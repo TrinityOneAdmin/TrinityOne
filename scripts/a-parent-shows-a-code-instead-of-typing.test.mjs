@@ -70,7 +70,11 @@ const ENGINE_SRC = (() => {
     + fnBody(FELLOWSHIP, 'function parseArrivalQR(text) {', 'parseArrivalQR');
 })();
 const METHODS = ['bringsChildren(churchNpub) {', 'setBringsChildren(churchNpub, on) {',
-  'myChildNames(churchNpub) {', 'setMyChildNames(churchNpub, names) {', 'arrivalQR(churchNpub) {'];
+  'myChildNames(churchNpub) {', 'setMyChildNames(churchNpub, names) {', 'arrivalQR(churchNpub) {',
+  // The persisted arrival outcome — the mirror that survives leaving the Today screen. Lifted like every
+  // other method here, so the tests below drive the SHIPPED reader and writer rather than a stub that
+  // would answer the question they are named after.
+  'arrivalOutcome(churchNpub) {', 'setArrivalOutcome(churchNpub, session, res) {'];
 
 const CHURCH = 'c'.repeat(64);
 const ME = 'a'.repeat(64);
@@ -81,9 +85,12 @@ function store(seed = {}) {
 }
 // The real engine, plus the ONE thing a harness may control: what time it is. `now` is threaded through
 // arrivalSessionNow's own second parameter, which is the shipped signature — not a Date stub.
-function fellowship(ls, clock, keyed = true) {
+function fellowship(ls, clock, keyed = true, identity = { v: true }) {
   const scope = {
-    localStorage: ls, _mePub: () => ME, _mayCache: () => keyed, toPub: (x) => String(x || ''),
+    // ⚠ ONE SOURCE OF IDENTITY FOR THE ENGINE AND THE APP. They were two stubs, so a test could change
+    // `myPubkey` and leave `_mePub` answering the old person — which made the card look broken when it was
+    // the harness that was inconsistent. A real phone has one identity; so does this now.
+    localStorage: ls, _mePub: () => (identity.v ? (identity.pub || ME) : ''), _mayCache: () => keyed, toPub: (x) => String(x || ''),
     lifetimeWindow, DEFAULT_HELPER_LIFETIME,
     window: { dispatchEvent() {}, Fellowship: null },
     Event: function Event(n) { this.type = n; },
@@ -101,7 +108,14 @@ function fellowship(ls, clock, keyed = true) {
   // shipped function's own parameter rather than by faking the clock.
   // `clock` is a BOX, not a number, so a test can move time under a card that is already mounted — which is
   // the only way to reach "the eleven o'clock button, with nine o'clock's refusal still on screen".
-  return { ...api, myPubkey: ME, arrivalSessionNow: (svcs) => api.arrivalSessionNow(svcs, clock.v) };
+  // ⚠ `myPubkey` IS A GETTER OVER A BOX, NOT A CONSTANT, and that is what lets a test model a COLD START.
+  // It was hard-coded to ME, so this harness could never reproduce the case where the app paints Today
+  // before `deriveFromIdentity` has resolved — which on native is two awaits away, including a dynamic
+  // import of secure storage that memory records deferred for MINUTES on a sleeping screen. A restart-
+  // ordering bug is invisible to a harness where identity is always already there. Found by audit 2026-09-13.
+  const out = { ...api, arrivalSessionNow: (svcs) => api.arrivalSessionNow(svcs, clock.v) };
+  Object.defineProperty(out, 'myPubkey', { get: () => (identity.v ? (identity.pub || ME) : ''), configurable: true });
+  return out;
 }
 
 // A Sunday, a service at 09:00, and the window the SHARED module says that service has.
@@ -116,11 +130,16 @@ const DATA = { VOTD_POOL: [{ ref: 'John 3:16', text: 'For God so loved the world
 const BIBLE = { parseRef: () => null, loaded: false, books: () => [], getVerses: () => [], bookName: () => 'Genesis', bookAbbr: () => 'Gen', maxChapter: () => 50, activeVersion: 'WEB' };
 
 function today({ seed = {}, now = IN_WINDOW, services = [SERVICE], arriveResult = { ok: true, id: 'x' }, qrRenderer = true,
-                clockIsWrong = false, clockSkewMins, clockSkewAhead = true } = {}) {
-  const { React, draw } = miniReact();
+                clockIsWrong = false, clockSkewMins, clockSkewAhead = true, myChildren = null, unmounts = false,
+                identityReady = true, churchReady = true } = {}) {
+  // ⚠ `unmounts` IS NOT DECORATION. The default harness keeps a store for ever, so a component rendered as
+  // `{open ? <X/> : null}` survives a close-and-reopen that real React would unmount — and the collapse test
+  // below would pass over the exact bug it is named after. See miniReact in render-jsx-screen.mjs.
+  const { React, draw } = miniReact({ unmounts });
   const ls = store(seed);
   const clock = { v: now };
-  const F = fellowship(ls, clock);
+  const identity = { v: identityReady };
+  const F = fellowship(ls, clock, true, identity);
   const qrTexts = [];
   const arriveCalls = [];
   const timers = [];
@@ -153,11 +172,12 @@ function today({ seed = {}, now = IN_WINDOW, services = [SERVICE], arriveResult 
     safeCssColor: (c) => c, todayISO: () => '2026-09-13', lsGet: (k, d) => d, lsSet: () => {},
     Math, Date, JSON, Set, Map, Number, String, Array, Promise, Object, isNaN, Boolean, parseInt, parseFloat,
   };
-  const mod = loadScreen('app/screens-today.jsx', ['TodayScreen', 'WereHereCard'], globals);
+  const mod = loadScreen('app/screens-today.jsx', ['TodayScreen', 'MyChildrenCard', 'WereHereSection'], globals);
+  const churchBox = { v: churchReady };
   const ctx = {
-    church: { id: 'c1', name: "St Chad's", npub: CHURCH },
+    get church() { return churchBox.v ? { id: 'c1', name: "St Chad's", npub: CHURCH } : null; },
     churchServices: services,
-    myChildren: { children: [], askAtDesk: 0, settled: true },
+    myChildren: myChildren || { children: [], askAtDesk: 0, settled: true },
     care: { settings: { enabled: false }, needs: [], myPub: 'me' },
     planProgress: {}, loc: null, churchDevos: [], servNext: null, servPending: [], servingSeenTs: 0,
     netUnread: 0, dark: false,
@@ -168,18 +188,44 @@ function today({ seed = {}, now = IN_WINDOW, services = [SERVICE], arriveResult 
     clockIsWrong, clockSkewMins, clockSkewAhead,
   };
   const api = {
-    ls, F, ctx, qrTexts, arriveCalls, timers, clock,
+    ls, F, ctx, qrTexts, arriveCalls, timers, clock, identity, churchBox,
+    // The two things that arrive late on a real phone. `arrive()` is the moment the app becomes usable.
+    arrive() { identity.v = true; churchBox.v = true; api.redraw(); return api.redraw(); },
     setNow(t) { clock.v = t; return api.redraw(); },
-    card: () => draw(mod.WereHereCard, { ctx }),
+    // ⚠ THE CARD DRIVEN HERE IS MyChildrenCard, NOT THE SECTION INSIDE IT, and that is deliberate. Since
+    // 2026-09-12 "We're here" and the QR are a section in this card's fold — the owner's ask, because the
+    // square opened at the door and then stayed open on Today all morning. Driving WereHereSection alone
+    // would leave every assertion below true with the section deleted from the fold: a well-tested component
+    // nobody is required to render, which is CLAUDE.md rule 1 verbatim. The fold is open by default (nothing
+    // in localStorage), so the section is in this tree.
+    card: () => draw(mod.MyChildrenCard, { ctx }),
+    section: () => draw(mod.WereHereSection, { ctx }),
     screen: () => draw(mod.TodayScreen, { ctx }),
   };
-  api.tree = api.card();
   api.redraw = () => { api.tree = api.card(); return api.tree; };
+  // ⚠ TWO DRAWS AT MOUNT, BECAUSE REACT RE-RENDERS AFTER AN EFFECT SETS STATE AND miniReact DOES NOT.
+  // The card rehydrates a persisted arrival from an effect rather than a `useState` initialiser — an
+  // initialiser cannot see the church npub or the pubkey at a cold start, which is the restart door this
+  // whole mechanism exists to close. One draw mounts and queues the effect; the second reflects what it set,
+  // which is what a phone shows. A single draw here would make every test below blind to that effect.
+  api.redraw();
+  api.redraw();
   api.press = (label) => {
     const b = shownButton(api.tree, label);
     assert.equal(b.length, 1, 'expected one control reading ' + JSON.stringify(label) + ', found ' + b.length);
     b[0].props.onClick();
     return api.redraw();
+  };
+  // THE FOLD ITSELF — the header button, found by the aria-expanded it carries rather than by its words.
+  api.fold = () => {
+    const b = shown(api.tree, n => n.type === 'button' && n.props && n.props['aria-expanded'] !== undefined);
+    assert.equal(b.length, 1, 'expected one collapsing header, found ' + b.length);
+    b[0].props.onClick();
+    return api.redraw();
+  };
+  api.isOpen = () => {
+    const b = shown(api.tree, n => n.type === 'button' && n.props && n.props['aria-expanded'] !== undefined);
+    return b.length === 1 ? !!b[0].props['aria-expanded'] : null;
   };
   api.click = async (label) => {
     const b = shownButton(api.tree, label);
@@ -311,7 +357,10 @@ test('REFUSED WITH NO MEASURED CAUSE NAMES NO CAUSE, AND DOES NOT BLAME THE CHUR
 test('…and when the clock IS measured wrong, it says so, with the number and the direction', async () => {
   // The measured skew is the only honest discriminator this client has, and where it exists it is the most
   // useful thing on the screen: it is the one cause a parent can actually do something about.
-  const t = today({ seed: READY, arriveResult: { ok: false, reason: 'refused' },
+  // ⚠ AND THE RELAY'S OWN WORDS MATTER, not just the measured skew. A wrong clock produces `auth-required`
+  // (NIP-42 fails on it) and nothing else; naming the clock over `blocked` or `rate-limited` is a causal
+  // claim about a member the church may have deliberately turned away. See the conflation test below.
+  const t = today({ seed: READY, arriveResult: { ok: false, reason: 'refused', message: 'auth-required: we can’t serve unauthenticated users' },
                     clockIsWrong: true, clockSkewMins: 15, clockSkewAhead: true });
   await t.click('We’re here');
   const c = reads(t.tree);
@@ -319,7 +368,7 @@ test('…and when the clock IS measured wrong, it says so, with the number and t
   assert.match(c, /15/, 'the measured skew is not shown');
   assert.match(c, /ahead of/, 'the direction is not shown');
   assert.match(c, /desk/i, 'naming the clock replaced the thing that actually gets the child into the room');
-  const b = today({ seed: READY, arriveResult: { ok: false, reason: 'refused' },
+  const b = today({ seed: READY, arriveResult: { ok: false, reason: 'refused', message: 'auth-required: bad clock' },
                     clockIsWrong: true, clockSkewMins: 9, clockSkewAhead: false });
   await b.click('We’re here');
   assert.match(reads(b.tree), /behind/, 'a phone running slow was told it was running fast');
@@ -436,6 +485,439 @@ function settings({ seed = {}, keyed = true } = {}) {
   return api;
 }
 
+// ══════════════ THE FOLD THE CODE NOW LIVES BEHIND ════════════════════════════════════════════════════════
+// Owner, 2026-09-12: the square "is open, and stays open", so it went inside MyChildrenCard's collapse. That
+// put a one-tap way to UNMOUNT the arrival on the card itself, and the first cut of it did exactly that.
+// ⚠ THESE RUN ON `unmounts: true`. The default harness keeps a component's state after it leaves the tree,
+// so all three below pass over the bug they are named after.
+
+test('PUTTING THE CODE AWAY AND GETTING IT BACK DOES NOT LOSE THE ARRIVAL', async () => {
+  const t = today({ seed: READY, unmounts: true });
+  await t.click('We’re here');
+  assert.equal(shown(t.tree, n => n.props && n.props.dangerouslySetInnerHTML).length, 1, 're-anchor: no code was drawn at all');
+  t.fold();
+  assert.equal(t.isOpen(), false, 're-anchor: the card did not actually close');
+  assert.equal(shown(t.tree, n => n.props && n.props.dangerouslySetInnerHTML).length, 0,
+    'THE CODE IS STILL ON SCREEN WITH THE CARD SHUT — the fold is what the owner asked to put it away');
+  t.fold();
+  assert.equal(t.isOpen(), true, 're-anchor: the card did not re-open');
+  assert.equal(shown(t.tree, n => n.props && n.props.dangerouslySetInnerHTML).length, 1,
+    'THE CODE DID NOT COME BACK. The arrival is written, the worker can see it, and this parent is now ' +
+    'looking at an untouched "We’re here" button. Screen read: ' + reads(t.tree));
+  assert.equal(shownButton(t.tree, 'We’re here').length, 0,
+    'A SECOND "WE’RE HERE" IS OFFERED OVER AN ARRIVAL THAT LANDED');
+  assert.deepEqual(t.arriveCalls, [{ session: 'svc-am' }], 'the re-open published a second arrival');
+});
+
+test('…so a landed arrival can never be re-reported as refused', async () => {
+  // THE HARM, NOT THE MECHANISM. Fold, re-open, tap again on a relay that is now unreachable, and the card
+  // told a parent "that was turned away, take them to the desk" about an arrival ALREADY ON THE WORKER'S
+  // SCREEN. That is device finding F1's harm — see the `unsure` branch — coming back through the fold.
+  const t = today({ seed: READY, unmounts: true });
+  await t.click('We’re here');
+  t.fold(); t.fold();
+  const c = reads(t.tree);
+  assert.ok(!/desk/i.test(c), 'A LANDED ARRIVAL IS WORDED AS A FAILURE AFTER A FOLD. Screen read: ' + c);
+  assert.match(c, /Show this to the children’s worker/i, 'the re-opened card no longer says what the square is for');
+});
+
+test('a REFUSAL also survives the fold, so it is not silently forgotten', async () => {
+  // The same rule the other way: folding must not launder a refusal into a clean button either.
+  const t = today({ seed: READY, arriveResult: { ok: false, reason: 'refused' }, unmounts: true });
+  await t.click('We’re here');
+  t.fold(); t.fold();
+  assert.match(reads(t.tree), /desk/i, 'the refusal was forgotten by the fold — the parent is told nothing went wrong');
+});
+
+// ⚠ THE ROWS CARRY A SESSION, and they did not before. Suppression is scoped to the service in window, so a
+// sessionless row never suppresses — which is correct behaviour and which silently made three tests here
+// assert nothing. `SERVICE.id` is the session these children are checked into.
+const IN_A_ROOM = (names, session) => ({ children: names.map((n, i) => ({ id: 'r' + i, childName: n, code: '400' + i, out: 0, session: session || SERVICE.id })), askAtDesk: 0, settled: true });
+
+test('OUT OF WINDOW, A CARD THAT IS THERE FOR THE PICKUP CODES OFFERS NO ARRIVAL BUTTON', () => {
+  // ⚠ THE STATE NO OTHER TEST OCCUPIES, and audit of 23f7200 confirmed the gate was untested because of it:
+  // every "there is no card" test above passes NO children, so MyChildrenCard's own `offers` check returns
+  // null first and WereHereSection's `if (!offers) return null` is never the thing being exercised. Here the
+  // card IS on screen for another reason — a child is in a room and the parent is reading the pickup code —
+  // and the question is whether the arrival button inside it knows the window has closed. A button offered
+  // here writes an arrival for a session the relay will refuse, an hour after anyone could act on it.
+  const t = today({ seed: READY, now: WIN.until + 3600, myChildren: IN_A_ROOM(['Milo']) });
+  const c = reads(t.tree);
+  assert.match(c, /Your children at church/, 're-anchor: the card is not on screen, so the absence below is vacuous');
+  assert.match(c, /4000/, 're-anchor: the pickup code is not on screen either');
+  assert.equal(shownButton(t.tree, 'We’re here').length, 0,
+    'AN ARRIVAL BUTTON IS OFFERED AN HOUR AFTER THE WINDOW CLOSED. Read: ' + c);
+  assert.ok(!/Bringing/.test(c), 'the card still asks about bringing children in, out of window. Read: ' + c);
+  // ⚠ TWO GUARDS HOLD THIS UP, AND SABOTAGING EITHER ONE ALONE LEAVES THIS TEST GREEN. Written down because
+  // the house rule is that a sabotage row which does not bite means the test is blind, the sabotage never
+  // applied, or ANOTHER GUARD ANSWERED FIRST — and this is the third, which is the one that looks like the
+  // first. Measured:
+  //   · WereHereSection's own `if (!offers) return null` removed  -> still green (the card's layer holds)
+  //   · the card's `stillToBring` no longer derived from `offers` -> still green (the section's gate holds)
+  //   · BOTH removed                                              -> THIS TEST FAILS
+  // So the property is real and guarded twice over. Do not "simplify" one of them away on the strength of a
+  // green run after deleting the other.
+});
+
+// ══════════════ LEAVING THE SCREEN MUST NOT THROW THE ARRIVAL AWAY ════════════════════════════════════════
+// Audit C-F2. `app.jsx` renders ONE screen at a time, so a tab switch unmounts this card and everything it
+// holds. The fold was fixed on 2026-09-12 and the harm declared closed; it was closed for ONE of at least
+// three doors. This is the tab, and an app restart behaves identically.
+//
+// ⚠ A FRESH CARD OVER THE SAME STORAGE is how both are modelled — that is exactly what a remount is. The
+// state is deliberately NOT shared; only the localStorage the engine writes to.
+
+test('COMING BACK TO TODAY DOES NOT LOSE A LANDED ARRIVAL', async () => {
+  const t = today({ seed: READY });
+  await t.click('We’re here');
+  assert.equal(shown(t.tree, n => n.props && n.props.dangerouslySetInnerHTML).length, 1, 're-anchor: no square was drawn');
+
+  const back = today({ seed: t.ls.v });        // ← the tab switch: a new card, the same phone
+  assert.equal(shown(back.tree, n => n.props && n.props.dangerouslySetInnerHTML).length, 1,
+    'THE SQUARE IS GONE AFTER LEAVING TODAY. The arrival is written and on the worker’s screen; this phone ' +
+    'has simply forgotten, and offers the button again. Read: ' + reads(back.tree));
+  assert.equal(shownButton(back.tree, 'We’re here').length, 0,
+    'A SECOND "WE’RE HERE" IS OFFERED OVER AN ARRIVAL THAT LANDED — and a flaky second tap then reports ' +
+    '"that was turned away, take them to the desk" about a check-in the worker is looking at.');
+  assert.deepEqual(back.arriveCalls, [], 'the remount published a second arrival by itself');
+});
+
+test('…and a REFUSAL survives it too, so the parent is not told it went fine', async () => {
+  const t = today({ seed: READY, arriveResult: { ok: false, reason: 'refused' } });
+  await t.click('We’re here');
+  const back = today({ seed: t.ls.v });
+  assert.match(reads(back.tree), /desk/i,
+    'the refusal was forgotten on the way back, so the card now looks untouched — and re-tapping after a ' +
+    'refusal is exactly how a duplicate arrival starts');
+});
+
+test('A STALE ARRIVAL NEVER PAINTS OVER A LATER SERVICE', async () => {
+  // The morning's answer must not sit on the eleven o'clock door. Same rule `landed` and `inARoom` apply.
+  const t = today({ seed: READY });
+  await t.click('We’re here');                           // answered for svc-am
+  const at11 = Math.floor(new Date(2026, 8, 13, 11, 30, 0, 0).getTime() / 1000);
+  const back = today({ seed: t.ls.v, now: at11, services: [SERVICE, LATE] });
+  assert.equal(shownButton(back.tree, 'We’re here').length, 1,
+    'THE MORNING’S ARRIVAL IS STILL ON SCREEN AT THE LATE SERVICE, so this parent cannot announce for the ' +
+    'room they are standing outside.');
+  assert.equal(shown(back.tree, n => n.props && n.props.dangerouslySetInnerHTML).length, 0,
+    'a square answered for the morning session is being held up at a different door');
+});
+
+test('IT IS A MIRROR, NOT THE STATE: a phone that cannot write still shows the square', async () => {
+  // ⚠ THE WHOLE REASON THIS IS NOT STORED INSTEAD OF HELD. This origin is documented shedding avatars at
+  // the browser's ~5MB limit for a church of ~500 — which is exactly the church that has a children's
+  // ministry. Reading FROM the store would mean a full quota leaves a parent with NO SQUARE AT THE MOMENT
+  // OF THE TAP, which is strictly worse than the bug being fixed.
+  const t = today({ seed: READY });
+  t.ls.setItem = () => { throw new Error('QuotaExceededError'); };
+  await t.click('We’re here');
+  assert.equal(shown(t.tree, n => n.props && n.props.dangerouslySetInnerHTML).length, 1,
+    'A PHONE THAT CANNOT WRITE TO STORAGE LOST ITS SQUARE AT THE DOOR. The mirror must never be able to ' +
+    'cost the tap.');
+  assert.deepEqual(t.arriveCalls, [{ session: 'svc-am' }], 're-anchor: the arrival itself did not publish');
+  // ⚠ TWO LAYERS HOLD THIS UP AND REMOVING EITHER ALONE LEAVES THIS GREEN — written down because the house
+  // rule is that a sabotage row which does not bite means the test is blind, the sabotage never applied, or
+  // ANOTHER GUARD ANSWERED FIRST, and this is the third. Measured:
+  //   · `setArrivalOutcome`'s own catch removed (it rethrows)      -> still green, the card's guard holds
+  //   · the card's `try { … } catch (e) {}` removed                -> still green, the engine's catch holds
+  //   · BOTH removed                                               -> the whole FILE dies, not one test:
+  //     the throw escapes an async handler and takes the run with it, which is precisely what it would do
+  //     to a parent's screen at a door.
+  // Keep both. Neither is redundant with the other; they fail in opposite directions.
+});
+
+test('A RESTART: the app paints Today BEFORE the phone knows who it is, and the square still comes back', async () => {
+  // ⚠ THE DOOR A PARENT ACTUALLY USES, and the one a `useState` initialiser could not close. Reading the
+  // store needs the church npub AND the pubkey; at a cold start neither exists. `createRoot().render()` is
+  // synchronous while `deriveFromIdentity` sets `Fellowship.myPubkey` after two awaits — on native a dynamic
+  // import of secure storage and a bridge round trip, deferred for MINUTES on a sleeping screen, which is
+  // exactly a phone taken out of a pocket at a door. Audit finding, 2026-09-13.
+  const t = today({ seed: READY });
+  await t.click('We’re here');
+  assert.equal(shown(t.tree, n => n.props && n.props.dangerouslySetInnerHTML).length, 1, 're-anchor: no square was drawn');
+
+  // The restart: same phone, same storage, but the app mounts Today before identity has resolved.
+  const cold = today({ seed: t.ls.v, identityReady: false, churchReady: false });
+  assert.equal(shownButton(cold.tree, 'We’re here').length, 0,
+    're-anchor: with no church there should be no card at all yet, so the assertion below is about the ' +
+    'arrival and not about an empty screen');
+  cold.arrive();                                  // deriveFromIdentity resolves, the lock lifts
+  assert.equal(shown(cold.tree, n => n.props && n.props.dangerouslySetInnerHTML).length, 1,
+    'NO SQUARE AFTER A RESTART. The arrival is written and on the worker’s screen; this phone read an empty ' +
+    'store before it knew who it was, and never looked again. Read: ' + reads(cold.tree));
+  assert.equal(shownButton(cold.tree, 'We’re here').length, 0,
+    'the button is offered again over an arrival that landed — a second tap on a flaky socket then reports ' +
+    '"take them to the desk" about a check-in the worker is looking at');
+  assert.deepEqual(cold.arriveCalls, [], 'the restart published a second arrival by itself');
+});
+
+test('A CHURCH SWITCH re-reads, because the card is not remounted', async () => {
+  // `screens.today` carries no `key`, so switching church does NOT remount this card. A mount-time read
+  // would keep showing the first church's answer for ever.
+  const t = today({ seed: READY });
+  await t.click('We’re here');
+  const other = today({ seed: t.ls.v, churchReady: false });
+  assert.equal(shown(other.tree, n => n.props && n.props.dangerouslySetInnerHTML).length, 0,
+    're-anchor: with no church there is nothing to show');
+  other.arrive();
+  assert.equal(shown(other.tree, n => n.props && n.props.dangerouslySetInnerHTML).length, 1,
+    'the card never re-read the store when the church arrived');
+});
+
+test('A RE-READ NEVER OVERWRITES AN ANSWER THE PARENT HAS JUST GIVEN', async () => {
+  // The guard inside the effect. The effect re-runs whenever the church npub or the pubkey changes — a
+  // church switch, a reconnect, identity landing late — and without the guard it would replace a LIVE
+  // outcome with whatever is on disk.
+  //
+  // ⚠ THE DISK MUST DISAGREE WITH THE SCREEN, OR THIS TEST PROVES NOTHING. My first version fired a redraw
+  // with matching values and could not discriminate: the sabotage row came back green, which is how a blind
+  // test announces itself. So the store is seeded with a REFUSAL, writes are then made to fail (quota), and
+  // the parent taps successfully — the screen says landed, the disk still says refused.
+  const t = today({ seed: { ...READY, [`trinityone.arrivedat.${CHURCH}|${ME}`]: JSON.stringify({ session: 'svc-am', ok: false, reason: 'refused', at: 1 }) } });
+  t.ls.setItem = () => { throw new Error('QuotaExceededError'); };
+  await t.click('We’re here');
+  assert.match(reads(t.tree), /Show this to the children’s worker/i, 're-anchor: the fresh tap did not land');
+
+  // Now force the effect to re-run, exactly as a church switch does: the npub goes away and comes back.
+  t.churchBox.v = false; t.redraw();
+  t.churchBox.v = true; t.redraw(); t.redraw();
+  const c = reads(t.tree);
+  assert.ok(!/desk/i.test(c),
+    'A STALE REFUSAL ON DISK OVERWROTE A SUCCESSFUL TAP the parent had just made. The screen now sends them ' +
+    'to the desk over a check-in that is on the worker’s screen. Read: ' + c);
+  assert.match(c, /Show this to the children’s worker/i, 'the landed square was lost on the re-read');
+});
+
+test('A SECOND PERSON ON THE SAME PHONE IS NEVER SHOWN THE FIRST PERSON\u2019S CODE', () => {
+  // ⚠ THE GUARD ONLY ASKED "IS THERE AN ANSWER?", NEVER "WHOSE?". So after any tap the re-read was dead for
+  // the life of the card — and this card is not remounted when a second member signs in (`screens.today`
+  // carries no `key`). Measured before the fix: the new person saw a square built from THEIR key for an
+  // arrival they never made, and NO button left to tap. The worker scanning it gets "nobody with that code
+  // has said they're at this door". Audit finding, 2026-09-14.
+  const t = today({ seed: READY });
+  t.identity.v = true;
+  return t.click('We’re here').then(() => {
+    assert.equal(shown(t.tree, n => n.props && n.props.dangerouslySetInnerHTML).length, 1, 're-anchor: no square');
+    // A different person signs in — one who ALSO brings children, or there would be no card to get wrong.
+    const B = 'd'.repeat(64);
+    t.ls.v['trinityone.bringkids.' + CHURCH + '|' + B] = '1';
+    t.ls.v['trinityone.mykidnames.' + CHURCH + '|' + B] = JSON.stringify(['Noah']);
+    t.identity.pub = B;
+    t.redraw(); t.redraw();
+    const c = reads(t.tree);
+    assert.equal(shown(t.tree, n => n.props && n.props.dangerouslySetInnerHTML).length, 0,
+      'THE NEW PERSON IS SHOWN A CODE FOR AN ARRIVAL THEY NEVER MADE. Read: ' + c);
+    assert.equal(shownButton(t.tree, 'We’re here').length, 1,
+      'AND THEY HAVE NO WAY TO ANNOUNCE — the only control is gone, so they are stuck until a force-stop.');
+    assert.match(c, /Bringing Noah in\?/,
+      'the card names the FIRST person\u2019s children to the second person. Read: ' + c);
+  });
+});
+
+test('\u2026and a CHURCH SWITCH re-reads rather than keeping the other church\u2019s answer', async () => {
+  // The common half of the same defect: someone in two churches announces at one, switches to the other,
+  // and the card keeps the first church's answer instead of reading the second's.
+  const t = today({ seed: READY });
+  await t.click('We’re here');
+  t.churchBox.v = false; t.redraw();
+  t.churchBox.v = true; t.redraw(); t.redraw();
+  assert.equal(shown(t.tree, n => n.props && n.props.dangerouslySetInnerHTML).length, 1,
+    're-anchor: returning to the SAME church must still restore this person\u2019s own answer');
+});
+
+// ══════════════ AND IT STOPS ASKING ONCE THEY ARE IN A ROOM ═══════════════════════════════════════════════
+
+test('SHUT, IT DOES NOT ASK A PARENT TO CHECK IN CHILDREN WHO ARE ALREADY IN A ROOM', () => {
+  // "Your children at church · 2" and, directly under it, "Open this to check Milo and Ivy in" — with both
+  // pickup codes behind the fold. One line contradicting the next. Found by audit of 23f7200.
+  const t = today({ seed: READY, myChildren: IN_A_ROOM(['Milo', 'Ivy']) });
+  t.fold();
+  const c = reads(t.tree);
+  assert.equal(t.isOpen(), false, 're-anchor: the card did not close, so this is not reading the shut header');
+  assert.ok(!/Open this to check/i.test(c),
+    'THE SHUT HEADER ASKS A PARENT TO CHECK IN CHILDREN IT IS COUNTING AS ALREADY THERE. Read: ' + c);
+  assert.match(c, /Your children at church/, 're-anchor: the card rendered nothing at all');
+});
+
+test('…BUT THE ARRIVAL BUTTON STAYS. Suppression may never empty a door control', () => {
+  // ⚠ THIS TEST ASSERTED THE OPPOSITE UNTIL 2026-09-12, AND THE OPPOSITE WAS THE DEFECT. It required the
+  // button to disappear once every child was accounted for — which, with the unscoped filter, also removed
+  // it at the SECOND service of the day, leaving a parent at a door with nothing to tap and nothing on
+  // screen saying check-in was live. DOMAIN.md: "do not block."
+  // The contradiction the filter was added for (a shut header saying "check them in" over their own pickup
+  // codes) is a WORDING problem and is fixed in the header alone. The two must never be traded.
+  const t = today({ seed: READY, myChildren: IN_A_ROOM(['Milo', 'Ivy']) });
+  const c = reads(t.tree);
+  assert.equal(shownButton(t.tree, 'We’re here').length, 1,
+    'THE DOOR CONTROL WAS REMOVED because the phone believed every child was already in a room. A parent ' +
+    'who needs to announce again — a child collected and brought back, a record this phone cannot read — ' +
+    'has nothing to tap. Read: ' + c);
+  assert.match(c, /Bringing Milo and Zoë in\?|Bringing Milo and Ivy in\?/,
+    'the heading no longer names the family, so it disagrees with the square, which carries them all');
+  assert.match(c, /400/, 're-anchor: the pickup codes are not on screen, so this is not the state it claims');
+});
+
+test('THE SECOND SERVICE OF THE DAY — the one that was broken', () => {
+  // THE CRITICAL DEFECT, audit C F1. Two children checked in at the MORNING service; it is now inside the
+  // LATE service's window. Measured before the fix: 0 arrival buttons, and the shut-header line gone too,
+  // so NOTHING on the screen said check-in was live. `myChildren` spans 26h by design, so the morning
+  // record is still live in the evening — this is the ordinary Sunday, not an edge case.
+  const at11 = Math.floor(new Date(2026, 8, 13, 11, 30, 0, 0).getTime() / 1000);
+  const t = today({ seed: READY, now: at11, services: [SERVICE, LATE], myChildren: IN_A_ROOM(['Milo', 'Ivy']) });
+  const c = reads(t.tree);
+  assert.equal(shownButton(t.tree, 'We’re here').length, 1,
+    'A PARENT AT THE SECOND SERVICE CANNOT SAY THEY ARE THERE. Their children were checked in this ' +
+    'morning, at a different service, and that record removed the button. Read: ' + c);
+  assert.match(c, /Bringing Milo and Ivy in\?/, 'the card does not name the children it is offering to bring in');
+  // ⚠ AND THE SHUT HEADER TOO, WHICH IS WHAT ACTUALLY GUARDS THE SESSION SCOPE. Measured: reverting the
+  // scope alone leaves the assertions above GREEN, because keeping the filter out of the section protects
+  // the button whatever the filter says. Two independent halves, and without this line only one of them is
+  // held in place. Same lesson as the two-guard note in the out-of-window test below.
+  t.fold();
+  assert.match(reads(t.tree), /Open this to check Milo and Ivy in/,
+    'THE SHUT HEADER TREATS THIS MORNING\'S CHECK-IN AS COVERING THE ELEVEN O\'CLOCK SERVICE, so the only ' +
+    'line on a folded card that says check-in is live has gone. Read: ' + reads(t.tree));
+});
+
+test('…and a record with NO session never suppresses, because unknown is not "present"', () => {
+  // `checkinSessionOf` returns '' when the tag is absent, and the console deliberately publishes a
+  // sessionless record when a church has more than one service today and the worker picked none.
+  const t = today({ seed: READY, myChildren: { children: [{ id: 'r0', childName: 'Milo', code: '1162', out: 0, session: '' }], askAtDesk: 0, settled: true } });
+  t.fold();
+  assert.match(reads(t.tree), /Open this to check Milo and Ivy in/,
+    'A SESSIONLESS RECORD SUPPRESSED A CHILD. Nothing established that child is in a room today.');
+});
+
+test('ONE CHILD IN, ONE NOT: the SHUT HEADER names only the one still to bring', () => {
+  // ⚠ THE SUBSET NAMING MOVED. Until 2026-09-12 the open card's heading also named only the child still to
+  // bring ("Bringing Ivy in?"). That required the section to hold the filtered list — and an EMPTY filtered
+  // list then emptied the door control itself. The filter now acts in the one place it was added for: the
+  // shut header, which must not say "check them in" over their own pickup codes.
+  // The open heading names the whole family, which is what the square carries and what the worker sees.
+  const t = today({ seed: READY, myChildren: IN_A_ROOM(['Milo']) });
+  t.fold();
+  assert.match(reads(t.tree), /Open this to check Ivy in/,
+    'the SHUT header does not name the child still to bring. Read: ' + reads(t.tree));
+  assert.ok(!/Open this to check Milo and Ivy in/.test(reads(t.tree)),
+    'the shut header offers to check in a child it is counting as already there — the contradiction the ' +
+    'filter exists to remove');
+  t.fold();
+  const c = reads(t.tree);
+  assert.equal(shownButton(t.tree, 'We’re here').length, 1, 'the second child could not be announced at all');
+  assert.match(c, /Bringing Milo and Ivy in\?/,
+    'the OPEN heading should name the whole family — it must agree with the square, which carries them all');
+});
+
+test('a name the worker recorded differently is NOT suppressed — the safe direction', () => {
+  // Rows written by a worker's own phone carry no child name at all (a known gap), and a typed name may not
+  // match what the parent typed. Either way the child stays offered: the worst case is the offer that was
+  // always made, where the opposite would be a door a parent cannot get through.
+  const t = today({ seed: READY, myChildren: { children: [{ id: 'r0', childName: '', code: '1162', out: 0 }], askAtDesk: 0, settled: true } });
+  assert.equal(shownButton(t.tree, 'We’re here').length, 1,
+    'A CHILD WAS SUPPRESSED BY A ROW THAT NAMES NOBODY. A parent at a door cannot say they are there.');
+  assert.match(reads(t.tree), /Bringing Milo and Ivy in\?/, 'both children should still be offered');
+});
+
+test('a child already COLLECTED does not suppress the offer either', () => {
+  // `out` is set by a release. A family that came back for the second service must be able to announce again.
+  const t = today({ seed: READY, myChildren: { children: [{ id: 'r0', childName: 'Milo', code: '1162', out: 1757000000 }], askAtDesk: 0, settled: true } });
+  assert.match(reads(t.tree), /Bringing Milo and Ivy in\?/,
+    'a child who has been collected was treated as still in a room, so they could not be brought back');
+});
+
+// ── AND THE ROW IN SETTINGS THAT REACHES THAT SHEET ──────────────────────────────────────────────────────
+// The sheet above is unreachable unless there is a row that opens it, and until 2026-09-12 NOTHING drove
+// ProfileSheet at all: the row could have been deleted and all twenty-two tests here stayed green. That is
+// CLAUDE.md rule 1 — an engine, and a sheet, nobody is required to consult. It is written now because the
+// row MOVED (owner: put it in "My family"), and a move is exactly when an untested control goes missing.
+function profile({ church = { id: 'c1', name: "St Chad's", npub: CHURCH }, childAccounts = true } = {}) {
+  const { React, draw } = miniReact();
+  const ls = store({});
+  const F = fellowship(ls, { v: IN_WINDOW });
+  F.relays = ['wss://one.example'];   // the Relays row counts them
+  if (childAccounts) F.createChildAccount = async () => ({ ok: true });
+  const opened = [];
+  const globals = {
+    React,
+    window: { Fellowship: F, TrinityIdentity: { qrSVG: () => '' }, Capacitor: { isNativePlatform: () => false },
+      TrinityData: DATA, TrinityLN: { currency: () => null },
+      addEventListener() {}, removeEventListener() {}, dispatchEvent() {}, localStorage: ls, innerWidth: 390,
+      matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }) },
+    document: { addEventListener() {}, removeEventListener() {}, createElement: () => ({ style: {}, appendChild() {}, remove() {}, click() {} }), body: { appendChild() {}, removeChild() {} } },
+    navigator: { userAgent: '', clipboard: { writeText: async () => {} } },
+    localStorage: ls,
+    setTimeout, clearTimeout, setInterval: () => 0, clearInterval: () => {}, console, fetch: async () => ({ ok: false }),
+    Icon: Stub('Icon'), IconBtn: Stub('IconBtn'), UserAvatar: Stub('UserAvatar'), AvatarPicker: Stub('AvatarPicker'),
+    QRScanner: Stub('QRScanner'), BackupCard: Stub('BackupCard'), ChurchBadge: Stub('ChurchBadge'),
+    Overlay: function Overlay(p) { return React.createElement('div', {}, p.open ? p.children : null); },
+    BottomSheet: ({ open, children }) => (open ? children : null),
+    NotifToggleRow: function NotifToggleRow(p) { return React.createElement('div', {}, String(p.label)); },
+    safeCssColor: (c) => c, lsGet: (k, d) => d, lsSet: () => {},
+    // app/app.jsx's pilot flag, read at the value it SHIPS at. A harness that turned the parked wallet on
+    // would be testing a sheet no member has.
+    WALLET_ENABLED: false,
+    Math, Date, JSON, Set, Map, Number, String, Array, Promise, Object, isNaN, Boolean, parseInt, parseFloat,
+  };
+  const mod = loadScreen('app/identity.jsx', ['ProfileSheet'], globals);
+  const ctx = {
+    church, safeguard: {}, toast() {}, openHelp() {},
+    openChurchSwitcher() {}, openNotifSettings() {}, openCurrency() {}, openShareApp() {}, openWallet() {},
+    openRelays() {}, openBackup() {}, openAbout() {},
+  };
+  const api = { ls, F, ctx, opened };
+  api.redraw = () => { api.tree = draw(mod.ProfileSheet, { open: true, onClose() {}, identity: { name: 'Sarah Okafor', avatar: null, npub: 'npub1' + 'q'.repeat(58) }, onSave() {}, ctx }); return api.tree; };
+  api.redraw();
+  return api;
+}
+
+// The heading a row sits under, read off the RENDERED tree — never by matching text in app/*.jsx (rule 3).
+// Every section heading in this sheet is an uppercase word or two on its own; the nearest one ABOVE a row is
+// the section that row is in.
+function sectionOf(tree, label) {
+  const flat = [];
+  (function walk(n) {
+    if (!n || typeof n !== 'object') return;
+    if (Array.isArray(n)) return n.forEach(walk);
+    const t = texts(n).join(' ').replace(/\s+/g, ' ').trim();
+    if (/^[A-Z][A-Z &’']{2,}$/.test(t)) flat.push({ head: t });
+    else if (n.props && n.props.onClick && t.includes(label)) flat.push({ row: t });
+    (n.kids || []).forEach(walk);
+  })(tree);
+  let head = '';
+  for (const e of flat) { if (e.head) head = e.head; else if (e.row) return head; }
+  return null;
+}
+
+test('"CHILDREN AT CHURCH" IS A ROW IN SETTINGS, AND IT IS UNDER "MY FAMILY"', () => {
+  const p = profile();
+  assert.match(reads(p.tree), /Children at church/,
+    'THERE IS NO WAY INTO THE CHILDREN-AT-CHURCH SHEET. Every other test in this file drives that sheet ' +
+    'directly, so all of them stay green with the only row that opens it deleted — rule 1 verbatim.');
+  assert.equal(sectionOf(p.tree, 'Children at church'), 'MY FAMILY',
+    'the row is not under MY FAMILY (owner, 2026-09-12) — it reads as being under ' +
+    JSON.stringify(sectionOf(p.tree, 'Children at church')));
+  // RE-ANCHOR: sectionOf can find headings at all, so the assertion above is not vacuously matching ''.
+  assert.equal(sectionOf(p.tree, 'Notifications'), 'SETTINGS', 're-anchor: sectionOf cannot read this sheet’s headings');
+});
+
+test('…and it does NOT disappear on a phone with no child-account support', () => {
+  // THE TRAP THE MOVE WALKED INTO. MY FAMILY was gated on `window.Fellowship.createChildAccount` — a name a
+  // shell that has not finished loading does not have yet. Dropping the row inside that gate unchanged would
+  // have taken the whole of check-in off those phones, silently.
+  const p = profile({ childAccounts: false });
+  assert.match(reads(p.tree), /Children at church/,
+    'A SETTING VANISHED WITH A FUNCTION THAT HAS NOTHING TO DO WITH IT. The parent has no way to reach ' +
+    'check-in at all, and nothing on screen says why.');
+  assert.ok(!/Children’s accounts/.test(reads(p.tree)), 're-anchor: the child-account row rendered anyway, so the gate above is not being tested');
+});
+
+test('…and it is absent when the member is in no church, because the answer is per-church', () => {
+  const p = profile({ church: null });
+  assert.ok(!/Children at church/.test(reads(p.tree)),
+    'a member who follows no church was offered a per-church setting with no church to store it against');
+});
+
 test('a member can say they bring children and type the names — and it is stored LOCALLY, under their own key', () => {
   const s = settings();
   assert.match(reads(s.tree), /I bring children to church/i, 'there is no way to say you bring children');
@@ -527,4 +1009,39 @@ test('…and on an unlocked phone the same control still says so when the list i
   s.press('Add');
   assert.match(reads(s.tree), /already on the list, or the list is full/i,
     'a thirteenth child vanished with no word said');
+});
+
+test('A BLOCKED MEMBER WITH A SLIGHTLY WRONG CLOCK IS NOT TOLD THE CLOCK IS WHY', async () => {
+  // Found by the audit of the refusal fix, 2026-09-14. The clock branch was UNREACHABLE for as long as
+  // `err.refused` was dead code; the moment it started firing it accused the clock over every refusal
+  // vocabulary, because `ctx.clockIsWrong` is measured independently of WHY the relay said no.
+  // The person on the other end of `blocked:` is someone the church has deliberately turned away. Handing
+  // them a number of minutes to chase is the exact half of the precedent that
+  // a-refused-proof-does-not-accuse-the-clock-or-the-member.test.mjs exists for.
+  for (const message of ['blocked: not a member or not permitted for this group',
+                         'invalid: signature failed',
+                         'restricted: not authenticated',
+                         'rate-limited: slow down',
+                         'error: relay storage unavailable — nothing was saved']) {
+    const t = today({ seed: READY, arriveResult: { ok: false, reason: 'refused', message },
+                      clockIsWrong: true, clockSkewMins: 12, clockSkewAhead: true });
+    await t.click('We’re here');
+    const c = reads(t.tree);
+    assert.ok(!/clock/i.test(c),
+      'THE CARD BLAMED THE CLOCK FOR "' + message.split(':')[0] + '". The clock is measured wrong and that ' +
+      'is true, but it is not why — and for `blocked` the real answer is a person, not a setting. Read: ' + c);
+    assert.match(c, /can’t tell why/i, 'it must say it cannot tell, rather than naming the wrong cause');
+    assert.match(c, /desk/i, 'and still point at the thing that gets the child into the room');
+  }
+});
+
+test('a refusal REHYDRATED after a restart carries no message, so it names no cause', async () => {
+  // setArrivalOutcome stores ok + reason only. Under-claiming is the right way round: a parent coming back
+  // to this screen is told plainly that we cannot tell, rather than being handed a cause we cannot support.
+  const t = today({ seed: READY, arriveResult: { ok: false, reason: 'refused' },
+                    clockIsWrong: true, clockSkewMins: 12, clockSkewAhead: true });
+  await t.click('We’re here');
+  const c = reads(t.tree);
+  assert.ok(!/clock/i.test(c), 'a refusal with no recorded words was still blamed on the clock');
+  assert.match(c, /can’t tell why/i, 'and it must say so');
 });

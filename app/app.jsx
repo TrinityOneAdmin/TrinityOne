@@ -496,6 +496,18 @@ function App() {
     let stopped = false;
     const attempt = () => {
       if (stopped || wipedForLock.current) return true;
+      // ⚠ A GUESS IS NOT A LOCK, AND THIS USED TO ACT ON ONE. `commLocked` is seeded from lockNow() at
+      // FIRST RENDER, and lockNow's first clause is `isLocked()` = `hasEnc() && !sessionMnemonic`. On a
+      // "remember me" boot sessionMnemonic arrives only after a SecureStorage round trip, so for one render
+      // the app believes a member who never locked IS locked — and this effect destroyed every church cache
+      // on them. Offline, the congregation then paints empty with nothing saying why.
+      // Item 7 of the 14-day audit, 2026-09-14, and it CORRECTS bf25f49's message and comment, which named
+      // the second clause (`hasPin() && !myPubkey`). The first clause is the one that fires.
+      // Waiting costs nothing: `settled` is set the moment init() finishes, whichever branch it took, and
+      // the bounded poll below is already here for exactly this kind of not-ready-yet. A genuinely locked
+      // boot still wipes — one poll later, before anything has been served.
+      const ID = window.TrinityIdentity;
+      if (!ID || !ID.settled) return false;
       if (!(window.Fellowship && window.Fellowship.clearCommunityCache)) return false;
       wipedForLock.current = true;
       try { window.Fellowship.clearCommunityCache(); } catch (e) {}
@@ -503,7 +515,26 @@ function App() {
     };
     if (attempt()) return;
     const t = setInterval(() => { if (attempt()) clearInterval(t); }, 300);
-    const give = setTimeout(() => clearInterval(t), 20000);
+    // ⚠ WHEN THE BUDGET RUNS OUT, WIPE ANYWAY — "we could not find out" is not "the phone is unlocked".
+    // `settled` waits on init(), which on a locked boot awaits a SecureStorage read. That read is UNBOUNDED,
+    // and this repo has measured a sleeping screen deferring native calls for MINUTES. So a phone whose
+    // store answers late used to reach the end of this budget having done nothing, and `commLocked` never
+    // changes again while it stays locked — meaning a SEIZED, LOCKED PHONE KEPT EVERY CONGREGATION CACHE.
+    // That is AUDIT-2026-07-28 F7, the defect this whole effect exists for, reintroduced by the fix for its
+    // opposite. Raised by the audit of 5951edd; the owner's call, 2026-09-15.
+    //
+    // THE TWO COSTS ARE NOT EQUAL, which is what decides it. Wiping a member who was not really locked costs
+    // them a re-download of cached church data — annoying, and everything they own (journal, notes, outbox,
+    // their own words, the Bible) is on the keep-list and untouched. NOT wiping a seized phone costs a
+    // congregation its member list, its groups and its care notes, to whoever is holding it. This product's
+    // stated threat model is lawful compulsion and seizure. So the timeout falls TOWARDS the wipe.
+    const give = setTimeout(() => {
+      clearInterval(t);
+      if (stopped || wipedForLock.current) return;
+      if (!(window.Fellowship && window.Fellowship.clearCommunityCache)) return;   // nothing to call: a later boot wipes
+      wipedForLock.current = true;
+      try { window.Fellowship.clearCommunityCache(); } catch (e) {}
+    }, 20000);
     return () => { stopped = true; clearInterval(t); clearTimeout(give); };
   }, [commLocked]);
   // the in-app wallet is the member's, always-on (rides on their key) — boot it once so the balance is
@@ -789,8 +820,18 @@ function App() {
     if (F && F.leaveMembership) {
       let told = null;
       try { told = await F.leaveMembership(npub); } catch (e) { told = null; }
-      if (!told) {
-        toast('Couldn’t tell your church you’ve left — you’re still a member there. Try again when you have signal.', { error: true });
+      // ⚠ `told.ok`, NEVER `if (told)`. leaveMembership answers with an OBJECT now and an object is always
+      // truthy, so truth-testing it would drop the church from this phone over a tombstone nobody accepted —
+      // the exact optimism audit #6 removed. (Same trap as markSafe in chunk 1.)
+      if (!(told && told.ok)) {
+        // "YOU'RE STILL A MEMBER THERE" IS FALSE IN THE ONE DIRECTION THAT MATTERS. Nobody answering inside
+        // the ack window is not a refusal: the tombstone is signed, on the wire, and the church may already
+        // have honoured it. Telling someone who has chosen to leave that they are still in it — sometimes for
+        // the reasons an unfollow button exists for — is the worst way for this line to be wrong. We still do
+        // NOT drop the church locally, because we cannot confirm it went; leaving again is a no-op if it did.
+        toast(told && told.reason === 'unconfirmed'
+          ? 'We couldn’t confirm your church was told — it may well have been. You’re still following them here; try again in a moment.'
+          : 'Couldn’t tell your church you’ve left — you’re still a member there. Try again when you have signal.', { error: true });
         return false;
       }
     }
@@ -1103,6 +1144,10 @@ function App() {
   const [servReplies, setServReplies] = useA({}); // my replies: { requestId: 'accept'|'decline'|'swap' }
   const [churchEvents, setChurchEvents] = useA([]);
   const [myRsvps, setMyRsvps] = useA({});       // { eventId: 'going'|'maybe'|'no' }
+  // THE LAST RSVP ATTEMPT THAT DID NOT COME BACK CONFIRMED, per event: { verdict, next }. A REF, not state:
+  // it must survive the re-render the subscription causes without causing one of its own, and setRsvp has to
+  // read it synchronously on the very next tap. See setRsvp below for what it is for.
+  const rsvpUnsureRef = useAR({});
   const [openServing, setOpenServing] = useA(servingParam === '1');
   const [servingTab, setServingTab] = useA('serving');   // which Serving tab to land on (e.g. 'care' from the cared-for banner)
   const [careFocus, setCareFocus] = useA(null);          // a care need id to auto-open when Serving → Care opens (deep-link from the banner)
@@ -2112,16 +2157,38 @@ function App() {
     // Priyanka: "It already said You're going. I tapped Going to confirm — and it wiped my answer." She then
     // had to work out for herself that pressing it again put it back. Losing an answer is a fine thing to
     // allow and a terrible thing to do silently, so say what happened.
+    //
+    // ⚠ …AND AFTER A FAILED ATTEMPT THE TOGGLE MUST NOT BE RECOMPUTED FROM `myRsvps`. 2026-09-15, chunk 2.
+    // This is the same complaint as Priyanka's, one turn of the screw worse, and it costs her the answer she
+    // was trying to confirm. She taps Going. It LANDS, but nobody acknowledges inside the ack window, so she
+    // is told it failed. The subscription then echoes the RSVP back and quietly sets myRsvps[event] = 'going'.
+    // She taps the same button again to make sure — and `myRsvps[eventId] === verdict` is now true, so the app
+    // computes a WITHDRAWAL and publishes 'none'. Two taps meaning "yes" and she is marked not going.
+    // So: when the last attempt for THIS event and THIS button did not come back confirmed, REPEAT it rather
+    // than deriving a new meaning from state that attempt may have desynced. Repeating is safe — the doc is
+    // replaceable at a fixed d-tag — and it is the only reading that makes "you can send it again" true.
+    // A DIFFERENT button clears the hold and toggles normally, because that tap says something new.
+    //
+    // ⚠ AND NOTHING RETRIES BY ITSELF. A retry of a toggle is not the same action twice: it recomputes, and
+    // can publish the opposite of what was asked. The member taps; the wording says what the tap will do.
     setRsvp: async (eventId, verdict) => {
       const np = (churches.find(c => c.id === activeChurch) || {}).npub;
-      const cleared = myRsvps[eventId] === verdict;
-      const next = cleared ? null : verdict;
+      const held = rsvpUnsureRef.current[eventId];
+      const repeat = !!held && held.verdict === verdict;
+      const next = repeat ? held.next : (myRsvps[eventId] === verdict ? null : verdict);
+      const cleared = next === null;
       if (!(window.Fellowship && window.Fellowship.setEventRsvp)) return;
       const sent = await window.Fellowship.setEventRsvp(np, eventId, next || 'none');
-      if (!sent) {
-        toast('Couldn’t send your answer — the church hasn’t been told. Try again when you have signal.', { error: true });
+      // `sent.ok`, never `if (sent)` — an object is always truthy and a failure would take the success arm,
+      // recording an answer the church never confirmed. (The markSafe trap, chunk 1.)
+      if (!(sent && sent.ok)) {
+        rsvpUnsureRef.current[eventId] = { verdict, next };   // what this tap MEANT, so the next one repeats it
+        toast(sent && sent.reason === 'unconfirmed'
+          ? 'We couldn’t confirm your answer reached your church — it may well have. Tap the same button again to send it again; it won’t withdraw it.'
+          : 'Couldn’t send your answer — the church hasn’t been told. Try again when you have signal.', { error: true });
         return;
       }
+      delete rsvpUnsureRef.current[eventId];
       setMyRsvps(m => ({ ...m, [eventId]: next }));
       if (cleared) toast('Answer withdrawn — tap again if you meant to keep it');
     },
@@ -2136,6 +2203,19 @@ function App() {
       const np = (churches.find(c => c.id === activeChurch) || {}).npub;
       if (!(window.Fellowship && window.Fellowship.getUnavailable)) return [];
       return window.Fellowship.getUnavailable(np);
+    },
+    // ⚠ ASK THE CHURCH, DO NOT TRUST THE PHONE'S COPY. `getUnavailableDates` reads a LOCAL MIRROR that an
+    // ordinary wipe destroys — and because every save REPLACES the whole array, a blank sheet plus one new
+    // date deletes every date the member had already given, from the ROTA, silently. Measured by audit
+    // 2026-09-14. The document is addressable at the member's own key and signed by them, so their phone can
+    // just fetch it.
+    // Answers { dates, complete }. `complete` is not decoration: a read nobody answered must never be
+    // rendered as "you have told them nothing", or saving over it destroys the church's record — the same
+    // shape as the relay doc-wipe (B0).
+    readUnavailableDates: () => {
+      const np = (churches.find(c => c.id === activeChurch) || {}).npub;
+      if (!np || !(window.Fellowship && window.Fellowship.readUnavailable)) return Promise.resolve({ dates: [], complete: false });
+      return window.Fellowship.readUnavailable(np);
     },
     togglePlanDay: (pid, day) => {
       const prev = MD.settings.get('plans', {});

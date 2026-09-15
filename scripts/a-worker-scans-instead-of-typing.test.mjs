@@ -88,7 +88,7 @@ const qr = (g, c, extra = {}) => JSON.stringify({ v: 1, g, c, ...extra });
 // ── THE REGISTER THE TRANSPORT WOULD HAND THE SCREEN ──────────────────────────────────────────────────────
 // The exact shape Fellowship.subscribeCheckinRegister emits — asserted against the shipped reader in
 // scripts/a-cleared-worker-reads-one-sessions-register.test.mjs, so these are its real answers.
-const arrival = (pub, name, checkedIn = 0) => ({ pub, name, at: AM_FROM, checkedIn });
+const arrival = (pub, name, checkedIn = 0, at = AM_FROM) => ({ pub, name, at, checkedIn });
 const session = (id, arrivals, rows = []) => ({
   session: id, roomCode: roomCode(id), roomClash: false,
   from: AM_FROM, until: AM_FROM + 10800, helpers: 2, arrivals, rows,
@@ -482,4 +482,179 @@ test('a bidi override in a scanned name never reaches the confirmation', async (
   await d.click(0, 'Yes, check in');
   assert.equal(d.checkinCalls[0].childName, 'Milo',
     'an invisible character was written into the safeguarding record: ' + JSON.stringify(d.checkinCalls[0].childName));
+});
+
+
+// ── ITEM 12 (audit 2026-09-14): TWO FAMILIES AT ONCE, NEITHER NAME RESOLVED ─────────────────────────────
+// The whole no-typing design rests on ONE mitigation: a confirmation that NAMES BOTH SIDES, "Milo → Sarah
+// Henderson?", because the measured risk is the worker tapping the wrong queue row and handing a child's
+// name and pickup code to the wrong family. When the sealed name has not reached this phone, both the row
+// and the confirmation used to collapse to a CONSTANT — "Someone's arrived…", "the person who just
+// arrived" — so two families at the door produced two identical rows and two identical questions, and the
+// mitigation was wallpaper at exactly the moment it was load-bearing.
+const SECOND = 'e'.repeat(64);
+// The same clock string the screen builds, derived rather than retyped — a hard-coded "9:42" would pass or
+// fail on the machine's timezone rather than on the code.
+const clockOf = (ts) => new Date(ts * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+
+test('two arrivals with no names are TELLABLE APART on the queue', async () => {
+  const d = desk(register([session('svc-am', [
+    arrival(TOM, '', 0, AM_FROM),           // name not resolved on this phone
+    arrival(SECOND, '', 0, AM_FROM + 420),  // seven minutes later
+  ])]));
+  await d.click(0, 'Check a child in');
+  const t = d.reads(0);
+  const generic = (t.match(/Someone’s arrived — their name hasn’t reached your phone yet/g) || []).length;
+  assert.equal(generic, 0,
+    'BOTH QUEUE ROWS READ THE SAME WORDS, so the worker cannot tell which family is which before she taps. ' +
+    'Screen read: ' + t);
+  const times = (t.match(/Someone arrived at /g) || []).length;
+  assert.equal(times, 2, 'expected both rows to carry their arrival time; saw ' + times + ' in: ' + t);
+});
+
+test('the confirmation names the TIME when it cannot name the person', async () => {
+  const d = desk(register([session('svc-am', [arrival(TOM, '', 0, AM_FROM)])]));
+  d.press(0, 'Someone arrived at ' + clockOf(AM_FROM) + ' —');   // pick the family off the signed arrival
+  d.type(0, 'Child’s name', 'Milo');
+  await d.click(0, 'Check a child in');                          // submit → the pairing panel
+  const t = d.reads(0);
+  assert.match(t, new RegExp('Milo → the person who arrived at ' + clockOf(AM_FROM).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\?'),
+    'THE CONFIRMATION STILL USES A CONSTANT for an unresolved family, so two of them are asked about in ' +
+    'identical words. Screen read: ' + t);
+  assert.ok(!/the person who just arrived/.test(t), 'the old constant is still on screen: ' + t);
+});
+
+test('two families whose rows read IDENTICALLY — the panel says it cannot tell them apart', async () => {
+  // Same minute, so the clock time added by this fix does not separate them either.
+  const d = desk(register([session('svc-am', [
+    arrival(TOM, '', 0, AM_FROM), arrival(SECOND, '', 0, AM_FROM),
+  ])]));
+  // Both rows read the same, so they cannot be pressed by text — which is the defect. Tap the row itself.
+  const rows = shown(d.tree(0), n => n.type === 'button' && n.props && n.props['aria-pressed'] !== undefined);
+  assert.equal(rows.length, 2, 're-anchor: expected two queue rows, saw ' + rows.length);
+  rows[0].props.onClick();
+  d.type(0, 'Child’s name', 'Milo');
+  await d.click(0, 'Check a child in');
+  const t = d.reads(0);
+  assert.match(t, /Milo → /, 're-anchor: the pairing panel never opened, so this test proves nothing');
+  assert.match(t, /can’t tell them apart/,
+    'TWO FAMILIES READ IDENTICALLY AND THE CONFIRMATION READS AS CERTAIN. It may name either of them, and a ' +
+    'question that looks checked launders a guess into a verified pairing. Screen read: ' + t);
+  assert.match(t, /Ask before you tap/, 'it must hand the check to the person who can actually make it');
+});
+
+test('TWO FAMILIES WITH THE SAME RESOLVED NAME are caught too — an ordinary Sunday', async () => {
+  // Found by the audit of this fix, 2026-09-14, and it is the substantive half: the first version of the
+  // warning counted UNNAMED arrivals, so two members both displaying as "Sarah" — which is what a church
+  // whose sealed display names are first-name-only has every week — produced two identical rows, a
+  // confirmation reading "Milo → Sarah?", and NO warning at all. Resolving the names does not make the
+  // question answerable; it just makes the ambiguity look authoritative.
+  const d = desk(register([session('svc-am', [
+    arrival(TOM, 'Sarah', 0, AM_FROM), arrival(SECOND, 'Sarah', 0, AM_FROM + 600),
+  ])]));
+  // Same problem as the test above, and the same point: two identical rows cannot be told apart by text.
+  const rows = shown(d.tree(0), n => n.type === 'button' && n.props && n.props['aria-pressed'] !== undefined);
+  assert.equal(rows.length, 2, 're-anchor: expected two queue rows, saw ' + rows.length);
+  rows[0].props.onClick();
+  d.type(0, 'Child’s name', 'Milo');
+  await d.click(0, 'Check a child in');
+  const t = d.reads(0);
+  assert.match(t, /Milo → Sarah\?/, 're-anchor: the pairing panel never opened');
+  assert.match(t, /can’t tell them apart/,
+    'TWO FAMILIES BOTH READ "Sarah" AND NOTHING SAID SO. The worker taps one, and a child’s name and pickup ' +
+    'code go to whichever of them she guessed. Screen read: ' + t);
+});
+
+test('a SCAN whose family this phone cannot name DOES warn — the forgery check needs a name', async () => {
+  // Owner's decision, 2026-09-15, after the audit. The warning used to be suppressed outright on the scan
+  // path, argued as "the scan carries a cryptographic guarantee". What is SIGNED is the arrival; what
+  // SELECTS it is a pubkey read off a camera, and a QR can be photographed or copied. The design's answer to
+  // a forged code is this very confirmation — "a code naming a family that is not in front of her shows her
+  // the mismatch in words" — and that answer NEEDS A NAME. With the name unresolved the panel read
+  // "Milo → the person who arrived at 9:42?", which identifies nobody, and the warning was off too.
+  const d = desk(register([session('svc-am', [arrival(TOM, '', 0, AM_FROM)])]));
+  d.scan(0, qr(TOM, ['Milo']));
+  await d.click(0, 'Check a child in');
+  const t = d.reads(0);
+  assert.match(t, /Milo → /, 're-anchor: the scan did not reach a pairing');
+  assert.match(t, /can’t tell you whose code you scanned/,
+    'A SCANNED CODE NAMED NOBODY AND NOTHING SAID SO. The one check against a photographed or forged code is ' +
+    'her reading a name and not recognising it — with no name and no warning she has neither. Read: ' + t);
+});
+
+test('…but a SCAN that CAN name the family stays silent', async () => {
+  // The no-cry-wolf half. A resolved name is the whole mitigation working; warning there teaches her to tap
+  // through, which is the failure item 12 was named for.
+  const d = desk(register([session('svc-am', [arrival(TOM, 'Tom Achebe', 0, AM_FROM)])]));
+  d.scan(0, qr(TOM, ['Milo']));
+  await d.click(0, 'Check a child in');
+  const t = d.reads(0);
+  assert.match(t, /Milo → Tom Achebe\?/, 're-anchor: the confirmation did not name the family');
+  assert.ok(!/Ask before you tap/.test(t),
+    'the scan path warned when the confirmation named the family perfectly well: ' + t);
+});
+
+test('two unnamed families the CLOCK separates do not trigger the warning', async () => {
+  // The discriminator this fix added must actually count. 45 minutes apart is not ambiguous.
+  const d = desk(register([session('svc-am', [
+    arrival(TOM, '', 0, AM_FROM), arrival(SECOND, '', 0, AM_FROM + 2700),
+  ])]));
+  d.press(0, 'Someone arrived at ' + clockOf(AM_FROM) + ' —');
+  d.type(0, 'Child’s name', 'Milo');
+  await d.click(0, 'Check a child in');
+  const t = d.reads(0);
+  assert.match(t, /Milo → /, 're-anchor');
+  assert.ok(!/can’t tell them apart/.test(t),
+    'the warning fired over two rows the clock plainly separates, which teaches the worker to ignore it: ' + t);
+});
+
+test('…and with only ONE unnamed family it does NOT cry wolf', async () => {
+  const d = desk(register([session('svc-am', [
+    arrival(TOM, '', 0, AM_FROM), arrival(SECOND, 'Ada Nwosu', 0, AM_FROM + 60),
+  ])]));
+  d.press(0, 'Someone arrived at ' + clockOf(AM_FROM) + ' —');
+  d.type(0, 'Child’s name', 'Milo');
+  await d.click(0, 'Check a child in');
+  const t = d.reads(0);
+  assert.match(t, /Milo → /, 're-anchor: the pairing panel never opened');
+  assert.ok(!/can’t tell them apart/.test(t),
+    'the ambiguity warning fires when there is no ambiguity — a warning shown every Sunday is one nobody reads');
+});
+
+test('a RESOLVED name is still used, and is not replaced by a clock time', async () => {
+  // Re-anchor: the time is a fallback, never an upgrade. Naming the person is always better.
+  const d = desk(register([session('svc-am', [arrival(TOM, 'Tom Achebe', 0, AM_FROM)])]));
+  await d.click(0, 'Check a child in');
+  const t = d.reads(0);
+  assert.match(t, /Tom Achebe has arrived/, 'a known family is no longer named on the queue: ' + t);
+  assert.ok(!/Someone arrived at/.test(t), 'a named arrival was described by its clock time instead: ' + t);
+});
+
+test('re-scanning the SAME code mid-family re-arms cleanly — no half-set pairing', async () => {
+  // Local-auditor lead 8b5c625acd, 2026-09-15: after the first child is written, `scanned` carries the
+  // sibling while `pending` is null and `picked` still holds the guardian — and the lead reads that as an
+  // "inconsistent" state that could write the second child with a stale or absent guardian.
+  // It is the ORDINARY state between picking a family and submitting: `submit()` rebuilds `pending` from
+  // `pickedArrival` every time, so the confirmation is always re-shown. What was NOT covered is the worker
+  // scanning the same code again in that window, which is an easy thing to do at a busy door.
+  const d = desk(register([session('svc-am', [arrival(SARAH, 'Sarah Henderson')])]));
+  d.scan(0, qr(SARAH, ['Milo', 'Ivy']));
+  await d.click(0, 'Check a child in');
+  await d.click(0, 'Yes, check in');
+  assert.equal(d.checkinCalls.length, 1, 're-anchor: the first child was not written');
+  assert.equal(d.input(0, 'Child’s name').props.value, 'Ivy', 're-anchor: the sibling was not carried');
+
+  // …and now she scans the same code again rather than tapping.
+  d.scan(0, qr(SARAH, ['Milo', 'Ivy']));
+  const t = d.reads(0);
+  assert.ok(!/Ivy → /.test(t) && !/Milo → /.test(t),
+    'a scan left a pairing panel on screen that the worker never answered: ' + t);
+  await d.click(0, 'Check a child in');
+  assert.match(d.reads(0), /Milo → Sarah Henderson\?/,
+    'the re-scan did not re-establish the pairing, so the next write would carry no confirmed family');
+  await d.click(0, 'Yes, check in');
+  assert.equal(d.checkinCalls.length, 2, 'the second write did not happen');
+  assert.equal(d.checkinCalls[1].guardian, SARAH,
+    'A RE-SCAN MID-FAMILY LOST THE GUARDIAN LINK. The relay serves the record to the p-tagged pubkey, so ' +
+    'this is the difference between the parent getting their child’s copy and not.');
 });

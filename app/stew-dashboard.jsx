@@ -367,6 +367,16 @@ function PublishErrorBanner() {
   // steward ended with silence. The link that produces the safeguarding banner is exactly the link that
   // produces generic publish errors, so the child-safety message was the one most likely to be evicted.
   const [sgMsg, setSgMsg] = React.useState('');
+  // ⚠ CHURCH REGISTRATION GETS ITS OWN SLOT, for the same reason `sgMsg` has one, and the measurement is the
+  // same. `selfRegister`'s `ownRefused` has fired `steward-write-blocked` with `what: 'church registration'`
+  // since e028209 (2026-08-17) into the SHARED `msg`, which `f` overwrites and then auto-clears after 9s.
+  // And a box that just refused a registration is the box whose next write also fails — so the one message
+  // telling a steward "your church is NOT on this computer" was the message most likely to be wiped.
+  // Reproduced end to end: the registration text rendered, one publish error replaced it, one 9000ms timer
+  // armed, and after it the screen read "".
+  // IT IS ALSO STICKY. It is not a transient failure — it is a standing state ("you believe you are
+  // self-hosting and you are not") that stays true until somebody acts on it.
+  const [regMsg, setRegMsg] = React.useState('');
   React.useEffect(() => {
     const f = (e) => {
       const { msg: m, wrongChurch, sticky } = publishErrorMessage((e.detail && e.detail.reason) || '', e.detail && e.detail.evt);
@@ -383,13 +393,17 @@ function PublishErrorBanner() {
       const d = e.detail || {};
       const text = d.message || ('That change to the ' + (d.what || 'church') + ' could not be saved.');
       if (d.what === 'safeguarding clearances') { setSgMsg(text); return; }
+      // Matched on the two `what` values selfRegister and the relay panel actually send. A prefix test
+      // rather than equality, so a future "church registration (retry)" lands here too rather than
+      // silently falling back into the evictable slot.
+      if (/^church (registration|relay)/.test(String(d.what || ''))) { setRegMsg(text); return; }
       clearTimeout(f._t); setMsg(text);
     };
     window.addEventListener('steward-publish-error', f);
     window.addEventListener('steward-write-blocked', g);
     return () => { window.removeEventListener('steward-publish-error', f); window.removeEventListener('steward-write-blocked', g); };
   }, []);
-  if (!msg && !sgMsg) return null;
+  if (!msg && !sgMsg && !regMsg) return null;
   // role="alert" + aria-live so a screen reader ANNOUNCES it. The console's only failure banner was the one
   // surface in this codebase without it — app/ui.jsx, app/screens-today.jsx and app/stew-meals.jsx all get it
   // right — so a TalkBack user got nothing at all when a child-safeguarding warning appeared. The dismiss
@@ -429,6 +443,9 @@ function PublishErrorBanner() {
   return (
     <div style={{ flexShrink: 1, minHeight: 0, maxHeight: 'min(40vh, 220px)', overflowY: 'auto', position: 'relative', zIndex: 240, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '10px 16px 0', background: 'var(--paper)' }}>
       {sgMsg ? card(sgMsg, 'sg', () => setSgMsg(''), 'sg') : null}
+      {/* ABOVE the generic slot: a church that is not where its steward believes it is outranks a write that
+          failed once. Both stay until dismissed — this one because nothing clears it but acting on it. */}
+      {regMsg ? card(regMsg, 'reg', () => setRegMsg(''), 'gen') : null}
       {msg ? card(msg, 'gen', () => setMsg(''), 'gen') : null}
     </div>
   );
@@ -3697,6 +3714,17 @@ function DashRelaysCard() {
   // WHICH RELAY REFUSED, keyed the way both sides store it. Recomputed when the alarm flips or the health
   // check returns, which is exactly when it can change. Compared with trailing slashes and case removed:
   // the pool keys relays by its own normaliser and a raw string compare has missed silently three times.
+  // ⚠ REMOVING A RELAY WAS ONE TAP AND TOOK THE WAY BACK WITH IT. Audit item 19, 2026-09-14, and MEASURED
+  // on a real console: a relay added by name (`falgate-box` → `wss://box.example.ts.net/relay`) was removed
+  // by a single click on a trash icon with no confirmation, and `Steward.removeRelay` also deleted the
+  // name→url binding — deliberately, so auto-follow cannot re-add what a steward just removed.
+  // The consequence is the part nobody sees coming: the NAME is the durable handle and the URL is not. A
+  // self-hosted box reached through a tunnel changes address, which is the whole reason the name exists
+  // (CLAUDE.md rule 10's note on root 3: "tunnel addresses churn"). So after one misplaced tap the steward
+  // has no relay, no name, and an address on screen that may already be stale — and the member app's own
+  // relay list has asked "are you sure?" since the day it shipped. This is the console catching up.
+  const [confirmDrop, setConfirmDrop] = React.useState(null);   // the url awaiting a yes, or null
+  const relayName = (u) => { try { return (window.Steward.relayNameFor && window.Steward.relayNameFor(u)) || ''; } catch (e) { return ''; } };
   const refusedSet = React.useMemo(() => {
     const key = (u) => String(u || '').toLowerCase().replace(/\/+$/, '');
     const m = new Map();
@@ -3772,8 +3800,24 @@ function DashRelaysCard() {
                   {refused ? <SkPill tint="clay">Refused our last change</SkPill> : null}
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 700, color: up ? 'var(--sage-ink)' : 'var(--clay-ink)' }}><span style={{ width: 8, height: 8, borderRadius: 999, background: up ? 'var(--sage)' : 'var(--clay)' }} /> {up ? 'Answering' : 'Offline'}</span>
                   {up && r.ms != null ? <span style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>· {r.ms}ms</span> : null}
-                  {!self && r.url !== own ? <button onClick={() => window.Steward.removeRelay(r.url)} title="Remove relay" aria-label="Remove relay" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={14} color="currentColor" /></button> : null}
+                  {!self && r.url !== own ? <button onClick={() => setConfirmDrop(r.url)} title="Remove relay" aria-label="Remove relay" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 7px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={14} color="currentColor" /></button> : null}
                 </div>
+                {/* NAME WHAT IS ABOUT TO BE LOST, not just "are you sure?". If this relay was reached BY NAME
+                    the name goes too, and that — not the address on screen — is what would bring it back. */}
+                {confirmDrop === r.url ? (
+                  <div role="alert" style={{ flexBasis: '100%', display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap', marginTop: 8, paddingTop: 9, borderTop: '1px solid var(--line)' }}>
+                    <span style={{ flex: 1, minWidth: 180, fontSize: 12, lineHeight: 1.45, color: 'var(--ink-2)' }}>
+                      {/* ⚠ CURLY APOSTROPHE, AND NOT FOR TYPOGRAPHY. A straight ' in JSX TEXT is an
+                          unbalanced quote to every brace-walking slicer in scripts/ — fnBody enters string
+                          mode and runs past the end of the component, so any test that lifts this card dies
+                          with "could not find the end of DashRelaysCard". Cost me a test run on the day this
+                          was written. The whole file already uses ’; this is why. */}
+                      Stop sending this church’s data to this relay?{relayName(r.url) ? ' It was added by the name “' + relayName(r.url) + '” — that name is forgotten too, so write it down if you may want it back.' : ' You would need this exact address to add it again.'}
+                    </span>
+                    <button onClick={() => { window.Steward.removeRelay(r.url); setConfirmDrop(null); }} title="Remove this relay" className="sk-btn sk-btn--clay" style={{ padding: '5px 11px', fontSize: 12 }}>Remove</button>
+                    <button onClick={() => setConfirmDrop(null)} title="Keep this relay" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 11px', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)', color: 'var(--ink-2)' }}>Keep it</button>
+                  </div>
+                ) : null}
               </div>
             );
           })}
@@ -8610,9 +8654,17 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
     if (!payload) return;
     if (!window.confirm('Restore this church onto this device?\n\nThis replaces the church key currently held here — make sure it’s backed up. You’ll be asked to set a PIN.')) return;
     // NO reload here. adoptChurch → restoreKey keeps the seed in MEMORY ONLY and sets needsPin, so the
-    // forced-PIN modal can encrypt and persist it; a reload throws that memory away and leaves the device
-    // with no key at all (restoreKey has already cleared the old one). StewardRoot swaps StewDashboard for
-    // StewardForcedPin on the needsPin event and remounts it after, which is the refresh the reload was for.
+    // forced-PIN modal can encrypt and persist it; a reload throws that memory away. StewardRoot swaps
+    // StewDashboard for StewardForcedPin on the needsPin event and remounts it after, which is the refresh
+    // the reload was for.
+    // ⚠ THE PARENTHESIS HERE USED TO SAY "(restoreKey has already cleared the old one)" AND IT IS BACKWARDS.
+    // cd67c7a deliberately REMOVED that eager wipe, because it left the device with no church key at all in
+    // the window between the wipe and setPin() — deterministic key loss, found on a phone 2026-08-04. Today
+    // restoreKey() calls setKey(), which sets in-memory state and nothing else; the previous key stays in
+    // localStorage and the hardware store until setPin() overwrites the same slot.
+    // SO THE HAZARD A RELOAD CAUSES IS THE OPPOSITE ONE, AND QUIETER: the restored seed is lost, the OLD key
+    // is still there, and the console comes back looking perfectly normal as the church it was before. The
+    // steward believes they adopted a church and did not. Same rule, right reason. Audit item 13, 2026-09-14.
     try { window.Steward.adoptChurch(payload); }
     catch (e) { window.alert('That QR isn’t a valid church handoff.'); }
   };
@@ -8622,9 +8674,13 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
     if (window.Steward.hasKey && !window.confirm('This replaces the church currently on this device — make sure its recovery phrase is backed up first.\n\nContinue?')) return;
     try {
       // NO reload — see adoptScanned. restoreKey() deliberately does NOT persist: the seed lives in memory
-      // until the forced-PIN modal encrypts it, and restoreKey has ALREADY removed the previous key from
-      // localStorage and the hardware store. Reloading here dropped the only copy, so the console came back
-      // to "Set up a new church" having destroyed the old key and kept nothing. Found on-device 2026-08-04.
+      // until the forced-PIN modal encrypts it.
+      // ⚠ AND THE SECOND HALF OF THIS USED TO READ "restoreKey has ALREADY removed the previous key from
+      // localStorage and the hardware store … the console came back to 'Set up a new church' having
+      // destroyed the old key and kept nothing." That WAS true on 2026-08-04 and is the bug cd67c7a fixed by
+      // deleting the eager wipe. Describing the fixed code as though it were still broken is worse than
+      // saying nothing: the next reader looks for a wipe that is not there, or restores one thinking it was
+      // an oversight. Audit item 13, 2026-09-14 — checked against setKey(), which touches memory only.
       window.Steward.restoreKey(restorePhrase);
     } catch (e) { setRestoreErr(e.message || 'That phrase isn’t valid.'); }
   };
@@ -8999,7 +9055,36 @@ function StewDmWindow({ peer, offset, onClose }) {
   const [rxFor, setRxFor] = React.useState('');   // msg id whose emoji picker is open
   const [err, setErr] = React.useState('');      // a send that never left this console, said out loud
   React.useEffect(() => window.Steward.subscribeDMThread(peer.pubkey, setMsgs), [peer.pubkey]);
-  React.useEffect(() => { if (!min && scRef.current) scRef.current.scrollTop = scRef.current.scrollHeight; }, [msgs, min]);
+  // ⚠ THE OTHER HALF OF THE OUTBOX, AND IT LIVED NOWHERE. The engine has had outboxForPeer, retryQueuedDM
+  // and dropQueuedDM since the outbox was added; this window called none of them, and `msgs` only ever holds
+  // what comes BACK off the relay. So a message the console had safely queued was invisible: the composer
+  // emptied and the steward saw nothing at all. Measured on a real console, 2026-09-14 — the words sat in
+  // the outbox with `_pending: true` while the open thread showed no trace of them. A vicar answering a
+  // member in distress had no way to tell a sent message from a swallowed one.
+  // The member app has rendered exactly this since 2026-08-26 (app/screens-chat.jsx, the dmQueued block);
+  // this is the same treatment, same wording, on the console. Owner's decision: "queue and retry, but show it."
+  const [queued, setQueued] = React.useState([]);
+  React.useEffect(() => {
+    const S = window.Steward; if (!S || !S.outboxForPeer) return;
+    const refresh = () => setQueued((S.outboxForPeer(peer.pubkey) || []).map(o => ({
+      id: o.id, mine: true, ts: o.created_at,
+      // THE PLAINTEXT IS MEMORY-ONLY ON PURPOSE — the queued item holds ciphertext that was going to a relay
+      // anyway, so a seized laptop gains nothing (see the note on _sOutPlain). The cost is that a RELOAD
+      // leaves a waiting message with no words, and an empty bubble reads as corruption. Say what it is.
+      text: o.plain || '(a message you sent earlier — still waiting to send)',
+      _pending: !o._failed, _failed: !!o._failed,
+    })));
+    refresh();
+    window.addEventListener('steward-outbox', refresh);
+    return () => window.removeEventListener('steward-outbox', refresh);
+  }, [peer.pubkey]);
+  // Queued items that the relay has since accepted come back through subscribeDMThread under the SAME event
+  // id, so dedupe on it or the steward sees their own message twice at the moment it lands.
+  const shown = React.useMemo(() => {
+    const have = new Set(msgs.map(m => m.id));
+    return [...msgs, ...queued.filter(q => !have.has(q.id))];
+  }, [msgs, queued]);
+  React.useEffect(() => { if (!min && scRef.current) scRef.current.scrollTop = scRef.current.scrollHeight; }, [msgs, queued, min]);
   // NOTHING ON THIS SCREEN EVER RENDERED A FAILURE. The send was fire-and-forget, the composer was cleared
   // regardless, and the thread below only shows what comes BACK off the relay — so when Steward.sendDM
   // returned null (no key, no peer hex, or the encrypt threw, all of them before the outbox push) the
@@ -9030,9 +9115,23 @@ function StewDmWindow({ peer, offset, onClose }) {
         <React.Fragment>
           <div ref={scRef} className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '12px 12px', display: 'flex', flexDirection: 'column', gap: 7 }}>
             <div style={{ textAlign: 'center', fontSize: 11, color: 'var(--ink-3)', marginBottom: 4 }}><Icon name="lock" size={12} /> Encrypted · only you two can read this</div>
-            {msgs.map(m => (
+            {shown.map(m => (
               <div key={m.id} style={{ alignSelf: m.mine ? 'flex-end' : 'flex-start', maxWidth: '82%', display: 'flex', flexDirection: 'column', alignItems: m.mine ? 'flex-end' : 'flex-start', position: 'relative' }}>
                 <div onClick={() => setRxFor(v => v === m.id ? '' : m.id)} title="Tap to react" style={{ padding: '8px 12px', borderRadius: 14, fontSize: 13.5, lineHeight: 1.4, whiteSpace: 'pre-wrap', background: m.mine ? 'var(--clay)' : 'var(--surface-2)', color: m.mine ? '#fff' : 'var(--ink)', border: m.mine ? 'none' : '1px solid var(--line)', cursor: 'pointer' }}>{m.text}</div>
+                {/* A WAITING MESSAGE MUST LOOK LIKE ONE. Without this footer the bubble above is identical to
+                    a delivered message, which is worse than showing nothing: the words are safe, and the
+                    steward is told they went. Mirrors app/screens-chat.jsx. */}
+                {m._failed || m._pending ? (m._failed ? (
+                  <span style={{ fontSize: 10.5, color: 'var(--clay-ink)', margin: '3px 2px 0', display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                    <Icon name="alert" size={10} color="currentColor" />Couldn’t send
+                    <button onClick={() => window.Steward.retryQueuedDM(m.id)} title="Try sending this again" style={{ border: 'none', background: 'none', padding: 0, color: 'var(--clay-ink)', fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 10.5 }}>Try again</button>
+                    <button onClick={() => window.Steward.dropQueuedDM(m.id)} title="Throw this message away" style={{ border: 'none', background: 'none', padding: 0, color: 'var(--ink-3)', fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 10.5 }}>Discard</button>
+                  </span>
+                ) : (
+                  <span style={{ fontSize: 10.5, color: 'var(--ink-3)', margin: '3px 2px 0', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                    <Icon name="clock" size={10} color="currentColor" />Waiting to send
+                  </span>
+                )) : null}
                 {m.reactions && m.reactions.length ? (
                   <div style={{ display: 'flex', gap: 3, marginTop: 2, flexWrap: 'wrap' }}>
                     {Object.entries(m.reactions.reduce((a, e) => (a[e] = (a[e] || 0) + 1, a), {})).map(([emo, n]) => (

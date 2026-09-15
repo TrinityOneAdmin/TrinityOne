@@ -22,7 +22,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { stripComments, fnBody } from './test-slice.mjs';
+import { stripComments, fnBody, stmt } from './test-slice.mjs';
 
 const ST = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
 
@@ -67,6 +67,17 @@ test('the retry re-sends the SAME event, and stops trying eventually — visibly
     now: () => 1000,
     lsGet: (k) => store[k], lsSet: (k, v) => { store[k] = v; },
     _sOutKey: () => 'k', S_OUTBOX_MAX: 200,
+    // The give-up threshold, taken from the bundle rather than retyped — a hard-coded 8 here would keep
+    // passing after somebody changed the real one.
+    S_OUT_TRIES: new Function(stmt(ST, 'var S_OUT_TRIES =', 'S_OUT_TRIES') + '\nreturn S_OUT_TRIES;')(),
+    // LIFTED, NOT STUBBED — _sOutDue is what decides whether an item is attempted at all (audit item 9,
+    // 2026-09-14: a message already given up on was being re-published for ever). A stub here would answer
+    // the question this test asks on the shipped code's behalf.
+    _sOutDue: new Function(
+      stmt(ST, 'var S_OUT_TRIES =', 'S_OUT_TRIES') + '\n' +
+      stmt(ST, 'var S_OUT_BACKOFF_MS =', 'S_OUT_BACKOFF_MS') + '\n' +
+      'const now = () => 1000;\n' +
+      fnBody(ST, 'function _sOutDue(item, ignoreBackoff)', '_sOutDue') + '\nreturn _sOutDue;')(),
   }, 'async function _sOutFlush');
   await flush();
   assert.equal(attempts, 1, 'the flush did not attempt the queued message');
@@ -85,9 +96,23 @@ test('the outbox carries private messages ONLY, never the church\'s documents', 
 });
 
 test('giving up is visible, and reversible by the steward', () => {
+  // ⚠ THIS TEST USED TO MATCH /retryQueuedDM/ AND /dropQueuedDM/ AGAINST THE WHOLE BUNDLE, and both matched
+  // — their own definitions. So it passed for the entire period in which, by the console's own account,
+  // "StewDmWindow called none of them" and the screen that would make giving up VISIBLE did not exist. A
+  // test satisfied by a function's definition says nothing about whether anything calls it; audit item 14,
+  // 2026-09-14, and it is the same shape as CLAUDE.md rule 1 in a file that is not about a screen.
+  //
+  // WHAT PROVES THE CLAIM NOW, by rendering the console's DM window and clicking the controls:
+  //   scripts/a-dm-that-never-sent-is-not-sent.test.mjs
+  //     · "a message the console has GIVEN UP ON says so, and offers a way back" — Try again and Discard
+  //       are found in the tree and their handlers are asserted to reach Steward.retryQueuedDM/dropQueuedDM
+  //     · "a message given up on REPAINTS as failed without reopening the thread"
+  //   scripts/a-message-the-console-gave-up-on-stays-given-up.test.mjs — that the give-up STATE is real.
+  // What is left here is the one thing honest to read off the bundle: that the flush can reach it at all.
+  // (Matching vendor/steward.js is sound — esbuild removes dead code, so a disabled branch disappears.)
   const flush = stripComments(fnBody(ST, 'async function _sOutFlush', '_sOutFlush'));
   assert.match(flush, /failed\s*=\s*true/,
     'a message that cannot be sent is retried for ever or dropped — neither is something a steward can see');
-  assert.match(stripComments(ST), /retryQueuedDM/, 'a steward cannot retry a message the app gave up on');
-  assert.match(stripComments(ST), /dropQueuedDM/, 'a steward cannot discard a message the app gave up on');
+  assert.match(flush, /S_OUT_TRIES/,
+    'the give-up threshold is inlined or gone, so the flush no longer measures against a stated limit');
 });

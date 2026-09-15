@@ -6527,7 +6527,7 @@
   );
   function _relayKey(url) {
     try {
-      return normalizeURL2(String(url || ""));
+      return relayAddrKey(String(url || ""));
     } catch {
       return String(url || "");
     }
@@ -15838,7 +15838,7 @@ zoo`.split("\n");
   function _originIsLoopback() {
     const l = typeof location !== "undefined" ? location : null;
     if (!l || !l.hostname) return false;
-    return /^(localhost|127\.0\.0\.1|::1|0\.0\.0\.0)$/i.test(String(l.hostname).replace(/^\[|\]$/g, ""));
+    return /^(localhost|127\.0\.0\.1|::1)$/i.test(String(l.hostname).replace(/^\[|\]$/g, ""));
   }
   async function localAdminToken() {
     if (_localToken) return _localToken;
@@ -16747,22 +16747,41 @@ zoo`.split("\n");
     } catch (e) {
     }
   }
-  async function _sOutFlush() {
+  var S_OUT_TRIES = 8;
+  var S_OUT_BACKOFF_MS = 30 * 60 * 1e3;
+  function _sOutDue(item, ignoreBackoff) {
+    if (item.failed) return false;
+    if (ignoreBackoff) return true;
+    const tries = item.tries || 0;
+    if (!tries || !item.lastTry) return true;
+    const wait = Math.min(45e3 * Math.pow(2, tries), S_OUT_BACKOFF_MS);
+    const since = now() - item.lastTry;
+    if (since < 0) return true;
+    return since * 1e3 >= wait;
+  }
+  async function _sOutFlush(ignoreBackoff) {
     if (_sFlushing || !sk) return;
     _sOutLoad();
     if (!_sOutbox.length) return;
     _sFlushing = true;
     try {
       for (const item of [..._sOutbox]) {
-        const r = await publish(item.evt);
+        if (!_sOutDue(item, ignoreBackoff)) continue;
+        let r = false;
+        try {
+          r = await publish(item.evt);
+        } catch (e) {
+          r = false;
+        }
+        const live = _sOutbox.find((o) => o && o.evt && o.evt.id === item.evt.id) || item;
         if (r) {
           _sOutbox = _sOutbox.filter((o) => o.evt.id !== item.evt.id);
           _sOutPlain.delete(item.evt.id);
           _sOutSave();
         } else {
-          item.tries = (item.tries || 0) + 1;
-          item.lastTry = now();
-          if (item.tries >= 8) item.failed = true;
+          live.tries = (live.tries || 0) + 1;
+          live.lastTry = now();
+          if (live.tries >= S_OUT_TRIES) live.failed = true;
           _sOutSave();
         }
       }
@@ -16773,7 +16792,7 @@ zoo`.split("\n");
   try {
     window.addEventListener("steward-relay-returned", () => {
       setTimeout(() => {
-        _sOutFlush().catch(() => {
+        _sOutFlush(true).catch(() => {
         });
       }, 3e3);
     });
@@ -16997,7 +17016,24 @@ zoo`.split("\n");
         oneose() {
           complete = true;
           finish();
-        }
+        },
+        // A CLIENT TIMEOUT MUST NOT MASQUERADE AS AN ANSWER — B0 of reference/PLAN-ENROLMENT-GAP-2026-09-02.md,
+        // and the same fix `_newestByD` has carried since AUDIT-8 measured it there.
+        // nostr-tools arms its OWN EOSE timer (default `baseEoseTimeout` 4400ms) and calls `oneose` when it
+        // expires, whether or not any relay ever sent the frame. This function's own bound is 6000ms, so the
+        // library's fake EOSE fired FIRST and set `complete = true` — a failed read reporting a COMPLETED read
+        // of an EMPTY church. That is the input to the doc-wipe chain: `relayNetDoc()` returns
+        // {ev:null, complete:true} while the church's relays are merely down (the a8 update blip is exactly
+        // this), the `!complete` guard does not fire, entries are rebuilt FROM SCRATCH with created_at: now(),
+        // and newest-wins un-admits every box the church had signed, on every member's phone.
+        // Pushing the library's timer well past our own bound means an EOSE arriving inside `ms` is a real one.
+        //
+        // ⚠ THIS ALONE DOES NOT CLOSE B0, and the plan says so in as many words. An UNREACHABLE relay still
+        // reports finished — measured in scripts/a-failed-read-is-not-an-empty-church.test.mjs, which drives a
+        // real socket that never sends EOSE and a genuinely dead port. `complete` means "every relay I could
+        // reach finished", which is not the question enrolment asks. Steps 2-3 of B0 — counting how many relays
+        // GENUINELY answered, and refusing the from-scratch path unless at least one did — are still open.
+        maxWait: ms + 5e3
       });
       setTimeout(finish, ms);
     });
@@ -17283,12 +17319,26 @@ zoo`.split("\n");
     // Signs the boxes this console can prove into the church's own membership document. Additive: it never
     // drops an entry that is merely unreachable.
     //
-    // STILL NOT CALLED AUTOMATICALLY ANYWHERE, and with C4's gate live that is now a DEPLOYMENT BLOCKER rather
-    // than a loose end: a church whose relay is admitted by neither the canonical pin nor this console's own
-    // origin has no way to author the document that would admit it, so its members would find no relay they
-    // may publish to. Wiring it into start-up is merge-schedule step 4 and wants a browser pass of its own —
-    // and the Suite's common case (§6-quater) is covered meanwhile by the same-origin root, which needs no
-    // document at all.
+    // STILL NOT CALLED AUTOMATICALLY ANYWHERE — and the sentence that used to be here, calling that a
+    // "DEPLOYMENT BLOCKER … its members would find no relay they may publish to", IS FALSE. Audit item 17,
+    // 2026-09-14, checked against the gate rather than against this comment.
+    //
+    // WHAT proveRelay ACTUALLY DOES (src/relay-net.src.js): after the one refusal for our own shipped
+    // addresses, it tries canonical pin → same origin → the church's relay-net document → and then admits
+    // anything that proved it holds a relay identity key at all, as `root: 'software'`. A self-hosting
+    // church's box reaches that last line and is admitted with NO document in existence. So nobody is cut off,
+    // and this function is a loose end, not a blocker.
+    //
+    // TWO THINGS THE NEXT PERSON TO WIRE IT UP NEEDS, because neither is visible from the call site:
+    //  · ROOT 3 IS INERT IN PRACTICE. No console authors a relay-net document today, so the `church` root
+    //    matches nothing and every self-hosted box is admitted one line lower on proof alone. Turning this on
+    //    does not "enable" self-hosting; it narrows nothing and adds a signed record.
+    //  · `9ec4310`'s GUARD IS UNEXERCISED. That commit fixed a doc-wipe — a read nobody answered was reported
+    //    as an empty church, the document was rebuilt from scratch with `created_at: now()`, and newest-wins
+    //    UN-ADMITTED every box the church had signed, on every member's phone. The `!complete → unknown:true`
+    //    return below is that fix, and with zero callers it has never run outside its test. It is the first
+    //    thing to exercise on a real slow link when this is wired in, not the last.
+    // Wiring it into start-up is merge-schedule step 4 and wants a browser pass of its own.
     enrolRelayNet,
     // ---- primitives for optional modules (Meals, Finance, Manna plugins) ----
     // Modules call publishSigned/subscribeMany; they never see `pool`, `relays()`, or `feChurch`.
@@ -22799,6 +22849,17 @@ zoo`.split("\n");
     // `{ member: false }` for the possession proof alone — the clone SOURCE, and nothing else (cloneFromRelay).
     resolveRelayName(name, opts) {
       return resolveRelayName(name, opts);
+    },
+    // WHICH NAME, IF ANY, POINTS AT THIS ADDRESS. Read-only, and it exists so a screen can say what a steward
+    // is about to lose: removeRelay() deliberately forgets the name→url binding (so auto-follow cannot re-add
+    // what was just removed), and for a self-hosted box behind a rotating tunnel address the NAME is the
+    // durable handle while the URL is not. Audit item 19, 2026-09-14.
+    // CALLER (rule 2): app/stew-dashboard.jsx, the remove-relay confirmation. No writer uses it.
+    relayNameFor(url) {
+      const u = normRelay(url);
+      if (!u) return "";
+      const hit = getNamedRelays().find((e) => e && normRelay(e.url) === u);
+      return hit ? String(hit.name || "") : "";
     },
     // remember that this relay was reached BY NAME, so auto-follow can track it as the tunnel url rotates
     rememberRelayName(name, url) {

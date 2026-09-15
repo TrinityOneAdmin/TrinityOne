@@ -422,6 +422,27 @@ async function init() {
       if (rem) { sessionMnemonic = rem; apply(deriveProfile(rem), { ephemeral: false }); return; }
       applyLocked(); return;
     }
+    // ⚠ A FAILED READ IS NOT AN EMPTY PHONE. `secureGet` ends `catch (e) { …; return null; }`, so a secure
+    // store that THROWS answers exactly as it does when there genuinely is no account — and the next line
+    // used to mint a fresh identity and write it over the top. The member opens the app as a brand-new
+    // nameless person: no name, no churches, no history, and the seed that would have brought it back
+    // overwritten. `secureSet`'s own comment already names the shape ("a Keystore that silently no-ops the
+    // write, known on some Androids after credential changes"). Audit finding 2026-09-14.
+    //
+    // ⚠ THE PIN CASE WAS ALREADY SAFE — the orphan-blob branch above recovers a PIN-locked identity, which
+    // is why this only ever bit a phone with NO PIN. That branch exists because of an earlier audit; this is
+    // the same lesson applied to the other half.
+    //
+    // So: ask whether this phone has ever held an account before minting over it. `_recoveryReference()` is
+    // the function that answers, and the comment above it already states the rule this path was breaking —
+    // a missing reference means "cannot prove it", NEVER "must be fine". A phone that HAS a reference but
+    // cannot read its seed is a phone with a broken store, not a new phone, and the honest answer is to say
+    // so rather than to replace the person.
+    if (isNative() && _recoveryReference()) {
+      console.warn('[identity] this phone has held an account but its seed could not be read — refusing to mint over it');
+      applyLocked();
+      return;
+    }
     mnemonic = generateSeedWords(); await secureSet(mnemonic);
   }
   apply(deriveProfile(mnemonic), { ephemeral: isEphemeral() });
@@ -755,4 +776,28 @@ window.TrinityIdentity = {
   },
 };
 
-window.TrinityIdentity.ready = init().catch(e => console.error('[identity] init failed', e));
+// ⚠ `settled` — HAS THE LOCK BEEN DECIDED, OR IS IT STILL A GUESS? `isLocked()` is
+// `hasEnc() && !sessionMnemonic`, and on a "remember me" boot `sessionMnemonic` arrives only after
+// `await rememberedSeed()` — a SecureStorage round trip. Until then the honest answer to "is this member
+// locked?" is NOT "yes", it is "we do not know yet", and anything destructive keyed on that guess acts on
+// a phone that never locked. app/app.jsx's locked-boot wipe did exactly that (item 7 of the 14-day audit,
+// 2026-09-14): on a stay-open boot it fired at first render and destroyed every church cache for a member
+// who had not seen a PIN screen — and offline the congregation then painted empty with nothing saying why.
+//
+// A PROMISE WAS NOT ENOUGH. `ready` already existed, but a React render cannot await it, so a synchronous
+// caller had no way to ask. This flag is that question, answerable in a render.
+// FALSE UNTIL init() HAS RUN TO COMPLETION, whichever branch it took — minted, unlocked, remembered or
+// locked — and it stays true for the session. It says the question has been ANSWERED, never what the answer
+// was: `isLocked()` is still the only thing that says whether the member is locked.
+// CALLERS (rule 2): app/app.jsx, the `commLocked` wipe effect. Nothing else reads it.
+window.TrinityIdentity.settled = false;
+window.TrinityIdentity.ready = init()
+  .catch(e => console.error('[identity] init failed', e))
+  // …AND IT SETTLES EVEN WHEN init() THREW, which matters: a phone whose secure store throws would
+  // otherwise leave this false for the session and never wipe on a genuinely locked boot — the mirror
+  // defect (AUDIT-2026-07-28 F7), and the worse of the two on a seized device.
+  // ⚠ THE `.catch` ABOVE IS WHAT GUARANTEES THAT, NOT THE `.finally`. The catch converts the rejection, so
+  // `.then` here would behave identically — I wrote "this is why it is .finally and not .then" and it was
+  // wrong; a sabotage swapping them came back green and was right to. `.finally` is kept because it states
+  // the intent and survives the catch being narrowed later, which is the only way this could regress.
+  .finally(() => { window.TrinityIdentity.settled = true; });

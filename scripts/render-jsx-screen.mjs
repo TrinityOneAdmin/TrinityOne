@@ -62,7 +62,30 @@ const sameDeps = (a, b) => Array.isArray(a) && Array.isArray(b) && a.length === 
 // expanded recursively, each with its OWN hook store keyed by its position (and its React `key` where it has
 // one), because hook state belongs to an instance and a single flat array would hand one component's state
 // to another the moment the tree changed shape.
-export function miniReact() {
+// ⚠ `unmounts: true` MAKES THIS HARNESS ABLE TO SEE A COMPONENT LEAVE THE TREE, AND THE DEFAULT CANNOT.
+// By default a store is kept for ever once created, so a component rendered as `{open ? <X/> : null}` keeps
+// its state across a close-and-reopen — which real React does NOT: it unmounts X and the next mount starts
+// blank. Every test written on the default therefore goes GREEN over a state-lost-on-collapse bug, which is
+// exactly how one shipped in 23f7200 (a parent's landed check-in arrival was thrown away by the tap that
+// folded the card, and the button that came back could then report the arrival refused).
+//
+// The default is UNCHANGED and every existing caller keeps it: dropping stores costs a set per draw and
+// changes what a mid-test `draw` means, and every file that uses this was written against the old
+// behaviour. Pass the option in a test that needs to open and close something.
+//
+// ⚠ THE RULE-2 NOTE HERE SAID "40 files, every one calling `miniReact()` bare. Verified with: grep …" AND
+// BOTH HALVES WERE WRONG. The count was ~59 files at the time (an audit measured 58 the same week, and the
+// number moves every time a screen test is added — which is exactly why a hard number does not belong in a
+// comment). And the quoted grep no longer returns nothing: it returns the one deliberate caller below.
+//
+// THE RULE, WHICH DOES NOT DRIFT: every caller passes NO option and therefore keeps the old behaviour.
+// There is exactly one exception, and it is deliberate —
+//   scripts/a-parent-shows-a-code-instead-of-typing.test.mjs, which needs a component to genuinely UNMOUNT
+//   in order to see a check-in arrival being thrown away by a fold.
+// To re-check that, and read the answer rather than trusting this comment:
+//     grep -rn "miniReact(" scripts/ | grep -v "miniReact()" | grep -v render-jsx-screen.mjs
+export function miniReact(opts) {
+  const UNMOUNTS = !!(opts && opts.unmounts);
   const stores = new Map();
   let cur = null, queued = [];
   const React = {
@@ -111,10 +134,12 @@ export function miniReact() {
     return s;
   };
   function expand(node, key) {
+    if (UNMOUNTS && seen) seen.add(key);
     if (node == null || node === false || typeof node !== 'object') return node;
     if (Array.isArray(node)) return node.map((c, i) => expand(c, key + '.' + i));
     if (typeof node.type !== 'function') return { ...node, kids: (node.kids || []).map((c, i) => expand(c, key + '.' + i)) };
     const k = key + '#' + (node.type.name || 'C') + (node.props && node.props.key != null ? ':' + node.props.key : '');
+    if (UNMOUNTS && seen) seen.add(k);
     const kids = node.kids || [];
     const prev = cur;
     cur = storeFor(k);
@@ -124,9 +149,16 @@ export function miniReact() {
     return { type: node.type, props: node.props, kids: [expand(out, k)] };
   }
   // One draw: render the tree, then run whatever effects it queued (deps-compared, as React does).
+  let seen = null;
   const draw = (Comp, props) => {
     queued = [];
+    if (UNMOUNTS) seen = new Set();
     const tree = expand({ type: Comp, props, kids: [] }, 'root');
+    // A STORE NOT VISITED BY THIS DRAW BELONGS TO A COMPONENT THAT HAS LEFT THE TREE. React unmounts it and
+    // the state goes with it; so does this, under the option. Cleanups are NOT run — this harness never ran
+    // them (that is its own documented limitation, which is why intervals must be stubbed) and pretending
+    // otherwise here would make one option quietly change two things.
+    if (UNMOUNTS) { for (const k of [...stores.keys()]) if (!seen.has(k)) stores.delete(k); seen = null; }
     const run = queued; queued = [];
     run.forEach(fn => { try { fn(); } catch (e) { throw new Error('an effect threw during render: ' + e.message); } });
     return tree;

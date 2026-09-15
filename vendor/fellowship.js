@@ -3760,7 +3760,7 @@
   );
   function _relayKey(url) {
     try {
-      return normalizeURL2(String(url || ""));
+      return relayAddrKey(String(url || ""));
     } catch {
       return String(url || "");
     }
@@ -9055,7 +9055,9 @@
     const candidates = _dedupeRelays(relays);
     const targets = _netRelays(candidates);
     if (!targets.length && (candidates.length || churchRelaysRaw().length)) {
-      return Promise.reject(new Error(NO_NETWORK_RELAY + ": none of this church's relays could be proved to be ours"));
+      const e0 = new Error(NO_NETWORK_RELAY + ": none of this church's relays could be proved to be ours");
+      e0.unsent = true;
+      return Promise.reject(e0);
     }
     try {
       for (const u of targets) {
@@ -9077,13 +9079,23 @@
         }
       });
       if (!good) {
-        const why = (rs.find((r) => r.status === "fulfilled") || {}).value || ((rs.find((r) => r.status === "rejected") || {}).reason || {}).message || "no relay accepted this";
+        const _spoke = (r) => r.status === "fulfilled" ? String(r.value == null ? "" : r.value) : String(r.reason && r.reason.message || r.reason || "");
+        const _said = (r) => _spoke(r) && !/^connection failure/i.test(_spoke(r));
+        const why = (rs.find(_said) ? _spoke(rs.find(_said)) : "") || (rs.find((r) => r.status === "fulfilled") || {}).value || ((rs.find((r) => r.status === "rejected") || {}).reason || {}).message || "no relay accepted this";
         const err = new Error(String(why));
-        err.refused = rs.some((r) => r.status === "fulfilled" && _PUB_REFUSED.test(String(r.value == null ? "" : r.value)));
+        const _saidAny = (r) => String(r.status === "rejected" ? r.reason && r.reason.message || r.reason || "" : r.value == null ? "" : r.value);
+        err.refused = rs.some((r) => _PUB_REFUSED.test(_saidAny(r)));
+        const _unreachable = (r) => r.status === "fulfilled" && /^connection failure/i.test(String(r.value == null ? "" : r.value));
+        if (!targets.length || rs.length && rs.every(_unreachable)) err.unsent = true;
         throw err;
       }
       return true;
     });
+  }
+  function _pubReason(e) {
+    if (e && e.unsent) return "not-sent";
+    if (e && e.refused) return "refused";
+    return "unconfirmed";
   }
   function _publishBounded(relays, evt) {
     return Promise.race([
@@ -9160,6 +9172,7 @@
   }
   var BRINGKIDS_KEY = "trinityone.bringkids.";
   var MYKIDNAMES_KEY = "trinityone.mykidnames.";
+  var ARRIVEDAT_KEY = "trinityone.arrivedat.";
   var MYKIDS_MAX = 12;
   var MYKID_NAME_MAX = 40;
   function _kidsChanged() {
@@ -9661,7 +9674,8 @@
         "trinityone.joinintent"
       ]);
       const FORCE_WIPE = /* @__PURE__ */ new Set(["trinityone.mydata:data/chatseen"]);
-      const doomed = (k) => !!k && k.startsWith("trinityone.") && !KEEP.has(k) && (FORCE_WIPE.has(k) || !k.startsWith("trinityone.mydata:") && !k.startsWith("trinityone.backedup.") && !k.startsWith("trinityone.approvedToast.") && (PREFIXES.some((p) => k.startsWith(p)) || IDENTIFIER.test(k)));
+      const KEEP_PREFIX = ["trinityone.bringkids.", "trinityone.mykidnames.", "trinityone.arrivedat."];
+      const doomed = (k) => !!k && k.startsWith("trinityone.") && !KEEP.has(k) && !KEEP_PREFIX.some((p) => k.startsWith(p)) && (FORCE_WIPE.has(k) || !k.startsWith("trinityone.mydata:") && !k.startsWith("trinityone.backedup.") && !k.startsWith("trinityone.approvedToast.") && (PREFIXES.some((p) => k.startsWith(p)) || IDENTIFIER.test(k)));
       try {
         const kill = [];
         for (let i3 = 0; i3 < localStorage.length; i3++) {
@@ -9740,16 +9754,34 @@
     },
     // leave a church: tombstone the membership event (they vanish from the steward's list unless they
     // have posted). Wired for when an unfollow action exists.
+    //
+    // ── "YOU'RE STILL A MEMBER THERE" WAS FALSE IN THE ONE DIRECTION THAT MATTERS. 2026-09-15, chunk 2. ────
+    // This returned `evt | null` and leaveChurch turned the null into "Couldn't tell your church you've left —
+    // you're still a member there." `_publishAny` throws when nobody acknowledged inside WEDGE_ACK_MS as well
+    // as when a relay refused, and in the first case the tombstone is signed, on the wire, and may already have
+    // been honoured: the church has dropped them and the app tells them it has not. A member who wanted to leave
+    // a church — sometimes for reasons that are the whole point of an unfollow button — is told they are still
+    // in it. NOW: `{ ok, reason }` from the shared `_pubReason`, and the caller says "we couldn't confirm".
+    //
+    // ⚠ EVERY RETURN IS AN OBJECT NOW, INCLUDING THE TWO THAT WERE BARE `return;`. leaveChurch read `if (!told)`
+    // and an object is always truthy, so a half-converted caller would drop the church from the phone over a
+    // tombstone nobody accepted — the exact optimism audit #6 removed. Its one caller now reads `told.ok`, and
+    // a-reply-that-did-not-send-is-not-a-reply.test.mjs fails if a failure ever comes back with `ok` true.
+    // The locked-with-an-unsent-intent path still answers `local: true` alongside `ok: true` (nothing is at the
+    // church to tombstone, so the unfollow is allowed through) — join-while-locked.test.mjs pins that.
+    //
+    // NO RETRY: the tombstone is a replaceable doc at a fixed d-tag, so leaving twice is a no-op — but the
+    // person decides. See the note above the moderation writers for why there is no shared retry helper.
     async leaveMembership(npubOrHex) {
       if (!sk) await window.Fellowship.ready;
       const cp = toPub(npubOrHex);
-      if (!cp) return;
+      if (!cp) return { ok: false, reason: "not-sent" };
       if (!sk) {
         if (!_joinSent[cp] && _joinIntents.some((i3) => i3.cp === cp)) {
           _dropJoinIntent(cp);
-          return { local: true };
+          return { ok: true, local: true };
         }
-        return;
+        return { ok: false, reason: "not-sent" };
       }
       const evt = finalizeEvent2({
         kind: 30078,
@@ -9760,11 +9792,11 @@
       try {
         await _publishAny(window.Fellowship.relays, evt);
       } catch (e) {
-        return null;
+        return { ok: false, reason: _pubReason(e) };
       }
       _clearJoinSent(cp);
       _dropJoinIntent(cp);
-      return evt;
+      return { ok: true, evt };
     },
     // live count of a church's members — matches the steward's rule: distinct people (not the church)
     // who posted (kind-1) or explicitly joined (member:<church>), minus those who left without posting.
@@ -10818,43 +10850,64 @@
     // _publishAny raises each relay's give-up to WEDGE_ACK_MS (11s) and then waits on all of them, so a silent
     // relay left the room's "Removing…" line spinning for eleven seconds with the abusive post still on screen.
     // Bounded settles at PUBLISH_TIMEOUT_MS (12s) at worst and, far more importantly, CANNOT sit longer than
-    // that if a socket never settles at all. The outcome the caller sees is unchanged: the event on success,
-    // null on any failure — including the timeout, which is a failure and must read as one.
+    // that if a socket never settles at all. A timeout is a failure and must read as one — but see the note
+    // below on WHICH failure, because that used to be flattened and the room said the wrong thing about it.
     // Callers (CLAUDE.md rule 2 — complete list): app/screens-chat.jsx doPin / doUnpin / doRemove. The console's
     // pin/unpin/hide are window.Steward's own implementations in src/steward.src.js and do not come through
-    // here. unhideMessage has no caller in app/ at all; it is changed with its three siblings so the next one
-    // written does not inherit the unbounded wait.
+    // here. unhideMessage has no caller in app/ at all (app/stew-dashboard.jsx calls window.Steward's); it is
+    // changed with its three siblings so the next one written does not inherit the unbounded wait.
+    //
+    // ── AND THEY MUST NOT ASSERT A STATE THEY CANNOT KNOW. 2026-09-15, chunk 2. ────────────────────────────
+    // All four returned `evt | null`, and the room turned that single `null` into a sentence about the world:
+    // "Couldn't remove that — IT'S STILL VISIBLE TO THE GROUP." `_publishBounded` rejects when a relay refused
+    // AND when nobody answered in time, and the second is not a verdict — the tombstone is signed, on the wire,
+    // and usually lands a moment later. So a leader who has just hidden an abusive post is told it is still up.
+    // He leaves it up, or removes it a second time. (Removing twice is harmless — see below — but being lied to
+    // at that moment is not.)
+    // NOW: `{ ok: true, evt }` or `{ ok: false, reason }`, reason from the shared `_pubReason`.
+    //
+    // ⚠ AN OBJECT, AND EVERY CALLER CHANGED IN THE SAME COMMIT. `_moderated` branched on `evt ? done : failed`,
+    // so ANY truthy failure value — an object OR a string like 'unconfirmed' — would take the SUCCESS arm and
+    // toast "Message removed" over a post that is still there. That is worse than the bug. The object forces
+    // the caller to change, and moderation-does-not-assert-what-it-cannot-know.test.mjs fails if one truth-tests
+    // it. (Same trap, same remedy as markSafe in chunk 1.)
+    //
+    // ⚠ AND NO RETRY. All four write one REPLACEABLE doc at a fixed d-tag, so a second attempt is a no-op — but
+    // a shared "retry on unconfirmed" helper around every writer in this file would be wrong: four writers here
+    // are NOT idempotent, and setEventRsvp is a toggle whose retry reverses the member's own answer. `_pubReason`
+    // is the shared piece; the SENTENCE stays with each writer, because what to say depends on what the document
+    // means. The person decides whether to act again; the wording now lets them.
     async pinPost(churchNpub, groupId, msg) {
       if (!sk) await window.Fellowship.ready;
       const cp = toPub(churchNpub);
-      if (!cp || !groupId || !msg || !msg.id) return null;
+      if (!cp || !groupId || !msg || !msg.id) return { ok: false, reason: "not-sent" };
       const content = JSON.stringify({ msgId: msg.id, text: msg.text || "", by: msg.pubkey || msg.by || "", ts: msg._ts || msg.ts || Math.floor(Date.now() / 1e3) });
       const evt = finalizeEvent2(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", "trinityone/pin:" + groupId], ["t", NET], ["t", groupId], ["p", cp]], content }), sk);
       try {
         await _publishBounded(window.Fellowship.relays, evt);
       } catch (e) {
         console.warn("[fellowship] pinPost failed", e);
-        return null;
+        return { ok: false, reason: _pubReason(e) };
       }
-      return evt;
+      return { ok: true, evt };
     },
     async unpin(churchNpub, groupId) {
       if (!sk) await window.Fellowship.ready;
       const cp = toPub(churchNpub);
-      if (!cp || !groupId) return null;
+      if (!cp || !groupId) return { ok: false, reason: "not-sent" };
       const evt = finalizeEvent2(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", "trinityone/pin:" + groupId], ["t", NET], ["t", groupId], ["p", cp], ["deleted", "1"]], content: "" }), sk);
       try {
         await _publishBounded(window.Fellowship.relays, evt);
       } catch (e) {
         console.warn("[fellowship] unpin failed", e);
-        return null;
+        return { ok: false, reason: _pubReason(e) };
       }
-      return evt;
+      return { ok: true, evt };
     },
     async hideMessage(churchNpub, groupId, msgId) {
       if (!sk) await window.Fellowship.ready;
       const cp = toPub(churchNpub);
-      if (!cp || !msgId) return null;
+      if (!cp || !msgId) return { ok: false, reason: "not-sent" };
       const tags = [["d", "trinityone/hidden:" + msgId], ["t", NET], ["p", cp]];
       if (groupId) tags.push(["t", groupId]);
       const evt = finalizeEvent2(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags, content: JSON.stringify({ groupId: groupId || "" }) }), sk);
@@ -10862,14 +10915,14 @@
         await _publishBounded(window.Fellowship.relays, evt);
       } catch (e) {
         console.warn("[fellowship] hideMessage failed", e);
-        return null;
+        return { ok: false, reason: _pubReason(e) };
       }
-      return evt;
+      return { ok: true, evt };
     },
     async unhideMessage(churchNpub, groupId, msgId) {
       if (!sk) await window.Fellowship.ready;
       const cp = toPub(churchNpub);
-      if (!cp || !msgId) return null;
+      if (!cp || !msgId) return { ok: false, reason: "not-sent" };
       const tags = [["d", "trinityone/hidden:" + msgId], ["t", NET], ["p", cp], ["deleted", "1"]];
       if (groupId) tags.push(["t", groupId]);
       const evt = finalizeEvent2(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags, content: "" }), sk);
@@ -10877,9 +10930,9 @@
         await _publishBounded(window.Fellowship.relays, evt);
       } catch (e) {
         console.warn("[fellowship] unhideMessage failed", e);
-        return null;
+        return { ok: false, reason: _pubReason(e) };
       }
-      return evt;
+      return { ok: true, evt };
     },
     // ── read a church's published GROUP definitions (kind 30078, by the steward console) ──
     // onGroups([{id,name,kind,sub}]) fires on change; returns an unsubscribe fn.
@@ -11156,28 +11209,30 @@
       }
       const join2 = finalizeEvent2({ kind: 30078, created_at: ts, tags: [["d", "trinityone/member:" + cp], ["t", NET], ["p", cp]], content: JSON.stringify({ joined: ts }) }, childSk);
       const req = finalizeEvent2({ kind: 30078, created_at: ts, tags: [["d", "trinityone/guardreq:" + childPub], ["t", NET], ["p", cp], ["p", childPub]], content: JSON.stringify({ child: childPub, parent: pub }) }, sk);
-      const sent = async (e) => {
+      const why = { join: "", k0: "", name: "", req: "" };
+      const sent = async (e, key) => {
         if (!e) return false;
         try {
           await _publishAny(window.Fellowship.relays, e);
           return true;
         } catch (err) {
           console.warn("[fellowship] child publish failed", err);
+          if (key) why[key] = _pubReason(err);
           return false;
         }
       };
       const published = { join: false, k0: false, name: false, req: false };
-      published.join = await sent(join2);
+      published.join = await sent(join2, "join");
       if (published.join) {
-        const both = await Promise.all([sent(k0), sent(childNameDoc)]);
+        const both = await Promise.all([sent(k0, "k0"), sent(childNameDoc, "name")]);
         published.k0 = both[0];
         published.name = both[1];
-        if (published.name) published.req = await sent(req);
+        if (published.name) published.req = await sent(req, "req");
       }
       const ok = !!(published.join && published.name && published.req);
       if (ok) _saveChildLink({ child: childPub, name, churchPub: cp, ts });
       _needAuth = true;
-      return { childPub, mnemonic, npub: npubEncode(childPub), name, published, ok };
+      return { childPub, mnemonic, npub: npubEncode(childPub), name, published, why, ok };
     },
     // the children this parent has set up (local record; no secrets) — [{ child, name, churchPub, ts }]
     myChildren(churchNpub) {
@@ -11917,6 +11972,56 @@
       _kidsChanged();
       return !!on;
     },
+    // ── DID I ALREADY SAY WE ARE HERE? ──────────────────────────────────────────────────────────────────────
+    // The outcome of the LAST arrival this phone wrote, so that leaving the Today screen does not throw it
+    // away. It was React state alone, which meant: tap "We're here", look at any other tab, come back — and
+    // the square was gone and the button offered again over an arrival ALREADY ON THE WORKER'S SCREEN. Tap
+    // again on a flaky socket and the card says "that was turned away, take them to the desk" about a
+    // check-in the worker is looking at. `app.jsx` renders one screen at a time, so leaving Today unmounts
+    // everything it was remembering. The fold was fixed on 2026-09-12; this is the same harm through the tab
+    // and through an app restart.
+    //
+    // ⚠ THIS IS A MIRROR, NOT THE STATE ITSELF, AND THE DIFFERENCE IS A DOOR. The first design deleted the
+    // React state and read from here instead — which means a storage that is full or refused leaves the
+    // parent with NO SQUARE AT THE MOMENT OF THE TAP, not merely after a tab switch. This origin is already
+    // documented shedding avatars at the browser's ~5MB limit for a church of ~500, which is exactly the
+    // church that has a children's ministry. So the card keeps its own state and this is written alongside:
+    // if it fails, nothing is worse than before it existed.
+    //
+    // ⚠ ONE RECORD PER (church, member), OVERWRITTEN BY THE NEXT SESSION. Not a key per session — that grows
+    // without bound against the same 5MB, and a parent needs exactly one answer: "the last thing I said, and
+    // which service I said it for". The reader hands back the session so the caller can refuse a stale one,
+    // the same rule `landed` and `inARoom` both apply.
+    //
+    // `_kidSlot` is the same per-member slot `bringsChildren` and `myChildNames` use. A church-only key would
+    // hand one member's landed arrival to the next identity on a shared phone.
+    arrivalOutcome(churchNpub) {
+      const slot = _kidSlot(ARRIVEDAT_KEY, toPub(churchNpub));
+      if (!slot) return null;
+      try {
+        const o = JSON.parse(localStorage.getItem(slot) || "null");
+        if (!o || typeof o !== "object" || typeof o.session !== "string" || !o.session) return null;
+        return { session: o.session, ok: !!o.ok, reason: String(o.reason || ""), at: Number(o.at) || 0 };
+      } catch (e) {
+        return null;
+      }
+    },
+    setArrivalOutcome(churchNpub, session, res) {
+      const slot = _kidSlot(ARRIVEDAT_KEY, toPub(churchNpub));
+      const sid = String(session || "");
+      if (!slot || !sid || !_mayCache()) return false;
+      try {
+        localStorage.setItem(slot, JSON.stringify({
+          session: sid,
+          ok: !!(res && res.ok),
+          reason: String(res && res.reason || ""),
+          at: Math.floor(Date.now() / 1e3)
+        }));
+      } catch (e) {
+        return false;
+      }
+      return true;
+    },
     // THE NAMES. Returned normalised, so a caller can never be handed something it could not render.
     myChildNames(churchNpub) {
       const slot = _kidSlot(MYKIDNAMES_KEY, toPub(churchNpub));
@@ -11964,7 +12069,7 @@
     // the child's name at the desk exactly as she does today.
     //
     // ⚠ IT HAS A PRODUCT CALLER FROM 2026-09-12, AND UNTIL THEN IT HAD NONE. `ctx.checkinArrive` in
-    // app/app.jsx, called by WereHereCard in app/screens-today.jsx — §3b of
+    // app/app.jsx, called by WereHereSection in app/screens-today.jsx — §3b of
     // reference/PLAN-CHECKIN-NO-TYPING-2026-09-11.md. The comment that stood here said "NOTHING IN app/ CALLS
     // THIS YET" and named the reason: reading a record back needed a guardian-sealed copy that did not exist.
     // That copy shipped, and §3b then removed the rest of the obstacle by carrying the children's names
@@ -12001,7 +12106,7 @@
       } catch (e) {
         return {
           ok: false,
-          reason: e && e.refused ? "refused" : "unconfirmed",
+          reason: _pubReason(e),
           message: String(e && e.message || e),
           id: d
         };
@@ -12095,7 +12200,7 @@
       try {
         await _publishAny(relaysForChurch(cp), evt);
       } catch (e) {
-        return { ok: false, reason: "publish-failed", message: String(e && e.message || e) };
+        return { ok: false, reason: _pubReason(e), message: String(e && e.message || e) };
       }
       return { ok: true, id };
     },
@@ -12154,7 +12259,7 @@
       try {
         await _publishAny(relaysForChurch(cp), evt);
       } catch (e) {
-        return { ok: false, reason: "publish-failed", message: String(e && e.message || e) };
+        return { ok: false, reason: _pubReason(e), message: String(e && e.message || e) };
       }
       return { ok: true, id };
     },
@@ -13014,7 +13119,7 @@
         } catch {
         }
       }
-      if (!sk || !cp || !check || !check.by) return false;
+      if (!sk || !cp || !check || !check.by) return { ok: false, narrowed: false, reason: "not-sent" };
       const body = JSON.stringify({ status: status === "help" ? "help" : "safe", note: String(note || "").trim().slice(0, 240), at: Math.floor(Date.now() / 1e3), checkId: check.id });
       const aud = check.audience === "care" ? "care" : "stewards";
       let group = null;
@@ -13044,15 +13149,15 @@
         } catch (e) {
         }
       }
-      if (!Object.keys(to).length) return false;
+      if (!Object.keys(to).length) return { ok: false, narrowed: false, reason: "no-readers" };
       const ct = JSON.stringify({ v: 2, to });
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", SAFE_D + cp], ["t", NET], ["church", cp], ["p", check.by]], content: ct }, sk);
       try {
         await _publishAny(churchRelays(), evt);
-        return picked.narrowed ? "narrow" : true;
+        return { ok: true, narrowed: !!picked.narrowed, reason: "" };
       } catch (e) {
         console.warn("[fellowship] markSafe publish failed", e);
-        return false;
+        return { ok: false, narrowed: false, reason: _pubReason(e) };
       }
     },
     // the RECIPIENT marks a day they don't need help (relay rejects this from anyone but the recipient).
@@ -13414,18 +13519,34 @@
       };
     },
     // member RSVP to a calendar event — one addressable doc per (member,event), p-tagged to church
+    //
+    // ── THIS WRITER IS IDEMPOTENT. ITS CALLER'S TOGGLE IS NOT. 2026-09-15, chunk 2. ───────────────────────
+    // The verdict arrives already decided and goes to a fixed d-tag (`rsvp:<eventId>`), so writing it twice is
+    // a no-op. What was dishonest was the answer: `evt | null`, and `_publishAny` throws when nobody answered
+    // inside WEDGE_ACK_MS as well as when a relay refused. So a member who tapped "Going" over a slow relay was
+    // told the church had not been told, while it had. Then — the part that costs her her answer — the
+    // subscription echoed the RSVP back, ctx.setRsvp's `myRsvps[eventId] === verdict` became true, and tapping
+    // the same button to make sure computed a WITHDRAWAL. Two taps meaning "yes" leave her marked not going.
+    // NOW: `{ ok, evt, reason }` from the shared `_pubReason`, so the caller can both say the true thing AND
+    // remember what it last tried — see setRsvp in app/app.jsx, which is where the toggle actually lives.
+    //
+    // ⚠ NO RETRY HERE, AND NEVER. A retry of a TOGGLE is not the same action twice: `setRsvp` recomputes the
+    // verdict from state a failure may have desynced, so an automatic second attempt can publish the opposite
+    // of what the member asked for. The person taps again if they want to; the wording now tells them what that
+    // tap will do. (An object, not a truthy string, for the reason in the moderation note above: the one caller
+    // read `if (!sent)` and any truthy failure would have taken the success arm.)
     async setEventRsvp(churchNpub, eventId, verdict) {
       if (!sk) await window.Fellowship.ready;
       const cp = toPub(churchNpub);
-      if (!cp || !sk) return;
+      if (!cp || !sk) return { ok: false, reason: "not-sent" };
       const content = JSON.stringify({ event: eventId, v: verdict });
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", "trinityone/rsvp:" + eventId], ["t", NET], ["p", cp]], content }, sk);
       try {
         await _publishAny(window.Fellowship.relays, evt);
       } catch (e) {
-        return null;
+        return { ok: false, reason: _pubReason(e) };
       }
-      return evt;
+      return { ok: true, evt };
     },
     subscribeMyRsvps(onRsvps) {
       const me = window.Fellowship.myPubkey;
@@ -13493,6 +13614,67 @@
       } catch (e) {
         return [];
       }
+    },
+    // ── ASK THE CHURCH WHAT IT ALREADY HOLDS ──────────────────────────────────────────────────────────────
+    // The local mirror was the ONLY copy this screen ever read, and that made an ordinary wipe destroy the
+    // church's record too: the mirror goes, the sheet opens blank, the member ticks one new Sunday, and each
+    // save REPLACES the whole array — so the two Sundays they had already given are deleted from the rota,
+    // by them, while adding a third. Nobody is told. Measured by audit 2026-09-14.
+    //
+    // The document is addressable at the MEMBER'S OWN key and signed by them, so their phone can simply fetch
+    // it. The mirror is a cache from here on, not the truth.
+    //
+    // ⚠ IT ANSWERS `{ dates, complete }`, AND `complete` IS THE WHOLE POINT. A read that nobody answered must
+    // never be reported as "you have told them nothing" — that is exactly the shape that armed the relay
+    // doc-wipe (B0 in reference/PLAN-ENROLMENT-GAP-2026-09-02.md: "a failed read reports a COMPLETED read of
+    // an EMPTY church"), and here it would arm the same replace-with-nothing. A caller that cannot see
+    // `complete: true` must refuse to save a replacement.
+    //
+    // `maxWait` for the reason `_newestByD` carries it: nostr-tools arms its OWN eose timer and calls
+    // `oneose` when it expires whether or not a relay answered, so without this a silent socket would report
+    // a completed read of an empty document — the very thing this function exists to distinguish.
+    readUnavailable(churchNpub, ms = 6e3) {
+      const cp = toPub(churchNpub);
+      const me = window.Fellowship.myPubkey;
+      if (!cp || !me) return Promise.resolve({ dates: [], complete: false });
+      return new Promise((resolve) => {
+        let best = null, complete = false, done = false;
+        const finish = () => {
+          if (done) return;
+          done = true;
+          try {
+            sub.close();
+          } catch (e) {
+          }
+          let dates = [];
+          if (best) {
+            try {
+              const o = JSON.parse(best.content || "{}");
+              dates = Array.isArray(o.dates) ? o.dates.filter((d) => typeof d === "string") : [];
+            } catch (e) {
+              dates = [];
+            }
+          }
+          if (complete) {
+            try {
+              localStorage.setItem(UNAVAIL_MIRROR + cp, JSON.stringify(dates));
+            } catch (e) {
+            }
+          }
+          resolve({ dates, complete });
+        };
+        const sub = pool.subscribeMany(relaysForChurch(cp), [{ kinds: [30078], authors: [me], "#d": ["trinityone/unavail:" + me] }], {
+          onevent(e) {
+            if (!best || (e.created_at || 0) > (best.created_at || 0)) best = e;
+          },
+          oneose() {
+            complete = true;
+            finish();
+          },
+          maxWait: ms + 5e3
+        });
+        setTimeout(finish, ms);
+      });
     },
     // ── read a church's kind-0 profile (name etc.) -- used when following a church by npub ──
     // FEDERATION Phase 2 — read a church's signed NIP-65 relay-list (kind 10002) and ADOPT the relays it

@@ -47,7 +47,7 @@
 // reading their own database. This raises the floor from "anyone with a keypair" to "a relay running the
 // enforcing software that this church signed for", and no further.
 import { normalizeURL } from 'nostr-tools/utils';
-import { verifyRelayIdentity, relayHttpBase } from './relay-identity.src.js';
+import { verifyRelayIdentity, relayHttpBase, relayAddrKey } from './relay-identity.src.js';
 
 // The church's own membership statement. A NEW document type, deliberately NOT `trinityone/relays`.
 //
@@ -117,7 +117,36 @@ export const CANONICAL_RELAY_PUBS = Object.freeze(
 // string compare against a URL that differs only by a trailing slash misses SILENTLY — three occurrences of
 // that trap are already recorded in this codebase. Falls back to the raw string if normalizeURL throws on
 // something unparseable, which then simply fails to match, which is the fail-closed direction.
-function _relayKey(url) { try { return normalizeURL(String(url || '')); } catch { return String(url || ''); } }
+// ⚠ THIS MUST KEY ADDRESSES THE SAME WAY THE POSSESSION PROOF DOES, and for one commit it did not.
+// The refusal below ("a box answering at an address we SHIP must prove a key we ship") and the proof that
+// admits a box are ONE decision, and they were comparing addresses two different ways:
+//   this, via normalizeURL  — KEEPS the scheme and the query string
+//   the proof, via relayAddrKey — DROPS both
+// So `wss://…/relay?x=1` and `ws://…/relay` were the SAME address for getting a valid proof and a DIFFERENT
+// address for the refusal. A replacement machine at our own name, dialled by either spelling, skipped the
+// one check that protects a compelled or seized `app.trinityone.church` and was admitted as `software`.
+// Measured against the LIVE production relay: the query-decorated form gets a genuine 200 proof today.
+// Audit, 2026-09-14.
+//
+// ⚠ STRICTER, AND ONLY FOR OUR OWN ADDRESSES. More spellings of a SHIPPED address now attract the extra
+// check; nothing about a church's own box changes, because a self-hosted relay does not sit at one of our
+// hint addresses at all. scripts/our-own-address-must-prove-our-own-key.test.mjs pins both directions,
+// including that a genuine canonical relay is still admitted by every spelling.
+//
+// ⚠ AND THE `catch` HERE FAILS OPEN IN THE REFUSAL PATH, WHICH IS NOT WHAT THE OLD COMMENT CLAIMED. It
+// said a normalisation failure "simply fails to match, which is the fail-closed direction". For a POOL
+// lookup that is true. For `isSharedAddress` it is the opposite: no match means "not one of our addresses",
+// so the refusal never fires and the box is admitted as `software`. Measured accidentally — a test whose
+// lift was missing this function's collaborator silently admitted EVERY spelling, which is what that path
+// does. Left as-is because the inputs here are addresses the app itself holds and `relayAddrKey` has its
+// own string fallback, so a throw is not reachable in practice; recorded because the next person to read
+// that sentence deserves to know which direction it actually fails in.
+//
+// ⚠ AND IT IS STILL THE POOL'S KEY FOR EVERYTHING ELSE. `relayAddrKey` normalises host, default ports and
+// trailing slashes exactly as the pool's normalizeURL does for the cases the pool cares about; the
+// difference is only the two things the proof deliberately ignores. The three trailing-slash traps this
+// codebase records are unaffected — the test covers that spelling too.
+function _relayKey(url) { try { return relayAddrKey(String(url || '')); } catch { return String(url || ''); } }
 
 const _isHex64 = (s) => /^[0-9a-f]{64}$/.test(String(s || '').toLowerCase());
 

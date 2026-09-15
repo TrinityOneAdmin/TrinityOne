@@ -300,7 +300,31 @@ function UnavailSheet({ open, onClose, ctx }) {
   // every Sunday given before it. Measured on a real member: 13 + 27 Sep saved, then 20 Sep added, and the
   // stored record became 20 Sep alone. It also made cancelling impossible: you cannot untick what is not shown.
   const [had, setHad] = useSv(false);
-  useSvE(() => { if (open) { const cur = ctx.getUnavailableDates ? ctx.getUnavailableDates() : []; setSel(cur); setHad(cur.length > 0); setErr(''); setBusy(false); } }, [open]);
+  // `known` is what the CHURCH holds: null until the read answers, so the difference between "they hold
+  // nothing" and "we could not ask" is visible rather than collapsed into an empty list.
+  const [known, setKnown] = useSv(null);
+  // ⚠ THE LOCAL COPY PAINTS FIRST, THEN THE CHURCH'S ANSWER CORRECTS IT — and the save is held until that
+  // answer lands. The mirror was the ONLY source this sheet ever read, and an ordinary wipe destroys it; a
+  // blank sheet plus one new date then REPLACED the church's whole list, deleting every date the member had
+  // already given, from the rota, with a success toast. Audit finding, 2026-09-14.
+  useSvE(() => {
+    if (!open) return;
+    const cur = ctx.getUnavailableDates ? ctx.getUnavailableDates() : [];
+    setSel(cur); setHad(cur.length > 0); setErr(''); setBusy(false); setKnown(null);
+    let live = true;
+    Promise.resolve(ctx.readUnavailableDates ? ctx.readUnavailableDates() : { dates: cur, complete: true })
+      .then((r) => {
+        if (!live || !r) return;
+        // ⚠ ONLY AN ANSWERED READ IS ALLOWED TO CHANGE WHAT IS ON SCREEN. A read nobody answered leaves the
+        // sheet exactly as the mirror painted it and leaves `known` null, which is what blocks the save
+        // below. Treating it as an empty list is the mistake that arms the replace-with-nothing.
+        if (!r.complete) return;
+        setKnown(r.dates);
+        setSel(r.dates); setHad(r.dates.length > 0);
+      })
+      .catch(() => {});
+    return () => { live = false; };
+  }, [open]);
   const sundays = svNextSundays(6);
   const toggle = (iso) => setSel(s => s.includes(iso) ? s.filter(x => x !== iso) : [...s, iso]);
   return (
@@ -329,6 +353,15 @@ function UnavailSheet({ open, onClose, ctx }) {
           an unavailability is cancelled, and there was previously no way to do it at all. */}
       <button onClick={async () => {
         if (busy) return;
+        // ⚠ REFUSE TO SAVE OVER AN ANSWER WE NEVER GOT. Every save REPLACES the whole list, so writing while
+        // this sheet is showing a list it could not confirm deletes whatever the church actually holds. A
+        // read that nobody answered is not "you have told them nothing" — that conflation is what turned an
+        // ordinary cache wipe into the rota losing two Sundays a member had already given. Audit 2026-09-14.
+        if (known === null) {
+          setErr('We couldn’t check what your church already has, so nothing was changed — saving now could ' +
+                 'wipe dates you’ve already given. Check your connection and open this again.');
+          return;
+        }
         setBusy(true); setErr('');
         try {
           await ctx.setUnavailableDates(sel);
@@ -616,7 +649,12 @@ function svWhen(ts) {
 // integer: the Oppo showed "Collected · 1789084514" on 2026-09-11 while the console beside it said
 // "out 12:55 AM". Same format as the console's fmtT, so the two screens agree about one collection.
 function svClock(ts) {
-  if (!Number.isFinite(ts)) return '';
+  // ⚠ `> 0`, NOT JUST isFinite. `Number.isFinite(0)` is true, so `svClock(0)` painted "1:00 AM" and
+  // `svClock(-1)` painted "12:59 AM" — an invented time. The ingest is `{ at: e.created_at || 0 }`, so a
+  // record with no created_at reached here as 0, and on the check-in screens that time is the ONE thing a
+  // worker is told to check against the person in front of her. An empty string falls back to wording that
+  // claims nothing. Audit, 2026-09-14. (A real epoch second is ~1.7e9; nothing legitimate is near zero.)
+  if (!Number.isFinite(ts) || ts <= 0) return '';
   try { return new Date(ts * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); } catch (e) { return ''; }
 }
 // ONE HELP BUTTON, VISIBLE, with real text — the member app's ctx.openHelp deep link, styled as the app's other
@@ -658,6 +696,10 @@ function KidsRow({ rec, ctx, open, onToggle }) {
     catch (e) { res = { ok: false }; }
     setBusy(false);
     if (res && res.ok) { setMode(''); setEntry(''); }   // the collected row arrives from the relay and folds
+    // ⚠ "NOTHING WAS WRITTEN" IS A CLAIM, AND IT WAS FALSE HALF THE TIME. `unconfirmed` means nobody
+    // answered in time — the release is signed, on the wire, and may already have landed. Telling a worker
+    // it did not save sends her to undo something that already worked. Same rule as the parent's card.
+    else if (res && res.reason === 'unconfirmed') setErr('We couldn’t confirm that. They may already be checked out — look at the register before doing it again.');
     else setErr('That did not save — see the desk. Nothing was written.');
   };
   const confirmCode = () => {
@@ -755,12 +797,79 @@ function svArrivalName(a) {
 // The two places an unresolved parent is worded, kept apart because one is a sentence and one is a label
 // inside a question, and a single string cannot read well as both. Neither invents a name: a screen that
 // substituted a key fragment would make an unresolved stranger look like a known family.
+// ⚠ AN UNRESOLVED ARRIVAL MUST STILL BE TELLABLE FROM ANOTHER ONE. Both of these used to collapse to a
+// CONSTANT when the sealed name had not arrived — "Someone's arrived…" on every row, "the person who just
+// arrived" in every confirmation. Two families at the door at once and the worker sees two identical rows
+// and is asked two identical questions, so the one mitigation the no-typing design rests on ("name both
+// sides", reference/PLAN-CHECKIN-NO-TYPING §3b) degrades to wallpaper at exactly the moment it is load-
+// bearing: the measured risk is her tapping the wrong row and handing a child's name and pickup code to
+// the wrong family. Audit item 12, 2026-09-14.
+//
+// THE ARRIVAL TIME IS THE DISCRIMINATOR, and it is deliberately not a key fragment. The note these two
+// functions already carried is right — "a screen that substituted a key fragment would make an unresolved
+// stranger look like a known family" — and a clock time cannot be mistaken for a name. It is also the one
+// fact the worker can check against the person in front of her ("were you here just before the service
+// started?"). `at` comes off the signed arrival, so it is not ours to invent either.
+//
+// It is NOT a complete answer and is not dressed up as one: two families arriving inside the same minute
+// still read alike, which is why the panel below says so out loud when more than one arrival is unnamed.
 function svArrivalLine(a) {
   const n = svArrivalName(a);
-  return n ? n + ' has arrived' : 'Someone’s arrived — their name hasn’t reached your phone yet';
+  if (n) return n + ' has arrived';
+  const t = svClock(a && a.at);
+  return t ? 'Someone arrived at ' + t + ' — their name hasn’t reached your phone yet'
+           : 'Someone’s arrived — their name hasn’t reached your phone yet';
+}
+// ⚠ IS THIS QUESTION ACTUALLY ABLE TO TELL THIS FAMILY FROM ANOTHER ONE? Ask about the LABEL, which is what
+// the worker reads, not about whether names have resolved. The first version of this counted UNNAMED
+// arrivals, and the audit of 2026-09-14 showed that to be wrong in both directions:
+//   · it fired on the SCAN path, where the family is picked by the pubkey off a signed arrival and there is
+//     nothing to confuse — a warning on the one path carrying a cryptographic guarantee;
+//   · it fired for two unnamed arrivals 45 minutes apart, which the clock time added by this very fix makes
+//     plainly distinguishable;
+//   · and it stayed SILENT for two families whose resolved names are both "Sarah", which is an ordinary
+//     Sunday in a church whose sealed display names are first-name-only — two identical rows, one
+//     confirmation reading "Milo → Sarah?", and nothing said.
+// A warning that fires where there is no ambiguity is one the worker learns to tap through, which is item
+// 12's own argument turned on its fix.
+// ⚠ ASK WHETHER THE QUESTION CAN IDENTIFY ANYONE — NOT HOW SHE PICKED THE FAMILY.
+// This used to be `!pending.bySig && svAmbiguous(...)`: suppressed entirely on the SCAN path, on the
+// reasoning that a scan picks the family from a signed document rather than from her reading a row. The
+// audit of 2026-09-15 took that apart, and the owner agreed. What is signed is the ARRIVAL; what SELECTS it
+// is a pubkey read off a camera, and a QR can be photographed or copied. The design's answer to a forged
+// code is precisely this confirmation — "a code naming a family that is not in front of her shows her the
+// mismatch in words". THAT ANSWER NEEDS A NAME. With the name unresolved the panel reads "Milo → the person
+// who arrived at 9:42?", which identifies nobody — and the warning was off as well, so she had neither.
+//
+// TWO CASES, ONE QUESTION. A TAP is her reading a row and choosing, so what matters is whether another row
+// reads the same. A SCAN carries no reading at all, so what matters is whether the confirmation can name the
+// person standing there. Either way: if this question cannot identify anyone, say so.
+// It still does NOT cry wolf — a scan with a resolved name is silent, and so is a tap where every row reads
+// differently. And it never blocks: design §10, nothing here stops a child reaching a room.
+// Answers '' (the question is fine), 'same' (another row reads identically) or 'unnamed' (a scan whose
+// family this phone cannot name). Two different situations need two different sentences: "another family
+// reads the same" is wrong for a scan, and "their name hasn't reached your phone" is wrong for two
+// families who are both called Sarah.
+function svUnsure(queue, pending) {
+  if (!pending) return '';
+  const list = Array.isArray(queue) ? queue.filter(Boolean) : [];
+  const me = list.find(a => a.pub === pending.guardian);
+  if (!me) return '';
+  if (pending.bySig) return svArrivalName(me) ? '' : 'unnamed';   // scanned: can it name the person at all?
+  return svAmbiguous(queue, pending.guardian) ? 'same' : '';      // tapped: does another row read the same?
+}
+function svAmbiguous(queue, pub) {
+  const list = Array.isArray(queue) ? queue.filter(Boolean) : [];
+  const me = list.find(a => a.pub === pub);
+  if (!me) return false;                       // no arrival behind this pairing — nothing to confuse it with
+  const mine = svArrivalLabel(me);
+  return list.some(a => a.pub !== pub && svArrivalLabel(a) === mine);
 }
 function svArrivalLabel(a) {
-  return svArrivalName(a) || 'the person who just arrived';
+  const n = svArrivalName(a);
+  if (n) return n;
+  const t = svClock(a && a.at);
+  return t ? 'the person who arrived at ' + t : 'the person who just arrived';
 }
 function KidsAddChild({ ctx, session, arrivals }) {
   const queue = Array.isArray(arrivals) ? arrivals : [];
@@ -772,7 +881,13 @@ function KidsAddChild({ ctx, session, arrivals }) {
   const [picked, setPicked] = useSv('');
   // …AND THE PAIRING THE WORKER HAS BEEN ASKED TO CONFIRM, held separately so the confirmation can only ever
   // name what was on screen when she was asked.
-  const [pending, setPending] = useSv(null);  // { childName, guardian, label } | null
+  const [pending, setPending] = useSv(null);  // { childName, guardian, label, bySig } | null
+  // HOW THE FAMILY WAS CHOSEN, which decides whether the confirmation can be ambiguous at all. A SCAN picks
+  // the family by the pubkey off a SIGNED arrival — the relay admitted that document from that pubkey's own
+  // address — so the pairing is exact however alike two rows look, and warning there teaches the worker to
+  // tap through a warning that is always wrong. A TAP is her reading a row and choosing, which is precisely
+  // where two identical rows can go wrong. Audit of item 12's fix, 2026-09-14.
+  const [bySig, setBySig] = useSv(false);
   // ── SCANNING THE PARENT'S CODE — §3b of reference/PLAN-CHECKIN-NO-TYPING-2026-09-11.md ───────────────────
   const [scanning, setScanning] = useSv(false);
   // QRScanner IS SINGLE-SHOT: its loop calls onResult once and stops rescheduling, relying on the caller to
@@ -802,10 +917,21 @@ function KidsAddChild({ ctx, session, arrivals }) {
       // stay armed.
       const rest = scanned.filter(n => n !== childName);
       if (rest.length && guardian && queue.some(a => a && a.pub === guardian)) { setScanned(rest); setName(rest[0]); }
-      else { setScanned([]); setName(''); setPicked(''); }
+      else { setScanned([]); setName(''); setPicked(''); setBySig(false); }
     } else {
       // LOUD, and it does NOT clear the form — she tries again or takes the child to the desk.
-      setMsg({ ok: false, text: 'That did not save — see the desk. Nothing was written.' });
+      // ⚠ BUT NOT LOUDER THAN THE TRUTH. `unconfirmed` means nobody answered inside the ack window, not
+      // that the write failed: the record is signed and on the wire and often lands a moment later. Telling
+      // her "nothing was written" makes her check the child in AGAIN, which mints a second record and shows
+      // the child TWICE on the parent's card. ⚠ CORRECTED by the audit of this fix: both rows carry the SAME
+      // code (it is not regenerated on a retry), so either matches at collection — but collecting one leaves
+      // the OTHER showing the child as still in the room for the rest of the window. The three answers, and
+      // now four: `not-sent` (nothing left the phone) and `refused` (a box read it and said no) are SETTLED
+      // and get the plain message; only `unconfirmed` is softened. The parent's card has worded these ways
+      // since device finding F1.
+      setMsg({ ok: false, text: (res && res.reason === 'unconfirmed')
+        ? 'We couldn’t confirm that reached your church — it may well have. Check the register before checking them in again.'
+        : 'That did not save — see the desk. Nothing was written.' });
     }
   };
   // ⚠ THE MITIGATION THIS SCREEN EXISTS TO CARRY. Checking in FROM AN ARRIVAL must never be a bare tap.
@@ -820,7 +946,7 @@ function KidsAddChild({ ctx, session, arrivals }) {
   const submit = async () => {
     const nm = name.trim();
     if (!nm || busy) return;
-    if (pickedArrival) { setMsg(null); setPending({ childName: nm, guardian: pickedArrival.pub, label: svArrivalLabel(pickedArrival) }); return; }
+    if (pickedArrival) { setMsg(null); setPending({ childName: nm, guardian: pickedArrival.pub, label: svArrivalLabel(pickedArrival), bySig }); return; }
     await write(nm, '');
   };
   // ⚠ THE LOAD-BEARING RULE OF THE WHOLE NO-TYPING DESIGN, AND IT IS ENFORCED RIGHT HERE.
@@ -859,11 +985,11 @@ function KidsAddChild({ ctx, session, arrivals }) {
       // CLEAR ANY EARLIER PICK. A failed scan must not leave a stale pairing armed under a fresh name: that
       // would be the "Milo → Sarah Henderson?" mitigation answering about the wrong family. Clearing can only
       // ever REMOVE a guardian tag, never invent one, so it is the safe direction.
-      setScanned([]); setPicked(''); setPending(null);
+      setScanned([]); setPicked(''); setBySig(false); setPending(null);
       setMsg({ ok: false, text: 'Nobody with that code has said they’re at this door. Type the child’s name instead.' });
       return;
     }
-    setPicked(hit.pub); setPending(null); setScanned(p.c); setName(p.c[0]); setMsg(null);
+    setPicked(hit.pub); setBySig(true); setPending(null); setScanned(p.c); setName(p.c[0]); setMsg(null);
   };
   return (
     <div style={{ borderTop: '1px solid var(--line)', padding: '11px 13px', display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -875,7 +1001,7 @@ function KidsAddChild({ ctx, session, arrivals }) {
           {queue.map(a => (
             // TAPPING A ROW BY HAND DROPS THE SCANNED NAMES. They belong to the code that picked the family
             // this row may not be — leaving them up would offer one family's children under another's name.
-            <button key={a.pub} onClick={() => { setPicked(p => (p === a.pub ? '' : a.pub)); setPending(null); setMsg(null); setScanned([]); }} aria-pressed={picked === a.pub}
+            <button key={a.pub} onClick={() => { setPicked(p => (p === a.pub ? '' : a.pub)); setBySig(false); setPending(null); setMsg(null); setScanned([]); }} aria-pressed={picked === a.pub}
               style={{ display: 'flex', alignItems: 'center', gap: 9, width: '100%', textAlign: 'left', padding: '9px 11px', borderRadius: 12, cursor: 'pointer',
                 border: '1px solid ' + (picked === a.pub ? 'var(--sage)' : 'var(--line)'), background: picked === a.pub ? 'color-mix(in oklab, var(--sage) 12%, var(--surface))' : 'var(--surface)' }}>
               <div style={{ flex: 1, minWidth: 0 }}>
@@ -932,6 +1058,23 @@ function KidsAddChild({ ctx, session, arrivals }) {
       {pending ? (
         <div style={{ borderRadius: 14, border: '1px solid var(--sage)', background: 'color-mix(in oklab, var(--sage) 10%, var(--surface))', padding: '11px 13px', display: 'flex', flexDirection: 'column', gap: 9 }}>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 16, lineHeight: 1.25, color: 'var(--ink)' }}>{pending.childName + ' → ' + pending.label + '?'}</div>
+          {/* ⚠ AND WHEN THE QUESTION CANNOT DISTINGUISH THEM, SAY SO RATHER THAN LOOK CONFIDENT. With two or
+              more arrivals whose names have not reached this phone, "Milo → the person who arrived at 9:42?"
+              may name either of them, and a confirmation that reads as certain is worse than none: it
+              launders a guess into a checked pairing. It does NOT block — design §10, nothing in this
+              feature stops a child reaching a room — it hands the check back to the one person who can
+              actually make it, who is standing at the desk. */}
+          {svUnsure(queue, pending) === 'same' ? (
+            <div style={{ fontSize: 12.5, lineHeight: 1.45, color: 'var(--ink-2)', fontWeight: 600 }}>
+              Another family here reads exactly the same on this screen, so this question can’t tell them
+              apart. Ask before you tap.
+            </div>
+          ) : svUnsure(queue, pending) === 'unnamed' ? (
+            <div style={{ fontSize: 12.5, lineHeight: 1.45, color: 'var(--ink-2)', fontWeight: 600 }}>
+              Their name hasn’t reached your phone, so this question can’t tell you whose code you scanned.
+              Ask before you tap.
+            </div>
+          ) : null}
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             <button onClick={() => write(pending.childName, pending.guardian)} disabled={busy}
               style={{ padding: '8px 14px', borderRadius: 11, border: 'none', cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.5 : 1, background: 'var(--sage)', color: 'var(--on-accent, #fff)', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 13.5 }}>
@@ -1191,8 +1334,13 @@ function ServingScreen({ open, onClose, ctx, docked }) {
   return (
     <Overlay open={open} onClose={onClose} docked={docked} label="What's happening">
       <div style={{ paddingTop: 50, background: 'color-mix(in oklab, var(--surface) 92%, transparent)', backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)', borderBottom: '1px solid var(--line)', flexShrink: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '8px 14px 12px' }}>
-          <button onClick={onClose} aria-label="Close" title="Close" style={{ width: 38, height: 38, borderRadius: 12, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="chevL" size={22} /></button>
+        {/* ⚠ THE BACK BUTTON MOVED DOWN ONTO THE TAB ROW — owner, 2026-09-12, "the empty header row".
+            Removing the title and the church name on 2026-09-11 left this row holding a 38px back button and
+            an empty spacer, and it still cost 58px (38 + 8 + 12) of a 360px-wide phone: a whole row of
+            content spent on one icon. The button is now the first item of the row below, OUTSIDE that row's
+            horizontal scroll, so it stays put while the tabs slide under it.
+            The comment that used to live here — why there is no title and no church name — is unchanged and
+            still true; it is just recorded on the row that survived. */}
           {/* NO TITLE AND NO CHURCH NAME — owner, 2026-09-11, and both halves have a reason.
               The title said "Serving", and this page stopped being only that: the strip below it now carries
               Serving, Rota, Kids, Events, Calendar and Care, so the heading named one tab out of six and
@@ -1206,8 +1354,6 @@ function ServingScreen({ open, onClose, ctx, docked }) {
               the first tab, so a screen reader would announce this dialog as "Serving", which is the exact
               wrong name this change exists to remove. The `label` on Overlay below is that fix and is not
               decoration; scripts/the-serving-page-is-not-only-serving.test.mjs holds it in place. */}
-          <div style={{ flex: 1, minWidth: 0 }} />
-        </div>
         {/* Four tabs need 399px and a 360px phone offers 320 after padding and gaps, so Care was cut off at
             the right edge — tappable, but its label never readable, and nothing here scrolled. `flex: 1` is
             not the shrink it looks like: a flex item defaults to `min-width: auto`, so these refuse to go
@@ -1225,7 +1371,14 @@ function ServingScreen({ open, onClose, ctx, docked }) {
             end of a swipe. It is 10px, not 14: `gap: 4` applies before it too, and 4 + 10 is the 14 the left
             side gets. scroll-padding covers the other scroll — scrollIntoView aligns the BUTTON to the
             nearest edge and reads straight past a spacer. */}
-        <div className="no-scrollbar" style={{ display: 'flex', gap: 4, padding: '4px 0 12px 14px', overflowX: 'auto', WebkitOverflowScrolling: 'touch', scrollPadding: '0 14px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+        {/* OUTSIDE THE SCROLLER, DELIBERATELY. Inside it the back button would slide away with the tabs and
+            a member mid-scroll would have no way out of the page. `flexShrink: 0` because a flex item's
+            automatic minimum would otherwise let it be squeezed by six tabs that refuse to shrink.
+            Its 38px height is what now sets this row's height, so nothing was lost by deleting the row
+            above — the button is the same size, it simply shares a line with something. */}
+        <button onClick={onClose} aria-label="Close" title="Close" style={{ width: 38, height: 38, marginLeft: 6, borderRadius: 12, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="chevL" size={22} /></button>
+        <div className="no-scrollbar" style={{ flex: 1, minWidth: 0, display: 'flex', gap: 4, padding: '4px 0 12px 8px', overflowX: 'auto', WebkitOverflowScrolling: 'touch', scrollPadding: '0 14px' }}>
           {_tabs.map(([k, lbl, ic]) => {
             const on = tab === k;
             return (
@@ -1235,6 +1388,7 @@ function ServingScreen({ open, onClose, ctx, docked }) {
             );
           })}
           <div aria-hidden="true" style={{ flex: '0 0 10px' }} />
+        </div>
         </div>
       </div>
 

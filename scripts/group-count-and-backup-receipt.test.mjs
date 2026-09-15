@@ -28,8 +28,14 @@ test('an open group carries no fabricated member count', () => {
 });
 
 test('markSaved records a date, and the panel shows it', () => {
-  assert.match(EXTRAS, /localStorage\.setItem\('trinityone\.backedup\.' \+ np, new Date\(\)\.toISOString\(\)\)/,
-    'the backup marker must be a timestamp, not a bare flag');
+  // ⚠ THIS ASSERTION USED TO MATCH THE setItem CALL IN app/identity-extras.jsx AND IT WAS BLIND (rule 3).
+  // app/*.jsx ships UNBUNDLED, so the text stays on disk whatever the code does. Proof, 2026-09-14: the
+  // writer was moved into app/backup.jsx recordBackup() and the old call survived only as an unreachable
+  // fallback — and this assertion went on passing, over a route that no longer ran it.
+  // WHAT ACTUALLY RECORDS A BACKUP IS NOW PROVED BY RUNNING IT, in
+  // scripts/a-backup-that-happened-is-recorded.test.mjs: both routes reach one writer, it records an ISO
+  // date, and neither records on saveFile's fallback branch. Six sabotages, all biting.
+  // What is left here is the part that IS honest to read: the panel's own rendering of the value.
   assert.match(EXTRAS, /Last backed up/, 'the export panel must show a persistent last-backed-up line');
   assert.match(EXTRAS, /if \(!v \|\| v === '1'\) return null/, 'and read legacy "1" as date-unknown, not crash');
 });

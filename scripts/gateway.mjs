@@ -10,6 +10,7 @@ import { readFileSync, writeFileSync, appendFileSync, renameSync, statSync, lsta
 import { Transform } from 'stream';
 import { gzipSync } from 'node:zlib';
 import { extname, normalize, join, sep } from 'path';
+import { networkInterfaces } from 'os';
 import { fileURLToPath } from 'url';
 import { lookup as dnsLookup } from 'dns/promises';
 import { decode as nip19decode, npubEncode } from 'nostr-tools/nip19';
@@ -1034,6 +1035,79 @@ function _declaredAddresses() {
   }
   // Loopback, always: the console that a Suite box serves dials its own port before anything is configured.
   for (const a of AUTO_LOOPBACK_ADDRESSES) out.push(a);
+  // THE ADDRESSES THIS BOX ANSWERS TO ON THE LOCAL NETWORK, when the operator has opted into LAN access.
+  for (const a of _lanAddresses()) out.push(a);
+  return out;
+}
+// ── "Let phones on this wifi connect directly" ────────────────────────────────────────────────────────────
+// The Suite's LAN toggle makes the relay LISTEN on the network (RELAY_HOST=0.0.0.0, set by main.rs from the
+// `lan-access` marker). Nothing declared a LAN address, so the relay then answered HTTP 421
+// "this relay does not declare the address you dialled" to every phone on that wifi — and the websocket
+// still connected, so the ungated reads kept painting while every gated read and every publish failed.
+// Partial, not an outage, which is this codebase's worst failure class. Measured by audit 2026-09-14:
+//     Host: 192.168.1.50:28911  ->  421 undeclared-address
+//
+// ⚠ DECLARING AN ADDRESS OPENS NOTHING. The socket is already listening — the toggle did that. This only
+// stops the relay lying about where it can be reached. Owner's decision, 2026-09-14: simple, "so long as
+// it's secure".
+//
+// ⚠ PRIVATE RANGES ONLY, AND THAT IS THE SECURITY OF IT. A Suite installed on a rented server has a PUBLIC
+// address; declaring that would advertise a publicly reachable relay nobody asked for, from a toggle whose
+// words are "phones on this wifi". So: RFC1918 and link-local v4, unique-local and link-local v6, and
+// nothing else. A box that wants a public address has three deliberate ways to say so already
+// (relay-addresses.json, the Cloudflare tunnel, RELAY_PUBLIC_URL) and they are untouched.
+//
+// ⚠ COMPUTED PER CALL, NOT AT START-UP, so a new address from the router takes effect with no restart:
+// _declaredAddresses() is already read fresh on every request, and this is a local syscall with no network
+// cost. `_lanCache` exists only so a burst of requests does not re-enumerate interfaces; 30s is well inside
+// a DHCP lease change.
+//
+// ⚠ ONLY WHEN THE OPERATOR ASKED. Gated on the same `lan-access` marker main.rs reads, so a relay that was
+// never opted in declares nothing new — and a server (which sets no RELAY_HOST and binds 0.0.0.0 by
+// default) is not silently given LAN declarations it never wanted.
+const LAN_TTL_MS = 30000;
+let _lanCache = { at: 0, list: [] };
+function _lanIsPrivate(a) {
+  if (!a || a.internal) return false;
+  const ip = String(a.address || '');
+  if (a.family === 'IPv4' || a.family === 4) {
+    const p = ip.split('.').map(Number);
+    if (p.length !== 4 || p.some(n => !Number.isFinite(n))) return false;
+    if (p[0] === 10) return true;                               // 10/8
+    if (p[0] === 172 && p[1] >= 16 && p[1] <= 31) return true;   // 172.16/12
+    if (p[0] === 192 && p[1] === 168) return true;               // 192.168/16
+    if (p[0] === 169 && p[1] === 254) return true;               // 169.254/16 link-local
+    return false;
+  }
+  const v6 = ip.toLowerCase();
+  if (/^f[cd]/.test(v6)) return true;                            // fc00::/7 unique-local
+  if (/^fe[89ab]/.test(v6)) return true;                         // fe80::/10 link-local
+  return false;
+}
+function _lanAddresses() {
+  // The marker is what the panel writes and main.rs reads. No marker, no LAN declarations.
+  let opted = false;
+  try { opted = existsSync(join(DATA_DIR, 'lan-access')); } catch { opted = false; }
+  if (!opted) return [];
+  const now = Date.now();
+  if (now - _lanCache.at < LAN_TTL_MS) return _lanCache.list;
+  const out = [];
+  try {
+    const ifaces = networkInterfaces();
+    for (const name of Object.keys(ifaces || {})) {
+      for (const a of (ifaces[name] || [])) {
+        if (!_lanIsPrivate(a)) continue;
+        // A v6 literal is dialled in brackets, and a link-local one carries a %scope the caller will not
+        // have typed — strip it, or the declared string can never match what a phone dials.
+        const host = (a.family === 'IPv4' || a.family === 4)
+          ? a.address
+          : '[' + String(a.address).replace(/%.*$/, '') + ']';
+        out.push('ws://' + host + ':' + PORT + '/relay');
+        out.push('ws://' + host + ':' + PORT);
+      }
+    }
+  } catch {}
+  _lanCache = { at: now, list: out };
   return out;
 }
 // The loopback entries this box adds FOR ITSELF, listed once so that "did anybody actually declare a public

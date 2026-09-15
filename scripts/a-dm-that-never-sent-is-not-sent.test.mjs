@@ -157,7 +157,9 @@ async function loadConsoleComponent(name, anchor, extraGlobals = {}) {
 function miniReact() {
   const states = [];
   const memos = [];
-  let i = 0, mi = 0;
+  const effDeps = [];
+  let queued = [];
+  let i = 0, mi = 0, ei = 0;
   const sameDeps = (a, b) => Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((v, n) => Object.is(v, b[n]));
   const React = {
     useState(init) {
@@ -174,11 +176,31 @@ function miniReact() {
       return memos[k].v;
     },
     useCallback(f, deps) { return React.useMemo(() => f, deps); },
-    useEffect() {}, useRef: () => ({ current: null }),
+    // ⚠ THIS WAS `useEffect() {}` — A NO-OP — AND THAT MADE A WHOLE CLASS OF DEFECT INVISIBLE HERE.
+    // Anything a component sets up in an effect simply did not happen: subscribeDMThread was never called,
+    // so `msgs` was always empty, and when StewDmWindow grew an outbox effect (audit item 4) the queued
+    // messages it reads could not appear no matter what the code did. A test that cannot see a feature
+    // cannot see it being deleted either. Deps-compared and flushed after the draw, exactly as
+    // scripts/render-jsx-screen.mjs does it, so state set by an effect lands on the NEXT draw — same as React.
+    useEffect(fn, deps) {
+      const k = ei++;
+      if (!(k in effDeps) || !sameDeps(effDeps[k], deps)) { effDeps[k] = deps; queued.push(fn); }
+    },
+    useRef: () => ({ current: null }),
     createElement: (type, props, ...kids) => ({ type, props: props || {}, kids }),
     Fragment: 'Fragment',
   };
-  return { React, reset: () => { i = 0; mi = 0; } };
+  // `flush` runs the effects this draw queued. A caller that never flushes is back to the no-op above, so
+  // both draw helpers below call it.
+  // KEEP WHAT THE EFFECTS RETURN. React calls those cleanups on unmount; a harness that discards them cannot
+  // see a listener that is never removed — which is exactly the sabotage that survived the audit of this
+  // file. `unmount()` runs them, so a test can ask what the component let go of.
+  const cleanups = [];
+  const flush = () => { const run = queued; queued = [];
+    run.forEach(fn => { try { const c = fn(); if (typeof c === 'function') cleanups.push(c); }
+      catch (e) { throw new Error('an effect threw during render: ' + e.message); } }); };
+  const unmount = () => { const c = cleanups.splice(0); c.forEach(f => { try { f(); } catch (e) {} }); return c.length; };
+  return { React, reset: () => { i = 0; mi = 0; ei = 0; }, flush, unmount };
 }
 
 // Walk a rendered tree collecting every string, and every node matching a predicate.
@@ -201,23 +223,48 @@ const find = (n, pred, out = []) => {
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 // 4. app/stew-dashboard.jsx — StewDmWindow (the auditor's worst: no screen rendered this failure at all)
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────
-async function dmWindow(result) {
-  const sent = [];
-  const { React, reset } = miniReact();
+async function dmWindow(result, outbox) {
+  const sent = [], retried = [], dropped = [];
+  // A REAL EVENT BUS, because the case that matters is a TRANSITION. Every outbox test in this file used to
+  // seed the queue BEFORE the window mounted, so they only ever proved that an outbox which already had
+  // content at mount time is rendered. The defect measured on a real console is the other case: the window
+  // is ALREADY OPEN, the steward types, sendDM queues, and the words must appear — which happens only
+  // through the `steward-outbox` event. The audit of this fix proved it: deleting that one listener left all
+  // 16 tests in this file green while a live console showed nothing at all.
+  const listeners = new Map();
+  let queue = outbox ? [...outbox] : [];
+  const { React, reset, flush, unmount } = miniReact();
   const Steward = {
     subscribeDMThread: () => () => {},
     sendDM: async (pk, body) => { sent.push([pk, body]); return result; },
     reactDM: () => {},
+    // THE OUTBOX THE CONSOLE ALREADY HAD AND NEVER SHOWED — audit item 4, 2026-09-14. These three have
+    // existed in src/steward.src.js since the outbox was added; StewDmWindow called none of them, so a
+    // queued message was invisible. Measured on a REAL console before this was written: the words sat in
+    // the outbox with _pending true and the open thread showed no trace of them.
+    outboxForPeer: (pk) => queue.filter(o => !o.peer || o.peer === pk),
+    retryQueuedDM: (id) => { retried.push(id); return true; },
+    dropQueuedDM: (id) => { dropped.push(id); },
   };
   const Comp = await loadConsoleComponent('StewDmWindow', 'function StewDmWindow(', {
     React,
-    window: { Steward },
+    // addEventListener: the outbox effect subscribes to `steward-outbox` so the bubble repaints when the
+    // flush marks an item failed. A stub that lacked it would throw inside the effect and the whole window
+    // would render empty — which looks exactly like the defect under test.
+    window: { Steward,
+      addEventListener: (k, f) => { listeners.set(k, [...(listeners.get(k) || []), f]); },
+      removeEventListener: (k, f) => { listeners.set(k, (listeners.get(k) || []).filter(x => x !== f)); } },
     Icon: () => null, SkBadge: () => null,
     SK_TINT: { gold: { fg: '#000' } },
     nameHandle: () => '', shortNpub: () => 'npub1…',
   });
-  const draw = () => { reset(); return Comp({ peer: { pubkey: 'peerhex', name: 'Ruth' }, offset: 0, onClose: () => {} }); };
-  return { draw, sent };
+  const draw = () => { reset(); const t = Comp({ peer: { pubkey: 'peerhex', name: 'Ruth' }, offset: 0, onClose: () => {} }); flush(); return t; };
+  // what _sOutSave() does in the engine: change the queue, then tell every listener
+  const fire = () => (listeners.get('steward-outbox') || []).forEach(f => f());
+  const enqueue = (item) => { queue = [...queue, item]; fire(); };
+  // what the flush does when it counts a try or gives up: change the item in place, then announce it
+  const mark = (id, patch) => { queue = queue.map(o => (o.id === id ? { ...o, ...patch } : o)); fire(); };
+  return { draw, sent, retried, dropped, enqueue, mark, listeners, unmount };
 }
 
 test('CONTROL: the console DM window renders, and its send button reaches Steward.sendDM', async () => {
@@ -352,4 +399,132 @@ test('publishMessage has no null exit, which is the whole reason sendToGroup nee
       'reports that as "Shared to <group>" over a message that was never sent');
     assert.doesNotMatch(e, /^null$/, 'publishMessage now returns null, and sendToGroup announces it as shared');
   }
+});
+
+
+// ── ITEM 4 (audit 2026-09-14): A MESSAGE THAT IS WAITING TO SEND MUST BE ON THE SCREEN ──────────────────
+// Measured on a real console in a real browser before any of this was written: sendDM queued the words,
+// `outboxForPeer` returned them with `_pending: true`, the thread was OPEN — and the body of the page did
+// not contain them anywhere. The composer emptied and the steward was told nothing. A vicar answering a
+// member in distress could not tell a sent message from a swallowed one.
+// DRAW TWICE. The outbox arrives through an effect, and an effect runs AFTER the draw that queued it — so
+// the first tree is always the pre-effect one, exactly as in React. A single draw here reports every one of
+// these features missing whatever the code does.
+const settle = (w) => { w.draw(); return w.draw(); };
+const QUEUED = [{ id: 'q1', created_at: 1, _pending: true, _failed: false, _tries: 0, plain: 'Can you call me back about Sunday?' }];
+const GAVEUP = [{ id: 'q2', created_at: 1, _pending: false, _failed: true, _tries: 8, plain: 'Are you all right?' }];
+
+test('a message WAITING to send appears in the thread, in the steward’s own words', async () => {
+  const w = await dmWindow({ id: 'e1' }, QUEUED);
+  const shown = texts(settle(w)).join(' | ');
+  assert.match(shown, /Can you call me back about Sunday\?/,
+    'THE STEWARD’S WORDS ARE NOWHERE ON THE SCREEN. They are safely queued and will be delivered, and the ' +
+    'console shows an empty thread — which is indistinguishable from having said nothing at all.');
+  assert.match(shown, /Waiting to send/,
+    'the queued message renders as an ORDINARY bubble, identical to a delivered one. That is worse than ' +
+    'showing nothing: the words are safe and the steward is told they went.');
+});
+
+test('a message the console has GIVEN UP ON says so, and offers a way back', async () => {
+  const w = await dmWindow({ id: 'e1' }, GAVEUP);
+  const tree = settle(w);
+  const shown = texts(tree).join(' | ');
+  assert.match(shown, /Are you all right\?/, 'the words of a failed message are not on screen');
+  assert.match(shown, /Couldn’t send/,
+    'a message that has exhausted its tries is displayed as though it were still on its way, so the steward ' +
+    'waits for a reply to something that will never arrive');
+  const retry = find(tree, n => n.type === 'button' && /Try again/.test((n.props && n.props.title) || '') === false && n.props && n.props.onClick && texts(n).join('').includes('Try again'))[0];
+  assert.ok(retry, 'there is no way to retry a given-up message — the give-up state is a dead end');
+  retry.props.onClick();
+  assert.deepEqual(w.retried, ['q2'], 'the retry control does not reach Steward.retryQueuedDM');
+  const drop = find(w.draw(), n => n.type === 'button' && n.props && n.props.onClick && texts(n).join('').includes('Discard'))[0];
+  assert.ok(drop, 'there is no way to discard a message that will never send');
+  drop.props.onClick();
+  assert.deepEqual(w.dropped, ['q2'], 'the discard control does not reach Steward.dropQueuedDM');
+});
+
+test('a queued message with NO words left says what it is, rather than showing an empty bubble', async () => {
+  // The plaintext is memory-only ON PURPOSE (a seized laptop gains nothing), so a reload leaves a waiting
+  // message with no words. An empty bubble reads as corruption; this must read as waiting.
+  const w = await dmWindow({ id: 'e1' }, [{ id: 'q3', created_at: 1, _pending: true, _failed: false, plain: '' }]);
+  const shown = texts(settle(w)).join(' | ');
+  assert.match(shown, /still waiting to send/,
+    'after a reload a queued message renders as an EMPTY bubble — which reads as a bug, not as waiting');
+});
+
+test('a queued message that the relay then ACCEPTS is not shown twice', async () => {
+  // The delivered copy comes back through subscribeDMThread under the same event id.
+  const { React, reset, flush } = miniReact();
+  const Comp = await loadConsoleComponent('StewDmWindow', 'function StewDmWindow(', {
+    React,
+    window: { Steward: { subscribeDMThread: (pk, cb) => { cb([{ id: 'q1', mine: true, text: 'Can you call me back about Sunday?' }]); return () => {}; },
+      sendDM: async () => ({ id: 'x' }), reactDM: () => {}, outboxForPeer: () => QUEUED, retryQueuedDM: () => {}, dropQueuedDM: () => {} },
+      addEventListener: () => {}, removeEventListener: () => {} },
+    Icon: () => null, SkBadge: () => null, SK_TINT: { gold: { fg: '#000' } },
+    nameHandle: () => '', shortNpub: () => 'npub1…',
+  });
+  const one = () => { reset(); const t = Comp({ peer: { pubkey: 'peerhex', name: 'Ruth' }, offset: 0, onClose: () => {} }); flush(); return t; };
+  one();                       // the effects (thread subscription + outbox) run after this draw
+  const shown = texts(one());
+  const hits = shown.join(' | ').split('Can you call me back about Sunday?').length - 1;
+  assert.equal(hits, 1, 'the steward sees their own message twice the moment it lands: ' + hits + ' copies');
+});
+
+
+test('THE TRANSITION: the window is already open, she sends, and the words appear', async () => {
+  // The defect, exactly as measured on a real console: thread open, relay stalled, composer emptied, nothing
+  // on screen. Seeding the outbox before mount cannot see this — only the `steward-outbox` event can, and
+  // the audit proved that deleting that listener left every other test in this file green.
+  const w = await dmWindow({ id: 'e1' });
+  settle(w);
+  assert.doesNotMatch(texts(w.draw()).join(' | '), /Can you call me back about Sunday\?/,
+    're-anchor: the thread already contained the message before it was sent');
+  w.enqueue({ id: 'q9', created_at: 1, peer: 'peerhex', _pending: true, _failed: false, plain: 'Can you call me back about Sunday?' });
+  const after = texts(w.draw()).join(' | ');
+  assert.match(after, /Can you call me back about Sunday\?/,
+    'THE STEWARD TYPED, THE RELAY DID NOT ANSWER, AND HER WORDS LEFT THE SCREEN. The message is safely ' +
+    'queued and will be delivered — and an open thread shows no trace of it, which is indistinguishable ' +
+    'from having said nothing.');
+  assert.match(after, /Waiting to send/, 'it arrived with no indication that it has not gone yet');
+});
+
+test('a message given up on REPAINTS as failed without reopening the thread', async () => {
+  // The flush marks an item failed 45 seconds to an hour later. If that does not reach an OPEN window, the
+  // steward sits watching "Waiting to send" over a message the console has abandoned, with the Try again
+  // button that would revive it never appearing.
+  const w = await dmWindow({ id: 'e1' }, [{ id: 'q1', created_at: 1, peer: 'peerhex', _pending: true, _failed: false, plain: 'Are you all right?' }]);
+  assert.match(texts(settle(w)).join(' | '), /Waiting to send/, 're-anchor: it did not start as waiting');
+  w.mark('q1', { _pending: false, _failed: true });     // what the flush does on the eighth try
+  const after = texts(w.draw()).join(' | ');
+  assert.match(after, /Couldn’t send/,
+    'THE CONSOLE GAVE UP AND THE OPEN THREAD STILL SAYS "Waiting to send". The steward waits for a reply to ' +
+    'a message that will never go, and never sees the control that would send it.');
+  assert.doesNotMatch(after, /Waiting to send/, 'it shows both states at once');
+});
+
+test('the window shows only THIS peer’s queue', async () => {
+  const w = await dmWindow({ id: 'e1' }, [
+    { id: 'mine', created_at: 1, peer: 'peerhex', _pending: true, plain: 'for Ruth' },
+    { id: 'theirs', created_at: 1, peer: 'someone-else', _pending: true, plain: 'for somebody else entirely' },
+  ]);
+  const shown = texts(settle(w)).join(' | ');
+  assert.match(shown, /for Ruth/, 're-anchor: this peer’s own queued message is missing');
+  assert.doesNotMatch(shown, /for somebody else entirely/,
+    'ANOTHER MEMBER’S PRIVATE MESSAGE IS ON THIS THREAD. The engine filters by peer today; nothing noticed ' +
+    'when this stopped asking it to.');
+});
+
+test('the window unsubscribes when it closes', async () => {
+  // One listener per open window. Without the cleanup, a console left running all Sunday accumulates one per
+  // thread opened, and each holds a stale closure that calls setQueued for a window that has gone. This
+  // sabotage survived the audit because the harness threw effect cleanups away; it keeps them now.
+  const w = await dmWindow({ id: 'e1' });
+  settle(w);
+  assert.equal((w.listeners.get('steward-outbox') || []).length, 1,
+    'expected exactly one outbox listener per open window, saw ' + (w.listeners.get('steward-outbox') || []).length);
+  const ran = w.unmount();
+  assert.ok(ran > 0, 'the outbox effect returns no cleanup at all — nothing is ever unsubscribed');
+  assert.equal((w.listeners.get('steward-outbox') || []).length, 0,
+    'THE LISTENER OUTLIVED THE WINDOW. Every thread a steward opens leaves one behind, each calling into a ' +
+    'component that is no longer on screen.');
 });

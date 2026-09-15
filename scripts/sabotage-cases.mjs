@@ -154,7 +154,15 @@ export const CASES = [
     file: 'src/steward.src.js',
     // drop the whole branch — that is what a revert would look like, and it is what the document-count and
     // owner-only assertions in steward-newest-wins actually measure
-    find: `        else if (d === GUARDIANS_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tGuardians) return; tGuardians = e.created_at; try { guardians = (JSON.parse(e.content).links) || {}; } catch { guardians = {}; } onLists({ minors, approved, nophoto, guardians, loaded: isLoaded() }); }`,
+    // ⚠ ANCHORED SHORT, ON PURPOSE. This case carried a whole line copied verbatim and stopped matching the
+    // first time anything on it changed — so it silently stopped sabotaging. Re-anchored 2026-09-15; nine
+    // cases were stale this way at once.
+    // ⚠ AND AIMED AT WHAT THE TEST ACTUALLY MEASURES. My first re-anchor replaced `else if (d === GUARDIANS_D
+    // + pub) {` with `else if (false) {`, which disables the branch but LEAVES the newest-wins guard inside
+    // it — and steward-newest-wins counts GUARDS (`subscribeSafeguard: 4`), so the count stayed 4 and the run
+    // came back BLIND GUARD. That is a mis-aimed sabotage reporting exactly what a blind test reports, which
+    // is the trap CLAUDE.md names. Removing the guard is what a revert of this fix would actually look like.
+    find: `if (e.created_at < tGuardians) return; tGuardians = e.created_at;`,
     replace: ``,
     test: 'scripts/steward-newest-wins.test.mjs',
   },
@@ -188,8 +196,13 @@ export const CASES = [
     file: 'app/screens-today.jsx',
     // exactly what happened twice: route a narrowed send into the send-failure error string, which the
     // answered view does not render
-    find: `setCollapsed(false); if (ok === 'narrow') setNarrow(true); }`,
-    replace: `setCollapsed(false); if (ok === 'narrow') setErr('narrowed'); }`,
+    // ⚠ RE-ANCHORED 2026-09-15. It read `setCollapsed(false); if (ok === 'narrow') setNarrow(true); }` and
+    // bcf1b67 changed markSafe's answer from `false | true | 'narrow'` to `{ ok, narrowed, reason }` — so the
+    // anchor died the commit AFTER fc0923f, whose whole subject was nine cases that rotted exactly this way.
+    // That commit also claimed "SABOTAGE, 10 rows all biting" while touching no case file: none of those ten
+    // is in the corpus, nobody can re-run them, and this one silently left it.
+    find: `setCollapsed(false); if (res.narrowed) setNarrow(true); }`,
+    replace: `setCollapsed(false); }`,
     test: 'scripts/safety-audience.test.mjs',
   },
   {
@@ -285,8 +298,11 @@ export const CASES = [
   {
     name: 'seal: one bad pubkey aborts the whole rotation',
     file: 'src/steward.src.js',
-    find: `    try { keys[mp] = sealTo(payload, mp); } catch (e) {}`,
-    replace: `    keys[mp] = sealTo(payload, mp);`,
+    // ⚠ ANCHORED SHORT, ON PURPOSE. This case carried a whole line copied verbatim and stopped matching
+    // the first time anything on it changed — so it silently stopped sabotaging. Re-anchored 2026-09-15
+    // on the shortest fragment that is still unique. NINE cases were stale this way at once.
+    find: `try { keys[mp] = sealTo(payload, mp); } catch (e) { _sealEachFailed.push(mp); }`,
+    replace: `keys[mp] = sealTo(payload, mp);`,
     test: 'scripts/seal-yields.test.mjs',
   },
   {
@@ -642,8 +658,11 @@ export const CASES = [
   {
     name: 'calendar: a member drops what it cannot open, so nothing is on',
     file: 'src/fellowship.src.js',
-    find: `          if (c === null) { byId.set(id, { id, _locked: true, ts: e.created_at, _by: e.pubkey }); emit(); return; }`,
-    replace: `          if (c === null) { return; }`,
+    // ⚠ ANCHORED SHORT, ON PURPOSE. This case carried a whole line copied verbatim and stopped matching
+    // the first time anything on it changed — so it silently stopped sabotaging. Re-anchored 2026-09-15
+    // on the shortest fragment that is still unique. NINE cases were stale this way at once.
+    find: `if (c === null) { _absorbById(versions, byId, id, { id, _locked: true, ts: e.created_at, _by: e.pubkey }, _trust); emit(); return; }`,
+    replace: `if (c === null) { return; }`,
     test: 'scripts/church-calendar-sealed.test.mjs',
   },
   {
@@ -761,7 +780,10 @@ export const CASES = [
     name: 'backup: the WebView anchor claims success again',
     file: 'app/backup.jsx',
     // the pre-fix behaviour: an <a download> the WebView cannot perform, reported as saved
-    find: `      if (isNative) throw new Error('This app can\u2019t write the file here. Update the app, or use \u201cSave to device\u201d.');`,
+    // ⚠ ANCHORED SHORT, ON PURPOSE. This case carried a whole line copied verbatim and stopped matching
+    // the first time anything on it changed — so it silently stopped sabotaging. Re-anchored 2026-09-15
+    // on the shortest fragment that is still unique. NINE cases were stale this way at once.
+    find: `      if (isNative) throw new Error(_cantWrite);`,
     replace: ``,
     test: 'scripts/backup-saves-somewhere.test.mjs',
   },
@@ -777,12 +799,11 @@ export const CASES = [
     name: 'backup: a dismissed share sheet fails the whole save',
     file: 'app/backup.jsx',
     // dropping the try/catch: closing the sheet then throws away a file that IS already written
-    find: `        try {
-          const c = await P.Filesystem.writeFile({ path: filename, data: text, directory: 'CACHE', encoding: 'utf8' });
-          await P.Share.share({ title: 'TrinityOne backup', text: 'Save this somewhere safe (Drive, OneDrive\u2026)', url: c.uri });
-        } catch (e) {}`,
-    replace: `        const c = await P.Filesystem.writeFile({ path: filename, data: text, directory: 'CACHE', encoding: 'utf8' });
-        await P.Share.share({ title: 'TrinityOne backup', text: 'Save this somewhere safe (Drive, OneDrive\u2026)', url: c.uri });`,
+    // ⚠ ANCHORED SHORT, ON PURPOSE. This case carried a whole line copied verbatim and stopped matching
+    // the first time anything on it changed — so it silently stopped sabotaging. Re-anchored 2026-09-15
+    // on the shortest fragment that is still unique. NINE cases were stale this way at once.
+    find: `          await P.Share.share({ title: _title, text: _blurb, url: c.uri });\n        } catch (e) {}`,
+    replace: `          await P.Share.share({ title: _title, text: _blurb, url: c.uri });`,
     test: 'scripts/backup-saves-somewhere.test.mjs',
   },
   {
@@ -878,14 +899,18 @@ export const CASES = [
     replace: `      ({}).nothing = JSON.stringify({`,
     test: 'scripts/render-crash-boundary.test.mjs',
   },
-  {
-    name: 'second church: starter groups collide again',
-    file: 'app/steward-root.jsx',
-    // the fixed-id form — the first church on the relay owns announce/men/women/youth/prayer for ever
-    find: `      (window.SK.groups || []).forEach(g => window.Steward.publishGroup({ id: nsp ? (nsp + '-' + g.id) : g.id, name: g.name, kind: g.kind, sub: SEED_SUB[g.id] || '' }));`,
-    replace: `      (window.SK.groups || []).forEach(g => window.Steward.publishGroup({ id: g.id, name: g.name, kind: g.kind, sub: SEED_SUB[g.id] || '' }));`,
-    test: 'scripts/second-church-on-a-relay.test.mjs',
-  },
+  // ── REMOVED 2026-09-15: 'second church: starter groups collide again' ─────────────────────────────────
+  // A sabotage case works by REPLACING code that exists, and the code this one broke is gone on purpose.
+  // app/steward-root.jsx used to publish five starter rooms the moment a church registered — announce, men,
+  // women, youth, prayer — with no UI and no choice, taking their names from window.SK, the design MOCK-UP
+  // object. Members did not read them as clutter; they read them as statements about themselves. The seeder
+  // was deleted, so there is nothing here to break.
+  // THE INVARIANT IS NOT LOST: scripts/second-church-on-a-relay.test.mjs asserts the ABSENCE of `SK.groups`
+  // and `publishGroup` in that file. Asserting an absence by text is sound where asserting a presence is
+  // not — a disabled `false && publishGroup(…)` still contains the string, so the test fails, which is the
+  // safe direction. Deleting a case rather than leaving it NO-ANCHOR for ever is the point: the harness
+  // reports a stale anchor as `bad`, and nine of those at once is how the real ones get ignored.
+
   {
     name: 'second church: a refused registration goes quiet again',
     file: 'src/steward.src.js',
@@ -980,8 +1005,11 @@ export const CASES = [
   {
     name: 'restore: the exact list becomes a prefix, sweeping in the church directory',
     file: 'app/backup.jsx',
-    find: `      if (k && (ex.has(k) || prefixes.some(p => k.startsWith(p)))) out[k] = localStorage.getItem(k);`,
-    replace: `      if (k && ([...ex].some(p => k.startsWith(p)) || prefixes.some(p => k.startsWith(p)))) out[k] = localStorage.getItem(k);`,
+    // ⚠ ANCHORED SHORT, ON PURPOSE. This case carried a whole line copied verbatim and stopped matching
+    // the first time anything on it changed — so it silently stopped sabotaging. Re-anchored 2026-09-15
+    // on the shortest fragment that is still unique. NINE cases were stale this way at once.
+    find: `(ex.has(k) || prefixes.some(p => k.startsWith(p)))`,
+    replace: `([...ex].some(p => k.startsWith(p)) || prefixes.some(p => k.startsWith(p)))`,
     test: 'scripts/rejoin-name-and-leaving.test.mjs',
   },
   {
@@ -1091,7 +1119,10 @@ export const CASES = [
     file: 'src/steward.src.js',
     // The bootstrap deadlock. relays()/ownRelay() consult the _boxHostsUs cache, so a box recorded as "not
     // hosting us" is invisible to the only code that could ever sign it in — permanently.
-    find: `  const o = _ownOrigin();`,
+    // ⚠ ANCHORED SHORT, ON PURPOSE. This case carried a whole line copied verbatim and stopped matching
+    // the first time anything on it changed — so it silently stopped sabotaging. Re-anchored 2026-09-15
+    // on the shortest fragment that is still unique. NINE cases were stale this way at once.
+    find: `  const o = _ownOrigin();              // the box that served this console — location, NOT ownRelay()`,
     replace: `  const o = ''; for (const u of relays()) add(u);`,
     test: 'scripts/is-this-relay-one-of-ours.test.mjs',
   },
@@ -1211,8 +1242,16 @@ export const CASES = [
   {
     name: 'relay-gate: the cache keeps an address that now answers with a different key',
     file: 'src/relay-net.src.js',
-    find: `  return { root: '', pub: provenPub };`,
-    replace: `  return no;`,
+    // ⚠ RE-ANCHORED 2026-09-15, TWICE, AND THE FIRST ATTEMPT IS THE LESSON. The old anchor
+    // (`  return { root: '', pub: provenPub };`) was deleted by 98b4416 and the case had been silently
+    // inert since. My first replacement aimed at the shared-address refusal — but this test's takeover
+    // scenario is a CHURCH'S OWN BOX, so isSharedAddress is false and that line never runs: the harness
+    // reported BLIND GUARD, which is what a mis-aimed sabotage and a blind test both look like.
+    // What the test actually measures is the cache TAKING the new key when an address re-proves with a
+    // different one. Refusing to overwrite an existing entry is what "keeps an address that now answers
+    // with a different key" means, so that is what this breaks.
+    find: `      rememberVerified(map, url, res.pub, scope, nowSec());`,
+    replace: `      if (!had) rememberVerified(map, url, res.pub, scope, nowSec());`,
     test: 'scripts/only-a-relay-this-church-proved-gets-its-data.test.mjs',
   },
   {
@@ -1235,7 +1274,11 @@ export const CASES = [
     file: 'src/relay-net.src.js',
     // memory: relay-url-normalisation-trap. The pool keys its connections by normalizeURL(); a raw compare
     // that differs only by a trailing slash misses SILENTLY, and the gate then misses the relay it is about.
-    find: `function _relayKey(url) { try { return normalizeURL(String(url || '')); } catch { return String(url || ''); } }`,
+    // ⚠ RE-ANCHORED 2026-09-14. This still said `normalizeURL`, which 62c376c replaced with `relayAddrKey`
+    // so the gate's refusal and its possession proof compare addresses the same way. A `find` that matches
+    // nothing is a sabotage case that silently stops sabotaging — it reports GREEN for ever, which is the one
+    // thing a sabotage case must never do.
+    find: `function _relayKey(url) { try { return relayAddrKey(String(url || '')); } catch { return String(url || ''); } }`,
     replace: `function _relayKey(url) { return String(url || ''); }`,
     test: 'scripts/only-a-relay-this-church-proved-gets-its-data.test.mjs',
   },

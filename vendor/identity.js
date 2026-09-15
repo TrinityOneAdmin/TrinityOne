@@ -12277,6 +12277,11 @@ zoo`.split("\n"));
         applyLocked();
         return;
       }
+      if (isNative() && _recoveryReference()) {
+        console.warn("[identity] this phone has held an account but its seed could not be read \u2014 refusing to mint over it");
+        applyLocked();
+        return;
+      }
       mnemonic = generateSeedWords();
       await secureSet(mnemonic);
     }
@@ -12643,5 +12648,8 @@ zoo`.split("\n"));
       return qr.createSvgTag({ cellSize: 4, margin: 2, scalable: true });
     }
   };
-  window.TrinityIdentity.ready = init().catch((e) => console.error("[identity] init failed", e));
+  window.TrinityIdentity.settled = false;
+  window.TrinityIdentity.ready = init().catch((e) => console.error("[identity] init failed", e)).finally(() => {
+    window.TrinityIdentity.settled = true;
+  });
 })();

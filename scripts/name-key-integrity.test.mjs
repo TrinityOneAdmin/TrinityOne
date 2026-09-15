@@ -567,9 +567,22 @@ test('a mid-session lock does not blank every face for the rest of the session',
   // _k0Seen instead fixed the churn and removed that healing: after a lock, every member was filtered out of
   // requestProfiles for ever, so no kind-0 arrived again. Our own profile too — so _recoverOwnProfile never
   // ran, and the next edit republished a kind-0 with an empty picture, destroying the photo on the relay.
+  // ⚠ BRACE-MATCHED, NOT A FIXED WINDOW. This asserted `_k0Seen.clear()` within 1600 characters of the
+  // function's name, and on 2026-09-14 a legitimate addition to the keep-list pushed it to 1683 — the test
+  // went red with the property it guards perfectly intact. clearCommunityCache's own comment already warns
+  // about this ("name-key-integrity slices a fixed window of the bundle from this function's first mention"),
+  // and the same trap was fixed in scripts/profile-refusal.test.mjs earlier the same day. Distance is not the
+  // property; being inside the function is.
   const at = FELLOWSHIP.search(/clearCommunityCache/);
   assert.notEqual(at, -1, 'clearCommunityCache is gone');
-  const fn = FELLOWSHIP.slice(at, at + 1600);
+  const open = FELLOWSHIP.indexOf('{', at);
+  let depth = 0, end = -1;
+  for (let i = open; i < FELLOWSHIP.length; i++) {
+    if (FELLOWSHIP[i] === '{') depth++;
+    else if (FELLOWSHIP[i] === '}' && --depth === 0) { end = i; break; }
+  }
+  assert.ok(end > open, 'could not brace-match clearCommunityCache — re-anchor this test');
+  const fn = FELLOWSHIP.slice(open, end + 1);
   assert.match(fn, /_k0Seen\.clear\(\)/,
     'the wipe does not reset "have we asked the relay", so a lock leaves every member permanently unfetchable');
 });

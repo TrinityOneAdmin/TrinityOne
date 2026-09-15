@@ -35,6 +35,21 @@ import { webcrypto } from 'node:crypto';
 import { SimplePool } from 'nostr-tools/pool';
 import { verifyEvent, finalizeEvent } from 'nostr-tools/pure';
 import { normalizeURL } from 'nostr-tools/utils';
+// ⚠ THE PERSISTED VERIFIED SET IS NOT KEYED BY normalizeURL, AND HAS NOT BEEN SINCE 62c376c (2026-09-14).
+// `_relayKey` was moved onto relayAddrKey so that the REFUSAL ("a box at an address we ship must prove a key
+// we ship") and the possession proof that admits a box compare addresses the same way — they did not, and a
+// replacement machine at our own name could be admitted by spelling the URL differently. relayAddrKey drops
+// the scheme and the query string; normalizeURL keeps both. Two white-box assertions in this file reached
+// past the gate's API into the stored JSON and indexed it by normalizeURL, so they broke.
+//
+// NOTHING A CHURCH HOLDS WAS LOST BY THAT. `readVerified` re-keys EVERY stored entry through `_relayKey` as
+// it loads, so a set persisted by an older build is migrated on the first boot after the update and no relay
+// has to re-prove. Checked by reading readVerified, and by the restart test below, which goes through the
+// gate's own API and passed throughout.
+//
+// The two assertions now use the same function the gate uses, imported from the source it lives in, rather
+// than a second normaliser that agreed with it by coincidence until it didn't.
+import { relayAddrKey } from '../src/relay-identity.src.js';
 import * as nip44 from 'nostr-tools/nip44';
 import { fnBody, stmt } from './test-slice.mjs';
 import * as H from './relay-network-harness.mjs';
@@ -341,8 +356,8 @@ test('the filter is synchronous and consults the cache only; an unknown address 
 
     // What it wrote down is the PUBKEY proved there, under the church that vouched.
     const cache = JSON.parse(store.getItem('trinityone.relays.verified'));
-    const entry = cache[normalizeURL(IN.wsUrl)];
-    assert.ok(entry, 'the verified set is keyed by something other than the normalised URL: ' + JSON.stringify(Object.keys(cache)));
+    const entry = cache[relayAddrKey(IN.wsUrl)];
+    assert.ok(entry, 'the verified set is keyed by something other than the gate\'s own address key: ' + JSON.stringify(Object.keys(cache)));
     assert.equal(entry.pub, IN.relayPub, 'the cache recorded the wrong key for this box');
     assert.equal(entry.cp, church.pub, 'a church-signature admission was cached without the church that made it');
   } finally { con.close(); }
@@ -483,6 +498,10 @@ test('a relay that moved re-proves at its new address; an address answering with
     const c2 = consoleOn({ church: flock, origin: { protocol: 'https:', host: 'app.example.church' }, extra: [takenOver], store: s2 });
     // Seed the cache with a proof this address really did pass once, under this church's signature.
     s2.setItem('trinityone.relays.verified', JSON.stringify({
+      // SEEDED THE OLD WAY ON PURPOSE. A store written by a build before 62c376c keys entries by
+      // normalizeURL; readVerified re-keys them on load, so this stale entry must still be found, still be
+      // trusted, and still be OVERWRITTEN when the address answers with a different key. If the migration
+      // ever goes, this seed is simply ignored and the assertion below reads undefined.
       [normalizeURL(takenOver)]: { pub: BOX.relayPub, cp: flock.pub, at: Math.floor(Date.now() / 1000), until: Math.floor(Date.now() / 1000) + 86400 },
     }));
     const c2b = consoleOn({ church: flock, origin: { protocol: 'https:', host: 'app.example.church' }, extra: [takenOver], store: s2 });
@@ -498,7 +517,7 @@ test('a relay that moved re-proves at its new address; an address answering with
     // proof about a MACHINE, not a grant to an ADDRESS. So the stored entry must now name the usurper's key,
     // not the key that was cached before. If the cache kept the old key it would be vouching for a machine it
     // never checked, which is the defect this test was written for and is still reachable.
-    const entry = JSON.parse(s2.getItem('trinityone.relays.verified') || '{}')[normalizeURL(takenOver)];
+    const entry = JSON.parse(s2.getItem('trinityone.relays.verified') || '{}')[relayAddrKey(takenOver)];
     assert.equal(entry && entry.pub, usurperKey.pub,
       'the cache kept its old entry for an address that is now answering with a DIFFERENT key. It is ' +
       'vouching for a machine it never checked.');

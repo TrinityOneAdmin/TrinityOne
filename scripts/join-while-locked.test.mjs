@@ -100,7 +100,8 @@ test('leaving the church clears the stamp, so a re-follow starts from "not yet a
   await api.announceMembership(CP_NPUB);
   assert.equal(api.joinSent(CP_NPUB), true);
   const left = await api.leaveMembership(CP_NPUB);
-  assert.ok(left, 'leaveMembership did not tombstone');
+  // `left.ok`, not `left`: leaveMembership answers with an object now, and a FAILURE object is truthy too.
+  assert.ok(left && left.ok, 'leaveMembership did not tombstone');
   assert.equal(api.joinSent(CP_NPUB), false, 'they left, and the app still says their request to join was sent');
 });
 
@@ -167,7 +168,7 @@ test('leaving while locked, with only an unsent intent, drops the promise and le
   const { api, scope, published } = lift(locked(owner.pub));
   await api.announceMembership(CP_NPUB);
   const r = await api.leaveMembership(CP_NPUB);
-  assert.ok(r && r.local, 'leaveChurch would refuse ("still a member there") over a join that was never sent');
+  assert.ok(r && r.ok && r.local, 'leaveChurch would refuse ("still a member there") over a join that was never sent');
   assert.equal(scope._joinIntents.length, 0);
   assert.equal(published.length, 0);
 });

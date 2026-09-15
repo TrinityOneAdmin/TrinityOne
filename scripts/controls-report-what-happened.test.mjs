@@ -85,14 +85,18 @@ test('remove, pin and unpin report the real outcome', async () => {
   const busySeen = [];
   const fn = new Function('ctx', 'Promise', 'modBusyRef', 'setModBusy', src)(
     { toast: (m) => toasts.push(m) }, Promise, busyRef, (v) => busySeen.push(v));
+  // RE-ANCHORED 2026-09-15 (chunk 2). The three writers answer `{ ok, evt, reason }` now, so the success row
+  // carries `ok` — and the bare `null` row stays, because a writer that ever answers null again must still be
+  // read as a failure and not as a truthy success.
   await fn(() => Promise.resolve(null), 'Pinning…', 'Pinned', 'Couldn’t pin that');
-  await fn(() => Promise.resolve({ id: 'e' }), 'Pinning…', 'Pinned', 'Couldn’t pin that');
+  await fn(() => Promise.resolve({ ok: false, reason: 'refused' }), 'Pinning…', 'Pinned', 'Couldn’t pin that');
+  await fn(() => Promise.resolve({ ok: true, evt: { id: 'e' } }), 'Pinning…', 'Pinned', 'Couldn’t pin that');
   await fn(() => Promise.reject(new Error('x')), 'Pinning…', 'Pinned', 'Couldn’t pin that');
-  assert.deepEqual(toasts, ['Couldn’t pin that', 'Pinned', 'Couldn’t pin that'],
+  assert.deepEqual(toasts, ['Couldn’t pin that', 'Couldn’t pin that', 'Pinned', 'Couldn’t pin that'],
     'a moderation action that never published was reported as done');
-  // …and every one of those three left the control usable again, which is the other half of the guard.
+  // …and every one of those four left the control usable again, which is the other half of the guard.
   assert.equal(busyRef.current, false, 'the guard is never released, so the leader can never act again');
-  assert.deepEqual(busySeen, ['Pinning…', '', 'Pinning…', '', 'Pinning…', ''],
+  assert.deepEqual(busySeen, ['Pinning…', '', 'Pinning…', '', 'Pinning…', '', 'Pinning…', ''],
     'the busy state is not raised on the way in and cleared on the way out');
 });
 

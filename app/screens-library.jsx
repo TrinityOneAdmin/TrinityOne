@@ -198,8 +198,18 @@ function BackupCard({ ctx }) {
       // Name the place and say it is theirs to keep — the file lands in the phone's shared Documents folder,
       // so "saved" without a location or a next step leaves a member who cannot check it and will not move it.
       const at = (window.TrinityBackup.savedWhere && window.TrinityBackup.savedWhere(res)) || '';
+      // ⚠ RECORD IT, OR THE MEMBER IS NAGGED FOR EVER OVER A BACKUP THEY HAVE ACTUALLY MADE. This file is
+      // the same file the recovery hub writes, from the same collectMember(), and it carries the member's
+      // twelve words — so completing it here DOES make them recoverable. Only the hub's copy of this flow
+      // recorded that, so a member who backed up from this card kept seeing "Secure your account" and an
+      // empty backup date. Measured on a phone, 2026-09-14. One writer now, in app/backup.jsx.
+      //
+      // ⚠ ON THE `else` BRANCH ONLY. `res.warn` is saveFile saying the direct write did not happen and it
+      // fell back — its message tells the member no copy may have been kept, and recording a backup over
+      // that sentence is audit 2026-09-02 #7 exactly: the nudge goes quiet for the people who have no file.
       if (res && res.warn) { ctx.toast(res.warn); }
-      else ctx.toast(at ? ('Saved to ' + at + ' — keep a copy somewhere safe') : (mode === 'local' ? 'Saved to your device — keep a copy somewhere safe' : 'Backup ready to store'));
+      else { if (window.TrinityBackup.recordBackup) window.TrinityBackup.recordBackup();
+        ctx.toast(at ? ('Saved to ' + at + ' — keep a copy somewhere safe') : (mode === 'local' ? 'Saved to your device — keep a copy somewhere safe' : 'Backup ready to store')); }
       setTimeout(() => { setDone(null); setPicking(false); setPass(''); }, 2200);
     } catch (e) { setBusy(''); ctx.toast('Backup failed: ' + (e.message || e)); }
   };
@@ -613,7 +623,7 @@ function CollectionView({ coll, open, onClose, ctx }) {
         {/* prayer add form */}
         {isPrayer && adding ? (
           <div style={{ marginBottom: 14, padding: 14, borderRadius: 16, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', animation: 'trinityFade .2s ease both' }}>
-            <input value={pWho} onChange={e => setPWho(e.target.value)} placeholder="Who or what? (e.g. Mum)" style={{
+            <input value={pWho} onChange={e => setPWho(e.target.value)} placeholder="Who or what? (e.g. a neighbour)" style={{
               width: '100%', boxSizing: 'border-box', height: 42, padding: '0 12px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface-2)', outline: 'none', fontSize: 14.5, fontWeight: 700, color: 'var(--ink)', fontFamily: 'var(--font-ui)', marginBottom: 9 }} />
             <textarea value={pText} onChange={e => setPText(e.target.value)} rows={2} placeholder="What are you praying for?" style={{
               width: '100%', boxSizing: 'border-box', resize: 'none', padding: '10px 12px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface-2)', outline: 'none', fontFamily: 'var(--font-read)', fontSize: 15, lineHeight: 1.5, color: 'var(--ink)' }} />

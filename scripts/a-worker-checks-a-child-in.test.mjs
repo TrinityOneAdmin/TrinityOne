@@ -413,7 +413,7 @@ test('a guardian pubkey is normalised to ONE spelling, the one the relay stores'
 //
 // ⚠ THIS PARAGRAPH SAID "NOTHING IN app/ CALLS writeArrival YET" UNTIL 2026-09-12, AND IT IS NO LONGER TRUE.
 // §3b of reference/PLAN-CHECKIN-NO-TYPING-2026-09-11.md gave it one: `ctx.checkinArrive` in app/app.jsx,
-// called by WereHereCard in app/screens-today.jsx, driven on the rendered screen in
+// called by WereHereSection in app/screens-today.jsx, driven on the rendered screen in
 // scripts/a-parent-shows-a-code-instead-of-typing.test.mjs. So the rule-1 hole this paragraph declared is
 // closed; what stays true, and is still the reason this file drives the relay end to end, is that the writer
 // grants no authority — any member could sign this event by hand, and the gate that matters is the relay's.
@@ -532,7 +532,12 @@ function liftArrivalWithPublish(actor, publishImpl) {
     get: (t, k) => { if (k === Symbol.unscopables) return undefined; if (k in t) return t[k];
       throw new ReferenceError('the shipped writeArrival needs a stub for ' + String(k)); },
   });
-  return new Function('scope', 'with (scope) { return ({ ' +
+  return new Function('scope', 'with (scope) { ' +
+    // LIFTED, NOT STUBBED. _pubReason is the shipped four-way classifier the three writers now share; a stub
+    // here would supply the very answer the three tests below are named after. What SETS `refused` and
+    // `unsent` on the error is proved against a real socket in
+    // scripts/a-relay-that-says-no-is-not-a-relay-that-is-slow.test.mjs.
+    fnBody(FELLOWSHIP, 'function _pubReason(e) {', '_pubReason') + '\n return ({ ' +
     fnBody(FELLOWSHIP, 'async writeArrival(churchNpub, rec) {', 'writeArrival') + ' }); }')(proxy).writeArrival;
 }
 

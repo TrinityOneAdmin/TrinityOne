@@ -1196,10 +1196,19 @@ let _localToken = null;
 // always wins. A recovery that depends on one timer firing before a human types a passphrase is not a
 // recovery. Raised by the audit of f0ceb92, whose headline said this path never runs at all — that was
 // wrong for the real app, and right about the fragility.
+// ⚠ `0.0.0.0` IS DELIBERATELY NOT IN THIS LIST, and it used to be — the same removal `0ac3ee6` made in the
+// sibling gate in relay-app/home.js, which this one was left out of. The gateway's `/local-token` route
+// accepts only 127.0.0.1, localhost and ::1, so a page served at 0.0.0.0 passed THIS check, asked for the
+// admin token, and was refused. ADMITTING AN ADDRESS THE SERVER REFUSES IS STRICTLY WORSE THAN NOT ADMITTING
+// IT: the caller cannot tell "not a local box" from "a local box that said no", and in the relay app that
+// difference stranded a box on the panel at every launch with no way back to the wizard.
+// Not reachable here today — `localAdminToken` returns '' either way and every caller treats that as "no
+// token" — so this is the rule being made the same in both places, not a live bug. Audit item 20,
+// 2026-09-14. scripts/two-loopback-gates-agree.test.mjs pins them together.
 function _originIsLoopback() {
   const l = (typeof location !== 'undefined') ? location : null;
   if (!l || !l.hostname) return false;
-  return /^(localhost|127\.0\.0\.1|::1|0\.0\.0\.0)$/i.test(String(l.hostname).replace(/^\[|\]$/g, ''));
+  return /^(localhost|127\.0\.0\.1|::1)$/i.test(String(l.hostname).replace(/^\[|\]$/g, ''));
 }
 async function localAdminToken() {
   if (_localToken) return _localToken;
@@ -1207,6 +1216,7 @@ async function localAdminToken() {
   try { const r = await fetch('/local-token', { cache: 'no-store' }); if (!r.ok) return ''; const j = await r.json(); _localToken = (j && j.token) || ''; return _localToken; } catch (e) { return ''; }
 }
 function _authHdr(tok) { return tok ? { 'Authorization': 'Bearer ' + tok } : {}; }
+
 async function refreshSelfPublicRelay() {
   if (!ownIsLoopback()) return;
   try {
@@ -2465,29 +2475,85 @@ function _sOutSave() {
   try { lsSet(_sOutKey(), JSON.stringify(_sOutbox.slice(-S_OUTBOX_MAX))); } catch (e) {}
   try { window.dispatchEvent(new CustomEvent('steward-outbox')); } catch (e) {}
 }
-async function _sOutFlush() {
+// HOW LONG TO WAIT BEFORE THE NEXT ATTEMPT — 90s, 3m, 6m, 12m, 24m, then half-hourly.
+// ⚠ THIS IS NOT A REFINEMENT, IT IS LOAD-BEARING. Without it the eight tries below are spent in six minutes
+// flat (the interval is 45s), so ANY six-minute outage — a router reboot, a phone in a lift, a church hall
+// with one bar — permanently gives up on every message queued at the time. Adding the skip without adding
+// the backoff would have turned "retries for ever" into "gives up almost immediately", which is worse for
+// the person waiting for a reply. Eight tries now span about an hour and three quarters.
+const S_OUT_TRIES = 8;
+const S_OUT_BACKOFF_MS = 30 * 60 * 1000;
+function _sOutDue(item, ignoreBackoff) {
+  if (item.failed) return false;               // given up on: only the steward's own "Try again" revives it
+  if (ignoreBackoff) return true;              // the relay just came back — ask it now, do not sit out a wait
+  const tries = item.tries || 0;
+  if (!tries || !item.lastTry) return true;
+  const wait = Math.min(45000 * Math.pow(2, tries), S_OUT_BACKOFF_MS);
+  // ⚠ A CLOCK THAT MOVED BACKWARDS MUST NOT SILENCE A MESSAGE. `lastTry` is written from this machine's own
+  // clock; if the console booted with a fast RTC and NTP then corrected it, `lastTry` sits in the future and
+  // this subtraction goes negative — so the message is skipped, `tries` never climbs, it never reaches the
+  // give-up state, and the steward watches "Waiting to send" for the whole length of the skew. Measured by
+  // the audit of this fix: a day fast → a day of total silence, then normal service. A timestamp we cannot
+  // have written yet is not evidence of anything, so treat it as due and let the attempt re-stamp it.
+  const since = now() - item.lastTry;
+  if (since < 0) return true;
+  return since * 1000 >= wait;
+}
+// CALLERS (CLAUDE.md rule 2 — complete list, grepped 2026-09-14): the 45s interval below, the
+// `steward-relay-returned` listener below (the only one that passes `ignoreBackoff`), and `retryQueuedDM`.
+// THREE. A commit message of mine said four; the audit of it counted three. The number is the whole point of
+// the rule, so it is written here where it can be checked rather than in a message nobody greps.
+async function _sOutFlush(ignoreBackoff) {
   if (_sFlushing || !sk) return;
   _sOutLoad();
   if (!_sOutbox.length) return;
   _sFlushing = true;
   try {
     for (const item of [..._sOutbox]) {
-      const r = await publish(item.evt);
+      // ⚠ IT RE-PUBLISHED WHAT IT HAD ALREADY GIVEN UP ON. `failed` was set and then never read here, so a
+      // message that had exhausted its tries went back on the wire every 45 seconds for the life of the
+      // install, up to 200 of them — while the comment below promised the opposite and `lastTry` was written
+      // and never read. The give-up state was unreachable in practice. Audit finding 2026-09-14.
+      if (!_sOutDue(item, ignoreBackoff)) continue;
+      // ⚠ PUBLISH CAN THROW, AND A THROW USED TO ABANDON THE REST OF THE QUEUE. There was no try here: a
+      // rejection from publish() propagated out of the loop, `finally` cleared the flag, and the caller's
+      // .catch swallowed it — so every message BEHIND this one was never attempted, and this one's `tries`
+      // never moved, so it could never reach the give-up state either. publish() opens with
+      // _waitForRegistration() and calls relays(); either can reject. A throw is a failed try, not an exit.
+      let r = false;
+      try { r = await publish(item.evt); } catch (e) { r = false; }
+      // ⚠ MUTATE THE LIVE ITEM, NOT THIS SNAPSHOT. The loop walks `[..._sOutbox]`, and ANY call to
+      // `_sOutLoad()` while it runs replaces `_sOutbox` with freshly-parsed objects — at which point `item`
+      // is an orphan, every `tries`/`lastTry` written below lands on nothing, and the `_sOutSave()` after it
+      // serialises the reloaded array without them.
+      // THAT IS NOT HYPOTHETICAL AND IT IS NEW. `outboxForPeer()` opens with `_sOutLoad()`, and the DM
+      // window's `steward-outbox` listener — the first listener that event has ever had — calls it from
+      // inside `_sOutSave()`, synchronously, in the middle of this loop. `tries` and `lastTry` were
+      // write-only before the backoff read them, so the orphaning was harmless; now it means the backoff
+      // does not engage at all while a steward has a DM window open. Measured by the audit of this fix: 20
+      // queued messages over a dead relay went on the wire 1086 times instead of 160, the tail item 111
+      // times instead of 8 — on exactly the thin pipe this product exists to work over.
+      const live = _sOutbox.find(o => o && o.evt && o.evt.id === item.evt.id) || item;
       if (r) { _sOutbox = _sOutbox.filter(o => o.evt.id !== item.evt.id); _sOutPlain.delete(item.evt.id); _sOutSave(); }
       else {
         // publish() answers false for "every relay rejected" without saying whether that was a refusal or an
         // outage, so tries are counted and a message is eventually given up on rather than retried for ever.
         // Giving up is VISIBLE — it moves to a failed state the steward can see and retry — never a discard.
-        item.tries = (item.tries || 0) + 1;
-        item.lastTry = now();
-        if (item.tries >= 8) item.failed = true;
+        // THAT VISIBILITY IS THE OTHER HALF OF THIS FIX and lived nowhere until the same audit: the engine
+        // has had outboxForPeer/retryQueuedDM/dropQueuedDM all along and StewDmWindow never called one of
+        // them, so "a failed state the steward can see" was a sentence about a screen that did not exist.
+        live.tries = (live.tries || 0) + 1;
+        live.lastTry = now();
+        if (live.tries >= S_OUT_TRIES) live.failed = true;
         _sOutSave();
       }
     }
   } finally { _sFlushing = false; }
 }
 try {
-  window.addEventListener('steward-relay-returned', () => { setTimeout(() => { _sOutFlush().catch(() => {}); }, 3000); });
+  // THE RELAY IS BACK — do not make a waiting message sit out a backoff that was measured against an outage
+  // which has just ended. Still skips items already given up on: those are the steward's to revive.
+  window.addEventListener('steward-relay-returned', () => { setTimeout(() => { _sOutFlush(true).catch(() => {}); }, 3000); });
   setInterval(() => { _sOutFlush().catch(() => {}); }, 45000);
 } catch (e) {}
 // TARGETED PUBLISH, for the safeguarding write path only. The shared publish() above resolves on
@@ -2797,6 +2863,23 @@ function _oneComplete(filters, ms = 6000) {
     const sub = pool.subscribeMany(relaysRaw(), filters, {
       onevent(e) { if (!best || (e.created_at || 0) > (best.created_at || 0)) best = e; },
       oneose() { complete = true; finish(); },
+      // A CLIENT TIMEOUT MUST NOT MASQUERADE AS AN ANSWER — B0 of reference/PLAN-ENROLMENT-GAP-2026-09-02.md,
+      // and the same fix `_newestByD` has carried since AUDIT-8 measured it there.
+      // nostr-tools arms its OWN EOSE timer (default `baseEoseTimeout` 4400ms) and calls `oneose` when it
+      // expires, whether or not any relay ever sent the frame. This function's own bound is 6000ms, so the
+      // library's fake EOSE fired FIRST and set `complete = true` — a failed read reporting a COMPLETED read
+      // of an EMPTY church. That is the input to the doc-wipe chain: `relayNetDoc()` returns
+      // {ev:null, complete:true} while the church's relays are merely down (the a8 update blip is exactly
+      // this), the `!complete` guard does not fire, entries are rebuilt FROM SCRATCH with created_at: now(),
+      // and newest-wins un-admits every box the church had signed, on every member's phone.
+      // Pushing the library's timer well past our own bound means an EOSE arriving inside `ms` is a real one.
+      //
+      // ⚠ THIS ALONE DOES NOT CLOSE B0, and the plan says so in as many words. An UNREACHABLE relay still
+      // reports finished — measured in scripts/a-failed-read-is-not-an-empty-church.test.mjs, which drives a
+      // real socket that never sends EOSE and a genuinely dead port. `complete` means "every relay I could
+      // reach finished", which is not the question enrolment asks. Steps 2-3 of B0 — counting how many relays
+      // GENUINELY answered, and refusing the from-scratch path unless at least one did — are still open.
+      maxWait: ms + 5000,
     });
     setTimeout(finish, ms);
   });
@@ -3268,12 +3351,26 @@ window.Steward = {
   // Signs the boxes this console can prove into the church's own membership document. Additive: it never
   // drops an entry that is merely unreachable.
   //
-  // STILL NOT CALLED AUTOMATICALLY ANYWHERE, and with C4's gate live that is now a DEPLOYMENT BLOCKER rather
-  // than a loose end: a church whose relay is admitted by neither the canonical pin nor this console's own
-  // origin has no way to author the document that would admit it, so its members would find no relay they
-  // may publish to. Wiring it into start-up is merge-schedule step 4 and wants a browser pass of its own —
-  // and the Suite's common case (§6-quater) is covered meanwhile by the same-origin root, which needs no
-  // document at all.
+  // STILL NOT CALLED AUTOMATICALLY ANYWHERE — and the sentence that used to be here, calling that a
+  // "DEPLOYMENT BLOCKER … its members would find no relay they may publish to", IS FALSE. Audit item 17,
+  // 2026-09-14, checked against the gate rather than against this comment.
+  //
+  // WHAT proveRelay ACTUALLY DOES (src/relay-net.src.js): after the one refusal for our own shipped
+  // addresses, it tries canonical pin → same origin → the church's relay-net document → and then admits
+  // anything that proved it holds a relay identity key at all, as `root: 'software'`. A self-hosting
+  // church's box reaches that last line and is admitted with NO document in existence. So nobody is cut off,
+  // and this function is a loose end, not a blocker.
+  //
+  // TWO THINGS THE NEXT PERSON TO WIRE IT UP NEEDS, because neither is visible from the call site:
+  //  · ROOT 3 IS INERT IN PRACTICE. No console authors a relay-net document today, so the `church` root
+  //    matches nothing and every self-hosted box is admitted one line lower on proof alone. Turning this on
+  //    does not "enable" self-hosting; it narrows nothing and adds a signed record.
+  //  · `9ec4310`'s GUARD IS UNEXERCISED. That commit fixed a doc-wipe — a read nobody answered was reported
+  //    as an empty church, the document was rebuilt from scratch with `created_at: now()`, and newest-wins
+  //    UN-ADMITTED every box the church had signed, on every member's phone. The `!complete → unknown:true`
+  //    return below is that fix, and with zero callers it has never run outside its test. It is the first
+  //    thing to exercise on a real slow link when this is wired in, not the last.
+  // Wiring it into start-up is merge-schedule step 4 and wants a browser pass of its own.
   enrolRelayNet,
 
   // ---- primitives for optional modules (Meals, Finance, Manna plugins) ----
@@ -3955,6 +4052,16 @@ window.Steward = {
       if (local && host) nip05 = local + '@' + host;
     }
     const content = JSON.stringify({ name: m.name || '', about: m.about || '', nip05, picture: m.picture || '', banner: m.banner || '', bannerFade: (typeof m.bannerFade === 'number') ? m.bannerFade : 16, accent: m.accent || '', channel: m.channel || '', audioFeed: m.audioFeed || '', lud16: (m.lud16 || '').trim(), giving: !!m.giving, features: (m.features && typeof m.features === 'object') ? m.features : {}, rules: (m.rules && typeof m.rules === 'object') ? m.rules : {} });
+    // ⚠ NOTHING REGISTERS A BOX FROM HERE, AND THAT IS DELIBERATE. A `_registerOnOwnBox` hook sat on this
+    // publish for one day (2cb1582, reverted 2026-09-12). It duplicated `selfRegister(name, {createHere:
+    // true})`, which has done this correctly since 2026-09-04 from the setup wizard's name step, on the
+    // owner's decision that "a church is put on a box by a person, at the moment they create it there".
+    // The duplicate was worse in every measured way: it fired on EVERY profile write — a colour slider
+    // deciding relay admission — and it used the box's admin token, which bypasses all four of the relay's
+    // guards (invite-only, the H4 bootstrap lock written to stop 19 junk tenants, the name check, the cap).
+    // Proven redundant by execution, not by reading: with it fully dead in the bundle, a real browser
+    // driving the real wizard against a fresh relay still registered the church, recorded `by: "self"` —
+    // the signature door, not the token one.
     return publish(finalizeEvent({ kind: 0, created_at: now(), tags: [], content }, sk));
   },
   // NIP-65 relay-list (FEDERATION-PLAN Phase 1b): advertise, in a church-signed replaceable event (kind
@@ -8564,6 +8671,16 @@ window.Steward = {
   // required). C5: the answer must be wss:// AND pass the network gate before it comes back. Pass
   // `{ member: false }` for the possession proof alone — the clone SOURCE, and nothing else (cloneFromRelay).
   resolveRelayName(name, opts) { return resolveRelayName(name, opts); },
+  // WHICH NAME, IF ANY, POINTS AT THIS ADDRESS. Read-only, and it exists so a screen can say what a steward
+  // is about to lose: removeRelay() deliberately forgets the name→url binding (so auto-follow cannot re-add
+  // what was just removed), and for a self-hosted box behind a rotating tunnel address the NAME is the
+  // durable handle while the URL is not. Audit item 19, 2026-09-14.
+  // CALLER (rule 2): app/stew-dashboard.jsx, the remove-relay confirmation. No writer uses it.
+  relayNameFor(url) {
+    const u = normRelay(url); if (!u) return '';
+    const hit = getNamedRelays().find(e => e && normRelay(e.url) === u);
+    return hit ? String(hit.name || '') : '';
+  },
   // remember that this relay was reached BY NAME, so auto-follow can track it as the tunnel url rotates
   rememberRelayName(name, url) {
     const n = String(name || '').trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');

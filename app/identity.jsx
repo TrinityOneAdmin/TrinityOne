@@ -1634,12 +1634,28 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
           <DirectoryToggle identity={identity} onSave={onSave} ctx={ctx} />
         </Group>
 
-        {/* My family — a parent sets up & oversees a child's account (safeguarding v2) */}
-        {ctx.church && ctx.church.npub && window.Fellowship && window.Fellowship.createChildAccount ? (
+        {/* My family — a parent sets up & oversees a child's account (safeguarding v2), and says who they bring
+            to church on a Sunday.
+            ⚠ THE SECTION'S OWN CONDITION IS THE CHURCH, NOT `createChildAccount`, AND THAT IS THE WHOLE OF THE
+            CARE NEEDED HERE. "Children at church" moved down from SETTINGS on 2026-09-12 (owner), and the
+            section it moved into was gated on `window.Fellowship.createChildAccount` — a function a shell that
+            has not finished loading does not have yet, and one no child-free build needs at all. Dropping the
+            row inside that gate unchanged would have hidden it on every phone where that name is missing:
+            a setting that silently is not there, which is the silent-blank shape this codebase keeps paying
+            for. So the SECTION asks only what both rows need (a church), and each ROW carries its own
+            condition. */}
+        {ctx.church && ctx.church.npub ? (
           <React.Fragment>
             <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.6px', margin: '16px 4px 9px' }}>MY FAMILY</div>
             <Group>
-              <Row icon="pray" label="Children’s accounts" sub="Set up and look after a child’s account in your church" accent="var(--sage)" onClick={() => setFamily(true)} />
+              {/* §3b. PER-CHURCH, because the answer is: a member of two congregations brings children to one
+                  and not the other, and the stored key carries the church for that reason. It sits ABOVE
+                  children's accounts because it is the one most families need — most children checked into a
+                  crèche have no phone and no account at all (design §7). */}
+              <Row icon="child" label="Children at church" sub="Say you bring children, and their names — kept on this phone" accent="var(--sage)" onClick={() => setKidsAt(true)} />
+              {window.Fellowship && window.Fellowship.createChildAccount ? (
+                <Row icon="pray" label="Children’s accounts" sub="Set up and look after a child’s account in your church" accent="var(--sage)" onClick={() => setFamily(true)} />
+              ) : null}
             </Group>
           </React.Fragment>
         ) : null}
@@ -1658,13 +1674,6 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
         <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.6px', margin: '16px 4px 9px' }}>SETTINGS</div>
         <Group>
           <Row icon="bell" label="Notifications" sub="Choose what you’re alerted about" accent="var(--clay)" onClick={() => { onClose && onClose(); ctx.openNotifSettings(); }} />
-          {/* §3b. ONLY INSIDE A CHURCH, because the answer is per-church: a member of two congregations brings
-              children to one and not the other, and the stored key carries the church for that reason. It is
-              in SETTINGS rather than MY FAMILY deliberately — MY FAMILY is about a child's own ACCOUNT, and
-              most children checked into a crèche have no phone at all (design §7). */}
-          {ctx.church && ctx.church.npub ? (
-            <Row icon="child" label="Children at church" sub="Say you bring children, and their names — kept on this phone" accent="var(--sage)" onClick={() => setKidsAt(true)} />
-          ) : null}
           <Row icon="bolt" label="Currency" sub={(() => { const c = window.TrinityLN && window.TrinityLN.currency && window.TrinityLN.currency(); return c ? `Show giving amounts in ${c.label} (${c.symbol})` : 'Currency for giving amounts'; })()} accent="var(--gold)" onClick={() => { onClose && onClose(); ctx.openCurrency(); }} />
         </Group>
 
@@ -1932,16 +1941,28 @@ function FamilySheet({ open, onClose, ctx }) {
         _familyPendingKey.name = n;
         _familyPendingKey.mnemonic = (r && r.mnemonic) || seed;
         const p = r.published || {};
+        const w = r.why || {};   // which KIND of failure, per document — see the !p.join branch below
         // WHAT THE COPY MAY PROMISE. "This finishes the same account" is true for as long as the app is
         // running, and false once it has been closed and reopened — the key is held in memory on purpose
         // (see the module note). So the promise is stated with its boundary attached rather than flatly, and
         // the parent is told what to do if they have already closed it. CLAUDE.md rule 4.
         const RETRY = ' Try again in a moment — while the app stays open this finishes the same account rather than starting another. ' +
           'If you have already closed the app since it failed, ask your steward before trying again: starting over would give your child a second account.';
+        // ⚠ AND "NOTHING HAS BEEN SET UP YET" IS ONLY TRUE FOR ONE OF THE THREE FAILURES. This branch alone
+        // omitted RETRY, reasoning that nothing reached any relay so a fresh attempt is safe whether or not
+        // the app was restarted. That holds for `not-sent` (no socket was opened) and for `refused` (a box
+        // read it and said no). It is FALSE for `unconfirmed`: nobody answered inside the ack window, the
+        // join is signed and on the wire, and it may already be on the relay. A parent told nothing exists
+        // closes the app, tries again, and her daughter now has TWO accounts — one invisible, unrecoverable,
+        // with twelve words nobody has ever seen — and her steward has two guardian requests for one child.
+        // Found by the verification pass of 2026-09-15.
+        const joinMayHaveLanded = (w && w.join) === 'unconfirmed';
         setErr(!p.join
-          // Nothing reached any relay, so there is no half-made account to finish and no promise to keep:
-          // a fresh attempt here is safe whether or not the app was restarted.
-          ? 'Couldn’t reach your church’s relay, so the account wasn’t created. Check you’re online and try again — nothing has been set up yet.'
+          ? (joinMayHaveLanded
+            ? 'We couldn’t confirm that reached your church, so we can’t say whether the account was created.' + RETRY
+            // Nothing reached any relay, so there is no half-made account to finish and no promise to keep:
+            // a fresh attempt here is safe whether or not the app was restarted.
+            : 'Couldn’t reach your church’s relay, so the account wasn’t created. Check you’re online and try again — nothing has been set up yet.')
           : !p.name
             ? 'The account was created but your church can’t see who it belongs to yet — your steward needs the child’s name to confirm the link.' + RETRY
             // The request is the ONLY thing that ever asks a steward to confirm the link, nothing re-sends it,

@@ -255,7 +255,13 @@ async function rects(i) {
       return { x: Math.round(b.x), y: Math.round(b.y), w: Math.round(b.width), h: Math.round(b.height),
                right: Math.round(b.right), bottom: Math.round(b.bottom) }; };
     const ROW = el(${P.rowTid}), COL = el(${P.colTid}), CHURCH = el(${P.churchTid}), CONTROLS = el(${P.controlsTid});
-    const DATE = COL && COL.children[0], GREET = COL && COL.children[1];
+    // ⚠ NOT COL.children[0]/[1] ANY MORE. The date and the greeting were removed on 2026-09-12 and that
+    // column's first child is now the church pill — indexing it would have handed this test the PILL and
+    // called it "the date", and the mid-word check would have passed over a thing it was not looking at.
+    // Asked for by what they WERE instead: a bare text line directly in the column. The test above requires
+    // both to be empty, so this resolving to nothing is the passing state.
+    const lines = COL ? [...COL.children].filter(e => e.tagName !== 'BUTTON') : [];
+    const DATE = lines[0], GREET = lines[1];
     const NAME = CHURCH && CHURCH.querySelector('span:last-child');
     // A WORD BROKEN ACROSS TWO LINES REPORTS TWO CLIENT RECTS for its range; an unbroken one reports exactly
     // one. That is how "Wedne / sday" is caught, and it cannot be satisfied by source text.
@@ -275,7 +281,10 @@ async function rects(i) {
       ellipsisW = Math.ceil(p.getBoundingClientRect().width); p.remove(); }
     return JSON.stringify({ vw: document.documentElement.clientWidth,
       row: box(ROW), col: box(COL), church: box(CHURCH), controls: box(CONTROLS), streak: box(el(${P.streakTid})),
-      name: NAME ? { w: Math.round(NAME.getBoundingClientRect().width), full: Math.ceil(NAME.scrollWidth), ellipsisW } : null,
+      name: NAME ? { w: Math.round(NAME.getBoundingClientRect().width), full: Math.ceil(NAME.scrollWidth), ellipsisW,
+        // the property the mid-word check stands down on, and one line of this name in its own font
+        whiteSpace: getComputedStyle(NAME).whiteSpace,
+        oneLineH: Math.ceil(parseFloat(getComputedStyle(NAME).lineHeight) || NAME.getBoundingClientRect().height) } : null,
       date: { ...box(DATE), words: words(DATE) }, greet: { ...box(GREET), words: words(GREET) },
       buttons: [...document.querySelectorAll('[data-tid="${P.controlsTid}"] > button')]
         .map(e => { const b = e.getBoundingClientRect(); return { label: e.getAttribute('aria-label') || e.getAttribute('title') || '',
@@ -351,22 +360,44 @@ for (const [i, c] of CASES.entries()) {
     const m = await measure(i);
     assert.equal(m.vw, c.width, 'the page did not lay out at the width under test');
 
-    // 1. NO WORD IS BROKEN MID-WORD. `overflow-wrap: anywhere` on the greeting column inherited into both of
-    //    these and, at 320px with a long church name and a three-digit streak, produced "Wedne / sday 30 /
-    //    Septem / ber" and "Good / mornin / g". A range over one word reports one client rect per line it is
-    //    drawn on, so a count above 1 IS the break — no source text is involved.
-    for (const [what, line] of [['the date', m.date], ['the greeting', m.greet]]) {
-      assert.ok(line.words.length > 0, `${what} rendered no words at ${m.vw}px — re-anchor this test`);
-      for (const w of line.words) {
-        assert.equal(w.lines, 1,
-          `${what} is broken mid-word at ${m.vw}px: "${w.word}" is drawn across ${w.lines} lines ` +
-          `(greeting column is ${m.col.w}px wide). Full line: ${line.words.map(x => x.word + '/' + x.lines).join(' ')}`);
-        // and it must not solve that by spilling out of its column into the controls instead
-        assert.ok(w.right <= m.col.right + 1,
-          `${what} spills out of the greeting column at ${m.vw}px: "${w.word}" reaches x=${w.right}, ` +
-          `column ends at x=${m.col.right}`);
-      }
-    }
+    // 1. NO WORD IS BROKEN MID-WORD, AND THE ONLY WORDS LEFT UP HERE ARE THE CHURCH'S NAME.
+    //    ⚠ THIS USED TO MEASURE THE DATE AND THE GREETING. Both came off the header on 2026-09-12 (owner:
+    //    the phone's own status bar already shows the date an inch above, and "Good morning" is two lines
+    //    saying nothing a member did not know), so the two lines that produced "Wedne / sday 30 / Septem /
+    //    ber" and "Good / mornin / g" no longer exist to break.
+    //    ⚠ AN EARLIER VERSION OF THIS COMMENT SAID "the MECHANISM that broke them did not go anywhere —
+    //    `overflow-wrap: anywhere` on this column". THAT IS FALSE and was caught in audit: grep the file,
+    //    that property is gone; what is left in the header is the past-tense prose explaining that it was
+    //    REMOVED and replaced by the flex floor. Writing a coverage decision on a mechanism that no longer
+    //    exists is rule 4, so it is corrected here rather than quietly dropped.
+    //    A range over one word reports one client rect per line it is drawn on, so a count above 1 IS the
+    //    break; no source text is involved.
+    assert.ok(m.date.words.length === 0 && m.greet.words.length === 0,
+      `THE DATE OR THE GREETING IS BACK ON THE TODAY HEADER at ${m.vw}px — the owner asked for both off. ` +
+      `Read: ${JSON.stringify([m.date.words, m.greet.words])}`);
+    //    ⚠ AND THE MID-WORD LOOP IS NOT REPOINTED AT THE CHURCH NAME, because it would measure nothing
+    //    there and report a break that is not one. That name carries `white-space: nowrap`, so it cannot
+    //    wrap at all — and a Range over a word inside a nowrap span that `overflow: hidden` is CLIPPING
+    //    reports more than one client rect anyway (measured: "St" came back as 2 lines at 360px, on text
+    //    drawn on a single line). A check that fires on the clip rather than on a break is a blind check.
+    //    What is left of the name IS guarded, by the two assertions below: it must stay wider than a lone
+    //    "…", and its pill must not be drawn across the controls.
+    //    THE ONE THING HOLDING THAT UP IS `white-space: nowrap` ON THE NAME, AND IT IS TESTED HERE.
+    //    Audit of 23f7200: deleting that one property left this file 21/21 green while the pill grew from
+    //    76px to 84px at 320px, because the name wrapped to two lines inside it — every geometry bound in
+    //    this file was slack enough to let it through. The computed property is asserted directly because
+    //    it IS the mechanism the check above stands down for; the measured height below is the consequence.
+    assert.equal(m.name && m.name.whiteSpace, 'nowrap',
+      `THE CHURCH NAME CAN WRAP at ${m.vw}px (white-space: ${m.name && m.name.whiteSpace}). It is the only ` +
+      `text left in this column and the mid-word check above stands down on the promise that it cannot.`);
+    assert.ok(m.church.h > 0 && m.church.h <= m.name.oneLineH + 14,
+      `the church pill is ${m.church.h}px tall at ${m.vw}px, more than one line of its own name ` +
+      `(${m.name.oneLineH}px) plus its padding — the name has wrapped inside it`);
+    assert.ok(m.church.w > 0 && m.col.w > 0,
+      `the church pill or its column measured zero at ${m.vw}px — nothing below is measuring anything`);
+    assert.ok(m.church.right <= m.col.right + 1,
+      `the church pill spills out of its column at ${m.vw}px: pill ends at x=${m.church.right}, ` +
+      `column ends at x=${m.col.right}`);
 
     // 2. THE CHURCH NAME IS STILL LEGIBLE — not squeezed down to the ellipsis and nothing else. Measured at
     //    320px with the column at 56px: the name span was 14px, which is one "…". The bar is the width of a

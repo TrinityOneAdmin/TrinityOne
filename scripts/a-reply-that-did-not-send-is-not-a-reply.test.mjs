@@ -22,6 +22,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { fnBody } from './test-slice.mjs';
 
 const BUNDLE = readFileSync(new URL('../vendor/fellowship.js', import.meta.url), 'utf8');
 
@@ -53,34 +54,53 @@ function runner(name, { publishFails }) {
   const window = { Fellowship: { relays: ['wss://r.example/relay'], ready: Promise.resolve() } };
   // 2026-09-06: leaveMembership now clears the "sent" stamp and any queued join intent after the tombstone
   // lands (fix/join-while-locked). Stubbed here so the happy-path control still reaches its return.
-  const obj = new Function('finalizeEvent2', '_publishAny', 'toPub', 'window', 'sk', 'NET', 'Date', 'JSON', 'Math', '_clearJoinSent', '_dropJoinIntent',
-    'return ' + src)(finalizeEvent2, _publishAny, toPub, window, 'sk-bytes', 'trinityone', Date, JSON, Math, () => {}, () => {});
+  // 2026-09-15: setEventRsvp and leaveMembership classify the failure through the SHIPPED `_pubReason`, so
+  // that is lifted out of the bundle too rather than stubbed — a stub here would supply the very answer these
+  // tests are named after.
+  const _pubReason = new Function(fnBody(BUNDLE, 'function _pubReason(e)', '_pubReason') + '\nreturn _pubReason;')();
+  const obj = new Function('finalizeEvent2', '_publishAny', 'toPub', 'window', 'sk', 'NET', 'Date', 'JSON', 'Math', '_clearJoinSent', '_dropJoinIntent', '_pubReason',
+    'return ' + src)(finalizeEvent2, _publishAny, toPub, window, 'sk-bytes', 'trinityone', Date, JSON, Math, () => {}, () => {}, _pubReason);
   return { fn: obj[name], calls };
 }
 
+// 2026-09-15, chunk 2: two of these three grew a REASON, because `_publishAny` also throws when nobody
+// acknowledged in time and that is not the same as a refusal. They answer `{ ok, evt, reason }` now;
+// respondToServingRequest is untouched and still answers `evt | null`. The invariant this file exists for is
+// unchanged and is what `falsy` below asserts: A SEND THAT LANDED NOWHERE MUST NOT COME BACK LOOKING LIKE ONE
+// THAT DID. For the object shape that means `ok === false` — and an object being TRUTHY is exactly why every
+// caller had to change in the same commit (see the per-writer notes in src/fellowship.src.js).
 const CASES = [
-  ['respondToServingRequest', ['npub1church', 'req-1', 'accept', ''],
+  ['respondToServingRequest', ['npub1church', 'req-1', 'accept', ''], 'null',
    'a member taps "Yes, I\'ll serve", is thanked, and the leader is never told'],
-  ['setEventRsvp', ['npub1church', 'ev-1', 'going'],
+  ['setEventRsvp', ['npub1church', 'ev-1', 'going'], 'object',
    'a member RSVPs, sees it recorded, and the church never receives it'],
-  ['leaveMembership', ['npub1church'],
+  ['leaveMembership', ['npub1church'], 'object',
    'a member leaves, the church is removed from their phone, and the church still has them'],
 ];
 
-for (const [name, args, why] of CASES) {
-  test(`${name}: a publish that reached NO relay returns null`, async () => {
+for (const [name, args, shape, why] of CASES) {
+  test(`${name}: a publish that reached NO relay does not report a send`, async () => {
     const { fn, calls } = runner(name, { publishFails: true });
     const out = await fn(...args);
     assert.deepEqual(calls, ['publish'], `${name} did not attempt a publish at all — re-anchor this test`);
-    assert.equal(out, null,
-      `${name} handed its event back after every relay refused it, so the caller reads it as sent: ${why}`);
+    if (shape === 'null') {
+      assert.equal(out, null,
+        `${name} handed its event back after every relay refused it, so the caller reads it as sent: ${why}`);
+    } else {
+      assert.equal(out && out.ok, false,
+        `${name} reported a send after every relay refused it, so the caller reads it as sent: ${why}. ` +
+        `Got: ${JSON.stringify(out)}`);
+      assert.equal(out.evt, undefined,
+        `${name} still hands the event back on a failure — a caller that reaches for it reads a send that never happened`);
+    }
   });
 
   test(`CONTROL: ${name} still returns the event when a relay DID accept it`, async () => {
-    // Without this the fix could be "always return null", which would break every one of these controls.
+    // Without this the fix could be "always fail", which would break every one of these controls.
     const { fn } = runner(name, { publishFails: false });
     const out = await fn(...args);
-    assert.ok(out && out.kind === 30078,
+    const evt = shape === 'null' ? out : (out && out.ok ? out.evt : null);
+    assert.ok(evt && evt.kind === 30078,
       `${name} no longer returns its event on the happy path — the control would report failure every time`);
   });
 }

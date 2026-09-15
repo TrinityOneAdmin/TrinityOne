@@ -83,7 +83,16 @@ function RecoverySheet({ open, onClose, ctx }) {
   // screen says a backup exists, so members re-ran it or assumed it had failed (measured repeatedly,
   // 2026-08-18). A durable "last backed up" line needs a date; an ISO string is still truthy, so the existing
   // backed-up nudge that checks this key keeps working, and old '1' values read as "backed up, date unknown".
-  const markSaved = () => { try { const np = window.TrinityIdentity && window.TrinityIdentity.current && window.TrinityIdentity.current.npub; if (np) localStorage.setItem('trinityone.backedup.' + np, new Date().toISOString()); } catch (e) {} };
+  // ONE WRITER, IN app/backup.jsx. This was the only place that recorded a backup, and the identical flow on
+  // the "Back up your data" card (app/screens-library.jsx) wrote the same seed-bearing file and recorded
+  // nothing — so that member was nagged for ever. Measured on a phone, 2026-09-14. Delegating rather than
+  // duplicating is the point: the next route to write a backup file calls this too, or it is the same bug.
+  // The local fallback keeps the sheet working if backup.jsx has not loaded.
+  const markSaved = () => { try {
+    if (window.TrinityBackup && window.TrinityBackup.recordBackup) return void window.TrinityBackup.recordBackup();
+    const np = window.TrinityIdentity && window.TrinityIdentity.current && window.TrinityIdentity.current.npub;
+    if (np) localStorage.setItem('trinityone.backedup.' + np, new Date().toISOString());
+  } catch (e) {} };
   const lastBackup = (() => { try { const np = window.TrinityIdentity && window.TrinityIdentity.current && window.TrinityIdentity.current.npub; const v = np && localStorage.getItem('trinityone.backedup.' + np); if (!v || v === '1') return null; const d = new Date(v); return isNaN(d) ? null : d; } catch (e) { return null; } })();
   const doExport = async () => {
     // SECURITY-AUDIT-2026-07-18: floor lowered 10 → 6 because the KDF is now memory-hard Argon2id (backup.jsx),
