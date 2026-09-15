@@ -184,25 +184,128 @@ for (const component of ['SafetyDock', 'SafetyBanner']) {
   });
 }
 
-// ── ⚠ THE POINT-OF-USE GAP THAT IS STILL OPEN ──────────────────────────────────────────────────────────
-// Audit of bcf1b67, 2026-09-15, and it is NOT closed. The tests above lift `respond` and assert `setErr`
-// was CALLED. That is the handler, not the screen. The auditor proved the difference by deleting the dock's
-// ENTIRE error display — `{err ? <div…>{err}</div> : null}` → `{null}` — and running the suite:
+// ── THE SCREEN ITSELF, DRAWN ──────────────────────────────────────────────────────────────────────────
+// CLAUDE.md rule 1, and it was open for two commits. The tests above lift `respond` and assert `setErr` was
+// CALLED — that is the handler, not the screen. The audit of bcf1b67 proved the difference by deleting the
+// dock's ENTIRE error display (`{err ? <div…>{err}</div> : null}` → `{null}`) and running the suite:
+// 114 tests across 12 files stayed GREEN. A member would get no feedback on any failed safety reply, of any
+// kind, and nothing went red.
 //
-//     114 tests across 12 files GREEN, including all 11 in this file.
+// IT ALSO HID A REAL DEFECT. `SafetyBanner` returns early once `status` is set, and `err` was rendered only
+// BELOW that return — so a member who had said "I'm safe" and then tapped "I need help instead" over a
+// failed send saw NOTHING, while the screen still read "You told your church you're safe." Her church had a
+// "safe" on record. Third time that trap has been set in this file; safety-audience.test.mjs records the
+// first two.
 //
-// A member would get no feedback on any failed safety reply, of any kind, and nothing goes red. That is a
-// rule-1 failure in the file whose subject is rule 1.
-//
-// IT ALSO HID A REAL DEFECT FOR TWO COMMITS, now fixed in app/screens-today.jsx: `SafetyBanner` returns
-// early once `status` is set, and `err` was rendered only BELOW that return — so a member who had said
-// "I'm safe" and then tapped "I need help instead" over a failed send saw NOTHING, while the screen still
-// read "You told your church you're safe." Both answered arms render `err` now.
-//
-// WHAT IS NEEDED: a test that DRAWS the tree through scripts/render-jsx-screen.mjs and asserts the wording
-// is in it. The acceptance criterion is exactly the auditor's sabotage above — it must go red.
-// I attempted this and could not stand the fixture up in the time available: SafetyBanner takes its check
-// from `subscribeSafetyCheck` (a subscription, not a prop) and its effect body is wrapped in try/catch, so
-// a single missing global leaves `check` null and the component renders nothing — silently. The auditor DID
-// get it to render, so it is a missing stub, not a limitation. Start from the probe in
-// scripts/a-care-action-that-failed-says-so-on-screen.test.mjs, which drives this same screen file.
+// ⚠ THE FIXTURE IS FUSSIER THAN IT LOOKS, and this is why an earlier attempt was abandoned:
+//   · the check arrives through `subscribeSafetyCheck` — a SUBSCRIPTION, not a prop;
+//   · `SafetyBanner` returns null unless `ctx.care.settings.enabled`;
+//   · the subscription effect body is wrapped in try/catch, so ONE missing global leaves `check` null and
+//     the component renders nothing, SILENTLY — it looks exactly like a broken assertion;
+//   · effects run after the draw, so state lands on the NEXT one. Draw twice.
+import { loadScreen, miniReact as renderMini, texts as treeTexts, find as treeFind } from './render-jsx-screen.mjs';
+
+// render-jsx-screen's `button(tree, label)` does `.includes(label)` on a STRING. These controls are matched
+// by pattern (the label differs per surface and carries a curly apostrophe), so find them directly.
+const btn = (tree, re) => treeFind(tree, n => n.type === 'button' && re.test(treeTexts(n).join(' ')));
+
+const CHECK = { id: 'chk1', by: 'b'.repeat(64), message: 'Storm — are you safe?', audience: 'stewards' };
+const CTX = { church: { npub: 'npub1church', name: 'St Chad\u2019s' }, care: { settings: { enabled: true } } };
+
+function safetyScreen() {
+  const { React, draw } = renderMini();
+  const Icon = ({ name }) => React.createElement('i', { 'data-icon': name });
+  const Stub = (n) => function S(p) { return React.createElement('div', { 'data-stub': n }, p && p.children); };
+  const result = { v: { ok: false, narrowed: false, reason: 'unconfirmed' } };
+  // what this member answered on an earlier visit — drives `collapsed`, which is the row they come back to
+  const acked = { v: null };
+  const win = { addEventListener() {}, removeEventListener() {}, innerWidth: 360,
+    Fellowship: { markSafe: async () => result.v,
+      subscribeSafetyCheck: (cb) => { cb(CHECK); return () => {}; },
+      subscribeCareRequests: () => () => {}, childCareAudience: async () => [] },
+    TrinityData: { NOTIFICATIONS: [], PLANS: [], VOTD_POOL: [] },
+    Bible: { parseRef: () => null, loaded: false, books: () => [], getVerses: () => [], maxChapter: () => 1,
+             activeVersion: 'WEB', refLabel: () => '', defaultLoc: () => ({ book: 43, chap: 1 }) } };
+  const globals = {
+    React, window: win,
+    // `safetyAck` is defined INSIDE screens-today.jsx and reads localStorage directly — injecting a global
+    // of that name does nothing. The recorded answer has to come through storage, which is also how the real
+    // app decides whether the banner renders collapsed.
+    localStorage: { getItem: (k) => (acked.v && k === 'trinityone.safetyack.' + CHECK.id ? acked.v : null),
+                    setItem() {}, removeItem() {} },
+    document: { addEventListener() {}, removeEventListener() {}, querySelector: () => null },
+    navigator: { userAgent: '' }, location: { search: '', hostname: 'x' },
+    setTimeout, clearTimeout, setInterval, clearInterval, console,
+    Icon, ChurchBadge: Stub('ChurchBadge'), SectionLabel: Stub('SectionLabel'), Halo: Stub('Halo'),
+    Sheet: Stub('Sheet'), IconBtn: Stub('IconBtn'),
+    lsGet: (k, d) => d, lsSet: () => {}, cx: (...a) => a.filter(Boolean).join(' '),
+    useTrinityAudio: () => ({ track: null, playing: false }), todayISO: () => '2026-09-15',
+    fetch: async () => ({ ok: false, json: async () => ({}) }),
+  };
+  const mod = loadScreen('app/screens-today.jsx', ['SafetyBanner', 'SafetyDock'], globals);
+  // Draw twice: the subscription runs in an effect, and an effect lands on the NEXT draw.
+  const settle = (Comp, props) => { draw(Comp, props); return draw(Comp, props); };
+  return { draw, settle, result, acked, ...mod };
+}
+
+for (const [name, props] of [['SafetyBanner', { ctx: CTX, persistent: true }], ['SafetyDock', { ctx: CTX, onOpenToday: () => {} }]]) {
+  test(name + ': a FAILED reply is visible ON THE DRAWN SCREEN, not merely handed to setErr', async () => {
+    const s = safetyScreen();
+    const Comp = s[name];
+    assert.ok(Comp, name + ' is no longer exported from screens-today.jsx — re-anchor this test');
+    s.result.v = { ok: false, narrowed: false, reason: 'unconfirmed' };
+    const tree = s.settle(Comp, props);
+    assert.match(treeTexts(tree).join(' | '), /are you safe|safe/i, 're-anchor: ' + name + ' rendered nothing');
+    const b = btn(tree, /I\u2019m safe|I need help/i)[0];
+    assert.ok(b, 're-anchor: no reply control on ' + name);
+    await b.props.onClick({ stopPropagation() {} });
+    const shown = treeTexts(s.draw(Comp, props)).join(' | ');
+    assert.match(shown, /couldn\u2019t confirm/i,
+      'THE MEMBER IS TOLD NOTHING ON SCREEN over a safety reply that may not have arrived. The handler called ' +
+      'setErr; the tree does not draw it. Deleting the error display leaves every handler test green — this ' +
+      'is the assertion that stops that. Screen read: ' + shown);
+  });
+}
+
+test('SafetyBanner: ESCALATING from safe to "I need help" shows the failure — the silent path', async () => {
+  const s = safetyScreen();
+  s.result.v = { ok: true, narrowed: false, reason: '' };                 // the first answer lands
+  let tree = s.settle(s.SafetyBanner, { ctx: CTX, persistent: true });
+  const safe = btn(tree, /I\u2019m safe/i)[0];
+  assert.ok(safe, 're-anchor: no "I\u2019m safe" control');
+  await safe.props.onClick({ stopPropagation() {} });
+  tree = s.draw(s.SafetyBanner, { ctx: CTX, persistent: true });
+  assert.match(treeTexts(tree).join(' | '), /told your church you\u2019re safe/i,
+    're-anchor: the answered arm did not render, so the escalation below is untested');
+
+  s.result.v = { ok: false, narrowed: false, reason: 'unconfirmed' };     // …the escalation does not land
+  const esc = btn(tree, /I need help instead/i)[0];
+  assert.ok(esc, 're-anchor: no escalation control in the answered arm');
+  await esc.props.onClick({ stopPropagation() {} });
+  const after = treeTexts(s.draw(s.SafetyBanner, { ctx: CTX, persistent: true })).join(' | ');
+  assert.match(after, /couldn\u2019t confirm/i,
+    'A MEMBER WHO IS NO LONGER SAFE TAPPED "I need help instead", THE SEND DID NOT LAND, AND THE SCREEN SAID ' +
+    'NOTHING — while still reading "You told your church you\u2019re safe." Her church has a "safe" on ' +
+    'record and nobody is coming. Screen read: ' + after);
+});
+
+test('SafetyBanner COLLAPSED: the one-line row shows a failed escalation too', async () => {
+  // The state a member is in when they come back to Today having already answered earlier: the banner
+  // renders as a single line ("You told your church you're safe · I need help"), because the subscription
+  // sets `collapsed` from the recorded answer. Tapping "I need help" there and having the send fail was
+  // silent — the expanded card and the dock were fixed first and this row was not, which a sabotage found:
+  // deleting its error left every test green.
+  const s = safetyScreen();
+  s.acked.v = 'safe';                       // they answered on an earlier visit
+  s.result.v = { ok: false, narrowed: false, reason: 'unconfirmed' };
+  const tree = s.settle(s.SafetyBanner, { ctx: CTX, persistent: true });
+  const shown = treeTexts(tree).join(' | ');
+  assert.match(shown, /told your church you’re safe/i, 're-anchor: the collapsed row did not render');
+  const esc = btn(tree, /I need help/i)[0];
+  assert.ok(esc, 're-anchor: no escalation control on the collapsed row');
+  await esc.props.onClick({ stopPropagation() {} });
+  const after = treeTexts(s.draw(s.SafetyBanner, { ctx: CTX, persistent: true })).join(' | ');
+  assert.match(after, /couldn’t confirm/i,
+    'ON THE ONE-LINE ROW — the state a member returns to — an escalation that did not land said NOTHING. ' +
+    'Screen read: ' + after);
+});
