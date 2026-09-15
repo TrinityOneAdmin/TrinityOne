@@ -4182,8 +4182,36 @@ window.Fellowship = {
           // the precise state they had just asked to leave, reported to them as its opposite. Wrong in the one
           // direction that matters, on the one control here that is a privacy choice. AUDIT-2026-08-30.
           let why = 'Couldn’t save your profile details — this phone can’t reach your church’s relay right now.';
-          if (meta && meta.hidden === true) why = 'Couldn’t reach your church’s relay — you are still listed in the directory for now. It will save when you’re back online.';
-          else if (meta && meta.hidden === false) why = 'Couldn’t reach your church’s relay — you are still hidden from the directory for now. It will save when you’re back online.';
+          // ⚠ NEITHER SENTENCE PROMISES A LATER SAVE ANY MORE. Both used to end by telling the member it would
+          // save once they were back online. Nothing retries: no queue entry, no listener, and reconnecting
+          // changes nothing — measured, one publish attempt before and one after. The change only ever reaches
+          // the church BY ACCIDENT, if the member later edits their profile again and the unsent `hidden`
+          // rides out with that edit, because `_profilePubBody` is recorded only after a publish that did not
+          // throw. So the reassurance did the opposite of its job: this is the one PRIVACY control here, the
+          // member had just been told the true state ("you are still listed"), and was then told to stop
+          // worrying about it. Tell them to try again — the only thing that actually works.
+          // Owner's decision, 2026-09-15. If a retry is ever built, the reassurance comes back WITH it.
+          // ⚠ WHAT TO DO ABOUT IT DEPENDS ON WHY IT FAILED, and the answer is already in `e`. The first version of
+          // this fix replaced "It will save when you’re back online" (a promise nothing keeps) with "Try again
+          // when you have a signal" — which is itself false for two of the three outcomes `_publishAny`
+          // produces, and the review of that fix caught it:
+          //   · not-sent   — nothing left this phone: no relay could be PROVED to be ours. The signal may be
+          //                  perfect. reference/RELAY-ADMISSION.md forbids softening this one; it is a
+          //                  configuration problem and only a steward can fix it.
+          //   · refused    — a relay READ the event and said no. A better signal reproduces it for ever.
+          //   · unconfirmed— nobody answered in time. This is the one a signal actually fixes.
+          // `_pubReason(e)` is the classifier ten sibling writers already use; this branch was discarding the
+          // error object entirely. The state half of the sentence is unchanged and still comes first, because
+          // on a privacy control the member's first question is which way round they currently are.
+          const _why = _pubReason(e);
+          const _advice = _why === 'not-sent'
+            ? 'It didn’t leave this phone — none of your church’s relays could be confirmed. Ask a steward.'
+            : _why === 'refused'
+            ? 'Your church’s relay refused it, so trying again won’t help. Ask a steward.'
+            : 'Try again when you have a signal.';
+          if (meta && meta.hidden === true) why = 'Couldn’t save that — you are still listed in the directory. ' + _advice;
+          else if (meta && meta.hidden === false) why = 'Couldn’t save that — you are still hidden from the directory. ' + _advice;
+          else why = 'Couldn’t save your profile details. ' + _advice;
           try { if (window.trinityToast) window.trinityToast(why); } catch (x) {}
         }
       }

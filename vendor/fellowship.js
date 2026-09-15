@@ -10256,8 +10256,11 @@
           console.warn("[fellowship] profile publish failed", e);
           if (["about", "picture", "av", "hidden"].some((k) => meta && meta[k] != null)) {
             let why = "Couldn\u2019t save your profile details \u2014 this phone can\u2019t reach your church\u2019s relay right now.";
-            if (meta && meta.hidden === true) why = "Couldn\u2019t reach your church\u2019s relay \u2014 you are still listed in the directory for now. It will save when you\u2019re back online.";
-            else if (meta && meta.hidden === false) why = "Couldn\u2019t reach your church\u2019s relay \u2014 you are still hidden from the directory for now. It will save when you\u2019re back online.";
+            const _why = _pubReason(e);
+            const _advice = _why === "not-sent" ? "It didn\u2019t leave this phone \u2014 none of your church\u2019s relays could be confirmed. Ask a steward." : _why === "refused" ? "Your church\u2019s relay refused it, so trying again won\u2019t help. Ask a steward." : "Try again when you have a signal.";
+            if (meta && meta.hidden === true) why = "Couldn\u2019t save that \u2014 you are still listed in the directory. " + _advice;
+            else if (meta && meta.hidden === false) why = "Couldn\u2019t save that \u2014 you are still hidden from the directory. " + _advice;
+            else why = "Couldn\u2019t save your profile details. " + _advice;
             try {
               if (window.trinityToast) window.trinityToast(why);
             } catch (x) {

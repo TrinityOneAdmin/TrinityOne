@@ -8659,6 +8659,23 @@ window.Steward = {
     window.dispatchEvent(new CustomEvent('steward-relays'));
     return url;
   },
+  // ⚠ WHICH RELAYS CAN ACTUALLY BE REMOVED — asked by the console so the two cannot drift apart.
+  // `removeRelay` only filters `extraRelays()`, and the canonical addresses are appended unconditionally
+  // (see the relay-seed loop), so calling it on one of those removes NOTHING while still returning true and
+  // still forgetting any name→url binding. The console showed a trash icon against them on every console,
+  // community and self-hosting alike: a steward could click it, confirm, be told nothing, and watch the row
+  // stay. The member app has always got this right (`canRemove` in app/identity-extras.jsx reads
+  // Fellowship.CANONICAL_RELAYS); this is the same test, exposed for the console. Found 2026-09-15.
+  // Deliberately NOT a change to removeRelay's contract: it has exactly one product caller and the fix the
+  // owner chose is to stop OFFERING the control, not to make the control fail differently.
+  // (CANONICAL_RELAYS is deliberately NOT exported: nothing reads it, and exporting the live array that
+  //  relaysRaw() iterates hands any caller a way to mutate the relay set from outside. Ask canRemoveRelay.)
+  canRemoveRelay(url) {
+    if (!url) return false;
+    if (CANONICAL_RELAYS.includes(url)) return false;
+    try { if (url === ownRelay()) return false; } catch (e) {}
+    return true;
+  },
   removeRelay(url) {
     const next = extraRelays().filter(r => r !== url);
     lsSet(RELAYS_LS, JSON.stringify(next));

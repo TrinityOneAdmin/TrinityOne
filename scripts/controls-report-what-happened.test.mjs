@@ -244,7 +244,10 @@ test('POINT OF USE: the failed-publish report is RUN, not read', async () => {
   const finalizeName = (BODY.match(/\bfinalizeEvent\d*\b/) || ['finalizeEvent'])[0];
 
   const ME = 'a'.repeat(64);
-  const run = async ({ meta, publishFails = true }) => {
+  // ⚠ `failAs` DRIVES THE THREE SHAPES `_publishAny` ACTUALLY THROWS, because the advice now depends on
+  // which one it was — and the first version of this fix told everyone to "try again when you have a
+  // signal", which is false for two of them. 'unconfirmed' is the plain Error the old stub threw.
+  const run = async ({ meta, publishFails = true, failAs = 'unconfirmed' }) => {
     const toasts = [];
     const scope = {
       sk: new Uint8Array(32), pub: ME,
@@ -259,7 +262,15 @@ test('POINT OF USE: the failed-publish report is RUN, not read', async () => {
       _profilePubFor: null, _profilePubBody: null,
       PROFILE_KEY: 'trinityone.profile',
       [finalizeName]: (t) => ({ ...t, id: 'e1', sig: 'x' }),
-      _publishAny: async () => { if (publishFails) throw new Error('no relay accepted it'); },
+      _publishAny: async () => {
+        if (!publishFails) return;
+        const e = new Error('no relay accepted it');
+        if (failAs === 'not-sent') e.unsent = true;
+        if (failAs === 'refused') e.refused = true;
+        throw e;
+      },
+      // the real classifier, lifted from the same shipped bundle rather than imitated
+      _pubReason: (e) => (e && e.unsent ? 'not-sent' : e && e.refused ? 'refused' : 'unconfirmed'),
       window: {
         Fellowship: { relays: ['wss://test.invalid'], ready: Promise.resolve(), requestProfiles: () => {}, syncSealedNames: () => {} },
         trinityToast: (m) => toasts.push(m),
@@ -311,4 +322,35 @@ test('POINT OF USE: the failed-publish report is RUN, not read', async () => {
   // …and a publish that WORKED says nothing
   assert.deepEqual(await run({ meta: { hidden: true }, publishFails: false }), [],
     'a successful opt-out tells the member it failed');
+
+  // ── WHAT TO DO ABOUT IT DEPENDS ON WHY IT FAILED ───────────────────────────────────────────────────────
+  // The switch used to end "It will save when you’re back online" — a promise nothing keeps. The FIRST fix
+  // said "Try again when you have a signal" instead, and an adversarial review caught that this is false for
+  // two of the three outcomes `_publishAny` produces, with the classifier sitting unused in the same file:
+  //   · not-sent    nothing left the phone — no relay could be PROVED ours. The signal may be perfect, and
+  //                 reference/RELAY-ADMISSION.md forbids softening this one.
+  //   · refused     a relay READ it and said no. A better signal reproduces that for ever.
+  //   · unconfirmed nobody answered in time — the only one a signal fixes.
+  const notSent = await run({ meta: { hidden: true }, failAs: 'not-sent' });
+  assert.match(notSent[0], /didn’t leave this phone|Ask a steward/,
+    'nothing reached the network because no relay could be proved to be ours — a configuration problem only ' +
+    'a steward can fix — and the member was told to wait for a signal they may already have. Got: ' + notSent[0]);
+  assert.doesNotMatch(notSent[0], /Try again when you have a signal/,
+    'still blaming the signal for a relay-list problem');
+
+  const refusedT = await run({ meta: { hidden: true }, failAs: 'refused' });
+  assert.match(refusedT[0], /refused it|Ask a steward/,
+    'a relay read the event and refused it; a better signal reproduces that for ever. Got: ' + refusedT[0]);
+  assert.doesNotMatch(refusedT[0], /Try again when you have a signal/,
+    'still telling them to retry a refusal');
+
+  const unconf = await run({ meta: { hidden: true }, failAs: 'unconfirmed' });
+  assert.match(unconf[0], /Try again when you have a signal/,
+    'nobody answered in time — this IS the case a signal fixes, and the advice has been lost. Got: ' + unconf[0]);
+
+  for (const t of [notSent[0], refusedT[0], unconf[0]]) {
+    assert.match(t, /still listed in the directory/,
+      'the true state must come first whatever the cause — on a privacy control that is the member’s first question');
+    assert.doesNotMatch(t, /will save when you/, 'the promise nothing keeps is back');
+  }
 });

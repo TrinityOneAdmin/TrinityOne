@@ -127,7 +127,12 @@ function profileRunner({ publishFails, alreadyPublished }) {
   const profiles = { [ME]: { name: 'Jane Smith', about: '', picture: '', hidden: false } };
   const names  = ['sk', 'pub', 'window', 'profiles', '_k0Seen', '_publishAny', 'finalizeEvent2', '_churchPhotosOff',
                   '_myPhotoReset', '_stripPhoto', 'PROFILE_KEY', 'localStorage', 'setTimeout', 'console',
-                  '_profilePubFor', '_profilePubBody', 'JSON', 'Date', 'Math', 'String', 'CustomEvent'];
+                  '_profilePubFor', '_profilePubBody', 'JSON', 'Date', 'Math', 'String', 'CustomEvent',
+                  // ⚠ A LIFTED FUNCTION HAS TWO CALLER LISTS: the code that calls it, and the tests that
+                  // SLICE it. setProfile started asking `_pubReason(e)` on 2026-09-15 so its failure
+                  // advice matches WHICH way the publish failed, and this harness went red with
+                  // "_pubReason is not defined" — loudly, which is what the name list is for.
+                  '_pubReason'];
   const values = ['sk-bytes', ME,
     { Fellowship: { ready: Promise.resolve(), relays: ['wss://r/relay'], myProfile: null,
                     syncSealedNames() { state.sealedNames++; } },
@@ -138,7 +143,8 @@ function profileRunner({ publishFails, alreadyPublished }) {
     (e) => ({ ...e, id: 'evt-id' }), () => false, () => false, (p, av) => av, 'trinityone.profile',
     { setItem: (k, v) => { state.stored = v; }, getItem: () => null }, setTimeout, { warn() {} },
     alreadyPublished ? ME : '', alreadyPublished ? JSON.stringify({ about: '', picture: '' }) : '',
-    JSON, Date, Math, String, function CustomEvent() {}];
+    JSON, Date, Math, String, function CustomEvent() {},
+    (e) => (e && e.unsent ? 'not-sent' : e && e.refused ? 'refused' : 'unconfirmed')];
   const obj = new Function(...names, 'return ({ ' + liftFellowship('setProfile') + ' })')(...values);
   return { setProfile: obj.setProfile, state };
 }

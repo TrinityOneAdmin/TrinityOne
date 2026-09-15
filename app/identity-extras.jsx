@@ -589,6 +589,23 @@ function RelaysSheet({ open, onClose, ctx }) {
   // how a member loses their church rather than a stray address. (The dead `toggle` above it, which only
   // changed a row's colour, is gone.)
   const [confirmDrop, setConfirmDrop] = useIx(null);
+  // ⚠ AN ABANDONED CONFIRMATION MUST NOT SURVIVE THE SHEET CLOSING. `confirmDrop` holds a URL and nothing
+  // cleared it, so: tap "Stop using", think better of it, close the sheet — and on reopening, the DESTRUCTIVE
+  // "Confirm: stop using" button is sitting in the exact slot the harmless "asks you to confirm" button
+  // normally occupies. Same row, same place, one tap, no second chance. Rendered and driven to prove it.
+  // The four sibling sheets in this file already reset on `!open` (backup, PIN, recovery, transfer); this one
+  // was simply missed. Found 2026-09-15.
+  useIxE(() => { if (!open) setConfirmDrop(null); }, [open]);
+  // ⚠ AND IT MUST ALSO GO WHEN THE ROW STOPS BEING REMOVABLE — the sheet closing was only half of it, which
+  // the review of the first fix proved by driving the real component: a relay that CONNECTS (canRemove goes
+  // false, the whole control disappears) and then lapses again brings the destructive button straight back,
+  // still armed, with the member having done nothing at all in between. Relays connect and drop constantly;
+  // that path needs no mistake by anyone. Clearing on url-not-found also covers a row leaving the list.
+  useIxE(() => {
+    if (!confirmDrop) return;
+    const r = (list || []).find(x => x && x.url === confirmDrop);
+    if (!r || !canRemove(r)) setConfirmDrop(null);
+  }, [list, confirmDrop]);
   const CANON = (FS && FS.CANONICAL_RELAYS) || ((FS && FS.CANONICAL_RELAY) ? [FS.CANONICAL_RELAY] : []);
   const canRemove = (r) => r.status !== 'on' && !CANON.includes(r.url);
   const remove = (u) => { setConfirmDrop(null); if (FS && FS.removeRelay) { FS.removeRelay(u); setList(fromReal()); } else setList(rows.filter(r => r.url !== u)); };
