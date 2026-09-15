@@ -723,18 +723,29 @@
   <div class="wrap">
     <div class="eyebrow"><span class="to-pill">Support the project</span></div>
     <h2>Owned by no one. Kept alive by everyone.</h2>
-    <p class="sx-intro">TrinityOne is free, open source and ad-free, and it stays that way because people pitch in. Two things help right now.</p>
+    <p class="sx-intro">TrinityOne is free, open source and ad-free. Some churches have a spare computer and a good line. Others have nothing spare at all. The first can carry the second.</p>
     <div class="sx-grid">
+      <!-- ⚠ THE RELAY CARD COMES FIRST AS OF 2026-09-15, at the owner's request: "lets put a little more
+           emphasis on the well resourced churches supporting those who are persecuted and have very little."
+           It is the section's point, so it leads. `Tell someone` stays as the low-commitment ask beneath it.
+           ⚠ AND IT CLAIMS NOTHING ABOUT PRIVACY, deliberately. A relay operator can see which churches are
+           registered on their machine, and pubkey-to-IP is an open exposure this project has NOT closed
+           (reference/ deanon red-team, 2026-07-14). An earlier draft of this card said a host "does not need
+           to know who they are"; that is the kind of sentence scripts/no-overclaims.test.mjs exists for.
+           What IS true and what this says: one relay admits more than one church — relay/church.json carries
+           entries added both `by: self` and `by: operator` — so spare capacity really does become somebody
+           else's church home. -->
+      <div class="sx-card">
+        <h3>Run a relay — and carry another church</h3>
+        <p>Give a computer that stays on. One machine can hold more than one church.</p>
+        <p>A church with something spare can host one without — no computer, no reliable power, or good reason not to run one where they are.</p>
+        <p style="color:var(--ink-3);margin-top:9px">Any always-on computer will do. The Suite is one double-click app, no command line.</p>
+        <p style="margin-top:11px"><a href="#get" style="font-weight:700;color:var(--clay)">Get the Suite &rarr;</a></p>
+      </div>
       <div class="sx-card">
         <h3>Tell someone</h3>
         <p>A friend, your small group, your pastor. Every church that joins makes the network stronger for all of them — and costs us nothing to run.</p>
         <p style="margin-top:11px"><a href="#get" style="font-weight:700;color:var(--clay)">Share the app &rarr;</a></p>
-      </div>
-      <div class="sx-card">
-        <h3>Run a relay</h3>
-        <p>The most useful thing you can give is a computer that stays on. A church that hosts its own keeps its records on its own machine — and a network of them has no middle for anyone to lean on.</p>
-        <p style="color:var(--ink-3);margin-top:9px">Any always-on computer will do. The Suite is one double-click app, no command line.</p>
-        <p style="margin-top:11px"><a href="#get" style="font-weight:700;color:var(--clay)">Get the Suite &rarr;</a></p>
       </div>
       <!-- GIVE: HIDDEN 2026-09-12 at the owner's request, not abandoned. The card said the giving route was
            "not open yet", which asks a reader to hold a promise for us; two live actions read better without
@@ -743,6 +754,7 @@
            NOTE the deleted block is NOT left commented out here on purpose: it carried CSS custom properties
            (var with two leading hyphens), and a double hyphen inside an HTML comment is invalid. -->
     </div>
+    <p class="sx-note" style="text-align:center">Built for churches where it costs something to be one. If yours meets freely and has something spare, that is what makes you useful here.</p>
   </div>
 </section>
 
