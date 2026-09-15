@@ -530,7 +530,7 @@ function _blobMember(req, ownerCp, host, path) {
   // a stranger who self-joined an approval-gated church but was never admitted, keeps downloading members-only media.
   const md = MEMBER_DOCS.get(ownerCp);
   const gated = REQUIRE_APPROVAL.has(ownerCp), admitted = ADMITTED_BY.get(ownerCp);
-  const effectiveMember = !!(md && md.has(p)) && !BLOCKED.has(p) && (!gated || !!(admitted && admitted.has(p)));
+  const effectiveMember = !!(md && md.has(p)) && !blockedBy(p, ownerCp) && (!gated || !!(admitted && admitted.has(p)));
   return p === ownerCp || stewardCan(p, ownerCp, 'any') || effectiveMember;   // church / steward / effective member of the OWNING church
 }
 
@@ -2331,8 +2331,36 @@ function owningChurch(e, d) {
 // OR by a steward naming the church in a ['church'] tag. Resolve the owning church for the finance gates from both.
 const finCp = (e) => namedChurch(e) || (CHURCH_PUBS.has(e.pubkey) ? e.pubkey : '');
 const BLOCKED_BY = new Map();    // churchpub -> Set(blocked member pubkeys); BLOCKED is the union for fast checks
-const BLOCKED = new Set();       // banned pubkeys — rejected on write, withheld on read
-function rebuildBlocked() { BLOCKED.clear(); for (const s of BLOCKED_BY.values()) for (const p of s) BLOCKED.add(p); rebuildMembers(); }
+// ⚠ THERE IS NO RELAY-WIDE `BLOCKED` SET ANY MORE, AND THAT IS THE FIX. It existed as the union of every
+// church's list, and eleven gates consulted it, so one church's ban silenced its subject across every
+// congregation on the box. It is DELETED rather than left unused so that reaching for it is a
+// ReferenceError at startup instead of a silent cross-church grant — the same discipline the `isLeader`
+// removal used a few hundred lines down ("a site that forgets is a ReferenceError at startup rather than a
+// silent grant"). Ask `blockedBy(pub, cp)` below, which needs a church and therefore cannot be got wrong
+// by accident.
+function rebuildBlocked() { rebuildMembers(); }
+// ⚠ IS `pub` BANNED BY CHURCH `cp` — WHICH IS THE ONLY CHURCH ENTITLED TO AN OPINION ABOUT THEM.
+//
+// A ban is a judgement a church makes about its OWN people. `BLOCKED` is every church's list merged, so a
+// gate that consults the union lets any co-tenant church on the same box silence a named person everywhere
+// on it — including inside a church that has never heard of the dispute. This box hosts many churches at
+// once (relay/church.json carries nine today), so that is the ordinary case and not an exotic one.
+//
+// MEASURED before the fix, 2026-09-15, on a clean two-church relay: a member of church B who had never
+// touched church A could write to B; church A published a blocklist naming them; B refused their next write
+// with "blocked: not a member or not permitted for this group"; church A cleared its list and B accepted
+// them again. Three steps, one victim, two unrelated churches.
+//
+// THIS IS THE SAME DEFECT AND THE SAME FIX AS `minorOf` (AUDIT-2026-07-30 S3), whose note says it in almost
+// these words about MINORS. Blocks were left on the union when minors were scoped. Do not re-merge them.
+//
+// ⚠ AND THE OPPOSITE FAILURE IS AS BAD: a ban that stops biting is a church unable to remove someone from
+// its own rooms. Every change below keeps the refusal — it only asks the RIGHT church's list. The test file
+// carries a case for each direction, and a fix that satisfies only one of them is not the fix.
+function blockedBy(pub, cp) {
+  const s = cp && BLOCKED_BY.get(cp);
+  return !!(s && s.has(pub));
+}
 // effective membership = everyone who published a member: doc, minus the blocked, minus (for a church that
 // requires approval) anyone the steward hasn't admitted yet. A pending member's doc is stored (so the steward
 // sees the request) but grants no posting rights until they're on that church's admitted list.
@@ -2341,7 +2369,7 @@ function rebuildMembers() {
   for (const [cp, set] of MEMBER_DOCS) {
     const gated = REQUIRE_APPROVAL.has(cp), admitted = ADMITTED_BY.get(cp);
     for (const pk of set) {
-      if (BLOCKED.has(pk)) continue;
+      if (blockedBy(pk, cp)) continue;
       if (gated && !(admitted && admitted.has(pk))) continue;   // awaiting approval
       MEMBERS.add(pk);
     }
@@ -2827,7 +2855,7 @@ function resolveChurch(e) {
   const ct = (e.tags || []).find(t => t[0] === 'church'); const cp = ct && ct[1];
   if (cp) {
     const md = MEMBER_DOCS.get(cp), gated = REQUIRE_APPROVAL.has(cp), admitted = ADMITTED_BY.get(cp);
-    const effMember = !!(md && md.has(e.pubkey)) && !BLOCKED.has(e.pubkey) && (!gated || !!(admitted && admitted.has(e.pubkey)));
+    const effMember = !!(md && md.has(e.pubkey)) && !blockedBy(e.pubkey, cp) && (!gated || !!(admitted && admitted.has(e.pubkey)));
     if (e.pubkey === cp || networkOf(e.pubkey, cp) || stewardCan(e.pubkey, cp, 'any') || effMember) return cp;   // B3: scoped
   }
   if (CHURCH_PUBS.has(e.pubkey) || NETWORKS.has(e.pubkey)) return e.pubkey;
@@ -3460,7 +3488,18 @@ function accept(e) {
   // the mistake above. Use leaderOf(cp).
   const isAnyChurch = CHURCH_PUBS.has(e.pubkey), isNetwork = _netCp ? networkOf(e.pubkey, _netCp) : NETWORKS.has(e.pubkey);
   const isMember = isAnyChurch || isNetwork || MEMBERS.has(e.pubkey);
-  if (BLOCKED.has(e.pubkey) && !(isAnyChurch || isNetwork)) return false;   // a blocked member can't write anything
+  // ⚠ THE BAN BELONGS TO THE BANNING CHURCH, NOT TO THE BOX. This was `BLOCKED.has(e.pubkey)` — the merged
+  // list — so one church's ban stopped its subject writing to EVERY church on this relay, including
+  // congregations that had never heard of the dispute. Measured on a clean two-church relay, 2026-09-15:
+  // a member of B, who had never touched A, was silenced in B by A's blocklist and restored when A cleared
+  // it. Ask the church this event is actually FOR, resolved exactly as the scoped rules below resolve it.
+  //
+  // AN EVENT NO CHURCH OWNS IS NOT COVERED BY ANYBODY'S BAN, and that is the point rather than a gap: a ban
+  // is a church removing someone from ITS rooms. The blanket refusal is not lost, it is relocated — the
+  // church-scoped rules below (and `isMember`, whose set rebuildMembers() now builds per church) each refuse
+  // in their own right, so a member banned by the only church they belong to still cannot write at all.
+  const _banCp = owningChurch(e, (e.tags.find(t => t[0] === 'd') || [])[1] || '');
+  if (_banCp && blockedBy(e.pubkey, _banCp) && !(isAnyChurch || isNetwork)) return false;
   const k = e.kind;
   if (k === 0) {                                                 // profiles (replaceable, per-pubkey)
     // …but a minor's photograph is refused whatever their membership, unless their church allows it. Placed
@@ -3740,7 +3779,7 @@ function accept(e) {
       const cp = toHexPub(d.slice(NAME_D.length)) || '';
       // Membership, not EFFECTIVE membership: a member awaiting approval must still be able to say what they
       // are called, or a gated church can't show the steward a name to approve. It is their own name, sealed.
-      return !!cp && CHURCH_PUBS.has(cp) && !BLOCKED.has(e.pubkey) && !!(MEMBER_DOCS.get(cp) || new Set()).has(e.pubkey);
+      return !!cp && CHURCH_PUBS.has(cp) && !blockedBy(e.pubkey, cp) && !!(MEMBER_DOCS.get(cp) || new Set()).has(e.pubkey);
     }
     // the care-team recipient roster (d=careteam:<churchpub>) — church key or a current steward. Just pubkeys
     // (no secrets), so a member can read it to seal an ask-for-help request to exactly the care team.
@@ -4101,7 +4140,7 @@ function effMemberOf(who, cp) {
   if (!who || !cp) return false;
   const md = MEMBER_DOCS.get(cp);
   const gated = REQUIRE_APPROVAL.has(cp), admitted = ADMITTED_BY.get(cp);
-  return !!(md && md.has(who)) && !BLOCKED.has(who) && (!gated || !!(admitted && admitted.has(who)));
+  return !!(md && md.has(who)) && !blockedBy(who, cp) && (!gated || !!(admitted && admitted.has(who)));
 }
 // May `authed` read content belonging to church cp at all? The church itself, a network it belongs to, one of
 // its current stewards, or an effective member.
@@ -4702,7 +4741,7 @@ function canRead(e, authed) {
     }
     const md = MEMBER_DOCS.get(cp);
     const gated = REQUIRE_APPROVAL.has(cp), admitted = ADMITTED_BY.get(cp);
-    return !!(md && md.has(authed)) && !BLOCKED.has(authed) && (!gated || !!(admitted && admitted.has(authed)));
+    return !!(md && md.has(authed)) && !blockedBy(authed, cp) && (!gated || !!(admitted && admitted.has(authed)));
   }
   // ── DEFAULT-ALLOW TAIL, CLOSED. AUDIT-2026-07-27 ──────────────────────────────────────────────────────────
   // This function gated kind-4 and kind-30078 with real care and then ended `if (e.kind !== 1) return true;`,
@@ -6490,7 +6529,15 @@ function serveStatic(req, res) {
       const k0 = store.query({ kinds: [0], limit: 1000000 }).sort((a, b) => (CHURCH_PUBS.has(b.pubkey) - CHURCH_PUBS.has(a.pubkey)) || ((a.created_at || 0) - (b.created_at || 0)));
       const map = new Map();
       for (const e of k0) {
-        if (BLOCKED.has(e.pubkey)) continue;
+        // ⚠ NO BAN CHECK HERE, deliberately, and it is a REMOVAL rather than a rescoping. This read
+        // `if (BLOCKED.has(e.pubkey)) continue;` — the merged list — one line above a filter that keeps
+        // CHURCHES ONLY. So the only entries it could ever suppress were CHURCH keys, and blocklists hold
+        // member keys: on its own terms it was dead. What it was NOT was harmless, because nothing stops a
+        // church writing another church's key into its own blocklist, and that would have taken the second
+        // church's public handle off this endpoint for everyone on the box. A church's handle is meant to be
+        // public — that is the whole point of the CHURCHES ONLY rule below — and no other church has any
+        // authority over it. There is no per-church question to ask here: the entry IS the church.
+        // Part of the ban-scoping pass, 2026-09-15.
         // CHURCHES ONLY. Resolving a MEMBER's name turned this into a guess-a-name oracle: ask for "maria" and
         // get her identity back, from anywhere, unauthenticated. The bulk dump was closed in 2026-06-24 (L7);
         // the scoped form is the same leak one name at a time, and it is exactly what a congregation that must
@@ -7174,7 +7221,7 @@ wss.on('connection', (ws, req) => {
       // AUDIT-2026-07-27: challenge whenever we withhold ANYTHING from an unauthenticated reader, not only
       // kind-30078/4. Once kind-0/5/7 became member-gated, a member's own {kinds:[0]} REQ was withheld and
       // never challenged, so their app rendered a church with no names — a gate has to come with its prompt.
-      scan: for (const f of filters) for (const e of store.query(f, _scanBudget)) { if (_seen.has(e.id)) continue; _seen.add(e.id); if (BLOCKED.has(e.pubkey)) continue; if (!canRead(e, ws._auth)) { if (!ws._auth) wantsSafeguard = true; continue; } matched.push(e); if (++_reqEvents >= MAX_REQ_EVENTS) break scan; }   // aggregate cap across ALL filters (DoS): a no-limit REQ can't materialize 32x10k events
+      scan: for (const f of filters) for (const e of store.query(f, _scanBudget)) { if (_seen.has(e.id)) continue; _seen.add(e.id); if (blockedBy(e.pubkey, owningChurch(e, (e.tags.find(t => t[0] === 'd') || [])[1] || ''))) continue; if (!canRead(e, ws._auth)) { if (!ws._auth) wantsSafeguard = true; continue; } matched.push(e); if (++_reqEvents >= MAX_REQ_EVENTS) break scan; }   // aggregate cap across ALL filters (DoS): a no-limit REQ can't materialize 32x10k events
       matched.sort((a, b) => (a.created_at || 0) - (b.created_at || 0));   // oldest→newest, matching the previous array delivery order
       // LAZY NIP-42: challenge ONLY when the REQ explicitly targets an invite-only group (a #t for an
       // invite group id). A broad query (e.g. #p:church) that merely happens to match an invite message
@@ -7230,8 +7277,16 @@ wss.on('connection', (ws, req) => {
         // was actually dialled on. (Tunnels forward the original Host, so this is the name the member used.)
         let boundToUs = false;
         try { const rt = evt && (evt.tags.find(t => t[0] === 'relay') || [])[1]; boundToUs = !!rt && !!ws._host && new URL(String(rt)).hostname.replace(/^\[|\]$/g, '').toLowerCase() === ws._host; } catch { boundToUs = false; }
-        if (evt && evt.kind === 22242 && ch === ws._challenge && fresh && boundToUs && verifyEvent(evt) && !BLOCKED.has(evt.pubkey)) {
-          // SECURITY-AUDIT-2026-07-06 H1: a BLOCKED pubkey must never satisfy a read gate — refuse to authenticate it.
+        if (evt && evt.kind === 22242 && ch === ws._challenge && fresh && boundToUs && verifyEvent(evt)) {
+          // ⚠ NO BAN CHECK HERE ANY MORE, and the owner took this decision on 2026-09-15. It read
+          // `&& !BLOCKED.has(evt.pubkey)` — the merged list — and authentication is the one gate with NO
+          // church in the picture, so the union was the only list it could consult. The effect was that one
+          // church's ban stopped its subject signing in to the relay AT ALL, cutting them out of every other
+          // congregation on the box before a single per-church rule was reached.
+          // SECURITY-AUDIT-2026-07-06 H1 ("a BLOCKED pubkey must never satisfy a read gate") is NOT repealed:
+          // it is enforced where it can name a church — canRead()/effMemberOf(), the REQ scan and the replay
+          // below all ask blockedBy(pubkey, owningChurch(...)). Signing in now proves who you are; it grants
+          // nothing on its own. Re-adding a union check here would undo the whole of this fix.
           ws._auth = evt.pubkey; ws.send(JSON.stringify(['OK', evt.id, true, '']));
           // now authed: replay everything the open subs were waiting on that the connection can NOW read
           // but could NOT while unauthed — invite-only group messages AND the safeguarding lists (minors/
@@ -7250,7 +7305,7 @@ wss.on('connection', (ws, req) => {
             const seen = new Set();
             for (const f of filters) for (const e of store.query(f, _replayBudget)) {
               if (seen.has(e.id)) continue; seen.add(e.id);
-              if (BLOCKED.has(e.pubkey) || !canRead(e, ws._auth)) continue;
+              if (blockedBy(e.pubkey, owningChurch(e, (e.tags.find(t => t[0] === 'd') || [])[1] || '')) || !canRead(e, ws._auth)) continue;
               if (!canRead(e, null)) { if (ws.bufferedAmount > MAX_WS_BUFFER) { try { ws.close(1009, 'too slow'); } catch {} return; } ws.send(JSON.stringify(['EVENT', subId, e])); }
             }
           }
