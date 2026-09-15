@@ -1941,16 +1941,28 @@ function FamilySheet({ open, onClose, ctx }) {
         _familyPendingKey.name = n;
         _familyPendingKey.mnemonic = (r && r.mnemonic) || seed;
         const p = r.published || {};
+        const w = r.why || {};   // which KIND of failure, per document — see the !p.join branch below
         // WHAT THE COPY MAY PROMISE. "This finishes the same account" is true for as long as the app is
         // running, and false once it has been closed and reopened — the key is held in memory on purpose
         // (see the module note). So the promise is stated with its boundary attached rather than flatly, and
         // the parent is told what to do if they have already closed it. CLAUDE.md rule 4.
         const RETRY = ' Try again in a moment — while the app stays open this finishes the same account rather than starting another. ' +
           'If you have already closed the app since it failed, ask your steward before trying again: starting over would give your child a second account.';
+        // ⚠ AND "NOTHING HAS BEEN SET UP YET" IS ONLY TRUE FOR ONE OF THE THREE FAILURES. This branch alone
+        // omitted RETRY, reasoning that nothing reached any relay so a fresh attempt is safe whether or not
+        // the app was restarted. That holds for `not-sent` (no socket was opened) and for `refused` (a box
+        // read it and said no). It is FALSE for `unconfirmed`: nobody answered inside the ack window, the
+        // join is signed and on the wire, and it may already be on the relay. A parent told nothing exists
+        // closes the app, tries again, and her daughter now has TWO accounts — one invisible, unrecoverable,
+        // with twelve words nobody has ever seen — and her steward has two guardian requests for one child.
+        // Found by the verification pass of 2026-09-15.
+        const joinMayHaveLanded = (w && w.join) === 'unconfirmed';
         setErr(!p.join
-          // Nothing reached any relay, so there is no half-made account to finish and no promise to keep:
-          // a fresh attempt here is safe whether or not the app was restarted.
-          ? 'Couldn’t reach your church’s relay, so the account wasn’t created. Check you’re online and try again — nothing has been set up yet.'
+          ? (joinMayHaveLanded
+            ? 'We couldn’t confirm that reached your church, so we can’t say whether the account was created.' + RETRY
+            // Nothing reached any relay, so there is no half-made account to finish and no promise to keep:
+            // a fresh attempt here is safe whether or not the app was restarted.
+            : 'Couldn’t reach your church’s relay, so the account wasn’t created. Check you’re online and try again — nothing has been set up yet.')
           : !p.name
             ? 'The account was created but your church can’t see who it belongs to yet — your steward needs the child’s name to confirm the link.' + RETRY
             // The request is the ONLY thing that ever asks a steward to confirm the link, nothing re-sends it,

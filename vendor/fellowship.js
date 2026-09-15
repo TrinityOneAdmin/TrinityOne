@@ -11170,28 +11170,30 @@
       }
       const join2 = finalizeEvent2({ kind: 30078, created_at: ts, tags: [["d", "trinityone/member:" + cp], ["t", NET], ["p", cp]], content: JSON.stringify({ joined: ts }) }, childSk);
       const req = finalizeEvent2({ kind: 30078, created_at: ts, tags: [["d", "trinityone/guardreq:" + childPub], ["t", NET], ["p", cp], ["p", childPub]], content: JSON.stringify({ child: childPub, parent: pub }) }, sk);
-      const sent = async (e) => {
+      const why = { join: "", k0: "", name: "", req: "" };
+      const sent = async (e, key) => {
         if (!e) return false;
         try {
           await _publishAny(window.Fellowship.relays, e);
           return true;
         } catch (err) {
           console.warn("[fellowship] child publish failed", err);
+          if (key) why[key] = _pubReason(err);
           return false;
         }
       };
       const published = { join: false, k0: false, name: false, req: false };
-      published.join = await sent(join2);
+      published.join = await sent(join2, "join");
       if (published.join) {
-        const both = await Promise.all([sent(k0), sent(childNameDoc)]);
+        const both = await Promise.all([sent(k0, "k0"), sent(childNameDoc, "name")]);
         published.k0 = both[0];
         published.name = both[1];
-        if (published.name) published.req = await sent(req);
+        if (published.name) published.req = await sent(req, "req");
       }
       const ok = !!(published.join && published.name && published.req);
       if (ok) _saveChildLink({ child: childPub, name, churchPub: cp, ts });
       _needAuth = true;
-      return { childPub, mnemonic, npub: npubEncode(childPub), name, published, ok };
+      return { childPub, mnemonic, npub: npubEncode(childPub), name, published, why, ok };
     },
     // the children this parent has set up (local record; no secrets) — [{ child, name, churchPub, ts }]
     myChildren(churchNpub) {
@@ -13078,7 +13080,7 @@
         } catch {
         }
       }
-      if (!sk || !cp || !check || !check.by) return false;
+      if (!sk || !cp || !check || !check.by) return { ok: false, narrowed: false, reason: "not-sent" };
       const body = JSON.stringify({ status: status === "help" ? "help" : "safe", note: String(note || "").trim().slice(0, 240), at: Math.floor(Date.now() / 1e3), checkId: check.id });
       const aud = check.audience === "care" ? "care" : "stewards";
       let group = null;
@@ -13108,15 +13110,15 @@
         } catch (e) {
         }
       }
-      if (!Object.keys(to).length) return false;
+      if (!Object.keys(to).length) return { ok: false, narrowed: false, reason: "no-readers" };
       const ct = JSON.stringify({ v: 2, to });
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", SAFE_D + cp], ["t", NET], ["church", cp], ["p", check.by]], content: ct }, sk);
       try {
         await _publishAny(churchRelays(), evt);
-        return picked.narrowed ? "narrow" : true;
+        return { ok: true, narrowed: !!picked.narrowed, reason: "" };
       } catch (e) {
         console.warn("[fellowship] markSafe publish failed", e);
-        return false;
+        return { ok: false, narrowed: false, reason: _pubReason(e) };
       }
     },
     // the RECIPIENT marks a day they don't need help (relay rejects this from anyone but the recipient).

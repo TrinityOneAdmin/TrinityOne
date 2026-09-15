@@ -72,12 +72,17 @@ test('the member is told who will actually read it', () => {
 test('every surface that sends a safety reply can show a narrowed one', () => {
   const senders = (TODAY.match(/Fellowship\.markSafe\(/g) || []).length;
   assert.ok(senders >= 2, 'the safety surfaces moved — re-anchor this test (expected the dock and the banner)');
-  const renders = (TODAY.match(/if \(ok === 'narrow'\) setNarrow\(true\)/g) || []).length;
+  // ⚠ THE SHAPE CHANGED 2026-09-15, AND THIS IS THE SECOND CALLER LIST A SIGNATURE CHANGE HAS.
+  // markSafe used to answer `false | true | 'narrow'` and every failure was the same `false`, so a member
+  // whose "I need help" merely went unacknowledged was told it failed to send. It now answers
+  // `{ ok, narrowed, reason }`. This test counts the surfaces that can SHOW a narrowed delivery, so it moved
+  // from `ok === 'narrow'` to `res.narrowed` — the test did not become wrong, its subject was renamed.
+  const renders = (TODAY.match(/if \(res\.narrowed\) setNarrow\(true\)/g) || []).length;
   assert.equal(renders, senders,
     `${senders} places send a safety reply but only ${renders} can tell the member it reached fewer people ` +
     'than the check promised. The missing one shows "You told your church you\'re safe" with no caveat, and ' +
     'the care team never hears about it');
-  assert.doesNotMatch(TODAY, /if \(ok === 'narrow'\) setErr\(/,
+  assert.doesNotMatch(TODAY, /if \(res\.narrowed\) setErr\(/,
     'a narrowed send is being reported through the send-FAILURE error string. Both surfaces switch to an ' +
     'answered view the moment the send succeeds, and that view does not render it — which is exactly how ' +
     'this was missed twice');

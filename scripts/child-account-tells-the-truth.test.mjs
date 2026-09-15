@@ -43,7 +43,11 @@ const dOf = (e) => (e.tags.find(t => t[0] === 'd') || [])[1] || '';
 
 // `fails` names which documents the relay refuses: 'join' | 'name' | 'k0' | 'req'.
 // `children` is the parent's local family list, shared with the _rebuildFamily run at the foot of this file.
-function parent({ fails = [], children = [] } = {}) {
+// `failWith` — the SHAPE of the error a failing publish throws, which is what `_pubReason` classifies.
+// Default is a bare Error, which is an unacknowledged publish ('unconfirmed'); pass `refused` or `unsent`
+// to get the settled kinds. Added 2026-09-15: the join's failure KIND decides whether the screen may
+// promise a restart is safe.
+function parent({ fails = [], children = [], failWith = null } = {}) {
   // `order` = every document the function ATTEMPTED, in order; `published` = the ones the relay took;
   // `relay` = the events actually sitting on the relay afterwards; `minted` = every key the engine minted.
   const state = { published: [], order: [], saved: null, relay: [], minted: [], children };
@@ -58,6 +62,10 @@ function parent({ fails = [], children = [] } = {}) {
   const parentSk = generateSecretKey();
   state.parentPub = getPublicKey(parentSk);
   const scope = {
+    // LIFTED, NOT STUBBED. `_pubReason` is the shipped four-way classifier
+    // ('not-sent' | 'refused' | 'unconfirmed'), and `createChildAccount` now records its answer per
+    // document in `why`. A stub here would supply the very distinction the branch below is named after.
+    _pubReason: new Function(grabMethod(SRC, 'function _pubReason(e)') + '\nreturn _pubReason;')(),
     sk: parentSk,
     pub: state.parentPub,
     toPub: () => CHURCH,
@@ -67,7 +75,12 @@ function parent({ fails = [], children = [] } = {}) {
     _publishAny: async (_relays, e) => {
       const k = kind(e);
       state.order.push(k);
-      if (fails.includes(k)) throw new Error('relay refused ' + k);
+      if (fails.includes(k)) {
+        const err = new Error('relay refused ' + k);
+        if (failWith === 'refused') err.refused = true;
+        if (failWith === 'unsent') err.unsent = true;
+        throw err;
+      }
       state.published.push(k);
       state.relay.push(e);
     },
@@ -446,4 +459,89 @@ test('POINT OF USE: a thrown error is reported, not swallowed into a blank revea
   assert.equal(s.seen.made, undefined, 'the reveal screen would print `made.mnemonic` of undefined');
   assert.notEqual(s.seen.stage, 'reveal');
   assert.match(s.seen.err, /\S/, 'the sheet swallowed the error and said nothing');
+});
+
+
+// ── THE ONE BRANCH THAT PROMISES A RESTART IS SAFE ─────────────────────────────────────────────────────
+// Verification pass, 2026-09-15. Of the three failure arms in FamilySheet.create, `!p.join` ALONE omits the
+// RETRY warning, on the reasoning that "nothing reached any relay, so a fresh attempt is safe whether or not
+// the app was restarted". That holds for `not-sent` (no socket opened) and for `refused` (a box read it and
+// said no). It is FALSE for `unconfirmed`: nobody answered inside the ack window, the join is signed and on
+// the wire, and it may already be on the relay.
+// A parent told "nothing has been set up yet" closes the app and tries again — and her daughter now has TWO
+// accounts, one invisible and unrecoverable with twelve words nobody has ever seen, and her steward has two
+// guardian requests for one child. The key is held in memory ON PURPOSE (a child seed on disk is a
+// safeguarding-grade credential and this pilot's threat model is seizure), so a restart really does start over.
+test('the JOIN reports WHICH failure it was, so the screen can tell a restart apart from a retry', async () => {
+  const p = parent({ fails: ['join'] });              // a bare throw = nobody acknowledged
+  const r = await p.call();
+  assert.equal(r.published.join, false, 're-anchor: an unacknowledged join was recorded as published');
+  assert.equal(r.why && r.why.join, 'unconfirmed',
+    'THE JOIN FAILURE CARRIES NO REASON, so the screen cannot tell "nothing was sent" from "it may already ' +
+    'be on the relay" — and the branch that says "nothing has been set up yet" is the one WITHOUT the ' +
+    'restart warning. Got: ' + JSON.stringify(r.why));
+});
+
+test('…and a join that was REFUSED says so — there is no half-made account to warn about', async () => {
+  const r = await parent({ fails: ['join'], failWith: 'refused' }).call();
+  assert.equal(r.why.join, 'refused', 'a settled refusal was reported as "we could not confirm"');
+});
+
+test('…and one that never left the phone says not-sent', async () => {
+  const r = await parent({ fails: ['join'], failWith: 'unsent' }).call();
+  assert.equal(r.why.join, 'not-sent', 'no socket was opened, and the parent may be warned off a safe retry');
+});
+
+test('`ok` STILL means all three landed — a reason must never make a failure look like a success', async () => {
+  // The trap this shape avoids: had `sent()` returned a truthy STRING for an unacknowledged publish, then
+  // `ok = !!(join && name && req)` would be TRUE over three documents nobody confirmed.
+  const r = await parent({ fails: ['join'] }).call();
+  assert.equal(r.ok, false,
+    'A CALL WHERE NOTHING WAS CONFIRMED REPORTED SUCCESS. The parent is shown twelve words for an account ' +
+    'that may not exist. why=' + JSON.stringify(r.why));
+  const good = await parent({}).call();
+  assert.equal(good.ok, true, 're-anchor: a fully published child account no longer reports success');
+  assert.deepEqual(good.why, { join: '', k0: '', name: '', req: '' }, 'a clean run recorded a failure reason');
+});
+
+// ── THE POINT OF USE: what the parent is actually told when the join is unconfirmed ─────────────────────
+// CLAUDE.md rule 1. The engine tests above prove `why.join` carries the distinction; this proves the SCREEN
+// acts on it. Delete the branch and every engine test stays green.
+test('an UNCONFIRMED join warns the parent that closing the app would start over', async () => {
+  const s = sheet({ result: { ok: false, childPub: 'p'.repeat(64), mnemonic: 'x'.repeat(10), name: 'Ellie',
+    published: { join: false, k0: false, name: false, req: false },
+    why: { join: 'unconfirmed', k0: '', name: '', req: '' } } });
+  await s.run();
+  assert.ok(!/nothing has been set up yet/i.test(s.seen.err),
+    'THE PARENT IS TOLD NOTHING EXISTS OVER A JOIN THAT MAY ALREADY BE ON THE RELAY. She closes the app, ' +
+    'tries again, and her daughter has two accounts — one invisible, with words nobody has ever seen. ' +
+    'Shown: ' + s.seen.err);
+  assert.match(s.seen.err, /ask your steward before trying again/i,
+    'the restart warning is missing from the one failure where a restart is NOT safe. Shown: ' + s.seen.err);
+});
+
+test('…and a join that truly never left the phone still says nothing was set up', async () => {
+  // The other direction. Over-warning here would send a parent to her steward over a plain lack of signal,
+  // when a fresh attempt is genuinely safe.
+  const s = sheet({ result: { ok: false, childPub: 'p'.repeat(64), mnemonic: 'x'.repeat(10), name: 'Ellie',
+    published: { join: false, k0: false, name: false, req: false },
+    why: { join: 'not-sent', k0: '', name: '', req: '' } } });
+  await s.run();
+  assert.match(s.seen.err, /nothing has been set up yet/i,
+    'a parent with no signal was sent to her steward over an attempt that is safe to repeat. Shown: ' + s.seen.err);
+  assert.ok(!/ask your steward before trying again/i.test(s.seen.err),
+    'the restart warning fires where a restart IS safe — a warning shown every time is one nobody reads');
+});
+
+test('…and neither case shows the twelve words', async () => {
+  // The unrecoverable failure this whole file exists for: words shown once, stored nowhere, for an account
+  // that may not exist.
+  for (const reason of ['unconfirmed', 'not-sent', 'refused']) {
+    const s = sheet({ result: { ok: false, childPub: 'p'.repeat(64), mnemonic: 'x'.repeat(10), name: 'Ellie',
+      published: { join: false, k0: false, name: false, req: false },
+      why: { join: reason, k0: '', name: '', req: '' } } });
+    await s.run();
+    assert.equal(s.seen.made, undefined,
+      'the twelve words were shown for an account that failed to be created (' + reason + ')');
+  }
 });

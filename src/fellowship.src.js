@@ -4914,25 +4914,30 @@ window.Fellowship = {
     // document, no sealed name and nothing for the steward — the row said "Waiting for steward to confirm"
     // for ever and nothing retried. The words are shown once and stored nowhere, so "it looked like it
     // worked" IS the failure. AUDIT-2026-08-29.
-    const sent = async (e) => { if (!e) return false; try { await _publishAny(window.Fellowship.relays, e); return true; } catch (err) { console.warn('[fellowship] child publish failed', err); return false; } };
+    // ⚠ `sent` STAYS BOOLEAN AND THE REASON RIDES ALONGSIDE, which is not fastidiousness. `ok` below is
+    // `!!(published.join && published.name && published.req)`, so if this returned a truthy STRING for an
+    // unacknowledged publish, all three would be truthy and the whole call would report SUCCESS over three
+    // documents nobody confirmed. The reason goes in a parallel map instead; every existing contract holds.
+    const why = { join: '', k0: '', name: '', req: '' };
+    const sent = async (e, key) => { if (!e) return false; try { await _publishAny(window.Fellowship.relays, e); return true; } catch (err) { console.warn('[fellowship] child publish failed', err); if (key) why[key] = _pubReason(err); return false; } };
     const published = { join: false, k0: false, name: false, req: false };
     // A GATE, NOT A BATCH. The other three used to go out whatever became of the join. The join is what makes
     // the child a member, and the relay will not accept a name document from a pubkey it does not already know
     // is a member — so on a failed join the name was guaranteed to be refused, while the kind-0 and the
     // guardian request still landed for a pubkey that belongs to no church. The screen meanwhile told the
     // parent "nothing has been set up yet". AUDIT-2026-08-29.
-    published.join = await sent(join);
+    published.join = await sent(join, 'join');
     if (published.join) {
       // the empty kind-0 has no ordering constraint of its own, so it rides alongside the name rather than
       // costing a fourth round trip — _publishAny has no timeout and a parent is watching "Setting up…".
-      const both = await Promise.all([sent(k0), sent(childNameDoc)]);
+      const both = await Promise.all([sent(k0, 'k0'), sent(childNameDoc, 'name')]);
       published.k0 = both[0]; published.name = both[1];
       // AND THE REQUEST ONLY ONCE THE STEWARD CAN READ IT. The console deliberately will not resolve a
       // requester-supplied name (it is forgeable — SECURITY-AUDIT-2026-07-20 C1), so a request that arrives
       // without the sealed name asks a real person to approve a bare npub. It is also the one document
       // _rebuildFamily reads back on the next launch, so sending it over a failed name is exactly what
       // resurrects a blank-named "Waiting for steward to confirm" row for a setup that never finished.
-      if (published.name) published.req = await sent(req);
+      if (published.name) published.req = await sent(req, 'req');
     }
     // WHAT "CREATED" MEANS: all three of join, name and request. The join makes the child a member; the sealed
     // name is what the steward reads when confirming the link; the REQUEST is the only thing that ever asks
@@ -4947,7 +4952,9 @@ window.Fellowship = {
     if (ok) _saveChildLink({ child: childPub, name, churchPub: cp, ts });
     _needAuth = true;   // M3: now a guardian — must NIP-42-auth to read the church's confirmation of this link (connTick reconnects with auth)
     // The mnemonic comes back even when ok is false, ON PURPOSE: it is how the caller retries the SAME child.
-    return { childPub, mnemonic, npub: npubEncode(childPub), name, published, ok };
+    // `why` — WHICH KIND OF FAILURE, per document. The screen needs it for one branch in particular:
+    // see the note on the `!p.join` arm in app/identity.jsx. Empty string where nothing failed.
+    return { childPub, mnemonic, npub: npubEncode(childPub), name, published, why, ok };
   },
   // the children this parent has set up (local record; no secrets) — [{ child, name, churchPub, ts }]
   myChildren(churchNpub) {
@@ -6664,7 +6671,7 @@ window.Fellowship = {
   async markSafe(check, status, note) {
     const cp = window.Fellowship.churchPub;
     if (!sk) { try { await window.Fellowship.ready; } catch {} }
-    if (!sk || !cp || !check || !check.by) return false;
+    if (!sk || !cp || !check || !check.by) return { ok: false, narrowed: false, reason: 'not-sent' };
     const body = JSON.stringify({ status: status === 'help' ? 'help' : 'safe', note: String(note || '').trim().slice(0, 240), at: Math.floor(Date.now() / 1000), checkId: check.id });
     // Seal to EVERY reader the steward chose, plus the church key — always. NIP-44 is one-to-one, so a
     // multi-reader doc carries one ciphertext per recipient, keyed by their pubkey. v1 (a bare string sealed to
@@ -6694,7 +6701,7 @@ window.Fellowship = {
     let readers = picked.readers;
     const to = {};
     for (const r of readers) { try { to[r] = _dmEncrypt(sk, r, body); } catch (e) {} }
-    if (!Object.keys(to).length) return false;
+    if (!Object.keys(to).length) return { ok: false, narrowed: false, reason: 'no-readers' };
     const ct = JSON.stringify({ v: 2, to });
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', SAFE_D + cp], ['t', NET], ['church', cp], ['p', check.by]], content: ct }, sk);
     // Return TRUE only on a real relay ACK. The member's "you're safe" confirmation must reflect DELIVERY —
@@ -6704,8 +6711,22 @@ window.Fellowship = {
     // the check promised. Truthy keeps every existing caller working; the extra state lets the screen tell
     // the member their reply reached their church leader and not yet the team it was addressed to, which
     // is the difference between a degraded send and the silent one this replaces.
-    try { await _publishAny(churchRelays(), evt); return picked.narrowed ? 'narrow' : true; }
-    catch (e) { console.warn('[fellowship] markSafe publish failed', e); return false; }
+    // ⚠ FOUR ANSWERS, AND THE RETURN SHAPE CHANGED — READ THIS BEFORE ADDING A CALLER.
+    // This used to answer `false | true | 'narrow'`, and every failure was the same `false`. A safety
+    // roll-call is the worst screen in the app to be wrong on: `_publishAny` throws when a relay REFUSED and
+    // when NOBODY ANSWERED inside WEDGE_ACK_MS, so a member who tapped "I need help" over a slow relay was
+    // told "Couldn't send — try again" while their church already had it. The same defect as the check-in
+    // writers (device finding F1); this is the safety surface getting the same treatment.
+    //
+    // ⚠ IT IS AN OBJECT, NOT A TRUTHY STRING, AND THAT IS DELIBERATE. Both callers branch on `if (ok)`, so
+    // ANY truthy failure value — an object OR a string like 'unconfirmed' — makes a failure take the SUCCESS
+    // arm: safetyAck fires and the member is recorded as having answered when nothing was confirmed. That is
+    // strictly worse than the bug being fixed. An object forces every caller to be updated, and
+    // scripts/a-safety-reply-tells-the-truth.test.mjs fails if a caller truth-tests it instead.
+    // CALLERS (rule 2, complete): app/screens-today.jsx — SafetyDock.respond and SafetyCard.respond. Nothing
+    // in src/steward.src.js calls this; the console only READS safety replies.
+    try { await _publishAny(churchRelays(), evt); return { ok: true, narrowed: !!picked.narrowed, reason: '' }; }
+    catch (e) { console.warn('[fellowship] markSafe publish failed', e); return { ok: false, narrowed: false, reason: _pubReason(e) }; }
   },
   // the RECIPIENT marks a day they don't need help (relay rejects this from anyone but the recipient).
   // H3: "I don't need help that day" is RECIPIENT-ONLY, and the relay enforces it — but it can no longer

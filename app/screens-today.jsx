@@ -1130,10 +1130,17 @@ function SafetyDock({ ctx, onOpenToday }) {
   const dismiss = () => { setDismissed(true); try { localStorage.setItem('trinityone.safetydockx.' + check.id, '1'); } catch (e) {} };
   const respond = async (s) => {
     if (sending) return; setSending(true); setErr('');
-    let ok = false;
-    try { ok = await window.Fellowship.markSafe(check, s, ''); } catch (e) {}
+    // ⚠ markSafe ANSWERS FOUR WAYS NOW, AND `if (res)` WOULD BE WRONG — an object is truthy, so truth-testing
+    // it marks a member safe over a send that failed. Read `res.ok`. (A truthy STRING would invert the same
+    // way, which is why this is an object: it cannot be got wrong quietly.)
+    let res = null;
+    try { res = await window.Fellowship.markSafe(check, s, ''); } catch (e) {}
     setSending(false);
-    if (ok) { safetyAck(check.id, s); setAnswered(s); if (ok === 'narrow') setNarrow(true); }
+    if (res && res.ok) { safetyAck(check.id, s); setAnswered(s); if (res.narrowed) setNarrow(true); }
+    // NOBODY ANSWERED IN TIME IS NOT A FAILURE TO SEND. The reply is signed and on the wire and may already
+    // be with the church. Telling someone in an emergency that nobody knows — when they do — is the worst
+    // version of this screen being wrong, and it does NOT clear `answered`, so they can send again if they want.
+    else if (res && res.reason === 'unconfirmed') setErr('We couldn’t confirm that reached your church — it may well have. You can send it again.');
     else setErr('Couldn’t send — try again.');
   };
   const btn = (extra) => ({ flex: 1, height: 40, border: 'none', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 14, color: '#fff', ...extra });
@@ -1244,14 +1251,17 @@ function SafetyBanner({ ctx, persistent }) {
   }
   const respond = async (s) => {
     if (sending) return; setSending(true); setErr('');
-    let ok = false;
-    try { ok = await window.Fellowship.markSafe(check, s, note); } catch (e) {}
+    // See the note on the dock's respond(): `res.ok`, never `if (res)`.
+    let res = null;
+    try { res = await window.Fellowship.markSafe(check, s, note); } catch (e) {}
     setSending(false);
     // 'narrow' means delivered, but we could not resolve the audience the steward chose — so it reached
     // the church leader and not (yet) the team it was addressed to. Saying so is the whole point: what
     // this replaces reported a full delivery that never happened.
     const NARROW = 'Sent to your church leader. Your church’s team list hasn’t loaded yet, so they may not see it straight away.';
-    if (ok) { setStatus(s); safetyAck(check.id, s); setCollapsed(false); if (ok === 'narrow') setNarrow(true); } else setErr('Couldn’t send — check your connection and try again.');
+    if (res && res.ok) { setStatus(s); safetyAck(check.id, s); setCollapsed(false); if (res.narrowed) setNarrow(true); }
+    else if (res && res.reason === 'unconfirmed') setErr('We couldn’t confirm that reached your church — it may well have. You can send it again.');
+    else setErr('Couldn’t send — check your connection and try again.');
   };
   const wrap = { borderRadius: 16, padding: 16, marginBottom: 18, animation: 'trinityFade .4s ease both' };
   const btn = (extra) => ({ flex: 1, height: 46, border: 'none', borderRadius: 12, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 800, fontSize: 15, ...extra });
