@@ -18,12 +18,22 @@ import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
 
 const ROOT = new URL('../', import.meta.url).pathname;
-const DOCS = ['CLAUDE.md', 'reference/RELAY-ADMISSION.md', 'reference/DOMAIN.md'];
+// ⚠ `reference/` IS UNTRACKED — 66c0a95, "the public repo is the software". It exists on the maintainer's
+// box only, as a symlink into TrinityOne-internal/. A fresh clone and CI have CLAUDE.md and nothing else,
+// so reading these unguarded made this file fail everywhere but one machine: `.github/workflows/test.yml`
+// runs `npm test` on every push, and scripts/release.sh gates on the same command — so CI would have been
+// red from the moment this landed. Its three siblings that read `reference/` all guard for absence; this
+// one did not, and its commit measured "0 real failures" on the one box where the symlink exists.
+// Skipping a document that is not there is right: the rule it enforces is about documents a reader can
+// actually open.
+const ALL_DOCS = ['CLAUDE.md', 'reference/RELAY-ADMISSION.md', 'reference/DOMAIN.md'];
+const DOCS = ALL_DOCS.filter(d => existsSync(ROOT + d));
 // ⚠ LONGEST ALTERNATIVE FIRST. `js` before `jsx` matches the `.js` INSIDE `screens-today.jsx` and then
 // reports a file that does not exist — a regex bug that reads exactly like a real finding.
 const LINE_CITE = /(?:src|app|scripts|relay-app|vendor)\/[A-Za-z0-9._-]+\.(?:src\.)?(?:jsx|mjs|js):\d+/g;
 
 test('no mandatory document cites a line number', () => {
+  assert.ok(DOCS.includes('CLAUDE.md'), 'CLAUDE.md is tracked and must always be checked — it is missing');
   for (const d of DOCS) {
     const text = readFileSync(ROOT + d, 'utf8');
     // the warning comments in these files quote the old citations on purpose, as the worked example

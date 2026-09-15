@@ -1273,7 +1273,7 @@ function SafetyBanner({ ctx, persistent }) {
       const hide = () => { setHidden(true); try { localStorage.setItem('trinityone.safetytodayx.' + check.id, '1'); } catch (e) {} };
       return (
         <div role="status" style={{
-          display: 'flex', alignItems: 'center', gap: 8, borderRadius: 12, padding: '7px 6px 7px 11px', marginBottom: 14,
+          display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', borderRadius: 12, padding: '7px 6px 7px 11px', marginBottom: 14,
           background: help ? 'var(--clay-soft)' : 'var(--sage-soft, #dbe7dd)', border: '1px solid ' + tone,
           animation: 'trinityFade .35s ease both',
         }}>
@@ -1285,6 +1285,15 @@ function SafetyBanner({ ctx, persistent }) {
             flexShrink: 0, border: 'none', background: 'none', padding: '5px 4px', cursor: 'pointer',
             fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, color: tone, textDecoration: 'underline',
           }}>{sending ? 'Sending…' : (help ? 'I’m safe' : 'I need help')}</button>
+          {/* ⚠ THE ANSWERED ARM MUST SHOW A FAILURE TOO, AND FOR TWO COMMITS IT DID NOT. `respond` calls
+              setErr() on every failure, and `err` was rendered ONLY in the un-answered return below — so a
+              member who had already said "I'm safe" and then tapped "I need help instead" over a send that
+              failed got NOTHING, and the screen went on reading "You told your church you're safe." The
+              escalation is the single most important tap on this screen and it was the silent one.
+              THIS IS THE THIRD TIME THIS EXACT TRAP HAS BEEN SET HERE — safety-audience.test.mjs records the
+              first two in its own words ("the second survived a commit whose own message criticised the
+              first"). Audit of bcf1b67, 2026-09-15. */}
+          {err ? <span role="alert" style={{ flexBasis: '100%', fontSize: 12, lineHeight: 1.4, fontWeight: 700, color: 'var(--clay-deep, #b4462f)', marginTop: 6 }}>{err}</span> : null}
           {persistent ? null : <button onClick={hide} aria-label="Dismiss" title="Dismiss" style={{
             flexShrink: 0, width: 30, height: 30, border: 'none', background: 'none', cursor: 'pointer',
             color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 8,
@@ -1306,6 +1315,7 @@ function SafetyBanner({ ctx, persistent }) {
             hasn’t loaded on this phone yet, so the rest of the team may not see it straight away.
           </div>
         ) : null}
+        {err ? <div role="alert" style={{ fontSize: 13.5, color: 'var(--clay-deep, #b4462f)', fontWeight: 700, marginTop: 9 }}>{err}</div> : null}
         <button onClick={() => respond(help ? 'safe' : 'help')} disabled={sending} style={{ marginTop: 11, height: 40, padding: '0 15px', border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13.5, color: 'var(--ink)' }}>{help ? 'Actually, I’m safe' : 'I need help instead'}</button>
       </div>
     );

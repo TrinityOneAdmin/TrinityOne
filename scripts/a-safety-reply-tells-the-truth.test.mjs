@@ -17,7 +17,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { readdirSync } from 'node:fs';
 import { fnBody, stripComments } from './test-slice.mjs';
+
+const APP_DIR = new URL('../app/', import.meta.url).pathname;
 
 const SHIP = readFileSync(new URL('../vendor/fellowship.js', import.meta.url), 'utf8');
 const TODAY = readFileSync(new URL('../app/screens-today.jsx', import.meta.url), 'utf8');
@@ -90,18 +93,29 @@ test('a delivered reply still reports delivery, and still reports a NARROW one',
 // a property of the source text itself. A disabled `false && markSafe(...)` would still be counted, which is
 // the safe direction: it would fail this test, not pass it.
 test('every caller reads .ok — truth-testing the result would mark a member safe over a failed send', () => {
-  const src = stripComments(TODAY);
-  const sites = [...src.matchAll(/(\w+)\s*=\s*await window\.Fellowship\.markSafe\(/g)].map(m => m[1]);
+  // ⚠ SCAN EVERY SCREEN, NOT JUST THIS ONE. The first version read app/screens-today.jsx alone, so the
+  // auditor added a third caller to app/screens-serving.jsx — which renders <SafetyBanner persistent /> —
+  // that recorded a member as having answered over a FAILED send, and all 16 tests stayed green. That is the
+  // exact inversion the object shape exists to prevent, invisible to the guard written to prevent it.
+  const FILES = readdirSync(APP_DIR).filter(f => f.endsWith('.jsx'));
+  const sites = [];
+  for (const f of FILES) {
+    const src = stripComments(readFileSync(APP_DIR + f, 'utf8'));
+    for (const m of src.matchAll(/(\w+)\s*=\s*await window\.Fellowship\.markSafe\(/g)) sites.push({ f, v: m[1], src });
+    // …and the shape that dodges an assignment entirely.
+    assert.ok(!/\(\s*await\s+window\.Fellowship\.markSafe\([^)]*\)\s*\)\s*\./.test(src),
+      f + ' calls markSafe inline and reads a property off it — assign it, so the caller scan below can see it');
+  }
   assert.equal(sites.length, 2,
     'the number of markSafe call sites changed (' + sites.length + '). Every one must read `.ok`; a new one ' +
     'that says `if (res)` records a member as having answered when nothing was confirmed.');
-  for (const v of sites) {
+  for (const { f, v, src } of sites) {
     assert.ok(!new RegExp('if\\s*\\(\\s*' + v + '\\s*\\)').test(src),
-      'a caller truth-tests the markSafe result (`if (' + v + ')`). The result is an OBJECT and always ' +
+      f + ': a caller truth-tests the markSafe result (`if (' + v + ')`). The result is an OBJECT and always ' +
       'truthy, so a failed send would take the success arm: safetyAck fires and the member is recorded as ' +
       'having answered. That is worse than the bug this shape was introduced to fix.');
     assert.ok(new RegExp(v + '\\s*&&\\s*' + v + '\\.ok').test(src),
-      'a caller does not check `' + v + '.ok` — it must, or delivery is never actually confirmed');
+      f + ': a caller does not check `' + v + '.ok` — it must, or delivery is never actually confirmed');
   }
 });
 
@@ -169,3 +183,26 @@ for (const component of ['SafetyDock', 'SafetyBanner']) {
       'what this replaced reported a full delivery that never happened.');
   });
 }
+
+// ── ⚠ THE POINT-OF-USE GAP THAT IS STILL OPEN ──────────────────────────────────────────────────────────
+// Audit of bcf1b67, 2026-09-15, and it is NOT closed. The tests above lift `respond` and assert `setErr`
+// was CALLED. That is the handler, not the screen. The auditor proved the difference by deleting the dock's
+// ENTIRE error display — `{err ? <div…>{err}</div> : null}` → `{null}` — and running the suite:
+//
+//     114 tests across 12 files GREEN, including all 11 in this file.
+//
+// A member would get no feedback on any failed safety reply, of any kind, and nothing goes red. That is a
+// rule-1 failure in the file whose subject is rule 1.
+//
+// IT ALSO HID A REAL DEFECT FOR TWO COMMITS, now fixed in app/screens-today.jsx: `SafetyBanner` returns
+// early once `status` is set, and `err` was rendered only BELOW that return — so a member who had said
+// "I'm safe" and then tapped "I need help instead" over a failed send saw NOTHING, while the screen still
+// read "You told your church you're safe." Both answered arms render `err` now.
+//
+// WHAT IS NEEDED: a test that DRAWS the tree through scripts/render-jsx-screen.mjs and asserts the wording
+// is in it. The acceptance criterion is exactly the auditor's sabotage above — it must go red.
+// I attempted this and could not stand the fixture up in the time available: SafetyBanner takes its check
+// from `subscribeSafetyCheck` (a subscription, not a prop) and its effect body is wrapped in try/catch, so
+// a single missing global leaves `check` null and the component renders nothing — silently. The auditor DID
+// get it to render, so it is a missing stub, not a limitation. Start from the probe in
+// scripts/a-care-action-that-failed-says-so-on-screen.test.mjs, which drives this same screen file.

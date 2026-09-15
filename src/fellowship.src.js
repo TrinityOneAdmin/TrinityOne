@@ -2939,8 +2939,12 @@ function _publishAny(relays, evt) {
 //                check a child in twice. Device finding F1, measured on a Pixel 2026-09-11.
 //
 // ONE FUNCTION, because there are three sibling writers and the last round of this fix reached only one of
-// them — and then the one it reached was wrong in the other direction for a month. Callers: writeArrival,
-// writeCheckin, releaseCheckin. Any new writer that reports an outcome to a member should use it.
+// them — and then the one it reached was wrong in the other direction for a month.
+// CALLERS (rule 2, complete, re-grepped 2026-09-15): writeArrival, writeCheckin, releaseCheckin,
+// markSafe, and `sent()` inside createChildAccount. The first three were the whole list when this was
+// written; bcf1b67 added the last two and did not update it here, which is the same rule broken on the
+// same shared function it was reaching into. Any new writer that reports an outcome to a member
+// should use it — and add itself to this line.
 function _pubReason(e) {
   if (e && e.unsent) return 'not-sent';
   if (e && e.refused) return 'refused';
@@ -6766,7 +6770,10 @@ window.Fellowship = {
     // arm: safetyAck fires and the member is recorded as having answered when nothing was confirmed. That is
     // strictly worse than the bug being fixed. An object forces every caller to be updated, and
     // scripts/a-safety-reply-tells-the-truth.test.mjs fails if a caller truth-tests it instead.
-    // CALLERS (rule 2, complete): app/screens-today.jsx — SafetyDock.respond and SafetyCard.respond. Nothing
+    // CALLERS (rule 2, complete): app/screens-today.jsx — SafetyDock.respond and SafetyBanner.respond.
+    // (⚠ this said `SafetyCard`, which does not exist in this codebase — grep returned only the comment
+    //  itself. Second time in three commits that a shipped rule-2 list named a function nobody can
+    //  grep; a list that cannot be checked is not a list. Corrected 2026-09-15.) Nothing
     // in src/steward.src.js calls this; the console only READS safety replies.
     try { await _publishAny(churchRelays(), evt); return { ok: true, narrowed: !!picked.narrowed, reason: '' }; }
     catch (e) { console.warn('[fellowship] markSafe publish failed', e); return { ok: false, narrowed: false, reason: _pubReason(e) }; }

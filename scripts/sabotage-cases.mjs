@@ -196,8 +196,13 @@ export const CASES = [
     file: 'app/screens-today.jsx',
     // exactly what happened twice: route a narrowed send into the send-failure error string, which the
     // answered view does not render
-    find: `setCollapsed(false); if (ok === 'narrow') setNarrow(true); }`,
-    replace: `setCollapsed(false); if (ok === 'narrow') setErr('narrowed'); }`,
+    // ⚠ RE-ANCHORED 2026-09-15. It read `setCollapsed(false); if (ok === 'narrow') setNarrow(true); }` and
+    // bcf1b67 changed markSafe's answer from `false | true | 'narrow'` to `{ ok, narrowed, reason }` — so the
+    // anchor died the commit AFTER fc0923f, whose whole subject was nine cases that rotted exactly this way.
+    // That commit also claimed "SABOTAGE, 10 rows all biting" while touching no case file: none of those ten
+    // is in the corpus, nobody can re-run them, and this one silently left it.
+    find: `setCollapsed(false); if (res.narrowed) setNarrow(true); }`,
+    replace: `setCollapsed(false); }`,
     test: 'scripts/safety-audience.test.mjs',
   },
   {
