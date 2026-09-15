@@ -181,7 +181,10 @@
   /* phone mockup (ported from welcome.html) */
   .phone-stage { display: flex; justify-content: center; align-items: center; position: relative; }
   .phone-stage::before { content:''; position:absolute; width:340px; height:340px; border-radius:999px; background: radial-gradient(circle, color-mix(in oklab, var(--clay) 18%, transparent), transparent 62%); }
-  .phone-embed { width: 280px; height: 604px; position: relative; overflow: hidden; border-radius: 39px; background: linear-gradient(150deg,#2b2b2e,#0d0d0f 60%); box-shadow: 0 40px 70px rgba(40,30,20,.34), 0 0 0 1px rgba(0,0,0,.4); }
+  /* 280x568 is the SHAPE OF THE SCREENSHOTS (360x730 CSS on the handset, 0.4932), not a chosen aesthetic.
+     It was 280x604 (0.4636) while the images were 560x1208, and `object-fit: cover` then scaled to the
+     height and clipped ~9px off each side. Re-capture at a different device size and this number moves. */
+  .phone-embed { width: 280px; height: 568px; position: relative; overflow: hidden; border-radius: 39px; background: linear-gradient(150deg,#2b2b2e,#0d0d0f 60%); box-shadow: 0 40px 70px rgba(40,30,20,.34), 0 0 0 1px rgba(0,0,0,.4); }
   .phone-embed img { display: block; border-radius: 39px; }
 
   /* ── Generic band ── */
@@ -336,7 +339,7 @@
       <!-- No <picture>/avif here any more: pills.js swaps `src` directly, and a <source> would keep winning
            over the swapped src, so every pill would show the Today screen and look broken. One format, one
            element, one source of truth. Not lazy either — it is the hero image and it is what a pill changes. -->
-      <div class="phone-embed"><img id="appShot" src="welcome-app-today.webp" alt="The TrinityOne app — the Today screen" width="280" height="604" style="width:280px;height:604px;object-fit:cover" decoding="async" /></div>
+      <div class="phone-embed"><img id="appShot" src="welcome-app-today.webp" alt="The TrinityOne app — the Today screen" width="280" height="568" style="width:280px;height:568px;object-fit:cover" decoding="async" /></div>
     </div>
   </div>
 </header>
