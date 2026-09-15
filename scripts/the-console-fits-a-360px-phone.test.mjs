@@ -289,3 +289,99 @@ test('the pop-ups 32d101d changed without photographing them do fit the phone',
       'the Oppo in 32d101d. The harness and the handset no longer agree, so treat every figure in this file ' +
       'as unverified until someone re-measures on a device.');
   });
+
+// ── FINDING 2 OF THE AUDIT: HOW MUCH OF THE PHONE THE CONSOLE'S OWN CHROME EATS ──────────────────────────
+// The audit's headline was that the nav "eats the entire first fold, on every page", and put the fixed block
+// above the content at "~730px". MEASURED HERE IT IS NOT 730 — it was 309 of 730 (42%), which is bad enough
+// and is the number this test is written against. Reporting the larger figure would have been easier and
+// would also have been wrong; the audit was working from screenshots, this is working from rects.
+//
+// Where the 309 went, measured part by part at 360x730 with 9 nav pills:
+//     10  the header block's own top padding
+//     32  header row: wordmark, Invite code, New post, settings avatar
+//     56  the church card (identity switcher)
+//     35  a full-width row holding the single word "Help", and nothing else
+//    108  the nav, 9 pills wrapping onto 3 rows (a church with check-in and finance on gets 4)
+//    ~68  gaps, plus TWO bottom margins that belong to the DESKTOP SIDEBAR and leaked into the phone header,
+//         where the flex container already supplies a gap: 18px under the church card, 14px under Help.
+//
+// After: 233. The two stray margins are gone, and Help moved into the header row where there was horizontal
+// space going spare. The content pane went from 421px to 497 — 18% more of the phone spent on the church.
+//
+// THE NAV ITSELF IS UNCHANGED AND THE REMAINING 108px IS AN OWNER'S DECISION, not an oversight. Every way of
+// shrinking it costs something a test cannot weigh: a single scrolling strip hides sections off the right
+// edge (and reverses a decision recorded in the JSX — "tabs WRAP onto multiple rows rather than scrolling
+// sideways"); an overflow menu hides them behind a tap; and tightening the pills was tried and measured — it
+// bought 11px and took the tap targets from 32px to 29px, which is the wrong direction on a touch screen.
+// THE BUDGET IS ON THE CHROME *MINUS THE NAV*, and that is deliberate. The nav's height is not a constant:
+// it is 3 rows for the 9 sections a plain church has and 4 for the 10 a church with check-in and finance
+// switched on has, so a budget on the total would fail a church for turning a module on. Everything above
+// the nav IS constant, and it is the part this change touched. Measured: 201px before, 125px after.
+// A looser budget on the total was tried first and was worthless — it sat 9px above the measurement and
+// slept through an 18px regression.
+const ABOVE_NAV_BUDGET = 130;
+
+test('the console chrome does not eat the first fold of a 360px phone', { skip: !CHROME ? 'no chromium' : false, timeout: 240000 }, async () => {
+  await openTab('Overview');
+  const m = JSON.parse(await evalIn(`(() => {
+    const nav = document.querySelector('nav[aria-label="Console sections"]');
+    const main = document.querySelector('main');
+    if (!nav || !main) return JSON.stringify({ ok: false });
+    const block = nav.parentElement;
+    const parts = [...block.children].map(k => {
+      const r = k.getBoundingClientRect();
+      return { h: Math.round(r.height), text: (k.innerText || '').trim().replace(/\\s+/g, ' ').slice(0, 30) };
+    });
+    return JSON.stringify({
+      ok: true,
+      chromeHeight: Math.round(block.getBoundingClientRect().height),
+      mainTop: Math.round(main.getBoundingClientRect().top),
+      mainHeight: Math.round(main.getBoundingClientRect().height),
+      navHeight: Math.round(nav.getBoundingClientRect().height),
+      parts,
+    });
+  })()`));
+  assert.ok(m.ok, 'no nav and <main> on screen — this is not the dashboard');
+
+  const aboveNav = m.chromeHeight - m.navHeight;
+  assert.ok(aboveNav <= ABOVE_NAV_BUDGET,
+    `everything above the console's nav is ${aboveNav}px of a ${VH}px phone, over the ${ABOVE_NAV_BUDGET}px ` +
+    `budget. With the nav that is ${m.chromeHeight}px of chrome (${Math.round(m.chromeHeight / VH * 100)}% of ` +
+    `the screen) and ${m.mainHeight}px left for the church. Parts: ` + JSON.stringify(m.parts));
+
+  // …and it must not have bought that by throwing away the header's own top row or the nav.
+  assert.ok(m.navHeight > 40, `the nav measured ${m.navHeight}px — the sections are gone, not compressed`);
+  assert.equal(m.mainTop, m.chromeHeight, 'the content pane does not start where the chrome ends');
+
+  // THE HELP ROW IS GONE FROM THE STACK — that is the change, and this is what fails if it is put back.
+  const helpRow = m.parts.find(p => p.text === 'Help');
+  assert.equal(helpRow, undefined,
+    'Help is a full-width row of its own again, below the church card: ' + JSON.stringify(helpRow) +
+    'px of a 730px screen for one word.');
+});
+
+test('Help is still one press away on the phone, and still called Help', { skip: !CHROME ? 'no chromium' : false, timeout: 240000 }, async () => {
+  // MOVING A CONTROL MUST NOT LOSE IT. The compact button has no visible text, so its accessible name is the
+  // only name it has — and scripts/app-boots.test.mjs presses this control by looking that name up. Pressing
+  // it here proves the whole path in the real page: the button exists in the header, it is reachable, and it
+  // opens the real help dialog.
+  await openTab('Overview');
+  const inHeader = await evalIn(`(() => {
+    const b = [...document.querySelectorAll('button')].filter(x => x.getAttribute('aria-label') === 'Help');
+    if (b.length !== 1) return 'found ' + b.length;
+    const nav = document.querySelector('nav[aria-label="Console sections"]');
+    return b[0].getBoundingClientRect().bottom <= nav.getBoundingClientRect().top ? 'above the nav' : 'below the nav';
+  })()`);
+  assert.equal(inHeader, 'above the nav', `the Help control is not where a steward can reach it: ${inHeader}`);
+
+  const opened = await evalIn(`(() => {
+    const b = [...document.querySelectorAll('button')].find(x => x.getAttribute('aria-label') === 'Help');
+    if (!b) return 'no Help control'; b.click(); return 'ok'; })()`);
+  assert.equal(opened, 'ok');
+  await sleep(1200);
+  const dlg = await evalIn(`(() => { const d = document.querySelector('[role="dialog"][aria-label="Help"]');
+    return d ? (d.querySelectorAll('[data-help-id]').length + ' guides') : 'no help dialog'; })()`);
+  assert.match(String(dlg), /^[1-9][0-9]* guides$/, `pressing Help in the header opened: ${dlg}`);
+  await evalIn(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+  await sleep(600);
+});

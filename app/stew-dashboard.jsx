@@ -138,6 +138,9 @@ const NAV = [
 // With no owned networks it's just the church name button (tap to rename).
 function IdentitySwitcher({ church, churchName, initials, onEditName }) {
   const idv = window.useStewardIdv ? window.useStewardIdv() : 0;
+  // The phone header lays these out with its own `gap`, so the sidebar's bottom margin is pure waste
+  // there — measured at 18px of a 730px screen, below a header block already 309px tall.
+  const narrow = useStewNarrow();
   const stewarded = window.useStewardStewardedChurches ? window.useStewardStewardedChurches() : [];   // churches we steward (delegated)
   const [open, setOpen] = React.useState(false);
   const [, force] = React.useState(0);
@@ -153,7 +156,7 @@ function IdentitySwitcher({ church, churchName, initials, onEditName }) {
   // no other identities (no owned networks, no stewarded churches) → original behaviour (tap to set/rename the church)
   if (!networks.length && !stewarded.length) {
     return (
-      <button onClick={onEditName} title="Set church name" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: 10, borderRadius: 13, border: '1px solid var(--line)', background: 'var(--surface-2)', cursor: 'pointer', marginBottom: 18, textAlign: 'left' }}>
+      <button onClick={onEditName} title="Set church name" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: 10, borderRadius: 13, border: '1px solid var(--line)', background: 'var(--surface-2)', cursor: 'pointer', marginBottom: narrow ? 0 : 18, textAlign: 'left' }}>
         <SkBadge initials={initials} picture={church.picture} size={34} radius={999} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}><span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 14, color: church.name ? 'var(--ink)' : 'var(--ink-3)' }}>{churchName}</span>{church.name ? <Icon name="check" size={12} stroke={3} color="var(--sage)" /> : null}</div>
@@ -164,7 +167,7 @@ function IdentitySwitcher({ church, churchName, initials, onEditName }) {
     );
   }
   return (
-    <div style={{ position: 'relative', marginBottom: 18 }}>
+    <div style={{ position: 'relative', marginBottom: narrow ? 0 : 18 }}>
       <button onClick={() => setOpen(o => !o)} title="Switch between your church, networks, and churches you steward" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: 10, borderRadius: 13, width: '100%', border: '1px solid ' + (offChurch ? 'color-mix(in oklab, var(--clay) 45%, var(--line))' : 'var(--line)'), background: offChurch ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface-2)', cursor: 'pointer', textAlign: 'left' }}>
         <SkBadge initials={initials} picture={offChurch ? '' : church.picture} size={34} radius={999} accent={offChurch ? 'var(--clay)' : undefined} />
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -1516,10 +1519,16 @@ function StewDashboard({ initial = 'overview' }) {
               <Halo size={22} color="var(--ink)" spark="var(--clay)" />
               <span style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 15 }}>Trinity<span style={{ color: 'var(--clay)' }}>One</span></span>
               <div style={{ flex: 1 }} />
+              {/* HELP LIVES IN THIS ROW ON A PHONE, not in a full-width row of its own below the church card.
+                  Measured at 360x730 before this: that row cost 35px of button + 9px of gap + its own 14px
+                  bottom margin, spent on one word, in a header block that was already 309px of a 730px screen
+                  (UI audit 2026-09-15, finding 2). The header row had horizontal space going spare.
+                  `actions` is NOT where it goes: that fragment is shared with the wide layout's topbar, and
+                  the wide sidebar already has its own Help. Same control, same dialog, same accessible name. */}
+              <StewHelpButton compact />
               {actions}
             </div>
             <IdentitySwitcher church={church} churchName={churchName} initials={initials} onEditName={editName} />
-            <StewHelpButton />
             {/* The page heading. Off-screen on a phone — the narrow header has no room for it — but a
                 screen reader still announces which section of the console it has landed in, and the card
                 headings below it now have something to hang from. */}
