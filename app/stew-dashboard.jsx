@@ -5565,7 +5565,24 @@ function DashMembers() {
             ) : null}
           </div>
         ) : null}
-        <DismissibleNote id="safeguarding-intro" icon="shield" tone="sage" style={{ marginBottom: 10, flexShrink: 0 }}><b>Safeguarding.</b> Mark under-18s as <b>Child</b> — they’ll only see child-safe groups, and a private message between a child and an adult is blocked unless that adult is <b>cleared for youth</b> (or that adult is the child’s linked <b>parent</b>). Clear only adults on your church’s cleared-worker list. <b>Your cleared list is also who can receive a request for help from a young person</b> — being on the care rota is not enough, and if nobody is cleared, no child in your church can ask for help through the app. This works alongside — not instead of — your safeguarding policy.</DismissibleNote>
+        {/* ONE SENTENCE, AND THE GUIDE. The owner, 2026-09-10: *"we need to cut down on the instructional
+            copy in the ui itself. Use tool tips and help docs for this kind of information imo."* This note was
+            ~90 words and sat between the "N ACTIVE" badge and the first member, so on a 360px phone a steward
+            could not see a single member without scrolling past an essay (UI audit 2026-09-15, finding 4).
+
+            NOTHING WAS DELETED, IT WAS MOVED. All eight facts that came out of here are in the
+            'console-family-safety' guide, and the test asserts that against window.HelpData rather than taking
+            it on trust: mark as Child; child-safe groups only; the blocked child<->adult DM and both of its
+            exemptions; clear only adults already on your own cleared-worker list; that the cleared list IS the
+            route a plea for help takes; that the care rota is not enough; that nobody cleared means no route at
+            all; and that none of this replaces checks, training, supervision or policy.
+
+            WHAT STAYED, AND WHY IT IS THIS RATHER THAN THE OPENING SENTENCE: the two ACTIONS this page is for
+            (mark, clear) and the one consequence the guide itself calls the one most churches do not expect.
+            The others are consequences a steward meets the first time they happen; this one is invisible until
+            a child needs it and there is nobody to receive them. Phrased as who CAN receive a plea and never as
+            the only route — a young person can always message the church itself, and the guide says so. */}
+        <DismissibleNote id="safeguarding-intro" icon="shield" tone="sage" style={{ marginBottom: 10, flexShrink: 0 }}><b>Safeguarding.</b> Mark under-18s as <b>Child</b>, and clear only adults already on your church’s cleared-worker list — that cleared list is also who can receive a young person’s request for help. <StewHelpLink id="console-family-safety" label="What marking and clearing do" /></DismissibleNote>
         {/* THE STATE NOBODY WOULD OTHERWISE SEE. A church that has marked children and cleared nobody has, without
             meaning to, closed the only route a young person has to ask for help here — and the person who could
             fix it in ten seconds is looking at this screen. Not dismissible: it is a description of the church's
