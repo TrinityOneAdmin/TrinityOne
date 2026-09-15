@@ -85,14 +85,30 @@ const GROUPS = [
 
 // A term's worth of a real parish diary. Dates are generated relative to today so the calendar is never empty.
 const day = (n) => { const d = new Date(Date.now() + n * 86400000); return d.toISOString().slice(0, 10); };
+// ⚠ A CHURCH DIARY LANDS ON REAL WEEKDAYS. `day(n)` is a fixed offset from whenever the seed is run, so the
+// screenshots showed "Morning worship" on a Thursday and a "Tuesday morning group" on a Saturday — the kind
+// of small wrongness any churchgoer spots instantly and nobody can un-see. `on(wd, weeks)` returns the NEXT
+// given weekday (0 = Sunday), optionally some weeks further out, so the diary reads correctly whatever day
+// the seed happens to be run. Added 2026-09-15 after the owner asked for a Friday youth group and a
+// Wednesday life group and the existing rows turned out to be on arbitrary days.
+const on = (wd, weeks = 0) => {
+  const d = new Date();
+  d.setDate(d.getDate() + ((wd - d.getDay() + 7) % 7 || 7) + weeks * 7);
+  return d.toISOString().slice(0, 10);
+};
+const SUN = 0, TUE = 2, WED = 3, FRI = 5, SAT = 6;
 const EVENTS = [
-  { id: 'ev-sun',    date: day(2),  time: '10:00', title: 'Morning worship',        where: 'Church',            blurb: 'All welcome. Refreshments afterwards in the hall.' },
-  { id: 'ev-tue',    date: day(4),  time: '10:00', title: 'Tuesday morning group',  where: '14 Elm Row',        blurb: 'Coffee, Bible and a chat. Anyone welcome — no need to book.', groupId: 'tuesday' },
-  { id: 'ev-fri',    date: day(7),  time: '19:00', title: 'Youth night',            where: 'The hall',          blurb: 'Games, food and a short talk. Years 7–11.', groupId: 'stm-youth' },
-  { id: 'ev-lunch',  date: day(9),  time: '12:30', title: 'Bring-and-share lunch',  where: 'The hall',          blurb: 'Bring something to share if you can — there is always plenty.' },
-  { id: 'ev-pcc',    date: day(12), time: '19:30', title: 'PCC meeting',            where: 'The vestry',        blurb: 'Agenda circulated by email on Monday.' },
-  { id: 'ev-baptism',date: day(16), time: '10:00', title: 'Baptism service',        where: 'Church',            blurb: 'We welcome the Achebe family as Ada is baptised.' },
-  { id: 'ev-quiet',  date: day(23), time: '09:30', title: 'Quiet morning',          where: 'St Bede’s retreat', blurb: 'A slower morning of prayer and silence. Lifts available.' },
+  { id: 'ev-sun',    date: on(SUN),  time: '10:00', title: 'Morning worship',        where: 'Church',            blurb: 'All welcome. Refreshments afterwards in the hall.' },
+  { id: 'ev-tue',    date: on(TUE),  time: '10:00', title: 'Tuesday morning group',  where: '14 Elm Row',        blurb: 'Coffee, Bible and a chat. Anyone welcome — no need to book.', groupId: 'tuesday' },
+  // ⚠ THESE DATES ARE REAL WEEKDAYS, not arbitrary offsets. day(n) counts from today, so day(3) and
+  // day(8) are the Friday and the Wednesday — a screenshot that says "Friday youth group" under a
+  // Tuesday date is the kind of small wrongness a church notices immediately. Recheck if `day` moves.
+  { id: 'ev-fri',    date: on(FRI),  time: '19:30', title: 'Friday youth group',     where: 'The hall',          blurb: 'Games, food and a short talk. Years 7–11.', groupId: 'stm-youth' },
+  { id: 'ev-wed',    date: on(WED),  time: '19:30', title: 'Wednesday life group',  where: '14 Elm Row',        blurb: 'Midweek Bible study and prayer, in someone’s front room. Everyone welcome.' },
+  { id: 'ev-lunch',  date: on(SUN, 1),  time: '12:30', title: 'Bring-and-share lunch',  where: 'The hall',          blurb: 'Bring something to share if you can — there is always plenty.' },
+  { id: 'ev-pcc',    date: on(TUE, 1), time: '19:30', title: 'PCC meeting',            where: 'The vestry',        blurb: 'Agenda circulated by email on Monday.' },
+  { id: 'ev-baptism',date: on(SUN, 2), time: '10:00', title: 'Baptism service',        where: 'Church',            blurb: 'We welcome the Achebe family as Ada is baptised.' },
+  { id: 'ev-quiet',  date: on(SAT, 3), time: '09:30', title: 'Quiet morning',          where: 'St Bede’s retreat', blurb: 'A slower morning of prayer and silence. Lifts available.' },
 ];
 
 // ── go ────────────────────────────────────────────────────────────────────────────────────────────────────

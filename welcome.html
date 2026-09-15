@@ -187,6 +187,12 @@
   .phone-embed { width: 280px; height: 568px; position: relative; overflow: hidden; border-radius: 39px; background: linear-gradient(150deg,#2b2b2e,#0d0d0f 60%); box-shadow: 0 40px 70px rgba(40,30,20,.34), 0 0 0 1px rgba(0,0,0,.4); }
   .phone-embed img { display: block; border-radius: 39px; }
 
+  /* The console shot under the two steps. Capped so it never outgrows the steps above it, and it keeps its
+     own aspect so the dashboard is legible rather than squeezed. */
+  .console-shot { margin: 42px auto 0; max-width: 940px; }
+  .console-shot img { display: block; width: 100%; height: auto; border-radius: 16px; border: 1px solid var(--line); box-shadow: var(--shadow-lg); }
+  .console-shot figcaption { margin-top: 12px; text-align: center; font-size: 14.5px; color: var(--ink-2); }
+
   /* ── Generic band ── */
   .band { padding: 84px 0; }
   .band h2 { font-family: var(--font-display); font-weight: 700; font-size: clamp(30px,4.6vw,46px); letter-spacing: -1px; text-align: center; margin: 16px auto 0; max-width: 720px; line-height: 1.06; }
@@ -319,13 +325,16 @@
       <!-- Each pill swaps the phone beside it for a REAL screen from a real phone — a seeded church with a
            real congregation in it, not a mock-up. A pill with no data-shot is left inert on purpose: pointing
            one at an unrelated screen would be a small lie in the exact place the page claims to show you the
-           product. All eight have a screen of their own, so none of them is inert.
+           product. All TEN have a screen of their own, so none of them is inert.
+           ⚠ "Serving rotas" became "Serving" when Rota arrived beside it, 2026-09-15. It always pointed
+           at the SERVING tab — your own next turn — and with a real rota screen next to it the old label
+           named the wrong one of the two.
            ⚠ THE RESTING IMAGE MUST BE THE SCREEN THE RESTING PILL NAMES. `is-heart` puts a permanent
            emphasis on "The Bible" as the at-rest state, and the <img> below loaded the TODAY screen —
            so a reader arriving at the page saw the Bible pill lit and a completely different screen in
            the phone. Spotted by the owner, 2026-09-15. Today keeps a screen of its own, as the 8th pill. -->
       <div class="feat-pills" data-pills aria-label="What's inside — tap to see it">
-        <span class="is-heart" data-shot="app-bible.webp" data-label="the Bible">The Bible</span><span data-shot="app-sermons.webp" data-label="sermons">Sermons</span><span data-shot="app-plans.webp" data-label="reading plans">Reading plans</span><span data-shot="app-devotionals.webp" data-label="devotionals">Devotionals</span><span data-shot="app-prayer.webp" data-label="prayer requests">Prayer</span><span data-shot="app-serving.webp" data-label="the serving rota">Serving rotas</span><span data-shot="app-care.webp" data-label="practical care">Care</span><span data-shot="welcome-app-today.webp" data-label="the Today screen">Today</span>
+        <span class="is-heart" data-shot="app-bible.webp" data-label="the Bible">The Bible</span><span data-shot="app-sermons.webp" data-label="sermons">Sermons</span><span data-shot="app-plans.webp" data-label="reading plans">Reading plans</span><span data-shot="app-devotionals.webp" data-label="devotionals">Devotionals</span><span data-shot="app-prayer.webp" data-label="prayer requests">Prayer</span><span data-shot="app-serving.webp" data-label="your serving">Serving</span><span data-shot="app-rota.webp" data-label="the rota">Rota</span><span data-shot="app-events.webp" data-label="events and services">Events</span><span data-shot="app-care.webp" data-label="practical care">Care</span><span data-shot="welcome-app-today.webp" data-label="the Today screen">Today</span>
       </div>
       <div class="cta">
         <a href="#start" class="to-btn to-btn--clay">Start a church</a>
@@ -366,7 +375,7 @@
           <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s7-5.2 7-11a7 7 0 1 0-14 0c0 5.8 7 11 7 11Z"/><circle cx="12" cy="10" r="2.4"/></svg>
         </div>
         <h3>A leader sets it up</h3>
-        <p>One person sets the church up — it's free, takes minutes, and there's nothing to host and nothing to configure.</p>
+        <p>One person sets the church up. Free, takes minutes, nothing to host or configure.</p>
       </li>
       <li class="step">
         <div class="step-n">2</div>
@@ -374,9 +383,22 @@
           <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a4 4 0 0 0 5.7.3l2.6-2.6a4 4 0 0 0-5.7-5.7l-1.4 1.4"/><path d="M14 11a4 4 0 0 0-5.7-.3L5.7 13.3a4 4 0 0 0 5.7 5.7l1.4-1.4"/></svg>
         </div>
         <h3>Everyone joins by tapping a link</h3>
-        <p>The leader shares one link or QR code. Tap it and you're through &mdash; no forms, no password, no email address. Some churches ask a steward to let you in first, and you'll be given twelve words to keep somewhere safe.</p>
+        <p>One link or QR code. No forms, no password, no email &mdash; just twelve words to keep somewhere safe. Some churches ask a steward to let you in first.</p>
       </li>
     </ol>
+    <!-- ⚠ WHAT A LEADER ACTUALLY SEES, under the two steps that describe getting there. Captured from the
+         REAL console (the web app at desktop width, not the phone APK) against a seeded church of 120 people
+         and nine rooms, so every number on it is a number the product produced. Owner asked for it on
+         2026-09-15: "a screenshot of the dashboard of the steward console under the 1 and 2 cards".
+         The joining-code column is CROPPED OUT, and that is a deliberate choice worth recording: it carried
+         two warnings ("this link only works on this computer", "not public yet") which are artefacts of a
+         demo relay that was never made reachable — a state a configured church does not sit in. Cropping is
+         honest; editing them away would not have been. -->
+    <figure class="console-shot">
+      <img src="console-dashboard.webp" alt="The steward console: a church of 120 members with nine rooms, seen on a computer"
+           width="940" height="620" loading="lazy" decoding="async" />
+      <figcaption>The leader's view. Members, rooms, rotas and the church's own relay, on a computer you own.</figcaption>
+    </figure>
   </div>
 </section>
 

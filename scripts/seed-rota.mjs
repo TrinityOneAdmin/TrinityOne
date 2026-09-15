@@ -42,10 +42,23 @@ const TEAMS = [
 ];
 
 // Three Sundays out.
+// A REAL CHURCH DOES NOT HOLD THE SAME SERVICE EVERY WEEK, and a screenshot of three identical rows says
+// nothing about the product. Varied 2026-09-15 at the owner's request ("we need more than morning worship").
+// Ordinary Anglican parish shape: a said early service, the main sung one, an all-age, an evening, and the
+// occasional office — enough that the rota screen shows different teams doing different jobs.
+// ⚠ SUNDAYS, NOT OFFSETS — the same fix as scripts/seed-church.mjs. These were day(2)/day(9)/day(16) from
+// whenever the seed ran, which put "Morning worship" on a Thursday in every screenshot. `onWeekday(0, w)` is
+// the next Sunday, w weeks out. The 08:00 and 18:30 rows share their Sunday with the 10:00 one, as they would.
+// (Named onWeekday, not `on` — this file already has a local `on` inside the rota builder.)
+const onWeekday = (wd, weeks = 0) => { const d = new Date(); d.setDate(d.getDate() + ((wd - d.getDay() + 7) % 7 || 7) + weeks * 7); return d.toISOString().slice(0, 10); };
+const SUN = 0;
 const SERVICES = [
-  { id: 'svc-1', date: day(2),  time: '10:00', name: 'Morning worship' },
-  { id: 'svc-2', date: day(9),  time: '10:00', name: 'Morning worship' },
-  { id: 'svc-3', date: day(16), time: '10:00', name: 'Baptism service' },
+  { id: 'svc-1', date: onWeekday(SUN),    time: '10:00', name: 'Morning worship' },
+  { id: 'svc-1b', date: onWeekday(SUN),    time: '08:00', name: 'Early service' },
+  { id: 'svc-2', date: onWeekday(SUN, 1), time: '10:00', name: 'All-age service' },
+  { id: 'svc-2b', date: onWeekday(SUN, 1), time: '18:30', name: 'Evening service' },
+  { id: 'svc-3', date: onWeekday(SUN, 2), time: '10:00', name: 'Baptism service' },
+  { id: 'svc-4', date: onWeekday(SUN, 3), time: '10:00', name: 'Harvest festival' },
 ];
 
 const conn = () => new Promise((res, rej) => { const w = new WebSocket(RELAY); w.on('open', () => res(w)); w.on('error', rej); });
