@@ -2348,18 +2348,35 @@ function NewPostModal({ onClose }) {
   );
 }
 
+// A CARD IN THIS GRID MUST BE ABLE TO SHRINK, AND IT COULD NOT.
+//
+// Measured in Chromium at 360x730 (the Oppo CPH2477's viewport), Overview, before this change:
+//   grid container 336px wide, `1fr 1fr`, gap 10  ->  tracks resolved to 205.09px and 146.64px
+//   the RIGHT column's two cards (Groups, Your relay) ended at x=374 — 14px past the screen, unreachable,
+//   because <main> does not scroll sideways.
+// `1fr` is `minmax(auto, 1fr)`, and that `auto` minimum is the track's largest MIN-CONTENT width. The word
+// "Announcements" cannot be broken, so column 1 demanded 205px, took it, and pushed column 2 off the phone.
+// `minmax(0, 1fr)` removes the floor, so the two tracks are always half the container and the grid can never
+// be wider than the box it sits in. Both halves are needed: the cap alone would simply move the overflow
+// INSIDE the card, so the card gets `minWidth: 0` and the label is allowed to ellipsise.
+//
+// ON A PHONE THE CHEVRON GOES. It is decoration — the whole card is the control (role=button, one onClick)
+// and nothing about what it does changes — and at 163px it was costing 23px of the ~101px the label has to
+// live in, which is the difference between "Announcements" reading in full and reading "Announcemen…".
 function StatCard({ label, value, sub, ic, tint, onClick }) {
   const t = SK_TINT[tint];
+  const narrow = useStewNarrow();
+  const pad = narrow ? 12 : 18, icn = narrow ? 24 : 30;
   return (
-    <div onClick={onClick} role={onClick ? 'button' : undefined} style={{ flex: 1, padding: 18, borderRadius: 16, background: 'var(--surface)', border: '1px solid var(--line)', cursor: onClick ? 'pointer' : 'default', transition: 'box-shadow .12s, transform .12s', textAlign: 'left', boxShadow: onClick ? 'var(--shadow-sm)' : 'none' }}
+    <div onClick={onClick} role={onClick ? 'button' : undefined} style={{ flex: 1, minWidth: 0, padding: pad, borderRadius: 16, background: 'var(--surface)', border: '1px solid var(--line)', cursor: onClick ? 'pointer' : 'default', transition: 'box-shadow .12s, transform .12s', textAlign: 'left', boxShadow: onClick ? 'var(--shadow-sm)' : 'none' }}
       onMouseEnter={onClick ? (e) => { e.currentTarget.style.boxShadow = 'var(--shadow)'; } : undefined}
       onMouseLeave={onClick ? (e) => { e.currentTarget.style.boxShadow = 'var(--shadow-sm)'; } : undefined}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <div style={{ width: 30, height: 30, borderRadius: 9, background: t.bg, color: t.fg, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={ic} size={17} color="currentColor" /></div>
-        <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ink-3)' }}>{label}</span>
-        {onClick ? <Icon name="chevR" size={15} color="var(--ink-3)" style={{ marginLeft: 'auto' }} /> : null}
+      <div style={{ display: 'flex', alignItems: 'center', gap: narrow ? 6 : 8, minWidth: 0 }}>
+        <div style={{ width: icn, height: icn, borderRadius: 9, flexShrink: 0, background: t.bg, color: t.fg, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={ic} size={narrow ? 15 : 17} color="currentColor" /></div>
+        <span style={{ fontSize: narrow ? 11.5 : 12.5, fontWeight: 600, color: 'var(--ink-3)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
+        {(onClick && !narrow) ? <Icon name="chevR" size={15} color="var(--ink-3)" style={{ marginLeft: 'auto' }} /> : null}
       </div>
-      <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 28, letterSpacing: '-.6px', marginTop: 12 }}>{value}</div>
+      <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 28, letterSpacing: '-.6px', marginTop: narrow ? 9 : 12 }}>{value}</div>
       <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 2 }}>{sub}</div>
     </div>
   );
@@ -2518,8 +2535,10 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
   const fillStyle = narrow ? {} : { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' };
   const listStyle = narrow ? { display: 'flex', flexDirection: 'column', gap: 10 } : { display: 'flex', flexDirection: 'column', gap: 10, flex: 1, minHeight: 0, overflowY: 'auto' };
 
+  // minmax(0, …), not 1fr — see the note on StatCard. A bare `1fr` let one card's longest word set the
+  // track width and shove the other column 14px off a 360px screen.
   const stat = (
-    <div style={{ display: 'grid', gridTemplateColumns: narrow ? '1fr 1fr' : 'repeat(4, 1fr)', gap: narrow ? 10 : 14 }}>
+    <div style={{ display: 'grid', gridTemplateColumns: narrow ? 'minmax(0, 1fr) minmax(0, 1fr)' : 'repeat(4, minmax(0, 1fr))', gap: narrow ? 10 : 14 }}>
       <StatCard label="Members" value={realCount ? String(realCount) : '—'} sub={realCount ? 'invite more' : 'invite your church'} ic="pray" tint="sage" onClick={() => onTab('members')} />
       <StatCard label="Groups" value={String(groups.length)} sub="chat rooms · signed" ic="chat" tint="clay" onClick={() => onTab('groups')} />
       <StatCard label="Announcements" value={stats.announcements ? String(stats.announcements) : '—'} sub="post to everyone" ic="send" tint="gold" onClick={() => (onNewPost ? onNewPost() : onTab('groups'))} />
