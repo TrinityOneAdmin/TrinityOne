@@ -319,9 +319,13 @@
       <!-- Each pill swaps the phone beside it for a REAL screen from a real phone — a seeded church with a
            real congregation in it, not a mock-up. A pill with no data-shot is left inert on purpose: pointing
            one at an unrelated screen would be a small lie in the exact place the page claims to show you the
-           product. All seven have a screen of their own now, so none of them is inert. -->
+           product. All eight have a screen of their own, so none of them is inert.
+           ⚠ THE RESTING IMAGE MUST BE THE SCREEN THE RESTING PILL NAMES. `is-heart` puts a permanent
+           emphasis on "The Bible" as the at-rest state, and the <img> below loaded the TODAY screen —
+           so a reader arriving at the page saw the Bible pill lit and a completely different screen in
+           the phone. Spotted by the owner, 2026-09-15. Today keeps a screen of its own, as the 8th pill. -->
       <div class="feat-pills" data-pills aria-label="What's inside — tap to see it">
-        <span class="is-heart" data-shot="app-bible.webp" data-label="the Bible">The Bible</span><span data-shot="app-sermons.webp" data-label="sermons">Sermons</span><span data-shot="app-plans.webp" data-label="reading plans">Reading plans</span><span data-shot="app-devotionals.webp" data-label="devotionals">Devotionals</span><span data-shot="app-prayer.webp" data-label="prayer requests">Prayer</span><span data-shot="app-serving.webp" data-label="the serving rota">Serving rotas</span><span data-shot="app-care.webp" data-label="practical care">Care</span>
+        <span class="is-heart" data-shot="app-bible.webp" data-label="the Bible">The Bible</span><span data-shot="app-sermons.webp" data-label="sermons">Sermons</span><span data-shot="app-plans.webp" data-label="reading plans">Reading plans</span><span data-shot="app-devotionals.webp" data-label="devotionals">Devotionals</span><span data-shot="app-prayer.webp" data-label="prayer requests">Prayer</span><span data-shot="app-serving.webp" data-label="the serving rota">Serving rotas</span><span data-shot="app-care.webp" data-label="practical care">Care</span><span data-shot="welcome-app-today.webp" data-label="the Today screen">Today</span>
       </div>
       <div class="cta">
         <a href="#start" class="to-btn to-btn--clay">Start a church</a>
@@ -339,7 +343,7 @@
       <!-- No <picture>/avif here any more: pills.js swaps `src` directly, and a <source> would keep winning
            over the swapped src, so every pill would show the Today screen and look broken. One format, one
            element, one source of truth. Not lazy either — it is the hero image and it is what a pill changes. -->
-      <div class="phone-embed"><img id="appShot" src="welcome-app-today.webp" alt="The TrinityOne app — the Today screen" width="280" height="568" style="width:280px;height:568px;object-fit:cover" decoding="async" /></div>
+      <div class="phone-embed"><img id="appShot" src="app-bible.webp" alt="The TrinityOne app — the Bible" width="280" height="568" style="width:280px;height:568px;object-fit:cover" decoding="async" /></div>
     </div>
   </div>
 </header>
