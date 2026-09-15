@@ -565,20 +565,33 @@ test('TWO FAMILIES WITH THE SAME RESOLVED NAME are caught too — an ordinary Su
     'code go to whichever of them she guessed. Screen read: ' + t);
 });
 
-test('the SCAN path never warns — the family is picked by signature, not by a tap', async () => {
-  // The mirror failure, also from that audit. Scanning picks the family by the pubkey off a SIGNED arrival,
-  // so there is nothing to confuse however many unnamed families are in the queue. A warning on the one path
-  // carrying a cryptographic guarantee is a warning the worker learns to tap through — which is item 12's
-  // own argument ("degraded to wallpaper") turned on its fix.
-  const d = desk(register([session('svc-am', [
-    arrival(TOM, '', 0, AM_FROM), arrival(SECOND, '', 0, AM_FROM),
-  ])]));
+test('a SCAN whose family this phone cannot name DOES warn — the forgery check needs a name', async () => {
+  // Owner's decision, 2026-09-15, after the audit. The warning used to be suppressed outright on the scan
+  // path, argued as "the scan carries a cryptographic guarantee". What is SIGNED is the arrival; what
+  // SELECTS it is a pubkey read off a camera, and a QR can be photographed or copied. The design's answer to
+  // a forged code is this very confirmation — "a code naming a family that is not in front of her shows her
+  // the mismatch in words" — and that answer NEEDS A NAME. With the name unresolved the panel read
+  // "Milo → the person who arrived at 9:42?", which identifies nobody, and the warning was off too.
+  const d = desk(register([session('svc-am', [arrival(TOM, '', 0, AM_FROM)])]));
   d.scan(0, qr(TOM, ['Milo']));
   await d.click(0, 'Check a child in');
   const t = d.reads(0);
   assert.match(t, /Milo → /, 're-anchor: the scan did not reach a pairing');
-  assert.ok(!/can’t tell them apart/.test(t),
-    'the scan path warned about an ambiguity it does not have — the family came off a signed arrival: ' + t);
+  assert.match(t, /can’t tell you whose code you scanned/,
+    'A SCANNED CODE NAMED NOBODY AND NOTHING SAID SO. The one check against a photographed or forged code is ' +
+    'her reading a name and not recognising it — with no name and no warning she has neither. Read: ' + t);
+});
+
+test('…but a SCAN that CAN name the family stays silent', async () => {
+  // The no-cry-wolf half. A resolved name is the whole mitigation working; warning there teaches her to tap
+  // through, which is the failure item 12 was named for.
+  const d = desk(register([session('svc-am', [arrival(TOM, 'Tom Achebe', 0, AM_FROM)])]));
+  d.scan(0, qr(TOM, ['Milo']));
+  await d.click(0, 'Check a child in');
+  const t = d.reads(0);
+  assert.match(t, /Milo → Tom Achebe\?/, 're-anchor: the confirmation did not name the family');
+  assert.ok(!/Ask before you tap/.test(t),
+    'the scan path warned when the confirmation named the family perfectly well: ' + t);
 });
 
 test('two unnamed families the CLOCK separates do not trigger the warning', async () => {

@@ -515,7 +515,26 @@ function App() {
     };
     if (attempt()) return;
     const t = setInterval(() => { if (attempt()) clearInterval(t); }, 300);
-    const give = setTimeout(() => clearInterval(t), 20000);
+    // ⚠ WHEN THE BUDGET RUNS OUT, WIPE ANYWAY — "we could not find out" is not "the phone is unlocked".
+    // `settled` waits on init(), which on a locked boot awaits a SecureStorage read. That read is UNBOUNDED,
+    // and this repo has measured a sleeping screen deferring native calls for MINUTES. So a phone whose
+    // store answers late used to reach the end of this budget having done nothing, and `commLocked` never
+    // changes again while it stays locked — meaning a SEIZED, LOCKED PHONE KEPT EVERY CONGREGATION CACHE.
+    // That is AUDIT-2026-07-28 F7, the defect this whole effect exists for, reintroduced by the fix for its
+    // opposite. Raised by the audit of 5951edd; the owner's call, 2026-09-15.
+    //
+    // THE TWO COSTS ARE NOT EQUAL, which is what decides it. Wiping a member who was not really locked costs
+    // them a re-download of cached church data — annoying, and everything they own (journal, notes, outbox,
+    // their own words, the Bible) is on the keep-list and untouched. NOT wiping a seized phone costs a
+    // congregation its member list, its groups and its care notes, to whoever is holding it. This product's
+    // stated threat model is lawful compulsion and seizure. So the timeout falls TOWARDS the wipe.
+    const give = setTimeout(() => {
+      clearInterval(t);
+      if (stopped || wipedForLock.current) return;
+      if (!(window.Fellowship && window.Fellowship.clearCommunityCache)) return;   // nothing to call: a later boot wipes
+      wipedForLock.current = true;
+      try { window.Fellowship.clearCommunityCache(); } catch (e) {}
+    }, 20000);
     return () => { stopped = true; clearInterval(t); clearTimeout(give); };
   }, [commLocked]);
   // the in-app wallet is the member's, always-on (rides on their key) — boot it once so the balance is

@@ -360,3 +360,42 @@ test('but a GENUINELY locked boot still wipes, once identity has settled', () =>
     'A SEIZED, LOCKED PHONE KEEPS EVERY CONGREGATION CACHE. Waiting for the lock to be settled has turned ' +
     'into never wiping at all, which is the defect this whole effect exists for.');
 });
+
+// ── WHEN THE PHONE WILL NOT SAY WHETHER IT IS LOCKED ────────────────────────────────────────────────────
+// Owner's decision, 2026-09-15, after the audit of 5951edd. `settled` waits on init(), which on a locked
+// boot awaits an UNBOUNDED SecureStorage read — and this repo has measured a sleeping screen deferring
+// native calls for minutes. A phone whose store answered late used to spend the whole 20-second budget
+// doing nothing, and `commLocked` never changes again while it stays locked: A SEIZED, LOCKED PHONE KEPT
+// EVERY CONGREGATION CACHE. That is AUDIT-2026-07-28 F7 — the defect this effect exists for — reintroduced
+// by the fix for its opposite.
+// The two costs are not equal. Wiping a member who was not really locked costs a re-download; everything
+// of theirs is on the keep-list. Not wiping a seized phone costs a congregation its member list, groups and
+// care notes. So "we could not find out" now falls TOWARDS the wipe.
+test('a phone that never answers whether it is locked is wiped anyway, when the budget runs out', () => {
+  const e = lockEffect({ locked: true, settled: false, engineAfter: 0 });
+  for (let i = 0; i < 70; i++) e.tick();                 // the whole 20s of 300ms polls
+  assert.equal(e.wipes(), 0, 're-anchor: it wiped before the budget ran out, so this proves nothing');
+  e.giveUp();                                            // the give-up timer fires
+  assert.equal(e.wipes(), 1,
+    'A SEIZED, LOCKED PHONE KEPT EVERY CONGREGATION CACHE. The secure store answered too late, the poll gave ' +
+    'up, and commLocked never changes again while the phone stays locked — so nothing ever wipes. Member ' +
+    'list, groups and care notes, left on the device for whoever is holding it.');
+});
+
+test('…and it does not wipe TWICE when the store answers just before the deadline', () => {
+  const e = lockEffect({ locked: true, settled: false });
+  e.settle();
+  e.tick();
+  assert.equal(e.wipes(), 1, 're-anchor: the normal path stopped wiping');
+  e.giveUp();
+  assert.equal(e.wipes(), 1, 'the give-up timer wiped a second time over a wipe that had already run');
+});
+
+test('…and an UNLOCKED phone is still never wiped, budget or no budget', () => {
+  // The whole point of 5951edd. The timeout must not become a back door that wipes every member.
+  const e = lockEffect({ locked: false, settled: false });
+  for (let i = 0; i < 70; i++) e.tick();
+  e.giveUp();
+  assert.equal(e.wipes(), 0,
+    'the give-up timer wiped a member who was never locked — which is the defect 5951edd was written to fix');
+});

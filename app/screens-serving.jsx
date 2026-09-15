@@ -832,6 +832,32 @@ function svArrivalLine(a) {
 //     confirmation reading "Milo → Sarah?", and nothing said.
 // A warning that fires where there is no ambiguity is one the worker learns to tap through, which is item
 // 12's own argument turned on its fix.
+// ⚠ ASK WHETHER THE QUESTION CAN IDENTIFY ANYONE — NOT HOW SHE PICKED THE FAMILY.
+// This used to be `!pending.bySig && svAmbiguous(...)`: suppressed entirely on the SCAN path, on the
+// reasoning that a scan picks the family from a signed document rather than from her reading a row. The
+// audit of 2026-09-15 took that apart, and the owner agreed. What is signed is the ARRIVAL; what SELECTS it
+// is a pubkey read off a camera, and a QR can be photographed or copied. The design's answer to a forged
+// code is precisely this confirmation — "a code naming a family that is not in front of her shows her the
+// mismatch in words". THAT ANSWER NEEDS A NAME. With the name unresolved the panel reads "Milo → the person
+// who arrived at 9:42?", which identifies nobody — and the warning was off as well, so she had neither.
+//
+// TWO CASES, ONE QUESTION. A TAP is her reading a row and choosing, so what matters is whether another row
+// reads the same. A SCAN carries no reading at all, so what matters is whether the confirmation can name the
+// person standing there. Either way: if this question cannot identify anyone, say so.
+// It still does NOT cry wolf — a scan with a resolved name is silent, and so is a tap where every row reads
+// differently. And it never blocks: design §10, nothing here stops a child reaching a room.
+// Answers '' (the question is fine), 'same' (another row reads identically) or 'unnamed' (a scan whose
+// family this phone cannot name). Two different situations need two different sentences: "another family
+// reads the same" is wrong for a scan, and "their name hasn't reached your phone" is wrong for two
+// families who are both called Sarah.
+function svUnsure(queue, pending) {
+  if (!pending) return '';
+  const list = Array.isArray(queue) ? queue.filter(Boolean) : [];
+  const me = list.find(a => a.pub === pending.guardian);
+  if (!me) return '';
+  if (pending.bySig) return svArrivalName(me) ? '' : 'unnamed';   // scanned: can it name the person at all?
+  return svAmbiguous(queue, pending.guardian) ? 'same' : '';      // tapped: does another row read the same?
+}
 function svAmbiguous(queue, pub) {
   const list = Array.isArray(queue) ? queue.filter(Boolean) : [];
   const me = list.find(a => a.pub === pub);
@@ -1038,10 +1064,15 @@ function KidsAddChild({ ctx, session, arrivals }) {
               launders a guess into a checked pairing. It does NOT block — design §10, nothing in this
               feature stops a child reaching a room — it hands the check back to the one person who can
               actually make it, who is standing at the desk. */}
-          {!pending.bySig && svAmbiguous(queue, pending.guardian) ? (
+          {svUnsure(queue, pending) === 'same' ? (
             <div style={{ fontSize: 12.5, lineHeight: 1.45, color: 'var(--ink-2)', fontWeight: 600 }}>
               Another family here reads exactly the same on this screen, so this question can’t tell them
               apart. Ask before you tap.
+            </div>
+          ) : svUnsure(queue, pending) === 'unnamed' ? (
+            <div style={{ fontSize: 12.5, lineHeight: 1.45, color: 'var(--ink-2)', fontWeight: 600 }}>
+              Their name hasn’t reached your phone, so this question can’t tell you whose code you scanned.
+              Ask before you tap.
             </div>
           ) : null}
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
