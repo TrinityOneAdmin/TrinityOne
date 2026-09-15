@@ -40,7 +40,12 @@ async function joinQueue() {
     nameHandle: (m) => (m && m.name ? m.name.toLowerCase().replace(/\s+/g, '') : ''),
     shortNpub: (n) => String(n || '').slice(0, 12) + '…',
     Panel: (p) => (p && p.children) || null, Icon: (p) => null, SkPill: (p) => (p && p.children) || null,
+    // StewHelpLink joined DashMembers on 2026-09-15 (the safeguarding note is now one sentence plus a
+    // link to the console-family-safety guide). These fixtures name every free identifier the sliced
+    // function uses, so a NEW one is a ReferenceError here even though the real console has it in scope —
+    // classic scripts share one global. That is the second caller list a change like this has.
     SkBadge: () => null, SkConfirm: () => null, DismissibleNote: (p) => (p && p.children) || null,
+    StewHelpLink: (p) => (p && p.label) || null,
     window: {
       Steward: {
         setBlocked: (l) => { blocked.push(l); return Promise.resolve(true); },

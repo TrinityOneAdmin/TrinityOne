@@ -90,7 +90,23 @@ function renderMembersPage() {
   return { node, text: node ? reads(node) : '', linked };
 }
 
-const WORD_BUDGET = 45;   // the note as shipped before this: ~90. As it stands now: ~34.
+const WORD_BUDGET = 55;   // the note as shipped before this: 99. As it stands now: 45.
+// AND A FLOOR, WHICH MATTERS MORE THAN THE CEILING. An independent audit cut the note down to
+// "<b>Safeguarding.</b> <StewHelpLink/>" - every safeguarding fact gone, including the one the commit said
+// was deliberately KEPT - and both tests in this file stayed green, because a word budget is an upper bound
+// and nothing asserted what had to remain. The next "shorten the copy" pass would have deleted it over a
+// green suite. These two must be on the screen, and reference/DOMAIN.md says why:
+//   · what clearing an adult GRANTS. "Whatever screen grants it must say, in words, what it grants - a
+//     warden ticking 'cleared for check-in' must not discover later that they also opened children's chat."
+//     This IS the screen that grants it, and the grant is one tap with no confirmation step.
+//   · that the cleared list is who a young person's request for help reaches - the consequence the guide
+//     itself calls the one most churches do not expect, and the only one invisible until a child needs it.
+const MUST_REMAIN = {
+  'what clearing an adult grants (DOMAIN.md: the granting screen must say what it grants)':
+    /clear\w*[^.]{0,90}\bmessage a child\b/i,
+  'that the cleared list is who a plea for help reaches':
+    /cleared list[^.]{0,90}receive[^.]{0,70}request for help/i,
+};
 
 test('the Members safeguarding note is a sentence, not an essay', () => {
   const { node, text, linked } = renderMembersPage();
@@ -101,6 +117,11 @@ test('the Members safeguarding note is a sentence, not an essay', () => {
     'the Members page opens with a ' + words + '-word explainer sitting between the member count and the first ' +
     'member, so on a 360px phone a steward scrolls past it to see anybody. Budget is ' + WORD_BUDGET + ' words; ' +
     'the rest belongs in the console-family-safety guide. On screen now:\n  ' + text);
+
+  const gone = Object.entries(MUST_REMAIN).filter(([, re]) => !re.test(text)).map(([k]) => k);
+  assert.deepEqual(gone, [],
+    'the note is short enough and has stopped saying what it must say on the screen where the action ' +
+    'happens: ' + gone.join('; ') + '. On screen now:\n  ' + text);
 
   // …and it must hand the reader somewhere to go, or "shorter" is just "less is said".
   assert.ok(linked.includes('console-family-safety'),
@@ -129,10 +150,18 @@ test('every fact taken off the Members page is in the guide the note links to', 
     missing.join('; ') + '. Either put the fact back on screen or put it back in console-family-safety.');
 
   // And the guide has to be one the console can actually open, or the link is a dead end.
-  const ids = readFileSync(ROOT + 'app/stew-help.jsx', 'utf8');
-  const m = /const STEW_HELP_IDS = \[([^\]]*)\]/.exec(ids);
-  assert.ok(m, 're-anchor this test: STEW_HELP_IDS is no longer a literal array in app/stew-help.jsx');
-  assert.ok(m[1].includes("'console-family-safety'"),
-    'the console does not list console-family-safety among its help articles, so the link on the Members page ' +
-    'opens a dialog that skips it');
+  //
+  // ⚠ THIS RUNS THE CONSOLE'S OWN LOOKUP; it does not read STEW_HELP_IDS as text. The first version regexed
+  // that literal array out of app/stew-help.jsx - a behaviour claim made by matching source text in a file
+  // that ships UNBUNDLED, which is precisely what CLAUDE.md rule 3 forbids: a runtime filter over the array
+  // would leave every character of it in place and the assertion would still pass. An audit caught it.
+  const { stewHelpArticles } = loadScreen('app/stew-help.jsx', ['stewHelpArticles'], {
+    React: { createElement: () => null, Fragment: 'Fragment', useState: () => [null, () => {}],
+             useEffect() {}, useRef: () => ({ current: null }), useMemo: (f) => f(), useCallback: (f) => f },
+    Icon: () => null, window: { HelpData: helpData() },
+  });
+  const offered = stewHelpArticles().map(a => a.id);
+  assert.ok(offered.includes('console-family-safety'),
+    'the console does not offer console-family-safety among its help articles, so the link on the Members ' +
+    'page opens a dialog that skips it. Offered: ' + JSON.stringify(offered));
 });

@@ -56,7 +56,12 @@ const furniture = () => ({
   SK_TINT: { gold: { fg: '#000' }, sage: { fg: '#000' }, clay: { fg: '#000' }, ink: { fg: '#000' } },
   nameHandle: () => '', shortNpub: (n) => String(n || '').slice(0, 12) + '…', ago: () => 'a while ago',
   Panel: (p) => (p && p.children) || null, Icon: () => null, SkPill: (p) => (p && p.children) || null,
+  // StewHelpLink joined DashMembers on 2026-09-15 (the safeguarding note is now one sentence plus a
+  // link to the console-family-safety guide). These fixtures name every free identifier the sliced
+  // function uses, so a NEW one is a ReferenceError here even though the real console has it in scope —
+  // classic scripts share one global. That is the second caller list a change like this has.
   SkBadge: () => null, SkConfirm: () => null, DismissibleNote: (p) => (p && p.children) || null,
+  StewHelpLink: (p) => (p && p.label) || null,
   useStewDialog: () => ({ current: null }), todayISO: () => '2026-09-07', stewCapState: () => ({ allowed: true }),
 });
 

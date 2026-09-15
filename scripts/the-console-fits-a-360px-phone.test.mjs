@@ -38,7 +38,7 @@ const ROOT = new URL('..', import.meta.url).pathname;
 const VW = 360, VH = 730;   // the Oppo CPH2477's viewport, the phone the owner runs the console on
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-let relay, chr, ws, dataDir, prof, evalIn, booted = '';
+let relay, chr, ws, dataDir, prof, evalIn, send, booted = '';
 const errors = [];
 
 async function waitReady(ms = 20000) {
@@ -82,7 +82,7 @@ before(async () => {
     }
     if (m.id && pend.has(m.id)) { pend.get(m.id)(m); pend.delete(m.id); }
   });
-  const send = (method, params = {}) => new Promise(r => { const i = ++id; pend.set(i, r); ws.send(JSON.stringify({ id: i, method, params })); });
+  send = (method, params = {}) => new Promise(r => { const i = ++id; pend.set(i, r); ws.send(JSON.stringify({ id: i, method, params })); });
   await send('Runtime.enable');
   // --window-size gets the OUTER window; this pins the layout viewport to the handset's exact CSS pixels.
   await send('Emulation.setDeviceMetricsOverride', { width: VW, height: VH, deviceScaleFactor: 2, mobile: true });
@@ -166,6 +166,17 @@ test('the console reached its dashboard at 360x730 — without which nothing bel
     assert.deepEqual(errors, [], 'the console threw while reaching its dashboard:\n  ' + errors.join('\n  '));
   });
 
+// The four Overview stat-card labels and whether each one fits the box it was given.
+const CARD_LABELS = `(() => {
+  const out = [];
+  for (const el of document.querySelectorAll('main span')) {
+    const t = (el.textContent || '').trim();
+    if (!/^(Members|Groups|Announcements|Your relay)$/.test(t)) continue;
+    out.push({ label: t, needs: el.scrollWidth, has: el.clientWidth });
+  }
+  return JSON.stringify(out);
+})()`;
+
 test('nothing on Overview is cut off by the right edge of the phone',
   { skip: !CHROME ? 'no chromium' : false, timeout: 240000 }, async () => {
     // Measured before the fix, on this exact screen: the stat grid's tracks resolved to 205.09px + 146.64px
@@ -178,19 +189,45 @@ test('nothing on Overview is cut off by the right edge of the phone',
       'these are laid out past the right edge of a ' + VW + 'px screen, and <main> does not scroll sideways, ' +
       'so a steward cannot see them: ' + JSON.stringify(off));
 
-    // …and the cards must not have bought that by hiding their own labels. An ellipsised label passes the
-    // assertion above while still failing the steward.
-    const cut = JSON.parse(await evalIn(`(() => {
-      const out = [];
-      for (const el of document.querySelectorAll('main span')) {
-        const t = (el.textContent || '').trim();
-        if (!/^(Members|Groups|Announcements|Your relay)$/.test(t)) continue;
-        if (el.scrollWidth > el.clientWidth + 1) out.push({ label: t, needs: el.scrollWidth, has: el.clientWidth });
-      }
-      return JSON.stringify(out);
-    })()`));
+    // ⚠ THE ASSERTION ABOVE IS A SCAN, AND AN EMPTY SCREEN SATISFIES EVERY SCAN. An independent audit
+    // deleted the whole stat grid (`const stat = null`) and this test stayed green: nothing rendered, so
+    // nothing was off-screen. CLAUDE.md rule 1, in the exact shape it warns about. Count the cards FIRST.
+    const cards = JSON.parse(await evalIn(CARD_LABELS));
+    assert.equal(cards.length, 4,
+      'Overview shows ' + cards.length + ' of its four stat cards (Members, Groups, Announcements, Your ' +
+      'relay), so the measurements above are of a screen that is missing the thing under test: ' +
+      JSON.stringify(cards));
+
+    // …and the cards must not have bought their fit by hiding their own labels. An ellipsised label passes
+    // the off-screen assertion while still failing the steward.
+    const cut = cards.filter(c => c.needs > c.has + 1);
     assert.deepEqual(cut, [], 'an Overview card label is truncated rather than laid out: ' + JSON.stringify(cut));
   });
+
+test('the same cards are not truncated on a desktop console', { skip: !CHROME ? 'no chromium' : false, timeout: 240000 }, async () => {
+  // THE FIX FOR THE PHONE BROKE THE DESKTOP, and only an audit that changed the viewport saw it. The first
+  // version of this change let the label ellipsise at EVERY width, and the 4-up desktop grid gives a label
+  // LESS room than the 2-up phone grid does: at a 960px window "Announcements" had 64px of the 106px it
+  // needs and read "Announce…", and "Your relay" read "Your rela…". Every other test in this file is pinned
+  // to 360x730 and none of them could see it. 790 is the narrowest desktop layout (>=760 drops the phone
+  // shell), 960 is a half-screen window and is where it was caught, 1280 is a normal one.
+  try {
+    for (const w of [790, 960, 1280]) {
+      await send('Emulation.setDeviceMetricsOverride', { width: w, height: 900, deviceScaleFactor: 1, mobile: false });
+      await sleep(1200);
+      const cards = JSON.parse(await evalIn(CARD_LABELS));
+      assert.equal(cards.length, 4, `at ${w}px Overview shows ${cards.length} of its four stat cards`);
+      const cut = cards.filter(c => c.needs > c.has + 1);
+      assert.deepEqual(cut, [], `at a ${w}px console window an Overview card label is cut short: ` + JSON.stringify(cut));
+      const off = JSON.parse(await evalIn(OFF_SCREEN_RIGHT));
+      assert.deepEqual(off, [], `at ${w}px these are laid out past the right edge: ` + JSON.stringify(off));
+    }
+  } finally {
+    // hand the phone back to whatever runs next
+    await send('Emulation.setDeviceMetricsOverride', { width: VW, height: VH, deviceScaleFactor: 2, mobile: true });
+    await sleep(1200);
+  }
+});
 
 // ── FINDING 4: THE 24 POP-UPS THAT WERE CHANGED BUT NEVER LOOKED AT ──────────────────────────────────────
 // 32d101d changed 30 modal backdrops after measuring exactly TWO of them on the phone (New group, New event)
