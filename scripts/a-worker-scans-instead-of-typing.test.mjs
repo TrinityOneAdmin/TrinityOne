@@ -616,3 +616,32 @@ test('a RESOLVED name is still used, and is not replaced by a clock time', async
   assert.match(t, /Tom Achebe has arrived/, 'a known family is no longer named on the queue: ' + t);
   assert.ok(!/Someone arrived at/.test(t), 'a named arrival was described by its clock time instead: ' + t);
 });
+
+test('re-scanning the SAME code mid-family re-arms cleanly — no half-set pairing', async () => {
+  // Local-auditor lead 8b5c625acd, 2026-09-15: after the first child is written, `scanned` carries the
+  // sibling while `pending` is null and `picked` still holds the guardian — and the lead reads that as an
+  // "inconsistent" state that could write the second child with a stale or absent guardian.
+  // It is the ORDINARY state between picking a family and submitting: `submit()` rebuilds `pending` from
+  // `pickedArrival` every time, so the confirmation is always re-shown. What was NOT covered is the worker
+  // scanning the same code again in that window, which is an easy thing to do at a busy door.
+  const d = desk(register([session('svc-am', [arrival(SARAH, 'Sarah Henderson')])]));
+  d.scan(0, qr(SARAH, ['Milo', 'Ivy']));
+  await d.click(0, 'Check a child in');
+  await d.click(0, 'Yes, check in');
+  assert.equal(d.checkinCalls.length, 1, 're-anchor: the first child was not written');
+  assert.equal(d.input(0, 'Child’s name').props.value, 'Ivy', 're-anchor: the sibling was not carried');
+
+  // …and now she scans the same code again rather than tapping.
+  d.scan(0, qr(SARAH, ['Milo', 'Ivy']));
+  const t = d.reads(0);
+  assert.ok(!/Ivy → /.test(t) && !/Milo → /.test(t),
+    'a scan left a pairing panel on screen that the worker never answered: ' + t);
+  await d.click(0, 'Check a child in');
+  assert.match(d.reads(0), /Milo → Sarah Henderson\?/,
+    'the re-scan did not re-establish the pairing, so the next write would carry no confirmed family');
+  await d.click(0, 'Yes, check in');
+  assert.equal(d.checkinCalls.length, 2, 'the second write did not happen');
+  assert.equal(d.checkinCalls[1].guardian, SARAH,
+    'A RE-SCAN MID-FAMILY LOST THE GUARDIAN LINK. The relay serves the record to the p-tagged pubkey, so ' +
+    'this is the difference between the parent getting their child’s copy and not.');
+});

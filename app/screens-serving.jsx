@@ -699,7 +699,7 @@ function KidsRow({ rec, ctx, open, onToggle }) {
     // ⚠ "NOTHING WAS WRITTEN" IS A CLAIM, AND IT WAS FALSE HALF THE TIME. `unconfirmed` means nobody
     // answered in time — the release is signed, on the wire, and may already have landed. Telling a worker
     // it did not save sends her to undo something that already worked. Same rule as the parent's card.
-    else if (res && res.reason === 'unconfirmed') setErr('We couldn’t confirm that — it may well have saved. Check the register before doing it again.');
+    else if (res && res.reason === 'unconfirmed') setErr('We couldn’t confirm that. They may already be checked out — look at the register before doing it again.');
     else setErr('That did not save — see the desk. Nothing was written.');
   };
   const confirmCode = () => {
