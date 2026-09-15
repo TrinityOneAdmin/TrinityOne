@@ -2539,6 +2539,19 @@ function safeguardAllows(minorPub, other) {
   const cps = minorGoverningChurches(minorPub);
   if (!cps.length) return true;
   for (const cp of cps) {
+    // ⚠ A PERSON THIS CHURCH HAS BANNED HAS NO STANDING IN IT — not as a cleared worker, not as a steward,
+    // not as a linked guardian. A ban does NOT rewrite `approved:<cp>`, so the clearance list outlives it,
+    // and every escape below is a `continue` that would hand a banned adult a private route to a child.
+    //
+    // This is placed here rather than left to the membership gate because the membership gate cannot carry
+    // it any more. Before blocklists were scoped per church, kind-4 was refused at `if (!isMember)` — the
+    // relay-wide member set excluded anyone on ANY church's list, so a banned worker was not a member of
+    // ANYWHERE and their DMs died there. Now that membership is per church (correctly: A's ban must not
+    // remove someone from B), a worker banned by A but belonging to B is still a member, and `approved:<A>`
+    // still names them. MEASURED by the audit of this commit: their DMs to A's children were accepted,
+    // where at 32d101d they were refused. The control — a worker who belongs to A alone — was refused
+    // either way, which is exactly why a single-church fixture would not have caught it.
+    if (blockedBy(other, cp)) return false;
     // A CHILD IS NEVER A GUARDIAN, whatever the guardians: map says. The map is written by the console, which
     // refuses to LINK a child as a parent but never re-checked a link that already existed: mark a linked adult
     // as a young person afterwards and the link stayed, and because guardianLinkedIn matches in EITHER direction
@@ -3498,7 +3511,18 @@ function accept(e) {
   // is a church removing someone from ITS rooms. The blanket refusal is not lost, it is relocated — the
   // church-scoped rules below (and `isMember`, whose set rebuildMembers() now builds per church) each refuse
   // in their own right, so a member banned by the only church they belong to still cannot write at all.
-  const _banCp = owningChurch(e, (e.tags.find(t => t[0] === 'd') || [])[1] || '');
+  //
+  // ⚠ AND A CHAT MESSAGE BELONGS TO ITS GROUP'S CHURCH, WHICH owningChurch() CANNOT SEE. A kind-1 carries no
+  // d-tag and no ['church'] tag — it names its room in a second ['t'] tag — so owningChurch() returns '' for
+  // every chat message ever posted. The first version of this line stopped there, and the audit of this very
+  // commit caught what that cost: a member their church had BANNED could still post into that church's
+  // invite-only room and its serving-team room, because those two branches below answer from GROUP_MEMBERS
+  // and ROSTER_PEOPLE — allowlists a ban does not rewrite — and the blanket refusal that used to catch them
+  // had just been narrowed out of their way. MEASURED at 32d101d (refused) against this branch (accepted):
+  // a banned member posting into the elders' room, one church, no co-tenant needed. Reads were still
+  // refused, so the shape was "can write into a room they cannot read".
+  const _gid = gidOf(e);
+  const _banCp = owningChurch(e, dtag(e)) || (_gid ? (GROUP_CHURCH.get(_gid) || '') : '');
   if (_banCp && blockedBy(e.pubkey, _banCp) && !(isAnyChurch || isNetwork)) return false;
   const k = e.kind;
   if (k === 0) {                                                 // profiles (replaceable, per-pubkey)

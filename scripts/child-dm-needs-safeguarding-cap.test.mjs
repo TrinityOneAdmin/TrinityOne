@@ -49,8 +49,14 @@ const lift = (name, stubs, anchor) => {
 };
 
 const CHURCH = 'c'.repeat(64), CHILD = 'k'.repeat(64);
-const make = ({ approved = [], guardians = [], minors = [], caps = {} } = {}) => lift('safeguardAllows', {
+const make = ({ approved = [], guardians = [], minors = [], caps = {}, blocked = [] } = {}) => lift('safeguardAllows', {
   minorGoverningChurches: () => [CHURCH],
+  // A PERSON THE GOVERNING CHURCH HAS BANNED HAS NO STANDING IN IT — added 2026-09-15 when blocklists were
+  // scoped per church. It is first in the function, before every clearance and guardian escape, because a ban
+  // does not rewrite `approved:<cp>` and without it the clearance outlives the ban. The `blocked` case below
+  // drives it; this stub is also what makes the lift resolve, and a missing stub is why six tests in this file
+  // failed loudly rather than quietly reading undefined — which is the point of the Proxy above.
+  blockedBy: (who) => blocked.includes(who),
   approvedIn: (who) => approved.includes(who),
   guardianLinkedIn: (minor, who) => guardians.includes(who),
   // D2 (sim round 3): a guardian entry naming a child is ignored at decision time — a child is never a
@@ -89,11 +95,24 @@ test('an ordinary member is refused', () => {
   assert.equal(make({})(CHILD, 'stranger'), false, 'anyone at all can message a child');
 });
 
+test('a CLEARED worker the church has since BANNED is refused', () => {
+  // Banning does not rewrite `approved:<cp>`, so the clearance list outlives the ban. Before blocklists were
+  // scoped per church (2026-09-15) this was caught one layer up — kind-4's `isMember` used the relay-wide
+  // member set, which excluded anyone on ANY church's list. Once membership became per church, a worker banned
+  // by this church but still a member of another was a member again, and this list still named them.
+  assert.equal(make({ approved: ['worker'] })(CHILD, 'worker'), true,
+    'fixture: a cleared worker should be allowed before any ban, or the case below proves nothing');
+  assert.equal(make({ approved: ['worker'], blocked: ['worker'] })(CHILD, 'worker'), false,
+    'a worker this church has BANNED still had a private route to its children, because the clearance list ' +
+    'outlives the ban. safeguardAllows must refuse a blocked person before it consults approvedIn.');
+});
+
 test('a child governed by two churches needs clearance from BOTH', () => {
   // One church's lax list must never open a child governed by another's.
   const twoChurches = lift('safeguardAllows', {
     minorGoverningChurches: () => [CHURCH, 'other'],
     approvedIn: (who, cp) => who === 'half' && cp === CHURCH,   // cleared by one church only
+    blockedBy: () => false,
     guardianLinkedIn: () => false, minorOf: () => false, networkOf: () => false, stewardCan: () => false,
   });
   assert.equal(twoChurches(CHILD, 'half'), false,
@@ -150,7 +169,7 @@ test('a care-scoped steward cannot read or answer a CHILD\'s request for help', 
 test('an ADULT\'s request for help is untouched by any of this', () => {
   // The gate only engages for a minor. A church whose care lead is scoped to Care alone must go on running
   // ordinary care exactly as before — the change must not quietly shrink their job.
-  const noMinors = lift('safeguardAllows', { minorGoverningChurches: () => [],
+  const noMinors = lift('safeguardAllows', { minorGoverningChurches: () => [], blockedBy: () => false,
     approvedIn: () => false, guardianLinkedIn: () => false, minorOf: () => false, networkOf: () => false, stewardCan: () => false });
   assert.equal(noMinors('a'.repeat(64), 'careLead'), true,
     'an adult who asked for help can no longer be answered — the safeguarding gate is firing on everybody');

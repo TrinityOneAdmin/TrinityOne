@@ -169,3 +169,100 @@ test('…but church B\'s own ban still bites, which is the whole point of bannin
     'lifting the ban did not restore them (' + restored.why + ') — a ban must be reversible by the church ' +
     'that made it, or a mistaken block is permanent.');
 });
+
+// ── THE ROOMS A BAN MUST ALSO CLOSE ──────────────────────────────────────────────────────────────────────
+//
+// ⚠ THESE TWO EXIST BECAUSE THE FIRST VERSION OF THIS FIX BROKE THEM, and the two tests above stayed green
+// over it. An independent audit of the ban-scoping commit found it; measured at 32d101d (refused) against
+// the first draft of the scoped gate (accepted).
+//
+// WHY IT HAPPENED, because the shape will recur: a chat message carries no d-tag and no ['church'] tag — it
+// names its room in a SECOND ['t'] tag — so `owningChurch()` returns '' for every kind-1 there has ever
+// been. accept()'s ban refusal had just been narrowed from "any church's list" to "the church this event is
+// for", and for a chat message that resolved to nobody, so no ban applied. The invite and team branches then
+// answer from GROUP_MEMBERS and ROSTER_PEOPLE — allowlists that a ban does not rewrite — and returned true.
+// The result was a banned member posting into their own church's elders' room. ONE church; no co-tenant
+// needed. Reads were still refused, so the shape was "can write into a room they cannot read".
+//
+// The fix resolves the group's owning church for the ban question. Delete that and these two go red.
+const group = (church, gid, extra) => send(doc(church, D.GROUP + gid, { id: gid, name: gid, ...extra }, [['church', church.pub]]));
+const post = (who, gid, text) => send(finalizeEvent({
+  kind: 1, created_at: now(), content: text,
+  // ⚠ THE ROOM IS NAMED IN A SECOND ['t'] TAG. gidOf() reads the first ['t'] whose value is not the network
+  // name; an ['e'] or ['g'] tag names NOTHING to this relay. A draft of this file used ['e'] and every
+  // message landed in no room at all, which looked exactly like the ban working.
+  tags: [['t', 'trinityone'], ['t', gid]],
+}, who.sk));
+
+test('a banned member cannot post into their own church\'s INVITE-ONLY room', async () => {
+  const gid = 'elders-' + Date.now();
+  // ⚠ `visibility: 'invite'`, not `kind: 'invite'`. The relay reads c.visibility; a draft of this file used
+  // `kind` and got an ORDINARY room, whose generic member rule refused the banned author for another reason
+  // entirely — a false pass that hid the defect.
+  assert.equal((await group(churchB, gid, { visibility: 'invite', members: [victim.pub] })).ok, true, 'fixture: the group doc was refused');
+  await sleep(400);
+  assert.equal((await post(victim, gid, 'before the ban')).ok, true, 'fixture: an un-banned member of the allowlist could not post');
+
+  await banlist(churchB, [victim.pub]);
+  const after = await post(victim, gid, 'after the ban');
+  assert.notEqual(after.ok, true,
+    'A BANNED MEMBER POSTED INTO THEIR CHURCH\'S INVITE-ONLY ROOM. The invite branch answers from ' +
+    'GROUP_MEMBERS, which a ban never rewrites, so the only thing standing in the way is accept()\'s ban ' +
+    'refusal — and that can only fire if the ban question resolves the GROUP\'s church, because a chat ' +
+    'message has no d-tag and no church tag of its own.');
+  await banlist(churchB, []);
+});
+
+test('a banned member cannot post into their own church\'s SERVING-TEAM room', async () => {
+  const gid = 'welcome-' + Date.now();
+  assert.equal((await group(churchB, gid, { kind: 'team' })).ok, true, 'fixture: the team group doc was refused');
+  // a serving team's allowlist is its ROSTER, not the group doc's members — the two-list split
+  assert.equal((await send(doc(churchB, D.ROSTER + gid, { pubs: [victim.pub] }, [['church', churchB.pub]]))).ok, true, 'fixture: the roster was refused');
+  await sleep(400);
+  assert.equal((await post(victim, gid, 'before the ban')).ok, true, 'fixture: a rostered member could not post');
+
+  await banlist(churchB, [victim.pub]);
+  const after = await post(victim, gid, 'after the ban');
+  assert.notEqual(after.ok, true,
+    'A BANNED MEMBER POSTED INTO THEIR CHURCH\'S SERVING-TEAM ROOM — the ROSTER_PEOPLE sibling of the ' +
+    'invite case above, and it fails the same way for the same reason.');
+  await banlist(churchB, []);
+});
+
+// ── THE SAFEGUARDING ONE, AND IT NEEDS TWO CHURCHES TO SHOW ITSELF ───────────────────────────────────────
+//
+// ⚠ ALSO FOUND BY THE AUDIT OF THIS COMMIT, and the reason a single-church fixture would have missed it.
+// Church A clears a children's worker (`approved:<A>`) and then BANS them. A ban does not rewrite the
+// clearance list. Before blocklists were scoped, the worker's DMs died at kind-4's `if (!isMember)` —
+// the relay-wide member set excluded anyone on any church's list, so they were a member of nowhere. Once
+// membership became per church (correctly), a worker banned by A but still a member of B is a member again,
+// and A's clearance list still names them: their private messages to A's CHILDREN were accepted.
+// MEASURED: refused at 32d101d, accepted against the first draft of the scoped gate.
+// The control matters — a worker belonging to A alone was refused either way.
+test('a children\'s worker church A has banned cannot message A\'s children, even while a member of B', async () => {
+  const worker = key();   // cleared by A, banned by A, and ALSO a member of B — that last part is the point
+  const child  = key();   // a young person of church A
+
+  assert.equal((await send(doc(worker, D.MEMBER + churchA.pub, { joined: now() }))).ok, true, 'fixture: worker could not join A');
+  assert.equal((await send(doc(worker, D.MEMBER + churchB.pub, { joined: now() }))).ok, true, 'fixture: worker could not join B');
+  assert.equal((await send(doc(child,  D.MEMBER + churchA.pub, { joined: now() }))).ok, true, 'fixture: child could not join A');
+  await sleep(300);
+  assert.equal((await send(doc(churchA, D.MINORS + churchA.pub, { pubkeys: [child.pub] }))).ok, true, 'fixture: A could not mark its child');
+  assert.equal((await send(doc(churchA, D.APPROVED + churchA.pub, { pubkeys: [worker.pub] }))).ok, true, 'fixture: A could not clear its worker');
+  await sleep(400);
+
+  const dm = (text) => send(finalizeEvent({
+    kind: 4, created_at: now(), content: text, tags: [['t', 'trinityone'], ['p', child.pub]],
+  }, worker.sk));
+
+  assert.equal((await dm('before the ban')).ok, true,
+    'fixture: a CLEARED worker could not message a child of their own church, so the test below proves nothing');
+
+  await banlist(churchA, [worker.pub]);
+  const after = await dm('after the ban');
+  assert.notEqual(after.ok, true,
+    'A WORKER CHURCH A HAS BANNED STILL HAS A PRIVATE ROUTE TO A\'S CHILDREN. Banning does not rewrite ' +
+    'approved:<A>, so the clearance outlives the ban; safeguardAllows() must refuse anyone the governing ' +
+    'church has blocked before it consults that list.');
+  await banlist(churchA, []);
+});
