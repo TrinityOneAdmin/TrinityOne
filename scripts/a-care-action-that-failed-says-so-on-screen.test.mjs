@@ -150,6 +150,12 @@ function runCareAction(name, { lands }) {
     async fillCareSlot() { return lands ? evt : null; },
     async clearCareSlot() { return lands ? evt : null; },
     async clearCareSkip() { return lands ? evt : null; },
+    // ⚠ markCareSkip DOES NOT MATCH ITS SIBLINGS, and that is the whole reason `skip` was missed. The three
+    // above return null when the publish fails, so `if (!r)` is enough for them. This one returns the EVENT
+    // either way and puts the outcome on `_delivered` — so on failure it is TRUTHY, and a wrapper copying the
+    // sibling pattern stays silent. The stub mirrors that exactly; weaken it to `null` and the skip case
+    // below would pass against a wrapper that is still broken.
+    async markCareSkip() { return { ...evt, _delivered: !!lands }; },
   } };
   const obj = new Function('setOptCare', 'toast', 'window', 'return ({ ' + liftCareAction(name) + ' })')(setOptCare, toast, window);
   return { fn: obj[name], said, optCare };
@@ -164,6 +170,11 @@ const SLOT_CASES = [
    'the dietary note nobody else can see is the one that matters'],
   ['clearSkip', ['care-1', '2026-09-10'],            /still marked/i,
    'the day stays crossed out and nobody brings anything'],
+  // ⚠ ADDED 2026-09-15, and it was the ONLY one of the five missing from this list — which is how it
+  // survived the sims and the owner's own use of the care feature. Both were true at once: the control
+  // worked every time it was tried, and it said nothing on the one occasion it would have mattered.
+  ['skip',      ['care-1', '2026-09-10', '', null, null], /needing someone/i,
+   'the family says "not this day", it reaches nobody, the day still reads as needed, and somebody cooks a meal nobody wanted'],
 ];
 
 for (const [name, args, expect, why] of SLOT_CASES) {
@@ -258,3 +269,18 @@ test('the phone says which half landed, not just "Opened as a need"', async () =
   assert.match(clean.m, /Opened as a need/);
 });
 
+
+// ⚠ THE TRAP, NAILED DOWN SEPARATELY, because the obvious "tidy-up" re-opens it. `skip` cannot be checked
+// with `if (!r)` like its four siblings: markCareSkip resolves with the EVENT on failure too. This asserts
+// the wrapper reads `_delivered` and not truthiness — replace the check with `if (!r)` and this reddens
+// while every other test in this file stays green.
+test('skip: a TRUTHY result with _delivered false is still a failure', async () => {
+  const said = [];
+  const toast = (msg, opts) => said.push({ msg: String(msg), error: !!(opts && opts.error) });
+  const window = { Fellowship: { async markCareSkip() { return { id: 'evt-id', _delivered: false }; } } };
+  const obj = new Function('setOptCare', 'toast', 'window', 'return ({ ' + liftCareAction('skip') + ' })')(() => {}, toast, window);
+  await obj.skip('care-1', '2026-09-10', '', null, null);
+  assert.ok(said.filter(t => t.error).length,
+    'markCareSkip resolved with a truthy event whose _delivered was false — a failed skip — and the member ' +
+    'was told nothing. `if (!r)` is not sufficient here; read _delivered.');
+});

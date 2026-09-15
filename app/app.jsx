@@ -2019,7 +2019,20 @@ function App() {
       clearFill: (careId, iso) => { setOptCare(o => ({ ...o, [careId + '|' + iso]: 'clear' })); return window.Fellowship.clearCareSlot(careId, iso).then(r => { if (r) toast('Removed'); else { setOptCare(o => { const n = { ...o }; delete n[careId + '|' + iso]; return n; }); toast('That didn’t reach your church — you’re still down for that day.', { error: true }); } return r; }); },
       // update the "what I'm bringing" note on an already-filled slot — same fillCareSlot doc, no "signed up" toast
       setNote: (careId, iso, note) => window.Fellowship.fillCareSlot(careId, iso, note).then(r => { if (!r) toast('That note didn’t reach your church — nobody else can see it yet.', { error: true }); return r; }),
-      skip: (careId, iso, reason, skipEnc, author) => window.Fellowship.markCareSkip(careId, iso, reason, skipEnc, author),
+      // ⚠ `skip` WAS THE ONE CARE CONTROL THAT SAID NOTHING EITHER WAY, and `if (!r)` — the check every
+      // sibling on this object uses — would NOT have caught it. Those all return null when the publish
+      // fails; markCareSkip returns the EVENT either way and records the outcome on `_delivered`, so a
+      // truthiness test is true on failure. Same shape as markSafe's, found the same day.
+      // PROVED by rendering CareNeedRow and pressing the button: a refused skip and a delivered one produced
+      // byte-identical screens, no toast, no alert. It survived the sims and the owner's own use because the
+      // send never failed there — and scripts/a-care-action-that-failed-says-so-on-screen.test.mjs, written
+      // for exactly this class, covered fill / clearFill / setNote / clearSkip and omitted this one until now.
+      // THE HARM is the thing the feature exists to prevent: the family says "not this day", it lands
+      // nowhere, the day still reads as needed, and somebody cooks a meal nobody wanted.
+      // ⚠ WORDING IS SIDE-NEUTRAL ON PURPOSE. Both the RECIPIENT ("I’m covered") and a care-team manager
+      // ("Skip") press this button, so it cannot say "they" — to the recipient, they ARE the they.
+      skip: (careId, iso, reason, skipEnc, author) => window.Fellowship.markCareSkip(careId, iso, reason, skipEnc, author)
+        .then(r => { if (!r || r._delivered === false) toast('That didn’t reach your church — that day may still show as needing someone.', { error: true }); return r; }),
       clearSkip: (careId, iso) => window.Fellowship.clearCareSkip(careId, iso).then(r => { if (!r) toast('That didn’t reach your church — that day is still marked as one to skip.', { error: true }); return r; }),
       // "I'm here to help": the list of members who are available, plus this member's own signal actions
       avail: careAvail,

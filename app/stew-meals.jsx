@@ -739,7 +739,23 @@ function MealsNeedDetail({ need, slots, skips, onClose, onEdit }) {
   // steward can mark a day "covered" (block it) for a recipient who isn't on the app — optimistic, then publish
   const [optSkip, setOptSkip] = React.useState({});
   const isSkipped = (iso) => (iso in optSkip) ? optSkip[iso] : !!skipByDate[iso];
-  const doSkip = (iso, on) => { setOptSkip(o => ({ ...o, [iso]: on })); if (window.StewardMeals) { on ? window.StewardMeals.skipDay(need.id, iso) : window.StewardMeals.unskipDay(need.id, iso); } };
+  // ⚠ THE OPTIMISTIC TICK MUST BE PUT BACK WHEN THE WRITE DOES NOT LAND. This set `optSkip` and then fired
+  // and forgot, so a refused skipDay/unskipDay left the day reading "Covered" for ever — and the console
+  // DOES raise a banner for a failed publish (`steward-publish-error` -> the dashboard's listener), which
+  // made it worse rather than better: the banner said the change failed and the row went on saying it
+  // succeeded, and the row is the one a steward acts on. Found beside the member-app sibling in
+  // app/app.jsx's `care.skip`, 2026-09-15.
+  // DELETE the key rather than flipping it back: absence falls through to `skipByDate[iso]`, which is what
+  // the relay actually holds, so the row re-reads the truth instead of a second guess of ours.
+  const doSkip = (iso, on) => {
+    setOptSkip(o => ({ ...o, [iso]: on }));
+    if (!window.StewardMeals) return;
+    const revert = () => setOptSkip(o => { const n = { ...o }; delete n[iso]; return n; });
+    // resolve-null AND reject are both handled: the guards in steward-meals.src.js return Promise.resolve(null)
+    // for a bad id or date, while the publish path rejects.
+    Promise.resolve(on ? window.StewardMeals.skipDay(need.id, iso) : window.StewardMeals.unskipDay(need.id, iso))
+      .then(r => { if (!r) revert(); }, revert);
+  };
   const MEAL_SHORT = { breakfast: 'Breakfast', lunch: 'Lunch', dinner: 'Dinner' };
   const dayMealsOf = (iso) => { const dm = need.dayMeals || {}; const base = Array.isArray(need.meals) ? need.meals : []; return (dm[iso] && dm[iso].length) ? dm[iso] : base; };
   return (

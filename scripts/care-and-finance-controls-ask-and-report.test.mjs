@@ -96,3 +96,55 @@ test('a statement import that posted nothing keeps the modal open and names the 
   assert.equal(half.rows[1].dup, false, 'the line that FAILED was marked as already imported — it never landed');
   assert.equal(half.rows[1].selected, true, 'the line that failed was deselected, so the retry does nothing');
 });
+
+// ── THE OPTIMISTIC "COVERED" TICK MUST BE PUT BACK WHEN THE WRITE FAILS ──────────────────────────────────
+//
+// `doSkip` in app/stew-meals.jsx let a steward mark a day covered on behalf of a recipient who is not on the
+// app. It set its optimistic state and then fired and forgot, so a refused publish left the row reading
+// "Covered" for ever. The console DOES raise a banner for a failed publish (steward-publish-error, caught by
+// the dashboard's listener) — which made this worse, not better: the banner said the change failed while the
+// row went on saying it succeeded, and the row is the one a steward acts on.
+//
+// Found beside its member-app sibling (`care.skip` in app/app.jsx), 2026-09-15, by an audit briefed to
+// refute that one. CLAUDE.md rule 3: app/stew-meals.jsx ships UNBUNDLED, so nothing here matches its text —
+// the real `doSkip` is lifted and RUN.
+const liftDoSkip = () => {
+  const body = fnBody(MEALS, 'const doSkip = (iso, on) => {', 'doSkip');
+  return (opt, StewardMeals) => {
+    const setOptSkip = (f) => { const n = typeof f === 'function' ? f({ ...opt }) : f; for (const k of Object.keys(opt)) delete opt[k]; Object.assign(opt, n); };
+    const need = { id: 'care-1' };
+    // eslint-disable-next-line no-new-func
+    return new Function('setOptSkip', 'need', 'window', body + '; return doSkip;')(setOptSkip, need, { StewardMeals });
+  };
+};
+
+test('a day the relay refused does not keep reading "Covered"', async () => {
+  const opt = {};
+  const doSkip = liftDoSkip()(opt, { skipDay: async () => null, unskipDay: async () => null });
+  doSkip('2026-09-10', true);
+  assert.equal(opt['2026-09-10'], true, 'the tick should appear immediately — the optimistic half is wanted');
+  await new Promise(r => setTimeout(r, 20));
+  assert.equal('2026-09-10' in opt, false,
+    'the publish failed and the day still reads "Covered". The steward sees a banner saying the change did ' +
+    'not save AND a row saying it did, and acts on the row — so a family that asked for nothing gets a meal, ' +
+    'or one that needs a meal is skipped. Delete the key so the row falls back to what the relay holds.');
+});
+
+test('…and a REJECTED publish is handled too, not just a null result', async () => {
+  const opt = {};
+  const doSkip = liftDoSkip()(opt, { skipDay: async () => { throw new Error('no relay accepted this'); }, unskipDay: async () => null });
+  doSkip('2026-09-11', true);
+  await new Promise(r => setTimeout(r, 20));
+  assert.equal('2026-09-11' in opt, false,
+    'skipDay REJECTED and the optimistic tick survived. The guards in steward-meals.src.js resolve null for a ' +
+    'bad id or date while the publish path rejects — both have to revert.');
+});
+
+test('CONTROL: a day that DID save keeps its tick', async () => {
+  const opt = {};
+  const doSkip = liftDoSkip()(opt, { skipDay: async () => ({ id: 'e1' }), unskipDay: async () => ({ id: 'e2' }) });
+  doSkip('2026-09-12', true);
+  await new Promise(r => setTimeout(r, 20));
+  assert.equal(opt['2026-09-12'], true,
+    'a successful skip lost its tick — the revert is firing on success, which would make the control unusable');
+});
