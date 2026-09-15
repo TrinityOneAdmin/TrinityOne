@@ -496,6 +496,18 @@ function App() {
     let stopped = false;
     const attempt = () => {
       if (stopped || wipedForLock.current) return true;
+      // ⚠ A GUESS IS NOT A LOCK, AND THIS USED TO ACT ON ONE. `commLocked` is seeded from lockNow() at
+      // FIRST RENDER, and lockNow's first clause is `isLocked()` = `hasEnc() && !sessionMnemonic`. On a
+      // "remember me" boot sessionMnemonic arrives only after a SecureStorage round trip, so for one render
+      // the app believes a member who never locked IS locked — and this effect destroyed every church cache
+      // on them. Offline, the congregation then paints empty with nothing saying why.
+      // Item 7 of the 14-day audit, 2026-09-14, and it CORRECTS bf25f49's message and comment, which named
+      // the second clause (`hasPin() && !myPubkey`). The first clause is the one that fires.
+      // Waiting costs nothing: `settled` is set the moment init() finishes, whichever branch it took, and
+      // the bounded poll below is already here for exactly this kind of not-ready-yet. A genuinely locked
+      // boot still wipes — one poll later, before anything has been served.
+      const ID = window.TrinityIdentity;
+      if (!ID || !ID.settled) return false;
       if (!(window.Fellowship && window.Fellowship.clearCommunityCache)) return false;
       wipedForLock.current = true;
       try { window.Fellowship.clearCommunityCache(); } catch (e) {}

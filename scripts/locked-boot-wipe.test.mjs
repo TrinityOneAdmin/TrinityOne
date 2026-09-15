@@ -172,7 +172,8 @@ test('the church list is KEPT, and the comment says so', () => {
 // wipe's `attempt()` left 9/9 green, over the one effect that decides whether a seized, locked phone still
 // holds a congregation's caches. CLAUDE.md rule 3, in the file that most needs it.
 // THE EFFECT IS LIFTED OUT OF app/app.jsx AND RUN NOW. Nothing below matches source text.
-function lockEffect({ locked, engineAfter = 0 }) {
+function lockEffect(opts) {
+  const { locked, engineAfter = 0 } = opts;
   const A = readFileSync(ROOT + 'app/app.jsx', 'utf8');
   const a = A.indexOf('const wipedForLock = useAR(false);');
   assert.notEqual(a, -1, 'the locked-boot wipe is gone from app.jsx — re-anchor this test');
@@ -192,9 +193,17 @@ function lockEffect({ locked, engineAfter = 0 }) {
   // read. `attempt()` reads window.Fellowship two or three times, so counting reads made `engineAfter: 3`
   // mean "somewhere between 2 and 5 attempts" — loose enough that the test passed for any nearby value.
   let attempts = 0;
-  const win = { get Fellowship() {
-    return (attempts >= engineAfter) ? { clearCommunityCache: () => { wipes++; } } : {};
-  } };
+  // AND WHETHER IDENTITY HAS SETTLED. `commLocked` is seeded from lockNow() at FIRST RENDER, and on a
+  // "stay open" boot `isLocked()` is `hasEnc() && !sessionMnemonic` — true until an await on the secure
+  // store completes. So the app believes it is locked for one render on a phone that never locked, and
+  // whether the wipe wins that race is a timing accident. Item 7 of the 14-day audit.
+  let settled = opts.settled !== false;
+  const win = {
+    get Fellowship() {
+      return (attempts >= engineAfter) ? { clearCommunityCache: () => { wipes++; } } : {};
+    },
+    get TrinityIdentity() { return { settled, ready: Promise.resolve() }; },
+  };
   const scope = {
     get commLocked() { return lockedNow; },
     window: win,
@@ -217,6 +226,7 @@ function lockEffect({ locked, engineAfter = 0 }) {
     // what the effect re-runs as when commLocked changes — same closure, same wipedForLock
     setLocked: (v) => { if (typeof cleanup === 'function') cleanup(); lockedNow = v; cleanup = run(); attempts++; },
     giveUp: () => timers.forEach(t => t.fn()),
+    settle: () => { settled = true; },
     giveUpMs: () => (timers[0] || {}).ms,
     pollMs: () => 300,
   };
@@ -306,4 +316,47 @@ test('the exemption does NOT widen the wipe’s hole — a church cache with a s
   const left = runWipe(near);
   assert.deepEqual(left, [],
     'the keep-list is matching more than the three prefixes that were argued for, one at a time: ' + left.join(', '));
+});
+
+// ── ITEM 7 (14-day audit, 2026-09-14): THE WIPE FIRES ON A PHONE THAT NEVER LOCKED ─────────────────────
+// `commLocked` is seeded from `lockNow()` at FIRST RENDER. On a "remember me" boot `isLocked()` is
+// `hasEnc() && !sessionMnemonic`, and `sessionMnemonic` is set only after `await rememberedSeed()` — a
+// SecureStorage round trip. So for one render the app believes it is locked, the wipe effect fires, and a
+// member who never saw a PIN screen loses every church cache. Offline, the congregation then paints empty
+// with nothing saying why.
+//
+// ⚠ THIS IS A RACE, WHICH IS WHY A PHONE COULD NOT SETTLE IT. Eight force-stop boots on the Oppo did not
+// reproduce it — that is evidence about one phone's secure-store latency on eight occasions, not about the
+// ordering. Driven here in both directions instead: decisive, and it needs no hardware.
+//
+// ⚠ AND IT CORRECTS bf25f49's COMMIT MESSAGE AND ITS CODE COMMENT, both of which named the SECOND clause
+// (`hasPin() && !myPubkey`). The FIRST clause is the one that fires.
+test('a wipe must NOT run on a lock the app has only GUESSED at', () => {
+  const e = lockEffect({ locked: true, settled: false });   // first render on a remembered boot
+  assert.equal(e.wipes(), 0,
+    'THE WIPE RAN ON A FIRST-RENDER GUESS. On a "stay open" boot isLocked() is true until the secure store ' +
+    'answers, so a member who never locked loses every church cache — and offline the congregation paints ' +
+    'empty with nothing saying why. Whether it fires is a timing accident, which is why eight boots on a ' +
+    'phone proved nothing either way.');
+});
+
+test('…and once identity settles as UNLOCKED, it still never runs', () => {
+  const e = lockEffect({ locked: true, settled: false });
+  e.settle();                 // the secure store answered: the member is remembered, not locked
+  e.setLocked(false);         // …so commLocked clears
+  e.tick(); e.tick();
+  assert.equal(e.wipes(), 0, 'the wipe ran after the app learned the member was never locked');
+});
+
+test('but a GENUINELY locked boot still wipes, once identity has settled', () => {
+  // The other direction, and the one the feature exists for. AUDIT-2026-07-28 F7 was the mirror failure —
+  // the wipe read a first-render value and did NOT run on a real locked boot, leaving 11 church-keyed
+  // caches on a seized phone. Waiting for `settled` must not reintroduce that.
+  const e = lockEffect({ locked: true, settled: false });
+  assert.equal(e.wipes(), 0, 're-anchor: it wiped before settling');
+  e.settle();
+  e.tick();
+  assert.equal(e.wipes(), 1,
+    'A SEIZED, LOCKED PHONE KEEPS EVERY CONGREGATION CACHE. Waiting for the lock to be settled has turned ' +
+    'into never wiping at all, which is the defect this whole effect exists for.');
 });

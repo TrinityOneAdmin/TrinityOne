@@ -12648,5 +12648,8 @@ zoo`.split("\n"));
       return qr.createSvgTag({ cellSize: 4, margin: 2, scalable: true });
     }
   };
-  window.TrinityIdentity.ready = init().catch((e) => console.error("[identity] init failed", e));
+  window.TrinityIdentity.settled = false;
+  window.TrinityIdentity.ready = init().catch((e) => console.error("[identity] init failed", e)).finally(() => {
+    window.TrinityIdentity.settled = true;
+  });
 })();

@@ -92,3 +92,50 @@ test('THE PIN-LOCKED RECOVERY THAT MADE THIS NARROW IS STILL THERE', () => {
   assert.ok(orphan < guardAt,
     'the recovery must be tried BEFORE the refusal, or a recoverable member is refused instead of restored');
 });
+
+// ── ITEM 7's OTHER HALF: `settled` must mean "init finished", whichever way it went ─────────────────────
+// app/app.jsx's locked-boot wipe now refuses to act until `window.TrinityIdentity.settled` is true, because
+// `isLocked()` is `hasEnc() && !sessionMnemonic` and on a "remember me" boot that is true until a
+// SecureStorage round trip completes — so a first-render read destroyed every church cache for a member who
+// never locked. The flag is the load-bearing half of that fix and the harness in locked-boot-wipe.test.mjs
+// STUBS it, so nothing there can see this wiring break. Driven off the shipped bundle here.
+//
+// ⚠ AND IT MUST SETTLE EVEN WHEN init() THREW: a phone whose secure store throws would otherwise leave the
+// flag false for the session and never wipe on a genuinely locked boot — the mirror defect
+// (AUDIT-2026-07-28 F7), and the worse of the two on a seized device.
+// (An earlier version of this note said "this is why it is .finally and not .then". That was WRONG — the
+// `.catch` before it converts the rejection, so both behave identically, and a sabotage swapping them came
+// back green and was right to. The test below pins the BEHAVIOUR, which is what actually matters.)
+function shippedSettle({ fails = false } = {}) {
+  const win = { TrinityIdentity: {} };
+  const tail = SHIP.slice(SHIP.indexOf('window.TrinityIdentity.settled = false;'));
+  const end = tail.indexOf('});') + 3;
+  const src = tail.slice(0, end);
+  const run = new Function('window', 'init', 'console', src + '\nreturn window.TrinityIdentity;');
+  const ID = run(win, () => (fails ? Promise.reject(new Error('secure store threw')) : Promise.resolve()),
+    { error: () => {} });
+  return ID;
+}
+
+test('settled is FALSE until identity has finished deciding', () => {
+  const ID = shippedSettle();
+  assert.equal(ID.settled, false,
+    'IDENTITY REPORTS ITSELF SETTLED BEFORE IT HAS DECIDED ANYTHING. The locked-boot wipe then acts on a ' +
+    'first-render guess, and on a "stay open" boot destroys every church cache for a member who never ' +
+    'locked — offline, the congregation paints empty with nothing saying why.');
+});
+
+test('…and becomes TRUE once it has', async () => {
+  const ID = shippedSettle();
+  await ID.ready;
+  assert.equal(ID.settled, true, 'identity finished and never said so, so the wipe would wait for ever');
+});
+
+test('a secure store that THREW still settles — or a locked phone never wipes at all', async () => {
+  const ID = shippedSettle({ fails: true });
+  await ID.ready;
+  assert.equal(ID.settled, true,
+    'INIT FAILED AND settled STAYED FALSE. On a seized, locked phone whose secure store threw, the wipe now ' +
+    'waits for ever and every congregation cache stays on disk — the mirror of the defect it exists for, ' +
+    'and the worse one.');
+});
