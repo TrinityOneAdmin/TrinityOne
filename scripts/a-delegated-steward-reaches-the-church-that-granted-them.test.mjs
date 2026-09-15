@@ -315,7 +315,10 @@ async function screen(h) {
   });
   win.useStewardStewardedChurches = hookMod.useStewardStewardedChurches;
   const dash = await loadSlices([[DASH_JSX, 'function IdentitySwitcher({', 'IdentitySwitcher']], ['IdentitySwitcher'], {
-    React, window: win, SkBadge: () => null, Icon: () => null, churchHandle: () => '',
+    // useStewNarrow joined IdentitySwitcher on 2026-09-15 (the desktop sidebar's bottom margin must not
+    // leak into the phone header). A slice fixture names every free identifier, so a NEW one is a
+    // ReferenceError here even though the real console has it in scope. Desktop is what this file is about.
+    React, window: win, SkBadge: () => null, Icon: () => null, churchHandle: () => '', useStewNarrow: () => false,
   });
   const props = { church: { name: 'My empty church', npub: 'npub_' + ME }, churchName: 'My empty church', initials: 'ME', onEditName: () => {} };
   let tree = draw(dash.IdentitySwitcher, props);
