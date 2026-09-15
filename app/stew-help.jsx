@@ -70,7 +70,7 @@ function StewardHelp({ onClose, initialId }) {
   const Stepper = window.TextSizeStepper;
   const fs = scale;
   return (
-    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 18, background: 'color-mix(in oklab, var(--ink) 34%, transparent)', backdropFilter: 'blur(3px)', animation: 'lumenFade .18s ease both' }}>
+    <div onClick={onClose} style={{ position: 'fixed', overflowY: 'auto', inset: 0, zIndex: 200, display: 'flex', alignItems: 'safe center', justifyContent: 'center', padding: 18, background: 'color-mix(in oklab, var(--ink) 34%, transparent)', backdropFilter: 'blur(3px)', animation: 'lumenFade .18s ease both' }}>
       <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="Help" tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 640, maxWidth: '100%', maxHeight: '92%', display: 'flex', flexDirection: 'column', borderRadius: 22, background: 'var(--paper)', border: '1px solid var(--line)', boxShadow: '0 24px 70px rgba(0,0,0,.28)', overflow: 'hidden', animation: 'lumenScale .22s cubic-bezier(.2,.8,.3,1.1) both' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '14px 16px 6px' }}>
           {article ? (

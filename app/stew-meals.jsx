@@ -117,7 +117,7 @@ function AnnounceCareModal({ onClose }) {
     catch (e) { setErr((e && e.message) || 'Couldn\u2019t post \u2014 check your connection and try again.'); setBusy(false); }
   };
   return (
-    <div onClick={() => { if (!busy) onClose(); }} style={{ position: 'absolute', inset: 0, zIndex: 96, background: 'rgba(40,32,24,.45)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+    <div onClick={() => { if (!busy) onClose(); }} style={{ position: 'fixed', overflowY: 'auto', inset: 0, zIndex: 96, background: 'rgba(40,32,24,.45)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'safe center', justifyContent: 'center', padding: 24 }}>
       <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="Tell your church about practical care" tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 480, maxWidth: '94%', maxHeight: '86vh', overflowY: 'auto', background: 'var(--surface)', borderRadius: 20, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 22 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 6 }}>
           <div style={{ width: 40, height: 40, borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="heart" size={20} color="currentColor" /></div>
