@@ -36,6 +36,9 @@ import { fnBody, stripComments } from './test-slice.mjs';
 const ROOT = new URL('../', import.meta.url).pathname;
 const tick = () => new Promise(r => setTimeout(r, 0));
 
+// 2026-09-15 (chunk 2): the three writers answer `{ ok, evt, reason }`, so the stub must too — a stub that
+// answers the OLD shape would drive the screen down its failure arm and report a fault that is the stub's.
+const DONE = { ok: true, evt: { id: 'tombstone' } };
 const GROUP = { id: 'g1', name: 'Youth', accent: 'var(--clay)', kind: 'Group' };
 const POST = { id: 'm1', pubkey: 'themhex', handle: 'sam', text: 'call me on 07700 900123', _ts: 1756500000 };
 
@@ -139,7 +142,7 @@ test('while the removal is in flight the room SAYS SO — the whole regression',
   assert.match(busyLine(during), /Removing/,
     'the leader tapped Remove on an abusive post, the menu closed over it, the post stayed exactly where ' +
     'it was, and NOTHING on the screen said the app had heard them — for up to eleven seconds');
-  await r.finish({ id: 'tombstone' });
+  await r.finish(DONE);
   const after = r.draw();
   assert.equal(busyLine(after), '', 'the busy line never clears, so the room now looks permanently stuck');
   assert.deepEqual(r.toasts, ['Message removed'], 'the honest outcome reporting from e06cb36 was lost');
@@ -160,7 +163,7 @@ test('a second tap during those seconds does not publish a second time', async (
   assert.equal(r.calls.unpin, 1,
     'a second tap published a second unpin. Every tap in those eleven seconds was another event on the ' +
     'relay, and the reason people tap again is that the first tap looked like it did nothing');
-  await r.finish({ id: 'tombstone' });
+  await r.finish(DONE);
   assert.deepEqual(r.toasts, ['Unpinned']);
   assert.equal(find(r.draw(), n => n.type === 'button' && n.props.title === 'Unpin')[0].props.disabled, false,
     'the control never becomes usable again — one failed unpin would lock the banner for the session');
@@ -190,7 +193,7 @@ test('the in-bubble Pin and Remove controls follow the busy state, and are relea
     'a moderation publish is in flight and the controls in the message menu are still live — a second tap ' +
     'from here publishes again, which is the regression this file exists for');
 
-  await r.finish({ id: 'tombstone' });
+  await r.finish(DONE);
   const after = modItems(r.draw());
   assert.equal(after.length, 2, 'the bubble menu emptied when the unpin finished');
   assert.ok(after.every(b => b.props.disabled === false),
@@ -199,7 +202,9 @@ test('the in-bubble Pin and Remove controls follow the busy state, and are relea
 });
 
 test('…and a moderation action that FAILED still says so, and lets them try again', async () => {
-  for (const [what, settle] of [['a refusal', (r) => r.finish(null)], ['a thrown error', (r) => r.fail(new Error('timeout'))]]) {
+  for (const [what, settle] of [['a refusal', (r) => r.finish({ ok: false, reason: 'refused' })],
+                                ['a writer that answers nothing at all', (r) => r.finish(null)],
+                                ['a thrown error', (r) => r.fail(new Error('timeout'))]]) {
     const r = room();
     find(r.draw(), n => n.type === 'button' && n.props.title === 'Message actions')[0].props.onClick();
     find(r.draw(), n => n.type === 'button' && texts(n).join(' ').includes('Remove message'))[0].props.onClick();
@@ -213,6 +218,72 @@ test('…and a moderation action that FAILED still says so, and lets them try ag
     find(r.draw(), n => n.type === 'button' && texts(n).join(' ').includes('Remove message'))[0].props.onClick();
     assert.equal(r.calls.hide, 2, `${what}: the leader can never retry — the guard was never released`);
   }
+});
+
+// ── …AND THE OUTCOME THAT IS NEITHER. 2026-09-15, chunk 2. ───────────────────────────────────────────────
+//
+// `failed` above is not "it failed" — read it again: "it's still visible to the group", "it's still pinned".
+// Those are claims about what every other member can see. The publish rejects when a relay REFUSED and when
+// nobody answered inside the ack window, and the second is not a verdict: the tombstone is signed, on the
+// wire, and usually lands a moment later. So the leader who has just hidden a child's phone number is told
+// the post is still up. He leaves it up, or removes it again — and the second removal is a no-op he had no
+// way of knowing was a no-op.
+//
+// CLAUDE.md rule 1. This is the POINT OF USE and it is RENDERED: the room is compiled and driven, and the
+// assertion reads the toast the room produced. Delete the third sentence from the room and every engine test
+// for these writers stays green.
+test('an outcome NOBODY CONFIRMED must not claim the post is still up', async () => {
+  const UNSURE = { ok: false, reason: 'unconfirmed' };
+  const r = room();
+  find(r.draw(), n => n.type === 'button' && n.props.title === 'Message actions')[0].props.onClick();
+  find(r.draw(), n => n.type === 'button' && texts(n).join(' ').includes('Remove message'))[0].props.onClick();
+  await r.finish(UNSURE);
+  assert.equal(r.toasts.length, 1, 'the leader was told nothing at all');
+  assert.ok(!/still visible to the group/.test(r.toasts[0]),
+    'A LEADER WHO HAS JUST REMOVED AN ABUSIVE POST IS TOLD IT IS STILL UP, over a tombstone the relay has ' +
+    'almost certainly taken. He leaves it there, or removes it twice. Shown: ' + r.toasts[0]);
+  assert.match(r.toasts[0], /confirm/i,
+    'nothing on screen says what actually happened — the leader cannot tell a refusal from a slow relay, ' +
+    'and only one of those means the post is still there. Shown: ' + r.toasts[0]);
+  assert.equal(busyLine(r.draw()), '', 'the busy line is stuck on screen after an unconfirmed publish');
+});
+
+test('…and the same for the pin and the banner ✕, which say "still as it was" and "still pinned"', async () => {
+  const UNSURE = { ok: false, reason: 'unconfirmed' };
+
+  const p = room();
+  find(p.draw(), n => n.type === 'button' && n.props.title === 'Message actions')[0].props.onClick();
+  const pin = find(p.draw(), n => n.type === 'button' && texts(n).join(' ').includes('Pin message'));
+  assert.equal(pin.length, 1, 'the Pin control is gone from the actions menu — re-anchor this test');
+  pin[0].props.onClick();
+  await p.finish(UNSURE);
+  assert.equal(p.toasts.length, 1, 'the leader was told nothing at all');
+  assert.ok(!/still as it was/.test(p.toasts[0]),
+    'an unconfirmed pin reported the group unchanged, so a leader pins twice or gives up: ' + p.toasts[0]);
+  assert.match(p.toasts[0], /confirm/i, 'nothing says what happened: ' + p.toasts[0]);
+
+  const u = room({ pinned: { msgId: 'm1', text: 'call me on 07700 900123', by: 'themhex', ts: 1756500000 } });
+  find(u.draw(), n => n.type === 'button' && n.props.title === 'Unpin')[0].props.onClick();
+  await u.finish(UNSURE);
+  assert.equal(u.toasts.length, 1, 'the leader was told nothing at all');
+  assert.ok(!/still pinned/.test(u.toasts[0]),
+    'an unconfirmed unpin reported the post still pinned for everyone: ' + u.toasts[0]);
+  assert.match(u.toasts[0], /confirm/i, 'nothing says what happened: ' + u.toasts[0]);
+});
+
+// ⚠ THE SHAPE IS THE DANGEROUS PART, and this is the row that pins it. `_moderated` used to branch on
+// `evt ? done : failed`. The writers answer an OBJECT now, and an object is ALWAYS truthy — so a room that
+// truth-tests the result toasts "Message removed" over a post that is still there, which is strictly worse
+// than the bug being fixed. Rendered, so nothing here can be satisfied by text in a file that ships
+// unbundled: the room is driven with a FAILURE object and the toast is read out of the tree.
+test('a failure OBJECT is not mistaken for a success — the inversion this shape exists to prevent', async () => {
+  const r = room();
+  find(r.draw(), n => n.type === 'button' && n.props.title === 'Message actions')[0].props.onClick();
+  find(r.draw(), n => n.type === 'button' && texts(n).join(' ').includes('Remove message'))[0].props.onClick();
+  await r.finish({ ok: false, reason: 'refused' });
+  assert.ok(!/Message removed/.test(r.toasts[0]),
+    'THE ROOM TRUTH-TESTS THE RESULT. Every failure is now an object, every object is truthy, so the leader ' +
+    'is told an abusive post was removed when the relay refused outright. Shown: ' + r.toasts[0]);
 });
 
 test('the moderation publishes are BOUNDED in the shipped bundle', () => {

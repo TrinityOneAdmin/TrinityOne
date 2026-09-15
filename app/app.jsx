@@ -801,8 +801,18 @@ function App() {
     if (F && F.leaveMembership) {
       let told = null;
       try { told = await F.leaveMembership(npub); } catch (e) { told = null; }
-      if (!told) {
-        toast('Couldn’t tell your church you’ve left — you’re still a member there. Try again when you have signal.', { error: true });
+      // ⚠ `told.ok`, NEVER `if (told)`. leaveMembership answers with an OBJECT now and an object is always
+      // truthy, so truth-testing it would drop the church from this phone over a tombstone nobody accepted —
+      // the exact optimism audit #6 removed. (Same trap as markSafe in chunk 1.)
+      if (!(told && told.ok)) {
+        // "YOU'RE STILL A MEMBER THERE" IS FALSE IN THE ONE DIRECTION THAT MATTERS. Nobody answering inside
+        // the ack window is not a refusal: the tombstone is signed, on the wire, and the church may already
+        // have honoured it. Telling someone who has chosen to leave that they are still in it — sometimes for
+        // the reasons an unfollow button exists for — is the worst way for this line to be wrong. We still do
+        // NOT drop the church locally, because we cannot confirm it went; leaving again is a no-op if it did.
+        toast(told && told.reason === 'unconfirmed'
+          ? 'We couldn’t confirm your church was told — it may well have been. You’re still following them here; try again in a moment.'
+          : 'Couldn’t tell your church you’ve left — you’re still a member there. Try again when you have signal.', { error: true });
         return false;
       }
     }
@@ -1115,6 +1125,10 @@ function App() {
   const [servReplies, setServReplies] = useA({}); // my replies: { requestId: 'accept'|'decline'|'swap' }
   const [churchEvents, setChurchEvents] = useA([]);
   const [myRsvps, setMyRsvps] = useA({});       // { eventId: 'going'|'maybe'|'no' }
+  // THE LAST RSVP ATTEMPT THAT DID NOT COME BACK CONFIRMED, per event: { verdict, next }. A REF, not state:
+  // it must survive the re-render the subscription causes without causing one of its own, and setRsvp has to
+  // read it synchronously on the very next tap. See setRsvp below for what it is for.
+  const rsvpUnsureRef = useAR({});
   const [openServing, setOpenServing] = useA(servingParam === '1');
   const [servingTab, setServingTab] = useA('serving');   // which Serving tab to land on (e.g. 'care' from the cared-for banner)
   const [careFocus, setCareFocus] = useA(null);          // a care need id to auto-open when Serving → Care opens (deep-link from the banner)
@@ -2124,16 +2138,38 @@ function App() {
     // Priyanka: "It already said You're going. I tapped Going to confirm — and it wiped my answer." She then
     // had to work out for herself that pressing it again put it back. Losing an answer is a fine thing to
     // allow and a terrible thing to do silently, so say what happened.
+    //
+    // ⚠ …AND AFTER A FAILED ATTEMPT THE TOGGLE MUST NOT BE RECOMPUTED FROM `myRsvps`. 2026-09-15, chunk 2.
+    // This is the same complaint as Priyanka's, one turn of the screw worse, and it costs her the answer she
+    // was trying to confirm. She taps Going. It LANDS, but nobody acknowledges inside the ack window, so she
+    // is told it failed. The subscription then echoes the RSVP back and quietly sets myRsvps[event] = 'going'.
+    // She taps the same button again to make sure — and `myRsvps[eventId] === verdict` is now true, so the app
+    // computes a WITHDRAWAL and publishes 'none'. Two taps meaning "yes" and she is marked not going.
+    // So: when the last attempt for THIS event and THIS button did not come back confirmed, REPEAT it rather
+    // than deriving a new meaning from state that attempt may have desynced. Repeating is safe — the doc is
+    // replaceable at a fixed d-tag — and it is the only reading that makes "you can send it again" true.
+    // A DIFFERENT button clears the hold and toggles normally, because that tap says something new.
+    //
+    // ⚠ AND NOTHING RETRIES BY ITSELF. A retry of a toggle is not the same action twice: it recomputes, and
+    // can publish the opposite of what was asked. The member taps; the wording says what the tap will do.
     setRsvp: async (eventId, verdict) => {
       const np = (churches.find(c => c.id === activeChurch) || {}).npub;
-      const cleared = myRsvps[eventId] === verdict;
-      const next = cleared ? null : verdict;
+      const held = rsvpUnsureRef.current[eventId];
+      const repeat = !!held && held.verdict === verdict;
+      const next = repeat ? held.next : (myRsvps[eventId] === verdict ? null : verdict);
+      const cleared = next === null;
       if (!(window.Fellowship && window.Fellowship.setEventRsvp)) return;
       const sent = await window.Fellowship.setEventRsvp(np, eventId, next || 'none');
-      if (!sent) {
-        toast('Couldn’t send your answer — the church hasn’t been told. Try again when you have signal.', { error: true });
+      // `sent.ok`, never `if (sent)` — an object is always truthy and a failure would take the success arm,
+      // recording an answer the church never confirmed. (The markSafe trap, chunk 1.)
+      if (!(sent && sent.ok)) {
+        rsvpUnsureRef.current[eventId] = { verdict, next };   // what this tap MEANT, so the next one repeats it
+        toast(sent && sent.reason === 'unconfirmed'
+          ? 'We couldn’t confirm your answer reached your church — it may well have. Tap the same button again to send it again; it won’t withdraw it.'
+          : 'Couldn’t send your answer — the church hasn’t been told. Try again when you have signal.', { error: true });
         return;
       }
+      delete rsvpUnsureRef.current[eventId];
       setMyRsvps(m => ({ ...m, [eventId]: next }));
       if (cleared) toast('Answer withdrawn — tap again if you meant to keep it');
     },

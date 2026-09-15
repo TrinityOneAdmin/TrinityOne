@@ -1412,7 +1412,17 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
   // apart both read the old `modBusy` and both publish. The ref is written synchronously, so the second tap
   // sees it. (`modBusy` still drives what is on screen and what is disabled.)
   const modBusyRef = useCR(false);
-  const _moderated = (start, busy, done, failed) => {
+  // ── AND A THIRD OUTCOME: THE ONE WE CANNOT CALL EITHER WAY. 2026-09-15, chunk 2. ────────────────────
+  // `failed` here is not "it failed", it is a claim about the GROUP'S SCREEN: "it's still visible to the
+  // group", "it's still pinned". The publish rejects when a relay refused AND when nobody answered inside the
+  // ack window, and the second is not a verdict — the tombstone is signed, on the wire, and usually lands a
+  // moment later. So a leader who has just hidden an abusive post reads that it is still up. He leaves it up,
+  // or removes it again. `unsure` is that case's own sentence, and it must not assert either state.
+  // The three writers now answer `{ ok, evt, reason }`; `r.ok`, never `if (r)` — an object is always truthy,
+  // so truth-testing it would toast "Message removed" over a post that is still there (the markSafe trap,
+  // chunk 1). A thrown error is still `failed`: the writers catch their own, so a throw from here is not a
+  // relay being slow.
+  const _moderated = (start, busy, done, failed, unsure) => {
     if (modBusyRef.current) return;
     modBusyRef.current = true; setModBusy(busy);
     const finish = (msg) => { modBusyRef.current = false; setModBusy(''); ctx.toast(msg); };
@@ -1420,14 +1430,14 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
     // not a microtask later, and a synchronous throw from it has to land in `finish` like any other failure.
     let p; try { p = start(); } catch (e) { finish(failed); return; }
     return Promise.resolve(p)
-      .then(evt => finish(evt ? done : failed))
+      .then(r => finish(r && r.ok ? done : (r && r.reason === 'unconfirmed' ? (unsure || failed) : failed)))
       .catch(() => finish(failed));
   };
-  const doPin = (m) => { setMenuFor(null); _moderated(() => window.Fellowship.pinPost(churchNpub, group.id, m), 'Pinning…', 'Pinned', 'Couldn’t pin that — it’s still as it was.'); };
+  const doPin = (m) => { setMenuFor(null); _moderated(() => window.Fellowship.pinPost(churchNpub, group.id, m), 'Pinning…', 'Pinned', 'Couldn’t pin that — it’s still as it was.', 'Couldn’t confirm that pin — check the group before pinning again.'); };
   // setMenuFor(null) here too: unpin is reachable from the bubble menu as well as the banner ✕, and that
   // path left the menu sitting open over a message whose action was already in flight.
-  const doUnpin = () => { setMenuFor(null); _moderated(() => window.Fellowship.unpin(churchNpub, group.id), 'Unpinning…', 'Unpinned', 'Couldn’t unpin that — it’s still pinned.'); };
-  const doRemove = (m) => { setMenuFor(null); _moderated(() => window.Fellowship.hideMessage(churchNpub, group.id, m.id), 'Removing…', 'Message removed', 'Couldn’t remove that — it’s still visible to the group.'); };
+  const doUnpin = () => { setMenuFor(null); _moderated(() => window.Fellowship.unpin(churchNpub, group.id), 'Unpinning…', 'Unpinned', 'Couldn’t unpin that — it’s still pinned.', 'Couldn’t confirm that — check the group before unpinning again.'); };
+  const doRemove = (m) => { setMenuFor(null); _moderated(() => window.Fellowship.hideMessage(churchNpub, group.id, m.id), 'Removing…', 'Message removed', 'Couldn’t remove that — it’s still visible to the group.', 'Couldn’t confirm that removal — check the group before removing it again.'); };
   const hideSet = hidden || new Set();
   // perf #6: memoize the visible set on [msgs, hidden] so it's a STABLE reference. It was rebuilt every render, and
   // the `bubbles` useMemo below lists it in its deps — so that memo recomputed on EVERY render (incl. each composer

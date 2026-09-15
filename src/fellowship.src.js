@@ -3646,14 +3646,32 @@ window.Fellowship = {
   },
   // leave a church: tombstone the membership event (they vanish from the steward's list unless they
   // have posted). Wired for when an unfollow action exists.
+  //
+  // ── "YOU'RE STILL A MEMBER THERE" WAS FALSE IN THE ONE DIRECTION THAT MATTERS. 2026-09-15, chunk 2. ────
+  // This returned `evt | null` and leaveChurch turned the null into "Couldn't tell your church you've left —
+  // you're still a member there." `_publishAny` throws when nobody acknowledged inside WEDGE_ACK_MS as well
+  // as when a relay refused, and in the first case the tombstone is signed, on the wire, and may already have
+  // been honoured: the church has dropped them and the app tells them it has not. A member who wanted to leave
+  // a church — sometimes for reasons that are the whole point of an unfollow button — is told they are still
+  // in it. NOW: `{ ok, reason }` from the shared `_pubReason`, and the caller says "we couldn't confirm".
+  //
+  // ⚠ EVERY RETURN IS AN OBJECT NOW, INCLUDING THE TWO THAT WERE BARE `return;`. leaveChurch read `if (!told)`
+  // and an object is always truthy, so a half-converted caller would drop the church from the phone over a
+  // tombstone nobody accepted — the exact optimism audit #6 removed. Its one caller now reads `told.ok`, and
+  // a-reply-that-did-not-send-is-not-a-reply.test.mjs fails if a failure ever comes back with `ok` true.
+  // The locked-with-an-unsent-intent path still answers `local: true` alongside `ok: true` (nothing is at the
+  // church to tombstone, so the unfollow is allowed through) — join-while-locked.test.mjs pins that.
+  //
+  // NO RETRY: the tombstone is a replaceable doc at a fixed d-tag, so leaving twice is a no-op — but the
+  // person decides. See the note above the moderation writers for why there is no shared retry helper.
   async leaveMembership(npubOrHex) {
     if (!sk) await window.Fellowship.ready;
-    const cp = toPub(npubOrHex); if (!cp) return;
+    const cp = toPub(npubOrHex); if (!cp) return { ok: false, reason: 'not-sent' };
     if (!sk) {
       // Locked: nothing can be tombstoned. But if all this device ever held for this church was an unsent
       // intent, there is nothing at the church to leave — drop the promise and let the unfollow go through.
-      if (!_joinSent[cp] && _joinIntents.some(i => i.cp === cp)) { _dropJoinIntent(cp); return { local: true }; }
-      return;
+      if (!_joinSent[cp] && _joinIntents.some(i => i.cp === cp)) { _dropJoinIntent(cp); return { ok: true, local: true }; }
+      return { ok: false, reason: 'not-sent' };
     }
     const evt = finalizeEvent({
       kind: 30078, created_at: Math.floor(Date.now() / 1000),
@@ -3662,10 +3680,10 @@ window.Fellowship = {
     // A SEND THAT LANDED NOWHERE MUST NOT COME BACK LOOKING LIKE ONE THAT DID. Audit 2026-09-02 #6.
     // _publishAny THROWS when no relay accepted (and resolves true otherwise), and this swallowed that and
     // returned the event anyway — so every caller read a total failure as a success and said so on screen.
-    try { await _publishAny(window.Fellowship.relays, evt); } catch (e) { return null; }
+    try { await _publishAny(window.Fellowship.relays, evt); } catch (e) { return { ok: false, reason: _pubReason(e) }; }
     _clearJoinSent(cp);   // they have left: the next follow starts from "not yet asked", not from "sent"
     _dropJoinIntent(cp);  // …and no promise to join them survives the leaving
-    return evt;
+    return { ok: true, evt };
   },
 
   // live count of a church's members — matches the steward's rule: distinct people (not the church)
@@ -4594,44 +4612,69 @@ window.Fellowship = {
   // _publishAny raises each relay's give-up to WEDGE_ACK_MS (11s) and then waits on all of them, so a silent
   // relay left the room's "Removing…" line spinning for eleven seconds with the abusive post still on screen.
   // Bounded settles at PUBLISH_TIMEOUT_MS (12s) at worst and, far more importantly, CANNOT sit longer than
-  // that if a socket never settles at all. The outcome the caller sees is unchanged: the event on success,
-  // null on any failure — including the timeout, which is a failure and must read as one.
+  // that if a socket never settles at all. A timeout is a failure and must read as one — but see the note
+  // below on WHICH failure, because that used to be flattened and the room said the wrong thing about it.
   // Callers (CLAUDE.md rule 2 — complete list): app/screens-chat.jsx doPin / doUnpin / doRemove. The console's
   // pin/unpin/hide are window.Steward's own implementations in src/steward.src.js and do not come through
-  // here. unhideMessage has no caller in app/ at all; it is changed with its three siblings so the next one
-  // written does not inherit the unbounded wait.
+  // here. unhideMessage has no caller in app/ at all (app/stew-dashboard.jsx calls window.Steward's); it is
+  // changed with its three siblings so the next one written does not inherit the unbounded wait.
+  //
+  // ── AND THEY MUST NOT ASSERT A STATE THEY CANNOT KNOW. 2026-09-15, chunk 2. ────────────────────────────
+  // All four returned `evt | null`, and the room turned that single `null` into a sentence about the world:
+  // "Couldn't remove that — IT'S STILL VISIBLE TO THE GROUP." `_publishBounded` rejects when a relay refused
+  // AND when nobody answered in time, and the second is not a verdict — the tombstone is signed, on the wire,
+  // and usually lands a moment later. So a leader who has just hidden an abusive post is told it is still up.
+  // He leaves it up, or removes it a second time. (Removing twice is harmless — see below — but being lied to
+  // at that moment is not.)
+  // NOW: `{ ok: true, evt }` or `{ ok: false, reason }`, reason from the shared `_pubReason`.
+  //
+  // ⚠ AN OBJECT, AND EVERY CALLER CHANGED IN THE SAME COMMIT. `_moderated` branched on `evt ? done : failed`,
+  // so ANY truthy failure value — an object OR a string like 'unconfirmed' — would take the SUCCESS arm and
+  // toast "Message removed" over a post that is still there. That is worse than the bug. The object forces
+  // the caller to change, and moderation-does-not-assert-what-it-cannot-know.test.mjs fails if one truth-tests
+  // it. (Same trap, same remedy as markSafe in chunk 1.)
+  //
+  // ⚠ AND NO RETRY. All four write one REPLACEABLE doc at a fixed d-tag, so a second attempt is a no-op — but
+  // a shared "retry on unconfirmed" helper around every writer in this file would be wrong: four writers here
+  // are NOT idempotent, and setEventRsvp is a toggle whose retry reverses the member's own answer. `_pubReason`
+  // is the shared piece; the SENTENCE stays with each writer, because what to say depends on what the document
+  // means. The person decides whether to act again; the wording now lets them.
   async pinPost(churchNpub, groupId, msg) {
     if (!sk) await window.Fellowship.ready;
-    const cp = toPub(churchNpub); if (!cp || !groupId || !msg || !msg.id) return null;
+    const cp = toPub(churchNpub); if (!cp || !groupId || !msg || !msg.id) return { ok: false, reason: 'not-sent' };
     const content = JSON.stringify({ msgId: msg.id, text: msg.text || '', by: msg.pubkey || msg.by || '', ts: msg._ts || msg.ts || Math.floor(Date.now() / 1000) });
     const evt = finalizeEvent(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/pin:' + groupId], ['t', NET], ['t', groupId], ['p', cp]], content }), sk);
-    try { await _publishBounded(window.Fellowship.relays, evt); } catch (e) { console.warn('[fellowship] pinPost failed', e); return null; }
-    return evt;
+    try { await _publishBounded(window.Fellowship.relays, evt); }
+    catch (e) { console.warn('[fellowship] pinPost failed', e); return { ok: false, reason: _pubReason(e) }; }
+    return { ok: true, evt };
   },
   async unpin(churchNpub, groupId) {
     if (!sk) await window.Fellowship.ready;
-    const cp = toPub(churchNpub); if (!cp || !groupId) return null;
+    const cp = toPub(churchNpub); if (!cp || !groupId) return { ok: false, reason: 'not-sent' };
     const evt = finalizeEvent(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/pin:' + groupId], ['t', NET], ['t', groupId], ['p', cp], ['deleted', '1']], content: '' }), sk);
-    try { await _publishBounded(window.Fellowship.relays, evt); } catch (e) { console.warn('[fellowship] unpin failed', e); return null; }
-    return evt;
+    try { await _publishBounded(window.Fellowship.relays, evt); }
+    catch (e) { console.warn('[fellowship] unpin failed', e); return { ok: false, reason: _pubReason(e) }; }
+    return { ok: true, evt };
   },
   async hideMessage(churchNpub, groupId, msgId) {
     if (!sk) await window.Fellowship.ready;
-    const cp = toPub(churchNpub); if (!cp || !msgId) return null;
+    const cp = toPub(churchNpub); if (!cp || !msgId) return { ok: false, reason: 'not-sent' };
     const tags = [['d', 'trinityone/hidden:' + msgId], ['t', NET], ['p', cp]];
     if (groupId) tags.push(['t', groupId]);
     const evt = finalizeEvent(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags, content: JSON.stringify({ groupId: groupId || '' }) }), sk);
-    try { await _publishBounded(window.Fellowship.relays, evt); } catch (e) { console.warn('[fellowship] hideMessage failed', e); return null; }
-    return evt;
+    try { await _publishBounded(window.Fellowship.relays, evt); }
+    catch (e) { console.warn('[fellowship] hideMessage failed', e); return { ok: false, reason: _pubReason(e) }; }
+    return { ok: true, evt };
   },
   async unhideMessage(churchNpub, groupId, msgId) {
     if (!sk) await window.Fellowship.ready;
-    const cp = toPub(churchNpub); if (!cp || !msgId) return null;
+    const cp = toPub(churchNpub); if (!cp || !msgId) return { ok: false, reason: 'not-sent' };
     const tags = [['d', 'trinityone/hidden:' + msgId], ['t', NET], ['p', cp], ['deleted', '1']];
     if (groupId) tags.push(['t', groupId]);
     const evt = finalizeEvent(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags, content: '' }), sk);
-    try { await _publishBounded(window.Fellowship.relays, evt); } catch (e) { console.warn('[fellowship] unhideMessage failed', e); return null; }
-    return evt;
+    try { await _publishBounded(window.Fellowship.relays, evt); }
+    catch (e) { console.warn('[fellowship] unhideMessage failed', e); return { ok: false, reason: _pubReason(e) }; }
+    return { ok: true, evt };
   },
 
   // ── read a church's published GROUP definitions (kind 30078, by the steward console) ──
@@ -6959,16 +7002,32 @@ window.Fellowship = {
     return () => { try { sub.close(); } catch {} };
   },
   // member RSVP to a calendar event — one addressable doc per (member,event), p-tagged to church
+  //
+  // ── THIS WRITER IS IDEMPOTENT. ITS CALLER'S TOGGLE IS NOT. 2026-09-15, chunk 2. ───────────────────────
+  // The verdict arrives already decided and goes to a fixed d-tag (`rsvp:<eventId>`), so writing it twice is
+  // a no-op. What was dishonest was the answer: `evt | null`, and `_publishAny` throws when nobody answered
+  // inside WEDGE_ACK_MS as well as when a relay refused. So a member who tapped "Going" over a slow relay was
+  // told the church had not been told, while it had. Then — the part that costs her her answer — the
+  // subscription echoed the RSVP back, ctx.setRsvp's `myRsvps[eventId] === verdict` became true, and tapping
+  // the same button to make sure computed a WITHDRAWAL. Two taps meaning "yes" leave her marked not going.
+  // NOW: `{ ok, evt, reason }` from the shared `_pubReason`, so the caller can both say the true thing AND
+  // remember what it last tried — see setRsvp in app/app.jsx, which is where the toggle actually lives.
+  //
+  // ⚠ NO RETRY HERE, AND NEVER. A retry of a TOGGLE is not the same action twice: `setRsvp` recomputes the
+  // verdict from state a failure may have desynced, so an automatic second attempt can publish the opposite
+  // of what the member asked for. The person taps again if they want to; the wording now tells them what that
+  // tap will do. (An object, not a truthy string, for the reason in the moderation note above: the one caller
+  // read `if (!sent)` and any truthy failure would have taken the success arm.)
   async setEventRsvp(churchNpub, eventId, verdict) {
     if (!sk) await window.Fellowship.ready;
-    const cp = toPub(churchNpub); if (!cp || !sk) return;
+    const cp = toPub(churchNpub); if (!cp || !sk) return { ok: false, reason: 'not-sent' };
     const content = JSON.stringify({ event: eventId, v: verdict });
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/rsvp:' + eventId], ['t', NET], ['p', cp]], content }, sk);
     // A SEND THAT LANDED NOWHERE MUST NOT COME BACK LOOKING LIKE ONE THAT DID. Audit 2026-09-02 #6.
     // _publishAny THROWS when no relay accepted (and resolves true otherwise), and this swallowed that and
     // returned the event anyway — so every caller read a total failure as a success and said so on screen.
-    try { await _publishAny(window.Fellowship.relays, evt); } catch (e) { return null; }
-    return evt;
+    try { await _publishAny(window.Fellowship.relays, evt); } catch (e) { return { ok: false, reason: _pubReason(e) }; }
+    return { ok: true, evt };
   },
   subscribeMyRsvps(onRsvps) {
     const me = window.Fellowship.myPubkey;
