@@ -612,14 +612,30 @@ const CARE_DRAFT_KEY = 'trinityone.carereq.draft';
 // with no church in it — so one nonce carried across a church switch would overwrite the other church's
 // request. The suffix is never read back for anything but this.
 const _careDraftKey = () => CARE_DRAFT_KEY + '.' + ((window.Fellowship && window.Fellowship.churchPub) || '');
+// ⚠ AND IT EXPIRES. An independent review measured the hole this closes: the tail was dropped only by Cancel,
+// by the backdrop, or by a confirmed send — and Android's BACK button closes the Serving page UNDERNEATH this
+// sheet, so the sheet's own close never runs and the tail survived for ever. Weeks later the member's next,
+// unrelated ask would land at the SAME address and quietly REPLACE a request the care team may already have
+// acted on, with neither side told. The unmount cleanup below is the real fix; this age limit is the
+// belt-and-braces for every other way out nobody has thought of yet — a church switch with the sheet open,
+// the care feature being turned off, a restore. A retry a member makes in the moment is seconds later, never
+// hours, so nothing legitimate is lost by forgetting a stale one.
+const CARE_DRAFT_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 function _careDraftId() {
-  let k = '';
-  try { k = localStorage.getItem(_careDraftKey()) || ''; } catch (e) {}
+  let k = '', raw = '';
+  try { raw = localStorage.getItem(_careDraftKey()) || ''; } catch (e) {}
+  const dot = raw.lastIndexOf('.');
+  if (dot > 0) {
+    const at = Number(raw.slice(dot + 1));
+    // A clock that has stepped BACKWARDS must not make a stale tail look fresh, so an age that is not a
+    // sane positive number is treated as expired rather than trusted.
+    if (Number.isFinite(at) && Date.now() - at >= 0 && Date.now() - at < CARE_DRAFT_MAX_AGE_MS) k = raw.slice(0, dot);
+  }
   if (/^[0-9a-f]{16}$/.test(k)) return k;
   const b = new Uint8Array(8);
   try { crypto.getRandomValues(b); } catch (e) { for (let i = 0; i < 8; i++) b[i] = Math.floor(Math.random() * 256); }
   k = Array.from(b).map(x => x.toString(16).padStart(2, '0')).join('');
-  try { localStorage.setItem(_careDraftKey(), k); } catch (e) {}
+  try { localStorage.setItem(_careDraftKey(), k + '.' + Date.now()); } catch (e) {}
   return k;
 }
 function _clearCareDraft() { try { localStorage.removeItem(_careDraftKey()); } catch (e) {} }
@@ -724,6 +740,12 @@ function AskForHelpForm({ ctx, onClose, onSent }) {
   // A DELIBERATE CLOSE ENDS THIS ASK. Cancel and the backdrop both come through here so that reopening the
   // sheet is a genuinely new request; only being killed by the system keeps the tail alive.
   const _cancel = () => { _clearCareDraft(); onClose(); };
+  // …AND BACK COUNTS AS ONE. Cancel and the backdrop call _cancel; Android's back button does not — it closes
+  // the Serving page this sheet lives inside (window.trinityGoBack in app/app.jsx has no entry for this
+  // sheet), so onClose never fires and the tail used to survive. Unmounting IS the deliberate close, and it
+  // cannot fire when the system kills the app, so the one property worth keeping — a retry after a kill still
+  // replaces rather than duplicates — is untouched. A confirmed send clears the tail before this runs.
+  React.useEffect(() => () => { _clearCareDraft(); }, []);
   // "We couldn't confirm it" is not "it failed". Once we are in that state Send stops being the obvious next
   // tap — the primary action becomes closing the sheet, and re-sending stays reachable but quiet.
   const [held, setHeld] = React.useState(false);

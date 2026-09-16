@@ -197,6 +197,11 @@ function screen({ api, store, openedBy = 'steward', isMinor = false }) {
     tree: () => draw(Host, {}),
     isOpen: () => open,
     reopen: () => { open = true; return draw(Host, {}); },
+    // ANDROID'S BACK BUTTON, WHICH IS NOT A CALL TO onClose. Back closes the Serving PAGE this sheet lives
+    // inside (window.trinityGoBack in app/app.jsx carries no entry for the sheet), so the parent stops
+    // rendering it and the sheet's own close handler never runs. Anything the sheet only does in onClose is
+    // therefore skipped. This is the exact route an independent review measured on 2026-09-16.
+    back: () => { open = false; return draw(Host, {}); },
     async click(label) {
       let tree = draw(Host, {});
       const bs = button(tree, label);
@@ -406,4 +411,69 @@ test('a need the relay REFUSED still falls back to the private request — a ref
   // the question is whether the sheet still reaches for the route that was always safe.
   assert.equal(carereqs(relay.tried).length, 1,
     'a refused public need left the member with nothing at all — the private route must still carry the ask');
+});
+
+// ⚠ THE WAY OUT THAT IS NOT A CLOSE, AND THE SILENT LOSS IT USED TO CAUSE.
+//
+// Measured by an independent review on 2026-09-16, with a control:
+//
+//   dismissed with the sheet's own Close button   2 distinct ids   (the two asks stay separate)
+//   dismissed with ANDROID'S BACK BUTTON          1 id             (the new ask OVERWROTE the old one)
+//
+// Back closes the Serving page underneath this sheet — app/app.jsx's back-button layer list has no entry for
+// the sheet — so onClose never fires and the draft tail survived. And "we couldn't confirm" almost always
+// means the relay DID take it, so request #1 is sitting with the care team, possibly already acted on. Weeks
+// later the same member asks about something else entirely and that text replaces request #1 at the same
+// address, inside the same conversation thread. Neither side is told. That is worse than the duplicate this
+// file exists to prevent: a duplicate is visible and can be tidied up; this destroys an ask somebody is
+// relying on.
+//
+// ⚠ TWO THINGS CLOSE IT, AND ONLY ONE OF THEM CAN BE TESTED HERE. The real fix is an unmount cleanup, so
+// leaving by ANY route ends the ask — but render-jsx-screen.mjs says in as many words that it never runs
+// effect cleanups, so nothing in this file can see it, and a test that cannot fail is worth nothing. What IS
+// testable, and what actually closes the reported harm, is the age limit: a tail older than
+// CARE_DRAFT_MAX_AGE_MS is ignored. The review's scenario is weeks later; a genuine retry is seconds later.
+// The row below drives the age limit through the REAL screen by ageing what is on disk.
+test('a stale draft never attaches a new ask to an old request', async () => {
+  const store = disk();
+  const relay = relayThat('unconfirmed');
+  const h = screen({ api: engine(relay), store });
+  await ask(h);                                   // tap 1 — taken, never acknowledged
+  const first = distinct(carereqs(relay.store));
+  assert.equal(first.length, 1, 'fixture: the first ask should be on the relay');
+
+  // …the member leaves by a route that is not Cancel (Back), so the tail is still on disk. Age it past the
+  // limit, the way weeks of real time would.
+  let aged = 0;
+  for (const k of [...store._map.keys()]) {
+    if (!/carereq\.draft/.test(k)) continue;
+    const raw = String(store._map.get(k)); const dot = raw.lastIndexOf('.');
+    if (dot > 0) { store._map.set(k, raw.slice(0, dot) + '.' + (Date.now() - 7 * 60 * 60 * 1000)); aged++; }
+  }
+  assert.equal(aged, 1,
+    'no draft tail was found on disk to age, so this row is not measuring what it names. Keys seen: ' +
+    JSON.stringify([...store._map.keys()]));
+
+  h.back();
+  h.reopen();
+  await ask(h);
+
+  const ids = distinct(carereqs(relay.store));
+  assert.equal(ids.length, 2,
+    'a NEW ask, made long after the last one, landed at the SAME address and replaced it. The care team may ' +
+    'already have acted on that first request, and nobody is told it has been overwritten. Ids: ' +
+    JSON.stringify(ids));
+  assert.ok(ids.includes(first[0]), 'the FIRST request must still be on the relay, untouched');
+});
+
+test('CONTROL: a retry inside one open sheet is still ONE ask', async () => {
+  // Without this, "always mint a fresh tail" would pass the row above and put the original duplicate back.
+  const relay = relayThat('unconfirmed');
+  const h = screen({ api: engine(relay), store: disk() });
+  await ask(h);
+  await h.click('Send it again');
+  assert.equal(relay.store.length, 2, 'CONTROL: both taps must really have reached the relay, or this row ' +
+    'is satisfied by a sheet that sent nothing');
+  assert.equal(distinct(carereqs(relay.store)).length, 1,
+    'two taps inside one open sheet made two requests again — the fix this file is named for is gone');
 });
