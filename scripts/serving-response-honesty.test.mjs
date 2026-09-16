@@ -97,3 +97,72 @@ test('NO control talks to respondServing directly — they all go through the he
   const helper = fnBody(src, 'function svRespond(', 'svRespond');
   assert.match(helper, /ctx\.respondServing\(/, 're-anchor: the one permitted call is no longer in svRespond');
 });
+
+// ── THE OPPOSITE LIE, AND THIS ONE IS RUN RATHER THAN READ ────────────────────────────────────────────────
+//
+// Added 2026-09-16. `respondToServingRequest` returned `null` for all three failure outcomes at once, so
+// respondServing could only ever say the settled sentence — "you're still shown as not having replied" —
+// over a reply nobody had merely ACKNOWLEDGED. Believing the church never heard, a member arranges cover for
+// a Sunday she is already down for. A wrong failure message sends somebody to redo work already done, which
+// is why it is worse than no message.
+//
+// Answering again is safe, and the wording says so: the verdict arrives already decided and goes to the
+// fixed d-tag `reqreply:<requestId>`, so a second press writes the same answer to the same document. (Unlike
+// setEventRsvp, this is not a toggle and cannot reverse itself — which is why the two sentences differ.)
+//
+// LIFTED AND RUN, never text-matched: app/*.jsx ships unbundled, so `false && ` in front of the new branch
+// would leave every word of it in place and a text assertion would still pass (CLAUDE.md rule 3).
+const respondServing = (outcome) => {
+  const toasts = [];
+  const replies = [];
+  const body = fnBody(APP, 'respondServing: async (item, verdict, swapTo) =>', 'respondServing');
+  const window = { Fellowship: { respondToServingRequest: async () => outcome } };
+  const obj = new Function('churches', 'activeChurch', 'toast', 'window', 'setServReplies',
+    'return ({ ' + body + ' })')(
+    [{ id: 'c1', npub: 'npub1church' }], 'c1',
+    (m, o) => toasts.push({ m: String(m), e: !!(o && o.error) }),
+    window,
+    (f) => replies.push(typeof f === 'function' ? f({}) : f));
+  return { fn: obj.respondServing, toasts, replies };
+};
+const ITEM = { id: 'req-1' };
+
+test('an UNCONFIRMED reply is not reported as "you’re still shown as not having replied"', async () => {
+  const r = respondServing({ ok: false, reason: 'unconfirmed' });
+  const out = await r.fn(ITEM, 'accept', '');
+  assert.equal(out, false, 'an unconfirmed reply must not be reported to the caller as a confirmed send');
+  assert.equal(r.toasts.length, 1, 'nothing was said at all');
+  assert.match(r.toasts[0].m, /couldn’t confirm/i,
+    'a reply nobody answered for is still being called a settled failure, so a member who HAS replied goes ' +
+    'and arranges cover for a Sunday she is already down for');
+  assert.match(r.toasts[0].m, /won’t change what you said/i,
+    'the member is not told that pressing the same button again is safe, which is the only thing that makes ' +
+    '"it may well have" actionable rather than merely worrying');
+});
+
+test('CONTROL: a reply that genuinely never left the phone still says so plainly', async () => {
+  // Without this, "always say we couldn’t confirm" passes the row above — and softening a settled failure is
+  // the direction that leaves a rota relying on an answer the church never received.
+  const r = respondServing({ ok: false, reason: 'not-sent' });
+  await r.fn(ITEM, 'accept', '');
+  assert.match(r.toasts[0].m, /still shown as not having replied/i,
+    'a reply that reached no relay at all is being softened into "it may well have"');
+});
+
+test('CONTROL: an ACCEPTED reply is recorded and says nothing about failure', async () => {
+  const r = respondServing({ ok: true, evt: { id: 'e' } });
+  const out = await r.fn(ITEM, 'accept', '');
+  assert.equal(out, true, 'a reply a relay accepted is being reported as a failure — the opposite lie');
+  assert.equal(r.toasts.filter(t => t.e).length, 0, 'a successful reply toasted an error');
+  assert.deepEqual(r.replies, [{ 'req-1': 'accept' }],
+    'the answer was not recorded on the member’s own screen, so their slot still reads unanswered');
+});
+
+test('⚠ the truthiness trap: a FAILURE OBJECT must not take the success arm', async () => {
+  // respondToServingRequest answers an object now, and an object is always truthy — `if (sent)` would read
+  // every failure as a send. That is the markSafe trap, set three times in this repo already.
+  const r = respondServing({ ok: false, reason: 'refused' });
+  const out = await r.fn(ITEM, 'accept', '');
+  assert.equal(out, false, 'respondServing read a failure OBJECT as a success — it must test `sent.ok`');
+  assert.deepEqual(r.replies, [], 'a refused reply was recorded on the member’s screen as though it had sent');
+});

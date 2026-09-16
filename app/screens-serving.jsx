@@ -368,11 +368,22 @@ function UnavailSheet({ open, onClose, ctx }) {
           ctx.toast(sel.length ? `Marked ${sel.length} ${sel.length === 1 ? 'Sunday' : 'Sundays'} away` : 'Cleared — you’re available again');
           onClose();
         } catch (e) {
-          setErr('That didn’t reach your church, so nothing was saved. ' +
-            // ctx.joinState, NOT ctx.isPending — there is no such field, and reading it gave every member
-            // the connection message even when the real reason was that their church had not admitted them
-            // yet, which is the single most common cause of this failure.
-            ((ctx.joinState && ctx.joinState.isPending) ? 'You’re still waiting to be approved — try again once you’re in.' : 'Check your connection and try again.'));
+          // ⚠ "NOTHING WAS SAVED" IS A CLAIM, AND FOR ONE OF THE THREE OUTCOMES IT IS FALSE.
+          // setUnavailable now attaches `reason` to what it throws (`_pubReason`, the shared classifier).
+          // When nobody ANSWERED, the document is signed and on the wire and usually lands a moment later —
+          // telling a member "nothing was saved" sends them to tell their leader out of band about Sundays
+          // the rota already knows. Re-saving is safe: every save replaces the whole list at the fixed d-tag
+          // `unavail:<me>` and `sel` has not changed, so pressing Save again writes exactly the same dates.
+          // The local mirror is deliberately NOT written on this path, so reopening the sheet asks the church
+          // and shows whatever it really holds — which is the right way for a member to settle it.
+          setErr((e && e.reason === 'unconfirmed')
+            ? 'We couldn’t confirm that reached your church — it may well have. Press Save again to be sure; ' +
+              'it writes the same dates, not extra ones. Or close this and open it again to see what your church now has.'
+            : 'That didn’t reach your church, so nothing was saved. ' +
+              // ctx.joinState, NOT ctx.isPending — there is no such field, and reading it gave every member
+              // the connection message even when the real reason was that their church had not admitted them
+              // yet, which is the single most common cause of this failure.
+              ((ctx.joinState && ctx.joinState.isPending) ? 'You’re still waiting to be approved — try again once you’re in.' : 'Check your connection and try again.'));
           setBusy(false);
         }
       }} disabled={busy || (!sel.length && !had)} style={{ ...svPrimary(), background: (sel.length || had) ? 'var(--clay)' : 'var(--line)', opacity: busy ? 0.6 : 1 }}>

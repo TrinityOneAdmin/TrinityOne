@@ -2168,9 +2168,20 @@ function App() {
       // This fired and forgot, so "Yes, I can serve" was recorded on the member's own screen and nowhere
       // else — the rota keeps showing the slot unfilled and they believe they have answered. Audit #6.
       if (!(window.Fellowship && window.Fellowship.respondToServingRequest)) return false;
+      // ⚠ `sent && sent.ok`, NEVER `if (sent)` — respondToServingRequest answers an OBJECT now and an object
+      // is always truthy, so a plain truthiness test would take the SUCCESS arm on every failure. (The
+      // markSafe trap; it is the reason this line and the engine changed in the same commit.)
+      // AND THE THREE-WAY SPLIT. `null` used to mean all three failures at once, so a member whose reply
+      // nobody had ACKNOWLEDGED was told "you're still shown as not having replied" — and, believing the
+      // church never heard, went and arranged cover for a Sunday she was already down for. Answering again
+      // is safe: the verdict arrives already decided and goes to the fixed d-tag `reqreply:<requestId>`, so
+      // a second press writes the same answer to the same document. (Unlike setEventRsvp, this is not a
+      // toggle and cannot reverse itself.)
       const sent = await window.Fellowship.respondToServingRequest(np, reqId, verdict, swapTo);
-      if (!sent) {
-        toast('Couldn’t send your answer — you’re still shown as not having replied. Try again when you have signal.', { error: true });
+      if (!(sent && sent.ok)) {
+        toast(sent && sent.reason === 'unconfirmed'
+          ? 'We couldn’t confirm your answer reached your church — it may well have. Tap the same button again; it won’t change what you said.'
+          : 'Couldn’t send your answer — you’re still shown as not having replied. Try again when you have signal.', { error: true });
         return false;
       }
       setServReplies(m => ({ ...m, [reqId]: verdict }));

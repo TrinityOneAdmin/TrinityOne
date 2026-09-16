@@ -7030,8 +7030,18 @@ window.Fellowship = {
     // A SEND THAT LANDED NOWHERE MUST NOT COME BACK LOOKING LIKE ONE THAT DID. Audit 2026-09-02 #6.
     // _publishAny THROWS when no relay accepted (and resolves true otherwise), and this swallowed that and
     // returned the event anyway — so every caller read a total failure as a success and said so on screen.
-    try { await _publishAny(window.Fellowship.relays, evt); } catch (e) { return null; }
-    return evt;
+    //
+    // …AND THEN IT TOLD THE MEMBER THE OPPOSITE LIE. 2026-09-16. `null` meant all three failures at once, so
+    // "you're still shown as not having replied" was said over a reply nobody had merely ACKNOWLEDGED — and
+    // the member, believing the church never heard, arranges cover for a Sunday they are already down for.
+    // `{ ok, reason }` now, reason from the shared `_pubReason`, like setEventRsvp beside it.
+    //
+    // ⚠ WHY "ANSWER AGAIN" IS SAFE HERE AND IS NOT SAFE FOR AN RSVP. This is not a toggle: the verdict
+    // arrives already decided and goes to the fixed d-tag `reqreply:<requestId>`, so pressing the same
+    // button again writes the same document with the same answer. It cannot reverse itself the way
+    // setEventRsvp's caller can.
+    try { await _publishAny(window.Fellowship.relays, evt); } catch (e) { return { ok: false, reason: _pubReason(e) }; }
+    return { ok: true, evt };
   },
   // my replies to serving requests (own reqreply docs) -> { requestId: verdict }
   subscribeMyReqReplies(onReplies) {
@@ -7098,7 +7108,13 @@ window.Fellowship = {
     const list = Array.isArray(dates) ? dates : [];
     const content = JSON.stringify({ dates: list });
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/unavail:' + me], ['t', NET], ['p', cp]], content }, sk);
-    await _publishBounded(window.Fellowship.relays, evt);
+    // ⚠ IT STILL THROWS — but the caller must be able to tell "nothing left this phone" from "nobody
+    // answered in time", because the honest sentence is opposite in the two cases. `_publishBounded` rejects
+    // with a bare `Error('timeout')` on the race, which carries neither flag, so `_pubReason` reads it as
+    // `unconfirmed` — which is exactly right: the event is signed and on the wire and often lands a moment
+    // later. Attached rather than returned, so every existing `catch` keeps working unchanged. 2026-09-16.
+    try { await _publishBounded(window.Fellowship.relays, evt); }
+    catch (e) { try { e.reason = _pubReason(e); } catch (x) {} throw e; }
     // Mirror only AFTER the church has it, so the sheet can never show dates the rota does not know about.
     try { localStorage.setItem(UNAVAIL_MIRROR + cp, JSON.stringify(list)); } catch (e) {}
     return evt;

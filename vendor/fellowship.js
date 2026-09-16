@@ -13486,9 +13486,9 @@
       try {
         await _publishAny(window.Fellowship.relays, evt);
       } catch (e) {
-        return null;
+        return { ok: false, reason: _pubReason(e) };
       }
-      return evt;
+      return { ok: true, evt };
     },
     // my replies to serving requests (own reqreply docs) -> { requestId: verdict }
     subscribeMyReqReplies(onReplies) {
@@ -13598,7 +13598,15 @@
       const list = Array.isArray(dates) ? dates : [];
       const content = JSON.stringify({ dates: list });
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", "trinityone/unavail:" + me], ["t", NET], ["p", cp]], content }, sk);
-      await _publishBounded(window.Fellowship.relays, evt);
+      try {
+        await _publishBounded(window.Fellowship.relays, evt);
+      } catch (e) {
+        try {
+          e.reason = _pubReason(e);
+        } catch (x) {
+        }
+        throw e;
+      }
       try {
         localStorage.setItem(UNAVAIL_MIRROR + cp, JSON.stringify(list));
       } catch (e) {
