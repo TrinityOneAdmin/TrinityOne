@@ -5603,7 +5603,7 @@ function DashMembers() {
             The others are consequences a steward meets the first time they happen; this one is invisible until
             a child needs it and there is nobody to receive them. Phrased as who CAN receive a plea and never as
             the only route — a young person can always message the church itself, and the guide says so. */}
-        <DismissibleNote id="safeguarding-intro" icon="shield" tone="sage" style={{ marginBottom: 10, flexShrink: 0 }}><b>Safeguarding.</b> Mark under-18s as <b>Child</b>, and clear only adults already on your church’s cleared-worker list — clearing an adult lets them message a child privately, and your cleared list is also who can receive a request for help from a young person. <StewHelpLink id="console-family-safety" label="What marking and clearing do" /></DismissibleNote>
+        <DismissibleNote id="safeguarding-intro" icon="shield" tone="sage" style={{ marginBottom: 10, flexShrink: 0 }}><b>Safeguarding.</b> Mark under-18s as <b>Child</b>. Clear only adults already on your church’s cleared-worker list: clearing one lets them message a child privately, and your cleared list is also who can receive a young person’s request for help. <StewHelpLink id="console-family-safety" label="What marking and clearing do" /></DismissibleNote>
         {/* THE STATE NOBODY WOULD OTHERWISE SEE. A church that has marked children and cleared nobody has, without
             meaning to, closed the only route a young person has to ask for help here — and the person who could
             fix it in ten seconds is looking at this screen. Not dismissible: it is a description of the church's

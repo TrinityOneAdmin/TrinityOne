@@ -17,6 +17,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { transformSync } from 'esbuild';
 import { fnBody, stripComments } from './test-slice.mjs';
+import { renderMembersPage } from './render-members-page.mjs';
 
 const MEALS = readFileSync(new URL('../app/stew-meals.jsx', import.meta.url), 'utf8');
 const DASH = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
@@ -117,9 +118,19 @@ test('with no children marked, nothing changes at all', () => {
 test('the safeguarding panel explains that the cleared list decides who can help a young person', () => {
   // A steward reading this screen previously had no way to know the list they were editing also decided
   // whether any child in their church could ask for help at all.
-  const src = stripComments(DASH);
-  assert.match(src, /cleared list is also who can receive a request for help from a young person/i,
-    'the panel still describes the cleared list as being about private messages only');
+  //
+  // ⚠ THIS USED TO MATCH THE SOURCE TEXT of app/stew-dashboard.jsx, and it was wrong twice over.
+  //   · CLAUDE.md rule 3: that file ships UNBUNDLED, so `false && ` in front of the note's condition leaves
+  //     every word of it in the file and the regex passes over a screen that draws nothing. The header of
+  //     this very file says it renders rather than matching source; these last two tests did not.
+  //   · It pinned ONE exact 15-word sentence, so it also silently forbade ever shortening the note. When
+  //     the owner asked for it to be shortened on 2026-09-16 this test failed, which is how it was found.
+  // It now reads the RENDERED note, through the same fixture the members-page test uses, so it asserts
+  // what a steward sees. The regex is the fact, not the sentence: any wording carrying it passes.
+  const { text } = renderMembersPage();
+  assert.match(text, /cleared list[^.]{0,90}receive[^.]{0,70}request for help/i,
+    'the Members page no longer says ON SCREEN that the cleared list is who a young person\'s request for ' +
+    'help reaches — it describes that list as being about private messages only. On screen now:\n  ' + text);
 });
 
 test('…and warns when children are marked but nobody is cleared', () => {

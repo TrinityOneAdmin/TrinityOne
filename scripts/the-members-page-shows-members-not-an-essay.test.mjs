@@ -21,7 +21,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { loadScreen, miniReact, find, reads } from './render-jsx-screen.mjs';
+import { loadScreen } from './render-jsx-screen.mjs';
+import { renderMembersPage } from './render-members-page.mjs';
 
 const ROOT = new URL('..', import.meta.url).pathname;
 
@@ -47,51 +48,13 @@ function articleText(id) {
   return out.join(' · ');
 }
 
-// Render DashMembers with a church that HAS members — the note only renders once somebody has joined.
-function renderMembersPage() {
-  const { React, draw } = miniReact();
-  const win = {
-    useStewardMembers: () => [
-      { pubkey: 'aaa', pk: 'aaa', npub: 'npub1aaa', name: 'Ann Brown' },
-      { pubkey: 'bbb', pk: 'bbb', npub: 'npub1bbb', name: 'Ben Cole' },
-      { pubkey: 'ccc', pk: 'ccc', npub: 'npub1ccc', name: 'Cara Dee' },
-    ],
-    useStewardGroups: () => [], useStewardNetworks: () => [], useStewardCategories: () => [],
-    useStewardRosters: () => ({}), useStewardChurch: () => ({ name: 'St X', features: {} }),
-    useStewardMinors: () => new Set(), useStewardApproved: () => new Set(), useStewardGuardians: () => ({}),
-    usePendingJoins: () => [], usePendingGuardians: () => [],
-    Steward: { pubkey: 'zzz' },
-    addEventListener() {}, removeEventListener() {}, dispatchEvent() {},
-    localStorage: { getItem: () => null, setItem() {} },
-  };
-  const base = { React, Icon: () => null, window: win, localStorage: win.localStorage };
+// The fixture moved to ./render-members-page.mjs so child-care-triage-is-separate.test.mjs can assert
+// against the SAME rendered note without importing this file and re-running its tests.
 
-  // THE REAL BANNER COMPONENT, not a stub. It is what decides whether the note appears at all (it hides
-  // itself once dismissed), so stubbing it would let "the note never renders" pass this file.
-  const { DismissibleNote } = loadScreen('app/stew-modal.jsx', ['DismissibleNote'], base);
-  // …wrapped only so the note can be FOUND in the tree. The wrapper adds a marker attribute and changes
-  // nothing else: the real component still decides what it renders.
-  const Tagged = (props) => React.createElement('div', { 'data-note-id': props.id }, DismissibleNote(props));
-
-  // The help link is the one thing this fixture stands in for, because the real one pulls in the whole help
-  // dialog. It records the article id it was ASKED for, which is the only thing asserted about it.
-  const linked = [];
-  const StewHelpLink = ({ id, label }) => { linked.push(id); return React.createElement('span', null, label); };
-
-  const mod = loadScreen('app/stew-dashboard.jsx', ['DashMembers'], {
-    ...base,
-    SkToggle: () => null, SkBadge: () => null, SkConfirm: () => null,
-    SkPill: ({ children }) => React.createElement('span', null, children),
-    DismissibleNote: Tagged, StewHelpLink,
-    useStewDialog: () => ({ current: null }), todayISO: () => '2026-09-15',
-  });
-  const tree = draw(mod.DashMembers, {});
-  const node = find(tree, n => n.props && n.props['data-note-id'] === 'safeguarding-intro')[0];
-  return { node, text: node ? reads(node) : '', linked };
-}
-
-const WORD_BUDGET = 55;   // the note as shipped before this: 99. As it stands now: 47 (measured, not
-                          // estimated — an audit found this comment saying 45 after a rewording added two).
+const WORD_BUDGET = 42;   // the note as shipped before this: 99, then 47. As it stands now: 37 (measured by
+                          // running this file with the budget set to 0 and reading the number back, not
+                          // estimated — an audit once found this comment saying 45 after a rewording added two).
+                          // 37 counts the help-link label too, because that is what a reader reads.
 // AND A FLOOR, WHICH MATTERS MORE THAN THE CEILING. An independent audit cut the note down to
 // "<b>Safeguarding.</b> <StewHelpLink/>" - every safeguarding fact gone, including the one the commit said
 // was deliberately KEPT - and both tests in this file stayed green, because a word budget is an upper bound
