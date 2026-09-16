@@ -2170,7 +2170,8 @@ function App() {
       // rota with no matching request tapped "I'm away", saw the thank-you, and the relay received nothing.
       // The caller cannot know that without an answer, so give it one.
       if (!reqId) { toast('Your leader hasn’t sent a request for this yet — ask them to re-publish the rota.'); return false; }
-      // AWAIT IT, AND SAY SO IF IT DID NOT GO. respondToServingRequest returns null when no relay accepted.
+      // AWAIT IT, AND SAY SO IF IT DID NOT GO. respondToServingRequest answers `{ ok, reason }` (it returned
+      // `null` until 2026-09-16, which is what the next note is about).
       // This fired and forgot, so "Yes, I can serve" was recorded on the member's own screen and nowhere
       // else — the rota keeps showing the slot unfilled and they believe they have answered. Audit #6.
       if (!(window.Fellowship && window.Fellowship.respondToServingRequest)) return false;
