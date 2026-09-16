@@ -70,6 +70,23 @@ const MUST_REMAIN = {
     /clear\w*[^.]{0,90}\bmessage a child\b/i,
   'that the cleared list is who a plea for help reaches':
     /cleared list[^.]{0,90}receive[^.]{0,70}request for help/i,
+  // ⚠ ADDED 2026-09-16, after a merge-gate review got past the two above. It replaced "Clear only adults
+  // already on your church's cleared-worker list" with "Clear adults you trust" — the exact reading
+  // reference/DOMAIN.md warns about — and BOTH tests in this file stayed green, because the first regex is
+  // satisfied by the words that survive ("your CLEARED list is who may MESSAGE A CHILD privately").
+  //
+  // This is the sentence that has to be guarded hardest, and it was the only one with no guard at all.
+  // DOMAIN.md: the merged clearance "is safe ONLY because it now describes a real vetting check rather than
+  // an app convenience", and "⚠ SO THE CLEARING ACT ITSELF IS THE SAFEGUARD". A 37-word draft was refuted on
+  // 2026-09-16 for softening this to "adults your church has already checked", which a steward can satisfy
+  // with "well, we've known him fifteen years". Naming the LIST is the whole point: it either has their name
+  // on it or it does not.
+  //
+  // So this pins the artefact, not the phrasing — any wording is fine as long as it sends the steward to the
+  // cleared-worker list. If that list is ever renamed in the product, change this regex deliberately and say
+  // so in the commit; do not loosen it to make a reword pass.
+  'that you may only clear someone already on the church\'s cleared-worker list (DOMAIN.md: the clearing act itself is the safeguard)':
+    /clear\w*[^.]{0,80}\bcleared-worker list\b/i,
 };
 
 test('the Members safeguarding note is a sentence, not an essay', () => {
