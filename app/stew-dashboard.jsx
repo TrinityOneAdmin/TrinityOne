@@ -138,6 +138,9 @@ const NAV = [
 // With no owned networks it's just the church name button (tap to rename).
 function IdentitySwitcher({ church, churchName, initials, onEditName }) {
   const idv = window.useStewardIdv ? window.useStewardIdv() : 0;
+  // The phone header lays these out with its own `gap`, so the sidebar's bottom margin is pure waste
+  // there — measured at 18px of a 730px screen, below a header block already 309px tall.
+  const narrow = useStewNarrow();
   const stewarded = window.useStewardStewardedChurches ? window.useStewardStewardedChurches() : [];   // churches we steward (delegated)
   const [open, setOpen] = React.useState(false);
   const [, force] = React.useState(0);
@@ -153,7 +156,7 @@ function IdentitySwitcher({ church, churchName, initials, onEditName }) {
   // no other identities (no owned networks, no stewarded churches) → original behaviour (tap to set/rename the church)
   if (!networks.length && !stewarded.length) {
     return (
-      <button onClick={onEditName} title="Set church name" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: 10, borderRadius: 13, border: '1px solid var(--line)', background: 'var(--surface-2)', cursor: 'pointer', marginBottom: 18, textAlign: 'left' }}>
+      <button onClick={onEditName} title="Set church name" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: 10, borderRadius: 13, border: '1px solid var(--line)', background: 'var(--surface-2)', cursor: 'pointer', marginBottom: narrow ? 0 : 18, textAlign: 'left' }}>
         <SkBadge initials={initials} picture={church.picture} size={34} radius={999} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}><span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 14, color: church.name ? 'var(--ink)' : 'var(--ink-3)' }}>{churchName}</span>{church.name ? <Icon name="check" size={12} stroke={3} color="var(--sage)" /> : null}</div>
@@ -164,7 +167,7 @@ function IdentitySwitcher({ church, churchName, initials, onEditName }) {
     );
   }
   return (
-    <div style={{ position: 'relative', marginBottom: 18 }}>
+    <div style={{ position: 'relative', marginBottom: narrow ? 0 : 18 }}>
       <button onClick={() => setOpen(o => !o)} title="Switch between your church, networks, and churches you steward" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: 10, borderRadius: 13, width: '100%', border: '1px solid ' + (offChurch ? 'color-mix(in oklab, var(--clay) 45%, var(--line))' : 'var(--line)'), background: offChurch ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface-2)', cursor: 'pointer', textAlign: 'left' }}>
         <SkBadge initials={initials} picture={offChurch ? '' : church.picture} size={34} radius={999} accent={offChurch ? 'var(--clay)' : undefined} />
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -1516,10 +1519,16 @@ function StewDashboard({ initial = 'overview' }) {
               <Halo size={22} color="var(--ink)" spark="var(--clay)" />
               <span style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 15 }}>Trinity<span style={{ color: 'var(--clay)' }}>One</span></span>
               <div style={{ flex: 1 }} />
+              {/* HELP LIVES IN THIS ROW ON A PHONE, not in a full-width row of its own below the church card.
+                  Measured at 360x730 before this: that row cost 35px of button + 9px of gap + its own 14px
+                  bottom margin, spent on one word, in a header block that was already 309px of a 730px screen
+                  (UI audit 2026-09-15, finding 2). The header row had horizontal space going spare.
+                  `actions` is NOT where it goes: that fragment is shared with the wide layout's topbar, and
+                  the wide sidebar already has its own Help. Same control, same dialog, same accessible name. */}
+              <StewHelpButton compact />
               {actions}
             </div>
             <IdentitySwitcher church={church} churchName={churchName} initials={initials} onEditName={editName} />
-            <StewHelpButton />
             {/* The page heading. Off-screen on a phone — the narrow header has no room for it — but a
                 screen reader still announces which section of the console it has landed in, and the card
                 headings below it now have something to hang from. */}
@@ -2348,18 +2357,47 @@ function NewPostModal({ onClose }) {
   );
 }
 
+// A CARD IN THIS GRID MUST BE ABLE TO SHRINK, AND IT COULD NOT.
+//
+// Measured in Chromium at 360x730 (the Oppo CPH2477's viewport), Overview, before this change:
+//   grid container 336px wide, `1fr 1fr`, gap 10  ->  tracks resolved to 205.09px and 146.64px
+//   the RIGHT column's two cards (Groups, Your relay) ended at x=374 — 14px past the screen, unreachable,
+//   because <main> does not scroll sideways.
+// `1fr` is `minmax(auto, 1fr)`, and that `auto` minimum is the track's largest MIN-CONTENT width. The word
+// "Announcements" cannot be broken, so column 1 demanded 205px, took it, and pushed column 2 off the phone.
+// `minmax(0, 1fr)` removes the floor, so the two tracks are always half the container and the grid can never
+// be wider than the box it sits in. Both halves are needed: the cap alone would simply move the overflow
+// INSIDE the card, so the card gets `minWidth: 0` and the label is allowed to ellipsise.
+//
+// ON A PHONE THE CHEVRON GOES. It is decoration — the whole card is the control (role=button, one onClick)
+// and nothing about what it does changes — and at 163px it was costing 23px of the ~101px the label has to
+// live in, which is the difference between "Announcements" reading in full and reading "Announcemen…".
 function StatCard({ label, value, sub, ic, tint, onClick }) {
   const t = SK_TINT[tint];
+  const narrow = useStewNarrow();
+  const pad = narrow ? 12 : 18, icn = narrow ? 24 : 30;
   return (
-    <div onClick={onClick} role={onClick ? 'button' : undefined} style={{ flex: 1, padding: 18, borderRadius: 16, background: 'var(--surface)', border: '1px solid var(--line)', cursor: onClick ? 'pointer' : 'default', transition: 'box-shadow .12s, transform .12s', textAlign: 'left', boxShadow: onClick ? 'var(--shadow-sm)' : 'none' }}
+    <div onClick={onClick} role={onClick ? 'button' : undefined} style={{ flex: 1, minWidth: 0, padding: pad, borderRadius: 16, background: 'var(--surface)', border: '1px solid var(--line)', cursor: onClick ? 'pointer' : 'default', transition: 'box-shadow .12s, transform .12s', textAlign: 'left', boxShadow: onClick ? 'var(--shadow-sm)' : 'none' }}
       onMouseEnter={onClick ? (e) => { e.currentTarget.style.boxShadow = 'var(--shadow)'; } : undefined}
       onMouseLeave={onClick ? (e) => { e.currentTarget.style.boxShadow = 'var(--shadow-sm)'; } : undefined}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <div style={{ width: 30, height: 30, borderRadius: 9, background: t.bg, color: t.fg, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={ic} size={17} color="currentColor" /></div>
-        <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ink-3)' }}>{label}</span>
-        {onClick ? <Icon name="chevR" size={15} color="var(--ink-3)" style={{ marginLeft: 'auto' }} /> : null}
+      <div style={{ display: 'flex', alignItems: 'center', gap: narrow ? 6 : 8, minWidth: 0 }}>
+        <div style={{ width: icn, height: icn, borderRadius: 9, flexShrink: 0, background: t.bg, color: t.fg, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={ic} size={narrow ? 15 : 17} color="currentColor" /></div>
+        {/* THE ELLIPSIS IS A BACKSTOP AT EVERY WIDTH, and it took two audits to get this right.
+            · Ungated (first attempt) it FIRED on the desktop: at a 960px window "Announcements" had 64px
+              of the 106px it needs and read "Announce…", "Your relay" read "Your rela…".
+            · Phone-only (second attempt) was worse, and worse in a way the test could not see: with
+              `overflow: visible` the desktop label PAINTED OUT OF ITS CARD — measured at 790px,
+              "Announcements" ran 66px past its card's content box, ~34px into the neighbouring card —
+              and `scrollWidth === clientWidth` once overflow is visible, so a truncation check reads
+              clean over it. A second audit caught that.
+            The real cause was neither: it was a FOUR-column grid on a half-screen window. The grid is
+            auto-fit now, so it drops to 3 or 2 columns instead of crushing four, every label fits at
+            every width, and this line fires nowhere — which is what a backstop should do. */}
+        <span style={{ fontSize: narrow ? 11.5 : 12.5, fontWeight: 600, color: 'var(--ink-3)',
+          minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
+        {(onClick && !narrow) ? <Icon name="chevR" size={15} color="var(--ink-3)" style={{ marginLeft: 'auto' }} /> : null}
       </div>
-      <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 28, letterSpacing: '-.6px', marginTop: 12 }}>{value}</div>
+      <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 28, letterSpacing: '-.6px', marginTop: narrow ? 9 : 12 }}>{value}</div>
       <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 2 }}>{sub}</div>
     </div>
   );
@@ -2518,8 +2556,10 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
   const fillStyle = narrow ? {} : { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' };
   const listStyle = narrow ? { display: 'flex', flexDirection: 'column', gap: 10 } : { display: 'flex', flexDirection: 'column', gap: 10, flex: 1, minHeight: 0, overflowY: 'auto' };
 
+  // minmax(0, …), not 1fr — see the note on StatCard. A bare `1fr` let one card's longest word set the
+  // track width and shove the other column 14px off a 360px screen.
   const stat = (
-    <div style={{ display: 'grid', gridTemplateColumns: narrow ? '1fr 1fr' : 'repeat(4, 1fr)', gap: narrow ? 10 : 14 }}>
+    <div style={{ display: 'grid', gridTemplateColumns: narrow ? 'minmax(0, 1fr) minmax(0, 1fr)' : 'repeat(auto-fit, minmax(168px, 1fr))', gap: narrow ? 10 : 14 }}>
       <StatCard label="Members" value={realCount ? String(realCount) : '—'} sub={realCount ? 'invite more' : 'invite your church'} ic="pray" tint="sage" onClick={() => onTab('members')} />
       <StatCard label="Groups" value={String(groups.length)} sub="chat rooms · signed" ic="chat" tint="clay" onClick={() => onTab('groups')} />
       <StatCard label="Announcements" value={stats.announcements ? String(stats.announcements) : '—'} sub="post to everyone" ic="send" tint="gold" onClick={() => (onNewPost ? onNewPost() : onTab('groups'))} />
@@ -5377,7 +5417,7 @@ function DashMembers() {
           {!delegated ? (<React.Fragment>
           <button onClick={() => toggleMinor(m.pubkey)} aria-label={(minorsSet.has(m.pubkey) ? 'Unmark as a child: ' : 'Mark as a child: ') + (nameByPub[m.pubkey] || 'this member')} title={minorsSet.has(m.pubkey) ? 'Unmark as a child' : 'Mark as a child — they’ll only see child-safe groups, and adults can only DM them if cleared for youth'} style={{ border: '1px solid ' + (minorsSet.has(m.pubkey) ? 'color-mix(in oklab, var(--clay) 40%, var(--line))' : 'var(--line)'), background: minorsSet.has(m.pubkey) ? 'color-mix(in oklab, var(--clay) 12%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: minorsSet.has(m.pubkey) ? 'var(--clay-ink)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
             <Icon name="pray" size={14} color="currentColor" /> {minorsSet.has(m.pubkey) ? 'Child ✓' : 'Child'}</button>
-          <button onClick={() => toggleApproved(m.pubkey)} aria-label={(approvedSet.has(m.pubkey) ? 'Remove youth clearance from ' : 'Clear for youth work: ') + (nameByPub[m.pubkey] || 'this member')} title={approvedSet.has(m.pubkey) ? 'Remove youth clearance' : 'Cleared to contact youth — mirror your church’s cleared-worker list. Only cleared adults can DM a child'} style={{ border: '1px solid ' + (approvedSet.has(m.pubkey) ? 'color-mix(in oklab, var(--gold) 45%, var(--line))' : 'var(--line)'), background: approvedSet.has(m.pubkey) ? 'color-mix(in oklab, var(--gold) 14%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: approvedSet.has(m.pubkey) ? '#8a6717' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
+          <button onClick={() => toggleApproved(m.pubkey)} aria-label={(approvedSet.has(m.pubkey) ? 'Remove youth clearance from ' : 'Clear for youth work: ') + (nameByPub[m.pubkey] || 'this member') + (approvedSet.has(m.pubkey) ? '' : ' — this also lets them message a child privately')} title={approvedSet.has(m.pubkey) ? 'Remove youth clearance' : 'Cleared to contact youth — mirror your church’s cleared-worker list. Only cleared adults can DM a child'} style={{ border: '1px solid ' + (approvedSet.has(m.pubkey) ? 'color-mix(in oklab, var(--gold) 45%, var(--line))' : 'var(--line)'), background: approvedSet.has(m.pubkey) ? 'color-mix(in oklab, var(--gold) 14%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: approvedSet.has(m.pubkey) ? '#8a6717' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
             <Icon name="shield" size={14} color="currentColor" /> {approvedSet.has(m.pubkey) ? 'Cleared ✓' : 'Clear for youth'}</button>
           {minorsSet.has(m.pubkey) ? (
             <button onClick={() => setLinkChild(m.pubkey)} title="Link this child to a parent / guardian — they can always reach each other and the parent can collect them at check-in" style={{ border: '1px solid ' + ((guardians[m.pubkey] && guardians[m.pubkey].length) ? 'color-mix(in oklab, var(--sage) 40%, var(--line))' : 'var(--line)'), background: (guardians[m.pubkey] && guardians[m.pubkey].length) ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: 'var(--sage-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
@@ -5546,7 +5586,24 @@ function DashMembers() {
             ) : null}
           </div>
         ) : null}
-        <DismissibleNote id="safeguarding-intro" icon="shield" tone="sage" style={{ marginBottom: 10, flexShrink: 0 }}><b>Safeguarding.</b> Mark under-18s as <b>Child</b> — they’ll only see child-safe groups, and a private message between a child and an adult is blocked unless that adult is <b>cleared for youth</b> (or that adult is the child’s linked <b>parent</b>). Clear only adults on your church’s cleared-worker list. <b>Your cleared list is also who can receive a request for help from a young person</b> — being on the care rota is not enough, and if nobody is cleared, no child in your church can ask for help through the app. This works alongside — not instead of — your safeguarding policy.</DismissibleNote>
+        {/* ONE SENTENCE, AND THE GUIDE. The owner, 2026-09-10: *"we need to cut down on the instructional
+            copy in the ui itself. Use tool tips and help docs for this kind of information imo."* This note was
+            ~90 words and sat between the "N ACTIVE" badge and the first member, so on a 360px phone a steward
+            could not see a single member without scrolling past an essay (UI audit 2026-09-15, finding 4).
+
+            NOTHING WAS DELETED, IT WAS MOVED. All eight facts that came out of here are in the
+            'console-family-safety' guide, and the test asserts that against window.HelpData rather than taking
+            it on trust: mark as Child; child-safe groups only; the blocked child<->adult DM and both of its
+            exemptions; clear only adults already on your own cleared-worker list; that the cleared list IS the
+            route a plea for help takes; that the care rota is not enough; that nobody cleared means no route at
+            all; and that none of this replaces checks, training, supervision or policy.
+
+            WHAT STAYED, AND WHY IT IS THIS RATHER THAN THE OPENING SENTENCE: the two ACTIONS this page is for
+            (mark, clear) and the one consequence the guide itself calls the one most churches do not expect.
+            The others are consequences a steward meets the first time they happen; this one is invisible until
+            a child needs it and there is nobody to receive them. Phrased as who CAN receive a plea and never as
+            the only route — a young person can always message the church itself, and the guide says so. */}
+        <DismissibleNote id="safeguarding-intro" icon="shield" tone="sage" style={{ marginBottom: 10, flexShrink: 0 }}><b>Safeguarding.</b> Mark under-18s as <b>Child</b>. Clear only adults already on your church’s cleared-worker list: clearing one lets them message a child privately, and your cleared list is also who can receive a young person’s request for help. <StewHelpLink id="console-family-safety" label="What marking and clearing do" /></DismissibleNote>
         {/* THE STATE NOBODY WOULD OTHERWISE SEE. A church that has marked children and cleared nobody has, without
             meaning to, closed the only route a young person has to ask for help here — and the person who could
             fix it in ten seconds is looking at this screen. Not dismissible: it is a description of the church's

@@ -36,7 +36,12 @@ async function membersTab({ names = true } = {}) {
     React, CustomEvent, setTimeout, clearTimeout, Promise, Date, Math, JSON, Set, Object, String, Array,
     Panel: (p) => (p && p.children) || null,
     SkPill: (p) => (p && p.children) || null,
+    // StewHelpLink joined DashMembers on 2026-09-15 (the safeguarding note is now one sentence plus a
+    // link to the console-family-safety guide). These fixtures name every free identifier the sliced
+    // function uses, so a NEW one is a ReferenceError here even though the real console has it in scope —
+    // classic scripts share one global. That is the second caller list a change like this has.
     DismissibleNote: (p) => (p && p.children) || null,
+    StewHelpLink: (p) => (p && p.label) || null,
     Icon: (p) => (p && p.children) || null,
     location: { search: '', hostname: 'x' },
     document: { addEventListener() {}, removeEventListener() {}, createElement: () => ({ style: {}, appendChild() {}, remove() {}, click() {} }), body: { appendChild() {}, removeChild() {} } },

@@ -140,7 +140,19 @@ test('CONTROL: a member’s row carries both safeguarding controls, each naming 
   // person; if that regressed, the two tests below would be pressing an unidentifiable control.
   const r = await memberRowFor({});
   assert.equal(r.byLabel('Mark as a child: ').props['aria-label'], 'Mark as a child: ' + NAME);
-  assert.equal(r.byLabel('Clear for youth work: ').props['aria-label'], 'Clear for youth work: ' + NAME);
+  // The contract this line exists for is that the control NAMES THE PERSON, and it still does.
+  // 2026-09-16: the accessible name also carries WHAT THE PRESS GRANTS. reference/DOMAIN.md: "Whatever
+  // screen grants it must say, in words, what it grants — a warden ticking 'cleared for check-in' must
+  // not discover later that they also opened children's chat." The note above the list says so too, but
+  // it is a DismissibleNote: one tap on its × writes trinityone.note.safeguarding-intro and it never
+  // comes back, and a `title` is invisible on a phone — so the label is the only place that cannot be
+  // dismissed. Asserted as prefix + name + consequence rather than loosened to a substring match.
+  const clearLabel = r.byLabel('Clear for youth work: ').props['aria-label'];
+  assert.ok(clearLabel.startsWith('Clear for youth work: ' + NAME),
+    'the clear control no longer names the person it acts on: ' + JSON.stringify(clearLabel));
+  assert.match(clearLabel, /message a child privately/,
+    'the clear control no longer says what pressing it GRANTS, and the only other place that says so is ' +
+    'a note the steward can dismiss for ever: ' + JSON.stringify(clearLabel));
 });
 
 // ── gap 1: the mark control ────────────────────────────────────────────────────────────────────────────────

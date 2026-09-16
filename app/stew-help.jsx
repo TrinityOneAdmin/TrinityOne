@@ -116,15 +116,38 @@ function StewardHelp({ onClose, initialId }) {
   );
 }
 
-// The ONE entry point: a Help button that sits under the identity switcher in both console layouts
-// (desktop sidebar and phone header) and mounts the dialog above.
-function StewHelpButton() {
+// The ONE entry point: a Help button that mounts the dialog above. Two shapes, one control.
+//
+// `compact` IS THE PHONE. On the desktop sidebar this is a labelled row under the identity switcher, which is
+// what it has always been. On a 360px phone that row sat full-width and ALONE between the church card and the
+// nav, and measured 35px of button plus 9px of gap plus its own 14px bottom margin — 58px of a 730px screen
+// spent on one word, in a header that was already eating 309px before any content (UI audit 2026-09-15,
+// finding 2). Compact puts the same button in the header row beside Invite code and New post, where there was
+// horizontal room going spare.
+//
+// WHAT DOES NOT CHANGE: the onClick, the dialog it opens, the `title`, and — load-bearing — the accessible
+// name. It is `aria-label="Help"` in both shapes, because that is the only name a compact icon button has,
+// and scripts/app-boots.test.mjs presses this control by looking that name up.
+//
+// ⚠ 44px, AND THAT NUMBER IS NOT DECORATION. The first version of this shape measured 35 x 31px — shorter
+// than the nav pills the same commit REFUSED to shrink from 32px to 29px on the grounds that a touch target
+// must not get smaller. An audit put those two facts side by side. This repo already has the standard,
+// browser-measured, in scripts/verse-of-the-day-starts-minimised.test.mjs: "under the 44px a thumb needs".
+// Help is the only control that opens the guides, so it meets it. Its three neighbours in that header row
+// (Invite code, New post, the settings avatar) measure 31-32px and are UNCHANGED and pre-existing — they are
+// not this branch's to fix, and they are recorded here so the next person does not have to re-measure.
+function StewHelpButton({ compact = false }) {
   const [open, setOpen] = React.useState(false);
   return (
     <React.Fragment>
-      <button onClick={() => setOpen(true)} aria-label="Help" title="Guides to running your church on TrinityOne" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', cursor: 'pointer', textAlign: 'left', fontWeight: 600, fontSize: 13.5, fontFamily: 'var(--font-ui)', marginBottom: 14 }}>
-        <Icon name="book" size={16} color="var(--ink-3)" /> Help
-      </button>
+      {compact
+        ? <button onClick={() => setOpen(true)} aria-label="Help" title="Guides to running your church on TrinityOne"
+            className="sk-btn sk-btn--ghost" style={{ padding: '8px 10px', fontSize: 13, minHeight: 44, minWidth: 44 }}>
+            <Icon name="book" size={15} color="currentColor" />
+          </button>
+        : <button onClick={() => setOpen(true)} aria-label="Help" title="Guides to running your church on TrinityOne" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', cursor: 'pointer', textAlign: 'left', fontWeight: 600, fontSize: 13.5, fontFamily: 'var(--font-ui)', marginBottom: 14 }}>
+            <Icon name="book" size={16} color="var(--ink-3)" /> Help
+          </button>}
       {open ? <StewardHelp onClose={() => setOpen(false)} /> : null}
     </React.Fragment>
   );
