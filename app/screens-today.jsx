@@ -161,14 +161,28 @@ function CareNeedRow({ need, slots, skips, care, canManage, expanded, onToggle }
 // The person a need is FOR can close the whole thing ("I'm sorted") — not just skip day by day. Without this
 // they must ask a steward to stop the church organising around them, which is the opposite of dignified.
 function CloseMyNeedButton({ need }) {
-  const [state, setState] = React.useState('');   // '' | 'confirm' | 'busy' | 'failed'
+  const [state, setState] = React.useState('');   // '' | 'confirm' | 'busy' | 'refused' | 'not-sent' | 'unsure'
+  // ⚠ ONE MESSAGE FOR THREE DIFFERENT THINGS, AND IT WAS ONLY TRUE FOR ONE OF THEM.
+  // "Your church keeps that with the care team — message them and they'll close it" describes a REFUSAL:
+  // the relay's care: gate, when the church does not let members close their own needs. Said over a close
+  // nobody had merely ACKNOWLEDGED, it sends somebody who has just told their church they are sorted to go
+  // and ask the care team to do a thing that is already done — which is the small indignity this button
+  // exists to remove. closeMyCareNeed answers { ok, reason } now (`_pubReason`), so each gets its own words.
+  // ⚠ `r && r.ok`, never `if (r)`: the failure object is truthy.
   const close = async () => {
     setState('busy');
-    let ok = false;
-    try { ok = await window.Fellowship.closeMyCareNeed(need); } catch (e) {}
-    setState(ok ? '' : 'failed');
+    let r = null;
+    try { r = await window.Fellowship.closeMyCareNeed(need); } catch (e) { r = null; }
+    if (r && r.ok) { setState(''); return; }
+    // A falsy answer — the engine's own guards (no key yet, or a need that is not this member's) and a
+    // thrown error — keeps the wording that shipped before, deliberately: this change splits the three
+    // publish outcomes apart and widens nothing else.
+    setState(!r ? 'refused' : r.reason === 'unconfirmed' ? 'unsure' : r.reason === 'not-sent' ? 'not-sent' : 'refused');
   };
-  if (state === 'failed') return <div style={{ fontSize: 11.5, color: 'var(--clay-deep, #b4462f)', marginTop: 8, lineHeight: 1.45 }}>Couldn’t close it from here — your church keeps that with the care team. Message them and they’ll close it.</div>;
+  const failNote = (t) => <div role="status" style={{ fontSize: 11.5, color: 'var(--clay-deep, #b4462f)', marginTop: 8, lineHeight: 1.45 }}>{t}</div>;
+  if (state === 'unsure') return failNote('We couldn’t confirm that reached your church — it may well have. Close the app and open this again to see; pressing it a second time does no harm.');
+  if (state === 'not-sent') return failNote('That didn’t reach your church, so it’s still open. Try again when you have signal.');
+  if (state === 'refused') return failNote('Couldn’t close it from here — your church keeps that with the care team. Message them and they’ll close it.');
   if (state === 'confirm' || state === 'busy') return (
     <div style={{ marginTop: 9, padding: '10px 12px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
       <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.45, marginBottom: 9 }}>Close this? Your church will stop signing up to help — you can always ask again.</div>

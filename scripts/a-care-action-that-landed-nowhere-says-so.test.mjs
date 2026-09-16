@@ -87,9 +87,11 @@ function runner(name, { publishFails, how }) {
   // reason that has nothing to do with what it is testing. The REAL classifier is injected, never a stub —
   // an injected outcome cannot catch a dead classifier.
   const names  = ['finalizeEvent2', '_publishAny', 'churchRelays', 'window', 'sk', 'pub', 'NET', '_pubReason',
-                  'CAREREQ_D', 'CAREREQSTATUS_D', 'CARESLOT_D', 'CARESKIP_D', 'Date', 'JSON', 'Math', 'console'];
+                  'CAREREQ_D', 'CAREREQSTATUS_D', 'CARESLOT_D', 'CARESKIP_D', 'CARE_D', 'String',
+                  'Date', 'JSON', 'Math', 'console'];
   const values = [finalizeEvent2, _publishAny, churchRelays, window, 'sk-bytes', 'me-pub', 'trinityone', _pubReason,
-                  'carereq:', 'carereqstatus:', 'careslot:', 'careskip:', Date, JSON, Math,
+                  'carereq:', 'carereqstatus:', 'careslot:', 'careskip:', 'care:', String,
+                  Date, JSON, Math,
                   { warn() {} }];   // the real ones log; keep the test output clean
   const obj = new Function(...names, 'return ' + src)(...values);
   return { fn: obj[name], calls };
@@ -101,8 +103,6 @@ const CASES = [
    'the member is shown their request withdrawn while the care team still has it open'],
   ['setCareRequestStatus', ['req-1', 'asker-pub', { status: 'declined' }],
    'the asker is never told what happened, and waits'],
-  ['clearCareSkip',        ['care-1', '2026-09-10'],
-   'the day stays crossed out and nobody brings anything'],
 ];
 
 // ⚠ THESE TWO CHANGED SHAPE ON 2026-09-16, to `{ ok, reason }` — the setEventRsvp shape.
@@ -114,6 +114,12 @@ const REASONED = [
    'the volunteer believes they are bringing a meal and the slot still reads empty'],
   ['clearCareSlot',        ['care-1', '2026-09-10'],
    'the volunteer believes they stood down and is still the only name against that day'],
+  // 2026-09-16, second pair. Both moved for the same reason: their one message was said over all three
+  // outcomes, and for `unconfirmed` it was false in the direction that makes somebody redo something.
+  ['clearCareSkip',        ['care-1', '2026-09-10'],
+   'the day stays crossed out and nobody brings anything'],
+  ['closeMyCareNeed',      [{ id: 'care-1', recipient: 'me-pub' }],
+   'somebody who has told their church they are sorted is sent to ask the care team to close it again'],
 ];
 
 for (const [name, args, why] of CASES) {

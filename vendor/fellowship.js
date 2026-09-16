@@ -12970,11 +12970,11 @@
       if ((need.recipient || "").toLowerCase() !== (pub || "").toLowerCase()) return false;
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", CARE_D + need.id], ["t", NET], ["church", cp], ["deleted", "1"]], content: "" }, sk);
       try {
-        const r = await _publishAny(churchRelays(), evt);
-        return !!r || true;
+        await _publishAny(churchRelays(), evt);
       } catch (e) {
-        return false;
+        return { ok: false, reason: _pubReason(e) };
       }
+      return { ok: true, evt };
     },
     // ── shared care-team↔asker thread for a request (the "Message" action). Sealed to the care team + the asker
     // (+ the church + ourselves), so any care member can join in and the asker can reply. ──
@@ -13212,9 +13212,9 @@
         await _publishAny(churchRelays(), evt);
       } catch (e) {
         console.warn("[fellowship] clear care skip publish failed", e);
-        return null;
+        return { ok: false, reason: _pubReason(e) };
       }
-      return evt;
+      return { ok: true, evt };
     },
     // ── "I'm here to help" availability — a member signals they're willing to help, so people who need
     // something are encouraged to ask. One replaceable doc per member per church (keyed by the member's own

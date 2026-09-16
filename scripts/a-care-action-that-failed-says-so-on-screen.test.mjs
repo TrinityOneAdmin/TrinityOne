@@ -42,8 +42,8 @@ function screen() {
     todayISO: () => '2026-09-04',
     fetch: async () => ({ ok: false, json: async () => ({}) }),
   };
-  const mod = loadScreen('app/screens-today.jsx', ['MyRequestRow', 'CareRequestCard', 'CareNeedRow'], globals);
-  return { draw, ...mod };
+  const mod = loadScreen('app/screens-today.jsx', ['MyRequestRow', 'CareRequestCard', 'CareNeedRow', 'CloseMyNeedButton'], globals);
+  return { draw, ...mod, win };
 }
 
 // Fire a button's onClick and re-draw, the way React would after a setState.
@@ -157,7 +157,7 @@ function runCareAction(name, { lands, reason }) {
   const window = { Fellowship: {
     async fillCareSlot() { return lands ? { ok: true, evt } : fail; },
     async clearCareSlot() { return lands ? { ok: true, evt } : fail; },
-    async clearCareSkip() { return lands ? evt : null; },
+    async clearCareSkip() { return lands ? { ok: true, evt } : fail; },
     // ⚠ markCareSkip DOES NOT MATCH ITS SIBLINGS, and that is the whole reason `skip` was missed. The three
     // above return null when the publish fails, so `if (!r)` is enough for them. This one returns the EVENT
     // either way and puts the outcome on `_delivered` — so on failure it is TRUTHY, and a wrapper copying the
@@ -221,6 +221,9 @@ const UNSURE_CASES = [
    'somebody who did stand down is told they did not, and stops trusting the button'],
   ['setNote',   ['care-1', '2026-09-10', 'gluten free'], /may well have/i,
    'the dietary note is retyped and resent over one that had already arrived'],
+  ['clearSkip', ['care-1', '2026-09-10'],                /won.t do any harm/i,
+   'a recipient who has said "actually, yes please" is told the day is still crossed out, so they ask a ' +
+   'second time for help they have already asked for'],
 ];
 
 for (const [name, args, expect, why] of UNSURE_CASES) {
@@ -301,6 +304,67 @@ test('CONTROL: an accepted note save DOES show “✓ Saved”', async () => {
   const c = needRow(async () => ({ ok: true, evt: { id: 'e' } }));
   await c.save();
   assert.match(c.labels(), /✓ Saved/, 'a note the church accepted no longer confirms itself to the member');
+});
+
+// ── "I'M SORTED — CLOSE THIS": ONE MESSAGE FOR THREE DIFFERENT THINGS ────────────────────────────────────
+//
+// "Your church keeps that with the care team — message them and they'll close it" describes a REFUSAL: the
+// relay's care: gate, when a church does not let members close their own needs. It was said for every
+// failure. Over a close nobody had merely ACKNOWLEDGED, it sends somebody who has just told their church
+// they are sorted to go and ask the care team to do a thing that is already done — which is exactly the
+// small indignity this button was built to remove.
+//
+// Rendered, pressed, and READ: this is the drawn screen, not the source (rule 3).
+function closeBtn(answer) {
+  const s = screen();
+  s.win.Fellowship.closeMyCareNeed = async () => answer;
+  const props = { need: { id: 'care-1', recipient: 'm'.repeat(64) } };
+  let tree = s.draw(s.CloseMyNeedButton, props);
+  const redraw = () => (tree = s.draw(s.CloseMyNeedButton, props));
+  return {
+    press: async (label) => {
+      const b = button(tree, label);
+      assert.ok(b.length, `no "${label}" control — re-anchor this test`);
+      await b[0].props.onClick({ stopPropagation() {} });
+      await new Promise(r => setTimeout(r, 0));
+      return redraw();
+    },
+    reads: () => texts(tree).join(' | '),
+  };
+}
+async function closeAndRead(answer) {
+  const c = closeBtn(answer);
+  await c.press('close this');       // opens the confirmation
+  await c.press('Yes, close it');
+  return c.reads();
+}
+
+test('closing a need: an UNCONFIRMED close does not send the member to the care team', async () => {
+  const t = await closeAndRead({ ok: false, reason: 'unconfirmed' });
+  assert.match(t, /couldn’t confirm/i,
+    'a close nobody answered for is still described as your church refusing it. Read: ' + t);
+  assert.doesNotMatch(t, /message them/i,
+    'somebody who has just said "I\'m sorted" is being told to go and ask the care team to close a need ' +
+    'that is very probably closed already. Read: ' + t);
+});
+
+test('CONTROL: a REFUSED close still says the church keeps that with the care team', async () => {
+  // That sentence is TRUE for a refusal — the relay's care: gate — and it must not be softened away.
+  const t = await closeAndRead({ ok: false, reason: 'refused' });
+  assert.match(t, /message them/i, 'the refusal wording was lost, so a member is told to retry something ' +
+    'their church will never allow from here. Read: ' + t);
+});
+
+test('CONTROL: a close that reached NO relay says it is still open', async () => {
+  const t = await closeAndRead({ ok: false, reason: 'not-sent' });
+  assert.match(t, /still open/i, 'a close that left the phone nowhere is not reported as still open. Read: ' + t);
+});
+
+test('CONTROL: a close a relay ACCEPTED reports no failure at all', async () => {
+  // Without this, "always show an error" passes all three rows above.
+  const t = await closeAndRead({ ok: true, evt: { id: 'e' } });
+  assert.doesNotMatch(t, /couldn’t confirm|message them|still open/i,
+    'a successful close is reporting a failure — the opposite lie. Read: ' + t);
 });
 
 test('…and is NOT rolled back when we simply could not tell', async () => {

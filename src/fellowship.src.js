@@ -6644,7 +6644,16 @@ window.Fellowship = {
     if (!sk || !cp || !need || !need.id) return false;
     if ((need.recipient || '').toLowerCase() !== (pub || '').toLowerCase()) return false;   // only your own
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CARE_D + need.id], ['t', NET], ['church', cp], ['deleted', '1']], content: '' }, sk);
-    try { const r = await _publishAny(churchRelays(), evt); return !!r || true; } catch (e) { return false; }
+    // ⚠ WHICH FAILURE IT WAS DECIDES WHAT THE SCREEN MAY SAY, and this returned a bare `false` for all of
+    // them. The button's one message — "your church keeps that with the care team, message them and they'll
+    // close it" — is only true for a REFUSAL (the relay's care: gate, when the church does not allow members
+    // to close their own needs). Said over a close nobody had acknowledged, it sends somebody who has just
+    // told the church they are sorted to go and ask the care team to do a thing already done.
+    // `{ ok, reason }` now. Fixed d-tag (`care:<need.id>` + deleted), so pressing again is safe.
+    // The `!!r || true` it replaces was always `true` — _publishAny resolves `true` or throws.
+    try { await _publishAny(churchRelays(), evt); }
+    catch (e) { return { ok: false, reason: _pubReason(e) }; }
+    return { ok: true, evt };
   },
   // ── shared care-team↔asker thread for a request (the "Message" action). Sealed to the care team + the asker
   // (+ the church + ourselves), so any care member can join in and the asker can reply. ──
@@ -6848,8 +6857,13 @@ window.Fellowship = {
     // Undoing a skip is the recipient saying "actually, yes please" — if it lands nowhere the day stays
     // crossed out and nobody brings anything. markCareSkip above already reports through `_delivered`;
     // this direction reported nothing at all.
-    try { await _publishAny(churchRelays(), evt); } catch (e) { console.warn('[fellowship] clear care skip publish failed', e); return null; }
-    return evt;
+    // …AND THEN REPORTED ALL THREE FAILURES AS ONE. `{ ok, reason }` now, like its siblings: "that day is
+    // still marked as one to skip" is false over an undo nobody merely acknowledged, and it makes the
+    // recipient ask a second time for help they have already asked for. Fixed d-tag
+    // (`careskip:<careId>:<iso>`), so pressing again replaces the same document and is safe.
+    try { await _publishAny(churchRelays(), evt); }
+    catch (e) { console.warn('[fellowship] clear care skip publish failed', e); return { ok: false, reason: _pubReason(e) }; }
+    return { ok: true, evt };
   },
   // ── "I'm here to help" availability — a member signals they're willing to help, so people who need
   // something are encouraged to ask. One replaceable doc per member per church (keyed by the member's own

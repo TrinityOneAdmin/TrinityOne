@@ -2044,7 +2044,10 @@ function App() {
       // ("Skip") press this button, so it cannot say "they" — to the recipient, they ARE the they.
       skip: (careId, iso, reason, skipEnc, author) => window.Fellowship.markCareSkip(careId, iso, reason, skipEnc, author)
         .then(r => { if (!r || r._delivered === false) toast('That didn’t reach your church — that day may still show as needing someone.', { error: true }); return r; }),
-      clearSkip: (careId, iso) => window.Fellowship.clearCareSkip(careId, iso).then(r => { if (!r) toast('That didn’t reach your church — that day is still marked as one to skip.', { error: true }); return r; }),
+      // `r && r.ok`, never `if (r)` — clearCareSkip answers an object now and an object is always truthy.
+      // Three outcomes: "that day is still marked as one to skip" is false over an undo nobody merely
+      // acknowledged, and it makes the recipient ask again for help they have already asked for.
+      clearSkip: (careId, iso) => window.Fellowship.clearCareSkip(careId, iso).then(r => { if (r && r.ok) return r; toast(r && r.reason === 'unconfirmed' ? 'We couldn’t confirm that reached your church — it may well have. Tap Undo again if the day still shows as skipped; it won’t do any harm.' : 'That didn’t reach your church — that day is still marked as one to skip.', { error: true }); return r; }),
       // "I'm here to help": the list of members who are available, plus this member's own signal actions
       avail: careAvail,
       setAvail: (tags, note) => window.Fellowship.setCareAvail(tags, note).then(r => { if (r) toast('You’re listed — thank you for being ready to help'); return r; }),
