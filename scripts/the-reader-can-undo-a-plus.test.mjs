@@ -544,3 +544,49 @@ test('the + rolls off the end of a BOOK into the next one, exactly as a swipe do
   assert.equal(R.selectionLabel(), 'John 21:20', 'the − must walk back over a book line too');
   assert.deepEqual(R.selectedRows(), [20]);
 });
+
+// ⚠ TWO CHAPTER LINES, NOT ONE — THE DESIGN'S HEADLINE CLAIM, AND IT HAD NO GUARD AT ALL.
+//
+// The carried part is a LIST precisely so the + can be pressed through several chapters. Every other test in
+// this file crosses ONE line, and an independent audit proved that is not enough: it broke stacking two
+// different ways and all sixteen tests still passed.
+//
+//   carried chapters stored newest-first instead of oldest-first   16 pass, 0 fail
+//   the − hands back the FIRST carried chapter, not the most recent 16 pass, 0 fail
+//
+// With either of those, a reader who rolls through two lines gets their verses copied OUT OF ORDER and the −
+// jumps them back to the wrong chapter. The shipped code is right; nothing would have noticed it breaking.
+test('the + stacks across TWO chapter lines, and the − unwinds them one at a time', () => {
+  const R = reader({ start: { book: 43, chap: 1 }, chapters: { 1: 3, 2: 2, 3: 20 } });
+  R.tapVerse(2);
+  R.pressTitled('Add the next verse');            // 1:3
+  R.pressTitled('Add the next verse');            // rolls into chapter 2
+  assert.equal(R.selectionLabel(), 'John 1:2-2:1', 'the first line should carry');
+  R.pressTitled('Add the next verse');            // 2:2
+  R.pressTitled('Add the next verse');            // rolls into chapter 3 — the SECOND line
+  assert.equal(R.selectionLabel(), 'John 1:2-3:1',
+    'a passage across TWO chapter lines must read from where it started to where it now ends — a carried ' +
+    'list stored in the wrong order names the wrong span here');
+  assert.equal(R.chapterHeading(), 'Chapter 3', 'the reader should be looking at the chapter they rolled into');
+
+  // …and the words come out in reading order, which is what a newest-first list would scramble.
+  const copied = R.copyText ? R.copyText() : null;
+  if (copied) {
+    const order = ['1:2', '1:3', '2:1', '2:2', '3:1'].map(r => copied.indexOf(r));
+    assert.deepEqual(order, [...order].sort((a, b) => a - b),
+      'Copy must carry the verses in reading order across both lines; got: ' + copied.slice(0, 160));
+  }
+
+  // The − unwinds ONE line at a time, most recent first. A − that handed back the FIRST carried chapter
+  // would jump the reader two chapters back in a single press.
+  R.pressTitled('Remove the last verse');
+  assert.equal(R.selectionLabel(), 'John 1:2-2:2',
+    'the first − must undo only the most recent roll-over, not the earliest one');
+  assert.equal(R.chapterHeading(), 'Chapter 2', 'and must land the reader in the chapter it just came back to');
+
+  R.pressTitled('Remove the last verse');
+  assert.equal(R.selectionLabel(), 'John 1:2-2:1');
+  R.pressTitled('Remove the last verse');
+  assert.equal(R.selectionLabel(), 'John 1:2-3', 'and the second line unwinds the same way');
+  assert.equal(R.chapterHeading(), 'Chapter 1', 'back where the reader started');
+});
