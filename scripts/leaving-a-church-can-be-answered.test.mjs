@@ -197,6 +197,16 @@ function leavePage({ churchName = 'St Bartholomew-the-Great' } = {}) {
   const strandedWarning = find(closedTree, n => n.props && n.props.role === 'dialog'
     && /^Leave /.test(String(n.props['aria-label'] || ''))).length;
 
+  // …AND THEN OPEN IT AGAIN. The `open &&` guard above only HIDES the warning while the sheet is shut; the
+  // pending choice is still held in state. ChurchSwitcher is mounted for the life of the app (app/app.jsx
+  // toggles `open`, it does not unmount it), so unless the effect CLEARS that choice, the next time the
+  // member opens the church switcher — from the Today pill, minutes later, for something else entirely —
+  // they are met with "Leave <church>?" they never asked for, with the Leave button live.
+  // An independent review deleted `setConfirmLeave(null)` from that effect and ALL EIGHT tests here stayed
+  // green. This is the row that closes that hole; `reopenedWarning` must be 0.
+  const reopenedWarning = find(draw(ChurchSwitcher, props), n => n.props && n.props.role === 'dialog'
+    && /^Leave /.test(String(n.props['aria-label'] || ''))).length;
+
   const { html, nodes } = serialize(tree);
   // The warning, found by the role and label the screen put on it.
   const dlgTid = nodes.findIndex(n => n.props && n.props.role === 'dialog' && /^Leave /.test(String(n.props['aria-label'] || '')));
@@ -208,7 +218,7 @@ function leavePage({ churchName = 'St Bartholomew-the-Great' } = {}) {
     : find(nodes[dlgTid], n => n.type === 'button').map(b => nodes.indexOf(b)).filter(i => i >= 0);
   const answerLabels = answerTids.map(i => texts(nodes[i]).join('').trim());
 
-  return { tapped, strandedWarning, dlgTid, overTid, answerTids, answerLabels, churchName, html:
+  return { tapped, strandedWarning, reopenedWarning, dlgTid, overTid, answerTids, answerLabels, churchName, html:
 `<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <link rel="stylesheet" href="/vendor/fonts/fonts.css">
 <style>${[...readFileSync(join(ROOT, 'index.html'), 'utf8').matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)].map(m => m[1]).join('\n')}
@@ -266,7 +276,12 @@ after(() => { try { ws && ws.close(); } catch {} try { chr && chr.kill('SIGKILL'
 const SIZES = [
   { w: 320, h: 730, name: '320x730, a small phone upright' },
   { w: 360, h: 730, name: '360x730, the Oppo handset upright' },
-  { w: 730, h: 360, name: '730x360, any phone held sideways' },
+  // 328, NOT 360. MEASURED ON THE OPPO (CPH2477) ON 2026-09-16: held sideways the WebView reports
+  // 730 x 328 — the navigation bar takes the rest. The 32px difference is not academic: at 360 the
+  // RestrictedExplainer cap below measures as doing nothing, and at 328 removing it puts that sheet's
+  // heading at y = -5 with nothing to scroll back up with. A test that is kinder than the handset
+  // reports a screen no member has.
+  { w: 730, h: 328, name: '730x328, the Oppo held sideways (measured, not assumed)' },
 ];
 
 const MEASURED = new Map();
@@ -338,6 +353,22 @@ test('closing the church switcher takes the leave warning with it', { timeout: 1
       'the "Leave this church?" warning is still on screen after the switcher closed. It is a sibling of ' +
       'the sheet now, so it has to be gated on `open` and `confirmLeave` has to be cleared when the sheet ' +
       'closes — see the note above useChE in ChurchSwitcher.');
+  });
+
+  test('…and it does not come BACK the next time the member opens the switcher', () => {
+    // THE OTHER HALF OF THAT GUARD, AND IT WAS UNTESTED UNTIL A REVIEW FOUND IT. The `open &&` gate only
+    // hides the warning while the sheet is shut — the pending choice is still sitting in state. The
+    // switcher is mounted for the life of the app (app/app.jsx toggles `open`, it never unmounts it), so
+    // without `setConfirmLeave(null)` in that effect the member opens the church switcher later, for
+    // something else entirely, and is met with "Leave <church>?" they never asked for — with the Leave
+    // button live and nothing explaining where it came from.
+    //
+    // Measured: an independent reviewer deleted that one line and all eight tests in this file stayed
+    // green. Delete it now and this row goes red.
+    assert.equal(PAGE.reopenedWarning, 0,
+      'reopening the church switcher shows a "Leave this church?" warning the member never asked for. ' +
+      'The pending choice from a previous visit was never cleared — see `setConfirmLeave(null)` in the ' +
+      'effect above, and do not remove it as tidying.');
   });
 
 for (let i = 0; i < SIZES.length; i++) {

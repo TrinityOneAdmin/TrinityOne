@@ -231,3 +231,38 @@ test('the verse card does not block tapping the chapter behind it', () => {
   assert.deepEqual(dimmers.map(() => 'a dimming backdrop'), [],
     'a dimming backdrop is back over the chapter. That is the thing "＋ before" existed to work around.');
 });
+
+// ⚠ THE BOUNDS CHECK ON `+`, WHICH NOTHING GUARDED UNTIL A REVIEW SAID SO.
+//
+// `_extend` only appends when the next verse actually exists in the chapter. That check was untested:
+// delete `verses.some(...)` from it and every other test in this file stays green — while the reader would
+// hold a verse number the chapter does not contain. Copy, Share and the reference line would all name it,
+// and `selRow` would be undefined, so Share-note would send an empty verse.
+//
+// With "＋ before" gone, `+` is the card's ONLY growth control, so this matters more than it did, not less.
+//
+// NOTE ON WHAT THIS DOES *NOT* SAY. Today `+` at the last verse of a chapter simply does nothing — an
+// enabled, full-opacity button that ignores the press. The owner has asked for it to roll on into the next
+// chapter instead ("chapter markings are sometimes a pain anyway"), which needs the reader's selection to
+// carry a chapter and is a separate piece of work. This row asserts only the invariant that survives either
+// decision: the selection never contains a verse that is not there.
+test('the + never selects a verse the chapter does not have', () => {
+  const R = reader();
+  R.tapVerse(20);                       // the fixture chapter ends at 20
+  assert.equal(R.selectionLabel(), 'John 3:20', 'fixture: tapping the last verse should select it');
+  R.pressTitled('Add the next verse');
+  assert.equal(R.selectionLabel(), 'John 3:20',
+    'the + ran past the end of the chapter and put verse 21 in the selection. The chapter has no verse 21, ' +
+    'so the reference line names a verse that does not exist and Copy/Share would carry it.');
+  assert.deepEqual(R.selectedRows(), [20],
+    'the painted chapter and the reference line disagree about what is selected');
+
+  // …and the control: one verse from the end it MUST still extend, or a "fix" that disabled the button
+  // near the end of every chapter would pass the row above.
+  const R2 = reader();
+  R2.tapVerse(19);
+  R2.pressTitled('Add the next verse');
+  assert.equal(R2.selectionLabel(), 'John 3:19-20',
+    'the + stopped working one verse from the end — the bounds check is off by one and the reader cannot ' +
+    'reach the last verse of any chapter with it');
+});

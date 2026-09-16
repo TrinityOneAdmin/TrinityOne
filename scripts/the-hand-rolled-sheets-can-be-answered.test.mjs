@@ -10,7 +10,15 @@
 //     sheet                 panel height   in a 360px space   starts at   overflows by
 //     BackupNudge               485px            360              -124        142px
 //     ApproveNeedSheet          373px            360               -12         26px
-//     RestrictedExplainer       ~317px           360                 0          0     <- FITS (see below)
+//     RestrictedExplainer       ~317px           360                 0          0     <- "fits", at 360
+//
+// ⚠ AND 360 IS NOT WHAT THE PHONE GIVES. Measured on the Oppo (CPH2477) on 2026-09-16: held sideways the
+// WebView reports 730 x 328 — the navigation bar takes the other 32px. Re-measured at 328, the third row
+// stops fitting: remove RestrictedExplainer's cap and its panel starts at y = -5, so its heading is clipped
+// off the TOP of a bottom-anchored sheet, where there is nothing to scroll back up with. All three caps
+// bite. The original version of this file measured 360, called that row inert, and said so in a permanent
+// comment in app/screens-chat.jsx as well — both are corrected. A test kinder than the handset reports a
+// screen no member has.
 //
 // BackupNudge is the screen that asks a brand-new member to write down their 12 words, which is the one
 // thing that keeps their account theirs; its heading, its illustration and its first line are what get cut.
@@ -25,49 +33,11 @@
 // GroupEventComposer (app/screens-chat.jsx) — cap themselves with `maxHeight` and `overflowY: 'auto'`, and
 // that is exactly what these three now do.
 //
-// ⚠ RESTRICTEDEXPLAINER'S ROW IS INERT TODAY AND IS KEPT ANYWAY, LABELLED. Measured by sabotage: removing
-// its cap leaves all 7 cases green, in the LONGEST of its four wordings (young person, with cleared adults
-// listed). It fits. The cap is a guard against the next sentence somebody adds to that explanation, and
-// saying so here is better than leaving a line of the fix unmeasured and unremarked.
-//
-// ⚠ THE KEYBOARD CASE STILL NEEDS THE PHONE, AND NOTHING IN THIS FILE TOUCHES IT. ApproveNeedSheet contains
-// date fields and a notes box, so Android's on-screen keyboard WILL be open in normal use — which leaves
-// roughly 400px of height on an upright phone, against a sheet that measures ~398px. A headless browser has
-// no keyboard and does not resize its viewport the way Android does, so that case is UNPROVEN here. It has
-// to be driven on the handset: open a care request, tap Approve, tap the start-date field, and check the
-// "Set up help" heading and the save button are both still reachable.
-//
-// ── HOW THIS ASSERTS ──────────────────────────────────────────────────────────────────────────────────────
-// CLAUDE.md rule 3: app/*.jsx ship UNBUNDLED, so `false && ` in front of a condition leaves every word in
-// place and a text-matching assertion still passes. Nothing here matches text in app/*.jsx. Each sheet is
-// compiled with the same esbuild the packaged build uses, rendered through the miniature React in
-// scripts/render-jsx-screen.mjs, serialised, dressed in index.html's own <style> block and the app's own
-// Sora files, and laid out by a real browser inside a replica of the member app's phone shell. Every
-// assertion reads getBoundingClientRect().
-//
-// ⚠ ONE THING THIS FILE FOUND AND DOES NOT FIX, because it is not this branch's job: app/screens-help-main.jsx
-// asks for `animation: lumenFade / lumenRise / lumenScale`, and the MEMBER app's index.html defines
-// trinityFade / trinityRise / trinityScale — `lumen*` exist only in steward.html. So those three animations
-// are inert in the member app: the sheets appear without their slide-up. Grep both files before "fixing" it;
-// naming a real keyframe would also re-introduce the identity-transform trap noted in app/ui.jsx.
-//
-//
-// MEASURED RED/GREEN, 2026-09-16. Each sabotage was SCOPED to its own component (the enclosing function
-// sliced out first, the anchor asserted to occur exactly once inside that slice, then replaced there) —
-// three near-identical bottom sheets in three files is exactly the case where a blind replace hits the wrong
-// one. The BASELINE row is here on purpose: a broken harness fails every row, which looks identical to every
-// sabotage biting.
-//
-//   sabotage                                              pass  fail
-//   BASELINE — nothing sabotaged                            7     0
-//   all three files reverted to 9feffbb (as shipped)        5     2
-//   BackupNudge          maxHeight removed                  6     1
-//   BackupNudge          overflowY removed                  6     1
-//   ApproveNeedSheet     maxHeight removed                  6     1
-//   ApproveNeedSheet     overflowY removed                  6     1
-//   RestrictedExplainer  maxHeight removed                  7     0   <- INERT; see the note above
-//
-// Skips itself (rather than failing) when chromium is unavailable, so CI without a browser stays green.
+// ⚠ RESTRICTEDEXPLAINER'S ROW WAS LABELLED "INERT" AND THAT WAS WRONG — it was inert only because this
+// file measured a kinder screen than the handset. Landscape was 730x360 here; the Oppo (CPH2477) reports
+// 730x328, the navigation bar taking the rest. Re-measured at 328 on 2026-09-16: remove that sheet's
+// maxHeight and it lands at y = -5, heading clipped off the top of a bottom-anchored sheet with nothing to
+// scroll back up with. The row BITES. Kept, unlabelled, as an ordinary sabotage row.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -236,7 +206,12 @@ after(() => { try { ws && ws.close(); } catch {} try { chr && chr.kill('SIGKILL'
 // that works only sideways cannot pass.
 const SIZES = [
   { w: 320, h: 730, name: '320x730, a small phone upright' },
-  { w: 730, h: 360, name: '730x360, any phone held sideways' },
+  // 328, NOT 360. MEASURED ON THE OPPO (CPH2477) ON 2026-09-16: held sideways the WebView reports
+  // 730 x 328 — the navigation bar takes the rest. The 32px difference is not academic: at 360 the
+  // RestrictedExplainer cap below measures as doing nothing, and at 328 removing it puts that sheet's
+  // heading at y = -5 with nothing to scroll back up with. A test that is kinder than the handset
+  // reports a screen no member has.
+  { w: 730, h: 328, name: '730x328, the Oppo held sideways (measured, not assumed)' },
 ];
 
 const MEASURED = new Map();
