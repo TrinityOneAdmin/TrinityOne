@@ -2369,7 +2369,18 @@ function RestrictedExplainer({ ctx, onClose }) {
   const cleared = ((ctx && ctx.safeguard && ctx.safeguard.approved) || []).length;
   return (
     <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 70, background: 'rgba(34,28,22,.44)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
-      <div onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Why is this restricted?" style={{ width: '100%', maxWidth: 460, background: 'var(--surface)', borderTopLeftRadius: 22, borderTopRightRadius: 22, padding: '20px 18px 26px', fontFamily: 'var(--font-ui)' }}>
+      {/* `maxHeight` + `overflowY`, matching GroupEventComposer in this file. This sheet is hand-rolled
+          rather than a <BottomSheet>, so nothing else caps it — and it is bottom-anchored, so anything that
+          does not fit goes off the TOP where there is nothing to scroll back up with. Unlike its two
+          siblings (BackupNudge, ApproveNeedSheet) it fits UPRIGHT at every width measured.
+          ⚠ THIS COMMENT USED TO SAY THE CAP WAS INERT — "removing it changes nothing on screen right now".
+          THAT WAS WRONG, and wrong because the test measured a kinder screen than the phone has. It used
+          730x360 for landscape; the Oppo (CPH2477) actually reports 730x328, the navigation bar taking the
+          rest. Re-measured at 328 on 2026-09-16: remove this cap and the panel lands at y = -5, so "Messages
+          here are limited" is clipped off the TOP, where a bottom-anchored sheet has nothing to scroll back
+          up with. The cap is load-bearing on any phone held sideways, and there is a named test for it
+          (scripts/the-hand-rolled-sheets-can-be-answered.test.mjs). */}
+      <div onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Why is this restricted?" style={{ width: '100%', maxWidth: 460, maxHeight: '88%', overflowY: 'auto', background: 'var(--surface)', borderTopLeftRadius: 22, borderTopRightRadius: 22, padding: '20px 18px 26px', fontFamily: 'var(--font-ui)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
           <Icon name="lock" size={20} color="var(--clay)" />
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 19 }}>{minor ? 'Your account is set up for a young person' : 'Messages here are limited'}</div>

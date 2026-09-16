@@ -323,12 +323,25 @@ window.HelpCenter = HelpCenter;
 window.BackupWalkthrough = BackupWalkthrough;
 
 // ════ First-run backup nudge (gentle, skippable) ════
+// ⚠ `maxHeight` + `overflowY` ON THE PANEL ARE NOT DECORATION. This sheet does NOT go through <BottomSheet>
+// (app/ui.jsx), which caps and scrolls itself; it is hand-rolled and sits on the bottom edge, so a panel
+// taller than the screen overflows UPWARD and there is nothing to scroll back up with. Measured in Chromium
+// by scripts/the-hand-rolled-sheets-can-be-answered.test.mjs, uncapped, on a phone HELD SIDEWAYS (730x360):
+// the panel was 485px tall in a 360px space and started at y=-124 — the heading, the illustration and the
+// first line of "let's keep you safe" were all off the top of the screen. This is the one screen that asks a
+// new member to write down their 12 words, so losing its opening line is not cosmetic.
+// The cap matches what AskForHelpForm (app/screens-today.jsx) already does.
+//
+// ⚠ AND NOTHING RENDERS THIS COMPONENT TODAY. The `window.BackupNudge = BackupNudge` line below is its only
+// reference anywhere in the repo — it arrived on 2026-06-05 in 2319088 (the Help Center design handoff) and
+// was never wired into app.jsx. So the cap above is correct-if-used and invisible until somebody wires it
+// up. Do not read the measurement above as a description of a screen anyone is looking at.
 function BackupNudge({ open, onClose, onBackup }) {
   if (!open) return null;
   return (
     <div style={{ position: 'absolute', inset: 0, zIndex: 68, display: 'flex', alignItems: 'flex-end', animation: 'lumenFade .3s ease both' }}>
       <div onClick={onClose} style={{ position: 'absolute', inset: 0, background: 'rgba(20,14,8,.42)' }} />
-      <div style={{ position: 'relative', width: '100%', background: 'var(--surface)', borderRadius: '30px 30px 0 0', padding: '12px 24px 26px', boxShadow: '0 -10px 40px rgba(20,14,8,.22)', animation: 'lumenRise .4s cubic-bezier(.32,.72,0,1) both' }}>
+      <div style={{ position: 'relative', width: '100%', maxHeight: '88%', overflowY: 'auto', background: 'var(--surface)', borderRadius: '30px 30px 0 0', padding: '12px 24px 26px', boxShadow: '0 -10px 40px rgba(20,14,8,.22)', animation: 'lumenRise .4s cubic-bezier(.32,.72,0,1) both' }}>
         <div style={{ display: 'flex', justifyContent: 'center', padding: '4px 0 6px' }}>
           <div style={{ width: 38, height: 5, borderRadius: 3, background: 'var(--ink-3)', opacity: .4 }} />
         </div>

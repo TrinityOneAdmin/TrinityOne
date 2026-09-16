@@ -384,7 +384,15 @@ function ApproveNeedSheet({ req, ctx, onClose, onDone }) {
   const lbl = { fontSize: 11.5, fontWeight: 800, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '16px 0 8px' };
   return (
     <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 60, background: 'rgba(34,28,22,.44)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
-      <div onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Set up help" style={{ width: '100%', maxWidth: 460, background: 'var(--surface)', borderRadius: '22px 22px 0 0', border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: '22px 20px calc(24px + env(safe-area-inset-bottom))' }}>
+      {/* ⚠ `maxHeight` + `overflowY` ARE LOAD-BEARING, same as AskForHelpForm below. This sheet is hand-rolled
+          rather than a <BottomSheet>, so nothing caps it: uncapped on a phone HELD SIDEWAYS (730x360) it
+          measured 373px in a 360px space and started at y=-12, with the "Set up help" heading off the top and
+          nothing to scroll back up with (scripts/the-hand-rolled-sheets-can-be-answered.test.mjs).
+          ⚠ AND THE KEYBOARD CASE IS NOT PROVED BY THAT TEST. This form has date fields and a notes box, so
+          the on-screen keyboard WILL be open in normal use, which leaves roughly 400px of height on an
+          upright phone — where the sheet measured 398px. A headless browser has no keyboard; that case needs
+          the handset. */}
+      <div onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Set up help" style={{ width: '100%', maxWidth: 460, maxHeight: '88%', overflowY: 'auto', background: 'var(--surface)', borderRadius: '22px 22px 0 0', border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: '22px 20px calc(24px + env(safe-area-inset-bottom))' }}>
         <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 21 }}>Set up help</div>
         {/* SAY WHAT THIS ACTUALLY OPENS. approveCareRequest mints ONE need, from the FIRST kind
             (`type: req.type` — fellowship.src.js). When requests could only name one kind, naming the request

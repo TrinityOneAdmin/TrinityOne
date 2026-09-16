@@ -109,8 +109,7 @@ function ActionSheet({ label, ctx, open, onClose, onColor, curColor, onNote, onC
       </div>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 16 }}>
         <button onClick={ctx._shrink} disabled={!isMulti} title="Remove the last verse" style={{ width: 38, height: 38, borderRadius: 999, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontSize: 22, fontWeight: 700, lineHeight: 1, cursor: isMulti ? 'pointer' : 'default', opacity: isMulti ? 1 : 0.4, fontFamily: 'var(--font-ui)' }}>−</button>
-        <button onClick={ctx._extendUp} title="Add the verse before" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, height: 38, padding: '0 14px', borderRadius: 999, border: '1px solid var(--clay)', background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)', fontSize: 13.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>＋ before</button>
-        <button onClick={ctx._extend} title="Add the verse after" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, height: 38, padding: '0 14px', borderRadius: 999, border: '1px solid var(--clay)', background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)', fontSize: 13.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>＋ after</button>
+        <button onClick={ctx._extend} title="Add the next verse" style={{ width: 38, height: 38, borderRadius: 999, border: '1px solid var(--clay)', background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)', fontSize: 22, fontWeight: 700, lineHeight: 1, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>+</button>
       </div>
       {!isMulti ? <React.Fragment>
       <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)', marginBottom: 9 }}>Highlight</div>
@@ -815,10 +814,21 @@ function ReadScreen({ ctx }) {
     _copy: () => { try { navigator.clipboard && navigator.clipboard.writeText(rangeRef + ' — ' + selText).catch(() => {}); } catch (e) {} close(); ctx.toast(multi > 1 ? 'Passage copied' : 'Copied to clipboard'); },
     _share: () => { close(); ctx.openShareSheet({ ref: rangeRef, text: selText, version }); },
     _shareNote: () => { close(); ctx.openShareSheet({ type: 'note', ref: labelOf(sel0), text: selRow ? selRow.text : '', version, note: ctx.notes[keyOf(sel0)] || '' }); },
-    // extend/shrink the selection into a contiguous passage from inside the sheet (the backdrop blocks tapping more verses)
+    // GROW THE PASSAGE ONE VERSE AT A TIME, from inside the sheet. There used to be TWO buttons here, "+
+    // before" and "+ after", and the comment that lived on this line said they were needed because "the
+    // backdrop blocks tapping more verses". That backdrop was removed on 2026-06-27 (6958ae7 made this sheet
+    // `passthrough`, so the chapter stays scrollable and every verse stays tappable behind it) and the
+    // comment outlived it by fifteen months. A reader who wants an earlier verse taps it in the text; the
+    // one thing they cannot do by tapping is keep going past the bottom of the screen, so ONE + is enough.
     _extend: () => { const nx = (selSorted[selSorted.length - 1] || 0) + 1; if (verses.some(x => Number(x.v) === nx)) setSel([...sel, nx]); },
-    _extendUp: () => { const nx = (selSorted[0] || 0) - 1; if (nx >= 1 && verses.some(x => Number(x.v) === nx)) setSel([...sel, nx]); },
-    _shrink: () => { const mx = selSorted[selSorted.length - 1]; if (selSorted.length > 1 && mx != null) setSel(sel.filter(x => Number(x) !== mx)); },
+    // ⚠ MINUS TAKES BACK THE LAST VERSE ADDED — NOT THE HIGHEST-NUMBERED ONE, WHICH IS WHAT IT USED TO DO.
+    // `sel` is in TAP ORDER (selectVerse appends, _extend appends); `selSorted` is only for display and for
+    // the reference label. Removing `selSorted`'s maximum meant that a reader who tapped verse 5 and then
+    // tapped verse 4 was left holding VERSE 4 when they pressed minus — minus deleted the verse they had
+    // actually chosen and kept the one they were undoing. Worse, Note / Bookmark / Highlight all attach to
+    // the LOWEST selected verse (`sel0` above), so that reader could annotate verse 4 having never
+    // deliberately selected it. Dropping the last entry of `sel` makes minus a true undo of the last tap.
+    _shrink: () => { if (sel.length > 1 && selSorted.length > 1) setSel(sel.slice(0, -1)); },
   };
 
   // speak the whole chapter, verse by verse — highlights + scrolls to each verse as it's read
