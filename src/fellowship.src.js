@@ -6905,8 +6905,13 @@ window.Fellowship = {
     // RSVP and leaving a church — this pair was not in the plan's list, so batch 15's screen fix ("Couldn't
     // list you") could never fire: the engine handed back the event whatever happened. Found by the
     // pre-merge audit, 2026-09-04.
-    try { await _publishAny(churchRelays(), evt); } catch (e) { console.warn('[fellowship] care avail publish failed', e); return null; }
-    return evt;
+    // …AND NOR IS AN UNANSWERED ONE A FAILURE. 2026-09-16: `null` meant all three at once, so "Couldn't list
+    // you — the church hasn't been told" was said over a listing that had very probably landed. The member
+    // then either gives up on offering, or offers again out of band to a church that already has them.
+    // Fixed d-tag (`careavail:<churchPub>`), so saving again replaces the same document.
+    try { await _publishAny(churchRelays(), evt); }
+    catch (e) { console.warn('[fellowship] care avail publish failed', e); return { ok: false, reason: _pubReason(e) }; }
+    return { ok: true, evt };
   },
   async clearCareAvail() {
     const cp = window.Fellowship.churchPub;
@@ -6914,9 +6919,10 @@ window.Fellowship = {
     if (!sk || !cp) return null;
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CAREAVAIL_D + cp], ['t', NET], ['church', cp], ['deleted', '1']], content: '' }, sk);
     // …and coming OFF the list must not be claimed either: a member who thinks they withdrew, and did not,
-    // is still being counted on.
-    try { await _publishAny(churchRelays(), evt); } catch (e) { return null; }
-    return evt;
+    // is still being counted on. Same three outcomes, same fixed d-tag, so the same safe retry.
+    try { await _publishAny(churchRelays(), evt); }
+    catch (e) { return { ok: false, reason: _pubReason(e) }; }
+    return { ok: true, evt };
   },
   // events posted by a GROUP'S leaders (members the church empowered) — authored by the member, scoped to
   // a group. Client-verified (M2): we only show events from the church, a current roster steward, or an

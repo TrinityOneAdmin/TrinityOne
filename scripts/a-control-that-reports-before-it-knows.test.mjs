@@ -74,8 +74,12 @@ test('the note does NOT say "✓ Saved" when it did not save', async () => {
     'a green "✓ Saved" was drawn beside the error toast saying the same note had not reached the church');
 });
 
+// ⚠ `{ ok: true, evt }`, NOT a bare event. fillCareSlot (which is what care.setNote reaches) answers
+// { ok, reason } since 2026-09-16, so the screen tests `r && r.ok` — a bare `{ id: 'evt' }` has no `.ok`
+// and would be read as a failure. This CONTROL went red the moment the shape changed, which is exactly
+// what a stub that mirrors the real contract is for.
 test('CONTROL: a note that DID save still says so', async () => {
-  const words = await saveTheNote({ id: 'evt' });
+  const words = await saveTheNote({ ok: true, evt: { id: 'evt' } });
   assert.match(words, /✓ Saved/, 'the confirmation was lost — without this control the fix could be "never confirm"');
 });
 
@@ -83,7 +87,7 @@ test('CONTROL: a note that DID save still says so', async () => {
 async function takeMeOff(clearResult) {
   const said = [];
   const care = { myPub: ME, avail: [{ pubkey: ME, tags: ['lifts'], note: '' }],
-                 clearAvail: async () => clearResult, setAvail: async () => ({ id: 'e' }) };
+                 clearAvail: async () => clearResult, setAvail: async () => ({ ok: true, evt: { id: 'e' } }) };
   const ctxToast = (m, o) => said.push({ m: String(m), e: !!(o && o.error) });
   const { draw, CareAvailability, ctx } = memberScreen(care, { toast: ctxToast });
   const props = { ctx: { ...ctx, toast: ctxToast }, part: 'mine' };
@@ -104,8 +108,32 @@ test('coming OFF the list says so when it did not reach the church', async () =>
 });
 
 test('CONTROL: coming off the list quietly when it DID land', async () => {
-  const said = await takeMeOff({ id: 'evt' });
+  const said = await takeMeOff({ ok: true, evt: { id: 'evt' } });
   assert.equal(said.filter(t => t.e).length, 0, 'a successful withdrawal now reports a failure');
+});
+
+// ── AND THE OPPOSITE LIE ON THE SAME CONTROL ─────────────────────────────────────────────────────────────
+// Added 2026-09-16. "The church hasn't been told, so people can still see you as ready to help" was said
+// for all three outcomes. Over a withdrawal that had very probably landed, that leaves somebody who can no
+// longer help believing they are still being counted on — and the only thing they can do about it is press
+// a button that already worked. Re-pressing IS safe (fixed d-tag `careavail:<churchPub>`), and the wording
+// now says so rather than implying the withdrawal failed.
+test('coming OFF the list: "we couldn’t tell" is not reported as "the church hasn’t been told"', async () => {
+  const said = await takeMeOff({ ok: false, reason: 'unconfirmed' });
+  const bad = said.filter(t => t.e);
+  assert.ok(bad.length, 'nothing was said at all on an unconfirmed withdrawal');
+  assert.match(bad[0].m, /couldn’t confirm/i,
+    'a withdrawal nobody answered for is still called a settled failure, so a member who can no longer ' +
+    'help is left believing the church still has them down');
+  assert.doesNotMatch(bad[0].m, /hasn’t been told/i,
+    'it still asserts the church was never told, over a document the church very probably holds');
+});
+
+test('CONTROL: a withdrawal that reached NO relay still says the church has not been told', async () => {
+  // Softening a settled failure is the dangerous direction here: the member stops worrying, and stays listed.
+  const said = await takeMeOff({ ok: false, reason: 'not-sent' });
+  assert.ok(said.some(t => t.e && /hasn’t been told/i.test(t.m)),
+    'a withdrawal that left the phone nowhere is being softened into "it may well have"');
 });
 
 // ── the member's profile, out of the SHIPPED bundle ───────────────────────────────────────────────────────

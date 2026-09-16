@@ -13278,9 +13278,9 @@
         await _publishAny(churchRelays(), evt);
       } catch (e) {
         console.warn("[fellowship] care avail publish failed", e);
-        return null;
+        return { ok: false, reason: _pubReason(e) };
       }
-      return evt;
+      return { ok: true, evt };
     },
     async clearCareAvail() {
       const cp = window.Fellowship.churchPub;
@@ -13295,9 +13295,9 @@
       try {
         await _publishAny(churchRelays(), evt);
       } catch (e) {
-        return null;
+        return { ok: false, reason: _pubReason(e) };
       }
-      return evt;
+      return { ok: true, evt };
     },
     // events posted by a GROUP'S leaders (members the church empowered) — authored by the member, scoped to
     // a group. Client-verified (M2): we only show events from the church, a current roster steward, or an

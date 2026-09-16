@@ -929,10 +929,24 @@ function CareAvailability({ ctx, part }) {
   // DO NOT LIST SOMEBODY WHO WAS NEVER LISTED. Audit 2026-09-02 #18. This flipped the card to "you're
   // listed" before knowing, so a member who volunteered to help and was never recorded believes their
   // church can call on them. `setAvail` already returns the engine's answer (app.jsx:1795).
+  // ⚠ `r && r.ok`, never `if (r)` — setCareAvail answers an OBJECT now, and an object is always truthy, so
+  // a plain truthiness test would flip the card to "you're listed" on every failure. That is the very bug
+  // audit #18 above was written about, re-armed by the shape change.
+  // AND THE THIRD OUTCOME. "The church hasn't been told" was said over a listing nobody had merely
+  // ACKNOWLEDGED, so a member who HAS offered either gives up or offers again out of band to a church that
+  // already has them. On `unconfirmed` the card is left following the relay — setOpt(null) — because that
+  // really is what we know: the relay's own answer is the truth, and claiming either state over it would be
+  // the same guess in a new direction. Saving again is safe (fixed d-tag `careavail:<churchPub>`).
   const save = () => {
     setEditing(false);
     Promise.resolve(care.setAvail ? care.setAvail(tags, note) : null)
-      .then((ok) => { if (ok) setOpt(true); else { setOpt(null); ctx.toast('Couldn’t list you — the church hasn’t been told. Try again when you have signal.', { error: true }); } })
+      .then((r) => {
+        if (r && r.ok) { setOpt(true); return; }
+        setOpt(null);
+        ctx.toast(r && r.reason === 'unconfirmed'
+          ? 'We couldn’t confirm that reached your church — it may well have. If the card still says you’re not listed in a moment, save again; it won’t list you twice.'
+          : 'Couldn’t list you — the church hasn’t been told. Try again when you have signal.', { error: true });
+      })
       .catch(() => { setOpt(null); ctx.toast('Couldn’t list you — the church hasn’t been told.', { error: true }); });
   };
   // COMING OFF THE LIST IS THE SAME PROMISE IN REVERSE, and only the "on" direction was fixed. A member who
@@ -941,7 +955,13 @@ function CareAvailability({ ctx, part }) {
   const turnOff = () => {
     setEditing(false);
     Promise.resolve(care.clearAvail ? care.clearAvail() : null)
-      .then((ok) => { if (ok) { setOpt(false); setTags([]); setNote(''); } else { setOpt(null); ctx.toast('Couldn’t take you off the list — the church hasn’t been told, so people can still see you as ready to help. Try again when you have signal.', { error: true }); } })
+      .then((r) => {
+        if (r && r.ok) { setOpt(false); setTags([]); setNote(''); return; }
+        setOpt(null);
+        ctx.toast(r && r.reason === 'unconfirmed'
+          ? 'We couldn’t confirm that reached your church — it may well have. If the card still says you’re listed in a moment, tap it again; it won’t do any harm.'
+          : 'Couldn’t take you off the list — the church hasn’t been told, so people can still see you as ready to help. Try again when you have signal.', { error: true });
+      })
       .catch(() => { setOpt(null); ctx.toast('Couldn’t take you off the list — the church hasn’t been told.', { error: true }); });
   };
   const showTags = (mine && mine.tags && mine.tags.length) ? mine.tags : tags;

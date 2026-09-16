@@ -2050,8 +2050,11 @@ function App() {
       clearSkip: (careId, iso) => window.Fellowship.clearCareSkip(careId, iso).then(r => { if (r && r.ok) return r; toast(r && r.reason === 'unconfirmed' ? 'We couldn’t confirm that reached your church — it may well have. Tap Undo again if the day still shows as skipped; it won’t do any harm.' : 'That didn’t reach your church — that day is still marked as one to skip.', { error: true }); return r; }),
       // "I'm here to help": the list of members who are available, plus this member's own signal actions
       avail: careAvail,
-      setAvail: (tags, note) => window.Fellowship.setCareAvail(tags, note).then(r => { if (r) toast('You’re listed — thank you for being ready to help'); return r; }),
-      clearAvail: () => window.Fellowship.clearCareAvail().then(r => { if (r) toast('You’re off the list'); return r; }),
+      // `r && r.ok`, never `if (r)` — both answer an object now and an object is always truthy, so a plain
+      // truthiness test would thank a member for a listing the church never received. The failure wording
+      // lives on the card in app/screens-today.jsx (CareAvailability), which is where a member is looking.
+      setAvail: (tags, note) => window.Fellowship.setCareAvail(tags, note).then(r => { if (r && r.ok) toast('You’re listed — thank you for being ready to help'); return r; }),
+      clearAvail: () => window.Fellowship.clearCareAvail().then(r => { if (r && r.ok) toast('You’re off the list'); return r; }),
     },
     // safeguarding: this member's child status + whether a DM with a given peer is permitted (relay-enforced too)
     safeguard,
