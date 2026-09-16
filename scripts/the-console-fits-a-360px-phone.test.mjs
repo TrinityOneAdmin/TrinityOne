@@ -167,12 +167,29 @@ test('the console reached its dashboard at 360x730 — without which nothing bel
   });
 
 // The four Overview stat-card labels and whether each one fits the box it was given.
+//
+// ⚠ TWO DIFFERENT FAILURES, AND `scrollWidth > clientWidth` ONLY SEES ONE. With `overflow: hidden` a label
+// that does not fit is TRUNCATED and scrollWidth exceeds clientWidth. With `overflow: visible` the same
+// label simply PAINTS OUT OF ITS CARD, over the neighbour — and scrollWidth then EQUALS clientWidth, so a
+// truncation check reads perfectly clean over it. A phone-only ellipsis shipped on this branch produced
+// exactly that at 790px ("Announcements" ran 66px past its card, ~34px into the next one) and an audit had
+// to find it because this file could not. So measure BOTH: truncated, and spilling past the card's own box.
 const CARD_LABELS = `(() => {
   const out = [];
   for (const el of document.querySelectorAll('main span')) {
     const t = (el.textContent || '').trim();
     if (!/^(Members|Groups|Announcements|Your relay)$/.test(t)) continue;
-    out.push({ label: t, needs: el.scrollWidth, has: el.clientWidth });
+    const r = el.getBoundingClientRect();
+    // the card is the nearest ancestor with a border — walk up from the label's flex row
+    let card = el.parentElement;
+    while (card && getComputedStyle(card).borderTopWidth === '0px' && card.tagName !== 'MAIN') card = card.parentElement;
+    const cs = card ? getComputedStyle(card) : null;
+    const cardRight = card ? card.getBoundingClientRect().right - parseFloat(cs.borderRightWidth || 0) - parseFloat(cs.paddingRight || 0) : null;
+    out.push({
+      label: t, needs: el.scrollWidth, has: el.clientWidth,
+      spillsPastCard: cardRight === null ? null : Math.round(Math.max(0, r.right - cardRight)),
+      lines: Math.round(r.height),
+    });
   }
   return JSON.stringify(out);
 })()`;
@@ -202,6 +219,8 @@ test('nothing on Overview is cut off by the right edge of the phone',
     // the off-screen assertion while still failing the steward.
     const cut = cards.filter(c => c.needs > c.has + 1);
     assert.deepEqual(cut, [], 'an Overview card label is truncated rather than laid out: ' + JSON.stringify(cut));
+    const spill = cards.filter(c => c.spillsPastCard > 1);
+    assert.deepEqual(spill, [], 'an Overview card label is painting outside its own card: ' + JSON.stringify(spill));
   });
 
 test('the same cards are not truncated on a desktop console', { skip: !CHROME ? 'no chromium' : false, timeout: 240000 }, async () => {
@@ -219,6 +238,10 @@ test('the same cards are not truncated on a desktop console', { skip: !CHROME ? 
       assert.equal(cards.length, 4, `at ${w}px Overview shows ${cards.length} of its four stat cards`);
       const cut = cards.filter(c => c.needs > c.has + 1);
       assert.deepEqual(cut, [], `at a ${w}px console window an Overview card label is cut short: ` + JSON.stringify(cut));
+      const spill = cards.filter(c => c.spillsPastCard > 1);
+      assert.deepEqual(spill, [],
+        `at a ${w}px console window an Overview card label paints outside its own card, over its neighbour: ` +
+        JSON.stringify(spill));
       const off = JSON.parse(await evalIn(OFF_SCREEN_RIGHT));
       assert.deepEqual(off, [], `at ${w}px these are laid out past the right edge: ` + JSON.stringify(off));
     }
@@ -356,7 +379,13 @@ test('the pop-ups 32d101d changed without photographing them do fit the phone',
 // the nav IS constant, and it is the part this change touched. Measured: 201px before, 125px after.
 // A looser budget on the total was tried first and was worthless — it sat 9px above the measurement and
 // slept through an 18px regression.
-const ABOVE_NAV_BUDGET = 130;
+//
+// 130 -> 145 on 2026-09-16, and the 12px was bought back DELIBERATELY: an audit measured the new compact Help
+// button at 35 x 31px, smaller than the nav pills the same change had refused to shrink. Taking it to the
+// 44px a thumb needs makes the header row 44px instead of 32, so above-nav went 125 -> 137. That is the right
+// way round — a control too small to press is not a saving — and the budget says so rather than hiding it.
+// Measured: 201 before this branch, 125 at its first attempt, 137 as it ships. Chrome total 309 -> 245.
+const ABOVE_NAV_BUDGET = 145;
 
 test('the console chrome does not eat the first fold of a 360px phone', { skip: !CHROME ? 'no chromium' : false, timeout: 240000 }, async () => {
   await openTab('Overview');
@@ -386,9 +415,35 @@ test('the console chrome does not eat the first fold of a 360px phone', { skip: 
     `budget. With the nav that is ${m.chromeHeight}px of chrome (${Math.round(m.chromeHeight / VH * 100)}% of ` +
     `the screen) and ${m.mainHeight}px left for the church. Parts: ` + JSON.stringify(m.parts));
 
-  // …and it must not have bought that by throwing away the header's own top row or the nav.
+  // ⚠ …AND IT MUST NOT HAVE BOUGHT THAT BY THROWING THINGS AWAY. A budget shrinks when you delete, so a
+  // budget with no inventory beside it rewards deletion. An audit proved this exact hole: wrapping the
+  // narrow branch's <IdentitySwitcher> in `{false ? … : null}` — deleting the church card, which for a
+  // delegated steward is also the ONLY way to switch which church they are looking at — left all six tests
+  // in this file green. So name what has to be there, by measurement, not by the total.
   assert.ok(m.navHeight > 40, `the nav measured ${m.navHeight}px — the sections are gone, not compressed`);
   assert.equal(m.mainTop, m.chromeHeight, 'the content pane does not start where the chrome ends');
+
+  const present = await evalIn(`(() => {
+    const nav = document.querySelector('nav[aria-label="Console sections"]');
+    const block = nav.parentElement;
+    const kids = [...block.children].filter(k => k.getBoundingClientRect().height > 8);
+    const header = kids.find(k => /Trinity/.test(k.innerText || ''));
+    // The church card is the row that is neither the wordmark header nor the nav and still holds a control.
+    // ⚠ "some child has a button" is NOT good enough and was the first version of this: the NAV is a child
+    // and is full of buttons, so deleting the card left it passing. Exclude the two rows we can name.
+    const card = kids.find(k => k !== header && k !== nav && (k.tagName === 'BUTTON' || k.querySelector('button')));
+    return JSON.stringify({
+      rows: kids.length,
+      hasWordmark: !!header,
+      churchCard: !!card,
+      cardText: card ? (card.innerText || '').replace(/\s+/g, ' ').slice(0, 40) : null,
+    });
+  })()`).then(JSON.parse);
+  assert.equal(present.hasWordmark, true, 'the header row itself is gone from the phone chrome');
+  assert.equal(present.churchCard, true,
+    'the church card is gone from the phone header. It is how a steward sees WHICH church they are acting ' +
+    'for, and for a delegated steward it is the only control that switches between them — deleting it would ' +
+    'make this budget pass and is not what "compressed" means.');
 
   // THE HELP ROW IS GONE FROM THE STACK — that is the change, and this is what fails if it is put back.
   const helpRow = m.parts.find(p => p.text === 'Help');
@@ -397,11 +452,16 @@ test('the console chrome does not eat the first fold of a 360px phone', { skip: 
     'px of a 730px screen for one word.');
 });
 
-test('Help is still one press away on the phone, and still called Help', { skip: !CHROME ? 'no chromium' : false, timeout: 240000 }, async () => {
+test('Help is still in the phone header, big enough to press, and still called Help', { skip: !CHROME ? 'no chromium' : false, timeout: 240000 }, async () => {
   // MOVING A CONTROL MUST NOT LOSE IT. The compact button has no visible text, so its accessible name is the
-  // only name it has — and scripts/app-boots.test.mjs presses this control by looking that name up. Pressing
-  // it here proves the whole path in the real page: the button exists in the header, it is reachable, and it
-  // opens the real help dialog.
+  // only name it has — and scripts/app-boots.test.mjs presses this control by looking that name up.
+  //
+  // ⚠ THIS DOES NOT PROVE THE BUTTON IS REACHABLE BY A FINGER, and an earlier version of this comment said it
+  // did. The first-run wizard is deliberately left up (see before()), its fixed 360x730 overlay sits over the
+  // header, and `elementFromPoint` at this button's centre returns the WIZARD. `b.click()` bypasses hit
+  // testing, so the press lands anyway. What is proved here is: the control exists in the header above the
+  // nav, it is 44px, it is named "Help", and its handler opens the real dialog with real guides in it.
+  // Hit-testing was checked by hand with the wizard dismissed and the button does receive the press.
   await openTab('Overview');
   const inHeader = await evalIn(`(() => {
     const b = [...document.querySelectorAll('button')].filter(x => x.getAttribute('aria-label') === 'Help');
@@ -410,6 +470,21 @@ test('Help is still one press away on the phone, and still called Help', { skip:
     return b[0].getBoundingClientRect().bottom <= nav.getBoundingClientRect().top ? 'above the nav' : 'below the nav';
   })()`);
   assert.equal(inHeader, 'above the nav', `the Help control is not where a steward can reach it: ${inHeader}`);
+
+  // ⚠ AND IT MUST BE BIG ENOUGH TO PRESS. The first version of this icon button measured 35 x 31px — SHORTER
+  // than the 32px nav pills the same commit refused to shrink to 29px because "that is the wrong direction on
+  // a touch screen". An audit put those two facts next to each other. The standard is this repo's own, in
+  // scripts/verse-of-the-day-starts-minimised.test.mjs: "under the 44px a thumb needs".
+  const box = JSON.parse(await evalIn(`(() => {
+    const b = [...document.querySelectorAll('button')].find(x => x.getAttribute('aria-label') === 'Help');
+    if (!b) return JSON.stringify({ w: 0, h: 0 });
+    const r = b.getBoundingClientRect();
+    return JSON.stringify({ w: Math.round(r.width), h: Math.round(r.height) });
+  })()`));
+  assert.ok(box.h >= 44 && box.w >= 44,
+    `the Help control is ${box.w}x${box.h}px. It carries no visible text on a phone, so it is a bare glyph, ` +
+    'and 44px is what a thumb needs — this branch refused to take the nav pills from 32px to 29px for the ' +
+    'same reason and must not then ship something smaller.');
 
   const opened = await evalIn(`(() => {
     const b = [...document.querySelectorAll('button')].find(x => x.getAttribute('aria-label') === 'Help');
