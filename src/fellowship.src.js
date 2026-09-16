@@ -4848,7 +4848,15 @@ window.Fellowship = {
         // safeguarding lists are OWNER-ONLY — only ever trust the church key (M2/safeguarding). A member's own
         // sealed clearance may also come from a CURRENT roster steward, which is who marks a child in practice.
         if (e.pubkey !== pubk && !(_churchRoster.get(pubk) && _churchRoster.get(pubk).has(e.pubkey))) return;
-        if (e.pubkey !== pubk && !(d || '').startsWith('trinityone/clearance:')) return;
+        // …AND THE PHOTO-SUPPRESSION LIST, which a delegated steward with Safeguarding is offered the button
+        // for and the relay accepts from them (accept()'s NOPHOTO_D branch: the church key or a steward with
+        // 'safeguarding'). This line admitted ONLY the sealed clearance, so every phone in the congregation
+        // ignored a steward's copy of `nophoto:` — the relay refused the suppressed member's NEW photograph
+        // while the one already published went on rendering in Chat, Groups, Today and the family view, with
+        // nothing to say it had. The other three (minors/approved/guardians) stay owner-only, because the
+        // relay refuses a steward's write of those outright, so a steward-signed copy could only ever be a
+        // forgery. This is not a widening of trust: the line above still requires a CURRENT roster steward.
+        if (e.pubkey !== pubk && !(d || '').startsWith('trinityone/clearance:') && d !== 'trinityone/nophoto:' + pubk) return;
         // NEWEST-WINS (audit 2026-07-24). These are single replaceable documents read from EVERY relay at once,
         // and each assignment took whichever copy ARRIVED last. With two relays that is a race: a lagging relay
         // answering second reinstates an older list — and for safeguarding that means a child stops being

@@ -19159,7 +19159,7 @@ zoo`.split("\n");
       if (!churchSk || !churchPub) return Promise.resolve(null);
       const haveRing = (_skeys[groupId] || []).length > 0;
       if (opts.reuseOnly && !haveRing) return Promise.resolve(null);
-      const recips = [.../* @__PURE__ */ new Set([churchPub, ...(memberPubs || []).map((p) => toPubHex(p) || p).filter(Boolean)])].filter((p) => !_localBlocked.has(String(p).toLowerCase()));
+      const recips = [.../* @__PURE__ */ new Set([actingChurch || churchPub, churchPub, ...(memberPubs || []).map((p) => toPubHex(p) || p).filter(Boolean)])].filter((p) => !_localBlocked.has(String(p).toLowerCase()));
       let ring = _skeys[groupId] || [];
       let key = ring[0];
       if (!opts.rotate && !key && !_isRelayAuthed()) return Promise.resolve(null);
@@ -19195,7 +19195,7 @@ zoo`.split("\n");
         content = build(ring.slice(0, r));
         skipped = build.missed || [];
       }
-      const ok = await publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", GROUPKEY_D + groupId], ["t", NET]], content }, churchSk));
+      const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", GROUPKEY_D + groupId], ["t", NET]], content }, churchSk));
       if (ok === false) return false;
       if (skipped.length) {
         console.warn("[steward] group key " + groupId + ": could not seal to " + skipped.length + " member(s) \u2014 they cannot read or post in that room");
@@ -19366,7 +19366,7 @@ zoo`.split("\n");
       _requireTrustedView("photo settings");
       if (!sk) return Promise.resolve(null);
       const list = [...new Set((pubkeys || []).filter(Boolean))];
-      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", NOPHOTO_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list }) }, sk));
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", NOPHOTO_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list }) }, sk));
     },
     // Tell ONE member what their own safeguarding status is, sealed to them. This exists so a member's app can
     // know whether THEY are a child or a cleared adult without the church publishing a cleartext list of its
@@ -19873,7 +19873,7 @@ zoo`.split("\n");
     },
     setJoinPolicy(approval) {
       if (!sk) return Promise.resolve(null);
-      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", JOINPOLICY_D + pub], ["t", NET]], content: JSON.stringify({ approval: !!approval }) }, sk));
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", JOINPOLICY_D + pub], ["t", NET]], content: JSON.stringify({ approval: !!approval }) }, sk));
     },
     // AUDIT-2026-07-28 F10. A new church published its join policy at wizard step 0 — before the relay had been
     // told the church exists. accept() refuses any kind-30078 write from a key that is not a configured church

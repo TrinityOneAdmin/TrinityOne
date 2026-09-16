@@ -4936,7 +4936,17 @@ window.Steward = {
     if (opts.reuseOnly && !haveRing) return Promise.resolve(null);   // background re-key must NOT mint a new key (would orphan history)
     // The locally-known blocklist wins over a stale caller list (AUDIT-2026-08-10 item B): the roster effect
     // calls this with the same stale roster in the same post-block window as the name key.
-    const recips = [...new Set([churchPub, ...(memberPubs || []).map(p => toPubHex(p) || p).filter(Boolean)])]
+    // WHOSE ROOM IS THIS? `churchPub` is THIS DEVICE'S OWN KEY, not the church's — setActiveIdentity's
+    // delegated branch leaves churchSk/churchPub alone and moves `pub`/`actingChurch` instead ("delegated:
+    // OUR key signs, church's context reads"). So a delegated steward sealing a room wrapped the key to
+    // THEMSELVES and the group's members, and the CHURCH OWNER was not a recipient of the key to their own
+    // room: their console's stewIngestKey looks for env.keys[<the church's key>] and found nothing, so the
+    // owner could neither read the room nor add anybody to it afterwards.
+    // BOTH keys go in, deliberately: `actingChurch || churchPub` so the church is always sealed to, and
+    // `churchPub` so the steward who just made the room can still read it (they are only in `memberPubs` if
+    // they happen to be in the group). In the ordinary owner case the two are the same value and the Set
+    // collapses them, so the recipient list is byte-identical to before.
+    const recips = [...new Set([actingChurch || churchPub, churchPub, ...(memberPubs || []).map(p => toPubHex(p) || p).filter(Boolean)])]
       .filter(p => !_localBlocked.has(String(p).toLowerCase()));
     let ring = _skeys[groupId] || [];
     let key = ring[0];
@@ -4997,7 +5007,16 @@ window.Steward = {
       content = build(ring.slice(0, r));
       skipped = build.missed || [];
     }
-    const ok = await publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', GROUPKEY_D + groupId], ['t', NET]], content }, churchSk));
+    // feChurch, NOT a bare finalizeEvent — and this one is the worst of the three writers it was missing from.
+    // Every reader of a church document asks the relay for "signed by the church OR tagged with the church"
+    // (the union filter in subscribeGroups here, and the shared hub in src/fellowship.src.js). A delegated
+    // steward's envelope is signed by the STEWARD and, without the tag, named no church — so it matched
+    // neither half. Measured: the relay stores it, and asking for it back as the church key AND as an
+    // ordinary member both return nothing. The console reported success and flagged the group encrypted, and
+    // the room rendered EMPTY rather than broken on every phone in the congregation, so nobody reports it.
+    // `churchSk` stays the signer because in delegated mode it IS `sk` — the steward's own key; feChurch only
+    // adds the ['church', <cp>] tag (and routes through _monotonic, which every other publisher already gets).
+    const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', GROUPKEY_D + groupId], ['t', NET]], content }, churchSk));
     if (ok === false) return false;
     if (skipped.length) {
       console.warn('[steward] group key ' + groupId + ': could not seal to ' + skipped.length + ' member(s) — they cannot read or post in that room');
@@ -5160,11 +5179,19 @@ window.Steward = {
     });
     return () => { try { sub.close(); } catch {} };
   },
-  setNoPhoto(pubkeys) {   // replace the whole photo-suppression list (church-signed, owner-only)
+  setNoPhoto(pubkeys) {   // replace the whole photo-suppression list (church key, or a Safeguarding steward)
     _requireTrustedView('photo settings');
     if (!sk) return Promise.resolve(null);
     const list = [...new Set((pubkeys || []).filter(Boolean))];
-    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', NOPHOTO_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list }) }, sk));
+    // feChurch, NOT a bare finalizeEvent — A SAFEGUARDING CONTROL THAT UNDID ITSELF.
+    // This document REPLACES the whole list, and the relay rebuilds its enforcement from whichever copy
+    // arrived LAST, whoever signed it (NOPHOTO_BY, keyed on the d-tag alone). The button is correctly offered
+    // to a delegated steward with Safeguarding and the relay correctly accepts their write — but untagged it
+    // matched neither half of any reader's filter (authors:[church] OR #church:[church]), so the console and
+    // every phone went on showing the CHURCH'S list while the relay obeyed the steward's. MEASURED, in this
+    // order: the church suppresses Amy, Amy's photo is refused; a steward writes a list without Amy, and
+    // AMY'S PHOTO IS ACCEPTED AGAIN — with nothing on any screen saying so.
+    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', NOPHOTO_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list }) }, sk));
   },
   // Tell ONE member what their own safeguarding status is, sealed to them. This exists so a member's app can
   // know whether THEY are a child or a cleared adult without the church publishing a cleartext list of its
@@ -5833,7 +5860,15 @@ window.Steward = {
   },
   setJoinPolicy(approval) {   // turn approval-to-join on/off
     if (!sk) return Promise.resolve(null);
-    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', JOINPOLICY_D + pub], ['t', NET]], content: JSON.stringify({ approval: !!approval }) }, sk));
+    // feChurch, NOT a bare finalizeEvent. "Rules & privacy" has no owner lock, so a delegated steward with
+    // the Members capability can press this — and the relay ACCEPTS their write and starts enforcing it at
+    // once (the JOINPOLICY_D branch of accept() reads the church out of the d-tag, so the tag is not what
+    // admits it). What the tag decides is whether anyone can READ it back: subscribeJoinPolicy — and
+    // ensureJoinPolicy below — ask for authors:[church] OR #church:[church], and a steward-signed untagged
+    // copy matches neither. So the switch on screen stayed OFF while the relay enforced ON; pressing it again
+    // only set it on again, and a delegated console could never turn it back off. Members arriving with a
+    // join link were held pending indefinitely with nothing on screen saying so.
+    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', JOINPOLICY_D + pub], ['t', NET]], content: JSON.stringify({ approval: !!approval }) }, sk));
   },
   // AUDIT-2026-07-28 F10. A new church published its join policy at wizard step 0 — before the relay had been
   // told the church exists. accept() refuses any kind-30078 write from a key that is not a configured church

@@ -296,6 +296,12 @@ test('a locally-blocked member is excluded from the group key envelope', async (
     const published = [];
     const publish = async (evt) => { published.push(evt); return evt; };
     const finalizeEvent2 = (t) => t, finalizeEvent = finalizeEvent2;
+    // This fixture is the CHURCH OWNER's console, so actingChurch is empty and feChurch stamps nothing —
+    // which is exactly what makes the assertion below ("the church itself must stay a recipient") still mean
+    // what it always meant. The delegated case is covered by
+    // scripts/a-delegated-stewards-church-writes-are-visible.test.mjs, against a real relay.
+    const actingChurch = '';
+    const feChurch = (t, s) => finalizeEvent(t, s);
     const api = { ${method} };
     return { api, published };
   `;
