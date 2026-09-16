@@ -2044,6 +2044,36 @@ const checkinChurchHolds = (d, cp) => {
   }
   return false;
 };
+// …AND DOES A COLLEAGUE ALREADY HOLD IT? The sibling above closes an address the CHURCH holds; this closes
+// one another HELPER holds. Measured 2026-09-16: Ada checked a child in with one pickup code, Dana published
+// at the SAME address with another, the relay took it, the safeguarding lead was served both, and the console
+// renders newest-wins with no author — so the desk releases the child on Dana's code and nothing on any
+// screen says the record changed hands. The invariant written beside checkinChurchHolds already said "a
+// helper may CREATE records and update her own"; only half of it was enforced.
+//
+// ⚠ SCOPED TO THIS CHURCH, like checkinSessionConflict. Check-in ids are a relay-GLOBAL namespace on a shared
+// box, so counting a CO-TENANT's record here would hand any other church a way to close addresses in this
+// church's register — a denial of service dressed up as a safeguard.
+//
+// ⚠ THIS IS ABOUT ONE ADDRESS, NOT ABOUT ONE CHILD, and the distinction is the whole safety of it. Owner,
+// 2026-09-16: "One worker needs to be able to sign in, and another needs to be able to sign out, thats how
+// teams work." Exactly so — and collection already writes its OWN record (releaseCheckin mints a `cr…` id and
+// names the check-in it collects in a ['rel'] tag), so a colleague signing a child out never writes where the
+// first helper wrote and never meets this rule. Anything that ever tempts a future reader to widen this to
+// "the helper who created it owns the child" fails an ordinary Sunday. See reference/DOMAIN.md.
+//
+// Websocket door only — see checkinTombstone's note. An archive from any box running today can legitimately
+// carry two helper records at one address; an ingest-side version would silently drop one on every restore,
+// and a DIFFERENT one each time, because /import's order is arbitrary.
+const checkinOtherHelperHolds = (d, cp, who) => {
+  if (!d || !cp || !who) return false;
+  for (const x of store.query({ kinds: [30078], '#d': [d], limit: 200 })) {
+    const xcp = namedChurch(x) || (CHURCH_PUBS.has(x.pubkey) ? x.pubkey : '');
+    if (xcp !== cp) continue;          // a co-tenant's record can never close this church's desk
+    if (x.pubkey !== who) return true; // somebody other than the writer already holds this address
+  }
+  return false;
+};
 const checkinSessionOkOnIngest = (e, d) => {
   if (!e || e.kind !== 30078 || !String(d || '').startsWith(CHECKIN_D)) return true;
   if (CHURCH_PUBS.has(e.pubkey)) return true;
@@ -4006,7 +4036,30 @@ function accept(e) {
       // steward) already holds a record at is closed to her. Nothing shipped writes a helper record today
       // (the worker view is read-only); when slice 4 gives a helper checkout, it writes its own document.
       // The relay holds no keys, so this is the boundary that CAN be enforced here.
+      // ⚠ KEPT DELIBERATELY, THOUGH DELETING IT PASSES EVERY TEST IN THIS REPO. An independent review of the
+      // commit below found that, and it is true: the newer gate is broader at this door, because a helper is
+      // never the church key and never a safeguarding steward, so every record this line refuses the next
+      // one refuses too. The F-B test in checkin-helper-write-scope.test.mjs now passes because of the NEWER
+      // line, not this one.
+      //
+      // I TRIED TO WRITE A TEST THAT PINS THIS LINE ALONE AND COULD NOT, and the attempt is worth recording
+      // so nobody repeats it. The one shape where the two gates differ on paper is a record authored by THIS
+      // church's key but tagged with a DIFFERENT church: checkinOtherHelperHolds resolves ownership from the
+      // tag and skips it as a co-tenant's (deliberately — counting a co-tenant's record would hand any other
+      // church on the box a way to close addresses in ours), while this line asks "did WE write it" and
+      // catches it. Such a record cannot be made through this door, but CAN arrive through /import, which
+      // does store.put with no accept() pass. So I planted exactly that by import and drove a helper at it:
+      // MEASURED, the write is refused identically WITH and WITHOUT this line — something earlier in the
+      // chain declines that shape anyway. The test therefore passed whether the line was there or not, which
+      // is a vacuous test, and it was deleted rather than shipped.
+      //
+      // So this is belt-and-braces over a door that accept() does not guard, kept because it is free and
+      // because the two gates ask genuinely different questions. Do not delete it as dead weight on the
+      // strength of a green suite; the suite cannot tell you.
       if (checkinChurchHolds(d, cp)) return false;
+      // …nor a COLLEAGUE'S. Same rule, the other half of it — see checkinOtherHelperHolds for the measurement
+      // and for why signing a child out is untouched.
+      if (checkinOtherHelperHolds(d, cp, e.pubkey)) return false;
       //      d. AND THE RECORD AT THAT ADDRESS MUST BE THEIR SESSION'S. Everything above this line asks about
       //      the tag on the incoming event, which the writer chose; nothing asked which session the record the
       //      d-tag ADDRESSES belongs to. RED TEAM 2026-09-10 F1: a helper in-window for S1 only, correctly

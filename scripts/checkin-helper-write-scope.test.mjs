@@ -60,6 +60,9 @@ const other = K();        // A CO-TENANT on the same box, deliberately reusing t
 const sgLead = K();       // a steward ticked for Safeguarding — must still be able to write anything
 const ada = K();          // cleared, and in-window for MORNING only. The forger.
 const bea = K();          // cleared, and in-window for AFTERNOON only
+const dina = K();         // cleared, and in-window for MORNING — ada's COLLEAGUE, on the same session.
+                          // A children's team is a team: the fixture had no two helpers on one session, which
+                          // is why helper-vs-helper went unnoticed for so long.
 const cara = K();         // an ordinary member, never cleared
 const gina = K();         // a guardian, p-tagged on the morning record
 
@@ -149,13 +152,15 @@ const record = (author, id, session, sessionKey, body, extra = []) => {
 };
 // What the forger can actually sign: she has no ring key, so `content` is garbage to the church — and a
 // ['ck'] copy sealed under the session key she DOES hold, tagged with the session she IS entitled to.
-const forgery = (id, session, body) => {
+const forgeryBy = (who, id, session, body, extra = []) => {
   const obj = { id, session, childName: 'Child ' + id, code: '0000', date: '2026-09-06', out: 'collected by A. Stranger', ...body };
-  return doc(ada, D.CHECKIN + id, nip44.encrypt(JSON.stringify(obj), unhex('ee'.repeat(32))), [
+  return doc(who, D.CHECKIN + id, nip44.encrypt(JSON.stringify(obj), unhex('ee'.repeat(32))), [
     ['church', church.pub], ['enc', '2'], ['session', session],
     ['ck', nip44.encrypt(JSON.stringify(obj), unhex(KEY_AM))],
+    ...extra,
   ]);
 };
+const forgery = (id, session, body) => forgeryBy(ada, id, session, body);
 const nip98 = (who, path, extra = []) => 'Nostr ' + Buffer.from(JSON.stringify(finalizeEvent({
   kind: 27235, created_at: now(), tags: [['u', `http://${HOST}${path}`], ['method', 'POST'], ...extra], content: '',
 }, who.sk))).toString('base64');
@@ -184,14 +189,15 @@ before(async () => {
   dataDir = mkdtempSync(join(tmpdir(), 'trin-ck-writescope-'));
   await boot();
   w = await conn();
-  for (const who of [sgLead, ada, bea, cara, gina]) await send(w, doc(who, D.MEMBER + church.pub, { joined: now() }));
+  for (const who of [sgLead, ada, bea, dina, cara, gina]) await send(w, doc(who, D.MEMBER + church.pub, { joined: now() }));
   await send(w, doc(church, D.STEWARDS + church.pub, { pubkeys: [sgLead.pub], caps: { [sgLead.pub]: ['safeguarding'] } }));
   await send(w, doc(church, D.GUARDIANS + church.pub, { links: {} }));
   await send(w, doc(other, D.STEWARDS + other.pub, { pubkeys: [] }));
   await sleep(250);
   await send(w, permission(church, ada.pub));
   await send(w, permission(church, bea.pub));
-  await send(w, grant(church, MORNING, [ada.pub], KEY_AM));
+  await send(w, permission(church, dina.pub));
+  await send(w, grant(church, MORNING, [ada.pub, dina.pub], KEY_AM));
   await send(w, grant(church, AFTERNOON, [bea.pub], KEY_PM));
   // The church's own two records: one at each session. `pm1` is the address ada must never be able to touch.
   await send(w, record(church, 'am1', MORNING, KEY_AM, {}, [['p', gina.pub]]));
@@ -230,6 +236,75 @@ test('THE DEFECT: a helper cannot publish at another session\'s address by taggi
   assert.ok(copies.length > 0, 'the church\'s own pm1 is gone — this test is now measuring an empty address, not a refusal');
   assert.deepEqual([...new Set(copies.map(e => e.pubkey))].filter(p => p === ada.pub), [],
     'the helper\'s forgery is on the box at the afternoon record\'s address');
+});
+
+test('BASELINE: dina is a working helper on ada\'s session — or everything below is vacuous', async () => {
+  // Two helpers on ONE session. The fixture had never had that, which is how helper-versus-helper went
+  // unnoticed: ada and bea are on different sessions, so every earlier test here was really about sessions.
+  const [ok] = await publishAs(dina, forgeryBy(dina, 'dina-new', MORNING, { out: null }));
+  assert.equal(ok, true, 'a second cleared, in-window helper could not check a child in at all — the grant ' +
+    'fixture is wrong and every refusal below would pass for the wrong reason');
+});
+
+test('ONE HELPER DOES NOT OVERWRITE ANOTHER\'S RECORD — the pickup code stays the one that was written', async () => {
+  // Measured 2026-09-16, before this gate: Ada checked a child in with code 1111; Dana published at THE SAME
+  // ADDRESS with 9999; the relay took it, the safeguarding lead was served both, and the console renders
+  // newest-wins with no author — so 9999 is what the desk releases the child on. checkinChurchHolds closed
+  // this address to a helper when the CHURCH held it (red team F-B); nobody had closed it when a COLLEAGUE
+  // held it, though the invariant written beside that gate says "a helper may CREATE records and update her
+  // own".
+  await sleep(1100);   // a clear second, or the store refuses the rewrite as `have-newer` and proves nothing
+  const [ok, msg] = await publishAs(dina, forgeryBy(dina, 'ada-new', MORNING, { code: '9999' }));
+  assert.equal(ok, false, 'A HELPER REWROTE A COLLEAGUE\'S CHECK-IN RECORD. The pickup code the desk shows ' +
+    'is now hers, the original is invisible, and nothing on any screen says the record changed hands: ' + msg);
+
+  // …and nothing landed. `ok:false` is the frame; this is the disk.
+  const copies = await copiesOf(D.CHECKIN + 'ada-new');
+  assert.ok(copies.length > 0, 'ada\'s own record is gone — this is now measuring an empty address, not a refusal');
+  assert.equal(copies.filter(e => e.pubkey === dina.pub).length, 0,
+    'the colleague\'s copy is on the box beside ada\'s, so the console still has two to choose between');
+});
+
+test('…but SIGNING A CHILD OUT is untouched, because collection writes its own record', async () => {
+  // THE CONTROL THE OWNER ASKED FOR, 2026-09-16: *"One worker needs to be able to sign in, and another needs
+  // to be able to sign out, thats how teams work."* Exactly right, and it is why this gate is about ONE
+  // ADDRESS rather than about one child: releaseCheckin (src/fellowship.src.js) mints its OWN id (`cr…`) and
+  // names the check-in it collects in a ['rel'] tag, so a colleague collecting a child never writes where the
+  // first helper wrote. If this test ever fails, the gate above has been widened into something that breaks
+  // an ordinary Sunday — see reference/DOMAIN.md, "a child is not owned by the volunteer who signed them in".
+  const [ok, msg] = await publishAs(dina, forgeryBy(dina, 'cr-dina-1', MORNING, { out: 1 }, [['rel', 'ada-new']]));
+  assert.equal(ok, true, 'a helper could not sign out a child a COLLEAGUE signed in. That is how a children\'s ' +
+    'team actually works, and this gate must never refuse it: ' + msg);
+});
+
+test('…and ada may still update the record SHE wrote', async () => {
+  // The other half of the invariant: "a helper may create records and update her own". A gate that refused
+  // this would stop a volunteer correcting her own typo.
+  await sleep(1100);
+  const [ok] = await publishAs(ada, forgery('ada-new', MORNING, { code: '1212' }));
+  assert.equal(ok, true, 'a helper could no longer update her OWN record — the gate is refusing the case the ' +
+    'capability exists for');
+});
+
+test('…and a CO-TENANT church\'s record at the same address cannot lock this church\'s helper out', async () => {
+  // Check-in ids are a relay-GLOBAL namespace on a shared box. If the new gate counted another church's
+  // record it would hand any co-tenant a way to close addresses in THIS church's register — a denial of
+  // service dressed as a safeguard. Scoped the same way checkinSessionConflict is.
+  await send(w, doc(other, D.MEMBER + other.pub, { joined: now() }));
+  await send(w, record(other, 'shared-id', MORNING, KEY_AM, {}, { cp: other }));
+  await sleep(300);
+  const [ok, msg] = await publishAs(dina, forgeryBy(dina, 'shared-id', MORNING, { out: null }));
+  assert.equal(ok, true, 'a DIFFERENT church\'s record at the same global id stopped this church\'s helper ' +
+    'checking a child in: ' + msg);
+});
+
+test('…and the church, or a safeguarding steward, may still correct a helper\'s record', async () => {
+  await sleep(1100);
+  const [okC] = await publishAs(church, record(church, 'dina-new', MORNING, KEY_AM, { code: '7777' }));
+  assert.equal(okC, true, 'the church could not correct a helper-written record');
+  await sleep(1100);
+  const [okS] = await publishAs(sgLead, record(sgLead, 'dina-new', MORNING, KEY_AM, { code: '8888' }));
+  assert.equal(okS, true, 'a safeguarding steward could not correct a helper-written record');
 });
 
 test('…and she cannot reach it by tagging the session she does NOT hold either', async () => {
@@ -375,6 +450,32 @@ test('/import refuses the same forgery, and imports the helper\'s honest record 
   const badCopies = await copiesOf(D.CHECKIN + 'pm1');
   assert.equal(badCopies.filter(e => e.pubkey === ada.pub).length, 0,
     'RED TEAM F1 THROUGH THE OTHER DOOR: /import installed a helper\'s record at another session\'s address');
+});
+
+test('A RESTORE KEEPS BOTH HELPERS\' RECORDS AT ONE ADDRESS — the new gate is the door only', async () => {
+  // ⚠ THE TEST THIS FIX MOST NEEDS, and the one whose absence has cost this project twice.
+  //
+  // The websocket gate above refuses a second helper at one address. An archive from ANY box running today
+  // legitimately contains exactly that — those records were written before the gate existed — and /import
+  // deliberately never calls accept(). If anybody ever "tidies" the new rule onto the ingest path, a restore
+  // would silently drop one of the pair, and a DIFFERENT one each time, because /import's order is arbitrary.
+  // That is precisely the shape of the 2026-08-20 incident (a write gate replayed over an import deleted a
+  // church's whole finance journal) and of the steward tombstone refused on every restore.
+  //
+  // So: two helper-authored records at ONE address, through /import, in one request. BOTH must land.
+  const first  = forgeryBy(ada,  'restore-pair', MORNING, { code: '1111' });
+  const second = forgeryBy(dina, 'restore-pair', MORNING, { code: '9999' });
+  const [status, body] = await importAs(church, [first, second]);
+  assert.equal(status, 200, '/import refused the church key — the import door is not being exercised');
+  assert.equal(body.invalid, 0,
+    'a restore REFUSED a legitimate archived record. The new helper gate has reached the ingest path, and ' +
+    'every church restoring a backup will silently lose check-in records: invalid=' + body.invalid);
+  await sleep(400);
+  const copies = await copiesOf(D.CHECKIN + 'restore-pair');
+  const authors = new Set(copies.map(e => e.pubkey));
+  assert.ok(authors.has(ada.pub) && authors.has(dina.pub),
+    'a restore kept only one of two archived helper records at this address, so a child\'s register is now ' +
+    'missing an entry that was on the box before the backup. Authors kept: ' + [...authors].length);
 });
 
 test('…and a RESTART does not reinstate it', async () => {
