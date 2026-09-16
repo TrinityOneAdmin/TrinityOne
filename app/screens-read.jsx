@@ -748,6 +748,20 @@ function ReadScreen({ ctx }) {
   const [serif, setSerif] = useS(() => lsGet('trinityone.readerSerif', true));
   const [showStrongs, setShowStrongs] = useS(false);
   const [sel, setSel] = useS([]);   // selected verse numbers — multi-select to copy/share a passage together
+  // ── A PASSAGE THAT CROSSES A CHAPTER LINE ──────────────────────────────────────────────────────────────
+  // The reader paints ONE chapter, so `sel` is verse numbers in the chapter now on screen and stays that
+  // way. Pressing + at the last verse of a chapter rolls the reader into the next one (the owner:
+  // "chapter markings are sometimes a pain anyway"); the verses already chosen are parked HERE, oldest
+  // first, and the reference line, Copy and Share read straight across the join.
+  //   · each entry keeps its `sel` in TAP ORDER, so − can hand the earlier chapter back exactly as it was;
+  //   · `joined` marks a chapter the + ran off the END of, which is what lets the label collapse
+  //     "John 1:19-51" + "John 2:1" into "John 1:19-2:1" rather than listing both;
+  //   · tapping any verse empties this — that is a new passage, not a longer one.
+  const [carry, setCarry] = useS([]);        // [{ book, chap, sel: [...tap order], joined }]
+  // Set by + / − at the moment THEY move the reader, so the arriving-chapter effect below knows not to
+  // throw away the selection they just built. Anything else that moves the reader (a swipe, the footer,
+  // the book picker, Search, Today) leaves it null and the selection is cleared as it always was.
+  const rollRef = useR(null);
   const [sheet, setSheet] = useS(new URLSearchParams(location.search).get('sheet') || null);
   // word-study history: a stack of Strong's ids so following a cross-reference can be walked back
   const _initWord = new URLSearchParams(location.search).get('word') || null;
@@ -767,7 +781,10 @@ function ReadScreen({ ctx }) {
   useE(() => { lsSet('trinityone.readerSerif', serif); }, [serif]);
   // arriving on a specific verse (from Today / Search / Book picker): select it + scroll it into view
   useE(() => {
-    setSel(loc.verse ? [loc.verse] : []);
+    const roll = rollRef.current; rollRef.current = null;   // consumed here whether it matches or not
+    // A roll-over already set `sel` and `carry` for THIS chapter in the same handler that called setLoc.
+    // Every other arrival is a fresh place in the Bible: one verse or none, and nothing carried.
+    if (!(roll && roll.book === loc.book && roll.chap === loc.chap)) { setSel(loc.verse ? [loc.verse] : []); setCarry([]); }
     const sc = scrollRef.current; if (!sc) return;
     if (loc.verse) {
       setTimeout(() => { const el = sc.querySelector('#rv-' + loc.verse); if (el && el.scrollIntoView) el.scrollIntoView({ block: 'center' }); else sc.scrollTop = 0; }, 60);
@@ -795,7 +812,7 @@ function ReadScreen({ ctx }) {
   const selectVerse = (n) => {
     const has = sel.some(x => String(x) === String(n));
     const next = has ? sel.filter(x => String(x) !== String(n)) : [...sel, n];
-    setSel(next); setSheet(next.length ? 'action' : null);
+    setSel(next); setCarry([]); setSheet(next.length ? 'action' : null);
   };
   const openWord = (id) => { setWordStack([id]); setSheet('word'); };            // fresh lookup (tapping a verse's Strong's number)
   const pushWord = (id) => { setWordStack(s => [...s, id]); };                    // follow a cross-reference, keeping history
@@ -803,16 +820,58 @@ function ReadScreen({ ctx }) {
 
   const selSorted = [...new Set((sel || []).map(Number))].filter(Boolean).sort((a, b) => a - b);
   const sel0 = selSorted[0];                       // anchor verse for per-verse actions (note / bookmark / highlight)
-  const multi = selSorted.length;
+  // THE WHOLE PASSAGE, oldest chapter first: the carried chapters (if the reader rolled a + past a chapter
+  // line) and then the one on screen. When nothing has been carried this is a single entry and everything
+  // below reduces to exactly what it computed before.
+  const passage = [...carry, { book: loc.book, chap: loc.chap, sel }]
+    .map(s => ({ book: s.book, chap: s.chap, joined: !!s.joined, verses: [...new Set((s.sel || []).map(Number))].filter(Boolean).sort((a, b) => a - b) }))
+    .filter(s => s.verses.length);
+  // How many verses the reader is holding ALTOGETHER. This drives the card's two arms, and it has to count
+  // the carried ones: a rolled-over passage whose on-screen part is one verse is still a passage, and the
+  // per-verse arm (Note / Bookmark / Highlight / Cross-refs, all anchored on `sel0` in THIS chapter) would
+  // otherwise be offered for a selection whose first verse is in a chapter that is no longer on screen.
+  const multi = passage.reduce((n, s) => n + s.verses.length, 0);
   const selRow = verses.find(x => String(x.v) === String(sel0));
-  // compact reference for the whole selection, e.g. "John 3:16-18,20"
-  const rangeRef = selSorted.length ? bname + ' ' + loc.chap + ':' + (() => { const r = []; let i = 0; while (i < selSorted.length) { let j = i; while (j + 1 < selSorted.length && selSorted[j + 1] === selSorted[j] + 1) j++; r.push(i === j ? '' + selSorted[i] : selSorted[i] + '-' + selSorted[j]); i = j + 1; } return r.join(','); })() : '';
-  const selText = selSorted.map(v => { const r = verses.find(x => String(x.v) === String(v)); return r ? r.text : ''; }).filter(Boolean).join(' ');
+  // ── THE REFERENCE LINE ────────────────────────────────────────────────────────────────────────────────
+  // Collapse the passage into contiguous runs, then name them. Two verses join one run when they are
+  // neighbours in the same chapter, OR when the earlier chapter was rolled off the END by a + and the next
+  // one begins at its first selected verse — which is exactly what the roll-over produces. So
+  // "John 3:16-18,20" still reads that way, and a rolled passage reads "John 1:19-2:1" rather than naming
+  // both halves.
+  const runs = [];
+  passage.forEach((s, si) => {
+    const prv = si > 0 ? passage[si - 1] : null;
+    s.verses.forEach((v) => {
+      const last = runs[runs.length - 1], here = { book: s.book, chap: s.chap, verse: v };
+      const sameChapterNeighbour = last && last.to.book === s.book && last.to.chap === s.chap && last.to.verse === v - 1;
+      const acrossTheChapterLine = last && prv && prv.joined && v === s.verses[0]
+        && last.to.book === prv.book && last.to.chap === prv.chap
+        && last.to.verse === prv.verses[prv.verses.length - 1];
+      if (sameChapterNeighbour || acrossTheChapterLine) last.to = here; else runs.push({ from: here, to: here });
+    });
+  });
+  const rangeRef = (() => {
+    let cb = null, cc = null, out = '';
+    const piece = (p) => { let t = ''; if (p.book !== cb) t += Bible.bookName(p.book) + ' '; if (p.book !== cb || p.chap !== cc) t += p.chap + ':'; cb = p.book; cc = p.chap; return t + p.verse; };
+    runs.forEach((r, i) => {
+      if (i) out += ',';
+      out += piece(r.from);
+      if (r.to.verse !== r.from.verse || r.to.chap !== r.from.chap || r.to.book !== r.from.book) out += '-' + piece(r.to);
+    });
+    return out;
+  })();
+  // The text of the whole passage. A carried chapter is NOT in `verses` (that memo holds the chapter on
+  // screen only), so its words are fetched when Copy or Share actually asks — never on every draw, which is
+  // what the perf note on the `verses` memo above is about. Callers: _copy, _share (and nothing else).
+  const passageText = () => passage.map(s => {
+    const rows = (s.book === loc.book && s.chap === loc.chap) ? verses : (Bible.getVerses(s.book, s.chap, version) || []);
+    return s.verses.map(v => { const r = rows.find(x => String(x.v) === String(v)); return r ? r.text : ''; }).filter(Boolean).join(' ');
+  }).filter(Boolean).join(' ');
   const sheetCtx = {
     toast: ctx.toast,
     _bm: () => { const k = keyOf(sel0); ctx.toggleBookmark(k); ctx.toast(ctx.bookmarks.includes(k) ? 'Bookmark removed' : 'Bookmarked'); },
-    _copy: () => { try { navigator.clipboard && navigator.clipboard.writeText(rangeRef + ' — ' + selText).catch(() => {}); } catch (e) {} close(); ctx.toast(multi > 1 ? 'Passage copied' : 'Copied to clipboard'); },
-    _share: () => { close(); ctx.openShareSheet({ ref: rangeRef, text: selText, version }); },
+    _copy: () => { try { navigator.clipboard && navigator.clipboard.writeText(rangeRef + ' — ' + passageText()).catch(() => {}); } catch (e) {} close(); ctx.toast(multi > 1 ? 'Passage copied' : 'Copied to clipboard'); },
+    _share: () => { close(); ctx.openShareSheet({ ref: rangeRef, text: passageText(), version }); },
     _shareNote: () => { close(); ctx.openShareSheet({ type: 'note', ref: labelOf(sel0), text: selRow ? selRow.text : '', version, note: ctx.notes[keyOf(sel0)] || '' }); },
     // GROW THE PASSAGE ONE VERSE AT A TIME, from inside the sheet. There used to be TWO buttons here, "+
     // before" and "+ after", and the comment that lived on this line said they were needed because "the
@@ -820,7 +879,30 @@ function ReadScreen({ ctx }) {
     // `passthrough`, so the chapter stays scrollable and every verse stays tappable behind it) and the
     // comment outlived it by fifteen months. A reader who wants an earlier verse taps it in the text; the
     // one thing they cannot do by tapping is keep going past the bottom of the screen, so ONE + is enough.
-    _extend: () => { const nx = (selSorted[selSorted.length - 1] || 0) + 1; if (verses.some(x => Number(x.v) === nx)) setSel([...sel, nx]); },
+    // ⚠ AND AT THE LAST VERSE IT ROLLS ON INTO THE NEXT CHAPTER. Until 2026-09-16 this was an enabled,
+    // full-opacity button that ignored the press there. The owner chose "carry the selection and move the
+    // view with it": the reader is taken to the next chapter, its first verse joins the passage, and the
+    // verses already chosen stay in it (parked in `carry`). `Bible.step` is the SAME function the swipe
+    // handler turns pages with, so a + off the end of a book lands where a swipe would — and at the very
+    // end of the Bible it returns null and we say so out loud, in the swipe's own words.
+    _extend: () => {
+      const nx = (selSorted[selSorted.length - 1] || 0) + 1;
+      if (verses.some(x => Number(x.v) === nx)) { setSel([...sel, nx]); return; }
+      if (!selSorted.length) return;
+      // only the END of the chapter rolls over. A number missing from the middle (a version that omits a
+      // verse) is a gap, not an end, and there the + does what it always did: nothing.
+      const maxV = verses.reduce((m, x) => Math.max(m, Number(x.v) || 0), 0);
+      if (nx <= maxV) return;
+      const nl = Bible.step(loc, 1);
+      if (!nl) { ctx.toast('That\u2019s the last chapter of the Bible'); return; }
+      const rows = Bible.getVerses(nl.book, nl.chap, version) || [];
+      if (!rows.length) return;                      // no text for the next chapter in this version
+      const first = Number(rows[0].v);
+      rollRef.current = { book: nl.book, chap: nl.chap };
+      setCarry([...carry, { book: loc.book, chap: loc.chap, sel, joined: true }]);
+      setSel([first]);
+      ctx.setLoc({ book: nl.book, chap: nl.chap, verse: first });
+    },
     // ⚠ MINUS TAKES BACK THE LAST VERSE ADDED — NOT THE HIGHEST-NUMBERED ONE, WHICH IS WHAT IT USED TO DO.
     // `sel` is in TAP ORDER (selectVerse appends, _extend appends); `selSorted` is only for display and for
     // the reference label. Removing `selSorted`'s maximum meant that a reader who tapped verse 5 and then
@@ -828,7 +910,20 @@ function ReadScreen({ ctx }) {
     // actually chosen and kept the one they were undoing. Worse, Note / Bookmark / Highlight all attach to
     // the LOWEST selected verse (`sel0` above), so that reader could annotate verse 4 having never
     // deliberately selected it. Dropping the last entry of `sel` makes minus a true undo of the last tap.
-    _shrink: () => { if (sel.length > 1 && selSorted.length > 1) setSel(sel.slice(0, -1)); },
+    // …and it undoes a ROLL-OVER the same way: the + that crossed the chapter line moved the reader, so the
+    // − that takes it back must move them BACK and hand over the selection they had, in the order they made
+    // it. Anything less leaves a reader holding verses they never chose in a chapter they never asked for —
+    // and Note / Bookmark / Highlight attach to the LOWEST selected verse, so that is silent and wrong.
+    _shrink: () => {
+      if (sel.length > 1 && selSorted.length > 1) { setSel(sel.slice(0, -1)); return; }
+      if (!carry.length) return;
+      const back = carry[carry.length - 1];
+      const to = back.sel.reduce((m, v) => Math.max(m, Number(v) || 0), 0);
+      rollRef.current = { book: back.book, chap: back.chap };
+      setCarry(carry.slice(0, -1));
+      setSel(back.sel);
+      ctx.setLoc({ book: back.book, chap: back.chap, verse: to || undefined });
+    },
   };
 
   // speak the whole chapter, verse by verse — highlights + scrolls to each verse as it's read
