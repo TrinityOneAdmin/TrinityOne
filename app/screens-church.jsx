@@ -232,32 +232,19 @@ function FollowChurch({ onBack, onFollowed, ctx }) {
 function ChurchSwitcher({ open, onClose, ctx, churches, activeId, onPick, onFollowed, initialMode }) {
   const [mode, setMode] = useCh('list'); // 'list' | 'follow'
   const [confirmLeave, setConfirmLeave] = useCh(null);   // church id awaiting leave confirmation
-  useChE(() => { if (open) setMode(initialMode === 'follow' || new URLSearchParams(location.search).get('church') === 'follow' ? 'follow' : 'list'); }, [open]);
+  // ⚠ `setConfirmLeave(null)` HERE IS NOT TIDYING. The warning below is a SIBLING of the sheet (see the note
+  // beside it), so it no longer disappears when the sheet unmounts the way a child would. Android's back
+  // button and the Escape key both close the topmost back-stack layer, which is the SHEET — so without this
+  // (and without the `open &&` guard on the warning itself) pressing back while the warning is up would
+  // close the switcher and leave the warning stranded over the Today page, still offering to leave a church.
+  useChE(() => { setConfirmLeave(null); if (open) setMode(initialMode === 'follow' || new URLSearchParams(location.search).get('church') === 'follow' ? 'follow' : 'list'); }, [open]);
   // two churches can share a name — disambiguate clashes with the verified @handle, else a short key
   const churchLabel = window.makeNameDisambiguator(churches || [], c => c.name || '', c => c.nip05, c => c.npub || c.id);
 
-  const leavingChurch = churches.find(c => c.id === confirmLeave);
+  const leavingChurch = open ? churches.find(c => c.id === confirmLeave) : null;
   return (
+    <React.Fragment>
     <BottomSheet open={open} onClose={onClose} maxHeight="86%" z={60}>
-      {/* z ABOVE this sheet's 60, or the warning opens underneath the list it is warning about. */}
-      {leavingChurch ? (
-        <div onClick={() => setConfirmLeave(null)} style={{ position: 'fixed', inset: 0, zIndex: 90, background: 'rgba(20,15,10,.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 22 }}>
-          <div role="dialog" aria-modal="true" aria-label={'Leave ' + (leavingChurch.name || 'this church')} onClick={e => e.stopPropagation()}
-            style={{ width: 400, maxWidth: '100%', background: 'var(--surface)', borderRadius: 20, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 22 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 10 }}>
-              <div style={{ width: 40, height: 40, borderRadius: 12, flexShrink: 0, background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="alert" size={20} /></div>
-              <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 18, lineHeight: 1.2 }}>Leave {leavingChurch.name}?</div>
-            </div>
-            <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 10px' }}>You’ll stop seeing this church’s groups, events, prayer requests and care — and its people won’t see you.</p>
-            <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 10px' }}>Anything that belongs to this church goes with it, including <b>any children’s accounts you look after here</b>.</p>
-            <p style={{ fontSize: 13.5, color: 'var(--ink-3)', lineHeight: 1.55, margin: '0 0 18px' }}>Your own account, your 12 words and your reading stay on this phone. To come back you’ll need the church’s invite link or code — so make sure you have it before you leave.</p>
-            <div style={{ display: 'flex', gap: 10 }}>
-              <button onClick={() => setConfirmLeave(null)} style={{ flex: 1.2, padding: 13, borderRadius: 13, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontWeight: 700, fontSize: 14.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Stay</button>
-              <button onClick={() => { const id = confirmLeave; setConfirmLeave(null); ctx.leaveChurch(id); }} style={{ flex: 1, padding: 13, borderRadius: 13, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 700, fontSize: 14.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Leave</button>
-            </div>
-          </div>
-        </div>
-      ) : null}
       {mode === 'list' ? (
         <div>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
@@ -317,6 +304,38 @@ function ChurchSwitcher({ open, onClose, ctx, churches, activeId, onPick, onFoll
         <FollowChurch onBack={() => setMode('list')} onFollowed={onFollowed} ctx={ctx} />
       )}
     </BottomSheet>
+      {/* ⚠ THIS WARNING IS A SIBLING OF THE SHEET, NOT A CHILD OF IT, AND THAT IS THE FIX.
+          It says `position: fixed; inset: 0` — cover the whole screen — and while it lived INSIDE
+          <BottomSheet> that silently meant "cover the whole sheet": BottomSheet's panel always carries
+          `transform: translateY(0)`, and a transformed ancestor becomes the containing block for every
+          `position: fixed` descendant. Measured in Chromium (scripts/leaving-a-church-can-be-answered.test.mjs),
+          with the buttons past the bottom of the phone and nothing able to scroll to them:
+              320x730  card 309..813   Stay/Leave 744..790   60px off
+              360x730  card 362..780   Stay/Leave 711..757   27px off
+              730x360  card  18..415   Stay/Leave 346..392   32px off   (any phone held sideways)
+          `safe center` rather than plain `center` for the same reason the console's pop-ups use it: a child
+          taller than its container is put at a NEGATIVE offset by `center`, and the scroll origin is already
+          past it, so that part can never be reached. `overflowY: auto` is what makes a tall one scrollable.
+          zIndex 90 is ABOVE the sheet's 60, or the warning opens underneath the list it is warning about. */}
+      {leavingChurch ? (
+        <div onClick={() => setConfirmLeave(null)} style={{ position: 'fixed', inset: 0, zIndex: 90, background: 'rgba(20,15,10,.5)', display: 'flex', alignItems: 'safe center', justifyContent: 'center', padding: 22, overflowY: 'auto' }}>
+          <div role="dialog" aria-modal="true" aria-label={'Leave ' + (leavingChurch.name || 'this church')} onClick={e => e.stopPropagation()}
+            style={{ width: 400, maxWidth: '100%', background: 'var(--surface)', borderRadius: 20, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 22 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 10 }}>
+              <div style={{ width: 40, height: 40, borderRadius: 12, flexShrink: 0, background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="alert" size={20} /></div>
+              <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 18, lineHeight: 1.2 }}>Leave {leavingChurch.name}?</div>
+            </div>
+            <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 10px' }}>You’ll stop seeing this church’s groups, events, prayer requests and care — and its people won’t see you.</p>
+            <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 10px' }}>Anything that belongs to this church goes with it, including <b>any children’s accounts you look after here</b>.</p>
+            <p style={{ fontSize: 13.5, color: 'var(--ink-3)', lineHeight: 1.55, margin: '0 0 18px' }}>Your own account, your 12 words and your reading stay on this phone. To come back you’ll need the church’s invite link or code — so make sure you have it before you leave.</p>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button onClick={() => setConfirmLeave(null)} style={{ flex: 1.2, padding: 13, borderRadius: 13, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontWeight: 700, fontSize: 14.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Stay</button>
+              <button onClick={() => { const id = confirmLeave; setConfirmLeave(null); ctx.leaveChurch(id); }} style={{ flex: 1, padding: 13, borderRadius: 13, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 700, fontSize: 14.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Leave</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </React.Fragment>
   );
 }
 window.ChurchSwitcher = ChurchSwitcher;

@@ -2369,7 +2369,14 @@ function RestrictedExplainer({ ctx, onClose }) {
   const cleared = ((ctx && ctx.safeguard && ctx.safeguard.approved) || []).length;
   return (
     <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 70, background: 'rgba(34,28,22,.44)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
-      <div onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Why is this restricted?" style={{ width: '100%', maxWidth: 460, background: 'var(--surface)', borderTopLeftRadius: 22, borderTopRightRadius: 22, padding: '20px 18px 26px', fontFamily: 'var(--font-ui)' }}>
+      {/* `maxHeight` + `overflowY`, matching GroupEventComposer in this file. This sheet is hand-rolled
+          rather than a <BottomSheet>, so nothing else caps it — and it is bottom-anchored, so anything that
+          does not fit goes off the TOP where there is nothing to scroll back up with. Unlike its two
+          siblings (BackupNudge, ApproveNeedSheet) it FITS today at every size measured, in all four of its
+          wordings: measured by sabotage, removing this cap changes nothing on screen right now
+          (scripts/the-hand-rolled-sheets-can-be-answered.test.mjs). It is here so the next sentence added to
+          this explanation cannot push the heading off a sideways phone. */}
+      <div onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Why is this restricted?" style={{ width: '100%', maxWidth: 460, maxHeight: '88%', overflowY: 'auto', background: 'var(--surface)', borderTopLeftRadius: 22, borderTopRightRadius: 22, padding: '20px 18px 26px', fontFamily: 'var(--font-ui)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
           <Icon name="lock" size={20} color="var(--clay)" />
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 19 }}>{minor ? 'Your account is set up for a young person' : 'Messages here are limited'}</div>
