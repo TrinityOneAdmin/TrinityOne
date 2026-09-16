@@ -5888,16 +5888,48 @@ window.Steward = {
     } catch (e) {}
     return { ok: false, reason: 'refused' };
   },
+  // TWO AUTHORS, ONE ADDRESS, AND NEWEST-WINS IS THE WRONG ANSWER HERE.
+  //
+  // This is an addressable document, so the relay keeps ONE COPY PER AUTHOR and cannot collapse them: once a
+  // delegated steward's copy is findable at all (see setAdmitted below), the church's copy and one or more
+  // steward copies all arrive on this subscription. `latest` took the newest of them and threw the rest away.
+  //
+  // That is the round-9 shape all over again (two-authors-one-document.test.mjs) with a worse consequence,
+  // because this list is a SET and not a version of one thing. The vicar approves Ada while the churchwarden
+  // approves Ben, sixty seconds apart, each from the list they could see. Newest-wins picks one document,
+  // therefore one of the two names, and the other person is silently back in "Waiting to be let in" — and
+  // then the next Approve press writes that loss down as the church's own copy, permanently.
+  //
+  // SO: NEWEST PER AUTHOR, UNION ACROSS AUTHORS. Newest-per-author is what makes REMOVAL still work — an
+  // author's later list replaces their own earlier one, so a name they drop is really dropped. The union is
+  // what makes admission additive: anybody the church OR a steward has approved is approved. Nobody's
+  // decision is discarded because somebody else's was more recent.
+  //
+  // THE COST, SAID PLAINLY: to take a person off the list, every author who put them on it has to publish a
+  // list without them. Taking a name off the church's copy alone no longer removes them if a steward's copy
+  // still carries them. Blocking is unaffected — it is a separate document and a separate gate at the relay,
+  // and blocking is how a member is actually removed (see the Block path in app/stew-dashboard.jsx).
+  //
+  // _byChurchOrSteward IS KEPT, AND THAT IS A DELIBERATE SEAM. It is a CURRENT-roster test, so a departed
+  // steward's copy stops appearing in this console's view even though the relay keeps serving it (that is
+  // what the retractionExempt entry in scripts/gateway.mjs is for). Dropping the test would mean a relay
+  // could hand this console admissions signed by any key at all — and the very next Approve press would
+  // republish them as the CHURCH'S OWN signed copy, laundering a forgery into the church's authority. The
+  // people themselves are not un-admitted by this: the relay's own allowlist is what the doors read.
   subscribeAdmitted(onList) {   // the approved-members allowlist → [pubkeys]
-    let cur = [], latest = 0;
+    let cur = [];
+    const byAuthor = new Map();   // author pubkey -> { at, pubkeys } — newest per author, unioned below
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (d !== ADMITTED_D + pub) return;
         if (_authFuture(e) || !_byChurchOrSteward(e)) return;   // church or a rostered steward may admit members
-        // newest wins — a stale copy drops recently-approved members back into "waiting to join"
-        if (e.created_at < latest) return; latest = e.created_at;
-        try { cur = (JSON.parse(e.content).pubkeys) || []; } catch { cur = []; }
+        const prev = byAuthor.get(e.pubkey);
+        if (prev && e.created_at < prev.at) return;             // this author's own older list — not the whole church's
+        let list = []; try { list = (JSON.parse(e.content).pubkeys) || []; } catch { list = []; }
+        byAuthor.set(e.pubkey, { at: e.created_at, pubkeys: list });
+        const all = new Set(); for (const v of byAuthor.values()) for (const pk of v.pubkeys) if (pk) all.add(pk);
+        cur = [...all];
         onList(cur);
       },
       oneose() { onList(cur); },
@@ -6117,11 +6149,29 @@ window.Steward = {
       failed,
     };
   },
+  // A DELEGATED STEWARD'S APPROVALS WERE WRITTEN WHERE NOBODY LOOKS. `finalizeEvent(..., sk)` signs with
+  // whichever key this console holds — in delegated mode that is the STEWARD'S own key, while `pub` is the
+  // church (see setActiveIdentity: "delegated: OUR key signs, church's context reads"). The d-tag named the
+  // church, so the relay stored it and even enforced it; but every reader of this address asks for
+  // `authors:[cp]` OR `#church:[cp]`, and an untagged steward copy matches NEITHER. Measured consequence:
+  // subscribeAdmitted below returned only the church's own copy, so the next person to admit anybody — the
+  // steward again, or the owner — read a stale list, added one name to it, and republished it over the top.
+  // Everyone admitted in between went back to "Waiting to be let in", with nothing said to anyone.
+  //
+  // CALLERS, all four (rule 2). Three are in app/stew-dashboard.jsx — `admitMember` (one Approve press),
+  // `admitAll` (the bulk confirm that opens a church) and `toggleApproval` (grandfathering everyone already
+  // here when approval is switched on) — and the fourth is `reseatMember` in this file, which admits a
+  // member's replacement key. Every one of them passes a WHOLE list built from what the console can see, so
+  // every one of them was a read-modify-write over a view that was missing the steward copies.
+  //
+  // feChurch(), not finalizeEvent(): it stamps ['church', <cp>] when and only when this console is acting
+  // for someone else's church, which is exactly the tag the readers filter on. The owner console's own
+  // writes are byte-identical to before (actingChurch is empty, so feChurch adds nothing).
   setAdmitted(pubkeys) {   // replace the whole admitted list (pass hex pubkeys)
     _requireTrustedView('approved-members list');
     if (!sk) return Promise.resolve(null);
     const list = [...new Set((pubkeys || []).filter(Boolean))];
-    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', ADMITTED_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list }) }, sk));
+    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', ADMITTED_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list }) }));
   },
 
   // ---- delegated stewards: the OWNER (this church key) signs a roster of co-steward pubkeys. The relay

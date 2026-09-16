@@ -1516,6 +1516,28 @@ const anyChurchOf = (m) => churchesOf(m)[0] || '';
 const EMPTY_SET = new Set();
 const REQUIRE_APPROVAL = new Set(); // churchpubs whose joins need steward approval (default: open join)
 const ADMITTED_BY = new Map();      // churchpub -> Set(approved member pubkeys) (only used when that church requires approval)
+// …AND WHO SAID SO. The allowlist is an ADDRESSABLE document, so this relay keeps one copy PER AUTHOR at the
+// one address `admitted:<churchpub>` — the church's own, plus one for every delegated steward that has ever
+// approved anybody. ADMITTED_BY used to be overwritten by whichever of those replayed LAST, which on a boot
+// rehydrate is decided by created_at order and nothing else. Two people admitting on the same morning, and
+// the earlier one's decision simply was not in the map.
+//
+// So note() is a MAP-KEEPER here, exactly as it is for check-in clearances: it records that THIS author said
+// THIS, and ADMITTED_BY is the derived union. Newest-per-author (addressable storage already guarantees it)
+// so a name an author drops is really dropped from their copy; union across authors so nobody's approval is
+// discarded because somebody else's was more recent.
+//
+// CLAUDE.md rule 2 — EVERY READER OF ADMITTED_BY, and none of them changes: rebuildMembers(), effMember(),
+// canRead()'s kind-30078 tail, the kind-4 gate's `effectiveMember`, the blob gate, and the pending-join
+// branch. They all ask `admitted.has(pk)`, which is what the union answers; only how the Set is built moves.
+// ADMITTED_SRC has exactly one writer (note()'s ADMITTED_D branch) and one reader (rebuildAdmitted()).
+const ADMITTED_SRC = new Map();     // churchpub -> Map(author pubkey -> Set(pubkeys they approved))
+function rebuildAdmitted(cp) {
+  const per = ADMITTED_SRC.get(cp);
+  const out = new Set();
+  if (per) for (const set of per.values()) for (const pk of set) out.add(pk);
+  ADMITTED_BY.set(cp, out);
+}
 const JOIN_NOTIFIED = new Set();    // "pubkey:churchpub" we've already alerted the steward about (join or request) — dedupe push spam
 const BROADCAST = new Set();   // group ids the church marked broadcast
 // Networks a church joined — allowed to publish church-style content for THAT church.
@@ -2887,7 +2909,7 @@ let _hydrating = false;
 function clearDerivedMaps() {
   for (const m of [MEMBER_DOCS, MEMBER_CHURCHES, GROUP_CHURCH, GROUP_VIS, GROUP_MEMBERS, GROUP_NAMES,
                    GROUP_LEADERS, GROUP_LEADER_BY, GROUP_EVENTPOLICY, STEWARDS_BY, STEWARD_CAPS, BLOCKED_BY, MINORS_BY, APPROVED_BY, NOPHOTO_BY,
-                   GUARDIANS_BY, NETWORKS_BY, ADMITTED_BY, ROSTER_BY, ROSTER_PEOPLE, MEALS_ADMIN_GROUP, ROTA_VIS, CHECKIN_HELPERS,
+                   GUARDIANS_BY, NETWORKS_BY, ADMITTED_BY, ADMITTED_SRC, ROSTER_BY, ROSTER_PEOPLE, MEALS_ADMIN_GROUP, ROTA_VIS, CHECKIN_HELPERS,
                    CHECKIN_PERMITS,
                    FINANCE_SEQ, CARE_RECIPIENT, CARE_SKIPHASH, PEER_URLS, TRUSTED_RELAYS, EVENT_AUDIENCE]) { try { m.clear(); } catch {} }
   // CHECKIN_PERMITS was missing here, and it is the HALF OF THE CONJUNCTION THE WHOLE 2026-09-09 RESTRUCTURE
@@ -3092,8 +3114,25 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     if (!_hydrating) rebuildMembers();
   }
   else if (d.startsWith(ADMITTED_D) && CHURCH_PUBS.has(cp = d.slice(ADMITTED_D.length)) && (e.pubkey === cp || stewardCan(e.pubkey, cp, 'any'))) {   // a church's approved-members allowlist
+    // PER AUTHOR, THEN UNIONED — see ADMITTED_SRC. `.set(cp, set)` here meant the last copy to replay won,
+    // and on a rehydrate that is whichever has the later created_at. The church approves Ada at 10:02, the
+    // churchwarden approves Ben at 10:03, and after the next restart Ada is waiting to be let in again.
+    //
+    // ⚠ THE AUTHOR QUESTION ABOVE IS DELIBERATELY UNCHANGED, and it is a CURRENT-roster test, so a steward
+    // who leaves still loses their approvals from this map on the next rehydrate. That is a KNOWN REMAINING
+    // GAP and it is not fixed here, because the only way to fix it at this line is to stop asking who the
+    // author was — and unlike the check-in withdrawal next door, which can only ever REFUSE somebody, this
+    // document GRANTS. /import is reachable by any church key registered on this box (see _exportAuth) and
+    // writes straight to the store with no accept() pass, so an unauthored ingest would let one church on a
+    // shared community relay admit members into ANOTHER church's gated corpus. The evidence needed to tell a
+    // departed-but-genuine steward from a co-tenant's forgery — the roster as it stood when the document was
+    // written — is overwritten by the next roster, so this box cannot recover it. Written up for the owner to
+    // decide rather than improvised; the read gate (retractionExempt, in canRead) is fixed and is what keeps
+    // the document itself being SERVED.
     const set = new Set(); if (!removed) { try { (JSON.parse(e.content).pubkeys || []).forEach(p => { const h = toHexPub(p); if (h) set.add(h); }); } catch {} }
-    ADMITTED_BY.set(cp, set); if (!_hydrating) rebuildMembers();
+    let per = ADMITTED_SRC.get(cp); if (!per) { per = new Map(); ADMITTED_SRC.set(cp, per); }
+    per.set(e.pubkey, set);
+    rebuildAdmitted(cp); if (!_hydrating) rebuildMembers();
   }
   else if (d.startsWith(MINORS_D) && CHURCH_PUBS.has(cp = d.slice(MINORS_D.length)) && e.pubkey === cp) {   // safeguarding: church's minors list — OWNER-ONLY
     const set = new Set(); if (!removed) { try { (JSON.parse(e.content).pubkeys || []).forEach(p => { const h = toHexPub(p); if (h) set.add(h); }); } catch {} }
@@ -4389,7 +4428,36 @@ function canRead(e, authed) {
     // says "cleared" while the desk refuses (audit of 9f17160, 2026-09-11). Tombstones only; the CLEARANCE half
     // is decided below, in the CHECKINPERM_D branch, and a removed steward's clearance is rightly withheld.
     const checkinWithdrawal = d.startsWith(CHECKINPERM_D) && ((e.tags || []).some(t => t[0] === 'deleted') || !e.content);
-    const retractionExempt = memberWritable || d.startsWith(NEED_D) || d.startsWith('finance/') || d.startsWith(CHECKIN_D) || checkinWithdrawal;
+    // …AND THE LIST OF WHO IS ALLOWED IN. The owner's decision, 2026-09-16, in his words: "approved members
+    // must always survive a steward leaving."
+    //
+    // WHY IT IS ONLY NOW REACHABLE. A delegated steward's approvals used to go out with no ['church'] tag at
+    // all (src/steward.src.js, setAdmitted), so `ch` was empty and this retraction never looked at them — at
+    // the price of no reader ever finding them either. Tagging them is the fix above; it also walks them
+    // straight into this rule, and the tag on its own would be worse than the bug. A church that gates joins
+    // reads this document to decide who may be there. Retract one and the church silently reverts to an older
+    // allowlist the moment a delegate stands down: everyone that person admitted since is back at "Waiting to
+    // be let in", on a relay that restarts itself, with nothing said to anybody.
+    //
+    // IT IS THE SAME JUDGEMENT AS THE FOUR ABOVE, and the same one accept() is not asked to make. A register
+    // that quietly drops entries when a rota changes is worse than no register, because nobody can tell it has
+    // happened — that sentence was written for care needs and it is truer here, because an approval is what
+    // stands between a person and their own church's corpus.
+    //
+    // WHAT IT COSTS, SAID PLAINLY RATHER THAN WAVED AT: a steward who admits somebody on their way out
+    // survives too, until the church rewrites the list. That is exactly the trade already accepted for the
+    // books and the children's register, and it is the correctable direction — a name the church did not want
+    // is visible on the Members screen and one press away from being blocked, which is a separate document and
+    // a separate gate this rule does not touch. Losing real entries is silent, and no press fixes it.
+    //
+    // THIS IS A READ GATE AND CHANGES NOTHING THAT IS ACCEPTED OR STORED. `retractionExempt` has exactly one
+    // reader — the line below it — and accept() does not consult it. So a departed steward may still write
+    // NOTHING more (accept()'s ADMITTED_D branch is untouched: leaderOf(cp) || stewardCan(…,'members')), and
+    // no ingest rule gains a new question. That is what keeps this out of the family of the 2026-08-20
+    // incident, where replaying a WRITE gate over an /import deleted a church's whole finance journal: this
+    // adds no door, opens no door, and deletes nothing. It only stops withholding what is already on disk.
+    const retractionExempt = memberWritable || d.startsWith(NEED_D) || d.startsWith('finance/') || d.startsWith(CHECKIN_D) || checkinWithdrawal
+      || d.startsWith(ADMITTED_D);
     // 'any', deliberately, and NOT this document's own capability. This asks whether the author still acts
     // for the church at all, so that narrowing a delegate to Finance does not make every group they ever
     // created stop being served to the congregation. An owner who writes them an EMPTY capability list is
