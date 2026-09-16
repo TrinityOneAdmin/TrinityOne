@@ -29,7 +29,7 @@ const h = (type, props, ...kids) => ({ type, props: { ...(props || {}), children
 const SERVICE = { id: 'svc1', date: '2026-09-13', time: '10:30', name: 'Sunday Gathering' };
 const ROSTER = { id: 't1', roles: [{ id: 'r1', name: 'Greeter' }], people: [{ id: 'p1', name: 'Ruth Bexley', pub: 'ab'.repeat(32) }], pods: [] };
 
-function mount({ publishRota, publishService, preset = {} } = {}) {
+function mount({ publishRota, publishService, sendReq, preset = {} } = {}) {
   const sent = [];        // outward serving requests
   const published = [];   // rota publishes attempted
   const states = [];
@@ -54,7 +54,9 @@ function mount({ publishRota, publishService, preset = {} } = {}) {
     Steward: {
       publishService: publishService || (async (s) => ({ id: 'svc' + Math.random().toString(36).slice(2, 6), ...s })),
       publishRota: async (r) => { published.push(r); return publishRota ? publishRota(r) : { id: r.service }; },
-      sendServingRequest: async (...a) => { sent.push(a); return true; },
+      // NULL is what the real one resolves when no relay accepted (src/steward.src.js: publish() returns
+      // false and sendServingRequest maps it to null). `sendReq` lets a test choose that outcome.
+      sendServingRequest: async (...a) => { sent.push(a); return sendReq ? sendReq(...a) : true; },
     },
   };
   // Any other useStewardX the screen reaches for answers with an empty list. Stubbing THOSE cannot answer the
@@ -138,4 +140,64 @@ test('a relay refusal is a refusal too, not just a missing key', async () => {
   const btn = handlerNamed(m, 'publishRota');
   await btn.props.onClick();
   assert.deepEqual(m.sent, [], 'a rota the relay never accepted still asked people to serve');
+});
+
+// ── AND THE OTHER HALF OF THE SAME LIE, FOUND 2026-09-16 ────────────────────────────────────────────────
+//
+// The tests above cover "the rota did not save, so ask nobody". They say nothing about the case where the
+// rota DID save and the asks themselves failed — and measured on this screen before the fix, that case
+// produced a flash BYTE-IDENTICAL to a completely successful publish:
+//
+//   asks accepted -> "Published — everyone assigned has been asked"
+//   asks refused  -> "Published — everyone assigned has been asked"
+//
+// sendRequestsFor was a plain `for` loop that discarded every promise, though sendServingRequest has always
+// resolved null when no relay accepted. So a steward stopped chasing, the volunteers were never asked, and
+// the member app contradicted the console to their face: "Your leader hasn't sent a request for this yet."
+//
+// These two tests are a PAIR and neither works alone. Without the control, deleting the message entirely
+// passes the first. Without the first, a fix that always warned would pass the control.
+const flashText = (m) => {
+  const out = [];
+  const walk = (v) => {
+    if (typeof v === 'string') { if (v.length > 6) out.push(v); return; }
+    if (Array.isArray(v)) return v.forEach(walk);
+    if (v && typeof v === 'object' && v.props) walk(v.props.children);
+  };
+  m.walk().forEach(n => { if (n.props) walk(n.props.children); });
+  return out.filter(t => /Published|asked|signal/i.test(t));
+};
+
+test('a rota that saved but could not ask anybody does NOT say everyone was asked', async () => {
+  const m = mount({ publishRota: async (r) => ({ id: r.service }), sendReq: async () => null });
+  await handlerNamed(m, 'publishRota').props.onClick();
+  await new Promise(r => setTimeout(r, 30));
+  const said = flashText(m).join(' | ');
+
+  assert.ok(m.sent.length >= 1,
+    'no serving request was even attempted, so this test is not exercising the path it names');
+  assert.ok(!/everyone assigned has been asked/i.test(said),
+    'THE DEFECT: every request to serve was refused and the console still told the steward that everyone ' +
+    'assigned had been asked. They stop chasing; nobody turns up. On screen: ' + said);
+  assert.match(said, /couldn’t be asked/i,
+    'the console no longer tells the steward that some people could not be asked. On screen: ' + said);
+  assert.match(said, /press Publish again/i,
+    'the message says something went wrong but not what to do about it. Re-publishing is the whole recovery ' +
+    '— alreadyAsked reads the relay\'s own request documents, so it re-asks only the people who were ' +
+    'missed. A warning without that sentence sends a steward looking for a problem they cannot find.');
+});
+
+test('…and a rota whose requests ALL landed still says everyone was asked', async () => {
+  // The control. Without it, a fix that warns unconditionally — or one that deleted the happy-path message
+  // altogether — would pass the test above and nobody would notice.
+  const m = mount({ publishRota: async (r) => ({ id: r.service }), sendReq: async () => ({ id: 'req1' }) });
+  await handlerNamed(m, 'publishRota').props.onClick();
+  await new Promise(r => setTimeout(r, 30));
+  const said = flashText(m).join(' | ');
+  assert.match(said, /everyone assigned has been asked/i,
+    'a publish in which every request landed no longer confirms it, so the warning above is now permanent ' +
+    'and means nothing. On screen: ' + said);
+  assert.ok(!/couldn’t be asked/i.test(said),
+    'the console warned that people could not be asked on a publish where every request succeeded. On ' +
+    'screen: ' + said);
 });

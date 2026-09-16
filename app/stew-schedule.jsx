@@ -545,11 +545,17 @@ function DashRota({ onNewTeam }) {
       });
       if (s.id === svcId) setAssign(next);
       saves.push(window.Steward.publishRota({ service: s.id, published: true, assign: next })
-        .then(r => { if (r != null) sendRequestsFor(s.id, s.date, s.time, s.name, next); return r; }));
+        .then(async r => {
+          if (r == null) return { rota: null, failed: 0, tried: 0 };
+          const asked = await sendRequestsFor(s.id, s.date, s.time, s.name, next);
+          return { rota: r, failed: asked.failed, tried: asked.tried };
+        }));
     });
     Promise.all(saves).then(out => {
-      const lost = out.filter(r => r == null).length;
+      const lost = out.filter(r => r.rota == null).length;
       if (lost) { setFlash(SCH_NO_KEY); setTimeout(() => setFlash(''), 4000); return; }
+      const unasked = out.reduce((n, r) => n + r.failed, 0);
+      if (unasked) { setFlash(unaskedFlash(unasked, out.reduce((n, r) => n + r.tried, 0))); setTimeout(() => setFlash(''), 5000); return; }
       setFlash('Rotated ' + pods.length + ' pods across ' + upcoming.length + ' service' + (upcoming.length === 1 ? '' : 's'));
       setTimeout(() => setFlash(''), 2600);
     });
@@ -557,16 +563,32 @@ function DashRota({ onNewTeam }) {
   };
   // already asked this person for this exact slot? (don't re-send on every publish)
   const alreadyAsked = (sId, tId, rId, pub) => requests.some(q => q.serviceId === sId && q.teamId === tId && q.roleId === rId && q.memberPub === pub);
-  const sendRequestsFor = (sId, sDate, sTime, sName, assignMap) => {
+  // ⚠ THIS RETURNS A COUNT, AND EVERY CALLER MUST USE IT. It used to be a plain loop that threw away every
+  // answer, so a steward whose requests all failed still read "Published — everyone assigned has been asked".
+  // Measured 2026-09-16 by driving this screen with the requests refused: the flash was byte-identical to the
+  // one a fully successful publish produces, while the volunteer's own app said "Your leader hasn't sent a
+  // request for this yet". Two screens, one true, and nobody on the door.
+  // sendServingRequest resolves NULL when no relay accepted (see src/steward.src.js — publish() returns false
+  // and it maps that to null), so the engine always knew; only the screen discarded it.
+  // Re-sending is safe and is the whole recovery: alreadyAsked reads the request documents the RELAY holds,
+  // so an ask that never landed is not there, and pressing Publish again asks exactly the people who were
+  // missed and nobody else.
+  const sendRequestsFor = async (sId, sDate, sTime, sName, assignMap) => {
+    const jobs = [];
     for (const key in assignMap) {
       const a = assignMap[key]; if (!a || !a.pub) continue;
       const [teamId, roleId] = key.split('::');
       if (alreadyAsked(sId, teamId, roleId, a.pub)) continue;
       const team = teams.find(t => t.id === teamId); const m = team ? teamMeta(team) : {};
       const role = rosterFor(teamId).roles.find(r => r.id === roleId);
-      window.Steward.sendServingRequest({ memberPub: a.pub, serviceId: sId, teamId, roleId, role: role ? role.name : '', teamName: m.name || (team && team.name) || 'Team', icon: m.icon, accent: m.accent, date: sDate, time: sTime, service: sName, note: `Can you serve on ${m.name || (team && team.name) || 'the team'} (${role ? role.name : ''})?` });
+      jobs.push(Promise.resolve(window.Steward.sendServingRequest({ memberPub: a.pub, serviceId: sId, teamId, roleId, role: role ? role.name : '', teamName: m.name || (team && team.name) || 'Team', icon: m.icon, accent: m.accent, date: sDate, time: sTime, service: sName, note: `Can you serve on ${m.name || (team && team.name) || 'the team'} (${role ? role.name : ''})?` })).catch(() => null));
     }
+    const out = await Promise.all(jobs);
+    const failed = out.filter(r => r == null).length;
+    return { tried: out.length, failed };
   };
+  // "2 of 5 couldn't be asked", and what to do about it. One sentence, because it sits in a flash.
+  const unaskedFlash = (failed, tried) => `Published, but ${failed} of ${tried} couldn’t be asked — press Publish again when you have signal.`;
   // pure: fill the gaps of `base` for a given date, not reusing anyone already on that day
   const fillAssign = (base, date, svcId) => {
     const next = { ...base };
@@ -632,7 +654,7 @@ function DashRota({ onNewTeam }) {
       const probe = await window.Steward.publishService({ id: svc.id, name: svc.name, date: svc.date, time: svc.time });
       if (probe == null) { setFlash(SCH_NO_KEY); setTimeout(() => setFlash(''), 4000); return; }
     }
-    let lost = 0;
+    let lost = 0, unasked = 0, triedAsks = 0;
     for (const dt of dates) {
       if (byDate[dt]) { ensured.push(byDate[dt]); continue; }
       const ns = await window.Steward.publishService({ name: svc.name, date: dt, time: svc.time });
@@ -642,10 +664,12 @@ function DashRota({ onNewTeam }) {
       const filled = fillAssign(assignFor(s.id) || {}, s.date, s.id);
       const r = await window.Steward.publishRota({ service: s.id, published: true, assign: filled });
       if (r == null) { lost++; continue; }   // do not ask anyone to serve on a rota that does not exist
-      sendRequestsFor(s.id, s.date, s.time, s.name, filled);
+      const asked = await sendRequestsFor(s.id, s.date, s.time, s.name, filled);
+      unasked += asked.failed; triedAsks += asked.tried;
       if (s.id === svcId) setAssign(filled);
     }
     if (lost) { setFlash(SCH_NO_KEY); setTimeout(() => setFlash(''), 4000); return; }
+    if (unasked) { setFlash(unaskedFlash(unasked, triedAsks)); setTimeout(() => setFlash(''), 5000); return; }
     setFlash(`Created + filled ${ensured.length} service${ensured.length > 1 ? 's' : ''}`); setTimeout(() => setFlash(''), 2800);
   };
   const assignFor = (id) => (draft[id] !== undefined ? draft[id] : (persisted(id) ? persisted(id).assign : null));
@@ -661,7 +685,8 @@ function DashRota({ onNewTeam }) {
     // Do NOT ask people to serve on a rota that was not saved: they would get the request and the rota would
     // not exist. sendRequestsFor is the outward-facing half, so it waits on the publish landing.
     if (r == null) { setFlash(SCH_NO_KEY); setTimeout(() => setFlash(''), 4000); return; }
-    sendRequestsFor(svcId, svc.date, svc.time, svc.name, assign);
+    const asked = await sendRequestsFor(svcId, svc.date, svc.time, svc.name, assign);
+    if (asked.failed) { setFlash(unaskedFlash(asked.failed, asked.tried)); setTimeout(() => setFlash(''), 5000); return; }
     setFlash('Published — everyone assigned has been asked'); setTimeout(() => setFlash(''), 2400);
   };
 
