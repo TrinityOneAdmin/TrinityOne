@@ -582,6 +582,48 @@ function CareRequests({ ctx }) {
   );
 }
 
+// ── ONE ASK IS ONE ASK, EVEN WHEN THE SEND HAS TO BE REPEATED ────────────────────────────────────────────
+//
+// A family tapped Send, the relay TOOK the request but did not acknowledge it in time, the sheet said
+// "Couldn't send — check your connection and try again", and they tapped Send again. That minted a SECOND
+// request, because publishCareRequest used to choose the id's random tail on every call. The care team saw
+// two families' worth of need where there was one and organised two meal trains. Measured against a live
+// gateway, 2026-09-16.
+//
+// So the tail is chosen HERE, once, when the sheet OPENS — a care request is an addressable document, and
+// two writes at one id leave one document, so a retry REPLACES rather than adds. It is handed to the engine
+// as `draftId`; the engine still builds the id (`<asker>-<tail>`) and still refuses anything that is not
+// plain hex of the right length, so the relay's ownership rule is untouched.
+//
+// WHY IT IS WRITTEN DOWN AND NOT JUST HELD IN STATE: a low-memory Android will kill this app while the
+// member is staring at a failed send, and a nonce that died with the process would duplicate on the retry
+// after the restart — the exact case the fix exists for.
+//
+// WHY IT IS THROWN AWAY ON CLOSE: closing and reopening the sheet is a person deciding to ask again, and a
+// family that genuinely needs to ask twice must be able to — even in identical words. So a deliberate close
+// (Cancel, or tapping the backdrop) drops it, and so does a confirmed send. Being killed does neither,
+// which is exactly the distinction wanted.
+//
+// ⚠ RANDOM, NEVER DERIVED FROM WHAT THEY WROTE. The d-tag is in the CLEAR on the relay even though the body
+// is sealed, so an id hashed from a short note plus a known member key is guessable — it would let a relay
+// operator confirm what somebody asked for help about.
+const CARE_DRAFT_KEY = 'trinityone.carereq.draft';
+// Per church: the same member may belong to two, and an addressable id belongs to (author, kind, d-tag)
+// with no church in it — so one nonce carried across a church switch would overwrite the other church's
+// request. The suffix is never read back for anything but this.
+const _careDraftKey = () => CARE_DRAFT_KEY + '.' + ((window.Fellowship && window.Fellowship.churchPub) || '');
+function _careDraftId() {
+  let k = '';
+  try { k = localStorage.getItem(_careDraftKey()) || ''; } catch (e) {}
+  if (/^[0-9a-f]{16}$/.test(k)) return k;
+  const b = new Uint8Array(8);
+  try { crypto.getRandomValues(b); } catch (e) { for (let i = 0; i < 8; i++) b[i] = Math.floor(Math.random() * 256); }
+  k = Array.from(b).map(x => x.toString(16).padStart(2, '0')).join('');
+  try { localStorage.setItem(_careDraftKey(), k); } catch (e) {}
+  return k;
+}
+function _clearCareDraft() { try { localStorage.removeItem(_careDraftKey()); } catch (e) {} }
+
 // WHAT WE MAY HONESTLY TELL SOMEONE WHO HAS JUST ASKED FOR HELP.
 // publishCareRequest seals a copy of the request to each recipient it can name, and it names them at send
 // time from the church's published care-team roster. When that roster cannot be established — a relay still
@@ -605,7 +647,20 @@ const CARE_SEND_REFUSAL = {
   // good signal — and "check your connection" would send someone asking for help to stare at their wifi.
   // Say plainly that it did not go, and point them at a person, because that is the route that still works.
   'no-network-relay': 'Your request was NOT sent — we couldn’t reach a relay your church runs. Please speak to a leader in person, and try again later.',
+  // ── the three honest outcomes of a publish (_pubReason in src/fellowship.src.js) ────────────────────────
+  // NOT a verdict, and the reason this whole change exists. Nobody answered in time; the request is signed,
+  // on the wire, and often already stored. "Couldn't send — check your connection" was a false sentence over
+  // a perfectly good connection, and it made Send the obvious next tap — which is how one family's ask
+  // became two requests and two meal trains. Say what we actually know, and ask them not to re-send yet.
+  'unconfirmed': 'We couldn’t confirm that reached your church — it may well have. Don’t send it again yet; check your requests in a moment, or speak to a leader.',
+  // SETTLED: nothing left this phone at all.
+  'not-sent': 'Your request was NOT sent — it never left this phone. Please speak to a leader in person, and try again when you have a signal.',
+  // SETTLED: a relay read it and said no. Retrying the same words will get the same answer, so point at a person.
+  'refused': 'Your church’s relay would not accept this request, so it was NOT sent. Please speak to a leader in person — they can sort this out.',
 };
+// TRUE ONLY OF THE ONE ANSWER THAT IS NOT A VERDICT. Used to decide whether the sheet may fall back to a
+// second, different publish, and whether Send is still the obvious next tap.
+const careSendUnconfirmed = (res) => !!(res && res.error === 'unconfirmed');
 function careSentWording(res) {
   // A YOUNG PERSON DID NOT WRITE TO THE CARE TEAM. Their request goes to the adults their church has cleared,
   // and telling them otherwise names a group of people they did not choose to tell — unsettling in itself, and
@@ -663,6 +718,15 @@ function AskForHelpForm({ ctx, onClose, onSent }) {
   const [note, setNote] = React.useState('');
   const [busy, setBusy] = React.useState(false);
   const [err, setErr] = React.useState('');
+  // ⚠ LAZY useState, NOT an effect: the tail has to exist before the first Send, and an effect runs after
+  // the draw. One mint per mount, kept for every retry inside this open sheet — see _careDraftId above.
+  const [_draftId] = React.useState(_careDraftId);
+  // A DELIBERATE CLOSE ENDS THIS ASK. Cancel and the backdrop both come through here so that reopening the
+  // sheet is a genuinely new request; only being killed by the system keeps the tail alive.
+  const _cancel = () => { _clearCareDraft(); onClose(); };
+  // "We couldn't confirm it" is not "it failed". Once we are in that state Send stops being the obvious next
+  // tap — the primary action becomes closing the sheet, and re-sending stays reachable but quiet.
+  const [held, setHeld] = React.useState(false);
   const TYPES = Object.keys(CARE_TYPE_LABEL);
   const chip = (active) => ({ padding: '8px 13px', borderRadius: 999, border: '1px solid ' + (active ? 'var(--clay)' : 'var(--line)'), background: active ? 'color-mix(in oklab, var(--clay) 12%, var(--surface))' : 'var(--surface)', color: active ? 'var(--clay-deep, #b4462f)' : 'var(--ink-2)', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'inline-flex', alignItems: 'center', gap: 6 });
   const lbl = { fontSize: 11.5, fontWeight: 800, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '18px 0 9px' };
@@ -679,18 +743,35 @@ function AskForHelpForm({ ctx, onClose, onSent }) {
       if (_opensNeed) {
         const r = await window.Fellowship.publishCareNeed({ types, forSelf, forName: forSelf ? '' : forName, note, dates, meals, dietary: diet });
         if (r && !r.error) ok = { ...r, teamOnly: _teamOnly };
+        // ⚠ A FALLBACK IS A SECOND PUBLISH, AND A NEED IS PUBLIC. publishCareNeed returned a bare `null` for
+        // every failure, including "nobody acknowledged it in time" — and the line below reads falsy as
+        // "that did not happen, send the private one instead". Measured 2026-09-16: ONE tap left a PUBLIC
+        // need on the relay AND a private care request AND a success toast. The family asked once,
+        // privately, and got a public notice as well. That is a privacy failure, not untidiness.
+        //
+        // So the fallback is allowed only where the need SETTLED as not-happened — every policy refusal
+        // ('minor-cannot-open', 'unknown-clearance', 'no-care-key', 'no-dates'), plus 'refused' (a relay
+        // read it and said no) and 'not-sent' (nothing left the phone). Never on 'unconfirmed'.
+        if (careSendUnconfirmed(r)) {
+          setBusy(false); setHeld(true);
+          setErr(CARE_SEND_REFUSAL[r.error]);
+          return;
+        }
       }
-      if (!ok) ok = await window.Fellowship.publishCareRequest({ types, forSelf, forName: forSelf ? '' : forName, when, urgency, note });
+      if (!ok) ok = await window.Fellowship.publishCareRequest({ types, forSelf, forName: forSelf ? '' : forName, when, urgency, note, draftId: _draftId });
     } catch (e) {}
     setBusy(false);
     // A REFUSAL IS AN OBJECT TOO. publishCareRequest answers with a reason when it will not send a child's
     // request — it could not tell whether the sender is a child, could not establish who may receive it, or
     // the church has cleared nobody. `if (ok)` read every one of those as success and thanked them for it.
-    if (ok && ok.error) { setErr(CARE_SEND_REFUSAL[ok.error] || 'Couldn’t send — please try again.'); return; }
-    if (ok) onSent(ok); else setErr('Couldn’t send — check your connection and try again.');
+    // …and since 2026-09-16 it also answers with the publish outcome itself ('unconfirmed' | 'not-sent' |
+    // 'refused') instead of a bare null, so the sentence below is no longer said over a good connection.
+    if (ok && ok.error) { setHeld(careSendUnconfirmed(ok)); setErr(CARE_SEND_REFUSAL[ok.error] || 'Couldn’t send — please try again.'); return; }
+    // CONFIRMED. The draft tail has done its job; the next time this sheet opens it is a new ask.
+    if (ok) { _clearCareDraft(); onSent(ok); } else setErr('Couldn’t send — check your connection and try again.');
   };
   return (
-    <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 60, background: 'rgba(34,28,22,.44)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
+    <div onClick={_cancel} style={{ position: 'absolute', inset: 0, zIndex: 60, background: 'rgba(34,28,22,.44)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
       <div onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Ask for help" style={{ width: '100%', maxWidth: 460, maxHeight: '88%', overflowY: 'auto', background: 'var(--surface)', borderRadius: '22px 22px 0 0', border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: '22px 20px calc(24px + env(safe-area-inset-bottom))' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
           <Icon name="heart" size={20} color="var(--clay)" />
@@ -771,9 +852,17 @@ function AskForHelpForm({ ctx, onClose, onSent }) {
         <textarea value={note} onChange={e => setNote(e.target.value)} placeholder="A sentence or two — as much or as little as you like." style={{ width: '100%', boxSizing: 'border-box', minHeight: 84, resize: 'vertical', padding: 12, borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontSize: 14.5, fontFamily: 'var(--font-ui)', outline: 'none', lineHeight: 1.45 }} />
 
         {err ? <div style={{ fontSize: 13, color: 'var(--clay-deep, #b4462f)', fontWeight: 700, marginTop: 12 }}>{err}</div> : null}
+        {/* ONCE WE CANNOT CONFIRM IT, SEND IS NO LONGER THE OBVIOUS NEXT TAP. The request is probably already
+            with the church, so the two controls swap weight: closing becomes the primary action and sending
+            again stays reachable but quiet. A re-send from here writes to the SAME id and replaces, so even
+            a member who taps it anyway still leaves one request — this is belt as well as braces. */}
         <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
-          <button onClick={onClose} style={{ flex: 1, padding: 13, borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', fontWeight: 700, fontSize: 14.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Cancel</button>
-          <button onClick={submit} disabled={busy} style={{ flex: 2, padding: 13, borderRadius: 14, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 800, fontSize: 15, cursor: busy ? 'wait' : 'pointer', fontFamily: 'var(--font-ui)', opacity: busy ? .7 : 1 }}>{busy ? (_opensNeed ? 'Opening…' : 'Sending…') : (_isMinor ? 'Send' : _opensNeed ? 'Open this need' : 'Send to care team')}</button>
+          <button onClick={_cancel} style={held
+            ? { flex: 2, padding: 13, borderRadius: 14, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 800, fontSize: 15, cursor: 'pointer', fontFamily: 'var(--font-ui)' }
+            : { flex: 1, padding: 13, borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', fontWeight: 700, fontSize: 14.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>{held ? 'Close' : 'Cancel'}</button>
+          <button onClick={submit} disabled={busy} style={held
+            ? { flex: 1, padding: 13, borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', fontWeight: 700, fontSize: 14, cursor: busy ? 'wait' : 'pointer', fontFamily: 'var(--font-ui)', opacity: busy ? .7 : 1 }
+            : { flex: 2, padding: 13, borderRadius: 14, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 800, fontSize: 15, cursor: busy ? 'wait' : 'pointer', fontFamily: 'var(--font-ui)', opacity: busy ? .7 : 1 }}>{busy ? (_opensNeed ? 'Opening…' : 'Sending…') : held ? 'Send it again' : (_isMinor ? 'Send' : _opensNeed ? 'Open this need' : 'Send to care team')}</button>
         </div>
       </div>
     </div>

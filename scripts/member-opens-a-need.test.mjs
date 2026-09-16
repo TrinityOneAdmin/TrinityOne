@@ -270,6 +270,13 @@ function sheet({ opensNeed = true, dates = ['2026-09-01'], needAnswer, teamOnly 
     meals: ['dinner'], diet: [],
     // submit() clears the error before it starts; only a REAL message is an event worth recording.
     setErr: (e) => { if (e) calls.push(['err', e]); }, setBusy: () => {},
+    // ── RULE 2: submit()'s free variables, 2026-09-16 ────────────────────────────────────────────────────
+    // The sheet now carries a DRAFT ID minted when it opens (so a retry replaces the first request instead
+    // of minting a second one), and a `held` state for the one publish outcome that is not a verdict. A
+    // name this scope does not supply is a ReferenceError inside submit's own `try { … } catch {}`, which is
+    // SWALLOWED and reads as "nothing was published" — so these are listed here, not discovered.
+    _draftId: 'dddddddddddddddd', _clearCareDraft: () => {}, setHeld: () => {},
+    careSendUnconfirmed: (r) => !!(r && r.error === 'unconfirmed'),
     onSent: (r) => { calls.push(['sent', r]); },
     CARE_SEND_REFUSAL: {},
     window: { Fellowship: {

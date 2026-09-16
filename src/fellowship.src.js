@@ -2940,10 +2940,12 @@ function _publishAny(relays, evt) {
 //
 // ONE FUNCTION, because there are three sibling writers and the last round of this fix reached only one of
 // them — and then the one it reached was wrong in the other direction for a month.
-// CALLERS (rule 2, complete, re-grepped 2026-09-15): writeArrival, writeCheckin, releaseCheckin,
-// markSafe, and `sent()` inside createChildAccount. The first three were the whole list when this was
-// written; bcf1b67 added the last two and did not update it here, which is the same rule broken on the
-// same shared function it was reaching into. Any new writer that reports an outcome to a member
+// CALLERS (rule 2, complete, re-grepped 2026-09-16): writeArrival, writeCheckin, releaseCheckin,
+// markSafe, `sent()` inside createChildAccount, publishCareRequest and publishCareNeed. The first three
+// were the whole list when this was written; bcf1b67 added markSafe and createChildAccount and did not
+// update it here, which is the same rule broken on the same shared function it was reaching into. The last
+// two joined on 2026-09-16 — a family asking for help was told "check your connection" over a send the
+// relay had taken, and tapped Send again. Any new writer that reports an outcome to a member
 // should use it — and add itself to this line.
 function _pubReason(e) {
   if (e && e.unsent) return 'not-sent';
@@ -6427,7 +6429,30 @@ window.Fellowship = {
     // app to ask for help" so a member on an older build is told what to do rather than to check their wifi.
     // The fallback existed briefly and had to go — it was consulted at only one of the four doors into the
     // relay, which preserved the exact bypass this id is here to close.
-    const id = pub.slice(0, 16) + '-' + _hex(crypto.getRandomValues(new Uint8Array(8)));
+    //
+    // ⚠ THE TAIL IS THE CALLER'S, AND THAT IS THE WHOLE OF THIS FIX. It used to be minted here, fresh, on
+    // every call — so a Send the relay TOOK but did not acknowledge in time (the app says "couldn't send")
+    // became a SECOND REQUEST when the family tapped Send again. Measured against a live gateway
+    // 2026-09-16: two taps, two d-tags, and a care team looking at two families' worth of need where there
+    // was one. `fillCareSlot` under identical staging stored ONE, because its id is derived from something
+    // stable — every other writer in this file keys off something stable and this one did not.
+    //
+    // The sheet mints one draft tail when it OPENS and keeps it until the ask is confirmed or the sheet is
+    // deliberately closed (see AskForHelpForm in app/screens-today.jsx), so a retry writes to the SAME
+    // addressable id and REPLACES: two writes at one id leave one document. Closing and reopening mints a
+    // new tail, so a family who genuinely needs to ask twice still can, even with identical words.
+    //
+    // SHAPE UNCHANGED, so nothing already on a relay is affected: 16 hex characters after the asker's
+    // 16-character prefix, exactly as before. `carereqIdOk` in scripts/gateway.mjs only ever reads the part
+    // BEFORE the first `-` (ID_OWNER_RE = /^([0-9a-f]{8,64})-/) and leaves the tail unconstrained, so this
+    // changes only how the tail is CHOSEN. Anything that is not plain lowercase hex of the right length is
+    // ignored and a random tail minted, so a caller cannot reshape the id from outside.
+    //
+    // ⚠ NEVER DERIVE IT FROM WHAT THEY WROTE. The d-tag travels in the CLEAR on the relay even though the
+    // body is sealed, so an id hashed from a short note plus a known member key is guessable — it would let
+    // a relay operator confirm what somebody asked for help ABOUT. Random, or nothing.
+    const draft = String(fields.draftId || '').toLowerCase();
+    const id = pub.slice(0, 16) + '-' + (/^[0-9a-f]{8,32}$/.test(draft) ? draft : _hex(crypto.getRandomValues(new Uint8Array(8))));
     // WHICH RULE PICKED THIS AUDIENCE, said out loud. A reply reuses the request's recipient list, which is
     // right for a young person — but for an ordinary adult it froze the care rota as it stood that day, so a
     // care member who joined afterwards could no longer read new replies on a live thread. "Any care member
@@ -6453,7 +6478,17 @@ window.Fellowship = {
       // person instead. (memory: fix-the-control-not-the-label — six controls have toasted success over a
       // send that never happened; this is the reason a seventh is not being added here.)
       if (isNoNetworkRelay(e)) return { error: 'no-network-relay' };
-      return null;
+      // ⚠ THREE ANSWERS, NOT TWO, AND THIS RETURNED `null` FOR ALL OF THEM. `null` is rendered by the sheet
+      // as "Couldn't send — check your connection and try again", which is a false sentence over the
+      // commonest of the three: `unconfirmed` means nobody answered inside WEDGE_ACK_MS, and the event is
+      // signed, on the wire, and often already stored. Saying "it failed, try again" there is what put a
+      // second request in front of the care team. `_pubReason` is the classifier ten sibling writers
+      // already use (see its CALLERS line); this branch was the last big writer discarding it.
+      //
+      // ADDITIVE for the ONE caller: AskForHelpForm.submit already reads `ok.error` and renders
+      // CARE_SEND_REFUSAL[ok.error], so a reason it knows the words for is an improvement and a reason it
+      // does not falls back to the same generic sentence `null` produced. Nothing else calls this.
+      return { error: _pubReason(e) };
     }
     // The caller must be able to tell the member the truth about who has this. `narrowed` = we could not
     // establish the team, so only the church leader holds a key to it; teamCount 0 with narrowed false = the
@@ -6631,7 +6666,17 @@ window.Fellowship = {
     const id = 'care' + _hex(crypto.getRandomValues(new Uint8Array(6)));
     const body = { id, type, types: uniq.length ? uniq : [type], dates, startDate: dates[0] || '', endDate: dates[dates.length - 1] || '', meals, dayMeals: {}, enc, by: pub, openedByMember: true };
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CARE_D + id], ['t', NET], ['church', cp], ['enc', 'care1']], content: JSON.stringify(body) }, sk);
-    try { await _publishAny(churchRelays(), evt); } catch (e) { console.warn('[fellowship] member need publish failed', e); return null; }
+    // ⚠ A NEED IS PUBLIC, SO "WE COULD NOT CONFIRM IT" MUST NOT READ AS "IT DID NOT HAPPEN". This returned
+    // `null` for every failure, and the sheet falls back to a PRIVATE care request on a falsy answer — so a
+    // publish the relay took but did not acknowledge in time gave one tap a PUBLIC need on the relay AND a
+    // private request AND a success toast. The family asked once, privately, and got a public notice too.
+    // Measured 2026-09-16. That is a privacy failure, not untidiness.
+    //
+    // Same three answers as every other writer, through the same `_pubReason` (see its CALLERS line). The
+    // caller falls through to the private request only on the two SETTLED answers — `refused` (a box read
+    // it and said no) and `not-sent` (nothing left the device) — and never on `unconfirmed`.
+    try { await _publishAny(churchRelays(), evt); }
+    catch (e) { console.warn('[fellowship] member need publish failed', e); return { error: _pubReason(e) }; }
     return { id, need: true };
   },
   // The person a need is FOR closes it themselves ("I'm sorted, thanks"). Dignity: someone who asked for help

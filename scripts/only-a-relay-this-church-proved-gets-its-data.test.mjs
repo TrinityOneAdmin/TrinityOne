@@ -634,6 +634,10 @@ function memberOn({ church, relays = [], canonical = [], pins = {}, store = memS
     fnBody(src, 'function _classify', '_classify'),
     fnBody(src, 'function _dedupeRelays', '_dedupeRelays'),
     fnBody(src, 'function _publishAny', '_publishAny'),
+    // RULE 2, 2026-09-16: publishCareRequest classifies its own publish failure through the shared
+    // _pubReason instead of returning a bare null. Lifted with the rest — case 2 below stages a publish
+    // that reaches nothing, which is exactly the branch that reads it.
+    fnBody(src, 'function _pubReason', '_pubReason'),
   ].join('\n');
   assertGateLift(body, 'vendor/fellowship.js');
   assert.match(body, /const targets = _netRelays\(candidates\)/,
