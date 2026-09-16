@@ -2324,10 +2324,24 @@ function NewPostModal({ onClose }) {
   const [text, setText] = React.useState('');
   const [target, setTarget] = React.useState(broadcast ? broadcast.id : (groups[0] ? groups[0].id : 'announce'));
   const [sending, setSending] = React.useState(false);
+  const [err, setErr] = React.useState('');
+  // A POST THAT REACHED NO RELAY MUST NOT TAKE THE WORDS WITH IT.
+  // `publishPost` RESOLVES with `false` when the publish set was empty or every relay refused — it does not
+  // throw — so awaiting it inside a bare try/catch and then calling onClose() closed this dialog identically
+  // on a failure and on a success, and the steward's typing went with the dialog. "The service has moved to
+  // 9am" then exists nowhere: nobody received it and it cannot be sent again without being retyped.
+  // The sibling AnnounceCareModal in app/stew-meals.jsx already does exactly this; so do doPin/doUnpin/
+  // doRemove in GroupChatModal below. Same shape, so there is one thing to learn.
   const post = async () => {
     if (!text.trim() || sending) return;
-    setSending(true);
-    try { await window.Steward.publishPost(text.trim(), target); } catch {}
+    setSending(true); setErr('');
+    let ok = null;
+    try { ok = await window.Steward.publishPost(text.trim(), target); } catch (e) { ok = null; }
+    if (!ok) {
+      setSending(false);
+      setErr('That didn’t post — nothing reached your church. What you wrote is still here; check your connection and press Post again.');
+      return;
+    }
     onClose();
   };
   const dlgRef = useStewDialog(onClose);   // a11y: Escape + focus (dialog semantics on the panel below)
@@ -2348,6 +2362,7 @@ function NewPostModal({ onClose }) {
           </div>
         ) : null}
         <textarea value={text} onChange={e => setText(e.target.value)} autoFocus rows={4} placeholder="Write to your church…" style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 14, background: 'var(--surface-2)', padding: '13px 15px', fontSize: 14.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', resize: 'vertical', lineHeight: 1.5 }} />
+        {err ? <div role="alert" style={{ display: 'flex', alignItems: 'flex-start', gap: 7, fontSize: 12.5, color: 'var(--clay-ink)', margin: '12px 0 0', lineHeight: 1.45 }}><Icon name="alert" size={15} color="var(--clay)" /><span>{err}</span></div> : null}
         <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
           <button onClick={post} disabled={!text.trim() || sending} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: (!text.trim() || sending) ? 0.55 : 1 }}><Icon name="send" size={16} color="var(--on-clay)" /> {sending ? 'Posting…' : 'Post'}</button>
@@ -3042,7 +3057,18 @@ function GroupChatModal({ group, onClose }) {
   React.useEffect(() => window.Steward.subscribeGroupChat(group.id, setMsgs), [group.id]);
   React.useEffect(() => window.Steward.subscribeGroupPin(group.id, setPin), [group.id]);
   React.useEffect(() => { if (scRef.current) scRef.current.scrollTop = scRef.current.scrollHeight; }, [msgs]);
-  const send = () => { if (!text.trim()) return; window.Steward.publishPost(text.trim(), group.id); setText(''); };
+  // THE SAME BUG AS NewPostModal ABOVE, AND WORSE HERE: this is usually a REPLY to somebody who is waiting.
+  // `publishPost` resolves `false` when nothing was accepted and never throws, so this cleared the box on the
+  // way out and the steward watched their answer vanish into a room it never reached. Clear ONLY once a relay
+  // has taken it; otherwise keep the words and say so through the banner doPin/doUnpin/doRemove already use.
+  const [sending, setSending] = React.useState(false);
+  const send = () => {
+    const t = text.trim(); if (!t || sending) return;
+    setSending(true);
+    Promise.resolve(window.Steward.publishPost(t, group.id))
+      .then((ok) => { setSending(false); if (ok) setText(''); else showMod('That didn’t send — nothing reached your church. Your message is still in the box; try again.'); })
+      .catch(() => { setSending(false); showMod('That didn’t send — the relay could not be reached. Your message is still in the box; try again.'); });
+  };
   const react = (m, emoji) => { window.Steward.reactGroup(group.id, m.id, m.by, m.myReaction === emoji ? '-' : emoji); setRxFor(''); };
   const doPin = (m) => {
     setMenuFor('');
@@ -3209,7 +3235,7 @@ function GroupChatModal({ group, onClose }) {
         </div>
         <div style={{ display: 'flex', gap: 9, padding: '12px 14px', borderTop: '1px solid var(--line)' }}>
           <input value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') send(); }} placeholder="Message your church…" style={{ flex: 1, height: 42, border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '0 14px', fontSize: 14, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
-          <button onClick={send} disabled={!text.trim()} title="Send this message" className="sk-btn sk-btn--clay" style={{ padding: '0 16px', opacity: text.trim() ? 1 : 0.55 }}><Icon name="send" size={16} color="var(--on-clay)" /></button>
+          <button onClick={send} disabled={!text.trim() || sending} title="Send this message" className="sk-btn sk-btn--clay" style={{ padding: '0 16px', opacity: (text.trim() && !sending) ? 1 : 0.55 }}><Icon name="send" size={16} color="var(--on-clay)" /></button>
         </div>
         {evDetail && window.SchEventDetail ? React.createElement(window.SchEventDetail, { event: evDetail, onClose: () => setEvDetail(null) }) : null}
     </div>
@@ -6911,6 +6937,8 @@ function NetworkAnnounceComposer() {
   const [owned, setOwned] = React.useState(() => (window.Steward.ownedNetworks ? window.Steward.ownedNetworks() : []));
   const [text, setText] = React.useState('');
   const [sent, setSent] = React.useState(false);
+  const [busy, setBusy] = React.useState(false);
+  const [err, setErr] = React.useState('');   // declared with the other hooks: `if (!net) return null` below is an early return
   const [posts, setPosts] = React.useState([]);
   React.useEffect(() => {
     const refresh = () => setOwned(window.Steward.ownedNetworks ? window.Steward.ownedNetworks() : []);
@@ -6922,9 +6950,16 @@ function NetworkAnnounceComposer() {
   React.useEffect(() => { if (!net || !window.Steward.subscribeNetworkAnnouncements) return; return window.Steward.subscribeNetworkAnnouncements(net.pub, setPosts); }, [net && net.pub]);
   React.useEffect(() => { setLiveName(''); if (!net || !window.Steward.subscribeNetworkProfile) return; return window.Steward.subscribeNetworkProfile(net.pub, (p) => { if (p && p.name) setLiveName(p.name); }); }, [net && net.pub]);
   if (!net) return null;
+  // …AND THE THIRD OF THE THREE. `publishNetworkAnnouncement` resolves NULL when it has no signing key for
+  // this network and `publish()` resolves FALSE when no relay accepted — neither throws. So this cleared the
+  // box and lit a green "Sent" tick over a broadcast that reached not one church in the network.
   const post = async () => {
-    if (!text.trim()) return;
-    await window.Steward.publishNetworkAnnouncement(net.pub, text.trim());
+    if (!text.trim() || busy) return;
+    setBusy(true); setErr('');
+    let ok = null;
+    try { ok = await window.Steward.publishNetworkAnnouncement(net.pub, text.trim()); } catch (e) { ok = null; }
+    setBusy(false);
+    if (!ok) { setErr('That didn’t post — nothing reached the network. What you wrote is still here; check your connection and try again.'); return; }
     setText(''); setSent(true); setTimeout(() => setSent(false), 1600);
   };
   return (
@@ -6935,7 +6970,8 @@ function NetworkAnnounceComposer() {
       </div>
       <div style={{ fontSize: 12, color: 'var(--ink-3)', lineHeight: 1.45, marginBottom: 9 }}>Reaches every member of every church in the network.</div>
       <textarea value={text} onChange={e => setText(e.target.value)} rows={3} placeholder="Share news with the whole network…" style={{ width: '100%', boxSizing: 'border-box', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', padding: '11px 13px', fontSize: 14, lineHeight: 1.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', resize: 'vertical', marginBottom: 9 }} />
-      <button onClick={post} disabled={!text.trim()} className="sk-btn sk-btn--clay" style={{ padding: '9px 15px', fontSize: 13.5, opacity: text.trim() ? 1 : 0.55 }}><Icon name={sent ? 'check' : 'send'} size={15} color="var(--on-clay)" /> {sent ? 'Sent' : 'Post announcement'}</button>
+      <button onClick={post} disabled={!text.trim() || busy} className="sk-btn sk-btn--clay" style={{ padding: '9px 15px', fontSize: 13.5, opacity: (text.trim() && !busy) ? 1 : 0.55 }}><Icon name={sent ? 'check' : 'send'} size={15} color="var(--on-clay)" /> {sent ? 'Sent' : busy ? 'Posting…' : 'Post announcement'}</button>
+      {err ? <div role="alert" style={{ display: 'flex', alignItems: 'flex-start', gap: 7, fontSize: 12.5, color: 'var(--clay-ink)', margin: '10px 0 0', lineHeight: 1.45 }}><Icon name="alert" size={15} color="var(--clay)" /><span>{err}</span></div> : null}
       {posts.length ? (
         <div style={{ marginTop: 14 }}>
           <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 7 }}>Recent</div>
