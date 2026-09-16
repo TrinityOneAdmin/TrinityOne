@@ -555,8 +555,9 @@ function DashRota({ onNewTeam }) {
       const lost = out.filter(r => r.rota == null).length;
       if (lost) { setFlash(SCH_NO_KEY); setTimeout(() => setFlash(''), 4000); return; }
       const unasked = out.reduce((n, r) => n + r.failed, 0);
-      if (unasked) { setFlash(unaskedFlash(unasked, out.reduce((n, r) => n + r.tried, 0))); setTimeout(() => setFlash(''), 5000); return; }
-      setFlash('Rotated ' + pods.length + ' pods across ' + upcoming.length + ' service' + (upcoming.length === 1 ? '' : 's'));
+      const rotLead = 'Rotated ' + pods.length + ' pods across ' + upcoming.length + ' service' + (upcoming.length === 1 ? '' : 's');
+      if (unasked) { setFlash(unaskedFlash(rotLead, unasked, out.reduce((n, r) => n + r.tried, 0), 'Open each service and press Publish')); setTimeout(() => setFlash(''), 6000); return; }
+      setFlash(rotLead);
       setTimeout(() => setFlash(''), 2600);
     });
     return upcoming.length;
@@ -588,7 +589,19 @@ function DashRota({ onNewTeam }) {
     return { tried: out.length, failed };
   };
   // "2 of 5 couldn't be asked", and what to do about it. One sentence, because it sits in a flash.
-  const unaskedFlash = (failed, tried) => `Published, but ${failed} of ${tried} couldn’t be asked — press Publish again when you have signal.`;
+  //
+  // ⚠ IT MUST NOT NAME A CAUSE. The first draft said "when you have signal" and a review refuted it: this
+  // board sits directly under PublishErrorBanner (app/stew-dashboard.jsx), which is fed by the SAME failure
+  // and already says the right thing per cause — "this part of the church hasn't been given to you", "open
+  // Settings -> Relays", "trying again as-is won't help", "fix the date and time", and only in the fallback
+  // case "check the connection". In three of those five, "when you have signal" told the steward the
+  // opposite of the banner an inch above it. The banner owns the cause; this line owns the count.
+  //
+  // ⚠ AND IT MUST NAME THE RIGHT CONTROL. `retry` is passed in because the three callers are reached by
+  // three different controls. Only publish() is reached by "Publish rota", and pressing it again re-sends
+  // for the SELECTED service only — so on the bulk paths "press Publish again" named a button the steward
+  // never pressed and would not have retried the other weeks anyway.
+  const unaskedFlash = (lead, failed, tried, retry) => `${lead}, but ${failed} of ${tried} couldn’t be asked yet. ${retry}; if it keeps failing, the message above says why.`;
   // pure: fill the gaps of `base` for a given date, not reusing anyone already on that day
   const fillAssign = (base, date, svcId) => {
     const next = { ...base };
@@ -669,8 +682,9 @@ function DashRota({ onNewTeam }) {
       if (s.id === svcId) setAssign(filled);
     }
     if (lost) { setFlash(SCH_NO_KEY); setTimeout(() => setFlash(''), 4000); return; }
-    if (unasked) { setFlash(unaskedFlash(unasked, triedAsks)); setTimeout(() => setFlash(''), 5000); return; }
-    setFlash(`Created + filled ${ensured.length} service${ensured.length > 1 ? 's' : ''}`); setTimeout(() => setFlash(''), 2800);
+    const madeLead = `Created + filled ${ensured.length} service${ensured.length > 1 ? 's' : ''}`;
+    if (unasked) { setFlash(unaskedFlash(madeLead, unasked, triedAsks, 'Open each service and press Publish')); setTimeout(() => setFlash(''), 6000); return; }
+    setFlash(madeLead); setTimeout(() => setFlash(''), 2800);
   };
   const assignFor = (id) => (draft[id] !== undefined ? draft[id] : (persisted(id) ? persisted(id).assign : null));
   const copyLastWeek = () => {
@@ -686,7 +700,7 @@ function DashRota({ onNewTeam }) {
     // not exist. sendRequestsFor is the outward-facing half, so it waits on the publish landing.
     if (r == null) { setFlash(SCH_NO_KEY); setTimeout(() => setFlash(''), 4000); return; }
     const asked = await sendRequestsFor(svcId, svc.date, svc.time, svc.name, assign);
-    if (asked.failed) { setFlash(unaskedFlash(asked.failed, asked.tried)); setTimeout(() => setFlash(''), 5000); return; }
+    if (asked.failed) { setFlash(unaskedFlash('Published', asked.failed, asked.tried, 'Press Publish again')); setTimeout(() => setFlash(''), 5000); return; }
     setFlash('Published — everyone assigned has been asked'); setTimeout(() => setFlash(''), 2400);
   };
 
