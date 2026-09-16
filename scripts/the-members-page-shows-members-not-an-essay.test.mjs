@@ -90,7 +90,8 @@ function renderMembersPage() {
   return { node, text: node ? reads(node) : '', linked };
 }
 
-const WORD_BUDGET = 55;   // the note as shipped before this: 99. As it stands now: 45.
+const WORD_BUDGET = 55;   // the note as shipped before this: 99. As it stands now: 47 (measured, not
+                          // estimated — an audit found this comment saying 45 after a rewording added two).
 // AND A FLOOR, WHICH MATTERS MORE THAN THE CEILING. An independent audit cut the note down to
 // "<b>Safeguarding.</b> <StewHelpLink/>" - every safeguarding fact gone, including the one the commit said
 // was deliberately KEPT - and both tests in this file stayed green, because a word budget is an upper bound
