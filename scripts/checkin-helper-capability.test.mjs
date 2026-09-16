@@ -263,19 +263,30 @@ test('with a helper key and nothing else: FINANCE is unreachable', async () => {
   // This is the August leak in reverse. Granting Finance handed over the children's register; the test that
   // was missing was the refusal. Here it is, in the other direction, before anyone can say it was obvious.
   //
-  // THE LEDGER, asserted against the NON-MEMBER helper. Measured while writing this file, 2026-09-09, and it
-  // is worth writing down because it surprised me: `finance/journal:` has NO read branch in canRead() at all.
-  // It falls to the ordinary effective-member rule, so ANY member of the church can already fetch the
-  // ledger's ciphertext — while scripts/trinity-doc-types.mjs declares it `read: 'church'`. The entries are
-  // church-encrypted, so this is not a plaintext leak; it is the registry describing something the relay does
-  // not do, which is exactly the class of gap that registry exists to make visible. NOT this slice's to fix —
-  // reported, not changed — and asserted here as it actually is so this test never encodes a false belief.
+  // THE LEDGER, asserted against BOTH helpers — and the second one is the part that changed.
+  //
+  // WHAT THIS NOTE USED TO SAY, and why it no longer says it. Until 2026-09-16 it recorded a gap found while
+  // writing this file: `finance/journal:` had NO read branch in canRead() at all, so it fell to the ordinary
+  // effective-member rule and any member of the church could fetch the ledger's ciphertext, while
+  // scripts/trinity-doc-types.mjs declared it `read: 'church'`. It was asserted here as it actually was
+  // (`ada` — an ordinary member — received 1) with a note saying the registry was describing something the
+  // relay did not do, and that fixing it was not that slice's business.
+  //
+  // IT HAS NOW BEEN FIXED, deliberately, on fix/finance-read-gate-2026-09-16. canRead() has a `finance/`
+  // branch that serves the module to the church, its network and a steward holding Finance, and returns. So
+  // ada's count moves from 1 to 0 — and the zero is NOT flipped on its own: the line below is a MEMBER's
+  // refusal now, which is a different claim from the helper's, and the re-anchor beneath it proves the
+  // document is really on the box. What is measured has not weakened; the relay has.
   assert.deepEqual(await asks(dan, { kinds: [30078], '#d': [D.FIN_JOURNAL + '1'] }), [],
     'a check-in helper who is not a member of the congregation was served the church\'s ledger — the grant ' +
     'must confer nothing beyond one session\'s register');
-  assert.equal((await asks(ada, { kinds: [30078], '#d': [D.FIN_JOURNAL + '1'] })).length, 1,
-    're-anchor: an ordinary member no longer receives the ledger ciphertext. That is a TIGHTENING and probably ' +
-    'right, but it was not decided here, and the note above about the registry is now stale');
+  assert.deepEqual(await asks(ada, { kinds: [30078], '#d': [D.FIN_JOURNAL + '1'] }), [],
+    'an ordinary member who is also a check-in helper was served the church\'s ledger. The entries are ' +
+    'sealed, but the address and the timestamp are cleartext, so this hands over the shape of the books.');
+  assert.equal((await asks(treasurer, { kinds: [30078], '#d': [D.FIN_JOURNAL + '1'] })).length, 1,
+    're-anchor: the entry is not on this relay at all, so the two refusals above prove nothing. (The ' +
+    'treasurer is the church\'s Finance steward; scripts/the-books-are-not-the-congregations.test.mjs ' +
+    'is where that gate is tested in full.)');
   // AND THE PART THAT ACTUALLY DECIDES IT: neither helper holds a key that opens any of it.
   for (const who of [ada, dan]) {
     const env = await asks(who, { kinds: [30078], '#d': [D.FINANCEKEY + church.pub] });

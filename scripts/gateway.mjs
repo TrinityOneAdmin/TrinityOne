@@ -4396,6 +4396,60 @@ function canRead(e, authed) {
     // saying "nothing", and that reads the same as removing them — which is today's behaviour for removal.
     if (ch && !retractionExempt) { if (!(e.pubkey === ch || stewardCan(e.pubkey, ch, 'any'))) return false; }
     if (!authed) return false;
+    // ══ THE CHURCH'S BOOKS ARE NOT THE CONGREGATION'S ═════════════════════════════════════════════════════
+    //
+    // Until this line existed, `finance/` had NO read rule at all: it fell straight through to the ordinary
+    // effective-member test at the foot of this function. Measured on a live relay, 2026-09-16, as an
+    // ordinary member of the church — not a steward, not the treasurer:
+    //
+    //     finance/journal:1  served     finance/account:a1  served
+    //     finance/journal:2  served     finance/settings    served
+    //
+    // with an anonymous client and a member of no church both getting zero in the same run. So the boundary
+    // the box was drawing was "any authenticated member of this church", and scripts/trinity-doc-types.mjs
+    // had declared all four of these `read: 'church'` the whole time — a description of a rule that was
+    // never written. The code won, so the declaration was false; this makes it true.
+    //
+    // WHAT WAS LEAKING, weighed rather than waved at, because overclaiming it would be worse than the bug.
+    // Every entry is sealed with the FINANCE capability key, wrapped to the church and to stewards holding
+    // Finance and to nobody else, so a member could not read one amount. What a member could read is the
+    // SHAPE of the books, in the clear, off the address and the created_at: how many entries the ledger
+    // holds, when each was written, how often the treasurer posts, and which accounts and which funds exist.
+    // For a congregation under lawful pressure — the pilot's own threat model — that is a map of the church's
+    // money without a penny of it, and it is not a thing the church ever chose to publish.
+    //
+    // IT MIRRORS THE WRITE GATE, deliberately and exactly. accept()'s finance branches admit
+    // `e.pubkey === cp || stewardCan(e.pubkey, cp, 'finance')`. Both sides now name the same principals, so
+    // there is one answer to "whose books are these" instead of two that can drift apart.
+    //
+    // stewardCan, NOT stewardCanExplicitly, AND THAT IS NOT AN OVERSIGHT. CAP_KEYS.finance in
+    // src/steward.src.js is `legacy: true, explicit: false`: a steward appointed before capabilities existed
+    // ALREADY HOLDS THE BOOKS' KEY today, because the envelope is wrapped to them. An explicit-only read gate
+    // would therefore blind a working treasurer the moment her church's relay updated — she would open the
+    // accounts to an empty page, with no error and nothing to tell her the box was withholding it. That is an
+    // availability failure dressed up as a security improvement, and it is the exact thing stewardCan()'s
+    // compatibility branch exists to prevent. (The register's key is `explicit: true` and is gated with
+    // stewardCanExplicitly a few lines down; the two rules differ because the two keys differ.)
+    //
+    // WHO IS NARROWED BY THIS, said plainly: an ordinary member, and a steward whose church ticked them for
+    // something that is not Finance. The second is a real change and it is the right one — a church that
+    // writes a capability list has said what each steward does, and a safeguarding lead is not the treasurer.
+    //
+    // IT RETURNS — no fall-through to the ordinary effective-member rule at the foot of this function. That
+    // fall-through IS the defect, here and in the helper grant before it (2026-09-09, measured on a live
+    // gateway): a branch that narrows a document and then falls through serves it to everybody anyway.
+    //
+    // PLACED AFTER retractionExempt HAS DONE ITS WORK, which is load-bearing and must not be tidied. The
+    // exemption above keeps serving a DEPARTED treasurer's entries; without it the church opens its accounts
+    // and the months that treasurer served are simply missing, with the sequence numbers either side still
+    // there. This rule decides WHO reads them, not WHETHER the past survives, and the two must stay separate.
+    //
+    // THE WHOLE MODULE, not just the journal: `finance/account:`, `finance/fund:` and `finance/settings` are
+    // the chart of accounts, the fund list and the currency, and gating the entries alone would leave most of
+    // the same disclosure readable by another route. Note this is `finance/` with a slash, so
+    // `trinityone/financekey:` — the per-recipient key ENVELOPE — is untouched and stays readable by members,
+    // as every other key envelope is: a recipient can only ever unwrap their own slot.
+    if (d.startsWith('finance/')) return authed === cp || networkOf(authed, cp) || stewardCan(authed, cp, 'finance');
     // ══ THE CHECK-IN DOCUMENTS DECIDE THEIR OWN READERS, AND THEY DECIDE THEM *FIRST* ═════════════════════
     //
     // MOVED ABOVE THE GENERAL STEWARD SHORT-CIRCUIT, 2026-09-11, and the move IS the fix. These four branches
