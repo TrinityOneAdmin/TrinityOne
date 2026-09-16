@@ -221,9 +221,9 @@ const UNSURE_CASES = [
   // sign-up rather than repeating it. Corrected 2026-09-16 after an independent review measured it; the
   // rows now require the message to describe what the ROW shows, which is what the member can actually act
   // on. See the two tests at the foot of this file, which hold the message and the button together.
-  ['fill',      ['care-1', '2026-09-10', 'lasagne'],     /shown as helping/i,
+  ['fill',      ['care-1', '2026-09-10', 'lasagne'],     /open this again to see whether you are signed up/i,
    'a volunteer who did sign up is told they did not, so two people cook the same day or nobody does'],
-  ['clearFill', ['care-1', '2026-09-10'],                /shown as no longer helping/i,
+  ['clearFill', ['care-1', '2026-09-10'],                /open this again to see whether you are still down/i,
    'somebody who did stand down is told they did not, and stops trusting the button'],
   ['setNote',   ['care-1', '2026-09-10', 'gluten free'], /may well have/i,
    'the dietary note is retyped and resent over one that had already arrived'],
@@ -495,14 +495,41 @@ test('after an unconfirmed sign-up the row’s button CANCELS — this is what t
     + 'below is measuring the wrong state and proves nothing');
   assert.doesNotMatch(labels, /I’ll help|I'll help/,
     'the row offers "I\'ll help" while I already hold a slot, so the button is not the one this test is about');
+
+  // …AND PRESS IT. A re-audit pointed out this row only read the LABEL: it would stay green with the button
+  // rewired to sign you up again, which is the whole thing it is named after. Press what the member would
+  // press and record which action it calls.
+  const called = [];
+  const { draw, CareNeedRow } = screen();
+  const care = {
+    myPub: ME,
+    slots: [{ needId: 'care-1', isoDate: '2026-09-10', pubkey: ME, note: '' }],
+    skips: [],
+    fill: () => { called.push('fill'); return Promise.resolve({ ok: false, reason: 'unconfirmed' }); },
+    clearFill: () => { called.push('clearFill'); return Promise.resolve({ ok: false, reason: 'unconfirmed' }); },
+    setNote: () => Promise.resolve({ ok: true }),
+  };
+  const tree = draw(CareNeedRow, { need: NEED, slots: care.slots, skips: [], care, canManage: false, expanded: true, onToggle: () => {} });
+  const helping = button(tree, 'You’re helping').concat(button(tree, "You're helping"));
+  assert.equal(helping.length, 1, 'expected exactly one "You\'re helping" control on the row, found ' + helping.length);
+  helping[0].props.onClick({ stopPropagation() {} });
+  assert.deepEqual(called, ['clearFill'],
+    'the button a member sees after an unconfirmed sign-up does NOT cancel. That is the whole premise of ' +
+    'the wording rule below — if this control signs them up again instead, the old "tap the same button" ' +
+    'sentence was never dangerous and this pair of rows is guarding nothing. Called: ' + JSON.stringify(called));
 });
 
-test('the unconfirmed care wording never tells a member to press the button again', () => {
+test('the unconfirmed care wording never tells a member to press the button again', async () => {
   // Drives the REAL lifted wrappers out of app/app.jsx — never a copy, and never a text match on that file
   // (CLAUDE.md rule 3: it ships unbundled, so `false && ` would leave every word in place).
+  // ⚠ THIS LOOP USED TO `return` INSIDE ITSELF, so only `fill` was ever asserted and the dangerous sentence
+  // could be put straight back into `clearFill` with every test still green. A re-audit measured exactly
+  // that. Await both, and count them, so a future edit cannot quietly drop one.
+  const checked = [];
   for (const name of ['fill', 'clearFill']) {
     const { fn, said } = runCareAction(name, { lands: false, reason: 'unconfirmed' });
-    return fn('care-1', '2026-09-10', 'lasagne').then(() => {
+    checked.push(name);
+    await fn('care-1', '2026-09-10', 'lasagne').then(() => {
       const msg = said.map(s => s.msg).join(' | ');
       assert.ok(msg, name + ': nothing was said at all on an unconfirmed send');
       assert.doesNotMatch(msg, /tap the same button|press the same button|tap it again|press it again/i,
@@ -513,6 +540,13 @@ test('the unconfirmed care wording never tells a member to press the button agai
       assert.match(msg, /may well have/i,
         name + ': the honest half must survive — an unconfirmed send probably DID land and must not be '
         + 'reported as a failure');
+      assert.match(msg, /open this again to see/i,
+        name + ' leaves the member with nothing they can act on. The row cannot change while the app is '
+        + 'open — the optimistic mark is written in three places and pruned in none — so the only true '
+        + 'advice is the one CloseMyNeedButton already gives: close the app and open it again.');
     });
   }
+  assert.deepEqual(checked, ['fill', 'clearFill'],
+    'this row asserted fewer controls than it names. It previously returned inside its own loop and only '
+    + 'ever checked `fill`.');
 });
