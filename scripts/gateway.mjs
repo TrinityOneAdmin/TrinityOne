@@ -4036,6 +4036,26 @@ function accept(e) {
       // steward) already holds a record at is closed to her. Nothing shipped writes a helper record today
       // (the worker view is read-only); when slice 4 gives a helper checkout, it writes its own document.
       // The relay holds no keys, so this is the boundary that CAN be enforced here.
+      // ⚠ KEPT DELIBERATELY, THOUGH DELETING IT PASSES EVERY TEST IN THIS REPO. An independent review of the
+      // commit below found that, and it is true: the newer gate is broader at this door, because a helper is
+      // never the church key and never a safeguarding steward, so every record this line refuses the next
+      // one refuses too. The F-B test in checkin-helper-write-scope.test.mjs now passes because of the NEWER
+      // line, not this one.
+      //
+      // I TRIED TO WRITE A TEST THAT PINS THIS LINE ALONE AND COULD NOT, and the attempt is worth recording
+      // so nobody repeats it. The one shape where the two gates differ on paper is a record authored by THIS
+      // church's key but tagged with a DIFFERENT church: checkinOtherHelperHolds resolves ownership from the
+      // tag and skips it as a co-tenant's (deliberately — counting a co-tenant's record would hand any other
+      // church on the box a way to close addresses in ours), while this line asks "did WE write it" and
+      // catches it. Such a record cannot be made through this door, but CAN arrive through /import, which
+      // does store.put with no accept() pass. So I planted exactly that by import and drove a helper at it:
+      // MEASURED, the write is refused identically WITH and WITHOUT this line — something earlier in the
+      // chain declines that shape anyway. The test therefore passed whether the line was there or not, which
+      // is a vacuous test, and it was deleted rather than shipped.
+      //
+      // So this is belt-and-braces over a door that accept() does not guard, kept because it is free and
+      // because the two gates ask genuinely different questions. Do not delete it as dead weight on the
+      // strength of a green suite; the suite cannot tell you.
       if (checkinChurchHolds(d, cp)) return false;
       // …nor a COLLEAGUE'S. Same rule, the other half of it — see checkinOtherHelperHolds for the measurement
       // and for why signing a child out is untouched.
