@@ -215,9 +215,15 @@ for (const [name, args, expect, why] of SLOT_CASES) {
 // cannot sign anyone up twice. (Checked in src/fellowship.src.js before this wording was written; a control
 // that minted a fresh id each time would need different words and is deliberately not in this list.)
 const UNSURE_CASES = [
-  ['fill',      ['care-1', '2026-09-10', 'lasagne'],     /won.t sign you up twice/i,
+  // ⚠ THESE TWO EXPECTED THE DANGEROUS SENTENCE, AND SO PINNED THE DEFECT IN PLACE. They required the
+  // message to say "tap the same button again" — but on `unconfirmed` the optimistic mark is KEPT, so the
+  // button under the toast has already flipped to the opposite action. Pressing it again cancels the
+  // sign-up rather than repeating it. Corrected 2026-09-16 after an independent review measured it; the
+  // rows now require the message to describe what the ROW shows, which is what the member can actually act
+  // on. See the two tests at the foot of this file, which hold the message and the button together.
+  ['fill',      ['care-1', '2026-09-10', 'lasagne'],     /shown as helping/i,
    'a volunteer who did sign up is told they did not, so two people cook the same day or nobody does'],
-  ['clearFill', ['care-1', '2026-09-10'],                /won.t put you back on/i,
+  ['clearFill', ['care-1', '2026-09-10'],                /shown as no longer helping/i,
    'somebody who did stand down is told they did not, and stops trusting the button'],
   ['setNote',   ['care-1', '2026-09-10', 'gluten free'], /may well have/i,
    'the dietary note is retyped and resent over one that had already arrived'],
@@ -235,8 +241,9 @@ for (const [name, args, expect, why] of UNSURE_CASES) {
     assert.match(bad[0].msg, /couldn.t confirm/i,
       `${name} still claims a settled failure over a send nobody answered for: ${why}`);
     assert.match(bad[0].msg, expect,
-      `${name} does not tell the member that pressing the same button again is safe, which is the only ` +
-      'thing that makes "it may well have" actionable rather than merely worrying');
+      `${name} does not tell the member what the row NOW SHOWS, which is the only thing that makes ` +
+      '"it may well have" actionable rather than merely worrying — and it must never point at the button, ' +
+      'which by then performs the opposite action');
     assert.doesNotMatch(bad[0].msg, /didn.t reach/i,
       `${name} is still saying the words that send somebody to redo work already done`);
   });
@@ -458,4 +465,54 @@ test('skip: a TRUTHY result with _delivered false is still a failure', async () 
   assert.ok(said.filter(t => t.error).length,
     'markCareSkip resolved with a truthy event whose _delivered was false — a failed skip — and the member ' +
     'was told nothing. `if (!r)` is not sufficient here; read _delivered.');
+});
+
+// ⚠ THE MESSAGE MUST NOT POINT AT A BUTTON THAT HAS CHANGED UNDER IT.
+//
+// Found by an independent review on 2026-09-16, in the flagship example of the branch that introduced it.
+// On `unconfirmed` the wrapper deliberately KEEPS the optimistic mark — right, because the send probably did
+// land. But `ctx.care.slots` then carries a slot for me, so CareNeedRow renders "You're helping", whose
+// onClick is clearFill. The toast sitting on top of it said:
+//
+//     "Tap the same button again; it won't sign you up twice."
+//
+// Tapping it again does not re-send. IT CANCELS. If the sign-up did land — which is what the sentence says
+// is likely — the second tap takes the family's meal away. The reverse case is the same bug the other way:
+// after a failed cancel, the optimistic clear reverts the button to "I'll help", so tapping again signs you
+// back on.
+//
+// The old code was not exposed to this because it ROLLED BACK the optimistic mark on every failure. The fix
+// that kept the mark and the wording that invited a second tap were correct apart; together they inverted
+// the action. This is the same hazard setEventRsvp's own comment warns about, one file away.
+//
+// Two rows, and they must be read together: the first pins what the button DOES once the optimistic mark is
+// kept, the second pins that the sentence does not tell anyone to press it.
+test('after an unconfirmed sign-up the row’s button CANCELS — this is what the message must not contradict', () => {
+  const c = needRow(async () => ({ ok: false, reason: 'unconfirmed' }));
+  const labels = c.labels();
+  assert.match(labels, /You’re helping|You're helping/,
+    'CONTROL: with a slot of mine on the need, the row should show me as helping — if it does not, the row '
+    + 'below is measuring the wrong state and proves nothing');
+  assert.doesNotMatch(labels, /I’ll help|I'll help/,
+    'the row offers "I\'ll help" while I already hold a slot, so the button is not the one this test is about');
+});
+
+test('the unconfirmed care wording never tells a member to press the button again', () => {
+  // Drives the REAL lifted wrappers out of app/app.jsx — never a copy, and never a text match on that file
+  // (CLAUDE.md rule 3: it ships unbundled, so `false && ` would leave every word in place).
+  for (const name of ['fill', 'clearFill']) {
+    const { fn, said } = runCareAction(name, { lands: false, reason: 'unconfirmed' });
+    return fn('care-1', '2026-09-10', 'lasagne').then(() => {
+      const msg = said.map(s => s.msg).join(' | ');
+      assert.ok(msg, name + ': nothing was said at all on an unconfirmed send');
+      assert.doesNotMatch(msg, /tap the same button|press the same button|tap it again|press it again/i,
+        name + ' tells the member to press the button again. By the time they read it the button in that '
+        + 'place has flipped to the opposite action, so the second press UNDOES the first rather than '
+        + 'repeating it — and on `fill` that takes a family\'s meal away. Say what the row now shows '
+        + 'instead. Measured message: ' + msg);
+      assert.match(msg, /may well have/i,
+        name + ': the honest half must survive — an unconfirmed send probably DID land and must not be '
+        + 'reported as a failure');
+    });
+  }
 });
