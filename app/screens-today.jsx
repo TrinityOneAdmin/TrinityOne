@@ -84,8 +84,11 @@ function CareNeedRow({ need, slots, skips, care, canManage, expanded, onToggle }
   // that added a failure toast on 2026-09-04 put a green tick beside its own error message. Audit same day.
   const saveNote = (iso) => {
     const cur = noteDraft[iso] !== undefined ? noteDraft[iso] : myNoteFor(iso);
+    // ⚠ `r && r.ok`, NEVER `if (r)`. fillCareSlot now answers an OBJECT — { ok, reason } — and an object is
+    // always truthy, so a plain truthiness test paints the green "✓ Saved" tick over every failure, which is
+    // the trap markSafe set. The toast beside it comes from care.setNote in app.jsx.
     Promise.resolve((care.setNote || care.fill)(need.id, iso, (cur || '').trim()))
-      .then(ok => { if (ok) setSavedFlash(f => ({ ...f, [iso]: true })); })
+      .then(r => { if (r && r.ok) setSavedFlash(f => ({ ...f, [iso]: true })); })
       .catch(() => {});
   };
   return (

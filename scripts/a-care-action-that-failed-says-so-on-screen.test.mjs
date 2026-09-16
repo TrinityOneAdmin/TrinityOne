@@ -42,7 +42,7 @@ function screen() {
     todayISO: () => '2026-09-04',
     fetch: async () => ({ ok: false, json: async () => ({}) }),
   };
-  const mod = loadScreen('app/screens-today.jsx', ['MyRequestRow', 'CareRequestCard'], globals);
+  const mod = loadScreen('app/screens-today.jsx', ['MyRequestRow', 'CareRequestCard', 'CareNeedRow'], globals);
   return { draw, ...mod };
 }
 
@@ -140,15 +140,23 @@ function liftCareAction(name) {
   return APP.slice(i + 1, k);
 }
 
-function runCareAction(name, { lands }) {
+// `reason` is the classifier's verdict when `lands` is false — 'not-sent' (settled: nothing left the phone
+// or a box said no) or 'unconfirmed' (nobody answered in time; the event is signed, on the wire, and often
+// lands a moment later). Those two need OPPOSITE sentences and the wrappers must not conflate them.
+function runCareAction(name, { lands, reason }) {
   const said = [];
   const toast = (msg, opts) => said.push({ msg: String(msg), error: !!(opts && opts.error) });
   const optCare = {};
   const setOptCare = (f) => { const n = typeof f === 'function' ? f({ ...optCare }) : f; for (const k of Object.keys(optCare)) delete optCare[k]; Object.assign(optCare, n); };
   const evt = { id: 'evt-id' };
+  // fillCareSlot / clearCareSlot now answer { ok, reason } — the setEventRsvp shape — so that the screen can
+  // tell "it did not go" from "we could not tell". ⚠ The failure object is TRUTHY, which is precisely the
+  // markSafe trap: a wrapper still reading `if (r)` takes the SUCCESS arm on every failure. Stubbing the
+  // real shape is what makes these rows able to see that.
+  const fail = { ok: false, reason: reason || 'not-sent' };
   const window = { Fellowship: {
-    async fillCareSlot() { return lands ? evt : null; },
-    async clearCareSlot() { return lands ? evt : null; },
+    async fillCareSlot() { return lands ? { ok: true, evt } : fail; },
+    async clearCareSlot() { return lands ? { ok: true, evt } : fail; },
     async clearCareSkip() { return lands ? evt : null; },
     // ⚠ markCareSkip DOES NOT MATCH ITS SIBLINGS, and that is the whole reason `skip` was missed. The three
     // above return null when the publish fails, so `if (!r)` is enough for them. This one returns the EVENT
@@ -194,12 +202,115 @@ for (const [name, args, expect, why] of SLOT_CASES) {
   });
 }
 
+// ── THE OPPOSITE LIE: "that didn't reach your church" said over a send that very probably LANDED ──────────
+//
+// Every row above is about claiming success over a failure. These are about the other direction, which is
+// the one nobody looks for: `fillCareSlot` used to return null for ALL THREE failure outcomes at once, so a
+// sign-up that nobody had ACKNOWLEDGED — signed, on the wire, usually landing a second later — was reported
+// as "you're NOT signed up". The volunteer then signs up again somewhere else, or stands down and the family
+// gets nothing. A wrong failure message is worse than no message: it sends somebody to redo work already done.
+//
+// The sentence is only honest if pressing the button again is SAFE. It is: fillCareSlot and clearCareSlot
+// both write the fixed d-tag `careslot:<careId>:<iso>`, so a second press REPLACES the same document — it
+// cannot sign anyone up twice. (Checked in src/fellowship.src.js before this wording was written; a control
+// that minted a fresh id each time would need different words and is deliberately not in this list.)
+const UNSURE_CASES = [
+  ['fill',      ['care-1', '2026-09-10', 'lasagne'],     /won.t sign you up twice/i,
+   'a volunteer who did sign up is told they did not, so two people cook the same day or nobody does'],
+  ['clearFill', ['care-1', '2026-09-10'],                /won.t put you back on/i,
+   'somebody who did stand down is told they did not, and stops trusting the button'],
+  ['setNote',   ['care-1', '2026-09-10', 'gluten free'], /may well have/i,
+   'the dietary note is retyped and resent over one that had already arrived'],
+];
+
+for (const [name, args, expect, why] of UNSURE_CASES) {
+  test(`${name}: "we couldn't tell" is NOT reported as "it didn't reach your church"`, async () => {
+    const { fn, said } = runCareAction(name, { lands: false, reason: 'unconfirmed' });
+    await fn(...args);
+    const bad = said.filter(t => t.error);
+    assert.ok(bad.length, `${name} said nothing at all on an unconfirmed send`);
+    assert.match(bad[0].msg, /couldn.t confirm/i,
+      `${name} still claims a settled failure over a send nobody answered for: ${why}`);
+    assert.match(bad[0].msg, expect,
+      `${name} does not tell the member that pressing the same button again is safe, which is the only ` +
+      'thing that makes "it may well have" actionable rather than merely worrying');
+    assert.doesNotMatch(bad[0].msg, /didn.t reach/i,
+      `${name} is still saying the words that send somebody to redo work already done`);
+  });
+
+  test(`CONTROL: ${name} still says the SETTLED failure plainly when nothing was sent`, async () => {
+    // Without this pair, "always say we couldn't confirm" would pass every row above — and that is the
+    // dangerous direction: softening a settled refusal is how somebody is told help is coming when it is not.
+    const { fn, said } = runCareAction(name, { lands: false, reason: 'not-sent' });
+    await fn(...args);
+    const bad = said.filter(t => t.error);
+    assert.ok(bad.length, `${name} said nothing on a settled failure`);
+    assert.match(bad[0].msg, /didn.t reach/i,
+      `${name} softened "nothing left this phone" into "we couldn't confirm it" — the opposite mistake, ` +
+      'and the one that leaves a family expecting a meal that was never promised');
+  });
+}
+
 test('the optimistic tick is still rolled back as well as explained', async () => {
   // The rollback was already there and is what stops the row lying; the message is what stops the rollback
   // reading as a mis-tap. Both, or neither is any use.
   const { fn, optCare } = runCareAction('fill', { lands: false });
   await fn('care-1', '2026-09-10', '');
   assert.deepEqual(Object.keys(optCare), [], 'the row still shows the member as signed up after a failure');
+});
+
+// ── AND THE GREEN TICK BESIDE THE NOTE, WHICH THE SHAPE CHANGE PUT ONE CHARACTER FROM LYING ──────────────
+//
+// "bringing a lasagne, no nuts" is the one field on this row other people act on. The Save button turns into
+// "✓ Saved" from `savedFlash`, and that was set by `if (ok)` over a writer that returned an EVENT or NULL.
+// fillCareSlot now answers { ok, reason } — and a failure object is TRUTHY — so a plain truthiness test
+// would tick every failure green. Exactly the markSafe trap, on a control that had no screen test at all
+// until this one; the sabotage of `r && r.ok` -> `r` was caught by nothing on 2026-09-16.
+const NEED = { id: 'care-1', type: 'meals', dates: ['2026-09-10'], meals: ['dinner'], displayLabel: 'A family' };
+const ME = 'm'.repeat(64);
+
+function needRow(setNote) {
+  const { draw, CareNeedRow } = screen();
+  const care = { myPub: ME, slots: [{ needId: 'care-1', isoDate: '2026-09-10', pubkey: ME, note: '' }], skips: [], setNote, fill: setNote };
+  const props = { need: NEED, slots: care.slots, skips: [], care, canManage: false, expanded: true, onToggle: () => {} };
+  let tree = draw(CareNeedRow, props);
+  const redraw = () => (tree = draw(CareNeedRow, props));
+  return {
+    redraw,
+    save: async () => {
+      const b = button(tree, 'Save');
+      assert.ok(b.length, 'no Save control beside the "what I\'m bringing" note — re-anchor this test');
+      await b[b.length - 1].props.onClick({ stopPropagation() {} });
+      await new Promise(r => setTimeout(r, 0));
+      return redraw();
+    },
+    labels: () => texts(tree).join(' | '),
+  };
+}
+
+test('the note’s green “✓ Saved” tick is not painted over a save that failed', async () => {
+  const c = needRow(async () => ({ ok: false, reason: 'unconfirmed' }));
+  await c.save();
+  assert.doesNotMatch(c.labels(), /✓ Saved/,
+    'the note said "✓ Saved" over a write no relay acknowledged. fillCareSlot answers an OBJECT now, and an ' +
+    'object is always truthy — `if (r)` ticks every failure green, which is the markSafe trap exactly.');
+});
+
+test('CONTROL: an accepted note save DOES show “✓ Saved”', async () => {
+  // Without this, deleting savedFlash altogether would pass the row above.
+  const c = needRow(async () => ({ ok: true, evt: { id: 'e' } }));
+  await c.save();
+  assert.match(c.labels(), /✓ Saved/, 'a note the church accepted no longer confirms itself to the member');
+});
+
+test('…and is NOT rolled back when we simply could not tell', async () => {
+  // The same lie, one layer below the words: un-ticking the day repaints it as "nobody is bringing this"
+  // under a sign-up that probably landed, and the row is what another volunteer looks at before offering.
+  const { fn, optCare } = runCareAction('fill', { lands: false, reason: 'unconfirmed' });
+  await fn('care-1', '2026-09-10', '');
+  assert.deepEqual(Object.keys(optCare), ['care-1|2026-09-10'],
+    'an unconfirmed sign-up un-ticked itself. The toast says "it may well have" and the row beside it says ' +
+    'the opposite, so the member believes the row.');
 });
 
 // ── THE MEMBER APP'S half-landed report, which had no point-of-use test at all ────────────────────────────

@@ -2015,10 +2015,21 @@ function App() {
       })(),
       skips: careSkips,
       myPub: (window.Fellowship && window.Fellowship.myPubkey) || '',
-      fill: (careId, iso, note) => { setOptCare(o => ({ ...o, [careId + '|' + iso]: 'fill' })); return window.Fellowship.fillCareSlot(careId, iso, note).then(r => { if (r) toast('Thank you — you’re signed up'); else { setOptCare(o => { const n = { ...o }; delete n[careId + '|' + iso]; return n; }); toast('That didn’t reach your church — you’re NOT signed up. Try again in a moment.', { error: true }); } return r; }); },
-      clearFill: (careId, iso) => { setOptCare(o => ({ ...o, [careId + '|' + iso]: 'clear' })); return window.Fellowship.clearCareSlot(careId, iso).then(r => { if (r) toast('Removed'); else { setOptCare(o => { const n = { ...o }; delete n[careId + '|' + iso]; return n; }); toast('That didn’t reach your church — you’re still down for that day.', { error: true }); } return r; }); },
+      // ⚠ "WE COULDN'T TELL" IS NOT "IT FAILED", AND SAYING THE WRONG ONE COSTS A FAMILY A MEAL.
+      // These three read `if (r)` over a writer that returned null for all three failures at once, so a
+      // sign-up nobody had ACKNOWLEDGED — signed, on the wire, very often landing a second later — was
+      // reported as "you're NOT signed up". Two people then cook the same Tuesday, or the one who really
+      // had it stands down. That is the opposite lie from the usual one and it is worse: a wrong failure
+      // message sends somebody to redo work that was already done.
+      // `fillCareSlot`/`clearCareSlot` now answer { ok, reason } (reason from the shared `_pubReason`), and
+      // both write a FIXED d-tag — `careslot:<careId>:<iso>` — so pressing the same button again replaces
+      // the same document. "Tap it again" is therefore true and can never double a sign-up.
+      // ⚠ AND THE OPTIMISTIC MARK STAYS ON 'unconfirmed'. Rolling it back would repaint the day as empty
+      // under a sign-up that probably landed, which is the same lie again, one layer down.
+      fill: (careId, iso, note) => { setOptCare(o => ({ ...o, [careId + '|' + iso]: 'fill' })); return window.Fellowship.fillCareSlot(careId, iso, note).then(r => { if (r && r.ok) toast('Thank you — you’re signed up'); else if (r && r.reason === 'unconfirmed') toast('We couldn’t confirm that reached your church — it may well have. Tap the same button again; it won’t sign you up twice.', { error: true }); else { setOptCare(o => { const n = { ...o }; delete n[careId + '|' + iso]; return n; }); toast('That didn’t reach your church — you’re NOT signed up. Try again in a moment.', { error: true }); } return r; }); },
+      clearFill: (careId, iso) => { setOptCare(o => ({ ...o, [careId + '|' + iso]: 'clear' })); return window.Fellowship.clearCareSlot(careId, iso).then(r => { if (r && r.ok) toast('Removed'); else if (r && r.reason === 'unconfirmed') toast('We couldn’t confirm that reached your church — it may well have. Tap the same button again; it won’t put you back on.', { error: true }); else { setOptCare(o => { const n = { ...o }; delete n[careId + '|' + iso]; return n; }); toast('That didn’t reach your church — you’re still down for that day.', { error: true }); } return r; }); },
       // update the "what I'm bringing" note on an already-filled slot — same fillCareSlot doc, no "signed up" toast
-      setNote: (careId, iso, note) => window.Fellowship.fillCareSlot(careId, iso, note).then(r => { if (!r) toast('That note didn’t reach your church — nobody else can see it yet.', { error: true }); return r; }),
+      setNote: (careId, iso, note) => window.Fellowship.fillCareSlot(careId, iso, note).then(r => { if (r && r.ok) return r; toast(r && r.reason === 'unconfirmed' ? 'We couldn’t confirm that note reached your church — it may well have. You can send it again.' : 'That note didn’t reach your church — nobody else can see it yet.', { error: true }); return r; }),
       // ⚠ `skip` WAS THE ONE CARE CONTROL THAT SAID NOTHING EITHER WAY, and `if (!r)` — the check every
       // sibling on this object uses — would NOT have caught it. Those all return null when the publish
       // fails; markCareSkip returns the EVENT either way and records the outcome on `_delivered`, so a

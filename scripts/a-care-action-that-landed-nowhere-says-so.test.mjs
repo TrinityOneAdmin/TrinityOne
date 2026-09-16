@@ -41,37 +41,79 @@ function liftMethod(name) {
   throw new Error('unbalanced braces slicing ' + name);
 }
 
-function runner(name, { publishFails }) {
+// THE REAL CLASSIFIER, LIFTED FROM THE SHIPPED BUNDLE — never a stub of it.
+// An injected outcome cannot catch a dead classifier: hand these functions a hand-written `() => 'not-sent'`
+// and they would report the right word with `_pubReason` deleted from the product. So run the one that ships.
+const _pubReason = (function () {
+  const i = BUNDLE.indexOf('function _pubReason(e) {');
+  assert.ok(i > 0, '_pubReason is not in the bundle under that name — re-anchor this test');
+  let d = 0;
+  for (let k = BUNDLE.indexOf('{', i); k < BUNDLE.length; k++) {
+    if (BUNDLE[k] === '{') d++;
+    else if (BUNDLE[k] === '}') { d--; if (!d) return new Function('return ' + BUNDLE.slice(i, k + 1) + '; return _pubReason;')(); }
+  }
+  throw new Error('unbalanced braces slicing _pubReason');
+})();
+// BASELINE for the instrument itself: a classifier that always answers the same word would make every
+// reason row below meaningless, and it is one character away at all times.
+test('CONTROL: the lifted _pubReason really does separate the three outcomes', () => {
+  assert.equal(_pubReason({ unsent: true }), 'not-sent');
+  assert.equal(_pubReason({ refused: true }), 'refused');
+  assert.equal(_pubReason(new Error('nobody answered')), 'unconfirmed');
+});
+
+function runner(name, { publishFails, how }) {
   const src = '({ ' + liftMethod(name) + ' })';
   const calls = [];
   const finalizeEvent2 = (e) => ({ ...e, id: 'evt-id', sig: 'sig' });
   const _publishAny = async () => {
     calls.push('publish');
-    if (publishFails) throw new Error("NO_NETWORK_RELAY: none of this church's relays could be proved to be ours");
+    if (publishFails) {
+      // Shaped exactly as the real _publishAny shapes it: `.unsent` when nothing left the device, neither
+      // flag when every relay simply went quiet. That is what _pubReason reads.
+      const e = new Error(how === 'unconfirmed'
+        ? 'no relay accepted this'
+        : "NO_NETWORK_RELAY: none of this church's relays could be proved to be ours");
+      if (how !== 'unconfirmed') e.unsent = true;
+      throw e;
+    }
     return true;
   };
   const churchRelays = () => ['wss://r.example/relay'];
   const window = { Fellowship: { churchPub: 'church-pub-hex', ready: Promise.resolve() } };
-  const names  = ['finalizeEvent2', '_publishAny', 'churchRelays', 'window', 'sk', 'pub', 'NET',
+  // ⚠ A LIFTED FUNCTION HAS TWO CALLER LISTS: the code that calls it, and the tests that SLICE IT BY NAME
+  // with a hand-written `names` array like this one. `_pubReason` was added to fillCareSlot and
+  // clearCareSlot on 2026-09-16; without it here they throw ReferenceError and every row below fails for a
+  // reason that has nothing to do with what it is testing. The REAL classifier is injected, never a stub —
+  // an injected outcome cannot catch a dead classifier.
+  const names  = ['finalizeEvent2', '_publishAny', 'churchRelays', 'window', 'sk', 'pub', 'NET', '_pubReason',
                   'CAREREQ_D', 'CAREREQSTATUS_D', 'CARESLOT_D', 'CARESKIP_D', 'Date', 'JSON', 'Math', 'console'];
-  const values = [finalizeEvent2, _publishAny, churchRelays, window, 'sk-bytes', 'me-pub', 'trinityone',
+  const values = [finalizeEvent2, _publishAny, churchRelays, window, 'sk-bytes', 'me-pub', 'trinityone', _pubReason,
                   'carereq:', 'carereqstatus:', 'careslot:', 'careskip:', Date, JSON, Math,
                   { warn() {} }];   // the real ones log; keep the test output clean
   const obj = new Function(...names, 'return ' + src)(...values);
   return { fn: obj[name], calls };
 }
 
+// STILL `evt | null`: these two report a failure and nothing more, which is all their callers ask of them.
 const CASES = [
   ['cancelCareRequest',    ['req-1'],
    'the member is shown their request withdrawn while the care team still has it open'],
   ['setCareRequestStatus', ['req-1', 'asker-pub', { status: 'declined' }],
    'the asker is never told what happened, and waits'],
+  ['clearCareSkip',        ['care-1', '2026-09-10'],
+   'the day stays crossed out and nobody brings anything'],
+];
+
+// ⚠ THESE TWO CHANGED SHAPE ON 2026-09-16, to `{ ok, reason }` — the setEventRsvp shape.
+// `null` collapsed three different outcomes into one, and the screen then said "you're NOT signed up" over
+// a sign-up nobody had merely ACKNOWLEDGED, which is the opposite lie and sends a second volunteer to cook
+// the same day. Their d-tag is fixed (`careslot:<careId>:<iso>`), so "tap it again" is safe and true.
+const REASONED = [
   ['fillCareSlot',         ['care-1', '2026-09-10', 'lasagne'],
    'the volunteer believes they are bringing a meal and the slot still reads empty'],
   ['clearCareSlot',        ['care-1', '2026-09-10'],
    'the volunteer believes they stood down and is still the only name against that day'],
-  ['clearCareSkip',        ['care-1', '2026-09-10'],
-   'the day stays crossed out and nobody brings anything'],
 ];
 
 for (const [name, args, why] of CASES) {
@@ -88,6 +130,36 @@ for (const [name, args, why] of CASES) {
     const { fn } = runner(name, { publishFails: false });
     const out = await fn(...args);
     assert.ok(out && out.id === 'evt-id', `${name} must return the event on success — this control is what stops the fix becoming "always fail"`);
+  });
+}
+
+for (const [name, args, why] of REASONED) {
+  test(`${name}: a publish that reached NO relay answers ok:false, and says nothing was sent`, async () => {
+    const { fn, calls } = runner(name, { publishFails: true, how: 'not-sent' });
+    const out = await fn(...args);
+    assert.deepEqual(calls, ['publish'], `${name} did not attempt a publish at all — re-anchor this test`);
+    assert.equal(out && out.ok, false,
+      `${name} reported success after every relay refused it: ${why}`);
+    assert.equal(out.reason, 'not-sent',
+      `${name} softened "nothing left this phone" — the direction that leaves a family expecting a meal ` +
+      'nobody ever promised');
+  });
+
+  test(`${name}: a publish NOBODY ANSWERED is reported as unconfirmed, not as a failure`, async () => {
+    const { fn } = runner(name, { publishFails: true, how: 'unconfirmed' });
+    const out = await fn(...args);
+    assert.equal(out && out.ok, false, `${name} must not claim success when nothing was acknowledged`);
+    assert.equal(out.reason, 'unconfirmed',
+      `${name} is still calling an unanswered publish a settled failure. The event is signed and on the ` +
+      'wire and usually lands a moment later; telling the member it did not is what sends them to do it twice.');
+  });
+
+  test(`CONTROL: ${name} still returns ok:true with the event when a relay DID accept it`, async () => {
+    const { fn } = runner(name, { publishFails: false });
+    const out = await fn(...args);
+    assert.equal(out && out.ok, true, `${name} must report success when a relay accepted it`);
+    assert.ok(out.evt && out.evt.id === 'evt-id',
+      `${name} must still hand back the event — this control is what stops the fix becoming "always fail"`);
   });
 }
 

@@ -13057,9 +13057,9 @@
         await _publishAny(churchRelays(), evt);
       } catch (e) {
         console.warn("[fellowship] care slot publish failed", e);
-        return null;
+        return { ok: false, reason: _pubReason(e) };
       }
-      return evt;
+      return { ok: true, evt };
     },
     async clearCareSlot(careId, iso) {
       const cp = window.Fellowship.churchPub;
@@ -13075,9 +13075,9 @@
         await _publishAny(churchRelays(), evt);
       } catch (e) {
         console.warn("[fellowship] clear care slot publish failed", e);
-        return null;
+        return { ok: false, reason: _pubReason(e) };
       }
-      return evt;
+      return { ok: true, evt };
     },
     // SAFETY CHECK — subscribe to the church's active emergency roll-call. cb(check) with the newest OPEN check
     // {id, message, by, at}, or cb(null) when there's none / it was closed. The relay only serves it to

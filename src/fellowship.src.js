@@ -6698,8 +6698,15 @@ window.Fellowship = {
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CARESLOT_D + careId + ':' + iso], ['t', NET], ['church', cp]], content: JSON.stringify({ careId, isoDate: iso, note: String(note || '').trim() }) }, sk);
     // SIGNING UP TO BRING A MEAL IS A PROMISE TO A FAMILY. If it lands nowhere the slot still reads empty to
     // everyone else — worst case nobody comes, and the one person who thought they had it never finds out.
-    try { await _publishAny(churchRelays(), evt); } catch (e) { console.warn('[fellowship] care slot publish failed', e); return null; }
-    return evt;
+    //
+    // …AND "NOBODY ANSWERED" IS NOT "IT DID NOT GO". `return null` collapsed three different outcomes into
+    // one, and the screen then said "you're NOT signed up" over a sign-up that had very probably landed —
+    // which sends a second cook to the same Tuesday, or makes the first one withdraw. The d-tag is fixed
+    // (`careslot:<careId>:<iso>`), so pressing the button again REPLACES the same document and can never
+    // double anything: the honest sentence is safe to act on. Same `{ ok, reason }` as setEventRsvp.
+    try { await _publishAny(churchRelays(), evt); }
+    catch (e) { console.warn('[fellowship] care slot publish failed', e); return { ok: false, reason: _pubReason(e) }; }
+    return { ok: true, evt };
   },
   async clearCareSlot(careId, iso) {
     const cp = window.Fellowship.churchPub;
@@ -6707,9 +6714,10 @@ window.Fellowship = {
     if (!sk || !cp || !careId || !iso) return null;
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CARESLOT_D + careId + ':' + iso], ['t', NET], ['church', cp], ['deleted', '1']], content: '' }, sk);
     // …and standing DOWN from one matters just as much: a person who believes they withdrew, and did not, is
-    // still the only name against that day.
-    try { await _publishAny(churchRelays(), evt); } catch (e) { console.warn('[fellowship] clear care slot publish failed', e); return null; }
-    return evt;
+    // still the only name against that day. Same three outcomes, same fixed d-tag, so the same safe retry.
+    try { await _publishAny(churchRelays(), evt); }
+    catch (e) { console.warn('[fellowship] clear care slot publish failed', e); return { ok: false, reason: _pubReason(e) }; }
+    return { ok: true, evt };
   },
   // SAFETY CHECK — subscribe to the church's active emergency roll-call. cb(check) with the newest OPEN check
   // {id, message, by, at}, or cb(null) when there's none / it was closed. The relay only serves it to
