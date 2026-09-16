@@ -1,7 +1,8 @@
-// THE BIBLE READER'S VERSE CARD: ONE "+", AND A "−" THAT REALLY UNDOES THE LAST TAP.
+// THE BIBLE READER'S VERSE CARD: ONE "+", A "−" THAT REALLY UNDOES IT, AND A + THAT CROSSES CHAPTERS.
 //   Run: node --test scripts/the-reader-can-undo-a-plus.test.mjs
 //
-// Two changes, both asked for by the owner, both about the little card that appears when you tap a verse.
+// Three changes, all asked for by the owner, all about the little card that appears when you tap a verse.
+// (3 was added on 2026-09-16 and is written up in its own banner further down the file.)
 //
 // 1. ONE PLUS INSTEAD OF TWO. The card used to carry "＋ before" and "＋ after". The owner: *"lets just have
 //    a Plus, that adds the next verse, users can select the first one and either manually select more in the
@@ -35,9 +36,11 @@
 //
 // MEASURED RED/GREEN, 2026-09-16, against app/screens-read.jsx. Each sabotage was SCOPED — ActionSheet or
 // ReadScreen sliced out first, the anchor asserted to occur exactly once inside that slice, then replaced
-// there. The BASELINE row is here on purpose: a broken harness fails every row, which looks identical to
-// every sabotage biting.
+// there, and the file's md5 checked to have actually moved (an inert sabotage reads exactly like a test
+// that does not bite). The BASELINE row is here on purpose: a broken harness fails every row, which looks
+// identical to every sabotage biting.
 //
+// ROUND 1 — the one + and the true −, over the 5 tests this file opened with:
 //   sabotage                                                   pass  fail
 //   BASELINE — nothing sabotaged                                 5     0
 //   the code as it shipped, before either fix                    1     4
@@ -47,30 +50,68 @@
 //   the + deleted from the card                                  2     3
 //   the sheet's `passthrough` removed (backdrop returns)         4     1
 //
+// ROUND 2 — the roll onto the next chapter, over all 16:
+//   sabotage                                                   pass  fail
+//   BASELINE — nothing sabotaged                                16     0
+//   the roll-over deleted from + (today's "nothing happens")     5    11
+//   + rolls on but CARRIES NOTHING (earlier verses dropped)      8     8
+//   + carries the passage but does NOT move the reader           8     8
+//   + at the end of the Bible silently ignores the press again  14     2
+//   − loses its roll-back arm (the reader is stranded)          13     3
+//   − hands the carried chapter back SORTED, not in tap order   15     1
+//   − comes back but does not MOVE the reader back              13     3
+//   the card counts only the chapter on screen (`multi`)        12     4
+//   Copy/Share take only the chapter on screen                  15     1
+//   the reference names only the chapter on screen               9     7
+//   the reference calls the new book by the old one's name      15     1
+//   a fresh tap keeps the carried chapter                       15     1
+//   an ordinary page turn keeps the carried chapter             15     1
+//
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { loadScreen, miniReact, find, reads } from './render-jsx-screen.mjs';
 
 const Stub = n => { const f = function () { return null; }; Object.defineProperty(f, 'name', { value: n }); return f; };
-const VERSES = Array.from({ length: 20 }, (_, i) => ({
-  v: i + 1, text: 'Verse ' + (i + 1) + ' of this chapter, with enough words in it to wrap on a phone.',
-}));
 
-// The reader, standing up with a real chapter in it. A name the screen needs that is not supplied here is a
+// ⚠ THE FIXTURE SERVES A WHOLE BOOK, NOT ONE CHAPTER, and it has to: the + now rolls the reader on into the
+// NEXT chapter, so a fixture that answers with the same twenty verses whatever chapter it is asked for
+// cannot tell a roll-over from standing still. Every verse names its own chapter for the same reason —
+// Copy and Share across a chapter line are checked by reading the words back.
+const verseText = (c, v) => 'Chapter ' + c + ' verse ' + v + ', with enough words in it to wrap on a phone.';
+
+// The reader, standing up with a real book in it. A name the screen needs that is not supplied here is a
 // ReferenceError at the point of use — deliberately, because a silently-stubbed global is how a test ends up
 // asserting about something that is not the code.
-function reader() {
+//
+//   opts.chapters  { <chapter>: <how many verses> } — any chapter not named has 20
+//   opts.lastChap  the last chapter this fixture has (default 21). step() returns null past it, which is
+//                  what the real engine does at the end of the Bible.
+//   opts.start     where the reader opens (default John 3, as every test written before 2026-09-16 assumes)
+//   opts.nextBook  give the fixture a SECOND book (Acts), so step() rolls off the end of John into it the
+//                  way the real engine does. Off by default: every test written before 2026-09-16 assumes
+//                  one book and would see a different label at the end of it.
+const BOOKNAME = { 43: 'John', 44: 'Acts' };
+function reader(opts = {}) {
+  const chapters = opts.chapters || {};
+  const lastChap = opts.lastChap == null ? 21 : opts.lastChap;
+  const start = opts.start || { book: 43, chap: 3 };
+  const versesIn = (c) => Array.from({ length: chapters[c] == null ? 20 : chapters[c] },
+    (_, i) => ({ v: i + 1, text: verseText(c, i + 1), html: verseText(c, i + 1) }));
+  const toasts = [], shared = [], copied = [];
   const { React, draw } = miniReact();
   const win = {
     addEventListener() {}, removeEventListener() {}, innerWidth: 360,
     localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
-    TrinityData: { PLANS: [], VOTD_POOL: [] }, Fellowship: {},
+    // CROSSREFS is read by CrossRefSheet whenever the reader is in John 1 — which these tests now are.
+    // Leaving it out is a TypeError inside the real component, not a finding about it.
+    TrinityData: { PLANS: [], VOTD_POOL: [], CROSSREFS: {} }, Fellowship: {},
     speechSynthesis: null, sanitizeHtml: (h) => h,
   };
   const base = {
     React, window: win, localStorage: win.localStorage,
     document: { addEventListener() {}, removeEventListener() {}, querySelector: () => null, activeElement: null },
-    navigator: { userAgent: '', clipboard: null }, location: { search: '', hostname: 'x' },
+    navigator: { userAgent: '', clipboard: { writeText: (t) => { copied.push(t); return Promise.resolve(); } } },
+    location: { search: '', hostname: 'x' },
     setTimeout, clearTimeout, setInterval, clearInterval, console,
     history: { back() {}, pushState() {}, replaceState() {}, state: null },
     fetch: async () => ({ ok: false, json: async () => ({}) }),
@@ -81,11 +122,21 @@ function reader() {
     loaded: true, activeVersion: 'WEB',
     books: () => [{ n: 43, name: 'John', chapters: 21 }],
     bookMeta: () => [{ n: 43, name: 'John', chapters: 21, group: 'nt' }],
-    bookName: () => 'John', getVerses: () => VERSES, maxChapter: () => 21,
-    refLabel: () => 'John 3', parseRef: () => null, defaultLoc: () => ({ book: 43, chap: 3 }),
+    bookName: (b) => BOOKNAME[b] || 'John', getVerses: (b, c) => versesIn(c), maxChapter: () => lastChap,
+    refLabel: (l, v) => (BOOKNAME[l.book] || 'John') + ' ' + l.chap + (v != null ? ':' + v : ''), parseRef: () => null,
+    defaultLoc: () => ({ ...start }),
     versions: () => [{ abbr: 'WEB', name: 'World English Bible' }],
-    step: (l, d) => ({ book: l.book, chap: l.chap + d }),
-    refKey: (b, c, v) => b + '.' + c + '.' + v,
+    // the real engine rolls into the neighbouring BOOK at the ends of one, and returns NULL only at the
+    // ends of the whole Bible. Both are reproduced here, because the + inherits this function wholesale.
+    step: (l, d) => {
+      const c = l.chap + d;
+      if (c >= 1 && c <= lastChap) return { book: l.book, chap: c };
+      if (!opts.nextBook) return null;
+      if (d > 0 && l.book === 43) return { book: 44, chap: 1 };
+      if (d < 0 && l.book === 44) return { book: 43, chap: lastChap };
+      return null;
+    },
+    refKey: (l, v) => l.book + '.' + l.chap + '.' + v,
     subscribe: () => () => {}, getCommentary: () => null, lex: () => ({ missing: true }),
     getCatalog: async () => [], isInstalled: () => true, isInstalling: () => false, installModule: async () => ({}),
   };
@@ -99,9 +150,13 @@ function reader() {
     todayISO: () => '2026-09-16',
     useTrinityAudio: () => ({ track: null, playing: false }),
   });
+  // The reader's place in the Bible is REAL STATE here, moved only by the screen calling ctx.setLoc — which
+  // is the whole point: the + is now allowed to move it, and a fixture that pinned `loc` could not see that.
   const ctx = {
-    toast() {}, toggleBookmark() {}, bookmarks: [], notes: {}, highlights: {},
-    openShareSheet() {}, plans: [], planProgress: {}, church: { name: 'Test Church' },
+    loc: { ...start }, version: 'WEB',
+    setLoc(x) { ctx.loc = { ...x }; },
+    toast: (m) => toasts.push(m), toggleBookmark() {}, bookmarks: [], notes: {}, highlights: {},
+    openShareSheet: (pl) => shared.push(pl), plans: [], planProgress: {}, church: { name: 'Test Church' },
   };
   let tree = draw(ReadScreen, { ctx });
   const redraw = () => { tree = draw(ReadScreen, { ctx }); return tree; };
@@ -140,7 +195,7 @@ function reader() {
   const selectionLabel = () => {
     const refs = find(tree, x => x.props && x.props.style
       && String(x.props.style.fontFamily || '') === 'var(--font-display)'
-      && /^John 3:/.test(reads(x)))[0];
+      && /^(John|Acts) \d+:/.test(reads(x)))[0];
     return refs ? reads(refs) : null;
   };
 
@@ -153,7 +208,38 @@ function reader() {
       && /var\(--clay\) 30%/.test(String(x.props.style.background || ''))).length > 0)
     .map(x => Number(x.props.id.slice(3))).sort((a, b) => a - b);
 
-  return { tapVerse, pressTitled, cardButtons, selectionLabel, selectedRows, tree: () => tree };
+  // WHICH CHAPTER IS ON SCREEN, read off the heading the reader sees ("Chapter 2"), so a claim that the +
+  // moved the view cannot be satisfied by state nobody is shown.
+  const chapterHeading = () => { const h = find(tree, x => x.type === 'h1')[0]; return h ? reads(h) : null; };
+
+  // The card's own count line — "Verse selected" / "N verses selected". This is what decides which arm of
+  // the card a reader gets: the per-verse arm (Note / Bookmark / Highlight / Cross-refs) all anchor on the
+  // lowest verse IN THE CHAPTER ON SCREEN, so it must not be offered for a passage that began earlier.
+  const cardCount = () => { const d = find(tree, x => x.props && x.props.style && x.props.style.fontSize === 12
+    && String(x.props.style.color) === 'var(--ink-3)' && /selected$/.test(reads(x)))[0]; return d ? reads(d) : null; };
+
+  // The action tiles at the bottom of the card, by the words on them.
+  const actionLabels = () => find(tree, x => x.type === 'button' && x.props && x.props.style
+    && x.props.style.borderRadius === 16).map(b => reads(b));
+
+  // The footer chapter buttons — ANY other way of moving the reader, for the case that must NOT keep a
+  // carried passage.
+  const pressFooter = (which) => {
+    const bs = find(tree, x => x.type === 'button' && x.props && x.props.style && x.props.style.borderRadius === 15);
+    assert.equal(bs.length, 2, 'expected two footer chapter buttons, found ' + bs.length);
+    bs[which === 'next' ? 1 : 0].props.onClick();
+    // ⚠ TWO DRAWS, AND THE REASON IS THE HARNESS, NOT THE SCREEN. An ordinary page turn clears the
+    // selection from inside an EFFECT (it has to: the reader may equally have arrived from Search or the
+    // book picker). Real React re-renders after an effect calls setState; this miniature React runs effects
+    // after a draw and stops, so the first draw still shows the selection the reader had a moment ago.
+    // The + and − need no such thing — they set the selection in the handler itself, in the same breath as
+    // moving the reader, so one draw shows the finished answer.
+    redraw();
+    return redraw();
+  };
+
+  return { tapVerse, pressTitled, cardButtons, selectionLabel, selectedRows, chapterHeading, cardCount,
+    actionLabels, pressFooter, toasts, shared, copied, loc: () => ctx.loc, tree: () => tree };
 }
 
 test('the verse card offers ONE way to grow the passage, a single +', () => {
@@ -241,13 +327,14 @@ test('the verse card does not block tapping the chapter behind it', () => {
 //
 // With "＋ before" gone, `+` is the card's ONLY growth control, so this matters more than it did, not less.
 //
-// NOTE ON WHAT THIS DOES *NOT* SAY. Today `+` at the last verse of a chapter simply does nothing — an
-// enabled, full-opacity button that ignores the press. The owner has asked for it to roll on into the next
-// chapter instead ("chapter markings are sometimes a pain anyway"), which needs the reader's selection to
-// carry a chapter and is a separate piece of work. This row asserts only the invariant that survives either
-// decision: the selection never contains a verse that is not there.
+// ⚠ RE-BASED 2026-09-16, AND NOT DELETED. It used to open on a fixture whose chapter 3 was simply the end
+// of the world, because `+` at the last verse of a chapter did nothing at all. It now rolls on into the
+// next chapter, so the "nothing happens" case had to be given a place where there genuinely IS no next
+// chapter — `lastChap: 3`, the end of the Bible. The INVARIANT it exists for is untouched and still the
+// point: the selection never contains a verse that is not there. The roll-over's own version of the same
+// invariant is asserted below ("the + rolls on into the next chapter").
 test('the + never selects a verse the chapter does not have', () => {
-  const R = reader();
+  const R = reader({ lastChap: 3 });    // John 3 is the last chapter this fixture has
   R.tapVerse(20);                       // the fixture chapter ends at 20
   assert.equal(R.selectionLabel(), 'John 3:20', 'fixture: tapping the last verse should select it');
   R.pressTitled('Add the next verse');
@@ -256,6 +343,10 @@ test('the + never selects a verse the chapter does not have', () => {
     'so the reference line names a verse that does not exist and Copy/Share would carry it.');
   assert.deepEqual(R.selectedRows(), [20],
     'the painted chapter and the reference line disagree about what is selected');
+  assert.deepEqual(R.toasts, ['That\u2019s the last chapter of the Bible'],
+    'at the very end of the Bible the + must SAY so, the way a swipe off the end already does, rather ' +
+    'than being an enabled full-opacity button that silently ignores the press');
+  assert.deepEqual(R.loc(), { book: 43, chap: 3 }, 'nothing should have moved the reader');
 
   // …and the control: one verse from the end it MUST still extend, or a "fix" that disabled the button
   // near the end of every chapter would pass the row above.
@@ -265,4 +356,237 @@ test('the + never selects a verse the chapter does not have', () => {
   assert.equal(R2.selectionLabel(), 'John 3:19-20',
     'the + stopped working one verse from the end — the bounds check is off by one and the reader cannot ' +
     'reach the last verse of any chapter with it');
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════════
+// ROLLING ONTO THE NEXT CHAPTER WITH THE +  (2026-09-16)
+//
+// The owner: *"Roll onto the next chapter with the +, chapter markings are sometimes a pain anyway."* Offered
+// three shapes, they chose **"carry the selection and move the view with it"** — so the + at the last verse
+// of a chapter takes the reader to the next chapter, puts its first verse in the passage, and KEEPS the
+// verses already chosen.
+//
+// `sel` is still verse numbers in the chapter on screen; the chapters already passed are parked in `carry`.
+// Everything below is read off the redrawn screen — the reference line on the card, the chapter heading a
+// reader sees, and which verse rows are painted as selected.
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+test('the + rolls on into the next chapter, and takes the reader with it', () => {
+  // The owner's own example: John 1:19, then + all the way past verse 51.
+  const R = reader({ start: { book: 43, chap: 1 }, chapters: { 1: 51, 2: 25 } });
+  R.tapVerse(19);
+  for (let v = 19; v < 51; v++) R.pressTitled('Add the next verse');
+  assert.equal(R.selectionLabel(), 'John 1:19-51', 'fixture: the + should reach the end of chapter 1');
+  assert.equal(R.chapterHeading(), 'Chapter 1', 'nothing should have moved the reader yet');
+
+  R.pressTitled('Add the next verse');
+  assert.equal(R.selectionLabel(), 'John 1:19-2:1',
+    'the + at the last verse of a chapter must extend the passage into the next one AND keep the verses ' +
+    'already chosen. A label of "John 2:1" means the earlier verses were dropped; "John 1:19-51" means ' +
+    'the press was ignored, which is the bug this replaces.');
+  assert.equal(R.chapterHeading(), 'Chapter 2',
+    'the reader was not moved — the owner chose "carry the selection AND move the view with it"');
+  assert.deepEqual(R.selectedRows(), [1],
+    'the chapter now on screen should paint verse 1 as part of the passage');
+  assert.ok(!/:52\b/.test(R.selectionLabel()),
+    'the passage names verse 52 of a chapter that ends at 51');
+});
+
+test('and it keeps rolling, one verse at a time, on the far side of the line', () => {
+  const R = reader({ start: { book: 43, chap: 1 }, chapters: { 1: 51, 2: 25 } });
+  R.tapVerse(51);
+  R.pressTitled('Add the next verse');
+  assert.equal(R.selectionLabel(), 'John 1:51-2:1');
+  R.pressTitled('Add the next verse');
+  assert.equal(R.selectionLabel(), 'John 1:51-2:2', 'the + should go on growing the passage in the new chapter');
+  assert.deepEqual(R.selectedRows(), [1, 2]);
+});
+
+test('the − is a true undo of a roll-over: back a chapter, with the passage intact', () => {
+  // ⚠ THIS IS THE ONE THAT MATTERS. A − that does not walk back across the line leaves the reader holding
+  // verses in a chapter they never asked for — and Note, Bookmark and Highlight all attach to the LOWEST
+  // selected verse, so they would then annotate a verse they never deliberately chose. Silent, and wrong.
+  const R = reader({ start: { book: 43, chap: 1 }, chapters: { 1: 51, 2: 25 } });
+  R.tapVerse(49);
+  R.pressTitled('Add the next verse');            // 50
+  R.pressTitled('Add the next verse');            // 51
+  R.pressTitled('Add the next verse');            // rolls into chapter 2
+  assert.equal(R.selectionLabel(), 'John 1:49-2:1');
+  assert.equal(R.chapterHeading(), 'Chapter 2');
+
+  R.pressTitled('Remove the last verse');
+  assert.equal(R.selectionLabel(), 'John 1:49-51',
+    'the − must take back the verse the + just added, which means coming back across the chapter line');
+  assert.equal(R.chapterHeading(), 'Chapter 1', 'the − must bring the reader back to the chapter they left');
+  assert.deepEqual(R.selectedRows(), [49, 50, 51],
+    'the selection the reader had before the roll-over must be handed back exactly');
+
+  R.pressTitled('Remove the last verse');
+  assert.equal(R.selectionLabel(), 'John 1:49-50', 'and the − goes on undoing inside the chapter as before');
+});
+
+test('the − restores the order the reader tapped in, not merely the numbers', () => {
+  // `sel` is in TAP ORDER and the − pops the LAST ENTRY, so a carried chapter that came back sorted would
+  // make the very next − delete the wrong verse — the exact defect this file was written for, one chapter
+  // further along.
+  const R = reader({ start: { book: 43, chap: 1 }, chapters: { 1: 51, 2: 25 } });
+  R.tapVerse(51);
+  R.tapVerse(50);                                  // tapped SECOND, so the − owes them this one back first
+  assert.equal(R.selectionLabel(), 'John 1:50-51');
+  R.pressTitled('Add the next verse');             // 51 is the last verse -> rolls into chapter 2
+  assert.equal(R.selectionLabel(), 'John 1:50-2:1');
+  R.pressTitled('Remove the last verse');          // undo the roll
+  assert.equal(R.selectionLabel(), 'John 1:50-51');
+  R.pressTitled('Remove the last verse');          // undo the tap on 50
+  assert.equal(R.selectionLabel(), 'John 1:51',
+    'the carried chapter came back with its taps re-sorted, so the − took away verse 51 — the verse the ' +
+    'reader chose first — and left them holding the one they were undoing');
+  assert.deepEqual(R.selectedRows(), [51]);
+});
+
+test('Copy and Share carry the words of BOTH chapters', () => {
+  // The other chapter is not on screen and is not in the `verses` memo, so its words have to be fetched.
+  // A passage that copies only what is painted is the quiet failure here: the reference says John 1:51-2:1
+  // and the clipboard holds one verse.
+  const tile = (R, label) => {
+    const tiles = find(R.tree(), x => x.type === 'button' && x.props && x.props.style && x.props.style.borderRadius === 16);
+    const i = R.actionLabels().indexOf(label);
+    assert.ok(i >= 0, 'no ' + label + ' on the card; there are: ' + JSON.stringify(R.actionLabels()));
+    tiles[i].props.onClick();
+  };
+  const R = reader({ start: { book: 43, chap: 1 }, chapters: { 1: 51, 2: 25 } });
+  R.tapVerse(51);
+  R.pressTitled('Add the next verse');
+  assert.equal(R.selectionLabel(), 'John 1:51-2:1');
+  tile(R, 'Copy');
+  assert.equal(R.copied.length, 1, 'Copy put nothing on the clipboard');
+  assert.ok(R.copied[0].startsWith('John 1:51-2:1 — '),
+    'the copied passage should be headed by the reference that spans the chapter line. Got: ' + R.copied[0]);
+  assert.ok(R.copied[0].includes('Chapter 1 verse 51'), 'the copied text lost the chapter the passage began in');
+  assert.ok(R.copied[0].includes('Chapter 2 verse 1'), 'the copied text lost the chapter the passage ran on into');
+
+  const R2 = reader({ start: { book: 43, chap: 1 }, chapters: { 1: 51, 2: 25 } });
+  R2.tapVerse(51);
+  R2.pressTitled('Add the next verse');
+  tile(R2, 'Share');
+  assert.equal(R2.shared.length, 1, 'Share opened nothing');
+  assert.equal(R2.shared[0].ref, 'John 1:51-2:1');
+  assert.ok(R2.shared[0].text.includes('Chapter 1 verse 51') && R2.shared[0].text.includes('Chapter 2 verse 1'),
+    'Share carried only one side of the chapter line. Got: ' + JSON.stringify(R2.shared[0].text));
+});
+
+test('a rolled passage is never offered the per-verse actions', () => {
+  // Note / Bookmark / Highlight / Cross-refs all anchor on the LOWEST verse IN THE CHAPTER ON SCREEN. Once a
+  // passage has crossed a chapter line its first verse is not on screen, so offering them would silently
+  // attach a person's note to the wrong verse — which is the harm the whole file exists to prevent.
+  const R = reader({ start: { book: 43, chap: 1 }, chapters: { 1: 51, 2: 25 } });
+  R.tapVerse(51);
+  assert.equal(R.cardCount(), 'Verse selected');
+  assert.ok(R.actionLabels().includes('Note'), 'fixture: one verse should get the per-verse actions');
+
+  R.pressTitled('Add the next verse');
+  assert.equal(R.cardCount(), '2 verses selected',
+    'the card counted only the verse on screen, so a passage spanning two chapters looked like a single verse');
+  assert.deepEqual(R.actionLabels(), ['Copy', 'Share'],
+    'a passage that has crossed a chapter line was offered per-verse actions anchored on the wrong chapter. ' +
+    'Found: ' + JSON.stringify(R.actionLabels()));
+});
+
+test('tapping a verse starts a NEW passage, it does not lengthen the old one', () => {
+  const R = reader({ start: { book: 43, chap: 1 }, chapters: { 1: 51, 2: 25 } });
+  R.tapVerse(51);
+  R.pressTitled('Add the next verse');
+  assert.equal(R.selectionLabel(), 'John 1:51-2:1');
+  R.tapVerse(5);
+  assert.equal(R.selectionLabel(), 'John 2:1,5',
+    'a fresh tap must drop the chapter the passage was carrying — the reader is choosing a new passage, ' +
+    'not extending one they left behind a chapter ago');
+  assert.deepEqual(R.selectedRows(), [1, 5]);
+});
+
+test('turning the page any OTHER way drops the carried chapter', () => {
+  // The + is the only thing allowed to move the reader and keep a passage. A footer button, a swipe, the
+  // book picker, Search, Today — all of them are a fresh place in the Bible.
+  const R = reader({ start: { book: 43, chap: 1 }, chapters: { 1: 51, 2: 25 } });
+  R.tapVerse(51);
+  R.pressTitled('Add the next verse');
+  assert.equal(R.chapterHeading(), 'Chapter 2');
+  R.pressFooter('next');                            // the ordinary "next chapter" button
+  assert.equal(R.chapterHeading(), 'Chapter 3');
+  assert.equal(R.selectionLabel(), null, 'the reader turned the page: nothing should still be selected');
+  assert.deepEqual(R.selectedRows(), []);
+});
+
+test('at the very end of the Bible the + says so instead of doing nothing', () => {
+  // `Bible.step` is the same function the swipe handler turns pages with. Where it returns null — the end of
+  // the Bible — the + must speak, in the swipe's own words, rather than ignore the press as it used to.
+  const R = reader({ start: { book: 43, chap: 3 }, lastChap: 3 });
+  R.tapVerse(20);
+  R.pressTitled('Add the next verse');
+  assert.deepEqual(R.toasts, ['That’s the last chapter of the Bible']);
+  assert.equal(R.selectionLabel(), 'John 3:20', 'nothing should have been added');
+  assert.equal(R.chapterHeading(), 'Chapter 3', 'nothing should have moved');
+});
+
+test('the + rolls off the end of a BOOK into the next one, exactly as a swipe does', () => {
+  // `Bible.step` already turns the page into the neighbouring book; the + uses that same function, so the
+  // reference has to name the new book rather than carrying John's name across the join.
+  const R = reader({ start: { book: 43, chap: 21 }, lastChap: 21, nextBook: true });
+  R.tapVerse(20);
+  assert.equal(R.selectionLabel(), 'John 21:20');
+  R.pressTitled('Add the next verse');
+  assert.equal(R.selectionLabel(), 'John 21:20-Acts 1:1',
+    'the + ran off the end of John. The passage must name the book it ran on into, not keep calling it John.');
+  assert.deepEqual(R.toasts, [], 'the end of a BOOK is not the end of the Bible and must not say so');
+  assert.deepEqual(R.selectedRows(), [1]);
+
+  R.pressTitled('Remove the last verse');
+  assert.equal(R.selectionLabel(), 'John 21:20', 'the − must walk back over a book line too');
+  assert.deepEqual(R.selectedRows(), [20]);
+});
+
+// ⚠ TWO CHAPTER LINES, NOT ONE — THE DESIGN'S HEADLINE CLAIM, AND IT HAD NO GUARD AT ALL.
+//
+// The carried part is a LIST precisely so the + can be pressed through several chapters. Every other test in
+// this file crosses ONE line, and an independent audit proved that is not enough: it broke stacking two
+// different ways and all sixteen tests still passed.
+//
+//   carried chapters stored newest-first instead of oldest-first   16 pass, 0 fail
+//   the − hands back the FIRST carried chapter, not the most recent 16 pass, 0 fail
+//
+// With either of those, a reader who rolls through two lines gets their verses copied OUT OF ORDER and the −
+// jumps them back to the wrong chapter. The shipped code is right; nothing would have noticed it breaking.
+test('the + stacks across TWO chapter lines, and the − unwinds them one at a time', () => {
+  const R = reader({ start: { book: 43, chap: 1 }, chapters: { 1: 3, 2: 2, 3: 20 } });
+  R.tapVerse(2);
+  R.pressTitled('Add the next verse');            // 1:3
+  R.pressTitled('Add the next verse');            // rolls into chapter 2
+  assert.equal(R.selectionLabel(), 'John 1:2-2:1', 'the first line should carry');
+  R.pressTitled('Add the next verse');            // 2:2
+  R.pressTitled('Add the next verse');            // rolls into chapter 3 — the SECOND line
+  assert.equal(R.selectionLabel(), 'John 1:2-3:1',
+    'a passage across TWO chapter lines must read from where it started to where it now ends — a carried ' +
+    'list stored in the wrong order names the wrong span here');
+  assert.equal(R.chapterHeading(), 'Chapter 3', 'the reader should be looking at the chapter they rolled into');
+
+  // …and the words come out in reading order, which is what a newest-first list would scramble.
+  const copied = R.copyText ? R.copyText() : null;
+  if (copied) {
+    const order = ['1:2', '1:3', '2:1', '2:2', '3:1'].map(r => copied.indexOf(r));
+    assert.deepEqual(order, [...order].sort((a, b) => a - b),
+      'Copy must carry the verses in reading order across both lines; got: ' + copied.slice(0, 160));
+  }
+
+  // The − unwinds ONE line at a time, most recent first. A − that handed back the FIRST carried chapter
+  // would jump the reader two chapters back in a single press.
+  R.pressTitled('Remove the last verse');
+  assert.equal(R.selectionLabel(), 'John 1:2-2:2',
+    'the first − must undo only the most recent roll-over, not the earliest one');
+  assert.equal(R.chapterHeading(), 'Chapter 2', 'and must land the reader in the chapter it just came back to');
+
+  R.pressTitled('Remove the last verse');
+  assert.equal(R.selectionLabel(), 'John 1:2-2:1');
+  R.pressTitled('Remove the last verse');
+  assert.equal(R.selectionLabel(), 'John 1:2-3', 'and the second line unwinds the same way');
+  assert.equal(R.chapterHeading(), 'Chapter 1', 'back where the reader started');
 });
