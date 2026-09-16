@@ -124,9 +124,16 @@ export const DOC_TYPES = Object.freeze({
   'trinityone/mediakey:':     { write: 'steward',   read: 'members', scope: 'suffix', note: 'its key set IS the member roster — gated accordingly' },
   'finance/journal:':         { write: 'steward',   read: 'church',  scope: 'tag',    note: 'append-only, single-writer, relay is the ordering authority' },
   // ARCHITECTURE-AUDIT-2026-07-30 A6. The other three finance docs, from app/stew-finance.jsx — a file the
-  // old extraction never read. gateway.mjs gates them explicitly and generically:
-  //     if (d.startsWith('finance/')) { const cp = finCp(e); return !!cp && (e.pubkey === cp || stewardOf(e.pubkey, cp)); }
-  // so the same church-or-rostered-steward rule as the journal, without the seq ordering.
+  // old extraction never read. gateway.mjs gates them explicitly and generically, on BOTH sides:
+  //     accept():   if (d.startsWith('finance/')) { const cp = finCp(e); return !!cp && (e.pubkey === cp || stewardCan(e.pubkey, cp, 'finance')); }
+  //     canRead():  if (d.startsWith('finance/')) return authed === cp || networkOf(authed, cp) || stewardCan(authed, cp, 'finance');
+  // so the same church-or-finance-steward rule as the journal, without the seq ordering.
+  //
+  // ⚠ `read: 'church'` WAS FALSE FOR THESE FOUR TYPES UNTIL 2026-09-16, and the registry existing is how it
+  // was found. canRead() had no `finance/` branch at all: the books fell through to the ordinary
+  // effective-member rule, and an ordinary member of the church — measured on a live relay — was served
+  // every entry, the chart of accounts and the settings. Sealed, so no amount leaked; the d-tag and the
+  // created_at are cleartext, so the SHAPE of the books did. The branch above is what made the column true.
   'finance/account:':         { write: 'steward',   read: 'church',  scope: 'author', gatedBy: "d.startsWith('finance/')", note: 'chart of accounts; church-encrypted, relay sees ciphertext' },
   'finance/fund:':            { write: 'steward',   read: 'church',  scope: 'author', gatedBy: "d.startsWith('finance/')", note: 'fund accounting bucket — NOT trinityone/fund:, which is a giving destination and owner-only' },
   'finance/settings':         { write: 'steward',   read: 'church',  scope: 'author', gatedBy: "d.startsWith('finance/')", note: 'finance module settings' },
