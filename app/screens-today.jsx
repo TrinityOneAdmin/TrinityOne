@@ -620,7 +620,13 @@ const _careDraftKey = () => CARE_DRAFT_KEY + '.' + ((window.Fellowship && window
 // belt-and-braces for every other way out nobody has thought of yet — a church switch with the sheet open,
 // the care feature being turned off, a restore. A retry a member makes in the moment is seconds later, never
 // hours, so nothing legitimate is lost by forgetting a stale one.
-const CARE_DRAFT_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+// THIRTY MINUTES, NOT SIX HOURS. Once the unmount cleanup is in, this limit only ever applies to ONE route:
+// the app being KILLED, which is the only way out that runs no cleanup. A genuine retry after a kill is
+// minutes — a member staring at a failed send reopens the app and tries again. Every extra hour here is an
+// hour in which a killed-then-reopened phone could attach an UNRELATED ask to the old request. Six hours was
+// the first number written and a re-audit was right that it was twelve times longer than anything legitimate
+// needs.
+const CARE_DRAFT_MAX_AGE_MS = 30 * 60 * 1000;
 function _careDraftId() {
   let k = '', raw = '';
   try { raw = localStorage.getItem(_careDraftKey()) || ''; } catch (e) {}
