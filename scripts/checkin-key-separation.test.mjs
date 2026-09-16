@@ -327,7 +327,15 @@ test('the relay refuses a check-in write from anyone but the church or a SAFEGUA
   const rule = gw.match(/if \(d\.startsWith\(CHECKIN_D\)\) \{[\s\S]*?\n    \}/) || gw.match(/if \(d\.startsWith\(CHECKIN_D\)\)[^\n]*/);
   assert.ok(rule, 'the relay has no rule for checkin: docs, so they fall to the member catch-all and any ' +
     'member of the church can overwrite a child\'s check-in record');
-  assert.ok(rule[0].split('\n').length < 40, 're-anchor: the checkin: write rule slice ran away past its own block');
+  // COUNT CODE, NOT BLANK LINES. This was `.split('\n').length < 40` and broke on 2026-09-16 when a twenty-
+  // line COMMENT was added inside the rule — `stripComments` replaces a comment line with an EMPTY line
+  // rather than removing it, so the slice went to 49 lines while the rule itself stayed at 11 lines of code.
+  // The guard is here to catch the slice running away past its own block, which is a code question; a
+  // comment growing must never fail it, or the next person to explain something in that block gets a red
+  // suite and no idea why.
+  const ruleCode = rule[0].split('\n').filter(l => l.trim()).length;
+  assert.ok(ruleCode < 40, 're-anchor: the checkin: write rule slice ran away past its own block — ' +
+    ruleCode + ' lines of code');
   assert.match(rule[0], /stewardCan\(e\.pubkey, cp, ['"]safeguarding['"]\)/,
     'the check-in write rule does not admit a safeguarding steward, so the capability grants nothing');
   assert.match(rule[0], /e\.pubkey === cp/, 'the church itself cannot write its own register');
