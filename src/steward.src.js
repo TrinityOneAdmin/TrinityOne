@@ -7945,7 +7945,26 @@ window.Steward = {
     if (!sk || !req || !req.memberPub) return Promise.resolve(null);
     const id = req.id || ('req' + Date.now());
     const content = JSON.stringify({ serviceId: req.serviceId || '', teamId: req.teamId || '', roleId: req.roleId || '', role: req.role || '', teamName: req.teamName || '', icon: req.icon || 'hand', accent: req.accent || 'var(--clay)', date: req.date || '', time: req.time || '', service: req.service || '', from: req.from || 'Your church', note: req.note || '' });
-    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', REQUEST_D + id], ['t', NET], ['p', req.memberPub]], content }, sk))
+    // ⚠ feChurch, NOT a bare finalizeEvent. MEASURED against a live relay on 2026-09-16: as a bare
+    // finalizeEvent this was REFUSED outright for a delegated steward — "blocked: not a member or not
+    // permitted for this group" — so their volunteers were never asked to serve at all. Not a display bug:
+    // nothing left the building.
+    //
+    // The relay's rule for church-authored CONTENT documents (accept() in scripts/gateway.mjs) is
+    // `leaderOf(ownCp()) || stewardCan(e.pubkey, namedChurch(e), 'content')`, and namedChurch() reads the
+    // ['church', <cp>] tag. In delegated mode the steward's OWN key signs while `pub` is the church, so
+    // without that tag the author is not the church (leaderOf false) and no church is named
+    // (stewardCan(pub, '', …) returns false on its first line). Both halves fail. feChurch stamps the tag.
+    //
+    // REQUEST_D was the ONLY one of the relay's twelve content prefixes publishing this way — the other
+    // eleven (group/plan/devo/rota/roster/service/room/booking/runsheet/category/pinsermon) all go through
+    // feChurch. One missed call site, not a design gap.
+    //
+    // Measured on the same relay, all four rows: church key untagged ACCEPTED (unchanged, the ordinary
+    // case); delegated steward untagged REFUSED; delegated steward tagged ACCEPTED; and the control that
+    // matters — an ORDINARY MEMBER with a church tag is still REFUSED, so the tag grants nothing on its own
+    // and the capability check is still what decides.
+    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', REQUEST_D + id], ['t', NET], ['p', req.memberPub]], content }, sk))
       .then((ok) => (ok ? { id, ...JSON.parse(content), memberPub: req.memberPub } : null));   // publish() returns FALSE when no relay accepted; see publishService
   },
   // the church's own "can you serve?" request docs (so the board can join replies to a slot)
