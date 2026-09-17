@@ -28,6 +28,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { loadScreen, miniReact, find, texts } from './render-jsx-screen.mjs';
+import { readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 
 const Stub = (n) => { const f = function () { return null; }; Object.defineProperty(f, 'name', { value: n }); return f; };
 const REFUSAL = 'blocked: not a member or not permitted for this group';
@@ -113,8 +115,18 @@ test('…and it still outranks the modal — the AUDIT-9 defect must not come ba
     'their modal open, so this is not a corner case.');
   assert.equal(w.pointerEvents, 'none',
     'the strip swallows taps across the whole width of the dialog behind it');
-  assert.equal(cardsOf(c.tree)[0].props.style.pointerEvents, 'auto',
-    'the message itself cannot be tapped, so it cannot be dismissed or expanded');
+  // ⚠ THE CARD ITSELF IS POINTER-TRANSPARENT WHILE CLAMPED, AND ITS CONTROLS ARE NOT. Audit of 1641992:
+  // at 730x328 there is no strip short enough to clear a 92vh dialog (app/stew-finance.jsx's modals), and
+  // an intercepting strip over the bottom of one ate half of "Post to members". Letting taps through is
+  // what keeps that button usable; the two controls re-enable themselves so the message is still
+  // dismissible and still expandable.
+  assert.equal(cardsOf(c.tree)[0].props.style.pointerEvents, 'none',
+    'THE CLAMPED CARD INTERCEPTS TAPS. Over a 92vh dialog that is its primary action, dead.');
+  for (const b2 of [...showBtn(c.tree), ...dismissBtn(c.tree)]) {
+    assert.equal(b2.props.style.pointerEvents, 'auto',
+      'a control on the clamped card cannot be tapped, because the card around it is pointer-transparent ' +
+      'and it did not re-enable itself: ' + String(b2.props['aria-label']));
+  }
 });
 
 test('…clamped to one line, and short enough to clear a full-height dialog in landscape', () => {
@@ -127,8 +139,9 @@ test('…clamped to one line, and short enough to clear a full-height dialog in 
   // 730x328 is the Oppo in landscape. A dialog there is at most 86vh (SkConfirm) inside a 24px-padded
   // overlay, so its lowest ink is at about 305px; the strip must start below that. 30vh of 328 is 98px, so
   // the 84px literal is what binds, and the card inside it is ~32px.
-  assert.equal(w.maxHeight, 'min(30vh, 84px)',
-    'the collapsed strip is taller than the room a landscape dialog leaves at the foot of the screen');
+  assert.equal(w.maxHeight, 'min(24vh, 62px)',
+    'the collapsed strip grew. At 730x328 a 92vh dialog leaves nothing at the foot of the screen, so the ' +
+    'strip is kept to one short row and lets taps through — both halves matter, and this is the first.');
 });
 
 test('the whole message is one tap away, and the message is still dismissible', () => {
@@ -201,4 +214,57 @@ test('…and it does not cover the tab strip, which is the AUDIT-8 defect', () =
       'the banner is positioned from the top of the viewport again — measured with elementFromPoint at 360px ' +
       'that covered every control in the tab strip, including the Members tab the message tells you to open');
   }
+});
+
+// ── REGRESSION TRIPWIRE (source text, not behaviour), and it is labelled as such ──────────────────────────
+//
+// Everything above renders. This does not, and it cannot: it exists to catch an overlay that does not exist
+// yet. The render test proves ONE dialog (SkConfirm, through the real useStewDialog) moves the banner; it
+// structurally cannot know about a modal somebody writes next month, and a modal that skips registration is
+// one the banner goes on cropping with every test green.
+//
+// It is here because that is exactly what happened on the day the fix was written: three console overlays
+// had no useStewDialog at all — DelegateBrief, StewApproveSheet and MealsNeedModal — and the first cut of
+// this work missed every one of them. An audit brief found them.
+//
+// WHAT COUNTS AS A MODAL HERE: full-viewport (`position: 'fixed'` with `inset: 0`) AND visually covering —
+// it either dims (a `background` with rgba()/color-mix()) or blurs. That deliberately excludes the invisible
+// click-catchers a dropdown puts behind itself (app/stew-schedule.jsx has two, zIndex 40, no background):
+// those cover nothing, so the banner has nothing to get out of the way of.
+const APP = new URL('../app/', import.meta.url).pathname;
+const STEW_FILES = readdirSync(APP).filter(f => /^stew-.*\.jsx$/.test(f));
+
+test('TRIPWIRE: every covering overlay in the console registers itself as a modal', () => {
+  const missing = [], seen = [];
+  for (const f of STEW_FILES) {
+    const src = readFileSync(join(APP, f), 'utf8');
+    const lines = src.split('\n');
+    for (const m of src.matchAll(/position:\s*'fixed',[^\n]{0,200}inset:\s*0[^\n]{0,400}/g)) {
+      const chunk = m[0];
+      if (!/background:\s*'(?:rgba|color-mix)|backdropFilter:\s*'blur\(/.test(chunk)) continue;   // a click-catcher
+      const at = m.index;
+      let owner = null;
+      for (let j = src.slice(0, at).split('\n').length - 1; j >= 0; j--) {
+        const d = lines[j].match(/^function\s+([A-Za-z_$][\w$]*)/);
+        if (d) { owner = d[1]; break; }
+      }
+      assert.ok(owner, `could not find the component owning an overlay in app/${f} — re-anchor this tripwire`);
+      if (seen.includes(f + ':' + owner)) continue;
+      seen.push(f + ':' + owner);
+      // ⚠ NOT fnBody. A straight apostrophe in JSX TEXT is an unbalanced quote to every brace-walking
+      // slicer in scripts/ — app/stew-finance.jsx has one, and fnBody dies on it with "could not find the
+      // end of BooksDonate". That trap is written up in DashRelaysCard's own source. Slicing from this
+      // top-level `function` to the NEXT one is enough for a presence check and cannot be tripped by
+      // punctuation.
+      const from = src.indexOf('\nfunction ' + owner);
+      const next = src.indexOf('\nfunction ', from + 1);
+      const body = src.slice(from, next === -1 ? src.length : next);
+      if (!/useStewDialog\(|useStewModalOpen/.test(body)) missing.push('app/' + f + ' · ' + owner);
+    }
+  }
+  assert.ok(seen.length > 20, `only ${seen.length} covering overlays found — the scan has stopped scanning`);
+  assert.deepEqual(missing, [],
+    'THESE OVERLAYS DO NOT REGISTER AS MODALS, so the console\'s error banner will sit on their heading ' +
+    'exactly as it did on the Oppo on 2026-09-17: ' + missing.join(', ') + '. One line fixes each — see ' +
+    'WizShell in app/stew-dashboard.jsx.');
 });

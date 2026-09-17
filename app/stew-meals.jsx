@@ -507,6 +507,10 @@ function StewApproveSheet({ req, who, onClose, onDone }) {
     if (!ok) { setErr('Couldn’t set this up — it didn’t reach the church, so nothing has changed. Try again in a moment.'); return; }
     onDone(ok);
   };
+  // REGISTER AS A MODAL. Full-viewport overlay, so the console's error banner has to know it is up in order
+  // to get out of the way of its heading — see the long note in WizShell for why this is written as an
+  // expression rather than a bare call or a named helper.
+  (typeof useStewModalOpen === 'function' ? useStewModalOpen : () => React.useEffect(() => {}, []))(true);
   const fld = { width: '100%', boxSizing: 'border-box', padding: '10px 12px', borderRadius: 10, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontSize: 14 };
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 90, background: 'rgba(40,32,24,.42)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -830,6 +834,10 @@ function MealsNeedDetail({ need, slots, skips, onClose, onEdit }) {
 
 // ────────────────────────────────────────────────────────────────────────────────
 function MealsNeedModal({ need, onClose, onSaved, onDeleted }) {
+  // REGISTER AS A MODAL. Full-viewport overlay, so the console's error banner has to know it is up in order
+  // to get out of the way of its heading — see the long note in WizShell for why this is written as an
+  // expression rather than a bare call or a named helper.
+  (typeof useStewModalOpen === 'function' ? useStewModalOpen : () => React.useEffect(() => {}, []))(true);
   const isEdit = !!need;
   const today = todayISO();
   const [label, setLabel]   = React.useState(need ? need.displayLabel : '');

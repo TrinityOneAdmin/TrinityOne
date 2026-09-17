@@ -22,7 +22,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { rmSync, existsSync } from 'node:fs';
+import { rmSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WebSocket } from 'ws';
@@ -52,9 +52,22 @@ function shell(bannerHtml) {
     + '</div>';
 }
 
-// Render the two real components and glue their trees into one page. `modalOpen` is what the real registry
-// (app/stew-modal.jsx) answers while a dialog is up; `withDialog` says whether one is drawn at all.
-function fixture(modalOpen, withDialog = true) {
+// ⚠ TWO DIALOGS, BECAUSE ONE OF THEM IS THE TALLEST CLASS AND THAT IS WHERE THIS BREAKS.
+//
+// SkConfirm is `maxHeight: 86vh`. app/stew-finance.jsx's modals are `92vh`, and the first cut of this fix
+// claimed "it does not touch a control" on the strength of SkConfirm alone. An audit measured
+// FinanceShareStatement instead: at 730x328 the strip ate the bottom 19px of a 44px "Post to members", and
+// at 360x730 it clipped 3px off two buttons the commit said it could not reach at all. That dialog is the
+// one the banner is raised above modals FOR — it publishes with its modal still open.
+//
+// `FinanceShareStatement` here is the real component out of app/stew-finance.jsx, given the real shipped
+// ledger out of vendor/finance-ledger.js and an empty book.
+const LEDGER = new Function(readFileSync(new URL('../vendor/finance-ledger.js', import.meta.url), 'utf8')
+  + '\nreturn FinanceLedger;')();
+
+// Render the real components and glue their trees into one page. `modalOpen` is what the real registry
+// (app/stew-modal.jsx) answers while a dialog is up; `withDialog` is false, 'confirm' (86vh) or 'tall' (92vh).
+function fixture(modalOpen, withDialog = 'confirm') {
   const Stub = (n) => { const f = function () { return null; }; Object.defineProperty(f, 'name', { value: n }); return f; };
   const listeners = {};
   const win = {
@@ -79,14 +92,30 @@ function fixture(modalOpen, withDialog = true) {
   assert.equal(find(tree, n => n.props && n.props.role === 'alert').length, 1,
     're-anchor: the banner did not render exactly one message');
   const d = miniReact();
-  const dlg = withDialog ? d.draw(mod.SkConfirm, {
-    icon: 'lock', title: 'Seal “Musicians”?', confirmLabel: 'Seal it',
-    body: 'From now on its messages are encrypted end-to-end — not even the relay can read them. Messages '
-      + 'already posted stay as they are.',
-    onConfirm() {}, onCancel() {},
-  }) : null;
+  let dlg = null;
+  if (withDialog === 'confirm') {
+    dlg = d.draw(mod.SkConfirm, {
+      icon: 'lock', title: 'Seal “Musicians”?', confirmLabel: 'Seal it',
+      body: 'From now on its messages are encrypted end-to-end — not even the relay can read them. Messages '
+        + 'already posted stay as they are.',
+      onConfirm() {}, onCancel() {},
+    });
+  } else if (withDialog === 'tall') {
+    const fin = loadScreen('app/stew-finance.jsx', ['FinanceShareStatement'], {
+      React: d.React, window: win, Icon: Stub('Icon'), SkPill: Stub('SkPill'), SkBadge: Stub('SkBadge'),
+      Panel: ({ children }) => children, DismissibleNote: ({ children }) => children,
+      useStewDialog: () => ({ current: null }), useStewModalOpen: () => {},
+      setTimeout: () => 1, clearTimeout: () => {}, console, todayISO: () => '2026-09-17',
+      Math, Date, JSON, String, Number, Boolean, Object, Array, Set, Map, Promise, RegExp,
+    });
+    dlg = d.draw(fin.FinanceShareStatement, {
+      F: LEDGER, book: { journal: [], accounts: [], funds: [], name: 'St Aidan' },
+      churchName: 'St Aidan', accent: 'var(--clay)', logo: '', canPost: true,
+      onPostToMembers() {}, onClose() {},
+    });
+  }
   // Modals come FIRST in the console shell, exactly as they do here; what decides the stacking is z-index.
-  return page((withDialog ? toHtml(dlg) : '') + shell(toHtml(tree)));
+  return page((dlg ? toHtml(dlg) : '') + shell(toHtml(tree)));
 }
 
 let chr, ws, prof, send, evalIn, frameId;
@@ -98,9 +127,10 @@ before(async () => {
   // private /tmp and cannot see anything this process writes there — a file:// fixture loads as a blank page
   // and every measurement below then says the banner "rendered nothing", which looks exactly like the bug.
   // Page.setDocumentContent hands the markup straight to the frame and needs no filesystem either side.
-  HTML.open = fixture(true);                 // a dialog is up, and the banner knows it
-  HTML.shut = fixture(false, false);         // no dialog at all — the everyday console
-  HTML.was = fixture(false, true);           // THE BASELINE: a dialog is up and the banner does not know
+  HTML.open = fixture(true);                    // a dialog is up, and the banner knows it
+  HTML.shut = fixture(false, false);            // no dialog at all — the everyday console
+  HTML.was = fixture(false, 'confirm');         // THE BASELINE: a dialog is up and the banner does not know
+  HTML.tall = fixture(true, 'tall');            // the 92vh case an audit found this fix breaking
   prof = join(tmpdir(), 'trin-banner-chr-' + process.pid);
   chr = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${CDP}`, '--no-sandbox', '--disable-gpu',
     '--host-resolver-rules=MAP * 127.0.0.1:9', `--user-data-dir=${prof}`, 'about:blank'], { stdio: 'ignore' });
@@ -139,10 +169,26 @@ const MEASURE = `(() => {
   // question the rectangles only imply.
   const at = (x, y) => { const e = document.elementFromPoint(x, y); return e ? (e.closest('[role="alert"]') ? 'banner' : (e.closest('[role="dialog"]') ? 'dialog' : 'other')) : 'none'; };
   const t = box(title), a = box(alert);
+  // EVERY CONTROL IN THE DIALOG, AT THREE POINTS. The centre alone is not enough: the strip sits at the foot,
+  // so what it takes first is the BOTTOM EDGE of the lowest row of buttons.
+  const intercepted = buttons.map(b => {
+    const r = box(b);
+    const pts = [r.top + 3, (r.top + r.bottom) / 2, r.bottom - 3].map(y => at((r.left + r.right) / 2, y));
+    return pts.includes('banner') ? { text: (b.textContent || '').trim().slice(0, 32), box: r, pts } : null;
+  }).filter(Boolean);
   return JSON.stringify({
     vw: innerWidth, vh: innerHeight,
     dialog: box(dialog), title: t, alert: a, main: box(document.querySelector('main')),
-    buttons: buttons.map(b => box(b)),
+    buttons: buttons.map(b => box(b)), intercepted,
+    // The banner's OWN dismiss control. While the strip is clamped the card lets taps through, so the card's
+    // middle no longer answers "is the banner on top" — its control does, and it answers both halves at once:
+    // painted above the overlay, and reachable.
+    atDismiss: (() => {
+      const d2 = document.querySelector('[role="alert"] button[aria-label^="Dismiss"]');
+      if (!d2) return 'none';
+      const r = box(d2);
+      return at((r.left + r.right) / 2, (r.top + r.bottom) / 2);
+    })(),
     atTitle: t ? at((t.left + t.right) / 2, t.top + 4) : null,
     atLastButton: buttons.length ? (() => { const r = box(buttons[buttons.length - 1]); return at((r.left + r.right) / 2, (r.top + r.bottom) / 2); })() : null,
   });
@@ -181,14 +227,25 @@ for (const [label, W, H] of [['360x730 upright', 360, 730], ['730x328 landscape'
   test(`${label}: …and the banner is still ON TOP, not behind the overlay`, { skip: !CHROME ? 'no chromium' : false, timeout: 120000 }, async () => {
     // AUDIT-9's defect, which must not come back: painted under the modal it is greyed and untappable.
     const m = await measure('open', W, H);
-    const who = await evalIn(`(() => {
-      const a = document.querySelector('[role="alert"]').getBoundingClientRect();
-      const e = document.elementFromPoint((a.left + a.right) / 2, (a.top + a.bottom) / 2);
-      return e ? (e.closest('[role="alert"]') ? 'banner' : 'covered') : 'none';
-    })()`);
-    assert.equal(who, 'banner',
-      `the banner's own middle is painted by something else at ${label} — it is behind the overlay again ` +
-      `(AUDIT-9), where it is greyed and cannot be tapped. banner ${JSON.stringify(m.alert)}`);
+    assert.equal(m.atDismiss, 'banner',
+      `the banner's own dismiss control is painted by something else at ${label} — the banner is behind the ` +
+      `overlay again (AUDIT-9), where it is greyed and cannot be tapped. banner ${JSON.stringify(m.alert)}`);
+  });
+}
+
+for (const [label, W, H] of [['360x730 upright', 360, 730], ['730x328 landscape', 730, 328]]) {
+  test(`${label}: a 92vh dialog keeps every one of its controls operable`, { skip: !CHROME ? 'no chromium' : false, timeout: 120000 }, async () => {
+    // THE ROW AN AUDIT HAD TO ADD. At 328px of height there is no strip short enough to clear a 92vh dialog,
+    // so the strip stops INTERCEPTING instead: pointer-transparent except its own two controls. This asserts
+    // the consequence rather than the mechanism — no control of the dialog is painted by the banner at its
+    // top edge, its middle, or its bottom edge.
+    const m = await measure('tall', W, H);
+    assert.ok(m.dialog && m.alert, 're-anchor: the tall fixture did not render both boxes');
+    assert.ok(m.buttons.length >= 4, `re-anchor: FinanceShareStatement rendered ${m.buttons.length} buttons`);
+    assert.deepEqual(m.intercepted, [],
+      `THE BANNER INTERCEPTS A CONTROL OF A 92vh DIALOG at ${label} — and that dialog is the one this banner ` +
+      `is raised above modals for, because it publishes with its modal still open. ` +
+      JSON.stringify(m.intercepted) + ' banner ' + JSON.stringify(m.alert));
   });
 }
 

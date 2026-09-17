@@ -4,6 +4,10 @@
 // nobody enjoys writing: you can be removed at any time, and you will not be asked first. A steward who
 // learns that from a screen going blank mid-task learns something worse.
 function DelegateBrief({ onClose, churchName }) {
+  // REGISTER AS A MODAL. Full-viewport overlay, so the console's error banner has to know it is up in order
+  // to get out of the way of its heading — see the long note in WizShell for why this is written as an
+  // expression rather than a bare call or a named helper.
+  (typeof useStewModalOpen === 'function' ? useStewModalOpen : () => React.useEffect(() => {}, []))(true);
   const caps = (window.Steward && window.Steward.myStewardCaps && window.Steward.myStewardCaps()) || null;
   const named = Array.isArray(caps) ? caps.map(c => STEW_CAP_LABEL[c] || c) : null;
   return (
@@ -508,18 +512,26 @@ function PublishErrorBanner() {
   const clamped = modalUp && !openWide;   // one line while a dialog is up, until the steward says otherwise
   const card = (text, key, clear, tone) => (
     <div key={key} role="alert" aria-live={tone === 'sg' ? 'assertive' : 'polite'} aria-atomic="true"
-      style={{ pointerEvents: 'auto', maxWidth: 560, width: '100%', display: 'flex', alignItems: clamped ? 'center' : 'flex-start', gap: 10, padding: clamped ? '7px 12px' : '12px 14px', borderRadius: 13, background: tone === 'quiet' ? 'var(--surface-2)' : 'color-mix(in oklab, var(--clay) 12%, var(--surface))', border: tone === 'quiet' ? '1px solid var(--line)' : '1px solid color-mix(in oklab, var(--clay) 40%, transparent)', boxShadow: 'var(--shadow-lg)' }}>
+      // ⚠ WHEN CLAMPED THE CARD LETS TAPS THROUGH, AND THAT IS THE WHOLE OF THE FIX FOR A TALL DIALOG.
+      // Audit of 1641992, 2026-09-17: the commit claimed the bottom strip "does not touch a control", which
+      // was true of SkConfirm (86vh) and FALSE of app/stew-finance.jsx's modals (92vh) — measured, the strip
+      // ate the bottom 19px of FinanceShareStatement's "Post to members" at 730x328 and 3px of it at
+      // 360x730. At 328px of height there is no strip short enough to clear a 92vh dialog, so the strip
+      // stops INTERCEPTING instead: everything but its own two controls is pointer-transparent, a tap on the
+      // button underneath reaches the button, and the two controls re-enable themselves below.
+      // And FinanceShareStatement is the exact dialog this banner is raised above modals for.
+      style={{ pointerEvents: clamped ? 'none' : 'auto', maxWidth: 560, width: '100%', display: 'flex', alignItems: clamped ? 'center' : 'flex-start', gap: 10, padding: clamped ? '5px 10px' : '12px 14px', borderRadius: 13, background: tone === 'quiet' ? 'var(--surface-2)' : 'color-mix(in oklab, var(--clay) 12%, var(--surface))', border: tone === 'quiet' ? '1px solid var(--line)' : '1px solid color-mix(in oklab, var(--clay) 40%, transparent)', boxShadow: 'var(--shadow-lg)' }}>
       <Icon name={tone === 'sg' ? 'shield' : 'bolt'} size={17} color={tone === 'quiet' ? 'var(--ink-3)' : 'var(--clay)'} style={{ flexShrink: 0, marginTop: clamped ? 0 : 1 }} />
       <div style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: tone === 'quiet' ? 'var(--ink-2)' : 'var(--ink)', lineHeight: 1.45, fontWeight: 600, ...(clamped ? { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } : null) }}>{text}</div>
       {/* THE WAY BACK TO THE WHOLE SENTENCE, and it has to be a real 24px-plus target on a cheap Android
           phone (WCAG 2.5.8) like the dismiss beside it. A summary with no way to read the rest would be a
           worse banner than the one that cropped the dialog. */}
       {clamped ? <button onClick={() => setOpenWide(true)} aria-label="Show the whole message" title="Show the whole message"
-        style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '4px 9px', minHeight: 24, cursor: 'pointer', flexShrink: 0, fontSize: 11.5, fontWeight: 700, fontFamily: 'var(--font-ui)', color: 'var(--ink-2)' }}>Show</button> : null}
+        style={{ pointerEvents: 'auto', border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '4px 9px', minHeight: 24, cursor: 'pointer', flexShrink: 0, fontSize: 11.5, fontWeight: 700, fontFamily: 'var(--font-ui)', color: 'var(--ink-2)' }}>Show</button> : null}
       {/* padding:14 with margin:-14 already gives this a ~44px target without changing the layout; only the
           accessible name was missing. A second `style` added here for one commit silently won and undid it. */}
       <button onClick={clear} aria-label="Dismiss this message" title="Dismiss this message"
-        style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0, padding: 14, margin: -14 }}><Icon name="x" size={16} /></button>
+        style={{ pointerEvents: 'auto', border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0, padding: clamped ? 10 : 14, margin: clamped ? -10 : -14 }}><Icon name="x" size={16} /></button>
     </div>
   );
   // BELOW the header, not over it. Absolutely positioned at top:12 the card covered the entire tab strip at
@@ -551,8 +563,8 @@ function PublishErrorBanner() {
   const wrapper = modalUp
     ? { position: 'fixed', left: 0, right: 0, bottom: 0, zIndex: 240, background: 'transparent',
         pointerEvents: openWide ? 'auto' : 'none',
-        maxHeight: openWide ? 'min(40vh, 220px)' : 'min(30vh, 84px)', overflowY: 'auto',
-        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '0 16px 10px' }
+        maxHeight: openWide ? 'min(40vh, 220px)' : 'min(24vh, 62px)', overflowY: 'auto',
+        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '0 16px 6px' }
     : { flexShrink: 1, minHeight: 0, maxHeight: 'min(40vh, 220px)', overflowY: 'auto', position: 'relative', zIndex: 240,
         display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '10px 16px 0', background: 'var(--paper)' };
   return (
