@@ -155,7 +155,31 @@
      arriving from the other side. The panels that already scroll are unaffected by saying it twice.
 
      `!important` because every console overlay is styled inline, and this must win over all 35 of them for
-     as long as a message is up and not one moment longer — the attribute is set and cleared by the banner. */
+     as long as a message is up and not one moment longer — the attribute is set and cleared by the banner.
+
+     ⚠ KNOWN LIMIT, MEASURED AND DELIBERATELY NOT FIXED HERE — READ THIS BEFORE CHANGING THESE NUMBERS.
+     A `max-height` is only a SHORTENING while it is tighter than the panel's own cap. Above it, `!important`
+     overrides the panel's inline value and makes the panel TALLER than it was. For a 90vh panel that happens
+     once 100vh - 62 - 28 > 90vh, i.e. above 900px of viewport height — the DESKTOP console, which is what
+     app/stew-dashboard.jsx's first line calls this. Measured on MealsNeedModal, clamped vs no attribute, as
+     clearance between the panel's bottom and the strip's top:
+
+         1024x1366  +302 vs +302   content-sized, neither cap binds
+         1280x1024    -4 vs   +8   <- the rule turns a clearance into an overlap
+         1440x960     -1 vs   +5   <- the panel GREW by 6px, from 864 to 870
+          360x730    +10 vs   -7   the rule doing its job
+          730x328    +31 vs  -27   the rule doing its job
+
+     The overlap is a few pixels of the card's bottom PADDING, never a control, and the `open` state cannot
+     reach it (100vh - 248 exceeds 90vh only above 2480px). It is recorded rather than fixed because the
+     honest repair is not a different number: this reservation is expressed as a CAP when what it means is a
+     FLOOR ON THE GAP AT THE BOTTOM, and a cap only behaves like a floor while it is the binding constraint.
+     CSS cannot say "no taller than whatever this panel already said", so the repair is a different mechanism
+     (shrink the OVERLAY's box rather than the panel's, which needs :has() and converts the panels' vh caps
+     into container-relative ones) and that is a larger change than the defect justifies today.
+
+     THE BLIND SPOT IS THE POINT: every measurement on this branch is 360x730 or 730x328, so a device run on
+     a phone will never find this. */
   html[data-stew-banner="clamped"] [role="dialog"][aria-modal="true"],
   html[data-stew-banner="clamped"] [data-stew-modal-panel] {
     max-height: calc(100vh - min(24vh, 62px) - 28px) !important;
