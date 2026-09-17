@@ -357,7 +357,18 @@ let _stewardNamesCt = '';   // the sealed labels we hold but could not open yet 
 // three people the run of a church, and they were right: the roster said who, never when. Same terms as the
 // rest — carried forward through unrelated edits, pruned with the steward it belongs to.
 let _stewardSince = {};
-const STEWARD_CAPS = ['finance', 'care', 'safeguarding', 'members', 'content'];
+// SEALING A ROOM IS ITS OWN JOB, 2026-09-17. `sealedrooms` is deliberately NOT part of `content`: minting an
+// encrypted room's key means HOLDING that key, and holding it means being able to read the room. `content` is
+// already a broad tick — groups, plans, devotionals, rotas, rosters, services, rooms, bookings, run sheets,
+// categories, pinned sermons — and the owner did not want "may run the rotas" and "may read the sealed rooms"
+// to be the same decision. The relay is what enforces it (scripts/gateway.mjs, the GROUPKEY_D branch of
+// accept(), which also names why the gate is stewardCan and not stewardCanExplicitly). Nothing on this side
+// hides a button over it: the console has always treated hiding buttons as theatre, because a delegate can
+// reach the same relay from any other client.
+//
+// It is ADDED, never a rename: the five names before it keep their exact spelling and meaning, so every roster
+// in the field parses unchanged and a relay that has not been updated simply ignores the sixth word.
+const STEWARD_CAPS = ['finance', 'care', 'safeguarding', 'members', 'content', 'sealedrooms'];
 // ── A KEY PER CAPABILITY ──────────────────────────────────────────────────────────────────────────────────
 // One mechanism, not one per feature. The books got their own key on 2026-08-19 and kids check-in needed the
 // same shape the next morning — at which point writing a fourth hand-rolled envelope (after care, name and

@@ -24,8 +24,14 @@
 // ── EVERY NUMBER BELOW WAS MEASURED ON THIS RELAY, NOT INFERRED ────────────────────────────────────────────
 //   group key    untagged: STORED, and invisible to the congregation AND to the church owner (0 documents on
 //                both halves of the filter). Tagged: both see it. A steward who is not also a MEMBER of the
-//                church is refused outright — there is no relay rule for `groupkey:` at all; it survives on
-//                the generic "a member may write their own documents" rule. Declared gap, not fixed here.
+//                church WAS refused outright, and this file said so as a declared gap: there was no relay
+//                rule for `groupkey:` at all, so it survived on the generic "a member may write their own
+//                documents" rule. ⚠ THAT GAP IS CLOSED AS OF THE 2026-09-17 MERGE with
+//                feat/sealing-is-its-own-job — accept() now has a GROUPKEY_D branch that resolves the owning
+//                church from the GROUP and admits the church, its network, or a steward holding the new
+//                `sealedrooms` capability. Which is why Dana's fixture roster below carries that word: the
+//                two fixes were written apart and each is incomplete without the other. Untagged, the relay
+//                stores the key and serves it to nobody; unpermissioned, the relay never stores it at all.
 //   join policy  untagged: STORED and ENFORCED AT ONCE, and invisible to both halves of the filter — so the
 //                switch reads "off" while the relay holds new joiners pending, and pressing it again only
 //                sets it on again. Also measured: with approval on, an existing member who is not on the
@@ -182,7 +188,15 @@ before(async () => {
   ws = await connect();
   assert.equal((await send(ws, finalizeEvent({ kind: 0, created_at: now(), tags: [['t', NET]], content: JSON.stringify({ name: 'St Mary’s' }) }, church.sk)))[0], true, 'church profile');
   for (const who of [dana, rob, amy, ben]) assert.equal((await send(ws, doc(who, MEMBER_D + cp, { joined: now() })))[0], true, 'joined');
-  assert.equal((await setRoster([dana.pub], { [dana.pub]: ['content', 'members', 'safeguarding'] }))[0], true, 'steward roster');
+  // 'sealedrooms' ADDED WHEN THIS BRANCH MET feat/sealing-is-its-own-job-2026-09-17 (merge, 2026-09-17).
+  // It is a fixture correction, not a weakening. On the day this file was written, sealing a room needed no
+  // capability at all — groupkey: had no rule in accept() and fell to the generic member catch-all — so the
+  // three caps below were simply the ones Dana's job needs. That branch gives sealing a tick of its own,
+  // deliberately NOT folded into 'content', because minting a room's key means holding it and therefore
+  // reading the room. Without this word the first three tests here fail with the relay refusing the write,
+  // which is the new rule working exactly as intended. The test immediately below pins that, so the merge
+  // interaction is measured and not merely asserted in a comment.
+  assert.equal((await setRoster([dana.pub], { [dana.pub]: ['content', 'members', 'safeguarding', 'sealedrooms'] }))[0], true, 'steward roster');
   await sleep(300);
 });
 after(async () => { try { ws && ws.close(); } catch {} try { relay && relay.kill('SIGKILL'); } catch {} await sleep(200); try { rmSync(dataDir, { recursive: true, force: true }); } catch {} });

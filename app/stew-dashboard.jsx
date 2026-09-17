@@ -51,7 +51,7 @@ function DelegateBrief({ onClose, churchName }) {
 // AND IT FAILS OPEN. myStewardCaps() returns null when we hold no roster yet — a console that has not
 // reached the relay, or an unscoped steward — and null means "everything". Hiding real controls because a
 // connection is slow would be worse than showing one that the relay then honestly refuses.
-const STEW_CAP_LABEL = { finance: 'Finance', care: 'Care', safeguarding: 'Safeguarding', members: 'Members', content: 'Groups & rotas' };
+const STEW_CAP_LABEL = { finance: 'Finance', care: 'Care', safeguarding: 'Safeguarding', members: 'Members', content: 'Groups & rotas', sealedrooms: 'Sealed rooms' };
 function stewCapState(cap) {
   const S = window.Steward || {};
   if (!S.actingChurch) return { allowed: true, owner: true, why: '' };          // the owner console: unrestricted
@@ -5304,10 +5304,20 @@ function DashMembers() {
       // so a removal published nothing at all. The only {rotate:true} call site was the invite-only members
       // editor, which does not exist for an OPEN encrypted group. The contract in steward.src.js says removal
       // MUST rotate; this is the path that was missing it. AUDIT-2026-07-27.
-      // NOT AS A DELEGATED STEWARD. publishGroupKey always signs with churchSk and always seeds the recipient set
-      // with churchPub — this device's OWN church key. Acting for a church we merely steward, that re-keys THEIR
-      // group under OUR key and leaves the owning church out of the recipients, locking them out of their own
-      // room. The same commit added exactly this guard to publishProfile and missed it here. AUDIT-2026-07-27.
+      // NOT AS A DELEGATED STEWARD. publishGroupKey always signs with churchSk and always seeded the recipient
+      // set with churchPub — this device's OWN church key. Acting for a church we merely steward, that re-keys
+      // THEIR group under OUR key and left the owning church out of the recipients, locking them out of their
+      // own room. The same commit added exactly this guard to publishProfile and missed it here. AUDIT-2026-07-27.
+      //
+      // ⚠ HALF OF THAT REASON IS GONE AND THE GUARD IS DELIBERATELY KEPT. Since the 2026-09-17 merge,
+      // publishGroupKey seeds from `actingChurch || churchPub`, so the owning church IS a recipient now and
+      // the lockout above can no longer happen (proved in scripts/a-sealed-room-reaches-the-church-that-owns-it
+      // .test.mjs, "the CHURCH can really UNWRAP its own entry"). The guard stays because letting a delegated
+      // console re-key every encrypted room in someone else's church as a side effect of ONE Block tap is a
+      // separate decision, and it is the owner's to make, not a merge's. What it costs today: blocking someone
+      // from a delegated console does not rotate that church's room keys, so the blocked person's phone can
+      // still read future messages in rooms they were in until the owner's own console blocks them too. THAT
+      // IS AN OPEN GAP, reported and not patched here — it needs the owner's call and a phone.
       const grps = (!delegated && Array.isArray(groups)) ? groups : [];
       for (const g of grps) {
         if (!g || !g.encrypted) continue;
@@ -7122,7 +7132,7 @@ function DashStewardsPanel({ church }) {
   // written before this feature means and what a church that never opens this panel keeps.
   const caps = (window.Steward.stewardCaps && window.Steward.stewardCaps()) || {};
   const capNames = (window.Steward.stewardCapNames && window.Steward.stewardCapNames()) || [];
-  const CAP_LABEL = { finance: 'Finance', care: 'Care', safeguarding: 'Safeguarding', members: 'Members', content: 'Groups & rotas' };
+  const CAP_LABEL = { finance: 'Finance', care: 'Care', safeguarding: 'Safeguarding', members: 'Members', content: 'Groups & rotas', sealedrooms: 'Sealed rooms' };
   const CAP_SUB = {
     // This used to warn that the books were sealed to the church key and a delegate could not open them.
     // That limit was removed the same afternoon (the books now have a key of their own, wrapped to whoever
@@ -7142,6 +7152,11 @@ function DashStewardsPanel({ church }) {
     safeguarding: 'Clearances, photo decisions and kids check-in. They can SEE who is marked as a child, which adults are cleared, guardians, and check-in records — only you can CHANGE those lists.',
     members: 'Admit people, set the join policy, re-seat someone who lost their words. They can SEE the whole membership list with real names, and who is waiting to join.',
     content: 'Groups, rotas, services, events, posts. They can SEE every group including private ones, read what is said in them, and post to the whole church in its name.',
+    // ITS OWN TICK, NOT PART OF "Groups & rotas", and the sentence has to say why or the separation looks
+    // like fussiness. Locking a room means minting its key; whoever mints it holds it; whoever holds it can
+    // read the room. So this is the one that decides who can read a private conversation, and it is worth a
+    // deliberate yes on its own. — owner’s wording pending, 2026-09-17.
+    sealedrooms: 'Lock a room so only its members can read it. Whoever locks one holds its key, so they can SEE everything said in it.',
   };
   const setCaps = (pk, list) => {
     const next = { ...caps };

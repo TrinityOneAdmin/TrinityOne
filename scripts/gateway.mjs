@@ -745,6 +745,7 @@ const UNAVAIL_D = D.UNAVAIL;     // a member's unavailable dates for the rota �
 const NAMEKEY_D = D.NAMEKEY;     // per-church name key envelope, wrapped per member — church/steward-signed
 const NAME_D = D.NAME;           // a MEMBER's own display name for one church, sealed under that key
 const CAREKEY_D = D.CAREKEY;     // per-church CARE key, wrapped per member (mirrors mediakey:) — sensitive care fields are sealed under it
+const GROUPKEY_D = D.GROUPKEY;   // ONE ENCRYPTED ROOM's key, wrapped per member — d=groupkey:<groupId>. WRITE is scoped to the church that owns the GROUP, never to the ['church'] tag — the envelope DOES carry one since 2026-09-16 (feChurch), and that tag is exactly what a cross-church forgery would set.
 const FINANCEKEY_D = D.FINANCEKEY;   // the church books' key, wrapped to the church + every finance-capable steward
 const CHECKIN_D = D.CHECKIN;         // one child's presence at one session — d=checkin:<id>, sealed under the safeguarding key
 const CHECKINHELPER_D = D.CHECKINHELPER; // ONE SESSION'S key, wrapped to whoever the church's PERMISSIONS admit — d=checkinhelper:<serviceId>. Cleartext window + pubkey list, because the relay has to read what it enforces; names no child. Owner-only mint, like CHECKINKEY_D and for the same reason.
@@ -3825,6 +3826,69 @@ function accept(e) {
       return !!pm && pm.person === who && isPermissionSource(pm.source);
     }
     if (d.startsWith(CAREKEY_D)) { const cp = toHexPub(d.slice(CAREKEY_D.length)) || ''; return !!cp && CHURCH_PUBS.has(cp) && (e.pubkey === cp || stewardCan(e.pubkey, cp, 'care')); }
+    // -- ONE ENCRYPTED ROOM'S KEY -- d=groupkey:<groupId>. A RULE OF ITS OWN SINCE 2026-09-17. ------------
+    //
+    // (!) IT HAD NO RULE AT ALL. It fell off the end of this block onto the generic member catch-all
+    // (`if (!isMember) return false`), and `isMember` is the RELAY-WIDE union -- "is this key a member of ANY
+    // church on this box". Two consequences, both measured on a live relay before this branch existed:
+    //
+    //   1. A STEWARD OF THIS CHURCH WHO IS NOT ALSO A MEMBER OF IT WAS REFUSED, verbatim
+    //      ["OK",...,false,"blocked: not a member or not permitted for this group"]. The relay let her create
+    //      the room, flip it to encrypted and write a rota, then refused the key -- so the room existed, said
+    //      it was encrypted, and nobody could read a word in it. Publishing a member: document for her made
+    //      the identical write succeed, which pins the cause. A delegated steward is routinely NOT a member
+    //      of the congregation she helps run; the CHECKIN_D branch below already says so in as many words.
+    //   2. A MEMBER OF A DIFFERENT CHURCH ON THE SAME RELAY WAS ACCEPTED writing this church's room key.
+    //      Nothing in the d-tag names a church, so the catch-all never asked which one. The wrong person got
+    //      in and the right person was kept out, by one rule, in one line.
+    //
+    // WHY NOT SIMPLY 'content'. Minting a room key means HOLDING it, and holding it means reading the room.
+    // "Content" is already broad -- groups, plans, devotionals, rotas, rosters, services, rooms, bookings, run
+    // sheets, categories, pinned sermons -- and the owner did not want "may run the rotas" and "may read the
+    // sealed rooms" to be the same tick. So sealing a room is its own capability.
+    //
+    // stewardCan AND NOT stewardCanExplicitly, deliberately, and this is the opposite call to CHECKINPERM_D.
+    // There IS a working user to blind here, which is the whole test that rule applies: an UNSCOPED steward
+    // who is also a member of this church can seal a room TODAY, through the very catch-all this branch
+    // replaces. An explicit-only gate would take that away on the morning the relay updated -- the
+    // availability failure dressed as a security improvement that the note on stewardCan() exists to forbid.
+    // The children's register was the other way round: before its capability, NO delegate of any kind could
+    // open a record, so nothing was taken. Two further reasons, both checkable: _ingestGroupKey in
+    // src/fellowship.src.js has accepted a ROSTER STEWARD's envelope since 2026-07-06, so a delegate holding
+    // a group key is not a class of access this upgrade invents; and the console's capability editor collapses
+    // "every box ticked" to `caps: null` (unscoped), so an explicit-only gate would refuse the very steward an
+    // owner had ticked everything for -- the padlocks-and-keys disagreement this repo has already shipped once.
+    //
+    // THE OWNING CHURCH IS THE GROUP'S, NOT THE WRITER'S. Nothing trusts a ['church'] tag here — and as of
+    // 2026-09-16 there IS one to distrust. This comment used to read "there is not one to trust: publishGroupKey
+    // ... never goes through feChurch, so namedChurch(e) is '' for every envelope". That was true when this
+    // branch was written and is FALSE NOW: publishGroupKey routes through feChurch so the congregation can
+    // find the key at all (without the tag the relay stored it and served it to nobody, and the room rendered
+    // empty). Which makes this line stop being academic and start being load-bearing: the tag is set by
+    // whoever signs the envelope, so a steward of church A could stamp church B on it. Resolution mirrors
+    // idOwnerOk: the group's recorded owner first, then the owner the ID ITSELF names (ids are
+    // `<churchpub16>-<rand>`, which is what covers a relay that has not yet received the group definition --
+    // publish() resolves on the FIRST relay to accept, so the two routinely diverge), and only then the
+    // author when the author is itself a configured church writing its own room. That last term is what keeps
+    // "the church's own key can always seal" true for a brand-new, prefix-less id, and it is no weaker than
+    // the rule the group: document itself gets from idOwnerOk.
+    //
+    // (!) IT RETURNS. A branch that narrows a document and then falls through serves it to everyone anyway --
+    // the shape of the finance read-gate defect. Every path out of this block is a return.
+    //
+    // (!) AND IT CANNOT RUN ON THE INGEST PATH, which is checked rather than assumed: /import and both
+    // relay-to-relay paths call store.put() with no accept() pass at all (see the note on arrivalIdOk, which
+    // is split in two precisely because of that). So nothing already stored becomes unwritable or unservable
+    // by this: canRead is untouched, every envelope on disk is still served exactly as before, and a restore
+    // still replays them. The separation is deliberate -- replaying a write gate over an import once deleted a
+    // church's whole finance journal.
+    if (d.startsWith(GROUPKEY_D)) {
+      const gid = d.slice(GROUPKEY_D.length);
+      if (!gid) return false;                                  // an envelope for no room is an envelope for nobody
+      const owner = GROUP_CHURCH.get(gid) || idNamesOwner(gid) || (CHURCH_PUBS.has(e.pubkey) ? e.pubkey : '');
+      if (!owner || !CHURCH_PUBS.has(owner)) return false;     // not attributable to a church we carry
+      return e.pubkey === owner || networkOf(e.pubkey, owner) || stewardCan(e.pubkey, owner, 'sealedrooms');
+    }
     // the per-church NAME key envelope — same authority as the care key.
     if (d.startsWith(NAMEKEY_D)) { const cp = toHexPub(d.slice(NAMEKEY_D.length)) || ''; return !!cp && CHURCH_PUBS.has(cp) && (e.pubkey === cp || stewardCan(e.pubkey, cp, 'members')); }
     // a member's OWN sealed name for one church. Only that member may write it — nobody else gets to decide
