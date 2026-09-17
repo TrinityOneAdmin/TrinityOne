@@ -89,8 +89,19 @@ test('the Sealed rooms sentence says the thing that makes it its own tick', () =
   assert.match(blurb, /read/i,
     'the Sealed rooms sentence never tells the owner that this person can READ what is said in the room. ' +
     'That is the whole of what the grant does.');
-  assert.match(blurb, /Groups & rotas/,
-    'the sentence does not say why this is separate from Groups & rotas, so the separation reads as fussiness');
+  // ⚠ THIS USED TO DEMAND THE WORDS "Groups & rotas". The owner read the sentence and asked for it shorter,
+  // and that cross-reference was the longest part of it — it explains the SHAPE OF THE CONSOLE to someone who
+  // is looking at the console. What actually justifies a second tick is the FACT: locking a room means
+  // holding its key, and holding the key means reading the room. That fact is what this now requires, and it
+  // is the same thing the sentence was reaching for. House style is one or two short sentences (the other
+  // five blurbs run 136-190 characters); demanding a clause about a neighbouring tick pushed this one to 207.
+  assert.match(blurb, /holds? its key/i,
+    'the sentence no longer tells the owner that whoever locks a room HOLDS ITS KEY. That fact is the whole ' +
+    'reason this is a separate tick from Groups & rotas — without it the second box reads as fussiness and ' +
+    'an owner will tick both.');
+  assert.ok(blurb.length <= 190,
+    'the Sealed rooms sentence is ' + blurb.length + ' characters, longer than every other capability blurb ' +
+    '(136-190). It is read at the moment an owner is choosing, so it has to be readable at a glance.');
 });
 
 test('the console and the relay spell the capability the SAME way', () => {

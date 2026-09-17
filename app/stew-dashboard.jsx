@@ -7146,7 +7146,7 @@ function DashStewardsPanel({ church }) {
     // like fussiness. Locking a room means minting its key; whoever mints it holds it; whoever holds it can
     // read the room. So this is the one that decides who can read a private conversation, and it is worth a
     // deliberate yes on its own. — owner’s wording pending, 2026-09-17.
-    sealedrooms: 'Lock a room so only its members can read it, and unlock one. Whoever locks a room HOLDS its key, so they can SEE everything said in it — which is why this is separate from Groups & rotas.',
+    sealedrooms: 'Lock a room so only its members can read it. Whoever locks one holds its key, so they can SEE everything said in it.',
   };
   const setCaps = (pk, list) => {
     const next = { ...caps };
