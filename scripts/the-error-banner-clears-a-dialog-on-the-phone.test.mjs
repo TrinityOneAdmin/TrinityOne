@@ -78,7 +78,7 @@ function fixture(modalOpen, withDialog = 'confirm') {
     dispatchEvent: () => {},
   };
   const b = miniReact();
-  const mod = loadScreen('app/stew-dashboard.jsx', ['PublishErrorBanner', 'SkConfirm'], {
+  const mod = loadScreen('app/stew-dashboard.jsx', ['PublishErrorBanner', 'SkConfirm', 'NameEditModal'], {
     React: b.React, window: win, Icon: Stub('Icon'),
     useStewDialog: () => ({ current: null }), useStewModalOpen: () => {},
     noteRelayRejection: () => {},
@@ -91,15 +91,24 @@ function fixture(modalOpen, withDialog = 'confirm') {
   tree = b.draw(mod.PublishErrorBanner, {});
   assert.equal(find(tree, n => n.props && n.props.role === 'alert').length, 1,
     're-anchor: the banner did not render exactly one message');
+  // ⚠ A COMPONENT MUST BE DRAWN BY THE miniReact WHOSE `React` COMPILED IT. The console's two dialogs came
+  // out of `mod` (built with `b.React`), so they are drawn with `b`; only the finance module below is loaded
+  // against `d`. Drawing one instance's component through another's `draw` gives "Cannot read properties of
+  // null (reading 'si')" — the hook store is never entered — and it takes the whole file down at once.
   const d = miniReact();
   let dlg = null;
   if (withDialog === 'confirm') {
-    dlg = d.draw(mod.SkConfirm, {
+    dlg = b.draw(mod.SkConfirm, {
       icon: 'lock', title: 'Seal “Musicians”?', confirmLabel: 'Seal it',
       body: 'From now on its messages are encrypted end-to-end — not even the relay can read them. Messages '
         + 'already posted stay as they are.',
       onConfirm() {}, onCancel() {},
     });
+  } else if (withDialog === 'spill') {
+    // A panel that declares NO overflow of its own — 19 of the console's 35 do not. `max-height` alone
+    // neither clips nor scrolls such a panel; its content spills out of the card and the card's border,
+    // background and shadow end part-way up its own text. NameEditModal measured 263/236 at 730x328.
+    dlg = b.draw(mod.NameEditModal, { open: true, current: 'St Aidan', isNetwork: false, onSave() {}, onClose() {} });
   } else if (withDialog === 'tall') {
     const fin = loadScreen('app/stew-finance.jsx', ['FinanceShareStatement'], {
       React: d.React, window: win, Icon: Stub('Icon'), SkPill: Stub('SkPill'), SkBadge: Stub('SkBadge'),
@@ -133,6 +142,7 @@ before(async () => {
   HTML.shut = fixture(false, false);            // no dialog at all — the everyday console
   HTML.was = fixture(false, 'confirm');         // THE BASELINE: a dialog is up and the banner does not know
   HTML.tall = fixture(true, 'tall');            // the 92vh case an audit found this fix breaking
+  HTML.spill = fixture(true, 'spill');          // a panel with no overflow of its own, which max-height spills
   prof = join(tmpdir(), 'trin-banner-chr-' + process.pid);
   chr = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${CDP}`, '--no-sandbox', '--disable-gpu',
     '--host-resolver-rules=MAP * 127.0.0.1:9', `--user-data-dir=${prof}`, 'about:blank'], { stdio: 'ignore' });
@@ -199,6 +209,9 @@ const MEASURE = `(() => {
       }
       return bad.filter(x => /^BUTTON/.test(x.what));
     })(),
+    // Does the panel CONTAIN its own content, or has a max-height pushed it out through the card's edge?
+    panel: dialog ? { overflowY: getComputedStyle(dialog).overflowY,
+                      scrollHeight: dialog.scrollHeight, clientHeight: dialog.clientHeight } : null,
     atDismiss: (() => {
       const d2 = document.querySelector('[role="alert"] button[aria-label^="Dismiss"]');
       if (!d2) return 'none';
@@ -269,6 +282,28 @@ for (const [label, W, H] of [['360x730 upright', 360, 730], ['730x328 landscape'
     assert.deepEqual(m.insideBanner, [],
       `A TAP ON THE BANNER PRESSES A BUTTON BEHIND IT at ${label}. The card is opaque, so what the steward ` +
       `sees is a banner and what they press is the dialog's primary action: ` + JSON.stringify(m.insideBanner));
+  });
+}
+
+for (const [label, W, H] of [['360x730 upright', 360, 730], ['730x328 landscape', 730, 328]]) {
+  test(`${label}: shortening a dialog does not push its content out through the card`, { skip: !CHROME ? 'no chromium' : false, timeout: 120000 }, async () => {
+    // Audit of 4a6dd5a. `max-height: … !important` on a panel whose own overflow is `visible` neither clips
+    // nor scrolls: the content spills out and the card's border, background and shadow end part-way up its
+    // own text — the "oddly cropped" complaint that started this branch, arriving from the other side.
+    // 19 of the console's 35 panels declare no overflow of their own, so this is a class and not a case.
+    for (const which of ['spill', 'tall']) {
+      const m = await measure(which, W, H);
+      assert.ok(m.panel, `re-anchor: the ${which} fixture rendered no panel`);
+      // THE INVARIANT IS "CONTAINED OR SCROLLABLE", never "short". A capped panel whose content is taller
+      // than its box is perfectly fine WHEN IT SCROLLS — that is the whole point of the cap. What is not
+      // fine is `overflow-y: visible` with a cap, where the content is painted outside the card entirely.
+      const contained = m.panel.scrollHeight <= m.panel.clientHeight + 1;
+      assert.ok(contained || m.panel.overflowY === 'auto' || m.panel.overflowY === 'scroll',
+        `the ${which} panel is capped, its content is ${m.panel.scrollHeight - m.panel.clientHeight}px ` +
+        `taller than the box that paints it, and it does not scroll — so that content is OUTSIDE the card, ` +
+        `over the dim, with the card's border and shadow ending part-way up its own text. ` +
+        `At ${label}: ${JSON.stringify(m.panel)}`);
+    }
   });
 }
 

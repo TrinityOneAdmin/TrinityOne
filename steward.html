@@ -147,17 +147,26 @@
      against each other by scripts/the-error-banner-does-not-crop-an-open-dialog.test.mjs, because a drift
      here is invisible on screen until a dialog is tall enough to reach the strip.
 
+     ⚠ `overflow-y` IS NOT OPTIONAL HERE, AND LEAVING IT OUT SHIPPED FOR ONE COMMIT. A `max-height` on a
+     panel whose own overflow is `visible` neither clips nor scrolls — the content simply spills out of the
+     card, so its rounded corner, border, background and shadow end part-way up its own text, over the dim.
+     Measured at 730x328: NameEditModal 263/236, PinModal 320/236, NewPostModal 269/236, and 19 of the 35
+     panels declare no overflow of their own. It is the "oddly cropped" complaint this branch started from,
+     arriving from the other side. The panels that already scroll are unaffected by saying it twice.
+
      `!important` because every console overlay is styled inline, and this must win over all 35 of them for
      as long as a message is up and not one moment longer — the attribute is set and cleared by the banner. */
   html[data-stew-banner="clamped"] [role="dialog"][aria-modal="true"],
   html[data-stew-banner="clamped"] [data-stew-modal-panel] {
     max-height: calc(100vh - min(24vh, 62px) - 28px) !important;
     margin-bottom: min(24vh, 62px) !important;
+    overflow-y: auto !important;
   }
   html[data-stew-banner="open"] [role="dialog"][aria-modal="true"],
   html[data-stew-banner="open"] [data-stew-modal-panel] {
     max-height: calc(100vh - min(40vh, 220px) - 28px) !important;
     margin-bottom: min(40vh, 220px) !important;
+    overflow-y: auto !important;
   }
 
   @keyframes lumenFade  { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
