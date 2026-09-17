@@ -899,8 +899,17 @@ function MealsNeedModal({ need, onClose, onSaved, onDeleted }) {
     catch (e) { setErr((e && e.message) || 'Could not close.'); setBusy(false); }
   };
   return (
-    <div role="dialog" aria-modal="true" style={{ position: 'fixed', inset: 0, background: 'rgba(20,15,8,.55)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '5vh 16px', zIndex: 70 }}>
-      <div style={{ width: 'min(540px, 100%)', maxHeight: '90vh', overflow: 'auto', background: 'var(--surface)', borderRadius: 18, boxShadow: 'var(--shadow-lg)', padding: 22 }}>
+    // ⚠ THE DIALOG ROLE BELONGS ON THE PANEL, NEVER ON THE BACKDROP, and this was the one place in the
+    // console it sat on the backdrop. Two things go wrong when it does, and the second is the serious one:
+    //   · to a screen reader the modal "is" the whole viewport, dim included, rather than the card;
+    //   · every rule that selects a dialog panel then lands on a `position: fixed; inset: 0` element.
+    //     Measured 2026-09-17 at 730x328: steward.html's reserved-space rules shortened this OVERLAY, so the
+    //     dim stopped 90px short of the bottom of the screen, the console behind it in that strip became
+    //     tappable while "Start care" was open — a modality break, and this overlay has no click-to-close —
+    //     and the overlay scrolled as well as the card inside it.
+    // Moved to the card, which is where every other console dialog has always had it.
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(20,15,8,.55)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '5vh 16px', zIndex: 70 }}>
+      <div role="dialog" aria-modal="true" aria-label={isEdit ? 'Edit care need' : 'Start care'} style={{ width: 'min(540px, 100%)', maxHeight: '90vh', overflow: 'auto', background: 'var(--surface)', borderRadius: 18, boxShadow: 'var(--shadow-lg)', padding: 22 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
           <div style={{ width: 36, height: 36, borderRadius: 11, background: 'color-mix(in oklab, var(--sage) 14%, var(--surface))', color: 'var(--sage-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="heart" size={18} color="var(--sage)" /></div>
           <div style={{ flex: 1, fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 19 }}>{isEdit ? 'Edit care need' : 'Start care'}</div>

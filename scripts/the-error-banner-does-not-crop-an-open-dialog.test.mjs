@@ -298,6 +298,30 @@ test('the two lengths in steward.html and the two in this component are the SAME
 const APP = new URL('../app/', import.meta.url).pathname;
 const STEW_FILES = readdirSync(APP).filter(f => /^stew-.*\.jsx$/.test(f));
 
+test('TRIPWIRE: the dialog role is never on a backdrop, only on the panel inside it', () => {
+  // ⚠ THIS IS NOT AN ACCESSIBILITY NICETY ANY MORE. steward.html's reserved-space rules select
+  // `[role="dialog"][aria-modal="true"]` and shorten it. Put that role on a `position: fixed; inset: 0`
+  // backdrop and the rules shorten the BACKDROP: measured 2026-09-17 at 730x328 on MealsNeedModal, the dim
+  // stopped 90px short of the bottom of the screen, the console behind it became tappable while the dialog
+  // was open — with no click-to-close on that overlay — and the backdrop scrolled as well as the card.
+  //
+  // Source-shape, and labelled as such: it catches the markup, not the consequence. The browser file
+  // measures the consequence for the panels it can stand up.
+  const bad = [];
+  for (const f of STEW_FILES) {
+    const src = readFileSync(join(APP, f), 'utf8');
+    for (const line of src.split('\n')) {
+      if (!/role="dialog"/.test(line)) continue;
+      if (/position:\s*'fixed',\s*inset:\s*0|inset:\s*0,\s*position:\s*'fixed'/.test(line)) {
+        bad.push('app/' + f + ' · ' + line.trim().slice(0, 90));
+      }
+    }
+  }
+  assert.deepEqual(bad, [],
+    'A DIALOG ROLE IS ON A FULL-VIEWPORT BACKDROP. steward.html shortens what it selects, so this shortens ' +
+    'the dim itself and leaves the console live underneath it: ' + bad.join(' | '));
+});
+
 test('TRIPWIRE: every covering overlay in the console registers itself as a modal', () => {
   const missing = [], seen = [];
   for (const f of STEW_FILES) {
