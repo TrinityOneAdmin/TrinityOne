@@ -5143,9 +5143,12 @@ window.Steward = {
     // now. A stale spread is a worse lie than the one this fix removes, because it names relays.
     const _sealAt = Date.now();
     const ok = await window.Steward.publishGroup({ ...group, encrypted: true });
-    // publishGroup resolves an OBJECT even when every relay refused (its .then builds one over publish()'s
-    // false) — `ts` carries the truth: the accepted event's created_at, or false. Reading mere truthiness
-    // here would report a refused flag write as sealed, which is the exact lie this function exists to end.
+    // ⚠ THIS COMMENT WAS WRONG AND IS CORRECTED RATHER THAN SOFTENED (audit finding F7, 2026-09-17). It said
+    // "publishGroup resolves an OBJECT even when every relay refused (its .then builds one over publish()'s
+    // false) — `ts` carries the truth". It does not: publishGroup ends `.then(e => (e ? {…} : null))`, so a
+    // write that did not fully land resolves NULL and `!ok` is the live branch. `!ok.ts` is belt and braces
+    // over a shape publishGroup cannot currently produce, kept because it costs nothing and because the
+    // `{ id, ts: false }` shape is what the tests of this function hand it.
     // TWO DIFFERENT FAILURES, AND ONLY ONE OF THEM IS "NOTHING IS SEALED".
     //
     // publishGroup answers null for a write that reached NO relay and for one that reached SOME — both are

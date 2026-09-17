@@ -278,6 +278,105 @@ test('…while a seal that reached NO relay is still told plainly that nothing c
   assert.doesNotMatch(said, /1 of 3|0 of 3/, 'a write that landed nowhere is being described as a partial one');
 });
 
+test('…and it never says a relay REFUSED, because it does not know that', async () => {
+  // Audit finding F3 on this fix, 2026-09-17. `missed` is every relay that did not acknowledge, and
+  // _publishToRelays deliberately turns a connection failure into a rejection — so an offline relay, or one
+  // whose OK arrived after the 12s publish timeout, is in that list too. That function's own comment says
+  // it: "a late OK is not a refusal, and the EVENT has usually been stored by then." Naming a relay as
+  // having refused a document it may be holding trades a vague sentence for a checkable false one.
+  const said = await screen(PARTIAL);
+  assert.doesNotMatch(said, /would not take it|refused/i,
+    'the dialog names a specific relay as having REFUSED the lock. It may simply have been unreachable, and ' +
+    'it may be holding the document: ' + said);
+  assert.match(said, /out of reach|didn’t take it/,
+    'the steward is not told what actually happened to the relays that are missing the lock');
+});
+
+// ── D. the OTHER screen: "Encrypt all group chat" ─────────────────────────────────────────────────────────
+// Audit finding F1 on this fix, 2026-09-17, and it is the one that would have shipped: doEncryptAll gained a
+// third bucket and a whole new sentence whose only guard was a TEXT MATCH on app/stew-dashboard.jsx — which
+// CLAUDE.md rule 3 forbids, because that file ships unbundled. Two sabotages proved it: deleting the routing
+// left every test green, and routing a partial into the pre-existing `partial` bucket instead flipped the
+// church-wide "Encrypt all" switch ON over rooms sealed on one relay of three. That is the exact false
+// reassurance this whole branch exists to remove, pointing the other way.
+async function sweep(sealResult) {
+  const { React, draw } = miniReact();
+  const events = [], profiles = [];
+  const win = {
+    useStewardGroups: () => [{ id: 'g1', name: 'Musicians', kind: 'group' }],
+    useStewardMembers: () => [{ pubkey: 'a'.repeat(64), name: 'Ann' }],
+    useStewardStewards: () => [], useStewardBlocked: () => [], useStewardAdmitted: () => [],
+    useStewardJoinPolicy: () => false, useStewardIdv: () => 0, useStewardRosters: () => ({}),
+    useStewardCategories: () => [], stewardStreamLoaded: () => true,
+    Steward: {
+      sealGroup: async () => sealResult,
+      publishProfile: (pr) => { profiles.push(pr); return Promise.resolve(true); },
+      setJoinPolicy() {}, setAdmitted() {},
+    },
+    addEventListener() {}, removeEventListener() {},
+    dispatchEvent: (e) => { events.push({ type: e.type, detail: e.detail }); },
+    localStorage: { getItem: () => null, setItem() {} },
+  };
+  const mod = loadScreen('app/stew-dashboard.jsx', ['DashFeaturesPanel'], {
+    React, window: win,
+    Icon: Stub('Icon'), SkToggle: Stub('SkToggle'), SkPill: Stub('SkPill'), SkBadge: Stub('SkBadge'),
+    Panel: ({ children }) => children, DismissibleNote: ({ children }) => children,
+    DashMealsPanel: Stub('DashMealsPanel'), DashGivingPanel: Stub('DashGivingPanel'), DashChatTagsPanel: Stub('DashChatTagsPanel'),
+    useStewDialog: () => ({ current: null }), useStewModalOpen: () => {},
+    CustomEvent: class { constructor(t, o) { this.type = t; this.detail = (o || {}).detail; } },
+    setTimeout, clearTimeout, console,
+    Math, Date, JSON, String, Number, Boolean, Object, Array, Set, Map, Promise, RegExp,
+  });
+  const props = { church: { name: 'St Aidan', features: {} }, show: 'rules' };
+  const render = () => draw(mod.DashFeaturesPanel, props);
+  let tree = render();
+  const press = (label, what) => {
+    const hits = find(tree, n => n.type === 'button' && (texts(n).join(' ').includes(label)
+      || String((n.props || {})['aria-label'] || '').includes(label)));
+    assert.equal(hits.length, 1, `re-anchor this test: expected exactly one ${what}, found ${hits.length}`);
+    const r = hits[0].props.onClick({ stopPropagation() {} });
+    tree = render();
+    return r;
+  };
+  press('Toggle encrypt all group chat', 'encrypt-all switch');
+  await press('Encrypt all', '“Encrypt all” button in the confirm dialog');
+  for (let i = 0; i < 8; i++) await new Promise(r => setTimeout(r, 0));
+  return { events, profiles, said: events.map(e => (e.detail && e.detail.message) || '').join(' | ') };
+}
+
+test('THE SWEEP: one room half-sealed keeps “Encrypt all” OFF', async () => {
+  const w = await sweep(PARTIAL);
+  assert.deepEqual(w.profiles, [],
+    'THE CHURCH-WIDE SWITCH FLIPPED ON over a room sealed on one relay of three. Every member’s app fans ' +
+    'its messages to all of them, so that room is sealed on one and cleartext on the others — and the ' +
+    'steward has been told the whole church is encrypted.');
+});
+
+test('…and the steward is told which rooms only half-landed, not that they are unencrypted', async () => {
+  const w = await sweep(PARTIAL);
+  assert.match(w.said, /\S/, 'the sweep finished a partial seal in complete silence');
+  assert.match(w.said, /Musicians/, 'the room that only half-landed is not named');
+  assert.doesNotMatch(w.said, /could not be sealed/,
+    'the partial room is reported as "could not be sealed and so stays unencrypted" — it IS sealed on the ' +
+    'relay that took it, which is the lie this branch exists to remove: ' + w.said);
+  assert.match(w.said, /some of your relays/, 'the steward is not told what actually happened');
+});
+
+test('CONTROL: a sweep where every room fully sealed DOES flip the switch on', async () => {
+  // Without this row, a doEncryptAll that had simply stopped working would pass both rows above.
+  const w = await sweep({ sealed: true, skipped: [] });
+  assert.equal(w.profiles.length, 1, 'a fully successful sweep no longer turns "Encrypt all" on');
+  assert.equal(w.profiles[0].features.encryptComms, true);
+});
+
+test('…and a room that sealed NOWHERE still blocks the switch and is named as unencrypted', async () => {
+  const w = await sweep(NOWHERE);
+  assert.deepEqual(w.profiles, [], 'the switch flipped on over a room that is sealed nowhere');
+  assert.match(w.said, /could not be sealed/,
+    'a room that reached no relay is no longer reported as unencrypted — softening BOTH sentences trades ' +
+    'one lie for another');
+});
+
 test('CONTROL: a seal that fully worked closes the dialog and says nothing', async () => {
   const said = await screen({ sealed: true, skipped: [] });
   assert.equal(said, '',

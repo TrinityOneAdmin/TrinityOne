@@ -32,8 +32,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { loadScreen, miniReact, texts, find } from './render-jsx-screen.mjs';
+import { fnBody } from './test-slice.mjs';
 
 const DASH = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
+const BUNDLE = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
 const REFUSAL = 'blocked: not a member or not permitted for this group';
 const DELEGATE = { Steward: { actingChurch: '3eb1f889'.padEnd(64, '0') } };
 const OWNER = { Steward: { actingChurch: '' } };
@@ -195,13 +197,14 @@ test('a quiet note can never evict an alarm — four slots, not three', () => {
 
 // ── C. the call site ──────────────────────────────────────────────────────────────────────────────────────
 // The real KeyDistributor, rendered, with its real effects run by the harness.
-function distributor() {
+function distributor(groups) {
   const { React, draw } = miniReact();
   const calls = [];
+  let members = [{ pubkey: 'a'.repeat(64) }];
   const win = {
     useStewardChurch: () => ({ name: 'St Aidan', features: {} }),
-    useStewardGroups: () => [],
-    useStewardMembers: () => [{ pubkey: 'a'.repeat(64) }],
+    useStewardGroups: () => groups || [],
+    useStewardMembers: () => members,
     useStewardStewards: () => ['b'.repeat(64)],
     useStewardBlocked: () => [],
     Steward: {
@@ -211,6 +214,7 @@ function distributor() {
       ensureCareKeyForMembers: (...a) => calls.push(['care', a]),
       ensureNameKeyForMembers: (...a) => calls.push(['name', a]),
       ensureGroupKeys: (...a) => calls.push(['groups', a]),
+      publishGroupKey: (...a) => { calls.push(['groupkey', a]); return Promise.resolve(null); },
     },
     addEventListener() {}, removeEventListener() {},
   };
@@ -219,6 +223,11 @@ function distributor() {
     Math, Date, JSON, String, Number, Boolean, Object, Array, Set, Map, console, Promise,
   });
   draw(mod.KeyDistributor, {});
+  calls.join = calls.join;   // keep the array plain
+  // SOMEBODY JOINS. The distributor records a room's roster on FIRST sighting and only publishes when it
+  // GROWS, so one draw can never reach the group-key path — which is exactly how the groupkey half of this
+  // fix came to be untested (audit finding F2, 2026-09-17).
+  calls.grow = () => { members = [...members, { pubkey: 'c'.repeat(64) }]; draw(mod.KeyDistributor, {}); return calls; };
   return calls;
 }
 
@@ -229,6 +238,69 @@ test('THE CALL SITE: the key distributor marks its care-key write as one nobody 
   assert.equal(!!(care[1][2] && care[1][2].background), true,
     'THE MARK IS NOT PASSED. Everything else about this fix is dormant: the relay refuses this write on every ' +
     'roster re-emit and the standing alarm comes back exactly as before.');
+});
+
+test('…and it marks the GROUP-KEY envelope the same way, which is the other half of the report', () => {
+  // Audit finding F2 on this fix, 2026-09-17: the first cut of this rig had no groups, so the group-key path
+  // never ran and dropping `background: true` from it left every test green. The 2026-09-07 note quoted in
+  // publishErrorMessage names BOTH documents the delegated console was refused: carekey: and groupkey:.
+  const calls = distributor([{ id: 'g1', name: 'Musicians', encrypted: true }]);
+  assert.deepEqual(calls.filter(c => c[0] === 'groupkey'), [],
+    're-anchor: the distributor keyed a room on FIRST sighting, which it must never do — the room was already ' +
+    'keyed when it was created, and re-keying on mount would spend a near-1MB envelope on every console open');
+  calls.grow();
+  const gk = calls.find(c => c[0] === 'groupkey');
+  assert.ok(gk, 'a member joined an encrypted room and no key envelope was published at all');
+  assert.equal(!!(gk[1][2] && gk[1][2].background), true,
+    'THE GROUP-KEY ENVELOPE IS NOT MARKED. On a delegated console without that grant the relay refuses it on ' +
+    'every roster change, and the standing alarm comes back exactly as it did for the care key.');
+  assert.equal(gk[1][2].reuseOnly, true,
+    'the background re-key is no longer reuseOnly — it may now MINT a second key over an existing one, which ' +
+    'orphans every message already sealed in that room');
+});
+
+// The OTHER automatic writer of a group-key envelope, lifted out of the shipped bundle and run. Its only
+// caller is the same key-distributor effect, so it hard-codes the mark rather than taking an option — and
+// that hard-coded line had no test at all until audit finding F2, 2026-09-17.
+function liftEnsureGroupKeys(spy) {
+  const scope = new Proxy({
+    actingChurch: '', pub: 'c'.repeat(64), sk: new Uint8Array(32).fill(3),
+    churchSk: new Uint8Array(32).fill(3), churchPub: 'c'.repeat(64),
+    _isRelayAuthed: () => true,
+    _skeys: {},                                   // we hold no ring, so the room looks unkeyed
+    relays: () => ['wss://one.example/relay'],
+    GROUP_D: 'trinityone/group:', GROUPKEY_D: 'trinityone/groupkey:',
+    // The one state that reaches the publish: the group document exists, no envelope exists, and nothing
+    // sealed has ever been posted in the room.
+    pool: { querySync: async (_r, [f]) => {
+      const d = (f['#d'] || [])[0] || '';
+      if (d.startsWith('trinityone/groupkey:')) return [];
+      if (d) return [{ id: 'doc' }];
+      return [];
+    } },
+  }, {
+    has: (t, k) => (k in t) || !(String(k) in globalThis),
+    get: (t, k) => {
+      if (k === Symbol.unscopables) return undefined;
+      if (k in t) return t[k];
+      throw new ReferenceError('the lifted ensureGroupKeys needs `' + String(k) + '` — add a stub');
+    },
+  });
+  const body = fnBody(BUNDLE, '  async ensureGroupKeys(groups, memberPubs) {', 'ensureGroupKeys in the shipped bundle');
+  const method = new Function('scope', `with (scope) { const _api = { ${body} }; return _api.ensureGroupKeys; }`)(scope);
+  // `this.publishGroupKey` is the call under test, so run the method on an object that owns the spy.
+  return { ensureGroupKeys: method, publishGroupKey: spy };
+}
+
+test('THE HEALER TOO: ensureGroupKeys marks its own publish, run out of the shipped bundle', async () => {
+  const seen = [];
+  const api = liftEnsureGroupKeys((...a) => { seen.push(a); return Promise.resolve(true); });
+  const out = await api.ensureGroupKeys([{ id: 'g1', name: 'Musicians', encrypted: true }], ['a'.repeat(64)]);
+  assert.equal(seen.length, 1,
+    're-anchor: ensureGroupKeys never reached its publish, so the assertion below is vacuous — ' + JSON.stringify(out));
+  assert.equal(!!(seen[0][2] && seen[0][2].background), true,
+    'ensureGroupKeys does not mark its publish as one nobody asked for. Its only caller is the background ' +
+    'key-distributor effect, so a refusal here raises the standing alarm over a write no steward made.');
 });
 
 test('…and it still passes the roster and the stewards, which is what the envelope is FOR', () => {

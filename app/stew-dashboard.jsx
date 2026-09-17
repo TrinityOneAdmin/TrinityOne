@@ -3468,10 +3468,16 @@ function DashGroups() {
       const why = r && r.reason === 'not-authed'
         ? 'This console isn’t connected to your church’s relay yet, so the group can’t be sealed. Wait for the connection and try again — nothing is sealed yet.'
         : r && r.reason === 'flag-partial'
-          ? 'The key was saved, and “' + (s.g.name || 'this group') + '” is now sealed on ' + landed.length + ' of ' + (landed.length + missed.length) + ' relays. '
-            + missed.map(hostOf).join(', ') + ' would not take it, so messages that go through '
-            + (missed.length === 1 ? 'it' : 'them') + ' can still be read there. Trying again won’t change that if '
-            + (missed.length === 1 ? 'that relay doesn’t' : 'those relays don’t') + ' carry your church — see Settings → Relays.'
+          // ⚠ "DID NOT TAKE IT" — NEVER "REFUSED IT". Audit finding F3 on this fix, 2026-09-17. `missed` is
+          // every relay that did not ACK, and _publishToRelays deliberately turns a connection failure into a
+          // rejection; a relay that was offline, or whose OK arrived after the 12s publish timeout, lands in
+          // that list too. The comment above _publishToRelays says so in as many words: "a late OK is not a
+          // refusal, and the EVENT has usually been stored by then." Naming a specific relay as having
+          // refused a document it may actually hold turns a vague sentence into a checkable false one.
+          ? 'The key was saved, and “' + (s.g.name || 'this group') + '” is sealed on ' + landed.length + ' of ' + (landed.length + missed.length) + ' relays. '
+            + missed.map(hostOf).join(', ') + ' didn’t take it — ' + (missed.length === 1 ? 'it may not carry' : 'they may not carry')
+            + ' your church, or may have been out of reach. Messages that go through '
+            + (missed.length === 1 ? 'it' : 'them') + ' can still be read there. Check Settings → Relays.'
         : r && r.reason === 'flag-failed'
           ? 'The group’s key was saved but no relay accepted the lock, so “' + (s.g.name || 'this group') + '” is unchanged and its messages are still readable by the relay. Try again.'
           : 'The relay didn’t accept the group’s key, so “' + (s.g.name || 'this group') + '” stays unencrypted. Check your connection and try again.';
@@ -7950,7 +7956,9 @@ function DashFeaturesPanel({ church, show = null }) {
     }
     if (failed.length || partial.length || half.length) {
       const parts = [];
-      if (half.length) parts.push(half.length + ' group' + (half.length === 1 ? '' : 's') + ' reached only some of your relays, so ' + (half.length === 1 ? 'it is' : 'they are') + ' sealed on those and still readable on the others: ' + half.join(', ') + '. Check Settings → Relays — a relay that doesn’t carry your church will keep refusing.');
+      // Same rule as the seal dialog above: a relay that did not ACK may be offline rather than refusing, so
+      // this says what is TRUE of the rooms and sends the steward to look, rather than diagnosing for them.
+      if (half.length) parts.push(half.length + ' group' + (half.length === 1 ? '' : 's') + ' reached only some of your relays, so ' + (half.length === 1 ? 'it is' : 'they are') + ' sealed on those and still readable on the others: ' + half.join(', ') + '. “Encrypt all” stays off. Check Settings → Relays.');
       if (failed.length) parts.push(failed.length + ' group' + (failed.length === 1 ? '' : 's') + ' could not be sealed and so ' + (failed.length === 1 ? 'stays' : 'stay') + ' unencrypted: ' + failed.join(', ') + '. “Encrypt all” stays off — try again once this console is connected.');
       if (partial.length) parts.push(partial.join('; ') + '. They will not be able to read or post there. Open each group and save it again to re-send.');
       try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'group key', message: parts.join(' ') } })); } catch (e) {}
