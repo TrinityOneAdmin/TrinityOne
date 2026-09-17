@@ -38,6 +38,13 @@ const REFUSAL = 'blocked: not a member or not permitted for this group';
 // `window.stewModalOpen` onto it and app/stew-dashboard.jsx reads it.
 function console_(openAtMount) {
   const listeners = {};
+  // A root element that records what the banner writes to it. The reserved-space rules in steward.html are
+  // keyed off this one attribute, so nothing else about them can be true if this is not set.
+  const root = {
+    attrs: {},
+    setAttribute(k, v) { root.attrs[k] = v; },
+    removeAttribute(k) { delete root.attrs[k]; },
+  };
   const win = {
     Steward: { actingChurch: '' },
     addEventListener: (k, fn) => { (listeners[k] = listeners[k] || []).push(fn); },
@@ -55,6 +62,7 @@ function console_(openAtMount) {
   const timers = [];
   const dash = loadScreen('app/stew-dashboard.jsx', ['PublishErrorBanner', 'SkConfirm'], {
     React: b.React, window: win, Icon: Stub('Icon'),
+    document: { documentElement: root },
     useStewDialog: modal.useStewDialog, useStewModalOpen: modal.useStewModalOpen,
     noteRelayRejection: () => {},
     setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; },
@@ -62,7 +70,7 @@ function console_(openAtMount) {
     console, localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
     Math, Date, JSON, String, Number, Boolean, Object, Array, Set, Map, Promise, RegExp,
   });
-  const api = { win, timers, modalReact: mr, modal, dash };
+  const api = { win, timers, modalReact: mr, modal, dash, root };
   api.drawBanner = () => { api.tree = b.draw(dash.PublishErrorBanner, {}); return api.tree; };
   api.fire = (detail) => {
     (listeners['steward-publish-error'] || []).forEach(fn => fn({ detail }));
@@ -115,18 +123,14 @@ test('…and it still outranks the modal — the AUDIT-9 defect must not come ba
     'their modal open, so this is not a corner case.');
   assert.equal(w.pointerEvents, 'none',
     'the strip swallows taps across the whole width of the dialog behind it');
-  // ⚠ THE CARD ITSELF IS POINTER-TRANSPARENT WHILE CLAMPED, AND ITS CONTROLS ARE NOT. Audit of 1641992:
-  // at 730x328 there is no strip short enough to clear a 92vh dialog (app/stew-finance.jsx's modals), and
-  // an intercepting strip over the bottom of one ate half of "Post to members". Letting taps through is
-  // what keeps that button usable; the two controls re-enable themselves so the message is still
-  // dismissible and still expandable.
-  assert.equal(cardsOf(c.tree)[0].props.style.pointerEvents, 'none',
-    'THE CLAMPED CARD INTERCEPTS TAPS. Over a 92vh dialog that is its primary action, dead.');
-  for (const b2 of [...showBtn(c.tree), ...dismissBtn(c.tree)]) {
-    assert.equal(b2.props.style.pointerEvents, 'auto',
-      'a control on the clamped card cannot be tapped, because the card around it is pointer-transparent ' +
-      'and it did not re-enable itself: ' + String(b2.props['aria-label']));
-  }
+  // ⚠ THE CARD MUST INTERCEPT. A pointer-transparent card shipped here for exactly one commit and was the
+  // worst thing on this branch: the card is OPAQUE, so an 11px band that PAINTED as an error banner
+  // ACTUATED "Post to members" behind it — measured with elementFromPoint at 730x328. A steward aiming at
+  // the banner would have published the church's quarterly finances to every member. What keeps the strip
+  // off a dialog's buttons is the reserved space (the row below), never pointer-events.
+  assert.equal(cardsOf(c.tree)[0].props.style.pointerEvents, 'auto',
+    'THE CARD LETS TAPS THROUGH TO WHATEVER IS BEHIND IT. It is opaque, so what a steward sees is a banner ' +
+    'and what they press is a dialog\'s primary action.');
 });
 
 test('…clamped to one line, and short enough to clear a full-height dialog in landscape', () => {
@@ -213,6 +217,66 @@ test('…and it does not cover the tab strip, which is the AUDIT-8 defect', () =
     assert.ok(!('top' in w) && w.position !== 'absolute',
       'the banner is positioned from the top of the viewport again — measured with elementFromPoint at 360px ' +
       'that covered every control in the tab strip, including the Members tab the message tells you to open');
+  }
+});
+
+test('THE RESERVED SPACE: the page is told a banner is standing there, and in which state', () => {
+  // This is what actually keeps the strip off a dialog's buttons — not pointer-events, which was tried for
+  // one commit and turned an unreachable button into a silently WRONG one. The two lengths live in
+  // steward.html; this attribute is the only thing the banner contributes, and without it every rule there
+  // is inert and the strip is back on top of "Post to members".
+  const c = console_(true);
+  assert.equal(c.root.attrs['data-stew-banner'], undefined, 're-anchor: something reserved space before a message existed');
+  c.fire({ reason: 'timeout' });
+  assert.equal(c.root.attrs['data-stew-banner'], 'clamped',
+    'NOTHING RESERVES THE SPACE. The rules in steward.html are keyed on this attribute, so a dialog is laid ' +
+    'out full height and the strip lands on its buttons.');
+  showBtn(c.tree)[0].props.onClick();
+  c.drawBanner();
+  assert.equal(c.root.attrs['data-stew-banner'], 'open',
+    'expanding the banner does not widen the reservation, so the expanded card covers the dialog');
+});
+
+test('…and the reservation is released the moment the message is', () => {
+  // Left set, the console keeps every dialog short for the rest of the session over a message that is gone —
+  // AUDIT-9's "it eats the page" in a different hat.
+  const c = console_(true);
+  c.fire({ reason: 'timeout' });
+  assert.equal(c.root.attrs['data-stew-banner'], 'clamped');
+  dismissBtn(c.tree)[dismissBtn(c.tree).length - 1].props.onClick();
+  c.drawBanner();
+  assert.equal(c.root.attrs['data-stew-banner'], undefined,
+    'THE RESERVATION OUTLIVED THE MESSAGE. Every dialog in the console stays short for the rest of the session.');
+});
+
+test('…and no space is reserved when there is no dialog to reserve it from', () => {
+  const c = console_(false);
+  c.fire({ reason: 'timeout' });
+  assert.equal(c.root.attrs['data-stew-banner'], undefined,
+    'the console shortens its dialogs over a banner that is in flow and not over them at all');
+});
+
+test('the two lengths in steward.html and the two in this component are the SAME lengths', () => {
+  // ⚠ A DRIFT HERE IS INVISIBLE ON SCREEN until a dialog is tall enough to reach the strip, and then it is
+  // the 92vh finance modals — the ones this banner is raised above modals for. So they are pinned against
+  // each other rather than trusted to be kept in step by hand.
+  const html = readFileSync(new URL('../steward.html', import.meta.url), 'utf8');
+  const c = console_(true);
+  c.fire({ reason: 'timeout' });
+  const clampedCap = wrapperOf(c.tree).props.style.maxHeight;
+  showBtn(c.tree)[0].props.onClick();
+  const openCap = wrapperOf(c.drawBanner()).props.style.maxHeight;
+  for (const [state, cap] of [['clamped', clampedCap], ['open', openCap]]) {
+    const rule = html.slice(html.indexOf('html[data-stew-banner="' + state + '"]'));
+    const end = rule.indexOf('}');
+    assert.notEqual(end, -1, `steward.html has no html[data-stew-banner="${state}"] rule — re-anchor`);
+    const block = rule.slice(0, end);
+    const want = cap.replace(/\s+/g, '');
+    assert.ok(block.replace(/\s+/g, '').includes('margin-bottom:' + want),
+      `steward.html reserves a different height for "${state}" than the banner actually takes. The banner ` +
+      `caps itself at ${cap}; the rule says ${JSON.stringify(block.trim())}`);
+    assert.ok(block.replace(/\s+/g, '').includes('calc(100vh-' + want + '-28px)'),
+      `steward.html shortens a dialog by a different height than the banner takes for "${state}"`);
   }
 });
 

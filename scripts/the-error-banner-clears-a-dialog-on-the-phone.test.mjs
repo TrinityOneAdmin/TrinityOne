@@ -115,7 +115,9 @@ function fixture(modalOpen, withDialog = 'confirm') {
     });
   }
   // Modals come FIRST in the console shell, exactly as they do here; what decides the stacking is z-index.
-  return page((dlg ? toHtml(dlg) : '') + shell(toHtml(tree)));
+  // The second argument is what the banner's own effect puts on <html>, and the rules it triggers are read
+  // out of steward.html rather than retyped — they are the whole of what keeps the strip off the dialog.
+  return page((dlg ? toHtml(dlg) : '') + shell(toHtml(tree)), modalOpen && withDialog ? 'clamped' : '');
 }
 
 let chr, ws, prof, send, evalIn, frameId;
@@ -183,6 +185,20 @@ const MEASURE = `(() => {
     // The banner's OWN dismiss control. While the strip is clamped the card lets taps through, so the card's
     // middle no longer answers "is the banner on top" — its control does, and it answers both halves at once:
     // painted above the overlay, and reachable.
+    // ⚠ AND THE OTHER DIRECTION, which is the one that nearly shipped. A pointer-transparent card is opaque
+    // to the eye and invisible to the finger: every point down the middle of the banner's own rectangle must
+    // belong to the BANNER, never to a control behind it.
+    insideBanner: (() => {
+      if (!a) return [];
+      const bad = [];
+      for (let y = a.top + 1; y < a.bottom; y += 2) {
+        const e = document.elementFromPoint((a.left + a.right) / 2, y);
+        if (!e || e.closest('[role="alert"]')) continue;
+        const btn = e.closest('button');
+        bad.push({ y, what: btn ? ('BUTTON:' + (btn.textContent || '').trim().slice(0, 28)) : (e.closest('[role="dialog"]') ? 'dialog' : 'other') });
+      }
+      return bad.filter(x => /^BUTTON/.test(x.what));
+    })(),
     atDismiss: (() => {
       const d2 = document.querySelector('[role="alert"] button[aria-label^="Dismiss"]');
       if (!d2) return 'none';
@@ -222,6 +238,8 @@ for (const [label, W, H] of [['360x730 upright', 360, 730], ['730x328 landscape'
     assert.equal(m.atLastButton, 'dialog',
       `THE BANNER COVERS THE DIALOG'S CONFIRM BUTTON at ${label}. banner ${JSON.stringify(m.alert)} ` +
       `buttons ${JSON.stringify(m.buttons)}.`);
+    assert.deepEqual(m.insideBanner, [],
+      `A TAP ON THE BANNER PRESSES A BUTTON BEHIND IT at ${label}: ` + JSON.stringify(m.insideBanner));
   });
 
   test(`${label}: …and the banner is still ON TOP, not behind the overlay`, { skip: !CHROME ? 'no chromium' : false, timeout: 120000 }, async () => {
@@ -246,6 +264,11 @@ for (const [label, W, H] of [['360x730 upright', 360, 730], ['730x328 landscape'
       `THE BANNER INTERCEPTS A CONTROL OF A 92vh DIALOG at ${label} — and that dialog is the one this banner ` +
       `is raised above modals for, because it publishes with its modal still open. ` +
       JSON.stringify(m.intercepted) + ' banner ' + JSON.stringify(m.alert));
+    // …AND NOT BY BEING SEE-THROUGH. That was tried for one commit and was the worst state this branch
+    // reached: an opaque 11px band that painted as the error banner and actuated "Post to members".
+    assert.deepEqual(m.insideBanner, [],
+      `A TAP ON THE BANNER PRESSES A BUTTON BEHIND IT at ${label}. The card is opaque, so what the steward ` +
+      `sees is a banner and what they press is the dialog's primary action: ` + JSON.stringify(m.insideBanner));
   });
 }
 

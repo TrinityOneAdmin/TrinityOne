@@ -446,6 +446,21 @@ function PublishErrorBanner() {
     try { return !!(window.stewModalOpen && window.stewModalOpen()); } catch (e) { return false; }
   });
   const [openWide, setOpenWide] = React.useState(false);   // the steward expanded the one-line bar
+  // RESERVE THE SPACE ON THE PAGE, so no dialog is ever laid out underneath this strip. The two lengths
+  // live in steward.html because CSS is the only thing that can reach 35 inline-styled overlays at once;
+  // this only says WHICH state is up. Cleared the moment the last message goes, so a dialog with no banner
+  // over it is exactly as tall as it has always been.
+  React.useEffect(() => {
+    const showing = !!(msg || sgMsg || regMsg || bgMsg);
+    try {
+      const el = document.documentElement;
+      if (showing && modalUp) el.setAttribute('data-stew-banner', openWide ? 'open' : 'clamped');
+      else el.removeAttribute('data-stew-banner');
+    } catch (e) {}
+    // ⚠ AND ON THE WAY OUT. Without this the console keeps every dialog short for the rest of the session
+    // after one message, which is the AUDIT-9 "it eats the page" defect wearing a different hat.
+    return () => { try { document.documentElement.removeAttribute('data-stew-banner'); } catch (e) {} };
+  }, [modalUp, openWide, msg, sgMsg, regMsg, bgMsg]);
   React.useEffect(() => {
     const h = () => {
       let up = false;
@@ -512,15 +527,14 @@ function PublishErrorBanner() {
   const clamped = modalUp && !openWide;   // one line while a dialog is up, until the steward says otherwise
   const card = (text, key, clear, tone) => (
     <div key={key} role="alert" aria-live={tone === 'sg' ? 'assertive' : 'polite'} aria-atomic="true"
-      // ⚠ WHEN CLAMPED THE CARD LETS TAPS THROUGH, AND THAT IS THE WHOLE OF THE FIX FOR A TALL DIALOG.
-      // Audit of 1641992, 2026-09-17: the commit claimed the bottom strip "does not touch a control", which
-      // was true of SkConfirm (86vh) and FALSE of app/stew-finance.jsx's modals (92vh) — measured, the strip
-      // ate the bottom 19px of FinanceShareStatement's "Post to members" at 730x328 and 3px of it at
-      // 360x730. At 328px of height there is no strip short enough to clear a 92vh dialog, so the strip
-      // stops INTERCEPTING instead: everything but its own two controls is pointer-transparent, a tap on the
-      // button underneath reaches the button, and the two controls re-enable themselves below.
-      // And FinanceShareStatement is the exact dialog this banner is raised above modals for.
-      style={{ pointerEvents: clamped ? 'none' : 'auto', maxWidth: 560, width: '100%', display: 'flex', alignItems: clamped ? 'center' : 'flex-start', gap: 10, padding: clamped ? '5px 10px' : '12px 14px', borderRadius: 13, background: tone === 'quiet' ? 'var(--surface-2)' : 'color-mix(in oklab, var(--clay) 12%, var(--surface))', border: tone === 'quiet' ? '1px solid var(--line)' : '1px solid color-mix(in oklab, var(--clay) 40%, transparent)', boxShadow: 'var(--shadow-lg)' }}>
+      // ⚠ THE CARD INTERCEPTS, AND IT MUST. A pass-through card shipped here for exactly one commit and was
+      // the worst thing on this branch: the card is OPAQUE, so an 11px band that painted as an error banner
+      // actuated "Post to members" behind it — a steward aiming at the banner publishing the church's
+      // quarterly finances to every member. Measured at 730x328 with elementFromPoint.
+      // What keeps it off a dialog's buttons is not pointer-events; it is that the DIALOG GIVES UP THE
+      // SPACE — see the html[data-stew-banner] rules in steward.html and the effect that sets that
+      // attribute above.
+      style={{ pointerEvents: 'auto', maxWidth: 560, width: '100%', display: 'flex', alignItems: clamped ? 'center' : 'flex-start', gap: 10, padding: clamped ? '5px 10px' : '12px 14px', borderRadius: 13, background: tone === 'quiet' ? 'var(--surface-2)' : 'color-mix(in oklab, var(--clay) 12%, var(--surface))', border: tone === 'quiet' ? '1px solid var(--line)' : '1px solid color-mix(in oklab, var(--clay) 40%, transparent)', boxShadow: 'var(--shadow-lg)' }}>
       <Icon name={tone === 'sg' ? 'shield' : 'bolt'} size={17} color={tone === 'quiet' ? 'var(--ink-3)' : 'var(--clay)'} style={{ flexShrink: 0, marginTop: clamped ? 0 : 1 }} />
       <div style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: tone === 'quiet' ? 'var(--ink-2)' : 'var(--ink)', lineHeight: 1.45, fontWeight: 600, ...(clamped ? { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } : null) }}>{text}</div>
       {/* THE WAY BACK TO THE WHOLE SENTENCE, and it has to be a real 24px-plus target on a cheap Android
@@ -804,7 +818,10 @@ function WizShell({ step, title, sub, children, footer }) {
   (typeof useStewModalOpen === 'function' ? useStewModalOpen : () => React.useEffect(() => {}, []))(true);
   return (
     <div style={{ position: 'fixed', overflowY: 'auto', inset: 0, zIndex: 120, display: 'flex', alignItems: 'safe center', justifyContent: 'center', padding: 24, background: 'color-mix(in oklab, var(--ink) 42%, transparent)', backdropFilter: 'blur(4px)', animation: 'lumenFade .18s ease both' }}>
-      <div className="no-scrollbar" style={{ width: 520, maxWidth: '100%', maxHeight: '92%', overflowY: 'auto', borderRadius: 24, background: 'var(--paper)', border: '1px solid var(--line)', boxShadow: '0 30px 80px rgba(0,0,0,.32)', animation: 'lumenScale .22s cubic-bezier(.2,.8,.3,1.1) both' }}>
+      {/* `data-stew-modal-panel` is the handle the html[data-stew-banner] rules in steward.html need. Every
+          other console panel carries role="dialog", which those rules match directly; this one does not
+          (see the note at the top of this component), so it says so another way. */}
+      <div className="no-scrollbar" data-stew-modal-panel="1" style={{ width: 520, maxWidth: '100%', maxHeight: '92%', overflowY: 'auto', borderRadius: 24, background: 'var(--paper)', border: '1px solid var(--line)', boxShadow: '0 30px 80px rgba(0,0,0,.32)', animation: 'lumenScale .22s cubic-bezier(.2,.8,.3,1.1) both' }}>
         <div style={{ padding: '26px 28px 0' }}>
           <div style={{ display: 'flex', gap: 6, marginBottom: 18 }}>{[0, 1, 2, 3, 4, 5, 6].map(i => <span key={i} style={{ height: 5, flex: 1, borderRadius: 999, background: i <= step ? 'var(--clay)' : 'var(--line)' }} />)}</div>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 24, letterSpacing: '-.4px' }}>{title}</div>

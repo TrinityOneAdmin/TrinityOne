@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 // Turn a rendered miniReact tree into real HTML, so a browser can lay out the boxes the components
 // actually evaluated. Shared by the probe and the test beside it; one copy, because two would drift.
 //
@@ -27,7 +28,11 @@ export function toHtml(node) {
   const p = node.props || {};
   const attrs = [];
   if (p.style) attrs.push('style="' + esc(styleString(p.style)) + '"');
-  for (const k of ['role', 'aria-label', 'aria-live', 'title', 'id', 'className'])
+  // ⚠ `aria-modal` AND `data-stew-modal-panel` ARE LOAD-BEARING, not decoration. The reserved-space rules
+  // in steward.html select on them, so a serializer that dropped them produced a fixture where the rules
+  // matched nothing — and the measurement then reported the fix as broken when it was the instrument that
+  // was. That happened while this was being written.
+  for (const k of ['role', 'aria-modal', 'data-stew-modal-panel', 'aria-label', 'aria-live', 'title', 'id', 'className'])
     if (p[k]) attrs.push((k === 'className' ? 'class' : k) + '="' + esc(p[k]) + '"');
   if (p['data-probe']) attrs.push('data-probe="' + esc(p['data-probe']) + '"');
   const tag = String(node.type);
@@ -48,12 +53,33 @@ html,body{margin:0;padding:0;height:100%;font-family:var(--font-ui);background:v
 button{font:inherit}
 `;
 
-export function page(bodyHtml) {
+// THE RESERVED-SPACE RULES, LIFTED OUT OF steward.html RATHER THAN RETYPED. They are the whole of what keeps
+// the docked strip off a dialog's buttons, so a fixture that omitted them would measure a page the console
+// does not have — and a fixture that copied them would go on measuring the old ones after somebody edits the
+// real file.
+export function reservedSpaceCss() {
+  const html = readFileSync(new URL('../steward.html', import.meta.url), 'utf8');
+  const out = [];
+  for (const state of ['clamped', 'open']) {
+    const at = html.indexOf('html[data-stew-banner="' + state + '"]');
+    if (at === -1) throw new Error('steward.html has no html[data-stew-banner="' + state + '"] rule — re-anchor');
+    const end = html.indexOf('}', at);
+    out.push(html.slice(at, end + 1));
+  }
+  return out.join('\n');
+}
+
+export function page(bodyHtml, rootAttr) {
   // ⚠ THE VIEWPORT META IS LOAD-BEARING, AND IT IS THE ONE steward.html SHIPS. Without it a mobile-emulated
   // Chromium lays the page out at its 980px fallback width, so a measurement taken "at 360x730" is silently
   // taken at 980x1988 instead — every box lands somewhere real and somewhere else, which is the worst kind
   // of wrong number.
-  return '<!doctype html><meta charset="utf-8">'
+  // The attribute goes on <html> in the markup rather than through a script: Page.setDocumentContent is
+  // the only way a snap-confined Chromium can be handed this page, and a fixture that depended on script
+  // execution would be one more thing between the measurement and the thing measured.
+  return '<!doctype html><html' + (rootAttr ? ' data-stew-banner="' + rootAttr + '"' : '') + '>'
+    + '<head><meta charset="utf-8">'
     + '<meta name="viewport" content="width=device-width, initial-scale=1.0" />'
-    + '<style>' + PAGE_CSS + '</style><body>' + bodyHtml + '</body>';
+    + '<style>' + PAGE_CSS + '\n' + reservedSpaceCss() + '</style></head>'
+    + '<body>' + bodyHtml + '</body></html>';
 }

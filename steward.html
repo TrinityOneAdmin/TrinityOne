@@ -126,6 +126,40 @@
   .sk-btn--ghost:hover { box-shadow:inset 0 0 0 1.4px var(--ink); }
   .sk-mono { font-family:var(--mono); }
 
+
+  /* ── A DIALOG GIVES UP THE SPACE THE ERROR BANNER IS STANDING IN ─────────────────────────────────────
+     The console's error banner sits ABOVE every modal on purpose (z-index 240 over their 50-220; AUDIT-9,
+     because in flow it was painted underneath them, greyed and untappable, while FinanceShareStatement and
+     the first-run wizard both publish with their modal still open). Since 2026-09-17 it docks to the FOOT of
+     the viewport while a dialog is open, so it stops covering the dialog's title.
+
+     THAT LEFT A DIALOG'S BUTTONS UNDER IT, and both ways of living with the overlap are worse than this rule:
+       · an INTERCEPTING strip eats the bottom 19px of a 44px "Post to members" at 730x328 — measured;
+       · a PASS-THROUGH strip is worse still, and was shipped for exactly one commit: an opaque band that
+         paints as an error banner and ACTUATES the button behind it. A steward aiming at the banner would
+         have published the church's quarterly finances to every member.
+
+     So the dialog gets shorter instead. `max-height` shrinks it and `margin-bottom` moves it up out of the
+     strip: with the overlays' `align-items: safe center`, a panel at its cap then lands clear of the strip
+     with room to spare, and its own `overflow-y: auto` scrolls whatever no longer fits.
+
+     ⚠ THE TWO LENGTHS BELOW MUST MATCH PublishErrorBanner's own `maxHeight` FOR EACH STATE. They are pinned
+     against each other by scripts/the-error-banner-does-not-crop-an-open-dialog.test.mjs, because a drift
+     here is invisible on screen until a dialog is tall enough to reach the strip.
+
+     `!important` because every console overlay is styled inline, and this must win over all 35 of them for
+     as long as a message is up and not one moment longer — the attribute is set and cleared by the banner. */
+  html[data-stew-banner="clamped"] [role="dialog"][aria-modal="true"],
+  html[data-stew-banner="clamped"] [data-stew-modal-panel] {
+    max-height: calc(100vh - min(24vh, 62px) - 28px) !important;
+    margin-bottom: min(24vh, 62px) !important;
+  }
+  html[data-stew-banner="open"] [role="dialog"][aria-modal="true"],
+  html[data-stew-banner="open"] [data-stew-modal-panel] {
+    max-height: calc(100vh - min(40vh, 220px) - 28px) !important;
+    margin-bottom: min(40vh, 220px) !important;
+  }
+
   @keyframes lumenFade  { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
   @keyframes lumenScale { from { opacity: 0; transform: scale(.96); } to { opacity: 1; transform: scale(1); } }
   @keyframes trinitySpin { to { transform: rotate(360deg); } }
