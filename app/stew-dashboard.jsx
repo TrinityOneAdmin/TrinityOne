@@ -417,6 +417,45 @@ function PublishErrorBanner() {
   // without `saidQuiet` this would flash the note over and over — the same defect in a lighter colour.
   const [bgMsg, setBgMsg] = React.useState('');
   const saidQuiet = React.useRef({});
+  // ⚠ WHILE A DIALOG IS OPEN THIS BANNER MOVES TO THE BOTTOM AND SHRINKS TO ONE LINE.
+  //
+  // Both of the rules below it are still true and neither is being undone:
+  //   · it must OUTRANK modals (z-index 240 over their 50-220). AUDIT-9: in flow it lost its stacking context
+  //     and was painted underneath them, greyed and untappable, while FinanceShareStatement and the first-run
+  //     wizard both publish with their modal still open. A relay refusal must not explain itself behind a blur.
+  //   · it must not cover the TAB STRIP and must not eat the scrolling content region (AUDIT-8, AUDIT-9).
+  //
+  // The cost nobody costed: an opaque `var(--paper)` band, full width, sitting exactly where a centred
+  // dialog's top edge is at 360x730. The owner, on the Oppo, 2026-09-17, over the seal dialog: “oddly
+  // cropped” — the banner had taken its title and first lines.
+  //
+  // WHY THE BOTTOM, AND WHY COLLAPSED. A dialog's identity is at its top: the title, then the sentence that
+  // says what the button will do. The banner is the thing that may be summarised; the dialog is not. And at
+  // 730x328 — the Oppo in landscape, with 32px of navigation bar — a dialog may be 86vh tall, so there is no
+  // arrangement in which a multi-line banner and a full-height dialog are both entirely visible: something
+  // has to shrink, and it is the banner. One line, at the foot, with `Show` to open it in place; nothing is
+  // lost and nothing is hidden behind the dialog, because it still paints above it.
+  //
+  // MEASURED, not reasoned: see scripts/the-error-banner-does-not-crop-an-open-dialog.test.mjs, which reads
+  // the style object this component actually evaluates.
+  const [modalUp, setModalUp] = React.useState(() => {
+    try { return !!(window.stewModalOpen && window.stewModalOpen()); } catch (e) { return false; }
+  });
+  const [openWide, setOpenWide] = React.useState(false);   // the steward expanded the one-line bar
+  React.useEffect(() => {
+    const h = () => {
+      let up = false;
+      try { up = !!(window.stewModalOpen && window.stewModalOpen()); } catch (e) {}
+      // EXPANDING IS FOR THIS DIALOG, NOT FOR EVER. Left latched, the next dialog opens under a banner the
+      // steward expanded ten minutes ago — which is the cropping this exists to stop, re-created by their
+      // own tap. Collapsing on close costs one tap and cannot surprise anyone.
+      if (!up) setOpenWide(false);
+      setModalUp(up);
+    };
+    window.addEventListener('stew-modals', h);
+    h();   // a dialog may already have been open when this mounted
+    return () => window.removeEventListener('stew-modals', h);
+  }, []);
   React.useEffect(() => {
     const f = (e) => {
       const d = e.detail || {};
@@ -466,11 +505,17 @@ function PublishErrorBanner() {
   // a screen reader still gets it — in the console's neutral surface rather than the clay/pink one every
   // other message here uses, because the whole point of the slot is that nothing has gone wrong for the
   // person reading it.
+  const clamped = modalUp && !openWide;   // one line while a dialog is up, until the steward says otherwise
   const card = (text, key, clear, tone) => (
     <div key={key} role="alert" aria-live={tone === 'sg' ? 'assertive' : 'polite'} aria-atomic="true"
-      style={{ pointerEvents: 'auto', maxWidth: 560, width: '100%', display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 14px', borderRadius: 13, background: tone === 'quiet' ? 'var(--surface-2)' : 'color-mix(in oklab, var(--clay) 12%, var(--surface))', border: tone === 'quiet' ? '1px solid var(--line)' : '1px solid color-mix(in oklab, var(--clay) 40%, transparent)', boxShadow: 'var(--shadow-lg)' }}>
-      <Icon name={tone === 'sg' ? 'shield' : 'bolt'} size={17} color={tone === 'quiet' ? 'var(--ink-3)' : 'var(--clay)'} style={{ flexShrink: 0, marginTop: 1 }} />
-      <div style={{ flex: 1, fontSize: 12.5, color: tone === 'quiet' ? 'var(--ink-2)' : 'var(--ink)', lineHeight: 1.45, fontWeight: 600 }}>{text}</div>
+      style={{ pointerEvents: 'auto', maxWidth: 560, width: '100%', display: 'flex', alignItems: clamped ? 'center' : 'flex-start', gap: 10, padding: clamped ? '7px 12px' : '12px 14px', borderRadius: 13, background: tone === 'quiet' ? 'var(--surface-2)' : 'color-mix(in oklab, var(--clay) 12%, var(--surface))', border: tone === 'quiet' ? '1px solid var(--line)' : '1px solid color-mix(in oklab, var(--clay) 40%, transparent)', boxShadow: 'var(--shadow-lg)' }}>
+      <Icon name={tone === 'sg' ? 'shield' : 'bolt'} size={17} color={tone === 'quiet' ? 'var(--ink-3)' : 'var(--clay)'} style={{ flexShrink: 0, marginTop: clamped ? 0 : 1 }} />
+      <div style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: tone === 'quiet' ? 'var(--ink-2)' : 'var(--ink)', lineHeight: 1.45, fontWeight: 600, ...(clamped ? { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } : null) }}>{text}</div>
+      {/* THE WAY BACK TO THE WHOLE SENTENCE, and it has to be a real 24px-plus target on a cheap Android
+          phone (WCAG 2.5.8) like the dismiss beside it. A summary with no way to read the rest would be a
+          worse banner than the one that cropped the dialog. */}
+      {clamped ? <button onClick={() => setOpenWide(true)} aria-label="Show the whole message" title="Show the whole message"
+        style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '4px 9px', minHeight: 24, cursor: 'pointer', flexShrink: 0, fontSize: 11.5, fontWeight: 700, fontFamily: 'var(--font-ui)', color: 'var(--ink-2)' }}>Show</button> : null}
       {/* padding:14 with margin:-14 already gives this a ~44px target without changing the layout; only the
           accessible name was missing. A second `style` added here for one commit silently won and undid it. */}
       <button onClick={clear} aria-label="Dismiss this message" title="Dismiss this message"
@@ -497,8 +542,21 @@ function PublishErrorBanner() {
   // elementFromPoint: every control including the Members tab the message tells you to open. Rendered as a
   // normal row between the header and the scrolling content, it pushes the page down instead, so the one
   // action the text asks for stays reachable while the warning is up. AUDIT-8.
+  // WITH NO DIALOG OPEN THIS IS EXACTLY WHAT IT WAS: in flow, below the header, above the content, opaque,
+  // capped at 40vh/220px, z-index 240. With one open it becomes a fixed strip at the FOOT of the viewport —
+  // still 240, so it is never behind the blur; transparent and pointer-transparent outside the card itself,
+  // so the dialog stays fully usable around it; and out of flow, so it cannot eat the content region either.
+  // `pointerEvents` goes back to auto once expanded, or a message long enough to need its own scrollbar
+  // could not be scrolled.
+  const wrapper = modalUp
+    ? { position: 'fixed', left: 0, right: 0, bottom: 0, zIndex: 240, background: 'transparent',
+        pointerEvents: openWide ? 'auto' : 'none',
+        maxHeight: openWide ? 'min(40vh, 220px)' : 'min(30vh, 84px)', overflowY: 'auto',
+        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '0 16px 10px' }
+    : { flexShrink: 1, minHeight: 0, maxHeight: 'min(40vh, 220px)', overflowY: 'auto', position: 'relative', zIndex: 240,
+        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '10px 16px 0', background: 'var(--paper)' };
   return (
-    <div style={{ flexShrink: 1, minHeight: 0, maxHeight: 'min(40vh, 220px)', overflowY: 'auto', position: 'relative', zIndex: 240, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '10px 16px 0', background: 'var(--paper)' }}>
+    <div style={wrapper}>
       {sgMsg ? card(sgMsg, 'sg', () => setSgMsg(''), 'sg') : null}
       {/* ABOVE the generic slot: a church that is not where its steward believes it is outranks a write that
           failed once. Both stay until dismissed — this one because nothing clears it but acting on it. */}
@@ -715,6 +773,23 @@ function KeyDistributor() {
 // wizard step chrome — module-level so its component type is stable across renders
 // (defining it inside StewSetupWizard would remount on every keystroke and blur the inputs).
 function WizShell({ step, title, sub, children, footer }) {
+  // REGISTERS AS A MODAL WITHOUT TAKING THE REST OF useStewDialog. This overlay is `position: fixed; inset: 0`
+  // at z-index 120 and the error banner sits above it — the first-run wizard publishes while it is open, which
+  // is one of the two cases AUDIT-9 raised the banner for — so the banner has to know it is up in order to get
+  // out of the way of its title. It deliberately does NOT adopt useStewDialog's focus trap and Escape: this
+  // shell has no onClose, and a wizard a steward could dismiss with Escape mid-setup is a different change.
+  // REGISTER AS A MODAL — see useStewModalOpen in app/stew-modal.jsx, which every other console dialog
+  // reaches through useStewDialog.
+  //
+  // ⚠ WHY THIS IS WRITTEN AS AN EXPRESSION AND NOT AS A NAMED HELPER. Two reasons, both measured today:
+  //   · a bare `useStewModalOpen(true)` is undefined in the ~26 tests that compile ONE app file and hand it
+  //     its globals by name, and none of them is about a modal registry. It took nine of them down;
+  //   · hoisting it into a module-level const, in BOTH this file and the other overlay's file, is a
+  //     DUPLICATE TOP-LEVEL NAME across two classic scripts, which is a SyntaxError that blanks the whole
+  //     console — this codebase has shipped that exact defect before.
+  // The fallback keeps the hook COUNT identical (one useEffect either way), so this is not a conditional
+  // hook: it is the same hook, from one of two places.
+  (typeof useStewModalOpen === 'function' ? useStewModalOpen : () => React.useEffect(() => {}, []))(true);
   return (
     <div style={{ position: 'fixed', overflowY: 'auto', inset: 0, zIndex: 120, display: 'flex', alignItems: 'safe center', justifyContent: 'center', padding: 24, background: 'color-mix(in oklab, var(--ink) 42%, transparent)', backdropFilter: 'blur(4px)', animation: 'lumenFade .18s ease both' }}>
       <div className="no-scrollbar" style={{ width: 520, maxWidth: '100%', maxHeight: '92%', overflowY: 'auto', borderRadius: 24, background: 'var(--paper)', border: '1px solid var(--line)', boxShadow: '0 30px 80px rgba(0,0,0,.32)', animation: 'lumenScale .22s cubic-bezier(.2,.8,.3,1.1) both' }}>

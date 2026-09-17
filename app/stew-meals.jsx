@@ -435,6 +435,22 @@ function StewCareChat({ reqId, requesterPub, title, onClose }) {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
+  // …AND IT TELLS THE CONSOLE IT IS A MODAL. This panel rolls its own Escape rather than using useStewDialog,
+  // so it was invisible to the one thing that has to know a dialog is open: the error banner, which sits above
+  // every overlay (AUDIT-9) and therefore has to move out of the way of a dialog's title while one is up.
+  // Registration only — the focus trap is a separate question this panel has not answered.
+  // REGISTER AS A MODAL — see useStewModalOpen in app/stew-modal.jsx, which every other console dialog
+  // reaches through useStewDialog.
+  //
+  // ⚠ WHY THIS IS WRITTEN AS AN EXPRESSION AND NOT AS A NAMED HELPER. Two reasons, both measured today:
+  //   · a bare `useStewModalOpen(true)` is undefined in the ~26 tests that compile ONE app file and hand it
+  //     its globals by name, and none of them is about a modal registry. It took nine of them down;
+  //   · hoisting it into a module-level const, in BOTH this file and the other overlay's file, is a
+  //     DUPLICATE TOP-LEVEL NAME across two classic scripts, which is a SyntaxError that blanks the whole
+  //     console — this codebase has shipped that exact defect before.
+  // The fallback keeps the hook COUNT identical (one useEffect either way), so this is not a conditional
+  // hook: it is the same hook, from one of two places.
+  (typeof useStewModalOpen === 'function' ? useStewModalOpen : () => React.useEffect(() => {}, []))(true);
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 90, background: 'rgba(40,32,24,.42)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       <div onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Care conversation" style={{ width: 440, maxWidth: '92%', height: '70vh', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderRadius: 20, border: '1px solid var(--line)', overflow: 'hidden' }}>

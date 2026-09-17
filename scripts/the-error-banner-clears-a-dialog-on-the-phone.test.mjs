@@ -1,0 +1,229 @@
+// MEASURED IN A BROWSER, AT THE TWO SIZES OF THE PHONE THE OWNER RUNS THE CONSOLE ON.
+//   Run: node --test scripts/the-error-banner-clears-a-dialog-on-the-phone.test.mjs
+//
+// scripts/the-error-banner-does-not-crop-an-open-dialog.test.mjs answers "what did the component decide".
+// This answers the only question that actually mattered on 2026-09-17 — "where does the box LAND" — and it
+// is a different question, because `position: fixed; bottom: 0` plus `max-height: min(30vh, 84px)` is a
+// sentence about pixels that no style object resolves. The banner used to be in flow at the top with an
+// opaque background, and at 360x730 that is exactly where a centred dialog's title is.
+//
+// WHAT IS REAL HERE AND WHAT IS NOT, said plainly so nobody over-reads it:
+//   · REAL — the style objects. PublishErrorBanner and SkConfirm are COMPILED out of app/stew-dashboard.jsx
+//     with the real esbuild, RENDERED, and the tree they produce is serialised to HTML with those exact
+//     styles. `false && ` in front of the new branch changes what this measures (CLAUDE.md rule 3).
+//   · REAL — the layout. Chromium, at 360x730 and at 730x328, getBoundingClientRect().
+//   · NOT REAL — the surrounding console. There is no header, no tab strip and no relay here; the two boxes
+//     are placed in an empty page. That is the point: it isolates the one interaction under test.
+//
+// 360x730 is the Oppo CPH2477 upright. 730x328 is the same handset in landscape, where the navigation bar
+// takes 32px of the 360.
+//
+// Skips itself when chromium is unavailable, like scripts/app-boots.test.mjs, so CI without a browser is green.
+import { test, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { rmSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { WebSocket } from 'ws';
+import { loadScreen, miniReact, find } from './render-jsx-screen.mjs';
+import { toHtml, page } from './console-banner-geometry.mjs';
+import { requireFreePort } from './test-ports.mjs';
+
+const CHROME = ['/usr/bin/chromium-browser', '/usr/bin/chromium', '/usr/bin/google-chrome'].find(p => existsSync(p));
+const CDP = 9371;
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const LONG = 'The key was saved, and “Musicians” is now sealed on 1 of 4 relays. relay.example.org, '
+  + 'other.example.net, third.example.com would not take it, so messages that go through them can still be '
+  + 'read there. Trying again won’t change that if those relays don’t carry your church — see Settings → Relays.';
+
+// ⚠ THE CONSOLE'S CHROME IS PART OF THE INSTRUMENT, and leaving it out made the first cut of this file
+// USELESS — it passed just as happily with the whole fix deleted. In flow the banner sits BELOW the header
+// and the tab strip; drop those and it lands at y=0, which is nowhere near a vertically-centred dialog, so
+// the defect simply did not occur in the fixture. The 2026-09-15 UI audit measured that block at 309px of a
+// 730px screen before that day's compressions and less after, so 230 is a conservative stand-in, and the
+// `was` fixture below is the baseline row that proves this number is big enough to reproduce the defect.
+const CHROME_H = 230;
+function shell(bannerHtml) {
+  return '<div style="position:absolute;inset:0;display:flex;flex-direction:column">'
+    + '<div style="flex-shrink:0;height:' + CHROME_H + 'px;background:var(--surface);border-bottom:1px solid var(--line)"></div>'
+    + bannerHtml
+    + '<main style="flex:1;min-height:0;overflow-y:auto"></main>'
+    + '</div>';
+}
+
+// Render the two real components and glue their trees into one page. `modalOpen` is what the real registry
+// (app/stew-modal.jsx) answers while a dialog is up; `withDialog` says whether one is drawn at all.
+function fixture(modalOpen, withDialog = true) {
+  const Stub = (n) => { const f = function () { return null; }; Object.defineProperty(f, 'name', { value: n }); return f; };
+  const listeners = {};
+  const win = {
+    Steward: { actingChurch: '' },
+    stewModalOpen: () => modalOpen,
+    addEventListener: (k, fn) => { (listeners[k] = listeners[k] || []).push(fn); },
+    removeEventListener: () => {},
+    dispatchEvent: () => {},
+  };
+  const b = miniReact();
+  const mod = loadScreen('app/stew-dashboard.jsx', ['PublishErrorBanner', 'SkConfirm'], {
+    React: b.React, window: win, Icon: Stub('Icon'),
+    useStewDialog: () => ({ current: null }), useStewModalOpen: () => {},
+    noteRelayRejection: () => {},
+    setTimeout: () => 1, clearTimeout: () => {},
+    console, localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+    Math, Date, JSON, String, Number, Boolean, Object, Array, Set, Map, Promise, RegExp,
+  });
+  let tree = b.draw(mod.PublishErrorBanner, {});
+  (listeners['steward-write-blocked'] || []).forEach(fn => fn({ detail: { what: 'group key', message: LONG } }));
+  tree = b.draw(mod.PublishErrorBanner, {});
+  assert.equal(find(tree, n => n.props && n.props.role === 'alert').length, 1,
+    're-anchor: the banner did not render exactly one message');
+  const d = miniReact();
+  const dlg = withDialog ? d.draw(mod.SkConfirm, {
+    icon: 'lock', title: 'Seal “Musicians”?', confirmLabel: 'Seal it',
+    body: 'From now on its messages are encrypted end-to-end — not even the relay can read them. Messages '
+      + 'already posted stay as they are.',
+    onConfirm() {}, onCancel() {},
+  }) : null;
+  // Modals come FIRST in the console shell, exactly as they do here; what decides the stacking is z-index.
+  return page((withDialog ? toHtml(dlg) : '') + shell(toHtml(tree)));
+}
+
+let chr, ws, prof, send, evalIn, frameId;
+const HTML = {};
+before(async () => {
+  if (!CHROME) return;
+  await requireFreePort(CDP, 'the-error-banner-clears-a-dialog-on-the-phone.test.mjs (Chrome debug port)');
+  // ⚠ NOT A FILE, AND NOT BECAUSE A FILE WOULD BE UNTIDY. Chromium here is a SNAP, so it runs with its own
+  // private /tmp and cannot see anything this process writes there — a file:// fixture loads as a blank page
+  // and every measurement below then says the banner "rendered nothing", which looks exactly like the bug.
+  // Page.setDocumentContent hands the markup straight to the frame and needs no filesystem either side.
+  HTML.open = fixture(true);                 // a dialog is up, and the banner knows it
+  HTML.shut = fixture(false, false);         // no dialog at all — the everyday console
+  HTML.was = fixture(false, true);           // THE BASELINE: a dialog is up and the banner does not know
+  prof = join(tmpdir(), 'trin-banner-chr-' + process.pid);
+  chr = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${CDP}`, '--no-sandbox', '--disable-gpu',
+    '--host-resolver-rules=MAP * 127.0.0.1:9', `--user-data-dir=${prof}`, 'about:blank'], { stdio: 'ignore' });
+  let targets = null;
+  for (let i = 0; i < 40 && !targets; i++) { await sleep(400); try { targets = await (await fetch(`http://127.0.0.1:${CDP}/json`)).json(); } catch {} }
+  assert.ok(targets && targets.length, 'chromium never exposed a debug target');
+  const t = targets.find(x => x.type === 'page') || targets[0];
+  ws = new WebSocket(t.webSocketDebuggerUrl, { perMessageDeflate: false, maxPayload: 5e8 });
+  await new Promise((res, rej) => { ws.on('open', res); ws.on('error', rej); });
+  let id = 0; const pend = new Map();
+  ws.on('message', (m) => { const j = JSON.parse(m); if (j.id && pend.has(j.id)) { pend.get(j.id)(j); pend.delete(j.id); } });
+  send = (method, params = {}) => new Promise(r => { const i = ++id; pend.set(i, r); ws.send(JSON.stringify({ id: i, method, params })); });
+  await send('Page.enable');
+  await send('Runtime.enable');
+  frameId = (await send('Page.getFrameTree')).result.frameTree.frame.id;
+  evalIn = async (expr) => {
+    const rr = await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true });
+    if (rr?.result?.exceptionDetails) throw new Error('in-page: ' + JSON.stringify(rr.result.exceptionDetails).slice(0, 300));
+    return rr?.result?.result?.value;
+  };
+});
+after(async () => {
+  try { ws && ws.close(); } catch {}
+  try { chr && chr.kill('SIGKILL'); } catch {}
+  try { prof && rmSync(prof, { recursive: true, force: true }); } catch {}
+});
+
+const MEASURE = `(() => {
+  const box = (el) => { if (!el) return null; const r = el.getBoundingClientRect();
+    return { top: Math.round(r.top), bottom: Math.round(r.bottom), left: Math.round(r.left), right: Math.round(r.right) }; };
+  const dialog = document.querySelector('[role="dialog"]');
+  const alert = document.querySelector('[role="alert"]');
+  const title = dialog && dialog.querySelector('div > div:last-child');
+  const buttons = dialog ? [...dialog.querySelectorAll('button')] : [];
+  // What is actually painted at the dialog's title, and at its buttons? elementFromPoint answers the
+  // question the rectangles only imply.
+  const at = (x, y) => { const e = document.elementFromPoint(x, y); return e ? (e.closest('[role="alert"]') ? 'banner' : (e.closest('[role="dialog"]') ? 'dialog' : 'other')) : 'none'; };
+  const t = box(title), a = box(alert);
+  return JSON.stringify({
+    vw: innerWidth, vh: innerHeight,
+    dialog: box(dialog), title: t, alert: a, main: box(document.querySelector('main')),
+    buttons: buttons.map(b => box(b)),
+    atTitle: t ? at((t.left + t.right) / 2, t.top + 4) : null,
+    atLastButton: buttons.length ? (() => { const r = box(buttons[buttons.length - 1]); return at((r.left + r.right) / 2, (r.top + r.bottom) / 2); })() : null,
+  });
+})()`;
+
+async function measure(which, w, h) {
+  await send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 2, mobile: true });
+  await send('Page.setDocumentContent', { frameId, html: HTML[which] });
+  await sleep(350);
+  return JSON.parse(await evalIn(MEASURE));
+}
+const overlap = (a, b) => Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
+
+for (const [label, W, H] of [['360x730 upright', 360, 730], ['730x328 landscape', 730, 328]]) {
+  test(`${label}: with a dialog open, nothing of the banner is over its title`, { skip: !CHROME ? 'no chromium' : false, timeout: 120000 }, async () => {
+    const m = await measure('open', W, H);
+    assert.deepEqual({ vw: m.vw, vh: m.vh }, { vw: W, vh: H }, 'the viewport is not the size this test claims to measure');
+    assert.ok(m.dialog && m.alert, 're-anchor: the fixture did not render both boxes');
+    assert.equal(overlap(m.alert, m.title), 0,
+      `THE BANNER IS BACK OVER THE DIALOG'S TITLE at ${label}. banner ${JSON.stringify(m.alert)} title ` +
+      `${JSON.stringify(m.title)} — this is the owner's "oddly cropped", measured.`);
+    assert.equal(m.atTitle, 'dialog',
+      `the pixel at the top of the dialog's title belongs to the ${m.atTitle}, not the dialog`);
+  });
+
+  test(`${label}: …and the dialog's buttons are still reachable`, { skip: !CHROME ? 'no chromium' : false, timeout: 120000 }, async () => {
+    // The mirror risk of moving the banner to the foot: at the bottom it could cover Cancel and Seal it,
+    // which is worse than covering a title. This is the row that would catch it.
+    const m = await measure('open', W, H);
+    assert.ok(m.buttons.length >= 2, 're-anchor: the confirm dialog no longer has its two buttons');
+    assert.equal(m.atLastButton, 'dialog',
+      `THE BANNER COVERS THE DIALOG'S CONFIRM BUTTON at ${label}. banner ${JSON.stringify(m.alert)} ` +
+      `buttons ${JSON.stringify(m.buttons)}.`);
+  });
+
+  test(`${label}: …and the banner is still ON TOP, not behind the overlay`, { skip: !CHROME ? 'no chromium' : false, timeout: 120000 }, async () => {
+    // AUDIT-9's defect, which must not come back: painted under the modal it is greyed and untappable.
+    const m = await measure('open', W, H);
+    const who = await evalIn(`(() => {
+      const a = document.querySelector('[role="alert"]').getBoundingClientRect();
+      const e = document.elementFromPoint((a.left + a.right) / 2, (a.top + a.bottom) / 2);
+      return e ? (e.closest('[role="alert"]') ? 'banner' : 'covered') : 'none';
+    })()`);
+    assert.equal(who, 'banner',
+      `the banner's own middle is painted by something else at ${label} — it is behind the overlay again ` +
+      `(AUDIT-9), where it is greyed and cannot be tapped. banner ${JSON.stringify(m.alert)}`);
+  });
+}
+
+test('BASELINE 360x730: the shape this replaces really does cover the dialog’s title', { skip: !CHROME ? 'no chromium' : false, timeout: 120000 }, async () => {
+  // ⚠ WITHOUT THIS ROW THE THREE ABOVE PROVE NOTHING. The first cut of this file had no console chrome in
+  // its fixture, so the in-flow banner landed at y=0 — nowhere near a centred dialog — and the whole file
+  // stayed green with the fix deleted. This is the same banner, told there is no dialog open, which is
+  // exactly what it believed before 2026-09-17: in flow, below the chrome, opaque, at z-index 240.
+  const m = await measure('was', 360, 730);
+  assert.ok(m.dialog && m.alert && m.title, 're-anchor: the baseline fixture did not render both boxes');
+  assert.ok(overlap(m.alert, m.title) > 0,
+    'the baseline does NOT reproduce the defect, so this file cannot see it either. banner ' +
+    JSON.stringify(m.alert) + ' title ' + JSON.stringify(m.title) + ' — is CHROME_H still realistic?');
+  assert.equal(m.atTitle, 'banner',
+    'the baseline’s title is not actually painted over by the banner, so the rows above are vacuous');
+});
+
+test('360x730: with NO dialog open the banner is back in flow, under the chrome, pushing the page down', { skip: !CHROME ? 'no chromium' : false, timeout: 120000 }, async () => {
+  // The control, and the other half of AUDIT-8/AUDIT-9. Without it a banner that had simply stopped
+  // rendering, or one left pinned to the viewport for ever, would pass every row above.
+  const m = await measure('shut', 360, 730);
+  assert.ok(m.alert, 'the banner rendered nothing at all');
+  assert.ok(m.alert.top >= CHROME_H && m.alert.top < CHROME_H + 40,
+    `the in-flow banner is not immediately under the header and tab strip (chrome ends at ${CHROME_H}, ` +
+    `banner top ${m.alert.top}) — it is meant to push the content down, not float somewhere`);
+  assert.ok(m.main && m.main.top >= m.alert.bottom,
+    `THE BANNER IS PAINTED OVER THE CONTENT instead of pushing it down: banner ${JSON.stringify(m.alert)} ` +
+    `main ${JSON.stringify(m.main)}. AUDIT-8.`);
+  // AUDIT-9's cap, measured rather than read off the style: a long message must never cost more than
+  // min(40vh, 220px). At 730 tall that is the 220 literal. Uncapped, the message in this fixture is four
+  // lines; the real one that produced the finding left the content region 38px tall and below the fold.
+  assert.ok(m.alert.bottom - m.alert.top <= 221,
+    `the banner is ${m.alert.bottom - m.alert.top}px tall, past its min(40vh, 220px) cap — uncapped it eats ` +
+    'the fold, which is AUDIT-9');
+  assert.ok(m.main.bottom - m.main.top >= 730 - CHROME_H - 221,
+    `the scrolling content region is down to ${m.main.bottom - m.main.top}px: the banner is taking more ` +
+    'than its cap, so a volunteer sees the header, the tabs and a wall of pink text and no church content');
+});
