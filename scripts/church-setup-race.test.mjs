@@ -124,7 +124,7 @@ test('a relay that never answers registration does NOT stop the church publishin
 test('BOTH publishers wait — not just the one that got fixed first', () => {
   // publish() was guarded first and the five seeded groups were refused anyway, because they travel by
   // _publishToRelays(). Measured, twice, before this test existed.
-  for (const fn of ['async function publish(evt) {', 'async function _publishToRelays(evt, urls) {']) {
+  for (const fn of ['async function publish(evt, opts) {', 'async function _publishToRelays(evt, urls) {']) {
     const body = stripComments(fnBody(VENDOR, fn, fn));
     assert.match(body, /_waitForRegistration\(\)/,
       fn.split('(')[0] + ' publishes without waiting for the church to exist on the relay');

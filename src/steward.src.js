@@ -2399,7 +2399,23 @@ async function deriveAes(pin, salt, iterations) {
 // The prefix is written inline rather than hoisted to a constant so this function stays self-contained: the
 // tests lift it out of the bundle and run it, and a name resolved from the enclosing IIFE would be undefined
 // there — a green suite proving nothing.
-async function publish(evt) {
+// `opts.background` — THE STEWARD DID NOT ASK FOR THIS WRITE.
+//
+// Optional and defaulted off, so every existing call site is untouched and stays exactly as loud as it was.
+// The ONE thing it changes is what the console's standing banner is allowed to say about a refusal (see
+// publishErrorMessage in app/stew-dashboard.jsx): a write nobody asked for must not raise a standing alarm
+// saying a change was not saved, because there was no change and there was no steward.
+//
+// Measured on the owner's delegated console 2026-09-17, and recorded once already inside publishErrorMessage
+// on 2026-09-07: the key-distributor effect republishes trinityone/carekey: whenever the roster re-emits, a
+// delegated steward with no care grant is CORRECTLY refused every time, and the sticky banner “That change
+// wasn’t saved — this part of the church hasn’t been given to you” came back on every tab for ever.
+//
+// WHO PASSES IT (CLAUDE.md rule 2 — complete list, measured 2026-09-17): ensureCareKeyForMembers, whose one
+// caller is the background key-distributor effect; ensureGroupKeys, same effect; and publishGroupKey when
+// ITS caller passes it — which the key-distributor does and the interactive seal deliberately does not.
+async function publish(evt, opts) {
+  const _bg = !!(opts && opts.background);
   // WAIT FOR THE RELAY TO KNOW THIS CHURCH EXISTS. seedNewChurch() fires selfRegister() without awaiting it
   // and starts writing immediately, so the founding documents raced an HTTP round-trip and were refused as
   // "not a member or not permitted for this group". Bounded: a relay that never answers must not stop a
@@ -2417,7 +2433,7 @@ async function publish(evt) {
       ? NO_NETWORK_RELAY + ': none of this church\'s relays could be proved to be ours, so nothing was published'
       : 'no relay is configured for this church';
     console.warn('[steward] publish blocked —', reason);
-    try { window.dispatchEvent(new CustomEvent('steward-publish-error', { detail: { reason, evt } })); } catch (x) {}
+    try { window.dispatchEvent(new CustomEvent('steward-publish-error', { detail: { reason, evt, background: _bg } })); } catch (x) {}
     return false;
   }
   try {
@@ -2452,7 +2468,7 @@ async function publish(evt) {
       const d1 = ((evt.tags || []).find(t => t[0] === 'd') || [])[1];
       if (d1 && /newer version/i.test(reason) && (_lastOk.get(d1) || 0) > (evt.created_at || 0)) return evt;
     } catch (x) {}
-    try { window.dispatchEvent(new CustomEvent('steward-publish-error', { detail: { reason, evt, refused } })); } catch (x) {}
+    try { window.dispatchEvent(new CustomEvent('steward-publish-error', { detail: { reason, evt, refused, background: _bg } })); } catch (x) {}
     return false;   // total failure — every relay rejected; callers that await the result can surface it
   }
   // a write landed → the relays are accepting our posts, so any "a relay is refusing us" alarm can clear
@@ -2602,12 +2618,20 @@ async function _publishToRelays(evt, urls) {
   // the cold-cache window, because setKey's gate refresh is fire-and-forget and a steward's first action can
   // beat the proofs.
   //
-  // SIX CALLERS ARRIVE HERE, and they do not all arrive in the same condition. `targets` can only be empty
-  // when relays() is (live is a filter over it, and a non-empty `urls` is used as given), and _isRelayAuthed
-  // iterates relays() — so setBlocked, setMinors, setApproved and setGuardians are stopped one line earlier
-  // by _requireTrustedView, which raises steward-write-blocked and throws. publishGroup and publishClearance
-  // have no such guard and had nothing at all: a child-safe toggle, a group definition, a category change,
-  // a member's sealed clearance, all failing in complete silence.
+  // TEN CALLERS ARRIVE HERE, and they do not all arrive in the same condition. This comment said SIX until
+  // 2026-09-17; the check-in work added four more and nobody moved the number, which is exactly the drift
+  // CLAUDE.md rule 2 exists to stop — so it is MEASURED, not remembered:
+  //     grep -n '_publishToRelays(' src/steward.src.js
+  //   publishGroup · setBlocked · publishClearance · setMinors · setApproved · setGuardians ·
+  //   grantCheckinPermission · revokeCheckinPermission · publishCheckinHelpers · revokeCheckinHelpers
+  //
+  // `targets` can only be empty when relays() is (live is a filter over it, and a non-empty `urls` is used as
+  // given), and _isRelayAuthed iterates relays() — so setBlocked, setMinors, setApproved and setGuardians are
+  // stopped one line earlier by _requireTrustedView, which raises steward-write-blocked and throws.
+  // publishGroup and publishClearance have no such guard and had nothing at all: a child-safe toggle, a group
+  // definition, a category change, a member's sealed clearance, all failing in complete silence. The four
+  // check-in writers are guarded by _mayClearForCheckin()/churchSkHeld() instead, which is a different
+  // question, so they reach here too.
   //
   // Written INLINE rather than shared with publish(): both functions are lifted out of the bundle and run by
   // the tests, and a name resolved from the enclosing IIFE is undefined there — a green suite proving
@@ -2617,6 +2641,9 @@ async function _publishToRelays(evt, urls) {
       ? NO_NETWORK_RELAY + ': none of this church\'s relays could be proved to be ours, so nothing was published'
       : 'no relay is configured for this church';
     console.warn('[steward] all-relay publish blocked —', reason);
+    // try/catch because the tests LIFT this function out of the bundle and run it, where a name from the
+    // enclosing IIFE is undefined — the same reason _lastOk is guarded inside publish().
+    try { _noteSpread(evt, [], []); } catch (x) {}   // nowhere to write: nothing landed, and nothing refused either
     try { window.dispatchEvent(new CustomEvent('steward-publish-error', { detail: { reason, evt } })); } catch (x) {}
     return false;
   }
@@ -2634,8 +2661,15 @@ async function _publishToRelays(evt, urls) {
       if (typeof v === 'string' && v.startsWith('connection failure')) throw new Error(v);
       return v;
     })));
-  } catch (e) { return false; }
+  } catch (e) { try { _noteSpread(evt, [], targets.slice()); } catch (x) {} return false; }
   const accepted = rs.filter(r => r.status === 'fulfilled').length;
+  // RECORD THE SPREAD BEFORE ANY OF THE RETURNS BELOW, so the two failure shapes are told apart by the
+  // callers that have a sentence to write about them. See the note above _lastSpread; the return values
+  // themselves are unchanged.
+  try {
+    _noteSpread(evt, targets.filter((u, i) => rs[i] && rs[i].status === 'fulfilled'),
+                     targets.filter((u, i) => !rs[i] || rs[i].status !== 'fulfilled'));
+  } catch (x) {}
   if (!accepted) {
     let reason = '';
     try { const f = rs.find(r => r.status === 'rejected'); reason = (f && f.reason && (f.reason.message || String(f.reason))) || ''; } catch (x) {}
@@ -2649,6 +2683,12 @@ async function _publishToRelays(evt, urls) {
     try { window.dispatchEvent(new CustomEvent('steward-publish-error', { detail: { reason, evt, refused } })); } catch (x) {}
     return false;
   }
+  // ⚠ THIS FIRES ON A PARTIAL WRITE TOO, AND THAT IS DELIBERATE — checked rather than assumed, 2026-09-17.
+  // Its one listener (DashRelaysCard in app/stew-dashboard.jsx) asks a narrower question than "did this save":
+  // it asks "are the relays accepting our posts again", so it can drop the standing "a relay is refusing our
+  // posts" alarm. On a partial write one of them accepted, so the answer is yes and the alarm should go.
+  // The write is still reported as NOT DONE on the next line, and the spread recorded above is what lets a
+  // caller say which of the two failures it was.
   try { window.dispatchEvent(new CustomEvent('steward-publish-ok', { detail: { evt } })); } catch (x) {}
   return accepted === targets.length ? evt : false;
 }
@@ -2768,6 +2808,35 @@ async function _waitForRegistration() {
 }
 const _lastStamp = new Map();   // d-tag -> the created_at we last published for it
 const _lastOk = new Map();      // d-tag -> the created_at of the last copy the relay ACCEPTED
+// ⚠ WHICH RELAYS TOOK THE WRITE — the one question `_publishToRelays`'s return value cannot answer.
+//
+// THAT RULE IS UNTOUCHED BY THIS. `_publishToRelays` still answers `evt` only when EVERY targeted relay
+// accepted and `false` otherwise, because a group rule that reached one relay of three is enforced on one of
+// three while every member's app fans its messages to all of them. A partial write is a FAILURE, it stays a
+// failure, and `false` still means not-done to all ten callers.
+//
+// What `false` CANNOT say is which failure it was, and the difference is two different sentences a steward
+// can act on. Measured on the owner's delegated console, 2026-09-17: sealing a room wrote the group document
+// to the one relay that carries that church and to none of the other three (which carry other churches and
+// refuse this one). The seal was REAL — the relay's stored copy has `encrypted: true`, and rejected.log holds
+// no refusal for it — and the console said "the group could not be marked encrypted… messages are still
+// readable by the relay" and told the steward to try again. Both halves are untrue of the only relay their
+// church is on, and trying again can never succeed while a connected relay does not carry the church.
+//
+// Keyed by `d` tag, like _lastOk above and for the same reason: two writes of two documents can be in flight
+// at once, and a single "last result" would hand one document's answer to the other.
+const _lastSpread = new Map();  // d-tag -> { landed: [url], missed: [url], at }
+function _noteSpread(evt, landed, missed) {
+  try {
+    const d = (((evt && evt.tags) || []).find(t => t[0] === 'd') || [])[1];
+    if (d) _lastSpread.set(d, { landed: (landed || []).slice(), missed: (missed || []).slice(), at: Date.now() });
+  } catch (x) {}
+}
+// The spread of the last write of document `d` in this session, or null if we have never written it.
+function _spreadOf(d) {
+  const s = _lastSpread.get(d);
+  return s ? { landed: s.landed.slice(), missed: s.missed.slice(), at: s.at } : null;
+}
 function _monotonic(tmpl) {
   const d = ((tmpl.tags || []).find(t => t[0] === 'd') || [])[1] || ('kind:' + tmpl.kind);
   const nowS = Math.floor(Date.now() / 1000);
@@ -4291,7 +4360,11 @@ window.Steward = {
   // Wrap the care key for everyone who needs it. MINTS only on a first run where we have positively
   // established there is no envelope — never on a cold `_careKeyHex === null`, which is the ordinary state
   // for the first second of every console open. Idempotent: re-wraps the EXISTING key for anyone missing.
-  async ensureCareKeyForMembers(memberPubs, stewardPubs) {
+  // `opts.background` — see the note above publish(). This function has exactly ONE caller (the
+  // key-distributor effect, app/stew-dashboard.jsx), it is automatic, and a delegated steward with no care
+  // grant is refused by the relay every time it runs. `opts` rather than a hard-coded `true` so that a
+  // deliberate care control added later is loud by default, which is the way round this codebase needs.
+  async ensureCareKeyForMembers(memberPubs, stewardPubs, opts) {
     const cp = actingChurch || pub;
     if (!sk || !cp || !churchPub) return false;
     if (!_careKeyChecked) return false;                       // haven't looked yet — minting now would orphan
@@ -4323,7 +4396,7 @@ window.Steward = {
     
     const _ring = JSON.stringify(_careKeyRing.length ? _careKeyRing : [_careKeyHex]);
     const keys = await _sealEach(_ring, want, (pl, mp) => nip44e(pl, nip44ck(sk, mp)));
-    const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', CAREKEY_D + cp], ['t', NET]], content: JSON.stringify({ keys, rev: _careKeyRev }) }));
+    const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', CAREKEY_D + cp], ['t', NET]], content: JSON.stringify({ keys, rev: _careKeyRev }) }), { background: !!(opts && opts.background) });
     if (ok !== false) _careKeyDocKeys = keys;
     return ok;
   },
@@ -4936,7 +5009,9 @@ window.Steward = {
         out.push({ id: g.id, name: g.name || '', state: 'needs-decision' });
         continue;
       }
-      const r = await this.publishGroupKey(g.id, memberPubs || []);
+      // BACKGROUND: this whole function runs from the key-distributor effect and from nowhere else, so a
+      // refusal here is not a steward's failed action. See the note above publish().
+      const r = await this.publishGroupKey(g.id, memberPubs || [], { background: true });
       out.push({ id: g.id, name: g.name || '', state: (r === null || r === false) ? 'failed' : 'issued' });
     }
     return out;
@@ -5027,7 +5102,10 @@ window.Steward = {
     // the room rendered EMPTY rather than broken on every phone in the congregation, so nobody reports it.
     // `churchSk` stays the signer because in delegated mode it IS `sk` — the steward's own key; feChurch only
     // adds the ['church', <cp>] tag (and routes through _monotonic, which every other publisher already gets).
-    const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', GROUPKEY_D + groupId], ['t', NET]], content }, churchSk));
+    // `opts.background` is the CALLER's answer to "did a steward ask for this", never this function's own:
+    // the interactive seal (sealGroup) and the edit-members rotation pass nothing and stay loud, while the
+    // key-distributor effect and ensureGroupKeys pass true. See the note above publish().
+    const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', GROUPKEY_D + groupId], ['t', NET]], content }, churchSk), { background: !!opts.background });
     if (ok === false) return false;
     if (skipped.length) {
       console.warn('[steward] group key ' + groupId + ': could not seal to ' + skipped.length + ' member(s) — they cannot read or post in that room');
@@ -5058,11 +5136,36 @@ window.Steward = {
     try { r = await window.Steward.publishGroupKey(group.id, memberPubs); } catch (e) { r = null; }
     // no usable envelope on the relay → the group doc is never touched; the room stays honestly cleartext
     if (r === null || r === false) return { sealed: false, reason: r === null ? 'cannot-key' : 'relay-refused' };
+    // `_sealAt` IS NOT DECORATION — a spread from an EARLIER write of this same document would be read as
+    // this one's. Found reading my own diff back, 2026-09-17, before it shipped: publishGroup answers null on
+    // its FIRST line when there is no signing key, without ever reaching _publishToRelays, so nothing new is
+    // recorded — and a seal that had half-landed an hour ago would then be reported as having half-landed
+    // now. A stale spread is a worse lie than the one this fix removes, because it names relays.
+    const _sealAt = Date.now();
     const ok = await window.Steward.publishGroup({ ...group, encrypted: true });
     // publishGroup resolves an OBJECT even when every relay refused (its .then builds one over publish()'s
     // false) — `ts` carries the truth: the accepted event's created_at, or false. Reading mere truthiness
     // here would report a refused flag write as sealed, which is the exact lie this function exists to end.
-    if (!ok || !ok.ts) return { sealed: false, keyPublished: true, reason: 'flag-failed' };
+    // TWO DIFFERENT FAILURES, AND ONLY ONE OF THEM IS "NOTHING IS SEALED".
+    //
+    // publishGroup answers null for a write that reached NO relay and for one that reached SOME — both are
+    // not-done, and both must stay not-done (see _lastSpread). But they are not the same thing to the person
+    // holding the phone: a flag that landed on the relay their church actually lives on IS in force there,
+    // and the sentence "messages are still readable by the relay" is then false. Measured on the owner's
+    // delegated console, 2026-09-17: the seal worked, and the dialog said it had not.
+    //
+    // `landed` is the honest middle answer. The room is sealed on the relays named in it and cleartext on the
+    // ones in `missed`, and the console says exactly that instead of guessing at one of the two extremes.
+    if (!ok || !ok.ts) {
+      let spread = null;
+      // try/catch because the tests LIFT this method out of the bundle and run it, where a name from the
+      // enclosing IIFE is undefined. No answer means "we do not know", which falls to the older, safer
+      // sentence rather than inventing a spread.
+      try { const _s = _spreadOf(GROUP_D + group.id); if (_s && _s.at >= _sealAt) spread = _s; } catch (x) { spread = null; }
+      spread = spread || { landed: [], missed: [] };
+      return { sealed: false, keyPublished: true, landed: spread.landed, missed: spread.missed,
+               reason: spread.landed.length ? 'flag-partial' : 'flag-failed' };
+    }
     return { sealed: true, skipped: (r && r.skipped) || [] };
   },
   // ---- moderation: the church's blocklist (banned member pubkeys). The relay rejects their writes

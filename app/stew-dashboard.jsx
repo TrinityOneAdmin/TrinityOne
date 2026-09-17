@@ -293,8 +293,10 @@ function relayRejectionActive() {
 // relay-rejection alarm); each known reason gets its own sentence; anything else we do not recognise is quoted
 // from the relay verbatim rather than given an invented explanation. Only a genuine connection failure — the
 // case with no reason at all — is auto-dismissed, because the others need the steward to do something.
-function publishErrorMessage(reason, evt) {
+// `opts.background` says the console started this write by itself — see publish() in src/steward.src.js.
+function publishErrorMessage(reason, evt, opts) {
   const r = String(reason || '');
+  const background = !!(opts && opts.background);
   // A DECLINED KIND IS NOT A WRONG KEY. "not a member or not permitted" is the relay's answer both to "you
   // are not this church" and to "I do not store that kind of event" — and kind:10002, the NIP-65 relay
   // list, is always the second. Reporting it as the first told stewards on healthy churches to restore
@@ -321,8 +323,28 @@ function publishErrorMessage(reason, evt) {
     // this file with `new Function` and runs it with no DOM, so a bare `window` is a ReferenceError that
     // takes three existing tests down with it. (It did, before this guard.)
     const delegated = !!(typeof window !== 'undefined' && window.Steward && window.Steward.actingChurch);
-    if (delegated) return { wrongChurch: false, sticky: true,
-      msg: 'That change wasn’t saved — this part of the church hasn’t been given to you. Ask whoever holds the church key; they can change what you may do from their own console.' };
+    if (delegated) {
+      // ⚠ A WRITE NOBODY ASKED FOR, CORRECTLY DECLINED, IS NOT A STEWARD'S FAILED CHANGE.
+      //
+      // The sentence below is right for a control a steward TAPPED and wrong for the key-distributor effect,
+      // which republishes trinityone/carekey: and the group-key envelopes on every roster re-emit. On the
+      // owner's delegated console those are refused every single time, correctly — that steward has no care
+      // grant — and `sticky: true` means the alarm came back on every tab for ever, over a change that was
+      // never made. Measured 2026-09-07, and again on the relay's own rejected.log 2026-09-17 (13:01:48.977
+      // and 13:01:55.018, bracketing a seal that WORKED).
+      //
+      // NOT SILENCE. This codebase's standing failure is refusals that reach no screen at all, so it still
+      // speaks — once, non-sticky, in its own quiet slot, and leading with the fact that nothing the steward
+      // did has failed. The slot is what makes it once: see PublishErrorBanner.
+      //
+      // ONLY THE DELEGATED BRANCH IS SOFTENED. For an OWNER this same refusal means the relay is not carrying
+      // their church, which is a standing state that must keep raising the alarm and revealing the
+      // registration panel — background or not.
+      if (background) return { wrongChurch: false, sticky: false, quiet: true,
+        msg: 'Nothing you did has failed. This console keeps some of the church’s keys up to date by itself and isn’t allowed to — ask whoever holds the church key if care, or a sealed room, looks incomplete.' };
+      return { wrongChurch: false, sticky: true,
+        msg: 'That change wasn’t saved — this part of the church hasn’t been given to you. Ask whoever holds the church key; they can change what you may do from their own console.' };
+    }
     // DO NOT LEAD WITH "restore your church key". That is destructive and irreversible, and it cannot fix
     // the likelier cause: this refusal string covers BOTH "wrong key" and "this relay does not carry this
     // church", and the second is what a relay reset or a restore without church.json produces. Measured
@@ -380,11 +402,39 @@ function PublishErrorBanner() {
   // IT IS ALSO STICKY. It is not a transient failure — it is a standing state ("you believe you are
   // self-hosting and you are not") that stays true until somebody acts on it.
   const [regMsg, setRegMsg] = React.useState('');
+  // ⚠ AND A FOURTH SLOT, FOR A REFUSAL THE STEWARD DID NOT CAUSE. The key-distributor effect republishes the
+  // church's key envelopes whenever the roster re-emits; on a delegated console without that grant the relay
+  // correctly refuses every one of them, and until now each refusal set the STICKY generic slot. The result
+  // was a standing pink alarm on every tab of a console that was working perfectly, saying a change had
+  // failed when the steward had made none. Measured on a real delegated console 2026-09-07, and on the
+  // relay's own rejected.log 2026-09-17 — where the two refusals bracket a seal that SUCCEEDED.
+  //
+  // Its own slot, for the same reason `sgMsg` and `regMsg` have theirs: last-event-wins across one shared
+  // string is how the message that matters gets evicted (AUDIT-8). This is the one slot where eviction would
+  // be harmless and it still does not share, because a quiet note must never be able to overwrite an alarm.
+  //
+  // SAID ONCE PER CONSOLE SESSION, PER SENTENCE. The refused write is retried on every roster change, so
+  // without `saidQuiet` this would flash the note over and over — the same defect in a lighter colour.
+  const [bgMsg, setBgMsg] = React.useState('');
+  const saidQuiet = React.useRef({});
   React.useEffect(() => {
     const f = (e) => {
-      const { msg: m, wrongChurch, sticky } = publishErrorMessage((e.detail && e.detail.reason) || '', e.detail && e.detail.evt);
+      const d = e.detail || {};
+      const { msg: m, wrongChurch, sticky, quiet } = publishErrorMessage(d.reason || '', d.evt, { background: !!d.background });
       if (!m) return;   // a refusal we deliberately do not surface (see publishErrorMessage)
-      if (wrongChurch) noteRelayRejection(e.detail && e.detail.refused);
+      if (wrongChurch) noteRelayRejection(d.refused);
+      if (quiet) {
+        // EVERY ONE OF THESE STILL REACHES THE LOG, whether or not the note is shown again, so a background
+        // refusal is never invisible to anyone reading the console — it is only ever unshouted.
+        try { console.warn('[console] a background write was refused:', d.reason || '(no reason given)',
+          (((d.evt && d.evt.tags) || []).find(t => t[0] === 'd') || [])[1] || ''); } catch (x) {}
+        if (saidQuiet.current[m]) return;
+        saidQuiet.current[m] = true;
+        setBgMsg(m);
+        clearTimeout(f._q);
+        f._q = setTimeout(() => setBgMsg(''), 12000);
+        return;
+      }
       setMsg(m);
       clearTimeout(f._t);
       if (!sticky) f._t = setTimeout(() => setMsg(''), 9000);   // actionable failures stay until dismissed
@@ -406,17 +456,21 @@ function PublishErrorBanner() {
     window.addEventListener('steward-write-blocked', g);
     return () => { window.removeEventListener('steward-publish-error', f); window.removeEventListener('steward-write-blocked', g); };
   }, []);
-  if (!msg && !sgMsg && !regMsg) return null;
+  if (!msg && !sgMsg && !regMsg && !bgMsg) return null;
   // role="alert" + aria-live so a screen reader ANNOUNCES it. The console's only failure banner was the one
   // surface in this codebase without it — app/ui.jsx, app/screens-today.jsx and app/stew-meals.jsx all get it
   // right — so a TalkBack user got nothing at all when a child-safeguarding warning appeared. The dismiss
   // button was a bare 15px icon measured at 27x17, below the WCAG 2.5.8 minimum of 24x24 and far below the
   // 44x44 a cheap Android phone needs; padded out with a negative margin so it keeps its visual size.
+  // `tone: 'quiet'` IS NOT AN ALARM AND MUST NOT LOOK LIKE ONE. Same card, same dismiss, same role=alert —
+  // a screen reader still gets it — in the console's neutral surface rather than the clay/pink one every
+  // other message here uses, because the whole point of the slot is that nothing has gone wrong for the
+  // person reading it.
   const card = (text, key, clear, tone) => (
     <div key={key} role="alert" aria-live={tone === 'sg' ? 'assertive' : 'polite'} aria-atomic="true"
-      style={{ pointerEvents: 'auto', maxWidth: 560, width: '100%', display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 14px', borderRadius: 13, background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 40%, transparent)', boxShadow: 'var(--shadow-lg)' }}>
-      <Icon name={tone === 'sg' ? 'shield' : 'bolt'} size={17} color="var(--clay)" style={{ flexShrink: 0, marginTop: 1 }} />
-      <div style={{ flex: 1, fontSize: 12.5, color: 'var(--ink)', lineHeight: 1.45, fontWeight: 600 }}>{text}</div>
+      style={{ pointerEvents: 'auto', maxWidth: 560, width: '100%', display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 14px', borderRadius: 13, background: tone === 'quiet' ? 'var(--surface-2)' : 'color-mix(in oklab, var(--clay) 12%, var(--surface))', border: tone === 'quiet' ? '1px solid var(--line)' : '1px solid color-mix(in oklab, var(--clay) 40%, transparent)', boxShadow: 'var(--shadow-lg)' }}>
+      <Icon name={tone === 'sg' ? 'shield' : 'bolt'} size={17} color={tone === 'quiet' ? 'var(--ink-3)' : 'var(--clay)'} style={{ flexShrink: 0, marginTop: 1 }} />
+      <div style={{ flex: 1, fontSize: 12.5, color: tone === 'quiet' ? 'var(--ink-2)' : 'var(--ink)', lineHeight: 1.45, fontWeight: 600 }}>{text}</div>
       {/* padding:14 with margin:-14 already gives this a ~44px target without changing the layout; only the
           accessible name was missing. A second `style` added here for one commit silently won and undid it. */}
       <button onClick={clear} aria-label="Dismiss this message" title="Dismiss this message"
@@ -450,6 +504,9 @@ function PublishErrorBanner() {
           failed once. Both stay until dismissed — this one because nothing clears it but acting on it. */}
       {regMsg ? card(regMsg, 'reg', () => setRegMsg(''), 'gen') : null}
       {msg ? card(msg, 'gen', () => setMsg(''), 'gen') : null}
+      {/* LAST, and lowest: a note about something the console did by itself never outranks something a
+          steward did. */}
+      {bgMsg ? card(bgMsg, 'bg', () => setBgMsg(''), 'quiet') : null}
     </div>
   );
 }
@@ -582,7 +639,7 @@ function KeyDistributor() {
           if (pending.current[g.id]) continue;
           if (Date.now() < (nextTry.current[g.id] || 0)) continue;
           pending.current[g.id] = true;
-          Promise.resolve(window.Steward.publishGroupKey(g.id, recips, { reuseOnly: true })).then(r => {
+          Promise.resolve(window.Steward.publishGroupKey(g.id, recips, { reuseOnly: true, background: true })).then(r => {
             pending.current[g.id] = false;
             if (r === false) {
               const n = (failCount.current[g.id] || 0) + 1; failCount.current[g.id] = n;
@@ -612,7 +669,14 @@ function KeyDistributor() {
     // H3: and the CARE key, so every member can open a need and volunteer. Mints only after the
     // subscription has confirmed no envelope exists — never on a cold null, which is what orphaned
     // every sealed need in the first attempt. Stewards are included so a delegated console can re-key.
-    if (window.Steward && window.Steward.ensureCareKeyForMembers) window.Steward.ensureCareKeyForMembers(memberPubs, stewardRoster);
+    // `{ background: true }` — NOBODY ASKED FOR THIS WRITE, so its refusal must not raise the console's
+    // standing alarm. This effect re-runs on every roster re-emit, and on a delegated console with no care
+    // grant the relay correctly refuses the carekey document every single time; the sticky banner then sat
+    // on every tab saying a change the steward never made had not been saved. Measured 2026-09-07 and again
+    // 2026-09-17 (relay rejected.log, 13:01:48 and 13:01:55, bracketing a seal that worked). The refusal is
+    // still reported — quietly, once, by PublishErrorBanner — and a care control the steward TAPS is
+    // untouched by this, because it does not come through here.
+    if (window.Steward && window.Steward.ensureCareKeyForMembers) window.Steward.ensureCareKeyForMembers(memberPubs, stewardRoster, { background: true });
     // …and the NAME key. Without this nothing ever mints one, the member app's key list stays empty, and every
     // seal silently no-ops — the whole mechanism present and doing nothing, which is the failure mode this
     // codebase specialises in.
@@ -3317,10 +3381,24 @@ function DashGroups() {
     try { r = await window.Steward.sealGroup(s.g, recipsFor(s.g)); } catch (e) { r = null; }
     clearTimeout(guard);
     if (!r || !r.sealed) {
+      // ⚠ 'flag-partial' IS A DIFFERENT SENTENCE FROM 'flag-failed', AND SAYING THE WRONG ONE IS A LIE ABOUT
+      // PRIVACY. Both mean the flag write is not done — Steward.sealGroup keeps all-must-accept, and neither
+      // reports success — but they are not the same news. Measured on the owner's delegated console,
+      // 2026-09-17: four relays connected, exactly one carrying this church, the seal STORED on that one with
+      // `encrypted: true` and no refusal in the relay's log. The steward was shown the flag-failed sentence,
+      // which asserts “messages are still readable by the relay” — untrue of the only relay their church is
+      // on — and told to try again, which cannot succeed while a connected relay does not carry the church.
+      const hostOf = (u) => { try { return new URL(u).host; } catch (e) { return String(u || ''); } };
+      const missed = (r && r.missed) || [], landed = (r && r.landed) || [];
       const why = r && r.reason === 'not-authed'
         ? 'This console isn’t connected to your church’s relay yet, so the group can’t be sealed. Wait for the connection and try again — nothing is sealed yet.'
+        : r && r.reason === 'flag-partial'
+          ? 'The key was saved, and “' + (s.g.name || 'this group') + '” is now sealed on ' + landed.length + ' of ' + (landed.length + missed.length) + ' relays. '
+            + missed.map(hostOf).join(', ') + ' would not take it, so messages that go through '
+            + (missed.length === 1 ? 'it' : 'them') + ' can still be read there. Trying again won’t change that if '
+            + (missed.length === 1 ? 'that relay doesn’t' : 'those relays don’t') + ' carry your church — see Settings → Relays.'
         : r && r.reason === 'flag-failed'
-          ? 'The group’s key was saved but the group could not be marked encrypted. Try again — until it succeeds, messages are still readable by the relay.'
+          ? 'The group’s key was saved but no relay accepted the lock, so “' + (s.g.name || 'this group') + '” is unchanged and its messages are still readable by the relay. Try again.'
           : 'The relay didn’t accept the group’s key, so “' + (s.g.name || 'this group') + '” stays unencrypted. Check your connection and try again.';
       setSealing(cur => cur ? { ...cur, busy: false, err: why } : cur);
       return;
@@ -7777,7 +7855,11 @@ function DashFeaturesPanel({ church, show = null }) {
   // group sealed — so "Encrypt all: on" never overstates what happened.
   const doEncryptAll = async () => {
     setConfirmEnc(false);
-    const failed = [], partial = [];
+    // THREE OUTCOMES, NOT TWO. `half` is the same distinction the seal dialog gained on 2026-09-17: a flag
+    // write that reached SOME relays leaves the room sealed on those and cleartext on the rest, so calling it
+    // "stays unencrypted" is untrue of the relay the church actually lives on. It still is not success —
+    // "Encrypt all" stays off for it, exactly as for a total failure.
+    const failed = [], partial = [], half = [];
     for (const g of allGroups) {
       // Teams are skipped DELIBERATELY — they have no encryption control of their own, and encRecips() below
       // would seal a team room to every member of the church rather than to its roster, which is the wrong
@@ -7788,16 +7870,17 @@ function DashFeaturesPanel({ church, show = null }) {
       if (g.kind === 'team' || g.encrypted) continue;
       let r = null;
       try { r = await window.Steward.sealGroup(g, encRecips(g)); } catch (e) { r = null; }
-      if (!r || !r.sealed) failed.push(g.name || 'a group');
+      if (!r || !r.sealed) (r && r.reason === 'flag-partial' ? half : failed).push(g.name || 'a group');
       else if (r.skipped && r.skipped.length) partial.push(r.skipped.length + ' member(s) could not be given the key for “' + (g.name || 'a group') + '”');
     }
-    if (failed.length || partial.length) {
+    if (failed.length || partial.length || half.length) {
       const parts = [];
+      if (half.length) parts.push(half.length + ' group' + (half.length === 1 ? '' : 's') + ' reached only some of your relays, so ' + (half.length === 1 ? 'it is' : 'they are') + ' sealed on those and still readable on the others: ' + half.join(', ') + '. Check Settings → Relays — a relay that doesn’t carry your church will keep refusing.');
       if (failed.length) parts.push(failed.length + ' group' + (failed.length === 1 ? '' : 's') + ' could not be sealed and so ' + (failed.length === 1 ? 'stays' : 'stay') + ' unencrypted: ' + failed.join(', ') + '. “Encrypt all” stays off — try again once this console is connected.');
       if (partial.length) parts.push(partial.join('; ') + '. They will not be able to read or post there. Open each group and save it again to re-send.');
       try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'group key', message: parts.join(' ') } })); } catch (e) {}
     }
-    if (!failed.length) window.Steward.publishProfile({ features: { ...f, encryptComms: true } });
+    if (!failed.length && !half.length) window.Steward.publishProfile({ features: { ...f, encryptComms: true } });
   };
   const toggleEncryptAll = () => { if (encOn) window.Steward.publishProfile({ features: { ...f, encryptComms: false } }); else setConfirmEnc(true); };
   // member photos — ON by default; a church opts out via memberPhotos:false. Children are excluded unless

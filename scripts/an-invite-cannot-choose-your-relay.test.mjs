@@ -206,7 +206,7 @@ function consoleOn({ church, origin, canonical = [], pins = {}, extra = [], name
     stmt(src, 'var _gate = createRelayGate(', '_gate'),
     fnBody(src, 'function relays()', 'relays'),
     stmt(src, 'var NO_NETWORK_RELAY = ', 'NO_NETWORK_RELAY'),
-    fnBody(src, 'async function publish(evt)', 'publish'),
+    fnBody(src, 'async function publish(evt, opts)', 'publish'),
     fnBody(src, 'function _dirBases', '_dirBases'),
     fnBody(src, 'async function resolveRelayName', 'resolveRelayName'),
     fnBody(src, 'async function admitRemoteRelay', 'admitRemoteRelay'),

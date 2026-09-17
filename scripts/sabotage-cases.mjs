@@ -598,10 +598,10 @@ export const CASES = [
     // the exact pre-branch shape: advance `last` optimistically, so a failed publish is never retried and
     // the member who joined in that window has no key, for good
     find: `          pending.current[g.id] = true;
-          Promise.resolve(window.Steward.publishGroupKey(g.id, recips, { reuseOnly: true })).then(r => {`,
+          Promise.resolve(window.Steward.publishGroupKey(g.id, recips, { reuseOnly: true, background: true })).then(r => {`,
     replace: `          pending.current[g.id] = true;
           last.current[g.id] = key;
-          Promise.resolve(window.Steward.publishGroupKey(g.id, recips, { reuseOnly: true })).then(r => {`,
+          Promise.resolve(window.Steward.publishGroupKey(g.id, recips, { reuseOnly: true, background: true })).then(r => {`,
     test: 'scripts/group-key-ring.test.mjs',
   },
   {

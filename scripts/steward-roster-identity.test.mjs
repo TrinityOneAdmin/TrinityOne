@@ -124,7 +124,7 @@ test('the row leads with the owner\'s name, not the invented one', () => {
 });
 
 test('a refusal of our OWN superseded write does not alarm the steward', () => {
-  const body = stripComments(fnBody(VENDOR, 'async function publish(evt) {', 'publish'));
+  const body = stripComments(fnBody(VENDOR, 'async function publish(evt, opts) {', 'publish'));
   assert.match(body, /_lastOk/,
     'nothing records which of our writes the relay accepted, so a "newer version already stored" refusal of ' +
     'our own older copy is indistinguishable from a real failure');

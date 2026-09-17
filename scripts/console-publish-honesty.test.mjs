@@ -112,7 +112,7 @@ function consoleSide(urls, clock, ident, mutate, extra) {
   // state, so the wait is a no-op and this file keeps measuring exactly what it always measured.
   const gateSrc = 'let _regGate = null; const REG_GATE_MS = 45000;\n'
     + grab('async function _waitForRegistration()');
-  const publishSrc = gateSrc + grab('async function publish(evt)') + grab('async function _publishToRelays(evt, urls)');
+  const publishSrc = gateSrc + grab('async function publish(evt, opts)') + grab('async function _publishToRelays(evt, urls)');
   const pubClearance = grab('publishClearance(memberPub, status, urls)');
   const refresh = grab('refreshClearances(memberPubs, minors, approved, guardians)');
   // NOT grab('_refreshClearancesNow(...)'): its first occurrence is the CALL inside the refreshClearances
@@ -968,7 +968,7 @@ test('publish() checks the prefix rather than rejecting every string it is hande
   // The failure mode of an over-broad fix. A relay's OK reason is ALSO a string — usually '' but it can carry
   // text — and treating any string as a failure would make every successful save report as failed, which is
   // the same lie in the other direction and just as damaging (stewards re-entering data that saved fine).
-  const fn = grab('async function publish(evt)');
+  const fn = grab('async function publish(evt, opts)');
   assert.match(fn, /startsWith\(/,
     'publish() no longer discriminates by prefix. If it rejects any string resolution, a relay that answers ' +
     'OK with a reason string turns every successful save into a reported failure.');

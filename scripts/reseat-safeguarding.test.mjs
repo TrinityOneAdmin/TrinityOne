@@ -229,7 +229,7 @@ function consoleSide() {
   // the already-registered state, so nothing here waits.
   const decls = 'let _regGate = null; const REG_GATE_MS = 45000;\n'
     + grab(STEWARD, 'async function _waitForRegistration()')
-    + grab(STEWARD, 'async function publish(evt)')
+    + grab(STEWARD, 'async function publish(evt, opts)')
     + grab(STEWARD, 'var _beatsDoc = ') + ';\n'
     + grab(STEWARD, 'function _memberHonours(') + grab(STEWARD, 'function _topWeMustAnswer(')
     + grab(STEWARD, 'function _newestByD(') + grab(STEWARD, 'function _connectedRelays(')
