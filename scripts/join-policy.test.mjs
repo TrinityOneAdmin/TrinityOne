@@ -136,11 +136,18 @@ function consoleSide(church) {
   const ensure = grabMethod(STEWARD, 'ensureJoinPolicy()');
   // esbuild renames the nostr-tools import (finalizeEvent2 today). Binding the name I expected instead of the
   // one it emits makes every publish throw — which looks exactly like the relay refusing, i.e. like the bug.
-  const feName = (setJP.match(/\bfinalizeEvent\d*\b/) || [])[0];
-  assert.ok(feName, 'setJoinPolicy no longer signs an event — re-anchor this test');
+  // setJoinPolicy signs through feChurch now (2026-09-16), so the signer name has to be read out of THAT
+  // function rather than out of setJoinPolicy. feChurch itself is lifted from the bundle, not re-written
+  // here — this fixture is the church OWNER's console, where actingChurch is empty and feChurch stamps no
+  // church tag, so the four tests below still measure exactly what they always measured.
+  const feChurchSrc = grabMethod(STEWARD, 'function feChurch(tmpl, signer) {');
+  const feName = (feChurchSrc.match(/\bfinalizeEvent\d*\b/) || [])[0];
+  assert.ok(feName, 'feChurch no longer signs an event — re-anchor this test');
   scope[feName] = finalizeEvent;
+  scope.actingChurch = '';
+  scope._monotonic = (t) => t;   // the shipped one guards same-second replaceables and needs state; irrelevant here
   const args = Object.keys(scope);
-  const api = new Function(...args, `return ({ ${setJP},\n    ${ensure} });`)(...args.map(k => scope[k]));
+  const api = new Function(...args, `${feChurchSrc}\n    return ({ ${setJP},\n    ${ensure} });`)(...args.map(k => scope[k]));
   Object.assign(scope.window.Steward, api);
   return { api, blocked };
 }
