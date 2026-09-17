@@ -12,6 +12,15 @@
 // do so by inheriting a GENERIC rule that nobody chose for them, rather than by declaration. That is an
 // assurance gap, not a live hole, and this file is where it stops being invisible.
 //
+// ⚠ AND ONE OF THE FIVE WAS A LIVE HOLE AFTER ALL. "All five currently behave acceptably" was measured on
+// ONE CHURCH. `groupkey:` was measured again on 2026-09-17 against a relay carrying two, and the generic rule
+// it had inherited was `isMember` — the relay-wide union, which asks "a member of ANY church on this box".
+// So a steward of THIS church who had not also joined it was REFUSED her own room's key, and a member of a
+// DIFFERENT church was ACCEPTED writing it. Two of the five have since been given rules of their own:
+// checkin: (2026-08-20) and groupkey: (2026-09-17, below). The paragraph above is kept as written because its
+// reasoning is the reason this file exists — a rule nobody chose is a rule nobody checked — and its one wrong
+// word is the most useful thing on the page.
+//
 // WHAT THIS FILE IS NOT, YET. It does not replace the constants in gateway.mjs or the engines. Rewiring the
 // authorization spine to read from here is a behaviour-changing edit to infrastructure and is deliberately a
 // separate, later step. For now this is the DECLARATION, and scripts/doc-registry.test.mjs is the conformance
@@ -98,6 +107,15 @@ export const DOC_TYPES = Object.freeze({
   'trinityone/careskip:':     { write: 'recipient', read: 'members', scope: 'tag',    note: 'RECIPIENT-only, enforced by a sealed token' },
   'trinityone/careavail:':    { write: 'member',    read: 'members', scope: 'suffix', note: 'non-minors only, on BOTH sides: a minor may not write one, and one written before they were marked is no longer served to ordinary members \u2014 only to the author, the church, its network, its stewards and care admins' },
   'trinityone/carekey:':      { write: 'steward',   read: 'members', scope: 'suffix' },
+  // THE SEALED-ROOM KEY, given a rule of its own on 2026-09-17. It was UNDECLARED until then, and the entry
+  // below records what that cost rather than quietly deleting it. With no branch in accept() it fell to the
+  // generic member catch-all, which answers the relay-wide question "is this key a member of ANY church on
+  // this box" — so a steward of THIS church who had not also joined it was REFUSED her own room's key, while
+  // a member of a CO-TENANT church was ACCEPTED writing it. Both measured on a live relay. `scope` is 'tag'
+  // in the sense that matters here: the owning church is resolved from the GROUP the d-tag names
+  // (GROUP_CHURCH / the id's own owner prefix), never from a ['church'] tag on the event — publishGroupKey
+  // does not write one at all.
+  'trinityone/groupkey:':     { write: 'steward',   read: 'members', scope: 'tag',    gatedBy: "d.startsWith(GROUPKEY_D)", note: 'the key that makes an encrypted room readable, wrapped per member. Member-readable is correct — each member can only unwrap their own copy. WRITE is the church, a network of that church, or a steward of the church that owns the GROUP holding the sealed-rooms capability; "content" does NOT carry it, because minting a room key means holding it and so reading the room' },
   'trinityone/financekey:':   { write: 'church',    read: 'members', scope: 'suffix', note: 'owner-only mint — the church books\u2019 key, wrapped to the church and to every steward holding the finance capability' },
   'trinityone/checkinkey:':   { write: 'church',    read: 'members', scope: 'suffix', note: 'owner-only mint — the children\u2019s register key, wrapped to the church and to every steward holding the SAFEGUARDING capability. Separate from financekey: deliberately: until 2026-08-20 both the register and the ledger were sealed with one key derived from the church secret, so granting a treasurer Finance handed them every child\u2019s name, room and pickup code' },
   'trinityone/checkin:':      { write: 'mixed',     read: 'church',  scope: 'tag',    note: 'one child\u2019s presence at one session, sealed under the SAFEGUARDING key. Church or a steward holding safeguarding; NOT the member catch-all — these are addressable, so an ordinary member could otherwise overwrite a child\u2019s presence record with anything and it would vanish from the register. READ WAS \'members\' UNTIL 2026-09-09 \u2014 every member of the church received the ciphertext, and this registry said so outright. The check-in helper capability made that indefensible: a helper key is scoped to one session, and a register whose ciphertext the whole congregation already holds cannot be re-scoped by any gate afterwards. The set is now the church, its network, a steward the church EXPLICITLY ticked for safeguarding (stewardCanExplicitly — an unscoped steward is refused, owner 2026-09-12: they were never given the register key, so all they ever received was the cleartext tags), an IN-WINDOW HELPER of the session named in the record\u2019s [\'session\'] tag, the guardian the record names in a [\'p\'] tag, and \u2014 for an older young person who has an account \u2014 a guardian of that person in the church\u2019s own guardians: map (guardianOfIn, one-directional, with minorOf as a second refusal). WRITE gained that same helper. The column says \'church\' because there is no value for this set and \'members\' would now be a lie; the honest list is the sentence above. \u26a0 THIS SENTENCE WAS TRUE OF THE DESIGN AND FALSE OF THE CODE UNTIL 2026-09-11: canRead short-circuited on stewardCan(\u2026,\'any\') || careAdmin(\u2026) BEFORE reaching the check-in branch, so a Finance-only treasurer, a Groups-&-rotas volunteer and every care admin were served every record. Sealed, but [\'p\'] and [\'session\'] are cleartext and roster: turns a pubkey into a name \u2014 \u201cthis named parent had a child at church on this date\u201d, with no key. REACH, measured rather than waved at: publishCheckin wrote no [‘p’] and no [‘session’] tag until 2026-09-09, and a record naming no parent supports no inference about one — so this reaches every record written SINCE that date, not the whole history. Fixed by deciding the check-in documents BEFORE that short-circuit; see checkinReader() in scripts/gateway.mjs' },
@@ -171,7 +189,6 @@ export const DOC_TYPES = Object.freeze({
 // were measured on 2026-07-29 and are acceptable — but nobody chose them, and that is the point of listing
 // them here. Anything ADDED to this list is a decision someone has to make on purpose.
 export const UNDECLARED = Object.freeze({
-  'trinityone/groupkey:':  'church-authored key envelope, wrapped per member; member-readable is correct — each member can only unwrap their own copy',
   'trinityone/sermon:':    'church content for members; generic church rule is right, but undeclared',
   'trinityone/msgtags':    'steward-defined chat tag labels; church-wide and not sensitive',
   'trinityone/backup-meta:': 'church-authored, CLEARTEXT {at, remind} — when the church last exported its data and how often it is reminded. Member-readable under the generic rule. Harmless in itself, but it does tell any member how long the church has gone without a backup',
@@ -246,6 +263,7 @@ export const D = Object.freeze({
   NAMEKEY:        k('trinityone/namekey:'),
   NAME:           k('trinityone/name:'),
   CAREKEY:        k('trinityone/carekey:'),
+  GROUPKEY:       k('trinityone/groupkey:'),
   FINANCEKEY:     k('trinityone/financekey:'),
   CHECKINKEY:     k('trinityone/checkinkey:'),
   CHECKIN:        k('trinityone/checkin:'),

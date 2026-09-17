@@ -15365,7 +15365,7 @@ zoo`.split("\n");
   var _stewardNames = {};
   var _stewardNamesCt = "";
   var _stewardSince = {};
-  var STEWARD_CAPS = ["finance", "care", "safeguarding", "members", "content"];
+  var STEWARD_CAPS = ["finance", "care", "safeguarding", "members", "content", "sealedrooms"];
   var CAP_KEYS = {
     finance: { d: "trinityone/financekey:", cap: "finance", legacy: true, explicit: false },
     // the church books

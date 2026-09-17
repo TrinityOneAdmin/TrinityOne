@@ -51,7 +51,7 @@ function DelegateBrief({ onClose, churchName }) {
 // AND IT FAILS OPEN. myStewardCaps() returns null when we hold no roster yet — a console that has not
 // reached the relay, or an unscoped steward — and null means "everything". Hiding real controls because a
 // connection is slow would be worse than showing one that the relay then honestly refuses.
-const STEW_CAP_LABEL = { finance: 'Finance', care: 'Care', safeguarding: 'Safeguarding', members: 'Members', content: 'Groups & rotas' };
+const STEW_CAP_LABEL = { finance: 'Finance', care: 'Care', safeguarding: 'Safeguarding', members: 'Members', content: 'Groups & rotas', sealedrooms: 'Sealed rooms' };
 function stewCapState(cap) {
   const S = window.Steward || {};
   if (!S.actingChurch) return { allowed: true, owner: true, why: '' };          // the owner console: unrestricted
@@ -7122,7 +7122,7 @@ function DashStewardsPanel({ church }) {
   // written before this feature means and what a church that never opens this panel keeps.
   const caps = (window.Steward.stewardCaps && window.Steward.stewardCaps()) || {};
   const capNames = (window.Steward.stewardCapNames && window.Steward.stewardCapNames()) || [];
-  const CAP_LABEL = { finance: 'Finance', care: 'Care', safeguarding: 'Safeguarding', members: 'Members', content: 'Groups & rotas' };
+  const CAP_LABEL = { finance: 'Finance', care: 'Care', safeguarding: 'Safeguarding', members: 'Members', content: 'Groups & rotas', sealedrooms: 'Sealed rooms' };
   const CAP_SUB = {
     // This used to warn that the books were sealed to the church key and a delegate could not open them.
     // That limit was removed the same afternoon (the books now have a key of their own, wrapped to whoever
@@ -7142,6 +7142,11 @@ function DashStewardsPanel({ church }) {
     safeguarding: 'Clearances, photo decisions and kids check-in. They can SEE who is marked as a child, which adults are cleared, guardians, and check-in records — only you can CHANGE those lists.',
     members: 'Admit people, set the join policy, re-seat someone who lost their words. They can SEE the whole membership list with real names, and who is waiting to join.',
     content: 'Groups, rotas, services, events, posts. They can SEE every group including private ones, read what is said in them, and post to the whole church in its name.',
+    // ITS OWN TICK, NOT PART OF "Groups & rotas", and the sentence has to say why or the separation looks
+    // like fussiness. Locking a room means minting its key; whoever mints it holds it; whoever holds it can
+    // read the room. So this is the one that decides who can read a private conversation, and it is worth a
+    // deliberate yes on its own. — owner’s wording pending, 2026-09-17.
+    sealedrooms: 'Lock a room so only its members can read it, and unlock one. Whoever locks a room HOLDS its key, so they can SEE everything said in it — which is why this is separate from Groups & rotas.',
   };
   const setCaps = (pk, list) => {
     const next = { ...caps };
