@@ -26,11 +26,30 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # NB: macOS Intel (macos-13 / x86_64-apple-darwin) is intentionally omitted for now — that runner is
         # `bundles` restricts formats per-OS: Windows uses NSIS only (the WiX MSI bundler chokes on the large
         # payload tree), Linux ships AppImage + deb, macOS ships a .dmg. `stable` is the version-less name we
         # ALSO publish each installer under, so the app can link releases/latest/download/<stable> forever.
-        # NB: macOS Intel (macos-13) can be slow to get a runner; if it queues, the other assets still publish.
+        #
+        # macOS INTEL (macos-13 / x86_64-apple-darwin / stable name macos-x64) IS DELIBERATELY NOT HERE, and
+        # removing it is what makes this workflow publish anything at all. Two comments used to stand where
+        # this one does, and both were false: one said Intel was "intentionally omitted" while it sat in the
+        # matrix below, and one said "if it queues, the other assets still publish" — they do not.
+        #
+        # What actually happens, measured from the run history:
+        #     relay-v0.8.0-rc1   failure    24h 0m 1s   2026-08-25
+        #     relay-v0.7.2       failure    24h 0m 1s   2026-07-24
+        #     relay-v0.7.1       cancelled  24h 0m 2s   (x4, July)
+        # The macos-13 job never gets a runner. `fail-fast: false` keeps the SIBLING JOBS running, but it
+        # cannot make them PUBLISH: the release assets are attached by a step at the end of each job, and
+        # GitHub kills the whole workflow — every job with it — at its 24-hour ceiling. So Linux, Windows and
+        # Apple-silicon builds that finished in minutes were thrown away three times over, and GitHub's
+        # "latest release" is still relay-v0.7.1 from 10 July while the website's download links point at it.
+        # TrinityOne-Suite-macos-x64.dmg has never shipped once, so nothing that exists is being withdrawn.
+        #
+        # TO COME BACK once we understand why that runner never materialises (label retired? quota? the
+        # image's deprecation?) — the owner is getting Mac hardware for iPhone work anyway, so an Intel build
+        # may end up being cut locally rather than here. Apple silicon (macos-14) builds fine in minutes and
+        # is the macOS download the website advertises; it is untouched.
         include:
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
@@ -40,10 +59,6 @@ jobs:
             target: aarch64-apple-darwin
             bundles: app,dmg
             stable: macos-arm64
-          - os: macos-13          # Intel (older Macs — common in the field)
-            target: x86_64-apple-darwin
-            bundles: app,dmg
-            stable: macos-x64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             bundles: nsis

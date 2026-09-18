@@ -37,8 +37,13 @@ npx @tauri-apps/cli@2 build                              # installers in src-tau
 ```
 
 ## Release (CI)
-`.github/workflows/relay-desktop.yml` builds a 4-way matrix — Linux (`x86_64`), macOS Intel + Apple
-Silicon, Windows (`x86_64`) — each on its own native runner. **No Mac or Windows machine required.**
+`.github/workflows/relay-desktop.yml` builds a 3-way matrix — Linux (`x86_64`), macOS Apple Silicon,
+Windows (`x86_64`) — each on its own native runner. **No Mac or Windows machine required.**
+
+**No Intel macOS build.** `macos-13` was in the matrix until 2026-09-18 and never once got a runner: the
+job queued until GitHub killed the whole workflow at its 24-hour ceiling, taking the finished Linux,
+Windows and Apple-silicon assets with it. Three tagged releases published nothing that way. The matrix
+comment in the workflow has the measured run times and the conditions for bringing it back.
 - **Push a tag `relay-v1.2.3`** → builds all platforms and attaches the installers to a GitHub Release.
 - **Run workflow (manual)** → builds all platforms, uploads them as artifacts (no release) — use to test.
 
