@@ -21914,7 +21914,7 @@ zoo`.split("\n");
       if (!sk || !req || !req.memberPub) return Promise.resolve(null);
       const id = req.id || "req" + Date.now();
       const content = JSON.stringify({ serviceId: req.serviceId || "", teamId: req.teamId || "", roleId: req.roleId || "", role: req.role || "", teamName: req.teamName || "", icon: req.icon || "hand", accent: req.accent || "var(--clay)", date: req.date || "", time: req.time || "", service: req.service || "", from: req.from || "Your church", note: req.note || "" });
-      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", REQUEST_D + id], ["t", NET], ["p", req.memberPub]], content }, sk)).then((ok) => ok ? { id, ...JSON.parse(content), memberPub: req.memberPub } : null);
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", REQUEST_D + id], ["t", NET], ["p", req.memberPub]], content }, sk)).then((ok) => ok ? { id, ...JSON.parse(content), memberPub: req.memberPub } : null);
     },
     // the church's own "can you serve?" request docs (so the board can join replies to a slot)
     subscribeRequests(onRequests) {
