@@ -247,6 +247,87 @@ const MEASURE = `(() => {
       return { w: Math.round(r.width), h: Math.round(r.height),
                footW: Math.round(r.width + mx), footH: Math.round(r.height + my) };
     })(),
+    // ⚠ THE WHOLE RECT, ON A 1px GRID, WITH elementFromPoint — because getBoundingClientRect CANNOT SEE A
+    // CLIP. dismiss above reported a 44x44 button and was right about the box and wrong about the target:
+    // the wrapper is overflowY: 'auto' with the card flush against its top, so 3 rows of that box lived
+    // OUTSIDE the scroll container and were clipped away, and what answered there was the dialog's SCRIM —
+    // whose onClick is onCancel. A centre-point check is exactly what let that through, twice: once here and
+    // once on the sibling control, where the same negative margin reached 4px across Show's right edge and
+    // won the hit test because it paints later.
+    //
+    // For each of the banner's two controls: how many of its own pixels actually reach it, how many distinct
+    // rows and columns of it are live, how many live pixels fall OUTSIDE the painted card (a steward pressing
+    // visibly-dim pixels), and — for every pixel that is NOT its own — what is there instead.
+    grid: (() => {
+      const alertEl = document.querySelector('[role="alert"]');
+      if (!alertEl) return null;
+      const cardR = alertEl.getBoundingClientRect();
+      const name = (el) => el ? (el.getAttribute('aria-label') || (el.textContent || '').trim()).slice(0, 30) : null;
+      const owner = (x, y) => {
+        const e = document.elementFromPoint(x, y);
+        if (!e) return 'none';
+        const b2 = e.closest('button');
+        if (b2) return 'BUTTON:' + name(b2);
+        if (e.closest('[role="alert"]')) return 'banner';
+        if (e.closest('[role="dialog"]')) return 'dialog';
+        // A full-viewport overlay that is NOT the panel is the scrim, and every one of them carries
+        // onClick={onCancel} / onClick={onClose}. Naming it is the difference between "a few pixels miss"
+        // and "a few pixels throw away the dialog the steward was working in".
+        const cs2 = getComputedStyle(e);
+        if (cs2.position === 'fixed' && e.getBoundingClientRect().width >= innerWidth - 1) return 'SCRIM';
+        return 'other';
+      };
+      const scan = (el) => {
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        const x0 = Math.ceil(r.left), x1 = Math.floor(r.right) - 1;
+        const y0 = Math.ceil(r.top), y1 = Math.floor(r.bottom) - 1;
+        const rows = new Set(), cols = new Set(), notMine = {};
+        let hit = 0, total = 0, outsideCard = 0;
+        for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+          total++;
+          const e = document.elementFromPoint(x, y);
+          if (e && e.closest('button') === el) {
+            hit++; rows.add(y); cols.add(x);
+            if (x < cardR.left || x >= cardR.right || y < cardR.top || y >= cardR.bottom) outsideCard++;
+          } else {
+            const w2 = owner(x, y);
+            notMine[w2] = (notMine[w2] || 0) + 1;
+          }
+        }
+        return { w: Math.round(r.width), h: Math.round(r.height),
+                 left: Math.round(r.left), right: Math.round(r.right),
+                 top: Math.round(r.top), bottom: Math.round(r.bottom),
+                 total, hit, rows: rows.size, cols: cols.size, outsideCard, notMine };
+      };
+      const dEl = document.querySelector('[role="alert"] button[aria-label^="Dismiss"]');
+      const sEl = document.querySelector('[role="alert"] button[aria-label^="Show"]');
+      // And the other direction over the NEIGHBOUR: of Show's own pixels, how many does Dismiss own? Pressing
+      // one of those does not miss — it throws the message away, and dismissing is the only route by which
+      // the full text becomes unreachable.
+      let showStolen = null;
+      if (sEl) {
+        const r = sEl.getBoundingClientRect();
+        let stolen = 0;
+        for (let y = Math.ceil(r.top); y <= Math.floor(r.bottom) - 1; y++)
+          for (let x = Math.ceil(r.left); x <= Math.floor(r.right) - 1; x++) {
+            const e = document.elementFromPoint(x, y);
+            if (e && e.closest('button') === dEl) stolen++;
+          }
+        showStolen = stolen;
+      }
+      // THE INSTRUMENT'S OWN GUARD. The dismiss button is an icon plus padding; a stub that renders nothing
+      // gives it a zero-width child and every number above is then about a box this component never draws.
+      const ic = dEl ? dEl.firstElementChild : null;
+      const icr = ic ? ic.getBoundingClientRect() : null;
+      return {
+        card: { w: Math.round(cardR.width), h: Math.round(cardR.height),
+                left: Math.round(cardR.left), right: Math.round(cardR.right),
+                top: Math.round(cardR.top), bottom: Math.round(cardR.bottom) },
+        dismiss: scan(dEl), show: scan(sEl), showStolenByDismiss: showStolen,
+        icon: icr ? { w: Math.round(icr.width), h: Math.round(icr.height) } : null,
+      };
+    })(),
     atTitle: t ? at((t.left + t.right) / 2, t.top + 4) : null,
     atLastButton: buttons.length ? (() => { const r = box(buttons[buttons.length - 1]); return at((r.left + r.right) / 2, (r.top + r.bottom) / 2); })() : null,
   });
@@ -372,50 +453,107 @@ test('360x730: with NO dialog open the banner is back in flow, under the chrome,
     'than its cap, so a volunteer sees the header, the tabs and a wall of pink text and no church content');
 });
 
-// ── THE DISMISS CONTROL IS A REAL TARGET, IN BOTH STATES ───────────────────────────────────────────────────
+// ── THE DISMISS CONTROL IS A REAL TARGET, IN BOTH STATES — MEASURED PIXEL BY PIXEL ─────────────────────────
 //
-// The clamping added on 2026-09-17 shrank this button's padding from 14 to 10 while it was docked, which took
-// the target from 44x44 to 36x36 — measured here, in Chromium, at both sizes of the owner's handset. 36 is
-// over WCAG 2.5.8's 24 and under the 44 this codebase has held itself to since audit #27, on the one control
-// a steward presses to clear an error they have just been told about.
+// THE RECTANGLE IS NOT THE TARGET. The rows here used to ask `getBoundingClientRect()` for a width and a
+// height and call that the hit area, and it passed a 44x44 box of which:
+//   · 3 rows were CLIPPED AWAY by the wrapper's `overflowY: 'auto'` (the card is flush against its top, so a
+//     negative top margin puts the button outside the scroll container), and what answered in the lost band
+//     was the DIALOG'S SCRIM — `onClick={onCancel}`. Driven on the Oppo CPH2477 with the seal dialog open:
+//     the top corners of the little x CLOSED THE DIALOG and left the error standing. That is the exact shape
+//     this banner was already bitten by, where a strip painted as the banner and actuated what was behind it.
+//   · 243 of the 1760 pixels that did reach it were OUTSIDE THE PAINTED CARD, over the dim to its right and
+//     below — a steward pressing visibly-dim pixels and dismissing an error.
+//   · 100 pixels of the neighbouring `Show` pill belonged to it, because growing the border box from 36 to 44
+//     moved its left edge 4px across Show's right edge and this button paints later. That is not a miss: the
+//     rightmost column of "Show the whole message" THREW THE MESSAGE AWAY, and dismissing is the only route
+//     by which the full text becomes unreachable.
+// Those three numbers are what the rows below print when the c58970a shape is put back, at both sizes.
+// A centre-point check sees none of that. These rows scan the WHOLE rect on a 1px grid with elementFromPoint,
+// and scan the neighbour too.
 //
-// ⚠ AND THE OBVIOUS FIX IS THE WRONG ONE, which is why the second row exists. Simply restoring `padding: 14`
-// without the matching negative margin would put a 44px box inside a bar that is meant to be one line, and
-// the strip that has to clear a 92vh dialog at 328px of screen height would grow by 8px. The target and the
-// footprint are separated by the negative margin instead: the button hit-tests at 44x44 and reserves 16x16,
-// exactly as it already did with no dialog open.
+// WHY 37 AND NOT 44 WHILE DOCKED. The docked strip IS 37px tall — that is what clears a 92vh dialog at 328px
+// of screen, and steward.html shortens every dialog by exactly that reservation — so 44 vertical pixels
+// inside the painted card do not exist. The choice is a 44x37 target wholly inside the card, or a 44x44 box
+// that hangs 7px out over the dialog's scrim. It is the first. The 44 that a cheap Android phone needs is
+// kept in the dimension that has room (width), and the un-docked state below is still 44x44.
 for (const [label, W, H] of [['360x730 upright', 360, 730], ['730x328 landscape', 730, 328]]) {
-  test(`${label}: the banner's dismiss button is at least 44x44 with a dialog open`, { skip: !CHROME ? 'no chromium' : false, timeout: 120000 }, async () => {
+  test(`${label}: every pixel of the docked dismiss target actually reaches the dismiss button`, { skip: !CHROME ? 'no chromium' : false, timeout: 120000 }, async () => {
     const m = await measure('open', W, H);
-    assert.ok(m.dismiss, 're-anchor: the docked banner rendered no dismiss button');
-    assert.ok(m.dismiss.w >= 44 && m.dismiss.h >= 44,
-      `THE DISMISS BUTTON IS ${m.dismiss.w}x${m.dismiss.h} WHILE THE BANNER IS DOCKED at ${label}, under the ` +
-      '44x44 a cheap Android phone needs — and this is the control that clears an error message, so a miss ' +
-      'either does nothing or presses whatever the dialog has behind it.');
+    assert.ok(m.grid && m.grid.dismiss, 're-anchor: the docked banner rendered no dismiss button');
+    const g = m.grid.dismiss;
+    assert.equal(g.hit, g.total,
+      `${g.total - g.hit} of the dismiss button's ${g.total} px2 DO NOT REACH IT at ${label} — ` +
+      `${JSON.stringify(g.notMine)}. A rectangle is not a target: an ancestor clip is invisible to ` +
+      'getBoundingClientRect, and SCRIM there means the steward cancels the dialog they were working in.');
+    assert.equal(g.rows, g.h, `only ${g.rows} of the target's ${g.h} rows are live at ${label}`);
+    assert.equal(g.cols, g.w, `only ${g.cols} of the target's ${g.w} columns are live at ${label}`);
+    assert.ok(g.w >= 44,
+      `THE DISMISS TARGET IS ${g.w}px WIDE at ${label}, under the 44 a cheap Android phone needs on the one ` +
+      'control a steward presses to clear an error they have just been told about.');
   });
 
-  test(`${label}: …and the target costs the docked strip no height`, { skip: !CHROME ? 'no chromium' : false, timeout: 120000 }, async () => {
-    // The whole point of the shape: hit area 44, footprint 16, bar unchanged at one line. If a future edit
-    // grows the target by growing the box, this is the row that says so.
+  test(`${label}: …and none of it lies outside the painted banner card, which is still one line`, { skip: !CHROME ? 'no chromium' : false, timeout: 120000 }, async () => {
     const m = await measure('open', W, H);
-    assert.ok(m.dismiss.footH <= 16,
-      `the dismiss button reserves ${m.dismiss.footH}px of the docked strip's height (it may reserve 16): ` +
-      'the bar is no longer one line, and it is the bar that has to clear a 92vh dialog at 328px of screen.');
+    const g = m.grid.dismiss, c = m.grid.card;
+    assert.equal(g.outsideCard, 0,
+      `${g.outsideCard} px2 of the dismiss target are OUTSIDE THE PAINTED CARD at ${label} (card ` +
+      `${JSON.stringify(c)}, target ${JSON.stringify({ left: g.left, right: g.right, top: g.top, bottom: g.bottom })}) — ` +
+      'they read to a steward as the dialog\'s dim, and pressing them throws an error message away.');
+    // The target is the card's own right-hand end: exactly as tall as the card it sits in, and no wider than
+    // the room the card has. Derived from the card, so a change to the card's padding cannot leave it stale.
+    assert.deepEqual({ top: g.top, bottom: g.bottom }, { top: c.top, bottom: c.bottom },
+      `the docked target no longer spans the card's height at ${label} — every row it loses is a row a ` +
+      'finger has to be more accurate than the card looks');
     const barH = m.alert.bottom - m.alert.top;
     assert.ok(barH <= 40,
       `THE DOCKED BANNER IS ${barH}px TALL at ${label}. It was measured at 37 on the Oppo on 2026-09-17 and ` +
       'is meant to be one line — every pixel here comes off a dialog that is already 92vh.');
   });
+
+  test(`${label}: …and it takes not one pixel of the Show button beside it`, { skip: !CHROME ? 'no chromium' : false, timeout: 120000 }, async () => {
+    // THE NEIGHBOUR, because the fix for the target is what broke this. Dismiss paints after Show, so any
+    // overlap is silently won by Dismiss — and the two controls are opposites: one opens the whole message,
+    // the other is the only way to make it unreachable.
+    const m = await measure('open', W, H);
+    const s = m.grid.show;
+    assert.ok(s, 're-anchor: the docked banner rendered no Show button');
+    assert.equal(m.grid.showStolenByDismiss, 0,
+      `DISMISS OWNS ${m.grid.showStolenByDismiss} px2 OF THE SHOW BUTTON at ${label}. The rightmost pixels of ` +
+      'the pill labelled "Show the whole message" throw the message away instead of showing it.');
+    assert.equal(s.notMine['BUTTON:Dismiss this message'] || 0, 0,
+      `Show's own rectangle hit-tests as Dismiss in ${s.notMine['BUTTON:Dismiss this message']} places at ${label}`);
+    assert.ok(s.rows === s.h,
+      `only ${s.rows} of Show's ${s.h} rows are live at ${label} — something is sitting on it`);
+  });
 }
 
-test('360x730: the dismiss button is at least 44x44 with NO dialog open too', { skip: !CHROME ? 'no chromium' : false, timeout: 120000 }, async () => {
+test('360x730: the dismiss button is a full 44x44 with NO dialog open, every pixel of it', { skip: !CHROME ? 'no chromium' : false, timeout: 120000 }, async () => {
   // The control. This state was never broken — asserting it keeps a "fix" that trades one state for the
-  // other from reading as a pass.
+  // other from reading as a pass, and the in-flow card is 171px tall so 44x44 genuinely fits inside it.
   const m = await measure('shut', 360, 730);
-  assert.ok(m.dismiss, 're-anchor: the in-flow banner rendered no dismiss button');
+  assert.ok(m.dismiss && m.grid && m.grid.dismiss, 're-anchor: the in-flow banner rendered no dismiss button');
   assert.ok(m.dismiss.w >= 44 && m.dismiss.h >= 44,
     `the in-flow banner's dismiss button is ${m.dismiss.w}x${m.dismiss.h}, under 44x44`);
   assert.ok(m.dismiss.footW <= 16 && m.dismiss.footH <= 16,
     `the in-flow dismiss button reserves ${m.dismiss.footW}x${m.dismiss.footH}, not the 16x16 it has always ` +
     'reserved — the card is now a different size than it was before this button was touched');
+  const g = m.grid.dismiss;
+  assert.equal(g.hit, g.total,
+    `${g.total - g.hit} px2 of the in-flow dismiss target do not reach it — ${JSON.stringify(g.notMine)}`);
+  assert.equal(g.rows, g.h, `only ${g.rows} of ${g.h} rows are live with no dialog open`);
+  assert.equal(g.cols, g.w, `only ${g.cols} of ${g.w} columns are live with no dialog open`);
+});
+
+test('THE INSTRUMENT: the icon inside the dismiss button is a real 16px box, not nothing', { skip: !CHROME ? 'no chromium' : false, timeout: 120000 }, async () => {
+  // ⚠ NOTHING ELSE IN THIS FILE NOTICES IF THIS STUB GOES BACK TO RENDERING NOTHING. `minWidth: 44` pins the
+  // border box either way, so all the rows above stayed green with a zero-size icon — which is how this file
+  // once reported 20x20 where the phone had 36x36. The docked shape derives its height from the card rather
+  // than from the icon, so it survives a zero icon; the numbers it reports would still be a fiction.
+  for (const [which, w, h] of [['open', 360, 730], ['shut', 360, 730]]) {
+    const m = await measure(which, w, h);
+    assert.deepEqual(m.grid.icon, { w: 16, h: 16 },
+      `the dismiss button's icon measures ${JSON.stringify(m.grid.icon)} in the "${which}" fixture. A stub ` +
+      'that renders nothing makes every measurement in this file a measurement of padding.');
+  }
 });
