@@ -26,7 +26,45 @@ if (typeof document !== 'undefined' && !window.__stewEscWired) {
     try { top.close(); } catch (err) {}
   });
 }
+// ── IS ANY MODAL OPEN? ────────────────────────────────────────────────────────────────────────────────────
+//
+// Nothing outside a modal could answer that question, and one thing needs to: the console's error banner sits
+// ABOVE every overlay on purpose (z-index 240 over the overlays' 50-220 — AUDIT-9, because it was painted
+// underneath them, greyed and untappable, while FinanceShareStatement and the first-run wizard both publish
+// with their modal still open). The cost of that fix, found by the owner on the Oppo on 2026-09-17 and
+// described as “oddly cropped”: an opaque pink band across the TOP of an open dialog, over its title and
+// first lines. Both readings are right; what has to change is WHERE the banner sits while a dialog is up.
+//
+// A COUNTER, NOT A DOM QUERY. Every console dialog already comes through useStewDialog for Escape and focus,
+// so this is the one place that already knows, and it is exact — no observer, no polling, and a test can
+// drive it. What it does NOT cover is an overlay that skips this hook; the two in the console that did
+// (WizShell, and the meals care conversation) now call useStewModalOpen directly.
+//
+// ⚠ IT COUNTS, IT DOES NOT FLAG. Dialogs nest — SkConfirm opens over the categories modal — and a boolean
+// would clear on the inner one's close while the outer was still up.
+const _stewModals = [];
+function _stewModalsChanged() {
+  try { window.dispatchEvent(new CustomEvent('stew-modals', { detail: { open: _stewModals.length } })); } catch (e) {}
+}
+function useStewModalOpen(active) {
+  const on = active === undefined ? true : active;
+  React.useEffect(() => {
+    if (!on) return;
+    const tag = {};
+    _stewModals.push(tag);
+    _stewModalsChanged();
+    return () => {
+      const i = _stewModals.indexOf(tag);
+      if (i >= 0) _stewModals.splice(i, 1);
+      _stewModalsChanged();
+    };
+  }, [on]);
+}
+window.useStewModalOpen = useStewModalOpen;
+window.stewModalOpen = () => _stewModals.length > 0;
+
 function useStewDialog(onClose, active) {
+  useStewModalOpen(active);   // every console dialog registers itself by coming through here
   const on = active === undefined ? true : active;
   const panelRef = React.useRef(null);
   const closeRef = React.useRef(onClose);

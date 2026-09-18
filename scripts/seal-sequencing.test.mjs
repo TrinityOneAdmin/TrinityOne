@@ -111,6 +111,9 @@ test('the Encrypt-all sweep seals per group through Steward.sealGroup too', () =
   assert.match(fn, /await window\.Steward\.sealGroup\(/, 'the sweep must await each seal — a Pi relay cannot take N envelopes at once');
   assert.doesNotMatch(fn, /publishGroup\(\{\s*\.\.\.g,\s*encrypted:\s*true\s*\}\)/,
     'the sweep is flag-first again — a failing subset becomes dead rooms en masse');
-  assert.match(fn, /if \(!failed\.length\) window\.Steward\.publishProfile\(/,
-    'encryptComms must not flip on unless every group actually sealed');
+  // RE-ANCHORED 2026-09-17, not weakened: the sweep gained a third bucket, `half`, for a group whose flag
+  // write reached some relays and not others (see _lastSpread in src/steward.src.js). That is still not
+  // "every group actually sealed", so the switch must stay off for it too — which is what this now pins.
+  assert.match(fn, /if \(!failed\.length && !half\.length\) window\.Steward\.publishProfile\(/,
+    'encryptComms must not flip on unless every group actually sealed, on every relay');
 });

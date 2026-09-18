@@ -4,6 +4,10 @@
 // nobody enjoys writing: you can be removed at any time, and you will not be asked first. A steward who
 // learns that from a screen going blank mid-task learns something worse.
 function DelegateBrief({ onClose, churchName }) {
+  // REGISTER AS A MODAL. Full-viewport overlay, so the console's error banner has to know it is up in order
+  // to get out of the way of its heading — see the long note in WizShell for why this is written as an
+  // expression rather than a bare call or a named helper.
+  (typeof useStewModalOpen === 'function' ? useStewModalOpen : () => React.useEffect(() => {}, []))(true);
   const caps = (window.Steward && window.Steward.myStewardCaps && window.Steward.myStewardCaps()) || null;
   const named = Array.isArray(caps) ? caps.map(c => STEW_CAP_LABEL[c] || c) : null;
   return (
@@ -51,7 +55,7 @@ function DelegateBrief({ onClose, churchName }) {
 // AND IT FAILS OPEN. myStewardCaps() returns null when we hold no roster yet — a console that has not
 // reached the relay, or an unscoped steward — and null means "everything". Hiding real controls because a
 // connection is slow would be worse than showing one that the relay then honestly refuses.
-const STEW_CAP_LABEL = { finance: 'Finance', care: 'Care', safeguarding: 'Safeguarding', members: 'Members', content: 'Groups & rotas' };
+const STEW_CAP_LABEL = { finance: 'Finance', care: 'Care', safeguarding: 'Safeguarding', members: 'Members', content: 'Groups & rotas', sealedrooms: 'Sealed rooms' };
 function stewCapState(cap) {
   const S = window.Steward || {};
   if (!S.actingChurch) return { allowed: true, owner: true, why: '' };          // the owner console: unrestricted
@@ -293,8 +297,10 @@ function relayRejectionActive() {
 // relay-rejection alarm); each known reason gets its own sentence; anything else we do not recognise is quoted
 // from the relay verbatim rather than given an invented explanation. Only a genuine connection failure — the
 // case with no reason at all — is auto-dismissed, because the others need the steward to do something.
-function publishErrorMessage(reason, evt) {
+// `opts.background` says the console started this write by itself — see publish() in src/steward.src.js.
+function publishErrorMessage(reason, evt, opts) {
   const r = String(reason || '');
+  const background = !!(opts && opts.background);
   // A DECLINED KIND IS NOT A WRONG KEY. "not a member or not permitted" is the relay's answer both to "you
   // are not this church" and to "I do not store that kind of event" — and kind:10002, the NIP-65 relay
   // list, is always the second. Reporting it as the first told stewards on healthy churches to restore
@@ -321,8 +327,28 @@ function publishErrorMessage(reason, evt) {
     // this file with `new Function` and runs it with no DOM, so a bare `window` is a ReferenceError that
     // takes three existing tests down with it. (It did, before this guard.)
     const delegated = !!(typeof window !== 'undefined' && window.Steward && window.Steward.actingChurch);
-    if (delegated) return { wrongChurch: false, sticky: true,
-      msg: 'That change wasn’t saved — this part of the church hasn’t been given to you. Ask whoever holds the church key; they can change what you may do from their own console.' };
+    if (delegated) {
+      // ⚠ A WRITE NOBODY ASKED FOR, CORRECTLY DECLINED, IS NOT A STEWARD'S FAILED CHANGE.
+      //
+      // The sentence below is right for a control a steward TAPPED and wrong for the key-distributor effect,
+      // which republishes trinityone/carekey: and the group-key envelopes on every roster re-emit. On the
+      // owner's delegated console those are refused every single time, correctly — that steward has no care
+      // grant — and `sticky: true` means the alarm came back on every tab for ever, over a change that was
+      // never made. Measured 2026-09-07, and again on the relay's own rejected.log 2026-09-17 (13:01:48.977
+      // and 13:01:55.018, bracketing a seal that WORKED).
+      //
+      // NOT SILENCE. This codebase's standing failure is refusals that reach no screen at all, so it still
+      // speaks — once, non-sticky, in its own quiet slot, and leading with the fact that nothing the steward
+      // did has failed. The slot is what makes it once: see PublishErrorBanner.
+      //
+      // ONLY THE DELEGATED BRANCH IS SOFTENED. For an OWNER this same refusal means the relay is not carrying
+      // their church, which is a standing state that must keep raising the alarm and revealing the
+      // registration panel — background or not.
+      if (background) return { wrongChurch: false, sticky: false, quiet: true,
+        msg: 'Nothing you did has failed. This console keeps some of the church’s keys up to date by itself and isn’t allowed to — ask whoever holds the church key if care, or a sealed room, looks incomplete.' };
+      return { wrongChurch: false, sticky: true,
+        msg: 'That change wasn’t saved — this part of the church hasn’t been given to you. Ask whoever holds the church key; they can change what you may do from their own console.' };
+    }
     // DO NOT LEAD WITH "restore your church key". That is destructive and irreversible, and it cannot fix
     // the likelier cause: this refusal string covers BOTH "wrong key" and "this relay does not carry this
     // church", and the second is what a relay reset or a restore without church.json produces. Measured
@@ -380,11 +406,93 @@ function PublishErrorBanner() {
   // IT IS ALSO STICKY. It is not a transient failure — it is a standing state ("you believe you are
   // self-hosting and you are not") that stays true until somebody acts on it.
   const [regMsg, setRegMsg] = React.useState('');
+  // ⚠ AND A FOURTH SLOT, FOR A REFUSAL THE STEWARD DID NOT CAUSE. The key-distributor effect republishes the
+  // church's key envelopes whenever the roster re-emits; on a delegated console without that grant the relay
+  // correctly refuses every one of them, and until now each refusal set the STICKY generic slot. The result
+  // was a standing pink alarm on every tab of a console that was working perfectly, saying a change had
+  // failed when the steward had made none. Measured on a real delegated console 2026-09-07, and on the
+  // relay's own rejected.log 2026-09-17 — where the two refusals bracket a seal that SUCCEEDED.
+  //
+  // Its own slot, for the same reason `sgMsg` and `regMsg` have theirs: last-event-wins across one shared
+  // string is how the message that matters gets evicted (AUDIT-8). This is the one slot where eviction would
+  // be harmless and it still does not share, because a quiet note must never be able to overwrite an alarm.
+  //
+  // SAID ONCE PER CONSOLE SESSION, PER SENTENCE. The refused write is retried on every roster change, so
+  // without `saidQuiet` this would flash the note over and over — the same defect in a lighter colour.
+  const [bgMsg, setBgMsg] = React.useState('');
+  const saidQuiet = React.useRef({});
+  // ⚠ WHILE A DIALOG IS OPEN THIS BANNER MOVES TO THE BOTTOM AND SHRINKS TO ONE LINE.
+  //
+  // Both of the rules below it are still true and neither is being undone:
+  //   · it must OUTRANK modals (z-index 240 over their 50-220). AUDIT-9: in flow it lost its stacking context
+  //     and was painted underneath them, greyed and untappable, while FinanceShareStatement and the first-run
+  //     wizard both publish with their modal still open. A relay refusal must not explain itself behind a blur.
+  //   · it must not cover the TAB STRIP and must not eat the scrolling content region (AUDIT-8, AUDIT-9).
+  //
+  // The cost nobody costed: an opaque `var(--paper)` band, full width, sitting exactly where a centred
+  // dialog's top edge is at 360x730. The owner, on the Oppo, 2026-09-17, over the seal dialog: “oddly
+  // cropped” — the banner had taken its title and first lines.
+  //
+  // WHY THE BOTTOM, AND WHY COLLAPSED. A dialog's identity is at its top: the title, then the sentence that
+  // says what the button will do. The banner is the thing that may be summarised; the dialog is not. And at
+  // 730x328 — the Oppo in landscape, with 32px of navigation bar — a dialog may be 86vh tall, so there is no
+  // arrangement in which a multi-line banner and a full-height dialog are both entirely visible: something
+  // has to shrink, and it is the banner. One line, at the foot, with `Show` to open it in place; nothing is
+  // lost and nothing is hidden behind the dialog, because it still paints above it.
+  //
+  // MEASURED, not reasoned: see scripts/the-error-banner-does-not-crop-an-open-dialog.test.mjs, which reads
+  // the style object this component actually evaluates.
+  const [modalUp, setModalUp] = React.useState(() => {
+    try { return !!(window.stewModalOpen && window.stewModalOpen()); } catch (e) { return false; }
+  });
+  const [openWide, setOpenWide] = React.useState(false);   // the steward expanded the one-line bar
+  // RESERVE THE SPACE ON THE PAGE, so no dialog is ever laid out underneath this strip. The two lengths
+  // live in steward.html because CSS is the only thing that can reach 35 inline-styled overlays at once;
+  // this only says WHICH state is up. Cleared the moment the last message goes, so a dialog with no banner
+  // over it is exactly as tall as it has always been.
+  React.useEffect(() => {
+    const showing = !!(msg || sgMsg || regMsg || bgMsg);
+    try {
+      const el = document.documentElement;
+      if (showing && modalUp) el.setAttribute('data-stew-banner', openWide ? 'open' : 'clamped');
+      else el.removeAttribute('data-stew-banner');
+    } catch (e) {}
+    // ⚠ AND ON THE WAY OUT. Without this the console keeps every dialog short for the rest of the session
+    // after one message, which is the AUDIT-9 "it eats the page" defect wearing a different hat.
+    return () => { try { document.documentElement.removeAttribute('data-stew-banner'); } catch (e) {} };
+  }, [modalUp, openWide, msg, sgMsg, regMsg, bgMsg]);
+  React.useEffect(() => {
+    const h = () => {
+      let up = false;
+      try { up = !!(window.stewModalOpen && window.stewModalOpen()); } catch (e) {}
+      // EXPANDING IS FOR THIS DIALOG, NOT FOR EVER. Left latched, the next dialog opens under a banner the
+      // steward expanded ten minutes ago — which is the cropping this exists to stop, re-created by their
+      // own tap. Collapsing on close costs one tap and cannot surprise anyone.
+      if (!up) setOpenWide(false);
+      setModalUp(up);
+    };
+    window.addEventListener('stew-modals', h);
+    h();   // a dialog may already have been open when this mounted
+    return () => window.removeEventListener('stew-modals', h);
+  }, []);
   React.useEffect(() => {
     const f = (e) => {
-      const { msg: m, wrongChurch, sticky } = publishErrorMessage((e.detail && e.detail.reason) || '', e.detail && e.detail.evt);
+      const d = e.detail || {};
+      const { msg: m, wrongChurch, sticky, quiet } = publishErrorMessage(d.reason || '', d.evt, { background: !!d.background });
       if (!m) return;   // a refusal we deliberately do not surface (see publishErrorMessage)
-      if (wrongChurch) noteRelayRejection(e.detail && e.detail.refused);
+      if (wrongChurch) noteRelayRejection(d.refused);
+      if (quiet) {
+        // EVERY ONE OF THESE STILL REACHES THE LOG, whether or not the note is shown again, so a background
+        // refusal is never invisible to anyone reading the console — it is only ever unshouted.
+        try { console.warn('[console] a background write was refused:', d.reason || '(no reason given)',
+          (((d.evt && d.evt.tags) || []).find(t => t[0] === 'd') || [])[1] || ''); } catch (x) {}
+        if (saidQuiet.current[m]) return;
+        saidQuiet.current[m] = true;
+        setBgMsg(m);
+        clearTimeout(f._q);
+        f._q = setTimeout(() => setBgMsg(''), 12000);
+        return;
+      }
       setMsg(m);
       clearTimeout(f._t);
       if (!sticky) f._t = setTimeout(() => setMsg(''), 9000);   // actionable failures stay until dismissed
@@ -406,21 +514,38 @@ function PublishErrorBanner() {
     window.addEventListener('steward-write-blocked', g);
     return () => { window.removeEventListener('steward-publish-error', f); window.removeEventListener('steward-write-blocked', g); };
   }, []);
-  if (!msg && !sgMsg && !regMsg) return null;
+  if (!msg && !sgMsg && !regMsg && !bgMsg) return null;
   // role="alert" + aria-live so a screen reader ANNOUNCES it. The console's only failure banner was the one
   // surface in this codebase without it — app/ui.jsx, app/screens-today.jsx and app/stew-meals.jsx all get it
   // right — so a TalkBack user got nothing at all when a child-safeguarding warning appeared. The dismiss
   // button was a bare 15px icon measured at 27x17, below the WCAG 2.5.8 minimum of 24x24 and far below the
   // 44x44 a cheap Android phone needs; padded out with a negative margin so it keeps its visual size.
+  // `tone: 'quiet'` IS NOT AN ALARM AND MUST NOT LOOK LIKE ONE. Same card, same dismiss, same role=alert —
+  // a screen reader still gets it — in the console's neutral surface rather than the clay/pink one every
+  // other message here uses, because the whole point of the slot is that nothing has gone wrong for the
+  // person reading it.
+  const clamped = modalUp && !openWide;   // one line while a dialog is up, until the steward says otherwise
   const card = (text, key, clear, tone) => (
     <div key={key} role="alert" aria-live={tone === 'sg' ? 'assertive' : 'polite'} aria-atomic="true"
-      style={{ pointerEvents: 'auto', maxWidth: 560, width: '100%', display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 14px', borderRadius: 13, background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 40%, transparent)', boxShadow: 'var(--shadow-lg)' }}>
-      <Icon name={tone === 'sg' ? 'shield' : 'bolt'} size={17} color="var(--clay)" style={{ flexShrink: 0, marginTop: 1 }} />
-      <div style={{ flex: 1, fontSize: 12.5, color: 'var(--ink)', lineHeight: 1.45, fontWeight: 600 }}>{text}</div>
+      // ⚠ THE CARD INTERCEPTS, AND IT MUST. A pass-through card shipped here for exactly one commit and was
+      // the worst thing on this branch: the card is OPAQUE, so an 11px band that painted as an error banner
+      // actuated "Post to members" behind it — a steward aiming at the banner publishing the church's
+      // quarterly finances to every member. Measured at 730x328 with elementFromPoint.
+      // What keeps it off a dialog's buttons is not pointer-events; it is that the DIALOG GIVES UP THE
+      // SPACE — see the html[data-stew-banner] rules in steward.html and the effect that sets that
+      // attribute above.
+      style={{ pointerEvents: 'auto', maxWidth: 560, width: '100%', display: 'flex', alignItems: clamped ? 'center' : 'flex-start', gap: 10, padding: clamped ? '5px 10px' : '12px 14px', borderRadius: 13, background: tone === 'quiet' ? 'var(--surface-2)' : 'color-mix(in oklab, var(--clay) 12%, var(--surface))', border: tone === 'quiet' ? '1px solid var(--line)' : '1px solid color-mix(in oklab, var(--clay) 40%, transparent)', boxShadow: 'var(--shadow-lg)' }}>
+      <Icon name={tone === 'sg' ? 'shield' : 'bolt'} size={17} color={tone === 'quiet' ? 'var(--ink-3)' : 'var(--clay)'} style={{ flexShrink: 0, marginTop: clamped ? 0 : 1 }} />
+      <div style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: tone === 'quiet' ? 'var(--ink-2)' : 'var(--ink)', lineHeight: 1.45, fontWeight: 600, ...(clamped ? { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } : null) }}>{text}</div>
+      {/* THE WAY BACK TO THE WHOLE SENTENCE, and it has to be a real 24px-plus target on a cheap Android
+          phone (WCAG 2.5.8) like the dismiss beside it. A summary with no way to read the rest would be a
+          worse banner than the one that cropped the dialog. */}
+      {clamped ? <button onClick={() => setOpenWide(true)} aria-label="Show the whole message" title="Show the whole message"
+        style={{ pointerEvents: 'auto', border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '4px 9px', minHeight: 24, cursor: 'pointer', flexShrink: 0, fontSize: 11.5, fontWeight: 700, fontFamily: 'var(--font-ui)', color: 'var(--ink-2)' }}>Show</button> : null}
       {/* padding:14 with margin:-14 already gives this a ~44px target without changing the layout; only the
           accessible name was missing. A second `style` added here for one commit silently won and undid it. */}
       <button onClick={clear} aria-label="Dismiss this message" title="Dismiss this message"
-        style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0, padding: 14, margin: -14 }}><Icon name="x" size={16} /></button>
+        style={{ pointerEvents: 'auto', border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0, padding: clamped ? 10 : 14, margin: clamped ? -10 : -14 }}><Icon name="x" size={16} /></button>
     </div>
   );
   // BELOW the header, not over it. Absolutely positioned at top:12 the card covered the entire tab strip at
@@ -443,13 +568,29 @@ function PublishErrorBanner() {
   // elementFromPoint: every control including the Members tab the message tells you to open. Rendered as a
   // normal row between the header and the scrolling content, it pushes the page down instead, so the one
   // action the text asks for stays reachable while the warning is up. AUDIT-8.
+  // WITH NO DIALOG OPEN THIS IS EXACTLY WHAT IT WAS: in flow, below the header, above the content, opaque,
+  // capped at 40vh/220px, z-index 240. With one open it becomes a fixed strip at the FOOT of the viewport —
+  // still 240, so it is never behind the blur; transparent and pointer-transparent outside the card itself,
+  // so the dialog stays fully usable around it; and out of flow, so it cannot eat the content region either.
+  // `pointerEvents` goes back to auto once expanded, or a message long enough to need its own scrollbar
+  // could not be scrolled.
+  const wrapper = modalUp
+    ? { position: 'fixed', left: 0, right: 0, bottom: 0, zIndex: 240, background: 'transparent',
+        pointerEvents: openWide ? 'auto' : 'none',
+        maxHeight: openWide ? 'min(40vh, 220px)' : 'min(24vh, 62px)', overflowY: 'auto',
+        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '0 16px 6px' }
+    : { flexShrink: 1, minHeight: 0, maxHeight: 'min(40vh, 220px)', overflowY: 'auto', position: 'relative', zIndex: 240,
+        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '10px 16px 0', background: 'var(--paper)' };
   return (
-    <div style={{ flexShrink: 1, minHeight: 0, maxHeight: 'min(40vh, 220px)', overflowY: 'auto', position: 'relative', zIndex: 240, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '10px 16px 0', background: 'var(--paper)' }}>
+    <div style={wrapper}>
       {sgMsg ? card(sgMsg, 'sg', () => setSgMsg(''), 'sg') : null}
       {/* ABOVE the generic slot: a church that is not where its steward believes it is outranks a write that
           failed once. Both stay until dismissed — this one because nothing clears it but acting on it. */}
       {regMsg ? card(regMsg, 'reg', () => setRegMsg(''), 'gen') : null}
       {msg ? card(msg, 'gen', () => setMsg(''), 'gen') : null}
+      {/* LAST, and lowest: a note about something the console did by itself never outranks something a
+          steward did. */}
+      {bgMsg ? card(bgMsg, 'bg', () => setBgMsg(''), 'quiet') : null}
     </div>
   );
 }
@@ -582,7 +723,7 @@ function KeyDistributor() {
           if (pending.current[g.id]) continue;
           if (Date.now() < (nextTry.current[g.id] || 0)) continue;
           pending.current[g.id] = true;
-          Promise.resolve(window.Steward.publishGroupKey(g.id, recips, { reuseOnly: true })).then(r => {
+          Promise.resolve(window.Steward.publishGroupKey(g.id, recips, { reuseOnly: true, background: true })).then(r => {
             pending.current[g.id] = false;
             if (r === false) {
               const n = (failCount.current[g.id] || 0) + 1; failCount.current[g.id] = n;
@@ -612,7 +753,14 @@ function KeyDistributor() {
     // H3: and the CARE key, so every member can open a need and volunteer. Mints only after the
     // subscription has confirmed no envelope exists — never on a cold null, which is what orphaned
     // every sealed need in the first attempt. Stewards are included so a delegated console can re-key.
-    if (window.Steward && window.Steward.ensureCareKeyForMembers) window.Steward.ensureCareKeyForMembers(memberPubs, stewardRoster);
+    // `{ background: true }` — NOBODY ASKED FOR THIS WRITE, so its refusal must not raise the console's
+    // standing alarm. This effect re-runs on every roster re-emit, and on a delegated console with no care
+    // grant the relay correctly refuses the carekey document every single time; the sticky banner then sat
+    // on every tab saying a change the steward never made had not been saved. Measured 2026-09-07 and again
+    // 2026-09-17 (relay rejected.log, 13:01:48 and 13:01:55, bracketing a seal that worked). The refusal is
+    // still reported — quietly, once, by PublishErrorBanner — and a care control the steward TAPS is
+    // untouched by this, because it does not come through here.
+    if (window.Steward && window.Steward.ensureCareKeyForMembers) window.Steward.ensureCareKeyForMembers(memberPubs, stewardRoster, { background: true });
     // …and the NAME key. Without this nothing ever mints one, the member app's key list stays empty, and every
     // seal silently no-ops — the whole mechanism present and doing nothing, which is the failure mode this
     // codebase specialises in.
@@ -651,9 +799,29 @@ function KeyDistributor() {
 // wizard step chrome — module-level so its component type is stable across renders
 // (defining it inside StewSetupWizard would remount on every keystroke and blur the inputs).
 function WizShell({ step, title, sub, children, footer }) {
+  // REGISTERS AS A MODAL WITHOUT TAKING THE REST OF useStewDialog. This overlay is `position: fixed; inset: 0`
+  // at z-index 120 and the error banner sits above it — the first-run wizard publishes while it is open, which
+  // is one of the two cases AUDIT-9 raised the banner for — so the banner has to know it is up in order to get
+  // out of the way of its title. It deliberately does NOT adopt useStewDialog's focus trap and Escape: this
+  // shell has no onClose, and a wizard a steward could dismiss with Escape mid-setup is a different change.
+  // REGISTER AS A MODAL — see useStewModalOpen in app/stew-modal.jsx, which every other console dialog
+  // reaches through useStewDialog.
+  //
+  // ⚠ WHY THIS IS WRITTEN AS AN EXPRESSION AND NOT AS A NAMED HELPER. Two reasons, both measured today:
+  //   · a bare `useStewModalOpen(true)` is undefined in the ~26 tests that compile ONE app file and hand it
+  //     its globals by name, and none of them is about a modal registry. It took nine of them down;
+  //   · hoisting it into a module-level const, in BOTH this file and the other overlay's file, is a
+  //     DUPLICATE TOP-LEVEL NAME across two classic scripts, which is a SyntaxError that blanks the whole
+  //     console — this codebase has shipped that exact defect before.
+  // The fallback keeps the hook COUNT identical (one useEffect either way), so this is not a conditional
+  // hook: it is the same hook, from one of two places.
+  (typeof useStewModalOpen === 'function' ? useStewModalOpen : () => React.useEffect(() => {}, []))(true);
   return (
     <div style={{ position: 'fixed', overflowY: 'auto', inset: 0, zIndex: 120, display: 'flex', alignItems: 'safe center', justifyContent: 'center', padding: 24, background: 'color-mix(in oklab, var(--ink) 42%, transparent)', backdropFilter: 'blur(4px)', animation: 'lumenFade .18s ease both' }}>
-      <div className="no-scrollbar" style={{ width: 520, maxWidth: '100%', maxHeight: '92%', overflowY: 'auto', borderRadius: 24, background: 'var(--paper)', border: '1px solid var(--line)', boxShadow: '0 30px 80px rgba(0,0,0,.32)', animation: 'lumenScale .22s cubic-bezier(.2,.8,.3,1.1) both' }}>
+      {/* `data-stew-modal-panel` is the handle the html[data-stew-banner] rules in steward.html need. Every
+          other console panel carries role="dialog", which those rules match directly; this one does not
+          (see the note at the top of this component), so it says so another way. */}
+      <div className="no-scrollbar" data-stew-modal-panel="1" style={{ width: 520, maxWidth: '100%', maxHeight: '92%', overflowY: 'auto', borderRadius: 24, background: 'var(--paper)', border: '1px solid var(--line)', boxShadow: '0 30px 80px rgba(0,0,0,.32)', animation: 'lumenScale .22s cubic-bezier(.2,.8,.3,1.1) both' }}>
         <div style={{ padding: '26px 28px 0' }}>
           <div style={{ display: 'flex', gap: 6, marginBottom: 18 }}>{[0, 1, 2, 3, 4, 5, 6].map(i => <span key={i} style={{ height: 5, flex: 1, borderRadius: 999, background: i <= step ? 'var(--clay)' : 'var(--line)' }} />)}</div>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 24, letterSpacing: '-.4px' }}>{title}</div>
@@ -3317,10 +3485,30 @@ function DashGroups() {
     try { r = await window.Steward.sealGroup(s.g, recipsFor(s.g)); } catch (e) { r = null; }
     clearTimeout(guard);
     if (!r || !r.sealed) {
+      // ⚠ 'flag-partial' IS A DIFFERENT SENTENCE FROM 'flag-failed', AND SAYING THE WRONG ONE IS A LIE ABOUT
+      // PRIVACY. Both mean the flag write is not done — Steward.sealGroup keeps all-must-accept, and neither
+      // reports success — but they are not the same news. Measured on the owner's delegated console,
+      // 2026-09-17: four relays connected, exactly one carrying this church, the seal STORED on that one with
+      // `encrypted: true` and no refusal in the relay's log. The steward was shown the flag-failed sentence,
+      // which asserts “messages are still readable by the relay” — untrue of the only relay their church is
+      // on — and told to try again, which cannot succeed while a connected relay does not carry the church.
+      const hostOf = (u) => { try { return new URL(u).host; } catch (e) { return String(u || ''); } };
+      const missed = (r && r.missed) || [], landed = (r && r.landed) || [];
       const why = r && r.reason === 'not-authed'
         ? 'This console isn’t connected to your church’s relay yet, so the group can’t be sealed. Wait for the connection and try again — nothing is sealed yet.'
+        : r && r.reason === 'flag-partial'
+          // ⚠ "DID NOT TAKE IT" — NEVER "REFUSED IT". Audit finding F3 on this fix, 2026-09-17. `missed` is
+          // every relay that did not ACK, and _publishToRelays deliberately turns a connection failure into a
+          // rejection; a relay that was offline, or whose OK arrived after the 12s publish timeout, lands in
+          // that list too. The comment above _publishToRelays says so in as many words: "a late OK is not a
+          // refusal, and the EVENT has usually been stored by then." Naming a specific relay as having
+          // refused a document it may actually hold turns a vague sentence into a checkable false one.
+          ? 'The key was saved, and “' + (s.g.name || 'this group') + '” is sealed on ' + landed.length + ' of ' + (landed.length + missed.length) + ' relays. '
+            + missed.map(hostOf).join(', ') + ' didn’t take it — ' + (missed.length === 1 ? 'it may not carry' : 'they may not carry')
+            + ' your church, or may have been out of reach. Messages that go through '
+            + (missed.length === 1 ? 'it' : 'them') + ' can still be read there. Check Settings → Relays.'
         : r && r.reason === 'flag-failed'
-          ? 'The group’s key was saved but the group could not be marked encrypted. Try again — until it succeeds, messages are still readable by the relay.'
+          ? 'The group’s key was saved but no relay accepted the lock, so “' + (s.g.name || 'this group') + '” is unchanged and its messages are still readable by the relay. Try again.'
           : 'The relay didn’t accept the group’s key, so “' + (s.g.name || 'this group') + '” stays unencrypted. Check your connection and try again.';
       setSealing(cur => cur ? { ...cur, busy: false, err: why } : cur);
       return;
@@ -5304,10 +5492,20 @@ function DashMembers() {
       // so a removal published nothing at all. The only {rotate:true} call site was the invite-only members
       // editor, which does not exist for an OPEN encrypted group. The contract in steward.src.js says removal
       // MUST rotate; this is the path that was missing it. AUDIT-2026-07-27.
-      // NOT AS A DELEGATED STEWARD. publishGroupKey always signs with churchSk and always seeds the recipient set
-      // with churchPub — this device's OWN church key. Acting for a church we merely steward, that re-keys THEIR
-      // group under OUR key and leaves the owning church out of the recipients, locking them out of their own
-      // room. The same commit added exactly this guard to publishProfile and missed it here. AUDIT-2026-07-27.
+      // NOT AS A DELEGATED STEWARD. publishGroupKey always signs with churchSk and always seeded the recipient
+      // set with churchPub — this device's OWN church key. Acting for a church we merely steward, that re-keys
+      // THEIR group under OUR key and left the owning church out of the recipients, locking them out of their
+      // own room. The same commit added exactly this guard to publishProfile and missed it here. AUDIT-2026-07-27.
+      //
+      // ⚠ HALF OF THAT REASON IS GONE AND THE GUARD IS DELIBERATELY KEPT. Since the 2026-09-17 merge,
+      // publishGroupKey seeds from `actingChurch || churchPub`, so the owning church IS a recipient now and
+      // the lockout above can no longer happen (proved in scripts/a-sealed-room-reaches-the-church-that-owns-it
+      // .test.mjs, "the CHURCH can really UNWRAP its own entry"). The guard stays because letting a delegated
+      // console re-key every encrypted room in someone else's church as a side effect of ONE Block tap is a
+      // separate decision, and it is the owner's to make, not a merge's. What it costs today: blocking someone
+      // from a delegated console does not rotate that church's room keys, so the blocked person's phone can
+      // still read future messages in rooms they were in until the owner's own console blocks them too. THAT
+      // IS AN OPEN GAP, reported and not patched here — it needs the owner's call and a phone.
       const grps = (!delegated && Array.isArray(groups)) ? groups : [];
       for (const g of grps) {
         if (!g || !g.encrypted) continue;
@@ -7122,7 +7320,7 @@ function DashStewardsPanel({ church }) {
   // written before this feature means and what a church that never opens this panel keeps.
   const caps = (window.Steward.stewardCaps && window.Steward.stewardCaps()) || {};
   const capNames = (window.Steward.stewardCapNames && window.Steward.stewardCapNames()) || [];
-  const CAP_LABEL = { finance: 'Finance', care: 'Care', safeguarding: 'Safeguarding', members: 'Members', content: 'Groups & rotas' };
+  const CAP_LABEL = { finance: 'Finance', care: 'Care', safeguarding: 'Safeguarding', members: 'Members', content: 'Groups & rotas', sealedrooms: 'Sealed rooms' };
   const CAP_SUB = {
     // This used to warn that the books were sealed to the church key and a delegate could not open them.
     // That limit was removed the same afternoon (the books now have a key of their own, wrapped to whoever
@@ -7142,6 +7340,11 @@ function DashStewardsPanel({ church }) {
     safeguarding: 'Clearances, photo decisions and kids check-in. They can SEE who is marked as a child, which adults are cleared, guardians, and check-in records — only you can CHANGE those lists.',
     members: 'Admit people, set the join policy, re-seat someone who lost their words. They can SEE the whole membership list with real names, and who is waiting to join.',
     content: 'Groups, rotas, services, events, posts. They can SEE every group including private ones, read what is said in them, and post to the whole church in its name.',
+    // ITS OWN TICK, NOT PART OF "Groups & rotas", and the sentence has to say why or the separation looks
+    // like fussiness. Locking a room means minting its key; whoever mints it holds it; whoever holds it can
+    // read the room. So this is the one that decides who can read a private conversation, and it is worth a
+    // deliberate yes on its own. — owner’s wording pending, 2026-09-17.
+    sealedrooms: 'Lock a room so only its members can read it. Whoever locks one holds its key, so they can SEE everything said in it.',
   };
   const setCaps = (pk, list) => {
     const next = { ...caps };
@@ -7762,7 +7965,11 @@ function DashFeaturesPanel({ church, show = null }) {
   // group sealed — so "Encrypt all: on" never overstates what happened.
   const doEncryptAll = async () => {
     setConfirmEnc(false);
-    const failed = [], partial = [];
+    // THREE OUTCOMES, NOT TWO. `half` is the same distinction the seal dialog gained on 2026-09-17: a flag
+    // write that reached SOME relays leaves the room sealed on those and cleartext on the rest, so calling it
+    // "stays unencrypted" is untrue of the relay the church actually lives on. It still is not success —
+    // "Encrypt all" stays off for it, exactly as for a total failure.
+    const failed = [], partial = [], half = [];
     for (const g of allGroups) {
       // Teams are skipped DELIBERATELY — they have no encryption control of their own, and encRecips() below
       // would seal a team room to every member of the church rather than to its roster, which is the wrong
@@ -7773,16 +7980,19 @@ function DashFeaturesPanel({ church, show = null }) {
       if (g.kind === 'team' || g.encrypted) continue;
       let r = null;
       try { r = await window.Steward.sealGroup(g, encRecips(g)); } catch (e) { r = null; }
-      if (!r || !r.sealed) failed.push(g.name || 'a group');
+      if (!r || !r.sealed) (r && r.reason === 'flag-partial' ? half : failed).push(g.name || 'a group');
       else if (r.skipped && r.skipped.length) partial.push(r.skipped.length + ' member(s) could not be given the key for “' + (g.name || 'a group') + '”');
     }
-    if (failed.length || partial.length) {
+    if (failed.length || partial.length || half.length) {
       const parts = [];
+      // Same rule as the seal dialog above: a relay that did not ACK may be offline rather than refusing, so
+      // this says what is TRUE of the rooms and sends the steward to look, rather than diagnosing for them.
+      if (half.length) parts.push(half.length + ' group' + (half.length === 1 ? '' : 's') + ' reached only some of your relays, so ' + (half.length === 1 ? 'it is' : 'they are') + ' sealed on those and still readable on the others: ' + half.join(', ') + '. “Encrypt all” stays off. Check Settings → Relays.');
       if (failed.length) parts.push(failed.length + ' group' + (failed.length === 1 ? '' : 's') + ' could not be sealed and so ' + (failed.length === 1 ? 'stays' : 'stay') + ' unencrypted: ' + failed.join(', ') + '. “Encrypt all” stays off — try again once this console is connected.');
       if (partial.length) parts.push(partial.join('; ') + '. They will not be able to read or post there. Open each group and save it again to re-send.');
       try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'group key', message: parts.join(' ') } })); } catch (e) {}
     }
-    if (!failed.length) window.Steward.publishProfile({ features: { ...f, encryptComms: true } });
+    if (!failed.length && !half.length) window.Steward.publishProfile({ features: { ...f, encryptComms: true } });
   };
   const toggleEncryptAll = () => { if (encOn) window.Steward.publishProfile({ features: { ...f, encryptComms: false } }); else setConfirmEnc(true); };
   // member photos — ON by default; a church opts out via memberPhotos:false. Children are excluded unless

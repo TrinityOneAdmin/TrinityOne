@@ -15365,7 +15365,7 @@ zoo`.split("\n");
   var _stewardNames = {};
   var _stewardNamesCt = "";
   var _stewardSince = {};
-  var STEWARD_CAPS = ["finance", "care", "safeguarding", "members", "content"];
+  var STEWARD_CAPS = ["finance", "care", "safeguarding", "members", "content", "sealedrooms"];
   var CAP_KEYS = {
     finance: { d: "trinityone/financekey:", cap: "finance", legacy: true, explicit: false },
     // the church books
@@ -16671,14 +16671,15 @@ zoo`.split("\n");
     const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(pin), "PBKDF2", false, ["deriveKey"]);
     return crypto.subtle.deriveKey({ name: "PBKDF2", salt, iterations: iterations || PIN_ITER_LEGACY, hash: "SHA-256" }, base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
   }
-  async function publish(evt) {
+  async function publish(evt, opts) {
+    const _bg = !!(opts && opts.background);
     await _waitForRegistration();
     const _targets = relays();
     if (!_targets.length) {
       const reason = relaysRaw().length ? NO_NETWORK_RELAY + ": none of this church's relays could be proved to be ours, so nothing was published" : "no relay is configured for this church";
       console.warn("[steward] publish blocked \u2014", reason);
       try {
-        window.dispatchEvent(new CustomEvent("steward-publish-error", { detail: { reason, evt } }));
+        window.dispatchEvent(new CustomEvent("steward-publish-error", { detail: { reason, evt, background: _bg } }));
       } catch (x) {
       }
       return false;
@@ -16709,7 +16710,7 @@ zoo`.split("\n");
       } catch (x) {
       }
       try {
-        window.dispatchEvent(new CustomEvent("steward-publish-error", { detail: { reason, evt, refused } }));
+        window.dispatchEvent(new CustomEvent("steward-publish-error", { detail: { reason, evt, refused, background: _bg } }));
       } catch (x) {
       }
       return false;
@@ -16810,6 +16811,10 @@ zoo`.split("\n");
       const reason = relaysRaw().length ? NO_NETWORK_RELAY + ": none of this church's relays could be proved to be ours, so nothing was published" : "no relay is configured for this church";
       console.warn("[steward] all-relay publish blocked \u2014", reason);
       try {
+        _noteSpread(evt, [], []);
+      } catch (x) {
+      }
+      try {
         window.dispatchEvent(new CustomEvent("steward-publish-error", { detail: { reason, evt } }));
       } catch (x) {
       }
@@ -16829,9 +16834,21 @@ zoo`.split("\n");
         return v;
       })));
     } catch (e) {
+      try {
+        _noteSpread(evt, [], targets.slice());
+      } catch (x) {
+      }
       return false;
     }
     const accepted = rs.filter((r) => r.status === "fulfilled").length;
+    try {
+      _noteSpread(
+        evt,
+        targets.filter((u, i3) => rs[i3] && rs[i3].status === "fulfilled"),
+        targets.filter((u, i3) => !rs[i3] || rs[i3].status !== "fulfilled")
+      );
+    } catch (x) {
+    }
     if (!accepted) {
       let reason = "";
       try {
@@ -16938,6 +16955,18 @@ zoo`.split("\n");
   }
   var _lastStamp = /* @__PURE__ */ new Map();
   var _lastOk = /* @__PURE__ */ new Map();
+  var _lastSpread = /* @__PURE__ */ new Map();
+  function _noteSpread(evt, landed, missed) {
+    try {
+      const d = ((evt && evt.tags || []).find((t) => t[0] === "d") || [])[1];
+      if (d) _lastSpread.set(d, { landed: (landed || []).slice(), missed: (missed || []).slice(), at: Date.now() });
+    } catch (x) {
+    }
+  }
+  function _spreadOf(d) {
+    const s = _lastSpread.get(d);
+    return s ? { landed: s.landed.slice(), missed: s.missed.slice(), at: s.at } : null;
+  }
   function _monotonic(tmpl) {
     const d = ((tmpl.tags || []).find((t) => t[0] === "d") || [])[1] || "kind:" + tmpl.kind;
     const nowS = Math.floor(Date.now() / 1e3);
@@ -18302,7 +18331,11 @@ zoo`.split("\n");
     // Wrap the care key for everyone who needs it. MINTS only on a first run where we have positively
     // established there is no envelope — never on a cold `_careKeyHex === null`, which is the ordinary state
     // for the first second of every console open. Idempotent: re-wraps the EXISTING key for anyone missing.
-    async ensureCareKeyForMembers(memberPubs, stewardPubs) {
+    // `opts.background` — see the note above publish(). This function has exactly ONE caller (the
+    // key-distributor effect, app/stew-dashboard.jsx), it is automatic, and a delegated steward with no care
+    // grant is refused by the relay every time it runs. `opts` rather than a hard-coded `true` so that a
+    // deliberate care control added later is loud by default, which is the way round this codebase needs.
+    async ensureCareKeyForMembers(memberPubs, stewardPubs, opts) {
       const cp = actingChurch || pub;
       if (!sk || !cp || !churchPub) return false;
       if (!_careKeyChecked) return false;
@@ -18321,7 +18354,7 @@ zoo`.split("\n");
       if (want.every((p2) => have[p2])) return false;
       const _ring = JSON.stringify(_careKeyRing.length ? _careKeyRing : [_careKeyHex]);
       const keys = await _sealEach(_ring, want, (pl, mp) => encrypt3(pl, getConversationKey(sk, mp)));
-      const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", CAREKEY_D + cp], ["t", NET]], content: JSON.stringify({ keys, rev: _careKeyRev }) }));
+      const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", CAREKEY_D + cp], ["t", NET]], content: JSON.stringify({ keys, rev: _careKeyRev }) }), { background: !!(opts && opts.background) });
       if (ok !== false) _careKeyDocKeys = keys;
       return ok;
     },
@@ -19150,7 +19183,7 @@ zoo`.split("\n");
           out.push({ id: g.id, name: g.name || "", state: "needs-decision" });
           continue;
         }
-        const r = await this.publishGroupKey(g.id, memberPubs || []);
+        const r = await this.publishGroupKey(g.id, memberPubs || [], { background: true });
         out.push({ id: g.id, name: g.name || "", state: r === null || r === false ? "failed" : "issued" });
       }
       return out;
@@ -19159,7 +19192,7 @@ zoo`.split("\n");
       if (!churchSk || !churchPub) return Promise.resolve(null);
       const haveRing = (_skeys[groupId] || []).length > 0;
       if (opts.reuseOnly && !haveRing) return Promise.resolve(null);
-      const recips = [.../* @__PURE__ */ new Set([churchPub, ...(memberPubs || []).map((p) => toPubHex(p) || p).filter(Boolean)])].filter((p) => !_localBlocked.has(String(p).toLowerCase()));
+      const recips = [.../* @__PURE__ */ new Set([actingChurch || churchPub, churchPub, ...(memberPubs || []).map((p) => toPubHex(p) || p).filter(Boolean)])].filter((p) => !_localBlocked.has(String(p).toLowerCase()));
       let ring = _skeys[groupId] || [];
       let key = ring[0];
       if (!opts.rotate && !key && !_isRelayAuthed()) return Promise.resolve(null);
@@ -19195,7 +19228,7 @@ zoo`.split("\n");
         content = build(ring.slice(0, r));
         skipped = build.missed || [];
       }
-      const ok = await publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", GROUPKEY_D + groupId], ["t", NET]], content }, churchSk));
+      const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", GROUPKEY_D + groupId], ["t", NET]], content }, churchSk), { background: !!opts.background });
       if (ok === false) return false;
       if (skipped.length) {
         console.warn("[steward] group key " + groupId + ": could not seal to " + skipped.length + " member(s) \u2014 they cannot read or post in that room");
@@ -19229,8 +19262,25 @@ zoo`.split("\n");
         r = null;
       }
       if (r === null || r === false) return { sealed: false, reason: r === null ? "cannot-key" : "relay-refused" };
+      const _sealAt = Date.now();
       const ok = await window.Steward.publishGroup({ ...group, encrypted: true });
-      if (!ok || !ok.ts) return { sealed: false, keyPublished: true, reason: "flag-failed" };
+      if (!ok || !ok.ts) {
+        let spread = null;
+        try {
+          const _s = _spreadOf(GROUP_D + group.id);
+          if (_s && _s.at >= _sealAt) spread = _s;
+        } catch (x) {
+          spread = null;
+        }
+        spread = spread || { landed: [], missed: [] };
+        return {
+          sealed: false,
+          keyPublished: true,
+          landed: spread.landed,
+          missed: spread.missed,
+          reason: spread.landed.length ? "flag-partial" : "flag-failed"
+        };
+      }
       return { sealed: true, skipped: r && r.skipped || [] };
     },
     // ---- moderation: the church's blocklist (banned member pubkeys). The relay rejects their writes
@@ -19366,7 +19416,7 @@ zoo`.split("\n");
       _requireTrustedView("photo settings");
       if (!sk) return Promise.resolve(null);
       const list = [...new Set((pubkeys || []).filter(Boolean))];
-      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", NOPHOTO_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list }) }, sk));
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", NOPHOTO_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list }) }, sk));
     },
     // Tell ONE member what their own safeguarding status is, sealed to them. This exists so a member's app can
     // know whether THEY are a child or a cleared adult without the church publishing a cleartext list of its
@@ -19873,7 +19923,7 @@ zoo`.split("\n");
     },
     setJoinPolicy(approval) {
       if (!sk) return Promise.resolve(null);
-      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", JOINPOLICY_D + pub], ["t", NET]], content: JSON.stringify({ approval: !!approval }) }, sk));
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", JOINPOLICY_D + pub], ["t", NET]], content: JSON.stringify({ approval: !!approval }) }, sk));
     },
     // AUDIT-2026-07-28 F10. A new church published its join policy at wizard step 0 — before the relay had been
     // told the church exists. accept() refuses any kind-30078 write from a key that is not a configured church

@@ -200,7 +200,10 @@ test('the console mints and maintains the name key', () => {
   const at = DASH.indexOf('() => {', DASH.indexOf('const notBlocked = (pk)'));
   assert.notEqual(at, -1, 'the key-distributor loop moved — re-anchor this test');
   const body = fnBody(DASH, at, 'the key-distributor roster effect');
-  assert.match(body, /ensureCareKeyForMembers\(memberPubs, stewardRoster\)/,
+  // RE-ANCHORED 2026-09-17: the call gained a third argument, `{ background: true }`, which marks it as a
+  // write no steward asked for so a correct refusal cannot raise the console's standing alarm. Both of the
+  // arguments this test is about are still pinned.
+  assert.match(body, /ensureCareKeyForMembers\(memberPubs, stewardRoster[,)]/,
     'the distributor no longer maintains the care key for the roster');
   // The steward roster is passed too: without it a delegated console is not a recipient of the envelope it
   // is meant to maintain, which is how it ended up holding an empty ring and wiping the church's names.

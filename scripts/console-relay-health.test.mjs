@@ -112,7 +112,7 @@ function consoleSide(urls) {
   const markM = grab('markResubscribed() {');
   // publish() waits for the church to exist on a relay (R5-5), so its gate is lifted with it — shipped
   // source, not a stub. _regGate starts null, the already-registered state, so the wait is a no-op here.
-  const publishSrc = 'let _regGate = null; const REG_GATE_MS = 45000;\n' + grab('async function _waitForRegistration()') + grab('async function publish(evt)');
+  const publishSrc = 'let _regGate = null; const REG_GATE_MS = 45000;\n' + grab('async function _waitForRegistration()') + grab('async function publish(evt, opts)');
   const reconnect = grab('async reconnectDownRelays() {');
   // The fix has to remember which relays were actually opened. However that is spelled, it has to be wired to
   // the pool's own success callback — bind whatever the bundle installs, so this test follows the shipped code

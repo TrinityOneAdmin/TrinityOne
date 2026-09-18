@@ -170,7 +170,7 @@ function consoleOn({ church, origin, canonical = [], pins = {}, extra = [], stor
     stmt(src, 'var _gate = createRelayGate(', '_gate'),
     fnBody(src, 'function relays()', 'relays'),
     stmt(src, 'var NO_NETWORK_RELAY = ', 'NO_NETWORK_RELAY'),
-    fnBody(src, 'async function publish(evt)', 'publish'),
+    fnBody(src, 'async function publish(evt, opts)', 'publish'),
   ].join('\n');
   assertGateLift(body, 'vendor/steward.js');
   assert.match(body, /const _targets = relays\(\);/, 'vendor/steward.js: publish() no longer assembles through the gated list');

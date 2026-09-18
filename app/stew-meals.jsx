@@ -435,6 +435,22 @@ function StewCareChat({ reqId, requesterPub, title, onClose }) {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
+  // …AND IT TELLS THE CONSOLE IT IS A MODAL. This panel rolls its own Escape rather than using useStewDialog,
+  // so it was invisible to the one thing that has to know a dialog is open: the error banner, which sits above
+  // every overlay (AUDIT-9) and therefore has to move out of the way of a dialog's title while one is up.
+  // Registration only — the focus trap is a separate question this panel has not answered.
+  // REGISTER AS A MODAL — see useStewModalOpen in app/stew-modal.jsx, which every other console dialog
+  // reaches through useStewDialog.
+  //
+  // ⚠ WHY THIS IS WRITTEN AS AN EXPRESSION AND NOT AS A NAMED HELPER. Two reasons, both measured today:
+  //   · a bare `useStewModalOpen(true)` is undefined in the ~26 tests that compile ONE app file and hand it
+  //     its globals by name, and none of them is about a modal registry. It took nine of them down;
+  //   · hoisting it into a module-level const, in BOTH this file and the other overlay's file, is a
+  //     DUPLICATE TOP-LEVEL NAME across two classic scripts, which is a SyntaxError that blanks the whole
+  //     console — this codebase has shipped that exact defect before.
+  // The fallback keeps the hook COUNT identical (one useEffect either way), so this is not a conditional
+  // hook: it is the same hook, from one of two places.
+  (typeof useStewModalOpen === 'function' ? useStewModalOpen : () => React.useEffect(() => {}, []))(true);
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 90, background: 'rgba(40,32,24,.42)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       <div onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Care conversation" style={{ width: 440, maxWidth: '92%', height: '70vh', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderRadius: 20, border: '1px solid var(--line)', overflow: 'hidden' }}>
@@ -491,6 +507,10 @@ function StewApproveSheet({ req, who, onClose, onDone }) {
     if (!ok) { setErr('Couldn’t set this up — it didn’t reach the church, so nothing has changed. Try again in a moment.'); return; }
     onDone(ok);
   };
+  // REGISTER AS A MODAL. Full-viewport overlay, so the console's error banner has to know it is up in order
+  // to get out of the way of its heading — see the long note in WizShell for why this is written as an
+  // expression rather than a bare call or a named helper.
+  (typeof useStewModalOpen === 'function' ? useStewModalOpen : () => React.useEffect(() => {}, []))(true);
   const fld = { width: '100%', boxSizing: 'border-box', padding: '10px 12px', borderRadius: 10, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontSize: 14 };
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 90, background: 'rgba(40,32,24,.42)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -814,6 +834,10 @@ function MealsNeedDetail({ need, slots, skips, onClose, onEdit }) {
 
 // ────────────────────────────────────────────────────────────────────────────────
 function MealsNeedModal({ need, onClose, onSaved, onDeleted }) {
+  // REGISTER AS A MODAL. Full-viewport overlay, so the console's error banner has to know it is up in order
+  // to get out of the way of its heading — see the long note in WizShell for why this is written as an
+  // expression rather than a bare call or a named helper.
+  (typeof useStewModalOpen === 'function' ? useStewModalOpen : () => React.useEffect(() => {}, []))(true);
   const isEdit = !!need;
   const today = todayISO();
   const [label, setLabel]   = React.useState(need ? need.displayLabel : '');
@@ -875,8 +899,17 @@ function MealsNeedModal({ need, onClose, onSaved, onDeleted }) {
     catch (e) { setErr((e && e.message) || 'Could not close.'); setBusy(false); }
   };
   return (
-    <div role="dialog" aria-modal="true" style={{ position: 'fixed', inset: 0, background: 'rgba(20,15,8,.55)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '5vh 16px', zIndex: 70 }}>
-      <div style={{ width: 'min(540px, 100%)', maxHeight: '90vh', overflow: 'auto', background: 'var(--surface)', borderRadius: 18, boxShadow: 'var(--shadow-lg)', padding: 22 }}>
+    // ⚠ THE DIALOG ROLE BELONGS ON THE PANEL, NEVER ON THE BACKDROP, and this was the one place in the
+    // console it sat on the backdrop. Two things go wrong when it does, and the second is the serious one:
+    //   · to a screen reader the modal "is" the whole viewport, dim included, rather than the card;
+    //   · every rule that selects a dialog panel then lands on a `position: fixed; inset: 0` element.
+    //     Measured 2026-09-17 at 730x328: steward.html's reserved-space rules shortened this OVERLAY, so the
+    //     dim stopped 90px short of the bottom of the screen, the console behind it in that strip became
+    //     tappable while "Start care" was open — a modality break, and this overlay has no click-to-close —
+    //     and the overlay scrolled as well as the card inside it.
+    // Moved to the card, which is where every other console dialog has always had it.
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(20,15,8,.55)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '5vh 16px', zIndex: 70 }}>
+      <div role="dialog" aria-modal="true" aria-label={isEdit ? 'Edit care need' : 'Start care'} style={{ width: 'min(540px, 100%)', maxHeight: '90vh', overflow: 'auto', background: 'var(--surface)', borderRadius: 18, boxShadow: 'var(--shadow-lg)', padding: 22 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
           <div style={{ width: 36, height: 36, borderRadius: 11, background: 'color-mix(in oklab, var(--sage) 14%, var(--surface))', color: 'var(--sage-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="heart" size={18} color="var(--sage)" /></div>
           <div style={{ flex: 1, fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 19 }}>{isEdit ? 'Edit care need' : 'Start care'}</div>
