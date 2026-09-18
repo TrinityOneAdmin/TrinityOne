@@ -12698,7 +12698,8 @@
         } catch (e) {
         }
       }
-      const id = pub.slice(0, 16) + "-" + _hex(crypto.getRandomValues(new Uint8Array(8)));
+      const draft = String(fields.draftId || "").toLowerCase();
+      const id = pub.slice(0, 16) + "-" + (/^[0-9a-f]{8,32}$/.test(draft) ? draft : _hex(crypto.getRandomValues(new Uint8Array(8))));
       const evt = finalizeEvent2({ kind: 30078, created_at: body.at, tags: [["d", CAREREQ_D + id], ["t", NET], ["t", "carereq"], ["church", cp], ["aud", childish ? "cleared" : "team"]], content: JSON.stringify({ keys, enc }) }, sk);
       try {
         await _publishAny(churchRelays(), evt);
@@ -12706,7 +12707,7 @@
         console.warn("[fellowship] care request publish failed", e);
         if (/update the app/i.test(String(e && e.message || ""))) return { error: "stale-app" };
         if (isNoNetworkRelay(e)) return { error: "no-network-relay" };
-        return null;
+        return { error: _pubReason(e) };
       }
       return { id, ...body, teamCount: pubs.length, narrowed: !Array.isArray(team), toChildAudience: childish };
     },
@@ -12950,7 +12951,7 @@
         await _publishAny(churchRelays(), evt);
       } catch (e) {
         console.warn("[fellowship] member need publish failed", e);
-        return null;
+        return { error: _pubReason(e) };
       }
       return { id, need: true };
     },

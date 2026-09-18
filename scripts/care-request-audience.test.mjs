@@ -61,6 +61,13 @@ function loadPublish({ team, sgSelf, childAudience, clearanceEvents, relayAuthed
   // would be a mock of the thing every test below is named after. It is fed real relay documents through
   // `pool.querySync` (empty by default here, which is a church that has published no clearance at all).
   const fetchClr = liftFetchMyClearance(VENDOR);
+  // ── RULE 2, 2026-09-16: publishCareRequest now classifies its OWN publish failure ──────────────────────
+  // It used to return a bare `null` for every failure, which the sheet rendered as "check your connection"
+  // over a send the relay had taken. It now answers with `_pubReason(e)` — the same classifier ten sibling
+  // writers use. Lifted, not stubbed: the three answers it distinguishes are the whole point of that branch.
+  // It is reached only when _publishAny throws, so a missing name here would have sat latent until the first
+  // test that stages a failure.
+  const pubReason = fnBody(VENDOR, 'function _pubReason(e) {', '_pubReason');
   // THE BUNDLER RENAMES WHAT IT LIFTS. In vendor/fellowship.js this function's crypto helpers are no longer
   // called nip44e/nip44ck/finalizeEvent — esbuild rewrote them to encrypt/getConversationKey/finalizeEvent2,
   // and a hard-coded parameter list therefore fed the function three undefined names. The function catches
@@ -112,7 +119,7 @@ function loadPublish({ team, sgSelf, childAudience, clearanceEvents, relayAuthed
       throw new ReferenceError('the lifted function needs `' + String(k) + '` — add a stub for it in loadPublish()');
     },
   });
-  const fn = new Function('scope', `with (scope) { ${sgMine} ${fetchClr} return ({ ${body} }).publishCareRequest; }`)(scope);
+  const fn = new Function('scope', `with (scope) { ${sgMine} ${fetchClr} ${pubReason} return ({ ${body} }).publishCareRequest; }`)(scope);
   return { fn, published };
 }
 
@@ -406,8 +413,20 @@ test('the send keeps a reason the member can act on', () => {
     'the relay\'s "your app is too old" reason is swallowed, so the member is told their connection failed');
   assert.match(body, /error: 'stale-app'/,
     'the reason is not turned into something the screen can render');
-  assert.match(body, /return null;/,
-    'every other failure must still return null — callers test truthiness, and a truthy error reads as success');
+  // ⚠ THIS ASSERTION USED TO READ `assert.match(body, /return null;/)` UNDER THE MESSAGE "every other
+  // failure must still return null — callers test truthiness, and a truthy error reads as success". That
+  // stopped being true on 2026-09-16 and, worse, the assertion could not have SEEN it stop: publishCareRequest
+  // keeps three other `return null;` lines (no key, no church, a seal that would not encrypt), so the regex
+  // matched whatever the publish branch did. A publish failure now answers with its own reason — the shipped
+  // `_pubReason`, as ten sibling writers do — because `null` was rendered as "check your connection" over a
+  // send the relay had taken, and that sentence is what put a second request in front of the care team.
+  // The truthiness worry it was written for is handled: the ONE caller reads `ok.error` before `ok`.
+  assert.match(body, /return \{ error: _pubReason\(e\) \};/,
+    'a care request that failed to publish answers with a bare value again, so the sheet cannot tell "nobody ' +
+    'answered in time" (the request may well be there) from "it definitely did not go" — and says the wrong ' +
+    'one of the two to somebody asking for help');
+  assert.doesNotMatch(body.slice(body.indexOf('try { await _publishAny(churchRelays(), evt); }')), /return null;/,
+    'the publish branch returns a bare null again');
 });
 
 test('and the screen has words for it', () => {

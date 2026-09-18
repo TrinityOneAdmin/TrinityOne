@@ -82,6 +82,13 @@ function loadPublish({ team, childAudience, clearance = [], relayDocs = [], rela
   // says "we have not heard" — which is the state every test here runs in. Stubbing it would leave this file
   // asserting about a mock of the rule it exists to guard; the repo has shipped that mistake four times.
   const fetchClr = liftFetchMyClearance(VENDOR);
+  // ── RULE 2, 2026-09-16: publishCareRequest now classifies its OWN publish failure ──────────────────────
+  // It used to return a bare `null` for every failure, which the sheet rendered as "check your connection"
+  // over a send the relay had taken. It now answers with `_pubReason(e)` — the same classifier ten sibling
+  // writers use. Lifted, not stubbed: the three answers it distinguishes are the whole point of that branch.
+  // It is reached only when _publishAny throws, so a missing name here would have sat latent until the first
+  // test that stages a failure.
+  const pubReason = fnBody(VENDOR, 'function _pubReason(e) {', '_pubReason');
   const stubs = {
     window: { Fellowship: { churchPub, ready: Promise.resolve() } },
     sk: tomSk, pub: tomPub,
@@ -123,7 +130,7 @@ function loadPublish({ team, childAudience, clearance = [], relayDocs = [], rela
       throw new ReferenceError('the lifted function needs `' + String(k) + '` — add a stub for it in loadPublish()');
     },
   });
-  const fn = new Function('scope', `with (scope) { ${sgMine} ${fetchClr} return ({ ${body} }).publishCareRequest; }`)(scope);
+  const fn = new Function('scope', `with (scope) { ${sgMine} ${fetchClr} ${pubReason} return ({ ${body} }).publishCareRequest; }`)(scope);
   return { fn, published };
 }
 
