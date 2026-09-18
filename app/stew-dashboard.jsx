@@ -542,10 +542,38 @@ function PublishErrorBanner() {
           worse banner than the one that cropped the dialog. */}
       {clamped ? <button onClick={() => setOpenWide(true)} aria-label="Show the whole message" title="Show the whole message"
         style={{ pointerEvents: 'auto', border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '4px 9px', minHeight: 24, cursor: 'pointer', flexShrink: 0, fontSize: 11.5, fontWeight: 700, fontFamily: 'var(--font-ui)', color: 'var(--ink-2)' }}>Show</button> : null}
-      {/* padding:14 with margin:-14 already gives this a ~44px target without changing the layout; only the
-          accessible name was missing. A second `style` added here for one commit silently won and undid it. */}
+      {/* ⚠ A TARGET BIGGER THAN ITS CARD IS NOT A BIGGER TARGET. TWO DIFFERENT SHAPES, ONE PER STATE.
+          IN FLOW (no dialog) the card is 171px tall and 44x44 fits inside it with room to spare, so the old
+          trick stands unchanged: `padding: 14` with `margin: -14` hit-tests 44x44 while the flex line still
+          reserves only the icon's 16x16.
+          DOCKED (a dialog is up) THAT TRICK OVERFLOWED THE CARD IN BOTH DIRECTIONS, and both overflows were
+          live defects measured at 360x730 and 730x328:
+            · UPWARDS, out of the wrapper. The wrapper is `overflowY: 'auto'` with the card flush to its top,
+              so the 3px of button above the card was CLIPPED AWAY — 44x40 of the claimed 44x44 reached it on
+              this repo's own grid scan (the audit's grid, sampling half a pixel differently, said 44x41), and
+              `elementFromPoint` in the lost band returned the DIALOG'S SCRIM, whose onClick is onCancel.
+              Driven on the Oppo with the seal dialog up: pressing the top corners of the little x CLOSED THE
+              DIALOG and left the error standing. That is the "paints as the banner, actuates what is behind
+              it" shape this banner has already been bitten by twice.
+            · SIDEWAYS, over `Show`. `margin: -14` put the border box's left edge 4px inside Show's right
+              edge, and this button paints later, so it won the hit test: the rightmost column of the pill
+              that says "Show the whole message" THREW THE MESSAGE AWAY. 100 of Show's 1250 px2 — measured,
+              by putting the old shape back under the grid scan named below.
+          So while docked the target is the card's own right-hand end: `alignSelf: 'stretch'` with -6px of
+          vertical margin (the card's 5px padding + its 1px border) makes it exactly as tall as the painted
+          card, and NO horizontal negative margin means the flex line reserves the whole 44 — so it cannot
+          reach across the gap into Show. 44x37, every pixel of it inside the card and hit-testable.
+          37 not 44: the docked strip IS 37px tall (that is what keeps it clear of a 92vh dialog at 328px of
+          screen, and steward.html shortens every dialog by exactly that reservation), so 44 vertical pixels
+          inside it do not exist. Over WCAG 2.5.8's 24, and 1628 usable px2 against the 1760 of a 44x44 box
+          of which 132 pressed the wrong thing.
+          THE HEIGHT IS DERIVED, NOT TYPED: `stretch` tracks the card's line box, so a future change to the
+          card's padding cannot leave this number stale. Measured, not reasoned — see the grid scan in
+          scripts/the-error-banner-clears-a-dialog-on-the-phone.test.mjs.
+          A second `style` added here for one commit silently won and undid the padding entirely. */}
       <button onClick={clear} aria-label="Dismiss this message" title="Dismiss this message"
-        style={{ pointerEvents: 'auto', border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0, padding: clamped ? 10 : 14, margin: clamped ? -10 : -14 }}><Icon name="x" size={16} /></button>
+        style={{ pointerEvents: 'auto', border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, minWidth: 44,
+          ...(clamped ? { alignSelf: 'stretch', padding: '0 14px', margin: '-6px 0' } : { minHeight: 44, padding: 14, margin: -14 }) }}><Icon name="x" size={16} /></button>
     </div>
   );
   // BELOW the header, not over it. Absolutely positioned at top:12 the card covered the entire tab strip at
