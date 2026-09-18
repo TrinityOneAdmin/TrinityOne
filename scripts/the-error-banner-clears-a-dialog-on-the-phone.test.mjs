@@ -67,7 +67,10 @@ const LEDGER = new Function(readFileSync(new URL('../vendor/finance-ledger.js', 
 
 // Render the real components and glue their trees into one page. `modalOpen` is what the real registry
 // (app/stew-modal.jsx) answers while a dialog is up; `withDialog` is false, 'confirm' (86vh) or 'tall' (92vh).
-function fixture(modalOpen, withDialog = 'confirm') {
+// `expand` presses the banner's own "Show the whole message" pill before serialising, which is the ONLY way
+// to reach the expanded state — `openWide` is component state with no prop and no global behind it. The tree
+// is re-drawn afterwards because miniReact keeps hook state per instance across draws, exactly as React does.
+function fixture(modalOpen, withDialog = 'confirm', expand = false) {
   const Stub = (n) => { const f = function () { return null; }; Object.defineProperty(f, 'name', { value: n }); return f; };
   // ⚠ THE ICON IS A REAL BOX HERE, and it has to be. A stub that renders NOTHING gives every icon zero
   // width, and the one box in this file whose size is the thing under test — the dismiss button, which is
@@ -97,6 +100,15 @@ function fixture(modalOpen, withDialog = 'confirm') {
   tree = b.draw(mod.PublishErrorBanner, {});
   assert.equal(find(tree, n => n.props && n.props.role === 'alert').length, 1,
     're-anchor: the banner did not render exactly one message');
+  if (expand) {
+    const show = find(tree, n => n.props && n.props['aria-label'] === 'Show the whole message');
+    assert.equal(show.length, 1, 're-anchor: the docked banner has no Show control to press, so this fixture cannot reach the expanded state');
+    show[0].props.onClick();
+    tree = b.draw(mod.PublishErrorBanner, {});
+    assert.equal(find(tree, n => n.props && n.props['aria-label'] === 'Show the whole message').length, 0,
+      're-anchor: pressing Show did not expand the banner — the fixture is still measuring the DOCKED state ' +
+      'under the expanded state\'s name, which is worse than not measuring it');
+  }
   // ⚠ A COMPONENT MUST BE DRAWN BY THE miniReact WHOSE `React` COMPILED IT. The console's two dialogs came
   // out of `mod` (built with `b.React`), so they are drawn with `b`; only the finance module below is loaded
   // against `d`. Drawing one instance's component through another's `draw` gives "Cannot read properties of
@@ -132,7 +144,7 @@ function fixture(modalOpen, withDialog = 'confirm') {
   // Modals come FIRST in the console shell, exactly as they do here; what decides the stacking is z-index.
   // The second argument is what the banner's own effect puts on <html>, and the rules it triggers are read
   // out of steward.html rather than retyped — they are the whole of what keeps the strip off the dialog.
-  return page((dlg ? toHtml(dlg) : '') + shell(toHtml(tree)), modalOpen && withDialog ? 'clamped' : '');
+  return page((dlg ? toHtml(dlg) : '') + shell(toHtml(tree)), modalOpen && withDialog ? (expand ? 'open' : 'clamped') : '');
 }
 
 let chr, ws, prof, send, evalIn, frameId;
@@ -149,6 +161,12 @@ before(async () => {
   HTML.was = fixture(false, 'confirm');         // THE BASELINE: a dialog is up and the banner does not know
   HTML.tall = fixture(true, 'tall');            // the 92vh case an audit found this fix breaking
   HTML.spill = fixture(true, 'spill');          // a panel with no overflow of its own, which max-height spills
+  // ⚠ THE FIFTH STATE, AND THE ONE THAT WAS MISSING. `open` above is the banner DOCKED to one line; press its
+  // Show pill and the same banner becomes `data-stew-banner="open"` — a taller card, still fixed to the foot,
+  // still over the dialog. None of the four fixtures above is that state, which is why 20/20 said nothing
+  // about it while the audit of 2026-09-18 measured 44 px2 of the dismiss button landing on the dialog's
+  // SCRIM there. It is PRE-EXISTING, not a regression — see the note above the rows at the foot of this file.
+  HTML.expanded = fixture(true, 'confirm', true);
   prof = join(tmpdir(), 'trin-banner-chr-' + process.pid);
   // NEVER LET A TEST REACH PRODUCTION, and NAME THE HOSTS. The trailing `MAP *` catch-all is what this file
   // has always had and it is kept — this fixture loads no URL at all, so nothing here needs to resolve. What
@@ -555,5 +573,110 @@ test('THE INSTRUMENT: the icon inside the dismiss button is a real 16px box, not
     assert.deepEqual(m.grid.icon, { w: 16, h: 16 },
       `the dismiss button's icon measures ${JSON.stringify(m.grid.icon)} in the "${which}" fixture. A stub ` +
       'that renders nothing makes every measurement in this file a measurement of padding.');
+  }
+});
+
+// ── AND THE SAME QUESTION IN THE EXPANDED STATE, WHICH NOTHING HERE USED TO ASK ─────────────────────────────
+//
+// THE HOLE, NAMED (audit 2026-09-18). Every row above that measures the banner over a dialog uses the `open`
+// fixture, and `open` is the DOCKED one-line strip. Press the Show pill on that same card and the banner
+// becomes a taller card at `data-stew-banner="open"` — still fixed to the foot, still above the dialog, still
+// inside a wrapper whose `overflowY: 'auto'` clips anything above its padding box. The dismiss button in that
+// state takes the OTHER arm of the ternary (`padding: 14, margin: -14`), and -14 against 12px of card padding
+// plus a 1px border puts its top row 1px ABOVE the card — outside the clip, where what answers is the
+// dialog's scrim, and `SkConfirm`'s scrim is `<div onClick={onCancel}>`.
+//
+// Measured at 360x730 before the fix: card top 553, button top 552, 1892/1936 px2 reaching the button,
+// notMine {"SCRIM": 44} — the whole top row. One CSS pixel, so a steward has to be unlucky; but it is the
+// same class of defect as the two commits before this, and the consequence is identical: the press reads as
+// "clear this error" and performs "throw away the dialog I was working in".
+//
+// PRE-EXISTING, NOT INTRODUCED, and provable without checking out the old commit: this arm of the ternary is
+// the IN-FLOW shape, untouched by either of the two commits that fixed the docked state. Put `margin: -14`
+// back in place of the `-12px -14px` beside it and both rows below go red at both sizes with the numbers
+// above — which is the same measurement the 2026-09-18 audit took against the branch point.
+for (const [label, W, H] of [['360x730 upright', 360, 730], ['730x328 landscape', 730, 328]]) {
+  test(`${label}: the EXPANDED banner's dismiss target is whole, and none of it is the dialog's scrim`, { skip: !CHROME ? 'no chromium' : false, timeout: 120000 }, async () => {
+    const m = await measure('expanded', W, H);
+    assert.ok(m.dialog && m.alert, 're-anchor: the expanded fixture did not render both boxes');
+    assert.ok(m.grid && m.grid.dismiss, 're-anchor: the expanded banner rendered no dismiss button');
+    // THE FIXTURE MUST REALLY BE EXPANDED. Without this the row is vacuous: a fixture that silently stayed
+    // docked would measure the strip a second time and pass on the docked shape's merits.
+    assert.equal(m.grid.show, null,
+      're-anchor: the expanded banner still renders a Show pill, so this fixture is measuring the DOCKED state');
+    assert.ok(m.alert.bottom - m.alert.top > 40,
+      `the "expanded" card is ${m.alert.bottom - m.alert.top}px tall — that is the one-line strip, not the ` +
+      'expanded state, and every assertion in this row is then about the wrong thing');
+    const g = m.grid.dismiss, c = m.grid.card;
+    assert.equal(g.hit, g.total,
+      `${g.total - g.hit} of the expanded dismiss button's ${g.total} px2 DO NOT REACH IT at ${label} — ` +
+      `${JSON.stringify(g.notMine)}. SCRIM there means the steward aiming at "clear this message" cancels ` +
+      'the dialog they were working in, because SkConfirm\'s scrim is onClick={onCancel}.');
+    // NOT `rows === h` / `cols === w`, which the docked rows above can assert and this one cannot: the
+    // expanded card lands on a half pixel, so the integer grid covers 43 of a 44px-high box and an equality
+    // there would fail on the instrument rather than on the code. `hit === total` already says every pixel
+    // the grid does reach belongs to the button — there is no hole — and the guard below says the scan was
+    // not vacuous, which is the failure mode an inequality would otherwise hide.
+    assert.ok(g.total >= 1800, `the expanded dismiss grid scanned only ${g.total} px2 at ${label} — a target ` +
+      'that small is not the 44x44 this row believes it is measuring');
+    assert.equal(g.outsideCard, 0,
+      `${g.outsideCard} px2 of the expanded dismiss target are OUTSIDE THE PAINTED CARD at ${label} ` +
+      `(card ${JSON.stringify(c)}, target ${JSON.stringify({ left: g.left, right: g.right, top: g.top, bottom: g.bottom })})`);
+    // …and it is still the target a cheap Android phone needs. The expanded card has the room the docked one
+    // does not, so this state keeps the full 44x44 and does not trade one defect for a smaller control.
+    assert.ok(g.w >= 44 && g.h >= 44,
+      `THE EXPANDED DISMISS TARGET IS ${g.w}x${g.h} at ${label}, under 44x44 — the docked state gives up ` +
+      'vertical room because it has none; this one has room and must not.');
+  });
+
+  test(`${label}: …and the expanded banner still covers no control of the dialog`, { skip: !CHROME ? 'no chromium' : false, timeout: 120000 }, async () => {
+    // The mirror risk of making room above the card: whatever the fix does, the expanded banner must not
+    // start intercepting the dialog's own buttons, and must not be see-through over them either.
+    const m = await measure('expanded', W, H);
+    // ⚠ `intercepted` IS DELIBERATELY NOT ASSERTED HERE, and the reason is a finding in its own right.
+    // At 730x328 the `open` reservation shortens SkConfirm to 169px against 235px of content, so its Cancel
+    // and "Seal it" are SCROLLED OUT OF the panel's own viewport — clipped by the dialog, not covered by the
+    // banner. getBoundingClientRect still reports them at their unscrolled place, so `at()` samples a point
+    // the dialog is not painting and reads back "banner". The instrument cannot tell "covered" from
+    // "scrolled away"; asserting on it here would pin a false claim. What IS true, and is recorded for the
+    // owner rather than fixed on this branch: expanding the banner on a landscape phone can put a dialog's
+    // buttons below its own fold, and there is no control that collapses the banner again — `openWide`
+    // clears only when the dialog closes.
+    assert.deepEqual(m.insideBanner, [],
+      `A TAP ON THE EXPANDED BANNER PRESSES A BUTTON BEHIND IT at ${label}: ` + JSON.stringify(m.insideBanner));
+    assert.equal(m.atDismiss, 'banner',
+      `the expanded banner's dismiss control is painted by something else at ${label} — it is behind the ` +
+      'overlay (AUDIT-9), where it is greyed and cannot be tapped');
+  });
+}
+
+// ── THE TRADE THE DOCKED SHAPE MADE, MEASURED SO IT CANNOT DRIFT FURTHER ────────────────────────────────────
+//
+// 9719cf0 dropped the dismiss button's horizontal negative margin, which is what stops it reaching across
+// into the Show pill. The cost, which that commit did not state: the flex line now reserves the button's
+// whole 44px instead of the icon's 16, so the one-line message loses 28px of room before it ellipsises.
+// Measured here, by putting the old shape back: 192 -> 164 at 360x730, 424 -> 396 at 730x328. On a 360px
+// phone that is about 15% of the line — four or five characters — and it is accepted, because the message is
+// a summary either way and `Show` opens the whole sentence.
+//
+// This row is a FLOOR, not an equality: it exists so the next widening of a control in this strip cannot
+// quietly take another slice of the message without somebody choosing to. The exact numbers above are the
+// record; the thresholds below are where "a summary" stops being one.
+test('the docked message keeps a readable amount of room beside its two controls', { skip: !CHROME ? 'no chromium' : false, timeout: 120000 }, async () => {
+  for (const [label, W, H, floor] of [['360x730 upright', 360, 730, 150], ['730x328 landscape', 730, 328, 380]]) {
+    await send('Emulation.setDeviceMetricsOverride', { width: W, height: H, deviceScaleFactor: 2, mobile: true });
+    await send('Page.setDocumentContent', { frameId, html: HTML.open });
+    await sleep(350);
+    const w = await evalIn(`(() => {
+      const a = document.querySelector('[role="alert"]');
+      // the message is the flex:1 child between the icon and the two buttons
+      const el = [...a.children].find(e => e.tagName === 'DIV');
+      return el ? Math.round(el.getBoundingClientRect().width) : -1;
+    })()`);
+    assert.ok(w > 0, `re-anchor: the docked banner has no message element at ${label}`);
+    assert.ok(w >= floor,
+      `THE DOCKED MESSAGE IS DOWN TO ${w}px AT ${label}, past the ${floor} floor. It was 192/424 before ` +
+      '9719cf0 and 164/396 after; something has taken another slice of the one line a steward reads before ' +
+      'deciding whether to open the whole thing.');
   }
 });
