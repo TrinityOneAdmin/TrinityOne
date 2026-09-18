@@ -50,9 +50,22 @@ test('the helper card does not list somebody the church was never told about', a
     'be called on');
   assert.ok(failed.toasts.some(t => /Couldn’t list you/.test(t)), 'and nothing told them it had not worked');
 
-  const ok = run({ id: 'evt' });
+  // ⚠ `{ ok: true, evt }`, not a bare event: setCareAvail answers { ok, reason } since 2026-09-16, and the
+  // card tests `r && r.ok` — a failure OBJECT is truthy, so `if (r)` would flip it to "listed" on every
+  // failure, which is the bug this very test was written about.
+  const ok = run({ ok: true, evt: { id: 'evt' } });
   await new Promise(r => setTimeout(r, 5));
   assert.equal(ok.opt, true, 'CONTROL: a listing that DID save no longer shows as listed');
+
+  // …and the third outcome. "The church hasn't been told" over a listing that very probably landed makes a
+  // member who has offered either give up or offer again to a church that already has them.
+  const unsure = run({ ok: false, reason: 'unconfirmed' });
+  await new Promise(r => setTimeout(r, 5));
+  assert.notEqual(unsure.opt, true, 'the card claimed "you\'re listed" over an answer nobody gave');
+  assert.ok(unsure.toasts.some(t => /couldn’t confirm/i.test(t)),
+    'an unconfirmed listing is still reported as a settled failure');
+  assert.ok(!unsure.toasts.some(t => /hasn’t been told/.test(t)),
+    'it still asserts the church was never told, over a document the church very probably holds');
 });
 
 test('the feed rows only tick when the publish landed', () => {
@@ -82,18 +95,34 @@ test('the ENGINE reports a care listing that reached no relay', async () => {
       else if (bundle[k] === '}') { d--; if (!d) { end = k + 1; break; } }
     }
     const body = bundle.slice(i, end);
+    // ⚠ THE SECOND CALLER LIST. This hand-written name list IS a caller of the lifted function: both grew a
+    // `_pubReason(e)` on 2026-09-16 and went red here with "_pubReason is not defined" until it was added.
+    // The classifier is lifted from the SHIPPED bundle, never stubbed — an injected outcome cannot catch a
+    // dead classifier, and this one is one character from always answering the same word.
+    const _pubReason = new Function(fnBody(bundle, 'function _pubReason(e)', '_pubReason') + '\nreturn _pubReason;')();
     const mk = (fails) => new Function('window', 'sk', 'finalizeEvent2', '_publishAny', 'churchRelays',
-      'CAREAVAIL_D', 'NET', '_sealChurchDocMember', 'JSON', 'Date', 'Math', 'Array', 'String', 'console',
+      'CAREAVAIL_D', 'NET', '_sealChurchDocMember', '_pubReason', 'JSON', 'Date', 'Math', 'Array', 'String', 'console',
       'return ({ ' + body + ' })')(
       { Fellowship: { churchPub: 'cc', ready: Promise.resolve() } }, 'sk',
       (e) => ({ ...e, id: 'x' }),
-      async () => { if (fails) throw new Error('NO_NETWORK_RELAY'); return true; },
+      async () => { if (fails) { const e = new Error('NO_NETWORK_RELAY'); e.unsent = true; throw e; } return true; },
       () => ['wss://r/relay'], 'trinityone/careavail:', 'trinityone',
-      () => 'sealed', JSON, Date, Math, Array, String, { warn() {} })[name];
-    assert.equal(await mk(true)(['meal'], 'n'), null,
-      name + ' handed its event back after every relay refused it, so the screen above can never see a ' +
+      () => 'sealed', _pubReason, JSON, Date, Math, Array, String, { warn() {} })[name];
+    // 2026-09-16: these answer `{ ok, reason }` now rather than `evt | null`, so that the card can tell
+    // "the church was never told" from "nobody answered, and it may well have landed" — two sentences that
+    // send a member in opposite directions. The invariant this test exists for is unchanged: a send that
+    // landed nowhere must not come back looking like one that did.
+    const failed = await mk(true)(['meal'], 'n');
+    assert.equal(failed && failed.ok, false,
+      name + ' reported a send after every relay refused it, so the screen above can never see a ' +
       'failure and a member who was never listed is told they are');
-    assert.ok(await mk(false)(['meal'], 'n'),
-      'CONTROL: ' + name + ' no longer returns its event on the happy path');
+    assert.equal(failed.evt, undefined,
+      name + ' still hands the event back on a failure — a caller that reaches for it reads a send that never happened');
+    assert.equal(failed.reason, 'not-sent',
+      name + ' lost the reason, so the card can only ever say the settled sentence');
+    const landed = await mk(false)(['meal'], 'n');
+    assert.equal(landed && landed.ok, true,
+      'CONTROL: ' + name + ' no longer reports success on the happy path');
+    assert.ok(landed.evt && landed.evt.id, 'CONTROL: ' + name + ' no longer returns its event on the happy path');
   }
 });

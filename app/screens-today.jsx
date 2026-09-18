@@ -84,8 +84,11 @@ function CareNeedRow({ need, slots, skips, care, canManage, expanded, onToggle }
   // that added a failure toast on 2026-09-04 put a green tick beside its own error message. Audit same day.
   const saveNote = (iso) => {
     const cur = noteDraft[iso] !== undefined ? noteDraft[iso] : myNoteFor(iso);
+    // ⚠ `r && r.ok`, NEVER `if (r)`. fillCareSlot now answers an OBJECT — { ok, reason } — and an object is
+    // always truthy, so a plain truthiness test paints the green "✓ Saved" tick over every failure, which is
+    // the trap markSafe set. The toast beside it comes from care.setNote in app.jsx.
     Promise.resolve((care.setNote || care.fill)(need.id, iso, (cur || '').trim()))
-      .then(ok => { if (ok) setSavedFlash(f => ({ ...f, [iso]: true })); })
+      .then(r => { if (r && r.ok) setSavedFlash(f => ({ ...f, [iso]: true })); })
       .catch(() => {});
   };
   return (
@@ -158,14 +161,28 @@ function CareNeedRow({ need, slots, skips, care, canManage, expanded, onToggle }
 // The person a need is FOR can close the whole thing ("I'm sorted") — not just skip day by day. Without this
 // they must ask a steward to stop the church organising around them, which is the opposite of dignified.
 function CloseMyNeedButton({ need }) {
-  const [state, setState] = React.useState('');   // '' | 'confirm' | 'busy' | 'failed'
+  const [state, setState] = React.useState('');   // '' | 'confirm' | 'busy' | 'refused' | 'not-sent' | 'unsure'
+  // ⚠ ONE MESSAGE FOR THREE DIFFERENT THINGS, AND IT WAS ONLY TRUE FOR ONE OF THEM.
+  // "Your church keeps that with the care team — message them and they'll close it" describes a REFUSAL:
+  // the relay's care: gate, when the church does not let members close their own needs. Said over a close
+  // nobody had merely ACKNOWLEDGED, it sends somebody who has just told their church they are sorted to go
+  // and ask the care team to do a thing that is already done — which is the small indignity this button
+  // exists to remove. closeMyCareNeed answers { ok, reason } now (`_pubReason`), so each gets its own words.
+  // ⚠ `r && r.ok`, never `if (r)`: the failure object is truthy.
   const close = async () => {
     setState('busy');
-    let ok = false;
-    try { ok = await window.Fellowship.closeMyCareNeed(need); } catch (e) {}
-    setState(ok ? '' : 'failed');
+    let r = null;
+    try { r = await window.Fellowship.closeMyCareNeed(need); } catch (e) { r = null; }
+    if (r && r.ok) { setState(''); return; }
+    // A falsy answer — the engine's own guards (no key yet, or a need that is not this member's) and a
+    // thrown error — keeps the wording that shipped before, deliberately: this change splits the three
+    // publish outcomes apart and widens nothing else.
+    setState(!r ? 'refused' : r.reason === 'unconfirmed' ? 'unsure' : r.reason === 'not-sent' ? 'not-sent' : 'refused');
   };
-  if (state === 'failed') return <div style={{ fontSize: 11.5, color: 'var(--clay-deep, #b4462f)', marginTop: 8, lineHeight: 1.45 }}>Couldn’t close it from here — your church keeps that with the care team. Message them and they’ll close it.</div>;
+  const failNote = (t) => <div role="status" style={{ fontSize: 11.5, color: 'var(--clay-deep, #b4462f)', marginTop: 8, lineHeight: 1.45 }}>{t}</div>;
+  if (state === 'unsure') return failNote('We couldn’t confirm that reached your church — it may well have. Close the app and open this again to see; pressing it a second time does no harm.');
+  if (state === 'not-sent') return failNote('That didn’t reach your church, so it’s still open. Try again when you have signal.');
+  if (state === 'refused') return failNote('Couldn’t close it from here — your church keeps that with the care team. Message them and they’ll close it.');
   if (state === 'confirm' || state === 'busy') return (
     <div style={{ marginTop: 9, padding: '10px 12px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
       <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.45, marginBottom: 9 }}>Close this? Your church will stop signing up to help — you can always ask again.</div>
@@ -1029,10 +1046,24 @@ function CareAvailability({ ctx, part }) {
   // DO NOT LIST SOMEBODY WHO WAS NEVER LISTED. Audit 2026-09-02 #18. This flipped the card to "you're
   // listed" before knowing, so a member who volunteered to help and was never recorded believes their
   // church can call on them. `setAvail` already returns the engine's answer (app.jsx:1795).
+  // ⚠ `r && r.ok`, never `if (r)` — setCareAvail answers an OBJECT now, and an object is always truthy, so
+  // a plain truthiness test would flip the card to "you're listed" on every failure. That is the very bug
+  // audit #18 above was written about, re-armed by the shape change.
+  // AND THE THIRD OUTCOME. "The church hasn't been told" was said over a listing nobody had merely
+  // ACKNOWLEDGED, so a member who HAS offered either gives up or offers again out of band to a church that
+  // already has them. On `unconfirmed` the card is left following the relay — setOpt(null) — because that
+  // really is what we know: the relay's own answer is the truth, and claiming either state over it would be
+  // the same guess in a new direction. Saving again is safe (fixed d-tag `careavail:<churchPub>`).
   const save = () => {
     setEditing(false);
     Promise.resolve(care.setAvail ? care.setAvail(tags, note) : null)
-      .then((ok) => { if (ok) setOpt(true); else { setOpt(null); ctx.toast('Couldn’t list you — the church hasn’t been told. Try again when you have signal.', { error: true }); } })
+      .then((r) => {
+        if (r && r.ok) { setOpt(true); return; }
+        setOpt(null);
+        ctx.toast(r && r.reason === 'unconfirmed'
+          ? 'We couldn’t confirm that reached your church — it may well have. If the card still says you’re not listed in a moment, save again; it won’t list you twice.'
+          : 'Couldn’t list you — the church hasn’t been told. Try again when you have signal.', { error: true });
+      })
       .catch(() => { setOpt(null); ctx.toast('Couldn’t list you — the church hasn’t been told.', { error: true }); });
   };
   // COMING OFF THE LIST IS THE SAME PROMISE IN REVERSE, and only the "on" direction was fixed. A member who
@@ -1041,7 +1072,13 @@ function CareAvailability({ ctx, part }) {
   const turnOff = () => {
     setEditing(false);
     Promise.resolve(care.clearAvail ? care.clearAvail() : null)
-      .then((ok) => { if (ok) { setOpt(false); setTags([]); setNote(''); } else { setOpt(null); ctx.toast('Couldn’t take you off the list — the church hasn’t been told, so people can still see you as ready to help. Try again when you have signal.', { error: true }); } })
+      .then((r) => {
+        if (r && r.ok) { setOpt(false); setTags([]); setNote(''); return; }
+        setOpt(null);
+        ctx.toast(r && r.reason === 'unconfirmed'
+          ? 'We couldn’t confirm that reached your church — it may well have. If the card still says you’re listed in a moment, tap it again; it won’t do any harm.'
+          : 'Couldn’t take you off the list — the church hasn’t been told, so people can still see you as ready to help. Try again when you have signal.', { error: true });
+      })
       .catch(() => { setOpt(null); ctx.toast('Couldn’t take you off the list — the church hasn’t been told.', { error: true }); });
   };
   const showTags = (mine && mine.tags && mine.tags.length) ? mine.tags : tags;

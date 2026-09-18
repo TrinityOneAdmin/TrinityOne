@@ -12971,11 +12971,11 @@
       if ((need.recipient || "").toLowerCase() !== (pub || "").toLowerCase()) return false;
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", CARE_D + need.id], ["t", NET], ["church", cp], ["deleted", "1"]], content: "" }, sk);
       try {
-        const r = await _publishAny(churchRelays(), evt);
-        return !!r || true;
+        await _publishAny(churchRelays(), evt);
       } catch (e) {
-        return false;
+        return { ok: false, reason: _pubReason(e) };
       }
+      return { ok: true, evt };
     },
     // ── shared care-team↔asker thread for a request (the "Message" action). Sealed to the care team + the asker
     // (+ the church + ourselves), so any care member can join in and the asker can reply. ──
@@ -13058,9 +13058,9 @@
         await _publishAny(churchRelays(), evt);
       } catch (e) {
         console.warn("[fellowship] care slot publish failed", e);
-        return null;
+        return { ok: false, reason: _pubReason(e) };
       }
-      return evt;
+      return { ok: true, evt };
     },
     async clearCareSlot(careId, iso) {
       const cp = window.Fellowship.churchPub;
@@ -13076,9 +13076,9 @@
         await _publishAny(churchRelays(), evt);
       } catch (e) {
         console.warn("[fellowship] clear care slot publish failed", e);
-        return null;
+        return { ok: false, reason: _pubReason(e) };
       }
-      return evt;
+      return { ok: true, evt };
     },
     // SAFETY CHECK — subscribe to the church's active emergency roll-call. cb(check) with the newest OPEN check
     // {id, message, by, at}, or cb(null) when there's none / it was closed. The relay only serves it to
@@ -13213,9 +13213,9 @@
         await _publishAny(churchRelays(), evt);
       } catch (e) {
         console.warn("[fellowship] clear care skip publish failed", e);
-        return null;
+        return { ok: false, reason: _pubReason(e) };
       }
-      return evt;
+      return { ok: true, evt };
     },
     // ── "I'm here to help" availability — a member signals they're willing to help, so people who need
     // something are encouraged to ask. One replaceable doc per member per church (keyed by the member's own
@@ -13279,9 +13279,9 @@
         await _publishAny(churchRelays(), evt);
       } catch (e) {
         console.warn("[fellowship] care avail publish failed", e);
-        return null;
+        return { ok: false, reason: _pubReason(e) };
       }
-      return evt;
+      return { ok: true, evt };
     },
     async clearCareAvail() {
       const cp = window.Fellowship.churchPub;
@@ -13296,9 +13296,9 @@
       try {
         await _publishAny(churchRelays(), evt);
       } catch (e) {
-        return null;
+        return { ok: false, reason: _pubReason(e) };
       }
-      return evt;
+      return { ok: true, evt };
     },
     // events posted by a GROUP'S leaders (members the church empowered) — authored by the member, scoped to
     // a group. Client-verified (M2): we only show events from the church, a current roster steward, or an
@@ -13487,9 +13487,9 @@
       try {
         await _publishAny(window.Fellowship.relays, evt);
       } catch (e) {
-        return null;
+        return { ok: false, reason: _pubReason(e) };
       }
-      return evt;
+      return { ok: true, evt };
     },
     // my replies to serving requests (own reqreply docs) -> { requestId: verdict }
     subscribeMyReqReplies(onReplies) {
@@ -13599,7 +13599,15 @@
       const list = Array.isArray(dates) ? dates : [];
       const content = JSON.stringify({ dates: list });
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", "trinityone/unavail:" + me], ["t", NET], ["p", cp]], content }, sk);
-      await _publishBounded(window.Fellowship.relays, evt);
+      try {
+        await _publishBounded(window.Fellowship.relays, evt);
+      } catch (e) {
+        try {
+          e.reason = _pubReason(e);
+        } catch (x) {
+        }
+        throw e;
+      }
       try {
         localStorage.setItem(UNAVAIL_MIRROR + cp, JSON.stringify(list));
       } catch (e) {

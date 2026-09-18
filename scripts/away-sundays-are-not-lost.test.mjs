@@ -27,7 +27,10 @@ function find(n, pred, out = []) {
 }
 const button = (tree, label) => find(tree, n => n.type === 'button' && texts(n).join(' ').includes(label));
 
-function sheet({ mirror = [], church = null, complete = true } = {}) {
+// `saveFails` is the REASON setUnavailable throws with, or null for a save that works. The engine attaches
+// it (`_pubReason`) precisely so this sheet can tell "nothing left the phone" from "nobody answered" — two
+// outcomes that need opposite sentences.
+function sheet({ mirror = [], church = null, complete = true, saveFails = null } = {}) {
   const { React, draw } = miniReact();
   const saved = [];
   const toasts = [];
@@ -50,7 +53,12 @@ function sheet({ mirror = [], church = null, complete = true } = {}) {
     church: { id: 'c1', name: "St Chad's", npub: 'c'.repeat(64) },
     getUnavailableDates: () => mirror,
     readUnavailableDates: () => Promise.resolve({ dates: church === null ? [] : church, complete }),
-    setUnavailableDates: (d) => { saved.push(d); return Promise.resolve({}); },
+    setUnavailableDates: (d) => {
+      saved.push(d);
+      if (!saveFails) return Promise.resolve({});
+      const e = new Error('publish failed'); e.reason = saveFails;
+      return Promise.reject(e);
+    },
     toast: (m) => toasts.push(m),
     joinState: { isPending: false },
   };
@@ -121,4 +129,48 @@ test('…and when the read DOES answer, saving works normally', async () => {
   b[0].props.onClick();
   for (let i = 0; i < 8; i++) await Promise.resolve();
   assert.equal(s.saved.length, 1, 'a confirmed read still could not save — the guard is blocking the feature');
+});
+
+// ── AND THE OPPOSITE LIE: "nothing was saved" over a save that very probably LANDED ───────────────────────
+//
+// Added 2026-09-16. The catch in this sheet said "That didn't reach your church, so nothing was saved" for
+// all three failure outcomes at once. When nobody ANSWERED, the document is signed, on the wire, and usually
+// lands a moment later — so the member is told the rota does not know about Sundays it already knows about,
+// and goes and tells their leader out of band. A wrong failure message sends somebody to redo work already
+// done, which is why it is worse than no message.
+//
+// Re-saving is safe and the wording says so: every save replaces the whole list at the fixed d-tag
+// `unavail:<me>` and the ticks have not changed, so pressing Save again writes exactly the same dates.
+async function saveAndRead(s) {
+  await s.settle();
+  const b = button(s.tree, 'away').concat(button(s.tree, 'Clear all'));
+  assert.ok(b.length, 're-anchor: no save control rendered');
+  b[0].props.onClick();
+  for (let i = 0; i < 12; i++) await Promise.resolve();
+  return reads(s.redraw());
+}
+
+test('a save NOBODY ANSWERED is not reported as "nothing was saved"', async () => {
+  const s = sheet({ mirror: ['2026-09-20'], church: ['2026-09-20'], saveFails: 'unconfirmed' });
+  const t = await saveAndRead(s);
+  assert.match(t, /couldn’t confirm|could not confirm/i,
+    'the sheet still claims a settled failure over a save nobody answered for. Read: ' + t);
+  assert.doesNotMatch(t, /nothing was saved/i,
+    'it is still telling the member the rota does not know, over dates the rota very probably has. Read: ' + t);
+});
+
+test('CONTROL: a save that genuinely never left the phone still says nothing was saved', async () => {
+  // Without this row, "always say we couldn’t confirm" would pass the one above — and softening a settled
+  // failure is the dangerous direction: the member stops worrying about dates the church never received.
+  const s = sheet({ mirror: ['2026-09-20'], church: ['2026-09-20'], saveFails: 'not-sent' });
+  const t = await saveAndRead(s);
+  assert.match(t, /nothing was saved/i,
+    'a save that reached no relay at all is being softened into "it may well have". Read: ' + t);
+});
+
+test('CONTROL: a save that WORKED reports no failure at all', async () => {
+  const s = sheet({ mirror: ['2026-09-20'], church: ['2026-09-20'] });
+  const t = await saveAndRead(s);
+  assert.doesNotMatch(t, /couldn’t confirm|nothing was saved/i,
+    'a successful save is reporting a failure — the opposite lie again. Read: ' + t);
 });

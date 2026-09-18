@@ -6697,7 +6697,16 @@ window.Fellowship = {
     if (!sk || !cp || !need || !need.id) return false;
     if ((need.recipient || '').toLowerCase() !== (pub || '').toLowerCase()) return false;   // only your own
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CARE_D + need.id], ['t', NET], ['church', cp], ['deleted', '1']], content: '' }, sk);
-    try { const r = await _publishAny(churchRelays(), evt); return !!r || true; } catch (e) { return false; }
+    // ⚠ WHICH FAILURE IT WAS DECIDES WHAT THE SCREEN MAY SAY, and this returned a bare `false` for all of
+    // them. The button's one message — "your church keeps that with the care team, message them and they'll
+    // close it" — is only true for a REFUSAL (the relay's care: gate, when the church does not allow members
+    // to close their own needs). Said over a close nobody had acknowledged, it sends somebody who has just
+    // told the church they are sorted to go and ask the care team to do a thing already done.
+    // `{ ok, reason }` now. Fixed d-tag (`care:<need.id>` + deleted), so pressing again is safe.
+    // The `!!r || true` it replaces was always `true` — _publishAny resolves `true` or throws.
+    try { await _publishAny(churchRelays(), evt); }
+    catch (e) { return { ok: false, reason: _pubReason(e) }; }
+    return { ok: true, evt };
   },
   // ── shared care-team↔asker thread for a request (the "Message" action). Sealed to the care team + the asker
   // (+ the church + ourselves), so any care member can join in and the asker can reply. ──
@@ -6751,8 +6760,15 @@ window.Fellowship = {
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CARESLOT_D + careId + ':' + iso], ['t', NET], ['church', cp]], content: JSON.stringify({ careId, isoDate: iso, note: String(note || '').trim() }) }, sk);
     // SIGNING UP TO BRING A MEAL IS A PROMISE TO A FAMILY. If it lands nowhere the slot still reads empty to
     // everyone else — worst case nobody comes, and the one person who thought they had it never finds out.
-    try { await _publishAny(churchRelays(), evt); } catch (e) { console.warn('[fellowship] care slot publish failed', e); return null; }
-    return evt;
+    //
+    // …AND "NOBODY ANSWERED" IS NOT "IT DID NOT GO". `return null` collapsed three different outcomes into
+    // one, and the screen then said "you're NOT signed up" over a sign-up that had very probably landed —
+    // which sends a second cook to the same Tuesday, or makes the first one withdraw. The d-tag is fixed
+    // (`careslot:<careId>:<iso>`), so pressing the button again REPLACES the same document and can never
+    // double anything: the honest sentence is safe to act on. Same `{ ok, reason }` as setEventRsvp.
+    try { await _publishAny(churchRelays(), evt); }
+    catch (e) { console.warn('[fellowship] care slot publish failed', e); return { ok: false, reason: _pubReason(e) }; }
+    return { ok: true, evt };
   },
   async clearCareSlot(careId, iso) {
     const cp = window.Fellowship.churchPub;
@@ -6760,9 +6776,10 @@ window.Fellowship = {
     if (!sk || !cp || !careId || !iso) return null;
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CARESLOT_D + careId + ':' + iso], ['t', NET], ['church', cp], ['deleted', '1']], content: '' }, sk);
     // …and standing DOWN from one matters just as much: a person who believes they withdrew, and did not, is
-    // still the only name against that day.
-    try { await _publishAny(churchRelays(), evt); } catch (e) { console.warn('[fellowship] clear care slot publish failed', e); return null; }
-    return evt;
+    // still the only name against that day. Same three outcomes, same fixed d-tag, so the same safe retry.
+    try { await _publishAny(churchRelays(), evt); }
+    catch (e) { console.warn('[fellowship] clear care slot publish failed', e); return { ok: false, reason: _pubReason(e) }; }
+    return { ok: true, evt };
   },
   // SAFETY CHECK — subscribe to the church's active emergency roll-call. cb(check) with the newest OPEN check
   // {id, message, by, at}, or cb(null) when there's none / it was closed. The relay only serves it to
@@ -6893,8 +6910,13 @@ window.Fellowship = {
     // Undoing a skip is the recipient saying "actually, yes please" — if it lands nowhere the day stays
     // crossed out and nobody brings anything. markCareSkip above already reports through `_delivered`;
     // this direction reported nothing at all.
-    try { await _publishAny(churchRelays(), evt); } catch (e) { console.warn('[fellowship] clear care skip publish failed', e); return null; }
-    return evt;
+    // …AND THEN REPORTED ALL THREE FAILURES AS ONE. `{ ok, reason }` now, like its siblings: "that day is
+    // still marked as one to skip" is false over an undo nobody merely acknowledged, and it makes the
+    // recipient ask a second time for help they have already asked for. Fixed d-tag
+    // (`careskip:<careId>:<iso>`), so pressing again replaces the same document and is safe.
+    try { await _publishAny(churchRelays(), evt); }
+    catch (e) { console.warn('[fellowship] clear care skip publish failed', e); return { ok: false, reason: _pubReason(e) }; }
+    return { ok: true, evt };
   },
   // ── "I'm here to help" availability — a member signals they're willing to help, so people who need
   // something are encouraged to ask. One replaceable doc per member per church (keyed by the member's own
@@ -6936,8 +6958,13 @@ window.Fellowship = {
     // RSVP and leaving a church — this pair was not in the plan's list, so batch 15's screen fix ("Couldn't
     // list you") could never fire: the engine handed back the event whatever happened. Found by the
     // pre-merge audit, 2026-09-04.
-    try { await _publishAny(churchRelays(), evt); } catch (e) { console.warn('[fellowship] care avail publish failed', e); return null; }
-    return evt;
+    // …AND NOR IS AN UNANSWERED ONE A FAILURE. 2026-09-16: `null` meant all three at once, so "Couldn't list
+    // you — the church hasn't been told" was said over a listing that had very probably landed. The member
+    // then either gives up on offering, or offers again out of band to a church that already has them.
+    // Fixed d-tag (`careavail:<churchPub>`), so saving again replaces the same document.
+    try { await _publishAny(churchRelays(), evt); }
+    catch (e) { console.warn('[fellowship] care avail publish failed', e); return { ok: false, reason: _pubReason(e) }; }
+    return { ok: true, evt };
   },
   async clearCareAvail() {
     const cp = window.Fellowship.churchPub;
@@ -6945,9 +6972,10 @@ window.Fellowship = {
     if (!sk || !cp) return null;
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CAREAVAIL_D + cp], ['t', NET], ['church', cp], ['deleted', '1']], content: '' }, sk);
     // …and coming OFF the list must not be claimed either: a member who thinks they withdrew, and did not,
-    // is still being counted on.
-    try { await _publishAny(churchRelays(), evt); } catch (e) { return null; }
-    return evt;
+    // is still being counted on. Same three outcomes, same fixed d-tag, so the same safe retry.
+    try { await _publishAny(churchRelays(), evt); }
+    catch (e) { return { ok: false, reason: _pubReason(e) }; }
+    return { ok: true, evt };
   },
   // events posted by a GROUP'S leaders (members the church empowered) — authored by the member, scoped to
   // a group. Client-verified (M2): we only show events from the church, a current roster steward, or an
@@ -7075,8 +7103,18 @@ window.Fellowship = {
     // A SEND THAT LANDED NOWHERE MUST NOT COME BACK LOOKING LIKE ONE THAT DID. Audit 2026-09-02 #6.
     // _publishAny THROWS when no relay accepted (and resolves true otherwise), and this swallowed that and
     // returned the event anyway — so every caller read a total failure as a success and said so on screen.
-    try { await _publishAny(window.Fellowship.relays, evt); } catch (e) { return null; }
-    return evt;
+    //
+    // …AND THEN IT TOLD THE MEMBER THE OPPOSITE LIE. 2026-09-16. `null` meant all three failures at once, so
+    // "you're still shown as not having replied" was said over a reply nobody had merely ACKNOWLEDGED — and
+    // the member, believing the church never heard, arranges cover for a Sunday they are already down for.
+    // `{ ok, reason }` now, reason from the shared `_pubReason`, like setEventRsvp beside it.
+    //
+    // ⚠ WHY "ANSWER AGAIN" IS SAFE HERE AND IS NOT SAFE FOR AN RSVP. This is not a toggle: the verdict
+    // arrives already decided and goes to the fixed d-tag `reqreply:<requestId>`, so pressing the same
+    // button again writes the same document with the same answer. It cannot reverse itself the way
+    // setEventRsvp's caller can.
+    try { await _publishAny(window.Fellowship.relays, evt); } catch (e) { return { ok: false, reason: _pubReason(e) }; }
+    return { ok: true, evt };
   },
   // my replies to serving requests (own reqreply docs) -> { requestId: verdict }
   subscribeMyReqReplies(onReplies) {
@@ -7143,7 +7181,13 @@ window.Fellowship = {
     const list = Array.isArray(dates) ? dates : [];
     const content = JSON.stringify({ dates: list });
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/unavail:' + me], ['t', NET], ['p', cp]], content }, sk);
-    await _publishBounded(window.Fellowship.relays, evt);
+    // ⚠ IT STILL THROWS — but the caller must be able to tell "nothing left this phone" from "nobody
+    // answered in time", because the honest sentence is opposite in the two cases. `_publishBounded` rejects
+    // with a bare `Error('timeout')` on the race, which carries neither flag, so `_pubReason` reads it as
+    // `unconfirmed` — which is exactly right: the event is signed and on the wire and often lands a moment
+    // later. Attached rather than returned, so every existing `catch` keeps working unchanged. 2026-09-16.
+    try { await _publishBounded(window.Fellowship.relays, evt); }
+    catch (e) { try { e.reason = _pubReason(e); } catch (x) {} throw e; }
     // Mirror only AFTER the church has it, so the sheet can never show dates the rota does not know about.
     try { localStorage.setItem(UNAVAIL_MIRROR + cp, JSON.stringify(list)); } catch (e) {}
     return evt;

@@ -687,7 +687,13 @@ function DashFinanceBook() {
   const postStatementToMembers = async (model, text) => {
     if (!broadcastGroup) throw new Error('No announcements channel to post to. Create a broadcast group first.');
     const lead = (model.title || 'Financial statement') + ' — ' + (model.periodLabel || '') + '\n\n';
-    await S.publishPost(lead + text, broadcastGroup.id);
+    // THE FOURTH CALLER OF publishPost, and it had the same hole as the two in stew-dashboard.jsx:
+    // publishPost RESOLVES `false` when the publish set was empty or every relay refused — it never throws —
+    // so awaiting it alone let doPost() in FinanceShareStatement print "Shared with members." over a
+    // statement no member received. Nothing typed is lost here (the text is rebuilt from the book), but the
+    // claim was still false. Throw, so the existing catch in doPost shows the reason and keeps the dialog open.
+    const ok = await S.publishPost(lead + text, broadcastGroup.id);
+    if (!ok) throw new Error('That didn’t post — nothing reached your church. Check your connection and try again.');
   };
   React.useEffect(() => {   // gentle donation nudge — once per session, unless hidden for ~3 months after giving
     if (!DONATE_ON || _booksDonateShown || Date.now() < booksDonateHiddenUntil()) return;

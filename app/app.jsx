@@ -2015,10 +2015,21 @@ function App() {
       })(),
       skips: careSkips,
       myPub: (window.Fellowship && window.Fellowship.myPubkey) || '',
-      fill: (careId, iso, note) => { setOptCare(o => ({ ...o, [careId + '|' + iso]: 'fill' })); return window.Fellowship.fillCareSlot(careId, iso, note).then(r => { if (r) toast('Thank you — you’re signed up'); else { setOptCare(o => { const n = { ...o }; delete n[careId + '|' + iso]; return n; }); toast('That didn’t reach your church — you’re NOT signed up. Try again in a moment.', { error: true }); } return r; }); },
-      clearFill: (careId, iso) => { setOptCare(o => ({ ...o, [careId + '|' + iso]: 'clear' })); return window.Fellowship.clearCareSlot(careId, iso).then(r => { if (r) toast('Removed'); else { setOptCare(o => { const n = { ...o }; delete n[careId + '|' + iso]; return n; }); toast('That didn’t reach your church — you’re still down for that day.', { error: true }); } return r; }); },
+      // ⚠ "WE COULDN'T TELL" IS NOT "IT FAILED", AND SAYING THE WRONG ONE COSTS A FAMILY A MEAL.
+      // These three read `if (r)` over a writer that returned null for all three failures at once, so a
+      // sign-up nobody had ACKNOWLEDGED — signed, on the wire, very often landing a second later — was
+      // reported as "you're NOT signed up". Two people then cook the same Tuesday, or the one who really
+      // had it stands down. That is the opposite lie from the usual one and it is worse: a wrong failure
+      // message sends somebody to redo work that was already done.
+      // `fillCareSlot`/`clearCareSlot` now answer { ok, reason } (reason from the shared `_pubReason`), and
+      // both write a FIXED d-tag — `careslot:<careId>:<iso>` — so pressing the same button again replaces
+      // the same document. "Tap it again" is therefore true and can never double a sign-up.
+      // ⚠ AND THE OPTIMISTIC MARK STAYS ON 'unconfirmed'. Rolling it back would repaint the day as empty
+      // under a sign-up that probably landed, which is the same lie again, one layer down.
+      fill: (careId, iso, note) => { setOptCare(o => ({ ...o, [careId + '|' + iso]: 'fill' })); return window.Fellowship.fillCareSlot(careId, iso, note).then(r => { if (r && r.ok) toast('Thank you — you’re signed up'); else if (r && r.reason === 'unconfirmed') toast('We couldn’t confirm that reached your church — it may well have. Close the app and open this again to see whether you are signed up.', { error: true }); else { setOptCare(o => { const n = { ...o }; delete n[careId + '|' + iso]; return n; }); toast('That didn’t reach your church — you’re NOT signed up. Try again in a moment.', { error: true }); } return r; }); },
+      clearFill: (careId, iso) => { setOptCare(o => ({ ...o, [careId + '|' + iso]: 'clear' })); return window.Fellowship.clearCareSlot(careId, iso).then(r => { if (r && r.ok) toast('Removed'); else if (r && r.reason === 'unconfirmed') toast('We couldn’t confirm that reached your church — it may well have. Close the app and open this again to see whether you are still down for that day.', { error: true }); else { setOptCare(o => { const n = { ...o }; delete n[careId + '|' + iso]; return n; }); toast('That didn’t reach your church — you’re still down for that day.', { error: true }); } return r; }); },
       // update the "what I'm bringing" note on an already-filled slot — same fillCareSlot doc, no "signed up" toast
-      setNote: (careId, iso, note) => window.Fellowship.fillCareSlot(careId, iso, note).then(r => { if (!r) toast('That note didn’t reach your church — nobody else can see it yet.', { error: true }); return r; }),
+      setNote: (careId, iso, note) => window.Fellowship.fillCareSlot(careId, iso, note).then(r => { if (r && r.ok) return r; toast(r && r.reason === 'unconfirmed' ? 'We couldn’t confirm that note reached your church — it may well have. You can send it again.' : 'That note didn’t reach your church — nobody else can see it yet.', { error: true }); return r; }),
       // ⚠ `skip` WAS THE ONE CARE CONTROL THAT SAID NOTHING EITHER WAY, and `if (!r)` — the check every
       // sibling on this object uses — would NOT have caught it. Those all return null when the publish
       // fails; markCareSkip returns the EVENT either way and records the outcome on `_delivered`, so a
@@ -2033,11 +2044,17 @@ function App() {
       // ("Skip") press this button, so it cannot say "they" — to the recipient, they ARE the they.
       skip: (careId, iso, reason, skipEnc, author) => window.Fellowship.markCareSkip(careId, iso, reason, skipEnc, author)
         .then(r => { if (!r || r._delivered === false) toast('That didn’t reach your church — that day may still show as needing someone.', { error: true }); return r; }),
-      clearSkip: (careId, iso) => window.Fellowship.clearCareSkip(careId, iso).then(r => { if (!r) toast('That didn’t reach your church — that day is still marked as one to skip.', { error: true }); return r; }),
+      // `r && r.ok`, never `if (r)` — clearCareSkip answers an object now and an object is always truthy.
+      // Three outcomes: "that day is still marked as one to skip" is false over an undo nobody merely
+      // acknowledged, and it makes the recipient ask again for help they have already asked for.
+      clearSkip: (careId, iso) => window.Fellowship.clearCareSkip(careId, iso).then(r => { if (r && r.ok) return r; toast(r && r.reason === 'unconfirmed' ? 'We couldn’t confirm that reached your church — it may well have. Tap Undo again if the day still shows as skipped; it won’t do any harm.' : 'That didn’t reach your church — that day is still marked as one to skip.', { error: true }); return r; }),
       // "I'm here to help": the list of members who are available, plus this member's own signal actions
       avail: careAvail,
-      setAvail: (tags, note) => window.Fellowship.setCareAvail(tags, note).then(r => { if (r) toast('You’re listed — thank you for being ready to help'); return r; }),
-      clearAvail: () => window.Fellowship.clearCareAvail().then(r => { if (r) toast('You’re off the list'); return r; }),
+      // `r && r.ok`, never `if (r)` — both answer an object now and an object is always truthy, so a plain
+      // truthiness test would thank a member for a listing the church never received. The failure wording
+      // lives on the card in app/screens-today.jsx (CareAvailability), which is where a member is looking.
+      setAvail: (tags, note) => window.Fellowship.setCareAvail(tags, note).then(r => { if (r && r.ok) toast('You’re listed — thank you for being ready to help'); return r; }),
+      clearAvail: () => window.Fellowship.clearCareAvail().then(r => { if (r && r.ok) toast('You’re off the list'); return r; }),
     },
     // safeguarding: this member's child status + whether a DM with a given peer is permitted (relay-enforced too)
     safeguard,
@@ -2153,13 +2170,25 @@ function App() {
       // rota with no matching request tapped "I'm away", saw the thank-you, and the relay received nothing.
       // The caller cannot know that without an answer, so give it one.
       if (!reqId) { toast('Your leader hasn’t sent a request for this yet — ask them to re-publish the rota.'); return false; }
-      // AWAIT IT, AND SAY SO IF IT DID NOT GO. respondToServingRequest returns null when no relay accepted.
+      // AWAIT IT, AND SAY SO IF IT DID NOT GO. respondToServingRequest answers `{ ok, reason }` (it returned
+      // `null` until 2026-09-16, which is what the next note is about).
       // This fired and forgot, so "Yes, I can serve" was recorded on the member's own screen and nowhere
       // else — the rota keeps showing the slot unfilled and they believe they have answered. Audit #6.
       if (!(window.Fellowship && window.Fellowship.respondToServingRequest)) return false;
+      // ⚠ `sent && sent.ok`, NEVER `if (sent)` — respondToServingRequest answers an OBJECT now and an object
+      // is always truthy, so a plain truthiness test would take the SUCCESS arm on every failure. (The
+      // markSafe trap; it is the reason this line and the engine changed in the same commit.)
+      // AND THE THREE-WAY SPLIT. `null` used to mean all three failures at once, so a member whose reply
+      // nobody had ACKNOWLEDGED was told "you're still shown as not having replied" — and, believing the
+      // church never heard, went and arranged cover for a Sunday she was already down for. Answering again
+      // is safe: the verdict arrives already decided and goes to the fixed d-tag `reqreply:<requestId>`, so
+      // a second press writes the same answer to the same document. (Unlike setEventRsvp, this is not a
+      // toggle and cannot reverse itself.)
       const sent = await window.Fellowship.respondToServingRequest(np, reqId, verdict, swapTo);
-      if (!sent) {
-        toast('Couldn’t send your answer — you’re still shown as not having replied. Try again when you have signal.', { error: true });
+      if (!(sent && sent.ok)) {
+        toast(sent && sent.reason === 'unconfirmed'
+          ? 'We couldn’t confirm your answer reached your church — it may well have. Tap the same button again; it won’t change what you said.'
+          : 'Couldn’t send your answer — you’re still shown as not having replied. Try again when you have signal.', { error: true });
         return false;
       }
       setServReplies(m => ({ ...m, [reqId]: verdict }));
