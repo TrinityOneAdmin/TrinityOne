@@ -60,8 +60,16 @@ fi
 # ── anti-rollback: refuse a validly-signed but OLDER bundle ────────────────────────────────────
 # SECURITY-AUDIT-2026-07-18 M2: the signature proves authenticity, not freshness. A compromised origin/DNS/TLS
 # could serve a previously-released (still validly signed) bundle to roll the fleet back onto a since-patched
-# vuln (e.g. the pre-2026-07-13 world-readable roster). version.txt line 2 is the build's git commit ISO date
-# (stamped by build-relay-payload.sh); require the incoming build to be no older than the installed one.
+# vuln (e.g. the pre-2026-07-13 world-readable roster). version.txt line 2 is the build's git commit ISO date;
+# require the incoming build to be no older than the installed one.
+#
+# WHERE BOTH STAMPS COME FROM (this said "stamped by build-relay-payload.sh" until 2026-09-18, and that was
+# never true of either side of this comparison): `git archive` substitutes them via export-subst — see
+# .gitattributes — so NEW_STAMP is whatever the release host's build-strict-tgz.sh archived into the bundle
+# being offered, and CUR_STAMP is the same field from the bundle this box last unpacked (seeded by
+# relay-app/install.sh's first pull). build-relay-payload.sh writes a version.txt too, but only into the
+# desktop Suite's payload directory, which is export-ignored and so never reaches a bundle — and a Suite
+# install enables no trinityone-update.path, so it never reaches this script either.
 NEW_STAMP="$( { tar -xzOf "$TARBALL" version.txt 2>/dev/null || tar -xzOf "$TARBALL" ./version.txt 2>/dev/null; } | sed -n 2p )"
 CUR_STAMP="$(sed -n 2p "$DIR/version.txt" 2>/dev/null || true)"
 NEW_E="$(date -d "$NEW_STAMP" +%s 2>/dev/null || echo 0)"

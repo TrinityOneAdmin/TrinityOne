@@ -4,7 +4,7 @@
 # the web app loads plain <script> tags (no 3 MB @babel/standalone, no per-load in-browser transpile) and the
 # gateway can serve a strict CSP with no 'unsafe-eval' — the D1 audit fix.
 #
-# Usage: build-strict-tgz.sh <output.tgz> [git-ref]
+# Usage: build-strict-tgz.sh <output.tgz> [git-ref]      # git-ref also settable as $RELEASE_REF; default `main`
 # Same content as `git archive <ref>` except: app/*.jsx -> app/*.js, the app shells load .js (Babel dropped),
 # and vendor/babel.min.js is removed. Everything else (relay-app, modules, assets, steward, etc.) is untouched.
 #
@@ -12,9 +12,19 @@
 # release host's live HEAD. Building from HEAD meant whatever branch this box happened to have checked out
 # got signed with the real release key and installed fleet-wide — which is exactly how a8 ended up running a
 # WIP commit from the parked push branch, months of security fixes behind, with nobody able to tell.
+#
+# 2026-09-18: the ref may ALSO be named by the RELEASE_REF env var — the same variable gateway.mjs's
+# ensureSignedBundle() already reads — because a caller that runs inside a CI job cannot pass an argument.
+# relay-v0.8.0 failed on all three platforms 20s in with exactly the message below: actions/checkout@v4 on a
+# TAG push leaves a SHALLOW, DETACHED checkout holding one commit and refs/tags/<tag>, so there is no local
+# `main` and the build stopped before it built anything. The fix is NOT a fall back to HEAD — that is C1
+# again, and a tag build that shipped `main` would be its own trap (tag one commit, ship another). It is for
+# the caller to NAME the ref it means: CI passes RELEASE_REF=${{ github.ref_name }}, which is the tag on a
+# tag push and the branch on a manual run, and each resolves inside its own checkout. The default stays
+# `main`, so an unnamed build on the release host still cannot ship whatever is checked out there.
 set -euo pipefail
 OUT="${1:?usage: build-strict-tgz.sh <output.tgz> [git-ref]}"
-REF="${2:-main}"
+REF="${2:-${RELEASE_REF:-main}}"
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
 ESBUILD="$DIR/node_modules/.bin/esbuild"
 [ -x "$ESBUILD" ] || { echo "build-strict-tgz: esbuild not found at $ESBUILD" >&2; exit 2; }
