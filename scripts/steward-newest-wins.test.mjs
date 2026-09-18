@@ -11,8 +11,18 @@
 // What this test is, honestly: a STRUCTURAL guard, not a behavioural one. Driving the real handlers would
 // need a fake relay socket underneath SimplePool; that is worth building, but this file does not do it. It
 // asserts the ordering guard is present in the SHIPPED bundle (vendor/steward.js — what actually runs, not
-// the source), so deleting one fails the suite. It cannot prove the comparison is correct, only that it is
-// still there. Verified to bite: removing any single guard turns this red.
+// the source), so deleting one fails the suite. Verified to bite: removing any single guard turns this red.
+//
+// WHAT IT STILL CANNOT DO, AND WHO DOES IT INSTEAD (audit 2026-09-18). A structural rule reads the guard;
+// it does not run it. This file passed 11/0 with subscribeAdmitted's guard DEAD — one token changed in the
+// bundle (`byAuthor.get(e.pubkey)` → `byAuthor.get(e.id)`) makes `prev` permanently undefined, so nothing
+// is ever skipped, and every word the rules below look for is still on the page. The rule that now catches
+// that particular shape was added the same day (the clock must be read under the key it is written under),
+// but the lesson stands: only running the handler can prove a comparison DOES anything.
+// subscribeAdmitted is the one handler that IS driven for real, in
+// scripts/approved-members-survive-a-steward-leaving.test.mjs — including an older document arriving from
+// the SAME author after a newer one, which is the only arrangement that distinguishes a live guard from a
+// dead one. The other five handlers here have no such test. Do not read this file's green as behaviour.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -88,6 +98,26 @@ test('the guard is a real comparison against a tracked timestamp, not a constant
         if (!fed) problems.push(
           `${name}: guard compares against '${varName}.${field}', but nothing in the handler ever writes ` +
           `'${field}' from an event's created_at — so it can never skip a stale copy.`);
+        // …AND THE THING COMPARED MUST BE THE THING WRITTEN. Audit 2026-09-18: changing ONE token in the
+        // bundle, `byAuthor.get(e.pubkey)` → `byAuthor.get(e.id)`, leaves every rule above satisfied while
+        // `prev` is permanently undefined, so `e.created_at < prev.at` is never true and the guard is dead.
+        // A per-author clock is only a clock if the entry is looked up under the SAME key it is stored
+        // under; read it under anything else and every event looks like the first one from a new author.
+        const from = new RegExp('\\b' + varName + '\\s*=\\s*([A-Za-z_$][\\w$]*)\\.get\\(((?:[^()]|\\([^()]*\\))*)\\)').exec(body);
+        if (!from) problems.push(
+          `${name}: guard compares against '${varName}.${field}', but '${varName}' is not read out of a map ` +
+          `at all. Either the per-author clock has changed shape — re-anchor this rule — or the lookup has ` +
+          `gone and the guard compares against something that can never hold a previous timestamp.`);
+        else {
+          const [, mapName, key] = from;
+          const wrote = new RegExp('\\b' + mapName + '\\.set\\(\\s*' + key.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*,')
+            .test(body);
+          if (!wrote) problems.push(
+            `${name}: the clock is READ as '${mapName}.get(${key.trim()})' but never WRITTEN under that same ` +
+            `key — so the lookup always misses, '${varName}' is always undefined, and no stale copy is ever ` +
+            `skipped. (This is the exact 2026-09-18 one-token sabotage; the behavioural proof is ` +
+            `scripts/approved-members-survive-a-steward-leaving.test.mjs.)`);
+        }
       } else {
         const fed = new RegExp('\\b' + varName + '\\s*=\\s*[A-Za-z_$][\\w$]*\\.created_at').test(body);
         if (!fed) problems.push(

@@ -292,9 +292,13 @@ test('the retraction exemption is a READ gate and nothing else', () => {
     'argument above no longer holds.');
 });
 
-test('the console combines every copy instead of taking the newest — SHIPPED bundle, run', () => {
-  // Rule 1 again, on the other side: lift subscribeAdmitted out of vendor/steward.js and drive it with a fake
-  // pool. A newest-wins fold passes nothing here; only a per-author union does.
+// ── ONE DRIVEN COPY OF THE SHIPPED HANDLER ────────────────────────────────────────────────────────────────
+// Rule 1, on the console's side: lift subscribeAdmitted out of vendor/steward.js and RUN it against a fake
+// pool, so deleting the fold from the shipped bundle fails this file. Every call builds an INDEPENDENT
+// instance with its own `handlers`; sharing one fake pool across two instances silently rebinds the first,
+// which would let a case drive a subscription it is not the subject of.
+const admittedDoc = (who, ts, pubkeys) => ({ pubkey: who, created_at: ts, tags: [['d', ADMITTED_D + cp], ['t', NET]], content: JSON.stringify({ pubkeys }) });
+function drivenAdmitted() {
   const src = 'const api = { ' + grab('subscribeAdmitted(onList)') + ' };';
   let handlers = null;
   const scope = {
@@ -305,39 +309,83 @@ test('the console combines every copy instead of taking the newest — SHIPPED b
   };
   const keys = Object.keys(scope);
   const api = new Function(...keys, src + '\nreturn api;')(...keys.map(k => scope[k]));
-
   const seen = [];
   api.subscribeAdmitted((l) => seen.push([...l]));
   assert.ok(handlers, 're-anchor: subscribeAdmitted no longer opens a subscription');
-  const doc = (who, ts, pubkeys) => ({ pubkey: who, created_at: ts, tags: [['d', ADMITTED_D + cp], ['t', NET]], content: JSON.stringify({ pubkeys }) });
+  return { deliver: (e) => handlers.onevent(e), seen, last: () => seen[seen.length - 1] };
+}
 
-  handlers.onevent(doc(cp, 100, [ada.pub]));            // the vicar approves Ada
-  handlers.onevent(doc(warden.pub, 162, [ben.pub]));    // the warden approves Ben, a minute later
-  const after = seen[seen.length - 1];
+test('the console combines every copy instead of taking the newest — SHIPPED bundle, run', () => {
+  // A newest-wins fold passes nothing here; only a per-author union does.
+  const doc = admittedDoc;
+  const one = drivenAdmitted();
+
+  one.deliver(doc(cp, 100, [ada.pub]));            // the vicar approves Ada
+  one.deliver(doc(warden.pub, 162, [ben.pub]));    // the warden approves Ben, a minute later
+  const after = one.last();
   assert.ok(after.includes(ada.pub) && after.includes(ben.pub),
     'the console still takes the newest copy and throws the other away, so one of two people approved on the ' +
     'same morning is shown as still waiting — and the next Approve press writes that down permanently. ' +
     'Saw: ' + JSON.stringify(after));
 
   // ARRIVAL ORDER MUST NOT DECIDE ANYTHING. Same two documents, opposite order.
-  const seen2 = [];
-  const api2 = new Function(...keys, src + '\nreturn api;')(...keys.map(k => scope[k]));
-  api2.subscribeAdmitted((l) => seen2.push([...l]));
-  handlers.onevent(doc(warden.pub, 162, [ben.pub]));
-  handlers.onevent(doc(cp, 100, [ada.pub]));
-  const after2 = seen2[seen2.length - 1];
+  const two = drivenAdmitted();
+  two.deliver(doc(warden.pub, 162, [ben.pub]));
+  two.deliver(doc(cp, 100, [ada.pub]));
+  const after2 = two.last();
   assert.ok(after2.includes(ada.pub) && after2.includes(ben.pub),
     'an older copy arriving late still loses — which is a reconnect, so the Members screen changes under ' +
     'whoever is looking at it. Saw: ' + JSON.stringify(after2));
 
   // …AND AN AUTHOR'S OWN LATER LIST STILL REPLACES THEIR OWN EARLIER ONE, or nobody could ever be taken off.
-  const seen3 = [];
-  const api3 = new Function(...keys, src + '\nreturn api;')(...keys.map(k => scope[k]));
-  api3.subscribeAdmitted((l) => seen3.push([...l]));
-  handlers.onevent(doc(cp, 100, [ada.pub, ben.pub]));
-  handlers.onevent(doc(cp, 200, [ada.pub]));
-  const after3 = seen3[seen3.length - 1];
+  const three = drivenAdmitted();
+  three.deliver(doc(cp, 100, [ada.pub, ben.pub]));
+  three.deliver(doc(cp, 200, [ada.pub]));
+  const after3 = three.last();
   assert.deepEqual(after3, [ada.pub],
     'the union has become a one-way ratchet: the church published a list WITHOUT Ben and he is still on it, ' +
     'so nobody can ever be removed. Newest-per-author, union across authors — not union across everything.');
+});
+
+test('A LAGGING RELAY REPLAYING AN AUTHOR\'S SUPERSEDED LIST DOES NOT UN-REMOVE ANYBODY — SHIPPED bundle, run', () => {
+  // THE GAP THIS CLOSES (audit 2026-09-18). The three cases above are: two authors; the same two in the
+  // opposite order; and one author whose NEWER list arrives LAST. None of them ever delivers an OLDER
+  // document from the SAME author AFTER a newer one — which is the only arrangement the newest-per-author
+  // guard exists for, and therefore the only one that can tell a working guard from a dead one.
+  //
+  // How dead it could be, measured: change `byAuthor.get(e.pubkey)` to `byAuthor.get(e.id)` in the shipped
+  // bundle and `prev` is always undefined, so `e.created_at < prev.at` is never true and NO stale copy is
+  // ever skipped. Every test in the repo stayed green, including the structural scan in
+  // scripts/steward-newest-wins.test.mjs, which checks that the compared field is FED from a created_at but
+  // never that the object compared is the object written.
+  //
+  // WHY IT MATTERS ON A SUNDAY. Every relay holds its own copy of this one address and the console reads all
+  // of them at once. A relay that was offline while the church removed somebody answers with the list as it
+  // was — an EARLIER created_at, more names on it. If the guard is dead that copy overwrites the current one
+  // in byAuthor, the union puts the removed person back, and the next Approve press writes them down as
+  // approved in the church's own signed copy. That is a removal silently undone by a slow server.
+  const doc = admittedDoc;
+
+  // The church's current list is [Ada]. Ben was on the previous one and has been taken off.
+  const solo = drivenAdmitted();
+  solo.deliver(doc(cp, 200, [ada.pub]));
+  solo.deliver(doc(cp, 100, [ada.pub, ben.pub]));   // a lagging relay answers with the superseded copy
+  assert.deepEqual(solo.last(), [ada.pub],
+    'an OLDER list from the SAME author overwrote the newer one, so somebody the church removed is approved ' +
+    'again — put back by a relay that was merely behind, and made permanent by the next Approve press. ' +
+    'Saw: ' + JSON.stringify(solo.last()));
+  assert.ok(!solo.seen.some(l => l.includes(ben.pub)),
+    'the removed member was never in the final list but DID flash into it on the way — the Members screen ' +
+    'repaints from every emission, so a steward can approve against a list that briefly told them a lie. ' +
+    'Emissions: ' + JSON.stringify(solo.seen));
+
+  // …and the same, with a steward's copy in the union alongside, so the stale replay cannot hide behind it.
+  const mixed = drivenAdmitted();
+  mixed.deliver(doc(cp, 200, [ada.pub]));                       // church: Ada only, Ben removed
+  mixed.deliver(doc(warden.pub, 150, [ben.pub]));               // the warden separately approved Ben
+  mixed.deliver(doc(cp, 100, [ada.pub, church.pub]));           // lagging relay replays the church's old copy
+  assert.deepEqual([...mixed.last()].sort(), [ada.pub, ben.pub].sort(),
+    'the stale church copy was folded in beside the warden\'s, so a name the church has dropped is back on ' +
+    'the allowlist. Newest-per-author must hold INSIDE the union, not only when one author is talking. ' +
+    'Saw: ' + JSON.stringify(mixed.last()));
 });

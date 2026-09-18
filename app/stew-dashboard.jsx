@@ -563,17 +563,53 @@ function PublishErrorBanner() {
           vertical margin (the card's 5px padding + its 1px border) makes it exactly as tall as the painted
           card, and NO horizontal negative margin means the flex line reserves the whole 44 — so it cannot
           reach across the gap into Show. 44x37, every pixel of it inside the card and hit-testable.
-          37 not 44: the docked strip IS 37px tall (that is what keeps it clear of a 92vh dialog at 328px of
-          screen, and steward.html shortens every dialog by exactly that reservation), so 44 vertical pixels
-          inside it do not exist. Over WCAG 2.5.8's 24, and 1628 usable px2 against the 1760 of a 44x44 box
+          37 not 44: the docked strip IS 37px tall, so 44 vertical pixels inside it do not exist. And the
+          reservation is NOT that 37 — steward.html shortens every dialog by `min(24vh, 62px)`, which at
+          both phone sizes is 62. The strip occupies 43 of that (37 of card plus the wrapper's 6px of
+          bottom padding) and the remaining ~19 is slack. Saying "shortens every dialog by exactly that
+          reservation" was wrong in the code comment and right in 9719cf0's later paragraph; this is the
+          corrected version. Over WCAG 2.5.8's 24, and 1628 usable px2 against the 1760 of a 44x44 box
           of which 132 pressed the wrong thing.
-          THE HEIGHT IS DERIVED, NOT TYPED: `stretch` tracks the card's line box, so a future change to the
-          card's padding cannot leave this number stale. Measured, not reasoned — see the grid scan in
-          scripts/the-error-banner-clears-a-dialog-on-the-phone.test.mjs.
+          THE HEIGHT IS NOT TYPED, BUT IT IS NOT SAFE FROM THE PADDING EITHER, and the commit that introduced
+          this shape (9719cf0) said the opposite: “the height is DERIVED from the card's line box, not typed,
+          so a later change to the card's padding cannot leave a stale number here.” That is false and the
+          repo's own test disproves it. `alignSelf: 'stretch'` sizes the CONTENT box; the -6px is the card's
+          5px padding plus its 1px border, typed out, and nothing derives it. An audit changed the docked
+          card's padding from '5px 10px' to '2px 10px' and the original defect came straight back — four rows
+          of the grid scan below go red at both phone sizes, printing 132 px2 of the target OUTSIDE THE
+          PAINTED CARD and {"SCRIM":132} (re-measured on this branch, 2026-09-18). So: THE TEST is what
+          protects this, not the mechanism. If you change either card's padding, change the margin beside it
+          in the same edit and re-run that file.
+
+          WHAT THE DOCKED SHAPE COSTS, SINCE NOBODY COSTED IT WHEN IT LANDED. Dropping the horizontal negative
+          margin makes the flex line reserve the button's whole 44px instead of the icon's 16, so the
+          one-line message has 28px less room before it ellipsises: 192px of text to 164 at 360x730, and
+          424 to 396 at 730x328. On a 360px phone that is about 15% of the line, four or five characters.
+          It is accepted rather than regretted: the message is a summary either way, the whole sentence is
+          one tap away on `Show`, and `Show` now works to its own right edge instead of losing its last
+          column to this button. If that trade ever looks wrong the answer is a narrower button, not the
+          negative margin back.
+
+          EXPANDED (a dialog is up and the steward pressed `Show`) IS ITS OWN SHAPE, AND IT USED TO BE THE
+          IN-FLOW ONE. The in-flow trick is `padding: 14` with `margin: -14`, and -14 against this card's
+          12px padding + 1px border puts the button's top row 1px ABOVE the card. In flow that lands in the
+          wrapper's 10px of top padding and is merely untidy. Over a dialog the wrapper is the fixed strip,
+          `overflowY: 'auto'` with the card flush to its padding box, so that row is outside the clip:
+          measured at 360x730, card top 553, button top 552, 1892 of 1936 px2 reaching the button and
+          {"SCRIM":44} — and SkConfirm's scrim is onClick={onCancel}. At 730x328 the same row reached the
+          button but sat outside the painted card (outsideCard 44). One CSS pixel, low odds, and the same
+          class of defect as the two paragraphs above. PRE-EXISTING, not introduced by them: the identical
+          numbers come off the merge this was branched from. `-12px` keeps the whole 44x44 a pixel inside the
+          card's border in both directions; the in-flow branch is left exactly as it was, because its
+          16x16 footprint is asserted and nothing there was broken.
+          Measured, not reasoned — see the grid scan in
+          scripts/the-error-banner-clears-a-dialog-on-the-phone.test.mjs, including its `expanded` fixture.
           A second `style` added here for one commit silently won and undid the padding entirely. */}
       <button onClick={clear} aria-label="Dismiss this message" title="Dismiss this message"
         style={{ pointerEvents: 'auto', border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, minWidth: 44,
-          ...(clamped ? { alignSelf: 'stretch', padding: '0 14px', margin: '-6px 0' } : { minHeight: 44, padding: 14, margin: -14 }) }}><Icon name="x" size={16} /></button>
+          ...(clamped ? { alignSelf: 'stretch', padding: '0 14px', margin: '-6px 0' }
+            : modalUp ? { minHeight: 44, padding: 14, margin: '-12px -14px' }
+            : { minHeight: 44, padding: 14, margin: -14 }) }}><Icon name="x" size={16} /></button>
     </div>
   );
   // BELOW the header, not over it. Absolutely positioned at top:12 the card covered the entire tab strip at
