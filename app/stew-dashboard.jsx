@@ -542,10 +542,16 @@ function PublishErrorBanner() {
           worse banner than the one that cropped the dialog. */}
       {clamped ? <button onClick={() => setOpenWide(true)} aria-label="Show the whole message" title="Show the whole message"
         style={{ pointerEvents: 'auto', border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '4px 9px', minHeight: 24, cursor: 'pointer', flexShrink: 0, fontSize: 11.5, fontWeight: 700, fontFamily: 'var(--font-ui)', color: 'var(--ink-2)' }}>Show</button> : null}
-      {/* padding:14 with margin:-14 already gives this a ~44px target without changing the layout; only the
-          accessible name was missing. A second `style` added here for one commit silently won and undid it. */}
+      {/* THE TARGET AND THE PAINTED BOX ARE NOT THE SAME BOX, and that is the whole trick. `padding: 14` with
+          `margin: -14` hit-tests at 44x44 (WCAG 2.5.8 asks 24; a cheap Android phone needs 44) while the flex
+          line only ever reserves the 16x16 the icon would have taken on its own — so the docked one-line strip
+          stays 37px tall, which is what keeps it clear of a 92vh dialog at 328px of screen. `minWidth`/
+          `minHeight` pin the 44 even if the icon shrinks. It was CLAMPED DOWN TO 10/-10 on 2026-09-17, which
+          left the same 16x16 footprint and a 36x36 target: nothing on screen moved, and the one control a
+          steward presses to clear an error got smaller than this codebase's own floor.
+          A second `style` added here for one commit silently won and undid the padding entirely. */}
       <button onClick={clear} aria-label="Dismiss this message" title="Dismiss this message"
-        style={{ pointerEvents: 'auto', border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0, padding: clamped ? 10 : 14, margin: clamped ? -10 : -14 }}><Icon name="x" size={16} /></button>
+        style={{ pointerEvents: 'auto', border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, minWidth: 44, minHeight: 44, padding: 14, margin: -14 }}><Icon name="x" size={16} /></button>
     </div>
   );
   // BELOW the header, not over it. Absolutely positioned at top:12 the card covered the entire tab strip at

@@ -69,6 +69,12 @@ const LEDGER = new Function(readFileSync(new URL('../vendor/finance-ledger.js', 
 // (app/stew-modal.jsx) answers while a dialog is up; `withDialog` is false, 'confirm' (86vh) or 'tall' (92vh).
 function fixture(modalOpen, withDialog = 'confirm') {
   const Stub = (n) => { const f = function () { return null; }; Object.defineProperty(f, 'name', { value: n }); return f; };
+  // ⚠ THE ICON IS A REAL BOX HERE, and it has to be. A stub that renders NOTHING gives every icon zero
+  // width, and the one box in this file whose size is the thing under test — the dismiss button, which is
+  // an icon plus padding — then measures as padding alone. Before this, that button measured 20x20 in the
+  // clamped state where a phone actually has 36x36: the instrument was reporting a defect twice as bad as
+  // the real one, which is no better than reporting none. `size` is the prop every call site passes.
+  const Icon = ({ size }) => ({ type: 'span', props: { style: { display: 'block', width: size || 16, height: size || 16, flexShrink: 0 } }, kids: [] });
   const listeners = {};
   const win = {
     Steward: { actingChurch: '' },
@@ -79,7 +85,7 @@ function fixture(modalOpen, withDialog = 'confirm') {
   };
   const b = miniReact();
   const mod = loadScreen('app/stew-dashboard.jsx', ['PublishErrorBanner', 'SkConfirm', 'NameEditModal'], {
-    React: b.React, window: win, Icon: Stub('Icon'),
+    React: b.React, window: win, Icon,
     useStewDialog: () => ({ current: null }), useStewModalOpen: () => {},
     noteRelayRejection: () => {},
     setTimeout: () => 1, clearTimeout: () => {},
@@ -111,7 +117,7 @@ function fixture(modalOpen, withDialog = 'confirm') {
     dlg = b.draw(mod.NameEditModal, { open: true, current: 'St Aidan', isNetwork: false, onSave() {}, onClose() {} });
   } else if (withDialog === 'tall') {
     const fin = loadScreen('app/stew-finance.jsx', ['FinanceShareStatement'], {
-      React: d.React, window: win, Icon: Stub('Icon'), SkPill: Stub('SkPill'), SkBadge: Stub('SkBadge'),
+      React: d.React, window: win, Icon, SkPill: Stub('SkPill'), SkBadge: Stub('SkBadge'),
       Panel: ({ children }) => children, DismissibleNote: ({ children }) => children,
       useStewDialog: () => ({ current: null }), useStewModalOpen: () => {},
       setTimeout: () => 1, clearTimeout: () => {}, console, todayISO: () => '2026-09-17',
@@ -144,8 +150,18 @@ before(async () => {
   HTML.tall = fixture(true, 'tall');            // the 92vh case an audit found this fix breaking
   HTML.spill = fixture(true, 'spill');          // a panel with no overflow of its own, which max-height spills
   prof = join(tmpdir(), 'trin-banner-chr-' + process.pid);
+  // NEVER LET A TEST REACH PRODUCTION, and NAME THE HOSTS. The trailing `MAP *` catch-all is what this file
+  // has always had and it is kept — this fixture loads no URL at all, so nothing here needs to resolve. What
+  // it did NOT have is the production hosts by name, which is what scripts/no-browser-reaches-production.test.mjs
+  // requires of every launcher in this directory: a bare wildcard reads as "this one happens not to need the
+  // network today", and the next edit that gives it a page to load would drop it without anyone noticing.
+  // Round 8 is why the guard exists — a console dialling the canonical relays from a local origin wrote a
+  // church's books to the LIVE relay, and the ledger then sat split across two relays showing a balance
+  // neither supported. Nothing reached production from this file; the guard caught it first.
+  // 127.0.0.1:9 is the discard port: nothing listens, so a connection fails instantly rather than hanging.
+  const BLOCK_PROD = '--host-resolver-rules=MAP app.trinityone.church 127.0.0.1:9, MAP *.ts.net 127.0.0.1:9, MAP trinityone.church 127.0.0.1:9, MAP * 127.0.0.1:9';
   chr = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${CDP}`, '--no-sandbox', '--disable-gpu',
-    '--host-resolver-rules=MAP * 127.0.0.1:9', `--user-data-dir=${prof}`, 'about:blank'], { stdio: 'ignore' });
+    BLOCK_PROD, `--user-data-dir=${prof}`, 'about:blank'], { stdio: 'ignore' });
   let targets = null;
   for (let i = 0; i < 40 && !targets; i++) { await sleep(400); try { targets = await (await fetch(`http://127.0.0.1:${CDP}/json`)).json(); } catch {} }
   assert.ok(targets && targets.length, 'chromium never exposed a debug target');
@@ -217,6 +233,19 @@ const MEASURE = `(() => {
       if (!d2) return 'none';
       const r = box(d2);
       return at((r.left + r.right) / 2, (r.top + r.bottom) / 2);
+    })(),
+    // THE SIZE OF THE THING A FINGER HAS TO LAND ON, and separately the room it costs the bar. They are not
+    // the same number and they are not meant to be: a negative margin lets the target be bigger than its
+    // footprint. w/h are the border box, which is what the browser hit-tests; footW/footH are the margin
+    // box, which is what the flex line actually reserves.
+    dismiss: (() => {
+      const d2 = document.querySelector('[role="alert"] button[aria-label^="Dismiss"]');
+      if (!d2) return null;
+      const r = d2.getBoundingClientRect(), cs = getComputedStyle(d2);
+      const mx = parseFloat(cs.marginLeft) + parseFloat(cs.marginRight);
+      const my = parseFloat(cs.marginTop) + parseFloat(cs.marginBottom);
+      return { w: Math.round(r.width), h: Math.round(r.height),
+               footW: Math.round(r.width + mx), footH: Math.round(r.height + my) };
     })(),
     atTitle: t ? at((t.left + t.right) / 2, t.top + 4) : null,
     atLastButton: buttons.length ? (() => { const r = box(buttons[buttons.length - 1]); return at((r.left + r.right) / 2, (r.top + r.bottom) / 2); })() : null,
@@ -341,4 +370,52 @@ test('360x730: with NO dialog open the banner is back in flow, under the chrome,
   assert.ok(m.main.bottom - m.main.top >= 730 - CHROME_H - 221,
     `the scrolling content region is down to ${m.main.bottom - m.main.top}px: the banner is taking more ` +
     'than its cap, so a volunteer sees the header, the tabs and a wall of pink text and no church content');
+});
+
+// ── THE DISMISS CONTROL IS A REAL TARGET, IN BOTH STATES ───────────────────────────────────────────────────
+//
+// The clamping added on 2026-09-17 shrank this button's padding from 14 to 10 while it was docked, which took
+// the target from 44x44 to 36x36 — measured here, in Chromium, at both sizes of the owner's handset. 36 is
+// over WCAG 2.5.8's 24 and under the 44 this codebase has held itself to since audit #27, on the one control
+// a steward presses to clear an error they have just been told about.
+//
+// ⚠ AND THE OBVIOUS FIX IS THE WRONG ONE, which is why the second row exists. Simply restoring `padding: 14`
+// without the matching negative margin would put a 44px box inside a bar that is meant to be one line, and
+// the strip that has to clear a 92vh dialog at 328px of screen height would grow by 8px. The target and the
+// footprint are separated by the negative margin instead: the button hit-tests at 44x44 and reserves 16x16,
+// exactly as it already did with no dialog open.
+for (const [label, W, H] of [['360x730 upright', 360, 730], ['730x328 landscape', 730, 328]]) {
+  test(`${label}: the banner's dismiss button is at least 44x44 with a dialog open`, { skip: !CHROME ? 'no chromium' : false, timeout: 120000 }, async () => {
+    const m = await measure('open', W, H);
+    assert.ok(m.dismiss, 're-anchor: the docked banner rendered no dismiss button');
+    assert.ok(m.dismiss.w >= 44 && m.dismiss.h >= 44,
+      `THE DISMISS BUTTON IS ${m.dismiss.w}x${m.dismiss.h} WHILE THE BANNER IS DOCKED at ${label}, under the ` +
+      '44x44 a cheap Android phone needs — and this is the control that clears an error message, so a miss ' +
+      'either does nothing or presses whatever the dialog has behind it.');
+  });
+
+  test(`${label}: …and the target costs the docked strip no height`, { skip: !CHROME ? 'no chromium' : false, timeout: 120000 }, async () => {
+    // The whole point of the shape: hit area 44, footprint 16, bar unchanged at one line. If a future edit
+    // grows the target by growing the box, this is the row that says so.
+    const m = await measure('open', W, H);
+    assert.ok(m.dismiss.footH <= 16,
+      `the dismiss button reserves ${m.dismiss.footH}px of the docked strip's height (it may reserve 16): ` +
+      'the bar is no longer one line, and it is the bar that has to clear a 92vh dialog at 328px of screen.');
+    const barH = m.alert.bottom - m.alert.top;
+    assert.ok(barH <= 40,
+      `THE DOCKED BANNER IS ${barH}px TALL at ${label}. It was measured at 37 on the Oppo on 2026-09-17 and ` +
+      'is meant to be one line — every pixel here comes off a dialog that is already 92vh.');
+  });
+}
+
+test('360x730: the dismiss button is at least 44x44 with NO dialog open too', { skip: !CHROME ? 'no chromium' : false, timeout: 120000 }, async () => {
+  // The control. This state was never broken — asserting it keeps a "fix" that trades one state for the
+  // other from reading as a pass.
+  const m = await measure('shut', 360, 730);
+  assert.ok(m.dismiss, 're-anchor: the in-flow banner rendered no dismiss button');
+  assert.ok(m.dismiss.w >= 44 && m.dismiss.h >= 44,
+    `the in-flow banner's dismiss button is ${m.dismiss.w}x${m.dismiss.h}, under 44x44`);
+  assert.ok(m.dismiss.footW <= 16 && m.dismiss.footH <= 16,
+    `the in-flow dismiss button reserves ${m.dismiss.footW}x${m.dismiss.footH}, not the 16x16 it has always ` +
+    'reserved — the card is now a different size than it was before this button was touched');
 });
