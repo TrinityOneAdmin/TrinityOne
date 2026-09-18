@@ -20,6 +20,17 @@ permissions:
 
 env:
   NODE_VERSION: "22.22.2"        # the Node runtime bundled INTO the app (has node:sqlite); != the build Node below
+  # WHICH COMMIT THIS BUILD PACKAGES. build-relay-payload.sh → build-strict-tgz.sh `git archive` this ref;
+  # it defaults to `main` and deliberately never falls back to HEAD (RELEASE-2026-07-20 C1 — the release host
+  # once signed whatever it happened to have checked out and pushed it fleet-wide).
+  #
+  # relay-v0.8.0 failed on all three platforms 20s in with "build-strict-tgz: release ref 'main' does not
+  # resolve": actions/checkout@v4 on a tag push fetches `+<sha>:refs/tags/<tag>` at depth 1 and checks it out
+  # DETACHED, so this checkout has the tag and no `main` at all. github.ref_name is the tag name on a tag push
+  # and the branch name on a manual run — each resolves in its own checkout, and a tag build now ships the
+  # commit that was tagged rather than whatever `main` points at (tagging one commit and shipping another
+  # would be its own trap). Nothing here reintroduces C1: the ref is still named, never inferred from HEAD.
+  RELEASE_REF: ${{ github.ref_name }}
 
 jobs:
   build:
@@ -156,10 +167,11 @@ jobs:
               *)   cp "$f" "dist-installers/TrinityOne-Suite-${{ matrix.stable }}.$ext" ;;
             esac
           done
-          # Version manifest for the in-app update check. sha MUST match version.txt (git rev-parse HEAD,
-          # same checkout the payload was stamped from) so /suite-update compares like-for-like. Every matrix
-          # job writes the same sha; softprops clobbers by filename on the Release, so one wins harmlessly.
-          SHA="$(git rev-parse HEAD)"
+          # Version manifest for the in-app update check. sha MUST match the payload's version.txt so
+          # /suite-update compares like-for-like — so resolve the SAME ref build-relay-payload.sh stamped
+          # (RELEASE_REF), not HEAD. Every matrix job writes the same sha; softprops clobbers by filename on
+          # the Release, so one wins harmlessly.
+          SHA="$(git rev-parse --verify "${RELEASE_REF}^{commit}")"
           printf '{"sha":"%s","version":"%s","tag":"%s"}\n' "$SHA" "${GITHUB_REF_NAME#relay-v}" "${GITHUB_REF_NAME}" > dist-installers/suite-latest.json
           ls -la dist-installers || true
 
