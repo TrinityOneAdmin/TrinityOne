@@ -41,24 +41,45 @@ jobs:
         # payload tree), Linux ships AppImage + deb, macOS ships a .dmg. `stable` is the version-less name we
         # ALSO publish each installer under, so the app can link releases/latest/download/<stable> forever.
         #
-        # macOS INTEL (macos-13 / x86_64-apple-darwin / stable name macos-x64) IS DELIBERATELY NOT HERE, and
-        # removing it is what makes this workflow publish anything at all. Two comments used to stand where
-        # this one does, and both were false: one said Intel was "intentionally omitted" while it sat in the
-        # matrix below, and one said "if it queues, the other assets still publish" — they do not.
+        # macOS INTEL (macos-13 / x86_64-apple-darwin / stable name macos-x64) IS DELIBERATELY NOT HERE.
+        # Three comments have now stood where this one does, and the first TWO were false: one said Intel was
+        # "intentionally omitted" while it sat in the matrix below, and one said "if it queues, the other
+        # assets still publish". The THIRD was mine (182b018, 2026-09-18) and was also false: it said removing
+        # Intel "is what makes this workflow publish anything at all", and that Linux, Windows and
+        # Apple-silicon builds "that finished in minutes were thrown away three times over". Measured against
+        # the run history and the release assets, neither holds. If you are here debugging a failed tag, the
+        # thing to know is that THERE WERE TWO SEPARATE BLOCKERS, discovered one at a time:
         #
-        # What actually happens, measured from the run history:
-        #     relay-v0.8.0-rc1   failure    24h 0m 1s   2026-08-25
-        #     relay-v0.7.2       failure    24h 0m 1s   2026-07-24
-        #     relay-v0.7.1       cancelled  24h 0m 2s   (x4, July)
-        # The macos-13 job never gets a runner. `fail-fast: false` keeps the SIBLING JOBS running, but it
-        # cannot make them PUBLISH: the release assets are attached by a step at the end of each job, and
-        # GitHub kills the whole workflow — every job with it — at its 24-hour ceiling. So Linux, Windows and
-        # Apple-silicon builds that finished in minutes were thrown away three times over, and GitHub's
-        # "latest release" is still relay-v0.7.1 from 10 July while the website's download links point at it.
-        # TrinityOne-Suite-macos-x64.dmg has never shipped once, so nothing that exists is being withdrawn.
+        # (1) macos-13 never gets a runner — and that is a 24-HOUR HANG, not a lost upload. The last run to
+        #     end green before today was 29084950936 (10 Jul, 9m29s), whose matrix had three jobs and no
+        #     Intel; it created the relay-v0.7.1 release at 10:04. Intel was in the matrix for the 42 runs
+        #     after it (37 cancelled, 4 failed, all at GitHub's 24h ceiling) and that job never once started.
+        #     But `fail-fast: false` did keep the siblings BUILDING AND UPLOADING: in run 29102861720 (10 Jul
+        #     15:13) linux / windows / macos-arm64 each ended `success` in 3-7 minutes and their installers
+        #     sit on the relay-v0.7.1 release stamped 15:16:49-15:20:00 — inside that same run. Same again
+        #     from the 12 Jul run (Suite assets 06:14-06:18). The hang still costs real things (the run is
+        #     red, it holds a concurrency slot for a day, and a human has to go and check the assets landed),
+        #     but it is NOT why the later tags shipped nothing.
         #
-        # TO COME BACK once we understand why that runner never materialises (label retired? quota? the
-        # image's deprecation?) — the owner is getting Mac hardware for iPhone work anyway, so an Intel build
+        # (2) The release ref stopped resolving in a TAG checkout — which is what actually killed 0.7.2
+        #     onwards. build-strict-tgz.sh gained REF="${2:-main}" between relay-v0.7.1 (which archived HEAD
+        #     and took no ref at all) and relay-v0.7.2, while build-relay-payload.sh still called it with no
+        #     ref; actions/checkout@v4 on a tag push leaves a shallow DETACHED checkout with no `main`. Every
+        #     sibling job therefore died at "Assemble the relay payload" in under 90 seconds:
+        #         relay-v0.7.2      24 Jul   3/3 siblings failed in 34-68s
+        #         relay-v0.8.0-rc1  25 Aug   3/3 siblings failed in 30-63s
+        #         relay-v0.8.0      18 Sep   3/3 siblings failed in 40-80s — with Intel ALREADY REMOVED
+        #     For those tags nothing "finished in minutes"; there was never an installer to throw away, and
+        #     that last row is the proof that dropping Intel on its own would not have published a thing.
+        #     Fixed separately, by RELEASE_REF above (b3e55dd).
+        #
+        # TrinityOne-Suite-macos-x64.* has never shipped on any release, so nothing that exists is being
+        # withdrawn. GitHub's "latest release" is still relay-v0.7.1 from 10 July, and the website's download
+        # links point at it.
+        #
+        # TO COME BACK once we know WHY that runner never materialises — label retired, quota, or the image's
+        # deprecation; not established here. What IS established is that "it is slow" is not the answer: the
+        # job never starts at all. The owner is getting Mac hardware for iPhone work anyway, so an Intel build
         # may end up being cut locally rather than here. Apple silicon (macos-14) builds fine in minutes and
         # is the macOS download the website advertises; it is untouched.
         include:

@@ -31,7 +31,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, rmSync, cpSync, symlinkSync, writeFileSync, readFileSync, existsSync, appendFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, cpSync, symlinkSync, writeFileSync, readFileSync, existsSync, appendFileSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -177,4 +177,83 @@ test('a dirty tree and an unrelated branch still cannot reach the release tarbal
   const named = build(dir, { env: { RELEASE_REF: 'main' } });
   assert.equal(named.status, 0, named.stderr);
   assert.ok(!listing(named.out).includes('WIP-SENTINEL.txt'));
+});
+
+// ── 3. THE PAYLOAD'S OWN STAMP — build-relay-payload.sh, which nothing else in this repo ever executes ─────
+// The two rows above drive build-strict-tgz.sh, and the version.txt they read out of its tarball is
+// `git archive`'s export-subst substitution (.gitattributes) — a field that was never broken.
+// build-relay-payload.sh then OVERWRITES that file in the payload directory (its step 4) with a stamp of its
+// own, and THAT is the field the 2026-09-18 fix changed from `git rev-parse HEAD` to the ref it packaged.
+// Measured before this row existed: reverting that one line to HEAD left release-ref, bundle-contents,
+// relay-bundle-honesty and relay-update-reconcile at 21 pass / 0 fail, because nothing ran this script.
+//
+// The stub `npm` below is deliberate and narrow: the script's step 3 shells out to `npm install` for the
+// three runtime deps, which needs the network and is not what is under test. The archive of the ref, the
+// transpile, the prune and the stamp being asserted are all the real script.
+function stubNpm(binDir) {
+  mkdirSync(binDir, { recursive: true });
+  const p = join(binDir, 'npm');
+  writeFileSync(p, '#!/usr/bin/env bash\n'
+    + '# test stub: the payload build only needs `npm install` to leave a node_modules behind for it to\n'
+    + '# move into place. No network, no packages — the stamp is what this test is about.\n'
+    + 'if [ "${1:-}" = "install" ]; then mkdir -p node_modules/.payload-test-stub; fi\nexit 0\n');
+  chmodSync(p, 0o755);
+}
+
+test('the payload stamp names the ref that was packaged, not the commit that happens to be checked out', (t) => {
+  const scratch = mkdtempSync(join(tmpdir(), 'trinityone-payload-stamp-'));
+  t.after(() => { try { rmSync(scratch, { recursive: true, force: true }); } catch {} });
+  const dir = join(scratch, 'host');
+  mkdirSync(dir, { recursive: true });
+
+  // The release host again: `main` exists, an UNRELATED branch is checked out, and that branch's commit is
+  // DATED AHEAD of main — the shape that made this worth fixing, since both stamped fields get read back.
+  git(dir, ['init', '-q']);
+  git(dir, ['remote', 'add', 'origin', 'file://' + ROOT]);
+  git(dir, ['-c', 'protocol.version=2', 'fetch', '--no-tags', '--depth=1', 'origin', '+HEAD:refs/heads/main']);
+  git(dir, ['checkout', '--force', 'main']);
+  const mainSha = git(dir, ['rev-parse', 'main^{commit}']);
+  const mainDate = git(dir, ['show', '-s', '--format=%cI', mainSha]);
+
+  git(dir, ['checkout', '-q', '-b', 'wip/not-a-release']);
+  writeFileSync(join(dir, 'WIP-SENTINEL.txt'), 'committed on an unrelated branch, must never be stamped\n');
+  git(dir, ['add', 'WIP-SENTINEL.txt']);
+  execFileSync('git', ['-C', dir, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'wip: not a release'],
+    { env: { ...process.env, GIT_COMMITTER_DATE: '2099-01-01T00:00:00+00:00', GIT_AUTHOR_DATE: '2099-01-01T00:00:00+00:00' } });
+  const wipSha = git(dir, ['rev-parse', 'HEAD']);
+  assert.notEqual(wipSha, mainSha, 'the repro needs HEAD and `main` to differ, or this test asserts nothing');
+
+  installScriptUnderTest(dir);                                   // build-strict-tgz.sh — the tree it archives
+  cpSync(join(ROOT, 'scripts', 'build-relay-payload.sh'), join(dir, 'scripts', 'build-relay-payload.sh'));
+  minimalEsbuild(dir);
+  const bin = join(scratch, 'bin');
+  stubNpm(bin);
+
+  const payload = (args, env = {}) => {
+    const out = join(scratch, 'payload');
+    try { rmSync(out, { recursive: true, force: true }); } catch {}
+    const e = { ...process.env, PATH: bin + ':' + process.env.PATH };
+    delete e.RELEASE_REF;                                        // never inherit the runner's own
+    for (const [k, v] of Object.entries(env)) e[k] = v;
+    const r = spawnSync('bash', [join(dir, 'scripts', 'build-relay-payload.sh'), out, ...args],
+      { cwd: dir, env: e, encoding: 'utf8', maxBuffer: 512 * 1024 * 1024 });
+    assert.equal(r.status, 0, 'build-relay-payload.sh failed\n' + (r.stderr || ''));
+    const [sha, date] = readFileSync(join(out, 'version.txt'), 'utf8').split('\n');
+    return { sha: (sha || '').trim(), date: (date || '').trim() };
+  };
+
+  // (a) no ref named → the default, `main`. The stamp must be main's, not the branch sitting in HEAD.
+  const def = payload([]);
+  assert.notEqual(def.sha, wipSha,
+    'the payload stamped the CHECKED-OUT commit: /suite-update compares this sha for EQUALITY against '
+    + 'suite-latest.json, so the shipped Suite would misreport which build it is');
+  assert.equal(def.sha, mainSha, 'the payload stamp must name the packaged ref (`main`)');
+  assert.equal(def.date, mainDate, 'the payload date stamp must be the packaged ref\'s commit date');
+
+  // (b) and it FOLLOWS the ref rather than merely always saying `main`: name another ref, the stamp moves.
+  //     RELEASE_REF is the CI shape — a workflow step cannot pass an argument through the matrix.
+  const named = payload([], { RELEASE_REF: 'wip/not-a-release' });
+  assert.equal(named.sha, wipSha, 'RELEASE_REF must decide the stamp, not the default');
+  const viaArg = payload(['main']);
+  assert.equal(viaArg.sha, mainSha, 'the positional ref must decide the stamp too');
 });

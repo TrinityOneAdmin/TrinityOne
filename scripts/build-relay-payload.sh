@@ -61,9 +61,23 @@ rm -rf "$STAGE"
 #    Stamp the REF WE JUST PACKAGED, not HEAD. Those are the same commit in CI, but not on the release host:
 #    this box is the dev machine AND the release origin, so `main` is routinely packaged while an unrelated
 #    branch is checked out, and the old HEAD stamp then labelled main's CONTENT with that branch's sha and
-#    DATE. Both are read: /suite-update compares the sha against suite-latest.json, and relay-update.sh's
-#    anti-rollback compares the date — so a parked branch dated ahead of main could have made every relay
-#    refuse the real release as a downgrade.
+#    DATE.
+#
+#    WHAT THAT ACTUALLY BREAKS — measured, because the first version of this comment (and b3e55dd's message)
+#    said it "could have made every relay refuse the genuine release as a downgrade", and that is wrong.
+#    This line is the ONLY writer of a version.txt anywhere outside `git archive`'s export-subst, and what
+#    it writes lands ONLY in the desktop Suite's payload directory. The bundle a church relay updates from
+#    (/relay-app/bundle.tgz) is an archive of the release ref — gateway.mjs ensureSignedBundle →
+#    build-strict-tgz.sh → `git archive`, so its version.txt comes from export-subst (.gitattributes) — and
+#    relay-app/desktop is export-ignored, so nothing written here can ride along. relay-update.sh's
+#    date-based anti-rollback therefore compares two export-subst stamps and never sees this one. On top of
+#    that a Suite install enables no systemd path unit (only relay-app/install.sh does), so a Suite never
+#    runs relay-update.sh at all.
+#    The real blast radius is the Suite's report of ITSELF: /suite-update compares this sha for EQUALITY
+#    against suite-latest.json, and /status prints it. A wrong stamp MISREPORTS — "up to date" when it is
+#    not, or an update offered when there is none. It refuses nothing and blocks no upgrade.
+#    Guarded by scripts/release-ref.test.mjs row 3, which runs THIS script in a checkout whose HEAD is
+#    deliberately not the ref being packaged; reverting the line below to HEAD turns that row red.
 if [ -z "${PAYLOAD_SKIP_STAMP:-}" ]; then
   { git -C "$DIR" rev-parse "$REF^{commit}"; git -C "$DIR" show -s --format=%cI "$REF^{commit}"; } > "$OUT/version.txt" 2>/dev/null || true
 fi
