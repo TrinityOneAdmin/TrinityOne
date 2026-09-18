@@ -58,16 +58,48 @@ for (const [name, docs] of Object.entries(REPLACEABLE_DOCS)) {
 }
 
 test('the guard is a real comparison against a tracked timestamp, not a constant', () => {
-  // `if (e.created_at < 0)` would satisfy a naive presence check while never skipping anything.
+  // `if (e.created_at < 0)` would satisfy a naive presence check while never skipping anything. So for every
+  // guard found, the thing it compares against must be FED from an event's created_at inside the same handler.
+  //
+  // TWO SHAPES, because there are two (both correct). The one-clock handlers keep a bare variable
+  // (`latest = e.created_at`). subscribeAdmitted keeps a clock PER AUTHOR — b24f8c1, because the approved
+  // list is a SET and two stewards approving different people a minute apart were losing one of them — so
+  // its guard reads `e.created_at < prev.at` and the timestamp is written as an object FIELD inside a Map
+  // entry (`byAuthor.set(e.pubkey, { at: e.created_at, … })`). The bare-variable rule cannot see that, and
+  // when it was the only rule this assertion THREW on the second handler, which silently stopped the other
+  // four — steward roster, guardian map, join policy, safeguard bundle — from ever being checked at all.
+  //
+  // Hence: findings are COLLECTED and reported together rather than thrown one at a time, so one bad handler
+  // can never again hide the rest; and `checked` proves the scan was not vacuous — a regex that matched
+  // nothing here would look green for ever.
+  const problems = [];
   for (const name of Object.keys(REPLACEABLE_DOCS)) {
     const body = handlerBody(name);
-    for (const m of body.matchAll(/created_at\s*<\s*([A-Za-z_$][\w$]*)/g)) {
-      const varName = m[1];
-      assert.match(body, new RegExp(varName + '\\s*=\\s*\\w+\\.created_at'),
-        `${name}: guard compares against '${varName}', but nothing ever assigns it from an event's created_at — ` +
-        `so it can never skip a stale copy.`);
+    let checked = 0;
+    for (const m of body.matchAll(/created_at\s*<\s*([A-Za-z_$][\w$]*)(?:\.([A-Za-z_$][\w$]*))?/g)) {
+      const [, varName, field] = m;
+      checked++;
+      if (field) {
+        // per-author clock: the field must be written from an event's created_at in this handler, either as
+        // an object literal (`at: e.created_at`) or by assignment (`prev.at = e.created_at`).
+        const fed = new RegExp('\\b' + field + '\\s*:\\s*[A-Za-z_$][\\w$]*\\.created_at')
+          .test(body)
+          || new RegExp('\\.' + field + '\\s*=\\s*[A-Za-z_$][\\w$]*\\.created_at').test(body);
+        if (!fed) problems.push(
+          `${name}: guard compares against '${varName}.${field}', but nothing in the handler ever writes ` +
+          `'${field}' from an event's created_at — so it can never skip a stale copy.`);
+      } else {
+        const fed = new RegExp('\\b' + varName + '\\s*=\\s*[A-Za-z_$][\\w$]*\\.created_at').test(body);
+        if (!fed) problems.push(
+          `${name}: guard compares against '${varName}', but nothing ever assigns it from an event's ` +
+          `created_at — so it can never skip a stale copy.`);
+      }
     }
+    if (checked === 0) problems.push(
+      `${name}: no created_at comparison was examined at all. Either the guard is gone, or it is written in ` +
+      `a shape this test cannot see — and an unseen guard is an unchecked one.`);
   }
+  assert.deepEqual(problems, [], '\n' + problems.join('\n'));
 });
 
 // AUTHOR DISCIPLINE (Fable audit 2026-07-22, HIGH). The `#church` subscription filter matches ANY author,
