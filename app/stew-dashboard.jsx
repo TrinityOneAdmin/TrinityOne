@@ -7133,9 +7133,13 @@ function StewBackupModal({ church, onClose }) {
     ['chat', 'Console settings', 'Relays, video channel, preferences'],
     ['globe', 'Your groups, rota & members', 'Live on the relay — they return when you restore the key'],
   ];
-  const dlgRef = useStewDialog(onClose);   // a11y: Escape + focus (dialog semantics on the panel below)
+  // Hold every exit shut while the file is being written — closing mid-save would hide a save that is still
+  // running. Same shape as SermonEditModal's. 8537ba2 pointed Cancel at this name without defining it here, so
+  // the modal threw on mount and "Back up to a file" showed the error boundary for 27 days.
+  const guardedClose = () => { if (!busy) onClose(); };
+  const dlgRef = useStewDialog(guardedClose);   // a11y: Escape + focus (dialog semantics on the panel below)
   return (
-    <div onClick={onClose} style={{ position: 'fixed', overflowY: 'auto', inset: 0, zIndex: 95, background: 'rgba(40,32,24,.45)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'safe center', justifyContent: 'center', padding: 24 }}>
+    <div onClick={guardedClose} style={{ position: 'fixed', overflowY: 'auto', inset: 0, zIndex: 95, background: 'rgba(40,32,24,.45)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'safe center', justifyContent: 'center', padding: 24 }}>
       <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="Back up your church" tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 470, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26, maxHeight: '92%', overflowY: 'auto', animation: 'lumenScale .22s cubic-bezier(.2,.8,.3,1.1) both' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 6 }}>
           <div style={{ width: 40, height: 40, borderRadius: 12, background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="lock" size={21} /></div>
