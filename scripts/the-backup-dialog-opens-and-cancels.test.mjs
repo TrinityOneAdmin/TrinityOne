@@ -99,3 +99,35 @@ test('while the file is being written, none of Cancel, Escape or the backdrop cl
   assert.match(String(m.button('Encrypting')?.kids?.join('') || ''), /Encrypting/, 'the save button does not say the save is running');
   m.unmount();
 });
+
+// RULE 1 — the point of USE. The three tests above render StewBackupModal directly, so they would stay green
+// if Settings stopped showing it: `false && backupOpen` in DashSettings leaves every word in place. An audit of
+// this branch measured exactly that (unwired, 3/3 green). This one presses the real "Back up to a file" button
+// on the real Church key page and follows the element it puts in the tree.
+test('pressing "Back up to a file" on the Church key page puts the backup dialog on screen, and its Cancel takes it off again', () => {
+  const { React, reset, flush, unmount } = fakeReact();
+  const { window } = fakeBrowser({ Steward: fakeSteward() });
+  const { DashSettings, StewBackupModal } = loadConsole({ React, window, expr: '{ DashSettings, StewBackupModal }' });
+  let tree;
+  const draw = () => { reset(); tree = DashSettings({ initialSection: 'key' }); flush(); return tree; };
+  draw();
+  const button = nodes(tree).find(n => n.type === 'button' && (n.kids || []).some(k => typeof k === 'string' && k.includes('Back up to a file')));
+  assert.ok(button, 'no "Back up to a file" button on the Church key page — re-anchor (initialSection "key")');
+  const modalsIn = (t) => nodes(t).filter(n => n.type === StewBackupModal);
+  assert.equal(modalsIn(tree).length, 0, 'the backup dialog is on screen before anyone pressed the button');
+
+  button.props.onClick();
+  draw();
+  const placed = modalsIn(tree);
+  assert.equal(placed.length, 1, 'THE POINT OF USE: pressing "Back up to a file" did not put StewBackupModal on the Settings screen');
+
+  // The harness never calls child components, so mount the element Settings placed, with the props Settings gave it.
+  const panel = StewBackupModal(placed[0].props); flush();
+  assert.ok(nodes(panel).find(n => n.props && n.props.role === 'dialog'), 'the element Settings placed does not render a role="dialog" panel');
+  const cancel = nodes(panel).find(n => n.type === 'button' && (n.kids || []).some(k => typeof k === 'string' && k.includes('Cancel')));
+  assert.ok(cancel, 'the placed dialog has no Cancel');
+  cancel.props.onClick();                                          // → the onClose Settings passed → setBackupOpen(false)
+  draw();
+  assert.equal(modalsIn(tree).length, 0, 'Cancel on the dialog did not take it off the Settings screen');
+  unmount();
+});
