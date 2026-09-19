@@ -154,6 +154,30 @@ test('in a browser, "Save QR" is still a download: one anchor with a .png downlo
   c.unmount();
 });
 
+test('in a browser, the file behind the "Save QR" download is the DECODED PNG — its bytes, not their base64 text', async () => {
+  // Audit 2026-09-19 (P7 table, sabotage K): with the Blob built from the undecoded base64 string, the row
+  // above still passed — an anchor with a .png name was clicked. A desktop "Save QR" would then have
+  // downloaded base64 TEXT named .png. So capture what the anchor points at and read its bytes.
+  const c = console_({ native: false });
+  // Every object URL made while the button runs (the raster makes one for its SVG <img> too), keyed by url,
+  // so the download is whichever one the CLICKED anchor's href names.
+  const blobs = new Map();
+  const RealURL = c.window.URL;
+  c.window.URL = class extends RealURL { static createObjectURL(b) { const u = 'blob:console.example/' + (blobs.size + 1); blobs.set(u, b); return u; } static revokeObjectURL() {} };
+  const card = inviteCard(c);
+  c.button(card.tree, 'Save QR').props.onClick();
+  await c.settle(() => c.anchors.some(a => a.clicked));
+  const clicked = c.anchors.filter(a => a.clicked);
+  assert.equal(clicked.length, 1, 'the browser path did not click exactly one anchor');
+  const blob = blobs.get(clicked[0].href);
+  assert.ok(blob, 'the clicked anchor’s href is not an object URL made during the save: ' + clicked[0].href);
+  assert.equal(blob.type, 'image/png', 'the download is not typed image/png: ' + JSON.stringify(blob.type));
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  assert.deepEqual(Array.from(bytes.subarray(0, 8)), [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 'THE DEFECT: the file does not start with the PNG signature — the browser would download base64 text named .png: ' + Buffer.from(bytes).toString('latin1').slice(0, 24));
+  assert.deepEqual(Array.from(bytes), Array.from(PNG), 'the bytes downloaded are not the bytes the canvas produced');
+  c.unmount();
+});
+
 test('on the phone, Finance → "Export CSV" writes one .csv to Documents and shows the receipt', async () => {
   const c = console_({ native: true });
   const { DashFinanceBook } = c.mods;

@@ -2242,7 +2242,7 @@ window.skPrintable = function (html) {
       var P = window.Capacitor && window.Capacitor.Plugins;
       if (P && P.Filesystem && P.Share) {
         var fname = 'trinityone-' + Date.now() + '.html';
-        var res = await P.Filesystem.writeFile({ path: fname, data: html, directory: 'Cache', encoding: 'utf8' });
+        var res = await P.Filesystem.writeFile({ path: fname, data: html, directory: 'CACHE', encoding: 'utf8' });
         await P.Share.share({ title: 'TrinityOne document', text: 'Open in a browser to print or save as PDF.', files: [res.uri] });
         return;
       }
@@ -2374,7 +2374,7 @@ function InvitePosterModal({ church, url, svg, onClose }) {
         const b64 = doc.output('datauristring').split(',')[1];
         const P = window.Capacitor.Plugins;
         try {
-          const res = await P.Filesystem.writeFile({ path: fname, data: b64, directory: 'Cache' });
+          const res = await P.Filesystem.writeFile({ path: fname, data: b64, directory: 'CACHE' });
           await P.Share.share({ title: fname, text: 'Invite to ' + (church.name || 'our church'), files: [res.uri], dialogTitle: 'Save or share invite PDF' });
         } catch (e) {
           // file-share unsupported on this device → share the link instead so it's not a dead button
@@ -8934,9 +8934,9 @@ function DashBackup() {
         let res;
         if (binary) {   // zip bytes -> base64 for Filesystem (no encoding = base64)
           let bin = ''; const CH = 0x8000; for (let i = 0; i < data.length; i += CH) bin += String.fromCharCode.apply(null, data.subarray(i, Math.min(i + CH, data.length)));
-          res = await P.Filesystem.writeFile({ path: filename, data: btoa(bin), directory: 'Cache' });
+          res = await P.Filesystem.writeFile({ path: filename, data: btoa(bin), directory: 'CACHE' });
         } else {
-          res = await P.Filesystem.writeFile({ path: filename, data, directory: 'Cache', encoding: 'utf8' });
+          res = await P.Filesystem.writeFile({ path: filename, data, directory: 'CACHE', encoding: 'utf8' });
         }
         await P.Share.share({ title: 'TrinityOne church backup', text: count + ' records' + mediaBit + (encrypted ? ' — encrypted; only your church key can open it.' : ' — keep this file somewhere safe.'), files: [res.uri] });
       } else {   // web: a file download (Blob accepts string or Uint8Array)

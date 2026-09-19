@@ -320,6 +320,9 @@ const MEASURE = `(() => {
       };
       const dEl = document.querySelector('[role="alert"] button[aria-label^="Dismiss"]');
       const sEl = document.querySelector('[role="alert"] button[aria-label^="Show"]');
+      // The expanded state's neighbour: the Collapse pill (5ee5351), floated at the top-right of the text,
+      // i.e. exactly where a Dismiss with a negative LEFT margin reaches. Scanned the same way as Show.
+      const cEl = document.querySelector('[role="alert"] button[aria-label^="Collapse"]');
       // And the other direction over the NEIGHBOUR: of Show's own pixels, how many does Dismiss own? Pressing
       // one of those does not miss — it throws the message away, and dismissing is the only route by which
       // the full text becomes unreachable.
@@ -334,6 +337,17 @@ const MEASURE = `(() => {
           }
         showStolen = stolen;
       }
+      let collapseStolen = null;
+      if (cEl) {
+        const r = cEl.getBoundingClientRect();
+        let stolen = 0;
+        for (let y = Math.ceil(r.top); y <= Math.floor(r.bottom) - 1; y++)
+          for (let x = Math.ceil(r.left); x <= Math.floor(r.right) - 1; x++) {
+            const e = document.elementFromPoint(x, y);
+            if (e && e.closest('button') === dEl) stolen++;
+          }
+        collapseStolen = stolen;
+      }
       // THE INSTRUMENT'S OWN GUARD. The dismiss button is an icon plus padding; a stub that renders nothing
       // gives it a zero-width child and every number above is then about a box this component never draws.
       const ic = dEl ? dEl.firstElementChild : null;
@@ -343,6 +357,7 @@ const MEASURE = `(() => {
                 left: Math.round(cardR.left), right: Math.round(cardR.right),
                 top: Math.round(cardR.top), bottom: Math.round(cardR.bottom) },
         dismiss: scan(dEl), show: scan(sEl), showStolenByDismiss: showStolen,
+        collapse: scan(cEl), collapseStolenByDismiss: collapseStolen,
         icon: icr ? { w: Math.round(icr.width), h: Math.round(icr.height) } : null,
       };
     })(),
@@ -647,6 +662,42 @@ for (const [label, W, H] of [['360x730 upright', 360, 730], ['730x328 landscape'
     assert.equal(m.atDismiss, 'banner',
       `the expanded banner's dismiss control is painted by something else at ${label} — it is behind the ` +
       'overlay (AUDIT-9), where it is greyed and cannot be tapped');
+  });
+}
+
+// ── THE COLLAPSE PILL, AND THE MARGIN THAT KEEPS DISMISS OFF IT ────────────────────────────────────────────
+//
+// 5ee5351 put a "Collapse" pill in the expanded banner, floated to the top-right of the text — which is the
+// 10px gap away from the dismiss button. That commit also changed the expanded dismiss margin from
+// `-12px -14px` to `-12px -14px -12px 0` "so it cannot reach across the gap into the new pill", and the
+// 2026-09-19 audit found the sentence true and unpinned: with the old margin back, Dismiss answers 108 px2
+// of the Collapse pill (a 4px column x 27 rows) at both sizes, and 25/25 here still passed — the 9719cf0
+// shape ("Dismiss owns the right edge of its neighbour") one control over. Dismiss paints after Collapse, so
+// any overlap is silently Dismiss's, and the two are opposites: one gives the dialog its height back, the
+// other throws the message away.
+//
+// The docked twin of these rows — Show scanned for pixels Dismiss owns — is above ("…and it takes not one
+// pixel of the Show button beside it"). Same instrument, same two sizes, other state.
+for (const [label, W, H] of [['360x730 upright', 360, 730], ['730x328 landscape', 730, 328]]) {
+  test(`${label}: the EXPANDED banner's Collapse pill is whole — not one pixel of it is the dismiss button`, { skip: !CHROME ? 'no chromium' : false, timeout: 120000 }, async () => {
+    const m = await measure('expanded', W, H);
+    assert.equal(m.grid.show, null, 're-anchor: the "expanded" fixture still renders a Show pill — it is measuring the DOCKED state');
+    const c = m.grid.collapse;
+    assert.ok(c, 're-anchor: the expanded banner rendered no Collapse pill — 5ee5351\'s way back down is gone');
+    assert.ok(c.total >= 1500, `the Collapse pill scanned only ${c.total} px2 at ${label} — that is not the 73x28 pill this row believes it is measuring`);
+    assert.equal(m.grid.collapseStolenByDismiss, 0,
+      `DISMISS OWNS ${m.grid.collapseStolenByDismiss} px2 OF THE COLLAPSE PILL at ${label}. A steward pressing ` +
+      'the right edge of "Collapse this message to one line" throws the message away instead — the margin ' +
+      'on the expanded dismiss button reaches leftwards across the gap again (5ee5351 set its left margin to 0).');
+    assert.equal(c.notMine['BUTTON:Dismiss this message'] || 0, 0,
+      `Collapse's own rectangle hit-tests as Dismiss in ${c.notMine['BUTTON:Dismiss this message']} places at ${label}`);
+    // Whatever is not the pill's own is the CARD behind its rounded corners (borderRadius 9: ~32 px2 of a
+    // 73x28 pill), never a control, the scrim or the dialog. NOT `rows === h`: like the expanded dismiss row
+    // above, the pill lands on a half pixel at 730x328 and the integer grid covers 27 of its 28 rows — an
+    // equality there fails on the instrument, not the code.
+    const lost = Object.keys(c.notMine).filter(k => k !== 'banner');
+    assert.deepEqual(lost, [], `pixels of the Collapse pill belong to something other than the pill or its card at ${label}: ${JSON.stringify(c.notMine)}`);
+    assert.ok(c.hit >= c.total - 48, `only ${c.hit} of the Collapse pill's ${c.total} px2 reach it at ${label} — more than its four rounded corners are missing: ${JSON.stringify(c.notMine)}`);
   });
 }
 

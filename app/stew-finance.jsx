@@ -419,7 +419,7 @@ async function fsSavePdf(doc, fname) {
   if (isNative && window.Capacitor.Plugins && window.Capacitor.Plugins.Filesystem) {
     const b64 = doc.output('datauristring').split(',')[1];
     const P = window.Capacitor.Plugins;
-    const res = await P.Filesystem.writeFile({ path: fname, data: b64, directory: 'Cache' });
+    const res = await P.Filesystem.writeFile({ path: fname, data: b64, directory: 'CACHE' });
     if (P.Share) await P.Share.share({ title: fname, text: 'Church financial statement', files: [res.uri], dialogTitle: 'Save or share statement' });
   } else {
     doc.save(fname);
