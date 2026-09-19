@@ -62,10 +62,18 @@ function WizMeetings({ meetings, setMeetings }) {
               <input value={m.title} onChange={e => set(i, { title: e.target.value })} placeholder="Meeting name" style={{ ...fld, flex: 1 }} />
               <button onClick={() => setMeetings(a => a.filter((_, j) => j !== i))} title="Remove this meeting" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 10, padding: '9px 10px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0 }}><Icon name="trash" size={16} color="currentColor" /></button>
             </div>
-            <div style={{ display: 'flex', gap: 9 }}>
-              <select value={m.day} onChange={e => set(i, { day: +e.target.value })} style={{ ...fld, flex: 1.3, cursor: 'pointer', fontWeight: 600 }}>{['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].map((d, di) => <option key={di} value={di}>{d}</option>)}</select>
-              <input type="time" value={m.time} onChange={e => set(i, { time: e.target.value })} style={{ ...fld, flex: 1 }} />
-              <select value={m.recur} onChange={e => set(i, { recur: e.target.value })} style={{ ...fld, flex: 1.2, cursor: 'pointer', fontWeight: 600 }}><option value="weekly">Weekly</option><option value="fortnightly">Fortnightly</option><option value="monthly">Monthly</option></select>
+            {/* DAY / TIME / RECURRENCE WRAP. A <select> will not shrink below the width of its longest
+                option, so three of them on one unwrapping line put the recurrence select at x 334→460 in a
+                360px viewport — 0 of its 26 columns on screen (audit 2026-09-19 §E, p/here/01-11-wizard-
+                meetings.png). Each field now has a basis it can wrap at: on a phone the day and time share
+                the first line and the recurrence drops to the next, full width; on a desktop card all three
+                still fit one line. Deliberately NO `minWidth: 0`: a select that can shrink below its longest
+                option clips the day's name instead of overflowing, which is the same defect wearing a
+                different hat — the wrap is the fix, and each field stays at least as wide as its own text. */}
+            <div style={{ display: 'flex', gap: 9, flexWrap: 'wrap' }}>
+              <select value={m.day} onChange={e => set(i, { day: +e.target.value })} style={{ ...fld, flex: '1.3 1 120px', cursor: 'pointer', fontWeight: 600 }}>{['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].map((d, di) => <option key={di} value={di}>{d}</option>)}</select>
+              <input type="time" value={m.time} onChange={e => set(i, { time: e.target.value })} style={{ ...fld, flex: '1 1 100px' }} />
+              <select value={m.recur} onChange={e => set(i, { recur: e.target.value })} style={{ ...fld, flex: '1.2 1 120px', cursor: 'pointer', fontWeight: 600 }}><option value="weekly">Weekly</option><option value="fortnightly">Fortnightly</option><option value="monthly">Monthly</option></select>
             </div>
           </div>
         ))}
