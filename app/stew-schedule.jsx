@@ -57,13 +57,25 @@ function SchDateBlock({ dateStr, accent = 'var(--clay)' }) {
 
 const schFld = { width: '100%', boxSizing: 'border-box', height: 44, border: '1px solid var(--line)', borderRadius: 11, background: 'var(--surface-2)', padding: '0 13px', fontSize: 14.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' };
 const schLbl = { fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '14px 0 6px' };
-function SchModal({ title, children, onClose, width = 480 }) {
+// `footer`, when given, is a NON-SCROLLING last row under the body. The panel used to be one scrolling box
+// with the caller's buttons as its last children: "New event" on the Oppo at 360x730 ended in a clean
+// rounded edge with Cancel and "Add event" at y 931 (audit 2026-09-19 §D, 0/340 and 0/350 hittable), and
+// nothing on screen said the card scrolled. Now the panel is a flex column capped at maxHeight (never
+// `height`, so a short dialog does not grow), the body is the scroll container, and a footer stays inside
+// the viewport at any height — including the height steward.html's html[data-stew-banner] rules cap this
+// panel to while the error banner is over it. Callers that pass no footer keep their buttons in the body
+// and see one difference: the box that scrolls is the body, not the panel — the roster, assign,
+// add-a-service, run-sheet, service-detail and edit-event sheets (seven callers, all in this file).
+function SchModal({ title, children, onClose, width = 480, footer }) {
   const dlgRef = useStewDialog(onClose);   // a11y: Escape + focus (dialog semantics on the panel below)
   return (
     <div onClick={onClose} style={{ position: 'fixed', overflowY: 'auto', inset: 0, zIndex: 95, background: 'rgba(40,32,24,.42)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'safe center', justifyContent: 'center' }}>
-      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={title} tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width, maxWidth: '94%', maxHeight: '90%', overflow: 'auto', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26, outline: 'none' }}>
-        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 21, marginBottom: 4 }}>{title}</div>
-        {children}
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={title} tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width, maxWidth: '94%', maxHeight: '90%', display: 'flex', flexDirection: 'column', overflow: 'hidden', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', outline: 'none' }}>
+        <div style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', padding: footer ? '26px 26px 8px' : 26 }}>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 21, marginBottom: 4 }}>{title}</div>
+          {children}
+        </div>
+        {footer ? <div style={{ flexShrink: 0, padding: '14px 26px 22px', borderTop: '1px solid var(--line)' }}>{footer}</div> : null}
       </div>
     </div>
   );
@@ -954,7 +966,16 @@ function SchEventModal({ day, onClose }) {
     onClose();
   };
   return (
-    <SchModal title="New event" onClose={onClose} width={460}>
+    <SchModal title="New event" onClose={onClose} width={460} footer={
+      <React.Fragment>
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
+          <button onClick={save} disabled={!title.trim() || !date || busy} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: (title.trim() && date && !busy) ? 1 : 0.55 }}><Icon name="calPlus" size={16} color="var(--on-clay)" /> {repeat === 'none' ? 'Add event' : 'Add events'}</button>
+        </div>
+        {/* in the footer, not the body: a "not saved" under a scrolled-away body is a failure nobody sees */}
+        <SchNotSaved msg={err} />
+      </React.Fragment>
+    }>
       {ownedNets.length ? (
         <React.Fragment>
           <div style={schLbl}>Publish as</div>
@@ -1018,11 +1039,6 @@ function SchEventModal({ day, onClose }) {
       <div style={schLbl}>Note (optional)</div>
       <textarea aria-label="Note (optional)" value={blurb} onChange={e => setBlurb(e.target.value)} rows={3} placeholder="A short description members will read." style={{ ...schFld, height: 'auto', padding: '11px 13px', lineHeight: 1.5, resize: 'vertical', fontFamily: 'var(--font-ui)' }} />
       <SchRepeatRow repeat={repeat} setRepeat={setRepeat} until={until} setUntil={setUntil} />
-      <div style={{ display: 'flex', gap: 10, marginTop: 22 }}>
-        <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
-        <button onClick={save} disabled={!title.trim() || !date || busy} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: (title.trim() && date && !busy) ? 1 : 0.55 }}><Icon name="calPlus" size={16} color="var(--on-clay)" /> {repeat === 'none' ? 'Add event' : 'Add events'}</button>
-      </div>
-      <SchNotSaved msg={err} />
     </SchModal>
   );
 }

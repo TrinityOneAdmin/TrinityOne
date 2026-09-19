@@ -928,11 +928,18 @@ test('a loopback relay explains why there is no install code, instead of showing
   assert.match(words, /go public/i, 'the explanation does not say what would make it appear');
 });
 
-test('the invite dialog scrolls, now that the card it holds is twice as tall', () => {
+test('the invite dialog scrolls, now that the card it holds is twice as tall — its BODY does, under a Done that stays put', () => {
   // It never needed to: one QR, one code, one row of buttons, and it always fitted. The install block adds
   // a SECOND 168px QR and four more controls, and a dialog with no scroll of its own simply runs off the
   // bottom of a phone-sized console — the controls unreachable, with nothing on screen to suggest anything
   // is below. JoinCard is stubbed deliberately: the claim here is about the container, not the card.
+  //
+  // RE-BASED 2026-09-19 (P9, fix/dialog-footers-stay-in-reach). This row used to ask for `overflowY: 'auto'`
+  // on the PANEL, and that shape put Done at y 1177 of a 730px phone with the card ending in a clean edge at
+  // 686 (UI audit 2026-09-19 §D, 0/612 hittable): the panel scrolled, and nothing said so. The panel is a
+  // capped flex column now; the box that scrolls is the body INSIDE it, and Done is a sibling of that box,
+  // not a child — which is what keeps it on screen. The phone measurement of that claim is
+  // scripts/dialog-footers-stay-in-reach-on-a-phone.test.mjs; this row pins the shape in the tree.
   const { React, draw } = miniReact();
   const { JoinModal } = liftFromJsx(DASH, 'function JoinModal(', 'JoinModal', ['JoinModal'], {
     React, JoinCard: () => null, useStewDialog: () => ({ current: null }),
@@ -941,5 +948,11 @@ test('the invite dialog scrolls, now that the card it holds is twice as tall', (
   assert.equal(dlg.length, 1, 'the invite dialog is gone or is no longer a dialog');
   const st = dlg[0].props.style || {};
   assert.ok(st.maxHeight, 'the dialog has no height limit, so a tall card pushes its own controls off the screen');
-  assert.equal(st.overflowY, 'auto', 'the dialog does not scroll, so whatever overflows is simply unreachable');
+  assert.equal(st.display + '/' + st.flexDirection, 'flex/column', 'the panel is not a flex column, so nothing inside it can be pinned');
+  const scrollers = find(dlg[0], (n) => n.props && n.props.style && n.props.style.overflowY === 'auto');
+  assert.equal(scrollers.length, 1, 'exactly one box inside the invite dialog should scroll (its body); found ' + scrollers.length);
+  const done = find(dlg[0], (n) => n.type === 'button' && (n.kids || []).some(k => k === 'Done'));
+  assert.equal(done.length, 1, 'the Done button is gone');
+  assert.equal(find(scrollers[0], (n) => n === done[0]).length, 0,
+    'Done is INSIDE the scrolling body again — on a phone it scrolls out of the card with nothing to say it is there');
 });
