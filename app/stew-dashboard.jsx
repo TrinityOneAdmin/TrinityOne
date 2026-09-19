@@ -140,7 +140,14 @@ const NAV = [
 
 // sidebar identity control: switch the WHOLE console between the church and any network it owns.
 // With no owned networks it's just the church name button (tap to rename).
-function IdentitySwitcher({ church, churchName, initials, onEditName }) {
+//
+// `compact` IS THE PHONE HEADER (2026-09-19, the hamburger nav). The card this draws on the desktop sidebar
+// was a 56px row of its own on a 360px phone, in a header that then wrapped nine nav pills under it — 32% of
+// the screen before any content. On a phone the same control is one line of small text that fills the
+// header's middle column, sits under the section heading, and is still the WHOLE column as a tap target
+// (44px tall — the heading over it lets taps through). Same onClick, same popover, same rename route; the
+// pencil that sat on the card is the small glyph at the end of the line.
+function IdentitySwitcher({ church, churchName, initials, onEditName, compact = false }) {
   const idv = window.useStewardIdv ? window.useStewardIdv() : 0;
   // The phone header lays these out with its own `gap`, so the sidebar's bottom margin is pure waste
   // there — measured at 18px of a 730px screen, below a header block already 309px tall.
@@ -157,8 +164,19 @@ function IdentitySwitcher({ church, churchName, initials, onEditName }) {
   const delegated = window.Steward.isDelegated && window.Steward.isDelegated();
   const offChurch = viewingNetwork || delegated;   // not on our own church identity
   const pick = (pub) => { window.Steward.setActiveIdentity(pub); setOpen(false); };
+  // the one-line phone shape: fills the column it is given, the text sits on the bottom edge under the heading
+  const compactBtn = { position: 'absolute', inset: 0, width: '100%', display: 'flex', alignItems: 'flex-end', gap: 5, padding: '0 0 3px', border: 'none', background: 'none', cursor: 'pointer', textAlign: 'left', minWidth: 0, fontFamily: 'var(--font-ui)' };
+  const compactName = { flexShrink: 1, minWidth: 0, fontSize: 11.5, fontWeight: 600, lineHeight: '14px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' };
   // no other identities (no owned networks, no stewarded churches) → original behaviour (tap to set/rename the church)
   if (!networks.length && !stewarded.length) {
+    if (compact) {
+      return (
+        <button onClick={onEditName} title="Set church name" style={compactBtn}>
+          <span style={{ ...compactName, color: church.name ? 'var(--ink-2)' : 'var(--ink-3)' }}>{churchName}</span>
+          <Icon name="pen" size={11} color="var(--ink-3)" style={{ flexShrink: 0, marginBottom: 1 }} />
+        </button>
+      );
+    }
     return (
       <button onClick={onEditName} title="Set church name" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: 10, borderRadius: 13, border: '1px solid var(--line)', background: 'var(--surface-2)', cursor: 'pointer', marginBottom: narrow ? 0 : 18, textAlign: 'left' }}>
         <SkBadge initials={initials} picture={church.picture} size={34} radius={999} />
@@ -170,21 +188,34 @@ function IdentitySwitcher({ church, churchName, initials, onEditName }) {
       </button>
     );
   }
+  const badge = <span style={{ fontSize: 8.5, fontWeight: 800, letterSpacing: '.5px', color: offChurch ? 'var(--clay-ink)' : 'var(--ink-3)', background: offChurch ? 'var(--clay-soft)' : 'var(--surface)', border: offChurch ? 'none' : '1px solid var(--line)', borderRadius: 999, padding: '1px 5px', flexShrink: 0 }}>{delegated ? 'STEWARD' : viewingNetwork ? 'NETWORK' : 'CHURCH'}</span>;
+  // The popover hangs under the control. In the phone header the control is a ~150px column, so the list is
+  // given a width of its own there (it holds church names) and kept inside a 360px screen.
+  const popStyle = { position: 'absolute', top: '100%', marginTop: 6, zIndex: 60, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 13, boxShadow: 'var(--shadow-lg)', padding: 6, animation: 'lumenScale .16s ease both',
+    ...(compact ? { left: -8, width: 'min(300px, calc(100vw - 72px))' } : { left: 0, right: 0 }) };
   return (
-    <div style={{ position: 'relative', marginBottom: narrow ? 0 : 18 }}>
+    <div style={compact ? { position: 'absolute', inset: 0 } : { position: 'relative', marginBottom: narrow ? 0 : 18 }}>
+      {compact ? (
+        <button onClick={() => setOpen(o => !o)} aria-expanded={open} title="Switch between your church, networks, and churches you steward" style={compactBtn}>
+          <span style={{ ...compactName, color: offChurch ? 'var(--clay-ink)' : 'var(--ink-2)' }}>{churchName}</span>
+          {offChurch ? badge : null}
+          <Icon name={open ? 'chevU' : 'chevD'} size={11} color="var(--ink-3)" style={{ flexShrink: 0, marginBottom: 1 }} />
+        </button>
+      ) : (
       <button onClick={() => setOpen(o => !o)} title="Switch between your church, networks, and churches you steward" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: 10, borderRadius: 13, width: '100%', border: '1px solid ' + (offChurch ? 'color-mix(in oklab, var(--clay) 45%, var(--line))' : 'var(--line)'), background: offChurch ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface-2)', cursor: 'pointer', textAlign: 'left' }}>
         <SkBadge initials={initials} picture={offChurch ? '' : church.picture} size={34} radius={999} accent={offChurch ? 'var(--clay)' : undefined} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
             <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 14, color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{churchName}</span>
-            <span style={{ fontSize: 8.5, fontWeight: 800, letterSpacing: '.5px', color: offChurch ? 'var(--clay-ink)' : 'var(--ink-3)', background: offChurch ? 'var(--clay-soft)' : 'var(--surface)', border: offChurch ? 'none' : '1px solid var(--line)', borderRadius: 999, padding: '1px 5px', flexShrink: 0 }}>{delegated ? 'STEWARD' : viewingNetwork ? 'NETWORK' : 'CHURCH'}</span>
+            {badge}
           </div>
           <div style={{ fontSize: 11, color: 'var(--ink-3)' }}>{delegated ? 'Acting as steward · tap to switch' : 'Tap to switch view'}</div>
         </div>
         <Icon name={open ? 'chevU' : 'chevD'} size={14} color="var(--ink-3)" />
       </button>
+      )}
       {open ? (
-        <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, marginTop: 6, zIndex: 60, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 13, boxShadow: 'var(--shadow-lg)', padding: 6, animation: 'lumenScale .16s ease both' }}>
+        <div style={popStyle}>
           {ids.map(idn => {
             const on = idn.pub === activePub;
             const label = idn.kind === 'church' ? (church.name || 'Your church') : (idn.name || (idn.kind === 'steward' ? 'Church' : 'Network'));
@@ -1518,6 +1549,61 @@ function StewQRScanner({ onResult, onCancel }) {
 }
 window.StewQRScanner = StewQRScanner;
 
+// ── THE PHONE'S SECTION MENU ──────────────────────────────────────────────────────────────────────────────
+//
+// Decided by the owner 2026-09-19 (reference/UI-AUDIT-PLAN-console-apk.md §0): a hamburger. Measured on the
+// Oppo at 360x730 before it, the wrapping pill strip was three rows (107px) and the church's own content
+// began 235px down — 32% of the portrait screen and over two-thirds of a landscape one spent on chrome.
+// The cost the owner named is discoverability, and the header answers it: the CURRENT section's name sits
+// beside ☰, so a steward knows where they are without opening this.
+//
+// A drawer from the left, holding the same `nav` list the desktop sidebar renders — same items, same order,
+// same capability padlocks (the list is computed once, in StewDashboard, and handed to both). It is a
+// console dialog like every other: `useStewDialog` gives it Escape, the focus trap, and the modal count the
+// error banner reads to get out of a dialog's way; the Capacitor `backButton` listener is the skPrintable
+// pattern, removed on unmount, so a steward on the phone is never held behind the menu. It closes on a
+// pick, on the backdrop, on Escape, on Back and on its own × — and Help, which lived in the header row on
+// the phone, is its last row: the header has no room for a fifth 44px control beside the section name.
+function StewSectionsMenu({ nav, tab, onPick, onHelp, onClose }) {
+  const dlgRef = useStewDialog(onClose);
+  React.useEffect(() => {
+    let sub;
+    try { const P = window.Capacitor && window.Capacitor.Plugins; if (P && P.App && P.App.addListener) sub = P.App.addListener('backButton', () => onClose()); } catch (e) {}
+    return () => { try { sub && sub.remove && sub.remove(); } catch (e) {} };
+  }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+  const row = { display: 'flex', alignItems: 'center', gap: 12, width: '100%', minHeight: 44, flexShrink: 0, padding: '10px 12px', borderRadius: 11, border: 'none', cursor: 'pointer', textAlign: 'left', background: 'transparent', color: 'var(--ink-2)', fontWeight: 600, fontSize: 14.5, fontFamily: 'var(--font-ui)' };
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'color-mix(in oklab, var(--ink) 34%, transparent)', backdropFilter: 'blur(3px)', animation: 'lumenFade .18s ease both' }}>
+      <div ref={dlgRef} id="stew-sections-menu" role="dialog" aria-modal="true" aria-label="Sections" tabIndex={-1} onClick={e => e.stopPropagation()}
+        style={{ position: 'absolute', top: 0, bottom: 0, left: 0, width: 'min(300px, 84vw)', display: 'flex', flexDirection: 'column', overflowY: 'auto', background: 'var(--surface)', borderRight: '1px solid var(--line)', boxShadow: '0 24px 70px rgba(0,0,0,.28)', padding: '10px 10px 14px', outline: 'none', animation: 'lumenSlideIn .2s ease both' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '0 2px 8px', flexShrink: 0 }}>
+          <Halo size={22} color="var(--ink)" spark="var(--clay)" />
+          <span style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 15 }}>Trinity<span style={{ color: 'var(--clay)' }}>One</span></span>
+          <div style={{ flex: 1 }} />
+          <button onClick={onClose} aria-label="Close sections" title="Close" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, minWidth: 44, minHeight: 44, boxSizing: 'border-box', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}><Icon name="x" size={14} /></button>
+        </div>
+        {/* THE PANEL SCROLLS, NOT THE LIST. In landscape (730x328) only four rows fit; a list that scrolled
+            inside a fixed-height box ended cleanly on "Calendar" with Help pinned under it, and nothing on
+            screen said five more sections were there. With the panel as the scroller the cut lands mid-row,
+            which is the hint. `flex: 1` still pushes Help to the bottom where there is room (portrait). */}
+        <nav aria-label="Console sections" style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
+          {nav.map(n => {
+            const on = n.key === tab;
+            return (
+              <button key={n.key} onClick={() => onPick(n.key)} aria-current={on ? 'page' : undefined} style={{ ...row, background: on ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'transparent', color: on ? 'var(--clay-ink)' : 'var(--ink-2)', fontWeight: on ? 700 : 600 }}>
+                <Icon name={n.ic} size={19} color={on ? 'var(--clay)' : 'var(--ink-3)'} /> {n.label}
+                {n.locked ? <React.Fragment><div style={{ flex: 1 }} /><Icon name="lock" size={13} color="var(--ink-3)" /></React.Fragment> : null}
+              </button>
+            );
+          })}
+        </nav>
+        <div style={{ height: 1, background: 'var(--line)', margin: '8px 4px', flexShrink: 0 }} />
+        <button onClick={onHelp} aria-label="Help" title="Guides to running your church on TrinityOne" style={row}><Icon name="book" size={19} color="var(--ink-3)" /> Help</button>
+      </div>
+    </div>
+  );
+}
+
 function StewDashboard({ initial = 'overview' }) {
   const [tab, setTab] = React.useState(initial);
   const [settingsSection, setSettingsSection] = React.useState(null);   // deep-link a Settings PAGE (see SETTINGS_GROUPS); the four old tab keys are aliased
@@ -1527,6 +1613,8 @@ function StewDashboard({ initial = 'overview' }) {
   const [invite, setInvite] = React.useState(new URLSearchParams(location.search).get('invite') === '1');
   const [posting, setPosting] = React.useState(new URLSearchParams(location.search).get('newpost') === '1');
   const [addingTeam, setAddingTeam] = React.useState(false);
+  const [menu, setMenu] = React.useState(false);   // the phone's section drawer (StewSectionsMenu); never used by the desktop sidebar
+  const [help, setHelp] = React.useState(false);   // Help opened FROM that drawer — the drawer closes first, so the dialog cannot live inside it
   const church = window.useStewardChurch();   // real church profile + npub from the relay
   // Finance is no longer owner-only. The books have a key of their own now, wrapped to the church and to
   // every steward granted `finance` (src/steward.src.js), so a treasurer can read the whole history and
@@ -1718,20 +1806,24 @@ function StewDashboard({ initial = 'overview' }) {
   // Marked, not hidden — the same choice the nav makes a few lines up. A button that vanishes reads as a
   // broken console; a dimmed one that says why reads as a church that has scoped you.
   const _contentCap = stewCapState('content');
+  // ON A PHONE THESE ARE BARE GLYPHS, so each carries its label as its accessible name and is the 44px a
+  // thumb needs. They measured 35x31 (QR, New post) and 32x32 (the avatar) on the Oppo, 2026-09-19 — under
+  // the standard this repo already holds Help to (scripts/the-console-fits-a-360px-phone.test.mjs).
+  const _tap = narrow ? { minWidth: 44, minHeight: 44, padding: '8px 10px', justifyContent: 'center' } : { padding: '9px 14px' };
   const _capBtn = (allowed, why, label, icon, onClick, title) => (
     <button onClick={allowed ? onClick : () => { try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'church', message: why + ' Ask whoever holds the church key if you need it.' } })); } catch (e) {} }}
-      aria-disabled={!allowed} title={allowed ? title : why}
+      aria-disabled={!allowed} title={allowed ? title : why} aria-label={narrow ? label : undefined}
       className={'sk-btn ' + (allowed ? 'sk-btn--clay' : 'sk-btn--ghost')}
-      style={{ padding: narrow ? '8px 10px' : '9px 14px', fontSize: 13, opacity: allowed ? 1 : 0.55, cursor: allowed ? 'pointer' : 'not-allowed' }}>
+      style={{ ..._tap, fontSize: 13, opacity: allowed ? 1 : 0.55, cursor: allowed ? 'pointer' : 'not-allowed' }}>
       <Icon name={allowed ? icon : 'lock'} size={15} color="currentColor" /> {narrow ? '' : label}</button>
   );
   const actions = (
     <React.Fragment>
-      <button onClick={() => setInvite(true)} title="Show your church’s joining code and QR for new members" className="sk-btn sk-btn--ghost" style={{ padding: narrow ? '8px 10px' : '9px 14px', fontSize: 13 }}><Icon name="qr" size={15} color="currentColor" /> {narrow ? '' : 'Invite code'}</button>
+      <button onClick={() => setInvite(true)} title="Show your church’s joining code and QR for new members" aria-label={narrow ? 'Invite code' : undefined} className="sk-btn sk-btn--ghost" style={{ ..._tap, fontSize: 13 }}><Icon name="qr" size={15} color="currentColor" /> {narrow ? '' : 'Invite code'}</button>
       {tab === 'rota'
         ? _capBtn(_contentCap.allowed, _contentCap.why, 'New team', 'plus', () => setAddingTeam(true), 'Create a new serving team')
         : _capBtn(_contentCap.allowed, _contentCap.why, 'New post', 'send', () => setPosting(true), 'Write a new post for your church')}
-      <button onClick={() => setTab('settings')} title="Settings" style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer', borderRadius: 11 }}><SkBadge initials={initials} picture={church.picture} size={narrow ? 32 : 36} radius={999} accent="var(--sage)" /></button>
+      <button onClick={() => setTab('settings')} title="Settings" aria-label="Settings" style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer', borderRadius: 11, ...(narrow ? { minWidth: 44, minHeight: 44, display: 'flex', alignItems: 'center', justifyContent: 'center' } : {}) }}><SkBadge initials={initials} picture={church.picture} size={narrow ? 32 : 36} radius={999} accent="var(--sage)" /></button>
     </React.Fragment>
   );
 
@@ -1745,38 +1837,33 @@ function StewDashboard({ initial = 'overview' }) {
         <JoinNotifier /><KeyDistributor />
         {wizard ? <StewSetupWizard church={church} onTab={setTab} onSettings={openSettings} onDone={finishWizard} onInvite={() => setInvite(true)} onNewPost={() => setPosting(true)} /> : null}
         {renaming ? <NameEditModal current={church.name} isNetwork={church.isNetwork} onSave={(n) => Promise.resolve(window.Steward.publishProfile({ name: n, nip05: church.nip05 }))} onClose={() => setRenaming(false)} /> : null}
+        {/* THE SECTIONS ARE BEHIND ☰ ON A PHONE — one 44px row of chrome, decided by the owner 2026-09-19
+            (reference/UI-AUDIT-PLAN-console-apk.md §0). The header that stood here before was a wordmark row,
+            the church card, and nine pills wrapping onto three rows: 233px, with the church's content
+            starting 235px down a 730px screen. See StewSectionsMenu for the drawer and what it must do. */}
+        {menu ? <StewSectionsMenu nav={nav} tab={tab} onPick={(k) => { setMenu(false); setTab(k); }} onHelp={() => { setMenu(false); setHelp(true); }} onClose={() => setMenu(false)} /> : null}
+        {help && window.StewardHelp ? <window.StewardHelp onClose={() => setHelp(false)} /> : null}
         <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', background: 'var(--paper)' }}>
-          <div style={{ flexShrink: 0, background: church.isNetwork ? 'color-mix(in oklab, var(--clay) 7%, var(--surface))' : 'var(--surface)', borderBottom: '1px solid var(--line)', padding: '10px 12px 8px', display: 'flex', flexDirection: 'column', gap: 9 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Halo size={22} color="var(--ink)" spark="var(--clay)" />
-              <span style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 15 }}>Trinity<span style={{ color: 'var(--clay)' }}>One</span></span>
-              <div style={{ flex: 1 }} />
-              {/* HELP LIVES IN THIS ROW ON A PHONE, not in a full-width row of its own below the church card.
-                  Measured at 360x730 before this: that row cost 35px of button + 9px of gap + its own 14px
-                  bottom margin, spent on one word, in a header block that was already 309px of a 730px screen
-                  (UI audit 2026-09-15, finding 2). The header row had horizontal space going spare.
-                  `actions` is NOT where it goes: that fragment is shared with the wide layout's topbar, and
-                  the wide sidebar already has its own Help. Same control, same dialog, same accessible name. */}
-              <StewHelpButton compact />
-              {actions}
+          <div style={{ flexShrink: 0, background: church.isNetwork ? 'color-mix(in oklab, var(--clay) 7%, var(--surface))' : 'var(--surface)', borderBottom: '1px solid var(--line)', padding: '6px 8px', display: 'flex', alignItems: 'center', gap: 6 }}>
+            {/* ☰ DOES NOTHING WHILE A DIALOG IS UP. Every console dialog is a fixed overlay above this row, so a
+                finger cannot reach this button then anyway; this is the same answer for a key or a script,
+                so the menu can never open UNDER an open dialog and take Escape from it. `stewModalOpen` is
+                the count every console dialog registers in (app/stew-modal.jsx); absent in the tests that
+                compile this file alone, hence the guard. */}
+            <button onClick={() => { if (typeof window.stewModalOpen === 'function' && window.stewModalOpen()) return; setMenu(true); }}
+              aria-label="Sections" aria-expanded={menu} aria-controls="stew-sections-menu" title="Sections of the console"
+              style={{ minWidth: 44, minHeight: 44, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', border: 'none', background: 'none', borderRadius: 11, cursor: 'pointer', color: 'var(--ink)', padding: 0 }}>
+              <Icon name="menu" size={22} color="currentColor" />
+            </button>
+            {/* WHERE YOU ARE, THEN WHOSE CONSOLE. The section name is the page heading, visible now (it was
+                clipped off-screen for readers only while the pills carried the name); the church line under
+                it is the identity switcher, and the whole 44px column is its tap target — the heading lets
+                the press through. */}
+            <div style={{ flex: 1, minWidth: 0, position: 'relative', height: 44 }}>
+              <h1 style={{ position: 'absolute', left: 0, right: 0, top: 3, margin: 0, fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 15.5, lineHeight: '20px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', pointerEvents: 'none', zIndex: 1 }}>{(nav.find(n => n.key === tab) || {}).label || 'Console'}</h1>
+              <IdentitySwitcher compact church={church} churchName={churchName} initials={initials} onEditName={editName} />
             </div>
-            <IdentitySwitcher church={church} churchName={churchName} initials={initials} onEditName={editName} />
-            {/* The page heading. Off-screen on a phone — the narrow header has no room for it — but a
-                screen reader still announces which section of the console it has landed in, and the card
-                headings below it now have something to hang from. */}
-            <h1 style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)', clipPath: 'inset(50%)', whiteSpace: 'nowrap', margin: 0 }}>{(nav.find(n => n.key === tab) || {}).label || 'Console'}</h1>
-            {/* tabs WRAP onto multiple rows rather than scrolling sideways (no awkward horizontal scroll) */}
-            <nav aria-label="Console sections" style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-              {nav.map(n => {
-                const on = n.key === tab;
-                return (
-                  <button key={n.key} onClick={() => setTab(n.key)} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 11px', borderRadius: 999, border: '1px solid ' + (on ? 'var(--clay)' : 'var(--line)'), cursor: 'pointer', whiteSpace: 'nowrap', background: on ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'var(--surface)', color: on ? 'var(--clay-ink)' : 'var(--ink-2)', fontWeight: 700, fontSize: 12.5, fontFamily: 'var(--font-ui)' }}>
-                    <Icon name={n.ic} size={14} color={on ? 'var(--clay)' : 'var(--ink-3)'} /> {n.label}
-                    {n.locked ? <Icon name="lock" size={11} color="var(--ink-3)" /> : null}
-                  </button>
-                );
-              })}
-            </nav>
+            {actions}
           </div>
           <PublishErrorBanner />
           <main className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', WebkitOverflowScrolling: 'touch', padding: '14px 12px 24px', background: 'var(--paper)' }}>

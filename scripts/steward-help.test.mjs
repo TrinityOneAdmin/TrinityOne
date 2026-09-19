@@ -95,6 +95,16 @@ const fresh = (over) => { const { React, draw } = miniReact(); return { ...conso
 const helpButtons = (tree) => find(tree, n => n.type === 'button' && (n.props || {})['aria-label'] === 'Help');
 const dialogs = (tree) => find(tree, n => n.props && n.props.role === 'dialog' && n.props['aria-label'] === 'Help');
 const articleButtons = (tree) => find(tree, n => n.type === 'button' && (n.props || {})['data-help-id']);
+// ON A PHONE, HELP IS THE LAST ROW OF THE SECTIONS MENU (2026-09-19, StewSectionsMenu in app/stew-dashboard.jsx):
+// the one-row header has no room for a fifth 44px control beside the section name, so the narrow layout mounts
+// the Help control only once ☰ has been pressed. The desktop sidebar still shows it outright. This presses ☰
+// where there is one and hands back the redrawn tree; where there is none (desktop) the tree is unchanged.
+const reachHelp = (tree, draw, Comp) => {
+  const burger = find(tree, n => n.type === 'button' && (n.props || {})['aria-label'] === 'Sections');
+  if (!burger.length) return tree;
+  burger[0].props.onClick();
+  return draw(Comp, {});
+};
 
 // ── the premise ────────────────────────────────────────────────────────────────────────────────────────────
 test('CONTROL: the six console files compile into one scope with no duplicate top-level name, and HelpData is real', () => {
@@ -111,6 +121,8 @@ for (const [what, innerWidth] of [['the desktop layout', 1200], ['the narrow (ph
   test(`${what} carries exactly one Help control, and pressing it mounts the guides`, () => {
     const { mod, draw, win } = fresh({ window: { innerWidth } });
     let tree = draw(mod.StewDashboard, {});
+    assert.equal(dialogs(tree).length, 0, 'the help dialog is open before anyone asked for it');
+    tree = reachHelp(tree, draw, mod.StewDashboard);
     const btns = helpButtons(tree);
     assert.equal(btns.length, 1, `${what} has ${btns.length} controls with the accessible name "Help" — it needs exactly one`);
     assert.equal(dialogs(tree).length, 0, 'the help dialog is open before anyone asked for it');
@@ -250,6 +262,7 @@ test('the phone back button (popstate) closes it', () => {
   const { mod, draw, winListeners } = fresh({ window: { innerWidth: 500 } });
   let tree = draw(mod.StewDashboard, {});
   const before = (winListeners.popstate || []).length;
+  tree = reachHelp(tree, draw, mod.StewDashboard);   // the phone: Help is behind ☰
   helpButtons(tree)[0].props.onClick();
   tree = draw(mod.StewDashboard, {});
   assert.equal(dialogs(tree).length, 1);

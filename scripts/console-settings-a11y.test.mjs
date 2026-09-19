@@ -169,7 +169,19 @@ for (const [name, props, titles] of CARDS.filter(c => c[2].length)) {
 for (const [what, innerWidth] of [['the desktop layout', 1200], ['the narrow (phone) layout', 500]]) {
   test(`${what} has a main landmark, a named nav, and a page heading`, () => {
     const { mod, draw } = fresh({ window: { innerWidth } });
-    const tree = draw(mod.StewDashboard, {});
+    let tree = draw(mod.StewDashboard, {});
+    // ON A PHONE THE SECTION LIST IS BEHIND ☰ (2026-09-19, StewSectionsMenu in app/stew-dashboard.jsx), so the
+    // named nav landmark is in the drawer and exists once the menu is open. The main landmark and the page
+    // heading are on screen either way — asserted below on the redrawn tree, which has all three.
+    const burger = find(tree, n => n.type === 'button' && (n.props || {})['aria-label'] === 'Sections');
+    if (innerWidth < 760) {
+      assert.equal(burger.length, 1, `${what} has ${burger.length} controls named "Sections" — it needs exactly one, the ☰`);
+      assert.equal(find(tree, n => n.type === 'nav').length, 0, `${what} draws its section list before ☰ is pressed — the drawer is not a drawer`);
+      burger[0].props.onClick();
+      tree = draw(mod.StewDashboard, {});
+    } else {
+      assert.equal(burger.length, 0, `${what} has a ☰ control — the hamburger is the phone's, the desktop keeps its sidebar`);
+    }
     const navs = find(tree, n => n.type === 'nav');
     assert.equal(navs.length, 1, `${what} has no <nav> around the console's section list`);
     assert.equal(navs[0].props['aria-label'], 'Console sections',

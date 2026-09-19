@@ -48,6 +48,7 @@ function Icon({ name, size = 22, stroke = 1.8, fill = false, style = {}, color =
     chevD: <><path d="m5 9 7 7 7-7" {...p} /></>,
     chevU: <><path d="m5 15 7-7 7 7" {...p} /></>,
     x: <><path d="m6 6 12 12M18 6 6 18" {...p} /></>,
+    menu: <><path d="M4 7h16M4 12h16M4 17h16" {...p} /></>,   // the console's phone-only "Sections" control
     plus: <><path d="M12 5v14M5 12h14" {...p} /></>,
     download: <><path d="M12 4v11M7.5 10.5 12 15l4.5-4.5M5 19.5h14" {...p} /></>,
     check: <><path d="m5 12.5 4.5 4.5L19 6.5" {...p} /></>,
