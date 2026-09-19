@@ -1632,6 +1632,15 @@ function StewDashboard({ initial = 'overview' }) {
   const [settingsIntent, setSettingsIntent] = React.useState(null);     // a one-shot action on that page (e.g. open the Set-PIN dialog)
   const [tick, setTick] = React.useState(0);   // a capability key arriving is not React state — nudge a re-render, and re-run the mint
   const openSettings = (section = null, intent = null) => { setSettingsSection(section); setSettingsIntent(intent); setTab('settings'); };
+  // PICKING "SETTINGS" WHILE ALREADY IN SETTINGS GOES BACK TO ITS INDEX. On a phone the list and a page are
+  // never on screen together, and picking the section again from ☰ (or the avatar) is how a steward asks for
+  // the list — it used to do nothing, because setTab('settings') on 'settings' is a no-op to React, so the
+  // page stayed open and only the small "All settings" link led back (audit 2026-09-19 §E, "cost me six wrong
+  // captures"). Bumping this key remounts DashSettings with no `initialSection`, which is the index on a phone
+  // and the first page in a browser. A remount rather than a prop on purpose: a revealed recovery phrase is
+  // hidden again by it, which is the right side to fall on for "I pressed Settings".
+  const [settingsEpoch, setSettingsEpoch] = React.useState(0);
+  const pickTab = (k) => { if (k === 'settings' && tab === 'settings') setSettingsEpoch(n => n + 1); setTab(k); };
   const [invite, setInvite] = React.useState(new URLSearchParams(location.search).get('invite') === '1');
   const [posting, setPosting] = React.useState(new URLSearchParams(location.search).get('newpost') === '1');
   const [addingTeam, setAddingTeam] = React.useState(false);
@@ -1817,7 +1826,7 @@ function StewDashboard({ initial = 'overview' }) {
       {tab === 'finance' && <DashFinance />}
       {tab === 'manna' && <DashManna />}
       {tab === 'meals' && (stewCapState('care').allowed ? <DashMeals /> : <StewCapBlocked cap='care' />)}
-      {tab === 'settings' && <DashSettings onTab={setTab} initialSection={settingsSection} initialIntent={settingsIntent} onSectionConsumed={() => { setSettingsSection(null); setSettingsIntent(null); }} />}
+      {tab === 'settings' && <DashSettings key={settingsEpoch} onTab={setTab} initialSection={settingsSection} initialIntent={settingsIntent} onSectionConsumed={() => { setSettingsSection(null); setSettingsIntent(null); }} />}
     </React.Fragment>
   );
   // "New post" and "New team" both write content, so both need the `content` capability — and both sat in the
@@ -1845,7 +1854,7 @@ function StewDashboard({ initial = 'overview' }) {
       {tab === 'rota'
         ? _capBtn(_contentCap.allowed, _contentCap.why, 'New team', 'plus', () => setAddingTeam(true), 'Create a new serving team')
         : _capBtn(_contentCap.allowed, _contentCap.why, 'New post', 'send', () => setPosting(true), 'Write a new post for your church')}
-      <button onClick={() => setTab('settings')} title="Settings" aria-label="Settings" style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer', borderRadius: 11, ...(narrow ? { minWidth: 44, minHeight: 44, display: 'flex', alignItems: 'center', justifyContent: 'center' } : {}) }}><SkBadge initials={initials} picture={church.picture} size={narrow ? 32 : 36} radius={999} accent="var(--sage)" /></button>
+      <button onClick={() => pickTab('settings')} title="Settings" aria-label="Settings" style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer', borderRadius: 11, ...(narrow ? { minWidth: 44, minHeight: 44, display: 'flex', alignItems: 'center', justifyContent: 'center' } : {}) }}><SkBadge initials={initials} picture={church.picture} size={narrow ? 32 : 36} radius={999} accent="var(--sage)" /></button>
     </React.Fragment>
   );
 
@@ -1863,7 +1872,7 @@ function StewDashboard({ initial = 'overview' }) {
             (reference/UI-AUDIT-PLAN-console-apk.md §0). The header that stood here before was a wordmark row,
             the church card, and nine pills wrapping onto three rows: 233px, with the church's content
             starting 235px down a 730px screen. See StewSectionsMenu for the drawer and what it must do. */}
-        {menu ? <StewSectionsMenu nav={nav} tab={tab} onPick={(k) => { setMenu(false); setTab(k); }} onHelp={() => { setMenu(false); setHelp(true); }} onClose={() => setMenu(false)} /> : null}
+        {menu ? <StewSectionsMenu nav={nav} tab={tab} onPick={(k) => { setMenu(false); pickTab(k); }} onHelp={() => { setMenu(false); setHelp(true); }} onClose={() => setMenu(false)} /> : null}
         {help && window.StewardHelp ? <window.StewardHelp onClose={() => setHelp(false)} /> : null}
         <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', background: 'var(--paper)' }}>
           <div style={{ flexShrink: 0, background: church.isNetwork ? 'color-mix(in oklab, var(--clay) 7%, var(--surface))' : 'var(--surface)', borderBottom: '1px solid var(--line)', padding: '6px 8px', display: 'flex', alignItems: 'center', gap: 6 }}>

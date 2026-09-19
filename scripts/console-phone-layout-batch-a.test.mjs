@@ -3,6 +3,7 @@
 //   Run: node --test scripts/console-phone-layout-batch-a.test.mjs
 //
 //   3. Wizard "Your regular meetings" — day / time / recurrence wrap; every select is on screen and hittable.
+//   7. Picking "Settings" from ☰ while inside a settings page returns to the settings index.
 //
 // ── WHY A BROWSER, AND WHAT IS REAL ──────────────────────────────────────────────────────────────────────
 // Same instrument as scripts/dialog-footers-stay-in-reach-on-a-phone.test.mjs: the real steward.html off the
@@ -258,6 +259,26 @@ test('the wizard can be put away for the rest of this file: reload, unlock with 
 });
 
 // ── 7. re-picking Settings returns to the index ───────────────────────────────────────────────────────────
+test('7. inside a settings page, picking "Settings" from ☰ — and tapping the avatar — returns to the settings index', SKIP, async () => {
+  // The audit's instrument lost six captures to this: on the Oppo the Settings pill did nothing while a
+  // settings page was open, and only the small "All settings" link led back. Same pill, now a drawer row.
+  await openSettingsPage('Church key');
+  let v = JSON.parse(await evalIn(SETTINGS_VIEW));
+  assert.equal(v.page, true, 're-anchor: opening "Church key" did not open a settings page (no "All settings" control)');
+  assert.equal(v.index, false, 're-anchor: the settings index is on screen beside the page — this is not the phone layout');
+  await openTab('Settings');
+  v = JSON.parse(await evalIn(SETTINGS_VIEW));
+  assert.equal(v.index, true, `picking Settings from ☰ while on a settings page did NOT return to the index: ${JSON.stringify(v)}`);
+  assert.equal(v.page, false, `the settings page is still open after re-picking Settings: ${JSON.stringify(v)}`);
+  assert.ok(v.rows >= 10, `the index lists ${v.rows} rows — not the settings list`);
+  // the avatar in the header is the other "Settings" control on the phone
+  await openSettingsPage('Relays');
+  assert.equal(JSON.parse(await evalIn(SETTINGS_VIEW)).page, true, 're-anchor: "Relays" did not open a settings page');
+  await pressButton(`x.getAttribute('aria-label') === 'Settings' && !x.closest('[role="dialog"]')`, 'Settings (the avatar)');
+  v = JSON.parse(await evalIn(SETTINGS_VIEW));
+  assert.equal(v.index && !v.page, true, `tapping the avatar while on a settings page did not return to the index: ${JSON.stringify(v)}`);
+  assert.deepEqual(errors, [], 'the console threw:\n  ' + errors.join('\n  '));
+});
 
 // ── 2. the relay row ──────────────────────────────────────────────────────────────────────────────────────
 
