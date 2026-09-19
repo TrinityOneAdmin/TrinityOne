@@ -2,6 +2,7 @@
 // screenshot and a measurement in TrinityOne-internal/UI-AUDIT-console-2026-09-19.md §E, each one a row here.
 //   Run: node --test scripts/console-phone-layout-batch-a.test.mjs
 //
+//   1. Members row — the NAME wins the width fight; the handle beside it is what truncates.
 //   2. Settings → Relays row — the chips wrap; nothing in a relay row is off the right edge of the screen.
 //   3. Wizard "Your regular meetings" — day / time / recurrence wrap; every select is on screen and hittable.
 //   7. Picking "Settings" from ☰ while inside a settings page returns to the settings index.
@@ -318,6 +319,46 @@ test('2. Settings → Relays: with a relay marked "refused", nothing in any rela
 });
 
 // ── 1. the members row ────────────────────────────────────────────────────────────────────────────────────
+test('1. Members: a 16-character name beside a 20-character handle shows at least 12 characters of the NAME; the handle is what gives way', SKIP, async () => {
+  // Measured on the Oppo 2026-09-19 (full/portrait/07-members.png): the name ellipsed to "R…" while the handle
+  // showed in full. At 360px the text column of a member row is ~128px (badge, two action buttons), so a
+  // 16-character bold name does not fit whole either way; what changes is WHO shrinks. Visible characters are
+  // read from the node itself: clientWidth over the per-character width of its full text (scrollWidth, which
+  // an overflow-hidden span still reports in full).
+  // THE MEMBER IS SEEDED through the roster cache the console paints from on mount (useStewardMembers /
+  // subscribeMembers seed from `trinityone.steward.members.<church>` before the relay answers) — a harness
+  // affordance; the church has no members and its writes are refused. Joined minutes ago so it is in the
+  // active list, not the folded inactive one.
+  const NAME = 'Persephone Wilde', HANDLE = 'persephonewilde_1234';
+  assert.equal(NAME.length, 16); assert.equal(HANDLE.length, 20);
+  await evalIn(`(() => { localStorage.setItem('trinityone.steward.members.' + window.Steward.churchPub, JSON.stringify([{ pubkey: 'ab'.repeat(32), npub: 'npub1' + 'q'.repeat(58), name: ${JSON.stringify(NAME)}, nip05: ${JSON.stringify(HANDLE + '@example.org')}, picture: '', count: 0, lastTs: 0, firstTs: 0, joined: Math.floor(Date.now() / 1000) - 360 }])); return 'ok'; })()`);
+  await openTab('Overview');
+  await openTab('Members');
+  await sleep(1500);
+  const m = JSON.parse(await evalIn(`(() => {
+    const name = [...document.querySelectorAll('main span')].find(s => (s.textContent || '').trim() === ${JSON.stringify(NAME)} && s.children.length === 0);
+    if (!name) return JSON.stringify({ found: false });
+    const line = name.parentElement;                          // name + handle, one line
+    const card = line.closest('main div[style*="border-radius"], main div');   // the row card: the nearest bordered ancestor
+    let el = line; while (el && el !== document.body && getComputedStyle(el).borderTopWidth === '0px') el = el.parentElement;
+    const cr = el.getBoundingClientRect();
+    const handle = [...line.querySelectorAll('span')].find(s => s !== name && (s.textContent || '').includes('@' + ${JSON.stringify(HANDLE)}));
+    const g = (n) => { const r = n.getBoundingClientRect(); return { w: Math.round(r.width), left: Math.round(r.left), right: Math.round(r.right), sw: n.scrollWidth, cw: n.clientWidth }; };
+    const nm = g(name); const perChar = nm.sw / ${NAME.length};
+    return JSON.stringify({ found: true, vw: innerWidth, card: { left: Math.round(cr.left), right: Math.round(cr.right) }, line: g(line),
+      name: { ...nm, visibleChars: perChar ? Math.floor(nm.cw / perChar) : 0, whole: nm.sw <= nm.cw + 1 },
+      handle: handle ? { ...g(handle), whole: handle.scrollWidth <= handle.clientWidth + 1 } : null }); })()`));
+  assert.equal(m.found, true, 'the seeded member is not on the Members page — the roster cache seed did not paint');
+  assert.ok(m.name.visibleChars >= 12,
+    `the name shows ${m.name.visibleChars} of ${NAME.length} characters (${m.name.cw}px of ${m.name.sw}px) at ${m.vw}px — the name lost the width fight. Line ${m.line.left}→${m.line.right}, handle ${JSON.stringify(m.handle)}`);
+  assert.ok(m.name.right <= m.card.right && m.name.left >= m.card.left, `the name spills past its card (${m.name.left}→${m.name.right} in ${m.card.left}→${m.card.right})`);
+  assert.ok(m.handle, 're-anchor: no handle node beside the name');
+  // the handle is the one that gives way: it is either truncated or has no room at all — never whole while the name is not
+  assert.ok(m.name.whole || !m.handle.whole || m.handle.w === 0,
+    `the handle is whole (${m.handle.w}px) while the name is cut (${m.name.visibleChars}/${NAME.length}) — the handle won the width fight`);
+  console.log(`    measured: name ${m.name.visibleChars}/${NAME.length} chars in ${m.name.cw}px; handle ${m.handle.w}px${m.handle.whole ? ' (whole)' : ' (truncated)'}; line ${m.line.left}→${m.line.right} of card ${m.card.left}→${m.card.right}`);
+  assert.deepEqual(errors, [], 'the console threw:\n  ' + errors.join('\n  '));
+});
 
 // ── 5 + 6. the dialogs: one gutter, no ring ───────────────────────────────────────────────────────────────
 // The twelve dialogs the audit measured, by the control that opens each, with the margin it had at 360

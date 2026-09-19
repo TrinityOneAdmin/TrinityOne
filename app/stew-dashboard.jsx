@@ -5879,11 +5879,18 @@ function DashMembers() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
           <SkBadge initials={initials} av={m.av} pubkey={m.pubkey} size={36} radius={11} accent={SK_TINT[named ? 'gold' : 'sage'].fg} />
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
-              <span style={{ fontWeight: 700, fontSize: 14.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 1 }}>{label}</span>
+            {/* THE NAME WINS THE WIDTH FIGHT. At 360px the name shrank to "R…" while the handle beside it
+                showed in full (audit 2026-09-19 §E, full/portrait/07-members.png): the name was the only
+                flex item allowed to shrink. Now the name never shrinks below its own text (capped at the row
+                so a very long name still ellipsises), and it is the HANDLE that gives way — its text is in a
+                span of its own because text-overflow does not apply to an inline-flex box, only to a block
+                whose children are text. The row clips so the handle's gap cannot poke past the card. */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0, overflow: 'hidden' }}>
+              <span style={{ fontWeight: 700, fontSize: 14.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 0, maxWidth: '100%' }}>{label}</span>
               {nameHandle(m)
-                ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 11.5, color: 'var(--sage-ink)', fontWeight: 700, flexShrink: 0 }} title={m.nip05 || m.npub}>@{nameHandle(m)} <Icon name="check" size={11} stroke={3} color="var(--sage)" /></span>
-                : <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={m.npub}>{shortNpub(m.npub)}</span>}
+                ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 11.5, color: 'var(--sage-ink)', fontWeight: 700, flexShrink: 1, minWidth: 0 }} title={m.nip05 || m.npub}>
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>@{nameHandle(m)}</span> <Icon name="check" size={11} stroke={3} color="var(--sage)" style={{ flexShrink: 0 }} /></span>
+                : <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 1, minWidth: 0 }} title={m.npub}>{shortNpub(m.npub)}</span>}
             </div>
             <div style={{ fontSize: 12.5, color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.count > 0 ? `${m.count} message${m.count === 1 ? '' : 's'} · last ${ago(m.lastTs)}` : `joined ${ago(m.joined)} · hasn’t posted yet`}</div>
           </div>
