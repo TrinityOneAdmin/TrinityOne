@@ -55,12 +55,13 @@ function finItemToDoc(it) {
   if (id.startsWith('journal:')) return { t: 'journal', seq: it.seq, date: it.date, memo: it.memo, postings: it.postings, by: it.by, ts: it.ts, reverses: it.reverses, importKey: it.importKey ?? null };
   return null;
 }
+// Both file exports on this screen (this CSV and fsDownloadDoc's HTML below) used to build an `<a download>`
+// and click it, inside a try that swallowed everything. In the APK's WebView that writes no file and says
+// nothing (console audit 2026-09-19, P7). They now go through saveConsoleFile (stew-dashboard.jsx), which
+// writes to Documents on the phone and is the plain download in a browser. Both resolve to the sentence the
+// screen shows and REJECT when nothing was saved — the caller shows that too; nothing is swallowed here.
 function booksDownload(name, text) {
-  try {
-    const url = URL.createObjectURL(new Blob([text], { type: 'text/csv;charset=utf-8' }));
-    const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click();
-    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 800);
-  } catch (e) {}
+  return saveConsoleFile(name, text, { mime: 'text/csv;charset=utf-8', title: 'Finance export', blurb: 'Open it in a spreadsheet.' });
 }
 function booksTodayISO() { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
 function booksFmt(minor, book) {
@@ -373,12 +374,8 @@ function FinanceImport({ book, F, onPost, onClose }) {
 // Builds an AGGREGATE statement (totals by category + fund — no member names) the treasurer reviews, then
 // shares: download a printable doc, copy a plain-text summary (paste into email/WhatsApp), or — deliberately —
 // post it to members. The heavy lifting is the pure window.FinanceLedger.buildStatement/statementText/Html.
-function fsDownloadDoc(name, text, mime) {
-  try {
-    const url = URL.createObjectURL(new Blob([text], { type: mime }));
-    const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click();
-    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 800);
-  } catch (e) {}
+function fsDownloadDoc(name, text, mime) {   // see booksDownload: same path, same contract
+  return saveConsoleFile(name, text, { mime, title: 'Financial statement', blurb: 'Open it to print or save as PDF.' });
 }
 function fsSlug(s) { return String(s || 'statement').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'statement'; }
 // parse a #rgb / #rrggbb brand accent to [r,g,b] for jsPDF; fall back to `fb` when unset/unparseable
@@ -471,8 +468,12 @@ function FinanceShareStatement({ book, F, churchName, accent, logo, canPost, onP
   const doDownload = async () => {
     const base = fsSlug(title) + '-' + fsSlug(period.label);
     try { const doc = fsBuildStatementPdf(model, F); if (doc) { await fsSavePdf(doc, base + '.pdf'); setFlash('Statement downloaded — ready to print or share.'); setTimeout(() => setFlash(''), 2600); return; } } catch (e) {}
-    fsDownloadDoc(base + '.html', F.statementHtml(model), 'text/html;charset=utf-8');   // fallback: self-contained HTML
-    setFlash('Downloaded — open it to print or save as PDF.'); setTimeout(() => setFlash(''), 2600);
+    // fallback: self-contained HTML. The sentence comes from the save, not from here — "Downloaded" was
+    // printed over a WebView that had downloaded nothing.
+    try {
+      const msg = await fsDownloadDoc(base + '.html', F.statementHtml(model), 'text/html;charset=utf-8');
+      setFlash(msg || 'Downloaded — open it to print or save as PDF.'); setTimeout(() => setFlash(''), 2600);
+    } catch (e) { setFlash((e && e.message) || 'Could not save the statement on this device.'); }
   };
   const doPost = async () => {
     try { await onPostToMembers(model, F.statementText(model)); setPosting('done'); setFlash('Shared with members.'); }
@@ -678,6 +679,7 @@ function DashFinanceBook() {
   const [reports, setReports] = React.useState(false);
   const [donate, setDonate] = React.useState(false);
   const [sharing, setSharing] = React.useState(false);
+  const [exported, setExported] = React.useState('');   // what Export CSV reported: "Saved to …", or why it did not
   // church profile + groups (for the statement title + the "post to members" broadcast target). Relay-backed
   // console only; in localStorage mode these are absent and the modal simply omits the "Post to members" button.
   const church = window.useStewardChurch ? window.useStewardChurch() : { name: '' };
@@ -793,7 +795,7 @@ function DashFinanceBook() {
   const bank = F.trialBalance(book).rows.find(r => r.account === 'bank');
   const cash = bank ? bank.debit - bank.credit : 0;
   const recent = book.journal.slice().reverse().slice(0, 16);
-  const exportCsv = () => {
+  const exportCsv = async () => {
     const rows = [['seq', 'date', 'memo', 'account', 'fund', 'debit', 'credit']];
     for (const e of book.journal) for (const p of e.postings) rows.push([e.seq, e.date, e.memo, (book.accounts.get(p.account) || {}).name || p.account, p.fund || '', p.dir === 'dr' ? p.amount : '', p.dir === 'cr' ? p.amount : '']);
     // SECURITY-AUDIT-2026-07-06 H6: CSV formula-injection guard. `memo` carries bank-statement descriptions
@@ -801,7 +803,10 @@ function DashFinanceBook() {
     // that STARTS with = + - @ (or tab/CR) from being run as a formula when the treasurer opens the file in
     // Excel/Sheets (=HYPERLINK/WEBSERVICE exfil, or DDE command exec). Prefix such cells with a ' to neutralise.
     const csvCell = c => { let s = String(c); if (/^[=+\-@\t\r]/.test(s)) s = "'" + s; return '"' + s.replace(/"/g, '""') + '"'; };
-    booksDownload('finance-' + booksTodayISO() + '.csv', rows.map(r => r.map(csvCell).join(',')).join('\n'));
+    try {
+      const msg = await booksDownload('finance-' + booksTodayISO() + '.csv', rows.map(r => r.map(csvCell).join(',')).join('\n'));
+      setExported(msg); if (/^Saved/.test(msg)) setTimeout(() => setExported(''), 5000);   // a receipt fades; a warning stays
+    } catch (e) { setExported((e && e.message) || 'Could not save the export on this device.'); }
   };
 
   const stat = (label, val, tone) => (
@@ -851,6 +856,7 @@ function DashFinanceBook() {
             <button onClick={exportCsv} style={{ border: '1px solid var(--line)', background: 'transparent', borderRadius: 9, padding: '6px 11px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, color: 'var(--ink)' }}>Export CSV</button>
           </div>
         </div>
+        {exported ? <div role="status" style={{ fontSize: 12.5, lineHeight: 1.5, color: 'var(--ink-2)', margin: '-4px 0 10px' }}>{exported}</div> : null}
         {recent.length === 0 && <div style={{ color: 'var(--ink-3)', fontSize: 14, padding: '10px 0' }}>No transactions yet — record your first with the button above.</div>}
         {recent.map(e => { const v = booksEntryView(book, e); return (
           <div key={e.seq} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '9px 0', borderTop: '1px solid var(--line)' }}>

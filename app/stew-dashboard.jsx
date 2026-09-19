@@ -2229,6 +2229,41 @@ window.skPrintable = function (html) {
   };
 };
 
+// SAVING A FILE FROM A CONSOLE BUTTON — ONE PATH, AND IT SAYS WHERE THE FILE WENT.
+//
+// Four console buttons each built an `<a download>` and clicked it: Save QR and Save install QR (JoinCard),
+// Export CSV (DashFinanceBook) and the statement's HTML fallback (FinanceShareStatement, stew-finance.jsx).
+// Inside the Capacitor WebView that writes no file, throws nothing and changes nothing on screen — measured
+// on the Oppo, console audit 2026-09-19 (P7) — and it is the same shape the backup card was cured of on
+// 2026-08-16. So they go through TrinityBackup.saveFile, which already does the hard part right: on the
+// phone it writes to Documents FIRST and only then offers the share sheet, throws when it cannot write, and
+// reports where the file landed (savedWhere). In a browser it is the download these buttons always were —
+// mode 'local' is the anchor and nothing else, so a desktop treasurer's CSV does not turn into a share dialog.
+//
+// `data` is text, or base64 with `opts.base64` (a PNG is bytes; saveFile takes them that way). Resolves to
+// the sentence for the screen — "Saved to Documents/join-st-mary.png." on the phone, '' in a browser where
+// the download bar already says so. Rejects with the sentence to show when NOTHING was saved; a caller puts
+// that on screen, never in a catch that swallows it — a button that fails silently is the defect this replaces.
+// The three wordings passed below replace saveFile's backup-specific defaults ("make a backup", "Save to
+// device"), which name buttons that do not exist on these screens.
+// Callers: saveQrPngFor (JoinCard, below), booksDownload and fsDownloadDoc (stew-finance.jsx).
+async function saveConsoleFile(filename, data, opts) {
+  const B = window.TrinityBackup;
+  if (!B || !B.saveFile) throw new Error('This build can’t save files — open the console in a browser to download it.');
+  const isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+  const res = await B.saveFile(filename, data, isNative ? 'share' : 'local', {
+    mime: (opts && opts.mime) || 'application/octet-stream', base64: !!(opts && opts.base64),
+    title: (opts && opts.title) || filename, blurb: (opts && opts.blurb) || 'Saved to your Documents folder — share a copy from here.',
+    cantWrite: 'This phone won’t let the app save the file. Update the app, or open the console in a browser to download it.',
+    cantHand: 'This phone won’t let the app save the file, and has no way to hand it to another app. Update the app, or open the console in a browser to download it.',
+    shareFailed: 'Nothing was kept — the sharing sheet closed before the file went anywhere. Please try again.',
+  });
+  if (res && res.warn) return res.warn;                       // written to CACHE and handed over: say so, in saveFile's words
+  if (res && res.where === 'downloads') return '';             // a browser: its own download bar is the receipt
+  const where = (B.savedWhere && B.savedWhere(res)) || '';
+  return where ? 'Saved to ' + where + '.' : 'Saved.';
+}
+
 // On-theme confirm dialog (replaces the browser's native window.confirm, which looks off-brand).
 // `busy` and `err` are optional (AUDIT-2026-08-10 item A): a confirm whose action is awaited — sealing a
 // group waits for the key envelope to land before the flag flips — needs somewhere honest to show "working"
@@ -2503,21 +2538,47 @@ function JoinCard({ qrSize = 92, center = false }) {
     doCopy('link', url);
   };
   // ONE mechanism for saving a QR, not two. This was the join QR's private helper; the install QR needs
-  // exactly the same thing (render locally, raster to PNG, offer it as a download) and a second copy of it
-  // would be a second thing to keep working. Callers: saveQrPng (the join code) and saveInstallQr.
+  // exactly the same thing (render locally, raster to PNG, save it) and a second copy of it would be a
+  // second thing to keep working. Callers: saveQrPng (the join code) and saveInstallQr.
+  //
+  // THE SAVE ITSELF IS saveConsoleFile, NOT AN ANCHOR. This used to end in `<a download>` + click(), which
+  // inside the APK's WebView writes nothing, throws nothing and shows nothing — two dead buttons in the
+  // most-used dialog (console audit 2026-09-19, P7). The raster is unchanged; the PNG's bytes now go to the
+  // helper as base64, and what it reports — "Saved to Documents/…", or why nothing was saved — is shown
+  // under the row that was pressed (`saved`). Success clears itself; a failure stays until the next press.
+  const [saved, setSaved] = React.useState(null);   // { row: 'join' | 'install', text } | null
+  const savedTimer = React.useRef(null);
+  const showSaved = (row, text, clear) => {
+    clearTimeout(savedTimer.current);
+    setSaved(text ? { row, text } : null);
+    if (text && clear) savedTimer.current = setTimeout(() => setSaved(null), 5000);
+  };
   const saveQrPngFor = (text, filePrefix) => {
     if (!text || !window.Steward.qrSVG) return;
+    const row = filePrefix === 'install' ? 'install' : 'join';
     const u = URL.createObjectURL(new Blob([window.Steward.qrSVG(text)], { type: 'image/svg+xml' }));
     const img = new Image();
     img.onload = () => {
       const c = document.createElement('canvas'); c.width = 560; c.height = 560; const x = c.getContext('2d');
       x.fillStyle = '#fff'; x.fillRect(0, 0, 560, 560); x.drawImage(img, 24, 24, 512, 512);
-      c.toBlob(b => { if (!b) return; const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = filePrefix + '-' + ((church.name || 'church').toLowerCase().replace(/[^a-z0-9]+/g, '-')) + '.png'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000); }, 'image/png');
+      c.toBlob(async b => {
+        if (!b) { showSaved(row, 'Couldn’t draw the QR on this device.'); return; }
+        const name = filePrefix + '-' + ((church.name || 'church').toLowerCase().replace(/[^a-z0-9]+/g, '-')) + '.png';
+        try {
+          const bytes = new Uint8Array(await b.arrayBuffer());
+          let bin = ''; for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + 0x8000, bytes.length)));
+          const msg = await saveConsoleFile(name, btoa(bin), { mime: 'image/png', base64: true, title: 'QR code for ' + (church.name || 'your church'), blurb: 'Post it in a chat or on a poster.' });
+          showSaved(row, msg, /^Saved/.test(msg));   // a receipt fades; a warning or a failure stays
+        } catch (e) { showSaved(row, (e && e.message) || 'Couldn’t save the QR.'); }
+      }, 'image/png');
       URL.revokeObjectURL(u);
     };
-    img.onerror = () => URL.revokeObjectURL(u);
+    img.onerror = () => { URL.revokeObjectURL(u); showSaved(row, 'Couldn’t draw the QR on this device.'); };
     img.src = u;
   };
+  const savedLine = (row) => (saved && saved.row === row
+    ? <div role="status" style={{ marginTop: 8, fontSize: 12.5, lineHeight: 1.5, color: 'var(--ink-2)' }}>{saved.text}</div>
+    : null);
   const saveQrPng = () => saveQrPngFor(url, 'join');
   const saveInstallQr = () => saveQrPngFor(install.url, 'install');
   // reachability gate: in the self-hosted Suite, show "make your church reachable" until the tunnel is on
@@ -2550,6 +2611,7 @@ function JoinCard({ qrSize = 92, center = false }) {
           <button onClick={saveQrPng} title="Save the QR as an image to post in a chat or on a poster" className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 12 }}><Icon name="qr" size={14} color="currentColor" /> Save QR</button>
           <button onClick={() => setPoster(true)} className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 12 }} title="Show the invite poster (QR + link) to display, print, or save"><Icon name="receipt" size={14} color="currentColor" /> Invite poster</button>
         </div>
+        {savedLine('join')}
       </div>
       {poster ? <InvitePosterModal church={church} url={url} svg={svg} onClose={() => setPoster(false)} /> : null}
     </div>
@@ -2594,6 +2656,7 @@ function JoinCard({ qrSize = 92, center = false }) {
               <button onClick={saveInstallQr} title="Save the install QR as an image to post in a chat or on a poster" className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 12 }}><Icon name="qr" size={14} color="currentColor" /> Save install QR</button>
               <button onClick={printInstall} title="Print a slip that tells people how to install the app from your church's own machine" className="sk-btn sk-btn--ghost" style={{ padding: '7px 11px', fontSize: 12 }}><Icon name="receipt" size={14} color="currentColor" /> Install slip</button>
             </div>
+            {savedLine('install')}
             {/* One plain statement, and only when there is one to make. Nothing is shown while the
                 installer is current, and nothing is shown when the relay could not be asked. */}
             {installerNote ? <div role="status" style={{ marginTop: 10, padding: '9px 11px', borderRadius: 11, background: 'color-mix(in oklab, var(--clay) 9%, var(--surface))', border: '1px solid var(--line)', fontSize: 12.5, lineHeight: 1.5, color: 'var(--ink-2)' }}>{installerNote}</div> : null}

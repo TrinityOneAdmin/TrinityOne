@@ -246,7 +246,8 @@
   // Callers (CLAUDE.md rule 2 — complete list): app/identity-extras.jsx `doExport`, app/screens-library.jsx
   // `run` (⚠ this said `doExport`; that name does not exist in that file, and a rule-2 list nobody can grep
   // is not a list — corrected 2026-09-14), app/stew-dashboard.jsx (the church-key backup),
-  // app/screens-serving.jsx svDownloadICS.
+  // app/screens-serving.jsx svDownloadICS, app/stew-dashboard.jsx saveConsoleFile (the console's Save QR,
+  // Save install QR, Export CSV and the statement's HTML fallback — the QR is the one caller passing base64).
   async function saveFile(filename, text, mode, opts) {
     const _mime = (opts && opts.mime) || 'application/json';
     const _title = (opts && opts.title) || 'TrinityOne backup';
@@ -254,6 +255,14 @@
     const _cantWrite = (opts && opts.cantWrite) || 'This app can’t write the file here. Update the app, or use “Save to device”.';
     const _cantHand = (opts && opts.cantHand) || 'This phone won’t let the app save the file, and it has no way to hand it to another app. Update the app, or open TrinityOne in a browser to make a backup.';
     const _shareFailed = (opts && opts.shareFailed) || 'Nothing was kept — the sharing sheet closed before the file went anywhere. Please try again.';
+    // BYTES AS WELL AS TEXT. Every caller above hands over text; the console's "Save QR" hands over a PNG,
+    // which is bytes. `opts.base64` says `text` is base64 of the file: Capacitor's Filesystem writes base64
+    // when no `encoding` is given (that is its default, and how share-app.jsx writes the APK), so the three
+    // writes below drop the utf8 tag, and the two browser paths decode it into the Blob/File they build.
+    // No caller that passes text sees any change — `_enc` is exactly the object that was inlined before.
+    const _b64 = !!(opts && opts.base64);
+    const _enc = _b64 ? {} : { encoding: 'utf8' };
+    const _bytes = () => (_b64 ? Uint8Array.from(atob(text), ch => ch.charCodeAt(0)) : text);
     const Cap = window.Capacitor, P = Cap && Cap.Plugins;
     const isNative = !!(Cap && Cap.isNativePlatform && Cap.isNativePlatform());
     const native = !!(P && P.Filesystem && isNative);
@@ -261,7 +270,7 @@
     // claim it worked. `saved: false` is not enough — every caller treats a returned object as success.
     const anchorSave = () => {
       if (isNative) throw new Error(_cantWrite);
-      const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type: _mime }));
+      const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([_bytes()], { type: _mime }));
       a.download = filename; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
       return { saved: true, where: 'downloads' };
     };
@@ -279,14 +288,14 @@
       // whatever the next OEM does — all of which look the same to the member and all of which need the same
       // answer: fall back to the path that worked before, and be honest that it is weaker.
       let w = null;
-      try { w = await P.Filesystem.writeFile({ path: filename, data: text, directory: 'DOCUMENTS', encoding: 'utf8' }); }
+      try { w = await P.Filesystem.writeFile({ path: filename, data: text, directory: 'DOCUMENTS', ..._enc }); }
       catch (e) { w = null; }
       if (!w) {
         // CACHE needs no permission. It is also cleared at Android's discretion, so this copy is a courier,
         // not a backup — which is exactly what the member has to be told, because dismissing the sheet here
         // really does leave them with nothing.
         if (!P.Share) throw new Error(_cantHand);
-        const c = await P.Filesystem.writeFile({ path: filename, data: text, directory: 'CACHE', encoding: 'utf8' });
+        const c = await P.Filesystem.writeFile({ path: filename, data: text, directory: 'CACHE', ..._enc });
         // A REJECTION HERE IS THE PLUGIN'S WORDS, NOT OURS. @capacitor/share rejects a dismissed sheet with
         // the bare string "Share canceled", and every caller of this function puts e.message straight in
         // front of the member. Say what it means for them instead — the CACHE copy is a courier Android may
@@ -301,7 +310,7 @@
         // is exposed to it. A throw here means the member closed the sheet — the durable file above is
         // already written, so that is a choice, not a failure.
         try {
-          const c = await P.Filesystem.writeFile({ path: filename, data: text, directory: 'CACHE', encoding: 'utf8' });
+          const c = await P.Filesystem.writeFile({ path: filename, data: text, directory: 'CACHE', ..._enc });
           await P.Share.share({ title: _title, text: _blurb, url: c.uri });
         } catch (e) {}
       }
@@ -316,7 +325,7 @@
       // was missed, so on a PWA a calendar file was offered to the chooser as `application/json` titled
       // "TrinityOne backup" — and calendar apps, which filter by MIME type, removed themselves from the list.
       // The member saw no way to add the event and nothing said why.
-      const file = new File([text], filename, { type: _mime });
+      const file = new File([_bytes()], filename, { type: _mime });
       if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: _title }); return { saved: true, where: 'cloud' }; }
     } catch {}
     return anchorSave();
