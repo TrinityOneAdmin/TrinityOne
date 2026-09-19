@@ -104,3 +104,45 @@ test('Calendar: with one meeting on the calendar and nothing on the rota, the si
   assert.doesNotMatch(line, /no upcoming services/i, 'the empty state still says "No upcoming services" under a service the steward just created');
   unmount();
 });
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+// 4. SET A CONSOLE PIN — names the page that exists, and never promises words the steward has not seen.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+function pinGate({ newChurch }) {
+  const { React, reset, flush, unmount } = fakeReact();
+  const { window } = fakeBrowser({ Steward: fakeSteward() });
+  if (newChurch) window.localStorage.setItem('trinityone.steward.newchurch', '1');
+  const { StewardForcedPin } = loadConsole({ React, window, expr: '{ StewardForcedPin }' });
+  reset(); const tree = StewardForcedPin({}); flush();
+  return { text: said(tree), tree, unmount };
+}
+
+test('Set a console PIN: the gate points at Settings → Church key, never "Settings → Security"', () => {
+  for (const newChurch of [false, true]) {
+    const g = pinGate({ newChurch });
+    assert.ok(button(g.tree, 'Set PIN'), 're-anchor: the gate has no "Set PIN" button');
+    assert.match(g.text, /Church key/, `THE DEFECT (newchurch=${newChurch}): the gate does not name Settings → Church key: ` + JSON.stringify(g.text));
+    assert.doesNotMatch(g.text, /Settings → Security/, `(newchurch=${newChurch}) the gate still says "Settings → Security", which is the delegates' page`);
+    g.unmount();
+  }
+});
+
+test('Set a console PIN: on the new-church path it does not promise a 12-word phrase the wizard has not shown yet', () => {
+  const fresh = pinGate({ newChurch: true });
+  assert.doesNotMatch(fresh.text, /12-word/, 'THE DEFECT: "recover the church via your 12-word phrase" on a church whose phrase has not been shown');
+  assert.match(fresh.text, /come next/i, 'the new-church footer does not say the recovery words come next: ' + JSON.stringify(fresh.text));
+  fresh.unmount();
+  // …and the other routes (restore, adopt, an old install) already hold the phrase, so they may be told it restores the church
+  const old = pinGate({ newChurch: false });
+  assert.match(old.text, /12-word/, 'a console that already holds its phrase is no longer told the phrase is the way back');
+  old.unmount();
+});
+
+test('Set a console PIN: the copy is short — one sentence of why, one line of advice, one line of footer', () => {
+  // Owner, 2026-09-10: less instructional copy on screen. Counted on the rendered tree, not the source.
+  const g = pinGate({ newChurch: false });
+  const prose = g.text.replace(/Set a console PIN|Set PIN & enter/g, '');
+  const sentences = prose.split(/[.;]\s|[.;]$/).map(s => s.trim()).filter(s => s.length > 20);
+  assert.ok(sentences.length <= 4, 'the gate carries ' + sentences.length + ' sentences of copy; the rule is one why, one line of advice, one footer:\n  ' + sentences.join('\n  '));
+  g.unmount();
+});
