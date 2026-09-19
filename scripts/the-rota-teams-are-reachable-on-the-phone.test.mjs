@@ -221,10 +221,27 @@ after(async () => {
   try { prof && rmSync(prof, { recursive: true, force: true }); } catch {}
 });
 
-// Open one of the console's sections by pressing its real nav pill, and prove we got there.
+// The console's section buttons, wherever this build keeps them. Before feat/console-hamburger-nav the
+// phone shows a strip of pills; after it the same buttons live in a drawer behind a ☰ (`aria-label="Sections"`)
+// and exist only while it is open. This test must pass on either side of that merge — an audit of the two
+// branches found it red 3/4 the moment they met — so: open the drawer if there is one, then look.
+const SECTIONS_JS = `(async () => {
+  const burger = document.querySelector('button[aria-label="Sections"]');
+  if (burger && burger.getAttribute('aria-expanded') !== 'true') { burger.click(); await new Promise(r => setTimeout(r, 400)); }
+  const scope = document.querySelector('[role="dialog"][aria-label="Sections"] nav') || document.querySelector('nav[aria-label="Console sections"]');
+  return scope ? [...scope.querySelectorAll('button')].map(b => (b.textContent || '').trim()) : [];
+})()`;
+async function sectionLabels() { return evalIn(SECTIONS_JS); }
+
+// Open one of the console's sections by pressing its real nav button, and prove we got there.
 async function openTab(label) {
-  const r = await evalIn(`(() => { const b=[...document.querySelectorAll('nav[aria-label="Console sections"] button')].find(x=>(x.textContent||'').trim().startsWith(${JSON.stringify(label)})); if(!b) return 'miss'; b.click(); return 'ok'; })()`);
-  assert.equal(r, 'ok', `no "${label}" pill in the console's nav — re-anchor this test`);
+  const r = await evalIn(`(async () => {
+    const burger = document.querySelector('button[aria-label="Sections"]');
+    if (burger && burger.getAttribute('aria-expanded') !== 'true') { burger.click(); await new Promise(r => setTimeout(r, 400)); }
+    const scope = document.querySelector('[role="dialog"][aria-label="Sections"] nav') || document.querySelector('nav[aria-label="Console sections"]');
+    const b = scope && [...scope.querySelectorAll('button')].find(x => (x.textContent || '').trim().startsWith(${JSON.stringify(label)}));
+    if (!b) return 'miss'; b.click(); return 'ok'; })()`);
+  assert.equal(r, 'ok', `no "${label}" button in the console's nav — re-anchor this test`);
   await sleep(2600);
 }
 
@@ -274,8 +291,11 @@ const MEASURE = `(() => {
 test('the console reached its dashboard with three teams and a service — without which nothing below proves anything',
   { skip: !CHROME ? 'no chromium' : false, timeout: 240000 }, async () => {
     assert.equal(booted, 'ok', 'the "Start a new church" button was never found');
-    const nav = await evalIn(`(() => { const n = document.querySelector('nav[aria-label="Console sections"]'); return n ? n.querySelectorAll('button').length : 0; })()`);
+    const labels = await sectionLabels();
+    const nav = labels.length;
     assert.ok(nav >= 6, `the console's nav has ${nav} sections — it did not reach the dashboard, so every measurement below is of the wrong screen`);
+    // Leave the drawer (if this build has one) closed again, so the geometry below is of the Rota, not the menu.
+    await evalIn(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
     assert.equal(registered, 'ok', 'the church did not register on its box, so nothing it publishes is stored: ' + registered);
     assert.ok(seeded && seeded.teams.every(Boolean) && seeded.teams.length === 3, 'the three teams were not all saved: ' + JSON.stringify(seeded));
     assert.deepEqual(seeded.rosters, ['ok', 'ok', 'ok'], 'the three rosters (which carry the roles the Assign buttons come from) were not all saved: ' + JSON.stringify(seeded));
