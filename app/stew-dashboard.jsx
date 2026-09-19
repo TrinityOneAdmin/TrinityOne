@@ -3977,7 +3977,14 @@ function GroupLeadersModal({ group, onClose }) {
   const [savedLeaders, setSavedLeaders] = React.useState(() => new Set(group.leaders || []));
   const [told, setTold] = React.useState(() => new Set());
   const toggle = (pk) => setSel(s => { const n = new Set(s); n.has(pk) ? n.delete(pk) : n.add(pk); return n; });
+  // NOBODY TO TICK. "The leaders you choose — the people you tick below" is the default, and on a church nobody
+  // has joined yet the list below it is empty — so the dialog offered a choice with no one to choose and a live
+  // Save that would publish an empty leader list (console audit 2026-09-19 §C). The precondition is named where
+  // the list would be, and Save waits until there is someone to tick or a different option is chosen.
+  const nobodyToTick = members.length === 0;
+  const saveBlocked = pol === 'leaders' && nobodyToTick;
   const save = async () => {
+    if (saveBlocked) return;
     setSaving(true); setSaveErr(''); setNotTold([]);
     const before = new Set(savedLeaders);
     // ONE publish, not two. publishGroup rebuilds the group document from scratch, and both setGroupLeaders
@@ -4067,7 +4074,7 @@ function GroupLeadersModal({ group, onClose }) {
           </div>
         ) : null}
         <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 7 }}>
-          {members.length === 0 ? <div style={{ fontSize: 13.5, color: 'var(--ink-3)', textAlign: 'center', padding: 24 }}>No app members yet. Once people join your church they’ll be selectable here.</div>
+          {nobodyToTick ? <div role="status" style={{ fontSize: 13.5, color: 'var(--ink-3)', textAlign: 'center', padding: 24 }}>Nobody has joined your church on the app yet, so there is no one to tick.</div>
             : members.map(m => {
               const on = sel.has(m.pubkey);
               const nm = m.name || ('Anon · ' + (m.npub || m.pubkey).slice(-6));
@@ -4096,7 +4103,7 @@ function GroupLeadersModal({ group, onClose }) {
         ) : null}
         <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>{notTold.length ? 'Close' : 'Cancel'}</button>
-          <button onClick={save} disabled={saving} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: saving ? 0.6 : 1 }}><Icon name="check" size={15} color="var(--on-clay)" /> {saving ? 'Saving…' : 'Save'}</button>
+          <button onClick={save} disabled={saving || saveBlocked} title={saveBlocked ? 'No one to tick yet — choose another option, or wait until someone joins.' : undefined} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: (saving || saveBlocked) ? 0.6 : 1 }}><Icon name="check" size={15} color="var(--on-clay)" /> {saving ? 'Saving…' : 'Save'}</button>
         </div>
       </div>
     </div>
