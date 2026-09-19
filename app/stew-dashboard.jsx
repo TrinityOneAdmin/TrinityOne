@@ -567,7 +567,19 @@ function PublishErrorBanner() {
       // attribute above.
       style={{ pointerEvents: 'auto', maxWidth: 560, width: '100%', display: 'flex', alignItems: clamped ? 'center' : 'flex-start', gap: 10, padding: clamped ? '5px 10px' : '12px 14px', borderRadius: 13, background: tone === 'quiet' ? 'var(--surface-2)' : 'color-mix(in oklab, var(--clay) 12%, var(--surface))', border: tone === 'quiet' ? '1px solid var(--line)' : '1px solid color-mix(in oklab, var(--clay) 40%, transparent)', boxShadow: 'var(--shadow-lg)' }}>
       <Icon name={tone === 'sg' ? 'shield' : 'bolt'} size={17} color={tone === 'quiet' ? 'var(--ink-3)' : 'var(--clay)'} style={{ flexShrink: 0, marginTop: clamped ? 0 : 1 }} />
-      <div style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: tone === 'quiet' ? 'var(--ink-2)' : 'var(--ink)', lineHeight: 1.45, fontWeight: 600, ...(clamped ? { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } : null) }}>{text}</div>
+      <div style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: tone === 'quiet' ? 'var(--ink-2)' : 'var(--ink)', lineHeight: 1.45, fontWeight: 600, ...(clamped ? { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } : null) }}>
+        {/* THE WAY BACK DOWN, the inverse of `Show`. Expanding the banner over a dialog shortens that dialog to
+            calc(100vh - 220px - 28px) (steward.html); at 730x328 that is 80px of dialog, and until this pill
+            existed nothing collapsed the banner again while the dialog stayed open — `openWide` cleared only on
+            close, so the steward's way back to their own buttons was to abandon the dialog
+            (reference/UI-AUDIT-PLAN-console-apk.md §2b). Floated at the top-right of the text so it is on
+            screen at the wrapper's scroll origin whatever the message's length, and the sentence wraps round
+            it rather than being squeezed beside it. NOT labelled "Show…": the geometry test finds the Show
+            pill by that aria-label prefix and must keep seeing exactly none of them while expanded. */}
+        {modalUp && openWide ? <button onClick={() => setOpenWide(false)} aria-label="Collapse this message to one line" title="Collapse this message to one line"
+          style={{ pointerEvents: 'auto', float: 'right', margin: '-2px 0 4px 10px', border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '4px 9px', minHeight: 28, cursor: 'pointer', fontSize: 11.5, fontWeight: 700, fontFamily: 'var(--font-ui)', color: 'var(--ink-2)' }}>Collapse</button> : null}
+        {text}
+      </div>
       {/* THE WAY BACK TO THE WHOLE SENTENCE, and it has to be a real 24px-plus target on a cheap Android
           phone (WCAG 2.5.8) like the dismiss beside it. A summary with no way to read the rest would be a
           worse banner than the one that cropped the dialog. */}
@@ -639,7 +651,11 @@ function PublishErrorBanner() {
       <button onClick={clear} aria-label="Dismiss this message" title="Dismiss this message"
         style={{ pointerEvents: 'auto', border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, minWidth: 44,
           ...(clamped ? { alignSelf: 'stretch', padding: '0 14px', margin: '-6px 0' }
-            : modalUp ? { minHeight: 44, padding: 14, margin: '-12px -14px' }
+            // EXPANDED: no negative LEFT margin any more. `-12px -14px` reached 14px leftwards — across the 10px
+            // gap and 4px into whatever sat beside it, which since the Collapse pill above is a control: the
+            // same "Dismiss owns the right edge of the neighbour" defect the docked shape was measured
+            // with (9719cf0). The flex line now reserves the whole 44 on this side, as it does while docked.
+            : modalUp ? { minHeight: 44, padding: 14, margin: '-12px -14px -12px 0' }
             : { minHeight: 44, padding: 14, margin: -14 }) }}><Icon name="x" size={16} /></button>
     </div>
   );
@@ -916,14 +932,20 @@ function WizShell({ step, title, sub, children, footer }) {
       {/* `data-stew-modal-panel` is the handle the html[data-stew-banner] rules in steward.html need. Every
           other console panel carries role="dialog", which those rules match directly; this one does not
           (see the note at the top of this component), so it says so another way. */}
-      <div className="no-scrollbar" data-stew-modal-panel="1" style={{ width: 520, maxWidth: '100%', maxHeight: '92%', overflowY: 'auto', borderRadius: 24, background: 'var(--paper)', border: '1px solid var(--line)', boxShadow: '0 30px 80px rgba(0,0,0,.32)', animation: 'lumenScale .22s cubic-bezier(.2,.8,.3,1.1) both' }}>
-        <div style={{ padding: '26px 28px 0' }}>
+      {/* PINNED FOOTER, SCROLLING BODY. Every wizard step in landscape on the Oppo (730x328) hid Continue below
+          the 258px card, and nothing said the card scrolled (audit 2026-09-19 §D). The panel is a flex column
+          capped at maxHeight — never `height`, so a short step does not grow — the step's body is the scroll
+          container, and the footer is a non-scrolling last row with a rule above it. steward.html's
+          html[data-stew-banner] rules cap THIS panel (they match [data-stew-modal-panel]) and the footer stays
+          inside whatever height they leave. Same shape as SkConfirm. */}
+      <div data-stew-modal-panel="1" style={{ width: 520, maxWidth: '100%', maxHeight: '92%', display: 'flex', flexDirection: 'column', overflow: 'hidden', borderRadius: 24, background: 'var(--paper)', border: '1px solid var(--line)', boxShadow: '0 30px 80px rgba(0,0,0,.32)', animation: 'lumenScale .22s cubic-bezier(.2,.8,.3,1.1) both' }}>
+        <div className="no-scrollbar" style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', padding: '26px 28px 8px' }}>
           <div style={{ display: 'flex', gap: 6, marginBottom: 18 }}>{[0, 1, 2, 3, 4, 5, 6].map(i => <span key={i} style={{ height: 5, flex: 1, borderRadius: 999, background: i <= step ? 'var(--clay)' : 'var(--line)' }} />)}</div>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 24, letterSpacing: '-.4px' }}>{title}</div>
           {sub ? <div style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 0' }}>{sub}</div> : null}
           <div style={{ marginTop: 18 }}>{children}</div>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '20px 28px 24px' }}>{footer}</div>
+        <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10, padding: '14px 28px 22px', borderTop: '1px solid var(--line)' }}>{footer}</div>
       </div>
     </div>
   );
@@ -2238,16 +2260,27 @@ function SkConfirm({ icon, tint, title, body, confirmLabel, onConfirm, onCancel,
   const dlgRef = useStewDialog(() => { if (!busy) onCancel(); });   // a11y: Escape + focus (dialog semantics on the panel below)
   return (
     <div onClick={onCancel} style={{ position: 'fixed', overflowY: 'auto', inset: 0, zIndex: 220, background: 'rgba(40,32,24,.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'safe center', justifyContent: 'center', padding: 24, animation: 'lumenFade .16s ease both' }}>
-      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={title} tabIndex={-1} onClick={e => e.stopPropagation()} style={{ maxHeight: '86vh', overflowY: 'auto', width: 420, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26, animation: 'lumenScale .2s ease both', outline: 'none' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 9 }}>
-          <div style={{ width: 42, height: 42, borderRadius: 12, background: 'color-mix(in oklab, ' + t + ' 14%, var(--surface))', color: t, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={icon || 'lock'} size={21} /></div>
-          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20, lineHeight: 1.15 }}>{title}</div>
+      {/* THE FOOTER IS PINNED, THE BODY SCROLLS. The panel used to be one scrolling box with the buttons as
+          its last child: "Admit 40 people?" on a 360x730 phone ended in a clean rounded edge at y 739 with
+          Cancel and "Admit all" both entirely below it, and nothing on screen to say the card scrolled
+          (UI audit 2026-09-19 §D, measured 0/290 hittable). Now the panel is a flex column capped at
+          `maxHeight` (never `height`, so a short confirm does not grow), the body is the scroll container,
+          and the buttons are a non-scrolling last row that stays inside the viewport at any height —
+          including the height steward.html's html[data-stew-banner] rules cap this panel to while the
+          error banner is docked or expanded over it. Proved at the point of use, at both phone sizes, in
+          scripts/dialog-footers-stay-in-reach-on-a-phone.test.mjs. */}
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={title} tabIndex={-1} onClick={e => e.stopPropagation()} style={{ maxHeight: '86vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', width: 420, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', animation: 'lumenScale .2s ease both', outline: 'none' }}>
+        <div style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', padding: '26px 26px 6px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 9 }}>
+            <div style={{ width: 42, height: 42, borderRadius: 12, background: 'color-mix(in oklab, ' + t + ' 14%, var(--surface))', color: t, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={icon || 'lock'} size={21} /></div>
+            <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20, lineHeight: 1.15 }}>{title}</div>
+          </div>
+          {/* pre-line: a body that separates its parts with blank lines (the admit-all name list does) otherwise
+              collapses into one run-on paragraph, which is the shape nobody reads before pressing the button. */}
+          <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 14px', whiteSpace: 'pre-line' }}>{body}</p>
+          {err ? <div role="alert" style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, lineHeight: 1.45, margin: '-4px 0 12px' }}>{err}</div> : null}
         </div>
-        {/* pre-line: a body that separates its parts with blank lines (the admit-all name list does) otherwise
-            collapses into one run-on paragraph, which is the shape nobody reads before pressing the button. */}
-        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 20px', whiteSpace: 'pre-line' }}>{body}</p>
-        {err ? <div role="alert" style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, lineHeight: 1.45, margin: '-8px 0 16px' }}>{err}</div> : null}
-        <div style={{ display: 'flex', gap: 10 }}>
+        <div style={{ flexShrink: 0, display: 'flex', gap: 10, padding: '14px 26px 22px', borderTop: '1px solid var(--line)' }}>
           <button onClick={onCancel} disabled={busy} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 13, fontSize: 14, opacity: busy ? .5 : 1 }}>Cancel</button>
           <button onClick={onConfirm} disabled={busy} className="sk-btn" style={{ flex: 1, padding: 13, fontSize: 14, background: t, color: '#fff', opacity: busy ? .5 : 1 }}>{confirmLabel || 'Confirm'}</button>
         </div>
@@ -2273,7 +2306,10 @@ function InvitePosterModal({ church, url, svg, onClose }) {
     style.textContent = '@media print {'
       + ' body * { visibility: hidden !important; }'
       + ' .invite-poster, .invite-poster * { visibility: visible !important; }'
-      + ' .invite-poster { position: absolute !important; left: 0 !important; top: 0 !important; width: 100% !important; max-width: none !important; margin: 0 !important; border: none !important; box-shadow: none !important; background: #fff !important; padding: 28px !important; }'
+      + ' .invite-poster { position: absolute !important; left: 0 !important; top: 0 !important; width: 100% !important; max-width: none !important; max-height: none !important; display: block !important; overflow: visible !important; margin: 0 !important; border: none !important; box-shadow: none !important; background: #fff !important; padding: 28px !important; }'
+      // the on-screen card scrolls its body under a pinned footer (see the panel below); on paper there is no
+      // fold, so the body is un-clipped and the footer is already hidden by .no-print
+      + ' .invite-poster .invite-poster-body { overflow: visible !important; max-height: none !important; padding: 0 !important; }'
       + ' .invite-poster .no-print { display: none !important; } }';
     document.head.appendChild(style);
     return () => { window.removeEventListener('popstate', onPop); try { sub && sub.remove && sub.remove(); } catch (e) {} try { document.head.removeChild(style); } catch (e) {} };
@@ -2318,8 +2354,13 @@ function InvitePosterModal({ church, url, svg, onClose }) {
   const dlgRef = useStewDialog(onClose);   // a11y: Escape + focus (dialog semantics on the panel below)
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 120, background: 'color-mix(in oklab, var(--ink) 45%, transparent)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', overflowY: 'auto', padding: '22px 16px' }}>
-      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={'Join ' + (church.name || 'your church')} tabIndex={-1} className="invite-poster" onClick={e => e.stopPropagation()} style={{ width: 420, maxWidth: '100%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26, position: 'relative', margin: 'auto', outline: 'none' }}>
-        <button onClick={onClose} title="Close" className="no-print" style={{ position: 'absolute', top: 13, right: 13, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 999, width: 34, height: 34, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--ink-2)' }}><Icon name="x" size={18} color="currentColor" /></button>
+      {/* Pinned footer, scrolling body — the shape SkConfirm explains. This card used to have no height cap at
+          all: the OVERLAY scrolled, and on the Oppo at 360x730 Done / Save PDF / Share link sat at y 1112–1156
+          (audit 2026-09-19 §D, 0/153, 0/270, 0/279 hittable). `maxHeight: 100%` is the overlay's padded box.
+          The print rules above un-clip `.invite-poster-body`, so the paper sheet is still the whole poster. */}
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={'Join ' + (church.name || 'your church')} tabIndex={-1} className="invite-poster" onClick={e => e.stopPropagation()} style={{ width: 420, maxWidth: '100%', maxHeight: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', position: 'relative', margin: 'auto', outline: 'none' }}>
+        <button onClick={onClose} title="Close" className="no-print" style={{ position: 'absolute', top: 13, right: 13, zIndex: 1, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 999, width: 34, height: 34, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--ink-2)' }}><Icon name="x" size={18} color="currentColor" /></button>
+        <div className="invite-poster-body" style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', padding: '26px 26px 8px' }}>
         <div style={{ textAlign: 'center' }}>
           <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '1.6px', color: 'var(--clay-ink)', marginBottom: 8 }}>TRINITYONE</div>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 24, lineHeight: 1.1, marginBottom: 8 }}>Join {church.name || 'your church'}</div>
@@ -2351,7 +2392,8 @@ function InvitePosterModal({ church, url, svg, onClose }) {
             </div>
           ))}
         </div>
-        <div className="no-print" style={{ display: 'flex', flexWrap: 'wrap', gap: 9, marginTop: 20, justifyContent: 'center' }}>
+        </div>
+        <div className="no-print" style={{ flexShrink: 0, display: 'flex', flexWrap: 'wrap', gap: 9, padding: '14px 26px 22px', borderTop: '1px solid var(--line)', justifyContent: 'center' }}>
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ padding: '10px 16px', fontSize: 13.5 }}>Done</button>
           <button onClick={savePdf} disabled={pdfBusy} className="sk-btn sk-btn--clay" style={{ padding: '10px 16px', fontSize: 13.5, opacity: pdfBusy ? 0.6 : 1 }}><Icon name={pdfBusy ? 'refresh' : 'receipt'} size={15} color="var(--on-clay)" /> {pdfBusy ? 'Making PDF…' : 'Save PDF'}</button>
           {isNative
@@ -2625,11 +2667,18 @@ function JoinModal({ onClose }) {
           always fitted. This card now carries a SECOND QR at the same 168px and a whole install block, and
           on a phone-sized console that runs off the bottom of a dialog which has no scroll of its own —
           the controls are simply unreachable, with nothing on screen to suggest anything is below. */}
-      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="Invite your church" tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 440, maxWidth: '92%', maxHeight: '88vh', overflowY: 'auto', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 30 }}>
-        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22, textAlign: 'center' }}>Invite your church</div>
-        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 22px', textAlign: 'center' }}>Show this on screen or print it. One scan with a phone camera opens TrinityOne already following your church — no account, no phone number.</p>
-        <JoinCard qrSize={168} center />
-        <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ width: '100%', padding: 11, fontSize: 14, marginTop: 24 }}>Done</button>
+      {/* …AND THE PANEL'S SCROLL IS THE BODY'S, NOT THE CARD'S. Scrolling the whole card put Done at y 1177 of
+          a 730px phone (audit 2026-09-19 §D, 0/612 hittable) with the card ending in a clean rounded edge.
+          Same shape as SkConfirm: flex column, body scrolls, Done pinned below a rule. */}
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="Invite your church" tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 440, maxWidth: '92%', maxHeight: '88vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)' }}>
+        <div style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', padding: '30px 30px 10px' }}>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22, textAlign: 'center' }}>Invite your church</div>
+          <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 22px', textAlign: 'center' }}>Show this on screen or print it. One scan with a phone camera opens TrinityOne already following your church — no account, no phone number.</p>
+          <JoinCard qrSize={168} center />
+        </div>
+        <div style={{ flexShrink: 0, padding: '14px 30px 22px', borderTop: '1px solid var(--line)' }}>
+          <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ width: '100%', padding: 11, fontSize: 14 }}>Done</button>
+        </div>
       </div>
     </div>
   );
@@ -4023,7 +4072,10 @@ function NewTeamModal({ open, onClose }) {
   const lbl = { fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '14px 0 6px' };
   return (
     <div onClick={onClose} style={{ position: 'fixed', overflowY: 'auto', inset: 0, zIndex: 90, background: 'rgba(40,32,24,.42)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'safe center', justifyContent: 'center' }}>
-      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="New team" tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 500, maxWidth: '93%', maxHeight: '90%', overflow: 'auto', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 28 }}>
+      {/* Pinned footer, scrolling body — the shape SkConfirm explains. Measured on the Oppo at 360x730:
+          the card ended at y 694 with Cancel and "Create team" at 694+, 0/429 and 0/442 hittable. */}
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="New team" tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 500, maxWidth: '93%', maxHeight: '90%', display: 'flex', flexDirection: 'column', overflow: 'hidden', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)' }}>
+        <div style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', padding: '28px 28px 8px' }}>
         <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22 }}>New team</div>
         <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 4px' }}>Pick a kind to start from, then tweak. The team is a private chat channel and its people fill rota slots.</p>
         <div style={lbl}>Kind</div>
@@ -4043,7 +4095,8 @@ function NewTeamModal({ open, onClose }) {
         <textarea aria-label="Roles to fill (one per line)" value={roles} onChange={e => setRoles(e.target.value)} rows={5} placeholder={'Lead\nVocals\nKeys\nSound'} style={{ ...fld, height: 'auto', padding: '11px 13px', lineHeight: 1.5, resize: 'vertical', fontFamily: 'var(--font-ui)' }} />
         <div style={lbl}>What's it for (optional)</div>
         <input aria-label="What's it for (optional)" value={desc} onChange={e => setDesc(e.target.value)} placeholder="e.g. Sunday musicians & singers" style={fld} />
-        <div style={{ display: 'flex', gap: 10, marginTop: 22 }}>
+        </div>
+        <div style={{ flexShrink: 0, display: 'flex', gap: 10, padding: '14px 28px 22px', borderTop: '1px solid var(--line)' }}>
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
           <button onClick={create} disabled={!name.trim()} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: name.trim() ? 1 : 0.55 }}><Icon name="plus" size={16} color="var(--on-clay)" /> Create team</button>
         </div>
@@ -4484,7 +4537,11 @@ function NewPlanModal({ onClose }) {
   const dlgRef = useStewDialog(onClose);   // a11y: Escape + focus (dialog semantics on the panel below)
   return (
     <div onClick={onClose} style={{ position: 'fixed', overflowY: 'auto', inset: 0, zIndex: 90, background: 'rgba(40,32,24,.42)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'safe center', justifyContent: 'center' }}>
-      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="Create a reading plan" tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 500, maxWidth: '92%', maxHeight: '88%', overflowY: 'auto', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 28 }}>
+      {/* Pinned footer, scrolling body — the shape SkConfirm explains. This one's three footer buttons were
+          HALF-clipped by the 88% cap on the Oppo at 360x730 (audit 2026-09-19 §D: 134/260, 128/247, 170/325
+          of their pixels reachable) — which is why the test scans each button's whole rect, not its centre. */}
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="Create a reading plan" tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 500, maxWidth: '92%', maxHeight: '88%', display: 'flex', flexDirection: 'column', overflow: 'hidden', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)' }}>
+        <div style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', padding: '28px 28px 8px' }}>
         <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22 }}>Create a reading plan</div>
         <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 18px' }}>Your own plan — a sermon series, a season's readings, anything. One reading per line; each line is a day.</p>
         <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 6 }}>Name</div>
@@ -4504,7 +4561,8 @@ function NewPlanModal({ onClose }) {
             <div style={{ fontSize: 12, color: isFuture ? 'var(--ink-2)' : 'var(--clay-ink)' }}>{isFuture ? `Hidden from members until ${new Date(schedAt * 1000).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}.` : 'That time is in the past — it will publish immediately.'}</div>
           </React.Fragment>
         ) : null}
-        <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
+        </div>
+        <div style={{ flexShrink: 0, display: 'flex', gap: 10, padding: '14px 28px 22px', borderTop: '1px solid var(--line)' }}>
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: '0 0 auto', padding: '12px 14px', fontSize: 14 }}>Cancel</button>
           <button onClick={() => create(true)} disabled={!name.trim() || !lines.length} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 13.5, opacity: (!name.trim() || !lines.length) ? 0.55 : 1 }} title="Hold it — members won’t see it until you publish">Save as draft</button>
           <button onClick={() => create(false)} disabled={!name.trim() || !lines.length} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 13.5, opacity: (!name.trim() || !lines.length) ? 0.55 : 1 }}><Icon name="send" size={15} color="var(--on-clay)" /> {isFuture ? 'Schedule' : 'Publish now'}</button>
@@ -7227,7 +7285,11 @@ function StewBackupModal({ church, onClose }) {
   const dlgRef = useStewDialog(guardedClose);   // a11y: Escape + focus (dialog semantics on the panel below)
   return (
     <div onClick={guardedClose} style={{ position: 'fixed', overflowY: 'auto', inset: 0, zIndex: 95, background: 'rgba(40,32,24,.45)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'safe center', justifyContent: 'center', padding: 24 }}>
-      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="Back up your church" tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 470, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 26, maxHeight: '92%', overflowY: 'auto', animation: 'lumenScale .22s cubic-bezier(.2,.8,.3,1.1) both' }}>
+      {/* Pinned footer, scrolling body — the shape SkConfirm explains. Measured on the Oppo at 360x730: Cancel
+          and "Download encrypted backup" at y 793 of a 730px screen, inside a card that scrolled and did not
+          say so (shots-console-2026-09-19/p/here/50-p2-backup-dialog). */}
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="Back up your church" tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 470, maxWidth: '94%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', maxHeight: '92%', display: 'flex', flexDirection: 'column', overflow: 'hidden', animation: 'lumenScale .22s cubic-bezier(.2,.8,.3,1.1) both' }}>
+        <div style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', padding: '26px 26px 6px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 6 }}>
           <div style={{ width: 40, height: 40, borderRadius: 12, background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="lock" size={21} /></div>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 21 }}>Back up your church</div>
@@ -7258,7 +7320,8 @@ function StewBackupModal({ church, onClose }) {
           <Icon name="shield" size={16} color="#8a6717" style={{ flexShrink: 0, marginTop: 1 }} />
           <div style={{ fontSize: 12, color: 'var(--ink-2)', lineHeight: 1.5 }}>If you forget this, the backup can’t be opened — not even by us. Keep it somewhere separate from the file: together, they are one thing, not two.</div>
         </div>
-        <div style={{ display: 'flex', gap: 10 }}>
+        </div>
+        <div style={{ flexShrink: 0, display: 'flex', gap: 10, padding: '14px 26px 22px', borderTop: '1px solid var(--line)' }}>
           <button onClick={guardedClose} disabled={busy} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 13, fontSize: 14, opacity: busy ? 0.5 : 1, cursor: busy ? 'default' : 'pointer' }}>Cancel</button>
           <button onClick={make} disabled={busy || done || pass.length < ((window.TrinityBackup && window.TrinityBackup.PASS_MIN) || 12) || !secure} className="sk-btn sk-btn--clay" style={{ flex: 2, padding: 13, fontSize: 14, opacity: (busy || pass.length < 4 || !secure) ? 0.6 : 1 }}>
             <Icon name={done ? 'check' : 'share'} size={15} color="#fff" /> {done ? (savedAt ? 'Saved to ' + savedAt : 'Saved') : busy ? 'Encrypting…' : 'Download encrypted backup'}</button>
