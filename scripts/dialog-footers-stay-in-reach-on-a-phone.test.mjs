@@ -345,9 +345,13 @@ test('the wizard can be put away for the rest of this file: reload, unlock with 
   { skip: !CHROME ? 'no chromium' : false, timeout: 240000 }, async () => {
     await evalIn(`(() => { localStorage.setItem('trinityone.steward.wizard.done', '1'); localStorage.removeItem('trinityone.steward.newchurch'); return 'ok'; })()`);
     await send('Page.reload', { ignoreCache: false });
-    await sleep(8000);
-    const locked = await evalIn(type('Your PIN or passphrase', PIN));
-    assert.equal(locked, 'ok', 'after the reload there is no PIN field — the console did not come back locked on this church');
+    // POLL for the lock screen, do not sleep for it. A fixed 8s was enough alone and not enough inside the
+    // full suite (`npm test` on 5ee5351: this row 'miss', and every dialog row after it failed for want of a
+    // dashboard) — the suite oversubscribes the box and a reload under load takes longer than any number
+    // picked in a quiet run. Waiting for the field itself costs nothing when it is quick.
+    let locked = 'miss';
+    for (const t0 = Date.now(); locked !== 'ok' && Date.now() - t0 < 90000;) { await sleep(500); locked = await evalIn(type('Your PIN or passphrase', PIN)); }
+    assert.equal(locked, 'ok', 'after the reload there is no PIN field within 90s — the console did not come back locked on this church');
     await evalIn(click('/^Unlock/i'));
     await sleep(12000);
     assert.equal(await wizardUp(), false, 'the wizard is still up after the reload — the flag did not take');
