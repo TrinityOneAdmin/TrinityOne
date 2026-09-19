@@ -2,6 +2,7 @@
 // screenshot and a measurement in TrinityOne-internal/UI-AUDIT-console-2026-09-19.md §E, each one a row here.
 //   Run: node --test scripts/console-phone-layout-batch-a.test.mjs
 //
+//   2. Settings → Relays row — the chips wrap; nothing in a relay row is off the right edge of the screen.
 //   3. Wizard "Your regular meetings" — day / time / recurrence wrap; every select is on screen and hittable.
 //   7. Picking "Settings" from ☰ while inside a settings page returns to the settings index.
 //
@@ -281,6 +282,40 @@ test('7. inside a settings page, picking "Settings" from ☰ — and tapping the
 });
 
 // ── 2. the relay row ──────────────────────────────────────────────────────────────────────────────────────
+test('2. Settings → Relays: with a relay marked "refused", nothing in any relay row is past the right edge of a 360px screen', SKIP, async () => {
+  // Measured on the Oppo 2026-09-19 (p/here/01-17-settings-relays-refusing-fix.png): the REFUSED chip ended at
+  // x 349 past a card that ends ~325, and "Answering · 118ms" sat at x 358→442 — entirely off-screen. Re-measured
+  // on this branch before the fix: the chip strip ran to x 609.
+  // THE REFUSAL IS SEEDED the way the console records one (noteRelayRejection: the timestamp key, the per-url
+  // list, and the event DashRelaysCard listens for), for every relay it lists, so every row carries the chip
+  // the audit photographed. A harness affordance for the geometry, and nothing here claims the relays refused.
+  await openSettingsPage('Relays');
+  await sleep(2000);
+  const urls = JSON.parse(await evalIn(`window.Steward.relayStatus().then(s => JSON.stringify(s.map(r => r.url)))`));
+  assert.ok(urls.length >= 1, 're-anchor: the console lists no relays');
+  await evalIn(`(() => { window.dispatchEvent(new CustomEvent('steward-relay-cleared'));
+    localStorage.setItem(window.REG_NEEDED_LS, String(Date.now()));
+    localStorage.setItem(window.REG_REFUSED_LS, JSON.stringify(${JSON.stringify(urls)}.map(u => ({ url: u, error: 'blocked: not this relay’s church', at: Date.now() }))));
+    window.dispatchEvent(new CustomEvent('steward-relay-rejected')); return 'ok'; })()`);
+  await sleep(800);
+  const m = JSON.parse(await evalIn(`(() => {
+    // a relay row is the card whose tooltip carries the relay's own refusal — the chip's row
+    const rows = [...document.querySelectorAll('main [title^="This relay refused"]')];
+    return JSON.stringify({ vw: innerWidth, rows: rows.map(row => { const r = row.getBoundingClientRect();
+      const kids = [...row.querySelectorAll('*')].filter(e => e.getBoundingClientRect().width > 0);
+      const over = kids.filter(e => e.getBoundingClientRect().right > innerWidth - 8 || e.getBoundingClientRect().left < 0)
+        .map(e => ({ tag: e.tagName, text: (e.textContent || '').trim().slice(0, 28), left: Math.round(e.getBoundingClientRect().left), right: Math.round(e.getBoundingClientRect().right) }));
+      const chips = kids.filter(e => e.classList.contains('sk-pill')).map(e => (e.textContent || '').trim());
+      return { left: Math.round(r.left), right: Math.round(r.right), chips, over }; }) }); })()`));
+  assert.ok(m.rows.length >= 1, 'no relay row carries the refusal — the seed did not take, so there is no crowded row to measure');
+  for (const row of m.rows) {
+    assert.ok(row.chips.some(c => /refused/i.test(c)), `a relay row has no "refused" chip; chips: ${JSON.stringify(row.chips)} — not the crowded row the audit measured`);
+    assert.deepEqual(row.over, [], `these parts of a relay row are off the ${m.vw}px screen (card ${row.left}→${row.right}): ${JSON.stringify(row.over)}`);
+  }
+  console.log(`    measured: ${m.rows.length} relay rows at ${m.vw}px, chips ${JSON.stringify(m.rows[0].chips)}, nothing past x ${m.vw - 8}`);
+  await evalIn(`(() => { window.dispatchEvent(new CustomEvent('steward-relay-cleared')); localStorage.removeItem(window.REG_NEEDED_LS); localStorage.removeItem(window.REG_REFUSED_LS); return 'ok'; })()`);
+  assert.deepEqual(errors, [], 'the console threw:\n  ' + errors.join('\n  '));
+});
 
 // ── 1. the members row ────────────────────────────────────────────────────────────────────────────────────
 

@@ -4315,7 +4315,14 @@ function DashRelaysCard() {
               <div key={r.url} title={refusedWhy ? 'This relay refused our last change and said: ' + refusedWhy : undefined} style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '9px 12px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
                 <div style={{ width: 26, height: 26, borderRadius: 8, background: 'var(--surface)', color: up ? 'var(--sage-ink)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="globe" size={15} color="currentColor" /></div>
                 <div style={{ flex: 1, minWidth: 140, fontWeight: 700, fontSize: 12.5, fontFamily: 'var(--mono)', overflowWrap: 'anywhere', lineHeight: 1.35 }}>{r.url}</div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexShrink: 0 }}>
+                {/* THE CHIPS WRAP. This strip was one unbreakable line — `flexShrink: 0`, no wrap — so on a
+                    360px phone "Shared · Refused our last change · ● Answering · 118ms" ran to x 609 and the
+                    health of the relay was off the right edge of the screen (audit 2026-09-19 §E,
+                    p/here/01-17-settings-relays-refusing-fix.png). The row already wraps this strip under
+                    the address; now the strip wraps within itself too, so on a wide card it is still one
+                    line and on a phone the status drops under the chips. `maxWidth: 100%` keeps it inside
+                    the card's padding box rather than letting `flexShrink: 0` overrule the wrap. */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap', minWidth: 0, maxWidth: '100%' }}>
                   {self ? <SkPill tint="clay">Self-hosted</SkPill> : <SkPill tint="ink">Shared</SkPill>}
                   {/* REACHABLE AND IN-OUR-NETWORK ARE TWO DIFFERENT FACTS, and a relay that is one but not
                       the other must not look fine. Under the closed network nothing is published to an
