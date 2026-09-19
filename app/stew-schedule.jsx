@@ -814,7 +814,17 @@ function DashRota({ onNewTeam }) {
           {runsheetOpen ? <RunsheetModal service={svc} sheet={(runsheets.find(r => r.id === svc.id) || {}).items || []} onClose={() => setRunsheetOpen(false)} /> : null}
 
           {/* team cards */}
-          <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflow: 'auto', marginTop: 14, display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 14, alignContent: 'start' }}>
+          {/* gridAutoRows: max-content IS THE FIX FOR THE 10px CARDS, and it is easy to delete as a tidy-up.
+              Each card below is `overflow: hidden`, which makes it a scroll container, and a scroll container's
+              automatic minimum size is ZERO. So with the default `auto` rows this definite-height grid
+              (`flex: 1; minHeight: 0`) shared its own height out among the rows instead of letting them
+              overflow: on a 360x730 phone with three teams the rows resolved to 10px 10px 10px 96px, in
+              landscape to 2px, and `overflow: auto` had nothing to scroll — every Assign button was clipped
+              away (UI audit 2026-09-19, p/here/01-46-rota-full.png). Sizing the rows to their content
+              restores the overflow, so the grid scrolls and the cards are whole at every size. Not
+              `minHeight` on the cards: that grows the cards without growing the tracks, so they overlap.
+              Measured in scripts/the-rota-teams-are-reachable-on-the-phone.test.mjs. */}
+          <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflow: 'auto', marginTop: 14, display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gridAutoRows: 'max-content', gap: 14, alignContent: 'start' }}>
             {teams.map(t => {
               const m = teamMeta(t); const r = rosterFor(t.id);
               const tFilled = r.roles.filter(role => assign[t.id + '::' + role.id] && assign[t.id + '::' + role.id].name).length;
