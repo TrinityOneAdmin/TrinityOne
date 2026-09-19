@@ -8477,13 +8477,21 @@ function DashFeaturesPanel({ church, show = null }) {
 
 // church giving — the Lightning address gifts pay to (published as kind-0 lud16, NIP-57).
 // Self-custody: this is the church's OWN wallet; the app never holds funds.
-function DashGivingPanel({ church }) {
+//
+// LOCKED FOR THE PILOT, AS ONE FACT. The switch below was `disabled` outright while "Set up the Lightning
+// address" two lines under it stayed live — an action offered under the line saying it cannot be used
+// (console audit 2026-09-19 §C). Both now read the same `locked`, so the day the pilot lock is lifted it is
+// lifted in one place: this default. It is a prop, not a module constant, for two reasons — a test can mount
+// the unlocked panel without a hook into production state, and the tests that slice this function out of the
+// file by name (settings-rows-tap-the-words.test.mjs) would meet a module constant as a free identifier.
+// The one caller (DashFeaturesPanel) passes nothing and gets the lock.
+function DashGivingPanel({ church, locked = true }) {
   const [draft, setDraft] = React.useState('');
   const [saved, setSaved] = React.useState(false);
   const [check, setCheck] = React.useState(null); // null | 'checking' | 'ok' | 'bad'
   const [expanded, setExpanded] = React.useState(false);   // when giving is OFF, the setup is collapsed
   React.useEffect(() => { setDraft(church.lud16 || church.lnaddr || ''); setCheck(null); }, [church.lud16, church.lnaddr]);
-  const showConfig = church.giving || expanded;            // on = always show; off = collapsed until "set up"
+  const showConfig = !locked && (church.giving || expanded);   // on = always show; off = collapsed until "set up"; locked = the collapsed link, disabled
   const valid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(draft.trim());
 
   // verify it's a real LNURL-pay address before saving
@@ -8517,7 +8525,7 @@ function DashGivingPanel({ church }) {
           <div style={{ fontWeight: 700, fontSize: 14.5 }}>Show the Giving tab to members</div>
           <div className="set-desc" style={{ color: 'var(--ink-2)' }}><b style={{ color: 'var(--clay-ink)' }}>Locked during the pilot</b> — {church.giving ? 'on: members can give to this church.' : 'off: members won’t see giving.'} This opens up once testing is finished.</div>
         </div>
-        <button onClick={toggleGiving} disabled aria-label="Toggle giving" role="switch" aria-checked={!!church.giving} title="Giving is locked during the pilot" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'not-allowed', opacity: .4, flexShrink: 0,
+        <button onClick={toggleGiving} disabled={locked} aria-label="Toggle giving" role="switch" aria-checked={!!church.giving} title={locked ? 'Giving is locked during the pilot' : 'Show or hide the Giving tab for members'} style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: locked ? 'not-allowed' : 'pointer', opacity: locked ? .4 : 1, flexShrink: 0,
           background: church.giving ? 'var(--sage)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
           <span style={{ position: 'absolute', top: 3, left: church.giving ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
         </button>
@@ -8526,7 +8534,7 @@ function DashGivingPanel({ church }) {
           One box either way, so this whole block is one item of the Extras list and keeps its own spacing. */}
       <div>
       {!showConfig ? (
-        <button onClick={() => setExpanded(true)} style={{ border: 'none', background: 'none', padding: 0, color: 'var(--clay-ink)', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+        <button onClick={() => { if (!locked) setExpanded(true); }} disabled={locked} title={locked ? 'Giving is locked during the pilot' : undefined} style={{ border: 'none', background: 'none', padding: 0, color: locked ? 'var(--ink-3)' : 'var(--clay-ink)', fontWeight: 700, fontSize: 13, cursor: locked ? 'not-allowed' : 'pointer', fontFamily: 'var(--font-ui)', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
           <Icon name="pen" size={13} color="currentColor" /> {(church.lud16 || church.lnaddr) ? 'Edit the Lightning address' : 'Set up the Lightning address'}
         </button>
       ) : (
