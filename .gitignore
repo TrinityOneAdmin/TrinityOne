@@ -116,3 +116,10 @@ scripts/.sim-*.json
 # silently added 4 tests to every count recorded in a commit message — which is how 2059 was written down
 # for a tree that gives everyone else 2055. CLAUDE.md rule 7 cannot work while a test file is invisible.
 !scripts/sim-harness-dialogs.test.mjs
+
+# Device tooling lives OUTSIDE the public repo (owner, 2026-09-19: "Id prefer testing stuff remains as off
+# the git as possible"). Same arrangement as HANDOFF.md and reference/ — a symlink into
+# ../TrinityOne-internal/, so git stores a link at most and a `git add -A` cannot publish it.
+# ⚠ The 14 OTHER scripts/*.probe.mjs are still TRACKED. Moving those is a separate decision, not an
+# oversight — nothing imports them, but they are referenced by name in commit messages and docs.
+scripts/console-shots.probe.mjs
