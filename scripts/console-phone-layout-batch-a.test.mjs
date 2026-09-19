@@ -5,6 +5,8 @@
 //   1. Members row — the NAME wins the width fight; the handle beside it is what truncates.
 //   2. Settings → Relays row — the chips wrap; nothing in a relay row is off the right edge of the screen.
 //   3. Wizard "Your regular meetings" — day / time / recurrence wrap; every select is on screen and hittable.
+//   4. The error banner's Show and Collapse pills — Show is as tall as the docked strip (36px: the whole of
+//      what exists without a taller strip), Collapse reaches 44 without growing or touching Dismiss.
 //   5. No focus ring round a whole dialog on open; a real control inside still gets one from the keyboard.
 //   6. One side margin (16px) for every dialog the audit measured, which had eight different ones.
 //   7. Picking "Settings" from ☰ while inside a settings page returns to the settings index.
@@ -437,3 +439,47 @@ test('5. the sections drawer takes focus on open and is drawn without a ring; th
 });
 
 // ── 4. the banner's pills ─────────────────────────────────────────────────────────────────────────────────
+test(`4. with a dialog up: the docked banner's Show target is the whole strip, and the expanded banner's Collapse reaches ${FLOOR}px without touching Dismiss`, SKIP, async () => {
+  // Measured on this branch before the fix: Show 24px tall, Collapse 28px, against the codebase's 44px floor
+  // (reference/UI-AUDIT-PLAN-console-apk.md §2 item 2 and §2b). Show cannot reach 44 without a taller strip —
+  // the dialog-shortening rule in steward.html depends on the strip's height — so its claim is "every pixel of
+  // the strip", and the strip's height is printed. Collapse sits in the expanded (tall) card and reaches 44
+  // through an invisible ::before; the pill itself stays 28 so the sentence still wraps round it. Hit heights
+  // are read with elementFromPoint down the pill's centre column, not from rects (§3 of that plan: a rect is
+  // not the hit area).
+  await closeAll(); await dismissBanners();
+  await pressButton(`x.getAttribute('aria-label')==='New post'`, 'New post');
+  assert.equal(await evalIn(`document.querySelectorAll('[role="dialog"]').length`), 1, 're-anchor: New post did not open');
+  await evalIn(`(() => { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'group key', message: ${JSON.stringify(LONG)} } })); return 'ok'; })()`);
+  await sleep(700);
+  const HIT = (sel) => `(() => { const b = document.querySelector(${JSON.stringify(sel)}); if (!b) return JSON.stringify({ found: false });
+    const r = b.getBoundingClientRect(); const card = b.closest('[role="alert"]').getBoundingClientRect();
+    const cx = Math.round((r.left + r.right) / 2); let top = null, bottom = null; const others = {};
+    for (let y = Math.round(card.top) - 4; y <= Math.round(card.bottom) + 4; y++) { const e = document.elementFromPoint(cx, y); const mine = e && (e === b || b.contains(e)); if (mine) { if (top === null) top = y; bottom = y; } }
+    // the whole extended box, for what ELSE answers there: nothing may be another button
+    for (let y = Math.round(r.top) - 8; y < Math.round(r.bottom) + 8; y++) for (let x = Math.round(r.left); x < Math.round(r.right); x++) {
+      const e = document.elementFromPoint(x, y); if (!e || e === b || b.contains(e)) continue; const o = e.closest('button'); if (o) { const k = 'BUTTON:' + (o.getAttribute('aria-label') || '').slice(0, 24); others[k] = (others[k] || 0) + 1; } }
+    const visual = b.querySelector('span') ? Math.round(b.querySelector('span').getBoundingClientRect().height) : Math.round(r.height);
+    return JSON.stringify({ found: true, rect: { top: Math.round(r.top), bottom: Math.round(r.bottom), h: Math.round(r.height), w: Math.round(r.width) }, hitTop: top, hitBottom: bottom, hitH: top === null ? 0 : bottom - top + 1,
+      insideCard: top !== null && top >= Math.floor(card.top) && bottom <= Math.ceil(card.bottom), card: { top: Math.round(card.top), bottom: Math.round(card.bottom), h: Math.round(card.height) }, visual, others }); })()`;
+  const s = JSON.parse(await evalIn(HIT('[role="alert"] button[aria-label="Show the whole message"]')));
+  assert.equal(s.found, true, 'the docked banner has no Show pill');
+  assert.equal(await evalIn(`document.documentElement.getAttribute("data-stew-banner")`), "clamped", 'the banner did not dock over the dialog');
+  assert.ok(s.hitH >= s.card.h - 1, `Show's target is ${s.hitH}px tall down its centre (y ${s.hitTop}..${s.hitBottom}) in a ${s.card.h}px strip — not the whole strip`);
+  assert.ok(s.hitH >= 36, `the docked strip is ${s.card.h}px and Show reaches ${s.hitH} — under the 36 this branch measured; the strip has shrunk`);
+  assert.equal(s.insideCard, true, `Show's target leaves the painted card (y ${s.hitTop}..${s.hitBottom} vs card ${s.card.top}..${s.card.bottom}) — what answers outside it is the dialog's scrim`);
+  assert.equal(s.visual, 24, `the Show pill the eye sees is ${s.visual}px — the visual grew instead of the target`);
+  assert.deepEqual(s.others, {}, `another button answers inside Show's extended box: ${JSON.stringify(s.others)}`);
+  await evalIn(`document.querySelector('[role="alert"] button[aria-label="Show the whole message"]').click()`);
+  await sleep(700);
+  const c = JSON.parse(await evalIn(HIT('[role="alert"] button[aria-label^="Collapse"]')));
+  assert.equal(c.found, true, 'the expanded banner has no Collapse pill');
+  assert.ok(c.hitH >= FLOOR, `Collapse's target is ${c.hitH}px tall down its centre (y ${c.hitTop}..${c.hitBottom}) — under the ${FLOOR}px floor`);
+  assert.equal(c.insideCard, true, `Collapse's target leaves the painted card (y ${c.hitTop}..${c.hitBottom} vs card ${c.card.top}..${c.card.bottom})`);
+  assert.equal(c.rect.h, 28, `the Collapse pill itself is ${c.rect.h}px — it grew, so the sentence wraps differently; the target was meant to grow, not the pill`);
+  assert.deepEqual(c.others, {}, `another button answers inside Collapse's extended box — that is Dismiss stealing the edge: ${JSON.stringify(c.others)}`);
+  console.log(`    measured: docked strip ${s.card.h}px, Show target ${s.hitH}px (pill ${s.visual}px); expanded card ${c.card.h}px, Collapse target ${c.hitH}px (pill ${c.rect.h}px)`);
+  await dismissBanners();
+  await closeAll();
+  assert.deepEqual(errors, [], 'the console threw:\n  ' + errors.join('\n  '));
+});

@@ -576,15 +576,31 @@ function PublishErrorBanner() {
             screen at the wrapper's scroll origin whatever the message's length, and the sentence wraps round
             it rather than being squeezed beside it. NOT labelled "Show…": the geometry test finds the Show
             pill by that aria-label prefix and must keep seeing exactly none of them while expanded. */}
-        {modalUp && openWide ? <button onClick={() => setOpenWide(false)} aria-label="Collapse this message to one line" title="Collapse this message to one line"
+        {/* 44px TO THE FINGER, 28px TO THE EYE. The pill paints at 28 because the sentence wraps round it;
+            `stew-reach-44` (steward.html) adds an invisible ::before that extends the HIT area 9px above and
+            below, past 44 — the codebase’s own floor — without a taller pill and without reaching sideways,
+            where Dismiss is. The pill’s top sits 11px inside the card, so the extra 9 never leaves it. */}
+        {modalUp && openWide ? <button onClick={() => setOpenWide(false)} aria-label="Collapse this message to one line" title="Collapse this message to one line" className="stew-reach-44"
           style={{ pointerEvents: 'auto', float: 'right', margin: '-2px 0 4px 10px', border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '4px 9px', minHeight: 28, cursor: 'pointer', fontSize: 11.5, fontWeight: 700, fontFamily: 'var(--font-ui)', color: 'var(--ink-2)' }}>Collapse</button> : null}
         {text}
       </div>
       {/* THE WAY BACK TO THE WHOLE SENTENCE, and it has to be a real 24px-plus target on a cheap Android
           phone (WCAG 2.5.8) like the dismiss beside it. A summary with no way to read the rest would be a
           worse banner than the one that cropped the dialog. */}
+      {/* AS TALL AS THE STRIP, AND NO TALLER. The BUTTON is 36px with -6px of vertical margin (the card's 5px
+          padding + 1px border), so it is exactly as tall as the painted card and every pixel of it is inside;
+          the 24px pill the eye sees is a span inside it, unchanged. NOT `alignSelf: 'stretch'` like Dismiss:
+          a stretched item with negative margins holds no height of its own, and the strip fell from 36 to
+          30px when it was tried (measured 2026-09-19) — the 24px pill is what sets the strip's height, so
+          the button must still carry 24 in the flex line, which 36 - 12 of margin is. Measured 2026-09-19:
+          the target was 24px against the codebase's 44px floor. 44 is NOT reachable here without a taller
+          strip — the strip is 36px and steward.html's dialog-shortening rule depends on that (reference/
+          UI-AUDIT-PLAN-console-apk.md §2 item 2) — so this is the strip's height, the whole of what exists.
+          No horizontal reach: Dismiss is beside it and the two must not overlap
+          (scripts/the-error-banner-clears-a-dialog-on-the-phone.test.mjs). */}
       {clamped ? <button onClick={() => setOpenWide(true)} aria-label="Show the whole message" title="Show the whole message"
-        style={{ pointerEvents: 'auto', border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '4px 9px', minHeight: 24, cursor: 'pointer', flexShrink: 0, fontSize: 11.5, fontWeight: 700, fontFamily: 'var(--font-ui)', color: 'var(--ink-2)' }}>Show</button> : null}
+        style={{ pointerEvents: 'auto', border: 'none', background: 'none', padding: 0, minHeight: 36, margin: '-6px 0', display: 'flex', alignItems: 'center', cursor: 'pointer', flexShrink: 0, fontFamily: 'var(--font-ui)' }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', boxSizing: 'border-box', border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '4px 9px', minHeight: 24, fontSize: 11.5, fontWeight: 700, color: 'var(--ink-2)' }}>Show</span></button> : null}
       {/* ⚠ A TARGET BIGGER THAN ITS CARD IS NOT A BIGGER TARGET. TWO DIFFERENT SHAPES, ONE PER STATE.
           IN FLOW (no dialog) the card is 171px tall and 44x44 fits inside it with room to spare, so the old
           trick stands unchanged: `padding: 14` with `margin: -14` hit-tests 44x44 while the flex line still

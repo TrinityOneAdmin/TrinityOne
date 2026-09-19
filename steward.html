@@ -193,6 +193,17 @@
     overflow-y: auto !important;
   }
 
+  /* ── A 44px FINGER TARGET ON A 28px PILL ──────────────────────────────────────────────────────────────
+     The expanded error banner's "Collapse" pill paints at 28px because the message wraps round it; the
+     codebase’s touch floor is 44. This adds 9px of invisible, hit-testable target above and below (a 1px grid
+     down its centre reads 46, never 43: a sub-pixel pill loses a row at each end at 8) WITHOUT a
+     taller pill (which would re-wrap the sentence) and WITHOUT reaching sideways, where the Dismiss × sits —
+     the two are scanned on a 1px grid for overlap in scripts/the-error-banner-clears-a-dialog-on-the-phone
+     .test.mjs. A ::before is part of its element's hit region, so elementFromPoint there returns the pill.
+     Measured in scripts/console-phone-layout-batch-a.test.mjs. */
+  .stew-reach-44 { position: relative; }
+  .stew-reach-44::before { content: ''; position: absolute; left: 0; right: 0; top: -9px; bottom: -9px; }
+
   /* ── NO FOCUS RING AROUND A WHOLE DIALOG ──────────────────────────────────────────────────────────────
      useStewDialog (app/stew-modal.jsx) moves focus onto the panel itself when a dialog opens and nothing
      inside it took focus — right for a screen reader, which announces the dialog. brand.css paints EVERY
