@@ -78,3 +78,29 @@ test('Group leaders: with one member in the church, Save is enabled and the empt
   assert.equal(nodes(d.tree).some(n => n.props && n.props.role === 'status'), false, 'the "nobody to tick" line is shown with a member on screen');
   d.unmount();
 });
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+// 3. CALENDAR — the "upcoming services" panel names the rota, so it cannot contradict an event just made.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+test('Calendar: with one meeting on the calendar and nothing on the rota, the side panel says the rota is empty — not "No upcoming services"', () => {
+  const { React, reset, flush, unmount } = fakeReact();
+  const t = new Date(); const date = t.getFullYear() + '-' + String(t.getMonth() + 1).padStart(2, '0') + '-' + String(t.getDate()).padStart(2, '0');   // today: always in the month on screen
+  const Steward = fakeSteward({ churchPub: 'cp',
+    subscribeEvents: answers([{ id: 'e1', title: 'Sunday Service', date, time: '10:00', recur: 'weekly', accent: 'var(--clay)' }]),
+    subscribeServices: answers([]), subscribeRotas: answers([]), subscribeRosters: answers([]), subscribeGroups: answers([]),
+    subscribeRsvps: answers({}), subscribeMembers: answers([]), subscribeBookings: answers([]), subscribeRooms: answers([]), subscribeRunsheets: answers([]) });
+  const { window } = fakeBrowser({ Steward });
+  window.innerWidth = 1280;   // the side panel is a column on desktop and stacks on a phone; the sentence is the same
+  const { DashCalendar } = loadConsole({ React, window, expr: '{ DashCalendar }' });
+  let tree;
+  const draw = () => { reset(); tree = DashCalendar({}); flush(); return tree; };
+  draw(); draw();
+  // CONTROL: the meeting is on the calendar (a cell carries the title), so the panel below it is the case the audit photographed
+  assert.ok(said(tree).includes('Sunday Service'), 're-anchor: the injected Sunday Service is not on the calendar at all');
+  const status = nodes(tree).find(n => n.props && n.props.role === 'status');
+  assert.ok(status, 'the upcoming-services panel has no empty-state line (no role="status")');
+  const line = said(status);
+  assert.match(line, /rota/i, 'THE DEFECT: the empty state does not say it is the ROTA that is empty: ' + JSON.stringify(line));
+  assert.doesNotMatch(line, /no upcoming services/i, 'the empty state still says "No upcoming services" under a service the steward just created');
+  unmount();
+});
