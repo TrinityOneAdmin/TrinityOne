@@ -4947,6 +4947,10 @@ function BulkUploadModal({ kind, onClose }) {
   const [done, setDone] = React.useState(0);
   const [rejected, setRejected] = React.useState([]);   // names of non-text files we couldn't read
   const inputRef = React.useRef(null);
+  // A PHONE HAS NOTHING TO DROP FROM. "Drop files here, or click to choose" is right on a desktop and wrong on
+  // the APK, where the hidden file input is the only control (console audit 2026-09-19 §C). On a narrow screen
+  // the zone says what it is: a button to choose files.
+  const narrow = useStewNarrow();
 
   const parse = (name, raw) => {
     const baseTitle = name.replace(/\.(txt|md|markdown)$/i, '').replace(/[-_]+/g, ' ').trim() || 'Untitled';
@@ -4993,13 +4997,13 @@ function BulkUploadModal({ kind, onClose }) {
       <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={'Bulk upload ' + (isPlans ? 'reading plans' : 'devotionals')} tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 560, maxWidth: '96%', maxHeight: '90%', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', overflow: 'hidden', animation: 'lumenScale .2s ease both' }}>
         <div style={{ padding: '24px 26px 0' }}>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22 }}>Bulk upload {isPlans ? 'reading plans' : 'devotionals'}</div>
-          <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 16px' }}>{isPlans ? 'Drop one or more text files — each file becomes a plan, with one Bible reference per line (a “# Title” first line is used as the name).' : 'Drop one or more Markdown / text files — each becomes a devotional. The first “# Heading” (or the filename) is the title.'} They land as <b>drafts</b>, so you can arrange and schedule them before anything reaches members.</p>
+          <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 16px' }}>{isPlans ? 'Each text file becomes a plan, with one Bible reference per line (a “# Title” first line is used as the name).' : 'Each Markdown / text file becomes a devotional. The first “# Heading” (or the filename) is the title.'} They land as <b>drafts</b>, so you can arrange and schedule them before anything reaches members.</p>
         </div>
         <div style={{ padding: '0 26px' }}>
           <div onDragOver={e => { e.preventDefault(); setDrag(true); }} onDragLeave={() => setDrag(false)} onDrop={e => { e.preventDefault(); setDrag(false); addFiles(e.dataTransfer.files); }} onClick={() => inputRef.current && inputRef.current.click()}
             style={{ border: '2px dashed ' + (drag ? 'var(--clay)' : 'var(--line)'), borderRadius: 16, background: drag ? 'color-mix(in oklab, var(--clay) 7%, var(--surface))' : 'var(--surface-2)', padding: '24px 18px', textAlign: 'center', cursor: 'pointer', transition: 'all .15s' }}>
             <Icon name="share" size={26} color="var(--ink-3)" />
-            <div style={{ fontWeight: 700, fontSize: 14.5, marginTop: 8 }}>Drop files here, or click to choose</div>
+            <div style={{ fontWeight: 700, fontSize: 14.5, marginTop: 8 }}>{narrow ? 'Choose files' : 'Drop files here, or click to choose'}</div>
             <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 3 }}>.md · .markdown · .txt</div>
             <input ref={inputRef} type="file" accept=".md,.markdown,.txt,text/plain,text/markdown" multiple onChange={e => { addFiles(e.target.files); e.target.value = ''; }} style={{ display: 'none' }} />
           </div>

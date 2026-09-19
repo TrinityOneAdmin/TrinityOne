@@ -146,3 +146,32 @@ test('Set a console PIN: the copy is short — one sentence of why, one line of 
   assert.ok(sentences.length <= 4, 'the gate carries ' + sentences.length + ' sentences of copy; the rule is one why, one line of advice, one footer:\n  ' + sentences.join('\n  '));
   g.unmount();
 });
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+// 5. BULK UPLOAD — on a phone the zone is a "Choose files" control; only a desktop is told to drop.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+function bulkUpload({ width }) {
+  const { React, reset, flush, unmount } = fakeReact();
+  const { window } = fakeBrowser({ Steward: fakeSteward() });
+  window.innerWidth = width;
+  const { BulkUploadModal } = loadConsole({ React, window, expr: '{ BulkUploadModal }' });
+  reset(); const tree = BulkUploadModal({ kind: 'devotionals', onClose() {} }); flush();
+  const zone = nodes(tree).find(n => typeof n.props.onDrop === 'function');
+  assert.ok(zone, 're-anchor: no drop zone (an element with onDrop) in the bulk-upload dialog');
+  assert.ok(nodes(zone).some(n => n.type === 'input' && n.props.type === 'file'), 're-anchor: the zone no longer wraps the file input that is the real control');
+  return { zone: said(zone), text: said(tree), unmount };
+}
+
+test('Bulk upload: at 360px the zone says "Choose files" and nothing on the dialog says "Drop"', () => {
+  const b = bulkUpload({ width: 360 });
+  assert.doesNotMatch(b.zone, /drop/i, 'THE DEFECT: the phone is told to drop files, which it has nothing to drop from: ' + JSON.stringify(b.zone));
+  assert.match(b.zone, /choose files/i, 'the zone does not say what it is on a phone — a control to choose files: ' + JSON.stringify(b.zone));
+  assert.doesNotMatch(b.text, /\bdrop\b/i, 'the dialog still tells a phone to drop something: ' + JSON.stringify(b.text));
+  b.unmount();
+});
+
+test('Bulk upload: at 1280px the zone still invites a drop', () => {
+  const b = bulkUpload({ width: 1280 });
+  assert.match(b.zone, /drop/i, 'the desktop drop zone lost its drop invitation: ' + JSON.stringify(b.zone));
+  b.unmount();
+});
