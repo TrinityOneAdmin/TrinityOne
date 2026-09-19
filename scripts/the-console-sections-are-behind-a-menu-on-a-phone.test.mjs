@@ -13,11 +13,13 @@
 // object. Nothing here matches text in app/*.jsx (CLAUDE.md rule 3); the console is loaded off the real
 // gateway and read with getBoundingClientRect.
 //
-// A separate file because this one needs the first-run wizard OUT OF THE WAY, and that file needs it left
-// up (its dialog measurements were calibrated against the handset with it up — see the note in its before()).
-// The wizard registers as a modal, and ☰ correctly does nothing while a modal is up, so with the wizard on
-// screen no menu could ever open here. It is kept off by refusing the one localStorage delete the create
-// path makes (`trinityone.steward.wizard.done`), which is the only reason it appears at all.
+// A separate file because this one is ABOUT the drawer, and the-console-fits-a-360px-phone is about what the
+// chrome costs every screen; each keeps its own church and ports. Both now keep the first-run wizard OUT OF
+// THE WAY the same way (an earlier version of this note said the 360 file left it up — it did once, and no
+// longer does; see its before()). The wizard registers as a modal, and ☰ correctly does nothing while a modal
+// is up, so with the wizard on screen no menu could ever open here. It is kept off by refusing the one
+// localStorage delete the create path makes (`trinityone.steward.wizard.done`), which is the only reason it
+// appears at all.
 //
 // Skips itself when chromium is unavailable, like scripts/app-boots.test.mjs, so CI without a browser is green.
 import { test, before, after } from 'node:test';
