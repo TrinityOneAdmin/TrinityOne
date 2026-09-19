@@ -5,6 +5,8 @@
 //   1. Members row — the NAME wins the width fight; the handle beside it is what truncates.
 //   2. Settings → Relays row — the chips wrap; nothing in a relay row is off the right edge of the screen.
 //   3. Wizard "Your regular meetings" — day / time / recurrence wrap; every select is on screen and hittable.
+//   5. No focus ring round a whole dialog on open; a real control inside still gets one from the keyboard.
+//   6. One side margin (16px) for every dialog the audit measured, which had eight different ones.
 //   7. Picking "Settings" from ☰ while inside a settings page returns to the settings index.
 //
 // ── WHY A BROWSER, AND WHAT IS REAL ──────────────────────────────────────────────────────────────────────
@@ -392,6 +394,46 @@ const tab = async () => {
 const ringless = (p) => p.outlineStyle === 'none' || parseFloat(p.outlineWidth) === 0;
 const focusedPanels = [];   // which dialogs focused their panel on open — the ones row 5 was asserted on
 
+for (const d of DIALOGS) {
+  test(`6 + 5. ${d.name} at 360x730: ${GUTTER}px from each edge (was ${d.was}), no focus ring round the panel, and a Tab lands a ring on a real control`, SKIP, async () => {
+    await closeAll(); await dismissBanners();
+    assert.equal(await evalIn(`document.querySelectorAll('[role="dialog"]').length`), 0, 'a dialog is open that Escape does not close — nothing below can be measured');
+    await d.open();
+    await sleep(400);
+    const p = JSON.parse(await evalIn(PANEL));
+    assert.equal(p.found, true, `${d.name}: no dialog panel on screen`);
+    // 6. the gutter — both edges, so a panel that is merely narrow and off-centre does not pass
+    assert.ok(Math.abs(p.left - GUTTER) <= 1 && Math.abs((p.vw - p.right) - GUTTER) <= 1,
+      `${d.name} ("${p.label}") sits ${p.left}px from the left and ${p.vw - p.right}px from the right of a ${p.vw}px screen — not the ${GUTTER}px every phone dialog gets (it was ${d.was})`);
+    // 5. the ring. Dialogs whose first field takes focus itself never focus the panel; the ones that do are the
+    // ones the audit photographed with a clay ring round the whole card. Asserted wherever the panel IS focused.
+    if (p.focused) { focusedPanels.push(d.name); assert.ok(ringless(p), `${d.name}: the whole dialog is drawn with a ${p.outlineWidth} ${p.outlineStyle} focus ring on open`); }
+    // …and the ring is still there for a keyboard: one Tab, and whatever it lands on inside the dialog shows one
+    await tab();
+    const f = JSON.parse(await evalIn(FOCUSED));
+    assert.equal(f.inDialog, true, `${d.name}: Tab left the dialog (landed on ${f.tag} "${f.label}") — the focus trap is not the subject here but nothing below can be read`);
+    assert.ok(f.outlineStyle !== 'none' && parseFloat(f.outlineWidth) >= 2,
+      `${d.name}: after Tab the focused ${f.tag} "${f.label}" has no visible focus ring (${f.outlineWidth} ${f.outlineStyle}) — the panel fix took the ring off real controls too`);
+    console.log(`    ${d.name}: ${p.left}px | ${p.vw - p.right}px (was ${d.was}); panel focused ${p.focused}${p.focused ? `, outline ${p.outlineStyle}` : ''}; Tab → ${f.tag} "${f.label}" ${f.outlineWidth} ${f.outlineStyle}`);
+    await closeAll();
+    assert.deepEqual(errors, [], 'the console threw:\n  ' + errors.join('\n  '));
+  });
+}
 
+test('5. the sections drawer takes focus on open and is drawn without a ring; the panels above that were focused numbered at least four', SKIP, async () => {
+  // The drawer is a dialog too and was in the audit's list. And a control on this row: at least four of the
+  // dialogs above must have focused their panel, or row 5 above asserted nothing (autoFocus fields take it
+  // on the others — New team, New event, New group, Categories, Change PIN, New post).
+  await closeAll();
+  await openMenu();
+  const p = JSON.parse(await evalIn(`(() => { const p = document.querySelector('[role="dialog"][aria-label="Sections"]'); if (!p) return JSON.stringify({ found: false }); const cs = getComputedStyle(p);
+    return JSON.stringify({ found: true, focused: document.activeElement === p, outlineStyle: cs.outlineStyle, outlineWidth: cs.outlineWidth }); })()`));
+  assert.equal(p.found, true, '☰ did not open the sections drawer');
+  assert.equal(p.focused, true, 'the drawer did not take focus on open — the ring claim below would be about nothing');
+  assert.ok(ringless(p), `the sections drawer is drawn with a ${p.outlineWidth} ${p.outlineStyle} focus ring on open`);
+  await escape();
+  assert.ok(focusedPanels.length >= 4, `only ${focusedPanels.length} of the dialogs above focused their panel (${JSON.stringify(focusedPanels)}) — the no-ring claim was asserted on too few of them`);
+  console.log(`    the no-ring claim was asserted on: ${focusedPanels.join(', ')}; the drawer`);
+});
 
 // ── 4. the banner's pills ─────────────────────────────────────────────────────────────────────────────────
