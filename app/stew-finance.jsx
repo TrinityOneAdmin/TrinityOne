@@ -27,9 +27,11 @@ let _booksDonateShown = false;           // once per app session
 function booksDonateHiddenUntil() { try { return parseInt(localStorage.getItem(DONATE_LS) || '0', 10) || 0; } catch (e) { return 0; } }
 function booksDonateGave() { try { localStorage.setItem(DONATE_LS, String(Date.now() + DONATE.hideDays * 864e5)); } catch (e) {} }
 
-function booksFresh() {
+// `baseCurrency` is the church's choice (see the first-open chooser in DashFinanceBook). The default is only
+// for the localStorage fallback (booksLoad), which no relay-backed console reaches.
+function booksFresh(baseCurrency = 'GBP') {
   const F = window.FinanceLedger;
-  const b = F.createBook({ baseCurrency: 'GBP', decimals: 2 });
+  const b = F.createBook({ baseCurrency, decimals: 2 });
   [['bank', '1000', 'Bank / cash', 'asset'],
    ['giving', '4000', 'Giving & offerings', 'income'],
    ['other-income', '4900', 'Other income', 'income'],
@@ -645,11 +647,20 @@ function DashFinanceBook() {
       return false;
     }
   };
-  // relay-backed persistence: subscribe to the church's encrypted finance docs → rebuild the book; seed the
-  // default chart on first use. Journal entries publish through the relay's single-writer seq guard.
+  // NOTHING IS PUBLISHED BY LOOKING. Until 2026-09-19 an authenticated empty read seeded the book here — and
+  // seeding PUBLISHED finance/settings with baseCurrency 'GBP', so opening the Finance tab for the first time
+  // wrote a £ book to the relay with no currency control anywhere (console audit 2026-09-19 §C; owner:
+  // nation-neutral by default). Now the empty read only asks: the screen shows a one-time currency choice and
+  // publishes nothing until a currency is pressed. `needsCurrency` is that state; `chosenRef` remembers the
+  // press so a later empty delivery (a second relay, a reconnect before the echo) does not ask twice.
+  const [needsCurrency, setNeedsCurrency] = React.useState(false);
+  const chosenRef = React.useRef(false);
+  // relay-backed persistence: subscribe to the church's encrypted finance docs → rebuild the book; on the
+  // first authenticated empty read, ASK which currency (the chooser below seeds and publishes the default
+  // chart). Journal entries publish through the relay's single-writer seq guard.
   React.useEffect(() => {
     if (!useRelay) return;
-    let seeded = false;
+    chosenRef.current = false;
     const unsub = S.encSubscribe('finance/', items => {
       const docs = items.map(finItemToDoc).filter(Boolean);
       if (!docs.length) {
@@ -657,23 +668,29 @@ function DashFinanceBook() {
         // so an unauthenticated or restarting relay returns exactly this empty result — and seeding republishes
         // finance/settings and finance/account:<id>, which are REPLACEABLE, so the church's real currency,
         // fiscal year and chart of accounts are overwritten and hard-deleted. The journal survives under
-        // different d-tags and then replays against a chart it no longer matches. Only seed once we've had an
-        // authenticated read (same guard as the care key).
-        if (seeded) return;
+        // different d-tags and then replays against a chart it no longer matches. Only ASK once we've had an
+        // authenticated read (same guard as the care key) — and the ask publishes nothing by itself.
+        if (chosenRef.current) return;
         if (window.Steward && window.Steward.relayAuthed && !window.Steward.relayAuthed()) return;
-        seeded = true;
-        const b = booksFresh(); bookRef.current = b; bump();
-        S.encPublish('finance/settings', { baseCurrency: b.baseCurrency, decimals: b.decimals, fiscalYearStart: b.fiscalYearStart });
-        for (const a of b.accounts.values()) S.encPublish('finance/account:' + a.id, { code: a.code, name: a.name, type: a.type });
-        for (const f of b.funds.values()) if (f.id !== 'general') S.encPublish('finance/fund:' + f.id, { name: f.name, kind: f.kind });
+        setNeedsCurrency(true);
         return;
       }
+      setNeedsCurrency(false);
       const r = F.rebuildBook(docs); if (r.book) { bookRef.current = r.book; bump(); }
     });
     return unsub;
     // [idv, conn], like every other subscription in this console — this one was the last still mounted with
     // [], so it never followed a church switch and never re-issued its REQ after a relay reconnect.
   }, [_bIdv, _bConn]);
+  // The one-time choice. This is the ONLY place a book is seeded on the relay path, and it runs from a press.
+  const chooseCurrency = (ccy) => {
+    if (!CCY_SYM[ccy]) return;
+    chosenRef.current = true;
+    const b = booksFresh(ccy); bookRef.current = b; setNeedsCurrency(false); bump();
+    S.encPublish('finance/settings', { baseCurrency: b.baseCurrency, decimals: b.decimals, fiscalYearStart: b.fiscalYearStart });
+    for (const a of b.accounts.values()) S.encPublish('finance/account:' + a.id, { code: a.code, name: a.name, type: a.type });
+    for (const f of b.funds.values()) if (f.id !== 'general') S.encPublish('finance/fund:' + f.id, { name: f.name, kind: f.kind });
+  };
   const [recording, setRecording] = React.useState(false);
   const [importing, setImporting] = React.useState(false);
   const [reports, setReports] = React.useState(false);
@@ -813,6 +830,22 @@ function DashFinanceBook() {
     <div style={{ ...bkCard, flex: 1, minWidth: 150 }}>
       <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '.5px' }}>{label}</div>
       <div style={{ fontSize: 25, fontWeight: 800, marginTop: 6, color: tone || 'var(--ink)', fontFamily: 'var(--font-display, var(--font-ui))' }}>{val}</div>
+    </div>
+  );
+
+  // THE CHOOSER, INSTEAD OF A BOOK. Every control below (record, import, export, share) needs a book, and a
+  // book needs a currency, so while the choice is open this is the whole screen: one sentence, four buttons.
+  if (needsCurrency) return (
+    <div style={{ padding: '4px 2px 40px' }}>
+      <h2 style={{ margin: 0, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 24 }}>Finance</h2>
+      <div role="group" aria-label="Choose a currency" style={{ ...bkCard, marginTop: 16, maxWidth: 520 }}>
+        <div style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 12 }}>Choose the currency your church keeps its books in.</div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {Object.keys(CCY_SYM).map(ccy => (
+            <button key={ccy} onClick={() => chooseCurrency(ccy)} className="sk-btn" style={{ padding: '10px 16px', fontSize: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)' }}>{CCY_SYM[ccy]} {ccy}</button>
+          ))}
+        </div>
+      </div>
     </div>
   );
 

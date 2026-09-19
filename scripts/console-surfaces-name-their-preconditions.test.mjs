@@ -80,6 +80,72 @@ test('Group leaders: with one member in the church, Save is enabled and the empt
 });
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+// 2. FINANCE — looking at the tab publishes nothing; the first open asks which currency, and only a press seeds.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+// A console on a church with NO finance documents: the relay answers the subscription at once with nothing,
+// and the console is authenticated (the AUDIT-2026-07-24 guard is satisfied, so this is the case that used to seed).
+function financeTab({ docs = [] } = {}) {
+  const { React, reset, flush, fresh, unmount } = fakeReact();
+  const publishes = [];
+  const Steward = fakeSteward({ churchPub: 'cp',
+    encSubscribe: (prefix, cb) => { cb(docs); return () => {}; },
+    relayAuthed: () => true,
+    encPublish: async (d, doc) => { publishes.push([d, doc]); return true; },
+    financeKeyRing: () => ['books-key'], capKeyRing: () => ['books-key'], subscribeCapKey: () => () => {},   // the books key is held, so DashFinance opens the book
+    subscribeProfile: answers({ name: 'St Test' }), subscribeGroups: answers([]),
+  });
+  const { window } = fakeBrowser({ Steward });
+  const { DashFinance, DashFinanceBook } = loadConsole({ React, window, vendor: ['vendor/finance-ledger.js'], expr: '{ DashFinance, DashFinanceBook }' });
+  // RULE 1: start from the tab component the console mounts, and follow the element it places.
+  reset(); const tab = DashFinance({}); flush();
+  const placed = nodes(tab).find(n => n.type === DashFinanceBook);
+  assert.ok(placed, 'THE POINT OF USE: the Finance tab (DashFinance) no longer places DashFinanceBook');
+  fresh();
+  let tree;
+  const draw = () => { reset(); tree = DashFinanceBook(placed.props); flush(); return tree; };
+  draw(); draw();   // the second draw sees the subscription's delivery
+  const settings = () => publishes.filter(([d]) => d === 'finance/settings');
+  return { draw, get tree() { return tree; }, publishes, settings, unmount };
+}
+
+test('Finance: opening the tab on a church with no books publishes NOTHING and shows a currency choice', () => {
+  const f = financeTab();
+  assert.equal(f.publishes.length, 0,
+    'THE DEFECT: opening the Finance tab published ' + f.publishes.length + ' document(s) — ' + f.publishes.map(([d]) => d).join(', ') +
+    ' — a £ book written to the relay by merely looking');
+  const group = nodes(f.tree).find(n => n.props && n.props.role === 'group');
+  assert.ok(group, 'no currency chooser (role="group") on the tab');
+  for (const ccy of ['GBP', 'USD', 'EUR', 'sats']) assert.ok(buttonSaying(group, ccy), 'the chooser offers no ' + ccy + ' button');
+  assert.equal(button(f.tree, 'Record a transaction'), undefined, '"Record a transaction" is offered before there is a book to record into');
+  assert.equal(button(f.tree, 'Import statement'), undefined, '"Import statement" is offered before there is a book');
+  f.unmount();
+});
+
+test('Finance: pressing USD publishes exactly one finance/settings with baseCurrency USD, and the tiles show $', () => {
+  const f = financeTab();
+  buttonSaying(f.tree, 'USD').props.onClick();
+  f.draw();
+  const set = f.settings();
+  assert.equal(set.length, 1, 'expected exactly one finance/settings publish after the press, got ' + set.length);
+  assert.equal(set[0][1].baseCurrency, 'USD', 'the book was published in ' + set[0][1].baseCurrency + ', not the currency pressed');
+  assert.ok(f.publishes.some(([d]) => d.startsWith('finance/account:')), 'the default chart of accounts was not published with the settings');
+  assert.equal(nodes(f.tree).some(n => n.props && n.props.role === 'group'), false, 'the chooser is still on screen after a choice');
+  assert.ok(button(f.tree, 'Record a transaction'), 'after the choice the book’s controls did not appear');
+  const text = said(f.tree);
+  assert.match(text, /\$0\.00/, 'the tiles do not show a $ amount after choosing USD: ' + JSON.stringify(text.slice(0, 200)));
+  assert.doesNotMatch(text, /£/, 'a £ is still on the screen of a church that chose USD');
+  f.unmount();
+});
+
+test('Finance: a church that already has its settings gets its book straight away, in its own currency, with no chooser and no publish', () => {
+  const f = financeTab({ docs: [{ id: 'settings', baseCurrency: 'EUR', decimals: 2, fiscalYearStart: '01-01' }, { id: 'account:bank', code: '1000', name: 'Bank', type: 'asset' }] });
+  assert.equal(f.publishes.length, 0, 'an existing book was re-published on open');
+  assert.equal(nodes(f.tree).some(n => n.props && n.props.role === 'group'), false, 'the currency chooser is shown to a church that already chose');
+  assert.match(said(f.tree), /€0\.00/, 'the existing book is not shown in its own currency');
+  f.unmount();
+});
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 // 3. CALENDAR — the "upcoming services" panel names the rota, so it cannot contradict an event just made.
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 test('Calendar: with one meeting on the calendar and nothing on the rota, the side panel says the rota is empty — not "No upcoming services"', () => {
