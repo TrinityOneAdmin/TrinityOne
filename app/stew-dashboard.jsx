@@ -1282,29 +1282,20 @@ function StewSetupWizard({ church, onDone, onTab, onSettings, onInvite, onNewPos
   );
 
   if (step === 1) return (
-    <WizShell step={step} title="Your church’s recovery key" sub="These 12 words ARE your church — they sign everything you post. Write them on paper, and make a second copy you keep somewhere else. There is no way to reset this: not by us, not from your relay, not from a backup file."
+    <WizShell step={step} title="Your church’s recovery key" sub="These 12 words are your church — nothing else can restore it: not us, not your relay, not a backup file."
       footer={<React.Fragment>
         <button onClick={() => setStep(0)} className="sk-btn sk-btn--ghost" style={{ padding: '12px 16px' }}><Icon name="chevL" size={15} color="currentColor" /> Back</button>
         <div style={{ flex: 1 }} />
         <button onClick={() => { if (canContinue) next(); }} disabled={!canContinue} className="sk-btn sk-btn--clay" style={{ padding: '12px 20px', opacity: canContinue ? 1 : .5 }}>Continue <Icon name="chevR" size={15} color="var(--on-clay)" /></button>
       </React.Fragment>}>
-      {/* WHAT LOSING IT ACTUALLY COSTS. "The church can't be recovered" is true but abstract, and a steward
-          reads it as boilerplate. The realistic way a church loses this key is not theft — it is the laptop
-          dying, or the one person who set it up leaving. Say the consequence in the concrete, and ask for the
-          second copy here rather than hoping they infer it. AUDIT-2026-07-27. */}
-      <div style={{ display: 'flex', gap: 11, padding: '13px 15px', borderRadius: 12, marginBottom: 14,
-        background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 30%, var(--line))' }}>
-        <Icon name="shield" size={17} color="var(--clay)" style={{ flexShrink: 0, marginTop: 1 }} />
-        <div style={{ fontSize: 13.5, lineHeight: 1.55, color: 'var(--ink-2)' }}>
-          <b style={{ color: 'var(--ink)' }}>If these words are lost, the church is gone — not locked, gone.</b> You
-          would start a new one, and every member would have to join it again. Your groups, your rota, your
-          records and your history stay sealed to the old key, and nobody can open them.
-          <div style={{ marginTop: 7 }}>Most churches don’t lose this to theft. They lose it because the laptop
-          died, or the person who set it up moved on. <b>Two paper copies, in two places</b> — that is the whole
-          precaution.</div>
-        </div>
-      </div>
-      <div style={lbl}>RECOVERY PHRASE — 12 WORDS</div>
+      {/* THE WORDS FIRST. The warning used to sit above them — two paragraphs, so on a 360px phone the twelve
+          words began 605px down a 1085px step and a newcomer scrolled past the warning to reach the one thing
+          the step is for (console audit 2026-09-19 §A6). The words are now the first thing on the step and the
+          warning follows them, cut to its two bold sentences (owner 2026-09-10: less instructional copy on
+          screen). The concrete cost — every member joining again, the laptop that died — is the help article
+          "Your church’s recovery phrase" (app/help-data.jsx, console-words). AUDIT-2026-07-27 asked for that
+          cost to be stated here; the two sentences that remain are the ones it found load-bearing. */}
+      <div style={lbl} data-wiz-words="1">RECOVERY PHRASE — 12 WORDS</div>
       {/* The phrase and the check must NEVER share a screen. With the words still visible the "quick check" is
           copying from the box above — it proves nothing about what was written on paper, and it teaches the
           steward to click through the one ceremony standing between them and losing the church key for good.
@@ -1356,6 +1347,14 @@ function StewSetupWizard({ church, onDone, onTab, onSettings, onInvite, onNewPos
       {!phrase ? (
       <div style={{ marginTop: 12, fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5 }}>This key was imported, so its recovery phrase isn’t shown here — keep the copy you set up with somewhere safe. You can continue.</div>
       ) : null}
+      <div style={{ display: 'flex', gap: 11, padding: '13px 15px', borderRadius: 12, marginTop: 14,
+        background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 30%, var(--line))' }}>
+        <Icon name="shield" size={17} color="var(--clay)" style={{ flexShrink: 0, marginTop: 1 }} />
+        <div style={{ fontSize: 13.5, lineHeight: 1.55, color: 'var(--ink-2)' }}>
+          <b style={{ color: 'var(--ink)' }}>If these words are lost, the church is gone — not locked, gone.</b>{' '}
+          <b style={{ color: 'var(--ink)' }}>Two paper copies, in two places</b> — that is the whole precaution.
+        </div>
+      </div>
       <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px solid var(--line)' }}>
         {!relayOpen ? (
           <button onClick={() => setRelayOpen(true)} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 13, fontFamily: 'var(--font-ui)', padding: 0 }}>Running your own relay? Connect it →</button>
