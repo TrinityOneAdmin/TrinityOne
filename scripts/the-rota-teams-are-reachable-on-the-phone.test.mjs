@@ -44,11 +44,19 @@ import * as H from './relay-network-harness.mjs';
 const CHROME = ['/usr/bin/chromium-browser', '/usr/bin/chromium', '/usr/bin/google-chrome'].find(p => existsSync(p));
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-// The viewports this file measures. Portrait is the Oppo CPH2477 the way the defect was photographed. The
-// short desktop window is the owner's Suite window: the same collapse happens in any window the grid does
-// not fit, it is just less dramatic there (measured here before the fix: rows 2px 96px at 1100x420).
+// The viewports this file measures. The two phone ones are the Oppo CPH2477 both ways up, the sizes the
+// defect was photographed at. The short desktop window is the owner's Suite window: the same collapse
+// happens in any window the grid does not fit, it is just less dramatic there (measured here before the
+// fix: rows 2px 96px at 1100x420).
+//
+// Landscape is a second defect on top of the row collapse, and the row property alone does not reach it:
+// measured on the real console at 730x328, the header takes 207px, <main> has 121px, the service strip and
+// the summary card already overrun the rota column, and the grid's box was 0px tall (459..459 with 467px of
+// content) — whole cards behind no window at all. The phone floor on the grid (DashRota, `minHeight` when
+// narrow) is what this row proves; delete it and this row fails while portrait still passes.
 const VIEWS = [
   { name: 'portrait 360x730', w: 360, h: 730, mobile: true },
+  { name: 'landscape 730x328', w: 730, h: 328, mobile: true },
   { name: 'short desktop 1100x420', w: 1100, h: 420, mobile: false },
 ];
 
