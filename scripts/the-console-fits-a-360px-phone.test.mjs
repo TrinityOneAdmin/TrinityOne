@@ -100,6 +100,18 @@ before(async () => {
     const set=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
     set.call(i, ${JSON.stringify(val)}); i.dispatchEvent(new Event('input',{bubbles:true})); return 'ok'; })()`;
   await sleep(9000);
+  // ⚠ THE FIRST-RUN WIZARD IS KEPT OFF (2026-09-19). Until the hamburger nav it was left up here, deliberately,
+  // and the note that follows is why that was a trap worth recording. It is off now because the sections are
+  // a DIALOG on a phone and ☰ does nothing while a modal is up — the wizard registers as one — so with it on
+  // screen openTab() below could never open a section.
+  //
+  // How it is kept off: StewDashboard shows it when `newchurch` is set and `wizard.done` is not, and
+  // seedNewChurch (app/steward-root.jsx) sets the first and DELETES the second, deliberately, so a second
+  // church on one device still gets setup. Refusing that one delete is the only way in that is not a race
+  // (the two below were both measured losing). A harness affordance: nothing in the console reads
+  // removeItem's return. The same trick is in the-console-sections-are-behind-a-menu-on-a-phone.test.mjs.
+  await evalIn(`(() => { const orig = Storage.prototype.removeItem; Storage.prototype.removeItem = function (k) { if (k === 'trinityone.steward.wizard.done') return; return orig.call(this, k); };
+    localStorage.setItem('trinityone.steward.wizard.done', '1'); return 'ok'; })()`);
   booted = await evalIn(click('/Start a new church/i'));
   await sleep(2500);
   await evalIn(type('At least 8', 'cedar-harbour-lamp-42'));
@@ -107,13 +119,13 @@ before(async () => {
   await evalIn(click('/Set PIN/i'));
   await sleep(13000);
 
-  // ⚠ THE FIRST-RUN WIZARD IS STILL ON SCREEN AT THIS POINT, DELIBERATELY, AND THAT IS A TRAP TO KNOW ABOUT.
+  // ⚠ THE FIRST-RUN WIZARD USED TO BE ON SCREEN AT THIS POINT, AND THAT WAS A TRAP TO KNOW ABOUT.
   // It is a full-screen flow with a blurred backdrop of its own, rendered AFTER every header modal in the
   // console shell, so it is the LAST blurred overlay in the DOM. A probe that grabs "the topmost blurred
   // overlay" therefore measures the WIZARD: while this file was being written, one did exactly that and
   // reported three different modals as identically sized (177..553, one "Continue" button — the wizard's).
   //
-  // It cannot cheaply be got rid of, and each way fails differently:
+  // It could not cheaply be got rid of, and each way failed differently:
   //   · setting trinityone.steward.wizard.done BEFORE creating the church does nothing — the create path
   //     deletes it (app/steward-root.jsx), deliberately, so a second church on one device still gets setup;
   //   · setting it 1.2s after the PIN loses a race against the dashboard, which reads the flag once in an
@@ -121,10 +133,11 @@ before(async () => {
   //   · Escape does not close it. Step 0 has NO EXIT on purpose ("NO EXIT BEFORE THE TWELVE WORDS"), because
   //     one tap there used to leave a steward holding a church and no written-down key.
   //
-  // So this file does not fight it. It measures the overlay that CONTAINS a role=dialog panel — the wizard's
+  // So this file did not fight it. It measures the overlay that CONTAINS a role=dialog panel — the wizard's
   // does not have one — and every modal test below asserts WHICH dialog it just measured by name. Proving the
   // identity of what was measured is strictly stronger than proving the absence of one thing that could have
-  // been measured instead.
+  // been measured instead — and both guards are KEPT now that the wizard is off, because they cost nothing
+  // and the next overlay someone adds without a role will be caught the same way.
   await sleep(1500);
 });
 
@@ -136,11 +149,27 @@ after(async () => {
   try { dataDir && rmSync(dataDir, { recursive: true, force: true }); } catch {}
 });
 
-// Open one of the console's sections by pressing its real nav pill, and prove we got there.
+// Open one of the console's sections the way a steward does on a phone — press ☰, then the section in the
+// menu — and prove we got there. The sections are a drawer since 2026-09-19 (StewSectionsMenu in
+// app/stew-dashboard.jsx); they were a strip of pills in the header before that.
+async function openMenu() {
+  const r = await evalIn(`(() => { const b = document.querySelector('button[aria-label="Sections"]'); if (!b) return 'miss'; b.click(); return 'ok'; })()`);
+  assert.equal(r, 'ok', 'no ☰ ("Sections") control in the console\'s header — re-anchor this test');
+  await sleep(700);
+  const open = await evalIn(`!!document.querySelector('[role="dialog"][aria-label="Sections"] nav[aria-label="Console sections"]')`);
+  assert.equal(open, true, 'pressing ☰ opened no sections menu — a modal may be up (☰ does nothing under one; see before())');
+}
+async function closeMenu() {
+  await evalIn(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+  await sleep(500);
+}
 async function openTab(label) {
-  const r = await evalIn(`(() => { const b=[...document.querySelectorAll('nav[aria-label="Console sections"] button')].find(x=>(x.textContent||'').trim().startsWith(${JSON.stringify(label)})); if(!b) return 'miss'; b.click(); return 'ok'; })()`);
-  assert.equal(r, 'ok', `no "${label}" pill in the console's nav — re-anchor this test`);
+  await openMenu();
+  const r = await evalIn(`(() => { const b=[...document.querySelectorAll('[role="dialog"][aria-label="Sections"] nav[aria-label="Console sections"] button')].find(x=>(x.textContent||'').trim().startsWith(${JSON.stringify(label)})); if(!b) return 'miss'; b.click(); return 'ok'; })()`);
+  assert.equal(r, 'ok', `no "${label}" row in the console's sections menu — re-anchor this test`);
   await sleep(2600);
+  const closed = await evalIn(`!document.querySelector('[role="dialog"][aria-label="Sections"]')`);
+  assert.equal(closed, true, 'picking a section left the menu open over it');
 }
 
 // Everything laid out inside <main> whose right edge is past the right edge of the phone. <main> scrolls
@@ -161,7 +190,10 @@ test('the console reached its dashboard at 360x730 — without which nothing bel
     assert.equal(booted, 'ok', 'the "Start a new church" button was never found');
     const v = JSON.parse(await evalIn('JSON.stringify({ w: innerWidth, h: innerHeight })'));
     assert.deepEqual(v, { w: VW, h: VH }, 'the viewport is not the phone we claim to be measuring');
+    // the sections are behind ☰ on a phone: open it to count them, then put it away
+    await openMenu();
     const nav = await evalIn(`(() => { const n = document.querySelector('nav[aria-label="Console sections"]'); return n ? n.querySelectorAll('button').length : 0; })()`);
+    await closeMenu();
     assert.ok(nav >= 6, `the console's nav has ${nav} sections — it did not reach the dashboard, so every measurement below is of the wrong screen`);
     assert.deepEqual(errors, [], 'the console threw while reaching its dashboard:\n  ' + errors.join('\n  '));
   });
@@ -385,115 +417,129 @@ test('the pop-ups 32d101d changed without photographing them do fit the phone',
 // 44px a thumb needs makes the header row 44px instead of 32, so above-nav went 125 -> 137. That is the right
 // way round — a control too small to press is not a saving — and the budget says so rather than hiding it.
 // Measured: 201 before this branch, 125 at its first attempt, 137 as it ships. Chrome total 309 -> 245.
-const ABOVE_NAV_BUDGET = 145;
+//
+// 2026-09-19: THE NAV IS GONE FROM THE HEADER, AND THE BUDGET IS ON THE TOTAL NOW. The owner decided the
+// hamburger (reference/UI-AUDIT-PLAN-console-apk.md §0) after the measurement above: the pills were 107px of
+// the 233, and the church's content began 235px down. The sections are a drawer (StewSectionsMenu), the
+// header is ONE 44px row — ☰, the section name over the church line, Invite code, New post, the avatar — so
+// the thing that made a total budget worthless (a nav whose height depended on which modules were on) is
+// not in the header any more. Measured on this branch: <main> starts at 57px. The budget is the plan's 108.
+//
+// The inventory beside the budget is kept, in its new shape, for the same reason it was there: a budget
+// rewards deletion. What must be present, by measurement: ☰ at 44px, the church line (the identity switcher
+// — for a delegated steward the only way to switch churches), and the sections themselves, in the menu, one
+// row of 44px each. Help is no longer a header control at all; it is the last row of the menu, and the test
+// after this one presses it there.
+const MAIN_TOP_BUDGET = 108;
 
 test('the console chrome does not eat the first fold of a 360px phone', { skip: !CHROME ? 'no chromium' : false, timeout: 240000 }, async () => {
   await openTab('Overview');
   const m = JSON.parse(await evalIn(`(() => {
-    const nav = document.querySelector('nav[aria-label="Console sections"]');
     const main = document.querySelector('main');
-    if (!nav || !main) return JSON.stringify({ ok: false });
-    const block = nav.parentElement;
-    const parts = [...block.children].map(k => {
-      const r = k.getBoundingClientRect();
-      return { h: Math.round(r.height), text: (k.innerText || '').trim().replace(/\\s+/g, ' ').slice(0, 30) };
-    });
+    const burger = document.querySelector('button[aria-label="Sections"]');
+    if (!burger || !main) return JSON.stringify({ ok: false });
+    const header = burger.parentElement;
+    const br = burger.getBoundingClientRect(), hr = header.getBoundingClientRect();
     return JSON.stringify({
       ok: true,
-      chromeHeight: Math.round(block.getBoundingClientRect().height),
       mainTop: Math.round(main.getBoundingClientRect().top),
       mainHeight: Math.round(main.getBoundingClientRect().height),
-      navHeight: Math.round(nav.getBoundingClientRect().height),
-      parts,
+      headerHeight: Math.round(hr.height),
+      burger: { w: Math.round(br.width), h: Math.round(br.height) },
+      headerText: (header.innerText || '').trim().replace(/\\s+/g, ' ').slice(0, 60),
+      navInHeader: !!document.querySelector('nav[aria-label="Console sections"]'),
     });
   })()`));
-  assert.ok(m.ok, 'no nav and <main> on screen — this is not the dashboard');
+  assert.ok(m.ok, 'no ☰ and <main> on screen — this is not the dashboard');
 
-  const aboveNav = m.chromeHeight - m.navHeight;
-  assert.ok(aboveNav <= ABOVE_NAV_BUDGET,
-    `everything above the console's nav is ${aboveNav}px of a ${VH}px phone, over the ${ABOVE_NAV_BUDGET}px ` +
-    `budget. With the nav that is ${m.chromeHeight}px of chrome (${Math.round(m.chromeHeight / VH * 100)}% of ` +
-    `the screen) and ${m.mainHeight}px left for the church. Parts: ` + JSON.stringify(m.parts));
+  assert.ok(m.mainTop <= MAIN_TOP_BUDGET,
+    `the church's content starts ${m.mainTop}px down a ${VH}px phone, over the ${MAIN_TOP_BUDGET}px budget ` +
+    `(${Math.round(m.mainTop / VH * 100)}% of the screen), leaving ${m.mainHeight}px for the church. Header: ` + JSON.stringify(m));
+  assert.equal(m.navInHeader, false, 'the section list is back in the header with the menu closed — that is the pill strip');
 
   // ⚠ …AND IT MUST NOT HAVE BOUGHT THAT BY THROWING THINGS AWAY. A budget shrinks when you delete, so a
-  // budget with no inventory beside it rewards deletion. An audit proved this exact hole: wrapping the
-  // narrow branch's <IdentitySwitcher> in `{false ? … : null}` — deleting the church card, which for a
-  // delegated steward is also the ONLY way to switch which church they are looking at — left all six tests
-  // in this file green. So name what has to be there, by measurement, not by the total.
-  assert.ok(m.navHeight > 40, `the nav measured ${m.navHeight}px — the sections are gone, not compressed`);
-  assert.equal(m.mainTop, m.chromeHeight, 'the content pane does not start where the chrome ends');
-
+  // budget with no inventory beside it rewards deletion. An audit proved this exact hole in an earlier
+  // shape of this test: wrapping the church card in `{false ? … : null}` — deleting it, which for a
+  // delegated steward is also the ONLY way to switch which church they are looking at — left every test in
+  // this file green. So name what has to be there, by measurement, not by the total.
+  assert.ok(m.burger.w >= 44 && m.burger.h >= 44, `☰ is ${m.burger.w}x${m.burger.h}px — under the 44px a thumb needs`);
   const present = await evalIn(`(() => {
-    const nav = document.querySelector('nav[aria-label="Console sections"]');
-    const block = nav.parentElement;
-    const kids = [...block.children].filter(k => k.getBoundingClientRect().height > 8);
-    const header = kids.find(k => /Trinity/.test(k.innerText || ''));
-    // The church card is the row that is neither the wordmark header nor the nav and still holds a control.
-    // ⚠ "some child has a button" is NOT good enough and was the first version of this: the NAV is a child
-    // and is full of buttons, so deleting the card left it passing. Exclude the two rows we can name.
-    const card = kids.find(k => k !== header && k !== nav && (k.tagName === 'BUTTON' || k.querySelector('button')));
+    const header = document.querySelector('button[aria-label="Sections"]').parentElement;
+    const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 1 && r.height > 1 && r.right <= innerWidth && el.offsetParent !== null; };
+    // The church line is the identity switcher: the one control in the header whose title is about the
+    // church's name or about switching between churches. ⚠ NOT "some button in the header" — the header
+    // is full of buttons, so deleting the church line would leave that passing.
+    const church = [...header.querySelectorAll('button')].filter(b => /^(Set church name|Switch between your church)/.test(b.getAttribute('title') || ''));
+    const heading = header.querySelector('h1');
     return JSON.stringify({
-      rows: kids.length,
-      hasWordmark: !!header,
-      churchCard: !!card,
-      cardText: card ? (card.innerText || '').replace(/\s+/g, ' ').slice(0, 40) : null,
+      churchLine: church.length === 1 && vis(church[0]),
+      churchText: church.length ? (church[0].innerText || '').replace(/\\s+/g, ' ').slice(0, 40) : null,
+      churchBox: church.length ? (r => ({ w: Math.round(r.width), h: Math.round(r.height) }))(church[0].getBoundingClientRect()) : null,
+      heading: heading ? (heading.textContent || '').trim() : null,
+      headingVisible: !!heading && vis(heading),
+      helpInHeader: [...header.querySelectorAll('button')].some(b => b.getAttribute('aria-label') === 'Help' || (b.textContent || '').trim() === 'Help'),
     });
   })()`).then(JSON.parse);
-  assert.equal(present.hasWordmark, true, 'the header row itself is gone from the phone chrome');
-  assert.equal(present.churchCard, true,
-    'the church card is gone from the phone header. It is how a steward sees WHICH church they are acting ' +
+  assert.equal(present.churchLine, true,
+    'the church line is gone from the phone header. It is how a steward sees WHICH church they are acting ' +
     'for, and for a delegated steward it is the only control that switches between them — deleting it would ' +
-    'make this budget pass and is not what "compressed" means.');
+    'make this budget pass and is not what "compressed" means. ' + JSON.stringify(present));
+  assert.ok(present.churchBox.h >= 44, `the church line is ${present.churchBox.h}px tall — it is the whole header column on purpose, so a thumb can hit it: ` + JSON.stringify(present));
+  assert.equal(present.heading, 'Overview', 'the header does not name the section on screen: ' + JSON.stringify(present));
+  assert.equal(present.headingVisible, true, 'the section name is in the header but not on screen: ' + JSON.stringify(present));
 
-  // THE HELP ROW IS GONE FROM THE STACK — that is the change, and this is what fails if it is put back.
-  const helpRow = m.parts.find(p => p.text === 'Help');
-  assert.equal(helpRow, undefined,
-    'Help is a full-width row of its own again, below the church card: ' + JSON.stringify(helpRow) +
-    'px of a 730px screen for one word.');
+  // THE SECTIONS ARE IN THE MENU, ONE 44px ROW EACH — "gone from the header" must not mean gone.
+  await openMenu();
+  const rows = JSON.parse(await evalIn(`(() => JSON.stringify([...document.querySelectorAll('[role="dialog"][aria-label="Sections"] nav button')].map(b => ({ label: (b.textContent || '').trim(), h: Math.round(b.getBoundingClientRect().height) }))))()`));
+  await closeMenu();
+  assert.ok(rows.length >= 6, `the sections menu lists ${rows.length} sections — the sections are gone, not moved: ` + JSON.stringify(rows));
+  for (const r of rows) assert.ok(r.h >= 44, `"${r.label}" is ${r.h}px tall in the menu — the pills were 32px and that was already refused as too small`);
+
+  // THE HELP ROW IS NOT IN THE HEADER — it was a full-width row of its own once (35px for one word), then a
+  // compact button in the header row, and it is the last row of the menu now. This fails if it comes back.
+  assert.equal(present.helpInHeader, false, 'Help is in the phone header again: ' + JSON.stringify(m.headerText));
 });
 
-test('Help is still in the phone header, big enough to press, and still called Help', { skip: !CHROME ? 'no chromium' : false, timeout: 240000 }, async () => {
-  // MOVING A CONTROL MUST NOT LOSE IT. The compact button has no visible text, so its accessible name is the
-  // only name it has — and scripts/app-boots.test.mjs presses this control by looking that name up.
+test('Help is the last row of the sections menu, big enough to press, still called Help, and opens the guides', { skip: !CHROME ? 'no chromium' : false, timeout: 240000 }, async () => {
+  // MOVING A CONTROL MUST NOT LOSE IT. This control has moved twice: from a full-width row under the church
+  // card (35px for one word) into the header row as a bare glyph (2026-09-15), and from the header row into
+  // the sections menu (2026-09-19) — the one-row header has ☰, the section name, the church line and three
+  // 44px actions, and no room for a fifth. Its accessible name is the only name it has on a phone, and
+  // scripts/app-boots.test.mjs presses this control by looking that name up (on the desktop layout, where it
+  // is still in the sidebar).
   //
-  // ⚠ THIS DOES NOT PROVE THE BUTTON IS REACHABLE BY A FINGER, and an earlier version of this comment said it
-  // did. The first-run wizard is deliberately left up (see before()), its fixed 360x730 overlay sits over the
-  // header, and `elementFromPoint` at this button's centre returns the WIZARD. `b.click()` bypasses hit
-  // testing, so the press lands anyway. What is proved here is: the control exists in the header above the
-  // nav, it is 44px, it is named "Help", and its handler opens the real dialog with real guides in it.
-  // Hit-testing was checked by hand with the wizard dismissed and the button does receive the press.
+  // What is proved here: the control is NOT in the header (asserted by the test above), it IS in the menu,
+  // it is 44px, it is named "Help", and its handler opens the real dialog with real guides in it — and the
+  // menu has closed under that dialog, so Escape then lands on Help and not on a menu nobody can see.
   await openTab('Overview');
-  const inHeader = await evalIn(`(() => {
-    const b = [...document.querySelectorAll('button')].filter(x => x.getAttribute('aria-label') === 'Help');
-    if (b.length !== 1) return 'found ' + b.length;
-    const nav = document.querySelector('nav[aria-label="Console sections"]');
-    return b[0].getBoundingClientRect().bottom <= nav.getBoundingClientRect().top ? 'above the nav' : 'below the nav';
-  })()`);
-  assert.equal(inHeader, 'above the nav', `the Help control is not where a steward can reach it: ${inHeader}`);
-
-  // ⚠ AND IT MUST BE BIG ENOUGH TO PRESS. The first version of this icon button measured 35 x 31px — SHORTER
-  // than the 32px nav pills the same commit refused to shrink to 29px because "that is the wrong direction on
-  // a touch screen". An audit put those two facts next to each other. The standard is this repo's own, in
-  // scripts/verse-of-the-day-starts-minimised.test.mjs: "under the 44px a thumb needs".
+  const before = await evalIn(`[...document.querySelectorAll('button')].filter(x => x.getAttribute('aria-label') === 'Help').length`);
+  assert.equal(before, 0, `${before} controls named "Help" on screen with the menu closed — on a phone Help is behind ☰`);
+  await openMenu();
   const box = JSON.parse(await evalIn(`(() => {
-    const b = [...document.querySelectorAll('button')].find(x => x.getAttribute('aria-label') === 'Help');
-    if (!b) return JSON.stringify({ w: 0, h: 0 });
-    const r = b.getBoundingClientRect();
-    return JSON.stringify({ w: Math.round(r.width), h: Math.round(r.height) });
+    const b = [...document.querySelectorAll('[role="dialog"][aria-label="Sections"] button')].filter(x => x.getAttribute('aria-label') === 'Help');
+    if (b.length !== 1) return JSON.stringify({ found: b.length });
+    const r = b[0].getBoundingClientRect();
+    return JSON.stringify({ found: 1, w: Math.round(r.width), h: Math.round(r.height), onScreen: r.bottom <= innerHeight && r.top >= 0 });
   })()`));
-  assert.ok(box.h >= 44 && box.w >= 44,
-    `the Help control is ${box.w}x${box.h}px. It carries no visible text on a phone, so it is a bare glyph, ` +
-    'and 44px is what a thumb needs — this branch refused to take the nav pills from 32px to 29px for the ' +
-    'same reason and must not then ship something smaller.');
+  assert.equal(box.found, 1, `the sections menu holds ${box.found} controls named "Help" — it needs exactly one`);
+  assert.equal(box.onScreen, true, 'Help is in the menu but off the bottom of the phone in portrait');
+
+  // ⚠ AND IT MUST BE BIG ENOUGH TO PRESS. The first version of the header icon button measured 35 x 31px —
+  // SHORTER than the 32px nav pills the same commit refused to shrink to 29px because "that is the wrong
+  // direction on a touch screen". An audit put those two facts next to each other. The standard is this
+  // repo's own, in scripts/verse-of-the-day-starts-minimised.test.mjs: "under the 44px a thumb needs".
+  assert.ok(box.h >= 44 && box.w >= 44, `the Help row is ${box.w}x${box.h}px — under the 44px a thumb needs`);
 
   const opened = await evalIn(`(() => {
-    const b = [...document.querySelectorAll('button')].find(x => x.getAttribute('aria-label') === 'Help');
+    const b = [...document.querySelectorAll('[role="dialog"][aria-label="Sections"] button')].find(x => x.getAttribute('aria-label') === 'Help');
     if (!b) return 'no Help control'; b.click(); return 'ok'; })()`);
   assert.equal(opened, 'ok');
   await sleep(1200);
   const dlg = await evalIn(`(() => { const d = document.querySelector('[role="dialog"][aria-label="Help"]');
     return d ? (d.querySelectorAll('[data-help-id]').length + ' guides') : 'no help dialog'; })()`);
-  assert.match(String(dlg), /^[1-9][0-9]* guides$/, `pressing Help in the header opened: ${dlg}`);
+  assert.match(String(dlg), /^[1-9][0-9]* guides$/, `pressing Help in the menu opened: ${dlg}`);
+  assert.equal(await evalIn(`!!document.querySelector('[role="dialog"][aria-label="Sections"]')`), false, 'the sections menu is still open under the Help dialog');
   await evalIn(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
   await sleep(600);
+  assert.equal(await evalIn(`document.querySelectorAll('[role="dialog"]').length`), 0, 'Escape did not close Help');
 });
