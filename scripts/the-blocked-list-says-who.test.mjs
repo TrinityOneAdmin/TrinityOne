@@ -42,6 +42,9 @@ async function membersTab({ names = true } = {}) {
     // classic scripts share one global. That is the second caller list a change like this has.
     DismissibleNote: (p) => (p && p.children) || null,
     StewHelpLink: (p) => (p && p.label) || null,
+    // useStewNarrow joined DashMembers on 2026-09-20 (P12: the member card is one row on a phone, with its
+    // actions behind ⋯). `false` here is the desktop row — the card these tests were written against.
+    useStewNarrow: () => false,
     Icon: (p) => (p && p.children) || null,
     location: { search: '', hostname: 'x' },
     document: { addEventListener() {}, removeEventListener() {}, createElement: () => ({ style: {}, appendChild() {}, remove() {}, click() {} }), body: { appendChild() {}, removeChild() {} } },
