@@ -346,8 +346,12 @@ test('1. Members: a 16-character name beside a 20-character handle shows at leas
     const card = line.closest('main div[style*="border-radius"], main div');   // the row card: the nearest bordered ancestor
     let el = line; while (el && el !== document.body && getComputedStyle(el).borderTopWidth === '0px') el = el.parentElement;
     const cr = el.getBoundingClientRect();
-    const handle = [...line.querySelectorAll('span')].find(s => s !== name && (s.textContent || '').includes('@' + ${JSON.stringify(HANDLE)}));
-    const g = (n) => { const r = n.getBoundingClientRect(); return { w: Math.round(r.width), left: Math.round(r.left), right: Math.round(r.right), sw: n.scrollWidth, cw: n.clientWidth }; };
+    // THE HANDLE MAY BE BENEATH THE NAME. Since P12 (2026-09-20) the phone row puts the handle on a second
+    // line under the name, in the same text column; the desktop row keeps it beside the name. Look in the
+    // column (the line's parent) so both shapes are found, and read each node's top/bottom to tell which.
+    const col = line.parentElement;
+    const handle = [...col.querySelectorAll('span')].find(s => s !== name && (s.textContent || '').includes('@' + ${JSON.stringify(HANDLE)}));
+    const g = (n) => { const r = n.getBoundingClientRect(); return { w: Math.round(r.width), left: Math.round(r.left), right: Math.round(r.right), top: Math.round(r.top), bottom: Math.round(r.bottom), sw: n.scrollWidth, cw: n.clientWidth }; };
     const nm = g(name); const perChar = nm.sw / ${NAME.length};
     return JSON.stringify({ found: true, vw: innerWidth, card: { left: Math.round(cr.left), right: Math.round(cr.right) }, line: g(line),
       name: { ...nm, visibleChars: perChar ? Math.floor(nm.cw / perChar) : 0, whole: nm.sw <= nm.cw + 1 },
@@ -357,10 +361,13 @@ test('1. Members: a 16-character name beside a 20-character handle shows at leas
     `the name shows ${m.name.visibleChars} of ${NAME.length} characters (${m.name.cw}px of ${m.name.sw}px) at ${m.vw}px — the name lost the width fight. Line ${m.line.left}→${m.line.right}, handle ${JSON.stringify(m.handle)}`);
   assert.ok(m.name.right <= m.card.right && m.name.left >= m.card.left, `the name spills past its card (${m.name.left}→${m.name.right} in ${m.card.left}→${m.card.right})`);
   assert.ok(m.handle, 're-anchor: no handle node beside the name');
-  // the handle is the one that gives way: it is either truncated or has no room at all — never whole while the name is not
-  assert.ok(m.name.whole || !m.handle.whole || m.handle.w === 0,
-    `the handle is whole (${m.handle.w}px) while the name is cut (${m.name.visibleChars}/${NAME.length}) — the handle won the width fight`);
-  console.log(`    measured: name ${m.name.visibleChars}/${NAME.length} chars in ${m.name.cw}px; handle ${m.handle.w}px${m.handle.whole ? ' (whole)' : ' (truncated)'}; line ${m.line.left}→${m.line.right} of card ${m.card.left}→${m.card.right}`);
+  // the handle is the one that gives way: it is either truncated or has no room at all — never whole while
+  // the name is not — or (the phone row since P12) it sits on its own line BENEATH the name, where there is
+  // no fight to win: the name has the whole line and the handle its own.
+  const beneath = m.handle.top >= m.name.bottom - 1;
+  assert.ok(m.name.whole || !m.handle.whole || m.handle.w === 0 || beneath,
+    `the handle is whole (${m.handle.w}px) beside the name while the name is cut (${m.name.visibleChars}/${NAME.length}) — the handle won the width fight`);
+  console.log(`    measured: name ${m.name.visibleChars}/${NAME.length} chars in ${m.name.cw}px; handle ${m.handle.w}px${m.handle.whole ? ' (whole)' : ' (truncated)'}${beneath ? ', beneath the name' : ', beside it'}; line ${m.line.left}→${m.line.right} of card ${m.card.left}→${m.card.right}`);
   assert.deepEqual(errors, [], 'the console threw:\n  ' + errors.join('\n  '));
 });
 

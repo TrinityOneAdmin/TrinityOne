@@ -1641,6 +1641,60 @@ function StewSectionsMenu({ nav, tab, onPick, onHelp, onClose }) {
   );
 }
 
+// ── A MEMBER'S ACTIONS, ON A PHONE ────────────────────────────────────────────────────────────────────────
+//
+// Owner, 2026-09-20: "compress or hide all those tags/pills, the whole card shouldn't be much bigger than
+// the display picture size." Measured on the Oppo at 360x730 the day before, each member of the Members
+// list was a ~380px card — Chat, Child, Clear for youth, Reconnect stacked one per line under a row of
+// pills — so forty members were fifteen screens. On a phone the row is now avatar · name · Chat · ⋯, and
+// everything else the card carried is behind ⋯ in this sheet. The DESKTOP row is untouched.
+//
+// It is a console dialog like the sections drawer (StewSectionsMenu): `useStewDialog` gives it Escape, the
+// focus trap and the modal count; the Capacitor `backButton` listener is the same pattern, removed on
+// unmount. A pick runs the row's OWN handler — the very function the desktop button calls, with the same
+// confirm where there is one (Remove / block asks twice here as it does there) — and closes the sheet,
+// except where the steward needs to see the result in place (`keep`: Copied ✓, the block confirm).
+//
+// The header repeats the safeguarding FACTS the card's pills carried (child, cleared, parent of / parents,
+// no guardian, the historic "still listed as a guardian" warning) so nothing a steward could read off the
+// card is lost — it is one tap further away, and "Child" / "Cleared" stay on the row itself.
+function StewMemberSheet({ label, initials, av, pubkey, accent, facts, actions, onClose }) {
+  const dlgRef = useStewDialog(onClose);
+  React.useEffect(() => {
+    let sub;
+    try { const P = window.Capacitor && window.Capacitor.Plugins; if (P && P.App && P.App.addListener) sub = P.App.addListener('backButton', () => onClose()); } catch (e) {}
+    return () => { try { sub && sub.remove && sub.remove(); } catch (e) {} };
+  }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+  const row = { display: 'flex', alignItems: 'center', gap: 12, width: '100%', minHeight: 48, flexShrink: 0, padding: '10px 12px', borderRadius: 11, border: 'none', cursor: 'pointer', textAlign: 'left', background: 'transparent', color: 'var(--ink-2)', fontWeight: 600, fontSize: 14.5, fontFamily: 'var(--font-ui)' };
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 200, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', background: 'color-mix(in oklab, var(--ink) 34%, transparent)', backdropFilter: 'blur(3px)', animation: 'lumenFade .18s ease both' }}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={'More for ' + label} tabIndex={-1} onClick={e => e.stopPropagation()}
+        style={{ width: '100%', maxWidth: 480, maxHeight: '88%', display: 'flex', flexDirection: 'column', overflowY: 'auto', background: 'var(--surface)', border: '1px solid var(--line)', borderBottom: 'none', borderRadius: '18px 18px 0 0', boxShadow: '0 -16px 50px rgba(0,0,0,.25)', padding: '10px 10px calc(12px + env(safe-area-inset-bottom, 0px))', outline: 'none' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '2px 2px 8px', flexShrink: 0 }}>
+          <SkBadge initials={initials} av={av} pubkey={pubkey} size={36} radius={11} accent={accent} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontWeight: 700, fontSize: 15, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</div>
+            {facts && facts.length ? <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 4 }}>{facts}</div> : null}
+          </div>
+          <button onClick={onClose} aria-label={'Close: more for ' + label} title="Close" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, minWidth: 44, minHeight: 44, boxSizing: 'border-box', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}><Icon name="x" size={14} /></button>
+        </div>
+        <div style={{ height: 1, background: 'var(--line)', margin: '0 4px 6px', flexShrink: 0 }} />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          {actions.map(a => (
+            <button key={a.key} onClick={() => { a.onPick(); if (!a.keep) onClose(); }} aria-label={a.aria || a.label} title={a.title} style={{ ...row, color: a.tone === 'clay' ? 'var(--clay-ink)' : row.color, fontWeight: a.tone === 'clay' ? 700 : row.fontWeight }}>
+              <Icon name={a.icon} size={19} color={a.tone === 'clay' ? 'var(--clay)' : 'var(--ink-3)'} />
+              <span style={{ flex: 1, minWidth: 0 }}>
+                {a.label}
+                {a.sub ? <span style={{ display: 'block', fontSize: 12, fontWeight: 500, color: 'var(--ink-3)', lineHeight: 1.35, marginTop: 1 }}>{a.sub}</span> : null}
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function StewDashboard({ initial = 'overview' }) {
   const [tab, setTab] = React.useState(initial);
   const [settingsSection, setSettingsSection] = React.useState(null);   // deep-link a Settings PAGE (see SETTINGS_GROUPS); the four old tab keys are aliased
@@ -5701,6 +5755,8 @@ function DashMembers() {
   // steward-initiated link (no parent request): pick an adult as the child's guardian, from the child's row
   const [linkChild, setLinkChild] = React.useState(null);
   const [reseatFor, setReseatFor] = React.useState(null);   // member who lost their 12 words and is back on a new key
+  const narrow = useStewNarrow();                           // the phone's one-row member card (memberRow) + its ⋯ sheet
+  const [moreFor, setMoreFor] = React.useState(null);       // whose ⋯ sheet (StewMemberSheet) is open, by pubkey
   const [bulkOpen, setBulkOpen] = React.useState(false);   // bulk-invite (print join slips) — bring a congregation across
   // safeguarding (child marking, youth clearance, parent links) is OWNER-ONLY at the relay — a delegated
   // steward's writes are rejected. Hide those actions when acting as someone else's steward, so the UI
@@ -5896,10 +5952,97 @@ function DashMembers() {
   const activeM = members.filter(m => seen(m) >= cutoff && !isBlocked(m.pubkey) && !pendingSet.has(m.pubkey) && matchQ(m));
   const inactiveM = members.filter(m => seen(m) < cutoff && !isBlocked(m.pubkey) && !pendingSet.has(m.pubkey) && matchQ(m));
   const chatting = activeM.filter(m => m.count > 0).length;
+  // WHAT THE PHONE'S ⋯ SHEET OFFERS FOR A MEMBER — the desktop card's controls, in its order, behind the
+  // SAME gates: `!delegated` for the three that write minors:/approved:/guardians: (the relay reserves those
+  // to the church key), the `members` capability for Reconnect, `safeguarding` + the church's photo setting
+  // for the photo switch. Each `onPick` is the handler the desktop button calls; nothing here decides anything
+  // of its own. A change to a gate or a handler belongs in the desktop row and in this list both — the
+  // desktop JSX is left exactly as it was, so the two are kept side by side on purpose rather than shared.
+  const memberActions = (m) => {
+    const pk = m.pubkey, who = nameByPub[pk] || 'this member';
+    const minor = minorsSet.has(pk), cleared = approvedSet.has(pk), linked = !!(guardians[pk] && guardians[pk].length);
+    const out = [];
+    out.push({ key: 'copy', icon: copied === m.npub ? 'check' : 'link', label: copied === m.npub ? 'Copied ✓' : 'Copy npub', title: 'Copy npub', keep: true, onPick: () => doCopy(m.npub) });
+    if (confirmBlock === pk) {
+      out.push({ key: 'block', icon: 'shield', tone: 'clay', label: 'Block ' + who, sub: 'Bans them from posting and hides their messages', aria: 'Confirm: block ' + who, title: 'Confirm — bans them from posting & hides their messages', onPick: () => block(pk) });
+      out.push({ key: 'block-cancel', icon: 'x', label: 'Cancel', title: 'Cancel', keep: true, onPick: () => setConfirmBlock(null) });
+    } else {
+      out.push({ key: 'block', icon: 'shield', label: 'Remove / block', aria: 'Remove / block ' + who + ' — asks you to confirm', title: 'Remove / block this member', keep: true, onPick: () => setConfirmBlock(pk) });
+    }
+    if (!delegated) {
+      out.push({ key: 'child', icon: 'pray', label: minor ? 'No longer a child' : 'Mark as child', aria: (minor ? 'Unmark as a child: ' : 'Mark as a child: ') + who, title: minor ? 'Unmark as a child' : 'Mark as a child — they’ll only see child-safe groups, and adults can only DM them if cleared for youth', onPick: () => toggleMinor(pk) });
+      out.push({ key: 'clear', icon: 'shield', label: cleared ? 'Remove youth clearance' : 'Clear for youth', aria: (cleared ? 'Remove youth clearance from ' : 'Clear for youth work: ') + who + (cleared ? '' : ' — this also lets them message a child privately'), title: cleared ? 'Remove youth clearance' : 'Cleared to contact youth — mirror your church’s cleared-worker list. Only cleared adults can DM a child', onPick: () => toggleApproved(pk) });
+      if (minor) out.push({ key: 'parent', icon: 'users', label: linked ? 'Parents' : 'Link parent', title: 'Link this child to a parent / guardian — they can always reach each other and the parent can collect them at check-in', onPick: () => setLinkChild(pk) });
+    }
+    if (stewCapState('members').allowed) out.push({ key: 'reconnect', icon: 'swap', label: 'Reconnect', sub: 'Lost their 12 words and is back on a new phone', title: 'They lost their 12 words and are back on a new phone with a new key — put them back in their place here', onPick: () => setReseatFor(pk) });
+    if (stewCapState('safeguarding').allowed && photosAllowed && (m.hasPhoto || nophotoSet.has(pk))) {
+      out.push({ key: 'photo', icon: 'refresh', label: nophotoSet.has(pk) ? 'Allow photos again' : 'Turn off photo', title: nophotoSet.has(pk) ? 'Photos are off for this member — your church sees their symbol/initial, and they can’t set a new photo. Tap to allow photos again.' : 'Turn off photos for this member — your church sees their symbol/initial, and they can’t set a photo until you allow it again.', onPick: () => toggleNoPhoto(pk) });
+    }
+    return out;
+  };
+  // The facts the card's pills carried, for the sheet's header: everything but the two that stay on the row
+  // ("Child", "Cleared") and the two the row's second line already says (joined / inactive).
+  const memberFacts = (m) => {
+    const pk = m.pubkey, minor = minorsSet.has(pk), linked = !!(guardians[pk] && guardians[pk].length);
+    const f = [];
+    if (minor) f.push(<SkPill key="child" tint="clay">child</SkPill>);
+    if (approvedSet.has(pk)) f.push(<SkPill key="cleared" tint="gold">cleared for youth</SkPill>);
+    if (linked) f.push(<SkPill key="parents" tint="sage">parent: {guardians[pk].map(p => nameByPub[p] || 'linked').join(', ')}</SkPill>);
+    if (minor && !linked) f.push(<SkPill key="noguardian" tint="ink">no guardian</SkPill>);
+    if (parentSet.has(pk)) f.push(<SkPill key="parent" tint="sage">parent account</SkPill>);
+    if (minor && parentSet.has(pk)) f.push(<SkPill key="still" tint="clay">child · still listed as a guardian</SkPill>);
+    return f;
+  };
   const memberRow = (m, inactive) => {
     const named = !!m.name;
     const label = named ? m.name : 'Anonymous';
     const initials = (named ? m.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'AN').toUpperCase();
+    if (narrow) {
+      // ONE ROW, ABOUT THE AVATAR'S HEIGHT (P12, owner 2026-09-20 — the sheet's note has the numbers). Avatar ·
+      // name / handle · Chat · ⋯. The two safeguarding FACTS stay on the row as a small tag, and only for the
+      // members who have them (DOMAIN.md: a steward sees who is a child and who is cleared without hunting; a
+      // plain adult carries nothing). Every other control is in the ⋯ sheet, calling the same handlers.
+      // The NAME has the first line to itself — it is what a steward scans the list by, and beside a 44px Chat
+      // and a 44px ⋯ a 360px row leaves it ~130px, so a tag on the same line cut "Ruth Whitlock" to "Ruth …"
+      // (measured). The tag leads the SECOND line, ahead of the handle and the joined / last-seen text, which
+      // is the part that may ellipsise (the name wins the width fight here as it does on the desktop row).
+      // The per-member notice (minorNotice) is a moment about THIS person and follows the row as its own
+      // block, so the row itself never grows.
+      const tag = { padding: '2px 7px', fontSize: 9.5, letterSpacing: '.6px', flexShrink: 0, marginRight: 5 };
+      const btn = { border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 11, minWidth: 44, minHeight: 44, boxSizing: 'border-box', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0, fontFamily: 'var(--font-ui)' };
+      const status = m.count > 0 ? `${m.count} message${m.count === 1 ? '' : 's'} · last ${ago(m.lastTs)}` : `joined ${ago(m.joined)}`;
+      return (
+        <React.Fragment key={m.pubkey}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 6px 5px 10px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid var(--line)', opacity: inactive ? 0.62 : 1 }}>
+            <SkBadge initials={initials} av={m.av} pubkey={m.pubkey} size={36} radius={11} accent={SK_TINT[named ? 'gold' : 'sage'].fg} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <span style={{ display: 'block', fontWeight: 700, fontSize: 14.5, lineHeight: 1.3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
+              <div style={{ display: 'flex', alignItems: 'center', minWidth: 0 }}>
+                {minorsSet.has(m.pubkey) ? <SkPill tint="clay" style={tag}>Child</SkPill> : null}
+                {approvedSet.has(m.pubkey) ? <SkPill tint="gold" style={tag}>Cleared</SkPill> : null}
+                <div style={{ minWidth: 0, fontSize: 12, lineHeight: 1.3, color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={m.nip05 || m.npub}>
+                  {nameHandle(m)
+                    ? <span style={{ color: 'var(--sage-ink)', fontWeight: 700 }}>@{nameHandle(m)}</span>
+                    : <span style={{ fontFamily: 'var(--mono)' }}>{shortNpub(m.npub)}</span>}
+                  {' · '}{inactive ? 'inactive · ' : ''}{status}
+                </div>
+              </div>
+            </div>
+            <button onClick={() => window.dispatchEvent(new CustomEvent('steward-open-dm', { detail: { pubkey: m.pubkey, npub: m.npub, name: label, nip05: m.nip05 } }))} aria-label={'Chat with ' + label} title="Message privately" style={{ ...btn, color: 'var(--clay-ink)' }}>
+              <Icon name="chat" size={18} color="currentColor" /></button>
+            <button onClick={() => setMoreFor(m.pubkey)} aria-label={'More for ' + label} aria-haspopup="dialog" aria-expanded={moreFor === m.pubkey ? 'true' : 'false'} title="More" style={{ ...btn, color: 'var(--ink-3)' }}>
+              <Icon name="dots" size={18} color="currentColor" /></button>
+          </div>
+          {minorNotice && minorNotice.pk === m.pubkey ? (
+            <div role={minorNotice.tone === 'fail' ? 'alert' : 'status'} style={{ fontSize: 12.5, lineHeight: 1.45, padding: '9px 12px', borderRadius: 11,
+              background: minorNotice.tone === 'fail' ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'color-mix(in oklab, var(--gold) 12%, var(--surface))',
+              border: '1px solid ' + (minorNotice.tone === 'fail' ? 'color-mix(in oklab, var(--clay) 38%, var(--line))' : 'color-mix(in oklab, var(--gold) 34%, var(--line))'), color: 'var(--ink)' }}>
+              {minorNotice.text}
+            </div>
+          ) : null}
+        </React.Fragment>
+      );
+    }
     return (
       <div key={m.pubkey} style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '12px 14px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid var(--line)', opacity: inactive ? 0.62 : 1 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
@@ -6066,7 +6209,11 @@ function DashMembers() {
                     <div style={{ fontWeight: 700, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</div>
                     <div style={{ fontSize: 11.5, color: 'var(--ink-3)', fontFamily: nameHandle(m) ? 'var(--font-ui)' : 'var(--mono)' }}>{nameHandle(m) ? '@' + nameHandle(m) : shortNpub(m.npub)} · wants to join</div>
                   </div>
-                  <button onClick={() => admitMember(m.pubkey)} className="sk-btn sk-btn--clay" style={{ padding: '7px 12px', fontSize: 12.5, flexShrink: 0 }}><Icon name="check" size={14} color="var(--on-clay)" /> Approve</button>
+                  {/* ON THE ROW, NEVER BEHIND A MENU. Admission is the one act a steward takes on this list, and only
+                      a human at an unlocked console takes it (decided 2026-08-18) — so when the member rows were
+                      compressed to one line for the phone (P12), Approve stayed where Chat sits on a member's row.
+                      44px tall on a phone, the codebase's touch floor, like the row's other controls. */}
+                  <button onClick={() => admitMember(m.pubkey)} className="sk-btn sk-btn--clay" style={{ padding: '7px 12px', fontSize: 12.5, flexShrink: 0, ...(narrow ? { minHeight: 44, boxSizing: 'border-box' } : null) }}><Icon name="check" size={14} color="var(--on-clay)" /> Approve</button>
                   {/* TWO TAPS, LIKE THE MEMBERS LIST ALREADY REQUIRES. This ✕ sits a few pixels from
                       Approve, and one tap on it PERMANENTLY blocks the person AND rotates every one of the
                       church's keys — irreversible, from the screen a steward is fastest on. The members
@@ -6203,6 +6350,16 @@ function DashMembers() {
         </div>
         </React.Fragment>
       )}
+      {/* The phone's ⋯ sheet. Looked up by pubkey on every render so its labels follow the state they act on
+          ("Mark as child" becomes "No longer a child" once the list lands); it goes with the member if they are
+          blocked or filtered away while it is open. */}
+      {moreFor ? (() => {
+        const m = members.find(x => x.pubkey === moreFor && !isBlocked(x.pubkey));
+        if (!m) return null;
+        const named = !!m.name;
+        return <StewMemberSheet label={named ? m.name : 'Anonymous'} initials={(named ? m.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'AN').toUpperCase()} av={m.av} pubkey={m.pubkey} accent={SK_TINT[named ? 'gold' : 'sage'].fg}
+          facts={memberFacts(m)} actions={memberActions(m)} onClose={() => { setMoreFor(null); if (confirmBlock === m.pubkey) setConfirmBlock(null); }} />;
+      })() : null}
       {linkChild ? <GuardianLinkModal child={linkChild} childName={nameByPub[linkChild]} members={members} guardians={guardians} minorsSet={minorsSet} onLink={linkParent} onUnlink={unlinkParent} onClose={() => setLinkChild(null)} /> : null}
       {reseatFor ? <ReseatModal member={reseatFor} memberName={nameByPub[reseatFor] || 'this member'} realName={nameByPub[reseatFor] || ''} isMinor={minorsSet.has(reseatFor)} admittedList={admittedList} onClose={() => setReseatFor(null)} /> : null}
       {bulkOpen ? <BulkInviteModal onClose={() => setBulkOpen(false)} /> : null}

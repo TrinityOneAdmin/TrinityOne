@@ -122,6 +122,11 @@ async function memberRowFor({ minor = false, cleared = false, guardianOf = null,
       doCopy: () => {}, copied: null, confirmBlock: null, block: () => {}, setConfirmBlock: () => {},
       setLinkChild: () => {}, setReseatFor: () => {}, toggleNoPhoto: () => {},
       stewCapState: () => ({ allowed: false }),
+      // The phone's one-row card (P12, 2026-09-20): memberRow reads `narrow` and, on a phone, renders Chat + ⋯
+      // with the two controls under test moved into the ⋯ sheet (moreFor / setMoreFor). `false` is the desktop
+      // row this file has always sliced; scripts/the-member-card-is-one-row-on-a-phone.test.mjs drives the
+      // phone row and its sheet in a browser, against the relay.
+      narrow: false, moreFor: null, setMoreFor: () => {},
     });
   const tree = mod.memberRow({ pubkey: PK, npub: 'npub1abc', name: NAME, count: 3, lastTs: 1, joined: 1 }, false);
   const byLabel = (starts) => {

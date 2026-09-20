@@ -62,6 +62,9 @@ const furniture = () => ({
   // classic scripts share one global. That is the second caller list a change like this has.
   SkBadge: () => null, SkConfirm: () => null, DismissibleNote: (p) => (p && p.children) || null,
   StewHelpLink: (p) => (p && p.label) || null,
+  // useStewNarrow joined DashMembers on 2026-09-20 (P12: the member card is one row on a phone, with its
+  // actions behind ⋯). `false` here is the desktop row — the card these tests were written against.
+  useStewNarrow: () => false,
   useStewDialog: () => ({ current: null }), todayISO: () => '2026-09-07', stewCapState: () => ({ allowed: true }),
 });
 
