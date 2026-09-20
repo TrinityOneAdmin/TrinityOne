@@ -32,7 +32,7 @@ import { npubEncode } from 'nostr-tools/nip19';
 import { requireFreePort } from './test-ports.mjs';
 
 const CHROME = ['/usr/bin/chromium-browser', '/usr/bin/chromium', '/usr/bin/google-chrome'].find(p => existsSync(p));
-const PORT = 8868, CDP = 9369;   // 88xx: 8862 fits-a-360px-phone, 8864 sections-behind-a-menu, 8866 dialog-footers; 93xx taken: 9350-9358, 9360-9364, 9366, 9367, 9371, 9381, 9412
+const PORT = 8869, CDP = 9369;   // 88xx: 8862 fits-a-360px-phone, 8864 sections-behind-a-menu, 8866 dialog-footers, 8868 phone-layout-batch-a; 93xx taken: 9350-9358, 9360-9364, 9366, 9367, 9371, 9381, 9412
 const ROOT = new URL('..', import.meta.url).pathname;
 const PIN = 'cedar-harbour-lamp-42';
 const WORDS_WITHIN = 400;   // px from the card's top within which the words label must start
@@ -140,7 +140,13 @@ const MEASURE = `(() => {
   // the checkbox: reachable once scrolled to (the card body scrolls; that is allowed for the LAST control)
   let cbHit = 'absent', cbScrolled = null;
   if (cb) { cb.scrollIntoView({ block: 'center' }); cbHit = hitOf(cb); cbScrolled = r(cb); for (const el of scrollers) el.scrollTop = 0; }
-  return JSON.stringify({ found: true, vh: innerHeight, panel: { top: Math.round(pr.top), bottom: Math.round(pr.bottom), height: Math.round(pr.height) },
+  // ORDER, not just distance: the warning must come AFTER the words in the document. A short warning above
+  // the words still lands the label within 400px, so distance alone does not pin "words first" (found by the
+  // audit of this branch). The warning is found by its rendered words, not by a class.
+  const warning = [...panel.querySelectorAll('*')].find(el => el.children.length <= 3 && /not locked, gone/.test(el.textContent || '') && !/RECOVERY PHRASE/.test(el.textContent || ''));
+  const wordsBeforeWarning = !!(label && warning && (label.compareDocumentPosition(warning) & Node.DOCUMENT_POSITION_FOLLOWING));
+  const stepText = (panel.textContent || '').replace(/[ \\t\\r\\n]+/g, ' ');
+  return JSON.stringify({ found: true, vh: innerHeight, wordsBeforeWarning, warningTop: warning ? Math.round(warning.getBoundingClientRect().top) : null, stepText, panel: { top: Math.round(pr.top), bottom: Math.round(pr.bottom), height: Math.round(pr.height) },
     bodyScrollHeight: Math.max(0, ...scrollers.map(el => el.scrollHeight)),
     label: r(label), box: r(box), boxText: box ? (box.textContent || '').trim().split(/\\s+/).length : 0,
     checkbox: r(cb), checkboxHit: cbHit, checkboxScrolled: cbScrolled, continue: r(cont), continueHit, continueDisabled: cont ? cont.disabled : null });
@@ -170,6 +176,15 @@ test(`the twelve words start within ${WORDS_WITHIN}px of the card's top and are 
     console.log(`    card ${m.panel.top}..${m.panel.bottom} (${m.panel.height}px, body scrollHeight ${m.bodyScrollHeight}); words label ${into}px into the card, phrase box ${m.box.top}..${m.box.bottom}; checkbox ${JSON.stringify(m.checkbox)} → ${m.checkboxHit}; Continue ${JSON.stringify(m.continue)} → ${m.continueHit}`);
     assert.ok(into <= WORDS_WITHIN,
       `THE DEFECT: the words label starts ${into}px into the card (the audit measured ~605px) — a newcomer scrolls past the warning to reach the one thing the step is for`);
+    assert.equal(m.wordsBeforeWarning, true, `the words must come BEFORE the warning in the step, and they do not (label ${m.label.top}, warning ${m.warningTop})`);
+    // The three things AUDIT-2026-07-27 and name-privacy.test.mjs pinned about this step, now read off the
+    // RENDERED step rather than grepped out of app/stew-dashboard.jsx (CLAUDE.md rule 3): two copies in two
+    // places; "gone — not locked, gone"; and no backup file or relay can save it. The 07-27 wording "join it
+    // again" was cut on the owner's 09-10 less-copy rule; the concrete cost is "gone", and the help article
+    // console-words still spells out that every member joins again.
+    assert.match(m.stepText, /two paper copies, in two places/i, 'one paper copy in one place is how churches actually lose this');
+    assert.match(m.stepText, /not locked, gone/i, 'the consequence must be concrete — "cannot be recovered" reads as boilerplate');
+    assert.match(m.stepText, /not us, not your relay, not a backup file/i, 'stewards assume a backup file or the relay can save them; say plainly that neither can');
     assert.ok(m.label.top >= 0 && m.box.bottom <= m.vh,
       `the phrase box (${m.box.top}..${m.box.bottom}) is not fully inside the ${m.vh}px viewport with the card unscrolled`);
     assert.equal(m.checkboxHit, 'self', `the acknowledgement checkbox cannot be reached (elementFromPoint at its centre after scrolling to it → ${m.checkboxHit})`);

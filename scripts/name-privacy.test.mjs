@@ -97,24 +97,12 @@ test('the shipped bundle agrees with the source', () => {
 // the copy makes the consequence concrete. The ceremony (phrase hidden before the quiz, a different three on
 // re-read) was already right; the message was abstract.
 
-test('church setup states the concrete cost of losing the key, and asks for a second copy', () => {
-  // Shortened 2026-09-19 (console audit §A6, P11b): the words moved ABOVE the warning and the warning was cut
-  // to its two bold sentences — owner 2026-09-10, less instructional copy on screen; the fuller cost (every
-  // member joining again, the laptop that died) is the help article "Your church’s recovery phrase". What
-  // this test guards is unchanged in substance: the step still asks for two copies, still says the church is
-  // GONE rather than "cannot be recovered", and still says no backup file and no relay can save it. The slice
-  // runs to the NEXT WizShell, not a fixed 3000 chars, because the warning now sits at the end of the step.
-  const DASH = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
-  const at = DASH.indexOf('Your church’s recovery key');
-  assert.notEqual(at, -1, 'the recovery-key step is gone');
-  const end = DASH.indexOf('<WizShell', at + 10);
-  const body = DASH.slice(at, end > at ? end : at + 8000);
-  assert.match(body, /two paper copies, in two places/i, 'one paper copy in one place is how churches actually lose this');
-  assert.match(body, /not locked, gone/i, 'the consequence must be concrete — "cannot be recovered" reads as boilerplate');
-  assert.match(body, /not us, not your relay, not a backup file/i,
-    'stewards assume a backup file or the relay can save them; say plainly that neither can');
-});
-
+// 'church setup states the concrete cost of losing the key, and asks for a second copy' LIVED HERE and read
+// app/stew-dashboard.jsx as text — which CLAUDE.md rule 3 forbids for a behaviour claim (`false && ` leaves every
+// word in place). The same three assertions now run against the RENDERED recovery-key step in
+// scripts/the-recovery-words-come-first-on-a-phone.test.mjs, in a real browser at 360x730. Moved 2026-09-20 on
+// the audit of fix/console-copy-and-preconditions; the count here goes 8 -> 7, that file 2 -> 2 (assertions, not
+// tests, moved).
 test('the phrase is still hidden before the check — the ceremony must not regress', () => {
   const DASH = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
   assert.match(DASH, /Phrase hidden — answer from the paper copy you just wrote/,
