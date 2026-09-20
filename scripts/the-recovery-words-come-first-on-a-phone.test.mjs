@@ -99,13 +99,16 @@ before(async () => {
   };
 
   // The real path: Start a new church → the PIN gate → the wizard on step 0.
-  await sleep(9000);
+  // WAIT FOR THE SCREEN, NOT FOR A NUMBER — the same boot race 74eade2 fixed in the 360px file: this copy of
+  // its 9s/13s pauses lost the race inside the first full suite after the member-card merge (2/2 alone).
+  { const t0 = Date.now(); let seen = 'miss'; while (seen !== 'ok' && Date.now() - t0 < 90000) { await sleep(500); try { seen = await evalIn(`(() => [...document.querySelectorAll('button')].some(x => /Start a new church/i.test((x.textContent||'').trim())) ? 'ok' : 'miss')()`); } catch {} } }
   booted = await evalIn(click('/Start a new church/i'));
-  await sleep(2500);
+  { const t0 = Date.now(); let seen = 'miss'; while (seen !== 'ok' && Date.now() - t0 < 60000) { await sleep(500); try { seen = await evalIn(`(() => [...document.querySelectorAll('input')].some(x => (x.placeholder||'').includes('At least 8')) ? 'ok' : 'miss')()`); } catch {} } }
   await evalIn(type('At least 8', PIN));
   await evalIn(type('Type it again', PIN));
   await evalIn(click('/Set PIN/i'));
-  await sleep(13000);
+  // the wizard's first step is up when its panel is: poll for it, then settle
+  { const t0 = Date.now(); let up = false; while (!up && Date.now() - t0 < 90000) { await sleep(500); try { up = await evalIn(`!!document.querySelector('[data-stew-modal-panel]')`); } catch {} } await sleep(2000); }
 });
 
 after(async () => {
@@ -161,8 +164,12 @@ test('CONTROL: the console reached the wizard at 360x730, and Continue took it t
     assert.equal(await evalIn(type('Your church’s name', 'St Aidan of the Words')), 'ok', 're-anchor: no church-name field on step 0');
     await sleep(300);
     await pressInWizard('Continue');
-    await sleep(3500);
-    assert.match(await wizardTitle(), /recovery key/i, 're-anchor: Continue on step 0 did not reach the recovery-key step');
+    // Continue on step 0 names the church and registers it on the relay before it advances — network work,
+    // so wait for the step it lands on (up to 45s), not for a number: with the boot itself no longer padded
+    // by 13s, a fixed 3.5s here was the next race.
+    let title = '';
+    for (const t0 = Date.now(); !/recovery key/i.test(title) && Date.now() - t0 < 45000;) { await sleep(500); title = await wizardTitle(); }
+    assert.match(title, /recovery key/i, 're-anchor: Continue on step 0 did not reach the recovery-key step');
     assert.deepEqual(errors, [], 'the console threw on the way to the step:\n  ' + errors.join('\n  '));
   });
 
