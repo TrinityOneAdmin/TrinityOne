@@ -554,6 +554,13 @@ function StewardForcedPin() {
   const [pin2, setPin2] = useSt('');
   const [busy, setBusy] = useSt(false);
   const [err, setErr] = useSt('');
+  // WHICH ROUTE BROUGHT US HERE decides what the footer may promise. On "Start a new church" this gate fires
+  // before the wizard has shown the recovery words, so "recover the church via your 12-word phrase" pointed at
+  // something the steward had not seen (console audit 2026-09-19 §A5). The create path sets this flag one line
+  // by seedNewChurch() above; every other route — restore, adopt, an old install —
+  // arrives with the phrase already in the steward's hands.
+  let newChurch = false;
+  try { newChurch = localStorage.getItem('trinityone.steward.newchurch') === '1'; } catch (e) {}
   const submit = async () => {
     if (busy) return;
     // Same rule as the wizard: six minimum, digits fine. See the note there — the stricter version locked
@@ -588,20 +595,19 @@ function StewardForcedPin() {
       <div style={{ width: 'min(440px, 92vw)', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 22, boxShadow: 'var(--shadow-lg)', padding: 28, textAlign: 'center' }}>
         <Halo size={40} color="var(--ink)" spark="var(--clay)" />
         <h1 style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 21, margin: '12px 0 4px' }}>Set a console PIN</h1>
+        {/* ONE SENTENCE EACH (owner, 2026-09-10: less instructional copy on screen). The page it names is
+            Settings → Church key — "Settings → Security" is the delegates' page, and this gate is the owner's.
+            The fuller why lives in the help article "Your church’s recovery phrase". */}
         <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 18, textAlign: 'left' }}>
-          Your church key signs as the <b>whole church</b> — if it leaks, an attacker can impersonate
-          the church to every member. This encrypts the key on this device, so a stolen phone or
-          copied browser storage holds nothing usable <i>without it</i>. You can change it anytime under{' '}
-          <b>Settings → Security</b>.
+          This PIN encrypts the church key on this device, so a stolen phone or copied browser storage holds
+          nothing usable without it — change it any time under <b>Settings → Church key</b>.
           {/* AUDIT-2026-07-30. The old copy said "digits are fine" and set the floor at six. Six digits is a
               million possibilities — about half a minute on one gaming GPU once the encrypted file has been
               copied, because an attacker guessing offline never meets this screen's lockout. The honest ask is
               a generated password; a four-random-word passphrase is the memorable equivalent. Deliberately NOT
               "must contain a digit and a symbol": that rule produces Church#01 and rejects a real passphrase. */}
           <div style={{ marginTop: 10 }}>
-            <b>Use a password manager to generate one</b> if you can — that is the strongest option and you
-            never have to remember it. Otherwise pick four random words you can picture together. Avoid your
-            church's name, a year, or anything someone could read off your noticeboard.
+            <b>Use a password manager to generate one</b> if you can, or pick four random words you can picture together.
           </div>
         </div>
         <input type="password" aria-label="Choose a console PIN or passphrase" value={pin} autoFocus onChange={e => { setPin(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') submit(); }}
@@ -613,7 +619,9 @@ function StewardForcedPin() {
         {err ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, marginTop: 8 }}>{err}</div> : null}
         <button onClick={submit} disabled={!pin || !pin2 || busy} className="sk-btn sk-btn--clay" style={{ width: '100%', justifyContent: 'center', padding: '13px', fontSize: 15, marginTop: 14, opacity: (pin && pin2 && !busy) ? 1 : .5 }}><Icon name="lock" size={16} color="var(--on-clay)" /> {busy ? 'Setting…' : 'Set PIN & enter'}</button>
         <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 11, lineHeight: 1.5 }}>
-          Required. If you forget the PIN, recover the church via your 12-word phrase on any device.
+          {newChurch
+            ? 'Required — your church’s recovery words come next; they are the way back in if you forget this PIN.'
+            : 'Required — if you forget this PIN, the church’s 12-word recovery phrase restores it on any device.'}
         </div>
       </div>
     </div>

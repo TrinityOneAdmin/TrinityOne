@@ -1192,7 +1192,11 @@ function DashCalendar() {
         })() : (
           <div>
             <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 16, marginBottom: 12 }}>Upcoming services</div>
-            {upcoming.length === 0 ? <div style={{ fontSize: 13, color: 'var(--ink-3)' }}>No upcoming services. Add one on the Rota page.</div> : null}
+            {/* THE ROTA'S SERVICES, NOT THE CALENDAR'S EVENTS. The wizard's "regular meetings" (a Sunday Service among
+                them) are calendar events; this panel lists the rota's services, which are a different document. It
+                read "No upcoming services" directly under a Sunday Service the steward had just created (console
+                audit 2026-09-19 §A6), so the empty state now says which list it is talking about. */}
+            {upcoming.length === 0 ? <div role="status" style={{ fontSize: 13, color: 'var(--ink-3)' }}>Nothing on the rota yet — services you build on the Rota page appear here.</div> : null}
             {upcoming.map(s => { const c = coverageFor(s.id); return (
               <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: 11, borderRadius: 13, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', marginBottom: 9 }}>
                 <SchDateBlock dateStr={s.date} />

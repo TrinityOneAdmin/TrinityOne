@@ -97,17 +97,12 @@ test('the shipped bundle agrees with the source', () => {
 // the copy makes the consequence concrete. The ceremony (phrase hidden before the quiz, a different three on
 // re-read) was already right; the message was abstract.
 
-test('church setup states the concrete cost of losing the key, and asks for a second copy', () => {
-  const DASH = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
-  const at = DASH.indexOf('Your church’s recovery key');
-  assert.notEqual(at, -1, 'the recovery-key step is gone');
-  const body = DASH.slice(at, at + 3000);
-  assert.match(body, /second copy/i, 'one paper copy in one place is how churches actually lose this');
-  assert.match(body, /join it again/i, 'the consequence must be concrete — "cannot be recovered" reads as boilerplate');
-  assert.match(body, /not by us, not from your relay, not from a backup file/i,
-    'stewards assume a backup file or the relay can save them; say plainly that neither can');
-});
-
+// 'church setup states the concrete cost of losing the key, and asks for a second copy' LIVED HERE and read
+// app/stew-dashboard.jsx as text — which CLAUDE.md rule 3 forbids for a behaviour claim (`false && ` leaves every
+// word in place). The same three assertions now run against the RENDERED recovery-key step in
+// scripts/the-recovery-words-come-first-on-a-phone.test.mjs, in a real browser at 360x730. Moved 2026-09-20 on
+// the audit of fix/console-copy-and-preconditions; the count here goes 8 -> 7, that file 2 -> 2 (assertions, not
+// tests, moved).
 test('the phrase is still hidden before the check — the ceremony must not regress', () => {
   const DASH = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
   assert.match(DASH, /Phrase hidden — answer from the paper copy you just wrote/,

@@ -1298,29 +1298,20 @@ function StewSetupWizard({ church, onDone, onTab, onSettings, onInvite, onNewPos
   );
 
   if (step === 1) return (
-    <WizShell step={step} title="Your church’s recovery key" sub="These 12 words ARE your church — they sign everything you post. Write them on paper, and make a second copy you keep somewhere else. There is no way to reset this: not by us, not from your relay, not from a backup file."
+    <WizShell step={step} title="Your church’s recovery key" sub="These 12 words are your church — nothing else can restore it: not us, not your relay, not a backup file."
       footer={<React.Fragment>
         <button onClick={() => setStep(0)} className="sk-btn sk-btn--ghost" style={{ padding: '12px 16px' }}><Icon name="chevL" size={15} color="currentColor" /> Back</button>
         <div style={{ flex: 1 }} />
         <button onClick={() => { if (canContinue) next(); }} disabled={!canContinue} className="sk-btn sk-btn--clay" style={{ padding: '12px 20px', opacity: canContinue ? 1 : .5 }}>Continue <Icon name="chevR" size={15} color="var(--on-clay)" /></button>
       </React.Fragment>}>
-      {/* WHAT LOSING IT ACTUALLY COSTS. "The church can't be recovered" is true but abstract, and a steward
-          reads it as boilerplate. The realistic way a church loses this key is not theft — it is the laptop
-          dying, or the one person who set it up leaving. Say the consequence in the concrete, and ask for the
-          second copy here rather than hoping they infer it. AUDIT-2026-07-27. */}
-      <div style={{ display: 'flex', gap: 11, padding: '13px 15px', borderRadius: 12, marginBottom: 14,
-        background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 30%, var(--line))' }}>
-        <Icon name="shield" size={17} color="var(--clay)" style={{ flexShrink: 0, marginTop: 1 }} />
-        <div style={{ fontSize: 13.5, lineHeight: 1.55, color: 'var(--ink-2)' }}>
-          <b style={{ color: 'var(--ink)' }}>If these words are lost, the church is gone — not locked, gone.</b> You
-          would start a new one, and every member would have to join it again. Your groups, your rota, your
-          records and your history stay sealed to the old key, and nobody can open them.
-          <div style={{ marginTop: 7 }}>Most churches don’t lose this to theft. They lose it because the laptop
-          died, or the person who set it up moved on. <b>Two paper copies, in two places</b> — that is the whole
-          precaution.</div>
-        </div>
-      </div>
-      <div style={lbl}>RECOVERY PHRASE — 12 WORDS</div>
+      {/* THE WORDS FIRST. The warning used to sit above them — two paragraphs, so on a 360px phone the twelve
+          words began 605px down a 1085px step and a newcomer scrolled past the warning to reach the one thing
+          the step is for (console audit 2026-09-19 §A6). The words are now the first thing on the step and the
+          warning follows them, cut to its two bold sentences (owner 2026-09-10: less instructional copy on
+          screen). The concrete cost — every member joining again, the laptop that died — is the help article
+          "Your church’s recovery phrase" (app/help-data.jsx, console-words). AUDIT-2026-07-27 asked for that
+          cost to be stated here; the two sentences that remain are the ones it found load-bearing. */}
+      <div style={lbl} data-wiz-words="1">RECOVERY PHRASE — 12 WORDS</div>
       {/* The phrase and the check must NEVER share a screen. With the words still visible the "quick check" is
           copying from the box above — it proves nothing about what was written on paper, and it teaches the
           steward to click through the one ceremony standing between them and losing the church key for good.
@@ -1372,6 +1363,14 @@ function StewSetupWizard({ church, onDone, onTab, onSettings, onInvite, onNewPos
       {!phrase ? (
       <div style={{ marginTop: 12, fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5 }}>This key was imported, so its recovery phrase isn’t shown here — keep the copy you set up with somewhere safe. You can continue.</div>
       ) : null}
+      <div style={{ display: 'flex', gap: 11, padding: '13px 15px', borderRadius: 12, marginTop: 14,
+        background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 30%, var(--line))' }}>
+        <Icon name="shield" size={17} color="var(--clay)" style={{ flexShrink: 0, marginTop: 1 }} />
+        <div style={{ fontSize: 13.5, lineHeight: 1.55, color: 'var(--ink-2)' }}>
+          <b style={{ color: 'var(--ink)' }}>If these words are lost, the church is gone — not locked, gone.</b>{' '}
+          <b style={{ color: 'var(--ink)' }}>Two paper copies, in two places</b> — that is the whole precaution.
+        </div>
+      </div>
       <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px solid var(--line)' }}>
         {!relayOpen ? (
           <button onClick={() => setRelayOpen(true)} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 13, fontFamily: 'var(--font-ui)', padding: 0 }}>Running your own relay? Connect it →</button>
@@ -4002,7 +4001,14 @@ function GroupLeadersModal({ group, onClose }) {
   const [savedLeaders, setSavedLeaders] = React.useState(() => new Set(group.leaders || []));
   const [told, setTold] = React.useState(() => new Set());
   const toggle = (pk) => setSel(s => { const n = new Set(s); n.has(pk) ? n.delete(pk) : n.add(pk); return n; });
+  // NOBODY TO TICK. "The leaders you choose — the people you tick below" is the default, and on a church nobody
+  // has joined yet the list below it is empty — so the dialog offered a choice with no one to choose and a live
+  // Save that would publish an empty leader list (console audit 2026-09-19 §C). The precondition is named where
+  // the list would be, and Save waits until there is someone to tick or a different option is chosen.
+  const nobodyToTick = members.length === 0;
+  const saveBlocked = pol === 'leaders' && nobodyToTick;
   const save = async () => {
+    if (saveBlocked) return;
     setSaving(true); setSaveErr(''); setNotTold([]);
     const before = new Set(savedLeaders);
     // ONE publish, not two. publishGroup rebuilds the group document from scratch, and both setGroupLeaders
@@ -4092,7 +4098,7 @@ function GroupLeadersModal({ group, onClose }) {
           </div>
         ) : null}
         <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 7 }}>
-          {members.length === 0 ? <div style={{ fontSize: 13.5, color: 'var(--ink-3)', textAlign: 'center', padding: 24 }}>No app members yet. Once people join your church they’ll be selectable here.</div>
+          {nobodyToTick ? <div role="status" style={{ fontSize: 13.5, color: 'var(--ink-3)', textAlign: 'center', padding: 24 }}>Nobody has joined your church on the app yet, so there is no one to tick.</div>
             : members.map(m => {
               const on = sel.has(m.pubkey);
               const nm = m.name || ('Anon · ' + (m.npub || m.pubkey).slice(-6));
@@ -4121,7 +4127,7 @@ function GroupLeadersModal({ group, onClose }) {
         ) : null}
         <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>{notTold.length ? 'Close' : 'Cancel'}</button>
-          <button onClick={save} disabled={saving} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: saving ? 0.6 : 1 }}><Icon name="check" size={15} color="var(--on-clay)" /> {saving ? 'Saving…' : 'Save'}</button>
+          <button onClick={save} disabled={saving || saveBlocked} title={saveBlocked ? 'No one to tick yet — choose another option, or wait until someone joins.' : undefined} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: (saving || saveBlocked) ? 0.6 : 1 }}><Icon name="check" size={15} color="var(--on-clay)" /> {saving ? 'Saving…' : 'Save'}</button>
         </div>
       </div>
     </div>
@@ -4972,6 +4978,10 @@ function BulkUploadModal({ kind, onClose }) {
   const [done, setDone] = React.useState(0);
   const [rejected, setRejected] = React.useState([]);   // names of non-text files we couldn't read
   const inputRef = React.useRef(null);
+  // A PHONE HAS NOTHING TO DROP FROM. "Drop files here, or click to choose" is right on a desktop and wrong on
+  // the APK, where the hidden file input is the only control (console audit 2026-09-19 §C). On a narrow screen
+  // the zone says what it is: a button to choose files.
+  const narrow = useStewNarrow();
 
   const parse = (name, raw) => {
     const baseTitle = name.replace(/\.(txt|md|markdown)$/i, '').replace(/[-_]+/g, ' ').trim() || 'Untitled';
@@ -5018,13 +5028,13 @@ function BulkUploadModal({ kind, onClose }) {
       <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={'Bulk upload ' + (isPlans ? 'reading plans' : 'devotionals')} tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 560, maxWidth: '96%', maxHeight: '90%', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', overflow: 'hidden', animation: 'lumenScale .2s ease both' }}>
         <div style={{ padding: '24px 26px 0' }}>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22 }}>Bulk upload {isPlans ? 'reading plans' : 'devotionals'}</div>
-          <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 16px' }}>{isPlans ? 'Drop one or more text files — each file becomes a plan, with one Bible reference per line (a “# Title” first line is used as the name).' : 'Drop one or more Markdown / text files — each becomes a devotional. The first “# Heading” (or the filename) is the title.'} They land as <b>drafts</b>, so you can arrange and schedule them before anything reaches members.</p>
+          <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 16px' }}>{isPlans ? 'Each text file becomes a plan, with one Bible reference per line (a “# Title” first line is used as the name).' : 'Each Markdown / text file becomes a devotional. The first “# Heading” (or the filename) is the title.'} They land as <b>drafts</b>, so you can arrange and schedule them before anything reaches members.</p>
         </div>
         <div style={{ padding: '0 26px' }}>
           <div onDragOver={e => { e.preventDefault(); setDrag(true); }} onDragLeave={() => setDrag(false)} onDrop={e => { e.preventDefault(); setDrag(false); addFiles(e.dataTransfer.files); }} onClick={() => inputRef.current && inputRef.current.click()}
             style={{ border: '2px dashed ' + (drag ? 'var(--clay)' : 'var(--line)'), borderRadius: 16, background: drag ? 'color-mix(in oklab, var(--clay) 7%, var(--surface))' : 'var(--surface-2)', padding: '24px 18px', textAlign: 'center', cursor: 'pointer', transition: 'all .15s' }}>
             <Icon name="share" size={26} color="var(--ink-3)" />
-            <div style={{ fontWeight: 700, fontSize: 14.5, marginTop: 8 }}>Drop files here, or click to choose</div>
+            <div style={{ fontWeight: 700, fontSize: 14.5, marginTop: 8 }}>{narrow ? 'Choose files' : 'Drop files here, or click to choose'}</div>
             <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 3 }}>.md · .markdown · .txt</div>
             <input ref={inputRef} type="file" accept=".md,.markdown,.txt,text/plain,text/markdown" multiple onChange={e => { addFiles(e.target.files); e.target.value = ''; }} style={{ display: 'none' }} />
           </div>
