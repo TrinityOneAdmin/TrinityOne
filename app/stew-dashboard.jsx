@@ -1660,11 +1660,19 @@ function StewSectionsMenu({ nav, tab, onPick, onHelp, onClose }) {
 // card is lost — it is one tap further away, and "Child" / "Cleared" stay on the row itself.
 function StewMemberSheet({ label, initials, av, pubkey, accent, facts, actions, onClose }) {
   const dlgRef = useStewDialog(onClose);
+  // Android Back must call the CURRENT onClose, not the first render's. DashMembers hands in a new onClose
+  // on every render, and the one that matters is the one that knows a block is armed ("Confirm: block …"
+  // showing) and disarms it. Registered once with `[]`, the listener kept the first closure, which saw no
+  // block armed — so ⋯ → Remove / block → Back left the arm in place, and the NEXT ⋯ opened with a one-tap
+  // "Confirm: block" in the slot "Remove / block" normally fills. Found by the audit of this branch with a
+  // fake App plugin in the real console. useStewDialog's Escape path already keeps a ref for exactly this.
+  const closeRef = React.useRef(onClose);
+  closeRef.current = onClose;
   React.useEffect(() => {
     let sub;
-    try { const P = window.Capacitor && window.Capacitor.Plugins; if (P && P.App && P.App.addListener) sub = P.App.addListener('backButton', () => onClose()); } catch (e) {}
+    try { const P = window.Capacitor && window.Capacitor.Plugins; if (P && P.App && P.App.addListener) sub = P.App.addListener('backButton', () => { try { closeRef.current && closeRef.current(); } catch (e) {} }); } catch (e) {}
     return () => { try { sub && sub.remove && sub.remove(); } catch (e) {} };
-  }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
   const row = { display: 'flex', alignItems: 'center', gap: 12, width: '100%', minHeight: 48, flexShrink: 0, padding: '10px 12px', borderRadius: 11, border: 'none', cursor: 'pointer', textAlign: 'left', background: 'transparent', color: 'var(--ink-2)', fontWeight: 600, fontSize: 14.5, fontFamily: 'var(--font-ui)' };
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 200, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', background: 'color-mix(in oklab, var(--ink) 34%, transparent)', backdropFilter: 'blur(3px)', animation: 'lumenFade .18s ease both' }}>

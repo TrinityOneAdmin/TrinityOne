@@ -420,3 +420,58 @@ test(`6. under "See inactive" a member unseen for 90 days is the same one row (a
   console.log(`    inactive row ${m.height}px: "${m.text}"`);
   assert.deepEqual(errors, [], 'the console threw:\n  ' + errors.join('\n  '));
 });
+
+// ── 7. every sheet action reaches ITS OWN handler — the audit's sabotage ─────────────────────────────
+// The audit of 2d3bc63 wired the sheet's "Clear for youth" to toggleMinor (mark a child instead of clear
+// an adult) and all seven rows above stayed green: only "Mark as a child" was proved at the point of use.
+// So: clear the plain adult from the sheet and read the tag the relay hands back. A wrong handler would
+// paint "Child" here, and the row would say so.
+test('7. "Clear for youth" from the sheet clears THAT adult — the row grows "Cleared", never "Child" — and the sheet then offers to remove it', SKIP, async () => {
+  await setSize(360, 730);
+  await sleep(600);
+  const NAME = PEOPLE.adult2.name;
+  assert.deepEqual((await rowOf(NAME)).tags, [], 're-anchor: the adult under test already carries a tag');
+  await pressMore(NAME);
+  await pickInSheet('Clear for youth work: ' + NAME + ' — this also lets them message a child privately');
+  let tags = [];
+  for (const t0 = Date.now(); Date.now() - t0 < 12000 && !tags.includes('Cleared');) { await sleep(400); tags = (await rowOf(NAME)).tags; }
+  assert.deepEqual(tags, ['Cleared'], `after "Clear for youth" from the sheet, ${NAME}'s row shows ${JSON.stringify(tags)} — the wrong handler ran, or none`);
+  await pressMore(NAME);
+  const s = await sheetOf();
+  assert.ok(s.items.some(i => i.label === 'Remove youth clearance from ' + NAME), `the reopened sheet does not offer to remove the clearance: ${JSON.stringify(s.items.map(i => i.label))}`);
+  await pickInSheet('Remove youth clearance from ' + NAME);
+  for (const t0 = Date.now(); Date.now() - t0 < 12000 && tags.includes('Cleared');) { await sleep(400); tags = (await rowOf(NAME)).tags; }
+  assert.deepEqual(tags, [], `after removing the clearance, ${NAME}'s row still shows ${JSON.stringify(tags)}`);
+  assert.deepEqual(errors, [], 'the console threw:\n  ' + errors.join('\n  '));
+});
+
+// ── 8. Android Back disarms an armed block — the audit's defect ──────────────────────────────────────
+// 2d3bc63 registered the sheet's Capacitor backButton listener once, so it kept the FIRST render's onClose,
+// which had seen no block armed. ⋯ → Remove / block → Back → the arm survived, and the next ⋯ opened with
+// "Confirm: block …" where "Remove / block" belongs — one tap from a ban and a key rotation. A fake App
+// plugin is installed BEFORE the sheet mounts (the listener is read at mount), Back is fired through it,
+// and the reopened sheet must be disarmed exactly as it is after Escape.
+test('8. ⋯ → Remove / block → Android Back: the sheet closes disarmed, and the next ⋯ offers "Remove / block", not "Confirm: block"', SKIP, async () => {
+  const NAME = PEOPLE.adult2.name;
+  const installed = await evalIn(`(() => { window.__backs = []; window.Capacitor = window.Capacitor || {}; window.Capacitor.Plugins = window.Capacitor.Plugins || {};
+    window.Capacitor.Plugins.App = { addListener: (ev, fn) => { if (ev === 'backButton') window.__backs.push(fn); return { remove: () => { window.__backs = window.__backs.filter(f => f !== fn); } }; } }; return 'ok'; })()`);
+  assert.equal(installed, 'ok');
+  await pressMore(NAME);
+  await pickInSheet('Remove / block ' + NAME + ' — asks you to confirm');
+  await sleep(300);
+  let s = await sheetOf();
+  assert.equal(s.open, true, 'the sheet closed on the first (arming) tap of Remove / block');
+  assert.ok(s.items.some(i => i.label === 'Confirm: block ' + NAME), `the block is not armed after one tap: ${JSON.stringify(s.items.map(i => i.label))}`);
+  const fired = await evalIn(`(() => { const n = window.__backs.length; window.__backs.forEach(f => f()); return n; })()`);
+  assert.equal(fired, 1, `expected exactly one backButton listener while the sheet is open, found ${fired}`);
+  await sleep(600);
+  assert.equal((await sheetOf()).open, false, 'Android Back did not close the sheet');
+  await pressMore(NAME);
+  s = await sheetOf();
+  const labels = s.items.map(i => i.label);
+  assert.ok(!labels.some(l => /^Confirm: block /.test(l)), `THE DEFECT: after Back, the reopened sheet still has the block ARMED — one tap would ban ${NAME}: ${JSON.stringify(labels)}`);
+  assert.ok(labels.some(l => l === 'Remove / block ' + NAME + ' — asks you to confirm'), `the reopened sheet does not offer the two-tap "Remove / block": ${JSON.stringify(labels)}`);
+  await escape();
+  assert.equal(await evalIn(`window.__backs.length`), 0, 'the backButton listener was not removed when the sheet closed');
+  assert.deepEqual(errors, [], 'the console threw:\n  ' + errors.join('\n  '));
+});
