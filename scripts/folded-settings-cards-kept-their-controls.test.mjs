@@ -205,29 +205,22 @@ test('practical care still brings its own settings with it when it is on', () =>
     'the care-team picker is gone, and an empty care team is a church where "ask for help" reaches nobody');
 });
 
-test('the giving setup is still inside the row it was folded into — and, while giving is locked for the pilot, it is disabled with the reason', () => {
+test('the giving setup is still reachable from the row it was folded into', () => {
   // The card wrapper is gone, so this link IS the whole way in to the Lightning address. Nothing else on
   // the Features tab opens it.
   // (Noted while writing this and NOT fixed here, because it predates the fold and belongs in its own
   // change: the field below has no aria-label and no title, only a placeholder. The a11y sweep in
   // console-settings-a11y.test.mjs never reached it, because it renders DashGivingPanel with an empty
   // church, where the setup is collapsed and the field does not exist.)
-  //
-  // SINCE THE CONSOLE AUDIT OF 2026-09-19 (§C) the link is DISABLED while the pilot lock is on: it sat two
-  // lines under "Locked during the pilot" and opened a Lightning-address editor for a feature no member can
-  // use. So on the real page the link is present, disabled, and a press opens nothing; the "it opens the
-  // editor" claim is made against the panel mounted with the lock off, in
-  // scripts/console-surfaces-name-their-preconditions.test.mjs.
   const s = settings('features');
   const open = buttonSaying(card(s.tree, 'Congregation features'), 'Set up the Lightning address');
-  assert.equal(open.length, 1, 'the collapsed giving setup link is gone from the card — the row is all there is');
-  assert.equal(open[0].props.disabled, true,
-    'the Lightning-address link is live under "Locked during the pilot" — an action offered without its precondition');
-  assert.match(String(open[0].props.title || ''), /locked during the pilot/i, 'the disabled link does not say why');
+  assert.equal(open.length, 1, 'the collapsed giving setup has no way to open — the row is now all there is');
   open[0].props.onClick();
   const after = s.render();
-  assert.equal(find(after, n => n.type === 'input' && n.props.inputMode === 'email').length, 0,
-    'pressing the disabled link still opened the Lightning-address editor');
+  const field = find(after, n => n.type === 'input' && n.props.inputMode === 'email');
+  assert.equal(field.length, 1, 'opening the giving setup renders no Lightning-address field');
+  assert.equal(find(card(after, 'Congregation features'), n => n.type === 'input' && n.props.inputMode === 'email').length, 1,
+    'the giving setup opened somewhere other than inside the card the row now lives in');
 });
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────
