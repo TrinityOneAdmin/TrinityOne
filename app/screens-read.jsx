@@ -638,7 +638,12 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked }) {
     read();
     return window.Bible.subscribe ? window.Bible.subscribe(read) : undefined;
   }, [open, loc.book, loc.chap, ctx.version]);
-  const sx = useR(0);
+  // SWIPE-TO-CLOSE ONLY COUNTS WHEN THE SWIPE IS MOSTLY SIDEWAYS. This measured the finger's rightward travel
+  // alone: end more than 56px right of where it started and the panel closed. A long thumb-scroll down these
+  // notes is rarely vertical — 60px of drift over 400px of scrolling counted as a swipe, and the panel slid
+  // away mid-read (owner, on the phone, 2026-09-20). The reader's own page-turn swipe (onSwipeEnd below) has
+  // always required the sideways distance to beat the vertical by SWIPE_DOMINANCE; this now asks the same.
+  const sx = useR(null);
   // the reader's own notes for this chapter (keys look like "John 1:4")
   const prefix = label + ':';
   const myNotes = Object.keys(ctx.notes || {}).filter(k => k.indexOf(prefix) === 0)
@@ -651,8 +656,14 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked }) {
     <React.Fragment>
       {open && !docked ? <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 24, background: 'rgba(20,15,10,.32)', animation: 'trinityFade .25s ease both' }} /> : null}
       <div
-        onTouchStart={(e) => { sx.current = e.touches[0].clientX; }}
-        onTouchEnd={(e) => { if (!docked && e.changedTouches[0].clientX - sx.current > 56) onClose(); }}
+        onTouchStart={(e) => { sx.current = (e.touches && e.touches.length === 1) ? { x: e.touches[0].clientX, y: e.touches[0].clientY } : null; }}
+        onTouchCancel={() => { sx.current = null; }}
+        onTouchEnd={(e) => {
+          const s = sx.current; sx.current = null;
+          if (docked || !s || !e.changedTouches || !e.changedTouches.length) return;
+          const dx = e.changedTouches[0].clientX - s.x, dy = e.changedTouches[0].clientY - s.y;
+          if (dx > 56 && dx > Math.abs(dy) * 1.7) onClose();   // right, and mostly right — a scroll that drifts is not a swipe
+        }}
         style={docked
           ? { position: 'absolute', inset: 0, background: 'var(--surface)', display: 'flex', flexDirection: 'column' }
           : { position: 'absolute', top: 0, right: 0, bottom: 0, zIndex: 25, width: 'min(440px, 88%)', background: 'var(--surface)', borderLeft: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', transform: open ? 'translateX(0)' : 'translateX(101%)', transition: 'transform .32s cubic-bezier(.32,.72,0,1)', display: 'flex', flexDirection: 'column' }}>
