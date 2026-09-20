@@ -576,15 +576,31 @@ function PublishErrorBanner() {
             screen at the wrapper's scroll origin whatever the message's length, and the sentence wraps round
             it rather than being squeezed beside it. NOT labelled "Show…": the geometry test finds the Show
             pill by that aria-label prefix and must keep seeing exactly none of them while expanded. */}
-        {modalUp && openWide ? <button onClick={() => setOpenWide(false)} aria-label="Collapse this message to one line" title="Collapse this message to one line"
+        {/* 44px TO THE FINGER, 28px TO THE EYE. The pill paints at 28 because the sentence wraps round it;
+            `stew-reach-44` (steward.html) adds an invisible ::before that extends the HIT area 9px above and
+            below, past 44 — the codebase’s own floor — without a taller pill and without reaching sideways,
+            where Dismiss is. The pill’s top sits 11px inside the card, so the extra 9 never leaves it. */}
+        {modalUp && openWide ? <button onClick={() => setOpenWide(false)} aria-label="Collapse this message to one line" title="Collapse this message to one line" className="stew-reach-44"
           style={{ pointerEvents: 'auto', float: 'right', margin: '-2px 0 4px 10px', border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '4px 9px', minHeight: 28, cursor: 'pointer', fontSize: 11.5, fontWeight: 700, fontFamily: 'var(--font-ui)', color: 'var(--ink-2)' }}>Collapse</button> : null}
         {text}
       </div>
       {/* THE WAY BACK TO THE WHOLE SENTENCE, and it has to be a real 24px-plus target on a cheap Android
           phone (WCAG 2.5.8) like the dismiss beside it. A summary with no way to read the rest would be a
           worse banner than the one that cropped the dialog. */}
+      {/* AS TALL AS THE STRIP, AND NO TALLER. The BUTTON is 36px with -6px of vertical margin (the card's 5px
+          padding + 1px border), so it is exactly as tall as the painted card and every pixel of it is inside;
+          the 24px pill the eye sees is a span inside it, unchanged. NOT `alignSelf: 'stretch'` like Dismiss:
+          a stretched item with negative margins holds no height of its own, and the strip fell from 36 to
+          30px when it was tried (measured 2026-09-19) — the 24px pill is what sets the strip's height, so
+          the button must still carry 24 in the flex line, which 36 - 12 of margin is. Measured 2026-09-19:
+          the target was 24px against the codebase's 44px floor. 44 is NOT reachable here without a taller
+          strip — the strip is 36px and steward.html's dialog-shortening rule depends on that (reference/
+          UI-AUDIT-PLAN-console-apk.md §2 item 2) — so this is the strip's height, the whole of what exists.
+          No horizontal reach: Dismiss is beside it and the two must not overlap
+          (scripts/the-error-banner-clears-a-dialog-on-the-phone.test.mjs). */}
       {clamped ? <button onClick={() => setOpenWide(true)} aria-label="Show the whole message" title="Show the whole message"
-        style={{ pointerEvents: 'auto', border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '4px 9px', minHeight: 24, cursor: 'pointer', flexShrink: 0, fontSize: 11.5, fontWeight: 700, fontFamily: 'var(--font-ui)', color: 'var(--ink-2)' }}>Show</button> : null}
+        style={{ pointerEvents: 'auto', border: 'none', background: 'none', padding: 0, minHeight: 36, margin: '-6px 0', display: 'flex', alignItems: 'center', cursor: 'pointer', flexShrink: 0, fontFamily: 'var(--font-ui)' }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', boxSizing: 'border-box', border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '4px 9px', minHeight: 24, fontSize: 11.5, fontWeight: 700, color: 'var(--ink-2)' }}>Show</span></button> : null}
       {/* ⚠ A TARGET BIGGER THAN ITS CARD IS NOT A BIGGER TARGET. TWO DIFFERENT SHAPES, ONE PER STATE.
           IN FLOW (no dialog) the card is 171px tall and 44x44 fits inside it with room to spare, so the old
           trick stands unchanged: `padding: 14` with `margin: -14` hit-tests 44x44 while the flex line still
@@ -1632,6 +1648,15 @@ function StewDashboard({ initial = 'overview' }) {
   const [settingsIntent, setSettingsIntent] = React.useState(null);     // a one-shot action on that page (e.g. open the Set-PIN dialog)
   const [tick, setTick] = React.useState(0);   // a capability key arriving is not React state — nudge a re-render, and re-run the mint
   const openSettings = (section = null, intent = null) => { setSettingsSection(section); setSettingsIntent(intent); setTab('settings'); };
+  // PICKING "SETTINGS" WHILE ALREADY IN SETTINGS GOES BACK TO ITS INDEX. On a phone the list and a page are
+  // never on screen together, and picking the section again from ☰ (or the avatar) is how a steward asks for
+  // the list — it used to do nothing, because setTab('settings') on 'settings' is a no-op to React, so the
+  // page stayed open and only the small "All settings" link led back (audit 2026-09-19 §E, "cost me six wrong
+  // captures"). Bumping this key remounts DashSettings with no `initialSection`, which is the index on a phone
+  // and the first page in a browser. A remount rather than a prop on purpose: a revealed recovery phrase is
+  // hidden again by it, which is the right side to fall on for "I pressed Settings".
+  const [settingsEpoch, setSettingsEpoch] = React.useState(0);
+  const pickTab = (k) => { if (k === 'settings' && tab === 'settings') setSettingsEpoch(n => n + 1); setTab(k); };
   const [invite, setInvite] = React.useState(new URLSearchParams(location.search).get('invite') === '1');
   const [posting, setPosting] = React.useState(new URLSearchParams(location.search).get('newpost') === '1');
   const [addingTeam, setAddingTeam] = React.useState(false);
@@ -1817,7 +1842,7 @@ function StewDashboard({ initial = 'overview' }) {
       {tab === 'finance' && <DashFinance />}
       {tab === 'manna' && <DashManna />}
       {tab === 'meals' && (stewCapState('care').allowed ? <DashMeals /> : <StewCapBlocked cap='care' />)}
-      {tab === 'settings' && <DashSettings onTab={setTab} initialSection={settingsSection} initialIntent={settingsIntent} onSectionConsumed={() => { setSettingsSection(null); setSettingsIntent(null); }} />}
+      {tab === 'settings' && <DashSettings key={settingsEpoch} onTab={setTab} initialSection={settingsSection} initialIntent={settingsIntent} onSectionConsumed={() => { setSettingsSection(null); setSettingsIntent(null); }} />}
     </React.Fragment>
   );
   // "New post" and "New team" both write content, so both need the `content` capability — and both sat in the
@@ -1845,7 +1870,7 @@ function StewDashboard({ initial = 'overview' }) {
       {tab === 'rota'
         ? _capBtn(_contentCap.allowed, _contentCap.why, 'New team', 'plus', () => setAddingTeam(true), 'Create a new serving team')
         : _capBtn(_contentCap.allowed, _contentCap.why, 'New post', 'send', () => setPosting(true), 'Write a new post for your church')}
-      <button onClick={() => setTab('settings')} title="Settings" aria-label="Settings" style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer', borderRadius: 11, ...(narrow ? { minWidth: 44, minHeight: 44, display: 'flex', alignItems: 'center', justifyContent: 'center' } : {}) }}><SkBadge initials={initials} picture={church.picture} size={narrow ? 32 : 36} radius={999} accent="var(--sage)" /></button>
+      <button onClick={() => pickTab('settings')} title="Settings" aria-label="Settings" style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer', borderRadius: 11, ...(narrow ? { minWidth: 44, minHeight: 44, display: 'flex', alignItems: 'center', justifyContent: 'center' } : {}) }}><SkBadge initials={initials} picture={church.picture} size={narrow ? 32 : 36} radius={999} accent="var(--sage)" /></button>
     </React.Fragment>
   );
 
@@ -1863,7 +1888,7 @@ function StewDashboard({ initial = 'overview' }) {
             (reference/UI-AUDIT-PLAN-console-apk.md §0). The header that stood here before was a wordmark row,
             the church card, and nine pills wrapping onto three rows: 233px, with the church's content
             starting 235px down a 730px screen. See StewSectionsMenu for the drawer and what it must do. */}
-        {menu ? <StewSectionsMenu nav={nav} tab={tab} onPick={(k) => { setMenu(false); setTab(k); }} onHelp={() => { setMenu(false); setHelp(true); }} onClose={() => setMenu(false)} /> : null}
+        {menu ? <StewSectionsMenu nav={nav} tab={tab} onPick={(k) => { setMenu(false); pickTab(k); }} onHelp={() => { setMenu(false); setHelp(true); }} onClose={() => setMenu(false)} /> : null}
         {help && window.StewardHelp ? <window.StewardHelp onClose={() => setHelp(false)} /> : null}
         <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', background: 'var(--paper)' }}>
           <div style={{ flexShrink: 0, background: church.isNetwork ? 'color-mix(in oklab, var(--clay) 7%, var(--surface))' : 'var(--surface)', borderBottom: '1px solid var(--line)', padding: '6px 8px', display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -4306,7 +4331,14 @@ function DashRelaysCard() {
               <div key={r.url} title={refusedWhy ? 'This relay refused our last change and said: ' + refusedWhy : undefined} style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '9px 12px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
                 <div style={{ width: 26, height: 26, borderRadius: 8, background: 'var(--surface)', color: up ? 'var(--sage-ink)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="globe" size={15} color="currentColor" /></div>
                 <div style={{ flex: 1, minWidth: 140, fontWeight: 700, fontSize: 12.5, fontFamily: 'var(--mono)', overflowWrap: 'anywhere', lineHeight: 1.35 }}>{r.url}</div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexShrink: 0 }}>
+                {/* THE CHIPS WRAP. This strip was one unbreakable line — `flexShrink: 0`, no wrap — so on a
+                    360px phone "Shared · Refused our last change · ● Answering · 118ms" ran to x 609 and the
+                    health of the relay was off the right edge of the screen (audit 2026-09-19 §E,
+                    p/here/01-17-settings-relays-refusing-fix.png). The row already wraps this strip under
+                    the address; now the strip wraps within itself too, so on a wide card it is still one
+                    line and on a phone the status drops under the chips. `maxWidth: 100%` keeps it inside
+                    the card's padding box rather than letting `flexShrink: 0` overrule the wrap. */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap', minWidth: 0, maxWidth: '100%' }}>
                   {self ? <SkPill tint="clay">Self-hosted</SkPill> : <SkPill tint="ink">Shared</SkPill>}
                   {/* REACHABLE AND IN-OUR-NETWORK ARE TWO DIFFERENT FACTS, and a relay that is one but not
                       the other must not look fine. Under the closed network nothing is published to an
@@ -5863,11 +5895,18 @@ function DashMembers() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
           <SkBadge initials={initials} av={m.av} pubkey={m.pubkey} size={36} radius={11} accent={SK_TINT[named ? 'gold' : 'sage'].fg} />
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
-              <span style={{ fontWeight: 700, fontSize: 14.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 1 }}>{label}</span>
+            {/* THE NAME WINS THE WIDTH FIGHT. At 360px the name shrank to "R…" while the handle beside it
+                showed in full (audit 2026-09-19 §E, full/portrait/07-members.png): the name was the only
+                flex item allowed to shrink. Now the name never shrinks below its own text (capped at the row
+                so a very long name still ellipsises), and it is the HANDLE that gives way — its text is in a
+                span of its own because text-overflow does not apply to an inline-flex box, only to a block
+                whose children are text. The row clips so the handle's gap cannot poke past the card. */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0, overflow: 'hidden' }}>
+              <span style={{ fontWeight: 700, fontSize: 14.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 0, maxWidth: '100%' }}>{label}</span>
               {nameHandle(m)
-                ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 11.5, color: 'var(--sage-ink)', fontWeight: 700, flexShrink: 0 }} title={m.nip05 || m.npub}>@{nameHandle(m)} <Icon name="check" size={11} stroke={3} color="var(--sage)" /></span>
-                : <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={m.npub}>{shortNpub(m.npub)}</span>}
+                ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 11.5, color: 'var(--sage-ink)', fontWeight: 700, flexShrink: 1, minWidth: 0 }} title={m.nip05 || m.npub}>
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>@{nameHandle(m)}</span> <Icon name="check" size={11} stroke={3} color="var(--sage)" style={{ flexShrink: 0 }} /></span>
+                : <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 1, minWidth: 0 }} title={m.npub}>{shortNpub(m.npub)}</span>}
             </div>
             <div style={{ fontSize: 12.5, color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.count > 0 ? `${m.count} message${m.count === 1 ? '' : 's'} · last ${ago(m.lastTs)}` : `joined ${ago(m.joined)} · hasn’t posted yet`}</div>
           </div>
