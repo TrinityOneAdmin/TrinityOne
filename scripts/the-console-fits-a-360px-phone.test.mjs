@@ -99,7 +99,11 @@ before(async () => {
     if(!i) return 'miss';
     const set=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
     set.call(i, ${JSON.stringify(val)}); i.dispatchEvent(new Event('input',{bubbles:true})); return 'ok'; })()`;
-  await sleep(9000);
+  // WAIT FOR THE BUTTON, NOT FOR A NUMBER. This was `await sleep(9000)`: enough alone, and lost the boot race
+  // in 2 of 8 full-suite runs on 2026-09-19/20 (the machine is busy, the page loads later, 'Start a new church'
+  // is not there yet, and every row after it fails for want of a dashboard). Same fix as ebdd343 made in
+  // the dialog-footers file: look every half-second, up to 90s, then carry on the moment it is there.
+  { const t0 = Date.now(); let seen = 'miss'; while (seen !== 'ok' && Date.now() - t0 < 90000) { await sleep(500); try { seen = await evalIn(`(() => [...document.querySelectorAll('button')].some(x => /Start a new church/i.test((x.textContent||'').trim())) ? 'ok' : 'miss')()`); } catch {} } }
   // ⚠ THE FIRST-RUN WIZARD IS KEPT OFF (2026-09-19). Until the hamburger nav it was left up here, deliberately,
   // and the note that follows is why that was a trap worth recording. It is off now because the sections are
   // a DIALOG on a phone and ☰ does nothing while a modal is up — the wizard registers as one — so with it on
@@ -117,7 +121,8 @@ before(async () => {
   await evalIn(type('At least 8', 'cedar-harbour-lamp-42'));
   await evalIn(type('Type it again', 'cedar-harbour-lamp-42'));
   await evalIn(click('/Set PIN/i'));
-  await sleep(13000);
+  // Likewise here: the dashboard is "up" when the sections ☰ is on screen; a fixed 13s was the second guess.
+  { const t0 = Date.now(); let up = false; while (!up && Date.now() - t0 < 90000) { await sleep(500); try { up = await evalIn(`!!document.querySelector('button[aria-label="Sections"]')`); } catch {} } await sleep(1500); }
 
   // ⚠ THE FIRST-RUN WIZARD USED TO BE ON SCREEN AT THIS POINT, AND THAT WAS A TRAP TO KNOW ABOUT.
   // It is a full-screen flow with a blurred backdrop of its own, rendered AFTER every header modal in the
