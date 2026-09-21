@@ -107,7 +107,10 @@ before(async () => {
     if(!i) return 'miss';
     const set=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
     set.call(i, ${JSON.stringify(val)}); i.dispatchEvent(new Event('input',{bubbles:true})); return 'ok'; })()`;
-  await sleep(9000);
+  // WAIT FOR THE BUTTON, NOT FOR A NUMBER — the boot race 74eade2 fixed in the 360px file, then 316cd4e in the
+  // recovery-words file; this copy of the same 9s/13s pauses went red 10/10 in two consecutive full-suite runs
+  // on 2026-09-20/21 (10/10 alone). Poll for 'Start a new church', up to 90s.
+  { const t0 = Date.now(); let seen = 'miss'; while (seen !== 'ok' && Date.now() - t0 < 90000) { await sleep(500); try { seen = await evalIn(`(() => [...document.querySelectorAll('button')].some(x => /Start a new church/i.test((x.textContent||'').trim())) ? 'ok' : 'miss')()`); } catch {} } }
   // KEEP THE FIRST-RUN WIZARD OFF. StewDashboard shows it when `newchurch` is set and `wizard.done` is not;
   // seedNewChurch (app/steward-root.jsx) sets the first and DELETES the second, deliberately, so that a second
   // church on one device still gets setup. Setting `done` before creating the church therefore does nothing,
@@ -117,11 +120,12 @@ before(async () => {
   await evalIn(`(() => { const orig = Storage.prototype.removeItem; Storage.prototype.removeItem = function (k) { if (k === 'trinityone.steward.wizard.done') return; return orig.call(this, k); };
     localStorage.setItem('trinityone.steward.wizard.done', '1'); return 'ok'; })()`);
   booted = await evalIn(click('/Start a new church/i'));
-  await sleep(2500);
+  { const t0 = Date.now(); let seen = 'miss'; while (seen !== 'ok' && Date.now() - t0 < 60000) { await sleep(500); try { seen = await evalIn(`(() => [...document.querySelectorAll('input')].some(x => (x.placeholder||'').includes('At least 8')) ? 'ok' : 'miss')()`); } catch {} } }
   await evalIn(type('At least 8', 'cedar-harbour-lamp-42'));
   await evalIn(type('Type it again', 'cedar-harbour-lamp-42'));
   await evalIn(click('/Set PIN/i'));
-  await sleep(13000);
+  // the dashboard is up when ☰ is: poll for it, then settle
+  { const t0 = Date.now(); let up = false; while (!up && Date.now() - t0 < 90000) { await sleep(500); try { up = await evalIn(`!!document.querySelector('button[aria-label="Sections"]')`); } catch {} } await sleep(2000); }
 });
 
 after(async () => {
