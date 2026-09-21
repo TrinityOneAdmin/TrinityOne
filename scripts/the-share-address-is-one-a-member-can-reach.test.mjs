@@ -45,11 +45,13 @@ globalThis.fetch = function (input, init) {
   return real.call(this, input, init);
 };\n`;
 // What startCloudflared() waits for: the trycloudflare URL and a "Registered tunnel connection" line, then a
-// process that stays up. Two lines and a sleep are the whole of it.
+// process that stays up. Two lines and a sleep are the whole of it — and the sleep ends when the gateway
+// that spawned it is gone, because SIGKILL on the gateway does not reach its children and the first cut of
+// this left ten of these loops running for ever (measured: one per test run, until pkill).
 const FAKE_CF = `#!/bin/sh
 echo "INF |  https://${TUNNEL_HOST}  |" >&2
 echo "INF Registered tunnel connection connIndex=0" >&2
-while true; do sleep 1; done
+P=$PPID; while kill -0 $P 2>/dev/null; do sleep 1; done
 `;
 
 let gw = null;
