@@ -57,14 +57,18 @@ done
 LOCAL_SHA="$(git rev-parse --verify --quiet "refs/tags/$TAG^{commit}" || true)"
 [ -n "$LOCAL_SHA" ] || die "there is no tag '$TAG' in this checkout — git fetch --tags, or tag the release first"
 command -v gh >/dev/null 2>&1 || die "the GitHub CLI (gh) is not installed — it is how the assets are uploaded"
-REMOTE_TAG="$(gh release view "$TAG" --json tagName --jq .tagName 2>/dev/null || true)"
-[ "$REMOTE_TAG" = "$TAG" ] || die "there is no GitHub Release for '$TAG' yet — push the tag and let CI (relay-desktop.yml) create it, then run this again"
-REF="$(gh api "repos/$REPO/git/ref/tags/$TAG" --jq '.object.type + " " + .object.sha' 2>/dev/null || true)"
+# --repo on every gh call, so the guard and the upload can never answer "which repository?" two different
+# ways (release view/upload would otherwise infer it from the git remote; api would not). gh's stderr is kept
+# and shown, so "not logged in" or "no network" reads as what it is, not as "no Release yet".
+GH_ERR="$(mktemp)"; trap 'rm -f "$GH_ERR"' EXIT
+REMOTE_TAG="$(gh release view "$TAG" --repo "$REPO" --json tagName --jq .tagName 2>"$GH_ERR" || true)"
+[ "$REMOTE_TAG" = "$TAG" ] || die "there is no GitHub Release for '$TAG' yet (gh said: $(tr -d '\n' < "$GH_ERR")) — push the tag and let CI (relay-desktop.yml) create it, then run this again"
+REF="$(gh api "repos/$REPO/git/ref/tags/$TAG" --jq '.object.type + " " + .object.sha' 2>"$GH_ERR" || true)"
 REMOTE_SHA="${REF#* }"
 if [ "${REF%% *}" = "tag" ]; then   # an annotated tag: one more hop to the commit it names
-  REMOTE_SHA="$(gh api "repos/$REPO/git/tags/$REMOTE_SHA" --jq .object.sha 2>/dev/null || true)"
+  REMOTE_SHA="$(gh api "repos/$REPO/git/tags/$REMOTE_SHA" --jq .object.sha 2>"$GH_ERR" || true)"
 fi
-[ -n "$REMOTE_SHA" ] || die "could not read which commit '$TAG' names on GitHub"
+[ -n "$REMOTE_SHA" ] || die "could not read which commit '$TAG' names on GitHub (gh said: $(tr -d '\n' < "$GH_ERR"))"
 [ "$REMOTE_SHA" = "$LOCAL_SHA" ] || die "'$TAG' names $REMOTE_SHA on GitHub but $LOCAL_SHA here — the Suite CI built and this bundle would disagree; fetch the tag and try again"
 ok "$TAG → $LOCAL_SHA, and GitHub agrees"
 
@@ -76,7 +80,7 @@ PUB="$DIR/relay-app/release-pubkey.pem"
 command -v openssl >/dev/null 2>&1 || die "openssl is missing"
 
 # ── 3. build, sign, and CHECK before anything leaves this box ──────────────────────────────────────────────
-TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
+TMP="$(mktemp -d)"; trap 'rm -rf "$TMP" "$GH_ERR"' EXIT
 say "building the bundle for $TAG"
 RELEASE_REF="$TAG" bash "$DIR/scripts/build-strict-tgz.sh" "$TMP/bundle.tgz" "$TAG" || die "the bundle build failed"
 [ -s "$TMP/bundle.tgz" ] || die "the build produced no bundle"
@@ -104,7 +108,7 @@ if [ "$DRY" = 1 ]; then
 fi
 say "uploading to the $TAG release"
 # shellcheck disable=SC2086
-gh release upload "$TAG" $FILES --clobber || die "the upload failed — nothing to undo, run it again"
+gh release upload "$TAG" --repo "$REPO" $FILES --clobber || die "the upload failed — nothing to undo, run it again"
 for a in $ASSETS; do ok "https://github.com/$REPO/releases/download/$TAG/$a"; done
 echo "  latest: https://github.com/$REPO/releases/latest/download/bundle.tgz  (points here once this is the newest non-prerelease)"
 exit 0

@@ -33,6 +33,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, chmodSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -246,6 +247,10 @@ test('install.sh with a GITHUB RELEASE source fetches the assets flat, and keeps
     assert.equal(r.codeSource, r.src, 'relay/code-source is not the release address');
     assert.equal(r.origin, 'https://app.trinityone.church', 'with a GitHub code source the app origin must default to the host the phones already check — a release carries no APKs');
     assert.match(r.out, /Installing the boot service/, 'the script did not reach the systemd step');
+    // the run prints the fingerprint of the key it pinned (the test key here), so the operator sees the number
+    // the guide and the header name — or does not, and stops
+    const fp = createHash('sha256').update(readFileSync(join(d, 'release.pub'))).digest('hex');
+    assert.match(r.out, new RegExp('release key sha256 ' + fp), 'the run does not print the pinned key\'s fingerprint');
   } finally { rmSync(d, { recursive: true, force: true }); }
   const d2 = fixture();
   try {
@@ -313,6 +318,17 @@ test('with no code-source file the updater pulls from the origin\'s /relay-app/,
     assert.ok(r.asked.includes('http://code.test/relay-app/bundle.tgz') && r.asked.includes('http://code.test/relay-app/bundle.sig'), 'the origin was not asked under /relay-app/: ' + r.asked.join(', '));
     assert.equal(r.code, 'console.log("the genuine build")\n', 'the new build was not unpacked');
     assert.equal(r.status, 0, 'the update did not end healthy:\n' + r.out.slice(-800));
+  } finally { rmSync(d, { recursive: true, force: true }); }
+});
+
+test('a GitHub-release code source and NO origin: the code updates, no installer is asked for, the update is healthy', { skip: HAS_OPENSSL ? false : 'no openssl' }, () => {
+  const d = fixture();
+  try {
+    const r = runUpdater(d, { codeSource: 'http://code.test/releases/latest/download' });
+    assert.equal(r.code, 'console.log("the genuine build")\n', 'the new build was not unpacked:\n' + r.out.slice(-800));
+    assert.ok(!r.asked.some((u) => /\.apk$/.test(u)), 'an installer was asked for although the box has no app origin: ' + r.asked.join(', '));
+    assert.equal(r.status, 0, 'the update did not end healthy:\n' + r.out.slice(-800));
+    assert.equal(r.state && r.state.state, 'ok', 'update-status.json does not record success: ' + JSON.stringify(r.state));
   } finally { rmSync(d, { recursive: true, force: true }); }
 });
 

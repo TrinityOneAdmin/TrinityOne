@@ -163,7 +163,7 @@ loadSettings();
 //     already checks for updates (app/update-check.jsx) and the one the console links members to. The seed
 //     is copied ONLY when the file does not exist: an operator who clears it (an empty file) stays cleared.
 //   • the operator, from the control panel, through POST /settings {origin} — admin-gated, same trust as
-//     install.sh's --src, since it decides where the installers members download come from.
+//     install.sh's --origin, since it decides where the installers members download come from.
 //
 // LIVE, NOT A BOOT-TIME CONSTANT. Every reader below consults the `let` on each call, so a change from the
 // panel takes effect at once and the panel can say "in use now" rather than "restart the relay".
@@ -5583,7 +5583,7 @@ function serveStatic(req, res) {
           return { freeBytes: free, totalBytes: total, usedPct: total ? Math.round((1 - free / total) * 100) : null };
         } catch (e) { return null; }
       })(),
-      version: BUILD.sha, versionShort: BUILD.short, builtAt: BUILD.date, origin: ORIGIN,   // for the dashboard's update check
+      version: BUILD.sha, versionShort: BUILD.short, builtAt: BUILD.date, origin: ORIGIN,   // where this box's installers come from (the dashboard reads it; the code source is on /update)
       // C1: on a RELEASE HOST, what this box would hand the fleet if a relay pulled right now. Absent on an
       // ordinary relay. Surfaced so "which code is being released?" is answerable without shell access —
       // a8 ran a parked branch's WIP commit for a day and nothing anywhere said so.
@@ -6540,7 +6540,9 @@ function serveStatic(req, res) {
           try {
             const r = await fetch(base + '/bundle.json', { cache: 'no-store', signal: AbortSignal.timeout(6000) });
             const j = await r.json();
-            if (j && typeof j.sha === 'string' && /^[0-9a-f]{40}$/.test(j.sha)) latest = { version: j.sha, versionShort: j.sha.slice(0, 7), builtAt: j.builtAt || '', tag: j.tag || '' };
+            // Typed field by field: bundle.json is an unsigned description from a source the operator chose, and
+            // the panel calls .slice on builtAt — a number there threw inside loadUpdate and left the card blank.
+            if (j && typeof j.sha === 'string' && /^[0-9a-f]{40}$/.test(j.sha)) latest = { version: j.sha, versionShort: j.sha.slice(0, 7), builtAt: typeof j.builtAt === 'string' ? j.builtAt.slice(0, 40) : '', tag: typeof j.tag === 'string' ? j.tag.slice(0, 60) : '' };
           } catch {}
         } else if (codeSrc) {
           try {

@@ -38,13 +38,14 @@ const LATEST_SHA = 'f'.repeat(40);
 
 // One impostor plays every part: a GitHub release (flat bundle.json under /releases/latest/download) and a
 // TrinityOne relay (/status). It logs what it was asked.
-let host = null; const asked = [];
+let host = null; const asked = []; let hostile = false;
 before(async () => {
   host = await H.startImpostor({
     name: 'code-source',
     handler: (req, res, url) => {
       asked.push(url.pathname);
-      if (url.pathname === '/releases/latest/download/bundle.json') return H.sendJson(res, { tag: 'relay-v9.9.9', sha: LATEST_SHA, sha256: 'a'.repeat(64), size: 1, builtAt: '2026-09-21T00:00:00+00:00', publishedAt: '2026-09-21T01:00:00Z' });
+      // `hostile`: the same sha with every other field the wrong type — what a mis-edited code source can serve
+      if (url.pathname === '/releases/latest/download/bundle.json') return H.sendJson(res, hostile ? { tag: { x: 1 }, sha: LATEST_SHA, builtAt: 12345 } : { tag: 'relay-v9.9.9', sha: LATEST_SHA, sha256: 'a'.repeat(64), size: 1, builtAt: '2026-09-21T00:00:00+00:00', publishedAt: '2026-09-21T01:00:00Z' });
       if (url.pathname === '/status') return H.sendJson(res, { ok: true, version: 'e'.repeat(40), versionShort: 'eeeeeee', builtAt: '2026-09-20T00:00:00Z' });
       res.writeHead(404); res.end('nothing here');
     },
@@ -119,6 +120,15 @@ test('GET /update reads bundle.json from a GitHub-shaped code source, reports it
     // and the installer fetch is still refused — the installers have nowhere to come from
     const f = await box.post('/relay-app/fetch-apk');
     assert.equal(f.status, 400, 'fetch-apk did not refuse with no origin');
+    // bundle.json is an unsigned description: every field but sha is typed on the way in, because the panel
+    // calls .slice on builtAt and a number there threw inside loadUpdate and left the software card blank
+    hostile = true;
+    try {
+      const h = await box.get('/update');
+      assert.equal(h.body.latest && h.body.latest.version, LATEST_SHA, 'a well-formed sha beside ill-typed fields was dropped');
+      assert.equal(typeof h.body.latest.builtAt, 'string', 'latest.builtAt passed through as a ' + typeof h.body.latest.builtAt);
+      assert.equal(typeof h.body.latest.tag, 'string', 'latest.tag passed through as a ' + typeof h.body.latest.tag);
+    } finally { hostile = false; }
   } finally { box.stop(); }
 });
 

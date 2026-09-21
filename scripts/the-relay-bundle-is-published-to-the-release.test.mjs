@@ -51,6 +51,9 @@ function releaseHost() {
   git(dir, ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'test: the test key is the release key here']);
   git(dir, ['tag', TAG]);
   const sha = git(dir, ['rev-parse', TAG + '^{commit}']);
+  // the working tree then drifts from the tag — a release host is usually on some other branch — so a row
+  // can tell "install.sh as of the tag" from "install.sh as it happens to be on disk"
+  writeFileSync(join(dir, 'relay-app', 'install.sh'), readFileSync(join(dir, 'relay-app', 'install.sh'), 'utf8') + '# WORKING-TREE-SENTINEL: not at the tag\n');
   // the scripts under test are the WORKING TREE's, not the clone's committed copies
   cpSync(join(ROOT, 'scripts', 'publish-relay-bundle.sh'), join(dir, 'scripts', 'publish-relay-bundle.sh'));
   cpSync(join(ROOT, 'scripts', 'build-strict-tgz.sh'), join(dir, 'scripts', 'build-strict-tgz.sh'));
@@ -58,26 +61,32 @@ function releaseHost() {
   cpSync(join(ROOT, 'node_modules', 'esbuild'), join(nm, 'esbuild'), { recursive: true, dereference: false });
   cpSync(join(ROOT, 'node_modules', '@esbuild'), join(nm, '@esbuild'), { recursive: true, dereference: false });
   symlinkSync('../esbuild/bin/esbuild', join(nm, '.bin', 'esbuild'));
-  // the fake gh: `release view <tag>` answers from gh/releases/<tag>; `api …/git/ref/tags/<tag>` from
-  // gh/tags/<tag>; `release upload` copies the files into gh/uploaded/<tag>/; every call lands in gh/log
-  const gh = join(scratch, 'gh'); mkdirSync(join(gh, 'releases'), { recursive: true }); mkdirSync(join(gh, 'tags')); mkdirSync(join(gh, 'uploaded'));
+  // the fake gh: `release view <tag>` answers from gh/releases/<tag>; `api …/git/ref/tags/<tag>` prints
+  // "<type> <sha>" from gh/tags/<tag> (a lightweight tag names the commit; an annotated one names a tag
+  // object, which `api …/git/tags/<sha>` resolves from gh/tagobjs/<sha>); `release upload` copies the files
+  // into gh/uploaded/<tag>/; every call lands in gh/log. Every call must carry --repo, or the fake refuses.
+  const gh = join(scratch, 'gh'); mkdirSync(join(gh, 'releases'), { recursive: true }); mkdirSync(join(gh, 'tags')); mkdirSync(join(gh, 'tagobjs')); mkdirSync(join(gh, 'uploaded'));
   const bin = join(scratch, 'bin'); mkdirSync(bin);
   writeFileSync(join(bin, 'gh'), `#!/usr/bin/env bash
 GH=${JSON.stringify(gh)}
 printf '%s\\n' "$*" >> "$GH/log"
 case "$1 $2" in
-  "release view") t="$3"; [ -f "$GH/releases/$t" ] || { echo "release not found" >&2; exit 1; }; echo "$t";;
+  "release view") t="$3"; case " $* " in *" --repo TrinityOneAdmin/TrinityOne "*) ;; *) echo "fake gh: release view without --repo" >&2; exit 1;; esac
+       [ -f "$GH/releases/$t" ] || { echo "release not found" >&2; exit 1; }; echo "$t";;
   "api "*) p="$2"; case "$p" in
-       repos/*/git/ref/tags/*) t="\${p##*/}"; [ -f "$GH/tags/$t" ] || exit 1; echo "commit $(cat "$GH/tags/$t")";;
-       *) exit 1;; esac;;
-  "release upload") t="$3"; shift 3; mkdir -p "$GH/uploaded/$t"; for f in "$@"; do case "$f" in --*) ;; *) cp "$f" "$GH/uploaded/$t/";; esac; done;;
+       repos/TrinityOneAdmin/TrinityOne/git/ref/tags/*) t="\${p##*/}"; [ -f "$GH/tags/$t" ] || { echo "HTTP 404: Not Found" >&2; exit 1; }; cat "$GH/tags/$t";;
+       repos/TrinityOneAdmin/TrinityOne/git/tags/*) o="\${p##*/}"; [ -f "$GH/tagobjs/$o" ] || { echo "HTTP 404: Not Found" >&2; exit 1; }; cat "$GH/tagobjs/$o";;
+       *) echo "fake gh: unexpected api path $p" >&2; exit 1;; esac;;
+  "release upload") t="$3"; shift 3; case " $* " in *" --repo TrinityOneAdmin/TrinityOne "*) ;; *) echo "fake gh: release upload without --repo" >&2; exit 1;; esac
+       mkdir -p "$GH/uploaded/$t"; skip=0; for f in "$@"; do if [ "$skip" = 1 ]; then skip=0; continue; fi; case "$f" in --repo) skip=1;; --*) ;; *) cp "$f" "$GH/uploaded/$t/";; esac; done;;
   *) echo "fake gh: $*" >&2; exit 1;;
 esac
 `); chmodSync(join(bin, 'gh'), 0o755);
   const host = {
     scratch, dir, sha, gh, bin,
     releaseExists(t = TAG) { writeFileSync(join(gh, 'releases', t), ''); },
-    remoteTag(t, s) { writeFileSync(join(gh, 'tags', t), s); },
+    remoteTag(t, s) { writeFileSync(join(gh, 'tags', t), 'commit ' + s + '\n'); },
+    annotatedTag(t, s) { const o = 'ab'.repeat(20); writeFileSync(join(gh, 'tags', t), 'tag ' + o + '\n'); writeFileSync(join(gh, 'tagobjs', o), s + '\n'); },
     run(args, env = {}) {
       const r = spawnSync('bash', [join(dir, 'scripts', 'publish-relay-bundle.sh'), ...args],
         { cwd: dir, encoding: 'utf8', env: { ...process.env, PATH: bin + ':' + process.env.PATH, RELEASE_KEY: join(scratch, 'release.key'), ...env }, timeout: 180000 });
@@ -159,11 +168,35 @@ test('with the right key it uploads exactly the named assets, the signature veri
     assert.equal(j.tag, TAG); assert.equal(j.sha, h.sha, 'bundle.json names a commit other than the tag\'s');
     assert.equal(j.sha256, sha256(up('bundle.tgz')), 'bundle.json\'s sha256 is not the uploaded bundle\'s');
     assert.equal(j.builtAt, git(h.dir, ['show', '-s', '--format=%cI', h.sha]), 'bundle.json\'s builtAt is not the tagged commit\'s date, which is what version.txt carries and the panel compares');
-    assert.equal(readFileSync(up('install.sh'), 'utf8'), git(h.dir, ['show', TAG + ':relay-app/install.sh']) + '\n', 'the uploaded install.sh is not the tag\'s relay-app/install.sh');
+    const atTag = git(h.dir, ['show', TAG + ':relay-app/install.sh']) + '\n';
+    assert.equal(readFileSync(up('install.sh'), 'utf8'), atTag, 'the uploaded install.sh is not the tag\'s relay-app/install.sh');
+    assert.doesNotMatch(readFileSync(up('install.sh'), 'utf8'), /WORKING-TREE-SENTINEL/, 'the uploaded install.sh is the working tree\'s, not the tag\'s — a release host on a WIP branch would ship the wrong installer');
     // and the bundle is the tag's tree, stamped as such
     const vt = execFileSync('tar', ['xzfO', up('bundle.tgz'), './version.txt'], { encoding: 'utf8' });
     assert.equal(vt.split('\n')[0].trim(), h.sha, 'the bundle\'s version.txt does not name the tagged commit');
     for (const a of ASSETS) assert.match(r.out, new RegExp('https://github\\.com/TrinityOneAdmin/TrinityOne/releases/download/' + TAG + '/' + a.replace('.', '\\.')), 'the script does not print the address of ' + a);
+  } finally { h.stop(); }
+});
+
+test('an ANNOTATED tag on GitHub is followed to its commit before the two are compared', { skip: HAS_OPENSSL ? false : 'no openssl' }, () => {
+  const h = releaseHost();
+  try {
+    h.releaseExists(); h.annotatedTag(TAG, h.sha);
+    const r = h.run([TAG, '--dry']);
+    assert.equal(r.status, 0, 'an annotated tag naming the same commit was refused:\n' + r.out.slice(-800));
+    assert.match(r.log, /git\/tags\/abab/, 'the tag object was never dereferenced: ' + r.log);
+    h.annotatedTag(TAG, 'c'.repeat(40));
+    const bad = h.run([TAG, '--dry']);
+    assert.notEqual(bad.status, 0, 'an annotated tag naming ANOTHER commit was accepted');
+    assert.match(bad.out, /would disagree/, 'the refusal is not the disagreement sentence: ' + bad.out);
+  } finally { h.stop(); }
+});
+
+test('gh\'s own complaint reaches the operator — "not logged in" is not reported as "no Release yet"', { skip: HAS_OPENSSL ? false : 'no openssl' }, () => {
+  const h = releaseHost();
+  try {
+    const r = h.run([TAG]);   // no Release in the fake → gh says "release not found"
+    assert.match(r.out, /gh said: release not found/, 'the die sentence does not carry what gh said: ' + r.out);
   } finally { h.stop(); }
 });
 
