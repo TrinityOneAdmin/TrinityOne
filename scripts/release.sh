@@ -9,6 +9,11 @@
 #   scripts/release.sh --apk      # apk only
 #   scripts/release.sh --no-gw    # don't restart the local dev gateway
 #   scripts/release.sh --dry      # show every step without committing / deploying / building
+#
+# NOT DONE HERE: the RELAY release. That is a `relay-v*` tag (CI builds the Suite installers and creates the
+# GitHub Release) followed by `scripts/publish-relay-bundle.sh <tag>` on this box, which signs the server-box
+# bundle with relay/release-key.pem and attaches it to that Release — the key never goes to CI. See
+# docs/ops/RELEASES.md, "Cutting a RELAY release".
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

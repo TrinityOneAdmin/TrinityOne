@@ -49,6 +49,28 @@ Artifacts (repo root, served by the gateway at `/apks.html`; the steward one als
 
 **Never hand-run `gradlew` without `sync-web.sh` first.** A bare gradle build packages the *last-synced* web assets and silently ships stale code (`sync-web.sh` ends with `npx cap sync`, which copies `www/` into the native project). This is what `release.sh` does for you.
 
+## Cutting a RELAY release (the Suite installers + the server-box bundle)
+
+The relay code ships two ways, both from one `relay-v*` tag, and the two halves are made in two places:
+
+```sh
+git tag relay-v0.8.1 && git push origin relay-v0.8.1   # 1. CI (.github/workflows/relay-desktop.yml) builds the
+                                                       #    Suite installers and creates the GitHub Release
+scripts/publish-relay-bundle.sh relay-v0.8.1           # 2. THIS BOX builds bundle.tgz from the tag, signs it with
+                                                       #    relay/release-key.pem, checks the signature against
+                                                       #    relay-app/release-pubkey.pem, and attaches bundle.tgz,
+                                                       #    bundle.sig, bundle.json and install.sh to that Release
+```
+
+Step 2 exists because the release key lives here and never goes to CI. Until 2026-09-21 nothing did step 2:
+the only signed bundle was the one this box's own gateway serves at `/relay-app/bundle.tgz`, and the installer's
+default source was `app.trinityone.church`, which has no key and answers 404 — so the documented server route
+could not install at all. Server boxes now default to
+`https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download/` (`relay-app/install.sh --src`, kept in
+`relay/code-source`); a8 keeps pulling `main` from this box through its `relay/origin`, as before.
+`--dry` does everything but the upload. An `-rc` tag is a prerelease, which `latest` ignores — a box only
+gets it by naming `…/releases/download/<tag>` as its `--src`.
+
 ## Signing keys — BACK THESE UP (loss is unrecoverable)
 
 Two irreplaceable secrets live **only** on the dev/release box (both gitignored, disk-only). If either is
