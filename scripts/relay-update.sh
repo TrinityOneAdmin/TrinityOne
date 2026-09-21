@@ -37,25 +37,37 @@ curl -fsSL "$ORIGIN/relay-app/bundle.tgz" -o "$TARBALL" || { fail "could not dow
 
 # ── verify the bundle's authenticity BEFORE touching the installed code ────────────────────────
 # The bundle is signed on the release host with the Ed25519 release SECRET; we verify the detached
-# signature against the baked-in release PUBLIC key (ships in the bundle, committed to the repo).
-# This stops a compromised origin/DNS/TLS pushing a malicious bundle. Any failure here aborts WITHOUT
-# swapping or rolling back — nothing has changed yet. (If origin/DNS/TLS is intact this is belt-and-braces.)
+# signature against the baked-in release PUBLIC key (ships in the bundle, committed to the repo — and, for
+# the FIRST download, pinned inside relay-app/install.sh itself, so the copy on this box was checked before
+# it was ever trusted). This stops a compromised origin/DNS/TLS pushing a malicious bundle. Any failure here
+# aborts WITHOUT swapping or rolling back — nothing has changed yet.
+#
+# ── verify_release_bundle ──
+# verify_release_bundle <tarball> <signature> <public-key.pem>
+# Returns 0 when <signature> is the release key's Ed25519 signature over the exact bytes of <tarball>.
+# Otherwise prints ONE plain sentence on stderr and returns 1. Touches nothing on disk either way.
+# DUPLICATED VERBATIM in relay-app/install.sh and scripts/relay-update.sh: the installer is fetched on its own
+# by curl and cannot source a file that arrives inside the tarball it is checking. The two copies are pinned
+# byte-equal by scripts/the-installer-checks-what-it-downloads.test.mjs — change both or neither.
+verify_release_bundle() {
+  local tarball="$1" sig="$2" pub="$3"
+  [ -s "$tarball" ] || { echo "the downloaded package is empty, so there is nothing to install" >&2; return 1; }
+  [ -s "$sig" ] || { echo "the download came with no signature, so it cannot be checked and will not be installed" >&2; return 1; }
+  [ -s "$pub" ] || { echo "there is no release key on this box to check the download against, so it will not be installed" >&2; return 1; }
+  command -v openssl >/dev/null 2>&1 || { echo "openssl is missing, so the download's signature cannot be checked and it will not be installed" >&2; return 1; }
+  if openssl pkeyutl -verify -pubin -inkey "$pub" -rawin -in "$tarball" -sigfile "$sig" >/dev/null 2>&1; then return 0; fi
+  echo "the downloaded package was not signed by the TrinityOne release key, so it will not be installed (the download source may be compromised, or the download was corrupted)" >&2
+  return 1
+}
+# ── end verify_release_bundle ──
 PUBKEY="$DIR/relay-app/release-pubkey.pem"
-if [ ! -s "$PUBKEY" ]; then
-  status failed "this relay has no release key baked in, so the update cannot be verified"
-  log "VERIFY ABORT: baked-in release public key missing at $PUBKEY — refusing to apply an unverifiable bundle"
-  exit 1
-fi
-command -v openssl >/dev/null 2>&1 || { fail "openssl is missing, so the update signature cannot be checked"; }
 curl -fsSL "$ORIGIN/relay-app/bundle.sig" -o "$SIGFILE" || { fail "could not download the update signature from $ORIGIN"; }
-[ -s "$SIGFILE" ] || { fail "the update signature was empty"; }
-if openssl pkeyutl -verify -pubin -inkey "$PUBKEY" -rawin -in "$TARBALL" -sigfile "$SIGFILE" >/dev/null 2>&1; then
-  log "bundle signature verified against the baked-in release key"
-else
-  status failed "the update was not signed by the real release key — refusing it (the source may be compromised)"
-  log "VERIFY ABORT: bundle signature did NOT verify against the release key — refusing to apply (origin may be compromised)"
+if ! VERIFY_MSG="$(verify_release_bundle "$TARBALL" "$SIGFILE" "$PUBKEY" 2>&1)"; then
+  log "VERIFY ABORT: $VERIFY_MSG"
+  status failed "$VERIFY_MSG"
   exit 1
 fi
+log "bundle signature verified against the baked-in release key"
 
 # ── anti-rollback: refuse a validly-signed but OLDER bundle ────────────────────────────────────
 # SECURITY-AUDIT-2026-07-18 M2: the signature proves authenticity, not freshness. A compromised origin/DNS/TLS

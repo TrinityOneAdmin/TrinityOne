@@ -1,14 +1,20 @@
 #!/usr/bin/env bash
-# TrinityOne Relay — one-line installer for any Debian/Ubuntu/Raspberry Pi OS box.
+# TrinityOne Relay — installer for any Debian/Ubuntu/Raspberry Pi OS box.
 #
-#   curl -fsSL https://app.trinityone.church/relay-app/install.sh | sudo bash
+#   curl -fsSL -o install.sh https://app.trinityone.church/relay-app/install.sh
+#   less install.sh                      # read it: this file IS the trust root, see below
+#   sudo bash install.sh
 #
 # Sets up the gateway (relay + app + browser control dashboard) as a systemd service that starts on
 # boot, then optionally brings up a tunnel so the relay is reachable from outside the church LAN.
 # Not Pi-specific — it just needs an apt-based Linux box (a Pi, mini-PC, old laptop, or a VPS).
 #
-# The code is fetched as a tarball from the same host this script came from (the network's gateway),
-# so it works without any GitHub access (the repo is private during the pilot).
+# The code is fetched as a tarball from the release host ($SRC, --src to change), together with a detached
+# signature, and the signature is checked against the release public key PINNED IN THIS FILE before a single
+# byte is unpacked. Until 2026-09-21 this script fetched the tarball alone and untarred it as root — the
+# only key it could have checked against arrived INSIDE the tarball it was trusting (reference/BACKLOG.md,
+# "THE ONE-LINE INSTALLER HAS NEVER VERIFIED WHAT IT DOWNLOADS"). So: read this file before you run it. If
+# the key below is not the TrinityOne release key, nothing else in the file matters.
 #
 # Flags (all optional; prompts on a TTY when omitted):
 #   --church <npub[,npub...]>   church key(s) allowed to publish (the relay's write policy)
@@ -50,8 +56,37 @@ die()  { printf '\n\033[31m✗ %s\033[0m\n' "$*" >&2; exit 1; }
 ask()  { local p="$1" d="${2:-}" a=""; if [ "$ASSUME_YES" = 1 ] || [ ! -r /dev/tty ]; then echo "$d"; return; fi
          read -r -p "$p" a < /dev/tty || true; echo "${a:-$d}"; }
 
-[ "$(id -u)" = "0" ] || die "run as root:  curl -fsSL .../install.sh | sudo bash"
+[ "$(id -u)" = "0" ] || die "run as root:  sudo bash install.sh"
 command -v apt-get >/dev/null 2>&1 || die "this installer needs an apt-based distro (Debian/Ubuntu/Raspberry Pi OS). Install Node + run scripts/gateway.mjs manually otherwise."
+
+# ── THE TRUST ROOT ──────────────────────────────────────────────────────────────────────────────────────────
+# The TrinityOne release public key (Ed25519). Every code bundle the release host publishes is signed with its
+# private half (scripts/gateway.mjs ensureSignedBundle → /relay-app/bundle.sig). The same key ships inside the
+# bundle as relay-app/release-pubkey.pem, and scripts/relay-update.sh checks later updates against THAT copy —
+# but this first download has to be checked against something that did not arrive in the download, and this
+# is it. scripts/the-installer-checks-what-it-downloads.test.mjs pins it equal to the committed .pem.
+RELEASE_PUBKEY_PEM='-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEAUbKNmON7cIyaJrXFlVC7s3/BfdG4ihNwx7WOXFHzoAs=
+-----END PUBLIC KEY-----'
+
+# ── verify_release_bundle ──
+# verify_release_bundle <tarball> <signature> <public-key.pem>
+# Returns 0 when <signature> is the release key's Ed25519 signature over the exact bytes of <tarball>.
+# Otherwise prints ONE plain sentence on stderr and returns 1. Touches nothing on disk either way.
+# DUPLICATED VERBATIM in relay-app/install.sh and scripts/relay-update.sh: the installer is fetched on its own
+# by curl and cannot source a file that arrives inside the tarball it is checking. The two copies are pinned
+# byte-equal by scripts/the-installer-checks-what-it-downloads.test.mjs — change both or neither.
+verify_release_bundle() {
+  local tarball="$1" sig="$2" pub="$3"
+  [ -s "$tarball" ] || { echo "the downloaded package is empty, so there is nothing to install" >&2; return 1; }
+  [ -s "$sig" ] || { echo "the download came with no signature, so it cannot be checked and will not be installed" >&2; return 1; }
+  [ -s "$pub" ] || { echo "there is no release key on this box to check the download against, so it will not be installed" >&2; return 1; }
+  command -v openssl >/dev/null 2>&1 || { echo "openssl is missing, so the download's signature cannot be checked and it will not be installed" >&2; return 1; }
+  if openssl pkeyutl -verify -pubin -inkey "$pub" -rawin -in "$tarball" -sigfile "$sig" >/dev/null 2>&1; then return 0; fi
+  echo "the downloaded package was not signed by the TrinityOne release key, so it will not be installed (the download source may be compromised, or the download was corrupted)" >&2
+  return 1
+}
+# ── end verify_release_bundle ──
 
 say "TrinityOne Relay installer"
 
@@ -75,15 +110,26 @@ if ! id "$SVC_USER" >/dev/null 2>&1; then
   ok "created service user '$SVC_USER' (runs the relay with no login/privileges)"
 fi
 
-# ── fetch / update the app ──────────────────────────────────────────────────────
-# Pull a fresh code tarball from the gateway ($SRC/relay-app/bundle.tgz). The relay/ secrets live
-# outside the bundle, so updating never clobbers this box's church.json / admin token / push keys.
+# ── fetch / verify / unpack the app ──────────────────────────────────────────────
+# Pull the code tarball AND its detached signature from the release host ($SRC/relay-app/bundle.tgz + .sig),
+# check the signature against the key pinned above, and only then unpack. The relay/ secrets live outside
+# the bundle, so re-running never clobbers this box's church.json / admin token / push keys.
 say "Fetching the app into $DIR (from $SRC)"
 mkdir -p "$DIR"
-TARBALL="$(mktemp)"; trap 'rm -f "$TARBALL"' EXIT
+TARBALL="$(mktemp)"; SIGFILE="$(mktemp)"; PUBFILE="$(mktemp)"; trap 'rm -f "$TARBALL" "$SIGFILE" "$PUBFILE"' EXIT
 curl -fsSL "$SRC/relay-app/bundle.tgz" -o "$TARBALL" || die "couldn't download the code bundle from $SRC/relay-app/bundle.tgz"
+curl -fsSL "$SRC/relay-app/bundle.sig" -o "$SIGFILE" || die "couldn't download the bundle's signature from $SRC/relay-app/bundle.sig — without it the download cannot be checked, so nothing was installed"
+printf '%s\n' "$RELEASE_PUBKEY_PEM" > "$PUBFILE"
+if ! VERIFY_MSG="$(verify_release_bundle "$TARBALL" "$SIGFILE" "$PUBFILE" 2>&1)"; then die "$VERIFY_MSG"; fi
+ok "the download is signed by the TrinityOne release key"
 tar -xzf "$TARBALL" -C "$DIR" --no-same-owner --exclude='relay/*' || die "couldn't unpack the code bundle"   # SECURITY-AUDIT-2026-07-06 M10
 ok "code unpacked"
+# Later updates (scripts/relay-update.sh) verify against the key the bundle carries. It normally equals the
+# pinned one; a release that rotates the key ships the new one inside a bundle signed by the old, so a
+# difference here is a rotation, not a fault — but it is worth a line on the screen.
+if ! cmp -s "$PUBFILE" "$DIR/relay-app/release-pubkey.pem" 2>/dev/null; then
+  warn "the package carries a different release key from the one pinned in this installer — future updates will be checked against the package's key"
+fi
 
 say "Installing the relay's runtime dependencies (ws, web-push, nostr-tools)"
 ( cd "$DIR" && npm install --ignore-scripts --no-audit --no-fund --no-save ws web-push nostr-tools >/dev/null 2>&1 ) || die "npm install failed"   # SECURITY-AUDIT-2026-07-06 H3: no install-script RCE
