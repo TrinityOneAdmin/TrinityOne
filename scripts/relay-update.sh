@@ -3,8 +3,14 @@
 # drops relay/.update-request (the "Update now" button in the control dashboard writes that flag; the
 # sandboxed relay can only write under relay/, so the privileged work happens here instead).
 #
-# Pulls a fresh code bundle from this box's origin, swaps it in (preserving relay/ secrets + data), and
+# Pulls a fresh code bundle from this box's CODE SOURCE, swaps it in (preserving relay/ secrets + data), and
 # restarts — with a code backup + health-check + automatic rollback if the new build doesn't come up.
+#
+# TWO FILES, TWO SOURCES (2026-09-21). relay/code-source is where the code bundle comes from — a GitHub release
+# (…/releases/latest/download, the installer's default since today) or a TrinityOne relay. relay/origin is
+# where the member/steward installers come from (app.trinityone.church), and stays what the gateway reads for
+# them. A box installed before code-source existed has only relay/origin, and that then serves as the code
+# source too — exactly what it did before, so a8 (origin = the release host) keeps pulling `main` from it.
 set -uo pipefail
 DIR="${TRINITYONE_DIR:-/opt/trinityone}"
 SVC="${TRINITYONE_SVC:-trinityone-relay}"
@@ -27,13 +33,33 @@ fail() { log "$1"; status failed "$1"; exit 1; }
 
 rm -f "$FLAG"   # consume the flag first so the path-unit doesn't immediately re-trigger
 ORIGIN="$(tr -d '[:space:]' < "$DIR/relay/origin" 2>/dev/null || true)"
-[ -n "$ORIGIN" ] || { fail "no update origin is configured for this relay"; }
+CODE_SRC="$(tr -d '[:space:]' < "$DIR/relay/code-source" 2>/dev/null || true)"
+[ -n "$CODE_SRC" ] || CODE_SRC="$ORIGIN"
+[ -n "$CODE_SRC" ] || { fail "no update source is configured for this relay"; }
+
+# ── release_bundle_base ──
+# release_bundle_base <source>
+# Prints the directory that holds bundle.tgz, bundle.sig and bundle.json for <source>. Two shapes, told apart
+# by the address alone — no request is made:
+#   a GitHub release   …/releases/latest/download  or  …/releases/download/<tag>   → the assets sit flat there
+#   a TrinityOne relay  https://host[:port]                                          → it serves them under /relay-app/
+# DUPLICATED VERBATIM in relay-app/install.sh and scripts/relay-update.sh, for the reason given at
+# verify_release_bundle; pinned byte-equal by the same test.
+release_bundle_base() {
+  local src="${1%/}"
+  case "$src" in
+    */releases/latest/download|*/releases/download/*) printf '%s\n' "$src";;
+    *) printf '%s\n' "$src/relay-app";;
+  esac
+}
+# ── end release_bundle_base ──
+BUNDLE_BASE="$(release_bundle_base "$CODE_SRC")"
 
 CUR_SHA="$(sed -n 1p "$DIR/version.txt" 2>/dev/null | cut -c1-7)"
 status running "downloading"
-log "update requested — pulling from $ORIGIN"
+log "update requested — pulling from $BUNDLE_BASE"
 TARBALL="$(mktemp)"; SIGFILE="$(mktemp)"; trap 'rm -f "$TARBALL" "$SIGFILE"' EXIT
-curl -fsSL "$ORIGIN/relay-app/bundle.tgz" -o "$TARBALL" || { fail "could not download the update from $ORIGIN"; }
+curl -fsSL "$BUNDLE_BASE/bundle.tgz" -o "$TARBALL" || { fail "could not download the update from $BUNDLE_BASE/bundle.tgz"; }
 
 # ── verify the bundle's authenticity BEFORE touching the installed code ────────────────────────
 # The bundle is signed on the release host with the Ed25519 release SECRET; we verify the detached
@@ -61,7 +87,7 @@ verify_release_bundle() {
 }
 # ── end verify_release_bundle ──
 PUBKEY="$DIR/relay-app/release-pubkey.pem"
-curl -fsSL "$ORIGIN/relay-app/bundle.sig" -o "$SIGFILE" || { fail "could not download the update signature from $ORIGIN"; }
+curl -fsSL "$BUNDLE_BASE/bundle.sig" -o "$SIGFILE" || { fail "could not download the update signature from $BUNDLE_BASE/bundle.sig"; }
 if ! VERIFY_MSG="$(verify_release_bundle "$TARBALL" "$SIGFILE" "$PUBKEY" 2>&1)"; then
   log "VERIFY ABORT: $VERIFY_MSG"
   status failed "$VERIFY_MSG"
@@ -201,9 +227,10 @@ true   # a zero count is a normal outcome, not a failure — do not leave it as 
 # also pull the latest APK(s) so the in-app auto-update DOWNLOAD stays in lockstep with the new web + manifest.
 # (Previously a separate, easily-forgotten "Fetch latest APK" dashboard step → manifest said vN but the APK file
 #  lagged at vN-1, so members got no update or a stale one. One .update-request now deploys everything.)
+# From the APP origin, not the code source: a GitHub release carries no APKs.
 APKDIR="$DIR/relay/apks"; mkdir -p "$APKDIR"
 for f in trinityone.apk trinityone-steward.apk; do
-  if curl -fsSL "$ORIGIN/$f" -o "$APKDIR/$f.part" 2>/dev/null && [ "$(stat -c%s "$APKDIR/$f.part" 2>/dev/null || echo 0)" -gt 1000000 ]; then
+  if [ -n "$ORIGIN" ] && curl -fsSL "$ORIGIN/$f" -o "$APKDIR/$f.part" 2>/dev/null && [ "$(stat -c%s "$APKDIR/$f.part" 2>/dev/null || echo 0)" -gt 1000000 ]; then
     mv "$APKDIR/$f.part" "$APKDIR/$f"; log "fetched APK $f ($(stat -c%s "$APKDIR/$f") bytes)"
   else rm -f "$APKDIR/$f.part"; log "APK fetch skipped for $f (not on origin or <1MB)"; fi
 done

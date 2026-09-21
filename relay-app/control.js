@@ -511,19 +511,24 @@
       // update flag, so its software moves with the Suite itself; a box with no source is told so and given
       // the field above rather than a button that would fail underneath.
       if (cur.packaged) { body.innerHTML = 'This relay is part of the <b>TrinityOne Suite</b>: its software updates when you install a newer Suite — the launcher (Back) says when one is out. The update source above is still what the installer card below fetches from.'; return; }
-      if (!cur.origin) {
+      // WHERE THE CODE COMES FROM is its own answer (cur.codeSource, relay/code-source — a GitHub release on
+      // a box installed since 2026-09-21) and is what "Update now" pulls; the update source above is where
+      // the installers come from. A box without a code source pulls from its update source, as before.
+      const codeSrc = cur.codeSource || cur.origin;
+      const from = cur.codeSource && cur.codeSource !== cur.origin ? '<div class="hint" style="margin-bottom:6px">Software comes from ' + esc(cur.codeSource) + '. The update source above is where the installers come from.</div>' : '';
+      if (!codeSrc) {
         if (cur.releaseHost) { body.innerHTML = 'This is the release source — nothing to pull here.'; return; }
         body.innerHTML = '<b>This box was never told where to get things from</b> — set an update source above. Until then there is nowhere to check for a newer build or pull one from.'
           + '<button class="btn-clay" id="doUpdate" disabled aria-disabled="true" style="margin-top:8px;display:block;opacity:.55;cursor:not-allowed">Update now</button>';
         return;
       }
-      // The relay checks its update source server-side (cur.latest) — the browser can't be relied on to reach
+      // The relay checks its code source server-side (cur.latest) — the browser can't be relied on to reach
       // the release host's ts.net funnel. If the server couldn't reach it either, cur.latest is null.
       const latest = cur.latest;
-      if (!latest || !latest.version) { body.innerHTML = 'Couldn’t reach the update source (' + esc(cur.origin) + ') to check. You can still force an update with the button below.'
+      if (!latest || !latest.version) { body.innerHTML = from + 'Couldn’t reach the code source (' + esc(codeSrc) + ') to check. You can still force an update with the button below.'
         + '<button class="btn-clay" id="doUpdate" style="margin-top:8px;display:block">Update now</button>'; document.getElementById('doUpdate').onclick = doUpdate; return; }
-      if (latest.version === cur.version) { body.innerHTML = '<span style="color:var(--sage)">✓ Up to date.</span>'; return; }
-      body.innerHTML = 'A new build is available (' + esc((latest.versionShort || '') + (latest.builtAt ? ' · ' + latest.builtAt.slice(0, 10) : '')) + '). '
+      if (latest.version === cur.version) { body.innerHTML = from + '<span style="color:var(--sage)">✓ Up to date.</span>'; return; }
+      body.innerHTML = from + 'A new build is available (' + esc((latest.tag ? latest.tag + ' · ' : '') + (latest.versionShort || '') + (latest.builtAt ? ' · ' + latest.builtAt.slice(0, 10) : '')) + '). '
         + '<button class="btn-clay" id="doUpdate" style="margin-top:8px">Update now</button>';
       document.getElementById('doUpdate').onclick = doUpdate;
     } catch (e) { /* relay down — hero card shows it */ }
