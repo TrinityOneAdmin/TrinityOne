@@ -147,6 +147,22 @@ test('a key that is not the fleet\'s release key signs a bundle nobody would acc
   } finally { h.stop(); }
 });
 
+test('the key it checks against is the one AT THE TAG, not the one on disk: a drifted tree holding a second key, signing with that key, is refused', { skip: HAS_OPENSSL ? false : 'no openssl' }, () => {
+  // The audit of this branch (AUDIT-suite-A2-2026-09-21.md, N1) reproduced this exact operator error: the release
+  // host's working tree had drifted, its relay-app/release-pubkey.pem was a different key, and the guard verified
+  // against THAT — so a bundle the tag's own install.sh and every fleet box would refuse was uploaded with exit 0.
+  const h = releaseHost();
+  try {
+    h.releaseExists(); h.remoteTag(TAG, h.sha);
+    writeFileSync(join(h.dir, 'relay-app', 'release-pubkey.pem'), readFileSync(join(h.scratch, 'other.pub')));   // the tree drifts: a second key on disk
+    const r = h.run([TAG], { RELEASE_KEY: join(h.scratch, 'other.key') });                                          // …and the operator signs with its pair
+    assert.notEqual(r.status, 0, 'THE GAP: a signature only the drifted tree would accept was published');
+    assert.match(r.out, /as of relay-v|not the release key the fleet trusts/, 'the refusal does not name the tag\'s key: ' + r.out.slice(-600));
+    assert.equal(r.uploads.length, 0, 'gh release upload was called');
+    assert.deepEqual(r.uploaded(), [], 'files reached the release');
+  } finally { h.stop(); }
+});
+
 // ── §2 · the upload ──────────────────────────────────────────────────────────────────────────────────────
 
 test('with the right key it uploads exactly the named assets, the signature verifies over the uploaded bytes, and bundle.json is honest', { skip: HAS_OPENSSL ? false : 'no openssl' }, () => {

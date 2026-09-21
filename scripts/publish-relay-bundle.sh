@@ -74,24 +74,29 @@ ok "$TAG → $LOCAL_SHA, and GitHub agrees"
 
 # ── 2. the key ─────────────────────────────────────────────────────────────────────────────────────────────
 KEY="${RELEASE_KEY:-$DIR/relay/release-key.pem}"
-PUB="$DIR/relay-app/release-pubkey.pem"
+# THE KEY THE TAG SHIPS, NOT THE ONE ON DISK. The fleet checks a bundle against the release-pubkey.pem baked into
+# the code it already runs, and the tag's install.sh pins the same key; a working tree that has drifted from the
+# tag (a release host usually sits on some other branch) could hold a different pem and this guard would then
+# pass a signature every box refuses. The audit of this branch reproduced exactly that. So read the pem AT THE TAG.
 [ -s "$KEY" ] || die "no release key at $KEY — this is not the release host, and only the release host can sign a bundle"
-[ -s "$PUB" ] || die "relay-app/release-pubkey.pem is missing — there is nothing to check the signature against"
 command -v openssl >/dev/null 2>&1 || die "openssl is missing"
 
 # ── 3. build, sign, and CHECK before anything leaves this box ──────────────────────────────────────────────
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP" "$GH_ERR"' EXIT
+PUB="$TMP/release-pubkey.at-tag.pem"
+git show "$TAG:relay-app/release-pubkey.pem" > "$PUB" 2>/dev/null || die "relay-app/release-pubkey.pem is not in the tree at $TAG — there is nothing the fleet could check this signature against"
+[ -s "$PUB" ] || die "relay-app/release-pubkey.pem at $TAG is empty — there is nothing to check the signature against"
 say "building the bundle for $TAG"
 RELEASE_REF="$TAG" bash "$DIR/scripts/build-strict-tgz.sh" "$TMP/bundle.tgz" "$TAG" || die "the bundle build failed"
 [ -s "$TMP/bundle.tgz" ] || die "the build produced no bundle"
 openssl pkeyutl -sign -inkey "$KEY" -rawin -in "$TMP/bundle.tgz" -out "$TMP/bundle.sig" || die "signing failed"
 if ! openssl pkeyutl -verify -pubin -inkey "$PUB" -rawin -in "$TMP/bundle.tgz" -sigfile "$TMP/bundle.sig" >/dev/null 2>&1; then
-  die "the signature does not verify against relay-app/release-pubkey.pem — the key on this box is not the release key the fleet trusts, so nothing was uploaded"
+  die "the signature does not verify against relay-app/release-pubkey.pem as of $TAG — the key on this box is not the release key the fleet trusts, so nothing was uploaded"
 fi
 ok "signed, and the signature verifies against the committed public key"
 # the key INSIDE the bundle is what relay-update.sh checks later updates against; a difference is a rotation
 if ! { tar -xzOf "$TMP/bundle.tgz" ./relay-app/release-pubkey.pem 2>/dev/null || tar -xzOf "$TMP/bundle.tgz" relay-app/release-pubkey.pem 2>/dev/null; } | cmp -s - "$PUB"; then
-  warn "the bundle carries a different release-pubkey.pem from this checkout's — a key rotation is shipping in this release"
+  die "the bundle carries a different release-pubkey.pem from the one at $TAG — the build did not come from the tag; nothing was uploaded"
 fi
 git show "$TAG:relay-app/install.sh" > "$TMP/install.sh" || die "could not read relay-app/install.sh at $TAG"
 SHA256="$(sha256sum "$TMP/bundle.tgz" | cut -c1-64)"
