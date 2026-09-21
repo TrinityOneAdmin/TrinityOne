@@ -109,14 +109,20 @@ test('the name step names its wait — at once, again after 5 s, gone when the s
   let c = null;
   try {
     c = await startConsole(relay, tarpit.port);
-    await sleep(9000);
+    // WAIT FOR THE SCREEN, NOT FOR A NUMBER — fixed 9s/12s boot pauses lost the race inside the full suite in
+    // three sibling files on 2026-09-20/21 (74eade2, 316cd4e, 3a8c980); this file was written with the same
+    // pauses and the audit of its branch said so. Poll for each screen, up to 90s.
+    const waitFor = async (expr, what, ms = 90000) => { const t0 = Date.now(); let ok = false; while (!ok && Date.now() - t0 < ms) { await sleep(500); try { ok = !!(await c.evalIn(expr)); } catch {} } assert.ok(ok, `timed out waiting for ${what}`); };
+    await waitFor(`[...document.querySelectorAll('button')].some(x => /Start a new church/i.test((x.textContent||'').trim()))`, 'the setup screen');
     // The real path, the way a churchwarden walks it.
     assert.equal(await c.evalIn(click('/Start a new church/i')), 'ok', 'the console never offered "Start a new church"');
-    await sleep(2500);
+    await waitFor(`[...document.querySelectorAll('input')].some(x => (x.placeholder||'').includes('At least 8'))`, 'the PIN gate', 60000);
     assert.equal(await c.evalIn(typeInto(byPlaceholder('At least 8'), 'cedar-harbour-lamp-42')), 'ok', 'the PIN box was not on screen');
     assert.equal(await c.evalIn(typeInto(byPlaceholder('Type it again'), 'cedar-harbour-lamp-42')), 'ok', 'the confirm-PIN box was not on screen');
     assert.equal(await c.evalIn(click('/Set PIN/i')), 'ok', 'the console never offered "Set PIN"');
-    await sleep(12000);   // key generation + the first render of the whole dashboard, wizard included
+    // key generation + the first render of the whole dashboard, wizard included: wait for the name field itself
+    await waitFor(`!!document.querySelector('input[aria-label="Church name"]')`, 'the wizard\'s name step');
+    await sleep(1500);
     assert.match(String(await c.evalIn(`window.Steward && window.Steward.churchPub || ''`)), /^[0-9a-f]{64}$/, 'no church key after the PIN step');
     assert.equal(await c.evalIn(typeInto('document.querySelector(\'input[aria-label="Church name"]\')', 'St Columba in the Tarpit')), 'ok', 'the name field was not on screen');
     await sleep(300);
