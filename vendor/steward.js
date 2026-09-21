@@ -22840,9 +22840,9 @@ zoo`.split("\n");
         }
         let accepted = false;
         const refused = [], unreachable = [];
-        for (const base of bases) {
+        const one = async (base) => {
           const mark = churchPub + "@" + base;
-          if (!force && done[mark]) continue;
+          if (!force && done[mark]) return;
           const url = base + "/config";
           try {
             const auth = finalizeEvent2({ kind: 27235, created_at: now(), tags: [["u", url], ["method", "POST"]], content: "" }, churchSk);
@@ -22886,7 +22886,8 @@ zoo`.split("\n");
           } catch (e) {
             unreachable.push(base);
           }
-        }
+        };
+        await Promise.allSettled(Array.from(bases, one));
         const ownBase = rawOrigin || window.Steward.configBase();
         const ownRefused = refused.find((x) => x.base === ownBase) || unreachable.includes(ownBase);
         if (ownRefused) {

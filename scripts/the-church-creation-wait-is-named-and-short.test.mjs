@@ -9,10 +9,12 @@
 // registration landed within the first second in both runs; the wait was selfRegister() posting to its
 // bases one after another with a 6 s abort each (own origin, then two tarpits = 12 s), then publish().
 //
-// The fix pinned here: the step SAYS what it is doing (owner's copy, 2026-09-21): at once "Telling your
-// relay about your church…", after 5 s "Still waiting for a relay to answer — up to a minute. Your church
-// key is safe on this device." — under the field, role="status", gone when the step advances. No button
-// shortens it.
+// Two fixes, two commits, both pinned here:
+//   1. the step SAYS what it is doing (owner's copy, 2026-09-21): at once "Telling your relay about your
+//      church…", after 5 s "Still waiting for a relay to answer — up to a minute. Your church key is safe
+//      on this device." — under the field, role="status", gone when the step advances. No button shortens it.
+//   2. selfRegister posts to its bases IN PARALLEL, so the worst wait is one 6 s abort, not one per host.
+//      The SET of bases is unchanged — CLAUDE.md rule 10 — and the fetch spy at the bottom lists it.
 //
 // POINT OF USE (rule 1, rule 3): the browser row reads the DOM of the shipped page on a clock; nothing here
 // matches text in app/*.jsx. NOTHING REACHES PRODUCTION: the shipped hosts resolve to the tarpit in the
@@ -95,7 +97,7 @@ const SAMPLE = `(() => {
   return JSON.stringify({ cont: b ? (b.disabled ? 'disabled' : 'enabled') : 'absent', step: step1 ? 1 : (step0 ? 0 : -1), status });
 })()`;
 
-test('the name step names its wait — at once, again after 5 s, gone when the step advances',
+test('the name step names its wait — at once, again after 5 s, gone when the step advances — and the wait is one timeout, not one per host',
   { skip: !CHROME ? 'no chromium' : false, timeout: 240000 }, async () => {
   const tarpit = await startTarpit();
   const preDir = mkdtempSync(join(tmpdir(), 'trin-wizwait-pre-'));
@@ -157,6 +159,12 @@ test('the name step names its wait — at once, again after 5 s, gone when the s
     assert.equal(last.step, 1);
     assert.deepEqual(last.status.filter(s => s === FIRST || s === SECOND), [], 'the wait line outlived the name step:' + trail());
 
+    // 4. SHORT: with two shipped hosts in a tarpit the step took 12.1 s on 3a8c980 (one 6 s abort per host, in
+    //    turn). Posting to the bases in parallel makes that one 6 s abort plus the publish (measured 6.2 s).
+    //    11 s is the bound with margin: it fails for the sequential loop and passes a slow pass of the
+    //    parallel one.
+    assert.ok(advancedAt < 11, 'the name step took ' + advancedAt.toFixed(1) + ' s — the bases are being dialled one after another again (limit 11 s):' + trail());
+    assert.ok(tarpit.hits() >= 2, 'the tarpit saw ' + tarpit.hits() + ' connections — the shipped hosts were not dialled, so this run measured nothing');
   } finally {
     if (c) c.stop();
     tarpit.stop();
@@ -210,4 +218,98 @@ test('…and on a throw from publishProfile: busy and the line are both cleared,
   assert.deepEqual(h.log.filter(e => e[0] === 'busy').map(e => e[1]), [true, false], 'busy was not reset on the throw — Continue stays disabled for ever: ' + JSON.stringify(h.log));
   assert.equal(h.log.filter(e => e[0] === 'slow').pop()[1], false, 'the line was left on screen after the throw');
   assert.ok(!h.log.some(e => e[0] === 'next'), 'the wizard advanced past a profile that never published');
+});
+
+// ── the engine, lifted from the SHIPPED bundle and run with a fetch spy ─────────────────────────────────
+// The same lift as only-the-wizard-puts-a-church-on-the-serving-box: the proxy throws on any identifier the
+// stubs do not name, so a new dependency in selfRegister is a loud failure here rather than a silent one.
+import { fnBody } from './test-slice.mjs';
+const VENDOR = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
+const ORIGIN = 'http://127.0.0.1:8787';          // the box serving the console (the Suite)
+const CONFIG = 'http://192.168.1.20:8787';       // where configBase() points — a relay the church chose
+// THE SHIPPED LIST, read out of the bundle rather than typed here, so this pin follows the list that ships.
+const SHIPPED = (() => {
+  const m = VENDOR.match(/CANONICAL_RELAYS\s*=\s*\[([^\]]*)\]/);
+  assert.ok(m, 'CANONICAL_RELAYS is not in vendor/steward.js — re-anchor');
+  return m[1].split(',').map(x => x.trim().replace(/^["'`]|["'`]$/g, '')).filter(Boolean);
+})();
+assert.equal(SHIPPED.length, 2, 'the shipped relay list is ' + JSON.stringify(SHIPPED) + ' — this test was written against two; re-measure before changing the pin');
+const asBase = (r) => r.replace(/^wss:/i, 'https:').replace(/^ws:/i, 'http:').replace(/\/relay\/?$/i, '');
+
+function liftSelfRegister({ fetch }) {
+  const stubs = {
+    churchSk: new Uint8Array(32).fill(7), churchPub: 'PUB', pub: 'PUB', actingChurch: null,
+    _regNeedsName: false, _armRegGate: () => {}, _openRegGate: () => {}, _markRegOk: () => {},
+    npubEncode: (p) => 'npub_' + p,
+    CANONICAL_RELAYS: SHIPPED,
+    SELFREG_KEY: 'sr',
+    finalizeEvent: (e) => ({ ...e, id: 'evt', sig: 'sig', pubkey: 'PUB' }),
+    now: () => 1788500000,
+    _ownOrigin: () => ORIGIN,
+    window: { Steward: { configBase: () => CONFIG }, dispatchEvent: () => true },
+    localStorage: { getItem: () => '{}', setItem: () => {} },
+    AbortSignal: { timeout: () => undefined },
+    _boxHostsUs: false, lsSet: () => {}, _boxHostsKey: () => 'bh',
+    _gate: { refresh: () => Promise.resolve([]) }, relaysRaw: () => [],
+    fetch,
+  };
+  const proxy = new Proxy(stubs, {
+    has: (t, k) => (k in t) || !(String(k) in globalThis),
+    get: (t, k) => {
+      if (k === Symbol.unscopables) return undefined;
+      if (k in t) return t[k];
+      const base = String(k).replace(/\d+$/, '');
+      if (base in t) return t[base];
+      throw new ReferenceError('the lifted selfRegister needs `' + String(k) + '` — add a stub');
+    },
+    set: (t, k, v) => { t[k] = v; return true; },
+  });
+  const body = fnBody(VENDOR, 'async selfRegister(name, opts) {', 'selfRegister');
+  const fn = new Function('scope', `with (scope) { return ({ ${body} }).selfRegister; }`)(proxy);
+  return (name, opts) => fn.call({}, name, opts);
+}
+
+// WHAT WAS DIALLED ON 3a8c980, by the sequential loop, for the wizard's call (createHere, configBase not
+// the pool): the serving origin, configBase(), then each shipped relay as an https base. The set — not the
+// order — is what rule 10 protects, and this list is the whole of it.
+const DIALLED_BEFORE = [ORIGIN, CONFIG, ...SHIPPED.map(asBase)];
+
+test('rule 10: the bases dialled are exactly the ones the sequential loop dialled — the same four, nothing added, nothing dropped', async () => {
+  const posts = [];
+  const run = liftSelfRegister({ fetch: async (u) => { posts.push(String(u).replace(/\/config$/, '')); return { ok: true, json: async () => ({}) }; } });
+  await run('St Columba, lifted', { createHere: true });
+  assert.deepEqual([...posts].sort(), [...DIALLED_BEFORE].sort(),
+    'selfRegister dialled ' + JSON.stringify(posts) + '; on 3a8c980 it dialled ' + JSON.stringify(DIALLED_BEFORE));
+  assert.equal(posts.length, new Set(posts).size, 'a base was dialled twice: ' + JSON.stringify(posts));
+});
+
+test('…and the four are all in flight before any of them has answered', async () => {
+  // A fetch that does not answer until told to. Sequential code dials the second base only after the first
+  // resolves, so at the first pause exactly ONE would be pending; parallel code has all four pending.
+  const pending = []; let resolved = 0;
+  const run = liftSelfRegister({ fetch: (u) => new Promise((res) => pending.push({ u: String(u).replace(/\/config$/, ''), res })) });
+  const p = run('St Columba, lifted', { createHere: true });
+  await sleep(50);
+  assert.equal(resolved, 0);
+  assert.deepEqual(pending.map(x => x.u).sort(), [...DIALLED_BEFORE].sort(),
+    'with no relay having answered yet, ' + pending.length + ' base(s) were dialled: ' + JSON.stringify(pending.map(x => x.u)) +
+    ' — the bases are being asked one after another, so every unreachable host adds its own timeout to the wait');
+  // Let them answer, in reverse dial order, and the function still comes back accepted with every mark.
+  for (const x of [...pending].reverse()) { resolved++; x.res({ ok: true, json: async () => ({}) }); }
+  const out = await p;
+  assert.equal(out.ok, true);
+  assert.deepEqual(out.refused, []); assert.deepEqual(out.unreachable, []);
+});
+
+test('…and a base that throws or refuses is still told apart from one that accepts, per base, when they land out of order', async () => {
+  const run = liftSelfRegister({ fetch: async (u) => {
+    const b = String(u).replace(/\/config$/, '');
+    if (b === ORIGIN) { await sleep(30); return { ok: false, status: 403, json: async () => ({ error: 'this relay is already set up for its church' }) }; }
+    if (b === CONFIG) throw new TypeError('Failed to fetch');
+    return { ok: true, json: async () => ({}) };
+  } });
+  const out = await run('St Columba, lifted', { createHere: true });
+  assert.equal(out.ok, true, 'a shipped relay accepted, so ok');
+  assert.deepEqual(out.refused.map(r => [r.base, r.status, r.why]), [[ORIGIN, 403, 'this relay is already set up for its church']]);
+  assert.deepEqual(out.unreachable, [CONFIG]);
 });
