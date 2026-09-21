@@ -468,6 +468,14 @@ window.HelpData = {
     // 22.04 does nothing on 24.04, and the AppImage has to be marked executable first. The card now links here.
     // The install script is the trust root (it pins the release key it checks every download against), which
     // is WHY the form is download → read → run, and never `curl | sudo bash`.
+    //
+    // EVERY ADDRESS HERE SERVES THE FILE IT NAMES (the same day's audit, §6): the first draft sent the server
+    // to app.trinityone.church for install.sh and, through it, for bundle.tgz — and that host serves neither
+    // (no release key, no source checkout). The installer, the bundle and its signature are now assets of the
+    // GitHub Release for each relay-v* tag (scripts/publish-relay-bundle.sh), and
+    // scripts/the-one-line-installer-has-a-home.test.mjs pins every download address printed here to an asset
+    // that script uploads. The key's fingerprint is printed so a reader has something to compare the script
+    // against that did not arrive with it; the same test pins it to relay-app/release-pubkey.pem.
     // Plain text only: the console renders these strings as text, so an HTML tag would show up literally.
     {
       id: 'console-relay',
@@ -480,21 +488,23 @@ window.HelpData = {
         { type: 'list', items: [
           { lead: 'The TrinityOne Suite (recommended)', text: 'A desktop app for Windows, macOS and Linux. Install it, open it, and it runs the relay and the console together. Any computer you can leave switched on will do. Get it from the Downloads on the console’s home page or from trinityone.church.' },
           { lead: 'A Linux server (a Raspberry Pi, a mini-PC, an old laptop, a rented VPS)', text: 'For a box with no screen that must run on its own, day and night. A short install script sets the relay up as a service that starts at boot. The steps are below.' },
-          { lead: 'Nothing you can leave on', text: 'Use the hosted console at trinityone.church instead. Your records live on our relays; you can move to the Suite later without losing anything.' },
+          { lead: 'Nothing you can leave on', text: 'Use the hosted console at app.trinityone.church instead. Your records live on our relays; you can move to the Suite later without losing anything.' },
         ] },
-        { type: 'callout', tone: 'gold', text: 'On Linux, the Suite comes as a .deb package and as an AppImage. Use the .deb. On Ubuntu 22.04 double-clicking it opens the installer; on Ubuntu 24.04 double-clicking does nothing — open a terminal in your Downloads folder and run:  sudo apt install ./TrinityOne-Suite-linux-x86_64.deb   The AppImage has to be marked executable before it will run (right-click → Properties → allow executing as a program, or chmod +x), and we have not tested it as thoroughly as the .deb.' },
+        { type: 'callout', tone: 'gold', text: 'On Linux, use the .deb. Ubuntu 22.04: double-click it. Ubuntu 24.04: double-clicking does nothing — open a terminal in your Downloads folder and run:  sudo apt install ./TrinityOne-Suite-linux-x86_64.deb' },
+        { type: 'note', text: 'The AppImage has to be marked executable before it will run (right-click → Properties → allow executing as a program, or chmod +x). We have not tested it as thoroughly as the .deb.' },
         { type: 'steps', label: 'Installing on a Linux server — three commands, in this order', items: [
-          'Download the installer to the server:  curl -fsSL -o install.sh https://app.trinityone.church/relay-app/install.sh',
-          'Read it before you run it:  less install.sh   — near the top is the release key it checks every download against. That is the point of downloading it first: the script you can read is what decides what gets installed.',
-          'Run it:  sudo bash install.sh   — it installs Node if needed, fetches the relay, checks the download’s signature, sets it up as a service, and prints the address of the relay’s control panel and the admin token to unlock it.',
-          'Finish in the browser: open the control panel it printed, paste the token, and add your church’s npub under “Churches on this relay”.',
+          'Download the installer to the server:  curl -fsSL -o install.sh https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download/install.sh',
+          'Read it before you run it:  less install.sh   — near the top is the release key it checks every download against, with its fingerprint. That is the point of downloading it first: the script you can read is what decides what gets installed. The fingerprint must be the one below; if it is not, stop.',
+          'Run it:  sudo bash install.sh   — it installs Node if needed, fetches the relay from the newest TrinityOne release on GitHub, checks the download’s signature against that key, sets it up as a service, and prints the address of the relay’s control panel and the admin token to unlock it.',
+          'Finish in the browser: open the control panel it printed and paste the token. The installer asked for your church’s npub, so the relay already knows which church it serves; if you left that blank, add it under “Churches on this relay”.',
         ] },
+        { type: 'callout', tone: 'sage', text: 'Release key fingerprint (SHA-256):  72eaf9dae5f094be4fc4162771465a68865a9ac350fd0ac4ef9d75e648a93383   The same number is what  bash install.sh --fingerprint  prints for the file you downloaded, and  sha256sum relay-app/release-pubkey.pem  gives for the key in the public repository at github.com/TrinityOneAdmin/TrinityOne. Three places; if they disagree, do not run the script.' },
         { type: 'dont', items: [
           'Don’t pipe the installer straight into sudo (curl … | sudo bash). It runs as root; read it first.',
-          'Don’t drop the -L from curl: if the address redirects, without -L you save the redirect page instead of the script.',
+          'Don’t drop the -L from curl: the GitHub address redirects, and without -L you save the redirect page instead of the script.',
         ] },
         { type: 'note', text: 'Whichever way you set it up, the last step is the same: in this console, Settings → Network & relays, add the relay’s address. The Suite does this for you; a server box shows the address in its control panel.' },
-        { type: 'tech', text: 'The install script pins the TrinityOne release public key and verifies bundle.sig against bundle.tgz (Ed25519, openssl pkeyutl) before unpacking anything; later updates are verified the same way against the key the bundle carries. The Suite’s desktop installers are downloaded over HTTPS from GitHub Releases and are not code-signed; the Suite updates by installing a newer Suite, not through the relay’s update button.' },
+        { type: 'tech', text: 'A server box takes its CODE from GitHub Releases — bundle.tgz and bundle.sig sit beside the Suite installers on each relay-v release, signed on the release host with the key whose fingerprint is above — and the member and steward apps it hands out from app.trinityone.church, which carries them and GitHub does not. The install script pins the release public key and verifies bundle.sig against bundle.tgz (Ed25519, openssl pkeyutl) before unpacking anything; the panel’s Update now does the same against the key the bundle carries. The Suite’s desktop installers are downloaded over HTTPS from GitHub Releases and are not code-signed; the Suite updates by installing a newer Suite, not through the relay’s update button.' },
       ],
     },
     {

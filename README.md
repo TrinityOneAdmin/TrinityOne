@@ -70,10 +70,12 @@ node scripts/gateway.mjs 8000        # serves the app + a local relay on :8000
 
 ## Self-host a relay
 
-A church can run its own relay on a Raspberry Pi, mini-PC, or VPS — one line, then finish in the browser:
+A church can run its own relay on a Raspberry Pi, mini-PC, or VPS — three commands, then finish in the browser:
 
 ```bash
-curl -fsSL https://<your-host>/relay-app/install.sh | sudo bash
+curl -fsSL -o install.sh https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download/install.sh
+less install.sh        # read it first — it pins the release key it checks every download against
+sudo bash install.sh
 ```
 
 It defaults to a **Cloudflare tunnel** (use your own domain with `--cf-token` / `--domain relay.yourchurch.org`); Tailscale and LAN-only are also supported. See [`relay-app/`](relay-app/).

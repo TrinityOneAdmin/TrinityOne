@@ -20,9 +20,17 @@
 // the real settings page is opened, the real link pressed, and the guide's own words are read out of HelpData
 // at run time rather than copied into this file. The website half is Chromium reading help.html's DOM from a
 // gateway this test spawns.
+//
+// §5 (2026-09-21, after AUDIT-suite-ABD §6 and A2): the first guide sent the server to app.trinityone.church
+// for install.sh and bundle.tgz, and that host serves neither. Every download address the guide, the READMEs,
+// the installer and the console card print must now resolve — string-wise, no network — to an asset that
+// scripts/publish-relay-bundle.sh uploads or that relay-desktop.yml publishes. And the key's fingerprint,
+// printed so a reader has something to compare the script against that did not arrive with it, is pinned in
+// three places to relay-app/release-pubkey.pem.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { readFileSync, mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -105,10 +113,10 @@ test('the guide carries the two-step form: download with -L, read, then run — 
   assert.ok(a && Array.isArray(a.blocks) && a.blocks.length >= 5, 'there is no "console-relay" guide with a body in help-data.jsx — the one-liner has no home again');
   const steps = a.blocks.filter((b) => b.type === 'steps').flatMap((b) => b.items);
   assert.ok(steps.length >= 3, 'the guide has no numbered steps');
-  const dl = steps.findIndex((s) => /curl -fsSL -o install\.sh https:\/\/app\.trinityone\.church\/relay-app\/install\.sh/.test(s));
+  const dl = steps.findIndex((s) => /curl -fsSL -o install\.sh https:\/\/github\.com\/TrinityOneAdmin\/TrinityOne\/releases\/latest\/download\/install\.sh/.test(s));
   const rd = steps.findIndex((s) => /less install\.sh/.test(s));
   const run = steps.findIndex((s) => /sudo bash install\.sh/.test(s));
-  assert.ok(dl > -1, 'no step downloads the installer to a file with -L (curl -fsSL -o install.sh …)');
+  assert.ok(dl > -1, 'no step downloads the installer to a file with -L from the GitHub release (curl -fsSL -o install.sh https://github.com/…/releases/latest/download/install.sh) — app.trinityone.church does not serve it');
   assert.ok(rd > -1, 'no step tells the reader to READ the script before running it');
   assert.ok(run > -1, 'no step runs the downloaded file with sudo bash install.sh');
   assert.ok(dl < rd && rd < run, 'the steps are not in the order download → read → run');
@@ -239,4 +247,80 @@ test('the website’s download section points at the guide, and README no longer
   const readme = readFileSync(join(ROOT, 'relay-app', 'README.md'), 'utf8').split('\n').filter((l) => !/^\s*(#|<!--)/.test(l)).join('\n');
   assert.doesNotMatch(readme, /install\.sh \| sudo bash/, 'relay-app/README.md still tells people to pipe install.sh into sudo bash');
   assert.match(readme, /curl -fsSL -o install\.sh/, 'relay-app/README.md does not carry the download-to-a-file step');
+});
+
+// ── §5 · every printed address serves its file, and the trust root can be checked ────────────────────────
+
+const ASSETS_UPLOADED = spawnSync('bash', [join(ROOT, 'scripts', 'publish-relay-bundle.sh'), '--list-assets'], { encoding: 'utf8' }).stdout.trim().split('\n').filter(Boolean);
+// what relay-desktop.yml publishes: TrinityOne-Suite-<stable>.<ext> (or -setup.exe) per matrix row, and suite-latest.json
+function workflowAssets() {
+  const y = readFileSync(join(ROOT, '.github', 'workflows', 'relay-desktop.yml'), 'utf8').split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+  const rows = [...y.matchAll(/bundles:\s*([a-z,]+)\s*\n\s*stable:\s*([A-Za-z0-9_-]+)/g)];
+  assert.ok(rows.length >= 3, 'could not read the matrix rows out of relay-desktop.yml — re-anchor this test');
+  const out = new Set(['suite-latest.json']);
+  for (const [, bundles, stable] of rows) for (const b of bundles.split(',')) {
+    const ext = { deb: 'deb', appimage: 'AppImage', dmg: 'dmg', app: null, nsis: null }[b];
+    if (b === 'nsis') out.add('TrinityOne-Suite-' + stable + '-setup.exe');
+    else if (ext) out.add('TrinityOne-Suite-' + stable + '.' + ext);
+  }
+  return out;
+}
+const guideText = (a) => a.blocks.flatMap((b) => [b.text, b.label, ...(b.items || []).map((it) => (typeof it === 'string' ? it : it.lead + ' ' + it.text))]).filter(Boolean).join('\n');
+const urlsIn = (text) => [...text.matchAll(/https?:\/\/[^\s'"<>)\]]+/g)].map((m) => m[0].replace(/[.,:;]+$/, ''));
+
+test('every download address the guide, READMEs, installer and console card print is an asset something publishes', () => {
+  const { win, mod, draw } = fresh();
+  const a = article(win);
+  const card = panelTitled(draw(mod.DashSettings, { initialSection: 'ownbox', onSectionConsumed() {} }), 'Run your own relay box')[0];
+  const sources = {
+    'help-data.jsx console-relay': guideText(a),
+    'relay-app/README.md': readFileSync(join(ROOT, 'relay-app', 'README.md'), 'utf8'),
+    'README.md': readFileSync(join(ROOT, 'README.md'), 'utf8'),
+    'relay-app/install.sh': readFileSync(join(ROOT, 'relay-app', 'install.sh'), 'utf8'),
+    'console card': find(card, (n) => n.type === 'a' && (n.props || {}).href).map((n) => String(n.props.href)).join('\n'),
+  };
+  const published = new Set([...ASSETS_UPLOADED, ...workflowAssets()]);
+  assert.ok(ASSETS_UPLOADED.includes('install.sh') && ASSETS_UPLOADED.includes('bundle.tgz') && ASSETS_UPLOADED.includes('bundle.sig'), 'publish-relay-bundle.sh no longer uploads install.sh, bundle.tgz and bundle.sig: ' + ASSETS_UPLOADED.join(', '));
+  let checked = 0;
+  for (const [what, text] of Object.entries(sources)) {
+    for (const u of urlsIn(text)) {
+      const m = u.match(/^https:\/\/github\.com\/TrinityOneAdmin\/TrinityOne\/releases\/(?:latest\/download|download\/[^/]+)\/([^/]+)$/);
+      if (m) { checked++; assert.ok(published.has(m[1]), what + ' prints ' + u + ' but nothing publishes an asset named ' + m[1] + ' (published: ' + [...published].join(', ') + ')'); }
+      const b = u.match(/^https:\/\/github\.com\/TrinityOneAdmin\/TrinityOne\/blob\/[^/]+\/(.+)$/);
+      if (b) { checked++; assert.ok(existsSync(join(ROOT, b[1])), what + ' points at ' + u + ' and ' + b[1] + ' is not in the tree'); }
+      assert.doesNotMatch(u, /app\.trinityone\.church\/relay-app\/(bundle|install)/, what + ' still prints ' + u + ' — that host has no release key and serves neither the bundle nor the installer');
+    }
+  }
+  assert.ok(checked >= 6, 'fewer addresses were checked than expected (' + checked + ') — the guide, READMEs, installer or card lost their download links');
+  // and the installer's own default, resolved by its own rule, lands on the same assets
+  const inst = sources['relay-app/install.sh'];
+  const src = inst.match(/^SRC="([^"]+)"/m);
+  assert.ok(src, 'install.sh has no SRC= default');
+  const from = inst.indexOf('# ── release_bundle_base ──'), to = inst.indexOf('# ── end release_bundle_base ──', from);
+  const base = spawnSync('bash', ['-c', inst.slice(from, to) + '\nrelease_bundle_base ' + JSON.stringify(src[1])], { encoding: 'utf8' }).stdout.trim();
+  for (const f of ['bundle.tgz', 'bundle.sig']) {
+    const u = base + '/' + f;
+    const m = u.match(/^https:\/\/github\.com\/TrinityOneAdmin\/TrinityOne\/releases\/latest\/download\/([^/]+)$/);
+    assert.ok(m && published.has(m[1]), 'the installer\'s default source resolves to ' + u + ', which nothing publishes');
+  }
+});
+
+test('the release key fingerprint is one number in the guide, the installer header, --fingerprint, the README and the committed pem', () => {
+  const pem = readFileSync(join(ROOT, 'relay-app', 'release-pubkey.pem'));
+  const real = createHash('sha256').update(pem).digest('hex');
+  const hex64 = (text, what) => { const m = [...new Set([...text.matchAll(/\b[0-9a-f]{64}\b/g)].map((x) => x[0]))]; assert.equal(m.length, 1, what + ' should print exactly one 64-hex fingerprint, found ' + m.length); return m[0]; };
+  const { win } = fresh();
+  assert.equal(hex64(guideText(article(win)), 'the guide'), real, 'the fingerprint printed in the guide is not sha256(relay-app/release-pubkey.pem)');
+  const inst = readFileSync(join(ROOT, 'relay-app', 'install.sh'), 'utf8');
+  assert.equal(hex64(inst, 'install.sh'), real, 'the fingerprint in install.sh\'s header is not sha256(relay-app/release-pubkey.pem)');
+  assert.equal(hex64(readFileSync(join(ROOT, 'relay-app', 'README.md'), 'utf8'), 'relay-app/README.md'), real, 'the README\'s fingerprint is not the pem\'s');
+  // the key actually pinned in the script, hashed the way the header tells the reader to
+  const pinned = inst.match(/^RELEASE_PUBKEY_PEM='([\s\S]*?)'$/m);
+  assert.ok(pinned, 'install.sh no longer pins a key');
+  assert.equal(createHash('sha256').update(pinned[1] + '\n').digest('hex'), real, 'the key pinned in install.sh does not hash to the fingerprint the header states');
+  // and the script, run without root, prints that number and nothing else
+  const r = spawnSync('bash', [join(ROOT, 'relay-app', 'install.sh'), '--fingerprint'], { encoding: 'utf8' });
+  assert.equal(r.status, 0, '`bash install.sh --fingerprint` failed: ' + r.stderr);
+  assert.equal(r.stdout.trim(), real, '`bash install.sh --fingerprint` printed ' + JSON.stringify(r.stdout) + ', not the pem\'s sha256');
+  assert.doesNotMatch(r.stdout + r.stderr, /Installing|Fetching|run as root/, '--fingerprint went on to do something other than print the fingerprint');
 });
