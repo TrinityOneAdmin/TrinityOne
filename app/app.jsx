@@ -104,6 +104,25 @@ function lsGet(key, fallback){ try{ const v = localStorage.getItem(key); return 
 const _IDENT_KEY = /(npub1[02-9ac-hj-np-z]{20,}|[0-9a-f]{64})/i;
 function lsCanWrite(key){ try{ return !_IDENT_KEY.test(String(key)) || !!(window.Fellowship && window.Fellowship.myPubkey); }catch(e){ return true; } }
 function lsSet(key, val){ if(!lsCanWrite(key)) return; try{ localStorage.setItem(key, JSON.stringify(val)); }catch(e){} }
+// ── where the reader was ──
+// 2026-09-21, owner on the Pixel after an update: "it didn't keep my reading position". It never did — the
+// reader opened at John 1 on every launch. The place is written under the translation it was read in, so a
+// second translation with a different set of books (a New Testament alone, say) does not inherit a book it
+// cannot open; and a saved place is only trusted back if that book is still installed in the translation
+// that loads, else the reader starts where it always did. A verse is kept when the reader arrived at one.
+const READ_LOC_KEY = (version) => 'trinityone.readLoc.' + String(version || '');
+function resolveStartLoc(saved, books, maxChapter, fallback) {
+  const s = saved && typeof saved === 'object' ? saved : null;
+  if (!s) return fallback;
+  const book = Number(s.book), chap = Number(s.chap);
+  if (!Number.isInteger(book) || !Number.isInteger(chap) || chap < 1) return fallback;
+  let installed = []; try { installed = books() || []; } catch (e) { return fallback; }
+  if (!installed.includes(book)) return fallback;
+  let max = 0; try { max = Number(maxChapter(book)); } catch (e) {}
+  if (Number.isFinite(max) && max >= 1 && chap > max) return fallback;
+  const verse = Number(s.verse);
+  return Number.isInteger(verse) && verse >= 1 ? { book, chap, verse } : { book, chap };
+}
 // perf #10: merge a delivered kind-0 church profile into the church list, returning the SAME array reference when
 // nothing actually changed. The old callbacks did `cs.map(...)` unconditionally → a fresh array on every profile
 // re-delivery (incl. per-relay + reconnect), which re-ran the ~9 church-doc subscription effects keyed on `churches`
@@ -352,7 +371,21 @@ function App() {
 
   // reading location + active version (lifted so Today/Search can navigate)
   const [loc, setLoc] = useA(null);
-  useAE(() => { if (Bible.loaded && !loc) setLoc(Bible.defaultLoc()); }, [Bible.loaded]);
+  // On boot the reader opens where this member left off in the translation that loaded (resolveStartLoc,
+  // above), else at the translation's default. Every later navigation — the reader's own controls, gotoRef
+  // from Search / a plan / the notes panel, openPlanDay — goes through setLoc after this and so wins over the
+  // saved place, and is itself the next place saved.
+  useAE(() => {
+    if (!Bible.loaded || loc) return;
+    setLoc(resolveStartLoc(lsGet(READ_LOC_KEY(Bible.activeVersion), null), () => Bible.books(), (b) => Bible.maxChapter(b), Bible.defaultLoc()));
+  }, [Bible.loaded]);
+  // Written on every change of place (a chapter turned, a book picked, a verse arrived at) — never on a
+  // scroll — and again for the newly active translation when the member switches, so whichever loads first
+  // next launch finds the same place.
+  useAE(() => {
+    if (!loc || !Bible.activeVersion) return;
+    lsSet(READ_LOC_KEY(Bible.activeVersion), loc.verse ? { book: loc.book, chap: loc.chap, verse: loc.verse } : { book: loc.book, chap: loc.chap });
+  }, [loc, Bible.activeVersion]);
   // deep-links: ?group=<id> opens a chat room, ?plan=<id> opens a plan
   useAE(() => {
     const sp = new URLSearchParams(location.search);
