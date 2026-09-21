@@ -105,7 +105,13 @@ const FIRSTRUN = (() => {
 // claims one did not happen.
 // `sessionStorage` must be injected too: without it the block ReferenceErrors into its own catch and every
 // test reports "no redirect" — green, and measuring nothing.
-function launch({ seen = null, hostname = '127.0.0.1', storageThrows = false, tried = null, session = null } = {}) {
+// ⚠ THE LOAD EVENT AND THE TIMER ARE STUBBED TOO, and `launch()` plays them through unless told not to.
+// The redirect now waits for the load event and one more task, because a navigation started earlier
+// REPLACES the launcher's history entry in a real browser (measured; see home.js and
+// scripts/the-suite-splash-is-never-a-dead-end.test.mjs). So the block runs with the document still
+// `loading`, then the harness fires `load` and runs the timers, and only then reads what navigated.
+// `settle: false` stops before the load event, for the one test that asserts nothing has moved by then.
+function launch({ seen = null, hostname = '127.0.0.1', storageThrows = false, tried = null, session = null, settle = true } = {}) {
   const went = [];
   const ls = {};
   const localStorage = storageThrows
@@ -120,8 +126,15 @@ function launch({ seen = null, hostname = '127.0.0.1', storageThrows = false, tr
     set href(u) { went.push({ how: 'href', to: u }); },
     get href() { return 'http://127.0.0.1:8787/relay-app/home.html'; },
   };
-  new Function('localStorage', 'sessionStorage', 'location', FIRSTRUN)(localStorage, sessionStorage, location);
-  return { went, ss };
+  const onLoad = [], timers = [];
+  const document = { readyState: 'loading' };
+  const window = { addEventListener: (ev, f) => { if (ev === 'load') onLoad.push(f); } };
+  const setTimeout = (f) => { timers.push(f); };
+  new Function('localStorage', 'sessionStorage', 'location', 'document', 'window', 'setTimeout', FIRSTRUN)(localStorage, sessionStorage, location, document, window, setTimeout);
+  const fireLoad = () => { document.readyState = 'complete'; onLoad.splice(0).forEach(f => f()); };
+  const runTimers = () => { while (timers.length) timers.shift()(); };
+  if (settle) { fireLoad(); runTimers(); }
+  return { went, ss, fireLoad, runTimers };
 }
 const navigated = (r) => r.went.map(w => w.to);
 
@@ -138,6 +151,19 @@ test('…AND IT LEAVES A WAY BACK. `replace` consumes the entry the panel\u2019s
   // no links, no address bar, nothing but quitting the app. This is the whole of audit finding A-F1.
   assert.deepEqual(launch().went, [{ how: 'href', to: '/relay-app/control.html' }],
     'THE LAUNCHER STILL REPLACES ITS OWN HISTORY ENTRY, so the relay panel is a one-way door.');
+});
+
+test('…and `href` is NOT enough: the redirect waits for the load event and one more task', () => {
+  // The test above went green on 2026-09-12 and the owner still landed on the splash on 2026-09-19. Measured
+  // in Chromium (scripts/the-suite-splash-is-never-a-dead-end.test.mjs): a navigation started before the
+  // document has finished loading REPLACES its entry whichever method starts it — inline, or inside the load
+  // handler itself. One task after load, it pushes. So `href` chosen at the wrong moment is `replace`.
+  const r = launch({ settle: false });
+  assert.deepEqual(navigated(r), [], 'the launcher navigated BEFORE the load event, which replaces its own history entry');
+  r.fireLoad();
+  assert.deepEqual(navigated(r), [], 'the launcher navigated INSIDE the load handler, which still replaces its own history entry');
+  r.runTimers();
+  assert.deepEqual(navigated(r), ['/relay-app/control.html'], 'the redirect never fires once the page has loaded');
 });
 
 test('once per app RUN, even when the wizard never managed to mark itself seen', () => {

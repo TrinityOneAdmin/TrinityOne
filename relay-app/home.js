@@ -100,11 +100,27 @@
     // strictly worse than not admitting it.
     var h = String(location.hostname || '').replace(/^\[|\]$/g, '');
     if (!/^(localhost|127\.0\.0\.1|::1)$/i.test(h)) return;
-    sessionStorage.setItem('to_relay_setup_tried', '1');
-    // ⚠ `href`, NOT `replace`. `replace` CONSUMES this page's history entry, and the relay panel's only way
-    // out is `openConsole`, whose rule is `history.length > 1 ? history.back() : go to the launcher`. With
-    // the entry consumed, Back landed on the bundled "Starting your relay…" splash — no links, no address
-    // bar, nothing but quitting the app. Pushing restores the one assumption that exit depends on.
-    location.href = '/relay-app/control.html';
+    // ⚠ AFTER THE LOAD EVENT, AND ONE TASK LATER. A navigation started before this document has finished
+    // loading REPLACES its history entry, whichever way it is started — `href` and `replace` behave the
+    // same then. Measured in Chromium, 2026-09-21 (scripts/the-suite-splash-is-never-a-dead-end.test.mjs):
+    // `location.href` run inline, or inside the load handler itself, leaves [splash, control]; the same
+    // line one setTimeout after load leaves [splash, home, control]. WebKit draws the line at the same
+    // place (a location change scheduled before the load event has finished locks the back/forward list).
+    //
+    // 0ac3ee6 changed `replace` to `href` for exactly this reason and it changed nothing in a real
+    // browser, because the line still ran before load: the relay panel's only exit is `openConsole`
+    // (`history.length > 1 ? history.back() : go to the launcher`), history.length was 2, and Back landed
+    // on the bundled "Starting your relay…" splash — no links, no address bar, nothing but quitting the
+    // app. That is the door the owner walked through on a fresh Ubuntu box on 2026-09-19. The unit harness
+    // stubs `location`, so it could only ever see WHICH method was called, never what the browser did with
+    // it; the browser test above is the one that can.
+    var go = function () {
+      try {
+        sessionStorage.setItem('to_relay_setup_tried', '1');
+        location.href = '/relay-app/control.html';
+      } catch (e2) { /* as below */ }
+    };
+    var later = function () { setTimeout(go, 0); };
+    if (document.readyState === 'complete') later(); else window.addEventListener('load', later);
   } catch (e) { /* no storage, or a browser refusing it → leave the launcher alone, never trap the user */ }
 })();

@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>TrinityOne Relay</title>
 <style>
-  :root { color-scheme: light dark; --bg:#faf8f4; --ink:#2b2a27; --dim:#7c766c; --accent:#3a6b5f; --line:#e7e2d8; }
-  @media (prefers-color-scheme: dark) { :root { --bg:#16181a; --ink:#ece8e0; --dim:#9a948a; --accent:#7fb8a8; --line:#2a2d30; } }
+  :root { color-scheme: light dark; --bg:#faf8f4; --ink:#2b2a27; --dim:#7c766c; --accent:#3a6b5f; --clay:#c0562e; --line:#e7e2d8; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#16181a; --ink:#ece8e0; --dim:#9a948a; --accent:#7fb8a8; --clay:#d0693e; --line:#2a2d30; } }
   * { box-sizing: border-box; }
   html, body { height: 100%; margin: 0; }
   body {
@@ -15,31 +15,81 @@
     display: flex; align-items: center; justify-content: center; text-align: center;
     -webkit-user-select: none; user-select: none;
   }
-  .card { max-width: 340px; padding: 24px; }
+  .card { max-width: 360px; padding: 24px; }
   .halo {
     width: 76px; height: 76px; margin: 0 auto 22px; border-radius: 50%;
     border: 3px solid var(--line); border-top-color: var(--accent);
     animation: spin 1s linear infinite;
   }
+  .up .halo { animation: none; border-color: var(--accent); }
   @media (prefers-reduced-motion: reduce) { .halo { animation: none; border-top-color: var(--line); } }
   @keyframes spin { to { transform: rotate(360deg); } }
   h1 { font-size: 18px; font-weight: 650; margin: 0 0 6px; letter-spacing: .2px; }
   p { margin: 0; color: var(--dim); font-size: 13.5px; }
   .slow { margin-top: 16px; font-size: 12px; opacity: 0; transition: opacity .6s; }
   .slow.show { opacity: 1; }
+  .hint { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line); font-size: 12.5px; }
+  .exits { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-top: 12px; }
+  .exits a { display: inline-block; text-decoration: none; font-weight: 700; font-size: 13px; padding: 9px 14px; border-radius: 10px; color: #fff; background: var(--clay); transition: opacity .3s; }
+  .exits a[aria-disabled="true"] { opacity: .45; }
+  :focus-visible, a:focus-visible { outline: 2px solid var(--clay); outline-offset: 2px; }
 </style>
 </head>
 <body>
-  <div class="card">
+  <div class="card" id="card">
     <div class="halo" aria-hidden="true"></div>
-    <h1>Starting your relay…</h1>
-    <p>Setting up your church's own corner of the network. This takes a few seconds the first time.</p>
+    <h1 id="title">Starting your relay…</h1>
+    <p id="sub">Setting up your church's own corner of the network. This takes a few seconds the first time.</p>
     <p class="slow" id="slow">Still working — preparing the database and keys…</p>
+    <!-- NEVER A DEAD END. This page is the window's first history entry, so Back from the launcher lands here —
+         and on 2026-09-19 the owner reached it by pressing the relay panel's own "← Back" on a fresh Ubuntu box
+         (home.js's redirect ran before the load event, which REPLACES the launcher's entry; see home.js). With
+         no links on it, the only way out was quitting the app. So it carries the same two doors the launcher
+         does, and a line that says what the wait is. The links are never blocked: while the relay is still
+         starting they are dimmed and marked disabled, and they brighten when it answers. -->
+    <p class="hint" id="hint">If this stays here, the relay is starting in the background — these open when it answers.</p>
+    <nav class="exits" aria-label="Open the Suite">
+      <a id="goPanel" href="http://127.0.0.1:8787/relay-app/control.html" aria-disabled="true">Open the relay panel</a>
+      <a id="goConsole" href="http://127.0.0.1:8787/steward.html" aria-disabled="true">Open the console</a>
+    </nav>
   </div>
   <script>
-    // Purely cosmetic: reassure the user if the first boot runs long. The Rust shell navigates this
-    // window to the live control panel as soon as the relay is listening.
+    // Cosmetic: reassure the user if the first boot runs long. The Rust shell navigates this window to the
+    // launcher as soon as the relay is listening (main.rs), whether or not this script ever sees it answer.
     setTimeout(function () { var s = document.getElementById('slow'); if (s) s.classList.add('show'); }, 6000);
+
+    // THE RELAY'S ADDRESS. The shell starts the gateway on a fixed port (main.rs: `const PORT: u16 = 8787`) and
+    // reaches it by 127.0.0.1, not localhost — on Windows localhost can resolve to ::1 while the relay listens on
+    // IPv4. The shell passes no query string; `?relay=` exists so the headless browser test can point this page
+    // at a gateway on a port it chose, and only a page loaded with that query reads it.
+    (function () {
+      var base = 'http://127.0.0.1:8787';
+      try { var q = new URLSearchParams(location.search).get('relay'); if (q && /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/i.test(q)) base = q; } catch (e) {}
+      var panel = document.getElementById('goPanel'), console_ = document.getElementById('goConsole');
+      if (panel) panel.href = base + '/relay-app/control.html';
+      if (console_) console_.href = base + '/steward.html';
+      var hint = document.getElementById('hint');
+      var answered = false;
+      function up() {
+        if (answered) return; answered = true;
+        [panel, console_].forEach(function (a) { if (a) a.setAttribute('aria-disabled', 'false'); });
+        document.getElementById('card').classList.add('up');
+        var t = document.getElementById('title'); if (t) t.textContent = 'Your relay is running';
+        var s = document.getElementById('sub'); if (s) s.textContent = 'Pick where to go.';
+        var sl = document.getElementById('slow'); if (sl) sl.style.display = 'none';
+        if (hint) hint.textContent = 'The relay is answering — open the panel or the console.';
+      }
+      // Poll /status (it answers with Access-Control-Allow-Origin: * and no token). A poll that never succeeds
+      // changes nothing: the links above work without it.
+      function tick() {
+        if (answered) return;
+        var done = false;
+        try {
+          fetch(base + '/status', { cache: 'no-store' }).then(function (r) { if (r && r.ok) { done = true; up(); } }).catch(function () {}).then(function () { if (!done) setTimeout(tick, 1000); });
+        } catch (e) { setTimeout(tick, 1000); }
+      }
+      tick();
+    })();
   </script>
 </body>
 </html>
