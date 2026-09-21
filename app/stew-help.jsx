@@ -34,7 +34,7 @@
 // loses the church's has no church to go back to, and no way to move it onto a new key. 'restore' also named
 // a member Help button that does not exist in this console, and 'steward' ("Help from a steward") is written
 // to the person being helped — who, here, is the reader's member, not the reader.
-const STEW_HELP_IDS = ['console', 'console-giving-records', 'console-family-safety', 'console-checkin', 'console-steward', 'console-words', 'console-restore', 'console-scams', 'how-it-works'];
+const STEW_HELP_IDS = ['console', 'console-relay', 'console-giving-records', 'console-family-safety', 'console-checkin', 'console-steward', 'console-words', 'console-restore', 'console-scams', 'how-it-works'];
 
 function stewHelpArticles() {
   const all = (window.HelpData && Array.isArray(window.HelpData.articles)) ? window.HelpData.articles : [];

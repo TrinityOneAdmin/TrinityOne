@@ -88,6 +88,7 @@ function consoleWith(React, over = {}) {
     DismissibleNote: function DismissibleNote(p) { return p.children; },
     ConsoleChrome: function ConsoleChrome(p) { return p.children; },
     StewHelpButton: function StewHelpButton() { return null; },
+    StewHelpLink: function StewHelpLink() { return null; },   // app/stew-help.jsx; the relay card links its guide (2026-09-21)
     WizMeetings: function WizMeetings() { return null; },
     _wizMeetingId: () => 'evt1',
     useStewDialog: () => ({ current: null }),

@@ -462,6 +462,41 @@ window.HelpData = {
         { type: 'tech', text: 'The console is the same app pointed at the church’s relay with owner/steward privileges. The relay’s write-policy is the real gatekeeper — membership, approvals, invite-only groups and the safeguarding rules are all enforced server-side, so they hold even against a modified client.' },
       ],
     },
+    // THE ONE-LINE INSTALLER'S HOME (2026-09-21). relay-app/install.sh appeared in no help doc; the only place a
+    // steward met it was the console's relay card, as a raw `curl … | sudo bash` with no explanation. Owner's
+    // findings from a fresh Ubuntu box (reference/BACKLOG.md, 2026-09-19): the .deb double-click that works on
+    // 22.04 does nothing on 24.04, and the AppImage has to be marked executable first. The card now links here.
+    // The install script is the trust root (it pins the release key it checks every download against), which
+    // is WHY the form is download → read → run, and never `curl | sudo bash`.
+    // Plain text only: the console renders these strings as text, so an HTML tag would show up literally.
+    {
+      id: 'console-relay',
+      illo: 'safe',
+      title: 'Running your own relay',
+      summary: 'A computer you own carries your church’s records. Three ways to set one up, and which to pick.',
+      minutes: 4,
+      blocks: [
+        { type: 'p', text: 'A relay is the small server that carries your church’s chat, members and announcements. New churches start on the shared TrinityOne relay with nothing to set up. When you want everything on hardware you control, there are three ways to run one — pick by what computer you have.' },
+        { type: 'list', items: [
+          { lead: 'The TrinityOne Suite (recommended)', text: 'A desktop app for Windows, macOS and Linux. Install it, open it, and it runs the relay and the console together. Any computer you can leave switched on will do. Get it from the Downloads on the console’s home page or from trinityone.church.' },
+          { lead: 'A Linux server (a Raspberry Pi, a mini-PC, an old laptop, a rented VPS)', text: 'For a box with no screen that must run on its own, day and night. A short install script sets the relay up as a service that starts at boot. The steps are below.' },
+          { lead: 'Nothing you can leave on', text: 'Use the hosted console at trinityone.church instead. Your records live on our relays; you can move to the Suite later without losing anything.' },
+        ] },
+        { type: 'callout', tone: 'gold', text: 'On Linux, the Suite comes as a .deb package and as an AppImage. Use the .deb. On Ubuntu 22.04 double-clicking it opens the installer; on Ubuntu 24.04 double-clicking does nothing — open a terminal in your Downloads folder and run:  sudo apt install ./TrinityOne-Suite-linux-x86_64.deb   The AppImage has to be marked executable before it will run (right-click → Properties → allow executing as a program, or chmod +x), and we have not tested it as thoroughly as the .deb.' },
+        { type: 'steps', label: 'Installing on a Linux server — three commands, in this order', items: [
+          'Download the installer to the server:  curl -fsSL -o install.sh https://app.trinityone.church/relay-app/install.sh',
+          'Read it before you run it:  less install.sh   — near the top is the release key it checks every download against. That is the point of downloading it first: the script you can read is what decides what gets installed.',
+          'Run it:  sudo bash install.sh   — it installs Node if needed, fetches the relay, checks the download’s signature, sets it up as a service, and prints the address of the relay’s control panel and the admin token to unlock it.',
+          'Finish in the browser: open the control panel it printed, paste the token, and add your church’s npub under “Churches on this relay”.',
+        ] },
+        { type: 'dont', items: [
+          'Don’t pipe the installer straight into sudo (curl … | sudo bash). It runs as root; read it first.',
+          'Don’t drop the -L from curl: if the address redirects, without -L you save the redirect page instead of the script.',
+        ] },
+        { type: 'note', text: 'Whichever way you set it up, the last step is the same: in this console, Settings → Network & relays, add the relay’s address. The Suite does this for you; a server box shows the address in its control panel.' },
+        { type: 'tech', text: 'The install script pins the TrinityOne release public key and verifies bundle.sig against bundle.tgz (Ed25519, openssl pkeyutl) before unpacking anything; later updates are verified the same way against the key the bundle carries. The Suite’s desktop installers are downloaded over HTTPS from GitHub Releases and are not code-signed; the Suite updates by installing a newer Suite, not through the relay’s update button.' },
+      ],
+    },
     {
       id: 'giving-records',
       illo: 'paper',

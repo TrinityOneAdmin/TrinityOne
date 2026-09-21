@@ -10,21 +10,29 @@ The box that carries your church's messages, run on your own computer. Two ways 
 
 This README covers the server core; the Suite wraps the same relay.
 
-## Install on a Linux box, one line *(recommended — always-on)*
+## Install on a Linux box *(recommended — always-on)*
 For a relay that runs on boot and keeps running with nothing left open — on a Raspberry Pi, a
-mini-PC, an old laptop, or a VPS (any apt-based Linux; not Pi-specific):
+mini-PC, an old laptop, or a VPS (any apt-based Linux; not Pi-specific). Three commands, in this order:
 
 ```bash
-curl -fsSL https://app.trinityone.church/relay-app/install.sh | sudo bash
+curl -fsSL -o install.sh https://app.trinityone.church/relay-app/install.sh
+less install.sh        # read it first — it pins the release key it checks every download against
+sudo bash install.sh
 ```
 
-It installs Node if needed, fetches the app, runs the relay as a hardened `systemd` service under a
-dedicated `trinityone` user, asks for your church npub (write policy) and **lets you pick how it's
-reachable** — Tailscale, a Cloudflare quick tunnel, or LAN-only. Non-interactive / scripted:
+Not `curl … | sudo bash`: the script is the trust root, so it is downloaded, read, then run. (Keep the
+`-L`: if the address redirects, without it you save the redirect page instead of the script.) It installs
+Node if needed, fetches the app **and its signature** and verifies the one against the other before
+unpacking, runs the relay as a hardened `systemd` service under a dedicated `trinityone` user, asks for
+your church npub (write policy) and **lets you pick how it's reachable** — Tailscale, a Cloudflare quick
+tunnel, or LAN-only. Non-interactive / scripted:
 
 ```bash
-curl -fsSL …/install.sh | sudo bash -s -- --church npub1… --name "Grace Chapel" --tunnel tailscale -y
+sudo bash install.sh --church npub1… --name "Grace Chapel" --tunnel tailscale -y
 ```
+
+The same steps, with the Linux `.deb` / AppImage notes for the Suite, are in the help guide
+*Running your own relay* (`help.html#console-relay`, and Help in the steward console).
 
 Flags: `--church <npub[,npub…]>` · `--name` · `--tunnel tailscale|cloudflared|none` · `--port` ·
 `--dir` · `--branch` · `-y`. Re-run any time to update. Manage with `systemctl status trinityone-relay`.

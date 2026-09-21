@@ -88,6 +88,7 @@ function consoleWith(React, over = {}) {
     StewVersion: function StewVersion() { return null; },
     NetworkAnnounceComposer: function NetworkAnnounceComposer() { return null; },
     DismissibleNote: function DismissibleNote(p) { return p.children; },
+    StewHelpLink: function StewHelpLink() { return null; },   // app/stew-help.jsx; the relay card links its guide (2026-09-21)
     ConsoleChrome: function ConsoleChrome(p) { return p.children; },
     useStewDialog: () => ({ current: null }),
     churchHandle: () => 'grace',
