@@ -599,8 +599,31 @@
         : '<div class="apk-note warn">This box holds no installer yet, so there is nothing for members to install. Press “Update the installer now”.</div>';
     box.innerHTML = head + rows;
     const keep = document.getElementById('keepApkCurrent'); if (keep) keep.checked = s.keepCurrent === true;
-    const url = document.getElementById('installUrl'); if (url) url.textContent = s.shareUrl || '';
     const open = document.getElementById('openInstall'); if (open && s.shareUrl) open.href = s.shareUrl;
+    // "GIVE PEOPLE THIS" ONLY WHEN THERE IS SOMETHING PEOPLE CAN USE. The box answers with the address the
+    // ASKER used, and this panel asks from 127.0.0.1 — so on a Suite box that is not yet public the card
+    // printed http://127.0.0.1:8787/install under "share the address" and a QR encoding the same (owner's
+    // screenshot, 2026-09-19). That address resolves, on a member's phone, to the member's phone. Same rule
+    // as the console's installPageUrl(): loopback is refused; a private (LAN) address works on the church's
+    // own wifi and is carried and LABELLED; anything else is printed as it is. The gateway now folds this
+    // box's own tunnel into shareUrl, so once "Make it public" has been pressed the address here follows.
+    const share = String(s.shareUrl || '');
+    let host = '';
+    try { host = new URL(share).hostname.toLowerCase().replace(/^\[|\]$/g, ''); } catch (e) { host = ''; }
+    const LOOP = /^(localhost|::1|0\.0\.0\.0|127\.)/, LAN = /^(10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)|\.local$/;
+    const kind = !share ? 'none' : LOOP.test(host) ? 'local' : LAN.test(host) ? 'lan' : 'public';
+    const url = document.getElementById('installUrl');
+    const h2 = document.getElementById('installShareH'), p2 = document.getElementById('installShareP'), qr = document.getElementById('installQr');
+    if (url) { url.textContent = kind === 'local' || kind === 'none' ? '' : share; url.style.display = kind === 'local' || kind === 'none' ? 'none' : ''; }
+    if (qr) qr.style.display = kind === 'local' || kind === 'none' ? 'none' : 'block';
+    if (h2) h2.textContent = kind === 'local' ? 'Not shareable yet' : kind === 'none' ? 'No address yet' : 'Give people this';
+    if (p2) p2.textContent = kind === 'local'
+      ? 'This works only on this computer — press “Make it public” in Reach members from anywhere, above, to get an address you can share.'
+      : kind === 'lan'
+        ? 'This works on your own wifi only. Point a phone camera at the code, or share the address — for one that works anywhere, press “Make it public” above.'
+        : kind === 'none'
+          ? 'The relay did not say where it can be reached.'
+          : 'Point a phone camera at the code, or share the address. It opens the install page — no password, nothing to sign into.';
   }
 
   document.getElementById('fetchApk')?.addEventListener('click', async () => {
@@ -771,17 +794,27 @@
     document.getElementById('gpUp').onclick = doUp;
   }
 
+  // The installer card's "Give people this" address follows the tunnel (loadApkStatus), and that card
+  // re-reads itself every five minutes. Pressing "Make it public" must not leave "Not shareable yet" on
+  // screen for five minutes beside a card that says "On · public", so a change of public state re-reads
+  // it at once. `null` until the first tick has answered, so the first read is not counted as a change.
+  let _gpWasPublic = null;
+  function gpNotePublic(pubNow) {
+    if (_gpWasPublic === null) { _gpWasPublic = pubNow; return; }
+    if (pubNow !== _gpWasPublic) { _gpWasPublic = pubNow; loadApkStatus(); }
+  }
   async function gpTick() {
     if (tsBusy || cfHold) return;
     try {
       // Cloudflare quick tunnel is the no-account default — if it's up, show that and skip the Tailscale flow.
       let cf = null; try { cf = await (await fetch('/tunnel/state', { headers: authHeaders(), cache: 'no-store' })).json(); } catch (e) {}
-      if (cf && cf.running && cf.url) { renderCfPublic(cf); return; }
+      if (cf && cf.running && cf.url) { renderCfPublic(cf); gpNotePublic(true); return; }
       const r = await fetch('/tailscale/state', { headers: authHeaders(), cache:'no-store' });
       if (r.status === 401) { renderGoPublic({ locked:true }); return; }
       const s = await r.json();
       if (s.loggedIn) lastAuthUrl = '';
       renderGoPublic(s);
+      gpNotePublic(!!(s.funnelOn && s.publicUrl));
     } catch (e) { /* relay unreachable — the hero card already says so */ }
   }
 

@@ -333,11 +333,26 @@ async function apkAutoRefresh(why, force = false) {
 
 // The absolute address to send a member to. SETTINGS.appUrl is what the operator has TOLD this box it is
 // reachable at (behind a tunnel the Host header can be anything); fall back to the host the asker used.
+//
+// A LOOPBACK ASKER GETS THE ADDRESS THIS BOX OPENED FOR ITSELF. The Suite's own window reaches the relay at
+// 127.0.0.1, so the Host header there names an address that works on no other machine — and until 2026-09-21
+// that is what the panel printed under "Give people this", tunnel or no tunnel (measured: the quick tunnel
+// up, /relay-app/apk-status still said http://127.0.0.1:<port>/install, and the QR encoded the same). The
+// tunnel this box opened (CF_URL) or the Tailscale Funnel the panel last saw is the address a member can
+// actually reach, so those win over a loopback Host. A LAN Host is left alone on purpose: a phone that
+// reached /install over the hall wifi is exactly the member this feature exists for, and sending it round
+// through a tunnel would spend the mobile data the card promises to save.
 function installBase(req) {
   const conf = String(SETTINGS.appUrl || '').trim().replace(/\/+$/, '');
   if (/^https?:\/\//i.test(conf)) return conf;
   const host = String((req && req.headers && req.headers.host) || '').split(',')[0].trim();
   if (!host) return '';
+  const m6 = host.match(/^\[([^\]]*)\]/);   // "[::1]:8787" → "::1"; a bare "::1" (two colons or more) carries no port
+  const hn = (m6 ? m6[1] : host.split(':').length > 2 ? host : host.replace(/:\d+$/, '')).toLowerCase();
+  if (hn === 'localhost' || hn === '::1' || hn === '0.0.0.0' || /^127\./.test(hn)) {
+    if (CF_URL) return CF_URL;
+    if (_tsCache && _tsCache.funnelOn && _tsCache.publicUrl) return _tsCache.publicUrl;
+  }
   const fwd = String((req && req.headers && req.headers['x-forwarded-proto']) || '').split(',')[0].trim();
   const proto = fwd || ((req && req.socket && req.socket.encrypted) ? 'https' : 'http');
   return proto + '://' + host;

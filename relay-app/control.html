@@ -602,8 +602,11 @@
         <div class="share-box">
           <img id="installQr" class="share-qr" src="/apks/qr.svg" width="150" height="150" alt="QR code linking to this box's install page">
           <div class="share-words">
-            <div class="share-h">Give people this</div>
-            <div class="share-p">Point a phone camera at the code, or share the address. It opens the install page — no password, nothing to sign into.</div>
+            <!-- loadApkStatus rewrites all three: a loopback address is not shareable and is never printed
+                 here (BACKLOG, owner's screenshot 2026-09-19: "http://127.0.0.1:8787/install" under "share
+                 the address"); a LAN address is printed and labelled; a public one is printed as-is. -->
+            <div class="share-h" id="installShareH">Give people this</div>
+            <div class="share-p" id="installShareP">Point a phone camera at the code, or share the address. It opens the install page — no password, nothing to sign into.</div>
             <div class="share-u" id="installUrl">—</div>
           </div>
         </div>
