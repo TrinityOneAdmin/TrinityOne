@@ -82,5 +82,18 @@ if [ -z "${PAYLOAD_SKIP_STAMP:-}" ]; then
   { git -C "$DIR" rev-parse "$REF^{commit}"; git -C "$DIR" show -s --format=%cI "$REF^{commit}"; } > "$OUT/version.txt" 2>/dev/null || true
 fi
 
+# 5. WHERE A SUITE GETS THINGS FROM. gateway.mjs reads its update source from DATA_DIR/origin, and until
+#    2026-09-21 the only writer of that file was relay-app/install.sh — so a relay installed from the desktop
+#    Suite had none, could fetch no installer to hand out, and its panel said "this box hands out nothing
+#    yet" (owner's Ubuntu box, 2026-09-19). This stamp is the seed: on a packaged relay's FIRST boot the
+#    gateway copies it into DATA_DIR/origin (and never again — the operator's file wins from then on).
+#    Its presence is also what tells the gateway "this tree is a Suite payload", i.e. the code is read-only
+#    and relay-update.sh can never run here, so the panel says the software moves with the Suite.
+#    The default is the SAME host install.sh defaults to (its SRC=), pinned equal by
+#    scripts/a-suite-relay-is-told-where-to-get-things-from.test.mjs — one release host, two routes.
+#    Only the payload carries this file: relay-app/desktop is export-ignored, so it never reaches a
+#    bundle.tgz, and a git checkout never has it — which keeps every test-spawned gateway off the network.
+printf '%s\n' "${RELEASE_ORIGIN:-https://app.trinityone.church}" > "$OUT/release-origin"
+
 echo "build-relay-payload: done — $(du -sh "$OUT" | cut -f1) in $OUT"
 echo "  entry: node $OUT/scripts/gateway.mjs <port>   (set TRINITY_DATA_DIR to a writable dir)"

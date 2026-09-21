@@ -279,8 +279,10 @@ test('the panel asks the box what it hands out — not the relay’s own apk-lat
 });
 
 test('a behind box gets a headline an operator cannot miss, and an instruction', async () => {
+  // `origin` is what the endpoint has always returned; the panel now reads it (a box with none gets a
+  // disabled button and a different headline — scripts/a-suite-relay-is-told-where-to-get-things-from.test.mjs).
   const { dom } = await runPanel(okReply({
-    behind: true, holding: 2, keepCurrent: false, shareUrl: 'https://grace.example/install',
+    origin: 'https://release.example', behind: true, holding: 2, keepCurrent: false, shareUrl: 'https://grace.example/install',
     files: [{ name: 'trinityone.apk', title: 'TrinityOne', present: true, versionName: '0.9.99', versionCode: 206, ageDays: 2, state: 'behind', say: 'BEHIND — the update source is offering a different build.' }],
   }));
   const html = dom.els.get('apkHeld').innerHTML;
@@ -297,7 +299,7 @@ test('a behind box gets a headline an operator cannot miss, and an instruction',
 
 test('a box that is up to date says members can install from it, and holds no warning', async () => {
   const { dom } = await runPanel(okReply({
-    behind: false, holding: 2, keepCurrent: true, shareUrl: 'https://grace.example/install',
+    origin: 'https://release.example', behind: false, holding: 2, keepCurrent: true, shareUrl: 'https://grace.example/install',
     files: [{ name: 'trinityone.apk', title: 'TrinityOne', present: true, versionName: '0.9.72', versionCode: 207, ageDays: 0, state: 'current', say: 'Up to date.' }],
   }));
   const html = dom.els.get('apkHeld').innerHTML;

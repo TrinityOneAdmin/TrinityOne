@@ -92,6 +92,10 @@ relay/
 !relay/deploy/
 !relay/deploy/**
 relay/rejected.log
+# The Suite payload's update-source seed (scripts/build-relay-payload.sh step 5). It belongs ONLY in a built
+# payload: committed here it would make every git checkout read as a packaged Suite (gateway.mjs PACKAGED)
+# and seed an origin on every test relay.
+/release-origin
 # dev rigs: long-running experiments driven by hand, never part of a release
 scripts/.age-rig.mjs
 scripts/.boot-*.mjs

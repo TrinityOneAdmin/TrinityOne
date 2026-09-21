@@ -239,11 +239,19 @@ test('the payload stamp names the ref that was packaged, not the commit that hap
       { cwd: dir, env: e, encoding: 'utf8', maxBuffer: 512 * 1024 * 1024 });
     assert.equal(r.status, 0, 'build-relay-payload.sh failed\n' + (r.stderr || ''));
     const [sha, date] = readFileSync(join(out, 'version.txt'), 'utf8').split('\n');
-    return { sha: (sha || '').trim(), date: (date || '').trim() };
+    let seed = null; try { seed = readFileSync(join(out, 'release-origin'), 'utf8').trim(); } catch {}
+    return { sha: (sha || '').trim(), date: (date || '').trim(), seed };
   };
 
   // (a) no ref named → the default, `main`. The stamp must be main's, not the branch sitting in HEAD.
   const def = payload([]);
+  // THE SECOND STAMP (2026-09-21): the update source a packaged Suite seeds on first boot. Without it a Suite
+  // relay has no origin, hands out no installer, and its panel says "this box hands out nothing yet" — the
+  // owner's Ubuntu box of 2026-09-19. The gateway's half (seeding, and reading the file as "this is a
+  // payload") is in scripts/a-suite-relay-is-told-where-to-get-things-from.test.mjs; this row proves the
+  // real build script actually writes the file the gateway looks for.
+  assert.equal(def.seed, 'https://app.trinityone.church',
+    'the payload carries no release-origin (or the wrong one) — a Suite built from it boots with no update source');
   assert.notEqual(def.sha, wipSha,
     'the payload stamped the CHECKED-OUT commit: /suite-update compares this sha for EQUALITY against '
     + 'suite-latest.json, so the shipped Suite would misreport which build it is');

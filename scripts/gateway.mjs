@@ -146,8 +146,64 @@ const effChurchCap = () => SETTINGS.churchCap || CHURCH_MEDIA_CAP;   // per-chur
 function saveSettings() { try { const tmp = SETTINGS_FILE + '.tmp'; writeFileSync(tmp, JSON.stringify(SETTINGS, null, 2) + '\n'); renameSync(tmp, SETTINGS_FILE); } catch {} }
 loadSettings();
 
-// where this box pulls code updates from (written by the installer); blank on the release host itself.
-const ORIGIN = (() => { try { return readFileSync(join(DATA_DIR,'origin'), 'utf8').trim(); } catch { return ''; } })();
+// ── WHERE THIS BOX GETS THINGS FROM ──────────────────────────────────────────────────────────────────────
+// The update source: the host this box pulls the member/steward installers from (fetchApksFromOrigin), and —
+// on a server installed by relay-app/install.sh — the host relay-update.sh pulls a signed code bundle from.
+// Blank on the release host itself.
+//
+// It lives in ONE file, DATA_DIR/origin, and there are three writers:
+//   • relay-app/install.sh writes --src (default https://app.trinityone.church) at install time;
+//   • a packaged Suite SEEDS it on first boot from ROOT/release-origin, which scripts/build-relay-payload.sh
+//     stamps into the payload beside version.txt. Measured 2026-09-19 on the owner's Ubuntu box: a Suite
+//     install had no origin at all, so its panel said "this box hands out nothing yet" and pressing the
+//     button answered "✗ this relay has no origin to fetch from" — the file simply had no writer on that
+//     route. The seed is the SAME host install.sh defaults to, because it is the host every member phone
+//     already checks for updates (app/update-check.jsx) and the one the console links members to. The seed
+//     is copied ONLY when the file does not exist: an operator who clears it (an empty file) stays cleared.
+//   • the operator, from the control panel, through POST /settings {origin} — admin-gated, same trust as
+//     install.sh's --src, since it decides where the installers members download come from.
+//
+// LIVE, NOT A BOOT-TIME CONSTANT. Every reader below consults the `let` on each call, so a change from the
+// panel takes effect at once and the panel can say "in use now" rather than "restart the relay".
+//
+// A GIT CHECKOUT SEEDS NOTHING. Only a payload carries release-origin (relay-app/desktop is export-ignored,
+// so it never reaches a bundle.tgz either), which is what keeps every test-spawned gateway from dialling the
+// production host, and keeps the release host's own checkout from acquiring an origin.
+const ORIGIN_FILE = join(DATA_DIR, 'origin');
+const RELEASE_ORIGIN_SEED = join(ROOT, 'release-origin');
+// True when this code tree is a Suite payload. A payload's code is read-only inside the installed app and
+// no trinityone-update.path unit exists there, so "Update now" (relay-update.sh) can never run on it — the
+// Suite's software updates when a newer Suite is installed (/suite-update, home.js). The panel reads this
+// and shows that sentence instead of a button that would queue a flag nothing consumes.
+const PACKAGED = existsSync(RELEASE_ORIGIN_SEED);
+// '' for blank, the normalised origin for a valid one, null for something that is not an http(s) origin.
+// Only scheme + host[:port] survive: the readers append fixed paths, and credentials or a path in here would
+// be silently prepended to every fetch.
+function cleanOrigin(raw) {
+  const s = String(raw == null ? '' : raw).trim();
+  if (!s) return '';
+  if (s.length > 200) return null;
+  let u; try { u = new URL(s); } catch { return null; }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+  if (u.username || u.password) return null;
+  if ((u.pathname && u.pathname !== '/') || u.search || u.hash) return null;
+  return u.origin;
+}
+function readOriginFile() { try { return readFileSync(ORIGIN_FILE, 'utf8').trim(); } catch { return ''; } }
+function writeOriginFile(v) { const tmp = ORIGIN_FILE + '.tmp'; writeFileSync(tmp, v + '\n'); renameSync(tmp, ORIGIN_FILE); }
+let ORIGIN = readOriginFile();
+if (!existsSync(ORIGIN_FILE) && PACKAGED) {
+  let seed = ''; try { seed = cleanOrigin(readFileSync(RELEASE_ORIGIN_SEED, 'utf8')) || ''; } catch {}
+  if (seed) { try { writeOriginFile(seed); ORIGIN = seed; console.log('[origin] first run of a packaged relay — update source set to ' + seed); } catch (e) { console.error('[origin] could not seed the update source:', (e && e.message) || e); } }
+}
+// The operator's setter. Returns { ok, origin } or { error } with a sentence for the panel.
+function setOrigin(raw) {
+  const v = cleanOrigin(raw);
+  if (v === null) return { error: 'that is not a web address this box can fetch from — it needs to look like https://example.org' };
+  try { writeOriginFile(v); } catch (e) { return { error: 'could not save the update source: ' + String((e && e.message) || e) }; }
+  ORIGIN = v;
+  return { ok: true, origin: v };
+}
 // build version — `git archive` stamps version.txt via export-subst when the bundle is built; on a git
 // working tree the $Format placeholders stay literal, so fall back to git. Reported in /status so the
 // control dashboard can tell an installed relay whether a newer build is available.
@@ -264,7 +320,7 @@ function apkVerdict(held, facts) {
 // Pull both APKs from the origin AND record what was pulled. Shared by the operator's button and the
 // automatic refresh below, so the two can never disagree about what landed on disk.
 async function fetchApksFromOrigin(auto = false) {
-  if (!ORIGIN) return { error: 'this relay has no origin to fetch from' };
+  if (!ORIGIN) return { error: 'this box was never told where to get things from — set an update source in the control panel' };
   const base = ORIGIN.replace(/\/+$/, '');
   try { mkdirSync(APK_DIR, { recursive: true }); } catch {}
   let latest = null;
@@ -6303,12 +6359,20 @@ function serveStatic(req, res) {
     const H = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SEC_HEADERS, ...CORS };
     if (req.method === 'OPTIONS') { res.writeHead(204, { ...SEC_HEADERS, ...CORS }); res.end(); return; }
     if (!adminOK(req)) { res.writeHead(401, H); res.end('{"error":"unauthorized"}'); return; }
-    if (req.method === 'GET') { res.writeHead(200, H); res.end(JSON.stringify({ ok: true, settings: SETTINGS, mediaUsed: _mediaBytesTotal, mediaEnv: { cap: MEDIA_CAP, churchCap: CHURCH_MEDIA_CAP } })); return; }
+    if (req.method === 'GET') { res.writeHead(200, H); res.end(JSON.stringify({ ok: true, settings: SETTINGS, origin: ORIGIN, packaged: PACKAGED, mediaUsed: _mediaBytesTotal, mediaEnv: { cap: MEDIA_CAP, churchCap: CHURCH_MEDIA_CAP } })); return; }
     if (req.method === 'POST') {
       let body = ''; req.on('data', c => { body += c; if (body.length > 1e4) req.destroy(); });
       req.on('end', () => {
         try {
           const s = JSON.parse(body || '{}');
+          // THE UPDATE SOURCE is not a SETTINGS key: it lives in DATA_DIR/origin, the one file install.sh and
+          // relay-update.sh already read, so the three writers can never disagree about where it is kept.
+          // A bad value is refused whole — nothing else in the same request is applied either, so the
+          // panel's "✓ saved" can only ever mean the address it shows is the one in use.
+          if ('origin' in s) {
+            const r = setOrigin(s.origin);
+            if (r.error) { res.writeHead(400, H); res.end(JSON.stringify({ error: r.error })); return; }
+          }
           if ('lanAccess' in s) {
             SETTINGS.lanAccess = !!s.lanAccess;
             // a marker file, because the Tauri launcher decides the bind address before the gateway exists
@@ -6330,7 +6394,7 @@ function serveStatic(req, res) {
           // Turning the automatic refresh ON acts NOW rather than at the next 12-hour tick. An operator who
           // ticks the box because the panel just told them they are behind must not be left still behind.
           if ('keepApkCurrent' in s && SETTINGS.keepApkCurrent) { apkAutoRefresh('the operator turned it on', true).catch(() => {}); }
-          res.writeHead(200, H); res.end(JSON.stringify({ ok: true, settings: SETTINGS }));
+          res.writeHead(200, H); res.end(JSON.stringify({ ok: true, settings: SETTINGS, origin: ORIGIN, packaged: PACKAGED }));
         } catch (e) { res.writeHead(400, H); res.end(JSON.stringify({ error: String((e && e.message) || 'bad request') })); }
       });
       return;
@@ -6457,12 +6521,16 @@ function serveStatic(req, res) {
             else if (s && s.version) latest = { version: s.version, versionShort: s.versionShort, builtAt: s.builtAt };
           } catch {}
         }
-        res.writeHead(200, H); res.end(JSON.stringify({ ok: true, version: BUILD.sha, versionShort: BUILD.short, builtAt: BUILD.date, origin: ORIGIN, pending, stalled, last, latest }));
+        // `releaseHost` and `packaged` let the panel tell three no-button states apart that it used to
+        // render as one false sentence ("This is the release source"): the release host itself, a Suite
+        // payload (updates with the Suite), and a box that was simply never told where to get things from.
+        res.writeHead(200, H); res.end(JSON.stringify({ ok: true, version: BUILD.sha, versionShort: BUILD.short, builtAt: BUILD.date, origin: ORIGIN, releaseHost: existsSync(RELEASE_KEY), packaged: PACKAGED, pending, stalled, last, latest }));
       })();
       return;
     }
     if (req.method === 'POST') {
-      if (!ORIGIN) { res.writeHead(400, H); res.end('{"error":"this relay has no update origin (it may be the release host itself)"}'); return; }
+      if (PACKAGED) { res.writeHead(400, H); res.end('{"error":"this relay is part of the TrinityOne Suite — its software updates when you install a newer Suite"}'); return; }
+      if (!ORIGIN) { res.writeHead(400, H); res.end('{"error":"this box was never told where to get things from — set an update source in the control panel"}'); return; }
       try { writeFileSync(UPDATE_FLAG, JSON.stringify({ at: Date.now() }) + '\n'); res.writeHead(200, H); res.end(JSON.stringify({ ok: true, queued: true })); }
       catch (e) { res.writeHead(500, H); res.end(JSON.stringify({ error: 'could not queue the update: ' + String((e && e.message) || e) })); }
       return;
@@ -6477,7 +6545,7 @@ function serveStatic(req, res) {
     if (req.method === 'OPTIONS') { res.writeHead(204, { ...SEC_HEADERS, ...CORS }); res.end(); return; }
     if (!adminOK(req)) { res.writeHead(401, H); res.end('{"error":"unauthorized"}'); return; }
     if (req.method !== 'POST') { res.writeHead(405, H); res.end('{"error":"method"}'); return; }
-    if (!ORIGIN) { res.writeHead(400, H); res.end('{"error":"this relay has no origin to fetch from"}'); return; }
+    if (!ORIGIN) { res.writeHead(400, H); res.end('{"error":"this box was never told where to get things from — set an update source in the control panel"}'); return; }
     // The download itself lives in fetchApksFromOrigin() so that this button and the automatic refresh do
     // the SAME thing — including writing the provenance stamp that everything downstream reads.
     (async () => {

@@ -489,6 +489,10 @@
       const cur = await r.json(); relayVersion = cur.version || '';
       card.style.display = 'block';
       document.getElementById('u-current').textContent = (cur.versionShort || '—') + (cur.builtAt ? ' · ' + cur.builtAt.slice(0, 10) : '');
+      // The update-source field mirrors the file on the box, never the value somebody last typed — except
+      // while the operator is typing in it, when a 60-second re-read must not wipe their edit.
+      const oIn = document.getElementById('originIn');
+      if (oIn && document.activeElement !== oIn) oIn.value = cur.origin || '';
       const body = document.getElementById('u-body');
       // report the LAST OUTCOME whenever we look, not only if we happened to be watching (H2/H7)
       const lastMsg = document.getElementById('updateMsg');
@@ -501,7 +505,18 @@
       }
       if (cur.stalled) { body.innerHTML = '<b>The update didn\u2019t start.</b> This relay asked for one but nothing picked it up \u2014 the update helper isn\u2019t installed on this box, so updates have to be applied by re-running the installer.'; return; }
       if (cur.pending) { body.innerHTML = '⏳ An update is in progress…'; pollUpdate(); return; }
-      if (!cur.origin) { body.innerHTML = 'This is the release source — nothing to pull here.'; return; }
+      // THREE STATES THAT USED TO BE ONE FALSE SENTENCE. With no origin this card said "This is the release
+      // source — nothing to pull here" — true of exactly one machine, and shown on every Suite and every
+      // fresh box. A Suite's code is read-only inside the installed app and nothing there consumes the
+      // update flag, so its software moves with the Suite itself; a box with no source is told so and given
+      // the field above rather than a button that would fail underneath.
+      if (cur.packaged) { body.innerHTML = 'This relay is part of the <b>TrinityOne Suite</b>: its software updates when you install a newer Suite — the launcher (Back) says when one is out. The update source above is still what the installer card below fetches from.'; return; }
+      if (!cur.origin) {
+        if (cur.releaseHost) { body.innerHTML = 'This is the release source — nothing to pull here.'; return; }
+        body.innerHTML = '<b>This box was never told where to get things from</b> — set an update source above. Until then there is nowhere to check for a newer build or pull one from.'
+          + '<button class="btn-clay" id="doUpdate" disabled aria-disabled="true" style="margin-top:8px;display:block;opacity:.55;cursor:not-allowed">Update now</button>';
+        return;
+      }
       // The relay checks its update source server-side (cur.latest) — the browser can't be relied on to reach
       // the release host's ts.net funnel. If the server couldn't reach it either, cur.latest is null.
       const latest = cur.latest;
@@ -592,12 +607,22 @@
     }).join('');
     // THE HEADLINE IS THE POINT OF THE WHOLE CARD. An operator must not have to read three rows of version
     // numbers to find out that the thing they are handing to their congregation is out of date.
-    const head = s.behind
-      ? '<div class="apk-note warn">This box is handing out an installer that is behind. Press “Update the installer now”.</div>'
-      : s.holding
-        ? '<div class="apk-note ok">Members can install from this box.</div>'
-        : '<div class="apk-note warn">This box holds no installer yet, so there is nothing for members to install. Press “Update the installer now”.</div>';
+    //
+    // AND THE PRECONDITION COMES FIRST. With no update source the old headline still said "Press 'Update the
+    // installer now'", the button was live, and pressing it printed "✗ this relay has no origin to fetch
+    // from" underneath — the owner's screenshot of 2026-09-19. The button is disabled with the reason until
+    // a source exists; the reason names where to set it.
+    const noSource = !s.origin;
+    const head = noSource
+      ? '<div class="apk-note warn">This box was never told where to get things from, so it cannot fetch an installer — set an update source under “Relay software” above.' + (s.holding ? ' Members can still install the copy it already holds.' : '') + '</div>'
+      : s.behind
+        ? '<div class="apk-note warn">This box is handing out an installer that is behind. Press “Update the installer now”.</div>'
+        : s.holding
+          ? '<div class="apk-note ok">Members can install from this box.</div>'
+          : '<div class="apk-note warn">This box holds no installer yet, so there is nothing for members to install. Press “Update the installer now”.</div>';
     box.innerHTML = head + rows;
+    const fetchBtn = document.getElementById('fetchApk');
+    if (fetchBtn) { fetchBtn.disabled = noSource; fetchBtn.title = noSource ? 'Set an update source first' : ''; }
     const keep = document.getElementById('keepApkCurrent'); if (keep) keep.checked = s.keepCurrent === true;
     const url = document.getElementById('installUrl'); if (url) url.textContent = s.shareUrl || '';
     const open = document.getElementById('openInstall'); if (open && s.shareUrl) open.href = s.shareUrl;
@@ -619,6 +644,23 @@
     // rather than the request we made — including a fetch that half worked.
     loadApkStatus();
   });
+  // Saving the update source re-reads BOTH cards that depend on it, so "✓ saved" and a still-disabled
+  // button can never sit on the same screen.
+  document.getElementById('originSave')?.addEventListener('click', async () => {
+    const inp = document.getElementById('originIn'), m = document.getElementById('originMsg');
+    if (!inp || !m) return;
+    m.style.color = 'var(--ink-3)'; m.textContent = 'saving…';
+    try {
+      const r = await fetch('/settings', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify({ origin: (inp.value || '').trim() }) });
+      const s = await r.json();
+      if (!r.ok) { m.style.color = 'var(--clay-ink)'; m.textContent = '✗ ' + (s.error || 'could not save the update source'); return; }
+      inp.value = s.origin || '';   // what the box now holds, not the echo of what was typed
+      m.style.color = 'var(--sage-ink)';
+      m.textContent = s.origin ? '✓ saved — in use now, no restart needed' : '✓ cleared — this box has no update source';
+    } catch (e) { m.style.color = 'var(--clay-ink)'; m.textContent = '✗ ' + e.message; return; }
+    loadUpdate(); loadApkStatus();
+  });
+  document.getElementById('originIn')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') document.getElementById('originSave').click(); });
   document.getElementById('keepApkCurrent')?.addEventListener('change', async (e) => {
     const on = e.target.checked, m = document.getElementById('apkMsg');
     m.style.color = 'var(--ink-3)'; m.textContent = 'saving…';
