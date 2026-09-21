@@ -56,6 +56,7 @@ async function runSaveName({ typed, existingName = '', selfRegister }) {
     name: typed,
     church: { name: existingName, nip05: 'x@y' },
     setBusy: () => {},
+    setNameSlow: () => {}, nameSlowTimer: { current: null },   // the "still waiting" line under the field (2026-09-21); its 5 s timer is cleared on every exit
     next: () => calls.push(['next']),
     window: { Steward },
   };
