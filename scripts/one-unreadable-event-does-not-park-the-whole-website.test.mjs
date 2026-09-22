@@ -42,7 +42,9 @@ const sealed = (obj, key) => JSON.stringify({ e: nip44e(JSON.stringify(obj), unh
 // a test can start with an empty ring (the key has not arrived) and hand it over later. `tick(seconds)`
 // moves the clock the engine reads through now(); nothing here advances by counting syncs, because after
 // AUDIT-feeds-round3 F1 the engine does not either.
-function mirror({ events, copies, share, ring = [KEY_OURS], store = new Map() }) {
+// `at` starts this watch's clock at a given second instead of the default, so a row can run SEVERAL watches
+// over one storage and one moving wall clock — which is what a console whose relay flaps actually is.
+function mirror({ events, copies, share, ring = [KEY_OURS], store = new Map(), at = 1790000000 }) {
   const src = STEWARD;
   const body = [
     stmt(src, 'var WEB_ID_OK = ', 'WEB_ID_OK'),
@@ -54,6 +56,9 @@ function mirror({ events, copies, share, ring = [KEY_OURS], store = new Map() })
     fnBody(src, 'function _webGroupKey', '_webGroupKey'),
     fnBody(src, 'function _webGroupLoad', '_webGroupLoad'),
     fnBody(src, 'function _webGroupSeen', '_webGroupSeen'),
+    fnBody(src, 'function _webStuckKey', '_webStuckKey'),
+    fnBody(src, 'function _webStuckLoad', '_webStuckLoad'),
+    fnBody(src, 'function _webStuckClock', '_webStuckClock'),
     stmt(src, 'var SEAL_B64 = ', 'SEAL_B64'),
     fnBody(src, 'function _sealIsWhole', '_sealIsWhole'),
     fnBody(src, 'function _webWhyStuck', '_webWhyStuck'),
@@ -73,13 +78,13 @@ function mirror({ events, copies, share, ring = [KEY_OURS], store = new Map() })
 
   const published = [];
   const emitted = [];
-  let clock = 1790000000;
+  let clock = at;
   const w = {
     pub: 'CP', share, shareTs: 1, shareKnown: true,
     events: new Map(events.map(e => [e.id, e])), versions: new Map(), eventsKnown: true,
     copies: new Map(Object.entries(copies)), copyTs: new Map(), copiesKnown: true,
     subs: [], listeners: new Set([(snap) => emitted.push(snap)]), busy: false, again: false, timer: null,
-    stuckSince: 0, keyedSince: 0, groupSeen: new Set(), stuck: new Set(), stuckWhy: '', blocked: 0, held: 0,
+    stuckSince: 0, keyedSince: 0, groupSeen: new Set(), stuckAt: new Map(), stuck: new Set(), stuckWhy: '', blocked: 0, held: 0, heldIds: [],
   };
   const scope = {
     _web: w, pub: 'CP', sk: 'SK', actingChurch: '',
@@ -102,8 +107,9 @@ function mirror({ events, copies, share, ring = [KEY_OURS], store = new Map() })
   assert.ok(dec, 'vendor/steward.js: _openChurchDoc no longer decrypts the way this test reads it — re-anchor');
   scope[dec] = (ct, k) => require44().decrypt(ct, k);
   const names = Object.keys(scope);
-  const api = new Function(...names, `${body}\nreturn { _webSync, _webDesired, _webGroupLoad, w: _web };`)(...names.map(n => scope[n]));
+  const api = new Function(...names, `${body}\nreturn { _webSync, _webDesired, _webGroupLoad, _webStuckLoad, w: _web };`)(...names.map(n => scope[n]));
   w.groupSeen = api._webGroupLoad('CP');   // as _webEnsure does: what this console remembered before it restarted
+  w.stuckAt = api._webStuckLoad('CP');     // …and how long it had already been shut when the last watch stopped
   return { ...api, published, emitted, scope, w, ring, store,
     tick: (seconds) => { clock += seconds; },
     dtags: () => published.map(e => (e.tags.find(t => t[0] === 'd') || [])[1]),
@@ -478,6 +484,95 @@ test('F2: a copy the owner ticked "Not on the website" is NOT counted as still o
   const m2 = mirror({ events: [GOOD1, LOST], copies: { evtlost: LIVE_YOUTH }, share: share() });
   await pastReporting(m2);
   assert.equal(m2.emitted[m2.emitted.length - 1].held, 1, 'a stuck copy that IS being served stopped being counted');
+});
+
+// ── F3: ten minutes of WALL CLOCK, not ten minutes of one uninterrupted session ──────────────────────────
+// AUDIT-feeds-round4-2026-09-22 F3. The clock lived only in the watch, and the dashboard rebuilds the watch
+// on every connection bump (`_maybeBumpConn`, a 90 s heartbeat plus focus/visibility/online). So a console
+// on a thin pipe reset it every time: measured against e0ffd10's bundle, 0 tombstones over 108 simulated
+// minutes on a nine-minute restart cycle. The commit that set the budget framed the restart-reset as a
+// safety property; it is also the failure mode, and it lands on exactly the churches this product is aimed
+// at — the ones whose stranded copy will live longest.
+//
+// Each session below is a SEPARATE watch over one storage and one moving wall clock, which is what a
+// flapping console actually is.
+const flap = async ({ sessions, minutes, ring, store, t0 = 1790000000, events = [GOOD1, GROUP_LOST] }) => {
+  const hit = []; let t = t0;
+  for (let n = 1; n <= sessions; n++) {
+    const m = mirror({ events, copies: { evtyouth: LIVE_YOUTH }, share: share(), store, at: t, ...(ring ? { ring } : {}) });
+    await m._webSync();
+    m.tick(minutes * 60);
+    await m._webSync();
+    if (m.tombstoned().length) hit.push(n);
+    t += minutes * 60;
+  }
+  return hit;
+};
+test('F3: a relay that flaps every nine minutes no longer prevents the withdrawal for ever', async () => {
+  const store = new Map();
+  // one session that could still read it — the only moment a console can learn whose event this is
+  const first = mirror({ events: [GOOD1, GROUP_READABLE], copies: { evtyouth: LIVE_YOUTH }, share: share({ optIn: ['evtyouth'] }), store });
+  await first._webSync();
+  assert.deepEqual([...first.w.groupSeen], ['evtyouth'], 're-anchor: the console never learned this was a group\'s event');
+  const hit = await flap({ sessions: 12, minutes: 9, store });
+  assert.ok(hit.length,
+    'A FLAPPING RELAY PREVENTS THE WITHDRAWAL FOR EVER — twelve nine-minute sessions, 108 minutes of an adults-only room on a public website, and nothing was ever withdrawn');
+  assert.equal(hit[0], 2, 'the withdrawal took ' + hit[0] + ' nine-minute sessions, not the 2 that ten minutes of wall clock needs');
+});
+
+test('F3 CONTROL: a key that has NOT ARRIVED still spends nothing, however many restarts', async () => {
+  // AUDIT-feeds-round3 F1c, which a persisted clock must not undo. With an empty ring every event in the
+  // church's calendar is "stuck" and the cause is that the envelope is in flight, not that anything is lost.
+  // Nothing may be written down either — a clock started while the ring was empty would be spent by the time
+  // the ring arrived, which is the same bug wearing a hat.
+  const store = new Map();
+  const first = mirror({ events: [GOOD1, GROUP_READABLE], copies: { evtyouth: LIVE_YOUTH }, share: share({ optIn: ['evtyouth'] }), store });
+  await first._webSync();
+  const hit = await flap({ sessions: 12, minutes: 9, store, ring: [] });
+  assert.deepEqual(hit, [],
+    'A CONSOLE WAITING ON ITS NAME KEY WITHDREW AN EVENT ANYWAY — "the envelope has not arrived" and "the key is gone" are the same state again');
+  assert.equal(store.get('trinityone.webstuck.CP') || '[]', '[]', 'the give-up clock was started and written down while the key ring was still empty');
+  // CONTROL: the identical cycle WITH the ring does withdraw, so the row above is not passing on an accident
+  const store2 = new Map();
+  const f2 = mirror({ events: [GOOD1, GROUP_READABLE], copies: { evtyouth: LIVE_YOUTH }, share: share({ optIn: ['evtyouth'] }), store: store2 });
+  await f2._webSync();
+  assert.ok((await flap({ sessions: 12, minutes: 9, store: store2 })).length, 're-anchor: the flap never withdraws anything at all now');
+});
+
+test('F3: the persisted clock is cleared the moment the document opens again', async () => {
+  // Ten UNBROKEN minutes. A console that was stuck for nine minutes, read the document, and lost it again
+  // must wait a fresh ten — not act on the nine it remembered from before the key came back.
+  const store = new Map();
+  const first = mirror({ events: [GOOD1, GROUP_READABLE], copies: { evtyouth: LIVE_YOUTH }, share: share({ optIn: ['evtyouth'] }), store });
+  await first._webSync();
+  const stuck = mirror({ events: [GOOD1, GROUP_LOST], copies: { evtyouth: LIVE_YOUTH }, share: share(), store, at: 1790001000 });
+  await stuck._webSync(); stuck.tick(9 * 60); await stuck._webSync();
+  assert.deepEqual(stuck.tombstoned(), [], 're-anchor: nine minutes already withdrew it');
+  assert.ok(String(store.get('trinityone.webstuck.CP') || '').includes('evtyouth'), 're-anchor: nothing was written down to clear');
+  // the key comes back and the document opens
+  const well = mirror({ events: [GOOD1, GROUP_READABLE], copies: { evtyouth: LIVE_YOUTH }, share: share({ optIn: ['evtyouth'] }), store, at: 1790001540 });
+  await well._webSync();
+  assert.equal(store.get('trinityone.webstuck.CP'), '[]', 'THE CLOCK KEPT RUNNING THROUGH A PERIOD THE DOCUMENT WAS PERFECTLY READABLE');
+  // …and now it goes again: a fresh nine minutes must still not be enough
+  const again = await flap({ sessions: 1, minutes: 9, store, t0: 1790001600 });
+  assert.deepEqual(again, [], 'A FRESH NINE MINUTES WITHDREW IT — the clock carried over the minutes before the key came back');
+});
+
+test('F3: a console that has just started LOOKS AGAIN before it acts on what it remembered', async () => {
+  // The cost of a clock that survives a restart is that a watch can start with one already spent — a console
+  // shut for a week, or one whose relay only now answered. It must re-observe for a few seconds first rather
+  // than tombstoning on its very first sync from a memory of a state it has not yet seen this session.
+  const store = new Map();
+  const first = mirror({ events: [GOOD1, GROUP_READABLE], copies: { evtyouth: LIVE_YOUTH }, share: share({ optIn: ['evtyouth'] }), store });
+  await first._webSync();
+  const stuck = mirror({ events: [GOOD1, GROUP_LOST], copies: { evtyouth: LIVE_YOUTH }, share: share(), store, at: 1790001000 });
+  await stuck._webSync();                                   // writes the clock
+  const later = mirror({ events: [GOOD1, GROUP_LOST], copies: { evtyouth: LIVE_YOUTH }, share: share(), store, at: 1790001000 + 7 * 864e2 });
+  await later._webSync();
+  assert.deepEqual(later.tombstoned(), [],
+    'A WATCH TOMBSTONED ON ITS FIRST SYNC from a clock it read off disk, without once seeing the state itself');
+  later.tick(BLOCKED_AFTER_S + 1); await later._webSync();
+  assert.deepEqual(later.tombstoned(), ['trinityone/pubevent:evtyouth'], 're-anchor: a spent clock never withdraws anything now');
 });
 
 test('F1: the engine NAMES the copies still out there, so a control can act without opening them', async () => {

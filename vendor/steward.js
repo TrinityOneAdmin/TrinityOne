@@ -17368,6 +17368,39 @@ zoo`.split("\n");
     else w.groupSeen.delete(id);
     lsSet(_webGroupKey(w.pub), JSON.stringify([...w.groupSeen].slice(0, WEB_GROUP_MAX)));
   }
+  function _webStuckKey(cp) {
+    return "trinityone.webstuck." + cp;
+  }
+  function _webStuckLoad(cp) {
+    const out = /* @__PURE__ */ new Map();
+    try {
+      const a = JSON.parse(lsGet(_webStuckKey(cp)) || "[]");
+      if (Array.isArray(a)) for (const p of a.slice(0, WEB_GROUP_MAX)) {
+        if (Array.isArray(p) && typeof p[0] === "string" && WEB_ID_OK.test(p[0]) && typeof p[1] === "number" && isFinite(p[1]) && p[1] > 0) out.set(p[0], p[1]);
+      }
+    } catch (e) {
+    }
+    return out;
+  }
+  function _webStuckClock(w, tNow, keyReady) {
+    let changed = false;
+    for (const id of [...w.stuckAt.keys()]) {
+      if (!w.stuck.has(id)) {
+        w.stuckAt.delete(id);
+        changed = true;
+      } else if (w.stuckAt.get(id) > tNow) {
+        w.stuckAt.set(id, tNow);
+        changed = true;
+      }
+    }
+    if (keyReady) {
+      for (const id of w.stuck) if (!w.stuckAt.has(id)) {
+        w.stuckAt.set(id, tNow);
+        changed = true;
+      }
+    }
+    if (changed) lsSet(_webStuckKey(w.pub), JSON.stringify([...w.stuckAt].slice(0, WEB_GROUP_MAX)));
+  }
   var _web = null;
   function _webStop() {
     if (!_web) return;
@@ -17425,6 +17458,7 @@ zoo`.split("\n");
       stuckSince: 0,
       keyedSince: 0,
       groupSeen: _webGroupLoad(pub),
+      stuckAt: _webStuckLoad(pub),
       stuck: /* @__PURE__ */ new Set(),
       stuckWhy: "",
       blocked: 0,
@@ -17598,18 +17632,20 @@ zoo`.split("\n");
       w.stuckSince = 0;
       w.keyedSince = 0;
     }
+    _webStuckClock(w, tNow, keyReady);
     const showing = w.stuck.size && tNow - w.stuckSince >= WEB_BLOCKED_AFTER_S ? w.stuck.size : 0;
     const writes = [], tombs = [];
     for (const [id, body] of want) if (w.copies.get(id) !== body) writes.push([id, body]);
     const shown = new Set(w.share.optIn || []);
     const offFeed = new Set(w.share.optOut);
-    const gaveUp = keyReady && !!w.keyedSince && tNow - w.keyedSince >= WEB_GIVE_UP_S;
+    const looked = keyReady && !!w.keyedSince && tNow - w.keyedSince >= WEB_BLOCKED_AFTER_S;
     const heldIds = [];
     for (const id of w.copies.keys()) {
       if (want.has(id)) continue;
       if (w.stuck.has(id)) {
         const groupScoped = w.groupSeen.has(id) && !shown.has(id);
-        if (!(gaveUp && groupScoped)) {
+        const spent = looked && tNow - (w.stuckAt.get(id) || tNow) >= WEB_GIVE_UP_S;
+        if (!(spent && groupScoped)) {
           if (!offFeed.has(id)) heldIds.push(id);
           continue;
         }

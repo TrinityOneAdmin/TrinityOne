@@ -3496,6 +3496,45 @@ function _webGroupSeen(w, id, isGroup) {
   if (isGroup) w.groupSeen.add(id); else w.groupSeen.delete(id);
   lsSet(_webGroupKey(w.pub), JSON.stringify([...w.groupSeen].slice(0, WEB_GROUP_MAX)));
 }
+// TEN MINUTES OF WALL CLOCK, WHICH MEANS ACROSS RESTARTS (AUDIT-feeds-round4-2026-09-22 F3). The give-up
+// clock used to live only in the watch, and the dashboard rebuilds the watch on every connection bump —
+// `_maybeBumpConn` fires on a 90 s heartbeat plus focus, visibility and online. So a console whose relay
+// flaps faster than the budget reset it every time and could never reach it: measured, 0 withdrawals over
+// 108 minutes on a nine-minute restart cycle, on exactly the thin-pipe churches whose stranded copy will
+// live longest. The restart-reset was written up as a safety property; it is also the failure mode.
+//
+// So the moment an id was FIRST SEEN STUCK is kept per church beside groupSeen, and the budget is measured
+// from it. Three things this must not become:
+//   * it is only ever written while the key ring is READY, so a console waiting on its name-key envelope
+//     still spends nothing — round 3's F1c, which a clock started during the wait would quietly undo;
+//   * it is dropped the moment the id stops being stuck, so the ten minutes are ten UNBROKEN minutes and
+//     not a total accumulated across periods when the document opened perfectly well;
+//   * a timestamp in the future — a device whose clock was set back — is pulled down to now rather than
+//     left to sit there unreachable for as long as the skew lasts.
+// And a clock read off disk is not on its own permission to act: _webSync still requires this session to
+// have watched the same id, ring in hand, for WEB_BLOCKED_AFTER_S first.
+function _webStuckKey(cp) { return 'trinityone.webstuck.' + cp; }
+function _webStuckLoad(cp) {
+  const out = new Map();
+  try {
+    const a = JSON.parse(lsGet(_webStuckKey(cp)) || '[]');
+    if (Array.isArray(a)) for (const p of a.slice(0, WEB_GROUP_MAX)) {
+      if (Array.isArray(p) && typeof p[0] === 'string' && WEB_ID_OK.test(p[0]) && typeof p[1] === 'number' && isFinite(p[1]) && p[1] > 0) out.set(p[0], p[1]);
+    }
+  } catch (e) {}
+  return out;
+}
+// Written only when the answer CHANGES, like _webGroupSeen, so an ordinary sync over a healthy calendar
+// touches no storage at all.
+function _webStuckClock(w, tNow, keyReady) {
+  let changed = false;
+  for (const id of [...w.stuckAt.keys()]) {
+    if (!w.stuck.has(id)) { w.stuckAt.delete(id); changed = true; }
+    else if (w.stuckAt.get(id) > tNow) { w.stuckAt.set(id, tNow); changed = true; }
+  }
+  if (keyReady) for (const id of w.stuck) if (!w.stuckAt.has(id)) { w.stuckAt.set(id, tNow); changed = true; }
+  if (changed) lsSet(_webStuckKey(w.pub), JSON.stringify([...w.stuckAt].slice(0, WEB_GROUP_MAX)));
+}
 let _web = null;   // the watch: { pub, share, shareTs, shareKnown, events, eventsKnown, copies, copyTs, copiesKnown, subs, listeners, busy, again, timer }
 function _webStop() { if (!_web) return; for (const off of _web.subs) { try { off(); } catch {} } if (_web.timer) clearTimeout(_web.timer); _web = null; }
 // `heldIds` is the other half of `held`: a count cannot be acted on, and the control on the Settings page
@@ -3518,7 +3557,7 @@ function _webEnsure(restart) {
   const w = _web = { pub, share: carried ? carried.share : { ...WEB_DEFAULT, optOut: [] }, shareTs: carried ? carried.shareTs : 0, shareKnown: !!(carried && carried.shareKnown),
                      events: new Map(), versions: new Map(), eventsKnown: false,
                      copies: new Map(), copyTs: new Map(), copiesKnown: false, subs: [], listeners, busy: false, again: false, timer: null,
-                     stuckSince: 0, keyedSince: 0, groupSeen: _webGroupLoad(pub),
+                     stuckSince: 0, keyedSince: 0, groupSeen: _webGroupLoad(pub), stuckAt: _webStuckLoad(pub),
                      stuck: new Set(), stuckWhy: '', blocked: 0, held: 0, heldIds: [] };
   // 1. the switch — the church's OWN copy only, never a steward's or a co-tenant's
   const s1 = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#d': [SHARE_D + pub] }], {
@@ -3702,6 +3741,7 @@ async function _webSync() {
     if (!keyReady) w.keyedSince = 0; else if (!w.keyedSince) w.keyedSince = tNow;
     if (tNow - (w.keyedSince || w.stuckSince) <= WEB_GIVE_UP_S) setTimeout(() => { if (_web === w) _webQueueSync(); }, WEB_RETRY_MS);
   } else { w.stuckSince = 0; w.keyedSince = 0; }
+  _webStuckClock(w, tNow, keyReady);      // the wall clock, which outlives this watch; see above it
   const showing = (w.stuck.size && tNow - w.stuckSince >= WEB_BLOCKED_AFTER_S) ? w.stuck.size : 0;
   const writes = [], tombs = [];
   for (const [id, body] of want) if (w.copies.get(id) !== body) writes.push([id, body]);
@@ -3740,13 +3780,18 @@ async function _webSync() {
   //     ids it had just taken off would leave the line up for ever and the control looking dead.
   const shown = new Set(w.share.optIn || []);
   const offFeed = new Set(w.share.optOut);
-  const gaveUp = keyReady && !!w.keyedSince && tNow - w.keyedSince >= WEB_GIVE_UP_S;
+  // TWO CONDITIONS, AND THEY ARE NOT THE SAME CLOCK. `looked` is this SESSION: has this watch itself seen
+  // the ring in hand and the document shut for long enough to be worth believing — the guard against a watch
+  // acting destructively on its very first sync from a timestamp it read off disk. `spent` is the WALL
+  // CLOCK for that one id, which survives the restart (see _webStuckClock).
+  const looked = keyReady && !!w.keyedSince && tNow - w.keyedSince >= WEB_BLOCKED_AFTER_S;
   const heldIds = [];
   for (const id of w.copies.keys()) {
     if (want.has(id)) continue;
     if (w.stuck.has(id)) {
       const groupScoped = w.groupSeen.has(id) && !shown.has(id);
-      if (!(gaveUp && groupScoped)) { if (!offFeed.has(id)) heldIds.push(id); continue; }
+      const spent = looked && tNow - (w.stuckAt.get(id) || tNow) >= WEB_GIVE_UP_S;
+      if (!(spent && groupScoped)) { if (!offFeed.has(id)) heldIds.push(id); continue; }
     }
     tombs.push(id);
   }

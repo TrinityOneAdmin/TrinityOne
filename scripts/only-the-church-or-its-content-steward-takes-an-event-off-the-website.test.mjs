@@ -200,6 +200,9 @@ test('THE OWNER CONSOLE does not reconcile a group leader\'s cancel — the chur
     fnBody(S, 'function _webGroupKey', '_webGroupKey'),
     fnBody(S, 'function _webGroupLoad', '_webGroupLoad'),
     fnBody(S, 'function _webGroupSeen', '_webGroupSeen'),
+    fnBody(S, 'function _webStuckKey', '_webStuckKey'),
+    fnBody(S, 'function _webStuckLoad', '_webStuckLoad'),
+    fnBody(S, 'function _webStuckClock', '_webStuckClock'),
     fnBody(S, 'function _pickWinner', '_pickWinner'),
     fnBody(S, 'function _reduceVersions', '_reduceVersions'),
     fnBody(S, 'function _absorbById', '_absorbById'),
@@ -232,7 +235,7 @@ test('THE OWNER CONSOLE does not reconcile a group leader\'s cancel — the chur
       shareTs: 1, shareKnown: true, events: new Map(), versions: new Map(), eventsKnown: true,
       copies: new Map([['evtyouth', JSON.stringify({ title: 'Youth night', date: '2026-10-03', time: '19:30', where: 'The hall', blurb: '', recur: '', day: null })]]),
       copyTs: new Map(), copiesKnown: true, subs: [], listeners: new Set(), busy: false, again: false, timer: null,
-      stuckSince: 0, keyedSince: 0, groupSeen: new Set(), stuck: new Set(), stuckWhy: '', blocked: 0, held: 0,
+      stuckSince: 0, keyedSince: 0, groupSeen: new Set(), stuckAt: new Map(), stuck: new Set(), stuckWhy: '', blocked: 0, held: 0, heldIds: [],
     };
     const scope = {
       _web: w, pub: CP, sk: 'SK', actingChurch: '', _nameKeyRing: [KEY], _unhex: unhex, [dec]: n44.decrypt,
