@@ -17361,7 +17361,7 @@ zoo`.split("\n");
   }
   function _webEmit() {
     if (!_web) return;
-    const snap = { ..._web.share, optOut: [..._web.share.optOut], optIn: [..._web.share.optIn || []], known: _web.shareKnown };
+    const snap = { ..._web.share, optOut: [..._web.share.optOut], optIn: [..._web.share.optIn || []], known: _web.shareKnown, blocked: _web.blocked || 0, blockedWhy: (_web.blocked ? _web.stuckWhy : "") || "" };
     for (const cb of _web.listeners) {
       try {
         cb(snap);
@@ -17401,7 +17401,10 @@ zoo`.split("\n");
       busy: false,
       again: false,
       timer: null,
-      lockedTries: 0
+      lockedTries: 0,
+      stuck: /* @__PURE__ */ new Set(),
+      stuckWhy: "",
+      blocked: 0
     };
     const s1 = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#d": [SHARE_D + pub] }], {
       onevent(e) {
@@ -17483,7 +17486,18 @@ zoo`.split("\n");
     });
     return w;
   }
+  var WEB_BLOCKED_AFTER = 3;
+  function _webWhyStuck(raw) {
+    try {
+      const o = JSON.parse(String(raw || ""));
+      return o && typeof o.e === "string" ? "key" : "shape";
+    } catch (e) {
+      return "shape";
+    }
+  }
   function _webDesired(w) {
+    w.stuck = /* @__PURE__ */ new Set();
+    w.stuckWhy = "";
     if (!w.shareKnown || !w.copiesKnown || !w.eventsKnown) return null;
     const out = /* @__PURE__ */ new Map();
     if (!w.share.calendar) return out;
@@ -17497,7 +17511,11 @@ zoo`.split("\n");
       } catch (e) {
         c = null;
       }
-      if (c === null) return null;
+      if (c === null) {
+        w.stuck.add(ev.id);
+        if (!w.stuckWhy) w.stuckWhy = _webWhyStuck(ev.raw);
+        continue;
+      }
       if (held.has(ev.id)) continue;
       if (!c || typeof c !== "object" || !/^\d{4}-\d{2}-\d{2}$/.test(String(c.date || ""))) continue;
       if (String(c.groupId || "") && !shown.has(ev.id)) continue;
@@ -17513,19 +17531,23 @@ zoo`.split("\n");
       return;
     }
     const want = _webDesired(w);
-    if (want === null) {
-      if (w.shareKnown && w.copiesKnown && w.eventsKnown && w.lockedTries < 60) {
+    if (want === null) return;
+    if (w.stuck.size) {
+      if (w.lockedTries < 60) {
         w.lockedTries++;
         setTimeout(() => {
           if (_web === w) _webQueueSync();
         }, 2e3);
       }
-      return;
+    } else w.lockedTries = 0;
+    const showing = w.stuck.size && w.lockedTries >= WEB_BLOCKED_AFTER ? w.stuck.size : 0;
+    if (showing !== w.blocked) {
+      w.blocked = showing;
+      _webEmit();
     }
-    w.lockedTries = 0;
     const writes = [], tombs = [];
     for (const [id, body] of want) if (w.copies.get(id) !== body) writes.push([id, body]);
-    for (const id of w.copies.keys()) if (!want.has(id)) tombs.push(id);
+    for (const id of w.copies.keys()) if (!want.has(id) && !w.stuck.has(id)) tombs.push(id);
     if (!writes.length && !tombs.length) return;
     w.busy = true;
     try {

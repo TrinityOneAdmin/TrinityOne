@@ -8415,6 +8415,10 @@ function DashWebsitePanel({ church }) {
   React.useEffect(() => (window.Steward.subscribeWebsiteShare ? window.Steward.subscribeWebsiteShare(setShare) : undefined), []);
   const known = !!(share && share.known);
   const on = !!(share && share.calendar);
+  const blocked = (share && share.blocked) || 0;
+  const whyBlocked = (share && share.blockedWhy) === 'shape'
+    ? (blocked === 1 ? 'its details could not be read.' : 'their details could not be read.')
+    : (blocked === 1 ? 'it is sealed with a church key this console does not have.' : 'they are sealed with a church key this console does not have.');
   const url = (window.Steward.websiteFeedUrl && window.Steward.websiteFeedUrl()) || '';
   const toggle = async () => {
     if (busy || !known) return;
@@ -8440,6 +8444,16 @@ function DashWebsitePanel({ church }) {
         </button>
       </div>
       {msg ? <div role="alert" style={{ marginTop: 8, fontSize: 12.5, fontWeight: 600, color: 'var(--clay-ink)' }}>{msg}</div> : null}
+      {/* AN EVENT THE MIRROR COULD NOT PUBLISH IS SAID HERE. One event this console cannot open used to park
+          the whole mirror for the session while this switch went on reading "On" (audit F3). It no longer
+          does — the rest are published — but a church whose old name key is gone would otherwise never learn
+          why one event is missing from its website. The engine only reports after several retries, because
+          the key is usually merely late. */}
+      {blocked ? (
+        <div role="status" style={{ marginTop: 8, fontSize: 12.5, fontWeight: 600, color: 'var(--clay-ink)' }}>
+          {blocked === 1 ? '1 event could not be published' : blocked + ' events could not be published'} — {whyBlocked}
+        </div>
+      ) : null}
 
       <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', margin: '14px 0 6px' }}>Served from</div>
       <div role="radiogroup" aria-label="Served from" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>

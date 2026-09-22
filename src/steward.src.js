@@ -3465,7 +3465,7 @@ function _webCopyBody(ev) {
 }
 let _web = null;   // the watch: { pub, share, shareTs, shareKnown, events, eventsKnown, copies, copyTs, copiesKnown, subs, listeners, busy, again, timer }
 function _webStop() { if (!_web) return; for (const off of _web.subs) { try { off(); } catch {} } if (_web.timer) clearTimeout(_web.timer); _web = null; }
-function _webEmit() { if (!_web) return; const snap = { ..._web.share, optOut: [..._web.share.optOut], optIn: [...(_web.share.optIn || [])], known: _web.shareKnown }; for (const cb of _web.listeners) { try { cb(snap); } catch {} } }
+function _webEmit() { if (!_web) return; const snap = { ..._web.share, optOut: [..._web.share.optOut], optIn: [...(_web.share.optIn || [])], known: _web.shareKnown, blocked: _web.blocked || 0, blockedWhy: (_web.blocked ? _web.stuckWhy : '') || '' }; for (const cb of _web.listeners) { try { cb(snap); } catch {} } }
 function _webQueueSync() { if (!_web) return; if (_web.timer) clearTimeout(_web.timer); _web.timer = setTimeout(() => { if (_web) { _web.timer = null; _webSync(); } }, 250); }
 function _webEnsure(restart) {
   if (_web && _web.pub === pub && !restart) return _web;
@@ -3481,7 +3481,8 @@ function _webEnsure(restart) {
   if (!pub) return null;
   const w = _web = { pub, share: carried ? carried.share : { ...WEB_DEFAULT, optOut: [] }, shareTs: carried ? carried.shareTs : 0, shareKnown: !!(carried && carried.shareKnown),
                      events: new Map(), versions: new Map(), eventsKnown: false,
-                     copies: new Map(), copyTs: new Map(), copiesKnown: false, subs: [], listeners, busy: false, again: false, timer: null, lockedTries: 0 };
+                     copies: new Map(), copyTs: new Map(), copiesKnown: false, subs: [], listeners, busy: false, again: false, timer: null, lockedTries: 0,
+                     stuck: new Set(), stuckWhy: '', blocked: 0 };
   // 1. the switch — the church's OWN copy only, never a steward's or a co-tenant's
   const s1 = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#d': [SHARE_D + pub] }], {
     onevent(e) {
@@ -3528,9 +3529,24 @@ function _webEnsure(restart) {
   w.subs.push(() => { try { s3.close(); } catch {} });
   return w;
 }
+// WHY ONE EVENT THIS CONSOLE CANNOT OPEN MUST NOT DECIDE FOR THE OTHERS. _webDesired used to answer `null`
+// — "decide nothing" — the moment ANY event failed to open, which parked the whole mirror for the session
+// while Settings went on reading "On". A church that re-minted its name key with the old one lost (the
+// 2026-08-04 restore incident produced exactly that state) never got another event onto its feed, and nothing
+// said so (audit F3). Now an event that cannot be opened is undecided for THAT ID ALONE: it is neither
+// published nor tombstoned, the rest are mirrored, and once the retries are spent the Settings page says how
+// many and why. `null` still means "a stream has not finished", which is the only true "decide nothing".
+const WEB_BLOCKED_AFTER = 3;   // syncs with the same event stuck before it is reported — the name key is often merely LATE
+// Why an event would not open, from the document itself: sealed under a key we do not hold, or not a
+// document at all. Both make _openChurchDoc return null; only the first resolves itself when a key arrives.
+function _webWhyStuck(raw) {
+  try { const o = JSON.parse(String(raw || '')); return (o && typeof o.e === 'string') ? 'key' : 'shape'; } catch (e) { return 'shape'; }
+}
 // What the relay SHOULD hold, from what this console knows: Map(id -> body) while the switch is on, empty
-// otherwise. `null` means "do not decide yet" — a stream has not finished, or an event is still locked.
+// otherwise. `null` means "do not decide yet" — a stream has not finished. Events this console cannot open
+// are recorded in w.stuck and left alone by both halves of _webSync.
 function _webDesired(w) {
+  w.stuck = new Set(); w.stuckWhy = '';
   if (!w.shareKnown || !w.copiesKnown || !w.eventsKnown) return null;
   const out = new Map();
   if (!w.share.calendar) return out;
@@ -3539,7 +3555,7 @@ function _webDesired(w) {
   for (const ev of w.events.values()) {
     if (!ev || !WEB_ID_OK.test(String(ev.id || ''))) continue;
     let c = null; try { c = _openChurchDoc(ev.raw); } catch (e) { c = null; }
-    if (c === null) return null;                                    // the name key is late: decide nothing until it arrives
+    if (c === null) { w.stuck.add(ev.id); if (!w.stuckWhy) w.stuckWhy = _webWhyStuck(ev.raw); continue; }   // undecided for THIS id
     if (held.has(ev.id)) continue;
     if (!c || typeof c !== 'object' || !/^\d{4}-\d{2}-\d{2}$/.test(String(c.date || ''))) continue;
     // A GROUP EVENT IS OFF THE WEBSITE UNLESS TICKED ON (see WEB_DEFAULT). The groupId lives in the SEALED
@@ -3555,14 +3571,20 @@ async function _webSync() {
   if (!w || w.pub !== pub || !sk || actingChurch) return;          // owner mode only: the relay accepts these from the church key alone
   if (w.busy) { w.again = true; return; }
   const want = _webDesired(w);
-  // A locked calendar is the name key being late, which resolves itself within seconds on a healthy relay and
-  // never on a console that does not hold the key (a delegate's). Come back for it a bounded number of times;
-  // the next calendar event to arrive starts the count again.
-  if (want === null) { if (w.shareKnown && w.copiesKnown && w.eventsKnown && w.lockedTries < 60) { w.lockedTries++; setTimeout(() => { if (_web === w) _webQueueSync(); }, 2000); } return; }
-  w.lockedTries = 0;
+  if (want === null) return;                                        // a stream has not finished; its oneose will come back here
+  // A locked event is usually the name key being late, which resolves itself within seconds on a healthy
+  // relay and never on a console that does not hold the key (a delegate's, or a church whose old key is
+  // gone). Come back for it a bounded number of times, KEEP MIRRORING THE REST while we do, and once the
+  // first few retries are spent say so on the Settings page rather than looking like nothing is wrong.
+  if (w.stuck.size) { if (w.lockedTries < 60) { w.lockedTries++; setTimeout(() => { if (_web === w) _webQueueSync(); }, 2000); } }
+  else w.lockedTries = 0;
+  const showing = (w.stuck.size && w.lockedTries >= WEB_BLOCKED_AFTER) ? w.stuck.size : 0;
+  if (showing !== w.blocked) { w.blocked = showing; _webEmit(); }
   const writes = [], tombs = [];
   for (const [id, body] of want) if (w.copies.get(id) !== body) writes.push([id, body]);
-  for (const id of w.copies.keys()) if (!want.has(id)) tombs.push(id);
+  // …and a copy whose event we could not open is LEFT ALONE. Tombstoning it would take a perfectly good
+  // event off the church's website because this console lost a key — the destructive half of the same bug.
+  for (const id of w.copies.keys()) if (!want.has(id) && !w.stuck.has(id)) tombs.push(id);
   if (!writes.length && !tombs.length) return;
   w.busy = true;
   try {
