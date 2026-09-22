@@ -17328,12 +17328,12 @@ zoo`.split("\n");
     }
   }
   var _evtSeq = 0;
-  var WEB_DEFAULT = Object.freeze({ calendar: false, sermons: false, plans: false, optOut: [], address: "own" });
+  var WEB_DEFAULT = Object.freeze({ calendar: false, sermons: false, plans: false, optOut: [], optIn: [], address: "own" });
   var WEB_ID_OK = /^[A-Za-z0-9_-]{1,64}$/;
+  var _webIds = (v) => [...new Set((Array.isArray(v) ? v : []).map((x) => String(x)).filter((x) => WEB_ID_OK.test(x)))];
   function _webNormalise(c) {
     const o = c && typeof c === "object" ? c : {};
-    const optOut = [...new Set((Array.isArray(o.optOut) ? o.optOut : []).map((x) => String(x)).filter((x) => WEB_ID_OK.test(x)))];
-    return { calendar: o.calendar === true, sermons: false, plans: false, optOut, address: "own" };
+    return { calendar: o.calendar === true, sermons: false, plans: false, optOut: _webIds(o.optOut), optIn: _webIds(o.optIn), address: "own" };
   }
   function _webCopyBody(ev) {
     const recur = ev.recur === "weekly" || ev.recur === "fortnightly" || ev.recur === "monthly" ? ev.recur : "";
@@ -17361,7 +17361,7 @@ zoo`.split("\n");
   }
   function _webEmit() {
     if (!_web) return;
-    const snap = { ..._web.share, optOut: [..._web.share.optOut], known: _web.shareKnown };
+    const snap = { ..._web.share, optOut: [..._web.share.optOut], optIn: [..._web.share.optIn || []], known: _web.shareKnown };
     for (const cb of _web.listeners) {
       try {
         cb(snap);
@@ -17488,6 +17488,7 @@ zoo`.split("\n");
     const out = /* @__PURE__ */ new Map();
     if (!w.share.calendar) return out;
     const held = new Set(w.share.optOut);
+    const shown = new Set(w.share.optIn || []);
     for (const ev of w.events.values()) {
       if (!ev || !WEB_ID_OK.test(String(ev.id || ""))) continue;
       let c = null;
@@ -17499,6 +17500,7 @@ zoo`.split("\n");
       if (c === null) return null;
       if (held.has(ev.id)) continue;
       if (!c || typeof c !== "object" || !/^\d{4}-\d{2}-\d{2}$/.test(String(c.date || ""))) continue;
+      if (String(c.groupId || "") && !shown.has(ev.id)) continue;
       out.set(ev.id, _webCopyBody(c));
     }
     return out;
@@ -22252,6 +22254,22 @@ zoo`.split("\n");
     isWebsiteHeld(eventId) {
       const w = _webEnsure();
       return !!(w && w.share.optOut.includes(String(eventId || "")));
+    },
+    // The per-event "On the website" tick, for an event scoped to a GROUP: the inverse of setWebsiteHeld,
+    // because the default is the inverse. Same refusal-until-EOSE rule, for the same reason.
+    setWebsiteShown(eventId, shown) {
+      const id = String(eventId || "");
+      if (!WEB_ID_OK.test(id)) return Promise.resolve(false);
+      const w = _webEnsure();
+      if (!w || !w.shareKnown) return Promise.resolve(false);
+      const cur = w.share.optIn || [];
+      const optIn = shown ? [.../* @__PURE__ */ new Set([...cur, id])] : cur.filter((x) => x !== id);
+      if (optIn.length === cur.length && optIn.every((x, i3) => x === cur[i3])) return Promise.resolve(true);
+      return this.setWebsiteShare({ optIn });
+    },
+    isWebsiteShown(eventId) {
+      const w = _webEnsure();
+      return !!(w && (w.share.optIn || []).includes(String(eventId || "")));
     },
     websiteFeedUrl(eventId) {
       const base = _webFeedBase();

@@ -927,6 +927,21 @@ window.DashRota = DashRota;
 // sentence; the switch itself is in Settings → Your website.
 // What the banner says when the opt-out could not be recorded. The event is saved; only the tick is not.
 const SCH_HELD_MISSED = 'The event is saved, but “Not on the website” wasn’t recorded — open the event and tick it again.';
+// …and its inverse, for an event scoped to a GROUP: those are OFF the website unless a steward puts one on
+// (audit F2, owner 2026-09-22 — the relay withholds an adults-only room's event from the church's own
+// children, so it must not reach the website by default). Same row, opposite default and opposite label.
+const SCH_SHOWN_MISSED = 'The event is saved, but “On the website” wasn’t recorded — open the event and tick it again.';
+function SchWebsiteShownRow({ shown, setShown }) {
+  return (
+    <label style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 14, padding: '10px 12px', borderRadius: 11, border: '1px solid var(--line)', background: shown ? 'color-mix(in oklab, var(--gold) 10%, var(--surface))' : 'var(--surface-2)', cursor: 'pointer' }}>
+      <input type="checkbox" aria-label="On the website" checked={!!shown} onChange={ev => setShown(!!ev.target.checked)} style={{ width: 18, height: 18, margin: 0, cursor: 'pointer' }} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 700, fontSize: 13.5 }}>On the website</div>
+        <div style={{ fontSize: 12, color: 'var(--ink-3)', lineHeight: 1.4 }}>A group’s event stays off the public calendar feed unless you put it there.</div>
+      </div>
+    </label>
+  );
+}
 function SchWebsiteHeldRow({ held, setHeld }) {
   return (
     <label style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 14, padding: '10px 12px', borderRadius: 11, border: '1px solid var(--line)', background: held ? 'color-mix(in oklab, var(--gold) 10%, var(--surface))' : 'var(--surface-2)', cursor: 'pointer' }}>
@@ -957,6 +972,7 @@ function SchEventModal({ day, onClose }) {
   // per-document flag: it would mix a website decision into what every member reads). Owner-only, because the
   // relay accepts share: from the church key alone; a delegate does not see the tick.
   const [held, setHeld] = useSch(false);
+  const [shown, setShown] = useSch(false);   // the inverse tick, for a group-scoped event — see SchWebsiteShownRow
   const canHold = !!(window.Steward.setWebsiteHeld && !(window.Steward.isDelegated && window.Steward.isDelegated()));
   const ownedNets = React.useMemo(() => (window.Steward.ownedNetworks ? window.Steward.ownedNetworks() : []), []);
   const [asPub, setAsPub] = useSch('');          // '' = the church; else an owned network's pub
@@ -988,10 +1004,16 @@ function SchEventModal({ day, onClose }) {
     // …AND A TICK THAT DID NOT LAND IS SAID, through the console's existing banner (the event itself is saved,
     // so the dialog closes as usual). The engine refuses the opt-out until it has read the church's share:
     // document — a write built on defaults would drop every existing opt-out (audit of 7ffcfaf).
-    if (held && canHold && !asNetwork) {
+    if (held && canHold && !asNetwork && !gid) {
       let missed = 0;
       for (const r of out) { if (r && r.id) { let ok = false; try { ok = await window.Steward.setWebsiteHeld(r.id, true); } catch (e) { ok = false; } if (!ok) missed++; } }
       if (missed) { try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'website opt-out', message: SCH_HELD_MISSED } })); } catch (e) {} }
+    }
+    // …and the same for a GROUP event's opposite tick: it reaches the website only because this ran.
+    if (shown && canHold && !asNetwork && gid && window.Steward.setWebsiteShown) {
+      let missed = 0;
+      for (const r of out) { if (r && r.id) { let ok = false; try { ok = await window.Steward.setWebsiteShown(r.id, true); } catch (e) { ok = false; } if (!ok) missed++; } }
+      if (missed) { try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'website opt-in', message: SCH_SHOWN_MISSED } })); } catch (e) {} }
     }
     setBusy(false);
     if (out.some(r => r == null)) { setErr(SCH_NO_KEY); return; }
@@ -1071,7 +1093,7 @@ function SchEventModal({ day, onClose }) {
       <div style={schLbl}>Note (optional)</div>
       <textarea aria-label="Note (optional)" value={blurb} onChange={e => setBlurb(e.target.value)} rows={3} placeholder="A short description members will read." style={{ ...schFld, height: 'auto', padding: '11px 13px', lineHeight: 1.5, resize: 'vertical', fontFamily: 'var(--font-ui)' }} />
       <SchRepeatRow repeat={repeat} setRepeat={setRepeat} until={until} setUntil={setUntil} />
-      {canHold && !asNetwork ? <SchWebsiteHeldRow held={held} setHeld={setHeld} /> : null}
+      {canHold && !asNetwork ? (group ? <SchWebsiteShownRow shown={shown} setShown={setShown} /> : <SchWebsiteHeldRow held={held} setHeld={setHeld} />) : null}
     </SchModal>
   );
 }
@@ -1281,7 +1303,9 @@ function SchEventEdit({ event, onClose }) {
   const [recur, setRecur] = React.useState(e.recur || 'weekly');
   // "Not on the website" — see SchEventModal. Read from the share: document, written back on save.
   const canHold = !!(window.Steward.setWebsiteHeld && !(window.Steward.isDelegated && window.Steward.isDelegated()));
+  const inGroup = !!String(e.groupId || '');   // a group's event is off the website unless ticked on — the inverse tick
   const [held, setHeld] = React.useState(() => !!(canHold && window.Steward.isWebsiteHeld && window.Steward.isWebsiteHeld(e.id)));
+  const [shown, setShown] = React.useState(() => !!(canHold && window.Steward.isWebsiteShown && window.Steward.isWebsiteShown(e.id)));
   const [busy, setBusy] = React.useState(false);
   const [err, setErr] = React.useState('');
   const save = async () => {
@@ -1299,8 +1323,9 @@ function SchEventEdit({ event, onClose }) {
       }));
     } catch (x) { r = null; }
     if (r && canHold && e.id) {   // same as SchEventModal: a tick that did not land is said, not swallowed
-      let ok = false; try { ok = await window.Steward.setWebsiteHeld(e.id, held); } catch (x) { ok = false; }
-      if (!ok) { try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'website opt-out', message: SCH_HELD_MISSED } })); } catch (x) {} }
+      let ok = false;
+      try { ok = inGroup ? await window.Steward.setWebsiteShown(e.id, shown) : await window.Steward.setWebsiteHeld(e.id, held); } catch (x) { ok = false; }
+      if (!ok) { try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: inGroup ? 'website opt-in' : 'website opt-out', message: inGroup ? SCH_SHOWN_MISSED : SCH_HELD_MISSED } })); } catch (x) {} }
     }
     setBusy(false);
     if (!r) { setErr('Couldn’t save — the relay didn’t accept the change. Your edits are still here.'); return; }
@@ -1338,7 +1363,7 @@ function SchEventEdit({ event, onClose }) {
       <input aria-label="Where" value={where} onChange={ev => setWhere(ev.target.value)} placeholder="Optional" style={schFld} />
       <div style={schLbl}>Details</div>
       <textarea aria-label="Details" value={blurb} onChange={ev => setBlurb(ev.target.value)} rows={3} placeholder="Optional" style={{ ...schFld, height: 'auto', padding: '10px 13px', resize: 'vertical', lineHeight: 1.5 }} />
-      {canHold ? <SchWebsiteHeldRow held={held} setHeld={setHeld} /> : null}
+      {canHold ? (inGroup ? <SchWebsiteShownRow shown={shown} setShown={setShown} /> : <SchWebsiteHeldRow held={held} setHeld={setHeld} />) : null}
       {err ? <div style={{ marginTop: 10, fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600 }}>{err}</div> : null}
       <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
         <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12 }}>Cancel</button>

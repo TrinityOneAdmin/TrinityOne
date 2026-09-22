@@ -46,7 +46,8 @@ function mount(componentName, props, { steward = {}, preset = {}, events = [] } 
   return { render, states, nodes: () => nodes(render()), dispatched };
 }
 const tickOf = (m) => m.nodes().find(n => n.type === 'input' && n.props && n.props['aria-label'] === 'Not on the website');
-const owner = (over = {}) => ({ isDelegated: () => false, setWebsiteHeld: async () => true, isWebsiteHeld: () => false, publishEvent: async (ev) => ({ id: 'evt1', ...ev }), ownedNetworks: () => [], ...over });
+const onTickOf = (m) => m.nodes().find(n => n.type === 'input' && n.props && n.props['aria-label'] === 'On the website');
+const owner = (over = {}) => ({ isDelegated: () => false, setWebsiteHeld: async () => true, isWebsiteHeld: () => false, setWebsiteShown: async () => true, isWebsiteShown: () => false, publishEvent: async (ev) => ({ id: 'evt1', ...ev }), ownedNetworks: () => [], ...over });
 
 test('an owner console draws the tick in both dialogs', () => {
   assert.ok(tickOf(mount('SchEventModal', { day: '', onClose() {} }, { steward: owner() })), 'the New event dialog has no "Not on the website" tick for the church key');
@@ -56,6 +57,21 @@ test('an owner console draws the tick in both dialogs', () => {
 test('a delegated steward\'s console draws NO tick — the relay would refuse the write, so a tick would silently do nothing', () => {
   assert.equal(tickOf(mount('SchEventModal', { day: '', onClose() {} }, { steward: owner({ isDelegated: () => true }) })), undefined, 'THE TICK IS SHOWN TO A DELEGATE in the New event dialog');
   assert.equal(tickOf(mount('SchEventEdit', { event: { id: 'evt1', title: 'T', date: '2026-10-01' }, onClose() {} }, { steward: owner({ isDelegated: () => true }) })), undefined, 'THE TICK IS SHOWN TO A DELEGATE in the Edit event dialog');
+});
+
+test('a GROUP event is offered the OPPOSITE tick — "On the website", off by default — and never the opt-out one', () => {
+  // Audit F2, owner 2026-09-22: a group's event is withheld from the church's own minors by the relay's read
+  // gate, so it does not go on the public feed unless a steward puts it there, per item.
+  const m = mount('SchEventEdit', { event: { id: 'evt1', title: 'T', date: '2026-10-01', groupId: 'grpyouth' }, onClose() {} }, { steward: owner() });
+  assert.equal(tickOf(m), undefined, 'a GROUP event is offered "Not on the website" — its default is already off, so that tick would do nothing');
+  const on = onTickOf(m);
+  assert.ok(on, 'the Edit dialog has no "On the website" tick for a group event');
+  assert.equal(on.props.checked, false, 'a group event opens already ticked on to the website');
+  const shown = onTickOf(mount('SchEventEdit', { event: { id: 'evt1', title: 'T', date: '2026-10-01', groupId: 'grpyouth' }, onClose() {} }, { steward: owner({ isWebsiteShown: (id) => id === 'evt1' }) }));
+  assert.equal(shown.props.checked, true, 'a group event the church already put on the website opens unticked');
+  // …and a delegate is offered neither, for the reason the row below gives
+  const del = mount('SchEventEdit', { event: { id: 'evt1', title: 'T', date: '2026-10-01', groupId: 'grpyouth' }, onClose() {} }, { steward: owner({ isDelegated: () => true }) });
+  assert.equal(onTickOf(del), undefined, 'THE "ON THE WEBSITE" TICK IS SHOWN TO A DELEGATE');
 });
 
 test('the Edit dialog opens with the tick reflecting what the church already recorded', () => {

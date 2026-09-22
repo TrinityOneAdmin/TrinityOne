@@ -28,7 +28,7 @@ import * as H from './relay-network-harness.mjs';
 const CHROME = ['/usr/bin/chromium-browser', '/usr/bin/chromium', '/usr/bin/google-chrome'].find(p => existsSync(p));
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const PIN = 'cedar-harbour-lamp-42';
-const SUPPER = 'Harvest supper, all welcome', HELD = 'Safeguarding review';
+const SUPPER = 'Harvest supper, all welcome', HELD = 'Safeguarding review', YOUTH = 'Leaders’ planning evening';
 const NEXT_MONTH = (() => { const d = new Date(); d.setMonth(d.getMonth() + 1); d.setDate(3); return d.toISOString().slice(0, 10); })();
 const NEXT_MONTH_5 = NEXT_MONTH.slice(0, 8) + '05';
 
@@ -270,6 +270,57 @@ test('after a fresh boot, an event added with Settings never opened joins the fe
   assert.deepEqual(titles, [SUPPER, 'Carol service'].sort(),
     'the feed holds ' + JSON.stringify(titles) + ' — an event added while the switch is on must reach it without the steward touching Settings again');
   assert.equal(r.text.includes(HELD), false, 'THE HELD EVENT LEAKED');
+});
+
+test('a GROUP\'s event stays OFF the feed until "On the website" is ticked for it — adults-only rooms are withheld from the church\'s own children, so they never reach the website by default', { skip: SKIP, timeout: 240000 }, async () => {
+  // Audit of 02b6cf3, F2; owner decision 2026-09-22. The relay's read gate withholds an adults-only group's
+  // event from the church's minors; the first mirror put every event on the public feed regardless. Now an
+  // event scoped to a group is mirrored only when the steward ticks it on, per item, in the event's dialog.
+  await press('/^Groups$/', 'the Groups section');
+  await press('/^New group$/', 'New group');
+  await waitFor(`!!document.querySelector('input[aria-label="Name"]')`, 20000, 'the New group dialog');
+  assert.equal(await evalIn(typeInto('input[aria-label="Name"]', 'Youth leaders')), 'ok');
+  await press('/^Create group$/', 'Create group');
+  { const t0 = Date.now(); let n = 0; while (Date.now() - t0 < 20000) { n = heldBy(churchPub, 'trinityone/group:').length; if (n >= 2) break; await sleep(400); } assert.equal(n, 2, 'the second group never reached the box'); }
+  await press('/^Calendar$/', 'the Calendar section');
+  await press('/^New event$/', 'New event');
+  await waitFor(`!!document.querySelector('input[aria-label="Title"]')`, 20000, 'the New event dialog');
+  assert.equal(await evalIn(typeInto('input[aria-label="Title"]', YOUTH)), 'ok');
+  assert.equal(await evalIn(typeInto('input[aria-label="Date"]', NEXT_MONTH.slice(0, 8) + '12')), 'ok');
+  assert.equal(await evalIn(typeInto('input[aria-label="Where"]', 'The vicarage')), 'ok');
+  // scope it to the group — the chip carries the group's name
+  await press('/^Youth leaders$/', 'the Youth leaders chip');
+  assert.equal(await evalIn(`!!document.querySelector('input[aria-label="Not on the website"]')`), false, 'a GROUP event still offers "Not on the website" — the default for a group event is off, so the tick must be the inverse');
+  assert.equal(await evalIn(`!!document.querySelector('input[aria-label="On the website"]')`), true, 'THE "ON THE WEBSITE" TICK IS NOT IN THE NEW EVENT DIALOG for a group event');
+  assert.equal(await evalIn(`document.querySelector('input[aria-label="On the website"]').checked`), false, 'the tick is on by default');
+  await press('/^Add event$/', 'Add event');
+  await waitFor(`!document.querySelector('input[aria-label="Title"]')`, 30000, 'the dialog to close after saving');
+  // the event reached the box, sealed and group-tagged; then give the mirror its window and read the feed
+  { const t0 = Date.now(); let ev = []; while (Date.now() - t0 < 20000) { ev = heldBy(churchPub, 'trinityone/event:'); if (ev.length >= 4) break; await sleep(400); } assert.equal(ev.length, 4, 'the box holds ' + ev.length + ' event documents, not 4'); }
+  await sleep(4000);
+  const off = await fetch(feedUrl());
+  assert.equal(off.status, 200, 're-anchor: the feed is not on going into this row');
+  assert.equal((await off.text()).includes(YOUTH), false, 'A GROUP\'S EVENT WAS PUT ON THE PUBLIC FEED WITHOUT ANYONE TICKING IT ON');
+  assert.equal(heldBy(churchPub, 'trinityone/pubevent:').filter(c => !c.tombstone && c.content.includes(YOUTH)).length, 0, 'the box holds a public copy of the group event');
+  // now the steward puts it on, from the event's own Edit dialog
+  assert.equal(await evalIn(clickSel('button[title="Next month"]')), 'ok', 'no month-forward control on the calendar');
+  await sleep(500);
+  assert.equal(await evalIn(`(() => { const b=[...document.querySelectorAll('button[title="See what’s on this day"]')].find(x=>(x.textContent||'').includes(${JSON.stringify(YOUTH)})); if(b){b.click();return 'ok';} return 'miss'; })()`), 'ok', 'the day holding the group event is not on the calendar');
+  await sleep(500);
+  assert.equal(await evalIn(`(() => { const b=[...document.querySelectorAll('[role="button"]')].find(x=>(x.textContent||'').includes(${JSON.stringify(YOUTH)})); if(b){b.click();return 'ok';} return 'miss'; })()`), 'ok', 'the event card did not open');
+  await press('/^Edit$/', 'Edit');
+  await waitFor(`!!document.querySelector('input[aria-label="On the website"]')`, 20000, 'the "On the website" tick in the Edit dialog');
+  assert.equal(await evalIn(`document.querySelector('input[aria-label="On the website"]').checked`), false, 'Edit opened with the tick on');
+  assert.equal(await evalIn(clickSel('input[aria-label="On the website"]')), 'ok');
+  assert.equal(await evalIn(`document.querySelector('input[aria-label="On the website"]').checked`), true, 'the tick did not take');
+  await press('/^Save changes$/', 'Save changes');
+  const on = await pollFeed(x => x.status === 200 && x.text.includes(YOUTH));
+  assert.equal(on.text.includes(YOUTH), true, 'THE STEWARD TICKED THE GROUP EVENT ON AND IT IS STILL NOT ON THE FEED');
+  const share = JSON.parse(heldBy(churchPub, 'trinityone/share:')[0].content);
+  assert.equal(share.calendar, true, 'the tick switched the calendar off');
+  assert.equal(share.optOut.length, 1, 'the tick disturbed the earlier opt-out: ' + JSON.stringify(share.optOut));
+  assert.equal(on.text.includes(HELD), false, 'THE HELD EVENT LEAKED');
+  assert.deepEqual(errors, [], 'the console threw:\n  ' + errors.join('\n  '));
 });
 
 test('a tick saved in the seconds after a reconnect keeps the switch on and every earlier opt-out — the audit\'s restart window', { skip: SKIP, timeout: 240000 }, async () => {

@@ -8433,7 +8433,7 @@ function DashWebsitePanel({ church }) {
       <div onClick={toggle} className="set-row" style={{ ...row(on), opacity: known ? 1 : .6 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 14.5 }}>Share our calendar on our website</div>
-          <div className="set-desc" style={{ color: 'var(--ink-2)' }}>{on ? 'On — every event is on a public feed, except any ticked “Not on the website”.' : 'Off — nothing about your calendar leaves the app.'}</div>
+          <div className="set-desc" style={{ color: 'var(--ink-2)' }}>{on ? 'On — whole-church events are on a public feed, except any ticked “Not on the website”; a group’s event only if you tick it on.' : 'Off — nothing about your calendar leaves the app.'}</div>
         </div>
         <button onClick={(e) => { e.stopPropagation(); toggle(); }} disabled={busy || !known} aria-label="Share our calendar on our website" role="switch" aria-checked={on} title="Put your events on a feed your website can show" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: on ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
           <span style={{ position: 'absolute', top: 3, left: on ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />

@@ -3437,13 +3437,21 @@ let _evtSeq = 0;
 // community pool with the same code — it does run there); it does not mirror while the console is closed;
 // and a delegated steward cannot flip the switch or tick an event (the Settings page is owner-only and the
 // tick is hidden for them).
-const WEB_DEFAULT = Object.freeze({ calendar: false, sermons: false, plans: false, optOut: [], address: 'own' });
+//
+// A GROUP'S EVENT IS NOT ON THE WEBSITE UNLESS A STEWARD PUT IT THERE — the opposite default from a
+// whole-church event, and the owner's decision of 2026-09-22 (audit F2). The relay's own read gate withholds
+// an event tagged to a room the church has not marked child-safe from that church's minors, because "the
+// title and the place are the disclosure"; the first mirror published exactly that to anyone holding the
+// npub. So: `optOut` holds the whole-church events a steward ticked OFF, and `optIn` the GROUP events a
+// steward ticked ON. Two lists rather than one because the DEFAULT differs, and a single list could not say
+// which default an absent id falls under.
+const WEB_DEFAULT = Object.freeze({ calendar: false, sermons: false, plans: false, optOut: [], optIn: [], address: 'own' });
 const WEB_ID_OK = /^[A-Za-z0-9_-]{1,64}$/;
+const _webIds = (v) => [...new Set((Array.isArray(v) ? v : []).map(x => String(x)).filter(x => WEB_ID_OK.test(x)))];
 function _webNormalise(c) {
   const o = (c && typeof c === 'object') ? c : {};
-  const optOut = [...new Set((Array.isArray(o.optOut) ? o.optOut : []).map(x => String(x)).filter(x => WEB_ID_OK.test(x)))];
   // sermons/plans/address are phase 2/3: read as their defaults whatever an older or newer document says
-  return { calendar: o.calendar === true, sermons: false, plans: false, optOut, address: 'own' };
+  return { calendar: o.calendar === true, sermons: false, plans: false, optOut: _webIds(o.optOut), optIn: _webIds(o.optIn), address: 'own' };
 }
 // The copy's body, with a FIXED key order so two consoles produce byte-identical content for the same event —
 // that equality is what stops the reconciler republishing on every boot.
@@ -3457,7 +3465,7 @@ function _webCopyBody(ev) {
 }
 let _web = null;   // the watch: { pub, share, shareTs, shareKnown, events, eventsKnown, copies, copyTs, copiesKnown, subs, listeners, busy, again, timer }
 function _webStop() { if (!_web) return; for (const off of _web.subs) { try { off(); } catch {} } if (_web.timer) clearTimeout(_web.timer); _web = null; }
-function _webEmit() { if (!_web) return; const snap = { ..._web.share, optOut: [..._web.share.optOut], known: _web.shareKnown }; for (const cb of _web.listeners) { try { cb(snap); } catch {} } }
+function _webEmit() { if (!_web) return; const snap = { ..._web.share, optOut: [..._web.share.optOut], optIn: [...(_web.share.optIn || [])], known: _web.shareKnown }; for (const cb of _web.listeners) { try { cb(snap); } catch {} } }
 function _webQueueSync() { if (!_web) return; if (_web.timer) clearTimeout(_web.timer); _web.timer = setTimeout(() => { if (_web) { _web.timer = null; _webSync(); } }, 250); }
 function _webEnsure(restart) {
   if (_web && _web.pub === pub && !restart) return _web;
@@ -3527,12 +3535,17 @@ function _webDesired(w) {
   const out = new Map();
   if (!w.share.calendar) return out;
   const held = new Set(w.share.optOut);
+  const shown = new Set(w.share.optIn || []);
   for (const ev of w.events.values()) {
     if (!ev || !WEB_ID_OK.test(String(ev.id || ''))) continue;
     let c = null; try { c = _openChurchDoc(ev.raw); } catch (e) { c = null; }
     if (c === null) return null;                                    // the name key is late: decide nothing until it arrives
     if (held.has(ev.id)) continue;
     if (!c || typeof c !== 'object' || !/^\d{4}-\d{2}-\d{2}$/.test(String(c.date || ''))) continue;
+    // A GROUP EVENT IS OFF THE WEBSITE UNLESS TICKED ON (see WEB_DEFAULT). The groupId lives in the SEALED
+    // document, never in the public copy — the relay cannot see it, so this console is the only place the
+    // question can be asked at all.
+    if (String(c.groupId || '') && !shown.has(ev.id)) continue;
     out.set(ev.id, _webCopyBody(c));
   }
   return out;
@@ -8308,6 +8321,17 @@ window.Steward = {
     return this.setWebsiteShare({ optOut });
   },
   isWebsiteHeld(eventId) { const w = _webEnsure(); return !!(w && w.share.optOut.includes(String(eventId || ''))); },
+  // The per-event "On the website" tick, for an event scoped to a GROUP: the inverse of setWebsiteHeld,
+  // because the default is the inverse. Same refusal-until-EOSE rule, for the same reason.
+  setWebsiteShown(eventId, shown) {
+    const id = String(eventId || ''); if (!WEB_ID_OK.test(id)) return Promise.resolve(false);
+    const w = _webEnsure(); if (!w || !w.shareKnown) return Promise.resolve(false);   // see setWebsiteShare
+    const cur = w.share.optIn || [];
+    const optIn = shown ? [...new Set([...cur, id])] : cur.filter(x => x !== id);
+    if (optIn.length === cur.length && optIn.every((x, i) => x === cur[i])) return Promise.resolve(true);   // nothing to change
+    return this.setWebsiteShare({ optIn });
+  },
+  isWebsiteShown(eventId) { const w = _webEnsure(); return !!(w && (w.share.optIn || []).includes(String(eventId || ''))); },
   websiteFeedUrl(eventId) {
     const base = _webFeedBase(); if (!base || !this.npub) return '';
     return base + '/public/' + this.npub + (eventId ? '/e/' + encodeURIComponent(String(eventId)) + '.ics' : '/calendar.ics');
