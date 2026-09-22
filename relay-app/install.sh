@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # TrinityOne Relay — installer for any Debian/Ubuntu/Raspberry Pi OS box.
 #
-#   curl -fsSL -o install.sh https://app.trinityone.church/relay-app/install.sh
+#   curl -fsSL -o install.sh https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download/install.sh
 #   less install.sh                      # read it: this file IS the trust root, see below
 #   sudo bash install.sh
 #
@@ -9,12 +9,27 @@
 # boot, then optionally brings up a tunnel so the relay is reachable from outside the church LAN.
 # Not Pi-specific — it just needs an apt-based Linux box (a Pi, mini-PC, old laptop, or a VPS).
 #
-# The code is fetched as a tarball from the release host ($SRC, --src to change), together with a detached
-# signature, and the signature is checked against the release public key PINNED IN THIS FILE before a single
-# byte is unpacked. Until 2026-09-21 this script fetched the tarball alone and untarred it as root — the
-# only key it could have checked against arrived INSIDE the tarball it was trusting (reference/BACKLOG.md,
-# "THE ONE-LINE INSTALLER HAS NEVER VERIFIED WHAT IT DOWNLOADS"). So: read this file before you run it. If
-# the key below is not the TrinityOne release key, nothing else in the file matters.
+# WHERE THINGS COME FROM — two places, on purpose:
+#   CODE  the relay software, as a tarball + detached signature, from $SRC (--src). Default: the newest
+#         TrinityOne release on GitHub. Checked against the release public key PINNED IN THIS FILE before a
+#         single byte is unpacked, and the same source feeds the control panel's "Update now" later.
+#   APPS  the member/steward installers this box hands out to phones, from $ORIGIN (--origin). Default:
+#         https://app.trinityone.church, the host every member's app already checks for updates.
+#         Not GitHub: the APKs are pilot builds released separately from the relay, and they are not there.
+#   Point --src at a TrinityOne relay (https://host) instead and both come from it, as they did before
+#   2026-09-21 — a relay serves them under /relay-app/, a GitHub release flat (release_bundle_base, below).
+#
+# Until 2026-09-21 this script fetched the tarball alone and untarred it as root — the only key it could have
+# checked against arrived INSIDE the tarball it was trusting (reference/BACKLOG.md, "THE ONE-LINE INSTALLER
+# HAS NEVER VERIFIED WHAT IT DOWNLOADS"). So: read this file before you run it. If the key below is not the
+# TrinityOne release key, nothing else in the file matters. How to tell: its SHA-256 fingerprint is
+#
+#     72eaf9dae5f094be4fc4162771465a68865a9ac350fd0ac4ef9d75e648a93383
+#
+# which is `sha256sum relay-app/release-pubkey.pem` in the public repository
+# (https://github.com/TrinityOneAdmin/TrinityOne/blob/main/relay-app/release-pubkey.pem), is printed in the
+# "Running your own relay" guide, and is what `bash install.sh --fingerprint` prints for the key in THIS file.
+# Three places, two of them not this download. If they disagree, stop.
 #
 # Flags (all optional; prompts on a TTY when omitted):
 #   --church <npub[,npub...]>   church key(s) allowed to publish (the relay's write policy)
@@ -24,13 +39,20 @@
 #   --domain <relay.yourchurch.org>   your domain label (the route itself is set in Cloudflare)
 #   --port   <n>                listen port (default 8000)
 #   --dir    <path>             install dir (default /opt/trinityone)
-#   --src    <https://host>     where to fetch the code bundle from (default the pilot gateway)
+#   --src    <url>              where the code bundle comes from: a GitHub release
+#                               (…/releases/latest/download or …/releases/download/<tag>) or a TrinityOne
+#                               relay (https://host). Default: the newest GitHub release.
+#   --origin <https://host>     where the member/steward installers come from (default
+#                               https://app.trinityone.church; a relay named by --src, when it is one)
+#   --fingerprint               print the SHA-256 of the release key pinned in this file, and exit
 #   -y                          non-interactive: accept defaults, no prompts
 set -euo pipefail
 
-SRC="https://app.trinityone.church"
+SRC="https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download"
+APP_ORIGIN_DEFAULT="https://app.trinityone.church"
+ORIGIN=""
 DIR="/opt/trinityone"; PORT="8000"
-CHURCH=""; CHURCH_NAME=""; TUNNEL=""; CF_TOKEN=""; CF_HOST=""; ASSUME_YES=0
+CHURCH=""; CHURCH_NAME=""; TUNNEL=""; CF_TOKEN=""; CF_HOST=""; ASSUME_YES=0; SHOW_FP=0
 SVC_USER="trinityone"; SVC="trinityone-relay"
 
 while [ $# -gt 0 ]; do
@@ -43,6 +65,8 @@ while [ $# -gt 0 ]; do
     --port)   PORT="$2"; shift 2;;
     --dir)    DIR="$2"; shift 2;;
     --src)    SRC="${2%/}"; shift 2;;
+    --origin) ORIGIN="${2%/}"; shift 2;;
+    --fingerprint) SHOW_FP=1; shift;;
     -y|--yes) ASSUME_YES=1; shift;;
     *) echo "unknown option: $1" >&2; exit 1;;
   esac
@@ -55,9 +79,6 @@ die()  { printf '\n\033[31m✗ %s\033[0m\n' "$*" >&2; exit 1; }
 # read a prompt from the real terminal even when the script itself arrives on stdin (curl | bash)
 ask()  { local p="$1" d="${2:-}" a=""; if [ "$ASSUME_YES" = 1 ] || [ ! -r /dev/tty ]; then echo "$d"; return; fi
          read -r -p "$p" a < /dev/tty || true; echo "${a:-$d}"; }
-
-[ "$(id -u)" = "0" ] || die "run as root:  sudo bash install.sh"
-command -v apt-get >/dev/null 2>&1 || die "this installer needs an apt-based distro (Debian/Ubuntu/Raspberry Pi OS). Install Node + run scripts/gateway.mjs manually otherwise."
 
 # ── THE TRUST ROOT ──────────────────────────────────────────────────────────────────────────────────────────
 # The TrinityOne release public key (Ed25519). Every code bundle the release host publishes is signed with its
@@ -88,7 +109,37 @@ verify_release_bundle() {
 }
 # ── end verify_release_bundle ──
 
+# ── release_bundle_base ──
+# release_bundle_base <source>
+# Prints the directory that holds bundle.tgz, bundle.sig and bundle.json for <source>. Two shapes, told apart
+# by the address alone — no request is made:
+#   a GitHub release   …/releases/latest/download  or  …/releases/download/<tag>   → the assets sit flat there
+#   a TrinityOne relay  https://host[:port]                                          → it serves them under /relay-app/
+# DUPLICATED VERBATIM in relay-app/install.sh and scripts/relay-update.sh, for the reason given at
+# verify_release_bundle; pinned byte-equal by the same test.
+release_bundle_base() {
+  local src="${1%/}"
+  case "$src" in
+    */releases/latest/download|*/releases/download/*) printf '%s\n' "$src";;
+    *) printf '%s\n' "$src/relay-app";;
+  esac
+}
+# ── end release_bundle_base ──
+
+# The fingerprint of the key above, computed from this file — compare it with the guide and the repository.
+if [ "$SHOW_FP" = 1 ]; then printf '%s\n' "$RELEASE_PUBKEY_PEM" | sha256sum | cut -c1-64; exit 0; fi
+
+[ "$(id -u)" = "0" ] || die "run as root:  sudo bash install.sh"
+command -v apt-get >/dev/null 2>&1 || die "this installer needs an apt-based distro (Debian/Ubuntu/Raspberry Pi OS). Install Node + run scripts/gateway.mjs manually otherwise."
+
+# The apps' origin: named, else the relay --src points at, else the default.
+if [ -z "$ORIGIN" ]; then
+  case "$(release_bundle_base "$SRC")" in "$SRC/relay-app") ORIGIN="$SRC";; *) ORIGIN="$APP_ORIGIN_DEFAULT";; esac
+fi
+BUNDLE_BASE="$(release_bundle_base "$SRC")"
+
 say "TrinityOne Relay installer"
+ok "release key sha256 $(printf '%s\n' "$RELEASE_PUBKEY_PEM" | sha256sum | cut -c1-64)"
 
 # ── Node (>=18) ────────────────────────────────────────────────────────────────
 NODE_OK=0
@@ -111,14 +162,15 @@ if ! id "$SVC_USER" >/dev/null 2>&1; then
 fi
 
 # ── fetch / verify / unpack the app ──────────────────────────────────────────────
-# Pull the code tarball AND its detached signature from the release host ($SRC/relay-app/bundle.tgz + .sig),
-# check the signature against the key pinned above, and only then unpack. The relay/ secrets live outside
-# the bundle, so re-running never clobbers this box's church.json / admin token / push keys.
-say "Fetching the app into $DIR (from $SRC)"
+# Pull the code tarball AND its detached signature ($BUNDLE_BASE/bundle.tgz + .sig — a GitHub release's flat
+# assets, or a relay's /relay-app/), check the signature against the key pinned above, and only then unpack.
+# The relay/ secrets live outside the bundle, so re-running never clobbers this box's church.json / admin
+# token / push keys. -L on every curl: a GitHub download is a redirect.
+say "Fetching the app into $DIR (from $BUNDLE_BASE)"
 mkdir -p "$DIR"
 TARBALL="$(mktemp)"; SIGFILE="$(mktemp)"; PUBFILE="$(mktemp)"; trap 'rm -f "$TARBALL" "$SIGFILE" "$PUBFILE"' EXIT
-curl -fsSL "$SRC/relay-app/bundle.tgz" -o "$TARBALL" || die "couldn't download the code bundle from $SRC/relay-app/bundle.tgz"
-curl -fsSL "$SRC/relay-app/bundle.sig" -o "$SIGFILE" || die "couldn't download the bundle's signature from $SRC/relay-app/bundle.sig — without it the download cannot be checked, so nothing was installed"
+curl -fsSL "$BUNDLE_BASE/bundle.tgz" -o "$TARBALL" || die "couldn't download the code bundle from $BUNDLE_BASE/bundle.tgz"
+curl -fsSL "$BUNDLE_BASE/bundle.sig" -o "$SIGFILE" || die "couldn't download the bundle's signature from $BUNDLE_BASE/bundle.sig — without it the download cannot be checked, so nothing was installed"
 printf '%s\n' "$RELEASE_PUBKEY_PEM" > "$PUBFILE"
 if ! VERIFY_MSG="$(verify_release_bundle "$TARBALL" "$SIGFILE" "$PUBFILE" 2>&1)"; then die "$VERIFY_MSG"; fi
 ok "the download is signed by the TrinityOne release key"
@@ -137,7 +189,8 @@ ok "dependencies ready"
 
 # ── write policy (church.json) ──────────────────────────────────────────────────
 mkdir -p "$DIR/relay"
-printf '%s\n' "$SRC" > "$DIR/relay/origin"   # where the "Update now" button pulls fresh code from
+printf '%s\n' "$ORIGIN" > "$DIR/relay/origin"        # where the installers this box hands out come from
+printf '%s\n' "$SRC" > "$DIR/relay/code-source"      # where "Update now" (scripts/relay-update.sh) pulls code from
 if [ -z "$CHURCH" ] && [ ! -s "$DIR/relay/church.json" ]; then
   CHURCH="$(ask 'Your church public key (npub1…), or blank to set later: ' '')"
 fi
@@ -283,6 +336,7 @@ echo
 echo "  Admin token (keep it private):"
 echo "      ${ADMIN_TOKEN:-<see: journalctl -u $SVC | grep \"admin token\">}"
 echo
+echo "  Code updates come from $SRC; the installers it hands out from $ORIGIN."
 echo "  Manage:  systemctl status $SVC   ·   journalctl -u $SVC -f"
 echo "  (Own domain:  --cf-token <token> --domain relay.yourchurch.org  ·  or --tunnel tailscale|none)"
 echo

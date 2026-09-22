@@ -148,11 +148,13 @@ loadSettings();
 
 // ── WHERE THIS BOX GETS THINGS FROM ──────────────────────────────────────────────────────────────────────
 // The update source: the host this box pulls the member/steward installers from (fetchApksFromOrigin), and —
-// on a server installed by relay-app/install.sh — the host relay-update.sh pulls a signed code bundle from.
+// on a server installed before 2026-09-21 (no relay/code-source file) — the host relay-update.sh pulls a
+// signed code bundle from.
 // Blank on the release host itself.
 //
 // It lives in ONE file, DATA_DIR/origin, and there are three writers:
-//   • relay-app/install.sh writes --src (default https://app.trinityone.church) at install time;
+//   • relay-app/install.sh writes --origin (default https://app.trinityone.church) at install time — since
+//     2026-09-21 its --src is the CODE source, a different file (see codeSource below);
 //   • a packaged Suite SEEDS it on first boot from ROOT/release-origin, which scripts/build-relay-payload.sh
 //     stamps into the payload beside version.txt. Measured 2026-09-19 on the owner's Ubuntu box: a Suite
 //     install had no origin at all, so its panel said "this box hands out nothing yet" and pressing the
@@ -161,7 +163,7 @@ loadSettings();
 //     already checks for updates (app/update-check.jsx) and the one the console links members to. The seed
 //     is copied ONLY when the file does not exist: an operator who clears it (an empty file) stays cleared.
 //   • the operator, from the control panel, through POST /settings {origin} — admin-gated, same trust as
-//     install.sh's --src, since it decides where the installers members download come from.
+//     install.sh's --origin, since it decides where the installers members download come from.
 //
 // LIVE, NOT A BOOT-TIME CONSTANT. Every reader below consults the `let` on each call, so a change from the
 // panel takes effect at once and the panel can say "in use now" rather than "restart the relay".
@@ -195,6 +197,25 @@ let ORIGIN = readOriginFile();
 if (!existsSync(ORIGIN_FILE) && PACKAGED) {
   let seed = ''; try { seed = cleanOrigin(readFileSync(RELEASE_ORIGIN_SEED, 'utf8')) || ''; } catch {}
   if (seed) { try { writeOriginFile(seed); ORIGIN = seed; console.log('[origin] first run of a packaged relay — update source set to ' + seed); } catch (e) { console.error('[origin] could not seed the update source:', (e && e.message) || e); } }
+}
+// WHERE THE CODE COMES FROM — a second file, DATA_DIR/code-source, and a second question (2026-09-21).
+// ORIGIN above is where the INSTALLERS come from. A server box's own software now comes from a GitHub release
+// (relay-app/install.sh's default --src, the owner's decision after the audit found the guide pointing every
+// church at a8 for a bundle a8 does not serve), and GitHub carries no APKs, so the two cannot be one address.
+// relay-app/install.sh writes both; scripts/relay-update.sh reads this one for the bundle and ORIGIN for the
+// APKs; GET /update reads it to say whether a newer build is out, and POST /update to decide whether there is
+// anywhere to pull from. Absent (a box installed before it existed, e.g. a8), the origin serves as the code
+// source too — exactly what those boxes did before. No panel setter: it is an install-time choice.
+const CODE_SOURCE_FILE = join(DATA_DIR, 'code-source');
+function codeSource() { try { return readFileSync(CODE_SOURCE_FILE, 'utf8').trim(); } catch { return ''; } }
+// The same two shapes relay-app/install.sh's release_bundle_base tells apart, by the address alone: a GitHub
+// release holds bundle.tgz / bundle.sig / bundle.json flat under …/releases/latest/download or
+// …/releases/download/<tag>; a TrinityOne relay serves them under /relay-app/. Pinned equal to the shell copy
+// by scripts/a-server-box-takes-its-code-from-a-release.test.mjs, which runs both over the same inputs.
+function releaseBundleBase(src) {
+  const s = String(src || '').replace(/\/$/, '');
+  if (/\/releases\/latest\/download$/.test(s) || /\/releases\/download\/.+$/.test(s)) return s;
+  return s + '/relay-app';
 }
 // The operator's setter. Returns { ok, origin } or { error } with a sentence for the panel.
 function setOrigin(raw) {
@@ -5577,7 +5598,7 @@ function serveStatic(req, res) {
           return { freeBytes: free, totalBytes: total, usedPct: total ? Math.round((1 - free / total) * 100) : null };
         } catch (e) { return null; }
       })(),
-      version: BUILD.sha, versionShort: BUILD.short, builtAt: BUILD.date, origin: ORIGIN,   // for the dashboard's update check
+      version: BUILD.sha, versionShort: BUILD.short, builtAt: BUILD.date, origin: ORIGIN,   // where this box's installers come from (the dashboard reads it; the code source is on /update)
       // C1: on a RELEASE HOST, what this box would hand the fleet if a relay pulled right now. Absent on an
       // ordinary relay. Surfaced so "which code is being released?" is answerable without shell access —
       // a8 ran a parked branch's WIP commit for a day and nothing anywhere said so.
@@ -6524,9 +6545,23 @@ function serveStatic(req, res) {
       // address, or the network blocks ts.net), even though this server can. Best-effort, short timeout.
       (async () => {
         let latest = null;
-        if (ORIGIN) {
+        // Ask the CODE SOURCE what is newest — the same address relay-update.sh will pull from, so "a new
+        // build is available" and "Update now" can never name two different things. A GitHub release
+        // answers with bundle.json (written by scripts/publish-relay-bundle.sh beside the bundle); a
+        // TrinityOne relay with /status. A box with no code-source file asks its origin, as it always did.
+        const codeSrc = codeSource() || ORIGIN;
+        const base = codeSrc ? releaseBundleBase(codeSrc) : '';
+        if (codeSrc && base !== codeSrc + '/relay-app') {
           try {
-            const r = await fetch(ORIGIN.replace(/\/+$/, '') + '/status', { cache: 'no-store', signal: AbortSignal.timeout(6000) });
+            const r = await fetch(base + '/bundle.json', { cache: 'no-store', signal: AbortSignal.timeout(6000) });
+            const j = await r.json();
+            // Typed field by field: bundle.json is an unsigned description from a source the operator chose, and
+            // the panel calls .slice on builtAt — a number there threw inside loadUpdate and left the card blank.
+            if (j && typeof j.sha === 'string' && /^[0-9a-f]{40}$/.test(j.sha)) latest = { version: j.sha, versionShort: j.sha.slice(0, 7), builtAt: typeof j.builtAt === 'string' ? j.builtAt.slice(0, 40) : '', tag: typeof j.tag === 'string' ? j.tag.slice(0, 60) : '' };
+          } catch {}
+        } else if (codeSrc) {
+          try {
+            const r = await fetch(codeSrc.replace(/\/+$/, '') + '/status', { cache: 'no-store', signal: AbortSignal.timeout(6000) });
             const s = await r.json();
             // Prefer what the origin would actually SERVE (its release ref) over the version of the
             // process it happens to be running. Since the bundle is built from RELEASE_REF rather than
@@ -6539,13 +6574,15 @@ function serveStatic(req, res) {
         // `releaseHost` and `packaged` let the panel tell three no-button states apart that it used to
         // render as one false sentence ("This is the release source"): the release host itself, a Suite
         // payload (updates with the Suite), and a box that was simply never told where to get things from.
-        res.writeHead(200, H); res.end(JSON.stringify({ ok: true, version: BUILD.sha, versionShort: BUILD.short, builtAt: BUILD.date, origin: ORIGIN, releaseHost: existsSync(RELEASE_KEY), packaged: PACKAGED, pending, stalled, last, latest }));
+        // `codeSource` is the file as written (blank when the origin doubles as it), so the panel can say
+        // where the software comes from when that is not where the installers do.
+        res.writeHead(200, H); res.end(JSON.stringify({ ok: true, version: BUILD.sha, versionShort: BUILD.short, builtAt: BUILD.date, origin: ORIGIN, codeSource: codeSource(), releaseHost: existsSync(RELEASE_KEY), packaged: PACKAGED, pending, stalled, last, latest }));
       })();
       return;
     }
     if (req.method === 'POST') {
       if (PACKAGED) { res.writeHead(400, H); res.end('{"error":"this relay is part of the TrinityOne Suite — its software updates when you install a newer Suite"}'); return; }
-      if (!ORIGIN) { res.writeHead(400, H); res.end('{"error":"this box was never told where to get things from — set an update source in the control panel"}'); return; }
+      if (!codeSource() && !ORIGIN) { res.writeHead(400, H); res.end('{"error":"this box was never told where to get things from — set an update source in the control panel"}'); return; }
       try { writeFileSync(UPDATE_FLAG, JSON.stringify({ at: Date.now() }) + '\n'); res.writeHead(200, H); res.end(JSON.stringify({ ok: true, queued: true })); }
       catch (e) { res.writeHead(500, H); res.end(JSON.stringify({ error: 'could not queue the update: ' + String((e && e.message) || e) })); }
       return;

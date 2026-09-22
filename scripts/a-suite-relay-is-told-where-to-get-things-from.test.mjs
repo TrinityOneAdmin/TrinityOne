@@ -199,14 +199,16 @@ test('a packaged relay seeds DATA_DIR/origin from release-origin on its FIRST bo
   } finally { box.stop(); rmSync(dir, { recursive: true, force: true }); rmSync(root, { recursive: true, force: true }); }
 });
 
-test('the seed the payload build stamps is the host install.sh defaults to — one release host, two routes', () => {
+test('the seed the payload build stamps is the app origin install.sh defaults to — one host hands out the apps, two routes', () => {
   const build = readFileSync(join(ROOT, 'scripts', 'build-relay-payload.sh'), 'utf8');
   const m = build.match(/\$\{RELEASE_ORIGIN:-([^}]+)\}"?\s*>\s*"\$OUT\/release-origin"/);
   assert.ok(m, 'build-relay-payload.sh no longer stamps release-origin into the payload — a Suite would boot with no update source again');
   const install = readFileSync(join(ROOT, 'relay-app', 'install.sh'), 'utf8');
-  const s = install.match(/^SRC="([^"]+)"/m);
-  assert.ok(s, 'install.sh has no SRC= default to compare against');
-  assert.equal(m[1], s[1], 'the Suite\'s seed and the installer\'s default source name different hosts');
+  // Since 2026-09-21 install.sh's SRC= is where the CODE comes from (a GitHub release); the host the
+  // installers come from is APP_ORIGIN_DEFAULT, and that is what a Suite's seed must match.
+  const s = install.match(/^APP_ORIGIN_DEFAULT="([^"]+)"/m);
+  assert.ok(s, 'install.sh has no APP_ORIGIN_DEFAULT= to compare against');
+  assert.equal(m[1], s[1], 'the Suite\'s seed and the installer\'s default app origin name different hosts');
   assert.match(m[1], /^https:\/\/[a-z0-9.-]+$/, 'the seed is not a bare https origin');
   assert.match(readFileSync(join(ROOT, '.gitignore'), 'utf8'), /^\/release-origin$/m,
     'release-origin is not gitignored — committed, it would make every checkout read as a packaged Suite');

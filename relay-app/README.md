@@ -15,17 +15,22 @@ For a relay that runs on boot and keeps running with nothing left open — on a 
 mini-PC, an old laptop, or a VPS (any apt-based Linux; not Pi-specific). Three commands, in this order:
 
 ```bash
-curl -fsSL -o install.sh https://app.trinityone.church/relay-app/install.sh
+curl -fsSL -o install.sh https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download/install.sh
 less install.sh        # read it first — it pins the release key it checks every download against
 sudo bash install.sh
 ```
 
 Not `curl … | sudo bash`: the script is the trust root, so it is downloaded, read, then run. (Keep the
-`-L`: if the address redirects, without it you save the redirect page instead of the script.) It installs
-Node if needed, fetches the app **and its signature** and verifies the one against the other before
-unpacking, runs the relay as a hardened `systemd` service under a dedicated `trinityone` user, asks for
-your church npub (write policy) and **lets you pick how it's reachable** — Tailscale, a Cloudflare quick
-tunnel, or LAN-only. Non-interactive / scripted:
+`-L`: the GitHub address redirects, and without it you save the redirect page instead of the script.)
+The key it pins has SHA-256 fingerprint `72eaf9dae5f094be4fc4162771465a68865a9ac350fd0ac4ef9d75e648a93383` — the same
+number `bash install.sh --fingerprint` prints for the file you have and `sha256sum relay-app/release-pubkey.pem`
+gives in this repository; if they disagree, stop. It installs Node if needed, fetches the app **and its
+signature** from the newest [release](https://github.com/TrinityOneAdmin/TrinityOne/releases/latest) and
+verifies the one against the other before unpacking, runs the relay as a hardened `systemd` service under
+a dedicated `trinityone` user, asks for your church npub (write policy) and **lets you pick how it's
+reachable** — Tailscale, a Cloudflare quick tunnel, or LAN-only. **Code comes from GitHub Releases; the
+member/steward apps the box hands out come from `https://app.trinityone.church`** (`--origin`), which
+carries them and GitHub does not. Non-interactive / scripted:
 
 ```bash
 sudo bash install.sh --church npub1… --name "Grace Chapel" --tunnel tailscale -y
@@ -35,7 +40,8 @@ The same steps, with the Linux `.deb` / AppImage notes for the Suite, are in the
 *Running your own relay* (`help.html#console-relay`, and Help in the steward console).
 
 Flags: `--church <npub[,npub…]>` · `--name` · `--tunnel tailscale|cloudflared|none` · `--port` ·
-`--dir` · `--branch` · `-y`. Re-run any time to update. Manage with `systemctl status trinityone-relay`.
+`--dir` · `--src <release or relay address>` · `--origin <https://host>` · `--fingerprint` · `-y`. Re-run
+any time to update, or press **Update now** in the control panel. Manage with `systemctl status trinityone-relay`.
 
 ## Or run it from a window (no install — needs Node)
 - **Mac:** double-click `start.command`

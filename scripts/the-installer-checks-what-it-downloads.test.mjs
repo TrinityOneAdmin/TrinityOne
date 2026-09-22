@@ -22,14 +22,18 @@
 //       signature, a signature by another key, a missing key and a missing openssl each fail with a plain
 //       sentence and touch nothing;
 //   §3  the REAL install.sh, run under the same stubs as the reproduction: it asks for the signature, refuses a
-//       tampered or unsigned or wrongly-signed download BEFORE unpacking anything, and unpacks a good one;
-//   §4  relay-update.sh calls the function between the download and the unpack.
+//       tampered or unsigned or wrongly-signed download BEFORE unpacking anything, and unpacks a good one —
+//       from a GitHub release's flat assets (the default since 2026-09-21) and from a relay's /relay-app/;
+//   §4  the REAL relay-update.sh, run the same way: it pulls from the code source in whichever shape it has,
+//       fetches the installers from the app origin, and on a tampered bundle records "failed" and EXITS 1 with
+//       nothing unpacked (AUDIT-suite-ABD-2026-09-21 finding 4: that exit was pinned by text only).
 //
-// The test's own Ed25519 key stands in for the release key in §2 and §3 (the release secret is not in the
+// The test's own Ed25519 key stands in for the release key in §2–§4 (the release secret is not in the
 // repo and must never be); §1 is what ties the shipped script to the real key.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, chmodSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -41,13 +45,15 @@ const UPDATE = readFileSync(join(ROOT, 'scripts', 'relay-update.sh'), 'utf8');
 const PEM = readFileSync(join(ROOT, 'relay-app', 'release-pubkey.pem'), 'utf8').trim();
 const HAS_OPENSSL = spawnSync('openssl', ['version'], { encoding: 'utf8' }).status === 0;
 
-function fnBlock(src, what) {
-  const from = src.indexOf('# ── verify_release_bundle ──');
-  assert.notEqual(from, -1, 'the verify_release_bundle block is gone from ' + what);
-  const to = src.indexOf('# ── end verify_release_bundle ──', from);
-  assert.notEqual(to, -1, 'the verify_release_bundle end-marker is gone from ' + what + ' — re-anchor this test');
+function block(src, what, name) {
+  const from = src.indexOf('# ── ' + name + ' ──');
+  assert.notEqual(from, -1, 'the ' + name + ' block is gone from ' + what);
+  const to = src.indexOf('# ── end ' + name + ' ──', from);
+  assert.notEqual(to, -1, 'the ' + name + ' end-marker is gone from ' + what + ' — re-anchor this test');
   return src.slice(from, to);
 }
+const fnBlock = (src, what) => block(src, what, 'verify_release_bundle');
+const baseBlock = (src, what) => block(src, what, 'release_bundle_base');
 const sh = (script, env = {}) => spawnSync('bash', ['-c', script], { encoding: 'utf8', env: { ...process.env, ...env } });
 
 // ── §1 · one function, two copies; one key, pinned ───────────────────────────────────────────────────────
@@ -56,6 +62,17 @@ test('install.sh and relay-update.sh carry the SAME verify function, byte for by
   const a = fnBlock(INSTALL, 'relay-app/install.sh'), b = fnBlock(UPDATE, 'scripts/relay-update.sh');
   assert.equal(a, b, 'the two copies of verify_release_bundle have drifted apart — the installer and the updater would accept different things');
   assert.match(a, /openssl pkeyutl -verify -pubin -inkey "\$pub" -rawin -in "\$tarball" -sigfile "\$sig"/, 'the function no longer runs the Ed25519 verify');
+});
+
+test('release_bundle_base: one rule, two copies byte-equal; a GitHub release is flat, a relay is /relay-app/', () => {
+  const a = baseBlock(INSTALL, 'relay-app/install.sh'), b = baseBlock(UPDATE, 'scripts/relay-update.sh');
+  assert.equal(a, b, 'the two copies of release_bundle_base have drifted apart — the installer and the updater would fetch from different places');
+  const run = (src) => sh(a + '\nrelease_bundle_base ' + JSON.stringify(src)).stdout.trim();
+  assert.equal(run('https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download'), 'https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download', 'a GitHub "latest" address is not flat');
+  assert.equal(run('https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download/'), 'https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download', 'a trailing slash is not dropped');
+  assert.equal(run('https://github.com/TrinityOneAdmin/TrinityOne/releases/download/relay-v0.9.0-rc1'), 'https://github.com/TrinityOneAdmin/TrinityOne/releases/download/relay-v0.9.0-rc1', 'a pinned-tag address is not flat');
+  assert.equal(run('https://app.trinityone.church'), 'https://app.trinityone.church/relay-app', 'a relay address does not get /relay-app');
+  assert.equal(run('http://192.168.1.20:8000/'), 'http://192.168.1.20:8000/relay-app', 'a LAN relay address does not get /relay-app');
 });
 
 test('the key pinned in install.sh is the committed release public key', () => {
@@ -154,16 +171,20 @@ function installWithTestKey(d) {
   return p;
 }
 
-function runInstaller(d, files) {
-  const served = join(d, 'srv', 'relay-app'); mkdirSync(served, { recursive: true });
+// `layout`: 'relay' serves the files the way a TrinityOne relay does (http://local.test/relay-app/…);
+// 'github' the way a GitHub release does (http://local.test/releases/latest/download/…, flat).
+function runInstaller(d, files, { layout = 'relay', extra = [] } = {}) {
+  const src = layout === 'github' ? 'http://local.test/releases/latest/download' : 'http://local.test';
+  const served = join(d, 'srv', layout === 'github' ? 'releases/latest/download' : 'relay-app'); mkdirSync(served, { recursive: true });
   for (const [name, from] of Object.entries(files)) writeFileSync(join(served, name), readFileSync(from));
   const bin = stubs(d, join(d, 'srv'));
   const dir = join(d, 'opt'); mkdirSync(dir);
   try { rmSync(join(d, 'curl.log')); } catch {}
-  const r = spawnSync('bash', [installWithTestKey(d), '--dir', dir, '--src', 'http://local.test', '--tunnel', 'none', '-y'],
+  const r = spawnSync('bash', [installWithTestKey(d), '--dir', dir, '--src', src, '--tunnel', 'none', '-y', ...extra],
     { encoding: 'utf8', env: { ...process.env, PATH: bin + ':' + process.env.PATH }, timeout: 60000 });
   let asked = []; try { asked = readFileSync(join(d, 'curl.log'), 'utf8').trim().split('\n'); } catch {}
-  return { status: r.status, out: r.stdout + r.stderr, asked, unpacked: existsSync(join(dir, 'scripts', 'gateway.mjs')), dir };
+  const file = (n) => { try { return readFileSync(join(dir, 'relay', n), 'utf8').trim(); } catch { return null; } };
+  return { status: r.status, out: r.stdout + r.stderr, asked, unpacked: existsSync(join(dir, 'scripts', 'gateway.mjs')), dir, src, origin: file('origin'), codeSource: file('code-source') };
 }
 
 test('install.sh asks for the signature and refuses a TAMPERED download before unpacking a byte', { skip: HAS_OPENSSL ? false : 'no openssl' }, () => {
@@ -199,28 +220,127 @@ test('install.sh refuses a download signed by a key that is not the pinned one',
   } finally { rmSync(d, { recursive: true, force: true }); }
 });
 
-test('install.sh unpacks a GOOD download, says it was signed, and records the source as the origin', { skip: HAS_OPENSSL ? false : 'no openssl' }, () => {
+test('install.sh unpacks a GOOD download from a RELAY source, says it was signed, and that relay is both code source and origin', { skip: HAS_OPENSSL ? false : 'no openssl' }, () => {
   const d = fixture();
   try {
     const r = runInstaller(d, { 'bundle.tgz': join(d, 'bundle.tgz'), 'bundle.sig': join(d, 'bundle.sig') });
     assert.match(r.out, /signed by the TrinityOne release key/, 'a good download was not reported as signed: ' + r.out.slice(-600));
+    assert.ok(r.asked.includes('http://local.test/relay-app/bundle.tgz') && r.asked.includes('http://local.test/relay-app/bundle.sig'), 'a relay source was not fetched under /relay-app/: ' + r.asked.join(', '));
     assert.equal(r.unpacked, true, 'a correctly signed download was NOT unpacked — the check refuses everything');
     assert.equal(readFileSync(join(r.dir, 'scripts', 'gateway.mjs'), 'utf8'), 'console.log("the genuine build")\n', 'what was unpacked is not the signed tree');
-    assert.equal(readFileSync(join(r.dir, 'relay', 'origin'), 'utf8').trim(), 'http://local.test', 'the installer did not record --src as the update source');
+    assert.equal(r.codeSource, 'http://local.test', 'the installer did not record --src as the code source (relay/code-source)');
+    assert.equal(r.origin, 'http://local.test', 'a relay named by --src is not also the app origin — before 2026-09-21 --src was both, and an explicit relay source must still behave that way');
     // it got as far as the first root-only write, which a non-root run cannot do — i.e. PAST the unpack
     assert.match(r.out, /Installing the boot service/, 'the script did not reach the systemd step after a good unpack');
   } finally { rmSync(d, { recursive: true, force: true }); }
 });
 
-// ── §4 · the updater calls it between the download and the unpack ────────────────────────────────────────
+test('install.sh with a GITHUB RELEASE source fetches the assets flat, and keeps the app origin separate', { skip: HAS_OPENSSL ? false : 'no openssl' }, () => {
+  const d = fixture();
+  try {
+    const r = runInstaller(d, { 'bundle.tgz': join(d, 'bundle.tgz'), 'bundle.sig': join(d, 'bundle.sig') }, { layout: 'github' });
+    assert.ok(r.asked.includes('http://local.test/releases/latest/download/bundle.tgz'), 'the bundle was not fetched flat from the release: ' + r.asked.join(', '));
+    assert.ok(r.asked.includes('http://local.test/releases/latest/download/bundle.sig'), 'the signature was not fetched flat from the release: ' + r.asked.join(', '));
+    assert.ok(!r.asked.some((u) => /\/relay-app\/bundle/.test(u)), 'a GitHub source was fetched under /relay-app/, which a release does not have: ' + r.asked.join(', '));
+    assert.match(r.out, /signed by the TrinityOne release key/, 'the flat download was not verified: ' + r.out.slice(-600));
+    assert.equal(r.unpacked, true, 'a correctly signed release asset was not unpacked');
+    assert.equal(r.codeSource, r.src, 'relay/code-source is not the release address');
+    assert.equal(r.origin, 'https://app.trinityone.church', 'with a GitHub code source the app origin must default to the host the phones already check — a release carries no APKs');
+    assert.match(r.out, /Installing the boot service/, 'the script did not reach the systemd step');
+    // the run prints the fingerprint of the key it pinned (the test key here), so the operator sees the number
+    // the guide and the header name — or does not, and stops
+    const fp = createHash('sha256').update(readFileSync(join(d, 'release.pub'))).digest('hex');
+    assert.match(r.out, new RegExp('release key sha256 ' + fp), 'the run does not print the pinned key\'s fingerprint');
+  } finally { rmSync(d, { recursive: true, force: true }); }
+  const d2 = fixture();
+  try {
+    const r = runInstaller(d2, { 'bundle.tgz': join(d2, 'bundle.tgz'), 'bundle.sig': join(d2, 'bundle.sig') }, { layout: 'github', extra: ['--origin', 'http://apps.test/'] });
+    assert.equal(r.origin, 'http://apps.test', '--origin was not recorded as the app origin');
+    assert.equal(r.codeSource, r.src, '--origin changed the code source');
+  } finally { rmSync(d2, { recursive: true, force: true }); }
+});
 
-test('relay-update.sh verifies the bundle with the shared function before it unpacks', () => {
-  // comments stripped first, so a sentence in a comment cannot satisfy this
-  const code = UPDATE.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
-  const dl = code.indexOf('curl -fsSL "$ORIGIN/relay-app/bundle.tgz"');
-  const call = code.indexOf('verify_release_bundle "$TARBALL" "$SIGFILE" "$PUBKEY"');
-  const unpack = code.indexOf('tar -xzf "$TARBALL" -C "$DIR"');
-  assert.ok(dl > -1 && call > -1 && unpack > -1, 'download, verify call or unpack is missing from relay-update.sh');
-  assert.ok(dl < call && call < unpack, 'relay-update.sh does not verify between downloading and unpacking');
-  assert.match(code.slice(call, unpack), /status failed "\$VERIFY_MSG"/, 'a refused update no longer records the reason in update-status.json, so the panel would show nothing');
+// ── §4 · THE REAL UPDATER, run ───────────────────────────────────────────────────────────────────────────
+// scripts/relay-update.sh against an "installed" box in a scratch dir: the fixture's key is its
+// release-pubkey.pem, its version.txt is dated before the bundle's, and curl maps <scheme>://<host>/<path>
+// to a directory — so the code source, the app origin and the relay's own localhost answers are all files.
+// systemctl / chown / npm are no-ops; HEALTH_TRIES=1 keeps the post-restart wait to one tick.
+function runUpdater(d, { codeSource = null, origin = null, layout = 'github', bundle = 'bundle.tgz' } = {}) {
+  const served = join(d, 'usrv'); mkdirSync(served, { recursive: true });
+  const put = (rel, from) => { mkdirSync(join(served, rel, '..'), { recursive: true }); writeFileSync(join(served, rel), Buffer.isBuffer(from) || from.includes('\n') ? from : readFileSync(from)); };
+  const at = layout === 'github' ? 'code.test/releases/latest/download' : 'code.test/relay-app';
+  put(at + '/bundle.tgz', join(d, bundle)); put(at + '/bundle.sig', join(d, 'bundle.sig'));
+  put('apps.test/trinityone.apk', Buffer.alloc(1_100_000, 0x61));
+  put('localhost:8000/status', '{"ok":true,"version":"x"}\n'); put('localhost:8000/local-token', '{"token":"t"}\n'); put('localhost:8000/relay-addresses', 'loopbackOnly 1\n');
+  const bin = join(d, 'ubin'); mkdirSync(bin, { recursive: true });
+  for (const t of ['systemctl', 'chown', 'npm']) { writeFileSync(join(bin, t), '#!/bin/sh\necho "' + t + ' $*" >> ' + JSON.stringify(join(d, 'tools.log')) + '\nexit 0\n'); chmodSync(join(bin, t), 0o755); }
+  writeFileSync(join(bin, 'curl'), [
+    '#!/bin/sh', 'url=""; out=""',
+    'while [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift 2;; -H|-w|--max-time|-X|-d) shift 2;; -*) shift;; *) url="$1"; shift;; esac; done',
+    'echo "$url" >> ' + JSON.stringify(join(d, 'ucurl.log')),
+    'rel="${url#http://}"; rel="${rel#https://}"; f=' + JSON.stringify(served) + '"/$rel"',
+    'if [ -f "$f" ]; then if [ -n "$out" ]; then cp "$f" "$out"; else cat "$f"; fi; exit 0; fi',
+    'echo "curl: (22) 404" >&2; exit 22', '',
+  ].join('\n')); chmodSync(join(bin, 'curl'), 0o755);
+  const dir = join(d, 'installed'); mkdirSync(join(dir, 'scripts'), { recursive: true }); mkdirSync(join(dir, 'relay-app')); mkdirSync(join(dir, 'relay'));
+  writeFileSync(join(dir, 'scripts', 'gateway.mjs'), 'console.log("the OLD build")\n');
+  writeFileSync(join(dir, 'version.txt'), 'b'.repeat(40) + '\n2026-01-01T00:00:00+00:00\n');
+  writeFileSync(join(dir, 'relay-app', 'release-pubkey.pem'), readFileSync(join(d, 'release.pub')));
+  writeFileSync(join(dir, 'scripts', 'relay-update.sh'), UPDATE);
+  if (origin !== null) writeFileSync(join(dir, 'relay', 'origin'), origin + '\n');
+  if (codeSource !== null) writeFileSync(join(dir, 'relay', 'code-source'), codeSource + '\n');
+  const r = spawnSync('bash', [join(dir, 'scripts', 'relay-update.sh')], { encoding: 'utf8', timeout: 90000,
+    env: { ...process.env, PATH: bin + ':' + process.env.PATH, TRINITYONE_DIR: dir, TRINITYONE_PORT: '8000', HEALTH_TRIES: '1' } });
+  const lines = (f) => { try { return readFileSync(join(d, f), 'utf8').trim().split('\n'); } catch { return []; } };
+  let status = null; try { status = JSON.parse(readFileSync(join(dir, 'relay', 'update-status.json'), 'utf8')); } catch {}
+  return { status: r.status, out: r.stdout + r.stderr, asked: lines('ucurl.log'), tools: lines('tools.log'), code: readFileSync(join(dir, 'scripts', 'gateway.mjs'), 'utf8'), state: status, dir };
+}
+
+test('relay-update.sh pulls the bundle FLAT from a GitHub-release code source, and the installers from the app origin', { skip: HAS_OPENSSL ? false : 'no openssl' }, () => {
+  const d = fixture();
+  try {
+    const r = runUpdater(d, { codeSource: 'http://code.test/releases/latest/download', origin: 'http://apps.test' });
+    assert.ok(r.asked.includes('http://code.test/releases/latest/download/bundle.tgz'), 'the bundle was not fetched flat from the release: ' + r.asked.join(', '));
+    assert.ok(r.asked.includes('http://code.test/releases/latest/download/bundle.sig'), 'the signature was not fetched flat from the release');
+    assert.ok(r.asked.includes('http://apps.test/trinityone.apk'), 'the installer was not fetched from the app origin: ' + r.asked.join(', '));
+    assert.ok(!r.asked.some((u) => u.startsWith('http://code.test/') && !/\/releases\/latest\/download\/bundle\.(tgz|sig)$/.test(u)), 'something other than the two bundle files was asked of the code source: ' + r.asked.join(', '));
+    assert.equal(r.code, 'console.log("the genuine build")\n', 'the new build was not unpacked over the old one:\n' + r.out.slice(-800));
+    assert.ok(r.tools.some((l) => /^systemctl restart/.test(l)), 'the relay was not restarted after the unpack');
+    assert.equal(r.status, 0, 'the update did not end healthy:\n' + r.out.slice(-800));
+    assert.equal(r.state && r.state.state, 'ok', 'update-status.json does not record success: ' + JSON.stringify(r.state));
+  } finally { rmSync(d, { recursive: true, force: true }); }
+});
+
+test('with no code-source file the updater pulls from the origin\'s /relay-app/, as every box installed before it existed does', { skip: HAS_OPENSSL ? false : 'no openssl' }, () => {
+  const d = fixture();
+  try {
+    const r = runUpdater(d, { origin: 'http://code.test', layout: 'relay' });
+    assert.ok(r.asked.includes('http://code.test/relay-app/bundle.tgz') && r.asked.includes('http://code.test/relay-app/bundle.sig'), 'the origin was not asked under /relay-app/: ' + r.asked.join(', '));
+    assert.equal(r.code, 'console.log("the genuine build")\n', 'the new build was not unpacked');
+    assert.equal(r.status, 0, 'the update did not end healthy:\n' + r.out.slice(-800));
+  } finally { rmSync(d, { recursive: true, force: true }); }
+});
+
+test('a GitHub-release code source and NO origin: the code updates, no installer is asked for, the update is healthy', { skip: HAS_OPENSSL ? false : 'no openssl' }, () => {
+  const d = fixture();
+  try {
+    const r = runUpdater(d, { codeSource: 'http://code.test/releases/latest/download' });
+    assert.equal(r.code, 'console.log("the genuine build")\n', 'the new build was not unpacked:\n' + r.out.slice(-800));
+    assert.ok(!r.asked.some((u) => /\.apk$/.test(u)), 'an installer was asked for although the box has no app origin: ' + r.asked.join(', '));
+    assert.equal(r.status, 0, 'the update did not end healthy:\n' + r.out.slice(-800));
+    assert.equal(r.state && r.state.state, 'ok', 'update-status.json does not record success: ' + JSON.stringify(r.state));
+  } finally { rmSync(d, { recursive: true, force: true }); }
+});
+
+test('relay-update.sh on a TAMPERED bundle: records "failed" with the sentence, exits 1, unpacks nothing, restarts nothing', { skip: HAS_OPENSSL ? false : 'no openssl' }, () => {
+  const d = fixture();
+  try {
+    const r = runUpdater(d, { codeSource: 'http://code.test/releases/latest/download', origin: 'http://apps.test', bundle: 'tampered.tgz' });
+    assert.equal(r.status, 1, 'a tampered bundle did not make the updater exit 1 — the audit found this exit pinned by text only, and a `true` in its place passed every test');
+    assert.equal(r.code, 'console.log("the OLD build")\n', 'the tampered bundle was UNPACKED over the installed code');
+    assert.ok(r.state && r.state.state === 'failed', 'update-status.json does not say failed: ' + JSON.stringify(r.state));
+    assert.match(String(r.state.reason), /not signed by the TrinityOne release key/, 'the recorded reason is not the verify sentence the panel shows');
+    assert.ok(!r.tools.some((l) => /^systemctl restart/.test(l)), 'the relay was restarted after a refused update');
+    assert.ok(!r.asked.includes('http://apps.test/trinityone.apk'), 'the installers were fetched after the code was refused');
+  } finally { rmSync(d, { recursive: true, force: true }); }
 });
