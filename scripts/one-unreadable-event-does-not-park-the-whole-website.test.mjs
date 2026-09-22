@@ -36,6 +36,7 @@ function mirror({ events, copies, share }) {
   const body = [
     stmt(src, 'var WEB_ID_OK = ', 'WEB_ID_OK'),
     stmt(src, 'var WEB_BLOCKED_AFTER = ', 'WEB_BLOCKED_AFTER'),
+    stmt(src, 'var WEB_LOCKED_TRIES = ', 'WEB_LOCKED_TRIES'),
     fnBody(src, 'function _sealIsWhole', '_sealIsWhole'),
     fnBody(src, 'function _webWhyStuck', '_webWhyStuck'),
     fnBody(src, 'function _openChurchDoc', '_openChurchDoc'),
@@ -176,6 +177,52 @@ test('R4: two stuck events of DIFFERENT causes do not have one of them named for
   const same = mirror({ events: [GOOD1, LOST, { ...LOST, id: 'evtlost2' }], copies: {}, share: share() });
   for (let i = 0; i < 6; i++) await same._webSync();
   assert.equal(same.emitted[same.emitted.length - 1].blockedWhy, 'key', 'two of one cause stopped naming it');
+});
+
+// ── R5: F2's safeguarding default versus F3's "leave a stuck copy alone" ─────────────────────────────────
+// AUDIT-feeds-round2-2026-09-22 R5, measured: an ADULTS-ONLY GROUP EVENT already on the public feed — put
+// there by a console older than c878df1, when group events went on by default — whose sealed document later
+// becomes unopenable is never withdrawn by the mirror, and the relay has no rule for it because it cannot see
+// a groupId. It stays on the church's public website for ever. The two commits were written an hour apart.
+//
+// THE RULE, and its cost stated plainly. While the console is still retrying, nothing changes: the name key
+// is usually merely LATE, and row 3 above is exactly that case. Once the retry budget is SPENT — 60 tries at
+// 2 s, so about two minutes with a console open and the document still shut — the console stops vouching for
+// what it cannot read, and a copy comes off UNLESS the owner ticked that event "On the website". That tick is
+// the one positive statement a church has made about a group event being public, so it is honoured.
+//
+// The cost: a WHOLE-CHURCH event whose name key is permanently gone also leaves the website after those two
+// minutes, where before it stayed. That is the deliberate half of this trade — the console cannot tell the
+// two apart without opening the document, and of the two wrong answers, "a parish notice disappears from the
+// website until the key is restored, with the page saying so" is recoverable and "an adults-only room's title
+// and place stay on a public website" is not. It is also the direction the rest of this feature already
+// leans: a group's event is off the feed unless a steward ticks it on.
+test('R5: a stuck copy the owner never ticked ON comes off the website once the console has stopped waiting', async () => {
+  const live = JSON.stringify({ title: 'Youth night', date: '2026-11-01', time: '19:30', where: 'The vestry', blurb: '', recur: '', day: null });
+  const m = mirror({ events: [GOOD1, LOST], copies: { evtlost: live }, share: share() });
+  await m._webSync();
+  assert.deepEqual(m.tombstoned(), [], 'THE FIRST SYNC ALREADY WITHDREW IT — the name key is usually merely late, and this is row 3\'s case');
+  for (let i = 0; i < 70; i++) await m._webSync();
+  assert.deepEqual(m.tombstoned(), ['trinityone/pubevent:evtlost'],
+    'AN ADULTS-ONLY GROUP EVENT STAYS ON THE CHURCH\'S PUBLIC WEBSITE for ever because this console cannot open it — nothing else withdraws it, the relay cannot see a groupId, and the owner may not know it is there');
+  assert.deepEqual(m.dtags().filter(d => !m.tombstoned().includes(d)), ['trinityone/pubevent:evtsupper'], 'the readable event stopped being published');
+});
+
+test('R5: …but a stuck copy the owner DID tick "On the website" is left alone, however long it stays shut', async () => {
+  const live = JSON.stringify({ title: 'Youth night', date: '2026-11-01', time: '19:30', where: 'The vestry', blurb: '', recur: '', day: null });
+  const m = mirror({ events: [GOOD1, LOST], copies: { evtlost: live }, share: share({ optIn: ['evtlost'] }) });
+  for (let i = 0; i < 70; i++) await m._webSync();
+  assert.deepEqual(m.tombstoned(), [],
+    'THE OWNER TICKED THIS EVENT ONTO THE WEBSITE and the console took it off anyway because it could not read it');
+});
+
+test('R5 CONTROL: a readable event\'s copy is never withdrawn, however long another one stays stuck', async () => {
+  const body = JSON.stringify({ title: 'Harvest supper', date: '2026-10-03', time: '19:30', where: 'The hall', blurb: '', recur: '', day: null });
+  const m = mirror({ events: [GOOD1, GOOD2, LOST], copies: { evtsupper: body }, share: share() });
+  for (let i = 0; i < 70; i++) await m._webSync();
+  assert.equal(m.tombstoned().includes('trinityone/pubevent:evtsupper'), false, 'a readable event was swept up with the stuck one');
+  assert.equal(m.tombstoned().includes('trinityone/pubevent:evtfair'), false, 're-anchor: an event with no copy was tombstoned');
+  assert.deepEqual(m.tombstoned(), [], 'nothing should have come off here: the only stuck event has no public copy');
 });
 
 test('CONTROL: with every event readable nothing is blocked and nothing is emitted', async () => {

@@ -17487,6 +17487,7 @@ zoo`.split("\n");
     return w;
   }
   var WEB_BLOCKED_AFTER = 3;
+  var WEB_LOCKED_TRIES = 60;
   function _sealIsWhole(ct) {
     const s = String(ct || "");
     if (s.length < 132 || s.length > 87472 || s[0] === "#") return false;
@@ -17553,7 +17554,7 @@ zoo`.split("\n");
     const want = _webDesired(w);
     if (want === null) return;
     if (w.stuck.size) {
-      if (w.lockedTries < 60) {
+      if (w.lockedTries < WEB_LOCKED_TRIES) {
         w.lockedTries++;
         setTimeout(() => {
           if (_web === w) _webQueueSync();
@@ -17567,7 +17568,13 @@ zoo`.split("\n");
     }
     const writes = [], tombs = [];
     for (const [id, body] of want) if (w.copies.get(id) !== body) writes.push([id, body]);
-    for (const id of w.copies.keys()) if (!want.has(id) && !w.stuck.has(id)) tombs.push(id);
+    const shown = new Set(w.share.optIn || []);
+    const gaveUp = w.lockedTries >= WEB_LOCKED_TRIES;
+    for (const id of w.copies.keys()) {
+      if (want.has(id)) continue;
+      if (w.stuck.has(id) && !(gaveUp && !shown.has(id))) continue;
+      tombs.push(id);
+    }
     if (!writes.length && !tombs.length) return;
     w.busy = true;
     try {

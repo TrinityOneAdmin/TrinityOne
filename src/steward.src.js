@@ -3537,6 +3537,7 @@ function _webEnsure(restart) {
 // published nor tombstoned, the rest are mirrored, and once the retries are spent the Settings page says how
 // many and why. `null` still means "a stream has not finished", which is the only true "decide nothing".
 const WEB_BLOCKED_AFTER = 3;   // syncs with the same event stuck before it is reported — the name key is often merely LATE
+const WEB_LOCKED_TRIES = 60;   // …and retries, 2s apart, before the console stops waiting for it altogether (~2 minutes)
 // IS THIS A WHOLE SEALED PAYLOAD — asked with no key at all. NIP-44 v2 is base64 of
 // [version 2][nonce 32][padded ciphertext][mac 32], 132 to 87472 base64 characters, and '#' is NIP-44's own
 // marker for a version nobody should try to read. A payload that fails THIS could never be opened by any key,
@@ -3610,15 +3611,37 @@ async function _webSync() {
   // relay and never on a console that does not hold the key (a delegate's, or a church whose old key is
   // gone). Come back for it a bounded number of times, KEEP MIRRORING THE REST while we do, and once the
   // first few retries are spent say so on the Settings page rather than looking like nothing is wrong.
-  if (w.stuck.size) { if (w.lockedTries < 60) { w.lockedTries++; setTimeout(() => { if (_web === w) _webQueueSync(); }, 2000); } }
+  if (w.stuck.size) { if (w.lockedTries < WEB_LOCKED_TRIES) { w.lockedTries++; setTimeout(() => { if (_web === w) _webQueueSync(); }, 2000); } }
   else w.lockedTries = 0;
   const showing = (w.stuck.size && w.lockedTries >= WEB_BLOCKED_AFTER) ? w.stuck.size : 0;
   if (showing !== w.blocked) { w.blocked = showing; _webEmit(); }
   const writes = [], tombs = [];
   for (const [id, body] of want) if (w.copies.get(id) !== body) writes.push([id, body]);
-  // …and a copy whose event we could not open is LEFT ALONE. Tombstoning it would take a perfectly good
-  // event off the church's website because this console lost a key — the destructive half of the same bug.
-  for (const id of w.copies.keys()) if (!want.has(id) && !w.stuck.has(id)) tombs.push(id);
+  // …and a copy whose event we could not open is LEFT ALONE WHILE WE ARE STILL WAITING FOR THE KEY.
+  // Tombstoning it then would take a perfectly good event off the church's website because the name key was a
+  // few seconds late — the destructive half of the same bug (audit F3).
+  //
+  // ONCE THE RETRY BUDGET IS SPENT, THE ANSWER CHANGES (audit R5). About two minutes with this console open
+  // and the document still shut is not a late key; and "leave it alone" collides with the safeguarding
+  // default this branch introduced. A GROUP's event is on the feed only because a steward ticked it on — but
+  // a copy put there by a console older than that rule, whose document later became unopenable, was never
+  // withdrawn by anything: the mirror skipped it, and the relay has no rule for it because a groupId lives in
+  // the SEALED document and the relay cannot see one. An adults-only room's title and place stayed on a
+  // public website for ever, with nothing on any screen saying so.
+  //
+  // So a copy this console can no longer vouch for comes off, UNLESS the owner ticked that event "On the
+  // website" — the one positive statement a church has made about a group event being public, which is
+  // honoured. The cost, stated rather than hidden: a WHOLE-CHURCH event whose key is permanently gone also
+  // leaves the website after those two minutes. The console cannot tell the two apart without opening the
+  // document, and of the two wrong answers, a parish notice disappearing (recoverable, and the Settings page
+  // says how many and why) is the one to prefer over an adults-only room staying published.
+  const shown = new Set(w.share.optIn || []);
+  const gaveUp = w.lockedTries >= WEB_LOCKED_TRIES;
+  for (const id of w.copies.keys()) {
+    if (want.has(id)) continue;
+    if (w.stuck.has(id) && !(gaveUp && !shown.has(id))) continue;
+    tombs.push(id);
+  }
   if (!writes.length && !tombs.length) return;
   w.busy = true;
   try {
