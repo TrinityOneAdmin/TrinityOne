@@ -35,6 +35,10 @@ const LAUNCHERS = execFileSync('git', ['ls-files', 'scripts'], { cwd: ROOT, enco
   .filter(f => f !== 'no-browser-reaches-production.test.mjs')   // this file names the hosts to assert on them
   .filter(f => { try { return /remote-debugging-port/.test(readFileSync(join(DIR, f), 'utf8')); } catch { return false; } });
 
+// The rule is the VALUE of the actual flag — quoted or not, template or not — never a comment that mentions it.
+const ruleOf = (src) => (src.match(/--host-resolver-rules=[^\n]*/) || [''])[0];
+const TARPIT_SENTENCE = 'PRODUCTION HOSTS RESOLVE TO A TARPIT THIS FILE SPAWNS: it accepts and never answers, so nothing is stored';
+
 test('there are browser launchers to check', () => {
   assert.ok(LAUNCHERS.length >= 8,
     `only ${LAUNCHERS.length} launchers found — re-anchor this test, it is probably looking in the wrong place`);
@@ -44,9 +48,11 @@ test('every one of them blackholes the production relays', () => {
   const unguarded = [];
   for (const f of LAUNCHERS) {
     const src = readFileSync(join(DIR, f), 'utf8');
-    if (!/host-resolver-rules/.test(src)) { unguarded.push(f); continue; }
-    // and the rule must actually name the hosts, not just mention the flag
-    const rule = (src.match(/host-resolver-rules[^\n]*/) || [''])[0];   // the value may be quoted — do not stop at a quote
+    if (!/--host-resolver-rules=/.test(src)) { unguarded.push(f); continue; }
+    // and the rule must actually name the hosts, not just mention the flag. THE FLAG, not the first line that
+    // says the words: a comment above the launcher that explains the rule used to be what this read, and a
+    // guarded file was then filed as unguarded (2026-09-22, the-church-creation-wait file).
+    const rule = ruleOf(src);
     if (!/app\.trinityone\.church/.test(rule)) unguarded.push(f + ' (rule does not name app.trinityone.church)');
     else if (!/\*\.ts\.net/.test(rule)) unguarded.push(f + ' (rule does not cover the Tailscale funnel)');
   }
@@ -57,14 +63,23 @@ test('every one of them blackholes the production relays', () => {
     'relays and a balance neither supported:\n  ' + unguarded.join('\n  '));
 });
 
-test('the rule points at a port nothing listens on', () => {
+test('the rule points at a port nothing listens on — or at a tarpit the file itself spawns and says so', () => {
   // 127.0.0.1:9 is the discard port. Pointing these at a live local port would silently redirect a round's
   // writes into whatever happened to be running there, which is worse than the problem.
+  //
+  // ONE documented exception: a file may point the production hosts at a TARPIT — a socket it spawns itself
+  // that accepts and never answers, so nothing can be stored there — to reproduce what an unreachable host
+  // costs the console (the-church-creation-wait-is-named-and-short measures a 12s stall that way). It must say
+  // so in this exact sentence, and it must contain the createServer that makes the tarpit; a mapping to any
+  // other port, or the sentence without the server, is still refused.
   for (const f of LAUNCHERS) {
     const src = readFileSync(join(DIR, f), 'utf8');
-    const rule = (src.match(/host-resolver-rules[^\n]*/) || [''])[0];
+    const rule = ruleOf(src);
     if (!rule) continue;
-    assert.match(rule, /127\.0\.0\.1:9\b/,
-      `${f} maps the production hosts somewhere other than the discard port — a round's writes would go there`);
+    if (/127\.0\.0\.1:9\b/.test(rule)) continue;
+    const declared = src.includes(TARPIT_SENTENCE) && /createServer\(/.test(src);
+    assert.ok(declared,
+      `${f} maps the production hosts somewhere other than the discard port — a round's writes would go there. ` +
+      `(A self-spawned tarpit is allowed only with the sentence "${TARPIT_SENTENCE}" in the file and a createServer that makes it.)`);
   }
 });

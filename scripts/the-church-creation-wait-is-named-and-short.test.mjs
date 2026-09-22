@@ -17,7 +17,8 @@
 //      The SET of bases is unchanged — CLAUDE.md rule 10 — and the fetch spy at the bottom lists it.
 //
 // POINT OF USE (rule 1, rule 3): the browser row reads the DOM of the shipped page on a clock; nothing here
-// matches text in app/*.jsx. NOTHING REACHES PRODUCTION: the shipped hosts resolve to the tarpit in the
+// matches text in app/*.jsx. NOTHING REACHES PRODUCTION — PRODUCTION HOSTS RESOLVE TO A TARPIT THIS FILE SPAWNS: it accepts and never answers, so nothing is stored
+// (that sentence is what scripts/no-browser-reaches-production.test.mjs looks for). The shipped hosts resolve to the tarpit in the
 // browser and are refused inside the gateway (a fetch preload).
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
