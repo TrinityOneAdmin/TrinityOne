@@ -922,6 +922,21 @@ function DashRota({ onNewTeam }) {
 window.DashRota = DashRota;
 
 // ════════════════════════ CALENDAR ════════════════════════
+// "Not on the website" — one tick, shared by the New event and Edit event dialogs. Shown only when the
+// console holds the church key (the relay accepts the opt-out from that key alone). One label and one
+// sentence; the switch itself is in Settings → Your website.
+function SchWebsiteHeldRow({ held, setHeld }) {
+  return (
+    <label style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 14, padding: '10px 12px', borderRadius: 11, border: '1px solid var(--line)', background: held ? 'color-mix(in oklab, var(--gold) 10%, var(--surface))' : 'var(--surface-2)', cursor: 'pointer' }}>
+      <input type="checkbox" aria-label="Not on the website" checked={!!held} onChange={ev => setHeld(!!ev.target.checked)} style={{ width: 18, height: 18, margin: 0, cursor: 'pointer' }} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 700, fontSize: 13.5 }}>Not on the website</div>
+        <div style={{ fontSize: 12, color: 'var(--ink-3)', lineHeight: 1.4 }}>Members still see it; it stays off the public calendar feed.</div>
+      </div>
+    </label>
+  );
+}
+
 function SchEventModal({ day, onClose }) {
   const ACCENTS = [['var(--clay)', 'Gathering'], ['var(--sage)', 'Prayer'], ['var(--gold)', 'Social'], ['#5360D6', 'Youth']];
   const allGroups = window.useStewardGroups();   // chat groups + teams the event can belong to
@@ -936,6 +951,11 @@ function SchEventModal({ day, onClose }) {
   const [image, setImage] = useSch('');          // optional cover image (resized data-URL)
   const [repeat, setRepeat] = useSch('none');
   const [until, setUntil] = useSch('');
+  // "Not on the website" — recorded in the church's share: document, never in the event (the design rejected a
+  // per-document flag: it would mix a website decision into what every member reads). Owner-only, because the
+  // relay accepts share: from the church key alone; a delegate does not see the tick.
+  const [held, setHeld] = useSch(false);
+  const canHold = !!(window.Steward.setWebsiteHeld && !(window.Steward.isDelegated && window.Steward.isDelegated()));
   const ownedNets = React.useMemo(() => (window.Steward.ownedNetworks ? window.Steward.ownedNetworks() : []), []);
   const [asPub, setAsPub] = useSch('');          // '' = the church; else an owned network's pub
   const asNetwork = !!asPub;
@@ -961,6 +981,9 @@ function SchEventModal({ day, onClose }) {
     // a group is church-scoped, so a network-wide event never belongs to a church group
     const gid = asNetwork ? '' : group;
     const out = await Promise.all(dates.map(d => window.Steward.publishEvent({ title: title.trim(), date: d, time, where: where.trim(), blurb: blurb.trim(), accent, image, groupId: gid }, asPub)));
+    // THE TICK IS RECORDED AFTER THE EVENT EXISTS, by the id publishEvent minted. Every date of a repeat gets
+    // its own event and so its own opt-out. A church event only: a network-published event has no share: doc.
+    if (held && canHold && !asNetwork) { for (const r of out) { if (r && r.id) { try { await window.Steward.setWebsiteHeld(r.id, true); } catch (e) {} } } }
     setBusy(false);
     if (out.some(r => r == null)) { setErr(SCH_NO_KEY); return; }
     onClose();
@@ -1039,6 +1062,7 @@ function SchEventModal({ day, onClose }) {
       <div style={schLbl}>Note (optional)</div>
       <textarea aria-label="Note (optional)" value={blurb} onChange={e => setBlurb(e.target.value)} rows={3} placeholder="A short description members will read." style={{ ...schFld, height: 'auto', padding: '11px 13px', lineHeight: 1.5, resize: 'vertical', fontFamily: 'var(--font-ui)' }} />
       <SchRepeatRow repeat={repeat} setRepeat={setRepeat} until={until} setUntil={setUntil} />
+      {canHold && !asNetwork ? <SchWebsiteHeldRow held={held} setHeld={setHeld} /> : null}
     </SchModal>
   );
 }
@@ -1246,6 +1270,9 @@ function SchEventEdit({ event, onClose }) {
   const [date, setDate] = React.useState(e.date || '');
   const [day, setDay] = React.useState(typeof e.day === 'number' ? e.day : 0);
   const [recur, setRecur] = React.useState(e.recur || 'weekly');
+  // "Not on the website" — see SchEventModal. Read from the share: document, written back on save.
+  const canHold = !!(window.Steward.setWebsiteHeld && !(window.Steward.isDelegated && window.Steward.isDelegated()));
+  const [held, setHeld] = React.useState(() => !!(canHold && window.Steward.isWebsiteHeld && window.Steward.isWebsiteHeld(e.id)));
   const [busy, setBusy] = React.useState(false);
   const [err, setErr] = React.useState('');
   const save = async () => {
@@ -1262,6 +1289,7 @@ function SchEventEdit({ event, onClose }) {
         ...(series ? { recur, day } : {}),
       }));
     } catch (x) { r = null; }
+    if (r && canHold && e.id) { try { await window.Steward.setWebsiteHeld(e.id, held); } catch (x) {} }
     setBusy(false);
     if (!r) { setErr('Couldn’t save — the relay didn’t accept the change. Your edits are still here.'); return; }
     onClose();
@@ -1298,6 +1326,7 @@ function SchEventEdit({ event, onClose }) {
       <input aria-label="Where" value={where} onChange={ev => setWhere(ev.target.value)} placeholder="Optional" style={schFld} />
       <div style={schLbl}>Details</div>
       <textarea aria-label="Details" value={blurb} onChange={ev => setBlurb(ev.target.value)} rows={3} placeholder="Optional" style={{ ...schFld, height: 'auto', padding: '10px 13px', resize: 'vertical', lineHeight: 1.5 }} />
+      {canHold ? <SchWebsiteHeldRow held={held} setHeld={setHeld} /> : null}
       {err ? <div style={{ marginTop: 10, fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600 }}>{err}</div> : null}
       <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
         <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12 }}>Cancel</button>

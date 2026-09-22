@@ -192,6 +192,11 @@ const WAS_ON_A_TAB = [
 // it is a fault, not a page, and it stays a banner on Relays — see the refusal test in
 // scripts/relay-refusal-banner-and-retry-stay-together.test.mjs.
 const SPLIT_OUT = ['Add a relay', 'Copy your history to relay.grace.example', 'Keep your relays in sync'];
+// Pages added AFTER the 2026-09-09 split, each with the change that added it. A card here is a deliberate
+// addition, not an orphan — and it still has to be on exactly one page like every other.
+const ADDED_SINCE = [
+  'Your website',   // feat/church-website-feeds, 2026-09-22: the public calendar feed's switch and address (owner-only)
+];
 
 test('every panel that was on a tab is now on exactly one page, and nothing is left over', () => {
   const seen = new Map();   // panel title -> [pages it appears on]
@@ -201,7 +206,7 @@ test('every panel that was on a tab is now on exactly one page, and nothing is l
       seen.get(title).push(p.k);
     }
   }
-  const want = [...WAS_ON_A_TAB, ...SPLIT_OUT].sort();
+  const want = [...WAS_ON_A_TAB, ...SPLIT_OUT, ...ADDED_SINCE].sort();
   const got = [...seen.keys()].sort();
 
   const orphaned = want.filter(t => !seen.has(t));
@@ -218,7 +223,7 @@ test('every panel that was on a tab is now on exactly one page, and nothing is l
 
   assert.deepEqual(got, want,
     'the set of panels across every settings page is not the set this change set out to place. Anything in ' +
-    '`got` and not in `want` is a card nobody accounted for; add it to WAS_ON_A_TAB or SPLIT_OUT only after ' +
+    '`got` and not in `want` is a card nobody accounted for; add it to WAS_ON_A_TAB, SPLIT_OUT or ADDED_SINCE only after ' +
     'checking it is meant to be there.');
 });
 

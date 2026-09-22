@@ -15359,6 +15359,8 @@ zoo`.split("\n");
     return Array.from(new Uint8Array(d)).map((b) => b.toString(16).padStart(2, "0")).join("");
   }
   var JOINPOLICY_D = "trinityone/joinpolicy:";
+  var SHARE_D = "trinityone/share:";
+  var PUBEVENT_D = "trinityone/pubevent:";
   var ADMITTED_D = "trinityone/admitted:";
   var RESEAT_D = "trinityone/reseat:";
   var _stewardCaps = {};
@@ -17326,6 +17328,231 @@ zoo`.split("\n");
     }
   }
   var _evtSeq = 0;
+  var WEB_DEFAULT = Object.freeze({ calendar: false, sermons: false, plans: false, optOut: [], address: "own" });
+  var WEB_ID_OK = /^[A-Za-z0-9_-]{1,64}$/;
+  function _webNormalise(c) {
+    const o = c && typeof c === "object" ? c : {};
+    const optOut = [...new Set((Array.isArray(o.optOut) ? o.optOut : []).map((x) => String(x)).filter((x) => WEB_ID_OK.test(x)))];
+    return { calendar: o.calendar === true, sermons: false, plans: false, optOut, address: "own" };
+  }
+  function _webCopyBody(ev) {
+    const recur = ev.recur === "weekly" || ev.recur === "fortnightly" || ev.recur === "monthly" ? ev.recur : "";
+    return JSON.stringify({
+      title: String(ev.title || "").slice(0, 200),
+      date: String(ev.date || "").slice(0, 10),
+      time: String(ev.time || "").slice(0, 5),
+      where: String(ev.where || "").slice(0, 200),
+      blurb: String(ev.blurb || "").slice(0, 2e3),
+      recur,
+      day: recur && typeof ev.day === "number" ? ev.day : null
+    });
+  }
+  var _web = null;
+  function _webStop() {
+    if (!_web) return;
+    for (const off of _web.subs) {
+      try {
+        off();
+      } catch {
+      }
+    }
+    if (_web.timer) clearTimeout(_web.timer);
+    _web = null;
+  }
+  function _webEmit() {
+    if (!_web) return;
+    const snap = { ..._web.share, optOut: [..._web.share.optOut], known: _web.shareKnown };
+    for (const cb of _web.listeners) {
+      try {
+        cb(snap);
+      } catch {
+      }
+    }
+  }
+  function _webQueueSync() {
+    if (!_web) return;
+    if (_web.timer) clearTimeout(_web.timer);
+    _web.timer = setTimeout(() => {
+      if (_web) {
+        _web.timer = null;
+        _webSync();
+      }
+    }, 250);
+  }
+  function _webEnsure(restart) {
+    if (_web && _web.pub === pub && !restart) return _web;
+    const listeners = _web ? _web.listeners : /* @__PURE__ */ new Set();
+    _webStop();
+    if (!pub) return null;
+    const w = _web = {
+      pub,
+      share: { ...WEB_DEFAULT, optOut: [] },
+      shareTs: 0,
+      shareKnown: false,
+      events: /* @__PURE__ */ new Map(),
+      versions: /* @__PURE__ */ new Map(),
+      eventsKnown: false,
+      copies: /* @__PURE__ */ new Map(),
+      copyTs: /* @__PURE__ */ new Map(),
+      copiesKnown: false,
+      subs: [],
+      listeners,
+      busy: false,
+      again: false,
+      timer: null,
+      lockedTries: 0
+    };
+    const s1 = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#d": [SHARE_D + pub] }], {
+      onevent(e) {
+        if (e.pubkey !== pub || _authFuture(e)) return;
+        const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+        if (d !== SHARE_D + pub) return;
+        if (e.created_at < w.shareTs) return;
+        w.shareTs = e.created_at;
+        const gone = e.tags.some((t) => t[0] === "deleted") || !e.content;
+        let c = null;
+        if (!gone) {
+          try {
+            c = JSON.parse(e.content);
+          } catch {
+          }
+        }
+        w.share = gone ? { ...WEB_DEFAULT, optOut: [] } : _webNormalise(c);
+        _webEmit();
+        _webQueueSync();
+      },
+      oneose() {
+        w.shareKnown = true;
+        _webEmit();
+        _webQueueSync();
+      }
+    });
+    w.subs.push(() => {
+      try {
+        s1.close();
+      } catch {
+      }
+    });
+    const s2 = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }], {
+      onevent(e) {
+        if (e.pubkey !== pub) return;
+        const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+        if (!d.startsWith(PUBEVENT_D)) return;
+        const id = d.slice(PUBEVENT_D.length);
+        if ((w.copyTs.get(id) || 0) > e.created_at) return;
+        w.copyTs.set(id, e.created_at);
+        if (e.tags.some((t) => t[0] === "deleted") || !e.content) w.copies.delete(id);
+        else w.copies.set(id, e.content);
+        _webQueueSync();
+      },
+      oneose() {
+        w.copiesKnown = true;
+        _webQueueSync();
+      }
+    });
+    w.subs.push(() => {
+      try {
+        s2.close();
+      } catch {
+      }
+    });
+    const s3 = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
+      onevent(e) {
+        const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+        if (!d.startsWith(EVENT_D)) return;
+        const id = d.slice(EVENT_D.length);
+        if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
+          _forgetById(w.versions, w.events, id, e.pubkey, e.created_at, _consoleDisplay, { churchPub: pub, targets: _tombstoneTargets(e), mayName: _consoleChurchVoice });
+          _webQueueSync();
+          return;
+        }
+        _absorbById(w.versions, w.events, id, { id, raw: String(e.content || ""), ts: e.created_at, _by: e.pubkey }, _consoleDisplay);
+        _webQueueSync();
+      },
+      oneose() {
+        w.eventsKnown = true;
+        _webQueueSync();
+      }
+    });
+    w.subs.push(() => {
+      try {
+        s3.close();
+      } catch {
+      }
+    });
+    return w;
+  }
+  function _webDesired(w) {
+    if (!w.shareKnown || !w.copiesKnown || !w.eventsKnown) return null;
+    const out = /* @__PURE__ */ new Map();
+    if (!w.share.calendar) return out;
+    const held = new Set(w.share.optOut);
+    for (const ev of w.events.values()) {
+      if (!ev || !WEB_ID_OK.test(String(ev.id || ""))) continue;
+      let c = null;
+      try {
+        c = _openChurchDoc(ev.raw);
+      } catch (e) {
+        c = null;
+      }
+      if (c === null) return null;
+      if (held.has(ev.id)) continue;
+      if (!c || typeof c !== "object" || !/^\d{4}-\d{2}-\d{2}$/.test(String(c.date || ""))) continue;
+      out.set(ev.id, _webCopyBody(c));
+    }
+    return out;
+  }
+  async function _webSync() {
+    const w = _web;
+    if (!w || w.pub !== pub || !sk || actingChurch) return;
+    if (w.busy) {
+      w.again = true;
+      return;
+    }
+    const want = _webDesired(w);
+    if (want === null) {
+      if (w.shareKnown && w.copiesKnown && w.eventsKnown && w.lockedTries < 60) {
+        w.lockedTries++;
+        setTimeout(() => {
+          if (_web === w) _webQueueSync();
+        }, 2e3);
+      }
+      return;
+    }
+    w.lockedTries = 0;
+    const writes = [], tombs = [];
+    for (const [id, body] of want) if (w.copies.get(id) !== body) writes.push([id, body]);
+    for (const id of w.copies.keys()) if (!want.has(id)) tombs.push(id);
+    if (!writes.length && !tombs.length) return;
+    w.busy = true;
+    try {
+      for (const [id, body] of writes) {
+        if (_web !== w) return;
+        const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", PUBEVENT_D + id], ["t", NET]], content: body }, sk));
+        if (ok) w.copies.set(id, body);
+      }
+      for (const id of tombs) {
+        if (_web !== w) return;
+        const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", PUBEVENT_D + id], ["t", NET], ["deleted", "1"]], content: "" }, sk));
+        if (ok) w.copies.delete(id);
+      }
+    } catch (e) {
+    } finally {
+      w.busy = false;
+      if (w.again) {
+        w.again = false;
+        _webQueueSync();
+      }
+    }
+  }
+  function _webFeedBase() {
+    let r = ownRelay();
+    if (ownIsLoopback()) {
+      const p = selfPublicRelay();
+      if (p) r = p;
+    }
+    return String(r || "").replace(/^wss:/i, "https:").replace(/^ws:/i, "http:").replace(/\/relay\/?$/i, "").replace(/\/+$/, "");
+  }
   window.Steward = {
     pubkey: null,
     npub: null,
@@ -21966,6 +22193,63 @@ zoo`.split("\n");
     },
     subscribeEvents(onEvents) {
       return this._subAddr(EVENT_D, (c) => ({ date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || "", day: c.day, groupId: c.groupId || "", image: c.image || "" }), onEvents);
+    },
+    // ---- the church's website: the public calendar feed (see _webSync above the API object) ----
+    // onShare({ calendar, sermons, plans, optOut, address, known }) — `known` is false until the relay has answered.
+    // `restart: true` re-issues the three subscriptions on the current relay set (the dashboard passes it on a
+    // connection bump, the way every makeSub hook re-subscribes: a returning socket does not re-issue its REQs).
+    subscribeWebsiteShare(onShare, opts) {
+      const w = _webEnsure(!!(opts && opts.restart));
+      if (!w) {
+        try {
+          onShare({ ...WEB_DEFAULT, optOut: [], known: false });
+        } catch {
+        }
+        return () => {
+        };
+      }
+      w.listeners.add(onShare);
+      try {
+        onShare({ ...w.share, optOut: [...w.share.optOut], known: w.shareKnown });
+      } catch {
+      }
+      return () => {
+        w.listeners.delete(onShare);
+      };
+    },
+    // Flip a switch or rewrite the opt-outs. Resolves true when a relay accepted the share: document; false when
+    // none did or this console is a delegated steward (the relay would refuse it, so do not pretend).
+    async setWebsiteShare(patch) {
+      if (!sk || actingChurch) return false;
+      const w = _webEnsure();
+      if (!w) return false;
+      const next = _webNormalise({ ...w.share, ...patch || {} });
+      const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", SHARE_D + pub], ["t", NET]], content: JSON.stringify(next) }, sk));
+      if (!ok) return false;
+      w.share = next;
+      w.shareKnown = true;
+      _webEmit();
+      _webQueueSync();
+      return true;
+    },
+    // The per-event "Not on the website" tick. `held` true takes the event off the feed and its own address.
+    setWebsiteHeld(eventId, held) {
+      const id = String(eventId || "");
+      if (!WEB_ID_OK.test(id)) return Promise.resolve(false);
+      const w = _webEnsure();
+      const cur = w ? w.share.optOut : [];
+      const optOut = held ? [.../* @__PURE__ */ new Set([...cur, id])] : cur.filter((x) => x !== id);
+      if (optOut.length === cur.length && optOut.every((x, i3) => x === cur[i3])) return Promise.resolve(true);
+      return this.setWebsiteShare({ optOut });
+    },
+    isWebsiteHeld(eventId) {
+      const w = _webEnsure();
+      return !!(w && w.share.optOut.includes(String(eventId || "")));
+    },
+    websiteFeedUrl(eventId) {
+      const base = _webFeedBase();
+      if (!base || !this.npub) return "";
+      return base + "/public/" + this.npub + (eventId ? "/e/" + encodeURIComponent(String(eventId)) + ".ics" : "/calendar.ics");
     },
     // publish a recurring meeting (the church's rhythm): a normal event with recur + day-of-week, expanded into
     // occurrences client-side by expandEvents(). `m` = { id?, title, day (0-6), time, where?, recur, from? (anchor) }.

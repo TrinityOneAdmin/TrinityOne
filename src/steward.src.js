@@ -341,6 +341,10 @@ let _mediaKeyDocKeys = null;
 let _mediaKeyChecked = false;    // set only from subscribeMediaKey's oneose — see the mint gate                   // the latest media-key doc's wrapped-per-member map (to detect members not yet keyed)
 async function _sha256hex(u8) { const d = await crypto.subtle.digest('SHA-256', u8); return Array.from(new Uint8Array(d)).map(b => b.toString(16).padStart(2, '0')).join(''); }
 const JOINPOLICY_D = 'trinityone/joinpolicy:'; // join policy {approval:bool}, d=joinpolicy:<churchpub>
+// THE CHURCH'S WEBSITE (reference/DESIGN-embeddable-church-info.md, phase 1). Both PLAINTEXT on purpose and
+// church-key-only: the relay must read them to serve /public/<npub>/calendar.ics. See _webSync below.
+const SHARE_D = 'trinityone/share:';           // the switches + per-item opt-outs, d=share:<churchpub>
+const PUBEVENT_D = 'trinityone/pubevent:';     // the public copy of ONE event — noticeboard fields only, d=pubevent:<eventId>
 const ADMITTED_D = 'trinityone/admitted:';   // approved-members allowlist (when approval is on), d=admitted:<churchpub>
 const RESEAT_D = 'trinityone/reseat:';       // church-vouched "the member who was <old> is now <new>", d=reseat:<churchpub>
 // The capability map from the live roster: { "<steward pubkey>": ["finance", …] }. A steward who does not
@@ -3408,6 +3412,161 @@ function _connectedRelays() {
 // removes the possibility rather than shrinking it. Same fix as _wizMeetingId, whose test drew 5000 ids and
 // was failing the release gate one run in five. AUDIT-2026-07-29 S5.
 let _evtSeq = 0;
+
+// ════════════ THE CHURCH'S WEBSITE — the public calendar feed ════════════
+// reference/DESIGN-embeddable-church-info.md, phase 1. A church that switches "Share our calendar on our
+// website" on gets a feed at <its relay>/public/<npub>/calendar.ics, built by the relay.
+//
+// WHY THE CONSOLE WRITES A SECOND COPY OF EVERY EVENT. publishEvent() seals an event under the church name
+// key, so the relay holds ciphertext and cannot build a feed from it — the design doc assumed it could. The
+// relay therefore serves PLAINTEXT `pubevent:<id>` copies, and this console is what writes them: the
+// noticeboard fields only (title, date, time, place, note, repeat), never the group, the image, an RSVP or
+// an accent colour. "Would the church pin it to the noticeboard outside?" is the whole test.
+//
+// HOW THEY STAY IN STEP — a reconciler, not a hook on each save. _webSync() compares three things this
+// console already watches: the share: document (the switch + the ids ticked "Not on the website"), the
+// church's own calendar (opened with the name key), and the copies the relay currently holds. It publishes
+// a copy where one is missing or stale, and tombstones one that should no longer exist. So an event edited
+// by a delegated steward on another console, a switch flipped on a second machine, a copy that failed to
+// land — all converge the next time an owner console is open. It runs ONLY in owner mode (the relay accepts
+// these from the church key alone), only after all three streams have reached EOSE (a copy is never
+// tombstoned on a half-loaded calendar), and never tombstones while an event is locked (the name key is
+// late: a locked event is "unreadable", not "gone").
+//
+// WHAT IT DOES NOT DO, said plainly: it does not run on a phone-installed steward console (that runs on the
+// community pool with the same code — it does run there); it does not mirror while the console is closed;
+// and a delegated steward cannot flip the switch or tick an event (the Settings page is owner-only and the
+// tick is hidden for them).
+const WEB_DEFAULT = Object.freeze({ calendar: false, sermons: false, plans: false, optOut: [], address: 'own' });
+const WEB_ID_OK = /^[A-Za-z0-9_-]{1,64}$/;
+function _webNormalise(c) {
+  const o = (c && typeof c === 'object') ? c : {};
+  const optOut = [...new Set((Array.isArray(o.optOut) ? o.optOut : []).map(x => String(x)).filter(x => WEB_ID_OK.test(x)))];
+  // sermons/plans/address are phase 2/3: read as their defaults whatever an older or newer document says
+  return { calendar: o.calendar === true, sermons: false, plans: false, optOut, address: 'own' };
+}
+// The copy's body, with a FIXED key order so two consoles produce byte-identical content for the same event —
+// that equality is what stops the reconciler republishing on every boot.
+function _webCopyBody(ev) {
+  const recur = (ev.recur === 'weekly' || ev.recur === 'fortnightly' || ev.recur === 'monthly') ? ev.recur : '';
+  return JSON.stringify({
+    title: String(ev.title || '').slice(0, 200), date: String(ev.date || '').slice(0, 10), time: String(ev.time || '').slice(0, 5),
+    where: String(ev.where || '').slice(0, 200), blurb: String(ev.blurb || '').slice(0, 2000),
+    recur, day: (recur && typeof ev.day === 'number') ? ev.day : null,
+  });
+}
+let _web = null;   // the watch: { pub, share, shareTs, shareKnown, events, eventsKnown, copies, copyTs, copiesKnown, subs, listeners, busy, again, timer }
+function _webStop() { if (!_web) return; for (const off of _web.subs) { try { off(); } catch {} } if (_web.timer) clearTimeout(_web.timer); _web = null; }
+function _webEmit() { if (!_web) return; const snap = { ..._web.share, optOut: [..._web.share.optOut], known: _web.shareKnown }; for (const cb of _web.listeners) { try { cb(snap); } catch {} } }
+function _webQueueSync() { if (!_web) return; if (_web.timer) clearTimeout(_web.timer); _web.timer = setTimeout(() => { if (_web) { _web.timer = null; _webSync(); } }, 250); }
+function _webEnsure(restart) {
+  if (_web && _web.pub === pub && !restart) return _web;
+  const listeners = _web ? _web.listeners : new Set();
+  _webStop();
+  if (!pub) return null;
+  const w = _web = { pub, share: { ...WEB_DEFAULT, optOut: [] }, shareTs: 0, shareKnown: false, events: new Map(), versions: new Map(), eventsKnown: false,
+                     copies: new Map(), copyTs: new Map(), copiesKnown: false, subs: [], listeners, busy: false, again: false, timer: null, lockedTries: 0 };
+  // 1. the switch — the church's OWN copy only, never a steward's or a co-tenant's
+  const s1 = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#d': [SHARE_D + pub] }], {
+    onevent(e) {
+      if (e.pubkey !== pub || _authFuture(e)) return;
+      const d = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (d !== SHARE_D + pub) return;
+      if (e.created_at < w.shareTs) return; w.shareTs = e.created_at;
+      const gone = e.tags.some(t => t[0] === 'deleted') || !e.content;
+      let c = null; if (!gone) { try { c = JSON.parse(e.content); } catch {} }
+      w.share = gone ? { ...WEB_DEFAULT, optOut: [] } : _webNormalise(c);
+      _webEmit(); _webQueueSync();
+    },
+    oneose() { w.shareKnown = true; _webEmit(); _webQueueSync(); },
+  });
+  w.subs.push(() => { try { s1.close(); } catch {} });
+  // 2. the copies the relay holds, newest per id, the church's own only
+  const s2 = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }], {
+    onevent(e) {
+      if (e.pubkey !== pub) return;
+      const d = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (!d.startsWith(PUBEVENT_D)) return;
+      const id = d.slice(PUBEVENT_D.length);
+      if ((w.copyTs.get(id) || 0) > e.created_at) return; w.copyTs.set(id, e.created_at);
+      if (e.tags.some(t => t[0] === 'deleted') || !e.content) w.copies.delete(id); else w.copies.set(id, e.content);
+      _webQueueSync();
+    },
+    oneose() { w.copiesKnown = true; _webQueueSync(); },
+  });
+  w.subs.push(() => { try { s2.close(); } catch {} });
+  // 3. the calendar itself — the same two filters and the same newest-wins as _subAddr, opened with the name key
+  const s3 = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
+    onevent(e) {
+      const d = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (!d.startsWith(EVENT_D)) return;
+      const id = d.slice(EVENT_D.length);
+      if (e.tags.some(t => t[0] === 'deleted') || !e.content) { _forgetById(w.versions, w.events, id, e.pubkey, e.created_at, _consoleDisplay, { churchPub: pub, targets: _tombstoneTargets(e), mayName: _consoleChurchVoice }); _webQueueSync(); return; }
+      // THE CIPHERTEXT IS KEPT AND OPENED AT DECISION TIME, not here. On a fresh boot the calendar arrives
+      // before the name key does; an event opened once and remembered as "locked" would stay locked for the
+      // whole session, and _webDesired would keep answering "decide nothing" long after the key had landed —
+      // measured on this branch: an event added after the key arrived never reached the feed, because the two
+      // older ones were still placeholders. Opening on every decision costs a few decrypts per sync.
+      _absorbById(w.versions, w.events, id, { id, raw: String(e.content || ''), ts: e.created_at, _by: e.pubkey }, _consoleDisplay);
+      _webQueueSync();
+    },
+    oneose() { w.eventsKnown = true; _webQueueSync(); },
+  });
+  w.subs.push(() => { try { s3.close(); } catch {} });
+  return w;
+}
+// What the relay SHOULD hold, from what this console knows: Map(id -> body) while the switch is on, empty
+// otherwise. `null` means "do not decide yet" — a stream has not finished, or an event is still locked.
+function _webDesired(w) {
+  if (!w.shareKnown || !w.copiesKnown || !w.eventsKnown) return null;
+  const out = new Map();
+  if (!w.share.calendar) return out;
+  const held = new Set(w.share.optOut);
+  for (const ev of w.events.values()) {
+    if (!ev || !WEB_ID_OK.test(String(ev.id || ''))) continue;
+    let c = null; try { c = _openChurchDoc(ev.raw); } catch (e) { c = null; }
+    if (c === null) return null;                                    // the name key is late: decide nothing until it arrives
+    if (held.has(ev.id)) continue;
+    if (!c || typeof c !== 'object' || !/^\d{4}-\d{2}-\d{2}$/.test(String(c.date || ''))) continue;
+    out.set(ev.id, _webCopyBody(c));
+  }
+  return out;
+}
+async function _webSync() {
+  const w = _web;
+  if (!w || w.pub !== pub || !sk || actingChurch) return;          // owner mode only: the relay accepts these from the church key alone
+  if (w.busy) { w.again = true; return; }
+  const want = _webDesired(w);
+  // A locked calendar is the name key being late, which resolves itself within seconds on a healthy relay and
+  // never on a console that does not hold the key (a delegate's). Come back for it a bounded number of times;
+  // the next calendar event to arrive starts the count again.
+  if (want === null) { if (w.shareKnown && w.copiesKnown && w.eventsKnown && w.lockedTries < 60) { w.lockedTries++; setTimeout(() => { if (_web === w) _webQueueSync(); }, 2000); } return; }
+  w.lockedTries = 0;
+  const writes = [], tombs = [];
+  for (const [id, body] of want) if (w.copies.get(id) !== body) writes.push([id, body]);
+  for (const id of w.copies.keys()) if (!want.has(id)) tombs.push(id);
+  if (!writes.length && !tombs.length) return;
+  w.busy = true;
+  try {
+    for (const [id, body] of writes) {
+      if (_web !== w) return;
+      const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', PUBEVENT_D + id], ['t', NET]], content: body }, sk));
+      if (ok) w.copies.set(id, body);                                // optimistic, so the echo does not re-trigger a write
+    }
+    for (const id of tombs) {
+      if (_web !== w) return;
+      const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', PUBEVENT_D + id], ['t', NET], ['deleted', '1']], content: '' }, sk));
+      if (ok) w.copies.delete(id);
+    }
+  } catch (e) {}
+  finally { w.busy = false; if (w.again) { w.again = false; _webQueueSync(); } }
+}
+// The address a website builder pastes. The church's own relay, spoken as HTTP: wss://host/relay ->
+// https://host. A Suite box behind its tunnel names the tunnel (selfPublicRelay), because 127.0.0.1 is not an
+// address anyone else can open. A church on the community pool gets that pool's address — it IS that church's
+// relay — and the sentence on the page says what the address reveals either way.
+function _webFeedBase() {
+  let r = ownRelay();
+  if (ownIsLoopback()) { const p = selfPublicRelay(); if (p) r = p; }
+  return String(r || '').replace(/^wss:/i, 'https:').replace(/^ws:/i, 'http:').replace(/\/relay\/?$/i, '').replace(/\/+$/, '');
+}
 
 window.Steward = {
   pubkey: null, npub: null, hasKey: false,
@@ -8105,6 +8264,41 @@ window.Steward = {
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', EVENT_D + id], ['t', NET], ['deleted', '1']], content: '' }));
   },
   subscribeEvents(onEvents) { return this._subAddr(EVENT_D, (c) => ({ date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || '', day: c.day, groupId: c.groupId || '', image: c.image || '' }), onEvents); },
+
+  // ---- the church's website: the public calendar feed (see _webSync above the API object) ----
+  // onShare({ calendar, sermons, plans, optOut, address, known }) — `known` is false until the relay has answered.
+  // `restart: true` re-issues the three subscriptions on the current relay set (the dashboard passes it on a
+  // connection bump, the way every makeSub hook re-subscribes: a returning socket does not re-issue its REQs).
+  subscribeWebsiteShare(onShare, opts) {
+    const w = _webEnsure(!!(opts && opts.restart)); if (!w) { try { onShare({ ...WEB_DEFAULT, optOut: [], known: false }); } catch {} return () => {}; }
+    w.listeners.add(onShare);
+    try { onShare({ ...w.share, optOut: [...w.share.optOut], known: w.shareKnown }); } catch {}
+    return () => { w.listeners.delete(onShare); };
+  },
+  // Flip a switch or rewrite the opt-outs. Resolves true when a relay accepted the share: document; false when
+  // none did or this console is a delegated steward (the relay would refuse it, so do not pretend).
+  async setWebsiteShare(patch) {
+    if (!sk || actingChurch) return false;
+    const w = _webEnsure(); if (!w) return false;
+    const next = _webNormalise({ ...w.share, ...(patch || {}) });
+    const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', SHARE_D + pub], ['t', NET]], content: JSON.stringify(next) }, sk));
+    if (!ok) return false;
+    w.share = next; w.shareKnown = true; _webEmit(); _webQueueSync();   // the echo will agree; do not wait for it
+    return true;
+  },
+  // The per-event "Not on the website" tick. `held` true takes the event off the feed and its own address.
+  setWebsiteHeld(eventId, held) {
+    const id = String(eventId || ''); if (!WEB_ID_OK.test(id)) return Promise.resolve(false);
+    const w = _webEnsure(); const cur = w ? w.share.optOut : [];
+    const optOut = held ? [...new Set([...cur, id])] : cur.filter(x => x !== id);
+    if (optOut.length === cur.length && optOut.every((x, i) => x === cur[i])) return Promise.resolve(true);   // nothing to change
+    return this.setWebsiteShare({ optOut });
+  },
+  isWebsiteHeld(eventId) { const w = _webEnsure(); return !!(w && w.share.optOut.includes(String(eventId || ''))); },
+  websiteFeedUrl(eventId) {
+    const base = _webFeedBase(); if (!base || !this.npub) return '';
+    return base + '/public/' + this.npub + (eventId ? '/e/' + encodeURIComponent(String(eventId)) + '.ics' : '/calendar.ics');
+  },
   // publish a recurring meeting (the church's rhythm): a normal event with recur + day-of-week, expanded into
   // occurrences client-side by expandEvents(). `m` = { id?, title, day (0-6), time, where?, recur, from? (anchor) }.
   publishMeeting(m) { return this.publishEvent({ id: m.id, title: m.title, time: m.time, where: m.where || '', date: m.from || _todayISO(), recur: m.recur || 'weekly', day: m.day, accent: m.accent || 'var(--clay)' }); },

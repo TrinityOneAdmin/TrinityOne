@@ -130,11 +130,15 @@ const GROUPS = ['Church', 'People', 'Infrastructure', 'Security'];
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 // CONTROL — if this fails, every assertion below is meaningless.
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+// How many pages an OWNER's list holds with nothing collapsed: the sixteen from the 2026-09-09 split, plus
+// Your website (feat/church-website-feeds, 2026-09-22). A page added to SETTINGS_GROUPS is added here too.
+const PAGE_COUNT = 17;
+
 test('CONTROL: the list renders four group headers, all open, with every page under them', () => {
   const s = screen(null);
   assert.deepEqual(headers(s.tree).map(grpName), GROUPS,
     'the four group headers are not the four groups — re-anchor this test');
-  assert.equal(rows(s.tree).length, 16, `expected 16 page rows with nothing collapsed, found ${rows(s.tree).length}`);
+  assert.equal(rows(s.tree).length, PAGE_COUNT, `expected ${PAGE_COUNT} page rows with nothing collapsed, found ${rows(s.tree).length}`);
 });
 
 test('a steward who has never chosen gets every group OPEN, on the phone as well as in a browser', () => {
@@ -243,7 +247,7 @@ test('storage that throws, or holds rubbish, leaves every group open rather than
     const s = screen('identity', { store });
     store.set([...s.store.keys()][0] || s.mod.settingsGroupsLsKey(), bad);
     const again = screen('identity', { store });
-    assert.equal(rows(again.tree).length, 16,
+    assert.equal(rows(again.tree).length, PAGE_COUNT,
       `a stored value of ${bad} did not leave every group open — it rendered ${rows(again.tree).length} rows`);
   }
 });
@@ -359,7 +363,7 @@ test('the arrow keys move focus over the rows on screen, never into a shut group
   const s = screen('identity');
   header(s.tree, 'People').props.onClick();          // People shuts; Church holds the open page and stays
   const w = walkable(s);
-  assert.equal(w.rows.length, 16 - 3, `expected the three People rows to be gone, found ${w.rows.length} rows`);
+  assert.equal(w.rows.length, PAGE_COUNT - 3, `expected the three People rows to be gone, found ${w.rows.length} rows`);
   assert.equal(w.names.includes('Congregation features'), false, 're-anchor: People is still listed');
 
   // THE BOUNDARY PRESS. The row after Church's last is the first row of the next group ON SCREEN.
@@ -435,7 +439,7 @@ test('every page is still reachable once its group is opened — collapsing hide
     reached.push(...rowNames(s.render()).filter(n => !reached.includes(n)));
     header(s.render(), g).props.onClick();
   }
-  assert.equal(reached.length, 16,
-    `opening each group in turn reached ${reached.length} of the 16 pages. A page that no group reveals is a ` +
+  assert.equal(reached.length, PAGE_COUNT,
+    `opening each group in turn reached ${reached.length} of the ${PAGE_COUNT} pages. A page that no group reveals is a ` +
     'page nothing can open');
 });
