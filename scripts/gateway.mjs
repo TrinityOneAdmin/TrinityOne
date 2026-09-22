@@ -3550,10 +3550,34 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     // A CANCELLED EVENT LEAVES THE PUBLIC FEED AT ONCE, from the tombstone itself. The console tombstones
     // the pubevent: copy too, but only while an owner console is open (the mirror runs there) — a delegate's
     // delete, or a console closed before its reconciler fired, left the event on the church's website until
-    // the owner next opened the console (audit of a8d69f8, finding 3). Decided from the tag and the author
-    // alone, as the copy's own ingest is: a tombstone can only ever REMOVE a copy, so a forged one at worst
-    // takes an event off the website early, and the next reconcile puts it back.
-    if (removed) { const pubOwner = namedChurch(e) || (CHURCH_PUBS.has(e.pubkey) ? e.pubkey : ''); const pm = pubOwner && PUBEVENTS.get(pubOwner); if (pm) { pm.delete(eid); if (!pm.size) PUBEVENTS.delete(pubOwner); } }
+    // the owner next opened the console (audit of a8d69f8, finding 3).
+    //
+    // WHOSE TOMBSTONE COUNTS: the church key's own, or a steward the church trusts with CONTENT — the same
+    // predicate the console's _consoleChurchVoice applies before it withdraws the church's copy, so the relay
+    // and the console never disagree about a cancel. NEVER the ['t', group] tag, and never the ['church'] tag
+    // on its own. The first version keyed this on the self-declared tag alone, and accept() admits an event:
+    // tombstone from the leader of ANY group (or, under eventPolicy 'everyone', any member of it) on the
+    // strength of a group tag with no check that the id belongs to that group — so the youth leader took the
+    // harvest supper off the church's website, silently, persistently (the forged tombstone is newer than the
+    // copy, so a restart replays it), and the owner console never repaired it because the church's copy was
+    // still on disk with an unchanged body. Measured by the audit of 02b6cf3 (F1, rows B–E). The comment
+    // that stood here — "the next reconcile puts a wrongly removed one back" — was false.
+    //
+    // stewardCan reads STEWARDS_BY, a hydrated map. That is safe HERE because note() runs for an EVENT_D
+    // tombstone only at the websocket door (live map), in hydrateMaps() (which loads the steward roster in
+    // its first pass, before this replays) and in the post-/import hydrate — /import's own loop never calls
+    // note(). Proved on a fresh relay by only-the-church-or-its-content-steward-takes-an-event-off-the-
+    // website.test.mjs. On a cursor pull from a peer the roster may arrive after the tombstone, in which case
+    // a delegate's cancel is missed until the next boot — the same residue every stewardCan rule in this
+    // function carries. A group leader's cancel of a group event a steward put on the feed is not honoured
+    // here at all; the next owner console reconciles it (rare by construction: group events are off the feed
+    // unless a steward ticks them on).
+    if (removed) {
+      const pubOwner = namedChurch(e) || (CHURCH_PUBS.has(e.pubkey) ? e.pubkey : '');
+      if (pubOwner && (e.pubkey === pubOwner || stewardCan(e.pubkey, pubOwner, 'content'))) {
+        const pm = PUBEVENTS.get(pubOwner); if (pm) { pm.delete(eid); if (!pm.size) PUBEVENTS.delete(pubOwner); }
+      }
+    }
     const gid = eventGroup(e);
     const owner = namedChurch(e) || (CHURCH_PUBS.has(e.pubkey) ? e.pubkey : (gid && GROUP_CHURCH.get(gid)) || '');
     if (!owner || !CHURCH_PUBS.has(owner)) return;   // not attributable to a church we carry — record nothing

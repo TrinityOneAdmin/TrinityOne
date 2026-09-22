@@ -243,7 +243,10 @@ test('a tombstoned public copy leaves the feed at once — the console tombstone
 test('cancelling the EVENT itself takes its copy off the feed at once — the relay does not wait for a console to tombstone the copy', async () => {
   // Audit of a8d69f8, finding 3: a delegate's delete, or an owner console closed before its reconciler fired,
   // left the event on the church's website until an owner console next opened. Now the event's own tombstone
-  // drops the copy on ingest. A member's forged tombstone is refused at the door, so it cannot do this.
+  // drops the copy on ingest — the CHURCH's, or a content steward's. A member's tombstone with no group tag is
+  // refused at the door (this row); one carrying a group tag is ADMITTED by the pre-existing leader/'everyone'
+  // rule and must still count for nothing on the feed — that is
+  // only-the-church-or-its-content-steward-takes-an-event-off-the-website.test.mjs (audit of 02b6cf3, F1).
   assert.equal((await publish(pub, copyDoc(grace, EV_FAIR, COPY[EV_FAIR])))[0], true, 're-anchor: the fair\'s copy could not be put back');
   await sleep(150);
   assert.equal((await get(`/public/${NPUB}/e/${EV_FAIR}.ics`)).status, 200, 're-anchor: the fair is not on the feed to begin with');
