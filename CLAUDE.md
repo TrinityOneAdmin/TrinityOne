@@ -128,9 +128,12 @@ produced a false finding on three separate occasions.
   And hard-link it in (`cp -al ../TrinityOne/node_modules .`), never symlink: through a symlink esbuild
   writes the absolute host path into every bundle it builds, which would ship this box's directory layout.
 - **`sim-harness-dialogs.test.mjs` fails in ANY worktree** and is not a code failure. The sim drivers are
-  gitignored (`.gitignore:96`, because one once carried 36 private keys), so a worktree has exactly one on
-  disk — enough to defeat that test's "no drivers, skip" guard, not enough for its `>= 3` assertion. It
-  passes 4/4 in the main tree. Say so in the brief, or an auditor files it as a finding.
+  gitignored (`scripts/sim*.mjs`, `.gitignore:114` — the rule exists because sim DATA once carried 36 private
+  keys), so a worktree gets only the two TRACKED files its sweep matches — `cdp.probe.mjs` and
+  `cdp-frames.probe.mjs` — which is enough to defeat that test's "no drivers, skip" guard and not enough for
+  its `>= 3` assertion. It passes 4/4 in the main tree. Say so in the brief, or an auditor files it as a
+  finding. (Corrected 2026-09-22: this said ".gitignore:96" and "exactly one on disk"; both were wrong, and
+  an agent chasing the line number concluded the drivers were tracked, which they are not.)
 
 ## Sabotage must be scoped to the function under test
 
