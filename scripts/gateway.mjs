@@ -5474,13 +5474,28 @@ function tsRun(args, { timeoutMs = 12000 } = {}) {
     if (timeoutMs) setTimeout(() => finish(0), timeoutMs);
   });
 }
+// ── THE THREE TAILSCALE SPAWNS tsState() MAKES, AND THE BUDGET FOR EACH ──────────────────────────
+// Named, in one object, because a number in ANOTHER FILE is derived from their sum. The Suite launcher
+// (relay-app/home.js) will not say "first time here" until /relay-names/mine has answered; that route awaits
+// tsState() (its ownUrl); and tsState() spawns the CLI up to three times in sequence. So the slowest HONEST
+// answer a box can give is this sum — and the launcher's first-run ceiling has to stay above it, or a box
+// that WILL answer is sent back to the two doors with the card never shown (AUDIT-suite-B4 N1).
+// AUDIT-round-c C1 is why they are named rather than written inline: the auditor raised the first budget
+// 8000 → 22000, the launcher decided "doors" at 25 168 ms on a box that answered at 34 045 ms — N1 verbatim
+// — and the file written to defend against N1 stayed 9 pass / 0 fail, because nothing coupled the two
+// numbers. scripts/the-suite-first-run-is-one-guided-path.test.mjs now reads this object and home.js's
+// three named numbers and fails if they drift apart; it also fails if a tsRun() inside tsState() takes a
+// budget that did not come from here (a fourth spawn, or a literal put back), because then the sum is no
+// longer the truth.
+// Users: tsState() below, and nothing else — the other tsRun() callers are not on the launcher's path.
+const TS_STATE_BUDGETS_MS = { status: 8000, serveStatus: 6000, funnelStatus: 6000 };
 // The control panel polls /tailscale/state every 4s while open; each tsState() spawns 1–3 tailscale CLIs.
 // Cache it briefly so an open panel doesn't churn subprocesses for state that changes on the order of minutes.
 // Actions (up/funnel) reset _tsCacheAt so they still read fresh.
 let _tsCache = null, _tsCacheAt = 0;
 async function tsStateCached() { if (_tsCache && Date.now() - _tsCacheAt < 8000) return _tsCache; _tsCache = await tsState(); _tsCacheAt = Date.now(); return _tsCache; }
 async function tsState() {
-  const st = await tsRun(['status', '--json'], { timeoutMs: 8000 });
+  const st = await tsRun(['status', '--json'], { timeoutMs: TS_STATE_BUDGETS_MS.status });
   if (st.missing || st.code === -1 || /not found|executable file not found|no such file|enoent/i.test(st.err)) return { installed: false };   // -1/ENOENT = spawn failed → tailscale not installed (e.g. desktop app)
   let j = null; try { j = JSON.parse(st.out); } catch {}
   if (!j) {
@@ -5490,9 +5505,9 @@ async function tsState() {
   const backendState = j.BackendState || 'Unknown';
   const dnsName = String((j.Self && j.Self.DNSName) || '').replace(/\.$/, '');
   let funnelOn = false;
-  const sv = await tsRun(['serve', 'status', '--json'], { timeoutMs: 6000 });
+  const sv = await tsRun(['serve', 'status', '--json'], { timeoutMs: TS_STATE_BUDGETS_MS.serveStatus });
   try { const sj = JSON.parse(sv.out); funnelOn = !!(sj && sj.AllowFunnel && Object.values(sj.AllowFunnel).some(Boolean)); } catch {}
-  if (!funnelOn) { const fn = await tsRun(['funnel', 'status'], { timeoutMs: 6000 }); if (/https:\/\/\S+/.test(fn.out)) funnelOn = true; }
+  if (!funnelOn) { const fn = await tsRun(['funnel', 'status'], { timeoutMs: TS_STATE_BUDGETS_MS.funnelStatus }); if (/https:\/\/\S+/.test(fn.out)) funnelOn = true; }
   const publicUrl = (funnelOn && dnsName) ? 'https://' + dnsName : '';
   return { installed: true, backendState, loggedIn: backendState === 'Running', dnsName, funnelOn, publicUrl, relayWss: publicUrl ? publicUrl.replace(/^https/, 'wss') + '/relay' : '' };
 }

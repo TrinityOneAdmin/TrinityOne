@@ -51,6 +51,35 @@ globalThis.fetch = function (input, init) {
   return real.call(this, input, init);
 };\n`;
 
+// ── THE LAUNCHER'S CEILING, AND THE BUDGETS IT IS DERIVED FROM, READ OUT OF THE TWO FILES ────────────
+// Structural, and it has to be: the ceiling is armed in relay-app/home.js BEFORE any fetch, so it cannot be
+// served to the page, and the budgets it must clear are spawn timeouts in scripts/gateway.mjs. Nothing at
+// runtime can hold the two together. AUDIT-round-c C1 is what happens without this: raising tsState()'s
+// first budget 8000 → 22000 put the launcher back on the two doors at 25 168 ms for a box that answered at
+// 34 045 ms — AUDIT-suite-B4 N1 verbatim — and this very file stayed 9 pass / 0 fail.
+// Rule 3 does not bite: nothing here asserts BEHAVIOUR by matching text. What these numbers DO is measured
+// in Chromium by rows 1b(d) and 1c, which also check the ceiling fires where these numbers say it will.
+function firstRunNumbers() {
+  const gw = readFileSync(join(ROOT, 'scripts/gateway.mjs'), 'utf8');
+  const home = readFileSync(join(ROOT, 'relay-app/home.js'), 'utf8');
+  const decl = gw.match(/\nconst TS_STATE_BUDGETS_MS = \{([^}]*)\};/);
+  assert.ok(decl, 'scripts/gateway.mjs no longer declares TS_STATE_BUDGETS_MS — the launcher\'s first-run ceiling is derived from it (AUDIT-round-c C1)');
+  const budgets = [...decl[1].matchAll(/([A-Za-z0-9_]+)\s*:\s*(\d+)/g)].map(m => ({ name: m[1], ms: Number(m[2]) }));
+  const sum = budgets.reduce((a, b) => a + b.ms, 0);
+  const start = gw.indexOf('async function tsState() {');
+  assert.ok(start > 0, 'scripts/gateway.mjs has no tsState() — the launcher waits on it through /relay-names/mine');
+  const body = gw.slice(start, gw.indexOf('\n}\n', start));
+  const spawns = (body.match(/tsRun\(/g) || []).length;
+  const named = (body.match(/timeoutMs: TS_STATE_BUDGETS_MS\.[A-Za-z0-9_]+/g) || []).length;
+  const num = (name) => {
+    const m = home.match(new RegExp('\\n  var ' + name + ' = (\\d+);'));
+    assert.ok(m, 'relay-app/home.js no longer declares ' + name + ' — the ceiling is derived from tsState()\'s budgets and must say so in numbers a test can read (AUDIT-round-c C1)');
+    return Number(m[1]);
+  };
+  const budget = num('FIRST_RUN_TS_BUDGET_MS'), margin = num('FIRST_RUN_CEILING_MARGIN_MS');
+  return { budgets, sum, spawns, named, budget, margin, ceiling: budget + margin };
+}
+
 const live = new Set();
 after(() => { for (const s of live) s.stop(); });
 
@@ -83,6 +112,25 @@ async function startGateway({ seed = {}, env: extraEnv = {} } = {}) {
 function slowTailscale(dataDir, seconds) {
   const bin = join(dataDir, 'tailscale');
   writeFileSync(bin, '#!/bin/sh\nsleep ' + seconds + '\necho "failed to connect to local tailscaled; is it running?" >&2\nexit 1\n');
+  chmodSync(bin, 0o755);
+  return bin;
+}
+// A box whose tailscale ANSWERS THE FIRST QUESTION AND THEN HANGS. This is the only shape that reaches all
+// THREE of tsState()'s spawns: anything that fails to parse takes its early return after the first one, so
+// the 4-second fake above exercises ~4 s of a 20 s worst case and can never notice the ceiling moving under
+// it (AUDIT-round-c C1/C2). `status --json` prints parseable JSON and then sleeps; `serve status` and
+// `funnel status` print nothing and sleep. tsRun's budget resolves with whatever was printed by then, so
+// tsState pays every budget in full and still answers honestly (no funnel → no public URL → handle "").
+function hangingTailscale(dataDir) {
+  const bin = join(dataDir, 'tailscale-hang');
+  writeFileSync(bin, [
+    '#!/bin/sh',
+    'if [ "$1" = "status" ] && [ "$2" = "--json" ]; then',
+    '  echo \'{"BackendState":"Running","Self":{"DNSName":"box.example.ts.net."}}\'',
+    'fi',
+    'exec sleep 30',
+    '',
+  ].join('\n'));
   chmodSync(bin, 0o755);
   return bin;
 }
@@ -279,11 +327,11 @@ test('a first launch shows ONE card with three choices — not the two doors —
 // waited for (the page says it is checking); only a box that cannot answer at all — a network error or a non-2xx
 // on either question — gets the doors, because "first time here" is a claim this page will not make blind.
 test('a slow /relay-names/mine still gets the card — the launcher waits for the answer; a box that cannot answer at all gets the doors',
-  { skip: !CHROME ? 'no chromium' : false, timeout: 120000 }, async () => {
+  { skip: !CHROME ? 'no chromium' : false, timeout: 300000 }, async () => {
   // (a) tailscale installed and wedged: the name question takes ~4 s
   const dir = mkdtempSync(join(tmpdir(), 'trin-guided-ts-'));
   const gw = await startGateway({ env: { TRINITY_TAILSCALE_BIN: slowTailscale(dir, 4) } });
-  let c = null, front = null, front2 = null;
+  let c = null, front = null, front2 = null, gw2 = null, dir2 = null;
   try {
     // re-anchor: the box really is slow on that one question
     const tok = (await (await fetch(gw.base + '/local-token')).json()).token;
@@ -317,7 +365,32 @@ test('a slow /relay-names/mine still gets the card — the launcher waits for th
     c = await startChrome(front2.base + HOME);
     assert.equal(await launcherSettled(c), 'doors', 'a box that cannot answer /status was told "first time here"');
     assert.deepEqual((await readLauncher(c)).doors, [true, true]);
-  } finally { if (c) c.stop(); if (front) front.stop(); if (front2) front2.stop(); gw.stop(); try { rmSync(dir, { recursive: true, force: true }); } catch {} }
+    c.stop(); c = null;
+    // (d) THE TRUE WORST CASE, not a quarter of it. The 4-second fake in (a) EXITS, which takes tsState()'s
+    // early return after the FIRST of its three spawns — so (a) proves a slow box is waited for, but it
+    // cannot notice the ceiling drifting towards the real worst case (AUDIT-round-c C1/C2). This one answers
+    // the first question and hangs, so all three budgets are paid in full and the box still answers honestly.
+    const N = firstRunNumbers();
+    dir2 = mkdtempSync(join(tmpdir(), 'trin-guided-tshang-'));
+    gw2 = await startGateway({ env: { TRINITY_TAILSCALE_BIN: hangingTailscale(dir2) } });
+    const tok2 = (await (await fetch(gw2.base + '/local-token')).json()).token;
+    const t1 = Date.now();
+    const nm2 = await (await fetch(gw2.base + '/relay-names/mine', { headers: { Authorization: 'Bearer ' + tok2 } })).json();
+    const took2 = Date.now() - t1;
+    assert.ok(took2 >= N.sum - 1500, 're-anchor: /relay-names/mine answered in ' + took2 + ' ms, not the ' + N.sum + ' ms all three tsState() spawns cost — this fake did not reach them, so this part measures nothing');
+    assert.equal(nm2.handle, '', 're-anchor: the box at its worst case claims a name');
+    c = await startChrome('about:blank');
+    await c.send('Page.addScriptToEvaluateOnNewDocument', { source: RECORD_DECIDE });
+    await c.goto(gw2.base + HOME);
+    const d3 = await waitFor(c, `document.body.getAttribute('data-first-run')`, 'the launcher to decide on a box at tsState()\'s true worst case', N.ceiling + 20000);
+    const at3 = Number(await c.evalIn(`window.__decidedAt || 0`));
+    assert.equal(d3, 'card', 'A BOX AT tsState()\'s TRUE WORST CASE — all three tailscale spawns, ' + N.sum + ' ms, and an honest "no name, no church" at the end — WAS SENT TO THE TWO DOORS after ' + at3 + ' ms (AUDIT-suite-B4 N1)');
+    assert.equal((await readLauncher(c)).card, true, 'the first-run card is not on screen on a box at its true worst case');
+    assert.ok(at3 >= N.sum - 2000, 'the launcher decided at ' + at3 + ' ms — before the box could have answered, so this part did not measure the worst case');
+    assert.ok(at3 < N.ceiling, 'the launcher decided at ' + at3 + ' ms, at or past its own ' + N.ceiling + ' ms ceiling: the honest answer no longer beats the backstop (AUDIT-round-c C2 measured the whole margin at 4 818 ms)');
+  } finally { if (c) c.stop(); if (front) front.stop(); if (front2) front2.stop(); if (gw2) gw2.stop(); gw.stop();
+    try { rmSync(dir, { recursive: true, force: true }); } catch {}
+    if (dir2) { try { rmSync(dir2, { recursive: true, force: true }); } catch {} } }
 });
 
 // ── 1c. the ceiling: waiting is not the same as never deciding ─────────────────────────────
@@ -366,8 +439,10 @@ test('a box that accepts a question and never answers it still ends on the DOORS
     assert.equal(await c.evalIn(`(${ON})(document.getElementById('checking'))`), false, 'the "checking" line is still on screen after the ceiling fired');
     // the ceiling is a BACKSTOP, not a short timer: it must not fire before the gateway's own worst legitimate
     // answer (tsState = 8 s + 6 s + 6 s), or row 1b's slow box is back on the doors.
-    assert.ok(at > 20000, 'the ceiling fired after ' + at + ' ms — that is inside the 20 s worst case of tsState() itself, so a slow-but-honest box would be sent to the doors again (AUDIT-suite-B4 N1)');
-    assert.ok(at < 40000, 'the ceiling took ' + at + ' ms');
+    const N = firstRunNumbers();
+    assert.ok(at > N.sum, 'the ceiling fired after ' + at + ' ms — that is inside the ' + N.sum + ' ms worst case of tsState() itself, so a slow-but-honest box would be sent to the doors again (AUDIT-suite-B4 N1)');
+    // and it fired where the two files SAY it will, so the numbers cannot drift from the timer they set
+    assert.ok(at >= N.ceiling - 1500 && at <= N.ceiling + 9000, 'the ceiling fired at ' + at + ' ms, not at the ' + N.ceiling + ' ms home.js derives from tsState()\'s budgets (FIRST_RUN_TS_BUDGET_MS + FIRST_RUN_CEILING_MARGIN_MS) — the named numbers and the timer they are there to set have drifted apart (AUDIT-round-c C1)');
     c.stop(); c = null; stall.stop(); stall = null;
     // (b) the first fetch throws synchronously. Under the old timer this still ended on the doors; with the
     // timer gone the throw escaped the IIFE and nothing was left running.
@@ -380,6 +455,26 @@ test('a box that accepts a question and never answers it still ends on the DOORS
     assert.deepEqual((await readLauncher(c)).doors, [true, true], 'the doors are not on screen after a synchronous throw');
     assert.ok(at2 < 5000, 'a synchronous throw took ' + at2 + ' ms to reach the doors — nothing is in flight, so it must not wait for the ceiling');
   } finally { if (c) c.stop(); if (stall) stall.stop(); gw.stop(); }
+});
+
+// ── 1d. THE CEILING AND THE BUDGETS IT IS DERIVED FROM CANNOT DRIFT APART ────────────────────────
+// AUDIT-round-c C1. 25 s was the right number and nothing in the repository said why, or would notice if it
+// stopped being right: the auditor raised tsState()'s first budget 8000 → 22000 — an honest worst case of
+// 34 s — and the launcher went back to the two doors at 25 168 ms while this file stayed 9 pass / 0 fail.
+// The budgets are now named in one place (TS_STATE_BUDGETS_MS, scripts/gateway.mjs) and home.js states the
+// sum it believes and the margin it adds. This row holds those together; row 1c measures the ceiling
+// actually firing at the number they produce, and row 1b(d) measures the honest box beating it.
+test('the launcher\'s first-run ceiling is derived from tsState()\'s own budgets — raising one without the other fails here', () => {
+  const n = firstRunNumbers();
+  assert.equal(n.spawns, n.named,
+    'tsState() makes ' + n.spawns + ' tailscale spawns but only ' + n.named + ' of them take a budget from TS_STATE_BUDGETS_MS. A budget written inline is one the launcher\'s ceiling cannot see (AUDIT-round-c C1).');
+  assert.equal(n.spawns, n.budgets.length,
+    'tsState() makes ' + n.spawns + ' tailscale spawns and TS_STATE_BUDGETS_MS names ' + n.budgets.length + ' (' + n.budgets.map(b => b.name + '=' + b.ms).join(', ') + ') — the sum the launcher clears is no longer the worst case it will actually wait through.');
+  assert.equal(n.budget, n.sum,
+    'THE LAUNCHER\'S CEILING IS NO LONGER TIED TO THE ANSWER IT IS WAITING FOR. tsState()\'s budgets now sum to ' + n.sum + ' ms (' + n.budgets.map(b => b.name + '=' + b.ms).join(' + ') + '), and relay-app/home.js still says FIRST_RUN_TS_BUDGET_MS = ' + n.budget + '. A box that WILL answer, in ' + n.sum + ' ms, is sent to the two doors at ' + n.ceiling + ' ms with the first-run card never shown — AUDIT-suite-B4 N1, re-opened. Raise FIRST_RUN_TS_BUDGET_MS in relay-app/home.js to ' + n.sum + ' (and check the margin is still enough).');
+  assert.ok(n.ceiling > n.sum, 'the ceiling (' + n.ceiling + ' ms) is not above the slowest honest answer (' + n.sum + ' ms)');
+  assert.ok(n.margin >= 4000,
+    'the margin above tsState()\'s worst case is ' + n.margin + ' ms. That margin is the whole safety budget for everything else on the route (AUDIT-round-c C2 measured it at 4 818 ms end to end); below 4 s a box that answers honestly starts losing its card to the backstop.');
 });
 
 // ── 2. "Set up everything" ────────────────────────────────────────────────────────────────────────────────

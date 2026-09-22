@@ -30,13 +30,16 @@
 // whose pages do not load either": in both measurements the launcher, its scripts and every other route
 // loaded perfectly from the same box. Only one route failed.
 //
-// Hence the CEILING below: 25 s, then the doors, whatever is or is not in flight. 25 and not 2.5 because the
-// slowest HONEST answer is the one N1 is about — /relay-names/mine calls tsState(), which spawns the
-// tailscale CLI with budgets of 8 s + 6 s + 6 s (gateway.mjs tsState), so 20 s is the structural worst case
-// for a box that WILL answer, and a ceiling at or under it would send that box back to the doors. 25 s clears
-// it with margin and is far under "for ever". It is armed BEFORE the fetches, as the old 2.5 s timer was, so
-// it covers a throw as well as a stall; and the three calls are wrapped so that a synchronous throw from any
-// of them reaches the doors at once rather than waiting the 25 s out (nothing is in flight to wait for).
+// Hence the CEILING below, then the doors, whatever is or is not in flight. Not 2.5 s, because the slowest
+// HONEST answer is the one N1 is about — /relay-names/mine calls tsState(), which spawns the tailscale CLI
+// up to three times, and a ceiling at or under the sum of those budgets would send a box that WILL answer
+// back to the doors. So the ceiling is not a number chosen here: it is that sum plus a stated margin, and
+// the budgets are named in gateway.mjs (TS_STATE_BUDGETS_MS) so a test can hold the two together — without
+// that, raising one budget quietly re-opened N1 with every test still green (AUDIT-round-c C1).
+//
+// It is armed BEFORE the fetches, as the old 2.5 s timer was, so it covers a throw as well as a stall; and
+// the three calls are wrapped so that a synchronous throw from any of them reaches the doors at once rather
+// than waiting the ceiling out (nothing is in flight to wait for).
 //
 // The doors are visible in the HTML and this hides them while it asks, so a script that never runs leaves
 // the launcher with its doors; the ceiling is the same promise kept for a script that runs and never
@@ -62,7 +65,19 @@
   if (marked) { show('doors'); return; }
   doors.hidden = true; if (sub) sub.hidden = true;          // while asking; show() undoes it
   if (checking) checking.hidden = false;
-  var ceiling = setTimeout(function () { show('doors'); }, 25000);   // armed first: it covers a throw too
+  // THE CEILING IS DERIVED FROM tsState()'s OWN BUDGETS, AND A TEST FAILS IF THEY DRIFT APART.
+  // FIRST_RUN_TS_BUDGET_MS must equal the sum of TS_STATE_BUDGETS_MS in scripts/gateway.mjs (8 s + 6 s +
+  // 6 s): that is the slowest a box that WILL answer can take, so a ceiling at or under it sends that box
+  // back to the doors (AUDIT-suite-B4 N1). The margin is what is left over for everything else on the
+  // route; measured on the real pages, this page decides ~150 ms after the answer lands, and the true worst
+  // case came in at 20 036 ms against a 25 000 ceiling. Raising a budget in gateway.mjs without raising
+  // this reddens scripts/the-suite-first-run-is-one-guided-path.test.mjs (AUDIT-round-c C1) — it reads both
+  // files, and it also measures the ceiling actually firing, so the numbers below cannot drift from the
+  // timer they are here to set.
+  var FIRST_RUN_TS_BUDGET_MS = 20000;
+  var FIRST_RUN_CEILING_MARGIN_MS = 5000;
+  var FIRST_RUN_CEILING_MS = FIRST_RUN_TS_BUDGET_MS + FIRST_RUN_CEILING_MARGIN_MS;
+  var ceiling = setTimeout(function () { show('doors'); }, FIRST_RUN_CEILING_MS);   // armed first: it covers a throw too
   // Each question either answers (its JSON) or throws — a non-2xx is a throw, so Promise.all rejects on the
   // first question the box cannot answer and the doors are shown. Nothing here turns a failure into "no".
   try {
