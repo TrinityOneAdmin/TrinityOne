@@ -18,7 +18,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { DOC_TYPES, UNDECLARED, D, MEMBER_WRITABLE_TYPES } from './trinity-doc-types.mjs';
-import { stripComments, stripStrings } from './test-slice.mjs';
+import { fnBody, stripComments, stripStrings } from './test-slice.mjs';
 
 const GATEWAY = readFileSync(new URL('../scripts/gateway.mjs', import.meta.url), 'utf8');
 // THE SAME SOURCE WITH ITS COMMENTS BLANKED, for the assertions that read a DECISION rather than a name.
@@ -129,11 +129,51 @@ test('the ONE column-derived list the spine reads only ever NARROWS', () => {
     'the registry no longer exports MEMBER_WRITABLE_TYPES, or it collapsed: ' + JSON.stringify(MEMBER_WRITABLE_TYPES));
   const uses = GATEWAY.match(/\bMEMBER_WRITABLE_TYPES\b/g) || [];
   assert.equal(uses.length, 2, 'MEMBER_WRITABLE_TYPES is read in ' + uses.length + ' places in gateway.mjs — expected the import and memberDocTypeOk() only');
-  // OVER THE COMMENT-STRIPPED SOURCE — see GATEWAY_CODE at the top of this file for the sabotage that
-  // proved why. Commenting the decision out and leaving its words behind used to pass this line.
-  assert.match(GATEWAY_CODE, /if \(!\(isAnyChurch \|\| isNetwork\) && !memberDocTypeOk\(d\)\) return false;/,
-    'the catch-all no longer REFUSES on the list — if it is now granting on it, that is the change this wiring must never make');
+  // INSIDE accept(), NOT ANYWHERE IN THE FILE. AUDIT-steward-doc-rules-round2-2026-09-22, finding R3.
+  // Stripping comments (M1) and strings (F6) closed two doors of an unbounded family, and the auditor
+  // walked through a third: MOVE THE DECISION, VERBATIM, INTO DEAD CODE —
+  //
+  //     (deleted from accept(), appended at the bottom of gateway.mjs)
+  //     function _auditDeadCode(isAnyChurch, isNetwork, d) {
+  //       if (!(isAnyChurch || isNetwork) && !memberDocTypeOk(d)) return false;
+  //       return true;
+  //     }
+  //
+  // — which left this file 8 pass / 0 fail with the catch-all gone. A text match over a whole file cannot
+  // ask WHERE the text is, so the answer is to ask a question text cannot dodge: the decision must be in
+  // the body of the function that makes it. fnBody brace-matches accept() out of the stripped source
+  // (offsets are preserved, so slicing the stripped copy is the same region as the raw one).
+  const ACCEPT = fnBody(GATEWAY_CODE, 'function accept(e) {', 'accept()');
+  const hits = ACCEPT.match(/if \(!\(isAnyChurch \|\| isNetwork\) && !memberDocTypeOk\(d\)\) return false;/g) || [];
+  assert.equal(hits.length, 1,
+    'the catch-all refusal is not in accept()\'s own body ' + (hits.length ? '(it is there ' + hits.length + ' times)' : '(0 occurrences)') +
+    '. It may still be somewhere in gateway.mjs — in a helper nothing calls, say — and a document nobody ' +
+    'has declared would then be stored for any member of any church on the box.');
+  assert.doesNotMatch(ACCEPT, /memberDocTypeOk\([^)]*\)\) return true/, 'memberDocTypeOk is used to GRANT inside accept()');
   assert.doesNotMatch(GATEWAY_CODE, /memberDocTypeOk\([^)]*\)\) return true/, 'memberDocTypeOk is used to GRANT somewhere');
+
+  // AND THE DECISION IS RUN, NOT READ. The other door the auditor walked through was M1D: leave the
+  // catch-all exactly where it is and neuter what it ASKS —
+  //
+  //     const s = String(d || '');   ->   const s = String(d || ''); if (s) return true;
+  //
+  // — which also left this file 8 pass / 0 fail, because `function memberDocTypeOk(` is still every word
+  // the text above looks for. So the real function is lifted out of the shipped spine and executed. Its
+  // only dependency is MEMBER_WRITABLE_TYPES, which this file already imports from the registry — no stub
+  // supplies the answer it is named after ([[stub-answers-the-question]]).
+  const mdtSrc = fnBody(GATEWAY, 'function memberDocTypeOk(d) {', 'memberDocTypeOk');
+  // eslint-disable-next-line no-new-func
+  const memberDocTypeOk = new Function('MEMBER_WRITABLE_TYPES', mdtSrc + '\nreturn memberDocTypeOk;')(MEMBER_WRITABLE_TYPES);
+  assert.equal(memberDocTypeOk('trinityone/safe:abc'), true, 'a member type the registry declares is now refused — members could not write their own documents');
+  assert.equal(memberDocTypeOk('trinityone/notes'), true, 'a bare member type (the MyData six) is now refused');
+  assert.equal(memberDocTypeOk('trinityone/sermon:1'), false,
+    'THE LIST NO LONGER NARROWS ANYTHING: a steward-only type passes the member catch-all. Any member of ' +
+    'any church on this box could write the church\'s own documents.');
+  assert.equal(memberDocTypeOk('trinityone/nope-nobody-declared-this:1'), false,
+    'an UNDECLARED d-tag passes the member catch-all — which is exactly how `voice:` shipped writable by every member');
+  assert.equal(memberDocTypeOk('trinityone/notesX'), false,
+    'a bare name is being matched by PREFIX, which GRANTS rather than narrows: trinityone/notesX is not trinityone/notes');
+  assert.equal(memberDocTypeOk(''), false, 'an empty d-tag is accepted');
   // …and BOTH strippers must actually be stripping. One that silently returned its input would restore the
   // hole above in a way nothing else in this file could see, and there are two holes: prose in a comment
   // (M1) and prose in a string literal (F6).
