@@ -66,35 +66,46 @@ const isTick = (label) => (n) => n.type === 'input' && n.props && n.props['aria-
 const isCover = (n) => n.type === 'input' && n.props && n.props.type === 'file';
 const isNote = (n) => n.type === 'textarea' && n.props && /^(Note \(optional\)|Details)$/.test(String(n.props['aria-label'] || ''));
 const isBelongs = (n) => n.type === 'div' && [].concat((n.props && n.props.children) || []).includes('Belongs to');
+// The LABEL is not the block. An audit moved the tick between "Belongs to" and its own group chips and both
+// test files stayed green, so the lower bound is the last chip, not the heading above it.
+const isChip = (n) => n.type === 'button' && [].concat((n.props && n.props.children) || []).includes('Whole church');
+const isWhere = (n) => n.type === 'input' && n.props && n.props['aria-label'] === 'Where';
 const YOUTH_GROUP = [{ id: 'grpyouth', name: 'Youth', kind: 'group' }];
 
 test('the website tick sits between "Belongs to" and the optional fields in the New event dialog — both ticks', () => {
   const whole = mount('SchEventModal', { day: '', onClose() {} }, { steward: owner(), groups: YOUTH_GROUP });
-  const [tick, belongs, cover, note] = orderIn(whole, isTick('Not on the website'), isBelongs, isCover, isNote);
-  assert.ok(tick >= 0 && belongs >= 0 && cover >= 0 && note >= 0,
-    're-anchor: one of these controls is not in the New event dialog at all — ' + JSON.stringify({ tick, belongs, cover, note }));
+  const [tick, belongs, chip, cover, note] = orderIn(whole, isTick('Not on the website'), isBelongs, isChip, isCover, isNote);
+  assert.ok(tick >= 0 && belongs >= 0 && chip >= 0 && cover >= 0 && note >= 0,
+    're-anchor: one of these controls is not in the New event dialog at all — ' + JSON.stringify({ tick, belongs, chip, cover, note }));
   assert.ok(tick > belongs, 'the website tick is ABOVE "Belongs to", which is what decides which tick is shown');
+  assert.ok(tick > chip, 'THE WEBSITE TICK IS INSIDE THE "BELONGS TO" BLOCK, between its heading and its own group chips');
   assert.ok(tick < cover,
     'THE WEBSITE TICK IS BELOW THE COVER IMAGE PICKER — a steward has to scroll past the photo and the note to reach the control that decides whether the event is public');
   assert.ok(tick < note, 'THE WEBSITE TICK IS BELOW THE NOTE BOX — same scroll, same control');
   // the group event's opposite tick, in the same place
   const grp = mount('SchEventModal', { day: '', onClose() {} }, { steward: owner(), groups: YOUTH_GROUP, preset: { 6: 'grpyouth' } });
-  const [on, belongs2, cover2, note2] = orderIn(grp, isTick('On the website'), isBelongs, isCover, isNote);
-  assert.ok(on >= 0, 're-anchor: a group event draws no "On the website" tick in the New event dialog');
+  const [on, belongs2, chip2, cover2, note2] = orderIn(grp, isTick('On the website'), isBelongs, isChip, isCover, isNote);
+  assert.ok(on >= 0 && chip2 >= 0, 're-anchor: a group event draws no "On the website" tick in the New event dialog');
   assert.ok(on > belongs2, 'the group tick is above "Belongs to"');
+  assert.ok(on > chip2, 'the group tick sits inside the "Belongs to" block rather than after it');
   assert.ok(on < cover2 && on < note2,
     'THE GROUP EVENT\'S TICK IS BELOW THE OPTIONAL FIELDS — the two ticks are the same control in two states and must sit in the same place');
 });
 
 test('…and the Edit dialog puts it above the details box — both ticks', () => {
+  // BOTH SIDES, not just the upper one. An audit moved this tick to the very top of the Edit dialog, above
+  // "Name", and both this file and the headless-browser file stayed green: only `tick < Details` was ever
+  // asserted. The four cases are meant to sit in the SAME place, so the lower bound is pinned too.
   const whole = mount('SchEventEdit', { event: { id: 'evt1', title: 'T', date: '2026-10-01' }, onClose() {} }, { steward: owner() });
-  const [tick, note] = orderIn(whole, isTick('Not on the website'), isNote);
-  assert.ok(tick >= 0 && note >= 0, 're-anchor: ' + JSON.stringify({ tick, note }));
+  const [tick, where, note] = orderIn(whole, isTick('Not on the website'), isWhere, isNote);
+  assert.ok(tick >= 0 && where >= 0 && note >= 0, 're-anchor: ' + JSON.stringify({ tick, where, note }));
   assert.ok(tick < note, 'THE WEBSITE TICK IS BELOW THE DETAILS BOX IN THE EDIT DIALOG — the same scroll as the New event dialog had');
+  assert.ok(tick > where, 'THE WEBSITE TICK IS ABOVE "WHERE" IN THE EDIT DIALOG — it is meant to follow the fields that say what the event IS, in the same place as the New event dialog');
   const grp = mount('SchEventEdit', { event: { id: 'evt1', title: 'T', date: '2026-10-01', groupId: 'grpyouth' }, onClose() {} }, { steward: owner() });
-  const [on, note2] = orderIn(grp, isTick('On the website'), isNote);
-  assert.ok(on >= 0, 're-anchor: a group event draws no "On the website" tick in the Edit dialog');
+  const [on, where2, note2] = orderIn(grp, isTick('On the website'), isWhere, isNote);
+  assert.ok(on >= 0 && where2 >= 0, 're-anchor: a group event draws no "On the website" tick in the Edit dialog');
   assert.ok(on < note2, 'THE GROUP EVENT\'S TICK IS BELOW THE DETAILS BOX — the four cases must agree');
+  assert.ok(on > where2, 'the group event\'s tick is above "Where" — the four cases must agree');
 });
 
 test('a delegated steward\'s console draws NO tick — the relay would refuse the write, so a tick would silently do nothing', () => {
