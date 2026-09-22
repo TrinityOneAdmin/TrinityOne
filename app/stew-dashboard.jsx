@@ -4293,11 +4293,18 @@ function DashRunRelayCard() {
     <Panel title="Run your own relay box">
       <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 11 }}>The TrinityOne Suite app turns any always-on computer into your church’s relay — no command line. Install it, open it, then add the address it gives you to your relays.</div>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        {[['macOS', 'TrinityOne-Suite-macos-arm64.dmg'], ['Windows', 'TrinityOne-Suite-windows-x64-setup.exe'], ['Linux', 'TrinityOne-Suite-linux-x86_64.AppImage']].map(([label, file]) => (
+        {/* Linux points at the .deb, not the AppImage (2026-09-21): on Ubuntu 24.04 the AppImage needs marking
+            executable (and often libfuse2) before it runs at all, while the .deb installs with one apt command —
+            the guide linked below says which command. */}
+        {[['macOS', 'TrinityOne-Suite-macos-arm64.dmg'], ['Windows', 'TrinityOne-Suite-windows-x64-setup.exe'], ['Linux', 'TrinityOne-Suite-linux-x86_64.deb']].map(([label, file]) => (
           <a key={label} href={'https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download/' + file} target="_blank" rel="noopener" className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13, textDecoration: 'none' }}><Icon name="download" size={15} color="currentColor" /> {label}</a>
         ))}
       </div>
-      <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8, lineHeight: 1.5 }}>Download &amp; open it — it starts your relay. <a href="https://github.com/TrinityOneAdmin/TrinityOne/releases/latest" target="_blank" rel="noopener" style={{ color: 'var(--clay-ink)' }}>Other builds</a> (Debian package). Headless server? <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5 }}>curl -fsSL app.trinityone.church/relay-app/install.sh | sudo bash</span></div>
+      {/* THE RAW ONE-LINER IS GONE FROM THIS CARD (2026-09-21). It read `curl -fsSL … | sudo bash`, pointed at
+          a source that 404'd, and stood beside no explanation — so the console instructed stewards to pipe an
+          unread script into root. The guide carries the two-step form (download, read, run) and the Linux
+          package notes; the card carries the link. StewHelpLink is defined in stew-help.jsx, loaded before this file. */}
+      <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8, lineHeight: 1.5 }}>Download &amp; open it — it starts your relay. <a href="https://github.com/TrinityOneAdmin/TrinityOne/releases/latest" target="_blank" rel="noopener" style={{ color: 'var(--clay-ink)' }}>Other builds</a>. A headless Linux server, or stuck on a Linux package? <StewHelpLink id="console-relay" label="Running your own relay" /></div>
     </Panel>
   );
 }

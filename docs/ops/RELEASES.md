@@ -99,6 +99,20 @@ d=$(mktemp -d); gpg -d ~/trinityone-keys-$(date +%F).tar.gz.gpg 2>/dev/null | ta
 
 > `ARCHITECTURE.md:112` carries the same warning for the keystore; this is the operational checklist for it.
 
+## What each route checks before it runs code
+
+Three ways a relay arrives on a box, and what stands between the download and root. Each row is what
+`scripts/the-installer-checks-what-it-downloads.test.mjs` and `scripts/a-suite-relay-is-told-where-to-get-things-from.test.mjs`
+prove, no more. Until 2026-09-21 the first row read **NO** — `install.sh` fetched `bundle.tgz` alone and
+untarred it as root, and the only key it could have checked against arrived inside that tarball
+(`reference/BACKLOG.md`, "THE ONE-LINE INSTALLER HAS NEVER VERIFIED WHAT IT DOWNLOADS").
+
+| Route | Checked against | How |
+|---|---|---|
+| **`relay-app/install.sh`** (a server box) | the release public key **pinned in the script itself** | fetches `bundle.tgz` + `bundle.sig`, runs `verify_release_bundle`, refuses with one sentence and unpacks nothing on a tampered, unsigned or wrongly-signed download. The script a person reads before running it is the trust root — which is why the docs say download it, read it, then run it, not `curl \| sudo bash`. |
+| **The relay's Update now** (`scripts/relay-update.sh`, server boxes only) | `relay-app/release-pubkey.pem` **already on the box** — which the installer verified before it was ever trusted | the same `verify_release_bundle`, duplicated verbatim and pinned byte-equal by test, plus the date-based anti-rollback. |
+| **The desktop Suite** (`.exe` / `.dmg` / `.AppImage` / `.deb` from GitHub Releases) | HTTPS + GitHub | the installers themselves are **unsigned** (`relay-desktop.yml`). A Suite never runs `relay-update.sh` — its code is a read-only resource and no update unit exists — so a newer Suite is a new download; its relay panel says so. The Suite's relay DOES fetch the member/steward APKs from its update source (seeded at build, `release-origin`); the relay does not check those bytes — only Android's own APK signature check at install time applies. |
+
 ## Channels
 
 - **Web (always latest):** https://trinityone.pages.dev — the production apex. Each deploy also gets an immutable `https://<hash>.trinityone.pages.dev` preview URL; **don't test on those**, they're frozen snapshots.
