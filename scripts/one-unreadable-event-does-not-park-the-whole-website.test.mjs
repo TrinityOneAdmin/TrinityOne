@@ -437,6 +437,49 @@ test('F1: an event edited from a GROUP back to whole-church is forgotten, so a l
   assert.deepEqual(m.tombstoned(), [], 'a WHOLE-CHURCH event was withdrawn on a memory of what it used to be');
 });
 
+// ── F2: `held` is the number of copies that are STILL BEING SERVED, and nothing else ─────────────────────
+// AUDIT-feeds-round4-2026-09-22 F2. This number is what the second Settings sentence counts — "N of them are
+// still on your website" — and no row constrained it: a scoped sabotage that changed it left this file
+// 26/26/0. It also understated in the state that matters most. A copy this console KNOWS is group-scoped is
+// deliberately left up for the whole ten minutes, and it was counted into neither half, so the page said
+// "1 event could not be published" and stayed silent about the adults-only copy that was still public —
+// permanently so on a console whose relay flaps (F3 below).
+const LIVE_YOUTH = JSON.stringify({ title: 'Youth night', date: '2026-11-01', time: '19:30', where: 'The vestry', blurb: '', recur: '', day: null });
+test('F2: a group copy still up during the ten minutes is COUNTED as still on the website', async () => {
+  const m = mirror({ events: [GOOD1, GROUP_READABLE], copies: { evtyouth: LIVE_YOUTH }, share: share({ optIn: ['evtyouth'] }) });
+  await m._webSync();                                     // read once: the only moment the scope can be learned
+  m.w.events.set('evtyouth', GROUP_LOST);                 // …and now the name key is gone
+  m.w.share.optIn = [];
+  await pastReporting(m);
+  const said = m.emitted[m.emitted.length - 1];
+  assert.deepEqual(m.tombstoned(), [], 're-anchor: the copy came off before the ten minutes were up');
+  assert.equal(said.blocked, 1, 're-anchor: the page does not say the event could not be published');
+  assert.equal(said.held, 1,
+    'THE PAGE SAYS ONE EVENT COULD NOT BE PUBLISHED AND NOTHING ABOUT THE COPY THAT IS STILL PUBLIC — held reads ' + said.held +
+    ', so a church reading the screen is told an adults-only copy is gone when it is still being served');
+  // …and once the ten minutes really are spent and the copy comes off, the number goes back to nought
+  m.tick(GIVE_UP_S + 1); await m._webSync();
+  assert.deepEqual(m.tombstoned(), ['trinityone/pubevent:evtyouth'], 're-anchor: the withdrawal stopped happening');
+  assert.equal(m.emitted[m.emitted.length - 1].held, 0, 'the page claims a copy that was withdrawn is still on the website');
+});
+
+test('F2: a copy the owner ticked "Not on the website" is NOT counted as still on the website', async () => {
+  // The relay drops an opted-out copy at serve time — scripts/gateway.mjs publicFeed filters the church's
+  // copies by share.optOut before it builds anything — so a copy with the tick on is NOT on the website,
+  // whatever the relay still holds. This is also the number the control beside the sentence acts on, so a
+  // count that went on including the ids it had just taken off would leave the line claiming them for ever.
+  const m = mirror({ events: [GOOD1, LOST], copies: { evtlost: LIVE_YOUTH }, share: share({ optOut: ['evtlost'] }) });
+  await pastReporting(m);
+  const said = m.emitted[m.emitted.length - 1];
+  assert.equal(said.blocked, 1, 're-anchor: the page does not say the event could not be published');
+  assert.equal(said.held, 0,
+    'THE PAGE SAYS A COPY THE RELAY NO LONGER SERVES IS STILL ON THE WEBSITE — held reads ' + said.held);
+  // CONTROL: the identical copy without the tick IS counted, so the row above is not passing on an accident
+  const m2 = mirror({ events: [GOOD1, LOST], copies: { evtlost: LIVE_YOUTH }, share: share() });
+  await pastReporting(m2);
+  assert.equal(m2.emitted[m2.emitted.length - 1].held, 1, 'a stuck copy that IS being served stopped being counted');
+});
+
 test('R5 CONTROL: a readable event\'s copy is never withdrawn, however long another one stays stuck', async () => {
   const body = JSON.stringify({ title: 'Harvest supper', date: '2026-10-03', time: '19:30', where: 'The hall', blurb: '', recur: '', day: null });
   const m = mirror({ events: [GOOD1, GOOD2, LOST], copies: { evtsupper: body }, share: share() });

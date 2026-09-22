@@ -3724,14 +3724,26 @@ async function _webSync() {
   // found a groupId on, remembered in w.groupSeen — and honours the owner's "On the website" tick, which is
   // the one positive statement a church has made about a group event being public. Everything else it cannot
   // classify STAYS, and is counted into w.held so the Settings page can say so.
+  //
+  // WHAT w.held COUNTS, and why it is not "the ones we could not classify" (AUDIT-feeds-round4-2026-09-22
+  // F2). The sentence it draws says "N of them are still on your website", so the number has to be the
+  // copies a visitor can still fetch, and only those. Two corrections to what it used to count:
+  //   * a copy this console KNOWS is a group's is left up for the whole ten minutes, and was counted into
+  //     neither half — so the page said one event could not be published and stayed silent about the
+  //     adults-only copy that was still public, which on a console whose relay flaps is for ever (F3);
+  //   * a copy the owner ticked "Not on the website" was counted although the relay had already stopped
+  //     serving it (scripts/gateway.mjs publicFeed filters the church's copies by share.optOut before it
+  //     builds anything). That tick is the control beside this sentence, so a count that kept claiming the
+  //     ids it had just taken off would leave the line up for ever and the control looking dead.
   const shown = new Set(w.share.optIn || []);
+  const offFeed = new Set(w.share.optOut);
   const gaveUp = keyReady && !!w.keyedSince && tNow - w.keyedSince >= WEB_GIVE_UP_S;
   let held = 0;
   for (const id of w.copies.keys()) {
     if (want.has(id)) continue;
     if (w.stuck.has(id)) {
       const groupScoped = w.groupSeen.has(id) && !shown.has(id);
-      if (!(gaveUp && groupScoped)) { if (!groupScoped) held++; continue; }
+      if (!(gaveUp && groupScoped)) { if (!offFeed.has(id)) held++; continue; }
     }
     tombs.push(id);
   }

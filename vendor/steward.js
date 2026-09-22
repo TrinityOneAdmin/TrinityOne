@@ -17601,6 +17601,7 @@ zoo`.split("\n");
     const writes = [], tombs = [];
     for (const [id, body] of want) if (w.copies.get(id) !== body) writes.push([id, body]);
     const shown = new Set(w.share.optIn || []);
+    const offFeed = new Set(w.share.optOut);
     const gaveUp = keyReady && !!w.keyedSince && tNow - w.keyedSince >= WEB_GIVE_UP_S;
     let held = 0;
     for (const id of w.copies.keys()) {
@@ -17608,7 +17609,7 @@ zoo`.split("\n");
       if (w.stuck.has(id)) {
         const groupScoped = w.groupSeen.has(id) && !shown.has(id);
         if (!(gaveUp && groupScoped)) {
-          if (!groupScoped) held++;
+          if (!offFeed.has(id)) held++;
           continue;
         }
       }
