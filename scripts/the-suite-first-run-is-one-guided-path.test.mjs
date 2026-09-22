@@ -308,6 +308,34 @@ test('"Just a relay": the relay wizard → "Back to the Suite" (the primary) →
   } finally { if (c3) c3.stop(); if (named) named.stop(); c.stop(); gw.stop(); }
 });
 
+// ── 3b. the relay wizard opens on a SECOND visit too ─────────────────────────────────────────────────────
+// Found while screenshotting this branch: at 6b6e66d the wizard opened on the first visit to the panel in a
+// webview and never again while still unseen. On a load with the admin token already stored, control.js
+// called maybeFirstRun() synchronously — before `let rswOpen` further down the file existed — and the async
+// block it sat in swallowed the ReferenceError (the first visit's /local-token await had deferred it past
+// that). On the Suite that is every visit after the first: a person who pressed "← Back" beneath the wizard
+// and later chose "Just a relay" from the card got the dashboard, not the wizard the card promised.
+test('the relay wizard opens on a second visit to the panel in the same profile, while it is still unseen',
+  { skip: !CHROME ? 'no chromium' : false, timeout: 90000 }, async () => {
+  const gw = await startGateway();
+  const c = await startChrome(gw.base + '/relay-app/control.html?setup=relay');
+  try {
+    const OPEN = `document.getElementById('relaySetup') && document.getElementById('relaySetup').classList.contains('show')`;
+    await waitFor(c, OPEN, 'the relay wizard on the first visit', 20000);
+    assert.equal(await c.evalIn(`!!localStorage.getItem('to_relay_admin_token')`), true, 'staging: the panel did not store the admin token the second visit relies on');
+    assert.equal(await c.evalIn(`localStorage.getItem('to_relay_setup_seen')`), null, 'staging: the wizard is already marked seen');
+    // leave without answering (the Back beneath the overlay, or the shell's own Back), then come back
+    await c.goto(gw.base + HOME);
+    await launcherSettled(c);
+    assert.equal(await clickId(c, 'setupRelay'), 'ok', 'the launcher did not offer "Just a relay" again — nothing was set up');
+    await waitFor(c, `/control\\.html\\?setup=relay$/.test(location.href)`, 'the relay panel again', 15000);
+    await waitFor(c, `document.readyState === 'complete'`, 'the panel to load', 15000);
+    await sleep(2500);
+    assert.equal(await c.evalIn(OPEN), true,
+      'THE WIZARD DID NOT OPEN ON A SECOND VISIT. The card promised it; the person got the dashboard. At 6b6e66d maybeFirstRun() threw in the temporal dead zone on every load with the token already stored.');
+  } finally { c.stop(); gw.stop(); }
+});
+
 // ── 4. "Just the console" ─────────────────────────────────────────────────────────────────────────────────
 test('"Just the console": the console → a church → "Back to the Suite" → the launcher with two doors',
   { skip: !CHROME ? 'no chromium' : false, timeout: 180000 }, async () => {

@@ -792,6 +792,14 @@
     if (!adminToken) {
       try { const r = await fetch('/local-token', { cache: 'no-store' }); if (r.ok) { const j = await r.json(); if (j && j.token) { adminToken = j.token; localStorage.setItem(TOKEN_KEY, adminToken); } } } catch (e) {}
     }
+    // YIELD ONCE, ALWAYS. With the token already stored this ran synchronously — before the wizard's own
+    // `let rswOpen` / `const RSW_SEEN` (further down this file) existed — so maybeFirstRun() threw a
+    // ReferenceError that this async function turned into a silent rejection, and loadApkStatus() below
+    // never ran. The /local-token await above hid it: the wizard opened on the FIRST visit to this page in a
+    // webview and never on a second visit with the wizard still unseen. Measured 2026-09-22 (scripts/
+    // the-suite-first-run-is-one-guided-path.test.mjs, "a second visit"). One microtask puts every call
+    // below after the whole script has run, on both paths.
+    await undefined;
     loadConfig();
     loadRelayName();
     maybeFirstRun();
