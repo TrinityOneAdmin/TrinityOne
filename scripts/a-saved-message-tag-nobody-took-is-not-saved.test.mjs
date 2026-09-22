@@ -696,3 +696,121 @@ test('THE SCREEN: a cadence the relay accepted is adopted, and the church docume
     'the church document no longer wins. It is the one thing every steward sees, and this screen must ' +
     'follow it rather than a local preference — there is no local preference. Lit: ' + p.lit());
 });
+
+// ── THE TYPE THE SWEEP MISSED: `trinityone/relays`, ON THE SCREEN THAT WRITES IT ─────────────────────────
+// AUDIT-steward-doc-rules-round3-2026-09-22, finding F1. `a4002f5`'s commit message lists eight paths under
+// "CLAUDE.md RULE 2 — THE SWEEP" and `trinityone/relays` is not one of them, although it is one of the six
+// types this branch made church-key-only. Measured on the branch tip before this fix, driving the real
+// DashRelayHistoryCard compiled from app/stew-dashboard.jsx with `actingChurch: 'CHURCHPUB'`:
+//
+//     DELEGATED BUTTONS [label, aria-disabled, disabled] =
+//       [["Copy across",false,true],["Turn on sync",false,false],["Turn off",false,false]]
+//     DELEGATED after "Turn on sync": engine calls = ["syncEnable"]
+//     DELEGATED screen: … Sync could not be switched on — no relay accepted the setting. Nothing is
+//                         mirroring yet; try again.
+//     DELEGATED after "Turn off":     engine calls = ["syncEnable","syncDisable"]
+//     DELEGATED screen: … Sync could not be switched off — no relay accepted the change, so your relays are
+//                         STILL mirroring each other. Try again.
+//
+// Two live, unmarked buttons, and two refusals that tell a steward to retry something that can never
+// succeed — the "Turn off" one in the direction that matters, because that is the button a church presses
+// while decommissioning a box. The engine sentences are right for an OUTAGE on the owner's console and are
+// deliberately unchanged; what was wrong is that a delegated console reached them at all.
+//
+// CLAUDE.md rule 1: THREE markers are asserted here — `aria-disabled`, the padlock glyph and the tooltip —
+// because F3 in the same audit showed that a marker no test can see is a marker that can be deleted with
+// the suite green. Rule 3: the panel is compiled and RENDERED; nothing matches text in app/*.jsx.
+async function syncPanel({ delegated, boxes = 2, syncOn = false }) {
+  const { React, draw } = miniReact();
+  const order = [];
+  const win = {
+    Steward: {
+      actingChurch: delegated ? 'CHURCHPUB' : '',
+      myStewardCaps: () => ['content'],   // a fully-granted delegate: no capability is what refuses here
+      backupState: async () => ({ boxes, online: boxes, entries: boxes, syncOn }),
+      ownRelay: () => 'wss://relay.example.com/relay',
+      // THE ENGINE'S REAL ANSWERS, verbatim from src/steward.src.js — never a stand-in for the decision
+      // under test, which is whether the SCREEN reaches them at all.
+      syncEnable: async () => {
+        order.push('syncEnable');
+        if (delegated) throw new Error('Sync could not be switched on — no relay accepted the setting. Nothing is mirroring yet; try again.');
+        return { relays: boxes };
+      },
+      syncDisable: async () => {
+        order.push('syncDisable');
+        if (delegated) throw new Error('Sync could not be switched off — no relay accepted the change, so your relays are STILL mirroring each other. Try again.');
+        return { relays: 0 };
+      },
+      cloneFromRelay: async () => { order.push('cloneFromRelay'); return { imported: 7 }; },
+      resolveRelayName: async () => ({ url: 'wss://x/relay' }),
+    },
+    useStewardRelays: () => [{ url: 'wss://a/relay', status: 'on' }, { url: 'wss://b/relay', status: 'on' }],
+    localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+    addEventListener() {}, removeEventListener() {},
+  };
+  const mod = loadScreen('app/stew-dashboard.jsx', ['DashRelayHistoryCard'],
+    { ...BASE_GLOBALS(React, win), location: { search: '', host: 'x' } });
+  const render = () => draw(mod.DashRelayHistoryCard, {});
+  // THREE DRAWS AND A TICK: `backup` arrives through an async effect (useRelayBackupState → backupState),
+  // and the two sync buttons do not exist at all until it says the church has two boxes.
+  let tree = render(); tree = render(); await ticks(10); tree = render();
+  const btn = (label) => {
+    const hits = find(tree, n => n.type === 'button' && reads(n).trim() === label);
+    assert.equal(hits.length, 1, `re-anchor this test: expected exactly one "${label}" button, found ${hits.length}`);
+    return hits[0];
+  };
+  return {
+    order,
+    press: async (label) => { btn(label).props.onClick(); await ticks(20); tree = render(); },
+    marked: (label) => !!(btn(label).props || {})['aria-disabled'],
+    // THE PADLOCK, read off the tree rather than off the source. Icon is stubbed to render nothing, but the
+    // harness keeps the component node with its props, so the glyph is visible as `name: 'lock'`.
+    padlocked: (label) => find(btn(label), n => n && n.props && n.props.name === 'lock').length,
+    tip: (label) => String((btn(label).props || {}).title || ''),
+    said: () => reads(tree),
+  };
+}
+
+test('THE SCREEN: a delegated console cannot turn relay sync on or off, and reaches the engine zero times', async () => {
+  const p = await syncPanel({ delegated: true });
+  for (const label of ['Turn on sync', 'Turn off']) {
+    assert.equal(p.marked(label), true,
+      `"${label}" IS STILL OFFERED UNMARKED on a console that can never write trinityone/relays. That ` +
+      'document decides which relay boxes exchange this congregation’s whole corpus (CLAUDE.md rule 10), ' +
+      'so it is church-key-only and this press can reach nothing.');
+    assert.equal(p.padlocked(label), 1,
+      `"${label}" carries no padlock. On a phone there is no hover, so the glyph is the only marking a ` +
+      'steward sees before they press.');
+    assert.match(p.tip(label), /Only the church’s own console can turn relay sync on or off/,
+      `"${label}" lost its tooltip, so on a desktop console nothing says why it is locked. Tooltip: ` + p.tip(label));
+  }
+  await p.press('Turn on sync');
+  assert.deepEqual(p.order, [],
+    'PRESSING "Turn on sync" REACHED THE ENGINE on a delegated console: ' + JSON.stringify(p.order));
+  assert.match(p.said(), /Only the church’s own console can turn relay sync on or off/,
+    'the locked "Turn on sync" button said nothing when it was pressed. Screen read: ' + p.said());
+  assert.doesNotMatch(p.said(), /try again/i,
+    'THE STEWARD IS BEING TOLD TO TRY AGAIN at something that can never succeed. Screen read: ' + p.said());
+  await p.press('Turn off');
+  assert.deepEqual(p.order, [],
+    'PRESSING "Turn off" REACHED THE ENGINE on a delegated console: ' + JSON.stringify(p.order));
+  assert.doesNotMatch(p.said(), /STILL mirroring each other/,
+    'THE WORST SENTENCE ON THIS SCREEN WAS SHOWN TO SOMEBODY WHO CANNOT ACT ON IT. "Turn off" is pressed ' +
+    'while a church is decommissioning a relay or reacting to a seizure; telling a delegated steward their ' +
+    'relays are still mirroring, and to try again, is a dead end. Screen read: ' + p.said());
+});
+
+test('THE SCREEN: the OWNER console still turns relay sync on and off — the other direction', async () => {
+  // Without this, a "fix" that locked the panel for everybody would pass every assertion above while taking
+  // cross-relay sync away from every church that runs two boxes.
+  const p = await syncPanel({ delegated: false });
+  assert.equal(p.marked('Turn on sync'), false, 'the OWNER console has had "Turn on sync" locked');
+  assert.equal(p.marked('Turn off'), false, 'the OWNER console has had "Turn off" locked');
+  assert.equal(p.padlocked('Turn on sync'), 0, 'the OWNER console shows a padlock on a control it may use');
+  await p.press('Turn on sync');
+  assert.deepEqual(p.order, ['syncEnable'], 'the owner console no longer switches sync on: ' + JSON.stringify(p.order));
+  assert.match(p.said(), /✓ Sync on/, 'the owner console no longer reports a successful switch-on. Screen read: ' + p.said());
+  await p.press('Turn off');
+  assert.deepEqual(p.order, ['syncEnable', 'syncDisable'], 'the owner console no longer switches sync off: ' + JSON.stringify(p.order));
+  assert.match(p.said(), /Sync turned off/, 'the owner console no longer reports a successful switch-off. Screen read: ' + p.said());
+});

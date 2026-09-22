@@ -4625,6 +4625,11 @@ function DashAddRelayCard() {
   );
 }
 
+// THE ONE SENTENCE THE SYNC CONTROLS REFUSE WITH, in one place because both of them use it. Same shape as
+// SERMON_OWNER_ONLY beside DashSermons: name the boundary, then name who can. Short on purpose — the page
+// already says what sync is, so the tooltip only has to say who may change it.
+const SYNC_OWNER_ONLY = 'Only the church’s own console can turn relay sync on or off. Ask whoever holds the church key.';
+
 // ── MOVE OR COPY HISTORY: the two things a church does to its relays once in its life, if ever — copy
 //    everything onto a relay that is starting empty, and switch on continuous mirroring between its own
 //    boxes. Two cards, because they are two jobs; one page, because a steward reaches for them together.
@@ -4632,7 +4637,25 @@ function DashRelayHistoryCard() {
   const { backup } = useRelayBackupState();
   const [syncBusy, setSyncBusy] = React.useState(false);
   const [syncMsg, setSyncMsg] = React.useState(null);
+  // ── A DELEGATED CONSOLE LEARNS IT MAY NOT BEFORE IT ASKS ──────────────────────────────────────────────
+  // AUDIT-steward-doc-rules-round3-2026-09-22, finding F1: the rule-2 sweep in a4002f5 missed this type.
+  // Both buttons below write `trinityone/relays`, which this branch made church-key-only — and the registry
+  // says why in CLAUDE.md rule 10's words: that document decides which relay boxes exchange the whole
+  // corpus. The engine's refusals are written for an OUTAGE ("try again"), which is the right sentence when
+  // the owner's console cannot reach a relay and the wrong one for a steward who can never succeed — and
+  // "your relays are STILL mirroring each other. Try again." is that sentence in the direction that matters,
+  // because Turn off is what a church presses while decommissioning a box or reacting to a seizure.
+  //
+  // THE CAPABILITY IS IRRELEVANT AND ONLY `.owner` IS READ, exactly as in DashSermons: no capability a
+  // church can tick lets a delegate write this, so the question is "is this the church's own console",
+  // which is `stewCapState().owner` (`!S.actingChurch`). 'content' is the argument DashSermons passes for
+  // the same reason. It FAILS OPEN the same way the rest of the mechanism does — an owner console is never
+  // locked out, and a roster that has not landed cannot lock one either.
+  const _churchOnly = !stewCapState('content').owner;
   const doSync = async (on) => {
+    // THE FUNNEL, guarded as well as the two controls above it — the same belt-and-braces doUpload has, so
+    // a future caller (a keyboard path, a retry, a second button) cannot reach the engine around them.
+    if (_churchOnly) { setSyncMsg({ ok: false, text: SYNC_OWNER_ONLY }); return; }
     setSyncBusy(true); setSyncMsg(null);
     try { const r = on ? await window.Steward.syncEnable() : await window.Steward.syncDisable(); setSyncMsg({ ok: true, text: on ? '✓ Sync on — your ' + r.relays + ' relays will keep each other in step.' : 'Sync turned off.' }); }
     catch (e) { setSyncMsg({ ok: false, text: e.message || 'Couldn’t update sync.' }); }
@@ -4687,10 +4710,14 @@ function DashRelayHistoryCard() {
         {/* cross-relay sync: the church's own TrinityOne relays continuously exchange their full history */}
       <Panel title="Keep your relays in sync">
         <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 11 }}>Your church’s own relays can continuously exchange their full history — so if one goes offline it catches up when it’s back, and nothing is lost. {backup != null ? (backup.boxes >= 2 ? <b>{backup.boxes} separate relays can sync{backup.syncOn ? ' — sync is on.' : '.'}</b> : 'Add a second relay your church runs to switch this on.') : 'Checking…'}</div>
+        {/* MARKED, NOT HIDDEN — the same choice DashSermons, the nav and the header's "New post" make: a
+            button that vanishes reads as a broken console, a locked one that says why reads as a church
+            that has scoped you. `aria-disabled`, not `disabled`, so the press still lands and can answer
+            on screen — on a phone there is no hover, so a tooltip nobody can reach says nothing. */}
         {backup != null && backup.boxes >= 2 ? (
           <div style={{ display: 'flex', gap: 9 }}>
-            <button onClick={() => doSync(true)} disabled={syncBusy} className="sk-btn sk-btn--clay" style={{ padding: '9px 15px', fontSize: 13 }}>{syncBusy ? 'Saving…' : (backup.syncOn ? 'Re-sync now' : 'Turn on sync')}</button>
-            <button onClick={() => doSync(false)} disabled={syncBusy} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}>Turn off</button>
+            <button onClick={() => doSync(true)} disabled={syncBusy} aria-disabled={_churchOnly || undefined} title={_churchOnly ? SYNC_OWNER_ONLY : undefined} className={'sk-btn ' + (_churchOnly ? 'sk-btn--ghost' : 'sk-btn--clay')} style={{ padding: '9px 15px', fontSize: 13, opacity: _churchOnly ? 0.6 : 1, cursor: _churchOnly ? 'not-allowed' : 'pointer' }}>{_churchOnly ? <Icon name="lock" size={14} color="currentColor" /> : null}{syncBusy ? 'Saving…' : (backup.syncOn ? 'Re-sync now' : 'Turn on sync')}</button>
+            <button onClick={() => doSync(false)} disabled={syncBusy} aria-disabled={_churchOnly || undefined} title={_churchOnly ? SYNC_OWNER_ONLY : undefined} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13, opacity: _churchOnly ? 0.6 : 1, cursor: _churchOnly ? 'not-allowed' : 'pointer' }}>{_churchOnly ? <Icon name="lock" size={14} color="currentColor" /> : null}Turn off</button>
           </div>
         ) : null}
         {syncMsg ? <div style={{ fontSize: 12.5, marginTop: 9, fontWeight: 600, color: syncMsg.ok ? 'var(--sage-ink)' : 'var(--clay-ink)' }}>{syncMsg.text}</div> : null}
