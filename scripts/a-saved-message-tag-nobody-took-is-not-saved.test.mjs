@@ -595,3 +595,104 @@ test('THE SCREEN: the OWNER console still uploads, publishes and removes — the
   await p.press(TRASH_BTN, 'Remove (trash) button');
   assert.equal(p.labelled('Remove'), 1, 'the owner console no longer opens the removal confirmation at all');
 });
+
+// ── THE BACKUP CADENCE IS THE CHURCH'S, AND A PRESS THAT CHANGED NOTHING MUST NOT LOOK LIKE ONE ──────────
+// AUDIT-steward-doc-rules-round2-2026-09-22, finding R2. `057b09d` said, in its message and in the comment
+// it added, that "`freq` is this device's own reminder preference with its own localStorage key — it is not
+// only a view of the church document". Measured on the branch tip, driving the real DashBackup with a real
+// localStorage stub, delegated:
+//
+//     ###AFTER PRESS###       localStorage.backupRemind = weekly
+//     ###AFTER CHURCH DOC###  localStorage.backupRemind = monthly
+//
+// subscribeBackupMeta's handler writes that same key from the church document, four lines below the press.
+// So there is no per-device preference: on a delegated console the press stuck NOWHERE — not church-wide
+// and not locally — while the sentence beside it named only the church-wide half.
+//
+// THESE TESTS SUPPLY `localStorage` EXPLICITLY. BASE_GLOBALS above does not, and the panels call it bare,
+// so every such call lands in its own `catch {}` (round-2 audit R9) — an assertion about the key would be
+// vacuous and green without this.
+async function cadencePanel({ delegated, metaAnswer, start = 'monthly' }) {
+  const { React, draw } = miniReact();
+  const store = { 'trinityone.backupRemind': start };
+  const localStorage = { getItem: (k) => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = String(v); }, removeItem: (k) => { delete store[k]; } };
+  const asked = [];
+  let churchDoc = null;
+  const win = {
+    Steward: {
+      actingChurch: delegated ? 'CHURCHPUB' : '',
+      myStewardCaps: () => ['content'],
+      setBackupMeta: async (at, remind) => { asked.push(remind); return metaAnswer; },
+      subscribeBackupMeta: (cb) => { churchDoc = cb; return () => {}; },
+      mediaSize: async () => ({ count: 0, bytes: 0 }),
+    },
+    localStorage,
+    addEventListener() {}, removeEventListener() {},
+  };
+  const mod = loadScreen('app/stew-dashboard.jsx', ['DashBackup'], { ...BASE_GLOBALS(React, win), localStorage });
+  const render = () => draw(mod.DashBackup, {});
+  let tree = render(); tree = render();
+  const btn = (label) => {
+    const hits = find(tree, n => n.type === 'button' && reads(n).trim() === label);
+    assert.equal(hits.length, 1, `re-anchor this test: expected exactly one "${label}" button, found ${hits.length}`);
+    return hits[0];
+  };
+  return {
+    asked,
+    press: async (label) => { btn(label).props.onClick(); await ticks(14); tree = render(); },
+    marked: (label) => !!(btn(label).props || {})['aria-disabled'],
+    // the segment paints the chosen cadence with the clay fill — which button is lit IS the answer on screen
+    lit: () => ['Off', 'Weekly', 'Monthly'].filter(l => (btn(l).props.style || {}).background === 'var(--clay)').join(','),
+    stored: () => store['trinityone.backupRemind'],
+    arrive: async (remind) => { churchDoc({ at: 1700000000, remind }); await ticks(); tree = render(); },
+    said: () => reads(tree),
+  };
+}
+
+test('THE SCREEN: the cadence segment is locked on a delegated console, and the press changes nothing anywhere', async () => {
+  const p = await cadencePanel({ delegated: true, metaAnswer: false });
+  assert.equal(p.marked('Weekly'), true,
+    'the cadence control is still offered on a console that cannot change it — the relay gates ' +
+    'trinityone/backup-meta: to the church key, so this press can reach nothing');
+  await p.press('Weekly');
+  assert.deepEqual(p.asked, [],
+    'it asked the relay anyway, so the steward waits on a write that is always refused: ' + JSON.stringify(p.asked));
+  assert.equal(p.stored(), 'monthly',
+    'THE PRESS STILL ADOPTED A CADENCE LOCALLY. That key is a cache of the church document — the ' +
+    'subscription handler writes it too — so the press sticks nowhere and the screen disagrees with every ' +
+    'other console until the next document arrives. Stored: ' + p.stored());
+  assert.equal(p.lit(), 'Monthly',
+    'the segment moved to a cadence nothing will ever nudge at. Lit: ' + p.lit());
+  assert.match(p.said(), /Only the church’s own console can save the shared backup record/,
+    'the locked cadence control said nothing when it was pressed. Screen read: ' + p.said());
+});
+
+test('THE SCREEN: a cadence no relay took does not stay on the owner’s screen either', async () => {
+  // The same rule, on the console that IS allowed to write: the segment must show what the church will
+  // actually nudge at, not what this device tried to set.
+  const p = await cadencePanel({ delegated: false, metaAnswer: false });
+  assert.equal(p.marked('Weekly'), false, 'the OWNER console has had its cadence control locked');
+  await p.press('Weekly');
+  assert.deepEqual(p.asked, ['weekly'], 'the owner console stopped publishing the cadence at all: ' + JSON.stringify(p.asked));
+  assert.equal(p.lit(), 'Monthly',
+    'the segment is left on Weekly over a document no relay took, so this console nudges weekly and every ' +
+    'other console monthly, for ever. Lit: ' + p.lit());
+  assert.equal(p.stored(), 'monthly', 'the refused cadence was left in the cache and survives a reload. Stored: ' + p.stored());
+  assert.match(p.said(), /the shared backup record could not be saved/,
+    'the refusal is unreported. Screen read: ' + p.said());
+});
+
+test('THE SCREEN: a cadence the relay accepted is adopted, and the church document still wins', async () => {
+  // The other direction twice over: a working press must work, and the church document — which is what
+  // every other steward sees — must go on overwriting this screen when it arrives.
+  const p = await cadencePanel({ delegated: false, metaAnswer: { id: 'evt' } });
+  await p.press('Weekly');
+  assert.deepEqual(p.asked, ['weekly'], 'the owner console no longer publishes the cadence: ' + JSON.stringify(p.asked));
+  assert.equal(p.lit(), 'Weekly', 'a cadence every relay accepted was put back anyway. Lit: ' + p.lit());
+  assert.equal(p.stored(), 'weekly', 'the accepted cadence was not cached. Stored: ' + p.stored());
+  assert.doesNotMatch(p.said(), /could not be saved|Only the church/, 'an accepted cadence is reported as a failure. Screen read: ' + p.said());
+  await p.arrive('off');
+  assert.equal(p.lit(), 'Off',
+    'the church document no longer wins. It is the one thing every steward sees, and this screen must ' +
+    'follow it rather than a local preference — there is no local preference. Lit: ' + p.lit());
+});

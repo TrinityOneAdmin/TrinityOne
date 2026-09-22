@@ -9191,16 +9191,38 @@ function DashBackup() {
   // the segment move to Weekly while every other console went on nudging monthly, with nothing on any
   // screen saying so. Same shape as the one it sits beside, and [[fix-the-control-not-the-label]] again.
   //
-  // THE LOCAL HALF IS STILL ADOPTED, deliberately: `freq` is this device's own reminder preference with its
-  // own localStorage key, the press must not look like it did nothing, and subscribeBackupMeta overwrites
-  // `freq` from the church document the moment one arrives. What changes is that the CHURCH-WIDE half now
-  // reports itself instead of being assumed.
+  // ⚠ AND THE JUDGEMENT THAT STOOD HERE ON 2026-09-22 WAS MEASURABLY FALSE (round-2 audit, R2, CLAUDE.md
+  // rule 4). It read: "`freq` is this device's own reminder preference with its own localStorage key — it
+  // is not only a view of the church document." There is no per-device preference. FOUR LINES BELOW, in
+  // subscribeBackupMeta's handler, the church document writes THAT SAME KEY:
+  //
+  //     ###AFTER PRESS###       localStorage.backupRemind = weekly
+  //     ###AFTER CHURCH DOC###  localStorage.backupRemind = monthly
+  //
+  // `trinityone.backupRemind` is a CACHE of the church document — read at mount so the segment can paint
+  // before the subscription answers, and overwritten by it the moment it does. So on a delegated console,
+  // where the relay refuses the document, the press stuck NOWHERE: not church-wide, not locally, while the
+  // sentence beside it named only the church-wide half.
+  //
+  // THE CADENCE IS THE CHURCH'S TO SET, and this is the decision, not a workaround: every steward and every
+  // device is meant to show the same nudge (that is the whole reason this document exists), a delegated
+  // console can never write it, and a press that reaches no relay must not leave a different cadence on the
+  // screen from the one the church will actually nudge at. So the control is LOCKED on a delegated console
+  // and says who can, and on the owner's console a refused write puts the segment back where it was.
+  const _metaChurchOnly = !stewCapState('content').owner;
   const setFrequency = async (f) => {
-    setFreq(f); setFreqMsg('');
+    setFreqMsg('');
+    if (_metaChurchOnly) { setFreqMsg(BACKUP_META_OWNER_ONLY); return; }   // nothing adopted: the press cannot change this anywhere
+    const prev = freq;
+    setFreq(f);
     try { localStorage.setItem('trinityone.backupRemind', f); } catch {}
     let ok = true;
     try { if (window.Steward.setBackupMeta) ok = (await window.Steward.setBackupMeta(last, f)) !== false; } catch { ok = false; }
-    if (!ok) setFreqMsg((window.Steward && window.Steward.actingChurch) ? BACKUP_META_OWNER_ONLY : BACKUP_META_NO_RELAY);
+    if (!ok) {
+      setFreq(prev);
+      try { localStorage.setItem('trinityone.backupRemind', prev); } catch {}
+      setFreqMsg(BACKUP_META_NO_RELAY);
+    }
   };
   // church-wide backup state: same 'last backed up' + cadence on every steward/device, not just this one
   React.useEffect(() => {
@@ -9208,6 +9230,8 @@ function DashBackup() {
     return window.Steward.subscribeBackupMeta((m) => {
       if (!m) return;
       if (m.at) setLast((prev) => { const v = Math.max(prev || 0, m.at); try { localStorage.setItem('trinityone.lastBackupAt', String(v)); } catch {} return v; });
+      // THIS IS WHY `trinityone.backupRemind` IS A CACHE AND NOT A PREFERENCE — see setFrequency above.
+      // The church document writes the same key the mount-time read seeds `freq` from.
       if (m.remind) { setFreq(m.remind); try { localStorage.setItem('trinityone.backupRemind', m.remind); } catch {} }
     });
   }, []);
@@ -9309,8 +9333,12 @@ function DashBackup() {
       <div style={{ marginTop: 18, paddingTop: 16, borderTop: '1px solid var(--line)' }}>
         <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>Remind me to back up</div>
         <div style={seg}>
+          {/* MARKED ON A DELEGATED CONSOLE, not hidden — the same choice as DashSermons and _capBtn. The
+              segment goes on showing the CHURCH's cadence, which is the truth and which this console can
+              read (subscribeBackupMeta filters authors:[churchpub], and on a delegated console `pub` IS the
+              church); what it can no longer do is move without changing anything. */}
           {[['off', 'Off'], ['weekly', 'Weekly'], ['monthly', 'Monthly']].map(([k, label]) => (
-            <button key={k} onClick={() => setFrequency(k)} style={{ padding: '8px 15px', borderRadius: 9, border: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, background: freq === k ? 'var(--clay)' : 'transparent', color: freq === k ? '#fff' : 'var(--ink-2)' }}>{label}</button>
+            <button key={k} onClick={() => setFrequency(k)} aria-disabled={_metaChurchOnly || undefined} title={_metaChurchOnly ? BACKUP_META_OWNER_ONLY : undefined} style={{ padding: '8px 15px', borderRadius: 9, border: 'none', cursor: _metaChurchOnly ? 'not-allowed' : 'pointer', opacity: _metaChurchOnly && freq !== k ? 0.55 : 1, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, background: freq === k ? 'var(--clay)' : 'transparent', color: freq === k ? '#fff' : 'var(--ink-2)' }}>{label}</button>
           ))}
         </div>
         {/* BESIDE THE CONTROL, not up beside the backup button: `msg` renders above this whole section, and a
