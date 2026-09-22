@@ -16890,10 +16890,15 @@ zoo`.split("\n");
   var _regGate = null;
   var _openGate = null;
   var _regNeedsName = false;
+  var _regGen = 0;
   function _armRegGate() {
-    if (!_regGate) _regGate = new Promise((r) => {
-      _openGate = r;
-    });
+    if (!_regGate) {
+      _regGen++;
+      _regGate = new Promise((r) => {
+        _openGate = r;
+      });
+    }
+    return _regGen;
   }
   var _regOk = false;
   var _regOkWaiters = [];
@@ -16906,7 +16911,8 @@ zoo`.split("\n");
       }
     });
   }
-  function _openRegGate() {
+  function _openRegGate(gen) {
+    if (gen !== void 0 && gen !== _regGen) return;
     const f = _openGate;
     _openGate = null;
     if (f) {
@@ -22868,7 +22874,7 @@ zoo`.split("\n");
     async selfRegister(name, opts) {
       if (actingChurch) return { ok: false, refused: [], unreachable: [], skipped: "acting as a delegated steward" };
       _regNeedsName = false;
-      _armRegGate();
+      const _gen = _armRegGate();
       try {
         if (!churchSk || !churchPub) return;
         const np = npubEncode(churchPub);
@@ -22949,7 +22955,7 @@ zoo`.split("\n");
         return { ok: accepted, refused, unreachable };
       } finally {
         try {
-          if (!_regNeedsName) _openRegGate();
+          if (!_regNeedsName) _openRegGate(_gen);
         } catch (e) {
         }
       }

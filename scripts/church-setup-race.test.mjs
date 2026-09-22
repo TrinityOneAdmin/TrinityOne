@@ -141,9 +141,15 @@ test('every church document is stamped where it is SIGNED, not on one path', () 
 test('selfRegister opens the gate on every exit path', () => {
   const body = stripComments(fnBody(VENDOR, 'async selfRegister(name, opts) {', 'selfRegister'));
   assert.match(body, /_armRegGate\(\)/, 'selfRegister no longer holds the publish gate');
-  assert.match(body, /finally\s*\{[\s\S]{0,220}?_openRegGate\(\)/,
-    'the gate is opened somewhere other than a finally, so an early return or a throw leaves every ' +
-    'subsequent publish waiting out the bound');
+  // `_openRegGate(_gen)` since AUDIT-round-a F2: the gate carries the generation this call armed, so an
+  // answer for a church abandoned at the PIN gate's Back cannot open the NEXT church's gate. It is still the
+  // finally that opens it, and the ticket must be the one this call took — hence `_gen`, not a bare call.
+  assert.match(body, /finally\s*\{[\s\S]{0,260}?_openRegGate\(_gen\)/,
+    'the gate is opened somewhere other than a finally, or without the generation this call armed, so an ' +
+    'early return or a throw leaves every subsequent publish waiting out the bound');
+  assert.match(body, /const _gen = _armRegGate\(\)/,
+    'selfRegister no longer captures the gate generation it armed, so a stale registration can open a ' +
+    'later church’s gate again (AUDIT-round-a F2)');
   assert.match(body, /_regNeedsName/,
     'a refusal of "name your church first" is treated as a verdict. It is a not-yet: the wizard names the ' +
     'church seconds later and re-registers, and the founding documents should wait for that.');

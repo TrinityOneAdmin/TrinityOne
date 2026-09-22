@@ -2729,12 +2729,23 @@ function skFor(asPub) {
 // the relay is waiting for. Paid at most ONCE: publish() latches the gate open afterwards whichever way it
 // went, so a church whose relay will never accept it is delayed once and never again.
 const REG_GATE_MS = 45000;
-let _regGate = null, _openGate = null, _regNeedsName = false;
+// THE GATE BELONGS TO A CHURCH, AND SAYS SO (AUDIT-round-a-fixes-2026-09-22 F2). `_openRegGate()` used to
+// resolve whatever `_regGate` happened to be, carrying no identity — and `selfRegister`'s finally is fired
+// fire-and-forget from app/steward-root.jsx, so a registration begun for a church that was then ABANDONED at
+// the forced-PIN gate's Back could land after the next `createKey()` and open the NEW church's gate at once
+// (measured: 0 ms, where church #1's first publish held 802 ms — the R5-5 "ten refused writes" shape).
+// `_regGen` is that identity: bumped whenever a FRESH gate is armed, captured by selfRegister at its own
+// `_armRegGate()`, and checked on the way out. An answer from an earlier generation is dropped.
+// `_openRegGate()` with no argument still opens unconditionally — that is discardUnsavedKey's call, which is
+// releasing the gate it is abandoning and must not be second-guessed.
+let _regGate = null, _openGate = null, _regNeedsName = false, _regGen = 0;
 // ARMED THE MOMENT A CHURCH KEY EXISTS, not when registration starts. The first cut armed it inside
 // selfRegister() — but the fix had just removed the selfRegister call at creation (it passed an empty name
 // and could only ever 400), so at the moment the founding documents went out there was no gate at all and
 // all ten writes were refused exactly as before. Arm it where the church begins.
-function _armRegGate() { if (!_regGate) _regGate = new Promise((r) => { _openGate = r; }); }
+// Returns the generation of the gate that is now armed — the caller's ticket for _openRegGate() below. An
+// already-armed gate keeps its generation, so createKey() and the selfRegister that follows it share one.
+function _armRegGate() { if (!_regGate) { _regGen++; _regGate = new Promise((r) => { _openGate = r; }); } return _regGen; }
 // SUCCESS, not "we stopped waiting". The bounded gate below is right for ordinary writes — a church whose
 // relay will never accept it must still be able to work — but it is wrong for the founding documents, whose
 // whole purpose depends on the church existing on the relay first. Releasing those on a timer just races how
@@ -2743,7 +2754,10 @@ function _armRegGate() { if (!_regGate) _regGate = new Promise((r) => { _openGat
 let _regOk = false;
 const _regOkWaiters = [];
 function _markRegOk() { _regOk = true; _regOkWaiters.splice(0).forEach((f) => { try { f(true); } catch (e) {} }); }
-function _openRegGate() { const f = _openGate; _openGate = null; if (f) { try { f(); } catch (e) {} } }
+function _openRegGate(gen) {
+  if (gen !== undefined && gen !== _regGen) return;   // an answer from an abandoned church — not this gate's
+  const f = _openGate; _openGate = null; if (f) { try { f(); } catch (e) {} }
+}
 // EVERY publisher must wait, not just the one you happened to fix. publish() was guarded first and the
 // seeded groups went out anyway, because they travel by _publishToRelays() — the all-relays variant. Two
 // publishers, one gate.
@@ -8786,7 +8800,7 @@ window.Steward = {
     // one stops the junk rows, the other stops any future junk row becoming authority.
     if (actingChurch) return { ok: false, refused: [], unreachable: [], skipped: 'acting as a delegated steward' };
     _regNeedsName = false;
-    _armRegGate();
+    const _gen = _armRegGate();   // the gate this call belongs to; the finally below opens only THAT one
     try {
     if (!churchSk || !churchPub) return;
     const np = npubEncode(churchPub);
@@ -8903,7 +8917,9 @@ window.Steward = {
     } finally {
       // Open it as soon as we know where we stand — accepted, or refused for a reason naming the church will
       // not cure. Only the missing-name refusal leaves it shut, and publish() bounds that wait anyway.
-      try { if (!_regNeedsName) _openRegGate(); } catch (e) {}
+      // `_gen` is the gate this call armed: if the church it was for has since been abandoned at the PIN
+      // gate's Back and another one started, this is a stale answer and opens nothing (F2 above).
+      try { if (!_regNeedsName) _openRegGate(_gen); } catch (e) {}
     }
   },
   // register this church with ONE specific relay by PROVING key ownership (NIP-98 signed by the church key,

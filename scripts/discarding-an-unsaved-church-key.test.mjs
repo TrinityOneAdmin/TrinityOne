@@ -145,7 +145,7 @@ function engineWithRealGate(regGateMs) {
     _loadBoxHosts: () => {}, _refreshBoxHostsUs: () => {}, _gate: { refresh() {}, admit: () => [] }, relaysRaw: () => [],
     _resetChurchScopedState: () => {},
     pool: { relays: new Map(), close: () => {} },
-    needsPin: false,
+    needsPin: false, actingChurch: false,
     window: { Steward, dispatchEvent: () => {}, CustomEvent: function (type, init) { this.type = type; this.detail = init && init.detail; } },
     sk: null, pub: null, churchSk: null, churchPub: null, currentMnemonic: null,
     setTimeout, Date,
@@ -158,20 +158,21 @@ function engineWithRealGate(regGateMs) {
     set: (t, k, v) => { t[k] = v; return true; },
   });
   // the gate's own state, declared where the lifted functions close over it — as in the bundle
-  const src = 'let _regGate = null, _openGate = null, _proofWaited = false; const REG_GATE_MS = ' + regGateMs + ', PROOF_GATE_MS = 0;\n' +
+  const src = 'let _regGate = null, _openGate = null, _proofWaited = false, _regNeedsName = false, _regGen = 0; const REG_GATE_MS = ' + regGateMs + ', PROOF_GATE_MS = 0;\n' +
     fnBody(SHIP, 'function _armRegGate()', '_armRegGate') + '\n' +
-    fnBody(SHIP, 'function _openRegGate()', '_openRegGate') + '\n' +
+    fnBody(SHIP, 'function _openRegGate(gen)', '_openRegGate') + '\n' +
     fnBody(SHIP, 'function _awaitFirstAdmission(ms)', '_awaitFirstAdmission') + '\n' +
     fnBody(SHIP, 'async function _waitForRegistration()', '_waitForRegistration') + '\n' +
     fnBody(SHIP, 'function setKey(mnemonic)', 'setKey') + '\n' +
     fnBody(SHIP, 'function _setNeedsPin(v)', '_setNeedsPin') + '\n' +
     fnBody(SHIP, 'function _boxHostsKey()', '_boxHostsKey') + '\n' +
-    'return ({ setKey, _setNeedsPin, _waitForRegistration, gate: () => _regGate, ' + fnBody(SHIP, 'createKey() {', 'createKey') + ', ' +
-    fnBody(SHIP, 'discardUnsavedKey() {', 'discardUnsavedKey') + ' });';
+    'return ({ setKey, _setNeedsPin, _waitForRegistration, _armRegGate, _openRegGate, gate: () => _regGate, gen: () => _regGen, ' + fnBody(SHIP, 'createKey() {', 'createKey') + ', ' +
+    fnBody(SHIP, 'discardUnsavedKey() {', 'discardUnsavedKey') + ', ' +
+    fnBody(SHIP, 'async selfRegister(name, opts) {', 'selfRegister') + ' });';
   const api = new Function('scope', 'with (scope) { ' + src + ' }')(proxy);
   // how long a publish would be held by the gate right now (nobody registers, so a held write waits the budget)
   const firstPublishWait = async () => { const t0 = Date.now(); await api._waitForRegistration(); return Date.now() - t0; };
-  return { ...api, firstPublishWait };
+  return { ...api, scope, firstPublishWait };
 }
 
 test('after a Back, a SECOND "Start a new church" is gated again: its first publish waits on registration like the first church’s did', async () => {
@@ -192,4 +193,68 @@ test('after a Back, a SECOND "Start a new church" is gated again: its first publ
   const second = await e.firstPublishWait();
   assert.ok(second >= MS - 100, 'CHURCH #2, CREATED AFTER A BACK, HAS NO FOUNDING-WRITE GATE (AUDIT-suite-B5-B6 D1): its first publish waited ' + second + ' ms; church #1’s waited ' + control + ' ms. Start → Back → Start on the Suite founds a church whose first writes the relay refuses (the R5-5 shape).');
   assert.notEqual(g2, g1, 'after a Back the next church could not arm its own gate: _regGate is still church #1’s resolved promise, so _armRegGate() was a no-op');
+});
+
+// ── THE GATE BELONGS TO A CHURCH (AUDIT-round-a-fixes-2026-09-22 F2) ────────────────────────
+// Row 5 proves the next church can ARM a gate. It does not stop somebody else OPENING it. `_openRegGate()`
+// carried no identity — it resolved whatever `_regGate` happened to be — and `selfRegister`'s `finally`
+// (`if (!_regNeedsName) _openRegGate();`) is fired fire-and-forget from app/steward-root.jsx (`adopt()` and
+// `initChurch()`), so a registration begun for the ABANDONED church could land after the Back and after the
+// next `createKey()` and open church #2's gate at once. Measured by the auditor on the shipped bundle:
+// control 801 ms, row 5's path 802 ms, and the stale-answer path 0 ms — church #2 ungated.
+//
+// Reachable, and the two conditions correlate the wrong way: Restore a church → `adopt()` fires
+// `selfRegister('')` without awaiting → forced-PIN gate → "Go back" → "Start a new church". A relay that is
+// merely UNREACHABLE leaves `_regNeedsName` false, so the `finally` does call `_openRegGate()` — and an
+// unreachable relay is also what makes the call slow enough to still be in flight.
+//
+// Both rows below run the SHIPPED `selfRegister` out of vendor/steward.js, not a stand-in for its `finally`.
+
+test('a registration left over from the ABANDONED church cannot open the NEXT church\'s gate', async () => {
+  const MS = 800;
+  // control: a church founded with no Back at all — its first publish is held for the whole budget
+  const c = engineWithRealGate(MS);
+  c.createKey();
+  const control = await c.firstPublishWait();
+  assert.ok(control >= MS - 100, 're-anchor: church #1’s first publish was not held by the gate (' + control + ' ms)');
+
+  const e = engineWithRealGate(MS);
+  e.createKey();                                  // church #1 — createKey arms its gate
+  const g1 = e.gate();
+  // The Back happens while selfRegister is INSIDE: after `_armRegGate()`, before its `finally`. The shipped
+  // order is `_armRegGate(); try { if (!churchSk || !churchPub) return; … } finally { … _openRegGate(); }`,
+  // so the read of `churchSk` is exactly that instant — which is why the stub is read there and not earlier.
+  let back = null, backSk = e.scope.churchSk;
+  Object.defineProperty(e.scope, 'churchSk', { configurable: true,
+    get() {
+      if (back === null) {
+        back = e.discardUnsavedKey();             // "Go back — nothing has been created yet"
+        e.createKey();                            // "Start a new church" — church #2 arms its own gate
+        return null;                              // …and the abandoned registration falls through to its finally
+      }
+      return backSk;
+    },
+    set(v) { backSk = v; } });
+  await e.selfRegister('');
+  assert.equal(back, true, 're-anchor: the staged Back never happened inside selfRegister, so this row measures nothing');
+  const g2 = e.gate();
+  assert.notEqual(g2, g1, 're-anchor: church #2 did not arm a gate of its own (that is row 5’s defect, not this one)');
+  const second = await e.firstPublishWait();
+  assert.ok(second >= MS - 100, 'A REGISTRATION BEGUN FOR THE ABANDONED CHURCH OPENED CHURCH #2’S GATE (AUDIT-round-a F2): its first publish waited ' + second + ' ms; church #1’s waited ' + control + ' ms. Restore → Back → Start founds a church whose first writes the relay refuses (the R5-5 shape).');
+});
+
+test('the ordinary single-church path still opens its gate: the registration that belongs to this church opens it, once, and nothing hangs', async () => {
+  const LONG = 60000;                              // far longer than this test would tolerate if the gate never opened
+  const e = engineWithRealGate(LONG);
+  e.createKey();
+  assert.ok(e.gate() instanceof Promise, 're-anchor: createKey did not arm the gate');
+  e.scope.churchSk = null;                         // the early return inside selfRegister; its finally still runs
+  await e.selfRegister('');
+  const t0 = Date.now();
+  const first = await e.firstPublishWait();
+  assert.ok(first < 2000, 'THE GATE NEVER OPENED FOR THE CHURCH THAT REGISTERED: the first publish waited ' + first + ' ms of a ' + LONG + ' ms budget — church creation would hang on its own founding writes, which is worse than the race this guards against.');
+  assert.equal(e.gate(), null, 'the gate was not latched open after the wait — every later publish would pay it again');
+  const secondWait = await e.firstPublishWait();
+  assert.ok(secondWait < 200, 'a later publish paid the gate a second time (' + secondWait + ' ms): the once-per-session latch is gone');
+  assert.ok(Date.now() - t0 < 5000, 'staging: the whole ordinary path took longer than five seconds');
 });
