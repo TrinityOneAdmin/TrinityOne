@@ -3522,8 +3522,13 @@ function _webGroupSeen(w, id, isGroup, ts) {
 //
 // So the moment an id was FIRST SEEN STUCK is kept per church beside groupSeen, and the budget is measured
 // from it. Three things this must not become:
-//   * it is only ever written while the key ring is READY, so a console waiting on its name-key envelope
-//     still spends nothing — round 3's F1c, which a clock started during the wait would quietly undo;
+//   * A RING THAT HAS NOT ARRIVED STOPS THE CLOCK, it does not merely fail to start it. Guarding only the
+//     creation of an entry left one ALREADY ON DISK accruing through the whole wait, so a console that cold
+//     booted onto a thin pipe with nine minutes already spent withdrew the copy about seven seconds after
+//     its ring landed — round 3's F1c, undone by the back door. `_nameKeyRing` starts empty on every cold
+//     boot and the three streams this watch reads can reach EOSE before the envelope does, so that is the
+//     ordinary shape of a slow start. The cost is that a cold boot restarts the ten minutes; a WATCH
+//     restart (the connection bump this whole fix is about) does not, because it does not empty the ring;
 //   * it is dropped the moment the id stops being stuck, so the ten minutes are ten UNBROKEN minutes and
 //     not a total accumulated across periods when the document opened perfectly well;
 //   * a timestamp in the future — a device whose clock was set back — is pulled down to now rather than
@@ -3546,7 +3551,7 @@ function _webStuckLoad(cp) {
 function _webStuckClock(w, tNow, keyReady) {
   let changed = false;
   for (const id of [...w.stuckAt.keys()]) {
-    if (!w.stuck.has(id)) { w.stuckAt.delete(id); changed = true; }
+    if (!w.stuck.has(id) || !keyReady) { w.stuckAt.delete(id); changed = true; }
     else if (w.stuckAt.get(id) > tNow) { w.stuckAt.set(id, tNow); changed = true; }
   }
   if (keyReady) for (const id of w.stuck) if (!w.stuckAt.has(id)) { w.stuckAt.set(id, tNow); changed = true; }

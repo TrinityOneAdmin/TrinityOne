@@ -618,6 +618,38 @@ test('F3 CONTROL: a key that has NOT ARRIVED still spends nothing, however many 
   assert.ok((await flap({ sessions: 12, minutes: 9, store: store2 })).length, 're-anchor: the flap never withdraws anything at all now');
 });
 
+test('F3: a name-key envelope still in flight PAUSES a clock that is already running', async () => {
+  // The bullet the first version of this fix claimed and did not have. Guarding only the CREATION of an
+  // entry behind the ring left a clock ALREADY ON DISK accruing through the whole wait, so a console that
+  // cold-booted onto a thin pipe with nine minutes already spent withdrew the copy seconds after its ring
+  // landed — total observation with a ring in hand and the document shut: about seven seconds. MEASURED
+  // against the bundle at 1e05677: 600 s with an empty ring, then 7 s with the key, tombstoned the copy.
+  // _nameKeyRing starts EMPTY on every cold boot and is filled by a separate subscription, and the three
+  // streams this watch reads can reach EOSE before that envelope lands — so this is the ordinary shape of a
+  // slow start, not a corner. A ring that has not arrived must not only fail to start the clock; it must
+  // stop the one that is running.
+  const store = new Map();
+  const first = mirror({ events: [GOOD1, GROUP_READABLE], copies: { evtyouth: LIVE_YOUTH }, share: share({ optIn: ['evtyouth'] }), store });
+  await first._webSync();
+  const stuck = mirror({ events: [GOOD1, GROUP_LOST], copies: { evtyouth: LIVE_YOUTH }, share: share(), store, at: 1790001000 });
+  await stuck._webSync(); stuck.tick(9 * 60); await stuck._webSync();          // nine minutes, written down
+  assert.ok(String(store.get('trinityone.webstuck.CP') || '').includes('evtyouth'), 're-anchor: nothing was written down to carry over');
+  // …and now a cold boot: the same console, the same storage, the name-key envelope still in flight
+  const cold = mirror({ events: [GOOD1, GROUP_LOST], copies: { evtyouth: LIVE_YOUTH }, share: share(), store, ring: [], at: 1790001540 });
+  await cold._webSync();
+  assert.equal(store.get('trinityone.webstuck.CP'), '[]',
+    'THE CLOCK WENT ON RUNNING WHILE THE KEY RING WAS EMPTY — the wait for the envelope is being counted as time the document was shut');
+  cold.tick(GIVE_UP_S); await cold._webSync();
+  assert.deepEqual(cold.tombstoned(), [], 're-anchor: waiting for the envelope withdrew something by itself');
+  cold.ring.push(KEY_OURS);                                                    // the envelope lands; it still will not open
+  cold.tick(BLOCKED_AFTER_S + 1); await cold._webSync();
+  assert.deepEqual(cold.tombstoned(), [],
+    'A CONSOLE WITHDREW THE COPY SECONDS AFTER ITS KEY RING LANDED, on a budget it spent waiting for that very ring');
+  // …and the ten minutes then run from the moment the ring was in hand, as they are meant to
+  cold.tick(GIVE_UP_S + 1); await cold._webSync();
+  assert.deepEqual(cold.tombstoned(), ['trinityone/pubevent:evtyouth'], 're-anchor: the clock never starts again once it has been paused');
+});
+
 test('F3: the persisted clock is cleared the moment the document opens again', async () => {
   // Ten UNBROKEN minutes. A console that was stuck for nine minutes, read the document, and lost it again
   // must wait a fresh ten — not act on the nine it remembered from before the key came back.

@@ -17389,7 +17389,7 @@ zoo`.split("\n");
   function _webStuckClock(w, tNow, keyReady) {
     let changed = false;
     for (const id of [...w.stuckAt.keys()]) {
-      if (!w.stuck.has(id)) {
+      if (!w.stuck.has(id) || !keyReady) {
         w.stuckAt.delete(id);
         changed = true;
       } else if (w.stuckAt.get(id) > tNow) {
