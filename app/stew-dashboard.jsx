@@ -8407,6 +8407,21 @@ const CHATTAG_PRAYER = { id: 'prayer', label: 'Prayer request', icon: 'pray', ac
 // plaintext copy of every event not ticked "Not on the website" while this is on, and tombstones every copy
 // when it goes off; the relay serves the copies at the address shown, to anyone, with no login. Rule 3:
 // nothing here is asserted by matching this file's text — the browser test drives the real switch.
+// WHAT "COULD NOT BE PUBLISHED" ACTUALLY MEANS, one short sentence per cause. Until 2026-09-22 there were
+// two sentences for four causes, and the one that ran three times out of four sent a church looking for a
+// name key it already held (audit R4): a damaged copy, and a document that unsealed perfectly but held no
+// event, both read as "sealed with a church key this console does not have". The engine
+// (src/steward.src.js _webWhyStuck) now names what happened; these are the words for it. `key` says what was
+// observed rather than naming a cause, because a wrong key and a byte flipped inside a whole payload fail
+// the identical check and cannot be told apart. Copy rule (owner, 2026-09-10): one plain sentence, no
+// instructions — what to DO about it belongs in help.
+const WEB_BLOCKED_WHY = {
+  key: ['no church key on this console will open it.', 'no church key on this console will open them.'],
+  damaged: ['its saved copy is damaged.', 'their saved copies are damaged.'],
+  contents: ['it opened, but there was no event inside.', 'they opened, but there was no event inside.'],
+  shape: ['its details could not be read.', 'their details could not be read.'],
+  mixed: ['its details could not be read.', 'they could not be read, for more than one reason.'],
+};
 function DashWebsitePanel({ church }) {
   const [share, setShare] = React.useState(null);   // null until the engine has answered
   const [busy, setBusy] = React.useState(false);
@@ -8416,9 +8431,7 @@ function DashWebsitePanel({ church }) {
   const known = !!(share && share.known);
   const on = !!(share && share.calendar);
   const blocked = (share && share.blocked) || 0;
-  const whyBlocked = (share && share.blockedWhy) === 'shape'
-    ? (blocked === 1 ? 'its details could not be read.' : 'their details could not be read.')
-    : (blocked === 1 ? 'it is sealed with a church key this console does not have.' : 'they are sealed with a church key this console does not have.');
+  const whyBlocked = (WEB_BLOCKED_WHY[(share && share.blockedWhy)] || WEB_BLOCKED_WHY.shape)[blocked === 1 ? 0 : 1];
   const url = (window.Steward.websiteFeedUrl && window.Steward.websiteFeedUrl()) || '';
   const toggle = async () => {
     if (busy || !known) return;

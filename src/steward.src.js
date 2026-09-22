@@ -3537,10 +3537,36 @@ function _webEnsure(restart) {
 // published nor tombstoned, the rest are mirrored, and once the retries are spent the Settings page says how
 // many and why. `null` still means "a stream has not finished", which is the only true "decide nothing".
 const WEB_BLOCKED_AFTER = 3;   // syncs with the same event stuck before it is reported — the name key is often merely LATE
-// Why an event would not open, from the document itself: sealed under a key we do not hold, or not a
-// document at all. Both make _openChurchDoc return null; only the first resolves itself when a key arrives.
+// IS THIS A WHOLE SEALED PAYLOAD — asked with no key at all. NIP-44 v2 is base64 of
+// [version 2][nonce 32][padded ciphertext][mac 32], 132 to 87472 base64 characters, and '#' is NIP-44's own
+// marker for a version nobody should try to read. A payload that fails THIS could never be opened by any key,
+// which is the one half of "we could not unseal it" that can honestly be told apart from a missing key. The
+// other half cannot: a byte flipped inside an otherwise whole payload fails the same MAC check a wrong key
+// does, and both raise the identical "invalid MAC" (measured). So this answers only what it can answer.
+function _sealIsWhole(ct) {
+  const s = String(ct || '');
+  if (s.length < 132 || s.length > 87472 || s[0] === '#') return false;
+  try { return atob(s).charCodeAt(0) === 2; } catch (e) { return false; }
+}
+// WHY AN EVENT WOULD NOT OPEN, said honestly. The first version asked one question — "does the document have
+// a string .e field?" — and answered 'key' whenever it did. So a copy whose bytes were damaged, and a
+// document that unsealed perfectly with the key we hold but held no event, BOTH told the church to go and
+// find a name key it already has (audit R4). Four answers now, each of them something that happened:
+//   'shape'    — not a sealed document at all: it would not parse, or it was the literal null
+//   'damaged'  — the sealed text is not a whole payload, so no key could open it
+//   'key'      — a whole payload that no name key this console holds will unseal
+//   'contents' — it unsealed, and what came out was not an event
+// 'key' deliberately does not claim the key is MISSING, for the reason in _sealIsWhole above; the sentence
+// the page draws from it reports what was observed and leaves the cause open.
 function _webWhyStuck(raw) {
-  try { const o = JSON.parse(String(raw || '')); return (o && typeof o.e === 'string') ? 'key' : 'shape'; } catch (e) { return 'shape'; }
+  let o = null;
+  try { o = JSON.parse(String(raw || '')); } catch (e) { return 'shape'; }
+  if (!o || typeof o !== 'object' || typeof o.e !== 'string') return 'shape';
+  if (!_sealIsWhole(o.e)) return 'damaged';
+  // If ANY key opens it, the fault is what was inside: _openChurchDoc answers null after a successful unseal
+  // only when the plaintext will not parse, or parses to null.
+  for (const k of _nameKeyRing) { try { nip44d(o.e, _unhex(k)); return 'contents'; } catch (e) {} }
+  return 'key';
 }
 // What the relay SHOULD hold, from what this console knows: Map(id -> body) while the switch is on, empty
 // otherwise. `null` means "do not decide yet" — a stream has not finished. Events this console cannot open
@@ -3555,7 +3581,15 @@ function _webDesired(w) {
   for (const ev of w.events.values()) {
     if (!ev || !WEB_ID_OK.test(String(ev.id || ''))) continue;
     let c = null; try { c = _openChurchDoc(ev.raw); } catch (e) { c = null; }
-    if (c === null) { w.stuck.add(ev.id); if (!w.stuckWhy) w.stuckWhy = _webWhyStuck(ev.raw); continue; }   // undecided for THIS id
+    // undecided for THIS id. TWO STUCK EVENTS OF DIFFERENT CAUSES get 'mixed' rather than the first one's
+    // cause: the old rule kept only the first (`if (!w.stuckWhy)`), so "2 events … are sealed with a church
+    // key this console does not have" was drawn over one of each, naming a cause that was true of one of them.
+    if (c === null) {
+      w.stuck.add(ev.id);
+      const why = _webWhyStuck(ev.raw);
+      w.stuckWhy = !w.stuckWhy || w.stuckWhy === why ? why : 'mixed';
+      continue;
+    }
     if (held.has(ev.id)) continue;
     if (!c || typeof c !== 'object' || !/^\d{4}-\d{2}-\d{2}$/.test(String(c.date || ''))) continue;
     // A GROUP EVENT IS OFF THE WEBSITE UNLESS TICKED ON (see WEB_DEFAULT). The groupId lives in the SEALED

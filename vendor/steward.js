@@ -17487,13 +17487,32 @@ zoo`.split("\n");
     return w;
   }
   var WEB_BLOCKED_AFTER = 3;
-  function _webWhyStuck(raw) {
+  function _sealIsWhole(ct) {
+    const s = String(ct || "");
+    if (s.length < 132 || s.length > 87472 || s[0] === "#") return false;
     try {
-      const o = JSON.parse(String(raw || ""));
-      return o && typeof o.e === "string" ? "key" : "shape";
+      return atob(s).charCodeAt(0) === 2;
+    } catch (e) {
+      return false;
+    }
+  }
+  function _webWhyStuck(raw) {
+    let o = null;
+    try {
+      o = JSON.parse(String(raw || ""));
     } catch (e) {
       return "shape";
     }
+    if (!o || typeof o !== "object" || typeof o.e !== "string") return "shape";
+    if (!_sealIsWhole(o.e)) return "damaged";
+    for (const k of _nameKeyRing) {
+      try {
+        decrypt3(o.e, _unhex(k));
+        return "contents";
+      } catch (e) {
+      }
+    }
+    return "key";
   }
   function _webDesired(w) {
     w.stuck = /* @__PURE__ */ new Set();
@@ -17513,7 +17532,8 @@ zoo`.split("\n");
       }
       if (c === null) {
         w.stuck.add(ev.id);
-        if (!w.stuckWhy) w.stuckWhy = _webWhyStuck(ev.raw);
+        const why = _webWhyStuck(ev.raw);
+        w.stuckWhy = !w.stuckWhy || w.stuckWhy === why ? why : "mixed";
         continue;
       }
       if (held.has(ev.id)) continue;

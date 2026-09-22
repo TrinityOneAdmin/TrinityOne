@@ -36,6 +36,7 @@ function mirror({ events, copies, share }) {
   const body = [
     stmt(src, 'var WEB_ID_OK = ', 'WEB_ID_OK'),
     stmt(src, 'var WEB_BLOCKED_AFTER = ', 'WEB_BLOCKED_AFTER'),
+    fnBody(src, 'function _sealIsWhole', '_sealIsWhole'),
     fnBody(src, 'function _webWhyStuck', '_webWhyStuck'),
     fnBody(src, 'function _openChurchDoc', '_openChurchDoc'),
     fnBody(src, 'function _webCopyBody', '_webCopyBody'),
@@ -92,6 +93,10 @@ const GOOD1 = { id: 'evtsupper', raw: sealed({ title: 'Harvest supper', date: '2
 const GOOD2 = { id: 'evtfair', raw: sealed({ title: 'Christmas fair', date: '2026-12-05', time: '', where: 'The green', blurb: '' }, KEY_OURS), ts: 11 };
 const LOST = { id: 'evtlost', raw: sealed({ title: 'Old meeting', date: '2026-11-01', time: '10:00', where: 'The vestry', blurb: '' }, KEY_LOST), ts: 12 };
 const JUNK = { id: 'evtjunk', raw: 'not a document at all', ts: 13 };
+// R4's other two causes. DAMAGED: the key is fine and the stored text is not a whole payload (truncated).
+// CONTENTS: it unseals with the key we hold and what comes out is not an event.
+const DAMAGED = { id: 'evtdamaged', raw: JSON.stringify({ e: JSON.parse(GOOD1.raw).e.slice(0, 40) }), ts: 14 };
+const CONTENTS = { id: 'evtcontents', raw: JSON.stringify({ e: nip44e('this is not json at all', unhex(KEY_OURS)) }), ts: 15 };
 
 test('before all: the real nip44', async () => { _n44 = await import('nostr-tools/nip44'); assert.ok(_n44.decrypt); });
 
@@ -138,6 +143,41 @@ test('a document that is not a document at all is reported as such', async () =>
   assert.deepEqual(m.dtags(), ['trinityone/pubevent:evtsupper'], 'the good event was not published alongside it');
 });
 
+// ── R4: each cause is named, and only the one that happened ──────────────────────────────────────────────
+// AUDIT-feeds-round2-2026-09-22. _webWhyStuck asked only whether the document HAD a string `.e` field, so
+// 'key' meant "it looked sealed and we could not open it" and the page turned that into "it is sealed with a
+// church key this console does not have" — measured false for a damaged copy and for a document that
+// unsealed perfectly and held no event. A church chasing a name key it already holds is the cost.
+test('R4: each of the four causes is reported as itself, not all as a missing key', async () => {
+  const causes = [[LOST, 'key'], [DAMAGED, 'damaged'], [CONTENTS, 'contents'], [JUNK, 'shape']];
+  for (const [ev, why] of causes) {
+    const m = mirror({ events: [GOOD1, ev], copies: {}, share: share() });
+    for (let i = 0; i < 6; i++) await m._webSync();
+    const last = m.emitted[m.emitted.length - 1];
+    assert.ok(last, ev.id + ': the steward is never told at all');
+    assert.equal(last.blocked, 1, ev.id + ': ' + last.blocked + ' blocked, not 1');
+    assert.equal(last.blockedWhy, why, `${ev.id} IS REPORTED AS "${last.blockedWhy}" WHEN WHAT HAPPENED IS "${why}"`);
+    assert.deepEqual(m.dtags(), ['trinityone/pubevent:evtsupper'], ev.id + ': the readable event was not published beside it');
+  }
+  // CONTROL, and the point of the whole round: 'damaged' and 'contents' used to be 'key'.
+  assert.notEqual(causes[1][1], 'key'); assert.notEqual(causes[2][1], 'key');
+});
+
+test('R4: two stuck events of DIFFERENT causes do not have one of them named for both', async () => {
+  for (const pair of [[LOST, JUNK], [JUNK, LOST], [DAMAGED, CONTENTS]]) {
+    const m = mirror({ events: [GOOD1, ...pair], copies: {}, share: share() });
+    for (let i = 0; i < 6; i++) await m._webSync();
+    const last = m.emitted[m.emitted.length - 1];
+    assert.equal(last.blocked, 2, 'two events should be blocked, not ' + last.blocked);
+    assert.equal(last.blockedWhy, 'mixed',
+      `TWO CAUSES, ONE NAMED: the page would say "${pair.map(p => p.id).join(' + ')}" are both "${last.blockedWhy}"`);
+  }
+  // CONTROL: two stuck events of the SAME cause still name that cause.
+  const same = mirror({ events: [GOOD1, LOST, { ...LOST, id: 'evtlost2' }], copies: {}, share: share() });
+  for (let i = 0; i < 6; i++) await same._webSync();
+  assert.equal(same.emitted[same.emitted.length - 1].blockedWhy, 'key', 'two of one cause stopped naming it');
+});
+
 test('CONTROL: with every event readable nothing is blocked and nothing is emitted', async () => {
   const m = mirror({ events: [GOOD1, GOOD2], copies: {}, share: share() });
   for (let i = 0; i < 6; i++) await m._webSync();
@@ -147,7 +187,12 @@ test('CONTROL: with every event readable nothing is blocked and nothing is emitt
 
 // ── the screen: the real DashWebsitePanel ────────────────────────────────────────────────────────────────
 function panel(snapshot) {
-  const JS = transformSync(DASH.slice(DASH.indexOf('function DashWebsitePanel({ church }) {'), DASH.indexOf('window.DashWebsitePanel = DashWebsitePanel;')),
+  // The slice starts at the WHY TABLE, not at the component: the sentences live in a module-level const
+  // beside it and a slice that began at `function DashWebsitePanel` would render into a ReferenceError.
+  const from = DASH.indexOf('const WEB_BLOCKED_WHY = {');
+  assert.notEqual(from, -1, 'app/stew-dashboard.jsx: WEB_BLOCKED_WHY is gone — re-anchor this lift');
+  assert.ok(from < DASH.indexOf('function DashWebsitePanel({ church }) {'), 're-anchor: the why table moved below the panel');
+  const JS = transformSync(DASH.slice(from, DASH.indexOf('window.DashWebsitePanel = DashWebsitePanel;')),
     { loader: 'jsx', jsx: 'transform', jsxFactory: 'h', jsxFragment: 'Frag' }).code;
   const states = []; let idx = 0;
   const React = {
@@ -179,10 +224,35 @@ function panel(snapshot) {
 test('THE SCREEN: Settings → Your website says how many events could not be published, and why', () => {
   const said = panel({ ...share(), known: true, blocked: 1, blockedWhy: 'key' });
   assert.match(said, /1 event could not be published/, 'THE PAGE SAYS NOTHING about the event the mirror skipped — the switch reads "On" and one event is silently missing from the church\'s website');
-  assert.match(said, /church key this console does not have/, 'the page gives no reason');
+  assert.match(said, /no church key on this console will open it/, 'the page gives no reason');
   const two = panel({ ...share(), known: true, blocked: 2, blockedWhy: 'shape' });
   assert.match(two, /2 events could not be published/, 'the count is not the engine\'s');
   assert.match(two, /details could not be read/, 'the reason is not the engine\'s');
+});
+
+test('THE SCREEN (R4): every cause gets its own line, and none of them sends a church after a key it holds', () => {
+  // Rule 1, the point of use: these sentences are the ONLY place a church learns what happened. The four
+  // causes must read as four different things, and the three that are not about a key must not mention one.
+  const said = (why, n = 1) => panel({ ...share(), known: true, blocked: n, blockedWhy: why });
+  assert.match(said('damaged'), /its saved copy is damaged/, 'a DAMAGED copy is not named as damaged');
+  assert.match(said('contents'), /it opened, but there was no event inside/, 'a document that OPENED is not said to have opened');
+  assert.match(said('shape'), /its details could not be read/);
+  assert.match(said('key'), /no church key on this console will open it/);
+  for (const why of ['damaged', 'contents', 'shape']) {
+    assert.doesNotMatch(said(why), /church key/,
+      `"${why}" STILL SENDS THE CHURCH LOOKING FOR A NAME KEY — the key is fine and the console said it was not`);
+  }
+  // it is also not allowed to CLAIM the key is missing when it cannot know that (a wrong key and a flipped
+  // byte inside a whole payload fail the identical check)
+  assert.doesNotMatch(said('key'), /does not have|missing/, 'the "key" line asserts a cause it cannot distinguish');
+  // and the four lines are four different sentences, singular and plural
+  for (const n of [1, 2]) {
+    const lines = ['key', 'damaged', 'contents', 'shape'].map(w => said(w, n).match(/could not be published — ([^|]*?)(?:Served from|$)/)[1].trim());
+    assert.equal(new Set(lines).size, 4, 'two causes draw the same sentence at n=' + n + ': ' + JSON.stringify(lines));
+  }
+  assert.match(said('mixed', 2), /more than one reason/, 'two different causes are reported as one of them');
+  // an unknown cause from a newer engine still says something rather than "undefined"
+  assert.match(said('something-new'), /its details could not be read/, 'an unrecognised cause renders as undefined');
 });
 
 test('CONTROL: with nothing blocked the page says nothing of the kind', () => {
