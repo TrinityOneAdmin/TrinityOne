@@ -9413,6 +9413,16 @@ function writeCollapsedGroups(names) {
   try { localStorage.setItem(settingsGroupsLsKey(), JSON.stringify(names)); } catch (e) {}
 }
 
+// THE CONSOLE APK, not "a narrow window". The Settings groups start shut in the Suite and open on the phone
+// (see DashSettings), and those are two different QUESTIONS: the Suite's own window is 900px and can be
+// dragged narrower, so a width check would take the Suite's default away the moment somebody resized it,
+// while the phone's is a build, not a size. `window.Capacitor.isNativePlatform()` is how the rest of this
+// file already asks (the QR scan, the print/share paths, the update banner), so it is what is asked here.
+// One caller: the collapsed-groups default in DashSettings.
+function stewOnPhoneApp() {
+  try { return !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()); } catch (e) { return false; }
+}
+
 // Which group holds a page. Used to keep the group with the open page on screen, so nothing can open onto a
 // page whose row is hidden.
 function settingsGroupOf(visible, pageKey) {
@@ -9467,7 +9477,16 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
   // `shown` below, so in a browser one group is always open and on a phone, where nothing is open, none is.
   // The first press materialises that default as the steward's own record (the other three names), so a
   // stored preference keeps meaning what it meant before this date: the groups this steward keeps shut.
-  const [collapsed, setCollapsed] = React.useState(() => { const v = readCollapsedGroups(); return new Set(v === null ? groups.map(([g]) => g) : v); });
+  // OPEN ON THE PHONE, SHUT IN THE SUITE. Owner, 2026-09-22, after the shut-by-default start above was
+  // measured on a 360x730 console: four headers, ZERO rows, ~510px of empty screen and every page two taps
+  // away, because on a phone nothing is open to force a group open. The request that produced the shut start
+  // was made of the SUITE'S window, so it stays there and the phone keeps its rows. Only "never chosen"
+  // is decided here — a steward's own stored set of shut groups is honoured on both.
+  const [collapsed, setCollapsed] = React.useState(() => {
+    const v = readCollapsedGroups();
+    if (v !== null) return new Set(v);
+    return new Set(stewOnPhoneApp() ? [] : groups.map(([g]) => g));
+  });
   const toggleGroup = (g) => {
     const next = new Set(collapsed);
     if (next.has(g)) next.delete(g); else next.add(g);

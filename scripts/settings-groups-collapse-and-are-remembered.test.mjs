@@ -7,7 +7,10 @@
 // this on default?"* — so a steward who has never chosen now starts with every group SHUT, each with its count,
 // except the group holding the open page. The mechanics tests below therefore seed the one stored value that
 // means "all open" (`[]`, see `allOpen`) so they still exercise exactly the collapse they were written for;
-// the two DEFAULT tests flipped, and say so.
+// the two DEFAULT tests flipped, and say so. Owner again, same day, once that start was measured on a 360x730
+// console (four headers, no rows, every page two taps away): the shut start is the SUITE'S — on the console
+// APK every group is open by default. Both defaults only decide what "never chosen" means; a stored choice
+// wins on either. The last two tests in this file pin that pair.
 //
 // THE FAULT THIS FILE EXISTS FOR is the one the alias collision already demonstrated on this branch: a page
 // that exists and cannot be reached. A collapsed group is a second way to produce it, and a worse one,
@@ -71,6 +74,10 @@ function consoleWith(React, over = {}) {
     innerWidth: over.innerWidth || 1200,
     localStorage,
   };
+  // THE CONSOLE APK. `window.Capacitor.isNativePlatform()` is how this file's component asks (and how the rest
+  // of app/stew-dashboard.jsx asks, at the QR scan and the print paths) — presence of a narrow window is NOT
+  // the same question, because the Suite's own window is 900px and can be dragged narrower.
+  if (over.phoneApp) win.Capacitor = { isNativePlatform: () => true, Plugins: {} };
   const globals = {
     React, window: win,
     location: { host: 'relay.grace.example', hostname: 'relay.grace.example' },
@@ -486,4 +493,47 @@ test('every page is still reachable once its group is opened — collapsing hide
   assert.equal(reached.length, PAGES,
     `opening each group in turn reached ${reached.length} of the ${PAGES} pages. A page that no group reveals is a ` +
     'page nothing can open');
+});
+
+// ── THE PHONE OPENS THEM, THE SUITE DOES NOT (owner, 2026-09-22) ──────────────────────────────────────────
+// The shut-by-default start above was asked for from a screenshot of the SUITE'S window. On the console APK
+// it reads differently and the audit measured why: at 360x730 a fresh console showed four headers, ZERO rows
+// and ~510px of empty screen, and every page went from one tap to two — while the thing the default was
+// meant to cure (71 -> 1057px of list on a 730px screen) is a phone problem the phone is used to scrolling.
+// Owner's call: on a PHONE every group is open by default; collapsed-by-default stays in the Suite window.
+// A steward's OWN stored choice still wins on both — the default only decides what "never chosen" means.
+test('on the console APK a steward who has never chosen gets every group OPEN with its rows; in the Suite window they start shut', () => {
+  const ph = screen(null, { phoneApp: true, innerWidth: 360 });
+  assert.deepEqual(expanded(ph.tree), [true, true, true, true],
+    'ON THE PHONE A FRESH CONSOLE OPENS SETTINGS TO FOUR HEADERS AND NOTHING ELSE (owner, 2026-09-22: the groups start open on the APK). Headers read: ' + JSON.stringify(expanded(ph.tree)));
+  assert.equal(rows(ph.tree).length, PAGES, `the phone's open groups show ${rows(ph.tree).length} of the ${PAGES} page rows`);
+  assert.ok(rowNames(ph.tree).includes('Church identity') && rowNames(ph.tree).includes('Church key'),
+    'a group\'s rows are missing from the phone\'s Settings list: ' + JSON.stringify(rowNames(ph.tree)));
+  assert.deepEqual(counts(ph.tree), ['', '', '', ''], 'an open group is still showing a count');
+  // the same console at the same width WITHOUT the APK bridge — a narrow Suite window — keeps the shut start
+  const suiteNarrow = screen(null, { innerWidth: 360 });
+  assert.deepEqual(expanded(suiteNarrow.tree), [false, false, false, false],
+    'the shut-by-default start was decided by WIDTH, not by the console APK — a Suite window dragged narrow lost it');
+  const suite = screen(null, { innerWidth: 900 });
+  assert.deepEqual(expanded(suite.tree), [true, false, false, false],
+    'in the Suite window a fresh console no longer starts with only the open page\'s group expanded');
+  // neither default is written down: "never chosen" stays unchosen on both
+  assert.equal(ph.store.size, 0, 'the phone default was written to storage as if the steward had chosen it');
+  assert.equal(suite.store.size, 0, 'the Suite default was written to storage as if the steward had chosen it');
+});
+
+test('a steward\'s own choice still wins on the phone: a stored shut group stays shut there, a stored [] opens everything in the Suite', () => {
+  // stored "People shut" on the APK: People shut, the other three open — the phone default did not overrule it
+  const store = new Map();
+  const probe = consoleWith(miniReact().React, { store });
+  store.set(probe.mod.settingsGroupsLsKey(), JSON.stringify(['People']));
+  const ph = screen(null, { store, phoneApp: true, innerWidth: 360 });
+  assert.deepEqual(expanded(ph.tree), [true, false, true, true],
+    'THE PHONE DEFAULT OVERRULED THE STEWARD\'S OWN STORED CHOICE. Headers read: ' + JSON.stringify(expanded(ph.tree)));
+  assert.ok(rowNames(ph.tree).includes('Church identity') && !rowNames(ph.tree).includes('Members'),
+    'the stored-shut group\'s rows are on screen (or another group\'s are missing): ' + JSON.stringify(rowNames(ph.tree)));
+  // and the stored "all open" still means all open in the Suite window
+  const store2 = new Map();
+  const s = screen(null, { store: store2, allOpen: true, innerWidth: 900 });
+  assert.deepEqual(expanded(s.tree), [true, true, true, true], 'a stored [] no longer means "all open" in the Suite window');
 });
