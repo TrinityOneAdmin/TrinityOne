@@ -102,6 +102,26 @@ const waitFor = async (expr, ms, why) => {
   while (Date.now() - t0 < ms) { try { if (await js(expr)) return; } catch {} await sleep(500); }
   assert.fail(`timed out waiting for ${why} — buttons were: ${await buttons()}`);
 };
+// OPEN A SHUT SETTINGS GROUP BEFORE REACHING FOR A ROW INSIDE IT. The Settings index groups its pages under
+// four disclosure headers; whether they start open or shut is a product decision that has moved (2026-09-22:
+// shut by default in the Suite window, open on the phone). A steward reaching "Church key" presses SECURITY
+// first when it is shut, so the walk does too — and does nothing when the header is already open or when
+// this build has no group headers at all, which keeps this row honest on both sides of that change.
+// Returns 'opened' | 'already-open' | 'no-header'.
+const openSettingsGroup = async (name) => {
+  // A PLAIN PREFIX MATCH, no regex: the expression below is a template literal, so a backslash never reaches
+  // the page — the first cut's '\\b' and '/\\s+/' arrived in Chromium as a backspace and an 's', no header was
+  // ever found, and this returned 'no-header' as though the build had no groups at all.
+  const r = await js(`(() => {
+    const b = [...document.querySelectorAll('button[aria-expanded]')].find(e => (e.innerText || '').trim().indexOf(${JSON.stringify(name)}) === 0);
+    if (!b) return 'no-header';
+    if (b.getAttribute('aria-expanded') === 'true') return 'already-open';
+    b.click(); return 'opened';
+  })()`);
+  assert.ok(['opened', 'already-open', 'no-header'].includes(r), 'openSettingsGroup read back ' + JSON.stringify(r));
+  if (r === 'opened') await sleep(700);
+  return r;
+};
 const heading = () => js(`(document.querySelector('h1')||{}).innerText || ''`);
 const keyRows = () => js(`JSON.stringify(Object.keys(localStorage).filter(k => k.startsWith('trinityone.steward.church-key')))`);
 const setupScreen = async () => (await hasButton('Start a new church')) && (await hasButton('Restore a church')) && (await hasButton('Help run a church'));
@@ -160,6 +180,8 @@ test('Restore over an existing church → the gate → "Keep my current church" 
   await sleep(2000);
   await unlock();
   assert.equal(await js(`window.Steward.npub`), npub, 'the PIN opened a different church than the one just created');
+  await waitFor(`[...document.querySelectorAll('button')].some(b => /^(Church key|SECURITY)/.test((b.innerText||'').trim()))`, 30000, 'the Settings index (its Church key row, or the Security group that holds it)');
+  await openSettingsGroup('SECURITY');
   await waitFor(`[...document.querySelectorAll('button')].some(b => /^Church key/.test((b.innerText||'').trim()))`, 30000, 'the Settings index with its Church key row');
   await js(`(() => { const b = [...document.querySelectorAll('button')].find(e => /^Church key/.test((e.innerText||'').trim())); b.click(); return 1; })()`);
   await sleep(800);
