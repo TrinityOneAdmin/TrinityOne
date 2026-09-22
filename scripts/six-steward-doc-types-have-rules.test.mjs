@@ -91,6 +91,10 @@ const sm = K();          // a steward of A with every capability, who has ALSO j
 const smFin = K();       // a steward of A scoped EXPLICITLY to ['finance'], also a member of A
 const smB = K();         // a steward of B with every capability, also a member of B
 const mia = K();         // an ordinary member of A, no stewardship at all
+// THE ONE ACTOR THAT CAN TELL THE TWO NETWORK QUESTIONS APART — a MEMBER of A who is also the NETWORK key
+// of B. AUDIT-steward-doc-rules-2026-09-22 F7: the L1 fix below was pinned only by a source-text match,
+// because the actor the test used (A's own network key) never reaches the `_undeclared` reason branch at all.
+const netB = K();        // declared by church B as its network, and separately joined church A as a member
 
 let relay, dataDir;
 
@@ -140,6 +144,8 @@ before(async () => {
   await must('B could not write its steward roster', doc(churchB, D.STEWARDS + churchB.pub,
     { pubkeys: [smB.pub], caps: { [smB.pub]: ALL_CAPS } }));
   await must('A could not declare its network', doc(church, D.NETWORK + net.pub, { joined: now() }));
+  await must('B could not declare its network', doc(churchB, D.NETWORK + netB.pub, { joined: now() }));
+  await must('netB could not join A as an ordinary member', doc(netB, D.MEMBER + church.pub, { joined: now() }));
   await must('mia could not join A', doc(mia, D.MEMBER + church.pub, { joined: now() }));
   await must('sm could not join A', doc(sm, D.MEMBER + church.pub, { joined: now() }));
   await must('smFin could not join A', doc(smFin, D.MEMBER + church.pub, { joined: now() }));
@@ -338,12 +344,80 @@ test('the OK-frame reason asks the network question accept() asked, not a relay-
   // network key naming church B is refused, and must NOT be excused as "a network" in the reason.
   const asB = await publishAs(net, doc(net, 'trinityone/zzz:' + churchB.pub, { crossTenant: true }, [['church', churchB.pub]]));
   assert.equal(asB[2], false, 'a network key of church A wrote an undeclared document naming church B: ' + JSON.stringify(asB));
-  assert.match(GATEWAY, /const _rIsNetwork = _rcp \? networkOf\(evt\.pubkey, _rcp\) : NETWORKS\.has\(evt\.pubkey\);/,
+  // ⚠ THE ROW THAT ACTUALLY DRIVES THE FIX — AUDIT-steward-doc-rules-2026-09-22 F7. The two assertions above
+  // and below pass with the L1 fix REVERTED, because `net` is not in MEMBERS and so never reaches the
+  // `_undeclared` branch at all; only the source match went red, which is a text match doing a behaviour
+  // test's job. The discriminating actor is a key that is a MEMBER of A *and* the NETWORK of B, writing an
+  // undeclared document that NAMES CHURCH A:
+  //   · accept() asks networkOf(author, A) → false → refused (unchanged either way)
+  //   · the reason asks the same question with the fix → "undeclared document type …"
+  //   · the reason asks NETWORKS.has(author) without it → true → the generic "not a member" sentence, which
+  //     is the one that tells a steward to go and check something that is not wrong.
+  // Measured both ways on a live gateway, 2026-09-22.
+  const crossed = await publishAs(netB, doc(netB, 'trinityone/zzz:' + church.pub + ':crossnet', { crossNet: true }, [['church', church.pub]]));
+  assert.equal(crossed[2], false, 'a member of A who is B\'s network key wrote an undeclared document: ' + JSON.stringify(crossed));
+  assert.match(String(crossed[3]), /undeclared document type/,
+    'THE REASON IS ASKING THE RELAY-WIDE NETWORK QUESTION AGAIN. This author is a network of church B and a ' +
+    'plain member of church A; the event names church A, so accept() refused them AS A MEMBER — and the ' +
+    'reason excused them as "a network" and printed the generic sentence instead of the honest one. ' +
+    '(AUDIT-undeclared-doc-types-2026-09-22 L1.) Frame: ' + JSON.stringify(crossed));
+  assert.match(GATEWAY_CODE, /const _rIsNetwork = _rcp \? networkOf\(evt\.pubkey, _rcp\) : NETWORKS\.has\(evt\.pubkey\);/,
     'the OK-frame reason is back on the relay-wide NETWORKS set, so it can describe a refusal by a rule that ' +
     'did not make it (AUDIT-undeclared-doc-types-2026-09-22 L1)');
   // and the un-scoped case is unchanged: A's network key writing A's own undeclared document still lands.
   const asA = await publishAs(net, doc(net, 'trinityone/zzz:' + church.pub + ':own', { own: true }, [['church', church.pub]]));
   assert.equal(asA[2], true, 'the network key lost the catch-all it is supposed to keep: ' + JSON.stringify(asA));
+});
+
+
+// ── THE ACTOR THE ACTOR TABLE LEFT OUT, WHICH IS A NEW GRANT AND NOT A TIDY-UP ───────────────────────────
+test('a steward who never joined the church may write msgtags, and nothing else in this set', async () => {
+  // AUDIT-steward-doc-rules-2026-09-22 F8, CLAUDE.md rule 2. `2ff0f43`'s actor table has six rows and none
+  // of them is "a steward of THIS church who has NOT also joined it as a member". That actor was refused
+  // all six types at `6b6e66d` AND at `efe2dbe`, and is now ACCEPTED for one of them — an undeclared
+  // widening of who may write a church's chat tag labels.
+  //
+  // IT IS A GOOD CHANGE, which is exactly why it has to be written down rather than discovered. It is the
+  // `groupkey:` defect of 2026-09-17 in the other direction: the registry's own note records that "a
+  // steward of THIS church who had not also joined it was REFUSED her own room's key", because the rule in
+  // front of it asked the relay-wide `isMember`. stewardCan() asks the church's OWN steward roster and
+  // nothing else, so a delegate the church appointed can act for it without first joining it as a member.
+  //
+  // THE SCOPE OF THE GRANT IS ONE TYPE, and that is the half worth pinning: `sermon:` and `backup-meta:`
+  // were granted to a steward on 2026-09-22 and withdrawn the same day (F1/F2), so for this actor they go
+  // back to refused. If a later edit re-delegates either, this test goes red and the actor table has to be
+  // written again.
+  const smNoJoin = K();
+  const w = await conn();
+  // Re-sign A's roster with BOTH stewards on it. Addressable and keyed on (author, d-tag), so it must be
+  // newer than the copy `before()` wrote — see the sleep note in the trusted-relay test above.
+  await sleep(1100);
+  const roster = await send(w, doc(church, D.STEWARDS + church.pub,
+    { pubkeys: [sm.pub, smFin.pub, smNoJoin.pub], caps: { [sm.pub]: ALL_CAPS, [smFin.pub]: ['finance'], [smNoJoin.pub]: ALL_CAPS } }));
+  assert.equal(roster[2], true, 'fixture: church A could not re-sign its steward roster — ' + JSON.stringify(roster));
+  w.close();
+  await sleep(300);
+
+  // …and they really never joined: no trinityone/member:<A> document was ever published for this key.
+  const want = {
+    'trinityone/msgtags': true,          // GRANTED — content steward, read by #church:[cp], reaches members
+    'trinityone/sermon:': false,         // withdrawn 2026-09-22 (F1)
+    'trinityone/backup-meta:': false,    // withdrawn 2026-09-22 (F2)
+    'trinityone/mediakey:': false,
+    'trinityone/manna-': false,
+    'trinityone/relays': false,
+  };
+  for (const [type, ok] of Object.entries(want)) {
+    const frame = await publishAs(smNoJoin, SHAPES[type](smNoJoin));
+    assert.equal(frame[2], ok,
+      (ok
+        ? 'A STEWARD THIS CHURCH APPOINTED IS REFUSED BECAUSE THEY HAVE NOT ALSO JOINED IT AS A MEMBER — '
+          + 'that is the groupkey: defect of 2026-09-17 coming back. '
+        : 'A STEWARD WHO NEVER JOINED THIS CHURCH WROTE ' + type + '. That is a grant nobody has recorded; '
+          + 'if it is deliberate it belongs in the actor table, and if it is sermon: or backup-meta: it is '
+          + 'the withdrawal of 2026-09-22 being undone. ')
+      + type + ' — the relay answered: ' + JSON.stringify(frame));
+  }
 });
 
 // ── AND THE ONE THING THAT MUST NOT HAVE CHANGED ─────────────────────────────────────────────────────────

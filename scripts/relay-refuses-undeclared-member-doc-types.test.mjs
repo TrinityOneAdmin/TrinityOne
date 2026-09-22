@@ -201,7 +201,13 @@ test('a church-authored type the relay has no branch for is refused to a member 
   // scripts/six-steward-doc-types-have-rules.test.mjs, which drives the whole five-actor matrix). The
   // question this test asks is unchanged and still worth asking here: a MEMBER may not write it, and the
   // CHURCH still can. What changed is which line refuses the member — its own branch rather than the
-  // catch-all — which is why the reason is no longer asserted to name an undeclared type.
+  // catch-all — so this test deliberately makes NO claim about the reason, only about the answer.
+  //
+  // ⚠ THE SENTENCE HERE USED TO END "…which is why the reason is no longer asserted to name an undeclared
+  // type." That described a removal that never happened: `git show efe2dbe:` this file — the old body did
+  // not assert the reason either. AUDIT-steward-doc-rules-2026-09-22 F8, CLAUDE.md rule 4. The re-anchor it
+  // was excusing was in fact a STRENGTHENING (`in UNDECLARED` became `in DOC_TYPES && write === …`), which
+  // made the apology both false and unnecessary.
   // RE-ANCHORED AGAIN, 2026-09-22 (second round): the write column is 'church', not 'steward'. The
   // content-steward grant written earlier the same day was withdrawn because every shipped reader filters
   // authors:[churchpub] and served a steward-authored sermon to nobody. The whole actor matrix lives in
