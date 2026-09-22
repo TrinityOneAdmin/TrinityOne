@@ -3662,8 +3662,16 @@ window.Steward = {
   discardUnsavedKey() {
     if (!needsPin) return false;
     if (lsGet(KEY_LS)) return false;
-    try { localStorage.removeItem(_boxHostsKey()); } catch (e) {}   // a cache line for a church that will never exist
-    _openRegGate();   // nothing is being founded any more; nothing should wait on its registration
+    try { localStorage.removeItem(_boxHostsKey()); } catch (e) {}   // the discarded church's cache line (the restored or live church's, in the other two states)
+    // Nothing is being founded any more; nothing should wait on its registration — and the NEXT church must be
+    // able to arm its own. _openRegGate() resolves the gate but deliberately leaves `_regGate` set (selfRegister
+    // opens it on every established console, and publish() is the latch that nulls it — see _waitForRegistration),
+    // so after a Back the resolved promise stayed and _armRegGate() in the next createKey() was a no-op: church
+    // #2's founding writes went out with no gate at all, the R5-5 shape (AUDIT-suite-B5-B6 D1, measured: church
+    // #1's first publish held 1502 ms, church #2's 0 ms). This is the one place a church is ABANDONED mid-session,
+    // so the reset lives here, not in _openRegGate(), whose other caller must keep the latch it documents.
+    _openRegGate();
+    _regGate = null;
     _resetChurchScopedState();
     try { pool.close([...pool.relays.keys()]); } catch (e) {}
     sk = null; pub = null; currentMnemonic = null;

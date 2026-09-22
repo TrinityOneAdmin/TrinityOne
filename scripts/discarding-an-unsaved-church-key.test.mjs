@@ -120,3 +120,76 @@ test('a legacy plaintext seed on disk is NOT discarded — that seed IS the chur
   assert.equal(e.scope.needsPin, true, 'the forced PIN was cleared over a plaintext seed');
   assert.equal(e.store[KEY_LS], 'the legacy church seed words', 'the legacy seed was removed from storage');
 });
+
+// ── THE GATE RE-ARMS FOR THE NEXT CHURCH (AUDIT-suite-B5-B6 D1) ──────────────────────────────────────────
+// The engine above STUBS _armRegGate/_openRegGate, so it cannot see this: discardUnsavedKey() opened the
+// registration gate but left `_regGate` holding the resolved promise, and _armRegGate() is `if (!_regGate) …`,
+// so the NEXT createKey() could not arm a fresh one — church #2's founding writes went out with no gate at
+// all (the R5-5 "ten refused writes" shape). Measured by the auditor on the shipped bundle: church #1's first
+// publish waited 1502 ms; after Back + Start again, church #2's waited 0 ms. This engine lifts the SHIPPED
+// gate (_armRegGate, _openRegGate, _awaitFirstAdmission, _waitForRegistration — the wait publish() and
+// _publishToRelays() both apply) with a short REG_GATE_MS and nobody registering, so "waits on the gate" is
+// the whole budget and "no gate" is at once.
+function engineWithRealGate(regGateMs) {
+  const store = {};
+  const Steward = { hasKey: false, needsPin: false, locked: false, pubkey: null, npub: null };
+  const scope = {
+    KEY_LS, ENC_LS,
+    lsGet: (k) => (k in store ? store[k] : null),
+    lsSet: (k, v) => { store[k] = String(v); },
+    localStorage: { getItem: (k) => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = String(v); }, removeItem: (k) => { delete store[k]; } },
+    privateKeyFromSeedWords: () => new Uint8Array(32),
+    getPublicKey: () => 'ab'.repeat(32), getPublicKey2: () => 'ab'.repeat(32),
+    npubEncode: () => 'npub1unsaved',
+    generateSeedWords: () => 'fine flash wait silly next awkward charge front scout build damage river',
+    _loadBoxHosts: () => {}, _refreshBoxHostsUs: () => {}, _gate: { refresh() {}, admit: () => [] }, relaysRaw: () => [],
+    _resetChurchScopedState: () => {},
+    pool: { relays: new Map(), close: () => {} },
+    needsPin: false,
+    window: { Steward, dispatchEvent: () => {}, CustomEvent: function (type, init) { this.type = type; this.detail = init && init.detail; } },
+    sk: null, pub: null, churchSk: null, churchPub: null, currentMnemonic: null,
+    setTimeout, Date,
+    String, JSON, Array, Object, Boolean, Number, Math, Promise, console, RegExp, Error, Uint8Array, Map, Set, Symbol,
+  };
+  const proxy = new Proxy(scope, {
+    has: (t, k) => (k in t) || !(String(k) in globalThis),
+    get: (t, k) => { if (k === Symbol.unscopables) return undefined; if (k in t) return t[k];
+      throw new ReferenceError('the shipped gate needs a stub for ' + String(k)); },
+    set: (t, k, v) => { t[k] = v; return true; },
+  });
+  // the gate's own state, declared where the lifted functions close over it — as in the bundle
+  const src = 'let _regGate = null, _openGate = null, _proofWaited = false; const REG_GATE_MS = ' + regGateMs + ', PROOF_GATE_MS = 0;\n' +
+    fnBody(SHIP, 'function _armRegGate()', '_armRegGate') + '\n' +
+    fnBody(SHIP, 'function _openRegGate()', '_openRegGate') + '\n' +
+    fnBody(SHIP, 'function _awaitFirstAdmission(ms)', '_awaitFirstAdmission') + '\n' +
+    fnBody(SHIP, 'async function _waitForRegistration()', '_waitForRegistration') + '\n' +
+    fnBody(SHIP, 'function setKey(mnemonic)', 'setKey') + '\n' +
+    fnBody(SHIP, 'function _setNeedsPin(v)', '_setNeedsPin') + '\n' +
+    fnBody(SHIP, 'function _boxHostsKey()', '_boxHostsKey') + '\n' +
+    'return ({ setKey, _setNeedsPin, _waitForRegistration, gate: () => _regGate, ' + fnBody(SHIP, 'createKey() {', 'createKey') + ', ' +
+    fnBody(SHIP, 'discardUnsavedKey() {', 'discardUnsavedKey') + ' });';
+  const api = new Function('scope', 'with (scope) { ' + src + ' }')(proxy);
+  // how long a publish would be held by the gate right now (nobody registers, so a held write waits the budget)
+  const firstPublishWait = async () => { const t0 = Date.now(); await api._waitForRegistration(); return Date.now() - t0; };
+  return { ...api, firstPublishWait };
+}
+
+test('after a Back, a SECOND "Start a new church" is gated again: its first publish waits on registration like the first church’s did', async () => {
+  const MS = 800;
+  const e = engineWithRealGate(MS);
+  // control: a church founded with no Back — its first publish is held for the whole budget
+  const c = engineWithRealGate(MS);
+  c.createKey();
+  const control = await c.firstPublishWait();
+  assert.ok(control >= MS - 100, 're-anchor: church #1’s first publish was not held by the gate (' + control + ' ms) — the lifted gate is not the one that holds founding writes');
+  // church #1 → Back (the forced-PIN gate’s way back) → church #2
+  e.createKey();
+  const g1 = e.gate();
+  assert.ok(g1 instanceof Promise, 're-anchor: createKey did not arm the gate');
+  assert.equal(e.discardUnsavedKey(), true, 're-anchor: the discard was refused');
+  e.createKey();
+  const g2 = e.gate();
+  const second = await e.firstPublishWait();
+  assert.ok(second >= MS - 100, 'CHURCH #2, CREATED AFTER A BACK, HAS NO FOUNDING-WRITE GATE (AUDIT-suite-B5-B6 D1): its first publish waited ' + second + ' ms; church #1’s waited ' + control + ' ms. Start → Back → Start on the Suite founds a church whose first writes the relay refuses (the R5-5 shape).');
+  assert.notEqual(g2, g1, 'after a Back the next church could not arm its own gate: _regGate is still church #1’s resolved promise, so _armRegGate() was a no-op');
+});

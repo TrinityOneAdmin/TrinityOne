@@ -17552,6 +17552,7 @@ zoo`.split("\n");
       } catch (e) {
       }
       _openRegGate();
+      _regGate = null;
       _resetChurchScopedState();
       try {
         pool.close([...pool.relays.keys()]);
