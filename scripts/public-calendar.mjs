@@ -67,14 +67,33 @@ export function publicEventFields(ev) {
   };
 }
 
-// A recurring meeting's anchor is the date the steward set; its occurrences fall on `day` (0 = Sunday). For
-// weekly and fortnightly the first occurrence is the first `day` on or after the anchor — the same walk
-// app/recur.jsx's expandEvents does, and in phase with the rule this file emits.
-function firstOccurrence(date, day) {
+// A recurring meeting's anchor is the date the steward set; its occurrences fall on `day` (0 = Sunday).
+//
+// WEEKLY: the first occurrence is the first `day` on or after the anchor.
+//
+// FORTNIGHTLY IS NOT THAT, and the comment that stood here said it was. app/recur.jsx's expandEvents takes
+// the first `day` on or after the anchor and THEN pulls it a week forward when that lands an odd number of
+// weeks from the anchor — `Math.round((cur - anchor) / (7 * 864e5))`, which is 1 for an offset of 4, 5 or 6
+// days. So for 3 of the 7 possible weekdays the app's series runs a week later than the anchor's own week,
+// and a feed that skipped the correction advertised the WHOLE series a week early for ever, because
+// INTERVAL=2 carries the phase: measured at 7671 of 17899 anchors (42.9%) over 2024-2030, against controls
+// of 0 for weekly and 0 for monthly. A church's website and the church's own app named different nights.
+//
+// WHY THIS IS NOT `import { expandEvents }`. app/recur.jsx has no exports — it is a browser IIFE that
+// assigns window.expandEvents, loaded by index.html and steward.html through <script type="text/babel">.
+// Importing it here would mean reading a file and evaluating it inside the relay's request path, and the
+// file is not there to read: scripts/build-strict-tgz.sh transpiles app/*.jsx to app/*.js and DROPS the
+// .jsx from the payload every desktop relay ships and runs (build-relay-payload.sh step 1). So the rule is
+// written twice, and the test holds the two together: the sweep in
+// scripts/the-public-calendar-file-says-what-it-means.test.mjs executes the REAL expandEvents out of
+// app/recur.jsx and asserts the two never disagree, over every anchor of seven years × every weekday.
+function firstOccurrence(date, day, fortnightly) {
   const [, y, m, d] = ISO_DATE.exec(date);
-  const cur = new Date(Date.UTC(+y, +m - 1, +d));
+  const anchor = Date.UTC(+y, +m - 1, +d);
+  const cur = new Date(anchor);
   if (day == null) return date;
   for (let i = 0; i < 7 && cur.getUTCDay() !== day; i++) cur.setUTCDate(cur.getUTCDate() + 1);
+  if (fortnightly && Math.round((cur.getTime() - anchor) / (7 * 864e5)) % 2 !== 0) cur.setUTCDate(cur.getUTCDate() + 7);
   return cur.toISOString().slice(0, 10);
 }
 
@@ -100,7 +119,7 @@ function firstMonthlyOccurrence(date, day) {
 
 function dtstart(ev) {
   const date = ev.recur === 'monthly' ? firstMonthlyOccurrence(ev.date, ev.day)
-    : ev.recur ? firstOccurrence(ev.date, ev.day) : ev.date;
+    : ev.recur ? firstOccurrence(ev.date, ev.day, ev.recur === 'fortnightly') : ev.date;
   const d = date.replace(/-/g, '');
   if (!ev.time) return 'DTSTART;VALUE=DATE:' + d;
   return 'DTSTART:' + d + 'T' + ev.time.replace(':', '') + '00';

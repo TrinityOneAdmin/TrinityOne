@@ -27,9 +27,31 @@
 // carries one, with a scan that can now actually see it.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { transformSync } from 'esbuild';
 import { buildCalendar, unfoldIcs, publicEventFields, foldLine } from './public-calendar.mjs';
 
 const BYDAY = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
+
+// ── THE APP'S OWN EXPANSION, EXECUTED, NOT TRANSCRIBED ───────────────────────────────────────────────────
+// The feed and the app must name the same night, and the only way to be sure is to RUN the app's expansion
+// rather than re-derive it here: a transcription of expandEvents is a second copy of the rule that can drift,
+// and the audit that found the fortnightly defect flagged its own transcription as the one place its number
+// could be wrong. app/recur.jsx is a browser IIFE with no exports (it assigns window.expandEvents and is
+// loaded by index.html/steward.html through <script type="text/babel">), so it is transpiled and executed
+// here with a `window` of our own. scripts/public-calendar.mjs deliberately does NOT import it — the .jsx is
+// dropped from the payload every desktop relay ships (build-strict-tgz.sh transpiles app/*.jsx to app/*.js),
+// so the rule is written twice and THIS FILE is what holds the two together.
+const RECUR_SRC = readFileSync(new URL('../app/recur.jsx', import.meta.url), 'utf8');
+assert.match(RECUR_SRC, /const weeks = Math\.round\(\(cur - anchor\) \/ \(7 \* 864e5\)\)/,
+  'app/recur.jsx no longer applies the fortnightly phase correction this sweep exists to hold the feed to — re-anchor rather than delete');
+const expandEvents = (() => {
+  const js = transformSync(RECUR_SRC, { loader: 'jsx', jsx: 'transform' }).code;
+  const win = {};
+  new Function('window', js)(win);
+  assert.equal(typeof win.expandEvents, 'function', 'app/recur.jsx did not define expandEvents — the lift is reading nothing');
+  return win.expandEvents;
+})();
 const lines = (text) => unfoldIcs(text).split('\r\n').filter(Boolean);
 const prop = (text, name) => lines(text).filter(l => l.split(':')[0].split(';')[0] === name).map(l => l.slice(l.indexOf(':') + 1));
 const utc = (iso) => Date.UTC(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10));
@@ -61,17 +83,76 @@ test('F5: a monthly meeting\'s DTSTART is an instance of its own RRULE, whatever
   }
 });
 
-test('F5: weekly and fortnightly are untouched — their DTSTART is still the first matching day on or after the anchor', () => {
+test('F5/R2: weekly starts on the first matching day after its anchor; fortnightly stays IN PHASE with it', () => {
   const weekly = buildCalendar([{ id: 'sun', title: 'Sunday service', date: '2026-09-02', time: '10:30', recur: 'weekly', day: 0 }], { uidScope: 'x' });
   assert.equal(prop(weekly, 'DTSTART')[0], '20260906T103000', 'a weekly meeting no longer starts on the first matching day after its anchor');
   assert.equal(prop(weekly, 'RRULE')[0], 'FREQ=WEEKLY;BYDAY=SU');
+  // Thursday is ONE day after this Wednesday anchor: an even number of weeks, so the fortnightly series
+  // starts in the anchor's own week. This is one of the 4 of 7 offsets that were always right, and it is
+  // named as such because it was the ONLY fortnightly fixture in this file while the other 3 were wrong.
   const fort = buildCalendar([{ id: 'pray', title: 'Prayer', date: '2026-09-02', time: '20:00', recur: 'fortnightly', day: 4 }], { uidScope: 'x' });
   assert.equal(prop(fort, 'DTSTART')[0], '20260903T200000');
   assert.equal(prop(fort, 'RRULE')[0], 'FREQ=WEEKLY;INTERVAL=2;BYDAY=TH');
+  // …and a Sunday is FOUR days after it, which rounds to one week, so the app's series runs a week later and
+  // so must the feed. Before the fix this said 20260906 — the church's site a fortnight out of step for ever.
+  const off = buildCalendar([{ id: 'pray2', title: 'Prayer', date: '2026-09-02', time: '20:00', recur: 'fortnightly', day: 0 }], { uidScope: 'x' });
+  assert.equal(prop(off, 'DTSTART')[0], '20260913T200000',
+    'A FORTNIGHTLY MEETING IS ADVERTISED A WEEK OUT OF PHASE with the church\'s own app');
+  assert.equal(expandEvents([{ id: 'pray2', date: '2026-09-02', time: '20:00', recur: 'fortnightly', day: 0 }], '2026-09-02', 70)[0].date, '2026-09-13',
+    're-anchor: the app itself no longer starts this series where this row says it does');
   const once = buildCalendar([{ id: 'fair', title: 'Fair', date: '2026-12-05' }], { uidScope: 'x' });
   assert.equal(prop(once, 'DTSTART')[0], '20261205', 'a one-off event moved');
   assert.deepEqual(prop(once, 'RRULE'), [], 'a one-off event grew a repeat rule');
 });
+
+// ── THE SWEEP: the church's website and the church's own app must name the same night ────────────────────
+// AUDIT-feeds-round2-2026-09-22 R2. `firstOccurrence` took the first `day` on or after the anchor for
+// fortnightly too, but expandEvents then pulls that a week forward when it lands an odd number of weeks from
+// the anchor (offsets of 4, 5 and 6 days — 3 of the 7 weekdays), and INTERVAL=2 carries the error through the
+// whole series for ever. Measured on the tip that added a comment claiming the two agreed: 7671 of 17899
+// anchors, 42.9%, with weekly 0 and monthly 0 as controls.
+//
+// A single memorised date could not have caught it — the fixture the F5 row below pins happens to be one of
+// the 4 of 7 offsets that agree. So this is a property over EVERY anchor of seven years and EVERY weekday,
+// and the controls are in the same loop: if the reader or the lift breaks, weekly and monthly go red too.
+const YEARS = [2024, 2025, 2026, 2027, 2028, 2029, 2030];
+const anchors = (() => {
+  const out = [];
+  for (const y of YEARS) for (let m = 1; m <= 12; m++) {
+    const dim = new Date(Date.UTC(y, m, 0)).getUTCDate();
+    for (let dom = 1; dom <= dim; dom++) out.push(`${y}-${String(m).padStart(2, '0')}-${String(dom).padStart(2, '0')}`);
+  }
+  return out;
+})();
+
+for (const recur of ['weekly', 'fortnightly', 'monthly']) {
+  test(`R2: a ${recur} meeting starts on the same night the app shows — every anchor of ${YEARS.length} years × every weekday`, () => {
+    let cases = 0, bad = 0, first = '';
+    for (const date of anchors) {
+      for (let day = 0; day <= 6; day++) {
+        const ev = { id: 'meeting', title: 'Meeting', date, time: '19:30', recur, day };
+        const text = buildCalendar([ev], { uidScope: 'x' });
+        const compact = prop(text, 'DTSTART')[0].slice(0, 8);
+        const feed = compact.slice(0, 4) + '-' + compact.slice(4, 6) + '-' + compact.slice(6, 8);
+        // 70 days is enough to hold the first occurrence of any of the three rules (the furthest is a monthly
+        // whose first matching weekday falls at the end of the following month).
+        const app = expandEvents([ev], date, 70)[0];
+        cases++;
+        if (!app || app.date !== feed) {
+          bad++;
+          if (!first) first = `anchor ${date} day ${day}: the feed's DTSTART is ${feed}, the app's own first occurrence is ${app ? app.date : '(none)'} — the church's website advertises a night the app never shows`;
+        }
+        // …and DTSTART must be an instance of its own RRULE (RFC 5545 §3.8.5.3), or Google and Apple render
+        // it as an extra occurrence on top of the series.
+        assert.equal(BYDAY[dayOf(compact)], BYDAY[day], `DTSTART ${compact} (anchor ${date}, ${recur}) is not even the right weekday`);
+        if (recur === 'monthly') assert.equal(compact, firstSuchWeekdayOfMonth(compact), `DTSTART ${compact} (anchor ${date}) is not the first ${BYDAY[day]} of its month`);
+        assert.ok(utc(feed) >= utc(date), `DTSTART ${compact} is before the anchor ${date}`);
+      }
+    }
+    assert.equal(cases, anchors.length * 7, 're-anchor: the sweep stopped covering what it says it covers');
+    assert.equal(bad, 0, `${bad} of ${cases} anchors DISAGREE WITH THE APP. e.g. ${first}`);
+  });
+}
 
 test('F6: a 64-hex pubkey inside a long blurb is INVISIBLE to a raw scan and caught by the unfolded one', () => {
   const key = 'd'.repeat(64);
