@@ -78,6 +78,7 @@ const DEVICE_KEYS = [
   'trinityone.readerScale', 'trinityone.settings', 'trinityone.nostr.mnemonic.enc',
   'trinityone.backedup.' + NPUB,   // names the MEMBER, not the church — see the test below
   'trinityone.bible.translation', 'trinityone.reading.position',
+  'trinityone.readLoc.BSB',   // 2026-09-21: where the reader was, per translation — the key app.jsx actually writes
   // ⚠ AND THE THREE A PHONE ARGUED BACK ON. Every one of these carries a 64-hex pubkey in its NAME, so the
   // IDENTIFIER rule takes them unless something exempts them — and until bf25f49 nothing did.
   'trinityone.bringkids.' + CHURCH + '|' + MEMBER,
@@ -113,7 +114,7 @@ test('the Bible, the member’s own writing and their unsent messages all surviv
   // a Bible reader; the journal and notes are the MEMBER's, not the church's; and the outbox holds messages
   // they wrote that have not been delivered — losing those is data loss dressed up as hygiene.
   const left = runWipe(DEVICE_KEYS);
-  for (const k of ['trinityone.bible.translation', 'trinityone.reading.position', 'trinityone.readerScale',
+  for (const k of ['trinityone.bible.translation', 'trinityone.reading.position', 'trinityone.readLoc.BSB', 'trinityone.readerScale',
     'trinityone.settings', 'trinityone.nostr.mnemonic.enc', 'trinityone.outbox',
     'trinityone.mydata:data/journal', 'trinityone.mydata:data/notes',
     // 2026-09-06: the "a relay accepted my join" stamp. Wiped, every locked boot would tell a pending member
