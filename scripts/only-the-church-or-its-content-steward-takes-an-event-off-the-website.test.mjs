@@ -28,7 +28,9 @@ import { join } from 'node:path';
 import { WebSocket } from 'ws';
 import { generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure';
 import { npubEncode } from 'nostr-tools/nip19';
+import { readFileSync } from 'node:fs';
 import { requireFreePort } from './test-ports.mjs';
+import { fnBody, stmt } from './test-slice.mjs';
 import { D } from './trinity-doc-types.mjs';
 
 const PORT = 8851, PORT_B = 8852;   // unique across scripts/*.test.mjs (8850-8855 were free on 2026-09-22; 8850 is the sibling file's)
@@ -169,4 +171,117 @@ test('/import onto a FRESH relay reaches the same answers — the steward roster
   relays[PORT_B].proc.kill('SIGKILL'); await sleep(400);
   await startRelay(PORT_B, false);
   assert.deepEqual(await feed(PORT_B), { status: 200, ids: [EV_SUPPER] }, 'the restored relay changed its answer on its first restart');
+});
+
+// ── AND NOTHING ELSE HONOURS THE LEADER'S CANCEL EITHER ──────────────────────────────────────────────────
+// a0c5476's first commit message said "the next owner console reconciles it", and that a network key's cancel
+// was "likewise left to the console". AUDIT-feeds-round2-2026-09-22 R1 measured both false; that message was
+// rewritten (CLAUDE.md rule 4) and these are the rows that hold the corrected version to its word. The
+// BEHAVIOUR is unchanged and right: a group leader cannot withdraw a church-authored event ANYWHERE in this
+// product — not from the console, not from a member's phone, since _forgetById is shared — so what this
+// branch changed is that the feed now AGREES with the app instead of diverging from it, which was the
+// finding. The owner unticks "On the website" to take such an event off.
+
+test('THE OWNER CONSOLE does not reconcile a group leader\'s cancel — the church\'s event stays and the mirror publishes nothing', async () => {
+  // The real chain out of the shipped bundle: _tombstoneTargets -> _forgetById (with the console's own
+  // _consoleDisplay / _consoleChurchVoice) -> _webDesired -> _webSync. No copy of the logic.
+  const S = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
+  const n44 = await import('nostr-tools/nip44');
+  const unhex = (h) => new Uint8Array((String(h).match(/.{1,2}/g) || []).map(x => parseInt(x, 16)));
+  const KEY = 'a1'.repeat(32);
+  const body = [
+    stmt(S, 'var WEB_DEFAULT = ', 'WEB_DEFAULT'),
+    stmt(S, 'var WEB_ID_OK = ', 'WEB_ID_OK'),
+    stmt(S, 'var WEB_BLOCKED_AFTER = ', 'WEB_BLOCKED_AFTER'),
+    stmt(S, 'var WEB_LOCKED_TRIES = ', 'WEB_LOCKED_TRIES'),
+    fnBody(S, 'function _pickWinner', '_pickWinner'),
+    fnBody(S, 'function _reduceVersions', '_reduceVersions'),
+    fnBody(S, 'function _absorbById', '_absorbById'),
+    fnBody(S, 'function _tombstoneTargets', '_tombstoneTargets'),
+    fnBody(S, 'function _forgetById', '_forgetById'),
+    fnBody(S, 'function _openChurchDoc', '_openChurchDoc'),
+    fnBody(S, 'function _consoleDisplay', '_consoleDisplay'),
+    fnBody(S, 'function _capsOf', '_capsOf'),
+    fnBody(S, 'function _consoleChurchVoice', '_consoleChurchVoice'),
+    fnBody(S, 'function _sealIsWhole', '_sealIsWhole'),
+    fnBody(S, 'function _webCopyBody', '_webCopyBody'),
+    fnBody(S, 'function _webWhyStuck', '_webWhyStuck'),
+    fnBody(S, 'function _webEmit', '_webEmit'),
+    fnBody(S, 'function _webDesired', '_webDesired'),
+    fnBody(S, 'async function _webSync', '_webSync'),
+  ].join('\n');
+  // GUARDS ON THE LIFT: without these an assertion below could pass over nothing at all.
+  assert.match(body, /mayName/, 'vendor/steward.js: _forgetById no longer has a mayName grant — re-anchor');
+  assert.match(body, /tombs\.push\(id\)/, 'vendor/steward.js: _webSync no longer tombstones — re-anchor');
+  const dec = (body.match(/return JSON\.parse\((\w+)\(ct,/) || [])[1];
+  assert.ok(dec, 'vendor/steward.js: _openChurchDoc no longer decrypts the way this row reads it');
+
+  const CP = 'c'.repeat(64), LEADER = '1'.repeat(64), CONTENT = '2'.repeat(64);
+  const sealedDoc = (o) => JSON.stringify({ e: n44.encrypt(JSON.stringify(o), unhex(KEY)) });
+  const run = async (by, tags) => {
+    const published = [];
+    const w = {
+      pub: CP, share: { calendar: true, sermons: false, plans: false, optOut: [], optIn: ['evtyouth'], address: 'own' },
+      shareTs: 1, shareKnown: true, events: new Map(), versions: new Map(), eventsKnown: true,
+      copies: new Map([['evtyouth', JSON.stringify({ title: 'Youth night', date: '2026-10-03', time: '19:30', where: 'The hall', blurb: '', recur: '', day: null })]]),
+      copyTs: new Map(), copiesKnown: true, subs: [], listeners: new Set(), busy: false, again: false, timer: null,
+      lockedTries: 0, stuck: new Set(), stuckWhy: '', blocked: 0,
+    };
+    const scope = {
+      _web: w, pub: CP, sk: 'SK', actingChurch: '', _nameKeyRing: [KEY], _unhex: unhex, [dec]: n44.decrypt,
+      _careRosterKnown: true, _careRoster: new Set([CONTENT]), _stewardCaps: { [CONTENT]: ['content'] },
+      NET, PUBEVENT_D, now: () => 1790000000, feChurch: (t) => t,
+      publish: async (e) => { published.push(e); return true; },
+      _webQueueSync: () => {}, setTimeout: () => 0,
+    };
+    const names = Object.keys(scope);
+    const api = new Function(...names, `${body}\nreturn { _webSync, _forgetById, _tombstoneTargets, _absorbById, _consoleDisplay, _consoleChurchVoice };`)(...names.map(n => scope[n]));
+    // the church's own GROUP event, as the console holds it, already ticked onto the website
+    api._absorbById(w.versions, w.events, 'evtyouth',
+      { id: 'evtyouth', raw: sealedDoc({ title: 'Youth night', date: '2026-10-03', time: '19:30', where: 'The hall', blurb: '', groupId: 'grpyouth' }), ts: 10, _by: CP },
+      api._consoleDisplay);
+    assert.equal(w.events.has('evtyouth'), true, 're-anchor: the console never held the event to begin with');
+    const t = { pubkey: by, created_at: 20, tags: [['d', EVENT_D + 'evtyouth'], ['t', NET], ['deleted', '1'], ...tags] };
+    api._forgetById(w.versions, w.events, 'evtyouth', t.pubkey, t.created_at, api._consoleDisplay,
+      { churchPub: CP, targets: api._tombstoneTargets(t), mayName: api._consoleChurchVoice });
+    await api._webSync();
+    return { stillHeld: w.events.has('evtyouth'), tombstoned: published.filter(e => e.tags.some(x => x[0] === 'deleted')).map(e => (e.tags.find(x => x[0] === 'd') || [])[1]) };
+  };
+
+  const leader = await run(LEADER, [['t', G_YOUTH]]);
+  assert.equal(leader.stillHeld, true, 're-anchor: the console dropped the church\'s event on a leader\'s tombstone');
+  assert.deepEqual(leader.tombstoned, [],
+    'A GROUP LEADER\'S CANCEL IS RECONCILED BY THE CONSOLE after all — a0c5476\'s corrected message says it is not');
+  // …and the STRONGER forgery, which is the one the authority check actually decides: a leader whose
+  // tombstone NAMES the church's copy with a `for` tag, exactly as a delegated steward's console writes one.
+  // Without this row the case above proves only that a tombstone with no `for` tag binds nothing, and
+  // _consoleChurchVoice could be replaced by `() => true` with every assertion still green (measured).
+  const forging = await run(LEADER, [['t', G_YOUTH], ['for', CP]]);
+  assert.equal(forging.stillHeld, true,
+    'A GROUP LEADER WHO NAMES THE CHURCH\'S COPY WITHDRAWS IT FROM THE CONSOLE — mayName is not being consulted');
+  assert.deepEqual(forging.tombstoned, [], 'a group leader\'s `for`-tagged cancel took the event off the church\'s website');
+  // CONTROLS: the two authorities that DO withdraw the church's copy still do.
+  const content = await run(CONTENT, [['for', CP]]);
+  assert.equal(content.stillHeld, false, 'a content steward\'s cancel no longer reaches the church\'s copy');
+  assert.deepEqual(content.tombstoned, ['trinityone/pubevent:evtyouth'], 'a content steward\'s cancel no longer takes the copy off the website');
+  const church = await run(CP, []);
+  assert.equal(church.stillHeld, false, 'the church\'s own cancel no longer reaches its copy');
+  assert.deepEqual(church.tombstoned, ['trinityone/pubevent:evtyouth'], 'the church\'s own cancel no longer takes the copy off the website');
+});
+
+test('A NETWORK KEY\'s cancel is not honoured by the relay either — the event stays on the feed in every tag shape', async () => {
+  // The other half of the sentence a0c5476 withdrew. NOT asserted here: whether the relay STORES the
+  // tombstone. An unauthenticated REQ on this relay returns nothing for the church's OWN documents either
+  // (measured), so that instrument cannot tell a refused write from a withheld read, and a claim built on it
+  // would be exactly the kind this commit series exists to remove.
+  const netk = K();
+  assert.equal((await publish(pub, doc(grace, D.NETWORK + netk.pub, { joined: now() })))[0], true, 'the church could not join a network');
+  await sleep(200);
+  assert.deepEqual(await feed(), { status: 200, ids: [EV_SUPPER] }, 're-anchor: the feed is not where this row expects it');
+  for (const tags of [[['church', ap]], [['church', ap], ['t', G_YOUTH]], [['church', ap], ['for', ap]]]) {
+    const [ok] = await publish(pub, tomb(netk, EVENT_D + EV_SUPPER, tags));
+    await sleep(250);
+    assert.deepEqual(await feed(), { status: 200, ids: [EV_SUPPER] },
+      `A NETWORK KEY TOOK THE SUPPER OFF THE CHURCH'S WEBSITE with tags ${JSON.stringify(tags.map(t => t[0]))} (tombstone ${ok ? 'admitted' : 'refused'} at the door)`);
+  }
 });
