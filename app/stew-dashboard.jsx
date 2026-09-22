@@ -9129,7 +9129,24 @@ function DashBackup() {
   const [msg, setMsg] = React.useState(null);   // { ok, text }
   const [last, setLast] = React.useState(() => { try { return Number(localStorage.getItem('trinityone.lastBackupAt') || 0); } catch { return 0; } });
   const [freq, setFreq] = React.useState(() => { try { return localStorage.getItem('trinityone.backupRemind') || 'monthly'; } catch { return 'monthly'; } });
-  const setFrequency = (f) => { setFreq(f); try { localStorage.setItem('trinityone.backupRemind', f); } catch {} try { window.Steward.setBackupMeta && window.Steward.setBackupMeta(last, f); } catch {} };
+  const [freqMsg, setFreqMsg] = React.useState('');   // '' = the cadence reached the church document
+  // THE SECOND CALLER OF setBackupMeta, AND IT WAS STILL FIRE-AND-FORGET. AUDIT-steward-doc-rules-2026-09-22
+  // finding F3: the commit that fixed doBackup below said "both callers now say so on screen" and this one
+  // did not — it dropped the answer inside a try/catch and moved on, so a steward who picked "Weekly" saw
+  // the segment move to Weekly while every other console went on nudging monthly, with nothing on any
+  // screen saying so. Same shape as the one it sits beside, and [[fix-the-control-not-the-label]] again.
+  //
+  // THE LOCAL HALF IS STILL ADOPTED, deliberately: `freq` is this device's own reminder preference with its
+  // own localStorage key, the press must not look like it did nothing, and subscribeBackupMeta overwrites
+  // `freq` from the church document the moment one arrives. What changes is that the CHURCH-WIDE half now
+  // reports itself instead of being assumed.
+  const setFrequency = async (f) => {
+    setFreq(f); setFreqMsg('');
+    try { localStorage.setItem('trinityone.backupRemind', f); } catch {}
+    let ok = true;
+    try { if (window.Steward.setBackupMeta) ok = (await window.Steward.setBackupMeta(last, f)) !== false; } catch { ok = false; }
+    if (!ok) setFreqMsg('Your other stewards’ consoles will still show this church as overdue — the shared backup record could not be saved.');
+  };
   // church-wide backup state: same 'last backed up' + cadence on every steward/device, not just this one
   React.useEffect(() => {
     if (!window.Steward.subscribeBackupMeta) return;
@@ -9238,6 +9255,10 @@ function DashBackup() {
             <button key={k} onClick={() => setFrequency(k)} style={{ padding: '8px 15px', borderRadius: 9, border: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, background: freq === k ? 'var(--clay)' : 'transparent', color: freq === k ? '#fff' : 'var(--ink-2)' }}>{label}</button>
           ))}
         </div>
+        {/* BESIDE THE CONTROL, not up beside the backup button: `msg` renders above this whole section, and a
+            sentence about the reminder cadence appearing next to "Back up church data" is a sentence about a
+            different control. */}
+        {freqMsg ? <div role="alert" style={{ marginTop: 9, fontSize: 12.5, fontWeight: 600, color: 'var(--clay-ink)', lineHeight: 1.5 }}>{freqMsg}</div> : null}
       </div>
       <div style={{ marginTop: 18, paddingTop: 16, borderTop: '1px solid var(--line)' }}>
         <div onClick={() => setRestoreOpen((o) => !o)} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>

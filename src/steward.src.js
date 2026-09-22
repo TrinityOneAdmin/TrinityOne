@@ -4286,10 +4286,18 @@ window.Steward = {
   },
   // backup reminder, church-wide: record the last-backup time + reminder cadence in a church doc, so every steward
   // and device shows the same 'last backed up' + overdue nudge — not just the device that happened to run it.
-  // RETURNS false WHEN NO RELAY TOOK IT, and both callers now say so on screen. The backup itself is a local
-  // file and really did save; this document is the CHURCH-WIDE half — "every steward's nudge resets" — so a
-  // refusal means the other stewards' consoles still show overdue. Saying "Saved" and nothing else made this
-  // console the only one that believed the church was backed up.
+  // RETURNS false WHEN NO RELAY TOOK IT, and BOTH of its callers say so on screen — CLAUDE.md rule 2, and
+  // they are DashBackup's `doBackup` (the "Back up church data" button) and DashBackup's `setFrequency` (the
+  // weekly / monthly / off reminder segment), both in app/stew-dashboard.jsx.
+  //
+  // ⚠ THAT SENTENCE READ "and both callers now say so on screen" ON 2026-09-22 AND ONLY ONE OF THEM DID.
+  // setFrequency was still fire-and-forget inside a try/catch (AUDIT-steward-doc-rules-2026-09-22 F3, and
+  // CLAUDE.md rule 4 — the false claim in the permanent record is the finding). Both read the answer now,
+  // and there is a point-of-use test per caller so the next edit to either cannot quietly re-open it.
+  //
+  // The backup itself is a local file and really did save; this document is the CHURCH-WIDE half — "every
+  // steward's nudge resets" — so a refusal means the other stewards' consoles still show overdue. Saying
+  // "Saved" and nothing else made this console the only one that believed the church was backed up.
   setBackupMeta(at, remind) {
     if (!sk) return Promise.resolve(null);
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', BACKUPMETA_D + pub], ['t', NET]], content: JSON.stringify({ at: at || now(), remind: remind || 'monthly' }) }));

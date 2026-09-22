@@ -361,3 +361,45 @@ test('THE SCREEN: a backup whose church-wide record was refused says so, and nam
     'THE CONSEQUENCE IS BACK TO BEING INVISIBLE. This console is then the only one that believes the church ' +
     'is backed up, while every other steward goes on seeing "overdue". Screen read: ' + no.said());
 });
+
+test('THE SCREEN: changing the backup REMINDER says so too — the second caller of setBackupMeta', async () => {
+  // AUDIT-steward-doc-rules-2026-09-22, finding F3. setBackupMeta has TWO callers in DashBackup, and the
+  // commit that fixed the first one said in its permanent record that it had fixed both. This one — the
+  // weekly / monthly / off segment — was still fire-and-forget inside a try/catch, so a steward picked
+  // "Weekly", watched the segment move to Weekly, and every other console went on nudging monthly with
+  // nothing on any screen saying so.
+  const run = async ({ metaAnswer }) => {
+    const { React, draw } = miniReact();
+    const win = {
+      Steward: {
+        setBackupMeta: async () => metaAnswer,
+        subscribeBackupMeta: () => () => {},
+        mediaSize: async () => ({ count: 0, bytes: 0 }),
+      },
+      localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+      addEventListener() {}, removeEventListener() {},
+    };
+    const mod = loadScreen('app/stew-dashboard.jsx', ['DashBackup'], BASE_GLOBALS(React, win));
+    const render = () => draw(mod.DashBackup, {});
+    let tree = render();
+    const press = async (label) => {
+      const hits = find(tree, n => n.type === 'button' && reads(n).trim() === label);
+      assert.equal(hits.length, 1, `re-anchor this test: expected exactly one "${label}" button, found ${hits.length}`);
+      hits[0].props.onClick();
+      await ticks(12);
+      tree = render();
+    };
+    return { press, said: () => reads(tree) };
+  };
+
+  const ok = await run({ metaAnswer: { id: 'evt' } });
+  await ok.press('Weekly');
+  assert.doesNotMatch(ok.said(), /could not be saved/,
+    'a cadence change every relay accepted is being reported as a failure. Screen read: ' + ok.said());
+
+  const no = await run({ metaAnswer: false });
+  await no.press('Weekly');
+  assert.match(no.said(), /the shared backup record could not be saved/,
+    'THE CADENCE CONTROL IS STILL FIRE-AND-FORGET. The segment moves to Weekly on this console while every ' +
+    'other steward goes on being nudged monthly, and nothing on any screen says so. Screen read: ' + no.said());
+});
