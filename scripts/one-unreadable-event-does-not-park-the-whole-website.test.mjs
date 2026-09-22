@@ -290,19 +290,47 @@ test('F2 CONTROL: no REAL sealed document is ever called damaged — the way to 
   assert.equal(why(JSON.stringify({ e: nip44e('not json at all', unhex(KEY_OURS)) })), 'contents', 're-anchor: a document that opens is no longer classified by what was inside');
 });
 
+test('F2: the VERSION BYTE is checked — a payload this console cannot read is not blamed on a key', async () => {
+  // AUDIT-feeds-round4-2026-09-22 F6: of the three shape rules in _sealIsWhole this was the only one with no
+  // row over it, and the audit's scoped sabotage removing it left this file 26 pass / 0 fail. Re-measured
+  // here at 95ea16c, before this row existed: `if (raw.charCodeAt(0) !== 2)` neutered -> 41 pass / 0 fail,
+  // silent. NIP-44 has exactly one version, 2, and '#' is its own marker for a version nobody reads. A
+  // payload whose first byte says something else did not fail because of a key and must not be called one.
+  const why = whyStuck(globalThis.atob);
+  const real = LONG_SEALED();
+  const bytes = Uint8Array.from(globalThis.atob(real), c => c.charCodeAt(0));
+  // Only the version byte changes: the length, the charset and the 67+32n rule are all still satisfied, so
+  // this row can only be answering on the version byte.
+  const reversion = (v) => { const b = bytes.slice(); b[0] = v; return globalThis.btoa(String.fromCharCode(...b)); };
+  assert.equal(why(JSON.stringify({ e: reversion(2) })), 'key', 're-anchor: rewriting the payload broke it before the version byte could be read');
+  for (const v of [0, 1, 3, 255]) {
+    assert.equal(why(JSON.stringify({ e: reversion(v) })), 'damaged',
+      `A SEALED PAYLOAD MARKED VERSION ${v} IS REPORTED AS A MISSING CHURCH KEY — no key of any church would open it, and the church is sent looking for one`);
+  }
+  assert.equal(why(JSON.stringify({ e: real })), 'key', 're-anchor: an untouched payload sealed under a lost key stopped being a key problem');
+});
+
 test('F2: the answer does not depend on which base64 decoder the browser happens to have', async () => {
   // `atob` is WHATWG "forgiving-base64" in some engines (it accepts a length of 4n+2 and 4n+3) and strict in
   // others, and the console runs in whichever browser the church opened. Before this fix the same truncated
-  // copy was classified 'damaged' in one and 'key' in another — measured 68.3% vs 91.0% of lengths. The
-  // length/charset check is made in our own code now, so both decoders agree.
+  // copy was classified 'damaged' in one and 'key' in another. THREE decoders, not two, because node's own
+  // `atob` — which the rows above use and which 6c38421's table called "STRICT" — is itself the FORGIVING
+  // one: measured, atob('QUJDRA') (length 4n+2) and atob('QUJDRAA') (4n+3) both decode rather than throw.
+  // Driving 6c38421's BEFORE bundle over every truncation length of this fixture: node's atob 993 of 1,455
+  // lengths said 'key' (68.2%), a genuinely strict decoder 331 (22.7%), Buffer.from 1,324 (90.9%). The
+  // length/charset check is made in our own code now, so all three must agree.
   const real = LONG_SEALED();
   const forgiving = whyStuck(globalThis.atob);
   const lenient = whyStuck((s) => Buffer.from(s, 'base64').toString('binary'));
+  const strict = whyStuck((s) => {
+    if (s.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(s)) throw new Error('invalid base64');
+    return globalThis.atob(s);
+  });
   const diff = [];
   for (let n = 1; n < real.length; n++) {
     const raw = JSON.stringify({ e: real.slice(0, n) });
-    const a = forgiving(raw), b = lenient(raw);
-    if (a !== b) diff.push(`${n}: ${a} vs ${b}`);
+    const a = forgiving(raw), b = lenient(raw), c = strict(raw);
+    if (a !== b || a !== c) diff.push(`${n}: ${a} vs ${b} vs ${c}`);
   }
   assert.deepEqual(diff, [], 'THE CHURCH IS TOLD A DIFFERENT STORY IN A DIFFERENT BROWSER, for ' + diff.length + ' truncation lengths, e.g. ' + diff.slice(0, 3).join(' | '));
 });
