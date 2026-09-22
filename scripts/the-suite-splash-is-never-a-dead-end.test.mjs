@@ -134,6 +134,28 @@ test('a first launch STAYS on the launcher: two doors, no redirect, no "reopen t
   } finally { c.stop(); }
 });
 
+// The regression guard the audit of cec135f found lost with the redirect's tests: the ROUTE the owner took.
+test('from the launcher through "Manage a relay", the panel\'s "← Back" lands on the launcher with both doors — not below it',
+  { skip: !CHROME ? 'no chromium' : false, timeout: 90000 }, async () => {
+  const c = await startChrome('about:blank');
+  try {
+    await c.goto(gw.base + '/relay-app/home.html');
+    await sleep(1500);
+    // press the launcher's own door, as a person does (not a navigate)
+    assert.equal(await c.evalIn(`(() => { const a = [...document.querySelectorAll('a.mode')].find(a => /control\.html/.test(a.href)); if (!a) return 'miss'; a.click(); return 'ok'; })()`), 'ok', 'no "Manage a relay" door');
+    await sleep(2500);
+    assert.match(String(await c.evalIn('location.href')), /\/relay-app\/control\.html/, 'the door did not open the panel');
+    // press the panel's own Back control, as a person does
+    // (#openConsole is the panel's "← Back" — by id, because `\s` inside a template literal is just `s`)
+    const pressed = await c.evalIn(`(() => { const b = document.getElementById('openConsole'); if (!b) return 'miss'; b.click(); return 'ok'; })()`);
+    assert.equal(pressed, 'ok', 'the panel has no "← Back" control (#openConsole)');
+    await sleep(2500);
+    assert.match(String(await c.evalIn('location.href')), /\/relay-app\/home\.html$/,
+      'THE OWNER\'S ROUTE: Back from the panel landed on ' + (await c.evalIn('location.href')) + ', not the launcher');
+    assert.equal(await doorsOn(c), '/relay-app/control.html /steward.html', 'the launcher Back landed on does not offer both doors');
+  } finally { c.stop(); }
+});
+
 // ── the splash itself ────────────────────────────────────────────────────────────────────────────────────
 const readSplash = (c) => c.evalIn(`(() => {
   const a = (id) => { const e = document.getElementById(id); return e ? { href: e.href, disabled: e.getAttribute('aria-disabled'), text: (e.textContent || '').trim(), shown: getComputedStyle(e).display !== 'none' } : null; };

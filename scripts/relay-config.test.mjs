@@ -123,7 +123,7 @@ test('C4: the last church cannot be removed (that would open the relay to the in
   const r = await api('/config', { method: 'POST', body: JSON.stringify({ churches: [] }) });
   assert.equal(r.status, 400);
   const j = await r.json();
-  assert.match(j.error, /anyone on the internet/, 'emptying the list must be refused with a reason');
+  assert.match(j.error, /refusing every write/, 'emptying the list must be refused with a reason — and the reason must be true: a church-less relay REFUSES writes (accept()), it does not open them');
   const truth = await (await api('/config')).json();
   assert.equal(truth.churches.length > 0, true, 'the list was emptied anyway');
 });

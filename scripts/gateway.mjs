@@ -6247,7 +6247,7 @@ function serveStatic(req, res) {
             const remaining = curChurches().filter(c => toHexPub(c.npub) !== hex);
             if (!remaining.length && CHURCH_PUBS.has(hex)) {
               res.writeHead(400, H);
-              res.end(JSON.stringify({ error: 'that is the only church on this relay — removing it would let anyone on the internet write here. Add another first, or turn the relay off.' }));
+              res.end(JSON.stringify({ error: 'that is the only church on this relay — removing it would leave the relay refusing every write until a church is added again. Add another first, or turn the relay off.' }));
               return;
             }
             const wantPurge = !!parsed.removeChurch.purge;
@@ -6294,7 +6294,7 @@ function serveStatic(req, res) {
           // the whole internet — while the UI congratulates you. Refuse the emptying save outright.
           if (!clean.length && CHURCH_PUBS.size) {
             res.writeHead(400, H);
-            res.end(JSON.stringify({ error: 'removing every church would let anyone on the internet write to this relay. Keep at least one, or turn the relay off.' }));
+            res.end(JSON.stringify({ error: 'removing every church would leave the relay refusing every write until one is added again. Keep at least one, or turn the relay off.' }));
             return;
           }
           writeChurches(clean);

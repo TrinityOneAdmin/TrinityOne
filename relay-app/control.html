@@ -386,7 +386,7 @@
   <!-- THE NEXT STEP, while this relay hosts no church. A relay with no church refuses every write (gateway.mjs
        accept()), and the church is CREATED IN THE CONSOLE — naming it there registers it here on its own. This
        card is the one thing on the page that says so. Shown/hidden by control.js renderNextStep() from the
-       public /status `writePolicy` (no token needed, so a locked panel still shows it) and from /config; it
+       public /status `writePolicy` (no token needed, so a locked panel still shows it), polled every 5s; it
        goes away on the next poll after a church is registered. -->
   <div class="card card--wide" id="nextStep" style="display:none" aria-label="Next step">
     <h2>Your relay is running</h2>
