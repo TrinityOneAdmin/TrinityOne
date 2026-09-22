@@ -64,7 +64,11 @@ function firstRunNumbers() {
   const home = readFileSync(join(ROOT, 'relay-app/home.js'), 'utf8');
   const decl = gw.match(/\nconst TS_STATE_BUDGETS_MS = \{([^}]*)\};/);
   assert.ok(decl, 'scripts/gateway.mjs no longer declares TS_STATE_BUDGETS_MS — the launcher\'s first-run ceiling is derived from it (AUDIT-round-c C1)');
-  const budgets = [...decl[1].matchAll(/([A-Za-z0-9_]+)\s*:\s*(\d+)/g)].map(m => ({ name: m[1], ms: Number(m[2]) }));
+  // The value must be a BARE INTEGER, ending where the entry ends. `(\d+)` alone took the first number
+  // after the key, so `status: 8000 * 2` read as 8000 and this row stayed green over a route that really
+  // cost 28 038 ms against a 25 000 ceiling. A budget this test cannot sum is a budget it must not count:
+  // the entry then drops out and the tsRun-count assertion below says so.
+  const budgets = [...decl[1].matchAll(/([A-Za-z0-9_]+)\s*:\s*([0-9]+)\s*(?=[,}]|$)/g)].map(m => ({ name: m[1], ms: Number(m[2]) }));
   const sum = budgets.reduce((a, b) => a + b.ms, 0);
   const start = gw.indexOf('async function tsState() {');
   assert.ok(start > 0, 'scripts/gateway.mjs has no tsState() — the launcher waits on it through /relay-names/mine');
@@ -388,6 +392,15 @@ test('a slow /relay-names/mine still gets the card — the launcher waits for th
     assert.equal((await readLauncher(c)).card, true, 'the first-run card is not on screen on a box at its true worst case');
     assert.ok(at3 >= N.sum - 2000, 'the launcher decided at ' + at3 + ' ms — before the box could have answered, so this part did not measure the worst case');
     assert.ok(at3 < N.ceiling, 'the launcher decided at ' + at3 + ' ms, at or past its own ' + N.ceiling + ' ms ceiling: the honest answer no longer beats the backstop (AUDIT-round-c C2 measured the whole margin at 4 818 ms)');
+    // AND THE SLACK IT ACTUALLY HAD, not the slack it was promised. The row above only checks the cliff,
+    // and row 1d only checks the number someone WROTE DOWN — which is the C1 mistake one level up. The
+    // launcher's route is longer than tsState(): /local-token answers first, in series, and is in no sum.
+    // An audit deferred /local-token by 4 s and the whole route came in at 24 053 ms of a 25 000 ceiling —
+    // 947 ms of real margin — with every row here green. So the measured slack is held against the
+    // declared margin, at 60% of it, which leaves room for a loaded box without leaving room for a
+    // second slow step nobody counted.
+    assert.ok(N.ceiling - at3 >= N.margin * 0.6,
+      'the launcher answered at ' + at3 + ' ms and its ceiling is ' + N.ceiling + ' ms, so the REAL margin on this box is ' + Math.round(N.ceiling - at3) + ' ms — relay-app/home.js declares ' + N.margin + ' ms. Something on the launcher\'s route got slower without the ceiling following it. The route is /status in parallel with /local-token -> /relay-names/mine in series; only the tsState() half of it is in FIRST_RUN_TS_BUDGET_MS (AUDIT-round-c C1, and the finding against its first fix).');
   } finally { if (c) c.stop(); if (front) front.stop(); if (front2) front2.stop(); if (gw2) gw2.stop(); gw.stop();
     try { rmSync(dir, { recursive: true, force: true }); } catch {}
     if (dir2) { try { rmSync(dir2, { recursive: true, force: true }); } catch {} } }

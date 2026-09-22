@@ -6,7 +6,8 @@
 // location.href).
 //
 // "SET UP" IS READ FROM WHAT EXISTS, NOT ONLY FROM A MARKER. Two markers other pages already write mean "a
-// wizard finished or was skipped": `to_relay_setup_seen` (control.js closeRSW, the panel's own wizard) and
+// wizard finished or was skipped": `to_relay_setup_seen` (control.js maybeFirstRun, and ONLY there — no exit
+// from the relay wizard writes it; it means "this box has a relay name or a church", read off the box) and
 // `trinityone.steward.wizard.done` (stew-dashboard.jsx finishWizard, and the restore/adopt paths). Either one
 // → the doors, at once and without a fetch. Without a marker (a fresh webview profile, or cleared site data)
 // the box itself is asked: /status.writePolicy is true iff this relay holds a church (public, no token), and
@@ -173,6 +174,7 @@
 // no church and the person did not know why. The launcher's two doors are the first thing a person sees
 // now; the panel points at the console while the relay has no church (control.js, the next-step card).
 //
-// The `to_relay_setup_seen` marker is control.js's own — written by closeRSW(), read by maybeFirstRun() —
-// and nothing in this file reads or writes it any more. The once-per-run `to_relay_setup_tried` marker
-// existed only for the redirect and is gone with it.
+// The `to_relay_setup_seen` marker is control.js's own — written there by maybeFirstRun() alone, from the
+// box's own answers, and READ at the top of this file as the fast path to the doors. Nothing in this file
+// WRITES it. The once-per-run `to_relay_setup_tried` marker existed only for the redirect and is gone with
+// it.
