@@ -67,8 +67,9 @@ export function publicEventFields(ev) {
   };
 }
 
-// A recurring meeting's anchor is the date the steward set; its occurrences fall on `day` (0 = Sunday). The
-// first occurrence is the first `day` on or after the anchor — the same walk app/recur.jsx's expandEvents does.
+// A recurring meeting's anchor is the date the steward set; its occurrences fall on `day` (0 = Sunday). For
+// weekly and fortnightly the first occurrence is the first `day` on or after the anchor — the same walk
+// app/recur.jsx's expandEvents does, and in phase with the rule this file emits.
 function firstOccurrence(date, day) {
   const [, y, m, d] = ISO_DATE.exec(date);
   const cur = new Date(Date.UTC(+y, +m - 1, +d));
@@ -77,12 +78,40 @@ function firstOccurrence(date, day) {
   return cur.toISOString().slice(0, 10);
 }
 
+// A MONTHLY MEETING'S DTSTART MUST BE AN INSTANCE OF ITS OWN RRULE. `FREQ=MONTHLY;BYDAY=1TU` means "the
+// first Tuesday of the month", and a meeting anchored on the 15th (audit F5: anchor 2026-09-15, a Tuesday)
+// took the anchor itself as DTSTART — the THIRD Tuesday. RFC 5545 §3.8.5.3 says a DTSTART that is not
+// synchronised with the recurrence rule gives an undefined set; Google and Apple render it as an extra
+// occurrence, so a subscriber saw a phantom meeting on the 15th that the app's own expandEvents never shows.
+// The first occurrence is the first `day` of the anchor's OWN month if that is not before the anchor, else
+// the first `day` of the next month — which is exactly what expandEvents walks ("once a month, on the first
+// matching weekday of the month", occurrences before the anchor skipped).
+function firstMonthlyOccurrence(date, day) {
+  const [, y, m, d] = ISO_DATE.exec(date);
+  const anchor = Date.UTC(+y, +m - 1, +d);
+  if (day == null) return date;
+  for (let ahead = 0; ahead < 2; ahead++) {
+    const cur = new Date(Date.UTC(+y, +m - 1 + ahead, 1));
+    while (cur.getUTCDay() !== day) cur.setUTCDate(cur.getUTCDate() + 1);
+    if (cur.getTime() >= anchor) return cur.toISOString().slice(0, 10);
+  }
+  return date;   // unreachable: the first `day` of the next month is always after any date in this one
+}
+
 function dtstart(ev) {
-  const date = ev.recur ? firstOccurrence(ev.date, ev.day) : ev.date;
+  const date = ev.recur === 'monthly' ? firstMonthlyOccurrence(ev.date, ev.day)
+    : ev.recur ? firstOccurrence(ev.date, ev.day) : ev.date;
   const d = date.replace(/-/g, '');
   if (!ev.time) return 'DTSTART;VALUE=DATE:' + d;
   return 'DTSTART:' + d + 'T' + ev.time.replace(':', '') + '00';
 }
+
+// The inverse of foldLine, for anyone reading a file this module produced — including this repo's own tests.
+// A content line is folded at 75 OCTETS, so a 64-character hex pubkey inside a long description is SPLIT
+// across a fold, and a naive `text.includes(pubkey)` over the raw bytes answers "not there" while it is
+// there (audit F6 — the scans that assert no key reaches a church's website were reading folded text).
+// Unfold first, then scan. RFC 5545 §3.1: a CRLF followed by one space or tab is a fold and nothing else.
+export const unfoldIcs = (text) => String(text == null ? '' : text).replace(/\r\n[ \t]/g, '');
 
 function rrule(ev) {
   if (!ev.recur) return '';

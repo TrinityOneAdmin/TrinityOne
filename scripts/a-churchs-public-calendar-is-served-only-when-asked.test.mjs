@@ -27,6 +27,7 @@ import { generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure
 import { npubEncode } from 'nostr-tools/nip19';
 import { requireFreePort } from './test-ports.mjs';
 import { D, ALL_PREFIXES } from './trinity-doc-types.mjs';
+import { unfoldIcs } from './public-calendar.mjs';   // the inverse of the builder's own fold — see the byte-scan below
 
 const PORT = 8850;   // unique across scripts/*.test.mjs and scripts/*.probe.mjs (8850-8855 were free on 2026-09-22)
 const HTTP = `http://127.0.0.1:${PORT}`;
@@ -190,15 +191,19 @@ test('the church writes its public copies and switches the calendar on — the f
   const sunday = byUid.get(`trinityone-${EV_SUNDAY}@${NPUB}`);
   assert.equal(sunday.DTSTART, '20260906T103000', 'a weekly meeting starts on its anchor date');
   assert.equal(sunday.RRULE, 'FREQ=WEEKLY;BYDAY=SU', 'a weekly meeting carries its repeat rule');
-  // the whole file, byte by byte: nothing that could name a machine or a person
-  assert.equal(/\b(https?|wss?):\/\//.test(text), false, 'the feed carries a URL: ' + (text.match(/\b(https?|wss?):\/\/\S+/) || [])[0]);
-  assert.equal(text.includes('127.0.0.1') || text.includes(String(PORT)), false, 'the feed names the relay');
-  assert.equal(text.includes('ATTENDEE') || text.includes('ORGANIZER'), false, 'the feed names a person');
+  // The whole file, byte by byte: nothing that could name a machine or a person — SCANNED UNFOLDED. Content
+  // lines fold at 75 octets, so a long DESCRIPTION splits a hostname or a 64-character key across a fold and
+  // `includes()` over the raw file says "not there" while it is there (audit F6; the property is measured in
+  // the-public-calendar-file-says-what-it-means.test.mjs).
+  const flat = unfoldIcs(text);
+  assert.equal(/\b(https?|wss?):\/\//.test(flat), false, 'the feed carries a URL: ' + (flat.match(/\b(https?|wss?):\/\/\S+/) || [])[0]);
+  assert.equal(flat.includes('127.0.0.1') || flat.includes(String(PORT)), false, 'the feed names the relay');
+  assert.equal(flat.includes('ATTENDEE') || flat.includes('ORGANIZER'), false, 'the feed names a person');
   // The church's OWN npub is in every UID (trinityone-<id>@<npub>) — it is the address just dialled, so it
   // reveals nothing new. What must never appear is a member's key, or the church's key in any other form.
-  assert.equal(text.includes(ann.pub) || text.includes(ap), false, 'the feed carries a hex pubkey');
-  assert.equal(text.includes('Safeguarding review') || text.includes('vestry'), false, 'THE HELD EVENT LEAKED into the feed');
-  assert.equal(text.includes(EV_SECRET), false, 'an event with no public copy reached the feed');
+  assert.equal(flat.includes(ann.pub) || flat.includes(ap), false, 'the feed carries a hex pubkey');
+  assert.equal(flat.includes('Safeguarding review') || flat.includes('vestry'), false, 'THE HELD EVENT LEAKED into the feed');
+  assert.equal(flat.includes(EV_SECRET), false, 'an event with no public copy reached the feed');
 });
 
 test('each public event has its own address; the held one and the uncopied one do not', async () => {

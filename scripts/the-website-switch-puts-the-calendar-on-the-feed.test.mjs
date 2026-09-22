@@ -24,6 +24,7 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { WebSocket } from 'ws';
 import * as H from './relay-network-harness.mjs';
+import { unfoldIcs } from './public-calendar.mjs';   // the inverse of the builder's own fold — see the byte-scan below
 
 const CHROME = ['/usr/bin/chromium-browser', '/usr/bin/chromium', '/usr/bin/google-chrome'].find(p => existsSync(p));
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -228,8 +229,11 @@ test('Settings → Your website → the switch: the feed appears at the address 
   assert.deepEqual(titles, [SUPPER], 'the feed holds ' + JSON.stringify(titles) + ' — it must hold the supper and NOT the held event');
   assert.equal(cal.events[0].DTSTART, NEXT_MONTH.replace(/-/g, '') + 'T193000', 'the supper is not at its date and time');
   assert.equal(unescape(cal.events[0].LOCATION), 'The church hall');
-  assert.equal(/\b(https?|wss?):\/\//.test(r.text), false, 'the feed carries a URL: ' + (r.text.match(/\b(https?|wss?):\/\/\S+/) || [])[0]);
-  assert.equal(r.text.includes(HELD), false, 'THE HELD EVENT LEAKED');
+  // unfolded, for the reason the sibling file's scan gives (audit F6): a fold hides a long string from includes()
+  const flat = unfoldIcs(r.text);
+  assert.equal(/\b(https?|wss?):\/\//.test(flat), false, 'the feed carries a URL: ' + (flat.match(/\b(https?|wss?):\/\/\S+/) || [])[0]);
+  assert.equal(flat.includes(churchPub), false, 'the feed carries the church\'s key in hex');
+  assert.equal(flat.includes(HELD), false, 'THE HELD EVENT LEAKED');
   // and the box holds exactly one public copy — the supper's, in the clear, with the noticeboard fields only
   const copies = heldBy(churchPub, 'trinityone/pubevent:').filter(c => !c.tombstone);
   assert.equal(copies.length, 1, 'the box holds ' + copies.length + ' live public copies, not 1');
