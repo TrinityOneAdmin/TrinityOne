@@ -32,6 +32,19 @@
   });
   refreshReach();
 
+  // ── THE NEXT STEP WHILE THIS RELAY HOSTS NO CHURCH ────────────────────────────────────────────────────
+  // Owner, 2026-09-22, first run of the real app: after the relay wizard "no church existed on the relay" and
+  // nothing said why. Correct — a church is CREATED IN THE CONSOLE (naming it there registers it here, the
+  // 2026-09-04 decision) — but the panel had to say so. ONE caller: poll(), every 5 s, with /status's public
+  // `writePolicy` (true iff the relay has a church; no token needed, so a locked panel still gets it). A
+  // second call from loadConfig() was tried and removed: sabotaging it changed nothing the test could see.
+  // `undefined` (a relay that does not say) hides the card: a claim this panel cannot back is worse than none.
+  function renderNextStep(hasChurch) {
+    const el = document.getElementById('nextStep');
+    if (!el) return;
+    el.style.display = hasChurch === false ? 'block' : 'none';
+  }
+
   const initials = (n) => (n||'?').split(/\s+/).map(w=>w[0]).join('').slice(0,2).toUpperCase();
   async function poll() {
     // REACHABILITY IS DECIDED BY THE FETCH, NOTHING ELSE. This try used to wrap the fetch AND every DOM
@@ -61,6 +74,8 @@
       document.getElementById('title').textContent = 'Your relay is running';
       const up = Math.floor(s.uptimeMs/1000); const h=Math.floor(up/3600), m=Math.floor((up%3600)/60);
       document.getElementById('sub').textContent = 'Up ' + (h?h+'h ':'') + m + 'm · port ' + s.port;
+      // no church yet → the next-step card (the church is created in the console, not here)
+      renderNextStep(typeof s.writePolicy === 'boolean' ? s.writePolicy : undefined);
       // COUNTS COME FROM THE ADMIN-GATED /stats, NOT FROM /status. They were read from `s.counts` on the
       // public, unauthenticated /status — and they are church-identifying, which is the standard the rest
       // of that handler holds itself to (the clock was justified there as "says nothing about the
@@ -146,7 +161,11 @@
         '<div class="cr-action"><button class="btn btn-ghost btn-sm cr-remove" data-rm="' + i + '">Remove…</button></div>' +
       '</div>';
     }).join('')
-      : '<div class="warn"><span>⚠</span><span><b>No churches yet.</b> Until you add one, this relay accepts messages from anyone on the internet. Add your church above.</span></div>';
+      // ⚠ NOT "accepts messages from anyone on the internet" — it said that long after gateway.mjs accept()
+      // started refusing every write from a box with no churches. And the first church is not "added above":
+      // it is created in the console (naming it there registers it here). The paste field is for a church
+      // that already exists somewhere else.
+      : '<div class="warn"><span>⚠</span><span><b>No churches yet.</b> This relay stores nothing until it has one. Your own church is created in the console — <a href="/steward.html" id="cfgNoneConsole">open the console</a>. A church run from another device is added by its npub above.</span></div>';
     list.querySelectorAll('[data-rm]').forEach(b => b.onclick = () => removeChurch(cfgChurches[+b.dataset.rm]));
     wireCopyUrls(list);
   }
@@ -235,7 +254,7 @@
       if (r.status === 401) { setLocked(true); document.getElementById('cfgList').innerHTML = ''; return; }
       const s = await r.json();
       setLocked(false);
-      st.textContent = s.configured ? '' : '— not set up yet';
+      st.textContent = s.configured ? '' : '— none yet';
       cfgChurches = (s.churches || []).map(c => ({ npub: c.npub, name: c.name, by: c.by, at: c.at, events: c.events, blobs: c.blobs, bytes: c.bytes }));
       renderCfg();
       loadServes();
@@ -1134,7 +1153,10 @@
       card.innerHTML = rswDots()
         + '<div class="rsw-ic">' + RSW_IC.wave + '</div>'
         + '<h2 class="rsw-h">Welcome — let’s set up your relay</h2>'
-        + '<p class="rsw-sub">A relay is the private server that stores your church’s messages, records and media — running right here, on this machine. Two quick things and you’re ready: give it a name, and add your church. About a minute.</p>'
+        // ⚠ NOT "give it a name, and add your church". A fresh box's church is created in the console, not here —
+        // this wizard's church step only says so. Promising an "add your church" step that the wizard cannot
+        // deliver is how the owner's first run (2026-09-22) ended with no church and no idea why.
+        + '<p class="rsw-sub">A relay is the private server that stores your church’s messages, records and media — running right here, on this machine. Two quick things: give it a name, and say whether this computer stays on. Your church is created in the console afterwards. About a minute.</p>'
         + '<div class="rsw-foot"><button class="btn btn-ghost" id="rswSkip">Skip setup</button><div style="flex:1"></div><button class="btn btn-clay" id="rswGo">Get started</button></div>';
       document.getElementById('rswGo').onclick = () => { rswStep = 1; renderRSW(); };
       document.getElementById('rswSkip').onclick = closeRSW;
@@ -1261,16 +1283,25 @@
       document.getElementById('rswOnNo').onclick = () => answer(false);
       return;
     }
-    // step 4 — done + the one worthwhile next step (the tunnel lives on Settings)
+    // step 4 — done + the next steps (the tunnel lives on Settings; the CHURCH lives in the console)
+    // ⚠ THE CONSOLE STEP COMES FIRST WHEN THE BOX HAS NO CHURCH. The owner's first run of the real app
+    // (2026-09-22) reached this card, pressed "Go to dashboard", and found a relay with no church and nothing
+    // saying the church is created in the console. The dashboard's own next-step card says it too; this is
+    // the moment the person is actually reading.
+    const needsChurch = !rswHasChurches && !rswAdded;
     card.innerHTML = rswDots()
       + '<div class="rsw-ic">' + RSW_IC.check + '</div>'
       + '<h2 class="rsw-h">Your relay is ready</h2>'
-      + '<p class="rsw-sub">' + (rswHandle ? 'Named <b>' + esc(rswHandle) + '</b>. ' : '') + (rswAdded ? 'Your church can use it now. ' : '') + 'One more thing worth doing, so members outside your building can connect:</p>'
+      + '<p class="rsw-sub">' + (rswHandle ? 'Named <b>' + esc(rswHandle) + '</b>. ' : '') + (rswAdded ? 'Your church can use it now. ' : '')
+      +   (needsChurch ? 'Now set up your church — it is created in the console, not here.' : 'One more thing worth doing, so members outside your building can connect:') + '</p>'
       + '<div class="rsw-next">'
+      +   (needsChurch ? '<a class="rsw-step" id="rswConsole" href="/steward.html" style="text-decoration:none"><span class="si">' + RSW_IC.church + '</span><span style="flex:1"><span class="st">Open the console</span><span class="sd">Create your church there — naming it registers it on this relay.</span></span></a>' : '')
       +   '<button class="rsw-step" id="rswTunnel"><span class="si">' + RSW_IC.globe + '</span><span style="flex:1"><span class="st">Reach members from anywhere</span><span class="sd">Turn on a secure tunnel — free, no router setup.</span></span></button>'
       + '</div>'
       + '<div class="rsw-foot"><div style="flex:1"></div><button class="btn btn-clay" id="rswDone">Go to dashboard</button></div>';
     document.getElementById('rswDone').onclick = closeRSW;
+    // the console link is a real <a> (it navigates); mark the wizard seen on the way out so it never re-opens
+    const rc = document.getElementById('rswConsole'); if (rc) rc.addEventListener('click', () => { try { localStorage.setItem(RSW_SEEN, '1'); } catch (e) {} });
     document.getElementById('rswTunnel').onclick = () => {
       closeRSW();
       const t = document.getElementById('tab-set'); if (t) t.click();

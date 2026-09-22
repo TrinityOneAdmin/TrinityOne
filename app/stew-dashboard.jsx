@@ -2010,7 +2010,11 @@ function StewDashboard({ initial = 'overview' }) {
         {renaming ? <NameEditModal current={church.name} isNetwork={church.isNetwork} onSave={(n) => Promise.resolve(window.Steward.publishProfile({ name: n, nip05: church.nip05 }))} onClose={() => setRenaming(false)} /> : null}
       <div style={{ position: 'absolute', inset: 0, display: 'flex', background: 'var(--paper)' }}>
         {/* sidebar */}
-        <div style={{ width: 232, flexShrink: 0, background: 'var(--surface)', borderRight: '1px solid var(--line)', display: 'flex', flexDirection: 'column', padding: '22px 16px' }}>
+        {/* The sidebar SCROLLS when the window is short. Its last row is "Relay & Suite home" — the only way from the
+            console back to the launcher inside the Suite — and in a window shorter than ~780px (a 768px laptop, the
+            Suite's 900x780 window shrunk by the window manager) it sat below the bottom edge of a column that could
+            not scroll. Measured 2026-09-22 at 900x600: the link at y 683..723 in a 600px viewport. */}
+        <div style={{ width: 232, flexShrink: 0, background: 'var(--surface)', borderRight: '1px solid var(--line)', display: 'flex', flexDirection: 'column', padding: '22px 16px', overflowY: 'auto', minHeight: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '0 8px', marginBottom: 22 }}>
             <Halo size={26} color="var(--ink)" spark="var(--clay)" />
             <span style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 17 }}>Trinity<span style={{ color: 'var(--clay)' }}>One</span></span>

@@ -6324,7 +6324,7 @@ function serveStatic(req, res) {
             const remaining = curChurches().filter(c => toHexPub(c.npub) !== hex);
             if (!remaining.length && CHURCH_PUBS.has(hex)) {
               res.writeHead(400, H);
-              res.end(JSON.stringify({ error: 'that is the only church on this relay — removing it would let anyone on the internet write here. Add another first, or turn the relay off.' }));
+              res.end(JSON.stringify({ error: 'that is the only church on this relay — removing it would leave the relay refusing every write until a church is added again. Add another first, or turn the relay off.' }));
               return;
             }
             const wantPurge = !!parsed.removeChurch.purge;
@@ -6371,7 +6371,7 @@ function serveStatic(req, res) {
           // the whole internet — while the UI congratulates you. Refuse the emptying save outright.
           if (!clean.length && CHURCH_PUBS.size) {
             res.writeHead(400, H);
-            res.end(JSON.stringify({ error: 'removing every church would let anyone on the internet write to this relay. Keep at least one, or turn the relay off.' }));
+            res.end(JSON.stringify({ error: 'removing every church would leave the relay refusing every write until one is added again. Keep at least one, or turn the relay off.' }));
             return;
           }
           writeChurches(clean);
@@ -7719,7 +7719,10 @@ server.listen(PORT, BIND_HOST, () =>
     // NOT "open relay" ANY MORE. This line said "write policy OFF (open relay — anyone may write)" long after
     // accept() started refusing every write from a box with no churches. An operator reading it would conclude
     // their unconfigured relay was permissive when in fact it keeps nothing at all.
-    (CHURCH_PUBS.size ? `\n  write policy ON — ${CHURCH_PUBS.size} church(es), ${MEMBERS.size} members, ${BROADCAST.size} broadcast group(s)` : `\n  NO CHURCH CONFIGURED — this relay refuses every write until one is set up in the control dashboard`) +
+    // NOT "set up in the control dashboard" EITHER. The panel adds a church that already exists, by npub; a NEW
+    // church is created in the Steward console, and naming it there registers it here (2026-09-04). The owner's
+    // first run of the real app (2026-09-22) followed the old line's advice and ended with no church.
+    (CHURCH_PUBS.size ? `\n  write policy ON — ${CHURCH_PUBS.size} church(es), ${MEMBERS.size} members, ${BROADCAST.size} broadcast group(s)` : `\n  NO CHURCH CONFIGURED — this relay refuses every write until a church is created in the Steward console (http://localhost:${PORT}/steward.html), or an existing one is added by npub in the relay panel`) +
     `\n  setup / control:  http://localhost:${PORT}/relay-app/control.html` +
     `\n  admin token (needed to configure from another device): ${ADMIN_TOKEN}` +
     (!_strictWeb ? `\n  ⚠ CSP is LAX (unsafe-inline/eval) — served shells still carry in-browser Babel. Deploy a PRE-TRANSPILED build (or set STRICT_CSP=1) before go-live: the console holds the church key.` : '')));

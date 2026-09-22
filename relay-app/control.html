@@ -350,6 +350,11 @@
       <div class="sub" id="sub">The box that carries your church's messages.</div>
     </div>
     <button class="btn-ghost" id="openConsole">&larr; Back</button>
+    <!-- THE CONSOLE IS ONE CLICK FROM HERE. The church is created in the console, not on this panel, and until
+         2026-09-22 nothing on this page said so or led there — the owner's first run of the real app ended on
+         this panel with no church and no idea why. Same href as the launcher's "Run your church" door: the
+         console served by this same relay. (`openConsole` above is the Back button's historical id.) -->
+    <a class="btn btn-clay" id="goConsole" href="/steward.html" style="text-decoration:none">Open the console</a>
   </div>
 
   <!-- Two groups: what the relay IS DOING (dashboard) vs what you CONFIGURE (settings). All eight cards
@@ -377,6 +382,17 @@
   <!-- card deck: auto-fill grid, so it is 1 column on a phone and packs to 2–3 on a laptop without a
        breakpoint per card. -->
   <div class="deck">
+
+  <!-- THE NEXT STEP, while this relay hosts no church. A relay with no church refuses every write (gateway.mjs
+       accept()), and the church is CREATED IN THE CONSOLE — naming it there registers it here on its own. This
+       card is the one thing on the page that says so. Shown/hidden by control.js renderNextStep() from the
+       public /status `writePolicy` (no token needed, so a locked panel still shows it), polled every 5s; it
+       goes away on the next poll after a church is registered. -->
+  <div class="card card--wide" id="nextStep" style="display:none" aria-label="Next step">
+    <h2>Your relay is running</h2>
+    <div class="muted" style="margin-bottom:12px">Now set up your church — it is created in the console, not here.</div>
+    <a class="btn btn-clay" id="nextStepConsole" href="/steward.html" style="text-decoration:none">Open the console</a>
+  </div>
 
   <!-- The activity figures come from /stats, which is admin-only (it breaks activity down BY CHURCH).
        The token gate itself lives in the churches card, over in Settings — so when locked, say so here

@@ -1,26 +1,26 @@
-// THE SUITE'S "Starting your relay…" SPLASH IS NEVER A DEAD END, AND THE LAUNCHER'S REDIRECT NO LONGER LEADS THERE.
+// THE SUITE'S "Starting your relay…" SPLASH IS NEVER A DEAD END, AND A FIRST LAUNCH STAYS ON THE LAUNCHER.
 // Run: node --test scripts/the-suite-splash-is-never-a-dead-end.test.mjs
 //
 // Owner, 2026-09-19, on a fresh Ubuntu box: pressing the relay panel's own "← Back" landed on the bundled
-// splash — no links, no address bar, nothing but quitting the app. 0ac3ee6 had "fixed" this seven days earlier
-// by changing the launcher's redirect from `replace` to `href`, and its unit test went green.
+// splash — no links, no address bar, nothing but quitting the app. The launcher's first-run redirect to the
+// panel ran before the load event, which REPLACES the launcher's history entry (measured here at 3a8c980:
+// [about:blank, control] — home.html's entry GONE, `href` or not), so `history.back()` from the panel landed
+// below the launcher.
 //
-// MEASURED HERE, in Chromium, at 3a8c980: a first launch of home.html leaves the history [about:blank, control]
-// — home.html's entry is GONE, `href` or not — because a navigation started before the document has finished
-// loading replaces the entry it starts from. `history.length` reads 2, the panel calls `history.back()`, and
-// the page below home.html is what you get: about:blank in a browser tab, the splash in the Suite.
+// Then the owner's first run of the REAL AppImage, 2026-09-22: the app opened on the relay panel, nothing said
+// the two doors were one page back, and after the relay wizard nothing said the church is created in the
+// console. So the redirect is gone altogether (relay-app/home.js): a first launch stays on the launcher, and
+// test 1 here is the browser proving it — a fresh home.html off a real gateway, read three seconds later.
 //
-// Two fixes, two tests. home.js now waits for the load event and one task, so the entry is pushed and Back
-// reaches the launcher (test 1). And the splash itself carries the two doors and says what it is waiting for,
-// so a Back that reaches it — a second Back from the launcher can, on any launch — is still not a trap (tests
-// 2–4). The splash is served here from a plain static server because the gateway refuses to serve
-// relay-app/desktop/ (deliberately: those are build sources), and it is pointed at the test's gateway with
-// `?relay=`, which the shell never passes.
+// And the splash itself carries two doors and says what it is waiting for, so a Back that reaches it — a Back
+// from the launcher can, on any launch — is still not a trap (tests 2–5). Its first door is the LAUNCHER, the
+// page the shell itself opens once the relay answers; the second is the console. The splash is served here
+// from a plain static server because the gateway refuses to serve relay-app/desktop/ (deliberately: those are
+// build sources), and it is pointed at the test's gateway with `?relay=`, which the shell never passes.
 //
-// WHAT THIS CANNOT PROVE: the real shell is WebKitGTK, not Chromium. WebKit's rule for a pre-load navigation
-// is the same (NavigationScheduler locks the back/forward list until the load event has finished), but the
-// only proof is a Suite build on a desktop. NOTHING REACHES PRODUCTION: the shipped hosts resolve to a dead
-// port in the browser and are refused inside the gateway.
+// WHAT THIS CANNOT PROVE: the real shell is WebKitGTK, not Chromium; only a Suite build on a desktop shows
+// the real window. NOTHING REACHES PRODUCTION: the shipped hosts resolve to a dead port in the browser and
+// are refused inside the gateway.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -107,45 +107,52 @@ after(() => { if (gw) gw.stop(); if (splashSrv) splashSrv.close(); });
 
 const doorsOn = (c) => c.evalIn(`[...document.querySelectorAll('a.mode')].map(a => a.getAttribute('href')).sort().join(' ')`);
 
-test('a first launch PUSHES the launcher\'s entry, so the panel\'s "← Back" reaches the two doors and not the splash',
+
+test('a first launch STAYS on the launcher: two doors, no redirect, no "reopen the app" line',
   { skip: !CHROME ? 'no chromium' : false, timeout: 90000 }, async () => {
-  // The shape of the Suite window: one entry below the launcher (the splash there; about:blank here).
+  // The shape of the Suite window: one entry below the launcher (the splash there; about:blank here). Nothing
+  // in storage — this is the very first run.
   const c = await startChrome('about:blank');
   try {
     await c.goto(gw.base + '/relay-app/home.html');
     await sleep(3000);
-    assert.match(String(await c.evalIn('location.href')), /\/relay-app\/control\.html$/,
-      'a first launch did not reach the relay panel at all — the redirect is gone, and the relay wizard with it');
-    const entries = await c.history();
-    assert.ok(entries.some(u => /\/relay-app\/home\.html$/.test(u)),
-      'THE LAUNCHER\'S HISTORY ENTRY WAS REPLACED. The browser holds ' + JSON.stringify(entries) + ': the redirect ' +
-      'ran before the document had finished loading, so `href` behaved as `replace`. The panel\'s "← Back" now ' +
-      'lands on whatever is below the launcher — the bundled splash in the Suite. This is the door the owner ' +
-      'walked through on 2026-09-19.');
-    // Now the panel's own exit, exactly as the owner pressed it.
-    assert.equal(await c.evalIn(`(() => { const b = document.getElementById('openConsole'); if (!b) return 'missing'; b.click(); return 'clicked'; })()`), 'clicked',
-      'the panel no longer has its "← Back" button');
-    await sleep(1500);
     assert.match(String(await c.evalIn('location.href')), /\/relay-app\/home\.html$/,
-      'Back from the panel landed on ' + (await c.evalIn('location.href')) + ' instead of the launcher');
-    assert.equal(await doorsOn(c), '/relay-app/control.html /steward.html',
-      'the launcher Back reached does not offer both doors');
-    assert.match(String(await c.evalIn("sessionStorage.getItem('to_relay_setup_tried') || ''")), /^1$/,
-      'the once-per-run marker was not written, so Back would have bounced straight back to the panel');
+      'A FIRST LAUNCH LEFT THE LAUNCHER for ' + (await c.evalIn('location.href')) + '. On 2026-09-22 the owner’s ' +
+      'first run of the real app opened on the relay panel, with nothing saying the two doors were one page back.');
+    const entries = await c.history();
+    assert.deepEqual(entries.filter(u => !/^about:blank$/.test(u)), [gw.base + '/relay-app/home.html'],
+      'the browser holds ' + JSON.stringify(entries) + ' — the launcher navigated somewhere and came back, or was replaced');
+    assert.equal(await doorsOn(c), '/relay-app/control.html /steward.html', 'the launcher does not offer both doors');
+    // Both doors on screen, not merely in the DOM.
+    const shown = await c.evalIn(`[...document.querySelectorAll('a.mode')].map(a => { const r = a.getBoundingClientRect(); return r.width > 0 && r.height > 0 && getComputedStyle(a).visibility !== 'hidden'; }).join(',')`);
+    assert.equal(shown, 'true,true', 'a door is in the page but not on the screen');
+    const text = String(await c.evalIn('document.body.innerText'));
+    assert.doesNotMatch(text, /reopen the app/i,
+      'the launcher still says "reopen the app to return here" — false (the console and the panel both link back) and poor');
+    assert.equal(await c.evalIn("sessionStorage.getItem('to_relay_setup_tried')"), null,
+      'the once-per-run redirect marker is still being written — something still tries to redirect');
   } finally { c.stop(); }
 });
 
-test('the launcher opened with the once-per-run marker already set shows the two doors and stays put',
-  { skip: !CHROME ? 'no chromium' : false, timeout: 60000 }, async () => {
+// The regression guard the audit of cec135f found lost with the redirect's tests: the ROUTE the owner took.
+test('from the launcher through "Manage a relay", the panel\'s "← Back" lands on the launcher with both doors — not below it',
+  { skip: !CHROME ? 'no chromium' : false, timeout: 90000 }, async () => {
   const c = await startChrome('about:blank');
   try {
-    await c.goto(gw.base + '/relay-app/control.html');
-    await sleep(1500);
-    await c.evalIn("sessionStorage.setItem('to_relay_setup_tried', '1'); 'ok'");
     await c.goto(gw.base + '/relay-app/home.html');
+    await sleep(1500);
+    // press the launcher's own door, as a person does (not a navigate)
+    assert.equal(await c.evalIn(`(() => { const a = [...document.querySelectorAll('a.mode')].find(a => /control\.html/.test(a.href)); if (!a) return 'miss'; a.click(); return 'ok'; })()`), 'ok', 'no "Manage a relay" door');
     await sleep(2500);
-    assert.match(String(await c.evalIn('location.href')), /\/relay-app\/home\.html$/, 'the launcher redirected again in the same run');
-    assert.equal(await doorsOn(c), '/relay-app/control.html /steward.html', 'the launcher offers something other than its two doors');
+    assert.match(String(await c.evalIn('location.href')), /\/relay-app\/control\.html/, 'the door did not open the panel');
+    // press the panel's own Back control, as a person does
+    // (#openConsole is the panel's "← Back" — by id, because `\s` inside a template literal is just `s`)
+    const pressed = await c.evalIn(`(() => { const b = document.getElementById('openConsole'); if (!b) return 'miss'; b.click(); return 'ok'; })()`);
+    assert.equal(pressed, 'ok', 'the panel has no "← Back" control (#openConsole)');
+    await sleep(2500);
+    assert.match(String(await c.evalIn('location.href')), /\/relay-app\/home\.html$/,
+      'THE OWNER\'S ROUTE: Back from the panel landed on ' + (await c.evalIn('location.href')) + ', not the launcher');
+    assert.equal(await doorsOn(c), '/relay-app/control.html /steward.html', 'the launcher Back landed on does not offer both doors');
   } finally { c.stop(); }
 });
 
@@ -153,7 +160,7 @@ test('the launcher opened with the once-per-run marker already set shows the two
 const readSplash = (c) => c.evalIn(`(() => {
   const a = (id) => { const e = document.getElementById(id); return e ? { href: e.href, disabled: e.getAttribute('aria-disabled'), text: (e.textContent || '').trim(), shown: getComputedStyle(e).display !== 'none' } : null; };
   const hint = document.getElementById('hint');
-  return JSON.stringify({ panel: a('goPanel'), console: a('goConsole'), hint: hint ? (hint.textContent || '').trim() : null, title: (document.querySelector('h1') || {}).textContent || '' });
+  return JSON.stringify({ suite: a('goSuite'), console: a('goConsole'), hint: hint ? (hint.textContent || '').trim() : null, title: (document.querySelector('h1') || {}).textContent || '' });
 })()`);
 
 test('the splash carries both doors and says what it is waiting for while the relay is NOT answering',
@@ -163,18 +170,18 @@ test('the splash carries both doors and says what it is waiting for while the re
   try {
     await sleep(2500);
     const s = JSON.parse(await readSplash(c));
-    assert.ok(s.panel && s.console, 'THE SPLASH HAS NO EXITS. A person who reaches it by Back has nothing to press but quit.');
-    assert.equal(s.panel.href, `http://127.0.0.1:${dead}/relay-app/control.html`, 'the relay-panel link points somewhere else');
+    assert.ok(s.suite && s.console, 'THE SPLASH HAS NO EXITS. A person who reaches it by Back has nothing to press but quit.');
+    assert.equal(s.suite.href, `http://127.0.0.1:${dead}/relay-app/home.html`, 'the Suite door points somewhere other than the launcher');
     assert.equal(s.console.href, `http://127.0.0.1:${dead}/steward.html`, 'the console link points somewhere else');
-    assert.ok(s.panel.shown && s.console.shown, 'the doors are in the page but not on the screen');
-    assert.equal(s.panel.disabled, 'true', 'with the relay down the panel link claims to be ready');
+    assert.ok(s.suite.shown && s.console.shown, 'the doors are in the page but not on the screen');
+    assert.equal(s.suite.disabled, 'true', 'with the relay down the Suite door claims to be ready');
     assert.equal(s.console.disabled, 'true', 'with the relay down the console link claims to be ready');
     assert.match(String(s.hint), /starting in the background/i,
       'nothing on the splash says the wait is the relay starting, so "Starting your relay…" reads as "wait" and not "you are stuck"');
     assert.match(String(s.hint), /open when it answers/i, 'the line does not say when the doors open');
     // PRESSABLE ANYWAY. The dimming is advice, never a lock: a poll the shell's webview refuses must not
     // become the trap this page exists to remove.
-    assert.equal(await c.evalIn(`getComputedStyle(document.getElementById('goPanel')).pointerEvents`), 'auto', 'the dimmed link cannot be clicked');
+    assert.equal(await c.evalIn(`getComputedStyle(document.getElementById('goSuite')).pointerEvents`), 'auto', 'the dimmed link cannot be clicked');
   } finally { c.stop(); }
 });
 
@@ -183,16 +190,17 @@ test('…and the doors come alive when the relay answers, pointing at that relay
   const c = await startChrome(`${splashBase}/index.html?relay=${gw.base}`);
   try {
     let s = null;
-    for (let i = 0; i < 20; i++) { await sleep(500); s = JSON.parse(await readSplash(c)); if (s.panel && s.panel.disabled === 'false') break; }
-    assert.ok(s && s.panel, 'the splash has no relay-panel link');
-    assert.equal(s.panel.disabled, 'false', 'the relay is answering /status and the splash never noticed');
+    for (let i = 0; i < 20; i++) { await sleep(500); s = JSON.parse(await readSplash(c)); if (s.suite && s.suite.disabled === 'false') break; }
+    assert.ok(s && s.suite, 'the splash has no Suite door');
+    assert.equal(s.suite.disabled, 'false', 'the relay is answering /status and the splash never noticed');
     assert.equal(s.console.disabled, 'false', 'the relay is answering /status and the console link stayed dimmed');
-    assert.equal(s.panel.href, gw.base + '/relay-app/control.html', 'the live link points somewhere other than the relay that answered');
+    assert.equal(s.suite.href, gw.base + '/relay-app/home.html', 'the live link points somewhere other than the relay that answered');
     assert.match(String(s.hint), /answering/i, 'the line still says the relay is starting after it answered');
-    // A door that WORKS: follow it and land on the panel served by that relay.
-    await c.evalIn(`document.getElementById('goPanel').click(); 'ok'`);
+    // A door that WORKS: follow it and land on the LAUNCHER served by that relay — with its own two doors.
+    await c.evalIn(`document.getElementById('goSuite').click(); 'ok'`);
     await sleep(2000);
-    assert.equal(await c.evalIn('location.href'), gw.base + '/relay-app/control.html', 'the relay-panel door did not open the panel');
+    assert.equal(await c.evalIn('location.href'), gw.base + '/relay-app/home.html', 'the Suite door did not open the launcher');
+    assert.equal(await doorsOn(c), '/relay-app/control.html /steward.html', 'the launcher the door opened does not offer both doors');
   } finally { c.stop(); }
 });
 
@@ -207,7 +215,7 @@ test('with no ?relay the splash points at the port the shell starts the relay on
   try {
     await sleep(1500);
     const s = JSON.parse(await readSplash(c));
-    assert.equal(s.panel.href, `http://127.0.0.1:${m[1]}/relay-app/control.html`, 'the splash and the shell disagree about where the relay is');
+    assert.equal(s.suite.href, `http://127.0.0.1:${m[1]}/relay-app/home.html`, 'the splash and the shell disagree about where the relay is');
     assert.equal(s.console.href, `http://127.0.0.1:${m[1]}/steward.html`, 'the splash and the shell disagree about where the relay is');
   } finally { c.stop(); }
 });
@@ -219,6 +227,6 @@ test('the splash refuses a ?relay that is not this machine', { skip: !CHROME ? '
   try {
     await sleep(1500);
     const s = JSON.parse(await readSplash(c));
-    assert.match(s.panel.href, /^http:\/\/127\.0\.0\.1:\d+\//, 'the splash followed a ?relay pointing off this machine');
+    assert.match(s.suite.href, /^http:\/\/127\.0\.0\.1:\d+\//, 'the splash followed a ?relay pointing off this machine');
   } finally { c.stop(); }
 });
