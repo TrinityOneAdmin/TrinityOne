@@ -15353,6 +15353,7 @@ zoo`.split("\n");
   var _mediaKeyHex = null;
   var _mediaKeyRing = [];
   var _mediaKeyDocKeys = null;
+  var _mediaKeyPushRefused = null;
   var _mediaKeyChecked = false;
   async function _sha256hex(u83) {
     const d = await crypto.subtle.digest("SHA-256", u83);
@@ -16290,6 +16291,7 @@ zoo`.split("\n");
     _mediaKeyRing = [];
     _mediaKeyDocKeys = null;
     _mediaKeyChecked = false;
+    _mediaKeyPushRefused = null;
     for (const k of Object.keys(CAP_KEYS)) _capState[k] = { ring: [], docKeys: null, rev: 1, at: 0, checked: false };
     _checkinMigrated = "";
     _ckKeysSettled = "";
@@ -18299,10 +18301,25 @@ zoo`.split("\n");
       const want = [.../* @__PURE__ */ new Set([pub, ...(memberPubs || []).filter(Boolean)])].filter((p) => !_localBlocked.has(String(p).toLowerCase()));
       const have = _mediaKeyDocKeys || {};
       if (want.every((p) => have[p])) return false;
+      const fp = want.slice().sort().join(",");
+      if (_mediaKeyPushRefused === fp) return false;
       const _mring = JSON.stringify(_mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex]);
       const keys = await _sealEach(_mring, want, (pl, mp) => encrypt3(pl, getConversationKey(sk, mp)));
-      const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", MEDIAKEY_D + pub], ["t", NET]], content: JSON.stringify({ keys, rev: now() }) }));
-      if (ok !== false) _mediaKeyDocKeys = keys;
+      const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", MEDIAKEY_D + pub], ["t", NET]], content: JSON.stringify({ keys, rev: now() }) }), { background: true });
+      if (ok !== false) {
+        _mediaKeyDocKeys = keys;
+        _mediaKeyPushRefused = null;
+        return ok;
+      }
+      _mediaKeyPushRefused = fp;
+      try {
+        const missing = want.filter((p) => p !== pub && !have[p]).length;
+        window.dispatchEvent(new CustomEvent("steward-write-blocked", { detail: {
+          what: "sermon key",
+          message: (missing ? missing + " member(s) could not be given the key to this church\u2019s encrypted sermons, so those sermons will not play for them. " : "The key to this church\u2019s encrypted sermons could not be saved. ") + "Only the console that holds the church key can publish it. This console will not keep retrying."
+        } }));
+      } catch (e) {
+      }
       return ok;
     },
     // ROTATE the media key — same contract as rotateCareKey: a removed member must not hold the key to sermons
@@ -18323,6 +18340,7 @@ zoo`.split("\n");
       _mediaKeyRing = ring;
       _mediaKeyHex = fresh;
       _mediaKeyDocKeys = keys;
+      _mediaKeyPushRefused = null;
       return true;
     },
     // ---- care key: same envelope as the media key, for the Care module's sensitive fields ----
@@ -18525,10 +18543,14 @@ zoo`.split("\n");
         // Ring-aware, and tolerant of the legacy shape: a wrapped value is a JSON array of keys now (newest
         // first) but older envelopes hold one bare hex string. Reading only the new form would make every
         // sermon encrypted before the upgrade undecryptable.
+        /* `_mediaKeyPushRefused = null` (F2): an envelope LANDING is new information — the recipient map has
+           changed under us, so whatever this console last had refused is worth asking again. Without this a
+           console that was refused once would go on skipping until the roster itself changed. */
         onevent(e) {
           try {
             const o = JSON.parse(e.content);
             _mediaKeyDocKeys = o && o.keys || null;
+            _mediaKeyPushRefused = null;
             const mine = o.keys && o.keys[pub];
             if (mine && sk) {
               const plain = decrypt3(mine, getConversationKey(sk, e.pubkey));

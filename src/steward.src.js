@@ -330,6 +330,18 @@ const MEDIAKEY_D = 'trinityone/mediakey:';   // Tier 2 encryption: a per-church 
 let _mediaKeyHex = null;                       // this device's cached copy of the church media key (= ring[0])
 let _mediaKeyRing = [];                        // current key first, then superseded — rotation must never orphan an encrypted sermon
 let _mediaKeyDocKeys = null;
+// WHICH RECIPIENT SET THE RELAY LAST REFUSED, as a sorted fingerprint — null means "nothing is known to be
+// refused". AUDIT-steward-doc-rules-round3-2026-09-22, finding F2: `ensureMediaKeyForMembers` only recorded
+// what it published on SUCCESS (`if (ok !== false) _mediaKeyDocKeys = keys;`), so a refusal left the
+// "who is already keyed" map empty, the idempotence guard `want.every(p => have[p])` never became true, and
+// the console re-sealed and re-published the same refused document on EVERY roster emit — for ever.
+// Measured on the shipped bundle: 3 publishes for 3 calls when refused, 1 for 3 when accepted.
+//
+// IT IS NOT A PERMANENT GIVING-UP, and it must not be: the refusal may be an outage rather than a rule.
+// This is cleared whenever anything that could change the answer happens — the recipient set changes (a
+// different fingerprint is simply not a match), an envelope lands on the subscription, the key is rotated,
+// or the console changes identity.
+let _mediaKeyPushRefused = null;
 // HAVE WE ACTUALLY LOOKED for an envelope? The care key has this flag and the name key has this flag; the
 // media key had neither, and its guard tested relay AUTHENTICATION instead — which is one round trip, while
 // the church's document corpus is not. So a console restored from the 12 words, authenticated and writing,
@@ -1854,7 +1866,7 @@ function _resetChurchScopedState() {
   // The `*Checked` flags are the mint gates — "have we actually LOOKED for an envelope?". Carried across, they
   // report TRUE for a church nobody has looked at yet, which is what lets a stale ring be published as new.
   _careKeyHex = null; _careKeyRing = []; _careKeyDocKeys = null; _careKeyRev = 0; _careKeyChecked = false;
-  _mediaKeyHex = null; _mediaKeyRing = []; _mediaKeyDocKeys = null; _mediaKeyChecked = false;
+  _mediaKeyHex = null; _mediaKeyRing = []; _mediaKeyDocKeys = null; _mediaKeyChecked = false; _mediaKeyPushRefused = null;
   // Every capability envelope belongs here too. The comment above is not decorative: carrying a `checked`
   // flag across a church switch answers "already looked" for a church nobody has looked at.
   for (const k of Object.keys(CAP_KEYS)) _capState[k] = { ring: [], docKeys: null, rev: 1, at: 0, checked: false };
@@ -2411,9 +2423,12 @@ async function deriveAes(pin, salt, iterations) {
 // delegated steward with no care grant is CORRECTLY refused every time, and the sticky banner “That change
 // wasn’t saved — this part of the church hasn’t been given to you” came back on every tab for ever.
 //
-// WHO PASSES IT (CLAUDE.md rule 2 — complete list, measured 2026-09-17): ensureCareKeyForMembers, whose one
-// caller is the background key-distributor effect; ensureGroupKeys, same effect; and publishGroupKey when
-// ITS caller passes it — which the key-distributor does and the interactive seal deliberately does not.
+// WHO PASSES IT (CLAUDE.md rule 2 — complete list, measured 2026-09-17, extended 2026-09-22):
+// ensureCareKeyForMembers, whose one caller is the background key-distributor effect; ensureGroupKeys, same
+// effect; publishGroupKey when ITS caller passes it — which the key-distributor does and the interactive
+// seal deliberately does not; and ensureMediaKeyForMembers, same effect, added for finding F2 of
+// AUDIT-steward-doc-rules-round3-2026-09-22 (it had been raising the standing alarm on every roster emit
+// for a write nobody asked for, which is the defect the care key was given this for).
 async function publish(evt, opts) {
   const _bg = !!(opts && opts.background);
   // WAIT FOR THE RELAY TO KNOW THIS CHURCH EXISTS. seedNewChurch() fires selfRegister() without awaiting it
@@ -4376,11 +4391,35 @@ window.Steward = {
       .filter(p => !_localBlocked.has(String(p).toLowerCase()));   // a just-blocked member must not be re-keyed (item B)
     const have = _mediaKeyDocKeys || {};
     if (want.every(p => have[p])) return false;                   // everyone's already keyed — no republish
-    
+    // …AND DON'T ASK AGAIN FOR A SET THAT WAS JUST REFUSED (finding F2). Without this the guard above is the
+    // only brake, and it cannot apply, because a refused document never becomes a `have`. The sealing below
+    // is the expensive part, so this returns before it.
+    const fp = want.slice().sort().join(',');
+    if (_mediaKeyPushRefused === fp) return false;
+
     const _mring = JSON.stringify(_mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex]);
     const keys = await _sealEach(_mring, want, (pl, mp) => nip44e(pl, nip44ck(sk, mp)));
-    const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', MEDIAKEY_D + pub], ['t', NET]], content: JSON.stringify({ keys, rev: now() }) }));
-    if (ok !== false) _mediaKeyDocKeys = keys;                    // reflect what we just published so we don't loop
+    // `{ background: true }` — NOBODY ASKED FOR THIS WRITE. Same reasoning as ensureCareKeyForMembers, whose
+    // one caller is the same key-distributor effect and which was given this on 2026-09-17: the console's
+    // standing alarm says "That change wasn't saved", and there was no change and no steward. It is still
+    // reported, quietly and once, by PublishErrorBanner, and always to the log.
+    const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', MEDIAKEY_D + pub], ['t', NET]], content: JSON.stringify({ keys, rev: now() }) }), { background: true });
+    if (ok !== false) { _mediaKeyDocKeys = keys; _mediaKeyPushRefused = null; return ok; }   // reflect what we just published so we don't loop
+    // A REFUSAL IS NOW A FACT THIS CONSOLE REMEMBERS, AND SAYS ONCE. Quiet is right for the attempt; silent
+    // is not right for the consequence, which is that those members' apps will say a sermon "needs the
+    // unlock key" and nobody would think to connect the two. One banner, because we only reach here once
+    // per recipient set.
+    _mediaKeyPushRefused = fp;
+    try {
+      // `p !== pub` — the church's own copy is in `want` and is not a member, so counting it would tell a
+      // church with two unkeyed members that three people are locked out.
+      const missing = want.filter(p => p !== pub && !have[p]).length;
+      window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'sermon key',
+        message: (missing
+          ? missing + ' member(s) could not be given the key to this church’s encrypted sermons, so those sermons will not play for them. '
+          : 'The key to this church’s encrypted sermons could not be saved. ')
+          + 'Only the console that holds the church key can publish it. This console will not keep retrying.' } }));
+    } catch (e) {}
     return ok;
   },
   // ROTATE the media key — same contract as rotateCareKey: a removed member must not hold the key to sermons
@@ -4398,7 +4437,9 @@ window.Steward = {
     const keys = await _sealEach(payload, want, (pl, mp) => nip44e(pl, nip44ck(sk, mp)));
     const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', MEDIAKEY_D + pub], ['t', NET]], content: JSON.stringify({ keys, rev: now() }) }));
     if (ok === false) return false;
-    _mediaKeyRing = ring; _mediaKeyHex = fresh; _mediaKeyDocKeys = keys;
+    // …and the refusal memo goes with it (F2): a rotation that landed proves this console CAN write the
+    // envelope, so the reason ensureMediaKeyForMembers stopped asking no longer holds.
+    _mediaKeyRing = ring; _mediaKeyHex = fresh; _mediaKeyDocKeys = keys; _mediaKeyPushRefused = null;
     return true;
   },
   // ---- care key: same envelope as the media key, for the Care module's sensitive fields ----
@@ -4568,7 +4609,10 @@ window.Steward = {
       // Ring-aware, and tolerant of the legacy shape: a wrapped value is a JSON array of keys now (newest
       // first) but older envelopes hold one bare hex string. Reading only the new form would make every
       // sermon encrypted before the upgrade undecryptable.
-      onevent(e) { try { const o = JSON.parse(e.content); _mediaKeyDocKeys = (o && o.keys) || null; const mine = o.keys && o.keys[pub]; if (mine && sk) { const plain = nip44d(mine, nip44ck(sk, e.pubkey)); let r = null; try { const q = JSON.parse(plain); if (Array.isArray(q)) r = q.filter(k => typeof k === 'string' && k); } catch (x2) {} const incoming = (r && r.length) ? r : [plain]; _mediaKeyRing = [...incoming, ..._mediaKeyRing.filter(k => incoming.indexOf(k) === -1)]; _mediaKeyHex = _mediaKeyRing[0];   /* KEEP what this device already held: if we minted before the envelope arrived, discarding our key here would orphan anything encrypted in that window. Rotation must never drop a key that has already sealed something. */ } } catch (x) {} },
+      /* `_mediaKeyPushRefused = null` (F2): an envelope LANDING is new information — the recipient map has
+         changed under us, so whatever this console last had refused is worth asking again. Without this a
+         console that was refused once would go on skipping until the roster itself changed. */
+      onevent(e) { try { const o = JSON.parse(e.content); _mediaKeyDocKeys = (o && o.keys) || null; _mediaKeyPushRefused = null; const mine = o.keys && o.keys[pub]; if (mine && sk) { const plain = nip44d(mine, nip44ck(sk, e.pubkey)); let r = null; try { const q = JSON.parse(plain); if (Array.isArray(q)) r = q.filter(k => typeof k === 'string' && k); } catch (x2) {} const incoming = (r && r.length) ? r : [plain]; _mediaKeyRing = [...incoming, ..._mediaKeyRing.filter(k => incoming.indexOf(k) === -1)]; _mediaKeyHex = _mediaKeyRing[0];   /* KEEP what this device already held: if we minted before the envelope arrived, discarding our key here would orphan anything encrypted in that window. Rotation must never drop a key that has already sealed something. */ } } catch (x) {} },
       oneose() { _mediaKeyChecked = true; },   // no envelope came back → it is safe to mint one
     });
     return () => { try { sub.close(); } catch {} };

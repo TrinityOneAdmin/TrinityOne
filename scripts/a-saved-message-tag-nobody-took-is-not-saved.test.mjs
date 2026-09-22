@@ -814,3 +814,97 @@ test('THE SCREEN: the OWNER console still turns relay sync on and off — the ot
   assert.deepEqual(p.order, ['syncEnable', 'syncDisable'], 'the owner console no longer switches sync off: ' + JSON.stringify(p.order));
   assert.match(p.said(), /Sync turned off/, 'the owner console no longer reports a successful switch-off. Screen read: ' + p.said());
 });
+
+// ── A REFUSED BACKGROUND WRITE MUST NOT REPEAT FOR EVER ──────────────────────────────────────────────────
+// AUDIT-steward-doc-rules-round3-2026-09-22, finding F2. `ensureMediaKeyForMembers` is the console's
+// background re-wrap of the church media key; the key-distributor effect calls it on every roster emit
+// (app/stew-dashboard.jsx, two call sites). It publishes `trinityone/mediakey:`, which this branch makes
+// church-key-only. It recorded what it published only on SUCCESS —
+//
+//     if (ok !== false) _mediaKeyDocKeys = keys;
+//
+// — so a refusal left the "who is already keyed" map empty and the idempotence guard
+// `want.every(p => have[p])` could never become true. MEASURED on the shipped bundle before this fix:
+//
+//     REFUSED:  returns [false,false,false] | publish attempts = 3 | background flag = [false,false,false]
+//               | recorded keys = null | banner events = []
+//     ACCEPTED: returns [true,false,false]  | publish attempts = 1 | recorded keys = {"CP":…,"m1":…,"m2":…}
+//
+// Three seals and three publishes for three calls, none of them able to succeed, and the console's STANDING
+// alarm ("That change wasn't saved") raised by every one of them — which is the defect ensureCareKeyForMembers
+// was given `{ background: true }` for on 2026-09-17.
+//
+// The function is lifted out of vendor/steward.js — the SHIPPED bundle — and run, not read.
+async function runMediaKey(answer, calls = 3, memberPubs = ['m1', 'm2']) {
+  const peek = '__mk_' + Math.random().toString(36).slice(2);
+  const published = [];
+  const events = [];
+  // MUTABLE MODULE STATE MUST BE `let`. runLifted's preamble emits `const` for everything in `scope`, and
+  // this function ASSIGNS to _mediaKeyDocKeys and _mediaKeyPushRefused — a const would throw TypeError from
+  // inside the lifted code, which an assertion about "it stopped publishing" would happily accept.
+  const decls = 'let _mediaKeyHex = "aa"; let _mediaKeyRing = ["aa"]; let _mediaKeyDocKeys = null; '
+    + 'let _mediaKeyPushRefused = null;\n'
+    + `globalThis.${peek} = () => ({ docKeys: _mediaKeyDocKeys, refused: _mediaKeyPushRefused });\n`;
+  const lifted = await runLifted('ensureMediaKeyForMembers(memberPubs)', 'ensureMediaKeyForMembers', answer, {
+    publish: async (evt, opts) => { published.push({ evt, background: !!(opts && opts.background) }); return answer; },
+    _localBlocked: new Set(),
+    _sealEach: async (pl, want) => Object.fromEntries(want.map(p => [p, 'sealed-for-' + p])),
+    nip44e: (a) => a, nip44ck: () => 'ck',
+    window: { dispatchEvent: (e) => { events.push({ type: e.type, detail: e.detail }); } },
+    CustomEvent: class { constructor(type, init) { this.type = type; this.detail = (init || {}).detail; } },
+  }, [memberPubs], decls);
+  const out = [];
+  for (let i = 0; i < calls; i++) out.push(await lifted.fn(memberPubs));
+  const state = globalThis[peek]();
+  delete globalThis[peek];
+  return { out, published, events, state };
+}
+
+test('a refused media key is remembered, so the console stops republishing it', async () => {
+  const p = await runMediaKey(false);
+  assert.equal(p.published.length, 1,
+    'THE CONSOLE IS STILL HAMMERING. Three calls to ensureMediaKeyForMembers with the same roster produced ' +
+    p.published.length + ' publishes of a document the relay refuses every time. The key-distributor effect ' +
+    'runs on every roster emit, so this is unbounded — it re-seals for every member each time as well.');
+  assert.deepEqual(p.out, [false, false, false],
+    'the later calls no longer report the refusal to their caller: ' + JSON.stringify(p.out));
+  assert.equal(p.state.docKeys, null,
+    'a REFUSED document was recorded as published. That would tell the next call everyone is keyed when ' +
+    'nobody is, which is the opposite mistake and hides a real gap for ever.');
+  assert.ok(p.state.refused,
+    'nothing was remembered about the refusal, so only luck is stopping the republish.');
+});
+
+test('a refused media key is said ONCE, quietly, and names what it costs', async () => {
+  // CLAUDE.md rule 1 in the engine's half: bounded is not enough if it is also silent. A member whose app
+  // says a sermon "needs the unlock key" is the only symptom, and nobody would connect the two.
+  const p = await runMediaKey(false);
+  assert.deepEqual(p.published.map(x => x.background), [true],
+    'the media-key publish still raises the console’s STANDING alarm ("That change wasn’t saved"). Nobody ' +
+    'asked for this write and no steward made a change — the same reasoning ensureCareKeyForMembers was ' +
+    'given { background: true } for on 2026-09-17.');
+  const blocked = p.events.filter(e => e.type === 'steward-write-blocked');
+  assert.equal(blocked.length, 1,
+    'the refusal was announced ' + blocked.length + ' times over three calls. Once is the whole point: a ' +
+    'banner on every roster emit is the defect, not the fix.');
+  assert.equal(blocked[0].detail.what, 'sermon key', 'the banner is unlabelled: ' + JSON.stringify(blocked[0].detail));
+  assert.match(blocked[0].detail.message, /will not play for them/,
+    'the banner does not say what it costs the congregation. Message: ' + blocked[0].detail.message);
+  assert.match(blocked[0].detail.message, /2 member\(s\)/,
+    'the count is wrong or absent — the church’s own copy is in the recipient set and is not a member, so ' +
+    'two unkeyed members must not be reported as three. Message: ' + blocked[0].detail.message);
+});
+
+test('a media key the relay accepted still goes out, and is not blocked by the memo', async () => {
+  // The other direction: a "fix" that simply stopped publishing would pass both tests above while leaving
+  // every member who joins after an encrypted sermon unable to play it.
+  const p = await runMediaKey({ id: 'evt' });
+  assert.equal(p.published.length, 1,
+    'the accepted path no longer publishes at all, or publishes more than once: ' + p.published.length);
+  assert.deepEqual(Object.keys(p.state.docKeys || {}).sort(), ['CP', 'm1', 'm2'],
+    'an accepted publish was not recorded, so the next roster emit re-seals and re-publishes it: ' +
+    JSON.stringify(p.state.docKeys));
+  assert.equal(p.state.refused, null, 'an accepted publish left a refusal memo behind, which would block the next real one');
+  assert.deepEqual(p.events.filter(e => e.type === 'steward-write-blocked'), [],
+    'a media key every relay accepted raised a refusal banner: ' + JSON.stringify(p.events));
+});
