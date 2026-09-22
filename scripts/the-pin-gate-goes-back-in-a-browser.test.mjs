@@ -108,17 +108,30 @@ const waitFor = async (expr, ms, why) => {
 // first when it is shut, so the walk does too — and does nothing when the header is already open or when
 // this build has no group headers at all, which keeps this row honest on both sides of that change.
 // Returns 'opened' | 'already-open' | 'no-header'.
+//
+// 'no-header' IS ONLY HONEST WHEN THE PAGE HAS NO GROUP HEADERS AT ALL (AUDIT-round-a-fixes-2026-09-22 F4).
+// The first cut of this helper matched nothing — the expression below is a template literal, so its '\b' and
+// '/\s+/' reached Chromium as a backspace and an 's' — and returned 'no-header' as though the build had no
+// groups. The guard added with it, `['opened','already-open','no-header'].includes(r)`, admitted that value,
+// so it could not have caught the bug it was added for. It now reports the headers it DID see and refuses
+// 'no-header' whenever there are any: a build with no disclosure headers is a legitimate answer, a matcher
+// that walks past four of them is not.
 const openSettingsGroup = async (name) => {
-  // A PLAIN PREFIX MATCH, no regex: the expression below is a template literal, so a backslash never reaches
-  // the page — the first cut's '\\b' and '/\\s+/' arrived in Chromium as a backspace and an 's', no header was
-  // ever found, and this returned 'no-header' as though the build had no groups at all.
-  const r = await js(`(() => {
-    const b = [...document.querySelectorAll('button[aria-expanded]')].find(e => (e.innerText || '').trim().indexOf(${JSON.stringify(name)}) === 0);
-    if (!b) return 'no-header';
-    if (b.getAttribute('aria-expanded') === 'true') return 'already-open';
-    b.click(); return 'opened';
+  // A PLAIN PREFIX MATCH, no regex, for the reason above.
+  const raw = await js(`(() => {
+    const hs = [...document.querySelectorAll('button[aria-expanded]')];
+    const headers = hs.map(e => (e.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 40));
+    const b = hs.find(e => (e.innerText || '').trim().indexOf(${JSON.stringify(name)}) === 0);
+    if (!b) return JSON.stringify({ r: 'no-header', headers });
+    if (b.getAttribute('aria-expanded') === 'true') return JSON.stringify({ r: 'already-open', headers });
+    b.click(); return JSON.stringify({ r: 'opened', headers });
   })()`);
+  const { r, headers } = JSON.parse(raw);
   assert.ok(['opened', 'already-open', 'no-header'].includes(r), 'openSettingsGroup read back ' + JSON.stringify(r));
+  if (r === 'no-header') assert.deepEqual(headers, [],
+    'openSettingsGroup found no "' + name + '" group header, but this page HAS ' + headers.length + ' collapsible header(s): ' +
+    JSON.stringify(headers) + '. That is a broken matcher, not a build without groups — and a silent "there ' +
+    'was nothing to press" is how this walk went green over a Settings index it never opened (F4).');
   if (r === 'opened') await sleep(700);
   return r;
 };
