@@ -14,6 +14,29 @@
 // WHAT THIS IS NOT, and the test asserts it stays that way: accept()/canRead() keep their own rules. The
 // registry's write/read/scope columns are a SUMMARY; the real rules carry dozens of special cases. Deriving
 // authorization from a summary would be rewriting the security spine out of a simplification.
+//
+// ── WHAT THIS FILE CANNOT DO. READ THIS BEFORE TREATING ITS GREENNESS AS PROOF ───────────────────────────
+//
+// IT READS TEXT. Every assertion below is a question asked of gateway.mjs's source, and five separate
+// audits have now walked past one by moving the decision somewhere the text still looked right:
+//
+//     M1  (2026-09-22)        the decision left verbatim as a COMMENT                8/0 — closed by stripComments
+//     F6  (2026-09-22)        the decision left verbatim as a STRING LITERAL         8/0 — closed by stripStrings
+//     R3  (round 2)           the decision moved into DEAD CODE nothing calls        8/0 — closed by slicing accept()
+//     M1D (round 2)           the helper left in place and NEUTERED inside           8/0 — closed by RUNNING it
+//     F4  (round 3)           the helper SHADOWED by a local const inside accept()   8/0 — closed below
+//
+// THAT FAMILY IS UNBOUNDED, and each close is one door, not the corridor. A sixth is always available —
+// rename the parameter, wrap the call, resolve the function through a table, compute the d-tag differently.
+// So this file is a FAST TRIPWIRE, run in milliseconds with no relay, and it is NOT the guarantee.
+//
+// THE GUARANTEE IS BEHAVIOURAL, and it lives in two files that spawn a real gateway and ask it:
+//     scripts/relay-refuses-undeclared-member-doc-types.test.mjs   (F4's shadow: 28 pass / 2 fail)
+//     scripts/six-steward-doc-types-have-rules.test.mjs            (F4's shadow: 42 pass / 2 fail)
+// Both caught every door above without being changed for any of them, because they do not care where the
+// decision is written — they publish an event and read the relay's answer. If this file and those two ever
+// disagree, THEY are right. Nothing here should be tightened into a scope resolver; the honest next step
+// for a sixth door is another behavioural case, not another regular expression.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -151,6 +174,30 @@ test('the ONE column-derived list the spine reads only ever NARROWS', () => {
     'has declared would then be stored for any member of any church on the box.');
   assert.doesNotMatch(ACCEPT, /memberDocTypeOk\([^)]*\)\) return true/, 'memberDocTypeOk is used to GRANT inside accept()');
   assert.doesNotMatch(GATEWAY_CODE, /memberDocTypeOk\([^)]*\)\) return true/, 'memberDocTypeOk is used to GRANT somewhere');
+
+  // AND THE NAME AT THE CALL SITE MUST BE THE TOP-LEVEL FUNCTION, NOT A LOCAL ONE.
+  // AUDIT-steward-doc-rules-round3-2026-09-22, finding F4 — a FIFTH door, and the one that shows what this
+  // whole approach cannot do. Insert a shadow ABOVE the catch-all, inside accept(), and leave everything
+  // else untouched:
+  //
+  //     const memberDocTypeOk = (_x) => true;
+  //     if (!(isAnyChurch || isNetwork) && !memberDocTypeOk(d)) return false;   // unchanged, still once
+  //
+  // Measured: registry-wiring 8 pass / 0 fail with the catch-all completely neutered. Every assertion above
+  // is satisfied — the line is in accept()'s body exactly once, MEMBER_WRITABLE_TYPES is still read in two
+  // places, and the lift below still finds and runs the REAL top-level function, which still answers all
+  // six cases correctly. The test was running one function while the relay ran another: [[stub-answers-the-
+  // question]] inverted. Behaviourally it was caught — relay-refuses 28/2, six-steward 42/2.
+  //
+  // This is narrow ON PURPOSE. It asks one question text CAN answer: does accept() declare a binding of
+  // that name of its own? accept() legitimately never does, so there is nothing for it to false-positive
+  // on, and it does not pretend to resolve scopes. See "WHAT THIS FILE CANNOT DO" at the top.
+  const shadows = ACCEPT.match(/\b(?:const|let|var|function)\s+memberDocTypeOk\b/g) || [];
+  assert.deepEqual(shadows, [],
+    'accept() DECLARES ITS OWN `memberDocTypeOk` (' + shadows.join(', ') + '). The catch-all above then ' +
+    'calls that one and not the registry-derived function this test lifts and runs, so the two can say ' +
+    'opposite things while every assertion here passes. A document nobody has declared would be stored ' +
+    'for any member of any church on the box.');
 
   // AND THE DECISION IS RUN, NOT READ. The other door the auditor walked through was M1D: leave the
   // catch-all exactly where it is and neuter what it ASKS —
