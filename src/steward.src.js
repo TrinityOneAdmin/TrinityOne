@@ -3586,16 +3586,37 @@ const WEB_BLOCKED_AFTER_S = 6;    // seconds with the same event stuck before th
 // open, connected and holding its key ring for ten unbroken minutes with the document still shut.
 const WEB_GIVE_UP_S = 600;
 const WEB_RETRY_MS = 2000;        // how often a stuck watch comes back to look, while the budget is still running
-// IS THIS A WHOLE SEALED PAYLOAD — asked with no key at all. NIP-44 v2 is base64 of
-// [version 2][nonce 32][padded ciphertext][mac 32], 132 to 87472 base64 characters, and '#' is NIP-44's own
-// marker for a version nobody should try to read. A payload that fails THIS could never be opened by any key,
-// which is the one half of "we could not unseal it" that can honestly be told apart from a missing key. The
-// other half cannot: a byte flipped inside an otherwise whole payload fails the same MAC check a wrong key
-// does, and both raise the identical "invalid MAC" (measured). So this answers only what it can answer.
+// IS THIS A WHOLE SEALED PAYLOAD — asked with no key at all. NIP-44 v2 is padded standard base64 of
+//   [version 1][nonce 32][ciphertext 2 + padded][mac 32]
+// where `padded` is always a MULTIPLE OF 32 (NIP-44's calc_padded_len returns 32 for anything up to 32
+// bytes, and a multiple of 32 above it), so a whole payload decodes to exactly 67 + 32n bytes, n >= 1.
+// That is where the 132 and 87472 character bounds come from, and it is a far stronger statement than
+// "it decoded and started with a 2".
+//
+// WHY THE ARITHMETIC IS WORTH WRITING OUT (AUDIT-feeds-round3-2026-09-22 F2). The first version asked only
+// for the length bounds and the version byte, so a copy TRUNCATED anywhere past 132 characters still looked
+// whole and was reported as 'key' — the church was told to go and find a name key it already held. Measured
+// over every truncation length of a real 1,456-character sealed document, that was 994 of 1,456 (68.3%) with
+// this engine's own `atob`. Three checks close almost all of it, and all three are shape, not cryptography:
+//   1. the base64 must be WELL FORMED — a multiple of 4 characters, from the standard alphabet. This also
+//      makes the answer the same in every engine: `atob` is WHATWG "forgiving-base64" in some (it accepts a
+//      length of 4n+2 and 4n+3) and strict in others, so before this the classification depended on which
+//      browser the console was running in.
+//   2. the version byte must be 2 (unchanged), and '#' is NIP-44's own marker for a version nobody reads.
+//   3. the decoded length must be 67 + a multiple of 32. A truncation lands on that by luck about once in
+//      every 128 characters, which is what is left of the 68.3%.
+// What remains genuinely indistinguishable — a whole payload with a byte flipped inside it, and a payload
+// sealed under a key we do not hold — fails the identical MAC check and raises the identical "invalid MAC"
+// (measured). The sentence _webWhyStuck's 'key' draws says so rather than naming a cause.
+const SEAL_B64 = /^[A-Za-z0-9+/]+={0,2}$/;
 function _sealIsWhole(ct) {
   const s = String(ct || '');
   if (s.length < 132 || s.length > 87472 || s[0] === '#') return false;
-  try { return atob(s).charCodeAt(0) === 2; } catch (e) { return false; }
+  if (s.length % 4 !== 0 || !SEAL_B64.test(s)) return false;
+  let raw = '';
+  try { raw = atob(s); } catch (e) { return false; }
+  if (raw.charCodeAt(0) !== 2) return false;
+  return raw.length >= 99 && (raw.length - 67) % 32 === 0;
 }
 // WHY AN EVENT WOULD NOT OPEN, said honestly. The first version asked one question — "does the document have
 // a string .e field?" — and answered 'key' whenever it did. So a copy whose bytes were damaged, and a

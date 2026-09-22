@@ -54,6 +54,7 @@ function mirror({ events, copies, share, ring = [KEY_OURS], store = new Map() })
     fnBody(src, 'function _webGroupKey', '_webGroupKey'),
     fnBody(src, 'function _webGroupLoad', '_webGroupLoad'),
     fnBody(src, 'function _webGroupSeen', '_webGroupSeen'),
+    stmt(src, 'var SEAL_B64 = ', 'SEAL_B64'),
     fnBody(src, 'function _sealIsWhole', '_sealIsWhole'),
     fnBody(src, 'function _webWhyStuck', '_webWhyStuck'),
     fnBody(src, 'function _openChurchDoc', '_openChurchDoc'),
@@ -214,6 +215,86 @@ test('R4: two stuck events of DIFFERENT causes do not have one of them named for
   const same = mirror({ events: [GOOD1, LOST, { ...LOST, id: 'evtlost2' }], copies: {}, share: share() });
   await pastReporting(same);
   assert.equal(same.emitted[same.emitted.length - 1].blockedWhy, 'key', 'two of one cause stopped naming it');
+});
+
+// ── F2: a TRUNCATED copy is damaged, and is not reported as a key the church already holds ───────────────
+// AUDIT-feeds-round3-2026-09-22 F2. The R4 rows above use a 40-character fixture, which is below NIP-44's
+// own 132-character minimum and so was caught by the length bound alone. A real truncation is not like that:
+// it is hundreds of characters of valid base64, it looked whole, and it was reported as 'key'. Measured over
+// every truncation length of a real 1,456-character sealed document, driving the shipped _webWhyStuck:
+// 994 of 1,456 (68.3%) said 'key'. These rows sweep the same thing.
+function whyStuck(atobImpl) {
+  const body = [
+    stmt(STEWARD, 'var SEAL_B64 = ', 'SEAL_B64'),
+    fnBody(STEWARD, 'function _sealIsWhole', '_sealIsWhole'),
+    fnBody(STEWARD, 'function _webWhyStuck', '_webWhyStuck'),
+  ].join('\n');
+  assert.match(body, /_sealIsWhole\(o\.e\)/, 'vendor/steward.js: _webWhyStuck no longer asks whether the payload is whole — re-anchor');
+  const dec = (body.match(/(\w+)\(o\.e, _unhex\(k\)\)/) || [])[1];
+  assert.ok(dec, 'vendor/steward.js: _webWhyStuck no longer decrypts the way this row reads it — re-anchor');
+  const scope = { _nameKeyRing: [KEY_OURS], _unhex: unhex, [dec]: (ct, k) => require44().decrypt(ct, k), atob: atobImpl };
+  const names = Object.keys(scope);
+  return new Function(...names, `${body}\nreturn _webWhyStuck;`)(...names.map(n => scope[n]));
+}
+// A long blurb, so the payload is long enough for a truncation to be a realistic corruption rather than a
+// stub. Sealed under the key this console does NOT hold, so 'key' is the answer the old code gave.
+const LONG_SEALED = () => nip44e(JSON.stringify({ title: 'Harvest supper', date: '2026-10-03', time: '19:30', where: 'The hall', blurb: 'The Harvest supper is in the church hall. '.repeat(20) }), unhex(KEY_LOST));
+
+test('F2: a truncated copy is DAMAGED, not a key the church is still holding', async () => {
+  const why = whyStuck(globalThis.atob);
+  const real = LONG_SEALED();
+  assert.ok(real.length > 1000, 're-anchor: the fixture payload is too short for this sweep to mean anything');
+  const tally = {};
+  for (let n = 1; n < real.length; n++) {
+    const r = why(JSON.stringify({ e: real.slice(0, n) }));
+    tally[r] = (tally[r] || 0) + 1;
+  }
+  // What is left is arithmetic, not luck: a truncation is only indistinguishable from a whole payload when
+  // its length is a multiple of 4 AND the bytes it decodes to land on 67 + a multiple of 32 — one length in
+  // every 128. Anything much above that means the shape checks have stopped biting.
+  const allowed = Math.ceil(real.length / 128) + 1;
+  assert.ok((tally.key || 0) <= allowed,
+    `${tally.key} OF ${real.length} TRUNCATION LENGTHS TELL THE CHURCH TO FIND A NAME KEY IT ALREADY HOLDS (at most ${allowed} are genuinely indistinguishable): ${JSON.stringify(tally)}`);
+  // the two the audit names by hand
+  assert.equal(why(JSON.stringify({ e: real.slice(0, 200) })), 'damaged', 'a 200-character truncation is still blamed on a key');
+  assert.equal(why(JSON.stringify({ e: real.slice(0, 600) })), 'damaged', 'a 600-character truncation is still blamed on a key');
+  // CONTROL: the whole payload, which really is a key problem, is still a key problem.
+  assert.equal(why(JSON.stringify({ e: real })), 'key', 'a document sealed under a key we do not hold stopped being reported as a key problem');
+});
+
+test('F2 CONTROL: no REAL sealed document is ever called damaged — the way to get this fix wrong', async () => {
+  // The over-correction this row exists to catch: tightening the shape check until a perfectly good document
+  // sealed under a lost key reads as "damaged", which would tell a church its data is corrupt when it is not.
+  const why = whyStuck(globalThis.atob);
+  const bad = [];
+  for (const len of [1, 2, 31, 32, 33, 64, 100, 255, 256, 257, 1000, 4095, 4096, 10000, 65535]) {
+    const ct = nip44e('y'.repeat(len), unhex(KEY_LOST));
+    if (why(JSON.stringify({ e: ct })) !== 'key') bad.push(len + ' -> ' + why(JSON.stringify({ e: ct })));
+  }
+  for (let len = 1; len <= 600; len++) {
+    const ct = nip44e('z'.repeat(len), unhex(KEY_LOST));
+    if (why(JSON.stringify({ e: ct })) !== 'key') bad.push(len + ' -> ' + why(JSON.stringify({ e: ct })));
+  }
+  assert.deepEqual(bad, [], 'A GENUINELY LOST KEY IS NOW REPORTED AS A DAMAGED COPY for these plaintext lengths: ' + bad.slice(0, 8).join(', '));
+  // …and one this console CAN open is still read as its contents, not its shape
+  assert.equal(why(JSON.stringify({ e: nip44e('not json at all', unhex(KEY_OURS)) })), 'contents', 're-anchor: a document that opens is no longer classified by what was inside');
+});
+
+test('F2: the answer does not depend on which base64 decoder the browser happens to have', async () => {
+  // `atob` is WHATWG "forgiving-base64" in some engines (it accepts a length of 4n+2 and 4n+3) and strict in
+  // others, and the console runs in whichever browser the church opened. Before this fix the same truncated
+  // copy was classified 'damaged' in one and 'key' in another — measured 68.3% vs 91.0% of lengths. The
+  // length/charset check is made in our own code now, so both decoders agree.
+  const real = LONG_SEALED();
+  const forgiving = whyStuck(globalThis.atob);
+  const lenient = whyStuck((s) => Buffer.from(s, 'base64').toString('binary'));
+  const diff = [];
+  for (let n = 1; n < real.length; n++) {
+    const raw = JSON.stringify({ e: real.slice(0, n) });
+    const a = forgiving(raw), b = lenient(raw);
+    if (a !== b) diff.push(`${n}: ${a} vs ${b}`);
+  }
+  assert.deepEqual(diff, [], 'THE CHURCH IS TOLD A DIFFERENT STORY IN A DIFFERENT BROWSER, for ' + diff.length + ' truncation lengths, e.g. ' + diff.slice(0, 3).join(' | '));
 });
 
 // ── R5: F2's safeguarding default versus F3's "leave a stuck copy alone" ─────────────────────────────────
@@ -424,7 +505,7 @@ function panel(snapshot) {
 test('THE SCREEN: Settings → Your website says how many events could not be published, and why', () => {
   const said = panel({ ...share(), known: true, blocked: 1, blockedWhy: 'key' });
   assert.match(said, /1 event could not be published/, 'THE PAGE SAYS NOTHING about the event the mirror skipped — the switch reads "On" and one event is silently missing from the church\'s website');
-  assert.match(said, /no church key on this console will open it/, 'the page gives no reason');
+  assert.match(said, /no church key on this console opened it/, 'the page gives no reason');
   const two = panel({ ...share(), known: true, blocked: 2, blockedWhy: 'shape' });
   assert.match(two, /2 events could not be published/, 'the count is not the engine\'s');
   assert.match(two, /details could not be read/, 'the reason is not the engine\'s');
@@ -437,7 +518,10 @@ test('THE SCREEN (R4): every cause gets its own line, and none of them sends a c
   assert.match(said('damaged'), /its saved copy is damaged/, 'a DAMAGED copy is not named as damaged');
   assert.match(said('contents'), /it opened, but there was no event inside/, 'a document that OPENED is not said to have opened');
   assert.match(said('shape'), /its details could not be read/);
-  assert.match(said('key'), /no church key on this console will open it/);
+  assert.match(said('key'), /no church key on this console opened it/);
+  // F2: and it must not stop at the key — a byte flipped inside a whole payload fails the identical check
+  assert.match(said('key'), /may be damaged instead/,
+    'THE ONE CAUSE THIS CONSOLE CANNOT DIAGNOSE IS STATED AS IF IT COULD — a damaged copy fails the identical MAC check a lost key does, and the church is sent after a key it may well be holding');
   for (const why of ['damaged', 'contents', 'shape']) {
     assert.doesNotMatch(said(why), /church key/,
       `"${why}" STILL SENDS THE CHURCH LOOKING FOR A NAME KEY — the key is fine and the console said it was not`);

@@ -17513,14 +17513,19 @@ zoo`.split("\n");
   var WEB_BLOCKED_AFTER_S = 6;
   var WEB_GIVE_UP_S = 600;
   var WEB_RETRY_MS = 2e3;
+  var SEAL_B64 = /^[A-Za-z0-9+/]+={0,2}$/;
   function _sealIsWhole(ct) {
     const s = String(ct || "");
     if (s.length < 132 || s.length > 87472 || s[0] === "#") return false;
+    if (s.length % 4 !== 0 || !SEAL_B64.test(s)) return false;
+    let raw = "";
     try {
-      return atob(s).charCodeAt(0) === 2;
+      raw = atob(s);
     } catch (e) {
       return false;
     }
+    if (raw.charCodeAt(0) !== 2) return false;
+    return raw.length >= 99 && (raw.length - 67) % 32 === 0;
   }
   function _webWhyStuck(raw) {
     let o = null;

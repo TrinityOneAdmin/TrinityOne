@@ -209,6 +209,7 @@ test('THE OWNER CONSOLE does not reconcile a group leader\'s cancel — the chur
     fnBody(S, 'function _consoleDisplay', '_consoleDisplay'),
     fnBody(S, 'function _capsOf', '_capsOf'),
     fnBody(S, 'function _consoleChurchVoice', '_consoleChurchVoice'),
+    stmt(S, 'var SEAL_B64 = ', 'SEAL_B64'),
     fnBody(S, 'function _sealIsWhole', '_sealIsWhole'),
     fnBody(S, 'function _webCopyBody', '_webCopyBody'),
     fnBody(S, 'function _webWhyStuck', '_webWhyStuck'),

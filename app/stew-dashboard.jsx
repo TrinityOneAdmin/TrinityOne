@@ -8416,7 +8416,13 @@ const CHATTAG_PRAYER = { id: 'prayer', label: 'Prayer request', icon: 'pray', ac
 // the identical check and cannot be told apart. Copy rule (owner, 2026-09-10): one plain sentence, no
 // instructions — what to DO about it belongs in help.
 const WEB_BLOCKED_WHY = {
-  key: ['no church key on this console will open it.', 'no church key on this console will open them.'],
+  // 'key' IS THE ONE CAUSE THAT IS NOT A DIAGNOSIS, and the sentence has to carry that. What was observed is
+  // that a whole, well-formed sealed payload did not open with any key this console holds. A key the church
+  // no longer has and a byte flipped inside the payload fail the identical MAC check and raise the identical
+  // error, so "damaged instead" is named in the same breath rather than sending a church after a key it is
+  // still holding (AUDIT-feeds-round3-2026-09-22 F2; the shape checks in src/steward.src.js _sealIsWhole
+  // catch nearly every truncated copy before this, and this covers what they cannot).
+  key: ['no church key on this console opened it — the copy may be damaged instead.', 'no church key on this console opened them — the copies may be damaged instead.'],
   damaged: ['its saved copy is damaged.', 'their saved copies are damaged.'],
   contents: ['it opened, but there was no event inside.', 'they opened, but there was no event inside.'],
   shape: ['its details could not be read.', 'their details could not be read.'],
