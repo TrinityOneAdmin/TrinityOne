@@ -143,6 +143,10 @@ async function runLifted(sig, name, answer, scope = {}, args = [], decls = '') {
     feChurch: (t) => t,
     now: () => 1700000000,
     sk: 'SK', pub: 'CP', NET: 'trinityone',
+    // '' = the OWNER's console, which is what every test written before 2026-09-22 assumes. The three
+    // delegated-console tests below pass 'CHURCHPUB' explicitly, because on that console it is the decision
+    // under test and not scenery.
+    actingChurch: '',
     MSGTAGS_D: 'trinityone/msgtags', SERMON_D: 'trinityone/sermon:', MEDIAKEY_D: 'trinityone/mediakey:',
     BACKUPMETA_D: 'trinityone/backup-meta:',
     _sanitizeMsgTags: (t) => t,
@@ -196,8 +200,47 @@ test('removeSermon REFUSES TO DELETE THE BYTES when the tombstone was refused', 
 test('publishSermon still rejects on a refusal — the one that was already right', async () => {
   // It threw before this round and must go on throwing. Named here so that "the four that were wrong" can
   // never be tidied into "all of them behave the same" by making this one match the others.
-  const no = await runLifted('publishSermon(s)', 'publishSermon', false, {}, [{ title: 'Sunday', sha256: 'aa', host: 'h' }]);
+  const no = await runLifted('publishSermon(s)', 'publishSermon', false, { actingChurch: '' }, [{ title: 'Sunday', sha256: 'aa', host: 'h' }]);
   await assert.rejects(no.call(), /every relay rejected it/, 'publishSermon has lost its refusal check');
+});
+
+// ── THE TWO GRANTS THAT WERE WITHDRAWN: THE CONSOLE SAYS SO INSTEAD OF ASKING ────────────────────────────
+// AUDIT-steward-doc-rules-2026-09-22, F1 + F2, owner's decision "go with B". `trinityone/sermon:` and
+// `trinityone/backup-meta:` are church-key-only at the relay, because EVERY shipped reader of both filters
+// `authors:[churchpub]` — so a delegated steward's copy was stored, served to nobody (that console
+// included), and reported as a success. A delegated console must therefore not ask at all, and must say
+// which refusal it is: "no relay accepted it" sends somebody to look at a connection that is working.
+test('publishSermon refuses on a DELEGATED console, before anything is sent', async () => {
+  const no = await runLifted('publishSermon(s)', 'publishSermon', { id: 'evt' }, { actingChurch: 'CHURCHPUB' }, [{ title: 'Sunday', sha256: 'aa', host: 'h' }]);
+  await assert.rejects(no.call(), /Only the church’s own console can publish a sermon/,
+    'A DELEGATED CONSOLE STILL PUBLISHES A SERMON. The relay refuses it and, even if it did not, ' +
+    '_openSermons / subscribeSermons / subscribePinnedSermon all filter authors:[churchpub], so it reaches ' +
+    'nobody — including this console\'s own list — while the screen says "members notified".');
+  assert.equal(no.published.length, 0, 'it asked the relay anyway, so the steward gets a connection error instead of the reason');
+});
+
+test('removeSermon refuses on a DELEGATED console, and deletes no bytes', async () => {
+  const deletes = [];
+  const sermon = { id: 's1', sha256: 'abc123', hosts: ['https://one.example', 'https://two.example'] };
+  const no = await runLifted('async removeSermon(s)', 'removeSermon', { id: 'evt' },
+    { actingChurch: 'CHURCHPUB', fetch: async (u, o) => { deletes.push(u + ' ' + (o && o.method)); return { ok: true }; } }, [sermon]);
+  await assert.rejects(no.call(), /Only the church’s own console can remove a sermon/,
+    'a delegated console still tries to tombstone a sermon — the relay refuses that write, and the blob ' +
+    'deletes below it must never run over a refusal');
+  assert.deepEqual(deletes, [], 'THE BLOB BYTES WERE DELETED ON A CONSOLE THAT CANNOT TOMBSTONE THE DOCUMENT: ' + JSON.stringify(deletes));
+  assert.equal(no.published.length, 0, 'it published a tombstone the relay was always going to refuse');
+});
+
+test('setBackupMeta answers false on a DELEGATED console, without asking', async () => {
+  const no = await runLifted('setBackupMeta(at, remind)', 'setBackupMeta', { id: 'evt' }, { actingChurch: 'CHURCHPUB' }, [1700000000, 'monthly']);
+  assert.equal(await no.call(), false,
+    'setBackupMeta reports success on a delegated console. subscribeBackupMeta filters authors:[churchpub], ' +
+    'so a steward-authored record resets NOBODY\'s overdue nudge — the screen must say so.');
+  assert.equal(no.published.length, 0, 'it published a record the relay refuses and no console reads');
+  // …and the owner console is untouched: it still asks, and still reports what it got.
+  const yes = await runLifted('setBackupMeta(at, remind)', 'setBackupMeta', { id: 'evt' }, { actingChurch: '' }, [1700000000, 'monthly']);
+  assert.notEqual(await yes.call(), false, 'the owner console now believes it cannot save the shared backup record either');
+  assert.equal(yes.published.length, 1, 'the owner console stopped publishing the shared backup record');
 });
 
 
@@ -317,13 +360,14 @@ test('THE SCREEN: a refused sermon removal shows the reason, and does not close 
 });
 
 test('THE SCREEN: a backup whose church-wide record was refused says so, and names WHICH refusal', async () => {
-  // Both directions, because a fix that printed the sentence unconditionally would pass a one-sided test
+  // Three directions, because a fix that printed the sentence unconditionally would pass a one-sided test
   // while telling every owner console its working backup record had failed.
-  const run = async ({ metaAnswer }) => {
+  const run = async ({ metaAnswer, delegated }) => {
     const { React, draw } = miniReact();
     const doc = { createElement: () => ({ href: '', download: '', click() {}, remove() {} }), body: { appendChild() {} } };
     const win = {
       Steward: {
+        actingChurch: delegated ? 'CHURCHPUB' : '',
         exportChurchData: async () => ({ data: 'x', binary: false, mime: 'application/json', count: 42, filename: 'b.json', encrypted: true, media: 0 }),
         setBackupMeta: async () => metaAnswer,
         subscribeBackupMeta: () => () => {},
@@ -347,19 +391,30 @@ test('THE SCREEN: a backup whose church-wide record was refused says so, and nam
   };
 
   // 1. the owner console, record accepted: the plain success and NOTHING else.
-  const ok = await run({ metaAnswer: { id: 'evt' } });
+  const ok = await run({ metaAnswer: { id: 'evt' }, delegated: false });
   await ok.press('Back up church data');
   assert.match(ok.said(), /Saved 42 records/, 'the backup success message is gone — re-anchor this test. Screen read: ' + ok.said());
   assert.doesNotMatch(ok.said(), /overdue/,
     'a backup record that SAVED is being reported as not saved. Screen read: ' + ok.said());
 
   // 2. the owner console, record refused by every relay: the success AND the consequence.
-  const no = await run({ metaAnswer: false });
+  const no = await run({ metaAnswer: false, delegated: false });
   await no.press('Back up church data');
   assert.match(no.said(), /Saved 42 records/, 'the file really did save and the screen must still say so. Screen read: ' + no.said());
   assert.match(no.said(), /the shared backup record could not be saved/,
     'THE CONSEQUENCE IS BACK TO BEING INVISIBLE. This console is then the only one that believes the church ' +
     'is backed up, while every other steward goes on seeing "overdue". Screen read: ' + no.said());
+
+  // 3. the DELEGATED console: the same refusal, but it is permanent and has a name. "Couldn't save" would
+  //    send a steward to look at a connection that is working perfectly (F2, and the less-instructional-copy
+  //    rule: short label, one sentence, no jargon).
+  const dele = await run({ metaAnswer: false, delegated: true });
+  await dele.press('Back up church data');
+  assert.match(dele.said(), /Saved 42 records/, 'the file saves on a delegated console too, and the screen must say so. Screen read: ' + dele.said());
+  assert.match(dele.said(), /Only the church’s own console can save the shared backup record/,
+    'A DELEGATED CONSOLE IS BEING TOLD A RELAY PROBLEM. `trinityone/backup-meta:` is church-key-only ' +
+    '(2026-09-22) because subscribeBackupMeta filters authors:[churchpub] — the refusal is permanent and ' +
+    'nothing the steward does will change it. Screen read: ' + dele.said());
 });
 
 test('THE SCREEN: changing the backup REMINDER says so too — the second caller of setBackupMeta', async () => {
@@ -368,10 +423,11 @@ test('THE SCREEN: changing the backup REMINDER says so too — the second caller
   // weekly / monthly / off segment — was still fire-and-forget inside a try/catch, so a steward picked
   // "Weekly", watched the segment move to Weekly, and every other console went on nudging monthly with
   // nothing on any screen saying so.
-  const run = async ({ metaAnswer }) => {
+  const run = async ({ metaAnswer, delegated }) => {
     const { React, draw } = miniReact();
     const win = {
       Steward: {
+        actingChurch: delegated ? 'CHURCHPUB' : '',
         setBackupMeta: async () => metaAnswer,
         subscribeBackupMeta: () => () => {},
         mediaSize: async () => ({ count: 0, bytes: 0 }),
@@ -392,14 +448,19 @@ test('THE SCREEN: changing the backup REMINDER says so too — the second caller
     return { press, said: () => reads(tree) };
   };
 
-  const ok = await run({ metaAnswer: { id: 'evt' } });
+  const ok = await run({ metaAnswer: { id: 'evt' }, delegated: false });
   await ok.press('Weekly');
-  assert.doesNotMatch(ok.said(), /could not be saved/,
+  assert.doesNotMatch(ok.said(), /could not be saved|Only the church/,
     'a cadence change every relay accepted is being reported as a failure. Screen read: ' + ok.said());
 
-  const no = await run({ metaAnswer: false });
+  const no = await run({ metaAnswer: false, delegated: false });
   await no.press('Weekly');
   assert.match(no.said(), /the shared backup record could not be saved/,
     'THE CADENCE CONTROL IS STILL FIRE-AND-FORGET. The segment moves to Weekly on this console while every ' +
     'other steward goes on being nudged monthly, and nothing on any screen says so. Screen read: ' + no.said());
+
+  const dele = await run({ metaAnswer: false, delegated: true });
+  await dele.press('Weekly');
+  assert.match(dele.said(), /Only the church’s own console can save the shared backup record/,
+    'a delegated console is told to check its connection over a refusal that is permanent. Screen read: ' + dele.said());
 });

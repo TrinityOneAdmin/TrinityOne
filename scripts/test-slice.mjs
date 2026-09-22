@@ -145,8 +145,10 @@ export function stripComments(src) {
 // refusal sentence, a URL — must keep reading the raw source, because this blanks exactly those. It is for
 // assertions that read a DECISION.
 //
-// CALLERS (CLAUDE.md rule 2, and today there is exactly one — keep this list true):
-//   · scripts/registry-wiring.test.mjs — the member catch-all's `return false`
+// CALLERS (CLAUDE.md rule 2, and today there are two, both asserting a DECISION rather than a name —
+// keep this list true):
+//   · scripts/registry-wiring.test.mjs                   — the member catch-all's `return false`
+//   · scripts/six-steward-doc-types-have-rules.test.mjs  — `sermon:`'s own accept() branch
 //
 // Quote handling matches stripComments exactly, including the "a ' or \" string cannot contain a raw
 // newline" reset, which is what keeps an apostrophe in JSX text from eating the rest of a file.

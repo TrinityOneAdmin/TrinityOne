@@ -28,14 +28,30 @@
 // steward with the RIGHT capability — instead of one blanket answer nobody chose. The authority per type,
 // and the reason for each, is written in scripts/trinity-doc-types.mjs beside the entry; the short form:
 //
-//     sermon:        content     — the same branch as pinsermon:, so PUBLISHING and FEATURING agree
 //     msgtags        content     — the labels the congregation sees on a message
-//     backup-meta:   any         — a shared reminder timestamp; grants nothing, carries no key
+//     sermon:        church key  — SEE BELOW: the content-steward grant was withdrawn the same day
+//     backup-meta:   church key  — SEE BELOW: the 'any steward' grant was withdrawn the same day
 //     mediakey:      church key  — the envelope is sealed with the SIGNER's key, so only the church's own
 //                                  key can mint one a member can open
 //     manna-         church key  — a locked module, and one stem over seven sub-types of very different
 //                                  sensitivity is the "rule nobody chose" this registry exists to stop
 //     relays         church key  — CLAUDE.md rule 10: it decides which OTHER boxes get the whole corpus
+//
+// ⚠ TWO OF THE THREE STEWARD GRANTS LASTED ONE DAY, AND THE READER IS WHY (AUDIT-steward-doc-rules-2026-09-22,
+// F1 + F2, owner's decision "go with B"). A write grant is worth nothing until a reader accepts the signature
+// it produces. MEASURED on a live gateway: a delegated steward's church-tagged documents ACK, and then —
+//
+//     0  _openSermons           src/fellowship.src.js   authors:[cp] + `if (e.pubkey !== cp) return;`
+//     0  subscribeSermons       src/steward.src.js      authors:[pub]  (on a DELEGATED console `pub` is the
+//                                                       CHURCH's pubkey while `sk` is the steward's)
+//     0  subscribePinnedSermon  both                    authors:[pub] + #d
+//     0  subscribeBackupMeta    src/steward.src.js      authors:[pub] + #d
+//     1  the docs hub / subscribeMessageTags            #church:[cp]   ← the ONE that works end to end
+//
+// So granting `sermon:` and `backup-meta:` turned a LOUD failure into a SILENT success: the console printed
+// "✓ Uploaded … · members notified" and "Saved N records" over documents nobody would ever be served, and
+// DashBackup's "the shared record could not be saved" sentence — added the same day, and TRUE — stopped
+// printing. Both are church-key-only now. `msgtags` keeps its grant because it is read by `#church:[cp]`.
 //
 // FIVE ACTORS, EVERY TYPE, ON ONE RELAY CARRYING TWO CHURCHES. The cross-tenant row is not decoration:
 // `groupkey:` (2026-09-17) and `voice:` (2026-08-25) were both found by asking exactly it.
@@ -49,6 +65,7 @@ import { WebSocket } from 'ws';
 import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools/pure';
 import { npubEncode } from 'nostr-tools/nip19';
 import { requireFreePort } from './test-ports.mjs';
+import { stripComments, stripStrings } from './test-slice.mjs';
 import { D, DOC_TYPES, UNDECLARED } from './trinity-doc-types.mjs';
 
 const PORT = 8917;   // unique across scripts/*.test.mjs AND scripts/*.probe.mjs; checked free by requireFreePort
@@ -56,6 +73,12 @@ const WS_URL = `ws://127.0.0.1:${PORT}/relay`;
 const NET = 'trinityone';
 const ROOT = new URL('../', import.meta.url).pathname;
 const GATEWAY = readFileSync(new URL('../scripts/gateway.mjs', import.meta.url), 'utf8');
+// THE SAME SOURCE WITH COMMENTS *AND* STRING LITERALS BLANKED, offsets intact. Every structural assertion in
+// this file reads a DECISION, and a decision must not be satisfiable by prose — in a comment
+// (AUDIT-undeclared-doc-types-2026-09-22 M1) or, one step along, in a string literal
+// (AUDIT-steward-doc-rules-2026-09-22 F6). A self-check that both strippers really stripped lives in
+// scripts/registry-wiring.test.mjs, which is the file whose guard the string door defeated.
+const GATEWAY_CODE = stripStrings(stripComments(GATEWAY));
 const now = () => Math.floor(Date.now() / 1000);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const K = () => { const sk = generateSecretKey(); return { sk, pub: getPublicKey(sk) }; };
@@ -144,9 +167,9 @@ const SHAPES = {
 const MATRIX = {
   //                          church  network  steward+member  steward scoped   steward of   plain
   //                          key     of A     all capabilities to finance only  church B     member
-  'trinityone/sermon:':      [true,   true,    true,            false,           false,       false],
+  'trinityone/sermon:':      [true,   true,    false,           false,           false,       false],
   'trinityone/msgtags':      [true,   true,    true,            false,           false,       false],
-  'trinityone/backup-meta:': [true,   true,    true,            true,            false,       false],
+  'trinityone/backup-meta:': [true,   true,    false,           false,           false,       false],
   'trinityone/mediakey:':    [true,   true,    false,           false,           false,       false],
   'trinityone/manna-':       [true,   true,    false,           false,           false,       false],
   'trinityone/relays':       [true,   false,   false,           false,           false,       false],
@@ -204,25 +227,52 @@ test('a steward cannot write the trusted-relay list even when the envelope NAMES
     'boxes are handed this congregation\'s whole corpus (note()\'s TRUSTED_RELAYS / PEER_URLS). CLAUDE.md ' +
     'rule 10. Frame: ' + JSON.stringify(tagged));
   // …and the church key still writes it in both shapes, or cross-relay sync cannot be turned on at all.
+  // ⚠ THE SLEEP IS NOT DECORATION, and it was a REAL FLAKE before it was here (seen 2026-09-22, one run in
+  // several). `trinityone/relays` is ADDRESSABLE and keyed on (author, d-tag); the matrix above has already
+  // written it as the church key, and the relay refuses a replacement whose created_at is not NEWER than
+  // the copy it holds. Land both inside one second and this assertion fails as a stale replacement, which
+  // reads exactly like "the church key has been locked out of its own document".
+  await sleep(1100);
   assert.equal((await publishAs(church, doc(church, D.RELAYS, [{ pubkey: 'aa', url: 'ws://a' }, { pubkey: 'bb', url: 'ws://b' }], [['church', church.pub]])))[2], true,
     'the church key can no longer write its own trusted-relay list with a church tag present');
 });
 
-// ── THE INCOHERENCE THE AUDIT NAMED, CLOSED BY CONSTRUCTION ──────────────────────────────────────────────
-test('a content steward may PUBLISH a sermon as well as FEATURE one', async () => {
-  // The sharp edge of H1. The relay has granted a content-capable delegated steward `pinsermon:` since the
-  // content-docs branch was written; with no rule of its own, `sermon:` was decided by the catch-all — so
-  // after efe2dbe the same steward could feature a sermon they were not allowed to publish. Both answers
-  // now come from the SAME branch, so they cannot drift apart again.
+// ── THE TWO GRANTS THAT WERE WITHDRAWN, AND WHY THAT IS NOT THE INCOHERENCE COMING BACK ──────────────────
+test('a content steward may FEATURE a sermon and may not PUBLISH one, and neither reaches a reader', async () => {
+  // AUDIT-steward-doc-rules-2026-09-22 F1, owner's decision "go with B". The commit this replaces argued
+  // that granting `sermon:` to a content steward closed an incoherence: the relay let such a steward FEATURE
+  // a sermon (pinsermon: has been in the content branch since that branch was written) while the catch-all
+  // decided whether they could PUBLISH one.
+  //
+  // THE ARGUMENT DOES NOT SURVIVE THE READER. Both halves are invisible from a delegated console, measured:
+  // subscribePinnedSermon filters `authors:[pub]` exactly as _openSermons and subscribeSermons do, so a
+  // steward-authored pin lights no star and a steward-authored sermon reaches no list. The two therefore
+  // AGREE in the only place the incoherence was ever claimed to matter — what a human can see — and the
+  // asymmetry that is left is a write rule, not a user-visible one.
+  //
+  // WHY pinsermon: KEEPS ITS GRANT AND sermon: DOES NOT: pinsermon: predates all of this and narrowing it is
+  // an unmeasured behaviour change nobody has asked for; sermon:'s grant was one day old and was measured
+  // inert on all three readers. Both become real together, and only together, when the readers learn to
+  // accept a rostered steward's signature — a member-app change, so a member APK build and a device run.
+  // See TrinityOne-internal/reference/PLAN-delegated-steward-publishing.md.
   const pin = await publishAs(sm, doc(sm, D.PINSERMON + church.pub, { id: 's1', title: 'Sunday', sha256: 'aa' }, [['church', church.pub]]));
-  assert.equal(pin[2], true, 'the control moved: a content steward can no longer feature a sermon either — ' + JSON.stringify(pin));
+  assert.equal(pin[2], true,
+    'pinsermon: has been narrowed as a side effect of withdrawing the sermon: grant. That is a behaviour ' +
+    'change of its own and belongs in its own package — ' + JSON.stringify(pin));
   const put = await publishAs(sm, SHAPES['trinityone/sermon:'](sm));
-  assert.equal(put[2], true, 'a content steward may feature a sermon and not publish one — the incoherence is still open: ' + JSON.stringify(put));
-  // …and they are literally the same branch, not two rules that happen to agree today.
-  assert.match(GATEWAY, /d\.startsWith\(CATEGORY_D\) \|\| d\.startsWith\(PINSERMON_D\) \|\| d\.startsWith\(SERMON_D\)/,
-    'sermon: has been moved out of the branch that decides pinsermon:. Two rules for publishing and featuring ' +
-    'is how they disagreed in the first place.');
+  assert.equal(put[2], false,
+    'A DELEGATED STEWARD PUBLISHED A SERMON. Every shipped reader filters authors:[churchpub], so the relay ' +
+    'would be storing it and serving it to nobody — including the console that wrote it — while DashSermons ' +
+    'prints "✓ Uploaded … · members notified". Frame: ' + JSON.stringify(put));
+  // …and it is decided by its own branch, not by being absent from the content branch, so the next edit to
+  // that list cannot hand it back by accident.
+  assert.match(GATEWAY_CODE, /if \(d\.startsWith\(SERMON_D\)\) return leaderOf\(ownCp\(\)\);/,
+    'sermon: has lost its own accept() branch. If it is back in the content branch it is delegated again, ' +
+    'and the readers still will not serve it.');
+  assert.doesNotMatch(GATEWAY_CODE, /d\.startsWith\(PINSERMON_D\) \|\| d\.startsWith\(SERMON_D\)/,
+    'sermon: is back in the content-steward branch');
 });
+
 
 // ── THE DIAGNOSTIC, WHICH IS NOT THE DECISION BUT IS STILL A CLAIM ───────────────────────────────────────
 test('a refused member is no longer told the relay has no rule for a type it now gates', async () => {

@@ -9123,6 +9123,19 @@ function PinModal({ action, onClose }) {
   );
 }
 
+// THE TWO SENTENCES FOR A CHURCH-WIDE BACKUP RECORD THAT DID NOT SAVE, in one place because BOTH controls
+// in DashBackup use both of them (CLAUDE.md rule 2): the "Back up church data" button and the reminder
+// cadence segment. `trinityone/backup-meta:` is the CHURCH-WIDE half — the local file and the local cadence
+// both save regardless — so neither of these is a failure message, it is the second half of an honest
+// success.
+//
+// WHY TWO. On a DELEGATED console the refusal is permanent and has a name: the relay gates this document to
+// the church key or its network (2026-09-22), because subscribeBackupMeta filters `authors:[churchpub]` and
+// a steward-signed record is therefore served back to nobody, that console included. "Couldn't save" would
+// send that steward to look at a connection that is working perfectly. On the OWNER's console the same
+// `false` really is a relay problem, so it keeps the plain sentence.
+const BACKUP_META_OWNER_ONLY = 'Only the church’s own console can save the shared backup record, so your other stewards will still see this church as overdue.';
+const BACKUP_META_NO_RELAY = 'Your other stewards’ consoles will still show this church as overdue — the shared backup record could not be saved.';
 // Phase 1 backup: save the church's complete corpus to a file (native share sheet / web download) + a reminder cadence.
 function DashBackup() {
   const [busy, setBusy] = React.useState(false);
@@ -9145,7 +9158,7 @@ function DashBackup() {
     try { localStorage.setItem('trinityone.backupRemind', f); } catch {}
     let ok = true;
     try { if (window.Steward.setBackupMeta) ok = (await window.Steward.setBackupMeta(last, f)) !== false; } catch { ok = false; }
-    if (!ok) setFreqMsg('Your other stewards’ consoles will still show this church as overdue — the shared backup record could not be saved.');
+    if (!ok) setFreqMsg((window.Steward && window.Steward.actingChurch) ? BACKUP_META_OWNER_ONLY : BACKUP_META_NO_RELAY);
   };
   // church-wide backup state: same 'last backed up' + cadence on every steward/device, not just this one
   React.useEffect(() => {
@@ -9214,8 +9227,11 @@ function DashBackup() {
       // itself really did save, so this is a second sentence on a success message, not a failure.
       let _metaOk = true;
       try { if (window.Steward.setBackupMeta) _metaOk = (await window.Steward.setBackupMeta(ts, freq)) !== false; } catch { _metaOk = false; }
-      setMsg({ ok: true, text: 'Saved ' + count + ' records' + mediaBit + (encrypted ? ' — encrypted to your church key.' : ' (unencrypted).')
-        + (_metaOk ? '' : ' Your other stewards’ consoles will still show this church as overdue — the shared backup record could not be saved.') });
+      // WHICH refusal it was, not just that there was one — see the two sentences above DashBackup. On a
+      // delegated console this is now always the owner-only one, because the relay gates backup-meta: to
+      // the church key (2026-09-22) and the engine does not even ask.
+      const _metaSay = _metaOk ? '' : ' ' + ((window.Steward && window.Steward.actingChurch) ? BACKUP_META_OWNER_ONLY : BACKUP_META_NO_RELAY);
+      setMsg({ ok: true, text: 'Saved ' + count + ' records' + mediaBit + (encrypted ? ' — encrypted to your church key.' : ' (unencrypted).') + _metaSay });
     } catch (e) { setMsg({ ok: false, text: e.message || 'Backup failed' }); }
     setBusy(false);
   };

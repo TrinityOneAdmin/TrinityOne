@@ -202,8 +202,12 @@ test('a church-authored type the relay has no branch for is refused to a member 
   // question this test asks is unchanged and still worth asking here: a MEMBER may not write it, and the
   // CHURCH still can. What changed is which line refuses the member — its own branch rather than the
   // catch-all — which is why the reason is no longer asserted to name an undeclared type.
-  assert.ok('trinityone/sermon:' in DOC_TYPES && DOC_TYPES['trinityone/sermon:'].write === 'steward',
-    're-anchor: sermon: is no longer a declared steward-written type');
+  // RE-ANCHORED AGAIN, 2026-09-22 (second round): the write column is 'church', not 'steward'. The
+  // content-steward grant written earlier the same day was withdrawn because every shipped reader filters
+  // authors:[churchpub] and served a steward-authored sermon to nobody. The whole actor matrix lives in
+  // scripts/six-steward-doc-types-have-rules.test.mjs.
+  assert.ok('trinityone/sermon:' in DOC_TYPES && DOC_TYPES['trinityone/sermon:'].write === 'church',
+    're-anchor: sermon: is no longer a declared church-written type');
   const frame = await publishAs(mia, doc(mia, 'trinityone/sermon:s1', { title: 'not mine to write' }, [['church', church.pub]]));
   assert.equal(frame[2], false, 'a member wrote a church-authored type the relay has no rule for: ' + JSON.stringify(frame));
   const own = await publishAs(church, doc(church, 'trinityone/sermon:s1', { title: 'Sunday' }));

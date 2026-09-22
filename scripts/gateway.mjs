@@ -816,10 +816,10 @@ const NETWORK_D = D.NETWORK;   // the church declares it belongs to a network (t
 const BLOCKED_D = D.BLOCKED;   // a church's blocklist (banned member pubkeys) — d=blocked:<churchpub>
 const PIN_D = D.PIN;           // a group's pinned message — d=pin:<groupId> (one per group)
 const PINSERMON_D = D.PINSERMON; // the church's currently-featured/pinned sermon — d=pinsermon:<churchpub> (one per church) → member Today card + notification
-const SERMON_D = D.SERMON;     // the sermon itself — d=sermon:<id>, ["church",<cp>]; church/network/CONTENT steward, in the same branch as PINSERMON_D so publishing and featuring cannot disagree
+const SERMON_D = D.SERMON;     // the sermon itself — d=sermon:<id>, ["church",<cp>]; CHURCH KEY OR ITS NETWORK ONLY — the content-steward grant of 2026-09-22 was withdrawn the same day, measured inert at all three readers
 const MSGTAGS_D = D.MSGTAGS;   // the church's chat tag labels — d=trinityone/msgtags, a BARE name (one doc per author); church/network/CONTENT steward
 const MANNA_D = D.MANNA;       // the benevolence module's stem — d=trinityone/manna-<sub>, seven sub-types by concatenation; OWNER-ONLY while the module is locked for the pilot (see the registry entry for the three reasons)
-const BACKUPMETA_D = D.BACKUPMETA; // when the church last exported its data — d=backup-meta:<churchpub>, cleartext {at, remind}; church/network or ANY still-acting steward of that church
+const BACKUPMETA_D = D.BACKUPMETA; // when the church last exported its data — d=backup-meta:<churchpub>, cleartext {at, remind}; CHURCH KEY OR ITS NETWORK ONLY — the 'any steward' grant of 2026-09-22 was withdrawn the same day, measured inert at subscribeBackupMeta
 const HIDE_D = D.HIDE;       // a removed/hidden message — d=hidden:<msgId> (one per message)
 const MINORS_D = D.MINORS;     // safeguarding: a church's list of minor (child) pubkeys — d=minors:<churchpub>
 const APPROVED_D = D.APPROVED; // safeguarding: adults cleared to contact youth (mirrors the church's DBS/cleared list) — d=approved:<churchpub>
@@ -4122,12 +4122,21 @@ function accept(e) {
     // donations go. That is OWNER-ONLY: a delegated steward must not be able to create/replace a fund with
     // their own Lightning address and silently redirect members' gifts. Not in the steward-delegated set below.
     if (d.startsWith(FUND_D)) return leaderOf(ownCp());
-    // ── FOUR TYPES GIVEN RULES OF THEIR OWN ON 2026-09-22 ────────────────────────────────────────────────
-    // All four were living on the member catch-all, which is the `voice:` shape and cost the same thing
-    // twice over: at 6b6e66d every member of every church on this box could write all four (measured), and
-    // at efe2dbe nobody but the church key could — including the church's OWN steward, silently, because
-    // the console publishes them through feChurch, which signs with the STEWARD'S key. Each one now names
-    // the authority it needs. See scripts/trinity-doc-types.mjs for why each capability was chosen.
+    // ── FIVE TYPES GIVEN RULES OF THEIR OWN ON 2026-09-22 ────────────────────────────────────────────────
+    // msgtags, mediakey:, backup-meta: and manna- here, and sermon: in its own branch just below. All five
+    // were living on the member catch-all, which is the `voice:` shape and cost the same thing twice over:
+    // at 6b6e66d every member of every church on this box could write all five (measured), and at efe2dbe
+    // nobody but the church key could — including the church's OWN steward, silently, because the console
+    // publishes them through feChurch, which signs with the STEWARD'S key. Each one now names the authority
+    // it needs. See scripts/trinity-doc-types.mjs for why each was chosen.
+    //
+    // ONLY ONE OF THE FIVE IS DELEGATED, AND THAT IS A MEASUREMENT TALKING, NOT CAUTION. `msgtags` is
+    // delegated to a CONTENT steward and works end to end: both the member hub and the console read it by
+    // `#church:[cp]`, so a steward-authored copy really does reach a congregation (measured 2026-09-22).
+    // `sermon:` and `backup-meta:` were delegated the same day and WITHDRAWN the same day, because their
+    // readers filter `authors:[churchpub]` and served a steward-authored document to nobody — an ACK into a
+    // void, which is worse than the refusal it replaced. The test of whether a write grant is real is the
+    // READER, not the writer.
     //
     // THE CHAT TAG LABELS. `content`, because these are what the congregation sees on a message — the same
     // job as posting into a broadcast channel, which is already `content`. An EXACT match, never a prefix:
@@ -4143,12 +4152,24 @@ function accept(e) {
     // AUDIT-undeclared-doc-types-2026-09-22: an addressable write REPLACES the envelope, and losing it makes
     // every encrypted sermon undecryptable for the whole church.
     if (d.startsWith(MEDIAKEY_D)) return leaderOf(d.slice(MEDIAKEY_D.length));
-    // WHEN THE CHURCH LAST BACKED UP — d=backup-meta:<churchpub>, cleartext {at, remind}. 'any', not a named
-    // capability: it grants nothing, carries no key and names no person, and its whole purpose is that every
-    // steward's overdue nudge resets when any of them takes a backup. A church whose only delegate is its
-    // treasurer must not be left unable to clear its own banner. 'any' still refuses a steward whose church
-    // wrote them an EXPLICITLY empty capability list.
-    if (d.startsWith(BACKUPMETA_D)) { const cp = d.slice(BACKUPMETA_D.length); return leaderOf(cp) || stewardCan(e.pubkey, cp, 'any'); }
+    // WHEN THE CHURCH LAST BACKED UP — d=backup-meta:<churchpub>, cleartext {at, remind}. CHURCH KEY OR ITS
+    // NETWORK ONLY, scoped on the d-tag SUFFIX.
+    //
+    // ⚠ IT WAS `|| stewardCan(e.pubkey, cp, 'any')` FOR ONE DAY, 2026-09-22, AND THE GRANT WAS INERT.
+    // Its stated purpose was "every steward's overdue nudge resets when any one of them takes a backup".
+    // MEASURED on a live gateway the same day: subscribeBackupMeta (src/steward.src.js) filters
+    // `authors:[pub]` + `#d`, and on a delegated console `pub` is the CHURCH's pubkey while the signature is
+    // the steward's — so a steward-authored record came back to NOBODY, that console included. Asking the
+    // relay to store it therefore bought the nudge-reset nothing and cost the console its error: the write
+    // was ACKed, DashBackup's "the shared backup record could not be saved" sentence stopped printing, and
+    // every other steward went on seeing the church overdue with nothing on any screen saying so. A loud
+    // failure turned into a silent success. Owner's decision, 2026-09-22: do not grant it. The console now
+    // says plainly that only the church's own console can save this record.
+    //
+    // Re-granting it needs the READER changed first (accept a rostered steward's signature), which is a
+    // console + member-app change and a device run — written up in
+    // TrinityOne-internal/reference/PLAN-delegated-steward-publishing.md.
+    if (d.startsWith(BACKUPMETA_D)) return leaderOf(d.slice(BACKUPMETA_D.length));
     // THE BENEVOLENCE MODULE'S STEM — seven sub-types built by concatenation (settings, fund:, request:,
     // vouch:, approval:, record:, testimony:). Church key or its network ONLY, while the module is LOCKED
     // for the pilot (app/stew-manna.jsx says so on the toggle). One prefix rule would be one grant across
@@ -4156,17 +4177,38 @@ function accept(e) {
     // CHURCH FOR MONEY are not the same decision — and `finance`, the obvious grant when it ships, is
     // deliberately not made in advance. Widening this later is one line; a premature grant is not undoable.
     if (d.startsWith(MANNA_D)) return leaderOf(ownCp());
+    // THE SERMON ITSELF — d=sermon:<id>, ['church',<cp>]. CHURCH KEY OR ITS NETWORK ONLY.
+    //
+    // ⚠ IT SAT IN THE CONTENT BRANCH BELOW FOR ONE DAY, 2026-09-22, GRANTED TO A CONTENT STEWARD, AND THE
+    // GRANT WAS INERT ON EVERY SCREEN IN THE PRODUCT. MEASURED on a live gateway: a delegated steward's
+    // church-tagged `sermon:` ACKed and was then read back by the three shipped readers as 0, 0 and 0 —
+    //   · _openSermons          (src/fellowship.src.js) — `authors:[cp]` AND `if (e.pubkey !== cp) return;`
+    //   · subscribeSermons      (src/steward.src.js)    — `authors:[pub]`, and on a DELEGATED console `pub`
+    //                                                     is the church's pubkey while `sk` is the steward's
+    //   · subscribePinnedSermon (both)                  — `authors:[pub]` + `#d`
+    // so the ACK reached no member's app, no member's Today card, and not even the publishing steward's own
+    // sermon list — while DashSermons printed '✓ Uploaded … · members notified'. Against `efe2dbe` that is
+    // an HONESTY REGRESSION: there the write was refused and publishSermon threw a real error. Owner's
+    // decision, 2026-09-22: withdraw the grant rather than ACK into a void.
+    //
+    // THIS IS NOT INCOHERENT WITH pinsermon:, WHICH IS STILL GRANTED TO A CONTENT STEWARD, and the readers
+    // are the whole reason. subscribePinnedSermon filters `authors:[pub]` exactly as the two sermon readers
+    // do, so featuring is equally invisible from a delegated console: the two AGREE in the only place the
+    // incoherence was ever claimed to matter, which is what a human can see. `pinsermon:` keeps its grant
+    // because it predates all of this and narrowing it is an unmeasured behaviour change nobody asked for;
+    // `sermon:`'s grant was one day old and measured inert. Both become real together, and only together,
+    // when the READERS learn to accept a rostered steward's signature — a member-app change, so a member APK
+    // build and a device run. That package is written up in
+    // TrinityOne-internal/reference/PLAN-delegated-steward-publishing.md.
+    if (d.startsWith(SERMON_D)) return leaderOf(ownCp());
     // church-authored CONTENT docs: a steward names the church via a ["church", <cp>] tag
     if (d.startsWith(GROUP_D) || d.startsWith(PLAN_D) || d.startsWith(DEVO_D) || d.startsWith(ROTA_D)
       || d.startsWith(ROSTER_D) || d.startsWith(SERVICE_D) || d.startsWith(REQUEST_D)
       || d.startsWith(ROOM_D) || d.startsWith(BOOKING_D) || d.startsWith(RUNSHEET_D)
-      || d.startsWith(CATEGORY_D) || d.startsWith(PINSERMON_D) || d.startsWith(SERMON_D)) {
-      // SERMON_D JOINED THIS LIST ON 2026-09-22, and it belongs here rather than in a branch of its own
-      // precisely because PINSERMON_D is already in it. The relay granted a content-capable delegated
-      // steward the right to FEATURE a sermon and, having no rule for the sermon itself, let the member
-      // catch-all decide whether they could PUBLISH one — which meant "yes, and so may every member of every
-      // church on the box" before efe2dbe and "no, not even this church's content steward" after it. One
-      // branch, one capability, and the two answers cannot drift apart again.
+      || d.startsWith(CATEGORY_D) || d.startsWith(PINSERMON_D)) {
+      // SERMON_D JOINED THIS LIST ON 2026-09-22 AND LEFT IT THE SAME DAY — see its own branch above, and the
+      // measurement that decided it. PINSERMON_D stays: it has been decided here since this branch was
+      // written, so nothing about it is new and nothing about it has been measured as inert.
       // AUDIT-2026-07-24 CRITICAL-1/2: group: and roster: ids are relay-GLOBAL, so being *a* church key was
       // enough to rewrite ANOTHER church's group (→ flip invite-only to public) or care-team roster (→ grant
       // yourself care-admin over their private corpus). Refuse at the door once an id has an owner.

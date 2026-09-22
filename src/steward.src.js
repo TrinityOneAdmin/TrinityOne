@@ -4240,6 +4240,15 @@ window.Steward = {
   // publish a signed sermon doc referencing an uploaded blob (title + sha256 + host(s) for redundancy).
   publishSermon(s) {
     if (!sk) return Promise.resolve(null);
+    // A DELEGATED CONSOLE CANNOT PUBLISH A SERMON, AND IS TOLD SO BEFORE ANYTHING IS SENT.
+    //
+    // The relay refuses `trinityone/sermon:` to anything but the church key or its network (gateway.mjs,
+    // 2026-09-22) and the reason is the READERS, not caution: _openSermons, subscribeSermons and
+    // subscribePinnedSermon all filter `authors:[churchpub]`, so a steward-signed sermon is served to
+    // nobody — not to a member's app, not to a member's Today card, not to this console's own list.
+    // Measured as 0 / 0 / 0 on a live gateway. Asking anyway would earn a refusal and the connection
+    // advice that goes with it, which is the wrong thing to tell somebody whose connection is fine.
+    if (actingChurch) return Promise.reject(new Error('Only the church’s own console can publish a sermon. Ask whoever holds the church key.'));
     const id = s.id || ('sermon' + Date.now());
     const content = JSON.stringify({ id, title: s.title || 'Sermon', desc: (s.desc && String(s.desc).trim()) || undefined, sha256: s.sha256, hosts: (s.hosts && s.hosts.length) ? s.hosts : [s.host], mime: s.mime || '', size: s.size || 0, ts: s.ts || now(), enc: s.enc || undefined, series: s.series || undefined });
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', SERMON_D + id], ['t', NET]], content }))
@@ -4247,6 +4256,9 @@ window.Steward = {
   },
   async removeSermon(s) {
     if (!sk) return null;
+    // THE SAME BOUNDARY AS publishSermon ABOVE, and it matters more here: the tombstone IS a `sermon:` write,
+    // so a delegated console is refused it — and the blob deletes further down must never run over a refusal.
+    if (actingChurch) throw new Error('Only the church’s own console can remove a sermon. Nothing was deleted.');
     const id = (s && typeof s === 'object') ? s.id : s;
     // THE TOMBSTONE FIRST, AND ONLY THEN THE BYTES — and the tombstone must actually have landed. This
     // `await publish(...)` discarded its result and the DELETE loop below ran regardless, which is the worst
@@ -4256,7 +4268,11 @@ window.Steward = {
     // is recoverable. (It is reachable for a real steward: a delegate without the content capability is
     // refused this document by the relay — measured 2026-09-22.)
     const _tomb = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', SERMON_D + id], ['t', NET], ['deleted', '1']], content: '' }));
-    if (_tomb === false) throw new Error('Couldn’t remove that sermon — no relay accepted the change, so nothing was deleted. If you are helping another church, this needs the “Groups, rotas, services, events, posts” permission.');
+    // NO LONGER NAMES A PERMISSION. It used to end "…this needs the “Groups, rotas, services, events,
+    // posts” permission", which was true for one day and is not a thing a church can grant any more:
+    // `sermon:` is church-key-only, and the delegated case is answered above by name rather than by a
+    // refusal whose advice would be impossible to act on.
+    if (_tomb === false) throw new Error('Couldn’t remove that sermon — no relay accepted the change, so nothing was deleted.');
     // reclaim the stored bytes on each host (best-effort; content-addressed so the same sha lives on every mirror)
     const sha = s && typeof s === 'object' && s.sha256;
     const hosts = (s && typeof s === 'object' && ((s.hosts && s.hosts.length) ? s.hosts : (s.host ? [s.host] : []))) || [];
@@ -4298,8 +4314,17 @@ window.Steward = {
   // The backup itself is a local file and really did save; this document is the CHURCH-WIDE half — "every
   // steward's nudge resets" — so a refusal means the other stewards' consoles still show overdue. Saying
   // "Saved" and nothing else made this console the only one that believed the church was backed up.
+  //
+  // ON A DELEGATED CONSOLE IT IS ALWAYS false, AND IT DOES NOT ASK. The relay gates
+  // `trinityone/backup-meta:` to the church key or its network (2026-09-22), because subscribeBackupMeta
+  // below filters `authors:[pub]` — the CHURCH's pubkey — while a delegated console signs with the
+  // steward's own key. So a steward-authored record is read back by NOBODY, this console included, and
+  // resets nobody's nudge: measured as 0 rows on a live gateway the day that grant was written, which is
+  // why it was withdrawn the same day. Both callers say WHICH refusal it is rather than sending the
+  // steward to look at a connection that is working perfectly.
   setBackupMeta(at, remind) {
     if (!sk) return Promise.resolve(null);
+    if (actingChurch) return Promise.resolve(false);
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', BACKUPMETA_D + pub], ['t', NET]], content: JSON.stringify({ at: at || now(), remind: remind || 'monthly' }) }));
   },
   subscribeBackupMeta(onMeta) {

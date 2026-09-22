@@ -76,18 +76,33 @@ export const DOC_TYPES = Object.freeze({
   'trinityone/hidden:':       { write: 'mixed',     read: 'members', scope: 'tag',    note: 'moderation: a removed message' },
   'trinityone/pinsermon:':    { write: 'steward',   read: 'members', scope: 'suffix' },
   // THE SERMON ITSELF, given a rule of its own on 2026-09-22 — it was UNDECLARED until then, and the entry
-  // that used to sit below has been removed because it is declared now. It falls in the same accept()
-  // branch as pinsermon: above, and that is the whole point of the change: the relay already let a
-  // content-capable delegated steward FEATURE a sermon and, with no branch of its own, the catch-all
-  // decided whether they could PUBLISH one. Measured on a live relay at 6b6e66d: every member of every
-  // church on the box could write `trinityone/sermon:<id>`; at efe2dbe nobody but the church key could,
-  // including the church's own content steward. Both answers were accidents of a rule nobody chose.
-  // ⚠ THE RELAY ACCEPTING IT DOES NOT PUT IT ON A PHONE. _openSermons in src/fellowship.src.js filters
-  // `if (e.pubkey !== cp) return;` over `authors:[cp]`, so a sermon authored by a delegated steward is
-  // stored and shown to nobody. That was equally true on 6b6e66d (it was ACKed and invisible), so it is a
-  // pre-existing CLIENT defect, not something this rule introduces — but a console that now gets an honest
-  // ACK must not be read as "members can see it". Same shape as the mediakey: note below.
-  'trinityone/sermon:':       { write: 'steward',   read: 'members', scope: 'tag',    note: 'a self-hosted media item (sha256 + host) — church key, its network, or a steward with CONTENT, exactly as pinsermon: already was' },
+  // that used to sit below has been removed because it is declared now. Measured on a live relay at
+  // 6b6e66d: every member of every church on the box could write `trinityone/sermon:<id>`; at efe2dbe
+  // nobody but the church key could. Both answers were accidents of a rule nobody chose.
+  //
+  // ⚠ IT WAS 'steward' FOR ONE DAY AND IS 'church' NOW, AND THE READERS ARE THE WHOLE REASON. The first
+  // version of this rule put sermon: in the same accept() branch as pinsermon: and granted a CONTENT
+  // steward the write, on the argument that the relay already let such a steward FEATURE a sermon while the
+  // catch-all decided whether they could PUBLISH one. The argument does not survive measurement. A
+  // delegated steward's church-tagged `sermon:` ACKed and then came back as ZERO rows from all three
+  // shipped readers (live gateway, 2026-09-22):
+  //     0  _openSermons          src/fellowship.src.js  authors:[cp] + `if (e.pubkey !== cp) return;`
+  //     0  subscribeSermons      src/steward.src.js     authors:[pub] — and on a DELEGATED console `pub` is
+  //                                                     the CHURCH's pubkey while `sk` is the steward's
+  //     0  subscribePinnedSermon both                   authors:[pub] + #d
+  // Not on a member's phone, not on a member's Today card, and not even in the publishing steward's own
+  // sermon list — while the console printed '✓ Uploaded … · members notified'. Against efe2dbe that is an
+  // honesty regression: there the write was refused and publishSermon threw a real error.
+  //
+  // AND IT IS NOT INCOHERENT WITH pinsermon:, WHICH KEEPS ITS CONTENT-STEWARD GRANT. Featuring is equally
+  // invisible from a delegated console — subscribePinnedSermon filters the same way — so the two agree in
+  // what a human can see, which is the only place the incoherence was ever claimed to matter. pinsermon:
+  // keeps its grant because it predates all of this and narrowing it is an unmeasured behaviour change;
+  // sermon:'s grant was one day old and measured inert. BOTH become real together, and only together, when
+  // the readers learn to accept a rostered steward's signature — a member-app change, hence a member APK
+  // build and a device run. Written up as option A in
+  // TrinityOne-internal/reference/PLAN-delegated-steward-publishing.md.
+  'trinityone/sermon:':       { write: 'church',    read: 'members', scope: 'tag',    note: 'a self-hosted media item (sha256 + host) — church key or its network ONLY: every shipped reader filters authors:[churchpub], so a delegated steward\'s copy is served to nobody' },
   'trinityone/fund:':         { write: 'leader',    read: 'members', scope: 'tag' },
   // GIVEN A RULE OF ITS OWN ON 2026-09-22. The column said 'church' since the registry was written and the
   // relay had no branch for it, so it fell to the member catch-all — measured on a live two-church relay at
@@ -209,16 +224,24 @@ export const DOC_TYPES = Object.freeze({
   'trinityone/mediakey:':     { write: 'church',    read: 'members', scope: 'suffix', note: 'its key set IS the member roster — gated accordingly. OWNER-ONLY WRITE: the envelope is sealed with the SIGNER\'s key, so only the church key mints one a member can open' },
   // WHEN THE CHURCH LAST EXPORTED ITS DATA, and how often it is nudged. UNDECLARED until 2026-09-22.
   // d=backup-meta:<churchpub>, so it scopes on the suffix like every other <cp>-keyed document.
-  // 'any' RATHER THAN A NAMED CAPABILITY, deliberately: this document grants nothing, carries no key and
-  // names no person — it is a shared reminder timestamp, and its whole purpose is that "every steward's
-  // nudge resets" (src/steward.src.js, setBackupMeta). Requiring CONTENT or FINANCE would mean a church
-  // whose only delegate is its treasurer could take a backup and never clear the overdue banner. 'any' is
-  // the relay's existing predicate for "still acts for this church at all", and an EXPLICITLY empty
-  // capability list is still refused by it. What a steward can do with it is suppress the church's own
-  // backup nudge by writing a false date — a nuisance from somebody the church already delegated to, not an
-  // escalation. It stays CLEARTEXT and member-readable, which tells any member how long the church has gone
-  // without a backup; that was true before this rule and is not changed by it.
-  'trinityone/backup-meta:':  { write: 'steward',   read: 'members', scope: 'suffix', note: 'church-authored, CLEARTEXT {at, remind}. Church key, its network, or ANY still-acting steward of the church the d-tag names' },
+  //
+  // ⚠ IT WAS 'steward' (capability 'any') FOR ONE DAY AND IS 'church' NOW. The grant's whole stated
+  // purpose was "every steward's overdue nudge resets when any one of them takes a backup, so a church
+  // whose only delegate is its treasurer is not left unable to clear its own banner". MEASURED on a live
+  // gateway, 2026-09-22: subscribeBackupMeta (src/steward.src.js) filters `authors:[pub]` + `#d`, and on a
+  // delegated console `pub` is the CHURCH's pubkey while the signature is the steward's — so a
+  // steward-authored record came back as ZERO rows, to every console including the one that wrote it. The
+  // grant therefore bought the nudge-reset nothing and cost the console its error: the write was ACKed, so
+  // DashBackup's "the shared backup record could not be saved" sentence — added in the same commit, and
+  // true — stopped printing, while every other steward went on seeing the church overdue. A loud failure
+  // turned into a silent success, which is [[fix-the-control-not-the-label]] created by the fix for it.
+  // The console now says plainly that only the church's own console can save this record.
+  //
+  // Re-granting it needs the READER changed first (accept a rostered steward's signature) — option A in
+  // TrinityOne-internal/reference/PLAN-delegated-steward-publishing.md, a member-app + console change.
+  // It stays CLEARTEXT and member-readable, which tells any member how long the church has gone without a
+  // backup; that was true before this rule and is not changed by it.
+  'trinityone/backup-meta:':  { write: 'church',    read: 'members', scope: 'suffix', note: 'church-authored, CLEARTEXT {at, remind}. Church key or its network ONLY: subscribeBackupMeta filters authors:[churchpub], so a delegated steward\'s record resets nobody\'s nudge' },
   'finance/journal:':         { write: 'steward',   read: 'church',  scope: 'tag',    note: 'append-only, single-writer, relay is the ordering authority' },
   // ARCHITECTURE-AUDIT-2026-07-30 A6. The other three finance docs, from app/stew-finance.jsx — a file the
   // old extraction never read. gateway.mjs gates them explicitly and generically, on BOTH sides:
@@ -315,6 +338,16 @@ export const DOC_TYPES = Object.freeze({
 // the middle one, and the answer was never to reopen it: it was to give the six the rules they had never
 // been given. All six are declared above now, each with the authority it needs and the reason for it. The
 // one entry left below is the one whose generic answer really was chosen and checked.
+//
+// ⚠ AND THE MIDDLE ROW IS ONLY HALF RIGHT, WHICH TOOK ONE MORE DAY AND A SECOND MEASUREMENT TO FIND.
+// "Give the delegated console back what it lost" is the correct instinct and it only works where a READER
+// will serve the result. Of the three grants written for a steward on 2026-09-22, exactly one — msgtags —
+// is read by `#church:[cp]` and therefore reaches a congregation. `sermon:` and `backup-meta:` are read by
+// `authors:[cp]`, so a steward-signed copy was stored and served to nobody, the publishing console
+// included: the ACK replaced an honest error with silence. Both were withdrawn to church-key-only the same
+// day (owner's decision), and their entries above carry the zero-row measurement. THE RULE THIS LEAVES
+// BEHIND: a write grant is worth nothing until a reader accepts the signature it produces, so measure the
+// reader before widening the door.
 export const UNDECLARED = Object.freeze({
   'trinityone/wallet:':    'MEMBER-authored with no church tag, so canRead falls to author-only — verified: another member of the same church cannot read it',
 });
