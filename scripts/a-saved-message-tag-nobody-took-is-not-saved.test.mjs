@@ -464,3 +464,134 @@ test('THE SCREEN: changing the backup REMINDER says so too — the second caller
   assert.match(dele.said(), /Only the church’s own console can save the shared backup record/,
     'a delegated console is told to check its connection over a refusal that is permanent. Screen read: ' + dele.said());
 });
+
+// ── THE CONTROL, NOT THE LABEL: NOT ONE BYTE GOES UP ON A CONSOLE THAT MAY NOT PUBLISH ───────────────────
+// AUDIT-steward-doc-rules-round2-2026-09-22, finding R1. `publishSermon` refuses on a delegated console
+// (the three engine tests above) — but `doUpload` called `uploadBlob` FIRST and `publishSermon` after, so
+// the whole file went to the host and nothing then referenced it. Measured on the branch tip before this
+// fix, driving the real panel:
+//
+//     ###ORDER###  ["uploadBlob","publishSermon"]        (Encrypt OFF)
+//
+// A sermon video is routinely hundreds of MB and orphan-blob GC is on the backlog, not built. Encrypt ON
+// happened to be safe only because `mediaEncryptor` refuses one step earlier — luck, not a gate, so BOTH
+// settings are driven below. The three controls that write `trinityone/sermon:` — Upload, Edit and Remove
+// — are asserted to be MARKED as well, because a live control on a console that can never use it is the
+// [[fix-the-control-not-the-label]] shape whatever the engine says afterwards.
+async function sermonsPanel({ delegated, encOn, list = [] }) {
+  const { React, draw } = miniReact();
+  const order = [];
+  const win = {
+    Steward: {
+      actingChurch: delegated ? 'CHURCHPUB' : '',
+      myStewardCaps: () => ['content'],   // a fully-granted delegate: no capability is what refuses here
+      subscribeSermons: (cb) => { cb(list); return () => {}; },
+      subscribePinnedSermon: (cb) => { cb(null); return () => {}; },
+      subscribeMediaKey: () => () => {},
+      mediaHosts: () => [],
+      // THE ENGINE'S REAL ANSWERS, from src/steward.src.js — never a stand-in for the decision under test,
+      // which is whether the SCREEN reaches them at all.
+      mediaEncryptor: async () => {
+        order.push('mediaEncryptor');
+        if (delegated) throw new Error('Can’t encrypt this upload — your church’s media key could not be saved. Nothing has been uploaded.');
+        return async (b) => b;
+      },
+      uploadBlob: async () => { order.push('uploadBlob'); return { sha256: 'deadbeef', host: 'h', hosts: ['h'], mime: 'audio/mp4', size: 10, enc: false }; },
+      publishSermon: async (d) => {
+        order.push('publishSermon');
+        if (delegated) throw new Error('Only the church’s own console can publish a sermon. Ask whoever holds the church key.');
+        return { id: 's9', ...d };
+      },
+      pinSermon: async () => { order.push('pinSermon'); return { id: 'x' }; },
+      removeSermon: async () => { order.push('removeSermon'); throw new Error('Only the church’s own console can remove a sermon. Nothing was deleted.'); },
+    },
+    localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+    addEventListener() {}, removeEventListener() {},
+    useStewardMembers: () => [],
+    useStewardChurch: () => ({ features: { encryptComms: encOn } }),
+    useStewardConn: () => 0,
+  };
+  const mod = loadScreen('app/stew-dashboard.jsx', ['DashSermons'], BASE_GLOBALS(React, win));
+  const render = () => draw(mod.DashSermons, {});
+  // TWO DRAWS: the sermon list arrives through an effect, and this harness runs effects after the draw.
+  let tree = render(); tree = render();
+  const btn = (pred, what) => {
+    const hits = find(tree, n => n.type === 'button' && pred(n));
+    assert.equal(hits.length, 1, `re-anchor this test: expected exactly one ${what}, found ${hits.length}`);
+    return hits[0];
+  };
+  return {
+    order,
+    btn,
+    press: async (pred, what) => { btn(pred, what).props.onClick(); await ticks(20); tree = render(); },
+    marked: (pred, what) => !!(btn(pred, what).props || {})['aria-disabled'],
+    labelled: (label) => find(tree, n => n.type === 'button' && reads(n).trim() === label).length,
+    said: () => reads(tree),
+    // the real <input type=file>, answering as the OS file picker does — the funnel the Upload button opens
+    // and the one the HEVC / large-encrypted-video "upload anyway" sheets re-enter.
+    pickFile: async () => {
+      const hits = find(tree, n => n.type === 'input' && n.props && n.props.type === 'file' && n.props.accept);
+      assert.equal(hits.length, 1, 're-anchor this test: the sermon file input is gone');
+      await hits[0].props.onChange({ target: { files: [{ name: 'sunday.m4a', size: 5 * 1048576, type: 'audio/mp4', lastModified: 1 }], value: '' } });
+      await ticks(20); tree = render();
+    },
+  };
+}
+const UPLOAD_BTN = (n) => reads(n).trim() === 'Upload audio or video';
+const TRASH_BTN = (n) => (n.props && n.props['aria-label']) === 'Remove sermon';
+const PEN_BTN = (n) => (n.props && n.props['aria-label']) === 'Edit sermon';
+const SERMON1 = [{ id: 's1', title: 'Sunday morning', sha256: 'aa', size: 10, mime: 'audio/mp4' }];
+
+for (const encOn of [false, true]) {
+  test('THE SCREEN: a delegated console sends NO BYTES for a sermon — Encrypt ' + (encOn ? 'ON' : 'OFF'), async () => {
+    const p = await sermonsPanel({ delegated: true, encOn, list: SERMON1 });
+    assert.equal(p.marked(UPLOAD_BTN, 'Upload button'), true,
+      'THE UPLOAD CONTROL IS STILL OFFERED on a console that can never publish a sermon. (It is aria-disabled ' +
+      'rather than disabled on purpose — the press must still be able to answer on a phone, where there is ' +
+      'no hover and so no tooltip — but it must be MARKED.)');
+    await p.press(UPLOAD_BTN, 'Upload button');
+    assert.deepEqual(p.order, [],
+      'PRESSING UPLOAD STARTED WORK ON A DELEGATED CONSOLE: ' + JSON.stringify(p.order));
+    assert.match(p.said(), /Only the church’s own console can publish a sermon/,
+      'the locked Upload button said nothing when it was pressed. Screen read: ' + p.said());
+    // …and the funnel behind the control, which is the path that actually spent the bytes.
+    await p.pickFile();
+    await p.press(n => reads(n).trim() === 'Upload', 'Upload button in the naming modal');
+    assert.deepEqual(p.order, [],
+      'THE BLOB WENT UP BEFORE THE REFUSAL. uploadBlob ran and nothing then referenced those bytes — an ' +
+      'orphan on the host, for a file that is routinely hundreds of MB, and orphan-blob GC is not built. ' +
+      'Order: ' + JSON.stringify(p.order));
+    assert.match(p.said(), /Only the church’s own console can publish a sermon/,
+      'the naming modal closed or said nothing over the refusal. Screen read: ' + p.said());
+  });
+}
+
+test('THE SCREEN: a delegated console opens no “can’t be undone” sheet over a removal it cannot do', async () => {
+  const p = await sermonsPanel({ delegated: true, encOn: false, list: SERMON1 });
+  assert.equal(p.marked(TRASH_BTN, 'Remove (trash) button'), true, 'the Remove control is still offered unmarked');
+  assert.equal(p.marked(PEN_BTN, 'Edit (pen) button'), true, 'the Edit control is still offered unmarked — editing re-publishes the same sermon: document');
+  await p.press(TRASH_BTN, 'Remove (trash) button');
+  assert.equal(p.labelled('Remove'), 0,
+    'THE CONFIRMATION SHEET OPENED. A delegated console cannot tombstone a sermon, so "It disappears from ' +
+    'members’ apps and the stored file is deleted … This can’t be undone" is put in front of somebody over ' +
+    'something that cannot happen, and the refusal arrives only after they commit to it.');
+  assert.deepEqual(p.order, [], 'the engine was reached anyway: ' + JSON.stringify(p.order));
+  assert.match(p.said(), /Only the church’s own console can remove a sermon/,
+    'the locked Remove button said nothing when it was pressed. Screen read: ' + p.said());
+});
+
+test('THE SCREEN: the OWNER console still uploads, publishes and removes — the other direction', async () => {
+  // Without this, a "fix" that locked the panel for everybody would pass every assertion above while taking
+  // sermons away from every church that has one. OWN-3/4/5 in the round-2 audit are the same idea.
+  const p = await sermonsPanel({ delegated: false, encOn: false, list: SERMON1 });
+  assert.equal(p.marked(UPLOAD_BTN, 'Upload button'), false, 'the OWNER console has had its Upload button locked');
+  assert.equal(p.marked(TRASH_BTN, 'Remove (trash) button'), false, 'the OWNER console has had its Remove button locked');
+  assert.equal(p.marked(PEN_BTN, 'Edit (pen) button'), false, 'the OWNER console has had its Edit button locked');
+  await p.pickFile();
+  await p.press(n => reads(n).trim() === 'Upload', 'Upload button in the naming modal');
+  assert.deepEqual(p.order, ['uploadBlob', 'publishSermon', 'pinSermon'],
+    'the owner console no longer uploads and publishes a sermon: ' + JSON.stringify(p.order));
+  assert.match(p.said(), /✓ Uploaded/, 'the owner console no longer reports a successful upload. Screen read: ' + p.said());
+  await p.press(TRASH_BTN, 'Remove (trash) button');
+  assert.equal(p.labelled('Remove'), 1, 'the owner console no longer opens the removal confirmation at all');
+});

@@ -8272,6 +8272,14 @@ async function probeHevcVideo(file) {
   } catch { return false; }
 }
 
+// THE TWO SENTENCES THIS PANEL REFUSES WITH, in one place because THREE controls use them (CLAUDE.md
+// rule 2): Upload, Edit and Remove, all three of which write `trinityone/sermon:`. The publish one is the
+// engine's own wording verbatim (src/steward.src.js, publishSermon) so the screen and the engine cannot
+// drift apart; the remove one drops the engine's trailing "Nothing was deleted." because on a locked
+// control nothing was ever attempted, and names who can instead.
+const SERMON_OWNER_ONLY = 'Only the church’s own console can publish a sermon. Ask whoever holds the church key.';
+const SERMON_REMOVE_OWNER_ONLY = 'Only the church’s own console can remove a sermon. Ask whoever holds the church key.';
+
 function DashSermons() {
   const [sermons, setSermons] = React.useState([]);
   const [sermonsLoaded, setSermonsLoaded] = React.useState(false);   // has the subscription answered? see doUpload's dupe check
@@ -8291,6 +8299,23 @@ function DashSermons() {
   React.useEffect(() => (window.Steward.subscribeMediaKey ? window.Steward.subscribeMediaKey() : undefined), [conn]);
   React.useEffect(() => (window.Steward.subscribePinnedSermon ? window.Steward.subscribePinnedSermon(p => setPinnedId(p && p.id)) : undefined), [conn]);
   const togglePin = (s) => { if (pinnedId === s.id) window.Steward.unpinSermon(); else window.Steward.pinSermon(s); };
+  // ── A DELEGATED CONSOLE LEARNS IT MAY NOT PUBLISH BEFORE ANY BYTES LEAVE THE PHONE ────────────────────
+  // AUDIT-steward-doc-rules-round2-2026-09-22, finding R1. The engine refuses `trinityone/sermon:` on a
+  // delegated console (publishSermon / removeSermon, and the relay refuses it too) — but doUpload called
+  // uploadBlob FIRST and publishSermon after, measured order ["uploadBlob","publishSermon"]. With Encrypt
+  // OFF a whole sermon video — routinely hundreds of MB — therefore landed on the host and nothing then
+  // referenced it: an orphan blob, and orphan-blob GC is on the backlog, not built. With Encrypt ON there
+  // was no waste only because mediaEncryptor happens to refuse one step earlier.
+  //
+  // So this is [[fix-the-control-not-the-label]]: an honest refusal AFTER the upload is still an upload.
+  // The panel now uses the console's own capability mechanism, which is what every other delegated-console
+  // refusal in this file uses (stewCapState at the top, the nav at ~1913, _capBtn in the header).
+  //
+  // THE CAPABILITY IS IRRELEVANT HERE AND ONLY `.owner` IS READ. `sermon:` is church-key-only: no capability
+  // a church can tick makes a delegate able to publish one, so the question is not "were you granted this"
+  // but "is this the church's own console" — which is exactly `stewCapState().owner` (`!S.actingChurch`).
+  // It FAILS OPEN the same way the rest of the mechanism does: an owner console is never locked out.
+  const _churchOnly = !stewCapState('content').owner;
   const fileRef = React.useRef(null);
   const [upBusy, setUpBusy] = React.useState(false); const [upMsg, setUpMsg] = React.useState('');
   const [editing, setEditing] = React.useState(null);
@@ -8327,6 +8352,11 @@ function DashSermons() {
     askThenUpload(f);
   };
   const doUpload = async (f, fields) => {
+    // NOT ONE BYTE ON A CONSOLE THAT MAY NOT PUBLISH. The locked Upload button below is what a steward
+    // meets; this is the funnel every route into an upload passes through (that button, the HEVC "upload
+    // anyway", the large-encrypted-video "upload anyway", and Enter in the naming modal), so the guard
+    // lives here as well as on the control. Thrown, not toasted: the modal keeps the answer ON it.
+    if (_churchOnly) { setUpMsg('✗ ' + SERMON_OWNER_ONLY); throw new Error(SERMON_OWNER_ONLY); }
     const bigVid = String(f.type || '').startsWith('video') && f.size > 25 * 1048576;   // stopgap until on-device transcode: flag a heavy video
     setUpBusy(true); setUpMsg((bigVid ? '⚠ Large video (' + fmtSize(f.size) + ') — slow to upload' + (encOn ? ' + play' : '') + '. ' : '') + (encOn ? 'Encrypting + uploading ' : 'Uploading ') + f.name + '…');
     let ok = false;
@@ -8377,9 +8407,14 @@ function DashSermons() {
           <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
             <Icon name={String(s.mime || '').startsWith('video') ? 'play' : 'headphones'} size={16} color="var(--sage)" />
             <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 13.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.title}</div><div style={{ fontSize: 11.5, color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.desc ? s.desc : (fmtSize(s.size || 0) + (s.enc ? ' · encrypted' : ''))}</div></div>
-            <button onClick={() => setEditing(s)} title="Edit name & details" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '8px 10px', minWidth: 40, minHeight: 40, boxSizing: 'border-box', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="pen" size={14} color="currentColor" /></button>
+            {/* EDIT IS A `sermon:` WRITE TOO — it re-publishes the same document — so it is locked on a
+                delegated console beside the other two, rather than letting a steward retype a title and
+                meet the refusal only once they press Save. */}
+            <button onClick={() => { if (_churchOnly) { setUpMsg('✗ ' + SERMON_OWNER_ONLY); return; } setEditing(s); }} aria-disabled={_churchOnly || undefined} title={_churchOnly ? SERMON_OWNER_ONLY : 'Edit name & details'} aria-label="Edit sermon" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '8px 10px', minWidth: 40, minHeight: 40, boxSizing: 'border-box', alignItems: 'center', justifyContent: 'center', cursor: _churchOnly ? 'not-allowed' : 'pointer', opacity: _churchOnly ? 0.55 : 1, color: 'var(--ink-3)', display: 'flex' }}><Icon name={_churchOnly ? 'lock' : 'pen'} size={14} color="currentColor" /></button>
             <button onClick={() => togglePin(s)} title={pinnedId === s.id ? 'Pinned to members’ Today — tap to unpin' : 'Pin to members’ Today (sends a notification)'} style={{ border: '1px solid ' + (pinnedId === s.id ? 'var(--clay)' : 'var(--line)'), background: pinnedId === s.id ? 'var(--clay)' : 'var(--surface)', borderRadius: 9, padding: '8px 10px', minWidth: 40, minHeight: 40, boxSizing: 'border-box', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: pinnedId === s.id ? '#fff' : 'var(--ink-3)', display: 'flex' }}><Icon name="pin" size={14} color="currentColor" /></button>
-            <button onClick={() => setPendingDelete(s)} title="Remove" aria-label="Remove sermon" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '8px 10px', minWidth: 40, minHeight: 40, boxSizing: 'border-box', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={14} color="currentColor" /></button>
+            {/* NO "This can’t be undone" OVER SOMETHING THAT CANNOT HAPPEN. The confirmation sheet used to
+                open on a delegated console and take the press, and only then did the engine refuse. */}
+            <button onClick={() => { if (_churchOnly) { setUpMsg('✗ ' + SERMON_REMOVE_OWNER_ONLY); return; } setPendingDelete(s); }} aria-disabled={_churchOnly || undefined} title={_churchOnly ? SERMON_REMOVE_OWNER_ONLY : 'Remove'} aria-label="Remove sermon" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '8px 10px', minWidth: 40, minHeight: 40, boxSizing: 'border-box', alignItems: 'center', justifyContent: 'center', cursor: _churchOnly ? 'not-allowed' : 'pointer', opacity: _churchOnly ? 0.55 : 1, color: 'var(--ink-3)', display: 'flex' }}><Icon name={_churchOnly ? 'lock' : 'trash'} size={14} color="currentColor" /></button>
           </div>))}</div> : null}
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: 'var(--ink-2)', margin: '0 0 10px', cursor: 'pointer', lineHeight: 1.4 }}>
           <input type="checkbox" checked={encOn} onChange={e => setEncOn(e.target.checked)} style={{ flexShrink: 0 }} />
@@ -8400,7 +8435,14 @@ function DashSermons() {
           <span><b>Notify members</b> — feature it on everyone’s Today (“New video / New audio clip”) + send a notification. It becomes the one featured item, replacing any previous. Leave off for a quiet upload.</span>
         </label>
         <input ref={fileRef} type="file" accept="audio/*,video/*" style={{ display: 'none' }} onChange={onFile} />
-        <button onClick={() => fileRef.current && fileRef.current.click()} disabled={upBusy} className="sk-btn sk-btn--clay" style={{ fontSize: 13, opacity: upBusy ? 0.6 : 1 }}><Icon name={upBusy ? 'refresh' : 'plus'} size={15} color="var(--on-clay)" /> {upBusy ? 'Working…' : 'Upload audio or video'}</button>
+        {/* MARKED, NOT HIDDEN — the same choice the nav and the header's "New post" make (see _capBtn): a
+            button that vanishes reads as a broken console, a locked one that says why reads as a church
+            that has scoped you. `aria-disabled`, not `disabled`, so the press still lands and can answer
+            on screen — on a phone there is no hover, so a tooltip nobody can reach says nothing. */}
+        <button onClick={() => { if (_churchOnly) { setUpMsg('✗ ' + SERMON_OWNER_ONLY); return; } fileRef.current && fileRef.current.click(); }}
+          disabled={upBusy} aria-disabled={_churchOnly || undefined} title={_churchOnly ? SERMON_OWNER_ONLY : undefined}
+          className={'sk-btn ' + (_churchOnly ? 'sk-btn--ghost' : 'sk-btn--clay')}
+          style={{ fontSize: 13, opacity: (upBusy || _churchOnly) ? 0.6 : 1, cursor: _churchOnly ? 'not-allowed' : 'pointer' }}><Icon name={_churchOnly ? 'lock' : (upBusy ? 'refresh' : 'plus')} size={15} color={_churchOnly ? 'currentColor' : 'var(--on-clay)'} /> {upBusy ? 'Working…' : 'Upload audio or video'}</button>
         {upMsg ? <div style={{ fontSize: 12, color: 'var(--ink-2)', marginTop: 8 }}>{upMsg}</div> : null}
         <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 10, lineHeight: 1.45 }}>Big videos are slow to upload and, if encrypted, slow to play. Record or export at <b>~720p</b> and keep clips short — a few minutes is usually a few MB. <a href="https://github.com/TrinityOneAdmin/TrinityOne/blob/main/docs/guides/STEWARD-GUIDE.md#keeping-video-small-and-fast" target="_blank" rel="noopener" style={{ color: 'var(--clay-ink)', textDecoration: 'none', fontWeight: 600 }}>How to shrink a video →</a></div>
       </Panel>
