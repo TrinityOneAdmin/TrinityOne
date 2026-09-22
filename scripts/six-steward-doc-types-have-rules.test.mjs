@@ -273,6 +273,45 @@ test('a content steward may FEATURE a sermon and may not PUBLISH one, and neithe
     'sermon: is back in the content-steward branch');
 });
 
+// ── THE SUFFIX SCOPING THE COMMIT CALLED "STRUCTURALLY IMPOSSIBLE", ASKED IN THE SHAPE THAT CAN ANSWER ────
+test('a CO-TENANT CHURCH KEY cannot reach church A’s media key or backup record, in any envelope shape', async () => {
+  // AUDIT-steward-doc-rules-2026-09-22 F4. The matrix above cannot see this and said so was fine, because
+  // EVERY shape in SHAPES carries ['church', CP()] — and with a church tag present, a SUFFIX-scoped rule and
+  // an ownCp()-scoped one agree for every actor in the matrix. Two scoped sabotages proved it: replacing
+  //     if (d.startsWith(MEDIAKEY_D))   return leaderOf(d.slice(MEDIAKEY_D.length));
+  //     if (d.startsWith(BACKUPMETA_D)) return leaderOf(d.slice(BACKUPMETA_D.length));
+  // with `leaderOf(ownCp())` left this file 42 pass / 0 fail while a co-tenant church key overwrote church
+  // A's media-key envelope — the AUDIT-2026-07-24 CRITICAL-1/2 class, and losing that envelope makes every
+  // encrypted sermon undecryptable for the whole congregation.
+  //
+  // So ask it where the two rules DISAGREE: an envelope with NO church tag at all (ownCp() then falls back
+  // to the author, who is a church), and one tagged with the WRONG church (ownCp() takes the tag). The
+  // d-tag names church A in both, which is the only thing that should decide.
+  for (const [type, d] of [['mediakey:', D.MEDIAKEY + church.pub], ['backup-meta:', D.BACKUPMETA + church.pub]]) {
+    for (const [shape, extra] of [['UNTAGGED', []], ['TAGGED CHURCH B', [['church', churchB.pub]]]]) {
+      const frame = await publishAs(churchB, doc(churchB, d, { keys: {}, at: now(), rev: now() }, extra));
+      assert.equal(frame[2], false,
+        'A CO-TENANT CHURCH KEY WROTE CHURCH A\'S ' + type + ' DOCUMENT (' + shape + '). These are ' +
+        'ADDRESSABLE, so the write REPLACES — for mediakey: that is every encrypted sermon in church A made ' +
+        'undecryptable, by a congregation that merely shares a relay. The rule must scope on the d-tag ' +
+        'SUFFIX, which names the church, and not on ownCp(), which the author or the tag can supply. ' +
+        'Frame: ' + JSON.stringify(frame));
+    }
+  }
+  // …and church A's own key still writes both in both shapes, or the scoping has locked the owner out.
+  // ⚠ THE SLEEP IS NOT DECORATION. Both are ADDRESSABLE documents keyed on (author, d-tag), and the relay
+  // refuses a replacement whose created_at is not newer than the copy it already holds — the matrix above
+  // has already written each of these as the church key. Without a second between them the second write is
+  // refused as a stale replacement and the failure reads exactly like a broken rule. It did.
+  for (const d of [D.MEDIAKEY + church.pub, D.BACKUPMETA + church.pub]) {
+    assert.equal((await publishAs(church, doc(church, d, { keys: {}, at: now(), rev: now() })))[2], true,
+      'the church key can no longer write its own ' + d.slice(0, 24) + '… with no church tag');
+    await sleep(1100);
+    assert.equal((await publishAs(church, doc(church, d, { keys: {}, at: now(), rev: now() }, [['church', church.pub]])))[2], true,
+      'the church key can no longer write its own ' + d.slice(0, 24) + '… with a church tag');
+    await sleep(1100);
+  }
+});
 
 // ── THE DIAGNOSTIC, WHICH IS NOT THE DECISION BUT IS STILL A CLAIM ───────────────────────────────────────
 test('a refused member is no longer told the relay has no rule for a type it now gates', async () => {
