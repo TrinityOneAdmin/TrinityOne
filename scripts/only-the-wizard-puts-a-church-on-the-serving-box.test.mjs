@@ -53,6 +53,7 @@ test('THE SCREEN: the wizard\'s name step asks selfRegister to put the church on
     name: 'St Columba, created here',
     church: { name: '', nip05: '' },
     setBusy: () => {},
+    setNameSlow: () => {}, nameSlowTimer: { current: null },   // the "still waiting" line under the field (2026-09-21); its 5 s timer is cleared on every exit
     next: () => {},
     window: { Steward: {
       selfRegister: async (n, opts) => { calls.push({ n, opts }); return { ok: true }; },

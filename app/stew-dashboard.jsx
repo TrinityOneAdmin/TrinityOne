@@ -974,6 +974,17 @@ function StewSetupWizard({ church, onDone, onTab, onSettings, onInvite, onNewPos
   const [step, setStep] = React.useState(0);
   const [name, setName] = React.useState(church.name || '');
   const [busy, setBusy] = React.useState(false);
+  // THE NAME STEP'S WAIT IS NAMED. Continue on step 0 registers the church with its relays and publishes the
+  // profile, and until 2026-09-21 the only sign of that was the button at half opacity: measured on 3a8c980
+  // with the shipped relays accepting a connection and never answering (what an unreachable *.ts.net host
+  // looks like from a box without Tailscale), 12 s of a disabled button and nothing else on screen — no
+  // spinner, no sentence. `nameSlow` flips after 5 s of that so the line under the field can change from
+  // "telling your relay" to "still waiting". Owner's copy, 2026-09-21. No button shortens it: the wait is
+  // selfRegister's bounded timeouts plus the publish gate, and offering "skip" would skip the registration
+  // the rest of the wizard depends on.
+  const [nameSlow, setNameSlow] = React.useState(false);
+  const nameSlowTimer = React.useRef(null);
+  React.useEffect(() => () => clearTimeout(nameSlowTimer.current), []);
   const [teamName, setTeamName] = React.useState('');
   // Same rule as the Groups page: absent means ON, only an explicit false is a steward's decision to opt out.
   const encByDefaultWiz = !church.features || church.features.encryptComms !== false;
@@ -1102,7 +1113,10 @@ function StewSetupWizard({ church, onDone, onTab, onSettings, onInvite, onNewPos
   const saveName = async () => {
     const n = name.trim();
     if (n && n !== church.name) {
-      setBusy(true);
+      setBusy(true); setNameSlow(false);
+      clearTimeout(nameSlowTimer.current);
+      nameSlowTimer.current = setTimeout(() => setNameSlow(true), 5000);
+      try {
       // REGISTER THE CHURCH BEFORE PUBLISHING ANYTHING. A relay refuses every write for a church it does
       // not know, and the console's OTHER self-registration (the effect below, keyed on `church.name`)
       // waits for the name to come BACK from the relay — which it never can, because the write that would
@@ -1126,7 +1140,7 @@ function StewSetupWizard({ church, onDone, onTab, onSettings, onInvite, onNewPos
       // church". This is the only call site that passes it.
       try { if (window.Steward.selfRegister) await Promise.resolve(window.Steward.selfRegister(n, { createHere: true })); } catch (e) {}
       await Promise.resolve(window.Steward.publishProfile({ name: n, nip05: church.nip05 }));
-      setBusy(false);
+      } finally { clearTimeout(nameSlowTimer.current); setNameSlow(false); setBusy(false); }   // the line under the field goes with `busy`, on every exit
     }
     // AUDIT-2026-07-28 F10: ensureJoinPolicy, not setJoinPolicy. At this point in the wizard the relay may
     // not know this church exists yet, and it refuses the write — which was swallowed here, leaving the
@@ -1294,6 +1308,9 @@ function StewSetupWizard({ church, onDone, onTab, onSettings, onInvite, onNewPos
       </React.Fragment>}>
       <div style={lbl}>CHURCH NAME</div>
       <input aria-label="Church name" autoFocus value={name} onChange={e => setName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && name.trim()) saveName(); }} placeholder="Your church’s name" style={fld} />
+      {busy ? <div role="status" style={{ marginTop: 10, fontSize: 13, lineHeight: 1.5, color: 'var(--ink-2)' }}>
+        {nameSlow ? 'Still waiting for a relay to answer — up to a minute. Your church key is safe on this device.' : 'Telling your relay about your church…'}
+      </div> : null}
     </WizShell>
   );
 

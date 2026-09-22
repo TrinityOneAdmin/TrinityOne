@@ -1637,4 +1637,30 @@ export const CASES = [
     replace: `window.Steward.selfRegister(n)`,
     test: 'scripts/a-church-created-on-a-suite-box-publishes-to-it.test.mjs',
   },
+  // ── the wizard's name step names its wait, and the wait is one timeout (2026-09-21) ──────────────────
+  {
+    name: 'wizard-wait: the status line under the name field is removed',
+    file: 'app/stew-dashboard.jsx',
+    find: `      {busy ? <div role="status" style={{ marginTop: 10, fontSize: 13, lineHeight: 1.5, color: 'var(--ink-2)' }}>
+        {nameSlow ? 'Still waiting for a relay to answer — up to a minute. Your church key is safe on this device.' : 'Telling your relay about your church…'}
+      </div> : null}
+`,
+    replace: ``,
+    test: 'scripts/the-church-creation-wait-is-named-and-short.test.mjs',
+  },
+  {
+    name: 'wizard-wait: the 5 s timer never flips the line to "still waiting"',
+    file: 'app/stew-dashboard.jsx',
+    find: `nameSlowTimer.current = setTimeout(() => setNameSlow(true), 5000);`,
+    replace: `nameSlowTimer.current = setTimeout(() => {}, 5000);`,
+    test: 'scripts/the-church-creation-wait-is-named-and-short.test.mjs',
+  },
+  {
+    name: 'wizard-wait: selfRegister dials its bases one after another again',
+    file: 'src/steward.src.js',
+    // the 3a8c980 shape: every host that accepts and never answers costs its own 6 s before the next is asked
+    find: `    await Promise.allSettled(Array.from(bases, one));`,
+    replace: `    for (const base of bases) await one(base);`,
+    test: 'scripts/the-church-creation-wait-is-named-and-short.test.mjs',
+  },
 ];

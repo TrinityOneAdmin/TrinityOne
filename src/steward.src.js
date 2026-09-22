@@ -8772,9 +8772,20 @@ window.Steward = {
     let done = {};
     try { done = JSON.parse(localStorage.getItem(SELFREG_KEY) || '{}') || {}; } catch (e) {}
     let accepted = false; const refused = [], unreachable = [];
-    for (const base of bases) {
+    // ALL THE BASES AT ONCE, NOT ONE AFTER ANOTHER. This was a `for (const base of bases)` with an `await`
+    // inside, so every host that accepted a connection and never answered cost its full 6 s abort before the
+    // next was even dialled: measured 2026-09-21 on 3a8c980, driving the real wizard with the two shipped
+    // hosts in a tarpit, the name step's Continue sat disabled for 12.1 s (own box: instant; then 6 s; then
+    // 6 s) — and the Suite's first run, on a box where the shipped hosts are unreachable, IS that case.
+    // Dialled together the worst wait is ONE abort. Nothing else moves: the SET of bases is built exactly as
+    // before (rule 10 — this changes WHEN they are asked, never WHICH; pinned by the fetch spy in
+    // the-church-creation-wait-is-named-and-short), the per-(church, base) done-mark, _markRegOk on the first
+    // acceptance, the serving-origin cache flip, the refused/unreachable lists and the ownRefused event are
+    // all the same code, now run per base. `refused`/`unreachable` fill in completion order rather than
+    // dial order; nothing reads them by position (ownRefused is a find).
+    const one = async (base) => {
       const mark = churchPub + '@' + base;
-      if (!force && done[mark]) continue;                     // already registered this key with this relay
+      if (!force && done[mark]) return;                       // already registered this key with this relay
       const url = base + '/config';
       try {
         const auth = finalizeEvent({ kind: 27235, created_at: now(), tags: [['u', url], ['method', 'POST']], content: '' }, churchSk);
@@ -8815,7 +8826,8 @@ window.Steward = {
           // one reason so the founding documents wait for a church the relay will actually accept.
           if (/name/i.test(why)) _regNeedsName = true; }
       } catch (e) { unreachable.push(base); }
-    }
+    };
+    await Promise.allSettled(Array.from(bases, one));   // `one` never rejects; allSettled so a surprise never skips the verdict below
     // SAY IT WHEN NOBODY ACCEPTED. This used to return nothing at all, so a church whose registration was
     // REFUSED completed its whole setup — name, recovery phrase, groups, meetings — with every write silently
     // rejected, and the steward ended holding a church that looks set up and does not exist on the relay.
