@@ -38,7 +38,7 @@ import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fnBody } from './test-slice.mjs';
-import { miniReact, texts, button } from './render-jsx-screen.mjs';
+import { miniReact, texts, button, find, loadScreen, reads } from './render-jsx-screen.mjs';
 
 const ROOT = new URL('../', import.meta.url).pathname;
 const STEW = readFileSync(join(ROOT, 'app/stew-dashboard.jsx'), 'utf8');
@@ -200,6 +200,7 @@ test('publishSermon still rejects on a refusal — the one that was already righ
   await assert.rejects(no.call(), /every relay rejected it/, 'publishSermon has lost its refusal check');
 });
 
+
 test('mediaEncryptor REFUSES TO ENCRYPT when the key envelope was refused', async () => {
   // THE ONE WHOSE CONSEQUENCE IS PERMANENT. This awaited the envelope publish, threw the answer away, and
   // returned a working encryptor regardless — so the sermon upload in app/stew-dashboard.jsx encrypted the
@@ -246,4 +247,117 @@ test('pinSermon has no success label to put over a refusal', () => {
   assert.equal(sets.length, 1,
     'setPinnedId is called in ' + sets.length + ' places — it used to be exactly one, the relay subscription. ' +
     'A second writer is an optimistic update, which is a success label by another name.');
+});
+
+// ── THE OTHER TWO SCREENS, AT THE POINT OF USE (CLAUDE.md rule 1) ────────────────────────────────────────
+// AUDIT-steward-doc-rules-2026-09-22, finding F5. Of the three console screen changes in `2ff0f43`, only the
+// chat-tags panel above had a test that failed when the feature was deleted FROM THE SCREEN. Reverting the
+// other two to their pre-fix form left this file 8 pass / 0 fail:
+//
+//   · DashSermons' Remove confirm, back to `window.Steward.removeSermon(pendingDelete); setPendingDelete(null);`
+//     — and that revert is now WORSE than the code it came from, because removeSermon THROWS: the sheet
+//     closes, nothing is shown, and the steward believes the sermon was removed.
+//   · DashBackup, back to fire-and-forget with no "still overdue" sentence.
+//
+// Both are driven below through the REAL components, compiled with the real esbuild from app/*.jsx and
+// rendered — rule 3, because those files ship unbundled and a text match on them survives `false && `.
+const STUB = () => function Stub(p) { return { type: 'div', props: {}, kids: [p && p.children].flat().filter(Boolean) }; };
+const BASE_GLOBALS = (React, win) => ({
+  React, window: win,
+  Icon: () => null, SkBadge: STUB(), SkPill: STUB(), SkToggle: STUB(),
+  Panel: ({ children }) => children, DismissibleNote: ({ children }) => children,
+  useStewDialog: () => ({ current: null }), useStewModalOpen: () => {},
+  location: { search: '' },
+  setTimeout, clearTimeout, URL, URLSearchParams, Blob,
+  Math, Date, JSON, String, Number, Boolean, Object, Array, Set, Map, console, Promise, RegExp,
+});
+const ticks = async (n = 8) => { for (let i = 0; i < n; i++) await tick(); };
+
+test('THE SCREEN: a refused sermon removal shows the reason, and does not close in silence', async () => {
+  const { React, draw } = miniReact();
+  const calls = [];
+  const win = {
+    Steward: {
+      subscribeSermons: (cb) => { cb([{ id: 's1', title: 'Sunday morning', sha256: 'aa', size: 10, mime: 'audio/mp4' }]); return () => {}; },
+      subscribePinnedSermon: (cb) => { cb(null); return () => {}; },
+      subscribeMediaKey: () => () => {},
+      mediaHosts: () => [],
+      // THE ENGINE'S REAL ANSWER FOR A DELEGATED CONSOLE, verbatim from src/steward.src.js — not a stand-in
+      // for the decision under test, which is what the SCREEN does with a rejection.
+      removeSermon: async (s) => { calls.push(s && s.id); throw new Error('Only the church’s own console can remove a sermon. Nothing was deleted.'); },
+    },
+    localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+    addEventListener() {}, removeEventListener() {},
+  };
+  const mod = loadScreen('app/stew-dashboard.jsx', ['DashSermons'], BASE_GLOBALS(React, win));
+  const render = () => draw(mod.DashSermons, {});
+  // TWO DRAWS BEFORE READING. The subscription that fills the list runs in an EFFECT, and this harness runs
+  // effects after the draw — so the first tree is the empty-list one every real console shows for a moment.
+  let tree = render(); tree = render();
+  const press = async (pred, what) => {
+    const hits = find(tree, n => n.type === 'button' && pred(n));
+    assert.equal(hits.length, 1, `re-anchor this test: expected exactly one ${what}, found ${hits.length}`);
+    hits[0].props.onClick();
+    await ticks();
+    tree = render();
+  };
+  await press(n => (n.props && n.props['aria-label']) === 'Remove sermon', 'Remove (trash) button on the sermon row');
+  // reads(), not texts(): texts() also collects string PROPS, so the confirm button reads 'sk-btn Remove'
+  // and the row's trash button reads 'Remove Remove sermon' from its title and aria-label. reads() is what a
+  // human sees, which makes the dialog's button the only one whose visible text IS 'Remove'.
+  await press(n => reads(n).trim() === 'Remove', 'Remove button in the confirmation dialog');
+  await ticks();
+  tree = render();
+  const said = reads(tree);
+  assert.deepEqual(calls, ['s1'], 'the confirmation did not reach removeSermon at all — re-anchor this test');
+  assert.match(said, /Only the church’s own console can remove a sermon/,
+    'THE SHEET CLOSED AND SAID NOTHING. removeSermon rejects; if the confirm handler drops that rejection ' +
+    'the steward watches the dialog close exactly as it does on success and believes the sermon is gone — ' +
+    'it is still there, and so is its file. Screen read: ' + said);
+});
+
+test('THE SCREEN: a backup whose church-wide record was refused says so, and names WHICH refusal', async () => {
+  // Both directions, because a fix that printed the sentence unconditionally would pass a one-sided test
+  // while telling every owner console its working backup record had failed.
+  const run = async ({ metaAnswer }) => {
+    const { React, draw } = miniReact();
+    const doc = { createElement: () => ({ href: '', download: '', click() {}, remove() {} }), body: { appendChild() {} } };
+    const win = {
+      Steward: {
+        exportChurchData: async () => ({ data: 'x', binary: false, mime: 'application/json', count: 42, filename: 'b.json', encrypted: true, media: 0 }),
+        setBackupMeta: async () => metaAnswer,
+        subscribeBackupMeta: () => () => {},
+        mediaSize: async () => ({ count: 0, bytes: 0 }),
+      },
+      localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+      addEventListener() {}, removeEventListener() {},
+      document: doc,
+    };
+    const mod = loadScreen('app/stew-dashboard.jsx', ['DashBackup'], { ...BASE_GLOBALS(React, win), document: doc });
+    const render = () => draw(mod.DashBackup, {});
+    let tree = render();
+    const press = async (label) => {
+      const hits = find(tree, n => n.type === 'button' && reads(n).trim() === label);
+      assert.equal(hits.length, 1, `re-anchor this test: expected exactly one "${label}" button, found ${hits.length}`);
+      hits[0].props.onClick();
+      await ticks(12);
+      tree = render();
+    };
+    return { press, said: () => reads(tree) };
+  };
+
+  // 1. the owner console, record accepted: the plain success and NOTHING else.
+  const ok = await run({ metaAnswer: { id: 'evt' } });
+  await ok.press('Back up church data');
+  assert.match(ok.said(), /Saved 42 records/, 'the backup success message is gone — re-anchor this test. Screen read: ' + ok.said());
+  assert.doesNotMatch(ok.said(), /overdue/,
+    'a backup record that SAVED is being reported as not saved. Screen read: ' + ok.said());
+
+  // 2. the owner console, record refused by every relay: the success AND the consequence.
+  const no = await run({ metaAnswer: false });
+  await no.press('Back up church data');
+  assert.match(no.said(), /Saved 42 records/, 'the file really did save and the screen must still say so. Screen read: ' + no.said());
+  assert.match(no.said(), /the shared backup record could not be saved/,
+    'THE CONSEQUENCE IS BACK TO BEING INVISIBLE. This console is then the only one that believes the church ' +
+    'is backed up, while every other steward goes on seeing "overdue". Screen read: ' + no.said());
 });
