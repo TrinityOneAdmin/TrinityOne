@@ -18,7 +18,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { DOC_TYPES, UNDECLARED, D, MEMBER_WRITABLE_TYPES } from './trinity-doc-types.mjs';
-import { stripComments } from './test-slice.mjs';
+import { stripComments, stripStrings } from './test-slice.mjs';
 
 const GATEWAY = readFileSync(new URL('../scripts/gateway.mjs', import.meta.url), 'utf8');
 // THE SAME SOURCE WITH ITS COMMENTS BLANKED, for the assertions that read a DECISION rather than a name.
@@ -34,11 +34,22 @@ const GATEWAY = readFileSync(new URL('../scripts/gateway.mjs', import.meta.url),
 // assertions]] again, in a test written the same week as the note. stripComments keeps byte offsets stable,
 // so an ordering check over the same string would still mean what it says.
 //
+// AND THE STRINGS GO TOO — AUDIT-steward-doc-rules-2026-09-22, finding F6, which is M1 one step along.
+// stripComments must PRESERVE string contents to keep byte offsets stable, so the same decision typed as a
+// string literal walked straight past the fix above:
+//
+//     -    if (!(isAnyChurch || isNetwork) && !memberDocTypeOk(d)) return false;
+//     +    const _M1B = 'if (!(isAnyChurch || isNetwork) && !memberDocTypeOk(d)) return false;'; void _M1B;
+//
+// left this file 8 pass / 0 fail, with the rule gone. stripStrings blanks literal CONTENTS, offsets intact,
+// so the only text that can satisfy the assertions below is executable code.
+//
 // USED BY (CLAUDE.md rule 2 — every assertion that reads it, and they are all in one test): the catch-all's
 // `if (…) return false` match and the `memberDocTypeOk(…) return true` doesNotMatch, both in "the ONE
 // column-derived list the spine reads only ever NARROWS". The NAME-shaped assertions above deliberately keep
-// reading the raw source: a comment there is evidence the name exists in the file, which is all they claim.
-const GATEWAY_CODE = stripComments(GATEWAY);
+// reading the raw source: a comment there is evidence the name exists in the file, which is all they claim —
+// and they MUST, because the names they look for are string literals this would blank.
+const GATEWAY_CODE = stripStrings(stripComments(GATEWAY));
 const REGISTRY = readFileSync(new URL('../scripts/trinity-doc-types.mjs', import.meta.url), 'utf8');
 const declared = new Set([...Object.keys(DOC_TYPES), ...Object.keys(UNDECLARED)]);
 
@@ -123,10 +134,20 @@ test('the ONE column-derived list the spine reads only ever NARROWS', () => {
   assert.match(GATEWAY_CODE, /if \(!\(isAnyChurch \|\| isNetwork\) && !memberDocTypeOk\(d\)\) return false;/,
     'the catch-all no longer REFUSES on the list — if it is now granting on it, that is the change this wiring must never make');
   assert.doesNotMatch(GATEWAY_CODE, /memberDocTypeOk\([^)]*\)\) return true/, 'memberDocTypeOk is used to GRANT somewhere');
-  // …and the stripper must actually be stripping. A stripComments that silently returned its input would
-  // restore the hole above in a way nothing else in this file could see.
+  // …and BOTH strippers must actually be stripping. One that silently returned its input would restore the
+  // hole above in a way nothing else in this file could see, and there are two holes: prose in a comment
+  // (M1) and prose in a string literal (F6).
   assert.ok(/\/\/ THE CHAT TAG LABELS\./.test(GATEWAY) && !/\/\/ THE CHAT TAG LABELS\./.test(GATEWAY_CODE),
     'GATEWAY_CODE still contains gateway.mjs comments — the two assertions above are reading prose again');
+  assert.ok(/undeclared document type /.test(GATEWAY) && !/undeclared document type /.test(GATEWAY_CODE),
+    'GATEWAY_CODE still contains gateway.mjs STRING CONTENTS, so the decision above can be satisfied by a ' +
+    'string literal: `const _x = "if (…) return false;"` passes while the rule itself is deleted ' +
+    '(AUDIT-steward-doc-rules-2026-09-22 F6). The needle here is a refusal sentence that exists ONLY inside ' +
+    'a string once comments are gone.');
+  // …and the code itself must have survived both: a stripper that blanked everything would satisfy every
+  // doesNotMatch in this test and quietly stop the two matches above from meaning anything.
+  assert.match(GATEWAY_CODE, /function memberDocTypeOk\(/,
+    'GATEWAY_CODE no longer contains executable gateway.mjs code — the strippers have eaten the source');
 });
 
 test('the import is the runtime one, not a build-time copy', () => {

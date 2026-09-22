@@ -125,6 +125,49 @@ export function stripComments(src) {
   return out;
 }
 
+// THE SAME DOOR, ONE STEP ALONG: blank the CONTENTS of string literals, keeping byte offsets stable.
+//
+// AUDIT-steward-doc-rules-2026-09-22, finding F6. stripComments above deliberately PRESERVES string contents
+// (it has to, to keep offsets — `assert.equal(out.length, src.length)`), so a decision deleted from the code
+// and re-typed as a string literal satisfies every assertion that matches its text:
+//
+//     -    if (!(isAnyChurch || isNetwork) && !memberDocTypeOk(d)) return false;
+//     +    const _M1B = 'if (!(isAnyChurch || isNetwork) && !memberDocTypeOk(d)) return false;'; void _M1B;
+//
+// left scripts/registry-wiring.test.mjs 8 pass / 0 fail — the comment door, closed on the same day, reopened
+// as a string. This is the same [[comments-can-satisfy-assertions]] family: prose, of any kind, standing in
+// for the rule it describes.
+//
+// USE IT ON TOP OF stripComments, never instead of it: `stripStrings(stripComments(src))`. Comments must go
+// first, or an apostrophe in a comment opens a "string" that swallows the rest of the line.
+//
+// WHAT IT IS NOT FOR. Any assertion that reads a LITERAL the code is supposed to contain — a d-tag name, a
+// refusal sentence, a URL — must keep reading the raw source, because this blanks exactly those. It is for
+// assertions that read a DECISION.
+//
+// CALLERS (CLAUDE.md rule 2, and today there is exactly one — keep this list true):
+//   · scripts/registry-wiring.test.mjs — the member catch-all's `return false`
+//
+// Quote handling matches stripComments exactly, including the "a ' or \" string cannot contain a raw
+// newline" reset, which is what keeps an apostrophe in JSX text from eating the rest of a file.
+export function stripStrings(src) {
+  let out = '', q = '';
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i], prev = src[i - 1];
+    if (q) {
+      // Inside a literal: keep newlines (line numbers), blank everything else, and emit the CLOSING quote.
+      if (c === '\n' && q !== '`') { q = ''; out += c; continue; }   // never was a string — see stripComments
+      if (c === q && prev !== '\\') { q = ''; out += c; continue; }
+      out += c === '\n' ? '\n' : ' ';
+      continue;
+    }
+    if (c === '"' || c === "'" || c === '`') { q = c; out += c; continue; }
+    out += c;
+  }
+  assert.equal(out.length, src.length, 'stripStrings changed the length — offsets would no longer be comparable');
+  return out;
+}
+
 // An ordering assertion that cannot be satisfied by prose. Both needles must appear in the CODE, and
 // `first` must precede `second`. Use this instead of two indexOf calls on a raw slice.
 export function assertOrder(src, first, second, message) {
