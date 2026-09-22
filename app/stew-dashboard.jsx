@@ -2925,16 +2925,22 @@ function NewPostModal({ onClose }) {
 // ON A PHONE THE CHEVRON GOES. It is decoration — the whole card is the control (role=button, one onClick)
 // and nothing about what it does changes — and at 163px it was costing 23px of the ~101px the label has to
 // live in, which is the difference between "Announcements" reading in full and reading "Announcemen…".
-function StatCard({ label, value, sub, ic, tint, onClick }) {
+// `snug` (DashOverview, 2026-09-22): a desktop card a size down, for four across a 612px pane — the Suite's own
+// window. The phone density stays the phone's; this is the step between the two. In this size the ICON SITS ON
+// THE VALUE ROW, not the label row: a 144px card leaves the label 80px beside a 26px icon, and "Announcements"
+// needs 102px at 12px (measured 2026-09-22; no padding or font nudge that stays legible closes 22px). With the
+// label on a row of its own it has the card's full width, and nothing on the card is dropped.
+function StatCard({ label, value, sub, ic, tint, onClick, snug = false }) {
   const t = SK_TINT[tint];
   const narrow = useStewNarrow();
-  const pad = narrow ? 12 : 18, icn = narrow ? 24 : 30;
+  const pad = narrow ? 12 : snug ? 14 : 18, icn = narrow ? 24 : snug ? 26 : 30;
+  const icon = <div style={{ width: icn, height: icn, borderRadius: 9, flexShrink: 0, background: t.bg, color: t.fg, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={ic} size={narrow ? 15 : 17} color="currentColor" /></div>;
   return (
     <div onClick={onClick} role={onClick ? 'button' : undefined} style={{ flex: 1, minWidth: 0, padding: pad, borderRadius: 16, background: 'var(--surface)', border: '1px solid var(--line)', cursor: onClick ? 'pointer' : 'default', transition: 'box-shadow .12s, transform .12s', textAlign: 'left', boxShadow: onClick ? 'var(--shadow-sm)' : 'none' }}
       onMouseEnter={onClick ? (e) => { e.currentTarget.style.boxShadow = 'var(--shadow)'; } : undefined}
       onMouseLeave={onClick ? (e) => { e.currentTarget.style.boxShadow = 'var(--shadow-sm)'; } : undefined}>
       <div style={{ display: 'flex', alignItems: 'center', gap: narrow ? 6 : 8, minWidth: 0 }}>
-        <div style={{ width: icn, height: icn, borderRadius: 9, flexShrink: 0, background: t.bg, color: t.fg, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={ic} size={narrow ? 15 : 17} color="currentColor" /></div>
+        {snug ? null : icon}
         {/* THE ELLIPSIS IS A BACKSTOP AT EVERY WIDTH, and it took two audits to get this right.
             · Ungated (first attempt) it FIRED on the desktop: at a 960px window "Announcements" had 64px
               of the 106px it needs and read "Announce…", "Your relay" read "Your rela…".
@@ -2946,11 +2952,13 @@ function StatCard({ label, value, sub, ic, tint, onClick }) {
             The real cause was neither: it was a FOUR-column grid on a half-screen window. The grid is
             auto-fit now, so it drops to 3 or 2 columns instead of crushing four, every label fits at
             every width, and this line fires nowhere — which is what a backstop should do. */}
-        <span style={{ fontSize: narrow ? 11.5 : 12.5, fontWeight: 600, color: 'var(--ink-3)',
+        <span style={{ fontSize: narrow ? 11.5 : snug ? 12 : 12.5, fontWeight: 600, color: 'var(--ink-3)',
           minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
-        {(onClick && !narrow) ? <Icon name="chevR" size={15} color="var(--ink-3)" style={{ marginLeft: 'auto' }} /> : null}
+        {(onClick && !narrow && !snug) ? <Icon name="chevR" size={15} color="var(--ink-3)" style={{ marginLeft: 'auto' }} /> : null}
       </div>
-      <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 28, letterSpacing: '-.6px', marginTop: narrow ? 9 : 12 }}>{value}</div>
+      {snug
+        ? <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 9 }}>{icon}<div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 26, letterSpacing: '-.6px', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{value}</div></div>
+        : <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 28, letterSpacing: '-.6px', marginTop: narrow ? 9 : 12 }}>{value}</div>}
       <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 2 }}>{sub}</div>
     </div>
   );
@@ -3027,6 +3035,7 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
   const activity = window.useStewardActivity(); // real recent-events feed
   const relayUp = relays.some(r => r.status === 'on');
   const narrow = useStewNarrow();
+  const snug = useStewNarrow(1000) && !narrow;   // a desktop layout in a window under 1000px — the Suite's own 900x780 window; see `stat`
   const [chatGroup, setChatGroup] = React.useState(null);   // group whose chat is open (from a list/activity row)
   // open a chat by group id (used by both the groups list and the activity feed)
   const openChat = (gid) => { const g = groups.find(x => x.id === gid); if (g) window.dispatchEvent(new CustomEvent('steward-open-group-chat', { detail: g })); else onTab('groups'); };
@@ -3111,12 +3120,20 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
 
   // minmax(0, …), not 1fr — see the note on StatCard. A bare `1fr` let one card's longest word set the
   // track width and shove the other column 14px off a 360px screen.
+  //
+  // FOUR ACROSS IN THE SUITE'S OWN WINDOW. The desktop Suite opens this console at 900x780, which leaves the
+  // pane 612px wide; `auto-fit, minmax(168px, 1fr)` needs 714px for four, so the fourth card ("Your relay")
+  // dropped to a row of its own (measured 2026-09-22: three 195px columns, tops 92/92/92/238). Owner, from
+  // the screenshot: "at the default resolution, the four top cards need to be still 4 along the top". So
+  // under 1000px (and above the phone breakpoint) the row is FOUR fixed columns of whatever width there is,
+  // and StatCard draws itself a size down (`snug`) so every label still fits — the auto-fit rule stays for
+  // wider windows, where it was never the problem.
   const stat = (
-    <div style={{ display: 'grid', gridTemplateColumns: narrow ? 'minmax(0, 1fr) minmax(0, 1fr)' : 'repeat(auto-fit, minmax(168px, 1fr))', gap: narrow ? 10 : 14 }}>
-      <StatCard label="Members" value={realCount ? String(realCount) : '—'} sub={realCount ? 'invite more' : 'invite your church'} ic="pray" tint="sage" onClick={() => onTab('members')} />
-      <StatCard label="Groups" value={String(groups.length)} sub="chat rooms · signed" ic="chat" tint="clay" onClick={() => onTab('groups')} />
-      <StatCard label="Announcements" value={stats.announcements ? String(stats.announcements) : '—'} sub="post to everyone" ic="send" tint="gold" onClick={() => (onNewPost ? onNewPost() : onTab('groups'))} />
-      <StatCard label="Your relay" value={relays.length === 0 ? '…' : (relayUp ? 'Live' : 'Down')} sub="where you publish" ic="globe" tint={relayUp || relays.length === 0 ? 'ink' : 'clay'} onClick={() => goSettings('relays')} />
+    <div style={{ display: 'grid', gridTemplateColumns: narrow ? 'minmax(0, 1fr) minmax(0, 1fr)' : snug ? 'repeat(4, minmax(0, 1fr))' : 'repeat(auto-fit, minmax(168px, 1fr))', gap: narrow ? 10 : snug ? 12 : 14 }}>
+      <StatCard label="Members" value={realCount ? String(realCount) : '—'} sub={realCount ? 'invite more' : 'invite your church'} ic="pray" tint="sage" snug={snug} onClick={() => onTab('members')} />
+      <StatCard label="Groups" value={String(groups.length)} sub="chat rooms · signed" ic="chat" tint="clay" snug={snug} onClick={() => onTab('groups')} />
+      <StatCard label="Announcements" value={stats.announcements ? String(stats.announcements) : '—'} sub="post to everyone" ic="send" tint="gold" snug={snug} onClick={() => (onNewPost ? onNewPost() : onTab('groups'))} />
+      <StatCard label="Your relay" value={relays.length === 0 ? '…' : (relayUp ? 'Live' : 'Down')} sub="where you publish" ic="globe" tint={relayUp || relays.length === 0 ? 'ink' : 'clay'} snug={snug} onClick={() => goSettings('relays')} />
     </div>
   );
   const groupsPanel = (

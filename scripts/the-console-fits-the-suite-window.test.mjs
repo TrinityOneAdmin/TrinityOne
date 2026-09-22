@@ -1,0 +1,153 @@
+// THE CONSOLE FITS THE SUITE'S OWN WINDOW. The desktop Suite opens the console in a 900x780 window, and the
+// owner walked it on 2026-09-22 with screenshots: the four Overview stat cards wrapped 3+1, the two lower
+// cards sat side by side and squashed ("Noti…", the QR crammed against the code, the npub box past its card),
+// and every Settings group started open. Measured at 6b6e66d before anything was changed, in this harness:
+// three 195px stat columns with tops 92/92/92/238 (3+1); "Groups & rooms" 300px and "Joining code" 308px wide
+// side by side, "Notices" needing 58px of a 46px box (ellipsed), the QR beside a 142px text column; all four
+// Settings groups open with 16 rows and nothing stored. (The npub box running past its card's right edge did
+// NOT reproduce in Chromium at this size — that one is the Suite's WebKitGTK; the stacking fixes it the same way.)
+//
+// Everything here is GEOMETRY and DOM STATE read out of a real Chromium at exactly that size, against a real
+// gateway on a scratch dir — CLAUDE.md rule 3: app/stew-dashboard.jsx ships unbundled, so nothing here matches
+// its text. The boot is the one every console browser test uses (Start a new church → PIN), with the first-run
+// wizard kept off the way the-console-fits-a-360px-phone.test.mjs keeps it off.
+//
+// Run: node --test scripts/the-console-fits-the-suite-window.test.mjs
+import { test, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { WebSocket } from 'ws';
+import { freePort } from './relay-network-harness.mjs';
+
+const ROOT = fileURLToPath(new URL('..', import.meta.url));
+const CHROME = ['/usr/bin/chromium-browser', '/usr/bin/chromium', '/usr/bin/google-chrome'].find(p => existsSync(p));
+const VW = 900, VH = 780;   // the Suite's console window (relay-app/desktop), as the owner sees it
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+const BLACKHOLE = `const real = globalThis.fetch;
+globalThis.fetch = function (input, init) {
+  const u = String(input && input.url ? input.url : input);
+  if (/trinityone\\.church|\\.ts\\.net|trycloudflare/i.test(u)) return Promise.reject(new Error('blackholed by test: ' + u));
+  return real.call(this, input, init);
+};\n`;
+
+let gw = null, c = null;
+
+async function startGateway() {
+  const port = await freePort('the suite-window test\'s gateway');
+  const dataDir = mkdtempSync(join(tmpdir(), 'trin-suite-window-'));
+  const preload = join(dataDir, 'blackhole.mjs');
+  writeFileSync(preload, BLACKHOLE);
+  const proc = spawn(process.execPath, [join(ROOT, 'scripts/gateway.mjs'), String(port)], {
+    cwd: ROOT, stdio: 'ignore',
+    env: { ...process.env, TRINITY_DATA_DIR: dataDir, RELAY_SYNC: '0', RELAY_HOST: '127.0.0.1', RELAY_NO_OPEN: '1',
+      RELAY_DIRECTORY: 'http://127.0.0.1:9', TRINITY_TAILSCALE_BIN: '/nonexistent/tailscale', NODE_OPTIONS: '--import ' + preload },
+  });
+  const base = `http://127.0.0.1:${port}`;
+  let up = false;
+  for (let i = 0; i < 200 && !up; i++) { try { up = (await fetch(base + '/status')).ok; } catch {} if (!up) await sleep(150); }
+  assert.ok(up, 'the gateway never served /status');
+  return { base, stop() { try { proc.kill('SIGKILL'); } catch {} try { rmSync(dataDir, { recursive: true, force: true }); } catch {} } };
+}
+
+async function startChrome(url) {
+  const cdp = await freePort('the suite-window test\'s Chrome debug port');
+  const prof = mkdtempSync(join(tmpdir(), 'trin-suite-window-chrome-'));
+  const BLOCK_PROD = '--host-resolver-rules=MAP app.trinityone.church 127.0.0.1:9, MAP *.ts.net 127.0.0.1:9, MAP trinityone.church 127.0.0.1:9';
+  const chr = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${cdp}`, '--no-sandbox', '--disable-gpu', BLOCK_PROD,
+    `--user-data-dir=${prof}`, `--window-size=${VW},${VH}`, url], { stdio: 'ignore' });
+  let targets = null;
+  for (let i = 0; i < 40 && !targets; i++) { await sleep(400); try { targets = await (await fetch(`http://127.0.0.1:${cdp}/json`)).json(); } catch {} }
+  assert.ok(targets && targets.length, 'chromium never exposed a debug target');
+  const page = targets.find(t => t.type === 'page') || targets[0];
+  const ws = new WebSocket(page.webSocketDebuggerUrl, { perMessageDeflate: false, maxPayload: 5e8 });
+  await new Promise((res, rej) => { ws.on('open', res); ws.on('error', rej); });
+  let id = 0; const pend = new Map();
+  ws.on('message', (d) => { const m = JSON.parse(d); if (m.id && pend.has(m.id)) { pend.get(m.id)(m); pend.delete(m.id); } });
+  const send = (method, params = {}) => new Promise(r => { const i = ++id; pend.set(i, r); ws.send(JSON.stringify({ id: i, method, params })); });
+  await send('Runtime.enable'); await send('Page.enable');
+  await send('Emulation.setDeviceMetricsOverride', { width: VW, height: VH, deviceScaleFactor: 1, mobile: false });
+  const evalIn = async (expression) => {
+    const rr = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
+    if (rr && rr.result && rr.result.exceptionDetails) {
+      const e = rr.result.exceptionDetails;
+      throw new Error('the page threw: ' + String((e.exception && e.exception.description) || e.text || 'threw').split('\n')[0]);
+    }
+    return rr && rr.result && rr.result.result ? rr.result.result.value : undefined;
+  };
+  const goto = async (u) => { await send('Page.navigate', { url: u }); };
+  const waitFor = async (expr, what, ms = 90000) => { const t0 = Date.now(); let ok = false; while (!ok && Date.now() - t0 < ms) { await sleep(500); try { ok = !!(await evalIn(expr)); } catch {} } assert.ok(ok, 'timed out waiting for ' + what); };
+  return { evalIn, goto, send, waitFor, stop() { try { ws.close(); } catch {} try { chr.kill('SIGKILL'); } catch {} try { rmSync(prof, { recursive: true, force: true }); } catch {} } };
+}
+
+// Boot a church the way a person does, with the first-run wizard kept off (see the 360px test for why refusing
+// the one removeItem is the only way that is not a race).
+async function bootConsole() {
+  await c.goto(gw.base + '/steward.html');
+  await c.waitFor(`[...document.querySelectorAll('button')].some(x => /Start a new church/i.test((x.textContent||'').trim()))`, 'the setup screen');
+  await c.evalIn(`(() => { const orig = Storage.prototype.removeItem; Storage.prototype.removeItem = function (k) { if (k === 'trinityone.steward.wizard.done') return; return orig.call(this, k); };
+    localStorage.setItem('trinityone.steward.wizard.done', '1'); return 'ok'; })()`);
+  await c.evalIn(`[...document.querySelectorAll('button')].find(x => /Start a new church/i.test((x.textContent||'').trim())).click()`);
+  await c.waitFor(`[...document.querySelectorAll('input')].some(x => (x.placeholder||'').includes('At least 8'))`, 'the PIN gate', 60000);
+  const type = (ph, v) => `(() => { const i=[...document.querySelectorAll('input')].find(x=>(x.placeholder||'').includes(${JSON.stringify(ph)})); if(!i) return 'miss'; const s=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set; s.call(i, ${JSON.stringify(v)}); i.dispatchEvent(new Event('input',{bubbles:true})); return 'ok'; })()`;
+  assert.equal(await c.evalIn(type('At least 8', 'cedar-harbour-lamp-42')), 'ok');
+  assert.equal(await c.evalIn(type('Type it again', 'cedar-harbour-lamp-42')), 'ok');
+  await c.evalIn(`[...document.querySelectorAll('button')].find(x => /Set PIN/i.test((x.textContent||'').trim())).click()`);
+  await c.waitFor(`!!document.querySelector('nav[aria-label="Console sections"]') && !document.querySelector('[role="dialog"]')`, 'the dashboard, with no modal over it');
+  await sleep(1500);
+}
+
+// The desktop sidebar's section buttons (a <nav aria-label="Console sections"> of buttons whose text is the label).
+const openSection = async (label) => {
+  const r = await c.evalIn(`(() => { const b=[...document.querySelectorAll('nav[aria-label="Console sections"] button')].find(x=>(x.textContent||'').trim().startsWith(${JSON.stringify(label)})); if(!b) return 'miss'; b.click(); return 'ok'; })()`);
+  assert.equal(r, 'ok', `no "${label}" section in the console's sidebar — re-anchor this test`);
+  await sleep(1200);
+};
+
+// A card is a .sk-panel whose own <h2> says `title`.
+const PANEL = (title) => `[...document.querySelectorAll('.sk-panel')].find(p => { const h = p.querySelector('h2'); return h && (h.textContent||'').trim() === ${JSON.stringify(title)}; })`;
+
+before(async () => {
+  if (!CHROME) return;
+  gw = await startGateway();
+  c = await startChrome('about:blank');
+  await bootConsole();
+});
+after(() => { if (c) c.stop(); if (gw) gw.stop(); });
+
+test('the console is on its Overview at 900x780 — without which nothing below proves anything',
+  { skip: !CHROME ? 'no chromium' : false, timeout: 240000 }, async () => {
+  const v = JSON.parse(await c.evalIn('JSON.stringify({ w: innerWidth, h: innerHeight })'));
+  assert.deepEqual(v, { w: VW, h: VH }, 'the viewport is not the Suite window we claim to be measuring');
+  assert.equal(await c.evalIn(`!!${PANEL('Groups & rooms')}`), true, 'no "Groups & rooms" card — the Overview is not up');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+// 1. THE FOUR STAT CARDS STAY FOUR ACROSS. Owner: "at the default resolution, the four top cards need to be
+//    still 4 along the top". Measured at 6b6e66d: tops 261, 261, 261, 391.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+// The stat row is the one grid in <main> whose four children are all role=button; each card's label is its
+// first <span>. Read back as geometry: where each card's top is, and whether its label's text fits its box.
+const STAT_CARDS = `(() => {
+  const grid = [...document.querySelectorAll('main div')].find(d => getComputedStyle(d).display === 'grid' && d.children.length === 4 && [...d.children].every(k => k.getAttribute('role') === 'button'));
+  if (!grid) return '[]';
+  return JSON.stringify([...grid.children].map(el => { const r = el.getBoundingClientRect(); const sp = el.querySelector('span');
+    return { label: sp ? sp.textContent : '', top: Math.round(r.top), left: Math.round(r.left), w: Math.round(r.width), labelFits: sp ? sp.scrollWidth <= sp.clientWidth + 0.5 : null, need: sp ? sp.scrollWidth : 0, have: sp ? sp.clientWidth : 0 }; }));
+})()`;
+
+test('the four Overview stat cards sit on one row at 900x780',
+  { skip: !CHROME ? 'no chromium' : false, timeout: 240000 }, async () => {
+  await openSection('Overview');
+  const cards = JSON.parse(await c.evalIn(STAT_CARDS));
+  console.log('    stat cards: ' + JSON.stringify(cards));
+  assert.equal(cards.length, 4, 're-anchor: expected the four stat cards, found ' + cards.length);
+  const tops = new Set(cards.map(x => x.top));
+  assert.equal(tops.size, 1, 'THE DEFECT: the four stat cards wrap onto more than one row at the Suite\'s window width (tops ' + cards.map(x => x.top).join('/') + ')');
+  // …and four across is only a fix if the labels still read. StatCard's note records "Announce…" at 960px from
+  // an earlier four-column attempt; the ellipsis is a backstop that must fire nowhere at this size.
+  for (const x of cards) assert.equal(x.labelFits, true, `the "${x.label}" card's label is cut short ("…") at ${x.w}px — four across at this width needs a smaller card, not a truncated one`);
+});
