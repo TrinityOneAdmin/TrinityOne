@@ -3557,7 +3557,17 @@ function _webStop() { if (!_web) return; for (const off of _web.subs) { try { of
 // `heldIds` is the other half of `held`: a count cannot be acted on, and the control on the Settings page
 // ticks exactly these ids "Not on the website". They come from the copies the relay holds, never from a
 // document this console managed to open — that is what makes the control reachable for an event it cannot.
-function _webEmit() { if (!_web) return; const snap = { ..._web.share, optOut: [..._web.share.optOut], optIn: [...(_web.share.optIn || [])], known: _web.shareKnown, blocked: _web.blocked || 0, blockedWhy: (_web.blocked ? _web.stuckWhy : '') || '', held: _web.held || 0, heldIds: [...(_web.heldIds || [])] }; for (const cb of _web.listeners) { try { cb(snap); } catch {} } }
+// ONE SNAPSHOT BUILDER, BECAUSE THERE ARE TWO WAYS TO GET ONE. _webEmit pushes to every listener when
+// something CHANGES; subscribeWebsiteShare answers the moment a listener attaches. The second used to build
+// its own reply out of the share document alone — no blocked, no why, no held, no ids. The Settings panel
+// mounts and unmounts with navigation and re-subscribes each time, so every visit after the first was handed
+// that starved snapshot, and because _webEmit fires only on a change nothing ever repaired it: the page read
+// a healthy "On" with no warning and no control for the rest of the session. Two callers, one builder.
+function _webSnap(w) {
+  return { ...w.share, optOut: [...w.share.optOut], optIn: [...(w.share.optIn || [])], known: w.shareKnown,
+           blocked: w.blocked || 0, blockedWhy: (w.blocked ? w.stuckWhy : '') || '', held: w.held || 0, heldIds: [...(w.heldIds || [])] };
+}
+function _webEmit() { if (!_web) return; const snap = _webSnap(_web); for (const cb of _web.listeners) { try { cb(snap); } catch {} } }
 function _webQueueSync() { if (!_web) return; if (_web.timer) clearTimeout(_web.timer); _web.timer = setTimeout(() => { if (_web) { _web.timer = null; _webSync(); } }, 250); }
 function _webEnsure(restart) {
   if (_web && _web.pub === pub && !restart) return _web;
@@ -8557,7 +8567,7 @@ window.Steward = {
   subscribeWebsiteShare(onShare, opts) {
     const w = _webEnsure(!!(opts && opts.restart)); if (!w) { try { onShare({ ...WEB_DEFAULT, optOut: [], known: false }); } catch {} return () => {}; }
     w.listeners.add(onShare);
-    try { onShare({ ...w.share, optOut: [...w.share.optOut], known: w.shareKnown }); } catch {}
+    try { onShare(_webSnap(w)); } catch {}                 // the WHOLE snapshot; see _webSnap for what this used to cost
     return () => { w.listeners.delete(onShare); };
   },
   // Flip a switch or rewrite the opt-outs. Resolves true when a relay accepted the share: document; false when

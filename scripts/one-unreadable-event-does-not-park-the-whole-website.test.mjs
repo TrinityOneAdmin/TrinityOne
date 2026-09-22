@@ -64,6 +64,7 @@ function mirror({ events, copies, share, ring = [KEY_OURS], store = new Map(), a
     fnBody(src, 'function _webWhyStuck', '_webWhyStuck'),
     fnBody(src, 'function _openChurchDoc', '_openChurchDoc'),
     fnBody(src, 'function _webCopyBody', '_webCopyBody'),
+    fnBody(src, 'function _webSnap', '_webSnap'),
     fnBody(src, 'function _webEmit', '_webEmit'),
     fnBody(src, 'function _webDesired', '_webDesired'),
     fnBody(src, 'async function _webSync', '_webSync'),
@@ -643,6 +644,23 @@ test('F1: the engine NAMES the copies still out there, so a control can act with
   assert.deepEqual(m.emitted[m.emitted.length - 1].heldIds, [], 'the ids outlived the copies being taken off the website');
 });
 
+test('F1: a console that CAN read the event acts on the tick — the copy comes off, and goes back when it is lifted', async () => {
+  // WHAT THE TICK MEANS ON A HEALTHY CONSOLE, which is the half the control's own console cannot show. The
+  // copy is withdrawn from the relay as soon as a console that can open the event syncs — the same thing the
+  // per-event "Not on the website" tick has always done. So "nothing is destroyed" is true of the console
+  // that pressed the button and NOT of the church. The reversal is the load-bearing half: lift the tick and
+  // the copy is republished, which is what makes the control safe to press.
+  const live = JSON.stringify({ title: 'Harvest supper', date: '2026-10-03', time: '19:30', where: 'The hall', blurb: '', recur: '', day: null });
+  const m = mirror({ events: [GOOD1], copies: { evtsupper: live }, share: share({ optOut: ['evtsupper'] }) });
+  await m._webSync();
+  assert.deepEqual(m.tombstoned(), ['trinityone/pubevent:evtsupper'],
+    're-anchor: a ticked-off event is no longer withdrawn by a console that can read it');
+  m.w.share.optOut = [];                                  // the owner lifts the tick
+  await m._webSync();
+  assert.ok(m.dtags().filter((d, i) => !m.published[i].tags.some(t => t[0] === 'deleted')).includes('trinityone/pubevent:evtsupper'),
+    'THE EVENT NEVER CAME BACK after the tick was lifted — the control is not reversible after all');
+});
+
 test('F1: setWebsiteHeldMany ticks every id off in ONE share: write, and keeps the earlier opt-outs', async () => {
   // The shipped API the control calls, lifted out of vendor/steward.js and driven (memory:
   // tests-must-drive-shipped-code). One write, not one per id: the share: document is rewritten whole, so a
@@ -856,11 +874,54 @@ test('THE SCREEN (F1) CONTROL: nothing held, no control — and nothing to press
   const said = panel({ ...share(), known: true, blocked: 2, blockedWhy: 'key', held: 0 }, none);
   assert.doesNotMatch(said, /off our website/, 'the page offers to take copies off when none are up');
   assert.equal(btnIn(none, 'Take off our website'), undefined, 're-anchor: the control renders with nothing held');
-  // a snapshot from an older engine carries no ids: the control must not pretend it can act
+  // a snapshot from an older engine carries no ids: no control at all, rather than a dead one
   const stale = {};
   panel(HELD_SNAP({ heldIds: undefined }), stale);
-  const btn = btnIn(stale, 'Take off our website');
-  assert.ok(!btn || btn.props.disabled, 'THE CONTROL OFFERS TO ACT ON IDS IT WAS NEVER GIVEN');
+  assert.equal(btnIn(stale, 'Take off our website'), undefined,
+    'THE PAGE DRAWS A CONTROL WITH NOTHING TO ACT ON — a greyed-out button a steward cannot press and is never told why');
+  // …and a snapshot the engine really did fill renders a control that can be PRESSED. Without this the whole
+  // round passes over `disabled={true}` (measured: an always-disabled button left this file 33/33, green).
+  const live = {};
+  panel(HELD_SNAP(), live);
+  const btn = btnIn(live, 'Take off our website');
+  assert.ok(btn, 're-anchor: the control is gone');
+  assert.equal(!!btn.props.disabled, false,
+    'THE CONTROL IS GREYED OUT WHEN THERE IS SOMETHING TO ACT ON — a church is shown the answer to its problem and cannot press it');
+  // the two reasons it IS allowed to be dead, both of which the engine sets
+  const notyet = {}; panel(HELD_SNAP({ known: false }), notyet);
+  const b2 = btnIn(notyet, 'Take off our website');
+  assert.ok(!b2 || b2.props.disabled, 'the control is live before the relay has answered, when the write would rebuild share: from the defaults');
+});
+
+test('THE SCREEN (F1): the page a steward comes BACK to says it too', async () => {
+  // MEASURED before this fix: DashWebsitePanel mounts and unmounts with navigation
+  // (`{open === 'website' ? <DashWebsitePanel …/> : null}`) and re-subscribes with no restart, and
+  // subscribeWebsiteShare's immediate call handed that listener the share document ALONE — no blocked, no
+  // why, no held, no ids. _webEmit only fires when one of those CHANGES, so nothing ever repaired it: on
+  // every visit after the first the page read a healthy "On" with no warning and no control, for the rest of
+  // the session. This row drives the REAL subscribeWebsiteShare out of the bundle into the REAL panel.
+  const ids = ['evta', 'evtb', 'evtc'];
+  const bodyOf = (id) => JSON.stringify({ title: 'Event ' + id, date: '2026-10-03', time: '19:30', where: 'The hall', blurb: '', recur: '', day: null });
+  const evOf = (id) => ({ id, raw: sealed({ title: 'Event ' + id, date: '2026-10-03', time: '19:30', where: 'The hall', blurb: '' }, KEY_LOST), ts: 10 });
+  const m = mirror({ events: ids.map(evOf), copies: Object.fromEntries(ids.map(i => [i, bodyOf(i)])), share: share() });
+  await pastReporting(m);
+  assert.equal(m.emitted[m.emitted.length - 1].held, 3, 're-anchor: the engine is not reporting three copies still up');
+  const sub = fnBody(STEWARD, 'subscribeWebsiteShare(onShare, opts) {', 'subscribeWebsiteShare');
+  const lifted = [stmt(STEWARD, 'var WEB_DEFAULT = ', 'WEB_DEFAULT'), fnBody(STEWARD, 'function _webSnap', '_webSnap')].join('\n');
+  const api = new Function('_webEnsure', `${lifted}\nreturn { ${sub} };`)(() => m.w);
+  let snap = null;
+  api.subscribeWebsiteShare((s) => { snap = s; });
+  assert.ok(snap, 're-anchor: subscribeWebsiteShare no longer answers the moment a listener attaches');
+  assert.equal(snap.held, 3,
+    'A PANEL THAT MOUNTS A SECOND TIME IS HANDED A SNAPSHOT WITH NO WARNING IN IT — held reads ' + snap.held + ', and nothing ever emits again unless the number changes');
+  assert.equal(snap.blocked, 3, 'the same snapshot says nothing could not be published either');
+  assert.deepEqual([...(snap.heldIds || [])].sort(), ids, 'the snapshot names no ids, so the control has nothing to act on');
+  // …and the page drawn from THAT snapshot is the whole page, sentences and control
+  const sink = {};
+  const said = panel(snap, sink);
+  assert.match(said, /3 events could not be published/, 'THE PAGE IS SILENT ON EVERY VISIT AFTER THE FIRST');
+  assert.match(said, /3 of them are still on your website/, 'the second visit does not say the copies are still public');
+  assert.ok(btnIn(sink, 'Take off our website'), 'THE CONTROL IS GONE ON EVERY VISIT AFTER THE FIRST');
 });
 
 test('CONTROL: with nothing blocked the page says nothing of the kind', () => {

@@ -8503,10 +8503,12 @@ function DashWebsitePanel({ church }) {
             : held + ' of them are still on your website — this console could not open them to check.'}
         </div>
       ) : null}
-      {held ? (
-        <button onClick={takeOff} disabled={busy || !known || !heldIds.length} aria-label="Take off our website"
+      {/* NO IDS, NO CONTROL — rather than a greyed-out button a steward cannot press and is never told why.
+          An engine older than the ids (or one that has not reported yet) simply does not draw this. */}
+      {held && heldIds.length ? (
+        <button onClick={takeOff} disabled={busy || !known} aria-label="Take off our website"
           title="Your website stops showing them. Put the tick back from the event itself once a church key can open it again."
-          className="sk-btn sk-btn--ghost" style={{ marginTop: 6, padding: '7px 13px', fontSize: 12.5, opacity: (busy || !known || !heldIds.length) ? .5 : 1 }}>
+          className="sk-btn sk-btn--ghost" style={{ marginTop: 6, padding: '7px 13px', fontSize: 12.5, opacity: (busy || !known) ? .5 : 1 }}>
           {held === 1 ? 'Take it off our website' : 'Take them off our website'}
         </button>
       ) : null}

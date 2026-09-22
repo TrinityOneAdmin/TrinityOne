@@ -216,6 +216,7 @@ test('THE OWNER CONSOLE does not reconcile a group leader\'s cancel — the chur
     fnBody(S, 'function _sealIsWhole', '_sealIsWhole'),
     fnBody(S, 'function _webCopyBody', '_webCopyBody'),
     fnBody(S, 'function _webWhyStuck', '_webWhyStuck'),
+    fnBody(S, 'function _webSnap', '_webSnap'),
     fnBody(S, 'function _webEmit', '_webEmit'),
     fnBody(S, 'function _webDesired', '_webDesired'),
     fnBody(S, 'async function _webSync', '_webSync'),

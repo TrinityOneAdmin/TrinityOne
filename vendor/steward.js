@@ -17417,9 +17417,21 @@ zoo`.split("\n");
     if (_web.timer) clearTimeout(_web.timer);
     _web = null;
   }
+  function _webSnap(w) {
+    return {
+      ...w.share,
+      optOut: [...w.share.optOut],
+      optIn: [...w.share.optIn || []],
+      known: w.shareKnown,
+      blocked: w.blocked || 0,
+      blockedWhy: (w.blocked ? w.stuckWhy : "") || "",
+      held: w.held || 0,
+      heldIds: [...w.heldIds || []]
+    };
+  }
   function _webEmit() {
     if (!_web) return;
-    const snap = { ..._web.share, optOut: [..._web.share.optOut], optIn: [..._web.share.optIn || []], known: _web.shareKnown, blocked: _web.blocked || 0, blockedWhy: (_web.blocked ? _web.stuckWhy : "") || "", held: _web.held || 0, heldIds: [..._web.heldIds || []] };
+    const snap = _webSnap(_web);
     for (const cb of _web.listeners) {
       try {
         cb(snap);
@@ -22356,7 +22368,7 @@ zoo`.split("\n");
       }
       w.listeners.add(onShare);
       try {
-        onShare({ ...w.share, optOut: [...w.share.optOut], known: w.shareKnown });
+        onShare(_webSnap(w));
       } catch {
       }
       return () => {
