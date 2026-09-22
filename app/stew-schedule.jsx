@@ -1085,6 +1085,11 @@ function SchEventModal({ day, onClose }) {
           <div style={{ fontSize: 11.5, color: 'var(--ink-3)', margin: '6px 2px 0', lineHeight: 1.4 }}>Group events still show on everyone’s calendar, and appear inside that group’s chat too.</div>
         </React.Fragment>
       ) : null}
+      {/* THE WEBSITE TICK SITS HERE, not at the bottom (owner, 2026-09-22). Driven at 1280x1000 it was below
+          the cover-image picker and the note box, off the screen, so a steward had to scroll past two
+          optional fields to reach the one control that decides whether the event becomes public. "Belongs
+          to" is its neighbour because that answer is what decides which of the two ticks is shown at all. */}
+      {canHold && !asNetwork ? (group ? <SchWebsiteShownRow shown={shown} setShown={setShown} /> : <SchWebsiteHeldRow held={held} setHeld={setHeld} />) : null}
       <div style={schLbl}>Cover image (optional)</div>
       {image ? (
         <div style={{ position: 'relative', borderRadius: 12, overflow: 'hidden', marginBottom: 4, border: '1px solid var(--line)' }}>
@@ -1100,7 +1105,6 @@ function SchEventModal({ day, onClose }) {
       <div style={schLbl}>Note (optional)</div>
       <textarea aria-label="Note (optional)" value={blurb} onChange={e => setBlurb(e.target.value)} rows={3} placeholder="A short description members will read." style={{ ...schFld, height: 'auto', padding: '11px 13px', lineHeight: 1.5, resize: 'vertical', fontFamily: 'var(--font-ui)' }} />
       <SchRepeatRow repeat={repeat} setRepeat={setRepeat} until={until} setUntil={setUntil} />
-      {canHold && !asNetwork ? (group ? <SchWebsiteShownRow shown={shown} setShown={setShown} /> : <SchWebsiteHeldRow held={held} setHeld={setHeld} />) : null}
     </SchModal>
   );
 }
@@ -1368,9 +1372,12 @@ function SchEventEdit({ event, onClose }) {
       <input aria-label="Time" type="time" value={time} onChange={ev => setTime(ev.target.value)} style={schFld} />
       <div style={schLbl}>Where</div>
       <input aria-label="Where" value={where} onChange={ev => setWhere(ev.target.value)} placeholder="Optional" style={schFld} />
+      {/* …and in the same place here: above the long optional field, not below it. See SchEventModal. This
+          dialog has no "Belongs to" — the scope is fixed once an event exists — so the tick follows Where,
+          which is the last field that says what the event IS. */}
+      {canHold ? (inGroup ? <SchWebsiteShownRow shown={shown} setShown={setShown} /> : <SchWebsiteHeldRow held={held} setHeld={setHeld} />) : null}
       <div style={schLbl}>Details</div>
       <textarea aria-label="Details" value={blurb} onChange={ev => setBlurb(ev.target.value)} rows={3} placeholder="Optional" style={{ ...schFld, height: 'auto', padding: '10px 13px', resize: 'vertical', lineHeight: 1.5 }} />
-      {canHold ? (inGroup ? <SchWebsiteShownRow shown={shown} setShown={setShown} /> : <SchWebsiteHeldRow held={held} setHeld={setHeld} />) : null}
       {err ? <div style={{ marginTop: 10, fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600 }}>{err}</div> : null}
       <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
         <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12 }}>Cancel</button>

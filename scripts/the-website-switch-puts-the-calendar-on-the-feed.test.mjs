@@ -172,6 +172,21 @@ test('CONTROL: the console reached its dashboard on its own box, and nothing is 
   assert.deepEqual(errors, [], 'the console threw while booting:\n  ' + errors.join('\n  '));
 });
 
+
+// WHERE THE TICK SITS ON A REAL SCREEN (owner, 2026-09-22). Driven at 1280x1000 the New event dialog put the
+// website tick below the cover-image picker and the note box, off the bottom: a steward had to scroll past
+// two optional fields to reach the control that decides whether the event becomes public. This reads the
+// GEOMETRY of the rendered dialog — getBoundingClientRect, not the order of anything in app/*.jsx.
+const aboveIn = (tick, other) => `(() => {
+  const t = document.querySelector('input[aria-label=${JSON.stringify(tick)}]');
+  const o = (${other});
+  if (!t) return 'no-tick'; if (!o) return 'no-other';
+  return t.getBoundingClientRect().top < o.getBoundingClientRect().top ? 'above' : 'below';
+})()`;
+const COVER = `[...document.querySelectorAll('label')].find(l => /Add a photo/.test(l.textContent || ''))`;
+const NOTE = `document.querySelector('textarea[aria-label="Note (optional)"]')`;
+const DETAILS = `document.querySelector('textarea[aria-label="Details"]')`;
+
 test('two events are added on the Calendar page — one with "Not on the website" ticked', { skip: SKIP, timeout: 240000 }, async () => {
   // The church name key, which seals every event. The dashboard mints it on mount for a new church; an event
   // saved before it lands is refused ("not saved") rather than written in the clear, so wait for it as a
@@ -186,6 +201,9 @@ test('two events are added on the Calendar page — one with "Not on the website
     assert.equal(await evalIn(typeInto('input[aria-label="Where"]', 'The church hall')), 'ok');
     const tickPresent = await evalIn(`!!document.querySelector('input[aria-label="Not on the website"]')`);
     assert.equal(tickPresent, true, 'THE "NOT ON THE WEBSITE" TICK IS NOT IN THE NEW EVENT DIALOG');
+    assert.equal(await evalIn(aboveIn('Not on the website', COVER)), 'above',
+      'THE WEBSITE TICK IS BELOW THE COVER IMAGE PICKER on a real screen — a steward has to scroll past the photo and the note to reach the control that decides whether the event is public');
+    assert.equal(await evalIn(aboveIn('Not on the website', NOTE)), 'above', 'THE WEBSITE TICK IS BELOW THE NOTE BOX on a real screen');
     if (tick) assert.equal(await evalIn(clickSel('input[aria-label="Not on the website"]')), 'ok');
     assert.equal(await evalIn(`document.querySelector('input[aria-label="Not on the website"]').checked`), !!tick, 'the tick did not take');
     await sleep(200);
@@ -297,6 +315,9 @@ test('a GROUP\'s event stays OFF the feed until "On the website" is ticked for i
   assert.equal(await evalIn(`!!document.querySelector('input[aria-label="Not on the website"]')`), false, 'a GROUP event still offers "Not on the website" — the default for a group event is off, so the tick must be the inverse');
   assert.equal(await evalIn(`!!document.querySelector('input[aria-label="On the website"]')`), true, 'THE "ON THE WEBSITE" TICK IS NOT IN THE NEW EVENT DIALOG for a group event');
   assert.equal(await evalIn(`document.querySelector('input[aria-label="On the website"]').checked`), false, 'the tick is on by default');
+  assert.equal(await evalIn(aboveIn('On the website', COVER)), 'above',
+    'A GROUP EVENT\'S TICK IS BELOW THE COVER IMAGE PICKER on a real screen — the two ticks are the same control in two states and must sit in the same place');
+  assert.equal(await evalIn(aboveIn('On the website', NOTE)), 'above', 'a group event\'s tick is below the note box on a real screen');
   await press('/^Add event$/', 'Add event');
   await waitFor(`!document.querySelector('input[aria-label="Title"]')`, 30000, 'the dialog to close after saving');
   // the event reached the box, sealed and group-tagged; then give the mirror its window and read the feed
@@ -315,6 +336,8 @@ test('a GROUP\'s event stays OFF the feed until "On the website" is ticked for i
   await press('/^Edit$/', 'Edit');
   await waitFor(`!!document.querySelector('input[aria-label="On the website"]')`, 20000, 'the "On the website" tick in the Edit dialog');
   assert.equal(await evalIn(`document.querySelector('input[aria-label="On the website"]').checked`), false, 'Edit opened with the tick on');
+  assert.equal(await evalIn(aboveIn('On the website', DETAILS)), 'above',
+    'THE WEBSITE TICK IS BELOW THE DETAILS BOX IN THE EDIT DIALOG on a real screen');
   assert.equal(await evalIn(clickSel('input[aria-label="On the website"]')), 'ok');
   assert.equal(await evalIn(`document.querySelector('input[aria-label="On the website"]').checked`), true, 'the tick did not take');
   await press('/^Save changes$/', 'Save changes');

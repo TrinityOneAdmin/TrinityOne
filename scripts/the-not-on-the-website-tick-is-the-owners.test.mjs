@@ -18,7 +18,7 @@ import { transformSync } from 'esbuild';
 const SRC = readFileSync(new URL('../app/stew-schedule.jsx', import.meta.url), 'utf8');
 const JS = transformSync(SRC, { loader: 'jsx', jsx: 'transform', jsxFactory: 'h', jsxFragment: 'Frag' }).code;
 
-function mount(componentName, props, { steward = {}, preset = {}, events = [] } = {}) {
+function mount(componentName, props, { steward = {}, preset = {}, events = [], groups = [] } = {}) {
   const states = []; let idx = 0;
   const React = {
     useState(init) { const i = idx++; if (states.length <= i) states.push(Object.prototype.hasOwnProperty.call(preset, i) ? preset[i] : (typeof init === 'function' ? init() : init)); return [states[i], (v) => { states[i] = typeof v === 'function' ? v(states[i]) : v; }]; },
@@ -27,7 +27,7 @@ function mount(componentName, props, { steward = {}, preset = {}, events = [] } 
   };
   const h = (type, props2, ...kids) => ({ type, props: { ...(props2 || {}), children: kids.flat() } });
   const dispatched = [];
-  const win = { Steward: steward, useStewardGroups: () => [], useStewardEvents: () => events,
+  const win = { Steward: steward, useStewardGroups: () => groups, useStewardEvents: () => events,
     dispatchEvent(e) { dispatched.push(e); return true; }, confirm: () => true };
   const scope = { React, h, Frag: 'Frag', Icon: () => null, SchModal: (p) => h('modal', p), useStewDialog: () => ({ current: null }), todayISO: () => '2026-09-22',
     window: win, CustomEvent: class CustomEvent { constructor(type, init) { this.type = type; this.detail = init && init.detail; } } };
@@ -52,6 +52,49 @@ const owner = (over = {}) => ({ isDelegated: () => false, setWebsiteHeld: async 
 test('an owner console draws the tick in both dialogs', () => {
   assert.ok(tickOf(mount('SchEventModal', { day: '', onClose() {} }, { steward: owner() })), 'the New event dialog has no "Not on the website" tick for the church key');
   assert.ok(tickOf(mount('SchEventEdit', { event: { id: 'evt1', title: 'T', date: '2026-10-01' }, onClose() {} }, { steward: owner() })), 'the Edit event dialog has no tick for the church key');
+});
+
+// ── WHERE THE TICK SITS (owner, 2026-09-22) ──────────────────────────────────────────────────────────────
+// Driven at 1280x1000 in a real browser, the New event dialog ran TITLE, DATE/TIME, WHERE, TYPE, BELONGS TO,
+// COVER IMAGE (OPTIONAL), NOTE (OPTIONAL) and only then the tick — off the bottom of the screen. A steward
+// had to scroll past the photo picker and the note box to reach the one control that decides whether the
+// event becomes public. It now sits immediately after "Belongs to", whose answer decides which of the two
+// ticks is shown at all, and above the optional fields. Same place in all four cases: both ticks, both
+// dialogs. These rows read the ORDER OF THE RENDERED TREE, never the order of the source file (rule 3).
+const orderIn = (m, ...preds) => { const ns = m.nodes(); return preds.map(p => ns.findIndex(p)); };
+const isTick = (label) => (n) => n.type === 'input' && n.props && n.props['aria-label'] === label;
+const isCover = (n) => n.type === 'input' && n.props && n.props.type === 'file';
+const isNote = (n) => n.type === 'textarea' && n.props && /^(Note \(optional\)|Details)$/.test(String(n.props['aria-label'] || ''));
+const isBelongs = (n) => n.type === 'div' && [].concat((n.props && n.props.children) || []).includes('Belongs to');
+const YOUTH_GROUP = [{ id: 'grpyouth', name: 'Youth', kind: 'group' }];
+
+test('the website tick sits between "Belongs to" and the optional fields in the New event dialog — both ticks', () => {
+  const whole = mount('SchEventModal', { day: '', onClose() {} }, { steward: owner(), groups: YOUTH_GROUP });
+  const [tick, belongs, cover, note] = orderIn(whole, isTick('Not on the website'), isBelongs, isCover, isNote);
+  assert.ok(tick >= 0 && belongs >= 0 && cover >= 0 && note >= 0,
+    're-anchor: one of these controls is not in the New event dialog at all — ' + JSON.stringify({ tick, belongs, cover, note }));
+  assert.ok(tick > belongs, 'the website tick is ABOVE "Belongs to", which is what decides which tick is shown');
+  assert.ok(tick < cover,
+    'THE WEBSITE TICK IS BELOW THE COVER IMAGE PICKER — a steward has to scroll past the photo and the note to reach the control that decides whether the event is public');
+  assert.ok(tick < note, 'THE WEBSITE TICK IS BELOW THE NOTE BOX — same scroll, same control');
+  // the group event's opposite tick, in the same place
+  const grp = mount('SchEventModal', { day: '', onClose() {} }, { steward: owner(), groups: YOUTH_GROUP, preset: { 6: 'grpyouth' } });
+  const [on, belongs2, cover2, note2] = orderIn(grp, isTick('On the website'), isBelongs, isCover, isNote);
+  assert.ok(on >= 0, 're-anchor: a group event draws no "On the website" tick in the New event dialog');
+  assert.ok(on > belongs2, 'the group tick is above "Belongs to"');
+  assert.ok(on < cover2 && on < note2,
+    'THE GROUP EVENT\'S TICK IS BELOW THE OPTIONAL FIELDS — the two ticks are the same control in two states and must sit in the same place');
+});
+
+test('…and the Edit dialog puts it above the details box — both ticks', () => {
+  const whole = mount('SchEventEdit', { event: { id: 'evt1', title: 'T', date: '2026-10-01' }, onClose() {} }, { steward: owner() });
+  const [tick, note] = orderIn(whole, isTick('Not on the website'), isNote);
+  assert.ok(tick >= 0 && note >= 0, 're-anchor: ' + JSON.stringify({ tick, note }));
+  assert.ok(tick < note, 'THE WEBSITE TICK IS BELOW THE DETAILS BOX IN THE EDIT DIALOG — the same scroll as the New event dialog had');
+  const grp = mount('SchEventEdit', { event: { id: 'evt1', title: 'T', date: '2026-10-01', groupId: 'grpyouth' }, onClose() {} }, { steward: owner() });
+  const [on, note2] = orderIn(grp, isTick('On the website'), isNote);
+  assert.ok(on >= 0, 're-anchor: a group event draws no "On the website" tick in the Edit dialog');
+  assert.ok(on < note2, 'THE GROUP EVENT\'S TICK IS BELOW THE DETAILS BOX — the four cases must agree');
 });
 
 test('a delegated steward\'s console draws NO tick — the relay would refuse the write, so a tick would silently do nothing', () => {
