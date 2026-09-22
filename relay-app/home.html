@@ -21,7 +21,6 @@
   .mode h3 { font-size: 18px; font-weight: 750; margin: 0 0 6px; }
   .mode p { margin: 0; color: var(--ink2); font-size: 13.5px; line-height: 1.55; flex: 1; }
   .go { margin-top: 16px; font-weight: 700; font-size: 13.5px; color: var(--clay-ink); }
-  .foot { text-align: center; color: var(--dim); font-size: 12.5px; margin-top: 26px; }
   .upd { display: none; align-items: center; gap: 12px; background: color-mix(in oklab, var(--clay) 10%, var(--card)); border: 1px solid color-mix(in oklab, var(--clay) 35%, var(--line)); border-radius: 14px; padding: 13px 16px; margin-bottom: 22px; }
   .upd.show { display: flex; }
   .upd .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--clay); flex: none; box-shadow: 0 0 0 4px color-mix(in oklab, var(--clay) 22%, transparent); }
@@ -56,9 +55,11 @@
         <p>Is it running, can the outside world reach it, is it backed up, is it up to date. The church itself is run from the console — here or on any other device.</p>
         <span class="go">Open the panel &rarr;</span>
       </a>
-      
+
     </div>
-    <p class="foot">You can switch any time — reopen the app to return here.</p>
+    <!-- No foot line. It read "You can switch any time — reopen the app to return here", which was false: the
+         console's sidebar has "Relay & Suite home" and the panel has "← Back" and "Open the console", so nobody
+         needs to reopen the app. The two doors say everything this page has to say. -->
   </div>
   <script src="copy.js"></script>
 <script src="home.js"></script>

@@ -44,12 +44,14 @@
     <!-- NEVER A DEAD END. This page is the window's first history entry, so Back from the launcher lands here —
          and on 2026-09-19 the owner reached it by pressing the relay panel's own "← Back" on a fresh Ubuntu box
          (home.js's redirect ran before the load event, which REPLACES the launcher's entry; see home.js). With
-         no links on it, the only way out was quitting the app. So it carries the same two doors the launcher
-         does, and a line that says what the wait is. The links are never blocked: while the relay is still
-         starting they are dimmed and marked disabled, and they brighten when it answers. -->
+         no links on it, the only way out was quitting the app. So it carries two doors and a line that says
+         what the wait is. The first door is the LAUNCHER (home.html, the page the shell itself opens once the
+         relay answers — its two doors are the first thing a person sees, owner 2026-09-22), the second is the
+         console, the door most people want. The links are never blocked: while the relay is still starting
+         they are dimmed and marked disabled, and they brighten when it answers. -->
     <p class="hint" id="hint">If this stays here, the relay is starting in the background — these open when it answers.</p>
     <nav class="exits" aria-label="Open the Suite">
-      <a id="goPanel" href="http://127.0.0.1:8787/relay-app/control.html" aria-disabled="true">Open the relay panel</a>
+      <a id="goSuite" href="http://127.0.0.1:8787/relay-app/home.html" aria-disabled="true">Open the Suite</a>
       <a id="goConsole" href="http://127.0.0.1:8787/steward.html" aria-disabled="true">Open the console</a>
     </nav>
   </div>
@@ -65,8 +67,8 @@
     (function () {
       var base = 'http://127.0.0.1:8787';
       try { var q = new URLSearchParams(location.search).get('relay'); if (q && /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/i.test(q)) base = q; } catch (e) {}
-      var panel = document.getElementById('goPanel'), console_ = document.getElementById('goConsole');
-      if (panel) panel.href = base + '/relay-app/control.html';
+      var panel = document.getElementById('goSuite'), console_ = document.getElementById('goConsole');
+      if (panel) panel.href = base + '/relay-app/home.html';
       if (console_) console_.href = base + '/steward.html';
       var hint = document.getElementById('hint');
       var answered = false;
@@ -77,7 +79,7 @@
         var t = document.getElementById('title'); if (t) t.textContent = 'Your relay is running';
         var s = document.getElementById('sub'); if (s) s.textContent = 'Pick where to go.';
         var sl = document.getElementById('slow'); if (sl) sl.style.display = 'none';
-        if (hint) hint.textContent = 'The relay is answering — open the panel or the console.';
+        if (hint) hint.textContent = 'The relay is answering — open the Suite, or go straight to the console.';
       }
       // Poll /status (it answers with Access-Control-Allow-Origin: * and no token). A poll that never succeeds
       // changes nothing: the links above work without it.
