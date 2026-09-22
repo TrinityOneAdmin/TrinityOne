@@ -58,6 +58,21 @@ function isoParts(date) {
   if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) return null;
   return { y, mo, d, t };
 }
+// AND SO IS A COMPUTED OCCURRENCE (audit AUDIT-feeds-round3-2026-09-22 F3). isoParts() range-checks the
+// anchor a steward typed; it says nothing about the date the two walks below STEP TO. A weekly meeting
+// anchored on 9999-12-31 steps forward into the year 10000, where Date's toISOString() switches to ISO 8601's
+// expanded-year form (`+010000-01-01T…`) — and `.slice(0, 10).replace(/-/g, '')` turned that into
+// `DTSTART:+01000001T193000`, a string no calendar can read. Reachable from the console's own event date
+// field, which has a `max` of 9999-12-31 but no guarantee (a `pubevent:` copy can also arrive from /import or
+// a seed script, and this module is written to distrust its caller). So every occurrence goes back through
+// the same round trip the anchor did, and anything that fails it is not a date this module will place on a
+// calendar: dtstart() answers null and buildCalendar() writes no VEVENT at all rather than a broken one.
+function isoOf(d) {
+  const t = d instanceof Date ? d.getTime() : NaN;
+  if (!Number.isFinite(t)) return null;
+  const s = new Date(t).toISOString().slice(0, 10);
+  return ISO_DATE.test(s) ? s : null;
+}
 const HHMM = /^(\d{2}):(\d{2})$/;
 const RECUR = new Set(['weekly', 'fortnightly', 'monthly']);
 const BYDAY = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
@@ -114,7 +129,7 @@ function firstOccurrence(date, day, fortnightly) {
   const cur = new Date(anchor);
   for (let i = 0; i < 7 && cur.getUTCDay() !== day; i++) cur.setUTCDate(cur.getUTCDate() + 1);
   if (fortnightly && Math.round((cur.getTime() - anchor) / (7 * 864e5)) % 2 !== 0) cur.setUTCDate(cur.getUTCDate() + 7);
-  return cur.toISOString().slice(0, 10);
+  return isoOf(cur);
 }
 
 // A MONTHLY MEETING'S DTSTART MUST BE AN INSTANCE OF ITS OWN RRULE. `FREQ=MONTHLY;BYDAY=1TU` means "the
@@ -131,7 +146,7 @@ function firstMonthlyOccurrence(date, day) {
   for (let ahead = 0; ahead < 2; ahead++) {
     const cur = new Date(Date.UTC(p.y, p.mo - 1 + ahead, 1));
     while (cur.getUTCDay() !== day) cur.setUTCDate(cur.getUTCDate() + 1);
-    if (cur.getTime() >= p.t) return cur.toISOString().slice(0, 10);
+    if (cur.getTime() >= p.t) return isoOf(cur);
   }
   // Now genuinely unreachable, which the comment that stood here claimed while it was not: the first `day` of
   // the NEXT month is later than any date in this one — but only once the anchor really is a date in this one.
@@ -160,6 +175,7 @@ function dtstart(ev) {
   const date = !ev.recur ? ev.date
     : ev.recur === 'monthly' ? firstMonthlyOccurrence(ev.date, day)
       : firstOccurrence(ev.date, day, ev.recur === 'fortnightly');
+  if (!date) return null;                        // the series steps off the end of the calendar — see isoOf
   const d = date.replace(/-/g, '');
   if (!ev.time) return 'DTSTART;VALUE=DATE:' + d;
   return 'DTSTART:' + d + 'T' + ev.time.replace(':', '') + '00';
@@ -196,10 +212,14 @@ export function buildCalendar(events, { name = '', uidScope = 'trinityone', stam
   const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//TrinityOne//Church//EN', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH'];
   if (name) lines.push('X-WR-CALNAME:' + icsEscape(name));
   for (const ev of rows) {
+    // NO HALF-WRITTEN VEVENT: the range check on the computed occurrence is asked BEFORE anything is pushed,
+    // so an event whose series steps past 9999-12-31 is simply not in the file (isoOf above).
+    const ds = dtstart(ev);
+    if (!ds) continue;
     lines.push('BEGIN:VEVENT');
     lines.push('UID:trinityone-' + ev.id + '@' + uidScope);
     lines.push('DTSTAMP:' + stamp);
-    lines.push(dtstart(ev));
+    lines.push(ds);
     const rr = rrule(ev); if (rr) lines.push(rr);
     lines.push('SUMMARY:' + icsEscape(ev.title || 'Event'));
     if (ev.where) lines.push('LOCATION:' + icsEscape(ev.where));

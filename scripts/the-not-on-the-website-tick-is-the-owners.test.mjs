@@ -98,3 +98,24 @@ test('CONTROL: a tick the engine recorded raises no banner', async () => {
   await add.props.onClick();
   assert.equal(m.dispatched.some(e => e.type === 'steward-write-blocked'), false, 'a recorded tick raised the banner — the message would cry wolf');
 });
+
+// ── F3: the date field a steward types into ──────────────────────────────────────────────────────────────
+// AUDIT-feeds-round3-2026-09-22 F3. The defect it names is in the FEED BUILDER, and that is where it is
+// refused (scripts/public-calendar.mjs range-checks the computed occurrence). Its reachability note is this
+// screen: "the console's own event date field has no `max`, so a steward who fat-fingers a year reaches it."
+// This row is that half — asserted on the RENDERED TREE, never by matching app/*.jsx (CLAUDE.md rule 3),
+// because a `max` written into the source and never reaching the input is exactly what a text match cannot
+// tell apart from a working one.
+const dateFieldOf = (m) => m.nodes().find(n => n.type === 'input' && n.props && n.props['aria-label'] === 'Date' && n.props.type === 'date');
+
+test('F3: both event date fields cap the year at a date this product can write down', () => {
+  for (const [name, props] of [
+    ['SchEventModal', { day: '', onClose() {} }],
+    ['SchEventEdit', { event: { id: 'evt1', title: 'T', date: '2026-10-01' }, onClose() {} }],
+  ]) {
+    const f = dateFieldOf(mount(name, props, { steward: owner() }));
+    assert.ok(f, name + ': no date field rendered at all — re-anchor this row');
+    assert.equal(f.props.max, '9999-12-31',
+      `${name}: THE EVENT DATE FIELD HAS NO MAX (${JSON.stringify(f.props.max)}) — a steward can type a year the public calendar cannot represent, which is how F3 is reached from the console`);
+  }
+});

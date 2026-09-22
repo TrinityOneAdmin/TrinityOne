@@ -206,6 +206,85 @@ test('R7: an ISO-shaped date that is not a calendar date is dropped, not normali
   assert.equal(fired, 0, 'the fallback that calls itself unreachable fired ' + fired + ' times');
 });
 
+test('F3: a series that steps past 9999-12-31 is dropped, not written as an expanded-year DTSTART', () => {
+  // AUDIT-feeds-round3-2026-09-22 F3. isoParts() range-checks the ANCHOR; nothing range-checked the date the
+  // occurrence walks STEP TO. An anchor in the last week of 9999 steps into the year 10000, where Date's
+  // toISOString() switches to ISO 8601's expanded-year form (`+010000-01-01T…`), and `.slice(0, 10)` plus
+  // `.replace(/-/g, '')` made `DTSTART:+01000001T193000` — a string no calendar can read. Measured against
+  // the builder at 6c38421: 50 of 126 hostile rows, every one of them admitted and emitted.
+  let emitted = 0, malformed = [], dropped = 0;
+  for (const date of ['9999-12-24', '9999-12-25', '9999-12-26', '9999-12-27', '9999-12-28', '9999-12-29', '9999-12-30', '9999-12-31']) {
+    for (const recur of ['weekly', 'fortnightly', 'monthly']) {
+      for (let day = 0; day <= 6; day++) {
+        const text = buildCalendar([{ id: 'e', title: 'E', date, time: '19:30', recur, day }], { uidScope: 'x' });
+        const dt = prop(text, 'DTSTART');
+        if (!text.includes('BEGIN:VEVENT')) { dropped++; assert.deepEqual(dt, [], 'a dropped event still wrote a DTSTART'); continue; }
+        emitted++;
+        if (!/^\d{8}(T\d{6})?$/.test(dt[0])) malformed.push(`${date} ${recur} day ${day} -> ${dt[0]}`);
+      }
+    }
+  }
+  assert.deepEqual(malformed, [],
+    `A SERIES STEPPING OFF THE END OF THE CALENDAR IS ON A CHURCH'S PUBLIC FEED as a date no calendar can read: ${malformed.length} of ${emitted + dropped} rows, e.g. ${malformed.slice(0, 3).join(' | ')}`);
+  assert.ok(dropped > 0, 're-anchor: none of these anchors steps past the end of the calendar any more, so this row measures nothing');
+  // …and it is dropped WHOLE. Half a VEVENT is worse than none: a subscriber's parser would take the next
+  // event's fields as this one's.
+  const one = buildCalendar([{ id: 'e', title: 'E', date: '9999-12-31', time: '19:30', recur: 'weekly', day: 3 }], { uidScope: 'x' });
+  for (const marker of ['BEGIN:VEVENT', 'END:VEVENT', 'UID:', 'DTSTAMP:', 'DTSTART', 'RRULE']) {
+    assert.equal(one.includes(marker), false, 'the dropped event left ' + marker + ' in the file');
+  }
+  assert.ok(one.includes('BEGIN:VCALENDAR') && one.includes('END:VCALENDAR'), 'the file itself stopped being a calendar');
+  // CONTROL, and the thing this row must not break: an anchor in 9999 that does NOT step past the end is
+  // still a perfectly good series, and so is every ordinary one.
+  const early = buildCalendar([{ id: 'e', title: 'E', date: '9999-01-05', time: '19:30', recur: 'weekly', day: 3 }], { uidScope: 'x' });
+  assert.deepEqual(prop(early, 'DTSTART'), ['99990106T193000'], 'a far-future anchor that fits was dropped with the ones that do not');
+  const ord = buildCalendar([{ id: 'e', title: 'E', date: '2026-09-15', time: '19:30', recur: 'monthly', day: 2 }], { uidScope: 'x' });
+  assert.deepEqual(prop(ord, 'DTSTART'), ['20261006T193000'], 'an ordinary monthly meeting changed');
+  // a ONE-OFF on the very last day is untouched — it computes no occurrence at all
+  const once = buildCalendar([{ id: 'e', title: 'E', date: '9999-12-31', time: '19:30' }], { uidScope: 'x' });
+  assert.deepEqual(prop(once, 'DTSTART'), ['99991231T193000'], 'a one-off on the last day of the calendar was dropped');
+});
+
+test('F3: the whole hostile sweep — no spin, no throw, no malformed line, no DTSTART before its anchor', () => {
+  // The audit's fuzz shape, re-taken here so the property is guarded rather than measured once. 85,176
+  // combinations found exactly one defect class; this sweep covers the same ground and asserts the four
+  // properties that were checked, including the two that hold only because DAY_OK bounds both walks.
+  const DATES = [];
+  for (const y of ['0001', '0026', '1969', '1970', '2024', '2026', '2100', '9998', '9999']) {
+    for (const md of ['01-01', '02-28', '02-29', '06-15', '11-30', '12-01', '12-24', '12-25', '12-26', '12-27', '12-28', '12-29', '12-30', '12-31']) DATES.push(y + '-' + md);
+  }
+  const DAYS = [0, 1, 2, 3, 4, 5, 6, -1, 7, 2.5, '2', null, undefined, NaN, Infinity];
+  const RECURS = ['weekly', 'fortnightly', 'monthly', '', 'daily', null];
+  let n = 0, admitted = 0, emitted = 0;
+  const bad = [];
+  const t0 = Date.now();
+  for (const date of DATES) for (const recur of RECURS) for (const day of DAYS) {
+    n++;
+    const ev = { id: 'e', title: 'E', date, time: '19:30', where: 'H', blurb: '', recur, day };
+    let text;
+    try { text = buildCalendar([ev], { uidScope: 'x' }); }
+    catch (e) { bad.push(`${date} ${recur} ${String(day)} THREW ${e.message}`); continue; }
+    if (publicEventFields(ev)) admitted++;
+    if (!text.includes('BEGIN:VEVENT')) continue;
+    emitted++;
+    const dt = prop(text, 'DTSTART')[0];
+    const rr = prop(text, 'RRULE')[0] || '';
+    if (!/^\d{8}(T\d{6})?$/.test(dt)) { bad.push(`${date} ${recur} ${String(day)} DTSTART=${dt}`); continue; }
+    if (rr && !/^FREQ=(WEEKLY|MONTHLY)(;INTERVAL=2)?;BYDAY=(1)?(SU|MO|TU|WE|TH|FR|SA)$/.test(rr)) bad.push(`${date} ${recur} ${String(day)} RRULE=${rr}`);
+    if (dt.slice(0, 8) < date.replace(/-/g, '')) bad.push(`${date} ${recur} ${String(day)} DTSTART ${dt} is BEFORE its anchor`);
+    // a DTSTART must be an instance of its own rule (RFC 5545 §3.8.5.3), which is the F5/R3 property
+    const m = /BYDAY=(1)?(SU|MO|TU|WE|TH|FR|SA)$/.exec(rr);
+    if (m && dayOf(dt.slice(0, 8)) !== BYDAY.indexOf(m[2])) bad.push(`${date} ${recur} ${String(day)} DTSTART ${dt} is not a ${m[2]}`);
+    if (m && m[1] && dt.slice(0, 8) !== firstSuchWeekdayOfMonth(dt.slice(0, 8))) bad.push(`${date} ${recur} ${String(day)} monthly DTSTART ${dt} is not the first ${m[2]} of its month`);
+  }
+  assert.deepEqual(bad, [], `${bad.length} of ${n} hostile combinations produced a feed a calendar cannot read, e.g.\n  ` + bad.slice(0, 6).join('\n  '));
+  assert.ok(n > 1000 && emitted > 100 && admitted > 100, `re-anchor: the sweep measured almost nothing (n=${n} admitted=${admitted} emitted=${emitted})`);
+  // DAY_OK is what stops both walks spinning for ever, and a spin here is a hang inside the relay's request
+  // path rather than a wrong date. The whole sweep returning at all is the guard; the time bound makes it
+  // fail loudly rather than hanging a CI run.
+  assert.ok(Date.now() - t0 < 20000, 'the sweep took ' + (Date.now() - t0) + 'ms — an occurrence walk is spinning');
+});
+
 test('F6: a 64-hex pubkey inside a long blurb is INVISIBLE to a raw scan and caught by the unfolded one', () => {
   const key = 'd'.repeat(64);
   const blurb = 'Ring the office before Thursday if you need a lift to this one, or message us at ' + key + ' for details.';

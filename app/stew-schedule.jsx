@@ -37,6 +37,13 @@ function sameAssign(a, b) { const k = o => Object.keys(o || {}).filter(x => (o[x
 // So each save below checks. A modal that failed stays OPEN with its content intact, because the steward's
 // typing is the thing that would otherwise be lost.
 const SCH_NO_KEY = 'Not saved — your church’s key hasn’t arrived yet. Give it a moment and try again.';
+// THE LAST DATE THIS PRODUCT CAN WRITE DOWN. A year past 9999 leaves ISO 8601's four-digit form: Date's own
+// toISOString() switches to the expanded `+010000-01-01`, and the public calendar builder turned that into
+// `DTSTART:+01000001T193000`, a string no calendar can read (AUDIT-feeds-round3-2026-09-22 F3). The builder
+// is where that is REFUSED — scripts/public-calendar.mjs range-checks the computed occurrence and writes no
+// VEVENT for one it cannot represent — and this `max` is the cheaper half: it stops the date picker offering
+// a year the rest of the product cannot carry, so a steward who fat-fingers 9999 sees it here first.
+const SCH_MAX_DATE = '9999-12-31';
 function SchNotSaved({ msg }) {
   if (!msg) return null;
   return (
@@ -1048,7 +1055,7 @@ function SchEventModal({ day, onClose }) {
       <div style={schLbl}>Title</div>
       <input aria-label="Title" value={title} onChange={e => setTitle(e.target.value)} autoFocus placeholder="e.g. Prayer evening" style={schFld} />
       <div style={{ display: 'flex', gap: 10 }}>
-        <div style={{ flex: 1 }}><div style={schLbl}>Date</div><input aria-label="Date" type="date" value={date} onChange={e => setDate(e.target.value)} style={schFld} /></div>
+        <div style={{ flex: 1 }}><div style={schLbl}>Date</div><input aria-label="Date" type="date" value={date} max={SCH_MAX_DATE} onChange={e => setDate(e.target.value)} style={schFld} /></div>
         <div style={{ width: 130 }}><div style={schLbl}>Time</div><input aria-label="Time" type="time" value={time} onChange={e => setTime(e.target.value)} style={schFld} /></div>
       </div>
       {clashes.length ? (
@@ -1354,7 +1361,7 @@ function SchEventEdit({ event, onClose }) {
       ) : (
         <React.Fragment>
           <div style={schLbl}>Date</div>
-          <input aria-label="Date" type="date" value={date} onChange={ev => setDate(ev.target.value)} style={schFld} />
+          <input aria-label="Date" type="date" value={date} max={SCH_MAX_DATE} onChange={ev => setDate(ev.target.value)} style={schFld} />
         </React.Fragment>
       )}
       <div style={schLbl}>Time</div>
