@@ -17,7 +17,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { DOC_TYPES, UNDECLARED, D } from './trinity-doc-types.mjs';
+import { DOC_TYPES, UNDECLARED, D, MEMBER_WRITABLE_TYPES } from './trinity-doc-types.mjs';
 
 const GATEWAY = readFileSync(new URL('../scripts/gateway.mjs', import.meta.url), 'utf8');
 const REGISTRY = readFileSync(new URL('../scripts/trinity-doc-types.mjs', import.meta.url), 'utf8');
@@ -88,9 +88,25 @@ test('POLICY still lives in the spine, not in the registry', () => {
   }
 });
 
+// ── THE ONE EXCEPTION, 2026-09-22 ────────────────────────────────────────────────────────────────────────
+test('the ONE column-derived list the spine reads only ever NARROWS', () => {
+  // MEMBER_WRITABLE_TYPES is derived from the `write` column (in the registry, not here) and accept()'s member
+  // catch-all reads it. That is allowed because it can only refuse: a type absent from the list is refused,
+  // never granted, and every per-type rule stays in accept(). The registry's note above k() says why. This
+  // pins the SHAPE of the use — a refusal — so it cannot quietly become a grant; the behaviour itself is
+  // measured on a live gateway in scripts/relay-refuses-undeclared-member-doc-types.test.mjs.
+  assert.ok(Array.isArray(MEMBER_WRITABLE_TYPES) && MEMBER_WRITABLE_TYPES.length >= 21,
+    'the registry no longer exports MEMBER_WRITABLE_TYPES, or it collapsed: ' + JSON.stringify(MEMBER_WRITABLE_TYPES));
+  const uses = GATEWAY.match(/\bMEMBER_WRITABLE_TYPES\b/g) || [];
+  assert.equal(uses.length, 2, 'MEMBER_WRITABLE_TYPES is read in ' + uses.length + ' places in gateway.mjs — expected the import and memberDocTypeOk() only');
+  assert.match(GATEWAY, /if \(!\(isAnyChurch \|\| isNetwork\) && !memberDocTypeOk\(d\)\) return false;/,
+    'the catch-all no longer REFUSES on the list — if it is now granting on it, that is the change this wiring must never make');
+  assert.doesNotMatch(GATEWAY, /memberDocTypeOk\([^)]*\)\) return true/, 'memberDocTypeOk is used to GRANT somewhere');
+});
+
 test('the import is the runtime one, not a build-time copy', () => {
   // gateway.mjs is run directly by node — it is not bundled — so this has to be a real runtime import from a
   // path that ships. scripts/ is the proven one: event-store.mjs is already imported from here at runtime.
-  assert.match(GATEWAY, /import \{ D \} from '\.\/trinity-doc-types\.mjs';/,
+  assert.match(GATEWAY, /import \{ D, MEMBER_WRITABLE_TYPES \} from '\.\/trinity-doc-types\.mjs';/,
     'the spine no longer imports the registry at runtime');
 });

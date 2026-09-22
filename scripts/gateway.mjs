@@ -19,7 +19,7 @@ import { openStore, matchFilter } from './event-store.mjs';
 // half). These 50 strings used to be typed out below; a typo was not a build error but a document gated under
 // one name and published under another, failing silently. D.* is checked against the registry at module load,
 // so an undeclared name throws before this relay serves a request. POLICY stays in accept()/canRead().
-import { D } from './trinity-doc-types.mjs';   // durable event storage (node:sqlite) + the canonical read predicate
+import { D, MEMBER_WRITABLE_TYPES } from './trinity-doc-types.mjs';   // NAMES, plus the one NARROWING list (see memberDocTypeOk)
 // WHO MAY HOLD THE CHECK-IN HELPER KEY is asked in ONE place, and this is not it — see the file's own header.
 // The relay imports three things and derives nothing: the parser (so a grant means the same to the box that
 // stores it and the console that mints it), and the declared-source test (so a grant cannot claim a
@@ -2460,6 +2460,38 @@ const CP_SUFFIXED_D = [MEMBER_D, ADMITTED_D, RESEAT_D, STEWARDS_D, STEWARDREQ_D,
 // authorship, and without the exemption the retraction would refuse to serve a parent's own arrival to
 // the worker it is addressed to (the author is neither the church nor a steward). Sibling of CAREREQ_D.
 const MEMBER_WRITABLE_D = [SLOT_D, SKIP_D, AVAIL_D, SAFE_D, RSVP_D, REQREPLY_D, UNAVAIL_D, GUARDREQ_D, STEWARDREQ_D, MEMBER_D, CAREREQ_D, NAME_D, CHECKINARRIVAL_D];
+// MAY AN ORDINARY MEMBER WRITE A DOCUMENT OF THIS TYPE AT ALL? Asked by accept()'s kind-30078 catch-all and
+// nowhere else (CLAUDE.md rule 2: ONE caller, plus the OK-frame reason in the EVENT handler, which only names
+// the refusal it already made). NOT the list above: that one answers a READ question (which member-authored
+// documents escape the revoked-steward retraction) and carries `careskip:`, which is recipient-only on write.
+// This one is the registry's own derivation — every type declared `write: 'member'`, plus the wallet — and it
+// is the ONE place the relay lets the registry's columns narrow a decision, for the reason written above k()
+// in scripts/trinity-doc-types.mjs: it can only ever refuse. A prefixed name matches by prefix, a bare name
+// (the MyData six and chatseen) exactly, so `trinityone/notesX` is not `trinityone/notes`. Stateless — it
+// consults no map — but applied at the WEBSOCKET DOOR ONLY: an archive or a peer on a newer version may carry
+// a member type this build has never heard of, and refusing it on /import or on sync would lose a member's
+// document on restore (accept-is-not-a-retention-rule). Measured before it existed: a member of any church on
+// the box could store kind 30078 under ANY d-tag the relay had no rule for — which is how `voice:` shipped
+// writable by every member. scripts/relay-refuses-undeclared-member-doc-types.test.mjs.
+function memberDocTypeOk(d) {
+  const s = String(d || '');
+  for (const p of MEMBER_WRITABLE_TYPES) {
+    if (p.endsWith(':') ? s.startsWith(p) : s === p) return true;
+  }
+  return false;
+}
+// DOES THE RELAY GATE ANYTHING BY THIS NAME? For the OK-frame REASON only, never for a decision: the EVENT
+// handler says "undeclared document type" when a member's refused d-tag matches nothing in D and is not a
+// finance/ document. A declared type a member may not write (group:, voice:, …) keeps the generic reason.
+const GATED_D = Object.freeze(Object.values(D));
+function relayGatesType(d) {
+  const s = String(d || '');
+  if (s.startsWith('finance/')) return true;
+  for (const p of GATED_D) {
+    if (p.endsWith(':') ? s.startsWith(p) : s === p) return true;
+  }
+  return false;
+}
 function owningChurch(e, d) {
   const suf = CP_SUFFIXED_D.find(p => d.startsWith(p));
   if (suf) { const h = toHexPub(d.slice(suf.length)) || ''; if (h && CHURCH_PUBS.has(h)) return h; }
@@ -4328,6 +4360,11 @@ function accept(e) {
     // culled, so cap distinct docs per author — a member can't disk-exhaust the relay by spamming unique d-tags.
     // Updating an existing d-tag is always fine; only a NEW one past the cap is refused.
     if (!isMember) return false;
+    // …AND ONLY FOR A TYPE THIS PRODUCT HAS DECLARED A MEMBER MAY WRITE. The church key and a network key keep
+    // the catch-all as it was — an ordinary member does not. Everything a member legitimately writes has a
+    // declared type (memberDocTypeOk), so what this refuses is a d-tag nobody has invented yet, or a
+    // church-only type somebody forgot to give a branch above — the two shapes that produced `voice:`.
+    if (!(isAnyChurch || isNetwork) && !memberDocTypeOk(d)) return false;
     const mine = store.query({ kinds: [30078], authors: [e.pubkey], limit: MEMBER_DOC_CAP + 1 });
     if (mine.length > MEMBER_DOC_CAP && !mine.some(x => (x.tags.find(t => t[0] === 'd') || [])[1] === d)) return false;
     return true;
@@ -7491,9 +7528,20 @@ wss.on('connection', (ws, req) => {
         // NO reply at all where the old code sent a refusal. Audit, 2026-08-28.
         const _rd = dtag(evt) || '';
         const _stale = evt.kind === 30078 && _rd.startsWith(CAREREQ_D) && !ID_OWNER_RE.test(_rd.slice(CAREREQ_D.length));
-        rejectLog(evt, ws, _stale ? 'care request from a build that predates self-naming ids' : 'not a member or not permitted for this group');
+        // …and a document of a type the relay has NO rule for, from a MEMBER that is not a church or a network:
+        // the member catch-all refused it (memberDocTypeOk). A stranger keeps the generic reason, which already
+        // says "not a member". Named so a newer app publishing a type this
+        // relay predates reads "this relay needs updating", not "you are not a member". Only claimed when
+        // the relay really gates nothing by that name — a member refused a declared church-only type keeps
+        // the generic reason, because that refusal came from that type's own branch.
+        const _undeclared = evt.kind === 30078 && MEMBERS.has(evt.pubkey) && !memberDocTypeOk(_rd) && !relayGatesType(_rd)
+          && !(CHURCH_PUBS.has(evt.pubkey) || NETWORKS.has(evt.pubkey));
+        rejectLog(evt, ws, _stale ? 'care request from a build that predates self-naming ids'
+          : _undeclared ? 'undeclared document type ' + _rd.slice(0, 40) + ' from a member'
+          : 'not a member or not permitted for this group');
         ws.send(JSON.stringify(['OK', evt.id, false, _stale
           ? 'blocked: please update the app to ask for help — this version cannot send a request'
+          : _undeclared ? 'blocked: undeclared document type — this relay has no rule for it, and a member may not write one'
           : 'blocked: not a member or not permitted for this group']));
         return;
       }

@@ -232,6 +232,18 @@ export const UNDECLARED = Object.freeze({
 // occurrence is CHECKED against the first at module load. Building DOC_TYPES out of these constants would
 // remove the duplication, but it means rewriting 61 keys where any slip silently changes a live d-tag.
 // Checked duplication now; single-occurrence is a later tidy-up that deserves its own test.
+//
+// ⚠ THE ONE EXCEPTION, made on purpose on 2026-09-22 (owner: option B, "do it before we push to GitHub"):
+// MEMBER_WRITABLE_TYPES below IS derived from the `write` column, and accept()'s member catch-all reads it.
+// It is safe where deriving a grant would not be, because it only ever NARROWS: an ordinary member reaching
+// the catch-all is refused unless the d-tag matches a type this file calls member-writable, and a type absent
+// from the list is refused, never granted. The per-type POLICY still lives in accept() — the suffix-equals-
+// author rules, the caps, the minor checks, the church-key and network-key exemptions — and a type being on
+// this list grants nothing an accept() branch has already refused. Why it exists: without it the catch-all
+// admitted ANY d-tag from ANY member of any church on the box, which is how `voice:` shipped writable by
+// every member and how `share:`/`pubevent:` were caught the same week. See
+// scripts/relay-refuses-undeclared-member-doc-types.test.mjs, which derives the same list independently and
+// writes one document of every type as a member.
 const k = (s) => {
   if (!(s in DOC_TYPES) && !(s in UNDECLARED)) {
     throw new Error('trinity-doc-types: "' + s + '" is not a declared document type. Declare it here — with who '
@@ -308,6 +320,16 @@ export const D = Object.freeze({
 });
 
 export const ALL_PREFIXES = Object.freeze([...Object.keys(DOC_TYPES), ...Object.keys(UNDECLARED)]);
+
+// THE TYPES AN ORDINARY MEMBER MAY WRITE — the one derivation from the columns, explained above k(). Every
+// declared type whose `write` is 'member', plus the wallet, which is UNDECLARED but member-authored (its own
+// note says so). A prefixed name (ending in ':') matches a d-tag by prefix; a bare name matches exactly —
+// that is the caller's job (memberDocTypeOk in scripts/gateway.mjs); this is only the list. Built once, here,
+// so the relay never reads DOC_TYPES itself.
+export const MEMBER_WRITABLE_TYPES = Object.freeze([
+  ...Object.keys(DOC_TYPES).filter(p => DOC_TYPES[p].write === 'member'),
+  'trinityone/wallet:',
+]);
 
 // Look a d-tag up. Returns the declaration, or null for an unknown type — which is the answer that should
 // make a caller stop and think rather than guess.

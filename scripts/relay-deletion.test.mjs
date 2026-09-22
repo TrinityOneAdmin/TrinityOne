@@ -179,9 +179,13 @@ test('a forged tombstone for an event the relay has not seen cannot block its au
 });
 
 test('a replaceable write that lost the newest-wins race is NOT ACKed as success', async () => {
+  // A DECLARED member type. This was `trinityone/deltest:` — a made-up prefix, which M could write only because
+  // the member catch-all admitted ANY d-tag (closed 2026-09-22; see relay-refuses-undeclared-member-doc-types).
+  // rsvp: is a member's own addressable reply with no rule beyond the catch-all, so it is the same question:
+  // two versions of one address, and only the newer may be ACKed.
   const t = now();
-  const newer = doc(M, 'trinityone/deltest:' + t, { v: 2 }, t + 5);
-  const older = doc(M, 'trinityone/deltest:' + t, { v: 1 }, t);
+  const newer = doc(M, 'trinityone/rsvp:deltest-' + t, { v: 2 }, t + 5);
+  const older = doc(M, 'trinityone/rsvp:deltest-' + t, { v: 1 }, t);
   assert.equal((await publish(pub, newer))[0], true, 'the newer version stores');
   const [ok, reason] = await publish(pub, older);
   assert.equal(ok, false, 'the older version is rejected, not silently ACKed true');
