@@ -185,6 +185,29 @@ for (const [type, row] of Object.entries(MATRIX)) {
   }
 }
 
+// ── CLAUDE.md RULE 10: BOTH SHAPES OF THE TRUSTED-RELAY LIST ─────────────────────────────────────────────
+test('a steward cannot write the trusted-relay list even when the envelope NAMES the church', async () => {
+  // THE MATRIX ROW ABOVE IS NOT ENOUGH ON ITS OWN, and this test exists because a scoped sabotage proved it.
+  // The shipped console signs `trinityone/relays` with a raw finalizeEvent(…, sk) and NO ['church'] tag
+  // (syncEnable/syncDisable in src/steward.src.js), so a widening written as
+  // `|| stewardCan(e.pubkey, namedChurch(e), 'content')` — the shape every other delegated rule on this box
+  // uses — is INERT against that envelope: namedChurch() returns '' and the grant can never fire. Sabotaging
+  // the rule that way left this file 41/0, which is exactly the mis-aimed-sabotage failure CLAUDE.md warns
+  // about, arriving through the fixture rather than through the replace.
+  //
+  // So ask the question in the shape a future "fix" would actually produce: the same document, church-tagged,
+  // from a steward holding every capability the church has. Rule 10 says which relays a church talks to is
+  // the security boundary, and a delegate is not the authority for it in EITHER shape.
+  const tagged = await publishAs(sm, doc(sm, D.RELAYS, [{ pubkey: 'aa', url: 'ws://a' }, { pubkey: 'bb', url: 'ws://b' }], [['church', church.pub]]));
+  assert.equal(tagged[2], false,
+    'A DELEGATED STEWARD WROTE THE CHURCH\'S TRUSTED-RELAY LIST. That document decides which OTHER relay ' +
+    'boxes are handed this congregation\'s whole corpus (note()\'s TRUSTED_RELAYS / PEER_URLS). CLAUDE.md ' +
+    'rule 10. Frame: ' + JSON.stringify(tagged));
+  // …and the church key still writes it in both shapes, or cross-relay sync cannot be turned on at all.
+  assert.equal((await publishAs(church, doc(church, D.RELAYS, [{ pubkey: 'aa', url: 'ws://a' }, { pubkey: 'bb', url: 'ws://b' }], [['church', church.pub]])))[2], true,
+    'the church key can no longer write its own trusted-relay list with a church tag present');
+});
+
 // ── THE INCOHERENCE THE AUDIT NAMED, CLOSED BY CONSTRUCTION ──────────────────────────────────────────────
 test('a content steward may PUBLISH a sermon as well as FEATURE one', async () => {
   // The sharp edge of H1. The relay has granted a content-capable delegated steward `pinsermon:` since the
