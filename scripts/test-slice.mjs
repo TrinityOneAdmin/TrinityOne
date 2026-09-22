@@ -140,6 +140,24 @@ function regexCanStart(out) {
 //
 // The regex literals it can now see are copied through VERBATIM — they are code, and this function only
 // removes comments. (stripStrings, below, then blanks their bodies, for the reason written there.)
+//
+// ⚠ CORRECTION TO THE PERMANENT RECORD (CLAUDE.md rule 4). `277e0fe`'s commit message says this function's
+// "output changes for 16 of the 125 sources in scripts/ src/ app/ vendor/". THE NUMBER IS 17, not 16 —
+// found by AUDIT-steward-doc-rules-round3-2026-09-22 finding F5 and re-measured independently here, old
+// stripper (277e0fe^) against new over every git-tracked .js/.mjs/.jsx in those four directories minus
+// *.test.mjs. The seventeen, in full:
+//
+//     app/app.jsx · app/identity-extras.jsx · app/screens-audio.jsx · app/screens-watch.jsx ·
+//     app/stew-dashboard.jsx · scripts/gateway.mjs · scripts/scope-scan.mjs · src/fellowship.src.js ·
+//     src/finance-statement.mjs · src/relay-identity.src.js · src/steward.src.js · vendor/babel.min.js ·
+//     vendor/fellowship.js · vendor/finance-ledger.js · vendor/jspdf.umd.min.js · vendor/steward.js ·
+//     vendor/wallet.js
+//
+// AND THE DENOMINATOR DOES NOT REPRODUCE EITHER, which neither the commit nor the audit noticed: that set
+// is 127 files (80 non-JSX) at `277e0fe` itself, measured with `git ls-tree -r`, not 125/78. Three of them
+// are the dotted sim drivers in scripts/, which ARE tracked — so a walk that skips dotfiles gives 124, and
+// nothing gives 125. Everything downstream of the number is unaffected and does reproduce: 70 lines of
+// real code restored, 5 correctly blanked, 0 in neither class, and 61 -> 75 of 78 parsing.
 export function stripComments(src) {
   let out = '', q = '';
   for (let i = 0; i < src.length; i++) {
