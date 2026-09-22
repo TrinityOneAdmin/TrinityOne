@@ -116,18 +116,36 @@ const waitFor = async (expr, ms, why) => {
 // so it could not have caught the bug it was added for. It now reports the headers it DID see and refuses
 // 'no-header' whenever there are any: a build with no disclosure headers is a legitimate answer, a matcher
 // that walks past four of them is not.
+//
+// AND THE WITNESS MUST NOT COME FROM THE SAME SELECTOR AS THE SUSPECT (AUDIT-round-c C9). `headers` used to
+// be mapped from the very `button[aria-expanded]` query the matcher searches, so the one regression class
+// that would empty the match — the group headers rendered WITHOUT aria-expanded, an ordinary a11y change —
+// emptied the evidence with it: r = 'no-header', headers = [], `deepEqual(headers, [])` passed, and the
+// helper reported "there was nothing to press" in silence. MEASURED at 2444129 by scoping exactly that
+// change to the Settings group header in app/stew-dashboard.jsx: this file stayed 2 pass / 0 fail.
+// The headers are now counted by their own class (`.set-grp`, stew-dashboard.jsx's disclosure button),
+// which no part of the matcher touches — so "no headers on this page" has to be true of the PAGE, not just
+// of the query that failed. And when the matcher does find something, the same independent selector has to
+// agree that what it found is a group header.
 const openSettingsGroup = async (name) => {
   // A PLAIN PREFIX MATCH, no regex, for the reason above.
   const raw = await js(`(() => {
     const hs = [...document.querySelectorAll('button[aria-expanded]')];
-    const headers = hs.map(e => (e.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 40));
+    const grp = [...document.querySelectorAll('button.set-grp')];
+    const headers = grp.map(e => (e.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 40));
     const b = hs.find(e => (e.innerText || '').trim().indexOf(${JSON.stringify(name)}) === 0);
     if (!b) return JSON.stringify({ r: 'no-header', headers });
-    if (b.getAttribute('aria-expanded') === 'true') return JSON.stringify({ r: 'already-open', headers });
-    b.click(); return JSON.stringify({ r: 'opened', headers });
+    const witnessed = grp.indexOf(b) >= 0;
+    if (b.getAttribute('aria-expanded') === 'true') return JSON.stringify({ r: 'already-open', headers, witnessed });
+    b.click(); return JSON.stringify({ r: 'opened', headers, witnessed });
   })()`);
-  const { r, headers } = JSON.parse(raw);
+  const { r, headers, witnessed } = JSON.parse(raw);
   assert.ok(['opened', 'already-open', 'no-header'].includes(r), 'openSettingsGroup read back ' + JSON.stringify(r));
+  if (r !== 'no-header') assert.equal(witnessed, true,
+    'openSettingsGroup pressed a button[aria-expanded] that is not one of the Settings group headers (.set-grp). ' +
+    'The headers it can see are ' + JSON.stringify(headers) + '. Either the matcher hit some other disclosure ' +
+    'on the page, or the group header class was renamed — in which case the witness this guard depends on is ' +
+    'no longer independent of the attribute the matcher uses (AUDIT-round-c C9).');
   if (r === 'no-header') assert.deepEqual(headers, [],
     'openSettingsGroup found no "' + name + '" group header, but this page HAS ' + headers.length + ' collapsible header(s): ' +
     JSON.stringify(headers) + '. That is a broken matcher, not a build without groups — and a silent "there ' +
