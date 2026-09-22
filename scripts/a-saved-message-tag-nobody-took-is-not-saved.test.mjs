@@ -525,6 +525,12 @@ async function sermonsPanel({ delegated, encOn, list = [] }) {
     btn,
     press: async (pred, what) => { btn(pred, what).props.onClick(); await ticks(20); tree = render(); },
     marked: (pred, what) => !!(btn(pred, what).props || {})['aria-disabled'],
+    // THE OTHER TWO MARKERS, added for AUDIT-steward-doc-rules-round3-2026-09-22 finding F3, which measured
+    // that deleting either of them left this file 21/0. The padlock is read off the TREE, not off the
+    // source: Icon is stubbed to render nothing, but the harness keeps the component node with its props,
+    // so the glyph is visible as `props.name === 'lock'` and rule 3 is not touched.
+    padlocked: (pred, what) => find(btn(pred, what), n => n && n.props && n.props.name === 'lock').length,
+    tip: (pred, what) => String((btn(pred, what).props || {}).title || ''),
     labelled: (label) => find(tree, n => n.type === 'button' && reads(n).trim() === label).length,
     said: () => reads(tree),
     // the real <input type=file>, answering as the OS file picker does — the funnel the Upload button opens
@@ -907,4 +913,48 @@ test('a media key the relay accepted still goes out, and is not blocked by the m
   assert.equal(p.state.refused, null, 'an accepted publish left a refusal memo behind, which would block the next real one');
   assert.deepEqual(p.events.filter(e => e.type === 'steward-write-blocked'), [],
     'a media key every relay accepted raised a refusal banner: ' + JSON.stringify(p.events));
+});
+
+// ── THE TWO MARKERS NO TEST COULD SEE (CLAUDE.md rule 1, the hole in this file's own headline fix) ────────
+// AUDIT-steward-doc-rules-round3-2026-09-22, finding F3. `aria-disabled` does not stop a click in a browser
+// — a4002f5 says so itself and relies on each press handler to answer — but the four tests it added
+// asserted only `aria-disabled`. Two scoped sabotages were therefore INERT at 21 / 0:
+//
+//   D — delete ONLY the Edit (pen) button's `if (_churchOnly) { … return; }`, keep everything else.
+//       Measured with and without: WITH the sabotage the edit modal OPENS ("Edit audio details · Rename it
+//       and add details · Title · Details · optional · Cancel · Save"); shipped, it does not. That is
+//       exactly the flow a4002f5 says it prevents — "a steward should not retype a title to be refused
+//       at Save" — restored by deleting one clause, with the whole file green.
+//   E — delete the Upload button's padlock glyph AND its `title` tooltip, keep `aria-disabled`.
+//       21 / 0, and console-settings-a11y 37 / 0 as well. On a phone there is no hover, so the glyph is
+//       the ONLY marking a steward sees before they press.
+//
+// The two tests below are those rows, at the point of use. Nothing here matches text in app/*.jsx.
+test('THE SCREEN: the pen opens no edit form on a delegated console — the refusal is not at Save', async () => {
+  const p = await sermonsPanel({ delegated: true, encOn: false, list: SERMON1 });
+  assert.equal(p.labelled('Save'), 0, 'fixture: something is already offering Save before the pen is pressed');
+  await p.press(PEN_BTN, 'Edit (pen) button');
+  assert.equal(p.labelled('Save'), 0,
+    'THE EDIT MODAL OPENED ON A DELEGATED CONSOLE. `sermon:` is church-key-only, so the steward types a ' +
+    'title and a description and meets the refusal only when they press Save — which is the exact flow ' +
+    'this panel’s fix says it prevents. `aria-disabled` does not stop a click; the press handler has to.');
+  assert.deepEqual(p.order, [], 'the engine was reached by the pen: ' + JSON.stringify(p.order));
+  assert.match(p.said(), /Only the church’s own console can publish a sermon/,
+    'the locked pen said nothing when it was pressed. Screen read: ' + p.said());
+});
+
+test('THE SCREEN: all three locked sermon controls carry a padlock and say why', async () => {
+  const p = await sermonsPanel({ delegated: true, encOn: false, list: SERMON1 });
+  for (const [pred, what] of [[UPLOAD_BTN, 'Upload button'], [PEN_BTN, 'Edit (pen) button'], [TRASH_BTN, 'Remove (trash) button']]) {
+    assert.equal(p.padlocked(pred, what), 1,
+      `the ${what} carries no padlock on a delegated console. On a phone there is no hover and so no ` +
+      'tooltip, which makes the glyph the only thing that says "locked" before the press.');
+    assert.match(p.tip(pred, what), /Only the church’s own console can (publish|remove) a sermon/,
+      `the ${what} lost its tooltip, so on a desktop console nothing says why it is locked. Tooltip: ` + p.tip(pred, what));
+  }
+  // The other direction, so a "fix" that padlocks everything cannot pass: the OWNER console shows none.
+  const o = await sermonsPanel({ delegated: false, encOn: false, list: SERMON1 });
+  for (const [pred, what] of [[UPLOAD_BTN, 'Upload button'], [PEN_BTN, 'Edit (pen) button'], [TRASH_BTN, 'Remove (trash) button']]) {
+    assert.equal(o.padlocked(pred, what), 0, `the OWNER console shows a padlock on the ${what}, which it may use`);
+  }
 });
