@@ -12,8 +12,17 @@
 // the box itself is asked: /status.writePolicy is true iff this relay holds a church (public, no token), and
 // /relay-names/mine.handle is the relay's name (via /local-token, which only a same-machine request gets — the
 // Suite always is one). A church or a name → the doors: something was set up here, whatever storage says. Both
-// absent AND no marker → the card. If /status cannot be read at all the doors are shown — "first time here"
-// is a claim, and a claim this page cannot back is worse than the two doors that were always here.
+// absent AND no marker → the card. If either question cannot be answered at all — a network error, or a
+// non-2xx on /status, /local-token or /relay-names/mine — the doors are shown: "first time here" is a claim,
+// and a claim this page cannot back is worse than the two doors that were always here.
+//
+// A SLOW ANSWER IS NOT "NO" (AUDIT-suite-B4 N1). This used to give the box 2.5 s and then show the doors, and
+// /relay-names/mine spawns the tailscale CLI up to three times (8 s + 6 s + 6 s budgets) before it will say
+// what its `handle` is — so on a box where "Go public" was ever tried and tailscaled is now down, a genuine
+// first run timed out into the two doors and the card was never seen (measured: 4 s fake tailscale → doors).
+// Now there is no timer: the page says "Checking this computer…" and waits for the answer, and only a box
+// that cannot answer gets the doors. (A gateway that accepts the request and never answers is a wedged box,
+// and its two doors would open on pages that do not load either.)
 //
 // The doors are visible in the HTML and this hides them while it asks, so a script that never runs leaves
 // the launcher with its doors, never blank (the splash lesson: this page must not be a dead end).
@@ -21,37 +30,39 @@
   var card = document.getElementById('firstRun');
   var doors = document.getElementById('doors');
   var sub = document.getElementById('sub');
+  var checking = document.getElementById('checking');
   if (!card || !doors) return;
-  var decided = false, fallback = null;
+  var decided = false;
   function show(which) {
     if (decided) return;
-    decided = true; clearTimeout(fallback);
+    decided = true;
     card.hidden = which !== 'card';
     doors.hidden = which !== 'doors';
     if (sub) sub.hidden = which !== 'doors';
+    if (checking) checking.hidden = true;
     document.body.setAttribute('data-first-run', which);
   }
   var marked = false;
   try { marked = !!(localStorage.getItem('to_relay_setup_seen') || localStorage.getItem('trinityone.steward.wizard.done')); } catch (e) {}
   if (marked) { show('doors'); return; }
-  doors.hidden = true; if (sub) sub.hidden = true;          // while asking; the fallback below undoes it
-  fallback = setTimeout(function () { show('doors'); }, 2500);
-  var status = fetch('/status', { cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; });
+  doors.hidden = true; if (sub) sub.hidden = true;          // while asking; show() undoes it
+  if (checking) checking.hidden = false;
+  // Each question either answers (its JSON) or throws — a non-2xx is a throw, so Promise.all rejects on the
+  // first question the box cannot answer and the doors are shown. Nothing here turns a failure into "no".
+  var answered = function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); };
+  var status = fetch('/status', { cache: 'no-store' }).then(answered);
   var named = fetch('/local-token', { cache: 'no-store' })
-    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(answered)
     .then(function (j) {
-      if (!j || !j.token) return null;
-      return fetch('/relay-names/mine', { headers: { Authorization: 'Bearer ' + j.token }, cache: 'no-store' })
-        .then(function (r) { return r.ok ? r.json() : null; });
-    })
-    .catch(function () { return null; });
+      if (!j || !j.token) throw new Error('no local token');
+      return fetch('/relay-names/mine', { headers: { Authorization: 'Bearer ' + j.token }, cache: 'no-store' }).then(answered);
+    });
   Promise.all([status, named]).then(function (res) {
     var s = res[0], nm = res[1];
-    if (!s) { show('doors'); return; }                        // cannot tell → the doors, never a claim
-    var hasChurch = s.writePolicy === true;
+    var hasChurch = !!s && s.writePolicy === true;
     var hasName = !!(nm && nm.handle);
     show(hasChurch || hasName ? 'doors' : 'card');
-  }).catch(function () { show('doors'); });
+  }).catch(function () { show('doors'); });                  // cannot tell → the doors, never a claim
 })();
 
 // Suite launcher update check. The local relay does the actual GitHub fetch server-side (/suite-update)

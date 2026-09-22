@@ -29,7 +29,8 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
+import { createServer, request as httpRequest } from 'node:http';
+import { chmodSync, existsSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -53,7 +54,7 @@ const live = new Set();
 after(() => { for (const s of live) s.stop(); });
 
 // A fresh Suite install: an EMPTY data dir (or one seeded with exactly the file named), loopback, no origin.
-async function startGateway({ seed = {} } = {}) {
+async function startGateway({ seed = {}, env: extraEnv = {} } = {}) {
   const port = await freePort('the guided-path test\'s gateway');
   const dataDir = mkdtempSync(join(tmpdir(), 'trin-guided-'));
   const preload = join(dataDir, 'blackhole.mjs');
@@ -63,7 +64,7 @@ async function startGateway({ seed = {} } = {}) {
   const proc = spawn(process.execPath, [join(ROOT, 'scripts/gateway.mjs'), String(port)], {
     cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, TRINITY_DATA_DIR: dataDir, RELAY_SYNC: '0', RELAY_HOST: '127.0.0.1', RELAY_NO_OPEN: '1',
-      RELAY_DIRECTORY: 'http://127.0.0.1:9', TRINITY_TAILSCALE_BIN: '/nonexistent/tailscale', NODE_OPTIONS: '--import ' + preload },
+      RELAY_DIRECTORY: 'http://127.0.0.1:9', TRINITY_TAILSCALE_BIN: '/nonexistent/tailscale', NODE_OPTIONS: '--import ' + preload, ...extraEnv },
   });
   proc.stdout.on('data', d => log.push(String(d))); proc.stderr.on('data', d => log.push(String(d)));
   const base = `http://127.0.0.1:${port}`;
@@ -73,6 +74,31 @@ async function startGateway({ seed = {} } = {}) {
   const g = { port, base, dataDir, proc, log, stop() { live.delete(g); try { proc.kill('SIGKILL'); } catch {} try { rmSync(dataDir, { recursive: true, force: true }); } catch {} } };
   live.add(g);
   return g;
+}
+
+// A box with tailscale INSTALLED but wedged: the CLI takes `seconds` to say tailscaled is down. The gateway's
+// /relay-names/mine calls tsState() before it answers (ownUrl), so that route takes at least this long on such
+// a box — which is what a genuine first run on a machine where "Go public" was ever tried looks like.
+function slowTailscale(dataDir, seconds) {
+  const bin = join(dataDir, 'tailscale');
+  writeFileSync(bin, '#!/bin/sh\nsleep ' + seconds + '\necho "failed to connect to local tailscaled; is it running?" >&2\nexit 1\n');
+  chmodSync(bin, 0o755);
+  return bin;
+}
+// A front in front of a REAL gateway that answers one route with a 500 and hands everything else through — the
+// pages, the scripts and the other routes are the shipped ones. `stop()` closes it.
+async function startBrokenFront(gw, brokenRoute) {
+  const port = await freePort('the guided-path test\'s broken front');
+  const srv = createServer((req, res) => {
+    if ((req.url || '').split('?')[0] === brokenRoute) { res.writeHead(500, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end('{"error":"broken by test"}'); return; }
+    const up = httpRequest({ host: '127.0.0.1', port: gw.port, method: req.method, path: req.url, headers: { ...req.headers, host: '127.0.0.1:' + gw.port } }, (r) => { res.writeHead(r.statusCode, r.headers); r.pipe(res); });
+    up.on('error', () => { try { res.writeHead(502); res.end(); } catch {} });
+    req.pipe(up);
+  });
+  await new Promise(r => srv.listen(port, '127.0.0.1', r));
+  const f = { port, base: `http://127.0.0.1:${port}`, stop() { live.delete(f); try { srv.closeAllConnections(); srv.close(); } catch {} } };
+  live.add(f);
+  return f;
 }
 
 async function startChrome(url) {
@@ -221,6 +247,56 @@ test('a first launch shows ONE card with three choices — not the two doors —
     // the honest signals, as the box reports them right now: no church, no name
     assert.equal((await (await fetch(gw.base + '/status')).json()).writePolicy, false, 're-anchor: the fresh box claims a church');
   } finally { c.stop(); gw.stop(); }
+});
+
+// ── 1b. a slow answer is not "no" — and a box that cannot answer gets the doors ───────────────────────────
+// AUDIT-suite-B4 N1: home.js waited on /status and /relay-names/mine with a 2.5 s fallback to the doors, and
+// /relay-names/mine calls tsState() first — up to three tailscale spawns (8 s + 6 s + 6 s budgets) before it will
+// say what its `handle` is. Measured by the auditor with a fake tailscale that takes 4 s to say tailscaled is down:
+// /relay-names/mine 4026 ms, the launcher decided DOORS, the card never shown. Tailscale is one of the Suite's
+// own "Go public" routes, so a box with it installed and wedged is not exotic. The rule now: a slow answer is
+// waited for (the page says it is checking); only a box that cannot answer at all — a network error or a non-2xx
+// on either question — gets the doors, because "first time here" is a claim this page will not make blind.
+test('a slow /relay-names/mine still gets the card — the launcher waits for the answer; a box that cannot answer at all gets the doors',
+  { skip: !CHROME ? 'no chromium' : false, timeout: 120000 }, async () => {
+  // (a) tailscale installed and wedged: the name question takes ~4 s
+  const dir = mkdtempSync(join(tmpdir(), 'trin-guided-ts-'));
+  const gw = await startGateway({ env: { TRINITY_TAILSCALE_BIN: slowTailscale(dir, 4) } });
+  let c = null, front = null, front2 = null;
+  try {
+    // re-anchor: the box really is slow on that one question
+    const tok = (await (await fetch(gw.base + '/local-token')).json()).token;
+    const t0 = Date.now();
+    const nm = await (await fetch(gw.base + '/relay-names/mine', { headers: { Authorization: 'Bearer ' + tok } })).json();
+    const took = Date.now() - t0;
+    assert.ok(took >= 3500, 're-anchor: /relay-names/mine answered in ' + took + ' ms — the fake tailscale did not slow it, so this row measures nothing');
+    assert.equal(nm.handle, '', 're-anchor: the fresh box claims a name');
+    c = await startChrome(gw.base + HOME);
+    // while it waits: neither the card nor the doors, and the page says why
+    const early = await c.evalIn(`(() => { const on = ${ON}; return JSON.stringify({ decided: document.body.getAttribute('data-first-run'), card: on(document.getElementById('firstRun')), doors: [...document.querySelectorAll('a.mode')].map(on), checking: on(document.getElementById('checking')), text: document.body.innerText }); })()`).then(JSON.parse);
+    const decided = await launcherSettled(c);
+    assert.equal(decided, 'card', 'A GENUINE FIRST RUN ON A BOX WITH A SLOW TAILSCALE GETS THE TWO DOORS (AUDIT-suite-B4 N1): the launcher timed out and decided "' + decided + '" instead of waiting for the answer');
+    const L = await readLauncher(c);
+    assert.deepEqual([L.card, L.doors], [true, [false, false]], JSON.stringify(L));
+    // and what it showed while it waited
+    assert.equal(early.decided, null, 'the launcher decided "' + early.decided + '" before the box answered: ' + JSON.stringify(early));
+    assert.deepEqual([early.card, early.doors], [false, [false, false]], 'a card or a door is on screen before the box answered: ' + JSON.stringify(early));
+    assert.equal(early.checking, true, 'nothing on screen says the box is being checked while the launcher waits: ' + early.text);
+    assert.match(early.text, /Checking this computer/, early.text);
+    assert.equal(await c.evalIn(`(${ON})(document.getElementById('checking'))`), false, 'the "checking" line is still on screen after the launcher decided');
+    c.stop(); c = null;
+    // (b) a box that cannot answer the name question at all (a 500 on /relay-names/mine): the doors, not a claim
+    front = await startBrokenFront(gw, '/relay-names/mine');
+    c = await startChrome(front.base + HOME);
+    assert.equal(await launcherSettled(c), 'doors', 'A BOX THAT CANNOT SAY WHETHER IT HAS A NAME WAS TOLD "FIRST TIME HERE" — a failed answer must be the doors, not the card');
+    assert.deepEqual((await readLauncher(c)).doors, [true, true]);
+    c.stop(); c = null;
+    // (c) and one that cannot answer /status either
+    front2 = await startBrokenFront(gw, '/status');
+    c = await startChrome(front2.base + HOME);
+    assert.equal(await launcherSettled(c), 'doors', 'a box that cannot answer /status was told "first time here"');
+    assert.deepEqual((await readLauncher(c)).doors, [true, true]);
+  } finally { if (c) c.stop(); if (front) front.stop(); if (front2) front2.stop(); gw.stop(); try { rmSync(dir, { recursive: true, force: true }); } catch {} }
 });
 
 // ── 2. "Set up everything" ────────────────────────────────────────────────────────────────────────────────
