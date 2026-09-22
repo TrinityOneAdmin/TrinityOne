@@ -37,6 +37,7 @@ import { fileURLToPath } from 'node:url';
 import { WebSocket } from 'ws';
 import { freePort } from './relay-network-harness.mjs';
 import { loadScreen, miniReact, find, texts } from './render-jsx-screen.mjs';
+import { npubEncode } from 'nostr-tools/nip19';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const CHROME = ['/usr/bin/chromium-browser', '/usr/bin/chromium', '/usr/bin/google-chrome'].find(p => existsSync(p));
@@ -434,14 +435,16 @@ test('"Just a relay": the relay wizard → "Back to the Suite" (the primary) →
   let c = await startChrome(gw.base + HOME);
   let named = null, c3 = null;
   try {
-    // (a) skipping the wizard on the guided path still ends on the launcher — with the doors, since it was skipped
+    // (a) skipping the wizard on the guided path still ends on the launcher — and the card is still there,
+    // because a skip set nothing up (owner, 2026-09-22: "It should come back until its setup"). Row 3c below
+    // is the one that pins the whole shape; this is where the path lands.
     assert.equal(await launcherSettled(c), 'card');
     assert.equal(await clickId(c, 'setupRelay'), 'ok');
     await waitFor(c, `/control\\.html\\?setup=relay$/.test(location.href)`, 'the relay panel on the relay path', 15000);
     await waitFor(c, `document.getElementById('relaySetup') && document.getElementById('relaySetup').classList.contains('show')`, 'the relay wizard to open', 20000);
     assert.equal(await clickId(c, 'rswSkip'), 'ok', 'no "Skip setup"');
     await waitFor(c, `/\\/relay-app\\/home\\.html$/.test(location.href)`, 'the launcher after a skip', 15000);
-    assert.equal(await launcherSettled(c), 'doors', 'a skipped relay wizard left the launcher on the first-run card');
+    assert.equal(await launcherSettled(c), 'card', 'ONE "Skip setup" RETIRED THE FIRST-RUN CARD WITH NOTHING SET UP (AUDIT-suite-B4 N2)');
     c.stop();
     // (b) the whole wizard, from a profile that has not seen it
     c = await startChrome(gw.base + HOME);
@@ -464,6 +467,60 @@ test('"Just a relay": the relay wizard → "Back to the Suite" (the primary) →
     c3 = await startChrome(named.base + HOME);
     assert.equal(await launcherSettled(c3), 'doors', 'A FRESH PROFILE AGAINST A NAMED RELAY GETS THE FIRST-RUN CARD — a relay name is something that was set up here');
   } finally { if (c3) c3.stop(); if (named) named.stop(); c.stop(); gw.stop(); }
+});
+
+// ── 3c. "Skip setup" is not "set up" ──────────────────────────────────────────────
+// AUDIT-suite-B4 N2, and the OWNER'S DECISION on it (2026-09-22): "It should come back until its setup."
+// One "Skip setup" on the wizard's first screen used to write `to_relay_setup_seen` — the marker that means
+// "a wizard finished" — so the launcher's first-run card never returned AND the relay wizard never reopened
+// (`openRelaySetup` has one caller, `maybeFirstRun`, which the marker short-circuits). A box with no name, no
+// church and nothing else set up was permanently declared established by one click of the escape hatch.
+// What retires the card permanently is the two LIVE facts the launcher reads from the box: a church
+// (/status.writePolicy) or a relay name (/relay-names/mine.handle). This row walks both halves on the real
+// pages: a skip, and then actually setting something up.
+const TEST_NPUB = npubEncode('1'.repeat(63) + '0');
+
+test('"Skip setup" dismisses the wizard for this visit; it does not declare the box set up — the card comes back until something really is',
+  { skip: !CHROME ? 'no chromium' : false, timeout: 150000 }, async () => {
+  const gw = await startGateway();
+  const c = await startChrome(gw.base + HOME);
+  try {
+    // (a) the card, the door, the wizard, "Skip setup" — and the launcher still shows the card
+    assert.equal(await launcherSettled(c), 'card', 'staging: a fresh profile on a box with nothing set up did not get the card');
+    assert.equal(await clickId(c, 'setupRelay'), 'ok');
+    await waitFor(c, `/control\\.html\\?setup=relay$/.test(location.href)`, 'the relay panel on the relay path', 15000);
+    await waitFor(c, `document.getElementById('relaySetup') && document.getElementById('relaySetup').classList.contains('show')`, 'the relay wizard to open', 20000);
+    assert.equal(await clickId(c, 'rswSkip'), 'ok', 'THE "Skip setup" CONTROL IS GONE from the wizard\'s first screen');
+    await waitFor(c, `/\\/relay-app\\/home\\.html$/.test(location.href)`, 'the launcher after a skip', 15000);
+    assert.equal(await launcherSettled(c), 'card', 'ONE "Skip setup" RETIRED THE FIRST-RUN CARD WITH NOTHING SET UP (AUDIT-suite-B4 N2; owner 2026-09-22: "It should come back until its setup")');
+    assert.deepEqual((await readLauncher(c)).doors, [false, false], 'a door is on screen beside the card after a skip');
+    assert.equal(await c.evalIn(`localStorage.getItem('to_relay_setup_seen')`), null, 'a skip wrote the "a wizard finished" marker — nothing was set up, so nothing may claim it was');
+    // (b) and it is still there on the next launch of the launcher
+    await c.goto(gw.base + HOME);
+    assert.equal(await launcherSettled(c), 'card', 'the first-run card did not come back on the next launch after a skip');
+    // (c) the card is still ACTIONABLE: the same door reopens the wizard it skipped
+    assert.equal(await clickId(c, 'setupRelay'), 'ok');
+    await waitFor(c, `/control\\.html\\?setup=relay$/.test(location.href)`, 'the relay panel on the relay path', 15000);
+    await waitFor(c, `document.getElementById('relaySetup') && document.getElementById('relaySetup').classList.contains('show')`, 'THE RELAY WIZARD TO REOPEN after a skip — a card whose choices do nothing is worse than no card', 20000);
+    // (d) now actually set something up, through the wizard's own "I already have a church" field
+    assert.equal(await clickId(c, 'rswGo'), 'ok', 'no "Get started"');
+    assert.equal(await clickId(c, 'rswSkip'), 'ok', 'no "Skip for now" on the name step');   // a name cannot be claimed on a loopback box
+    assert.equal(await clickId(c, 'rswById'), 'ok', 'no "I already have a church" on the church step');
+    await waitFor(c, `!!document.getElementById('rswNpub')`, 'the church-by-ID field', 10000);
+    assert.equal(await typeInto(c, `document.getElementById('rswNpub')`, TEST_NPUB), 'ok');
+    assert.equal(await clickId(c, 'rswAdd'), 'ok', 'no "Add & continue"');
+    await waitFor(c, `!!document.getElementById('rswOnYes')`, 'the "does this computer stay on" step after the church was added (if the add was refused the wizard stays on the church step and says why)', 20000);
+    // re-anchor: the box itself now reports the church, which is the fact the launcher reads
+    assert.equal((await (await fetch(gw.base + '/status')).json()).writePolicy, true, 're-anchor: the box does not report the church that was just added, so the rest of this row measures nothing');
+    // (e) with EVERY marker cleared — so only the live facts can speak — the launcher shows the doors, and
+    //     keeps showing them. That is what permanently retires the card.
+    assert.equal(await c.evalIn(`(() => { localStorage.clear(); sessionStorage.clear(); return 'ok'; })()`), 'ok');
+    await c.goto(gw.base + HOME);
+    assert.equal(await launcherSettled(c), 'doors', 'A BOX THAT HOLDS A CHURCH IS STILL SHOWN THE FIRST-RUN CARD — the live facts must retire it');
+    assert.deepEqual((await readLauncher(c)).doors, [true, true]);
+    await c.goto(gw.base + HOME);
+    assert.equal(await launcherSettled(c), 'doors', 'the first-run card came back on a box that holds a church');
+  } finally { c.stop(); gw.stop(); }
 });
 
 // ── 3b. the relay wizard opens on a SECOND visit too ─────────────────────────────────────────────────────

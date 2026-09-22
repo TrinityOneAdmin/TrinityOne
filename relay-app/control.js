@@ -1098,6 +1098,16 @@
   // only when the relay genuinely looks new (no name claimed AND no church added), so
   // an established relay is never nagged.
   const RSW_SEEN = 'to_relay_setup_seen';
+  // ── "SKIP SETUP" IS NOT "SET UP" (AUDIT-suite-B4 N2; owner, 2026-09-22: "It should come back until its
+  // setup"). The step-0 escape hatch used to call closeRSW(), which writes RSW_SEEN — the marker that means "a
+  // wizard finished", and the one the LAUNCHER reads to retire its first-run card. So one click on a box with
+  // no name and no church declared it established for ever: the card never came back and this wizard never
+  // reopened (openRelaySetup has exactly one caller, maybeFirstRun, which RSW_SEEN short-circuits).
+  // A skip now dismisses it for THIS VISIT only — sessionStorage, which a relaunch of the Suite clears — so
+  // reloading this dashboard in the same sitting is not a nag, and the next launch asks again. What retires
+  // the card permanently is the two live facts the launcher reads from the box itself: a church
+  // (/status.writePolicy) or a relay name (/relay-names/mine.handle).
+  const RSW_SKIPPED = 'to_relay_setup_skipped';
   let rswOpen = false, rswStep = 0, rswHandle = '', rswAdded = false;
   // Does this box already carry a church? Set from the same /config read that decides whether the wizard
   // opens at all, so the church step can tell "a brand-new box" from "adding a second church".
@@ -1120,8 +1130,14 @@
     check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg>',
   };
 
+  function rswSkippedThisVisit() { try { return !!sessionStorage.getItem(RSW_SKIPPED); } catch (e) { return false; } }
+
   async function maybeFirstRun() {
     if (rswOpen || !adminToken || localStorage.getItem(RSW_SEEN)) return;
+    // A skip earlier in this visit keeps it shut — EXCEPT when the person arrived on a guided path
+    // (`?setup=`), which is them asking for this wizard again from the launcher's card. A card whose choices
+    // do nothing is worse than no card.
+    if (!RSW_PATH && rswSkippedThisVisit()) return;
     let nm = null, cf = null;
     try {
       [nm, cf] = await Promise.all([
@@ -1139,6 +1155,10 @@
 
   function openRelaySetup() { rswOpen = true; rswStep = 0; rswHandle = ''; rswAdded = false; rswManual = false; document.getElementById('relaySetup').classList.add('show'); renderRSW(); }
   function closeRSW() { localStorage.setItem(RSW_SEEN, '1'); rswOpen = false; document.getElementById('relaySetup').classList.remove('show'); }
+  // The same close WITHOUT the "a wizard finished" marker — see RSW_SKIPPED above. Only step 0's "Skip setup"
+  // uses it; every other way out of this wizard (Go to dashboard, the tunnel step, Back to the Suite, Next:
+  // open the console) is reached by walking it, and keeps writing RSW_SEEN.
+  function skipRSW() { try { sessionStorage.setItem(RSW_SKIPPED, '1'); } catch (e) {} rswOpen = false; document.getElementById('relaySetup').classList.remove('show'); }
   // ── THE CHURCH STEP, AS TWO PURE FUNCTIONS SO THEY CAN BE RUN IN A TEST ─────────────────────────────
   // relay-app/*.js ships unbundled exactly like app/*.jsx, so a test that MATCHED this markup would still
   // pass with the whole branch disabled (CLAUDE.md rule 3, same hazard, different directory). Returning a
@@ -1176,8 +1196,9 @@
         + '<p class="rsw-sub">A relay is the private server that stores your church’s messages, records and media — running right here, on this machine. Two quick things: give it a name, and say whether this computer stays on. Your church is created in the console afterwards. About a minute.</p>'
         + '<div class="rsw-foot"><button class="btn btn-ghost" id="rswSkip">Skip setup</button><div style="flex:1"></div><button class="btn btn-clay" id="rswGo">Get started</button></div>';
       document.getElementById('rswGo').onclick = () => { rswStep = 1; renderRSW(); };
-      // on a guided path a skip still ends on the launcher (RSW_PATH's note above); otherwise on this dashboard
-      document.getElementById('rswSkip').onclick = () => { closeRSW(); if (RSW_PATH) location.href = RSW_HOME; };
+      // on a guided path a skip still ends on the launcher (RSW_PATH's note above); otherwise on this dashboard.
+      // skipRSW, not closeRSW: a skip sets nothing up, so it must not say a wizard finished (RSW_SKIPPED above).
+      document.getElementById('rswSkip').onclick = () => { skipRSW(); if (RSW_PATH) location.href = RSW_HOME; };
       return;
     }
     if (rswStep === 1) {
