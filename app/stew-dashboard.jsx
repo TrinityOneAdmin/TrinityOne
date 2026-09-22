@@ -9380,11 +9380,15 @@ function settingsGroupsLsKey() {
 }
 
 // null means "this steward has never chosen", which is NOT the same as [] ("chosen, and all open"). Kept
-// distinct so a future default can tell a fresh console from a deliberate one without asking again.
+// distinct so the default can tell a fresh console from a deliberate one without asking again — and since
+// 2026-09-22 the default is EVERY GROUP SHUT (see DashSettings), so a stored [] is the one way to say "all open".
 function readCollapsedGroups() {
   try {
     const v = JSON.parse(localStorage.getItem(settingsGroupsLsKey()) || 'null');
-    return Array.isArray(v) ? v.filter(x => typeof x === 'string') : null;
+    // An array of anything but names is rubbish, and rubbish reads as "never chosen". It used to be FILTERED,
+    // which turned [1,2,3] into [] — harmless while [] and null meant the same thing, and a silent "all open"
+    // once they did not.
+    return (Array.isArray(v) && v.every(x => typeof x === 'string')) ? v : null;
   } catch (e) { return null; }
 }
 
@@ -9440,7 +9444,13 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
   const open = pages.some(p => p.k === page) ? page : (narrow ? null : (pages.length ? pages[0].k : null));
   const cur = pages.find(p => p.k === open) || null;
   // COLLAPSIBLE GROUPS. Read once, on mount, so a second console tab cannot fight this one for the value.
-  const [collapsed, setCollapsed] = React.useState(() => new Set(readCollapsedGroups() || []));
+  // THE DEFAULT IS SHUT. Owner, 2026-09-22, from a screenshot of the Suite's window: "Can we have the settings
+  // groups minimized like this on default?" A steward who has never chosen (nothing stored) starts with every
+  // group shut, each showing its count; the group holding the open page is forced open at render time by
+  // `shown` below, so in a browser one group is always open and on a phone, where nothing is open, none is.
+  // The first press materialises that default as the steward's own record (the other three names), so a
+  // stored preference keeps meaning what it meant before this date: the groups this steward keeps shut.
+  const [collapsed, setCollapsed] = React.useState(() => { const v = readCollapsedGroups(); return new Set(v === null ? groups.map(([g]) => g) : v); });
   const toggleGroup = (g) => {
     const next = new Set(collapsed);
     if (next.has(g)) next.delete(g); else next.add(g);
@@ -9459,6 +9469,8 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
   // The cost, said plainly: in a browser a page is always open, so one of the four headers is always shown
   // expanded. Pressing it still records the choice and it takes effect the moment the open page is
   // elsewhere. On a phone the list and a page are never on screen together, so nothing is forced there.
+  // With the shut-by-default start this is also how a fresh console reads: the current page's group open,
+  // the other three shut with their counts, and moving to a page in another group moves the open one.
   const openGroup = settingsGroupOf(groups, open);
   const shown = (g) => !collapsed.has(g) || g === openGroup;
   // The rows a steward can actually reach, which is what the arrow keys walk: a collapsed group's rows are

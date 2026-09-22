@@ -36,8 +36,11 @@ const JS = compileScreen('app/stew-dashboard.jsx');
 // stubs are furniture from other app files and the browser.
 function consoleWith(React, over = {}) {
   const store = new Map(over.storage || []);
+  // `allOpen`: a steward who has stored "nothing shut" (`[]`). The groups start SHUT by default since
+  // 2026-09-22 (only the open page's group shows its rows), so a test that needs the whole list as its
+  // control says so here rather than relying on the old default.
   const localStorage = {
-    getItem: (k) => (store.has(k) ? store.get(k) : null),
+    getItem: (k) => (store.has(k) ? store.get(k) : (over.allOpen && /\.setgroups\./.test(k) ? '[]' : null)),
     setItem: (k, v) => store.set(k, String(v)),
     removeItem: (k) => store.delete(k),
   };
@@ -130,7 +133,7 @@ const openRow = (tree) => rows(tree).find(b => b.props['aria-current'] === 'page
 // CONTROL — if this fails, every assertion below is meaningless.
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 test('CONTROL: the real DashSettings renders a list of pages and one page beside it', () => {
-  const s = settings(null);
+  const s = settings(null, { allOpen: true });   // re-based 2026-09-22: the fresh default shows one group's rows
   assert.ok(rows(s.tree).length >= 15, `the settings list rendered ${rows(s.tree).length} rows`);
   assert.equal(region(s.tree).length, 1, 'no page is open beside the list in a browser');
   assert.deepEqual(cardsOn(settings('relays').tree), ['Relays'],

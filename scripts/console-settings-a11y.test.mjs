@@ -45,7 +45,11 @@ function consoleWith(React, over = {}) {
     },
     useStewardStats: () => ({}), useStewardActivity: () => [], useStewardRequests: () => [],
     addEventListener() {}, removeEventListener() {}, innerWidth: 1200,
-    localStorage: { getItem: () => null, setItem() {} },
+    // The settings groups start SHUT by default since 2026-09-22 (only the open page's group shows its rows),
+    // and these tests are about the LIST'S SHAPE, not the default: this console has stored "nothing shut"
+    // (`[]`) so the whole list is on screen. The default itself is pinned in
+    // scripts/settings-groups-collapse-and-are-remembered.test.mjs.
+    localStorage: { getItem: (k) => (/\.setgroups\./.test(String(k)) ? '[]' : null), setItem() {} },
     ...(over.window || {}),
   };
   const globals = {

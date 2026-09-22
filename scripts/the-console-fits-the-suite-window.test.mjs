@@ -217,3 +217,40 @@ test('at 900x780 "Groups & rooms" and "Joining code" stack, each with the pane, 
   assert.ok(m.qr && m.code, 're-anchor: no QR (role=img) or no "Your church code" label on the joining card');
   assert.ok(m.qr.top + m.qr.h <= m.code.top + 0.5, `the QR sits beside the code text, not above it (QR bottom ${m.qr.top + m.qr.h}, label top ${m.code.top})`);
 });
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+// 3. THE SETTINGS GROUPS START SHUT. Owner, 2026-09-22 screenshot: "Can we have the settings groups minimized
+//    like this on default?" At 6b6e66d a fresh console opened Settings with all four groups open (16 rows).
+//    The mechanics are in scripts/settings-groups-collapse-and-are-remembered.test.mjs; this is the point of use.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+const GROUP_HEADERS = `JSON.stringify([...document.querySelectorAll('nav[aria-label="Settings pages"] button.set-grp')].map(b => ({ g: (b.querySelector('.set-grp-n')||{}).textContent, open: b.getAttribute('aria-expanded') === 'true', count: (b.querySelector('.set-grp-c')||{textContent:''}).textContent })))`;
+const unlock = async () => {
+  await c.goto(gw.base + '/steward.html');
+  await c.waitFor(`[...document.querySelectorAll('input')].some(x => (x.placeholder||'').includes('Your PIN'))`, 'the PIN unlock', 60000);
+  await c.evalIn(`(() => { const i=[...document.querySelectorAll('input')].find(x=>(x.placeholder||'').includes('Your PIN')); const s=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set; s.call(i, ${JSON.stringify(PIN)}); i.dispatchEvent(new Event('input',{bubbles:true})); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); return 'ok'; })()`);
+  await c.waitFor(`!!document.querySelector('nav[aria-label="Console sections"]') && !document.querySelector('[role="dialog"]')`, 'the dashboard after unlock');
+  await sleep(800);
+};
+
+test('a fresh console opens Settings with only the current page\'s group open, the rest shut with counts; a chosen group is remembered across a reload',
+  { skip: !CHROME ? 'no chromium' : false, timeout: 300000 }, async () => {
+  assert.equal(await c.evalIn(`Object.keys(localStorage).filter(k => k.includes('setgroups')).length`), 0, 're-anchor: a groups preference is already stored, so this is not a fresh console');
+  await openSection('Settings');
+  const fresh = JSON.parse(await c.evalIn(GROUP_HEADERS));
+  console.log('    settings groups, fresh: ' + JSON.stringify(fresh));
+  assert.deepEqual(fresh.map(h => h.g), ['Church', 'People', 'Infrastructure', 'Security'], 're-anchor: the four groups');
+  assert.deepEqual(fresh.map(h => h.open), [true, false, false, false], 'THE DEFECT: a fresh console does not open Settings with only Church (the group of the open page) open');
+  assert.deepEqual(fresh.slice(1).map(h => h.count), ['3', '5', '4'], 'the shut groups do not show their counts');
+  // open Security by hand, then one of its pages: Security open, Church (holding nothing, never chosen) shut
+  await c.evalIn(`[...document.querySelectorAll('button.set-grp')].find(b => (b.querySelector('.set-grp-n')||{}).textContent === 'Security').click()`);
+  await sleep(300);
+  await c.evalIn(`[...document.querySelectorAll('button.set-item')].find(b => (b.querySelector('.set-item-n')||{}).textContent === 'Church key').click()`);
+  await sleep(500);
+  const moved = JSON.parse(await c.evalIn(GROUP_HEADERS));
+  assert.deepEqual(moved.map(h => h.open), [false, false, false, true], 'with a Security page open, Security is not the one open group: ' + JSON.stringify(moved));
+  // reload: the remembered Security stays open beside the forced-open Church (Settings reopens on its first page)
+  await unlock();
+  await openSection('Settings');
+  const after = JSON.parse(await c.evalIn(GROUP_HEADERS));
+  assert.deepEqual(after.map(h => h.open), [true, false, false, true], 'after a reload the remembered choice did not win: ' + JSON.stringify(after));
+});
