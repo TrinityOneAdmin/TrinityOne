@@ -43,10 +43,28 @@ export function foldLine(line) {
 }
 
 const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
+// A DATE IS A RANGE AS WELL AS A SHAPE. The pattern above admits `2026-02-31`, `2026-13-01` and `2026-00-10`,
+// and Date.UTC then normalises them into some other month — which is how an anchor of 31 February reached the
+// feed as `DTSTART:20260231T193000`, a string no calendar can read (audit R7), and how a month of 13 became a
+// meeting in January 2027. So the parse is the range check: anything that does not survive the round trip is
+// not a date this module will place on a calendar. (`\d{4}` also means a year like `0026`, which Date.UTC
+// reads as 1926; that fails the round trip too, which is the fail-closed answer.)
+function isoParts(date) {
+  const m = ISO_DATE.exec(String(date == null ? '' : date));
+  if (!m) return null;
+  const y = +m[1], mo = +m[2], d = +m[3];
+  const t = Date.UTC(y, mo - 1, d);
+  const dt = new Date(t);
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) return null;
+  return { y, mo, d, t };
+}
 const HHMM = /^(\d{2}):(\d{2})$/;
 const RECUR = new Set(['weekly', 'fortnightly', 'monthly']);
 const BYDAY = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
 const ID_OK = /^[A-Za-z0-9_-]{1,64}$/;
+// Both occurrence walks step forward until `cur.getUTCDay() === day`. A `day` that no weekday can equal would
+// spin for ever, so neither walk is entered without this. seriesDay() below is what makes it always true.
+const DAY_OK = (day) => Number.isInteger(day) && day >= 0 && day <= 6;
 
 // Read one event down to the fields this file may carry. Returns null for anything that cannot be placed on
 // a calendar at all (no id, no valid date), which the builder then skips rather than emitting a broken VEVENT.
@@ -54,10 +72,10 @@ export function publicEventFields(ev) {
   if (!ev || typeof ev !== 'object') return null;
   const id = String(ev.id || '');
   const date = String(ev.date || '');
-  if (!ID_OK.test(id) || !ISO_DATE.test(date)) return null;
+  if (!ID_OK.test(id) || !isoParts(date)) return null;
   const time = HHMM.test(String(ev.time || '')) ? String(ev.time) : '';
   const recur = RECUR.has(ev.recur) ? ev.recur : '';
-  const day = (recur && Number.isInteger(ev.day) && ev.day >= 0 && ev.day <= 6) ? ev.day : null;
+  const day = (recur && DAY_OK(ev.day)) ? ev.day : null;
   return {
     id, date, time,
     title: String(ev.title || '').slice(0, 200),
@@ -87,11 +105,13 @@ export function publicEventFields(ev) {
 // written twice, and the test holds the two together: the sweep in
 // scripts/the-public-calendar-file-says-what-it-means.test.mjs executes the REAL expandEvents out of
 // app/recur.jsx and asserts the two never disagree, over every anchor of seven years × every weekday.
+//
+// `day` is always a number here — dtstart() resolves it through seriesDay() below before calling.
 function firstOccurrence(date, day, fortnightly) {
-  const [, y, m, d] = ISO_DATE.exec(date);
-  const anchor = Date.UTC(+y, +m - 1, +d);
+  const p = isoParts(date);
+  if (!p || !DAY_OK(day)) return date;
+  const anchor = p.t;
   const cur = new Date(anchor);
-  if (day == null) return date;
   for (let i = 0; i < 7 && cur.getUTCDay() !== day; i++) cur.setUTCDate(cur.getUTCDate() + 1);
   if (fortnightly && Math.round((cur.getTime() - anchor) / (7 * 864e5)) % 2 !== 0) cur.setUTCDate(cur.getUTCDate() + 7);
   return cur.toISOString().slice(0, 10);
@@ -106,20 +126,40 @@ function firstOccurrence(date, day, fortnightly) {
 // the first `day` of the next month — which is exactly what expandEvents walks ("once a month, on the first
 // matching weekday of the month", occurrences before the anchor skipped).
 function firstMonthlyOccurrence(date, day) {
-  const [, y, m, d] = ISO_DATE.exec(date);
-  const anchor = Date.UTC(+y, +m - 1, +d);
-  if (day == null) return date;
+  const p = isoParts(date);
+  if (!p || !DAY_OK(day)) return date;
   for (let ahead = 0; ahead < 2; ahead++) {
-    const cur = new Date(Date.UTC(+y, +m - 1 + ahead, 1));
+    const cur = new Date(Date.UTC(p.y, p.mo - 1 + ahead, 1));
     while (cur.getUTCDay() !== day) cur.setUTCDate(cur.getUTCDate() + 1);
-    if (cur.getTime() >= anchor) return cur.toISOString().slice(0, 10);
+    if (cur.getTime() >= p.t) return cur.toISOString().slice(0, 10);
   }
-  return date;   // unreachable: the first `day` of the next month is always after any date in this one
+  // Now genuinely unreachable, which the comment that stood here claimed while it was not: the first `day` of
+  // the NEXT month is later than any date in this one — but only once the anchor really is a date in this one.
+  // `2026-02-31` was admitted above and Date.UTC turned it into 3 March, so both candidates fell before it and
+  // this line ran, emitting the anchor back as `DTSTART:20260231T193000` (audit R7). isoParts() is what makes
+  // the sentence true; this stays as a fail-safe that returns a real date rather than as a claim.
+  return date;
 }
+// WHAT WEEKDAY A SERIES FALLS ON, read the same way in the DTSTART and in the RRULE. app/recur.jsx's
+// expandEvents falls back to the anchor's own weekday for a series with no usable `day`
+// (`const day = (typeof e.day === 'number') ? e.day : anchor.getDay()`), and rrule() below already did — but
+// firstMonthlyOccurrence was handed the raw `day`, saw null and returned the anchor untouched, so the file
+// carried `BYDAY=1TU` over a DTSTART that was not an instance of it for 281 of 365 anchors (audit R3).
+// publicEventFields nulls `day` for anything that is not an integer 0-6 — a string '2', 2.5, 7, -1 — and
+// src/steward.src.js publishEvent is where that `null` is minted (`typeof ev.day === 'number' ? ev.day :
+// null`), with scripts/seed-church.mjs and /import as the other two ways in. This module is written to
+// distrust its caller; that is the part it was not distrusting.
+const seriesDay = (ev) => {
+  if (typeof ev.day === 'number') return ev.day;
+  const p = isoParts(ev.date);
+  return p ? new Date(p.t).getUTCDay() : 0;
+};
 
 function dtstart(ev) {
-  const date = ev.recur === 'monthly' ? firstMonthlyOccurrence(ev.date, ev.day)
-    : ev.recur ? firstOccurrence(ev.date, ev.day, ev.recur === 'fortnightly') : ev.date;
+  const day = seriesDay(ev);
+  const date = !ev.recur ? ev.date
+    : ev.recur === 'monthly' ? firstMonthlyOccurrence(ev.date, day)
+      : firstOccurrence(ev.date, day, ev.recur === 'fortnightly');
   const d = date.replace(/-/g, '');
   if (!ev.time) return 'DTSTART;VALUE=DATE:' + d;
   return 'DTSTART:' + d + 'T' + ev.time.replace(':', '') + '00';
@@ -134,7 +174,7 @@ export const unfoldIcs = (text) => String(text == null ? '' : text).replace(/\r\
 
 function rrule(ev) {
   if (!ev.recur) return '';
-  const day = ev.day == null ? new Date(ev.date + 'T00:00:00Z').getUTCDay() : ev.day;
+  const day = seriesDay(ev);
   if (ev.recur === 'monthly') return 'RRULE:FREQ=MONTHLY;BYDAY=1' + BYDAY[day];   // first <weekday> of the month, as expandEvents reads it
   return 'RRULE:FREQ=WEEKLY' + (ev.recur === 'fortnightly' ? ';INTERVAL=2' : '') + ';BYDAY=' + BYDAY[day];
 }

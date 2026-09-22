@@ -264,6 +264,40 @@ test('cancelling the EVENT itself takes its copy off the feed at once — the re
   assert.equal(cal.events.some(e => e.UID === `trinityone-${EV_FAIR}@${NPUB}`), false, 'the cancelled event is still in the feed');
 });
 
+test('THE FEED ITSELF: a series with no usable `day`, and an anchor that is not a calendar date', async () => {
+  // AUDIT-feeds-round2 R3 and R7, measured where they actually bite: the relay's own ingest. gateway.mjs runs
+  // publicEventFields() over the RAW pubevent: body, so whatever a console writes is what this route has to
+  // cope with. Three ways a `day` of null is minted — src/steward.src.js publishEvent
+  // (`typeof ev.day === 'number' ? ev.day : null`), scripts/seed-church.mjs, and /import — and THIS is the
+  // one they all funnel through, so it is the one driven here. Neither shipped dialog can produce it
+  // (app/stew-schedule.jsx holds `day` as a number), which is exactly why nothing caught it.
+  const NODAY = 'evtnoday', BADDATE = 'evtbaddate';
+  assert.equal((await publish(pub, copyDoc(grace, NODAY, { title: 'Elders', date: '2026-09-15', time: '19:30', where: '', blurb: '', recur: 'monthly', day: null })))[0], true);
+  // 31 February: ISO-shaped, admitted before this fix, and Date.UTC quietly moved it to 3 March.
+  assert.equal((await publish(pub, copyDoc(grace, BADDATE, { title: 'Ghost', date: '2026-02-31', time: '19:30', where: '', blurb: '', recur: 'monthly', day: 0 })))[0], true);
+  await sleep(250);
+  const cal = parseIcs(await (await get(`/public/${NPUB}/calendar.ics`)).text());
+  const ev = cal.events.find(e => e.UID === `trinityone-${NODAY}@${NPUB}`);
+  assert.ok(ev, 'the no-`day` series never reached the feed at all — re-anchor');
+  assert.equal(ev.RRULE, 'FREQ=MONTHLY;BYDAY=1TU', 'the rule is not what the anchor\'s own weekday says');
+  assert.equal(ev.DTSTART, '20261006T193000',
+    'A MONTHLY MEETING WITH NO `day` STARTS ON A DATE THAT IS NOT AN INSTANCE OF ITS OWN RULE — every subscriber sees a phantom meeting the app never shows (got ' + ev.DTSTART + ')');
+  assert.equal(cal.events.some(e => e.UID === `trinityone-${BADDATE}@${NPUB}`), false,
+    'AN EVENT ANCHORED ON 31 FEBRUARY IS ON THE CHURCH\'S WEBSITE — it was admitted and normalised into another month');
+  assert.equal((await get(`/public/${NPUB}/e/${BADDATE}.ics`)).status, 404, 'the impossible date is served at its own address');
+  // …and every DTSTART the feed serves is a date a calendar can read.
+  for (const e of cal.events) {
+    const c = e.DTSTART.slice(0, 8), y = +c.slice(0, 4), m = +c.slice(4, 6), d = +c.slice(6, 8);
+    const dt = new Date(Date.UTC(y, m - 1, d));
+    assert.ok(dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d,
+      'DTSTART:' + e.DTSTART + ' IS NOT A CALENDAR DATE');
+  }
+  // leave the feed as the rows after this one expect to find it
+  assert.equal((await publish(pub, tomb(grace, PUBEVENT_D + NODAY)))[0], true);
+  assert.equal((await publish(pub, tomb(grace, PUBEVENT_D + BADDATE)))[0], true);
+  await sleep(200);
+});
+
 test('a co-tenant church\'s copies never appear on Grace\'s feed, and Grace\'s never on theirs', async () => {
   const a = await (await get(`/public/${NPUB}/calendar.ics`)).text();
   assert.equal(a.includes('bazaar'), false, 'St Mark\'s event is on Grace\'s feed');

@@ -154,6 +154,58 @@ for (const recur of ['weekly', 'fortnightly', 'monthly']) {
   });
 }
 
+test('R3: a series whose `day` is not an integer 0-6 still starts on an instance of its own rule', () => {
+  // publicEventFields NULLS `day` for anything that is not an integer 0-6, and src/steward.src.js publishEvent
+  // is where that null is minted. rrule() always fell back to the anchor's own weekday; the DTSTART did not,
+  // so BYDAY named one night and DTSTART another for 281 of 365 monthly anchors. Neither shipped dialog can
+  // produce it (both hold `day` as a number) — which is why the file was green over it. The sweep above runs
+  // only integers, so the null class is asserted HERE, for all three recurrences.
+  for (const day of [undefined, null, '2', 2.5, 7, -1, NaN, {}]) {
+    for (const recur of ['weekly', 'fortnightly', 'monthly']) {
+      const ev = { id: 'elders', title: 'Elders', date: '2026-09-15', time: '19:30', recur, day };
+      assert.equal(publicEventFields(ev).day, null, 're-anchor: publicEventFields now admits ' + JSON.stringify(day));
+      const text = buildCalendar([ev], { uidScope: 'x' });
+      const compact = prop(text, 'DTSTART')[0].slice(0, 8);
+      // 2026-09-15 is a Tuesday, so the fallback weekday is Tuesday for every one of these.
+      assert.equal(prop(text, 'RRULE')[0].endsWith('TU'), true, 'the rule stopped falling back to the anchor\'s weekday');
+      assert.equal(BYDAY[dayOf(compact)], 'TU', `day=${JSON.stringify(day)} ${recur}: DTSTART ${compact} is not on the weekday its own BYDAY names`);
+      if (recur === 'monthly') assert.equal(compact, firstSuchWeekdayOfMonth(compact),
+        `day=${JSON.stringify(day)}: DTSTART ${compact} IS NOT AN INSTANCE OF FREQ=MONTHLY;BYDAY=1TU — the website shows a meeting the app never does`);
+      assert.ok(utc(compact.slice(0, 4) + '-' + compact.slice(4, 6) + '-' + compact.slice(6, 8)) >= utc('2026-09-15'), 'DTSTART is before the anchor');
+    }
+  }
+  // CONTROL: a real `day` is still honoured and is NOT the anchor's weekday here (2026-09-15 is a Tuesday).
+  const ctl = buildCalendar([{ id: 'e', title: 'E', date: '2026-09-15', time: '19:30', recur: 'monthly', day: 5 }], { uidScope: 'x' });
+  assert.equal(prop(ctl, 'RRULE')[0], 'FREQ=MONTHLY;BYDAY=1FR');
+  assert.equal(prop(ctl, 'DTSTART')[0], '20261002T193000');
+});
+
+test('R7: an ISO-shaped date that is not a calendar date is dropped, not normalised into another month', () => {
+  // `2026-02-31` matched ISO_DATE and Date.UTC turned it into 3 March. For a Sunday or Monday series both
+  // candidates then fell before it and the "// unreachable" fallback fired, emitting DTSTART:20260231T193000
+  // — a string no calendar can read, and a REGRESSION on the pre-F5 builder, which emitted a real date.
+  for (const date of ['2026-02-31', '2026-02-30', '2026-02-29', '2026-04-31', '2026-06-31', '2026-13-01', '2026-00-10', '2026-01-32', '2026-01-00', '0026-01-01']) {
+    assert.equal(publicEventFields({ id: 'e', date }), null, date + ' is still admitted as a date');
+    for (let day = 0; day <= 6; day++) {
+      const text = buildCalendar([{ id: 'e', title: 'E', date, time: '19:30', recur: 'monthly', day }], { uidScope: 'x' });
+      assert.deepEqual(prop(text, 'DTSTART'), [], `anchor ${date} day ${day} still reaches the feed as ${prop(text, 'DTSTART')[0]}`);
+    }
+  }
+  // CONTROL: the leap day that DOES exist is admitted, and so is the last day of a 31-day month.
+  assert.ok(publicEventFields({ id: 'e', date: '2024-02-29' }), '29 February 2024 was dropped — the range check is too tight');
+  assert.ok(publicEventFields({ id: 'e', date: '2026-01-31' }), '31 January was dropped');
+  // …and the "unreachable" fallback is now genuinely unreachable: over every valid anchor of 2026 × every
+  // weekday, no monthly DTSTART is the anchor unless the anchor really is the first such weekday of its month.
+  let fired = 0;
+  for (const date of anchors.filter(d => d.startsWith('2026-'))) {
+    for (let day = 0; day <= 6; day++) {
+      const c = prop(buildCalendar([{ id: 'e', title: 'E', date, time: '19:30', recur: 'monthly', day }], { uidScope: 'x' }), 'DTSTART')[0].slice(0, 8);
+      if (c === date.replace(/-/g, '') && c !== firstSuchWeekdayOfMonth(c)) fired++;
+    }
+  }
+  assert.equal(fired, 0, 'the fallback that calls itself unreachable fired ' + fired + ' times');
+});
+
 test('F6: a 64-hex pubkey inside a long blurb is INVISIBLE to a raw scan and caught by the unfolded one', () => {
   const key = 'd'.repeat(64);
   const blurb = 'Ring the office before Thursday if you need a lift to this one, or message us at ' + key + ' for details.';
