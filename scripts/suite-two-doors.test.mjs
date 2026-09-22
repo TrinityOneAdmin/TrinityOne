@@ -24,9 +24,16 @@ const SHIP  = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'ut
 const MAIN  = readFileSync(new URL('../relay-app/desktop/src-tauri/src/main.rs', import.meta.url), 'utf8');
 
 test('the launcher offers two doors, and neither re-points the data', () => {
-  const doors = [...HOME.matchAll(/href="(\/[^"]+)"/g)].map(m => m[1]).filter(h => /steward\.html|control\.html/.test(h));
+  const doors = [...HOME.matchAll(/<a class="mode" href="(\/[^"]+)"/g)].map(m => m[1]);
   assert.deepEqual(doors.sort(), ['/relay-app/control.html', '/steward.html'],
-    'the launcher still offers a third door, or still passes a mode in the address');
+    'the launcher still offers a third door, or a door passes a mode in the address');
+  // Since 2026-09-22 a FIRST run shows one card in place of the doors (scripts/the-suite-first-run-is-one-guided-
+  // path.test.mjs drives it). Its three links open the same two pages; `?setup=` names which wizard comes next
+  // and nothing about where the church's records live — the mode this file exists to keep out of the address.
+  const all = [...HOME.matchAll(/href="(\/[^"]+)"/g)].map(m => m[1]).filter(h => /steward\.html|control\.html/.test(h));
+  assert.deepEqual([...new Set(all.map(h => h.replace(/\?.*$/, '')))].sort(), ['/relay-app/control.html', '/steward.html'],
+    'a link on the launcher opens a page that is neither the console nor the panel');
+  for (const h of all) assert.doesNotMatch(h, /host=|relayapp|mode=/, 'a launcher link passes a data-location mode in the address: ' + h);
 });
 
 // THE DOORS EXISTED; NOTHING MADE THE APP WALK THROUGH THEM. The test above pins home.html's two doors, and

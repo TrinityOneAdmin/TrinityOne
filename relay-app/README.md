@@ -2,9 +2,12 @@
 
 The box that carries your church's messages, run on your own computer. Two ways to run it:
 
-- **Easiest — the TrinityOne Suite** (macOS / Windows / Linux desktop app): double-click to install, pick
-  *Run your church* (the console) or *Manage a relay* (the relay panel), click **Go public** for a free no-account Cloudflare tunnel, and claim a
-  memorable **name** members connect by. Get it from the app's Downloads page — nothing to type.
+- **Easiest — the TrinityOne Suite** (macOS / Windows / Linux desktop app): double-click to install. The first
+  run asks once — **Set up everything** (the relay, then your church on it), *Just a relay* or *Just the
+  console* — and ends back on the launcher, which from then on shows its two doors: *Run your church* (the
+  console) and *Manage a relay* (the relay panel). In the panel, click **Go public** for a free no-account
+  Cloudflare tunnel, and claim a memorable **name** members connect by. Get it from the app's Downloads page —
+  nothing to type.
 - **Always-on server** (Raspberry Pi / mini-PC / old laptop / VPS): the one-line installer below runs it
   as a hardened systemd service.
 

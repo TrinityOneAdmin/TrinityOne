@@ -1,0 +1,371 @@
+// THE SUITE'S FIRST RUN IS ONE GUIDED PATH THROUGH THE TWO WIZARDS, AND IT ENDS ON THE LAUNCHER.
+// Run: node --test scripts/the-suite-first-run-is-one-guided-path.test.mjs
+//
+// Owner, 2026-09-22, after his own first run of the real AppImage: a first-time person still could not tell
+// which door to take. Measured at 6b6e66d (headless Chromium, empty-data gateway, fresh profile): the launcher
+// showed "What should this computer do for your church?" and the two doors — nothing that told a first-time
+// person which to take. The decision (PLAN-suite-fixes §B4, verbatim): NOT a third wizard. While nothing has
+// been set up the launcher shows ONE card — "Set up everything" (recommended) / "Just a relay" / "Just the
+// console" — and the two wizards that exist are joined by a thread: the relay wizard's done step points at the
+// console on the "everything" path, the console wizard's done step has "Back to the Suite" on the Suite, and
+// every path ends on the LAUNCHER, which by then shows its two doors and never the card again.
+//
+// "SET UP" is read from what exists, not only from a marker: /status.writePolicy (a church on this box) and
+// /relay-names/mine.handle (a relay name) beat a missing marker — a fresh webview profile against a box that
+// already has a church gets the doors. The markers are the two the wizards already write on finish or skip
+// (`to_relay_setup_seen`, `trinityone.steward.wizard.done`); this branch adds no new one.
+//
+// POINT OF USE (CLAUDE.md rule 1) and rule 3: every browser row reads the DOM of the shipped pages — the
+// launcher, the panel and the console, served by a real gateway with an EMPTY data dir — and clicks what a
+// person clicks. The one harness row RUNS the real StewSetupWizard under the miniature React and reads its
+// tree; nothing matches text in app/*.jsx or relay-app/*.js. NOTHING REACHES PRODUCTION: the shipped hosts
+// resolve to a dead port in the browser and are refused inside every gateway; this dev box's real Tailscale
+// is kept out with TRINITY_TAILSCALE_BIN. Skips itself without chromium.
+//
+// NOT DRIVEN HERE, deliberately: claiming a relay NAME in the wizard — the gateway refuses a claim until the
+// relay is public ("your relay isn't reachable from the internet yet"), so on a fresh loopback box the name
+// step can only be skipped; the "named relay" signal is seeded on disk (relay-myname.json) instead, which is
+// the file the gateway reads at boot.
+import { test, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { existsSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { WebSocket } from 'ws';
+import { freePort } from './relay-network-harness.mjs';
+import { loadScreen, miniReact, find, texts } from './render-jsx-screen.mjs';
+
+const ROOT = fileURLToPath(new URL('..', import.meta.url));
+const CHROME = ['/usr/bin/chromium-browser', '/usr/bin/chromium', '/usr/bin/google-chrome'].find(p => existsSync(p));
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+const HOME = '/relay-app/home.html';
+
+const BLACKHOLE = `const real = globalThis.fetch;
+globalThis.fetch = function (input, init) {
+  const u = String(input && input.url ? input.url : input);
+  if (/trinityone\\.church|\\.ts\\.net|trycloudflare/i.test(u)) return Promise.reject(new Error('blackholed by test: ' + u));
+  return real.call(this, input, init);
+};\n`;
+
+const live = new Set();
+after(() => { for (const s of live) s.stop(); });
+
+// A fresh Suite install: an EMPTY data dir (or one seeded with exactly the file named), loopback, no origin.
+async function startGateway({ seed = {} } = {}) {
+  const port = await freePort('the guided-path test\'s gateway');
+  const dataDir = mkdtempSync(join(tmpdir(), 'trin-guided-'));
+  const preload = join(dataDir, 'blackhole.mjs');
+  writeFileSync(preload, BLACKHOLE);
+  for (const [name, body] of Object.entries(seed)) writeFileSync(join(dataDir, name), body);
+  const log = [];
+  const proc = spawn(process.execPath, [join(ROOT, 'scripts/gateway.mjs'), String(port)], {
+    cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, TRINITY_DATA_DIR: dataDir, RELAY_SYNC: '0', RELAY_HOST: '127.0.0.1', RELAY_NO_OPEN: '1',
+      RELAY_DIRECTORY: 'http://127.0.0.1:9', TRINITY_TAILSCALE_BIN: '/nonexistent/tailscale', NODE_OPTIONS: '--import ' + preload },
+  });
+  proc.stdout.on('data', d => log.push(String(d))); proc.stderr.on('data', d => log.push(String(d)));
+  const base = `http://127.0.0.1:${port}`;
+  let up = false;
+  for (let i = 0; i < 200 && !up; i++) { try { up = (await fetch(base + '/status')).ok; } catch {} if (!up) await sleep(150); }
+  assert.ok(up, 'the gateway never served /status\n' + log.join(''));
+  const g = { port, base, dataDir, proc, log, stop() { live.delete(g); try { proc.kill('SIGKILL'); } catch {} try { rmSync(dataDir, { recursive: true, force: true }); } catch {} } };
+  live.add(g);
+  return g;
+}
+
+async function startChrome(url) {
+  const cdp = await freePort('the guided-path test\'s Chrome debug port');
+  const prof = mkdtempSync(join(tmpdir(), 'trin-guided-chrome-'));
+  const BLOCK_PROD = '--host-resolver-rules=MAP app.trinityone.church 127.0.0.1:9, MAP *.ts.net 127.0.0.1:9, MAP trinityone.church 127.0.0.1:9';
+  const chr = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${cdp}`, '--no-sandbox', '--disable-gpu', BLOCK_PROD,
+    `--user-data-dir=${prof}`, '--window-size=900,780', url], { stdio: 'ignore' });   // the Suite's own window size (tauri.conf.json)
+  let targets = null;
+  for (let i = 0; i < 40 && !targets; i++) { await sleep(400); try { targets = await (await fetch(`http://127.0.0.1:${cdp}/json`)).json(); } catch {} }
+  assert.ok(targets && targets.length, 'chromium never exposed a debug target');
+  const page = targets.find(t => t.type === 'page') || targets[0];
+  const ws = new WebSocket(page.webSocketDebuggerUrl, { perMessageDeflate: false, maxPayload: 5e8 });
+  await new Promise((res, rej) => { ws.on('open', res); ws.on('error', rej); });
+  let id = 0; const pend = new Map();
+  ws.on('message', (d) => { const m = JSON.parse(d); if (m.id && pend.has(m.id)) { pend.get(m.id)(m); pend.delete(m.id); } });
+  const send = (method, params = {}) => new Promise(r => { const i = ++id; pend.set(i, r); ws.send(JSON.stringify({ id: i, method, params })); });
+  await send('Runtime.enable'); await send('Page.enable');
+  const evalIn = async (expression) => {
+    const rr = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
+    if (rr && rr.result && rr.result.exceptionDetails) {
+      const e = rr.result.exceptionDetails;
+      throw new Error('the page threw: ' + String((e.exception && e.exception.description) || e.text || 'threw').split('\n')[0]);
+    }
+    return rr && rr.result && rr.result.result ? rr.result.result.value : undefined;
+  };
+  const goto = async (u) => { await send('Page.navigate', { url: u }); };
+  const c = { evalIn, goto, send, stop() { live.delete(c); try { ws.close(); } catch {} try { chr.kill('SIGKILL'); } catch {} try { rmSync(prof, { recursive: true, force: true }); } catch {} } };
+  live.add(c);
+  return c;
+}
+
+// ── reading the pages ────────────────────────────────────────────────────────────────────────────────────
+// ON SCREEN, not merely in the DOM: rendered with a size, no ancestor display:none, not visibility:hidden.
+const ON = `(e) => { if (!e) return false; const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0 && getComputedStyle(e).visibility !== 'hidden'; }`;
+const clickId = (c, id) => c.evalIn(`(() => { const b = document.getElementById('${id}'); if (!b) return 'missing'; b.click(); return 'ok'; })()`);
+const clickButton = (c, re) => c.evalIn(`(() => { const b = [...document.querySelectorAll('button')].find(x => ${re}.test((x.textContent || '').replace(/\\s+/g, ' ').trim())); if (!b) return 'missing'; b.click(); return 'ok'; })()`);
+const typeInto = (c, pick, val) => c.evalIn(`(() => { const i = ${pick}; if (!i) return 'missing';
+  const set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  set.call(i, ${JSON.stringify(val)}); i.dispatchEvent(new Event('input', { bubbles: true })); return 'ok'; })()`);
+const byPlaceholder = (ph) => `[...document.querySelectorAll('input')].find(x => (x.placeholder || '').includes(${JSON.stringify(ph)}))`;
+const waitFor = async (c, expr, what, ms = 60000) => {
+  const t0 = Date.now(); let v;
+  while (Date.now() - t0 < ms) { try { v = await c.evalIn(expr); } catch { v = undefined; } if (v) return v; await sleep(300); }
+  assert.fail('timed out waiting for ' + what + ' (last read: ' + JSON.stringify(v) + ')');
+};
+const bodyText = (c) => c.evalIn('document.body.innerText').then(String);
+
+// What the launcher shows: which of the card and the doors is on screen, and the card's three choices.
+const readLauncher = (c) => c.evalIn(`(() => { const on = ${ON};
+  const a = (id) => { const e = document.getElementById(id); return e ? { href: e.getAttribute('href'), text: (e.textContent || '').replace(/\\s+/g, ' ').trim(), on: on(e) } : null; };
+  return JSON.stringify({ decided: document.body.getAttribute('data-first-run'), card: on(document.getElementById('firstRun')),
+    doors: [...document.querySelectorAll('a.mode')].map(on), all: a('setupAll'), relay: a('setupRelay'), console: a('setupConsole') }); })()`).then(JSON.parse);
+const launcherSettled = (c) => waitFor(c, `document.body.getAttribute('data-first-run')`, 'the launcher to decide card-or-doors', 10000);
+
+// The relay wizard's done step, as a person reads it: the sentence, and every footer control in order.
+const readRswDone = (c) => c.evalIn(`(() => { const on = ${ON}; const card = document.getElementById('rswCard'); if (!card) return 'null';
+  const foot = card.querySelector('.rsw-foot');
+  const ctl = (e) => ({ id: e.id, tag: e.tagName.toLowerCase(), text: (e.textContent || '').replace(/\\s+/g, ' ').trim(), href: e.getAttribute('href'), primary: e.classList.contains('btn-clay'), on: on(e) });
+  return JSON.stringify({ heading: (card.querySelector('.rsw-h') || {}).textContent || '', sub: (card.querySelector('.rsw-sub') || {}).textContent || '',
+    foot: foot ? [...foot.querySelectorAll('a,button')].map(ctl) : [], steps: [...card.querySelectorAll('.rsw-step')].map(e => e.id) }); })()`).then(JSON.parse);
+
+// Walk the relay wizard the way a person on a fresh, not-yet-public box can: Get started → (a name cannot be
+// claimed before going public, so) Skip for now → Continue past the church card → Yes, it stays on → done.
+async function walkRelayWizard(c) {
+  await waitFor(c, `document.getElementById('relaySetup') && document.getElementById('relaySetup').classList.contains('show')`, 'the relay wizard to open', 20000);
+  assert.equal(await clickId(c, 'rswGo'), 'ok', 'no "Get started"');
+  assert.equal(await clickId(c, 'rswSkip'), 'ok', 'no "Skip for now" on the name step');
+  assert.match(String(await c.evalIn(`document.getElementById('rswCard').innerText`)), /console/i, 'staging: the church step is not up');
+  assert.equal(await clickId(c, 'rswSkip'), 'ok', 'no "Continue" on the church step');
+  assert.equal(await clickId(c, 'rswOnYes'), 'ok', 'no "Yes, it stays on"');
+  const done = await readRswDone(c);
+  assert.equal(done.heading.trim(), 'Your relay is ready', 'staging: the done step is not up — ' + JSON.stringify(done));
+  return done;
+}
+
+// Walk the console's own wizard from its setup screen to "You're all set": Start a new church → PIN → name →
+// the twelve words (written down, three of them typed back from the words the page itself holds) → the PIN
+// step skips itself (already locked) → groups → meetings → team → done. Everything after the words is taken
+// with its own primary button, whatever it offers; a step that cannot save is left by the escape it shows.
+async function walkConsoleWizard(c, churchName) {
+  await waitFor(c, `[...document.querySelectorAll('button')].some(x => /Start a new church/i.test((x.textContent || '').trim()))`, 'the console\'s setup screen', 90000);
+  assert.equal(await clickButton(c, '/Start a new church/i'), 'ok');
+  await waitFor(c, `[...document.querySelectorAll('input')].some(x => (x.placeholder || '').includes('At least 8'))`, 'the PIN gate');
+  assert.equal(await typeInto(c, byPlaceholder('At least 8'), 'cedar-harbour-lamp-42'), 'ok');
+  assert.equal(await typeInto(c, byPlaceholder('Type it again'), 'cedar-harbour-lamp-42'), 'ok');
+  assert.equal(await clickButton(c, '/Set PIN/i'), 'ok');
+  await waitFor(c, `!!document.querySelector('input[aria-label="Church name"]')`, 'the wizard\'s name step', 90000);
+  await sleep(1200);
+  assert.equal(await typeInto(c, `document.querySelector('input[aria-label="Church name"]')`, churchName), 'ok');
+  await sleep(200);
+  assert.equal(await clickButton(c, '/^Continue$/'), 'ok', 'no Continue on the name step');
+  await waitFor(c, `!![...document.querySelectorAll('div')].find(d => d.children.length === 0 && /recovery key/.test(d.textContent || ''))`, 'the recovery-key step', 90000);
+  // the words, from the page's own key — the quiz then wants three of them back
+  const phrase = String(await c.evalIn(`window.Steward.exportMnemonic() || ''`));
+  const words = phrase.trim().split(/\s+/);
+  assert.equal(words.length, 12, 'the church has no 12-word phrase to write down');
+  assert.equal(await c.evalIn(`(() => { const cb = [...document.querySelectorAll('input[type="checkbox"]')].find(x => /written these 12 words/.test((x.closest('label') || {}).textContent || '')); if (!cb) return 'missing'; cb.click(); return 'ok'; })()`), 'ok', 'no "I’ve written these 12 words" box');
+  await waitFor(c, `document.querySelectorAll('input[aria-label^="Word "]').length === 3`, 'the three quiz boxes');
+  const asked = JSON.parse(await c.evalIn(`JSON.stringify([...document.querySelectorAll('input[aria-label^="Word "]')].map(i => i.getAttribute('aria-label')))`));
+  for (const label of asked) {
+    const n = Number((label.match(/Word (\d+)/) || [])[1]);
+    assert.ok(n >= 1 && n <= 12, 'a quiz box asks for ' + label);
+    assert.equal(await typeInto(c, `document.querySelector('input[aria-label=${JSON.stringify(label)}]')`, words[n - 1]), 'ok');
+  }
+  await waitFor(c, `!![...document.querySelectorAll('button')].find(x => /^Continue$/.test((x.textContent || '').trim()) && !x.disabled)`, 'Continue to unlock after the quiz');
+  assert.equal(await clickButton(c, '/^Continue$/'), 'ok');
+  // groups → meetings → team → done, each by its own primary; an escape if a save fails
+  const TITLE = `(() => { const t = [...document.querySelectorAll('div')].find(d => d.children.length === 0 && /^(Create a few spaces|Your regular meetings|Serving rota|You’re all set 🎉)$/.test((d.textContent || '').trim())); return t ? t.textContent.trim() : ''; })()`;
+  let last = '';
+  for (let i = 0; i < 40; i++) {
+    const now = String(await waitFor(c, TITLE, 'a wizard step after the words (last seen: ' + last + ')', 60000));
+    if (/all set/.test(now)) return;
+    // the meetings step's escape after a failed save (measured: the pre-filled rows cannot be saved on a fresh
+    // loopback box and the step says so after ~8 s) — take it whenever it is offered
+    if (await clickButton(c, '/Skip for now and finish setup/') === 'ok') { last = ''; await sleep(1500); continue; }
+    if (now === last) { await sleep(1500); continue; }   // still saving — the button is disabled while busy
+    last = now;
+    if (/Create a few spaces/.test(now)) assert.equal(await clickButton(c, '/& continue|^Skip for now/'), 'ok', 'no primary on the groups step');
+    else if (/regular meetings/.test(now)) assert.equal(await clickButton(c, '/& continue|^Skip for now/'), 'ok', 'no primary on the meetings step');
+    else if (/Serving rota/.test(now)) assert.equal(await clickButton(c, '/do this later|Create team/'), 'ok', 'no primary on the team step');
+    await sleep(1500);
+  }
+  assert.fail('the console wizard never reached "You’re all set" (last step seen: ' + last + ')');
+}
+
+// ── 1. the first launch ───────────────────────────────────────────────────────────────────────────────────
+test('a first launch shows ONE card with three choices — not the two doors — and the words name all three',
+  { skip: !CHROME ? 'no chromium' : false, timeout: 60000 }, async () => {
+  const gw = await startGateway();
+  const c = await startChrome(gw.base + HOME);
+  try {
+    assert.equal(await launcherSettled(c), 'card', 'A FIRST-TIME PERSON GETS THE TWO DOORS AND NOTHING SAYS WHICH TO TAKE (measured at 6b6e66d). The launcher decided "' + (await c.evalIn(`document.body.getAttribute('data-first-run')`)) + '".');
+    const L = await readLauncher(c);
+    assert.equal(L.card, true, 'the first-run card is not on screen: ' + JSON.stringify(L));
+    assert.deepEqual(L.doors, [false, false], 'a door is on screen beside the card: ' + JSON.stringify(L));
+    assert.deepEqual([L.all.on, L.relay.on, L.console.on], [true, true, true], 'a choice is not on screen: ' + JSON.stringify(L));
+    assert.equal(L.all.href, '/relay-app/control.html?setup=everything', '"Set up everything" does not open the relay wizard on the everything path');
+    assert.equal(L.relay.href, '/relay-app/control.html?setup=relay', '"Just a relay" does not open the relay wizard on the relay path');
+    assert.equal(L.console.href, '/steward.html', '"Just the console" does not open the console');
+    assert.match(L.all.text, /^Set up everything Recommended /, 'the recommended choice is not marked so: ' + L.all.text);
+    assert.match(L.relay.text, /^Just a relay /); assert.match(L.console.text, /^Just the console /);
+    const text = await bodyText(c);
+    for (const s of ['First time here? Set this computer up.', 'Set up everything', 'Just a relay', 'Just the console']) assert.ok(text.includes(s), 'the page does not say "' + s + '":\n' + text);
+    assert.doesNotMatch(text, /What should this computer do/, 'the doors\' question is on screen under the card');
+    // the honest signals, as the box reports them right now: no church, no name
+    assert.equal((await (await fetch(gw.base + '/status')).json()).writePolicy, false, 're-anchor: the fresh box claims a church');
+  } finally { c.stop(); gw.stop(); }
+});
+
+// ── 2. "Set up everything" ────────────────────────────────────────────────────────────────────────────────
+test('"Set up everything": the relay wizard → "Next: open the console" → the console wizard → "Back to the Suite" → the launcher with two doors; a second launch, and a fresh profile, get the doors',
+  { skip: !CHROME ? 'no chromium' : false, timeout: 240000 }, async () => {
+  const gw = await startGateway();
+  const c = await startChrome(gw.base + HOME);
+  let c2 = null;
+  try {
+    assert.equal(await launcherSettled(c), 'card');
+    assert.equal(await clickId(c, 'setupAll'), 'ok');
+    await waitFor(c, `/control\\.html\\?setup=everything$/.test(location.href)`, 'the relay panel on the everything path', 15000);
+    const done = await walkRelayWizard(c);
+    // the done step names the church as the NEXT step and makes the console the primary
+    assert.match(done.sub, /^Next: your church\. It is created in the console, not here — naming it there registers it on this relay\.$/, 'the done step does not say the church is next: ' + JSON.stringify(done));
+    const ids = done.foot.map(f => f.id);
+    assert.deepEqual(ids, ['rswSuite', 'rswConsole'], 'the footer holds ' + JSON.stringify(done.foot) + ' — expected "Back to the Suite" then the console as the primary');
+    const next = done.foot.find(f => f.id === 'rswConsole'), back = done.foot.find(f => f.id === 'rswSuite');
+    assert.deepEqual([next.tag, next.text, next.href, next.primary, next.on], ['a', 'Next: open the console', '/steward.html', true, true], 'the console step is not the primary link: ' + JSON.stringify(next));
+    assert.deepEqual([back.tag, back.text, back.href, back.primary, back.on], ['a', 'Back to the Suite', HOME, false, true], 'skipping the church has no way back to the Suite: ' + JSON.stringify(back));
+    assert.deepEqual(done.steps, ['rswTunnel'], 'the step list repeats the console the footer already carries: ' + JSON.stringify(done.steps));
+    // follow the thread
+    assert.equal(await clickId(c, 'rswConsole'), 'ok');
+    await waitFor(c, `/\\/steward\\.html$/.test(location.href)`, 'the console', 15000);
+    await walkConsoleWizard(c, 'St Columba on the Suite');
+    // the console's done step carries the way back — and it is the Suite, so it is offered
+    const back2 = await c.evalIn(`(() => { const on = ${ON}; const b = [...document.querySelectorAll('button')].find(x => /Back to the Suite/.test(x.textContent || '')); return b ? JSON.stringify({ on: on(b), text: (b.textContent || '').replace(/\\s+/g, ' ').trim() }) : 'null'; })()`);
+    assert.notEqual(back2, 'null', 'THE CONSOLE\'S "You’re all set" STEP HAS NO "Back to the Suite" — the guided path ends in the console, not on the launcher');
+    assert.deepEqual(JSON.parse(back2), { on: true, text: 'Back to the Suite' });
+    assert.equal(await clickButton(c, '/Back to the Suite/'), 'ok');
+    await waitFor(c, `/\\/relay-app\\/home\\.html$/.test(location.href)`, 'the launcher', 15000);
+    assert.equal(await launcherSettled(c), 'doors', 'THE PATH ENDED ON THE LAUNCHER BUT IT SHOWS THE FIRST-RUN CARD AGAIN — the relay and the church are set up');
+    let L = await readLauncher(c);
+    assert.deepEqual([L.card, L.doors], [false, [true, true]], 'expected two doors and no card: ' + JSON.stringify(L));
+    assert.equal(await c.evalIn(`localStorage.getItem('trinityone.steward.wizard.done')`), '1', 'the console wizard was not marked done on the way out');
+    assert.equal(await c.evalIn(`localStorage.getItem('to_relay_setup_seen')`), '1', 'the relay wizard was not marked seen on the way out');
+    // a second launch, same profile: the doors, no card
+    await c.goto(gw.base + HOME);
+    assert.equal(await launcherSettled(c), 'doors', 'a second launch shows the card again');
+    // and a FRESH profile against this box, which now holds a church: the doors — the signal beats the marker
+    assert.equal((await (await fetch(gw.base + '/status')).json()).writePolicy, true, 're-anchor: the box does not report the church it registered');
+    c2 = await startChrome(gw.base + HOME);
+    assert.equal(await launcherSettled(c2), 'doors', 'A FRESH PROFILE AGAINST A BOX THAT HOLDS A CHURCH GETS THE FIRST-RUN CARD — the launcher trusts its marker over the box');
+    L = await readLauncher(c2);
+    assert.deepEqual([L.card, L.doors], [false, [true, true]], JSON.stringify(L));
+  } finally { if (c2) c2.stop(); c.stop(); gw.stop(); }
+});
+
+// ── 3. "Just a relay" ─────────────────────────────────────────────────────────────────────────────────────
+test('"Just a relay": the relay wizard → "Back to the Suite" (the primary) → the launcher with two doors; a skip lands there too; a named relay gets the doors from a fresh profile',
+  { skip: !CHROME ? 'no chromium' : false, timeout: 120000 }, async () => {
+  const gw = await startGateway();
+  let c = await startChrome(gw.base + HOME);
+  let named = null, c3 = null;
+  try {
+    // (a) skipping the wizard on the guided path still ends on the launcher — with the doors, since it was skipped
+    assert.equal(await launcherSettled(c), 'card');
+    assert.equal(await clickId(c, 'setupRelay'), 'ok');
+    await waitFor(c, `/control\\.html\\?setup=relay$/.test(location.href)`, 'the relay panel on the relay path', 15000);
+    await waitFor(c, `document.getElementById('relaySetup') && document.getElementById('relaySetup').classList.contains('show')`, 'the relay wizard to open', 20000);
+    assert.equal(await clickId(c, 'rswSkip'), 'ok', 'no "Skip setup"');
+    await waitFor(c, `/\\/relay-app\\/home\\.html$/.test(location.href)`, 'the launcher after a skip', 15000);
+    assert.equal(await launcherSettled(c), 'doors', 'a skipped relay wizard left the launcher on the first-run card');
+    c.stop();
+    // (b) the whole wizard, from a profile that has not seen it
+    c = await startChrome(gw.base + HOME);
+    assert.equal(await launcherSettled(c), 'card', 'staging: a fresh profile on a box with nothing set up did not get the card');
+    assert.equal(await clickId(c, 'setupRelay'), 'ok');
+    await waitFor(c, `/control\\.html\\?setup=relay$/.test(location.href)`, 'the relay panel on the relay path', 15000);
+    const done = await walkRelayWizard(c);
+    assert.deepEqual(done.foot.map(f => f.id), ['rswDone', 'rswSuite'], 'the footer holds ' + JSON.stringify(done.foot) + ' — expected the dashboard, then "Back to the Suite" as the primary');
+    const back = done.foot.find(f => f.id === 'rswSuite');
+    assert.deepEqual([back.tag, back.text, back.href, back.primary, back.on], ['a', 'Back to the Suite', HOME, true, true], JSON.stringify(back));
+    assert.equal(done.foot.find(f => f.id === 'rswDone').primary, false, '"Go to dashboard" is still the primary on the relay-only path');
+    assert.doesNotMatch(done.sub, /^Next: your church|^Now set up your church/, 'the relay-only path is told the church is next — nobody who only hosts a relay is marched into the church ceremony: ' + done.sub);
+    assert.equal(done.sub.trim(), 'A church run from another device is added by its ID under Settings → Churches; one created in the console here registers itself.', 'the relay-only done step does not say how a church run elsewhere gets on: ' + done.sub);
+    assert.equal(await clickId(c, 'rswSuite'), 'ok');
+    await waitFor(c, `/\\/relay-app\\/home\\.html$/.test(location.href)`, 'the launcher', 15000);
+    assert.equal(await launcherSettled(c), 'doors', 'the relay-only path ended on the launcher with the first-run card');
+    assert.deepEqual((await readLauncher(c)).doors, [true, true]);
+    // (c) a box whose relay HAS a name (the file the gateway reads at boot), fresh profile: the doors
+    named = await startGateway({ seed: { 'relay-myname.json': JSON.stringify({ handle: 'grace-city' }) + '\n' } });
+    c3 = await startChrome(named.base + HOME);
+    assert.equal(await launcherSettled(c3), 'doors', 'A FRESH PROFILE AGAINST A NAMED RELAY GETS THE FIRST-RUN CARD — a relay name is something that was set up here');
+  } finally { if (c3) c3.stop(); if (named) named.stop(); c.stop(); gw.stop(); }
+});
+
+// ── 4. "Just the console" ─────────────────────────────────────────────────────────────────────────────────
+test('"Just the console": the console → a church → "Back to the Suite" → the launcher with two doors',
+  { skip: !CHROME ? 'no chromium' : false, timeout: 180000 }, async () => {
+  const gw = await startGateway();
+  const c = await startChrome(gw.base + HOME);
+  try {
+    assert.equal(await launcherSettled(c), 'card');
+    assert.equal(await clickId(c, 'setupConsole'), 'ok');
+    await waitFor(c, `/\\/steward\\.html$/.test(location.href)`, 'the console', 15000);
+    await walkConsoleWizard(c, 'St Aidan on the Suite');
+    assert.equal(await clickButton(c, '/Back to the Suite/'), 'ok', 'the console\'s done step has no "Back to the Suite"');
+    await waitFor(c, `/\\/relay-app\\/home\\.html$/.test(location.href)`, 'the launcher', 15000);
+    assert.equal(await launcherSettled(c), 'doors', 'the console-only path ended on the launcher with the first-run card');
+    const L = await readLauncher(c);
+    assert.deepEqual([L.card, L.doors], [false, [true, true]], JSON.stringify(L));
+    assert.equal(await c.evalIn(`localStorage.getItem('trinityone.steward.wizard.done')`), '1');
+  } finally { c.stop(); gw.stop(); }
+});
+
+// ── 5. "Back to the Suite" is the Suite's, not the phone's or the hosted console's ────────────────────────
+// The real StewSetupWizard, run under the miniature React with its step seeded to the last one (the seed is
+// scoped the way scripts/settings-pages-are-a-list-and-a-detail.test.mjs scopes it: `React.useState(0)` occurs
+// exactly once inside the component and it is `step`), under three origins. The gate is the code's own
+// (stewOnSuite); the tree is what a person would be shown.
+function lastStep({ hostname, capacitor }) {
+  const src = readFileSync(join(ROOT, 'app/stew-dashboard.jsx'), 'utf8');
+  const at = src.indexOf('function StewSetupWizard(');
+  assert.notEqual(at, -1, 'StewSetupWizard is gone — re-anchor this test');
+  const body = src.slice(at, src.indexOf('\nfunction ', at + 1));
+  assert.equal((body.match(/React\.useState\(0\)/g) || []).length, 1, 'React.useState(0) is no longer unique inside StewSetupWizard — the seed could be aiming at other state');
+  const { React: R, draw } = miniReact();
+  const React = { ...R, useState: (init) => (init === 0 ? [6, () => {}] : R.useState(init)) };
+  const store = new Map();
+  const localStorage = { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)), removeItem: (k) => store.delete(k) };
+  const win = { Steward: { exportMnemonic: () => '', npub: 'npub1x', hasPinLock: () => true, needsPin: false }, addEventListener() {}, removeEventListener() {}, innerWidth: 900, localStorage, ...(capacitor ? { Capacitor: capacitor } : {}) };
+  const mod = loadScreen('app/stew-dashboard.jsx', ['StewSetupWizard'], {
+    React, window: win, location: { hostname, host: hostname }, localStorage, document: { addEventListener() {}, removeEventListener() {} },
+    navigator: { userAgent: '' }, setTimeout, clearTimeout, console, fetch: async () => ({ ok: false, json: async () => ({}) }),
+    Icon: function Icon() { return null; }, WizMeetings: function WizMeetings() { return null; }, _wizMeetingId: () => 'evt1',
+    useStewDialog: () => ({ current: null }), useStewModalOpen: () => {}, stewCapState: () => ({ allowed: false }),
+    SkQR: function SkQR() { return null; }, SkPill: function SkPill() { return null; }, SK_TINT: {},
+  });
+  const tree = draw(mod.StewSetupWizard, { church: { name: 'Grace Church' }, onDone() {}, onTab() {}, onSettings() {}, onInvite() {}, onNewPost() {} });
+  assert.match(texts(tree).join(' '), /You’re all set/, 'seeding the step did not reach the last step');
+  // The footer is handed to WizShell as a prop AND rendered as its child, so `find` meets every footer button
+  // twice (measured: "Go to dashboard" counts 2 as well). So the count is read AGAINST the button that is always
+  // there: "Back to the Suite" is on screen iff it counts the same as "Go to dashboard", absent iff it counts 0.
+  const count = (label) => find(tree, n => n.type === 'button' && texts(n).join(' ').includes(label)).length;
+  const dash = count('Go to dashboard');
+  assert.ok(dash >= 1, '"Go to dashboard" is gone from the last step — re-anchor this test');
+  const back = count('Back to the Suite');
+  return back === 0 ? 'absent' : back === dash ? 'shown' : 'odd:' + back + '/' + dash;
+}
+
+test('the console offers "Back to the Suite" on the Suite only: loopback with no Capacitor bridge — never on the APK, never on the hosted console', () => {
+  assert.equal(lastStep({ hostname: '127.0.0.1', capacitor: null }), 'shown', 'on the Suite (loopback, no Capacitor) the last step has no "Back to the Suite"');
+  assert.equal(lastStep({ hostname: 'localhost', capacitor: null }), 'shown', 'on the Suite at localhost the last step has no "Back to the Suite"');
+  assert.equal(lastStep({ hostname: 'localhost', capacitor: { isNativePlatform: () => true, Plugins: {} } }), 'absent',
+    'THE STEWARD APK IS OFFERED "Back to the Suite". Capacitor serves the APK from https://localhost, so a loopback check alone is true there — and there is no launcher on a phone.');
+  assert.equal(lastStep({ hostname: 'app.trinityone.church', capacitor: null }), 'absent', 'the hosted console is offered "Back to the Suite" — it has no launcher');
+});

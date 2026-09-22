@@ -1095,6 +1095,15 @@
   // opens at all, so the church step can tell "a brand-new box" from "adding a second church".
   let rswHasChurches = false;
   let rswManual = false;        // the steward asked for the paste field on a fresh box (a church made elsewhere)
+  // ── THE GUIDED PATH the launcher sent this person down (owner, 2026-09-22): `?setup=everything` means the
+  // relay wizard is the first half and the CONSOLE's wizard is the second, so the done step's primary is the
+  // console and "Back to the Suite" is how the church is skipped; `?setup=relay` means the relay is the whole
+  // job, so the primary is "Back to the Suite" (the launcher — its two doors are the lesson, and once this
+  // wizard has closed it shows them). No `?setup=` — the person came through the "Manage a relay" door — and
+  // the done step is what it was. Skipping the wizard on a guided path also lands on the launcher: skipping
+  // is always allowed, and the path still ends where the owner said it ends. Read once; a real reload keeps it.
+  const RSW_PATH = (() => { try { const p = new URLSearchParams(location.search).get('setup'); return p === 'everything' || p === 'relay' ? p : ''; } catch (e) { return ''; } })();
+  const RSW_HOME = '/relay-app/home.html';
   const RSW_IC = {
     wave: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 0 1 16 0"/><path d="M2 20h20"/><circle cx="12" cy="8" r="1.4" fill="currentColor" stroke="none"/></svg>',
     tag: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v5.6a2 2 0 0 0 .6 1.4l7 7a2 2 0 0 0 2.8 0l5.6-5.6a2 2 0 0 0 0-2.8l-7-7A2 2 0 0 0 12.6 5H7a4 4 0 0 0-4 4Z"/><circle cx="8" cy="10" r="1.3" fill="currentColor" stroke="none"/></svg>',
@@ -1159,7 +1168,8 @@
         + '<p class="rsw-sub">A relay is the private server that stores your church’s messages, records and media — running right here, on this machine. Two quick things: give it a name, and say whether this computer stays on. Your church is created in the console afterwards. About a minute.</p>'
         + '<div class="rsw-foot"><button class="btn btn-ghost" id="rswSkip">Skip setup</button><div style="flex:1"></div><button class="btn btn-clay" id="rswGo">Get started</button></div>';
       document.getElementById('rswGo').onclick = () => { rswStep = 1; renderRSW(); };
-      document.getElementById('rswSkip').onclick = closeRSW;
+      // on a guided path a skip still ends on the launcher (RSW_PATH's note above); otherwise on this dashboard
+      document.getElementById('rswSkip').onclick = () => { closeRSW(); if (RSW_PATH) location.href = RSW_HOME; };
       return;
     }
     if (rswStep === 1) {
@@ -1289,19 +1299,33 @@
     // saying the church is created in the console. The dashboard's own next-step card says it too; this is
     // the moment the person is actually reading.
     const needsChurch = !rswHasChurches && !rswAdded;
+    // On the launcher's "Set up everything" path the church IS the next step: the primary is the console and
+    // the step list does not repeat it. On "Just a relay" (or "everything" on a box that already has one) the
+    // primary is the launcher. Without a path: the step list carries the console, the primary is the dashboard.
+    const nextIsChurch = RSW_PATH === 'everything' && needsChurch;
+    const suiteLink = (cls) => '<a class="btn ' + cls + '" id="rswSuite" href="' + RSW_HOME + '" style="text-decoration:none">Back to the Suite</a>';
+    const foot = nextIsChurch
+      ? suiteLink('btn-ghost') + '<div style="flex:1"></div><a class="btn btn-clay" id="rswConsole" href="/steward.html" style="text-decoration:none">Next: open the console</a>'
+      : RSW_PATH
+        ? '<button class="btn btn-ghost" id="rswDone">Go to dashboard</button><div style="flex:1"></div>' + suiteLink('btn-clay')
+        : '<div style="flex:1"></div><button class="btn btn-clay" id="rswDone">Go to dashboard</button>';
     card.innerHTML = rswDots()
       + '<div class="rsw-ic">' + RSW_IC.check + '</div>'
       + '<h2 class="rsw-h">Your relay is ready</h2>'
       + '<p class="rsw-sub">' + (rswHandle ? 'Named <b>' + esc(rswHandle) + '</b>. ' : '') + (rswAdded ? 'Your church can use it now. ' : '')
-      +   (needsChurch ? 'Now set up your church — it is created in the console, not here.' : 'One more thing worth doing, so members outside your building can connect:') + '</p>'
+      +   (nextIsChurch ? 'Next: your church. It is created in the console, not here — naming it there registers it on this relay.'
+          // "Just a relay": the church is run from another device, so it is not the next step — say how it gets on
+          : RSW_PATH === 'relay' && needsChurch ? 'A church run from another device is added by its ID under Settings → Churches; one created in the console here registers itself.'
+          : needsChurch ? 'Now set up your church — it is created in the console, not here.' : 'One more thing worth doing, so members outside your building can connect:') + '</p>'
       + '<div class="rsw-next">'
-      +   (needsChurch ? '<a class="rsw-step" id="rswConsole" href="/steward.html" style="text-decoration:none"><span class="si">' + RSW_IC.church + '</span><span style="flex:1"><span class="st">Open the console</span><span class="sd">Create your church there — naming it registers it on this relay.</span></span></a>' : '')
+      +   (needsChurch && !nextIsChurch ? '<a class="rsw-step" id="rswConsole" href="/steward.html" style="text-decoration:none"><span class="si">' + RSW_IC.church + '</span><span style="flex:1"><span class="st">Open the console</span><span class="sd">Create your church there — naming it registers it on this relay.</span></span></a>' : '')
       +   '<button class="rsw-step" id="rswTunnel"><span class="si">' + RSW_IC.globe + '</span><span style="flex:1"><span class="st">Reach members from anywhere</span><span class="sd">Turn on a secure tunnel — free, no router setup.</span></span></button>'
       + '</div>'
-      + '<div class="rsw-foot"><div style="flex:1"></div><button class="btn btn-clay" id="rswDone">Go to dashboard</button></div>';
-    document.getElementById('rswDone').onclick = closeRSW;
-    // the console link is a real <a> (it navigates); mark the wizard seen on the way out so it never re-opens
-    const rc = document.getElementById('rswConsole'); if (rc) rc.addEventListener('click', () => { try { localStorage.setItem(RSW_SEEN, '1'); } catch (e) {} });
+      + '<div class="rsw-foot">' + foot + '</div>';
+    const rd = document.getElementById('rswDone'); if (rd) rd.onclick = closeRSW;
+    // the console and Suite links are real <a>s (they navigate); mark the wizard seen on the way out so it
+    // never re-opens — and so the launcher, which reads the same marker, shows its doors from now on
+    for (const id of ['rswConsole', 'rswSuite']) { const a = document.getElementById(id); if (a) a.addEventListener('click', () => { try { localStorage.setItem(RSW_SEEN, '1'); } catch (e) {} }); }
     document.getElementById('rswTunnel').onclick = () => {
       closeRSW();
       const t = document.getElementById('tab-set'); if (t) t.click();

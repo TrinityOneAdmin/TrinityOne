@@ -1,3 +1,59 @@
+// ── FIRST RUN: ONE CARD, NOT TWO DOORS ──────────────────────────────────────────────────────────────────
+// Owner, 2026-09-22, after his own first run of the real AppImage: a first-time person still cannot tell which
+// door to take. So while NOTHING has been set up the launcher shows one card — "Set up everything" / "Just a
+// relay" / "Just the console" — and the two doors otherwise. This block DECIDES; it never navigates (the
+// card's three choices are plain links, and scripts/suite-two-doors.test.mjs pins that this file has no
+// location.href).
+//
+// "SET UP" IS READ FROM WHAT EXISTS, NOT ONLY FROM A MARKER. Two markers other pages already write mean "a
+// wizard finished or was skipped": `to_relay_setup_seen` (control.js closeRSW, the panel's own wizard) and
+// `trinityone.steward.wizard.done` (stew-dashboard.jsx finishWizard, and the restore/adopt paths). Either one
+// → the doors, at once and without a fetch. Without a marker (a fresh webview profile, or cleared site data)
+// the box itself is asked: /status.writePolicy is true iff this relay holds a church (public, no token), and
+// /relay-names/mine.handle is the relay's name (via /local-token, which only a same-machine request gets — the
+// Suite always is one). A church or a name → the doors: something was set up here, whatever storage says. Both
+// absent AND no marker → the card. If /status cannot be read at all the doors are shown — "first time here"
+// is a claim, and a claim this page cannot back is worse than the two doors that were always here.
+//
+// The doors are visible in the HTML and this hides them while it asks, so a script that never runs leaves
+// the launcher with its doors, never blank (the splash lesson: this page must not be a dead end).
+(function () {
+  var card = document.getElementById('firstRun');
+  var doors = document.getElementById('doors');
+  var sub = document.getElementById('sub');
+  if (!card || !doors) return;
+  var decided = false, fallback = null;
+  function show(which) {
+    if (decided) return;
+    decided = true; clearTimeout(fallback);
+    card.hidden = which !== 'card';
+    doors.hidden = which !== 'doors';
+    if (sub) sub.hidden = which !== 'doors';
+    document.body.setAttribute('data-first-run', which);
+  }
+  var marked = false;
+  try { marked = !!(localStorage.getItem('to_relay_setup_seen') || localStorage.getItem('trinityone.steward.wizard.done')); } catch (e) {}
+  if (marked) { show('doors'); return; }
+  doors.hidden = true; if (sub) sub.hidden = true;          // while asking; the fallback below undoes it
+  fallback = setTimeout(function () { show('doors'); }, 2500);
+  var status = fetch('/status', { cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; });
+  var named = fetch('/local-token', { cache: 'no-store' })
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (j) {
+      if (!j || !j.token) return null;
+      return fetch('/relay-names/mine', { headers: { Authorization: 'Bearer ' + j.token }, cache: 'no-store' })
+        .then(function (r) { return r.ok ? r.json() : null; });
+    })
+    .catch(function () { return null; });
+  Promise.all([status, named]).then(function (res) {
+    var s = res[0], nm = res[1];
+    if (!s) { show('doors'); return; }                        // cannot tell → the doors, never a claim
+    var hasChurch = s.writePolicy === true;
+    var hasName = !!(nm && nm.handle);
+    show(hasChurch || hasName ? 'doors' : 'card');
+  }).catch(function () { show('doors'); });
+})();
+
 // Suite launcher update check. The local relay does the actual GitHub fetch server-side (/suite-update)
 // so this stays same-origin — no cross-origin CORS fetch from the webview. If a newer build is published,
 // show the banner. The app is an installer (it can't self-patch), so "update" = download + reinstall;
