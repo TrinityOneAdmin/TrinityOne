@@ -18056,7 +18056,10 @@ zoo`.split("\n");
       if (!sk) return Promise.resolve(null);
       const clean5 = _sanitizeMsgTags(tags);
       const content = JSON.stringify({ tags: clean5 });
-      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", MSGTAGS_D], ["t", NET]], content })).then(() => clean5);
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", MSGTAGS_D], ["t", NET]], content })).then((r) => {
+        if (r === false) throw new Error("Couldn\u2019t save the message tags \u2014 no relay accepted them. If you are helping another church, this needs the \u201CGroups, rotas, services, events, posts\u201D permission.");
+        return clean5;
+      });
     },
     // cb(tags) for the church's configured tags, or cb(null) when NO tags doc exists yet — the editor then
     // seeds the default (Prayer request), which the steward can rename, recolour or remove. Never hangs on load.
@@ -18154,7 +18157,8 @@ zoo`.split("\n");
     async removeSermon(s) {
       if (!sk) return null;
       const id = s && typeof s === "object" ? s.id : s;
-      await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", SERMON_D + id], ["t", NET], ["deleted", "1"]], content: "" }));
+      const _tomb = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", SERMON_D + id], ["t", NET], ["deleted", "1"]], content: "" }));
+      if (_tomb === false) throw new Error("Couldn\u2019t remove that sermon \u2014 no relay accepted the change, so nothing was deleted. If you are helping another church, this needs the \u201CGroups, rotas, services, events, posts\u201D permission.");
       const sha = s && typeof s === "object" && s.sha256;
       const hosts = s && typeof s === "object" && (s.hosts && s.hosts.length ? s.hosts : s.host ? [s.host] : []) || [];
       if (sha && hosts.length) {
@@ -18208,6 +18212,10 @@ zoo`.split("\n");
     },
     // backup reminder, church-wide: record the last-backup time + reminder cadence in a church doc, so every steward
     // and device shows the same 'last backed up' + overdue nudge — not just the device that happened to run it.
+    // RETURNS false WHEN NO RELAY TOOK IT, and both callers now say so on screen. The backup itself is a local
+    // file and really did save; this document is the CHURCH-WIDE half — "every steward's nudge resets" — so a
+    // refusal means the other stewards' consoles still show overdue. Saying "Saved" and nothing else made this
+    // console the only one that believed the church was backed up.
     setBackupMeta(at, remind) {
       if (!sk) return Promise.resolve(null);
       return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", BACKUPMETA_D + pub], ["t", NET]], content: JSON.stringify({ at: at || now(), remind: remind || "monthly" }) }));
@@ -18250,7 +18258,8 @@ zoo`.split("\n");
       const targets = [.../* @__PURE__ */ new Set([pub, ...(memberPubs || []).filter(Boolean)])];
       const _mring = JSON.stringify(_mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex]);
       const keys = await _sealEach(_mring, targets, (pl, mp) => encrypt3(pl, getConversationKey(sk, mp)));
-      await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", MEDIAKEY_D + pub], ["t", NET]], content: JSON.stringify({ keys, rev: now() }) }));
+      const _env = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", MEDIAKEY_D + pub], ["t", NET]], content: JSON.stringify({ keys, rev: now() }) }));
+      if (_env === false) throw new Error("Can\u2019t encrypt this upload \u2014 your church\u2019s media key could not be saved, so nothing encrypted with it could ever be played. Nothing has been uploaded. A church media key can only be published from the console that holds the church\u2019s own key.");
       const key = await crypto.subtle.importKey("raw", _unhex(_mediaKeyHex), "AES-GCM", false, ["encrypt"]);
       return async (bytes) => {
         const iv = crypto.getRandomValues(new Uint8Array(12));

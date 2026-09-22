@@ -4173,7 +4173,15 @@ window.Steward = {
     if (!sk) return Promise.resolve(null);
     const clean = _sanitizeMsgTags(tags);
     const content = JSON.stringify({ tags: clean });
-    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', MSGTAGS_D], ['t', NET]], content })).then(() => clean);
+    // A SAVE NOBODY ACCEPTED IS NOT A SAVE. This was `.then(() => clean)` — the publish result was thrown
+    // away — and the editor in app/stew-dashboard.jsx toasts "✓ Saved — members see these on their next
+    // sync." off the resolved value. So a refusal showed a tick. Measured on a live relay 2026-09-22: at
+    // efe2dbe every delegated steward was refused this document (it had no rule of its own and fell to the
+    // closed member catch-all) and the console reported success every time; after the rule below it a
+    // steward WITHOUT the content capability is still correctly refused, and that refusal must reach the
+    // screen. Same shape as syncEnable's fix of 2026-09-02, and as the note in fix-the-control-not-the-label.
+    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', MSGTAGS_D], ['t', NET]], content }))
+      .then((r) => { if (r === false) throw new Error('Couldn’t save the message tags — no relay accepted them. If you are helping another church, this needs the “Groups, rotas, services, events, posts” permission.'); return clean; });
   },
   // cb(tags) for the church's configured tags, or cb(null) when NO tags doc exists yet — the editor then
   // seeds the default (Prayer request), which the steward can rename, recolour or remove. Never hangs on load.
@@ -4240,7 +4248,15 @@ window.Steward = {
   async removeSermon(s) {
     if (!sk) return null;
     const id = (s && typeof s === 'object') ? s.id : s;
-    await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', SERMON_D + id], ['t', NET], ['deleted', '1']], content: '' }));   // tombstone the doc (hides it in every app)
+    // THE TOMBSTONE FIRST, AND ONLY THEN THE BYTES — and the tombstone must actually have landed. This
+    // `await publish(...)` discarded its result and the DELETE loop below ran regardless, which is the worst
+    // ordering available: a refused tombstone leaves the sermon document live in every member's app while
+    // the blob it points at is deleted from every host. The member gets a broken player, not a removed
+    // sermon, and nothing can put the bytes back. Refusing here leaves the sermon exactly as it was, which
+    // is recoverable. (It is reachable for a real steward: a delegate without the content capability is
+    // refused this document by the relay — measured 2026-09-22.)
+    const _tomb = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', SERMON_D + id], ['t', NET], ['deleted', '1']], content: '' }));
+    if (_tomb === false) throw new Error('Couldn’t remove that sermon — no relay accepted the change, so nothing was deleted. If you are helping another church, this needs the “Groups, rotas, services, events, posts” permission.');
     // reclaim the stored bytes on each host (best-effort; content-addressed so the same sha lives on every mirror)
     const sha = s && typeof s === 'object' && s.sha256;
     const hosts = (s && typeof s === 'object' && ((s.hosts && s.hosts.length) ? s.hosts : (s.host ? [s.host] : []))) || [];
@@ -4270,6 +4286,10 @@ window.Steward = {
   },
   // backup reminder, church-wide: record the last-backup time + reminder cadence in a church doc, so every steward
   // and device shows the same 'last backed up' + overdue nudge — not just the device that happened to run it.
+  // RETURNS false WHEN NO RELAY TOOK IT, and both callers now say so on screen. The backup itself is a local
+  // file and really did save; this document is the CHURCH-WIDE half — "every steward's nudge resets" — so a
+  // refusal means the other stewards' consoles still show overdue. Saying "Saved" and nothing else made this
+  // console the only one that believed the church was backed up.
   setBackupMeta(at, remind) {
     if (!sk) return Promise.resolve(null);
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', BACKUPMETA_D + pub], ['t', NET]], content: JSON.stringify({ at: at || now(), remind: remind || 'monthly' }) }));
@@ -4298,7 +4318,17 @@ window.Steward = {
     const targets = [...new Set([pub, ...(memberPubs || []).filter(Boolean)])];
     const _mring = JSON.stringify(_mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex]);
     const keys = await _sealEach(_mring, targets, (pl, mp) => nip44e(pl, nip44ck(sk, mp)));
-    await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', MEDIAKEY_D + pub], ['t', NET]], content: JSON.stringify({ keys, rev: now() }) }));
+    // THE ENVELOPE MUST LAND BEFORE WE HAND BACK AN ENCRYPTOR. This `await publish(...)` discarded its
+    // result, so a refused envelope still returned a working encryptor: the caller
+    // (app/stew-dashboard.jsx, the sermon upload) then encrypted the file with a key NOBODY HOLDS and
+    // uploaded the ciphertext to every host. That is unrecoverable — not a wrong toast, a permanently
+    // unplayable sermon — and it is the same loss the mint gate a few lines up exists to prevent, reached by
+    // the other door. The relay refuses this document to anything but the church key (mediakey: got its own
+    // rule on 2026-09-22; the envelope is sealed with the SIGNER's key, so a delegated steward's copy could
+    // not be opened by any member even if it were stored), which makes the refusal an ordinary, reachable
+    // case on a delegated console rather than a theoretical one.
+    const _env = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', MEDIAKEY_D + pub], ['t', NET]], content: JSON.stringify({ keys, rev: now() }) }));
+    if (_env === false) throw new Error('Can’t encrypt this upload — your church’s media key could not be saved, so nothing encrypted with it could ever be played. Nothing has been uploaded. A church media key can only be published from the console that holds the church’s own key.');
     const key = await crypto.subtle.importKey('raw', _unhex(_mediaKeyHex), 'AES-GCM', false, ['encrypt']);
     return async (bytes) => { const iv = crypto.getRandomValues(new Uint8Array(12)); const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, bytes)); const out = new Uint8Array(12 + ct.length); out.set(iv, 0); out.set(ct, 12); return out; };
   },

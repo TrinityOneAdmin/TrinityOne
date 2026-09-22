@@ -18,8 +18,27 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { DOC_TYPES, UNDECLARED, D, MEMBER_WRITABLE_TYPES } from './trinity-doc-types.mjs';
+import { stripComments } from './test-slice.mjs';
 
 const GATEWAY = readFileSync(new URL('../scripts/gateway.mjs', import.meta.url), 'utf8');
+// THE SAME SOURCE WITH ITS COMMENTS BLANKED, for the assertions that read a DECISION rather than a name.
+//
+// AUDIT-undeclared-doc-types-2026-09-22, finding M1. The "one column-derived list" test below does raw
+// assert.match over gateway.mjs and never stripped comments. Sabotage S4 — delete the decision and leave its
+// exact text as a comment:
+//
+//     -    if (!(isAnyChurch || isNetwork) && !memberDocTypeOk(d)) return false;
+//     +    // if (!(isAnyChurch || isNetwork) && !memberDocTypeOk(d)) return false;
+//
+// left this file 8 pass / 0 fail. The rule was gone and its guard was green — [[comments-can-satisfy-
+// assertions]] again, in a test written the same week as the note. stripComments keeps byte offsets stable,
+// so an ordering check over the same string would still mean what it says.
+//
+// USED BY (CLAUDE.md rule 2 — every assertion that reads it, and they are all in one test): the catch-all's
+// `if (…) return false` match and the `memberDocTypeOk(…) return true` doesNotMatch, both in "the ONE
+// column-derived list the spine reads only ever NARROWS". The NAME-shaped assertions above deliberately keep
+// reading the raw source: a comment there is evidence the name exists in the file, which is all they claim.
+const GATEWAY_CODE = stripComments(GATEWAY);
 const REGISTRY = readFileSync(new URL('../scripts/trinity-doc-types.mjs', import.meta.url), 'utf8');
 const declared = new Set([...Object.keys(DOC_TYPES), ...Object.keys(UNDECLARED)]);
 
@@ -99,9 +118,15 @@ test('the ONE column-derived list the spine reads only ever NARROWS', () => {
     'the registry no longer exports MEMBER_WRITABLE_TYPES, or it collapsed: ' + JSON.stringify(MEMBER_WRITABLE_TYPES));
   const uses = GATEWAY.match(/\bMEMBER_WRITABLE_TYPES\b/g) || [];
   assert.equal(uses.length, 2, 'MEMBER_WRITABLE_TYPES is read in ' + uses.length + ' places in gateway.mjs — expected the import and memberDocTypeOk() only');
-  assert.match(GATEWAY, /if \(!\(isAnyChurch \|\| isNetwork\) && !memberDocTypeOk\(d\)\) return false;/,
+  // OVER THE COMMENT-STRIPPED SOURCE — see GATEWAY_CODE at the top of this file for the sabotage that
+  // proved why. Commenting the decision out and leaving its words behind used to pass this line.
+  assert.match(GATEWAY_CODE, /if \(!\(isAnyChurch \|\| isNetwork\) && !memberDocTypeOk\(d\)\) return false;/,
     'the catch-all no longer REFUSES on the list — if it is now granting on it, that is the change this wiring must never make');
-  assert.doesNotMatch(GATEWAY, /memberDocTypeOk\([^)]*\)\) return true/, 'memberDocTypeOk is used to GRANT somewhere');
+  assert.doesNotMatch(GATEWAY_CODE, /memberDocTypeOk\([^)]*\)\) return true/, 'memberDocTypeOk is used to GRANT somewhere');
+  // …and the stripper must actually be stripping. A stripComments that silently returned its input would
+  // restore the hole above in a way nothing else in this file could see.
+  assert.ok(/\/\/ THE CHAT TAG LABELS\./.test(GATEWAY) && !/\/\/ THE CHAT TAG LABELS\./.test(GATEWAY_CODE),
+    'GATEWAY_CODE still contains gateway.mjs comments — the two assertions above are reading prose again');
 });
 
 test('the import is the runtime one, not a build-time copy', () => {

@@ -195,13 +195,55 @@ test('an ORDINARY MEMBER writing a type nobody declared is refused at the door, 
 });
 
 test('a church-authored type the relay has no branch for is refused to a member too', async () => {
-  // trinityone/sermon: is in UNDECLARED — client-used, church content, and accept() has no rule for it, so it
-  // used to fall to the same catch-all. Under the fix a member cannot write it; the church still can.
-  assert.ok('trinityone/sermon:' in UNDECLARED, 're-anchor: sermon: is no longer an UNDECLARED type');
+  // trinityone/sermon: used to be in UNDECLARED — client-used, church content, and accept() had no rule for
+  // it, so it fell to this same catch-all. RE-ANCHORED 2026-09-22: it now has a branch of its own (church
+  // key, its network, or a steward with the content capability — see
+  // scripts/six-steward-doc-types-have-rules.test.mjs, which drives the whole five-actor matrix). The
+  // question this test asks is unchanged and still worth asking here: a MEMBER may not write it, and the
+  // CHURCH still can. What changed is which line refuses the member — its own branch rather than the
+  // catch-all — which is why the reason is no longer asserted to name an undeclared type.
+  assert.ok('trinityone/sermon:' in DOC_TYPES && DOC_TYPES['trinityone/sermon:'].write === 'steward',
+    're-anchor: sermon: is no longer a declared steward-written type');
   const frame = await publishAs(mia, doc(mia, 'trinityone/sermon:s1', { title: 'not mine to write' }, [['church', church.pub]]));
   assert.equal(frame[2], false, 'a member wrote a church-authored type the relay has no rule for: ' + JSON.stringify(frame));
   const own = await publishAs(church, doc(church, 'trinityone/sermon:s1', { title: 'Sunday' }));
   assert.equal(own[2], true, 'the CHURCH can no longer write its own undeclared content — the fix narrowed the wrong key: ' + JSON.stringify(own));
+});
+
+// ── A BARE NAME MATCHES EXACTLY; A PREFIXED ONE MATCHES BY PREFIX ────────────────────────────────────────
+// AUDIT-undeclared-doc-types-2026-09-22, finding M2. memberDocTypeOk's own comment claims "a bare name (the
+// MyData six and chatseen) exactly, so `trinityone/notesX` is not `trinityone/notes`" — and NOTHING in this
+// file asked. Sabotage S3, scoped inside that function (the anchor appears twice in gateway.mjs; the sibling
+// is relayGatesType):
+//
+//     -    if (p.endsWith(':') ? s.startsWith(p) : s === p) return true;
+//     +    if (s.startsWith(p)) return true;
+//
+// left this file 28/28 GREEN while a member became free to write `trinityone/notesXYZ-<timestamp>` — an
+// unbounded novel-d-tag namespace under seven stems, bounded only by MEMBER_DOC_CAP. The fix's own headline
+// property, a BOUNDED member namespace, could be deleted in one character with every test still passing.
+//
+// Both halves are pinned, because they fail in opposite directions: widen the bare rule and the hole is back;
+// narrow the prefixed rule and every real rsvp/careslot/carereq stops being accepted on a Sunday.
+test('a member may NOT write a bare member type with anything appended', async () => {
+  const frame = await publishAs(mia, finalizeEvent({
+    kind: 30078, created_at: now(), tags: [['d', 'trinityone/notesXYZ-' + now()]], content: 'SEALED',
+  }, mia.sk));
+  assert.equal(frame[2], false,
+    'THE MEMBER NAMESPACE IS UNBOUNDED AGAIN: `trinityone/notes` is a BARE declared name and must match a ' +
+    'd-tag EXACTLY. Matching it by prefix hands every member a novel-d-tag namespace under each bare stem, ' +
+    'which is the hole this file exists to close. Frame: ' + JSON.stringify(frame));
+  assert.equal((await asks(mia, { kinds: [30078], authors: [mia.pub], '#d': ['trinityone/notesXYZ-' + now()] })).length, 0,
+    'refused at the frame and stored anyway');
+});
+
+test('a member CAN still write a prefixed member type with a suffix — the other direction', async () => {
+  // The same rule, read the other way. `trinityone/rsvp:` ends in ':' and must match by PREFIX, or every
+  // real reply a member sends is refused. Pinning only the refusal above would let a "fix" for it turn every
+  // declared prefix into an exact match and break the app in the quietest possible way.
+  const frame = await publishAs(mia, doc(mia, D.RSVP + 'evt-prefix-check', { going: true }, [['p', church.pub]]));
+  assert.equal(frame[2], true,
+    'A PREFIXED MEMBER TYPE IS NO LONGER MATCHED BY PREFIX — a member cannot RSVP at all: ' + JSON.stringify(frame));
 });
 
 // ── EVERY DECLARED MEMBER-WRITABLE TYPE STILL LANDS ──────────────────────────────────────────────────────

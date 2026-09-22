@@ -8368,7 +8368,7 @@ function DashSermons() {
     <div className="no-scrollbar" style={{ height: '100%', overflowY: 'auto' }}>
       {pendingUpload ? <SermonEditModal upload={pendingUpload} sermon={{ title: pendingUpload.title, mime: pendingUpload.mime }} onSave={(fields) => doUpload(pendingUpload.file, fields)} onClose={() => setPendingUpload(null)} /> : null}
       {editing ? <SermonEditModal sermon={editing} onSave={(fields) => Promise.resolve(window.Steward.publishSermon({ ...editing, ...fields }))} onClose={() => setEditing(null)} /> : null}
-      {pendingDelete ? <SkConfirm icon="trash" title={'Remove “' + (pendingDelete.title || 'this') + '”?'} confirmLabel="Remove" body="It disappears from members’ apps and the stored file is deleted from your relay(s) to free the space. This can’t be undone." onConfirm={() => { window.Steward.removeSermon(pendingDelete); setPendingDelete(null); }} onCancel={() => setPendingDelete(null)} /> : null}
+      {pendingDelete ? <SkConfirm icon="trash" title={'Remove “' + (pendingDelete.title || 'this') + '”?'} confirmLabel="Remove" body="It disappears from members’ apps and the stored file is deleted from your relay(s) to free the space. This can’t be undone." onConfirm={() => { const s = pendingDelete; setPendingDelete(null); Promise.resolve(window.Steward.removeSermon(s)).catch(err => setUpMsg('✗ ' + ((err && err.message) || 'Couldn’t remove that sermon'))); }} onCancel={() => setPendingDelete(null)} /> : null}
       {pendingHevc ? <SkConfirm icon="alert" tint="var(--gold)" title="This video may not play in web browsers" confirmLabel="Upload anyway" body="It’s recorded in H.265/HEVC — your phone’s “High Efficiency” format. Phones play it fine, but web browsers (and some older devices) can’t. To reach everyone, set your camera to “Most Compatible” (H.264) and re-record. Upload this one anyway? Members on the phone app will still be able to watch it." onConfirm={() => { const f = pendingHevc; setPendingHevc(null); askThenUpload(f); }} onCancel={() => setPendingHevc(null)} /> : null}
       {pendingBigEnc ? <SkConfirm icon="alert" tint="var(--gold)" title="Large encrypted video" confirmLabel="Upload anyway" body={'This encrypted video is ' + fmtSize(pendingBigEnc.size) + '. Encrypted media has to download in full and decrypt in memory before it plays — which needs 2–3× its size in RAM, so on an older phone it may fail to play at all. To be safe, trim it, export at 720p, or leave encryption off for this one (it stays members-only either way). Upload it as-is?'} onConfirm={() => { const f = pendingBigEnc; setPendingBigEnc(null); askThenUpload(f); }} onCancel={() => setPendingBigEnc(null)} /> : null}
       <Panel title="Self-hosted sermons">
@@ -8433,10 +8433,13 @@ function DashChatTagsPanel({ church }) {
   const remove = (i) => { setTags(list.filter((_, j) => j !== i)); setEditIdx(-1); };
   const save = async () => {
     setBusy(true); setMsg('');
-    try { const saved = await window.Steward.publishMessageTags(list); setTags(saved || []); setEditIdx(-1); setMsg('✓ Saved — members see these on their next sync.'); }
-    catch (e) { setMsg('Couldn’t save — try again.'); }
+    // THE TICK ONLY GOES UP FOR A DOCUMENT A RELAY TOOK. publishMessageTags used to discard publish()'s
+    // result, so this `await` resolved on a refusal and printed "✓ Saved" over nothing (the engine now
+    // throws; see its note). SAY WHY, rather than "try again": the reachable refusal here is a delegated
+    // steward without the content permission, and "try again" sends them to look at their connection.
+    try { const saved = await window.Steward.publishMessageTags(list); setTags(saved || []); setEditIdx(-1); setMsg('✓ Saved — members see these on their next sync.'); setTimeout(() => setMsg(''), 4000); }
+    catch (e) { setMsg((e && e.message) || 'Couldn’t save — try again.'); setTimeout(() => setMsg(''), 9000); }
     setBusy(false);
-    setTimeout(() => setMsg(''), 4000);
   };
   const swatch = { width: 22, height: 22, borderRadius: 999, cursor: 'pointer', flexShrink: 0, padding: 0 };
   const iconBtn = (active) => ({ width: 30, height: 30, borderRadius: 9, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0, background: active ? 'color-mix(in oklab, var(--clay) 12%, var(--surface))' : 'var(--surface)', border: '1px solid ' + (active ? 'var(--clay)' : 'var(--line)') });
@@ -9188,8 +9191,14 @@ function DashBackup() {
         setTimeout(() => URL.revokeObjectURL(url), 3000);
       }
       const ts = Math.floor(Date.now() / 1000); setLast(ts); try { localStorage.setItem('trinityone.lastBackupAt', String(ts)); } catch {}
-      try { window.Steward.setBackupMeta && window.Steward.setBackupMeta(ts, freq); } catch {}   // record church-wide so every steward's nudge resets
-      setMsg({ ok: true, text: 'Saved ' + count + ' records' + mediaBit + (encrypted ? ' — encrypted to your church key.' : ' (unencrypted).') });
+      // record church-wide so every steward's nudge resets — AND SAY SO WHEN IT DOES NOT. This was
+      // fire-and-forget inside a try/catch, so a refused document left THIS console the only one that
+      // believed the church was backed up while every other steward went on seeing "overdue". The file
+      // itself really did save, so this is a second sentence on a success message, not a failure.
+      let _metaOk = true;
+      try { if (window.Steward.setBackupMeta) _metaOk = (await window.Steward.setBackupMeta(ts, freq)) !== false; } catch { _metaOk = false; }
+      setMsg({ ok: true, text: 'Saved ' + count + ' records' + mediaBit + (encrypted ? ' — encrypted to your church key.' : ' (unencrypted).')
+        + (_metaOk ? '' : ' Your other stewards’ consoles will still show this church as overdue — the shared backup record could not be saved.') });
     } catch (e) { setMsg({ ok: false, text: e.message || 'Backup failed' }); }
     setBusy(false);
   };
