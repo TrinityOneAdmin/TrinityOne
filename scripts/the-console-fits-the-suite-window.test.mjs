@@ -151,3 +151,69 @@ test('the four Overview stat cards sit on one row at 900x780',
   // an earlier four-column attempt; the ellipsis is a backstop that must fire nowhere at this size.
   for (const x of cards) assert.equal(x.labelFits, true, `the "${x.label}" card's label is cut short ("…") at ${x.w}px — four across at this width needs a smaller card, not a truncated one`);
 });
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+// 2. THE TWO LOWER CARDS STACK, AND NOTHING IN THEM IS SQUASHED. Measured at 6b6e66d: "Groups & rooms" 300px and
+//    "Joining code" 308px side by side, "Notices" needing 58px of a 46px box, the QR beside a 142px text column.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+const PIN = 'cedar-harbour-lamp-42';
+// Rooms for the group list to show. A church with no NAME cannot register on its own box (gateway H4 refuses a
+// nameless row), and an unregistered church's writes are refused, so the church is named and registered the way
+// the wizard's name step does it (selfRegister with createHere, then the profile) before any room is published.
+// The room subscription was opened before the church existed, so it is re-issued by reloading and unlocking.
+async function seedRooms() {
+  const reg = await c.evalIn(`(async () => { try { const r = await Promise.resolve(window.Steward.selfRegister('Grace Church', { createHere: true })); return r && r.ok ? 'ok' : JSON.stringify(r); } catch (e) { return 'err:' + e.message; } })()`);
+  assert.equal(reg, 'ok', 'the church could not register on its own box: ' + reg);
+  await c.evalIn(`Promise.resolve(window.Steward.publishProfile({ name: 'Grace Church' })).then(() => 'ok')`);
+  const rooms = JSON.parse(await c.evalIn(`(async () => { const out = []; for (const g of [
+    { name: 'Whole Church', kind: 'group', sub: 'One room for everyone' }, { name: 'Notices', kind: 'broadcast', sub: 'Dates, news and what’s on' }, { name: 'Prayer', kind: 'group', sub: 'Share and lift requests' }]) {
+    const r = await Promise.resolve(window.Steward.publishGroup(g)); out.push(r ? r.name : null); } return JSON.stringify(out); })()`));
+  assert.deepEqual(rooms, ['Whole Church', 'Notices', 'Prayer'], 'the three rooms were not all accepted by the relay');
+  await c.goto(gw.base + '/steward.html');
+  await c.waitFor(`[...document.querySelectorAll('input')].some(x => (x.placeholder||'').includes('Your PIN'))`, 'the PIN unlock', 60000);
+  await c.evalIn(`(() => { const i=[...document.querySelectorAll('input')].find(x=>(x.placeholder||'').includes('Your PIN')); const s=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set; s.call(i, ${JSON.stringify(PIN)}); i.dispatchEvent(new Event('input',{bubbles:true})); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); return 'ok'; })()`);
+  await c.waitFor(`!!document.querySelector('nav[aria-label="Console sections"]') && !document.querySelector('[role="dialog"]')`, 'the dashboard after unlock');
+  await c.waitFor(`(${PANEL('Groups & rooms')} || {textContent:''}).textContent.includes('Prayer')`, 'the rooms on the Overview', 60000);
+}
+
+// The joining card on a loopback box shows the go-public gate in place of the invite; "I'll do this later" is the
+// steward's own way past it, and what the owner saw after going public is the same invite.
+async function revealInvite() {
+  await c.waitFor(`[...document.querySelectorAll('button')].some(b => /do this later/i.test(b.textContent||''))`, 'the go-public gate on the joining card', 30000);
+  await c.evalIn(`[...document.querySelectorAll('button')].find(b => /do this later/i.test(b.textContent||'')).click()`);
+  await c.waitFor(`!!(${PANEL('Joining code')} || document.body).querySelector('textarea')`, 'the invite (its npub box) on the joining card', 30000);
+  await sleep(600);
+}
+
+const LOWER_CARDS = `(() => {
+  const g = ${PANEL('Groups & rooms')}, j = ${PANEL('Joining code')};
+  if (!g || !j) return JSON.stringify({ missing: [!g && 'Groups & rooms', !j && 'Joining code'].filter(Boolean) });
+  const rect = (el) => { const r = el.getBoundingClientRect(); return { top: Math.round(r.top), right: Math.round(r.right), w: Math.round(r.width), h: Math.round(r.height) }; };
+  const past = (card) => [...card.querySelectorAll('*')].filter(el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.right > card.getBoundingClientRect().right + 0.5; })
+    .map(el => ({ tag: el.tagName, right: Math.round(el.getBoundingClientRect().right), text: (el.innerText || el.value || '').trim().slice(0, 30) })).slice(0, 6);
+  // group names: the one-line ellipsis boxes inside the groups card; ellipsed iff the text needs more than the box has
+  const names = [...g.querySelectorAll('div')].filter(d => getComputedStyle(d).textOverflow === 'ellipsis' && getComputedStyle(d).whiteSpace === 'nowrap')
+    .map(d => ({ name: d.textContent, ellipsed: d.scrollWidth > d.clientWidth + 0.5 }));
+  const qr = j.querySelector('[role="img"]');
+  const code = [...j.querySelectorAll('div')].find(d => /^Your church code$/i.test((d.textContent || '').trim()));
+  return JSON.stringify({ groups: rect(g), join: rect(j), pastGroups: past(g), pastJoin: past(j), names, qr: qr ? rect(qr) : null, code: code ? rect(code) : null });
+})()`;
+
+test('at 900x780 "Groups & rooms" and "Joining code" stack, each with the pane, nothing past a card\'s edge, no room name cut short',
+  { skip: !CHROME ? 'no chromium' : false, timeout: 300000 }, async () => {
+  await seedRooms();
+  await revealInvite();
+  const m = JSON.parse(await c.evalIn(LOWER_CARDS));
+  console.log('    lower cards: ' + JSON.stringify(m));
+  assert.ok(!m.missing, 're-anchor: missing card(s) ' + JSON.stringify(m.missing));
+  assert.ok(m.groups.w >= 380 && m.join.w >= 380, `THE DEFECT: the two lower cards are side by side and squashed (Groups & rooms ${m.groups.w}px, Joining code ${m.join.w}px) — under 1000px they stack`);
+  assert.notEqual(m.groups.top, m.join.top, 'the two cards share a top edge, so they are still beside each other');
+  assert.deepEqual(m.pastGroups, [], 'something inside "Groups & rooms" runs past its right edge');
+  assert.deepEqual(m.pastJoin, [], 'something inside "Joining code" runs past its right edge (the npub box, in the owner\'s screenshot)');
+  const short = m.names.filter(n => n.name.length <= 12 && n.ellipsed);
+  assert.ok(m.names.some(n => n.name === 'Notices'), 're-anchor: the Notices room is not in the list');
+  assert.deepEqual(short, [], 'a room name of 12 characters or fewer is cut short with "…": ' + JSON.stringify(short));
+  // the joining card puts its QR above its text: the QR's bottom edge is above the "Your church code" label
+  assert.ok(m.qr && m.code, 're-anchor: no QR (role=img) or no "Your church code" label on the joining card');
+  assert.ok(m.qr.top + m.qr.h <= m.code.top + 0.5, `the QR sits beside the code text, not above it (QR bottom ${m.qr.top + m.qr.h}, label top ${m.code.top})`);
+});

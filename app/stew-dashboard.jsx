@@ -3114,9 +3114,15 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
       <span className="sk-btn sk-btn--clay" style={{ padding: '9px 14px', fontSize: 13.5, flexShrink: 0 }}>Review <Icon name="chevR" size={15} color="var(--on-clay)" /></span>
     </button>
   ) : null;
-  // on narrow, panels size to content and the page scrolls; on wide they fill a fixed-height grid + scroll inside
-  const fillStyle = narrow ? {} : { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' };
-  const listStyle = narrow ? { display: 'flex', flexDirection: 'column', gap: 10 } : { display: 'flex', flexDirection: 'column', gap: 10, flex: 1, minHeight: 0, overflowY: 'auto' };
+  // on narrow, panels size to content and the page scrolls; on wide they fill a fixed-height grid + scroll inside.
+  // THE LOWER CARDS STACK IN THE SUITE'S WINDOW TOO (`snug`, under 1000px). Side by side in a 612px pane they were
+  // 300px and 308px wide (measured 2026-09-22 at 900x780): "Notices" ellipsed to "Noti…" beside its Broadcast
+  // pill, and the joining card's QR sat against a 142px text column with the code, the npub box and five
+  // buttons crammed into it — the owner's screenshot after the church went public. Stacked, each card has the
+  // pane, the joining card puts its QR above its text (`center`), and the page scrolls like the phone's.
+  const stacked = narrow || snug;
+  const fillStyle = stacked ? {} : { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' };
+  const listStyle = stacked ? { display: 'flex', flexDirection: 'column', gap: 10 } : { display: 'flex', flexDirection: 'column', gap: 10, flex: 1, minHeight: 0, overflowY: 'auto' };
 
   // minmax(0, …), not 1fr — see the note on StatCard. A bare `1fr` let one card's longest word set the
   // track width and shove the other column 14px off a 360px screen.
@@ -3153,14 +3159,14 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
   );
   const joinPanel = (
     <Panel title="Joining code">
-      <JoinCard qrSize={92} center={narrow} />
+      <JoinCard qrSize={92} center={stacked} />
       <div style={{ marginTop: 12 }}><PushEnabler /></div>
     </Panel>
   );
   const activityPanel = (
     <Panel title="Recent activity" style={fillStyle}>
       {activity.length === 0 ? <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '6px 2px' }}>Nothing yet — activity shows here as your church chats.</div> : null}
-      <div className="no-scrollbar" style={narrow ? { display: 'flex', flexDirection: 'column', gap: 14 } : { display: 'flex', flexDirection: 'column', gap: 14, flex: 1, minHeight: 0, overflowY: 'auto' }}>
+      <div className="no-scrollbar" style={stacked ? { display: 'flex', flexDirection: 'column', gap: 14 } : { display: 'flex', flexDirection: 'column', gap: 14, flex: 1, minHeight: 0, overflowY: 'auto' }}>
         {activity.map((a) => {
           const t = SK_TINT[a.tint] || SK_TINT.ink;
           // resolve a group name for chat-linked rows (the gid is the group id, not its name)
@@ -3187,6 +3193,15 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
     return (
       <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 16 }}>
         {pendingBanner}{careReqBanner}{stewardReqBanner}{stat}{joinPanel}{groupsPanel}{activityPanel}
+        {chatModal}
+      </div>
+    );
+  }
+  if (snug) {
+    // the Suite's window: the desktop stat row, then one column of content-sized cards — see `stacked`
+    return (
+      <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 18 }}>
+        {pendingBanner}{careReqBanner}{stewardReqBanner}{stat}{groupsPanel}{joinPanel}{activityPanel}
         {chatModal}
       </div>
     );
