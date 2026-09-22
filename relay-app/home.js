@@ -20,12 +20,27 @@
 // /relay-names/mine spawns the tailscale CLI up to three times (8 s + 6 s + 6 s budgets) before it will say
 // what its `handle` is — so on a box where "Go public" was ever tried and tailscaled is now down, a genuine
 // first run timed out into the two doors and the card was never seen (measured: 4 s fake tailscale → doors).
-// Now there is no timer: the page says "Checking this computer…" and waits for the answer, and only a box
-// that cannot answer gets the doors. (A gateway that accepts the request and never answers is a wedged box,
-// and its two doors would open on pages that do not load either.)
+// So the page says "Checking this computer…" and waits for the answer, and only a box that cannot answer
+// gets the doors.
+//
+// BUT WAITING IS NOT THE SAME AS NEVER DECIDING (AUDIT-round-a F1). `fetch` has no timeout of its own, so
+// "wait for the answer" with nothing above it is a dead end: measured, a box that ACCEPTS /relay-names/mine
+// and never answers it left this page on "Checking this computer…" — no card, no doors — still undecided
+// after 45 000 ms, and a synchronous throw from the first `fetch` did the same. Neither is "a wedged box
+// whose pages do not load either": in both measurements the launcher, its scripts and every other route
+// loaded perfectly from the same box. Only one route failed.
+//
+// Hence the CEILING below: 25 s, then the doors, whatever is or is not in flight. 25 and not 2.5 because the
+// slowest HONEST answer is the one N1 is about — /relay-names/mine calls tsState(), which spawns the
+// tailscale CLI with budgets of 8 s + 6 s + 6 s (gateway.mjs tsState), so 20 s is the structural worst case
+// for a box that WILL answer, and a ceiling at or under it would send that box back to the doors. 25 s clears
+// it with margin and is far under "for ever". It is armed BEFORE the fetches, as the old 2.5 s timer was, so
+// it covers a throw as well as a stall; and the three calls are wrapped so that a synchronous throw from any
+// of them reaches the doors at once rather than waiting the 25 s out (nothing is in flight to wait for).
 //
 // The doors are visible in the HTML and this hides them while it asks, so a script that never runs leaves
-// the launcher with its doors, never blank (the splash lesson: this page must not be a dead end).
+// the launcher with its doors; the ceiling is the same promise kept for a script that runs and never
+// finishes. Never blank, either way (the splash lesson: this page must not be a dead end).
 (function () {
   var card = document.getElementById('firstRun');
   var doors = document.getElementById('doors');
@@ -47,22 +62,28 @@
   if (marked) { show('doors'); return; }
   doors.hidden = true; if (sub) sub.hidden = true;          // while asking; show() undoes it
   if (checking) checking.hidden = false;
+  var ceiling = setTimeout(function () { show('doors'); }, 25000);   // armed first: it covers a throw too
   // Each question either answers (its JSON) or throws — a non-2xx is a throw, so Promise.all rejects on the
   // first question the box cannot answer and the doors are shown. Nothing here turns a failure into "no".
-  var answered = function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); };
-  var status = fetch('/status', { cache: 'no-store' }).then(answered);
-  var named = fetch('/local-token', { cache: 'no-store' })
-    .then(answered)
-    .then(function (j) {
-      if (!j || !j.token) throw new Error('no local token');
-      return fetch('/relay-names/mine', { headers: { Authorization: 'Bearer ' + j.token }, cache: 'no-store' }).then(answered);
-    });
-  Promise.all([status, named]).then(function (res) {
-    var s = res[0], nm = res[1];
-    var hasChurch = !!s && s.writePolicy === true;
-    var hasName = !!(nm && nm.handle);
-    show(hasChurch || hasName ? 'doors' : 'card');
-  }).catch(function () { show('doors'); });                  // cannot tell → the doors, never a claim
+  try {
+    var answered = function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); };
+    var status = fetch('/status', { cache: 'no-store' }).then(answered);
+    var named = fetch('/local-token', { cache: 'no-store' })
+      .then(answered)
+      .then(function (j) {
+        if (!j || !j.token) throw new Error('no local token');
+        return fetch('/relay-names/mine', { headers: { Authorization: 'Bearer ' + j.token }, cache: 'no-store' }).then(answered);
+      });
+    Promise.all([status, named]).then(function (res) {
+      clearTimeout(ceiling);
+      var s = res[0], nm = res[1];
+      var hasChurch = !!s && s.writePolicy === true;
+      var hasName = !!(nm && nm.handle);
+      show(hasChurch || hasName ? 'doors' : 'card');
+    }).catch(function () { clearTimeout(ceiling); show('doors'); });   // cannot tell → the doors, never a claim
+  } catch (e) {                                              // fetch itself threw: nothing is in flight to wait for
+    clearTimeout(ceiling); show('doors');
+  }
 })();
 
 // Suite launcher update check. The local relay does the actual GitHub fetch server-side (/suite-update)

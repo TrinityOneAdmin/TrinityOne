@@ -101,6 +101,26 @@ async function startBrokenFront(gw, brokenRoute) {
   return f;
 }
 
+// A front in front of a REAL gateway that ACCEPTS one route and never answers it — the socket stays open, no
+// status line is ever written — and hands everything else through. This is a route-level stall, not a box that
+// cannot serve HTML: the launcher, its scripts and every other route load perfectly from the same front. It is
+// the case `fetch` has no timeout for, so nothing but a ceiling in home.js can end it. `stop()` closes it and
+// destroys the held sockets.
+async function startStallingFront(gw, stalledRoute) {
+  const port = await freePort('the guided-path test\'s stalling front');
+  const held = new Set();
+  const srv = createServer((req, res) => {
+    if ((req.url || '').split('?')[0] === stalledRoute) { held.add(res); req.socket.setKeepAlive(true); return; }   // accepted, never answered
+    const up = httpRequest({ host: '127.0.0.1', port: gw.port, method: req.method, path: req.url, headers: { ...req.headers, host: '127.0.0.1:' + gw.port } }, (r) => { res.writeHead(r.statusCode, r.headers); r.pipe(res); });
+    up.on('error', () => { try { res.writeHead(502); res.end(); } catch {} });
+    req.pipe(up);
+  });
+  await new Promise(r => srv.listen(port, '127.0.0.1', r));
+  const f = { port, base: `http://127.0.0.1:${port}`, held, stop() { live.delete(f); for (const r of held) { try { r.destroy(); } catch {} } try { srv.closeAllConnections(); srv.close(); } catch {} } };
+  live.add(f);
+  return f;
+}
+
 async function startChrome(url) {
   const cdp = await freePort('the guided-path test\'s Chrome debug port');
   const prof = mkdtempSync(join(tmpdir(), 'trin-guided-chrome-'));
@@ -297,6 +317,68 @@ test('a slow /relay-names/mine still gets the card — the launcher waits for th
     assert.equal(await launcherSettled(c), 'doors', 'a box that cannot answer /status was told "first time here"');
     assert.deepEqual((await readLauncher(c)).doors, [true, true]);
   } finally { if (c) c.stop(); if (front) front.stop(); if (front2) front2.stop(); gw.stop(); try { rmSync(dir, { recursive: true, force: true }); } catch {} }
+});
+
+// ── 1c. the ceiling: waiting is not the same as never deciding ─────────────────────────────
+// AUDIT-round-a F1. Row 1b removed the 2.5 s fallback so a slow box is waited for. `fetch` has no timeout, so
+// that left NO ceiling: the auditor measured a box that ACCEPTS /relay-names/mine and never answers it sitting
+// on "Checking this computer…" — no card, no doors — still undecided after 45 000 ms, where the parent commit
+// showed the doors after 2527 ms. A synchronous throw from the first `fetch` did the same (undecided at
+// 20 000 ms), because the old timer was armed BEFORE the fetches and nothing was left running once the throw
+// escaped. Both rows here are route-level failures, not a box that cannot serve HTML: the page, its scripts
+// and every other route load perfectly from the same front. The rule: the launcher waits, but it always
+// decides — "this page must not be a dead end".
+// Stamps HOW LONG the page took to decide, on the page's own clock, from the first instant of the document.
+// (A poll and not a MutationObserver: this runs at document-start, where document.documentElement can still
+// be null and observe(null) would throw — taking the row's other injected script with it.)
+const RECORD_DECIDE = `window.__t0 = performance.now();
+(function tick() {
+  if (document.body && document.body.getAttribute('data-first-run')) { if (!window.__decidedAt) window.__decidedAt = performance.now() - window.__t0; return; }
+  setTimeout(tick, 20);
+})();`;
+
+test('a box that accepts a question and never answers it still ends on the DOORS, and so does a synchronous throw — the launcher waits, but it always decides',
+  { skip: !CHROME ? 'no chromium' : false, timeout: 180000 }, async () => {
+  const gw = await startGateway();
+  let c = null, stall = null;
+  try {
+    // (a) the front accepts /relay-names/mine and never answers it. Nothing else is touched.
+    stall = await startStallingFront(gw, '/relay-names/mine');
+    c = await startChrome('about:blank');
+    await c.send('Page.addScriptToEvaluateOnNewDocument', { source: RECORD_DECIDE });
+    await c.goto(stall.base + HOME);
+    // while it waits it is honest about it — the "checking" line, neither the card nor the doors
+    await waitFor(c, `(${ON})(document.getElementById('checking'))`, 'the "Checking this computer…" line while the box is silent', 20000);
+    const early = await c.evalIn(`(() => { const on = ${ON}; return JSON.stringify({ decided: document.body.getAttribute('data-first-run'), card: on(document.getElementById('firstRun')), doors: [...document.querySelectorAll('a.mode')].map(on), checking: on(document.getElementById('checking')), text: document.body.innerText }); })()`).then(JSON.parse);
+    assert.equal(early.decided, null, 'the launcher decided before the ceiling: ' + JSON.stringify(early));
+    assert.deepEqual([early.card, early.doors], [false, [false, false]], JSON.stringify(early));
+    assert.match(early.text, /Checking this computer/, early.text);
+    // re-anchor: the stall is real — the front is holding that request open and has answered nothing.
+    // (Polled: /relay-names/mine is only asked once /local-token has answered, so it is not there the instant
+    // the "checking" line goes up.)
+    for (let i = 0; i < 100 && stall.held.size === 0; i++) await sleep(100);
+    assert.ok(stall.held.size >= 1, 're-anchor: the front never received /relay-names/mine, so this row measures nothing');
+    const decided = await waitFor(c, `document.body.getAttribute('data-first-run')`, 'THE LAUNCHER TO DECIDE AT ALL — a box that accepts a question and never answers it leaves it on "Checking this computer…" for ever (AUDIT-round-a F1): this page must not be a dead end', 45000);
+    const at = Number(await c.evalIn(`window.__decidedAt || 0`));
+    assert.equal(decided, 'doors', 'a box that never answered was told "first time here" — it decided "' + decided + '" after ' + at + ' ms');
+    assert.deepEqual((await readLauncher(c)).doors, [true, true], 'the doors are not on screen after the ceiling fired');
+    assert.equal(await c.evalIn(`(${ON})(document.getElementById('checking'))`), false, 'the "checking" line is still on screen after the ceiling fired');
+    // the ceiling is a BACKSTOP, not a short timer: it must not fire before the gateway's own worst legitimate
+    // answer (tsState = 8 s + 6 s + 6 s), or row 1b's slow box is back on the doors.
+    assert.ok(at > 20000, 'the ceiling fired after ' + at + ' ms — that is inside the 20 s worst case of tsState() itself, so a slow-but-honest box would be sent to the doors again (AUDIT-suite-B4 N1)');
+    assert.ok(at < 40000, 'the ceiling took ' + at + ' ms');
+    c.stop(); c = null; stall.stop(); stall = null;
+    // (b) the first fetch throws synchronously. Under the old timer this still ended on the doors; with the
+    // timer gone the throw escaped the IIFE and nothing was left running.
+    c = await startChrome('about:blank');
+    await c.send('Page.addScriptToEvaluateOnNewDocument', { source: `window.fetch = function () { throw new TypeError('Failed to fetch (thrown synchronously by the test)'); };\n` + RECORD_DECIDE });
+    await c.goto(gw.base + HOME);
+    const d2 = await waitFor(c, `document.body.getAttribute('data-first-run')`, 'THE LAUNCHER TO DECIDE when `fetch` throws synchronously — the throw escapes the deciding block and leaves the whole page on "Checking this computer…" (AUDIT-round-a F1)', 45000);
+    const at2 = Number(await c.evalIn(`window.__decidedAt || 0`));
+    assert.equal(d2, 'doors', 'a box whose questions could not even be asked was told "first time here" — it decided "' + d2 + '"');
+    assert.deepEqual((await readLauncher(c)).doors, [true, true], 'the doors are not on screen after a synchronous throw');
+    assert.ok(at2 < 5000, 'a synchronous throw took ' + at2 + ' ms to reach the doors — nothing is in flight, so it must not wait for the ceiling');
+  } finally { if (c) c.stop(); if (stall) stall.stop(); gw.stop(); }
 });
 
 // ── 2. "Set up everything" ────────────────────────────────────────────────────────────────────────────────
