@@ -17382,7 +17382,7 @@ zoo`.split("\n");
   }
   function _webEmit() {
     if (!_web) return;
-    const snap = { ..._web.share, optOut: [..._web.share.optOut], optIn: [..._web.share.optIn || []], known: _web.shareKnown, blocked: _web.blocked || 0, blockedWhy: (_web.blocked ? _web.stuckWhy : "") || "", held: _web.held || 0 };
+    const snap = { ..._web.share, optOut: [..._web.share.optOut], optIn: [..._web.share.optIn || []], known: _web.shareKnown, blocked: _web.blocked || 0, blockedWhy: (_web.blocked ? _web.stuckWhy : "") || "", held: _web.held || 0, heldIds: [..._web.heldIds || []] };
     for (const cb of _web.listeners) {
       try {
         cb(snap);
@@ -17428,7 +17428,8 @@ zoo`.split("\n");
       stuck: /* @__PURE__ */ new Set(),
       stuckWhy: "",
       blocked: 0,
-      held: 0
+      held: 0,
+      heldIds: []
     };
     const s1 = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#d": [SHARE_D + pub] }], {
       onevent(e) {
@@ -17603,22 +17604,24 @@ zoo`.split("\n");
     const shown = new Set(w.share.optIn || []);
     const offFeed = new Set(w.share.optOut);
     const gaveUp = keyReady && !!w.keyedSince && tNow - w.keyedSince >= WEB_GIVE_UP_S;
-    let held = 0;
+    const heldIds = [];
     for (const id of w.copies.keys()) {
       if (want.has(id)) continue;
       if (w.stuck.has(id)) {
         const groupScoped = w.groupSeen.has(id) && !shown.has(id);
         if (!(gaveUp && groupScoped)) {
-          if (!offFeed.has(id)) held++;
+          if (!offFeed.has(id)) heldIds.push(id);
           continue;
         }
       }
       tombs.push(id);
     }
-    const heldShowing = showing ? held : 0;
-    if (showing !== w.blocked || heldShowing !== w.held) {
+    const heldShowing = showing ? heldIds.length : 0;
+    const idsShowing = showing ? heldIds : [];
+    if (showing !== w.blocked || heldShowing !== w.held || idsShowing.join("\n") !== (w.heldIds || []).join("\n")) {
       w.blocked = showing;
       w.held = heldShowing;
+      w.heldIds = idsShowing;
       _webEmit();
     }
     if (!writes.length && !tombs.length) return;
@@ -22353,6 +22356,27 @@ zoo`.split("\n");
     isWebsiteHeld(eventId) {
       const w = _webEnsure();
       return !!(w && w.share.optOut.includes(String(eventId || "")));
+    },
+    // THE SAME TICK, FOR THE COPIES NOBODY CAN OPEN — the control beside "N of them are still on your website"
+    // on Settings → Your website, and the only proportionate answer a church has to that sentence
+    // (AUDIT-feeds-round4-2026-09-22 F1). An event this console cannot open has no date, so it is on no day of
+    // the calendar grid and its editor cannot be reached at all; the only other lever was the master switch,
+    // which takes the whole calendar down. These ids come from `heldIds` in the watch's snapshot — the copies
+    // the relay holds — so nothing here needs a name key or a readable document.
+    //
+    // ONE WRITE, NOT ONE PER ID. share: is rewritten whole, so a write per id is one chance per id for the
+    // relay to refuse halfway and leave the page's sentence half true. Refuses (false) rather than writing
+    // before the relay has answered, for the reason on setWebsiteShare: the document would be rebuilt from the
+    // defaults and every earlier opt-out and the switch itself would go with it.
+    setWebsiteHeldMany(eventIds) {
+      const ids = _webIds(eventIds);
+      if (!ids.length) return Promise.resolve(false);
+      const w = _webEnsure();
+      if (!w || !w.shareKnown) return Promise.resolve(false);
+      const cur = w.share.optOut;
+      const optOut = [.../* @__PURE__ */ new Set([...cur, ...ids])];
+      if (optOut.length === cur.length) return Promise.resolve(true);
+      return this.setWebsiteShare({ optOut });
     },
     // The per-event "On the website" tick, for an event scoped to a GROUP: the inverse of setWebsiteHeld,
     // because the default is the inverse. Same refusal-until-EOSE rule, for the same reason.

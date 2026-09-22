@@ -480,6 +480,50 @@ test('F2: a copy the owner ticked "Not on the website" is NOT counted as still o
   assert.equal(m2.emitted[m2.emitted.length - 1].held, 1, 'a stuck copy that IS being served stopped being counted');
 });
 
+test('F1: the engine NAMES the copies still out there, so a control can act without opening them', async () => {
+  // AUDIT-feeds-round4-2026-09-22 F1. A count cannot be acted on. These ids are the whole reason the control
+  // beside the sentence can work at all: they come from w.copies, never from a document this console opened.
+  const ids = ['evta', 'evtb', 'evtc', 'evtd', 'evte'];
+  const bodyOf = (id) => JSON.stringify({ title: 'Event ' + id, date: '2026-10-03', time: '19:30', where: 'The hall', blurb: '', recur: '', day: null });
+  const evOf = (id) => ({ id, raw: sealed({ title: 'Event ' + id, date: '2026-10-03', time: '19:30', where: 'The hall', blurb: '' }, KEY_LOST), ts: 10 });
+  const m = mirror({ events: ids.map(evOf), copies: Object.fromEntries(ids.map(i => [i, bodyOf(i)])), share: share() });
+  await pastReporting(m);
+  const last = m.emitted[m.emitted.length - 1];
+  assert.equal(last.held, 5, 're-anchor: the page does not say five copies are still up');
+  assert.deepEqual([...(last.heldIds || [])].sort(), ids,
+    'THE PAGE IS GIVEN A COUNT AND NOTHING TO ACT ON — heldIds is ' + JSON.stringify(last.heldIds));
+  // …and the ids go away with the copies, so the control never offers to act on something already off
+  m.w.share.optOut = [...ids];
+  await m._webSync();
+  assert.deepEqual(m.emitted[m.emitted.length - 1].heldIds, [], 'the ids outlived the copies being taken off the website');
+});
+
+test('F1: setWebsiteHeldMany ticks every id off in ONE share: write, and keeps the earlier opt-outs', async () => {
+  // The shipped API the control calls, lifted out of vendor/steward.js and driven (memory:
+  // tests-must-drive-shipped-code). One write, not one per id: the share: document is rewritten whole, so a
+  // write per id would be five chances for the relay to refuse halfway and leave the page half true.
+  const body = fnBody(STEWARD, 'setWebsiteHeldMany(eventIds) {', 'setWebsiteHeldMany');
+  assert.match(body, /_webEnsure\(\)/, 'vendor/steward.js: setWebsiteHeldMany no longer consults the watch — re-anchor');
+  const patches = [];
+  const w = { share: { optOut: ['evtold'], optIn: [] }, shareKnown: true };
+  const lifted = [stmt(STEWARD, 'var WEB_ID_OK = ', 'WEB_ID_OK'), stmt(STEWARD, 'var _webIds = ', '_webIds')].join('\n');
+  const scope = { _webEnsure: () => w, _patches: patches };
+  const names = Object.keys(scope);
+  const api = new Function(...names,
+    `${lifted}\nreturn { ${body},\n  setWebsiteShare(p) { _patches.push(p); return Promise.resolve(true); } };`)(...names.map(n => scope[n]));
+  assert.equal(await api.setWebsiteHeldMany(['evta', 'evtb', 'evta']), true, 'the control was refused on a known share: document');
+  assert.equal(patches.length, 1, 'THE CONTROL WROTE THE SHARE DOCUMENT ' + patches.length + ' TIMES — one refusal halfway leaves the page half true');
+  assert.deepEqual(patches[0].optOut.sort(), ['evta', 'evtb', 'evtold'], 'the control dropped an earlier opt-out, or an id: ' + JSON.stringify(patches[0]));
+  // …and it refuses rather than writing a document built on defaults before the relay has answered
+  patches.length = 0; w.shareKnown = false;
+  assert.equal(await api.setWebsiteHeldMany(['evtc']), false, 'THE CONTROL WROTE share: BEFORE THE RELAY HAD ANSWERED — every earlier opt-out and the switch itself would be rewritten from the defaults');
+  assert.deepEqual(patches, [], 'it wrote anyway');
+  // …and junk never reaches the document
+  w.shareKnown = true;
+  assert.equal(await api.setWebsiteHeldMany(['../../etc', '']), false, 'an id that cannot be an event id reached the share document');
+  assert.deepEqual(patches, [], 'it wrote anyway');
+});
+
 test('R5 CONTROL: a readable event\'s copy is never withdrawn, however long another one stays stuck', async () => {
   const body = JSON.stringify({ title: 'Harvest supper', date: '2026-10-03', time: '19:30', where: 'The hall', blurb: '', recur: '', day: null });
   const m = mirror({ events: [GOOD1, GOOD2, LOST], copies: { evtsupper: body }, share: share() });
@@ -510,7 +554,12 @@ test('CONTROL: with every event readable nothing is blocked and nothing is emitt
 });
 
 // ── the screen: the real DashWebsitePanel ────────────────────────────────────────────────────────────────
-function panel(snapshot) {
+// `sink` (optional) is how a row DRIVES the panel rather than only reading it: it collects the engine calls
+// the panel makes, keeps the rendered nodes, and hands back a `render()` that re-runs the component over the
+// same hook state — so a row can click a control and then read what the page says afterwards. `sink.ok`
+// false makes the engine refuse, which is the case a control must not celebrate (memory:
+// fix-the-control-not-the-label).
+function panel(snapshot, sink) {
   // The slice starts at the WHY TABLE, not at the component: the sentences live in a module-level const
   // beside it and a slice that began at `function DashWebsitePanel` would render into a ReferenceError.
   const from = DASH.indexOf('const WEB_BLOCKED_WHY = {');
@@ -525,7 +574,10 @@ function panel(snapshot) {
     Fragment: 'Frag',
   };
   const h = (type, props, ...kids) => ({ type, props: { ...(props || {}), children: kids.flat() } });
-  const win = { Steward: { subscribeWebsiteShare: (cb) => { cb(snapshot); return () => {}; }, websiteFeedUrl: () => 'https://church.example/public/npub1x/calendar.ics', setWebsiteShare: async () => true } };
+  const s = sink || {};
+  s.calls = [];
+  const win = { Steward: { subscribeWebsiteShare: (cb) => { cb(snapshot); return () => {}; }, websiteFeedUrl: () => 'https://church.example/public/npub1x/calendar.ics', setWebsiteShare: async () => true,
+    setWebsiteHeldMany: async (ids) => { s.calls.push(ids); return s.ok !== false; } } };
   const scope = { React, h, Frag: 'Frag', Icon: () => null, Panel: (p) => h('panel', p), copyText: () => true, window: win };
   const names = Object.keys(scope);
   const mod = new Function(...names, JS + '\nreturn { DashWebsitePanel };')(...names.map(n => scope[n]));
@@ -540,9 +592,14 @@ function panel(snapshot) {
     : (n && n.props ? [].concat(n.props.children || []).map(text).join('') : '');
   // TWO PASSES, like the real thing: the panel starts with `share` null and learns it from the engine in an
   // effect. One pass would only ever read the "still loading" tree, which says nothing about anything.
-  idx = 0; mod.DashWebsitePanel({ church: {} });
-  idx = 0;
-  return nodes(mod.DashWebsitePanel({ church: {} })).map(text).join(' | ');
+  // `s.tree` is the element tree itself. `nodes()` above stops at a COMPONENT element (it calls the
+  // component and walks what comes back, and the Panel stub returns a node whose children are empty), so a
+  // row that needs a particular control — not just the words on the page — walks the tree with allNodes().
+  const render = () => { idx = 0; s.tree = mod.DashWebsitePanel({ church: {} }); s.nodes = nodes(s.tree); return s.nodes.map(text).join(' | '); };
+  render();
+  s.render = render;
+  s.text = text;
+  return render();
 }
 
 test('THE SCREEN: Settings → Your website says how many events could not be published, and why', () => {
@@ -598,6 +655,67 @@ test('THE SCREEN (F1): the page says which of them are STILL on the website', ()
   const none = panel({ ...share(), known: true, blocked: 2, blockedWhy: 'key', held: 0 });
   assert.match(none, /2 events could not be published/, 're-anchor: the blocked line stopped rendering');
   assert.doesNotMatch(none, /still on your website/, 'the page claims events are still published when the engine withdrew them');
+});
+
+// ── F1: a church can ACT on the sentence, without opening anything ───────────────────────────────────────
+// AUDIT-feeds-round4-2026-09-22 F1. The page told a church "1 of them is still on your website" and offered
+// nothing that would take it off. The intended escape — tick the event "Not on the website", which the relay
+// honours at serve time — is unreachable for exactly these events: a locked event is absorbed with no date
+// (`_subAddr`), the console calendar buckets by date, and `grep -c "_locked" app/stew-schedule.jsx` is 0, so
+// the event is on no day of the grid and its editor cannot be opened. The only lever left was the master
+// switch, which takes the whole calendar down. This control writes the same opt-out for the ids the engine
+// has already named, so it needs no key and opens nothing.
+const HELD_SNAP = (over = {}) => ({ ...share(), known: true, blocked: 1, blockedWhy: 'key', held: 1, heldIds: ['evtstuck'], ...over });
+const allNodes = (n, out = []) => {
+  if (!n || typeof n !== 'object') return out;
+  if (Array.isArray(n)) { n.forEach(x => allNodes(x, out)); return out; }
+  out.push(n);
+  allNodes(n.props && n.props.children, out);
+  return out;
+};
+const btnIn = (sink, label) => allNodes(sink.tree).find(n => n && n.type === 'button' && n.props && n.props['aria-label'] === label);
+
+test('THE SCREEN (F1): the held sentence carries a control that takes those copies off the website', async () => {
+  const sink = {};
+  const said = panel(HELD_SNAP(), sink);
+  assert.match(said, /Take it off our website/,
+    'THE PAGE TELLS A CHURCH A COPY IS STILL PUBLIC AND OFFERS NOTHING THAT WOULD TAKE IT OFF — the only lever is the master switch, which removes the whole calendar');
+  const btn = btnIn(sink, 'Take off our website');
+  assert.ok(btn && typeof btn.props.onClick === 'function', 'the control is not a button that does anything');
+  await btn.props.onClick({ stopPropagation() {} });
+  assert.deepEqual(sink.calls, [['evtstuck']],
+    'THE CONTROL DID NOT TICK THE HELD IDS OFF THE WEBSITE — it called the engine with ' + JSON.stringify(sink.calls));
+  assert.match(sink.render(), /your website no longer shows it/, 'the page does not say what just happened');
+  // the plural reads as a plural, and carries every id the engine named
+  const many = {};
+  const saidMany = panel(HELD_SNAP({ blocked: 3, held: 3, heldIds: ['evta', 'evtb', 'evtc'] }), many);
+  assert.match(saidMany, /Take them off our website/, 'the control is singular for three events');
+  await btnIn(many, 'Take off our website').props.onClick({ stopPropagation() {} });
+  assert.deepEqual(many.calls, [['evta', 'evtb', 'evtc']], 'the control took only some of the copies off');
+});
+
+test('THE SCREEN (F1): the control does not claim success over a write the relay refused', async () => {
+  // memory: fix-the-control-not-the-label — six serving controls toasted success on the line after a call
+  // that can refuse. A church that reads "taken off" and is still published is worse off than one that was
+  // told nothing, because it will stop looking.
+  const sink = { ok: false };
+  panel(HELD_SNAP(), sink);
+  await btnIn(sink, 'Take off our website').props.onClick({ stopPropagation() {} });
+  const after = sink.render();
+  assert.match(after, /Not saved/, 'A REFUSED WRITE IS REPORTED AS SUCCESS: ' + after.slice(0, 200));
+  assert.doesNotMatch(after, /no longer shows it/, 'the page celebrated a write that never landed');
+});
+
+test('THE SCREEN (F1) CONTROL: nothing held, no control — and nothing to press when the engine named no ids', () => {
+  const none = {};
+  const said = panel({ ...share(), known: true, blocked: 2, blockedWhy: 'key', held: 0 }, none);
+  assert.doesNotMatch(said, /off our website/, 'the page offers to take copies off when none are up');
+  assert.equal(btnIn(none, 'Take off our website'), undefined, 're-anchor: the control renders with nothing held');
+  // a snapshot from an older engine carries no ids: the control must not pretend it can act
+  const stale = {};
+  panel(HELD_SNAP({ heldIds: undefined }), stale);
+  const btn = btnIn(stale, 'Take off our website');
+  assert.ok(!btn || btn.props.disabled, 'THE CONTROL OFFERS TO ACT ON IDS IT WAS NEVER GIVEN');
 });
 
 test('CONTROL: with nothing blocked the page says nothing of the kind', () => {

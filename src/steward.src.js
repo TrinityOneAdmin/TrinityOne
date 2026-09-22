@@ -3498,7 +3498,10 @@ function _webGroupSeen(w, id, isGroup) {
 }
 let _web = null;   // the watch: { pub, share, shareTs, shareKnown, events, eventsKnown, copies, copyTs, copiesKnown, subs, listeners, busy, again, timer }
 function _webStop() { if (!_web) return; for (const off of _web.subs) { try { off(); } catch {} } if (_web.timer) clearTimeout(_web.timer); _web = null; }
-function _webEmit() { if (!_web) return; const snap = { ..._web.share, optOut: [..._web.share.optOut], optIn: [...(_web.share.optIn || [])], known: _web.shareKnown, blocked: _web.blocked || 0, blockedWhy: (_web.blocked ? _web.stuckWhy : '') || '', held: _web.held || 0 }; for (const cb of _web.listeners) { try { cb(snap); } catch {} } }
+// `heldIds` is the other half of `held`: a count cannot be acted on, and the control on the Settings page
+// ticks exactly these ids "Not on the website". They come from the copies the relay holds, never from a
+// document this console managed to open — that is what makes the control reachable for an event it cannot.
+function _webEmit() { if (!_web) return; const snap = { ..._web.share, optOut: [..._web.share.optOut], optIn: [...(_web.share.optIn || [])], known: _web.shareKnown, blocked: _web.blocked || 0, blockedWhy: (_web.blocked ? _web.stuckWhy : '') || '', held: _web.held || 0, heldIds: [...(_web.heldIds || [])] }; for (const cb of _web.listeners) { try { cb(snap); } catch {} } }
 function _webQueueSync() { if (!_web) return; if (_web.timer) clearTimeout(_web.timer); _web.timer = setTimeout(() => { if (_web) { _web.timer = null; _webSync(); } }, 250); }
 function _webEnsure(restart) {
   if (_web && _web.pub === pub && !restart) return _web;
@@ -3516,7 +3519,7 @@ function _webEnsure(restart) {
                      events: new Map(), versions: new Map(), eventsKnown: false,
                      copies: new Map(), copyTs: new Map(), copiesKnown: false, subs: [], listeners, busy: false, again: false, timer: null,
                      stuckSince: 0, keyedSince: 0, groupSeen: _webGroupLoad(pub),
-                     stuck: new Set(), stuckWhy: '', blocked: 0, held: 0 };
+                     stuck: new Set(), stuckWhy: '', blocked: 0, held: 0, heldIds: [] };
   // 1. the switch — the church's OWN copy only, never a steward's or a co-tenant's
   const s1 = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#d': [SHARE_D + pub] }], {
     onevent(e) {
@@ -3738,17 +3741,20 @@ async function _webSync() {
   const shown = new Set(w.share.optIn || []);
   const offFeed = new Set(w.share.optOut);
   const gaveUp = keyReady && !!w.keyedSince && tNow - w.keyedSince >= WEB_GIVE_UP_S;
-  let held = 0;
+  const heldIds = [];
   for (const id of w.copies.keys()) {
     if (want.has(id)) continue;
     if (w.stuck.has(id)) {
       const groupScoped = w.groupSeen.has(id) && !shown.has(id);
-      if (!(gaveUp && groupScoped)) { if (!offFeed.has(id)) held++; continue; }
+      if (!(gaveUp && groupScoped)) { if (!offFeed.has(id)) heldIds.push(id); continue; }
     }
     tombs.push(id);
   }
-  const heldShowing = showing ? held : 0;
-  if (showing !== w.blocked || heldShowing !== w.held) { w.blocked = showing; w.held = heldShowing; _webEmit(); }
+  const heldShowing = showing ? heldIds.length : 0;
+  const idsShowing = showing ? heldIds : [];
+  if (showing !== w.blocked || heldShowing !== w.held || idsShowing.join('\n') !== (w.heldIds || []).join('\n')) {
+    w.blocked = showing; w.held = heldShowing; w.heldIds = idsShowing; _webEmit();
+  }
   if (!writes.length && !tombs.length) return;
   w.busy = true;
   try {
@@ -8514,6 +8520,26 @@ window.Steward = {
     return this.setWebsiteShare({ optOut });
   },
   isWebsiteHeld(eventId) { const w = _webEnsure(); return !!(w && w.share.optOut.includes(String(eventId || ''))); },
+  // THE SAME TICK, FOR THE COPIES NOBODY CAN OPEN — the control beside "N of them are still on your website"
+  // on Settings → Your website, and the only proportionate answer a church has to that sentence
+  // (AUDIT-feeds-round4-2026-09-22 F1). An event this console cannot open has no date, so it is on no day of
+  // the calendar grid and its editor cannot be reached at all; the only other lever was the master switch,
+  // which takes the whole calendar down. These ids come from `heldIds` in the watch's snapshot — the copies
+  // the relay holds — so nothing here needs a name key or a readable document.
+  //
+  // ONE WRITE, NOT ONE PER ID. share: is rewritten whole, so a write per id is one chance per id for the
+  // relay to refuse halfway and leave the page's sentence half true. Refuses (false) rather than writing
+  // before the relay has answered, for the reason on setWebsiteShare: the document would be rebuilt from the
+  // defaults and every earlier opt-out and the switch itself would go with it.
+  setWebsiteHeldMany(eventIds) {
+    const ids = _webIds(eventIds);
+    if (!ids.length) return Promise.resolve(false);
+    const w = _webEnsure(); if (!w || !w.shareKnown) return Promise.resolve(false);   // see setWebsiteShare
+    const cur = w.share.optOut;
+    const optOut = [...new Set([...cur, ...ids])];
+    if (optOut.length === cur.length) return Promise.resolve(true);                   // every one already ticked
+    return this.setWebsiteShare({ optOut });
+  },
   // The per-event "On the website" tick, for an event scoped to a GROUP: the inverse of setWebsiteHeld,
   // because the default is the inverse. Same refusal-until-EOSE rule, for the same reason.
   setWebsiteShown(eventId, shown) {

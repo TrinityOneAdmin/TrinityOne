@@ -8439,6 +8439,7 @@ function DashWebsitePanel({ church }) {
   const blocked = (share && share.blocked) || 0;
   const whyBlocked = (WEB_BLOCKED_WHY[(share && share.blockedWhy)] || WEB_BLOCKED_WHY.shape)[blocked === 1 ? 0 : 1];
   const held = (share && share.held) || 0;
+  const heldIds = (share && share.heldIds) || [];
   const url = (window.Steward.websiteFeedUrl && window.Steward.websiteFeedUrl()) || '';
   const toggle = async () => {
     if (busy || !known) return;
@@ -8447,6 +8448,23 @@ function DashWebsitePanel({ church }) {
     try { ok = await Promise.resolve(window.Steward.setWebsiteShare({ calendar: !on })); } catch (e) { ok = false; }
     setBusy(false);
     if (!ok) setMsg('Not saved — the relay didn’t accept the change.');
+  };
+  // THE CONTROL BESIDE THE SENTENCE (AUDIT-feeds-round4-2026-09-22 F1). Until this existed the page told a
+  // church "1 of them is still on your website" and offered nothing that would take it off: an event this
+  // console cannot open has no date, so it is on no day of the calendar grid and its editor — where the
+  // "Not on the website" tick lives — cannot be reached at all. The only lever left was the switch above,
+  // which takes the WHOLE calendar down. This writes the same tick for the ids the engine named, which the
+  // relay honours at serve time, so it needs no key and opens nothing. Reversible: the tick comes off from
+  // the event itself once a key can read it again, and the copy is never destroyed.
+  const takeOff = async () => {
+    if (busy || !known || !heldIds.length) return;
+    setBusy(true); setMsg('');
+    let ok = false;
+    try { ok = await Promise.resolve(window.Steward.setWebsiteHeldMany(heldIds)); } catch (e) { ok = false; }
+    setBusy(false);
+    // memory: fix-the-control-not-the-label — never celebrate on the line after a call that can refuse.
+    setMsg(ok ? (heldIds.length === 1 ? 'Taken off — your website no longer shows it.' : 'Taken off — your website no longer shows them.')
+      : 'Not saved — the relay didn’t accept the change.');
   };
   // copyText, not navigator.clipboard: the console runs on plain http on a LAN box, where the clipboard API is
   // undefined, and copyText already carries the execCommand fallback that copes with that (see its note).
@@ -8484,6 +8502,13 @@ function DashWebsitePanel({ church }) {
           {held === 1 ? '1 of them is still on your website — this console could not open it to check.'
             : held + ' of them are still on your website — this console could not open them to check.'}
         </div>
+      ) : null}
+      {held ? (
+        <button onClick={takeOff} disabled={busy || !known || !heldIds.length} aria-label="Take off our website"
+          title="Your website stops showing them. Put the tick back from the event itself once a church key can open it again."
+          className="sk-btn sk-btn--ghost" style={{ marginTop: 6, padding: '7px 13px', fontSize: 12.5, opacity: (busy || !known || !heldIds.length) ? .5 : 1 }}>
+          {held === 1 ? 'Take it off our website' : 'Take them off our website'}
+        </button>
       ) : null}
 
       <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', margin: '14px 0 6px' }}>Served from</div>
