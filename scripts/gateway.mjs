@@ -7614,7 +7614,10 @@ server.listen(PORT, BIND_HOST, () =>
     // NOT "open relay" ANY MORE. This line said "write policy OFF (open relay — anyone may write)" long after
     // accept() started refusing every write from a box with no churches. An operator reading it would conclude
     // their unconfigured relay was permissive when in fact it keeps nothing at all.
-    (CHURCH_PUBS.size ? `\n  write policy ON — ${CHURCH_PUBS.size} church(es), ${MEMBERS.size} members, ${BROADCAST.size} broadcast group(s)` : `\n  NO CHURCH CONFIGURED — this relay refuses every write until one is set up in the control dashboard`) +
+    // NOT "set up in the control dashboard" EITHER. The panel adds a church that already exists, by npub; a NEW
+    // church is created in the Steward console, and naming it there registers it here (2026-09-04). The owner's
+    // first run of the real app (2026-09-22) followed the old line's advice and ended with no church.
+    (CHURCH_PUBS.size ? `\n  write policy ON — ${CHURCH_PUBS.size} church(es), ${MEMBERS.size} members, ${BROADCAST.size} broadcast group(s)` : `\n  NO CHURCH CONFIGURED — this relay refuses every write until a church is created in the Steward console (http://localhost:${PORT}/steward.html), or an existing one is added by npub in the relay panel`) +
     `\n  setup / control:  http://localhost:${PORT}/relay-app/control.html` +
     `\n  admin token (needed to configure from another device): ${ADMIN_TOKEN}` +
     (!_strictWeb ? `\n  ⚠ CSP is LAX (unsafe-inline/eval) — served shells still carry in-browser Babel. Deploy a PRE-TRANSPILED build (or set STRICT_CSP=1) before go-live: the console holds the church key.` : '')));

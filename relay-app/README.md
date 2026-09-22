@@ -45,9 +45,12 @@ one's up, else your LAN address), and prints:
 Leave the window open; close it to stop the relay.
 
 ## Which church it serves — set it up in the browser
-Open the **control dashboard** (`/relay-app/control.html`) and, under *Churches on this relay*, paste
-your church's `npub` (from the Steward console) and Save. It writes the relay's write policy and applies
-it instantly — no file editing, no restart. The relay only accepts writes from churches listed there.
+A **new** church is created in the Steward console served by this same box (`/steward.html`), and naming
+it there registers it on this relay automatically — there is nothing to paste. For a church that already
+exists elsewhere, open the **control panel** (`/relay-app/control.html`) and, under *Churches on this
+relay*, paste its `npub` (from its Steward console) and Save. It writes the relay's write policy and
+applies it instantly — no file editing, no restart. The relay refuses every write until it has a church,
+and then accepts writes only from the churches listed there.
 
 Configuring from the relay's **own computer** fills the admin token in automatically — the relay hands it
 only to genuine same-machine requests (`/local-token`, loopback-fenced). Configuring from **another device**
