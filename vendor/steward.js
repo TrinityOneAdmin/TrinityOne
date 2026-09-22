@@ -15295,6 +15295,9 @@ zoo`.split("\n");
     }
     return null;
   }
+  function _nameKeyReady() {
+    return _nameKeyRing.length > 0;
+  }
   var NAME_D = "trinityone/name:";
   var CLEARANCE_D = "trinityone/clearance:";
   var _clearanceSent = /* @__PURE__ */ new Map();
@@ -17347,6 +17350,24 @@ zoo`.split("\n");
       day: recur && typeof ev.day === "number" ? ev.day : null
     });
   }
+  function _webGroupKey(cp) {
+    return "trinityone.webgroup." + cp;
+  }
+  var WEB_GROUP_MAX = 2e3;
+  function _webGroupLoad(cp) {
+    try {
+      const a = JSON.parse(lsGet(_webGroupKey(cp)) || "[]");
+      return new Set(Array.isArray(a) ? a.filter((x) => typeof x === "string" && WEB_ID_OK.test(x)).slice(0, WEB_GROUP_MAX) : []);
+    } catch (e) {
+      return /* @__PURE__ */ new Set();
+    }
+  }
+  function _webGroupSeen(w, id, isGroup) {
+    if (isGroup === w.groupSeen.has(id)) return;
+    if (isGroup) w.groupSeen.add(id);
+    else w.groupSeen.delete(id);
+    lsSet(_webGroupKey(w.pub), JSON.stringify([...w.groupSeen].slice(0, WEB_GROUP_MAX)));
+  }
   var _web = null;
   function _webStop() {
     if (!_web) return;
@@ -17361,7 +17382,7 @@ zoo`.split("\n");
   }
   function _webEmit() {
     if (!_web) return;
-    const snap = { ..._web.share, optOut: [..._web.share.optOut], optIn: [..._web.share.optIn || []], known: _web.shareKnown, blocked: _web.blocked || 0, blockedWhy: (_web.blocked ? _web.stuckWhy : "") || "" };
+    const snap = { ..._web.share, optOut: [..._web.share.optOut], optIn: [..._web.share.optIn || []], known: _web.shareKnown, blocked: _web.blocked || 0, blockedWhy: (_web.blocked ? _web.stuckWhy : "") || "", held: _web.held || 0 };
     for (const cb of _web.listeners) {
       try {
         cb(snap);
@@ -17401,10 +17422,13 @@ zoo`.split("\n");
       busy: false,
       again: false,
       timer: null,
-      lockedTries: 0,
+      stuckSince: 0,
+      keyedSince: 0,
+      groupSeen: _webGroupLoad(pub),
       stuck: /* @__PURE__ */ new Set(),
       stuckWhy: "",
-      blocked: 0
+      blocked: 0,
+      held: 0
     };
     const s1 = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#d": [SHARE_D + pub] }], {
       onevent(e) {
@@ -17486,8 +17510,9 @@ zoo`.split("\n");
     });
     return w;
   }
-  var WEB_BLOCKED_AFTER = 3;
-  var WEB_LOCKED_TRIES = 60;
+  var WEB_BLOCKED_AFTER_S = 6;
+  var WEB_GIVE_UP_S = 600;
+  var WEB_RETRY_MS = 2e3;
   function _sealIsWhole(ct) {
     const s = String(ct || "");
     if (s.length < 132 || s.length > 87472 || s[0] === "#") return false;
@@ -17537,6 +17562,7 @@ zoo`.split("\n");
         w.stuckWhy = !w.stuckWhy || w.stuckWhy === why ? why : "mixed";
         continue;
       }
+      _webGroupSeen(w, ev.id, !!(c && typeof c === "object" && String(c.groupId || "")));
       if (held.has(ev.id)) continue;
       if (!c || typeof c !== "object" || !/^\d{4}-\d{2}-\d{2}$/.test(String(c.date || ""))) continue;
       if (String(c.groupId || "") && !shown.has(ev.id)) continue;
@@ -17553,27 +17579,41 @@ zoo`.split("\n");
     }
     const want = _webDesired(w);
     if (want === null) return;
+    const tNow = now();
+    const keyReady = _nameKeyReady();
     if (w.stuck.size) {
-      if (w.lockedTries < WEB_LOCKED_TRIES) {
-        w.lockedTries++;
-        setTimeout(() => {
-          if (_web === w) _webQueueSync();
-        }, 2e3);
-      }
-    } else w.lockedTries = 0;
-    const showing = w.stuck.size && w.lockedTries >= WEB_BLOCKED_AFTER ? w.stuck.size : 0;
-    if (showing !== w.blocked) {
-      w.blocked = showing;
-      _webEmit();
+      if (!w.stuckSince) w.stuckSince = tNow;
+      if (!keyReady) w.keyedSince = 0;
+      else if (!w.keyedSince) w.keyedSince = tNow;
+      if (tNow - (w.keyedSince || w.stuckSince) <= WEB_GIVE_UP_S) setTimeout(() => {
+        if (_web === w) _webQueueSync();
+      }, WEB_RETRY_MS);
+    } else {
+      w.stuckSince = 0;
+      w.keyedSince = 0;
     }
+    const showing = w.stuck.size && tNow - w.stuckSince >= WEB_BLOCKED_AFTER_S ? w.stuck.size : 0;
     const writes = [], tombs = [];
     for (const [id, body] of want) if (w.copies.get(id) !== body) writes.push([id, body]);
     const shown = new Set(w.share.optIn || []);
-    const gaveUp = w.lockedTries >= WEB_LOCKED_TRIES;
+    const gaveUp = keyReady && !!w.keyedSince && tNow - w.keyedSince >= WEB_GIVE_UP_S;
+    let held = 0;
     for (const id of w.copies.keys()) {
       if (want.has(id)) continue;
-      if (w.stuck.has(id) && !(gaveUp && !shown.has(id))) continue;
+      if (w.stuck.has(id)) {
+        const groupScoped = w.groupSeen.has(id) && !shown.has(id);
+        if (!(gaveUp && groupScoped)) {
+          if (!groupScoped) held++;
+          continue;
+        }
+      }
       tombs.push(id);
+    }
+    const heldShowing = showing ? held : 0;
+    if (showing !== w.blocked || heldShowing !== w.held) {
+      w.blocked = showing;
+      w.held = heldShowing;
+      _webEmit();
     }
     if (!writes.length && !tombs.length) return;
     w.busy = true;
@@ -19980,7 +20020,11 @@ zoo`.split("\n");
             if (!mine || !churchSk) return;
             const plain = decrypt3(mine, getConversationKey(churchSk, e.pubkey));
             const r = JSON.parse(plain);
-            if (Array.isArray(r)) _nameKeyRing = r.filter((x) => typeof x === "string" && /^[0-9a-f]+$/i.test(x));
+            if (Array.isArray(r)) {
+              const had = _nameKeyReady();
+              _nameKeyRing = r.filter((x) => typeof x === "string" && /^[0-9a-f]+$/i.test(x));
+              if (!had && _nameKeyReady()) _webQueueSync();
+            }
           } catch (x) {
           }
         },
@@ -20025,7 +20069,7 @@ zoo`.split("\n");
       return "";
     },
     nameKeyReady() {
-      return _nameKeyRing.length > 0;
+      return _nameKeyReady();
     },
     setMinors(pubkeys) {
       _requireTrustedView("list of children");

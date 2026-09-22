@@ -15,8 +15,15 @@
 //      would take a perfectly good event off the church's website because this console lost a key — and
 //      reports one blocked event, with why, once the retries are spent.
 //   2. THE SCREEN (CLAUDE.md rule 1), by executing the real DashWebsitePanel out of app/stew-dashboard.jsx
-//      and reading the tree: the count and the reason are on the page, and are absent when nothing is
-//      blocked. Deleting the line from the panel fails this file.
+//      and reading the tree: the count, the reason, and how many are still published anyway are on the page,
+//      and are absent when nothing is blocked. Deleting either line from the panel fails this file.
+//
+// AND THE THIRD ROUND (AUDIT-feeds-round3-2026-09-22 F1) — the withdrawal this file's R5 rows introduced was
+// too wide, too fast, and blind to the state it mattered most in. Its rows are `F1a` (a whole-church event
+// stays; a church's calendar never empties itself), `F1b` (the budget is wall clock, not a count of syncs
+// that relay chatter can spend in ~15 s) and `F1c` (a key ring that has not ARRIVED is not a key that is
+// GONE). The clock the engine reads is injected here, so nothing in this file proves elapsed time by
+// calling _webSync in a loop.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -31,12 +38,22 @@ const KEY_OURS = 'a1'.repeat(32), KEY_LOST = 'b2'.repeat(32);
 const sealed = (obj, key) => JSON.stringify({ e: nip44e(JSON.stringify(obj), unhex(key)) });
 
 // ── the mirror, lifted out of the bundle ─────────────────────────────────────────────────────────────────
-function mirror({ events, copies, share }) {
+// `ring` is the array the lifted code reads as _nameKeyRing and it is mutated IN PLACE by the rows below, so
+// a test can start with an empty ring (the key has not arrived) and hand it over later. `tick(seconds)`
+// moves the clock the engine reads through now(); nothing here advances by counting syncs, because after
+// AUDIT-feeds-round3 F1 the engine does not either.
+function mirror({ events, copies, share, ring = [KEY_OURS], store = new Map() }) {
   const src = STEWARD;
   const body = [
     stmt(src, 'var WEB_ID_OK = ', 'WEB_ID_OK'),
-    stmt(src, 'var WEB_BLOCKED_AFTER = ', 'WEB_BLOCKED_AFTER'),
-    stmt(src, 'var WEB_LOCKED_TRIES = ', 'WEB_LOCKED_TRIES'),
+    stmt(src, 'var WEB_BLOCKED_AFTER_S = ', 'WEB_BLOCKED_AFTER_S'),
+    stmt(src, 'var WEB_GIVE_UP_S = ', 'WEB_GIVE_UP_S'),
+    stmt(src, 'var WEB_RETRY_MS = ', 'WEB_RETRY_MS'),
+    stmt(src, 'var WEB_GROUP_MAX = ', 'WEB_GROUP_MAX'),
+    fnBody(src, 'function _nameKeyReady', '_nameKeyReady'),
+    fnBody(src, 'function _webGroupKey', '_webGroupKey'),
+    fnBody(src, 'function _webGroupLoad', '_webGroupLoad'),
+    fnBody(src, 'function _webGroupSeen', '_webGroupSeen'),
     fnBody(src, 'function _sealIsWhole', '_sealIsWhole'),
     fnBody(src, 'function _webWhyStuck', '_webWhyStuck'),
     fnBody(src, 'function _openChurchDoc', '_openChurchDoc'),
@@ -50,22 +67,26 @@ function mirror({ events, copies, share }) {
   assert.match(body, /_openChurchDoc\(ev\.raw\)/, 'vendor/steward.js: _webDesired no longer opens the event document');
   assert.equal((fnBody(src, 'async function _webSync', '_webSync').match(/tombs\.push\(id\)/g) || []).length, 1,
     'vendor/steward.js: the tombstone push is not where this test thinks it is');
+  assert.match(body, /_nameKeyReady\(\)/, 'vendor/steward.js: _webSync no longer asks whether the key ring has arrived — re-anchor (F1)');
+  assert.match(body, /w\.groupSeen\.has\(id\)/, 'vendor/steward.js: the withdrawal no longer consults what this console knows is group-scoped — re-anchor (F1)');
 
   const published = [];
   const emitted = [];
+  let clock = 1790000000;
   const w = {
     pub: 'CP', share, shareTs: 1, shareKnown: true,
     events: new Map(events.map(e => [e.id, e])), versions: new Map(), eventsKnown: true,
     copies: new Map(Object.entries(copies)), copyTs: new Map(), copiesKnown: true,
     subs: [], listeners: new Set([(snap) => emitted.push(snap)]), busy: false, again: false, timer: null,
-    lockedTries: 0, stuck: new Set(), stuckWhy: '', blocked: 0,
+    stuckSince: 0, keyedSince: 0, groupSeen: new Set(), stuck: new Set(), stuckWhy: '', blocked: 0, held: 0,
   };
   const scope = {
     _web: w, pub: 'CP', sk: 'SK', actingChurch: '',
-    _nameKeyRing: [KEY_OURS],
+    _nameKeyRing: ring,
     _unhex: unhex,
+    lsGet: (k) => (store.has(k) ? store.get(k) : null), lsSet: (k, v) => store.set(k, v),
     NET: 'trinityone', PUBEVENT_D: 'trinityone/pubevent:',
-    now: () => 1790000000,
+    now: () => clock,
     feChurch: (tmpl) => tmpl,
     publish: async (evt) => { published.push(evt); return true; },
     _webQueueSync: () => { scope.queued++; },
@@ -80,11 +101,20 @@ function mirror({ events, copies, share }) {
   assert.ok(dec, 'vendor/steward.js: _openChurchDoc no longer decrypts the way this test reads it — re-anchor');
   scope[dec] = (ct, k) => require44().decrypt(ct, k);
   const names = Object.keys(scope);
-  const api = new Function(...names, `${body}\nreturn { _webSync, _webDesired, w: _web };`)(...names.map(n => scope[n]));
-  return { ...api, published, emitted, scope, w,
+  const api = new Function(...names, `${body}\nreturn { _webSync, _webDesired, _webGroupLoad, w: _web };`)(...names.map(n => scope[n]));
+  w.groupSeen = api._webGroupLoad('CP');   // as _webEnsure does: what this console remembered before it restarted
+  return { ...api, published, emitted, scope, w, ring, store,
+    tick: (seconds) => { clock += seconds; },
     dtags: () => published.map(e => (e.tags.find(t => t[0] === 'd') || [])[1]),
     tombstoned: () => published.filter(e => e.tags.some(t => t[0] === 'deleted')).map(e => (e.tags.find(t => t[0] === 'd') || [])[1]) };
 }
+// Long enough to be past WEB_GIVE_UP_S whatever it is set to, without this file hard-coding the number.
+const GIVE_UP_S = +(stmt(STEWARD, 'var WEB_GIVE_UP_S = ', 'WEB_GIVE_UP_S').match(/=\s*(\d+)/) || [])[1];
+const BLOCKED_AFTER_S = +(stmt(STEWARD, 'var WEB_BLOCKED_AFTER_S = ', 'WEB_BLOCKED_AFTER_S').match(/=\s*(\d+)/) || [])[1];
+// Two syncs with the clock moved between them. That is ALL it should ever take, and the row below that says
+// so is the one that would fail if the budget went back to counting calls.
+const spendBudget = async (m) => { await m._webSync(); m.tick(GIVE_UP_S + 1); await m._webSync(); };
+const pastReporting = async (m) => { await m._webSync(); m.tick(BLOCKED_AFTER_S + 1); await m._webSync(); };
 // nostr-tools/nip44 is ESM; the lifted code calls nip44d synchronously, so hand it the real decrypt.
 let _n44 = null;
 function require44() { return _n44; }
@@ -98,6 +128,11 @@ const JUNK = { id: 'evtjunk', raw: 'not a document at all', ts: 13 };
 // CONTENTS: it unseals with the key we hold and what comes out is not an event.
 const DAMAGED = { id: 'evtdamaged', raw: JSON.stringify({ e: JSON.parse(GOOD1.raw).e.slice(0, 40) }), ts: 14 };
 const CONTENTS = { id: 'evtcontents', raw: JSON.stringify({ e: nip44e('this is not json at all', unhex(KEY_OURS)) }), ts: 15 };
+// The R5 pair: THE SAME EVENT, readable and then not. A `groupId` lives only in the sealed document, so the
+// readable copy is the console's one and only chance to learn that this event belongs to a room.
+const YOUTH = { title: 'Youth night', date: '2026-11-01', time: '19:30', where: 'The vestry', blurb: '', groupId: 'grpyouth' };
+const GROUP_READABLE = { id: 'evtyouth', raw: sealed(YOUTH, KEY_OURS), ts: 16 };
+const GROUP_LOST = { id: 'evtyouth', raw: sealed(YOUTH, KEY_LOST), ts: 17 };
 
 test('before all: the real nip44', async () => { _n44 = await import('nostr-tools/nip44'); assert.ok(_n44.decrypt); });
 
@@ -124,11 +159,13 @@ test('a copy that genuinely should not exist is still tombstoned — the skip is
   assert.deepEqual(m.tombstoned(), ['trinityone/pubevent:evtgone'], 'a copy with no event behind it is no longer withdrawn');
 });
 
-test('the steward is told, with a reason, once the retries are spent — and not before', async () => {
+test('the steward is told, with a reason, once it has been stuck a few seconds — and not before', async () => {
   const m = mirror({ events: [GOOD1, LOST], copies: {}, share: share() });
   await m._webSync();
   assert.equal(m.emitted.length, 0, 'the first sync already cried wolf — the name key is usually merely late');
-  for (let i = 0; i < 5; i++) await m._webSync();
+  for (let i = 0; i < 40; i++) await m._webSync();
+  assert.equal(m.emitted.length, 0, 'FORTY SYNCS IN NO TIME AT ALL CRIED WOLF — relay chatter, not elapsed time, is deciding when the page speaks');
+  await pastReporting(m);
   const last = m.emitted[m.emitted.length - 1];
   assert.ok(last, 'THE STEWARD IS NEVER TOLD: the mirror is skipping an event and nothing is emitted');
   assert.equal(last.blocked, 1, 'the snapshot reports ' + (last && last.blocked) + ' blocked events, not 1');
@@ -138,7 +175,7 @@ test('the steward is told, with a reason, once the retries are spent — and not
 
 test('a document that is not a document at all is reported as such', async () => {
   const m = mirror({ events: [GOOD1, JUNK], copies: {}, share: share() });
-  for (let i = 0; i < 6; i++) await m._webSync();
+  await pastReporting(m);
   const last = m.emitted[m.emitted.length - 1];
   assert.equal(last.blockedWhy, 'shape', 'an unparseable document was reported as a missing key');
   assert.deepEqual(m.dtags(), ['trinityone/pubevent:evtsupper'], 'the good event was not published alongside it');
@@ -153,7 +190,7 @@ test('R4: each of the four causes is reported as itself, not all as a missing ke
   const causes = [[LOST, 'key'], [DAMAGED, 'damaged'], [CONTENTS, 'contents'], [JUNK, 'shape']];
   for (const [ev, why] of causes) {
     const m = mirror({ events: [GOOD1, ev], copies: {}, share: share() });
-    for (let i = 0; i < 6; i++) await m._webSync();
+    await pastReporting(m);
     const last = m.emitted[m.emitted.length - 1];
     assert.ok(last, ev.id + ': the steward is never told at all');
     assert.equal(last.blocked, 1, ev.id + ': ' + last.blocked + ' blocked, not 1');
@@ -167,7 +204,7 @@ test('R4: each of the four causes is reported as itself, not all as a missing ke
 test('R4: two stuck events of DIFFERENT causes do not have one of them named for both', async () => {
   for (const pair of [[LOST, JUNK], [JUNK, LOST], [DAMAGED, CONTENTS]]) {
     const m = mirror({ events: [GOOD1, ...pair], copies: {}, share: share() });
-    for (let i = 0; i < 6; i++) await m._webSync();
+    await pastReporting(m);
     const last = m.emitted[m.emitted.length - 1];
     assert.equal(last.blocked, 2, 'two events should be blocked, not ' + last.blocked);
     assert.equal(last.blockedWhy, 'mixed',
@@ -175,7 +212,7 @@ test('R4: two stuck events of DIFFERENT causes do not have one of them named for
   }
   // CONTROL: two stuck events of the SAME cause still name that cause.
   const same = mirror({ events: [GOOD1, LOST, { ...LOST, id: 'evtlost2' }], copies: {}, share: share() });
-  for (let i = 0; i < 6; i++) await same._webSync();
+  await pastReporting(same);
   assert.equal(same.emitted[same.emitted.length - 1].blockedWhy, 'key', 'two of one cause stopped naming it');
 });
 
@@ -185,49 +222,165 @@ test('R4: two stuck events of DIFFERENT causes do not have one of them named for
 // becomes unopenable is never withdrawn by the mirror, and the relay has no rule for it because it cannot see
 // a groupId. It stays on the church's public website for ever. The two commits were written an hour apart.
 //
-// THE RULE, and its cost stated plainly. While the console is still retrying, nothing changes: the name key
-// is usually merely LATE, and row 3 above is exactly that case. Once the retry budget is SPENT — 60 tries at
-// 2 s, so about two minutes with a console open and the document still shut — the console stops vouching for
-// what it cannot read, and a copy comes off UNLESS the owner ticked that event "On the website". That tick is
-// the one positive statement a church has made about a group event being public, so it is honoured.
+// THE RULE, in the shape AUDIT-feeds-round3-2026-09-22 F1 narrowed it to. While the console is still within
+// its budget nothing changes: the name key is usually merely LATE, and row 3 above is exactly that case.
+// Once the budget is spent — TEN MINUTES OF WALL CLOCK with the key ring present and the document still shut
+// — a copy comes off IF this console can tell it is a group's event, and not otherwise:
 //
-// The cost: a WHOLE-CHURCH event whose name key is permanently gone also leaves the website after those two
-// minutes, where before it stayed. That is the deliberate half of this trade — the console cannot tell the
-// two apart without opening the document, and of the two wrong answers, "a parish notice disappears from the
-// website until the key is restored, with the page saying so" is recoverable and "an adults-only room's title
-// and place stay on a public website" is not. It is also the direction the rest of this feature already
-// leans: a group's event is off the feed unless a steward ticks it on.
-test('R5: a stuck copy the owner never ticked ON comes off the website once the console has stopped waiting', async () => {
+//   * group-scoped, in the only sense the console can know it: an id it has OPENED and found a `groupId` on,
+//     remembered per church in localStorage. That is the migration case R5 is about — the console published
+//     the copy, so it could read the document then.
+//   * UNLESS the owner ticked it "On the website", the one positive statement a church has made about a
+//     group event being public.
+//   * anything else — a whole-church event, or an id this console has never been able to open at all —
+//     STAYS, and the Settings page says how many are still out there. The first version withdrew those too,
+//     and a church with an empty key ring lost its ENTIRE public calendar (F1a, five of five).
+test('R5: a stuck copy of a GROUP event comes off the website once the console has stopped waiting', async () => {
   const live = JSON.stringify({ title: 'Youth night', date: '2026-11-01', time: '19:30', where: 'The vestry', blurb: '', recur: '', day: null });
-  const m = mirror({ events: [GOOD1, LOST], copies: { evtlost: live }, share: share() });
+  // THE WHOLE SEQUENCE, because only the first step can tell the console whose event this is. The owner
+  // ticked the youth group's event onto the website, so the copy is there legitimately and the console has
+  // opened the document and seen its groupId. Then the name key goes. Then the owner takes the tick off —
+  // from a phone-installed console, or this one — and the console must still get it off a public website
+  // even though it can no longer read a word of it.
+  const m = mirror({ events: [GOOD1, GROUP_READABLE], copies: { evtyouth: live }, share: share({ optIn: ['evtyouth'] }) });
+  await m._webSync();
+  assert.deepEqual([...m.w.groupSeen], ['evtyouth'], 'the console did not remember whose event this is while it could still read it');
+  assert.deepEqual(m.tombstoned(), [], 're-anchor: a ticked-on group event was withdrawn while it was perfectly readable');
+  m.w.events.set('evtyouth', GROUP_LOST);        // …and now the name key is gone
+  m.w.share.optIn = [];                          // …and the owner takes it off the website
   await m._webSync();
   assert.deepEqual(m.tombstoned(), [], 'THE FIRST SYNC ALREADY WITHDREW IT — the name key is usually merely late, and this is row 3\'s case');
-  for (let i = 0; i < 70; i++) await m._webSync();
-  assert.deepEqual(m.tombstoned(), ['trinityone/pubevent:evtlost'],
+  await spendBudget(m);
+  assert.deepEqual(m.tombstoned(), ['trinityone/pubevent:evtyouth'],
     'AN ADULTS-ONLY GROUP EVENT STAYS ON THE CHURCH\'S PUBLIC WEBSITE for ever because this console cannot open it — nothing else withdraws it, the relay cannot see a groupId, and the owner may not know it is there');
   assert.deepEqual(m.dtags().filter(d => !m.tombstoned().includes(d)), ['trinityone/pubevent:evtsupper'], 'the readable event stopped being published');
 });
 
 test('R5: …but a stuck copy the owner DID tick "On the website" is left alone, however long it stays shut', async () => {
   const live = JSON.stringify({ title: 'Youth night', date: '2026-11-01', time: '19:30', where: 'The vestry', blurb: '', recur: '', day: null });
-  const m = mirror({ events: [GOOD1, LOST], copies: { evtlost: live }, share: share({ optIn: ['evtlost'] }) });
-  for (let i = 0; i < 70; i++) await m._webSync();
+  const m = mirror({ events: [GOOD1, GROUP_READABLE], copies: { evtyouth: live }, share: share({ optIn: ['evtyouth'] }) });
+  await m._webSync();
+  m.w.events.set('evtyouth', GROUP_LOST);
+  await spendBudget(m);
   assert.deepEqual(m.tombstoned(), [],
     'THE OWNER TICKED THIS EVENT ONTO THE WEBSITE and the console took it off anyway because it could not read it');
+});
+
+// ── F1: the three ways the withdrawal used to be wrong ───────────────────────────────────────────────────
+// AUDIT-feeds-round3-2026-09-22 F1, all three measured against the shipped bundle before this fix.
+test('F1a: a WHOLE-CHURCH event whose key is gone STAYS on the website — a church\'s calendar never empties itself', async () => {
+  const ids = ['evta', 'evtb', 'evtc', 'evtd', 'evte'];
+  const bodyOf = (id) => JSON.stringify({ title: 'Event ' + id, date: '2026-10-03', time: '19:30', where: 'The hall', blurb: '', recur: '', day: null });
+  const evOf = (id) => ({ id, raw: sealed({ title: 'Event ' + id, date: '2026-10-03', time: '19:30', where: 'The hall', blurb: '' }, KEY_LOST), ts: 10 });
+  const m = mirror({ events: ids.map(evOf), copies: Object.fromEntries(ids.map(i => [i, bodyOf(i)])), share: share() });
+  await spendBudget(m);
+  assert.deepEqual(m.tombstoned(), [],
+    'THE CHURCH\'S ENTIRE PUBLIC CALENDAR EMPTIED ITSELF because one console cannot read it — five of five whole-church events withdrawn (F1a)');
+  // …and it is SAID, not silently left: the church is told both halves.
+  const last = m.emitted[m.emitted.length - 1];
+  assert.equal(last.blocked, 5, 'the page does not say how many could not be published');
+  assert.equal(last.held, 5, 'THE PAGE DOES NOT SAY THEY ARE STILL PUBLISHED — the console left five events on a public website and told nobody');
+});
+
+test('F1b: the budget is ELAPSED TIME, not a count of syncs — relay chatter cannot spend it', async () => {
+  // _webQueueSync debounces at 250 ms and is called from all three subscriptions' onevent/oneose as well as
+  // from setWebsiteShare/Held/Shown, so a budget of 60 CALLS could be spent by ordinary post-EOSE traffic in
+  // about 15 seconds. This row drives 500 syncs with the clock standing still.
+  const live = JSON.stringify({ title: 'Youth night', date: '2026-11-01', time: '19:30', where: 'The vestry', blurb: '', recur: '', day: null });
+  const m = mirror({ events: [GOOD1, GROUP_READABLE], copies: { evtyouth: live }, share: share({ optIn: ['evtyouth'] }) });
+  await m._webSync();
+  m.w.events.set('evtyouth', GROUP_LOST);
+  m.w.share.optIn = [];
+  for (let i = 0; i < 500; i++) await m._webSync();
+  assert.deepEqual(m.tombstoned(), [],
+    'FIVE HUNDRED SYNCS IN NO TIME AT ALL SPENT THE BUDGET — a chatty relay, not a long wait, is deciding to withdraw a church\'s event');
+  // the same watch, once the clock really moves
+  m.tick(GIVE_UP_S + 1); await m._webSync();
+  assert.deepEqual(m.tombstoned(), ['trinityone/pubevent:evtyouth'], 'CONTROL: the budget never expires at all now');
+});
+
+test('F1c: a key that has NOT ARRIVED is not a key that is gone — a late ring spends no budget and empties nothing', async () => {
+  // _nameKeyRing starts empty on every boot and is filled by a separate subscription. Before this fix the two
+  // states were indistinguishable to _webSync: measured, an empty ring took all three of a church's events
+  // off its public website. Here the documents are sealed under the key this console is ABOUT to receive.
+  const ids = ['evta', 'evtb', 'evtc'];
+  const bodyOf = (id) => JSON.stringify({ title: 'Event ' + id, date: '2026-10-03', time: '19:30', where: 'The hall', blurb: '', recur: '', day: null });
+  const evOf = (id) => ({ id, raw: sealed({ title: 'Event ' + id, date: '2026-10-03', time: '19:30', where: 'The hall', blurb: '' }, KEY_OURS), ts: 10 });
+  const m = mirror({ events: ids.map(evOf), copies: Object.fromEntries(ids.map(i => [i, bodyOf(i)])), share: share(), ring: [] });
+  await m._webSync();
+  m.tick(GIVE_UP_S * 6); await m._webSync();                       // an hour of a console waiting on its key
+  assert.deepEqual(m.tombstoned(), [],
+    'A KEY THAT WAS MERELY LATE EMPTIED THE CHURCH\'S WEBSITE — "the envelope has not arrived" and "the key is gone" are the same state to the mirror (F1c)');
+  assert.equal(m.w.keyedSince, 0, 'the give-up clock started while the key ring was still empty');
+  // and when it does arrive, everything comes back
+  m.ring.push(KEY_OURS);
+  await m._webSync();
+  assert.equal(m.w.stuck.size, 0, 'the events did not become readable when the key arrived');
+  assert.deepEqual(m.tombstoned(), [], 'the key arriving withdrew something');
+});
+
+test('F1: a copy this console has NEVER been able to open is left alone and said, not withdrawn', async () => {
+  // The honest limit of the fix, stated as a test: the migration case R5 is about is only knowable when this
+  // console once read the document. An id it has never opened is UNKNOWN, not "whole-church" — and unknown
+  // stays on the website. Deleting `w.groupSeen.has(id)` from the engine turns this row red.
+  const live = JSON.stringify({ title: 'Youth night', date: '2026-11-01', time: '19:30', where: 'The vestry', blurb: '', recur: '', day: null });
+  const m = mirror({ events: [GOOD1, LOST], copies: { evtlost: live }, share: share() });
+  await spendBudget(m);
+  assert.deepEqual(m.tombstoned(), [], 'a copy this console has never opened was withdrawn on a guess');
+  assert.equal(m.emitted[m.emitted.length - 1].held, 1, 'the page does not say the unclassifiable copy is still out there');
+});
+
+test('F1: what this console knows about an event SURVIVES A RESTART — it is the restart that loses the key', async () => {
+  const live = JSON.stringify({ title: 'Youth night', date: '2026-11-01', time: '19:30', where: 'The vestry', blurb: '', recur: '', day: null });
+  const store = new Map();
+  const first = mirror({ events: [GOOD1, GROUP_READABLE], copies: { evtyouth: live }, share: share({ optIn: ['evtyouth'] }), store });
+  await first._webSync();
+  assert.equal(store.get('trinityone.webgroup.CP'), '["evtyouth"]', 'nothing was written where the next boot would read it');
+  // a NEW console object over the same storage, and this time the key never opens the document
+  const next = mirror({ events: [GOOD1, GROUP_LOST], copies: { evtyouth: live }, share: share(), store });
+  assert.deepEqual([...next.w.groupSeen], ['evtyouth'], 'the new watch did not read back what the last one learned');
+  await spendBudget(next);
+  assert.deepEqual(next.tombstoned(), ['trinityone/pubevent:evtyouth'], 'the remembered answer was not used after the restart');
+});
+
+test('F1: an event edited from a GROUP back to whole-church is forgotten, so a later key loss does not withdraw it', async () => {
+  const live = JSON.stringify({ title: 'Youth night', date: '2026-11-01', time: '19:30', where: 'The vestry', blurb: '', recur: '', day: null });
+  const m = mirror({ events: [GOOD1, GROUP_READABLE], copies: { evtyouth: live }, share: share({ optIn: ['evtyouth'] }) });
+  await m._webSync();
+  assert.deepEqual([...m.w.groupSeen], ['evtyouth'], 're-anchor: it was never remembered as a group\'s event');
+  m.w.events.set('evtyouth', { id: 'evtyouth', raw: sealed({ title: 'Youth night', date: '2026-11-01', time: '19:30', where: 'The vestry', blurb: '' }, KEY_OURS), ts: 20 });
+  await m._webSync();
+  assert.deepEqual([...m.w.groupSeen], [], 'a group event made whole-church is still remembered as a group\'s');
+  m.w.events.set('evtyouth', GROUP_LOST);
+  await spendBudget(m);
+  assert.deepEqual(m.tombstoned(), [], 'a WHOLE-CHURCH event was withdrawn on a memory of what it used to be');
 });
 
 test('R5 CONTROL: a readable event\'s copy is never withdrawn, however long another one stays stuck', async () => {
   const body = JSON.stringify({ title: 'Harvest supper', date: '2026-10-03', time: '19:30', where: 'The hall', blurb: '', recur: '', day: null });
   const m = mirror({ events: [GOOD1, GOOD2, LOST], copies: { evtsupper: body }, share: share() });
-  for (let i = 0; i < 70; i++) await m._webSync();
+  await spendBudget(m);
   assert.equal(m.tombstoned().includes('trinityone/pubevent:evtsupper'), false, 'a readable event was swept up with the stuck one');
   assert.equal(m.tombstoned().includes('trinityone/pubevent:evtfair'), false, 're-anchor: an event with no copy was tombstoned');
   assert.deepEqual(m.tombstoned(), [], 'nothing should have come off here: the only stuck event has no public copy');
 });
 
+test('R5: the key coming back puts the event straight back on the website', async () => {
+  const live = JSON.stringify({ title: 'Youth night', date: '2026-11-01', time: '19:30', where: 'The vestry', blurb: '', recur: '', day: null });
+  const m = mirror({ events: [GOOD1, GROUP_READABLE], copies: { evtyouth: live }, share: share({ optIn: ['evtyouth'] }) });
+  await m._webSync();
+  m.w.events.set('evtyouth', GROUP_LOST);
+  m.w.copies.delete('evtyouth');                                   // …and its copy went while the key was gone
+  await spendBudget(m);
+  m.w.events.set('evtyouth', GROUP_READABLE);                      // the key comes back
+  await m._webSync();
+  assert.ok(m.dtags().includes('trinityone/pubevent:evtyouth'), 'THE EVENT NEVER CAME BACK after the key returned');
+  assert.equal(m.w.stuckSince, 0, 'the stuck clock did not reset when everything became readable again');
+});
+
 test('CONTROL: with every event readable nothing is blocked and nothing is emitted', async () => {
   const m = mirror({ events: [GOOD1, GOOD2], copies: {}, share: share() });
-  for (let i = 0; i < 6; i++) await m._webSync();
+  await pastReporting(m);
   assert.equal(m.w.blocked, 0);
   assert.deepEqual(m.emitted.map(e => e.blocked), [], 'a healthy mirror told the steward something was wrong');
 });
@@ -302,8 +455,27 @@ test('THE SCREEN (R4): every cause gets its own line, and none of them sends a c
   assert.match(said('something-new'), /its details could not be read/, 'an unrecognised cause renders as undefined');
 });
 
+test('THE SCREEN (F1): the page says which of them are STILL on the website', () => {
+  // CLAUDE.md rule 1, for the half of F1 that is a decision rather than a bug. The engine now LEAVES a copy
+  // it cannot classify on the public website rather than emptying a church's calendar. That is only
+  // defensible if the church is told, and this sentence is the only place it is told. Delete the `held`
+  // block from app/stew-dashboard.jsx and this row goes red.
+  const one = panel({ ...share(), known: true, blocked: 1, blockedWhy: 'key', held: 1 });
+  assert.match(one, /1 of them is still on your website/,
+    'THE PAGE DOES NOT SAY THE EVENT IS STILL PUBLISHED — the console left an event it cannot read on a public website and the Settings page shows only "could not be published"');
+  assert.match(one, /could not open it to check/, 'the page does not say why it was left there');
+  const many = panel({ ...share(), known: true, blocked: 5, blockedWhy: 'key', held: 5 });
+  assert.match(many, /5 of them are still on your website/, 'the count is not the engine\'s');
+  assert.match(many, /could not open them to check/, 'the plural sentence is not plural');
+  // CONTROL: blocked events that were all withdrawn say nothing of the kind.
+  const none = panel({ ...share(), known: true, blocked: 2, blockedWhy: 'key', held: 0 });
+  assert.match(none, /2 events could not be published/, 're-anchor: the blocked line stopped rendering');
+  assert.doesNotMatch(none, /still on your website/, 'the page claims events are still published when the engine withdrew them');
+});
+
 test('CONTROL: with nothing blocked the page says nothing of the kind', () => {
-  const said = panel({ ...share(), known: true, blocked: 0, blockedWhy: '' });
+  const said = panel({ ...share(), known: true, blocked: 0, blockedWhy: '', held: 0 });
   assert.doesNotMatch(said, /could not be published/, 'the page cries wolf on a healthy church');
+  assert.doesNotMatch(said, /still on your website/, 'the page cries wolf on a healthy church');
   assert.match(said, /Share our calendar on our website/, 're-anchor: the panel did not render at all');
 });

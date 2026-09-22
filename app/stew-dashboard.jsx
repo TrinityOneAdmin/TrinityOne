@@ -8432,6 +8432,7 @@ function DashWebsitePanel({ church }) {
   const on = !!(share && share.calendar);
   const blocked = (share && share.blocked) || 0;
   const whyBlocked = (WEB_BLOCKED_WHY[(share && share.blockedWhy)] || WEB_BLOCKED_WHY.shape)[blocked === 1 ? 0 : 1];
+  const held = (share && share.held) || 0;
   const url = (window.Steward.websiteFeedUrl && window.Steward.websiteFeedUrl()) || '';
   const toggle = async () => {
     if (busy || !known) return;
@@ -8465,6 +8466,17 @@ function DashWebsitePanel({ church }) {
       {blocked ? (
         <div role="status" style={{ marginTop: 8, fontSize: 12.5, fontWeight: 600, color: 'var(--clay-ink)' }}>
           {blocked === 1 ? '1 event could not be published' : blocked + ' events could not be published'} — {whyBlocked}
+        </div>
+      ) : null}
+      {/* AND WHAT IS STILL OUT THERE. The engine leaves a copy it cannot classify ON the website rather than
+          emptying a church's public calendar because a console is slow, offline or mid-restore
+          (AUDIT-feeds-round3-2026-09-22 F1, where an empty key ring withdrew five of five whole-church
+          events). That decision is only honest if the church is told which way it fell, so this line is the
+          other half of the one above: what could not be published, and what is still published anyway. */}
+      {held ? (
+        <div role="status" style={{ marginTop: 6, fontSize: 12.5, fontWeight: 600, color: 'var(--ink-2)' }}>
+          {held === 1 ? '1 of them is still on your website — this console could not open it to check.'
+            : held + ' of them are still on your website — this console could not open them to check.'}
         </div>
       ) : null}
 

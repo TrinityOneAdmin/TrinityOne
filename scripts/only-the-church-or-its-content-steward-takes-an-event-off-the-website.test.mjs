@@ -192,8 +192,14 @@ test('THE OWNER CONSOLE does not reconcile a group leader\'s cancel — the chur
   const body = [
     stmt(S, 'var WEB_DEFAULT = ', 'WEB_DEFAULT'),
     stmt(S, 'var WEB_ID_OK = ', 'WEB_ID_OK'),
-    stmt(S, 'var WEB_BLOCKED_AFTER = ', 'WEB_BLOCKED_AFTER'),
-    stmt(S, 'var WEB_LOCKED_TRIES = ', 'WEB_LOCKED_TRIES'),
+    stmt(S, 'var WEB_BLOCKED_AFTER_S = ', 'WEB_BLOCKED_AFTER_S'),
+    stmt(S, 'var WEB_GIVE_UP_S = ', 'WEB_GIVE_UP_S'),
+    stmt(S, 'var WEB_RETRY_MS = ', 'WEB_RETRY_MS'),
+    stmt(S, 'var WEB_GROUP_MAX = ', 'WEB_GROUP_MAX'),
+    fnBody(S, 'function _nameKeyReady', '_nameKeyReady'),
+    fnBody(S, 'function _webGroupKey', '_webGroupKey'),
+    fnBody(S, 'function _webGroupLoad', '_webGroupLoad'),
+    fnBody(S, 'function _webGroupSeen', '_webGroupSeen'),
     fnBody(S, 'function _pickWinner', '_pickWinner'),
     fnBody(S, 'function _reduceVersions', '_reduceVersions'),
     fnBody(S, 'function _absorbById', '_absorbById'),
@@ -225,14 +231,14 @@ test('THE OWNER CONSOLE does not reconcile a group leader\'s cancel — the chur
       shareTs: 1, shareKnown: true, events: new Map(), versions: new Map(), eventsKnown: true,
       copies: new Map([['evtyouth', JSON.stringify({ title: 'Youth night', date: '2026-10-03', time: '19:30', where: 'The hall', blurb: '', recur: '', day: null })]]),
       copyTs: new Map(), copiesKnown: true, subs: [], listeners: new Set(), busy: false, again: false, timer: null,
-      lockedTries: 0, stuck: new Set(), stuckWhy: '', blocked: 0,
+      stuckSince: 0, keyedSince: 0, groupSeen: new Set(), stuck: new Set(), stuckWhy: '', blocked: 0, held: 0,
     };
     const scope = {
       _web: w, pub: CP, sk: 'SK', actingChurch: '', _nameKeyRing: [KEY], _unhex: unhex, [dec]: n44.decrypt,
       _careRosterKnown: true, _careRoster: new Set([CONTENT]), _stewardCaps: { [CONTENT]: ['content'] },
       NET, PUBEVENT_D, now: () => 1790000000, feChurch: (t) => t,
       publish: async (e) => { published.push(e); return true; },
-      _webQueueSync: () => {}, setTimeout: () => 0,
+      _webQueueSync: () => {}, setTimeout: () => 0, lsGet: () => null, lsSet: () => {},
     };
     const names = Object.keys(scope);
     const api = new Function(...names, `${body}\nreturn { _webSync, _forgetById, _tombstoneTargets, _absorbById, _consoleDisplay, _consoleChurchVoice };`)(...names.map(n => scope[n]));
