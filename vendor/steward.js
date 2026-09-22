@@ -17355,16 +17355,20 @@ zoo`.split("\n");
   }
   var WEB_GROUP_MAX = 2e3;
   function _webGroupLoad(cp) {
+    const out = /* @__PURE__ */ new Map();
     try {
       const a = JSON.parse(lsGet(_webGroupKey(cp)) || "[]");
-      return new Set(Array.isArray(a) ? a.filter((x) => typeof x === "string" && WEB_ID_OK.test(x)).slice(0, WEB_GROUP_MAX) : []);
+      if (Array.isArray(a)) for (const p of a.slice(0, WEB_GROUP_MAX)) {
+        if (Array.isArray(p) && typeof p[0] === "string" && WEB_ID_OK.test(p[0]) && typeof p[1] === "number" && isFinite(p[1])) out.set(p[0], p[1]);
+      }
     } catch (e) {
-      return /* @__PURE__ */ new Set();
     }
+    return out;
   }
-  function _webGroupSeen(w, id, isGroup) {
-    if (isGroup === w.groupSeen.has(id)) return;
-    if (isGroup) w.groupSeen.add(id);
+  function _webGroupSeen(w, id, isGroup, ts) {
+    const at = isGroup ? typeof ts === "number" && isFinite(ts) ? ts : 0 : void 0;
+    if (isGroup ? w.groupSeen.get(id) === at : !w.groupSeen.has(id)) return;
+    if (isGroup) w.groupSeen.set(id, at);
     else w.groupSeen.delete(id);
     lsSet(_webGroupKey(w.pub), JSON.stringify([...w.groupSeen].slice(0, WEB_GROUP_MAX)));
   }
@@ -17602,7 +17606,7 @@ zoo`.split("\n");
         w.stuckWhy = !w.stuckWhy || w.stuckWhy === why ? why : "mixed";
         continue;
       }
-      _webGroupSeen(w, ev.id, !!(c && typeof c === "object" && String(c.groupId || "")));
+      _webGroupSeen(w, ev.id, !!(c && typeof c === "object" && String(c.groupId || "")), ev.ts);
       if (held.has(ev.id)) continue;
       if (!c || typeof c !== "object" || !/^\d{4}-\d{2}-\d{2}$/.test(String(c.date || ""))) continue;
       if (String(c.groupId || "") && !shown.has(ev.id)) continue;
@@ -17643,7 +17647,8 @@ zoo`.split("\n");
     for (const id of w.copies.keys()) {
       if (want.has(id)) continue;
       if (w.stuck.has(id)) {
-        const groupScoped = w.groupSeen.has(id) && !shown.has(id);
+        const cur = w.events.get(id);
+        const groupScoped = w.groupSeen.has(id) && !!cur && w.groupSeen.get(id) === cur.ts && !shown.has(id);
         const spent = looked && tNow - (w.stuckAt.get(id) || tNow) >= WEB_GIVE_UP_S;
         if (!(spent && groupScoped)) {
           if (!offFeed.has(id)) heldIds.push(id);

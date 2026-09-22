@@ -139,7 +139,10 @@ const CONTENTS = { id: 'evtcontents', raw: JSON.stringify({ e: nip44e('this is n
 // readable copy is the console's one and only chance to learn that this event belongs to a room.
 const YOUTH = { title: 'Youth night', date: '2026-11-01', time: '19:30', where: 'The vestry', blurb: '', groupId: 'grpyouth' };
 const GROUP_READABLE = { id: 'evtyouth', raw: sealed(YOUTH, KEY_OURS), ts: 16 };
-const GROUP_LOST = { id: 'evtyouth', raw: sealed(YOUTH, KEY_LOST), ts: 17 };
+// THE SAME VERSION, and that is the point: losing a name key does not rewrite the church's document. The
+// created_at is the copy's identity (AUDIT-feeds-round4-2026-09-22 F4), so R5's "readable, then not" is one
+// version that stopped opening — a DIFFERENT ts would be a different copy, which is F4's case, not this one.
+const GROUP_LOST = { id: 'evtyouth', raw: sealed(YOUTH, KEY_LOST), ts: 16 };
 
 test('before all: the real nip44', async () => { _n44 = await import('nostr-tools/nip44'); assert.ok(_n44.decrypt); });
 
@@ -331,7 +334,7 @@ test('R5: a stuck copy of a GROUP event comes off the website once the console h
   // even though it can no longer read a word of it.
   const m = mirror({ events: [GOOD1, GROUP_READABLE], copies: { evtyouth: live }, share: share({ optIn: ['evtyouth'] }) });
   await m._webSync();
-  assert.deepEqual([...m.w.groupSeen], ['evtyouth'], 'the console did not remember whose event this is while it could still read it');
+  assert.deepEqual([...m.w.groupSeen.keys()], ['evtyouth'], 'the console did not remember whose event this is while it could still read it');
   assert.deepEqual(m.tombstoned(), [], 're-anchor: a ticked-on group event was withdrawn while it was perfectly readable');
   m.w.events.set('evtyouth', GROUP_LOST);        // …and now the name key is gone
   m.w.share.optIn = [];                          // …and the owner takes it off the website
@@ -422,10 +425,10 @@ test('F1: what this console knows about an event SURVIVES A RESTART — it is th
   const store = new Map();
   const first = mirror({ events: [GOOD1, GROUP_READABLE], copies: { evtyouth: live }, share: share({ optIn: ['evtyouth'] }), store });
   await first._webSync();
-  assert.equal(store.get('trinityone.webgroup.CP'), '["evtyouth"]', 'nothing was written where the next boot would read it');
+  assert.equal(store.get('trinityone.webgroup.CP'), '[["evtyouth",' + GROUP_READABLE.ts + ']]', 'nothing was written where the next boot would read it');
   // a NEW console object over the same storage, and this time the key never opens the document
   const next = mirror({ events: [GOOD1, GROUP_LOST], copies: { evtyouth: live }, share: share(), store });
-  assert.deepEqual([...next.w.groupSeen], ['evtyouth'], 'the new watch did not read back what the last one learned');
+  assert.deepEqual([...next.w.groupSeen.keys()], ['evtyouth'], 'the new watch did not read back what the last one learned');
   await spendBudget(next);
   assert.deepEqual(next.tombstoned(), ['trinityone/pubevent:evtyouth'], 'the remembered answer was not used after the restart');
 });
@@ -434,10 +437,10 @@ test('F1: an event edited from a GROUP back to whole-church is forgotten, so a l
   const live = JSON.stringify({ title: 'Youth night', date: '2026-11-01', time: '19:30', where: 'The vestry', blurb: '', recur: '', day: null });
   const m = mirror({ events: [GOOD1, GROUP_READABLE], copies: { evtyouth: live }, share: share({ optIn: ['evtyouth'] }) });
   await m._webSync();
-  assert.deepEqual([...m.w.groupSeen], ['evtyouth'], 're-anchor: it was never remembered as a group\'s event');
+  assert.deepEqual([...m.w.groupSeen.keys()], ['evtyouth'], 're-anchor: it was never remembered as a group\'s event');
   m.w.events.set('evtyouth', { id: 'evtyouth', raw: sealed({ title: 'Youth night', date: '2026-11-01', time: '19:30', where: 'The vestry', blurb: '' }, KEY_OURS), ts: 20 });
   await m._webSync();
-  assert.deepEqual([...m.w.groupSeen], [], 'a group event made whole-church is still remembered as a group\'s');
+  assert.deepEqual([...m.w.groupSeen.keys()], [], 'a group event made whole-church is still remembered as a group\'s');
   m.w.events.set('evtyouth', GROUP_LOST);
   await spendBudget(m);
   assert.deepEqual(m.tombstoned(), [], 'a WHOLE-CHURCH event was withdrawn on a memory of what it used to be');
@@ -486,6 +489,53 @@ test('F2: a copy the owner ticked "Not on the website" is NOT counted as still o
   assert.equal(m2.emitted[m2.emitted.length - 1].held, 1, 'a stuck copy that IS being served stopped being counted');
 });
 
+// ── F4: a remembered scope cannot outlive the document it was read from ──────────────────────────────────
+// AUDIT-feeds-round4-2026-09-22 F4, measured: an id this console once opened and found a `groupId` on, later
+// edited to whole-church by ANOTHER console while this one could no longer read it, was withdrawn after ten
+// minutes — an ordinary church event silently off the public website, taken off by the one console that had
+// lost its key. What the console knows is the scope of a VERSION of the document, so that is what it
+// remembers; a newer version it cannot open is UNKNOWN, and unknown has stayed on the website since round 3.
+const WHOLE_NOW_LOST = (ts) => ({ id: 'evtyouth', raw: sealed({ title: 'Youth night', date: '2026-11-01', time: '19:30', where: 'The vestry', blurb: '' }, KEY_LOST), ts });
+test('F4: an event edited to whole-church while the key was gone is NOT withdrawn on the old memory', async () => {
+  const m = mirror({ events: [GOOD1, GROUP_READABLE], copies: { evtyouth: LIVE_YOUTH }, share: share({ optIn: ['evtyouth'] }) });
+  await m._webSync();
+  assert.equal(m.w.groupSeen.has('evtyouth'), true, 're-anchor: the console never learned this was a group\'s event');
+  m.w.events.set('evtyouth', WHOLE_NOW_LOST(GROUP_READABLE.ts + 40));   // a NEWER version, and unopenable here
+  m.w.share.optIn = [];
+  await spendBudget(m);
+  assert.deepEqual(m.tombstoned(), [],
+    'A WHOLE-CHURCH EVENT WAS TAKEN OFF THE CHURCH\'S WEBSITE on a memory of a version of the document that no longer exists — by the one console that had lost its key');
+  assert.equal(m.emitted[m.emitted.length - 1].held, 1, '…and the page does not say the copy is still out there either');
+  // CONTROL: the SAME version, merely unopenable — which is what losing a key actually looks like, and the
+  // whole point of R5 — still comes off.
+  const same = mirror({ events: [GOOD1, GROUP_READABLE], copies: { evtyouth: LIVE_YOUTH }, share: share({ optIn: ['evtyouth'] }) });
+  await same._webSync();
+  same.w.events.set('evtyouth', GROUP_LOST);
+  same.w.share.optIn = [];
+  await spendBudget(same);
+  assert.deepEqual(same.tombstoned(), ['trinityone/pubevent:evtyouth'], 're-anchor: the R5 withdrawal stopped happening at all');
+});
+
+test('F4: the version travels with the memory across a restart', async () => {
+  // The memory is on disk, so the staleness is too: a console that reads back "evtyouth was a group's" must
+  // also read back WHICH copy of evtyouth that was true of, or the first boot after an edit acts on a guess.
+  const store = new Map();
+  const first = mirror({ events: [GOOD1, GROUP_READABLE], copies: { evtyouth: LIVE_YOUTH }, share: share({ optIn: ['evtyouth'] }), store });
+  await first._webSync();
+  assert.equal(store.get('trinityone.webgroup.CP'), '[["evtyouth",' + GROUP_READABLE.ts + ']]',
+    'what is written for the next boot does not say which version it was true of: ' + store.get('trinityone.webgroup.CP'));
+  const next = mirror({ events: [GOOD1, WHOLE_NOW_LOST(GROUP_READABLE.ts + 40)], copies: { evtyouth: LIVE_YOUTH }, share: share(), store });
+  await spendBudget(next);
+  assert.deepEqual(next.tombstoned(), [], 'THE STALE MEMORY SURVIVED THE RESTART AND WITHDREW A WHOLE-CHURCH EVENT');
+  // CONTROL: the same restart with the document untouched still withdraws (the R5 migration case).
+  const store2 = new Map();
+  const f2 = mirror({ events: [GOOD1, GROUP_READABLE], copies: { evtyouth: LIVE_YOUTH }, share: share({ optIn: ['evtyouth'] }), store: store2 });
+  await f2._webSync();
+  const n2 = mirror({ events: [GOOD1, GROUP_LOST], copies: { evtyouth: LIVE_YOUTH }, share: share(), store: store2 });
+  await spendBudget(n2);
+  assert.deepEqual(n2.tombstoned(), ['trinityone/pubevent:evtyouth'], 're-anchor: nothing is withdrawn after a restart any more');
+});
+
 // ── F3: ten minutes of WALL CLOCK, not ten minutes of one uninterrupted session ──────────────────────────
 // AUDIT-feeds-round4-2026-09-22 F3. The clock lived only in the watch, and the dashboard rebuilds the watch
 // on every connection bump (`_maybeBumpConn`, a 90 s heartbeat plus focus/visibility/online). So a console
@@ -513,7 +563,7 @@ test('F3: a relay that flaps every nine minutes no longer prevents the withdrawa
   // one session that could still read it — the only moment a console can learn whose event this is
   const first = mirror({ events: [GOOD1, GROUP_READABLE], copies: { evtyouth: LIVE_YOUTH }, share: share({ optIn: ['evtyouth'] }), store });
   await first._webSync();
-  assert.deepEqual([...first.w.groupSeen], ['evtyouth'], 're-anchor: the console never learned this was a group\'s event');
+  assert.deepEqual([...first.w.groupSeen.keys()], ['evtyouth'], 're-anchor: the console never learned this was a group\'s event');
   const hit = await flap({ sessions: 12, minutes: 9, store });
   assert.ok(hit.length,
     'A FLAPPING RELAY PREVENTS THE WITHDRAWAL FOR EVER — twelve nine-minute sessions, 108 minutes of an adults-only room on a public website, and nothing was ever withdrawn');

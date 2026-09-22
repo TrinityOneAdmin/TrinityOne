@@ -235,7 +235,7 @@ test('THE OWNER CONSOLE does not reconcile a group leader\'s cancel — the chur
       shareTs: 1, shareKnown: true, events: new Map(), versions: new Map(), eventsKnown: true,
       copies: new Map([['evtyouth', JSON.stringify({ title: 'Youth night', date: '2026-10-03', time: '19:30', where: 'The hall', blurb: '', recur: '', day: null })]]),
       copyTs: new Map(), copiesKnown: true, subs: [], listeners: new Set(), busy: false, again: false, timer: null,
-      stuckSince: 0, keyedSince: 0, groupSeen: new Set(), stuckAt: new Map(), stuck: new Set(), stuckWhy: '', blocked: 0, held: 0, heldIds: [],
+      stuckSince: 0, keyedSince: 0, groupSeen: new Map(), stuckAt: new Map(), stuck: new Set(), stuckWhy: '', blocked: 0, held: 0, heldIds: [],
     };
     const scope = {
       _web: w, pub: CP, sk: 'SK', actingChurch: '', _nameKeyRing: [KEY], _unhex: unhex, [dec]: n44.decrypt,

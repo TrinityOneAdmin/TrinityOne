@@ -3476,24 +3476,41 @@ function _webCopyBody(ev) {
 // what this console SAW while it could read: the set of ids it has opened and found a `groupId` on, kept per
 // church in localStorage so the answer survives the restart that usually accompanies a key going missing.
 //
-// An id NOT in this set is NOT "whole-church" — it is UNKNOWN, and unknown is left on the website and said
+// An id NOT in this map is NOT "whole-church" — it is UNKNOWN, and unknown is left on the website and said
 // on the Settings page (see _webSync). That is the whole point: a church that has never opened an event on
 // this machine, or a console booting into a broken key state, remembers nothing and therefore withdraws
 // nothing.
+//
+// AND THE MEMORY IS OF A VERSION, NOT OF AN ID (AUDIT-feeds-round4-2026-09-22 F4). What this console saw was
+// the scope of ONE COPY of the document. Measured before this: an id opened once and found to be a group's,
+// then edited to whole-church by another console while this one could no longer read it, was withdrawn ten
+// minutes later — an ordinary church event silently off the public website, taken off by the one console
+// that had lost its key. So the created_at of the copy the scope was read from is kept beside the id, and a
+// document whose version no longer matches is UNKNOWN again.
+//
+// The cost is stated rather than hidden: a GROUP event edited while this console cannot read it also becomes
+// unknown, so it stays on the website instead of being withdrawn. That is the same fail-safe direction round
+// 3 chose for everything else it cannot classify, and it is no longer silent — the copy is counted into
+// w.held, named in w.heldIds, and the Settings page offers the control that takes it off.
 function _webGroupKey(cp) { return 'trinityone.webgroup.' + cp; }
 const WEB_GROUP_MAX = 2000;
 function _webGroupLoad(cp) {
+  const out = new Map();
   try {
     const a = JSON.parse(lsGet(_webGroupKey(cp)) || '[]');
-    return new Set(Array.isArray(a) ? a.filter(x => typeof x === 'string' && WEB_ID_OK.test(x)).slice(0, WEB_GROUP_MAX) : []);
-  } catch (e) { return new Set(); }
+    if (Array.isArray(a)) for (const p of a.slice(0, WEB_GROUP_MAX)) {
+      if (Array.isArray(p) && typeof p[0] === 'string' && WEB_ID_OK.test(p[0]) && typeof p[1] === 'number' && isFinite(p[1])) out.set(p[0], p[1]);
+    }
+  } catch (e) {}
+  return out;
 }
 // Written only when the answer CHANGES, so an ordinary sync over a healthy calendar touches no storage. An
 // event edited from a group back to whole-church removes its id, or a key lost later would withdraw an event
-// that is no longer a group's.
-function _webGroupSeen(w, id, isGroup) {
-  if (isGroup === w.groupSeen.has(id)) return;
-  if (isGroup) w.groupSeen.add(id); else w.groupSeen.delete(id);
+// that is no longer a group's; an event re-saved as a group's again records the new version.
+function _webGroupSeen(w, id, isGroup, ts) {
+  const at = isGroup ? (typeof ts === 'number' && isFinite(ts) ? ts : 0) : undefined;
+  if (isGroup ? w.groupSeen.get(id) === at : !w.groupSeen.has(id)) return;
+  if (isGroup) w.groupSeen.set(id, at); else w.groupSeen.delete(id);
   lsSet(_webGroupKey(w.pub), JSON.stringify([...w.groupSeen].slice(0, WEB_GROUP_MAX)));
 }
 // TEN MINUTES OF WALL CLOCK, WHICH MEANS ACROSS RESTARTS (AUDIT-feeds-round4-2026-09-22 F3). The give-up
@@ -3705,7 +3722,7 @@ function _webDesired(w) {
     // WHILE WE CAN STILL READ IT, REMEMBER WHOSE IT IS. This is the only moment the question can be asked,
     // and _webSync needs the answer at a moment when it cannot be. Before the opt-out and date checks, so a
     // group event a steward has ticked OFF the website is remembered as a group's event all the same.
-    _webGroupSeen(w, ev.id, !!(c && typeof c === 'object' && String(c.groupId || '')));
+    _webGroupSeen(w, ev.id, !!(c && typeof c === 'object' && String(c.groupId || '')), ev.ts);
     if (held.has(ev.id)) continue;
     if (!c || typeof c !== 'object' || !/^\d{4}-\d{2}-\d{2}$/.test(String(c.date || ''))) continue;
     // A GROUP EVENT IS OFF THE WEBSITE UNLESS TICKED ON (see WEB_DEFAULT). The groupId lives in the SEALED
@@ -3789,7 +3806,10 @@ async function _webSync() {
   for (const id of w.copies.keys()) {
     if (want.has(id)) continue;
     if (w.stuck.has(id)) {
-      const groupScoped = w.groupSeen.has(id) && !shown.has(id);
+      // …and the memory has to be of the copy in hand: a newer version this console cannot open is UNKNOWN,
+      // not "still a group's" (see _webGroupSeen).
+      const cur = w.events.get(id);
+      const groupScoped = w.groupSeen.has(id) && !!cur && w.groupSeen.get(id) === cur.ts && !shown.has(id);
       const spent = looked && tNow - (w.stuckAt.get(id) || tNow) >= WEB_GIVE_UP_S;
       if (!(spent && groupScoped)) { if (!offFeed.has(id)) heldIds.push(id); continue; }
     }
