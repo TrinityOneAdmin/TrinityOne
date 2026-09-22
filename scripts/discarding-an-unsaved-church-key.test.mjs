@@ -1,0 +1,122 @@
+// THE FORCED-PIN GATE'S WAY BACK MUST FORGET ONLY WHAT WAS NEVER SAVED.
+// Run: node --test scripts/discarding-an-unsaved-church-key.test.mjs
+//
+// Owner, 2026-09-22, seeing "Set a console PIN" on the Suite's first run: "We still need a back or cancel
+// button at this stage." The gate was built inescapable (AUDIT-2026-07-28) because the seed it guards may exist
+// only in memory and a RELOAD destroys it. That argues against reload, not against a Back that discards or
+// keeps on purpose. `window.Steward.discardUnsavedKey()` is that Back's engine half, and the whole of its
+// safety is in what it refuses to do:
+//   • after createKey — nothing saved, nothing published — it forgets the seed and the device is empty again;
+//   • after restoreKey over a church already on the device, it forgets the RESTORED seed and leaves the
+//     previous church's ciphertext byte-for-byte where it was, so the old PIN still opens it;
+//   • when the key in memory IS the saved one (needsPin false) it does nothing;
+//   • when the seed is a legacy plaintext one on disk (KEY_LS) it does nothing — forgetting that from memory
+//     would put "Set up a new church" over a live key, and the next setPin would delete it.
+//
+// Lifted from the SHIPPED bundle (vendor/steward.js), not the source, so a source edit that was never rebuilt
+// cannot pass here. Stubs stand in for storage, the crypto and the relay pool; nothing stands in for the
+// decision.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { fnBody } from './test-slice.mjs';
+
+const SHIP = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
+const KEY_LS = 'trinityone.steward.church-key', ENC_LS = 'trinityone.steward.church-key.enc';
+
+function engine(storeInit = {}) {
+  const store = { ...storeInit };
+  const events = [], closed = [], calls = { openRegGate: 0, reset: 0 };
+  const Steward = { hasKey: false, needsPin: false, locked: false, pubkey: null, npub: null };
+  const scope = {
+    KEY_LS, ENC_LS,
+    lsGet: (k) => (k in store ? store[k] : null),
+    lsSet: (k, v) => { store[k] = String(v); },
+    localStorage: { getItem: (k) => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = String(v); }, removeItem: (k) => { delete store[k]; } },
+    // setKey's real collaborators, as a-restore-leaves-the-old-key-openable.test.mjs stubs them
+    privateKeyFromSeedWords: () => new Uint8Array(32),
+    getPublicKey: () => 'ab'.repeat(32), getPublicKey2: () => 'ab'.repeat(32),
+    npubEncode: () => 'npub1unsaved',
+    generateSeedWords: () => 'fine flash wait silly next awkward charge front scout build damage river',
+    _loadBoxHosts: () => { store['trinityone.steward.boxhosts.' + 'ab'.repeat(32)] = '0'; },   // what the real one leaves behind on a Suite box
+    _refreshBoxHostsUs: () => {}, _gate: { refresh() {} }, relaysRaw: () => [],
+    _armRegGate: () => {}, _openRegGate: () => { calls.openRegGate++; }, _resetChurchScopedState: () => { calls.reset++; },
+    pool: { relays: new Map([['ws://relay.test/', {}]]), close: (urls) => { closed.push(...urls); } },
+    needsPin: false,
+    window: { Steward, dispatchEvent: (e) => { events.push(e.type); }, CustomEvent: function (type, init) { this.type = type; this.detail = init && init.detail; } },
+    sk: null, pub: null, churchSk: null, churchPub: null, currentMnemonic: null,
+    String, JSON, Array, Object, Boolean, Number, Math, Promise, console, RegExp, Error, Uint8Array, Map, Set, Symbol,
+  };
+  const proxy = new Proxy(scope, {
+    has: (t, k) => (k in t) || !(String(k) in globalThis),
+    get: (t, k) => { if (k === Symbol.unscopables) return undefined; if (k in t) return t[k];
+      throw new ReferenceError('the shipped discard needs a stub for ' + String(k)); },
+    set: (t, k, v) => { t[k] = v; return true; },
+  });
+  const src = fnBody(SHIP, 'function setKey(mnemonic)', 'setKey') + '\n' +
+    fnBody(SHIP, 'function _setNeedsPin(v)', '_setNeedsPin') + '\n' +
+    fnBody(SHIP, 'function _boxHostsKey()', '_boxHostsKey') + '\n' +
+    'return ({ setKey, _setNeedsPin, ' + fnBody(SHIP, 'createKey() {', 'createKey') + ', ' +
+    fnBody(SHIP, 'discardUnsavedKey() {', 'discardUnsavedKey') + ' });';
+  const api = new Function('scope', 'with (scope) { ' + src + ' }')(proxy);
+  return { ...api, scope, store, events, closed, calls, Steward,
+    // a restore's memory half: setKey + needsPin, exactly what restoreKey does around its checksum (lifted and
+    // pinned separately in a-restore-leaves-the-old-key-openable.test.mjs)
+    restoreOverIt: () => { api.setKey('restored'); api._setNeedsPin(true); },
+    keyRows: () => Object.keys(store).filter(k => k.startsWith(KEY_LS)) };
+}
+
+test('after createKey (nothing saved), discard empties the device: no key in memory, no key in storage, needsPin off', () => {
+  const e = engine();
+  e.createKey();
+  assert.equal(e.Steward.hasKey, true, 're-anchor: createKey no longer puts a key in memory');
+  assert.equal(e.scope.needsPin, true, 're-anchor: createKey no longer arms needsPin');
+  assert.deepEqual(e.keyRows(), [], 're-anchor: createKey wrote a key to storage — it is memory-only by design (SECURITY-AUDIT-2026-06-25)');
+
+  assert.equal(e.discardUnsavedKey(), true, 'discard refused an unsaved, freshly created key — the gate’s Back would do nothing');
+  assert.equal(e.Steward.hasKey, false, 'hasKey is still true after the discard, so StewardRoot would go on showing the gate');
+  assert.equal(e.scope.currentMnemonic, null, 'THE SEED IS STILL IN MEMORY after "Go back — nothing has been created yet"');
+  assert.equal(e.scope.sk, null, 'the signing key is still in memory after the discard');
+  assert.equal(e.scope.needsPin, false, 'needsPin is still set, so the gate would come straight back');
+  assert.equal(e.Steward.locked, false, 'a device with no saved church came back LOCKED — the unlock screen with nothing to unlock');
+  assert.deepEqual(e.keyRows(), [], 'a church-key row is in storage after discarding a key that was never saved');
+  assert.deepEqual(Object.keys(e.store).filter(k => /boxhosts/.test(k)), [], 'the boxhosts cache line for the discarded church was left behind');
+  assert.ok(e.events.includes('steward-key'), 'no steward-key event — StewardRoot reads hasKey only on that event, so nothing re-renders');
+  assert.equal(e.calls.openRegGate, 1, 'the registration gate armed by createKey was left armed with nothing being founded');
+  assert.deepEqual(e.closed, ['ws://relay.test/'], 'the relay sockets were kept open — a socket authed as the discarded key');
+});
+
+test('a SAVED key survives: discard is a no-op when the key in memory is the persisted one', () => {
+  const e = engine({ [ENC_LS]: '{"v":2,"ct":"the-saved-church"}' });
+  // an unlocked console: seed in memory, needsPin false (setPin cleared it), ciphertext on disk
+  e.setKey('saved'); e._setNeedsPin(false);
+  assert.equal(e.discardUnsavedKey(), false, 'discard reported success over a SAVED key');
+  assert.equal(e.scope.currentMnemonic, 'saved', 'THE SAVED CHURCH WAS FORGOTTEN FROM MEMORY by a discard meant only for unsaved keys');
+  assert.equal(e.Steward.hasKey, true, 'hasKey dropped over a saved key');
+  assert.equal(e.store[ENC_LS], '{"v":2,"ct":"the-saved-church"}', 'the saved ciphertext was touched');
+  assert.deepEqual(e.events, [], 'a no-op discard fired an event');
+  assert.deepEqual(e.closed, [], 'a no-op discard closed the relay sockets');
+});
+
+test('a restore over an existing church: discard forgets the RESTORED seed and leaves the previous church locked and openable', () => {
+  const e = engine({ [ENC_LS]: '{"v":2,"ct":"the-previous-church"}' });
+  e.restoreOverIt();
+  assert.equal(e.scope.currentMnemonic, 'restored', 're-anchor: the in-memory restore did not land');
+  assert.equal(e.discardUnsavedKey(), true, '"Keep my current church" was refused over a restore that had not been saved');
+  assert.equal(e.scope.currentMnemonic, null, 'the restored seed is still in memory');
+  assert.equal(e.store[ENC_LS], '{"v":2,"ct":"the-previous-church"}', 'THE PREVIOUS CHURCH’S CIPHERTEXT CHANGED — the old PIN no longer opens the old church');
+  assert.equal(e.Steward.locked, true, 'the console is not locked, so the previous church would not be offered for unlock');
+  assert.equal(e.Steward.hasKey, false, 'hasKey is still true after discarding the restored seed');
+  assert.equal(e.scope.needsPin, false, 'needsPin still set — the gate would come back over the unlock screen');
+  assert.equal(e.calls.reset, 1, 'the restored church’s module state was carried back into the previous church');
+});
+
+test('a legacy plaintext seed on disk is NOT discarded — that seed IS the church', () => {
+  const e = engine({ [KEY_LS]: 'the legacy church seed words' });
+  // what init() does on a legacy install: load it, force a PIN
+  e.setKey(e.store[KEY_LS]); e._setNeedsPin(true);
+  assert.equal(e.discardUnsavedKey(), false, 'discard accepted a legacy plaintext migration — "Set up a new church" would now sit over a live key');
+  assert.equal(e.scope.currentMnemonic, 'the legacy church seed words', 'the legacy seed was forgotten from memory');
+  assert.equal(e.scope.needsPin, true, 'the forced PIN was cleared over a plaintext seed');
+  assert.equal(e.store[KEY_LS], 'the legacy church seed words', 'the legacy seed was removed from storage');
+});
