@@ -3547,6 +3547,13 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     // deliberately allowed to say none of those things (see maybePushCancel). The content is sealed under the
     // church name key anyway, so the relay could not read them if it wanted to.
     const eid = d.slice(EVENT_D.length); if (!eid) return;
+    // A CANCELLED EVENT LEAVES THE PUBLIC FEED AT ONCE, from the tombstone itself. The console tombstones
+    // the pubevent: copy too, but only while an owner console is open (the mirror runs there) — a delegate's
+    // delete, or a console closed before its reconciler fired, left the event on the church's website until
+    // the owner next opened the console (audit of a8d69f8, finding 3). Decided from the tag and the author
+    // alone, as the copy's own ingest is: a tombstone can only ever REMOVE a copy, so a forged one at worst
+    // takes an event off the website early, and the next reconcile puts it back.
+    if (removed) { const pubOwner = namedChurch(e) || (CHURCH_PUBS.has(e.pubkey) ? e.pubkey : ''); const pm = pubOwner && PUBEVENTS.get(pubOwner); if (pm) { pm.delete(eid); if (!pm.size) PUBEVENTS.delete(pubOwner); } }
     const gid = eventGroup(e);
     const owner = namedChurch(e) || (CHURCH_PUBS.has(e.pubkey) ? e.pubkey : (gid && GROUP_CHURCH.get(gid)) || '');
     if (!owner || !CHURCH_PUBS.has(owner)) return;   // not attributable to a church we carry — record nothing

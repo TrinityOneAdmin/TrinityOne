@@ -194,7 +194,9 @@ test('the church writes its public copies and switches the calendar on — the f
   assert.equal(/\b(https?|wss?):\/\//.test(text), false, 'the feed carries a URL: ' + (text.match(/\b(https?|wss?):\/\/\S+/) || [])[0]);
   assert.equal(text.includes('127.0.0.1') || text.includes(String(PORT)), false, 'the feed names the relay');
   assert.equal(text.includes('ATTENDEE') || text.includes('ORGANIZER'), false, 'the feed names a person');
-  assert.equal(text.includes(ann.pub) || text.includes(ap), false, 'the feed carries a pubkey');
+  // The church's OWN npub is in every UID (trinityone-<id>@<npub>) — it is the address just dialled, so it
+  // reveals nothing new. What must never appear is a member's key, or the church's key in any other form.
+  assert.equal(text.includes(ann.pub) || text.includes(ap), false, 'the feed carries a hex pubkey');
   assert.equal(text.includes('Safeguarding review') || text.includes('vestry'), false, 'THE HELD EVENT LEAKED into the feed');
   assert.equal(text.includes(EV_SECRET), false, 'an event with no public copy reached the feed');
 });
@@ -236,6 +238,22 @@ test('a tombstoned public copy leaves the feed at once — the console tombstone
   const cal = parseIcs(await (await get(`/public/${NPUB}/calendar.ics`)).text());
   assert.deepEqual(cal.events.map(e => e.UID).sort(), [EV_SUNDAY, EV_SUPPER].map(id => `trinityone-${id}@${NPUB}`).sort());
   assert.equal((await get(`/public/${NPUB}/e/${EV_FAIR}.ics`)).status, 404);
+});
+
+test('cancelling the EVENT itself takes its copy off the feed at once — the relay does not wait for a console to tombstone the copy', async () => {
+  // Audit of a8d69f8, finding 3: a delegate's delete, or an owner console closed before its reconciler fired,
+  // left the event on the church's website until an owner console next opened. Now the event's own tombstone
+  // drops the copy on ingest. A member's forged tombstone is refused at the door, so it cannot do this.
+  assert.equal((await publish(pub, copyDoc(grace, EV_FAIR, COPY[EV_FAIR])))[0], true, 're-anchor: the fair\'s copy could not be put back');
+  await sleep(150);
+  assert.equal((await get(`/public/${NPUB}/e/${EV_FAIR}.ics`)).status, 200, 're-anchor: the fair is not on the feed to begin with');
+  assert.equal((await publish(pub, tomb(ann, EVENT_D + EV_FAIR)))[0], false, 'a MEMBER\'s tombstone of the event was accepted');
+  assert.equal((await get(`/public/${NPUB}/e/${EV_FAIR}.ics`)).status, 200, 'a member\'s forged tombstone took the event off the website');
+  assert.equal((await publish(pub, tomb(grace, EVENT_D + EV_FAIR)))[0], true, 'the church\'s own tombstone of the event was refused');
+  await sleep(200);
+  assert.equal((await get(`/public/${NPUB}/e/${EV_FAIR}.ics`)).status, 404, 'THE EVENT IS CANCELLED AND ITS COPY IS STILL SERVED at its own address');
+  const cal = parseIcs(await (await get(`/public/${NPUB}/calendar.ics`)).text());
+  assert.equal(cal.events.some(e => e.UID === `trinityone-${EV_FAIR}@${NPUB}`), false, 'the cancelled event is still in the feed');
 });
 
 test('a co-tenant church\'s copies never appear on Grace\'s feed, and Grace\'s never on theirs', async () => {

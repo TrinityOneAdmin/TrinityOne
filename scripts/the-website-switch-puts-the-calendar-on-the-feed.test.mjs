@@ -272,6 +272,39 @@ test('after a fresh boot, an event added with Settings never opened joins the fe
   assert.equal(r.text.includes(HELD), false, 'THE HELD EVENT LEAKED');
 });
 
+test('a tick saved in the seconds after a reconnect keeps the switch on and every earlier opt-out — the audit\'s restart window', { skip: SKIP, timeout: 240000 }, async () => {
+  // Audit of 7ffcfaf, findings 1 and 2. The dashboard restarts the website watch on every connection bump
+  // (laptop wake, a dropped socket). The first engine started that restart from the defaults, so a tick saved
+  // before the relay had answered rewrote share: as {calendar:false, optOut:[the new id]} — the switch went
+  // off and the held event's opt-out was gone; the next "on" put "Safeguarding review" on the website. This
+  // makes the exact call the dashboard makes and ticks in the same tick, through the shipped API.
+  const before = JSON.parse(heldBy(churchPub, 'trinityone/share:')[0].content);
+  assert.equal(before.calendar, true, 're-anchor: the switch is not on going into this row');
+  assert.equal(before.optOut.length, 1, 're-anchor: the held event is not recorded going into this row');
+  const r = await evalIn(`(async () => { window.Steward.subscribeWebsiteShare(() => {}, { restart: true }); const ok = await window.Steward.setWebsiteHeld('evtaudit1', true); return JSON.stringify({ ok }); })()`);
+  const after = JSON.parse(heldBy(churchPub, 'trinityone/share:')[0].content);
+  assert.equal(after.calendar, true, 'THE TICK SWITCHED THE CALENDAR OFF (setWebsiteHeld returned ' + r + ')');
+  assert.ok(after.optOut.includes(before.optOut[0]), 'THE TICK DISCARDED THE EARLIER OPT-OUT (setWebsiteHeld returned ' + r + '): ' + JSON.stringify(after.optOut));
+  const feed = await fetch(feedUrl());
+  assert.equal(feed.status, 200, 'the feed went away after a tick in the restart window');
+  assert.equal((await feed.text()).includes(HELD), false, 'THE HELD EVENT LEAKED after a tick in the restart window');
+  // …and the Settings switch in the same window: off then on must keep the opt-out
+  await press('/^Settings$/', 'the Settings section');
+  await waitFor(`[...document.querySelectorAll('button.set-item')].some(b => /Your website/.test(b.textContent||''))`, 20000, 'the Your website row');
+  assert.equal(await evalIn(`(() => { const b=[...document.querySelectorAll('button.set-item')].find(b => /Your website/.test(b.textContent||'')); b.click(); return 'ok'; })()`), 'ok');
+  await waitFor(`document.querySelector('button[aria-label="Share our calendar on our website"]') && !document.querySelector('button[aria-label="Share our calendar on our website"]').disabled`, 20000, 'the switch');
+  await evalIn(`window.Steward.subscribeWebsiteShare(() => {}, { restart: true }); 'ok'`);
+  assert.equal(await evalIn(clickSel('button[aria-label="Share our calendar on our website"]')), 'ok');
+  await waitFor(`document.querySelector('button[aria-label="Share our calendar on our website"]').getAttribute('aria-checked') === 'false'`, 20000, 'the switch to read off');
+  const off = JSON.parse(heldBy(churchPub, 'trinityone/share:')[0].content);
+  assert.equal(off.calendar, false);
+  assert.ok(off.optOut.includes(before.optOut[0]), 'SWITCHING OFF IN THE RESTART WINDOW DROPPED THE OPT-OUT: ' + JSON.stringify(off.optOut));
+  assert.equal(await evalIn(clickSel('button[aria-label="Share our calendar on our website"]')), 'ok');
+  await waitFor(`document.querySelector('button[aria-label="Share our calendar on our website"]').getAttribute('aria-checked') === 'true'`, 20000, 'the switch to read on');
+  const back = await pollFeed(x => x.status === 200 && x.text.includes('SUMMARY'));
+  assert.equal(back.text.includes(HELD), false, 'THE HELD EVENT LEAKED after off-then-on in the restart window');
+});
+
 test('the switch off: the feed is a 404 again and every public copy is tombstoned', { skip: SKIP, timeout: 240000 }, async () => {
   await press('/^Settings$/', 'the Settings section');
   await waitFor(`[...document.querySelectorAll('button.set-item')].some(b => /Your website/.test(b.textContent||''))`, 20000, 'the Your website row');

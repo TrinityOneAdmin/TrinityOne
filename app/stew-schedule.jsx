@@ -925,6 +925,8 @@ window.DashRota = DashRota;
 // "Not on the website" — one tick, shared by the New event and Edit event dialogs. Shown only when the
 // console holds the church key (the relay accepts the opt-out from that key alone). One label and one
 // sentence; the switch itself is in Settings → Your website.
+// What the banner says when the opt-out could not be recorded. The event is saved; only the tick is not.
+const SCH_HELD_MISSED = 'The event is saved, but “Not on the website” wasn’t recorded — open the event and tick it again.';
 function SchWebsiteHeldRow({ held, setHeld }) {
   return (
     <label style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 14, padding: '10px 12px', borderRadius: 11, border: '1px solid var(--line)', background: held ? 'color-mix(in oklab, var(--gold) 10%, var(--surface))' : 'var(--surface-2)', cursor: 'pointer' }}>
@@ -983,7 +985,14 @@ function SchEventModal({ day, onClose }) {
     const out = await Promise.all(dates.map(d => window.Steward.publishEvent({ title: title.trim(), date: d, time, where: where.trim(), blurb: blurb.trim(), accent, image, groupId: gid }, asPub)));
     // THE TICK IS RECORDED AFTER THE EVENT EXISTS, by the id publishEvent minted. Every date of a repeat gets
     // its own event and so its own opt-out. A church event only: a network-published event has no share: doc.
-    if (held && canHold && !asNetwork) { for (const r of out) { if (r && r.id) { try { await window.Steward.setWebsiteHeld(r.id, true); } catch (e) {} } } }
+    // …AND A TICK THAT DID NOT LAND IS SAID, through the console's existing banner (the event itself is saved,
+    // so the dialog closes as usual). The engine refuses the opt-out until it has read the church's share:
+    // document — a write built on defaults would drop every existing opt-out (audit of 7ffcfaf).
+    if (held && canHold && !asNetwork) {
+      let missed = 0;
+      for (const r of out) { if (r && r.id) { let ok = false; try { ok = await window.Steward.setWebsiteHeld(r.id, true); } catch (e) { ok = false; } if (!ok) missed++; } }
+      if (missed) { try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'website opt-out', message: SCH_HELD_MISSED } })); } catch (e) {} }
+    }
     setBusy(false);
     if (out.some(r => r == null)) { setErr(SCH_NO_KEY); return; }
     onClose();
@@ -1289,7 +1298,10 @@ function SchEventEdit({ event, onClose }) {
         ...(series ? { recur, day } : {}),
       }));
     } catch (x) { r = null; }
-    if (r && canHold && e.id) { try { await window.Steward.setWebsiteHeld(e.id, held); } catch (x) {} }
+    if (r && canHold && e.id) {   // same as SchEventModal: a tick that did not land is said, not swallowed
+      let ok = false; try { ok = await window.Steward.setWebsiteHeld(e.id, held); } catch (x) { ok = false; }
+      if (!ok) { try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'website opt-out', message: SCH_HELD_MISSED } })); } catch (x) {} }
+    }
     setBusy(false);
     if (!r) { setErr('Couldn’t save — the relay didn’t accept the change. Your edits are still here.'); return; }
     onClose();

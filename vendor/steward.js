@@ -17382,13 +17382,14 @@ zoo`.split("\n");
   function _webEnsure(restart) {
     if (_web && _web.pub === pub && !restart) return _web;
     const listeners = _web ? _web.listeners : /* @__PURE__ */ new Set();
+    const carried = _web && _web.pub === pub ? { share: _web.share, shareTs: _web.shareTs, shareKnown: _web.shareKnown } : null;
     _webStop();
     if (!pub) return null;
     const w = _web = {
       pub,
-      share: { ...WEB_DEFAULT, optOut: [] },
-      shareTs: 0,
-      shareKnown: false,
+      share: carried ? carried.share : { ...WEB_DEFAULT, optOut: [] },
+      shareTs: carried ? carried.shareTs : 0,
+      shareKnown: !!(carried && carried.shareKnown),
       events: /* @__PURE__ */ new Map(),
       versions: /* @__PURE__ */ new Map(),
       eventsKnown: false,
@@ -22219,14 +22220,19 @@ zoo`.split("\n");
     },
     // Flip a switch or rewrite the opt-outs. Resolves true when a relay accepted the share: document; false when
     // none did or this console is a delegated steward (the relay would refuse it, so do not pretend).
+    // NEVER FROM A VIEW WE HAVE NOT ESTABLISHED. The document is rewritten whole, so a write made before the relay
+    // has answered would be built on the defaults and silently drop every opt-out and the switch itself. Refuse
+    // (false) until the stream has reached EOSE — the same rule ensureNameKeyForMembers applies to its envelope.
     async setWebsiteShare(patch) {
       if (!sk || actingChurch) return false;
       const w = _webEnsure();
-      if (!w) return false;
+      if (!w || !w.shareKnown) return false;
       const next = _webNormalise({ ...w.share, ...patch || {} });
-      const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", SHARE_D + pub], ["t", NET]], content: JSON.stringify(next) }, sk));
+      const evt = feChurch({ kind: 30078, created_at: now(), tags: [["d", SHARE_D + pub], ["t", NET]], content: JSON.stringify(next) }, sk);
+      const ok = await publish(evt);
       if (!ok) return false;
       w.share = next;
+      w.shareTs = Math.max(w.shareTs, evt.created_at);
       w.shareKnown = true;
       _webEmit();
       _webQueueSync();
@@ -22237,7 +22243,8 @@ zoo`.split("\n");
       const id = String(eventId || "");
       if (!WEB_ID_OK.test(id)) return Promise.resolve(false);
       const w = _webEnsure();
-      const cur = w ? w.share.optOut : [];
+      if (!w || !w.shareKnown) return Promise.resolve(false);
+      const cur = w.share.optOut;
       const optOut = held ? [.../* @__PURE__ */ new Set([...cur, id])] : cur.filter((x) => x !== id);
       if (optOut.length === cur.length && optOut.every((x, i3) => x === cur[i3])) return Promise.resolve(true);
       return this.setWebsiteShare({ optOut });

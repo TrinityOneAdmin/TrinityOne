@@ -235,7 +235,9 @@ test('a delegated steward gets the one page they are allowed, and none of the ow
     'delegate pressing those controls gets a failed publish and no explanation');
   assert.deepEqual(cardsOn(settings('access', { delegated: true }).tree), ['Security'],
     'the delegate’s notice page does not render the notice');
-  for (const k of ['key', 'stewards', 'delegated', 'become']) {
+  // 'website' joined the owner-only set on 2026-09-22: the relay accepts the share: document from the church key
+  // alone, so a delegate's switch would flip nothing (audit of 7ffcfaf, finding 5: this was claimed and untested).
+  for (const k of ['key', 'stewards', 'delegated', 'become', 'website']) {
     assert.equal(cat.pages.some(p => p.k === k), false, `the owner-only ${k} page is in a delegate’s list`);
   }
 });
