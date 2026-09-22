@@ -3036,6 +3036,14 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
   const relayUp = relays.some(r => r.status === 'on');
   const narrow = useStewNarrow();
   const snug = useStewNarrow(1000) && !narrow;   // a desktop layout in a window under 1000px — the Suite's own 900x780 window; see `stat`
+  // FOUR ACROSS ONLY WHERE FOUR FIT. Under 850px the pane is narrower than 562px and a quarter of it, less the
+  // card's padding, is under the ~102px "Announcements" needs at 12px (measured 2026-09-22: at 790px, 87 of 102
+  // — the-console-fits-a-360px-phone's desktop check caught the first cut of this). Below that the auto-fit
+  // rule stays, as it was; the Suite's window is 900.
+  // (The hook is called unconditionally — inside `snug && …` it would be skipped on wide windows, the hook
+  // order would change on resize, and the whole Overview blanked. Measured, the first time round.)
+  const under850 = useStewNarrow(850);
+  const fourUp = snug && !under850;
   const [chatGroup, setChatGroup] = React.useState(null);   // group whose chat is open (from a list/activity row)
   // open a chat by group id (used by both the groups list and the activity feed)
   const openChat = (gid) => { const g = groups.find(x => x.id === gid); if (g) window.dispatchEvent(new CustomEvent('steward-open-group-chat', { detail: g })); else onTab('groups'); };
@@ -3131,11 +3139,11 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
   // pane 612px wide; `auto-fit, minmax(168px, 1fr)` needs 714px for four, so the fourth card ("Your relay")
   // dropped to a row of its own (measured 2026-09-22: three 195px columns, tops 92/92/92/238). Owner, from
   // the screenshot: "at the default resolution, the four top cards need to be still 4 along the top". So
-  // under 1000px (and above the phone breakpoint) the row is FOUR fixed columns of whatever width there is,
-  // and StatCard draws itself a size down (`snug`) so every label still fits — the auto-fit rule stays for
-  // wider windows, where it was never the problem.
+  // from 850px to 1000px (above the phone breakpoint) the row is FOUR fixed columns of whatever width there is
+  // (`fourUp`), and StatCard draws itself a size down (`snug`) so every label still fits — the auto-fit rule
+  // stays for wider windows, where it was never the problem, and for the 760–849px band, where four cannot fit.
   const stat = (
-    <div style={{ display: 'grid', gridTemplateColumns: narrow ? 'minmax(0, 1fr) minmax(0, 1fr)' : snug ? 'repeat(4, minmax(0, 1fr))' : 'repeat(auto-fit, minmax(168px, 1fr))', gap: narrow ? 10 : snug ? 12 : 14 }}>
+    <div style={{ display: 'grid', gridTemplateColumns: narrow ? 'minmax(0, 1fr) minmax(0, 1fr)' : fourUp ? 'repeat(4, minmax(0, 1fr))' : 'repeat(auto-fit, minmax(168px, 1fr))', gap: narrow ? 10 : snug ? 12 : 14 }}>
       <StatCard label="Members" value={realCount ? String(realCount) : '—'} sub={realCount ? 'invite more' : 'invite your church'} ic="pray" tint="sage" snug={snug} onClick={() => onTab('members')} />
       <StatCard label="Groups" value={String(groups.length)} sub="chat rooms · signed" ic="chat" tint="clay" snug={snug} onClick={() => onTab('groups')} />
       <StatCard label="Announcements" value={stats.announcements ? String(stats.announcements) : '—'} sub="post to everyone" ic="send" tint="gold" snug={snug} onClick={() => (onNewPost ? onNewPost() : onTab('groups'))} />
