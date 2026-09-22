@@ -20,6 +20,7 @@ import { openStore, matchFilter } from './event-store.mjs';
 // one name and published under another, failing silently. D.* is checked against the registry at module load,
 // so an undeclared name throws before this relay serves a request. POLICY stays in accept()/canRead().
 import { D } from './trinity-doc-types.mjs';   // durable event storage (node:sqlite) + the canonical read predicate
+import { buildCalendar, publicEventFields } from './public-calendar.mjs';   // the church's PUBLIC calendar feed (pure: no I/O, no policy)
 // WHO MAY HOLD THE CHECK-IN HELPER KEY is asked in ONE place, and this is not it — see the file's own header.
 // The relay imports three things and derives nothing: the parser (so a grant means the same to the box that
 // stores it and the console that mints it), and the declared-source test (so a grant cannot claim a
@@ -758,6 +759,10 @@ const MEDIAKEY_D = D.MEDIAKEY;   // Tier-2 media key wrapped per-member — its 
 // (a parent's guardian-link REQUEST is d=trinityone/guardreq:<childpub>, authored by the parent — member-writable, falls to the default member rule)
 const JOINPOLICY_D = D.JOINPOLICY; // church-signed join policy — d=joinpolicy:<churchpub>, content {approval:bool}; ON = members need steward approval to post
 const ADMITTED_D = D.ADMITTED;   // church-signed allowlist of approved members — d=admitted:<churchpub> (only meaningful when approval is ON)
+// THE CHURCH'S WEBSITE (reference/DESIGN-embeddable-church-info.md, phase 1). Both church-key-only and plaintext:
+// this relay must READ them to build /public/<npub>/calendar.ics, which is the one thing it serves without auth.
+const SHARE_D = D.SHARE;         // d=share:<churchpub>, {calendar:bool, optOut:[eventIds], address:'own'} — the switches and the per-item opt-outs
+const PUBEVENT_D = D.PUBEVENT;   // d=pubevent:<eventId> — the plaintext public copy of one event; event: itself is sealed and unreadable here
 // RE-SEAT: a member lost their 12 words, so their old key is gone forever and they came back on a NEW one.
 // The church vouches that the two are the same person — d=reseat:<churchpub>, content {pairs:[{old,new,at}]}.
 // Nothing here recovers the old key (nobody has it); it only moves a member's SEAT — their name, their place
@@ -2358,7 +2363,7 @@ const namedChurch = (e) => { const t = (e.tags || []).find(t => t[0] === 'church
 //   4. a member authored a reply and p-tagged the church (rsvp:/reqreply:/unavail:/guardreq:/stewardreq:).
 // Returns '' when ownership can't be proven — the caller MUST treat that as deny, not as public.
 const CP_SUFFIXED_D = [MEMBER_D, ADMITTED_D, RESEAT_D, STEWARDS_D, STEWARDREQ_D, BLOCKED_D, MINORS_D, APPROVED_D,
-  GUARDIANS_D, MEDIAKEY_D, CAREKEY_D, FINANCEKEY_D, CHECKINKEY_D, NAMEKEY_D, CARETEAM_D, AVAIL_D, SAFETY_D, NOPHOTO_D, JOINPOLICY_D];
+  GUARDIANS_D, MEDIAKEY_D, CAREKEY_D, FINANCEKEY_D, CHECKINKEY_D, NAMEKEY_D, CARETEAM_D, AVAIL_D, SAFETY_D, NOPHOTO_D, JOINPOLICY_D, SHARE_D];
 // Doc types an ORDINARY MEMBER legitimately authors while church-tagging them. Their authority comes from
 // authorship, not from delegated church authority, so the revoked-steward roster check in canRead() must
 // not be applied to them (REVIEW-2026-07-20 B1 — it silently hid every care sign-up from the church).
@@ -2656,6 +2661,13 @@ const GROUP_CHILDSAFE = new Set();   // groupIds a church explicitly marked chil
 // notification fire once: after the tombstone this entry is gone, so a second tombstone — a retry, a
 // republish, the whole corpus replaying on the next restart — has nothing to notify about.
 const EVENT_AUDIENCE = new Map();   // eventId -> { cp, gid, by } recorded when the event doc was stored
+// WHAT EACH CHURCH HAS CHOSEN TO PUT ON ITS WEBSITE, and the plaintext copies it wrote for that purpose.
+// Filled by note() from SHARE_D / PUBEVENT_D under a rule that consults NOTHING but CHURCH_PUBS and the event's
+// own author and d-tag (memory: ingest-rules-cannot-consult-hydrated-maps — these replay on /import before any
+// roster is known). Read by publicFeed() below and by nothing else. Absent means "not shared": a church with
+// no share: document, or one whose switch is off, serves nothing at /public/…, which is the default.
+const SHARE_BY = new Map();     // churchpub -> { calendar: bool, optOut: Set(eventId) }
+const PUBEVENTS = new Map();    // churchpub -> Map(eventId -> the noticeboard fields, as publicEventFields() admits them)
 
 // ---- marketing email capture (website "Stay updated" form) — opt-in list, stored locally ----
 const SUBS_FILE = join(DATA_DIR,'subscribers.json');
@@ -2942,7 +2954,7 @@ function clearDerivedMaps() {
                    GROUP_LEADERS, GROUP_LEADER_BY, GROUP_EVENTPOLICY, STEWARDS_BY, STEWARD_CAPS, BLOCKED_BY, MINORS_BY, APPROVED_BY, NOPHOTO_BY,
                    GUARDIANS_BY, NETWORKS_BY, ADMITTED_BY, ADMITTED_SRC, ROSTER_BY, ROSTER_PEOPLE, MEALS_ADMIN_GROUP, ROTA_VIS, CHECKIN_HELPERS,
                    CHECKIN_PERMITS,
-                   FINANCE_SEQ, CARE_RECIPIENT, CARE_SKIPHASH, PEER_URLS, TRUSTED_RELAYS, EVENT_AUDIENCE]) { try { m.clear(); } catch {} }
+                   FINANCE_SEQ, CARE_RECIPIENT, CARE_SKIPHASH, PEER_URLS, TRUSTED_RELAYS, EVENT_AUDIENCE, SHARE_BY, PUBEVENTS]) { try { m.clear(); } catch {} }
   // CHECKIN_PERMITS was missing here, and it is the HALF OF THE CONJUNCTION THE WHOLE 2026-09-09 RESTRUCTURE
   // RESTS ON. Added 2026-09-10. It was the only line on which the two check-in siblings differed, and it
   // failed OPEN in exactly the class the GROUP_CHILDSAFE note below describes.
@@ -3138,6 +3150,28 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
   else if (d.startsWith(BLOCKED_D) && CHURCH_PUBS.has(e.pubkey) && d.slice(BLOCKED_D.length) === e.pubkey) {
     const set = new Set(); if (!removed) { try { (JSON.parse(e.content).pubkeys || []).forEach(p => { const h = toHexPub(p); if (h) set.add(h); }); } catch {} }
     BLOCKED_BY.set(e.pubkey, set); if (!_hydrating) rebuildBlocked();   // rebuildBlocked() rebuilds MEMBERS (drops the blocked)
+  }
+  // THE WEBSITE SWITCHES AND THE PUBLIC COPIES. Owner-only and self-named, exactly as accept() admits them, and
+  // decided from the author and the d-tag alone: this branch replays on /import and on peer sync, where no
+  // roster has been read yet, so it may ask nothing that a roster would answer. A tombstone (or empty content)
+  // clears the entry, which is what makes "switch off" and "not on the website" take effect on the feed at once.
+  else if (d.startsWith(SHARE_D) && CHURCH_PUBS.has(e.pubkey) && d.slice(SHARE_D.length) === e.pubkey) {
+    if (removed) { SHARE_BY.delete(e.pubkey); }
+    else {
+      let c = null; try { c = JSON.parse(e.content); } catch {}
+      const optOut = new Set((c && Array.isArray(c.optOut) ? c.optOut : []).map(x => String(x)).filter(x => /^[A-Za-z0-9_-]{1,64}$/.test(x)));
+      SHARE_BY.set(e.pubkey, { calendar: !!(c && c.calendar === true), optOut });
+    }
+  }
+  else if (d.startsWith(PUBEVENT_D) && CHURCH_PUBS.has(e.pubkey)) {
+    const id = d.slice(PUBEVENT_D.length);
+    let m = PUBEVENTS.get(e.pubkey); if (!m) { m = new Map(); PUBEVENTS.set(e.pubkey, m); }
+    if (removed) { m.delete(id); if (!m.size) PUBEVENTS.delete(e.pubkey); }
+    else {
+      let c = null; try { c = JSON.parse(e.content); } catch {}
+      const f = publicEventFields({ ...(c && typeof c === 'object' ? c : {}), id });   // the d-tag names the event; the body may not rename it
+      if (f) m.set(id, f); else m.delete(id);
+    }
   }
   else if (d.startsWith(JOINPOLICY_D) && CHURCH_PUBS.has(cp = d.slice(JOINPOLICY_D.length)) && (e.pubkey === cp || stewardCan(e.pubkey, cp, 'any'))) {   // a church's join policy
     let approval = false; if (!removed) { try { approval = !!JSON.parse(e.content).approval; } catch {} }
@@ -3637,6 +3671,15 @@ function accept(e) {
     // whose whole purpose is to catch a type nobody gave a rule to.
     if (d.startsWith(VOICE_D)) return CHURCH_PUBS.has(e.pubkey) && d.slice(VOICE_D.length) === e.pubkey;
     if (d.startsWith(STEWARDS_D)) return CHURCH_PUBS.has(e.pubkey) && d.slice(STEWARDS_D.length) === e.pubkey;   // OWNER-ONLY: only the church key edits its own steward roster
+    // THE CHURCH'S WEBSITE. Owner-only, like the two above, and for the same reason the voice: note gives: with
+    // no rule these fall to the member catch-all at the foot of this block, where any member of any church on
+    // the box could write `share:<some other church>` under their own key. The public route reads only the
+    // church's own copy, so such a forgery would be inert there — but it would still be stored, and "inert as
+    // long as the reader is careful" is not a rule. share: names its church in the d-tag; pubevent: is keyed
+    // by (author, d), so a church can only ever write its own copies. Delegated stewards cannot write either
+    // in phase 1: the Settings page is owner-only and the console mirrors only in owner mode.
+    if (d.startsWith(SHARE_D)) return CHURCH_PUBS.has(e.pubkey) && d.slice(SHARE_D.length) === e.pubkey;
+    if (d.startsWith(PUBEVENT_D)) return CHURCH_PUBS.has(e.pubkey);
     // THE CHURCH'S RELAY-NETWORK MEMBERSHIP. Owner-only, like the roster: this document is the sole thing
     // that admits a self-hosted or third-party-hosted relay to a church's network, so the authority that
     // gatekeeps writes is the authority that decides it. Not delegated to stewards — nothing asked for that
@@ -5421,6 +5464,55 @@ function _gzipFile(file, mtimeMs) {
 }
 function _gzipBuf(body) { try { return gzipSync(body, { level: 6 }); } catch { return null; } }
 
+// ── THE CHURCH'S WEBSITE: /public/<npub>/calendar.ics and /public/<npub>/e/<id>.ics ────────────────────────
+// reference/DESIGN-embeddable-church-info.md, phase 1, address mode 1 (the church's own relay).
+//
+// THE RULE, in the design's words: a document is served here ONLY IF (a) its church has the type switched on
+// and (b) the item is not opted out. Everything else — every other document type, an unknown church, a church
+// with no share: document, a switch that is off, an opted-out id, an id that was never public — is a 404 that
+// looks the same from outside. The WebSocket read gate (canRead) is untouched: it stays default-deny and has
+// no rule for share: or pubevent:, so an anonymous REQ for either still gets nothing. This route reads the
+// two maps note() fills and the church's public kind-0 name (already public to anyone), and dials nothing:
+// CLAUDE.md rule 10 — the feed is built from this relay's own store and no other machine is consulted.
+//
+// WHAT IS IN THE BYTES: the noticeboard fields of each public event, and the church's display name. No URL, no
+// hostname, no member, no attendee, no count of anything private. An opted-out event is absent from the feed,
+// from its own per-event address, and from the count of VEVENTs — there is no "N events" line anywhere.
+//
+// HEADERS: text/calendar, cacheable for five minutes by anyone (it is public), the strict no-source CSP, no
+// cookie of any kind, CORS open (a website builder's script may fetch it cross-origin; that is the use).
+const PUBLIC_CSP = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
+const PUBLIC_ROUTE = /^\/public\/(npub1[a-z0-9]{58})\/(?:calendar\.ics|e\/([A-Za-z0-9_-]{1,64})\.ics)$/;
+function publicFeed(req, res, route) {
+  const notFound = () => { res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store', 'Content-Security-Policy': PUBLIC_CSP, ...SEC_HEADERS }); res.end('not found'); };
+  if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405, { 'Allow': 'GET, HEAD', 'Content-Security-Policy': PUBLIC_CSP, ...SEC_HEADERS }); res.end(); return; }
+  const m = PUBLIC_ROUTE.exec(route);
+  if (!m) return notFound();
+  const cp = toHexPub(m[1]);
+  if (!cp || !CHURCH_PUBS.has(cp)) return notFound();            // a church this relay does not hold has no page here
+  const share = SHARE_BY.get(cp);
+  if (!share || !share.calendar) return notFound();               // (a) the switch — absent reads as off
+  const all = PUBEVENTS.get(cp);
+  const events = all ? [...all.values()].filter(ev => !share.optOut.has(ev.id)) : [];   // (b) the opt-outs
+  let rows = events;
+  if (m[2] !== undefined) {                                       // one event, by its stable id
+    const one = events.find(ev => ev.id === m[2]);
+    if (!one) return notFound();                                  // opted out, deleted, or never public: all the same 404
+    rows = [one];
+  }
+  // The church's display name, from the kind-0 this relay already serves to anyone (canRead: a church's own
+  // profile is public so that a person deciding whether to join can see its name).
+  let name = '';
+  try { const prof = store.query({ kinds: [0], authors: [cp], limit: 1 })[0]; if (prof) name = String(JSON.parse(prof.content || '{}').name || '').slice(0, 120); } catch {}
+  const body = Buffer.from(buildCalendar(rows, { name, uidScope: m[1] }), 'utf8');
+  res.writeHead(200, {
+    'Content-Type': 'text/calendar; charset=utf-8', 'Content-Length': body.length,
+    'Cache-Control': 'public, max-age=300', 'Content-Security-Policy': PUBLIC_CSP,
+    'Access-Control-Allow-Origin': '*', ...SEC_HEADERS,
+  });
+  res.end(req.method === 'HEAD' ? undefined : body);
+}
+
 function serveStatic(req, res) {
   const route = (req.url || '/').split('?')[0];
   // relay status (for the Relay app control dashboard)
@@ -5461,6 +5553,9 @@ function serveStatic(req, res) {
   // NOTHING IN THE PRODUCT CONSULTS THIS YET. The proof and the gates that read it land separately and
   // deliberately: a relay older than this cannot answer, so the day something starts REQUIRING an answer is
   // the day every un-upgraded relay drops out of its church's network. Adding the endpoint is safe alone.
+  // THE CHURCH'S PUBLIC CALENDAR — the one thing this relay serves about a church without authentication, and
+  // only while that church has asked it to. See publicFeed() for the rules; this line only routes.
+  if (route === '/public' || route.startsWith('/public/')) { publicFeed(req, res, route); return; }
   if (route === '/relay-identity') {
     const H = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store', ...SEC_HEADERS };
     let nonce = ''; try { nonce = new URL(req.url, 'http://x').searchParams.get('nonce') || ''; } catch {}

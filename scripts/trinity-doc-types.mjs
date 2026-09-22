@@ -77,6 +77,14 @@ export const DOC_TYPES = Object.freeze({
   'trinityone/relay-net':     { write: 'church',    read: 'public',  scope: 'author', note: 'closed-network plan C3 — the church\'s own statement of WHICH RELAY BOXES ARE ITS NETWORK, as [{pubkey, alwaysOn, url?}]. NOT trinityone/relays, which means "cross-relay sync is on": syncEnable refuses to write that below two boxes (so a single-relay church could never author its own membership) and syncDisable writes [] to it (which would un-admit a church\'s own relay as a side effect of turning mirroring off). Add, never repurpose. The client matches on PUBKEY ONLY — `url` is an advisory hint about where the box was last seen, because a tunnelled relay changes address on every restart. READ IS PUBLIC (C4): under the client gate a phone will not publish anywhere until it has read this, so a newcomer who has scanned an invite must be able to read it BEFORE joining — the same reason joinpolicy: is public. It carries relay pubkeys and nothing about any person, and kind-10002 already publishes the same church\'s relay addresses to anyone' },
   'trinityone/network:':      { write: 'church',    read: 'members', scope: 'author', note: 'the church declares it joined a network' },
 
+  // ── the church's website (reference/DESIGN-embeddable-church-info.md, phase 1) ──────────────────────
+  // Both are church-key-only and PLAINTEXT on purpose: the relay must read them to build the public feed.
+  // Neither is served to an anonymous WebSocket — canRead has no rule for them, so they fall to the
+  // default-deny members path like any other church document. What IS public is the HTTP route
+  // /public/<npub>/calendar.ics, and only while share:.calendar is true.
+  'trinityone/share:':        { write: 'church',    read: 'members', scope: 'suffix', note: 'd=share:<churchpub>, {calendar, sermons, plans, optOut:[ids], address}. The per-TYPE switches for the public feeds and the per-ITEM opt-outs. Owner-only, like voice:/stewards:, and it names its own church in the d-tag so a co-tenant church cannot write it for another' },
+  'trinityone/pubevent:':     { write: 'church',    read: 'members', scope: 'author', note: 'the PLAINTEXT public copy of one event: {title, date, time, where, blurb, recur, day} — the noticeboard fields and nothing else (never a group, an image, an attendee). event: itself is sealed under the church name key so the relay cannot read it; the console writes this copy while the calendar switch is on and tombstones it on opt-out, delete or switch-off. Keyed by (author, d), so one church cannot overwrite another\'s' },
+
   // ── membership and joining ───────────────────────────────────────────────────────────────────────────
   'trinityone/member:':       { write: 'member',    read: 'members', scope: 'suffix', note: 'a member\'s own join document' },
   'trinityone/joinpolicy:':   { write: 'steward',   read: 'public',  scope: 'suffix', note: 'THE ONE PUBLIC DOC — a not-yet-member must read it before joining' },
@@ -285,6 +293,8 @@ export const D = Object.freeze({
   NOPHOTO:        k('trinityone/nophoto:'),
   MEDIAKEY:       k('trinityone/mediakey:'),
   JOINPOLICY:     k('trinityone/joinpolicy:'),
+  SHARE:          k('trinityone/share:'),
+  PUBEVENT:       k('trinityone/pubevent:'),
   ADMITTED:       k('trinityone/admitted:'),
   RESEAT:         k('trinityone/reseat:'),
   // Who signs what the church sends — a display by-line, church-signed. Deliberately its OWN document rather
