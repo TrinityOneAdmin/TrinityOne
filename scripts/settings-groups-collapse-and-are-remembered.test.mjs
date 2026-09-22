@@ -137,7 +137,7 @@ const region = (tree) => find(tree, n => n.type === 'section' && n.props['aria-l
 const GROUPS = ['Church', 'People', 'Infrastructure', 'Security'];
 const expanded = (tree) => headers(tree).map(b => b.props['aria-expanded']);
 const counts = (tree) => headers(tree).map(b => shownIn(b, 'set-grp-c'));
-const PAGES = 16;   // owner's pages across the four groups; a delegate has fewer
+const PAGES = 17;   // owner's pages across the four groups (16 + "Your name as a steward", 2026-09-22); a delegate has fewer
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 // CONTROL — if this fails, every assertion below is meaningless.
@@ -161,7 +161,7 @@ test('a steward who has never chosen gets every group SHUT with its count — ex
   const s = screen(null, { innerWidth: 1200 });                       // a browser: the first page, Church identity, is open
   assert.deepEqual(expanded(s.tree), [true, false, false, false],
     'in a browser, a steward who has never chosen does not get exactly the current page\'s group open and the rest shut');
-  assert.deepEqual(counts(s.tree), ['', '3', '5', '4'],
+  assert.deepEqual(counts(s.tree), ['', '4', '5', '4'],
     'the shut groups do not each say how many pages are behind them (and the open one must not)');
   assert.ok(rowNames(s.tree).includes('Church identity') && !rowNames(s.tree).includes('Relays'),
     'the rows on screen are not exactly the open group\'s');
@@ -169,7 +169,7 @@ test('a steward who has never chosen gets every group SHUT with its count — ex
   const ph = screen(null, { innerWidth: 500 });
   assert.deepEqual(expanded(ph.tree), [false, false, false, false],
     'on a phone, a steward who has never chosen does not get all four groups shut');
-  assert.deepEqual(counts(ph.tree), ['4', '3', '5', '4'], 'the phone\'s shut groups do not each say their count');
+  assert.deepEqual(counts(ph.tree), ['4', '4', '5', '4'], 'the phone\'s shut groups do not each say their count');
   // …and "never chosen" is still stored as nothing at all, so the default can tell a fresh console from a
   // deliberate one — a stored [] is now the one way to say "all open".
   assert.equal(s.store.size, 0,
@@ -407,7 +407,7 @@ test('the arrow keys move focus over the rows on screen, never into a shut group
   const s = screen('identity', { allOpen: true });
   header(s.tree, 'People').props.onClick();          // People shuts; Church holds the open page and stays
   const w = walkable(s);
-  assert.equal(w.rows.length, PAGES - 3, `expected the three People rows to be gone, found ${w.rows.length} rows`);
+  assert.equal(w.rows.length, PAGES - 4, `expected the four People rows to be gone, found ${w.rows.length} rows`);
   assert.equal(w.names.includes('Congregation features'), false, 're-anchor: People is still listed');
 
   // THE BOUNDARY PRESS. The row after Church's last is the first row of the next group ON SCREEN.

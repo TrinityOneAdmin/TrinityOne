@@ -196,6 +196,9 @@ const WAS_ON_A_TAB = [
 // it is a fault, not a page, and it stays a banner on Relays — see the refusal test in
 // scripts/relay-refusal-banner-and-retry-stay-together.test.mjs.
 const SPLIT_OUT = ['Add a relay', 'Copy your history to relay.grace.example', 'Keep your relays in sync'];
+// The owner's by-line (VoiceSetup) sat at the top of the Delegated stewards card until 2026-09-22; it is about
+// the owner, not the delegates, so it is a page of its own now. One card, one job: it appears exactly once.
+const MOVED_OUT = ['Your name as a steward'];
 
 test('every panel that was on a tab is now on exactly one page, and nothing is left over', () => {
   const seen = new Map();   // panel title -> [pages it appears on]
@@ -205,7 +208,7 @@ test('every panel that was on a tab is now on exactly one page, and nothing is l
       seen.get(title).push(p.k);
     }
   }
-  const want = [...WAS_ON_A_TAB, ...SPLIT_OUT].sort();
+  const want = [...WAS_ON_A_TAB, ...SPLIT_OUT, ...MOVED_OUT].sort();
   const got = [...seen.keys()].sort();
 
   const orphaned = want.filter(t => !seen.has(t));

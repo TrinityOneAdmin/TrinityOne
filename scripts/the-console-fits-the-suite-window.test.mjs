@@ -240,7 +240,7 @@ test('a fresh console opens Settings with only the current page\'s group open, t
   console.log('    settings groups, fresh: ' + JSON.stringify(fresh));
   assert.deepEqual(fresh.map(h => h.g), ['Church', 'People', 'Infrastructure', 'Security'], 're-anchor: the four groups');
   assert.deepEqual(fresh.map(h => h.open), [true, false, false, false], 'THE DEFECT: a fresh console does not open Settings with only Church (the group of the open page) open');
-  assert.deepEqual(fresh.slice(1).map(h => h.count), ['3', '5', '4'], 'the shut groups do not show their counts');
+  assert.deepEqual(fresh.slice(1).map(h => h.count), ['4', '5', '4'], 'the shut groups do not show their counts');
   // open Security by hand, then one of its pages: Security open, Church (holding nothing, never chosen) shut
   await c.evalIn(`[...document.querySelectorAll('button.set-grp')].find(b => (b.querySelector('.set-grp-n')||{}).textContent === 'Security').click()`);
   await sleep(300);

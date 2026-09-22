@@ -7814,7 +7814,11 @@ function DashNetworksPanel() {
 // nobody". Deliberately NOT a "send as" selector: there is one right answer per screen, a churchwarden will
 // not audit a dropdown before every send, and a console cannot honestly offer to sign as somebody whose key
 // it does not hold. The console always speaks for the church; a personal note comes from your own account.
-function VoiceSetup() {
+// Since 2026-09-22 this is the body of the "Your name as a steward" Settings page (it sat at the top of Delegated
+// stewards before, and it is about the owner, not the delegates). `onDelegated` opens that page — the one place
+// the sentence below sends a steward. Same handler, same publish (Steward.setVoice → _voiceSave) as before.
+// The example placeholders ("Rev Ada Nwachukwu" / "Vicar") went the same day: plain "Your name" / "Role (optional)".
+function VoiceSetup({ onDelegated }) {
   const v = (window.Steward && window.Steward.voice && window.Steward.voice()) || { self: null };
   const [name, setName] = React.useState((v.self && v.self.name) || '');
   const [office, setOffice] = React.useState((v.self && v.self.office) || '');
@@ -7831,14 +7835,17 @@ function VoiceSetup() {
   return (
     <div style={{ marginBottom: 16 }}>
       <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 10 }}>
-        Members see this under every notice and message sent from this console, like the name at the bottom of
-        a parish letter. <b>If someone else helps run the church, don’t share this console</b> — add them below
-        and they’ll write under their own name.
+        Members see this under every notice and message sent from this console. <b>If someone else helps run
+        the church, don’t share this console</b> — add them under{' '}
+        {onDelegated
+          ? <button onClick={onDelegated} style={{ border: 'none', background: 'none', padding: 0, color: 'var(--clay-ink)', fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 13.5 }}>Delegated stewards</button>
+          : <b>Delegated stewards</b>}
+        {' '}and they’ll write under their own name.
       </div>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 9 }}>
-        <input value={name} onChange={e => { setName(e.target.value); setState(''); }} placeholder="Rev Ada Nwachukwu" aria-label="Your name"
+        <input value={name} onChange={e => { setName(e.target.value); setState(''); }} placeholder="Your name" aria-label="Your name"
           style={{ flex: '1 1 180px', minWidth: 0, padding: '9px 11px', borderRadius: 10, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontSize: 14 }} />
-        <input value={office} onChange={e => { setOffice(e.target.value); setState(''); }} placeholder="Vicar" aria-label="Your role"
+        <input value={office} onChange={e => { setOffice(e.target.value); setState(''); }} placeholder="Role (optional)" aria-label="Your role"
           style={{ flex: '0 1 120px', minWidth: 0, padding: '9px 11px', borderRadius: 10, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontSize: 14 }} />
         <button onClick={save} className="sk-btn sk-btn--clay" style={{ padding: '9px 16px' }}>Save</button>
       </div>
@@ -8037,8 +8044,6 @@ function DashStewardsPanel({ church }) {
   };
   return (
     <Panel title="Delegated stewards">
-      <VoiceSetup />
-      <div style={{ height: 1, background: 'var(--line)', margin: '4px 0 16px' }} />
       <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 12 }}>Give a trusted member steward powers <b style={{ color: 'var(--ink)' }}>without sharing the church key</b>. They help run {church.name || 'the church'} — post, create groups, manage members — under their own key. You stay the owner: stewards can’t add other stewards, ban people, or change relay settings. <b style={{ color: 'var(--ink)' }}>Remove anyone anytime</b> and it takes effect immediately.</div>
       {pending.length ? <div style={{ marginBottom: 14 }}>
         <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--clay-ink)', marginBottom: 7 }}>Requests to steward · {pending.length}</div>
@@ -9314,6 +9319,10 @@ const SETTINGS_GROUPS = [
     { k: 'features', n: 'Congregation features', d: 'What members see' },
     { k: 'rules', n: 'Rules & privacy', d: 'Photos, encryption, joining' },
     { k: 'tags', n: 'Chat message tags', d: 'Prayer request, and your own' },
+    // The OWNER'S by-line, on a page of its own (owner, 2026-09-22: it "shouldn't be in the delegated stewards
+    // area" — it is about the person holding the key, not about their helpers). Owner-only because the
+    // document it publishes is church-signed (Steward._voiceSave), which a delegate's console cannot do.
+    { k: 'voice', n: 'Your name as a steward', d: 'Under every notice from here', owner: true },
   ]],
   // RELAYS WAS ONE CARD DOING EIGHT JOBS, measured at over 1000px, and only the first of the eight is
   // touched more than once in a church's life. It is five pages now; the eighth job, "a relay is refusing
@@ -9703,6 +9712,7 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
       {open === 'features' ? <DashFeaturesPanel church={church} show="features" /> : null}
       {open === 'rules' ? <DashFeaturesPanel church={church} show="rules" /> : null}
       {open === 'tags' ? <DashChatTagsPanel church={church} /> : null}
+      {open === 'voice' ? <Panel title="Your name as a steward"><VoiceSetup onDelegated={() => setPage('delegated')} /></Panel> : null}
 
       {open === 'relays' ? <DashRelaysCard /> : null}
       {open === 'add-relay' ? <DashAddRelayCard /> : null}
