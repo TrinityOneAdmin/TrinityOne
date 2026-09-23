@@ -950,7 +950,7 @@ test('a media key the relay accepted still goes out, and is not blocked by the m
 // it answers as the library does on the wire: an unopenable socket RESOLVES with "connection failure: …",
 // while a relay's own OK=false REJECTS with the relay's reason.
 async function runMediaKeyForReal(answers, calls = 3, memberPubs = ['m1', 'm2']) {
-  const banners = [], errors = [], attempts = [];
+  const banners = [], errors = [], attempts = [], subs = [];
   let n = 0;
   const scope = {
     sk: 'SK', pub: 'CP', actingChurch: '',
@@ -965,14 +965,22 @@ async function runMediaKeyForReal(answers, calls = 3, memberPubs = ['m1', 'm2'])
     console: { warn() {}, log() {}, error() {} },
     JSON, Set, Map, Array, Object, String, Number, Boolean, Promise, Error, RegExp,
     CustomEvent: class { constructor(type, init) { this.type = type; this.detail = (init || {}).detail; } },
-    pool: { publish: (targets) => {
-      const a = answers[Math.min(n, answers.length - 1)];
-      n++;
-      attempts.push(a.kind === 'ok' ? 'OK' : (a.kind === 'refused' ? 'REFUSED' : 'UNREACHABLE'));
-      if (a.kind === 'unreachable') return targets.map(() => Promise.resolve('connection failure: connection timed out'));
-      if (a.kind === 'refused') return targets.map(() => Promise.reject(new Error(a.reason)));
-      return targets.map(() => Promise.resolve(''));
-    } },
+    _isRelayAuthed: () => true,
+    _hex: () => 'bb',
+    crypto: { getRandomValues: (a) => a },
+    decrypt3: (a) => a,
+    pool: {
+      publish: (targets) => {
+        const a = answers[Math.min(n, answers.length - 1)];
+        n++;
+        attempts.push(a.kind === 'ok' ? 'OK' : (a.kind === 'refused' ? 'REFUSED' : 'UNREACHABLE'));
+        if (a.kind === 'unreachable') return targets.map(() => Promise.resolve('connection failure: connection timed out'));
+        if (a.kind === 'refused') return targets.map(() => Promise.reject(new Error(a.reason)));
+        return targets.map(() => Promise.resolve(''));
+      },
+      // subscribeMediaKey's socket: hand the handlers back so a test can deliver a real envelope.
+      subscribeMany: (_r, _f, handlers) => { subs.push(handlers); return { close() {} }; },
+    },
   };
   scope.window = { dispatchEvent: (e) => {
     if (e.type === 'steward-write-blocked') banners.push(e.detail.message);
@@ -988,16 +996,24 @@ async function runMediaKeyForReal(answers, calls = 3, memberPubs = ['m1', 'm2'])
   });
   // Mutable module state the lifted function ASSIGNS to must be `let`, or a const throws TypeError from
   // inside the lifted code and "it stopped publishing" would read as a pass.
-  const decls = 'let _mediaKeyHex = "aa"; let _mediaKeyRing = ["aa"]; let _mediaKeyDocKeys = null; let _mediaKeyPushRefused = null;';
+  const decls = 'let _mediaKeyHex = "aa"; let _mediaKeyRing = ["aa"]; let _mediaKeyDocKeys = null; '
+    + 'let _mediaKeyPushRefused = null; let _mediaKeyChecked = false;';
   const pubSrc = fnBody(BUNDLE, '  async function publish(evt, opts) {', 'publish in the shipped bundle');
-  const ensSrc = fnBody(BUNDLE, '    async ensureMediaKeyForMembers(memberPubs) {', 'ensureMediaKeyForMembers in the shipped bundle');
+  const family = [
+    fnBody(BUNDLE, '    async ensureMediaKeyForMembers(memberPubs) {', 'ensureMediaKeyForMembers in the shipped bundle'),
+    fnBody(BUNDLE, '    async rotateMediaKey(memberPubs) {', 'rotateMediaKey in the shipped bundle'),
+    fnBody(BUNDLE, '    subscribeMediaKey() {', 'subscribeMediaKey in the shipped bundle'),
+  ].join(',\n');
   const api = new Function('scope', `with (scope) { ${decls}
     ${pubSrc};
-    const _o = { ${ensSrc} };
-    return { fn: _o.ensureMediaKeyForMembers.bind(_o), peek: () => ({ docKeys: _mediaKeyDocKeys, refused: _mediaKeyPushRefused }) }; }`)(proxy);
+    const _o = { ${family} };
+    return { fn: _o.ensureMediaKeyForMembers.bind(_o), rotate: _o.rotateMediaKey.bind(_o),
+             subscribe: _o.subscribeMediaKey.bind(_o),
+             forget: (fp) => { _mediaKeyPushRefused = fp; },
+             peek: () => ({ docKeys: _mediaKeyDocKeys, refused: _mediaKeyPushRefused }) }; }`)(proxy);
   const out = [];
   for (let i = 0; i < calls; i++) out.push(await api.fn(memberPubs));
-  return { out, attempts, banners, errors, state: api.peek() };
+  return { out, attempts, banners, errors, subs, api, state: api.peek() };
 }
 
 test('A BLIP IS NOT A RULE: a media key nobody could deliver is tried again, and lands', async () => {
@@ -1037,6 +1053,64 @@ test('…and when the relay gives a reason nobody wrote a sentence for, the bann
     'the console invented a cause it cannot know: ' + JSON.stringify(p.banners));
   assert.doesNotMatch(p.banners[0] || '', /holds the church key/,
     'a relay that is merely read-only is still being blamed on the church key');
+});
+
+// ── THE TWO CLEARS NOBODY WAS TESTING ────────────────────────────────────────────────────────────────────
+// AUDIT-steward-doc-rules-round4-2026-09-22, finding F5. 177cfb9 names four places the memo is cleared and
+// calls that the reason it "IS NOT A PERMANENT GIVING-UP". Two of the four were deletable with the suite
+// green — MEASURED, each scoped to its own function, the anchor asserted exactly once inside the slice:
+//
+//   G — rotateMediaKey's `_mediaKeyPushRefused = null` made inert (`= _mediaKeyPushRefused`)
+//       → 31/0 · 15/0 · 6/0 · 13/0 · 10/0 · 8/0 — INERT across all six files that name the media key
+//   H — subscribeMediaKey's onevent `_mediaKeyPushRefused = null` made inert, same way
+//       → 31/0 · 15/0 · 6/0 · 13/0 · 10/0 · 8/0 — INERT
+//
+// ⚠ The onevent clear's own EXPLANATORY COMMENT contains the literal text `_mediaKeyPushRefused = null`, so
+// a plain string-replace patches the prose and reports exactly what a blind test reports
+// ([[comments-can-satisfy-assertions]], [[sabotage-must-be-scoped]]). Both rows below are point-of-USE: the
+// assertion is not "the line is there" but "the next roster emit asks again", driven through the shipped
+// ensureMediaKeyForMembers in the same module scope.
+
+test('THE CLEARS: a rotation that landed makes the console ask again for a set it had been refused', async () => {
+  // The first answer refuses, so the memo is set for real by the real code; the rest are healthy.
+  const p = await runMediaKeyForReal([{ kind: 'refused', reason: 'blocked: not a member or not permitted for this group' },
+                                      { kind: 'ok' }]);
+  assert.ok(p.state.refused, 're-anchor: no memo was ever set, so nothing below is testing a clear');
+  assert.equal(await p.api.fn(['m1', 'm2']), false, 're-anchor: the memo is not actually blocking the republish');
+
+  // Rotate to a SMALLER set on purpose: rotateMediaKey records what IT published, so rotating to the same
+  // roster would satisfy the idempotence guard on the next call and the row would pass with the clear
+  // deleted. m2 is left unkeyed, so the next call must get past that guard and reach the memo — and the
+  // fingerprint it computes is the very one that was refused.
+  assert.equal(await p.api.rotate(['m1']), true, 'the rotation itself failed, so this row proves nothing');
+  assert.equal(p.api.peek().refused, null,
+    'ROTATION NO LONGER CLEARS THE MEMO. A rotation that landed PROVES this console can write the envelope, ' +
+    'so the reason ensureMediaKeyForMembers stopped asking has gone.');
+  const before = p.attempts.length;
+  await p.api.fn(['m1', 'm2']);
+  assert.equal(p.attempts.length, before + 1,
+    'THE POINT OF USE: after a successful rotation the console still refuses to re-wrap the key for a ' +
+    'member who is missing it. Attempts: ' + JSON.stringify(p.attempts));
+});
+
+test('THE CLEARS: an envelope ARRIVING makes the console ask again too', async () => {
+  const p = await runMediaKeyForReal([{ kind: 'refused', reason: 'blocked: not a member or not permitted for this group' },
+                                      { kind: 'ok' }]);
+  assert.ok(p.state.refused, 're-anchor: no memo was ever set, so nothing below is testing a clear');
+  const stop = p.api.subscribe();
+  assert.equal(p.subs.length, 1, 're-anchor: subscribeMediaKey opened no subscription, so no envelope can arrive');
+  // A real envelope lands: somebody else's console re-keyed the church. The recipient map has changed under
+  // us, so whatever this console last had refused is worth asking again.
+  p.subs[0].onevent({ pubkey: 'CP', content: JSON.stringify({ keys: { CP: 'x', m1: 'y' }, rev: 1 }) });
+  assert.equal(p.api.peek().refused, null,
+    'AN ARRIVING ENVELOPE NO LONGER CLEARS THE MEMO. The recipient map has changed underneath this console ' +
+    'and it goes on skipping until the roster itself changes.');
+  const before = p.attempts.length;
+  await p.api.fn(['m1', 'm2']);
+  assert.equal(p.attempts.length, before + 1,
+    'THE POINT OF USE: an envelope arrived that does not key m2, and the console still will not re-wrap ' +
+    'for them. Attempts: ' + JSON.stringify(p.attempts));
+  stop();
 });
 
 // ── THE TWO MARKERS NO TEST COULD SEE (CLAUDE.md rule 1, the hole in this file's own headline fix) ────────
