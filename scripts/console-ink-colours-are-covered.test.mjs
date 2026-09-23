@@ -411,6 +411,13 @@ const BARE_INVENTORY = [
     [1, "background: kidPhotosOn ? 'var(--clay)' : 'var(--line)'"],
     [2, "background: m.mine ? 'var(--clay)' : 'var(--surface-2)'"],
     [2, "background: on ? 'var(--clay)' : 'transparent'"],
+    // Settings → Your website, the "Share our calendar on our website" switch TRACK (7ffcfaf). A
+    // role="switch" pill carries no text, so WCAG 1.4.3's 4.5:1 does not govern it — 1.4.11's 3:1 does, and
+    // --clay is 4.36:1. This is the ninth such track in this file and the other eight are already listed
+    // here, every one of them `? 'var(--clay|sage)' : 'var(--line)'`; --clay-ink would make this one switch
+    // a different colour from every other switch in the console. NOT a blanket exemption: it covers this
+    // switch track and nothing else, and any --clay behind TEXT still fails the row above.
+    [1, "background: on ? 'var(--clay)' : 'var(--line)'"],
     [1, "background: on ? 'var(--clay)' : 'var(--surface)'"],
     [1, "background: on ? 'var(--clay)' : 'var(--surface-2)'"],
     [3, "background: on ? 'var(--sage)' : 'transparent'"],
