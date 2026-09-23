@@ -200,8 +200,15 @@ test('the two required sentences are in the rendered text, and nothing on the pa
   const text = await ev(`document.getElementById('get').innerText`);
   assert.match(text, /Joining the pilot\? Contact us\./,
     'the primary pilot action is missing from the rendered page');
-  assert.match(text, /Already part of a church using TrinityOne\? Install from your church's own link, not from here\./,
-    'the sentence that stops an existing pilot member reading this page as "the app is gone" is missing');
+  // CORRECTED 2026-09-23 (F2, owner-approved): this sentence used to end "not from here" — a route, with
+  // no word on the one route that is actually unsafe, at the exact moment the tamper warning that named
+  // that risk went dormant (checked a few lines below). It now carries both the route and the caution.
+  assert.match(text, /Already part of a church using TrinityOne\? Install from your church's own link — not from a file someone sends you\./,
+    'the sentence that carries both the "where to install from" AND the "not from a file someone sends ' +
+    'you" caution is missing — it has to do the job the hidden tamper warning used to');
+  assert.doesNotMatch(text, /Install from your church's own link, not from here\./,
+    'the OLD wording ("not from here") is still rendering alongside or instead of the new one — it names ' +
+    'a route but not the actual risk (a file forwarded by a friend), which is the whole point of the fix');
   // The tamper warning is hidden, not deleted (owner reversed the original brief 2026-09-23: "Hide the
   // tamper proof line for now as well" — with no download on the page there is nothing to be cautious
   // about). It must not render now, and the next test proves the switch brings it back.
@@ -243,6 +250,31 @@ test('the section has no horizontal scroll at phone width', { skip: !CHROME ? 'n
     `JSON.stringify({doc: document.documentElement.scrollWidth, body: document.body.scrollWidth, inner: window.innerWidth})`));
   assert.ok(widths.doc <= widths.inner + 1, `document.documentElement.scrollWidth (${widths.doc}) exceeds the 400px viewport (${widths.inner}) — the page scrolls sideways`);
   assert.ok(widths.body <= widths.inner + 1, `document.body.scrollWidth (${widths.body}) exceeds the 400px viewport (${widths.inner})`);
+});
+
+// F1, AUDIT-pilot-page-2026-09-23.md: the lock inside #get was retruthed, but nine OTHER controls that
+// point at it — nav (×2), the mobile nav button, the hero, "For churches", both "Support the project"
+// cards, and the closing CTA's two buttons — still said "Download"/"Start a church"/"Get the
+// Suite"/"Share the app" and landed on a page that says it is closed to the public. Deliberately NOT a
+// list of the nine known strings — a list rots the moment a tenth `href="#get"` control is added with
+// new wording. This is structural instead: ANY control whose href is exactly "#get" (the locked
+// section's own anchor, wherever it appears on the page) must not use an inviting verb while the pilot
+// lock is on. A future control that repeats this mistake with different words is still caught.
+test('every control that points at the locked "Get the app" section is truthful while the pilot is on', { skip: !CHROME ? 'no chromium' : false }, async () => {
+  await openAt(1280);
+  const bad = JSON.parse(await ev(`(function(){
+    var verbs = /\\b(download|install|get|start)\\b/i;
+    var out = [];
+    var els = [].slice.call(document.querySelectorAll('a[href="#get"]'));
+    for (var i = 0; i < els.length; i++) {
+      var text = (els[i].innerText || '').replace(/\\s+/g, ' ').trim();
+      if (verbs.test(text)) out.push(text);
+    }
+    return JSON.stringify(out);
+  })()`));
+  assert.deepEqual(bad, [],
+    'a control whose href is "#get" still invites a stranger to download, install, get or start while ' +
+    'the section it points at is locked: ' + JSON.stringify(bad));
 });
 
 // LAST ON PURPOSE. This is the only test that mutates the shared page (it flips `data-pilot` live, with

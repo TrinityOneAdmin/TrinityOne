@@ -171,6 +171,20 @@
      `data-live-href` back to `href` and drop the wrapper's `pilot-locked` class (cosmetic only); on the
      steward Android control also restore `data-steward-cta download`. Nothing else changes — the copy
      and the tamper warning come back on their own. */
+  /* ══ PILOT COPY OUTSIDE #get (2026-09-23, AUDIT-pilot-page-2026-09-23.md F1/F2) ══ Nine `href="#get"`
+     calls-to-action elsewhere on the page (nav ×2, the mobile nav button, the hero, "For churches", both
+     "Support the project" cards, and the closing CTA's two buttons) said "Download"/"Start a
+     church"/"Get the Suite"/"Share the app" and landed on a section that now says it is closed to the
+     public — the same defect the owner objected to inside #get one commit ago, one scroll higher. None
+     of them is a DESCENDANT of `#get`, so they cannot key off `#get[data-pilot="on"]` the way the
+     in-section copy does; `:has()` reads that same single attribute from a shared ancestor instead of
+     adding a second attribute nobody would remember to keep in sync when this goes live. `.pl-hide` /
+     `.pl-only` are the page-wide equivalents of `.pilot-hide` / `.pilot-only` above — same meaning, kept
+     as separate classes so a search for one never silently touches the other's (differently-scoped)
+     rule. */
+  .pl-only { display: none; }
+  body:has(#get[data-pilot="on"]) .pl-only { display: inline; }
+  body:has(#get[data-pilot="on"]) .pl-hide { display: none; }
   /* Scoped to #get, not bare `.pilot-tag`: the tag reuses `.soon-pill`, which also sets
      `display:inline-flex` unconditionally at EQUAL specificity — with no #get prefix here, turning the
      switch off left the LATER-in-source `.soon-pill` rule win the tie and the tag stayed visible. #get
@@ -343,12 +357,12 @@
   <div class="wrap">
     <a href="#" class="wm-sm"><svg width="34" height="34" viewBox="0 0 512 512" style="display:block;flex-shrink:0"><use href="#to-mark" /></svg><span class="wm-txt">Trinity<span class="one">One</span></span></a>
     <div class="links">
-      <a href="#how">How it works</a><a href="#why">Why</a><a href="#features">Features</a><a href="#get">Get the app</a><a href="#churches">For churches</a><a href="help.html">Help</a>
+      <a href="#how">How it works</a><a href="#why">Why</a><a href="#features">Features</a><a href="#get"><span class="pl-hide">Get the app</span><span class="pl-only">The pilot</span></a><a href="#churches">For churches</a><a href="help.html">Help</a>
     </div>
     <div class="spacer"></div>
     <div class="nav-cta">
       <a href="#start" class="to-btn to-btn--clay nav-btn"><span class="nb-full">Start a church</span><span class="nb-short">Start</span></a>
-      <a href="#get" class="to-btn to-btn--ghost nav-btn"><span class="nb-full">Download</span><span class="nb-short">Get</span></a>
+      <a href="#get" class="to-btn to-btn--ghost nav-btn"><span class="nb-full"><span class="pl-hide">Download</span><span class="pl-only">Join the pilot</span></span><span class="nb-short"><span class="pl-hide">Get</span><span class="pl-only">Pilot</span></span></a>
     </div>
   </div>
 </nav>
@@ -380,9 +394,9 @@
       </div>
       <div class="cta">
         <a href="#start" class="to-btn to-btn--clay">Start a church</a>
-        <a href="#get" class="to-btn to-btn--ghost">Download</a>
+        <a href="#get" class="to-btn to-btn--ghost"><span class="pl-hide">Download</span><span class="pl-only">Join the pilot</span></a>
       </div>
-      <p class="free">Free to start, and always free to use.</p>
+      <p class="free"><span class="pl-hide">Free to start, and always free to use.</span><span class="pl-only">Always free to use — we're bringing pilot churches on by invitation right now.</span></p>
       <!-- JOURNEY AUDIT 2026-08-05, the cheapest fix in either audit. "Join a church" is the most prominent
            member CTA on the site, and the path it starts CANNOT be finished without an invite: the app's join
            step asks for a QR, code or link, and refuses an unknown church name. Not one of the five
@@ -670,7 +684,7 @@
       <div class="sx-card"><h3>The admin, handled</h3><p>Joining codes and a printable invite poster, member approval, serving rotas, the calendar, and a treasurer's ledger with quarterly statements that share totals without naming anyone.</p></div>
     </div>
     <div class="sx-actions">
-      <a href="#get" class="to-btn to-btn--clay">Start a church — free</a>
+      <a href="#get" class="to-btn to-btn--clay"><span class="pl-hide">Start a church — free</span><span class="pl-only">Join the pilot</span></a>
       <a href="#" data-switching-open class="to-btn to-btn--ghost" style="color:var(--paper);box-shadow:inset 0 0 0 1.5px rgba(255,255,255,.35)">Already on WhatsApp or another platform?</a>
     </div>
   </div>
@@ -708,7 +722,11 @@
          removes it with the section's other pilot copy rather than needing its own deletion. -->
     <div class="pilot-cta" style="text-align:center;margin:30px auto 0">
       <a href="mailto:hello@trinityone.church" class="to-btn to-btn--clay">Joining the pilot? Contact us.</a>
-      <p style="margin:14px auto 0;max-width:480px;font-size:14.5px;color:var(--ink-2);line-height:1.55">We're bringing pilot churches on by hand right now — email us and we'll get you set up.<br><strong style="display:inline-block;margin-top:8px">Already part of a church using TrinityOne? Install from your church's own link, not from here.</strong></p>
+      <!-- CORRECTED 2026-09-23 (AUDIT-pilot-page-2026-09-23.md F2, owner-approved): this sentence used to
+           end "not from here" — a route, with no word on the one route that is actually unsafe, at the
+           exact moment the tamper warning that named that risk went dormant (below). It now carries both
+           the route AND the caution the hidden warning used to, in one clause. -->
+      <p style="margin:14px auto 0;max-width:480px;font-size:14.5px;color:var(--ink-2);line-height:1.55">We're bringing pilot churches on by hand right now — email us and we'll get you set up.<br><strong style="display:inline-block;margin-top:8px">Already part of a church using TrinityOne? Install from your church's own link — not from a file someone sends you.</strong></p>
     </div>
 
     <div class="sx-grid sx-grid--dl">
@@ -834,12 +852,17 @@
         <h3>Run a relay, carry other churches</h3>
         <p>Share a computer that stays on. One machine can hold more than one church.</p>
         <p style="color:var(--ink-3);margin-top:9px">An old computer in a cupboard will do. The Suite is one double-click app, easy.</p>
-        <p style="margin-top:11px"><a href="#get" style="font-weight:700;color:var(--clay)">Get the Suite &rarr;</a></p>
+        <p style="margin-top:11px"><a href="#get" style="font-weight:700;color:var(--clay)"><span class="pl-hide">Get the Suite &rarr;</span><span class="pl-only">Join the pilot &rarr;</span></a></p>
       </div>
+      <!-- CORRECTED 2026-09-23 (AUDIT-pilot-page-2026-09-23.md F2): "Share the app →" asked a reader to
+           pass the app file on, in the same breath as the tamper warning that governed exactly that
+           behaviour going dormant above. It no longer invites sharing the app itself while the pilot is
+           on — pointing at #get instead, where the honest route (email us) lives. Same data-pilot
+           switch; the original returns at go-live. -->
       <div class="sx-card">
         <h3>Tell someone</h3>
         <p>A friend, your small group, your pastor. Every church that joins makes the network stronger for all of them.</p>
-        <p style="margin-top:11px"><a href="#get" style="font-weight:700;color:var(--clay)">Share the app &rarr;</a></p>
+        <p style="margin-top:11px"><a href="#get" style="font-weight:700;color:var(--clay)"><span class="pl-hide">Share the app &rarr;</span><span class="pl-only">Join the pilot &rarr;</span></a></p>
       </div>
       <!-- GIVE: HIDDEN 2026-09-12 at the owner's request, not abandoned. The card said the giving route was
            "not open yet", which asks a reader to hold a promise for us; two live actions read better without
@@ -857,10 +880,10 @@
   <div style="position:relative">
     <div class="eyebrow"><span class="to-pill">Ready when you are</span></div>
     <h2>Bring your church <span class="one">home</span>.</h2>
-    <p>Start a church today — it's free, and there are written guides for setting it up.</p>
+    <p><span class="pl-hide">Start a church today — it's free, and there are written guides for setting it up.</span><span class="pl-only">We're bringing pilot churches on by hand right now — see below to join.</span></p>
     <div class="cta">
-      <a href="#get" class="to-btn to-btn--clay">Start a church</a>
-      <a href="#get" id="join" class="to-btn to-btn--ghost">Download</a>
+      <a href="#get" class="to-btn to-btn--clay"><span class="pl-hide">Start a church</span><span class="pl-only">Join the pilot</span></a>
+      <a href="#get" id="join" class="to-btn to-btn--ghost"><span class="pl-hide">Download</span><span class="pl-only">Learn more</span></a>
     </div>
     <p style="margin-top:18px;font-size:15px;color:var(--ink-2);font-weight:600">Free to use, with guides and a help section built into the app.</p>
   </div>
@@ -870,7 +893,7 @@
   <div class="wrap">
     <a href="#" class="wm"><svg class="halo" style="font-size:30px;color:var(--paper);--spark:var(--gold)"><use href="#to-halo" /></svg><span>Trinity<span class="one">One</span></span></a>
     <p>A church home of your own — Bible, prayer, chat, and care, all in one place.</p>
-    <nav style="display:flex;flex-wrap:wrap;justify-content:center;gap:14px 20px;margin-top:26px;font-family:var(--font-ui);font-size:14.5px"><a href="#how" style="color:var(--paper);text-decoration:none;opacity:.85">How it works</a><a href="#why" style="color:var(--paper);text-decoration:none;opacity:.85">Why</a><a href="#features" style="color:var(--paper);text-decoration:none;opacity:.85">Features</a><a href="#get" style="color:var(--paper);text-decoration:none;opacity:.85">Get the app</a><a href="#support" style="color:var(--paper);text-decoration:none;opacity:.85">Support</a><a href="help.html" style="color:var(--gold-soft);text-decoration:none;font-weight:700">Help</a><a href="#churches" style="color:var(--paper);text-decoration:none;opacity:.85">For churches</a><a href="https://github.com/TrinityOneAdmin/TrinityOne" target="_blank" rel="noopener noreferrer" style="color:var(--paper);text-decoration:none;opacity:.85">GitHub</a><a href="https://github.com/TrinityOneAdmin/TrinityOne/issues" target="_blank" rel="noopener noreferrer" style="color:var(--paper);text-decoration:none;opacity:.85">Report an issue</a></nav>
+    <nav style="display:flex;flex-wrap:wrap;justify-content:center;gap:14px 20px;margin-top:26px;font-family:var(--font-ui);font-size:14.5px"><a href="#how" style="color:var(--paper);text-decoration:none;opacity:.85">How it works</a><a href="#why" style="color:var(--paper);text-decoration:none;opacity:.85">Why</a><a href="#features" style="color:var(--paper);text-decoration:none;opacity:.85">Features</a><a href="#get" style="color:var(--paper);text-decoration:none;opacity:.85"><span class="pl-hide">Get the app</span><span class="pl-only">The pilot</span></a><a href="#support" style="color:var(--paper);text-decoration:none;opacity:.85">Support</a><a href="help.html" style="color:var(--gold-soft);text-decoration:none;font-weight:700">Help</a><a href="#churches" style="color:var(--paper);text-decoration:none;opacity:.85">For churches</a><a href="https://github.com/TrinityOneAdmin/TrinityOne" target="_blank" rel="noopener noreferrer" style="color:var(--paper);text-decoration:none;opacity:.85">GitHub</a><a href="https://github.com/TrinityOneAdmin/TrinityOne/issues" target="_blank" rel="noopener noreferrer" style="color:var(--paper);text-decoration:none;opacity:.85">Report an issue</a></nav>
     <div class="copy">© 2026 TrinityOne · Made for the Church.</div>
   </div>
 </footer>
