@@ -17568,7 +17568,7 @@ zoo`.split("\n");
     return w;
   }
   var WEB_BLOCKED_AFTER_S = 6;
-  var WEB_GIVE_UP_S = 600;
+  var WEB_GIVE_UP_S = 240;
   var WEB_RETRY_MS = 2e3;
   var SEAL_B64 = /^[A-Za-z0-9+/]+={0,2}$/;
   function _sealIsWhole(ct) {
