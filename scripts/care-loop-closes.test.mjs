@@ -45,7 +45,7 @@ test('C12 — it renders in BOTH layouts, not just the wide one', () => {
   // Adding a banner to one of them is how a steward on a laptop sees it and a steward on a tablet does not.
   const wide = (STEWD.match(/\{pendingBanner\}\{careReqBanner\}/g) || []).length;
   const narrow = (STEWD.match(/\{pendingBanner\}\s*\n\s*\{careReqBanner\}/g) || []).length;
-  assert.equal(wide + narrow, 2, 'the care banner is missing from one of the two Overview layouts');
+  assert.equal(wide + narrow, 3, 'the care banner is missing from one of the three Overview layouts (narrow, snug, wide)');
 });
 
 const TODAY = stripComments(readFileSync(new URL('../app/screens-today.jsx', import.meta.url), 'utf8'));
