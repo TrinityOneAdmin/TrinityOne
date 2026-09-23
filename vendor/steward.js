@@ -17336,7 +17336,8 @@ zoo`.split("\n");
   var _webIds = (v) => [...new Set((Array.isArray(v) ? v : []).map((x) => String(x)).filter((x) => WEB_ID_OK.test(x)))];
   function _webNormalise(c) {
     const o = c && typeof c === "object" ? c : {};
-    return { calendar: o.calendar === true, sermons: false, plans: false, optOut: _webIds(o.optOut), optIn: _webIds(o.optIn), address: "own" };
+    const optOut = _webIds(o.optOut);
+    return { calendar: o.calendar === true, sermons: false, plans: false, optOut, optIn: _webIds(o.optIn).filter((x) => !optOut.includes(x)), address: "own" };
   }
   function _webOneList(st, w, next) {
     const same = (a, b) => a.length === b.length && a.every((x, i3) => x === b[i3]);
@@ -22402,9 +22403,11 @@ zoo`.split("\n");
     },
     // The per-event "Not on the website" tick. `held` true takes the event off the feed and its own address.
     //
-    // NO ID IS EVER IN BOTH LISTS — see _webOneList above, and AUDIT-feeds-round5-2026-09-22 F1. Reachable
-    // here by the long way round: a group's event ticked ON, edited to whole-church, ticked OFF here, then
-    // edited back into a group. `optOut` would win for ever and the group tick would be unreachable.
+    // NO ID IS EVER IN BOTH LISTS — see _webOneList above, and AUDIT-feeds-round5-2026-09-22 F1. This arm is
+    // belt and braces, not a route anyone can name: no console screen changes an event's scope after it is
+    // created (SchEventModal fixes groupId at publish; SchEventEdit passes `groupId: e.groupId || ''` straight
+    // through), so an id cannot travel between the two ticks this way. An earlier version of this comment
+    // asserted that it could, and the audit of that commit could not reach it.
     setWebsiteHeld(eventId, held) {
       const id = String(eventId || "");
       if (!WEB_ID_OK.test(id)) return Promise.resolve(false);

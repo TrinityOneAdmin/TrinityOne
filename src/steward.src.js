@@ -3456,8 +3456,21 @@ const WEB_ID_OK = /^[A-Za-z0-9_-]{1,64}$/;
 const _webIds = (v) => [...new Set((Array.isArray(v) ? v : []).map(x => String(x)).filter(x => WEB_ID_OK.test(x)))];
 function _webNormalise(c) {
   const o = (c && typeof c === 'object') ? c : {};
+  const optOut = _webIds(o.optOut);
+  // AN ID IN BOTH LISTS IS DROPPED FROM `optIn` ON THE WAY IN, not only on the way out (the audit of the
+  // round-5 F1 fix, finding 1). The three writers below keep the two lists apart, but this console is not
+  // the only thing that writes the document: a steward console of an OLDER build writes `optIn` alone, and
+  // this product ships TWO apks, so one church running one console of each is the ordinary rollout state,
+  // not a contrivance. Measured with the 81a98f8 bundle standing in as the second console: the id came back
+  // in both lists, and this console's event editor then drew "On the website" ticked over an event the
+  // website did not show — the exact state F1 is about.
+  //
+  // IT CHANGES NOTHING THE WEBSITE DOES, which is what makes it safe: _webDesired tests `optOut` first and
+  // `optOut` already won (round 2, M4). All it stops is the SCREEN, which reads `optIn`, contradicting the
+  // site, which reads `optOut`. The steward's next tick lifts the opt-out and puts the event back.
+  //
   // sermons/plans/address are phase 2/3: read as their defaults whatever an older or newer document says
-  return { calendar: o.calendar === true, sermons: false, plans: false, optOut: _webIds(o.optOut), optIn: _webIds(o.optIn), address: 'own' };
+  return { calendar: o.calendar === true, sermons: false, plans: false, optOut, optIn: _webIds(o.optIn).filter(x => !optOut.includes(x)), address: 'own' };
 }
 // THE TWO LISTS MUST NEVER HOLD THE SAME ID (AUDIT-feeds-round5-2026-09-22 F1). `optOut` holds the
 // whole-church events a steward ticked OFF; `optIn` the GROUP events a steward ticked ON. An id in both is
@@ -3466,11 +3479,14 @@ function _webNormalise(c) {
 // measured five steps deep on the shipped engine — while the event editor went on drawing a ticked box,
 // because the editor reads `optIn` and the website reads `optOut` first.
 //
-// Every writer of either list goes through here, so the invariant is kept at the one place it can be broken,
-// rather than by making _webDesired guess which of two contradictory statements a church meant. Callers, all
-// three of them: setWebsiteHeld, setWebsiteHeldMany, setWebsiteShown. It resolves true without writing when
-// neither list actually moves (the old per-setter "nothing to change" shortcut, which each of them had its
-// own half of — and setWebsiteShown's half is precisely what made its tick a silent no-op in the F1 case).
+// Every writer of either list on THIS build goes through here, rather than making _webDesired guess which of
+// two contradictory statements a church meant. Callers, all three of them: setWebsiteHeld,
+// setWebsiteHeldMany, setWebsiteShown. This is not the only place the invariant can be broken — a console
+// of an older build writes `optIn` alone — so _webNormalise above repairs a document on the way IN as well.
+//
+// It resolves true WITHOUT WRITING when neither list actually moves (the old per-setter "nothing to change"
+// shortcut, which each of the three had its own half of — and setWebsiteShown's half is precisely what made
+// its tick a silent no-op in the F1 case).
 function _webOneList(st, w, next) {
   const same = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
   if (same(next.optOut, w.share.optOut) && same(next.optIn, w.share.optIn || [])) return Promise.resolve(true);
@@ -8609,9 +8625,11 @@ window.Steward = {
   },
   // The per-event "Not on the website" tick. `held` true takes the event off the feed and its own address.
   //
-  // NO ID IS EVER IN BOTH LISTS — see _webOneList above, and AUDIT-feeds-round5-2026-09-22 F1. Reachable
-  // here by the long way round: a group's event ticked ON, edited to whole-church, ticked OFF here, then
-  // edited back into a group. `optOut` would win for ever and the group tick would be unreachable.
+  // NO ID IS EVER IN BOTH LISTS — see _webOneList above, and AUDIT-feeds-round5-2026-09-22 F1. This arm is
+  // belt and braces, not a route anyone can name: no console screen changes an event's scope after it is
+  // created (SchEventModal fixes groupId at publish; SchEventEdit passes `groupId: e.groupId || ''` straight
+  // through), so an id cannot travel between the two ticks this way. An earlier version of this comment
+  // asserted that it could, and the audit of that commit could not reach it.
   setWebsiteHeld(eventId, held) {
     const id = String(eventId || ''); if (!WEB_ID_OK.test(id)) return Promise.resolve(false);
     const w = _webEnsure(); if (!w || !w.shareKnown) return Promise.resolve(false);   // see setWebsiteShare

@@ -127,7 +127,7 @@ function mirror({ events, copies, share, ring = [KEY_OURS], store = new Map(), a
   assert.ok(dec, 'vendor/steward.js: _openChurchDoc no longer decrypts the way this test reads it — re-anchor');
   scope[dec] = (ct, k) => require44().decrypt(ct, k);
   const names = Object.keys(scope);
-  const api = new Function(...names, `${body}\n${writers}\nreturn { _webSync, _webDesired, _webGroupLoad, _webStuckLoad, w: _web, steward: { ${methods} } };`)(...names.map(n => scope[n]));
+  const api = new Function(...names, `${body}\n${writers}\nreturn { _webSync, _webDesired, _webGroupLoad, _webStuckLoad, _webNormalise, w: _web, steward: { ${methods} } };`)(...names.map(n => scope[n]));
   w.groupSeen = api._webGroupLoad('CP');   // as _webEnsure does: what this console remembered before it restarted
   w.stuckAt = api._webStuckLoad('CP');     // …and how long it had already been shut when the last watch stopped
   return { ...api, published, emitted, scope, w, ring, store,
@@ -931,6 +931,34 @@ test('R5F1 THE SCREEN CONTROL: the same dialog can take it off again — the doo
   assert.ok(m.tombstoned().includes('trinityone/pubevent:evtyouth'), 'UNTICKING THE EVENT LEFT IT ON THE WEBSITE');
   assert.deepEqual(m.shareDoc().optIn, [], 'the untick was not recorded');
   assert.deepEqual(m.shareDoc().optOut, [], 'UNTICKING A GROUP EVENT WROTE AN OPT-OUT — a group event is off by default, and an opt-out on the id would outlive an edit back to whole-church');
+});
+
+test('R5F1: a share: document from an OLDER console cannot make the editor contradict the website', async () => {
+  // The audit of ba19fff, finding 1: the writers below keep the two lists apart, and `_webNormalise` read
+  // them independently — so a console of an older build, which writes `optIn` alone, put an id straight back
+  // into both and this console's editor drew a ticked box over an event the website does not show. Two apks
+  // ship, so one church running a console of each is the ordinary rollout state.
+  const fromAnOlderConsole = { calendar: true, sermons: false, plans: false, optOut: ['evtyouth', 'evtold'], optIn: ['evtyouth', 'evtkeep'], address: 'own' };
+  // no copy on the relay to begin with, so the republish below is a WRITE and not a no-op equality check
+  const m = mirror({ events: [GROUP_READABLE], copies: {}, share: share() });
+  const loaded = m._webNormalise(fromAnOlderConsole);
+  assert.deepEqual(loaded.optOut.sort(), ['evtold', 'evtyouth'], 'the read dropped an opt-out');
+  assert.deepEqual(loaded.optIn, ['evtkeep'],
+    'AN ID SAT IN optOut AND optIn AT ONCE AFTER THE READ — the website reads optOut and the editor reads optIn, so the screen says the opposite of the site: ' + JSON.stringify(loaded));
+
+  // …and the SCREEN over that document, which is where it showed (CLAUDE.md rule 1)
+  m.w.share = loaded;
+  const console_ = { ...m.steward, isDelegated: () => false, publishEvent: async (ev) => ({ id: ev.id, ...ev }) };
+  const d = editDialog({ id: 'evtyouth', title: 'Youth night', date: '2026-11-01', time: '19:30', groupId: 'grpyouth' }, console_);
+  assert.equal(d.tick('On the website').props.checked, false,
+    'THE EDITOR OPENED WITH THE TICK SET over an event this church has opted out of — the state the F1 fix exists to make impossible, arriving from another console');
+  // …and one tick still puts it back, so the repair costs the church nothing
+  const before = m.live().length;
+  d.tick('On the website').props.onChange({ target: { checked: true } });
+  await d.save().props.onClick();
+  await m._webSync();
+  assert.ok(m.live().slice(before).includes('trinityone/pubevent:evtyouth'), 'the tick no longer puts the event back after the document was repaired');
+  assert.deepEqual(m.shareDoc().optIn.sort(), ['evtkeep', 'evtyouth'], 'the repair threw away an UNRELATED tick: ' + JSON.stringify(m.shareDoc()));
 });
 
 // ── F6 (round 5, LOW): the one line that stops the control acting on STALE ids ────────────────────────────
