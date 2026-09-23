@@ -1016,6 +1016,27 @@ test('R6F1 CONTROL: the steward DOES look at the tick again and unticks it — t
   assert.deepEqual(m.shareDoc().optOut, [], 'unticking a GROUP event must never write an opt-out — see the door-swings-both-ways test above');
 });
 
+// ── ROUND 6 F5: THE DIRECTION of the cross-filter, pinned on its own ───────────────────────────────────────
+// AUDIT-feeds-round6-2026-09-23 F5. The OLDER-console row above is the only place this repair was exercised,
+// and it fails identically by NAME whether `_webNormalise` does no repair at all, or repairs BACKWARDS
+// (optIn wins over optOut) — the auditor's own inverted sabotage tripped the very same test. Neither failure
+// on its own tells a reader which direction is safe. This row asserts the direction directly, on the
+// smallest input that can show it (one id, in both lists, nothing else to get lost in), and then proves the
+// REAL stake: the wrong direction does not just mis-render a tick, it PUBLISHES an event a steward opted out
+// of onto the church's public website.
+test('R6F5: an id in BOTH lists loads into optOut, not optIn — and never reaches the public website', async () => {
+  const m = mirror({ events: [GROUP_READABLE], copies: {}, share: share() });
+  const conflicted = { calendar: true, sermons: false, plans: false, optOut: ['evtyouth'], optIn: ['evtyouth'], address: 'own' };
+  const loaded = m._webNormalise(conflicted);
+  assert.deepEqual(loaded.optOut, ['evtyouth'], 're-anchor: optOut lost the id on the way in — this is not the row under test');
+  assert.deepEqual(loaded.optIn, [],
+    'THE REPAIR RAN BACKWARDS — the id stayed in optIn, which is the direction round 2 (M4) rejected: optOut must win');
+  m.w.share = loaded;
+  await m._webSync();
+  assert.equal(m.live().includes('trinityone/pubevent:evtyouth'), false,
+    'AN ID THAT SAT IN BOTH LISTS REACHED THE PUBLIC WEBSITE — the repair kept the statement that publishes it, not the one that withholds it');
+});
+
 // ── F6 (round 5, LOW): the one line that stops the control acting on STALE ids ────────────────────────────
 // Measured by the auditor: removing `idsShowing.join('\n') !== (w.heldIds || []).join('\n')` from the emit
 // condition left 43/43 green. It is load-bearing — an id set that swaps at a CONSTANT COUNT otherwise never
