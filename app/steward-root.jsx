@@ -561,6 +561,31 @@ function StewardForcedPin() {
   // arrives with the phrase already in the steward's hands.
   let newChurch = false;
   try { newChurch = localStorage.getItem('trinityone.steward.newchurch') === '1'; } catch (e) {}
+  // THE WAY BACK (owner, 2026-09-22: "We still need a back or cancel button at this stage"). "Inescapable"
+  // below was written against RELOAD, which destroys a memory-only seed; a Back that discards or keeps ON
+  // PURPOSE is a different thing. Three routes reach this screen and they are told apart by what is on disk:
+  //   • a legacy plaintext seed in `trinityone.steward.church-key` (init() found it and is forcing the
+  //     migration) — NO Back. That seed IS the church; leaving here would leave it unencrypted;
+  //   • an encrypted key already on the device (hasPinLock) — a restore/adopt over an existing church. Back =
+  //     "Keep my current church": the restored seed is dropped, the previous ciphertext was never touched
+  //     (cd67c7a), so the console locks and the old PIN opens the old church;
+  //   • nothing on disk — a new church, or a restore on a fresh device. Back = "Go back — nothing has been
+  //     created yet": the seed is dropped and the setup choices come back.
+  // The engine half is Steward.discardUnsavedKey(), which refuses the legacy case again on its own.
+  let legacy = false, previous = false;
+  try { legacy = !!localStorage.getItem('trinityone.steward.church-key'); } catch (e) {}
+  try { previous = !!(window.Steward.hasPinLock && window.Steward.hasPinLock()); } catch (e) {}
+  const back = legacy ? null : previous ? 'keep' : 'fresh';
+  const goBack = () => {
+    if (busy || !back) return;
+    let ok = false;
+    try { ok = !!(window.Steward.discardUnsavedKey && window.Steward.discardUnsavedKey()); } catch (e) {}
+    if (!ok) { setErr('Couldn’t go back from here — set a PIN to continue.'); return; }
+    // `newchurch` is the create path's marker for the first-run wizard; the church it marked no longer exists.
+    if (back === 'fresh') { try { localStorage.removeItem('trinityone.steward.newchurch'); } catch (e) {} }
+    // the discard fired steward-key with hasKey false: StewardRoot re-renders into the setup choices, or the
+    // unlock screen when a previous church is on the device.
+  };
   const submit = async () => {
     if (busy) return;
     // Same rule as the wizard: six minimum, digits fine. See the note there — the stricter version locked
@@ -570,10 +595,11 @@ function StewardForcedPin() {
     setBusy(true); setErr('');
     // AUDIT-2026-07-28 F19. This await had no try/catch, and `busy` disables the only button on the screen.
     // setPin does real work that can throw — crypto.subtle.encrypt, key derivation, and a localStorage write
-    // that fails on a full quota — and this gate is deliberately inescapable: no cancel, no back, the console
+    // that fails on a full quota — and this gate was deliberately inescapable: no cancel, no back, the console
     // renders nothing else until a PIN exists. So ONE rejection left the steward staring at a permanently
     // disabled "Setting…" button with no way forward and no way out, and nothing said why. Reset the button
-    // on every path, and say what actually happened.
+    // on every path, and say what actually happened. (Since 2026-09-22 there IS a Back on two of the three
+    // routes — see `back` above — and it is disabled while this runs; the legacy-migration route still has none.)
     let ok = false, why = '';
     try { ok = await window.Steward.setPin(pin); }
     catch (e) { why = (e && e.message) ? ' (' + String(e.message).slice(0, 80) + ')' : ''; }
@@ -618,6 +644,14 @@ function StewardForcedPin() {
           style={{ width: '100%', boxSizing: 'border-box', height: 50, marginTop: 10, textAlign: 'center', fontSize: 18, border: `1px solid ${err ? 'var(--clay)' : 'var(--line)'}`, borderRadius: 13, background: 'var(--surface-2)', color: 'var(--ink)', outline: 'none', fontFamily: 'var(--font-ui)' }} />
         {err ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, marginTop: 8 }}>{err}</div> : null}
         <button onClick={submit} disabled={!pin || !pin2 || busy} className="sk-btn sk-btn--clay" style={{ width: '100%', justifyContent: 'center', padding: '13px', fontSize: 15, marginTop: 14, opacity: (pin && pin2 && !busy) ? 1 : .5 }}><Icon name="lock" size={16} color="var(--on-clay)" /> {busy ? 'Setting…' : 'Set PIN & enter'}</button>
+        {back ? (
+          <button onClick={goBack} disabled={busy} className="sk-btn sk-btn--ghost" style={{ width: '100%', justifyContent: 'center', padding: '10px 16px', fontSize: 13.5, marginTop: 8 }}>
+            <Icon name="chevL" size={15} color="currentColor" /> {back === 'keep' ? 'Keep my current church' : 'Go back — nothing has been created yet'}
+          </button>
+        ) : null}
+        {back === 'keep' ? (
+          <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 6, lineHeight: 1.5 }}>Drops the phrase you just entered; the church already on this device is unchanged.</div>
+        ) : null}
         <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 11, lineHeight: 1.5 }}>
           {newChurch
             ? 'Required — your church’s recovery words come next; they are the way back in if you forget this PIN.'

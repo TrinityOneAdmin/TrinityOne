@@ -2729,12 +2729,23 @@ function skFor(asPub) {
 // the relay is waiting for. Paid at most ONCE: publish() latches the gate open afterwards whichever way it
 // went, so a church whose relay will never accept it is delayed once and never again.
 const REG_GATE_MS = 45000;
-let _regGate = null, _openGate = null, _regNeedsName = false;
+// THE GATE BELONGS TO A CHURCH, AND SAYS SO (AUDIT-round-a-fixes-2026-09-22 F2). `_openRegGate()` used to
+// resolve whatever `_regGate` happened to be, carrying no identity — and `selfRegister`'s finally is fired
+// fire-and-forget from app/steward-root.jsx, so a registration begun for a church that was then ABANDONED at
+// the forced-PIN gate's Back could land after the next `createKey()` and open the NEW church's gate at once
+// (measured: 0 ms, where church #1's first publish held 802 ms — the R5-5 "ten refused writes" shape).
+// `_regGen` is that identity: bumped whenever a FRESH gate is armed, captured by selfRegister at its own
+// `_armRegGate()`, and checked on the way out. An answer from an earlier generation is dropped.
+// `_openRegGate()` with no argument still opens unconditionally — that is discardUnsavedKey's call, which is
+// releasing the gate it is abandoning and must not be second-guessed.
+let _regGate = null, _openGate = null, _regNeedsName = false, _regGen = 0;
 // ARMED THE MOMENT A CHURCH KEY EXISTS, not when registration starts. The first cut armed it inside
 // selfRegister() — but the fix had just removed the selfRegister call at creation (it passed an empty name
 // and could only ever 400), so at the moment the founding documents went out there was no gate at all and
 // all ten writes were refused exactly as before. Arm it where the church begins.
-function _armRegGate() { if (!_regGate) _regGate = new Promise((r) => { _openGate = r; }); }
+// Returns the generation of the gate that is now armed — the caller's ticket for _openRegGate() below. An
+// already-armed gate keeps its generation, so createKey() and the selfRegister that follows it share one.
+function _armRegGate() { if (!_regGate) { _regGen++; _regGate = new Promise((r) => { _openGate = r; }); } return _regGen; }
 // SUCCESS, not "we stopped waiting". The bounded gate below is right for ordinary writes — a church whose
 // relay will never accept it must still be able to work — but it is wrong for the founding documents, whose
 // whole purpose depends on the church existing on the relay first. Releasing those on a timer just races how
@@ -2743,7 +2754,10 @@ function _armRegGate() { if (!_regGate) _regGate = new Promise((r) => { _openGat
 let _regOk = false;
 const _regOkWaiters = [];
 function _markRegOk() { _regOk = true; _regOkWaiters.splice(0).forEach((f) => { try { f(true); } catch (e) {} }); }
-function _openRegGate() { const f = _openGate; _openGate = null; if (f) { try { f(); } catch (e) {} } }
+function _openRegGate(gen) {
+  if (gen !== undefined && gen !== _regGen) return;   // an answer from an abandoned church — not this gate's
+  const f = _openGate; _openGate = null; if (f) { try { f(); } catch (e) {} }
+}
 // EVERY publisher must wait, not just the one you happened to fix. publish() was guarded first and the
 // seeded groups went out anyway, because they travel by _publishToRelays() — the all-relays variant. Two
 // publishers, one gate.
@@ -3636,6 +3650,49 @@ window.Steward = {
     if (lsGet(ENC_LS) && !(await window.Steward.verifyPin(pin))) return false;   // wrong/empty PIN → refuse
     window.Steward.locked = false;
     _setNeedsPin(true);   // force an immediate re-PIN, which overwrites the stored blob
+    return true;
+  },
+  // THE WAY BACK FROM THE FORCED-PIN GATE (owner, 2026-09-22: "We still need a back or cancel button at this
+  // stage"). Forget a seed that exists ONLY in memory — the one createKey(), restoreKey() or adoptChurch() put
+  // there and setPin() has not yet encrypted — and leave whatever WAS saved on this device exactly as it was.
+  //
+  // Three states reach the gate, and this is a no-op in the one where going back would cost a key:
+  //   • after createKey (a new church, nothing published, nothing on disk): the seed goes, the device is empty
+  //     again, and the console shows its setup choices;
+  //   • after restoreKey / adoptChurch (a phrase typed or scanned): the restored seed goes; the PREVIOUS
+  //     church's ciphertext is untouched (cd67c7a stopped restoreKey wiping it), so the console locks and the
+  //     old PIN opens the old church. A fresh device (no previous church) shows the setup choices instead;
+  //   • a legacy plaintext seed found in KEY_LS by init(): REFUSED, returns false. That seed IS the church and
+  //     it is on disk unencrypted — forgetting it from memory would show "Set up a new church" over a live key,
+  //     and the next createKey → setPin would then delete it. The gate shows no Back on that path either.
+  // Also a no-op when nothing is unsaved (needsPin false): the key in memory is the persisted one.
+  //
+  // The relay sockets go too. restoreKey() clears `_authedRelays` (a socket is recorded there when it signs a
+  // relay's challenge, and a relay challenges a connection once), so a socket kept open across a Back could
+  // never re-enter that map and _isRelayAuthed() would answer false for it for the rest of the session — the
+  // answer the key-minting guards refuse on. Reasoned from the code above, not measured. Closing them makes the
+  // return look like a locked boot, which IS a measured path: the dashboard's first subscription opens a fresh
+  // socket and answers a fresh challenge with the key that is actually in memory.
+  discardUnsavedKey() {
+    if (!needsPin) return false;
+    if (lsGet(KEY_LS)) return false;
+    try { localStorage.removeItem(_boxHostsKey()); } catch (e) {}   // the discarded church's cache line (the restored or live church's, in the other two states)
+    // Nothing is being founded any more; nothing should wait on its registration — and the NEXT church must be
+    // able to arm its own. _openRegGate() resolves the gate but deliberately leaves `_regGate` set (selfRegister
+    // opens it on every established console, and publish() is the latch that nulls it — see _waitForRegistration),
+    // so after a Back the resolved promise stayed and _armRegGate() in the next createKey() was a no-op: church
+    // #2's founding writes went out with no gate at all, the R5-5 shape (AUDIT-suite-B5-B6 D1, measured: church
+    // #1's first publish held 1502 ms, church #2's 0 ms). This is the one place a church is ABANDONED mid-session,
+    // so the reset lives here, not in _openRegGate(), whose other caller must keep the latch it documents.
+    _openRegGate();
+    _regGate = null;
+    _resetChurchScopedState();
+    try { pool.close([...pool.relays.keys()]); } catch (e) {}
+    sk = null; pub = null; currentMnemonic = null;
+    window.Steward.pubkey = null; window.Steward.npub = null; window.Steward.hasKey = false;
+    window.Steward.locked = !!lsGet(ENC_LS);   // the previous church, if there was one, stays and stays openable
+    _setNeedsPin(false);
+    window.dispatchEvent(new CustomEvent('steward-key', { detail: { npub: null } }));
     return true;
   },
   createKey() {
@@ -8743,7 +8800,7 @@ window.Steward = {
     // one stops the junk rows, the other stops any future junk row becoming authority.
     if (actingChurch) return { ok: false, refused: [], unreachable: [], skipped: 'acting as a delegated steward' };
     _regNeedsName = false;
-    _armRegGate();
+    const _gen = _armRegGate();   // the gate this call belongs to; the finally below opens only THAT one
     try {
     if (!churchSk || !churchPub) return;
     const np = npubEncode(churchPub);
@@ -8860,7 +8917,9 @@ window.Steward = {
     } finally {
       // Open it as soon as we know where we stand — accepted, or refused for a reason naming the church will
       // not cure. Only the missing-name refusal leaves it shut, and publish() bounds that wait anyway.
-      try { if (!_regNeedsName) _openRegGate(); } catch (e) {}
+      // `_gen` is the gate this call armed: if the church it was for has since been abandoned at the PIN
+      // gate's Back and another one started, this is a stale answer and opens nothing (F2 above).
+      try { if (!_regNeedsName) _openRegGate(_gen); } catch (e) {}
     }
   },
   // register this church with ONE specific relay by PROVING key ownership (NIP-98 signed by the church key,

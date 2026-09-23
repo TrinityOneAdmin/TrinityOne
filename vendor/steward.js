@@ -16890,10 +16890,15 @@ zoo`.split("\n");
   var _regGate = null;
   var _openGate = null;
   var _regNeedsName = false;
+  var _regGen = 0;
   function _armRegGate() {
-    if (!_regGate) _regGate = new Promise((r) => {
-      _openGate = r;
-    });
+    if (!_regGate) {
+      _regGen++;
+      _regGate = new Promise((r) => {
+        _openGate = r;
+      });
+    }
+    return _regGen;
   }
   var _regOk = false;
   var _regOkWaiters = [];
@@ -16906,7 +16911,8 @@ zoo`.split("\n");
       }
     });
   }
-  function _openRegGate() {
+  function _openRegGate(gen) {
+    if (gen !== void 0 && gen !== _regGen) return;
     const f = _openGate;
     _openGate = null;
     if (f) {
@@ -17521,6 +17527,52 @@ zoo`.split("\n");
       if (lsGet(ENC_LS) && !await window.Steward.verifyPin(pin)) return false;
       window.Steward.locked = false;
       _setNeedsPin(true);
+      return true;
+    },
+    // THE WAY BACK FROM THE FORCED-PIN GATE (owner, 2026-09-22: "We still need a back or cancel button at this
+    // stage"). Forget a seed that exists ONLY in memory — the one createKey(), restoreKey() or adoptChurch() put
+    // there and setPin() has not yet encrypted — and leave whatever WAS saved on this device exactly as it was.
+    //
+    // Three states reach the gate, and this is a no-op in the one where going back would cost a key:
+    //   • after createKey (a new church, nothing published, nothing on disk): the seed goes, the device is empty
+    //     again, and the console shows its setup choices;
+    //   • after restoreKey / adoptChurch (a phrase typed or scanned): the restored seed goes; the PREVIOUS
+    //     church's ciphertext is untouched (cd67c7a stopped restoreKey wiping it), so the console locks and the
+    //     old PIN opens the old church. A fresh device (no previous church) shows the setup choices instead;
+    //   • a legacy plaintext seed found in KEY_LS by init(): REFUSED, returns false. That seed IS the church and
+    //     it is on disk unencrypted — forgetting it from memory would show "Set up a new church" over a live key,
+    //     and the next createKey → setPin would then delete it. The gate shows no Back on that path either.
+    // Also a no-op when nothing is unsaved (needsPin false): the key in memory is the persisted one.
+    //
+    // The relay sockets go too. restoreKey() clears `_authedRelays` (a socket is recorded there when it signs a
+    // relay's challenge, and a relay challenges a connection once), so a socket kept open across a Back could
+    // never re-enter that map and _isRelayAuthed() would answer false for it for the rest of the session — the
+    // answer the key-minting guards refuse on. Reasoned from the code above, not measured. Closing them makes the
+    // return look like a locked boot, which IS a measured path: the dashboard's first subscription opens a fresh
+    // socket and answers a fresh challenge with the key that is actually in memory.
+    discardUnsavedKey() {
+      if (!needsPin) return false;
+      if (lsGet(KEY_LS)) return false;
+      try {
+        localStorage.removeItem(_boxHostsKey());
+      } catch (e) {
+      }
+      _openRegGate();
+      _regGate = null;
+      _resetChurchScopedState();
+      try {
+        pool.close([...pool.relays.keys()]);
+      } catch (e) {
+      }
+      sk = null;
+      pub = null;
+      currentMnemonic = null;
+      window.Steward.pubkey = null;
+      window.Steward.npub = null;
+      window.Steward.hasKey = false;
+      window.Steward.locked = !!lsGet(ENC_LS);
+      _setNeedsPin(false);
+      window.dispatchEvent(new CustomEvent("steward-key", { detail: { npub: null } }));
       return true;
     },
     createKey() {
@@ -22822,7 +22874,7 @@ zoo`.split("\n");
     async selfRegister(name, opts) {
       if (actingChurch) return { ok: false, refused: [], unreachable: [], skipped: "acting as a delegated steward" };
       _regNeedsName = false;
-      _armRegGate();
+      const _gen = _armRegGate();
       try {
         if (!churchSk || !churchPub) return;
         const np = npubEncode(churchPub);
@@ -22903,7 +22955,7 @@ zoo`.split("\n");
         return { ok: accepted, refused, unreachable };
       } finally {
         try {
-          if (!_regNeedsName) _openRegGate();
+          if (!_regNeedsName) _openRegGate(_gen);
         } catch (e) {
         }
       }
