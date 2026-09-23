@@ -3,6 +3,14 @@
 //
 // Owner, 2026-09-09: *"can we make the groups collapsable? Church, People, Infra, Security, that will help
 // tidy it up."* Sixteen pages in one column is a lot to scan and most stewards live in one or two groups.
+// Owner, 2026-09-22, from a screenshot of the Suite's window: *"Can we have the settings groups minimized like
+// this on default?"* — so a steward who has never chosen now starts with every group SHUT, each with its count,
+// except the group holding the open page. The mechanics tests below therefore seed the one stored value that
+// means "all open" (`[]`, see `allOpen`) so they still exercise exactly the collapse they were written for;
+// the two DEFAULT tests flipped, and say so. Owner again, same day, once that start was measured on a 360x730
+// console (four headers, no rows, every page two taps away): the shut start is the SUITE'S — on the console
+// APK every group is open by default. Both defaults only decide what "never chosen" means; a stored choice
+// wins on either. The last two tests in this file pin that pair.
 //
 // THE FAULT THIS FILE EXISTS FOR is the one the alias collision already demonstrated on this branch: a page
 // that exists and cannot be reached. A collapsed group is a second way to produce it, and a worse one,
@@ -66,6 +74,10 @@ function consoleWith(React, over = {}) {
     innerWidth: over.innerWidth || 1200,
     localStorage,
   };
+  // THE CONSOLE APK. `window.Capacitor.isNativePlatform()` is how this file's component asks (and how the rest
+  // of app/stew-dashboard.jsx asks, at the QR scan and the print paths) — presence of a narrow window is NOT
+  // the same question, because the Suite's own window is 900px and can be dragged narrower.
+  if (over.phoneApp) win.Capacitor = { isNativePlatform: () => true, Plugins: {} };
   const globals = {
     React, window: win,
     location: { host: 'relay.grace.example', hostname: 'relay.grace.example' },
@@ -101,6 +113,9 @@ function consoleWith(React, over = {}) {
   const mod = new Function(...names, JS + '\nreturn { ' + want.join(', ') + ' };')(...names.map(k => globals[k]));
   assert.equal(typeof mod.DashSettings, 'function', 'DashSettings is not a component any more — re-anchor this test');
   assert.equal(typeof mod.settingsGroupsLsKey, 'function', 'settingsGroupsLsKey is gone — re-anchor this test');
+  // A steward who has deliberately opened everything: stored `[]` — "chosen, and nothing shut". Since the
+  // default flipped to shut (2026-09-22) this is the state the collapse mechanics are exercised from.
+  if (over.allOpen && !store.has(mod.settingsGroupsLsKey())) store.set(mod.settingsGroupsLsKey(), '[]');
   return { mod, store, win };
 }
 
@@ -127,45 +142,78 @@ const rows = (tree) => find(tree, n => n.type === 'button' && /(^| )set-item( |$
 const rowNames = (tree) => rows(tree).map(b => shownIn(b, 'set-item-n'));
 const region = (tree) => find(tree, n => n.type === 'section' && n.props['aria-label']);
 const GROUPS = ['Church', 'People', 'Infrastructure', 'Security'];
+const expanded = (tree) => headers(tree).map(b => b.props['aria-expanded']);
+const counts = (tree) => headers(tree).map(b => shownIn(b, 'set-grp-c'));
+const PAGES = 17;   // owner's pages across the four groups (16 + "Your name as a steward", 2026-09-22); a delegate has fewer
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 // CONTROL — if this fails, every assertion below is meaningless.
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────
-test('CONTROL: the list renders four group headers, all open, with every page under them', () => {
-  const s = screen(null);
+test('CONTROL: the list renders four group headers, and with "all open" stored every page is under them', () => {
+  // Re-based 2026-09-22: this rendered a FRESH console and expected 16 rows; the fresh default is shut now,
+  // so the 16-row control is read from a console that has stored "all open".
+  const s = screen(null, { allOpen: true });
   assert.deepEqual(headers(s.tree).map(grpName), GROUPS,
     'the four group headers are not the four groups — re-anchor this test');
-  assert.equal(rows(s.tree).length, 16, `expected 16 page rows with nothing collapsed, found ${rows(s.tree).length}`);
+  assert.equal(rows(s.tree).length, PAGES, `expected ${PAGES} page rows with nothing collapsed, found ${rows(s.tree).length}`);
 });
 
-test('a steward who has never chosen gets every group OPEN, on the phone as well as in a browser', () => {
-  // THE DECISION, PINNED. A phone is where sixteen rows in a column is worst, so starting collapsed there was
-  // the obvious move and is NOT what this does. Two reasons:
-  //   · the phone list is the layout the owner has approved twice, and rule 2 of the decision note says it
-  //     must not change. Replacing its first screen with four words is a change to it, and nobody asked for
-  //     one — the ask was for groups that CAN collapse, "that will help tidy it up";
-  //   · a first screen showing four words and nothing else asks a steward who does not yet know the product
-  //     to guess where a setting lives. This project's defaults lean open.
-  // The preference is remembered on the phone too, so a steward who wants it tidy collapses once and it
-  // stays. If the owner would rather the phone started shut, that is this test plus one default.
-  for (const [what, innerWidth] of [['a browser', 1200], ['a phone', 500]]) {
-    const s = screen(null, { innerWidth });
-    assert.deepEqual(headers(s.tree).map(b => b.props['aria-expanded']), [true, true, true, true],
-      `on ${what}, a steward who has never collapsed anything does not get all four groups open`);
-  }
-  // …and "never chosen" is stored as nothing at all, so a later default can tell a fresh console from a
-  // deliberate one without asking again.
-  const fresh = screen(null);
-  assert.equal(fresh.store.size, 0,
+test('a steward who has never chosen gets every group SHUT with its count — except the group holding the open page', () => {
+  // THE DECISION, FLIPPED. Until 2026-09-22 this test pinned "every group open" (this project's defaults lean
+  // open, and a first screen of four words asks a newcomer to guess where a setting lives) and said in so many
+  // words that starting shut was "this test plus one default" if the owner asked. The owner asked, from a
+  // screenshot of the Suite's own window: "Can we have the settings groups minimized like this on default?"
+  // What survives of the old reasoning is the render-time rule below: in a browser a page is always open, so
+  // its group is always open, and a steward is never looking at four words and nothing else.
+  const s = screen(null, { innerWidth: 1200 });                       // a browser: the first page, Church identity, is open
+  assert.deepEqual(expanded(s.tree), [true, false, false, false],
+    'in a browser, a steward who has never chosen does not get exactly the current page\'s group open and the rest shut');
+  assert.deepEqual(counts(s.tree), ['', '4', '5', '4'],
+    'the shut groups do not each say how many pages are behind them (and the open one must not)');
+  assert.ok(rowNames(s.tree).includes('Church identity') && !rowNames(s.tree).includes('Relays'),
+    'the rows on screen are not exactly the open group\'s');
+  // on a phone the list is the whole first screen and no page is open, so nothing holds a group open
+  const ph = screen(null, { innerWidth: 500 });
+  assert.deepEqual(expanded(ph.tree), [false, false, false, false],
+    'on a phone, a steward who has never chosen does not get all four groups shut');
+  assert.deepEqual(counts(ph.tree), ['4', '4', '5', '4'], 'the phone\'s shut groups do not each say their count');
+  // …and "never chosen" is still stored as nothing at all, so the default can tell a fresh console from a
+  // deliberate one — a stored [] is now the one way to say "all open".
+  assert.equal(s.store.size, 0,
     'merely opening Settings writes a collapsed-groups preference. Then nothing can ever tell a steward who ' +
     'chose "all open" from one who has never touched it');
+});
+
+test('moving to a page in another group moves the open group; a group the steward opened by hand stays open', () => {
+  // The fresh console, walked: Church open (it holds Church identity). Press Security's header — that OPENS it
+  // and is remembered. Open a Security page: Security is open twice over, and Church, which now holds nothing
+  // and was never opened by hand, shuts. Reload on that page: the remembered Security stays open.
+  const store = new Map();
+  const s = screen('identity', { store });
+  assert.deepEqual(expanded(s.tree), [true, false, false, false], 're-anchor: a fresh console did not start Church-open');
+  header(s.tree, 'Security').props.onClick();
+  assert.deepEqual(expanded(s.render()), [true, false, false, true], 'pressing a shut group\'s header did not open it');
+  assert.deepEqual(JSON.parse(store.get([...store.keys()][0])).sort(), ['Church', 'Infrastructure', 'People'],
+    'opening one group from the shut-by-default start did not record the other three as the steward\'s shut groups');
+  // now open a page inside Security, the way a steward does — its row
+  rows(s.render()).find(b => shownIn(b, 'set-item-n') === 'Church key').props.onClick();
+  assert.equal(region(s.render())[0].props['aria-label'], 'Church key', 're-anchor: the Church key page did not open');
+  assert.deepEqual(expanded(s.render()), [false, false, false, true],
+    'with a Security page open, Church (which the steward never opened by hand) did not shut and/or Security is not open');
+  // a reload onto that page, sharing only the storage: Security open because the steward opened it, and it holds the page
+  const again = screen('key', { store });
+  assert.deepEqual(expanded(again.tree), [false, false, false, true], 'after a reload the remembered choice did not win');
+  // and a reload back onto a Church page: Church open because it holds the page, Security still open because it was chosen
+  const back = screen('identity', { store });
+  assert.deepEqual(expanded(back.tree), [true, false, false, true],
+    'after a reload onto a Church page, the remembered Security-open did not survive alongside the forced-open Church');
 });
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 // 1. A GROUP COLLAPSES, AND AN OPEN ONE SHOWS ITS PAGES.
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 test('collapsing a group hides its pages and nothing else; opening it brings them back', () => {
-  const s = screen('identity');                       // the open page is in Church, so Infrastructure is free
+  const s = screen('identity', { allOpen: true });    // the open page is in Church, so Infrastructure is free
   const before = rowNames(s.tree);
   assert.ok(before.includes('Relays') && before.includes('Add a relay'), 're-anchor: Infrastructure is not listed');
 
@@ -182,7 +230,7 @@ test('collapsing a group hides its pages and nothing else; opening it brings the
 });
 
 test('a collapsed group says how many pages are behind it', () => {
-  const s = screen('identity');
+  const s = screen('identity', { allOpen: true });
   header(s.tree, 'Infrastructure').props.onClick();
   const h = header(s.render(), 'Infrastructure');
   assert.equal(shownIn(h, 'set-grp-c'), '5',
@@ -195,7 +243,7 @@ test('a collapsed group says how many pages are behind it', () => {
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 test('the choice survives a remount, read back from storage and not from a component that kept it', () => {
   const store = new Map();
-  const first = screen('identity', { store });
+  const first = screen('identity', { store, allOpen: true });
   header(first.tree, 'People').props.onClick();
   header(first.render(), 'Infrastructure').props.onClick();
 
@@ -236,16 +284,22 @@ test('the key names the church AND the identity, so neither can read the other�
     'a delegate’s key changes with a field that is not the church they are acting for');
 });
 
-test('storage that throws, or holds rubbish, leaves every group open rather than blank', () => {
+test('storage that throws, or holds rubbish, gives the fresh-console default rather than blank', () => {
   // localStorage throws in a private window and in a thumbnailer; a settings list that renders nothing there
-  // is a worse outcome than one that forgets a preference.
+  // is a worse outcome than one that forgets a preference. Re-based 2026-09-22: "forgets" now means the
+  // shut-by-default start — the open page's group open with its rows, the other three shut with counts — and
+  // never a list with no rows at all.
+  const fresh = screen('identity');
   for (const bad of ['not json', '{"Church":true}', '[1,2,3]', 'null']) {
     const store = new Map();
     const s = screen('identity', { store });
     store.set([...s.store.keys()][0] || s.mod.settingsGroupsLsKey(), bad);
     const again = screen('identity', { store });
-    assert.equal(rows(again.tree).length, 16,
-      `a stored value of ${bad} did not leave every group open — it rendered ${rows(again.tree).length} rows`);
+    assert.deepEqual(expanded(again.tree), expanded(fresh.tree),
+      `a stored value of ${bad} did not behave as "never chosen" — headers ${JSON.stringify(expanded(again.tree))}`);
+    assert.deepEqual(rowNames(again.tree), rowNames(fresh.tree),
+      `a stored value of ${bad} rendered ${rows(again.tree).length} rows, not the fresh console's ${rows(fresh.tree).length}`);
+    assert.ok(rows(again.tree).length > 0, `a stored value of ${bad} rendered a list with no rows`);
   }
 });
 
@@ -254,7 +308,7 @@ test('storage that throws, or holds rubbish, leaves every group open rather than
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 test('a deep link into a collapsed group opens that group', () => {
   const store = new Map();
-  const seed = screen('identity', { store });
+  const seed = screen('identity', { store, allOpen: true });
   header(seed.tree, 'Security').props.onClick();               // Security is shut, and stored shut
 
   // …and now something deep-links straight into it. Overview's steward-requests banner does exactly this.
@@ -291,7 +345,7 @@ test('a reload while a page in a collapsed group is open shows that group, howev
 test('on a phone, where no page is open beside the list, a collapsed group really is collapsed', () => {
   // useStewNarrow is declared in app/stew-dashboard.jsx, so it is the window width that decides, not a stub.
   const store = new Map();
-  const seed = screen(null, { store, innerWidth: 500 });   // no deep link: the phone's own first screen
+  const seed = screen(null, { store, innerWidth: 500, allOpen: true });   // no deep link: the phone's own first screen
   assert.equal(region(seed.tree).length, 0, 're-anchor: a page is open on the phone’s first screen');
   header(seed.tree, 'Church').props.onClick();
   const names = rowNames(seed.render());
@@ -305,7 +359,7 @@ test('on a phone, where no page is open beside the list, a collapsed group reall
 // 4. IT IS A DISCLOSURE, AND IT IS REACHABLE BY KEYBOARD.
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 test('each group header is a real button that says whether it is open', () => {
-  const s = screen('identity');
+  const s = screen('identity', { allOpen: true });
   for (const h of headers(s.tree)) {
     assert.equal(h.type, 'button',
       'a group header is a <' + h.type + '>. aria-expanded on a div is not a control: it cannot be tabbed to ' +
@@ -321,7 +375,7 @@ test('each group header is a real button that says whether it is open', () => {
 });
 
 test('a shut group’s list is not left behind pointing at nothing', () => {
-  const s = screen('identity');
+  const s = screen('identity', { allOpen: true });
   const listFor = (t, g) => find(nav(t), n => n.type === 'ul' && n.props['aria-labelledby'] === header(t, g).props.id);
   assert.equal(listFor(s.tree, 'People').length, 1, 're-anchor: the People list is not labelled by its header');
   header(s.tree, 'People').props.onClick();
@@ -357,10 +411,10 @@ function walkable(s) {
 }
 
 test('the arrow keys move focus over the rows on screen, never into a shut group’s empty slots', () => {
-  const s = screen('identity');
+  const s = screen('identity', { allOpen: true });
   header(s.tree, 'People').props.onClick();          // People shuts; Church holds the open page and stays
   const w = walkable(s);
-  assert.equal(w.rows.length, 16 - 3, `expected the three People rows to be gone, found ${w.rows.length} rows`);
+  assert.equal(w.rows.length, PAGES - 4, `expected the four People rows to be gone, found ${w.rows.length} rows`);
   assert.equal(w.names.includes('Congregation features'), false, 're-anchor: People is still listed');
 
   // THE BOUNDARY PRESS. The row after Church's last is the first row of the next group ON SCREEN.
@@ -436,7 +490,50 @@ test('every page is still reachable once its group is opened — collapsing hide
     reached.push(...rowNames(s.render()).filter(n => !reached.includes(n)));
     header(s.render(), g).props.onClick();
   }
-  assert.equal(reached.length, 16,
-    `opening each group in turn reached ${reached.length} of the 16 pages. A page that no group reveals is a ` +
+  assert.equal(reached.length, PAGES,
+    `opening each group in turn reached ${reached.length} of the ${PAGES} pages. A page that no group reveals is a ` +
     'page nothing can open');
+});
+
+// ── THE PHONE OPENS THEM, THE SUITE DOES NOT (owner, 2026-09-22) ──────────────────────────────────────────
+// The shut-by-default start above was asked for from a screenshot of the SUITE'S window. On the console APK
+// it reads differently and the audit measured why: at 360x730 a fresh console showed four headers, ZERO rows
+// and ~510px of empty screen, and every page went from one tap to two — while the thing the default was
+// meant to cure (71 -> 1057px of list on a 730px screen) is a phone problem the phone is used to scrolling.
+// Owner's call: on a PHONE every group is open by default; collapsed-by-default stays in the Suite window.
+// A steward's OWN stored choice still wins on both — the default only decides what "never chosen" means.
+test('on the console APK a steward who has never chosen gets every group OPEN with its rows; in the Suite window they start shut', () => {
+  const ph = screen(null, { phoneApp: true, innerWidth: 360 });
+  assert.deepEqual(expanded(ph.tree), [true, true, true, true],
+    'ON THE PHONE A FRESH CONSOLE OPENS SETTINGS TO FOUR HEADERS AND NOTHING ELSE (owner, 2026-09-22: the groups start open on the APK). Headers read: ' + JSON.stringify(expanded(ph.tree)));
+  assert.equal(rows(ph.tree).length, PAGES, `the phone's open groups show ${rows(ph.tree).length} of the ${PAGES} page rows`);
+  assert.ok(rowNames(ph.tree).includes('Church identity') && rowNames(ph.tree).includes('Church key'),
+    'a group\'s rows are missing from the phone\'s Settings list: ' + JSON.stringify(rowNames(ph.tree)));
+  assert.deepEqual(counts(ph.tree), ['', '', '', ''], 'an open group is still showing a count');
+  // the same console at the same width WITHOUT the APK bridge — a narrow Suite window — keeps the shut start
+  const suiteNarrow = screen(null, { innerWidth: 360 });
+  assert.deepEqual(expanded(suiteNarrow.tree), [false, false, false, false],
+    'the shut-by-default start was decided by WIDTH, not by the console APK — a Suite window dragged narrow lost it');
+  const suite = screen(null, { innerWidth: 900 });
+  assert.deepEqual(expanded(suite.tree), [true, false, false, false],
+    'in the Suite window a fresh console no longer starts with only the open page\'s group expanded');
+  // neither default is written down: "never chosen" stays unchosen on both
+  assert.equal(ph.store.size, 0, 'the phone default was written to storage as if the steward had chosen it');
+  assert.equal(suite.store.size, 0, 'the Suite default was written to storage as if the steward had chosen it');
+});
+
+test('a steward\'s own choice still wins on the phone: a stored shut group stays shut there, a stored [] opens everything in the Suite', () => {
+  // stored "People shut" on the APK: People shut, the other three open — the phone default did not overrule it
+  const store = new Map();
+  const probe = consoleWith(miniReact().React, { store });
+  store.set(probe.mod.settingsGroupsLsKey(), JSON.stringify(['People']));
+  const ph = screen(null, { store, phoneApp: true, innerWidth: 360 });
+  assert.deepEqual(expanded(ph.tree), [true, false, true, true],
+    'THE PHONE DEFAULT OVERRULED THE STEWARD\'S OWN STORED CHOICE. Headers read: ' + JSON.stringify(expanded(ph.tree)));
+  assert.ok(rowNames(ph.tree).includes('Church identity') && !rowNames(ph.tree).includes('Members'),
+    'the stored-shut group\'s rows are on screen (or another group\'s are missing): ' + JSON.stringify(rowNames(ph.tree)));
+  // and the stored "all open" still means all open in the Suite window
+  const store2 = new Map();
+  const s = screen(null, { store: store2, allOpen: true, innerWidth: 900 });
+  assert.deepEqual(expanded(s.tree), [true, true, true, true], 'a stored [] no longer means "all open" in the Suite window');
 });

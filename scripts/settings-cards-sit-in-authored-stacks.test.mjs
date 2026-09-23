@@ -196,6 +196,7 @@ const CARDS_ON = {
   features: ['DashFeaturesPanel'],
   rules: ['DashFeaturesPanel'],
   tags: ['DashChatTagsPanel'],
+  voice: ['Panel:Your name as a steward'],   // the owner's by-line, out of Delegated stewards since 2026-09-22
   relays: ['DashRelaysCard'],
   'add-relay': ['DashAddRelayCard'],
   history: ['DashRelayHistoryCard'],

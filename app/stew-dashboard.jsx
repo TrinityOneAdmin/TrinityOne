@@ -2925,16 +2925,22 @@ function NewPostModal({ onClose }) {
 // ON A PHONE THE CHEVRON GOES. It is decoration — the whole card is the control (role=button, one onClick)
 // and nothing about what it does changes — and at 163px it was costing 23px of the ~101px the label has to
 // live in, which is the difference between "Announcements" reading in full and reading "Announcemen…".
-function StatCard({ label, value, sub, ic, tint, onClick }) {
+// `snug` (DashOverview, 2026-09-22): a desktop card a size down, for four across a 612px pane — the Suite's own
+// window. The phone density stays the phone's; this is the step between the two. In this size the ICON SITS ON
+// THE VALUE ROW, not the label row: a 144px card leaves the label 80px beside a 26px icon, and "Announcements"
+// needs 102px at 12px (measured 2026-09-22; no padding or font nudge that stays legible closes 22px). With the
+// label on a row of its own it has the card's full width, and nothing on the card is dropped.
+function StatCard({ label, value, sub, ic, tint, onClick, snug = false }) {
   const t = SK_TINT[tint];
   const narrow = useStewNarrow();
-  const pad = narrow ? 12 : 18, icn = narrow ? 24 : 30;
+  const pad = narrow ? 12 : snug ? 14 : 18, icn = narrow ? 24 : snug ? 26 : 30;
+  const icon = <div style={{ width: icn, height: icn, borderRadius: 9, flexShrink: 0, background: t.bg, color: t.fg, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={ic} size={narrow ? 15 : 17} color="currentColor" /></div>;
   return (
     <div onClick={onClick} role={onClick ? 'button' : undefined} style={{ flex: 1, minWidth: 0, padding: pad, borderRadius: 16, background: 'var(--surface)', border: '1px solid var(--line)', cursor: onClick ? 'pointer' : 'default', transition: 'box-shadow .12s, transform .12s', textAlign: 'left', boxShadow: onClick ? 'var(--shadow-sm)' : 'none' }}
       onMouseEnter={onClick ? (e) => { e.currentTarget.style.boxShadow = 'var(--shadow)'; } : undefined}
       onMouseLeave={onClick ? (e) => { e.currentTarget.style.boxShadow = 'var(--shadow-sm)'; } : undefined}>
       <div style={{ display: 'flex', alignItems: 'center', gap: narrow ? 6 : 8, minWidth: 0 }}>
-        <div style={{ width: icn, height: icn, borderRadius: 9, flexShrink: 0, background: t.bg, color: t.fg, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={ic} size={narrow ? 15 : 17} color="currentColor" /></div>
+        {snug ? null : icon}
         {/* THE ELLIPSIS IS A BACKSTOP AT EVERY WIDTH, and it took two audits to get this right.
             · Ungated (first attempt) it FIRED on the desktop: at a 960px window "Announcements" had 64px
               of the 106px it needs and read "Announce…", "Your relay" read "Your rela…".
@@ -2946,11 +2952,13 @@ function StatCard({ label, value, sub, ic, tint, onClick }) {
             The real cause was neither: it was a FOUR-column grid on a half-screen window. The grid is
             auto-fit now, so it drops to 3 or 2 columns instead of crushing four, every label fits at
             every width, and this line fires nowhere — which is what a backstop should do. */}
-        <span style={{ fontSize: narrow ? 11.5 : 12.5, fontWeight: 600, color: 'var(--ink-3)',
+        <span style={{ fontSize: narrow ? 11.5 : snug ? 12 : 12.5, fontWeight: 600, color: 'var(--ink-3)',
           minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
-        {(onClick && !narrow) ? <Icon name="chevR" size={15} color="var(--ink-3)" style={{ marginLeft: 'auto' }} /> : null}
+        {(onClick && !narrow && !snug) ? <Icon name="chevR" size={15} color="var(--ink-3)" style={{ marginLeft: 'auto' }} /> : null}
       </div>
-      <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 28, letterSpacing: '-.6px', marginTop: narrow ? 9 : 12 }}>{value}</div>
+      {snug
+        ? <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 9 }}>{icon}<div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 26, letterSpacing: '-.6px', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{value}</div></div>
+        : <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 28, letterSpacing: '-.6px', marginTop: narrow ? 9 : 12 }}>{value}</div>}
       <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 2 }}>{sub}</div>
     </div>
   );
@@ -3027,6 +3035,15 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
   const activity = window.useStewardActivity(); // real recent-events feed
   const relayUp = relays.some(r => r.status === 'on');
   const narrow = useStewNarrow();
+  const snug = useStewNarrow(1000) && !narrow;   // a desktop layout in a window under 1000px — the Suite's own 900x780 window; see `stat`
+  // FOUR ACROSS ONLY WHERE FOUR FIT. Under 850px the pane is narrower than 562px and a quarter of it, less the
+  // card's padding, is under the ~102px "Announcements" needs at 12px (measured 2026-09-22: at 790px, 87 of 102
+  // — the-console-fits-a-360px-phone's desktop check caught the first cut of this). Below that the auto-fit
+  // rule stays, as it was; the Suite's window is 900.
+  // (The hook is called unconditionally — inside `snug && …` it would be skipped on wide windows, the hook
+  // order would change on resize, and the whole Overview blanked. Measured, the first time round.)
+  const under850 = useStewNarrow(850);
+  const fourUp = snug && !under850;
   const [chatGroup, setChatGroup] = React.useState(null);   // group whose chat is open (from a list/activity row)
   // open a chat by group id (used by both the groups list and the activity feed)
   const openChat = (gid) => { const g = groups.find(x => x.id === gid); if (g) window.dispatchEvent(new CustomEvent('steward-open-group-chat', { detail: g })); else onTab('groups'); };
@@ -3105,18 +3122,32 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
       <span className="sk-btn sk-btn--clay" style={{ padding: '9px 14px', fontSize: 13.5, flexShrink: 0 }}>Review <Icon name="chevR" size={15} color="var(--on-clay)" /></span>
     </button>
   ) : null;
-  // on narrow, panels size to content and the page scrolls; on wide they fill a fixed-height grid + scroll inside
-  const fillStyle = narrow ? {} : { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' };
-  const listStyle = narrow ? { display: 'flex', flexDirection: 'column', gap: 10 } : { display: 'flex', flexDirection: 'column', gap: 10, flex: 1, minHeight: 0, overflowY: 'auto' };
+  // on narrow, panels size to content and the page scrolls; on wide they fill a fixed-height grid + scroll inside.
+  // THE LOWER CARDS STACK IN THE SUITE'S WINDOW TOO (`snug`, under 1000px). Side by side in a 612px pane they were
+  // 300px and 308px wide (measured 2026-09-22 at 900x780): "Notices" ellipsed to "Noti…" beside its Broadcast
+  // pill, and the joining card's QR sat against a 142px text column with the code, the npub box and five
+  // buttons crammed into it — the owner's screenshot after the church went public. Stacked, each card has the
+  // pane, the joining card puts its QR above its text (`center`), and the page scrolls like the phone's.
+  const stacked = narrow || snug;
+  const fillStyle = stacked ? {} : { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' };
+  const listStyle = stacked ? { display: 'flex', flexDirection: 'column', gap: 10 } : { display: 'flex', flexDirection: 'column', gap: 10, flex: 1, minHeight: 0, overflowY: 'auto' };
 
   // minmax(0, …), not 1fr — see the note on StatCard. A bare `1fr` let one card's longest word set the
   // track width and shove the other column 14px off a 360px screen.
+  //
+  // FOUR ACROSS IN THE SUITE'S OWN WINDOW. The desktop Suite opens this console at 900x780, which leaves the
+  // pane 612px wide; `auto-fit, minmax(168px, 1fr)` needs 714px for four, so the fourth card ("Your relay")
+  // dropped to a row of its own (measured 2026-09-22: three 195px columns, tops 92/92/92/238). Owner, from
+  // the screenshot: "at the default resolution, the four top cards need to be still 4 along the top". So
+  // from 850px to 1000px (above the phone breakpoint) the row is FOUR fixed columns of whatever width there is
+  // (`fourUp`), and StatCard draws itself a size down (`snug`) so every label still fits — the auto-fit rule
+  // stays for wider windows, where it was never the problem, and for the 760–849px band, where four cannot fit.
   const stat = (
-    <div style={{ display: 'grid', gridTemplateColumns: narrow ? 'minmax(0, 1fr) minmax(0, 1fr)' : 'repeat(auto-fit, minmax(168px, 1fr))', gap: narrow ? 10 : 14 }}>
-      <StatCard label="Members" value={realCount ? String(realCount) : '—'} sub={realCount ? 'invite more' : 'invite your church'} ic="pray" tint="sage" onClick={() => onTab('members')} />
-      <StatCard label="Groups" value={String(groups.length)} sub="chat rooms · signed" ic="chat" tint="clay" onClick={() => onTab('groups')} />
-      <StatCard label="Announcements" value={stats.announcements ? String(stats.announcements) : '—'} sub="post to everyone" ic="send" tint="gold" onClick={() => (onNewPost ? onNewPost() : onTab('groups'))} />
-      <StatCard label="Your relay" value={relays.length === 0 ? '…' : (relayUp ? 'Live' : 'Down')} sub="where you publish" ic="globe" tint={relayUp || relays.length === 0 ? 'ink' : 'clay'} onClick={() => goSettings('relays')} />
+    <div style={{ display: 'grid', gridTemplateColumns: narrow ? 'minmax(0, 1fr) minmax(0, 1fr)' : fourUp ? 'repeat(4, minmax(0, 1fr))' : 'repeat(auto-fit, minmax(168px, 1fr))', gap: narrow ? 10 : snug ? 12 : 14 }}>
+      <StatCard label="Members" value={realCount ? String(realCount) : '—'} sub={realCount ? 'invite more' : 'invite your church'} ic="pray" tint="sage" snug={snug} onClick={() => onTab('members')} />
+      <StatCard label="Groups" value={String(groups.length)} sub="chat rooms · signed" ic="chat" tint="clay" snug={snug} onClick={() => onTab('groups')} />
+      <StatCard label="Announcements" value={stats.announcements ? String(stats.announcements) : '—'} sub="post to everyone" ic="send" tint="gold" snug={snug} onClick={() => (onNewPost ? onNewPost() : onTab('groups'))} />
+      <StatCard label="Your relay" value={relays.length === 0 ? '…' : (relayUp ? 'Live' : 'Down')} sub="where you publish" ic="globe" tint={relayUp || relays.length === 0 ? 'ink' : 'clay'} snug={snug} onClick={() => goSettings('relays')} />
     </div>
   );
   const groupsPanel = (
@@ -3136,14 +3167,14 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
   );
   const joinPanel = (
     <Panel title="Joining code">
-      <JoinCard qrSize={92} center={narrow} />
+      <JoinCard qrSize={92} center={stacked} />
       <div style={{ marginTop: 12 }}><PushEnabler /></div>
     </Panel>
   );
   const activityPanel = (
     <Panel title="Recent activity" style={fillStyle}>
       {activity.length === 0 ? <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '6px 2px' }}>Nothing yet — activity shows here as your church chats.</div> : null}
-      <div className="no-scrollbar" style={narrow ? { display: 'flex', flexDirection: 'column', gap: 14 } : { display: 'flex', flexDirection: 'column', gap: 14, flex: 1, minHeight: 0, overflowY: 'auto' }}>
+      <div className="no-scrollbar" style={stacked ? { display: 'flex', flexDirection: 'column', gap: 14 } : { display: 'flex', flexDirection: 'column', gap: 14, flex: 1, minHeight: 0, overflowY: 'auto' }}>
         {activity.map((a) => {
           const t = SK_TINT[a.tint] || SK_TINT.ink;
           // resolve a group name for chat-linked rows (the gid is the group id, not its name)
@@ -3170,6 +3201,15 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
     return (
       <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 16 }}>
         {pendingBanner}{careReqBanner}{stewardReqBanner}{stat}{joinPanel}{groupsPanel}{activityPanel}
+        {chatModal}
+      </div>
+    );
+  }
+  if (snug) {
+    // the Suite's window: the desktop stat row, then one column of content-sized cards — see `stacked`
+    return (
+      <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 18 }}>
+        {pendingBanner}{careReqBanner}{stewardReqBanner}{stat}{groupsPanel}{joinPanel}{activityPanel}
         {chatModal}
       </div>
     );
@@ -7782,7 +7822,11 @@ function DashNetworksPanel() {
 // nobody". Deliberately NOT a "send as" selector: there is one right answer per screen, a churchwarden will
 // not audit a dropdown before every send, and a console cannot honestly offer to sign as somebody whose key
 // it does not hold. The console always speaks for the church; a personal note comes from your own account.
-function VoiceSetup() {
+// Since 2026-09-22 this is the body of the "Your name as a steward" Settings page (it sat at the top of Delegated
+// stewards before, and it is about the owner, not the delegates). `onDelegated` opens that page — the one place
+// the sentence below sends a steward. Same handler, same publish (Steward.setVoice → _voiceSave) as before.
+// The example placeholders ("Rev Ada Nwachukwu" / "Vicar") went the same day: plain "Your name" / "Role (optional)".
+function VoiceSetup({ onDelegated }) {
   const v = (window.Steward && window.Steward.voice && window.Steward.voice()) || { self: null };
   const [name, setName] = React.useState((v.self && v.self.name) || '');
   const [office, setOffice] = React.useState((v.self && v.self.office) || '');
@@ -7799,14 +7843,17 @@ function VoiceSetup() {
   return (
     <div style={{ marginBottom: 16 }}>
       <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 10 }}>
-        Members see this under every notice and message sent from this console, like the name at the bottom of
-        a parish letter. <b>If someone else helps run the church, don’t share this console</b> — add them below
-        and they’ll write under their own name.
+        Members see this under every notice and message sent from this console. <b>If someone else helps run
+        the church, don’t share this console</b> — add them under{' '}
+        {onDelegated
+          ? <button onClick={onDelegated} style={{ border: 'none', background: 'none', padding: 0, color: 'var(--clay-ink)', fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 13.5 }}>Delegated stewards</button>
+          : <b>Delegated stewards</b>}
+        {' '}and they’ll write under their own name.
       </div>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 9 }}>
-        <input value={name} onChange={e => { setName(e.target.value); setState(''); }} placeholder="Rev Ada Nwachukwu" aria-label="Your name"
+        <input value={name} onChange={e => { setName(e.target.value); setState(''); }} placeholder="Your name" aria-label="Your name"
           style={{ flex: '1 1 180px', minWidth: 0, padding: '9px 11px', borderRadius: 10, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontSize: 14 }} />
-        <input value={office} onChange={e => { setOffice(e.target.value); setState(''); }} placeholder="Vicar" aria-label="Your role"
+        <input value={office} onChange={e => { setOffice(e.target.value); setState(''); }} placeholder="Role (optional)" aria-label="Your role"
           style={{ flex: '0 1 120px', minWidth: 0, padding: '9px 11px', borderRadius: 10, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontSize: 14 }} />
         <button onClick={save} className="sk-btn sk-btn--clay" style={{ padding: '9px 16px' }}>Save</button>
       </div>
@@ -8005,8 +8052,6 @@ function DashStewardsPanel({ church }) {
   };
   return (
     <Panel title="Delegated stewards">
-      <VoiceSetup />
-      <div style={{ height: 1, background: 'var(--line)', margin: '4px 0 16px' }} />
       <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 12 }}>Give a trusted member steward powers <b style={{ color: 'var(--ink)' }}>without sharing the church key</b>. They help run {church.name || 'the church'} — post, create groups, manage members — under their own key. You stay the owner: stewards can’t add other stewards, ban people, or change relay settings. <b style={{ color: 'var(--ink)' }}>Remove anyone anytime</b> and it takes effect immediately.</div>
       {pending.length ? <div style={{ marginBottom: 14 }}>
         <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--clay-ink)', marginBottom: 7 }}>Requests to steward · {pending.length}</div>
@@ -9282,6 +9327,10 @@ const SETTINGS_GROUPS = [
     { k: 'features', n: 'Congregation features', d: 'What members see' },
     { k: 'rules', n: 'Rules & privacy', d: 'Photos, encryption, joining' },
     { k: 'tags', n: 'Chat message tags', d: 'Prayer request, and your own' },
+    // The OWNER'S by-line, on a page of its own (owner, 2026-09-22: it "shouldn't be in the delegated stewards
+    // area" — it is about the person holding the key, not about their helpers). Owner-only because the
+    // document it publishes is church-signed (Steward._voiceSave), which a delegate's console cannot do.
+    { k: 'voice', n: 'Your name as a steward', d: 'Under every notice from here', owner: true },
   ]],
   // RELAYS WAS ONE CARD DOING EIGHT JOBS, measured at over 1000px, and only the first of the eight is
   // touched more than once in a church's life. It is five pages now; the eighth job, "a relay is refusing
@@ -9348,16 +9397,30 @@ function settingsGroupsLsKey() {
 }
 
 // null means "this steward has never chosen", which is NOT the same as [] ("chosen, and all open"). Kept
-// distinct so a future default can tell a fresh console from a deliberate one without asking again.
+// distinct so the default can tell a fresh console from a deliberate one without asking again — and since
+// 2026-09-22 the default is EVERY GROUP SHUT (see DashSettings), so a stored [] is the one way to say "all open".
 function readCollapsedGroups() {
   try {
     const v = JSON.parse(localStorage.getItem(settingsGroupsLsKey()) || 'null');
-    return Array.isArray(v) ? v.filter(x => typeof x === 'string') : null;
+    // An array of anything but names is rubbish, and rubbish reads as "never chosen". It used to be FILTERED,
+    // which turned [1,2,3] into [] — harmless while [] and null meant the same thing, and a silent "all open"
+    // once they did not.
+    return (Array.isArray(v) && v.every(x => typeof x === 'string')) ? v : null;
   } catch (e) { return null; }
 }
 
 function writeCollapsedGroups(names) {
   try { localStorage.setItem(settingsGroupsLsKey(), JSON.stringify(names)); } catch (e) {}
+}
+
+// THE CONSOLE APK, not "a narrow window". The Settings groups start shut in the Suite and open on the phone
+// (see DashSettings), and those are two different QUESTIONS: the Suite's own window is 900px and can be
+// dragged narrower, so a width check would take the Suite's default away the moment somebody resized it,
+// while the phone's is a build, not a size. `window.Capacitor.isNativePlatform()` is how the rest of this
+// file already asks (the QR scan, the print/share paths, the update banner), so it is what is asked here.
+// One caller: the collapsed-groups default in DashSettings.
+function stewOnPhoneApp() {
+  try { return !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()); } catch (e) { return false; }
 }
 
 // Which group holds a page. Used to keep the group with the open page on screen, so nothing can open onto a
@@ -9408,7 +9471,22 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
   const open = pages.some(p => p.k === page) ? page : (narrow ? null : (pages.length ? pages[0].k : null));
   const cur = pages.find(p => p.k === open) || null;
   // COLLAPSIBLE GROUPS. Read once, on mount, so a second console tab cannot fight this one for the value.
-  const [collapsed, setCollapsed] = React.useState(() => new Set(readCollapsedGroups() || []));
+  // THE DEFAULT IS SHUT. Owner, 2026-09-22, from a screenshot of the Suite's window: "Can we have the settings
+  // groups minimized like this on default?" A steward who has never chosen (nothing stored) starts with every
+  // group shut, each showing its count; the group holding the open page is forced open at render time by
+  // `shown` below, so in a browser one group is always open and on a phone, where nothing is open, none is.
+  // The first press materialises that default as the steward's own record (the other three names), so a
+  // stored preference keeps meaning what it meant before this date: the groups this steward keeps shut.
+  // OPEN ON THE PHONE, SHUT IN THE SUITE. Owner, 2026-09-22, after the shut-by-default start above was
+  // measured on a 360x730 console: four headers, ZERO rows, ~510px of empty screen and every page two taps
+  // away, because on a phone nothing is open to force a group open. The request that produced the shut start
+  // was made of the SUITE'S window, so it stays there and the phone keeps its rows. Only "never chosen"
+  // is decided here — a steward's own stored set of shut groups is honoured on both.
+  const [collapsed, setCollapsed] = React.useState(() => {
+    const v = readCollapsedGroups();
+    if (v !== null) return new Set(v);
+    return new Set(stewOnPhoneApp() ? [] : groups.map(([g]) => g));
+  });
   const toggleGroup = (g) => {
     const next = new Set(collapsed);
     if (next.has(g)) next.delete(g); else next.add(g);
@@ -9427,6 +9505,8 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
   // The cost, said plainly: in a browser a page is always open, so one of the four headers is always shown
   // expanded. Pressing it still records the choice and it takes effect the moment the open page is
   // elsewhere. On a phone the list and a page are never on screen together, so nothing is forced there.
+  // With the shut-by-default start this is also how a fresh console reads: the current page's group open,
+  // the other three shut with their counts, and moving to a page in another group moves the open one.
   const openGroup = settingsGroupOf(groups, open);
   const shown = (g) => !collapsed.has(g) || g === openGroup;
   // The rows a steward can actually reach, which is what the arrow keys walk: a collapsed group's rows are
@@ -9659,6 +9739,7 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
       {open === 'features' ? <DashFeaturesPanel church={church} show="features" /> : null}
       {open === 'rules' ? <DashFeaturesPanel church={church} show="rules" /> : null}
       {open === 'tags' ? <DashChatTagsPanel church={church} /> : null}
+      {open === 'voice' ? <Panel title="Your name as a steward"><VoiceSetup onDelegated={() => setPage('delegated')} /></Panel> : null}
 
       {open === 'relays' ? <DashRelaysCard /> : null}
       {open === 'add-relay' ? <DashAddRelayCard /> : null}
