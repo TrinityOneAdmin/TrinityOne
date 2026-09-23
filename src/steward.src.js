@@ -3459,6 +3459,23 @@ function _webNormalise(c) {
   // sermons/plans/address are phase 2/3: read as their defaults whatever an older or newer document says
   return { calendar: o.calendar === true, sermons: false, plans: false, optOut: _webIds(o.optOut), optIn: _webIds(o.optIn), address: 'own' };
 }
+// THE TWO LISTS MUST NEVER HOLD THE SAME ID (AUDIT-feeds-round5-2026-09-22 F1). `optOut` holds the
+// whole-church events a steward ticked OFF; `optIn` the GROUP events a steward ticked ON. An id in both is
+// not a state a church can mean, and it was reachable: the Settings control writes `optOut` for ids it
+// cannot open, including a group event sitting in `optIn`. _webDesired then answered "off" for ever —
+// measured five steps deep on the shipped engine — while the event editor went on drawing a ticked box,
+// because the editor reads `optIn` and the website reads `optOut` first.
+//
+// Every writer of either list goes through here, so the invariant is kept at the one place it can be broken,
+// rather than by making _webDesired guess which of two contradictory statements a church meant. Callers, all
+// three of them: setWebsiteHeld, setWebsiteHeldMany, setWebsiteShown. It resolves true without writing when
+// neither list actually moves (the old per-setter "nothing to change" shortcut, which each of them had its
+// own half of — and setWebsiteShown's half is precisely what made its tick a silent no-op in the F1 case).
+function _webOneList(st, w, next) {
+  const same = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
+  if (same(next.optOut, w.share.optOut) && same(next.optIn, w.share.optIn || [])) return Promise.resolve(true);
+  return st.setWebsiteShare(next);
+}
 // The copy's body, with a FIXED key order so two consoles produce byte-identical content for the same event —
 // that equality is what stops the reconciler republishing on every boot.
 function _webCopyBody(ev) {
@@ -8591,13 +8608,17 @@ window.Steward = {
     return true;
   },
   // The per-event "Not on the website" tick. `held` true takes the event off the feed and its own address.
+  //
+  // NO ID IS EVER IN BOTH LISTS — see _webOneList above, and AUDIT-feeds-round5-2026-09-22 F1. Reachable
+  // here by the long way round: a group's event ticked ON, edited to whole-church, ticked OFF here, then
+  // edited back into a group. `optOut` would win for ever and the group tick would be unreachable.
   setWebsiteHeld(eventId, held) {
     const id = String(eventId || ''); if (!WEB_ID_OK.test(id)) return Promise.resolve(false);
     const w = _webEnsure(); if (!w || !w.shareKnown) return Promise.resolve(false);   // see setWebsiteShare
     const cur = w.share.optOut;
     const optOut = held ? [...new Set([...cur, id])] : cur.filter(x => x !== id);
-    if (optOut.length === cur.length && optOut.every((x, i) => x === cur[i])) return Promise.resolve(true);   // nothing to change
-    return this.setWebsiteShare({ optOut });
+    const optIn = held ? (w.share.optIn || []).filter(x => x !== id) : (w.share.optIn || []);
+    return _webOneList(this, w, { optOut, optIn });
   },
   isWebsiteHeld(eventId) { const w = _webEnsure(); return !!(w && w.share.optOut.includes(String(eventId || ''))); },
   // THE SAME TICK, FOR THE COPIES NOBODY CAN OPEN — the control beside "N of them are still on your website"
@@ -8611,24 +8632,36 @@ window.Steward = {
   // relay to refuse halfway and leave the page's sentence half true. Refuses (false) rather than writing
   // before the relay has answered, for the reason on setWebsiteShare: the document would be rebuilt from the
   // defaults and every earlier opt-out and the switch itself would go with it.
+  //
+  // AND IT CLEARS THE "ON THE WEBSITE" TICK FOR EVERY ID IT TAKES OFF (AUDIT-feeds-round5-2026-09-22 F1).
+  // Without that the two lists contradicted each other for exactly the events this control exists for — a
+  // GROUP event, on the feed because a steward ticked it on, whose document later became unopenable — and the
+  // editor went on drawing "On the website" ticked over an event the public site no longer showed.
   setWebsiteHeldMany(eventIds) {
     const ids = _webIds(eventIds);
     if (!ids.length) return Promise.resolve(false);
     const w = _webEnsure(); if (!w || !w.shareKnown) return Promise.resolve(false);   // see setWebsiteShare
     const cur = w.share.optOut;
     const optOut = [...new Set([...cur, ...ids])];
-    if (optOut.length === cur.length) return Promise.resolve(true);                   // every one already ticked
-    return this.setWebsiteShare({ optOut });
+    const optIn = (w.share.optIn || []).filter(x => !ids.includes(x));
+    return _webOneList(this, w, { optOut, optIn });
   },
   // The per-event "On the website" tick, for an event scoped to a GROUP: the inverse of setWebsiteHeld,
   // because the default is the inverse. Same refusal-until-EOSE rule, for the same reason.
+  //
+  // TICKING IT ON ALSO LIFTS ANY OPT-OUT ON THE SAME ID, which is what makes the control on Settings ->
+  // Your website REVERSIBLE from the event itself (AUDIT-feeds-round5-2026-09-22 F1). _webDesired tests
+  // `optOut` BEFORE `optIn` and deliberately keeps doing so — optOut-wins is the fail-safe precedence
+  // (round 2, M4), so a stale "on" tick must never beat a deliberate "take it off". The contradiction is
+  // therefore resolved where it is MADE, at the writers, and not by reordering the read: after this the
+  // steward's tick is the only statement left about that id, so it wins by being the only one.
   setWebsiteShown(eventId, shown) {
     const id = String(eventId || ''); if (!WEB_ID_OK.test(id)) return Promise.resolve(false);
     const w = _webEnsure(); if (!w || !w.shareKnown) return Promise.resolve(false);   // see setWebsiteShare
     const cur = w.share.optIn || [];
     const optIn = shown ? [...new Set([...cur, id])] : cur.filter(x => x !== id);
-    if (optIn.length === cur.length && optIn.every((x, i) => x === cur[i])) return Promise.resolve(true);   // nothing to change
-    return this.setWebsiteShare({ optIn });
+    const optOut = shown ? w.share.optOut.filter(x => x !== id) : w.share.optOut;
+    return _webOneList(this, w, { optIn, optOut });
   },
   isWebsiteShown(eventId) { const w = _webEnsure(); return !!(w && (w.share.optIn || []).includes(String(eventId || ''))); },
   websiteFeedUrl(eventId) {

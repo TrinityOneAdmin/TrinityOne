@@ -69,6 +69,24 @@ function mirror({ events, copies, share, ring = [KEY_OURS], store = new Map(), a
     fnBody(src, 'function _webDesired', '_webDesired'),
     fnBody(src, 'async function _webSync', '_webSync'),
   ].join('\n');
+  // …and the SHIPPED writers, as the object methods they are, so a row can drive the whole loop a steward
+  // does: press the Settings control, then tick the event back on in its own editor, then sync. They are the
+  // half AUDIT-feeds-round5-2026-09-22 F1 is about, and nothing here re-implements them.
+  const writers = [
+    stmt(src, 'var WEB_DEFAULT = ', 'WEB_DEFAULT'),
+    stmt(src, 'var SHARE_D = ', 'SHARE_D'),
+    stmt(src, 'var _webIds = ', '_webIds'),
+    fnBody(src, 'function _webNormalise', '_webNormalise'),
+    fnBody(src, 'function _webOneList', '_webOneList'),
+  ].join('\n');
+  const methods = [
+    fnBody(src, 'async setWebsiteShare(patch) {', 'setWebsiteShare'),
+    fnBody(src, 'setWebsiteHeld(eventId, held) {', 'setWebsiteHeld'),
+    fnBody(src, 'setWebsiteHeldMany(eventIds) {', 'setWebsiteHeldMany'),
+    fnBody(src, 'setWebsiteShown(eventId, shown) {', 'setWebsiteShown'),
+    fnBody(src, 'isWebsiteHeld(eventId) {', 'isWebsiteHeld'),
+    fnBody(src, 'isWebsiteShown(eventId) {', 'isWebsiteShown'),
+  ].join(',\n');
   // GUARDS ON THE LIFT: an assertion below would pass over nothing at all if these stopped being here.
   assert.match(body, /for \(const \[id, body\] of want\)/, 'vendor/steward.js: _webSync no longer walks `want` — re-anchor this test');
   assert.match(body, /_openChurchDoc\(ev\.raw\)/, 'vendor/steward.js: _webDesired no longer opens the event document');
@@ -97,6 +115,7 @@ function mirror({ events, copies, share, ring = [KEY_OURS], store = new Map(), a
     feChurch: (tmpl) => tmpl,
     publish: async (evt) => { published.push(evt); return true; },
     _webQueueSync: () => { scope.queued++; },
+    _webEnsure: () => w,
     queued: 0,
     setTimeout: (fn, ms) => { scope.timers.push(ms); return 0; },
     timers: [],
@@ -108,11 +127,14 @@ function mirror({ events, copies, share, ring = [KEY_OURS], store = new Map(), a
   assert.ok(dec, 'vendor/steward.js: _openChurchDoc no longer decrypts the way this test reads it — re-anchor');
   scope[dec] = (ct, k) => require44().decrypt(ct, k);
   const names = Object.keys(scope);
-  const api = new Function(...names, `${body}\nreturn { _webSync, _webDesired, _webGroupLoad, _webStuckLoad, w: _web };`)(...names.map(n => scope[n]));
+  const api = new Function(...names, `${body}\n${writers}\nreturn { _webSync, _webDesired, _webGroupLoad, _webStuckLoad, w: _web, steward: { ${methods} } };`)(...names.map(n => scope[n]));
   w.groupSeen = api._webGroupLoad('CP');   // as _webEnsure does: what this console remembered before it restarted
   w.stuckAt = api._webStuckLoad('CP');     // …and how long it had already been shut when the last watch stopped
   return { ...api, published, emitted, scope, w, ring, store,
     tick: (seconds) => { clock += seconds; },
+    // the share: document as it last reached the relay — what a SECOND console would read, not this one's copy
+    shareDoc: () => { const e = [...published].reverse().find(x => String((x.tags.find(t => t[0] === 'd') || [])[1] || '').includes('share:')); return e ? JSON.parse(e.content) : null; },
+    live: () => published.filter(e => !e.tags.some(t => t[0] === 'deleted')).map(e => (e.tags.find(t => t[0] === 'd') || [])[1]).filter(d => String(d).startsWith('trinityone/pubevent:')),
     dtags: () => published.map(e => (e.tags.find(t => t[0] === 'd') || [])[1]),
     tombstoned: () => published.filter(e => e.tags.some(t => t[0] === 'deleted')).map(e => (e.tags.find(t => t[0] === 'd') || [])[1]) };
 }
@@ -729,7 +751,7 @@ test('F1: setWebsiteHeldMany ticks every id off in ONE share: write, and keeps t
   assert.match(body, /_webEnsure\(\)/, 'vendor/steward.js: setWebsiteHeldMany no longer consults the watch — re-anchor');
   const patches = [];
   const w = { share: { optOut: ['evtold'], optIn: [] }, shareKnown: true };
-  const lifted = [stmt(STEWARD, 'var WEB_ID_OK = ', 'WEB_ID_OK'), stmt(STEWARD, 'var _webIds = ', '_webIds')].join('\n');
+  const lifted = [stmt(STEWARD, 'var WEB_ID_OK = ', 'WEB_ID_OK'), stmt(STEWARD, 'var _webIds = ', '_webIds'), fnBody(STEWARD, 'function _webOneList', '_webOneList')].join('\n');
   const scope = { _webEnsure: () => w, _patches: patches };
   const names = Object.keys(scope);
   const api = new Function(...names,
@@ -745,6 +767,193 @@ test('F1: setWebsiteHeldMany ticks every id off in ONE share: write, and keeps t
   w.shareKnown = true;
   assert.equal(await api.setWebsiteHeldMany(['../../etc', '']), false, 'an id that cannot be an event id reached the share document');
   assert.deepEqual(patches, [], 'it wrote anyway');
+});
+
+// ── ROUND 5 F1: THE CONTROL IS REVERSIBLE FROM THE EVENT ITSELF, FOR BOTH EVENT SCOPES ───────────────────
+// AUDIT-feeds-round5-2026-09-22 F1, measured on the shipped engine five steps deep: after the Settings
+// control was pressed, ticking "On the website" again in a GROUP event's own editor never brought the copy
+// back. `setWebsiteShown` wrote `optIn` alone, `_webDesired` tests `optOut` first, so `optOut` won for ever
+// and the steward was left looking at a ticked box on an event the website did not show. A WHOLE-CHURCH
+// event came back, which is why two internal audits and two commit messages said the door swung both ways.
+//
+// THE INVARIANT THESE ROWS PIN: the control is reversible from the event itself, for BOTH scopes; and no id
+// is ever in `optOut` and `optIn` at once, so no screen can contradict the website. The read order is
+// deliberately unchanged — optOut-wins is the fail-safe precedence (round 2, M4).
+const REVERSE_LIVE = JSON.stringify({ title: 'Youth night', date: '2026-11-01', time: '19:30', where: 'The vestry', blurb: '', recur: '', day: null });
+const MEET = { title: 'Church meeting', date: '2026-11-01', time: '19:30', where: 'The vestry', blurb: '' };
+const MEET_LIVE = JSON.stringify({ ...MEET, recur: '', day: null });
+// The five steps R5's migration case actually takes, up to the moment the editor is reachable again.
+async function pressed(m, id) {
+  await m._webSync();                                   // 1. healthy: the copy is published
+  const wasLive = m.live().includes('trinityone/pubevent:' + id);
+  m.w.events.set(id, m.lostVersion);                    // 2. the name key goes
+  m.w.copies.set(id, m.liveBody);
+  await pastReporting(m);
+  const snap = m.emitted[m.emitted.length - 1] || {};
+  const ok = await m.steward.setWebsiteHeldMany(snap.heldIds || []);   // 3. the steward presses the control
+  await m._webSync();
+  m.w.events.set(id, m.readableVersion);                // 4. the key comes back
+  await m._webSync();
+  return { wasLive, pressedOk: ok, heldIds: snap.heldIds || [] };
+}
+
+test('R5F1: the control is REVERSIBLE from the event itself — for a GROUP event as well as a whole-church one', async () => {
+  // THE GROUP EVENT: the case that was a one-way door.
+  const g = mirror({ events: [GROUP_READABLE], copies: {}, share: share({ optIn: ['evtyouth'] }) });
+  Object.assign(g, { lostVersion: GROUP_LOST, readableVersion: GROUP_READABLE, liveBody: REVERSE_LIVE });
+  const gp = await pressed(g, 'evtyouth');
+  assert.equal(gp.wasLive, true, 're-anchor: a group event ticked "On the website" was never published in the first place');
+  assert.deepEqual(gp.heldIds, ['evtyouth'], 're-anchor: the control was offered nothing to act on');
+  assert.equal(gp.pressedOk, true, 'the control was refused');
+  assert.ok(g.tombstoned().includes('trinityone/pubevent:evtyouth'), 're-anchor: the control did not take the copy off at all');
+  // THE SCREEN'S HALF: the editor must not open a ticked box over an event the website no longer shows.
+  assert.equal(g.steward.isWebsiteShown('evtyouth'), false,
+    'THE EVENT EDITOR STILL SHOWS "On the website ✓" FOR AN EVENT THE CONTROL TOOK OFF — the two lists contradict each other and nothing on any screen says why');
+  // …and the tick puts it back.
+  const before = g.live().length;
+  assert.equal(await g.steward.setWebsiteShown('evtyouth', true), true, 'the editor tick was refused');
+  await g._webSync();
+  assert.ok(g.live().slice(before).includes('trinityone/pubevent:evtyouth'),
+    'A GROUP EVENT NEVER COMES BACK after the control is pressed — "putting it back is the same tick from the event itself" is false for a group\'s event, and the steward has no way to undo it but hand-editing the share: document');
+  assert.deepEqual(g.shareDoc().optOut, [], 'the opt-out survived the tick, so the copy can never be served again');
+  assert.deepEqual(g.shareDoc().optIn, ['evtyouth'], 'the tick was not recorded');
+
+  // THE INVERSE, which round 5 measured as already working and which must stay working.
+  const c = mirror({ events: [{ id: 'evtmeet', raw: sealed(MEET, KEY_OURS), ts: 10 }], copies: {}, share: share() });
+  Object.assign(c, { lostVersion: { id: 'evtmeet', raw: sealed(MEET, KEY_LOST), ts: 10 }, readableVersion: { id: 'evtmeet', raw: sealed(MEET, KEY_OURS), ts: 10 }, liveBody: MEET_LIVE });
+  const cp = await pressed(c, 'evtmeet');
+  assert.equal(cp.wasLive, true, 're-anchor: a whole-church event was never published');
+  assert.ok(c.tombstoned().includes('trinityone/pubevent:evtmeet'), 're-anchor: the control did not take the whole-church copy off');
+  assert.equal(c.steward.isWebsiteHeld('evtmeet'), true, 're-anchor: the whole-church editor would not open with its tick set');
+  const cbefore = c.live().length;
+  assert.equal(await c.steward.setWebsiteHeld('evtmeet', false), true, 'the editor tick was refused');
+  await c._webSync();
+  assert.ok(c.live().slice(cbefore).includes('trinityone/pubevent:evtmeet'),
+    'A WHOLE-CHURCH EVENT NO LONGER COMES BACK when its tick is lifted — this half used to work and the fix broke it');
+});
+
+test('R5F1: no id is ever in BOTH lists — the three writers that could put one in both', async () => {
+  // The invariant, at every door into it. An id in `optOut` and `optIn` at once is not a state a church can
+  // mean: `optOut` holds the whole-church events ticked OFF, `optIn` the group events ticked ON.
+  const m = mirror({ events: [GROUP_READABLE], copies: {}, share: share({ optIn: ['evtyouth'], optOut: ['evtold'] }) });
+  assert.equal(await m.steward.setWebsiteHeldMany(['evtyouth']), true, 'the control was refused');
+  assert.deepEqual(m.shareDoc().optIn, [], 'THE CONTROL LEFT THE ID IN optIn — the editor will draw a tick over an event the website no longer shows');
+  assert.deepEqual(m.shareDoc().optOut.sort(), ['evtold', 'evtyouth'], 'the control dropped an earlier opt-out, or its own id');
+  // …the group tick, which must lift the opt-out the control just wrote
+  assert.equal(await m.steward.setWebsiteShown('evtyouth', true), true, 'the tick was refused');
+  assert.deepEqual(m.shareDoc().optOut, ['evtold'], 'THE GROUP TICK LEFT THE OPT-OUT STANDING — _webDesired reads optOut first, so the tick means nothing');
+  assert.deepEqual(m.shareDoc().optIn, ['evtyouth'], 'the tick was not recorded');
+  // …and the whole-church tick, reachable on the same id after an edit out of the group and back into it
+  assert.equal(await m.steward.setWebsiteHeld('evtyouth', true), true, 'the opt-out tick was refused');
+  assert.deepEqual(m.shareDoc().optIn, [], 'THE OPT-OUT TICK LEFT THE ID IN optIn — edit the event back into a group and its tick can never be honoured');
+  assert.deepEqual(m.shareDoc().optOut.sort(), ['evtold', 'evtyouth'], 'the opt-out was not recorded');
+});
+
+test('R5F1 CONTROL: a tick that changes nothing still writes nothing', async () => {
+  // The per-setter "nothing to change" shortcut moved into _webOneList. Losing it would rewrite share: on
+  // every Save of every event — one more chance per save for the relay to refuse, and a `created_at` churn
+  // that the copy-equality check exists to avoid.
+  const m = mirror({ events: [GROUP_READABLE], copies: {}, share: share({ optIn: ['evtyouth'], optOut: ['evtold'] }) });
+  assert.equal(await m.steward.setWebsiteShown('evtyouth', true), true, 'an already-ticked event was refused');
+  assert.equal(await m.steward.setWebsiteHeld('evtold', true), true, 'an already-opted-out event was refused');
+  assert.equal(await m.steward.setWebsiteHeldMany(['evtold']), true, 'an already-opted-out id was refused');
+  assert.equal(m.shareDoc(), null, 'THE SHARE DOCUMENT WAS REWRITTEN for a tick that changed nothing: ' + JSON.stringify(m.published.map(e => (e.tags.find(t => t[0] === 'd') || [])[1])));
+});
+
+// ── ROUND 5 F1, AT THE POINT OF USE: the event's OWN EDITOR, executed (CLAUDE.md rule 1) ──────────────────
+// The engine rows above would all still pass with the tick deleted from the Edit dialog, or with the dialog's
+// Save no longer calling setWebsiteShown. So this row runs the REAL SchEventEdit out of app/stew-schedule.jsx
+// over the REAL engine: press the Settings control, open the editor the steward would open, read the tick it
+// draws, flip it, press Save changes, and read the church's public feed afterwards.
+const SCHED = readFileSync(new URL('../app/stew-schedule.jsx', import.meta.url), 'utf8');
+const SCHED_JS = transformSync(SCHED, { loader: 'jsx', jsx: 'transform', jsxFactory: 'h', jsxFragment: 'Frag' }).code;
+function editDialog(event, steward) {
+  const states = []; let idx = 0;
+  const React = {
+    useState(init) { const i = idx++; if (states.length <= i) states.push(typeof init === 'function' ? init() : init); return [states[i], (v) => { states[i] = typeof v === 'function' ? v(states[i]) : v; }]; },
+    useEffect() {}, useRef: () => ({ current: null }), useMemo: (f) => f(), Fragment: 'Frag',
+  };
+  const h = (type, props, ...kids) => ({ type, props: { ...(props || {}), children: kids.flat() } });
+  const dispatched = [];
+  const win = { Steward: steward, useStewardGroups: () => [], useStewardEvents: () => [],
+    dispatchEvent: (e) => { dispatched.push(e); return true; }, confirm: () => true };
+  const scope = { React, h, Frag: 'Frag', Icon: () => null, SchModal: (p) => h('modal', p), useStewDialog: () => ({ current: null }), todayISO: () => '2026-09-22',
+    window: win, CustomEvent: class CustomEvent { constructor(type, init) { this.type = type; this.detail = init && init.detail; } } };
+  const names = Object.keys(scope);
+  const mod = new Function(...names, SCHED_JS + '\nreturn { SchEventEdit };')(...names.map(n => scope[n]));
+  const walk = (n, out = []) => {
+    if (!n || typeof n !== 'object') return out;
+    if (Array.isArray(n)) { n.forEach(x => walk(x, out)); return out; }
+    out.push(n);
+    if (typeof n.type === 'function') { try { walk(n.type(n.props), out); } catch (e) {} return out; }
+    walk(n.props && n.props.children, out); walk(n.props && n.props.footer, out); return out;
+  };
+  const nodes = () => { idx = 0; return walk(mod.SchEventEdit({ event, onClose() {} })); };
+  return { nodes, dispatched,
+    tick: (label) => nodes().find(n => n.type === 'input' && n.props && n.props['aria-label'] === label),
+    save: () => nodes().find(n => n.type === 'button' && [].concat((n.props && n.props.children) || []).includes('Save changes')) };
+}
+
+test('R5F1 THE SCREEN: a group event the control took off goes back on the website from its own editor', async () => {
+  const m = mirror({ events: [GROUP_READABLE], copies: {}, share: share({ optIn: ['evtyouth'] }) });
+  Object.assign(m, { lostVersion: GROUP_LOST, readableVersion: GROUP_READABLE, liveBody: REVERSE_LIVE });
+  await pressed(m, 'evtyouth');
+  assert.ok(m.tombstoned().includes('trinityone/pubevent:evtyouth'), 're-anchor: the control took nothing off, so there is nothing to put back');
+
+  // The steward opens the event that is back in the calendar grid now the key has returned.
+  const console_ = { ...m.steward, isDelegated: () => false, publishEvent: async (ev) => ({ id: ev.id, ...ev }) };
+  const d = editDialog({ id: 'evtyouth', title: 'Youth night', date: '2026-11-01', time: '19:30', groupId: 'grpyouth' }, console_);
+  const tick = d.tick('On the website');
+  assert.ok(tick, 'THE EDIT DIALOG DRAWS NO "On the website" TICK for a group event — there is nothing on the screen that could undo the control');
+  assert.equal(tick.props.checked, false,
+    'THE DIALOG OPENS WITH THE TICK SET over an event the website no longer shows — the screen contradicts the site and says nothing about it');
+  tick.props.onChange({ target: { checked: true } });
+  assert.equal(d.tick('On the website').props.checked, true, 're-anchor: the tick does not follow its own onChange');
+  const before = m.live().length;
+  const btn = d.save();
+  assert.ok(btn && typeof btn.props.onClick === 'function', 're-anchor: the Edit dialog has no Save changes button');
+  await btn.props.onClick();
+  assert.deepEqual(d.dispatched.filter(e => e.type === 'steward-write-blocked'), [], 'the dialog reported the tick as refused: ' + JSON.stringify(d.dispatched.map(e => e.detail)));
+  await m._webSync();
+  assert.ok(m.live().slice(before).includes('trinityone/pubevent:evtyouth'),
+    'TICKING THE EVENT BACK ON FROM ITS OWN EDITOR DID NOT PUT IT BACK ON THE CHURCH\'S WEBSITE — the control is a one-way door for a group\'s event');
+});
+
+test('R5F1 THE SCREEN CONTROL: the same dialog can take it off again — the door swings both ways', async () => {
+  const m = mirror({ events: [GROUP_READABLE], copies: { evtyouth: REVERSE_LIVE }, share: share({ optIn: ['evtyouth'] }) });
+  await m._webSync();
+  const console_ = { ...m.steward, isDelegated: () => false, publishEvent: async (ev) => ({ id: ev.id, ...ev }) };
+  const d = editDialog({ id: 'evtyouth', title: 'Youth night', date: '2026-11-01', time: '19:30', groupId: 'grpyouth' }, console_);
+  assert.equal(d.tick('On the website').props.checked, true, 're-anchor: the dialog does not open ticked for an event that IS on the website');
+  d.tick('On the website').props.onChange({ target: { checked: false } });
+  await d.save().props.onClick();
+  await m._webSync();
+  assert.ok(m.tombstoned().includes('trinityone/pubevent:evtyouth'), 'UNTICKING THE EVENT LEFT IT ON THE WEBSITE');
+  assert.deepEqual(m.shareDoc().optIn, [], 'the untick was not recorded');
+  assert.deepEqual(m.shareDoc().optOut, [], 'UNTICKING A GROUP EVENT WROTE AN OPT-OUT — a group event is off by default, and an opt-out on the id would outlive an edit back to whole-church');
+});
+
+// ── F6 (round 5, LOW): the one line that stops the control acting on STALE ids ────────────────────────────
+// Measured by the auditor: removing `idsShowing.join('\n') !== (w.heldIds || []).join('\n')` from the emit
+// condition left 43/43 green. It is load-bearing — an id set that swaps at a CONSTANT COUNT otherwise never
+// reaches the panel, and the button would then opt out an event that has since become readable and legitimate.
+test('F6: the panel is told when the held ids SWAP at a constant count', async () => {
+  const bodyOf = (id) => JSON.stringify({ title: 'Event ' + id, date: '2026-10-03', time: '19:30', where: 'The hall', blurb: '', recur: '', day: null });
+  const evLost = (id) => ({ id, raw: sealed({ title: 'Event ' + id, date: '2026-10-03', time: '19:30', where: 'The hall', blurb: '' }, KEY_LOST), ts: 10 });
+  const evOk = (id) => ({ id, raw: sealed({ title: 'Event ' + id, date: '2026-10-03', time: '19:30', where: 'The hall', blurb: '' }, KEY_OURS), ts: 10 });
+  const m = mirror({ events: [evLost('evta'), evLost('evtb')], copies: { evta: bodyOf('evta'), evtb: bodyOf('evtb') }, share: share() });
+  await pastReporting(m);
+  assert.deepEqual([...(m.emitted[m.emitted.length - 1].heldIds || [])].sort(), ['evta', 'evtb'], 're-anchor: the engine named different ids to begin with');
+  const seen = m.emitted.length;
+  // A opens and C shuts in the same sync: two held before, two held after, and a DIFFERENT two.
+  m.w.events.set('evta', evOk('evta'));
+  m.w.events.set('evtc', evLost('evtc')); m.w.copies.set('evtc', bodyOf('evtc'));
+  await m._webSync();
+  const last = m.emitted[m.emitted.length - 1];
+  assert.ok(m.emitted.length > seen,
+    'THE PANEL WAS NEVER TOLD THE IDS CHANGED — the count is the same, so nothing emitted, and the button would take off an event that has since become readable and legitimate');
+  assert.equal(last.held, 2, 're-anchor: the count did not stay constant, so this row is not testing what it names');
+  assert.deepEqual([...last.heldIds].sort(), ['evtb', 'evtc'], 'the panel is holding the OLD ids: ' + JSON.stringify(last.heldIds));
 });
 
 test('R5 CONTROL: a readable event\'s copy is never withdrawn, however long another one stays stuck', async () => {
