@@ -169,8 +169,9 @@
      locks all three member-card routes, one locks all four desktop builds, one locks both steward
      routes). GO LIVE = (1) this attribute off, (2) at each `PILOT-LOCK` comment, rename each control's
      `data-live-href` back to `href` and drop the wrapper's `pilot-locked` class (cosmetic only); on the
-     steward Android control also restore `data-steward-cta download`. Nothing else changes — the copy
-     and the tamper warning come back on their own.
+     steward Android control also restore `data-steward-cta download`; (3) in nav-cta and hero .cta,
+     restore the first button's `href="#start"` (pilot changed it to `#get`). The copy and the tamper
+     warning come back on their own via pl-hide/pl-only. pilot.html can stay or be removed.
      CORRECTED 2026-09-23 (AUDIT-pilot-page-2026-09-23.md, F4): `b07beab`'s commit message claimed the
      real target is "kept alongside as `data-live-href` so nothing is lost" — that was false. The MEMBER
      Android control's plain `download` attribute (present pre-pilot, nothing to do with
@@ -369,8 +370,8 @@
     </div>
     <div class="spacer"></div>
     <div class="nav-cta">
-      <a href="#start" class="to-btn to-btn--clay nav-btn"><span class="nb-full">Start a church</span><span class="nb-short">Start</span></a>
-      <a href="#get" class="to-btn to-btn--ghost nav-btn"><span class="nb-full"><span class="pl-hide">Download</span><span class="pl-only">Join the pilot</span></span><span class="nb-short"><span class="pl-hide">Get</span><span class="pl-only">Pilot</span></span></a>
+      <a href="#get" class="to-btn to-btn--clay nav-btn"><span class="nb-full"><span class="pl-hide">Start a church</span><span class="pl-only">Join the pilot</span></span><span class="nb-short"><span class="pl-hide">Start</span><span class="pl-only">Pilot</span></span></a>
+      <a href="#get" class="to-btn to-btn--ghost nav-btn"><span class="nb-full"><span class="pl-hide">Download</span><span class="pl-only">Contact us</span></span><span class="nb-short"><span class="pl-hide">Get</span><span class="pl-only">Contact</span></span></a>
     </div>
   </div>
 </nav>
@@ -401,10 +402,11 @@
         <span class="is-heart" data-shot="app-bible.webp" data-label="the Bible">The Bible</span><span data-shot="app-sermons.webp" data-label="sermons">Sermons</span><span data-shot="app-plans.webp" data-label="reading plans">Reading plans</span><span data-shot="app-devotionals.webp" data-label="devotionals">Devotionals</span><span data-shot="app-prayer.webp" data-label="prayer requests">Prayer</span><span data-shot="app-serving.webp" data-label="your serving">Serving</span><span data-shot="app-rota.webp" data-label="the rota">Rota</span><span data-shot="app-events.webp" data-label="events and services">Events</span><span data-shot="app-care.webp" data-label="practical care">Care</span><span data-shot="welcome-app-today.webp" data-label="the Today screen">Today</span>
       </div>
       <div class="cta">
-        <a href="#start" class="to-btn to-btn--clay">Start a church</a>
-        <a href="#get" class="to-btn to-btn--ghost"><span class="pl-hide">Download</span><span class="pl-only">Join the pilot</span></a>
+        <a href="#get" class="to-btn to-btn--clay"><span class="pl-hide">Start a church</span><span class="pl-only">Join the pilot</span></a>
+        <a href="#get" class="to-btn to-btn--ghost"><span class="pl-hide">Download</span><span class="pl-only">Contact us</span></a>
       </div>
       <p class="free"><span class="pl-hide">Free to start, and always free to use.</span><span class="pl-only">Always free to use — we're bringing pilot churches on by invitation right now.</span></p>
+      <p class="free pl-only" style="margin-top:6px"><a href="mailto:hello@trinityone.church" style="color:var(--clay-ink);font-weight:600;text-decoration:none;border-bottom:1px solid color-mix(in oklab, var(--clay) 35%, transparent)">Contact us to join the pilot &rarr;</a></p>
       <!-- JOURNEY AUDIT 2026-08-05, the cheapest fix in either audit. "Join a church" is the most prominent
            member CTA on the site, and the path it starts CANNOT be finished without an invite: the app's join
            step asks for a QR, code or link, and refuses an unknown church name. Not one of the five
