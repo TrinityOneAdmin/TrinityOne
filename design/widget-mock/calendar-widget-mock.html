@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>TrinityOne calendar widget — design mock</title>
+<!--
+  DESIGN MOCK. Not shipping code. Nothing on this page is wired to a real feed, a real relay, or a real
+  church. Built per reference/DESIGN-embeddable-church-info.md phase 3, brought forward as a look-and-feel
+  mock (owner-approved 2026-09-23) so the owner can choose a layout before anyone builds the real thing.
+
+  Self-contained on purpose: no network request should ever leave this page. No CDN, no webfonts, no
+  analytics, no cookies, no external images — everything below is inline. That is not a mock convenience;
+  it is the rule the SHIPPED widget has to follow too (design doc, "What it must never do" — a persecuted
+  church's visitors must not be exposed to anyone else's server), so the mock is drawn under the same
+  constraint rather than a looser one.
+
+  The three widget blocks below are styled as if they were dropped into a page on a church's OWN website —
+  which is why the surrounding "church site" chrome deliberately does NOT use TrinityOne's palette or
+  fonts. A church's site builder will have its own look; the widget's job is to still read as TrinityOne
+  sitting inside it. Brand tokens (colours, radii, shadows) are copied from this repo's brand.css by value,
+  not by reference, and the display/serif fonts are approximated with system font stacks — see the README
+  in this same folder for why (a real embed also can't load a webfont from elsewhere, but THIS file can't
+  load anything at all, including our own).
+
+  Sample events are invented but shaped exactly like scripts/public-calendar.mjs's real output: only the
+  fields a served `pubevent:` can carry appear anywhere below (title, date, time, place, a short blurb,
+  and a repeat pattern) — no attendee, no RSVP, no member name, no group id, no id, no URL, no relay
+  address, no "N events" count. See the README for the field list and what was deliberately left out.
+-->
+<style>
+  /* ══════════════════════════════════════════════════════════════════════════════════════════════════
+     0. RESET — shared by the whole page, mock chrome and widget alike
+     ══════════════════════════════════════════════════════════════════════════════════════════════════ */
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  html, body { overflow-x: hidden; max-width: 100%; }
+  body { margin: 0; }
+  img { max-width: 100%; }
+  a { color: inherit; }
+
+  /* ══════════════════════════════════════════════════════════════════════════════════════════════════
+     1. THE MOCK BANNER — so nobody mistakes any of this for a real page
+     ══════════════════════════════════════════════════════════════════════════════════════════════════ */
+  .mock-flag {
+    background: #17120B; color: #F4EEE2;
+    font: 700 13px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    letter-spacing: .3px;
+    padding: 10px 16px;
+    text-align: center;
+  }
+  .mock-flag b { color: #E0B860; }
+
+  /* ══════════════════════════════════════════════════════════════════════════════════════════════════
+     2. "A CHURCH'S OWN WEBSITE" — deliberately generic site-builder chrome, NOT TrinityOne's look.
+        This is the page the widget gets dropped into, so it needs its own, different, plainer style.
+     ══════════════════════════════════════════════════════════════════════════════════════════════════ */
+  .church-site {
+    font: 16px/1.6 Georgia, "Times New Roman", serif;
+    color: #2b3542;
+    background: #fbfbf9;
+  }
+  .church-header { background: #2b3a4a; color: #f3f1ea; padding: 22px 16px; }
+  .church-header .row { max-width: 1040px; margin: 0 auto; display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+  .church-header h1 { font-size: 24px; margin: 0; font-weight: 400; letter-spacing: .2px; }
+  .church-header .place { font-size: 13.5px; color: #cbd2dc; font-style: italic; }
+  .church-nav { background: #f3f1ea; border-bottom: 1px solid #dcd8cb; }
+  .church-nav .row { max-width: 1040px; margin: 0 auto; padding: 10px 16px; display: flex; gap: 22px; flex-wrap: wrap; }
+  .church-nav span { font: 700 12.5px system-ui, sans-serif; letter-spacing: .6px; text-transform: uppercase; color: #55606d; }
+
+  .church-hero { background: #eef0e9; padding: 40px 16px 34px; }
+  .church-hero .row { max-width: 1040px; margin: 0 auto; }
+  .church-hero h2 { font-size: 28px; margin: 0 0 10px; font-weight: 400; color: #24303e; }
+  .church-hero p { max-width: 640px; margin: 0; color: #445; }
+
+  .church-cols { max-width: 1040px; margin: 0 auto; padding: 34px 16px 10px; display: grid; grid-template-columns: 2fr 1fr; gap: 34px; }
+  .church-article h3 { font-size: 19px; color: #24303e; font-weight: 700; margin: 0 0 8px; }
+  .church-article p { margin: 0 0 14px; color: #33404d; }
+  .church-aside { background: #f3f1ea; border: 1px solid #e1ddcf; border-radius: 4px; padding: 16px 18px; align-self: start; }
+  .church-aside h4 { font: 700 13px system-ui, sans-serif; text-transform: uppercase; letter-spacing: .6px; color: #55606d; margin: 0 0 8px; }
+  .church-aside p { margin: 0; font-size: 14px; color: #445; }
+
+  @media (max-width: 720px) {
+    .church-cols { grid-template-columns: 1fr; }
+  }
+
+  /* ══════════════════════════════════════════════════════════════════════════════════════════════════
+     3. THE MOCK CATALOGUE — three variants, one below the other, each labelled and shown in a
+        plausible spot on the page above. This part of the page is OUR chrome, so it can look like
+        a design review, not like a church's site.
+     ══════════════════════════════════════════════════════════════════════════════════════════════════ */
+  .catalogue-intro {
+    background: #F4EEE2; border-top: 1px solid rgba(34,28,22,.14); border-bottom: 1px solid rgba(34,28,22,.14);
+    padding: 30px 16px 26px;
+    font: 15px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    color: #221C16;
+  }
+  .catalogue-intro .row { max-width: 1040px; margin: 0 auto; }
+  .catalogue-intro h2 { font: 800 22px system-ui, sans-serif; letter-spacing: -.3px; margin: 0 0 8px; }
+  .catalogue-intro p { max-width: 720px; margin: 0; color: #6B6052; }
+
+  .variant-block { max-width: 1040px; margin: 0 auto; padding: 30px 16px 6px; }
+  .variant-label {
+    display: inline-flex; align-items: center; gap: 9px;
+    font: 700 12.5px system-ui, sans-serif; letter-spacing: 1.1px; text-transform: uppercase;
+    background: #F3DECF; color: #A8462A; padding: 6px 13px; border-radius: 999px;
+    margin: 0 0 10px;
+  }
+  .variant-note { font: 14.5px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: #6B6052; max-width: 640px; margin: 0 0 18px; }
+
+  .frame { border: 1px dashed rgba(34,28,22,.28); border-radius: 8px; padding: 22px; background: repeating-linear-gradient(135deg, rgba(34,28,22,.025) 0 10px, transparent 10px 20px); }
+  .frame-caption { font: 700 10.5px system-ui, sans-serif; letter-spacing: .8px; text-transform: uppercase; color: #9b9284; margin: 0 0 14px; }
+  .frame--sidebar { max-width: 340px; }
+  .frame--narrow { max-width: 300px; }
+  .frame--full { }
+
+  /* ══════════════════════════════════════════════════════════════════════════════════════════════════
+     4. THE WIDGET ITSELF — TrinityOne's own look, scoped under .to-widget so the surrounding church
+        site's fonts/colours never leak in and the widget's never leak out. Values below are copied
+        from brand.css (--clay #C25A38, --gold #C8962E, --sage #5E8C6A, --paper #F4EEE2, --ink #221C16,
+        etc.) — same numbers, just re-declared here because this file loads nothing else.
+     ══════════════════════════════════════════════════════════════════════════════════════════════════ */
+  .to-widget {
+    --clay: #C25A38; --clay-deep: #9C4327; --clay-ink: #A8462A; --clay-soft: #F3DECF;
+    --gold: #C8962E; --gold-soft: #E0B860; --gold-tint: #F3E4C4;
+    --sage: #5E8C6A; --sage-soft: #D8E6DC; --sage-ink: #4A7355;
+    --ink: #221C16; --ink-2: #6B6052; --ink-3: #736958;
+    --paper: #F4EEE2; --paper-soft: #FBF6EC; --surface: #FFFDF8;
+    --line: rgba(34,28,22,0.10); --line-2: rgba(34,28,22,0.05);
+    --r-sm: 10px; --r-md: 16px; --r-lg: 24px;
+    --shadow-sm: 0 1px 2px rgba(34,28,16,.05), 0 6px 18px rgba(34,28,16,.06);
+    --shadow-md: 0 4px 12px rgba(34,28,16,.10), 0 20px 44px rgba(34,28,16,.12);
+    /* System-font stand-ins for --font-display / --font-serif (brand.css: Sora / Newsreader). A real
+       embed serves its own font files from the same base as the widget script — never a webfont CDN
+       (see README) — but THIS mock loads nothing at all, so it falls back one step further, to the
+       system stack, rather than to a CDN. */
+    --to-font-display: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --to-font-ui: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --to-font-serif: Georgia, "Iowan Old Style", "Times New Roman", serif;
+
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--r-lg);
+    box-shadow: var(--shadow-sm);
+    padding: 20px 20px 16px;
+    color: var(--ink);
+    font-family: var(--to-font-ui);
+    max-width: 100%;
+  }
+  .to-head { display: flex; align-items: center; gap: 10px; margin: 0 0 14px; }
+  .to-head svg.halo { width: 20px; height: 20px; flex-shrink: 0; color: var(--ink); }
+  .to-head h3, .to-head h4 {
+    font-family: var(--to-font-display); font-weight: 800; letter-spacing: -.2px;
+    margin: 0; color: var(--ink);
+  }
+  .to-head h3 { font-size: 17px; }
+  .to-head h4 { font-size: 14.5px; }
+
+  /* ── Variant 1: List ── */
+  .to-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+  .to-row { display: grid; grid-template-columns: 56px 1fr; gap: 14px; padding: 12px 0; border-top: 1px solid var(--line-2); }
+  .to-row:first-child { border-top: none; padding-top: 2px; }
+  .to-row__when { text-align: center; padding-top: 1px; }
+  .to-row__day { display: block; font: 700 10.5px var(--to-font-ui); letter-spacing: .6px; text-transform: uppercase; color: var(--clay-ink); }
+  .to-row__date { display: block; font: 700 18px var(--to-font-display); color: var(--ink); line-height: 1.15; }
+  .to-row__title { font: 700 14.5px var(--to-font-ui); color: var(--ink); display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+  .to-row__meta { font: 13px var(--to-font-ui); color: var(--ink-2); margin-top: 2px; }
+  .to-row__desc { font: 13px/1.5 var(--to-font-serif); color: var(--ink-2); margin-top: 5px; }
+  .to-badge {
+    font: 700 10px var(--to-font-ui); letter-spacing: .5px; text-transform: uppercase;
+    background: var(--clay-soft); color: var(--clay-ink); padding: 2px 8px; border-radius: 999px;
+  }
+  .to-foot { font: 12px var(--to-font-ui); color: var(--ink-3); margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line-2); }
+
+  /* ── Variant 2: Month grid ── */
+  .to-month__nav { display: flex; align-items: center; justify-content: center; gap: 16px; margin: 0 0 12px; }
+  .to-month__nav strong { font: 700 14px var(--to-font-display); color: var(--ink); }
+  .to-month__nav span { color: var(--ink-3); font-size: 14px; }
+  .to-month__grid { display: grid; grid-template-columns: repeat(7, minmax(0,1fr)); gap: 3px; }
+  .to-dow { text-align: center; font: 700 10px var(--to-font-ui); letter-spacing: .4px; text-transform: uppercase; color: var(--ink-3); padding-bottom: 4px; }
+  .to-day {
+    aspect-ratio: 1 / 1; border-radius: 8px; background: var(--paper-soft);
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+    min-width: 0;
+  }
+  .to-day--out { opacity: .38; }
+  .to-day--today { box-shadow: inset 0 0 0 1.5px var(--clay); }
+  .to-day__num { font: 700 12px var(--to-font-ui); color: var(--ink); }
+  .to-day__dots { display: flex; gap: 2px; height: 6px; align-items: center; }
+  .dot { width: 5px; height: 5px; border-radius: 50%; display: inline-block; }
+  .dot--service { background: var(--clay); }
+  .dot--prayer { background: var(--gold); }
+  .dot--toddler { background: var(--sage); }
+  .dot--pcc { background: var(--ink-3); }
+  .dot--youth { background: var(--clay-deep); }
+  .dot--oneoff { width: 5px; height: 5px; border-radius: 1px; background: var(--gold-soft); transform: rotate(45deg); }
+  .to-legend { display: flex; flex-wrap: wrap; gap: 10px 16px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line-2); }
+  .to-legend__item { display: inline-flex; align-items: center; gap: 6px; font: 12px var(--to-font-ui); color: var(--ink-2); }
+
+  /* ── Variant 3: Compact ── */
+  .to-compact-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+  .to-compact-list li { font: 13.5px var(--to-font-ui); color: var(--ink); display: flex; gap: 8px; align-items: baseline; }
+  .to-compact-list .day { font-weight: 700; color: var(--clay-ink); min-width: 30px; }
+  .to-compact-list .rest { color: var(--ink-2); }
+  .to-compact-list .rest b { color: var(--ink); font-weight: 700; }
+
+  footer.mock-footer {
+    font: 13px system-ui, sans-serif; color: #6B6052; background: #F4EEE2;
+    padding: 26px 16px 40px; text-align: center;
+  }
+  footer.mock-footer .row { max-width: 720px; margin: 0 auto; }
+</style>
+</head>
+<body>
+
+<div class="mock-flag">DESIGN MOCK — <b>not</b> shipping code, <b>not</b> wired to any real feed. See design/widget-mock/README.md.</div>
+
+<!-- ══════════════════════════════════════════════════════════════════════════════════════════════════
+     THE "CHURCH'S OWN WEBSITE" — invented content, plain site-builder look, so the widget below can be
+     judged sitting inside a page that isn't ours.
+     ══════════════════════════════════════════════════════════════════════════════════════════════════ -->
+<div class="church-site">
+  <header class="church-header">
+    <div class="row">
+      <h1>St Aidan&rsquo;s Church</h1>
+      <span class="place">Little Coxwell, Wiltshire</span>
+    </div>
+  </header>
+  <nav class="church-nav"><div class="row">
+    <span>Home</span><span>About</span><span>Services</span><span>Notices</span><span>Contact</span>
+  </div></nav>
+
+  <div class="church-hero"><div class="row">
+    <h2>You&rsquo;d be very welcome.</h2>
+    <p>We&rsquo;re a small parish church at the edge of the village, and we&rsquo;d love to see you on a
+    Sunday &mdash; or any day the door&rsquo;s open. Below is what&rsquo;s coming up.</p>
+  </div></div>
+
+  <div class="church-cols">
+    <div class="church-article">
+      <h3>About us</h3>
+      <p>St Aidan&rsquo;s has stood at the top of the green since the 13th century, and the congregation
+      that meets here now is a good deal friendlier than the building looks from the road. We keep the
+      usual pattern of a parish week &mdash; a Sunday service, a midweek gathering for prayer, and a run
+      of smaller groups through the week for whoever wants them.</p>
+      <h3>Visiting us</h3>
+      <p>There&rsquo;s parking behind the hall, and the north door is the one that&rsquo;s actually open.
+      Tea and coffee after the Sunday service; nobody will make you stand up and introduce yourself.</p>
+    </div>
+    <aside class="church-aside">
+      <h4>Find us</h4>
+      <p>Church Street, Little Coxwell<br />Wiltshire SN7&nbsp;&mdash;<br />on the green, next to the hall.</p>
+    </aside>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════════════════════════════════════
+     THE MOCK CATALOGUE
+     ══════════════════════════════════════════════════════════════════════════════════════════════════ -->
+<div class="catalogue-intro"><div class="row">
+  <h2>Widget mock &mdash; three layouts</h2>
+  <p>Below are three ways the same calendar could sit on a page like the one above. Same sample week,
+  same brand, three shapes &mdash; for the owner to pick from, or reject all three of. Nothing here reads
+  a real feed; see the README alongside this file for exactly which fields are real and which are not
+  built yet.</p>
+</div></div>
+
+<!-- Variant 1 — List --><div class="variant-block" id="variant-list">
+  <div class="variant-label">Variant 1 &middot; List (default)</div>
+  <p class="variant-note">The layout most churches will use: the next several events, soonest first.
+  Shown here as it would sit in a right-hand sidebar, the way the hero section above already has one.</p>
+  <div class="frame frame--sidebar">
+    <div class="frame-caption">&larr; imagine this column beside the article above</div>
+
+    <div class="to-widget to-widget--list">
+      <div class="to-head">
+        <svg class="halo" viewBox="0 0 100 100" aria-hidden="true">
+          <circle cx="50" cy="50" r="36" fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="round" stroke-dasharray="57.4 18" transform="rotate(-90 50 50)" />
+          <circle cx="50" cy="50" r="6.5" fill="#C8962E" />
+        </svg>
+        <h3>St Aidan&rsquo;s &mdash; What&rsquo;s On</h3>
+      </div>
+      <ol class="to-list">
+        <li class="to-row">
+          <div class="to-row__when"><span class="to-row__day">Wed</span><span class="to-row__date">23 Sep</span></div>
+          <div class="to-row__body">
+            <div class="to-row__title">Midweek Prayer <span class="to-badge">Weekly</span></div>
+            <div class="to-row__meta">7:30pm &middot; The Vestry</div>
+          </div>
+        </li>
+        <li class="to-row">
+          <div class="to-row__when"><span class="to-row__day">Fri</span><span class="to-row__date">25 Sep</span></div>
+          <div class="to-row__body">
+            <div class="to-row__title">Youth Night <span class="to-badge">Fortnightly</span></div>
+            <div class="to-row__meta">7:00pm &middot; Church Hall</div>
+          </div>
+        </li>
+        <li class="to-row">
+          <div class="to-row__when"><span class="to-row__day">Sun</span><span class="to-row__date">27 Sep</span></div>
+          <div class="to-row__body">
+            <div class="to-row__title">Sunday Service <span class="to-badge">Weekly</span></div>
+            <div class="to-row__meta">10:30am &middot; St Aidan&rsquo;s Church</div>
+          </div>
+        </li>
+        <li class="to-row">
+          <div class="to-row__when"><span class="to-row__day">Tue</span><span class="to-row__date">29 Sep</span></div>
+          <div class="to-row__body">
+            <div class="to-row__title">Toddler Group <span class="to-badge">Weekly</span></div>
+            <div class="to-row__meta">9:30am &middot; Church Hall</div>
+          </div>
+        </li>
+        <li class="to-row">
+          <div class="to-row__when"><span class="to-row__day">Sun</span><span class="to-row__date">4 Oct</span></div>
+          <div class="to-row__body">
+            <div class="to-row__title">Sunday Service <span class="to-badge">Weekly</span></div>
+            <div class="to-row__meta">10:30am &middot; St Aidan&rsquo;s Church</div>
+          </div>
+        </li>
+        <li class="to-row">
+          <div class="to-row__when"><span class="to-row__day">Tue</span><span class="to-row__date">6 Oct</span></div>
+          <div class="to-row__body">
+            <div class="to-row__title">PCC Meeting <span class="to-badge">Monthly</span></div>
+            <div class="to-row__meta">7:30pm &middot; The Vestry</div>
+          </div>
+        </li>
+        <li class="to-row">
+          <div class="to-row__when"><span class="to-row__day">Fri</span><span class="to-row__date">9 Oct</span></div>
+          <div class="to-row__body">
+            <div class="to-row__title">Youth Night <span class="to-badge">Fortnightly</span></div>
+            <div class="to-row__meta">7:00pm &middot; Church Hall</div>
+          </div>
+        </li>
+        <li class="to-row">
+          <div class="to-row__when"><span class="to-row__day">Sat</span><span class="to-row__date">10 Oct</span></div>
+          <div class="to-row__body">
+            <div class="to-row__title">Harvest Supper</div>
+            <div class="to-row__meta">6:30pm &middot; Church Hall</div>
+            <div class="to-row__desc">Bring a friend &mdash; tickets on the door, in aid of the food bank.</div>
+          </div>
+        </li>
+      </ol>
+      <div class="to-foot">Times as St Aidan&rsquo;s states them.</div>
+    </div>
+  </div>
+</div>
+
+<!-- Variant 2 — Month grid --><div class="variant-block" id="variant-month">
+  <div class="variant-label">Variant 2 &middot; Month grid</div>
+  <p class="variant-note">A calendar month, for a church that wants the shape people expect from a
+  calendar rather than a list. Shown here as a full-width &ldquo;What&rsquo;s On&rdquo; section further
+  down the same page.</p>
+  <div class="frame frame--full">
+    <div class="frame-caption">imagine this as its own section, below the article above</div>
+
+    <div class="to-widget to-widget--month">
+      <div class="to-head">
+        <svg class="halo" viewBox="0 0 100 100" aria-hidden="true">
+          <circle cx="50" cy="50" r="36" fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="round" stroke-dasharray="57.4 18" transform="rotate(-90 50 50)" />
+          <circle cx="50" cy="50" r="6.5" fill="#C8962E" />
+        </svg>
+        <h3>St Aidan&rsquo;s &mdash; What&rsquo;s On</h3>
+      </div>
+      <div class="to-month__nav"><span aria-hidden="true">&lsaquo;</span><strong>October 2026</strong><span aria-hidden="true">&rsaquo;</span></div>
+      <div class="to-month__grid">
+        <div class="to-dow">Mon</div><div class="to-dow">Tue</div><div class="to-dow">Wed</div><div class="to-dow">Thu</div><div class="to-dow">Fri</div><div class="to-dow">Sat</div><div class="to-dow">Sun</div>
+
+        <div class="to-day to-day--out"><span class="to-day__num">28</span><span class="to-day__dots"></span></div>
+        <div class="to-day to-day--out"><span class="to-day__num">29</span><span class="to-day__dots"><i class="dot dot--toddler" title="Toddler Group, 9:30am"></i></span></div>
+        <div class="to-day to-day--out"><span class="to-day__num">30</span><span class="to-day__dots"><i class="dot dot--prayer" title="Midweek Prayer, 7:30pm"></i></span></div>
+        <div class="to-day"><span class="to-day__num">1</span><span class="to-day__dots"></span></div>
+        <div class="to-day"><span class="to-day__num">2</span><span class="to-day__dots"></span></div>
+        <div class="to-day"><span class="to-day__num">3</span><span class="to-day__dots"></span></div>
+        <div class="to-day"><span class="to-day__num">4</span><span class="to-day__dots"><i class="dot dot--service" title="Sunday Service, 10:30am"></i></span></div>
+
+        <div class="to-day"><span class="to-day__num">5</span><span class="to-day__dots"></span></div>
+        <div class="to-day"><span class="to-day__num">6</span><span class="to-day__dots"><i class="dot dot--toddler" title="Toddler Group, 9:30am"></i><i class="dot dot--pcc" title="PCC Meeting, 7:30pm"></i></span></div>
+        <div class="to-day"><span class="to-day__num">7</span><span class="to-day__dots"><i class="dot dot--prayer" title="Midweek Prayer, 7:30pm"></i></span></div>
+        <div class="to-day"><span class="to-day__num">8</span><span class="to-day__dots"></span></div>
+        <div class="to-day"><span class="to-day__num">9</span><span class="to-day__dots"><i class="dot dot--youth" title="Youth Night, 7:00pm"></i></span></div>
+        <div class="to-day"><span class="to-day__num">10</span><span class="to-day__dots"><i class="dot dot--oneoff" title="Harvest Supper, 6:30pm"></i></span></div>
+        <div class="to-day"><span class="to-day__num">11</span><span class="to-day__dots"><i class="dot dot--service" title="Sunday Service, 10:30am"></i></span></div>
+
+        <div class="to-day"><span class="to-day__num">12</span><span class="to-day__dots"></span></div>
+        <div class="to-day"><span class="to-day__num">13</span><span class="to-day__dots"><i class="dot dot--toddler" title="Toddler Group, 9:30am"></i></span></div>
+        <div class="to-day"><span class="to-day__num">14</span><span class="to-day__dots"><i class="dot dot--prayer" title="Midweek Prayer, 7:30pm"></i></span></div>
+        <div class="to-day"><span class="to-day__num">15</span><span class="to-day__dots"></span></div>
+        <div class="to-day"><span class="to-day__num">16</span><span class="to-day__dots"></span></div>
+        <div class="to-day"><span class="to-day__num">17</span><span class="to-day__dots"></span></div>
+        <div class="to-day"><span class="to-day__num">18</span><span class="to-day__dots"><i class="dot dot--service" title="Sunday Service, 10:30am"></i></span></div>
+
+        <div class="to-day"><span class="to-day__num">19</span><span class="to-day__dots"></span></div>
+        <div class="to-day"><span class="to-day__num">20</span><span class="to-day__dots"><i class="dot dot--toddler" title="Toddler Group, 9:30am"></i></span></div>
+        <div class="to-day"><span class="to-day__num">21</span><span class="to-day__dots"><i class="dot dot--prayer" title="Midweek Prayer, 7:30pm"></i></span></div>
+        <div class="to-day"><span class="to-day__num">22</span><span class="to-day__dots"></span></div>
+        <div class="to-day"><span class="to-day__num">23</span><span class="to-day__dots"><i class="dot dot--youth" title="Youth Night, 7:00pm"></i></span></div>
+        <div class="to-day"><span class="to-day__num">24</span><span class="to-day__dots"></span></div>
+        <div class="to-day"><span class="to-day__num">25</span><span class="to-day__dots"><i class="dot dot--service" title="Sunday Service, 10:30am"></i></span></div>
+
+        <div class="to-day"><span class="to-day__num">26</span><span class="to-day__dots"></span></div>
+        <div class="to-day"><span class="to-day__num">27</span><span class="to-day__dots"><i class="dot dot--toddler" title="Toddler Group, 9:30am"></i></span></div>
+        <div class="to-day"><span class="to-day__num">28</span><span class="to-day__dots"><i class="dot dot--prayer" title="Midweek Prayer, 7:30pm"></i></span></div>
+        <div class="to-day"><span class="to-day__num">29</span><span class="to-day__dots"></span></div>
+        <div class="to-day"><span class="to-day__num">30</span><span class="to-day__dots"></span></div>
+        <div class="to-day"><span class="to-day__num">31</span><span class="to-day__dots"></span></div>
+        <div class="to-day to-day--out"><span class="to-day__num">1</span><span class="to-day__dots"><i class="dot dot--service" title="Sunday Service, 10:30am"></i></span></div>
+      </div>
+      <div class="to-legend">
+        <span class="to-legend__item"><i class="dot dot--service"></i> Sunday Service</span>
+        <span class="to-legend__item"><i class="dot dot--prayer"></i> Midweek Prayer</span>
+        <span class="to-legend__item"><i class="dot dot--toddler"></i> Toddler Group</span>
+        <span class="to-legend__item"><i class="dot dot--pcc"></i> PCC Meeting</span>
+        <span class="to-legend__item"><i class="dot dot--youth"></i> Youth Night</span>
+        <span class="to-legend__item"><i class="dot dot--oneoff"></i> One&#8209;off (Harvest Supper)</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Variant 3 — Compact --><div class="variant-block" id="variant-compact">
+  <div class="variant-label">Variant 3 &middot; Compact (&ldquo;this week&rdquo;)</div>
+  <p class="variant-note">A small block for a narrow sidebar or a footer &mdash; just what&rsquo;s left
+  this week, nothing to scroll.</p>
+  <div class="frame frame--narrow">
+    <div class="frame-caption">imagine this tucked into a footer column</div>
+
+    <div class="to-widget to-widget--compact">
+      <div class="to-head">
+        <svg class="halo" viewBox="0 0 100 100" aria-hidden="true">
+          <circle cx="50" cy="50" r="36" fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="round" stroke-dasharray="57.4 18" transform="rotate(-90 50 50)" />
+          <circle cx="50" cy="50" r="6.5" fill="#C8962E" />
+        </svg>
+        <h4>This week at St Aidan&rsquo;s</h4>
+      </div>
+      <ul class="to-compact-list">
+        <li><span class="day">Wed</span><span class="rest">23 Sep &mdash; <b>Midweek Prayer</b>, 7:30pm</span></li>
+        <li><span class="day">Fri</span><span class="rest">25 Sep &mdash; <b>Youth Night</b>, 7:00pm</span></li>
+        <li><span class="day">Sun</span><span class="rest">27 Sep &mdash; <b>Sunday Service</b>, 10:30am</span></li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<footer class="mock-footer"><div class="row">
+  This is a design mock for an internal decision, not a live product. Nothing above reads a real
+  calendar, and no request from this page goes anywhere &mdash; open it offline and check.
+</div></footer>
+
+</body>
+</html>
