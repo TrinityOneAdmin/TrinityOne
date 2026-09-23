@@ -3692,14 +3692,12 @@ function _webEnsure(restart) {
 // (AUDIT-feeds-round3-2026-09-22 F1b). A budget meant to say "this console has been open a long time and
 // the document is still shut" must therefore be measured in seconds, not in how chatty the relay is.
 const WEB_BLOCKED_AFTER_S = 6;    // seconds with the same event stuck before the page says so — the key is often merely LATE
-// TEN MINUTES, and the reason for a number that large. What this budget decides is destructive and what it
-// protects against is not urgent: on one side, a console that is slow, offline, mid-restore or waiting on a
-// thin pipe must NEVER take a church's events off its public website; on the other, a group event stranded
-// on that website has already been there since a console older than this rule published it, so ten more
-// minutes costs nothing. Ten minutes is also longer than any flap this watch survives — the dashboard
-// restarts it on every connection bump and a restart resets the clock — so reaching it means a console sat
-// open, connected and holding its key ring for ten unbroken minutes with the document still shut.
-const WEB_GIVE_UP_S = 600;
+// FOUR MINUTES. The idle lock fires at ten, so the withdrawal must finish well before that or it never
+// fires unattended (measured: the console locked at ~9.8 min, the feed was still live at 11.3 min).
+// Four minutes gives six minutes of margin and is still longer than any flap this watch survives — the
+// dashboard restarts it on every connection bump and a restart resets the clock — so reaching it means a
+// console sat open, connected and holding its key ring for four unbroken minutes with the document still shut.
+const WEB_GIVE_UP_S = 240;
 const WEB_RETRY_MS = 2000;        // how often a stuck watch comes back to look, while the budget is still running
 // IS THIS A WHOLE SEALED PAYLOAD — asked with no key at all. NIP-44 v2 is padded standard base64 of
 //   [version 1][nonce 32][ciphertext 2 + padded][mac 32]
