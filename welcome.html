@@ -170,7 +170,15 @@
      routes). GO LIVE = (1) this attribute off, (2) at each `PILOT-LOCK` comment, rename each control's
      `data-live-href` back to `href` and drop the wrapper's `pilot-locked` class (cosmetic only); on the
      steward Android control also restore `data-steward-cta download`. Nothing else changes — the copy
-     and the tamper warning come back on their own. */
+     and the tamper warning come back on their own.
+     CORRECTED 2026-09-23 (AUDIT-pilot-page-2026-09-23.md, F4): `b07beab`'s commit message claimed the
+     real target is "kept alongside as `data-live-href` so nothing is lost" — that was false. The MEMBER
+     Android control's plain `download` attribute (present pre-pilot, nothing to do with
+     `data-steward-cta`) was dropped when its `href` became `data-live-href` and nothing in this checklist
+     ever restored it, so following the checklist exactly shipped a permanently changed member download
+     link. Fixed by leaving `download` sitting on that control right now, inert (a `download` attribute
+     does nothing on an `<a>` with no `href`) — so step 2 restores it for free the moment `href` comes
+     back, with no separate step to remember. */
   /* ══ PILOT COPY OUTSIDE #get (2026-09-23, AUDIT-pilot-page-2026-09-23.md F1/F2) ══ Nine `href="#get"`
      calls-to-action elsewhere on the page (nav ×2, the mobile nav button, the hero, "For churches", both
      "Support the project" cards, and the closing CTA's two buttons) said "Download"/"Start a
@@ -737,9 +745,13 @@
         <!-- PILOT-LOCK 1 of 3: the Android DOWNLOAD and the iPhone/Computer WEB ROUTES share one
              wrapper, so one `pilot-locked` class locks all three at once — each control's own
              data-live-href still names its own real target. Go live: rename each control's
-             data-live-href to href and drop this wrapper's pilot-locked class. -->
+             data-live-href to href and drop this wrapper's pilot-locked class.
+             CORRECTED 2026-09-23 (F4): the Android control's `download` attribute (harmless here — it
+             does nothing on an <a> with no href) is left ON so go-live restores it automatically along
+             with href; b07beab dropped it and nothing in the checklist named it, so following the
+             checklist exactly used to ship a member APK link that had silently lost `download`. -->
         <div class="sx-acts pilot-locked">
-          <a class="sx-act sx-act--go" data-live-href="https://app.trinityone.church/trinityone.apk"><b>Android</b><span>Download the app</span></a>
+          <a class="sx-act sx-act--go" data-live-href="https://app.trinityone.church/trinityone.apk" download><b>Android</b><span>Download the app</span></a>
           <a class="sx-act" data-live-href="https://app.trinityone.church/"><b>iPhone &amp; iPad</b><span>Open in Safari, then Share &rarr; Add to Home Screen &mdash; official app coming soon</span></a>
           <a class="sx-act" data-live-href="https://app.trinityone.church/"><b>Computer</b><span>Open in your browser — nothing to install</span></a>
         </div>

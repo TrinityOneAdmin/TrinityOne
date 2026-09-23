@@ -119,13 +119,19 @@ async function openAt(width) {
 
 // The accessibility tree's role for a CSS selector's first match — 'link' for a real, reachable anchor;
 // something else (or ignored) for an <a> with no href, which has no implicit ARIA role at all.
+//
+// F6, AUDIT-pilot-page-2026-09-23.md: this used to return `undefined` when the selector matched nothing,
+// and the caller's `assert.notEqual(role, 'link')` treats `undefined` as "not link" — so a selector that
+// stops matching (the element renamed, removed, or its class dropped) made the test PASS, for a reason
+// having nothing to do with what it claims to check. It now throws, by name, so "the element is gone" and
+// "the element has no link role" can never be confused with each other again.
 async function axRoleOf(selector) {
   const doc = await send('DOM.getDocument', { depth: -1, pierce: true });
   const q = await send('DOM.querySelector', { nodeId: doc.root.nodeId, selector });
-  if (!q.nodeId) return undefined;
+  if (!q.nodeId) throw new Error(`axRoleOf: selector "${selector}" matched no element — fix the selector, don't read this as "no role"`);
   const ax = await send('Accessibility.getPartialAXTree', { nodeId: q.nodeId, fetchRelatives: false });
   const node = (ax.nodes || [])[0];
-  if (!node) return undefined;
+  if (!node) throw new Error(`axRoleOf: selector "${selector}" matched an element with no accessibility node`);
   if (node.ignored) return 'IGNORED';
   return node.role && node.role.value;
 }
@@ -200,6 +206,10 @@ test('the two required sentences are in the rendered text, and nothing on the pa
   const text = await ev(`document.getElementById('get').innerText`);
   assert.match(text, /Joining the pilot\? Contact us\./,
     'the primary pilot action is missing from the rendered page');
+  // F3, AUDIT-pilot-page-2026-09-23.md: pin the explanatory sentence too, not just the two headline
+  // sentences either side of it — deleting it left all 9 tests green.
+  assert.match(text, /We're bringing pilot churches on by hand right now/,
+    'the sentence explaining why there is no self-serve signup right now is missing from the contact CTA');
   // CORRECTED 2026-09-23 (F2, owner-approved): this sentence used to end "not from here" — a route, with
   // no word on the one route that is actually unsafe, at the exact moment the tamper warning that named
   // that risk went dormant (checked a few lines below). It now carries both the route and the caution.
@@ -240,8 +250,43 @@ test('the pilot cards are visibly tagged and the switch is the single "#get[data
   const visibleTags = await ev(
     `[].slice.call(document.querySelectorAll('#get .pilot-tag')).every(function(t){return getComputedStyle(t).display !== 'none';})`);
   assert.equal(visibleTags, true, 'a "Pilot" tag exists but is not actually visible');
+  // F5, AUDIT-pilot-page-2026-09-23.md: a count check alone stays green if the label text is changed
+  // ("Pilot" → "Soon") without changing the count — pin the actual word.
+  const tagTexts = JSON.parse(await ev(
+    `JSON.stringify([].slice.call(document.querySelectorAll('#get .pilot-tag')).map(function(t){return t.textContent.trim();}))`));
+  for (const t of tagTexts) assert.equal(t, 'Pilot', `a pilot tag reads "${t}", not "Pilot"`);
   const switchAttr = await ev(`document.getElementById('get').getAttribute('data-pilot')`);
   assert.equal(switchAttr, 'on', 'the pilot switch is not the documented "on" value on <section id="get">');
+});
+
+// F5, AUDIT-pilot-page-2026-09-23.md: deleting the `.pilot-locked` opacity/grayscale rules left all 9
+// existing tests green while nine dead controls rendered as ordinary, clickable-looking buttons — the one
+// thing the owner specified visually ("greyed out") was the one thing no test measured. This measures the
+// actual computed style a person would see, not a class name (a class can be present and do nothing).
+test('a locked control is visibly greyed out; a live control beside it is not', { skip: !CHROME ? 'no chromium' : false }, async () => {
+  const locked = JSON.parse(await ev(`(function(){
+    var a = document.querySelector('#get a[data-live-href="https://app.trinityone.church/trinityone.apk"]');
+    var s = getComputedStyle(a);
+    return JSON.stringify({ opacity: s.opacity, filter: s.filter, pointerEvents: s.pointerEvents });
+  })()`));
+  assert.ok(Number(locked.opacity) < 1,
+    `a locked control's computed opacity is ${locked.opacity} — a reader would see no visual difference from a live control`);
+  assert.match(locked.filter, /grayscale/,
+    `a locked control's computed filter is "${locked.filter}" — it does not desaturate the control`);
+  assert.equal(locked.pointerEvents, 'none',
+    'a locked control still accepts pointer events per computed style');
+  const live = JSON.parse(await ev(`(function(){
+    var a = document.querySelector('#get .pilot-cta a[href="mailto:hello@trinityone.church"]');
+    var s = getComputedStyle(a);
+    return JSON.stringify({ opacity: s.opacity, filter: s.filter, pointerEvents: s.pointerEvents });
+  })()`));
+  assert.equal(Number(live.opacity), 1,
+    `the live "Joining the pilot? Contact us." control is dimmed too (opacity ${live.opacity}) — the ` +
+    'contrast between locked and live controls is what proves the greying is selective');
+  assert.equal(live.filter, 'none',
+    `the live control is desaturated too (filter "${live.filter}")`);
+  assert.equal(live.pointerEvents, 'auto',
+    'the live control does not accept pointer events per computed style');
 });
 
 test('the section has no horizontal scroll at phone width', { skip: !CHROME ? 'no chromium' : false }, async () => {
