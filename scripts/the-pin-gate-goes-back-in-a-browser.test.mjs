@@ -133,7 +133,7 @@ const openSettingsGroup = async (name) => {
     const hs = [...document.querySelectorAll('button[aria-expanded]')];
     const grp = [...document.querySelectorAll('button.set-grp')];
     const headers = grp.map(e => (e.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 40));
-    const b = hs.find(e => (e.innerText || '').trim().indexOf(${JSON.stringify(name)}) === 0);
+    const b = hs.find(e => (e.innerText || '').trim().toLowerCase().indexOf(${JSON.stringify(name)}.toLowerCase()) === 0);
     if (!b) return JSON.stringify({ r: 'no-header', headers });
     const witnessed = grp.indexOf(b) >= 0;
     if (b.getAttribute('aria-expanded') === 'true') return JSON.stringify({ r: 'already-open', headers, witnessed });
