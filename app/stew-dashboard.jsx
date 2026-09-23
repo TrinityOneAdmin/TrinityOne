@@ -8602,6 +8602,27 @@ function DashWebsitePanel({ church }) {
   const held = (share && share.held) || 0;
   const heldIds = (share && share.heldIds) || [];
   const url = (window.Steward.websiteFeedUrl && window.Steward.websiteFeedUrl()) || '';
+  // PHASE 2 FEED SETTINGS (reference/DESIGN-embeddable-church-info.md). setWebsiteShare merges a partial
+  // patch onto whatever the engine already holds, so each control only ever names the field it changed.
+  const horizonMonths = (share && share.horizonMonths) || 6;
+  const detail = (share && share.detail) || 'full';
+  // `calNameEdit` is null whenever nobody is mid-edit, so the field reads straight from the share document —
+  // no effect needed to keep it in sync when the document changes elsewhere. Typing sets it; blurring clears
+  // it back to null once saved, the same "derive, don't mirror" shape the rest of this file avoids a sync
+  // effect for.
+  const [calNameEdit, setCalNameEdit] = React.useState(null);
+  const savedCalName = (share && share.calName) || '';
+  const calName = calNameEdit !== null ? calNameEdit : savedCalName;
+  const patchShare = async (patch) => {
+    if (busy || !known) return false;
+    setBusy(true); setMsg('');
+    let ok = false;
+    try { ok = await Promise.resolve(window.Steward.setWebsiteShare(patch)); } catch (e) { ok = false; }
+    setBusy(false);
+    if (!ok) setMsg('Not saved — the relay didn’t accept the change.');
+    return ok;
+  };
+  const saveCalName = async () => { const val = calName; setCalNameEdit(null); if (val !== savedCalName) await patchShare({ calName: val }); };
   const toggle = async () => {
     if (busy || !known) return;
     setBusy(true); setMsg('');
@@ -8672,6 +8693,45 @@ function DashWebsitePanel({ church }) {
           className="sk-btn sk-btn--ghost" style={{ marginTop: 6, padding: '7px 13px', fontSize: 12.5, opacity: (busy || !known) ? .5 : 1 }}>
           {held === 1 ? 'Take it off our website' : 'Take them off our website'}
         </button>
+      ) : null}
+
+      {on ? (
+        <React.Fragment>
+          <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', margin: '14px 0 6px' }}>How far ahead</div>
+          <div className="set-desc" style={{ color: 'var(--ink-2)', marginBottom: 8 }}>Events further out than this stay off the feed.</div>
+          <div role="radiogroup" aria-label="How far ahead" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {[[3, '3 months'], [6, '6 months'], [12, '12 months']].map(([m, label]) => (
+              <label key={m} style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '7px 12px', borderRadius: 999, border: '1px solid ' + (horizonMonths === m ? 'var(--clay)' : 'var(--line)'), background: horizonMonths === m ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface-2)', cursor: known ? 'pointer' : 'default', opacity: (busy || !known) ? .6 : 1 }}>
+                <input type="radio" name="website-horizon" value={m} checked={horizonMonths === m} disabled={busy || !known} onChange={() => patchShare({ horizonMonths: m })} aria-label={label} style={{ margin: 0 }} />
+                <span style={{ fontSize: 13, fontWeight: 700 }}>{label}</span>
+              </label>
+            ))}
+          </div>
+
+          <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', margin: '14px 0 6px' }}>Calendar name</div>
+          <div className="set-desc" style={{ color: 'var(--ink-2)', marginBottom: 8 }}>What someone sees when they subscribe.</div>
+          <input value={calName} onChange={e => setCalNameEdit(e.target.value)} onBlur={saveCalName} onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }}
+            disabled={busy || !known} placeholder={church.name || 'Your church'} aria-label="Calendar name"
+            style={{ width: '100%', boxSizing: 'border-box', height: 40, padding: '0 13px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', outline: 'none', fontSize: 14, color: 'var(--ink)', fontFamily: 'var(--font-ui)' }} />
+
+          <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', margin: '14px 0 6px' }}>How much of each event</div>
+          <div role="radiogroup" aria-label="How much of each event" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 12px', borderRadius: 11, border: '1px solid ' + (detail === 'full' ? 'var(--clay)' : 'var(--line)'), background: detail === 'full' ? 'color-mix(in oklab, var(--clay) 7%, var(--surface))' : 'var(--surface-2)', cursor: known ? 'pointer' : 'default' }}>
+              <input type="radio" name="website-detail" value="full" checked={detail === 'full'} disabled={busy || !known} onChange={() => patchShare({ detail: 'full' })} aria-label="Full" style={{ marginTop: 3 }} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 700, fontSize: 14 }}>Full</div>
+                <div className="set-desc" style={{ color: 'var(--ink-2)' }}>Title, time, place and any note you wrote.</div>
+              </div>
+            </label>
+            <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 12px', borderRadius: 11, border: '1px solid ' + (detail === 'short' ? 'var(--clay)' : 'var(--line)'), background: detail === 'short' ? 'color-mix(in oklab, var(--clay) 7%, var(--surface))' : 'var(--surface-2)', cursor: known ? 'pointer' : 'default' }}>
+              <input type="radio" name="website-detail" value="short" checked={detail === 'short'} disabled={busy || !known} onChange={() => patchShare({ detail: 'short' })} aria-label="Short" style={{ marginTop: 3 }} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 700, fontSize: 14 }}>Short</div>
+                <div className="set-desc" style={{ color: 'var(--ink-2)' }}>Just the title and time — no place, no note.</div>
+              </div>
+            </label>
+          </div>
+        </React.Fragment>
       ) : null}
 
       <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', margin: '14px 0 6px' }}>Served from</div>
