@@ -74,6 +74,7 @@ function mirror({ events, copies, share, ring = [KEY_OURS], store = new Map(), a
   // half AUDIT-feeds-round5-2026-09-22 F1 is about, and nothing here re-implements them.
   const writers = [
     stmt(src, 'var WEB_DEFAULT = ', 'WEB_DEFAULT'),
+    stmt(src, 'var WEB_HORIZON_OK = ', 'WEB_HORIZON_OK'),   // phase 2: _webNormalise now reads this to validate horizonMonths
     stmt(src, 'var SHARE_D = ', 'SHARE_D'),
     stmt(src, 'var _webIds = ', '_webIds'),
     fnBody(src, 'function _webNormalise', '_webNormalise'),

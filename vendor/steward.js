@@ -17351,13 +17351,17 @@ zoo`.split("\n");
     }
   }
   var _evtSeq = 0;
-  var WEB_DEFAULT = Object.freeze({ calendar: false, sermons: false, plans: false, optOut: [], optIn: [], address: "own" });
+  var WEB_HORIZON_OK = /* @__PURE__ */ new Set([3, 6, 12]);
+  var WEB_DEFAULT = Object.freeze({ calendar: false, sermons: false, plans: false, optOut: [], optIn: [], address: "own", horizonMonths: 6, calName: "", detail: "full" });
   var WEB_ID_OK = /^[A-Za-z0-9_-]{1,64}$/;
   var _webIds = (v) => [...new Set((Array.isArray(v) ? v : []).map((x) => String(x)).filter((x) => WEB_ID_OK.test(x)))];
   function _webNormalise(c) {
     const o = c && typeof c === "object" ? c : {};
     const optOut = _webIds(o.optOut);
-    return { calendar: o.calendar === true, sermons: false, plans: false, optOut, optIn: _webIds(o.optIn).filter((x) => !optOut.includes(x)), address: "own" };
+    const horizonMonths = WEB_HORIZON_OK.has(o.horizonMonths) ? o.horizonMonths : 6;
+    const calName = String(o.calName || "").slice(0, 120);
+    const detail = o.detail === "short" ? "short" : "full";
+    return { calendar: o.calendar === true, sermons: false, plans: false, optOut, optIn: _webIds(o.optIn).filter((x) => !optOut.includes(x)), address: "own", horizonMonths, calName, detail };
   }
   function _webOneList(st, w, next) {
     const same = (a, b) => a.length === b.length && a.every((x, i3) => x === b[i3]);
