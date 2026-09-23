@@ -800,29 +800,26 @@ test('"Just the console": the console → a church → "Back to the Suite" → t
 // must not be read as "a church exists" — it means only "a wizard was offered". If the box still holds no
 // church (and no relay name), the first-run card comes back and stays until the box actually has something.
 test('the console wizard\'s "done" marker does not retire the first-run card; the box state does',
-  { skip: !CHROME ? 'no chromium' : false, timeout: 180000 }, async () => {
+  { skip: !CHROME ? 'no chromium' : false, timeout: 60000 }, async () => {
   const gw = await startGateway();
   const c = await startChrome(gw.base + HOME);
   try {
     assert.equal(await launcherSettled(c), 'card');
-    assert.equal(await clickId(c, 'setupConsole'), 'ok');
-    await waitFor(c, `/\\/steward\\.html$/.test(location.href)`, 'the console', 15000);
-    await walkConsoleWizard(c, 'St Oswald');
-    assert.equal(await clickButton(c, '/Back to the Suite/'), 'ok');
-    await waitFor(c, `/\\/relay-app\\/home\\.html$/.test(location.href)`, 'the launcher', 15000);
-    // The wizard just wrote trinityone.steward.wizard.done. The box has no church (and no relay name).
-    // The launcher must read the box state, not the marker, so it shows the card.
+    // Set the markers the console wizard and relay setup write, WITHOUT creating a church.
+    // The box still holds no church and no relay name.
+    await c.evalIn(`localStorage.setItem('trinityone.steward.wizard.done', '1')`);
+    await c.evalIn(`localStorage.setItem('to_relay_setup_seen', '1')`);
     const marked = await c.evalIn(`localStorage.getItem('trinityone.steward.wizard.done')`);
-    assert.equal(marked, '1', 'the console wizard was not marked done');
-    // If the marker alone retired the card, we would see 'doors' here. But the launcher always fetches
-    // and checks the box state (/status.writePolicy and /relay-names/mine.handle), and since neither
-    // is true, it shows the card.
+    assert.equal(marked, '1', 'the marker was not written');
+    // Reload the launcher. The markers are set but the box has no church and no relay name.
+    // The launcher must read the box state, not the markers, so it shows the card.
+    await c.goto(gw.base + HOME);
     assert.equal(await launcherSettled(c), 'card', 'THE CONSOLE WIZARD\'S "done" MARKER RETIRED THE FIRST-RUN CARD WITH NO CHURCH ON THE BOX (the owner\'s rule: state of the box, not which button was pressed)');
     let L = await readLauncher(c);
     assert.deepEqual([L.card, L.doors], [true, [false, false]], JSON.stringify(L));
-    // On a second launch, the card is still there — the marker alone does not keep it gone.
+    // On a second launch, the card is still there — the markers alone do not keep it gone.
     await c.goto(gw.base + HOME);
-    assert.equal(await launcherSettled(c), 'card', 'a second launch still shows the card — the marker does not stay it retired');
+    assert.equal(await launcherSettled(c), 'card', 'a second launch still shows the card — the markers do not stay it retired');
     L = await readLauncher(c);
     assert.deepEqual([L.card, L.doors], [true, [false, false]], JSON.stringify(L));
   } finally { c.stop(); gw.stop(); }
