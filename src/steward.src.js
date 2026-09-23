@@ -2462,11 +2462,6 @@ async function publish(evt, opts) {
   catch (e) {
     console.warn('[steward] publish failed', e);
     // every relay rejected — surface it so the steward isn't left wondering why nothing saved
-    let reason = '';
-    try { const errs = (e && e.errors) || []; reason = (errs[0] && (errs[0].message || String(errs[0]))) || ''; } catch (x) {}
-    // WHICH RELAY SAID NO. `reason` kept errs[0] and threw the rest away, so a church with two relays was
-    // told "a relay refused this" and could not learn which — the Settings page then showed both as "Live",
-    // because answering a socket and accepting a write are different questions. Cost a day on 2026-09-08.
     // AggregateError.errors is index-aligned with the promise array, which is index-aligned with _targets.
     // Written inline, not as a shared helper: this function is lifted out of the bundle and run by the tests,
     // where a name resolved from the enclosing IIFE is undefined — see the note above _publishToRelays.
@@ -2475,6 +2470,18 @@ async function publish(evt, opts) {
       const errs = (e && e.errors) || [];
       refused = _targets.map((u, i) => ({ url: u, error: (errs[i] && (errs[i].message || String(errs[i]))) || '' }));
     } catch (x) { refused = []; }
+    // WHICH RELAY SAID NO — AUDIT-steward-doc-rules-round5-2026-09-23 finding 2. `reason` used to be
+    // errs[0].message, unconditionally — the Settings page was fixed to show every relay's own answer via
+    // `refused` above, but the single sentence a steward is actually shown still threw the rest away. On
+    // the pilot's own default of two addresses to one box: relay[0] unreachable, relay[1] genuinely
+    // refuses — MEASURED, the banner read "The relay refused it: connection failure: connection timed
+    // out.", nostr-tools talking about a socket that never opened, never a box's verdict, while the one
+    // relay with a real, actionable answer ("blocked: not a member or not permitted for this group") was
+    // discarded. Mirrors `_said`/`_spoke` in `_publishAny`, src/fellowship.src.js: A RELAY THAT SPOKE
+    // OUTRANKS ONE THAT COULD NOT BE DIALLED — order-independent, because a church's relay set having one
+    // address down is an ordinary Sunday, not an edge case.
+    const _spoke = refused.find(r => r && r.error && !/^connection failure/i.test(String(r.error)));
+    let reason = (_spoke && _spoke.error) || (refused[0] && refused[0].error) || '';
     // OUR OWN SUPERSEDED COPY IS NOT A FAILURE. Two code paths can publish the same document a moment apart;
     // the newer one lands and the older is refused with "a newer version of this is already stored". The
     // steward was then shown a red, sticky "your change could not be saved" for a change that IS saved —

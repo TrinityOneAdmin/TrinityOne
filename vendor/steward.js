@@ -16697,12 +16697,6 @@ zoo`.split("\n");
       })));
     } catch (e) {
       console.warn("[steward] publish failed", e);
-      let reason = "";
-      try {
-        const errs = e && e.errors || [];
-        reason = errs[0] && (errs[0].message || String(errs[0])) || "";
-      } catch (x) {
-      }
       let refused = [];
       try {
         const errs = e && e.errors || [];
@@ -16710,6 +16704,8 @@ zoo`.split("\n");
       } catch (x) {
         refused = [];
       }
+      const _spoke = refused.find((r) => r && r.error && !/^connection failure/i.test(String(r.error)));
+      let reason = _spoke && _spoke.error || refused[0] && refused[0].error || "";
       try {
         const d1 = ((evt.tags || []).find((t) => t[0] === "d") || [])[1];
         if (d1 && /newer version/i.test(reason) && (_lastOk.get(d1) || 0) > (evt.created_at || 0)) return evt;

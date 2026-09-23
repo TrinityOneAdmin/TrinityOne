@@ -513,6 +513,36 @@ test('A GENUINE REFUSAL MUST STILL RAISE THE BANNER', async () => {
   assert.equal(s.err(), 1, 'a genuine refusal fired no error event, so no banner can appear');
 });
 
+// AUDIT-steward-doc-rules-round5-2026-09-23 finding 2. `refused` (used to drive the Settings page) is
+// index-aligned per relay and was already right; the single sentence a steward is shown (`opts.reason`)
+// was not — it kept `errs[0]`, whichever relay that happened to be. On the pilot's own default of two
+// addresses to one box, an unreachable relay landing first means the banner quotes nostr-tools
+// ("connection failure: …") instead of the relay that actually read the event and said no.
+test('WHICH RELAY REFUSED — the banner must not depend on array order', async () => {
+  const evil = () => { const outsider = K(); return finalizeEvent({ kind: 30078, created_at: now(),
+    tags: [['d', CLEAR_D + outsider.pub], ['t', 'trinityone'], ['p', outsider.pub], ['church', outsider.pub]],
+    content: 'x' }, church.sk); };
+
+  const s1 = consoleSide([DEAD_URL, WS_URL]);
+  const opts1 = {};
+  const r1 = await s1.publish(evil(), opts1);
+  s1.close();
+  assert.equal(r1, false, 're-anchor: this write must be refused, not saved — the row below proves nothing otherwise');
+  assert.doesNotMatch(String(opts1.reason || ''), /^connection failure/i,
+    'THE DEAD RELAY WON. It was first in the array, and nostr-tools talking about a socket that never ' +
+    'opened was quoted to the steward instead of the relay that actually read this event and refused it: ' +
+    JSON.stringify(opts1));
+
+  const s2 = consoleSide([WS_URL, DEAD_URL]);
+  const opts2 = {};
+  const r2 = await s2.publish(evil(), opts2);
+  s2.close();
+  assert.equal(r2, false, 're-anchor: this write must be refused, not saved — the row below proves nothing otherwise');
+  assert.equal(opts2.reason, opts1.reason,
+    'THE SAME REFUSAL READS DIFFERENTLY DEPENDING ON RELAY ORDER: ' +
+    JSON.stringify({ deadFirst: opts1.reason, deadSecond: opts2.reason }));
+});
+
 // ── read before write: the cure, not the patch ───────────────────────────────────────────────────────────
 // HANDOFF-2026-07-31 item 7. Everything above says a tie-break refusal must be reported. That is right, and
 // it is only tolerable if the console stops CAUSING tie-breaks — otherwise the safeguarding banner cries wolf
