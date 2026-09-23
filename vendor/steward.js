@@ -17678,6 +17678,7 @@ zoo`.split("\n");
     // left alone (the console shows the add-a-backup nudge instead). No church data goes anywhere it isn't already.
     async autoSyncIfRedundant() {
       if (!sk || !pub) return { enabled: false };
+      if (actingChurch) return { enabled: false, delegated: true };
       try {
         const st = await window.Steward.backupState();
         if (st.boxes >= 2 && !st.syncOn) {

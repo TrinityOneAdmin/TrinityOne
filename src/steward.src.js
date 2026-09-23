@@ -3795,6 +3795,21 @@ window.Steward = {
   // left alone (the console shows the add-a-backup nudge instead). No church data goes anywhere it isn't already.
   async autoSyncIfRedundant() {
     if (!sk || !pub) return { enabled: false };
+    // ⚠ A DELEGATED CONSOLE MUST NOT EVEN TRY. This is not a control — it is a 5-second boot timer
+    // (app/steward-root.jsx:354) that nobody pressed, and d126298 made `trinityone/relays` church-key-only at
+    // the relay (`if (d === RELAYS_D) return CHURCH_PUBS.has(e.pubkey);`, scripts/gateway.mjs). A delegated
+    // steward signs with their OWN key, so the write is refused every time, `publish()` dispatches
+    // steward-publish-error with `background: false`, and publishErrorMessage turns that into `sticky: true`
+    // — the STANDING pink alarm, "That change wasn't saved", on every tab, about five seconds after every
+    // boot, over a change no steward made. MEASURED by lifting this function and syncEnable out of the
+    // shipped vendor/steward.js (AUDIT-steward-doc-rules-round4-2026-09-22, finding F1).
+    //
+    // `{ background: true }` on the publish would only soften the sentence. There is no outage reading under
+    // which a delegate's copy of this document can ever land, so the honest answer is not to attempt it:
+    // the engine knows which console it is. The owner's console is untouched — `actingChurch` is '' there.
+    // d126298's rule-2 note called this "a background engine path … nothing on screen reports it either
+    // way". The second half was false, and that is what this closes.
+    if (actingChurch) return { enabled: false, delegated: true };
     try {
       const st = await window.Steward.backupState();
       if (st.boxes >= 2 && !st.syncOn) { await window.Steward.syncEnable(); return { enabled: true, boxes: st.boxes }; }
