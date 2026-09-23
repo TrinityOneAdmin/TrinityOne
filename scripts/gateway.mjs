@@ -21,6 +21,7 @@ import { openStore, matchFilter } from './event-store.mjs';
 // so an undeclared name throws before this relay serves a request. POLICY stays in accept()/canRead().
 import { D, MEMBER_WRITABLE_TYPES } from './trinity-doc-types.mjs';   // NAMES, plus the one NARROWING list (see memberDocTypeOk)
 import { buildCalendar, publicEventFields } from './public-calendar.mjs';   // the church's PUBLIC calendar feed (pure: no I/O, no policy)
+import { buildWidgetScript } from './public-widget.mjs';   // the embeddable calendar widget (pure: same script for every church)
 // WHO MAY HOLD THE CHECK-IN HELPER KEY is asked in ONE place, and this is not it — see the file's own header.
 // The relay imports three things and derives nothing: the parser (so a grant means the same to the box that
 // stores it and the console that mints it), and the declared-source test (so a grant cannot claim a
@@ -5770,7 +5771,15 @@ function _gzipBuf(body) { try { return gzipSync(body, { level: 6 }); } catch { r
 // HEADERS: text/calendar, cacheable for five minutes by anyone (it is public), the strict no-source CSP, no
 // cookie of any kind, CORS open (a website builder's script may fetch it cross-origin; that is the use).
 const PUBLIC_CSP = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
+// The widget's own CSP is the same no-source policy plus 'self' on script-src, so the ONE script tag it is
+// loaded as may run, and nothing else may load — no CDN, no font, no image, matching the file's own promise
+// (public-widget.mjs's module comment, design/widget-mock/README.md's "no-third-party rule").
+const WIDGET_CSP = "default-src 'none'; script-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
 const PUBLIC_ROUTE = /^\/public\/(npub1[a-z0-9]{58})\/(?:calendar\.ics|e\/([A-Za-z0-9_-]{1,64})\.ics)$/;
+const WIDGET_ROUTE = /^\/public\/(npub1[a-z0-9]{58})\/widget\.js$/;
+// Built once — the script is identical for every church, so there is nothing per-church to rebuild per request.
+let _widgetJs = null;
+function widgetJs() { if (_widgetJs === null) _widgetJs = buildWidgetScript(); return _widgetJs; }
 // PHASE 2: "how far ahead the feed runs" (Settings → Your website). Applied to the WHOLE-FEED route only —
 // a direct `/e/<id>.ics` address is a link someone was given on purpose and keeps working regardless, the
 // same as an opted-out id already does not get a special case there. Calendar-month arithmetic (not a fixed
@@ -5783,6 +5792,24 @@ function horizonCutoff(months, at = new Date()) {
 function publicFeed(req, res, route) {
   const notFound = () => { res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store', 'Content-Security-Policy': PUBLIC_CSP, ...SEC_HEADERS }); res.end('not found'); };
   if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405, { 'Allow': 'GET, HEAD', 'Content-Security-Policy': PUBLIC_CSP, ...SEC_HEADERS }); res.end(); return; }
+  // THE WIDGET SCRIPT. Same rules as the feed itself: the church this route names must exist on this relay
+  // and have the calendar switch on, or it is the identical 404 as everything else here — a church that
+  // switches sharing off gets a script tag that quietly fails to fetch, not one still serving its calendar.
+  const wm = WIDGET_ROUTE.exec(route);
+  if (wm) {
+    const wcp = toHexPub(wm[1]);
+    if (!wcp || !CHURCH_PUBS.has(wcp)) return notFound();
+    const wshare = SHARE_BY.get(wcp);
+    if (!wshare || !wshare.calendar) return notFound();
+    const wbody = Buffer.from(widgetJs(), 'utf8');
+    res.writeHead(200, {
+      'Content-Type': 'text/javascript; charset=utf-8', 'Content-Length': wbody.length,
+      'Cache-Control': 'public, max-age=300', 'Content-Security-Policy': WIDGET_CSP,
+      'Access-Control-Allow-Origin': '*', ...SEC_HEADERS,
+    });
+    res.end(req.method === 'HEAD' ? undefined : wbody);
+    return;
+  }
   const m = PUBLIC_ROUTE.exec(route);
   if (!m) return notFound();
   const cp = toHexPub(m[1]);
