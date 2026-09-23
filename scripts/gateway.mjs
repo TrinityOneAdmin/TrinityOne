@@ -2801,7 +2801,7 @@ const EVENT_AUDIENCE = new Map();   // eventId -> { cp, gid, by } recorded when 
 // own author and d-tag (memory: ingest-rules-cannot-consult-hydrated-maps — these replay on /import before any
 // roster is known). Read by publicFeed() below and by nothing else. Absent means "not shared": a church with
 // no share: document, or one whose switch is off, serves nothing at /public/…, which is the default.
-const SHARE_BY = new Map();     // churchpub -> { calendar: bool, optOut: Set(eventId) }
+const SHARE_BY = new Map();     // churchpub -> { calendar: bool, optOut: Set(eventId), horizonMonths, calName, detail }
 const PUBEVENTS = new Map();    // churchpub -> Map(eventId -> the noticeboard fields, as publicEventFields() admits them)
 
 // ---- marketing email capture (website "Stay updated" form) — opt-in list, stored locally ----
@@ -3295,7 +3295,12 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     else {
       let c = null; try { c = JSON.parse(e.content); } catch {}
       const optOut = new Set((c && Array.isArray(c.optOut) ? c.optOut : []).map(x => String(x)).filter(x => /^[A-Za-z0-9_-]{1,64}$/.test(x)));
-      SHARE_BY.set(e.pubkey, { calendar: !!(c && c.calendar === true), optOut });
+      // PHASE 2 FEED SETTINGS. Same rule as optOut: an unrecognised or missing value reads as the safe
+      // default rather than being trusted, since this branch also replays on /import with no roster read yet.
+      const horizonMonths = [3, 6, 12].includes(c && c.horizonMonths) ? c.horizonMonths : 6;
+      const calName = String((c && c.calName) || '').slice(0, 120);
+      const detail = (c && c.detail === 'short') ? 'short' : 'full';
+      SHARE_BY.set(e.pubkey, { calendar: !!(c && c.calendar === true), optOut, horizonMonths, calName, detail });
     }
   }
   else if (d.startsWith(PUBEVENT_D) && CHURCH_PUBS.has(e.pubkey)) {
@@ -5766,6 +5771,15 @@ function _gzipBuf(body) { try { return gzipSync(body, { level: 6 }); } catch { r
 // cookie of any kind, CORS open (a website builder's script may fetch it cross-origin; that is the use).
 const PUBLIC_CSP = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
 const PUBLIC_ROUTE = /^\/public\/(npub1[a-z0-9]{58})\/(?:calendar\.ics|e\/([A-Za-z0-9_-]{1,64})\.ics)$/;
+// PHASE 2: "how far ahead the feed runs" (Settings → Your website). Applied to the WHOLE-FEED route only —
+// a direct `/e/<id>.ics` address is a link someone was given on purpose and keeps working regardless, the
+// same as an opted-out id already does not get a special case there. Calendar-month arithmetic (not a fixed
+// day count), so "6 months" means the same thing a steward reading the setting would expect.
+function horizonCutoff(months, at = new Date()) {
+  const d = new Date(Date.UTC(at.getUTCFullYear(), at.getUTCMonth(), at.getUTCDate()));
+  d.setUTCMonth(d.getUTCMonth() + (Number.isFinite(months) ? months : 6));
+  return d.toISOString().slice(0, 10);
+}
 function publicFeed(req, res, route) {
   const notFound = () => { res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store', 'Content-Security-Policy': PUBLIC_CSP, ...SEC_HEADERS }); res.end('not found'); };
   if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405, { 'Allow': 'GET, HEAD', 'Content-Security-Policy': PUBLIC_CSP, ...SEC_HEADERS }); res.end(); return; }
@@ -5782,12 +5796,14 @@ function publicFeed(req, res, route) {
     const one = events.find(ev => ev.id === m[2]);
     if (!one) return notFound();                                  // opted out, deleted, or never public: all the same 404
     rows = [one];
+  } else {
+    rows = events.filter(ev => ev.date <= horizonCutoff(share.horizonMonths));   // (c) how far ahead
   }
   // The church's display name, from the kind-0 this relay already serves to anyone (canRead: a church's own
   // profile is public so that a person deciding whether to join can see its name).
   let name = '';
   try { const prof = store.query({ kinds: [0], authors: [cp], limit: 1 })[0]; if (prof) name = String(JSON.parse(prof.content || '{}').name || '').slice(0, 120); } catch {}
-  const body = Buffer.from(buildCalendar(rows, { name, uidScope: m[1] }), 'utf8');
+  const body = Buffer.from(buildCalendar(rows, { name, uidScope: m[1], calName: share.calName, detail: share.detail }), 'utf8');
   res.writeHead(200, {
     'Content-Type': 'text/calendar; charset=utf-8', 'Content-Length': body.length,
     'Cache-Control': 'public, max-age=300', 'Content-Security-Policy': PUBLIC_CSP,
