@@ -3465,9 +3465,17 @@ function _webNormalise(c) {
   // in both lists, and this console's event editor then drew "On the website" ticked over an event the
   // website did not show — the exact state F1 is about.
   //
-  // IT CHANGES NOTHING THE WEBSITE DOES, which is what makes it safe: _webDesired tests `optOut` first and
-  // `optOut` already won (round 2, M4). All it stops is the SCREEN, which reads `optIn`, contradicting the
-  // site, which reads `optOut`. The steward's next tick lifts the opt-out and puts the event back.
+  // WHAT A VISITOR SEES IS UNCHANGED, which is what makes it fail-safe: _webDesired tests `optOut` first
+  // and `optOut` already won (round 2, M4), so the site never showed the id either way, and the `event:`
+  // document itself is untouched. CORRECTED (AUDIT-feeds-round6-2026-09-23 F2): this file's own commit
+  // message for this change said the repair "changes nothing the website does … all it stops is the
+  // SCREEN" — false. Dropping the id from `optIn` on the way in makes `groupScoped` true in `_webSync`
+  // for it, same as the control's own press does, so an existing public COPY is now TOMBSTONED on the
+  // next sync where before it was left live-but-unserved. Measured: the same arriving document gives
+  // `tombstoned: []` before this repair and `tombstoned: ["trinityone/pubevent:<id>"]` after it. The
+  // direction is still fail-safe (a visitor gets 404 either way; nothing is destroyed but a stale relay
+  // copy), and the steward's next tick lifts the opt-out and puts the event back — but "changes nothing"
+  // overclaimed it.
   //
   // sermons/plans/address are phase 2/3: read as their defaults whatever an older or newer document says
   return { calendar: o.calendar === true, sermons: false, plans: false, optOut, optIn: _webIds(o.optIn).filter(x => !optOut.includes(x)), address: 'own' };
