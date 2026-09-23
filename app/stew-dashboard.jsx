@@ -9432,7 +9432,22 @@ const SETTINGS_GROUPS = [
   ['Infrastructure', [
     { k: 'relays', n: 'Relays', d: 'Where your church publishes' },
     { k: 'add-relay', n: 'Add a relay', d: 'By address, auto-find or name' },
-    { k: 'history', n: 'Move or copy history', d: 'Copy across, keep in sync' },
+    // `owner: true` — BOTH CARDS ON THIS PAGE NEED THE CHURCH'S OWN KEY, measured, not assumed.
+    // d126298 deliberately left this row unmarked on the stated ground that "its other card is 'Copy
+    // across' … Hiding the page would take that away from a delegate to fix a different control", and
+    // explicitly did not claim a delegate could complete a clone. THEY CANNOT. `cloneFromRelay` authorises
+    // both ends with `_nip98`, which signs with THIS console's own key and tags the church; the relay's
+    // `_exportAuth` (scripts/gateway.mjs) ends `return cp && ev.pubkey === cp ? cp : null` — owner-only —
+    // and /export, /export-media and /import all use it. MEASURED, the shipped gate lifted and run against
+    // the proof _nip98 actually mints: DELEGATED -> null on all three, OWNER -> the church.
+    // (AUDIT-steward-doc-rules-round4-2026-09-22, finding F3.)
+    //
+    // So the page was showing a delegate one padlocked card and one unmarked control that answers
+    // "✗ Couldn't read your church's data from that relay (401 — is it the right relay for this church?)" —
+    // blaming them for picking the wrong relay over a refusal that is structural
+    // ([[fix-the-control-not-the-label]]). Marking the ROW is the house shape and covers both cards and any
+    // third: a page filtered out here cannot be opened at all, so the list and the detail cannot disagree.
+    { k: 'history', n: 'Move or copy history', d: 'Copy across, keep in sync', owner: true },
     { k: 'ownbox', n: 'Run your own box', d: 'Self-host with the Suite' },
     { k: 'network', n: 'Network', d: 'Belong to a group of churches' },
   ]],

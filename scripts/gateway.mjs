@@ -5938,10 +5938,13 @@ function serveStatic(req, res) {
     res.writeHead(405, H); res.end('{"error":"method"}'); return;
   }
   // church-data backup: stream every event this relay holds for the caller's church as JSONL (a self-verifying,
-  // importAll()-restorable archive). NIP-98-authed to the church key or a steward of that church.
+  // importAll()-restorable archive). NIP-98-authed to the CHURCH KEY ONLY — _exportAuth's last line is
+  // `return cp && ev.pubkey === cp ? cp : null`, and it says why: this streams the whole corpus, safeguarding
+  // lists included. This comment said "or a steward of that church" until 2026-09-23; _exportAuth was narrowed
+  // to owner-only before that and the three route comments were not moved with it (AUDIT round 4, F3).
   if (route === '/export') {
     const cp = _exportAuth(req, req.headers['host'] || '', route);
-    if (!cp) { res.writeHead(401, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }); res.end('unauthorized: needs a fresh NIP-98 proof signed by the church key or a steward, bound to this URL'); return; }
+    if (!cp) { res.writeHead(401, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }); res.end('unauthorized: needs a fresh NIP-98 proof signed by the church key, bound to this URL'); return; }
     const events = store.exportChurch(cp);
     res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Content-Disposition': 'attachment; filename="trinityone-church-backup.jsonl"', 'Cache-Control': 'no-store', ...SEC_HEADERS });
     res.write(JSON.stringify({ _manifest: { format: 'trinityone-church-backup', version: 1, church: cp, exportedAt: Math.floor(Date.now() / 1000), events: events.length, relay: ORIGIN } }) + '\n');
@@ -6045,13 +6048,13 @@ function serveStatic(req, res) {
   }
   // RESTORE / CLONE (the import engine): take a church's backup (decrypted JSONL of signed events, streamed by the
   // client) and import it — bootstrapping a fresh relay or repopulating one after loss. NIP-98-authed to the church
-  // key (which may also REGISTER a not-yet-known church here — same trust as self-registration) or a steward of an
-  // already-known church. Every event is signature-verified before it's stored, so a compromised file can't inject
+  // key ONLY (which may also REGISTER a not-yet-known church here — same trust as self-registration); _exportAuth
+  // is owner-only, so a delegated steward's own key is refused here as it is at /export. Every event is signature-verified before it's stored, so a compromised file can't inject
   // forgeries; the church key vouches for attributing them to cp. Media blobs restore separately via PUT /blob.
   if (route === '/import' && req.method === 'POST') {
     const H = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' };
     const cp = _exportAuth(req, req.headers['host'] || '', route);
-    if (!cp) { res.writeHead(401, H); res.end('{"error":"unauthorized: a fresh NIP-98 proof by the church key (or a steward) bound to /import"}'); return; }
+    if (!cp) { res.writeHead(401, H); res.end('{"error":"unauthorized: a fresh NIP-98 proof by the church key, bound to /import"}'); return; }
     const chunks = []; let n = 0, tooBig = false;
     req.on('data', (c) => { if (tooBig) return; n += c.length; if (n > MAX_IMPORT) { tooBig = true; try { res.writeHead(413, H); res.end('{"error":"import too large"}'); } catch {} req.destroy(); return; } chunks.push(c); });   // respond BEFORE destroy — destroy skips 'end', so a deferred 413 would hang the request (→ 502)
     req.on('end', () => {
