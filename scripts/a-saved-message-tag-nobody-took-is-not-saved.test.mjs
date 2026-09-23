@@ -1032,6 +1032,27 @@ test('A BLIP IS NOT A RULE: a media key nobody could deliver is tried again, and
     're-anchor: the failure reached no screen at all, so the silence asserted above is the wrong kind');
 });
 
+test('…AND NEITHER IS THE SHIPPED RELAY’S OWN "error:" — full disk, or a skewed clock', async () => {
+  // AUDIT-steward-doc-rules-round5-2026-09-23, finding 1. NIP-01 reserves `error:` for its one
+  // unstructured, TRANSIENT catch-all, and the shipped relay uses it for exactly that: a full disk /
+  // read-only volume (scripts/gateway.mjs:7691) and a skewed device clock (:7726). The relay DID speak —
+  // this goes through the REJECTED half of publish(), same as a genuine refusal — but it is not a rule
+  // that will refuse the same event again, so it must not stick any better than an unopenable socket does.
+  const p = await runMediaKeyForReal([
+    { kind: 'refused', reason: 'error: relay storage unavailable — nothing was saved' },
+    { kind: 'ok' },
+  ]);
+  assert.deepEqual(p.attempts, ['REFUSED', 'OK'],
+    'A FULL DISK IS NOW A PERMANENT RULE. Freeing the disk (or fixing the clock) never asks again — this ' +
+    'church’s media key stays unwrapped for those members for ever. Attempts: ' + JSON.stringify(p.attempts));
+  assert.deepEqual(Object.keys(p.state.docKeys || {}).sort(), ['CP', 'm1', 'm2'],
+    'the retry did not land, so nothing was recorded: ' + JSON.stringify(p.state.docKeys));
+  assert.equal(p.state.refused, null, 'a transient relay error was remembered as a rule');
+  assert.deepEqual(p.banners, [],
+    'A FULL DISK RAISED THE CHURCH-KEY BANNER, blaming the one console that holds the key for a box with ' +
+    'no free space: ' + JSON.stringify(p.banners));
+});
+
 test('…and a GENUINE refusal is still remembered, said once, through the real publish()', async () => {
   // The control. Without this row, a "fix" that simply never remembered anything would pass everything
   // above while restoring the unbounded re-seal-and-republish that 177cfb9 was written to stop.

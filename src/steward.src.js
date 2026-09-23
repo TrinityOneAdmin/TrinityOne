@@ -2498,10 +2498,23 @@ async function publish(evt, opts) {
     // THE SIGNAL, and why it is trustworthy: these are NIP-01's OK=false reasons — the machine-readable
     // prefixes a relay puts in front of its own refusal. `connection failure` is deliberately NOT among
     // them, because nostr-tools RESOLVES an unopenable socket with that string while REJECTING a real
-    // OK=false, so it is the vendored library talking, never a box's verdict. This is the same list, with
-    // the same meaning, as `_PUB_REFUSED` in src/fellowship.src.js, where the member app's own refusal
-    // banner already turns on it ("TRUE ONLY IF SOME BOX READ THIS EVENT AND SAID NO"); false there and
-    // here means WE DO NOT KNOW, which is the safe answer to retry on.
+    // OK=false, so it is the vendored library talking, never a box's verdict.
+    //
+    // NEITHER IS `error:` — AUDIT-steward-doc-rules-round5-2026-09-23 finding 1. NIP-01 reserves `error:`
+    // for its one unstructured, TRANSIENT catch-all, and the shipped relay uses it for exactly that: a full
+    // disk / read-only volume (scripts/gateway.mjs:7691, "relay storage unavailable — nothing was saved")
+    // and a skewed device clock (:7726, "timestamp is too far in the future"). MEASURED: one `error:` on an
+    // OWNER's console permanently stopped ensureMediaKeyForMembers asking again — freeing the disk or
+    // fixing the clock never cleared the memo, because a refused document never becomes a `have` and the
+    // guard above it never re-fires. `error:` is a box that spoke, but never a rule that will refuse the
+    // SAME event again, which is the only thing this memo is allowed to remember.
+    //
+    // NOT the same list as `_PUB_REFUSED` in src/fellowship.src.js any more, and deliberately so: that list
+    // answers "did any box settle this, so the wording can say 'refused' instead of 'unconfirmed'?", fired
+    // once with no memo attached, so leaving `error:` in it never gets anyone stuck. This list answers "is
+    // this a rule that will refuse the same write again?", which gates a memo with a PERMANENT consequence
+    // (`_mediaKeyPushRefused` and its siblings) — the question `_PERMANENT` in src/fellowship.src.js already
+    // asks separately from `_PUB_REFUSED`, for the same reason.
     //
     // ⚠ WRITTEN INLINE, not hoisted to a module const, for the same reason the connection-failure prefix
     // above is: the tests LIFT this function out of the bundle and run it, where a name resolved from the
@@ -2512,7 +2525,7 @@ async function publish(evt, opts) {
     // `rate-limited` counts as a refusal here because a box did speak — that is the pre-existing behaviour
     // for that case and not a change; the cases F2 was actually about are (2) and (3), and they now retry.
     let _saidNo = false;
-    try { _saidNo = refused.some(r => /^(error|blocked|invalid|restricted|rate-limited|auth-required)/i.test(String((r && r.error) || ''))); } catch (x) {}
+    try { _saidNo = refused.some(r => /^(blocked|invalid|restricted|rate-limited|auth-required)/i.test(String((r && r.error) || ''))); } catch (x) {}
     // …and the relay's OWN WORDS with it, so a caller that reports the refusal can quote them instead of
     // inventing an explanation — the rule publishErrorMessage already follows in app/stew-dashboard.jsx.
     try { if (opts && typeof opts === 'object') { opts.refused = _saidNo; opts.reason = reason; } } catch (x) {}

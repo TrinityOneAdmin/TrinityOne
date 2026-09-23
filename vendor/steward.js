@@ -16717,7 +16717,7 @@ zoo`.split("\n");
       }
       let _saidNo = false;
       try {
-        _saidNo = refused.some((r) => /^(error|blocked|invalid|restricted|rate-limited|auth-required)/i.test(String(r && r.error || "")));
+        _saidNo = refused.some((r) => /^(blocked|invalid|restricted|rate-limited|auth-required)/i.test(String(r && r.error || "")));
       } catch (x) {
       }
       try {
