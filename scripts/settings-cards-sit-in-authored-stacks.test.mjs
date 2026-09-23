@@ -192,6 +192,7 @@ const CARDS_ON = {
   branding: ['DashBrandingPanel'],
   media: ['DashMediaPanel'],
   backup: ['DashBackup'],
+  website: ['DashWebsitePanel'],   // feat/church-website-feeds: the public calendar feed's switch and address
   // Both come out of DashFeaturesPanel, which owns their shared state; `show` picks which one it renders.
   features: ['DashFeaturesPanel'],
   rules: ['DashFeaturesPanel'],

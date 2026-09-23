@@ -798,6 +798,15 @@ function KeyDistributor() {
   React.useEffect(() => (window.Steward && window.Steward.subscribeMediaKey ? window.Steward.subscribeMediaKey() : undefined), []);
   // the church CARE key — same envelope, sealing the identifying half of care needs (H3)
   React.useEffect(() => (window.Steward && window.Steward.subscribeCareKey ? window.Steward.subscribeCareKey() : undefined), []);
+  // THE WEBSITE MIRROR RUNS WHILE THE CONSOLE IS OPEN, not only while Settings → Your website is on screen.
+  // The engine's reconciler (src/steward.src.js _webSync) writes the public copy of an event added today
+  // against a switch turned on yesterday, and tombstones a copy when its event is removed — but only while
+  // its three subscriptions are up. Started here, at the dashboard root, so a steward who never opens that
+  // page again still has a feed that follows the calendar. Keyed on the connection like the hooks above it:
+  // a returning socket does not re-issue its REQs. Owner-only in effect: the engine refuses to write in
+  // delegated mode, so on a delegate's console this only reads.
+  const _webConn = window.useStewardConn ? window.useStewardConn() : 0;
+  React.useEffect(() => (window.Steward && window.Steward.subscribeWebsiteShare ? window.Steward.subscribeWebsiteShare(() => {}, { restart: true }) : undefined), [_webConn]);
   // the church NAME key — the envelope members seal their display name under, so the relay (and any mirror
   // holding a copy of this church) stores ciphertext instead of a named roster. AUDIT-2026-07-27.
   React.useEffect(() => (window.Steward && window.Steward.subscribeNameKey ? window.Steward.subscribeNameKey() : undefined), []);
@@ -8550,6 +8559,155 @@ const CHATTAG_ICONS = ['pray', 'sparkle', 'heart', 'flame', 'hand', 'gift', 'mus
 const CHATTAG_ACCENTS = [['gold', 'var(--gold)'], ['sage', 'var(--sage)'], ['clay', 'var(--clay)'], ['sky', '#5360D6'], ['plum', '#C24B7A'], ['teal', '#2E8B8B']];
 const chatTagCss = (a) => (CHATTAG_ACCENTS.find(x => x[0] === a) || CHATTAG_ACCENTS[2])[1];
 const CHATTAG_PRAYER = { id: 'prayer', label: 'Prayer request', icon: 'pray', accent: 'gold' };
+// YOUR WEBSITE — the church's calendar on the site it already has. reference/DESIGN-embeddable-church-info.md,
+// phase 1: one switch, the address it is served from, the feed address with Copy. The per-event "Not on the
+// website" tick lives in the event editor (app/stew-schedule.jsx). Copy rule (owner, 2026-09-10): a short
+// label and one plain sentence; how it works belongs in help, not on this screen.
+//
+// WHAT THE SWITCH DOES, so the sentence under it is true: the engine (src/steward.src.js _webSync) writes a
+// plaintext copy of every event not ticked "Not on the website" while this is on, and tombstones every copy
+// when it goes off; the relay serves the copies at the address shown, to anyone, with no login. Rule 3:
+// nothing here is asserted by matching this file's text — the browser test drives the real switch.
+// WHAT "COULD NOT BE PUBLISHED" ACTUALLY MEANS, one short sentence per cause. Until 2026-09-22 there were
+// two sentences for four causes, and the one that ran three times out of four sent a church looking for a
+// name key it already held (audit R4): a damaged copy, and a document that unsealed perfectly but held no
+// event, both read as "sealed with a church key this console does not have". The engine
+// (src/steward.src.js _webWhyStuck) now names what happened; these are the words for it. `key` says what was
+// observed rather than naming a cause, because a wrong key and a byte flipped inside a whole payload fail
+// the identical check and cannot be told apart. Copy rule (owner, 2026-09-10): one plain sentence, no
+// instructions — what to DO about it belongs in help.
+const WEB_BLOCKED_WHY = {
+  // 'key' IS THE ONE CAUSE THAT IS NOT A DIAGNOSIS, and the sentence has to carry that. What was observed is
+  // that a whole, well-formed sealed payload did not open with any key this console holds. A key the church
+  // no longer has and a byte flipped inside the payload fail the identical MAC check and raise the identical
+  // error, so "damaged instead" is named in the same breath rather than sending a church after a key it is
+  // still holding (AUDIT-feeds-round3-2026-09-22 F2; the shape checks in src/steward.src.js _sealIsWhole
+  // catch nearly every truncated copy before this, and this covers what they cannot).
+  key: ['no church key on this console opened it — the copy may be damaged instead.', 'no church key on this console opened them — the copies may be damaged instead.'],
+  damaged: ['its saved copy is damaged.', 'their saved copies are damaged.'],
+  contents: ['it opened, but there was no event inside.', 'they opened, but there was no event inside.'],
+  shape: ['its details could not be read.', 'their details could not be read.'],
+  mixed: ['its details could not be read.', 'they could not be read, for more than one reason.'],
+};
+function DashWebsitePanel({ church }) {
+  const [share, setShare] = React.useState(null);   // null until the engine has answered
+  const [busy, setBusy] = React.useState(false);
+  const [msg, setMsg] = React.useState('');
+  const [copied, setCopied] = React.useState('');
+  React.useEffect(() => (window.Steward.subscribeWebsiteShare ? window.Steward.subscribeWebsiteShare(setShare) : undefined), []);
+  const known = !!(share && share.known);
+  const on = !!(share && share.calendar);
+  const blocked = (share && share.blocked) || 0;
+  const whyBlocked = (WEB_BLOCKED_WHY[(share && share.blockedWhy)] || WEB_BLOCKED_WHY.shape)[blocked === 1 ? 0 : 1];
+  const held = (share && share.held) || 0;
+  const heldIds = (share && share.heldIds) || [];
+  const url = (window.Steward.websiteFeedUrl && window.Steward.websiteFeedUrl()) || '';
+  const toggle = async () => {
+    if (busy || !known) return;
+    setBusy(true); setMsg('');
+    let ok = false;
+    try { ok = await Promise.resolve(window.Steward.setWebsiteShare({ calendar: !on })); } catch (e) { ok = false; }
+    setBusy(false);
+    if (!ok) setMsg('Not saved — the relay didn’t accept the change.');
+  };
+  // THE CONTROL BESIDE THE SENTENCE (AUDIT-feeds-round4-2026-09-22 F1). Until this existed the page told a
+  // church "1 of them is still on your website" and offered nothing that would take it off: an event this
+  // console cannot open has no date, so it is on no day of the calendar grid and its editor — where the
+  // "Not on the website" tick lives — cannot be reached at all. The only lever left was the switch above,
+  // which takes the WHOLE calendar down. This writes the same tick for the ids the engine named, which the
+  // relay honours at serve time, so it needs no key and opens nothing. Reversible: the tick comes off from
+  // the event itself once a key can read it again, and the copy is never destroyed.
+  const takeOff = async () => {
+    if (busy || !known || !heldIds.length) return;
+    setBusy(true); setMsg('');
+    let ok = false;
+    try { ok = await Promise.resolve(window.Steward.setWebsiteHeldMany(heldIds)); } catch (e) { ok = false; }
+    setBusy(false);
+    // memory: fix-the-control-not-the-label — never celebrate on the line after a call that can refuse.
+    setMsg(ok ? (heldIds.length === 1 ? 'Taken off — your website no longer shows it.' : 'Taken off — your website no longer shows them.')
+      : 'Not saved — the relay didn’t accept the change.');
+  };
+  // copyText, not navigator.clipboard: the console runs on plain http on a LAN box, where the clipboard API is
+  // undefined, and copyText already carries the execCommand fallback that copes with that (see its note).
+  const copy = () => { setCopied(copyText(url) ? 'Copied' : 'Couldn’t copy — select the address and copy it'); setTimeout(() => setCopied(''), 2500); };
+  const row = (checked) => ({ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 11, borderRadius: 11, border: '1px solid var(--line)', background: checked ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface-2)' });
+  return (
+    <Panel title="Your website">
+      <div onClick={toggle} className="set-row" style={{ ...row(on), opacity: known ? 1 : .6 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontWeight: 700, fontSize: 14.5 }}>Share our calendar on our website</div>
+          <div className="set-desc" style={{ color: 'var(--ink-2)' }}>{on ? 'On — whole-church events are on a public feed, except any ticked “Not on the website”; a group’s event only if you tick it on.' : 'Off — nothing about your calendar leaves the app.'}</div>
+        </div>
+        <button onClick={(e) => { e.stopPropagation(); toggle(); }} disabled={busy || !known} aria-label="Share our calendar on our website" role="switch" aria-checked={on} title="Put your events on a feed your website can show" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: on ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
+          <span style={{ position: 'absolute', top: 3, left: on ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
+        </button>
+      </div>
+      {msg ? <div role="alert" style={{ marginTop: 8, fontSize: 12.5, fontWeight: 600, color: 'var(--clay-ink)' }}>{msg}</div> : null}
+      {/* AN EVENT THE MIRROR COULD NOT PUBLISH IS SAID HERE. One event this console cannot open used to park
+          the whole mirror for the session while this switch went on reading "On" (audit F3). It no longer
+          does — the rest are published — but a church whose old name key is gone would otherwise never learn
+          why one event is missing from its website. The engine only reports after several retries, because
+          the key is usually merely late. */}
+      {blocked ? (
+        <div role="status" style={{ marginTop: 8, fontSize: 12.5, fontWeight: 600, color: 'var(--clay-ink)' }}>
+          {blocked === 1 ? '1 event could not be published' : blocked + ' events could not be published'} — {whyBlocked}
+        </div>
+      ) : null}
+      {/* AND WHAT IS STILL OUT THERE. The engine leaves a copy it cannot classify ON the website rather than
+          emptying a church's public calendar because a console is slow, offline or mid-restore
+          (AUDIT-feeds-round3-2026-09-22 F1, where an empty key ring withdrew five of five whole-church
+          events). That decision is only honest if the church is told which way it fell, so this line is the
+          other half of the one above: what could not be published, and what is still published anyway. */}
+      {held ? (
+        <div role="status" style={{ marginTop: 6, fontSize: 12.5, fontWeight: 600, color: 'var(--ink-2)' }}>
+          {held === 1 ? '1 of them is still on your website — this console could not open it to check.'
+            : held + ' of them are still on your website — this console could not open them to check.'}
+        </div>
+      ) : null}
+      {/* NO IDS, NO CONTROL — rather than a greyed-out button a steward cannot press and is never told why.
+          An engine older than the ids (or one that has not reported yet) simply does not draw this. */}
+      {held && heldIds.length ? (
+        <button onClick={takeOff} disabled={busy || !known} aria-label="Take off our website"
+          title="Your website stops showing them. Put the tick back from the event itself once a church key can open it again."
+          className="sk-btn sk-btn--ghost" style={{ marginTop: 6, padding: '7px 13px', fontSize: 12.5, opacity: (busy || !known) ? .5 : 1 }}>
+          {held === 1 ? 'Take it off our website' : 'Take them off our website'}
+        </button>
+      ) : null}
+
+      <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', margin: '14px 0 6px' }}>Served from</div>
+      <div role="radiogroup" aria-label="Served from" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 12px', borderRadius: 11, border: '1px solid var(--clay)', background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', cursor: 'default' }}>
+          <input type="radio" name="website-address" value="own" checked readOnly aria-label="Our own relay" style={{ marginTop: 3 }} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontWeight: 700, fontSize: 14 }}>Our own relay</div>
+            <div className="set-desc" style={{ color: 'var(--ink-2)' }}>Anyone who opens the address can see where your church’s data is kept.</div>
+          </div>
+        </label>
+        <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 12px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface-2)', opacity: .6, cursor: 'not-allowed' }}>
+          <input type="radio" name="website-address" value="hosted" disabled aria-label="Via app.trinityone.church (coming)" style={{ marginTop: 3 }} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontWeight: 700, fontSize: 14 }}>Via app.trinityone.church <span style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', marginLeft: 6 }}>Coming</span></div>
+            <div className="set-desc" style={{ color: 'var(--ink-2)' }}>Shows only that you use TrinityOne.</div>
+          </div>
+        </label>
+      </div>
+
+      {on && url ? (
+        <React.Fragment>
+          <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', margin: '14px 0 6px' }}>Feed address</div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <input readOnly value={url} aria-label="Feed address" onFocus={e => e.target.select()} style={{ flex: 1, minWidth: 220, height: 36, padding: '0 10px', borderRadius: 9, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink-2)', fontFamily: 'var(--mono)', fontSize: 12 }} />
+            <button onClick={copy} className="sk-btn sk-btn--clay" aria-label="Copy feed address" style={{ padding: '8px 14px', fontSize: 13 }}><Icon name="copy" size={14} color="var(--on-clay)" /> Copy</button>
+            {copied ? <div role="status" style={{ fontSize: 12.5, fontWeight: 600, color: copied === 'Copied' ? 'var(--sage-ink)' : 'var(--clay-ink)' }}>{copied}</div> : null}
+          </div>
+          <div className="set-desc" style={{ color: 'var(--ink-3)', marginTop: 6 }}>Paste it into your website’s calendar block, or subscribe to it from a calendar app.</div>
+        </React.Fragment>
+      ) : null}
+    </Panel>
+  );
+}
+window.DashWebsitePanel = DashWebsitePanel;
+
 function DashChatTagsPanel({ church }) {
   const [tags, setTags] = React.useState(null);   // null = still loading; else the editable list
   const [editIdx, setEditIdx] = React.useState(-1);   // which row's icon/colour picker is expanded (-1 = none)
@@ -9501,6 +9659,9 @@ const SETTINGS_GROUPS = [
     { k: 'identity', n: 'Church identity', d: 'Name, picture, joining handle' },
     { k: 'branding', n: 'Branding', d: 'Colours and church mark' },
     { k: 'media', n: 'Video & audio', d: 'The Watch and Listen tabs' },
+    // OWNER-ONLY: the relay accepts the share: document from the church key alone (gateway.mjs accept()), and
+    // the console mirrors the public copies only in owner mode — a delegate's switch would flip nothing.
+    { k: 'website', n: 'Your website', d: 'Your calendar on your own site', owner: true },
     { k: 'backup', n: 'Backup & data', d: 'Export, import and recovery' },
   ]],
   ['People', [
@@ -9926,6 +10087,7 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
       {open === 'branding' ? <DashBrandingPanel church={church} /> : null}
       {open === 'media' ? <DashMediaPanel church={church} /> : null}
       {open === 'backup' ? <DashBackup /> : null}
+      {open === 'website' ? <DashWebsitePanel church={church} /> : null}
 
       {/* Giving and Practical care used to be cards of their own here. They are rows inside "Congregation
           features → Extras" now, which is where the rest of the church's feature switches live.

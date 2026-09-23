@@ -130,6 +130,14 @@ export const DOC_TYPES = Object.freeze({
   // sees on a message, which is the same job as posting into a broadcast channel.
   'trinityone/msgtags':       { write: 'steward',   read: 'members', scope: 'tag',    note: 'steward-defined chat tag labels; church-wide and not sensitive. Church key, its network, or a steward with CONTENT' },
 
+  // ── the church's website (reference/DESIGN-embeddable-church-info.md, phase 1) ──────────────────────
+  // Both are church-key-only and PLAINTEXT on purpose: the relay must read them to build the public feed.
+  // Neither is served to an anonymous WebSocket — canRead has no rule for them, so they fall to the
+  // default-deny members path like any other church document. What IS public is the HTTP route
+  // /public/<npub>/calendar.ics, and only while share:.calendar is true.
+  'trinityone/share:':        { write: 'church',    read: 'members', scope: 'suffix', note: 'd=share:<churchpub>, {calendar, sermons, plans, optOut:[ids], address}. The per-TYPE switches for the public feeds and the per-ITEM opt-outs. Owner-only, like voice:/stewards:, and it names its own church in the d-tag so a co-tenant church cannot write it for another' },
+  'trinityone/pubevent:':     { write: 'church',    read: 'members', scope: 'author', note: 'the PLAINTEXT public copy of one event: {title, date, time, where, blurb, recur, day} — the noticeboard fields and nothing else (never a group, an image, an attendee). event: itself is sealed under the church name key so the relay cannot read it; the console writes this copy while the calendar switch is on and tombstones it on opt-out, delete or switch-off. Keyed by (author, d), so one church cannot overwrite another\'s' },
+
   // ── membership and joining ───────────────────────────────────────────────────────────────────────────
   'trinityone/member:':       { write: 'member',    read: 'members', scope: 'suffix', note: 'a member\'s own join document' },
   'trinityone/joinpolicy:':   { write: 'steward',   read: 'public',  scope: 'suffix', note: 'THE ONE PUBLIC DOC — a not-yet-member must read it before joining' },
@@ -442,6 +450,8 @@ export const D = Object.freeze({
   NOPHOTO:        k('trinityone/nophoto:'),
   MEDIAKEY:       k('trinityone/mediakey:'),
   JOINPOLICY:     k('trinityone/joinpolicy:'),
+  SHARE:          k('trinityone/share:'),
+  PUBEVENT:       k('trinityone/pubevent:'),
   ADMITTED:       k('trinityone/admitted:'),
   RESEAT:         k('trinityone/reseat:'),
   // Who signs what the church sends — a display by-line, church-signed. Deliberately its OWN document rather

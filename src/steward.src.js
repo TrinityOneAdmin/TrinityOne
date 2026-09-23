@@ -229,6 +229,12 @@ function _openChurchDoc(content) {
   for (const k of _nameKeyRing) { try { return JSON.parse(nip44d(ct, _unhex(k))); } catch (e) {} }
   return null;
 }
+// HAS THE KEY RING ARRIVED AT ALL? The third state _openChurchDoc cannot express: it answers `null` both for
+// "no key we hold opens this" and for "we hold no keys yet", and the ring starts EMPTY on every boot and is
+// filled asynchronously by subscribeNameKey. A caller that treats the two as one thing is reasoning from a
+// value that has not arrived (memory: cached-paints-before-authority-arrives). The API method below has
+// exposed this since the module shipped; this is the same question asked from inside.
+function _nameKeyReady() { return _nameKeyRing.length > 0; }
 
 const NAME_D = 'trinityone/name:';         // a member's own display name for this church, sealed under it
 const CLEARANCE_D = 'trinityone/clearance:';   // a member's OWN safeguarding status, NIP-44 sealed to them
@@ -353,6 +359,10 @@ let _mediaKeyPushRefused = null;
 let _mediaKeyChecked = false;    // set only from subscribeMediaKey's oneose — see the mint gate                   // the latest media-key doc's wrapped-per-member map (to detect members not yet keyed)
 async function _sha256hex(u8) { const d = await crypto.subtle.digest('SHA-256', u8); return Array.from(new Uint8Array(d)).map(b => b.toString(16).padStart(2, '0')).join(''); }
 const JOINPOLICY_D = 'trinityone/joinpolicy:'; // join policy {approval:bool}, d=joinpolicy:<churchpub>
+// THE CHURCH'S WEBSITE (reference/DESIGN-embeddable-church-info.md, phase 1). Both PLAINTEXT on purpose and
+// church-key-only: the relay must read them to serve /public/<npub>/calendar.ics. See _webSync below.
+const SHARE_D = 'trinityone/share:';           // the switches + per-item opt-outs, d=share:<churchpub>
+const PUBEVENT_D = 'trinityone/pubevent:';     // the public copy of ONE event — noticeboard fields only, d=pubevent:<eventId>
 const ADMITTED_D = 'trinityone/admitted:';   // approved-members allowlist (when approval is on), d=admitted:<churchpub>
 const RESEAT_D = 'trinityone/reseat:';       // church-vouched "the member who was <old> is now <new>", d=reseat:<churchpub>
 // The capability map from the live roster: { "<steward pubkey>": ["finance", …] }. A steward who does not
@@ -3491,6 +3501,487 @@ function _connectedRelays() {
 // was failing the release gate one run in five. AUDIT-2026-07-29 S5.
 let _evtSeq = 0;
 
+// ════════════ THE CHURCH'S WEBSITE — the public calendar feed ════════════
+// reference/DESIGN-embeddable-church-info.md, phase 1. A church that switches "Share our calendar on our
+// website" on gets a feed at <its relay>/public/<npub>/calendar.ics, built by the relay.
+//
+// WHY THE CONSOLE WRITES A SECOND COPY OF EVERY EVENT. publishEvent() seals an event under the church name
+// key, so the relay holds ciphertext and cannot build a feed from it — the design doc assumed it could. The
+// relay therefore serves PLAINTEXT `pubevent:<id>` copies, and this console is what writes them: the
+// noticeboard fields only (title, date, time, place, note, repeat), never the group, the image, an RSVP or
+// an accent colour. "Would the church pin it to the noticeboard outside?" is the whole test.
+//
+// HOW THEY STAY IN STEP — a reconciler, not a hook on each save. _webSync() compares three things this
+// console already watches: the share: document (the switch + the ids ticked "Not on the website"), the
+// church's own calendar (opened with the name key), and the copies the relay currently holds. It publishes
+// a copy where one is missing or stale, and tombstones one that should no longer exist. So an event edited
+// by a delegated steward on another console, a switch flipped on a second machine, a copy that failed to
+// land — all converge the next time an owner console is open. It runs ONLY in owner mode (the relay accepts
+// these from the church key alone), only after all three streams have reached EOSE (a copy is never
+// tombstoned on a half-loaded calendar), and never tombstones while an event is locked (the name key is
+// late: a locked event is "unreadable", not "gone").
+//
+// WHAT IT DOES NOT DO, said plainly: it does not run on a phone-installed steward console (that runs on the
+// community pool with the same code — it does run there); it does not mirror while the console is closed;
+// and a delegated steward cannot flip the switch or tick an event (the Settings page is owner-only and the
+// tick is hidden for them).
+//
+// A GROUP'S EVENT IS NOT ON THE WEBSITE UNLESS A STEWARD PUT IT THERE — the opposite default from a
+// whole-church event, and the owner's decision of 2026-09-22 (audit F2). The relay's own read gate withholds
+// an event tagged to a room the church has not marked child-safe from that church's minors, because "the
+// title and the place are the disclosure"; the first mirror published exactly that to anyone holding the
+// npub. So: `optOut` holds the whole-church events a steward ticked OFF, and `optIn` the GROUP events a
+// steward ticked ON. Two lists rather than one because the DEFAULT differs, and a single list could not say
+// which default an absent id falls under.
+const WEB_DEFAULT = Object.freeze({ calendar: false, sermons: false, plans: false, optOut: [], optIn: [], address: 'own' });
+const WEB_ID_OK = /^[A-Za-z0-9_-]{1,64}$/;
+const _webIds = (v) => [...new Set((Array.isArray(v) ? v : []).map(x => String(x)).filter(x => WEB_ID_OK.test(x)))];
+function _webNormalise(c) {
+  const o = (c && typeof c === 'object') ? c : {};
+  const optOut = _webIds(o.optOut);
+  // AN ID IN BOTH LISTS IS DROPPED FROM `optIn` ON THE WAY IN, not only on the way out (the audit of the
+  // round-5 F1 fix, finding 1). The three writers below keep the two lists apart, but this console is not
+  // the only thing that writes the document: a steward console of an OLDER build writes `optIn` alone, and
+  // this product ships TWO apks, so one church running one console of each is the ordinary rollout state,
+  // not a contrivance. Measured with the 81a98f8 bundle standing in as the second console: the id came back
+  // in both lists, and this console's event editor then drew "On the website" ticked over an event the
+  // website did not show — the exact state F1 is about.
+  //
+  // WHAT A VISITOR SEES IS UNCHANGED, which is what makes it fail-safe: _webDesired tests `optOut` first
+  // and `optOut` already won (round 2, M4), so the site never showed the id either way, and the `event:`
+  // document itself is untouched. CORRECTED (AUDIT-feeds-round6-2026-09-23 F2): this file's own commit
+  // message for this change said the repair "changes nothing the website does … all it stops is the
+  // SCREEN" — false. Dropping the id from `optIn` on the way in makes `groupScoped` true in `_webSync`
+  // for it, same as the control's own press does, so an existing public COPY is now TOMBSTONED on the
+  // next sync where before it was left live-but-unserved. Measured: the same arriving document gives
+  // `tombstoned: []` before this repair and `tombstoned: ["trinityone/pubevent:<id>"]` after it. The
+  // direction is still fail-safe (a visitor gets 404 either way; nothing is destroyed but a stale relay
+  // copy), and the steward's next tick lifts the opt-out and puts the event back — but "changes nothing"
+  // overclaimed it.
+  //
+  // sermons/plans/address are phase 2/3: read as their defaults whatever an older or newer document says
+  return { calendar: o.calendar === true, sermons: false, plans: false, optOut, optIn: _webIds(o.optIn).filter(x => !optOut.includes(x)), address: 'own' };
+}
+// THE TWO LISTS MUST NEVER HOLD THE SAME ID (AUDIT-feeds-round5-2026-09-22 F1). `optOut` holds the
+// whole-church events a steward ticked OFF; `optIn` the GROUP events a steward ticked ON. An id in both is
+// not a state a church can mean, and it was reachable: the Settings control writes `optOut` for ids it
+// cannot open, including a group event sitting in `optIn`. _webDesired then answered "off" for ever —
+// measured five steps deep on the shipped engine — while the event editor went on drawing a ticked box,
+// because the editor reads `optIn` and the website reads `optOut` first.
+//
+// Every writer of either list on THIS build goes through here, rather than making _webDesired guess which of
+// two contradictory statements a church meant. Callers, all three of them: setWebsiteHeld,
+// setWebsiteHeldMany, setWebsiteShown. This is not the only place the invariant can be broken — a console
+// of an older build writes `optIn` alone — so _webNormalise above repairs a document on the way IN as well.
+//
+// It resolves true WITHOUT WRITING when neither list actually moves (the old per-setter "nothing to change"
+// shortcut, which each of the three had its own half of — and setWebsiteShown's half is precisely what made
+// its tick a silent no-op in the F1 case).
+function _webOneList(st, w, next) {
+  const same = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
+  if (same(next.optOut, w.share.optOut) && same(next.optIn, w.share.optIn || [])) return Promise.resolve(true);
+  return st.setWebsiteShare(next);
+}
+// The copy's body, with a FIXED key order so two consoles produce byte-identical content for the same event —
+// that equality is what stops the reconciler republishing on every boot.
+function _webCopyBody(ev) {
+  const recur = (ev.recur === 'weekly' || ev.recur === 'fortnightly' || ev.recur === 'monthly') ? ev.recur : '';
+  return JSON.stringify({
+    title: String(ev.title || '').slice(0, 200), date: String(ev.date || '').slice(0, 10), time: String(ev.time || '').slice(0, 5),
+    where: String(ev.where || '').slice(0, 200), blurb: String(ev.blurb || '').slice(0, 2000),
+    recur, day: (recur && typeof ev.day === 'number') ? ev.day : null,
+  });
+}
+// WHAT THIS CONSOLE CAN STILL TELL ABOUT AN EVENT IT CAN NO LONGER OPEN — which is almost nothing, and the
+// withdrawal below is scoped to the part that is not nothing. A group id lives in the SEALED document and
+// never in the public copy, so the moment the key ring cannot open a document, "is this a group's event?"
+// has no answer from the document, from the public copy, or from the relay. The one honest source left is
+// what this console SAW while it could read: the set of ids it has opened and found a `groupId` on, kept per
+// church in localStorage so the answer survives the restart that usually accompanies a key going missing.
+//
+// An id NOT in this map is NOT "whole-church" — it is UNKNOWN, and unknown is left on the website and said
+// on the Settings page (see _webSync). That is the whole point: a church that has never opened an event on
+// this machine, or a console booting into a broken key state, remembers nothing and therefore withdraws
+// nothing.
+//
+// AND THE MEMORY IS OF A VERSION, NOT OF AN ID (AUDIT-feeds-round4-2026-09-22 F4). What this console saw was
+// the scope of ONE COPY of the document. Measured before this: an id opened once and found to be a group's,
+// then edited to whole-church by another console while this one could no longer read it, was withdrawn ten
+// minutes later — an ordinary church event silently off the public website, taken off by the one console
+// that had lost its key. So the created_at of the copy the scope was read from is kept beside the id, and a
+// document whose version no longer matches is UNKNOWN again.
+//
+// The cost is stated rather than hidden: a GROUP event edited while this console cannot read it also becomes
+// unknown, so it stays on the website instead of being withdrawn. That is the same fail-safe direction round
+// 3 chose for everything else it cannot classify, and it is no longer silent — the copy is counted into
+// w.held, named in w.heldIds, and the Settings page offers the control that takes it off.
+function _webGroupKey(cp) { return 'trinityone.webgroup.' + cp; }
+const WEB_GROUP_MAX = 2000;
+function _webGroupLoad(cp) {
+  const out = new Map();
+  try {
+    const a = JSON.parse(lsGet(_webGroupKey(cp)) || '[]');
+    if (Array.isArray(a)) for (const p of a.slice(0, WEB_GROUP_MAX)) {
+      if (Array.isArray(p) && typeof p[0] === 'string' && WEB_ID_OK.test(p[0]) && typeof p[1] === 'number' && isFinite(p[1])) out.set(p[0], p[1]);
+    }
+  } catch (e) {}
+  return out;
+}
+// Written only when the answer CHANGES, so an ordinary sync over a healthy calendar touches no storage. An
+// event edited from a group back to whole-church removes its id, or a key lost later would withdraw an event
+// that is no longer a group's; an event re-saved as a group's again records the new version.
+function _webGroupSeen(w, id, isGroup, ts) {
+  const at = isGroup ? (typeof ts === 'number' && isFinite(ts) ? ts : 0) : undefined;
+  if (isGroup ? w.groupSeen.get(id) === at : !w.groupSeen.has(id)) return;
+  if (isGroup) w.groupSeen.set(id, at); else w.groupSeen.delete(id);
+  lsSet(_webGroupKey(w.pub), JSON.stringify([...w.groupSeen].slice(0, WEB_GROUP_MAX)));
+}
+// TEN MINUTES OF WALL CLOCK, WHICH MEANS ACROSS RESTARTS (AUDIT-feeds-round4-2026-09-22 F3). The give-up
+// clock used to live only in the watch, and the dashboard rebuilds the watch on every connection bump —
+// `_maybeBumpConn` fires on a 90 s heartbeat plus focus, visibility and online. So a console whose relay
+// flaps faster than the budget reset it every time and could never reach it: measured, 0 withdrawals over
+// 108 minutes on a nine-minute restart cycle, on exactly the thin-pipe churches whose stranded copy will
+// live longest. The restart-reset was written up as a safety property; it is also the failure mode.
+//
+// So the moment an id was FIRST SEEN STUCK is kept per church beside groupSeen, and the budget is measured
+// from it. Three things this must not become:
+//   * A RING THAT HAS NOT ARRIVED STOPS THE CLOCK, it does not merely fail to start it. Guarding only the
+//     creation of an entry left one ALREADY ON DISK accruing through the whole wait, so a console that cold
+//     booted onto a thin pipe with nine minutes already spent withdrew the copy about seven seconds after
+//     its ring landed — round 3's F1c, undone by the back door. `_nameKeyRing` starts empty on every cold
+//     boot and the three streams this watch reads can reach EOSE before the envelope does, so that is the
+//     ordinary shape of a slow start. The cost is that a cold boot restarts the ten minutes; a WATCH
+//     restart (the connection bump this whole fix is about) does not, because it does not empty the ring;
+//   * it is dropped the moment the id stops being stuck, so the ten minutes are ten UNBROKEN minutes and
+//     not a total accumulated across periods when the document opened perfectly well;
+//   * a timestamp in the future — a device whose clock was set back — is pulled down to now rather than
+//     left to sit there unreachable for as long as the skew lasts.
+// And a clock read off disk is not on its own permission to act: _webSync still requires this session to
+// have watched the same id, ring in hand, for WEB_BLOCKED_AFTER_S first.
+function _webStuckKey(cp) { return 'trinityone.webstuck.' + cp; }
+function _webStuckLoad(cp) {
+  const out = new Map();
+  try {
+    const a = JSON.parse(lsGet(_webStuckKey(cp)) || '[]');
+    if (Array.isArray(a)) for (const p of a.slice(0, WEB_GROUP_MAX)) {
+      if (Array.isArray(p) && typeof p[0] === 'string' && WEB_ID_OK.test(p[0]) && typeof p[1] === 'number' && isFinite(p[1]) && p[1] > 0) out.set(p[0], p[1]);
+    }
+  } catch (e) {}
+  return out;
+}
+// Written only when the answer CHANGES, like _webGroupSeen, so an ordinary sync over a healthy calendar
+// touches no storage at all.
+function _webStuckClock(w, tNow, keyReady) {
+  let changed = false;
+  for (const id of [...w.stuckAt.keys()]) {
+    if (!w.stuck.has(id) || !keyReady) { w.stuckAt.delete(id); changed = true; }
+    else if (w.stuckAt.get(id) > tNow) { w.stuckAt.set(id, tNow); changed = true; }
+  }
+  if (keyReady) for (const id of w.stuck) if (!w.stuckAt.has(id)) { w.stuckAt.set(id, tNow); changed = true; }
+  if (changed) lsSet(_webStuckKey(w.pub), JSON.stringify([...w.stuckAt].slice(0, WEB_GROUP_MAX)));
+}
+let _web = null;   // the watch: { pub, share, shareTs, shareKnown, events, eventsKnown, copies, copyTs, copiesKnown, subs, listeners, busy, again, timer }
+function _webStop() { if (!_web) return; for (const off of _web.subs) { try { off(); } catch {} } if (_web.timer) clearTimeout(_web.timer); _web = null; }
+// `heldIds` is the other half of `held`: a count cannot be acted on, and the control on the Settings page
+// ticks exactly these ids "Not on the website". They come from the copies the relay holds, never from a
+// document this console managed to open — that is what makes the control reachable for an event it cannot.
+// ONE SNAPSHOT BUILDER, BECAUSE THERE ARE TWO WAYS TO GET ONE. _webEmit pushes to every listener when
+// something CHANGES; subscribeWebsiteShare answers the moment a listener attaches. The second used to build
+// its own reply out of the share document alone — no blocked, no why, no held, no ids. The Settings panel
+// mounts and unmounts with navigation and re-subscribes each time, so every visit after the first was handed
+// that starved snapshot, and because _webEmit fires only on a change nothing ever repaired it: the page read
+// a healthy "On" with no warning and no control for the rest of the session. Two callers, one builder.
+function _webSnap(w) {
+  return { ...w.share, optOut: [...w.share.optOut], optIn: [...(w.share.optIn || [])], known: w.shareKnown,
+           blocked: w.blocked || 0, blockedWhy: (w.blocked ? w.stuckWhy : '') || '', held: w.held || 0, heldIds: [...(w.heldIds || [])] };
+}
+function _webEmit() { if (!_web) return; const snap = _webSnap(_web); for (const cb of _web.listeners) { try { cb(snap); } catch {} } }
+function _webQueueSync() { if (!_web) return; if (_web.timer) clearTimeout(_web.timer); _web.timer = setTimeout(() => { if (_web) { _web.timer = null; _webSync(); } }, 250); }
+function _webEnsure(restart) {
+  if (_web && _web.pub === pub && !restart) return _web;
+  const listeners = _web ? _web.listeners : new Set();
+  // A RESTART FOR THE SAME CHURCH KEEPS WHAT IT ALREADY KNOWS ABOUT THE SWITCH. The first version started every
+  // restart from the defaults (calendar off, no opt-outs) with `shareKnown` false, and the dashboard restarts
+  // this watch on every connection bump — so a tick saved in the seconds after a laptop woke rewrote share:
+  // from the defaults: the calendar went OFF and every existing opt-out was discarded; and the next "on"
+  // then put the withheld event on the website (audit of 7ffcfaf, findings 1 and 2, measured in the real
+  // console). The stream is re-issued below and newest-wins on top of what is carried over.
+  const carried = (_web && _web.pub === pub) ? { share: _web.share, shareTs: _web.shareTs, shareKnown: _web.shareKnown } : null;
+  _webStop();
+  if (!pub) return null;
+  const w = _web = { pub, share: carried ? carried.share : { ...WEB_DEFAULT, optOut: [] }, shareTs: carried ? carried.shareTs : 0, shareKnown: !!(carried && carried.shareKnown),
+                     events: new Map(), versions: new Map(), eventsKnown: false,
+                     copies: new Map(), copyTs: new Map(), copiesKnown: false, subs: [], listeners, busy: false, again: false, timer: null,
+                     stuckSince: 0, keyedSince: 0, groupSeen: _webGroupLoad(pub), stuckAt: _webStuckLoad(pub),
+                     stuck: new Set(), stuckWhy: '', blocked: 0, held: 0, heldIds: [] };
+  // 1. the switch — the church's OWN copy only, never a steward's or a co-tenant's
+  const s1 = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#d': [SHARE_D + pub] }], {
+    onevent(e) {
+      if (e.pubkey !== pub || _authFuture(e)) return;
+      const d = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (d !== SHARE_D + pub) return;
+      if (e.created_at < w.shareTs) return; w.shareTs = e.created_at;
+      const gone = e.tags.some(t => t[0] === 'deleted') || !e.content;
+      let c = null; if (!gone) { try { c = JSON.parse(e.content); } catch {} }
+      w.share = gone ? { ...WEB_DEFAULT, optOut: [] } : _webNormalise(c);
+      _webEmit(); _webQueueSync();
+    },
+    oneose() { w.shareKnown = true; _webEmit(); _webQueueSync(); },
+  });
+  w.subs.push(() => { try { s1.close(); } catch {} });
+  // 2. the copies the relay holds, newest per id, the church's own only
+  const s2 = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }], {
+    onevent(e) {
+      if (e.pubkey !== pub) return;
+      const d = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (!d.startsWith(PUBEVENT_D)) return;
+      const id = d.slice(PUBEVENT_D.length);
+      if ((w.copyTs.get(id) || 0) > e.created_at) return; w.copyTs.set(id, e.created_at);
+      if (e.tags.some(t => t[0] === 'deleted') || !e.content) w.copies.delete(id); else w.copies.set(id, e.content);
+      _webQueueSync();
+    },
+    oneose() { w.copiesKnown = true; _webQueueSync(); },
+  });
+  w.subs.push(() => { try { s2.close(); } catch {} });
+  // 3. the calendar itself — the same two filters and the same newest-wins as _subAddr, opened with the name key
+  const s3 = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
+    onevent(e) {
+      const d = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (!d.startsWith(EVENT_D)) return;
+      const id = d.slice(EVENT_D.length);
+      if (e.tags.some(t => t[0] === 'deleted') || !e.content) { _forgetById(w.versions, w.events, id, e.pubkey, e.created_at, _consoleDisplay, { churchPub: pub, targets: _tombstoneTargets(e), mayName: _consoleChurchVoice }); _webQueueSync(); return; }
+      // THE CIPHERTEXT IS KEPT AND OPENED AT DECISION TIME, not here. On a fresh boot the calendar arrives
+      // before the name key does; an event opened once and remembered as "locked" would stay locked for the
+      // whole session, and _webDesired would keep answering "decide nothing" long after the key had landed —
+      // measured on this branch: an event added after the key arrived never reached the feed, because the two
+      // older ones were still placeholders. Opening on every decision costs a few decrypts per sync.
+      _absorbById(w.versions, w.events, id, { id, raw: String(e.content || ''), ts: e.created_at, _by: e.pubkey }, _consoleDisplay);
+      _webQueueSync();
+    },
+    oneose() { w.eventsKnown = true; _webQueueSync(); },
+  });
+  w.subs.push(() => { try { s3.close(); } catch {} });
+  return w;
+}
+// WHY ONE EVENT THIS CONSOLE CANNOT OPEN MUST NOT DECIDE FOR THE OTHERS. _webDesired used to answer `null`
+// — "decide nothing" — the moment ANY event failed to open, which parked the whole mirror for the session
+// while Settings went on reading "On". A church that re-minted its name key with the old one lost (the
+// 2026-08-04 restore incident produced exactly that state) never got another event onto its feed, and nothing
+// said so (audit F3). Now an event that cannot be opened is undecided for THAT ID ALONE: it is neither
+// published nor tombstoned, the rest are mirrored, and once the retries are spent the Settings page says how
+// many and why. `null` still means "a stream has not finished", which is the only true "decide nothing".
+// TWO CLOCKS, BOTH WALL TIME, AND NEITHER OF THEM A COUNT OF SYNCS. The first version counted _webSync
+// CALLS — `lockedTries < 60`, described in its own comment as "~2 minutes". It is not: _webQueueSync()
+// debounces at 250 ms and is called from all three subscriptions' onevent/oneose as well as from
+// setWebsiteShare/Held/Shown, so ordinary post-EOSE relay traffic can spend all 60 in about 15 seconds
+// (AUDIT-feeds-round3-2026-09-22 F1b). A budget meant to say "this console has been open a long time and
+// the document is still shut" must therefore be measured in seconds, not in how chatty the relay is.
+const WEB_BLOCKED_AFTER_S = 6;    // seconds with the same event stuck before the page says so — the key is often merely LATE
+// FOUR MINUTES. The idle lock fires at ten, so the withdrawal must finish well before that or it never
+// fires unattended (measured: the console locked at ~9.8 min, the feed was still live at 11.3 min).
+// Four minutes gives six minutes of margin and is still longer than any flap this watch survives — the
+// dashboard restarts it on every connection bump and a restart resets the clock — so reaching it means a
+// console sat open, connected and holding its key ring for four unbroken minutes with the document still shut.
+const WEB_GIVE_UP_S = 240;
+const WEB_RETRY_MS = 2000;        // how often a stuck watch comes back to look, while the budget is still running
+// IS THIS A WHOLE SEALED PAYLOAD — asked with no key at all. NIP-44 v2 is padded standard base64 of
+//   [version 1][nonce 32][ciphertext 2 + padded][mac 32]
+// where `padded` is always a MULTIPLE OF 32 (NIP-44's calc_padded_len returns 32 for anything up to 32
+// bytes, and a multiple of 32 above it), so a whole payload decodes to exactly 67 + 32n bytes, n >= 1.
+// That is where the 132 and 87472 character bounds come from, and it is a far stronger statement than
+// "it decoded and started with a 2".
+//
+// WHY THE ARITHMETIC IS WORTH WRITING OUT (AUDIT-feeds-round3-2026-09-22 F2). The first version asked only
+// for the length bounds and the version byte, so a copy TRUNCATED anywhere past 132 characters still looked
+// whole and was reported as 'key' — the church was told to go and find a name key it already held. Measured
+// over every truncation length of a real 1,456-character sealed document, that was 994 of 1,456 (68.3%) with
+// this engine's own `atob`. Three checks close almost all of it, and all three are shape, not cryptography:
+//   1. the base64 must be WELL FORMED — a multiple of 4 characters, from the standard alphabet. This also
+//      makes the answer the same in every engine: `atob` is WHATWG "forgiving-base64" in some (it accepts a
+//      length of 4n+2 and 4n+3) and strict in others, so before this the classification depended on which
+//      browser the console was running in.
+//   2. the version byte must be 2 (unchanged), and '#' is NIP-44's own marker for a version nobody reads.
+//   3. the decoded length must be 67 + a multiple of 32. A truncation lands on that by luck about once in
+//      every 128 characters, which is what is left of the 68.3%.
+// What remains genuinely indistinguishable — a whole payload with a byte flipped inside it, and a payload
+// sealed under a key we do not hold — fails the identical MAC check and raises the identical "invalid MAC"
+// (measured). The sentence _webWhyStuck's 'key' draws says so rather than naming a cause.
+const SEAL_B64 = /^[A-Za-z0-9+/]+={0,2}$/;
+function _sealIsWhole(ct) {
+  const s = String(ct || '');
+  if (s.length < 132 || s.length > 87472 || s[0] === '#') return false;
+  if (s.length % 4 !== 0 || !SEAL_B64.test(s)) return false;
+  let raw = '';
+  try { raw = atob(s); } catch (e) { return false; }
+  if (raw.charCodeAt(0) !== 2) return false;
+  return raw.length >= 99 && (raw.length - 67) % 32 === 0;
+}
+// WHY AN EVENT WOULD NOT OPEN, said honestly. The first version asked one question — "does the document have
+// a string .e field?" — and answered 'key' whenever it did. So a copy whose bytes were damaged, and a
+// document that unsealed perfectly with the key we hold but held no event, BOTH told the church to go and
+// find a name key it already has (audit R4). Four answers now, each of them something that happened:
+//   'shape'    — not a sealed document at all: it would not parse, or it was the literal null
+//   'damaged'  — the sealed text is not a whole payload, so no key could open it
+//   'key'      — a whole payload that no name key this console holds will unseal
+//   'contents' — it unsealed, and what came out was not an event
+// 'key' deliberately does not claim the key is MISSING, for the reason in _sealIsWhole above; the sentence
+// the page draws from it reports what was observed and leaves the cause open.
+function _webWhyStuck(raw) {
+  let o = null;
+  try { o = JSON.parse(String(raw || '')); } catch (e) { return 'shape'; }
+  if (!o || typeof o !== 'object' || typeof o.e !== 'string') return 'shape';
+  if (!_sealIsWhole(o.e)) return 'damaged';
+  // If ANY key opens it, the fault is what was inside: _openChurchDoc answers null after a successful unseal
+  // only when the plaintext will not parse, or parses to null.
+  for (const k of _nameKeyRing) { try { nip44d(o.e, _unhex(k)); return 'contents'; } catch (e) {} }
+  return 'key';
+}
+// What the relay SHOULD hold, from what this console knows: Map(id -> body) while the switch is on, empty
+// otherwise. `null` means "do not decide yet" — a stream has not finished. Events this console cannot open
+// are recorded in w.stuck and left alone by both halves of _webSync.
+function _webDesired(w) {
+  w.stuck = new Set(); w.stuckWhy = '';
+  if (!w.shareKnown || !w.copiesKnown || !w.eventsKnown) return null;
+  const out = new Map();
+  if (!w.share.calendar) return out;
+  const held = new Set(w.share.optOut);
+  const shown = new Set(w.share.optIn || []);
+  for (const ev of w.events.values()) {
+    if (!ev || !WEB_ID_OK.test(String(ev.id || ''))) continue;
+    let c = null; try { c = _openChurchDoc(ev.raw); } catch (e) { c = null; }
+    // undecided for THIS id. TWO STUCK EVENTS OF DIFFERENT CAUSES get 'mixed' rather than the first one's
+    // cause: the old rule kept only the first (`if (!w.stuckWhy)`), so "2 events … are sealed with a church
+    // key this console does not have" was drawn over one of each, naming a cause that was true of one of them.
+    if (c === null) {
+      w.stuck.add(ev.id);
+      const why = _webWhyStuck(ev.raw);
+      w.stuckWhy = !w.stuckWhy || w.stuckWhy === why ? why : 'mixed';
+      continue;
+    }
+    // WHILE WE CAN STILL READ IT, REMEMBER WHOSE IT IS. This is the only moment the question can be asked,
+    // and _webSync needs the answer at a moment when it cannot be. Before the opt-out and date checks, so a
+    // group event a steward has ticked OFF the website is remembered as a group's event all the same.
+    _webGroupSeen(w, ev.id, !!(c && typeof c === 'object' && String(c.groupId || '')), ev.ts);
+    if (held.has(ev.id)) continue;
+    if (!c || typeof c !== 'object' || !/^\d{4}-\d{2}-\d{2}$/.test(String(c.date || ''))) continue;
+    // A GROUP EVENT IS OFF THE WEBSITE UNLESS TICKED ON (see WEB_DEFAULT). The groupId lives in the SEALED
+    // document, never in the public copy — the relay cannot see it, so this console is the only place the
+    // question can be asked at all.
+    if (String(c.groupId || '') && !shown.has(ev.id)) continue;
+    out.set(ev.id, _webCopyBody(c));
+  }
+  return out;
+}
+async function _webSync() {
+  const w = _web;
+  if (!w || w.pub !== pub || !sk || actingChurch) return;          // owner mode only: the relay accepts these from the church key alone
+  if (w.busy) { w.again = true; return; }
+  const want = _webDesired(w);
+  if (want === null) return;                                        // a stream has not finished; its oneose will come back here
+  // A locked event is usually the name key being late, which resolves itself within seconds on a healthy
+  // relay and never on a console that does not hold the key (a delegate's, or a church whose old key is
+  // gone). Come back for it while the budget is still running, KEEP MIRRORING THE REST while we do, and once
+  // it has been stuck a few seconds say so on the Settings page rather than looking like nothing is wrong.
+  //
+  // A KEY THAT HAS NOT ARRIVED IS NOT A KEY THAT IS GONE. _nameKeyRing starts EMPTY on every boot and is
+  // filled asynchronously by subscribeNameKey, so for the first seconds of a session — longer on a thin pipe
+  // — every event in the church's calendar is "stuck" and the cause is not that anything is lost. The first
+  // version asked nothing about the ring: measured against the shipped bundle, an empty ring took ALL FIVE of
+  // a test church's whole-church events off its public website (AUDIT-feeds-round3-2026-09-22 F1a/F1c). So
+  // the give-up clock runs only while the ring is READY. The reporting clock runs either way — a console
+  // that never receives its key must still say so on Settings rather than going quiet.
+  const tNow = now();
+  const keyReady = _nameKeyReady();
+  if (w.stuck.size) {
+    if (!w.stuckSince) w.stuckSince = tNow;
+    if (!keyReady) w.keyedSince = 0; else if (!w.keyedSince) w.keyedSince = tNow;
+    if (tNow - (w.keyedSince || w.stuckSince) <= WEB_GIVE_UP_S) setTimeout(() => { if (_web === w) _webQueueSync(); }, WEB_RETRY_MS);
+  } else { w.stuckSince = 0; w.keyedSince = 0; }
+  _webStuckClock(w, tNow, keyReady);      // the wall clock, which outlives this watch; see above it
+  const showing = (w.stuck.size && tNow - w.stuckSince >= WEB_BLOCKED_AFTER_S) ? w.stuck.size : 0;
+  const writes = [], tombs = [];
+  for (const [id, body] of want) if (w.copies.get(id) !== body) writes.push([id, body]);
+  // …and a copy whose event we could not open is LEFT ALONE WHILE WE ARE STILL WAITING FOR THE KEY.
+  // Tombstoning it then would take a perfectly good event off the church's website because the name key was a
+  // few seconds late — the destructive half of the same bug (audit F3).
+  //
+  // ONCE THE BUDGET IS SPENT THE ANSWER CHANGES — BUT ONLY FOR A GROUP'S EVENT (audit R5, narrowed by
+  // AUDIT-feeds-round3-2026-09-22 F1). Why the withdrawal exists at all: a GROUP's event is on the feed only
+  // because a steward ticked it on, but a copy put there by a console older than that rule, whose document
+  // later became unopenable, was never withdrawn by anything — the mirror skipped it and the relay has no
+  // rule for it, because a groupId lives in the SEALED document and the relay cannot see one. An adults-only
+  // room's title and place stayed on a public website for ever with nothing on any screen saying so.
+  //
+  // WHAT THE FIRST VERSION GOT WRONG: it withdrew EVERY stuck copy, whole-church events included, on the
+  // argument that the console cannot tell the two apart. Measured against the shipped bundle, a church whose
+  // key ring was empty lost its ENTIRE public calendar — five of five whole-church events (F1a). A
+  // whole-church event was never the concern: it is on the feed BY DEFAULT, so leaving it there while the
+  // console cannot read it is the safer of the two wrong answers, and emptying a church's website because a
+  // console is slow, offline or mid-restore is the unsafe one.
+  //
+  // So the withdrawal is scoped to a copy this console can TELL is group-scoped — an id it has opened and
+  // found a groupId on, remembered in w.groupSeen — and honours the owner's "On the website" tick, which is
+  // the one positive statement a church has made about a group event being public. Everything else it cannot
+  // classify STAYS, and is counted into w.held so the Settings page can say so.
+  //
+  // WHAT w.held COUNTS, and why it is not "the ones we could not classify" (AUDIT-feeds-round4-2026-09-22
+  // F2). The sentence it draws says "N of them are still on your website", so the number has to be the
+  // copies a visitor can still fetch, and only those. Two corrections to what it used to count:
+  //   * a copy this console KNOWS is a group's is left up for the whole ten minutes, and was counted into
+  //     neither half — so the page said one event could not be published and stayed silent about the
+  //     adults-only copy that was still public, which on a console whose relay flaps is for ever (F3);
+  //   * a copy the owner ticked "Not on the website" was counted although the relay had already stopped
+  //     serving it (scripts/gateway.mjs publicFeed filters the church's copies by share.optOut before it
+  //     builds anything). That tick is the control beside this sentence, so a count that kept claiming the
+  //     ids it had just taken off would leave the line up for ever and the control looking dead.
+  const shown = new Set(w.share.optIn || []);
+  const offFeed = new Set(w.share.optOut);
+  // TWO CONDITIONS, AND THEY ARE NOT THE SAME CLOCK. `looked` is this SESSION: has this watch itself seen
+  // the ring in hand and the document shut for long enough to be worth believing — the guard against a watch
+  // acting destructively on its very first sync from a timestamp it read off disk. `spent` is the WALL
+  // CLOCK for that one id, which survives the restart (see _webStuckClock).
+  const looked = keyReady && !!w.keyedSince && tNow - w.keyedSince >= WEB_BLOCKED_AFTER_S;
+  const heldIds = [];
+  for (const id of w.copies.keys()) {
+    if (want.has(id)) continue;
+    if (w.stuck.has(id)) {
+      // …and the memory has to be of the copy in hand: a newer version this console cannot open is UNKNOWN,
+      // not "still a group's" (see _webGroupSeen).
+      const cur = w.events.get(id);
+      const groupScoped = w.groupSeen.has(id) && !!cur && w.groupSeen.get(id) === cur.ts && !shown.has(id);
+      const spent = looked && tNow - (w.stuckAt.get(id) || tNow) >= WEB_GIVE_UP_S;
+      if (!(spent && groupScoped)) { if (!offFeed.has(id)) heldIds.push(id); continue; }
+    }
+    tombs.push(id);
+  }
+  const heldShowing = showing ? heldIds.length : 0;
+  const idsShowing = showing ? heldIds : [];
+  if (showing !== w.blocked || heldShowing !== w.held || idsShowing.join('\n') !== (w.heldIds || []).join('\n')) {
+    w.blocked = showing; w.held = heldShowing; w.heldIds = idsShowing; _webEmit();
+  }
+  if (!writes.length && !tombs.length) return;
+  w.busy = true;
+  try {
+    for (const [id, body] of writes) {
+      if (_web !== w) return;
+      const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', PUBEVENT_D + id], ['t', NET]], content: body }, sk));
+      if (ok) w.copies.set(id, body);                                // optimistic, so the echo does not re-trigger a write
+    }
+    for (const id of tombs) {
+      if (_web !== w) return;
+      const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', PUBEVENT_D + id], ['t', NET], ['deleted', '1']], content: '' }, sk));
+      if (ok) w.copies.delete(id);
+    }
+  } catch (e) {}
+  finally { w.busy = false; if (w.again) { w.again = false; _webQueueSync(); } }
+}
+// The address a website builder pastes. The church's own relay, spoken as HTTP: wss://host/relay ->
+// https://host. A Suite box behind its tunnel names the tunnel (selfPublicRelay), because 127.0.0.1 is not an
+// address anyone else can open. A church on the community pool gets that pool's address — it IS that church's
+// relay — and the sentence on the page says what the address reveals either way.
+function _webFeedBase() {
+  let r = ownRelay();
+  if (ownIsLoopback()) { const p = selfPublicRelay(); if (p) r = p; }
+  return String(r || '').replace(/^wss:/i, 'https:').replace(/^ws:/i, 'http:').replace(/\/relay\/?$/i, '').replace(/\/+$/, '');
+}
+
 window.Steward = {
   pubkey: null, npub: null, hasKey: false,
 
@@ -6038,7 +6529,14 @@ window.Steward = {
           if (!mine || !churchSk) return;
           const plain = nip44d(mine, nip44ck(churchSk, e.pubkey));
           const r = JSON.parse(plain);
-          if (Array.isArray(r)) _nameKeyRing = r.filter(x => typeof x === 'string' && /^[0-9a-f]+$/i.test(x));
+          if (Array.isArray(r)) {
+            const had = _nameKeyReady();
+            _nameKeyRing = r.filter(x => typeof x === 'string' && /^[0-9a-f]+$/i.test(x));
+            // THE KEY LANDING IS NEWS TO THE WEBSITE MIRROR. Nothing else tells it: _webSync's own 2 s retry
+            // was the only thing that ever noticed, which is why that retry had to run for ever or the feed
+            // would sit empty behind a key that had since arrived. Now the arrival itself asks for a sync.
+            if (!had && _nameKeyReady()) _webQueueSync();
+          }
         } catch (x) {}
       },
       oneose() { _nameKeyChecked = true; },   // the relay answered — a church with no envelope yet may now mint its first
@@ -6064,7 +6562,7 @@ window.Steward = {
     }
     return '';
   },
-  nameKeyReady() { return _nameKeyRing.length > 0; },
+  nameKeyReady() { return _nameKeyReady(); },
   setMinors(pubkeys) {   // replace the whole minors list (pass hex pubkeys)
     _requireTrustedView('list of children');
     if (!sk) return Promise.resolve(null);
@@ -8366,6 +8864,99 @@ window.Steward = {
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', EVENT_D + id], ['t', NET], ['deleted', '1']], content: '' }));
   },
   subscribeEvents(onEvents) { return this._subAddr(EVENT_D, (c) => ({ date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || '', day: c.day, groupId: c.groupId || '', image: c.image || '' }), onEvents); },
+
+  // ---- the church's website: the public calendar feed (see _webSync above the API object) ----
+  // onShare({ calendar, sermons, plans, optOut, address, known }) — `known` is false until the relay has answered.
+  // `restart: true` re-issues the three subscriptions on the current relay set (the dashboard passes it on a
+  // connection bump, the way every makeSub hook re-subscribes: a returning socket does not re-issue its REQs).
+  subscribeWebsiteShare(onShare, opts) {
+    const w = _webEnsure(!!(opts && opts.restart)); if (!w) { try { onShare({ ...WEB_DEFAULT, optOut: [], known: false }); } catch {} return () => {}; }
+    w.listeners.add(onShare);
+    try { onShare(_webSnap(w)); } catch {}                 // the WHOLE snapshot; see _webSnap for what this used to cost
+    return () => { w.listeners.delete(onShare); };
+  },
+  // Flip a switch or rewrite the opt-outs. Resolves true when a relay accepted the share: document; false when
+  // none did or this console is a delegated steward (the relay would refuse it, so do not pretend).
+  // NEVER FROM A VIEW WE HAVE NOT ESTABLISHED. The document is rewritten whole, so a write made before the relay
+  // has answered would be built on the defaults and silently drop every opt-out and the switch itself. Refuse
+  // (false) until the stream has reached EOSE — the same rule ensureNameKeyForMembers applies to its envelope.
+  async setWebsiteShare(patch) {
+    if (!sk || actingChurch) return false;
+    const w = _webEnsure(); if (!w || !w.shareKnown) return false;
+    const next = _webNormalise({ ...w.share, ...(patch || {}) });
+    const evt = feChurch({ kind: 30078, created_at: now(), tags: [['d', SHARE_D + pub], ['t', NET]], content: JSON.stringify(next) }, sk);
+    const ok = await publish(evt);
+    if (!ok) return false;
+    w.share = next; w.shareTs = Math.max(w.shareTs, evt.created_at); w.shareKnown = true; _webEmit(); _webQueueSync();   // the echo will agree; do not wait for it
+    return true;
+  },
+  // The per-event "Not on the website" tick. `held` true takes the event off the feed and its own address.
+  //
+  // NO ID IS EVER IN BOTH LISTS — see _webOneList above, and AUDIT-feeds-round5-2026-09-22 F1. This arm is
+  // belt and braces, not a route anyone can name: no console screen changes an event's scope after it is
+  // created (SchEventModal fixes groupId at publish; SchEventEdit passes `groupId: e.groupId || ''` straight
+  // through), so an id cannot travel between the two ticks this way. An earlier version of this comment
+  // asserted that it could, and the audit of that commit could not reach it.
+  setWebsiteHeld(eventId, held) {
+    const id = String(eventId || ''); if (!WEB_ID_OK.test(id)) return Promise.resolve(false);
+    const w = _webEnsure(); if (!w || !w.shareKnown) return Promise.resolve(false);   // see setWebsiteShare
+    const cur = w.share.optOut;
+    const optOut = held ? [...new Set([...cur, id])] : cur.filter(x => x !== id);
+    const optIn = held ? (w.share.optIn || []).filter(x => x !== id) : (w.share.optIn || []);
+    return _webOneList(this, w, { optOut, optIn });
+  },
+  isWebsiteHeld(eventId) { const w = _webEnsure(); return !!(w && w.share.optOut.includes(String(eventId || ''))); },
+  // THE SAME TICK, FOR THE COPIES NOBODY CAN OPEN — the control beside "N of them are still on your website"
+  // on Settings → Your website, and the only proportionate answer a church has to that sentence
+  // (AUDIT-feeds-round4-2026-09-22 F1). An event this console cannot open has no date, so it is on no day of
+  // the calendar grid and its editor cannot be reached at all; the only other lever was the master switch,
+  // which takes the whole calendar down. These ids come from `heldIds` in the watch's snapshot — the copies
+  // the relay holds — so nothing here needs a name key or a readable document.
+  //
+  // ONE WRITE, NOT ONE PER ID. share: is rewritten whole, so a write per id is one chance per id for the
+  // relay to refuse halfway and leave the page's sentence half true. Refuses (false) rather than writing
+  // before the relay has answered, for the reason on setWebsiteShare: the document would be rebuilt from the
+  // defaults and every earlier opt-out and the switch itself would go with it.
+  //
+  // DOES NOT ALSO FILTER `optIn` HERE (AUDIT-feeds-round6-2026-09-23 F4, correcting round 5's ba19fff, which
+  // said of this line and setWebsiteShown's own filter "one without the other leaves the defect
+  // half-standing"). That was true at ba19fff's own tip; `1bc8739`'s `_webNormalise` then started stripping
+  // an id from `optIn` on the way IN whenever it is ALSO in `optOut` — read below, and it runs inside
+  // setWebsiteShare on every write, this one included. So a filter here is now redundant, not a second line
+  // of defence: MEASURED by a scoped sabotage that deletes it — the published document and `w.share` are
+  // byte-identical with and without it, and every test in this file that exercises setWebsiteHeldMany stays
+  // green. setWebsiteShare sets `w.share` to the NORMALISED document it just built, never to the raw ids
+  // passed in here, so there is no path left where the two lists could disagree because this line was gone.
+  setWebsiteHeldMany(eventIds) {
+    const ids = _webIds(eventIds);
+    if (!ids.length) return Promise.resolve(false);
+    const w = _webEnsure(); if (!w || !w.shareKnown) return Promise.resolve(false);   // see setWebsiteShare
+    const cur = w.share.optOut;
+    const optOut = [...new Set([...cur, ...ids])];
+    return _webOneList(this, w, { optOut, optIn: w.share.optIn || [] });
+  },
+  // The per-event "On the website" tick, for an event scoped to a GROUP: the inverse of setWebsiteHeld,
+  // because the default is the inverse. Same refusal-until-EOSE rule, for the same reason.
+  //
+  // TICKING IT ON ALSO LIFTS ANY OPT-OUT ON THE SAME ID, which is what makes the control on Settings ->
+  // Your website REVERSIBLE from the event itself (AUDIT-feeds-round5-2026-09-22 F1). _webDesired tests
+  // `optOut` BEFORE `optIn` and deliberately keeps doing so — optOut-wins is the fail-safe precedence
+  // (round 2, M4), so a stale "on" tick must never beat a deliberate "take it off". The contradiction is
+  // therefore resolved where it is MADE, at the writers, and not by reordering the read: after this the
+  // steward's tick is the only statement left about that id, so it wins by being the only one.
+  setWebsiteShown(eventId, shown) {
+    const id = String(eventId || ''); if (!WEB_ID_OK.test(id)) return Promise.resolve(false);
+    const w = _webEnsure(); if (!w || !w.shareKnown) return Promise.resolve(false);   // see setWebsiteShare
+    const cur = w.share.optIn || [];
+    const optIn = shown ? [...new Set([...cur, id])] : cur.filter(x => x !== id);
+    const optOut = shown ? w.share.optOut.filter(x => x !== id) : w.share.optOut;
+    return _webOneList(this, w, { optIn, optOut });
+  },
+  isWebsiteShown(eventId) { const w = _webEnsure(); return !!(w && (w.share.optIn || []).includes(String(eventId || ''))); },
+  websiteFeedUrl(eventId) {
+    const base = _webFeedBase(); if (!base || !this.npub) return '';
+    return base + '/public/' + this.npub + (eventId ? '/e/' + encodeURIComponent(String(eventId)) + '.ics' : '/calendar.ics');
+  },
   // publish a recurring meeting (the church's rhythm): a normal event with recur + day-of-week, expanded into
   // occurrences client-side by expandEvents(). `m` = { id?, title, day (0-6), time, where?, recur, from? (anchor) }.
   publishMeeting(m) { return this.publishEvent({ id: m.id, title: m.title, time: m.time, where: m.where || '', date: m.from || _todayISO(), recur: m.recur || 'weekly', day: m.day, accent: m.accent || 'var(--clay)' }); },

@@ -37,6 +37,13 @@ function sameAssign(a, b) { const k = o => Object.keys(o || {}).filter(x => (o[x
 // So each save below checks. A modal that failed stays OPEN with its content intact, because the steward's
 // typing is the thing that would otherwise be lost.
 const SCH_NO_KEY = 'Not saved — your church’s key hasn’t arrived yet. Give it a moment and try again.';
+// THE LAST DATE THIS PRODUCT CAN WRITE DOWN. A year past 9999 leaves ISO 8601's four-digit form: Date's own
+// toISOString() switches to the expanded `+010000-01-01`, and the public calendar builder turned that into
+// `DTSTART:+01000001T193000`, a string no calendar can read (AUDIT-feeds-round3-2026-09-22 F3). The builder
+// is where that is REFUSED — scripts/public-calendar.mjs range-checks the computed occurrence and writes no
+// VEVENT for one it cannot represent — and this `max` is the cheaper half: it stops the date picker offering
+// a year the rest of the product cannot carry, so a steward who fat-fingers 9999 sees it here first.
+const SCH_MAX_DATE = '9999-12-31';
 function SchNotSaved({ msg }) {
   if (!msg) return null;
   return (
@@ -922,6 +929,38 @@ function DashRota({ onNewTeam }) {
 window.DashRota = DashRota;
 
 // ════════════════════════ CALENDAR ════════════════════════
+// "Not on the website" — one tick, shared by the New event and Edit event dialogs. Shown only when the
+// console holds the church key (the relay accepts the opt-out from that key alone). One label and one
+// sentence; the switch itself is in Settings → Your website.
+// What the banner says when the opt-out could not be recorded. The event is saved; only the tick is not.
+const SCH_HELD_MISSED = 'The event is saved, but “Not on the website” wasn’t recorded — open the event and tick it again.';
+// …and its inverse, for an event scoped to a GROUP: those are OFF the website unless a steward puts one on
+// (audit F2, owner 2026-09-22 — the relay withholds an adults-only room's event from the church's own
+// children, so it must not reach the website by default). Same row, opposite default and opposite label.
+const SCH_SHOWN_MISSED = 'The event is saved, but “On the website” wasn’t recorded — open the event and tick it again.';
+function SchWebsiteShownRow({ shown, setShown }) {
+  return (
+    <label style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 14, padding: '10px 12px', borderRadius: 11, border: '1px solid var(--line)', background: shown ? 'color-mix(in oklab, var(--gold) 10%, var(--surface))' : 'var(--surface-2)', cursor: 'pointer' }}>
+      <input type="checkbox" aria-label="On the website" checked={!!shown} onChange={ev => setShown(!!ev.target.checked)} style={{ width: 18, height: 18, margin: 0, cursor: 'pointer' }} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 700, fontSize: 13.5 }}>On the website</div>
+        <div style={{ fontSize: 12, color: 'var(--ink-3)', lineHeight: 1.4 }}>A group’s event stays off the public calendar feed unless you put it there.</div>
+      </div>
+    </label>
+  );
+}
+function SchWebsiteHeldRow({ held, setHeld }) {
+  return (
+    <label style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 14, padding: '10px 12px', borderRadius: 11, border: '1px solid var(--line)', background: held ? 'color-mix(in oklab, var(--gold) 10%, var(--surface))' : 'var(--surface-2)', cursor: 'pointer' }}>
+      <input type="checkbox" aria-label="Not on the website" checked={!!held} onChange={ev => setHeld(!!ev.target.checked)} style={{ width: 18, height: 18, margin: 0, cursor: 'pointer' }} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 700, fontSize: 13.5 }}>Not on the website</div>
+        <div style={{ fontSize: 12, color: 'var(--ink-3)', lineHeight: 1.4 }}>Members still see it; it stays off the public calendar feed.</div>
+      </div>
+    </label>
+  );
+}
+
 function SchEventModal({ day, onClose }) {
   const ACCENTS = [['var(--clay)', 'Gathering'], ['var(--sage)', 'Prayer'], ['var(--gold)', 'Social'], ['#5360D6', 'Youth']];
   const allGroups = window.useStewardGroups();   // chat groups + teams the event can belong to
@@ -936,6 +975,12 @@ function SchEventModal({ day, onClose }) {
   const [image, setImage] = useSch('');          // optional cover image (resized data-URL)
   const [repeat, setRepeat] = useSch('none');
   const [until, setUntil] = useSch('');
+  // "Not on the website" — recorded in the church's share: document, never in the event (the design rejected a
+  // per-document flag: it would mix a website decision into what every member reads). Owner-only, because the
+  // relay accepts share: from the church key alone; a delegate does not see the tick.
+  const [held, setHeld] = useSch(false);
+  const [shown, setShown] = useSch(false);   // the inverse tick, for a group-scoped event — see SchWebsiteShownRow
+  const canHold = !!(window.Steward.setWebsiteHeld && !(window.Steward.isDelegated && window.Steward.isDelegated()));
   const ownedNets = React.useMemo(() => (window.Steward.ownedNetworks ? window.Steward.ownedNetworks() : []), []);
   const [asPub, setAsPub] = useSch('');          // '' = the church; else an owned network's pub
   const asNetwork = !!asPub;
@@ -961,6 +1006,22 @@ function SchEventModal({ day, onClose }) {
     // a group is church-scoped, so a network-wide event never belongs to a church group
     const gid = asNetwork ? '' : group;
     const out = await Promise.all(dates.map(d => window.Steward.publishEvent({ title: title.trim(), date: d, time, where: where.trim(), blurb: blurb.trim(), accent, image, groupId: gid }, asPub)));
+    // THE TICK IS RECORDED AFTER THE EVENT EXISTS, by the id publishEvent minted. Every date of a repeat gets
+    // its own event and so its own opt-out. A church event only: a network-published event has no share: doc.
+    // …AND A TICK THAT DID NOT LAND IS SAID, through the console's existing banner (the event itself is saved,
+    // so the dialog closes as usual). The engine refuses the opt-out until it has read the church's share:
+    // document — a write built on defaults would drop every existing opt-out (audit of 7ffcfaf).
+    if (held && canHold && !asNetwork && !gid) {
+      let missed = 0;
+      for (const r of out) { if (r && r.id) { let ok = false; try { ok = await window.Steward.setWebsiteHeld(r.id, true); } catch (e) { ok = false; } if (!ok) missed++; } }
+      if (missed) { try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'website opt-out', message: SCH_HELD_MISSED } })); } catch (e) {} }
+    }
+    // …and the same for a GROUP event's opposite tick: it reaches the website only because this ran.
+    if (shown && canHold && !asNetwork && gid && window.Steward.setWebsiteShown) {
+      let missed = 0;
+      for (const r of out) { if (r && r.id) { let ok = false; try { ok = await window.Steward.setWebsiteShown(r.id, true); } catch (e) { ok = false; } if (!ok) missed++; } }
+      if (missed) { try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'website opt-in', message: SCH_SHOWN_MISSED } })); } catch (e) {} }
+    }
     setBusy(false);
     if (out.some(r => r == null)) { setErr(SCH_NO_KEY); return; }
     onClose();
@@ -994,7 +1055,7 @@ function SchEventModal({ day, onClose }) {
       <div style={schLbl}>Title</div>
       <input aria-label="Title" value={title} onChange={e => setTitle(e.target.value)} autoFocus placeholder="e.g. Prayer evening" style={schFld} />
       <div style={{ display: 'flex', gap: 10 }}>
-        <div style={{ flex: 1 }}><div style={schLbl}>Date</div><input aria-label="Date" type="date" value={date} onChange={e => setDate(e.target.value)} style={schFld} /></div>
+        <div style={{ flex: 1 }}><div style={schLbl}>Date</div><input aria-label="Date" type="date" value={date} max={SCH_MAX_DATE} onChange={e => setDate(e.target.value)} style={schFld} /></div>
         <div style={{ width: 130 }}><div style={schLbl}>Time</div><input aria-label="Time" type="time" value={time} onChange={e => setTime(e.target.value)} style={schFld} /></div>
       </div>
       {clashes.length ? (
@@ -1024,6 +1085,11 @@ function SchEventModal({ day, onClose }) {
           <div style={{ fontSize: 11.5, color: 'var(--ink-3)', margin: '6px 2px 0', lineHeight: 1.4 }}>Group events still show on everyone’s calendar, and appear inside that group’s chat too.</div>
         </React.Fragment>
       ) : null}
+      {/* THE WEBSITE TICK SITS HERE, not at the bottom (owner, 2026-09-22). Driven at 1280x1000 it was below
+          the cover-image picker and the note box, off the screen, so a steward had to scroll past two
+          optional fields to reach the one control that decides whether the event becomes public. "Belongs
+          to" is its neighbour because that answer is what decides which of the two ticks is shown at all. */}
+      {canHold && !asNetwork ? (group ? <SchWebsiteShownRow shown={shown} setShown={setShown} /> : <SchWebsiteHeldRow held={held} setHeld={setHeld} />) : null}
       <div style={schLbl}>Cover image (optional)</div>
       {image ? (
         <div style={{ position: 'relative', borderRadius: 12, overflow: 'hidden', marginBottom: 4, border: '1px solid var(--line)' }}>
@@ -1246,6 +1312,22 @@ function SchEventEdit({ event, onClose }) {
   const [date, setDate] = React.useState(e.date || '');
   const [day, setDay] = React.useState(typeof e.day === 'number' ? e.day : 0);
   const [recur, setRecur] = React.useState(e.recur || 'weekly');
+  // "Not on the website" — see SchEventModal. Read from the share: document, written back on save.
+  const canHold = !!(window.Steward.setWebsiteHeld && !(window.Steward.isDelegated && window.Steward.isDelegated()));
+  const inGroup = !!String(e.groupId || '');   // a group's event is off the website unless ticked on — the inverse tick
+  const [held, setHeld] = React.useState(() => !!(canHold && window.Steward.isWebsiteHeld && window.Steward.isWebsiteHeld(e.id)));
+  const [shown, setShown] = React.useState(() => !!(canHold && window.Steward.isWebsiteShown && window.Steward.isWebsiteShown(e.id)));
+  // WHAT THE TICK READ WHEN THIS DIALOG OPENED — captured once, never updated. If this dialog sits open
+  // while another console (or a live update to this one) changes the SAME id's website decision, Save must
+  // not republish a value the steward never looked at again (AUDIT-feeds-round6-2026-09-23 F1): before
+  // ba19fff, setWebsiteShown(id, true) wrote optIn alone, so a stale "on" tick could not lift an opt-out;
+  // now it also clears optOut (that's the fix ba19fff made, correctly, for the case where the STEWARD
+  // ticks it), so an untouched, merely-stale tick can silently undo a "take it off our website" made
+  // elsewhere during the time this dialog was open. `React.useRef(x).current` only ever takes the value `x`
+  // held on the FIRST render — the same value the lazy useState above just computed — so this is the tick's
+  // state at open, not at Save.
+  const heldAtOpen = React.useRef(held).current;
+  const shownAtOpen = React.useRef(shown).current;
   const [busy, setBusy] = React.useState(false);
   const [err, setErr] = React.useState('');
   const save = async () => {
@@ -1262,6 +1344,15 @@ function SchEventEdit({ event, onClose }) {
         ...(series ? { recur, day } : {}),
       }));
     } catch (x) { r = null; }
+    // ONLY WRITE THE TICK WHEN THE STEWARD ACTUALLY TOUCHED IT IN THIS DIALOG (F1 above) — a Save where
+    // shown/held still equals what this dialog opened with makes NO write at all, so it cannot overwrite a
+    // decision made elsewhere while the dialog sat open.
+    const touched = inGroup ? (shown !== shownAtOpen) : (held !== heldAtOpen);
+    if (r && canHold && e.id && touched) {   // same as SchEventModal: a tick that did not land is said, not swallowed
+      let ok = false;
+      try { ok = inGroup ? await window.Steward.setWebsiteShown(e.id, shown) : await window.Steward.setWebsiteHeld(e.id, held); } catch (x) { ok = false; }
+      if (!ok) { try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: inGroup ? 'website opt-in' : 'website opt-out', message: inGroup ? SCH_SHOWN_MISSED : SCH_HELD_MISSED } })); } catch (x) {} }
+    }
     setBusy(false);
     if (!r) { setErr('Couldn’t save — the relay didn’t accept the change. Your edits are still here.'); return; }
     onClose();
@@ -1289,13 +1380,17 @@ function SchEventEdit({ event, onClose }) {
       ) : (
         <React.Fragment>
           <div style={schLbl}>Date</div>
-          <input aria-label="Date" type="date" value={date} onChange={ev => setDate(ev.target.value)} style={schFld} />
+          <input aria-label="Date" type="date" value={date} max={SCH_MAX_DATE} onChange={ev => setDate(ev.target.value)} style={schFld} />
         </React.Fragment>
       )}
       <div style={schLbl}>Time</div>
       <input aria-label="Time" type="time" value={time} onChange={ev => setTime(ev.target.value)} style={schFld} />
       <div style={schLbl}>Where</div>
       <input aria-label="Where" value={where} onChange={ev => setWhere(ev.target.value)} placeholder="Optional" style={schFld} />
+      {/* …and in the same place here: above the long optional field, not below it. See SchEventModal. This
+          dialog has no "Belongs to" — the scope is fixed once an event exists — so the tick follows Where,
+          which is the last field that says what the event IS. */}
+      {canHold ? (inGroup ? <SchWebsiteShownRow shown={shown} setShown={setShown} /> : <SchWebsiteHeldRow held={held} setHeld={setHeld} />) : null}
       <div style={schLbl}>Details</div>
       <textarea aria-label="Details" value={blurb} onChange={ev => setBlurb(ev.target.value)} rows={3} placeholder="Optional" style={{ ...schFld, height: 'auto', padding: '10px 13px', resize: 'vertical', lineHeight: 1.5 }} />
       {err ? <div style={{ marginTop: 10, fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600 }}>{err}</div> : null}
@@ -1326,6 +1421,19 @@ function SchEventDetail({ event, onClose }) {
     </div>
   ) : null;
   const dlgRef = useStewDialog(onClose);   // a11y: Escape + focus (dialog semantics on the panel below)
+  // THE EDIT DIALOG REPLACES THIS CARD; IT DOES NOT OPEN INSIDE IT (AUDIT-feeds-round5-2026-09-22 F2).
+  // It used to render as the last child of the panel below, and a `position: fixed` overlay does NOT escape
+  // an ancestor that has a transform — `animation: lumenScale … both` leaves an identity transform on this
+  // card for as long as it is on screen, so the card became the Edit dialog's containing block. Measured in
+  // headless chromium at BOTH 1280x1000 and 1100x657: the Edit dialog's own scroll box was 238px tall for
+  // 659px of content, and its website tick sat 185px below the fold with the hit test at its centre
+  // returning a DIV. Everything past ~240px of that form was off it, "Save changes" included. That is the
+  // `todays-sheets-were-trapped-by-an-animation` shape, and no amount of moving the tick UP the form can
+  // fix it — a2a0c48 moved it 126px and it was still 185px under. Returned on its own, the Edit dialog is a
+  // top-level overlay like the New event dialog and measures the same way.
+  //
+  // Every hook above runs first, unconditionally, so this early return cannot reorder them.
+  if (editing) return <SchEventEdit event={e} onClose={() => { setEditing(false); onClose(); }} />;
   return (
     <div onClick={onClose} style={{ position: 'fixed', overflowY: 'auto', inset: 0, zIndex: 300, display: 'flex', alignItems: 'safe center', justifyContent: 'center', padding: 26, background: 'color-mix(in oklab, var(--ink) 34%, transparent)', backdropFilter: 'blur(3px)', animation: 'lumenFade .18s ease both' }}>
       <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={e.title || 'Event'} tabIndex={-1} onClick={ev => ev.stopPropagation()} style={{ width: 440, maxWidth: '100%', maxHeight: '90%', display: 'flex', flexDirection: 'column', borderRadius: 22, background: 'var(--paper)', border: '1px solid var(--line)', boxShadow: '0 24px 70px rgba(0,0,0,.28)', overflow: 'hidden', animation: 'lumenScale .22s cubic-bezier(.2,.8,.3,1.1) both', outline: 'none' }}>
@@ -1361,7 +1469,6 @@ function SchEventDetail({ event, onClose }) {
               : `Remove “${e.title || 'this event'}” for everyone? This cannot be undone.`)) { window.Steward.removeEvent(e.id); onClose(); } }}
             className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 11, fontSize: 13.5, color: 'var(--clay-ink)' }}><Icon name="trash" size={15} color="currentColor" /> {e.recur ? 'Remove series' : 'Remove'}</button>
         </div>
-        {editing ? <SchEventEdit event={e} onClose={() => { setEditing(false); onClose(); }} /> : null}
       </div>
     </div>
   );
