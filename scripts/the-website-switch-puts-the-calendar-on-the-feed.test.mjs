@@ -33,7 +33,7 @@ const SUPPER = 'Harvest supper, all welcome', HELD = 'Safeguarding review', YOUT
 const NEXT_MONTH = (() => { const d = new Date(); d.setMonth(d.getMonth() + 1); d.setDate(3); return d.toISOString().slice(0, 10); })();
 const NEXT_MONTH_5 = NEXT_MONTH.slice(0, 8) + '05';
 
-let relay, chr, ws, prof, evalIn, reloadAndUnlock, churchPub = '', npub = '';
+let relay, chr, ws, prof, evalIn, cdpSend, reloadAndUnlock, churchPub = '', npub = '';
 const errors = [];
 
 // What the box holds, read from its OWN sqlite — not from anything the console could answer from cache.
@@ -103,6 +103,7 @@ before(async () => {
     if (m.id && pend.has(m.id)) { pend.get(m.id)(m); pend.delete(m.id); } });
   const send = (method, params = {}) => new Promise(r => { const i = ++id; pend.set(i, r); ws.send(JSON.stringify({ id: i, method, params })); });
   await send('Runtime.enable');
+  cdpSend = send;                 // the viewport rows below drive Emulation.setDeviceMetricsOverride
   evalIn = async (expression) => {
     const rr = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
     if (rr?.result?.exceptionDetails) throw new Error('in-page: ' + JSON.stringify(rr.result.exceptionDetails.exception || rr.result.exceptionDetails).slice(0, 300));
@@ -381,6 +382,110 @@ test('a tick saved in the seconds after a reconnect keeps the switch on and ever
   await waitFor(`document.querySelector('button[aria-label="Share our calendar on our website"]').getAttribute('aria-checked') === 'true'`, 20000, 'the switch to read on');
   const back = await pollFeed(x => x.status === 200 && x.text.includes('SUMMARY'));
   assert.equal(back.text.includes(HELD), false, 'THE HELD EVENT LEAKED after off-then-on in the restart window');
+});
+
+// ── F2: THE TICK IS ON SCREEN WITHOUT SCROLLING, WHICH ORDER ALONE NEVER SAID ────────────────────────────
+// AUDIT-feeds-round5-2026-09-22 F2. The `aboveIn` rows above pin the tick's ORDER and nothing else, and
+// `clickSel` clicks an off-screen element happily — so all of them passed while the Edit dialog's tick sat
+// 185px BELOW THE FOLD of its own scroll box at 1280x1000 AND at 1100x657, with document.elementFromPoint at
+// its centre returning a DIV. Measured here, at this tip, before the fix:
+//
+//   EDIT  whole-church  1280x1000  tick 786..804  scroller DIV 381..619 clientH=238 scrollH=659  scrollNeeded 185  hit DIV
+//   EDIT  group         1100x657   tick 615..633  scroller DIV 209..448 clientH=238 scrollH=659  scrollNeeded 185  hit DIV
+//
+// The cause was not where the tick sits in the form. SchEventDetail rendered SchEventEdit INSIDE its own
+// card, and that card carries `animation: lumenScale … both`, whose identity transform makes it the
+// containing block for a `position: fixed` descendant — so the Edit dialog's backdrop was 267px tall instead
+// of the viewport, and its scroll box 238px for 659px of content. Everything past about 240px of that form
+// was off it, "Save changes" included. SchEventDetail now RETURNS the Edit dialog instead of nesting it.
+//
+// These rows read real geometry at TWO viewports. `scrollNeeded` is `tick.bottom − scroller.bottom` (<= 0
+// means no scrolling is needed to reach it) and `hitIsTheTick` is document.elementFromPoint at its centre.
+const TICK_GEOM = (label) => `(() => {
+  const t = document.querySelector('input[aria-label="LABEL"]');
+  if (!t) return { err: 'no tick called LABEL' };
+  const r = t.getBoundingClientRect();
+  let n = t.parentElement, sc = null;
+  while (n) { const st = getComputedStyle(n); if (/(auto|scroll)/.test(st.overflowY) && n.scrollHeight > n.clientHeight + 1) { sc = n; break; } n = n.parentElement; }
+  const sr = sc ? sc.getBoundingClientRect() : { top: 0, bottom: innerHeight };
+  const mid = document.elementFromPoint(Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2));
+  return { viewport: innerWidth + 'x' + innerHeight, top: Math.round(r.top), bottom: Math.round(r.bottom),
+           clientH: sc ? sc.clientHeight : innerHeight, scrollH: sc ? sc.scrollHeight : innerHeight,
+           scrollNeeded: Math.round(r.bottom - sr.bottom), hitIsTheTick: mid === t, hit: mid ? mid.tagName : 'none' };
+})()`.split('LABEL').join(label);
+const viewport = async (w, h) => { await cdpSend('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: false }); await sleep(700); };
+// A CONSOLE WINDOW, and a SHORT one. 1280x1000 is the size the owner's placement request was measured at;
+// 1100x657 is a laptop window with browser chrome, and is the size that made the New dialog's shortfall show.
+const CONSOLE_SIZES = [[1280, 1000], [1100, 657]];
+
+test('F2: the website tick is ON SCREEN without scrolling in the EDIT dialog, at two console sizes', { skip: SKIP, timeout: 300000 }, async () => {
+  const openEditOn = async (title) => {
+    await press('/^Calendar$/', 'the Calendar section');
+    await sleep(700);
+    let hit = 'miss';
+    for (let i = 0; i < 4 && hit !== 'ok'; i++) {
+      hit = await evalIn(`(() => { const b=[...document.querySelectorAll('button[title="See what’s on this day"]')].find(x=>(x.textContent||'').includes(${JSON.stringify(title)})); if(b){b.click();return 'ok';} return 'miss'; })()`);
+      if (hit !== 'ok') { assert.equal(await evalIn(clickSel('button[title="Next month"]')), 'ok', 'no month-forward control on the calendar'); await sleep(700); }
+    }
+    assert.equal(hit, 'ok', 'the day holding ' + title + ' is not on the calendar');
+    await sleep(600);
+    assert.equal(await evalIn(`(() => { const b=[...document.querySelectorAll('[role="button"]')].find(x=>(x.textContent||'').includes(${JSON.stringify(title)})); if(b){b.click();return 'ok';} return 'miss'; })()`), 'ok', 'the event card did not open');
+    await sleep(600);
+    await press('/^Edit$/', 'Edit');
+    await sleep(900);
+  };
+  const closeAll = async () => {
+    await evalIn(`(() => { for (const b of [...document.querySelectorAll('button')]) if ((b.textContent||'').trim() === 'Cancel') { b.click(); break; } return 'ok'; })()`);
+    await sleep(600);
+    await evalIn(`(() => { for (const b of document.querySelectorAll('button[title="Close"]')) b.click(); return 'ok'; })()`);
+    await sleep(600);
+  };
+  try {
+    for (const [title, label] of [[SUPPER, 'Not on the website'], [YOUTH, 'On the website']]) {
+      await viewport(1280, 1000);
+      await openEditOn(title);
+      for (const [w, h] of CONSOLE_SIZES) {
+        await viewport(w, h);
+        const g = await evalIn(TICK_GEOM(label));
+        assert.ok(!g.err, `the Edit dialog draws no "${label}" tick at ${w}x${h}: ${JSON.stringify(g)}`);
+        assert.ok(g.scrollNeeded <= 0,
+          `THE WEBSITE TICK IS ${g.scrollNeeded}px BELOW THE FOLD of the Edit dialog's scroll box at ${w}x${h} — a steward must scroll to reach the control that decides whether the event is public, and every order assertion in this file passes anyway: ${JSON.stringify(g)}`);
+        assert.equal(g.hitIsTheTick, true,
+          `THE TICK IS NOT WHAT IS AT ITS OWN CENTRE at ${w}x${h} (elementFromPoint returned ${g.hit}) — it is covered or clipped: ${JSON.stringify(g)}`);
+      }
+      await viewport(1280, 1000);
+      await closeAll();
+    }
+  } finally { await cdpSend('Emulation.clearDeviceMetricsOverride', {}); await sleep(500); }
+  assert.deepEqual(errors, [], 'the console threw:\n  ' + errors.join('\n  '));
+});
+
+test('F2: …and in the NEW event dialog at a console size, with the short-window shortfall stated rather than claimed away', { skip: SKIP, timeout: 300000 }, async () => {
+  // HONEST ABOUT WHAT IS NOT REACHED. The New event dialog carries "Belongs to" and its group chips, so its
+  // form is 878px where Edit's is 659px, and the owner's placement (2026-09-22) puts the tick INSIDE the
+  // Belongs-to block — the answer there decides which of the two ticks is drawn at all, so it cannot move
+  // above it. At 1280x1000 the tick is comfortably on screen. At 1100x657 — a short laptop window — it is
+  // about 40px under, and this row asserts that SMALL number rather than pretending it is zero: the
+  // regression it exists to catch is the original one, where the tick sat below the cover-image picker and
+  // the note box, 300px further down.
+  try {
+    await press('/^Calendar$/', 'the Calendar section');
+    await press('/^New event$/', 'New event');
+    await waitFor(`!!document.querySelector('input[aria-label="Title"]')`, 20000, 'the New event dialog');
+    await viewport(1280, 1000);
+    const big = await evalIn(TICK_GEOM('Not on the website'));
+    assert.ok(!big.err, 'the New event dialog draws no tick at 1280x1000: ' + JSON.stringify(big));
+    assert.ok(big.scrollNeeded <= 0,
+      `THE NEW EVENT DIALOG'S TICK IS ${big.scrollNeeded}px BELOW THE FOLD at 1280x1000 — the size the owner's request was measured at: ` + JSON.stringify(big));
+    assert.equal(big.hitIsTheTick, true, 'the New dialog tick is not what is at its own centre at 1280x1000: ' + JSON.stringify(big));
+    await viewport(1100, 657);
+    const small = await evalIn(TICK_GEOM('Not on the website'));
+    assert.ok(small.scrollNeeded < 120,
+      `THE NEW EVENT DIALOG'S TICK IS ${small.scrollNeeded}px BELOW THE FOLD at 1100x657 — it has gone back below the optional fields (the original complaint was ~300px): ` + JSON.stringify(small));
+  } finally { await cdpSend('Emulation.clearDeviceMetricsOverride', {}); await sleep(500); }
+  await evalIn(`(() => { for (const b of [...document.querySelectorAll('button')]) if ((b.textContent||'').trim() === 'Cancel') { b.click(); break; } return 'ok'; })()`);
+  await sleep(600);
+  assert.deepEqual(errors, [], 'the console threw:\n  ' + errors.join('\n  '));
 });
 
 test('the switch off: the feed is a 404 again and every public copy is tombstoned', { skip: SKIP, timeout: 240000 }, async () => {

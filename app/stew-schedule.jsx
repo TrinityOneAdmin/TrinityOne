@@ -1406,6 +1406,19 @@ function SchEventDetail({ event, onClose }) {
     </div>
   ) : null;
   const dlgRef = useStewDialog(onClose);   // a11y: Escape + focus (dialog semantics on the panel below)
+  // THE EDIT DIALOG REPLACES THIS CARD; IT DOES NOT OPEN INSIDE IT (AUDIT-feeds-round5-2026-09-22 F2).
+  // It used to render as the last child of the panel below, and a `position: fixed` overlay does NOT escape
+  // an ancestor that has a transform — `animation: lumenScale … both` leaves an identity transform on this
+  // card for as long as it is on screen, so the card became the Edit dialog's containing block. Measured in
+  // headless chromium at BOTH 1280x1000 and 1100x657: the Edit dialog's own scroll box was 238px tall for
+  // 659px of content, and its website tick sat 185px below the fold with the hit test at its centre
+  // returning a DIV. Everything past ~240px of that form was off it, "Save changes" included. That is the
+  // `todays-sheets-were-trapped-by-an-animation` shape, and no amount of moving the tick UP the form can
+  // fix it — a2a0c48 moved it 126px and it was still 185px under. Returned on its own, the Edit dialog is a
+  // top-level overlay like the New event dialog and measures the same way.
+  //
+  // Every hook above runs first, unconditionally, so this early return cannot reorder them.
+  if (editing) return <SchEventEdit event={e} onClose={() => { setEditing(false); onClose(); }} />;
   return (
     <div onClick={onClose} style={{ position: 'fixed', overflowY: 'auto', inset: 0, zIndex: 300, display: 'flex', alignItems: 'safe center', justifyContent: 'center', padding: 26, background: 'color-mix(in oklab, var(--ink) 34%, transparent)', backdropFilter: 'blur(3px)', animation: 'lumenFade .18s ease both' }}>
       <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={e.title || 'Event'} tabIndex={-1} onClick={ev => ev.stopPropagation()} style={{ width: 440, maxWidth: '100%', maxHeight: '90%', display: 'flex', flexDirection: 'column', borderRadius: 22, background: 'var(--paper)', border: '1px solid var(--line)', boxShadow: '0 24px 70px rgba(0,0,0,.28)', overflow: 'hidden', animation: 'lumenScale .22s cubic-bezier(.2,.8,.3,1.1) both', outline: 'none' }}>
@@ -1441,7 +1454,6 @@ function SchEventDetail({ event, onClose }) {
               : `Remove “${e.title || 'this event'}” for everyone? This cannot be undone.`)) { window.Steward.removeEvent(e.id); onClose(); } }}
             className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 11, fontSize: 13.5, color: 'var(--clay-ink)' }}><Icon name="trash" size={15} color="currentColor" /> {e.recur ? 'Remove series' : 'Remove'}</button>
         </div>
-        {editing ? <SchEventEdit event={e} onClose={() => { setEditing(false); onClose(); }} /> : null}
       </div>
     </div>
   );
