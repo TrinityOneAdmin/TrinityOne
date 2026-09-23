@@ -1,21 +1,37 @@
-// THE PUBLIC "GET THE APP" SECTION OFFERS NO DOWNLOAD WHILE THE APP IS INVITATION-ONLY.
+// THE PUBLIC "GET THE APP" SECTION OFFERS NEITHER A DOWNLOAD NOR A WAY INTO THE APP, WHILE IT IS
+// INVITATION-ONLY.
 //   Run: node --test scripts/the-pilot-page-offers-no-downloads.test.mjs
 //
 // Owner-approved 2026-09-23 (reference/DESIGN-embeddable-church-info.md, "The pilot website"). While
 // TrinityOne is in pilot, welcome.html's "Get the app" section must not hand a stranger a working link to
 // any of the six builds (member APK, steward APK, Windows .exe, macOS .dmg, Linux .AppImage, Linux .deb) —
-// only a pilot church's own join slip does that. The section stays VISIBLE (so a reader can still see which
-// platforms exist) but every control that used to download something becomes inert, a single
-// "Joining the pilot? Contact us." mailto action takes over as the primary CTA, and one sentence has to
-// survive the whole change: an existing pilot member reading a page that just closed public downloads must
-// not conclude the app is unavailable to THEM.
+// only a pilot church's own join slip does that.
+//
+// WIDENED THE SAME DAY, owner: "the pilot page needs the webapps grayed out as well" — the first cut of
+// this locked every download and left three WEB ROUTES live (member "iPhone & iPad" and "Computer", steward
+// "Open the console"), so a stranger could still reach the running app straight from this page. All nine
+// controls are locked the same way. Checked before locking them (CLAUDE.md rule 7): none is the route a
+// pilot MEMBER is told to use — that is a join-slip link carrying `?follow=…` straight to their own church
+// (join.js), never this page's bare app.trinityone.church entry points.
+//
+// The section stays VISIBLE (so a reader can still see which platforms exist) but every one of the nine
+// controls becomes inert, a single "Joining the pilot? Contact us." mailto action takes over as the primary
+// CTA, and one sentence has to survive the whole change: an existing pilot member reading a page that just
+// closed the public route must not conclude the app is unavailable to THEM.
+//
+// ALSO WIDENED THE SAME DAY: two sentences that were true went false the moment the section above them
+// locked (you cannot "just open it in your browser" or "download the app from this page" any more), and the
+// owner asked to hide the tamper warning too ("with no download on the page there is nothing on it to be
+// cautious about") — REVERSING the original brief, which said to keep it. This file asserts the reversal,
+// not the original instruction.
 //
 // CLAUDE.md rule 1 (test at the point of use): this does not grep welcome.html's source for the six
 // hostnames — a `false && ` in front of the gate would leave every character of a matched string in place.
 // It renders the real, served page (scripts/gateway.mjs, the same file that serves production) in headless
 // Chromium and reads the live DOM: computed hrefs, rendered innerText, the accessibility tree's role for a
-// locked control vs a live one, and actual layout width at phone size. Skips (does not fail) with no
-// chromium, same contract as scripts/app-boots.test.mjs.
+// locked control vs a live one, actual layout width at phone size, and — by flipping the page's own
+// `data-pilot` attribute live, no reload — that the single switch really does bring every one of those
+// things back at once. Skips (does not fail) with no chromium, same contract as scripts/app-boots.test.mjs.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -112,17 +128,25 @@ test('there is a browser to render the page in', { skip: !CHROME ? 'no chromium 
   assert.ok(CHROME);
 });
 
-test('no download URL is reachable from any control in "Get the app"', { skip: !CHROME ? 'no chromium' : false }, async () => {
+test('no download OR web-route URL is reachable from any control in "Get the app"', { skip: !CHROME ? 'no chromium' : false }, async () => {
   await openAt(1280);
   const hrefs = JSON.parse(await ev(
     `JSON.stringify([].slice.call(document.querySelectorAll('#get a')).map(function(a){return a.getAttribute('href');}).filter(Boolean))`));
-  const live = hrefs.filter((h) => /\.apk(\?|$)|\.exe(\?|$)|\.dmg(\?|$)|\.AppImage(\?|$)|\.deb(\?|$)|releases\/latest\/download/i.test(h));
-  assert.deepEqual(live, [],
+  const builds = hrefs.filter((h) => /\.apk(\?|$)|\.exe(\?|$)|\.dmg(\?|$)|\.AppImage(\?|$)|\.deb(\?|$)|releases\/latest\/download/i.test(h));
+  assert.deepEqual(builds, [],
     'a control in #get still carries a working link to a build. During the pilot, the general public must ' +
     'not be able to reach any of the six downloads from this page.');
+  // The wider check the owner asked for: no control may still open the running app itself either — that
+  // includes the member "iPhone & iPad"/"Computer" web routes and the steward "Open the console" page, all
+  // of which are bare app.trinityone.church entry points with no href-based way to tell them apart from a
+  // download by pattern. Only "Running your own relay" (help.html) and the mailto CTA may remain live.
+  const appRoutes = hrefs.filter((h) => /^https:\/\/app\.trinityone\.church/i.test(h));
+  assert.deepEqual(appRoutes, [],
+    'a control in #get still links straight into the running app (app.trinityone.church). Locking every ' +
+    'download and leaving the webapp routes live would still let a stranger reach the app from this page.');
 });
 
-test('exactly the six pilot downloads are locked, and each keeps its real target for go-live', { skip: !CHROME ? 'no chromium' : false }, async () => {
+test('exactly the nine pilot controls (six downloads, three web routes) are locked, and each keeps its real target for go-live', { skip: !CHROME ? 'no chromium' : false }, async () => {
   const locked = JSON.parse(await ev(
     `JSON.stringify([].slice.call(document.querySelectorAll('#get [data-live-href]')).map(function(a, i){` +
     // .focus() is the behavioural check, not the .tabIndex IDL getter: Chromium reports tabIndex === 0 for
@@ -131,20 +155,30 @@ test('exactly the six pilot downloads are locked, and each keeps its real target
     // rather than the property that looks right and isn't.
     `a.setAttribute('data-probe-idx', String(i)); a.focus(); var stuck = document.activeElement === a; document.activeElement && document.activeElement.blur && document.activeElement.blur();` +
     `return {liveHref:a.getAttribute('data-live-href'), href:a.getAttribute('href'), focusable:stuck};}))`));
-  assert.equal(locked.length, 6, `expected 6 locked download controls, found ${locked.length}`);
+  assert.equal(locked.length, 9, `expected 9 locked controls (6 downloads + 3 web routes), found ${locked.length}`);
   for (const c of locked) {
     assert.equal(c.href, null, `a locked control still has href="${c.href}" — it would still navigate`);
     assert.equal(c.focusable, false, `calling .focus() on a locked control (${c.liveHref}) actually moved keyboard focus there`);
     assert.match(c.liveHref, /^https:\/\/(app\.trinityone\.church|github\.com\/TrinityOneAdmin)/,
       'a locked control lost its real target — go-live would have nothing to restore');
   }
+  // The three web routes specifically, named, so deleting the wrapper around any ONE of them fails by name
+  // rather than only by a count that could hide which one went missing.
+  const wantLive = ['https://app.trinityone.church/', 'https://app.trinityone.church/steward.html'];
+  for (const want of wantLive) {
+    assert.ok(locked.some((c) => c.liveHref === want), `no locked control names ${want} as its real target`);
+  }
 });
 
 test('a locked control has no link role for a screen reader; a live control beside it still does', { skip: !CHROME ? 'no chromium' : false }, async () => {
   const lockedRole = await axRoleOf('#get a[data-live-href="https://app.trinityone.church/trinityone.apk"]');
   assert.notEqual(lockedRole, 'link', `the locked Android control still exposes an accessibility role of "${lockedRole}" — a screen reader would still announce it as a link`);
-  const liveRole = await axRoleOf('#get a[href="https://app.trinityone.church/steward.html"]');
-  assert.equal(liveRole, 'link', '"Open the console" is not a download and must stay a real, announced link — if this fails the harness itself is broken, not the page');
+  // Re-anchored 2026-09-23: "Open the console" (the previous live comparison) is now ITSELF locked, so it
+  // can no longer be the control that proves the locking is selective — using it would make this pass for
+  // the wrong reason (everything ignored, not "only the locked things ignored"). "Running your own relay"
+  // (the help-guide link beside the Linux builds) was never a pilot download or web route and stays live.
+  const liveRole = await axRoleOf('#get a[href="help.html#console-relay"]');
+  assert.equal(liveRole, 'link', '"Running your own relay" is not part of the pilot lock and must stay a real, announced link — if this fails the harness itself is broken, not the page');
 });
 
 test('the contact action points at hello@trinityone.church and nowhere else', { skip: !CHROME ? 'no chromium' : false }, async () => {
@@ -156,14 +190,28 @@ test('the contact action points at hello@trinityone.church and nowhere else', { 
   assert.equal(visible, true, 'the contact CTA is not actually shown — deleting it (or the pilot switch) must make this fail');
 });
 
-test('the two required sentences are in the rendered text', { skip: !CHROME ? 'no chromium' : false }, async () => {
+test('the two required sentences are in the rendered text, and nothing on the page still claims a download or an open-in-browser', { skip: !CHROME ? 'no chromium' : false }, async () => {
   const text = await ev(`document.getElementById('get').innerText`);
   assert.match(text, /Joining the pilot\? Contact us\./,
     'the primary pilot action is missing from the rendered page');
   assert.match(text, /Already part of a church using TrinityOne\? Install from your church's own link, not from here\./,
     'the sentence that stops an existing pilot member reading this page as "the app is gone" is missing');
-  assert.match(text, /Caution: if someone sends you the app, even someone you trust, don't install it\./,
-    'the tamper warning must survive unweakened — it matters MORE while the public route is closed');
+  // The tamper warning is hidden, not deleted (owner reversed the original brief 2026-09-23: "Hide the
+  // tamper proof line for now as well" — with no download on the page there is nothing to be cautious
+  // about). It must not render now, and the next test proves the switch brings it back.
+  assert.doesNotMatch(text, /Caution: if someone sends you the app/,
+    'the tamper warning is rendering — it should be hidden behind the pilot switch while nothing is downloadable');
+  // The two sentences that went false the moment the section locked (owner, 2026-09-23). A test that only
+  // checked the NEW copy would stay green even if someone restored the OLD, now-false sentence ALONGSIDE
+  // it — checking both directions closes that gap.
+  assert.doesNotMatch(text, /Install it on an Android phone, or just open it in your browser on any device/,
+    'the page still claims you can install or open it in your browser — you cannot, every route above is locked');
+  assert.doesNotMatch(text, /Download the app from this page, or from your church's own TrinityOne address/,
+    'the page still claims you can download the app from this page — you cannot, every download is locked');
+  assert.match(text, /We're not open to the public right now\./,
+    'the replacement sentence for the section intro is missing');
+  assert.match(text, /There's nothing to download from this page right now\./,
+    'the replacement sentence above the (now-hidden) caution box is missing');
 });
 
 test('the pilot cards are visibly tagged and the switch is the single "#get[data-pilot]" attribute', { skip: !CHROME ? 'no chromium' : false }, async () => {
@@ -182,4 +230,33 @@ test('the section has no horizontal scroll at phone width', { skip: !CHROME ? 'n
     `JSON.stringify({doc: document.documentElement.scrollWidth, body: document.body.scrollWidth, inner: window.innerWidth})`));
   assert.ok(widths.doc <= widths.inner + 1, `document.documentElement.scrollWidth (${widths.doc}) exceeds the 400px viewport (${widths.inner}) — the page scrolls sideways`);
   assert.ok(widths.body <= widths.inner + 1, `document.body.scrollWidth (${widths.body}) exceeds the 400px viewport (${widths.inner})`);
+});
+
+// LAST ON PURPOSE. This is the only test that mutates the shared page (it flips `data-pilot` live, with
+// no reload, to prove the switch really does govern everything at once) rather than only reading it, so
+// it runs after every other test that depends on the pilot-on state — and opens its own fresh copy of the
+// page first, rather than trusting whatever state an earlier test left the shared page in.
+test('going live is flipping ONE attribute: it brings the tags, the CTA, the old copy and the tamper warning back together, with no reload', { skip: !CHROME ? 'no chromium' : false }, async () => {
+  await openAt(1280);
+  const before_ = await ev(`document.getElementById('get').getAttribute('data-pilot')`);
+  assert.equal(before_, 'on', 'expected the page to load with the pilot switch on');
+  await ev(`document.getElementById('get').setAttribute('data-pilot', 'off')`);
+  const after_ = JSON.parse(await ev(`(function(){
+    var text = document.getElementById('get').innerText;
+    var tagVisible = [].slice.call(document.querySelectorAll('#get .pilot-tag')).some(function(t){return getComputedStyle(t).display !== 'none';});
+    var ctaVisible = getComputedStyle(document.querySelector('#get .pilot-cta')).display !== 'none';
+    return JSON.stringify({
+      tagVisible: tagVisible, ctaVisible: ctaVisible,
+      hasOldIntro: /Install it on an Android phone/.test(text),
+      hasOldDownloadLine: /Download the app from this page/.test(text),
+      hasCaution: /Caution: if someone sends you the app/.test(text),
+      hasNewIntro: /We're not open to the public right now/.test(text),
+    });
+  })()`));
+  assert.equal(after_.tagVisible, false, 'a "Pilot" tag is still visible after the switch was turned off');
+  assert.equal(after_.ctaVisible, false, 'the contact CTA is still visible after the switch was turned off');
+  assert.equal(after_.hasOldIntro, true, 'the pre-pilot intro sentence did not come back');
+  assert.equal(after_.hasOldDownloadLine, true, 'the pre-pilot "download the app from this page" sentence did not come back');
+  assert.equal(after_.hasCaution, true, 'the tamper warning did not come back');
+  assert.equal(after_.hasNewIntro, false, 'the pilot-only intro sentence is still showing after the switch was turned off');
 });

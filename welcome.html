@@ -148,25 +148,44 @@
   @media (max-width: 720px) { .sx-grid--2 { grid-template-columns: 1fr; } }
   .sx-actions { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; margin-top: 34px; }
   .sx-note { max-width: 700px; margin: 22px auto 0; font-size: 15px; line-height: 1.6; color: var(--ink-2); background: color-mix(in oklab, var(--clay) 8%, var(--surface)); border: 1px solid color-mix(in oklab, var(--clay) 26%, transparent); border-radius: 14px; padding: 14px 17px; }
+  /* Moved out of an inline style attribute (2026-09-23): an inline `style="display:…"` beats ANY
+     stylesheet rule, including the pilot switch's `#get[data-pilot="on"] .pilot-hide { display: none }` —
+     measured: the tamper warning kept rendering while "hidden" until this moved here. */
+  .sx-note-caution { display: inline-block; margin-top: 9px; font-size: .88em; }
 
-  /* ══ PILOT-MODE SWITCH (2026-09-23, owner-approved) ══ reference/DESIGN-embeddable-church-info.md,
-     "The pilot website". While the app is invitation-only, the public download links below are inert
-     and a single "Contact us" action stands in their place. Every PRESENTATION change this state makes —
-     the "Pilot" tags, the contact CTA block, the extra install-from-your-church line — keys off ONE
-     attribute: `data-pilot="on"` on `<section id="get">`. Flip that one attribute off (or delete it) and
-     all three disappear together; nothing else in this stylesheet needs to change.
+  /* ══ PILOT-MODE SWITCH (2026-09-23, owner-approved; widened 2026-09-23 to cover the web routes and
+     copy too — "the pilot page needs the webapps grayed out as well", so a stranger can no longer reach
+     the running app from this page at all, not just its downloads) ══
+     reference/DESIGN-embeddable-church-info.md, "The pilot website". Every PRESENTATION change this
+     state makes — the "Pilot" tags, the contact CTA block, the extra install-from-your-church line, the
+     two rewritten sentences below swapping back to their pre-pilot wording, and the tamper warning
+     reappearing — keys off ONE attribute: `data-pilot="on"` on `<section id="get">`. Flip that one
+     attribute off (or delete it) and all of it reverts together; nothing else in this stylesheet needs
+     to change.
      CSS cannot restore a REMOVED `href` (see the accessibility note on `#get` below for why href, not
-     aria-disabled, was removed), so the six controls this locks keep their real target as `data-live-href`
-     at three places tagged `PILOT-LOCK` in the markup (one of which wraps all four desktop builds at
-     once). GO LIVE = (1) this attribute off, (2) at each `PILOT-LOCK` comment, rename that control's
-     `data-live-href` back to `href` and drop its `pilot-locked` class (cosmetic only). Nothing else
-     changes. */
-  .pilot-tag { display: none; }
+     aria-disabled, was removed), so the nine controls this locks — the six downloads AND the three web
+     routes (member "iPhone & iPad" / "Computer", steward "Open the console") — keep their real target as
+     `data-live-href` at three places tagged `PILOT-LOCK` in the markup (each now a shared wrapper: one
+     locks all three member-card routes, one locks all four desktop builds, one locks both steward
+     routes). GO LIVE = (1) this attribute off, (2) at each `PILOT-LOCK` comment, rename each control's
+     `data-live-href` back to `href` and drop the wrapper's `pilot-locked` class (cosmetic only); on the
+     steward Android control also restore `data-steward-cta download`. Nothing else changes — the copy
+     and the tamper warning come back on their own. */
+  /* Scoped to #get, not bare `.pilot-tag`: the tag reuses `.soon-pill`, which also sets
+     `display:inline-flex` unconditionally at EQUAL specificity — with no #get prefix here, turning the
+     switch off left the LATER-in-source `.soon-pill` rule win the tie and the tag stayed visible. #get
+     raises this rule's specificity above `.soon-pill` so it wins regardless of cascade order. */
+  #get .pilot-tag { display: none; }
   #get[data-pilot="on"] .pilot-tag { display: inline-flex; }
   .pilot-cta { display: none; }
   #get[data-pilot="on"] .pilot-cta { display: block; }
-  .pilot-locked, .pilot-locked .sx-act { opacity: .5; filter: grayscale(55%); pointer-events: none; cursor: default; }
-  .pilot-locked:hover, .pilot-locked .sx-act:hover { transform: none; border-color: var(--line); }
+  /* Text swaps: .pilot-only is the pilot-state wording (hidden once live), .pilot-hide is the pre-pilot
+     wording / the tamper warning (hidden while the pilot is on, so it is dormant markup, not deleted). */
+  .pilot-only { display: none; }
+  #get[data-pilot="on"] .pilot-only { display: inline; }
+  #get[data-pilot="on"] .pilot-hide { display: none; }
+  .pilot-locked, .pilot-locked a { opacity: .5; filter: grayscale(55%); pointer-events: none; cursor: default; }
+  .pilot-locked:hover, .pilot-locked a:hover { transform: none; border-color: var(--line); }
   .pilot-locked.sx-act--go, .pilot-locked .sx-act--go { background: var(--surface); border-color: var(--line); }
   .pilot-locked.sx-act--go b, .pilot-locked .sx-act--go b,
   .pilot-locked.sx-act--go span, .pilot-locked .sx-act--go span { color: var(--ink-3); }
@@ -661,9 +680,16 @@
      byte-for-byte identical".
 
      PILOT MODE is ON (owner-approved 2026-09-23; reference/DESIGN-embeddable-church-info.md, "The pilot
-     website"): the app is invitation-only, so the six controls below that would hand anyone a build are
-     locked — see the PILOT-MODE SWITCH comment in <style> for the one attribute that governs this, and
-     the three PILOT-LOCK comments below for the controls it locks.
+     website"): the app is invitation-only, so the six DOWNLOADS below are locked, and — widened the same
+     day, owner: "the pilot page needs the webapps grayed out as well" — so are the three WEB ROUTES that
+     would otherwise still let a stranger reach the running app with every download locked (member
+     "iPhone & iPad" and "Computer", steward "Open the console"). Checked before locking them: neither is
+     the route a PILOT MEMBER is told to use — that is a join-slip link carrying `?follow=…` straight to
+     their own church (join.js), never this page's bare app.trinityone.church entry points; DOMAIN.md
+     records the "Open the console" button as the self-serve START-A-CHURCH path, which is exactly the
+     public route this pilot closes, not an existing member's way back in. See the PILOT-MODE SWITCH
+     comment in <style> for the one attribute that governs this, and the three PILOT-LOCK comments below
+     (each now a shared wrapper) for the nine controls it locks.
 
      ACCESSIBILITY CHOICE, made once for all three PILOT-LOCK spots: each locked control has its `href`
      REMOVED rather than carrying `aria-disabled` on a live link, or being swapped for a non-link element.
@@ -675,7 +701,7 @@
   <div class="wrap">
     <div class="eyebrow"><span class="to-pill">Get the app</span></div>
     <h2>Get TrinityOne</h2>
-    <p class="sx-intro">Install it on an Android phone, or just open it in your browser on any device — there's nothing to set up.</p>
+    <p class="sx-intro"><span class="pilot-hide">Install it on an Android phone, or just open it in your browser on any device — there's nothing to set up.</span><span class="pilot-only">We're not open to the public right now.</span></p>
 
     <!-- THE PRIMARY ACTION while pilot mode is on. Hidden entirely when `data-pilot` is off, so going live
          removes it with the section's other pilot copy rather than needing its own deletion. -->
@@ -689,12 +715,14 @@
         <h3>TrinityOne <span class="soon-pill pilot-tag">Pilot</span></h3>
         <p>Read the Bible, join your groups, pray together, and keep up with your church through the week.</p>
         <p style="color:var(--ink-3);margin-top:7px">The Bible works straight away. To join your church you'll need their invite link or code.</p>
-        <div class="sx-acts">
-          <!-- PILOT-LOCK 1 of 3: real target kept as data-live-href. Go live: rename data-live-href to
-               href on this control and drop the pilot-locked class. -->
-          <a class="sx-act sx-act--go pilot-locked" data-live-href="https://app.trinityone.church/trinityone.apk"><b>Android</b><span>Download the app</span></a>
-          <a class="sx-act" href="https://app.trinityone.church/"><b>iPhone &amp; iPad</b><span>Open in Safari, then Share &rarr; Add to Home Screen &mdash; official app coming soon</span></a>
-          <a class="sx-act" href="https://app.trinityone.church/"><b>Computer</b><span>Open in your browser — nothing to install</span></a>
+        <!-- PILOT-LOCK 1 of 3: the Android DOWNLOAD and the iPhone/Computer WEB ROUTES share one
+             wrapper, so one `pilot-locked` class locks all three at once — each control's own
+             data-live-href still names its own real target. Go live: rename each control's
+             data-live-href to href and drop this wrapper's pilot-locked class. -->
+        <div class="sx-acts pilot-locked">
+          <a class="sx-act sx-act--go" data-live-href="https://app.trinityone.church/trinityone.apk"><b>Android</b><span>Download the app</span></a>
+          <a class="sx-act" data-live-href="https://app.trinityone.church/"><b>iPhone &amp; iPad</b><span>Open in Safari, then Share &rarr; Add to Home Screen &mdash; official app coming soon</span></a>
+          <a class="sx-act" data-live-href="https://app.trinityone.church/"><b>Computer</b><span>Open in your browser — nothing to install</span></a>
         </div>
       </div>
 
@@ -739,14 +767,17 @@
     <div style="max-width:760px;margin:26px auto 0;padding:15px 18px;border:1px solid var(--line);border-radius:14px;background:var(--paper)">
       <div style="font-weight:700;font-size:15px;color:var(--ink);margin-bottom:5px">Leading a church, with no computer you can leave on? <span class="soon-pill pilot-tag">Pilot</span></div>
       <p style="font-size:14px;color:var(--ink-2);line-height:1.55;margin:0 0 10px">Open <b>TrinityOne Steward</b>, the console pastors and church leaders run their church from, in your browser instead. Nothing to install, and you can move to the Suite later — but your church's records will live on our relays rather than your own.</p>
-      <div style="display:flex;flex-wrap:wrap;gap:9px;font-size:13.5px">
-        <a href="https://app.trinityone.church/steward.html" style="font-weight:700;color:var(--clay)">Open the console &rarr;</a>
-        <!-- PILOT-LOCK 3 of 3: real target kept as data-live-href. `data-steward-cta` is deliberately
-             removed while locked — android-cta.js rewrites every [data-steward-cta] into a live APK
-             download on an Android visitor's phone, which would defeat this lock on exactly the device
-             it matters most on. Go live: rename data-live-href to href, drop pilot-locked, and restore
-             `data-steward-cta download` so android-cta.js's Android rewrite (see that file) applies again. -->
-        <a class="pilot-locked" data-live-href="https://app.trinityone.church/trinityone-steward.apk" style="font-weight:700;color:var(--ink-3)">Android app</a>
+      <!-- PILOT-LOCK 3 of 3: BOTH routes into the steward console — the hosted console page (a WEB
+           ROUTE) and its Android app (a DOWNLOAD) — share one wrapper. Real targets
+           kept as data-live-href on each. `data-steward-cta` is deliberately removed from the Android
+           control while locked — android-cta.js rewrites every [data-steward-cta] into a live APK
+           download on an Android visitor's phone, which would defeat this lock on exactly the device it
+           matters most on. Go live: rename each control's data-live-href to href, drop this wrapper's
+           pilot-locked class, and restore `data-steward-cta download` on the Android control so
+           android-cta.js's Android rewrite (see that file) applies again. -->
+      <div style="display:flex;flex-wrap:wrap;gap:9px;font-size:13.5px" class="pilot-locked">
+        <a data-live-href="https://app.trinityone.church/steward.html" style="font-weight:700;color:var(--clay)">Open the console &rarr;</a>
+        <a data-live-href="https://app.trinityone.church/trinityone-steward.apk" style="font-weight:700;color:var(--ink-3)">Android app</a>
       </div>
     </div>
 
@@ -758,8 +789,14 @@
          old wording ("a TrinityOne address you asked for", "your phone will not warn you") described the
          mechanism and left the reader to work out what to DO. Forwarding an app file over WhatsApp is
          normal and friendly in much of the world this is built for, so the instruction has to be plain and
-         it has to name the trusted friend, who is exactly who it will come from. -->
-    <p class="sx-note" style="text-align:center">Download the app from this page, or from your church's own TrinityOne address.<br><strong style="display:inline-block;margin-top:9px;font-size:.88em">Caution: if someone sends you the app, even someone you trust, don't install it. A file can be changed on its way to you without you knowing.</strong></p>
+         it has to name the trusted friend, who is exactly who it will come from.
+
+         PILOT, owner 2026-09-23: "Hide the tamper proof line for now as well" — with no download on the
+         page there is nothing on it to be cautious about. The caution `<strong>` is `pilot-hide` rather
+         than deleted, so it comes back verbatim at go-live with the downloads; the sentence above it is
+         rewritten (not hidden) because it names THIS page as a download source, which is false right now
+         either way. -->
+    <p class="sx-note" style="text-align:center"><span class="pilot-hide">Download the app from this page, or from your church's own TrinityOne address.</span><span class="pilot-only">There's nothing to download from this page right now.</span><br class="pilot-hide"><strong class="sx-note-caution pilot-hide">Caution: if someone sends you the app, even someone you trust, don't install it. A file can be changed on its way to you without you knowing.</strong></p>
   </div>
 </section>
 
