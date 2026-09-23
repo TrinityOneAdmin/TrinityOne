@@ -25,6 +25,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { compileScreen, miniReact, find, texts } from './render-jsx-screen.mjs';
+import { fnBody } from './test-slice.mjs';
 
 const ROOT = new URL('../', import.meta.url).pathname;
 
@@ -237,9 +238,56 @@ test('a delegated steward gets the one page they are allowed, and none of the ow
     'delegate pressing those controls gets a failed publish and no explanation');
   assert.deepEqual(cardsOn(settings('access', { delegated: true }).tree), ['Security'],
     'the delegate’s notice page does not render the notice');
-  for (const k of ['key', 'stewards', 'delegated', 'become']) {
+  for (const k of ['key', 'stewards', 'delegated', 'become', 'history']) {
     assert.equal(cat.pages.some(p => p.k === k), false, `the owner-only ${k} page is in a delegate’s list`);
   }
+});
+
+// "MOVE OR COPY HISTORY" IS OWNER-ONLY TOO, AND THE RELAY IS WHY.
+// AUDIT-steward-doc-rules-round4-2026-09-22, finding F3. d126298 left this page open to a delegate on the
+// stated ground that its "Copy across" card was still usable by one. It is not: `cloneFromRelay` authorises
+// both ends with `_nip98`, which signs with THIS console's own key, and the relay's `_exportAuth` ends
+// `return cp && ev.pubkey === cp ? cp : null`. So the page offered a delegate one padlocked card and one
+// unmarked button that answers 401 and blames them for choosing the wrong relay.
+//
+// The gate is LIFTED OUT OF scripts/gateway.mjs AND RUN here, in the same row as the screen: without it
+// this test asserts only "somebody typed owner: true", and the reason — which is the half that was wrong
+// last time — would again be nothing but prose ([[comments-can-satisfy-assertions]]).
+test('…and "Move or copy history" is gone too, because the relay refuses a delegate at both ends', () => {
+  const GW = readFileSync(new URL('../scripts/gateway.mjs', import.meta.url), 'utf8');
+  const scope = { verifyEvent: () => true, CHURCH_PUBS: new Set(['c'.repeat(64)]), Buffer, JSON, Date, Math, URL, Set };
+  const proxy = new Proxy(scope, {
+    has: (t, k) => (k in t) || !(String(k) in globalThis),
+    get: (t, k) => { if (k === Symbol.unscopables) return undefined; if (k in t) return t[k];
+      throw new ReferenceError('the lifted _exportAuth needs `' + String(k) + '` — add a stub'); },
+  });
+  const body = fnBody(GW, 'function _exportAuth(req, host, path) {', '_exportAuth in the shipped relay');
+  const _exportAuth = new Function('scope', `with (scope) { ${body}; return _exportAuth; }`)(proxy);
+  // Exactly what _nip98 mints: kind 27235, tags u / method / church, signed by THIS console's key.
+  const ask = (signer, path, method) => _exportAuth({ headers: { authorization: 'Nostr ' + Buffer.from(JSON.stringify({
+    kind: 27235, pubkey: signer, created_at: Math.floor(Date.now() / 1000), content: '', sig: 'x',
+    tags: [['u', 'https://relay.example' + path], ['method', method], ['church', 'c'.repeat(64)]],
+  })).toString('base64') } }, 'relay.example', path);
+
+  for (const [path, method] of [['/export', 'GET'], ['/export-media', 'GET'], ['/import', 'POST']]) {
+    assert.equal(ask('5'.repeat(64), path, method), null,
+      `THE PREMISE HAS CHANGED: ${path} now admits a delegated steward's own key, so this page may belong ` +
+      'back in a delegate’s list — re-take the decision rather than deleting this row.');
+    assert.equal(ask('c'.repeat(64), path, method), 'c'.repeat(64),
+      `re-anchor: ${path} refuses the CHURCH KEY as well, so the row above proves nothing about delegates`);
+  }
+  // The screen half. A delegate deep-linked to it must land somewhere real, never on nothing.
+  assert.equal(catalogue({ delegated: true }).pages.some(p => p.k === 'history'), false,
+    'a delegated steward is still offered "Move or copy history", where both cards need the church key');
+  const r = region(settings('history', { delegated: true }).tree);
+  assert.equal(r.length, 1, 'a delegate deep-linked to Move or copy history rendered no page at all');
+  assert.notEqual(r[0].props['aria-label'], 'Move or copy history',
+    'the page is filtered out of the list and still opens by deep link — the list and the detail disagree');
+  // …and the OWNER still has it, with both cards. Without this the row would pass over a page deleted for
+  // everybody, which would take cross-relay sync and the clone away from the one console that can use them.
+  assert.equal(catalogue().pages.some(p => p.k === 'history'), true, 'the owner console lost the page entirely');
+  assert.equal(cardsOn(settings('history').tree).length, 2,
+    'the owner’s Move or copy history page no longer renders both cards: ' + JSON.stringify(cardsOn(settings('history').tree)));
 });
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────

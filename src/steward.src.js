@@ -330,6 +330,18 @@ const MEDIAKEY_D = 'trinityone/mediakey:';   // Tier 2 encryption: a per-church 
 let _mediaKeyHex = null;                       // this device's cached copy of the church media key (= ring[0])
 let _mediaKeyRing = [];                        // current key first, then superseded — rotation must never orphan an encrypted sermon
 let _mediaKeyDocKeys = null;
+// WHICH RECIPIENT SET THE RELAY LAST REFUSED, as a sorted fingerprint — null means "nothing is known to be
+// refused". AUDIT-steward-doc-rules-round3-2026-09-22, finding F2: `ensureMediaKeyForMembers` only recorded
+// what it published on SUCCESS (`if (ok !== false) _mediaKeyDocKeys = keys;`), so a refusal left the
+// "who is already keyed" map empty, the idempotence guard `want.every(p => have[p])` never became true, and
+// the console re-sealed and re-published the same refused document on EVERY roster emit — for ever.
+// Measured on the shipped bundle: 3 publishes for 3 calls when refused, 1 for 3 when accepted.
+//
+// IT IS NOT A PERMANENT GIVING-UP, and it must not be: the refusal may be an outage rather than a rule.
+// This is cleared whenever anything that could change the answer happens — the recipient set changes (a
+// different fingerprint is simply not a match), an envelope lands on the subscription, the key is rotated,
+// or the console changes identity.
+let _mediaKeyPushRefused = null;
 // HAVE WE ACTUALLY LOOKED for an envelope? The care key has this flag and the name key has this flag; the
 // media key had neither, and its guard tested relay AUTHENTICATION instead — which is one round trip, while
 // the church's document corpus is not. So a console restored from the 12 words, authenticated and writing,
@@ -1854,7 +1866,7 @@ function _resetChurchScopedState() {
   // The `*Checked` flags are the mint gates — "have we actually LOOKED for an envelope?". Carried across, they
   // report TRUE for a church nobody has looked at yet, which is what lets a stale ring be published as new.
   _careKeyHex = null; _careKeyRing = []; _careKeyDocKeys = null; _careKeyRev = 0; _careKeyChecked = false;
-  _mediaKeyHex = null; _mediaKeyRing = []; _mediaKeyDocKeys = null; _mediaKeyChecked = false;
+  _mediaKeyHex = null; _mediaKeyRing = []; _mediaKeyDocKeys = null; _mediaKeyChecked = false; _mediaKeyPushRefused = null;
   // Every capability envelope belongs here too. The comment above is not decorative: carrying a `checked`
   // flag across a church switch answers "already looked" for a church nobody has looked at.
   for (const k of Object.keys(CAP_KEYS)) _capState[k] = { ring: [], docKeys: null, rev: 1, at: 0, checked: false };
@@ -2411,9 +2423,12 @@ async function deriveAes(pin, salt, iterations) {
 // delegated steward with no care grant is CORRECTLY refused every time, and the sticky banner “That change
 // wasn’t saved — this part of the church hasn’t been given to you” came back on every tab for ever.
 //
-// WHO PASSES IT (CLAUDE.md rule 2 — complete list, measured 2026-09-17): ensureCareKeyForMembers, whose one
-// caller is the background key-distributor effect; ensureGroupKeys, same effect; and publishGroupKey when
-// ITS caller passes it — which the key-distributor does and the interactive seal deliberately does not.
+// WHO PASSES IT (CLAUDE.md rule 2 — complete list, measured 2026-09-17, extended 2026-09-22):
+// ensureCareKeyForMembers, whose one caller is the background key-distributor effect; ensureGroupKeys, same
+// effect; publishGroupKey when ITS caller passes it — which the key-distributor does and the interactive
+// seal deliberately does not; and ensureMediaKeyForMembers, same effect, added for finding F2 of
+// AUDIT-steward-doc-rules-round3-2026-09-22 (it had been raising the standing alarm on every roster emit
+// for a write nobody asked for, which is the defect the care key was given this for).
 async function publish(evt, opts) {
   const _bg = !!(opts && opts.background);
   // WAIT FOR THE RELAY TO KNOW THIS CHURCH EXISTS. seedNewChurch() fires selfRegister() without awaiting it
@@ -2433,6 +2448,8 @@ async function publish(evt, opts) {
       ? NO_NETWORK_RELAY + ': none of this church\'s relays could be proved to be ours, so nothing was published'
       : 'no relay is configured for this church';
     console.warn('[steward] publish blocked —', reason);
+    // NOBODY READ THIS EVENT, so nobody refused it — see the note on `opts.refused` in the catch below.
+    try { if (opts && typeof opts === 'object') opts.refused = false; } catch (x) {}
     try { window.dispatchEvent(new CustomEvent('steward-publish-error', { detail: { reason, evt, background: _bg } })); } catch (x) {}
     return false;
   }
@@ -2445,11 +2462,6 @@ async function publish(evt, opts) {
   catch (e) {
     console.warn('[steward] publish failed', e);
     // every relay rejected — surface it so the steward isn't left wondering why nothing saved
-    let reason = '';
-    try { const errs = (e && e.errors) || []; reason = (errs[0] && (errs[0].message || String(errs[0]))) || ''; } catch (x) {}
-    // WHICH RELAY SAID NO. `reason` kept errs[0] and threw the rest away, so a church with two relays was
-    // told "a relay refused this" and could not learn which — the Settings page then showed both as "Live",
-    // because answering a socket and accepting a write are different questions. Cost a day on 2026-09-08.
     // AggregateError.errors is index-aligned with the promise array, which is index-aligned with _targets.
     // Written inline, not as a shared helper: this function is lifted out of the bundle and run by the tests,
     // where a name resolved from the enclosing IIFE is undefined — see the note above _publishToRelays.
@@ -2458,6 +2470,18 @@ async function publish(evt, opts) {
       const errs = (e && e.errors) || [];
       refused = _targets.map((u, i) => ({ url: u, error: (errs[i] && (errs[i].message || String(errs[i]))) || '' }));
     } catch (x) { refused = []; }
+    // WHICH RELAY SAID NO — AUDIT-steward-doc-rules-round5-2026-09-23 finding 2. `reason` used to be
+    // errs[0].message, unconditionally — the Settings page was fixed to show every relay's own answer via
+    // `refused` above, but the single sentence a steward is actually shown still threw the rest away. On
+    // the pilot's own default of two addresses to one box: relay[0] unreachable, relay[1] genuinely
+    // refuses — MEASURED, the banner read "The relay refused it: connection failure: connection timed
+    // out.", nostr-tools talking about a socket that never opened, never a box's verdict, while the one
+    // relay with a real, actionable answer ("blocked: not a member or not permitted for this group") was
+    // discarded. Mirrors `_said`/`_spoke` in `_publishAny`, src/fellowship.src.js: A RELAY THAT SPOKE
+    // OUTRANKS ONE THAT COULD NOT BE DIALLED — order-independent, because a church's relay set having one
+    // address down is an ordinary Sunday, not an edge case.
+    const _spoke = refused.find(r => r && r.error && !/^connection failure/i.test(String(r.error)));
+    let reason = (_spoke && _spoke.error) || (refused[0] && refused[0].error) || '';
     // OUR OWN SUPERSEDED COPY IS NOT A FAILURE. Two code paths can publish the same document a moment apart;
     // the newer one lands and the older is refused with "a newer version of this is already stored". The
     // steward was then shown a red, sticky "your change could not be saved" for a change that IS saved —
@@ -2468,6 +2492,50 @@ async function publish(evt, opts) {
       const d1 = ((evt.tags || []).find(t => t[0] === 'd') || [])[1];
       if (d1 && /newer version/i.test(reason) && (_lastOk.get(d1) || 0) > (evt.created_at || 0)) return evt;
     } catch (x) {}
+    // ── `opts.refused` — DID A BOX ACTUALLY READ THIS EVENT AND SAY NO? ──────────────────────────────────
+    //
+    // `false` is this function's answer to THREE different things, and a caller that remembers a failure
+    // must not treat them alike: (1) a relay read the event and refused it — a rule, which will refuse it
+    // again; (2) the socket never opened ("connection failure: …") — nobody refused anything and the event
+    // may well land next time; (3) no relay could be proved ours (the branch above) — likewise nobody read
+    // it. AUDIT-steward-doc-rules-round4-2026-09-22 finding F2: ensureMediaKeyForMembers remembered all
+    // three as a rule, so ONE blip on an owner's console permanently stopped the church's media key being
+    // re-wrapped for two members, and told the church the cause was its church key.
+    //
+    // THE SIGNAL, and why it is trustworthy: these are NIP-01's OK=false reasons — the machine-readable
+    // prefixes a relay puts in front of its own refusal. `connection failure` is deliberately NOT among
+    // them, because nostr-tools RESOLVES an unopenable socket with that string while REJECTING a real
+    // OK=false, so it is the vendored library talking, never a box's verdict.
+    //
+    // NEITHER IS `error:` — AUDIT-steward-doc-rules-round5-2026-09-23 finding 1. NIP-01 reserves `error:`
+    // for its one unstructured, TRANSIENT catch-all, and the shipped relay uses it for exactly that: a full
+    // disk / read-only volume (scripts/gateway.mjs:7691, "relay storage unavailable — nothing was saved")
+    // and a skewed device clock (:7726, "timestamp is too far in the future"). MEASURED: one `error:` on an
+    // OWNER's console permanently stopped ensureMediaKeyForMembers asking again — freeing the disk or
+    // fixing the clock never cleared the memo, because a refused document never becomes a `have` and the
+    // guard above it never re-fires. `error:` is a box that spoke, but never a rule that will refuse the
+    // SAME event again, which is the only thing this memo is allowed to remember.
+    //
+    // NOT the same list as `_PUB_REFUSED` in src/fellowship.src.js any more, and deliberately so: that list
+    // answers "did any box settle this, so the wording can say 'refused' instead of 'unconfirmed'?", fired
+    // once with no memo attached, so leaving `error:` in it never gets anyone stuck. This list answers "is
+    // this a rule that will refuse the same write again?", which gates a memo with a PERMANENT consequence
+    // (`_mediaKeyPushRefused` and its siblings) — the question `_PERMANENT` in src/fellowship.src.js already
+    // asks separately from `_PUB_REFUSED`, for the same reason.
+    //
+    // ⚠ WRITTEN INLINE, not hoisted to a module const, for the same reason the connection-failure prefix
+    // above is: the tests LIFT this function out of the bundle and run it, where a name resolved from the
+    // enclosing IIFE is undefined — a green suite proving nothing.
+    //
+    // ⚠ ADDITIVE, AND IT MUTATES ONLY THE CALLER'S OWN OBJECT. `opts` is optional; 68 of publish()'s 71
+    // call sites pass nothing at all and are untouched, and the three that do pass a fresh object literal.
+    // `rate-limited` counts as a refusal here because a box did speak — that is the pre-existing behaviour
+    // for that case and not a change; the cases F2 was actually about are (2) and (3), and they now retry.
+    let _saidNo = false;
+    try { _saidNo = refused.some(r => /^(blocked|invalid|restricted|rate-limited|auth-required)/i.test(String((r && r.error) || ''))); } catch (x) {}
+    // …and the relay's OWN WORDS with it, so a caller that reports the refusal can quote them instead of
+    // inventing an explanation — the rule publishErrorMessage already follows in app/stew-dashboard.jsx.
+    try { if (opts && typeof opts === 'object') { opts.refused = _saidNo; opts.reason = reason; } } catch (x) {}
     try { window.dispatchEvent(new CustomEvent('steward-publish-error', { detail: { reason, evt, refused, background: _bg } })); } catch (x) {}
     return false;   // total failure — every relay rejected; callers that await the result can surface it
   }
@@ -3837,6 +3905,21 @@ window.Steward = {
   // left alone (the console shows the add-a-backup nudge instead). No church data goes anywhere it isn't already.
   async autoSyncIfRedundant() {
     if (!sk || !pub) return { enabled: false };
+    // ⚠ A DELEGATED CONSOLE MUST NOT EVEN TRY. This is not a control — it is a 5-second boot timer
+    // (app/steward-root.jsx:354) that nobody pressed, and d126298 made `trinityone/relays` church-key-only at
+    // the relay (`if (d === RELAYS_D) return CHURCH_PUBS.has(e.pubkey);`, scripts/gateway.mjs). A delegated
+    // steward signs with their OWN key, so the write is refused every time, `publish()` dispatches
+    // steward-publish-error with `background: false`, and publishErrorMessage turns that into `sticky: true`
+    // — the STANDING pink alarm, "That change wasn't saved", on every tab, about five seconds after every
+    // boot, over a change no steward made. MEASURED by lifting this function and syncEnable out of the
+    // shipped vendor/steward.js (AUDIT-steward-doc-rules-round4-2026-09-22, finding F1).
+    //
+    // `{ background: true }` on the publish would only soften the sentence. There is no outage reading under
+    // which a delegate's copy of this document can ever land, so the honest answer is not to attempt it:
+    // the engine knows which console it is. The owner's console is untouched — `actingChurch` is '' there.
+    // d126298's rule-2 note called this "a background engine path … nothing on screen reports it either
+    // way". The second half was false, and that is what this closes.
+    if (actingChurch) return { enabled: false, delegated: true };
     try {
       const st = await window.Steward.backupState();
       if (st.boxes >= 2 && !st.syncOn) { await window.Steward.syncEnable(); return { enabled: true, boxes: st.boxes }; }
@@ -4230,7 +4313,15 @@ window.Steward = {
     if (!sk) return Promise.resolve(null);
     const clean = _sanitizeMsgTags(tags);
     const content = JSON.stringify({ tags: clean });
-    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', MSGTAGS_D], ['t', NET]], content })).then(() => clean);
+    // A SAVE NOBODY ACCEPTED IS NOT A SAVE. This was `.then(() => clean)` — the publish result was thrown
+    // away — and the editor in app/stew-dashboard.jsx toasts "✓ Saved — members see these on their next
+    // sync." off the resolved value. So a refusal showed a tick. Measured on a live relay 2026-09-22: at
+    // efe2dbe every delegated steward was refused this document (it had no rule of its own and fell to the
+    // closed member catch-all) and the console reported success every time; after the rule below it a
+    // steward WITHOUT the content capability is still correctly refused, and that refusal must reach the
+    // screen. Same shape as syncEnable's fix of 2026-09-02, and as the note in fix-the-control-not-the-label.
+    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', MSGTAGS_D], ['t', NET]], content }))
+      .then((r) => { if (r === false) throw new Error('Couldn’t save the message tags — no relay accepted them. If you are helping another church, this needs the “Groups, rotas, services, events, posts” permission.'); return clean; });
   },
   // cb(tags) for the church's configured tags, or cb(null) when NO tags doc exists yet — the editor then
   // seeds the default (Prayer request), which the steward can rename, recolour or remove. Never hangs on load.
@@ -4289,6 +4380,15 @@ window.Steward = {
   // publish a signed sermon doc referencing an uploaded blob (title + sha256 + host(s) for redundancy).
   publishSermon(s) {
     if (!sk) return Promise.resolve(null);
+    // A DELEGATED CONSOLE CANNOT PUBLISH A SERMON, AND IS TOLD SO BEFORE ANYTHING IS SENT.
+    //
+    // The relay refuses `trinityone/sermon:` to anything but the church key or its network (gateway.mjs,
+    // 2026-09-22) and the reason is the READERS, not caution: _openSermons, subscribeSermons and
+    // subscribePinnedSermon all filter `authors:[churchpub]`, so a steward-signed sermon is served to
+    // nobody — not to a member's app, not to a member's Today card, not to this console's own list.
+    // Measured as 0 / 0 / 0 on a live gateway. Asking anyway would earn a refusal and the connection
+    // advice that goes with it, which is the wrong thing to tell somebody whose connection is fine.
+    if (actingChurch) return Promise.reject(new Error('Only the church’s own console can publish a sermon. Ask whoever holds the church key.'));
     const id = s.id || ('sermon' + Date.now());
     const content = JSON.stringify({ id, title: s.title || 'Sermon', desc: (s.desc && String(s.desc).trim()) || undefined, sha256: s.sha256, hosts: (s.hosts && s.hosts.length) ? s.hosts : [s.host], mime: s.mime || '', size: s.size || 0, ts: s.ts || now(), enc: s.enc || undefined, series: s.series || undefined });
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', SERMON_D + id], ['t', NET]], content }))
@@ -4296,8 +4396,23 @@ window.Steward = {
   },
   async removeSermon(s) {
     if (!sk) return null;
+    // THE SAME BOUNDARY AS publishSermon ABOVE, and it matters more here: the tombstone IS a `sermon:` write,
+    // so a delegated console is refused it — and the blob deletes further down must never run over a refusal.
+    if (actingChurch) throw new Error('Only the church’s own console can remove a sermon. Nothing was deleted.');
     const id = (s && typeof s === 'object') ? s.id : s;
-    await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', SERMON_D + id], ['t', NET], ['deleted', '1']], content: '' }));   // tombstone the doc (hides it in every app)
+    // THE TOMBSTONE FIRST, AND ONLY THEN THE BYTES — and the tombstone must actually have landed. This
+    // `await publish(...)` discarded its result and the DELETE loop below ran regardless, which is the worst
+    // ordering available: a refused tombstone leaves the sermon document live in every member's app while
+    // the blob it points at is deleted from every host. The member gets a broken player, not a removed
+    // sermon, and nothing can put the bytes back. Refusing here leaves the sermon exactly as it was, which
+    // is recoverable. (It is reachable for a real steward: a delegate without the content capability is
+    // refused this document by the relay — measured 2026-09-22.)
+    const _tomb = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', SERMON_D + id], ['t', NET], ['deleted', '1']], content: '' }));
+    // NO LONGER NAMES A PERMISSION. It used to end "…this needs the “Groups, rotas, services, events,
+    // posts” permission", which was true for one day and is not a thing a church can grant any more:
+    // `sermon:` is church-key-only, and the delegated case is answered above by name rather than by a
+    // refusal whose advice would be impossible to act on.
+    if (_tomb === false) throw new Error('Couldn’t remove that sermon — no relay accepted the change, so nothing was deleted.');
     // reclaim the stored bytes on each host (best-effort; content-addressed so the same sha lives on every mirror)
     const sha = s && typeof s === 'object' && s.sha256;
     const hosts = (s && typeof s === 'object' && ((s.hosts && s.hosts.length) ? s.hosts : (s.host ? [s.host] : []))) || [];
@@ -4327,8 +4442,29 @@ window.Steward = {
   },
   // backup reminder, church-wide: record the last-backup time + reminder cadence in a church doc, so every steward
   // and device shows the same 'last backed up' + overdue nudge — not just the device that happened to run it.
+  // RETURNS false WHEN NO RELAY TOOK IT, and BOTH of its callers say so on screen — CLAUDE.md rule 2, and
+  // they are DashBackup's `doBackup` (the "Back up church data" button) and DashBackup's `setFrequency` (the
+  // weekly / monthly / off reminder segment), both in app/stew-dashboard.jsx.
+  //
+  // ⚠ THAT SENTENCE READ "and both callers now say so on screen" ON 2026-09-22 AND ONLY ONE OF THEM DID.
+  // setFrequency was still fire-and-forget inside a try/catch (AUDIT-steward-doc-rules-2026-09-22 F3, and
+  // CLAUDE.md rule 4 — the false claim in the permanent record is the finding). Both read the answer now,
+  // and there is a point-of-use test per caller so the next edit to either cannot quietly re-open it.
+  //
+  // The backup itself is a local file and really did save; this document is the CHURCH-WIDE half — "every
+  // steward's nudge resets" — so a refusal means the other stewards' consoles still show overdue. Saying
+  // "Saved" and nothing else made this console the only one that believed the church was backed up.
+  //
+  // ON A DELEGATED CONSOLE IT IS ALWAYS false, AND IT DOES NOT ASK. The relay gates
+  // `trinityone/backup-meta:` to the church key or its network (2026-09-22), because subscribeBackupMeta
+  // below filters `authors:[pub]` — the CHURCH's pubkey — while a delegated console signs with the
+  // steward's own key. So a steward-authored record is read back by NOBODY, this console included, and
+  // resets nobody's nudge: measured as 0 rows on a live gateway the day that grant was written, which is
+  // why it was withdrawn the same day. Both callers say WHICH refusal it is rather than sending the
+  // steward to look at a connection that is working perfectly.
   setBackupMeta(at, remind) {
     if (!sk) return Promise.resolve(null);
+    if (actingChurch) return Promise.resolve(false);
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', BACKUPMETA_D + pub], ['t', NET]], content: JSON.stringify({ at: at || now(), remind: remind || 'monthly' }) }));
   },
   subscribeBackupMeta(onMeta) {
@@ -4355,7 +4491,17 @@ window.Steward = {
     const targets = [...new Set([pub, ...(memberPubs || []).filter(Boolean)])];
     const _mring = JSON.stringify(_mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex]);
     const keys = await _sealEach(_mring, targets, (pl, mp) => nip44e(pl, nip44ck(sk, mp)));
-    await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', MEDIAKEY_D + pub], ['t', NET]], content: JSON.stringify({ keys, rev: now() }) }));
+    // THE ENVELOPE MUST LAND BEFORE WE HAND BACK AN ENCRYPTOR. This `await publish(...)` discarded its
+    // result, so a refused envelope still returned a working encryptor: the caller
+    // (app/stew-dashboard.jsx, the sermon upload) then encrypted the file with a key NOBODY HOLDS and
+    // uploaded the ciphertext to every host. That is unrecoverable — not a wrong toast, a permanently
+    // unplayable sermon — and it is the same loss the mint gate a few lines up exists to prevent, reached by
+    // the other door. The relay refuses this document to anything but the church key (mediakey: got its own
+    // rule on 2026-09-22; the envelope is sealed with the SIGNER's key, so a delegated steward's copy could
+    // not be opened by any member even if it were stored), which makes the refusal an ordinary, reachable
+    // case on a delegated console rather than a theoretical one.
+    const _env = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', MEDIAKEY_D + pub], ['t', NET]], content: JSON.stringify({ keys, rev: now() }) }));
+    if (_env === false) throw new Error('Can’t encrypt this upload — your church’s media key could not be saved, so nothing encrypted with it could ever be played. Nothing has been uploaded. A church media key can only be published from the console that holds the church’s own key.');
     const key = await crypto.subtle.importKey('raw', _unhex(_mediaKeyHex), 'AES-GCM', false, ['encrypt']);
     return async (bytes) => { const iv = crypto.getRandomValues(new Uint8Array(12)); const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, bytes)); const out = new Uint8Array(12 + ct.length); out.set(iv, 0); out.set(ct, 12); return out; };
   },
@@ -4370,11 +4516,64 @@ window.Steward = {
       .filter(p => !_localBlocked.has(String(p).toLowerCase()));   // a just-blocked member must not be re-keyed (item B)
     const have = _mediaKeyDocKeys || {};
     if (want.every(p => have[p])) return false;                   // everyone's already keyed — no republish
-    
+    // …AND DON'T ASK AGAIN FOR A SET THAT WAS JUST REFUSED (finding F2). Without this the guard above is the
+    // only brake, and it cannot apply, because a refused document never becomes a `have`. The sealing below
+    // is the expensive part, so this returns before it.
+    const fp = want.slice().sort().join(',');
+    if (_mediaKeyPushRefused === fp) return false;
+
     const _mring = JSON.stringify(_mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex]);
     const keys = await _sealEach(_mring, want, (pl, mp) => nip44e(pl, nip44ck(sk, mp)));
-    const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', MEDIAKEY_D + pub], ['t', NET]], content: JSON.stringify({ keys, rev: now() }) }));
-    if (ok !== false) _mediaKeyDocKeys = keys;                    // reflect what we just published so we don't loop
+    // `{ background: true }` — NOBODY ASKED FOR THIS WRITE. Same reasoning as ensureCareKeyForMembers, whose
+    // one caller is the same key-distributor effect and which was given this on 2026-09-17: the console's
+    // standing alarm says "That change wasn't saved", and there was no change and no steward. It is still
+    // reported, quietly and once, by PublishErrorBanner, and always to the log.
+    const _pubOpts = { background: true };
+    const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', MEDIAKEY_D + pub], ['t', NET]], content: JSON.stringify({ keys, rev: now() }) }), _pubOpts);
+    if (ok !== false) { _mediaKeyDocKeys = keys; _mediaKeyPushRefused = null; return ok; }   // reflect what we just published so we don't loop
+    // ⚠ A BLIP IS NOT A RULE, AND THIS MEMO IS ONLY ALLOWED TO REMEMBER RULES.
+    //
+    // `publish()` returns false for a refusal AND for a connection failure AND for "no relay could be
+    // proved ours". 177cfb9's memo promised in as many words that it "IS NOT A PERMANENT GIVING-UP … a
+    // refusal may be an outage rather than a rule", and then remembered all three alike. MEASURED
+    // (AUDIT-steward-doc-rules-round4-2026-09-22, F2): on an OWNER's console, one blip with the roster
+    // unchanged gave ONE attempt and two silent no-ops, two members were never given the key, their apps
+    // say a sermon "needs the unlock key", and the banner below blamed the church key — on the one console
+    // that holds it. None of the four clears this memo names can reach that state: the roster has not
+    // changed, subscribeMediaKey is mounted with `[]` deps so it never re-subscribes on reconnect, nobody
+    // rotates after a blip, and _resetChurchScopedState's only caller is restoreKey().
+    //
+    // `_pubOpts.refused` is publish()'s own answer to "did a box read this and say no" (see the note where
+    // it is set). Anything else and this console has learned nothing, so it must ask again on the next
+    // roster emit — which is what turns the outage back into a success when the relay returns. The failure
+    // is NOT silent either way: publish() has already dispatched steward-publish-error, which
+    // PublishErrorBanner renders as the ordinary non-sticky "Couldn't save to the relay — check the
+    // connection and try again". What must not happen is this console inventing a cause it cannot know.
+    if (!_pubOpts.refused) return ok;
+    // A REFUSAL IS NOW A FACT THIS CONSOLE REMEMBERS, AND SAYS ONCE. Quiet is right for the attempt; silent
+    // is not right for the consequence, which is that those members' apps will say a sermon "needs the
+    // unlock key" and nobody would think to connect the two. One banner, because we only reach here once
+    // per recipient set.
+    _mediaKeyPushRefused = fp;
+    try {
+      // `p !== pub` — the church's own copy is in `want` and is not a member, so counting it would tell a
+      // church with two unkeyed members that three people are locked out.
+      const missing = want.filter(p => p !== pub && !have[p]).length;
+      // …AND SAY WHAT ACTUALLY HAPPENED. "Only the console that holds the church key can publish it" is
+      // true of the membership/permission refusal — which is the relay's mediakey: rule — and a guess about
+      // every other one ("invalid: a newer version is already stored", "restricted: …"). The house rule for
+      // a reason we did not write is to quote the relay verbatim, not to explain it (publishErrorMessage,
+      // app/stew-dashboard.jsx). This can only be reached when a box genuinely refused, so there is always
+      // a reason to quote.
+      const _why = /not a member|not permitted/i.test(String(_pubOpts.reason || ''))
+        ? 'Only the console that holds the church key can publish it.'
+        : 'The relay refused it: ' + String(_pubOpts.reason || 'no reason given').trim().replace(/[.\s]+$/, '') + '.';
+      window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'sermon key',
+        message: (missing
+          ? missing + ' member(s) could not be given the key to this church’s encrypted sermons, so those sermons will not play for them. '
+          : 'The key to this church’s encrypted sermons could not be saved. ')
+          + _why + ' This console will not keep retrying.' } }));
+    } catch (e) {}
     return ok;
   },
   // ROTATE the media key — same contract as rotateCareKey: a removed member must not hold the key to sermons
@@ -4392,7 +4591,9 @@ window.Steward = {
     const keys = await _sealEach(payload, want, (pl, mp) => nip44e(pl, nip44ck(sk, mp)));
     const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', MEDIAKEY_D + pub], ['t', NET]], content: JSON.stringify({ keys, rev: now() }) }));
     if (ok === false) return false;
-    _mediaKeyRing = ring; _mediaKeyHex = fresh; _mediaKeyDocKeys = keys;
+    // …and the refusal memo goes with it (F2): a rotation that landed proves this console CAN write the
+    // envelope, so the reason ensureMediaKeyForMembers stopped asking no longer holds.
+    _mediaKeyRing = ring; _mediaKeyHex = fresh; _mediaKeyDocKeys = keys; _mediaKeyPushRefused = null;
     return true;
   },
   // ---- care key: same envelope as the media key, for the Care module's sensitive fields ----
@@ -4562,7 +4763,10 @@ window.Steward = {
       // Ring-aware, and tolerant of the legacy shape: a wrapped value is a JSON array of keys now (newest
       // first) but older envelopes hold one bare hex string. Reading only the new form would make every
       // sermon encrypted before the upgrade undecryptable.
-      onevent(e) { try { const o = JSON.parse(e.content); _mediaKeyDocKeys = (o && o.keys) || null; const mine = o.keys && o.keys[pub]; if (mine && sk) { const plain = nip44d(mine, nip44ck(sk, e.pubkey)); let r = null; try { const q = JSON.parse(plain); if (Array.isArray(q)) r = q.filter(k => typeof k === 'string' && k); } catch (x2) {} const incoming = (r && r.length) ? r : [plain]; _mediaKeyRing = [...incoming, ..._mediaKeyRing.filter(k => incoming.indexOf(k) === -1)]; _mediaKeyHex = _mediaKeyRing[0];   /* KEEP what this device already held: if we minted before the envelope arrived, discarding our key here would orphan anything encrypted in that window. Rotation must never drop a key that has already sealed something. */ } } catch (x) {} },
+      /* `_mediaKeyPushRefused = null` (F2): an envelope LANDING is new information — the recipient map has
+         changed under us, so whatever this console last had refused is worth asking again. Without this a
+         console that was refused once would go on skipping until the roster itself changed. */
+      onevent(e) { try { const o = JSON.parse(e.content); _mediaKeyDocKeys = (o && o.keys) || null; _mediaKeyPushRefused = null; const mine = o.keys && o.keys[pub]; if (mine && sk) { const plain = nip44d(mine, nip44ck(sk, e.pubkey)); let r = null; try { const q = JSON.parse(plain); if (Array.isArray(q)) r = q.filter(k => typeof k === 'string' && k); } catch (x2) {} const incoming = (r && r.length) ? r : [plain]; _mediaKeyRing = [...incoming, ..._mediaKeyRing.filter(k => incoming.indexOf(k) === -1)]; _mediaKeyHex = _mediaKeyRing[0];   /* KEEP what this device already held: if we minted before the envelope arrived, discarding our key here would orphan anything encrypted in that window. Rotation must never drop a key that has already sealed something. */ } } catch (x) {} },
       oneose() { _mediaKeyChecked = true; },   // no envelope came back → it is safe to mint one
     });
     return () => { try { sub.close(); } catch {} };

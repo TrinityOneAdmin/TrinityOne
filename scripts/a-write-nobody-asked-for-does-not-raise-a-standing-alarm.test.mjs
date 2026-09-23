@@ -310,3 +310,87 @@ test('…and it still passes the roster and the stewards, which is what the enve
   assert.deepEqual(care[1][1], ['b'.repeat(64)], 'the steward roster is no longer keyed — a delegated console ' +
     'holding an empty ring is how the church’s names were wiped once already');
 });
+
+// ── D. THE BOOT TIMER ─────────────────────────────────────────────────────────────────────────────────────
+// The other write nobody asked for, and the loudest: `autoSyncIfRedundant`, fired by a bare
+// `setTimeout(…, 5000)` at app/steward-root.jsx:354 on every console launch. It publishes
+// `trinityone/relays`, which the relay now admits only from the church key itself
+// (`if (d === RELAYS_D) return CHURCH_PUBS.has(e.pubkey);`, scripts/gateway.mjs). On a delegated console the
+// refusal arrives with `background: false`, so publishErrorMessage returns `sticky: true` and the STANDING
+// alarm paints on every tab five seconds after boot, over a change no steward made.
+// AUDIT-steward-doc-rules-round4-2026-09-22 finding F1.
+//
+// The engine is what must refuse, so the engine is what this drives — the SHIPPED autoSyncIfRedundant and
+// syncEnable lifted out of vendor/steward.js, with a `publish` that both records the attempt and fires the
+// real refusal at the real banner. A test that only read the source would be satisfied by the comment
+// explaining the guard ([[comments-can-satisfy-assertions]]).
+function liftBootTimer({ actingChurch }) {
+  const attempts = [];
+  const fired = [];
+  const scope = {
+    sk: new Uint8Array(32).fill(7), pub: 'c'.repeat(64), actingChurch,
+    now: () => 1756900000,
+    JSON, Map, Set, Array, Object, String, Number, Boolean, Promise, Error,
+    finalizeEvent2: (t) => ({ ...t, pubkey: 'signer' }),
+    // The shipped publish() dispatches steward-publish-error with `background: !!(opts && opts.background)`
+    // on a total refusal and returns false. That is all this needs it to be.
+    publish: async (evt, opts) => {
+      attempts.push({ d: ((evt.tags || []).find(t => t[0] === 'd') || [])[1], background: !!(opts && opts.background) });
+      fired.push({ reason: REFUSAL, evt, background: !!(opts && opts.background) });
+      return false;
+    },
+  };
+  const proxy = new Proxy(scope, {
+    has: (t, k) => (k in t) || !(String(k) in globalThis),
+    get: (t, k) => {
+      if (k === Symbol.unscopables) return undefined;
+      if (k in t) return t[k];
+      throw new ReferenceError('the lifted boot timer needs `' + String(k) + '` — add a stub');
+    },
+  });
+  const bodies = [
+    fnBody(BUNDLE, '    async autoSyncIfRedundant() {', 'autoSyncIfRedundant in the shipped bundle'),
+    fnBody(BUNDLE, '    async syncEnable() {', 'syncEnable in the shipped bundle'),
+  ].join(',\n');
+  const api = new Function('scope', `with (scope) { const _api = { ${bodies} }; return _api; }`)(proxy);
+  // Two proven relay boxes and sync not yet on — exactly the church the padlocked buttons are for.
+  scope.window = { Steward: { ...api,
+    relayIdentities: async () => ([{ base: 'https://a', pubkey: 'boxA', online: true },
+                                   { base: 'https://b', pubkey: 'boxB', online: true }]),
+    backupState: async () => ({ boxes: 2, online: 2, entries: 2, syncOn: false }) } };
+  return { api, attempts, fired };
+}
+
+test('THE BOOT TIMER: a delegated console does not publish the trusted-relays list at all', async () => {
+  const t = liftBootTimer({ actingChurch: '3eb1f889'.padEnd(64, '0') });
+  const out = await t.api.autoSyncIfRedundant();
+  assert.deepEqual(t.attempts, [],
+    'THE BOOT TIMER STILL WRITES. `trinityone/relays` is church-key-only at the relay, so this is refused ' +
+    'on every launch of every delegated console and nobody pressed anything: ' + JSON.stringify(t.attempts));
+  assert.equal(out.delegated, true, 're-anchor: the function no longer says why it declined, so the ' +
+    'assertion above could be passing because it never ran');
+});
+
+test('…so the standing alarm never paints, and on an OWNER console nothing changed', async () => {
+  // Both halves in one row deliberately: without the owner control, deleting the whole function would pass.
+  const d = liftBootTimer({ actingChurch: '3eb1f889'.padEnd(64, '0') });
+  await d.api.autoSyncIfRedundant();
+  const b = banner(DELEGATE);
+  d.fired.forEach(f => b.fire(f));
+  assert.equal(reads(b.tree), '',
+    'THE FIVE-SECOND ALARM IS BACK: ' + JSON.stringify(reads(b.tree)));
+
+  const o = liftBootTimer({ actingChurch: '' });
+  const out = await o.api.autoSyncIfRedundant();
+  assert.deepEqual(o.attempts, [{ d: 'trinityone/relays', background: false }],
+    'THE OWNER CONSOLE LOST AUTOMATIC SYNC. A church that has added a real second relay box no longer gets ' +
+    'cross-relay backup without hunting for a toggle: ' + JSON.stringify(o.attempts));
+  assert.equal(out.delegated, undefined, 'the owner console took the delegated branch');
+
+  // CONTROL: the same refusal, on the owner's console, still paints the standing alarm. Without this the
+  // silence asserted above could be a banner that had simply stopped working.
+  const ob = banner(OWNER);
+  o.fired.forEach(f => ob.fire(f));
+  assert.match(reads(ob.tree), /Changes weren’t saved/,
+    're-anchor: the banner no longer paints this refusal for anybody, so the delegated silence is vacuous');
+});

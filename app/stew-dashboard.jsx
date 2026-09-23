@@ -4684,6 +4684,11 @@ function DashAddRelayCard() {
   );
 }
 
+// THE ONE SENTENCE THE SYNC CONTROLS REFUSE WITH, in one place because both of them use it. Same shape as
+// SERMON_OWNER_ONLY beside DashSermons: name the boundary, then name who can. Short on purpose — the page
+// already says what sync is, so the tooltip only has to say who may change it.
+const SYNC_OWNER_ONLY = 'Only the church’s own console can turn relay sync on or off. Ask whoever holds the church key.';
+
 // ── MOVE OR COPY HISTORY: the two things a church does to its relays once in its life, if ever — copy
 //    everything onto a relay that is starting empty, and switch on continuous mirroring between its own
 //    boxes. Two cards, because they are two jobs; one page, because a steward reaches for them together.
@@ -4691,7 +4696,25 @@ function DashRelayHistoryCard() {
   const { backup } = useRelayBackupState();
   const [syncBusy, setSyncBusy] = React.useState(false);
   const [syncMsg, setSyncMsg] = React.useState(null);
+  // ── A DELEGATED CONSOLE LEARNS IT MAY NOT BEFORE IT ASKS ──────────────────────────────────────────────
+  // AUDIT-steward-doc-rules-round3-2026-09-22, finding F1: the rule-2 sweep in a4002f5 missed this type.
+  // Both buttons below write `trinityone/relays`, which this branch made church-key-only — and the registry
+  // says why in CLAUDE.md rule 10's words: that document decides which relay boxes exchange the whole
+  // corpus. The engine's refusals are written for an OUTAGE ("try again"), which is the right sentence when
+  // the owner's console cannot reach a relay and the wrong one for a steward who can never succeed — and
+  // "your relays are STILL mirroring each other. Try again." is that sentence in the direction that matters,
+  // because Turn off is what a church presses while decommissioning a box or reacting to a seizure.
+  //
+  // THE CAPABILITY IS IRRELEVANT AND ONLY `.owner` IS READ, exactly as in DashSermons: no capability a
+  // church can tick lets a delegate write this, so the question is "is this the church's own console",
+  // which is `stewCapState().owner` (`!S.actingChurch`). 'content' is the argument DashSermons passes for
+  // the same reason. It FAILS OPEN the same way the rest of the mechanism does — an owner console is never
+  // locked out, and a roster that has not landed cannot lock one either.
+  const _churchOnly = !stewCapState('content').owner;
   const doSync = async (on) => {
+    // THE FUNNEL, guarded as well as the two controls above it — the same belt-and-braces doUpload has, so
+    // a future caller (a keyboard path, a retry, a second button) cannot reach the engine around them.
+    if (_churchOnly) { setSyncMsg({ ok: false, text: SYNC_OWNER_ONLY }); return; }
     setSyncBusy(true); setSyncMsg(null);
     try { const r = on ? await window.Steward.syncEnable() : await window.Steward.syncDisable(); setSyncMsg({ ok: true, text: on ? '✓ Sync on — your ' + r.relays + ' relays will keep each other in step.' : 'Sync turned off.' }); }
     catch (e) { setSyncMsg({ ok: false, text: e.message || 'Couldn’t update sync.' }); }
@@ -4746,10 +4769,14 @@ function DashRelayHistoryCard() {
         {/* cross-relay sync: the church's own TrinityOne relays continuously exchange their full history */}
       <Panel title="Keep your relays in sync">
         <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 11 }}>Your church’s own relays can continuously exchange their full history — so if one goes offline it catches up when it’s back, and nothing is lost. {backup != null ? (backup.boxes >= 2 ? <b>{backup.boxes} separate relays can sync{backup.syncOn ? ' — sync is on.' : '.'}</b> : 'Add a second relay your church runs to switch this on.') : 'Checking…'}</div>
+        {/* MARKED, NOT HIDDEN — the same choice DashSermons, the nav and the header's "New post" make: a
+            button that vanishes reads as a broken console, a locked one that says why reads as a church
+            that has scoped you. `aria-disabled`, not `disabled`, so the press still lands and can answer
+            on screen — on a phone there is no hover, so a tooltip nobody can reach says nothing. */}
         {backup != null && backup.boxes >= 2 ? (
           <div style={{ display: 'flex', gap: 9 }}>
-            <button onClick={() => doSync(true)} disabled={syncBusy} className="sk-btn sk-btn--clay" style={{ padding: '9px 15px', fontSize: 13 }}>{syncBusy ? 'Saving…' : (backup.syncOn ? 'Re-sync now' : 'Turn on sync')}</button>
-            <button onClick={() => doSync(false)} disabled={syncBusy} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}>Turn off</button>
+            <button onClick={() => doSync(true)} disabled={syncBusy} aria-disabled={_churchOnly || undefined} title={_churchOnly ? SYNC_OWNER_ONLY : undefined} className={'sk-btn ' + (_churchOnly ? 'sk-btn--ghost' : 'sk-btn--clay')} style={{ padding: '9px 15px', fontSize: 13, opacity: _churchOnly ? 0.6 : 1, cursor: _churchOnly ? 'not-allowed' : 'pointer' }}>{_churchOnly ? <Icon name="lock" size={14} color="currentColor" /> : null}{syncBusy ? 'Saving…' : (backup.syncOn ? 'Re-sync now' : 'Turn on sync')}</button>
+            <button onClick={() => doSync(false)} disabled={syncBusy} aria-disabled={_churchOnly || undefined} title={_churchOnly ? SYNC_OWNER_ONLY : undefined} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13, opacity: _churchOnly ? 0.6 : 1, cursor: _churchOnly ? 'not-allowed' : 'pointer' }}>{_churchOnly ? <Icon name="lock" size={14} color="currentColor" /> : null}Turn off</button>
           </div>
         ) : null}
         {syncMsg ? <div style={{ fontSize: 12.5, marginTop: 9, fontWeight: 600, color: syncMsg.ok ? 'var(--sage-ink)' : 'var(--clay-ink)' }}>{syncMsg.text}</div> : null}
@@ -8336,6 +8363,14 @@ async function probeHevcVideo(file) {
   } catch { return false; }
 }
 
+// THE TWO SENTENCES THIS PANEL REFUSES WITH, in one place because THREE controls use them (CLAUDE.md
+// rule 2): Upload, Edit and Remove, all three of which write `trinityone/sermon:`. The publish one is the
+// engine's own wording verbatim (src/steward.src.js, publishSermon) so the screen and the engine cannot
+// drift apart; the remove one drops the engine's trailing "Nothing was deleted." because on a locked
+// control nothing was ever attempted, and names who can instead.
+const SERMON_OWNER_ONLY = 'Only the church’s own console can publish a sermon. Ask whoever holds the church key.';
+const SERMON_REMOVE_OWNER_ONLY = 'Only the church’s own console can remove a sermon. Ask whoever holds the church key.';
+
 function DashSermons() {
   const [sermons, setSermons] = React.useState([]);
   const [sermonsLoaded, setSermonsLoaded] = React.useState(false);   // has the subscription answered? see doUpload's dupe check
@@ -8355,6 +8390,23 @@ function DashSermons() {
   React.useEffect(() => (window.Steward.subscribeMediaKey ? window.Steward.subscribeMediaKey() : undefined), [conn]);
   React.useEffect(() => (window.Steward.subscribePinnedSermon ? window.Steward.subscribePinnedSermon(p => setPinnedId(p && p.id)) : undefined), [conn]);
   const togglePin = (s) => { if (pinnedId === s.id) window.Steward.unpinSermon(); else window.Steward.pinSermon(s); };
+  // ── A DELEGATED CONSOLE LEARNS IT MAY NOT PUBLISH BEFORE ANY BYTES LEAVE THE PHONE ────────────────────
+  // AUDIT-steward-doc-rules-round2-2026-09-22, finding R1. The engine refuses `trinityone/sermon:` on a
+  // delegated console (publishSermon / removeSermon, and the relay refuses it too) — but doUpload called
+  // uploadBlob FIRST and publishSermon after, measured order ["uploadBlob","publishSermon"]. With Encrypt
+  // OFF a whole sermon video — routinely hundreds of MB — therefore landed on the host and nothing then
+  // referenced it: an orphan blob, and orphan-blob GC is on the backlog, not built. With Encrypt ON there
+  // was no waste only because mediaEncryptor happens to refuse one step earlier.
+  //
+  // So this is [[fix-the-control-not-the-label]]: an honest refusal AFTER the upload is still an upload.
+  // The panel now uses the console's own capability mechanism, which is what every other delegated-console
+  // refusal in this file uses (stewCapState at the top, the nav at ~1913, _capBtn in the header).
+  //
+  // THE CAPABILITY IS IRRELEVANT HERE AND ONLY `.owner` IS READ. `sermon:` is church-key-only: no capability
+  // a church can tick makes a delegate able to publish one, so the question is not "were you granted this"
+  // but "is this the church's own console" — which is exactly `stewCapState().owner` (`!S.actingChurch`).
+  // It FAILS OPEN the same way the rest of the mechanism does: an owner console is never locked out.
+  const _churchOnly = !stewCapState('content').owner;
   const fileRef = React.useRef(null);
   const [upBusy, setUpBusy] = React.useState(false); const [upMsg, setUpMsg] = React.useState('');
   const [editing, setEditing] = React.useState(null);
@@ -8391,6 +8443,11 @@ function DashSermons() {
     askThenUpload(f);
   };
   const doUpload = async (f, fields) => {
+    // NOT ONE BYTE ON A CONSOLE THAT MAY NOT PUBLISH. The locked Upload button below is what a steward
+    // meets; this is the funnel every route into an upload passes through (that button, the HEVC "upload
+    // anyway", the large-encrypted-video "upload anyway", and Enter in the naming modal), so the guard
+    // lives here as well as on the control. Thrown, not toasted: the modal keeps the answer ON it.
+    if (_churchOnly) { setUpMsg('✗ ' + SERMON_OWNER_ONLY); throw new Error(SERMON_OWNER_ONLY); }
     const bigVid = String(f.type || '').startsWith('video') && f.size > 25 * 1048576;   // stopgap until on-device transcode: flag a heavy video
     setUpBusy(true); setUpMsg((bigVid ? '⚠ Large video (' + fmtSize(f.size) + ') — slow to upload' + (encOn ? ' + play' : '') + '. ' : '') + (encOn ? 'Encrypting + uploading ' : 'Uploading ') + f.name + '…');
     let ok = false;
@@ -8432,7 +8489,7 @@ function DashSermons() {
     <div className="no-scrollbar" style={{ height: '100%', overflowY: 'auto' }}>
       {pendingUpload ? <SermonEditModal upload={pendingUpload} sermon={{ title: pendingUpload.title, mime: pendingUpload.mime }} onSave={(fields) => doUpload(pendingUpload.file, fields)} onClose={() => setPendingUpload(null)} /> : null}
       {editing ? <SermonEditModal sermon={editing} onSave={(fields) => Promise.resolve(window.Steward.publishSermon({ ...editing, ...fields }))} onClose={() => setEditing(null)} /> : null}
-      {pendingDelete ? <SkConfirm icon="trash" title={'Remove “' + (pendingDelete.title || 'this') + '”?'} confirmLabel="Remove" body="It disappears from members’ apps and the stored file is deleted from your relay(s) to free the space. This can’t be undone." onConfirm={() => { window.Steward.removeSermon(pendingDelete); setPendingDelete(null); }} onCancel={() => setPendingDelete(null)} /> : null}
+      {pendingDelete ? <SkConfirm icon="trash" title={'Remove “' + (pendingDelete.title || 'this') + '”?'} confirmLabel="Remove" body="It disappears from members’ apps and the stored file is deleted from your relay(s) to free the space. This can’t be undone." onConfirm={() => { const s = pendingDelete; setPendingDelete(null); Promise.resolve(window.Steward.removeSermon(s)).catch(err => setUpMsg('✗ ' + ((err && err.message) || 'Couldn’t remove that sermon'))); }} onCancel={() => setPendingDelete(null)} /> : null}
       {pendingHevc ? <SkConfirm icon="alert" tint="var(--gold)" title="This video may not play in web browsers" confirmLabel="Upload anyway" body="It’s recorded in H.265/HEVC — your phone’s “High Efficiency” format. Phones play it fine, but web browsers (and some older devices) can’t. To reach everyone, set your camera to “Most Compatible” (H.264) and re-record. Upload this one anyway? Members on the phone app will still be able to watch it." onConfirm={() => { const f = pendingHevc; setPendingHevc(null); askThenUpload(f); }} onCancel={() => setPendingHevc(null)} /> : null}
       {pendingBigEnc ? <SkConfirm icon="alert" tint="var(--gold)" title="Large encrypted video" confirmLabel="Upload anyway" body={'This encrypted video is ' + fmtSize(pendingBigEnc.size) + '. Encrypted media has to download in full and decrypt in memory before it plays — which needs 2–3× its size in RAM, so on an older phone it may fail to play at all. To be safe, trim it, export at 720p, or leave encryption off for this one (it stays members-only either way). Upload it as-is?'} onConfirm={() => { const f = pendingBigEnc; setPendingBigEnc(null); askThenUpload(f); }} onCancel={() => setPendingBigEnc(null)} /> : null}
       <Panel title="Self-hosted sermons">
@@ -8441,9 +8498,14 @@ function DashSermons() {
           <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
             <Icon name={String(s.mime || '').startsWith('video') ? 'play' : 'headphones'} size={16} color="var(--sage)" />
             <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 13.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.title}</div><div style={{ fontSize: 11.5, color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.desc ? s.desc : (fmtSize(s.size || 0) + (s.enc ? ' · encrypted' : ''))}</div></div>
-            <button onClick={() => setEditing(s)} title="Edit name & details" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '8px 10px', minWidth: 40, minHeight: 40, boxSizing: 'border-box', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="pen" size={14} color="currentColor" /></button>
+            {/* EDIT IS A `sermon:` WRITE TOO — it re-publishes the same document — so it is locked on a
+                delegated console beside the other two, rather than letting a steward retype a title and
+                meet the refusal only once they press Save. */}
+            <button onClick={() => { if (_churchOnly) { setUpMsg('✗ ' + SERMON_OWNER_ONLY); return; } setEditing(s); }} aria-disabled={_churchOnly || undefined} title={_churchOnly ? SERMON_OWNER_ONLY : 'Edit name & details'} aria-label="Edit sermon" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '8px 10px', minWidth: 40, minHeight: 40, boxSizing: 'border-box', alignItems: 'center', justifyContent: 'center', cursor: _churchOnly ? 'not-allowed' : 'pointer', opacity: _churchOnly ? 0.55 : 1, color: 'var(--ink-3)', display: 'flex' }}><Icon name={_churchOnly ? 'lock' : 'pen'} size={14} color="currentColor" /></button>
             <button onClick={() => togglePin(s)} title={pinnedId === s.id ? 'Pinned to members’ Today — tap to unpin' : 'Pin to members’ Today (sends a notification)'} style={{ border: '1px solid ' + (pinnedId === s.id ? 'var(--clay)' : 'var(--line)'), background: pinnedId === s.id ? 'var(--clay)' : 'var(--surface)', borderRadius: 9, padding: '8px 10px', minWidth: 40, minHeight: 40, boxSizing: 'border-box', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: pinnedId === s.id ? '#fff' : 'var(--ink-3)', display: 'flex' }}><Icon name="pin" size={14} color="currentColor" /></button>
-            <button onClick={() => setPendingDelete(s)} title="Remove" aria-label="Remove sermon" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '8px 10px', minWidth: 40, minHeight: 40, boxSizing: 'border-box', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={14} color="currentColor" /></button>
+            {/* NO "This can’t be undone" OVER SOMETHING THAT CANNOT HAPPEN. The confirmation sheet used to
+                open on a delegated console and take the press, and only then did the engine refuse. */}
+            <button onClick={() => { if (_churchOnly) { setUpMsg('✗ ' + SERMON_REMOVE_OWNER_ONLY); return; } setPendingDelete(s); }} aria-disabled={_churchOnly || undefined} title={_churchOnly ? SERMON_REMOVE_OWNER_ONLY : 'Remove'} aria-label="Remove sermon" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '8px 10px', minWidth: 40, minHeight: 40, boxSizing: 'border-box', alignItems: 'center', justifyContent: 'center', cursor: _churchOnly ? 'not-allowed' : 'pointer', opacity: _churchOnly ? 0.55 : 1, color: 'var(--ink-3)', display: 'flex' }}><Icon name={_churchOnly ? 'lock' : 'trash'} size={14} color="currentColor" /></button>
           </div>))}</div> : null}
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: 'var(--ink-2)', margin: '0 0 10px', cursor: 'pointer', lineHeight: 1.4 }}>
           <input type="checkbox" checked={encOn} onChange={e => setEncOn(e.target.checked)} style={{ flexShrink: 0 }} />
@@ -8464,7 +8526,14 @@ function DashSermons() {
           <span><b>Notify members</b> — feature it on everyone’s Today (“New video / New audio clip”) + send a notification. It becomes the one featured item, replacing any previous. Leave off for a quiet upload.</span>
         </label>
         <input ref={fileRef} type="file" accept="audio/*,video/*" style={{ display: 'none' }} onChange={onFile} />
-        <button onClick={() => fileRef.current && fileRef.current.click()} disabled={upBusy} className="sk-btn sk-btn--clay" style={{ fontSize: 13, opacity: upBusy ? 0.6 : 1 }}><Icon name={upBusy ? 'refresh' : 'plus'} size={15} color="var(--on-clay)" /> {upBusy ? 'Working…' : 'Upload audio or video'}</button>
+        {/* MARKED, NOT HIDDEN — the same choice the nav and the header's "New post" make (see _capBtn): a
+            button that vanishes reads as a broken console, a locked one that says why reads as a church
+            that has scoped you. `aria-disabled`, not `disabled`, so the press still lands and can answer
+            on screen — on a phone there is no hover, so a tooltip nobody can reach says nothing. */}
+        <button onClick={() => { if (_churchOnly) { setUpMsg('✗ ' + SERMON_OWNER_ONLY); return; } fileRef.current && fileRef.current.click(); }}
+          disabled={upBusy} aria-disabled={_churchOnly || undefined} title={_churchOnly ? SERMON_OWNER_ONLY : undefined}
+          className={'sk-btn ' + (_churchOnly ? 'sk-btn--ghost' : 'sk-btn--clay')}
+          style={{ fontSize: 13, opacity: (upBusy || _churchOnly) ? 0.6 : 1, cursor: _churchOnly ? 'not-allowed' : 'pointer' }}><Icon name={_churchOnly ? 'lock' : (upBusy ? 'refresh' : 'plus')} size={15} color={_churchOnly ? 'currentColor' : 'var(--on-clay)'} /> {upBusy ? 'Working…' : 'Upload audio or video'}</button>
         {upMsg ? <div style={{ fontSize: 12, color: 'var(--ink-2)', marginTop: 8 }}>{upMsg}</div> : null}
         <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 10, lineHeight: 1.45 }}>Big videos are slow to upload and, if encrypted, slow to play. Record or export at <b>~720p</b> and keep clips short — a few minutes is usually a few MB. <a href="https://github.com/TrinityOneAdmin/TrinityOne/blob/main/docs/guides/STEWARD-GUIDE.md#keeping-video-small-and-fast" target="_blank" rel="noopener" style={{ color: 'var(--clay-ink)', textDecoration: 'none', fontWeight: 600 }}>How to shrink a video →</a></div>
       </Panel>
@@ -8497,10 +8566,13 @@ function DashChatTagsPanel({ church }) {
   const remove = (i) => { setTags(list.filter((_, j) => j !== i)); setEditIdx(-1); };
   const save = async () => {
     setBusy(true); setMsg('');
-    try { const saved = await window.Steward.publishMessageTags(list); setTags(saved || []); setEditIdx(-1); setMsg('✓ Saved — members see these on their next sync.'); }
-    catch (e) { setMsg('Couldn’t save — try again.'); }
+    // THE TICK ONLY GOES UP FOR A DOCUMENT A RELAY TOOK. publishMessageTags used to discard publish()'s
+    // result, so this `await` resolved on a refusal and printed "✓ Saved" over nothing (the engine now
+    // throws; see its note). SAY WHY, rather than "try again": the reachable refusal here is a delegated
+    // steward without the content permission, and "try again" sends them to look at their connection.
+    try { const saved = await window.Steward.publishMessageTags(list); setTags(saved || []); setEditIdx(-1); setMsg('✓ Saved — members see these on their next sync.'); setTimeout(() => setMsg(''), 4000); }
+    catch (e) { setMsg((e && e.message) || 'Couldn’t save — try again.'); setTimeout(() => setMsg(''), 9000); }
     setBusy(false);
-    setTimeout(() => setMsg(''), 4000);
   };
   const swatch = { width: 22, height: 22, borderRadius: 999, cursor: 'pointer', flexShrink: 0, padding: 0 };
   const iconBtn = (active) => ({ width: 30, height: 30, borderRadius: 9, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0, background: active ? 'color-mix(in oklab, var(--clay) 12%, var(--surface))' : 'var(--surface)', border: '1px solid ' + (active ? 'var(--clay)' : 'var(--line)') });
@@ -9184,19 +9256,89 @@ function PinModal({ action, onClose }) {
   );
 }
 
+// THE TWO SENTENCES FOR A CHURCH-WIDE BACKUP RECORD THAT DID NOT SAVE, in one place because BOTH controls
+// in DashBackup use both of them (CLAUDE.md rule 2): the "Back up church data" button and the reminder
+// cadence segment. `trinityone/backup-meta:` is the CHURCH-WIDE half — the local file and the local cadence
+// both save regardless — so neither of these is a failure message, it is the second half of an honest
+// success.
+//
+// WHY TWO. On a DELEGATED console the refusal is permanent and has a name: the relay gates this document to
+// the church key or its network (2026-09-22), because subscribeBackupMeta filters `authors:[churchpub]` and
+// a steward-signed record is therefore served back to nobody, that console included. "Couldn't save" would
+// send that steward to look at a connection that is working perfectly. On the OWNER's console the same
+// `false` really is a relay problem, so it keeps the plain sentence.
+const BACKUP_META_OWNER_ONLY = 'Only the church’s own console can save the shared backup record, so your other stewards will still see this church as overdue.';
+const BACKUP_META_NO_RELAY = 'Your other stewards’ consoles will still show this church as overdue — the shared backup record could not be saved.';
+// AUDIT-steward-doc-rules-round5-2026-09-23 finding 3. exportChurchData (/export, /export-media) and
+// restoreChurchData (/import) are NIP-98-authed to the church key only (_exportAuth, scripts/gateway.mjs)
+// — the same gate a2d1e4c put on the `history` settings row. Said up front, before the press, so a
+// delegate is not sent to pick a file or wait on a real backup only to be told "the relay returned 401".
+const BACKUP_EXPORT_OWNER_ONLY = 'Only the church’s own console can back up or restore this church’s data. Ask whoever holds the church key.';
 // Phase 1 backup: save the church's complete corpus to a file (native share sheet / web download) + a reminder cadence.
 function DashBackup() {
   const [busy, setBusy] = React.useState(false);
   const [msg, setMsg] = React.useState(null);   // { ok, text }
   const [last, setLast] = React.useState(() => { try { return Number(localStorage.getItem('trinityone.lastBackupAt') || 0); } catch { return 0; } });
   const [freq, setFreq] = React.useState(() => { try { return localStorage.getItem('trinityone.backupRemind') || 'monthly'; } catch { return 'monthly'; } });
-  const setFrequency = (f) => { setFreq(f); try { localStorage.setItem('trinityone.backupRemind', f); } catch {} try { window.Steward.setBackupMeta && window.Steward.setBackupMeta(last, f); } catch {} };
+  const [freqMsg, setFreqMsg] = React.useState('');   // '' = the cadence reached the church document
+  // THE SECOND CALLER OF setBackupMeta, AND IT WAS STILL FIRE-AND-FORGET. AUDIT-steward-doc-rules-2026-09-22
+  // finding F3: the commit that fixed doBackup below said "both callers now say so on screen" and this one
+  // did not — it dropped the answer inside a try/catch and moved on, so a steward who picked "Weekly" saw
+  // the segment move to Weekly while every other console went on nudging monthly, with nothing on any
+  // screen saying so. Same shape as the one it sits beside, and [[fix-the-control-not-the-label]] again.
+  //
+  // ⚠ AND THE JUDGEMENT THAT STOOD HERE ON 2026-09-22 WAS MEASURABLY FALSE (round-2 audit, R2, CLAUDE.md
+  // rule 4). It read: "`freq` is this device's own reminder preference with its own localStorage key — it
+  // is not only a view of the church document." There is no per-device preference. FOUR LINES BELOW, in
+  // subscribeBackupMeta's handler, the church document writes THAT SAME KEY:
+  //
+  //     ###AFTER PRESS###       localStorage.backupRemind = weekly
+  //     ###AFTER CHURCH DOC###  localStorage.backupRemind = monthly
+  //
+  // `trinityone.backupRemind` is a CACHE of the church document — read at mount so the segment can paint
+  // before the subscription answers, and overwritten by it the moment it does. So on a delegated console,
+  // where the relay refuses the document, the press stuck NOWHERE: not church-wide, not locally, while the
+  // sentence beside it named only the church-wide half.
+  //
+  // THE CADENCE IS THE CHURCH'S TO SET, and this is the decision, not a workaround: every steward and every
+  // device is meant to show the same nudge (that is the whole reason this document exists), a delegated
+  // console can never write it, and a press that reaches no relay must not leave a different cadence on the
+  // screen from the one the church will actually nudge at. So the control is LOCKED on a delegated console
+  // and says who can, and on the owner's console a refused write puts the segment back where it was.
+  //
+  // ALSO GATES `doBackup`/`doRestore` BELOW — AUDIT-steward-doc-rules-round5-2026-09-23 finding 3.
+  // `a2d1e4c` marked ONLY the `history` settings row `owner: true`, but exportChurchData -> /export and
+  // restoreChurchData -> /import go through the very same `_exportAuth` in scripts/gateway.mjs that route
+  // refuses a delegate on. MEASURED (rendered tree of a delegated console, before this fix): "Back up
+  // church data" and "Restore or clone from a backup" render byte-for-byte the OWNER's — no aria-disabled,
+  // no padlock — and answer "Backup failed — the relay returned 401" / "Restore failed — the relay
+  // returned 401 (are you the church owner, and does that relay allow this church?)". Marking the whole
+  // `backup` settings row owner-only (the `history` fix's shape) would ALSO hide the reminder-cadence
+  // display this same page correctly leaves visible to a delegate — so the two controls below are gated
+  // individually instead, the way `_churchOnly` already gates DashSync's two buttons and DashSermons' three.
+  const _metaChurchOnly = !stewCapState('content').owner;
+  const setFrequency = async (f) => {
+    setFreqMsg('');
+    if (_metaChurchOnly) { setFreqMsg(BACKUP_META_OWNER_ONLY); return; }   // nothing adopted: the press cannot change this anywhere
+    const prev = freq;
+    setFreq(f);
+    try { localStorage.setItem('trinityone.backupRemind', f); } catch {}
+    let ok = true;
+    try { if (window.Steward.setBackupMeta) ok = (await window.Steward.setBackupMeta(last, f)) !== false; } catch { ok = false; }
+    if (!ok) {
+      setFreq(prev);
+      try { localStorage.setItem('trinityone.backupRemind', prev); } catch {}
+      setFreqMsg(BACKUP_META_NO_RELAY);
+    }
+  };
   // church-wide backup state: same 'last backed up' + cadence on every steward/device, not just this one
   React.useEffect(() => {
     if (!window.Steward.subscribeBackupMeta) return;
     return window.Steward.subscribeBackupMeta((m) => {
       if (!m) return;
       if (m.at) setLast((prev) => { const v = Math.max(prev || 0, m.at); try { localStorage.setItem('trinityone.lastBackupAt', String(v)); } catch {} return v; });
+      // THIS IS WHY `trinityone.backupRemind` IS A CACHE AND NOT A PREFERENCE — see setFrequency above.
+      // The church document writes the same key the mount-time read seeds `freq` from.
       if (m.remind) { setFreq(m.remind); try { localStorage.setItem('trinityone.backupRemind', m.remind); } catch {} }
     });
   }, []);
@@ -9218,6 +9360,7 @@ function DashBackup() {
   const onPickRestore = (e) => { const f = e.target.files && e.target.files[0]; e.target.value = ''; if (!f) return; setRestoreMsg(null); const rd = new FileReader(); rd.onload = () => setRestoreFile({ name: f.name, bytes: new Uint8Array(rd.result) }); rd.onerror = () => setRestoreMsg({ ok: false, text: 'Couldn’t read that file.' }); rd.readAsArrayBuffer(f); };
   const doRestore = async () => {
     if (!restoreFile) return;
+    if (_metaChurchOnly) { setRestoreMsg({ ok: false, text: BACKUP_EXPORT_OWNER_ONLY }); return; }   // nothing was sent
     setRestoreBusy(true); setRestoreMsg(null); setRestoreProg(null);
     try {
       const relayUrl = restoreTarget === 'other' ? restoreUrl.trim() : '';
@@ -9231,6 +9374,7 @@ function DashBackup() {
   const windowDays = { weekly: 7, monthly: 30, off: Infinity };
   const overdue = freq !== 'off' && (Date.now() / 1000 - last) > windowDays[freq] * 86400;
   const doBackup = async () => {
+    if (_metaChurchOnly) { setMsg({ ok: false, text: BACKUP_EXPORT_OWNER_ONLY }); return; }   // nothing was sent
     setBusy(true); setMsg(null);
     try {
       const { data, binary, mime, count, filename, encrypted, media: mediaCount } = await window.Steward.exportChurchData({ encrypt, includeMedia });
@@ -9252,8 +9396,17 @@ function DashBackup() {
         setTimeout(() => URL.revokeObjectURL(url), 3000);
       }
       const ts = Math.floor(Date.now() / 1000); setLast(ts); try { localStorage.setItem('trinityone.lastBackupAt', String(ts)); } catch {}
-      try { window.Steward.setBackupMeta && window.Steward.setBackupMeta(ts, freq); } catch {}   // record church-wide so every steward's nudge resets
-      setMsg({ ok: true, text: 'Saved ' + count + ' records' + mediaBit + (encrypted ? ' — encrypted to your church key.' : ' (unencrypted).') });
+      // record church-wide so every steward's nudge resets — AND SAY SO WHEN IT DOES NOT. This was
+      // fire-and-forget inside a try/catch, so a refused document left THIS console the only one that
+      // believed the church was backed up while every other steward went on seeing "overdue". The file
+      // itself really did save, so this is a second sentence on a success message, not a failure.
+      let _metaOk = true;
+      try { if (window.Steward.setBackupMeta) _metaOk = (await window.Steward.setBackupMeta(ts, freq)) !== false; } catch { _metaOk = false; }
+      // WHICH refusal it was, not just that there was one — see the two sentences above DashBackup. On a
+      // delegated console this is now always the owner-only one, because the relay gates backup-meta: to
+      // the church key (2026-09-22) and the engine does not even ask.
+      const _metaSay = _metaOk ? '' : ' ' + ((window.Steward && window.Steward.actingChurch) ? BACKUP_META_OWNER_ONLY : BACKUP_META_NO_RELAY);
+      setMsg({ ok: true, text: 'Saved ' + count + ' records' + mediaBit + (encrypted ? ' — encrypted to your church key.' : ' (unencrypted).') + _metaSay });
     } catch (e) { setMsg({ ok: false, text: e.message || 'Backup failed' }); }
     setBusy(false);
   };
@@ -9283,16 +9436,24 @@ function DashBackup() {
           </span>
         </label>
       ) : null}
-      <button onClick={doBackup} disabled={busy} className="sk-btn sk-btn--clay" style={{ padding: '11px 16px', fontSize: 14 }}><Icon name="share" size={16} color="var(--on-clay)" /> {busy ? 'Backing up…' : 'Back up church data'}</button>
+      <button onClick={doBackup} disabled={busy} aria-disabled={_metaChurchOnly || undefined} title={_metaChurchOnly ? BACKUP_EXPORT_OWNER_ONLY : undefined} className={'sk-btn ' + (_metaChurchOnly ? 'sk-btn--ghost' : 'sk-btn--clay')} style={{ padding: '11px 16px', fontSize: 14, opacity: _metaChurchOnly ? 0.6 : 1, cursor: _metaChurchOnly ? 'not-allowed' : 'pointer' }}><Icon name={_metaChurchOnly ? 'lock' : 'share'} size={16} color={_metaChurchOnly ? 'currentColor' : 'var(--on-clay)'} /> {busy ? 'Backing up…' : 'Back up church data'}</button>
       {msg ? <div style={{ marginTop: 10, fontSize: 13, fontWeight: 600, color: msg.ok ? 'var(--sage-ink)' : 'var(--clay-ink)' }}>{msg.ok ? '✓ ' : '✗ '}{msg.text}</div> : null}
       <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 10 }}>Last backup: {last ? new Date(last * 1000).toLocaleDateString() : 'never'}</div>
       <div style={{ marginTop: 18, paddingTop: 16, borderTop: '1px solid var(--line)' }}>
         <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>Remind me to back up</div>
         <div style={seg}>
+          {/* MARKED ON A DELEGATED CONSOLE, not hidden — the same choice as DashSermons and _capBtn. The
+              segment goes on showing the CHURCH's cadence, which is the truth and which this console can
+              read (subscribeBackupMeta filters authors:[churchpub], and on a delegated console `pub` IS the
+              church); what it can no longer do is move without changing anything. */}
           {[['off', 'Off'], ['weekly', 'Weekly'], ['monthly', 'Monthly']].map(([k, label]) => (
-            <button key={k} onClick={() => setFrequency(k)} style={{ padding: '8px 15px', borderRadius: 9, border: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, background: freq === k ? 'var(--clay)' : 'transparent', color: freq === k ? '#fff' : 'var(--ink-2)' }}>{label}</button>
+            <button key={k} onClick={() => setFrequency(k)} aria-disabled={_metaChurchOnly || undefined} title={_metaChurchOnly ? BACKUP_META_OWNER_ONLY : undefined} style={{ padding: '8px 15px', borderRadius: 9, border: 'none', cursor: _metaChurchOnly ? 'not-allowed' : 'pointer', opacity: _metaChurchOnly && freq !== k ? 0.55 : 1, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, background: freq === k ? 'var(--clay)' : 'transparent', color: freq === k ? '#fff' : 'var(--ink-2)' }}>{label}</button>
           ))}
         </div>
+        {/* BESIDE THE CONTROL, not up beside the backup button: `msg` renders above this whole section, and a
+            sentence about the reminder cadence appearing next to "Back up church data" is a sentence about a
+            different control. */}
+        {freqMsg ? <div role="alert" style={{ marginTop: 9, fontSize: 12.5, fontWeight: 600, color: 'var(--clay-ink)', lineHeight: 1.5 }}>{freqMsg}</div> : null}
       </div>
       <div style={{ marginTop: 18, paddingTop: 16, borderTop: '1px solid var(--line)' }}>
         <div onClick={() => setRestoreOpen((o) => !o)} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
@@ -9312,7 +9473,7 @@ function DashBackup() {
                   ))}
                 </div>
                 {restoreTarget === 'other' ? <input value={restoreUrl} onChange={(e) => setRestoreUrl(e.target.value)} placeholder="https://other-relay.example" spellCheck={false} autoCapitalize="none" style={{ width: '100%', boxSizing: 'border-box', padding: '9px 12px', borderRadius: 9, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontSize: 13, marginBottom: 10 }} /> : null}
-                <button onClick={doRestore} disabled={restoreBusy} className="sk-btn sk-btn--clay" style={{ padding: '10px 16px', fontSize: 13.5 }}>{restoreBusy ? (restoreProg && restoreProg.phase === 'media' ? 'Restoring media ' + restoreProg.done + '/' + restoreProg.total + '…' : 'Importing records…') : 'Restore this backup'}</button>
+                <button onClick={doRestore} disabled={restoreBusy} aria-disabled={_metaChurchOnly || undefined} title={_metaChurchOnly ? BACKUP_EXPORT_OWNER_ONLY : undefined} className={'sk-btn ' + (_metaChurchOnly ? 'sk-btn--ghost' : 'sk-btn--clay')} style={{ padding: '10px 16px', fontSize: 13.5, opacity: _metaChurchOnly ? 0.6 : 1, cursor: _metaChurchOnly ? 'not-allowed' : 'pointer' }}>{_metaChurchOnly ? <Icon name="lock" size={14} color="currentColor" /> : null}{restoreBusy ? (restoreProg && restoreProg.phase === 'media' ? 'Restoring media ' + restoreProg.done + '/' + restoreProg.total + '…' : 'Importing records…') : 'Restore this backup'}</button>
               </div>
             ) : null}
             {restoreMsg ? <div style={{ marginTop: 10, fontSize: 13, fontWeight: 600, color: restoreMsg.ok ? 'var(--sage-ink)' : 'var(--clay-ink)' }}>{restoreMsg.ok ? '✓ ' : '✗ '}{restoreMsg.text}</div> : null}
@@ -9357,7 +9518,22 @@ const SETTINGS_GROUPS = [
   ['Infrastructure', [
     { k: 'relays', n: 'Relays', d: 'Where your church publishes' },
     { k: 'add-relay', n: 'Add a relay', d: 'By address, auto-find or name' },
-    { k: 'history', n: 'Move or copy history', d: 'Copy across, keep in sync' },
+    // `owner: true` — BOTH CARDS ON THIS PAGE NEED THE CHURCH'S OWN KEY, measured, not assumed.
+    // d126298 deliberately left this row unmarked on the stated ground that "its other card is 'Copy
+    // across' … Hiding the page would take that away from a delegate to fix a different control", and
+    // explicitly did not claim a delegate could complete a clone. THEY CANNOT. `cloneFromRelay` authorises
+    // both ends with `_nip98`, which signs with THIS console's own key and tags the church; the relay's
+    // `_exportAuth` (scripts/gateway.mjs) ends `return cp && ev.pubkey === cp ? cp : null` — owner-only —
+    // and /export, /export-media and /import all use it. MEASURED, the shipped gate lifted and run against
+    // the proof _nip98 actually mints: DELEGATED -> null on all three, OWNER -> the church.
+    // (AUDIT-steward-doc-rules-round4-2026-09-22, finding F3.)
+    //
+    // So the page was showing a delegate one padlocked card and one unmarked control that answers
+    // "✗ Couldn't read your church's data from that relay (401 — is it the right relay for this church?)" —
+    // blaming them for picking the wrong relay over a refusal that is structural
+    // ([[fix-the-control-not-the-label]]). Marking the ROW is the house shape and covers both cards and any
+    // third: a page filtered out here cannot be opened at all, so the list and the detail cannot disagree.
+    { k: 'history', n: 'Move or copy history', d: 'Copy across, keep in sync', owner: true },
     { k: 'ownbox', n: 'Run your own box', d: 'Self-host with the Suite' },
     { k: 'network', n: 'Network', d: 'Belong to a group of churches' },
   ]],

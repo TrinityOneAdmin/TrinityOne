@@ -19,7 +19,7 @@ import { openStore, matchFilter } from './event-store.mjs';
 // half). These 50 strings used to be typed out below; a typo was not a build error but a document gated under
 // one name and published under another, failing silently. D.* is checked against the registry at module load,
 // so an undeclared name throws before this relay serves a request. POLICY stays in accept()/canRead().
-import { D } from './trinity-doc-types.mjs';   // durable event storage (node:sqlite) + the canonical read predicate
+import { D, MEMBER_WRITABLE_TYPES } from './trinity-doc-types.mjs';   // NAMES, plus the one NARROWING list (see memberDocTypeOk)
 // WHO MAY HOLD THE CHECK-IN HELPER KEY is asked in ONE place, and this is not it — see the file's own header.
 // The relay imports three things and derives nothing: the parser (so a grant means the same to the box that
 // stores it and the console that mints it), and the declared-source test (so a grant cannot claim a
@@ -816,6 +816,10 @@ const NETWORK_D = D.NETWORK;   // the church declares it belongs to a network (t
 const BLOCKED_D = D.BLOCKED;   // a church's blocklist (banned member pubkeys) — d=blocked:<churchpub>
 const PIN_D = D.PIN;           // a group's pinned message — d=pin:<groupId> (one per group)
 const PINSERMON_D = D.PINSERMON; // the church's currently-featured/pinned sermon — d=pinsermon:<churchpub> (one per church) → member Today card + notification
+const SERMON_D = D.SERMON;     // the sermon itself — d=sermon:<id>, ["church",<cp>]; CHURCH KEY OR ITS NETWORK ONLY — the content-steward grant of 2026-09-22 was withdrawn the same day, measured inert at all three readers
+const MSGTAGS_D = D.MSGTAGS;   // the church's chat tag labels — d=trinityone/msgtags, a BARE name (one doc per author); church/network/CONTENT steward
+const MANNA_D = D.MANNA;       // the benevolence module's stem — d=trinityone/manna-<sub>, seven sub-types by concatenation; OWNER-ONLY while the module is locked for the pilot (see the registry entry for the three reasons)
+const BACKUPMETA_D = D.BACKUPMETA; // when the church last exported its data — d=backup-meta:<churchpub>, cleartext {at, remind}; CHURCH KEY OR ITS NETWORK ONLY — the 'any steward' grant of 2026-09-22 was withdrawn the same day, measured inert at subscribeBackupMeta
 const HIDE_D = D.HIDE;       // a removed/hidden message — d=hidden:<msgId> (one per message)
 const MINORS_D = D.MINORS;     // safeguarding: a church's list of minor (child) pubkeys — d=minors:<churchpub>
 const APPROVED_D = D.APPROVED; // safeguarding: adults cleared to contact youth (mirrors the church's DBS/cleared list) — d=approved:<churchpub>
@@ -2460,6 +2464,45 @@ const CP_SUFFIXED_D = [MEMBER_D, ADMITTED_D, RESEAT_D, STEWARDS_D, STEWARDREQ_D,
 // authorship, and without the exemption the retraction would refuse to serve a parent's own arrival to
 // the worker it is addressed to (the author is neither the church nor a steward). Sibling of CAREREQ_D.
 const MEMBER_WRITABLE_D = [SLOT_D, SKIP_D, AVAIL_D, SAFE_D, RSVP_D, REQREPLY_D, UNAVAIL_D, GUARDREQ_D, STEWARDREQ_D, MEMBER_D, CAREREQ_D, NAME_D, CHECKINARRIVAL_D];
+// MAY AN ORDINARY MEMBER WRITE A DOCUMENT OF THIS TYPE AT ALL? Asked by accept()'s kind-30078 catch-all and
+// nowhere else (CLAUDE.md rule 2: ONE caller, plus the OK-frame reason in the EVENT handler, which only names
+// the refusal it already made). NOT the list above: that one answers a READ question (which member-authored
+// documents escape the revoked-steward retraction) and carries `careskip:`, which is recipient-only on write.
+// This one is the registry's own derivation — every type declared `write: 'member'`, plus the wallet — and it
+// is the ONE place the relay lets the registry's columns narrow a decision, for the reason written above k()
+// in scripts/trinity-doc-types.mjs: it can only ever refuse. A prefixed name matches by prefix, a bare name
+// (the MyData six and chatseen) exactly, so `trinityone/notesX` is not `trinityone/notes`. Stateless — it
+// consults no map — but applied at the WEBSOCKET DOOR ONLY: an archive or a peer on a newer version may carry
+// a member type this build has never heard of, and refusing it on /import or on sync would lose a member's
+// document on restore (accept-is-not-a-retention-rule). Measured before it existed: a member of any church on
+// the box could store kind 30078 under ANY d-tag the relay had no rule for — which is how `voice:` shipped
+// writable by every member. scripts/relay-refuses-undeclared-member-doc-types.test.mjs.
+function memberDocTypeOk(d) {
+  const s = String(d || '');
+  for (const p of MEMBER_WRITABLE_TYPES) {
+    if (p.endsWith(':') ? s.startsWith(p) : s === p) return true;
+  }
+  return false;
+}
+// DOES THE RELAY GATE ANYTHING BY THIS NAME? For the OK-frame REASON only, never for a decision: the EVENT
+// handler says "undeclared document type" when a member's refused d-tag matches nothing in D and is not a
+// finance/ document. A declared type a member may not write (group:, voice:, …) keeps the generic reason.
+const GATED_D = Object.freeze(Object.values(D));
+function relayGatesType(d) {
+  const s = String(d || '');
+  if (s.startsWith('finance/')) return true;
+  // A STEM COUNTS AS A PREFIX HERE, AND DELIBERATELY DOES NOT IN memberDocTypeOk ABOVE. `trinityone/manna-`
+  // is one declared name standing for seven d-tags built from it by concatenation, so an exact-match-only
+  // rule made the relay say "this relay has no rule for it" about a document it had just refused under
+  // MANNA_D's own branch — measured on a live gateway, 2026-09-22. This function decides NO access; it only
+  // chooses which sentence the OK frame carries, so widening it is a diagnostic fix and nothing more.
+  // memberDocTypeOk stays exact for a bare name because widening it there would GRANT: `trinityone/notesX`
+  // must not be `trinityone/notes`, and nothing on the member-writable list is a stem today.
+  for (const p of GATED_D) {
+    if (p.endsWith(':') || p.endsWith('-') ? s.startsWith(p) : s === p) return true;
+  }
+  return false;
+}
 function owningChurch(e, d) {
   const suf = CP_SUFFIXED_D.find(p => d.startsWith(p));
   if (suf) { const h = toHexPub(d.slice(suf.length)) || ''; if (h && CHURCH_PUBS.has(h)) return h; }
@@ -3738,6 +3781,21 @@ function accept(e) {
     // their OWN copy and never the church's — the cross-tenant overwrite that hit trinityone/voice: is not
     // reachable here. This is a floor, not a patch: nothing but the church should be authoring it at all.
     if (d === RELAY_NET_D) return CHURCH_PUBS.has(e.pubkey);
+    // …AND ITS SIBLING, THE TRUSTED-RELAYS LIST. Owner-only for the same reason, and CLAUDE.md rule 10 is
+    // that reason: this is the document note() reads into TRUSTED_RELAYS / PEER_URLS, which is to say WHICH
+    // OTHER BOXES this relay hands a church's whole corpus to. Widening who may write it is widening which
+    // machines get the data, and a delegated steward is not the authority for that.
+    //
+    // IT HAD NO BRANCH AT ALL UNTIL 2026-09-22 and fell to the member catch-all, so it is the `voice:` shape
+    // exactly: declared write:'church' in the registry, gated by nobody. Measured on a live two-church
+    // relay at 6b6e66d — an ordinary member, and a steward of a CO-TENANT church, were both ACKed writing
+    // `trinityone/relays`. This costs a delegated console NOTHING that ever worked: note()'s own ingest has
+    // always been `d === RELAYS_D && CHURCH_PUBS.has(e.pubkey)`, so a steward-authored copy was stored and
+    // never honoured, and the console reads it back with `authors:[<churchpub>]`, so it was never read
+    // either. What changes is that syncEnable()/syncDisable() on a delegated console now FAIL LOUDLY —
+    // both already throw when publish() returns falsy — instead of reporting "✓ Sync on" over a document
+    // that decided nothing.
+    if (d === RELAYS_D) return CHURCH_PUBS.has(e.pubkey);
     if (d.startsWith(BLOCKED_D)) return leaderOf(d.slice(BLOCKED_D.length));   // OWNER-ONLY, and only your OWN blocklist                                                                // OWNER-ONLY: banning is not delegated to stewards
     if (d.startsWith(EVENT_D) || d.startsWith(PIN_D) || d.startsWith(HIDE_D)) {   // church/steward, or a group's empowered member, may post events / pin / hide
       // SECURITY-AUDIT-2026-07-06 M5: bind authority to the church that actually OWNS the referenced group,
@@ -4064,11 +4122,93 @@ function accept(e) {
     // donations go. That is OWNER-ONLY: a delegated steward must not be able to create/replace a fund with
     // their own Lightning address and silently redirect members' gifts. Not in the steward-delegated set below.
     if (d.startsWith(FUND_D)) return leaderOf(ownCp());
+    // ── FIVE TYPES GIVEN RULES OF THEIR OWN ON 2026-09-22 ────────────────────────────────────────────────
+    // msgtags, mediakey:, backup-meta: and manna- here, and sermon: in its own branch just below. All five
+    // were living on the member catch-all, which is the `voice:` shape and cost the same thing twice over:
+    // at 6b6e66d every member of every church on this box could write all five (measured), and at efe2dbe
+    // nobody but the church key could — including the church's OWN steward, silently, because the console
+    // publishes them through feChurch, which signs with the STEWARD'S key. Each one now names the authority
+    // it needs. See scripts/trinity-doc-types.mjs for why each was chosen.
+    //
+    // ONLY ONE OF THE FIVE IS DELEGATED, AND THAT IS A MEASUREMENT TALKING, NOT CAUTION. `msgtags` is
+    // delegated to a CONTENT steward and works end to end: both the member hub and the console read it by
+    // `#church:[cp]`, so a steward-authored copy really does reach a congregation (measured 2026-09-22).
+    // `sermon:` and `backup-meta:` were delegated the same day and WITHDRAWN the same day, because their
+    // readers filter `authors:[churchpub]` and served a steward-authored document to nobody — an ACK into a
+    // void, which is worse than the refusal it replaced. The test of whether a write grant is real is the
+    // READER, not the writer.
+    //
+    // THE CHAT TAG LABELS. `content`, because these are what the congregation sees on a message — the same
+    // job as posting into a broadcast channel, which is already `content`. An EXACT match, never a prefix:
+    // this is a bare name and `trinityone/msgtagsXYZ` is a different (undeclared) document.
+    if (d === MSGTAGS_D) return leaderOf(ownCp()) || stewardCan(e.pubkey, namedChurch(e), 'content');
+    // THE MEDIA-KEY ENVELOPE — d=mediakey:<churchpub>. OWNER-ONLY, and the reason is end-to-end rather than
+    // cautious: the console wraps each member's copy with nip44(SIGNER's key, member) while the member app
+    // unwraps with nip44(member, CHURCH pubkey), so an envelope signed by a delegated steward is one no
+    // member can open — and that same reader filters `e.pubkey !== cp`, so it is never served one anyway.
+    // Admitting it would be an ACK over a broken key, which is worse than the refusal. Scoped on the
+    // SUFFIX, so a steward of church A cannot reach church B's envelope by writing a ['church'] tag — the
+    // groupkey: lesson of 2026-09-17, made structural. A member's write here was the M3 finding of
+    // AUDIT-undeclared-doc-types-2026-09-22: an addressable write REPLACES the envelope, and losing it makes
+    // every encrypted sermon undecryptable for the whole church.
+    if (d.startsWith(MEDIAKEY_D)) return leaderOf(d.slice(MEDIAKEY_D.length));
+    // WHEN THE CHURCH LAST BACKED UP — d=backup-meta:<churchpub>, cleartext {at, remind}. CHURCH KEY OR ITS
+    // NETWORK ONLY, scoped on the d-tag SUFFIX.
+    //
+    // ⚠ IT WAS `|| stewardCan(e.pubkey, cp, 'any')` FOR ONE DAY, 2026-09-22, AND THE GRANT WAS INERT.
+    // Its stated purpose was "every steward's overdue nudge resets when any one of them takes a backup".
+    // MEASURED on a live gateway the same day: subscribeBackupMeta (src/steward.src.js) filters
+    // `authors:[pub]` + `#d`, and on a delegated console `pub` is the CHURCH's pubkey while the signature is
+    // the steward's — so a steward-authored record came back to NOBODY, that console included. Asking the
+    // relay to store it therefore bought the nudge-reset nothing and cost the console its error: the write
+    // was ACKed, DashBackup's "the shared backup record could not be saved" sentence stopped printing, and
+    // every other steward went on seeing the church overdue with nothing on any screen saying so. A loud
+    // failure turned into a silent success. Owner's decision, 2026-09-22: do not grant it. The console now
+    // says plainly that only the church's own console can save this record.
+    //
+    // Re-granting it needs the READER changed first (accept a rostered steward's signature), which is a
+    // console + member-app change and a device run — written up in
+    // TrinityOne-internal/reference/PLAN-delegated-steward-publishing.md.
+    if (d.startsWith(BACKUPMETA_D)) return leaderOf(d.slice(BACKUPMETA_D.length));
+    // THE BENEVOLENCE MODULE'S STEM — seven sub-types built by concatenation (settings, fund:, request:,
+    // vouch:, approval:, record:, testimony:). Church key or its network ONLY, while the module is LOCKED
+    // for the pilot (app/stew-manna.jsx says so on the toggle). One prefix rule would be one grant across
+    // seven documents of very different sensitivity — a policy dial and a record NAMING SOMEBODY ASKING THE
+    // CHURCH FOR MONEY are not the same decision — and `finance`, the obvious grant when it ships, is
+    // deliberately not made in advance. Widening this later is one line; a premature grant is not undoable.
+    if (d.startsWith(MANNA_D)) return leaderOf(ownCp());
+    // THE SERMON ITSELF — d=sermon:<id>, ['church',<cp>]. CHURCH KEY OR ITS NETWORK ONLY.
+    //
+    // ⚠ IT SAT IN THE CONTENT BRANCH BELOW FOR ONE DAY, 2026-09-22, GRANTED TO A CONTENT STEWARD, AND THE
+    // GRANT WAS INERT ON EVERY SCREEN IN THE PRODUCT. MEASURED on a live gateway: a delegated steward's
+    // church-tagged `sermon:` ACKed and was then read back by the three shipped readers as 0, 0 and 0 —
+    //   · _openSermons          (src/fellowship.src.js) — `authors:[cp]` AND `if (e.pubkey !== cp) return;`
+    //   · subscribeSermons      (src/steward.src.js)    — `authors:[pub]`, and on a DELEGATED console `pub`
+    //                                                     is the church's pubkey while `sk` is the steward's
+    //   · subscribePinnedSermon (both)                  — `authors:[pub]` + `#d`
+    // so the ACK reached no member's app, no member's Today card, and not even the publishing steward's own
+    // sermon list — while DashSermons printed '✓ Uploaded … · members notified'. Against `efe2dbe` that is
+    // an HONESTY REGRESSION: there the write was refused and publishSermon threw a real error. Owner's
+    // decision, 2026-09-22: withdraw the grant rather than ACK into a void.
+    //
+    // THIS IS NOT INCOHERENT WITH pinsermon:, WHICH IS STILL GRANTED TO A CONTENT STEWARD, and the readers
+    // are the whole reason. subscribePinnedSermon filters `authors:[pub]` exactly as the two sermon readers
+    // do, so featuring is equally invisible from a delegated console: the two AGREE in the only place the
+    // incoherence was ever claimed to matter, which is what a human can see. `pinsermon:` keeps its grant
+    // because it predates all of this and narrowing it is an unmeasured behaviour change nobody asked for;
+    // `sermon:`'s grant was one day old and measured inert. Both become real together, and only together,
+    // when the READERS learn to accept a rostered steward's signature — a member-app change, so a member APK
+    // build and a device run. That package is written up in
+    // TrinityOne-internal/reference/PLAN-delegated-steward-publishing.md.
+    if (d.startsWith(SERMON_D)) return leaderOf(ownCp());
     // church-authored CONTENT docs: a steward names the church via a ["church", <cp>] tag
     if (d.startsWith(GROUP_D) || d.startsWith(PLAN_D) || d.startsWith(DEVO_D) || d.startsWith(ROTA_D)
       || d.startsWith(ROSTER_D) || d.startsWith(SERVICE_D) || d.startsWith(REQUEST_D)
       || d.startsWith(ROOM_D) || d.startsWith(BOOKING_D) || d.startsWith(RUNSHEET_D)
       || d.startsWith(CATEGORY_D) || d.startsWith(PINSERMON_D)) {
+      // SERMON_D JOINED THIS LIST ON 2026-09-22 AND LEFT IT THE SAME DAY — see its own branch above, and the
+      // measurement that decided it. PINSERMON_D stays: it has been decided here since this branch was
+      // written, so nothing about it is new and nothing about it has been measured as inert.
       // AUDIT-2026-07-24 CRITICAL-1/2: group: and roster: ids are relay-GLOBAL, so being *a* church key was
       // enough to rewrite ANOTHER church's group (→ flip invite-only to public) or care-team roster (→ grant
       // yourself care-admin over their private corpus). Refuse at the door once an id has an owner.
@@ -4328,6 +4468,11 @@ function accept(e) {
     // culled, so cap distinct docs per author — a member can't disk-exhaust the relay by spamming unique d-tags.
     // Updating an existing d-tag is always fine; only a NEW one past the cap is refused.
     if (!isMember) return false;
+    // …AND ONLY FOR A TYPE THIS PRODUCT HAS DECLARED A MEMBER MAY WRITE. The church key and a network key keep
+    // the catch-all as it was — an ordinary member does not. Everything a member legitimately writes has a
+    // declared type (memberDocTypeOk), so what this refuses is a d-tag nobody has invented yet, or a
+    // church-only type somebody forgot to give a branch above — the two shapes that produced `voice:`.
+    if (!(isAnyChurch || isNetwork) && !memberDocTypeOk(d)) return false;
     const mine = store.query({ kinds: [30078], authors: [e.pubkey], limit: MEMBER_DOC_CAP + 1 });
     if (mine.length > MEMBER_DOC_CAP && !mine.some(x => (x.tags.find(t => t[0] === 'd') || [])[1] === d)) return false;
     return true;
@@ -5808,10 +5953,13 @@ function serveStatic(req, res) {
     res.writeHead(405, H); res.end('{"error":"method"}'); return;
   }
   // church-data backup: stream every event this relay holds for the caller's church as JSONL (a self-verifying,
-  // importAll()-restorable archive). NIP-98-authed to the church key or a steward of that church.
+  // importAll()-restorable archive). NIP-98-authed to the CHURCH KEY ONLY — _exportAuth's last line is
+  // `return cp && ev.pubkey === cp ? cp : null`, and it says why: this streams the whole corpus, safeguarding
+  // lists included. This comment said "or a steward of that church" until 2026-09-23; _exportAuth was narrowed
+  // to owner-only before that and the three route comments were not moved with it (AUDIT round 4, F3).
   if (route === '/export') {
     const cp = _exportAuth(req, req.headers['host'] || '', route);
-    if (!cp) { res.writeHead(401, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }); res.end('unauthorized: needs a fresh NIP-98 proof signed by the church key or a steward, bound to this URL'); return; }
+    if (!cp) { res.writeHead(401, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }); res.end('unauthorized: needs a fresh NIP-98 proof signed by the church key, bound to this URL'); return; }
     const events = store.exportChurch(cp);
     res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Content-Disposition': 'attachment; filename="trinityone-church-backup.jsonl"', 'Cache-Control': 'no-store', ...SEC_HEADERS });
     res.write(JSON.stringify({ _manifest: { format: 'trinityone-church-backup', version: 1, church: cp, exportedAt: Math.floor(Date.now() / 1000), events: events.length, relay: ORIGIN } }) + '\n');
@@ -5915,13 +6063,13 @@ function serveStatic(req, res) {
   }
   // RESTORE / CLONE (the import engine): take a church's backup (decrypted JSONL of signed events, streamed by the
   // client) and import it — bootstrapping a fresh relay or repopulating one after loss. NIP-98-authed to the church
-  // key (which may also REGISTER a not-yet-known church here — same trust as self-registration) or a steward of an
-  // already-known church. Every event is signature-verified before it's stored, so a compromised file can't inject
+  // key ONLY (which may also REGISTER a not-yet-known church here — same trust as self-registration); _exportAuth
+  // is owner-only, so a delegated steward's own key is refused here as it is at /export. Every event is signature-verified before it's stored, so a compromised file can't inject
   // forgeries; the church key vouches for attributing them to cp. Media blobs restore separately via PUT /blob.
   if (route === '/import' && req.method === 'POST') {
     const H = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' };
     const cp = _exportAuth(req, req.headers['host'] || '', route);
-    if (!cp) { res.writeHead(401, H); res.end('{"error":"unauthorized: a fresh NIP-98 proof by the church key (or a steward) bound to /import"}'); return; }
+    if (!cp) { res.writeHead(401, H); res.end('{"error":"unauthorized: a fresh NIP-98 proof by the church key, bound to /import"}'); return; }
     const chunks = []; let n = 0, tooBig = false;
     req.on('data', (c) => { if (tooBig) return; n += c.length; if (n > MAX_IMPORT) { tooBig = true; try { res.writeHead(413, H); res.end('{"error":"import too large"}'); } catch {} req.destroy(); return; } chunks.push(c); });   // respond BEFORE destroy — destroy skips 'end', so a deferred 413 would hang the request (→ 502)
     req.on('end', () => {
@@ -7506,9 +7654,29 @@ wss.on('connection', (ws, req) => {
         // NO reply at all where the old code sent a refusal. Audit, 2026-08-28.
         const _rd = dtag(evt) || '';
         const _stale = evt.kind === 30078 && _rd.startsWith(CAREREQ_D) && !ID_OWNER_RE.test(_rd.slice(CAREREQ_D.length));
-        rejectLog(evt, ws, _stale ? 'care request from a build that predates self-naming ids' : 'not a member or not permitted for this group');
+        // …and a document of a type the relay has NO rule for, from a MEMBER that is not a church or a network:
+        // the member catch-all refused it (memberDocTypeOk). A stranger keeps the generic reason, which already
+        // says "not a member". Named so a newer app publishing a type this
+        // relay predates reads "this relay needs updating", not "you are not a member". Only claimed when
+        // the relay really gates nothing by that name — a member refused a declared church-only type keeps
+        // the generic reason, because that refusal came from that type's own branch.
+        // THE NETWORK TEST HERE MUST BE THE ONE accept() MADE, not a relay-wide lookalike. It was
+        // `NETWORKS.has(evt.pubkey)` — the merged set, "is this key a network of ANY church on this box" —
+        // while accept() asks `networkOf(e.pubkey, namedChurch(e))` when the event names a church
+        // (AUDIT-undeclared-doc-types-2026-09-22 L1). On a multi-tenant relay a key that is a network of
+        // church B, writing an undeclared document that names church A, was refused by the new catch-all
+        // line and then told "not a member" — the generic reason, in the one multi-tenant case the new
+        // reason exists to explain. No security effect: both branches refuse. It made the diagnostic lie.
+        const _rcp = namedChurch(evt);
+        const _rIsNetwork = _rcp ? networkOf(evt.pubkey, _rcp) : NETWORKS.has(evt.pubkey);
+        const _undeclared = evt.kind === 30078 && MEMBERS.has(evt.pubkey) && !memberDocTypeOk(_rd) && !relayGatesType(_rd)
+          && !(CHURCH_PUBS.has(evt.pubkey) || _rIsNetwork);
+        rejectLog(evt, ws, _stale ? 'care request from a build that predates self-naming ids'
+          : _undeclared ? 'undeclared document type ' + _rd.slice(0, 40) + ' from a member'
+          : 'not a member or not permitted for this group');
         ws.send(JSON.stringify(['OK', evt.id, false, _stale
           ? 'blocked: please update the app to ask for help — this version cannot send a request'
+          : _undeclared ? 'blocked: undeclared document type — this relay has no rule for it, and a member may not write one'
           : 'blocked: not a member or not permitted for this group']));
         return;
       }

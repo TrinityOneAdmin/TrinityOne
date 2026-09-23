@@ -59,7 +59,14 @@ function console_({ binary }) {
   const exported = binary
     ? { data: ZIP, binary: true, mime: 'application/zip', count: 7, filename: 'trinityone-backup.zip', encrypted: true, media: 2 }
     : { data: '{"records":[1,2,3]}', binary: false, mime: 'application/json', count: 3, filename: 'trinityone-backup.json', encrypted: false, media: 0 };
-  const Steward = fakeSteward({ exportChurchData: async () => exported, mediaSize: async () => ({ count: 0, bytes: 0 }) });
+  // `actingChurch: ''` — THE OWNER CONSOLE. AUDIT-steward-doc-rules-round5-2026-09-23 finding 3 gated
+  // "Back up church data" on `stewCapState('content').owner`, which reads `window.Steward.actingChurch`.
+  // fakeSteward()'s Proxy returns a bare function (truthy) for any key not in its base object, so an
+  // unset `actingChurch` reads as truthy — the console under test here reads as a DELEGATE, the button
+  // never reaches exportChurchData at all, and the receipt is the owner-only refusal instead of a save.
+  // This test is about the phone's Filesystem plugin, not delegation, so it is explicit about which
+  // console it is.
+  const Steward = fakeSteward({ actingChurch: '', exportChurchData: async () => exported, mediaSize: async () => ({ count: 0, bytes: 0 }) });
   const { window } = fakeBrowser({ Steward });
   const writes = [], shares = [];
   // The Android plugin, as far as this test needs it: an id outside the enum is INVALID_DIR, nothing is written.

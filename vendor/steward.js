@@ -15353,6 +15353,7 @@ zoo`.split("\n");
   var _mediaKeyHex = null;
   var _mediaKeyRing = [];
   var _mediaKeyDocKeys = null;
+  var _mediaKeyPushRefused = null;
   var _mediaKeyChecked = false;
   async function _sha256hex(u83) {
     const d = await crypto.subtle.digest("SHA-256", u83);
@@ -16290,6 +16291,7 @@ zoo`.split("\n");
     _mediaKeyRing = [];
     _mediaKeyDocKeys = null;
     _mediaKeyChecked = false;
+    _mediaKeyPushRefused = null;
     for (const k of Object.keys(CAP_KEYS)) _capState[k] = { ring: [], docKeys: null, rev: 1, at: 0, checked: false };
     _checkinMigrated = "";
     _ckKeysSettled = "";
@@ -16679,6 +16681,10 @@ zoo`.split("\n");
       const reason = relaysRaw().length ? NO_NETWORK_RELAY + ": none of this church's relays could be proved to be ours, so nothing was published" : "no relay is configured for this church";
       console.warn("[steward] publish blocked \u2014", reason);
       try {
+        if (opts && typeof opts === "object") opts.refused = false;
+      } catch (x) {
+      }
+      try {
         window.dispatchEvent(new CustomEvent("steward-publish-error", { detail: { reason, evt, background: _bg } }));
       } catch (x) {
       }
@@ -16691,12 +16697,6 @@ zoo`.split("\n");
       })));
     } catch (e) {
       console.warn("[steward] publish failed", e);
-      let reason = "";
-      try {
-        const errs = e && e.errors || [];
-        reason = errs[0] && (errs[0].message || String(errs[0])) || "";
-      } catch (x) {
-      }
       let refused = [];
       try {
         const errs = e && e.errors || [];
@@ -16704,9 +16704,23 @@ zoo`.split("\n");
       } catch (x) {
         refused = [];
       }
+      const _spoke = refused.find((r) => r && r.error && !/^connection failure/i.test(String(r.error)));
+      let reason = _spoke && _spoke.error || refused[0] && refused[0].error || "";
       try {
         const d1 = ((evt.tags || []).find((t) => t[0] === "d") || [])[1];
         if (d1 && /newer version/i.test(reason) && (_lastOk.get(d1) || 0) > (evt.created_at || 0)) return evt;
+      } catch (x) {
+      }
+      let _saidNo = false;
+      try {
+        _saidNo = refused.some((r) => /^(blocked|invalid|restricted|rate-limited|auth-required)/i.test(String(r && r.error || "")));
+      } catch (x) {
+      }
+      try {
+        if (opts && typeof opts === "object") {
+          opts.refused = _saidNo;
+          opts.reason = reason;
+        }
       } catch (x) {
       }
       try {
@@ -17728,6 +17742,7 @@ zoo`.split("\n");
     // left alone (the console shows the add-a-backup nudge instead). No church data goes anywhere it isn't already.
     async autoSyncIfRedundant() {
       if (!sk || !pub) return { enabled: false };
+      if (actingChurch) return { enabled: false, delegated: true };
       try {
         const st = await window.Steward.backupState();
         if (st.boxes >= 2 && !st.syncOn) {
@@ -18108,7 +18123,10 @@ zoo`.split("\n");
       if (!sk) return Promise.resolve(null);
       const clean5 = _sanitizeMsgTags(tags);
       const content = JSON.stringify({ tags: clean5 });
-      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", MSGTAGS_D], ["t", NET]], content })).then(() => clean5);
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", MSGTAGS_D], ["t", NET]], content })).then((r) => {
+        if (r === false) throw new Error("Couldn\u2019t save the message tags \u2014 no relay accepted them. If you are helping another church, this needs the \u201CGroups, rotas, services, events, posts\u201D permission.");
+        return clean5;
+      });
     },
     // cb(tags) for the church's configured tags, or cb(null) when NO tags doc exists yet — the editor then
     // seeds the default (Prayer request), which the steward can rename, recolour or remove. Never hangs on load.
@@ -18196,6 +18214,7 @@ zoo`.split("\n");
     // publish a signed sermon doc referencing an uploaded blob (title + sha256 + host(s) for redundancy).
     publishSermon(s) {
       if (!sk) return Promise.resolve(null);
+      if (actingChurch) return Promise.reject(new Error("Only the church\u2019s own console can publish a sermon. Ask whoever holds the church key."));
       const id = s.id || "sermon" + Date.now();
       const content = JSON.stringify({ id, title: s.title || "Sermon", desc: s.desc && String(s.desc).trim() || void 0, sha256: s.sha256, hosts: s.hosts && s.hosts.length ? s.hosts : [s.host], mime: s.mime || "", size: s.size || 0, ts: s.ts || now(), enc: s.enc || void 0, series: s.series || void 0 });
       return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", SERMON_D + id], ["t", NET]], content })).then((r) => {
@@ -18205,8 +18224,10 @@ zoo`.split("\n");
     },
     async removeSermon(s) {
       if (!sk) return null;
+      if (actingChurch) throw new Error("Only the church\u2019s own console can remove a sermon. Nothing was deleted.");
       const id = s && typeof s === "object" ? s.id : s;
-      await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", SERMON_D + id], ["t", NET], ["deleted", "1"]], content: "" }));
+      const _tomb = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", SERMON_D + id], ["t", NET], ["deleted", "1"]], content: "" }));
+      if (_tomb === false) throw new Error("Couldn\u2019t remove that sermon \u2014 no relay accepted the change, so nothing was deleted.");
       const sha = s && typeof s === "object" && s.sha256;
       const hosts = s && typeof s === "object" && (s.hosts && s.hosts.length ? s.hosts : s.host ? [s.host] : []) || [];
       if (sha && hosts.length) {
@@ -18260,8 +18281,29 @@ zoo`.split("\n");
     },
     // backup reminder, church-wide: record the last-backup time + reminder cadence in a church doc, so every steward
     // and device shows the same 'last backed up' + overdue nudge — not just the device that happened to run it.
+    // RETURNS false WHEN NO RELAY TOOK IT, and BOTH of its callers say so on screen — CLAUDE.md rule 2, and
+    // they are DashBackup's `doBackup` (the "Back up church data" button) and DashBackup's `setFrequency` (the
+    // weekly / monthly / off reminder segment), both in app/stew-dashboard.jsx.
+    //
+    // ⚠ THAT SENTENCE READ "and both callers now say so on screen" ON 2026-09-22 AND ONLY ONE OF THEM DID.
+    // setFrequency was still fire-and-forget inside a try/catch (AUDIT-steward-doc-rules-2026-09-22 F3, and
+    // CLAUDE.md rule 4 — the false claim in the permanent record is the finding). Both read the answer now,
+    // and there is a point-of-use test per caller so the next edit to either cannot quietly re-open it.
+    //
+    // The backup itself is a local file and really did save; this document is the CHURCH-WIDE half — "every
+    // steward's nudge resets" — so a refusal means the other stewards' consoles still show overdue. Saying
+    // "Saved" and nothing else made this console the only one that believed the church was backed up.
+    //
+    // ON A DELEGATED CONSOLE IT IS ALWAYS false, AND IT DOES NOT ASK. The relay gates
+    // `trinityone/backup-meta:` to the church key or its network (2026-09-22), because subscribeBackupMeta
+    // below filters `authors:[pub]` — the CHURCH's pubkey — while a delegated console signs with the
+    // steward's own key. So a steward-authored record is read back by NOBODY, this console included, and
+    // resets nobody's nudge: measured as 0 rows on a live gateway the day that grant was written, which is
+    // why it was withdrawn the same day. Both callers say WHICH refusal it is rather than sending the
+    // steward to look at a connection that is working perfectly.
     setBackupMeta(at, remind) {
       if (!sk) return Promise.resolve(null);
+      if (actingChurch) return Promise.resolve(false);
       return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", BACKUPMETA_D + pub], ["t", NET]], content: JSON.stringify({ at: at || now(), remind: remind || "monthly" }) }));
     },
     subscribeBackupMeta(onMeta) {
@@ -18302,7 +18344,8 @@ zoo`.split("\n");
       const targets = [.../* @__PURE__ */ new Set([pub, ...(memberPubs || []).filter(Boolean)])];
       const _mring = JSON.stringify(_mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex]);
       const keys = await _sealEach(_mring, targets, (pl, mp) => encrypt3(pl, getConversationKey(sk, mp)));
-      await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", MEDIAKEY_D + pub], ["t", NET]], content: JSON.stringify({ keys, rev: now() }) }));
+      const _env = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", MEDIAKEY_D + pub], ["t", NET]], content: JSON.stringify({ keys, rev: now() }) }));
+      if (_env === false) throw new Error("Can\u2019t encrypt this upload \u2014 your church\u2019s media key could not be saved, so nothing encrypted with it could ever be played. Nothing has been uploaded. A church media key can only be published from the console that holds the church\u2019s own key.");
       const key = await crypto.subtle.importKey("raw", _unhex(_mediaKeyHex), "AES-GCM", false, ["encrypt"]);
       return async (bytes) => {
         const iv = crypto.getRandomValues(new Uint8Array(12));
@@ -18323,10 +18366,28 @@ zoo`.split("\n");
       const want = [.../* @__PURE__ */ new Set([pub, ...(memberPubs || []).filter(Boolean)])].filter((p) => !_localBlocked.has(String(p).toLowerCase()));
       const have = _mediaKeyDocKeys || {};
       if (want.every((p) => have[p])) return false;
+      const fp = want.slice().sort().join(",");
+      if (_mediaKeyPushRefused === fp) return false;
       const _mring = JSON.stringify(_mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex]);
       const keys = await _sealEach(_mring, want, (pl, mp) => encrypt3(pl, getConversationKey(sk, mp)));
-      const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", MEDIAKEY_D + pub], ["t", NET]], content: JSON.stringify({ keys, rev: now() }) }));
-      if (ok !== false) _mediaKeyDocKeys = keys;
+      const _pubOpts = { background: true };
+      const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", MEDIAKEY_D + pub], ["t", NET]], content: JSON.stringify({ keys, rev: now() }) }), _pubOpts);
+      if (ok !== false) {
+        _mediaKeyDocKeys = keys;
+        _mediaKeyPushRefused = null;
+        return ok;
+      }
+      if (!_pubOpts.refused) return ok;
+      _mediaKeyPushRefused = fp;
+      try {
+        const missing = want.filter((p) => p !== pub && !have[p]).length;
+        const _why = /not a member|not permitted/i.test(String(_pubOpts.reason || "")) ? "Only the console that holds the church key can publish it." : "The relay refused it: " + String(_pubOpts.reason || "no reason given").trim().replace(/[.\s]+$/, "") + ".";
+        window.dispatchEvent(new CustomEvent("steward-write-blocked", { detail: {
+          what: "sermon key",
+          message: (missing ? missing + " member(s) could not be given the key to this church\u2019s encrypted sermons, so those sermons will not play for them. " : "The key to this church\u2019s encrypted sermons could not be saved. ") + _why + " This console will not keep retrying."
+        } }));
+      } catch (e) {
+      }
       return ok;
     },
     // ROTATE the media key — same contract as rotateCareKey: a removed member must not hold the key to sermons
@@ -18347,6 +18408,7 @@ zoo`.split("\n");
       _mediaKeyRing = ring;
       _mediaKeyHex = fresh;
       _mediaKeyDocKeys = keys;
+      _mediaKeyPushRefused = null;
       return true;
     },
     // ---- care key: same envelope as the media key, for the Care module's sensitive fields ----
@@ -18549,10 +18611,14 @@ zoo`.split("\n");
         // Ring-aware, and tolerant of the legacy shape: a wrapped value is a JSON array of keys now (newest
         // first) but older envelopes hold one bare hex string. Reading only the new form would make every
         // sermon encrypted before the upgrade undecryptable.
+        /* `_mediaKeyPushRefused = null` (F2): an envelope LANDING is new information — the recipient map has
+           changed under us, so whatever this console last had refused is worth asking again. Without this a
+           console that was refused once would go on skipping until the roster itself changed. */
         onevent(e) {
           try {
             const o = JSON.parse(e.content);
             _mediaKeyDocKeys = o && o.keys || null;
+            _mediaKeyPushRefused = null;
             const mine = o.keys && o.keys[pub];
             if (mine && sk) {
               const plain = decrypt3(mine, getConversationKey(sk, e.pubkey));
