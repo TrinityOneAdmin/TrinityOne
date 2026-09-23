@@ -149,6 +149,28 @@
   .sx-actions { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; margin-top: 34px; }
   .sx-note { max-width: 700px; margin: 22px auto 0; font-size: 15px; line-height: 1.6; color: var(--ink-2); background: color-mix(in oklab, var(--clay) 8%, var(--surface)); border: 1px solid color-mix(in oklab, var(--clay) 26%, transparent); border-radius: 14px; padding: 14px 17px; }
 
+  /* ══ PILOT-MODE SWITCH (2026-09-23, owner-approved) ══ reference/DESIGN-embeddable-church-info.md,
+     "The pilot website". While the app is invitation-only, the public download links below are inert
+     and a single "Contact us" action stands in their place. Every PRESENTATION change this state makes —
+     the "Pilot" tags, the contact CTA block, the extra install-from-your-church line — keys off ONE
+     attribute: `data-pilot="on"` on `<section id="get">`. Flip that one attribute off (or delete it) and
+     all three disappear together; nothing else in this stylesheet needs to change.
+     CSS cannot restore a REMOVED `href` (see the accessibility note on `#get` below for why href, not
+     aria-disabled, was removed), so the six controls this locks keep their real target as `data-live-href`
+     at three places tagged `PILOT-LOCK` in the markup (one of which wraps all four desktop builds at
+     once). GO LIVE = (1) this attribute off, (2) at each `PILOT-LOCK` comment, rename that control's
+     `data-live-href` back to `href` and drop its `pilot-locked` class (cosmetic only). Nothing else
+     changes. */
+  .pilot-tag { display: none; }
+  #get[data-pilot="on"] .pilot-tag { display: inline-flex; }
+  .pilot-cta { display: none; }
+  #get[data-pilot="on"] .pilot-cta { display: block; }
+  .pilot-locked, .pilot-locked .sx-act { opacity: .5; filter: grayscale(55%); pointer-events: none; cursor: default; }
+  .pilot-locked:hover, .pilot-locked .sx-act:hover { transform: none; border-color: var(--line); }
+  .pilot-locked.sx-act--go, .pilot-locked .sx-act--go { background: var(--surface); border-color: var(--line); }
+  .pilot-locked.sx-act--go b, .pilot-locked .sx-act--go b,
+  .pilot-locked.sx-act--go span, .pilot-locked .sx-act--go span { color: var(--ink-3); }
+
   /* the moving-over overlay */
   .sw-ov { position: fixed; inset: 0; z-index: 200; display: none; background: rgba(20,16,12,.55); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); padding: 24px; overflow-y: auto; }
   .sw-ov.is-open { display: flex; align-items: flex-start; justify-content: center; }
@@ -636,38 +658,64 @@
 
 <!-- ══ GET THE APP ══ folded in from downloads.html, including the install-from-any-church story that
      resolves the old contradiction between "only install from this page" and "a friend church's APK is
-     byte-for-byte identical". -->
-<section class="sx" id="get" style="background:var(--paper-soft);border-top:1px solid var(--line)">
+     byte-for-byte identical".
+
+     PILOT MODE is ON (owner-approved 2026-09-23; reference/DESIGN-embeddable-church-info.md, "The pilot
+     website"): the app is invitation-only, so the six controls below that would hand anyone a build are
+     locked — see the PILOT-MODE SWITCH comment in <style> for the one attribute that governs this, and
+     the three PILOT-LOCK comments below for the controls it locks.
+
+     ACCESSIBILITY CHOICE, made once for all three PILOT-LOCK spots: each locked control has its `href`
+     REMOVED rather than carrying `aria-disabled` on a live link, or being swapped for a non-link element.
+     An `<a>` with no `href` has no implicit link role (HTML-AAM), so it is already unfocusable, already
+     absent from the tab order, and already read by a screen reader as plain text rather than announced as
+     a link — the disabled state a fake "disabled link" needs ARIA to fake, this gets for free and
+     correctly. The real target is kept alongside as `data-live-href` so nothing is lost. -->
+<section class="sx" id="get" data-pilot="on" style="background:var(--paper-soft);border-top:1px solid var(--line)">
   <div class="wrap">
     <div class="eyebrow"><span class="to-pill">Get the app</span></div>
     <h2>Get TrinityOne</h2>
     <p class="sx-intro">Install it on an Android phone, or just open it in your browser on any device — there's nothing to set up.</p>
+
+    <!-- THE PRIMARY ACTION while pilot mode is on. Hidden entirely when `data-pilot` is off, so going live
+         removes it with the section's other pilot copy rather than needing its own deletion. -->
+    <div class="pilot-cta" style="text-align:center;margin:30px auto 0">
+      <a href="mailto:hello@trinityone.church" class="to-btn to-btn--clay">Joining the pilot? Contact us.</a>
+      <p style="margin:14px auto 0;max-width:480px;font-size:14.5px;color:var(--ink-2);line-height:1.55">We're bringing pilot churches on by hand right now — email us and we'll get you set up.<br><strong style="display:inline-block;margin-top:8px">Already part of a church using TrinityOne? Install from your church's own link, not from here.</strong></p>
+    </div>
+
     <div class="sx-grid sx-grid--dl">
       <div class="sx-card sx-dl">
-        <h3>TrinityOne</h3>
+        <h3>TrinityOne <span class="soon-pill pilot-tag">Pilot</span></h3>
         <p>Read the Bible, join your groups, pray together, and keep up with your church through the week.</p>
         <p style="color:var(--ink-3);margin-top:7px">The Bible works straight away. To join your church you'll need their invite link or code.</p>
         <div class="sx-acts">
-          <a class="sx-act sx-act--go" href="https://app.trinityone.church/trinityone.apk" download><b>Android</b><span>Download the app</span></a>
+          <!-- PILOT-LOCK 1 of 3: real target kept as data-live-href. Go live: rename data-live-href to
+               href on this control and drop the pilot-locked class. -->
+          <a class="sx-act sx-act--go pilot-locked" data-live-href="https://app.trinityone.church/trinityone.apk"><b>Android</b><span>Download the app</span></a>
           <a class="sx-act" href="https://app.trinityone.church/"><b>iPhone &amp; iPad</b><span>Open in Safari, then Share &rarr; Add to Home Screen &mdash; official app coming soon</span></a>
           <a class="sx-act" href="https://app.trinityone.church/"><b>Computer</b><span>Open in your browser — nothing to install</span></a>
         </div>
       </div>
 
       <div class="sx-card sx-dl">
-        <h3>TrinityOne Suite</h3>
+        <h3>TrinityOne Suite <span class="soon-pill pilot-tag">Pilot</span></h3>
         <p><b>For pastors and church leaders.</b> The whole church on a computer you own: your records stay on your machine, and the console to run it comes with them &mdash; one double-click app, no command line.</p>
         <p style="color:var(--ink-3);margin-top:7px">The way we'd point you. Any computer you can leave on will do.</p>
-        <div class="sx-acts">
-          <a class="sx-act sx-act--go" href="https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download/TrinityOne-Suite-windows-x64-setup.exe"><b>Windows</b><span>Installer (.exe)</span></a>
-          <a class="sx-act" href="https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download/TrinityOne-Suite-macos-arm64.dmg"><b>macOS</b><span>Apple silicon (.dmg)</span></a>
+        <!-- PILOT-LOCK 2 of 3: ALL FOUR desktop builds share one wrapper, so one `pilot-locked` class here
+             locks all four at once — each control's own data-live-href still names its own real target.
+             Go live: rename each control's data-live-href to href and drop this wrapper's pilot-locked
+             class. -->
+        <div class="sx-acts pilot-locked">
+          <a class="sx-act sx-act--go" data-live-href="https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download/TrinityOne-Suite-windows-x64-setup.exe"><b>Windows</b><span>Installer (.exe)</span></a>
+          <a class="sx-act" data-live-href="https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download/TrinityOne-Suite-macos-arm64.dmg"><b>macOS</b><span>Apple silicon (.dmg)</span></a>
           <!-- CI builds `deb,appimage` and publishes both (relay-desktop.yml). The page named the Debian
                package in prose and linked only the AppImage, so the one reader who wanted it had nowhere
                to click. They share a row because they are ONE choice — which Linux package — not two
                platforms, and stacked they made this card taller than the member card beside it. -->
           <div class="sx-act-row">
-            <a class="sx-act" href="https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download/TrinityOne-Suite-linux-x86_64.AppImage"><b>Linux</b><span>AppImage</span></a>
-            <a class="sx-act" href="https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download/TrinityOne-Suite-linux-x86_64.deb"><b>Linux</b><span>.deb</span></a>
+            <a class="sx-act" data-live-href="https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download/TrinityOne-Suite-linux-x86_64.AppImage"><b>Linux</b><span>AppImage</span></a>
+            <a class="sx-act" data-live-href="https://github.com/TrinityOneAdmin/TrinityOne/releases/latest/download/TrinityOne-Suite-linux-x86_64.deb"><b>Linux</b><span>.deb</span></a>
           </div>
         </div>
         <!-- The quiet line the one-line installer never had (2026-09-21): a Linux server with no screen, and the
@@ -689,11 +737,16 @@
          had not already given. With the hosted console that argument does not hold: the key lives against
          our origin and the steward never loads anything from their own box. -->
     <div style="max-width:760px;margin:26px auto 0;padding:15px 18px;border:1px solid var(--line);border-radius:14px;background:var(--paper)">
-      <div style="font-weight:700;font-size:15px;color:var(--ink);margin-bottom:5px">Leading a church, with no computer you can leave on?</div>
+      <div style="font-weight:700;font-size:15px;color:var(--ink);margin-bottom:5px">Leading a church, with no computer you can leave on? <span class="soon-pill pilot-tag">Pilot</span></div>
       <p style="font-size:14px;color:var(--ink-2);line-height:1.55;margin:0 0 10px">Open <b>TrinityOne Steward</b>, the console pastors and church leaders run their church from, in your browser instead. Nothing to install, and you can move to the Suite later — but your church's records will live on our relays rather than your own.</p>
       <div style="display:flex;flex-wrap:wrap;gap:9px;font-size:13.5px">
         <a href="https://app.trinityone.church/steward.html" style="font-weight:700;color:var(--clay)">Open the console &rarr;</a>
-        <a href="https://app.trinityone.church/trinityone-steward.apk" data-steward-cta download style="font-weight:700;color:var(--ink-3)">Android app</a>
+        <!-- PILOT-LOCK 3 of 3: real target kept as data-live-href. `data-steward-cta` is deliberately
+             removed while locked — android-cta.js rewrites every [data-steward-cta] into a live APK
+             download on an Android visitor's phone, which would defeat this lock on exactly the device
+             it matters most on. Go live: rename data-live-href to href, drop pilot-locked, and restore
+             `data-steward-cta download` so android-cta.js's Android rewrite (see that file) applies again. -->
+        <a class="pilot-locked" data-live-href="https://app.trinityone.church/trinityone-steward.apk" style="font-weight:700;color:var(--ink-3)">Android app</a>
       </div>
     </div>
 
