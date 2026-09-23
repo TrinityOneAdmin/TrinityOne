@@ -66,3 +66,4 @@ ci          export-ignore
 capacitor.config.json  export-ignore
 .github                export-ignore
 relay-app/desktop      export-ignore
+design             export-ignore
