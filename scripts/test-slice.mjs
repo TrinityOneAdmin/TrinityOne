@@ -153,11 +153,30 @@ function regexCanStart(out) {
 //     vendor/fellowship.js · vendor/finance-ledger.js · vendor/jspdf.umd.min.js · vendor/steward.js ·
 //     vendor/wallet.js
 //
-// AND THE DENOMINATOR DOES NOT REPRODUCE EITHER, which neither the commit nor the audit noticed: that set
-// is 127 files (80 non-JSX) at `277e0fe` itself, measured with `git ls-tree -r`, not 125/78. Three of them
-// are the dotted sim drivers in scripts/, which ARE tracked — so a walk that skips dotfiles gives 124, and
-// nothing gives 125. Everything downstream of the number is unaffected and does reproduce: 70 lines of
-// real code restored, 5 correctly blanked, 0 in neither class, and 61 -> 75 of 78 parsing.
+// THE DENOMINATOR IS 127 / 80, AND 125 / 78 IS A NON-RECURSIVE WALK. That set is 127 files (80 non-JSX)
+// at `277e0fe` itself, measured with `git ls-tree -r`, and 127/80 is the honest denominator for "the
+// sources this stripper is used on".
+//
+// ⚠ AND THE FIRST CORRECTION GOT THE CAUSE WRONG (rule 4 again; AUDIT-steward-doc-rules-round4-2026-09-22
+// finding F4). This block said "a walk that skips dotfiles gives 124, and nothing gives 125". Something
+// does: a walk of `scripts/ src/ app/ vendor/` that does NOT DESCEND gives exactly 125 / 78. MEASURED,
+// same enumeration, same extension filter, same `*.test.mjs` exclusion, at `277e0fe`:
+//
+//     RECURSIVE, git-tracked at 277e0fe       : 127 files / 80 non-JSX
+//     NON-RECURSIVE (top level of the 4 dirs) : 125 files / 78 non-JSX     <<< the disputed pair
+//       dropped by a non-recursive walk       : vendor/library/index.js, vendor/sqljs/sql-wasm.js
+//     RECURSIVE minus dotfiles                : 124 files / 77 non-JSX
+//     NON-RECURSIVE minus dotfiles            : 122 files / 75 non-JSX
+//
+// The two files a non-recursive walk drops live in vendor/'s only two subdirectories and are BOTH non-JSX,
+// which is why BOTH of 277e0fe's numbers move by exactly two. The dotfile story explains 124 and is a red
+// herring; the three dotted sim drivers (scripts/.sim-click.mjs, .sim-type.mjs, .sim-words.mjs) are tracked
+// and not ignored, but they are not what the 125 is about.
+//
+// The 17 is unaffected: neither of the two extra files is among the seventeen listed above, so the same
+// seventeen change under either denominator. Everything else downstream of the number reproduces and is
+// untouched: 70 lines of real code restored, 5 correctly blanked, 0 in neither class, and 61 -> 75 of 78
+// parsing.
 export function stripComments(src) {
   let out = '', q = '';
   for (let i = 0; i < src.length; i++) {
