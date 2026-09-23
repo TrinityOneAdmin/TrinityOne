@@ -158,10 +158,10 @@
      the running app from this page at all, not just its downloads) ══
      reference/DESIGN-embeddable-church-info.md, "The pilot website". Every PRESENTATION change this
      state makes — the "Pilot" tags, the contact CTA block, the extra install-from-your-church line, the
-     two rewritten sentences below swapping back to their pre-pilot wording, and the tamper warning
-     reappearing — keys off ONE attribute: `data-pilot="on"` on `<section id="get">`. Flip that one
-     attribute off (or delete it) and all of it reverts together; nothing else in this stylesheet needs
-     to change.
+     rewritten section intro swapping back to its pre-pilot wording, and the whole download/tamper-warning
+     card at the foot of the section reappearing — keys off ONE attribute: `data-pilot="on"` on
+     `<section id="get">`. Flip that one attribute off (or delete it) and all of it reverts together;
+     nothing else in this stylesheet needs to change.
      CSS cannot restore a REMOVED `href` (see the accessibility note on `#get` below for why href, not
      aria-disabled, was removed), so the nine controls this locks — the six downloads AND the three web
      routes (member "iPhone & iPad" / "Computer", steward "Open the console") — keep their real target as
@@ -179,8 +179,9 @@
   #get[data-pilot="on"] .pilot-tag { display: inline-flex; }
   .pilot-cta { display: none; }
   #get[data-pilot="on"] .pilot-cta { display: block; }
-  /* Text swaps: .pilot-only is the pilot-state wording (hidden once live), .pilot-hide is the pre-pilot
-     wording / the tamper warning (hidden while the pilot is on, so it is dormant markup, not deleted). */
+  /* .pilot-only is pilot-state-only wording (hidden once live). .pilot-hide is the reverse: pre-pilot
+     wording, or (on the download/tamper-warning card at the foot of the section) a whole element — hidden
+     while the pilot is on, so it is dormant markup, not deleted, and needs no edit to come back live. */
   .pilot-only { display: none; }
   #get[data-pilot="on"] .pilot-only { display: inline; }
   #get[data-pilot="on"] .pilot-hide { display: none; }
@@ -792,11 +793,15 @@
          it has to name the trusted friend, who is exactly who it will come from.
 
          PILOT, owner 2026-09-23: "Hide the tamper proof line for now as well" — with no download on the
-         page there is nothing on it to be cautious about. The caution `<strong>` is `pilot-hide` rather
-         than deleted, so it comes back verbatim at go-live with the downloads; the sentence above it is
-         rewritten (not hidden) because it names THIS page as a download source, which is false right now
-         either way. -->
-    <p class="sx-note" style="text-align:center"><span class="pilot-hide">Download the app from this page, or from your church's own TrinityOne address.</span><span class="pilot-only">There's nothing to download from this page right now.</span><br class="pilot-hide"><strong class="sx-note-caution pilot-hide">Caution: if someone sends you the app, even someone you trust, don't install it. A file can be changed on its way to you without you knowing.</strong></p>
+         page there is nothing on it to be cautious about. FIRST CUT replaced the sentence above the
+         caution with "There's nothing to download from this page right now." and hid only the caution
+         `<strong>`; owner corrected the SAME DAY: "remove the little card... that is obvious, you don't
+         need to say it" — the replacement card itself was the thing to remove, not just reword. The whole
+         `<p class="sx-note">` is now `pilot-hide` (nothing sits in that spot during the pilot) and BOTH
+         originals — this sentence and the caution block — sit inside it, dormant, exactly as they read
+         before any of this started. Go-live needs no further edit here: flipping the switch reveals this
+         whole card, sentence and caution together. -->
+    <p class="sx-note pilot-hide" style="text-align:center">Download the app from this page, or from your church's own TrinityOne address.<br><strong class="sx-note-caution">Caution: if someone sends you the app, even someone you trust, don't install it. A file can be changed on its way to you without you knowing.</strong></p>
   </div>
 </section>
 

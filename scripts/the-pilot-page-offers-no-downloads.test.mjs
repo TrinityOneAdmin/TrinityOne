@@ -25,6 +25,12 @@
 // cautious about") — REVERSING the original brief, which said to keep it. This file asserts the reversal,
 // not the original instruction.
 //
+// CORRECTED THE SAME DAY, one round later: the first cut answered "download the app from this page" with
+// a replacement card saying "There's nothing to download from this page right now." Owner: "remove the
+// little card... that is obvious, you don't need to say it" — the card itself was the defect, not its
+// wording. The whole `.sx-note` card (the download sentence AND the tamper warning, which share one
+// wrapper) is now hidden as a unit and reappears as a unit at go-live; nothing replaces it.
+//
 // CLAUDE.md rule 1 (test at the point of use): this does not grep welcome.html's source for the six
 // hostnames — a `false && ` in front of the gate would leave every character of a matched string in place.
 // It renders the real, served page (scripts/gateway.mjs, the same file that serves production) in headless
@@ -210,8 +216,15 @@ test('the two required sentences are in the rendered text, and nothing on the pa
     'the page still claims you can download the app from this page — you cannot, every download is locked');
   assert.match(text, /We're not open to the public right now\./,
     'the replacement sentence for the section intro is missing');
-  assert.match(text, /There's nothing to download from this page right now\./,
-    'the replacement sentence above the (now-hidden) caution box is missing');
+  // Owner, 2026-09-23, SAME DAY as the sentence above shipped: "remove the little card that says 'there
+  // is nothing to download from this page right now' — that is obvious, you don't need to say it." The
+  // whole card goes, not just its wording — checked two ways, so a reinstated card fails whether or not
+  // it still carries that exact sentence.
+  assert.doesNotMatch(text, /There's nothing to download from this page right now/,
+    'the "nothing to download" card is back — the owner asked for it to be removed entirely, not reworded');
+  const noteVisible = await ev(`getComputedStyle(document.querySelector('#get .sx-note')).display !== 'none'`);
+  assert.equal(noteVisible, false,
+    'the .sx-note card at the foot of the section is visible — nothing should sit in that spot during the pilot');
 });
 
 test('the pilot cards are visibly tagged and the switch is the single "#get[data-pilot]" attribute', { skip: !CHROME ? 'no chromium' : false }, async () => {
@@ -245,18 +258,22 @@ test('going live is flipping ONE attribute: it brings the tags, the CTA, the old
     var text = document.getElementById('get').innerText;
     var tagVisible = [].slice.call(document.querySelectorAll('#get .pilot-tag')).some(function(t){return getComputedStyle(t).display !== 'none';});
     var ctaVisible = getComputedStyle(document.querySelector('#get .pilot-cta')).display !== 'none';
+    var noteVisible = getComputedStyle(document.querySelector('#get .sx-note')).display !== 'none';
     return JSON.stringify({
-      tagVisible: tagVisible, ctaVisible: ctaVisible,
+      tagVisible: tagVisible, ctaVisible: ctaVisible, noteVisible: noteVisible,
       hasOldIntro: /Install it on an Android phone/.test(text),
       hasOldDownloadLine: /Download the app from this page/.test(text),
       hasCaution: /Caution: if someone sends you the app/.test(text),
       hasNewIntro: /We're not open to the public right now/.test(text),
+      hasRemovedCard: /There's nothing to download from this page right now/.test(text),
     });
   })()`));
   assert.equal(after_.tagVisible, false, 'a "Pilot" tag is still visible after the switch was turned off');
   assert.equal(after_.ctaVisible, false, 'the contact CTA is still visible after the switch was turned off');
   assert.equal(after_.hasOldIntro, true, 'the pre-pilot intro sentence did not come back');
+  assert.equal(after_.noteVisible, true, 'the .sx-note card (the download sentence + tamper warning) did not come back');
   assert.equal(after_.hasOldDownloadLine, true, 'the pre-pilot "download the app from this page" sentence did not come back');
   assert.equal(after_.hasCaution, true, 'the tamper warning did not come back');
   assert.equal(after_.hasNewIntro, false, 'the pilot-only intro sentence is still showing after the switch was turned off');
+  assert.equal(after_.hasRemovedCard, false, 'the removed "nothing to download" card text is back — it was deleted outright, not something the switch should ever restore');
 });
