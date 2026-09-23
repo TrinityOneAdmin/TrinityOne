@@ -160,7 +160,11 @@ test('the wizard never promises "add your church", and its last step opens the c
     await c.goto(gw.base + '/relay-app/control.html');
     await sleep(2500);
     assert.equal(await c.evalIn(`document.getElementById('relaySetup').classList.contains('show')`), false, 'the wizard re-opened after the console step was taken');
-    assert.equal(await c.evalIn(`localStorage.getItem('to_relay_setup_seen')`), '1', 'the seen-marker was not written on the way to the console');
+    // WHAT KEEPS IT SHUT IS THE PER-VISIT DISMISSAL, NOT A CLAIM THAT THE BOX IS SET UP. At the moment this
+    // link is taken the box still holds nothing — the church is created in the console, after the click — so
+    // writing the launcher's "set up" marker here was a claim about the future (AUDIT-round-c C3).
+    assert.equal(await c.evalIn(`localStorage.getItem('to_relay_setup_seen')`), null, 'the console step marked the box "set up" while it still held nothing');
+    assert.equal(await c.evalIn(`sessionStorage.getItem('to_relay_setup_skipped')`), '1', 'the console step did not dismiss the wizard for this visit');
     // The Churches card (Settings) says it too, without the old false claim about accepting the whole internet.
     const cfg = String(await c.evalIn(`document.getElementById('cfgList').innerText`));
     assert.match(cfg, /created in the console/i, 'the empty Churches card does not say where a church is created');

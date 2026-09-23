@@ -28,6 +28,16 @@
   .upd .txt b { color: var(--clay-ink); }
   .upd a.dl { text-decoration: none; font-weight: 700; font-size: 13px; color: #fff; background: var(--clay); padding: 8px 14px; border-radius: 10px; white-space: nowrap; }
   .upd button.x { border: none; background: none; color: var(--dim); font-size: 18px; line-height: 1; cursor: pointer; padding: 2px 4px; flex: none; }
+  /* the first-run card: one choice, three ways (home.js decides which of this and the doors is shown) */
+  [hidden] { display: none !important; }   /* the UA rule loses to .modes{display:grid} without this */
+  .first { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 24px 22px; max-width: 560px; margin: 0 auto; }
+  .first h2 { font-size: 19px; font-weight: 750; margin: 0 0 14px; }
+  .pick { display: flex; flex-direction: column; gap: 3px; text-decoration: none; color: inherit; border: 1px solid var(--line); border-radius: 13px; padding: 13px 15px; margin-top: 9px; transition: border-color .14s, background .14s; }
+  .pick:hover { border-color: color-mix(in oklab, var(--clay) 40%, var(--line)); }
+  .pick-primary { background: color-mix(in oklab, var(--clay) 9%, var(--card)); border-color: color-mix(in oklab, var(--clay) 35%, var(--line)); }
+  .pk-t { font-weight: 750; font-size: 15px; display: flex; align-items: center; gap: 8px; }
+  .pk-t .rec { font-size: 11px; font-weight: 700; color: var(--clay-ink); background: color-mix(in oklab, var(--clay) 14%, transparent); border-radius: 999px; padding: 2px 8px; }
+  .pk-d { font-size: 13px; color: var(--ink2); line-height: 1.5; }
   :focus-visible, a:focus-visible, button:focus-visible { outline:2px solid var(--clay) !important; outline-offset:2px; }
   @media (prefers-reduced-motion: reduce){ *{ transition-duration:.001ms !important; animation-duration:.001ms !important; } }
 </style>
@@ -35,14 +45,35 @@
 <body>
   <div class="wrap">
     <div class="brand">TrinityOne <span>Suite</span></div>
-    <p class="sub">What should this computer do for your church?</p>
+    <p class="sub" id="sub">What should this computer do for your church?</p>
+    <p class="sub" id="checking" hidden>Checking this computer&hellip;</p>
     <div class="upd" id="upd">
       <span class="dot"></span>
       <span class="txt"><b>A new version is available.</b> Download and reinstall to update &mdash; your church data stays put.</span>
       <a class="dl" id="updDl" href="https://github.com/TrinityOneAdmin/TrinityOne/releases/latest" target="_blank" rel="noopener">Get update</a>
       <button class="x" id="updX" title="Dismiss" aria-label="Dismiss">&times;</button>
     </div>
-    <div class="modes">
+    <!-- THE FIRST RUN IS ONE CARD, NOT TWO DOORS (owner, 2026-09-22, after his own AppImage test: a first-time
+         person still could not tell which door to take). home.js shows this card only while NOTHING has been
+         set up — no relay name, no church on this box, neither wizard finished or skipped — and the two doors
+         otherwise. Three links, no new wizard: the two that exist are joined by a thread (`?setup=` tells the
+         relay wizard's done step what comes next; the console's done step has "Back to the Suite" on the Suite). -->
+    <section class="first" id="firstRun" hidden aria-labelledby="firstRunH">
+      <h2 id="firstRunH">First time here? Set this computer up.</h2>
+      <a class="pick pick-primary" id="setupAll" href="/relay-app/control.html?setup=everything">
+        <span class="pk-t">Set up everything <span class="rec">Recommended</span></span>
+        <span class="pk-d">Your relay first, then your church on it &mdash; a few minutes.</span>
+      </a>
+      <a class="pick" id="setupRelay" href="/relay-app/control.html?setup=relay">
+        <span class="pk-t">Just a relay</span>
+        <span class="pk-d">This computer keeps the records; the church is run from another device.</span>
+      </a>
+      <a class="pick" id="setupConsole" href="/steward.html">
+        <span class="pk-t">Just the console</span>
+        <span class="pk-d">Start your church now &mdash; the relay settings can wait.</span>
+      </a>
+    </section>
+    <div class="modes" id="doors">
       <a class="mode" href="/steward.html">
         <span class="ic" style="background:color-mix(in oklab,var(--clay) 12%,transparent);color:var(--clay)"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/></svg></span>
         <h3>Run your church</h3>

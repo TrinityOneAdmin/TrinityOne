@@ -792,6 +792,14 @@
     if (!adminToken) {
       try { const r = await fetch('/local-token', { cache: 'no-store' }); if (r.ok) { const j = await r.json(); if (j && j.token) { adminToken = j.token; localStorage.setItem(TOKEN_KEY, adminToken); } } } catch (e) {}
     }
+    // YIELD ONCE, ALWAYS. With the token already stored this ran synchronously — before the wizard's own
+    // `let rswOpen` / `const RSW_SEEN` (further down this file) existed — so maybeFirstRun() threw a
+    // ReferenceError that this async function turned into a silent rejection, and loadApkStatus() below
+    // never ran. The /local-token await above hid it: the wizard opened on the FIRST visit to this page in a
+    // webview and never on a second visit with the wizard still unseen. Measured 2026-09-22 (scripts/
+    // the-suite-first-run-is-one-guided-path.test.mjs, "a second visit"). One microtask puts every call
+    // below after the whole script has run, on both paths.
+    await undefined;
     loadConfig();
     loadRelayName();
     maybeFirstRun();
@@ -1086,15 +1094,43 @@
   // A fresh relay otherwise drops the operator straight onto the dashboard with the
   // setup scattered across Settings cards. This walks a brand-new relay through the
   // two things it actually needs — a name and its first church — BEFORE the console,
-  // then points at the tunnel as the next step. Shown once (a localStorage flag), and
-  // only when the relay genuinely looks new (no name claimed AND no church added), so
-  // an established relay is never nagged.
+  // then points at the tunnel as the next step. Shown only when the relay genuinely looks
+  // new (no name claimed AND no church added), so an established relay is never nagged —
+  // and dismissed for the visit, not for ever, whenever it is closed with nothing done.
+  // ── THE MARKER MEANS "THIS BOX HAS SOMETHING ON IT", NEVER "A WIZARD WAS WALKED" ───────────────
+  // AUDIT-suite-B4 N2 and AUDIT-round-c C3. Owner, 2026-09-22: "It should come back until its setup", and
+  // on the audit of the first attempt at it: "I agree with your recommendation, it definitely shouldn't
+  // count as complete."
+  //
+  // RSW_SEEN is the marker the LAUNCHER reads to retire its first-run card, and every exit from this wizard
+  // used to write it. Measured by the auditor on the real pages: "Just a relay" → Get started → "Skip for
+  // now" → "Skip for now" → "Yes, it stays on" → the done step's PRIMARY button retired the card for ever
+  // on a box still reporting writePolicy=false and handle="" — five clicks, two of them labelled "Skip for
+  // now" by this wizard, ending on the button a first-time person presses.
+  //
+  // SO THE STATE OF THE BOX DECIDES, NEVER WHICH BUTTON WAS PRESSED. This file now has exactly ONE writer of
+  // RSW_SEEN — maybeFirstRun() below — and it writes it only when the box's own answers say something is
+  // here: a relay name (/relay-names/mine.handle) or a church (/config.churches, the same set
+  // /status.writePolicy reports to the launcher). Closing this wizard writes RSW_SKIPPED instead — a
+  // per-visit dismissal in sessionStorage, which a relaunch of the Suite clears — so reloading this
+  // dashboard in the same sitting is not a nag, the next launch asks again, and nothing this wizard does can
+  // claim a setup that did not happen.
   const RSW_SEEN = 'to_relay_setup_seen';
+  const RSW_SKIPPED = 'to_relay_setup_skipped';
   let rswOpen = false, rswStep = 0, rswHandle = '', rswAdded = false;
   // Does this box already carry a church? Set from the same /config read that decides whether the wizard
   // opens at all, so the church step can tell "a brand-new box" from "adding a second church".
   let rswHasChurches = false;
   let rswManual = false;        // the steward asked for the paste field on a fresh box (a church made elsewhere)
+  // ── THE GUIDED PATH the launcher sent this person down (owner, 2026-09-22): `?setup=everything` means the
+  // relay wizard is the first half and the CONSOLE's wizard is the second, so the done step's primary is the
+  // console and "Back to the Suite" is how the church is skipped; `?setup=relay` means the relay is the whole
+  // job, so the primary is "Back to the Suite" (the launcher — its two doors are the lesson, and once this
+  // wizard has closed it shows them). No `?setup=` — the person came through the "Manage a relay" door — and
+  // the done step is what it was. Skipping the wizard on a guided path also lands on the launcher: skipping
+  // is always allowed, and the path still ends where the owner said it ends. Read once; a real reload keeps it.
+  const RSW_PATH = (() => { try { const p = new URLSearchParams(location.search).get('setup'); return p === 'everything' || p === 'relay' ? p : ''; } catch (e) { return ''; } })();
+  const RSW_HOME = '/relay-app/home.html';
   const RSW_IC = {
     wave: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 0 1 16 0"/><path d="M2 20h20"/><circle cx="12" cy="8" r="1.4" fill="currentColor" stroke="none"/></svg>',
     tag: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v5.6a2 2 0 0 0 .6 1.4l7 7a2 2 0 0 0 2.8 0l5.6-5.6a2 2 0 0 0 0-2.8l-7-7A2 2 0 0 0 12.6 5H7a4 4 0 0 0-4 4Z"/><circle cx="8" cy="10" r="1.3" fill="currentColor" stroke="none"/></svg>',
@@ -1103,8 +1139,14 @@
     check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 6.5"/></svg>',
   };
 
+  function rswSkippedThisVisit() { try { return !!sessionStorage.getItem(RSW_SKIPPED); } catch (e) { return false; } }
+
   async function maybeFirstRun() {
     if (rswOpen || !adminToken || localStorage.getItem(RSW_SEEN)) return;
+    // A skip earlier in this visit keeps it shut — EXCEPT when the person arrived on a guided path
+    // (`?setup=`), which is them asking for this wizard again from the launcher's card. A card whose choices
+    // do nothing is worse than no card.
+    if (!RSW_PATH && rswSkippedThisVisit()) return;
     let nm = null, cf = null;
     try {
       [nm, cf] = await Promise.all([
@@ -1116,12 +1158,38 @@
     rswHasChurches = (cf.churches || []).length > 0;
     const fresh = !nm.handle && !rswHasChurches;
     if (fresh) openRelaySetup();
-    else localStorage.setItem(RSW_SEEN, '1');                 // an established relay must never be nagged
+    // THE ONLY WRITER OF RSW_SEEN IN THIS FILE, and it writes it from the two answers just read off the box:
+    // a name it claimed, or a church it carries. An established relay must never be nagged — and a box that
+    // carries nothing must never be called established (RSW_SEEN above).
+    else localStorage.setItem(RSW_SEEN, '1');
   }
   window.maybeFirstRun = maybeFirstRun;
 
   function openRelaySetup() { rswOpen = true; rswStep = 0; rswHandle = ''; rswAdded = false; rswManual = false; document.getElementById('relaySetup').classList.add('show'); renderRSW(); }
-  function closeRSW() { localStorage.setItem(RSW_SEEN, '1'); rswOpen = false; document.getElementById('relaySetup').classList.remove('show'); }
+  // ── THE WAY OUT OF THE WIZARD — ALL FIVE OF THEM LAND HERE (AUDIT-round-c C3 + C4) ──────────────
+  // "Skip setup" on step 0, "Go to dashboard" and the tunnel step on the done step, and the two links out
+  // ("Back to the Suite", "Next: open the console"). It dismisses the wizard for THIS VISIT and claims
+  // nothing — see RSW_SEEN above for why none of them may say the box is set up.
+  //
+  // AND IT STRIPS `?setup=` FROM THE ADDRESS BAR. A guided arrival deliberately reopens this wizard on every
+  // load — that is how the launcher's card keeps the promise its choices make. Without this strip that also
+  // meant a person who closed the wizard and then reloaded the panel, or pressed Back to it, got it straight
+  // back: the auditor measured the card → wizard → skip → card loop three rounds running, with the only
+  // non-looping exit being the dishonest one above. Stripping it leaves them on the dashboard they asked
+  // for, while the card's own door still reopens the wizard — that is a fresh navigation, carrying
+  // `?setup=` again.
+  function closeRSW() {
+    try { sessionStorage.setItem(RSW_SKIPPED, '1'); } catch (e) {}
+    rswOpen = false;
+    document.getElementById('relaySetup').classList.remove('show');
+    try {
+      if (RSW_PATH && window.history && history.replaceState) {
+        const u = new URL(location.href);
+        u.searchParams.delete('setup');
+        history.replaceState(null, '', u.pathname + u.search + u.hash);
+      }
+    } catch (e) {}
+  }
   // ── THE CHURCH STEP, AS TWO PURE FUNCTIONS SO THEY CAN BE RUN IN A TEST ─────────────────────────────
   // relay-app/*.js ships unbundled exactly like app/*.jsx, so a test that MATCHED this markup would still
   // pass with the whole branch disabled (CLAUDE.md rule 3, same hazard, different directory). Returning a
@@ -1159,7 +1227,12 @@
         + '<p class="rsw-sub">A relay is the private server that stores your church’s messages, records and media — running right here, on this machine. Two quick things: give it a name, and say whether this computer stays on. Your church is created in the console afterwards. About a minute.</p>'
         + '<div class="rsw-foot"><button class="btn btn-ghost" id="rswSkip">Skip setup</button><div style="flex:1"></div><button class="btn btn-clay" id="rswGo">Get started</button></div>';
       document.getElementById('rswGo').onclick = () => { rswStep = 1; renderRSW(); };
-      document.getElementById('rswSkip').onclick = closeRSW;
+      // It used to send a guided path back to the launcher, which is where the person had just come from —
+      // so the launcher showed its card again (nothing was set up) and the only way past the wizard was to
+      // walk it and press a button that lied (AUDIT-round-c C4). "Skip setup" now means what it says: the
+      // wizard closes onto the dashboard behind it and stays closed for this visit. The way back to the
+      // launcher is the panel's own "← Back", which is on screen the moment the overlay goes.
+      document.getElementById('rswSkip').onclick = () => closeRSW();
       return;
     }
     if (rswStep === 1) {
@@ -1289,19 +1362,36 @@
     // saying the church is created in the console. The dashboard's own next-step card says it too; this is
     // the moment the person is actually reading.
     const needsChurch = !rswHasChurches && !rswAdded;
+    // On the launcher's "Set up everything" path the church IS the next step: the primary is the console and
+    // the step list does not repeat it. On "Just a relay" (or "everything" on a box that already has one) the
+    // primary is the launcher. Without a path: the step list carries the console, the primary is the dashboard.
+    const nextIsChurch = RSW_PATH === 'everything' && needsChurch;
+    const suiteLink = (cls) => '<a class="btn ' + cls + '" id="rswSuite" href="' + RSW_HOME + '" style="text-decoration:none">Back to the Suite</a>';
+    const foot = nextIsChurch
+      ? suiteLink('btn-ghost') + '<div style="flex:1"></div><a class="btn btn-clay" id="rswConsole" href="/steward.html" style="text-decoration:none">Next: open the console</a>'
+      : RSW_PATH
+        ? '<button class="btn btn-ghost" id="rswDone">Go to dashboard</button><div style="flex:1"></div>' + suiteLink('btn-clay')
+        : '<div style="flex:1"></div><button class="btn btn-clay" id="rswDone">Go to dashboard</button>';
     card.innerHTML = rswDots()
       + '<div class="rsw-ic">' + RSW_IC.check + '</div>'
       + '<h2 class="rsw-h">Your relay is ready</h2>'
       + '<p class="rsw-sub">' + (rswHandle ? 'Named <b>' + esc(rswHandle) + '</b>. ' : '') + (rswAdded ? 'Your church can use it now. ' : '')
-      +   (needsChurch ? 'Now set up your church — it is created in the console, not here.' : 'One more thing worth doing, so members outside your building can connect:') + '</p>'
+      +   (nextIsChurch ? 'Next: your church. It is created in the console, not here — naming it there registers it on this relay.'
+          // "Just a relay": the church is run from another device, so it is not the next step — say how it gets on
+          : RSW_PATH === 'relay' && needsChurch ? 'A church run from another device is added by its ID under Settings → Churches; one created in the console here registers itself.'
+          : needsChurch ? 'Now set up your church — it is created in the console, not here.' : 'One more thing worth doing, so members outside your building can connect:') + '</p>'
       + '<div class="rsw-next">'
-      +   (needsChurch ? '<a class="rsw-step" id="rswConsole" href="/steward.html" style="text-decoration:none"><span class="si">' + RSW_IC.church + '</span><span style="flex:1"><span class="st">Open the console</span><span class="sd">Create your church there — naming it registers it on this relay.</span></span></a>' : '')
+      +   (needsChurch && !nextIsChurch ? '<a class="rsw-step" id="rswConsole" href="/steward.html" style="text-decoration:none"><span class="si">' + RSW_IC.church + '</span><span style="flex:1"><span class="st">Open the console</span><span class="sd">Create your church there — naming it registers it on this relay.</span></span></a>' : '')
       +   '<button class="rsw-step" id="rswTunnel"><span class="si">' + RSW_IC.globe + '</span><span style="flex:1"><span class="st">Reach members from anywhere</span><span class="sd">Turn on a secure tunnel — free, no router setup.</span></span></button>'
       + '</div>'
-      + '<div class="rsw-foot"><div style="flex:1"></div><button class="btn btn-clay" id="rswDone">Go to dashboard</button></div>';
-    document.getElementById('rswDone').onclick = closeRSW;
-    // the console link is a real <a> (it navigates); mark the wizard seen on the way out so it never re-opens
-    const rc = document.getElementById('rswConsole'); if (rc) rc.addEventListener('click', () => { try { localStorage.setItem(RSW_SEEN, '1'); } catch (e) {} });
+      + '<div class="rsw-foot">' + foot + '</div>';
+    const rd = document.getElementById('rswDone'); if (rd) rd.onclick = closeRSW;
+    // The console and Suite links are real <a>s (they navigate), so they close the wizard on their way out:
+    // it must not be sitting there when the person comes back to the panel in this visit. They do NOT mark
+    // the box set up — on the "everything" path the church is created in the console AFTER this link is
+    // taken, so at the moment of the click this box may still hold nothing. What the launcher shows next is
+    // read from the box (AUDIT-round-c C3).
+    for (const id of ['rswConsole', 'rswSuite']) { const a = document.getElementById(id); if (a) a.addEventListener('click', () => closeRSW()); }
     document.getElementById('rswTunnel').onclick = () => {
       closeRSW();
       const t = document.getElementById('tab-set'); if (t) t.click();

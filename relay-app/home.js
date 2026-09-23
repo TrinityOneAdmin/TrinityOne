@@ -1,3 +1,105 @@
+// ── FIRST RUN: ONE CARD, NOT TWO DOORS ──────────────────────────────────────────────────────────────────
+// Owner, 2026-09-22, after his own first run of the real AppImage: a first-time person still cannot tell which
+// door to take. So while NOTHING has been set up the launcher shows one card — "Set up everything" / "Just a
+// relay" / "Just the console" — and the two doors otherwise. This block DECIDES; it never navigates (the
+// card's three choices are plain links, and scripts/suite-two-doors.test.mjs pins that this file has no
+// location.href).
+//
+// "SET UP" IS READ FROM WHAT EXISTS, NOT ONLY FROM A MARKER. Two markers other pages already write mean "a
+// wizard finished or was skipped": `to_relay_setup_seen` (control.js maybeFirstRun, and ONLY there — no exit
+// from the relay wizard writes it; it means "this box has a relay name or a church", read off the box) and
+// `trinityone.steward.wizard.done` (stew-dashboard.jsx finishWizard, and the restore/adopt paths). Either one
+// → the doors, at once and without a fetch. Without a marker (a fresh webview profile, or cleared site data)
+// the box itself is asked: /status.writePolicy is true iff this relay holds a church (public, no token), and
+// /relay-names/mine.handle is the relay's name (via /local-token, which only a same-machine request gets — the
+// Suite always is one). A church or a name → the doors: something was set up here, whatever storage says. Both
+// absent AND no marker → the card. If either question cannot be answered at all — a network error, or a
+// non-2xx on /status, /local-token or /relay-names/mine — the doors are shown: "first time here" is a claim,
+// and a claim this page cannot back is worse than the two doors that were always here.
+//
+// A SLOW ANSWER IS NOT "NO" (AUDIT-suite-B4 N1). This used to give the box 2.5 s and then show the doors, and
+// /relay-names/mine spawns the tailscale CLI up to three times (8 s + 6 s + 6 s budgets) before it will say
+// what its `handle` is — so on a box where "Go public" was ever tried and tailscaled is now down, a genuine
+// first run timed out into the two doors and the card was never seen (measured: 4 s fake tailscale → doors).
+// So the page says "Checking this computer…" and waits for the answer, and only a box that cannot answer
+// gets the doors.
+//
+// BUT WAITING IS NOT THE SAME AS NEVER DECIDING (AUDIT-round-a F1). `fetch` has no timeout of its own, so
+// "wait for the answer" with nothing above it is a dead end: measured, a box that ACCEPTS /relay-names/mine
+// and never answers it left this page on "Checking this computer…" — no card, no doors — still undecided
+// after 45 000 ms, and a synchronous throw from the first `fetch` did the same. Neither is "a wedged box
+// whose pages do not load either": in both measurements the launcher, its scripts and every other route
+// loaded perfectly from the same box. Only one route failed.
+//
+// Hence the CEILING below, then the doors, whatever is or is not in flight. Not 2.5 s, because the slowest
+// HONEST answer is the one N1 is about — /relay-names/mine calls tsState(), which spawns the tailscale CLI
+// up to three times, and a ceiling at or under the sum of those budgets would send a box that WILL answer
+// back to the doors. So the ceiling is not a number chosen here: it is that sum plus a stated margin, and
+// the budgets are named in gateway.mjs (TS_STATE_BUDGETS_MS) so a test can hold the two together — without
+// that, raising one budget quietly re-opened N1 with every test still green (AUDIT-round-c C1).
+//
+// It is armed BEFORE the fetches, as the old 2.5 s timer was, so it covers a throw as well as a stall; and
+// the three calls are wrapped so that a synchronous throw from any of them reaches the doors at once rather
+// than waiting the ceiling out (nothing is in flight to wait for).
+//
+// The doors are visible in the HTML and this hides them while it asks, so a script that never runs leaves
+// the launcher with its doors; the ceiling is the same promise kept for a script that runs and never
+// finishes. Never blank, either way (the splash lesson: this page must not be a dead end).
+(function () {
+  var card = document.getElementById('firstRun');
+  var doors = document.getElementById('doors');
+  var sub = document.getElementById('sub');
+  var checking = document.getElementById('checking');
+  if (!card || !doors) return;
+  var decided = false;
+  function show(which) {
+    if (decided) return;
+    decided = true;
+    card.hidden = which !== 'card';
+    doors.hidden = which !== 'doors';
+    if (sub) sub.hidden = which !== 'doors';
+    if (checking) checking.hidden = true;
+    if (!window.__decidedAt) window.__decidedAt = performance.now() - (window.__t0 || 0);
+    document.body.setAttribute('data-first-run', which);
+  }
+  doors.hidden = true; if (sub) sub.hidden = true;          // while asking; show() undoes it
+  if (checking) checking.hidden = false;
+  // THE CEILING IS DERIVED FROM tsState()'s OWN BUDGETS, AND A TEST FAILS IF THEY DRIFT APART.
+  // FIRST_RUN_TS_BUDGET_MS must equal the sum of TS_STATE_BUDGETS_MS in scripts/gateway.mjs (8 s + 6 s +
+  // 6 s): that is the slowest a box that WILL answer can take, so a ceiling at or under it sends that box
+  // back to the doors (AUDIT-suite-B4 N1). The margin is what is left over for everything else on the
+  // route; measured on the real pages, this page decides ~150 ms after the answer lands, and the true worst
+  // case came in at 20 036 ms against a 25 000 ceiling. Raising a budget in gateway.mjs without raising
+  // this reddens scripts/the-suite-first-run-is-one-guided-path.test.mjs (AUDIT-round-c C1) — it reads both
+  // files, and it also measures the ceiling actually firing, so the numbers below cannot drift from the
+  // timer they are here to set.
+  var FIRST_RUN_TS_BUDGET_MS = 20000;
+  var FIRST_RUN_CEILING_MARGIN_MS = 5000;
+  var FIRST_RUN_CEILING_MS = FIRST_RUN_TS_BUDGET_MS + FIRST_RUN_CEILING_MARGIN_MS;
+  var ceiling = setTimeout(function () { show('doors'); }, FIRST_RUN_CEILING_MS);   // armed first: it covers a throw too
+  // Each question either answers (its JSON) or throws — a non-2xx is a throw, so Promise.all rejects on the
+  // first question the box cannot answer and the doors are shown. Nothing here turns a failure into "no".
+  try {
+    var answered = function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); };
+    var status = fetch('/status', { cache: 'no-store' }).then(answered);
+    var named = fetch('/local-token', { cache: 'no-store' })
+      .then(answered)
+      .then(function (j) {
+        if (!j || !j.token) throw new Error('no local token');
+        return fetch('/relay-names/mine', { headers: { Authorization: 'Bearer ' + j.token }, cache: 'no-store' }).then(answered);
+      });
+    Promise.all([status, named]).then(function (res) {
+      clearTimeout(ceiling);
+      var s = res[0], nm = res[1];
+      var hasChurch = !!s && s.writePolicy === true;
+      var hasName = !!(nm && nm.handle);
+      show(hasChurch || hasName ? 'doors' : 'card');
+    }).catch(function () { clearTimeout(ceiling); show('doors'); });   // cannot tell → the doors, never a claim
+  } catch (e) {                                              // fetch itself threw: nothing is in flight to wait for
+    clearTimeout(ceiling); show('doors');
+  }
+})();
+
 // Suite launcher update check. The local relay does the actual GitHub fetch server-side (/suite-update)
 // so this stays same-origin — no cross-origin CORS fetch from the webview. If a newer build is published,
 // show the banner. The app is an installer (it can't self-patch), so "update" = download + reinstall;
@@ -70,6 +172,7 @@
 // no church and the person did not know why. The launcher's two doors are the first thing a person sees
 // now; the panel points at the console while the relay has no church (control.js, the next-step card).
 //
-// The `to_relay_setup_seen` marker is control.js's own — written by closeRSW(), read by maybeFirstRun() —
-// and nothing in this file reads or writes it any more. The once-per-run `to_relay_setup_tried` marker
-// existed only for the redirect and is gone with it.
+// The `to_relay_setup_seen` marker is control.js's own — written there by maybeFirstRun() alone, from the
+// box's own answers, and READ at the top of this file as the fast path to the doors. Nothing in this file
+// WRITES it. The once-per-run `to_relay_setup_tried` marker existed only for the redirect and is gone with
+// it.

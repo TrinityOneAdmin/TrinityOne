@@ -108,10 +108,12 @@ after(() => { if (gw) gw.stop(); if (splashSrv) splashSrv.close(); });
 const doorsOn = (c) => c.evalIn(`[...document.querySelectorAll('a.mode')].map(a => a.getAttribute('href')).sort().join(' ')`);
 
 
-test('a first launch STAYS on the launcher: two doors, no redirect, no "reopen the app" line',
+test('a first launch STAYS on the launcher: the first-run card, no redirect, no "reopen the app" line',
   { skip: !CHROME ? 'no chromium' : false, timeout: 90000 }, async () => {
   // The shape of the Suite window: one entry below the launcher (the splash there; about:blank here). Nothing
-  // in storage — this is the very first run.
+  // in storage — this is the very first run. Since 2026-09-22 (owner, after his AppImage test) a first run shows
+  // ONE card in place of the two doors; scripts/the-suite-first-run-is-one-guided-path.test.mjs drives the card.
+  // What this row still proves is the page does not LEAVE.
   const c = await startChrome('about:blank');
   try {
     await c.goto(gw.base + '/relay-app/home.html');
@@ -122,10 +124,10 @@ test('a first launch STAYS on the launcher: two doors, no redirect, no "reopen t
     const entries = await c.history();
     assert.deepEqual(entries.filter(u => !/^about:blank$/.test(u)), [gw.base + '/relay-app/home.html'],
       'the browser holds ' + JSON.stringify(entries) + ' — the launcher navigated somewhere and came back, or was replaced');
-    assert.equal(await doorsOn(c), '/relay-app/control.html /steward.html', 'the launcher does not offer both doors');
-    // Both doors on screen, not merely in the DOM.
-    const shown = await c.evalIn(`[...document.querySelectorAll('a.mode')].map(a => { const r = a.getBoundingClientRect(); return r.width > 0 && r.height > 0 && getComputedStyle(a).visibility !== 'hidden'; }).join(',')`);
-    assert.equal(shown, 'true,true', 'a door is in the page but not on the screen');
+    assert.equal(await doorsOn(c), '/relay-app/control.html /steward.html', 'the launcher does not carry both doors');
+    // On a FIRST run the card is on screen and the doors are not — the doors are one choice away, never gone.
+    const shown = await c.evalIn(`(() => { const on = (e) => { if (!e) return false; const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0 && getComputedStyle(e).visibility !== 'hidden'; }; return JSON.stringify({ card: on(document.getElementById('firstRun')), doors: [...document.querySelectorAll('a.mode')].map(on) }); })()`);
+    assert.deepEqual(JSON.parse(shown), { card: true, doors: [false, false] }, 'a first run shows ' + shown + ' — expected the first-run card and no doors');
     const text = String(await c.evalIn('document.body.innerText'));
     assert.doesNotMatch(text, /reopen the app/i,
       'the launcher still says "reopen the app to return here" — false (the console and the panel both link back) and poor');
@@ -141,6 +143,12 @@ test('from the launcher through "Manage a relay", the panel\'s "← Back" lands 
   try {
     await c.goto(gw.base + '/relay-app/home.html');
     await sleep(1500);
+    // A launch that is NOT the first: the relay wizard was once skipped, which is one of the markers the
+    // launcher reads (relay-app/home.js) — so the doors are on screen, not the first-run card.
+    await c.evalIn(`localStorage.setItem('to_relay_setup_seen', '1')`);
+    await c.goto(gw.base + '/relay-app/home.html');
+    await sleep(1500);
+    assert.equal(await c.evalIn(`document.body.getAttribute('data-first-run')`), 'doors', 'staging: the launcher did not show its doors on a non-first launch');
     // press the launcher's own door, as a person does (not a navigate)
     assert.equal(await c.evalIn(`(() => { const a = [...document.querySelectorAll('a.mode')].find(a => /control\.html/.test(a.href)); if (!a) return 'miss'; a.click(); return 'ok'; })()`), 'ok', 'no "Manage a relay" door');
     await sleep(2500);
@@ -153,6 +161,7 @@ test('from the launcher through "Manage a relay", the panel\'s "← Back" lands 
     assert.match(String(await c.evalIn('location.href')), /\/relay-app\/home\.html$/,
       'THE OWNER\'S ROUTE: Back from the panel landed on ' + (await c.evalIn('location.href')) + ', not the launcher');
     assert.equal(await doorsOn(c), '/relay-app/control.html /steward.html', 'the launcher Back landed on does not offer both doors');
+    assert.equal(await c.evalIn(`document.body.getAttribute('data-first-run')`), 'doors', 'the launcher Back landed on shows the first-run card over a relay whose wizard was already seen');
   } finally { c.stop(); }
 });
 

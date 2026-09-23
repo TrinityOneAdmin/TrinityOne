@@ -923,6 +923,19 @@ function KeyDistributor() {
   return null;
 }
 
+// IS THIS CONSOLE THE SUITE'S? — the desktop app, where the launcher (relay-app/home.html) is one page away.
+// The sidebar's "Relay & Suite home" link gates on a loopback hostname alone. That is TRUE inside the steward
+// APK as well (Capacitor serves it from https://localhost — measured 2026-09-22, REPORT-suite-B3 §4), where
+// there is no launcher to go back to; the APK hides that link only by accident of its narrow layout. So the
+// wizard's "Back to the Suite" asks both: loopback, AND no Capacitor bridge on the page. (`window.Capacitor`
+// is absent on the web console and on the Suite — a plain WebKitGTK webview — and present on every APK.)
+function stewOnSuite() {
+  try {
+    if (typeof location === 'undefined' || !['localhost', '127.0.0.1', '0.0.0.0'].includes(location.hostname)) return false;
+    return !(typeof window !== 'undefined' && window.Capacitor);
+  } catch (e) { return false; }
+}
+
 // wizard step chrome — module-level so its component type is stable across renders
 // (defining it inside StewSetupWizard would remount on every keystroke and blur the inputs).
 function WizShell({ step, title, sub, children, footer }) {
@@ -1521,6 +1534,12 @@ function StewSetupWizard({ church, onDone, onTab, onSettings, onInvite, onNewPos
   return (
     <WizShell step={step} title="You’re all set 🎉" sub="Your church is live. Hand members a joining code from “Invite code”, and post your first note any time."
       footer={<React.Fragment>
+        {/* THE SUITE'S GUIDED PATH ENDS ON THE LAUNCHER, not here (owner, 2026-09-22): the launcher's two doors
+            are what a first-time person has to learn, and they may have wanted only the relay. Only on the Suite
+            (stewOnSuite: loopback and no Capacitor) — the hosted console and the APK have no launcher. Setup is
+            marked done FIRST, the way "Go to dashboard" does, so the launcher's own read of that marker shows
+            its doors and never the first-run card again. */}
+        {stewOnSuite() ? <button onClick={() => { onDone(); location.href = '/relay-app/home.html'; }} className="sk-btn sk-btn--ghost" style={{ padding: '12px 16px' }}><Icon name="grid2" size={15} color="currentColor" /> Back to the Suite</button> : null}
         <div style={{ flex: 1 }} />
         <button onClick={() => { if (onTab) onTab('overview'); onDone(); }} className="sk-btn sk-btn--clay" style={{ padding: '12px 22px' }}><Icon name="check" size={16} color="var(--on-clay)" /> Go to dashboard</button>
       </React.Fragment>}>
