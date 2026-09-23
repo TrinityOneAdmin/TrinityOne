@@ -9205,6 +9205,11 @@ function PinModal({ action, onClose }) {
 // `false` really is a relay problem, so it keeps the plain sentence.
 const BACKUP_META_OWNER_ONLY = 'Only the church’s own console can save the shared backup record, so your other stewards will still see this church as overdue.';
 const BACKUP_META_NO_RELAY = 'Your other stewards’ consoles will still show this church as overdue — the shared backup record could not be saved.';
+// AUDIT-steward-doc-rules-round5-2026-09-23 finding 3. exportChurchData (/export, /export-media) and
+// restoreChurchData (/import) are NIP-98-authed to the church key only (_exportAuth, scripts/gateway.mjs)
+// — the same gate a2d1e4c put on the `history` settings row. Said up front, before the press, so a
+// delegate is not sent to pick a file or wait on a real backup only to be told "the relay returned 401".
+const BACKUP_EXPORT_OWNER_ONLY = 'Only the church’s own console can back up or restore this church’s data. Ask whoever holds the church key.';
 // Phase 1 backup: save the church's complete corpus to a file (native share sheet / web download) + a reminder cadence.
 function DashBackup() {
   const [busy, setBusy] = React.useState(false);
@@ -9236,6 +9241,17 @@ function DashBackup() {
   // console can never write it, and a press that reaches no relay must not leave a different cadence on the
   // screen from the one the church will actually nudge at. So the control is LOCKED on a delegated console
   // and says who can, and on the owner's console a refused write puts the segment back where it was.
+  //
+  // ALSO GATES `doBackup`/`doRestore` BELOW — AUDIT-steward-doc-rules-round5-2026-09-23 finding 3.
+  // `a2d1e4c` marked ONLY the `history` settings row `owner: true`, but exportChurchData -> /export and
+  // restoreChurchData -> /import go through the very same `_exportAuth` in scripts/gateway.mjs that route
+  // refuses a delegate on. MEASURED (rendered tree of a delegated console, before this fix): "Back up
+  // church data" and "Restore or clone from a backup" render byte-for-byte the OWNER's — no aria-disabled,
+  // no padlock — and answer "Backup failed — the relay returned 401" / "Restore failed — the relay
+  // returned 401 (are you the church owner, and does that relay allow this church?)". Marking the whole
+  // `backup` settings row owner-only (the `history` fix's shape) would ALSO hide the reminder-cadence
+  // display this same page correctly leaves visible to a delegate — so the two controls below are gated
+  // individually instead, the way `_churchOnly` already gates DashSync's two buttons and DashSermons' three.
   const _metaChurchOnly = !stewCapState('content').owner;
   const setFrequency = async (f) => {
     setFreqMsg('');
@@ -9280,6 +9296,7 @@ function DashBackup() {
   const onPickRestore = (e) => { const f = e.target.files && e.target.files[0]; e.target.value = ''; if (!f) return; setRestoreMsg(null); const rd = new FileReader(); rd.onload = () => setRestoreFile({ name: f.name, bytes: new Uint8Array(rd.result) }); rd.onerror = () => setRestoreMsg({ ok: false, text: 'Couldn’t read that file.' }); rd.readAsArrayBuffer(f); };
   const doRestore = async () => {
     if (!restoreFile) return;
+    if (_metaChurchOnly) { setRestoreMsg({ ok: false, text: BACKUP_EXPORT_OWNER_ONLY }); return; }   // nothing was sent
     setRestoreBusy(true); setRestoreMsg(null); setRestoreProg(null);
     try {
       const relayUrl = restoreTarget === 'other' ? restoreUrl.trim() : '';
@@ -9293,6 +9310,7 @@ function DashBackup() {
   const windowDays = { weekly: 7, monthly: 30, off: Infinity };
   const overdue = freq !== 'off' && (Date.now() / 1000 - last) > windowDays[freq] * 86400;
   const doBackup = async () => {
+    if (_metaChurchOnly) { setMsg({ ok: false, text: BACKUP_EXPORT_OWNER_ONLY }); return; }   // nothing was sent
     setBusy(true); setMsg(null);
     try {
       const { data, binary, mime, count, filename, encrypted, media: mediaCount } = await window.Steward.exportChurchData({ encrypt, includeMedia });
@@ -9354,7 +9372,7 @@ function DashBackup() {
           </span>
         </label>
       ) : null}
-      <button onClick={doBackup} disabled={busy} className="sk-btn sk-btn--clay" style={{ padding: '11px 16px', fontSize: 14 }}><Icon name="share" size={16} color="var(--on-clay)" /> {busy ? 'Backing up…' : 'Back up church data'}</button>
+      <button onClick={doBackup} disabled={busy} aria-disabled={_metaChurchOnly || undefined} title={_metaChurchOnly ? BACKUP_EXPORT_OWNER_ONLY : undefined} className={'sk-btn ' + (_metaChurchOnly ? 'sk-btn--ghost' : 'sk-btn--clay')} style={{ padding: '11px 16px', fontSize: 14, opacity: _metaChurchOnly ? 0.6 : 1, cursor: _metaChurchOnly ? 'not-allowed' : 'pointer' }}><Icon name={_metaChurchOnly ? 'lock' : 'share'} size={16} color={_metaChurchOnly ? 'currentColor' : 'var(--on-clay)'} /> {busy ? 'Backing up…' : 'Back up church data'}</button>
       {msg ? <div style={{ marginTop: 10, fontSize: 13, fontWeight: 600, color: msg.ok ? 'var(--sage-ink)' : 'var(--clay-ink)' }}>{msg.ok ? '✓ ' : '✗ '}{msg.text}</div> : null}
       <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 10 }}>Last backup: {last ? new Date(last * 1000).toLocaleDateString() : 'never'}</div>
       <div style={{ marginTop: 18, paddingTop: 16, borderTop: '1px solid var(--line)' }}>
@@ -9391,7 +9409,7 @@ function DashBackup() {
                   ))}
                 </div>
                 {restoreTarget === 'other' ? <input value={restoreUrl} onChange={(e) => setRestoreUrl(e.target.value)} placeholder="https://other-relay.example" spellCheck={false} autoCapitalize="none" style={{ width: '100%', boxSizing: 'border-box', padding: '9px 12px', borderRadius: 9, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontSize: 13, marginBottom: 10 }} /> : null}
-                <button onClick={doRestore} disabled={restoreBusy} className="sk-btn sk-btn--clay" style={{ padding: '10px 16px', fontSize: 13.5 }}>{restoreBusy ? (restoreProg && restoreProg.phase === 'media' ? 'Restoring media ' + restoreProg.done + '/' + restoreProg.total + '…' : 'Importing records…') : 'Restore this backup'}</button>
+                <button onClick={doRestore} disabled={restoreBusy} aria-disabled={_metaChurchOnly || undefined} title={_metaChurchOnly ? BACKUP_EXPORT_OWNER_ONLY : undefined} className={'sk-btn ' + (_metaChurchOnly ? 'sk-btn--ghost' : 'sk-btn--clay')} style={{ padding: '10px 16px', fontSize: 13.5, opacity: _metaChurchOnly ? 0.6 : 1, cursor: _metaChurchOnly ? 'not-allowed' : 'pointer' }}>{_metaChurchOnly ? <Icon name="lock" size={14} color="currentColor" /> : null}{restoreBusy ? (restoreProg && restoreProg.phase === 'media' ? 'Restoring media ' + restoreProg.done + '/' + restoreProg.total + '…' : 'Importing records…') : 'Restore this backup'}</button>
               </div>
             ) : null}
             {restoreMsg ? <div style={{ marginTop: 10, fontSize: 13, fontWeight: 600, color: restoreMsg.ok ? 'var(--sage-ink)' : 'var(--clay-ink)' }}>{restoreMsg.ok ? '✓ ' : '✗ '}{restoreMsg.text}</div> : null}

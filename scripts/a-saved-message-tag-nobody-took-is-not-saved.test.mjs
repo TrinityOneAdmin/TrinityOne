@@ -362,13 +362,13 @@ test('THE SCREEN: a refused sermon removal shows the reason, and does not close 
 test('THE SCREEN: a backup whose church-wide record was refused says so, and names WHICH refusal', async () => {
   // Three directions, because a fix that printed the sentence unconditionally would pass a one-sided test
   // while telling every owner console its working backup record had failed.
-  const run = async ({ metaAnswer, delegated }) => {
+  const run = async ({ metaAnswer, delegated, onExport }) => {
     const { React, draw } = miniReact();
     const doc = { createElement: () => ({ href: '', download: '', click() {}, remove() {} }), body: { appendChild() {} } };
     const win = {
       Steward: {
         actingChurch: delegated ? 'CHURCHPUB' : '',
-        exportChurchData: async () => ({ data: 'x', binary: false, mime: 'application/json', count: 42, filename: 'b.json', encrypted: true, media: 0 }),
+        exportChurchData: async () => { if (onExport) onExport(); return { data: 'x', binary: false, mime: 'application/json', count: 42, filename: 'b.json', encrypted: true, media: 0 }; },
         setBackupMeta: async () => metaAnswer,
         subscribeBackupMeta: () => () => {},
         mediaSize: async () => ({ count: 0, bytes: 0 }),
@@ -405,16 +405,85 @@ test('THE SCREEN: a backup whose church-wide record was refused says so, and nam
     'THE CONSEQUENCE IS BACK TO BEING INVISIBLE. This console is then the only one that believes the church ' +
     'is backed up, while every other steward goes on seeing "overdue". Screen read: ' + no.said());
 
-  // 3. the DELEGATED console: the same refusal, but it is permanent and has a name. "Couldn't save" would
-  //    send a steward to look at a connection that is working perfectly (F2, and the less-instructional-copy
-  //    rule: short label, one sentence, no jargon).
-  const dele = await run({ metaAnswer: false, delegated: true });
+  // 3. THE DELEGATED CONSOLE NEVER REACHES THE RELAY AT ALL — AUDIT-steward-doc-rules-round5-2026-09-23
+  // finding 3. This test used to mock exportChurchData to succeed even when delegated, and asserted "the
+  // file saves on a delegated console too" — which is not true against the real relay: /export is
+  // NIP-98-authed to the church key only (_exportAuth, scripts/gateway.mjs), the same gate as
+  // backup-meta:, so a delegate's export was ALWAYS going to be refused. The mock's convenient success
+  // hid the defect the round-5 audit measured: the button rendered with no padlock and no warning, and
+  // only answered "Backup failed — the relay returned 401" after a real round trip. The fix asks BEFORE
+  // the press, not after the relay answers — so exportChurchData must not even be attempted.
+  let exportCalls = 0;
+  const dele = await run({ metaAnswer: false, delegated: true, onExport: () => exportCalls++ });
   await dele.press('Back up church data');
-  assert.match(dele.said(), /Saved 42 records/, 'the file saves on a delegated console too, and the screen must say so. Screen read: ' + dele.said());
-  assert.match(dele.said(), /Only the church’s own console can save the shared backup record/,
-    'A DELEGATED CONSOLE IS BEING TOLD A RELAY PROBLEM. `trinityone/backup-meta:` is church-key-only ' +
-    '(2026-09-22) because subscribeBackupMeta filters authors:[churchpub] — the refusal is permanent and ' +
-    'nothing the steward does will change it. Screen read: ' + dele.said());
+  assert.equal(exportCalls, 0,
+    'THE DELEGATE\'S PRESS REACHED THE RELAY. exportChurchData was called ' + exportCalls + ' time(s) — the ' +
+    'church key gate on /export refuses every delegate, so attempting it buys nothing but a slower false hope.');
+  assert.doesNotMatch(dele.said(), /Saved 42 records/,
+    'A DELEGATED CONSOLE WAS TOLD THE BACKUP SAVED, which it never can. Screen read: ' + dele.said());
+  assert.match(dele.said(), /Only the church’s own console can back up or restore this church’s data/,
+    'the delegate’s press did not show the owner-only message before ever touching the relay. Screen read: ' + dele.said());
+});
+
+test('THE SCREEN: "Restore this backup" is locked on a delegated console too, before any file is even read', async () => {
+  // AUDIT-steward-doc-rules-round5-2026-09-23 finding 3, the other control gated by this fix.
+  // restoreChurchData -> POST /import goes through the same church-key-only _exportAuth as /export.
+  class FakeFileReader {
+    set onload(fn) { this._onload = fn; }
+    set onerror(fn) { this._onerror = fn; }
+    readAsArrayBuffer() { this.result = new Uint8Array([1]).buffer; setTimeout(() => this._onload && this._onload(), 0); }
+  }
+  const run = async ({ delegated, onRestore }) => {
+    const { React, draw } = miniReact();
+    const win = {
+      Steward: {
+        actingChurch: delegated ? 'CHURCHPUB' : '',
+        restoreChurchData: async () => { if (onRestore) onRestore(); return { imported: 1 }; },
+        subscribeBackupMeta: () => () => {},
+        mediaSize: async () => ({ count: 0, bytes: 0 }),
+      },
+      localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+      addEventListener() {}, removeEventListener() {},
+      FileReader: FakeFileReader,
+    };
+    const mod = loadScreen('app/stew-dashboard.jsx', ['DashBackup'], { ...BASE_GLOBALS(React, win), FileReader: FakeFileReader });
+    const render = () => draw(mod.DashBackup, {});
+    let tree = render();
+    const opener = find(tree, n => n.type === 'div' && typeof n.props.onClick === 'function' && reads(n).includes('Restore or clone from a backup'));
+    assert.equal(opener.length, 1, `re-anchor this test: expected exactly one restore-section opener, found ${opener.length}`);
+    opener[0].props.onClick();
+    await ticks();
+    tree = render();
+    const picker = find(tree, n => n.type === 'input' && n.props.type === 'file');
+    assert.equal(picker.length, 1, 're-anchor this test: no file input found after opening the restore section');
+    picker[0].props.onChange({ target: { files: [{ name: 'b.json' }], value: '' } });
+    await ticks(4);
+    tree = render();
+    const press = async (label) => {
+      const hits = find(tree, n => n.type === 'button' && reads(n).trim() === label);
+      assert.equal(hits.length, 1, `re-anchor this test: expected exactly one "${label}" button, found ${hits.length}`);
+      hits[0].props.onClick();
+      await ticks(12);
+      tree = render();
+    };
+    return { press, said: () => reads(tree) };
+  };
+
+  // control: the owner console really does reach restoreChurchData.
+  let ownerCalls = 0;
+  const ok = await run({ delegated: false, onRestore: () => ownerCalls++ });
+  await ok.press('Restore this backup');
+  assert.equal(ownerCalls, 1, 're-anchor: the owner console never reached restoreChurchData — the harness is broken');
+
+  // the finding: a delegated console must not reach it at all.
+  let deleCalls = 0;
+  const dele = await run({ delegated: true, onRestore: () => deleCalls++ });
+  await dele.press('Restore this backup');
+  assert.equal(deleCalls, 0,
+    'THE DELEGATE\'S PRESS REACHED THE RELAY. restoreChurchData was called ' + deleCalls + ' time(s) — /import ' +
+    'is church-key-only, so a delegate can never restore and must be told before picking a file, not after.');
+  assert.match(dele.said(), /Only the church’s own console can back up or restore this church’s data/,
+    'the delegate’s press did not show the owner-only message. Screen read: ' + dele.said());
 });
 
 test('THE SCREEN: changing the backup REMINDER says so too — the second caller of setBackupMeta', async () => {
