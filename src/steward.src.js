@@ -8651,18 +8651,22 @@ window.Steward = {
   // before the relay has answered, for the reason on setWebsiteShare: the document would be rebuilt from the
   // defaults and every earlier opt-out and the switch itself would go with it.
   //
-  // AND IT CLEARS THE "ON THE WEBSITE" TICK FOR EVERY ID IT TAKES OFF (AUDIT-feeds-round5-2026-09-22 F1).
-  // Without that the two lists contradicted each other for exactly the events this control exists for — a
-  // GROUP event, on the feed because a steward ticked it on, whose document later became unopenable — and the
-  // editor went on drawing "On the website" ticked over an event the public site no longer showed.
+  // DOES NOT ALSO FILTER `optIn` HERE (AUDIT-feeds-round6-2026-09-23 F4, correcting round 5's ba19fff, which
+  // said of this line and setWebsiteShown's own filter "one without the other leaves the defect
+  // half-standing"). That was true at ba19fff's own tip; `1bc8739`'s `_webNormalise` then started stripping
+  // an id from `optIn` on the way IN whenever it is ALSO in `optOut` — read below, and it runs inside
+  // setWebsiteShare on every write, this one included. So a filter here is now redundant, not a second line
+  // of defence: MEASURED by a scoped sabotage that deletes it — the published document and `w.share` are
+  // byte-identical with and without it, and every test in this file that exercises setWebsiteHeldMany stays
+  // green. setWebsiteShare sets `w.share` to the NORMALISED document it just built, never to the raw ids
+  // passed in here, so there is no path left where the two lists could disagree because this line was gone.
   setWebsiteHeldMany(eventIds) {
     const ids = _webIds(eventIds);
     if (!ids.length) return Promise.resolve(false);
     const w = _webEnsure(); if (!w || !w.shareKnown) return Promise.resolve(false);   // see setWebsiteShare
     const cur = w.share.optOut;
     const optOut = [...new Set([...cur, ...ids])];
-    const optIn = (w.share.optIn || []).filter(x => !ids.includes(x));
-    return _webOneList(this, w, { optOut, optIn });
+    return _webOneList(this, w, { optOut, optIn: w.share.optIn || [] });
   },
   // The per-event "On the website" tick, for an event scoped to a GROUP: the inverse of setWebsiteHeld,
   // because the default is the inverse. Same refusal-until-EOSE rule, for the same reason.
