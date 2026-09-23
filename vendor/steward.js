@@ -16681,6 +16681,10 @@ zoo`.split("\n");
       const reason = relaysRaw().length ? NO_NETWORK_RELAY + ": none of this church's relays could be proved to be ours, so nothing was published" : "no relay is configured for this church";
       console.warn("[steward] publish blocked \u2014", reason);
       try {
+        if (opts && typeof opts === "object") opts.refused = false;
+      } catch (x) {
+      }
+      try {
         window.dispatchEvent(new CustomEvent("steward-publish-error", { detail: { reason, evt, background: _bg } }));
       } catch (x) {
       }
@@ -16709,6 +16713,18 @@ zoo`.split("\n");
       try {
         const d1 = ((evt.tags || []).find((t) => t[0] === "d") || [])[1];
         if (d1 && /newer version/i.test(reason) && (_lastOk.get(d1) || 0) > (evt.created_at || 0)) return evt;
+      } catch (x) {
+      }
+      let _saidNo = false;
+      try {
+        _saidNo = refused.some((r) => /^(error|blocked|invalid|restricted|rate-limited|auth-required)/i.test(String(r && r.error || "")));
+      } catch (x) {
+      }
+      try {
+        if (opts && typeof opts === "object") {
+          opts.refused = _saidNo;
+          opts.reason = reason;
+        }
       } catch (x) {
       }
       try {
@@ -18306,18 +18322,21 @@ zoo`.split("\n");
       if (_mediaKeyPushRefused === fp) return false;
       const _mring = JSON.stringify(_mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex]);
       const keys = await _sealEach(_mring, want, (pl, mp) => encrypt3(pl, getConversationKey(sk, mp)));
-      const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", MEDIAKEY_D + pub], ["t", NET]], content: JSON.stringify({ keys, rev: now() }) }), { background: true });
+      const _pubOpts = { background: true };
+      const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", MEDIAKEY_D + pub], ["t", NET]], content: JSON.stringify({ keys, rev: now() }) }), _pubOpts);
       if (ok !== false) {
         _mediaKeyDocKeys = keys;
         _mediaKeyPushRefused = null;
         return ok;
       }
+      if (!_pubOpts.refused) return ok;
       _mediaKeyPushRefused = fp;
       try {
         const missing = want.filter((p) => p !== pub && !have[p]).length;
+        const _why = /not a member|not permitted/i.test(String(_pubOpts.reason || "")) ? "Only the console that holds the church key can publish it." : "The relay refused it: " + String(_pubOpts.reason || "no reason given").trim().replace(/[.\s]+$/, "") + ".";
         window.dispatchEvent(new CustomEvent("steward-write-blocked", { detail: {
           what: "sermon key",
-          message: (missing ? missing + " member(s) could not be given the key to this church\u2019s encrypted sermons, so those sermons will not play for them. " : "The key to this church\u2019s encrypted sermons could not be saved. ") + "Only the console that holds the church key can publish it. This console will not keep retrying."
+          message: (missing ? missing + " member(s) could not be given the key to this church\u2019s encrypted sermons, so those sermons will not play for them. " : "The key to this church\u2019s encrypted sermons could not be saved. ") + _why + " This console will not keep retrying."
         } }));
       } catch (e) {
       }

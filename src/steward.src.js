@@ -2448,6 +2448,8 @@ async function publish(evt, opts) {
       ? NO_NETWORK_RELAY + ': none of this church\'s relays could be proved to be ours, so nothing was published'
       : 'no relay is configured for this church';
     console.warn('[steward] publish blocked —', reason);
+    // NOBODY READ THIS EVENT, so nobody refused it — see the note on `opts.refused` in the catch below.
+    try { if (opts && typeof opts === 'object') opts.refused = false; } catch (x) {}
     try { window.dispatchEvent(new CustomEvent('steward-publish-error', { detail: { reason, evt, background: _bg } })); } catch (x) {}
     return false;
   }
@@ -2483,6 +2485,37 @@ async function publish(evt, opts) {
       const d1 = ((evt.tags || []).find(t => t[0] === 'd') || [])[1];
       if (d1 && /newer version/i.test(reason) && (_lastOk.get(d1) || 0) > (evt.created_at || 0)) return evt;
     } catch (x) {}
+    // ── `opts.refused` — DID A BOX ACTUALLY READ THIS EVENT AND SAY NO? ──────────────────────────────────
+    //
+    // `false` is this function's answer to THREE different things, and a caller that remembers a failure
+    // must not treat them alike: (1) a relay read the event and refused it — a rule, which will refuse it
+    // again; (2) the socket never opened ("connection failure: …") — nobody refused anything and the event
+    // may well land next time; (3) no relay could be proved ours (the branch above) — likewise nobody read
+    // it. AUDIT-steward-doc-rules-round4-2026-09-22 finding F2: ensureMediaKeyForMembers remembered all
+    // three as a rule, so ONE blip on an owner's console permanently stopped the church's media key being
+    // re-wrapped for two members, and told the church the cause was its church key.
+    //
+    // THE SIGNAL, and why it is trustworthy: these are NIP-01's OK=false reasons — the machine-readable
+    // prefixes a relay puts in front of its own refusal. `connection failure` is deliberately NOT among
+    // them, because nostr-tools RESOLVES an unopenable socket with that string while REJECTING a real
+    // OK=false, so it is the vendored library talking, never a box's verdict. This is the same list, with
+    // the same meaning, as `_PUB_REFUSED` in src/fellowship.src.js, where the member app's own refusal
+    // banner already turns on it ("TRUE ONLY IF SOME BOX READ THIS EVENT AND SAID NO"); false there and
+    // here means WE DO NOT KNOW, which is the safe answer to retry on.
+    //
+    // ⚠ WRITTEN INLINE, not hoisted to a module const, for the same reason the connection-failure prefix
+    // above is: the tests LIFT this function out of the bundle and run it, where a name resolved from the
+    // enclosing IIFE is undefined — a green suite proving nothing.
+    //
+    // ⚠ ADDITIVE, AND IT MUTATES ONLY THE CALLER'S OWN OBJECT. `opts` is optional; 57 of publish()'s 60
+    // call sites pass nothing at all and are untouched, and the three that do pass a fresh object literal.
+    // `rate-limited` counts as a refusal here because a box did speak — that is the pre-existing behaviour
+    // for that case and not a change; the cases F2 was actually about are (2) and (3), and they now retry.
+    let _saidNo = false;
+    try { _saidNo = refused.some(r => /^(error|blocked|invalid|restricted|rate-limited|auth-required)/i.test(String((r && r.error) || ''))); } catch (x) {}
+    // …and the relay's OWN WORDS with it, so a caller that reports the refusal can quote them instead of
+    // inventing an explanation — the rule publishErrorMessage already follows in app/stew-dashboard.jsx.
+    try { if (opts && typeof opts === 'object') { opts.refused = _saidNo; opts.reason = reason; } } catch (x) {}
     try { window.dispatchEvent(new CustomEvent('steward-publish-error', { detail: { reason, evt, refused, background: _bg } })); } catch (x) {}
     return false;   // total failure — every relay rejected; callers that await the result can surface it
   }
@@ -4418,8 +4451,28 @@ window.Steward = {
     // one caller is the same key-distributor effect and which was given this on 2026-09-17: the console's
     // standing alarm says "That change wasn't saved", and there was no change and no steward. It is still
     // reported, quietly and once, by PublishErrorBanner, and always to the log.
-    const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', MEDIAKEY_D + pub], ['t', NET]], content: JSON.stringify({ keys, rev: now() }) }), { background: true });
+    const _pubOpts = { background: true };
+    const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', MEDIAKEY_D + pub], ['t', NET]], content: JSON.stringify({ keys, rev: now() }) }), _pubOpts);
     if (ok !== false) { _mediaKeyDocKeys = keys; _mediaKeyPushRefused = null; return ok; }   // reflect what we just published so we don't loop
+    // ⚠ A BLIP IS NOT A RULE, AND THIS MEMO IS ONLY ALLOWED TO REMEMBER RULES.
+    //
+    // `publish()` returns false for a refusal AND for a connection failure AND for "no relay could be
+    // proved ours". 177cfb9's memo promised in as many words that it "IS NOT A PERMANENT GIVING-UP … a
+    // refusal may be an outage rather than a rule", and then remembered all three alike. MEASURED
+    // (AUDIT-steward-doc-rules-round4-2026-09-22, F2): on an OWNER's console, one blip with the roster
+    // unchanged gave ONE attempt and two silent no-ops, two members were never given the key, their apps
+    // say a sermon "needs the unlock key", and the banner below blamed the church key — on the one console
+    // that holds it. None of the four clears this memo names can reach that state: the roster has not
+    // changed, subscribeMediaKey is mounted with `[]` deps so it never re-subscribes on reconnect, nobody
+    // rotates after a blip, and _resetChurchScopedState's only caller is restoreKey().
+    //
+    // `_pubOpts.refused` is publish()'s own answer to "did a box read this and say no" (see the note where
+    // it is set). Anything else and this console has learned nothing, so it must ask again on the next
+    // roster emit — which is what turns the outage back into a success when the relay returns. The failure
+    // is NOT silent either way: publish() has already dispatched steward-publish-error, which
+    // PublishErrorBanner renders as the ordinary non-sticky "Couldn't save to the relay — check the
+    // connection and try again". What must not happen is this console inventing a cause it cannot know.
+    if (!_pubOpts.refused) return ok;
     // A REFUSAL IS NOW A FACT THIS CONSOLE REMEMBERS, AND SAYS ONCE. Quiet is right for the attempt; silent
     // is not right for the consequence, which is that those members' apps will say a sermon "needs the
     // unlock key" and nobody would think to connect the two. One banner, because we only reach here once
@@ -4429,11 +4482,20 @@ window.Steward = {
       // `p !== pub` — the church's own copy is in `want` and is not a member, so counting it would tell a
       // church with two unkeyed members that three people are locked out.
       const missing = want.filter(p => p !== pub && !have[p]).length;
+      // …AND SAY WHAT ACTUALLY HAPPENED. "Only the console that holds the church key can publish it" is
+      // true of the membership/permission refusal — which is the relay's mediakey: rule — and a guess about
+      // every other one ("invalid: a newer version is already stored", "restricted: …"). The house rule for
+      // a reason we did not write is to quote the relay verbatim, not to explain it (publishErrorMessage,
+      // app/stew-dashboard.jsx). This can only be reached when a box genuinely refused, so there is always
+      // a reason to quote.
+      const _why = /not a member|not permitted/i.test(String(_pubOpts.reason || ''))
+        ? 'Only the console that holds the church key can publish it.'
+        : 'The relay refused it: ' + String(_pubOpts.reason || 'no reason given').trim().replace(/[.\s]+$/, '') + '.';
       window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'sermon key',
         message: (missing
           ? missing + ' member(s) could not be given the key to this church’s encrypted sermons, so those sermons will not play for them. '
           : 'The key to this church’s encrypted sermons could not be saved. ')
-          + 'Only the console that holds the church key can publish it. This console will not keep retrying.' } }));
+          + _why + ' This console will not keep retrying.' } }));
     } catch (e) {}
     return ok;
   },

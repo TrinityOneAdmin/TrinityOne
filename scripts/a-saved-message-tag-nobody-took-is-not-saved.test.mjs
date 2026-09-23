@@ -841,7 +841,14 @@ test('THE SCREEN: the OWNER console still turns relay sync on and off — the ot
 // was given `{ background: true }` for on 2026-09-17.
 //
 // The function is lifted out of vendor/steward.js — the SHIPPED bundle — and run, not read.
-async function runMediaKey(answer, calls = 3, memberPubs = ['m1', 'm2']) {
+// `saidNo` — WHAT publish() ANSWERED, NOT JUST THAT IT FAILED. publish() returns `false` for a relay that
+// read the event and refused it AND for a socket that never opened, and since
+// AUDIT-steward-doc-rules-round4-2026-09-22 finding F2 this function is required to tell them apart: it
+// reads `opts.refused`, which publish() stamps. Default `true` because every test written before that
+// finding is about the church-key-only refusal of `trinityone/mediakey:` on a delegated console.
+// ⚠ THIS STUB SUPPLIES THE VERY DECISION UNDER TEST ([[a-stub-answers-the-question]]), so the rows below it
+// that matter most drive the REAL publish() out of the same bundle — see runMediaKeyForReal.
+async function runMediaKey(answer, calls = 3, memberPubs = ['m1', 'm2'], saidNo = true) {
   const peek = '__mk_' + Math.random().toString(36).slice(2);
   const published = [];
   const events = [];
@@ -852,7 +859,14 @@ async function runMediaKey(answer, calls = 3, memberPubs = ['m1', 'm2']) {
     + 'let _mediaKeyPushRefused = null;\n'
     + `globalThis.${peek} = () => ({ docKeys: _mediaKeyDocKeys, refused: _mediaKeyPushRefused });\n`;
   const lifted = await runLifted('ensureMediaKeyForMembers(memberPubs)', 'ensureMediaKeyForMembers', answer, {
-    publish: async (evt, opts) => { published.push({ evt, background: !!(opts && opts.background) }); return answer; },
+    publish: async (evt, opts) => {
+      published.push({ evt, background: !!(opts && opts.background) });
+      if (answer === false && opts && typeof opts === 'object') {
+        opts.refused = saidNo;
+        opts.reason = saidNo ? 'blocked: not a member or not permitted for this group' : 'connection failure: connection timed out';
+      }
+      return answer;
+    },
     _localBlocked: new Set(),
     _sealEach: async (pl, want) => Object.fromEntries(want.map(p => [p, 'sealed-for-' + p])),
     nip44e: (a) => a, nip44ck: () => 'ck',
@@ -913,6 +927,116 @@ test('a media key the relay accepted still goes out, and is not blocked by the m
   assert.equal(p.state.refused, null, 'an accepted publish left a refusal memo behind, which would block the next real one');
   assert.deepEqual(p.events.filter(e => e.type === 'steward-write-blocked'), [],
     'a media key every relay accepted raised a refusal banner: ' + JSON.stringify(p.events));
+});
+
+// ── …AND A BLIP IS NOT A RULE ────────────────────────────────────────────────────────────────────────────
+// AUDIT-steward-doc-rules-round4-2026-09-22, finding F2. The memo above promised in as many words that it
+// "IS NOT A PERMANENT GIVING-UP … a refusal may be an outage rather than a rule", and then remembered every
+// `false` alike — and publish() answers `false` for a relay that refused the event, for a socket that never
+// opened, and for "no relay could be proved ours". MEASURED on the shipped bundle before this fix, one blip
+// then healthy, roster unchanged, on an OWNER's console:
+//
+//     ATTEMPTS = [{"bg":true,"ans":"UNREACHABLE"}]   RETURNS = [false,false,false]
+//     STATE    = {"docKeys":null,"refused":"CP,m1,m2"}
+//     BANNERS  = ["2 member(s) could not be given the key … Only the console that holds the church key can
+//                 publish it. This console will not keep retrying."]
+//
+// Calls 2 and 3 were never attempted, two members were never given the key — their apps say a sermon "needs
+// the unlock key" — and the church was told the cause was its church key, on the one console that holds it.
+//
+// ⚠ THE WHOLE POINT IS WHICH SIGNAL IS READ, so these rows may not let a stub decide it
+// ([[a-stub-answers-the-question]]). They lift the REAL publish() out of vendor/steward.js and join it to
+// the REAL ensureMediaKeyForMembers. The only stub is `pool.publish` — the vendored nostr-tools call — and
+// it answers as the library does on the wire: an unopenable socket RESOLVES with "connection failure: …",
+// while a relay's own OK=false REJECTS with the relay's reason.
+async function runMediaKeyForReal(answers, calls = 3, memberPubs = ['m1', 'm2']) {
+  const banners = [], errors = [], attempts = [];
+  let n = 0;
+  const scope = {
+    sk: 'SK', pub: 'CP', actingChurch: '',
+    _localBlocked: new Set(), _lastOk: new Map(),
+    MEDIAKEY_D: 'trinityone/mediakey:', NET: 'trinityone', NO_NETWORK_RELAY: 'no-network-relay',
+    now: () => 1700000000 + n,
+    feChurch: (t) => t,
+    _sealEach: async (pl, want) => Object.fromEntries(want.map(p => [p, 'sealed-for-' + p])),
+    encrypt3: (a) => a, getConversationKey: () => 'ck',
+    _waitForRegistration: async () => {},
+    relays: () => ['wss://one.example/relay'], relaysRaw: () => ['wss://one.example/relay'],
+    console: { warn() {}, log() {}, error() {} },
+    JSON, Set, Map, Array, Object, String, Number, Boolean, Promise, Error, RegExp,
+    CustomEvent: class { constructor(type, init) { this.type = type; this.detail = (init || {}).detail; } },
+    pool: { publish: (targets) => {
+      const a = answers[Math.min(n, answers.length - 1)];
+      n++;
+      attempts.push(a.kind === 'ok' ? 'OK' : (a.kind === 'refused' ? 'REFUSED' : 'UNREACHABLE'));
+      if (a.kind === 'unreachable') return targets.map(() => Promise.resolve('connection failure: connection timed out'));
+      if (a.kind === 'refused') return targets.map(() => Promise.reject(new Error(a.reason)));
+      return targets.map(() => Promise.resolve(''));
+    } },
+  };
+  scope.window = { dispatchEvent: (e) => {
+    if (e.type === 'steward-write-blocked') banners.push(e.detail.message);
+    if (e.type === 'steward-publish-error') errors.push(e.detail.reason);
+  } };
+  const proxy = new Proxy(scope, {
+    has: (t, k) => (k in t) || !(String(k) in globalThis),
+    get: (t, k) => {
+      if (k === Symbol.unscopables) return undefined;
+      if (k in t) return t[k];
+      throw new ReferenceError('the lifted publish/ensureMediaKeyForMembers chain needs `' + String(k) + '` — add a stub');
+    },
+  });
+  // Mutable module state the lifted function ASSIGNS to must be `let`, or a const throws TypeError from
+  // inside the lifted code and "it stopped publishing" would read as a pass.
+  const decls = 'let _mediaKeyHex = "aa"; let _mediaKeyRing = ["aa"]; let _mediaKeyDocKeys = null; let _mediaKeyPushRefused = null;';
+  const pubSrc = fnBody(BUNDLE, '  async function publish(evt, opts) {', 'publish in the shipped bundle');
+  const ensSrc = fnBody(BUNDLE, '    async ensureMediaKeyForMembers(memberPubs) {', 'ensureMediaKeyForMembers in the shipped bundle');
+  const api = new Function('scope', `with (scope) { ${decls}
+    ${pubSrc};
+    const _o = { ${ensSrc} };
+    return { fn: _o.ensureMediaKeyForMembers.bind(_o), peek: () => ({ docKeys: _mediaKeyDocKeys, refused: _mediaKeyPushRefused }) }; }`)(proxy);
+  const out = [];
+  for (let i = 0; i < calls; i++) out.push(await api.fn(memberPubs));
+  return { out, attempts, banners, errors, state: api.peek() };
+}
+
+test('A BLIP IS NOT A RULE: a media key nobody could deliver is tried again, and lands', async () => {
+  const p = await runMediaKeyForReal([{ kind: 'unreachable' }, { kind: 'ok' }]);
+  assert.deepEqual(p.attempts, ['UNREACHABLE', 'OK'],
+    'THE MEMO IS A PERMANENT GIVING-UP AGAIN. One unopenable socket and this console never tries to give ' +
+    'the church’s media key to those members again — their apps say a sermon "needs the unlock key" for ' +
+    'ever. Attempts: ' + JSON.stringify(p.attempts));
+  assert.deepEqual(Object.keys(p.state.docKeys || {}).sort(), ['CP', 'm1', 'm2'],
+    'the retry did not land, so nothing was recorded: ' + JSON.stringify(p.state.docKeys));
+  assert.equal(p.state.refused, null, 'a transient failure was remembered as a rule');
+  assert.deepEqual(p.banners, [],
+    'A BLIP RAISED THE CHURCH-KEY BANNER. On an OWNER’s console that sentence is simply false, and the ' +
+    'failure is already reported by publish()’s own steward-publish-error: ' + JSON.stringify(p.banners));
+  assert.deepEqual(p.errors, ['connection failure: connection timed out'],
+    're-anchor: the failure reached no screen at all, so the silence asserted above is the wrong kind');
+});
+
+test('…and a GENUINE refusal is still remembered, said once, through the real publish()', async () => {
+  // The control. Without this row, a "fix" that simply never remembered anything would pass everything
+  // above while restoring the unbounded re-seal-and-republish that 177cfb9 was written to stop.
+  const p = await runMediaKeyForReal([{ kind: 'refused', reason: 'blocked: not a member or not permitted for this group' }]);
+  assert.deepEqual(p.attempts, ['REFUSED'],
+    'THE CONSOLE IS HAMMERING AGAIN: ' + JSON.stringify(p.attempts));
+  assert.ok(p.state.refused, 'a rule the relay stated was not remembered');
+  assert.equal(p.banners.length, 1, 'the refusal was announced ' + p.banners.length + ' times over three calls');
+  assert.match(p.banners[0], /Only the console that holds the church key can publish it\./,
+    'the membership refusal of mediakey: no longer names who can fix it: ' + p.banners[0]);
+});
+
+test('…and when the relay gives a reason nobody wrote a sentence for, the banner QUOTES it', async () => {
+  // rule 4, applied to a screen: "Only the console that holds the church key can publish it" is true of the
+  // membership refusal and a guess about every other one. The house rule is to quote the relay verbatim
+  // rather than invent an explanation (publishErrorMessage, app/stew-dashboard.jsx).
+  const p = await runMediaKeyForReal([{ kind: 'refused', reason: 'restricted: this relay is read-only right now' }]);
+  assert.match(p.banners[0] || '', /The relay refused it: restricted: this relay is read-only right now\./,
+    'the console invented a cause it cannot know: ' + JSON.stringify(p.banners));
+  assert.doesNotMatch(p.banners[0] || '', /holds the church key/,
+    'a relay that is merely read-only is still being blamed on the church key');
 });
 
 // ── THE TWO MARKERS NO TEST COULD SEE (CLAUDE.md rule 1, the hole in this file's own headline fix) ────────
