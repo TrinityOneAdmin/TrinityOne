@@ -871,7 +871,14 @@ function editDialog(event, steward) {
   const states = []; let idx = 0;
   const React = {
     useState(init) { const i = idx++; if (states.length <= i) states.push(typeof init === 'function' ? init() : init); return [states[i], (v) => { states[i] = typeof v === 'function' ? v(states[i]) : v; }]; },
-    useEffect() {}, useRef: () => ({ current: null }), useMemo: (f) => f(), Fragment: 'Frag',
+    // A REAL useRef, not a stub: shares the same per-render hook slot as useState above, and — like real
+    // React — only ever takes the value passed on the FIRST call for that slot; every later render keeps the
+    // SAME object and ignores the argument. Round 6's F1 test below depends on this: it captures what the
+    // tick read when the dialog OPENED, and a stub returning a fresh `{ current: null }` on every call would
+    // make that capture always "null", which can never equal a boolean — silently defeating the very check
+    // the fix (F1) adds, and reporting the fix as broken when it is not.
+    useRef(init) { const i = idx++; if (states.length <= i) states.push({ current: init }); return states[i]; },
+    useEffect() {}, useMemo: (f) => f(), Fragment: 'Frag',
   };
   const h = (type, props, ...kids) => ({ type, props: { ...(props || {}), children: kids.flat() } });
   const dispatched = [];
@@ -959,6 +966,54 @@ test('R5F1: a share: document from an OLDER console cannot make the editor contr
   await m._webSync();
   assert.ok(m.live().slice(before).includes('trinityone/pubevent:evtyouth'), 'the tick no longer puts the event back after the document was repaired');
   assert.deepEqual(m.shareDoc().optIn.sort(), ['evtkeep', 'evtyouth'], 'the repair threw away an UNRELATED tick: ' + JSON.stringify(m.shareDoc()));
+});
+
+// ── ROUND 6 F1, AT THE POINT OF USE: an Edit dialog already open must not undo the control ────────────────
+// AUDIT-feeds-round6-2026-09-23 F1. `SchEventEdit` reads the tick ONCE, in a lazy useState initialiser, and
+// (before this fix) every Save wrote it back whether or not the steward had touched it. `setWebsiteShown`
+// now clears the opt-out as well as setting optIn (ba19fff, correctly, for the case where the STEWARD
+// ticks it) — so a dialog that opened before the id was taken off the website, and is Saved afterwards
+// WITHOUT the steward looking at the tick again, republished the event: reachable with two consoles, one
+// with the Edit dialog open and one pressing the Settings control.
+test('R6F1: an Edit dialog already open does not undo "Take it off our website" pressed while it sat open', async () => {
+  const m = mirror({ events: [GROUP_READABLE], copies: {}, share: share({ optIn: ['evtyouth'] }) });
+  Object.assign(m, { lostVersion: GROUP_LOST, readableVersion: GROUP_READABLE, liveBody: REVERSE_LIVE });
+  await m._webSync();
+  assert.ok(m.live().includes('trinityone/pubevent:evtyouth'), 're-anchor: the event is not on the website to begin with');
+
+  // The steward opens the Edit dialog WHILE the event is still on the website — the tick reads ON.
+  const console_ = { ...m.steward, isDelegated: () => false, publishEvent: async (ev) => ({ id: ev.id, ...ev }) };
+  const d = editDialog({ id: 'evtyouth', title: 'Youth night', date: '2026-11-01', time: '19:30', groupId: 'grpyouth' }, console_);
+  assert.equal(d.tick('On the website').props.checked, true, 're-anchor: the dialog did not open ticked on');
+
+  // The Settings control is pressed — by this console or another — WHILE the dialog sits open.
+  await pressed(m, 'evtyouth');
+  assert.ok(m.tombstoned().includes('trinityone/pubevent:evtyouth'), 're-anchor: the control took nothing off, so there is nothing this test protects');
+
+  // The steward never looks at the tick again and presses Save changes.
+  const before = m.live().length;
+  await d.save().props.onClick();
+  assert.deepEqual(d.dispatched.filter(e => e.type === 'steward-write-blocked'), [], 'the dialog reported the tick as refused: ' + JSON.stringify(d.dispatched.map(e => e.detail)));
+  await m._webSync();
+  assert.equal(m.live().slice(before).includes('trinityone/pubevent:evtyouth'), false,
+    'AN EDIT DIALOG ALREADY OPEN UNDID "TAKE IT OFF OUR WEBSITE" — Save republished the event because the tick it read at OPEN was stale, not because the steward touched it');
+  assert.deepEqual(m.shareDoc().optOut, ['evtyouth'], 'the opt-out this console\'s Settings control just wrote did not survive an untouched Save');
+});
+
+test('R6F1 CONTROL: the steward DOES look at the tick again and unticks it — the write must still happen', async () => {
+  // The fix must not turn "Save" into a no-op for the tick generally — only when it was never touched.
+  // A live copy on the relay to begin with (as "the door swings both ways" above), so there is something
+  // for a genuine untick to tombstone.
+  const m = mirror({ events: [GROUP_READABLE], copies: { evtyouth: REVERSE_LIVE }, share: share({ optIn: ['evtyouth'] }) });
+  await m._webSync();
+  const console_ = { ...m.steward, isDelegated: () => false, publishEvent: async (ev) => ({ id: ev.id, ...ev }) };
+  const d = editDialog({ id: 'evtyouth', title: 'Youth night', date: '2026-11-01', time: '19:30', groupId: 'grpyouth' }, console_);
+  assert.equal(d.tick('On the website').props.checked, true, 're-anchor');
+  d.tick('On the website').props.onChange({ target: { checked: false } });
+  await d.save().props.onClick();
+  await m._webSync();
+  assert.ok(m.tombstoned().includes('trinityone/pubevent:evtyouth'), 'A DELIBERATE UNTICK NO LONGER WRITES — the fix over-applied and silenced every Save');
+  assert.deepEqual(m.shareDoc().optOut, [], 'unticking a GROUP event must never write an opt-out — see the door-swings-both-ways test above');
 });
 
 // ── F6 (round 5, LOW): the one line that stops the control acting on STALE ids ────────────────────────────

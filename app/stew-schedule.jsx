@@ -1317,6 +1317,17 @@ function SchEventEdit({ event, onClose }) {
   const inGroup = !!String(e.groupId || '');   // a group's event is off the website unless ticked on — the inverse tick
   const [held, setHeld] = React.useState(() => !!(canHold && window.Steward.isWebsiteHeld && window.Steward.isWebsiteHeld(e.id)));
   const [shown, setShown] = React.useState(() => !!(canHold && window.Steward.isWebsiteShown && window.Steward.isWebsiteShown(e.id)));
+  // WHAT THE TICK READ WHEN THIS DIALOG OPENED — captured once, never updated. If this dialog sits open
+  // while another console (or a live update to this one) changes the SAME id's website decision, Save must
+  // not republish a value the steward never looked at again (AUDIT-feeds-round6-2026-09-23 F1): before
+  // ba19fff, setWebsiteShown(id, true) wrote optIn alone, so a stale "on" tick could not lift an opt-out;
+  // now it also clears optOut (that's the fix ba19fff made, correctly, for the case where the STEWARD
+  // ticks it), so an untouched, merely-stale tick can silently undo a "take it off our website" made
+  // elsewhere during the time this dialog was open. `React.useRef(x).current` only ever takes the value `x`
+  // held on the FIRST render — the same value the lazy useState above just computed — so this is the tick's
+  // state at open, not at Save.
+  const heldAtOpen = React.useRef(held).current;
+  const shownAtOpen = React.useRef(shown).current;
   const [busy, setBusy] = React.useState(false);
   const [err, setErr] = React.useState('');
   const save = async () => {
@@ -1333,7 +1344,11 @@ function SchEventEdit({ event, onClose }) {
         ...(series ? { recur, day } : {}),
       }));
     } catch (x) { r = null; }
-    if (r && canHold && e.id) {   // same as SchEventModal: a tick that did not land is said, not swallowed
+    // ONLY WRITE THE TICK WHEN THE STEWARD ACTUALLY TOUCHED IT IN THIS DIALOG (F1 above) — a Save where
+    // shown/held still equals what this dialog opened with makes NO write at all, so it cannot overwrite a
+    // decision made elsewhere while the dialog sat open.
+    const touched = inGroup ? (shown !== shownAtOpen) : (held !== heldAtOpen);
+    if (r && canHold && e.id && touched) {   // same as SchEventModal: a tick that did not land is said, not swallowed
       let ok = false;
       try { ok = inGroup ? await window.Steward.setWebsiteShown(e.id, shown) : await window.Steward.setWebsiteHeld(e.id, held); } catch (x) { ok = false; }
       if (!ok) { try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: inGroup ? 'website opt-in' : 'website opt-out', message: inGroup ? SCH_SHOWN_MISSED : SCH_HELD_MISSED } })); } catch (x) {} }
