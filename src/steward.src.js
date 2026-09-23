@@ -2527,7 +2527,7 @@ async function publish(evt, opts) {
     // above is: the tests LIFT this function out of the bundle and run it, where a name resolved from the
     // enclosing IIFE is undefined — a green suite proving nothing.
     //
-    // ⚠ ADDITIVE, AND IT MUTATES ONLY THE CALLER'S OWN OBJECT. `opts` is optional; 57 of publish()'s 60
+    // ⚠ ADDITIVE, AND IT MUTATES ONLY THE CALLER'S OWN OBJECT. `opts` is optional; 68 of publish()'s 71
     // call sites pass nothing at all and are untouched, and the three that do pass a fresh object literal.
     // `rate-limited` counts as a refusal here because a box did speak — that is the pre-existing behaviour
     // for that case and not a change; the cases F2 was actually about are (2) and (3), and they now retry.

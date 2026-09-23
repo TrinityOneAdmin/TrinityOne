@@ -532,12 +532,22 @@ test('WHICH RELAY REFUSED — the banner must not depend on array order', async 
     'THE DEAD RELAY WON. It was first in the array, and nostr-tools talking about a socket that never ' +
     'opened was quoted to the steward instead of the relay that actually read this event and refused it: ' +
     JSON.stringify(opts1));
+  // `opts.refused` — settled by `_saidNo`, one relay unreachable and one genuinely refusing. This is the
+  // ONE relay set (of everything in this suite) where `.some()` and `.every()` over `refused` actually
+  // disagree: refused[0]'s "connection failure: …" matches neither, so `.every()` reads false here even
+  // though a box plainly did refuse it. R5-F6 named this exact blind spot — nothing in the suite drove
+  // publish() with more than one relay, so a `.some(` -> `.every(` sabotage was INERT in five files
+  // including this one, run alone. This assertion is what makes it bite.
+  assert.equal(opts1.refused, true,
+    'A GENUINE REFUSAL WAS NOT REMEMBERED AS ONE because a DIFFERENT relay in the same set was merely ' +
+    'unreachable: ' + JSON.stringify(opts1));
 
   const s2 = consoleSide([WS_URL, DEAD_URL]);
   const opts2 = {};
   const r2 = await s2.publish(evil(), opts2);
   s2.close();
   assert.equal(r2, false, 're-anchor: this write must be refused, not saved — the row below proves nothing otherwise');
+  assert.equal(opts2.refused, true, 'the mirror ordering lost the refusal too: ' + JSON.stringify(opts2));
   assert.equal(opts2.reason, opts1.reason,
     'THE SAME REFUSAL READS DIFFERENTLY DEPENDING ON RELAY ORDER: ' +
     JSON.stringify({ deadFirst: opts1.reason, deadSecond: opts2.reason }));
