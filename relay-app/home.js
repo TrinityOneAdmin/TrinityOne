@@ -59,11 +59,9 @@
     doors.hidden = which !== 'doors';
     if (sub) sub.hidden = which !== 'doors';
     if (checking) checking.hidden = true;
+    if (!window.__decidedAt) window.__decidedAt = performance.now() - (window.__t0 || 0);
     document.body.setAttribute('data-first-run', which);
   }
-  var marked = false;
-  try { marked = !!(localStorage.getItem('to_relay_setup_seen') || localStorage.getItem('trinityone.steward.wizard.done')); } catch (e) {}
-  if (marked) { show('doors'); return; }
   doors.hidden = true; if (sub) sub.hidden = true;          // while asking; show() undoes it
   if (checking) checking.hidden = false;
   // THE CEILING IS DERIVED FROM tsState()'s OWN BUDGETS, AND A TEST FAILS IF THEY DRIFT APART.
