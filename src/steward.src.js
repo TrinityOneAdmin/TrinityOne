@@ -5113,6 +5113,26 @@ window.Steward = {
   // republishes the doc, but ONLY when someone's actually missing (idempotent → safe to call on every roster change).
   // Returns false (no-op) if this device hasn't loaded the media key yet, or if no sermon has ever been encrypted.
   async ensureMediaKeyForMembers(memberPubs) {
+    // ⚠ A DELEGATED CONSOLE MUST NOT EVEN TRY — the same rule mediaEncryptor already keeps a few lines up,
+    // and for the same reason: `trinityone/mediakey:<church>` is OWNER-ONLY at the relay
+    // (`if (d.startsWith(MEDIAKEY_D)) return leaderOf(d.slice(MEDIAKEY_D.length));`, scripts/gateway.mjs) and
+    // a delegated steward signs with their OWN key through feChurch, so the envelope is refused every time.
+    //
+    // This was harmless until a6d13e0. Before it, subscribeMediaKey looked up only `o.keys[pub]` — on a
+    // delegated console that is the entry sealed TO THE CHURCH, which our key cannot open — so `_mediaKeyHex`
+    // stayed null and the guard on the line below stopped this function dead. a6d13e0 taught it to read OUR
+    // OWN entry (so a delegate can encrypt a sermon), and that switched this publish on.
+    //
+    // MEASURED by lifting this function out of the shipped vendor/steward.js and running it delegated with a
+    // media key in hand: one attempt at d=trinityone/mediakey:<church> signed by the STEWARD, refused, and one
+    // `steward-write-blocked` with `what: 'sermon key'`. PublishErrorBanner (app/stew-dashboard.jsx) arms no
+    // timer for that event, so the banner STANDS until dismissed, and it tells a steward who did nothing that
+    // this church's encrypted sermons will not play for a member. The church's own console maintains the
+    // envelope correctly, so the sentence is not true either.
+    //
+    // `false` is what the two callers already get from every other no-op here, and neither reads it: the
+    // key-distributor effect and the mount re-check timers, both in app/stew-dashboard.jsx.
+    if (actingChurch) return false;
     if (!sk || !_mediaKeyHex) return false;                       // no media key on this device → nothing to distribute yet
     const want = [...new Set([pub, ...(memberPubs || []).filter(Boolean)])]
       .filter(p => !_localBlocked.has(String(p).toLowerCase()));   // a just-blocked member must not be re-keyed (item B)
@@ -5183,6 +5203,21 @@ window.Steward = {
   // unplayable, and the new envelope simply isn't wrapped to them. Protects future uploads only; anything they
   // already downloaded is theirs, and no key change alters that.
   async rotateMediaKey(memberPubs) {
+    // NOT AS A DELEGATED STEWARD, for the reason above ensureMediaKeyForMembers: the envelope is owner-only at
+    // the relay and this console signs with its own key, so the rotation is refused and nothing is taken away
+    // from the blocked member here whatever we do.
+    //
+    // `null`, NOT `false`, and the difference is a second banner. The one caller is block() in
+    // app/stew-dashboard.jsx, which awaits this in `rotations` and reports every `ok === false` as
+    // "could not change the sermon key … Try blocking them again — and if it keeps failing, your church may
+    // have grown past what one key document can hold". On a delegated console that advice is untrue in both
+    // halves: retrying can never work and the size is irrelevant. `null` is how ensureNameKeyForMembers
+    // already marks a deliberate decline, and block() already tells a delegate, in its own
+    // `steward-write-blocked`, that only the owner can change these keys — the sermon key is named there now.
+    //
+    // MEASURED, delegated with a key in hand, out of the shipped bundle: before this, one attempt at
+    // d=trinityone/mediakey:<church> signed by the STEWARD with `background: false`, refused, returning false.
+    if (actingChurch) return null;
     if (!sk || !pub) return false;
     if (!_isRelayAuthed()) return false;                          // never act on an untrusted view (see the mint gate)
     if (!_mediaKeyHex) return false;                              // no key yet — mediaEncryptor mints the first

@@ -6061,10 +6061,15 @@ function DashMembers() {
       // row greys out, and the removed member's phone keeps decrypting every future message in every encrypted
       // group and keeps reading the congregation's names — indefinitely, with nothing on screen suggesting a
       // second step exists. AUDIT-2026-07-27.
+      //
+      // ENCRYPTED SERMONS ARE NAMED HERE TOO, added with the delegated guard in rotateMediaKey. That guard
+      // makes the sermon key the third thing a delegated Block cannot change; it declines with `null` so it
+      // does not raise the blockWarn above, whose advice ("try blocking them again") is untrue for a delegate.
+      // This one sentence is where the steward is told, and it is the same second step for all three.
       if (delegated) {
         const encrypted = (Array.isArray(groups) ? groups : []).some(g => g && g.encrypted);
         if (encrypted || window.Steward.ensureNameKeyForMembers) {
-          try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'block', message: 'They have been removed from the roster, but only the church owner can change the keys that lock them out of encrypted groups and members’ names. Ask the owner to open their own console and block them there as well.' } })); } catch (e2) {}
+          try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'block', message: 'They have been removed from the roster, but only the church owner can change the keys that lock them out of encrypted groups, encrypted sermons and members’ names. Ask the owner to open their own console and block them there as well.' } })); } catch (e2) {}
         }
       }
     } catch (e) {}

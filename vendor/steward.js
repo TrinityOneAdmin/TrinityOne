@@ -18833,6 +18833,7 @@ zoo`.split("\n");
     // republishes the doc, but ONLY when someone's actually missing (idempotent → safe to call on every roster change).
     // Returns false (no-op) if this device hasn't loaded the media key yet, or if no sermon has ever been encrypted.
     async ensureMediaKeyForMembers(memberPubs) {
+      if (actingChurch) return false;
       if (!sk || !_mediaKeyHex) return false;
       const want = [.../* @__PURE__ */ new Set([pub, ...(memberPubs || []).filter(Boolean)])].filter((p) => !_localBlocked.has(String(p).toLowerCase()));
       const have = _mediaKeyDocKeys || {};
@@ -18866,6 +18867,7 @@ zoo`.split("\n");
     // unplayable, and the new envelope simply isn't wrapped to them. Protects future uploads only; anything they
     // already downloaded is theirs, and no key change alters that.
     async rotateMediaKey(memberPubs) {
+      if (actingChurch) return null;
       if (!sk || !pub) return false;
       if (!_isRelayAuthed()) return false;
       if (!_mediaKeyHex) return false;
