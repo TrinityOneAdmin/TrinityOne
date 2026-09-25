@@ -35,9 +35,6 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fnBody } from './test-slice.mjs';
-// THE REAL normalizeURL the engine imports — not a hand-rolled lookalike. A stub here would be testing my
-// approximation of the pool's keying rule, which is the very thing that has gone wrong in the field twice.
-import { normalizeURL } from 'nostr-tools/utils';
 import { miniReact, find, reads, loadScreen } from './render-jsx-screen.mjs';
 
 const FELLOWSHIP_VENDOR = readFileSync(new URL('../vendor/fellowship.js', import.meta.url), 'utf8');
@@ -90,7 +87,7 @@ function liftedEngine() {
   return {
     open: (cb) => built('npub1c', cb),
     fire: (e) => handler.onevent(e, (e.tags.find(t => t[0] === 'd') || [])[1]),
-    eose: (reached = true) => handler.oneose(reached),   // `reached` = a relay actually answered; false = every socket failed
+    eose: () => handler.oneose(),
     opened: () => !!handler,
   };
 }
@@ -108,35 +105,6 @@ test('ENGINE: a church with NO sermons gets an empty list at EOSE — the callba
     'THE READER NEVER CALLED BACK for a church with no sermons. app/screens-watch.jsx holds `sermonsReady` ' +
     'false until it does, so Watch & Listen spins for 12s and then blames the connection. Calls: ' + calls.length);
   assert.deepEqual(calls[0], [], 'the empty answer is not an empty list: ' + JSON.stringify(calls[0]));
-});
-
-test('ENGINE: an EOSE with NO relay reached is NOT an empty church — it must stay silent', async () => {
-  // In nostr-tools' abstract-pool a connection FAILURE calls handleClose(i), whose first act is
-  // handleEose(i). So a phone with no signal receives a full, ordinary EOSE carrying nothing — identical,
-  // at this callback, to a church that genuinely has no sermons. Telling a member their church has no
-  // sermons because their train went into a tunnel is the second lie this reader could tell, and it is the
-  // one main told for ever (`oneose() { emit(); }`, unconditional).
-  const eng = liftedEngine();
-  const calls = [];
-  eng.open(l => calls.push(l));
-  eng.eose(false);            // every socket failed
-  await settle();
-  assert.equal(calls.length, 0,
-    'THE READER DECLARED THE CHURCH EMPTY OVER A DEAD CONNECTION. Nothing answered, so nothing is known — ' +
-    'the screen must go on waiting and let its own watchdog say "Can\'t reach". Calls: ' + JSON.stringify(calls));
-});
-
-test('ENGINE: …but a sermon already in hand still paints on an unreachable EOSE', async () => {
-  // The other half of the same rule: holding back the EMPTY must not hold back what we already have, or a
-  // reconnect would blank a list that is perfectly good.
-  const eng = liftedEngine();
-  const calls = [];
-  eng.open(l => calls.push(l));
-  eng.fire(sermonDoc('s1', 1000));
-  eng.eose(false);
-  await settle();
-  assert.ok(calls.length >= 1, 'a sermon already read was withheld because the socket later failed');
-  assert.equal(calls[calls.length - 1].length, 1, 'the sermon vanished: ' + JSON.stringify(calls[calls.length - 1]));
 });
 
 test('ENGINE: …and it still does NOT paint an empty list BEFORE eose — the flash guard is intact', async () => {
@@ -162,82 +130,11 @@ test('ENGINE: a church WITH a sermon still gets it — the fix did not trade one
   assert.equal(last[0].id, 's1', 'the wrong document arrived: ' + JSON.stringify(last));
 });
 
-// ── THE HUB'S OWN WIRING ────────────────────────────────────────────────────────────────────────────────
-// The tests above stub `_onChurchDocs`, so they pin what each READER does with the answer and say nothing
-// about whether the answer is ever right. That gap is real and was measured: replacing the hub's
-// `h.oneose(hub.reached)` with `h.oneose(true)` — i.e. every reader told the relay answered, always — left
-// the file 9/9 GREEN while restoring the exact bug these tests exist to prevent. A stub cannot be asked the
-// question it is standing in for ([[stub-answers-the-question]]).
-//
-// So two more, against the shipped bundle rather than a lift of one function:
-//   1. `_reachedRelay` itself, lifted and run — the normalizeURL trap, the never-dialled relay, the throw.
-//   2. The fan-out, asserted as TEXT IN vendor/fellowship.js. That is sound here and only here: esbuild
-//      removes dead code, so a line that stops being reached stops being in the bundle and the match fails
-//      (CLAUDE.md rule 3's own parenthetical — it is `app/*.jsx` that ships unbundled and cannot be
-//      asserted this way). It is a weaker test than running it, and it is the strongest available without
-//      lifting _docsHubOpen's thirty-odd dependencies.
-function liftedReached(statusMap, { throws = false } = {}) {
-  const stubs = {
-    pool: { listConnectionStatus: () => { if (throws) throw new Error('pool exploded'); return statusMap; } },
-    normalizeURL,
-  };
-  // ⚠ THE BUNDLER RENAMES IMPORTS. esbuild emits the call as `normalizeURL2(url)` because the name collides
-  // inside the bundle, and `_reachedRelay` swallows a ReferenceError in its own inner try/catch — so a
-  // harness that supplies only `normalizeURL` gets a function that silently answers `false` for every
-  // trailing-slash URL and looks like a real defect. It cost one red test to find, and the same
-  // digit-stripping fallback is in the memberApp() harness of
-  // scripts/a-delegated-stewards-sermons-reach-a-member-phone.test.mjs for exactly this reason.
-  const scope = new Proxy(stubs, {
-    has: () => true,
-    get: (t, k) => { if (k === Symbol.unscopables) return undefined; if (k in t) return t[k];
-      const base = String(k).replace(/\d+$/, ''); if (base in t) return t[base];
-      throw new ReferenceError('the lifted _reachedRelay needs `' + String(k) + '` — add a stub for it'); },
-  });
-  const body = fnBody(FELLOWSHIP_VENDOR, 'function _reachedRelay(urls) {', '_reachedRelay');
-  return new Function('scope', `with (scope) { ${body}\nreturn _reachedRelay; }`)(scope);
-}
-
-test('HUB WIRING: _reachedRelay says yes only for a relay that is actually connected', () => {
-  const live = new Map([['wss://a.example/relay', true]]);
-  assert.equal(liftedReached(live)(['wss://a.example/relay']), true, 'a live socket was reported as unreachable');
-  assert.equal(liftedReached(new Map([['wss://a.example/relay', false]]))(['wss://a.example/relay']), false,
-    'a relay the pool reports as DOWN was treated as reached');
-  assert.equal(liftedReached(new Map())(['wss://a.example/relay']), false,
-    'A RELAY THE POOL NEVER DIALLED IS ABSENT FROM THE MAP, so `st.get()` is undefined — that must mean ' +
-    'NOT reached. Reading undefined as "fine" is the exact defect relaysHealthy() records having shipped.');
-  assert.equal(liftedReached(live)([]), false, 'no relays at all was reported as reached');
-  assert.equal(liftedReached(live, { throws: true })(['wss://a.example/relay']), false,
-    'it fails OPEN on an exception — the safe answer is "we did not reach anyone", which holds the screen');
-});
-
-test('HUB WIRING: a trailing slash still matches — the normalizeURL trap that shipped once already', () => {
-  // The pool keys its map by normalizeURL(); relay lists hold whatever was typed, scanned or published. A
-  // self-hosted church typing `wss://church.example/relay/` missed the map entirely and read as undefined,
-  // which became a PERMANENT "Can't reach your church" over a live socket (see relaysHealthy's own note).
-  const st = new Map([['wss://church.example/relay', true]]);
-  assert.equal(liftedReached(st)(['wss://church.example/relay/']), true,
-    'a relay entered with a trailing slash is invisible to the connection map — every self-hosted and ' +
-    'LAN-only church would be told its own live relay is unreachable');
-});
-
-test('HUB WIRING: the docs hub computes the answer and hands it to every reader', () => {
-  // TEXT, against the BUNDLE (see the note above this block). Sabotage-checked: rewriting the fan-out to
-  // `h.oneose(true)` in src/ removes these lines from vendor/ and this test goes red.
-  assert.match(FELLOWSHIP_VENDOR, /hub\.reached = _reachedRelay\(relaysForChurch\(cp\)\)/,
-    'THE DOCS HUB NO LONGER ASKS whether a relay answered. Every reader on it then decides "is this church ' +
-    'empty or is this phone offline?" from a value nobody computed.');
-  const fanouts = FELLOWSHIP_VENDOR.match(/h\.oneose\(hub\.reached\)/g) || [];
-  assert.equal(fanouts.length, 2,
-    'expected the hub to pass its answer at BOTH eose paths — the live fan-out and the replay a handler ' +
-    'gets when it registers after eose — found ' + fanouts.length + '. A reader registered late would ' +
-    'otherwise be told `undefined`, i.e. "never reached", and hold a stale list for ever.');
-});
-
 // ── POINT OF USE ────────────────────────────────────────────────────────────────────────────────────────
 // The real WatchView, mounted, reading the real engine. `ctx.church.channel` is '' so the screen takes the
 // `window.Bible.getVideos()` branch for its OTHER gate (`data`) — a church with no YouTube channel and no
 // sermons is precisely the pilot church this bug hit.
-async function watchTab({ eose = true, reached = true, sermons = [] } = {}) {
+async function watchTab({ eose = true, sermons = [] } = {}) {
   const { React, draw } = miniReact();
   const eng = liftedEngine();
   const win = {
@@ -261,7 +158,7 @@ async function watchTab({ eose = true, reached = true, sermons = [] } = {}) {
   await settle();                 // Bible.getVideos() resolves, and the engine's subscription is open
   assert.ok(eng.opened(), 'the screen never subscribed to sermons at all — re-anchor this test');
   for (const s of sermons) eng.fire(s);
-  if (eose) eng.eose(reached);
+  if (eose) eng.eose();
   await settle();
   const tree = render();
   return { said: reads(tree), spinners: find(tree, n => n.props && /trinitySpin/.test(String(n.props.style && n.props.style.animation || ''))).length };
@@ -281,15 +178,6 @@ test('POINT OF USE: …and it DOES still spin while the relay has not answered �
   assert.doesNotMatch(p.said, /Nothing here yet/,
     'the tab decided a church has no sermons before the relay finished answering. Screen read: ' + JSON.stringify(p.said));
   assert.equal(p.spinners, 1, 'the loading spinner is not showing while the sermons feed is still loading');
-});
-
-test('POINT OF USE: an unreachable relay says "check your connection", NOT "Nothing here yet"', async () => {
-  const p = await watchTab({ reached: false });
-  assert.doesNotMatch(p.said, /Nothing here yet/,
-    'THE TAB TOLD A MEMBER THEIR CHURCH HAS NO SERMONS BECAUSE THE PHONE IS OFFLINE. Screen read: ' + JSON.stringify(p.said));
-  assert.equal(p.spinners, 1,
-    'the tab left the loading state over a relay that never answered — the 12s watchdog can no longer put ' +
-    'the honest "Can\'t reach" message up, because the gate it depends on has already been released');
 });
 
 test('POINT OF USE: a church WITH a sermon reaches the list, not the empty state', async () => {

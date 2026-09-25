@@ -2152,33 +2152,6 @@ function _docsHub(cp) {
   for (const e of hub.buf.values()) { const d0 = _dtag(e); if (d0 === 'trinityone/name:' + cp) { _recoverOwnName(cp, e); _openSealedName(cp, e.pubkey, e.content); } }
   return hub;
 }
-// DID WE ACTUALLY REACH ONE OF THESE RELAYS, or did every socket fail? EOSE CANNOT ANSWER THIS ON ITS OWN
-// and that is the whole reason this exists: in nostr-tools' abstract-pool, a connection FAILURE calls
-// `handleClose(i)`, whose first act is `handleEose(i)` — so a phone with no signal gets a full, ordinary
-// `oneose()` with nothing in it, indistinguishable from a church that genuinely has no rotas.
-//
-// Every reader on this hub had to choose which of the two to believe, and they all chose "unreachable":
-// `oneose() { eosed = true; if (byId.size) emit(); }`. That is right offline — it is what stops a lost
-// signal wiping the events cached on the phone — and wrong on a relay that answered, because a church that
-// deletes its last event then never clears it from a single member's screen. A cancelled meeting stayed on
-// every phone that had already cached it, until that phone's storage was cleared. THE ANSWER IS NOT TO PICK
-// THE OTHER SIDE: it is to stop guessing, which is what this asks.
-//
-// Borrowed WHOLE from relaysHealthy() above, including the bit that is not obvious: the pool keys its map by
-// normalizeURL() while our relay lists hold whatever was typed/scanned/published, so a perfectly ordinary
-// `wss://church.example/relay/` misses the map and reads `undefined`. Compare BOTH spellings. A relay the
-// pool never dialled is absent from the map, so `undefined` must mean "not reached", never "fine".
-// FAILS CLOSED on any exception: "we did not reach anyone" is the answer that preserves what is on screen.
-function _reachedRelay(urls) {
-  try {
-    const st = pool.listConnectionStatus();
-    for (const url of (urls || [])) {
-      if (st.get(url) === true) return true;
-      try { if (st.get(normalizeURL(url)) === true) return true; } catch (e) {}
-    }
-    return false;
-  } catch (e) { return false; }
-}
 function _docsHubOpen(hub) {
   if (hub.closer) return;
   const cp = hub.cp;
@@ -2250,15 +2223,13 @@ function _docsHubOpen(hub) {
       for (const h of [...hub.handlers]) { try { h.onevent(e, d); } catch (err) { _featureFailed('live update', d, err); } }
     },
     oneose() {
-      // Remember it on the hub: a handler that registers AFTER this fires gets it replayed (see _onChurchDocs).
-      hub.reached = _reachedRelay(relaysForChurch(cp));
       _hubEosed(hub); _docsHubSaveSoon(hub);
       // F11: rebuild the parent's children HERE. This fires on a socket that has just answered us, and only
       // once we hold a signing key — so it survives the unlock reconnect that used to kill it, and it works
       // at a cold boot, where the old call site ran before any hub existed. Once per hub per connection;
       // reconnectAll clears the flag so a fresh authenticated socket tries again.
       if (sk && !hub.familyRebuilt) { hub.familyRebuilt = true; try { _rebuildFamily(hub.cp); } catch (err) { _featureFailed('family rebuild', '', err); } }
-      for (const h of [...hub.handlers]) { try { h.oneose && h.oneose(hub.reached); } catch (err) { _featureFailed('load complete', '', err); } }
+      for (const h of [...hub.handlers]) { try { h.oneose && h.oneose(); } catch (err) { _featureFailed('load complete', '', err); } }
     },
   });
   hub.closer = () => { try { sub.close(); } catch {} };
@@ -2312,7 +2283,7 @@ function _onChurchDocs(cp, h) {
     if (d === 'trinityone/stewards:' + cp || d.startsWith(GROUPKEY_D)) continue;   // hub-level docs, already absorbed
     try { h.onevent(e, d); } catch (err) { _featureFailed('initial replay', d, err); }
   }
-  if (hub.eosed && h.oneose) { try { h.oneose(hub.reached); } catch (err) { _featureFailed('load complete', '', err); } }
+  if (hub.eosed && h.oneose) { try { h.oneose(); } catch (err) { _featureFailed('load complete', '', err); } }
   let off = false;
   return () => {
     if (off) return; off = true;
@@ -3396,14 +3367,7 @@ window.Fellowship = {
       //      means "this church has no sermons", never "the cache has not been overwritten yet".
       // `emit`'s own `!eosed && !v.length` guard still suppresses every PRE-EOSE empty, so the empty state
       // cannot flash on a slow relay. Restores what this reader did before option A (`oneose() { emit(); }`).
-      // ⚠ `reached` ADDED 2026-09-25, LATER THE SAME DAY, and it matters MORE here than anywhere else on
-      // this hub. Emitting unconditionally (what this did for one commit, and what main did for ever) fixed
-      // the stuck tab and left a second lie standing: a phone with NO SIGNAL also gets an ordinary empty
-      // EOSE, so Watch & Listen said "Nothing here yet" — a church's sermons declared absent because the
-      // train went into a tunnel. Now the three states are three states: still loading (no callback yet),
-      // genuinely none (a relay answered, list empty), and unreachable (no relay answered → no callback →
-      // the screen's own 12s watchdog says "Can't reach {church} right now", which is TRUE).
-      oneose(reached) { eosed = true; if (byId.size || reached) emit(); },
+      oneose() { eosed = true; emit(); },
     });
   },
   // the church's currently-featured/pinned sermon (or null) — drives a Today card + a notification. Widened
@@ -4830,7 +4794,7 @@ window.Fellowship = {
         } catch {}
       },
       onroster() { _reduceAll(versions, byId, _trust); emit(); },   // a revocation must promote the church's copy, not just hide theirs   // the church-signed steward roster arrived/changed — re-filter
-      oneose(reached) { eosed = true; if (byId.size || reached) emit(); },   // `reached`: emit an empty list only when a relay ACTUALLY ANSWERED — see _reachedRelay. Offline, EOSE fires with nothing and this holds the last-known rather than blanking it.   // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
+      oneose() { eosed = true; if (byId.size) emit(); },   // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
     });
   },
 
@@ -4857,7 +4821,7 @@ window.Fellowship = {
         try { const c = JSON.parse(e.content); _absorbById(versions, byId, id, { id, ...c, ts: e.created_at, _by: e.pubkey }, _trust); emit(); } catch {}
       },
       onroster() { _reduceAll(versions, byId, _trust); emit(); },   // a revocation must promote the church's copy, not just hide theirs   // re-filter once the steward roster lands (steward-authored categories)
-      oneose(reached) { eosed = true; if (byId.size || reached) emit(); },   // `reached`: emit an empty list only when a relay ACTUALLY ANSWERED — see _reachedRelay. Offline, EOSE fires with nothing and this holds the last-known rather than blanking it.   // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
+      oneose() { eosed = true; if (byId.size) emit(); },   // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
     });
   },
 
@@ -5193,7 +5157,7 @@ window.Fellowship = {
         try { _absorbById(versions, byId, id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey }, _trust); emit(); } catch {}
       },
       onroster() { _reduceAll(versions, byId, _trust); emit(); },   // a revocation must promote the church's copy, not just hide theirs
-      oneose(reached) { eosed = true; if (byId.size || reached) emit(); },   // `reached`: emit an empty list only when a relay ACTUALLY ANSWERED — see _reachedRelay. Offline, EOSE fires with nothing and this holds the last-known rather than blanking it.   // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
+      oneose() { eosed = true; if (byId.size) emit(); },   // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
     });
     return () => { stop(); if (timer) clearTimeout(timer); };
   },
@@ -5229,7 +5193,7 @@ window.Fellowship = {
         try { _absorbById(versions, byId, id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey }, _trust); emit(); } catch {}
       },
       onroster() { _reduceAll(versions, byId, _trust); emit(); },   // a revocation must promote the church's copy, not just hide theirs
-      oneose(reached) { eosed = true; if (byId.size || reached) emit(); },   // `reached`: emit an empty list only when a relay ACTUALLY ANSWERED — see _reachedRelay. Offline, EOSE fires with nothing and this holds the last-known rather than blanking it.   // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
+      oneose() { eosed = true; if (byId.size) emit(); },   // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
     });
     return () => { stop(); if (timer) clearTimeout(timer); };
   },
@@ -5261,7 +5225,7 @@ window.Fellowship = {
         } catch {}
       },
       onroster() { _reduceAll(versions, byId, _trust); emit(); },   // a revocation must promote the church's copy, not just hide theirs
-      oneose(reached) { eosed = true; if (byId.size || reached) emit(); },   // `reached`: emit an empty list only when a relay ACTUALLY ANSWERED — see _reachedRelay. Offline, EOSE fires with nothing and this holds the last-known rather than blanking it.   // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
+      oneose() { eosed = true; if (byId.size) emit(); },   // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
     });
   },
   // ── serving: services, per-service rotas, rosters, events the church publishes ──
@@ -6351,7 +6315,7 @@ window.Fellowship = {
         } catch {}
       },
       onroster() { _reduceAll(versions, byId, _trust); emit(); },   // a revocation must promote the church's copy, not just hide theirs
-      oneose(reached) { eosed = true; if (byId.size || reached) emit(); },   // `reached`: emit an empty list only when a relay ACTUALLY ANSWERED — see _reachedRelay. Offline, EOSE fires with nothing and this holds the last-known rather than blanking it.   // sticky: never blank live needs on a reconnect's EOSE-before-events; genuine closes come via the delete path
+      oneose() { eosed = true; if (byId.size) emit(); },   // sticky: never blank live needs on a reconnect's EOSE-before-events; genuine closes come via the delete path
     });
   },
   // member offers to help (careslot:) + recipient skip-days (careskip:) — both member-signed, church-tagged.
@@ -7102,9 +7066,7 @@ window.Fellowship = {
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { if (_groupEventTrusted(cp, _gidOf(e), e.pubkey)) { _forgetById(versions, byId, id, e.pubkey, e.created_at, _evTrust, { churchPub: cp, targets: _tombstoneTargets(e) }); emit(); } return; }
         try { const c = JSON.parse(e.content); _absorbById(versions, byId, id, { id, date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, image: c.image || '', groupId: c.groupId || '', byMember: e.pubkey !== cp, ts: e.created_at, _by: e.pubkey, _gid: gid }, _evTrust); emit(); } catch {}
       },
-      // Same question as the hub readers, asked at this reader's own socket because it does not use the
-      // hub: emit an empty list only if a relay actually answered (_reachedRelay). See its note.
-      oneose() { eosed = true; if (byId.size || _reachedRelay(window.Fellowship.relays)) emit(); },
+      oneose() { eosed = true; if (byId.size) emit(); },   // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
     });
     return () => { window.removeEventListener('trinity-church-trust', onTrust); try { sub.close(); } catch {} };
   },
@@ -7178,9 +7140,7 @@ window.Fellowship = {
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { if (e.pubkey === (window.Fellowship.churchPub || '')) { byId.delete(id); emit(); } return; }
         try { byId.set(id, { id, church: e.pubkey, ...JSON.parse(e.content), ts: e.created_at }); emit(); } catch {}
       },
-      // Same question as the hub readers (_reachedRelay), at this reader's own socket: a member taken OFF
-      // every rota must see the card go, and a member in a tunnel must not.
-      oneose() { if (byId.size || _reachedRelay(window.Fellowship.relays)) emit(); },
+      oneose() { if (byId.size) emit(); },   // sticky: don't blank the "you're serving" card on a reconnect's empty EOSE
     });
     return () => { try { sub.close(); } catch {} };
   },
