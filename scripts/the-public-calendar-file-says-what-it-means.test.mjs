@@ -315,3 +315,31 @@ test('F6: what the builder itself puts in the file names nobody — measured thr
   assert.deepEqual(Object.keys(publicEventFields({ id: 'supper', date: '2026-10-03', groupId: 'g', creator: member })).sort(),
     ['blurb', 'date', 'day', 'id', 'recur', 'time', 'title', 'where'], 'publicEventFields admits a field beyond the noticeboard ones');
 });
+
+// ── PHASE 2: the feed settings on Settings → Your website change the FILE ─────────────────────────────────
+// reference/DESIGN-embeddable-church-info.md, "What a steward can choose". These change the bytes buildCalendar
+// itself writes; scripts/a-churchs-public-calendar-is-served-only-when-asked.test.mjs proves the relay reads
+// the church's `share:` document and passes these through at the point of use.
+test('phase 2: calName wins over name for X-WR-CALNAME, and falls back to name when unset', () => {
+  const ev = [{ id: 'e', title: 'Service', date: '2026-10-04', time: '10:30' }];
+  const withCalName = buildCalendar(ev, { uidScope: 'x', name: 'Grace Church', calName: 'St Mary’s — What’s On' });
+  assert.deepEqual(prop(withCalName, 'X-WR-CALNAME'), ['St Mary’s — What’s On'], 'calName did not win over the church’s own name');
+  const fallback = buildCalendar(ev, { uidScope: 'x', name: 'Grace Church', calName: '' });
+  assert.deepEqual(prop(fallback, 'X-WR-CALNAME'), ['Grace Church'], 'an empty calName should fall back to name, not drop the line');
+  const neither = buildCalendar(ev, { uidScope: 'x' });
+  assert.deepEqual(prop(neither, 'X-WR-CALNAME'), [], 'no X-WR-CALNAME should be written when neither is given');
+});
+
+test('phase 2: detail "short" drops LOCATION and DESCRIPTION; "full" (the default) keeps them', () => {
+  const ev = [{ id: 'supper', title: 'Harvest supper', date: '2026-10-03', time: '19:30', where: 'The hall', blurb: 'All welcome' }];
+  const short = unfoldIcs(buildCalendar(ev, { uidScope: 'x', detail: 'short' }));
+  assert.equal(short.includes('LOCATION'), false, 'detail: short still wrote LOCATION');
+  assert.equal(short.includes('DESCRIPTION'), false, 'detail: short still wrote DESCRIPTION');
+  assert.equal(short.includes('SUMMARY:Harvest supper'), true, 'detail: short dropped the title too');
+  assert.equal(short.includes('DTSTART'), true, 'detail: short dropped the time too');
+  const full = unfoldIcs(buildCalendar(ev, { uidScope: 'x', detail: 'full' }));
+  assert.equal(full.includes('LOCATION:The hall'), true, 'detail: full should still carry LOCATION');
+  assert.equal(full.includes('DESCRIPTION:All welcome'), true, 'detail: full should still carry DESCRIPTION');
+  const defaulted = unfoldIcs(buildCalendar(ev, { uidScope: 'x' }));
+  assert.equal(defaulted.includes('LOCATION:The hall'), true, 'the default (no detail given) should be full, not short');
+});

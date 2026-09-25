@@ -202,15 +202,21 @@ export function icsStamp(at = new Date()) {
 }
 
 // The file. `events` is anything; only what publicEventFields() admits is written. `name` is the church's
-// display name (X-WR-CALNAME, so a subscriber's calendar app names the feed after the church). `uidScope`
-// makes UIDs unique across churches — pass the church's npub. NOTHING ELSE goes in: no URL, no host, no
-// contact, no ATTENDEE, no ORGANIZER. The mirror mode planned for phase 3 must be able to serve these
-// bytes with no trace of which machine built them, so nothing here may name one.
-export function buildCalendar(events, { name = '', uidScope = 'trinityone', stamp = icsStamp() } = {}) {
+// display name, used for X-WR-CALNAME when `calName` is not set. `calName` is the steward's own choice of
+// what the feed calls itself (Settings → Your website, phase 2) and wins when given — a church may want
+// "St Mary's — What's On" rather than its legal name. `detail: 'short'` (default 'full') drops LOCATION and
+// DESCRIPTION, leaving only the title and time — the phase-2 "how much of each event" setting, for a church
+// whose event notes are franker than it wants on a public feed. `uidScope` makes UIDs unique across churches
+// — pass the church's npub. NOTHING ELSE goes in: no URL, no host, no contact, no ATTENDEE, no ORGANIZER.
+// The mirror mode planned for phase 3 must be able to serve these bytes with no trace of which machine
+// built them, so nothing here may name one.
+export function buildCalendar(events, { name = '', uidScope = 'trinityone', stamp = icsStamp(), calName = '', detail = 'full' } = {}) {
   const rows = (Array.isArray(events) ? events : []).map(publicEventFields).filter(Boolean)
     .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time) || a.id.localeCompare(b.id));
   const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//TrinityOne//Church//EN', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH'];
-  if (name) lines.push('X-WR-CALNAME:' + icsEscape(name));
+  const label = calName || name;
+  if (label) lines.push('X-WR-CALNAME:' + icsEscape(label));
+  const full = detail !== 'short';
   for (const ev of rows) {
     // NO HALF-WRITTEN VEVENT: the range check on the computed occurrence is asked BEFORE anything is pushed,
     // so an event whose series steps past 9999-12-31 is simply not in the file (isoOf above).
@@ -222,8 +228,8 @@ export function buildCalendar(events, { name = '', uidScope = 'trinityone', stam
     lines.push(ds);
     const rr = rrule(ev); if (rr) lines.push(rr);
     lines.push('SUMMARY:' + icsEscape(ev.title || 'Event'));
-    if (ev.where) lines.push('LOCATION:' + icsEscape(ev.where));
-    if (ev.blurb) lines.push('DESCRIPTION:' + icsEscape(ev.blurb));
+    if (full && ev.where) lines.push('LOCATION:' + icsEscape(ev.where));
+    if (full && ev.blurb) lines.push('DESCRIPTION:' + icsEscape(ev.blurb));
     lines.push('END:VEVENT');
   }
   lines.push('END:VCALENDAR');
