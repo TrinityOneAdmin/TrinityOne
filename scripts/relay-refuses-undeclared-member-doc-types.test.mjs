@@ -208,12 +208,22 @@ test('a church-authored type the relay has no branch for is refused to a member 
   // not assert the reason either. AUDIT-steward-doc-rules-2026-09-22 F8, CLAUDE.md rule 4. The re-anchor it
   // was excusing was in fact a STRENGTHENING (`in UNDECLARED` became `in DOC_TYPES && write === …`), which
   // made the apology both false and unnecessary.
-  // RE-ANCHORED AGAIN, 2026-09-22 (second round): the write column is 'church', not 'steward'. The
-  // content-steward grant written earlier the same day was withdrawn because every shipped reader filters
-  // authors:[churchpub] and served a steward-authored sermon to nobody. The whole actor matrix lives in
-  // scripts/six-steward-doc-types-have-rules.test.mjs.
-  assert.ok('trinityone/sermon:' in DOC_TYPES && DOC_TYPES['trinityone/sermon:'].write === 'church',
-    're-anchor: sermon: is no longer a declared church-written type');
+  // RE-ANCHORED AGAIN, 2026-09-22 (second round): the write column went to 'church', not 'steward'. The
+  // content-steward grant written earlier the same day was withdrawn because every shipped reader filtered
+  // authors:[churchpub] and served a steward-authored sermon to nobody.
+  //
+  // AND RE-ANCHORED A THIRD TIME, 2026-09-25: it is 'steward' again. Option A
+  // (TrinityOne-internal/reference/PLAN-delegated-steward-publishing.md) fixed the four readers first —
+  // they now accept a rostered CONTENT steward's `['church', cp]`-tagged copy — and only then re-granted
+  // the write. THIS GUARD DID ITS JOB AND IS THE REASON YOU ARE READING THIS: the registry row was changed
+  // by the option-A commit while this file was not in that commit's enumerated affected set, and this
+  // assertion is what turned red and forced the change to be deliberate (CLAUDE.md rule 2). Keep it
+  // pinned to ONE exact value for that reason — an `=== 'church' || === 'steward'` here would be a guard
+  // that never fires again. The whole five-actor matrix lives in
+  // scripts/six-steward-doc-types-have-rules.test.mjs; what THIS test still asks, unchanged through all
+  // three re-anchors, is the pair below: a MEMBER may not write it, and the CHURCH still can.
+  assert.ok('trinityone/sermon:' in DOC_TYPES && DOC_TYPES['trinityone/sermon:'].write === 'steward',
+    're-anchor: sermon: is no longer a declared steward-writable type');
   const frame = await publishAs(mia, doc(mia, 'trinityone/sermon:s1', { title: 'not mine to write' }, [['church', church.pub]]));
   assert.equal(frame[2], false, 'a member wrote a church-authored type the relay has no rule for: ' + JSON.stringify(frame));
   const own = await publishAs(church, doc(church, 'trinityone/sermon:s1', { title: 'Sunday' }));

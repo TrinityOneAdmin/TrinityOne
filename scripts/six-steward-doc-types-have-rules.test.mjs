@@ -217,6 +217,21 @@ test('every one of the six is declared, and none of them is member-writable', ()
     assert.notEqual(DOC_TYPES[p].write, 'member',
       p + ' is declared member-writable. None of these six may be: the registry derives MEMBER_WRITABLE_TYPES from ' +
       'this column and accept()\'s catch-all reads it, so this word alone would re-open the hole (AUDIT M3).');
+    // AND THE COLUMN MUST AGREE WITH THE MATRIX BELOW, which is measured against a live relay.
+    // AUDIT-round1-2026-09-25 finding LOW-5: flipping `backup-meta:` from 'church' to 'steward' in the
+    // registry, while leaving accept() refusing it, passed this whole file 44/44. The registry is what the
+    // relay REFUSES TO START over (k() throws on an undeclared name) and what a human reads to answer
+    // "who may write this?", so a row that disagrees with the relay's own answer is a documented lie with
+    // nothing to catch it. `sermon:` was pinned — by a guard in
+    // scripts/relay-refuses-undeclared-member-doc-types.test.mjs, which is what caught option A changing
+    // this same column — and the other five were not. Now all six are, by derivation rather than by a
+    // hard-coded list, so a new row cannot be added without an answer here.
+    const stewardMayWrite = MATRIX[p][2] || MATRIX[p][3];   // the two steward columns (all caps / finance-only)
+    assert.equal(DOC_TYPES[p].write, stewardMayWrite ? 'steward' : 'church',
+      p + ': the registry\'s write column says "' + DOC_TYPES[p].write + '" and the relay, measured below, ' +
+      (stewardMayWrite ? 'ACCEPTS a rostered steward' : 'REFUSES every steward') + '. One of the two is wrong — ' +
+      'and if it is the relay that changed, the registry note above that row is now telling the next ' +
+      'session the opposite of what the code does (CLAUDE.md rule 4).');
   }
 });
 

@@ -569,6 +569,9 @@ test('THE SCREEN: changing the backup REMINDER says so too — the second caller
 // settings are driven below. The three controls that write `trinityone/sermon:` — Upload, Edit and Remove
 // — are asserted to be MARKED as well, because a live control on a console that can never use it is the
 // [[fix-the-control-not-the-label]] shape whatever the engine says afterwards.
+// `caps` says which steward this is, when `delegated` — default ['content'] (a fully-granted delegate),
+// matching every caller written before option A, Phase 2 (2026-09-25) existed. Pass `caps: ['finance']` (or
+// `[]`) for the one case that is still real: a steward this church has NOT given the content capability.
 async function sermonsPanel({ delegated, caps, encOn, list = [] }) {
   const { React, draw } = miniReact();
   const order = [];
@@ -757,10 +760,6 @@ test('THE SCREEN: the OWNER console still uploads, publishes and removes — the
 // THESE TESTS SUPPLY `localStorage` EXPLICITLY. BASE_GLOBALS above does not, and the panels call it bare,
 // so every such call lands in its own `catch {}` (round-2 audit R9) — an assertion about the key would be
 // vacuous and green without this.
-// `caps` — option A, Phase 1 (2026-09-25): the relay now grants ANY steward with a single capability this
-// write, not the church key alone, so `delegated` on its own no longer means locked. Default `null`
-// (unscoped, the ordinary/most common steward shape) matches every existing caller's original intent; pass
-// `caps: []` for the one shape that is still genuinely locked — a steward scoped to NOTHING.
 async function cadencePanel({ delegated, metaAnswer, start = 'monthly' }) {
   const { React, draw } = miniReact();
   const store = { 'trinityone.backupRemind': start };

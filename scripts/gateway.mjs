@@ -4232,8 +4232,8 @@ function accept(e) {
     // AUDIT-undeclared-doc-types-2026-09-22: an addressable write REPLACES the envelope, and losing it makes
     // every encrypted sermon undecryptable for the whole church.
     if (d.startsWith(MEDIAKEY_D)) return leaderOf(d.slice(MEDIAKEY_D.length));
-    // WHEN THE CHURCH LAST BACKED UP — d=backup-meta:<churchpub>, cleartext {at, remind}. CHURCH KEY OR A
-    // STEWARD WITH ANY CAPABILITY, scoped on the d-tag SUFFIX.
+    // WHEN THE CHURCH LAST BACKED UP — d=backup-meta:<churchpub>, cleartext {at, remind}. CHURCH KEY OR ITS
+    // NETWORK ONLY, scoped on the d-tag SUFFIX.
     //
     // ⚠ IT WAS `|| stewardCan(e.pubkey, cp, 'any')` FOR ONE DAY, 2026-09-22, AND THE GRANT WAS INERT, THEN
     // WITHDRAWN, THEN RE-GRANTED 2026-09-25 (option A, PLAN-delegated-steward-publishing.md, Phase 1).

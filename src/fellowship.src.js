@@ -3318,7 +3318,8 @@ window.Fellowship = {
     return _shared('sermons|' + cp0, (emit) => window.Fellowship._openSermons(cp0, emit))(onSermons);
   },
   // OPTION A, PHASE 2 (2026-09-25): widened from `authors:[cp]` + an in-handler `e.pubkey !== cp` refusal to
-  // the SAME shape as subscribeChurchGroups/subscribeChurchCategories just above — the shared church-docs
+  // the SAME shape as subscribeChurchGroups/subscribeChurchCategories (further DOWN this file, ~1,400 lines
+  // below — NOT "just above", which is what this said until 2026-09-25) — the shared church-docs
   // hub (`_onChurchDocs`, filters `authors:[cp]` OR `'#church':[cp]`), one version per author
   // (`versions`/`_absorbById`/`_forgetById`, src/church-doc-store.src.js) and `_churchVoice` deciding which
   // author's copy of a given sermon id is ever shown. `_churchVoice` is fail-CLOSED on an unknown roster: a

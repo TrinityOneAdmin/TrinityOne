@@ -9542,8 +9542,11 @@ function DashBackup() {
   //
   // THE CADENCE IS THE CHURCH'S TO SET — every steward and every device is meant to show the same nudge,
   // which is the whole reason this document exists — and "the church" means the church's own console, not
-  // a delegate. Briefly `_metaChurchOnly` (caps-scoped-to-nothing) on 2026-09-25 while the grant existed; back
-  // to the owner question, which is the same one export/restore ask below, for the same day's reason.
+  // a delegate. For half a day on 2026-09-25 this was TWO flags — `_metaLocked` (a steward scoped to no
+  // capability at all) for the cadence, `_exportOwnerOnly` for export/restore — while the grant existed.
+  // Both names went with it; grep the 2026-09-25 commits, not this file, for that history. (This sentence
+  // said "briefly `_metaChurchOnly`", i.e. that the flag was briefly itself: a blanket rename had rewritten
+  // the name inside the comment describing the OLD name. Audit finding LOW-4, same day.)
   // EXPORT/RESTORE ARE A SEPARATE, STILL-GENUINELY-OWNER-ONLY QUESTION — AUDIT-steward-doc-rules-round5-2026-09-23
   // finding 3. `a2d1e4c` marked ONLY the `history` settings row `owner: true`, but exportChurchData ->
   // /export and restoreChurchData -> /import go through the very same `_exportAuth` in scripts/gateway.mjs
