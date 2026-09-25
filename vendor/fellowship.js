@@ -9358,6 +9358,21 @@
       }
       return _shared("sermons|" + cp0, (emit) => window.Fellowship._openSermons(cp0, emit))(onSermons);
     },
+    // OPTION A, PHASE 2 (2026-09-25): widened from `authors:[cp]` + an in-handler `e.pubkey !== cp` refusal to
+    // the SAME shape as subscribeChurchGroups/subscribeChurchCategories just above — the shared church-docs
+    // hub (`_onChurchDocs`, filters `authors:[cp]` OR `'#church':[cp]`), one version per author
+    // (`versions`/`_absorbById`/`_forgetById`, src/church-doc-store.src.js) and `_churchVoice` deciding which
+    // author's copy of a given sermon id is ever shown. `_churchVoice` is fail-CLOSED on an unknown roster: a
+    // steward-authored sermon does not render until the hub has actually absorbed this church's `stewards:`
+    // roster (`_absorbRoster`, which every hub with ANY handler open receives automatically, since it shares
+    // the same `authors:[cp]` filter) — a sermon rendered before that is a sermon rendered on no authority at
+    // all (`cached-paints-before-authority-arrives`). `onroster()` re-derives every winner the moment the
+    // roster changes, so a revoked steward's sermon stops being the one shown (promoting the church's own
+    // copy, if there is one) without waiting for a new event. SIDE EFFECT, said plainly (CLAUDE.md rule 4):
+    // the store's own `ts` field is now the EVENT's `created_at`, like every other reader that uses this
+    // module, rather than the sermon's self-reported `ts` in its content — so re-saving a sermon's title now
+    // moves it back to the top of the list, which it did not before. No test in this codebase pinned the old
+    // behaviour, and every OTHER content type here already works this way.
     _openSermons(churchNpub, onSermons) {
       const cp = toPub(churchNpub);
       if (!cp) {
@@ -9366,34 +9381,54 @@
         };
       }
       const byId = /* @__PURE__ */ new Map();
-      const emit = _coalesce(() => onSermons([...byId.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0))));
-      const sub = pool.subscribeMany(relaysForChurch(cp), [{ kinds: [30078], authors: [cp], "#t": [NET] }], {
-        onevent(e) {
-          if (e.pubkey !== cp) return;
-          const d = _dtag(e);
+      const versions = /* @__PURE__ */ new Map();
+      const _trust = (rec) => _churchVoice(cp, rec);
+      let eosed = false;
+      const emit = _coalesce(() => {
+        const v = [...byId.values()].filter((s) => _churchVoice(cp, s));
+        if (!eosed && !v.length) return;
+        onSermons(v.sort((a, b) => (b.ts || 0) - (a.ts || 0)));
+      });
+      return _onChurchDocs(cp, {
+        emit,
+        // so the hub can cancel a queued emit when this handler tears down
+        want: [SERMON_D],
+        // replay only this slice of the hub (see _hubBufSet)
+        onevent(e, d) {
           if (!d.startsWith(SERMON_D)) return;
+          const id = d.slice(SERMON_D.length);
+          if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
+            if (_churchVoice(cp, { _by: e.pubkey })) {
+              _forgetById(versions, byId, id, e.pubkey, e.created_at, _trust, { churchPub: cp, targets: _tombstoneTargets(e) });
+              emit();
+            }
+            return;
+          }
           try {
             const s = JSON.parse(e.content);
             if (s && s.sha256) {
-              byId.set(d, { ...s, at: e.created_at });
+              _absorbById(versions, byId, id, { ...s, id, at: e.created_at, ts: e.created_at, _by: e.pubkey }, _trust);
               emit();
             }
           } catch {
           }
         },
-        oneose() {
+        onroster() {
+          _reduceAll(versions, byId, _trust);
           emit();
+        },
+        // a revocation must promote the church's copy, not just hide theirs
+        oneose() {
+          eosed = true;
+          if (byId.size) emit();
         }
+        // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
       });
-      return () => {
-        emit.cancel();
-        try {
-          sub.close();
-        } catch {
-        }
-      };
     },
-    // the church's currently-featured/pinned sermon (or null) — drives a Today card + a notification.
+    // the church's currently-featured/pinned sermon (or null) — drives a Today card + a notification. Widened
+    // the same way and for the same reason as _openSermons above; one constant store id ('pinned') because
+    // this is a single per-church document, not a list, so `_absorbById`'s per-author versioning picks the
+    // newest TRUSTED pin rather than whichever author's copy the relay happens to answer with first.
     subscribePinnedSermon(churchNpub, onPinned) {
       const cp = toPub(churchNpub);
       if (!cp) {
@@ -9401,29 +9436,41 @@
         return () => {
         };
       }
-      const sub = pool.subscribeMany(relaysForChurch(cp), [{ kinds: [30078], authors: [cp], "#d": [PINSERMON_D + cp] }], {
-        onevent(e) {
-          if (e.pubkey !== cp) return;
-          if ((e.tags.find((t) => t[0] === "deleted") || [])[1]) {
-            onPinned(null);
+      const id = "pinned";
+      const versions = /* @__PURE__ */ new Map();
+      const byId = /* @__PURE__ */ new Map();
+      const _trust = (rec) => _churchVoice(cp, rec);
+      const emit = () => {
+        const rec = byId.get(id);
+        onPinned(rec && rec.sha256 ? rec : null);
+      };
+      return _onChurchDocs(cp, {
+        emit,
+        want: [PINSERMON_D],
+        onevent(e, d) {
+          if (d !== PINSERMON_D + cp) return;
+          if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
+            if (_churchVoice(cp, { _by: e.pubkey })) {
+              _forgetById(versions, byId, id, e.pubkey, e.created_at, _trust, { churchPub: cp, targets: _tombstoneTargets(e) });
+              emit();
+            }
             return;
           }
           try {
             const p = JSON.parse(e.content);
-            onPinned(p && p.sha256 ? { ...p, at: e.created_at } : null);
+            _absorbById(versions, byId, id, { ...p, at: e.created_at, ts: e.created_at, _by: e.pubkey }, _trust);
+            emit();
           } catch {
-            onPinned(null);
           }
         },
+        onroster() {
+          _reduceAll(versions, byId, _trust);
+          emit();
+        },
         oneose() {
+          emit();
         }
       });
-      return () => {
-        try {
-          sub.close();
-        } catch {
-        }
-      };
     },
     // fetch a member-gated blob: sign a NIP-98 proof bound to the URL, download it, VERIFY the sha256 (content-
     // addressing = tamper-evident), optionally decrypt, and return an object URL the <audio>/<video> can play.

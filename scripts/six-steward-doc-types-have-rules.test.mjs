@@ -55,6 +55,16 @@
 //
 // FIVE ACTORS, EVERY TYPE, ON ONE RELAY CARRYING TWO CHURCHES. The cross-tenant row is not decoration:
 // `groupkey:` (2026-09-17) and `voice:` (2026-08-25) were both found by asking exactly it.
+//
+// ⚠ UPDATED 2026-09-25. `sermon:` and `backup-meta:` are RE-GRANTED to a rostered steward (option A,
+// TrinityOne-internal/reference/PLAN-delegated-steward-publishing.md), now that every reader named above has
+// been taught to accept a rostered steward's `['church', cp]`-tagged copy — `_openSermons` and both
+// `subscribePinnedSermon`s in the two engines, `subscribeSermons`, and `subscribeBackupMeta`. The MATRIX and
+// the two tests further down that pinned the withdrawal are updated to match; the sentences above this line
+// are left as written because they are the accurate history of WHY the withdrawal happened, which is still
+// true and still the reason the re-grant needed the readers fixed first. See
+// scripts/a-delegated-stewards-backup-meta-reaches-the-console.test.mjs and
+// scripts/a-delegated-stewards-sermons-reach-a-member-phone.test.mjs for the reader-side proof.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -170,12 +180,20 @@ const SHAPES = {
 };
 
 // WHO MAY WRITE EACH ONE — the table this commit exists to write down. `true` = must be ACKed.
+//
+// ⚠ UPDATED 2026-09-25 (option A, PLAN-delegated-steward-publishing.md, Phase 1 + 2). `sermon:` and
+// `backup-meta:` were re-granted to a rostered steward once their readers were fixed to actually serve a
+// steward-signed copy — see the two dedicated test files named at the bottom of this file's header comment.
+// `sermon:` needs the CONTENT capability (it is congregation-facing, the same bar as msgtags); `backup-meta:`
+// needs only 'any' (its whole point is that ANY steward taking a backup resets everyone's nudge), so a
+// steward scoped to finance-only — refused for sermon: — is ACCEPTED for backup-meta:. Neither of the last
+// two columns changes: a steward of a co-tenant church, and a plain member, still have no authority here.
 const MATRIX = {
   //                          church  network  steward+member  steward scoped   steward of   plain
   //                          key     of A     all capabilities to finance only  church B     member
-  'trinityone/sermon:':      [true,   true,    false,           false,           false,       false],
+  'trinityone/sermon:':      [true,   true,    true,            false,           false,       false],
   'trinityone/msgtags':      [true,   true,    true,            false,           false,       false],
-  'trinityone/backup-meta:': [true,   true,    false,           false,           false,       false],
+  'trinityone/backup-meta:': [true,   true,    true,            true,            false,       false],
   'trinityone/mediakey:':    [true,   true,    false,           false,           false,       false],
   'trinityone/manna-':       [true,   true,    false,           false,           false,       false],
   'trinityone/relays':       [true,   false,   false,           false,           false,       false],
@@ -243,40 +261,37 @@ test('a steward cannot write the trusted-relay list even when the envelope NAMES
     'the church key can no longer write its own trusted-relay list with a church tag present');
 });
 
-// ── THE TWO GRANTS THAT WERE WITHDRAWN, AND WHY THAT IS NOT THE INCOHERENCE COMING BACK ──────────────────
-test('a content steward may FEATURE a sermon and may not PUBLISH one, and neither reaches a reader', async () => {
-  // AUDIT-steward-doc-rules-2026-09-22 F1, owner's decision "go with B". The commit this replaces argued
-  // that granting `sermon:` to a content steward closed an incoherence: the relay let such a steward FEATURE
-  // a sermon (pinsermon: has been in the content branch since that branch was written) while the catch-all
-  // decided whether they could PUBLISH one.
-  //
-  // THE ARGUMENT DOES NOT SURVIVE THE READER. Both halves are invisible from a delegated console, measured:
-  // subscribePinnedSermon filters `authors:[pub]` exactly as _openSermons and subscribeSermons do, so a
-  // steward-authored pin lights no star and a steward-authored sermon reaches no list. The two therefore
-  // AGREE in the only place the incoherence was ever claimed to matter — what a human can see — and the
-  // asymmetry that is left is a write rule, not a user-visible one.
-  //
-  // WHY pinsermon: KEEPS ITS GRANT AND sermon: DOES NOT: pinsermon: predates all of this and narrowing it is
-  // an unmeasured behaviour change nobody has asked for; sermon:'s grant was one day old and was measured
-  // inert on all three readers. Both become real together, and only together, when the readers learn to
-  // accept a rostered steward's signature — a member-app change, so a member APK build and a device run.
-  // See TrinityOne-internal/reference/PLAN-delegated-steward-publishing.md.
+// ── THE TWO GRANTS THAT WERE WITHDRAWN, AND ARE NOW REAL ON BOTH SIDES ───────────────────────────────────
+test('a content steward may FEATURE a sermon AND PUBLISH one, and BOTH now reach a reader', async () => {
+  // AUDIT-steward-doc-rules-2026-09-22 F1 withdrew this grant because the readers could not serve it —
+  // measured 0 rows on all three shipped readers for a delegated steward's church-tagged `sermon:`. Option A
+  // (PLAN-delegated-steward-publishing.md) closed that gap 2026-09-25: `_openSermons` and both
+  // `subscribePinnedSermon`s (src/fellowship.src.js, src/steward.src.js) and `subscribeSermons`
+  // (src/steward.src.js) all now accept `authors:[cp]` OR `'#church':[cp]`, trusting only a currently
+  // rostered author. The RELAY-SIDE half is what this test pins; the READER-SIDE half — that a member phone
+  // and the publishing steward's own console genuinely display it — is proven in
+  // scripts/a-delegated-stewards-sermons-reach-a-member-phone.test.mjs, which is the one this grant would be
+  // worthless without.
   const pin = await publishAs(sm, doc(sm, D.PINSERMON + church.pub, { id: 's1', title: 'Sunday', sha256: 'aa' }, [['church', church.pub]]));
   assert.equal(pin[2], true,
-    'pinsermon: has been narrowed as a side effect of withdrawing the sermon: grant. That is a behaviour ' +
-    'change of its own and belongs in its own package — ' + JSON.stringify(pin));
+    'a content steward can no longer feature a sermon — pinsermon: has been narrowed. Frame: ' + JSON.stringify(pin));
   const put = await publishAs(sm, SHAPES['trinityone/sermon:'](sm));
-  assert.equal(put[2], false,
-    'A DELEGATED STEWARD PUBLISHED A SERMON. Every shipped reader filters authors:[churchpub], so the relay ' +
-    'would be storing it and serving it to nobody — including the console that wrote it — while DashSermons ' +
-    'prints "✓ Uploaded … · members notified". Frame: ' + JSON.stringify(put));
-  // …and it is decided by its own branch, not by being absent from the content branch, so the next edit to
-  // that list cannot hand it back by accident.
-  assert.match(GATEWAY_CODE, /if \(d\.startsWith\(SERMON_D\)\) return leaderOf\(ownCp\(\)\);/,
-    'sermon: has lost its own accept() branch. If it is back in the content branch it is delegated again, ' +
-    'and the readers still will not serve it.');
-  assert.doesNotMatch(GATEWAY_CODE, /d\.startsWith\(PINSERMON_D\) \|\| d\.startsWith\(SERMON_D\)/,
-    'sermon: is back in the content-steward branch');
+  assert.equal(put[2], true,
+    'A CONTENT STEWARD WAS REFUSED PUBLISHING A SERMON. The readers now serve a rostered steward\'s ' +
+    'church-tagged copy (option A, 2026-09-25), so this grant should be real again, matching pinsermon:. ' +
+    'Frame: ' + JSON.stringify(put));
+  // …and a steward scoped to FINANCE ONLY — who lacks the content capability — still may not, on either half.
+  const pinFin = await publishAs(smFin, doc(smFin, D.PINSERMON + church.pub, { id: 's1', title: 'Sunday', sha256: 'aa' }, [['church', church.pub]]));
+  assert.equal(pinFin[2], false, 'a finance-only steward can feature a sermon: ' + JSON.stringify(pinFin));
+  const putFin = await publishAs(smFin, SHAPES['trinityone/sermon:'](smFin));
+  assert.equal(putFin[2], false, 'a finance-only steward can publish a sermon: ' + JSON.stringify(putFin));
+  // …and sermon: is decided in the SAME branch as pinsermon: now — the readers agree, so the write rule
+  // should too, rather than living in a narrower branch of its own that the next edit could re-diverge.
+  assert.doesNotMatch(GATEWAY_CODE, /if \(d\.startsWith\(SERMON_D\)\) return leaderOf\(ownCp\(\)\);/,
+    'sermon: still has its own church-key-only accept() branch, separate from pinsermon: — the re-grant did not land');
+  assert.match(GATEWAY_CODE, /d\.startsWith\(PINSERMON_D\) \|\| d\.startsWith\(SERMON_D\)/,
+    'sermon: is not in the same content-steward branch as pinsermon: any more — re-anchor this test if the ' +
+    'branch was reshaped rather than reverted');
 });
 
 // ── THE SUFFIX SCOPING THE COMMIT CALLED "STRUCTURALLY IMPOSSIBLE", ASKED IN THE SHAPE THAT CAN ANSWER ────
@@ -383,10 +398,11 @@ test('a steward who never joined the church may write msgtags, and nothing else 
   // front of it asked the relay-wide `isMember`. stewardCan() asks the church's OWN steward roster and
   // nothing else, so a delegate the church appointed can act for it without first joining it as a member.
   //
-  // THE SCOPE OF THE GRANT IS ONE TYPE, and that is the half worth pinning: `sermon:` and `backup-meta:`
-  // were granted to a steward on 2026-09-22 and withdrawn the same day (F1/F2), so for this actor they go
-  // back to refused. If a later edit re-delegates either, this test goes red and the actor table has to be
-  // written again.
+  // THE SCOPE OF THE GRANT WAS ONE TYPE WHEN THIS TEST WAS WRITTEN, and is now three: `sermon:` and
+  // `backup-meta:` were granted to a steward on 2026-09-22, withdrawn the same day (F1/F2) because their
+  // readers could not serve the result, and RE-GRANTED 2026-09-25 (option A) once the readers were fixed —
+  // see PLAN-delegated-steward-publishing.md and the two dedicated test files. `smNoJoin` holds every
+  // capability (ALL_CAPS below), so both are ACCEPTED for them now, same as msgtags.
   const smNoJoin = K();
   const w = await conn();
   // Re-sign A's roster with BOTH stewards on it. Addressable and keyed on (author, d-tag), so it must be
@@ -401,8 +417,8 @@ test('a steward who never joined the church may write msgtags, and nothing else 
   // …and they really never joined: no trinityone/member:<A> document was ever published for this key.
   const want = {
     'trinityone/msgtags': true,          // GRANTED — content steward, read by #church:[cp], reaches members
-    'trinityone/sermon:': false,         // withdrawn 2026-09-22 (F1)
-    'trinityone/backup-meta:': false,    // withdrawn 2026-09-22 (F2)
+    'trinityone/sermon:': true,          // withdrawn 2026-09-22 (F1), RE-GRANTED 2026-09-25 (option A)
+    'trinityone/backup-meta:': true,     // withdrawn 2026-09-22 (F2), RE-GRANTED 2026-09-25 (option A)
     'trinityone/mediakey:': false,
     'trinityone/manna-': false,
     'trinityone/relays': false,
@@ -414,8 +430,7 @@ test('a steward who never joined the church may write msgtags, and nothing else 
         ? 'A STEWARD THIS CHURCH APPOINTED IS REFUSED BECAUSE THEY HAVE NOT ALSO JOINED IT AS A MEMBER — '
           + 'that is the groupkey: defect of 2026-09-17 coming back. '
         : 'A STEWARD WHO NEVER JOINED THIS CHURCH WROTE ' + type + '. That is a grant nobody has recorded; '
-          + 'if it is deliberate it belongs in the actor table, and if it is sermon: or backup-meta: it is '
-          + 'the withdrawal of 2026-09-22 being undone. ')
+          + 'if it is deliberate it belongs in the actor table. ')
       + type + ' — the relay answered: ' + JSON.stringify(frame));
   }
 });

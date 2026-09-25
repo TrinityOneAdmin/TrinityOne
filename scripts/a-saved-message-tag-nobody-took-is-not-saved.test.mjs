@@ -204,43 +204,67 @@ test('publishSermon still rejects on a refusal — the one that was already righ
   await assert.rejects(no.call(), /every relay rejected it/, 'publishSermon has lost its refusal check');
 });
 
-// ── THE TWO GRANTS THAT WERE WITHDRAWN: THE CONSOLE SAYS SO INSTEAD OF ASKING ────────────────────────────
-// AUDIT-steward-doc-rules-2026-09-22, F1 + F2, owner's decision "go with B". `trinityone/sermon:` and
-// `trinityone/backup-meta:` are church-key-only at the relay, because EVERY shipped reader of both filters
-// `authors:[churchpub]` — so a delegated steward's copy was stored, served to nobody (that console
-// included), and reported as a success. A delegated console must therefore not ask at all, and must say
-// which refusal it is: "no relay accepted it" sends somebody to look at a connection that is working.
-test('publishSermon refuses on a DELEGATED console, before anything is sent', async () => {
-  const no = await runLifted('publishSermon(s)', 'publishSermon', { id: 'evt' }, { actingChurch: 'CHURCHPUB' }, [{ title: 'Sunday', sha256: 'aa', host: 'h' }]);
-  await assert.rejects(no.call(), /Only the church’s own console can publish a sermon/,
-    'A DELEGATED CONSOLE STILL PUBLISHES A SERMON. The relay refuses it and, even if it did not, ' +
-    '_openSermons / subscribeSermons / subscribePinnedSermon all filter authors:[churchpub], so it reaches ' +
-    'nobody — including this console\'s own list — while the screen says "members notified".');
-  assert.equal(no.published.length, 0, 'it asked the relay anyway, so the steward gets a connection error instead of the reason');
+// ── THE TWO GRANTS THAT WERE WITHDRAWN, AND ARE RE-GRANTED (option A, PLAN-delegated-steward-publishing.md) ─
+// AUDIT-steward-doc-rules-2026-09-22, F1 + F2, owner's decision "go with B", withdrew `trinityone/sermon:`
+// and `trinityone/backup-meta:` to church-key-only because EVERY shipped reader of both filtered
+// `authors:[churchpub]` — a delegated steward's copy was stored, served to nobody, and reported as a
+// success. Option A fixed the readers (2026-09-25) and these two guards — added the SAME day as the
+// withdrawal, to stop a delegated console asking at all — came out again: `publishSermon`/`removeSermon` now
+// really ask the relay on every console, and report whatever it answers, exactly like every other write in
+// this file. WHICH stewards the relay actually grants this to (a content steward, not a finance-only one)
+// is the relay's own decision and is proven in scripts/six-steward-doc-types-have-rules.test.mjs; this
+// harness has no roster or capability concept, so `answer` stands in for whatever the relay decided.
+test('publishSermon now really asks the relay on a DELEGATED console too, and reports the answer', async () => {
+  const yes = await runLifted('publishSermon(s)', 'publishSermon', { id: 'evt' }, { actingChurch: 'CHURCHPUB' }, [{ title: 'Sunday', sha256: 'aa', host: 'h' }]);
+  const out = await yes.call();
+  assert.ok(out && out.sha256 === 'aa',
+    'A DELEGATED CONSOLE CAN NO LONGER PUBLISH A SERMON AT ALL — the 2026-09-22 short-circuit is still here, ' +
+    'and the relay/reader re-grant this commit makes is inert without this half. Got: ' + JSON.stringify(out));
+  assert.equal(yes.published.length, 1, 'a delegated console did not even try to publish');
+  // …and a genuine relay refusal (a steward the church has not given the content capability) still throws,
+  // exactly as it always has for the owner's own console.
+  const no = await runLifted('publishSermon(s)', 'publishSermon', false, { actingChurch: 'CHURCHPUB' }, [{ title: 'Sunday', sha256: 'aa', host: 'h' }]);
+  await assert.rejects(no.call(), /every relay rejected it/,
+    'a genuine refusal on a delegated console is no longer reported honestly');
 });
 
-test('removeSermon refuses on a DELEGATED console, and deletes no bytes', async () => {
-  const deletes = [];
+test('removeSermon now really asks the relay on a DELEGATED console too, and only deletes bytes when the tombstone lands', async () => {
   const sermon = { id: 's1', sha256: 'abc123', hosts: ['https://one.example', 'https://two.example'] };
-  const no = await runLifted('async removeSermon(s)', 'removeSermon', { id: 'evt' },
+  const deletes = [];
+  const yes = await runLifted('async removeSermon(s)', 'removeSermon', { id: 'evt' },
     { actingChurch: 'CHURCHPUB', fetch: async (u, o) => { deletes.push(u + ' ' + (o && o.method)); return { ok: true }; } }, [sermon]);
-  await assert.rejects(no.call(), /Only the church’s own console can remove a sermon/,
-    'a delegated console still tries to tombstone a sermon — the relay refuses that write, and the blob ' +
-    'deletes below it must never run over a refusal');
-  assert.deepEqual(deletes, [], 'THE BLOB BYTES WERE DELETED ON A CONSOLE THAT CANNOT TOMBSTONE THE DOCUMENT: ' + JSON.stringify(deletes));
-  assert.equal(no.published.length, 0, 'it published a tombstone the relay was always going to refuse');
+  assert.equal(await yes.call(), true,
+    'A DELEGATED CONSOLE CAN NO LONGER REMOVE A SERMON AT ALL — the 2026-09-22 short-circuit is still here');
+  assert.equal(deletes.length, 2, 'an accepted tombstone on a delegated console no longer reclaims the stored bytes: ' + JSON.stringify(deletes));
+  // …and a genuine refusal still deletes NOTHING — the ordering guard above this line (tombstone first,
+  // bytes only if it landed) must still hold now that a delegated console reaches it at all.
+  const deletes2 = [];
+  const no = await runLifted('async removeSermon(s)', 'removeSermon', false,
+    { actingChurch: 'CHURCHPUB', fetch: async (u, o) => { deletes2.push(u + ' ' + (o && o.method)); return { ok: true }; } }, [sermon]);
+  await assert.rejects(no.call(), /nothing was deleted/, 'a refused tombstone on a delegated console is no longer reported honestly');
+  assert.deepEqual(deletes2, [],
+    'THE BLOB BYTES WERE DELETED ON A DELEGATED CONSOLE OVER A REFUSED TOMBSTONE: ' + JSON.stringify(deletes2));
 });
 
-test('setBackupMeta answers false on a DELEGATED console, without asking', async () => {
-  const no = await runLifted('setBackupMeta(at, remind)', 'setBackupMeta', { id: 'evt' }, { actingChurch: 'CHURCHPUB' }, [1700000000, 'monthly']);
-  assert.equal(await no.call(), false,
-    'setBackupMeta reports success on a delegated console. subscribeBackupMeta filters authors:[churchpub], ' +
-    'so a steward-authored record resets NOBODY\'s overdue nudge — the screen must say so.');
-  assert.equal(no.published.length, 0, 'it published a record the relay refuses and no console reads');
-  // …and the owner console is untouched: it still asks, and still reports what it got.
-  const yes = await runLifted('setBackupMeta(at, remind)', 'setBackupMeta', { id: 'evt' }, { actingChurch: '' }, [1700000000, 'monthly']);
-  assert.notEqual(await yes.call(), false, 'the owner console now believes it cannot save the shared backup record either');
-  assert.equal(yes.published.length, 1, 'the owner console stopped publishing the shared backup record');
+// ⚠ UPDATED 2026-09-25 (option A, Phase 1, PLAN-delegated-steward-publishing.md). This test used to be named
+// "setBackupMeta answers false on a DELEGATED console, without asking" and asserted the `if (actingChurch)
+// return Promise.resolve(false)` short-circuit added 2026-09-22. subscribeBackupMeta now accepts a rostered
+// steward's `['church', cp]`-tagged copy (src/steward.src.js + src/church-doc-store.src.js) and the relay's
+// accept() grants `stewardCan(e.pubkey, cp, 'any')` again (scripts/gateway.mjs) — proven end to end in
+// scripts/a-delegated-stewards-backup-meta-reaches-the-console.test.mjs. What THIS file still owns is the
+// narrower H1 question: does setBackupMeta report what publish() actually answered, on EVERY console, rather
+// than discarding it (the original defect) or hard-coding an answer (the 2026-09-22 short-circuit, which was
+// itself a discard of a different kind — it discarded the question).
+test('setBackupMeta now really asks the relay on a DELEGATED console too, and reports the answer', async () => {
+  const yes = await runLifted('setBackupMeta(at, remind)', 'setBackupMeta', { id: 'evt' }, { actingChurch: 'CHURCHPUB' }, [1700000000, 'monthly']);
+  assert.notEqual(await yes.call(), false,
+    'setBackupMeta still refuses to even ask the relay on a delegated console — the 2026-09-22 short-circuit ' +
+    'is still here, and the re-grant this commit makes is inert without this half');
+  assert.equal(yes.published.length, 1, 'a delegated console did not publish the record at all');
+  // …and the owner console is unchanged: it still asks, and still reports what it got.
+  const owner = await runLifted('setBackupMeta(at, remind)', 'setBackupMeta', { id: 'evt' }, { actingChurch: '' }, [1700000000, 'monthly']);
+  assert.notEqual(await owner.call(), false, 'the owner console now believes it cannot save the shared backup record either');
+  assert.equal(owner.published.length, 1, 'the owner console stopped publishing the shared backup record');
 });
 
 
@@ -492,12 +516,20 @@ test('THE SCREEN: changing the backup REMINDER says so too — the second caller
   // weekly / monthly / off segment — was still fire-and-forget inside a try/catch, so a steward picked
   // "Weekly", watched the segment move to Weekly, and every other console went on nudging monthly with
   // nothing on any screen saying so.
-  const run = async ({ metaAnswer, delegated }) => {
+  //
+  // ⚠ UPDATED 2026-09-25 (option A, Phase 1). `delegated: true` on its own no longer means locked — the
+  // relay grants ANY steward with a single capability this write (`stewardCan(…, 'any')`), so an ordinary
+  // delegate (no `caps` stubbed, i.e. unscoped — the common case) now behaves exactly like the owner: it
+  // asks, and reports whatever the relay answered. `caps: []` is the one case still locked, and needs its
+  // own call-count check because "the button says the right thing" is not "the press never happened".
+  const run = async ({ metaAnswer, delegated, caps }) => {
     const { React, draw } = miniReact();
+    let calls = 0;
     const win = {
       Steward: {
         actingChurch: delegated ? 'CHURCHPUB' : '',
-        setBackupMeta: async () => metaAnswer,
+        myStewardCaps: () => (delegated ? (caps === undefined ? null : caps) : null),
+        setBackupMeta: async () => { calls++; return metaAnswer; },
         subscribeBackupMeta: () => () => {},
         mediaSize: async () => ({ count: 0, bytes: 0 }),
       },
@@ -514,12 +546,12 @@ test('THE SCREEN: changing the backup REMINDER says so too — the second caller
       await ticks(12);
       tree = render();
     };
-    return { press, said: () => reads(tree) };
+    return { press, said: () => reads(tree), calls: () => calls };
   };
 
   const ok = await run({ metaAnswer: { id: 'evt' }, delegated: false });
   await ok.press('Weekly');
-  assert.doesNotMatch(ok.said(), /could not be saved|Only the church/,
+  assert.doesNotMatch(ok.said(), /could not be saved|hasn’t given you/,
     'a cadence change every relay accepted is being reported as a failure. Screen read: ' + ok.said());
 
   const no = await run({ metaAnswer: false, delegated: false });
@@ -528,10 +560,20 @@ test('THE SCREEN: changing the backup REMINDER says so too — the second caller
     'THE CADENCE CONTROL IS STILL FIRE-AND-FORGET. The segment moves to Weekly on this console while every ' +
     'other steward goes on being nudged monthly, and nothing on any screen says so. Screen read: ' + no.said());
 
+  // an ORDINARY delegate — unscoped, the shape most stewards actually have — now asks the relay too, same
+  // as the owner, and reports the SAME relay problem rather than a permanent one that no longer exists.
   const dele = await run({ metaAnswer: false, delegated: true });
   await dele.press('Weekly');
-  assert.match(dele.said(), /Only the church’s own console can save the shared backup record/,
-    'a delegated console is told to check its connection over a refusal that is permanent. Screen read: ' + dele.said());
+  assert.equal(dele.calls(), 1, 'AN ORDINARY DELEGATE’S PRESS NEVER REACHED THE RELAY — the re-grant did not reach the screen');
+  assert.match(dele.said(), /the shared backup record could not be saved/,
+    'an ordinary delegate is told about a permanent refusal that no longer applies to them. Screen read: ' + dele.said());
+
+  // …and the one steward still genuinely locked: explicitly scoped to NOTHING.
+  const scoped = await run({ metaAnswer: false, delegated: true, caps: [] });
+  await scoped.press('Weekly');
+  assert.equal(scoped.calls(), 0, 'A STEWARD SCOPED TO NOTHING STILL REACHED THE RELAY: ' + scoped.calls());
+  assert.match(scoped.said(), /scoped you away from every capability/,
+    'a steward scoped to nothing is told to check their connection over a refusal that is permanent. Screen read: ' + scoped.said());
 });
 
 // ── THE CONTROL, NOT THE LABEL: NOT ONE BYTE GOES UP ON A CONSOLE THAT MAY NOT PUBLISH ───────────────────
@@ -547,32 +589,41 @@ test('THE SCREEN: changing the backup REMINDER says so too — the second caller
 // settings are driven below. The three controls that write `trinityone/sermon:` — Upload, Edit and Remove
 // — are asserted to be MARKED as well, because a live control on a console that can never use it is the
 // [[fix-the-control-not-the-label]] shape whatever the engine says afterwards.
-async function sermonsPanel({ delegated, encOn, list = [] }) {
+// `caps` says which steward this is, when `delegated` — default ['content'] (a fully-granted delegate),
+// matching every caller written before option A, Phase 2 (2026-09-25) existed. Pass `caps: ['finance']` (or
+// `[]`) for the one case that is still real: a steward this church has NOT given the content capability.
+async function sermonsPanel({ delegated, caps, encOn, list = [] }) {
   const { React, draw } = miniReact();
   const order = [];
+  const hasContent = !delegated || (caps || ['content']).includes('content');
   const win = {
     Steward: {
       actingChurch: delegated ? 'CHURCHPUB' : '',
-      myStewardCaps: () => ['content'],   // a fully-granted delegate: no capability is what refuses here
+      myStewardCaps: () => (delegated ? (caps || ['content']) : null),
       subscribeSermons: (cb) => { cb(list); return () => {}; },
       subscribePinnedSermon: (cb) => { cb(null); return () => {}; },
       subscribeMediaKey: () => () => {},
       mediaHosts: () => [],
       // THE ENGINE'S REAL ANSWERS, from src/steward.src.js — never a stand-in for the decision under test,
       // which is whether the SCREEN reaches them at all.
+      //
+      // mediaEncryptor IS UNCHANGED BY OPTION A: the media-key envelope (mediakey:) stays church-key-only
+      // regardless of any capability a church can tick, so it refuses on ANY delegated console whatever
+      // `caps` says — src/steward.src.js's mediaEncryptor asks the relay directly and mediakey: has no
+      // steward branch at all.
       mediaEncryptor: async () => {
         order.push('mediaEncryptor');
         if (delegated) throw new Error('Can’t encrypt this upload — your church’s media key could not be saved. Nothing has been uploaded.');
         return async (b) => b;
       },
       uploadBlob: async () => { order.push('uploadBlob'); return { sha256: 'deadbeef', host: 'h', hosts: ['h'], mime: 'audio/mp4', size: 10, enc: false }; },
-      publishSermon: async (d) => {
-        order.push('publishSermon');
-        if (delegated) throw new Error('Only the church’s own console can publish a sermon. Ask whoever holds the church key.');
-        return { id: 's9', ...d };
-      },
+      // publishSermon/removeSermon ask the relay on EVERY console now (option A, Phase 2) and the relay
+      // grants a CONTENT steward the same write as the church key — so a call that reaches this stub at all
+      // is expected to SUCCEED; the panel's OWN pre-press gate (`_churchOnly`, tested via `marked`/`said`
+      // below) is what must stop the press from ever reaching here for a steward without content.
+      publishSermon: async (d) => { order.push('publishSermon'); return { id: 's9', ...d }; },
       pinSermon: async () => { order.push('pinSermon'); return { id: 'x' }; },
-      removeSermon: async () => { order.push('removeSermon'); throw new Error('Only the church’s own console can remove a sermon. Nothing was deleted.'); },
+      removeSermon: async () => { order.push('removeSermon'); return true; },
     },
     localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
     addEventListener() {}, removeEventListener() {},
@@ -617,17 +668,26 @@ const TRASH_BTN = (n) => (n.props && n.props['aria-label']) === 'Remove sermon';
 const PEN_BTN = (n) => (n.props && n.props['aria-label']) === 'Edit sermon';
 const SERMON1 = [{ id: 's1', title: 'Sunday morning', sha256: 'aa', size: 10, mime: 'audio/mp4' }];
 
+// ⚠ UPDATED 2026-09-25 (option A, Phase 2). Until this date `sermon:` was church-key-only, so EVERY
+// delegated console — any capability, any roster — was refused, and the loop below covered that with one
+// fixture. It is now a CONTENT steward's write, so the loop splits in two: a steward WITHOUT content is
+// still refused exactly as before (never reaching the engine at all); a steward WITH it now behaves like
+// the owner for an UNENCRYPTED upload, and is STILL refused for an ENCRYPTED one — not by sermon:'s own
+// rule, but because the media-key envelope (mediakey:) stays church-key-only regardless of any capability
+// (see mediaEncryptor's note in sermonsPanel above). Encrypt ON is therefore the one case where a
+// content-capable delegate's Upload button is UNLOCKED and the press still ends in a refusal, just a
+// different one — proof that the two gates are independent and neither one is standing in for the other.
 for (const encOn of [false, true]) {
-  test('THE SCREEN: a delegated console sends NO BYTES for a sermon — Encrypt ' + (encOn ? 'ON' : 'OFF'), async () => {
-    const p = await sermonsPanel({ delegated: true, encOn, list: SERMON1 });
+  test('THE SCREEN: a steward WITHOUT content sends NO BYTES for a sermon — Encrypt ' + (encOn ? 'ON' : 'OFF'), async () => {
+    const p = await sermonsPanel({ delegated: true, caps: ['finance'], encOn, list: SERMON1 });
     assert.equal(p.marked(UPLOAD_BTN, 'Upload button'), true,
-      'THE UPLOAD CONTROL IS STILL OFFERED on a console that can never publish a sermon. (It is aria-disabled ' +
+      'THE UPLOAD CONTROL IS STILL OFFERED on a console that cannot publish a sermon. (It is aria-disabled ' +
       'rather than disabled on purpose — the press must still be able to answer on a phone, where there is ' +
       'no hover and so no tooltip — but it must be MARKED.)');
     await p.press(UPLOAD_BTN, 'Upload button');
     assert.deepEqual(p.order, [],
-      'PRESSING UPLOAD STARTED WORK ON A DELEGATED CONSOLE: ' + JSON.stringify(p.order));
-    assert.match(p.said(), /Only the church’s own console can publish a sermon/,
+      'PRESSING UPLOAD STARTED WORK ON A STEWARD WITHOUT CONTENT: ' + JSON.stringify(p.order));
+    assert.match(p.said(), /Your church hasn’t given you Groups & rotas/,
       'the locked Upload button said nothing when it was pressed. Screen read: ' + p.said());
     // …and the funnel behind the control, which is the path that actually spent the bytes.
     await p.pickFile();
@@ -636,23 +696,56 @@ for (const encOn of [false, true]) {
       'THE BLOB WENT UP BEFORE THE REFUSAL. uploadBlob ran and nothing then referenced those bytes — an ' +
       'orphan on the host, for a file that is routinely hundreds of MB, and orphan-blob GC is not built. ' +
       'Order: ' + JSON.stringify(p.order));
-    assert.match(p.said(), /Only the church’s own console can publish a sermon/,
+    assert.match(p.said(), /Your church hasn’t given you Groups & rotas/,
       'the naming modal closed or said nothing over the refusal. Screen read: ' + p.said());
   });
 }
 
-test('THE SCREEN: a delegated console opens no “can’t be undone” sheet over a removal it cannot do', async () => {
-  const p = await sermonsPanel({ delegated: true, encOn: false, list: SERMON1 });
+test('THE SCREEN: a CONTENT steward uploads an UNENCRYPTED sermon just like the owner', async () => {
+  const p = await sermonsPanel({ delegated: true, caps: ['content'], encOn: false, list: SERMON1 });
+  assert.equal(p.marked(UPLOAD_BTN, 'Upload button'), false,
+    'A CONTENT STEWARD IS STILL LOCKED OUT of publishing a sermon — the re-grant did not reach the screen');
+  await p.pickFile();
+  await p.press(n => reads(n).trim() === 'Upload', 'Upload button in the naming modal');
+  assert.deepEqual(p.order, ['uploadBlob', 'publishSermon', 'pinSermon'],
+    'a content steward no longer uploads and publishes a sermon: ' + JSON.stringify(p.order));
+  assert.match(p.said(), /✓ Uploaded/, 'a content steward’s successful upload is not reported. Screen read: ' + p.said());
+});
+
+test('THE SCREEN: a CONTENT steward’s ENCRYPTED upload is still refused — by the media key, not by sermon:', async () => {
+  const p = await sermonsPanel({ delegated: true, caps: ['content'], encOn: true, list: SERMON1 });
+  assert.equal(p.marked(UPLOAD_BTN, 'Upload button'), false,
+    'a content steward’s Upload button is locked even though sermon: itself no longer refuses them');
+  await p.pickFile();
+  await p.press(n => reads(n).trim() === 'Upload', 'Upload button in the naming modal');
+  assert.deepEqual(p.order, ['mediaEncryptor'],
+    'THE BLOB WENT UP, OR THE WRONG GATE FIRED: expected only mediaEncryptor to run before the refusal. Order: ' + JSON.stringify(p.order));
+  assert.match(p.said(), /media key could not be saved/,
+    'the refusal is not naming the media key, which is the ONLY reason left for a content steward to be ' +
+    'refused an encrypted sermon. Screen read: ' + p.said());
+});
+
+test('THE SCREEN: a steward WITHOUT content opens no “can’t be undone” sheet over a removal it cannot do', async () => {
+  const p = await sermonsPanel({ delegated: true, caps: ['finance'], encOn: false, list: SERMON1 });
   assert.equal(p.marked(TRASH_BTN, 'Remove (trash) button'), true, 'the Remove control is still offered unmarked');
   assert.equal(p.marked(PEN_BTN, 'Edit (pen) button'), true, 'the Edit control is still offered unmarked — editing re-publishes the same sermon: document');
   await p.press(TRASH_BTN, 'Remove (trash) button');
   assert.equal(p.labelled('Remove'), 0,
-    'THE CONFIRMATION SHEET OPENED. A delegated console cannot tombstone a sermon, so "It disappears from ' +
-    'members’ apps and the stored file is deleted … This can’t be undone" is put in front of somebody over ' +
-    'something that cannot happen, and the refusal arrives only after they commit to it.');
+    'THE CONFIRMATION SHEET OPENED. A steward without content cannot tombstone a sermon, so "It disappears ' +
+    'from members’ apps and the stored file is deleted … This can’t be undone" is put in front of somebody ' +
+    'over something that cannot happen, and the refusal arrives only after they commit to it.');
   assert.deepEqual(p.order, [], 'the engine was reached anyway: ' + JSON.stringify(p.order));
-  assert.match(p.said(), /Only the church’s own console can remove a sermon/,
+  assert.match(p.said(), /Your church hasn’t given you Groups & rotas/,
     'the locked Remove button said nothing when it was pressed. Screen read: ' + p.said());
+});
+
+test('THE SCREEN: a CONTENT steward’s removal opens the sheet and really removes the sermon', async () => {
+  const p = await sermonsPanel({ delegated: true, caps: ['content'], encOn: false, list: SERMON1 });
+  assert.equal(p.marked(TRASH_BTN, 'Remove (trash) button'), false, 'a content steward’s Remove button is still locked');
+  await p.press(TRASH_BTN, 'Remove (trash) button');
+  assert.equal(p.labelled('Remove'), 1, 'a content steward never sees the removal confirmation at all');
+  await p.press(n => reads(n).trim() === 'Remove', 'Remove button in the confirmation dialog');
+  assert.deepEqual(p.order, ['removeSermon'], 'a content steward’s removal did not reach the engine: ' + JSON.stringify(p.order));
 });
 
 test('THE SCREEN: the OWNER console still uploads, publishes and removes — the other direction', async () => {
@@ -687,7 +780,11 @@ test('THE SCREEN: the OWNER console still uploads, publishes and removes — the
 // THESE TESTS SUPPLY `localStorage` EXPLICITLY. BASE_GLOBALS above does not, and the panels call it bare,
 // so every such call lands in its own `catch {}` (round-2 audit R9) — an assertion about the key would be
 // vacuous and green without this.
-async function cadencePanel({ delegated, metaAnswer, start = 'monthly' }) {
+// `caps` — option A, Phase 1 (2026-09-25): the relay now grants ANY steward with a single capability this
+// write, not the church key alone, so `delegated` on its own no longer means locked. Default `null`
+// (unscoped, the ordinary/most common steward shape) matches every existing caller's original intent; pass
+// `caps: []` for the one shape that is still genuinely locked — a steward scoped to NOTHING.
+async function cadencePanel({ delegated, metaAnswer, start = 'monthly', caps = null }) {
   const { React, draw } = miniReact();
   const store = { 'trinityone.backupRemind': start };
   const localStorage = { getItem: (k) => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = String(v); }, removeItem: (k) => { delete store[k]; } };
@@ -696,7 +793,7 @@ async function cadencePanel({ delegated, metaAnswer, start = 'monthly' }) {
   const win = {
     Steward: {
       actingChurch: delegated ? 'CHURCHPUB' : '',
-      myStewardCaps: () => ['content'],
+      myStewardCaps: () => (delegated ? caps : null),
       setBackupMeta: async (at, remind) => { asked.push(remind); return metaAnswer; },
       subscribeBackupMeta: (cb) => { churchDoc = cb; return () => {}; },
       mediaSize: async () => ({ count: 0, bytes: 0 }),
@@ -724,11 +821,15 @@ async function cadencePanel({ delegated, metaAnswer, start = 'monthly' }) {
   };
 }
 
-test('THE SCREEN: the cadence segment is locked on a delegated console, and the press changes nothing anywhere', async () => {
-  const p = await cadencePanel({ delegated: true, metaAnswer: false });
+test('THE SCREEN: the cadence segment is locked for a steward scoped to NOTHING, and the press changes nothing anywhere', async () => {
+  // `caps: []` — explicit and empty, the compat rule's own "means nothing, not everything" exception. An
+  // ORDINARY delegate (unscoped, or with any one capability) is covered by the companion test in "THE
+  // SCREEN: changing the backup REMINDER…" above, which shows the segment now asks the relay just like the
+  // owner's console — option A, Phase 1, re-granted `stewardCan(…, 'any')`.
+  const p = await cadencePanel({ delegated: true, metaAnswer: false, caps: [] });
   assert.equal(p.marked('Weekly'), true,
-    'the cadence control is still offered on a console that cannot change it — the relay gates ' +
-    'trinityone/backup-meta: to the church key, so this press can reach nothing');
+    'the cadence control is still offered on a console that cannot change it — a steward scoped to nothing ' +
+    'still cannot reach this write');
   await p.press('Weekly');
   assert.deepEqual(p.asked, [],
     'it asked the relay anyway, so the steward waits on a write that is always refused: ' + JSON.stringify(p.asked));
@@ -738,7 +839,7 @@ test('THE SCREEN: the cadence segment is locked on a delegated console, and the 
     'other console until the next document arrives. Stored: ' + p.stored());
   assert.equal(p.lit(), 'Monthly',
     'the segment moved to a cadence nothing will ever nudge at. Lit: ' + p.lit());
-  assert.match(p.said(), /Only the church’s own console can save the shared backup record/,
+  assert.match(p.said(), /scoped you away from every capability/,
     'the locked cadence control said nothing when it was pressed. Screen read: ' + p.said());
 });
 
@@ -1218,31 +1319,44 @@ test('THE CLEARS: an envelope ARRIVING makes the console ask again too', async (
 //       the ONLY marking a steward sees before they press.
 //
 // The two tests below are those rows, at the point of use. Nothing here matches text in app/*.jsx.
-test('THE SCREEN: the pen opens no edit form on a delegated console — the refusal is not at Save', async () => {
-  const p = await sermonsPanel({ delegated: true, encOn: false, list: SERMON1 });
+test('THE SCREEN: the pen opens no edit form for a steward WITHOUT content — the refusal is not at Save', async () => {
+  // `caps: ['finance']`, not the default — sermon: is a CONTENT grant now (option A, Phase 2), so this is
+  // the one steward shape still refused. See the companion test just below for the one that is not.
+  const p = await sermonsPanel({ delegated: true, caps: ['finance'], encOn: false, list: SERMON1 });
   assert.equal(p.labelled('Save'), 0, 'fixture: something is already offering Save before the pen is pressed');
   await p.press(PEN_BTN, 'Edit (pen) button');
   assert.equal(p.labelled('Save'), 0,
-    'THE EDIT MODAL OPENED ON A DELEGATED CONSOLE. `sermon:` is church-key-only, so the steward types a ' +
-    'title and a description and meets the refusal only when they press Save — which is the exact flow ' +
-    'this panel’s fix says it prevents. `aria-disabled` does not stop a click; the press handler has to.');
+    'THE EDIT MODAL OPENED FOR A STEWARD WITHOUT CONTENT. The steward types a title and a description and ' +
+    'meets the refusal only when they press Save — which is the exact flow this panel’s fix says it ' +
+    'prevents. `aria-disabled` does not stop a click; the press handler has to.');
   assert.deepEqual(p.order, [], 'the engine was reached by the pen: ' + JSON.stringify(p.order));
-  assert.match(p.said(), /Only the church’s own console can publish a sermon/,
+  assert.match(p.said(), /Your church hasn’t given you Groups & rotas/,
     'the locked pen said nothing when it was pressed. Screen read: ' + p.said());
 });
 
-test('THE SCREEN: all three locked sermon controls carry a padlock and say why', async () => {
-  const p = await sermonsPanel({ delegated: true, encOn: false, list: SERMON1 });
+test('THE SCREEN: the pen opens the edit form for a CONTENT steward, and Save reaches the engine', async () => {
+  const p = await sermonsPanel({ delegated: true, caps: ['content'], encOn: false, list: SERMON1 });
+  await p.press(PEN_BTN, 'Edit (pen) button');
+  assert.equal(p.labelled('Save'), 1, 'A CONTENT STEWARD IS STILL LOCKED OUT of editing a sermon’s title/description');
+  await p.press(n => reads(n).trim() === 'Save', 'Save button in the edit modal');
+  assert.deepEqual(p.order, ['publishSermon'], 'a content steward’s edit did not reach the engine: ' + JSON.stringify(p.order));
+});
+
+test('THE SCREEN: all three sermon controls carry a padlock for a steward WITHOUT content, and say why', async () => {
+  const p = await sermonsPanel({ delegated: true, caps: ['finance'], encOn: false, list: SERMON1 });
   for (const [pred, what] of [[UPLOAD_BTN, 'Upload button'], [PEN_BTN, 'Edit (pen) button'], [TRASH_BTN, 'Remove (trash) button']]) {
     assert.equal(p.padlocked(pred, what), 1,
-      `the ${what} carries no padlock on a delegated console. On a phone there is no hover and so no ` +
+      `the ${what} carries no padlock on a steward without content. On a phone there is no hover and so no ` +
       'tooltip, which makes the glyph the only thing that says "locked" before the press.');
-    assert.match(p.tip(pred, what), /Only the church’s own console can (publish|remove) a sermon/,
+    assert.match(p.tip(pred, what), /Your church hasn’t given you Groups & rotas/,
       `the ${what} lost its tooltip, so on a desktop console nothing says why it is locked. Tooltip: ` + p.tip(pred, what));
   }
-  // The other direction, so a "fix" that padlocks everything cannot pass: the OWNER console shows none.
+  // The other two directions, so a "fix" that padlocks everyone cannot pass: neither the OWNER console nor
+  // a rostered CONTENT steward — the whole point of option A, Phase 2 — shows a padlock on any of the three.
   const o = await sermonsPanel({ delegated: false, encOn: false, list: SERMON1 });
+  const c = await sermonsPanel({ delegated: true, caps: ['content'], encOn: false, list: SERMON1 });
   for (const [pred, what] of [[UPLOAD_BTN, 'Upload button'], [PEN_BTN, 'Edit (pen) button'], [TRASH_BTN, 'Remove (trash) button']]) {
     assert.equal(o.padlocked(pred, what), 0, `the OWNER console shows a padlock on the ${what}, which it may use`);
+    assert.equal(c.padlocked(pred, what), 0, `a CONTENT steward’s console shows a padlock on the ${what}, which it may now use`);
   }
 });

@@ -4880,17 +4880,18 @@ window.Steward = {
     return { sha256: j.sha256, size: j.size, host: primary, hosts, mime: (file.type || j.type || ''), enc };
   },
   // publish a signed sermon doc referencing an uploaded blob (title + sha256 + host(s) for redundancy).
+  //
+  // OPTION A, PHASE 2 (2026-09-25): THE DELEGATED-CONSOLE REFUSAL ABOVE THIS LINE IS GONE ON PURPOSE. It read
+  // "A DELEGATED CONSOLE CANNOT PUBLISH A SERMON, AND IS TOLD SO BEFORE ANYTHING IS SENT" from 2026-09-22,
+  // because every reader filtered `authors:[churchpub]` and a steward-signed sermon reached nobody — not a
+  // member's app, not a member's Today card, not even this console's own list (measured 0 / 0 / 0). All four
+  // readers now accept a rostered CONTENT steward's `['church', cp]`-tagged copy
+  // (`_openSermons`/`subscribePinnedSermon` in src/fellowship.src.js, `subscribeSermons`/
+  // `subscribePinnedSermon` here), and the relay grants the write the same way (scripts/gateway.mjs). A
+  // steward without the content capability is still refused, by the relay itself — this function no longer
+  // needs to guess that in advance; `publish()`'s real answer is what the caller sees.
   publishSermon(s) {
     if (!sk) return Promise.resolve(null);
-    // A DELEGATED CONSOLE CANNOT PUBLISH A SERMON, AND IS TOLD SO BEFORE ANYTHING IS SENT.
-    //
-    // The relay refuses `trinityone/sermon:` to anything but the church key or its network (gateway.mjs,
-    // 2026-09-22) and the reason is the READERS, not caution: _openSermons, subscribeSermons and
-    // subscribePinnedSermon all filter `authors:[churchpub]`, so a steward-signed sermon is served to
-    // nobody — not to a member's app, not to a member's Today card, not to this console's own list.
-    // Measured as 0 / 0 / 0 on a live gateway. Asking anyway would earn a refusal and the connection
-    // advice that goes with it, which is the wrong thing to tell somebody whose connection is fine.
-    if (actingChurch) return Promise.reject(new Error('Only the church’s own console can publish a sermon. Ask whoever holds the church key.'));
     const id = s.id || ('sermon' + Date.now());
     const content = JSON.stringify({ id, title: s.title || 'Sermon', desc: (s.desc && String(s.desc).trim()) || undefined, sha256: s.sha256, hosts: (s.hosts && s.hosts.length) ? s.hosts : [s.host], mime: s.mime || '', size: s.size || 0, ts: s.ts || now(), enc: s.enc || undefined, series: s.series || undefined });
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', SERMON_D + id], ['t', NET]], content }))
@@ -4898,9 +4899,10 @@ window.Steward = {
   },
   async removeSermon(s) {
     if (!sk) return null;
-    // THE SAME BOUNDARY AS publishSermon ABOVE, and it matters more here: the tombstone IS a `sermon:` write,
-    // so a delegated console is refused it — and the blob deletes further down must never run over a refusal.
-    if (actingChurch) throw new Error('Only the church’s own console can remove a sermon. Nothing was deleted.');
+    // OPTION A, PHASE 2 (2026-09-25): a rostered CONTENT steward may now tombstone a sermon they (or the
+    // church) published — same grant as publishSermon above, same reason. A steward without the content
+    // capability is still refused, by the relay's own accept() rule, and the `_tomb === false` check just
+    // below is what turns that refusal into "nothing was deleted" rather than a blob delete run over it.
     const id = (s && typeof s === 'object') ? s.id : s;
     // THE TOMBSTONE FIRST, AND ONLY THEN THE BYTES — and the tombstone must actually have landed. This
     // `await publish(...)` discarded its result and the DELETE loop below ran regardless, which is the worst
@@ -4911,9 +4913,10 @@ window.Steward = {
     // refused this document by the relay — measured 2026-09-22.)
     const _tomb = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', SERMON_D + id], ['t', NET], ['deleted', '1']], content: '' }));
     // NO LONGER NAMES A PERMISSION. It used to end "…this needs the “Groups, rotas, services, events,
-    // posts” permission", which was true for one day and is not a thing a church can grant any more:
-    // `sermon:` is church-key-only, and the delegated case is answered above by name rather than by a
-    // refusal whose advice would be impossible to act on.
+    // posts” permission" — a sentence that was true for one day, then false while `sermon:` was
+    // church-key-only, and is true again now that CONTENT covers it (option A, 2026-09-25). Left unnamed
+    // deliberately: the relay's own refusal is the accurate answer either way, and naming a capability here
+    // is one more place to forget to update the next time this grant changes shape.
     if (_tomb === false) throw new Error('Couldn’t remove that sermon — no relay accepted the change, so nothing was deleted.');
     // reclaim the stored bytes on each host (best-effort; content-addressed so the same sha lives on every mirror)
     const sha = s && typeof s === 'object' && s.sha256;
@@ -4934,11 +4937,27 @@ window.Steward = {
     if (!sk) return Promise.resolve(null);
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', PINSERMON_D + pub], ['t', NET], ['deleted', '1']], content: '' }));
   },
+  // OPTION A, PHASE 2 (2026-09-25): widened from `authors:[pub]` + `#d` with NO in-handler author check at
+  // all — safe before this, because the filter itself WAS the whole trust boundary — to also accept
+  // `'#church':[pub]`, which needs one now: any author could tag themselves with this church otherwise.
+  // Multi-author (one constant store id, 'pinned', since this is a single per-church document) so
+  // `_absorbById`'s newest-TRUSTED-wins picks correctly between the church's own pin and a steward's.
   subscribePinnedSermon(onPinned) {
     if (!pub) { onPinned(null); return () => {}; }
-    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#d': [PINSERMON_D + pub] }], {
-      onevent(e) { if ((e.tags.find(t => t[0] === 'deleted') || [])[1]) { onPinned(null); return; } try { onPinned({ ...JSON.parse(e.content), at: e.created_at }); } catch { onPinned(null); } },
-      oneose() {},
+    const id = 'pinned';
+    const versions = new Map();   // id -> Map(author -> their copy); see src/church-doc-store.src.js
+    const byId = new Map();
+    const emit = () => { const rec = byId.get(id); onPinned(rec || null); };
+    const sub = pool.subscribeMany(relays(), [
+      { kinds: [30078], authors: [pub], '#d': [PINSERMON_D + pub] },
+      { kinds: [30078], '#church': [pub], '#d': [PINSERMON_D + pub] },
+    ], {
+      onevent(e) {
+        const d = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (d !== PINSERMON_D + pub) return;
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { _forgetById(versions, byId, id, e.pubkey, e.created_at, _consoleDisplay, { churchPub: pub, targets: _tombstoneTargets(e), mayName: _consoleChurchVoice }); emit(); return; }
+        try { const p = JSON.parse(e.content); _absorbById(versions, byId, id, { ...p, at: e.created_at, ts: e.created_at, _by: e.pubkey }, _consoleDisplay); emit(); } catch {}
+      },
+      oneose() { emit(); },
     });
     return () => { try { sub.close(); } catch {} };
   },
@@ -4957,23 +4976,45 @@ window.Steward = {
   // steward's nudge resets" — so a refusal means the other stewards' consoles still show overdue. Saying
   // "Saved" and nothing else made this console the only one that believed the church was backed up.
   //
-  // ON A DELEGATED CONSOLE IT IS ALWAYS false, AND IT DOES NOT ASK. The relay gates
-  // `trinityone/backup-meta:` to the church key or its network (2026-09-22), because subscribeBackupMeta
-  // below filters `authors:[pub]` — the CHURCH's pubkey — while a delegated console signs with the
-  // steward's own key. So a steward-authored record is read back by NOBODY, this console included, and
-  // resets nobody's nudge: measured as 0 rows on a live gateway the day that grant was written, which is
-  // why it was withdrawn the same day. Both callers say WHICH refusal it is rather than sending the
-  // steward to look at a connection that is working perfectly.
+  // OPTION A, PHASE 1 (2026-09-25): re-granted. `feChurch()` stamps `['church', pub]` on a delegated
+  // console (it already did — this document just never made use of it), and subscribeBackupMeta below now
+  // reads `'#church':[pub]` as well as `authors:[pub]`, trusting the author only when the console's own
+  // steward-roster subscription (`_careRoster`/`_careRosterKnown`, fed by subscribeStewards) currently
+  // holds them — see `_consoleDisplay`, the same predicate every other console reader in this file already
+  // uses for exactly this question. The relay's matching grant is `leaderOf(cp) || stewardCan(e.pubkey, cp,
+  // 'any')` in scripts/gateway.mjs — 'any' because the ask ("every steward's nudge resets when any one of
+  // them takes a backup") does not belong to one capability. Was `if (actingChurch) return
+  // Promise.resolve(false)` from 2026-09-22 to 2026-09-25: PLAN-delegated-steward-publishing.md, "the
+  // backup-meta: half is perhaps a tenth of [the sermon half] and needs no member APK" — console-to-console
+  // only, so no member-app change accompanies this one.
   setBackupMeta(at, remind) {
     if (!sk) return Promise.resolve(null);
-    if (actingChurch) return Promise.resolve(false);
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', BACKUPMETA_D + pub], ['t', NET]], content: JSON.stringify({ at: at || now(), remind: remind || 'monthly' }) }));
   },
+  // Widened alongside setBackupMeta above (same day, same reason): reads `authors:[pub]` (the church's own
+  // copy) OR `'#church':[pub]` (a delegated steward's, tagged by feChurch), and — because this is now a
+  // MULTI-AUTHOR addressable document exactly like subscribeGroups/subscribePlans elsewhere in this file —
+  // keeps every author's version (`versions`/`_absorbById`/`_forgetById`, src/church-doc-store.src.js) and
+  // lets `_pickWinner` choose the newest TRUSTED one, rather than whichever event happens to arrive last.
+  // `_consoleDisplay` is the trust predicate: it shows a steward's copy once the roster is known to include
+  // them, keeps showing everything while the roster is still unread (see its own comment), and drops a
+  // revoked steward's copy — promoting the church's own, if there is one — the moment the roster says so.
   subscribeBackupMeta(onMeta) {
     if (!pub) { onMeta(null); return () => {}; }
-    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#d': [BACKUPMETA_D + pub] }], {
-      onevent(e) { try { const c = JSON.parse(e.content); onMeta({ at: c.at || e.created_at, remind: c.remind || 'monthly' }); } catch { onMeta(null); } },
-      oneose() {},
+    const id = 'backup-meta';
+    const versions = new Map();   // id -> Map(author -> their copy); see src/church-doc-store.src.js — one constant id: this is a single per-church document, not a list
+    const byId = new Map();
+    const emit = () => { const rec = byId.get(id); onMeta(rec ? { at: rec.at || rec.ts, remind: rec.remind || 'monthly' } : null); };
+    const sub = pool.subscribeMany(relays(), [
+      { kinds: [30078], authors: [pub], '#d': [BACKUPMETA_D + pub] },
+      { kinds: [30078], '#church': [pub], '#d': [BACKUPMETA_D + pub] },
+    ], {
+      onevent(e) {
+        const d = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (d !== BACKUPMETA_D + pub) return;
+        if ((e.tags.find(t => t[0] === 'deleted') || [])[1]) { _forgetById(versions, byId, id, e.pubkey, e.created_at, _consoleDisplay, { churchPub: pub, targets: _tombstoneTargets(e), mayName: _consoleChurchVoice }); emit(); return; }
+        try { const c = JSON.parse(e.content); _absorbById(versions, byId, id, { id, at: c.at, remind: c.remind, ts: e.created_at, _by: e.pubkey }, _consoleDisplay); emit(); } catch {}
+      },
+      oneose() { emit(); },
     });
     return () => { try { sub.close(); } catch {} };
   },
@@ -5373,15 +5414,23 @@ window.Steward = {
       return true;
     } catch (e) { return true; }
   },
+  // OPTION A, PHASE 2 (2026-09-25): widened the same way as subscribeGroups above — `authors:[pub]` OR
+  // `'#church':[pub]`, one version per author (`_absorbById`/`_forgetById`), `_consoleDisplay` deciding
+  // which author's copy of a given sermon id is shown. SIDE EFFECT, said plainly (CLAUDE.md rule 4): the
+  // store's `ts` is now the EVENT's `created_at` rather than the sermon's own self-reported `ts`, matching
+  // every other reader that uses this module — re-saving a sermon's title now moves it to the top of this
+  // list, which it did not before. See the matching note on _openSermons in src/fellowship.src.js.
   subscribeSermons(onSermons) {
     if (!pub) { onSermons([]); return () => {}; }
     const byId = new Map();
-    const emit = () => onSermons([...byId.entries()].filter(([, s]) => s).map(([, s]) => s).sort((a, b) => (b.ts || 0) - (a.ts || 0)));
-    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }], {
+    const versions = new Map();   // id -> Map(author -> their copy); see src/church-doc-store.src.js
+    const emit = () => onSermons([...byId.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)));
+    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (!d.startsWith(SERMON_D)) return;
-        if ((e.tags.find(t => t[0] === 'deleted') || [])[1]) { byId.set(d, null); emit(); return; }
-        try { const s = JSON.parse(e.content); if (s && s.sha256) { byId.set(d, { ...s, at: e.created_at }); emit(); } } catch {}
+        const id = d.slice(SERMON_D.length);
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { _forgetById(versions, byId, id, e.pubkey, e.created_at, _consoleDisplay, { churchPub: pub, targets: _tombstoneTargets(e), mayName: _consoleChurchVoice }); emit(); return; }
+        try { const s = JSON.parse(e.content); if (s && s.sha256) { _absorbById(versions, byId, id, { ...s, id, at: e.created_at, ts: e.created_at, _by: e.pubkey }, _consoleDisplay); emit(); } } catch {}
       },
       oneose() { emit(); },
     });
