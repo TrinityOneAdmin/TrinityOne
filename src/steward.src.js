@@ -1770,6 +1770,30 @@ function _consoleChurchVoice(rec) {
   const caps = _capsOf(by);
   return !caps || caps.includes('content');
 }
+// THE SAME "SAY WHICH CHURCH" PROBLEM AS feChurch, ON A DOOR feChurch DOES NOT GUARD.
+// A blob upload/delete is authorised by a kind-24242 event sent to a HOST as an Authorization header — not
+// a relay document — so it never passes through feChurch and never got the church tag. The relay has
+// always been ready for it (`_blobUploader`, scripts/gateway.mjs):
+//     const cp = tag('church');
+//     if (cp && stewardCan(ev.pubkey, cp, 'any')) return { church: cp, … };
+//     if (CHURCH_PUBS.has(ev.pubkey))            return { church: ev.pubkey, … };
+// …and the client simply never said. Measured 2026-09-25 against a live gateway: the owner's PUT is 201,
+// a CONTENT steward's is 401 "unauthorized: sign a kind-24242 upload auth with the church (or steward)
+// key". So option A widened every sermon READER and re-granted the relay write, and a delegated steward
+// still could not publish a sermon at all, because the bytes never got through the door before the
+// document was ever written. The DELETE half is the same tag and the same 401, and it is worse: the
+// tombstone lands, the file does not go, and the confirmation sheet has already promised "the stored file
+// is deleted".
+// NOT feChurch: that stamps `for` and a monotonic created_at, both meaningless to a blob host, and this
+// event is signed for a host rather than published to a relay.
+// OUR OWN pubkey, which is NOT `pub` on a delegated console (there `pub` is the church we act for).
+// Same idiom as the roster check further down; `pub` is the honest fallback because on an owner console
+// the two ARE the same key.
+function _myOwnPub() { try { return getPublicKey(sk); } catch (e) { return pub; } }
+function _blobAuthTags(tags) {
+  if (actingChurch && !tags.some(t => t[0] === 'church')) return [...tags, ['church', actingChurch]];
+  return tags;
+}
 function feChurch(tmpl, signer) {
   if (actingChurch && !(tmpl.tags || []).some(t => t[0] === 'church')) {
     tmpl = { ...tmpl, tags: [...(tmpl.tags || []), ['church', actingChurch]] };
@@ -4864,7 +4888,7 @@ window.Steward = {
     const sha = await _sha256hex(bytes);
     const ctype = enc ? 'application/octet-stream' : (file.type || 'application/octet-stream');
     // one signed, host-agnostic kind-24242 upload auth, reused to PUT the SAME blob to the primary + each backup.
-    const authHdr = 'Nostr ' + btoa(JSON.stringify(finalizeEvent({ kind: 24242, created_at: now(), tags: [['t', 'upload'], ['x', sha], ['expiration', String(now() + 600)]], content: 'upload' }, sk)));
+    const authHdr = 'Nostr ' + btoa(JSON.stringify(finalizeEvent({ kind: 24242, created_at: now(), tags: _blobAuthTags([['t', 'upload'], ['x', sha], ['expiration', String(now() + 600)]]), content: 'upload' }, sk)));
     // native (CapacitorHttp) mangles a raw binary PUT body → send base64 text + a marker the gateway decodes; web sends raw bytes
     const native = _isNative(); const body = native ? _b64(bytes) : bytes;
     const put = async (b) => { const h = { Authorization: authHdr, 'Content-Type': ctype }; if (native) h['X-Blob-B64'] = '1'; const r = await fetch(b + '/blob', { method: 'PUT', headers: h, body }); if (!r.ok) { let m = ''; try { m = ((await r.json()) || {}).error || ''; } catch (e) {} throw new Error(m || ('Upload failed (' + r.status + ')')); } return r.json(); };
@@ -4922,7 +4946,7 @@ window.Steward = {
     const sha = s && typeof s === 'object' && s.sha256;
     const hosts = (s && typeof s === 'object' && ((s.hosts && s.hosts.length) ? s.hosts : (s.host ? [s.host] : []))) || [];
     if (sha && hosts.length) {
-      const auth = 'Nostr ' + btoa(JSON.stringify(finalizeEvent({ kind: 24242, created_at: now(), tags: [['t', 'delete'], ['x', sha], ['expiration', String(now() + 600)]], content: 'delete' }, sk)));
+      const auth = 'Nostr ' + btoa(JSON.stringify(finalizeEvent({ kind: 24242, created_at: now(), tags: _blobAuthTags([['t', 'delete'], ['x', sha], ['expiration', String(now() + 600)]]), content: 'delete' }, sk)));
       for (const h of hosts) { try { await fetch(String(h).replace(/\/+$/, '') + '/blob/' + sha, { method: 'DELETE', headers: { Authorization: auth } }); } catch (e) {} }
     }
     return true;
@@ -5040,6 +5064,17 @@ window.Steward = {
     // church and every member, permanently. Refuse to mint on an untrustworthy read (fail closed: the steward
     // sees "try again in a moment"; the alternative is silent, unrecoverable loss of the church's archive).
     if (!_mediaKeyHex && (!_mediaKeyChecked || !_isRelayAuthed())) throw new Error('Can’t encrypt this upload yet — this device hasn’t finished connecting to your church’s relay, so it can’t tell whether your church already has a media key. Wait a moment and try again.');
+    // A DELEGATED CONSOLE NEVER MINTS AND NEVER REPUBLISHES THE ENVELOPE. Minting here would seal a NEW
+    // key as the steward and leave every sermon the church encrypted before now undecryptable — the same
+    // unrecoverable loss the gate above exists to prevent, reached by the other door. It also cannot
+    // publish it: `trinityone/mediakey:` is church-key-only at the relay, deliberately (the envelope is
+    // sealed with the SIGNER's key, so a steward-authored copy could be opened by nobody). It does not
+    // need to. The church already sealed a copy of the key ring to every member, the steward reads theirs
+    // above, and a sermon encrypted with that key plays for every member exactly as the church's own do —
+    // which is why this half needed no member-app change. When there is no copy to read, say so plainly
+    // rather than reporting the mint failure the steward cannot act on.
+    if (actingChurch && !_mediaKeyHex) throw new Error('Can’t encrypt this upload — your church hasn’t shared its media key with this account yet. Ask whoever holds the church key to add you as a member of the church, or to upload this one themselves. Nothing has been uploaded.');
+    if (!actingChurch) {
     if (!_mediaKeyHex) { _mediaKeyHex = _hex(crypto.getRandomValues(new Uint8Array(32))); _mediaKeyRing = [_mediaKeyHex]; }
     const targets = [...new Set([pub, ...(memberPubs || []).filter(Boolean)])];
     const _mring = JSON.stringify(_mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex]);
@@ -5055,6 +5090,7 @@ window.Steward = {
     // case on a delegated console rather than a theoretical one.
     const _env = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', MEDIAKEY_D + pub], ['t', NET]], content: JSON.stringify({ keys, rev: now() }) }));
     if (_env === false) throw new Error('Can’t encrypt this upload — your church’s media key could not be saved, so nothing encrypted with it could ever be played. Nothing has been uploaded. A church media key can only be published from the console that holds the church’s own key.');
+    }
     const key = await crypto.subtle.importKey('raw', _unhex(_mediaKeyHex), 'AES-GCM', false, ['encrypt']);
     return async (bytes) => { const iv = crypto.getRandomValues(new Uint8Array(12)); const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, bytes)); const out = new Uint8Array(12 + ct.length); out.set(iv, 0); out.set(ct, 12); return out; };
   },
@@ -5319,7 +5355,7 @@ window.Steward = {
       /* `_mediaKeyPushRefused = null` (F2): an envelope LANDING is new information — the recipient map has
          changed under us, so whatever this console last had refused is worth asking again. Without this a
          console that was refused once would go on skipping until the roster itself changed. */
-      onevent(e) { try { const o = JSON.parse(e.content); _mediaKeyDocKeys = (o && o.keys) || null; _mediaKeyPushRefused = null; const mine = o.keys && o.keys[pub]; if (mine && sk) { const plain = nip44d(mine, nip44ck(sk, e.pubkey)); let r = null; try { const q = JSON.parse(plain); if (Array.isArray(q)) r = q.filter(k => typeof k === 'string' && k); } catch (x2) {} const incoming = (r && r.length) ? r : [plain]; _mediaKeyRing = [...incoming, ..._mediaKeyRing.filter(k => incoming.indexOf(k) === -1)]; _mediaKeyHex = _mediaKeyRing[0];   /* KEEP what this device already held: if we minted before the envelope arrived, discarding our key here would orphan anything encrypted in that window. Rotation must never drop a key that has already sealed something. */ } } catch (x) {} },
+      onevent(e) { try { const o = JSON.parse(e.content); _mediaKeyDocKeys = (o && o.keys) || null; _mediaKeyPushRefused = null; const _meKey = _myOwnPub(); const mine = o.keys && (o.keys[_meKey] || (_meKey === pub ? null : o.keys[pub]));   /* OPTION A: on a DELEGATED console `pub` is the CHURCH, so o.keys[pub] is the entry sealed TO THE CHURCH and our key cannot open it — _mediaKeyHex stayed null and mediaEncryptor then tried to MINT. Our own entry is there already: the church seals to [church, ...members] and a delegated steward is normally also a member. Owner console: _myOwnPub() === pub, so this is the old lookup exactly. */ if (mine && sk) { const plain = nip44d(mine, nip44ck(sk, e.pubkey)); let r = null; try { const q = JSON.parse(plain); if (Array.isArray(q)) r = q.filter(k => typeof k === 'string' && k); } catch (x2) {} const incoming = (r && r.length) ? r : [plain]; _mediaKeyRing = [...incoming, ..._mediaKeyRing.filter(k => incoming.indexOf(k) === -1)]; _mediaKeyHex = _mediaKeyRing[0];   /* KEEP what this device already held: if we minted before the envelope arrived, discarding our key here would orphan anything encrypted in that window. Rotation must never drop a key that has already sealed something. */ } } catch (x) {} },
       oneose() { _mediaKeyChecked = true; },   // no envelope came back → it is safe to mint one
     });
     return () => { try { sub.close(); } catch {} };

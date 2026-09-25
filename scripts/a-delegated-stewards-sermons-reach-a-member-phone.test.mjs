@@ -33,6 +33,7 @@ import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WebSocket } from 'ws';
+import { createHash } from 'node:crypto';
 import { SimplePool } from 'nostr-tools/pool';
 import { generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure';
 import { npubEncode } from 'nostr-tools/nip19';
@@ -135,6 +136,48 @@ function settle(sub, ms = 1200) {
     setTimeout(() => { unsub(); resolve(last); }, ms);
   });
 }
+
+// ── THE DOOR THE BYTES GO THROUGH, WHICH IS NOT THE ONE THE DOCUMENT GOES THROUGH ───────────────────────
+// Option A widened every sermon READER and re-granted `sermon:` at the relay, and a delegated steward still
+// could not publish a sermon — because a sermon is a FILE plus a document, and the file goes to a host over
+// HTTP with its own kind-24242 authorisation that never passed through feChurch and so never named the
+// church. AUDIT-delegated-publishing-2026-09-25 H1. These two tests pin the relay half of that contract;
+// the ones after them pin that the client actually satisfies it.
+const blobAuth = (who, t, sha, tags = []) => 'Nostr ' + Buffer.from(JSON.stringify(finalizeEvent({
+  kind: 24242, created_at: now(), content: t,
+  tags: [['t', t], ['x', sha], ['expiration', String(now() + 600)], ...tags],
+}, who.sk))).toString('base64');
+const BODY = Buffer.from('not really an mp3, but content-addressed all the same');
+const BODY_SHA = createHash('sha256').update(BODY).digest('hex');
+
+test('THE BYTES: a content steward’s upload is REFUSED when it does not name the church', async () => {
+  const r = await fetch(`http://127.0.0.1:${PORT}/blob`, { method: 'PUT',
+    headers: { Authorization: blobAuth(dana, 'upload', BODY_SHA), 'Content-Type': 'application/octet-stream' }, body: BODY });
+  assert.equal(r.status, 401,
+    'the relay accepted a blob from a steward who never said which church it was for — _blobUploader reads ' +
+    'the `church` tag to decide, so accepting without it would mean accepting from anyone. Status: ' + r.status);
+});
+
+test('THE BYTES: …and ACCEPTED when it does — the relay was always ready, the client never said', async () => {
+  const r = await fetch(`http://127.0.0.1:${PORT}/blob`, { method: 'PUT',
+    headers: { Authorization: blobAuth(dana, 'upload', BODY_SHA, [['church', cp]]), 'Content-Type': 'application/octet-stream' }, body: BODY });
+  assert.equal(r.status, 201,
+    'A CONTENT STEWARD CANNOT UPLOAD THE FILE, so every reader this branch widened has nothing to read and ' +
+    'the whole feature is inert. Status: ' + r.status + ' — ' + (await r.text()).slice(0, 200));
+  const j = JSON.parse(await (await fetch(`http://127.0.0.1:${PORT}/blob`, { method: 'PUT',
+    headers: { Authorization: blobAuth(dana, 'upload', BODY_SHA, [['church', cp]]), 'Content-Type': 'application/octet-stream' }, body: BODY })).text());
+  assert.equal(j.sha256, BODY_SHA, 'the host stored it under a different digest than the client computed');
+});
+
+test('THE BYTES: a steward’s DELETE needs the church tag too — this is why "Remove" never freed the file', async () => {
+  const bare = await fetch(`http://127.0.0.1:${PORT}/blob/${BODY_SHA}`, { method: 'DELETE', headers: { Authorization: blobAuth(dana, 'delete', BODY_SHA) } });
+  assert.equal(bare.status, 401, 'an unattributed delete was honoured: ' + bare.status);
+  const named = await fetch(`http://127.0.0.1:${PORT}/blob/${BODY_SHA}`, { method: 'DELETE', headers: { Authorization: blobAuth(dana, 'delete', BODY_SHA, [['church', cp]]) } });
+  assert.ok(named.status >= 200 && named.status < 300,
+    'A CONTENT STEWARD CANNOT FREE THE BYTES. removeSermon tombstones the document and the file stays on ' +
+    'every host for ever, while the confirmation sheet has already said "the stored file is deleted". ' +
+    'Status: ' + named.status);
+});
 
 test('a content steward’s sermon reaches the relay, tagged with the church', async () => {
   const dc = consoleApi({ signer: dana, actingChurch: cp });

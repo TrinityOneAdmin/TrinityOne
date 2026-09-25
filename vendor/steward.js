@@ -16227,6 +16227,17 @@ zoo`.split("\n");
     const caps = _capsOf(by);
     return !caps || caps.includes("content");
   }
+  function _myOwnPub() {
+    try {
+      return getPublicKey2(sk);
+    } catch (e) {
+      return pub;
+    }
+  }
+  function _blobAuthTags(tags) {
+    if (actingChurch && !tags.some((t) => t[0] === "church")) return [...tags, ["church", actingChurch]];
+    return tags;
+  }
   function feChurch(tmpl, signer) {
     if (actingChurch && !(tmpl.tags || []).some((t) => t[0] === "church")) {
       tmpl = { ...tmpl, tags: [...tmpl.tags || [], ["church", actingChurch]] };
@@ -18571,7 +18582,7 @@ zoo`.split("\n");
       if (enc) bytes = await encrypt4(bytes);
       const sha = await _sha256hex(bytes);
       const ctype = enc ? "application/octet-stream" : file.type || "application/octet-stream";
-      const authHdr = "Nostr " + btoa(JSON.stringify(finalizeEvent2({ kind: 24242, created_at: now(), tags: [["t", "upload"], ["x", sha], ["expiration", String(now() + 600)]], content: "upload" }, sk)));
+      const authHdr = "Nostr " + btoa(JSON.stringify(finalizeEvent2({ kind: 24242, created_at: now(), tags: _blobAuthTags([["t", "upload"], ["x", sha], ["expiration", String(now() + 600)]]), content: "upload" }, sk)));
       const native = _isNative();
       const body = native ? _b64(bytes) : bytes;
       const put = async (b) => {
@@ -18630,7 +18641,7 @@ zoo`.split("\n");
       const sha = s && typeof s === "object" && s.sha256;
       const hosts = s && typeof s === "object" && (s.hosts && s.hosts.length ? s.hosts : s.host ? [s.host] : []) || [];
       if (sha && hosts.length) {
-        const auth = "Nostr " + btoa(JSON.stringify(finalizeEvent2({ kind: 24242, created_at: now(), tags: [["t", "delete"], ["x", sha], ["expiration", String(now() + 600)]], content: "delete" }, sk)));
+        const auth = "Nostr " + btoa(JSON.stringify(finalizeEvent2({ kind: 24242, created_at: now(), tags: _blobAuthTags([["t", "delete"], ["x", sha], ["expiration", String(now() + 600)]]), content: "delete" }, sk)));
         for (const h of hosts) {
           try {
             await fetch(String(h).replace(/\/+$/, "") + "/blob/" + sha, { method: "DELETE", headers: { Authorization: auth } });
@@ -18788,15 +18799,18 @@ zoo`.split("\n");
     async mediaEncryptor(memberPubs) {
       if (!sk) throw new Error("no key");
       if (!_mediaKeyHex && (!_mediaKeyChecked || !_isRelayAuthed())) throw new Error("Can\u2019t encrypt this upload yet \u2014 this device hasn\u2019t finished connecting to your church\u2019s relay, so it can\u2019t tell whether your church already has a media key. Wait a moment and try again.");
-      if (!_mediaKeyHex) {
-        _mediaKeyHex = _hex(crypto.getRandomValues(new Uint8Array(32)));
-        _mediaKeyRing = [_mediaKeyHex];
+      if (actingChurch && !_mediaKeyHex) throw new Error("Can\u2019t encrypt this upload \u2014 your church hasn\u2019t shared its media key with this account yet. Ask whoever holds the church key to add you as a member of the church, or to upload this one themselves. Nothing has been uploaded.");
+      if (!actingChurch) {
+        if (!_mediaKeyHex) {
+          _mediaKeyHex = _hex(crypto.getRandomValues(new Uint8Array(32)));
+          _mediaKeyRing = [_mediaKeyHex];
+        }
+        const targets = [.../* @__PURE__ */ new Set([pub, ...(memberPubs || []).filter(Boolean)])];
+        const _mring = JSON.stringify(_mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex]);
+        const keys = await _sealEach(_mring, targets, (pl, mp) => encrypt3(pl, getConversationKey(sk, mp)));
+        const _env = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", MEDIAKEY_D + pub], ["t", NET]], content: JSON.stringify({ keys, rev: now() }) }));
+        if (_env === false) throw new Error("Can\u2019t encrypt this upload \u2014 your church\u2019s media key could not be saved, so nothing encrypted with it could ever be played. Nothing has been uploaded. A church media key can only be published from the console that holds the church\u2019s own key.");
       }
-      const targets = [.../* @__PURE__ */ new Set([pub, ...(memberPubs || []).filter(Boolean)])];
-      const _mring = JSON.stringify(_mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex]);
-      const keys = await _sealEach(_mring, targets, (pl, mp) => encrypt3(pl, getConversationKey(sk, mp)));
-      const _env = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", MEDIAKEY_D + pub], ["t", NET]], content: JSON.stringify({ keys, rev: now() }) }));
-      if (_env === false) throw new Error("Can\u2019t encrypt this upload \u2014 your church\u2019s media key could not be saved, so nothing encrypted with it could ever be played. Nothing has been uploaded. A church media key can only be published from the console that holds the church\u2019s own key.");
       const key = await crypto.subtle.importKey("raw", _unhex(_mediaKeyHex), "AES-GCM", false, ["encrypt"]);
       return async (bytes) => {
         const iv = crypto.getRandomValues(new Uint8Array(12));
@@ -19070,7 +19084,8 @@ zoo`.split("\n");
             const o = JSON.parse(e.content);
             _mediaKeyDocKeys = o && o.keys || null;
             _mediaKeyPushRefused = null;
-            const mine = o.keys && o.keys[pub];
+            const _meKey = _myOwnPub();
+            const mine = o.keys && (o.keys[_meKey] || (_meKey === pub ? null : o.keys[pub]));
             if (mine && sk) {
               const plain = decrypt3(mine, getConversationKey(sk, e.pubkey));
               let r = null;

@@ -150,6 +150,10 @@ async function runLifted(sig, name, answer, scope = {}, args = [], decls = '') {
     MSGTAGS_D: 'trinityone/msgtags', SERMON_D: 'trinityone/sermon:', MEDIAKEY_D: 'trinityone/mediakey:',
     BACKUPMETA_D: 'trinityone/backup-meta:',
     _sanitizeMsgTags: (t) => t,
+    // The blob auth sites call this now (option A, H1). The REAL one, lifted out of the bundle rather than
+    // stubbed: a stub returning `tags` unchanged would let every delegated-console test go green over an
+    // upload that never names the church, which is the defect itself.
+    _blobAuthTags: new Function('actingChurch', fnBody(BUNDLE, 'function _blobAuthTags(tags) {', '_blobAuthTags') + '\nreturn _blobAuthTags;')(scope.actingChurch || ''),
     fetch: async () => ({ ok: true }),
     btoa: (s) => Buffer.from(s, 'binary').toString('base64'),
     ...scope,
@@ -287,6 +291,138 @@ test('mediaEncryptor REFUSES TO ENCRYPT when the key envelope was refused', asyn
   const fn = await yes.call();
   assert.equal(typeof fn, 'function', 'an ACCEPTED envelope no longer yields an encryptor — encryption is now off for everyone');
   assert.equal(yes.published.length, 1, 'the envelope was not published at all');
+});
+
+const MEDIA_ENV = (extra = '') => `
+  let _mediaKeyRing = [];
+  let _mediaKeyChecked = true;
+  const _isRelayAuthed = () => true;
+  const _unhex = (h) => new Uint8Array(h.match(/../g).map(x => parseInt(x, 16)));
+  const _hex = (b) => [...b].map(x => x.toString(16).padStart(2, '0')).join('');
+  const _sealEach = async () => ({});
+  const nip44e = () => 'sealed'; const nip44ck = () => 'ck';
+  ${extra}`;
+
+test('ENCRYPTION: a delegated console recovers the key from ITS OWN entry in the church’s envelope', async () => {
+  // THE HALF THAT ACTUALLY LETS A DELEGATE ENCRYPT, and the one the tests above cannot see: they hand the
+  // engine a key that is already in hand. This drives the code that PUTS it there. subscribeMediaKey read
+  // `o.keys[pub]` — and on a delegated console `pub` is the CHURCH, so it tried to open the entry sealed to
+  // the church with the steward's key, failed silently inside the handler's own catch, left _mediaKeyHex
+  // null, and mediaEncryptor then tried to mint. Reverting that one lookup leaves every other test in this
+  // file green, which is why this one exists (the same shape as the hub-wiring gap on 2026-09-25).
+  const CHURCH = 'CP', STEWARD = 'STEWARD_PUB';
+  const [, DEC, CK] = BUNDLE.match(/const plain = (\w+)\(mine, (\w+)\(sk, e\.pubkey\)\)/) || [];
+  assert.ok(DEC && CK, 're-anchor this test: could not find the media-key unseal call in the bundle');
+  const [, GP] = BUNDLE.match(/function _myOwnPub\(\) \{\s*try \{\s*return (\w+)\(sk\)/) || [];
+  assert.ok(GP, 're-anchor this test: _myOwnPub no longer derives our pubkey from sk');
+  let handlers = null;
+  const peek = '__peek' + Math.random().toString(36).slice(2);
+  const r = await runLifted('subscribeMediaKey()', 'subscribeMediaKey', { id: 'evt' }, {
+    actingChurch: 'CHURCHPUB', pub: CHURCH, sk: 'STEWARD_SK',
+    [GP]: () => STEWARD,   // ← the emitted name too: _myOwnPub calls `getPublicKey2` in today's bundle
+    relays: () => ['wss://r'],
+    pool: { subscribeMany: (_r, _f, h) => { handlers = h; return { close() {} }; } },
+    // identity "decrypt" that records WHICH conversation key was used, so the test can prove it opened the
+    // entry addressed to us rather than one it could never have opened.
+    // ⚠ BIND THE NAMES THE BUNDLE ACTUALLY USES. esbuild renames these imports — `nip44d` is emitted as
+    // `decrypt3` and `nip44ck` as `getConversationKey` — and the handler swallows a ReferenceError in its
+    // own try/catch, so stubbing the SOURCE names leaves _mediaKeyHex null and looks exactly like the bug.
+    // Read them out of the bundle instead of hard-coding, because the numeric suffixes move on every build.
+    [DEC]: (payload, ck) => (payload.startsWith(ck.replace('ck:', '') + '/') ? payload.split('/')[1] : (() => { throw new Error('wrong recipient'); })()),
+    [CK]: (_sk, other) => 'ck:' + other,
+  }, [], `let _mediaKeyHex = null; let _mediaKeyRing = []; let _mediaKeyDocKeys = null; let _mediaKeyPushRefused = 'x'; let _mediaKeyChecked = false;
+     ${fnBody(BUNDLE, 'function _myOwnPub() {', '_myOwnPub')}
+     globalThis['${peek}'] = () => _mediaKeyHex;`);
+  r.fn();
+  assert.ok(handlers, 're-anchor this test: subscribeMediaKey did not open a subscription');
+  // The church's envelope: a ring sealed to the CHURCH, and another sealed to US. Only ours is openable.
+  handlers.onevent({ pubkey: CHURCH, content: JSON.stringify({ keys: {
+    [CHURCH]:  CHURCH  + '/' + JSON.stringify(['cc'.repeat(32)]),
+    [STEWARD]: CHURCH  + '/' + JSON.stringify(['ab'.repeat(32)]),
+  }, rev: 1 }) });
+  assert.equal(globalThis[peek](), 'ab'.repeat(32),
+    'A DELEGATED CONSOLE DID NOT RECOVER THE CHURCH’S MEDIA KEY from the copy sealed to it. mediaEncryptor ' +
+    'then has nothing to encrypt with, so an encrypted sermon is refused — or, before this fix, it minted a ' +
+    'fresh key and tried to republish the envelope. Got: ' + globalThis[peek]());
+  delete globalThis[peek];
+});
+
+test('ENCRYPTION: a delegated console USES the church’s key and never rewrites the envelope', async () => {
+  // The obvious reading of "let a delegate encrypt" — give them `trinityone/mediakey:` — is the dangerous
+  // one. mediaEncryptor MINTS a fresh key when it cannot read one, and replacing the envelope makes every
+  // sermon the church encrypted before now undecryptable, for ever. They do not need to write it: the
+  // church seals the key ring to [church, ...members] and a delegated steward is normally also a member, so
+  // a copy addressed to them already exists. Members then play a delegate's sermon with the same key they
+  // already hold, which is why this half needs no member-app change.
+  const r = await runLifted('async mediaEncryptor(memberPubs)', 'mediaEncryptor', { id: 'evt' },
+    { actingChurch: 'CHURCHPUB' }, [[]], MEDIA_ENV(`let _mediaKeyHex = '${'ab'.repeat(32)}';`));
+  const enc = await r.call();
+  assert.equal(typeof enc, 'function', 'a delegated console got no encryptor even though it holds the key');
+  assert.equal(r.published.length, 0,
+    'A DELEGATED CONSOLE REPUBLISHED THE MEDIA-KEY ENVELOPE. The relay refuses it (church-key-only, ' +
+    'deliberately), so the upload fails — and if it ever stopped refusing, the envelope would be sealed ' +
+    'with the STEWARD\'s key and no member could open it. Published: ' + JSON.stringify(r.published));
+  const out = await enc(new Uint8Array([1, 2, 3]));
+  assert.ok(out instanceof Uint8Array && out.length === 12 + 3 + 16,
+    'the delegated encryptor does not produce iv||ciphertext like the church\'s — a sermon encrypted with ' +
+    'it would not play. Got ' + (out && out.length) + ' bytes');
+});
+
+test('ENCRYPTION: …and says so plainly when the church has shared no key with this account', async () => {
+  const r = await runLifted('async mediaEncryptor(memberPubs)', 'mediaEncryptor', { id: 'evt' },
+    { actingChurch: 'CHURCHPUB' }, [[]], MEDIA_ENV('let _mediaKeyHex = null;'));
+  await assert.rejects(r.call(), /hasn’t shared its media key with this account/,
+    'a delegate with no key is told the mint or the save failed — neither is true and neither is something ' +
+    'they can act on. The accurate answer names what is missing and who can fix it.');
+  assert.equal(r.published.length, 0, 'it tried to mint and publish a key anyway');
+});
+
+test('ENCRYPTION: the OWNER console still mints and publishes the envelope — unchanged', async () => {
+  const r = await runLifted('async mediaEncryptor(memberPubs)', 'mediaEncryptor', { id: 'evt' },
+    { actingChurch: '' }, [[]], MEDIA_ENV('let _mediaKeyHex = null;'));
+  assert.equal(typeof await r.call(), 'function', 'the owner console can no longer encrypt at all');
+  assert.equal(r.published.length, 1,
+    'THE CHURCH STOPPED PUBLISHING ITS MEDIA-KEY ENVELOPE — no member would ever receive the key. ' +
+    'Published: ' + r.published.length);
+});
+
+test('THE BYTES: the blob auth names the church on a delegated console, and only there', async () => {
+  // AUDIT-delegated-publishing-2026-09-25 H1. A sermon is a FILE plus a document. The document goes through
+  // feChurch, which stamps `['church', actingChurch]`; the FILE goes to a host as a kind-24242 Authorization
+  // header that never did — so the relay's `_blobUploader`, which has always accepted
+  // `stewardCan(ev.pubkey, tag('church'), 'any')`, had nothing to match on and answered 401. Every reader
+  // option A widened then had nothing to read. The relay half of this contract is measured against a live
+  // gateway in scripts/a-delegated-stewards-sermons-reach-a-member-phone.test.mjs; this is the client half.
+  const body = fnBody(BUNDLE, 'function _blobAuthTags(tags) {', '_blobAuthTags');
+  const lift = (acting) => new Function('actingChurch', body + '\nreturn _blobAuthTags;')(acting);
+  const base = [['t', 'upload'], ['x', 'abc'], ['expiration', '123']];
+
+  const delegated = lift('CHURCHPUB')(base);
+  assert.deepEqual(delegated.find(t => t[0] === 'church'), ['church', 'CHURCHPUB'],
+    'A DELEGATED CONSOLE STILL SENDS AN UNATTRIBUTED UPLOAD — the host answers 401 and the steward is told ' +
+    'to check a connection that is working. Tags: ' + JSON.stringify(delegated));
+
+  const owner = lift('')(base);
+  assert.deepEqual(owner, base,
+    'the OWNER console now tags its own uploads too. Harmless at this relay, but it is a behaviour change ' +
+    'nobody asked for and _blobUploader takes the church-key branch anyway: ' + JSON.stringify(owner));
+
+  const already = lift('CHURCHPUB')([...base, ['church', 'SOMEONE_ELSE']]);
+  assert.equal(already.filter(t => t[0] === 'church').length, 1,
+    'it appended a second church tag; _blobUploader reads the FIRST, so the two would disagree silently');
+});
+
+test('THE BYTES: both blob doors actually go through it — upload AND delete', () => {
+  // Against the BUNDLE, where esbuild removes dead code: a call site that stopped using the helper stops
+  // appearing here (CLAUDE.md rule 3's parenthetical). Two doors, and the delete one is the half that was
+  // still promising "the stored file is deleted" over a 401.
+  const uses = (BUNDLE.match(/_blobAuthTags\(\[\[/g) || []).length;
+  assert.equal(uses, 2,
+    'expected BOTH the upload and the delete auth to name the church, found ' + uses + '. If it is 1, the ' +
+    'likely survivor is the upload and a delegate\'s Remove is silently orphaning the bytes again.');
+  // esbuild normalises string quotes, so match either spelling rather than the one src/ happens to use.
+  assert.match(BUNDLE, /tags: _blobAuthTags\(\[\[["']t["'], ["']upload["']\]/, 'the UPLOAD auth no longer names the church');
+  assert.match(BUNDLE, /tags: _blobAuthTags\(\[\[["']t["'], ["']delete["']\]/, 'the DELETE auth no longer names the church');
 });
 
 test('setBackupMeta NEVER INVENTS A BACKUP TIME — an unknown `at` publishes 0, not now()', async () => {
@@ -597,7 +733,7 @@ test('THE SCREEN: changing the backup REMINDER says so too — the second caller
 // `caps` says which steward this is, when `delegated` — default ['content'] (a fully-granted delegate),
 // matching every caller written before option A, Phase 2 (2026-09-25) existed. Pass `caps: ['finance']` (or
 // `[]`) for the one case that is still real: a steward this church has NOT given the content capability.
-async function sermonsPanel({ delegated, caps, encOn, list = [] }) {
+async function sermonsPanel({ delegated, caps, encOn, list = [], mediaKey = true }) {
   const { React, draw } = miniReact();
   const order = [];
   const hasContent = !delegated || (caps || ['content']).includes('content');
@@ -616,9 +752,13 @@ async function sermonsPanel({ delegated, caps, encOn, list = [] }) {
       // regardless of any capability a church can tick, so it refuses on ANY delegated console whatever
       // `caps` says — src/steward.src.js's mediaEncryptor asks the relay directly and mediakey: has no
       // steward branch at all.
+      // THE ENGINE'S REAL RULE SINCE OPTION A (2026-09-25), not "is this console delegated". A delegate no
+      // longer republishes the envelope — it reads the copy the church sealed to it as a member — so the
+      // only thing that can refuse an encrypted upload now is having NO key to read. `mediaKey: false` is
+      // the steward whose church never shared one (the non-member steward, owner's decision the same day).
       mediaEncryptor: async () => {
         order.push('mediaEncryptor');
-        if (delegated) throw new Error('Can’t encrypt this upload — your church’s media key could not be saved. Nothing has been uploaded.');
+        if (!mediaKey) throw new Error('Can’t encrypt this upload — your church hasn’t shared its media key with this account yet. Ask whoever holds the church key to add you as a member of the church, or to upload this one themselves. Nothing has been uploaded.');
         return async (b) => b;
       },
       uploadBlob: async () => { order.push('uploadBlob'); return { sha256: 'deadbeef', host: 'h', hosts: ['h'], mime: 'audio/mp4', size: 10, enc: false }; },
@@ -717,17 +857,32 @@ test('THE SCREEN: a CONTENT steward uploads an UNENCRYPTED sermon just like the 
   assert.match(p.said(), /✓ Uploaded/, 'a content steward’s successful upload is not reported. Screen read: ' + p.said());
 });
 
-test('THE SCREEN: a CONTENT steward’s ENCRYPTED upload is still refused — by the media key, not by sermon:', async () => {
+test('THE SCREEN: a CONTENT steward’s ENCRYPTED upload now goes through, on the church’s own key', async () => {
+  // INVERTED 2026-09-25 (option A, H1b). It asserted the refusal — `['mediaEncryptor']` then "media key
+  // could not be saved" — which was the honest report of a real dead end: a delegated console tried to MINT
+  // a key and republish the envelope, and the relay refuses that document to anything but the church key.
+  // It no longer mints. It reads the copy the church already sealed to it as a member and encrypts with the
+  // church's own key, so the file plays for every member exactly as the church's own sermons do.
   const p = await sermonsPanel({ delegated: true, caps: ['content'], encOn: true, list: SERMON1 });
-  assert.equal(p.marked(UPLOAD_BTN, 'Upload button'), false,
-    'a content steward’s Upload button is locked even though sermon: itself no longer refuses them');
+  assert.equal(p.marked(UPLOAD_BTN, 'Upload button'), false, 'a content steward’s Upload button is locked');
+  await p.pickFile();
+  await p.press(n => reads(n).trim() === 'Upload', 'Upload button in the naming modal');
+  assert.deepEqual(p.order, ['mediaEncryptor', 'uploadBlob', 'publishSermon', 'pinSermon'],
+    'A CONTENT STEWARD STILL CANNOT PUBLISH AN ENCRYPTED SERMON. Order: ' + JSON.stringify(p.order));
+  assert.match(p.said(), /✓ Uploaded/, 'the successful encrypted upload is not reported. Screen read: ' + p.said());
+});
+
+test('THE SCREEN: …and a steward whose church shared no key is told THAT, before any bytes move', async () => {
+  // The non-member steward (owner's decision, 2026-09-25: refuse honestly rather than widen the seal).
+  // The message must name what is missing and who can fix it — "could not be saved" described a mint that
+  // no longer happens, and "check your connection" would send them to look at a working one.
+  const p = await sermonsPanel({ delegated: true, caps: ['content'], encOn: true, list: SERMON1, mediaKey: false });
   await p.pickFile();
   await p.press(n => reads(n).trim() === 'Upload', 'Upload button in the naming modal');
   assert.deepEqual(p.order, ['mediaEncryptor'],
-    'THE BLOB WENT UP, OR THE WRONG GATE FIRED: expected only mediaEncryptor to run before the refusal. Order: ' + JSON.stringify(p.order));
-  assert.match(p.said(), /media key could not be saved/,
-    'the refusal is not naming the media key, which is the ONLY reason left for a content steward to be ' +
-    'refused an encrypted sermon. Screen read: ' + p.said());
+    'THE BLOB WENT UP OVER A REFUSAL: expected only mediaEncryptor to run. Order: ' + JSON.stringify(p.order));
+  assert.match(p.said(), /hasn’t shared its media key with this account/,
+    'the refusal does not say what is actually missing. Screen read: ' + p.said());
 });
 
 test('THE SCREEN: a steward WITHOUT content opens no “can’t be undone” sheet over a removal it cannot do', async () => {
