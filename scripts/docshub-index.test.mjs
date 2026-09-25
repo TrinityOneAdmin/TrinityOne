@@ -62,7 +62,16 @@ function registrations() {
     const w = block.match(/want: \[([^\]]+)\]/);
     if (!w) continue;
     const want = w[1].trim();
-    const g = block.match(/onevent\(e, d\) \{[\s\S]*?if \(!?d(?:\.startsWith\((\w+)\)|\s*!==\s*(\w+))\) return;/);
+    // THREE GUARD SHAPES, not two. The third — `if (d !== PREFIX + something) return;` — is a per-church
+    // SINGLETON: the constant is a prefix, and the document's whole d-tag is that prefix plus one value
+    // (the church's pubkey, for trinityone/pinsermon:). It reads as neither of the first two and the parser
+    // reported "no d-prefix guard was found", which is a FALSE NEGATIVE — the guard is there and is correct.
+    // Added 2026-09-25, when option A rewrote subscribePinnedSermon onto this hub and turned this file red;
+    // the bucketing question underneath was checked by hand first and the answer was right:
+    // _dkeyOf('trinityone/pinsermon:') and _dkeyOf('trinityone/pinsermon:<cp>') are both "pinsermon", so the
+    // declared slice really does replay the document. It is treated as a PREFIX below, because that is what
+    // the constant is and bucketing is the property this file exists to protect.
+    const g = block.match(/onevent\(e, d\) \{[\s\S]*?if \(!?d(?:\.startsWith\((\w+)\)|\s*!==\s*(\w+)\s*\+[^)]*|\s*!==\s*(\w+))\) return;/);
     // ── AND THE MULTI-PREFIX DISPATCH SHAPE, added 2026-09-10 ─────────────────────────────────────────────
     // subscribeCheckinRegister reads THREE document types on one registration — a clearance, a session-key
     // envelope and the records themselves — because the three decide one answer together and splitting them
@@ -81,7 +90,8 @@ function registrations() {
       out.push({ want, wants, dispatched, guard: null, exact: null, multi: true });
       continue;
     }
-    out.push({ want, wants, guard: g ? (g[1] || g[2] || '').trim() : null, exact: g ? !g[1] : null, multi: false });
+    // g[1] = startsWith(X) · g[2] = `!== X + …` (a per-church singleton, keyed on a PREFIX) · g[3] = `!== X` (a whole d-tag)
+    out.push({ want, wants, guard: g ? (g[1] || g[2] || g[3] || '').trim() : null, exact: g ? !!g[3] : null, multi: false });
   }
   return out;
 }

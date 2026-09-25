@@ -289,6 +289,31 @@ test('mediaEncryptor REFUSES TO ENCRYPT when the key envelope was refused', asyn
   assert.equal(yes.published.length, 1, 'the envelope was not published at all');
 });
 
+test('setBackupMeta NEVER INVENTS A BACKUP TIME — an unknown `at` publishes 0, not now()', async () => {
+  // It published `at: at || now()` until 2026-09-25. `setFrequency` (the cadence segment) passes this
+  // console's LOCAL `trinityone.lastBackupAt`, which is 0 on any device that has not itself exported — a
+  // second steward's laptop, a reinstall, a church that has never backed up at all. So changing the
+  // reminder from Monthly to Weekly published "backed up just now"; every console takes max(prev, at); and
+  // every steward's overdue nudge cleared over a backup nobody had taken. Found by
+  // AUDIT-delegated-publishing-2026-09-25 (M2) as a delegate hazard, and it was never only that: the
+  // church's OWN console does it too, which is why withdrawing that grant did not close it.
+  const unknown = await runLifted('setBackupMeta(at, remind)', 'setBackupMeta', { id: 'evt' }, { actingChurch: '' }, [0, 'weekly']);
+  await unknown.call();
+  assert.equal(unknown.published.length, 1, 're-anchor this test: the owner console did not publish at all');
+  const sent = JSON.parse(unknown.published[0].content);
+  assert.equal(sent.at, 0,
+    'A BACKUP TIME WAS INVENTED. The caller knew of no backup and this published `' + sent.at + '`, which ' +
+    'every other steward\'s console will read as "the church is backed up" and stop nudging over. 0 is the ' +
+    'honest answer and the screen already renders it as "Last backup: never".');
+  assert.equal(sent.remind, 'weekly', 'the cadence the steward actually chose was lost');
+
+  // …and a REAL backup time is still carried through untouched — the fix must not blank what is known.
+  const known = await runLifted('setBackupMeta(at, remind)', 'setBackupMeta', { id: 'evt' }, { actingChurch: '' }, [1700000000, 'monthly']);
+  await known.call();
+  assert.equal(JSON.parse(known.published[0].content).at, 1700000000,
+    'a genuine backup time was discarded — the church would be told it has never backed up');
+});
+
 test('setBackupMeta hands its caller the refusal instead of swallowing it', async () => {
   const no = await runLifted('setBackupMeta(at, remind)', 'setBackupMeta', false, {}, [1700000000, 'monthly']);
   assert.equal(await no.call(), false,
@@ -765,12 +790,13 @@ async function cadencePanel({ delegated, metaAnswer, start = 'monthly' }) {
   const store = { 'trinityone.backupRemind': start };
   const localStorage = { getItem: (k) => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = String(v); }, removeItem: (k) => { delete store[k]; } };
   const asked = [];
+  const sentAt = [];   // the `at` the SCREEN hands the engine — see the "never invents" test below
   let churchDoc = null;
   const win = {
     Steward: {
       actingChurch: delegated ? 'CHURCHPUB' : '',
       myStewardCaps: () => ['content'],
-      setBackupMeta: async (at, remind) => { asked.push(remind); return metaAnswer; },
+      setBackupMeta: async (at, remind) => { asked.push(remind); sentAt.push(at); return metaAnswer; },
       subscribeBackupMeta: (cb) => { churchDoc = cb; return () => {}; },
       mediaSize: async () => ({ count: 0, bytes: 0 }),
     },
@@ -787,6 +813,7 @@ async function cadencePanel({ delegated, metaAnswer, start = 'monthly' }) {
   };
   return {
     asked,
+    sentAt,
     press: async (label) => { btn(label).props.onClick(); await ticks(14); tree = render(); },
     marked: (label) => !!(btn(label).props || {})['aria-disabled'],
     // the segment paints the chosen cadence with the clay fill — which button is lit IS the answer on screen
@@ -796,6 +823,28 @@ async function cadencePanel({ delegated, metaAnswer, start = 'monthly' }) {
     said: () => reads(tree),
   };
 }
+
+test('THE SCREEN: a cadence change on a console that knows of NO backup sends 0, not a time', async () => {
+  // THE POINT OF USE for setBackupMeta's `at: at || 0` (CLAUDE.md rule 1). The engine can only be honest
+  // about a time it was given; this is the half that decides what it is given. `trinityone.lastBackupAt` is
+  // absent from this panel's store — a device that has never exported — and the press must carry that
+  // ignorance through rather than substituting a moment. If this ever passes `Date.now()`-anything, every
+  // steward's overdue nudge clears church-wide over a backup nobody took, and the engine cannot tell.
+  const p = await cadencePanel({ delegated: false, metaAnswer: { id: 'evt' } });
+  await p.press('Weekly');
+  assert.deepEqual(p.asked, ['weekly'], 're-anchor this test: the press did not reach setBackupMeta at all');
+  assert.equal(p.sentAt[0] || 0, 0,
+    'THE SCREEN INVENTED A BACKUP TIME: it handed the engine `' + p.sentAt[0] + '` on a console whose ' +
+    'trinityone.lastBackupAt has never been set. The engine publishes what it is given.');
+
+  // …and when this device DOES know one, the press must carry it, or changing the cadence would tell the
+  // church it has never backed up.
+  const q = await cadencePanel({ delegated: false, metaAnswer: { id: 'evt' } });
+  await q.arrive('monthly');            // the church record lands: at = 1700000000
+  await q.press('Weekly');
+  assert.equal(q.sentAt[0], 1700000000,
+    'the screen discarded the backup time it had just been told about: ' + JSON.stringify(q.sentAt));
+});
 
 test('THE SCREEN: the cadence segment is locked on a delegated console, and the press changes nothing anywhere', async () => {
   const p = await cadencePanel({ delegated: true, metaAnswer: false });

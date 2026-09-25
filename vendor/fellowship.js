@@ -8298,6 +8298,21 @@
     }
     return hub;
   }
+  function _reachedRelay(urls) {
+    try {
+      const st = pool.listConnectionStatus();
+      for (const url of urls || []) {
+        if (st.get(url) === true) return true;
+        try {
+          if (st.get(normalizeURL2(url)) === true) return true;
+        } catch (e) {
+        }
+      }
+      return false;
+    } catch (e) {
+      return false;
+    }
+  }
   function _docsHubOpen(hub) {
     if (hub.closer) return;
     const cp = hub.cp;
@@ -8405,6 +8420,7 @@
         }
       },
       oneose() {
+        hub.reached = _reachedRelay(relaysForChurch(cp));
         _hubEosed(hub);
         _docsHubSaveSoon(hub);
         if (sk && !hub.familyRebuilt) {
@@ -8417,7 +8433,7 @@
         }
         for (const h of [...hub.handlers]) {
           try {
-            h.oneose && h.oneose();
+            h.oneose && h.oneose(hub.reached);
           } catch (err) {
             _featureFailed("load complete", "", err);
           }
@@ -8479,7 +8495,7 @@
     }
     if (hub.eosed && h.oneose) {
       try {
-        h.oneose();
+        h.oneose(hub.reached);
       } catch (err) {
         _featureFailed("load complete", "", err);
       }
@@ -9434,9 +9450,16 @@
         //      means "this church has no sermons", never "the cache has not been overwritten yet".
         // `emit`'s own `!eosed && !v.length` guard still suppresses every PRE-EOSE empty, so the empty state
         // cannot flash on a slow relay. Restores what this reader did before option A (`oneose() { emit(); }`).
-        oneose() {
+        // ⚠ `reached` ADDED 2026-09-25, LATER THE SAME DAY, and it matters MORE here than anywhere else on
+        // this hub. Emitting unconditionally (what this did for one commit, and what main did for ever) fixed
+        // the stuck tab and left a second lie standing: a phone with NO SIGNAL also gets an ordinary empty
+        // EOSE, so Watch & Listen said "Nothing here yet" — a church's sermons declared absent because the
+        // train went into a tunnel. Now the three states are three states: still loading (no callback yet),
+        // genuinely none (a relay answered, list empty), and unreachable (no relay answered → no callback →
+        // the screen's own 12s watchdog says "Can't reach {church} right now", which is TRUE).
+        oneose(reached) {
           eosed = true;
-          emit();
+          if (byId.size || reached) emit();
         }
       });
     },
@@ -11049,11 +11072,11 @@
           emit();
         },
         // a revocation must promote the church's copy, not just hide theirs   // the church-signed steward roster arrived/changed — re-filter
-        oneose() {
+        oneose(reached) {
           eosed = true;
-          if (byId.size) emit();
+          if (byId.size || reached) emit();
         }
-        // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
+        // `reached`: emit an empty list only when a relay ACTUALLY ANSWERED — see _reachedRelay. Offline, EOSE fires with nothing and this holds the last-known rather than blanking it.   // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
       });
     },
     // ── read the church's group categories (named containers, kind-30078) ──
@@ -11104,11 +11127,11 @@
           emit();
         },
         // a revocation must promote the church's copy, not just hide theirs   // re-filter once the steward roster lands (steward-authored categories)
-        oneose() {
+        oneose(reached) {
           eosed = true;
-          if (byId.size) emit();
+          if (byId.size || reached) emit();
         }
-        // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
+        // `reached`: emit an empty list only when a relay ACTUALLY ANSWERED — see _reachedRelay. Offline, EOSE fires with nothing and this holds the last-known rather than blanking it.   // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
       });
     },
     // ── safeguarding: read the church's minors + approved-adults lists (kind-30078) ──
@@ -11399,11 +11422,11 @@
           emit();
         },
         // a revocation must promote the church's copy, not just hide theirs
-        oneose() {
+        oneose(reached) {
           eosed = true;
-          if (byId.size) emit();
+          if (byId.size || reached) emit();
         }
-        // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
+        // `reached`: emit an empty list only when a relay ACTUALLY ANSWERED — see _reachedRelay. Offline, EOSE fires with nothing and this holds the last-known rather than blanking it.   // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
       });
       return () => {
         stop();
@@ -11458,11 +11481,11 @@
           emit();
         },
         // a revocation must promote the church's copy, not just hide theirs
-        oneose() {
+        oneose(reached) {
           eosed = true;
-          if (byId.size) emit();
+          if (byId.size || reached) emit();
         }
-        // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
+        // `reached`: emit an empty list only when a relay ACTUALLY ANSWERED — see _reachedRelay. Offline, EOSE fires with nothing and this holds the last-known rather than blanking it.   // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
       });
       return () => {
         stop();
@@ -11518,11 +11541,11 @@
           emit();
         },
         // a revocation must promote the church's copy, not just hide theirs
-        oneose() {
+        oneose(reached) {
           eosed = true;
-          if (byId.size) emit();
+          if (byId.size || reached) emit();
         }
-        // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
+        // `reached`: emit an empty list only when a relay ACTUALLY ANSWERED — see _reachedRelay. Offline, EOSE fires with nothing and this holds the last-known rather than blanking it.   // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
       });
     },
     // ── serving: services, per-service rotas, rosters, events the church publishes ──
@@ -12628,11 +12651,11 @@
           emit();
         },
         // a revocation must promote the church's copy, not just hide theirs
-        oneose() {
+        oneose(reached) {
           eosed = true;
-          if (byId.size) emit();
+          if (byId.size || reached) emit();
         }
-        // sticky: never blank live needs on a reconnect's EOSE-before-events; genuine closes come via the delete path
+        // `reached`: emit an empty list only when a relay ACTUALLY ANSWERED — see _reachedRelay. Offline, EOSE fires with nothing and this holds the last-known rather than blanking it.   // sticky: never blank live needs on a reconnect's EOSE-before-events; genuine closes come via the delete path
       });
     },
     // member offers to help (careslot:) + recipient skip-days (careskip:) — both member-signed, church-tagged.
@@ -13408,11 +13431,12 @@
           } catch {
           }
         },
+        // Same question as the hub readers, asked at this reader's own socket because it does not use the
+        // hub: emit an empty list only if a relay actually answered (_reachedRelay). See its note.
         oneose() {
           eosed = true;
-          if (byId.size) emit();
+          if (byId.size || _reachedRelay(window.Fellowship.relays)) emit();
         }
-        // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
       });
       return () => {
         window.removeEventListener("trinity-church-trust", onTrust);
@@ -13527,10 +13551,11 @@
           } catch {
           }
         },
+        // Same question as the hub readers (_reachedRelay), at this reader's own socket: a member taken OFF
+        // every rota must see the card go, and a member in a tunnel must not.
         oneose() {
-          if (byId.size) emit();
+          if (byId.size || _reachedRelay(window.Fellowship.relays)) emit();
         }
-        // sticky: don't blank the "you're serving" card on a reconnect's empty EOSE
       });
       return () => {
         try {

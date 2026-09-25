@@ -18736,10 +18736,22 @@ zoo`.split("\n");
     //     fresh device who changes the frequency publishes the same false `at`. It is NOT fixed here — see
     //     the note raised with the owner 2026-09-25. Withdrawing the grant narrows who can trigger it; it
     //     does not close it.
+    //
+    // ⚠ `at: at || 0`, NOT `at: at || now()`. It invented a backup time until 2026-09-25, and that invention
+    // was reachable from an ordinary press: `setFrequency` passes this console's LOCAL
+    // `trinityone.lastBackupAt`, which is 0 on any device that has not itself exported — a second steward's
+    // laptop, a reinstall, a church that has never backed up at all. Changing the reminder from Monthly to
+    // Weekly then published "backed up just now", every console took `max(prev, at)`, and EVERY steward's
+    // overdue nudge cleared over a backup that had never happened. The one thing this document exists to say,
+    // said falsely, by a dropdown.
+    // 0 means "no backup is known", which is exactly what the screen already renders — "Last backup: never",
+    // "You haven't backed up", and `overdue` true. So the worst case now NAGS a church that is fine, where
+    // before it REASSURED a church that was not. For a backup reminder that is the only safe direction.
+    // (The subscriber keeps `if (m.at)`, so a 0 record never erases what a device knows of its own export.)
     setBackupMeta(at, remind) {
       if (!sk) return Promise.resolve(null);
       if (actingChurch) return Promise.resolve(false);
-      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", BACKUPMETA_D + pub], ["t", NET]], content: JSON.stringify({ at: at || now(), remind: remind || "monthly" }) }));
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", BACKUPMETA_D + pub], ["t", NET]], content: JSON.stringify({ at: at || 0, remind: remind || "monthly" }) }));
     },
     subscribeBackupMeta(onMeta) {
       if (!pub) {
@@ -18748,10 +18760,14 @@ zoo`.split("\n");
         };
       }
       const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#d": [BACKUPMETA_D + pub] }], {
+        // `c.at || 0`, never `|| e.created_at`: created_at is when the RECORD was written — a cadence change,
+        // say — not when anyone backed up, so the fallback restated the same lie at read time. Every record
+        // ever written carries a non-zero `at` (the old `at || now()` saw to that), so this branch only ever
+        // catches a 0 written deliberately by the line above, or a malformed doc. Both mean "not known".
         onevent(e) {
           try {
             const c = JSON.parse(e.content);
-            onMeta({ at: c.at || e.created_at, remind: c.remind || "monthly" });
+            onMeta({ at: c.at || 0, remind: c.remind || "monthly" });
           } catch {
             onMeta(null);
           }
