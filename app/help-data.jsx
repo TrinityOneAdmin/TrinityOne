@@ -92,6 +92,8 @@ window.HelpData = {
           { lead: 'What is a “relay”, and do I need one?', text: 'The small server that carries your church’s messages. As a member you never touch it — your church is on one already. Churches can run their own if they want everything on hardware they control, and that is the only reason the word appears anywhere.' },
 
           { lead: 'Someone sent me the app as a file. Should I install it?', text: 'No — not even from someone you trust. Download it yourself from the TrinityOne site or your own church’s address. A changed copy looks exactly the same as a real one, and your phone cannot tell the difference the first time you install it. The person who sent it to you may not know theirs was tampered with.' },
+
+          { lead: 'Can our church put its events on our own website?', text: 'Yes. A steward turns it on in the console under Settings → Church → Your website — it’s off until someone does. It publishes a feed of the events you choose (the whole church’s, or a group’s if a steward ticks them in) as a link you paste into your website’s calendar, or subscribe to from a calendar app like Google or Apple Calendar. There’s also a small widget script for a church whose website can run one. Either way, only the events you’ve chosen to share ever leave the app — nobody’s name, message or private group ever appears on it.' },
         ] },
 
         { type: 'callout', tone: 'sage', text: 'Nothing here is a trick question. If an answer above worries you, that is a good reason to talk to your church rather than to stop using it — most of these have a simple next step.' },
@@ -239,9 +241,9 @@ window.HelpData = {
     {
       id: 'care',
       illo: 'heart',
-      title: 'Practical care & meal trains',
-      summary: 'When someone needs a hand, the church can rally round — meals, lifts, errands, visits.',
-      minutes: 2,
+      title: 'Practical care, asking for help & meal trains',
+      summary: 'When someone needs a hand, the church can rally round — and you can ask, privately, without waiting to be noticed.',
+      minutes: 3,
       blocks: [
         { type: 'p', text: 'When a family has a new baby, someone’s unwell, or a person is grieving, the church can gather round with real, practical help. If your church turns this on, you’ll see open “needs” you can sign up for — a cooked meal on Tuesday, a lift to an appointment, a bit of shopping, a friendly visit. It’s the kind of showing-up a phone message can’t do on its own.' },
         { type: 'list', items: [
@@ -250,7 +252,15 @@ window.HelpData = {
           { lead: 'Say what you’re bringing', text: 'For meals, you can jot a quick note (“lasagne + salad”) so the family gets some variety and helpers don’t all bring the same thing.' },
         ] },
         { type: 'callout', tone: 'sage', text: 'If the help is for you, the need is yours to steer. You’ll see “This is for you”, and on any day you’re already sorted you can tap “I’m covered” — that day comes off the list, so no one cooks a meal you don’t need. (“I’m sorted — close this” is different: it closes the whole thing, and your church stops signing up to help.)' },
-        { type: 'note', text: 'Some churches keep this to a small care team rather than the whole church — either way, it’s only ever your own church, and only for as long as the help is needed.' },
+        { type: 'p', text: 'You don’t have to wait for someone to notice. If Care is on for your church, a private “Ask for help” sits on your Today screen too — for the week you can’t say out loud what’s going on, or don’t want the whole church to know.' },
+        { type: 'list', items: [
+          { lead: 'Tap “Ask for help” and say what’s going on', text: 'This is never posted as an open need. It goes straight to your church’s care team as a private, sealed message — only they see it, never the whole church.' },
+          { lead: 'It opens a private chat with the care team', text: 'So you can say more, answer a question, or arrange a time — just between you and them.' },
+          { lead: 'Change your mind, withdraw it', text: 'Withdrawing deletes your request and that chat together. Nothing is kept once you take it back.' },
+        ] },
+        { type: 'note', text: 'A young person asking for help is only ever seen by the adults your church has cleared for youth work — the app doesn’t call them “the care team” on a child’s screen, but they’re the same trusted people.' },
+        { type: 'callout', tone: 'gold', text: 'Sometimes your church will run a “safety check” — a gentle roll-call after something happens, asking everyone to say they’re OK. If you see one, tap “I’m safe”, or “I need help” if you’re not — either way, your church knows.' },
+        { type: 'note', text: 'Some churches keep the whole Care area to a small care team rather than the whole church — that changes who sees an open “need”, never who sees a private “Ask for help”, which always goes to the care team (or cleared adults, for a child) alone. Either way, it’s only ever your own church, and only for as long as the help is needed.' },
       ],
     },
     {
@@ -315,6 +325,12 @@ window.HelpData = {
           { lead: 'Private messages are protected', text: 'A child can only be privately messaged by their own parent and by approved people at the church — the adults it has cleared for youth work, and whoever looks after safeguarding. Nobody else can, and neither can another child.' },
           { lead: 'Your leaders are always reachable', text: 'A young person can always message the church itself if they need help.' },
         ] },
+        { type: 'p', text: 'None of this is hidden from your child, either — it’s explained to them, in their own app, so a protection doesn’t just feel like the app being broken.' },
+        { type: 'list', items: [
+          { lead: 'Their own profile says what kind of account it is', text: 'A young person’s profile tells them plainly: your church has set this up as a young person’s account, private messages are limited to the checked adults and to your parent or guardian, and everything else works normally. Only they and your church’s stewards see this.' },
+          { lead: 'A locked “Restricted” tag explains itself — differently to each side', text: 'When a message is blocked, tapping “Restricted” explains why. A young person is told what they can still do — read, join their groups, message a checked adult or leader. An adult on the other end is only ever told that messages here are limited for safeguarding — they are never told the other person is a child.' },
+          { lead: 'A blocked message says so honestly', text: '“Not delivered”, straight away. It never pretends to send and quietly go nowhere.' },
+        ] },
         { type: 'p', text: 'A parent can set up and look after a child’s account from their own phone:' },
         { type: 'steps', label: 'Set up your child’s account', items: [
           'Tap You at the bottom → “Children’s accounts” → “Add a child”.',
@@ -345,7 +361,7 @@ window.HelpData = {
       summary: 'Get a gentle nudge when something needs you — and choose exactly what.',
       minutes: 2,
       blocks: [
-        { type: 'p', text: 'TrinityOne can let you know when there’s something for you — a message, a church announcement, or a request to serve — even when the app is closed. You’re always in control of what comes through. One thing to know: on the Android app, serving reminders are the only alerts that come through at the moment. In a browser, or added to the home screen on an iPhone, all three work.' },
+        { type: 'p', text: 'TrinityOne can let you know when there’s something for you — a direct message, a church announcement, or a request to serve. You’re always in control of what comes through. One thing to know on the Android app: today, only serving reminders arrive once you’ve closed the app. Direct-message, announcement and serving-request alerts arrive while the app is open, but not after you close it. Add TrinityOne to the Home Screen on an iPhone, or use it in a browser tab, and all four work even with the app closed.' },
         { type: 'steps', label: 'Turn them on or off', items: [
           'Tap You at the bottom → Notifications.',
           'Turn “Allow notifications” on (your phone may ask permission — tap Allow).',
@@ -353,7 +369,7 @@ window.HelpData = {
         ] },
         { type: 'list', items: [
           { lead: 'Direct messages', text: 'When someone messages you directly. The alert never shows the message itself — just that one arrived.' },
-          { lead: 'Church announcements', text: 'When your church posts in its announcements channel.' },
+          { lead: 'Church announcements', text: 'When your church posts in its announcements channel. This also covers two other things your church may turn on — a featured sermon, and a “please confirm you’re safe” safety check — there’s no separate switch for either yet, so turning announcements off turns those off too.' },
           { lead: 'Serving requests', text: 'When your church asks if you can serve.' },
           { lead: 'Serving reminders', text: 'A gentle reminder the evening before you’re due to serve.' },
         ] },
@@ -380,7 +396,7 @@ window.HelpData = {
           'Compare the check code on both phones before you finish — all eight characters must match.',
           'You’re back — same account, same church, same groups.',
         ] },
-        { type: 'note', text: 'Your notes, journal and highlights live only on the old phone. Restore your backup file afterwards to bring those across too — the 12 words bring back who you are, the file brings back what you wrote.' },
+        { type: 'note', text: 'Your notes, journal and highlights live only on the old phone. Restore your backup file afterwards to bring those across too — the 12 words bring back who you are, the file brings back what you wrote. One more thing the words don’t bring back: which churches you followed. Nothing is lost, but you’ll need to follow each one again with its link or QR code — it takes a moment.' },
         { type: 'callout', tone: 'sage', text: 'Lost the words AND the old phone? Ask a steward. Choose “I’ve lost my 12 words”, show them the code on your screen, and your church can put you back in your place. Your old private messages stay locked — nobody can open those, which is the point of them being private.' },
         { type: 'tech', text: 'The backup file holds your BIP-39 identity plus your local study data, encrypted with your passphrase (AES-GCM, key stretched with memory-hard Argon2id; older files still open with the PBKDF2 they were made with). Restoring re-derives the same key, so you are the same person to your church. Note that your followed churches are stored on this device, so re-following is a manual step today.' },
       ],
@@ -441,9 +457,10 @@ window.HelpData = {
           { lead: 'Groups & announcements', text: 'Create chat rooms and announcement channels, set which are open or invite-only, and mark the ones that are safe for children.' },
           { lead: 'Rota', text: 'Build serving teams and schedules, send “Can you serve?” requests, and see who’s said yes, can’t, or is away.' },
           { lead: 'Events & calendar', text: 'Post events and socials and see who’s coming.' },
-          { lead: 'Where your church lives (the relay)', text: 'Every church runs on a relay — the small server that carries its chat, members and announcements (the Bible reader needs none of it). New churches start on the shared TrinityOne relay with nothing to set up; when you’re ready, Settings → Network & relays can point your church at one you trust, or your own, without anyone losing anything.' },
+          { lead: 'Where your church lives (the relay)', text: 'Every church runs on a relay — the small server that carries its chat, members and announcements (the Bible reader needs none of it). New churches start on the shared TrinityOne relay with nothing to set up; when you’re ready, Settings → Infrastructure → Relays can point your church at one you trust, or your own, without anyone losing anything.' },
+          { lead: 'Your website', text: 'Settings → Church → Your website can share your calendar with the outside world — off until you switch it on. Turn it on and your church’s events publish to a link you can paste into your own website’s calendar, or subscribe to from a calendar app; a group’s events only join it if a steward ticks them in one by one. You choose how far ahead it looks, what the calendar is called, and whether each event shows full details or just the title and time. Only the events you choose to share ever leave the app — nothing about your members does. One honest note: the feed’s own web address shows which relay serves your church, the same way any website address names the server it lives on.' },
         ] },
-        { type: 'callout', tone: 'sage', text: 'Practical care — meal trains, lifts and errands — switches on under Settings → Features when your church wants it. Church finances, a treasurer’s ledger, is already there in the console’s own list (see the next guide).' },
+        { type: 'callout', tone: 'sage', text: 'Practical care — meal trains, lifts and errands — switches on under Settings → People → Congregation features when your church wants it. Church finances, a treasurer’s ledger, is already there in the console’s own list (see the next guide).' },
         { type: 'note', text: 'Being a steward is delegated and revocable: a steward gets their own key and can be added or removed at any time, so leadership can change hands without anyone losing access to the church.' },
         // MARKETING-AUDIT-2026-08-05: from stewards-guide.html, now deleted (940 words, zero inbound links —
         // it had no href pointing at it from anywhere on the site). This distinction is the useful part, and
@@ -503,7 +520,7 @@ window.HelpData = {
           'Don’t pipe the installer straight into sudo (curl … | sudo bash). It runs as root; read it first.',
           'Don’t drop the -L from curl: the GitHub address redirects, and without -L you save the redirect page instead of the script.',
         ] },
-        { type: 'note', text: 'Whichever way you set it up, the last step is the same: in this console, Settings → Network & relays, add the relay’s address. The Suite does this for you; a server box shows the address in its control panel.' },
+        { type: 'note', text: 'Whichever way you set it up, the last step is the same: in this console, Settings → Infrastructure → Add a relay, and enter the relay’s address. The Suite does this for you; a server box shows the address in its control panel.' },
         { type: 'tech', text: 'A server box takes its CODE from GitHub Releases — bundle.tgz and bundle.sig sit beside the Suite installers on each relay-v release, signed on the release host with the key whose fingerprint is above — and the member and steward apps it hands out from app.trinityone.church, which carries them and GitHub does not. The install script pins the release public key and verifies bundle.sig against bundle.tgz (Ed25519, openssl pkeyutl) before unpacking anything; the panel’s Update now does the same against the key the bundle carries. The Suite’s desktop installers are downloaded over HTTPS from GitHub Releases and are not code-signed; the Suite updates by installing a newer Suite, not through the relay’s update button.' },
       ],
     },
@@ -589,7 +606,7 @@ window.HelpData = {
         { type: 'steps', label: 'Put the church on another computer', items: [
           'Before you leave the old one: Settings → Church → Backup & data → “Back up church data”. That file is your messages, groups, plans and records.',
           'On the new computer: Settings → Security → Church key → “Restore from a recovery phrase”, and type the twelve words. This computer is now the church — the same church, not a copy of it.',
-          'If the relay here is starting empty, Settings → Network & relays → “Copy your history to…” brings the past across. The phrase brings back who you are; this brings back what was said.',
+          'If the relay here is starting empty, Settings → Infrastructure → Move or copy history → “Copy your history to…” brings the past across. The phrase brings back who you are; this brings back what was said.',
           'Set a console lock on the new computer while you are there — the same Church key panel.',
         ] },
         { type: 'callout', tone: 'clay', text: 'The recovery phrase is the only way back. A backup of your church’s data is well worth having and will not do this job: it rebuilds the records, but it cannot make a computer the church again. Without the phrase that file is a library nobody can add to under your church’s name.' },
@@ -616,6 +633,7 @@ window.HelpData = {
         { type: 'steps', label: 'Add a steward', items: [
           'Settings → Security → Delegated stewards.',
           '“Add a steward” — scan their code, or paste it in. It is a public code: no key of yours or theirs changes hands.',
+          'Give them a name in your own words first — the console won’t let you add someone without one. You’ll need it to tell your stewards apart, especially the day a code gets pasted wrong.',
           'Tick what they may do. Leave everything unticked and they can sign in and see the church, nothing more.',
         ] },
         { type: 'p', text: 'Each tick says what they will SEE, not only what they may do — which is the part worth reading slowly, because you are deciding who may read something about a person in your congregation:' },
@@ -625,8 +643,10 @@ window.HelpData = {
           { lead: 'Safeguarding', text: 'Clearances, photo decisions and kids check-in. They can see who is marked as a child, which adults are cleared, guardians, and check-in records — only you can change those lists.' },
           { lead: 'Members', text: 'Admit people, set the join policy, reconnect someone who lost their words. They can see the whole membership list with real names, and who is waiting to join.' },
           { lead: 'Groups & rotas', text: 'Groups, rotas, services, events, posts. They can see every group including private ones, read what is said in them, and post to the whole church in its name.' },
+          { lead: 'Sealed rooms', text: 'Locking a room so only its members can read it. Whoever locks a room holds its key — so they can see everything said inside it from then on. That is why it is its own separate tick rather than folded into Groups & rotas.' },
         ] },
         { type: 'note', text: 'A steward is not a second you. They cannot add other stewards, block or remove anyone, or change your relay settings — those stay with the key. So if you hand the welcoming to a volunteer, keep yourself reachable for the times it has to go the other way.' },
+        { type: 'note', text: 'These limits are enforced by your church’s relay, each time it is asked — not by the app on a steward’s phone. That is what makes them hold even against a tampered app, but it also means they need a relay that knows how to check them. A relay running very old software may not check capabilities at all, and would quietly hand a steward everything regardless of what you ticked. The shared TrinityOne relay is always kept current; if your church runs its own, keeping it updated is what keeps these limits real.' },
         { type: 'callout', tone: 'clay', text: 'Handing over the recovery phrase is the other thing entirely, and it cannot be undone. It does not add a helper — it makes a second owner with exactly your powers, permanently. Settings → Security → Stewards & handoff is where that lives, and it says so at the moment you would do it.' },
         { type: 'rule', text: 'If you might ever want it back, it is a delegated steward. The phrase is for someone you would trust to be the church.' },
       ],
@@ -647,12 +667,13 @@ window.HelpData = {
           { lead: 'They see only child-safe groups', text: 'Their app shows just the groups you have marked safe for them. Adult spaces never appear.' },
           { lead: 'Private messages are blocked', text: 'A private message between a child and an adult is refused unless that adult is cleared for youth, or is the child’s linked parent.' },
           { lead: 'You are always reachable', text: 'A young person can always message the church itself if they need help.' },
+          { lead: 'It explains itself to them, too', text: 'Their own profile tells them plainly what kind of account it is. A locked “Restricted” tag on someone they can’t message explains what they CAN still do, rather than just refusing silently — that is what stops a protection reading as the app being broken. An adult on the other end is only ever told that messages are limited, never that the other person is a child.' },
         ] },
         { type: 'steps', label: 'Clear an adult for youth work', items: [
           'Members → the adult’s row → “Clear for youth”.',
         ] },
         { type: 'callout', tone: 'clay', text: 'Your cleared list is also who can receive a request for help from a young person. Being on the care rota is not enough. If nobody in your church is cleared, no child in your church can ask for help through the app — the request has nowhere to go.' },
-        { type: 'note', text: 'Settings → Features → “Allow children’s photos” is off to begin with: children use a colour, initial or symbol instead. Photos are visible to your whole church, and you can switch this back off at any time.' },
+        { type: 'note', text: 'Settings → People → Congregation features → “Allow children’s photos” is off to begin with: children use a colour, initial or symbol instead. Photos are visible to your whole church, and you can switch this back off at any time.' },
         { type: 'note', text: 'This supports your church’s safeguarding — it doesn’t replace background checks, training, supervision or policy. Clear only adults who are already on your church’s cleared-worker list. If you’re ever concerned, speak to your church’s safeguarding lead.' },
         { type: 'note', text: 'Safeguarding is one of the grants you can give a steward, and it is worth knowing what it opens: who is marked as a child, which adults are cleared, who each child’s guardians are, and the check-in records with names, rooms and pickup codes. Only you can change those lists.' },
         { type: 'tech', text: 'This is enforced at the relay, not just hidden in the app: the minor and approved-adult lists are owner-only, and the write-policy blocks child↔adult direct messages and child posts to adult groups server-side, so a tampered or third-party client can’t get around it.' },
@@ -722,7 +743,7 @@ window.HelpData = {
         { type: 'callout', tone: 'clay', text: 'A parent with the app sees their OWN children while they are checked in — the name and the pickup code — and nothing else: no register, no other family, no way to check a child out. A parent with no app, or one you checked in at the desk without them, sees nothing and is told to ask you for the code. Say both when you announce it.' },
         { type: 'steps', label: 'Before your first Sunday', items: [
           'Members → mark each child, and confirm who their guardians are. The register reads that list, so a child who is not marked cannot be checked in.',
-          'Settings → Features → “Kids check-in” must be on for the page to appear at all.',
+          'Settings → People → Congregation features → “Kids check-in” must be on for the page to appear at all.',
           'Check-in → “Clear someone” for any children’s worker who is not already a safeguarding steward.',
         ] },
         { type: 'steps', label: 'On the day', items: [
