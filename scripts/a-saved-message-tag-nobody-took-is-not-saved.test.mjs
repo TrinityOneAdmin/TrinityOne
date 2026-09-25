@@ -246,25 +246,23 @@ test('removeSermon now really asks the relay on a DELEGATED console too, and onl
     'THE BLOB BYTES WERE DELETED ON A DELEGATED CONSOLE OVER A REFUSED TOMBSTONE: ' + JSON.stringify(deletes2));
 });
 
-// ⚠ UPDATED 2026-09-25 (option A, Phase 1, PLAN-delegated-steward-publishing.md). This test used to be named
-// "setBackupMeta answers false on a DELEGATED console, without asking" and asserted the `if (actingChurch)
-// return Promise.resolve(false)` short-circuit added 2026-09-22. subscribeBackupMeta now accepts a rostered
-// steward's `['church', cp]`-tagged copy (src/steward.src.js + src/church-doc-store.src.js) and the relay's
-// accept() grants `stewardCan(e.pubkey, cp, 'any')` again (scripts/gateway.mjs) — proven end to end in
-// scripts/a-delegated-stewards-backup-meta-reaches-the-console.test.mjs. What THIS file still owns is the
-// narrower H1 question: does setBackupMeta report what publish() actually answered, on EVERY console, rather
-// than discarding it (the original defect) or hard-coding an answer (the 2026-09-22 short-circuit, which was
-// itself a discard of a different kind — it discarded the question).
-test('setBackupMeta now really asks the relay on a DELEGATED console too, and reports the answer', async () => {
-  const yes = await runLifted('setBackupMeta(at, remind)', 'setBackupMeta', { id: 'evt' }, { actingChurch: 'CHURCHPUB' }, [1700000000, 'monthly']);
-  assert.notEqual(await yes.call(), false,
-    'setBackupMeta still refuses to even ask the relay on a delegated console — the 2026-09-22 short-circuit ' +
-    'is still here, and the re-grant this commit makes is inert without this half');
-  assert.equal(yes.published.length, 1, 'a delegated console did not publish the record at all');
-  // …and the owner console is unchanged: it still asks, and still reports what it got.
-  const owner = await runLifted('setBackupMeta(at, remind)', 'setBackupMeta', { id: 'evt' }, { actingChurch: '' }, [1700000000, 'monthly']);
-  assert.notEqual(await owner.call(), false, 'the owner console now believes it cannot save the shared backup record either');
-  assert.equal(owner.published.length, 1, 'the owner console stopped publishing the shared backup record');
+// ⚠ THIS TEST WAS INVERTED FOR HALF A DAY ON 2026-09-25 AND IS BACK. Option A phase 1 taught
+// subscribeBackupMeta to read a rostered steward's church-tagged copy and re-granted the write at the
+// relay, so this was renamed "setBackupMeta now really asks the relay on a DELEGATED console too" and
+// asserted the opposite. The owner withdrew the grant the same day on measured evidence: a delegate cannot
+// export a backup at all, so the only press they could land was the cadence segment — which publishes this
+// console's LOCAL last-backup time (0 on a device that never exported) as "backed up just now", clearing
+// every steward's overdue nudge over a backup nobody took. Full note on setBackupMeta in src/steward.src.js.
+test('setBackupMeta answers false on a DELEGATED console, without asking', async () => {
+  const no = await runLifted('setBackupMeta(at, remind)', 'setBackupMeta', { id: 'evt' }, { actingChurch: 'CHURCHPUB' }, [1700000000, 'monthly']);
+  assert.equal(await no.call(), false,
+    'setBackupMeta reports success on a delegated console. subscribeBackupMeta filters authors:[churchpub], ' +
+    'so a steward-authored record resets NOBODY\'s overdue nudge — the screen must say so.');
+  assert.equal(no.published.length, 0, 'it published a record the relay refuses and no console reads');
+  // …and the owner console is untouched: it still asks, and still reports what it got.
+  const yes = await runLifted('setBackupMeta(at, remind)', 'setBackupMeta', { id: 'evt' }, { actingChurch: '' }, [1700000000, 'monthly']);
+  assert.notEqual(await yes.call(), false, 'the owner console now believes it cannot save the shared backup record either');
+  assert.equal(yes.published.length, 1, 'the owner console stopped publishing the shared backup record');
 });
 
 
@@ -516,20 +514,12 @@ test('THE SCREEN: changing the backup REMINDER says so too — the second caller
   // weekly / monthly / off segment — was still fire-and-forget inside a try/catch, so a steward picked
   // "Weekly", watched the segment move to Weekly, and every other console went on nudging monthly with
   // nothing on any screen saying so.
-  //
-  // ⚠ UPDATED 2026-09-25 (option A, Phase 1). `delegated: true` on its own no longer means locked — the
-  // relay grants ANY steward with a single capability this write (`stewardCan(…, 'any')`), so an ordinary
-  // delegate (no `caps` stubbed, i.e. unscoped — the common case) now behaves exactly like the owner: it
-  // asks, and reports whatever the relay answered. `caps: []` is the one case still locked, and needs its
-  // own call-count check because "the button says the right thing" is not "the press never happened".
-  const run = async ({ metaAnswer, delegated, caps }) => {
+  const run = async ({ metaAnswer, delegated }) => {
     const { React, draw } = miniReact();
-    let calls = 0;
     const win = {
       Steward: {
         actingChurch: delegated ? 'CHURCHPUB' : '',
-        myStewardCaps: () => (delegated ? (caps === undefined ? null : caps) : null),
-        setBackupMeta: async () => { calls++; return metaAnswer; },
+        setBackupMeta: async () => metaAnswer,
         subscribeBackupMeta: () => () => {},
         mediaSize: async () => ({ count: 0, bytes: 0 }),
       },
@@ -546,12 +536,12 @@ test('THE SCREEN: changing the backup REMINDER says so too — the second caller
       await ticks(12);
       tree = render();
     };
-    return { press, said: () => reads(tree), calls: () => calls };
+    return { press, said: () => reads(tree) };
   };
 
   const ok = await run({ metaAnswer: { id: 'evt' }, delegated: false });
   await ok.press('Weekly');
-  assert.doesNotMatch(ok.said(), /could not be saved|hasn’t given you/,
+  assert.doesNotMatch(ok.said(), /could not be saved|Only the church/,
     'a cadence change every relay accepted is being reported as a failure. Screen read: ' + ok.said());
 
   const no = await run({ metaAnswer: false, delegated: false });
@@ -560,20 +550,10 @@ test('THE SCREEN: changing the backup REMINDER says so too — the second caller
     'THE CADENCE CONTROL IS STILL FIRE-AND-FORGET. The segment moves to Weekly on this console while every ' +
     'other steward goes on being nudged monthly, and nothing on any screen says so. Screen read: ' + no.said());
 
-  // an ORDINARY delegate — unscoped, the shape most stewards actually have — now asks the relay too, same
-  // as the owner, and reports the SAME relay problem rather than a permanent one that no longer exists.
   const dele = await run({ metaAnswer: false, delegated: true });
   await dele.press('Weekly');
-  assert.equal(dele.calls(), 1, 'AN ORDINARY DELEGATE’S PRESS NEVER REACHED THE RELAY — the re-grant did not reach the screen');
-  assert.match(dele.said(), /the shared backup record could not be saved/,
-    'an ordinary delegate is told about a permanent refusal that no longer applies to them. Screen read: ' + dele.said());
-
-  // …and the one steward still genuinely locked: explicitly scoped to NOTHING.
-  const scoped = await run({ metaAnswer: false, delegated: true, caps: [] });
-  await scoped.press('Weekly');
-  assert.equal(scoped.calls(), 0, 'A STEWARD SCOPED TO NOTHING STILL REACHED THE RELAY: ' + scoped.calls());
-  assert.match(scoped.said(), /scoped you away from every capability/,
-    'a steward scoped to nothing is told to check their connection over a refusal that is permanent. Screen read: ' + scoped.said());
+  assert.match(dele.said(), /Only the church’s own console can save the shared backup record/,
+    'a delegated console is told to check its connection over a refusal that is permanent. Screen read: ' + dele.said());
 });
 
 // ── THE CONTROL, NOT THE LABEL: NOT ONE BYTE GOES UP ON A CONSOLE THAT MAY NOT PUBLISH ───────────────────
@@ -589,9 +569,6 @@ test('THE SCREEN: changing the backup REMINDER says so too — the second caller
 // settings are driven below. The three controls that write `trinityone/sermon:` — Upload, Edit and Remove
 // — are asserted to be MARKED as well, because a live control on a console that can never use it is the
 // [[fix-the-control-not-the-label]] shape whatever the engine says afterwards.
-// `caps` says which steward this is, when `delegated` — default ['content'] (a fully-granted delegate),
-// matching every caller written before option A, Phase 2 (2026-09-25) existed. Pass `caps: ['finance']` (or
-// `[]`) for the one case that is still real: a steward this church has NOT given the content capability.
 async function sermonsPanel({ delegated, caps, encOn, list = [] }) {
   const { React, draw } = miniReact();
   const order = [];
@@ -784,7 +761,7 @@ test('THE SCREEN: the OWNER console still uploads, publishes and removes — the
 // write, not the church key alone, so `delegated` on its own no longer means locked. Default `null`
 // (unscoped, the ordinary/most common steward shape) matches every existing caller's original intent; pass
 // `caps: []` for the one shape that is still genuinely locked — a steward scoped to NOTHING.
-async function cadencePanel({ delegated, metaAnswer, start = 'monthly', caps = null }) {
+async function cadencePanel({ delegated, metaAnswer, start = 'monthly' }) {
   const { React, draw } = miniReact();
   const store = { 'trinityone.backupRemind': start };
   const localStorage = { getItem: (k) => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = String(v); }, removeItem: (k) => { delete store[k]; } };
@@ -793,7 +770,7 @@ async function cadencePanel({ delegated, metaAnswer, start = 'monthly', caps = n
   const win = {
     Steward: {
       actingChurch: delegated ? 'CHURCHPUB' : '',
-      myStewardCaps: () => (delegated ? caps : null),
+      myStewardCaps: () => ['content'],
       setBackupMeta: async (at, remind) => { asked.push(remind); return metaAnswer; },
       subscribeBackupMeta: (cb) => { churchDoc = cb; return () => {}; },
       mediaSize: async () => ({ count: 0, bytes: 0 }),
@@ -821,15 +798,11 @@ async function cadencePanel({ delegated, metaAnswer, start = 'monthly', caps = n
   };
 }
 
-test('THE SCREEN: the cadence segment is locked for a steward scoped to NOTHING, and the press changes nothing anywhere', async () => {
-  // `caps: []` — explicit and empty, the compat rule's own "means nothing, not everything" exception. An
-  // ORDINARY delegate (unscoped, or with any one capability) is covered by the companion test in "THE
-  // SCREEN: changing the backup REMINDER…" above, which shows the segment now asks the relay just like the
-  // owner's console — option A, Phase 1, re-granted `stewardCan(…, 'any')`.
-  const p = await cadencePanel({ delegated: true, metaAnswer: false, caps: [] });
+test('THE SCREEN: the cadence segment is locked on a delegated console, and the press changes nothing anywhere', async () => {
+  const p = await cadencePanel({ delegated: true, metaAnswer: false });
   assert.equal(p.marked('Weekly'), true,
-    'the cadence control is still offered on a console that cannot change it — a steward scoped to nothing ' +
-    'still cannot reach this write');
+    'the cadence control is still offered on a console that cannot change it — the relay gates ' +
+    'trinityone/backup-meta: to the church key, so this press can reach nothing');
   await p.press('Weekly');
   assert.deepEqual(p.asked, [],
     'it asked the relay anyway, so the steward waits on a write that is always refused: ' + JSON.stringify(p.asked));
@@ -839,7 +812,7 @@ test('THE SCREEN: the cadence segment is locked for a steward scoped to NOTHING,
     'other console until the next document arrives. Stored: ' + p.stored());
   assert.equal(p.lit(), 'Monthly',
     'the segment moved to a cadence nothing will ever nudge at. Lit: ' + p.lit());
-  assert.match(p.said(), /scoped you away from every capability/,
+  assert.match(p.said(), /Only the church’s own console can save the shared backup record/,
     'the locked cadence control said nothing when it was pressed. Screen read: ' + p.said());
 });
 

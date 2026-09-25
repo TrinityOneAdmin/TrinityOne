@@ -821,7 +821,7 @@ const PINSERMON_D = D.PINSERMON; // the church's currently-featured/pinned sermo
 const SERMON_D = D.SERMON;     // the sermon itself — d=sermon:<id>, ["church",<cp>]; church key or a CONTENT steward — see the content-doc branch below for the 2026-09-22 withdrawal / 2026-09-25 re-grant history
 const MSGTAGS_D = D.MSGTAGS;   // the church's chat tag labels — d=trinityone/msgtags, a BARE name (one doc per author); church/network/CONTENT steward
 const MANNA_D = D.MANNA;       // the benevolence module's stem — d=trinityone/manna-<sub>, seven sub-types by concatenation; OWNER-ONLY while the module is locked for the pilot (see the registry entry for the three reasons)
-const BACKUPMETA_D = D.BACKUPMETA; // when the church last exported its data — d=backup-meta:<churchpub>, cleartext {at, remind}; church key or a steward with 'any' capability — see the accept() branch below for the 2026-09-22 withdrawal / 2026-09-25 re-grant history
+const BACKUPMETA_D = D.BACKUPMETA; // when the church last exported its data — d=backup-meta:<churchpub>, cleartext {at, remind}; CHURCH KEY OR ITS NETWORK ONLY — granted to a steward twice (2026-09-22, 2026-09-25) and withdrawn within the day both times; see the accept() branch below
 const HIDE_D = D.HIDE;       // a removed/hidden message — d=hidden:<msgId> (one per message)
 const MINORS_D = D.MINORS;     // safeguarding: a church's list of minor (child) pubkeys — d=minors:<churchpub>
 const APPROVED_D = D.APPROVED; // safeguarding: adults cleared to contact youth (mirrors the church's DBS/cleared list) — d=approved:<churchpub>
@@ -4246,15 +4246,18 @@ function accept(e) {
     // steward went on seeing the church overdue with nothing on any screen saying so. A loud failure turned
     // into a silent success. Owner's decision, 2026-09-22: withdraw the grant until the reader is fixed.
     //
-    // THE READER IS NOW FIXED. subscribeBackupMeta reads `authors:[pub]` OR `'#church':[pub]` and trusts the
-    // author only against the console's own live steward-roster read (`_consoleDisplay`, same predicate as
-    // subscribeGroups/subscribePlans/etc. in src/steward.src.js), keeping every author's version and
-    // choosing the newest TRUSTED one (src/church-doc-store.src.js) — so a revoked steward's stale record
-    // can never outrank the church's own. Console-to-console only: no member screen ever reads this
-    // document, so this half needed no member-app change and no APK — see the PLAN doc, "if only one half
-    // is ever built, build that one." Proven by
-    // scripts/a-delegated-stewards-backup-meta-reaches-the-console.test.mjs.
-    if (d.startsWith(BACKUPMETA_D)) { const cp = d.slice(BACKUPMETA_D.length); return leaderOf(cp) || stewardCan(e.pubkey, cp, 'any'); }
+    // IT WAS RE-GRANTED ON 2026-09-25 (option A, phase 1) AND WITHDRAWN AGAIN THE SAME DAY. Fixing the
+    // reader — subscribeBackupMeta now CAN read a steward's church-tagged copy — turned out to be necessary
+    // and not sufficient, and the second reason is the one to read before granting this a third time:
+    //   - A DELEGATE CANNOT TAKE A BACKUP AT ALL. The export route is church-key-only at `_exportAuth` in
+    //     this file, and the button is owner-only in app/stew-dashboard.jsx. So no delegated write to this
+    //     document can ever mean what the document records.
+    //   - THE ONE PRESS IT REACHED WAS A HAZARD. The cadence segment passes that console's LOCAL
+    //     `trinityone.lastBackupAt` (0 on a device that never exported) to setBackupMeta, whose
+    //     `at: at || now()` publishes "backed up just now"; every console takes max(prev, at), so a dropdown
+    //     clears the overdue nudge church-wide over a backup nobody took.
+    // Owner's decision, 2026-09-25, on measured evidence. `sermon:` kept its re-grant; this one did not.
+    if (d.startsWith(BACKUPMETA_D)) return leaderOf(d.slice(BACKUPMETA_D.length));
     // THE BENEVOLENCE MODULE'S STEM — seven sub-types built by concatenation (settings, fund:, request:,
     // vouch:, approval:, record:, testimony:). Church key or its network ONLY, while the module is LOCKED
     // for the pilot (app/stew-manna.jsx says so on the toggle). One prefix rule would be one grant across

@@ -56,15 +56,18 @@
 // FIVE ACTORS, EVERY TYPE, ON ONE RELAY CARRYING TWO CHURCHES. The cross-tenant row is not decoration:
 // `groupkey:` (2026-09-17) and `voice:` (2026-08-25) were both found by asking exactly it.
 //
-// ⚠ UPDATED 2026-09-25. `sermon:` and `backup-meta:` are RE-GRANTED to a rostered steward (option A,
-// TrinityOne-internal/reference/PLAN-delegated-steward-publishing.md), now that every reader named above has
-// been taught to accept a rostered steward's `['church', cp]`-tagged copy — `_openSermons` and both
-// `subscribePinnedSermon`s in the two engines, `subscribeSermons`, and `subscribeBackupMeta`. The MATRIX and
-// the two tests further down that pinned the withdrawal are updated to match; the sentences above this line
-// are left as written because they are the accurate history of WHY the withdrawal happened, which is still
-// true and still the reason the re-grant needed the readers fixed first. See
-// scripts/a-delegated-stewards-backup-meta-reaches-the-console.test.mjs and
+// ⚠ UPDATED 2026-09-25, AND ONE OF THE TWO MOVED. `sermon:` is RE-GRANTED to a rostered CONTENT steward
+// (option A, TrinityOne-internal/reference/PLAN-delegated-steward-publishing.md), now that every sermon
+// reader named above has been taught to accept a rostered steward's `['church', cp]`-tagged copy —
+// `_openSermons` and both `subscribePinnedSermon`s in the two engines, and `subscribeSermons`. See
 // scripts/a-delegated-stewards-sermons-reach-a-member-phone.test.mjs for the reader-side proof.
+// `backup-meta:` was re-granted the same day and WITHDRAWN AGAIN the same day, on the owner's decision:
+// its reader was fixed too, but a delegate cannot export a backup at all, so the only press they could
+// land was the cadence segment — which publishes that console's LOCAL last-backup time (0 on a device that
+// never exported) as "backed up just now", clearing every steward's overdue nudge over a backup nobody
+// took. Its row below is therefore unchanged from the 2026-09-22 withdrawal. The sentences above this line
+// are left as written: they are the accurate history of WHY the withdrawal happened, and still the reason
+// the sermon re-grant needed its readers fixed first.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -181,19 +184,19 @@ const SHAPES = {
 
 // WHO MAY WRITE EACH ONE — the table this commit exists to write down. `true` = must be ACKed.
 //
-// ⚠ UPDATED 2026-09-25 (option A, PLAN-delegated-steward-publishing.md, Phase 1 + 2). `sermon:` and
-// `backup-meta:` were re-granted to a rostered steward once their readers were fixed to actually serve a
-// steward-signed copy — see the two dedicated test files named at the bottom of this file's header comment.
-// `sermon:` needs the CONTENT capability (it is congregation-facing, the same bar as msgtags); `backup-meta:`
-// needs only 'any' (its whole point is that ANY steward taking a backup resets everyone's nudge), so a
-// steward scoped to finance-only — refused for sermon: — is ACCEPTED for backup-meta:. Neither of the last
-// two columns changes: a steward of a co-tenant church, and a plain member, still have no authority here.
+// ⚠ UPDATED 2026-09-25 (option A, PLAN-delegated-steward-publishing.md, Phase 2). `sermon:` was re-granted
+// to a rostered CONTENT steward once its four readers were fixed to actually serve a steward-signed copy —
+// see scripts/a-delegated-stewards-sermons-reach-a-member-phone.test.mjs. It needs the CONTENT capability,
+// the same bar as msgtags, because it is congregation-facing: a steward scoped to finance-only is refused.
+// `backup-meta:` KEEPS its 2026-09-22 withdrawal — re-granted and re-withdrawn the same day; see the header
+// comment. Neither of the last two columns changes for either: a steward of a co-tenant church, and a plain
+// member, still have no authority here.
 const MATRIX = {
   //                          church  network  steward+member  steward scoped   steward of   plain
   //                          key     of A     all capabilities to finance only  church B     member
   'trinityone/sermon:':      [true,   true,    true,            false,           false,       false],
   'trinityone/msgtags':      [true,   true,    true,            false,           false,       false],
-  'trinityone/backup-meta:': [true,   true,    true,            true,            false,       false],
+  'trinityone/backup-meta:': [true,   true,    false,           false,           false,       false],
   'trinityone/mediakey:':    [true,   true,    false,           false,           false,       false],
   'trinityone/manna-':       [true,   true,    false,           false,           false,       false],
   'trinityone/relays':       [true,   false,   false,           false,           false,       false],
@@ -398,11 +401,13 @@ test('a steward who never joined the church may write msgtags, and nothing else 
   // front of it asked the relay-wide `isMember`. stewardCan() asks the church's OWN steward roster and
   // nothing else, so a delegate the church appointed can act for it without first joining it as a member.
   //
-  // THE SCOPE OF THE GRANT WAS ONE TYPE WHEN THIS TEST WAS WRITTEN, and is now three: `sermon:` and
-  // `backup-meta:` were granted to a steward on 2026-09-22, withdrawn the same day (F1/F2) because their
-  // readers could not serve the result, and RE-GRANTED 2026-09-25 (option A) once the readers were fixed —
-  // see PLAN-delegated-steward-publishing.md and the two dedicated test files. `smNoJoin` holds every
-  // capability (ALL_CAPS below), so both are ACCEPTED for them now, same as msgtags.
+  // THE SCOPE OF THE GRANT WAS ONE TYPE WHEN THIS TEST WAS WRITTEN, and is now two: `sermon:` was granted
+  // to a steward on 2026-09-22, withdrawn the same day (F1) because its readers could not serve the result,
+  // and RE-GRANTED 2026-09-25 (option A) once those readers were fixed — see
+  // PLAN-delegated-steward-publishing.md and scripts/a-delegated-stewards-sermons-reach-a-member-phone.test.mjs.
+  // `backup-meta:` went the same way and came back: re-granted and re-withdrawn on 2026-09-25, so it stays
+  // REFUSED here. `smNoJoin` holds every capability (ALL_CAPS below), which is what makes that a real test:
+  // the refusal is the document's rule, not a missing capability.
   const smNoJoin = K();
   const w = await conn();
   // Re-sign A's roster with BOTH stewards on it. Addressable and keyed on (author, d-tag), so it must be
@@ -418,7 +423,7 @@ test('a steward who never joined the church may write msgtags, and nothing else 
   const want = {
     'trinityone/msgtags': true,          // GRANTED — content steward, read by #church:[cp], reaches members
     'trinityone/sermon:': true,          // withdrawn 2026-09-22 (F1), RE-GRANTED 2026-09-25 (option A)
-    'trinityone/backup-meta:': true,     // withdrawn 2026-09-22 (F2), RE-GRANTED 2026-09-25 (option A)
+    'trinityone/backup-meta:': false,    // withdrawn 2026-09-22 (F2); re-granted and re-withdrawn 2026-09-25
     'trinityone/mediakey:': false,
     'trinityone/manna-': false,
     'trinityone/relays': false,

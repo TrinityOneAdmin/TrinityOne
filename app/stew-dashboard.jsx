@@ -9501,14 +9501,13 @@ function PinModal({ action, onClose }) {
 // `authors:[churchpub]` and a steward-signed record was served back to nobody, that console included.
 // "Couldn't save" would have sent that steward to look at a connection that was working perfectly.
 //
-// ⚠ OPTION A, PHASE 2 (2026-09-25): NOT PERMANENT ANY MORE. subscribeBackupMeta now accepts a rostered
-// steward's `['church', cp]`-tagged copy and the relay grants `stewardCan(e.pubkey, cp, 'any')` — ANY
-// capability, not specifically content, because the whole point of this document is "any one steward taking
-// a backup resets everyone's nudge". BACKUP_META_OWNER_ONLY below is therefore now misnamed but kept for the
-// one case that is still real and still permanent: a steward this church has EXPLICITLY scoped to nothing
-// (`caps: {pub: []}`) — see `_metaLocked` in DashBackup. On a relay problem (`_metaLocked` false, the write
-// still returned `false`) it keeps the plain sentence, same as the owner's console always has.
-const BACKUP_META_OWNER_ONLY = 'Your church has scoped you away from every capability, so you can’t save the shared backup record either — your other stewards will still see this church as overdue.';
+// ⚠ IT WAS BRIEFLY NOT PERMANENT, ON 2026-09-25, AND IT IS PERMANENT AGAIN. Option A phase 1 re-granted
+// this document to any rostered steward and taught subscribeBackupMeta to read their copy; the owner
+// withdrew the grant the same day, because a delegate cannot take a backup at all (doBackup below is
+// owner-only) so the only press they could land was the cadence segment — which publishes THIS console's
+// local last-backup time, 0 on a device that never exported, as "backed up just now". The sentence below
+// is therefore accurate again, and is the one a delegate sees.
+const BACKUP_META_OWNER_ONLY = 'Only the church’s own console can save the shared backup record, so your other stewards will still see this church as overdue.';
 const BACKUP_META_NO_RELAY = 'Your other stewards’ consoles will still show this church as overdue — the shared backup record could not be saved.';
 // AUDIT-steward-doc-rules-round5-2026-09-23 finding 3. exportChurchData (/export, /export-media) and
 // restoreChurchData (/import) are NIP-98-authed to the church key only (_exportAuth, scripts/gateway.mjs)
@@ -9541,14 +9540,10 @@ function DashBackup() {
   // where the relay refuses the document, the press stuck NOWHERE: not church-wide, not locally, while the
   // sentence beside it named only the church-wide half.
   //
-  // THE CADENCE IS THE CHURCH'S TO SET — every steward and every device is meant to show the same nudge
-  // (that is the whole reason this document exists) — but "the church" now includes any steward it has
-  // given a single capability to, matching the relay's own `stewardCan(…, 'any')` grant (option A, Phase 2,
-  // 2026-09-25). `_metaLocked` is true only for a steward explicitly scoped to NOTHING (`caps: {pub: []}` —
-  // the compat rule's own "empty list means empty, not everything" exception; see stewardCan in
-  // scripts/gateway.mjs), never for an ordinary delegate, an unscoped legacy steward, or a slow connection.
-  const _metaCaps = (window.Steward.myStewardCaps && window.Steward.myStewardCaps()) || null;
-  const _metaLocked = Array.isArray(_metaCaps) && _metaCaps.length === 0;
+  // THE CADENCE IS THE CHURCH'S TO SET — every steward and every device is meant to show the same nudge,
+  // which is the whole reason this document exists — and "the church" means the church's own console, not
+  // a delegate. Briefly `_metaChurchOnly` (caps-scoped-to-nothing) on 2026-09-25 while the grant existed; back
+  // to the owner question, which is the same one export/restore ask below, for the same day's reason.
   // EXPORT/RESTORE ARE A SEPARATE, STILL-GENUINELY-OWNER-ONLY QUESTION — AUDIT-steward-doc-rules-round5-2026-09-23
   // finding 3. `a2d1e4c` marked ONLY the `history` settings row `owner: true`, but exportChurchData ->
   // /export and restoreChurchData -> /import go through the very same `_exportAuth` in scripts/gateway.mjs
@@ -9556,15 +9551,18 @@ function DashBackup() {
   // delegated console, before that fix): "Back up church data" and "Restore or clone from a backup" render
   // byte-for-byte the OWNER's — no aria-disabled, no padlock — and answer "Backup failed — the relay
   // returned 401" / "Restore failed — the relay returned 401 (are you the church owner, and does that relay
-  // allow this church?)". Kept separate from `_metaLocked` above: marking the whole `backup` settings row
+  // allow this church?)". Kept separate from `_metaChurchOnly` above: marking the whole `backup` settings row
   // owner-only (the `history` fix's shape) would ALSO hide the reminder-cadence display this page correctly
   // leaves visible to a delegate, and would now ALSO lock the cadence control for a steward who is allowed
-  // to move it. The two questions are gated individually, the way `_churchOnly` already gates DashSync's
-  // two buttons, and DashSermons' three since option A, Phase 2.
-  const _exportOwnerOnly = !stewCapState('content').owner;
+  // to move it. THE TWO QUESTIONS HAVE THE SAME ANSWER TODAY and share one flag — but they are still two
+  // questions, and the 2026-09-25 round is the proof: the cadence half was delegated for half a day while
+  // export stayed owner-only. If the cadence is ever delegated again, split this flag again; do NOT mark
+  // the whole `backup` settings row owner-only (the `history` fix's shape), because that would also hide
+  // the cadence display this page correctly leaves VISIBLE to a delegate.
+  const _metaChurchOnly = !stewCapState('content').owner;
   const setFrequency = async (f) => {
     setFreqMsg('');
-    if (_metaLocked) { setFreqMsg(BACKUP_META_OWNER_ONLY); return; }   // nothing adopted: the press cannot change this anywhere
+    if (_metaChurchOnly) { setFreqMsg(BACKUP_META_OWNER_ONLY); return; }   // nothing adopted: the press cannot change this anywhere
     const prev = freq;
     setFreq(f);
     try { localStorage.setItem('trinityone.backupRemind', f); } catch {}
@@ -9605,7 +9603,7 @@ function DashBackup() {
   const onPickRestore = (e) => { const f = e.target.files && e.target.files[0]; e.target.value = ''; if (!f) return; setRestoreMsg(null); const rd = new FileReader(); rd.onload = () => setRestoreFile({ name: f.name, bytes: new Uint8Array(rd.result) }); rd.onerror = () => setRestoreMsg({ ok: false, text: 'Couldn’t read that file.' }); rd.readAsArrayBuffer(f); };
   const doRestore = async () => {
     if (!restoreFile) return;
-    if (_exportOwnerOnly) { setRestoreMsg({ ok: false, text: BACKUP_EXPORT_OWNER_ONLY }); return; }   // nothing was sent
+    if (_metaChurchOnly) { setRestoreMsg({ ok: false, text: BACKUP_EXPORT_OWNER_ONLY }); return; }   // nothing was sent
     setRestoreBusy(true); setRestoreMsg(null); setRestoreProg(null);
     try {
       const relayUrl = restoreTarget === 'other' ? restoreUrl.trim() : '';
@@ -9619,7 +9617,7 @@ function DashBackup() {
   const windowDays = { weekly: 7, monthly: 30, off: Infinity };
   const overdue = freq !== 'off' && (Date.now() / 1000 - last) > windowDays[freq] * 86400;
   const doBackup = async () => {
-    if (_exportOwnerOnly) { setMsg({ ok: false, text: BACKUP_EXPORT_OWNER_ONLY }); return; }   // nothing was sent
+    if (_metaChurchOnly) { setMsg({ ok: false, text: BACKUP_EXPORT_OWNER_ONLY }); return; }   // nothing was sent
     setBusy(true); setMsg(null);
     try {
       const { data, binary, mime, count, filename, encrypted, media: mediaCount } = await window.Steward.exportChurchData({ encrypt, includeMedia });
@@ -9681,18 +9679,18 @@ function DashBackup() {
           </span>
         </label>
       ) : null}
-      <button onClick={doBackup} disabled={busy} aria-disabled={_exportOwnerOnly || undefined} title={_exportOwnerOnly ? BACKUP_EXPORT_OWNER_ONLY : undefined} className={'sk-btn ' + (_exportOwnerOnly ? 'sk-btn--ghost' : 'sk-btn--clay')} style={{ padding: '11px 16px', fontSize: 14, opacity: _exportOwnerOnly ? 0.6 : 1, cursor: _exportOwnerOnly ? 'not-allowed' : 'pointer' }}><Icon name={_exportOwnerOnly ? 'lock' : 'share'} size={16} color={_exportOwnerOnly ? 'currentColor' : 'var(--on-clay)'} /> {busy ? 'Backing up…' : 'Back up church data'}</button>
+      <button onClick={doBackup} disabled={busy} aria-disabled={_metaChurchOnly || undefined} title={_metaChurchOnly ? BACKUP_EXPORT_OWNER_ONLY : undefined} className={'sk-btn ' + (_metaChurchOnly ? 'sk-btn--ghost' : 'sk-btn--clay')} style={{ padding: '11px 16px', fontSize: 14, opacity: _metaChurchOnly ? 0.6 : 1, cursor: _metaChurchOnly ? 'not-allowed' : 'pointer' }}><Icon name={_metaChurchOnly ? 'lock' : 'share'} size={16} color={_metaChurchOnly ? 'currentColor' : 'var(--on-clay)'} /> {busy ? 'Backing up…' : 'Back up church data'}</button>
       {msg ? <div style={{ marginTop: 10, fontSize: 13, fontWeight: 600, color: msg.ok ? 'var(--sage-ink)' : 'var(--clay-ink)' }}>{msg.ok ? '✓ ' : '✗ '}{msg.text}</div> : null}
       <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 10 }}>Last backup: {last ? new Date(last * 1000).toLocaleDateString() : 'never'}</div>
       <div style={{ marginTop: 18, paddingTop: 16, borderTop: '1px solid var(--line)' }}>
         <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>Remind me to back up</div>
         <div style={seg}>
-          {/* MARKED ONLY FOR A STEWARD SCOPED TO NOTHING (`_metaLocked`), not hidden — the same choice as
-              DashSermons and _capBtn. Since option A, Phase 2 (2026-09-25) subscribeBackupMeta accepts a
-              rostered steward's tagged copy, so an ordinary delegate's press really does move the church's
-              cadence now, not just this device's cached view of it. */}
+          {/* MARKED ON A DELEGATED CONSOLE, not hidden — the same choice as DashSermons and _capBtn. The
+              segment goes on showing the CHURCH's cadence, which is the truth and which this console can
+              read (subscribeBackupMeta filters authors:[churchpub], and on a delegated console `pub` IS the
+              church); what it can no longer do is move without changing anything. */}
           {[['off', 'Off'], ['weekly', 'Weekly'], ['monthly', 'Monthly']].map(([k, label]) => (
-            <button key={k} onClick={() => setFrequency(k)} aria-disabled={_metaLocked || undefined} title={_metaLocked ? BACKUP_META_OWNER_ONLY : undefined} style={{ padding: '8px 15px', borderRadius: 9, border: 'none', cursor: _metaLocked ? 'not-allowed' : 'pointer', opacity: _metaLocked && freq !== k ? 0.55 : 1, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, background: freq === k ? 'var(--clay)' : 'transparent', color: freq === k ? '#fff' : 'var(--ink-2)' }}>{label}</button>
+            <button key={k} onClick={() => setFrequency(k)} aria-disabled={_metaChurchOnly || undefined} title={_metaChurchOnly ? BACKUP_META_OWNER_ONLY : undefined} style={{ padding: '8px 15px', borderRadius: 9, border: 'none', cursor: _metaChurchOnly ? 'not-allowed' : 'pointer', opacity: _metaChurchOnly && freq !== k ? 0.55 : 1, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, background: freq === k ? 'var(--clay)' : 'transparent', color: freq === k ? '#fff' : 'var(--ink-2)' }}>{label}</button>
           ))}
         </div>
         {/* BESIDE THE CONTROL, not up beside the backup button: `msg` renders above this whole section, and a
@@ -9718,7 +9716,7 @@ function DashBackup() {
                   ))}
                 </div>
                 {restoreTarget === 'other' ? <input value={restoreUrl} onChange={(e) => setRestoreUrl(e.target.value)} placeholder="https://other-relay.example" spellCheck={false} autoCapitalize="none" style={{ width: '100%', boxSizing: 'border-box', padding: '9px 12px', borderRadius: 9, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontSize: 13, marginBottom: 10 }} /> : null}
-                <button onClick={doRestore} disabled={restoreBusy} aria-disabled={_exportOwnerOnly || undefined} title={_exportOwnerOnly ? BACKUP_EXPORT_OWNER_ONLY : undefined} className={'sk-btn ' + (_exportOwnerOnly ? 'sk-btn--ghost' : 'sk-btn--clay')} style={{ padding: '10px 16px', fontSize: 13.5, opacity: _exportOwnerOnly ? 0.6 : 1, cursor: _exportOwnerOnly ? 'not-allowed' : 'pointer' }}>{_exportOwnerOnly ? <Icon name="lock" size={14} color="currentColor" /> : null}{restoreBusy ? (restoreProg && restoreProg.phase === 'media' ? 'Restoring media ' + restoreProg.done + '/' + restoreProg.total + '…' : 'Importing records…') : 'Restore this backup'}</button>
+                <button onClick={doRestore} disabled={restoreBusy} aria-disabled={_metaChurchOnly || undefined} title={_metaChurchOnly ? BACKUP_EXPORT_OWNER_ONLY : undefined} className={'sk-btn ' + (_metaChurchOnly ? 'sk-btn--ghost' : 'sk-btn--clay')} style={{ padding: '10px 16px', fontSize: 13.5, opacity: _metaChurchOnly ? 0.6 : 1, cursor: _metaChurchOnly ? 'not-allowed' : 'pointer' }}>{_metaChurchOnly ? <Icon name="lock" size={14} color="currentColor" /> : null}{restoreBusy ? (restoreProg && restoreProg.phase === 'media' ? 'Restoring media ' + restoreProg.done + '/' + restoreProg.total + '…' : 'Importing records…') : 'Restore this backup'}</button>
               </div>
             ) : null}
             {restoreMsg ? <div style={{ marginTop: 10, fontSize: 13, fontWeight: 600, color: restoreMsg.ok ? 'var(--sage-ink)' : 'var(--clay-ink)' }}>{restoreMsg.ok ? '✓ ' : '✗ '}{restoreMsg.text}</div> : null}

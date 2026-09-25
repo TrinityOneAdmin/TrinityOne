@@ -9418,11 +9418,25 @@
           emit();
         },
         // a revocation must promote the church's copy, not just hide theirs
+        // EOSE ALWAYS EMITS HERE, EVEN EMPTY — and that is the one place this reader must NOT copy
+        // subscribeChurchGroups/subscribeChurchCategories, which guard the same line with `if (byId.size)`.
+        // Two differences make the guard wrong here, both measured 2026-09-25:
+        //   1. THE CALLER GATES A WHOLE TAB ON THE FIRST CALLBACK. app/screens-watch.jsx holds `sermonsReady`
+        //      false until onSermons fires (U8: tell "still loading" apart from "genuinely none"), and renders
+        //      the channel feed behind the same gate. Never calling back leaves Watch & Listen spinning, then
+        //      claiming "Can't reach {church} right now — check your connection" over a relay that answered
+        //      perfectly, with a Try again that loops. A church with NO sermons is the normal case in the
+        //      pilot, so that was most churches. The groups/categories readers gate no such flag.
+        //   2. THERE IS NO CACHE TO PROTECT. The sticky guard exists so a reconnect's EOSE-before-events
+        //      cannot blank a list already painted from localStorage (`_seedFromCache`). This reader seeds
+        //      from no cache — byId is only ever filled by live/replayed events — so an empty byId at EOSE
+        //      means "this church has no sermons", never "the cache has not been overwritten yet".
+        // `emit`'s own `!eosed && !v.length` guard still suppresses every PRE-EOSE empty, so the empty state
+        // cannot flash on a slow relay. Restores what this reader did before option A (`oneose() { emit(); }`).
         oneose() {
           eosed = true;
-          if (byId.size) emit();
+          emit();
         }
-        // sticky: don't blank cards on a reconnect's EOSE-before-events; genuine removals come via the delete path
       });
     },
     // the church's currently-featured/pinned sermon (or null) — drives a Today card + a notification. Widened

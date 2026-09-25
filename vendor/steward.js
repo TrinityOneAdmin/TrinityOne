@@ -18713,63 +18713,50 @@ zoo`.split("\n");
     // steward's nudge resets" — so a refusal means the other stewards' consoles still show overdue. Saying
     // "Saved" and nothing else made this console the only one that believed the church was backed up.
     //
-    // OPTION A, PHASE 1 (2026-09-25): re-granted. `feChurch()` stamps `['church', pub]` on a delegated
-    // console (it already did — this document just never made use of it), and subscribeBackupMeta below now
-    // reads `'#church':[pub]` as well as `authors:[pub]`, trusting the author only when the console's own
-    // steward-roster subscription (`_careRoster`/`_careRosterKnown`, fed by subscribeStewards) currently
-    // holds them — see `_consoleDisplay`, the same predicate every other console reader in this file already
-    // uses for exactly this question. The relay's matching grant is `leaderOf(cp) || stewardCan(e.pubkey, cp,
-    // 'any')` in scripts/gateway.mjs — 'any' because the ask ("every steward's nudge resets when any one of
-    // them takes a backup") does not belong to one capability. Was `if (actingChurch) return
-    // Promise.resolve(false)` from 2026-09-22 to 2026-09-25: PLAN-delegated-steward-publishing.md, "the
-    // backup-meta: half is perhaps a tenth of [the sermon half] and needs no member APK" — console-to-console
-    // only, so no member-app change accompanies this one.
+    // ON A DELEGATED CONSOLE IT IS ALWAYS false, AND IT DOES NOT ASK. The relay gates
+    // `trinityone/backup-meta:` to the church key or its network (2026-09-22), because subscribeBackupMeta
+    // below filters `authors:[pub]` — the CHURCH's pubkey — while a delegated console signs with the
+    // steward's own key. So a steward-authored record is read back by NOBODY, this console included, and
+    // resets nobody's nudge: measured as 0 rows on a live gateway the day that grant was written, which is
+    // why it was withdrawn the same day. Both callers say WHICH refusal it is rather than sending the
+    // steward to look at a connection that is working perfectly.
+    //
+    // RE-GRANTED TO A DELEGATE 2026-09-25 (option A, phase 1) AND WITHDRAWN AGAIN THE SAME DAY, on the
+    // owner's decision, after an audit measured what the grant actually bought. Written down so the next
+    // session does not rediscover it as an incoherence and "fix" it a third time:
+    //   - THE STATED PURPOSE CANNOT HAPPEN. The grant exists so "every steward's nudge resets when any one of
+    //     them takes a backup". A delegate cannot take a backup: the export itself is owner-only (`doBackup`
+    //     in app/stew-dashboard.jsx, gated on `stewCapState('content').owner`, and unchanged by that round).
+    //     So the only press a delegate could make reach this document is the reminder-frequency segment.
+    //   - AND IT CARRIES A HAZARD. `setFrequency` passes this console's LOCAL `trinityone.lastBackupAt`, which
+    //     is 0 on any device that has not itself exported. With `at: at || now()` below, changing the
+    //     frequency then publishes `at: now()` — "backed up just now" — and every console's subscriber takes
+    //     `max(prev, m.at)`, clearing the overdue nudge church-wide over a backup nobody took.
+    //     ⚠ THAT HAZARD IS OLDER THAN THE GRANT AND IS STILL LIVE FOR THE CHURCH'S OWN CONSOLE: an owner on a
+    //     fresh device who changes the frequency publishes the same false `at`. It is NOT fixed here — see
+    //     the note raised with the owner 2026-09-25. Withdrawing the grant narrows who can trigger it; it
+    //     does not close it.
     setBackupMeta(at, remind) {
       if (!sk) return Promise.resolve(null);
+      if (actingChurch) return Promise.resolve(false);
       return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", BACKUPMETA_D + pub], ["t", NET]], content: JSON.stringify({ at: at || now(), remind: remind || "monthly" }) }));
     },
-    // Widened alongside setBackupMeta above (same day, same reason): reads `authors:[pub]` (the church's own
-    // copy) OR `'#church':[pub]` (a delegated steward's, tagged by feChurch), and — because this is now a
-    // MULTI-AUTHOR addressable document exactly like subscribeGroups/subscribePlans elsewhere in this file —
-    // keeps every author's version (`versions`/`_absorbById`/`_forgetById`, src/church-doc-store.src.js) and
-    // lets `_pickWinner` choose the newest TRUSTED one, rather than whichever event happens to arrive last.
-    // `_consoleDisplay` is the trust predicate: it shows a steward's copy once the roster is known to include
-    // them, keeps showing everything while the roster is still unread (see its own comment), and drops a
-    // revoked steward's copy — promoting the church's own, if there is one — the moment the roster says so.
     subscribeBackupMeta(onMeta) {
       if (!pub) {
         onMeta(null);
         return () => {
         };
       }
-      const id = "backup-meta";
-      const versions = /* @__PURE__ */ new Map();
-      const byId = /* @__PURE__ */ new Map();
-      const emit = () => {
-        const rec = byId.get(id);
-        onMeta(rec ? { at: rec.at || rec.ts, remind: rec.remind || "monthly" } : null);
-      };
-      const sub = pool.subscribeMany(relays(), [
-        { kinds: [30078], authors: [pub], "#d": [BACKUPMETA_D + pub] },
-        { kinds: [30078], "#church": [pub], "#d": [BACKUPMETA_D + pub] }
-      ], {
+      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#d": [BACKUPMETA_D + pub] }], {
         onevent(e) {
-          const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
-          if (d !== BACKUPMETA_D + pub) return;
-          if ((e.tags.find((t) => t[0] === "deleted") || [])[1]) {
-            _forgetById(versions, byId, id, e.pubkey, e.created_at, _consoleDisplay, { churchPub: pub, targets: _tombstoneTargets(e), mayName: _consoleChurchVoice });
-            emit();
-            return;
-          }
           try {
             const c = JSON.parse(e.content);
-            _absorbById(versions, byId, id, { id, at: c.at, remind: c.remind, ts: e.created_at, _by: e.pubkey }, _consoleDisplay);
-            emit();
+            onMeta({ at: c.at || e.created_at, remind: c.remind || "monthly" });
           } catch {
+            onMeta(null);
           }
         },
         oneose() {
-          emit();
         }
       });
       return () => {

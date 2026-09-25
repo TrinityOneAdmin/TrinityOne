@@ -12,8 +12,7 @@
 //
 // ── HOW THIS ASSERTS ──────────────────────────────────────────────────────────────────────────────────────
 // The console half drives publishSermon/subscribeSermons/pinSermon/subscribePinnedSermon out of the SHIPPED
-// vendor/steward.js against a REAL relay (scripts/gateway.mjs) over a real websocket — same technique as
-// scripts/a-delegated-stewards-backup-meta-reaches-the-console.test.mjs. The member half drives the SHIPPED
+// vendor/steward.js against a REAL relay (scripts/gateway.mjs) over a real websocket. The member half drives the SHIPPED
 // _openSermons/subscribePinnedSermon out of vendor/fellowship.js with a stubbed `_onChurchDocs` (the shared
 // docs-hub plumbing itself is unchanged by this fix and has its own tests) that replays whatever events the
 // test hands it and lets the test fire `onroster()` on demand — so "the roster has not arrived yet" and "the
@@ -87,7 +86,7 @@ after(async () => { try { ws && ws.close(); } catch {} try { relay && relay.kill
 // The shipped console, lifted out of vendor/steward.js, wired to a REAL SimplePool against the REAL relay.
 function consoleApi({ signer, actingChurch }) {
   const pool = new SimplePool();
-  pool.automaticallyAuth = (_url) => async (authEvent) => finalizeEvent(authEvent, signer.sk);   // plumbing only — see backup-meta test's note
+  pool.automaticallyAuth = (_url) => async (authEvent) => finalizeEvent(authEvent, signer.sk);   // plumbing only: the relay asks for NIP-42 auth, this answers it
   const scope = {
     sk: signer.sk, pub: cp, actingChurch,
     pool, relays: () => [WS_URL],

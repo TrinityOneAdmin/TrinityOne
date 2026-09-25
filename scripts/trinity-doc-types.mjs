@@ -234,8 +234,9 @@ export const DOC_TYPES = Object.freeze({
   // WHEN THE CHURCH LAST EXPORTED ITS DATA, and how often it is nudged. UNDECLARED until 2026-09-22.
   // d=backup-meta:<churchpub>, so it scopes on the suffix like every other <cp>-keyed document.
   //
-  // ⚠ IT WAS 'steward' (capability 'any') FOR ONE DAY, WAS 'church' FROM 2026-09-22, AND IS 'steward'
-  // (capability 'any') AGAIN AS OF 2026-09-25. The grant's whole stated purpose was "every steward's overdue
+  // ⚠ IT WAS 'steward' (capability 'any') FOR ONE DAY, AND HAS BEEN 'church' SINCE 2026-09-22. It was
+  // re-granted on 2026-09-25 (option A, phase 1) and WITHDRAWN AGAIN the same day — see the second note
+  // below before granting it a third time. The grant's whole stated purpose was "every steward's overdue
   // nudge resets when any one of them takes a backup, so a church whose only delegate is its treasurer is
   // not left unable to clear its own banner". MEASURED on a live gateway, 2026-09-22: subscribeBackupMeta
   // (src/steward.src.js) filtered `authors:[pub]` + `#d`, and on a delegated console `pub` is the CHURCH's
@@ -246,16 +247,23 @@ export const DOC_TYPES = Object.freeze({
   // the church overdue. A loud failure turned into a silent success. Owner's decision, 2026-09-22: withdraw
   // the grant until the reader is fixed.
   //
-  // OPTION A, BUILT 2026-09-25 (PLAN-delegated-steward-publishing.md, "if only one half is ever built, build
-  // this one" — it is console-to-console, needing no member screen and no APK). subscribeBackupMeta now
-  // reads `authors:[pub]` OR `'#church':[pub]`, keeps one version per author, and shows the newest one the
-  // console's own live steward-roster read still trusts (`_absorbById`/`_forgetById`/`_consoleDisplay`) — a
-  // revoked steward's record stops counting the moment the roster the relay itself enforces says so too
-  // (`backup-meta:` is not on canRead's retractionExempt list). Proven end to end by
-  // scripts/a-delegated-stewards-backup-meta-reaches-the-console.test.mjs. Stays CLEARTEXT and
-  // member-readable, which tells any member how long the church has gone without a backup; that was true
-  // before this rule and is not changed by it.
-  'trinityone/backup-meta:':  { write: 'steward',   read: 'members', scope: 'suffix', note: 'church-authored, CLEARTEXT {at, remind}. Church key or a steward with ANY capability, as of 2026-09-25 (option A) — subscribeBackupMeta now accepts a rostered steward\'s church-tagged copy, so the write is real again' },
+  // OPTION A PHASE 1 WAS BUILT ON 2026-09-25 AND WITHDRAWN THE SAME DAY, on the owner's decision, after an
+  // independent audit measured what the grant actually bought. Both halves of the reason matter, because
+  // "the reader is fixed now, so re-grant it" is exactly the conclusion the paragraph above invites:
+  //   1. THE STATED PURPOSE STILL CANNOT HAPPEN. A delegate cannot take a backup — the export button is
+  //      owner-only (`doBackup`, app/stew-dashboard.jsx) and option A did not change that. So no delegate
+  //      press can ever mean "a backup was taken", which is the only thing this document records.
+  //   2. THE ONE PRESS IT DID REACH IS A HAZARD. The reminder-frequency segment passes this console's LOCAL
+  //      `trinityone.lastBackupAt` (0 on a device that never exported) into setBackupMeta, whose
+  //      `at: at || now()` then publishes "backed up just now"; every console takes `max(prev, at)`, so one
+  //      delegate changing a dropdown clears the overdue nudge church-wide over a backup nobody took.
+  //      That hazard is OLDER than the grant and is still live for the church's own console — raised with
+  //      the owner 2026-09-25, not fixed here.
+  // Fixing the reader was therefore necessary and not sufficient. What this document needs before it can be
+  // delegated is a delegate who can actually EXPORT, and an `at` that cannot be invented by a frequency
+  // change. Stays CLEARTEXT and member-readable, which tells any member how long the church has gone
+  // without a backup; that was true before this rule and is not changed by it.
+  'trinityone/backup-meta:':  { write: 'church',    read: 'members', scope: 'suffix', note: 'church-authored, CLEARTEXT {at, remind}. Church key or its network ONLY: a delegate cannot export at all, so a delegated write can only ever misreport WHEN the church was last backed up' },
   'finance/journal:':         { write: 'steward',   read: 'church',  scope: 'tag',    note: 'append-only, single-writer, relay is the ordering authority' },
   // ARCHITECTURE-AUDIT-2026-07-30 A6. The other three finance docs, from app/stew-finance.jsx — a file the
   // old extraction never read. gateway.mjs gates them explicitly and generically, on BOTH sides:
@@ -363,11 +371,14 @@ export const DOC_TYPES = Object.freeze({
 // BEHIND: a write grant is worth nothing until a reader accepts the signature it produces, so measure the
 // reader before widening the door.
 //
-// ⚠ BOTH WERE RE-GRANTED 2026-09-25, READER FIRST. Option A in PLAN-delegated-steward-publishing.md taught
-// all four sermon: readers and the one backup-meta: reader to accept a rostered steward's `['church', cp]`
-// tag, keep one version per author, and show only the newest one a currently-held roster still trusts —
-// see the entries above for both types, and the two test files named there. The rule above is what made
-// re-granting them safe to even consider: the entries were left refusing until it could be measured true.
+// ⚠ ONE OF THE TWO WAS RE-GRANTED 2026-09-25, READER FIRST — AND ONLY ONE. Option A in
+// PLAN-delegated-steward-publishing.md taught all four sermon: readers and the one backup-meta: reader to
+// accept a rostered steward's `['church', cp]` tag, keep one version per author, and show only the newest
+// one a currently-held roster still trusts. `sermon:` kept that grant. `backup-meta:` did NOT: fixing its
+// reader turned out to be necessary and not sufficient, because a delegate cannot export a backup in the
+// first place, so no delegated write to it can ever mean what the document records (see its entry above).
+// THE RULE THAT ADDS: a reader that will serve the result is the FIRST question, not the only one. The
+// second is whether the press a delegate can actually reach produces a true statement.
 export const UNDECLARED = Object.freeze({
   'trinityone/wallet:':    'MEMBER-authored with no church tag, so canRead falls to author-only — verified: another member of the same church cannot read it',
 });
