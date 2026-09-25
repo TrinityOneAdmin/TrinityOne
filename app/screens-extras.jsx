@@ -141,7 +141,12 @@ function ListenScreen({ open, onClose, ctx }) {
 
   const chName = (data && data.channel && data.channel.name) || 'Sermons';
   // self-hosted sermons render as episodes too, but have no direct url — the blob is fetched (gated) on play.
-  const sermonEps = sermons.filter(s => !String(s.mime || '').startsWith('video')).map(s => ({ id: s.id, title: s.title, desc: s.desc, published: s.ts ? new Date(s.ts * 1000).toISOString() : '', _sermon: true, sha256: s.sha256, hosts: (s.hosts && s.hosts.length) ? s.hosts : (s.host ? [s.host] : []), mime: s.mime, enc: s.enc, size: s.size }));
+  // `contentTs`, NOT `ts` — the date the sermon document carries, not the time of the last event that
+  // carried it. `ts` is the store's ordering key and holds the EVENT's `created_at`, so retitling a
+  // sermon re-dated it here (measured 2026-09-25), printed straight beside the real pubDates of the
+  // church's podcast episodes. It feeds all three places `published` is read in this screen: the
+  // episode row, the now-playing header and `trackOf`'s mini-player subtitle.
+  const sermonEps = sermons.filter(s => !String(s.mime || '').startsWith('video')).map(s => ({ id: s.id, title: s.title, desc: s.desc, published: s.contentTs ? new Date(s.contentTs * 1000).toISOString() : '', _sermon: true, sha256: s.sha256, hosts: (s.hosts && s.hosts.length) ? s.hosts : (s.host ? [s.host] : []), mime: s.mime, enc: s.enc, size: s.size }));
   const episodes = [...sermonEps, ...((data && data.episodes) || [])];
   const trackOf = (ep) => ({ id: ep.id, title: ep.title, subtitle: [lsnPubDate(ep.published), chName].filter(Boolean).join(' · '), src: ep.audio, image: ep.image, album: chName });
   const curId = audio.track && audio.track.id;

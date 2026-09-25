@@ -4927,10 +4927,20 @@ window.Steward = {
   // `subscribePinnedSermon` here), and the relay grants the write the same way (scripts/gateway.mjs). A
   // steward without the content capability is still refused, by the relay itself — this function no longer
   // needs to guess that in advance; `publish()`'s real answer is what the caller sees.
+  //
+  // AN EDIT MUST NOT RE-DATE THE SERMON — `s.contentTs` FIRST, and it is why that field exists. This was
+  // `ts: s.ts || now()`, and app/stew-dashboard.jsx's Edit dialog saves with `publishSermon({ ...editing,
+  // ...fields })` where `editing` is a row out of subscribeSermons above. That row's `ts` is the EVENT's
+  // `created_at`, so each save wrote the last save's clock into the document as the preaching date and the
+  // real one was gone for good. MEASURED against a real relay: published 31 Jul, retitled 25 Sep, retitled
+  // again a minute later, and the document then held 25 Sep with 31 Jul recoverable from nowhere. Reading
+  // `contentTs` (the date the document itself carries) leaves it untouched. A genuinely NEW sermon has
+  // neither field — app/stew-dashboard.jsx's doUpload passes title/desc/sha256/host(s)/mime/size/enc and no
+  // date — so it still gets `now()`.
   publishSermon(s) {
     if (!sk) return Promise.resolve(null);
     const id = s.id || ('sermon' + Date.now());
-    const content = JSON.stringify({ id, title: s.title || 'Sermon', desc: (s.desc && String(s.desc).trim()) || undefined, sha256: s.sha256, hosts: (s.hosts && s.hosts.length) ? s.hosts : [s.host], mime: s.mime || '', size: s.size || 0, ts: s.ts || now(), enc: s.enc || undefined, series: s.series || undefined });
+    const content = JSON.stringify({ id, title: s.title || 'Sermon', desc: (s.desc && String(s.desc).trim()) || undefined, sha256: s.sha256, hosts: (s.hosts && s.hosts.length) ? s.hosts : [s.host], mime: s.mime || '', size: s.size || 0, ts: s.contentTs || s.ts || now(), enc: s.enc || undefined, series: s.series || undefined });
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', SERMON_D + id], ['t', NET]], content }))
       .then((r) => { if (r === false) throw new Error('Couldn’t save — every relay rejected it. Check your connection.'); return { id, ...JSON.parse(content) }; });
   },
@@ -5510,21 +5520,23 @@ window.Steward = {
   },
   // OPTION A, PHASE 2 (2026-09-25): widened the same way as subscribeGroups above — `authors:[pub]` OR
   // `'#church':[pub]`, one version per author (`_absorbById`/`_forgetById`), `_consoleDisplay` deciding
-  // which author's copy of a given sermon id is shown. SIDE EFFECT, said plainly (CLAUDE.md rule 4): the
-  // store's `ts` is now the EVENT's `created_at` rather than the sermon's own self-reported `ts`, matching
-  // every other reader that uses this module — re-saving a sermon's title now moves it to the top of this
-  // list, which it did not before. See the matching note on _openSermons in src/fellowship.src.js.
+  // which author's copy of a given sermon id is shown.
+  //
+  // `contentTs` IS THE SERMON'S OWN DATE, and `ts` stays the event's `created_at` for the store — the full
+  // reasoning, and what was measured, is on `_openSermons` in src/fellowship.src.js. The console shows no
+  // date at all today, so what this field fixes HERE is (a) the row order and (b) what the Edit dialog
+  // spreads back into publishSermon, which is the half that destroys the original date.
   subscribeSermons(onSermons) {
     if (!pub) { onSermons([]); return () => {}; }
     const byId = new Map();
     const versions = new Map();   // id -> Map(author -> their copy); see src/church-doc-store.src.js
-    const emit = () => onSermons([...byId.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)));
+    const emit = () => onSermons([...byId.values()].sort((a, b) => (b.contentTs || 0) - (a.contentTs || 0)));
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (!d.startsWith(SERMON_D)) return;
         const id = d.slice(SERMON_D.length);
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { _forgetById(versions, byId, id, e.pubkey, e.created_at, _consoleDisplay, { churchPub: pub, targets: _tombstoneTargets(e), mayName: _consoleChurchVoice }); emit(); return; }
-        try { const s = JSON.parse(e.content); if (s && s.sha256) { _absorbById(versions, byId, id, { ...s, id, at: e.created_at, ts: e.created_at, _by: e.pubkey }, _consoleDisplay); emit(); } } catch {}
+        try { const s = JSON.parse(e.content); if (s && s.sha256) { _absorbById(versions, byId, id, { ...s, id, at: e.created_at, ts: e.created_at, contentTs: Number(s.ts) || e.created_at, _by: e.pubkey }, _consoleDisplay); emit(); } } catch {}
       },
       oneose() { emit(); },
     });

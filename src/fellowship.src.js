@@ -3328,18 +3328,33 @@ window.Fellowship = {
   // the same `authors:[cp]` filter) — a sermon rendered before that is a sermon rendered on no authority at
   // all (`cached-paints-before-authority-arrives`). `onroster()` re-derives every winner the moment the
   // roster changes, so a revoked steward's sermon stops being the one shown (promoting the church's own
-  // copy, if there is one) without waiting for a new event. SIDE EFFECT, said plainly (CLAUDE.md rule 4):
-  // the store's own `ts` field is now the EVENT's `created_at`, like every other reader that uses this
-  // module, rather than the sermon's self-reported `ts` in its content — so re-saving a sermon's title now
-  // moves it back to the top of the list, which it did not before. No test in this codebase pinned the old
-  // behaviour, and every OTHER content type here already works this way.
+  // copy, if there is one) without waiting for a new event.
+  //
+  // ONE FIELD WAS DOING TWO JOBS, AND `contentTs` IS THE SECOND ONE (2026-09-25, later the same day). The
+  // note here used to end "re-saving a sermon's title now moves it back to the top of the list, which it did
+  // not before … every OTHER content type here already works this way", and treated that as a cosmetic
+  // side effect. It is not, because a sermon is the one content type that carries a date a PERSON chose:
+  //   · `ts` is the STORE's ordering key. It must stay the event's `created_at` — `_pickWinner`,
+  //     `_absorbById` and `_forgetById` (src/church-doc-store.src.js) compare it to decide which of two
+  //     authors' copies is shown and whether a tombstone is newer than the edit it withdraws. Back-date it
+  //     and a forward-dated copy beats the church's own, and a stale tombstone un-deletes a sermon.
+  //   · `contentTs` is WHEN IT WAS PREACHED — the `ts` the console wrote into the document's own content.
+  //     That is what the screens show and order by.
+  // MEASURED before this fix, driving the shipped bundles against a real relay: a sermon published on 31 Jul
+  // and retitled on 25 Sep was read back by a member's app as 25 Sep, in the Watch & Listen row, the video
+  // player header and the Listen tab's episode date, and it jumped above a sermon preached seven weeks later.
+  // The relay's copy of the ORIGINAL date survives one edit and is destroyed by the second (the console
+  // spreads the row it is showing back into publishSermon, and by then that row's `ts` is edit 1's clock).
+  // It falls back to `created_at` so a document with no `ts` of its own reads exactly as it did before.
   _openSermons(churchNpub, onSermons) {
     const cp = toPub(churchNpub); if (!cp) { onSermons([]); return () => {}; }
     const byId = new Map();
     const versions = new Map();   // id -> Map(author -> their copy); see src/church-doc-store.src.js
     const _trust = (rec) => _churchVoice(cp, rec);   // the church key, or a steward still on its signed roster
     let eosed = false;   // sticky: hold last-known until the relay's EOSE — don't blank on a transient/roster-lagged empty
-    const emit = _coalesce(() => { const v = [...byId.values()].filter(s => _churchVoice(cp, s)); if (!eosed && !v.length) return; onSermons(v.sort((a, b) => (b.ts || 0) - (a.ts || 0))); });
+    // SORTED BY THE PREACHING DATE, NOT THE EVENT TIME — see `contentTs` above. Editing a title must not
+    // move a sermon; a list of sermons is in the order they were given.
+    const emit = _coalesce(() => { const v = [...byId.values()].filter(s => _churchVoice(cp, s)); if (!eosed && !v.length) return; onSermons(v.sort((a, b) => (b.contentTs || 0) - (a.contentTs || 0))); });
     return _onChurchDocs(cp, {
       emit,   // so the hub can cancel a queued emit when this handler tears down
       want: [SERMON_D],   // replay only this slice of the hub (see _hubBufSet)
@@ -3349,7 +3364,7 @@ window.Fellowship = {
         // A DELETE IS A WRITE, honoured only from an author who could have written the doc — see the same
         // note on subscribeChurchGroups above; identical shape, identical reason (AUDIT-2026-07-24).
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { if (_churchVoice(cp, { _by: e.pubkey })) { _forgetById(versions, byId, id, e.pubkey, e.created_at, _trust, { churchPub: cp, targets: _tombstoneTargets(e) }); emit(); } return; }
-        try { const s = JSON.parse(e.content); if (s && s.sha256) { _absorbById(versions, byId, id, { ...s, id, at: e.created_at, ts: e.created_at, _by: e.pubkey }, _trust); emit(); } } catch {}
+        try { const s = JSON.parse(e.content); if (s && s.sha256) { _absorbById(versions, byId, id, { ...s, id, at: e.created_at, ts: e.created_at, contentTs: Number(s.ts) || e.created_at, _by: e.pubkey }, _trust); emit(); } } catch {}
       },
       onroster() { _reduceAll(versions, byId, _trust); emit(); },   // a revocation must promote the church's copy, not just hide theirs
       // EOSE ALWAYS EMITS HERE, EVEN EMPTY — and that is the one place this reader must NOT copy

@@ -82,6 +82,11 @@ function ChannelAvatar({ ch, size = 56 }) {
 }
 
 // a self-hosted sermon row (audio or video) — the church's own, relay-hosted media
+//
+// THE DATE HERE IS `contentTs`, NOT `ts`. `ts` is the store's ordering key and carries the EVENT's time, so
+// reading it printed the moment a steward last retitled the sermon — measured 2026-09-25: a sermon preached
+// 31 Jul read "25 Sep" the instant its title was corrected. `contentTs` is the date the document itself
+// carries. See `_openSermons` in src/fellowship.src.js.
 function SermonRow({ s, loading, onClick }) {
   const isVideo = String(s.mime || '').startsWith('video');
   const sz = s.size > 1048576 ? (s.size / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round((s.size || 0) / 1024)) + ' KB';
@@ -91,7 +96,7 @@ function SermonRow({ s, loading, onClick }) {
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontWeight: 700, fontSize: 14.5, color: 'var(--ink)', lineHeight: 1.25, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{s.title}</div>
         {s.desc ? <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 3, lineHeight: 1.4, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{s.desc}</div> : null}
-        <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 3 }}>{[isVideo ? 'Video' : 'Audio', sz, s.ts ? fmtDate(s.ts * 1000) : null, 'members only', s.enc ? 'encrypted' : null].filter(Boolean).join(' · ')}</div>
+        <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 3 }}>{[isVideo ? 'Video' : 'Audio', sz, s.contentTs ? fmtDate(s.contentTs * 1000) : null, 'members only', s.enc ? 'encrypted' : null].filter(Boolean).join(' · ')}</div>
       </div>
       {loading
         ? <div style={{ width: 18, height: 18, flexShrink: 0, borderRadius: 999, border: '2.5px solid var(--line)', borderTopColor: 'var(--clay)', animation: 'trinitySpin .8s linear infinite' }} />
@@ -141,7 +146,7 @@ function WatchView({ ctx }) {
     const isVideo = String(s.mime || '').startsWith('video');
     const hosts = (s.hosts && s.hosts.length) ? s.hosts : (s.host ? [s.host] : []);
     if (!hosts.length || !s.sha256) { ctx.toast('This sermon is unavailable'); return; }
-    if (isVideo) { ctx.openVideo({ id: s.id, title: s.title, desc: s.desc, _sermon: true, sha256: s.sha256, hosts, mime: s.mime, enc: s.enc, size: s.size, published: s.ts ? new Date(s.ts * 1000).toISOString() : '' }); return; }
+    if (isVideo) { ctx.openVideo({ id: s.id, title: s.title, desc: s.desc, _sermon: true, sha256: s.sha256, hosts, mime: s.mime, enc: s.enc, size: s.size, published: s.contentTs ? new Date(s.contentTs * 1000).toISOString() : ''   /* the preaching date, not the last-edit time — see SermonRow */ }); return; }
     setLoadingId(s.id);
     try {
       const FS = window.Fellowship;
