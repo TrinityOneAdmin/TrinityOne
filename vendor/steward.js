@@ -6347,6 +6347,9 @@
       }
       return false;
     }
+    if (cp && k0 === cp && named.includes("*")) {
+      for (const k of vers.keys()) if (!keys.includes(k)) keys.push(k);
+    }
     let did = false;
     for (const k of keys) {
       const held = vers.get(k);
@@ -16244,6 +16247,9 @@ zoo`.split("\n");
     }
     if (actingChurch && (tmpl.tags || []).some((t) => t[0] === "deleted") && !(tmpl.tags || []).some((t) => t[0] === "for")) {
       tmpl = { ...tmpl, tags: [...tmpl.tags || [], ["for", actingChurch]] };
+    }
+    if (!actingChurch && (tmpl.tags || []).some((t) => t[0] === "deleted") && !(tmpl.tags || []).some((t) => t[0] === "for")) {
+      tmpl = { ...tmpl, tags: [...tmpl.tags || [], ["for", "*"]] };
     }
     return finalizeEvent2(_monotonic(tmpl), signer || sk);
   }

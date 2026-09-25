@@ -183,6 +183,30 @@ export function _forgetById(versions, byId, id, by, ts, trusted, opts) {
     return false;
   }
 
+  // ...AND THE CHURCH MAY WITHDRAW ANY COPY OF ITS OWN DOCUMENT, WHICH IS THE OTHER DIRECTION OF THE SAME
+  // GRANT AND WAS MISSING UNTIL 2026-09-25. The rule above lets a delegated steward name the CHURCH's copy;
+  // nothing let the church name a STEWARD's. Measured (AUDIT-delegated-publishing-2026-09-25, H2/M1): the
+  // owner publishes a sermon, a content steward edits it — that is a second, steward-authored version — and
+  // the owner then removes it. The tombstone bound only the church's own copy, so the steward's stayed on
+  // every screen while the blob DELETE succeeded: a sermon listed everywhere whose player is broken for
+  // ever, under a sheet that had just promised "It disappears from members' apps and the stored file is
+  // deleted". The same shape left an owner unable to unpin a steward's featured sermon at all.
+  //
+  // `['for', '*']` — EVERY copy — rather than naming each author, because the console cannot reliably know
+  // who holds one: an author whose version has not reached this device yet would be missed, and that is the
+  // race, not an edge case. A church deleting its document means all of it.
+  //
+  // THIS IS NOT ROUND 9 REOPENED. That was one STEWARD's tidy-up taking a colleague's rota with it, and the
+  // rule against it is untouched: `k0 === cp` restricts this to a tombstone signed by the CHURCH KEY itself,
+  // in its own church. Nothing here widens what a steward may withdraw.
+  //
+  // Older readers ignore it safely: an app that does not understand `*` finds no `for` tag matching its own
+  // church pubkey, falls through to "my own copy only", and behaves exactly as it does today — the wrong
+  // half of the fix, which is what it already did. Additive, never repurposed.
+  if (cp && k0 === cp && named.includes('*')) {
+    for (const k of vers.keys()) if (!keys.includes(k)) keys.push(k);
+  }
+
   let did = false;
   for (const k of keys) {
     const held = vers.get(k);

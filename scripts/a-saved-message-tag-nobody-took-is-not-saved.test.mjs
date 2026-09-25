@@ -386,6 +386,37 @@ test('ENCRYPTION: the OWNER console still mints and publishes the envelope — u
     'Published: ' + r.published.length);
 });
 
+test('THE OWNER’S DELETE NAMES EVERY COPY, and a delegate’s still names only the church’s', () => {
+  // AUDIT-delegated-publishing-2026-09-25 H2/M1, the writer half. feChurch has stamped `['for', <church>]`
+  // on a DELEGATED console's tombstones since 2026-08-28, so a steward can withdraw the church's copy. The
+  // reverse never existed, and option A made it matter: a steward editing a sermon creates a second version
+  // under their own key, so the owner pressing Remove withdrew only half of it.
+  const body = fnBody(BUNDLE, 'function feChurch(tmpl, signer) {', 'feChurch');
+  // esbuild renames the import (`finalizeEvent2` in today's bundle) — bind whatever name the lifted code
+  // actually calls, or this throws a ReferenceError that looks nothing like the assertion it breaks.
+  const [, FE] = body.match(/return (\w+)\(_monotonic/) || [];
+  assert.ok(FE, 're-anchor this test: feChurch no longer signs through _monotonic');
+  const lift = (acting) => new Function('actingChurch', '_monotonic', FE, 'sk',
+    body + '\nreturn feChurch;')(acting, (t) => t, (t) => t, 'SK');
+  const forsOf = (e) => (e.tags || []).filter(t => t[0] === 'for').map(t => t[1]);
+
+  const ownerDel = lift('')({ tags: [['d', 'trinityone/sermon:s9'], ['deleted', '1']] });
+  assert.deepEqual(forsOf(ownerDel), ['*'],
+    'THE OWNER’S TOMBSTONE STILL NAMES ONLY ITS OWN COPY. A steward’s edited version survives it on every ' +
+    'screen, and the blob delete runs anyway. Tags: ' + JSON.stringify(ownerDel.tags));
+
+  const delegateDel = lift('CHURCHPUB')({ tags: [['d', 'trinityone/sermon:s9'], ['deleted', '1']] });
+  assert.deepEqual(forsOf(delegateDel), ['CHURCHPUB'],
+    'a DELEGATE’s tombstone now asks for every copy — that is round 9, reopened: one steward’s tidy-up ' +
+    'would take a colleague’s document with it. Tags: ' + JSON.stringify(delegateDel.tags));
+
+  const ownerWrite = lift('')({ tags: [['d', 'trinityone/sermon:s9']] });
+  assert.deepEqual(forsOf(ownerWrite), [], 'an ordinary write is being tagged as a withdrawal');
+
+  const already = lift('')({ tags: [['d', 'x'], ['deleted', '1'], ['for', 'SOMEONE']] });
+  assert.deepEqual(forsOf(already), ['SOMEONE'], 'it overrode a `for` the caller had already chosen');
+});
+
 test('THE BYTES: the blob auth names the church on a delegated console, and only there', async () => {
   // AUDIT-delegated-publishing-2026-09-25 H1. A sermon is a FILE plus a document. The document goes through
   // feChurch, which stamps `['church', actingChurch]`; the FILE goes to a host as a kind-24242 Authorization

@@ -1809,6 +1809,19 @@ function feChurch(tmpl, signer) {
       && !(tmpl.tags || []).some(t => t[0] === 'for')) {
     tmpl = { ...tmpl, tags: [...(tmpl.tags || []), ['for', actingChurch]] };
   }
+  // AND THE CHURCH'S OWN TOMBSTONE NAMES EVERY COPY, which is the same grant in the other direction and was
+  // missing until 2026-09-25. Since option A a steward can author a sermon — and edit one, which creates a
+  // SECOND version under their own key — so the church deleting "its" sermon withdrew only the half it
+  // signed. Measured (AUDIT-delegated-publishing-2026-09-25 H2/M1): the steward's copy stayed listed on
+  // every screen while the blob DELETE succeeded, leaving a sermon nobody can play and nobody can remove;
+  // and an owner could not unpin a steward's featured sermon at all.
+  // `*` rather than naming authors: this console cannot know who holds a copy it has not received yet, and
+  // that race IS the failure. Honoured in _forgetById (src/church-doc-store.src.js) only for a tombstone
+  // signed by the church key itself, so a steward still cannot reach a colleague's copy — round 9 stands.
+  if (!actingChurch && (tmpl.tags || []).some(t => t[0] === 'deleted')
+      && !(tmpl.tags || []).some(t => t[0] === 'for')) {
+    tmpl = { ...tmpl, tags: [...(tmpl.tags || []), ['for', '*']] };
+  }
   // Stamp HERE, where every church document is signed. The first attempt at this put it behind
   // _publishSigned() — which turned out to have exactly one caller, while forty-two paths call
   // publish(feChurch(...)) directly. Measured: the founding groups were still refused.

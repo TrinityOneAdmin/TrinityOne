@@ -354,6 +354,45 @@ test('MEMBER APP: a plain member’s forged sermon never renders, even though th
   unsub();
 });
 
+test('MEMBER APP: the church removing a sermon clears the STEWARD’S edit of it too', async () => {
+  // AUDIT-delegated-publishing-2026-09-25 H2, at the point of use. The owner publishes s1; Dana edits it,
+  // which is a second version under HER key and the one members see; the owner then presses Remove. Before
+  // `for: *` the tombstone bound only the church's copy, so Dana's stayed on every phone — and the blob
+  // DELETE had already run, so the sermon that remained could never play. The sheet said "It disappears
+  // from members' apps and the stored file is deleted"; half of that was true and it was the wrong half.
+  const app = memberApp();
+  const seen = [];
+  app.openSermons(l => seen.push(l.map(x => x.title)));
+  app.setRoster([STEW]);
+  app.fire(sermonDoc(FCP, 's1', { id: 's1', title: 'Sunday', sha256: 'aa' }, 1000, [['church', FCP]]));
+  app.fire(sermonDoc(STEW, 's1', { id: 's1', title: 'Sunday (corrected)', sha256: 'aa' }, 2000, [['church', FCP]]));
+  app.eose();
+  await tick();
+  assert.deepEqual(seen[seen.length - 1], ['Sunday (corrected)'], 'fixture: the steward’s edit should be the one shown');
+
+  // the church's Remove, exactly as feChurch now stamps it
+  app.fire(sermonDoc(FCP, 's1', null, 3000, [['church', FCP], ['for', '*']]));
+  await tick();
+  assert.deepEqual(seen[seen.length - 1], [],
+    'THE STEWARD’S EDIT SURVIVED THE CHURCH REMOVING THE SERMON. It is still listed on every member’s ' +
+    'phone and its file has already been deleted, so it can never play. Shown: ' + JSON.stringify(seen[seen.length - 1]));
+});
+
+test('MEMBER APP: …and a STEWARD’s `for: *` still cannot remove the church’s sermon', async () => {
+  // Round 9 at the point of use: the grant is honoured only for a tombstone signed by the church key.
+  const app = memberApp();
+  const seen = [];
+  app.openSermons(l => seen.push(l.map(x => x.title)));
+  app.setRoster([STEW]);
+  app.fire(sermonDoc(FCP, 's1', { id: 's1', title: 'Sunday', sha256: 'aa' }, 1000, [['church', FCP]]));
+  app.eose();
+  await tick();
+  app.fire(sermonDoc(STEW, 's1', null, 3000, [['church', FCP], ['for', '*']]));
+  await tick();
+  assert.deepEqual(seen[seen.length - 1], ['Sunday'],
+    'A STEWARD REMOVED THE CHURCH’S OWN SERMON by asking for every copy. Shown: ' + JSON.stringify(seen[seen.length - 1]));
+});
+
 test('MEMBER APP: NEWEST-WINS among TRUSTED authors — a late-arriving forgery never outranks the church’s own copy', async () => {
   // "newest-wins pins forgeries" (AUDIT Fable 2026-07-22): the forged copy below is dated LATER than the
   // church's, so if the pick were "newest, full stop" it would win. It must not, because its author is not

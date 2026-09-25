@@ -3577,6 +3577,9 @@
       }
       return false;
     }
+    if (cp && k0 === cp && named.includes("*")) {
+      for (const k of vers.keys()) if (!keys.includes(k)) keys.push(k);
+    }
     let did = false;
     for (const k of keys) {
       const held = vers.get(k);

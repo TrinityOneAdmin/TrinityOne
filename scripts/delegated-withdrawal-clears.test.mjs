@@ -161,10 +161,38 @@ test('it does NOT put the tag on ordinary writes', () => {
   assert.deepEqual(tagsOf(evt, 'for'), [], 'a normal edit was stamped as though it were a delete');
 });
 
-test('a church at its own console stamps nothing — there is no delegation to describe', () => {
+// ⚠ RE-ANCHORED 2026-09-25, DELIBERATELY. This asserted that an owner console stamps NOTHING — `for: []`
+// and `church: []` — on the reasoning in its own title: at the church's own console "there is no delegation
+// to describe". That was true while `for` had exactly one meaning: a delegated steward naming the CHURCH's
+// copy, which is the defect this whole file was written about.
+//
+// `for` now has a second meaning in the other direction, and it is the church's. Since option A a content
+// steward can author a sermon, and EDITING one creates a second version under their own key — so the owner
+// pressing Remove withdrew only the copy the church signed, leaving the steward's listed on every phone
+// with its file already deleted (AUDIT-delegated-publishing-2026-09-25, H2/M1). The owner's tombstone now
+// says `['for', '*']`: every copy of this document, which is what "the church deleted it" has always meant.
+//
+// THE CHURCH TAG HALF IS UNCHANGED AND STILL ASSERTED, because that part of the title is still exactly
+// right: an owner console describes no delegation, and stamping `church` there would be a real regression.
+// The round-9 half this file exists to protect is asserted below and in
+// scripts/two-authors-one-document.test.mjs — `*` is honoured only for a tombstone signed by the CHURCH KEY.
+test('a church at its own console names EVERY copy, and still describes no delegation', () => {
   const fe = signer({ acting: '' });
   const evt = fe({ kind: 30078, created_at: 1, tags: [['d', 'trinityone/group:g1'], ['deleted', '1']], content: '' });
-  assert.deepEqual(tagsOf(evt, 'for'), []);
+  assert.deepEqual(tagsOf(evt, 'for'), ['*'],
+    'the owner’s tombstone no longer names every copy, so a steward’s edited version of this document ' +
+    'survives the church deleting it — on every phone, with its file already gone');
+  assert.deepEqual(tagsOf(evt, 'church'), [],
+    'an owner console stamped a `church` tag — there is no delegation to describe here, and a reader that ' +
+    'sees one would treat the church as acting for itself');
+});
+
+test('…and an ordinary church WRITE still stamps nothing at all', () => {
+  // The `for: *` stamp must be reachable only from a withdrawal. A write carrying it would ask every reader
+  // to withdraw copies of a document that is being published.
+  const fe = signer({ acting: '' });
+  const evt = fe({ kind: 30078, created_at: 1, tags: [['d', 'trinityone/group:g1']], content: '{}' });
+  assert.deepEqual(tagsOf(evt, 'for'), [], 'an ordinary church write is being tagged as a withdrawal');
   assert.deepEqual(tagsOf(evt, 'church'), []);
 });
 

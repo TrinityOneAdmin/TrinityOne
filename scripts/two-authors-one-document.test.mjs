@@ -38,6 +38,9 @@ function store(bundle) {
     byId,
     put: (by, ts, tag, id, trust) => api._absorbById(versions, byId, id || 'svc1', { id: id || 'svc1', _by: by, ts, tag }, trust),
     del: (by, ts, id, trust) => api._forgetById(versions, byId, id || 'svc1', by, ts, trust),
+    // …and the same delete with a `for` grant attached: `targets` are the copies it NAMES, `mayName` is the
+    // stricter "who may withdraw" predicate readers pass separately from "who may be shown".
+    delNamed: (by, ts, opts, id, trust) => api._forgetById(versions, byId, id || 'svc1', by, ts, trust || (() => true), opts),
     revoke: (trust) => { if (!api._reduceAll) throw new Error('this bundle does not re-choose winners on a roster change'); api._reduceAll(versions, byId, trust); },
     seen: (id) => byId.get(id || 'svc1'),
     paint: (items) => api._seedFromCache(versions, byId, items),
@@ -104,6 +107,54 @@ test('THE CLEANUP: deleting the duplicate brings the real rota BACK, it does not
   m.del(WARDEN, 1787776500);
   assert.ok(m.seen(), 'the Sunday went blank — the vicar’s rota was deleted by somebody who never wrote it');
   assert.equal(m.seen().tag, 'ten real people', 'the surviving rota was not put back on screen');
+});
+
+test('THE CHURCH CAN WITHDRAW A STEWARD’S COPY — `for: *`, the other half of the `for` grant', () => {
+  // AUDIT-delegated-publishing-2026-09-25 H2/M1. Since option A a content steward can author a sermon, and
+  // EDITING one creates a second version under their own key. The owner then pressing Remove withdrew only
+  // the copy the church signed: the steward's stayed on every screen while the blob DELETE succeeded —
+  // a sermon listed everywhere that can never play, under a sheet promising it had gone. Same shape left an
+  // owner unable to unpin a steward's featured sermon at all.
+  const st = store(V);
+  st.put(CHURCH, 100, 'church copy');
+  st.put(WARDEN, 200, 'steward’s edit');
+  assert.equal(st.seen().tag, 'steward’s edit', 'fixture: the steward’s newer edit should be the one shown');
+  const went = st.delNamed(CHURCH, 300, { churchPub: CHURCH, targets: ['*'], mayName: () => true });
+  assert.ok(went, 'the church’s delete withdrew nothing at all');
+  assert.equal(st.seen(), undefined,
+    'THE STEWARD’S COPY SURVIVED THE CHURCH DELETING THE DOCUMENT. Still on screen: ' + JSON.stringify(st.seen()));
+});
+
+test('…and an OLD church tombstone, with no `for` tag, still binds only its own copy', () => {
+  // Every tombstone written before this grant existed, and every one from an older console. It must not
+  // start reaching further than it did — additive, never repurposed.
+  const st = store(V);
+  st.put(CHURCH, 100, 'church copy');
+  st.put(WARDEN, 200, 'steward’s edit');
+  st.delNamed(CHURCH, 300, { churchPub: CHURCH, targets: [], mayName: () => true });
+  assert.equal(st.seen() && st.seen().tag, 'steward’s edit',
+    'an untagged church tombstone now withdraws copies it never named — that is a behaviour change for ' +
+    'every delete ever written. Got: ' + JSON.stringify(st.seen()));
+});
+
+test('ROUND 9 STANDS: a steward’s `for: *` does NOT take a colleague’s copy', () => {
+  // The rule this grant must not reopen. Round 9 was one steward tidying their own duplicate and removing a
+  // colleague's rota with it. `*` is honoured only for a tombstone signed by the CHURCH KEY itself.
+  const st = store(V);
+  st.put(WARDEN, 100, 'warden’s rota');
+  st.put(THIRD, 200, 'a colleague’s rota');
+  st.delNamed(WARDEN, 300, { churchPub: CHURCH, targets: ['*'], mayName: () => true });
+  assert.equal(st.seen() && st.seen().tag, 'a colleague’s rota',
+    'A STEWARD WITHDREW A COLLEAGUE’S DOCUMENT by asking for every copy — round 9, reopened through the ' +
+    'new door. Got: ' + JSON.stringify(st.seen()));
+});
+
+test('…and a steward naming the CHURCH’s copy still works — the original grant is untouched', () => {
+  const st = store(V);
+  st.put(CHURCH, 100, 'church copy');
+  st.delNamed(WARDEN, 300, { churchPub: CHURCH, targets: [CHURCH], mayName: () => true });
+  assert.equal(st.seen(), undefined,
+    'a delegated steward can no longer withdraw the church’s own copy — the 2026-08-28 grant regressed');
 });
 
 test('a delete binds only its own author’s copy', () => {
