@@ -159,7 +159,23 @@ async function openTab(label) { await openMenu(); await pickSection(label); }
 async function openSettingsPage(name) {
   await openTab('Settings');
   if (await evalIn(`!!document.querySelector('button.set-back')`)) { await evalIn(`document.querySelector('button.set-back').click()`); await sleep(600); }
-  await evalIn(`(() => { [...document.querySelectorAll('nav[aria-label="Settings pages"] button.set-grp[aria-expanded="false"]')].forEach(b => b.click()); return 'ok'; })()`);
+  // EVERY GROUP OPEN, ONE PRESS PER ROUND TRIP. The four groups start SHUT off the phone app (DashSettings,
+  // "OPEN ON THE PHONE, SHUT IN THE SUITE" — owner 2026-09-22, 362481d) and this Chromium is not Capacitor,
+  // so all four are shut here however small the viewport. Until 2026-09-26 this line pressed them with a
+  // single `forEach(b => b.click())`; MEASURED on this file that same day, that leaves exactly ONE open —
+  // the last pressed — because all four handlers run inside one task and each closes over the same pre-click
+  // `collapsed`, so the last write wins. The rows of the other three are then not rendered at all, which is
+  // why this helper could still reach "Church key" (Security, pressed last) and could not reach
+  // "Rules & privacy" (People). No steward can press four headers inside one task, so nothing here says the
+  // screen is wrong; the HARNESS was.
+  // Then ASSERT nothing is left shut, so a half-working harness can never again be read as a missing row.
+  for (let i = 0; i < 8; i++) {
+    const more = await evalIn(`(() => { const b = document.querySelector('nav[aria-label="Settings pages"] button.set-grp[aria-expanded="false"]'); if (!b) return 'done'; b.click(); return 'more'; })()`);
+    if (more === 'done') break;
+    await sleep(250);
+  }
+  const shut = await evalIn(`(() => [...document.querySelectorAll('nav[aria-label="Settings pages"] button.set-grp[aria-expanded="false"]')].map(b => ((b.querySelector('.set-grp-n') || {}).textContent || '')).join(', '))()`);
+  assert.equal(shut, '', `the harness could not open these settings groups: ${shut}`);
   await sleep(500);
   const r = await evalIn(`(() => { const b = [...document.querySelectorAll('nav[aria-label="Settings pages"] button')].find(x => (x.querySelector('.set-item-n') || x).textContent.trim() === ${JSON.stringify(name)}); if (!b) return 'miss'; b.click(); return 'ok'; })()`);
   assert.equal(r, 'ok', `no "${name}" row in Settings — re-anchor this test`);
