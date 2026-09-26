@@ -15936,9 +15936,12 @@ zoo`.split("\n");
   var _skewProven = false;
   var _skewSpreadSec = 0;
   var _skewMeasuring = false;
+  var _skewFlight = null;
   var _skewByRelay = /* @__PURE__ */ new Map();
   var CLOCK_FAULT_SEC = 300;
   var SKEW_CAP_SEC = 900;
+  var STAMP_CAP_SEC = _CLOCK_SKEW;
+  var SKEW_WAIT_MS = 6e3;
   function clockLooksWrong() {
     return !!_skewMeasuredAt && Math.abs(_relaySkewSec) >= CLOCK_FAULT_SEC;
   }
@@ -15949,8 +15952,12 @@ zoo`.split("\n");
     return a[a.length - 1 >> 1];
   }
   async function measureRelaySkew(preferUrl) {
-    if (_skewMeasuring) return _relaySkewSec;
+    if (_skewMeasuring) return _skewFlight || _relaySkewSec;
     _skewMeasuring = true;
+    let _flightDone = null;
+    _skewFlight = new Promise((r) => {
+      _flightDone = r;
+    });
     try {
       const cands = [];
       const add2 = (u) => {
@@ -16002,7 +16009,33 @@ zoo`.split("\n");
       return _relaySkewSec;
     } finally {
       _skewMeasuring = false;
+      _skewFlight = null;
+      try {
+        _flightDone(_relaySkewSec);
+      } catch (x) {
+      }
     }
+  }
+  var _skewWaited = false;
+  function ensureSkew(opts) {
+    if (_skewMeasuredAt || _skewWaited) return null;
+    _skewWaited = true;
+    const ms = Math.max(0, opts && opts.timeoutMs || SKEW_WAIT_MS);
+    let settle = null;
+    const bounded = new Promise((r) => {
+      settle = r;
+      setTimeout(r, ms);
+    });
+    try {
+      measureRelaySkew().then(() => settle(), () => settle());
+    } catch (e) {
+      settle();
+    }
+    return bounded;
+  }
+  function _skewGate(fn) {
+    const w = ensureSkew({ timeoutMs: SKEW_WAIT_MS });
+    return w ? w.then(fn) : Promise.resolve(fn());
   }
   function relaySkewState() {
     return {
@@ -16015,13 +16048,16 @@ zoo`.split("\n");
       relays: [..._skewByRelay.entries()].map(([url, v]) => ({ url, sec: v.sec, proven: v.proven }))
     };
   }
-  function _credNow() {
-    if (!_skewMeasuredAt || !_skewProven) return now();
-    if (Math.abs(_skewSpreadSec) > SKEW_CAP_SEC) return now();
+  function _skewShift(capSec) {
+    if (!_skewMeasuredAt || !_skewProven) return 0;
+    if (Math.abs(_skewSpreadSec) > SKEW_CAP_SEC) return 0;
     let d = _relaySkewSec;
-    if (d > SKEW_CAP_SEC) d = SKEW_CAP_SEC;
-    if (d < -SKEW_CAP_SEC) d = -SKEW_CAP_SEC;
-    return now() - d;
+    if (d > capSec) d = capSec;
+    if (d < -capSec) d = -capSec;
+    return d;
+  }
+  function _credNow() {
+    return now() - _skewShift(SKEW_CAP_SEC);
   }
   try {
     setTimeout(() => {
@@ -17100,11 +17136,14 @@ zoo`.split("\n");
   }
   function _monotonic(tmpl) {
     const d = ((tmpl.tags || []).find((t) => t[0] === "d") || [])[1] || "kind:" + tmpl.kind;
-    const nowS = Math.floor(Date.now() / 1e3);
-    const want = tmpl.created_at || nowS;
+    const localS = Math.floor(Date.now() / 1e3);
+    const shift = _skewShift(STAMP_CAP_SEC);
+    const nowS = localS - shift;
+    const want = (tmpl.created_at || localS) - shift;
     const last = _lastStamp.get(d) || 0;
     let at = want > last ? want : last + 1;
-    if (at > nowS + 600) at = want;
+    const ceiling = Math.min(localS + STAMP_CAP_SEC, nowS + SKEW_CAP_SEC);
+    if (at > ceiling) at = want;
     _lastStamp.set(d, at);
     return at === tmpl.created_at ? tmpl : { ...tmpl, created_at: at };
   }
@@ -20374,7 +20413,7 @@ zoo`.split("\n");
       _requireTrustedView("list of children");
       if (!sk) return Promise.resolve(null);
       const list = [...new Set((pubkeys || []).filter(Boolean))];
-      return _publishToRelays(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", MINORS_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list }) }), sk));
+      return _skewGate(() => _publishToRelays(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", MINORS_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list }) }), sk)));
     },
     // `opts.listKnown` — has the CALLER actually read this church's cleared list? The console has that answer
     // (its safeguarding subscription reports `loaded`) and this module does not: an empty remembered list means
@@ -20399,7 +20438,7 @@ zoo`.split("\n");
         }
         cleared[p] = knownPrev && !knownPrev.has(p) ? { by: pub, at: now() } : { by: "", at: 0 };
       }
-      return _publishToRelays(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", APPROVED_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list, cleared }) }), sk));
+      return _skewGate(() => _publishToRelays(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", APPROVED_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list, cleared }) }), sk)));
     },
     // ---- safeguarding v2: parent↔child links. Parents publish a guardian-link REQUEST (guardreq:<childpub>,
     // p-tagged to us); the steward confirms it into the church-signed GUARDIANS map (guardians:<churchpub>),
@@ -20469,7 +20508,7 @@ zoo`.split("\n");
         const arr = [...new Set((ps || []).filter(Boolean))];
         if (c && arr.length) clean5[c] = arr;
       }
-      return _publishToRelays(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", GUARDIANS_D + pub], ["t", NET]], content: JSON.stringify({ links: clean5 }) }), sk));
+      return _skewGate(() => _publishToRelays(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", GUARDIANS_D + pub], ["t", NET]], content: JSON.stringify({ links: clean5 }) }), sk)));
     },
     // safeguarding v2: tell a STEWARD-LINKED parent (who never set the child up on their own device, so has no
     // local record) that they're now a guardian — otherwise the child never appears in their app. Church-signed,
@@ -20946,7 +20985,7 @@ zoo`.split("\n");
       } else if (_stewardNamesCt) {
         doc.n = _stewardNamesCt;
       }
-      return publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", STEWARDS_D + pub], ["t", NET]], content: JSON.stringify(doc) }), sk));
+      return _skewGate(() => publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", STEWARDS_D + pub], ["t", NET]], content: JSON.stringify(doc) }), sk)));
     },
     // What this church has granted each steward. Empty array = nothing; ABSENT = everything (an unscoped
     // steward, which is every steward that existed before this feature).
@@ -21866,12 +21905,12 @@ zoo`.split("\n");
       } catch (e) {
         return null;
       }
-      const ok = await _publishToRelays(finalizeEvent2(_monotonic({
+      const ok = await _skewGate(() => _publishToRelays(finalizeEvent2(_monotonic({
         kind: 30078,
         created_at: now(),
         tags: [["d", CHECKINPERM_D + person], ["t", NET], ["church", cp], ["person", person]],
         content: JSON.stringify(body)
-      }), sk));
+      }), sk)));
       if (ok === false || ok == null) return null;
       return { ...body };
     },
@@ -21892,12 +21931,12 @@ zoo`.split("\n");
       if (!sk || !_mayClearForCheckin()) return Promise.resolve(null);
       const who = String(person || "").trim().toLowerCase();
       if (!/^[0-9a-f]{64}$/.test(who)) return Promise.resolve(null);
-      return _publishToRelays(finalizeEvent2(_monotonic({
+      return _skewGate(() => _publishToRelays(finalizeEvent2(_monotonic({
         kind: 30078,
         created_at: now(),
         tags: [["d", CHECKINPERM_D + who], ["t", NET], ["church", pub], ["deleted", "1"]],
         content: ""
-      }), sk));
+      }), sk)));
     },
     // READ THE CLEARANCES BACK. Through readCheckinPermission — the relay's own parser — rather than a second
     // reading of the same JSON, so the console and the box cannot disagree about what a permission means. A
@@ -22204,12 +22243,12 @@ zoo`.split("\n");
         return null;
       }
       if (built.failed.length) _warnUnsealed("check-in helper", built.failed);
-      const ok = await _publishToRelays(finalizeEvent2(_monotonic({
+      const ok = await _skewGate(() => _publishToRelays(finalizeEvent2(_monotonic({
         kind: 30078,
         created_at: now(),
         tags: [["d", CHECKINHELPER_D + session], ["t", NET], ["church", cp], ["session", session]],
         content: JSON.stringify(built.doc)
-      }), sk));
+      }), sk)));
       if (ok === false || ok == null) return null;
       return {
         session,
@@ -22257,12 +22296,12 @@ zoo`.split("\n");
       if (!sk || !churchSkHeld() || actingChurch) return Promise.resolve(null);
       const sid = String(session || "");
       if (!sid) return Promise.resolve(null);
-      return _publishToRelays(finalizeEvent2(_monotonic({
+      return _skewGate(() => _publishToRelays(finalizeEvent2(_monotonic({
         kind: 30078,
         created_at: now(),
         tags: [["d", CHECKINHELPER_D + sid], ["t", NET], ["church", pub], ["deleted", "1"]],
         content: ""
-      }), sk));
+      }), sk)));
     },
     // ── THE TWO QUESTIONS THE CHECK-IN SCREEN HAS TO ASK BEFORE IT SAYS ANYTHING ────────────────────────────
     //

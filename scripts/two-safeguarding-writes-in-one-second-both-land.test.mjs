@@ -86,12 +86,31 @@ function consoleWriters(fixedSec) {
     buildCheckinPermission: ROLE.buildCheckinPermission, helperPolicy: ROLE.helperPolicy,
     lifetimeWindow: ROLE.lifetimeWindow, permittedHelpers: ROLE.permittedHelpers,
     buildHelperGrant: ROLE.buildHelperGrant, GRANT_SOURCE: ROLE.GRANT_SOURCE,
+    // ── stage 4's bounded wait. The REAL ensureSkew/_skewGate/_skewShift are lifted below; only the dial
+    //    itself is stubbed, because there is no relay in this harness. Nothing measures, so _skewShift
+    //    returns 0 and every stamp below is the local clock — which is what the first assertion in each
+    //    row then proves, rather than assuming.
+    measureRelaySkew: async () => 0,
+    setTimeout,
     // ── real crypto; the envelope is really sealed ──
     crypto: globalThis.crypto, encrypt3: nip44e, getConversationKey: nip44ck,
     _hex: (u) => Array.from(u).map(b => b.toString(16).padStart(2, '0')).join(''),
     JSON, Math, Number, String, Object, Array, Set, Date, RegExp, Promise, Error,
   };
   const prelude = [
+    // the measurement state, at its "nothing has ever answered" value, plus the real selection rules
+    stmt(SHIP, 'var _CLOCK_SKEW = ', '_CLOCK_SKEW'),
+    stmt(SHIP, 'var SKEW_CAP_SEC = ', 'SKEW_CAP_SEC'),
+    stmt(SHIP, 'var STAMP_CAP_SEC = ', 'STAMP_CAP_SEC'),
+    stmt(SHIP, 'var SKEW_WAIT_MS = ', 'SKEW_WAIT_MS'),
+    stmt(SHIP, 'var _relaySkewSec = 0', '_relaySkewSec'),
+    stmt(SHIP, 'var _skewMeasuredAt = 0', '_skewMeasuredAt'),
+    stmt(SHIP, 'var _skewProven = false', '_skewProven'),
+    stmt(SHIP, 'var _skewSpreadSec = 0', '_skewSpreadSec'),
+    stmt(SHIP, 'var _skewWaited = false', '_skewWaited'),
+    fnBody(SHIP, 'function _skewShift', '_skewShift'),
+    fnBody(SHIP, 'function ensureSkew', 'ensureSkew'),
+    fnBody(SHIP, 'function _skewGate', '_skewGate'),
     fnBody(SHIP, 'function _monotonic(tmpl)', '_monotonic'),
     stmt(SHIP, 'var NET = ', 'NET'),
     stmt(SHIP, 'var MINORS_D = ', 'MINORS_D'),
@@ -174,9 +193,9 @@ for (const [, name, what] of WRITERS) {
     const [e1, e2] = sent;
     assert.equal(dOf(e1), dOf(e2), 're-anchor: the two calls wrote DIFFERENT documents, so they never raced');
     assert.equal(e1.created_at, at,
-      'the first write was not stamped from the console\'s own clock. Stage 3 corrects NOTHING — if this ' +
-      'is stage 4 or later, this assertion is the one that is meant to move, deliberately and in its own ' +
-      'commit.');
+      'the first write was not stamped from the console\'s own clock. Nothing in this harness has measured ' +
+      'anything, and an unmeasured console must correct by NOTHING — the shipped _skewShift is lifted here, ' +
+      'not stubbed, so this row is the offline case and it must stay byte-identical to the local clock.');
     assert.ok(e2.created_at > e1.created_at,
       'THE SECOND WRITE TIED WITH THE FIRST. ' + name + ' no longer goes through _monotonic, so a steward ' +
       'who acts twice in one second has one of the two silently discarded by the relay — which half is ' +

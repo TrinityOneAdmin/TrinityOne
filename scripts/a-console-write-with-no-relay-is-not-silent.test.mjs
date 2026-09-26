@@ -51,6 +51,16 @@ const RELAY_NET_D = 'trinityone/relay-net';
 const GROUP_D = 'trinityone/group:';
 const ROOT = new URL('..', import.meta.url).pathname;
 const STEWARD = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
+
+// STAGE 4's two caps, READ OUT OF THE BUNDLE rather than typed here. Five tolerance constants drifting apart
+// is the defect the relay-corrected-time work exists to stop, and a test that hard-codes a sixth copy of one
+// of them stops being able to see the drift.
+const CAPS = (() => {
+  const src = stmt(STEWARD, 'var _CLOCK_SKEW = ', '_CLOCK_SKEW')
+    + '\n' + stmt(STEWARD, 'var STAMP_CAP_SEC = ', 'STAMP_CAP_SEC')
+    + '\n' + stmt(STEWARD, 'var SKEW_CAP_SEC = ', 'SKEW_CAP_SEC');
+  return new Function(src + '\nreturn { STAMP_CAP_SEC, SKEW_CAP_SEC };')();
+})();
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 // ── a browser's worth of world ──────────────────────────────────────────────────────────────────────────
@@ -173,6 +183,11 @@ function consoleWriters({ church, origin, canonical = [], pins = {}, extra = [],
     _waitForRegistration: async () => {},
     _localBlocked: new Set(),
     _lastStamp: new Map(),
+    // STAGE 4 (SCOPE-RELAY-CORRECTED-TIME-2026-09-26) made _monotonic read the relay-clock correction
+    // through _skewShift. Zero here — the unmeasured case, which is byte-identical to the build these
+    // rows were written against. The correction itself is measured in
+    // scripts/a-slow-console-does-not-write-past-its-own-gate.test.mjs, not here.
+    _skewShift: () => 0, ...CAPS,
   });
   store.setItem('trinityone.steward.extra-relays', JSON.stringify(extra));
   const publishGroup = fnBody(src, '  publishGroup(group) {', 'publishGroup');

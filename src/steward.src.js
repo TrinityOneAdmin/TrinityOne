@@ -1352,13 +1352,44 @@ let _skewMeasuredAt = 0;      // ms on the local clock; 0 = nothing has ever ans
 let _skewProven = false;      // did the number come from the signed proof, or only from /status?
 let _skewSpreadSec = 0;       // widest disagreement between the relays that answered
 let _skewMeasuring = false;   // one measurement at a time; the boot kick and a reconnect can arrive together
+// THE MEASUREMENT IN PROGRESS, so a concurrent caller can await THAT ONE. Without it, `_skewMeasuring` made
+// a second caller take the PREVIOUS number the instant the first call started dialling — which is fine for a
+// diagnostic and useless for ensureSkew(), whose whole job is to WAIT for the answer. A bounded wait that
+// returns instantly because the boot kick got there first buys nothing at all.
+let _skewFlight = null;
 const _skewByRelay = new Map();   // url -> { sec, at, proven }
 // Half the relay's NIP-42 window. Same number and same reasoning as the member app's CLOCK_FAULT_SEC:
 // comfortably outside ordinary drift, comfortably inside "this clock cannot authenticate".
 const CLOCK_FAULT_SEC = 300;
-// The cap a LATER stage would correct by, named here only so the panel can say when a reading is beyond
-// what any correction would ever paper over. It is put()'s own future clamp in scripts/event-store.mjs.
+// ── TWO CAPS, TWO JOBS. DO NOT TIDY THEM INTO ONE. ──────────────────────────────────────────────────────
+//
+// SKEW_CAP_SEC is the cap on a SHORT-LIVED CREDENTIAL's correction (_credNow). 900 because that is put()'s
+// own future clamp in scripts/event-store.mjs: a credential corrected inside ±900s cannot produce anything
+// an honest relay would not already have accepted from a device that far out on its own clock. A credential
+// is checked against the RELAY's freshness windows and then thrown away. It is never stored, never ordered,
+// and no gate on THIS console ever reads one back.
 const SKEW_CAP_SEC = 900;
+// STAMP_CAP_SEC is the cap on a DOCUMENT's correction (_monotonic), and it is deliberately the SMALLER
+// number, tied to the console's OWN receive gate rather than to the relay's.
+//
+// WHY, and it is the defect this stage nearly shipped. `_relaySkewSec` is local-minus-relay, so a console
+// whose clock is SLOW measures a NEGATIVE skew and the correction pushes its stamps FORWARD. Capped at 900
+// it would stamp up to now()+900 — and `_authFuture` (below, `e.created_at > now() + _CLOCK_SKEW`) refuses
+// anything past now()+600 on the console's OWN safeguarding subscription. So a console more than ten
+// minutes slow would write its minors list, the relay would store it, correctly-clocked phones would read
+// it, and the WRITING console's own screen would drop it as future-dated. Worse, `minors` starts empty and
+// `minorsKnown()` falls back to sawEose-while-authed, so the first such write leaves that console asserting
+// "nobody here is a child" rather than admitting it does not know. The member app already names this exact
+// 600-to-900 band as a measured hazard, beside its own clearance clamp in src/fellowship.src.js: "Two
+// programs that must agree cannot run different rulebooks."
+//
+// Derived from `_CLOCK_SKEW`, never written out as another 600: this whole piece of work exists because
+// five different tolerance constants drifted apart. At exactly the cap the gate is `>`, so a stamp of
+// now()+600 is accepted — and time only ever passes between stamping and reading, which moves the gate
+// further away, never closer.
+const STAMP_CAP_SEC = _CLOCK_SKEW;
+// The bounded wait the eight safeguarding writers take before their FIRST stamp of a session, once.
+const SKEW_WAIT_MS = 6000;
 function clockLooksWrong() { return !!_skewMeasuredAt && Math.abs(_relaySkewSec) >= CLOCK_FAULT_SEC; }
 // SEVERAL RELAYS DISAGREEING (§4). Median, except at exactly two, where the median is the average and the
 // average is not the conservative answer — take the reading CLOSER TO LOCAL, so a correction built on this
@@ -1372,8 +1403,14 @@ function _pickSkew(list) {
 // Best effort, always. Never throws, never blocks a write, and returns the last known figure when nothing
 // answers — a church on a thin pipe is the first audience, not the edge case.
 async function measureRelaySkew(preferUrl) {
-  if (_skewMeasuring) return _relaySkewSec;
+  // A CONCURRENT CALLER AWAITS THE MEASUREMENT IN PROGRESS, it does not take the previous number and walk
+  // away. The boot kick and a reconnect can arrive together — and, since stage 4, so can ensureSkew()'s
+  // bounded wait, whose entire job is to have an ANSWER before the first safeguarding stamp. Handing it the
+  // stale figure made that wait return in microseconds and buy nothing.
+  if (_skewMeasuring) return _skewFlight || _relaySkewSec;
   _skewMeasuring = true;
+  let _flightDone = null;
+  _skewFlight = new Promise((r) => { _flightDone = r; });
   try {
     // ASK EVERY CANDIDATE, not the first. The member app's own comment records the cost of asking one:
     // measured on the Oppo, the skew stayed 0 for three minutes with the clock a quarter-hour out, because
@@ -1418,7 +1455,35 @@ async function measureRelaySkew(preferUrl) {
     _skewMeasuredAt = Date.now();
     return _relaySkewSec;
   } catch (e) { return _relaySkewSec; }
-  finally { _skewMeasuring = false; }
+  finally { _skewMeasuring = false; _skewFlight = null; try { _flightDone(_relaySkewSec); } catch (x) {} }
+}
+// ── THE BOUNDED WAIT, FOR THE EIGHT SAFEGUARDING WRITERS AND NOTHING ELSE ───────────────────────────────
+//
+// Returns null when there is nothing to wait for, and a promise that settles within `timeoutMs` otherwise.
+// Null is the overwhelmingly common answer, and it is what keeps a write synchronous exactly as it was.
+//
+// LATCHED AFTER ONE WAIT. A console with no relay reachable never sets `_skewMeasuredAt`, so without the
+// latch every mark-a-child would sit for six seconds, for ever, with nothing on the screen saying why. A
+// church on a thin pipe in Tehran is the first audience, not the edge case: it pays this once per session
+// and never again. Same shape as `_proofWaited` on the registration gate, and for the same reason.
+//
+// IT CAN NEVER FAIL A WRITE. Whatever happens — no relay, a throw, a hung fetch — it resolves and the
+// caller stamps from whatever it knows, which with no measurement is the local clock and today's behaviour.
+let _skewWaited = false;
+function ensureSkew(opts) {
+  if (_skewMeasuredAt || _skewWaited) return null;
+  _skewWaited = true;
+  const ms = Math.max(0, (opts && opts.timeoutMs) || SKEW_WAIT_MS);
+  let settle = null;
+  const bounded = new Promise((r) => { settle = r; setTimeout(r, ms); });
+  try { measureRelaySkew().then(() => settle(), () => settle()); } catch (e) { settle(); }
+  return bounded;
+}
+// The one line each safeguarding writer adds. `fn` runs SYNCHRONOUSLY when there is nothing to wait for, so
+// every write after the first behaves exactly as it did before this stage.
+function _skewGate(fn) {
+  const w = ensureSkew({ timeoutMs: SKEW_WAIT_MS });
+  return w ? w.then(fn) : Promise.resolve(fn());
 }
 // WHAT THE PANEL READS. `measuredAt: 0` is the honest "we do not know" and the screen must show nothing
 // rather than claim a zero skew — an unmeasured clock and a correct clock are not the same fact.
@@ -1462,13 +1527,26 @@ function relaySkewState() {
 //                     future clamp in scripts/event-store.mjs, so a correction inside it cannot produce
 //                     anything an honest relay would not already accept from a device that far out on its
 //                     own. Above it the honest answer is to tell the person their clock is wrong.
-function _credNow() {
-  if (!_skewMeasuredAt || !_skewProven) return now();
-  if (Math.abs(_skewSpreadSec) > SKEW_CAP_SEC) return now();
+// HOW MANY SECONDS TO SUBTRACT FROM A LOCAL READING, and the three refusals above are all here. `capSec` is
+// the CALLER's bound, because the two callers answer to two different gates — see the note on SKEW_CAP_SEC
+// and STAMP_CAP_SEC above, and do not collapse them.
+//
+// The SPREAD refusal keeps SKEW_CAP_SEC for both callers deliberately: it is not a question about how far
+// we are willing to move, it is the question of whether the measurement is worth anything at all, and boxes
+// that contradict each other by a quarter of an hour are not a device-clock fault either caller can fix.
+//
+// It takes no clock reading of its own, so a caller that has already read the clock can shift THAT reading
+// rather than taking a second one and straddling a second boundary.
+function _skewShift(capSec) {
+  if (!_skewMeasuredAt || !_skewProven) return 0;
+  if (Math.abs(_skewSpreadSec) > SKEW_CAP_SEC) return 0;
   let d = _relaySkewSec;
-  if (d > SKEW_CAP_SEC) d = SKEW_CAP_SEC;
-  if (d < -SKEW_CAP_SEC) d = -SKEW_CAP_SEC;
-  return now() - d;
+  if (d > capSec) d = capSec;
+  if (d < -capSec) d = -capSec;
+  return d;
+}
+function _credNow() {
+  return now() - _skewShift(SKEW_CAP_SEC);
 }
 // Measure at start and when a relay comes back, so the number on the panel is about now and not about boot.
 // Both are deliberately delayed and both swallow everything: a measurement must never be able to delay or
@@ -3106,16 +3184,50 @@ function _spreadOf(d) {
 // setApproved, setGuardians, setStewards, grantCheckinPermission, revokeCheckinPermission,
 // publishCheckinHelpers, revokeCheckinHelpers. Every one is enumerated in the stage-3 commit.
 //
-// WHAT IT IS NOT. It is not a clock and it is not a correction. `now()` keeps its exact meaning, and a
-// console whose clock is eleven minutes fast still writes eleven minutes into the future — it now does so
-// in a strict order of its own. Correcting the number is stage 4 and lives in this same function.
+// AND SINCE STAGE 4 IT IS ALSO THE CLOCK. `now()` keeps its exact meaning — the seven local-elapsed-time
+// sites in this file depend on it and would all break — but the number stamped on a DOCUMENT is the relay's
+// clock as best this console can tell, so two consoles in one church order their writes by the same clock
+// instead of by whose laptop is faster. That is the other half of the incident on publishClearance.
+//
+// THE CORRECTION IS BOUNDED BY STAMP_CAP_SEC (= _CLOCK_SKEW, 600), NOT by SKEW_CAP_SEC. A slow console
+// corrects FORWARD, and this console's own `_authFuture` refuses a document past now() + _CLOCK_SKEW. Tied
+// to the smaller number, a corrected stamp can never be one this console itself would refuse. The long
+// version is on STAMP_CAP_SEC; it is a real defect, not a style preference.
+//
+// AND IT IS STILL ZERO WHENEVER THE MEASUREMENT IS NOT WORTH HAVING: nothing measured, the reading unsigned,
+// or relays disagreeing beyond the cap all give a shift of 0 and an event byte-identical to the last build.
+// Offline is that case. The correction can never prevent, delay past its bound, or fail a write.
 function _monotonic(tmpl) {
   const d = ((tmpl.tags || []).find(t => t[0] === 'd') || [])[1] || ('kind:' + tmpl.kind);
-  const nowS = Math.floor(Date.now() / 1000);
-  const want = tmpl.created_at || nowS;
+  const localS = Math.floor(Date.now() / 1000);
+  // ONE reading, shifted — never a second reading of the clock, which could straddle a second boundary and
+  // leave `want` and `nowS` disagreeing about which second this is.
+  const shift = _skewShift(STAMP_CAP_SEC);
+  const nowS = localS - shift;
+  const want = (tmpl.created_at || localS) - shift;
   const last = _lastStamp.get(d) || 0;
   let at = want > last ? want : last + 1;
-  if (at > nowS + 600) at = want;   // never stamp into the relay's future-clamp; take the rare tie instead
+  // THE RUNAWAY GUARD, and it has TWO ceilings now because there are two gates and they move apart under a
+  // correction. `last + 1` must not climb into either one; when it would, take the rare tie instead.
+  //   * localS + STAMP_CAP_SEC — THIS console's own _authFuture, which reads its LOCAL clock.
+  //   * nowS + SKEW_CAP_SEC    — put()'s future clamp, which reads the RELAY's.
+  // With no measurement the shift is 0, both bases are the same second and this is exactly `nowS + 600`,
+  // byte-identical to the build before stage 4.
+  //
+  // WRITING IT AS `nowS + 600` ALONE WAS WRONG AND A TEST CAUGHT IT: a console 600s FAST corrects backwards
+  // by 600, so the ceiling drops to the second its FIRST write of the session already occupies, the guard
+  // fires, `at` falls back to `want` — and the second write of that document is stamped 600s BEFORE the
+  // first. The relay answers have-newer and drops it. That is the measured incident, reintroduced by the fix
+  // for it.
+  //
+  // SAID PLAINLY (rule 4): at the very edge — a console corrected by the full STAMP_CAP_SEC in the SLOW
+  // direction — the first ceiling sits exactly on the stamp, so a SECOND write of that same document in the
+  // same second ties instead of bumping. That is stage 3's guarantee degrading at the cap, and it is the
+  // lesser of the two evils: the alternative is a document one second past this console's own gate, which
+  // it would then refuse to show. It needs a console ten minutes slow AND two writes of one document inside
+  // one second.
+  const ceiling = Math.min(localS + STAMP_CAP_SEC, nowS + SKEW_CAP_SEC);
+  if (at > ceiling) at = want;
   _lastStamp.set(d, at);
   return at === tmpl.created_at ? tmpl : { ...tmpl, created_at: at };
 }
@@ -6780,7 +6892,7 @@ window.Steward = {
     // A partial write now reports FAILURE. A steward who ticks "mark as a child" and sees it succeed has been
     // told the protection is in force; if the record reached one relay of three, it is in force on one of
     // three. An error is recoverable, false reassurance is not.
-    return _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', MINORS_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list }) }), sk));
+    return _skewGate(() => _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', MINORS_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list }) }), sk)));
   },
   // `opts.listKnown` — has the CALLER actually read this church's cleared list? The console has that answer
   // (its safeguarding subscription reports `loaded`) and this module does not: an empty remembered list means
@@ -6822,7 +6934,7 @@ window.Steward = {
       if (prior[p]) { cleared[p] = prior[p]; continue; }
       cleared[p] = (knownPrev && !knownPrev.has(p)) ? { by: pub, at: now() } : { by: '', at: 0 };
     }
-    return _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', APPROVED_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list, cleared }) }), sk));
+    return _skewGate(() => _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', APPROVED_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list, cleared }) }), sk)));
   },
 
   // ---- safeguarding v2: parent↔child links. Parents publish a guardian-link REQUEST (guardreq:<childpub>,
@@ -6882,7 +6994,7 @@ window.Steward = {
     // A partial write now reports FAILURE. A steward who ticks "mark as a child" and sees it succeed has been
     // told the protection is in force; if the record reached one relay of three, it is in force on one of
     // three. An error is recoverable, false reassurance is not.
-    return _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', GUARDIANS_D + pub], ['t', NET]], content: JSON.stringify({ links: clean }) }), sk));
+    return _skewGate(() => _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', GUARDIANS_D + pub], ['t', NET]], content: JSON.stringify({ links: clean }) }), sk)));
   },
   // safeguarding v2: tell a STEWARD-LINKED parent (who never set the child up on their own device, so has no
   // local record) that they're now a guardian — otherwise the child never appears in their app. Church-signed,
@@ -7410,7 +7522,7 @@ window.Steward = {
       doc.n = _stewardNamesCt;
     }
 
-    return publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', STEWARDS_D + pub], ['t', NET]], content: JSON.stringify(doc) }), sk));
+    return _skewGate(() => publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', STEWARDS_D + pub], ['t', NET]], content: JSON.stringify(doc) }), sk)));
   },
   // What this church has granted each steward. Empty array = nothing; ABSENT = everything (an unscoped
   // steward, which is every steward that existed before this feature).
@@ -8298,9 +8410,9 @@ window.Steward = {
     let body;
     try { body = buildCheckinPermission({ person, source: policy.source, lifetime: policy.lifetime, from: win.from, until: win.until }); }
     catch (e) { return null; }   // an undeclared source, a lifetime nobody implemented, a window past its cap
-    const ok = await _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(),
+    const ok = await _skewGate(() => _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(),
       tags: [['d', CHECKINPERM_D + person], ['t', NET], ['church', cp], ['person', person]],
-      content: JSON.stringify(body) }), sk));
+      content: JSON.stringify(body) }), sk)));
     if (ok === false || ok == null) return null;
     return { ...body };
   },
@@ -8321,8 +8433,8 @@ window.Steward = {
     if (!sk || !_mayClearForCheckin()) return Promise.resolve(null);
     const who = String(person || '').trim().toLowerCase();
     if (!/^[0-9a-f]{64}$/.test(who)) return Promise.resolve(null);
-    return _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(),
-      tags: [['d', CHECKINPERM_D + who], ['t', NET], ['church', pub], ['deleted', '1']], content: '' }), sk));
+    return _skewGate(() => _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(),
+      tags: [['d', CHECKINPERM_D + who], ['t', NET], ['church', pub], ['deleted', '1']], content: '' }), sk)));
   },
   // READ THE CLEARANCES BACK. Through readCheckinPermission — the relay's own parser — rather than a second
   // reading of the same JSON, so the console and the box cannot disagree about what a permission means. A
@@ -8656,9 +8768,9 @@ window.Steward = {
     // session to everyone else), but it must not be reported as a clean success. Same judgement as
     // _warnUnsealed, whose wording this borrows.
     if (built.failed.length) _warnUnsealed('check-in helper', built.failed);
-    const ok = await _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(),
+    const ok = await _skewGate(() => _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(),
       tags: [['d', CHECKINHELPER_D + session], ['t', NET], ['church', cp], ['session', session]],
-      content: JSON.stringify(built.doc) }), sk));
+      content: JSON.stringify(built.doc) }), sk)));
     if (ok === false || ok == null) return null;
     return { session, source: GRANT_SOURCE, lifetime: policy.lifetime, from: win.from, until: win.until,
       pubs: built.doc.pubs, failed: built.failed, key: sessionKeyHex, reused: sessionKeyHex === reuse };
@@ -8695,8 +8807,8 @@ window.Steward = {
     if (!sk || !churchSkHeld() || actingChurch) return Promise.resolve(null);
     const sid = String(session || '');
     if (!sid) return Promise.resolve(null);
-    return _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(),
-      tags: [['d', CHECKINHELPER_D + sid], ['t', NET], ['church', pub], ['deleted', '1']], content: '' }), sk));
+    return _skewGate(() => _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(),
+      tags: [['d', CHECKINHELPER_D + sid], ['t', NET], ['church', pub], ['deleted', '1']], content: '' }), sk)));
   },
 
   // ── THE TWO QUESTIONS THE CHECK-IN SCREEN HAS TO ASK BEFORE IT SAYS ANYTHING ────────────────────────────

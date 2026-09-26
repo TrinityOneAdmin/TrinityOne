@@ -1,8 +1,14 @@
 // A CHURCH MUST BE ABLE TO SEE THE CLOCK THAT DECIDES WHICH OF ITS WRITES WINS.
 // Run: node --test scripts/the-console-says-how-far-out-its-clock-is.test.mjs
 //
-// Stage 1 of reference/SCOPE-RELAY-CORRECTED-TIME-2026-09-26.md. MEASURE ONLY — nothing in this change
-// corrects a timestamp, and the last test in this file is what holds that line.
+// Stage 1 of reference/SCOPE-RELAY-CORRECTED-TIME-2026-09-26.md. MEASURE ONLY — nothing in THIS change
+// corrects a timestamp.
+//
+// ⚠ THE LAST TEST IN THIS FILE WAS REWRITTEN AT STAGE 4, on purpose and not quietly. It used to assert
+// that _monotonic consulted nothing, which is how stage 1 was held to its size. Stage 4 makes that
+// false: _monotonic is where the correction now lives. Leaving the row to pass by luck would be worse
+// than the bug it guarded, so it now asserts the two things that DID survive — now() is still the local
+// clock, and a document's correction is bounded by _CLOCK_SKEW rather than by a credential's cap.
 //
 // WHY THIS EXISTS. Two machines write the same church document and whichever stamp is LATER wins — and each
 // stamp is read off that machine's own clock. A console eleven minutes fast writes `{minor:false}`, the
@@ -16,7 +22,8 @@
 //   2. …and prefers that proof over /status, whose `now` anybody can type (CLAUDE.md rule 10)
 //   3. THE POINT OF USE (rule 1): the console's Relays panel shows the measured number. Deleting the line
 //      from the panel leaves every engine assertion above green, which is exactly what rule 1 is about.
-//   4. nothing in the shipped console consults the measurement when it stamps an event
+//   4. now() itself still means the LOCAL clock, and the stamp that does consult the measurement
+//      (stage 4's _monotonic) is bounded by the console's own receive gate
 //
 // ⚠ RULE 3: app/*.jsx ships UNBUNDLED, so `false && ` in front of a condition leaves every word in place and
 // a text match still passes. Test 3 RENDERS the panel — with the REAL hook out of app/steward-root.jsx, not
@@ -301,24 +308,32 @@ test('…and an unsigned reading says so on the screen', async () => {
 });
 
 // ── STAGE 1 CORRECTS NOTHING, and this is the assertion that holds that line ─────────────────────────────
-test('nothing in the shipped console consults the measurement when it stamps an event', () => {
-  // The whole safety argument for stage 1 is that it changes no stamp and no gate. `_monotonic` is the
-  // console's one stamping choke point (it rewrites `created_at` on 55 of the 90 stamps) and `now()` is
-  // where every stamp starts. If either learns about the skew, this is no longer a measuring change and the
-  // commit message that says it is becomes false.
-  //
-  // Comments are stripped first: an ordering check in this repo was once satisfied by the comment that
-  // explained the rule, and the block above `_monotonic` will one day describe this very work.
+test('now() still means the LOCAL clock, and the stamp is bounded by the console\'s own gate', () => {
+  // REWRITTEN AT STAGE 4. Until then this row asserted that `_monotonic` consulted nothing at all, and that
+  // was the whole safety argument for stage 1. Stage 4 puts the correction inside `_monotonic`, so the old
+  // claim is simply false now; it is replaced rather than deleted, and what it holds is the line that is
+  // still real. Comments are stripped first: an ordering check in this repo was once satisfied by the
+  // comment that explained the rule, and the block above `_monotonic` describes exactly this work.
   const mono = stripComments(fnBody(SHIP, 'function _monotonic(tmpl)', '_monotonic'));
-  for (const sym of ['_relaySkewSec', 'measureRelaySkew', 'relaySkewState', 'SKEW_CAP_SEC', '_skewByRelay']) {
+  assert.match(mono, /_skewShift\(STAMP_CAP_SEC\)/,
+    'the stamp no longer takes the correction through _skewShift(STAMP_CAP_SEC). If correcting a document ' +
+    'is being withdrawn that is a decision, not a tidy-up; if it has merely been re-spelled, re-anchor this ' +
+    'row rather than deleting it. Body seen:\n' + mono);
+  assert.ok(!mono.includes('SKEW_CAP_SEC) - '), 're-anchor: the shift is being taken with a credential cap');
+  assert.match(mono, /Math\.min\(localS \+ STAMP_CAP_SEC/,
+    'THE RUNAWAY GUARD LOST ITS LOCAL CEILING. `last + 1` must not climb past this console\'s OWN ' +
+    '_authFuture, which reads the LOCAL clock; measured only against the corrected clock, a 600s-fast ' +
+    'console stamps the SECOND write of a document BEFORE the first and the relay drops it as have-newer.');
+  // …and the measurement still reaches a DOCUMENT only through that one function.
+  for (const sym of ['_relaySkewSec', 'measureRelaySkew', 'relaySkewState', '_skewByRelay']) {
     assert.ok(!mono.includes(sym),
-      '_monotonic now reads ' + sym + '. Stage 1 measures and corrects NOTHING — if correcting the stamp is ' +
-      'the intention, that is stage 4, it needs the bound, the median and the hostile-relay argument, and it ' +
-      'must not arrive under a commit message that says nothing is corrected.');
+      '_monotonic now reads ' + sym + ' directly instead of going through _skewShift, which is where the ' +
+      'three refusals and the cap live. One writer with its own arithmetic is how two consoles in one ' +
+      'church end up ordering a child\'s clearance by two different rules.');
   }
   const nowFn = stripComments(stmt(SHIP, 'var now = () =>', 'now'));
-  assert.ok(!/_relaySkewSec|measureRelaySkew/.test(nowFn),
+  assert.ok(!/_relaySkewSec|measureRelaySkew|_skewShift/.test(nowFn),
     'now() itself was corrected. Seven call sites in this console are LOCAL clocks — a message retry, the ' +
-    'website-sync budget, a steward’s scheduled devotional — and correcting now() breaks all seven ' +
-    '(SCOPE-RELAY-CORRECTED-TIME §2(b)).');
+    'website-sync budget, a steward\u2019s scheduled devotional — and correcting now() breaks all seven ' +
+    '(SCOPE-RELAY-CORRECTED-TIME \u00a72(b)).');
 });

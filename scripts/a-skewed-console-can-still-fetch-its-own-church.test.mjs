@@ -91,6 +91,9 @@ function console_(relayList, churchSk, churchPub, localSkewSec, fetchImpl) {
     stmt(SHIP, 'var _skewProven = false', '_skewProven'),
     stmt(SHIP, 'var _skewSpreadSec = 0', '_skewSpreadSec'),
     stmt(SHIP, 'var _skewMeasuring = false', '_skewMeasuring'),
+    // stage 4: measureRelaySkew hands a CONCURRENT caller the in-flight promise instead of the previous
+    // number, so ensureSkew's bounded wait actually waits. That is this variable.
+    stmt(SHIP, 'var _skewFlight = null', '_skewFlight'),
     stmt(SHIP, 'var _skewByRelay =', '_skewByRelay'),
     stmt(SHIP, 'var CLOCK_FAULT_SEC =', 'CLOCK_FAULT_SEC'),
     stmt(SHIP, 'var SKEW_CAP_SEC =', 'SKEW_CAP_SEC'),
@@ -98,6 +101,10 @@ function console_(relayList, churchSk, churchPub, localSkewSec, fetchImpl) {
     fnBody(SHIP, 'function _pickSkew', '_pickSkew'),
     fnBody(SHIP, 'async function measureRelaySkew', 'measureRelaySkew'),
     fnBody(SHIP, 'function relaySkewState', 'relaySkewState'),
+    // stage 4 split the three refusals and the clamp out of _credNow so a DOCUMENT's stamp can use the same
+    // rules under a smaller cap. _credNow is now `now() - _skewShift(SKEW_CAP_SEC)` and nothing about what
+    // it returns has changed; every row in this file is the proof of that.
+    fnBody(SHIP, 'function _skewShift', '_skewShift'),
     fnBody(SHIP, 'function _credNow', '_credNow'),
     fnBody(SHIP, 'function _nip98(url, method)', '_nip98'),
     fnBody(SHIP, 'async function _putBlob(base, bytes)', '_putBlob'),
@@ -241,11 +248,19 @@ test('beyond ±900s the correction is CLAMPED, not applied in full', async () =>
 
 test('relays that disagree by more than the cap ⇒ no correction at all', async () => {
   const sk = generateSecretKey(), pub = getPublicKey(sk);
-  const a = await relayWithClock(0);
-  const b = await relayWithClock(-1200);
+  // THE TWO OFFSETS STRADDLE LOCAL, AND THAT IS THE POINT. _pickSkew takes the reading CLOSER TO LOCAL when
+  // there are exactly two, so the old pair of {0, -1200} picked 0 — and a credential that does not move
+  // proves nothing, because it would not have moved with the spread refusal deleted either. Measured by the
+  // stage-4 sabotage matrix: this row passed its own sabotage. Corrected 2026-09-26.
+  const a = await relayWithClock(-400);
+  const b = await relayWithClock(700);
   const c = console_([a.base, b.base], sk, pub, 0);
   await c.measureRelaySkew();
-  assert.ok(c.relaySkewState().spreadSec > 900, 're-anchor: the two relays no longer disagree past the cap');
+  assert.ok(c.relaySkewState().spreadSec > 900,
+    're-anchor: the two relays disagree by only ' + c.relaySkewState().spreadSec + 's, inside the cap');
+  assert.ok(Math.abs(c.relaySkewState().skewSec - 400) <= 1,
+    're-anchor: the pick is ' + c.relaySkewState().skewSec + 's. It must be NON-ZERO, or a credential that ' +
+    'does not move is not evidence that the spread refusal did anything.');
   assert.equal(c._credNow(), c.now(),
     'two relays contradicting each other by twenty minutes were averaged into a correction anyway. That is ' +
     'not a device-clock fault we can quietly fix, and guessing between them picks which box is believed.');
@@ -275,13 +290,14 @@ test('EXACTLY seven credentials are corrected, and every one is a kind-27235 or 
   }
 });
 
-test('NO CHURCH DOCUMENT IS CORRECTED — the stamping path is untouched', () => {
-  // Rule 7, made executable. The measured incident is about a safeguarding document losing a race; stage 2
-  // must not be able to reach one. _monotonic is the console's stamping choke point, publishClearance is
-  // the document the incident is about, and setMinors is the church's minors list.
+test('A DOCUMENT IS CORRECTED IN ONE PLACE ONLY, and never by a credential’s cap', () => {
+  // Rule 7, made executable, and REWRITTEN AT STAGE 4 rather than left to pass on a technicality. Until
+  // stage 4 this row said "no church document is corrected" and proved it by looking for _credNow in six
+  // writers. Stage 4 makes the first half of that false: _monotonic DOES correct now. What must stay true —
+  // and what this row now asserts — is that the correction lives in exactly one function, that the six
+  // writers reach it only through that function, and that a DOCUMENT is never bounded by a CREDENTIAL's cap.
   const bare = stripComments(SHIP);
   for (const [anchor, what] of [
-    ['function _monotonic(tmpl)', '_monotonic, the console’s stamping choke point'],
     ['publishClearance(', 'publishClearance, the document the measured incident is about'],
     ['setMinors(', 'setMinors, the church’s minors list'],
     ['setApproved(', 'setApproved, the cleared-to-work list'],
@@ -289,12 +305,30 @@ test('NO CHURCH DOCUMENT IS CORRECTED — the stamping path is untouched', () =>
     ['grantCheckinPermission(', 'grantCheckinPermission, a children’s-desk clearance'],
   ]) {
     const body = stripComments(fnBody(SHIP, anchor, anchor));
-    assert.ok(!body.includes('_credNow'),
-      what + ' now stamps from corrected time. THAT IS NOT STAGE 2. Correcting a document’s created_at ' +
-      'changes which of two consoles wins a race over a child’s clearance; it needs the bound, the median, ' +
-      'the hostile-relay argument and a two-device verification with a deliberately skewed clock — all of ' +
-      'which the scope document puts in stage 4, behind an audit.');
+    assert.ok(!/_credNow|_skewShift|_relaySkewSec/.test(body),
+      what + ' now reads the skew for itself instead of taking the stamp _monotonic gives it. One writer ' +
+      'with its own arithmetic is how two consoles in one church end up ordering a child’s clearance by ' +
+      'two different rules.');
   }
+  // …and the stamping path uses the SMALLER cap. A credential is checked against the relay's freshness
+  // window and thrown away; a document is read back by this console's own _authFuture at now()+_CLOCK_SKEW.
+  const mono = stripComments(fnBody(SHIP, 'function _monotonic(tmpl)', '_monotonic'));
+  assert.match(mono, /_skewShift\(STAMP_CAP_SEC\)/,
+    'THE STAMP IS BOUNDED BY THE WRONG NUMBER. _monotonic must pass STAMP_CAP_SEC (= _CLOCK_SKEW), not ' +
+    'SKEW_CAP_SEC. A console whose clock is SLOW corrects FORWARD, so a 900s bound lets it write a ' +
+    'safeguarding document its OWN _authFuture refuses — and `minors` defaults to empty with minorsKnown() ' +
+    'true, so that console then asserts nobody in the church is a child. Body seen:\n' + mono);
+  // SKEW_CAP_SEC does appear in _monotonic, once, and only in the runaway guard's SECOND ceiling —
+  // put()'s clamp, which is measured against the RELAY's clock. What must never happen is the SHIFT
+  // being taken with it, so that is what is asserted rather than the symbol being absent.
+  assert.ok(!/_skewShift\(SKEW_CAP_SEC\)/.test(mono),
+    '_monotonic takes its shift with SKEW_CAP_SEC. The two caps answer to two different gates and must ' +
+    'not be tidied into one; see the note above STAMP_CAP_SEC in src/steward.src.js.');
+  const cap = stripComments(stmt(SHIP, 'var STAMP_CAP_SEC =', 'STAMP_CAP_SEC'));
+  assert.match(cap, /_CLOCK_SKEW/,
+    'STAMP_CAP_SEC is a hard-coded number again rather than _CLOCK_SKEW itself. Five tolerance constants ' +
+    'drifting apart is the defect this whole piece of work exists to stop; the stamp\'s bound and the gate ' +
+    'it must not trip have to be one value, not two that agree today.');
   // …and now() itself still means the local clock, or the seven class-(b) local-elapsed-time sites break.
   const nowFn = stripComments(stmt(SHIP, 'var now = () =>', 'now'));
   assert.ok(!/_credNow|_relaySkewSec/.test(nowFn),
