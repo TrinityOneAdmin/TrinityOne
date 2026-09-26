@@ -27,7 +27,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, mkdirSync, copyFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, copyFileSync, symlinkSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { request as httpRequest } from 'node:http';
@@ -45,7 +45,6 @@ function buildNonGitTree() {
   const dir = mkdtempSync(join(tmpdir(), 'trin-nogit-'));
   mkdirSync(join(dir, 'scripts'));
   copyFileSync(join(ROOT, 'scripts', 'gateway.mjs'), join(dir, 'scripts', 'gateway.mjs'));
-  copyFileSync(join(ROOT, 'scripts', 'event-store.mjs'), join(dir, 'scripts', 'event-store.mjs'));
   // EVERY LOCAL IMPORT gateway.mjs MAKES AT RUNTIME. Without all of them the stand-in relay cannot start, and
   // every assertion below would pass or fail for the wrong reason — which is exactly what happened on
   // 2026-09-09 when the check-in helper capability added the third one: this file said "the stand-in relay is
@@ -56,8 +55,25 @@ function buildNonGitTree() {
   // place that hand-picks files, which is why the list has to be maintained here by hand — so if you add a
   // local import to gateway.mjs, add it here in the same commit. (scripts/relay-network-harness.mjs keeps its
   // own, deliberately different, list: see the note on OLD_LOCALS there.)
-  for (const f of ['trinity-doc-types.mjs', 'checkin-role-source.mjs'])
-    copyFileSync(join(ROOT, 'scripts', f), join(dir, 'scripts', f));
+  //
+  // AND IT WENT STALE ANYWAY, on 2026-09-11, when `90c0ce3` gave gateway.mjs public-calendar.mjs and
+  // public-widget.mjs. The comment above predicted the failure mode exactly and the comment was not enough, so
+  // the list is now CHECKED against gateway.mjs's real imports below. Hand-maintained still — a new import is
+  // a decision this harness should make on purpose — but it can no longer go quietly out of date.
+  const LOCALS = ['event-store.mjs', 'trinity-doc-types.mjs', 'checkin-role-source.mjs',
+                  'public-calendar.mjs', 'public-widget.mjs'];
+  for (const f of LOCALS) copyFileSync(join(ROOT, 'scripts', f), join(dir, 'scripts', f));
+  // THE LIST CHECKS ITSELF. Every `./x.mjs` gateway.mjs imports, static or dynamic, must be in LOCALS. Without
+  // this the only symptom of a missing file is a stand-in relay that will not start — at which point the three
+  // refusal assertions below stop being made and one of them still PASSES, because "no answer at all" is not
+  // 200 and carries fewer than 4096 bytes. A test that is red and simultaneously not testing is the worst of
+  // both, and that is the state this file was in from 2026-09-11 to 2026-09-26.
+  const gw = readFileSync(join(ROOT, 'scripts', 'gateway.mjs'), 'utf8');
+  const imported = [...gw.matchAll(/(?:from|import\()\s*'\.\/([\w.-]+\.mjs)'/g)].map(m => m[1]);
+  assert.ok(imported.length >= 5, `only ${imported.length} local imports found in gateway.mjs — the scan is broken, not the list`);
+  assert.deepEqual([...new Set(imported)].filter(f => !LOCALS.includes(f)), [],
+    'gateway.mjs imports a local file this harness does not copy into the stand-in relay. The relay will not ' +
+    'start, and the refusal assertions below will stop being made. Add it to LOCALS in the same commit.');
   symlinkSync(join(ROOT, 'node_modules'), join(dir, 'node_modules'));
   writeFileSync(join(dir, 'version.txt'), 'sha: ' + '1'.repeat(40) + '\ndate: 2026-07-29T00:00:00+01:00\n');
   writeFileSync(join(dir, 'index.html'), '<!doctype html><title>stand-in</title>\n');
