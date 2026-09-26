@@ -502,23 +502,23 @@ test('F1: an event edited from a GROUP back to whole-church is forgotten, so a l
 // AUDIT-feeds-round4-2026-09-22 F2. This number is what the second Settings sentence counts — "N of them are
 // still on your website" — and no row constrained it: a scoped sabotage that changed it left this file
 // 26/26/0. It also understated in the state that matters most. A copy this console KNOWS is group-scoped is
-// deliberately left up for the whole ten minutes, and it was counted into neither half, so the page said
+// deliberately left up for the whole give-up budget, and it was counted into neither half, so the page said
 // "1 event could not be published" and stayed silent about the adults-only copy that was still public —
 // permanently so on a console whose relay flaps (F3 below).
 const LIVE_YOUTH = JSON.stringify({ title: 'Youth night', date: '2026-11-01', time: '19:30', where: 'The vestry', blurb: '', recur: '', day: null });
-test('F2: a group copy still up during the ten minutes is COUNTED as still on the website', async () => {
+test('F2: a group copy still up while the budget runs is COUNTED as still on the website', async () => {
   const m = mirror({ events: [GOOD1, GROUP_READABLE], copies: { evtyouth: LIVE_YOUTH }, share: share({ optIn: ['evtyouth'] }) });
   await m._webSync();                                     // read once: the only moment the scope can be learned
   m.w.events.set('evtyouth', GROUP_LOST);                 // …and now the name key is gone
   m.w.share.optIn = [];
   await pastReporting(m);
   const said = m.emitted[m.emitted.length - 1];
-  assert.deepEqual(m.tombstoned(), [], 're-anchor: the copy came off before the ten minutes were up');
+  assert.deepEqual(m.tombstoned(), [], 're-anchor: the copy came off before the budget was up');
   assert.equal(said.blocked, 1, 're-anchor: the page does not say the event could not be published');
   assert.equal(said.held, 1,
     'THE PAGE SAYS ONE EVENT COULD NOT BE PUBLISHED AND NOTHING ABOUT THE COPY THAT IS STILL PUBLIC — held reads ' + said.held +
     ', so a church reading the screen is told an adults-only copy is gone when it is still being served');
-  // …and once the ten minutes really are spent and the copy comes off, the number goes back to nought
+  // …and once the budget really is spent and the copy comes off, the number goes back to nought
   m.tick(GIVE_UP_S + 1); await m._webSync();
   assert.deepEqual(m.tombstoned(), ['trinityone/pubevent:evtyouth'], 're-anchor: the withdrawal stopped happening');
   assert.equal(m.emitted[m.emitted.length - 1].held, 0, 'the page claims a copy that was withdrawn is still on the website');
@@ -588,7 +588,7 @@ test('F4: the version travels with the memory across a restart', async () => {
   assert.deepEqual(n2.tombstoned(), ['trinityone/pubevent:evtyouth'], 're-anchor: nothing is withdrawn after a restart any more');
 });
 
-// ── F3: ten minutes of WALL CLOCK, not ten minutes of one uninterrupted session ──────────────────────────
+// ── F3: the budget is WALL CLOCK, not one uninterrupted session ──────────────────────────────────────────
 // AUDIT-feeds-round4-2026-09-22 F3. The clock lived only in the watch, and the dashboard rebuilds the watch
 // on every connection bump (`_maybeBumpConn`, a 90 s heartbeat plus focus/visibility/online). So a console
 // on a thin pipe reset it every time: measured against e0ffd10's bundle, 0 tombstones over 108 simulated
@@ -598,28 +598,53 @@ test('F4: the version travels with the memory across a restart', async () => {
 //
 // Each session below is a SEPARATE watch over one storage and one moving wall clock, which is what a
 // flapping console actually is.
-const flap = async ({ sessions, minutes, ring, store, t0 = 1790000000, events = [GOOD1, GROUP_LOST] }) => {
+//
+// HOW LONG A SESSION IS, AND WHY IT IS NOW DERIVED RATHER THAN CHOSEN (re-anchored 2026-09-26).
+// These rows used nine-minute sessions against a 600 s budget: 540 s spends most of one budget and never
+// all of it, so the withdrawal took TWO sessions — and that "two" IS the bite. A clock that did not
+// survive the watch restart could never reach the budget at all, so the row failed loudly if the clock
+// went back to living only in the watch.
+//   On 2026-09-23 the owner shortened the budget from 600 s to 240 s (commit a5dbe1b): the console's idle
+// auto-lock fires at 10 min (app/steward-root.jsx:787), so a 600 s withdrawal never completed unattended
+// — measured, the console locked at ~9.8 min with the feed still live at 11.3 min. The code is right.
+//   But nine minutes now spends the WHOLE 240 s budget inside a single session, so re-anchoring these rows
+// to "one session" would have left them passing against a per-session clock — precisely the defect F3
+// exists to catch. So the session length is derived from the budget instead of sitting beside it:
+// three quarters of the budget is always short enough that ONE session cannot spend it (0.75 < 1) and
+// always long enough that TWO always can (1.5 >= 1), whatever the budget is set to next.
+const FLAP_S = Math.ceil(GIVE_UP_S * 0.75);            // 180 s against the 240 s budget
+const FLAP_SESSIONS = Math.ceil(GIVE_UP_S / FLAP_S);   // …and therefore 2, for any budget
+// `secs` is what the rows below pass; `minutes` is kept for the rows that deliberately flap far longer
+// than the budget and only care that the answer never changes.
+const flap = async ({ sessions, minutes, secs = minutes * 60, ring, store, t0 = 1790000000, events = [GOOD1, GROUP_LOST] }) => {
   const hit = []; let t = t0;
   for (let n = 1; n <= sessions; n++) {
     const m = mirror({ events, copies: { evtyouth: LIVE_YOUTH }, share: share(), store, at: t, ...(ring ? { ring } : {}) });
     await m._webSync();
-    m.tick(minutes * 60);
+    m.tick(secs);
     await m._webSync();
     if (m.tombstoned().length) hit.push(n);
-    t += minutes * 60;
+    t += secs;
   }
   return hit;
 };
-test('F3: a relay that flaps every nine minutes no longer prevents the withdrawal for ever', async () => {
+test('F3: a relay that flaps faster than the budget no longer prevents the withdrawal for ever', async () => {
   const store = new Map();
+  // THE ROW'S OWN PRECONDITION. If one session could spend the whole budget, a clock living only in the
+  // watch would satisfy every assertion below and this row would stop asking the question it is named for.
+  assert.ok(FLAP_S < GIVE_UP_S && FLAP_SESSIONS >= 2,
+    'THIS ROW CAN NO LONGER FAIL — a single ' + FLAP_S + ' s session now spends the whole ' + GIVE_UP_S +
+    ' s budget, so it no longer asks whether the clock survives the watch restart');
   // one session that could still read it — the only moment a console can learn whose event this is
   const first = mirror({ events: [GOOD1, GROUP_READABLE], copies: { evtyouth: LIVE_YOUTH }, share: share({ optIn: ['evtyouth'] }), store });
   await first._webSync();
   assert.deepEqual([...first.w.groupSeen.keys()], ['evtyouth'], 're-anchor: the console never learned this was a group\'s event');
-  const hit = await flap({ sessions: 12, minutes: 9, store });
+  const hit = await flap({ sessions: 12, secs: FLAP_S, store });
   assert.ok(hit.length,
-    'A FLAPPING RELAY PREVENTS THE WITHDRAWAL FOR EVER — twelve nine-minute sessions, 108 minutes of an adults-only room on a public website, and nothing was ever withdrawn');
-  assert.equal(hit[0], 2, 'the withdrawal took ' + hit[0] + ' nine-minute sessions, not the 2 that ten minutes of wall clock needs');
+    'A FLAPPING RELAY PREVENTS THE WITHDRAWAL FOR EVER — twelve sessions of ' + FLAP_S + ' s, ' +
+    (12 * FLAP_S / 60) + ' minutes of an adults-only room on a public website, and nothing was ever withdrawn');
+  assert.equal(hit[0], FLAP_SESSIONS, 'the withdrawal took ' + hit[0] + ' sessions of ' + FLAP_S +
+    ' s, not the ' + FLAP_SESSIONS + ' that ' + GIVE_UP_S + ' s of wall clock needs');
 });
 
 test('F3 CONTROL: a key that has NOT ARRIVED still spends nothing, however many restarts', async () => {
@@ -655,7 +680,7 @@ test('F3: a name-key envelope still in flight PAUSES a clock that is already run
   const first = mirror({ events: [GOOD1, GROUP_READABLE], copies: { evtyouth: LIVE_YOUTH }, share: share({ optIn: ['evtyouth'] }), store });
   await first._webSync();
   const stuck = mirror({ events: [GOOD1, GROUP_LOST], copies: { evtyouth: LIVE_YOUTH }, share: share(), store, at: 1790001000 });
-  await stuck._webSync(); stuck.tick(9 * 60); await stuck._webSync();          // nine minutes, written down
+  await stuck._webSync(); stuck.tick(FLAP_S); await stuck._webSync();          // under one budget, and written down
   assert.ok(String(store.get('trinityone.webstuck.CP') || '').includes('evtyouth'), 're-anchor: nothing was written down to carry over');
   // …and now a cold boot: the same console, the same storage, the name-key envelope still in flight
   const cold = mirror({ events: [GOOD1, GROUP_LOST], copies: { evtyouth: LIVE_YOUTH }, share: share(), store, ring: [], at: 1790001540 });
@@ -668,28 +693,34 @@ test('F3: a name-key envelope still in flight PAUSES a clock that is already run
   cold.tick(BLOCKED_AFTER_S + 1); await cold._webSync();
   assert.deepEqual(cold.tombstoned(), [],
     'A CONSOLE WITHDREW THE COPY SECONDS AFTER ITS KEY RING LANDED, on a budget it spent waiting for that very ring');
-  // …and the ten minutes then run from the moment the ring was in hand, as they are meant to
+  // …and the budget then runs from the moment the ring was in hand, as it is meant to
   cold.tick(GIVE_UP_S + 1); await cold._webSync();
   assert.deepEqual(cold.tombstoned(), ['trinityone/pubevent:evtyouth'], 're-anchor: the clock never starts again once it has been paused');
 });
 
 test('F3: the persisted clock is cleared the moment the document opens again', async () => {
-  // Ten UNBROKEN minutes. A console that was stuck for nine minutes, read the document, and lost it again
-  // must wait a fresh ten — not act on the nine it remembered from before the key came back.
+  // ONE UNBROKEN BUDGET. A console that was stuck for most of a budget, read the document, and lost it
+  // again must wait a fresh whole budget — not act on the time it remembered from before the key came back.
+  //
+  // Both stretches are FLAP_S, three quarters of the budget (re-anchored 2026-09-26 from the nine minutes
+  // these rows used against the old 600 s budget; see the derivation above `flap`). That length is what
+  // makes the row bite in BOTH directions: one stretch on its own is under the budget, so nothing may fire
+  // yet, and the two stretches together are over it, so a clock that carried across the readable period
+  // WOULD fire on the second — which is the failure this row exists to catch.
   const store = new Map();
   const first = mirror({ events: [GOOD1, GROUP_READABLE], copies: { evtyouth: LIVE_YOUTH }, share: share({ optIn: ['evtyouth'] }), store });
   await first._webSync();
   const stuck = mirror({ events: [GOOD1, GROUP_LOST], copies: { evtyouth: LIVE_YOUTH }, share: share(), store, at: 1790001000 });
-  await stuck._webSync(); stuck.tick(9 * 60); await stuck._webSync();
-  assert.deepEqual(stuck.tombstoned(), [], 're-anchor: nine minutes already withdrew it');
+  await stuck._webSync(); stuck.tick(FLAP_S); await stuck._webSync();
+  assert.deepEqual(stuck.tombstoned(), [], 're-anchor: the first stretch withdrew it on its own, so nothing below is being asked');
   assert.ok(String(store.get('trinityone.webstuck.CP') || '').includes('evtyouth'), 're-anchor: nothing was written down to clear');
   // the key comes back and the document opens
-  const well = mirror({ events: [GOOD1, GROUP_READABLE], copies: { evtyouth: LIVE_YOUTH }, share: share({ optIn: ['evtyouth'] }), store, at: 1790001540 });
+  const well = mirror({ events: [GOOD1, GROUP_READABLE], copies: { evtyouth: LIVE_YOUTH }, share: share({ optIn: ['evtyouth'] }), store, at: 1790001000 + FLAP_S + 60 });
   await well._webSync();
   assert.equal(store.get('trinityone.webstuck.CP'), '[]', 'THE CLOCK KEPT RUNNING THROUGH A PERIOD THE DOCUMENT WAS PERFECTLY READABLE');
-  // …and now it goes again: a fresh nine minutes must still not be enough
-  const again = await flap({ sessions: 1, minutes: 9, store, t0: 1790001600 });
-  assert.deepEqual(again, [], 'A FRESH NINE MINUTES WITHDREW IT — the clock carried over the minutes before the key came back');
+  // …and now it goes again: a fresh stretch of the same length must still not be enough
+  const again = await flap({ sessions: 1, secs: FLAP_S, store, t0: 1790001000 + FLAP_S + 120 });
+  assert.deepEqual(again, [], 'A FRESH ' + FLAP_S + ' s WITHDREW IT — the clock carried over the time before the key came back');
 });
 
 test('F3: a console that has just started LOOKS AGAIN before it acts on what it remembered', async () => {
