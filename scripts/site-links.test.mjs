@@ -35,7 +35,18 @@ const NOT_TRACKED = new Set(['apks.html', 'welcome-sim.html']);
 // linking it from the nav would drop a browsing reader onto an invitation to nothing. Being unreferenced is
 // correct for these and only these. Keep this set tiny and justified: it is the exemption that could quietly
 // re-admit the orphan problem, so a page belongs here only if arriving from outside is its ONLY sane route.
-const ENTRY_POINTS = new Set(['join.html']);
+//
+// pilot.html joins them on 2026-09-26. It landed on 2026-09-23 (9ba11ab) and its exemption did not, so this
+// row has been red ever since. It qualifies on the test above rather than by assertion: the page carries
+// <meta name="robots" content="noindex, nofollow">, its own first line reads "This page is for pilot churches
+// only. If you got here by accident, visit the main site", and 9ba11ab says in as many words "an unlisted page
+// with working download links for pilot churches — sent directly, not linked from the public site". Giving it
+// an inbound link would not fix a bug, it would undo the feature. The ONLY mention of it anywhere in the site
+// is inside an HTML comment in welcome.html, which `live()` strips on purpose — so the page really is
+// unreachable, and that really is correct.
+// When the pilot ends, the go-live checklist in welcome.html says this page "can stay or be removed"; if it is
+// removed, remove this line with it rather than leaving a dead exemption behind.
+const ENTRY_POINTS = new Set(['join.html', 'pilot.html']);
 
 const pages = readdirSync(ROOT).filter(f => f.endsWith('.html') && !APP_SHELLS.has(f) && !NOT_TRACKED.has(f));
 
