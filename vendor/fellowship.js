@@ -9405,6 +9405,8 @@
       const versions = /* @__PURE__ */ new Map();
       const _trust = (rec) => _churchVoice(cp, rec);
       let eosed = false;
+      const pending = /* @__PURE__ */ new Map();
+      const PEND_CAP = 500;
       const emit = _coalesce(() => {
         const v = [...byId.values()].filter((s) => _churchVoice(cp, s));
         if (!eosed && !v.length) return;
@@ -9422,7 +9424,9 @@
             if (_churchVoice(cp, { _by: e.pubkey })) {
               _forgetById(versions, byId, id, e.pubkey, e.created_at, _trust, { churchPub: cp, targets: _tombstoneTargets(e) });
               emit();
+              return;
             }
+            if (!_churchRoster.has(cp) && pending.size < PEND_CAP) pending.set(id + "|" + e.pubkey, { id, by: e.pubkey, ts: e.created_at, targets: _tombstoneTargets(e) });
             return;
           }
           try {
@@ -9434,11 +9438,19 @@
           } catch {
           }
         },
+        // a revocation must promote the church's copy, not just hide theirs — and the roster rules, once, on
+        // every delete that arrived before it (M3). Honoured or refused, the note goes either way.
+        // The `_churchVoice` below is defence in depth and is meant to stay: MEASURED (sabotage row S3,
+        // 2026-09-26) that removing it alone changes nothing a screen can see, because `_forgetById` asks the
+        // same question again — an unvouched author's delete binds only their own copy, and a copy of theirs
+        // can never be the one on show. It is the gate every other delete in this file goes through, so a
+        // reader arriving here does not have to reconstruct that argument to know this is safe.
         onroster() {
+          for (const p of pending.values()) if (_churchVoice(cp, { _by: p.by })) _forgetById(versions, byId, p.id, p.by, p.ts, _trust, { churchPub: cp, targets: p.targets });
+          pending.clear();
           _reduceAll(versions, byId, _trust);
           emit();
         },
-        // a revocation must promote the church's copy, not just hide theirs
         // EOSE ALWAYS EMITS HERE, EVEN EMPTY — and that is the one place this reader must NOT copy
         // subscribeChurchGroups/subscribeChurchCategories, which guard the same line with `if (byId.size)`.
         // Two differences make the guard wrong here, both measured 2026-09-25:

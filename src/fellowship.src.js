@@ -3352,6 +3352,39 @@ window.Fellowship = {
     const versions = new Map();   // id -> Map(author -> their copy); see src/church-doc-store.src.js
     const _trust = (rec) => _churchVoice(cp, rec);   // the church key, or a steward still on its signed roster
     let eosed = false;   // sticky: hold last-known until the relay's EOSE — don't blank on a transient/roster-lagged empty
+    // A TOMBSTONE THAT ARRIVES BEFORE THE ROSTER IS HELD, NOT DROPPED — AND HELD INERT. (M3, 2026-09-26.)
+    // The delete branch below is `if (trusted) forget(); return;`, so a withdrawal signed by a steward this
+    // phone has not yet been able to confirm was thrown away and never revisited: `onroster()` re-reduces
+    // the versions it HOLDS (`_reduceAll`), and a discarded tombstone is not one of them. Measured against
+    // the shipped bundle, driving `_openSermons` through the member harness:
+    //     roster → sermon → delete                     = cleared         (the order that worked)
+    //     church's sermon → steward's delete → roster   = STILL ON SCREEN
+    //     steward's sermon → delete → roster            = BACK on screen once the roster vouched for her
+    // Both failing orders clear themselves on the next app start — `_docsHub()` absorbs the roster out of the
+    // persisted buffer BEFORE any handler registers, so the replay sees the delete with authority in hand —
+    // which is why this reads as "a sermon the church removed hung around until I closed the app".
+    //
+    // WHAT IS REMEMBERED IS A NOTE, NOT A WITHDRAWAL, and that distinction is the whole safety of it. The
+    // note lives here, in a Map of its own, and is never handed to the store: `_pickWinner`,
+    // `_reduceVersions`, `_absorbById` and `_forgetById` cannot see it, so it hides nothing, outranks
+    // nothing and cannot be mistaken for a `_tomb` record. A stranger — a plain member, or somebody from
+    // another church — therefore cannot suppress a sermon by getting a delete in first, not even for the
+    // instant before the roster lands (`cached-paints-before-authority-arrives`, in the direction that
+    // HIDES a church's content). Nothing is hidden until the church's signed roster has vouched for the
+    // author, and if the roster never arrives — offline, unauthenticated — nothing is hidden at all.
+    //
+    // ONLY WHILE THE ROSTER IS UNKNOWN, and the roster gets exactly one chance to answer. Once
+    // `_churchRoster` holds an entry for this church the question has been decided and a refusal is final:
+    // notes are cleared on the first `onroster()` whether they were honoured or not, so a person the church
+    // adds as a steward LATER, for unrelated reasons, does not thereby acquire the authority to have
+    // deleted something back when they had none. A church's own `for: '*'` (4a9141c) never comes through
+    // here at all — `_churchVoice` trusts `by === cp` with no roster — so that withdrawal is unchanged.
+    //
+    // Capped, because the only thing that can reach this path is a relay serving deletes we would refuse:
+    // past the cap we simply stop taking notes, which is today's behaviour and leaves the sermon VISIBLE.
+    // In-memory, closure-local, nothing serialises it — it dies with the subscription.
+    const pending = new Map();   // id + '|' + author -> an unvouched delete, waiting for the roster to rule on it
+    const PEND_CAP = 500;
     // SORTED BY THE PREACHING DATE, NOT THE EVENT TIME — see `contentTs` above. Editing a title must not
     // move a sermon; a list of sermons is in the order they were given.
     const emit = _coalesce(() => { const v = [...byId.values()].filter(s => _churchVoice(cp, s)); if (!eosed && !v.length) return; onSermons(v.sort((a, b) => (b.contentTs || 0) - (a.contentTs || 0))); });
@@ -3363,10 +3396,23 @@ window.Fellowship = {
         const id = d.slice(SERMON_D.length);
         // A DELETE IS A WRITE, honoured only from an author who could have written the doc — see the same
         // note on subscribeChurchGroups above; identical shape, identical reason (AUDIT-2026-07-24).
-        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { if (_churchVoice(cp, { _by: e.pubkey })) { _forgetById(versions, byId, id, e.pubkey, e.created_at, _trust, { churchPub: cp, targets: _tombstoneTargets(e) }); emit(); } return; }
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) {
+          if (_churchVoice(cp, { _by: e.pubkey })) { _forgetById(versions, byId, id, e.pubkey, e.created_at, _trust, { churchPub: cp, targets: _tombstoneTargets(e) }); emit(); return; }
+          // Unvouched. If the roster is simply not here yet, take a note (see `pending` above); if it IS
+          // here, it has already said no and there is nothing to wait for.
+          if (!_churchRoster.has(cp) && pending.size < PEND_CAP) pending.set(id + '|' + e.pubkey, { id, by: e.pubkey, ts: e.created_at, targets: _tombstoneTargets(e) });
+          return;
+        }
         try { const s = JSON.parse(e.content); if (s && s.sha256) { _absorbById(versions, byId, id, { ...s, id, at: e.created_at, ts: e.created_at, contentTs: Number(s.ts) || e.created_at, _by: e.pubkey }, _trust); emit(); } } catch {}
       },
-      onroster() { _reduceAll(versions, byId, _trust); emit(); },   // a revocation must promote the church's copy, not just hide theirs
+      // a revocation must promote the church's copy, not just hide theirs — and the roster rules, once, on
+      // every delete that arrived before it (M3). Honoured or refused, the note goes either way.
+      // The `_churchVoice` below is defence in depth and is meant to stay: MEASURED (sabotage row S3,
+      // 2026-09-26) that removing it alone changes nothing a screen can see, because `_forgetById` asks the
+      // same question again — an unvouched author's delete binds only their own copy, and a copy of theirs
+      // can never be the one on show. It is the gate every other delete in this file goes through, so a
+      // reader arriving here does not have to reconstruct that argument to know this is safe.
+      onroster() { for (const p of pending.values()) if (_churchVoice(cp, { _by: p.by })) _forgetById(versions, byId, p.id, p.by, p.ts, _trust, { churchPub: cp, targets: p.targets }); pending.clear(); _reduceAll(versions, byId, _trust); emit(); },
       // EOSE ALWAYS EMITS HERE, EVEN EMPTY — and that is the one place this reader must NOT copy
       // subscribeChurchGroups/subscribeChurchCategories, which guard the same line with `if (byId.size)`.
       // Two differences make the guard wrong here, both measured 2026-09-25:
