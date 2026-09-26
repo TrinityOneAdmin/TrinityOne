@@ -50,7 +50,10 @@ import { requireFreePort } from './test-ports.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const CHROME = ['/usr/bin/chromium-browser', '/usr/bin/chromium', '/usr/bin/google-chrome'].find((p) => existsSync(p));
-const PORT = 8850, CDP = 9382;   // unique across scripts/*.test.mjs and scripts/*.probe.mjs, checked 2026-09-23
+const PORT = 8853, CDP = 9382;   // unique across scripts/*.test.mjs and scripts/*.probe.mjs. WAS 8850, which
+// a-churchs-public-calendar-is-served-only-when-asked.test.mjs had already claimed on 2026-09-22 — the
+// "checked 2026-09-23" above was not, and scripts/test-ports.test.mjs has been red on the clash ever since.
+// 8853 chosen 2026-09-26 by running that guard's own declaredPorts() over every .test.mjs and .probe.mjs.
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 let gateway, chrome, ws, id = 0, dataDir, profileDir, base;
