@@ -245,7 +245,10 @@ function consoleOn({ church, origin, canonical = [], pins = {}, extra = [], name
     CANONICAL_RELAYS: canonical, CANONICAL_RELAY_PUBS: pins,
     _boxHostsUs: null,
     pub: church.pub, sk: church.sk,
-    now: () => Math.floor(Date.now() / 1000),
+    // _credNow(): the corrected clock used for SHORT-LIVED CREDENTIALS only (the kind-24242 / kind-27235
+    // auth events a relay checks for freshness and discards). With no skew measured it returns exactly
+    // what now() returns, which is this harness's case — src/steward.src.js, above _blobBase().
+    now: () => Math.floor(Date.now() / 1000), _credNow: () => Math.floor(Date.now() / 1000),
     finalizeEvent, verifyEvent, normalizeURL, generateSecretKey, getPublicKey, npubEncode,
     btoa: (s) => Buffer.from(s, 'binary').toString('base64'),
     CustomEvent: Ev, NET: 'trinityone',

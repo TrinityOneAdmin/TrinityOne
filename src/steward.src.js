@@ -77,13 +77,18 @@ async function _openBackup(envelope) {                               // church-k
 }
 // a fresh NIP-98 (kind-27235) proof signed by the church key, bound to `url` + method — authorises /export,
 // /export-media, per-blob pulls (GET) and /import (POST). (sk/pub are the module's active church identity.)
-function _nip98(url, method) { return 'Nostr ' + btoa(JSON.stringify(finalizeEvent({ kind: 27235, created_at: now(), tags: [['u', url], ['method', method || 'GET'], ['church', pub]], content: '' }, sk))); }
+// _credNow(), not now(): the relay checks this proof's stamp against ITS clock (±300s in _exportAuth /
+// _blobMember, scripts/gateway.mjs) and then discards it. Stage 2 — nothing here is stored or ordered.
+function _nip98(url, method) { return 'Nostr ' + btoa(JSON.stringify(finalizeEvent({ kind: 27235, created_at: _credNow(), tags: [['u', url], ['method', method || 'GET'], ['church', pub]], content: '' }, sk))); }
 // restore one media blob to `base` with a signed kind-24242 upload auth (the church key passes _blobUploader).
 // (_sha256hex is defined below and used at call time.)
 async function _putBlob(base, bytes) {
   const sha = await _sha256hex(bytes);
   const native = !!(typeof window !== 'undefined' && window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
-  const auth = 'Nostr ' + btoa(JSON.stringify(finalizeEvent({ kind: 24242, created_at: now(), tags: [['t', 'upload'], ['x', sha], ['expiration', String(now() + 600)]], content: 'upload' }, sk)));
+  // ONE READING FOR BOTH FIELDS. `expiration` is compared to the relay's clock in _blobUploader and the
+  // stamp to nobody's, so taking _credNow() twice could straddle a second and leave the two disagreeing.
+  const _at = _credNow();
+  const auth = 'Nostr ' + btoa(JSON.stringify(finalizeEvent({ kind: 24242, created_at: _at, tags: [['t', 'upload'], ['x', sha], ['expiration', String(_at + 600)]], content: 'upload' }, sk)));
   const h = { Authorization: auth, 'Content-Type': 'application/octet-stream' };
   let body = bytes; if (native) { h['X-Blob-B64'] = '1'; body = _b64(bytes); }   // CapacitorHttp mangles raw binary -> base64 transport
   try { const r = await fetch(base + '/blob', { method: 'PUT', headers: h, body }); return r.ok; } catch { return false; }
@@ -1427,6 +1432,43 @@ function relaySkewState() {
     clockIsWrong: clockLooksWrong(),
     relays: [..._skewByRelay.entries()].map(([url, v]) => ({ url, sec: v.sec, proven: v.proven })),
   };
+}
+// ── THE ONE THING THE MEASUREMENT IS ALLOWED TO CHANGE: SHORT-LIVED CREDENTIALS ─────────────────────────
+//
+// Stage 2 of the same scope document (§6). `now()` keeps its exact meaning and every stamp in this file
+// still uses it. THIS IS FOR CREDENTIALS ONLY — the kind-27235 NIP-98 proofs and kind-24242 Blossom auth
+// events that a relay checks for FRESHNESS and then throws away. Seven of them, named in the commit. None
+// is stored, none is ordered against anything, and no newest-wins rule is anywhere near them.
+//
+// WHAT IT FIXES. Those relay-side checks are ±300s (_blobMember, _exportAuth, _syncAuth and the /config
+// addChurch branch in scripts/gateway.mjs) and the Blossom `expiration` is compared to the relay's clock in
+// _blobUploader. A console five minutes out therefore cannot download its own church's sermon, cannot take
+// a backup, cannot restore one, and cannot register itself with a relay — while every screen says only that
+// something went wrong.
+//
+// WHAT IT CANNOT REACH. Not a church document, not a safeguarding list, not a clearance, not an ordering
+// decision. If this function is wrong the worst outcome is a credential the relay refuses, which is exactly
+// what happens today; it cannot make a document win a race it should have lost.
+//
+// FOUR REFUSALS, all deliberate:
+//   * NOT MEASURED  → no correction. Byte-identical to the previous build. Offline is this case, and a
+//                     church on a thin pipe is the first audience, not the edge case.
+//   * NOT PROVEN    → no correction. A reading taken from `/status`'s unauthenticated `now` is shown to the
+//                     steward on the Relays panel and is never used to stamp anything. CLAUDE.md rule 10's
+//                     reasoning about `relayPub` is the same reasoning: a bare string is not proof.
+//   * RELAYS DISAGREE BY MORE THAN THE CAP → no correction. Boxes that contradict each other are not a
+//                     device-clock fault we can quietly fix.
+//   * BEYOND ±900s  → clamped to ±900s, and the panel already says the clock is wrong. 900 is put()'s own
+//                     future clamp in scripts/event-store.mjs, so a correction inside it cannot produce
+//                     anything an honest relay would not already accept from a device that far out on its
+//                     own. Above it the honest answer is to tell the person their clock is wrong.
+function _credNow() {
+  if (!_skewMeasuredAt || !_skewProven) return now();
+  if (Math.abs(_skewSpreadSec) > SKEW_CAP_SEC) return now();
+  let d = _relaySkewSec;
+  if (d > SKEW_CAP_SEC) d = SKEW_CAP_SEC;
+  if (d < -SKEW_CAP_SEC) d = -SKEW_CAP_SEC;
+  return now() - d;
 }
 // Measure at start and when a relay comes back, so the number on the panel is about now and not about boot.
 // Both are deliberately delayed and both swallow everything: a measurement must never be able to delay or
@@ -4839,7 +4881,8 @@ window.Steward = {
         sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: _b64ToU8(vapid.publicKey) });
       }
       // prove control of the church key (NIP-98), bound to this endpoint, so the gateway files it under churchPub
-      const auth = finalizeEvent({ kind: 27235, created_at: now(), tags: [['u', sub.endpoint], ['method', 'POST']], content: '' }, churchSk);
+      // _credNow(): /push/subscribe refuses a proof more than 300s from the RELAY's clock ('stale proof').
+      const auth = finalizeEvent({ kind: 27235, created_at: _credNow(), tags: [['u', sub.endpoint], ['method', 'POST']], content: '' }, churchSk);
       const r = await fetch('/push/subscribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sub, auth }) });
       return r.ok ? 'on' : 'error';
     } catch { return 'error'; }
@@ -4980,7 +5023,10 @@ window.Steward = {
     const sha = await _sha256hex(bytes);
     const ctype = enc ? 'application/octet-stream' : (file.type || 'application/octet-stream');
     // one signed, host-agnostic kind-24242 upload auth, reused to PUT the SAME blob to the primary + each backup.
-    const authHdr = 'Nostr ' + btoa(JSON.stringify(finalizeEvent({ kind: 24242, created_at: now(), tags: [['t', 'upload'], ['x', sha], ['expiration', String(now() + 600)]], content: 'upload' }, sk)));
+    // _credNow() for both, read ONCE — see _putBlob. _blobUploader refuses when `expiration` is behind the
+    // RELAY's clock, so a console five minutes fast could not upload a sermon to its own relay.
+    const _upAt = _credNow();
+    const authHdr = 'Nostr ' + btoa(JSON.stringify(finalizeEvent({ kind: 24242, created_at: _upAt, tags: [['t', 'upload'], ['x', sha], ['expiration', String(_upAt + 600)]], content: 'upload' }, sk)));
     // native (CapacitorHttp) mangles a raw binary PUT body → send base64 text + a marker the gateway decodes; web sends raw bytes
     const native = _isNative(); const body = native ? _b64(bytes) : bytes;
     const put = async (b) => { const h = { Authorization: authHdr, 'Content-Type': ctype }; if (native) h['X-Blob-B64'] = '1'; const r = await fetch(b + '/blob', { method: 'PUT', headers: h, body }); if (!r.ok) { let m = ''; try { m = ((await r.json()) || {}).error || ''; } catch (e) {} throw new Error(m || ('Upload failed (' + r.status + ')')); } return r.json(); };
@@ -5035,7 +5081,10 @@ window.Steward = {
     const sha = s && typeof s === 'object' && s.sha256;
     const hosts = (s && typeof s === 'object' && ((s.hosts && s.hosts.length) ? s.hosts : (s.host ? [s.host] : []))) || [];
     if (sha && hosts.length) {
-      const auth = 'Nostr ' + btoa(JSON.stringify(finalizeEvent({ kind: 24242, created_at: now(), tags: [['t', 'delete'], ['x', sha], ['expiration', String(now() + 600)]], content: 'delete' }, sk)));
+      // _credNow() for both, read ONCE — same gate as the upload arm (_blobUploader, action 'delete').
+      // The TOMBSTONE above is a church document and keeps now(): stage 2 corrects credentials only.
+      const _delAt = _credNow();
+      const auth = 'Nostr ' + btoa(JSON.stringify(finalizeEvent({ kind: 24242, created_at: _delAt, tags: [['t', 'delete'], ['x', sha], ['expiration', String(_delAt + 600)]], content: 'delete' }, sk)));
       for (const h of hosts) { try { await fetch(String(h).replace(/\/+$/, '') + '/blob/' + sha, { method: 'DELETE', headers: { Authorization: auth } }); } catch (e) {} }
     }
     return true;
@@ -9767,7 +9816,8 @@ window.Steward = {
       if (!force && done[mark]) return;                       // already registered this key with this relay
       const url = base + '/config';
       try {
-        const auth = finalizeEvent({ kind: 27235, created_at: now(), tags: [['u', url], ['method', 'POST']], content: '' }, churchSk);
+        // _credNow(): same /config gate as registerAtRelay, reached by the church-creation fan-out.
+        const auth = finalizeEvent({ kind: 27235, created_at: _credNow(), tags: [['u', url], ['method', 'POST']], content: '' }, churchSk);
         // A TIMEOUT, like every other fetch in this file (:667, :773, :778, :853). saveName now awaits this
         // before publishing, and Continue is disabled while it runs — so without one a captive portal or a
         // thin pipe leaves the wizard's first step hanging with no cancel and nothing on screen but a
@@ -9852,7 +9902,8 @@ window.Steward = {
     const base = String(wssUrl || '').replace(/^wss:/i, 'https:').replace(/^ws:/i, 'http:').replace(/\/relay\/?$/i, '');
     const url = base + '/config';
     try {
-      const auth = finalizeEvent({ kind: 27235, created_at: now(), tags: [['u', url], ['method', 'POST']], content: '' }, churchSk);
+      // _credNow(): /config's addChurch branch requires the proof within 300s of the RELAY's clock.
+      const auth = finalizeEvent({ kind: 27235, created_at: _credNow(), tags: [['u', url], ['method', 'POST']], content: '' }, churchSk);
       const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ addChurch: { npub: npubEncode(churchPub), name: name || '' }, auth }) });
       // PASS THE RELAY'S OWN REASON BACK. A caller that knows only "not ok" can say nothing more useful than
       // "it might not have worked", and the relay's refusals are well written and actionable — H4's is "set

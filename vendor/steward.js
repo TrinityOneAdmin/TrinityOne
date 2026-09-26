@@ -15186,12 +15186,13 @@ zoo`.split("\n");
     return { bytes: pt, fmt: e.fmt || "jsonl" };
   }
   function _nip98(url, method) {
-    return "Nostr " + btoa(JSON.stringify(finalizeEvent2({ kind: 27235, created_at: now(), tags: [["u", url], ["method", method || "GET"], ["church", pub]], content: "" }, sk)));
+    return "Nostr " + btoa(JSON.stringify(finalizeEvent2({ kind: 27235, created_at: _credNow(), tags: [["u", url], ["method", method || "GET"], ["church", pub]], content: "" }, sk)));
   }
   async function _putBlob(base, bytes) {
     const sha = await _sha256hex(bytes);
     const native = !!(typeof window !== "undefined" && window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
-    const auth = "Nostr " + btoa(JSON.stringify(finalizeEvent2({ kind: 24242, created_at: now(), tags: [["t", "upload"], ["x", sha], ["expiration", String(now() + 600)]], content: "upload" }, sk)));
+    const _at = _credNow();
+    const auth = "Nostr " + btoa(JSON.stringify(finalizeEvent2({ kind: 24242, created_at: _at, tags: [["t", "upload"], ["x", sha], ["expiration", String(_at + 600)]], content: "upload" }, sk)));
     const h = { Authorization: auth, "Content-Type": "application/octet-stream" };
     let body = bytes;
     if (native) {
@@ -16013,6 +16014,14 @@ zoo`.split("\n");
       clockIsWrong: clockLooksWrong(),
       relays: [..._skewByRelay.entries()].map(([url, v]) => ({ url, sec: v.sec, proven: v.proven }))
     };
+  }
+  function _credNow() {
+    if (!_skewMeasuredAt || !_skewProven) return now();
+    if (Math.abs(_skewSpreadSec) > SKEW_CAP_SEC) return now();
+    let d = _relaySkewSec;
+    if (d > SKEW_CAP_SEC) d = SKEW_CAP_SEC;
+    if (d < -SKEW_CAP_SEC) d = -SKEW_CAP_SEC;
+    return now() - d;
   }
   try {
     setTimeout(() => {
@@ -18541,7 +18550,7 @@ zoo`.split("\n");
           if (!vapid || !vapid.publicKey) return "no-vapid";
           sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: _b64ToU8(vapid.publicKey) });
         }
-        const auth = finalizeEvent2({ kind: 27235, created_at: now(), tags: [["u", sub.endpoint], ["method", "POST"]], content: "" }, churchSk);
+        const auth = finalizeEvent2({ kind: 27235, created_at: _credNow(), tags: [["u", sub.endpoint], ["method", "POST"]], content: "" }, churchSk);
         const r = await fetch("/push/subscribe", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sub, auth }) });
         return r.ok ? "on" : "error";
       } catch {
@@ -18668,7 +18677,8 @@ zoo`.split("\n");
       if (enc) bytes = await encrypt4(bytes);
       const sha = await _sha256hex(bytes);
       const ctype = enc ? "application/octet-stream" : file.type || "application/octet-stream";
-      const authHdr = "Nostr " + btoa(JSON.stringify(finalizeEvent2({ kind: 24242, created_at: now(), tags: [["t", "upload"], ["x", sha], ["expiration", String(now() + 600)]], content: "upload" }, sk)));
+      const _upAt = _credNow();
+      const authHdr = "Nostr " + btoa(JSON.stringify(finalizeEvent2({ kind: 24242, created_at: _upAt, tags: [["t", "upload"], ["x", sha], ["expiration", String(_upAt + 600)]], content: "upload" }, sk)));
       const native = _isNative();
       const body = native ? _b64(bytes) : bytes;
       const put = async (b) => {
@@ -18719,7 +18729,8 @@ zoo`.split("\n");
       const sha = s && typeof s === "object" && s.sha256;
       const hosts = s && typeof s === "object" && (s.hosts && s.hosts.length ? s.hosts : s.host ? [s.host] : []) || [];
       if (sha && hosts.length) {
-        const auth = "Nostr " + btoa(JSON.stringify(finalizeEvent2({ kind: 24242, created_at: now(), tags: [["t", "delete"], ["x", sha], ["expiration", String(now() + 600)]], content: "delete" }, sk)));
+        const _delAt = _credNow();
+        const auth = "Nostr " + btoa(JSON.stringify(finalizeEvent2({ kind: 24242, created_at: _delAt, tags: [["t", "delete"], ["x", sha], ["expiration", String(_delAt + 600)]], content: "delete" }, sk)));
         for (const h of hosts) {
           try {
             await fetch(String(h).replace(/\/+$/, "") + "/blob/" + sha, { method: "DELETE", headers: { Authorization: auth } });
@@ -23577,7 +23588,7 @@ zoo`.split("\n");
           if (!force && done[mark]) return;
           const url = base + "/config";
           try {
-            const auth = finalizeEvent2({ kind: 27235, created_at: now(), tags: [["u", url], ["method", "POST"]], content: "" }, churchSk);
+            const auth = finalizeEvent2({ kind: 27235, created_at: _credNow(), tags: [["u", url], ["method", "POST"]], content: "" }, churchSk);
             const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ addChurch: { npub: np, name: name || "" }, auth }), signal: AbortSignal.timeout(6e3) });
             if (r && r.ok) {
               done[mark] = 1;
@@ -23648,7 +23659,7 @@ zoo`.split("\n");
       const base = String(wssUrl || "").replace(/^wss:/i, "https:").replace(/^ws:/i, "http:").replace(/\/relay\/?$/i, "");
       const url = base + "/config";
       try {
-        const auth = finalizeEvent2({ kind: 27235, created_at: now(), tags: [["u", url], ["method", "POST"]], content: "" }, churchSk);
+        const auth = finalizeEvent2({ kind: 27235, created_at: _credNow(), tags: [["u", url], ["method", "POST"]], content: "" }, churchSk);
         const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ addChurch: { npub: npubEncode(churchPub), name: name || "" }, auth }) });
         let why = "";
         if (!r.ok) {
