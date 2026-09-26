@@ -33,6 +33,8 @@
     }
     const by = String(rec._by || "");
     const had = vers.get(by);
+    const wild = vers.get("*");
+    if (wild && wild._tomb && (wild.ts || 0) >= (rec.ts || 0)) return false;
     if (had && had._tomb && (had.ts || 0) >= (rec.ts || 0)) return false;
     if (had && (had.ts || 0) > (rec.ts || 0)) return false;
     vers.set(by, rec);
