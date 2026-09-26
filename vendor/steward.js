@@ -6317,6 +6317,8 @@
     }
     const by = String(rec._by || "");
     const had = vers.get(by);
+    const wild = vers.get("*");
+    if (wild && wild._tomb && (wild.ts || 0) >= (rec.ts || 0)) return false;
     if (had && had._tomb && (had.ts || 0) >= (rec.ts || 0)) return false;
     if (had && (had.ts || 0) > (rec.ts || 0)) return false;
     vers.set(by, rec);
@@ -6334,6 +6336,8 @@
     const mayName = typeof _authority === "function" ? !!_authority({ _by: by }) : false;
     const keys = [k0];
     if (cp && mayName && named.some((t) => t === cp) && !keys.includes(cp)) keys.push(cp);
+    const wild = !!(cp && k0 === cp && named.includes("*"));
+    if (wild && !keys.includes("*")) keys.push("*");
     const tomb = (k) => ({ _tomb: true, _by: k, ts: ts || 0 });
     const vers = versions.get(id);
     if (!vers) {
@@ -6347,7 +6351,7 @@
       }
       return false;
     }
-    if (cp && k0 === cp && named.includes("*")) {
+    if (wild) {
       for (const k of vers.keys()) if (!keys.includes(k)) keys.push(k);
     }
     let did = false;

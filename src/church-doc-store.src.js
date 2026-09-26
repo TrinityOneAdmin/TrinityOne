@@ -101,6 +101,17 @@ export function _absorbById(versions, byId, id, rec, trusted) {
   let vers = versions.get(id); if (!vers) { vers = new Map(); versions.set(id, vers); }
   const by = String(rec._by || '');
   const had = vers.get(by);
+  // ...AND A CHURCH'S WILDCARD WITHDRAWAL OUTRANKS AN AUTHOR THIS DEVICE HAS NEVER HEARD OF.
+  // `'*'` is the reserved key _forgetById files a church `for: '*'` tombstone under; no real author can
+  // collide with it, because every other key is a 64-hex pubkey or '' (an old cache with no author
+  // recorded). Consulting it HERE is what makes the withdrawal independent of arrival order: the copy it
+  // means to withdraw may not have arrived when it was applied, and on a multi-relay pool it usually has
+  // not. Measured on the shipped bundles before this line existed — church deletes, THEN the steward's
+  // older edit arrives: the sermon was back on screen, with its blob already deleted, so it could never
+  // play. Strictly at-or-older-than: a genuinely newer re-publication is admitted and shows, which is the
+  // property most at risk here and is held down by its own tests.
+  const wild = vers.get('*');
+  if (wild && wild._tomb && (wild.ts || 0) >= (rec.ts || 0)) return false;
   // A REMEMBERED WITHDRAWAL OUTRANKS A RE-DELIVERY AT THE SAME SECOND. `>` alone let a document whose
   // created_at equalled its own tombstone's walk back in, and a delete published in the same second as the
   // edit it removes is ordinary.
@@ -149,6 +160,34 @@ export function _forgetById(versions, byId, id, by, ts, trusted, opts) {
   const keys = [k0];
   if (cp && mayName && named.some(t => t === cp) && !keys.includes(cp)) keys.push(cp);
 
+  // ── THE CHURCH'S `for: '*'` IS DECIDED HERE, BEFORE WE LOOK AT WHAT WE HOLD ──────────────────────────
+  // It used to be decided below, after the "nothing received yet" branch had already returned, and it named
+  // only `vers.keys()` — the authors THIS DEVICE HAD ALREADY RECEIVED. So it worked for exactly one arrival
+  // order and silently did nothing for the others. Measured against the shipped bundles, both of them,
+  // sermons and the featured-sermon pin alike:
+  //     church copy → steward edit → church delete   = cleared   (the one order that worked)
+  //     church delete FIRST → steward edit           = BACK on screen
+  //     church copy → church delete → steward edit   = BACK on screen
+  // In the failing orders the steward's copy is OLDER than the tombstone, so it is not a re-publication —
+  // it is the withdrawn copy walking back in, and its blob has already been deleted, so it can never play.
+  // Both failing orders are ordinary: the docs hub delivers LIVE events straight to handlers in whatever
+  // order a MULTI-relay pool produces them (`_docsHubOpen` → `for (const h of hub.handlers) h.onevent(e,d)`),
+  // a delegated console's relay set is not the owner's, so one relay can hold the tombstone and another the
+  // copy, and `_replayChurchCalendar` walks `hub.buf.values()` in raw Map order with no sort at all.
+  //
+  // So the withdrawal is STICKY: it is filed as a version under the reserved key `'*'`, and `_absorbById`
+  // refuses to admit ANY author's copy at or older than it — including an author never seen. Same shape as
+  // the named tombs a few lines down, which is why it costs one key and no new data structure: `_pickWinner`
+  // already skips every `_tomb`, and `_reduceVersions` already filters them out of `_alt`, so a wildcard tomb
+  // is invisible to both exactly as a named one is.
+  //
+  // ROUND 9 IS UNTOUCHED. `k0 === cp` restricts this to a tombstone signed by the CHURCH KEY itself, in its
+  // own church. `mayName` is deliberately not consulted: it can only widen, and `k0 === cp` is already the
+  // narrowest test there is. A steward's `for: '*'` reaches nothing it could not reach before — including,
+  // now, a colleague's copy that arrives later, which it also cannot suppress.
+  const wild = !!(cp && k0 === cp && named.includes('*'));
+  if (wild && !keys.includes('*')) keys.push('*');
+
   // A WITHDRAWAL IS REMEMBERED, NOT CONSUMED — and this is the half the first version got wrong.
   //
   // Before the `for` grant existed, forgetting was safe: a delete only ever bound its OWN author's copy, and
@@ -175,6 +214,11 @@ export function _forgetById(versions, byId, id, by, ts, trusted, opts) {
     // Painted from an old cache and nothing live has arrived yet: we do not know whose it is, so any delete
     // binds it — which is what the old code did, and refusing would leave it on screen for ever. Remember it
     // too, or the copy we just hid walks back in on the next replay.
+    // `keys` already carries `'*'` when the church named every copy, so the wildcard tomb is laid down on
+    // this branch too — which is the whole of ordering B: a phone that hears the deletion before it has
+    // heard any copy at all. That is the DEFAULT on a cold start, because there is nothing to hear yet.
+    // No new memory class: this branch has always created a Map per tombstoned id, sticky or not, and
+    // `versions` is in-memory only — nothing serialises it, so every tomb here dies with the session.
     const had = byId.has(id);
     const fresh = new Map();
     for (const k of keys) fresh.set(k, tomb(k));
@@ -203,7 +247,11 @@ export function _forgetById(versions, byId, id, by, ts, trusted, opts) {
   // Older readers ignore it safely: an app that does not understand `*` finds no `for` tag matching its own
   // church pubkey, falls through to "my own copy only", and behaves exactly as it does today — the wrong
   // half of the fix, which is what it already did. Additive, never repurposed.
-  if (cp && k0 === cp && named.includes('*')) {
+  //
+  // The sticky `'*'` tomb above governs copies that have NOT arrived. This sweep is still required for the
+  // ones that HAVE: those are live records in `vers`, and `_pickWinner` reads them directly — it never
+  // consults `'*'`. Removing this line puts ordering A back on screen.
+  if (wild) {
     for (const k of vers.keys()) if (!keys.includes(k)) keys.push(k);
   }
 
