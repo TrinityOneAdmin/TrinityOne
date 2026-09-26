@@ -103,6 +103,12 @@ function liftedEngine() {
     // `onroster()` when it lands mid-session (`_docsHubOpen`) — this harness can do either.
     rosterKnownBeforeOpen: (pubs) => stubs._churchRoster.set(FCP, new Set(pubs)),
     rosterArrives: (pubs) => { stubs._churchRoster.set(FCP, new Set(pubs)); handler.onroster(); },
+    // THE SECOND THING `onroster()` MEANS. `_docsHubOpen` fires the SAME fan-out from two branches: the one
+    // that absorbs the church-signed `stewards:` document (which sets `_churchRoster` first — that is
+    // `rosterArrives` above), and the one that ingests the church CARE KEY (`d === CAREKEY_D + cp`), which
+    // sets nothing and is this. A harness that can only do the first cannot see the bug below, which is why
+    // the whole of this file passed over it.
+    careKeyArrives: () => { handler.onroster(); },
   };
 }
 
@@ -289,6 +295,82 @@ test('…and a STEWARD’s `for: *`, remembered and then vouched for, still cann
     'Shown: ' + JSON.stringify(last()));
 });
 
+// ── 14-17: THE CARE KEY MUST NOT CONSUME THE NOTE (AUDIT-branch-2026-09-26 F3) ──────────────────────────
+// `onroster()` means TWO different events. `_docsHubOpen` fires it both when the church-signed `stewards:`
+// roster is absorbed (which sets `_churchRoster` first) and when the church CARE KEY arrives (which sets
+// nothing). The notes above are cleared unconditionally and get exactly one chance, so a care key landing
+// between a tombstone and the roster spent that chance on nobody — and the bug the first half of this file
+// exists to stop came straight back, on an entirely ordinary path. MEASURED on the shipped bundle before
+// the fix, every callback shown:
+//     church sermon → steward delete → CARE KEY → roster      [["Sunday"],["Sunday"]]   STILL LISTED
+//     steward sermon → her own delete → CARE KEY → roster     [[],["Sunday"]]           BACK on screen
+// Both documents are church-signed and share this hub's filters, so either order is what a multi-relay pool
+// ordinarily produces. The fix is one line at the top of `onroster()`: until `_churchRoster` holds an entry
+// for this church, nothing has ruled on anything and there is nothing to consume.
+
+test('CARE KEY: a church’s sermon, a steward’s delete, a care key, THEN the roster — it must still go', async () => {
+  const { eng, calls, last } = recorder();
+  eng.fire(sermonDoc(FCP, 's1', 'Sunday', 1000, [['church', FCP]]));
+  eng.fire(deleteDoc(STEW, 's1', 3000, [['church', FCP], ['for', FCP]]));
+  eng.careKeyArrives();                      // ← the care key lands between the delete and the roster
+  eng.eose();
+  await settle();
+  assert.deepEqual(last(), ['Sunday'], 'fixture: nothing may be hidden before the roster has vouched for the author');
+  const before = calls.length;
+  eng.rosterArrives([STEW]);
+  await settle();
+  assert.ok(calls.length > before, 'the roster arriving produced no new callback at all, so nothing can have been re-decided');
+  assert.deepEqual(last(), [],
+    'THE CARE KEY ATE THE HELD DELETE. `onroster()` is fired for the care key as well as the steward ' +
+    'roster, and the held note was cleared by the wrong one — so a sermon the church removed is listed on ' +
+    'a member’s phone again (the 5ff5819 bug, via an ordinary path). Shown: ' + JSON.stringify(last()));
+});
+
+test('CARE KEY: a steward’s OWN sermon, her delete, a care key, then the roster', async () => {
+  const { eng, last } = recorder();
+  eng.fire(sermonDoc(STEW, 's1', 'Sunday', 1000, [['church', FCP]]));
+  eng.fire(deleteDoc(STEW, 's1', 3000, [['church', FCP]]));
+  eng.careKeyArrives();
+  eng.eose();
+  await settle();
+  eng.rosterArrives([STEW]);
+  await settle();
+  assert.deepEqual(last(), [],
+    'THE DELETED SERMON APPEARED when the roster landed: the care key had already discarded the delete, ' +
+    'so the roster vouched for the sermon and not for its withdrawal. Shown: ' + JSON.stringify(last()));
+});
+
+test('CARE KEY: several of them in a row still do not consume the note', async () => {
+  // The care key can be re-ingested — a rotation, or a second relay serving it again — and each one fires
+  // the same fan-out. One guard must hold for all of them, not just the first.
+  const { eng, last } = recorder();
+  eng.fire(sermonDoc(FCP, 's1', 'Sunday', 1000, [['church', FCP]]));
+  eng.fire(deleteDoc(STEW, 's1', 3000, [['church', FCP], ['for', FCP]]));
+  eng.careKeyArrives(); eng.careKeyArrives(); eng.careKeyArrives();
+  eng.eose();
+  await settle();
+  eng.rosterArrives([STEW]);
+  await settle();
+  assert.deepEqual(last(), [], 'a repeated care-key fan-out consumed the held delete. Shown: ' + JSON.stringify(last()));
+});
+
+test('SAFEGUARDING: a care key does not let a stranger’s delete through either', async () => {
+  // The direction that matters. The guard must not become a way for an unvouched delete to be applied —
+  // it only stops the note being DISCARDED; whether it is HONOURED is still the roster's decision alone.
+  const { eng, last } = recorder();
+  eng.fire(sermonDoc(FCP, 's1', 'Sunday', 1000, [['church', FCP]]));
+  eng.fire(deleteDoc(OUTSIDER, 's1', 3000, [['church', FCP], ['for', '*']]));
+  eng.careKeyArrives();
+  eng.eose();
+  await settle();
+  assert.deepEqual(last(), ['Sunday'], 'a stranger’s delete was honoured on the care-key fan-out');
+  eng.rosterArrives([STEW]);
+  await settle();
+  assert.deepEqual(last(), ['Sunday'],
+    'A STRANGER SUPPRESSED A CHURCH’S SERMON. Their delete was held past the care key and then honoured, ' +
+    'though the roster does not name them. Shown: ' + JSON.stringify(last()));
+});
+
 // ── POINT OF USE: THE REAL WATCH & LISTEN TAB ───────────────────────────────────────────────────────────
 // `ctx.church.channel` is '' so the screen takes the `window.Bible.getVideos()` branch for its other gate.
 // `SermonRow` is stubbed to render the title and nothing else, so `reads(tree)` says exactly which sermons
@@ -330,6 +412,23 @@ test('POINT OF USE: the removed sermon leaves the Watch & Listen tab when the ro
   assert.doesNotMatch(await w.said(), /Sunday Morning/,
     'A SERMON THE CHURCH REMOVED IS STILL ON THE WATCH & LISTEN TAB. Its delete reached the phone before ' +
     'the steward roster and was discarded (audit M3). Screen read: ' + JSON.stringify(await w.said()));
+});
+
+test('POINT OF USE: a care key arriving first does not put the removed sermon back on the tab', async () => {
+  // The screen-level version of tests 14-16. This is the one that fails if the guard is deleted from the
+  // reader the tab actually uses, rather than only from an engine nobody is required to consult (rule 1).
+  const w = await watchTab();
+  w.eng.fire(sermonDoc(FCP, 's1', 'Sunday Morning', 1000, [['church', FCP]]));
+  w.eng.fire(deleteDoc(STEW, 's1', 3000, [['church', FCP], ['for', FCP]]));
+  w.eng.careKeyArrives();                    // ← between the delete and the roster
+  w.eng.eose();
+  assert.match(await w.said(), /Sunday Morning/,
+    'fixture: the church’s sermon should be on the tab until the roster has ruled on the delete');
+  w.eng.rosterArrives([STEW]);
+  assert.doesNotMatch(await w.said(), /Sunday Morning/,
+    'A SERMON THE CHURCH REMOVED IS STILL ON THE WATCH & LISTEN TAB. The church care key fired the same ' +
+    '`onroster()` fan-out as the steward roster and consumed the held delete before the roster could rule ' +
+    'on it. Screen read: ' + JSON.stringify(await w.said()));
 });
 
 test('POINT OF USE: a stranger’s early delete leaves it on the tab, before AND after the roster', async () => {

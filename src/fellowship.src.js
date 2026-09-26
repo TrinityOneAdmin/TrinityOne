@@ -3412,7 +3412,32 @@ window.Fellowship = {
       // same question again — an unvouched author's delete binds only their own copy, and a copy of theirs
       // can never be the one on show. It is the gate every other delete in this file goes through, so a
       // reader arriving here does not have to reconstruct that argument to know this is safe.
-      onroster() { for (const p of pending.values()) if (_churchVoice(cp, { _by: p.by })) _forgetById(versions, byId, p.id, p.by, p.ts, _trust, { churchPub: cp, targets: p.targets }); pending.clear(); _reduceAll(versions, byId, _trust); emit(); },
+      //
+      // ...AND ONLY WHEN IT REALLY IS THE ROSTER. `onroster()` CURRENTLY MEANS TWO DIFFERENT EVENTS, and
+      // that is the whole of this bug. `_docsHubOpen` fires this same fan-out from two branches: the one
+      // that absorbs the church-signed `stewards:` document (`_absorbRoster`, which sets `_churchRoster`
+      // first), and the one that ingests the church CARE KEY (`d === CAREKEY_D + cp`), which sets nothing.
+      // The notes above are cleared unconditionally and get exactly one chance, so a care key arriving
+      // between a tombstone and the roster consumed that chance and the delete was thrown away — putting
+      // back, on an entirely ordinary path, the bug `5ff5819` had just fixed. MEASURED on the shipped
+      // bundle, driving `_openSermons`, every callback shown:
+      //     church sermon → steward delete → roster                  [["Sunday"],[]]            cleared
+      //     church sermon → steward delete → CARE KEY → roster       [["Sunday"],["Sunday"]]    STILL LISTED
+      //     steward sermon → her own delete → CARE KEY → roster      [[],["Sunday"]]            BACK on screen
+      // Both relay orderings are ordinary: the two documents are church-signed, share the hub's filters and
+      // arrive in whatever order a multi-relay pool produces.
+      //
+      // The guard is the roster's own arrival, not a flag: until `_churchRoster` holds an entry for this
+      // church nothing has ruled on anything, so there is nothing to consume. The safeguarding direction is
+      // unchanged and measured — a stranger's early delete still hides nothing, before or after the roster.
+      // Skipping `_reduceAll`/`emit()` on the care-key path is deliberate and harmless: sermons are not
+      // sealed under the care key, and `_reduceAll` with an unchanged roster is a no-op.
+      //
+      // THE FOLLOW-UP IS TO RENAME THE OTHER ONE. One callback meaning two events is how this happened and
+      // is how it will happen again; the care-key fan-out wants its own hook so `onroster()` can mean the
+      // roster and nothing else. Deliberately NOT done here — it reaches every `onroster()` in this file
+      // plus `subscribeCareNeeds`, whose care-key replay exists for a measured reason of its own.
+      onroster() { if (!_churchRoster.has(cp)) return; for (const p of pending.values()) if (_churchVoice(cp, { _by: p.by })) _forgetById(versions, byId, p.id, p.by, p.ts, _trust, { churchPub: cp, targets: p.targets }); pending.clear(); _reduceAll(versions, byId, _trust); emit(); },
       // EOSE ALWAYS EMITS HERE, EVEN EMPTY — and that is the one place this reader must NOT copy
       // subscribeChurchGroups/subscribeChurchCategories, which guard the same line with `if (byId.size)`.
       // Two differences make the guard wrong here, both measured 2026-09-25:
