@@ -42,7 +42,7 @@ const SHIP = readFileSync(join(ROOT, 'vendor/steward.js'), 'utf8');
 // ── A RELAY THAT ANSWERS /relay-identity OFF ITS OWN CLOCK ───────────────────────────────────────────────
 // The signed kind-27235 proof is the only clock stage 1 will read; /status's `now` is an unauthenticated
 // string and _skewShift refuses to correct from one (row 4).
-async function relayAt(offsetSec) {
+async function relayAt(offsetSec, delayMs = 0) {
   const sk = generateSecretKey();
   const pub = getPublicKey(sk);
   let base = '';
@@ -54,8 +54,11 @@ async function relayAt(offsetSec) {
                ['relay', base]], content: '' };
       ev.id = getEventHash(ev);
       ev.sig = bytesToHex(schnorr.sign(hexToBytes(ev.id), sk));
-      res.writeHead(200, { 'content-type': 'application/json' });
-      return res.end(JSON.stringify({ proof: ev }));
+      // `delayMs` makes "did the writer WAIT for the measurement?" an observable fact rather than a claim:
+      // with it, a writer that does not wait stamps before this reply can possibly have arrived.
+      const send = () => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ proof: ev })); };
+      if (delayMs) { setTimeout(send, delayMs); return; }
+      return send();
     }
     res.writeHead(404); res.end('no');
   });
@@ -101,10 +104,15 @@ function console_(relayList, churchSk, churchPub) {
     stmt(SHIP, 'var _authFuture = ', '_authFuture'),
     stmt(SHIP, 'var NET = ', 'NET'),
     stmt(SHIP, 'var MINORS_D = ', 'MINORS_D'),
+    stmt(SHIP, 'var CLEARANCE_D = ', 'CLEARANCE_D'),
+    fnBody(SHIP, 'function feChurch(tmpl, signer)', 'feChurch'),
   ].join('\n');
-  // …and one real safeguarding writer, so the stamp under test is one the shipped console really minted.
-  // It is an object-literal METHOD, so it goes in the `_w` literal below and not in `parts`.
-  const writer = fnBody(SHIP, 'setMinors(pubkeys) {', 'setMinors');
+  // …and the two real safeguarding writers, so every stamp under test is one the shipped console really
+  // minted. They are object-literal METHODS, so they go in the `_w` literal below and not in `parts`.
+  // publishClearance is here because it is the document the whole piece of work exists for, and because an
+  // audit found it had been left off the bounded wait while a sibling was put on in its place.
+  const writer = fnBody(SHIP, 'setMinors(pubkeys) {', 'setMinors')
+    + ',\n' + fnBody(SHIP, 'publishClearance(memberPub, status, urls) {', 'publishClearance');
   const scope = {
     verifyEvent, verifyEvent2: verifyEvent, fetch: globalThis.fetch,
     relays: () => relayList, relaysRaw: () => relayList,
@@ -115,11 +123,21 @@ function console_(relayList, churchSk, churchPub) {
     now: () => Math.floor(Date.now() / 1000),
     _requireTrustedView: () => {},
     _publishToRelays: (evt) => { sent.push(evt); return Promise.resolve(evt); },
+    // publishClearance's world. None of it decides a stamp.
+    actingChurch: '', _viewingNetwork: () => false, _clearanceSent: new Map(),
+    toPubHex: (x) => (/^[0-9a-f]{64}$/i.test(String(x)) ? String(x).toLowerCase() : null),
+    // esbuild renames the nip44 imports in the bundle; bind the names the SHIPPED text actually uses, or
+    // the seal throws inside publishClearance's own try/catch and it returns null, which reads exactly
+    // like the bug under test.
+    encrypt3: (plain) => 'sealed:' + plain, getConversationKey: () => 'ck',
+    nip44e: (plain) => 'sealed:' + plain, nip44ck: () => 'ck',
   };
   const api = new Function('scope', 'with (scope) {\n' + parts +
     '\nconst _w = { ' + writer + ' };' +
     '\nreturn { measureRelaySkew, relaySkewState, _credNow, _monotonic, _skewShift, _authFuture, ensureSkew,' +
-    '         setMinors: (p) => _w.setMinors(p), now, SKEW_CAP_SEC, STAMP_CAP_SEC, _CLOCK_SKEW }; }')(scope);
+    '         setMinors: (p) => _w.setMinors(p),' +
+    '         publishClearance: (a, b, c) => _w.publishClearance(a, b, c),' +
+    '         now, SKEW_CAP_SEC, STAMP_CAP_SEC, _CLOCK_SKEW }; }')(scope);
   return { api, sent };
 }
 
@@ -218,6 +236,41 @@ test('4 · AT the cap the gate still accepts — the boundary is `>`, not `>=`',
   r.stop();
 });
 
+// ══ 4b · THE BOUNDED WAIT, ON THE DOCUMENT IT EXISTS FOR ══════════════════════════════════════════════════
+//
+// ⚠ ADDED 2026-09-26 AFTER AN AUDIT. Stage 4 shipped with the wait on setStewards and NOT on
+// publishClearance — the scope document names publishClearance and the measured incident IS a clearance
+// losing to a fast clock. Row 11 now names every writer, but a list is a structural claim; this row is the
+// behavioural one. The relay answers its proof LATE, so a writer that does not wait stamps before the answer
+// can have arrived, and the two outcomes are a clean 0 versus the cap.
+test('4b · publishClearance WAITS for the first measurement before it stamps', async () => {
+  const sk = generateSecretKey(), pub = getPublicKey(sk);
+  const r = await relayAt(1200, 120);            // 1200s slow, and the proof takes 120ms to come back
+  const { api: c, sent } = console_([r.base], sk, pub);
+
+  // Nothing has measured yet, and a stamp taken RIGHT NOW proves it — this is what the write would carry
+  // if the writer did not wait.
+  const t0 = c.now();
+  assert.equal(stampAt(c, 'trinityone/x:4b', t0), t0,
+    're-anchor: something had already measured before the row began, so the comparison below is empty');
+
+  const child = 'b'.repeat(64);
+  await c.publishClearance(child, { minor: true, cleared: false, guardians: [] });
+  assert.equal(sent.length, 1, 'publishClearance published nothing — this row is measuring nothing');
+  const evt = sent[0];
+  assert.match(String((evt.tags.find(t => t[0] === 'd') || [])[1] || ''), /^trinityone\/clearance:/,
+    're-anchor: that is not a clearance document');
+  assert.equal(evt.created_at - c.now(), 600,
+    'THE CHILD’S OWN CLEARANCE WENT OUT ON THIS LAPTOP’S CLOCK. publishClearance stamped ' +
+    (evt.created_at - c.now()) + 's from local instead of the corrected time, so it did not wait for the ' +
+    'first measurement — and _lastStamp then pins that document for the rest of the session. This is the ' +
+    'writer the scope document names first and the one the measured incident is about.');
+  assert.equal(c._authFuture(evt), false,
+    'the corrected clearance is past this console’s own receive gate, so the console that wrote it will ' +
+    'drop it on the way back in');
+  r.stop();
+});
+
 // ══ 5 · THE THREE REFUSALS STILL REFUSE, on the document path as well as the credential path ══════════════
 test('5 · nothing measured ⇒ the event is byte-identical to the previous build', () => {
   const sk = generateSecretKey(), pub = getPublicKey(sk);
@@ -276,6 +329,113 @@ test('7 · relays that disagree by more than the cap ⇒ no correction at all', 
     'two relays contradicting each other by twenty minutes were averaged into a correction anyway. That ' +
     'is not a device-clock fault we can quietly fix, and guessing between them picks which box is believed.');
   a.stop(); b.stop();
+});
+
+// ══ 7b · AN UNSIGNED READING MAY NOT JOIN THE MEDIAN WHEN A PROVEN ONE EXISTS ════════════════════════════
+//
+// SECURITY, and it had no test until the stage-4 audit. `const use = proven.length ? proven : all;` in
+// measureRelaySkew is the whole of the rule. Sabotage it to `const use = all;` and the suite stayed 42/0:
+// _skewProven is true as long as ONE relay proved itself, so an unsigned /status reading would silently
+// join the pick that stamps this church's safeguarding documents. CLAUDE.md rule 10 refuses exactly that
+// shape for `relayPub` — "an unauthenticated string and never proof" — and a `now` over the same
+// unauthenticated GET is the same string.
+//
+// THE OFFSETS ARE CHOSEN SO THE RULE DECIDES SOMETHING. _pickSkew takes the reading closer to local when
+// there are exactly two, so the unsigned box is the NEARER one (+100) and the proven box the further
+// (+700): proven-only picks -700 and corrects by the 600 cap, while "everything counts" picks -100 and
+// corrects by 100. The two answers differ, which is what makes this row evidence.
+test('7b · an unsigned /status reading cannot move the stamp when a relay has PROVED itself', async () => {
+  const sk = generateSecretKey(), pub = getPublicKey(sk);
+  const proven = await relayAt(700);                    // signs its clock; we are 700s slow by it
+  // …and a box that answers /status only, claiming a much smaller difference. Anyone who can answer an
+  // unauthenticated GET at an address this console dials can say this.
+  let base = '';
+  const srv = createServer((req, res) => {
+    if (new URL(req.url, base).pathname === '/status') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ ok: true, now: Math.floor(Date.now() / 1000) + 100 }));
+    }
+    res.writeHead(404); res.end('no');
+  });
+  await new Promise(r => srv.listen(0, '127.0.0.1', r));
+  srv.unref();
+  base = 'http://127.0.0.1:' + srv.address().port;
+
+  const c = console_([proven.base, base], sk, pub).api;
+  await c.measureRelaySkew();
+  const st = c.relaySkewState();
+  assert.equal(st.proven, true, 're-anchor: the signed proof was not read at all');
+  assert.equal(st.relays.filter(r => !r.proven).length, 1,
+    're-anchor: the /status-only box was not recorded as unproven, so this row is not about the rule');
+  assert.ok(Math.abs(st.skewSec + 700) <= 2,
+    'AN UNAUTHENTICATED GET JUST HELPED CHOOSE THIS CHURCH’S CLOCK. The pick is ' + st.skewSec + 's, not ' +
+    'the -700s the one relay that SIGNED its answer reported. `use = proven.length ? proven : all` is the ' +
+    'rule; a /status reading is a diagnostic to show a steward and is never an input to a stamp.');
+  const t = c.now();
+  assert.equal(stampAt(c, 'trinityone/x:7b', t) - t, 600,
+    'the stamp moved by ' + (stampAt(c, 'trinityone/x:7b', t) - t) + 's rather than the cap, so an unproven ' +
+    'box has reached the safeguarding documents by the back door.');
+  proven.stop();
+  try { srv.closeAllConnections?.(); } catch {}
+  srv.close();
+});
+
+// ══ 7c · THE RUNAWAY GUARD'S LOCAL CEILING, MEASURED RATHER THAN GREPPED ══════════════════════════════════
+test('7c · a runaway _lastStamp cannot push a stamp past this console’s OWN gate', () => {
+  // Row 8 covers the guard's corrected half. This one covers the LOCAL half behaviourally, because the only
+  // other thing holding it is a source-text match for `Math.min(localS + STAMP_CAP_SEC` — and a ceiling that
+  // was broken to `localS + STAMP_CAP_SEC * 10` would pass that and fail here.
+  const sk = generateSecretKey(), pub = getPublicKey(sk);
+  const c = console_(['ws://127.0.0.1:1/relay'], sk, pub).api;   // nothing measured: shift 0, both bases equal
+  const d = 'trinityone/x:7c';
+  const t = c.now();
+  // Drive _lastStamp above the ceiling the way a caller can: an explicit created_at is honoured as `want`.
+  const high = stampAt(c, d, t + 700);
+  assert.equal(high, t + 700, 're-anchor: an explicit created_at is no longer honoured, so nothing is primed');
+  // …now an ordinary write of the SAME document. last+1 would be t+701, which is past this console's own
+  // _authFuture; the guard must take the tie instead.
+  const next = stampAt(c, d, t);
+  assert.equal(c._authFuture({ created_at: next }), false,
+    'THE CONSOLE JUST STAMPED A DOCUMENT ITS OWN SUBSCRIPTION WILL THROW AWAY. `last + 1` climbed to ' +
+    next + ', which is ' + (next - c.now()) + 's ahead, and _authFuture refuses anything past ' +
+    'now() + _CLOCK_SKEW. The runaway guard must be measured against the LOCAL clock as well as the ' +
+    'corrected one, or a high-water mark left by an earlier write walks straight through it.');
+});
+
+// ══ 7d · THE PANEL'S INPUT SAYS WHETHER THE CORRECTION IS ACTUALLY ON ═════════════════════════════════════
+test('7d · relaySkewState says when relays disagree and the correction is therefore OFF', async () => {
+  // Scope §4: a spread beyond the cap must RAISE THE BANNER. The refusal shipped at stage 4; the banner did
+  // not, so the correction could be silently off under a green dot and "your clock matches your relays".
+  const sk = generateSecretKey(), pub = getPublicKey(sk);
+  const a = await relayAt(400);
+  const b = await relayAt(-700);
+  const c = console_([a.base, b.base], sk, pub).api;
+  await c.measureRelaySkew();
+  const st = c.relaySkewState();
+  assert.ok(st.spreadSec > st.capSec, 're-anchor: the two relays no longer disagree past the cap');
+  assert.equal(st.disagree, true,
+    'the panel is given no way to tell that the relays contradict each other, so it paints the measured ' +
+    'number as if it were in use. A correction that is switched off must say so on the screen that claims it.');
+  assert.equal(st.correcting, false,
+    'relaySkewState reports the correction as ON while _skewShift is refusing to apply it. The two must be ' +
+    'the same predicate, or the panel and the stamp disagree about what this console is doing.');
+  const t = c.now();
+  assert.equal(stampAt(c, 'trinityone/x:7d', t), t, 're-anchor: the correction was applied after all');
+  a.stop(); b.stop();
+});
+
+test('7e · …and a healthy measurement reports the correction as ON', async () => {
+  const sk = generateSecretKey(), pub = getPublicKey(sk);
+  const r = await relayAt(700);
+  const c = console_([r.base], sk, pub).api;
+  assert.equal(c.relaySkewState().correcting, false, 'an UNMEASURED console must not claim to be correcting');
+  await c.measureRelaySkew();
+  const st = c.relaySkewState();
+  assert.equal(st.disagree, false, 're-anchor: one relay cannot disagree with itself');
+  assert.equal(st.correcting, true,
+    'CONTROL: a proven, agreed, in-cap measurement reports the correction as OFF. Without this row the ' +
+    'assertion above passes with `correcting` hard-coded false and the panel warns for ever.');
+  r.stop();
 });
 
 // ══ 8 · §5.3 — _monotonic's memory outlives the correction, and that is the designed behaviour ════════════
@@ -355,29 +515,60 @@ test('10 · a measurement already in flight is AWAITED, not short-circuited with
 });
 
 // ══ 11 · RULE 2, MADE EXECUTABLE: the eight writers all take the bounded wait ══════════════════════════════
-test('11 · all eight safeguarding writers go through _skewGate, and nothing else does', () => {
+// ══ 11 · RULE 2, MADE EXECUTABLE: exactly these writers take the bounded wait ═════════════════════════════
+//
+// ⚠ CORRECTED 2026-09-26 AFTER AN AUDIT. This row used to name setStewards where the scope document (§4, §6
+// stage 4) names publishClearance, and to assert a bare count of nine — so the substitution was CEMENTED by
+// a test, and the commit message calling them "the eight safeguarding writers" was false. publishClearance
+// is the document the whole piece of work exists for: the measured incident is a clearance losing to a fast
+// clock. The list is written out now, each entry with the reason it is on it, and the count is derived from
+// the list rather than typed.
+test('11 · exactly the named writers take the bounded wait, and each is named with its reason', () => {
   const bare = stripComments(SHIP);
-  const EIGHT = [
-    ['setMinors(pubkeys) {', 'setMinors'],
-    ['setApproved(pubkeys, opts) {', 'setApproved'],
-    ['setGuardians(links) {', 'setGuardians'],
-    ['setStewards(pubkeys, caps, names) {', 'setStewards'],
-    ['async grantCheckinPermission(opts) {', 'grantCheckinPermission'],
-    ['revokeCheckinPermission(person) {', 'revokeCheckinPermission'],
-    ['async publishCheckinHelpers(opts) {', 'publishCheckinHelpers'],
-    ['revokeCheckinHelpers(session) {', 'revokeCheckinHelpers'],
+  // THE SCOPE DOCUMENT'S EIGHT, from §4: "setMinors, setApproved, setGuardians, publishClearance, and the
+  // four check-in writers".
+  const PLANNED = [
+    ['publishClearance(memberPub, status, urls) {', 'publishClearance',
+     'THE document the measured incident is about — a clearance losing to a fast clock'],
+    ['setMinors(pubkeys) {', 'setMinors', 'the church’s list of children'],
+    ['setApproved(pubkeys, opts) {', 'setApproved', 'cleared to work with children'],
+    ['setGuardians(links) {', 'setGuardians', 'the parent↔child map'],
+    ['async grantCheckinPermission(opts) {', 'grantCheckinPermission', 'a children’s-desk clearance'],
+    ['revokeCheckinPermission(person) {', 'revokeCheckinPermission', 'withdrawing one'],
+    ['async publishCheckinHelpers(opts) {', 'publishCheckinHelpers', 'who may hold a session key at the desk'],
+    ['revokeCheckinHelpers(session) {', 'revokeCheckinHelpers', 'withdrawing a session envelope'],
   ];
-  for (const [anchor, name] of EIGHT) {
+  // TWO ADDED DELIBERATELY, each meeting the scope document's own criterion — an authority or safeguarding
+  // document, written from a screen by a press, never on the boot path. Recorded as a decision rather than
+  // left as a difference somebody has to notice.
+  const ADDED = [
+    ['setStewards(pubkeys, caps, names) {', 'setStewards',
+     'the steward roster decides who may mark a child at all; owner-only, three button handlers in ' +
+     'app/stew-dashboard.jsx and no other caller'],
+    ['setNoPhoto(', 'setNoPhoto',
+     'the list the relay refuses a child’s photo from; written from the same Members screen, and its own ' +
+     'comment records a measured case of a lost write un-suppressing a photo silently'],
+  ];
+  for (const [anchor, name, why] of [...PLANNED, ...ADDED]) {
     const body = stripComments(fnBody(SHIP, anchor, name));
     assert.match(body, /_skewGate\(/,
-      name + ' no longer takes the bounded wait before its first stamp of a session. The scope document ' +
-      'gives it to the eight safeguarding writers and to nothing else: they are user-initiated from a ' +
-      'screen, never on the boot path, so a bounded wait is affordable there and nowhere else.');
+      name + ' no longer takes the bounded wait before its first stamp of a session (' + why + '). A write ' +
+      'made before the first measurement has answered is stamped from this laptop’s clock, and ' +
+      '_lastStamp then pins it for the rest of the session.');
   }
-  // …and to nothing else. Eight uses plus the definition.
+  // …and the back-fill loop takes it OUT HERE, before its batch timer exists, or the first member of the
+  // first slice absorbs the whole six seconds and a roster of children is reported unconfirmed.
+  const rc = stripComments(fnBody(SHIP, 'async _refreshClearancesNow(', '_refreshClearancesNow'));
+  assert.match(rc, /ensureSkew\(/,
+    'the clearance back-fill no longer waits for a measurement before it starts. publishClearance waits for ' +
+    'itself, but inside the batch — and _BATCH_MS is about six seconds, so the wait and the timeout are the ' +
+    'same length and every member of the first slice comes back UNCONFIRMED.');
+  // …and nothing else does. Derived from the lists above, not typed, so adding a writer to one without the
+  // other fails here rather than silently widening the set.
   const uses = (bare.match(/_skewGate\(/g) || []).length;
-  assert.equal(uses, 9,
-    'the console now has ' + uses + ' _skewGate sites (8 writers + 1 definition expected). A bounded wait ' +
-    'on a write that is not user-initiated can sit in front of a boot path, which is exactly what the ' +
-    'scope document refuses.');
+  assert.equal(uses, PLANNED.length + ADDED.length + 1,
+    'the console has ' + uses + ' _skewGate sites; ' + (PLANNED.length + ADDED.length) + ' writers plus the ' +
+    'definition were expected. A bounded wait on a write that is not user-initiated can sit in front of a ' +
+    'boot path, which is what the scope document refuses — and a writer QUIETLY SWAPPED for another is what ' +
+    'this row was rewritten to stop.');
 });

@@ -219,6 +219,29 @@ const texts = (n, out = []) => {
 
 const ROW = 'wss://box.example.ts.net/relay';
 
+// The SHIPPED `relaySkew()` export, with the SHIPPED relaySkewState behind it, over a measurement state this
+// test writes. Everything between the panel and `_relaySkewSec` is real code out of vendor/steward.js.
+function shippedRelaySkew(state) {
+  const parts = [
+    stmt(SHIP, 'var _relaySkewSec = 0', '_relaySkewSec'),
+    stmt(SHIP, 'var _skewMeasuredAt = 0', '_skewMeasuredAt'),
+    stmt(SHIP, 'var _skewProven = false', '_skewProven'),
+    stmt(SHIP, 'var _skewSpreadSec = 0', '_skewSpreadSec'),
+    stmt(SHIP, 'var _skewByRelay =', '_skewByRelay'),
+    stmt(SHIP, 'var CLOCK_FAULT_SEC =', 'CLOCK_FAULT_SEC'),
+    stmt(SHIP, 'var SKEW_CAP_SEC =', 'SKEW_CAP_SEC'),
+    fnBody(SHIP, 'function clockLooksWrong', 'clockLooksWrong'),
+    fnBody(SHIP, 'function relaySkewState', 'relaySkewState'),
+  ].join('\n');
+  const body = parts
+    + '\n_relaySkewSec = S.skewSec; _skewMeasuredAt = S.measuredAt; _skewProven = S.proven;'
+    + '\n_skewSpreadSec = S.spreadSec;'
+    + '\nfor (const r of (S.relays || [])) _skewByRelay.set(r.url, { sec: r.sec, at: 1, proven: r.proven });'
+    + '\nconst _api = { ' + fnBody(SHIP, '    relaySkew() {', 'the relaySkew() export') + ' };'
+    + '\nreturn () => _api.relaySkew();';
+  return new Function('S', body)(state);
+}
+
 async function panel(skewState) {
   const { React, reset, flush } = mini();
   // BOTH HALVES, COMPILED TOGETHER. The hook comes out of steward-root.jsx and the card out of
@@ -235,8 +258,15 @@ async function panel(skewState) {
       [tmp, '--jsx=transform', '--format=esm', '--log-level=error'], { encoding: 'utf8' });
   } finally { rmSync(tmp, { force: true }); }
   const measured = [];
+  // ⚠ THE THIRD LINK, AND IT USED TO BE A STUB. This panel reaches the engine through exactly one name —
+  // `window.Steward.relaySkew()` — and a literal `relaySkew: () => skewState` covers the hook and the card
+  // while leaving that name uncovered: renaming the export in src/steward.src.js left the panel permanently
+  // blank and this file 11/11. So the member is LIFTED OUT OF THE SHIPPED BUNDLE, along with relaySkewState
+  // and the measurement state it reads, and the row's fixture is written into that state rather than
+  // returned past it. Rename the export and this throws; change what relaySkewState reports and the rows
+  // below see it.
   const Steward = {
-    relaySkew: () => skewState,
+    relaySkew: shippedRelaySkew(skewState),
     measureRelaySkew: async () => { measured.push(1); return skewState.skewSec; },
     relayNameFor: () => '', ownRelay: () => '', canRemoveRelay: () => true, removeRelay: () => {},
     registerWithRelay: async () => {},
@@ -288,6 +318,37 @@ test('…and a console whose clock is BEHIND is not described as ahead', async (
   assert.match(seen, /75s/, 'a slow clock is not reported at all');
   assert.match(seen, /behind/, 'a slow console is described as fast — the direction is hard-coded');
   assert.ok(!/ahead of/.test(seen), 'both directions are shown at once: ' + seen.slice(0, 300));
+});
+
+test('…and RELAYS THAT CONTRADICT EACH OTHER say so, instead of painting a calm screen', async () => {
+  // Scope §4 says a spread beyond the cap must RAISE THE BANNER, and until 2026-09-26 nothing did: the
+  // correction refused silently while this card showed a green dot and "This console's clock matches your
+  // relays (0s)". That is the calmest possible way to say "the thing protecting your safeguarding documents
+  // is switched off". The state comes through the SHIPPED relaySkewState, so `disagree` is computed by the
+  // console rather than asserted by this test.
+  const p = await panel({ skewSec: 0, measuredAt: 1758800000000, proven: true, spreadSec: 1100, capSec: 900,
+                          clockIsWrong: false,
+                          relays: [{ url: ROW, sec: 400, proven: true }, { url: ROW + '2', sec: -700, proven: true }] });
+  const seen = texts(await p.draw()).join(' | ');
+  assert.match(seen, /disagree/i,
+    'THE PANEL DOES NOT SAY THE CORRECTION IS OFF. Two relays contradicting each other by more than the cap ' +
+    'is not a device-clock fault the console will quietly fix — it refuses, and a steward who is not told ' +
+    'has no way to know the boxes need their clocks checked. Screen read: ' + seen.slice(0, 400));
+  assert.match(seen, /1100s/, 'the disagreement is mentioned without its size, so nobody can judge it');
+  assert.match(seen, /nothing is being corrected|not being corrected/i,
+    'the screen names the disagreement but not its consequence. The fact a steward needs is that stamps are ' +
+    'going out uncorrected right now.');
+});
+
+test('…and an unsigned reading says nothing is corrected from it', async () => {
+  const p = await panel({ skewSec: 400, measuredAt: 1758800000000, proven: false, spreadSec: 0, capSec: 900,
+                          clockIsWrong: true, relays: [{ url: ROW, sec: 400, proven: false }] });
+  const seen = texts(await p.draw()).join(' | ');
+  assert.match(seen, /unsigned/i, 're-anchor: the unsigned reading is no longer marked as one');
+  assert.match(seen, /nothing is corrected/i,
+    'the screen says the reading is unsigned without saying what follows from it. "Unsigned" is jargon; ' +
+    '"nothing is corrected from it" is the fact — and a steward reading a 400s drift needs to know their ' +
+    'writes are still going out on this laptop’s clock.');
 });
 
 test('…and an UNMEASURED clock claims nothing at all', async () => {

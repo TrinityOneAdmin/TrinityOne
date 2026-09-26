@@ -16045,6 +16045,14 @@ zoo`.split("\n");
       spreadSec: _skewSpreadSec,
       capSec: SKEW_CAP_SEC,
       clockIsWrong: clockLooksWrong(),
+      // IS THE CORRECTION ACTUALLY ON? The scope document (§4) says a spread beyond the cap must raise the
+      // banner, and until 2026-09-26 nothing did: _skewShift refused silently while the panel painted a green
+      // dot and "your clock matches your relays", which is the calmest possible way to say "the thing you were
+      // told protects this church is switched off". A steward cannot act on a number that is not being used.
+      // `disagree` is the reason; `correcting` is the fact, and it is the same predicate _skewShift applies —
+      // read off the state rather than re-derived, so the panel and the stamp cannot drift apart.
+      disagree: Math.abs(_skewSpreadSec) > SKEW_CAP_SEC,
+      correcting: !!_skewMeasuredAt && !!_skewProven && Math.abs(_skewSpreadSec) <= SKEW_CAP_SEC,
       relays: [..._skewByRelay.entries()].map(([url, v]) => ({ url, sec: v.sec, proven: v.proven }))
     };
   }
@@ -20073,7 +20081,7 @@ zoo`.split("\n");
       _requireTrustedView("photo settings");
       if (!sk) return Promise.resolve(null);
       const list = [...new Set((pubkeys || []).filter(Boolean))];
-      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", NOPHOTO_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list }) }, sk));
+      return _skewGate(() => publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", NOPHOTO_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list }) }, sk)));
     },
     // Tell ONE member what their own safeguarding status is, sealed to them. This exists so a member's app can
     // know whether THEY are a child or a cleared adult without the church publishing a cleartext list of its
@@ -20094,7 +20102,7 @@ zoo`.split("\n");
         return Promise.resolve(null);
       }
       const cp = actingChurch || pub;
-      return Promise.resolve(_publishToRelays(feChurch({ kind: 30078, created_at: now(), tags: [["d", CLEARANCE_D + mp], ["t", NET], ["p", mp], ["church", cp]], content: ct }), urls)).then((r) => {
+      return Promise.resolve(_skewGate(() => _publishToRelays(feChurch({ kind: 30078, created_at: now(), tags: [["d", CLEARANCE_D + mp], ["t", NET], ["p", mp], ["church", cp]], content: ct }), urls))).then((r) => {
         if (r) {
           try {
             _clearanceSent.set(mp, { minor: !!(status && status.minor), cleared: !!(status && status.cleared), guardians: guards, at: Date.now(), urls: urls && urls.length ? urls.slice() : null });
@@ -20160,6 +20168,11 @@ zoo`.split("\n");
     },
     async _refreshClearancesNow(memberPubs, minors, approved, guardians) {
       if (_viewingNetwork()) return { results: [], failed: 0, skipped: 0, total: 0, unverified: false };
+      try {
+        const _w = ensureSkew({ timeoutMs: SKEW_WAIT_MS });
+        if (_w) await _w;
+      } catch (e) {
+      }
       const mins = new Set((minors || []).map((x) => String(x || "").toLowerCase()));
       const appr = new Set((approved || []).map((x) => String(x || "").toLowerCase()));
       let pubs = [...new Set((memberPubs || []).filter(Boolean))];

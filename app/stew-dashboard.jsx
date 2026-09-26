@@ -388,8 +388,21 @@ function publishErrorMessage(reason, evt, opts) {
     return { wrongChurch: true, sticky: true,
       msg: 'Changes weren’t saved — your relays aren’t carrying this church. Open Settings → Relays and use “A relay is refusing our posts”, then reload this page. (If you have just pointed this console at a relay set up for a different church, that would do it too.)' };
   }
+  // ⚠ BOTH HALVES OF THIS SENTENCE WERE WRONG, and the second one sent stewards round a loop that cannot end.
+  // "Someone else saved" is one of two causes and not the commoner one: the relay keeps whichever copy has
+  // the LATER created_at, so a copy THIS console wrote from a clock that was running ahead — before the
+  // relay-clock correction landed, or in a session before it restarted — beats the corrected write that
+  // follows. And "reload the page and make your change again" cannot work in that case: the stamp is
+  // derived, not typed, so a reload produces the same losing date. Measured against a real gateway,
+  // 2026-09-26: session one writes uncorrected, the console restarts, session two measures +601s and
+  // writes the correction, and the relay answers OK:false "a newer version of this is already stored".
+  //
+  // WHAT IS TRUE, and it is something a steward can act on: the stored copy stops winning as soon as real
+  // time passes the date it carries. That is bounded — put() in scripts/event-store.mjs refuses anything
+  // more than 900s ahead of the relay's own clock — so the wait is at most about fifteen minutes and then
+  // the change saves normally. Saying "reload" instead cost the steward that fact.
   if (/newer version/i.test(r)) return { wrongChurch: false, sticky: true,
-    msg: 'Someone else saved a newer version of this while you were editing. Reload the page and make your change again — trying again as-is won’t help.' };
+    msg: 'A newer version of this is already stored, so your change wasn’t saved. Either another console saved while you were editing, or a copy was stamped from a clock running ahead — including this console’s own, before it was corrected. Reloading won’t change that. The stored copy stops winning once the time catches up with its date, which is at most about fifteen minutes; make the change again then.' };
   if (/deleted by its author/i.test(r)) return { wrongChurch: false, sticky: true,
     msg: 'That item has been deleted, so it can’t be changed. Create it again if you still need it.' };
   if (/too far in the future/i.test(r)) return { wrongChurch: false, sticky: true,
@@ -4551,19 +4564,27 @@ function DashRelaysCard() {
             measurement, and it is the figure a steward reads back when something will not save.
             NOTHING IS CORRECTED FOR THIS. Stage 1 measures; correcting stamps is a later, separate change. */}
         {skew && skew.measuredAt ? (
-          <div style={{ display: 'flex', gap: 9, alignItems: 'flex-start', marginTop: 14, padding: '10px 13px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid ' + (skew.clockIsWrong ? 'var(--clay)' : 'var(--line)') }}>
+          <div style={{ display: 'flex', gap: 9, alignItems: 'flex-start', marginTop: 14, padding: '10px 13px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid ' + ((skew.clockIsWrong || skew.disagree) ? 'var(--clay)' : 'var(--line)') }}>
             {/* --clay-ink / --sage-ink, not the bare brand tokens: console-ink-colours-are-covered.test.mjs
                 keeps an inventory of the bare ones and refuses NEW entries (white on --clay is 4.36:1,
                 under WCAG 1.4.3). Measured — this line was flagged when it was written. */}
-            <span style={{ width: 8, height: 8, borderRadius: 999, background: skew.clockIsWrong ? 'var(--clay-ink)' : 'var(--sage-ink)', flexShrink: 0, marginTop: 5 }} />
+            <span style={{ width: 8, height: 8, borderRadius: 999, background: (skew.clockIsWrong || skew.disagree) ? 'var(--clay-ink)' : 'var(--sage-ink)', flexShrink: 0, marginTop: 5 }} />
             <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55 }}>
               <b style={{ color: 'var(--ink)' }}>This console’s clock</b>{' '}
               {skew.skewSec === 0
                 ? 'matches your relays (0s).'
                 : (Math.abs(skew.skewSec) + 's ' + (skew.skewSec > 0 ? 'ahead of' : 'behind') + ' your relays.')}
-              {skew.proven ? '' : ' Read from an older relay, so unsigned.'}
+              {skew.proven ? '' : ' Read from an older relay, so unsigned — nothing is corrected from a reading a relay cannot sign.'}
               {skew.clockIsWrong
                 ? ' At this drift a relay can refuse what you save, and members can read the wrong answer. Set this device’s date and time automatically.'
+                : ''}
+              {/* THE CORRECTION CAN BE OFF WHILE EVERYTHING LOOKS CALM. Relays that contradict each other are
+                  not a device-clock fault, so the console refuses to correct from them — and until this line
+                  existed it refused in silence, under a green dot and "matches your relays". Scope §4 says
+                  the spread must raise the banner; this is that. It names the boxes' disagreement, not the
+                  steward's clock, because the steward's clock is not what is wrong. */}
+              {skew.disagree
+                ? ' Your relays disagree with each other by ' + skew.spreadSec + 's, which is more than the ' + skew.capSec + 's this console will ever correct by — so nothing is being corrected at all. Check the date and time on each relay box.'
                 : ''}
             </div>
           </div>

@@ -1495,6 +1495,14 @@ function relaySkewState() {
     spreadSec: _skewSpreadSec,
     capSec: SKEW_CAP_SEC,
     clockIsWrong: clockLooksWrong(),
+    // IS THE CORRECTION ACTUALLY ON? The scope document (§4) says a spread beyond the cap must raise the
+    // banner, and until 2026-09-26 nothing did: _skewShift refused silently while the panel painted a green
+    // dot and "your clock matches your relays", which is the calmest possible way to say "the thing you were
+    // told protects this church is switched off". A steward cannot act on a number that is not being used.
+    // `disagree` is the reason; `correcting` is the fact, and it is the same predicate _skewShift applies —
+    // read off the state rather than re-derived, so the panel and the stamp cannot drift apart.
+    disagree: Math.abs(_skewSpreadSec) > SKEW_CAP_SEC,
+    correcting: !!_skewMeasuredAt && !!_skewProven && Math.abs(_skewSpreadSec) <= SKEW_CAP_SEC,
     relays: [..._skewByRelay.entries()].map(([url, v]) => ({ url, sec: v.sec, proven: v.proven })),
   };
 }
@@ -6376,7 +6384,11 @@ window.Steward = {
     // every phone went on showing the CHURCH'S list while the relay obeyed the steward's. MEASURED, in this
     // order: the church suppresses Amy, Amy's photo is refused; a steward writes a list without Amy, and
     // AMY'S PHOTO IS ACCEPTED AGAIN — with nothing on any screen saying so.
-    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', NOPHOTO_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list }) }, sk));
+    // _skewGate, added 2026-09-26 with publishClearance. This is the list the relay refuses a child's
+    // photo from, it is written from the same Members screen by the same press, and losing its race
+    // un-suppresses a photo with nothing on any screen saying so — the failure the comment above
+    // records as MEASURED. Same criterion as the plan's eight: user-initiated, never on the boot path.
+    return _skewGate(() => publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', NOPHOTO_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list }) }, sk)));
   },
   // Tell ONE member what their own safeguarding status is, sealed to them. This exists so a member's app can
   // know whether THEY are a child or a cleared adult without the church publishing a cleartext list of its
@@ -6437,7 +6449,12 @@ window.Steward = {
     // second a church last edited its list of children, and told the member themselves — a fact the read gate
     // deliberately withholds from them. When delegated stewards get safeguarding, the revision check belongs
     // on the RELAY, which holds the list and can refuse a stale write outright. AUDIT-8.
-    return Promise.resolve(_publishToRelays(feChurch({ kind: 30078, created_at: now(), tags: [['d', CLEARANCE_D + mp], ['t', NET], ['p', mp], ['church', cp]], content: ct }), urls))
+    // _skewGate: THE BOUNDED WAIT, and this is the writer it exists for. The measured incident above is a
+    // clearance losing to a fast clock, so a clearance stamped before the first measurement has answered
+    // is the one write that must not go out uncorrected. Latched once per session and bounded, so the
+    // back-fill loop below pays it at most once — and _refreshClearancesNow awaits it before its batch
+    // timer starts, so the wait cannot be mistaken for a batch that timed out.
+    return Promise.resolve(_skewGate(() => _publishToRelays(feChurch({ kind: 30078, created_at: now(), tags: [['d', CLEARANCE_D + mp], ['t', NET], ['p', mp], ['church', cp]], content: ct }), urls)))
       .then(r => {
         // Remember what we just put on the wire, so a second writer moments later can tell it is redundant
         // WITHOUT waiting for the relay to echo it back. The read-before-write below closes the steady-state
@@ -6512,6 +6529,13 @@ window.Steward = {
     // AUDIT-8 test written to cover _viewingNetwork — which nothing had exercised, because all three harnesses
     // set `pub === churchPub` and the guard was constant-false.
     if (_viewingNetwork()) return { results: [], failed: 0, skipped: 0, total: 0, unverified: false };
+    // THE BOUNDED WAIT IS TAKEN HERE, ONCE, BEFORE THE BATCH TIMER EXISTS. publishClearance takes it too
+    // — it is on the public API and a future caller may reach it directly — but the latch means whoever
+    // arrives first pays, and it must not be the first member of the first batch: `_BATCH_MS` below is
+    // about six seconds, so a six-second wait inside the first write would consume the whole slice and
+    // report a roster's worth of children as UNCONFIRMED. Awaiting it out here costs the same wait and
+    // spends it where nothing is being timed.
+    try { const _w = ensureSkew({ timeoutMs: SKEW_WAIT_MS }); if (_w) await _w; } catch (e) {}
     const mins = new Set((minors || []).map(x => String(x || '').toLowerCase()));
     const appr = new Set((approved || []).map(x => String(x || '').toLowerCase()));
     let pubs = [...new Set((memberPubs || []).filter(Boolean))];

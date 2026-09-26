@@ -146,6 +146,12 @@ function consoleSide(ws) {
     churchPub: church.pub,
     _careRoster: new Set(), _careRosterKnown: true,
     now, publish,
+    // Stage 4's bounded wait, added to publishClearance and setNoPhoto after the 2026-09-26 audit.
+    // Pass-through, which is what the shipped _skewGate does once a measurement has answered or been
+    // given up on: it runs `fn` synchronously and returns its result. The wait itself is measured in
+    // scripts/a-slow-console-does-not-write-past-its-own-gate.test.mjs; here it must decide nothing.
+    _skewGate: (fn) => Promise.resolve(fn()),
+    ensureSkew: () => null, SKEW_WAIT_MS: 6000,
     feChurch: (t) => finalizeEvent(t, church.sk),
     toPubHex: (p) => (/^[0-9a-f]{64}$/i.test(p) ? p.toLowerCase() : null),
     [encName]: (s, k) => nip44v2.encrypt(s, k),
