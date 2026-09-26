@@ -108,7 +108,9 @@ export function relayAddrKey(u) {
   } catch { return str.toLowerCase().replace(/^wss?:\/\//, '').replace(/\/+$/, ''); }
 }
 
-// → { relayPub, url } when this box proved it holds that key AT THE ADDRESS WE DIALLED, or null.
+// → { relayPub, url, at } when this box proved it holds that key AT THE ADDRESS WE DIALLED, or null.
+// `at` is the proof event's own `created_at` — the relay's clock, signed. It is REPORTED, never consulted:
+// see the note beside the return, and the "NO CLOCK CHECK HERE" block below it.
 //
 // FAILS CLOSED ON EVERYTHING ELSE — unreachable, non-200, unparseable, wrong kind, bad signature, a nonce
 // that is not the one we sent, a timestamp outside the window. There is no partial answer and no "probably":
@@ -169,6 +171,17 @@ export async function verifyRelayIdentity(wssUrl) {
     // call, whatever its clock says. The relay's own kind-27235 checks (_exportAuth, _syncAuth, the
     // relay-name claims) still apply their 900s window to the things they protect — those are one-way
     // assertions with no nonce, so a clock is the only freshness they have. This one has better.
-    return { relayPub: String(ev.pubkey).toLowerCase(), url: tag('relay') };
+    // `at` IS RETURNED AND NEVER CONSULTED HERE. Additive, 2026-09-26, stage 1 of the relay-corrected-time
+    // work (reference/SCOPE-RELAY-CORRECTED-TIME-2026-09-26.md §4). It is the relay's own clock, SIGNED by
+    // the relay's identity key and bound to a nonce we minted this call — which is why it is worth having
+    // and why `/status`'s `now` is not: that is a bare string over an unauthenticated GET, exactly what
+    // CLAUDE.md rule 10 refuses for `relayPub`.
+    //
+    // READ THIS BEFORE ADDING A COMPARISON. Returning a number changes no gate; comparing it to OUR clock
+    // would re-create the failure the block below records, and there is a test that will stop you
+    // (scripts/a-slow-clock-does-not-lose-the-church.test.mjs asserts this function reads no clock of its
+    // own). Whoever consumes `at` decides what to do with it; this function still admits every relay it
+    // admitted before, at every skew, and refuses exactly the same ones.
+    return { relayPub: String(ev.pubkey).toLowerCase(), url: tag('relay'), at: Number(ev.created_at) || 0 };
   } catch { return null; }
 }

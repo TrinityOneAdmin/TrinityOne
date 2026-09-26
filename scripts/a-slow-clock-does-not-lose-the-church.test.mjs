@@ -91,8 +91,30 @@ test('no freshness WINDOW has been reintroduced into the shipped verifier', () =
     assert.equal(/RELAY_PROOF_WINDOW_SEC/.test(body), false,
       `${f}: verifyRelayIdentity applies a freshness window again — a phone with a skewed clock will be ` +
       `locked out of every relay, and told to speak to a leader`);
+    // ONE OCCURRENCE OF created_at IS ALLOWED, AND ONLY ONE SHAPE OF IT. 2026-09-26, stage 1 of the
+    // relay-corrected-time work: the function now REPORTS the proof's own `created_at` as `at` on its
+    // return, so a console can measure its clock against a relay's from a SIGNED number instead of from
+    // `/status`'s unauthenticated `now`. Reporting a value is not a gate — the tests below still prove a
+    // ±900s and a −86400s proof are admitted.
+    //
+    // The allowance is deliberately narrow: exactly the returned-field form, removed once, and then the
+    // ORIGINAL blanket assertion runs over what is left. Anything that reads the stamp for a second purpose
+    // — a comparison, a variable, a helper — leaves a `created_at` behind and fails here, which is the whole
+    // point. Do not widen this to a bare /created_at/ allowance.
+    const RETURNS_AT = /\bat:\s*Number\(ev\.created_at\)\s*\|\|\s*0/;
+    const hits = body.match(/created_at/g) || [];
+    if (hits.length) {
+      assert.equal(hits.length, 1,
+        `${f}: verifyRelayIdentity mentions created_at ${hits.length} times. Exactly one is allowed — the ` +
+        `additive \`at:\` on the return. A second use is a clock being consulted, and a clock consulted here ` +
+        `locks a skewed phone out of every relay in its church`);
+      assert.match(body, RETURNS_AT,
+        `${f}: verifyRelayIdentity's one use of created_at is not the additive returned field. If a clock is ` +
+        `genuinely needed here, that is a decision to argue for in the commit, not to slip past this test`);
+    }
+    const stripped = body.replace(RETURNS_AT, '');
     for (const clock of [/Date\.now\s*\(/, /created_at/, /\bnowSec\b/, /Math\.abs\s*\([^)]*-/]) {
-      assert.equal(clock.test(body), false,
+      assert.equal(clock.test(stripped), false,
         `${f}: verifyRelayIdentity reads a clock (${clock}). It verifies a signature over a nonce WE chose, ` +
         `so it needs no notion of time — and any comparison against one locks out a phone whose clock is off, ` +
         `which is the failure this whole file exists for. If a clock is ever genuinely needed here, that is a ` +

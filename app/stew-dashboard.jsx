@@ -4400,6 +4400,12 @@ function useRelayBackupState() {
 //    is its own page now; SETTINGS_GROUPS in DashSettings is the list of where each of them went.
 function DashRelaysCard() {
   const { status, backup } = useRelayBackupState();
+  // THE CONSOLE'S CLOCK, measured against the relays that store what it writes. Stage 1 of
+  // reference/SCOPE-RELAY-CORRECTED-TIME-2026-09-26.md: measured and SHOWN, corrected nowhere. It belongs on
+  // this card because the relays are the thing it is measured against and the thing a wrong clock breaks.
+  // Guarded because several tests render this card with their own `window`, and a missing hook must leave the
+  // panel working rather than throw over the whole relay list.
+  const skew = window.useStewardClockSkew ? window.useStewardClockSkew() : null;
   const host = (typeof location !== 'undefined' && location.host) || '';
   const online = status.filter(r => r.status === 'on').length;
   const checking = status.length === 0;
@@ -4539,6 +4545,29 @@ function DashRelaysCard() {
             );
           })}
         </div>
+        {/* THIS CONSOLE'S CLOCK against its relays'. Shown only once something has actually answered:
+            `measuredAt: 0` is "we do not know", and an unmeasured clock must not be painted as a correct
+            one. The seconds are printed as a number on purpose — "in step" is a judgement, the figure is the
+            measurement, and it is the figure a steward reads back when something will not save.
+            NOTHING IS CORRECTED FOR THIS. Stage 1 measures; correcting stamps is a later, separate change. */}
+        {skew && skew.measuredAt ? (
+          <div style={{ display: 'flex', gap: 9, alignItems: 'flex-start', marginTop: 14, padding: '10px 13px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid ' + (skew.clockIsWrong ? 'var(--clay)' : 'var(--line)') }}>
+            {/* --clay-ink / --sage-ink, not the bare brand tokens: console-ink-colours-are-covered.test.mjs
+                keeps an inventory of the bare ones and refuses NEW entries (white on --clay is 4.36:1,
+                under WCAG 1.4.3). Measured — this line was flagged when it was written. */}
+            <span style={{ width: 8, height: 8, borderRadius: 999, background: skew.clockIsWrong ? 'var(--clay-ink)' : 'var(--sage-ink)', flexShrink: 0, marginTop: 5 }} />
+            <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55 }}>
+              <b style={{ color: 'var(--ink)' }}>This console’s clock</b>{' '}
+              {skew.skewSec === 0
+                ? 'matches your relays (0s).'
+                : (Math.abs(skew.skewSec) + 's ' + (skew.skewSec > 0 ? 'ahead of' : 'behind') + ' your relays.')}
+              {skew.proven ? '' : ' Read from an older relay, so unsigned.'}
+              {skew.clockIsWrong
+                ? ' At this drift a relay can refuse what you save, and members can read the wrong answer. Set this device’s date and time automatically.'
+                : ''}
+            </div>
+          </div>
+        ) : null}
         {/* Only after a relay has actually refused a write. Named for the symptom the steward has, not for
             the mechanism — "register with the relay's allow-list" means nothing to someone whose actual
             problem is that their posts aren't saving. */}

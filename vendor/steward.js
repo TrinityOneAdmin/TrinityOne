@@ -6507,7 +6507,7 @@
       };
       if (tag("nonce").toLowerCase() !== nonce) return null;
       if (relayAddrKey(tag("relay")) !== relayAddrKey(wssUrl)) return null;
-      return { relayPub: String(ev.pubkey).toLowerCase(), url: tag("relay") };
+      return { relayPub: String(ev.pubkey).toLowerCase(), url: tag("relay"), at: Number(ev.created_at) || 0 };
     } catch {
       return null;
     }
@@ -15930,6 +15930,103 @@ zoo`.split("\n");
     }
   }
   var NO_NETWORK_RELAY = "no-network-relay";
+  var _relaySkewSec = 0;
+  var _skewMeasuredAt = 0;
+  var _skewProven = false;
+  var _skewSpreadSec = 0;
+  var _skewMeasuring = false;
+  var _skewByRelay = /* @__PURE__ */ new Map();
+  var CLOCK_FAULT_SEC = 300;
+  var SKEW_CAP_SEC = 900;
+  function clockLooksWrong() {
+    return !!_skewMeasuredAt && Math.abs(_relaySkewSec) >= CLOCK_FAULT_SEC;
+  }
+  function _pickSkew(list) {
+    const a = list.slice().sort((x, y) => x - y);
+    if (!a.length) return 0;
+    if (a.length === 2) return Math.abs(a[0]) <= Math.abs(a[1]) ? a[0] : a[1];
+    return a[a.length - 1 >> 1];
+  }
+  async function measureRelaySkew(preferUrl) {
+    if (_skewMeasuring) return _relaySkewSec;
+    _skewMeasuring = true;
+    try {
+      const cands = [];
+      const add2 = (u) => {
+        const v = String(u || "");
+        if (v && !cands.includes(v)) cands.push(v);
+      };
+      add2(preferUrl);
+      try {
+        relays().forEach(add2);
+      } catch (e) {
+      }
+      try {
+        relaysRaw().forEach(add2);
+      } catch (e) {
+      }
+      for (const url of cands) {
+        let proof = null;
+        try {
+          proof = await verifyRelayIdentity(url);
+        } catch (e) {
+          proof = null;
+        }
+        if (proof && Number(proof.at) > 0) {
+          _skewByRelay.set(url, { sec: Math.round(Date.now() / 1e3 - Number(proof.at)), at: Date.now(), proven: true });
+          continue;
+        }
+        const base = String(url).replace(/^wss:/i, "https:").replace(/^ws:/i, "http:").replace(/\/relay\/?$/i, "").replace(/\/+$/, "");
+        if (!/^https?:\/\/.+/i.test(base)) continue;
+        try {
+          const r = await fetch(base + "/status", { cache: "no-store", signal: AbortSignal.timeout(6e3) });
+          if (!r.ok) continue;
+          const j = await r.json();
+          if (!j || typeof j.now !== "number") continue;
+          _skewByRelay.set(url, { sec: Math.round(Date.now() / 1e3 - j.now), at: Date.now(), proven: false });
+        } catch (e) {
+        }
+      }
+      const all = [..._skewByRelay.values()];
+      const proven = all.filter((v) => v.proven);
+      const use = proven.length ? proven : all;
+      if (!use.length) return _relaySkewSec;
+      const secs = use.map((v) => v.sec);
+      _relaySkewSec = _pickSkew(secs);
+      _skewSpreadSec = Math.max(...secs) - Math.min(...secs);
+      _skewProven = !!proven.length;
+      _skewMeasuredAt = Date.now();
+      return _relaySkewSec;
+    } catch (e) {
+      return _relaySkewSec;
+    } finally {
+      _skewMeasuring = false;
+    }
+  }
+  function relaySkewState() {
+    return {
+      skewSec: _relaySkewSec,
+      measuredAt: _skewMeasuredAt,
+      proven: _skewProven,
+      spreadSec: _skewSpreadSec,
+      capSec: SKEW_CAP_SEC,
+      clockIsWrong: clockLooksWrong(),
+      relays: [..._skewByRelay.entries()].map(([url, v]) => ({ url, sec: v.sec, proven: v.proven }))
+    };
+  }
+  try {
+    setTimeout(() => {
+      measureRelaySkew().catch(() => {
+      });
+    }, 2500);
+    window.addEventListener("steward-relay-returned", () => {
+      setTimeout(() => {
+        measureRelaySkew().catch(() => {
+        });
+      }, 3e3);
+    });
+  } catch (e) {
+  }
   function _blobBase() {
     const r = ownRelay();
     return r.replace(/^wss:\/\//i, "https://").replace(/^ws:\/\//i, "http://").replace(/\/relay\/?$/i, "");
@@ -23655,6 +23752,21 @@ zoo`.split("\n");
         }
       }
       return picks;
+    },
+    // HOW FAR OUT IS THIS CONSOLE'S CLOCK, against the relays that will store what it writes. Measurement
+    // only — see the block above _blobBase(). Nothing here corrects a stamp, and nothing reads either of
+    // these to decide anything; the Relays panel shows the number so a steward can act on a clock that was
+    // previously invisible to everybody.
+    // CALLERS (rule 2): app/steward-root.jsx `useStewardClockSkew`, read by DashRelaysCard in
+    // app/stew-dashboard.jsx. No writer, no gate and no publish path calls any of the three.
+    measureRelaySkew(preferUrl) {
+      return measureRelaySkew(preferUrl);
+    },
+    relaySkew() {
+      return relaySkewState();
+    },
+    clockLooksWrong() {
+      return clockLooksWrong();
     },
     // probe each relay with a throwaway WS; resolves [{ url, status:'on'|'off', ms, member }]
     //

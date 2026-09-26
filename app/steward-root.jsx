@@ -313,6 +313,34 @@ function useStewardRelays() {
 }
 window.useStewardRelays = useStewardRelays;
 
+// HOW FAR OUT THIS CONSOLE'S CLOCK IS, against the relays that store what it writes. Measure only — stage 1
+// of reference/SCOPE-RELAY-CORRECTED-TIME-2026-09-26.md. Nothing here corrects a timestamp; the engine side
+// (src/steward.src.js, above _blobBase) says the same at more length.
+//
+// Re-measured when a relay comes back, because that is when the answer can change and when the engine is
+// already awake, and on a slow timer so a console left open overnight is not showing this morning's number.
+// Five minutes, not thirty seconds: each measurement dials every candidate relay for a signed proof.
+// CALLER (rule 2): DashRelaysCard in app/stew-dashboard.jsx. Nothing else reads it.
+function useStewardClockSkew() {
+  const [skew, setSkew] = useSt(null);
+  useStE(() => {
+    let alive = true;
+    const read = () => { try { const s = window.Steward.relaySkew ? window.Steward.relaySkew() : null; if (alive && s) setSkew(s); } catch (e) {} };
+    const measure = () => {
+      try {
+        const p = window.Steward.measureRelaySkew ? window.Steward.measureRelaySkew() : null;
+        if (p && typeof p.then === 'function') p.then(read, read); else read();
+      } catch (e) { read(); }
+    };
+    measure();
+    const t = setInterval(() => { if (typeof document === 'undefined' || document.visibilityState === 'visible') measure(); }, 300000);
+    window.addEventListener('steward-relay-returned', measure);
+    return () => { alive = false; clearInterval(t); window.removeEventListener('steward-relay-returned', measure); };
+  }, []);
+  return skew;
+}
+window.useStewardClockSkew = useStewardClockSkew;
+
 // the active identity's own profile (name etc.) + npub — church, or a network when toggled
 function useStewardChurch() {
   const idv = useStewardIdv();

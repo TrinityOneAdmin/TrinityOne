@@ -1320,6 +1320,122 @@ function relays() { try { return _gate.admit(relaysRaw(), pub); } catch (e) { re
 // A publish that had candidates and none of them proved is not "no relay is configured", and the steward has
 // to be told which. Stable prefix; the console has no general write queue and this item does not add one.
 const NO_NETWORK_RELAY = 'no-network-relay';
+
+// ── HOW FAR OUT IS THIS CONSOLE'S CLOCK? MEASURE ONLY — NOTHING HERE CORRECTS ANYTHING ──────────────────
+//
+// Stage 1 of reference/SCOPE-RELAY-CORRECTED-TIME-2026-09-26.md. Read §4 before changing any of it.
+//
+// WHY A CONSOLE NEEDS THIS AT ALL. Two machines write the same church document and the app decides which
+// wins by which was stamped LATER — off each machine's own clock. A console eleven minutes fast writes
+// "not a child", the correct "is a child" that follows loses because by the clock it is older, the relay
+// says "a newer version is already stored", and nothing retries. That is not hypothetical: it is written
+// up on publishClearance in this file as a reproduced incident. Nobody knows how far out a real church's
+// clocks are, so before anything is corrected, the number gets measured and shown.
+//
+// ⚠ NOTHING IN THIS BLOCK IS CONSULTED BY ANY STAMP, ANY GATE OR ANY ADMISSION DECISION. `now()` keeps its
+// exact meaning; relays() and _gate are untouched; no event's created_at moves. It reads, it reports, and
+// the console's Relays panel shows the answer. Correcting stamps is stage 4 and is a separate decision.
+//
+// WHERE THE TIME COMES FROM, AND WHY NOT /status. `verifyRelayIdentity` already fetches a kind-27235 event
+// SIGNED by the relay's identity key, bound to a nonce we minted this call and to the address we dialled.
+// Its `created_at` is the relay's own clock with a signature over it. `/status`'s `now` is a bare string
+// over an unauthenticated GET — CLAUDE.md rule 10 says in as many words that that shape "is never proof".
+// The member app's measureRelaySkew reads `/status` because it predates the proof; this one prefers the
+// proof and records WHICH it used, so a later stage can refuse to correct silently off an unsigned number.
+let _relaySkewSec = 0;        // this console's clock minus the relay's, in seconds. + = this box is FAST
+let _skewMeasuredAt = 0;      // ms on the local clock; 0 = nothing has ever answered, and 0 means UNKNOWN
+let _skewProven = false;      // did the number come from the signed proof, or only from /status?
+let _skewSpreadSec = 0;       // widest disagreement between the relays that answered
+let _skewMeasuring = false;   // one measurement at a time; the boot kick and a reconnect can arrive together
+const _skewByRelay = new Map();   // url -> { sec, at, proven }
+// Half the relay's NIP-42 window. Same number and same reasoning as the member app's CLOCK_FAULT_SEC:
+// comfortably outside ordinary drift, comfortably inside "this clock cannot authenticate".
+const CLOCK_FAULT_SEC = 300;
+// The cap a LATER stage would correct by, named here only so the panel can say when a reading is beyond
+// what any correction would ever paper over. It is put()'s own future clamp in scripts/event-store.mjs.
+const SKEW_CAP_SEC = 900;
+function clockLooksWrong() { return !!_skewMeasuredAt && Math.abs(_relaySkewSec) >= CLOCK_FAULT_SEC; }
+// SEVERAL RELAYS DISAGREEING (§4). Median, except at exactly two, where the median is the average and the
+// average is not the conservative answer — take the reading CLOSER TO LOCAL, so a correction built on this
+// can only ever be smaller. Ties go to the smaller magnitude for the same reason.
+function _pickSkew(list) {
+  const a = list.slice().sort((x, y) => x - y);
+  if (!a.length) return 0;
+  if (a.length === 2) return Math.abs(a[0]) <= Math.abs(a[1]) ? a[0] : a[1];
+  return a[(a.length - 1) >> 1];
+}
+// Best effort, always. Never throws, never blocks a write, and returns the last known figure when nothing
+// answers — a church on a thin pipe is the first audience, not the edge case.
+async function measureRelaySkew(preferUrl) {
+  if (_skewMeasuring) return _relaySkewSec;
+  _skewMeasuring = true;
+  try {
+    // ASK EVERY CANDIDATE, not the first. The member app's own comment records the cost of asking one:
+    // measured on the Oppo, the skew stayed 0 for three minutes with the clock a quarter-hour out, because
+    // the relay that happened to be picked was on a build too old to answer.
+    const cands = [];
+    const add = (u) => { const v = String(u || ''); if (v && !cands.includes(v)) cands.push(v); };
+    add(preferUrl);
+    try { relays().forEach(add); } catch (e) {}
+    // relaysRaw() as well as relays(): a candidate that has not proved itself yet is still a box whose clock
+    // is worth reading, and reading it decides nothing. This is a diagnostic, not an admission path — see
+    // CLAUDE.md rule 10. Nothing here adds, removes or reorders a relay.
+    try { relaysRaw().forEach(add); } catch (e) {}
+    for (const url of cands) {
+      let proof = null;
+      try { proof = await verifyRelayIdentity(url); } catch (e) { proof = null; }
+      if (proof && Number(proof.at) > 0) {
+        _skewByRelay.set(url, { sec: Math.round(Date.now() / 1000 - Number(proof.at)), at: Date.now(), proven: true });
+        continue;
+      }
+      // FALLBACK, AND IT IS MARKED AS ONE. A relay too old to carry `at` on its proof can still be read from
+      // /status, which is better than saying nothing to a steward whose console cannot save anything. It is
+      // recorded `proven: false` and a proven reading always wins over it, because a stage that corrects
+      // must be able to refuse an unsigned number.
+      const base = String(url).replace(/^wss:/i, 'https:').replace(/^ws:/i, 'http:').replace(/\/relay\/?$/i, '').replace(/\/+$/, '');
+      if (!/^https?:\/\/.+/i.test(base)) continue;
+      try {
+        const r = await fetch(base + '/status', { cache: 'no-store', signal: AbortSignal.timeout(6000) });
+        if (!r.ok) continue;
+        const j = await r.json();
+        if (!j || typeof j.now !== 'number') continue;   // too old to say — ask the next
+        _skewByRelay.set(url, { sec: Math.round(Date.now() / 1000 - j.now), at: Date.now(), proven: false });
+      } catch (e) { /* unreachable or not JSON — try the next */ }
+    }
+    const all = [..._skewByRelay.values()];
+    const proven = all.filter(v => v.proven);
+    const use = proven.length ? proven : all;
+    if (!use.length) return _relaySkewSec;   // nobody could tell us: say nothing about clocks rather than guess
+    const secs = use.map(v => v.sec);
+    _relaySkewSec = _pickSkew(secs);
+    _skewSpreadSec = Math.max(...secs) - Math.min(...secs);
+    _skewProven = !!proven.length;
+    _skewMeasuredAt = Date.now();
+    return _relaySkewSec;
+  } catch (e) { return _relaySkewSec; }
+  finally { _skewMeasuring = false; }
+}
+// WHAT THE PANEL READS. `measuredAt: 0` is the honest "we do not know" and the screen must show nothing
+// rather than claim a zero skew — an unmeasured clock and a correct clock are not the same fact.
+function relaySkewState() {
+  return {
+    skewSec: _relaySkewSec,
+    measuredAt: _skewMeasuredAt,
+    proven: _skewProven,
+    spreadSec: _skewSpreadSec,
+    capSec: SKEW_CAP_SEC,
+    clockIsWrong: clockLooksWrong(),
+    relays: [..._skewByRelay.entries()].map(([url, v]) => ({ url, sec: v.sec, proven: v.proven })),
+  };
+}
+// Measure at start and when a relay comes back, so the number on the panel is about now and not about boot.
+// Both are deliberately delayed and both swallow everything: a measurement must never be able to delay or
+// fail anything the console is doing.
+try {
+  setTimeout(() => { measureRelaySkew().catch(() => {}); }, 2500);
+  window.addEventListener('steward-relay-returned', () => { setTimeout(() => { measureRelaySkew().catch(() => {}); }, 3000); });
+} catch (e) {}
+
 // Phase 5 Tier 2: the media host = this relay's HTTPS origin (self-hosted blobs live beside the relay).
 function _blobBase() { const r = ownRelay(); return r.replace(/^wss:\/\//i, 'https://').replace(/^ws:\/\//i, 'http://').replace(/\/relay\/?$/i, ''); }
 // FEDERATION Phase 3 — relay discovery for the steward console (mirrors the member engine). Probe a relay's
@@ -9817,6 +9933,15 @@ window.Steward = {
     if (picks.length) { try { await (window.Steward.publishRelayList ? window.Steward.publishRelayList() : null); } catch (e) {} }
     return picks;
   },
+  // HOW FAR OUT IS THIS CONSOLE'S CLOCK, against the relays that will store what it writes. Measurement
+  // only — see the block above _blobBase(). Nothing here corrects a stamp, and nothing reads either of
+  // these to decide anything; the Relays panel shows the number so a steward can act on a clock that was
+  // previously invisible to everybody.
+  // CALLERS (rule 2): app/steward-root.jsx `useStewardClockSkew`, read by DashRelaysCard in
+  // app/stew-dashboard.jsx. No writer, no gate and no publish path calls any of the three.
+  measureRelaySkew(preferUrl) { return measureRelaySkew(preferUrl); },
+  relaySkew() { return relaySkewState(); },
+  clockLooksWrong() { return clockLooksWrong(); },
   // probe each relay with a throwaway WS; resolves [{ url, status:'on'|'off', ms, member }]
   //
   // EVERY CANDIDATE, NOT THE PUBLISH SET — and `member` says which is which. A relay this church's data no
