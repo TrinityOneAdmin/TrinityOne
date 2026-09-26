@@ -1553,7 +1553,7 @@ function _probeRelayEnforces(wssUrl, timeoutMs) {
     const ids = new Map();
     ws.onopen = () => {
       for (const pr of probes) {
-        const evt = finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', pr.d], ['t', NET]], content: JSON.stringify({ pubkeys: [] }) }, sk);
+        const evt = finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', pr.d], ['t', NET]], content: JSON.stringify({ pubkeys: [] }) }), sk);
         ids.set(evt.id, pr);
         try { ws.send(JSON.stringify(['EVENT', evt])); } catch (e) {}
       }
@@ -3087,6 +3087,28 @@ function _spreadOf(d) {
   const s = _lastSpread.get(d);
   return s ? { landed: s.landed.slice(), missed: s.missed.slice(), at: s.at } : null;
 }
+// ── ONE STAMP FOR EVERY DOCUMENT THIS CONSOLE WRITES ────────────────────────────────────────────────────
+//
+// Stage 3 of reference/SCOPE-RELAY-CORRECTED-TIME-2026-09-26.md. STILL THE LOCAL CLOCK — nothing here is
+// corrected; the only thing that changed is WHO comes through.
+//
+// WHAT IT DOES. `_lastStamp` remembers the created_at we last published for each `d` tag, and a second write
+// of the same document in the same second is stamped `last + 1` instead of tying. Ties matter because every
+// reader of an addressable document picks the copy with the larger created_at and the relay REFUSES the
+// loser outright ("a newer version of this is already stored"), which the console counts as nothing to
+// worry about. The same-second half of the incident recorded on publishClearance is exactly that: two
+// writes, one second, the wrong one kept, no banner, nothing retried.
+//
+// WHO COMES THROUGH IT. Every publisher in this file. 55 already arrived via feChurch(); stage 3 routed the
+// other 28 — which had been calling finalizeEvent() directly, deliberately, to avoid feChurch's ['church']
+// and ['for'] tags — through this function alone, so they keep their tags and gain the ordering. The eight
+// that made the case are the church's authority lists and the children's-desk clearances: setMinors,
+// setApproved, setGuardians, setStewards, grantCheckinPermission, revokeCheckinPermission,
+// publishCheckinHelpers, revokeCheckinHelpers. Every one is enumerated in the stage-3 commit.
+//
+// WHAT IT IS NOT. It is not a clock and it is not a correction. `now()` keeps its exact meaning, and a
+// console whose clock is eleven minutes fast still writes eleven minutes into the future — it now does so
+// in a strict order of its own. Correcting the number is stage 4 and lives in this same function.
 function _monotonic(tmpl) {
   const d = ((tmpl.tags || []).find(t => t[0] === 'd') || [])[1] || ('kind:' + tmpl.kind);
   const nowS = Math.floor(Date.now() / 1000);
@@ -3288,7 +3310,7 @@ async function enrolRelayNet(opts) {
   // Nothing proved and nothing already signed in: publish NOTHING. An empty document is the church signing
   // "my network is empty", which is a statement, not a silence.
   if (!entries.length || !changed) return { published: false, entries, proven, unproven, seeded };
-  const ev = await publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', RELAY_NET_D]], content: JSON.stringify(entries) }, sk));
+  const ev = await publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', RELAY_NET_D]], content: JSON.stringify(entries) }), sk));
   return { published: !!ev, entries, proven, unproven, seeded };
 }
 
@@ -4544,7 +4566,7 @@ window.Steward = {
     // A SETTING NOBODY ACCEPTED IS NOT A SETTING. Audit 2026-09-02 #17.
     // This awaited the publish and discarded it, so "✓ Sync on" appeared over a document no relay took —
     // and the church believed its two boxes were mirroring each other when nothing had been told to.
-    const ev = await publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', 'trinityone/relays']], content: JSON.stringify(trusted) }, sk));
+    const ev = await publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', 'trinityone/relays']], content: JSON.stringify(trusted) }), sk));
     if (!ev) throw new Error('Sync could not be switched on — no relay accepted the setting. Nothing is mirroring yet; try again.');
     return { relays: trusted.length };
   },
@@ -4594,7 +4616,7 @@ window.Steward = {
     // other while the console said they had stopped. That is the wrong direction to be wrong in — this is
     // pressed when a church is decommissioning a relay or reacting to a seizure, and believing mirroring has
     // stopped when it has not is the whole harm.
-    const ev = await publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', 'trinityone/relays']], content: '[]' }, sk));
+    const ev = await publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', 'trinityone/relays']], content: '[]' }), sk));
     if (!ev) throw new Error('Sync could not be switched off — no relay accepted the change, so your relays are STILL mirroring each other. Try again.');
     return { relays: 0 };
   },
@@ -4814,7 +4836,7 @@ window.Steward = {
     let content;
     try { content = JSON.stringify({ n: nip44e(JSON.stringify({ name: (lastProfile && lastProfile.name) || '' }), nip44ck(sk, cp)) }); }
     catch (e) { content = JSON.stringify({ n: '' }); }
-    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', STEWARDREQ_D + cp], ['t', NET], ['p', cp]], content }, sk))
+    return publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', STEWARDREQ_D + cp], ['t', NET], ['p', cp]], content }), sk))
       // A REQUEST NOBODY RECEIVED MUST NOT SAY "sent". The screen shows "✓ Request sent — the church's
       // owner will approve you" on a truthy result, so discarding publish()'s false left someone waiting
       // indefinitely for an approval that was never asked for. (Audit 2026-09-05, the sweep around the
@@ -4943,7 +4965,7 @@ window.Steward = {
     // Proven redundant by execution, not by reading: with it fully dead in the bundle, a real browser
     // driving the real wizard against a fresh relay still registered the church, recorded `by: "self"` —
     // the signature door, not the token one.
-    return publish(finalizeEvent({ kind: 0, created_at: now(), tags: [], content }, sk));
+    return publish(finalizeEvent(_monotonic({ kind: 0, created_at: now(), tags: [], content }), sk));
   },
   // NIP-65 relay-list (FEDERATION-PLAN Phase 1b): advertise, in a church-signed replaceable event (kind
   // 10002), WHICH relays carry this church's content — so a member can follow relay moves/additions
@@ -4954,7 +4976,7 @@ window.Steward = {
   publishRelayList() {
     if (!sk || actingChurch) return Promise.resolve(null);
     const tags = relays().map(r => ['r', r]);   // no read/write marker = both (church relays serve + accept)
-    return publish(finalizeEvent({ kind: 10002, created_at: now(), tags, content: '' }, sk));
+    return publish(finalizeEvent(_monotonic({ kind: 10002, created_at: now(), tags, content: '' }), sk));
   },
   publishFund(fund) {
     if (!sk) return Promise.resolve(null);
@@ -5698,14 +5720,14 @@ window.Steward = {
   // react to a group message (NIP-25 kind-7), interoperable with the member app. emoji '' or '-' retracts.
   reactGroup(groupId, msgId, targetPub, emoji) {
     if (!sk || !groupId || !msgId) return Promise.resolve(null);
-    return publish(finalizeEvent({ kind: 7, created_at: now(), tags: [['e', msgId], ['p', targetPub || ''], ['t', NET], ['t', groupId]], content: emoji || '-' }, sk));
+    return publish(finalizeEvent(_monotonic({ kind: 7, created_at: now(), tags: [['e', msgId], ['p', targetPub || ''], ['t', NET], ['t', groupId]], content: emoji || '-' }), sk));
   },
 
   // ---- direct messages: the church <-> a member (NIP-04 encrypted kind-4) ----
   async sendDM(peerHex, content) {
     if (!sk || !peerHex) return null;
     let enc = ''; try { enc = await nip04encrypt(sk, peerHex, content); } catch { return null; }
-    const evt = finalizeEvent({ kind: 4, created_at: now(), tags: [['p', peerHex], ['t', NET]], content: enc }, sk);
+    const evt = finalizeEvent(_monotonic({ kind: 4, created_at: now(), tags: [['p', peerHex], ['t', NET]], content: enc }), sk);
     // QUEUE FIRST, THEN ATTEMPT — the same rule the member app follows. If the publish fails the words are
     // still here, and the retry sends this exact event with its original id, so nothing duplicates.
     _sOutLoad();
@@ -5757,7 +5779,7 @@ window.Steward = {
   // react to a member's DM (NIP-25 kind-7). emoji '' or '-' retracts.
   async reactDM(peerHex, msgId, emoji) {
     if (!sk || !peerHex || !msgId) return null;
-    const evt = finalizeEvent({ kind: 7, created_at: now(), tags: [['e', msgId], ['p', peerHex], ['t', NET], ['k', '4']], content: emoji || '-' }, sk);
+    const evt = finalizeEvent(_monotonic({ kind: 7, created_at: now(), tags: [['e', msgId], ['p', peerHex], ['t', NET], ['k', '4']], content: emoji || '-' }), sk);
     return publish(evt);
   },
   // list of members who have a DM thread with the church (most recent first)
@@ -5988,7 +6010,6 @@ window.Steward = {
     // an un-updated phone would have opened Prayer or their life group to an EMPTY ROOM — no error, no spinner,
     // nothing to diagnose. The compat comment on the member side reasoned about the opposite direction only.
     // AUDIT-2026-07-27.
-    _senvTs[groupId] = now();
     // A MEMBER WE COULD NOT SEAL TO MUST NOT VANISH QUIETLY. This loop skipped any pubkey that threw and
     // carried on, and the publish reported success — so that member was simply absent from the envelope.
     // The member side treats "no copy for me" as REMOVAL and deletes any key it held, so they lose the room
@@ -6033,7 +6054,14 @@ window.Steward = {
     // `opts.background` is the CALLER's answer to "did a steward ask for this", never this function's own:
     // the interactive seal (sealGroup) and the edit-members rotation pass nothing and stay loud, while the
     // key-distributor effect and ensureGroupKeys pass true. See the note above publish().
-    const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', GROUPKEY_D + groupId], ['t', NET]], content }, churchSk), { background: !!opts.background });
+    const _env = feChurch({ kind: 30078, created_at: now(), tags: [['d', GROUPKEY_D + groupId], ['t', NET]], content }, churchSk);
+    // _senvTs IS THE STAMP WE ACTUALLY WROTE, not a second reading of the clock. It used to be set to now()
+    // a few lines above, before the envelope existed — and feChurch routes through _monotonic, which can
+    // hand back `last + 1` rather than the reading the call site took. The two therefore disagreed by a
+    // second or more, and stewIngestKey drops an envelope whose created_at is BELOW _senvTs, so our own
+    // envelope coming back off the relay could be discarded as stale. Take the number off the signed event.
+    _senvTs[groupId] = _env.created_at || 0;
+    const ok = await publish(_env, { background: !!opts.background });
     if (ok === false) return false;
     if (skipped.length) {
       console.warn('[steward] group key ' + groupId + ': could not seal to ' + skipped.length + ' member(s) — they cannot read or post in that room');
@@ -6133,7 +6161,7 @@ window.Steward = {
     // the two that lacked the block they AUTHENTICATED and read the entire adult group. The relay refuses to
     // authenticate a blocked key — but only a relay that HOLDS the block. A ban published single-accept is a
     // ban on one relay.
-    return _publishToRelays(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', BLOCKED_D + pub], ['t', NET]], content }, sk));
+    return _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', BLOCKED_D + pub], ['t', NET]], content }), sk));
   },
 
   // ---- safeguarding: two church-signed lists the relay reads to enforce child protection ----
@@ -6752,7 +6780,7 @@ window.Steward = {
     // A partial write now reports FAILURE. A steward who ticks "mark as a child" and sees it succeed has been
     // told the protection is in force; if the record reached one relay of three, it is in force on one of
     // three. An error is recoverable, false reassurance is not.
-    return _publishToRelays(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', MINORS_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list }) }, sk));
+    return _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', MINORS_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list }) }), sk));
   },
   // `opts.listKnown` — has the CALLER actually read this church's cleared list? The console has that answer
   // (its safeguarding subscription reports `loaded`) and this module does not: an empty remembered list means
@@ -6794,7 +6822,7 @@ window.Steward = {
       if (prior[p]) { cleared[p] = prior[p]; continue; }
       cleared[p] = (knownPrev && !knownPrev.has(p)) ? { by: pub, at: now() } : { by: '', at: 0 };
     }
-    return _publishToRelays(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', APPROVED_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list, cleared }) }, sk));
+    return _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', APPROVED_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list, cleared }) }), sk));
   },
 
   // ---- safeguarding v2: parent↔child links. Parents publish a guardian-link REQUEST (guardreq:<childpub>,
@@ -6854,7 +6882,7 @@ window.Steward = {
     // A partial write now reports FAILURE. A steward who ticks "mark as a child" and sees it succeed has been
     // told the protection is in force; if the record reached one relay of three, it is in force on one of
     // three. An error is recoverable, false reassurance is not.
-    return _publishToRelays(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', GUARDIANS_D + pub], ['t', NET]], content: JSON.stringify({ links: clean }) }, sk));
+    return _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', GUARDIANS_D + pub], ['t', NET]], content: JSON.stringify({ links: clean }) }), sk));
   },
   // safeguarding v2: tell a STEWARD-LINKED parent (who never set the child up on their own device, so has no
   // local record) that they're now a guardian — otherwise the child never appears in their app. Church-signed,
@@ -6869,7 +6897,7 @@ window.Steward = {
     let content;
     try { content = nip44e(JSON.stringify({ child: childPub, name: childName || '', church: churchPub }), nip44ck(sk, parentPub)); }
     catch (e) { return Promise.resolve(null); }
-    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', GUARDNOTICE_D + parentPub], ['t', NET], ['p', parentPub]], content }, sk));
+    return publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', GUARDNOTICE_D + parentPub], ['t', NET], ['p', parentPub]], content }), sk));
   },
 
   // THE OTHER HALF OF notifyGuardian. Linking a parent tells their app so the child appears in it; UNLINKING
@@ -6888,7 +6916,7 @@ window.Steward = {
     let content;
     try { content = nip44e(JSON.stringify({ removed: childPub, church: churchPub }), nip44ck(sk, parentPub)); }
     catch (e) { return Promise.resolve(null); }
-    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', GUARDNOTICE_D + parentPub], ['t', NET], ['p', parentPub]], content }, sk));
+    return publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', GUARDNOTICE_D + parentPub], ['t', NET], ['p', parentPub]], content }), sk));
   },
 
   // ---- joining: by default anyone with the invite/QR joins instantly. A steward can switch on
@@ -7382,7 +7410,7 @@ window.Steward = {
       doc.n = _stewardNamesCt;
     }
 
-    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', STEWARDS_D + pub], ['t', NET]], content: JSON.stringify(doc) }, sk));
+    return publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', STEWARDS_D + pub], ['t', NET]], content: JSON.stringify(doc) }), sk));
   },
   // What this church has granted each steward. Empty array = nothing; ABSENT = everything (an unscoped
   // steward, which is every steward that existed before this feature).
@@ -7407,7 +7435,7 @@ window.Steward = {
     // disk. The church's OWN name stays public in its kind-0 profile, as it must be to be findable at all.
     const sealedVoice = _sealChurchDoc(doc);
     if (sealedVoice == null) return Promise.resolve(false);
-    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', VOICE_D + pub], ['t', NET]], content: sealedVoice }, sk));
+    return publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', VOICE_D + pub], ['t', NET]], content: sealedVoice }), sk));
   },
   setVoice(name, office) {
     _selfVoice = (name && String(name).trim()) ? { name: String(name).trim().slice(0, 60), office: String(office || '').trim().slice(0, 40) } : null;
@@ -7842,13 +7870,13 @@ window.Steward = {
     if (!sk || !msgId) return Promise.resolve(null);
     const tags = [['d', HIDE_D + msgId], ['t', NET], ['p', pub]];
     if (groupId) tags.push(['t', groupId]);   // scope to the group so a group leader is authorised
-    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags, content: JSON.stringify({ groupId: groupId || '' }) }, sk));
+    return publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags, content: JSON.stringify({ groupId: groupId || '' }) }), sk));
   },
   unhideMessage(groupId, msgId) {   // restore a hidden message (tombstone the hide doc)
     if (!sk || !msgId) return Promise.resolve(null);
     const tags = [['d', HIDE_D + msgId], ['t', NET], ['p', pub], ['deleted', '1']];
     if (groupId) tags.push(['t', groupId]);
-    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags, content: '' }, sk));
+    return publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags, content: '' }), sk));
   },
   // the set of hidden message ids → cb(Set<msgId>) on every change. Unsub fn.
   subscribeHidden(cb) {
@@ -8270,9 +8298,9 @@ window.Steward = {
     let body;
     try { body = buildCheckinPermission({ person, source: policy.source, lifetime: policy.lifetime, from: win.from, until: win.until }); }
     catch (e) { return null; }   // an undeclared source, a lifetime nobody implemented, a window past its cap
-    const ok = await _publishToRelays(finalizeEvent({ kind: 30078, created_at: now(),
+    const ok = await _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(),
       tags: [['d', CHECKINPERM_D + person], ['t', NET], ['church', cp], ['person', person]],
-      content: JSON.stringify(body) }, sk));
+      content: JSON.stringify(body) }), sk));
     if (ok === false || ok == null) return null;
     return { ...body };
   },
@@ -8293,8 +8321,8 @@ window.Steward = {
     if (!sk || !_mayClearForCheckin()) return Promise.resolve(null);
     const who = String(person || '').trim().toLowerCase();
     if (!/^[0-9a-f]{64}$/.test(who)) return Promise.resolve(null);
-    return _publishToRelays(finalizeEvent({ kind: 30078, created_at: now(),
-      tags: [['d', CHECKINPERM_D + who], ['t', NET], ['church', pub], ['deleted', '1']], content: '' }, sk));
+    return _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(),
+      tags: [['d', CHECKINPERM_D + who], ['t', NET], ['church', pub], ['deleted', '1']], content: '' }), sk));
   },
   // READ THE CLEARANCES BACK. Through readCheckinPermission — the relay's own parser — rather than a second
   // reading of the same JSON, so the console and the box cannot disagree about what a permission means. A
@@ -8628,9 +8656,9 @@ window.Steward = {
     // session to everyone else), but it must not be reported as a clean success. Same judgement as
     // _warnUnsealed, whose wording this borrows.
     if (built.failed.length) _warnUnsealed('check-in helper', built.failed);
-    const ok = await _publishToRelays(finalizeEvent({ kind: 30078, created_at: now(),
+    const ok = await _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(),
       tags: [['d', CHECKINHELPER_D + session], ['t', NET], ['church', cp], ['session', session]],
-      content: JSON.stringify(built.doc) }, sk));
+      content: JSON.stringify(built.doc) }), sk));
     if (ok === false || ok == null) return null;
     return { session, source: GRANT_SOURCE, lifetime: policy.lifetime, from: win.from, until: win.until,
       pubs: built.doc.pubs, failed: built.failed, key: sessionKeyHex, reused: sessionKeyHex === reuse };
@@ -8667,8 +8695,8 @@ window.Steward = {
     if (!sk || !churchSkHeld() || actingChurch) return Promise.resolve(null);
     const sid = String(session || '');
     if (!sid) return Promise.resolve(null);
-    return _publishToRelays(finalizeEvent({ kind: 30078, created_at: now(),
-      tags: [['d', CHECKINHELPER_D + sid], ['t', NET], ['church', pub], ['deleted', '1']], content: '' }, sk));
+    return _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(),
+      tags: [['d', CHECKINHELPER_D + sid], ['t', NET], ['church', pub], ['deleted', '1']], content: '' }), sk));
   },
 
   // ── THE TWO QUESTIONS THE CHECK-IN SCREEN HAS TO ASK BEFORE IT SAYS ANYTHING ────────────────────────────
@@ -9381,12 +9409,12 @@ window.Steward = {
     if (!sk) return Promise.resolve(null);
     const np = toPubHex(input); if (!np) return Promise.resolve(null);
     const content = JSON.stringify({ joined: true });
-    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', NETWORK_D + np], ['t', NET], ['p', np]], content }, sk)).then((ok) => (ok ? { networkPub: np, npub: npubEncode(np) } : null));   // publish() returns FALSE when no relay accepted
+    return publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', NETWORK_D + np], ['t', NET], ['p', np]], content }), sk)).then((ok) => (ok ? { networkPub: np, npub: npubEncode(np) } : null));   // publish() returns FALSE when no relay accepted
   },
   leaveNetwork(networkPub) {
     if (!sk) return Promise.resolve(null);
     const np = toPubHex(networkPub) || networkPub;
-    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', NETWORK_D + np], ['t', NET], ['deleted', '1']], content: '' }, sk));
+    return publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', NETWORK_D + np], ['t', NET], ['deleted', '1']], content: '' }), sk));
   },
   // create a brand-new network: generate its key, join it (so the relay lets it post here), then
   // publish the network's profile + a starter announcements channel (signed by the network key).
@@ -9398,7 +9426,7 @@ window.Steward = {
     const nPub = getPublicKey(nsk);
     saveNetKey({ pub: nPub, mnemonic: m, name: name || 'Network' });   // keep the key so this console can publish AS the network
     await window.Steward.joinNetwork(nPub);   // church joins first so the relay whitelists the network key
-    await publish(finalizeEvent({ kind: 0, created_at: now(), tags: [], content: JSON.stringify({ name: name || 'Network' }) }, nsk));
+    await publish(finalizeEvent(_monotonic({ kind: 0, created_at: now(), tags: [], content: JSON.stringify({ name: name || 'Network' }) }), nsk));
     await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', GROUP_D + 'net-announce'], ['t', NET]], content: JSON.stringify({ name: 'Announcements', kind: 'broadcast', sub: 'From ' + (name || 'the network'), icon: 'globe', accent: 'var(--clay)' }) }, nsk));
     window.dispatchEvent(new CustomEvent('steward-networks'));
     return { networkPub: nPub, npub: npubEncode(nPub), mnemonic: m };
@@ -9408,7 +9436,7 @@ window.Steward = {
   // post a broadcast announcement AS an owned network (kind-1 into the net-announce channel)
   publishNetworkAnnouncement(networkPub, text) {
     const signer = skFor(networkPub); if (!signer || !text || !text.trim()) return Promise.resolve(null);
-    return publish(finalizeEvent({ kind: 1, created_at: now(), tags: [['t', NET], ['t', 'net-announce'], ['p', networkPub]], content: text.trim() }, signer));
+    return publish(finalizeEvent(_monotonic({ kind: 1, created_at: now(), tags: [['t', NET], ['t', 'net-announce'], ['p', networkPub]], content: text.trim() }), signer));
   },
   // a network's broadcast announcements (most recent first) — for previewing on the console
   subscribeNetworkAnnouncements(networkPub, onPosts) {

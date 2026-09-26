@@ -16099,7 +16099,7 @@ zoo`.split("\n");
       const ids = /* @__PURE__ */ new Map();
       ws.onopen = () => {
         for (const pr of probes) {
-          const evt = finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", pr.d], ["t", NET]], content: JSON.stringify({ pubkeys: [] }) }, sk2);
+          const evt = finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", pr.d], ["t", NET]], content: JSON.stringify({ pubkeys: [] }) }), sk2);
           ids.set(evt.id, pr);
           try {
             ws.send(JSON.stringify(["EVENT", evt]));
@@ -17260,7 +17260,7 @@ zoo`.split("\n");
     }
     const changed = JSON.stringify(entries) !== before;
     if (!entries.length || !changed) return { published: false, entries, proven, unproven, seeded };
-    const ev = await publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", RELAY_NET_D]], content: JSON.stringify(entries) }, sk));
+    const ev = await publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", RELAY_NET_D]], content: JSON.stringify(entries) }), sk));
     return { published: !!ev, entries, proven, unproven, seeded };
   }
   function isNetworkRelay2(cp, url) {
@@ -18213,7 +18213,7 @@ zoo`.split("\n");
       }
       const trusted = [...byBox.values()];
       if (trusted.length < 2) throw new Error("Sync needs at least two separate TrinityOne relays \u2014 add another the church runs.");
-      const ev = await publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", "trinityone/relays"]], content: JSON.stringify(trusted) }, sk));
+      const ev = await publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", "trinityone/relays"]], content: JSON.stringify(trusted) }), sk));
       if (!ev) throw new Error("Sync could not be switched on \u2014 no relay accepted the setting. Nothing is mirroring yet; try again.");
       return { relays: trusted.length };
     },
@@ -18254,7 +18254,7 @@ zoo`.split("\n");
     // resync: turn cross-relay sync OFF — publish an empty trusted-relays list (relays stop exchanging the corpus).
     async syncDisable() {
       if (!sk || !pub) throw new Error("No church key on this device");
-      const ev = await publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", "trinityone/relays"]], content: "[]" }, sk));
+      const ev = await publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", "trinityone/relays"]], content: "[]" }), sk));
       if (!ev) throw new Error("Sync could not be switched off \u2014 no relay accepted the change, so your relays are STILL mirroring each other. Try again.");
       return { relays: 0 };
     },
@@ -18459,7 +18459,7 @@ zoo`.split("\n");
       } catch (e) {
         content = JSON.stringify({ n: "" });
       }
-      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", STEWARDREQ_D + cp], ["t", NET], ["p", cp]], content }, sk)).then((ok) => ok ? { ok: true, church: cp, npub: npubEncode(cp) } : null);
+      return publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", STEWARDREQ_D + cp], ["t", NET], ["p", cp]], content }), sk)).then((ok) => ok ? { ok: true, church: cp, npub: npubEncode(cp) } : null);
     },
     // owner side: pending steward requests for THIS church → [{ pubkey, npub, name }] (excludes current stewards)
     subscribeStewardRequests(onReqs) {
@@ -18585,7 +18585,7 @@ zoo`.split("\n");
         if (local && host) nip05 = local + "@" + host;
       }
       const content = JSON.stringify({ name: m.name || "", about: m.about || "", nip05, picture: m.picture || "", banner: m.banner || "", bannerFade: typeof m.bannerFade === "number" ? m.bannerFade : 16, accent: m.accent || "", channel: m.channel || "", audioFeed: m.audioFeed || "", lud16: (m.lud16 || "").trim(), giving: !!m.giving, features: m.features && typeof m.features === "object" ? m.features : {}, rules: m.rules && typeof m.rules === "object" ? m.rules : {} });
-      return publish(finalizeEvent2({ kind: 0, created_at: now(), tags: [], content }, sk));
+      return publish(finalizeEvent2(_monotonic({ kind: 0, created_at: now(), tags: [], content }), sk));
     },
     // NIP-65 relay-list (FEDERATION-PLAN Phase 1b): advertise, in a church-signed replaceable event (kind
     // 10002), WHICH relays carry this church's content — so a member can follow relay moves/additions
@@ -18596,7 +18596,7 @@ zoo`.split("\n");
     publishRelayList() {
       if (!sk || actingChurch) return Promise.resolve(null);
       const tags = relays().map((r) => ["r", r]);
-      return publish(finalizeEvent2({ kind: 10002, created_at: now(), tags, content: "" }, sk));
+      return publish(finalizeEvent2(_monotonic({ kind: 10002, created_at: now(), tags, content: "" }), sk));
     },
     publishFund(fund) {
       if (!sk) return Promise.resolve(null);
@@ -19504,7 +19504,7 @@ zoo`.split("\n");
     // react to a group message (NIP-25 kind-7), interoperable with the member app. emoji '' or '-' retracts.
     reactGroup(groupId, msgId, targetPub, emoji) {
       if (!sk || !groupId || !msgId) return Promise.resolve(null);
-      return publish(finalizeEvent2({ kind: 7, created_at: now(), tags: [["e", msgId], ["p", targetPub || ""], ["t", NET], ["t", groupId]], content: emoji || "-" }, sk));
+      return publish(finalizeEvent2(_monotonic({ kind: 7, created_at: now(), tags: [["e", msgId], ["p", targetPub || ""], ["t", NET], ["t", groupId]], content: emoji || "-" }), sk));
     },
     // ---- direct messages: the church <-> a member (NIP-04 encrypted kind-4) ----
     async sendDM(peerHex, content) {
@@ -19515,7 +19515,7 @@ zoo`.split("\n");
       } catch {
         return null;
       }
-      const evt = finalizeEvent2({ kind: 4, created_at: now(), tags: [["p", peerHex], ["t", NET]], content: enc }, sk);
+      const evt = finalizeEvent2(_monotonic({ kind: 4, created_at: now(), tags: [["p", peerHex], ["t", NET]], content: enc }), sk);
       _sOutLoad();
       _sOutbox.push({ evt, peer: peerHex, at: now(), tries: 0 });
       _sOutPlain.set(evt.id, content);
@@ -19615,7 +19615,7 @@ zoo`.split("\n");
     // react to a member's DM (NIP-25 kind-7). emoji '' or '-' retracts.
     async reactDM(peerHex, msgId, emoji) {
       if (!sk || !peerHex || !msgId) return null;
-      const evt = finalizeEvent2({ kind: 7, created_at: now(), tags: [["e", msgId], ["p", peerHex], ["t", NET], ["k", "4"]], content: emoji || "-" }, sk);
+      const evt = finalizeEvent2(_monotonic({ kind: 7, created_at: now(), tags: [["e", msgId], ["p", peerHex], ["t", NET], ["k", "4"]], content: emoji || "-" }), sk);
       return publish(evt);
     },
     // list of members who have a DM thread with the church (most recent first)
@@ -19821,7 +19821,6 @@ zoo`.split("\n");
       _skeys[groupId] = ring;
       const rev2 = _srev[groupId] || 1;
       _srev[groupId] = rev2;
-      _senvTs[groupId] = now();
       let skipped = [];
       const build = (r) => {
         const keys = {}, rings = {}, missed = [];
@@ -19845,7 +19844,9 @@ zoo`.split("\n");
         content = build(ring.slice(0, r));
         skipped = build.missed || [];
       }
-      const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", GROUPKEY_D + groupId], ["t", NET]], content }, churchSk), { background: !!opts.background });
+      const _env = feChurch({ kind: 30078, created_at: now(), tags: [["d", GROUPKEY_D + groupId], ["t", NET]], content }, churchSk);
+      _senvTs[groupId] = _env.created_at || 0;
+      const ok = await publish(_env, { background: !!opts.background });
       if (ok === false) return false;
       if (skipped.length) {
         console.warn("[steward] group key " + groupId + ": could not seal to " + skipped.length + " member(s) \u2014 they cannot read or post in that room");
@@ -19935,7 +19936,7 @@ zoo`.split("\n");
       const list = [...new Set((pubkeys || []).filter(Boolean))];
       _localBlocked = new Set(list.map((p) => String(p).toLowerCase()));
       const content = JSON.stringify({ pubkeys: list });
-      return _publishToRelays(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", BLOCKED_D + pub], ["t", NET]], content }, sk));
+      return _publishToRelays(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", BLOCKED_D + pub], ["t", NET]], content }), sk));
     },
     // ---- safeguarding: two church-signed lists the relay reads to enforce child protection ----
     // minors:<churchpub> = members marked as children; approved:<churchpub> = adults cleared to contact youth
@@ -20373,7 +20374,7 @@ zoo`.split("\n");
       _requireTrustedView("list of children");
       if (!sk) return Promise.resolve(null);
       const list = [...new Set((pubkeys || []).filter(Boolean))];
-      return _publishToRelays(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", MINORS_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list }) }, sk));
+      return _publishToRelays(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", MINORS_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list }) }), sk));
     },
     // `opts.listKnown` — has the CALLER actually read this church's cleared list? The console has that answer
     // (its safeguarding subscription reports `loaded`) and this module does not: an empty remembered list means
@@ -20398,7 +20399,7 @@ zoo`.split("\n");
         }
         cleared[p] = knownPrev && !knownPrev.has(p) ? { by: pub, at: now() } : { by: "", at: 0 };
       }
-      return _publishToRelays(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", APPROVED_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list, cleared }) }, sk));
+      return _publishToRelays(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", APPROVED_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list, cleared }) }), sk));
     },
     // ---- safeguarding v2: parent↔child links. Parents publish a guardian-link REQUEST (guardreq:<childpub>,
     // p-tagged to us); the steward confirms it into the church-signed GUARDIANS map (guardians:<churchpub>),
@@ -20468,7 +20469,7 @@ zoo`.split("\n");
         const arr = [...new Set((ps || []).filter(Boolean))];
         if (c && arr.length) clean5[c] = arr;
       }
-      return _publishToRelays(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", GUARDIANS_D + pub], ["t", NET]], content: JSON.stringify({ links: clean5 }) }, sk));
+      return _publishToRelays(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", GUARDIANS_D + pub], ["t", NET]], content: JSON.stringify({ links: clean5 }) }), sk));
     },
     // safeguarding v2: tell a STEWARD-LINKED parent (who never set the child up on their own device, so has no
     // local record) that they're now a guardian — otherwise the child never appears in their app. Church-signed,
@@ -20486,7 +20487,7 @@ zoo`.split("\n");
       } catch (e) {
         return Promise.resolve(null);
       }
-      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", GUARDNOTICE_D + parentPub], ["t", NET], ["p", parentPub]], content }, sk));
+      return publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", GUARDNOTICE_D + parentPub], ["t", NET], ["p", parentPub]], content }), sk));
     },
     // THE OTHER HALF OF notifyGuardian. Linking a parent tells their app so the child appears in it; UNLINKING
     // told them nothing at all, and the parent's app stores the link in localStorage where nothing ever removed
@@ -20507,7 +20508,7 @@ zoo`.split("\n");
       } catch (e) {
         return Promise.resolve(null);
       }
-      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", GUARDNOTICE_D + parentPub], ["t", NET], ["p", parentPub]], content }, sk));
+      return publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", GUARDNOTICE_D + parentPub], ["t", NET], ["p", parentPub]], content }), sk));
     },
     // ---- joining: by default anyone with the invite/QR joins instantly. A steward can switch on
     // "require approval", and then a new member is held as a pending request until admitted. The relay
@@ -20945,7 +20946,7 @@ zoo`.split("\n");
       } else if (_stewardNamesCt) {
         doc.n = _stewardNamesCt;
       }
-      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", STEWARDS_D + pub], ["t", NET]], content: JSON.stringify(doc) }, sk));
+      return publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", STEWARDS_D + pub], ["t", NET]], content: JSON.stringify(doc) }), sk));
     },
     // What this church has granted each steward. Empty array = nothing; ABSENT = everything (an unscoped
     // steward, which is every steward that existed before this feature).
@@ -20973,7 +20974,7 @@ zoo`.split("\n");
       const doc = { self: _selfVoice && _selfVoice.name ? { ..._selfVoice, churchName: lastProfile.name || "" } : null, public: { ..._publicVoices } };
       const sealedVoice = _sealChurchDoc(doc);
       if (sealedVoice == null) return Promise.resolve(false);
-      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", VOICE_D + pub], ["t", NET]], content: sealedVoice }, sk));
+      return publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", VOICE_D + pub], ["t", NET]], content: sealedVoice }), sk));
     },
     setVoice(name, office) {
       _selfVoice = name && String(name).trim() ? { name: String(name).trim().slice(0, 60), office: String(office || "").trim().slice(0, 40) } : null;
@@ -21360,13 +21361,13 @@ zoo`.split("\n");
       if (!sk || !msgId) return Promise.resolve(null);
       const tags = [["d", HIDE_D + msgId], ["t", NET], ["p", pub]];
       if (groupId) tags.push(["t", groupId]);
-      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags, content: JSON.stringify({ groupId: groupId || "" }) }, sk));
+      return publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags, content: JSON.stringify({ groupId: groupId || "" }) }), sk));
     },
     unhideMessage(groupId, msgId) {
       if (!sk || !msgId) return Promise.resolve(null);
       const tags = [["d", HIDE_D + msgId], ["t", NET], ["p", pub], ["deleted", "1"]];
       if (groupId) tags.push(["t", groupId]);
-      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags, content: "" }, sk));
+      return publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags, content: "" }), sk));
     },
     // the set of hidden message ids → cb(Set<msgId>) on every change. Unsub fn.
     subscribeHidden(cb) {
@@ -21865,12 +21866,12 @@ zoo`.split("\n");
       } catch (e) {
         return null;
       }
-      const ok = await _publishToRelays(finalizeEvent2({
+      const ok = await _publishToRelays(finalizeEvent2(_monotonic({
         kind: 30078,
         created_at: now(),
         tags: [["d", CHECKINPERM_D + person], ["t", NET], ["church", cp], ["person", person]],
         content: JSON.stringify(body)
-      }, sk));
+      }), sk));
       if (ok === false || ok == null) return null;
       return { ...body };
     },
@@ -21891,12 +21892,12 @@ zoo`.split("\n");
       if (!sk || !_mayClearForCheckin()) return Promise.resolve(null);
       const who = String(person || "").trim().toLowerCase();
       if (!/^[0-9a-f]{64}$/.test(who)) return Promise.resolve(null);
-      return _publishToRelays(finalizeEvent2({
+      return _publishToRelays(finalizeEvent2(_monotonic({
         kind: 30078,
         created_at: now(),
         tags: [["d", CHECKINPERM_D + who], ["t", NET], ["church", pub], ["deleted", "1"]],
         content: ""
-      }, sk));
+      }), sk));
     },
     // READ THE CLEARANCES BACK. Through readCheckinPermission — the relay's own parser — rather than a second
     // reading of the same JSON, so the console and the box cannot disagree about what a permission means. A
@@ -22203,12 +22204,12 @@ zoo`.split("\n");
         return null;
       }
       if (built.failed.length) _warnUnsealed("check-in helper", built.failed);
-      const ok = await _publishToRelays(finalizeEvent2({
+      const ok = await _publishToRelays(finalizeEvent2(_monotonic({
         kind: 30078,
         created_at: now(),
         tags: [["d", CHECKINHELPER_D + session], ["t", NET], ["church", cp], ["session", session]],
         content: JSON.stringify(built.doc)
-      }, sk));
+      }), sk));
       if (ok === false || ok == null) return null;
       return {
         session,
@@ -22256,12 +22257,12 @@ zoo`.split("\n");
       if (!sk || !churchSkHeld() || actingChurch) return Promise.resolve(null);
       const sid = String(session || "");
       if (!sid) return Promise.resolve(null);
-      return _publishToRelays(finalizeEvent2({
+      return _publishToRelays(finalizeEvent2(_monotonic({
         kind: 30078,
         created_at: now(),
         tags: [["d", CHECKINHELPER_D + sid], ["t", NET], ["church", pub], ["deleted", "1"]],
         content: ""
-      }, sk));
+      }), sk));
     },
     // ── THE TWO QUESTIONS THE CHECK-IN SCREEN HAS TO ASK BEFORE IT SAYS ANYTHING ────────────────────────────
     //
@@ -23111,12 +23112,12 @@ zoo`.split("\n");
       const np = toPubHex(input);
       if (!np) return Promise.resolve(null);
       const content = JSON.stringify({ joined: true });
-      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", NETWORK_D + np], ["t", NET], ["p", np]], content }, sk)).then((ok) => ok ? { networkPub: np, npub: npubEncode(np) } : null);
+      return publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", NETWORK_D + np], ["t", NET], ["p", np]], content }), sk)).then((ok) => ok ? { networkPub: np, npub: npubEncode(np) } : null);
     },
     leaveNetwork(networkPub) {
       if (!sk) return Promise.resolve(null);
       const np = toPubHex(networkPub) || networkPub;
-      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", NETWORK_D + np], ["t", NET], ["deleted", "1"]], content: "" }, sk));
+      return publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", NETWORK_D + np], ["t", NET], ["deleted", "1"]], content: "" }), sk));
     },
     // create a brand-new network: generate its key, join it (so the relay lets it post here), then
     // publish the network's profile + a starter announcements channel (signed by the network key).
@@ -23128,7 +23129,7 @@ zoo`.split("\n");
       const nPub = getPublicKey2(nsk);
       saveNetKey({ pub: nPub, mnemonic: m, name: name || "Network" });
       await window.Steward.joinNetwork(nPub);
-      await publish(finalizeEvent2({ kind: 0, created_at: now(), tags: [], content: JSON.stringify({ name: name || "Network" }) }, nsk));
+      await publish(finalizeEvent2(_monotonic({ kind: 0, created_at: now(), tags: [], content: JSON.stringify({ name: name || "Network" }) }), nsk));
       await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", GROUP_D + "net-announce"], ["t", NET]], content: JSON.stringify({ name: "Announcements", kind: "broadcast", sub: "From " + (name || "the network"), icon: "globe", accent: "var(--clay)" }) }, nsk));
       window.dispatchEvent(new CustomEvent("steward-networks"));
       return { networkPub: nPub, npub: npubEncode(nPub), mnemonic: m };
@@ -23141,7 +23142,7 @@ zoo`.split("\n");
     publishNetworkAnnouncement(networkPub, text) {
       const signer = skFor(networkPub);
       if (!signer || !text || !text.trim()) return Promise.resolve(null);
-      return publish(finalizeEvent2({ kind: 1, created_at: now(), tags: [["t", NET], ["t", "net-announce"], ["p", networkPub]], content: text.trim() }, signer));
+      return publish(finalizeEvent2(_monotonic({ kind: 1, created_at: now(), tags: [["t", NET], ["t", "net-announce"], ["p", networkPub]], content: text.trim() }), signer));
     },
     // a network's broadcast announcements (most recent first) — for previewing on the console
     subscribeNetworkAnnouncements(networkPub, onPosts) {

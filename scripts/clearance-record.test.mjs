@@ -52,6 +52,10 @@ function runSetApproved({ pub, trail, pubkeys, listKnown }) {
     // esbuild renames imported bindings, so bind whatever name the SHIPPED bundle actually uses rather than
     // the one in the source. Discovered from the bundle, not guessed — a guess here fails as "refused".
     [FINALIZE]: (evt) => evt,
+    // Stage 3 of reference/SCOPE-RELAY-CORRECTED-TIME-2026-09-26.md put setApproved's write through
+    // _monotonic(). Identity, which is what the shipped one returns for a first write of a document;
+    // this file is about the CLEARED TRAIL inside the content, not about the stamp.
+    _monotonic: (t) => t,
     _publishToRelays: (evt) => { published = JSON.parse(evt.content); return Promise.resolve(true); },
     APPROVED_D: 'trinityone/approved:',
     NET: 'trinityone',

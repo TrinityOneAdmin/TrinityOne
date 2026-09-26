@@ -133,6 +133,12 @@ function harness({ stewardCaps = { [SGLEAD]: ['safeguarding'], [TREASURER]: ['fi
     nip44d: (ct, ck) => { const pre = 'sealed[' + ck + ']'; if (String(ct).indexOf(pre) !== 0) throw new Error('wrong key'); return String(ct).slice(pre.length); },
     decrypt: (ct, ck) => { const pre = 'sealed[' + ck + ']'; if (String(ct).indexOf(pre) !== 0) throw new Error('wrong key'); return String(ct).slice(pre.length); },
     finalizeEvent: (e) => ({ ...e, id: 'evt', pubkey: CHURCH, sig: 'sig' }),
+    // Stage 3 of reference/SCOPE-RELAY-CORRECTED-TIME-2026-09-26.md routed every raw publisher in the
+    // console through _monotonic(), so a lifted writer needs it in scope. IDENTITY here, deliberately:
+    // that is exactly what the shipped one returns for the first write of a document, and it leaves every
+    // row in this file measuring what it measured before. The ordering _monotonic adds is measured in
+    // scripts/two-safeguarding-writes-in-one-second-both-land.test.mjs; here it must decide nothing.
+    _monotonic: (t) => t,
     _publishToRelays: async (e) => { published.push(e); return publishOk; },
     // THE RELAY POOL, captured rather than dialled — so the SHIPPED read-back can be driven with events the
     // SHIPPED writers really produced. It records the subscription's handlers and nothing else; every decision

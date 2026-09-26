@@ -214,9 +214,11 @@ test('"Sync turned off" is not said over a refused publish', async () => {
   }
   // esbuild renames it `finalizeEvent2` in this bundle — pass the name the SHIPPED text actually uses, or the
   // lifted function resolves it from the global scope and the test asserts about nothing.
-  const mk = (lands) => new Function('sk', 'pub', 'publish', 'finalizeEvent2', 'now',
+  // …and `_monotonic`, which stage 3 of SCOPE-RELAY-CORRECTED-TIME-2026-09-26 put every raw publisher
+  // through. Identity here: that is what the shipped one returns for a first write of a document.
+  const mk = (lands) => new Function('sk', 'pub', 'publish', 'finalizeEvent2', 'now', '_monotonic',
     'return ({ ' + BUNDLE.slice(i, end) + ' })')('sk', 'p', async () => (lands ? { id: 'e' } : false),
-      (t) => t, () => 1756900000).syncDisable;
+      (t) => t, () => 1756900000, (t) => t).syncDisable;
   await assert.rejects(() => mk(false)(),
     /STILL mirroring|could not be switched off/,
     'the console said "Sync turned off." over a document no relay accepted — the boxes go on mirroring each ' +

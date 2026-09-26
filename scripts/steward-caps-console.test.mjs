@@ -46,6 +46,12 @@ function loadSetStewards(existingCaps) {
     _selfVoice: null, _publicVoices: {}, lastProfile: {},   // the console's by-line rides this roster (2026-08-26); empty here, so these cases still assert the plain shape
     STEWARDS_D: 'trinityone/stewards:', NET: 'trinityone',
     finalizeEvent: (t) => t, finalizeEvent2: (t) => t,   // the bundler renames it; accept both
+    // Stage 3 of reference/SCOPE-RELAY-CORRECTED-TIME-2026-09-26.md routed every raw publisher in the
+    // console through _monotonic(), so a lifted writer needs it in scope. IDENTITY here, deliberately:
+    // that is exactly what the shipped one returns for the first write of a document, and it leaves every
+    // row in this file measuring what it measured before. The ordering _monotonic adds is measured in
+    // scripts/two-safeguarding-writes-in-one-second-both-land.test.mjs; here it must decide nothing.
+    _monotonic: (t) => t,
     publish: (e) => { published.push(e); return Promise.resolve(e); },
   });
   return { fn, published };

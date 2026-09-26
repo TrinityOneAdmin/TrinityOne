@@ -199,6 +199,10 @@ function consoleOn({ church, origin, canonical = [], pins = {}, extra = [], stor
     WebSocket: function () { setTimeout(() => { try { this.onerror && this.onerror(); } catch (e) {} }, 0); this.close = () => {}; },
     _waitForRegistration: async () => {},
     _lastOk: new Map(),
+    // Stage 3 of reference/SCOPE-RELAY-CORRECTED-TIME-2026-09-26.md put enrolRelayNet's write through
+    // _monotonic(). Identity here: that is what the shipped one returns for a first write, so every row
+    // in this file measures what it measured before.
+    _monotonic: (t) => t,
     setNamedRelays: () => {}, getNamedRelays: () => [],
   });
   store.setItem('trinityone.steward.extra-relays', JSON.stringify(extra));

@@ -48,6 +48,12 @@ function loadSetStewards(caps, names, since, clock = 1787200000) {
     // still publish exactly the shape it always did — which is what the "plain old shape" cases below assert.
     _selfVoice: null, _publicVoices: {}, lastProfile: {},
     finalizeEvent: (t) => t, publish: (e) => { published.push(e); return Promise.resolve(e); },
+    // Stage 3 of reference/SCOPE-RELAY-CORRECTED-TIME-2026-09-26.md routed every raw publisher in the
+    // console through _monotonic(), so a lifted writer needs it in scope. IDENTITY here, deliberately:
+    // that is exactly what the shipped one returns for the first write of a document, and it leaves every
+    // row in this file measuring what it measured before. The ordering _monotonic adds is measured in
+    // scripts/two-safeguarding-writes-in-one-second-both-land.test.mjs; here it must decide nothing.
+    _monotonic: (t) => t,
   });
   return { fn, published };
 }

@@ -68,7 +68,10 @@ test('CONTROL: a relay that DOES prove itself keeps its identity', async () => {
 test('switching sync ON over a document nobody accepted throws', async () => {
   const body = lift('syncEnable');
   // esbuild renames the import to finalizeEvent2 in the bundle — inject both names.
+  // …and `_monotonic`, which stage 3 of SCOPE-RELAY-CORRECTED-TIME-2026-09-26 put every raw publisher
+  // through. Identity here: that is what the shipped one returns for a first write of a document.
   const mk = (accepted) => new Function('sk', 'pub', 'window', 'publish', 'finalizeEvent2', 'now', 'JSON',
+    '_monotonic',
     'return ({ ' + body + ' })')(
     'sk', 'pub',
     { Steward: { relayIdentities: async () => ([
@@ -76,7 +79,7 @@ test('switching sync ON over a document nobody accepted throws', async () => {
         { url: 'wss://b/relay', pubkey: 'b'.repeat(64), online: true },
       ]) } },
     async () => (accepted ? { id: 'evt' } : null),
-    (e) => e, () => 1, JSON,
+    (e) => e, () => 1, JSON, (t) => t,
   ).syncEnable;
   await assert.rejects(() => mk(false)(),
     /no relay accepted/i,

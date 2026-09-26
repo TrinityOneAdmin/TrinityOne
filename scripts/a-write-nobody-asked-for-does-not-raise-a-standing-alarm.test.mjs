@@ -332,6 +332,9 @@ function liftBootTimer({ actingChurch }) {
     now: () => 1756900000,
     JSON, Map, Set, Array, Object, String, Number, Boolean, Promise, Error,
     finalizeEvent2: (t) => ({ ...t, pubkey: 'signer' }),
+    // Stage 3 of reference/SCOPE-RELAY-CORRECTED-TIME-2026-09-26.md put syncEnable's write through
+    // _monotonic(). Identity, which is what the shipped one returns for a first write of a document.
+    _monotonic: (t) => t,
     // The shipped publish() dispatches steward-publish-error with `background: !!(opts && opts.background)`
     // on a total refusal and returns false. That is all this needs it to be.
     publish: async (evt, opts) => {
