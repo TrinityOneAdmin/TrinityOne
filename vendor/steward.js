@@ -6317,6 +6317,8 @@
     }
     const by = String(rec._by || "");
     const had = vers.get(by);
+    const wild = vers.get("*");
+    if (wild && wild._tomb && (wild.ts || 0) >= (rec.ts || 0)) return false;
     if (had && had._tomb && (had.ts || 0) >= (rec.ts || 0)) return false;
     if (had && (had.ts || 0) > (rec.ts || 0)) return false;
     vers.set(by, rec);
@@ -6334,6 +6336,8 @@
     const mayName = typeof _authority === "function" ? !!_authority({ _by: by }) : false;
     const keys = [k0];
     if (cp && mayName && named.some((t) => t === cp) && !keys.includes(cp)) keys.push(cp);
+    const wild = !!(cp && k0 === cp && named.includes("*"));
+    if (wild && !keys.includes("*")) keys.push("*");
     const tomb = (k) => ({ _tomb: true, _by: k, ts: ts || 0 });
     const vers = versions.get(id);
     if (!vers) {
@@ -6346,6 +6350,9 @@
         return true;
       }
       return false;
+    }
+    if (wild) {
+      for (const k of vers.keys()) if (!keys.includes(k)) keys.push(k);
     }
     let did = false;
     for (const k of keys) {
@@ -16377,12 +16384,26 @@ zoo`.split("\n");
     const caps = _capsOf(by);
     return !caps || caps.includes("content");
   }
+  function _myOwnPub() {
+    try {
+      return getPublicKey2(sk);
+    } catch (e) {
+      return pub;
+    }
+  }
+  function _blobAuthTags(tags) {
+    if (actingChurch && !tags.some((t) => t[0] === "church")) return [...tags, ["church", actingChurch]];
+    return tags;
+  }
   function feChurch(tmpl, signer) {
     if (actingChurch && !(tmpl.tags || []).some((t) => t[0] === "church")) {
       tmpl = { ...tmpl, tags: [...tmpl.tags || [], ["church", actingChurch]] };
     }
     if (actingChurch && (tmpl.tags || []).some((t) => t[0] === "deleted") && !(tmpl.tags || []).some((t) => t[0] === "for")) {
       tmpl = { ...tmpl, tags: [...tmpl.tags || [], ["for", actingChurch]] };
+    }
+    if (!actingChurch && (tmpl.tags || []).some((t) => t[0] === "deleted") && !(tmpl.tags || []).some((t) => t[0] === "for")) {
+      tmpl = { ...tmpl, tags: [...tmpl.tags || [], ["for", "*"]] };
     }
     return finalizeEvent2(_monotonic(tmpl), signer || sk);
   }
@@ -18725,7 +18746,7 @@ zoo`.split("\n");
       const sha = await _sha256hex(bytes);
       const ctype = enc ? "application/octet-stream" : file.type || "application/octet-stream";
       const _upAt = _credNow();
-      const authHdr = "Nostr " + btoa(JSON.stringify(finalizeEvent2({ kind: 24242, created_at: _upAt, tags: [["t", "upload"], ["x", sha], ["expiration", String(_upAt + 600)]], content: "upload" }, sk)));
+      const authHdr = "Nostr " + btoa(JSON.stringify(finalizeEvent2({ kind: 24242, created_at: _upAt, tags: _blobAuthTags([["t", "upload"], ["x", sha], ["expiration", String(_upAt + 600)]]), content: "upload" }, sk)));
       const native = _isNative();
       const body = native ? _b64(bytes) : bytes;
       const put = async (b) => {
@@ -18757,11 +18778,30 @@ zoo`.split("\n");
       return { sha256: j.sha256, size: j.size, host: primary, hosts, mime: file.type || j.type || "", enc };
     },
     // publish a signed sermon doc referencing an uploaded blob (title + sha256 + host(s) for redundancy).
+    //
+    // OPTION A, PHASE 2 (2026-09-25): THE DELEGATED-CONSOLE REFUSAL ABOVE THIS LINE IS GONE ON PURPOSE. It read
+    // "A DELEGATED CONSOLE CANNOT PUBLISH A SERMON, AND IS TOLD SO BEFORE ANYTHING IS SENT" from 2026-09-22,
+    // because every reader filtered `authors:[churchpub]` and a steward-signed sermon reached nobody — not a
+    // member's app, not a member's Today card, not even this console's own list (measured 0 / 0 / 0). All four
+    // readers now accept a rostered CONTENT steward's `['church', cp]`-tagged copy
+    // (`_openSermons`/`subscribePinnedSermon` in src/fellowship.src.js, `subscribeSermons`/
+    // `subscribePinnedSermon` here), and the relay grants the write the same way (scripts/gateway.mjs). A
+    // steward without the content capability is still refused, by the relay itself — this function no longer
+    // needs to guess that in advance; `publish()`'s real answer is what the caller sees.
+    //
+    // AN EDIT MUST NOT RE-DATE THE SERMON — `s.contentTs` FIRST, and it is why that field exists. This was
+    // `ts: s.ts || now()`, and app/stew-dashboard.jsx's Edit dialog saves with `publishSermon({ ...editing,
+    // ...fields })` where `editing` is a row out of subscribeSermons above. That row's `ts` is the EVENT's
+    // `created_at`, so each save wrote the last save's clock into the document as the preaching date and the
+    // real one was gone for good. MEASURED against a real relay: published 31 Jul, retitled 25 Sep, retitled
+    // again a minute later, and the document then held 25 Sep with 31 Jul recoverable from nowhere. Reading
+    // `contentTs` (the date the document itself carries) leaves it untouched. A genuinely NEW sermon has
+    // neither field — app/stew-dashboard.jsx's doUpload passes title/desc/sha256/host(s)/mime/size/enc and no
+    // date — so it still gets `now()`.
     publishSermon(s) {
       if (!sk) return Promise.resolve(null);
-      if (actingChurch) return Promise.reject(new Error("Only the church\u2019s own console can publish a sermon. Ask whoever holds the church key."));
       const id = s.id || "sermon" + Date.now();
-      const content = JSON.stringify({ id, title: s.title || "Sermon", desc: s.desc && String(s.desc).trim() || void 0, sha256: s.sha256, hosts: s.hosts && s.hosts.length ? s.hosts : [s.host], mime: s.mime || "", size: s.size || 0, ts: s.ts || now(), enc: s.enc || void 0, series: s.series || void 0 });
+      const content = JSON.stringify({ id, title: s.title || "Sermon", desc: s.desc && String(s.desc).trim() || void 0, sha256: s.sha256, hosts: s.hosts && s.hosts.length ? s.hosts : [s.host], mime: s.mime || "", size: s.size || 0, ts: s.contentTs || s.ts || now(), enc: s.enc || void 0, series: s.series || void 0 });
       return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", SERMON_D + id], ["t", NET]], content })).then((r) => {
         if (r === false) throw new Error("Couldn\u2019t save \u2014 every relay rejected it. Check your connection.");
         return { id, ...JSON.parse(content) };
@@ -18769,7 +18809,6 @@ zoo`.split("\n");
     },
     async removeSermon(s) {
       if (!sk) return null;
-      if (actingChurch) throw new Error("Only the church\u2019s own console can remove a sermon. Nothing was deleted.");
       const id = s && typeof s === "object" ? s.id : s;
       const _tomb = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", SERMON_D + id], ["t", NET], ["deleted", "1"]], content: "" }));
       if (_tomb === false) throw new Error("Couldn\u2019t remove that sermon \u2014 no relay accepted the change, so nothing was deleted.");
@@ -18777,7 +18816,7 @@ zoo`.split("\n");
       const hosts = s && typeof s === "object" && (s.hosts && s.hosts.length ? s.hosts : s.host ? [s.host] : []) || [];
       if (sha && hosts.length) {
         const _delAt = _credNow();
-        const auth = "Nostr " + btoa(JSON.stringify(finalizeEvent2({ kind: 24242, created_at: _delAt, tags: [["t", "delete"], ["x", sha], ["expiration", String(_delAt + 600)]], content: "delete" }, sk)));
+        const auth = "Nostr " + btoa(JSON.stringify(finalizeEvent2({ kind: 24242, created_at: _delAt, tags: _blobAuthTags([["t", "delete"], ["x", sha], ["expiration", String(_delAt + 600)]]), content: "delete" }, sk)));
         for (const h of hosts) {
           try {
             await fetch(String(h).replace(/\/+$/, "") + "/blob/" + sha, { method: "DELETE", headers: { Authorization: auth } });
@@ -18797,25 +18836,45 @@ zoo`.split("\n");
       if (!sk) return Promise.resolve(null);
       return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", PINSERMON_D + pub], ["t", NET], ["deleted", "1"]], content: "" }));
     },
+    // OPTION A, PHASE 2 (2026-09-25): widened from `authors:[pub]` + `#d` with NO in-handler author check at
+    // all — safe before this, because the filter itself WAS the whole trust boundary — to also accept
+    // `'#church':[pub]`, which needs one now: any author could tag themselves with this church otherwise.
+    // Multi-author (one constant store id, 'pinned', since this is a single per-church document) so
+    // `_absorbById`'s newest-TRUSTED-wins picks correctly between the church's own pin and a steward's.
     subscribePinnedSermon(onPinned) {
       if (!pub) {
         onPinned(null);
         return () => {
         };
       }
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#d": [PINSERMON_D + pub] }], {
+      const id = "pinned";
+      const versions = /* @__PURE__ */ new Map();
+      const byId = /* @__PURE__ */ new Map();
+      const emit = () => {
+        const rec = byId.get(id);
+        onPinned(rec || null);
+      };
+      const sub = pool.subscribeMany(relays(), [
+        { kinds: [30078], authors: [pub], "#d": [PINSERMON_D + pub] },
+        { kinds: [30078], "#church": [pub], "#d": [PINSERMON_D + pub] }
+      ], {
         onevent(e) {
-          if ((e.tags.find((t) => t[0] === "deleted") || [])[1]) {
-            onPinned(null);
+          const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+          if (d !== PINSERMON_D + pub) return;
+          if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
+            _forgetById(versions, byId, id, e.pubkey, e.created_at, _consoleDisplay, { churchPub: pub, targets: _tombstoneTargets(e), mayName: _consoleChurchVoice });
+            emit();
             return;
           }
           try {
-            onPinned({ ...JSON.parse(e.content), at: e.created_at });
+            const p = JSON.parse(e.content);
+            _absorbById(versions, byId, id, { ...p, at: e.created_at, ts: e.created_at, _by: e.pubkey }, _consoleDisplay);
+            emit();
           } catch {
-            onPinned(null);
           }
         },
         oneose() {
+          emit();
         }
       });
       return () => {
@@ -18847,10 +18906,38 @@ zoo`.split("\n");
     // resets nobody's nudge: measured as 0 rows on a live gateway the day that grant was written, which is
     // why it was withdrawn the same day. Both callers say WHICH refusal it is rather than sending the
     // steward to look at a connection that is working perfectly.
+    //
+    // RE-GRANTED TO A DELEGATE 2026-09-25 (option A, phase 1) AND WITHDRAWN AGAIN THE SAME DAY, on the
+    // owner's decision, after an audit measured what the grant actually bought. Written down so the next
+    // session does not rediscover it as an incoherence and "fix" it a third time:
+    //   - THE STATED PURPOSE CANNOT HAPPEN. The grant exists so "every steward's nudge resets when any one of
+    //     them takes a backup". A delegate cannot take a backup: the export itself is owner-only (`doBackup`
+    //     in app/stew-dashboard.jsx, gated on `stewCapState('content').owner`, and unchanged by that round).
+    //     So the only press a delegate could make reach this document is the reminder-frequency segment.
+    //   - AND IT CARRIES A HAZARD. `setFrequency` passes this console's LOCAL `trinityone.lastBackupAt`, which
+    //     is 0 on any device that has not itself exported. With `at: at || now()` below, changing the
+    //     frequency then publishes `at: now()` — "backed up just now" — and every console's subscriber takes
+    //     `max(prev, m.at)`, clearing the overdue nudge church-wide over a backup nobody took.
+    //     ⚠ THAT HAZARD IS OLDER THAN THE GRANT AND IS STILL LIVE FOR THE CHURCH'S OWN CONSOLE: an owner on a
+    //     fresh device who changes the frequency publishes the same false `at`. It is NOT fixed here — see
+    //     the note raised with the owner 2026-09-25. Withdrawing the grant narrows who can trigger it; it
+    //     does not close it.
+    //
+    // ⚠ `at: at || 0`, NOT `at: at || now()`. It invented a backup time until 2026-09-25, and that invention
+    // was reachable from an ordinary press: `setFrequency` passes this console's LOCAL
+    // `trinityone.lastBackupAt`, which is 0 on any device that has not itself exported — a second steward's
+    // laptop, a reinstall, a church that has never backed up at all. Changing the reminder from Monthly to
+    // Weekly then published "backed up just now", every console took `max(prev, at)`, and EVERY steward's
+    // overdue nudge cleared over a backup that had never happened. The one thing this document exists to say,
+    // said falsely, by a dropdown.
+    // 0 means "no backup is known", which is exactly what the screen already renders — "Last backup: never",
+    // "You haven't backed up", and `overdue` true. So the worst case now NAGS a church that is fine, where
+    // before it REASSURED a church that was not. For a backup reminder that is the only safe direction.
+    // (The subscriber keeps `if (m.at)`, so a 0 record never erases what a device knows of its own export.)
     setBackupMeta(at, remind) {
       if (!sk) return Promise.resolve(null);
       if (actingChurch) return Promise.resolve(false);
-      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", BACKUPMETA_D + pub], ["t", NET]], content: JSON.stringify({ at: at || now(), remind: remind || "monthly" }) }));
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", BACKUPMETA_D + pub], ["t", NET]], content: JSON.stringify({ at: at || 0, remind: remind || "monthly" }) }));
     },
     subscribeBackupMeta(onMeta) {
       if (!pub) {
@@ -18859,10 +18946,14 @@ zoo`.split("\n");
         };
       }
       const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#d": [BACKUPMETA_D + pub] }], {
+        // `c.at || 0`, never `|| e.created_at`: created_at is when the RECORD was written — a cadence change,
+        // say — not when anyone backed up, so the fallback restated the same lie at read time. Every record
+        // ever written carries a non-zero `at` (the old `at || now()` saw to that), so this branch only ever
+        // catches a 0 written deliberately by the line above, or a malformed doc. Both mean "not known".
         onevent(e) {
           try {
             const c = JSON.parse(e.content);
-            onMeta({ at: c.at || e.created_at, remind: c.remind || "monthly" });
+            onMeta({ at: c.at || 0, remind: c.remind || "monthly" });
           } catch {
             onMeta(null);
           }
@@ -18883,15 +18974,18 @@ zoo`.split("\n");
     async mediaEncryptor(memberPubs) {
       if (!sk) throw new Error("no key");
       if (!_mediaKeyHex && (!_mediaKeyChecked || !_isRelayAuthed())) throw new Error("Can\u2019t encrypt this upload yet \u2014 this device hasn\u2019t finished connecting to your church\u2019s relay, so it can\u2019t tell whether your church already has a media key. Wait a moment and try again.");
-      if (!_mediaKeyHex) {
-        _mediaKeyHex = _hex(crypto.getRandomValues(new Uint8Array(32)));
-        _mediaKeyRing = [_mediaKeyHex];
+      if (actingChurch && !_mediaKeyHex) throw new Error("Can\u2019t encrypt this upload \u2014 your church hasn\u2019t shared its media key with this account yet. Ask whoever holds the church key to add you as a member of the church, or to upload this one themselves. Nothing has been uploaded.");
+      if (!actingChurch) {
+        if (!_mediaKeyHex) {
+          _mediaKeyHex = _hex(crypto.getRandomValues(new Uint8Array(32)));
+          _mediaKeyRing = [_mediaKeyHex];
+        }
+        const targets = [.../* @__PURE__ */ new Set([pub, ...(memberPubs || []).filter(Boolean)])];
+        const _mring = JSON.stringify(_mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex]);
+        const keys = await _sealEach(_mring, targets, (pl, mp) => encrypt3(pl, getConversationKey(sk, mp)));
+        const _env = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", MEDIAKEY_D + pub], ["t", NET]], content: JSON.stringify({ keys, rev: now() }) }));
+        if (_env === false) throw new Error("Can\u2019t encrypt this upload \u2014 your church\u2019s media key could not be saved, so nothing encrypted with it could ever be played. Nothing has been uploaded. A church media key can only be published from the console that holds the church\u2019s own key.");
       }
-      const targets = [.../* @__PURE__ */ new Set([pub, ...(memberPubs || []).filter(Boolean)])];
-      const _mring = JSON.stringify(_mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex]);
-      const keys = await _sealEach(_mring, targets, (pl, mp) => encrypt3(pl, getConversationKey(sk, mp)));
-      const _env = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", MEDIAKEY_D + pub], ["t", NET]], content: JSON.stringify({ keys, rev: now() }) }));
-      if (_env === false) throw new Error("Can\u2019t encrypt this upload \u2014 your church\u2019s media key could not be saved, so nothing encrypted with it could ever be played. Nothing has been uploaded. A church media key can only be published from the console that holds the church\u2019s own key.");
       const key = await crypto.subtle.importKey("raw", _unhex(_mediaKeyHex), "AES-GCM", false, ["encrypt"]);
       return async (bytes) => {
         const iv = crypto.getRandomValues(new Uint8Array(12));
@@ -18908,6 +19002,7 @@ zoo`.split("\n");
     // republishes the doc, but ONLY when someone's actually missing (idempotent → safe to call on every roster change).
     // Returns false (no-op) if this device hasn't loaded the media key yet, or if no sermon has ever been encrypted.
     async ensureMediaKeyForMembers(memberPubs) {
+      if (actingChurch) return false;
       if (!sk || !_mediaKeyHex) return false;
       const want = [.../* @__PURE__ */ new Set([pub, ...(memberPubs || []).filter(Boolean)])].filter((p) => !_localBlocked.has(String(p).toLowerCase()));
       const have = _mediaKeyDocKeys || {};
@@ -18941,6 +19036,7 @@ zoo`.split("\n");
     // unplayable, and the new envelope simply isn't wrapped to them. Protects future uploads only; anything they
     // already downloaded is theirs, and no key change alters that.
     async rotateMediaKey(memberPubs) {
+      if (actingChurch) return null;
       if (!sk || !pub) return false;
       if (!_isRelayAuthed()) return false;
       if (!_mediaKeyHex) return false;
@@ -19165,7 +19261,8 @@ zoo`.split("\n");
             const o = JSON.parse(e.content);
             _mediaKeyDocKeys = o && o.keys || null;
             _mediaKeyPushRefused = null;
-            const mine = o.keys && o.keys[pub];
+            const _meKey = _myOwnPub();
+            const mine = o.keys && (o.keys[_meKey] || (_meKey === pub ? null : o.keys[pub]));
             if (mine && sk) {
               const plain = decrypt3(mine, getConversationKey(sk, e.pubkey));
               let r = null;
@@ -19301,6 +19398,14 @@ zoo`.split("\n");
         return true;
       }
     },
+    // OPTION A, PHASE 2 (2026-09-25): widened the same way as subscribeGroups above — `authors:[pub]` OR
+    // `'#church':[pub]`, one version per author (`_absorbById`/`_forgetById`), `_consoleDisplay` deciding
+    // which author's copy of a given sermon id is shown.
+    //
+    // `contentTs` IS THE SERMON'S OWN DATE, and `ts` stays the event's `created_at` for the store — the full
+    // reasoning, and what was measured, is on `_openSermons` in src/fellowship.src.js. The console shows no
+    // date at all today, so what this field fixes HERE is (a) the row order and (b) what the Edit dialog
+    // spreads back into publishSermon, which is the half that destroys the original date.
     subscribeSermons(onSermons) {
       if (!pub) {
         onSermons([]);
@@ -19308,20 +19413,22 @@ zoo`.split("\n");
         };
       }
       const byId = /* @__PURE__ */ new Map();
-      const emit = () => onSermons([...byId.entries()].filter(([, s]) => s).map(([, s]) => s).sort((a, b) => (b.ts || 0) - (a.ts || 0)));
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }], {
+      const versions = /* @__PURE__ */ new Map();
+      const emit = () => onSermons([...byId.values()].sort((a, b) => (b.contentTs || 0) - (a.contentTs || 0)));
+      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (!d.startsWith(SERMON_D)) return;
-          if ((e.tags.find((t) => t[0] === "deleted") || [])[1]) {
-            byId.set(d, null);
+          const id = d.slice(SERMON_D.length);
+          if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
+            _forgetById(versions, byId, id, e.pubkey, e.created_at, _consoleDisplay, { churchPub: pub, targets: _tombstoneTargets(e), mayName: _consoleChurchVoice });
             emit();
             return;
           }
           try {
             const s = JSON.parse(e.content);
             if (s && s.sha256) {
-              byId.set(d, { ...s, at: e.created_at });
+              _absorbById(versions, byId, id, { ...s, id, at: e.created_at, ts: e.created_at, contentTs: Number(s.ts) || e.created_at, _by: e.pubkey }, _consoleDisplay);
               emit();
             }
           } catch {

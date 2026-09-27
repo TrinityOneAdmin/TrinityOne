@@ -2014,6 +2014,30 @@ function _consoleChurchVoice(rec) {
   const caps = _capsOf(by);
   return !caps || caps.includes('content');
 }
+// THE SAME "SAY WHICH CHURCH" PROBLEM AS feChurch, ON A DOOR feChurch DOES NOT GUARD.
+// A blob upload/delete is authorised by a kind-24242 event sent to a HOST as an Authorization header — not
+// a relay document — so it never passes through feChurch and never got the church tag. The relay has
+// always been ready for it (`_blobUploader`, scripts/gateway.mjs):
+//     const cp = tag('church');
+//     if (cp && stewardCan(ev.pubkey, cp, 'any')) return { church: cp, … };
+//     if (CHURCH_PUBS.has(ev.pubkey))            return { church: ev.pubkey, … };
+// …and the client simply never said. Measured 2026-09-25 against a live gateway: the owner's PUT is 201,
+// a CONTENT steward's is 401 "unauthorized: sign a kind-24242 upload auth with the church (or steward)
+// key". So option A widened every sermon READER and re-granted the relay write, and a delegated steward
+// still could not publish a sermon at all, because the bytes never got through the door before the
+// document was ever written. The DELETE half is the same tag and the same 401, and it is worse: the
+// tombstone lands, the file does not go, and the confirmation sheet has already promised "the stored file
+// is deleted".
+// NOT feChurch: that stamps `for` and a monotonic created_at, both meaningless to a blob host, and this
+// event is signed for a host rather than published to a relay.
+// OUR OWN pubkey, which is NOT `pub` on a delegated console (there `pub` is the church we act for).
+// Same idiom as the roster check further down; `pub` is the honest fallback because on an owner console
+// the two ARE the same key.
+function _myOwnPub() { try { return getPublicKey(sk); } catch (e) { return pub; } }
+function _blobAuthTags(tags) {
+  if (actingChurch && !tags.some(t => t[0] === 'church')) return [...tags, ['church', actingChurch]];
+  return tags;
+}
 function feChurch(tmpl, signer) {
   if (actingChurch && !(tmpl.tags || []).some(t => t[0] === 'church')) {
     tmpl = { ...tmpl, tags: [...(tmpl.tags || []), ['church', actingChurch]] };
@@ -2028,6 +2052,19 @@ function feChurch(tmpl, signer) {
   if (actingChurch && (tmpl.tags || []).some(t => t[0] === 'deleted')
       && !(tmpl.tags || []).some(t => t[0] === 'for')) {
     tmpl = { ...tmpl, tags: [...(tmpl.tags || []), ['for', actingChurch]] };
+  }
+  // AND THE CHURCH'S OWN TOMBSTONE NAMES EVERY COPY, which is the same grant in the other direction and was
+  // missing until 2026-09-25. Since option A a steward can author a sermon — and edit one, which creates a
+  // SECOND version under their own key — so the church deleting "its" sermon withdrew only the half it
+  // signed. Measured (AUDIT-delegated-publishing-2026-09-25 H2/M1): the steward's copy stayed listed on
+  // every screen while the blob DELETE succeeded, leaving a sermon nobody can play and nobody can remove;
+  // and an owner could not unpin a steward's featured sermon at all.
+  // `*` rather than naming authors: this console cannot know who holds a copy it has not received yet, and
+  // that race IS the failure. Honoured in _forgetById (src/church-doc-store.src.js) only for a tombstone
+  // signed by the church key itself, so a steward still cannot reach a colleague's copy — round 9 stands.
+  if (!actingChurch && (tmpl.tags || []).some(t => t[0] === 'deleted')
+      && !(tmpl.tags || []).some(t => t[0] === 'for')) {
+    tmpl = { ...tmpl, tags: [...(tmpl.tags || []), ['for', '*']] };
   }
   // Stamp HERE, where every church document is signed. The first attempt at this put it behind
   // _publishSigned() — which turned out to have exactly one caller, while forty-two paths call
@@ -5165,10 +5202,13 @@ window.Steward = {
     const sha = await _sha256hex(bytes);
     const ctype = enc ? 'application/octet-stream' : (file.type || 'application/octet-stream');
     // one signed, host-agnostic kind-24242 upload auth, reused to PUT the SAME blob to the primary + each backup.
-    // _credNow() for both, read ONCE — see _putBlob. _blobUploader refuses when `expiration` is behind the
-    // RELAY's clock, so a console five minutes fast could not upload a sermon to its own relay.
+    // TWO FIXES ON ONE LINE, merged 2026-09-27. `_credNow()` (relay-corrected time, read ONCE — see
+    // _putBlob) because `_blobUploader` refuses when `expiration` is behind the RELAY's clock, so a console
+    // five minutes fast could not upload a sermon to its own relay. `_blobAuthTags` because the same door
+    // reads a `['church', cp]` tag to admit a DELEGATED steward — without it a delegate's PUT is 401 and
+    // every sermon reader the option-A work widened has nothing to read. Neither supersedes the other.
     const _upAt = _credNow();
-    const authHdr = 'Nostr ' + btoa(JSON.stringify(finalizeEvent({ kind: 24242, created_at: _upAt, tags: [['t', 'upload'], ['x', sha], ['expiration', String(_upAt + 600)]], content: 'upload' }, sk)));
+    const authHdr = 'Nostr ' + btoa(JSON.stringify(finalizeEvent({ kind: 24242, created_at: _upAt, tags: _blobAuthTags([['t', 'upload'], ['x', sha], ['expiration', String(_upAt + 600)]]), content: 'upload' }, sk)));
     // native (CapacitorHttp) mangles a raw binary PUT body → send base64 text + a marker the gateway decodes; web sends raw bytes
     const native = _isNative(); const body = native ? _b64(bytes) : bytes;
     const put = async (b) => { const h = { Authorization: authHdr, 'Content-Type': ctype }; if (native) h['X-Blob-B64'] = '1'; const r = await fetch(b + '/blob', { method: 'PUT', headers: h, body }); if (!r.ok) { let m = ''; try { m = ((await r.json()) || {}).error || ''; } catch (e) {} throw new Error(m || ('Upload failed (' + r.status + ')')); } return r.json(); };
@@ -5184,27 +5224,39 @@ window.Steward = {
     return { sha256: j.sha256, size: j.size, host: primary, hosts, mime: (file.type || j.type || ''), enc };
   },
   // publish a signed sermon doc referencing an uploaded blob (title + sha256 + host(s) for redundancy).
+  //
+  // OPTION A, PHASE 2 (2026-09-25): THE DELEGATED-CONSOLE REFUSAL ABOVE THIS LINE IS GONE ON PURPOSE. It read
+  // "A DELEGATED CONSOLE CANNOT PUBLISH A SERMON, AND IS TOLD SO BEFORE ANYTHING IS SENT" from 2026-09-22,
+  // because every reader filtered `authors:[churchpub]` and a steward-signed sermon reached nobody — not a
+  // member's app, not a member's Today card, not even this console's own list (measured 0 / 0 / 0). All four
+  // readers now accept a rostered CONTENT steward's `['church', cp]`-tagged copy
+  // (`_openSermons`/`subscribePinnedSermon` in src/fellowship.src.js, `subscribeSermons`/
+  // `subscribePinnedSermon` here), and the relay grants the write the same way (scripts/gateway.mjs). A
+  // steward without the content capability is still refused, by the relay itself — this function no longer
+  // needs to guess that in advance; `publish()`'s real answer is what the caller sees.
+  //
+  // AN EDIT MUST NOT RE-DATE THE SERMON — `s.contentTs` FIRST, and it is why that field exists. This was
+  // `ts: s.ts || now()`, and app/stew-dashboard.jsx's Edit dialog saves with `publishSermon({ ...editing,
+  // ...fields })` where `editing` is a row out of subscribeSermons above. That row's `ts` is the EVENT's
+  // `created_at`, so each save wrote the last save's clock into the document as the preaching date and the
+  // real one was gone for good. MEASURED against a real relay: published 31 Jul, retitled 25 Sep, retitled
+  // again a minute later, and the document then held 25 Sep with 31 Jul recoverable from nowhere. Reading
+  // `contentTs` (the date the document itself carries) leaves it untouched. A genuinely NEW sermon has
+  // neither field — app/stew-dashboard.jsx's doUpload passes title/desc/sha256/host(s)/mime/size/enc and no
+  // date — so it still gets `now()`.
   publishSermon(s) {
     if (!sk) return Promise.resolve(null);
-    // A DELEGATED CONSOLE CANNOT PUBLISH A SERMON, AND IS TOLD SO BEFORE ANYTHING IS SENT.
-    //
-    // The relay refuses `trinityone/sermon:` to anything but the church key or its network (gateway.mjs,
-    // 2026-09-22) and the reason is the READERS, not caution: _openSermons, subscribeSermons and
-    // subscribePinnedSermon all filter `authors:[churchpub]`, so a steward-signed sermon is served to
-    // nobody — not to a member's app, not to a member's Today card, not to this console's own list.
-    // Measured as 0 / 0 / 0 on a live gateway. Asking anyway would earn a refusal and the connection
-    // advice that goes with it, which is the wrong thing to tell somebody whose connection is fine.
-    if (actingChurch) return Promise.reject(new Error('Only the church’s own console can publish a sermon. Ask whoever holds the church key.'));
     const id = s.id || ('sermon' + Date.now());
-    const content = JSON.stringify({ id, title: s.title || 'Sermon', desc: (s.desc && String(s.desc).trim()) || undefined, sha256: s.sha256, hosts: (s.hosts && s.hosts.length) ? s.hosts : [s.host], mime: s.mime || '', size: s.size || 0, ts: s.ts || now(), enc: s.enc || undefined, series: s.series || undefined });
+    const content = JSON.stringify({ id, title: s.title || 'Sermon', desc: (s.desc && String(s.desc).trim()) || undefined, sha256: s.sha256, hosts: (s.hosts && s.hosts.length) ? s.hosts : [s.host], mime: s.mime || '', size: s.size || 0, ts: s.contentTs || s.ts || now(), enc: s.enc || undefined, series: s.series || undefined });
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', SERMON_D + id], ['t', NET]], content }))
       .then((r) => { if (r === false) throw new Error('Couldn’t save — every relay rejected it. Check your connection.'); return { id, ...JSON.parse(content) }; });
   },
   async removeSermon(s) {
     if (!sk) return null;
-    // THE SAME BOUNDARY AS publishSermon ABOVE, and it matters more here: the tombstone IS a `sermon:` write,
-    // so a delegated console is refused it — and the blob deletes further down must never run over a refusal.
-    if (actingChurch) throw new Error('Only the church’s own console can remove a sermon. Nothing was deleted.');
+    // OPTION A, PHASE 2 (2026-09-25): a rostered CONTENT steward may now tombstone a sermon they (or the
+    // church) published — same grant as publishSermon above, same reason. A steward without the content
+    // capability is still refused, by the relay's own accept() rule, and the `_tomb === false` check just
+    // below is what turns that refusal into "nothing was deleted" rather than a blob delete run over it.
     const id = (s && typeof s === 'object') ? s.id : s;
     // THE TOMBSTONE FIRST, AND ONLY THEN THE BYTES — and the tombstone must actually have landed. This
     // `await publish(...)` discarded its result and the DELETE loop below ran regardless, which is the worst
@@ -5215,18 +5267,21 @@ window.Steward = {
     // refused this document by the relay — measured 2026-09-22.)
     const _tomb = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', SERMON_D + id], ['t', NET], ['deleted', '1']], content: '' }));
     // NO LONGER NAMES A PERMISSION. It used to end "…this needs the “Groups, rotas, services, events,
-    // posts” permission", which was true for one day and is not a thing a church can grant any more:
-    // `sermon:` is church-key-only, and the delegated case is answered above by name rather than by a
-    // refusal whose advice would be impossible to act on.
+    // posts” permission" — a sentence that was true for one day, then false while `sermon:` was
+    // church-key-only, and is true again now that CONTENT covers it (option A, 2026-09-25). Left unnamed
+    // deliberately: the relay's own refusal is the accurate answer either way, and naming a capability here
+    // is one more place to forget to update the next time this grant changes shape.
     if (_tomb === false) throw new Error('Couldn’t remove that sermon — no relay accepted the change, so nothing was deleted.');
     // reclaim the stored bytes on each host (best-effort; content-addressed so the same sha lives on every mirror)
     const sha = s && typeof s === 'object' && s.sha256;
     const hosts = (s && typeof s === 'object' && ((s.hosts && s.hosts.length) ? s.hosts : (s.host ? [s.host] : []))) || [];
     if (sha && hosts.length) {
-      // _credNow() for both, read ONCE — same gate as the upload arm (_blobUploader, action 'delete').
+      // Same two fixes as the upload arm above, same door (`_blobUploader`, action 'delete'): corrected
+      // time so a skewed console is not refused, and the church tag so a delegate's Remove actually frees
+      // the bytes instead of tombstoning the document and leaving the file on every host.
       // The TOMBSTONE above is a church document and keeps now(): stage 2 corrects credentials only.
       const _delAt = _credNow();
-      const auth = 'Nostr ' + btoa(JSON.stringify(finalizeEvent({ kind: 24242, created_at: _delAt, tags: [['t', 'delete'], ['x', sha], ['expiration', String(_delAt + 600)]], content: 'delete' }, sk)));
+      const auth = 'Nostr ' + btoa(JSON.stringify(finalizeEvent({ kind: 24242, created_at: _delAt, tags: _blobAuthTags([['t', 'delete'], ['x', sha], ['expiration', String(_delAt + 600)]]), content: 'delete' }, sk)));
       for (const h of hosts) { try { await fetch(String(h).replace(/\/+$/, '') + '/blob/' + sha, { method: 'DELETE', headers: { Authorization: auth } }); } catch (e) {} }
     }
     return true;
@@ -5241,11 +5296,27 @@ window.Steward = {
     if (!sk) return Promise.resolve(null);
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', PINSERMON_D + pub], ['t', NET], ['deleted', '1']], content: '' }));
   },
+  // OPTION A, PHASE 2 (2026-09-25): widened from `authors:[pub]` + `#d` with NO in-handler author check at
+  // all — safe before this, because the filter itself WAS the whole trust boundary — to also accept
+  // `'#church':[pub]`, which needs one now: any author could tag themselves with this church otherwise.
+  // Multi-author (one constant store id, 'pinned', since this is a single per-church document) so
+  // `_absorbById`'s newest-TRUSTED-wins picks correctly between the church's own pin and a steward's.
   subscribePinnedSermon(onPinned) {
     if (!pub) { onPinned(null); return () => {}; }
-    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#d': [PINSERMON_D + pub] }], {
-      onevent(e) { if ((e.tags.find(t => t[0] === 'deleted') || [])[1]) { onPinned(null); return; } try { onPinned({ ...JSON.parse(e.content), at: e.created_at }); } catch { onPinned(null); } },
-      oneose() {},
+    const id = 'pinned';
+    const versions = new Map();   // id -> Map(author -> their copy); see src/church-doc-store.src.js
+    const byId = new Map();
+    const emit = () => { const rec = byId.get(id); onPinned(rec || null); };
+    const sub = pool.subscribeMany(relays(), [
+      { kinds: [30078], authors: [pub], '#d': [PINSERMON_D + pub] },
+      { kinds: [30078], '#church': [pub], '#d': [PINSERMON_D + pub] },
+    ], {
+      onevent(e) {
+        const d = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (d !== PINSERMON_D + pub) return;
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { _forgetById(versions, byId, id, e.pubkey, e.created_at, _consoleDisplay, { churchPub: pub, targets: _tombstoneTargets(e), mayName: _consoleChurchVoice }); emit(); return; }
+        try { const p = JSON.parse(e.content); _absorbById(versions, byId, id, { ...p, at: e.created_at, ts: e.created_at, _by: e.pubkey }, _consoleDisplay); emit(); } catch {}
+      },
+      oneose() { emit(); },
     });
     return () => { try { sub.close(); } catch {} };
   },
@@ -5271,15 +5342,47 @@ window.Steward = {
   // resets nobody's nudge: measured as 0 rows on a live gateway the day that grant was written, which is
   // why it was withdrawn the same day. Both callers say WHICH refusal it is rather than sending the
   // steward to look at a connection that is working perfectly.
+  //
+  // RE-GRANTED TO A DELEGATE 2026-09-25 (option A, phase 1) AND WITHDRAWN AGAIN THE SAME DAY, on the
+  // owner's decision, after an audit measured what the grant actually bought. Written down so the next
+  // session does not rediscover it as an incoherence and "fix" it a third time:
+  //   - THE STATED PURPOSE CANNOT HAPPEN. The grant exists so "every steward's nudge resets when any one of
+  //     them takes a backup". A delegate cannot take a backup: the export itself is owner-only (`doBackup`
+  //     in app/stew-dashboard.jsx, gated on `stewCapState('content').owner`, and unchanged by that round).
+  //     So the only press a delegate could make reach this document is the reminder-frequency segment.
+  //   - AND IT CARRIES A HAZARD. `setFrequency` passes this console's LOCAL `trinityone.lastBackupAt`, which
+  //     is 0 on any device that has not itself exported. With `at: at || now()` below, changing the
+  //     frequency then publishes `at: now()` — "backed up just now" — and every console's subscriber takes
+  //     `max(prev, m.at)`, clearing the overdue nudge church-wide over a backup nobody took.
+  //     ⚠ THAT HAZARD IS OLDER THAN THE GRANT AND IS STILL LIVE FOR THE CHURCH'S OWN CONSOLE: an owner on a
+  //     fresh device who changes the frequency publishes the same false `at`. It is NOT fixed here — see
+  //     the note raised with the owner 2026-09-25. Withdrawing the grant narrows who can trigger it; it
+  //     does not close it.
+  //
+  // ⚠ `at: at || 0`, NOT `at: at || now()`. It invented a backup time until 2026-09-25, and that invention
+  // was reachable from an ordinary press: `setFrequency` passes this console's LOCAL
+  // `trinityone.lastBackupAt`, which is 0 on any device that has not itself exported — a second steward's
+  // laptop, a reinstall, a church that has never backed up at all. Changing the reminder from Monthly to
+  // Weekly then published "backed up just now", every console took `max(prev, at)`, and EVERY steward's
+  // overdue nudge cleared over a backup that had never happened. The one thing this document exists to say,
+  // said falsely, by a dropdown.
+  // 0 means "no backup is known", which is exactly what the screen already renders — "Last backup: never",
+  // "You haven't backed up", and `overdue` true. So the worst case now NAGS a church that is fine, where
+  // before it REASSURED a church that was not. For a backup reminder that is the only safe direction.
+  // (The subscriber keeps `if (m.at)`, so a 0 record never erases what a device knows of its own export.)
   setBackupMeta(at, remind) {
     if (!sk) return Promise.resolve(null);
     if (actingChurch) return Promise.resolve(false);
-    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', BACKUPMETA_D + pub], ['t', NET]], content: JSON.stringify({ at: at || now(), remind: remind || 'monthly' }) }));
+    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', BACKUPMETA_D + pub], ['t', NET]], content: JSON.stringify({ at: at || 0, remind: remind || 'monthly' }) }));
   },
   subscribeBackupMeta(onMeta) {
     if (!pub) { onMeta(null); return () => {}; }
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#d': [BACKUPMETA_D + pub] }], {
-      onevent(e) { try { const c = JSON.parse(e.content); onMeta({ at: c.at || e.created_at, remind: c.remind || 'monthly' }); } catch { onMeta(null); } },
+      // `c.at || 0`, never `|| e.created_at`: created_at is when the RECORD was written — a cadence change,
+      // say — not when anyone backed up, so the fallback restated the same lie at read time. Every record
+      // ever written carries a non-zero `at` (the old `at || now()` saw to that), so this branch only ever
+      // catches a 0 written deliberately by the line above, or a malformed doc. Both mean "not known".
+      onevent(e) { try { const c = JSON.parse(e.content); onMeta({ at: c.at || 0, remind: c.remind || 'monthly' }); } catch { onMeta(null); } },
       oneose() {},
     });
     return () => { try { sub.close(); } catch {} };
@@ -5296,6 +5399,17 @@ window.Steward = {
     // church and every member, permanently. Refuse to mint on an untrustworthy read (fail closed: the steward
     // sees "try again in a moment"; the alternative is silent, unrecoverable loss of the church's archive).
     if (!_mediaKeyHex && (!_mediaKeyChecked || !_isRelayAuthed())) throw new Error('Can’t encrypt this upload yet — this device hasn’t finished connecting to your church’s relay, so it can’t tell whether your church already has a media key. Wait a moment and try again.');
+    // A DELEGATED CONSOLE NEVER MINTS AND NEVER REPUBLISHES THE ENVELOPE. Minting here would seal a NEW
+    // key as the steward and leave every sermon the church encrypted before now undecryptable — the same
+    // unrecoverable loss the gate above exists to prevent, reached by the other door. It also cannot
+    // publish it: `trinityone/mediakey:` is church-key-only at the relay, deliberately (the envelope is
+    // sealed with the SIGNER's key, so a steward-authored copy could be opened by nobody). It does not
+    // need to. The church already sealed a copy of the key ring to every member, the steward reads theirs
+    // above, and a sermon encrypted with that key plays for every member exactly as the church's own do —
+    // which is why this half needed no member-app change. When there is no copy to read, say so plainly
+    // rather than reporting the mint failure the steward cannot act on.
+    if (actingChurch && !_mediaKeyHex) throw new Error('Can’t encrypt this upload — your church hasn’t shared its media key with this account yet. Ask whoever holds the church key to add you as a member of the church, or to upload this one themselves. Nothing has been uploaded.');
+    if (!actingChurch) {
     if (!_mediaKeyHex) { _mediaKeyHex = _hex(crypto.getRandomValues(new Uint8Array(32))); _mediaKeyRing = [_mediaKeyHex]; }
     const targets = [...new Set([pub, ...(memberPubs || []).filter(Boolean)])];
     const _mring = JSON.stringify(_mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex]);
@@ -5311,6 +5425,7 @@ window.Steward = {
     // case on a delegated console rather than a theoretical one.
     const _env = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', MEDIAKEY_D + pub], ['t', NET]], content: JSON.stringify({ keys, rev: now() }) }));
     if (_env === false) throw new Error('Can’t encrypt this upload — your church’s media key could not be saved, so nothing encrypted with it could ever be played. Nothing has been uploaded. A church media key can only be published from the console that holds the church’s own key.');
+    }
     const key = await crypto.subtle.importKey('raw', _unhex(_mediaKeyHex), 'AES-GCM', false, ['encrypt']);
     return async (bytes) => { const iv = crypto.getRandomValues(new Uint8Array(12)); const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, bytes)); const out = new Uint8Array(12 + ct.length); out.set(iv, 0); out.set(ct, 12); return out; };
   },
@@ -5320,6 +5435,26 @@ window.Steward = {
   // republishes the doc, but ONLY when someone's actually missing (idempotent → safe to call on every roster change).
   // Returns false (no-op) if this device hasn't loaded the media key yet, or if no sermon has ever been encrypted.
   async ensureMediaKeyForMembers(memberPubs) {
+    // ⚠ A DELEGATED CONSOLE MUST NOT EVEN TRY — the same rule mediaEncryptor already keeps a few lines up,
+    // and for the same reason: `trinityone/mediakey:<church>` is OWNER-ONLY at the relay
+    // (`if (d.startsWith(MEDIAKEY_D)) return leaderOf(d.slice(MEDIAKEY_D.length));`, scripts/gateway.mjs) and
+    // a delegated steward signs with their OWN key through feChurch, so the envelope is refused every time.
+    //
+    // This was harmless until a6d13e0. Before it, subscribeMediaKey looked up only `o.keys[pub]` — on a
+    // delegated console that is the entry sealed TO THE CHURCH, which our key cannot open — so `_mediaKeyHex`
+    // stayed null and the guard on the line below stopped this function dead. a6d13e0 taught it to read OUR
+    // OWN entry (so a delegate can encrypt a sermon), and that switched this publish on.
+    //
+    // MEASURED by lifting this function out of the shipped vendor/steward.js and running it delegated with a
+    // media key in hand: one attempt at d=trinityone/mediakey:<church> signed by the STEWARD, refused, and one
+    // `steward-write-blocked` with `what: 'sermon key'`. PublishErrorBanner (app/stew-dashboard.jsx) arms no
+    // timer for that event, so the banner STANDS until dismissed, and it tells a steward who did nothing that
+    // this church's encrypted sermons will not play for a member. The church's own console maintains the
+    // envelope correctly, so the sentence is not true either.
+    //
+    // `false` is what the two callers already get from every other no-op here, and neither reads it: the
+    // key-distributor effect and the mount re-check timers, both in app/stew-dashboard.jsx.
+    if (actingChurch) return false;
     if (!sk || !_mediaKeyHex) return false;                       // no media key on this device → nothing to distribute yet
     const want = [...new Set([pub, ...(memberPubs || []).filter(Boolean)])]
       .filter(p => !_localBlocked.has(String(p).toLowerCase()));   // a just-blocked member must not be re-keyed (item B)
@@ -5390,6 +5525,21 @@ window.Steward = {
   // unplayable, and the new envelope simply isn't wrapped to them. Protects future uploads only; anything they
   // already downloaded is theirs, and no key change alters that.
   async rotateMediaKey(memberPubs) {
+    // NOT AS A DELEGATED STEWARD, for the reason above ensureMediaKeyForMembers: the envelope is owner-only at
+    // the relay and this console signs with its own key, so the rotation is refused and nothing is taken away
+    // from the blocked member here whatever we do.
+    //
+    // `null`, NOT `false`, and the difference is a second banner. The one caller is block() in
+    // app/stew-dashboard.jsx, which awaits this in `rotations` and reports every `ok === false` as
+    // "could not change the sermon key … Try blocking them again — and if it keeps failing, your church may
+    // have grown past what one key document can hold". On a delegated console that advice is untrue in both
+    // halves: retrying can never work and the size is irrelevant. `null` is how ensureNameKeyForMembers
+    // already marks a deliberate decline, and block() already tells a delegate, in its own
+    // `steward-write-blocked`, that only the owner can change these keys — the sermon key is named there now.
+    //
+    // MEASURED, delegated with a key in hand, out of the shipped bundle: before this, one attempt at
+    // d=trinityone/mediakey:<church> signed by the STEWARD with `background: false`, refused, returning false.
+    if (actingChurch) return null;
     if (!sk || !pub) return false;
     if (!_isRelayAuthed()) return false;                          // never act on an untrusted view (see the mint gate)
     if (!_mediaKeyHex) return false;                              // no key yet — mediaEncryptor mints the first
@@ -5575,7 +5725,7 @@ window.Steward = {
       /* `_mediaKeyPushRefused = null` (F2): an envelope LANDING is new information — the recipient map has
          changed under us, so whatever this console last had refused is worth asking again. Without this a
          console that was refused once would go on skipping until the roster itself changed. */
-      onevent(e) { try { const o = JSON.parse(e.content); _mediaKeyDocKeys = (o && o.keys) || null; _mediaKeyPushRefused = null; const mine = o.keys && o.keys[pub]; if (mine && sk) { const plain = nip44d(mine, nip44ck(sk, e.pubkey)); let r = null; try { const q = JSON.parse(plain); if (Array.isArray(q)) r = q.filter(k => typeof k === 'string' && k); } catch (x2) {} const incoming = (r && r.length) ? r : [plain]; _mediaKeyRing = [...incoming, ..._mediaKeyRing.filter(k => incoming.indexOf(k) === -1)]; _mediaKeyHex = _mediaKeyRing[0];   /* KEEP what this device already held: if we minted before the envelope arrived, discarding our key here would orphan anything encrypted in that window. Rotation must never drop a key that has already sealed something. */ } } catch (x) {} },
+      onevent(e) { try { const o = JSON.parse(e.content); _mediaKeyDocKeys = (o && o.keys) || null; _mediaKeyPushRefused = null; const _meKey = _myOwnPub(); const mine = o.keys && (o.keys[_meKey] || (_meKey === pub ? null : o.keys[pub]));   /* OPTION A: on a DELEGATED console `pub` is the CHURCH, so o.keys[pub] is the entry sealed TO THE CHURCH and our key cannot open it — _mediaKeyHex stayed null and mediaEncryptor then tried to MINT. Our own entry is there already: the church seals to [church, ...members] and a delegated steward is normally also a member. Owner console: _myOwnPub() === pub, so this is the old lookup exactly. */ if (mine && sk) { const plain = nip44d(mine, nip44ck(sk, e.pubkey)); let r = null; try { const q = JSON.parse(plain); if (Array.isArray(q)) r = q.filter(k => typeof k === 'string' && k); } catch (x2) {} const incoming = (r && r.length) ? r : [plain]; _mediaKeyRing = [...incoming, ..._mediaKeyRing.filter(k => incoming.indexOf(k) === -1)]; _mediaKeyHex = _mediaKeyRing[0];   /* KEEP what this device already held: if we minted before the envelope arrived, discarding our key here would orphan anything encrypted in that window. Rotation must never drop a key that has already sealed something. */ } } catch (x) {} },
       oneose() { _mediaKeyChecked = true; },   // no envelope came back → it is safe to mint one
     });
     return () => { try { sub.close(); } catch {} };
@@ -5680,15 +5830,25 @@ window.Steward = {
       return true;
     } catch (e) { return true; }
   },
+  // OPTION A, PHASE 2 (2026-09-25): widened the same way as subscribeGroups above — `authors:[pub]` OR
+  // `'#church':[pub]`, one version per author (`_absorbById`/`_forgetById`), `_consoleDisplay` deciding
+  // which author's copy of a given sermon id is shown.
+  //
+  // `contentTs` IS THE SERMON'S OWN DATE, and `ts` stays the event's `created_at` for the store — the full
+  // reasoning, and what was measured, is on `_openSermons` in src/fellowship.src.js. The console shows no
+  // date at all today, so what this field fixes HERE is (a) the row order and (b) what the Edit dialog
+  // spreads back into publishSermon, which is the half that destroys the original date.
   subscribeSermons(onSermons) {
     if (!pub) { onSermons([]); return () => {}; }
     const byId = new Map();
-    const emit = () => onSermons([...byId.entries()].filter(([, s]) => s).map(([, s]) => s).sort((a, b) => (b.ts || 0) - (a.ts || 0)));
-    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }], {
+    const versions = new Map();   // id -> Map(author -> their copy); see src/church-doc-store.src.js
+    const emit = () => onSermons([...byId.values()].sort((a, b) => (b.contentTs || 0) - (a.contentTs || 0)));
+    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (!d.startsWith(SERMON_D)) return;
-        if ((e.tags.find(t => t[0] === 'deleted') || [])[1]) { byId.set(d, null); emit(); return; }
-        try { const s = JSON.parse(e.content); if (s && s.sha256) { byId.set(d, { ...s, at: e.created_at }); emit(); } } catch {}
+        const id = d.slice(SERMON_D.length);
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { _forgetById(versions, byId, id, e.pubkey, e.created_at, _consoleDisplay, { churchPub: pub, targets: _tombstoneTargets(e), mayName: _consoleChurchVoice }); emit(); return; }
+        try { const s = JSON.parse(e.content); if (s && s.sha256) { _absorbById(versions, byId, id, { ...s, id, at: e.created_at, ts: e.created_at, contentTs: Number(s.ts) || e.created_at, _by: e.pubkey }, _consoleDisplay); emit(); } } catch {}
       },
       oneose() { emit(); },
     });

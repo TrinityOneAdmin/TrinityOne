@@ -4764,11 +4764,14 @@ function DashRelayHistoryCard() {
   // "your relays are STILL mirroring each other. Try again." is that sentence in the direction that matters,
   // because Turn off is what a church presses while decommissioning a box or reacting to a seizure.
   //
-  // THE CAPABILITY IS IRRELEVANT AND ONLY `.owner` IS READ, exactly as in DashSermons: no capability a
-  // church can tick lets a delegate write this, so the question is "is this the church's own console",
-  // which is `stewCapState().owner` (`!S.actingChurch`). 'content' is the argument DashSermons passes for
-  // the same reason. It FAILS OPEN the same way the rest of the mechanism does — an owner console is never
-  // locked out, and a roster that has not landed cannot lock one either.
+  // THE CAPABILITY IS IRRELEVANT AND ONLY `.owner` IS READ. No capability a church can tick lets a delegate
+  // write `trinityone/relays` — CLAUDE.md rule 10 — so the question is "is this the church's own console",
+  // which is `stewCapState().owner` (`!S.actingChurch`). 'content' is the argument passed only because
+  // stewCapState requires one; it is never consulted. (DashSermons used to read this file's exact reasoning
+  // for the same call — sermon: was church-key-only too, until option A, Phase 2, 2026-09-25 delegated it to
+  // a content steward. DashSermons now reads `.allowed` instead. This document's OWN authority has not
+  // changed and still reads `.owner`.) It FAILS OPEN the same way the rest of the mechanism does — an owner
+  // console is never locked out, and a roster that has not landed cannot lock one either.
   const _churchOnly = !stewCapState('content').owner;
   const doSync = async (on) => {
     // THE FUNNEL, guarded as well as the two controls above it — the same belt-and-braces doUpload has, so
@@ -6108,10 +6111,15 @@ function DashMembers() {
       // row greys out, and the removed member's phone keeps decrypting every future message in every encrypted
       // group and keeps reading the congregation's names — indefinitely, with nothing on screen suggesting a
       // second step exists. AUDIT-2026-07-27.
+      //
+      // ENCRYPTED SERMONS ARE NAMED HERE TOO, added with the delegated guard in rotateMediaKey. That guard
+      // makes the sermon key the third thing a delegated Block cannot change; it declines with `null` so it
+      // does not raise the blockWarn above, whose advice ("try blocking them again") is untrue for a delegate.
+      // This one sentence is where the steward is told, and it is the same second step for all three.
       if (delegated) {
         const encrypted = (Array.isArray(groups) ? groups : []).some(g => g && g.encrypted);
         if (encrypted || window.Steward.ensureNameKeyForMembers) {
-          try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'block', message: 'They have been removed from the roster, but only the church owner can change the keys that lock them out of encrypted groups and members’ names. Ask the owner to open their own console and block them there as well.' } })); } catch (e2) {}
+          try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'block', message: 'They have been removed from the roster, but only the church owner can change the keys that lock them out of encrypted groups, encrypted sermons and members’ names. Ask the owner to open their own console and block them there as well.' } })); } catch (e2) {}
         }
       }
     } catch (e) {}
@@ -8423,12 +8431,17 @@ async function probeHevcVideo(file) {
 }
 
 // THE TWO SENTENCES THIS PANEL REFUSES WITH, in one place because THREE controls use them (CLAUDE.md
-// rule 2): Upload, Edit and Remove, all three of which write `trinityone/sermon:`. The publish one is the
-// engine's own wording verbatim (src/steward.src.js, publishSermon) so the screen and the engine cannot
-// drift apart; the remove one drops the engine's trailing "Nothing was deleted." because on a locked
-// control nothing was ever attempted, and names who can instead.
-const SERMON_OWNER_ONLY = 'Only the church’s own console can publish a sermon. Ask whoever holds the church key.';
-const SERMON_REMOVE_OWNER_ONLY = 'Only the church’s own console can remove a sermon. Ask whoever holds the church key.';
+// rule 2): Upload, Edit and Remove, all three of which write `trinityone/sermon:`.
+//
+// ⚠ OPTION A, PHASE 2 (2026-09-25): NO LONGER "ONLY THE CHURCH'S OWN CONSOLE", and no longer the engine's
+// own wording verbatim — sermon: is delegated to a CONTENT steward now (publishSermon/removeSermon in
+// src/steward.src.js no longer refuse in advance; the relay's accept() grants it the same way). These are
+// pure client-side, pre-press messages for the one case that is still real: a steward this church has
+// scoped AWAY from content. `stewCapState`'s fail-open unscoped case (no capability list recorded at all)
+// already reads as allowed, matching the relay's own compatibility rule, so these fire only for an
+// EXPLICITLY narrowed steward — never for an ordinary delegate or a slow connection.
+const SERMON_OWNER_ONLY = 'Your church hasn’t given you Groups & rotas, so you can’t publish a sermon. Ask whoever holds the church key.';
+const SERMON_REMOVE_OWNER_ONLY = 'Your church hasn’t given you Groups & rotas, so you can’t remove a sermon. Ask whoever holds the church key.';
 
 function DashSermons() {
   const [sermons, setSermons] = React.useState([]);
@@ -8449,23 +8462,31 @@ function DashSermons() {
   React.useEffect(() => (window.Steward.subscribeMediaKey ? window.Steward.subscribeMediaKey() : undefined), [conn]);
   React.useEffect(() => (window.Steward.subscribePinnedSermon ? window.Steward.subscribePinnedSermon(p => setPinnedId(p && p.id)) : undefined), [conn]);
   const togglePin = (s) => { if (pinnedId === s.id) window.Steward.unpinSermon(); else window.Steward.pinSermon(s); };
-  // ── A DELEGATED CONSOLE LEARNS IT MAY NOT PUBLISH BEFORE ANY BYTES LEAVE THE PHONE ────────────────────
-  // AUDIT-steward-doc-rules-round2-2026-09-22, finding R1. The engine refuses `trinityone/sermon:` on a
-  // delegated console (publishSermon / removeSermon, and the relay refuses it too) — but doUpload called
-  // uploadBlob FIRST and publishSermon after, measured order ["uploadBlob","publishSermon"]. With Encrypt
-  // OFF a whole sermon video — routinely hundreds of MB — therefore landed on the host and nothing then
-  // referenced it: an orphan blob, and orphan-blob GC is on the backlog, not built. With Encrypt ON there
-  // was no waste only because mediaEncryptor happens to refuse one step earlier.
+  // ── A CONSOLE THAT MAY NOT PUBLISH LEARNS SO BEFORE ANY BYTES LEAVE THE PHONE ───────────────────────────
+  // AUDIT-steward-doc-rules-round2-2026-09-22, finding R1. At the time this was written the engine refused
+  // `trinityone/sermon:` on EVERY delegated console (publishSermon / removeSermon, and the relay too) — but
+  // doUpload called uploadBlob FIRST and publishSermon after, measured order ["uploadBlob","publishSermon"].
+  // With Encrypt OFF a whole sermon video — routinely hundreds of MB — therefore landed on the host and
+  // nothing then referenced it: an orphan blob, and orphan-blob GC is on the backlog, not built. With
+  // Encrypt ON there was no waste only because mediaEncryptor happened to refuse one step earlier — and
+  // mediaEncryptor STILL does, unconditionally, for any delegated console: the media-key envelope is a
+  // separate, still church-key-only rule that option A (below) does not touch. `_churchOnly` now decides a
+  // real question (does THIS steward hold content) rather than a foregone one, but the ordering rule this
+  // finding fixed — never spend the bytes before knowing whether the write can land — protects it exactly
+  // the same way for a steward who turns out not to have it.
   //
   // So this is [[fix-the-control-not-the-label]]: an honest refusal AFTER the upload is still an upload.
   // The panel now uses the console's own capability mechanism, which is what every other delegated-console
   // refusal in this file uses (stewCapState at the top, the nav at ~1913, _capBtn in the header).
   //
-  // THE CAPABILITY IS IRRELEVANT HERE AND ONLY `.owner` IS READ. `sermon:` is church-key-only: no capability
-  // a church can tick makes a delegate able to publish one, so the question is not "were you granted this"
-  // but "is this the church's own console" — which is exactly `stewCapState().owner` (`!S.actingChurch`).
-  // It FAILS OPEN the same way the rest of the mechanism does: an owner console is never locked out.
-  const _churchOnly = !stewCapState('content').owner;
+  // ⚠ OPTION A, PHASE 2 (2026-09-25): READS `.allowed`, NOT `.owner`. Until this date `sermon:` was
+  // church-key-only, so no capability a church could tick made a delegate able to publish one and the
+  // question really was just "is this the church's own console" (`.owner`). It is delegable now — a
+  // rostered CONTENT steward's write reaches the relay and every reader — so the question is the ordinary
+  // capability one every other gate in this file asks: `stewCapState('content').allowed`, true for the
+  // owner, a content steward, and an unscoped legacy steward (fail-open, same as everywhere else), false
+  // only for a steward this church has explicitly scoped away from content.
+  const _churchOnly = !stewCapState('content').allowed;
   const fileRef = React.useRef(null);
   const [upBusy, setUpBusy] = React.useState(false); const [upMsg, setUpMsg] = React.useState('');
   const [editing, setEditing] = React.useState(null);
@@ -9530,11 +9551,17 @@ function PinModal({ action, onClose }) {
 // both save regardless — so neither of these is a failure message, it is the second half of an honest
 // success.
 //
-// WHY TWO. On a DELEGATED console the refusal is permanent and has a name: the relay gates this document to
-// the church key or its network (2026-09-22), because subscribeBackupMeta filters `authors:[churchpub]` and
-// a steward-signed record is therefore served back to nobody, that console included. "Couldn't save" would
-// send that steward to look at a connection that is working perfectly. On the OWNER's console the same
-// `false` really is a relay problem, so it keeps the plain sentence.
+// WHY TWO. From 2026-09-22 to 2026-09-25 a DELEGATED console's refusal was permanent and had a name: the
+// relay gated this document to the church key or its network, because subscribeBackupMeta filtered
+// `authors:[churchpub]` and a steward-signed record was served back to nobody, that console included.
+// "Couldn't save" would have sent that steward to look at a connection that was working perfectly.
+//
+// ⚠ IT WAS BRIEFLY NOT PERMANENT, ON 2026-09-25, AND IT IS PERMANENT AGAIN. Option A phase 1 re-granted
+// this document to any rostered steward and taught subscribeBackupMeta to read their copy; the owner
+// withdrew the grant the same day, because a delegate cannot take a backup at all (doBackup below is
+// owner-only) so the only press they could land was the cadence segment — which publishes THIS console's
+// local last-backup time, 0 on a device that never exported, as "backed up just now". The sentence below
+// is therefore accurate again, and is the one a delegate sees.
 const BACKUP_META_OWNER_ONLY = 'Only the church’s own console can save the shared backup record, so your other stewards will still see this church as overdue.';
 const BACKUP_META_NO_RELAY = 'Your other stewards’ consoles will still show this church as overdue — the shared backup record could not be saved.';
 // AUDIT-steward-doc-rules-round5-2026-09-23 finding 3. exportChurchData (/export, /export-media) and
@@ -9568,22 +9595,28 @@ function DashBackup() {
   // where the relay refuses the document, the press stuck NOWHERE: not church-wide, not locally, while the
   // sentence beside it named only the church-wide half.
   //
-  // THE CADENCE IS THE CHURCH'S TO SET, and this is the decision, not a workaround: every steward and every
-  // device is meant to show the same nudge (that is the whole reason this document exists), a delegated
-  // console can never write it, and a press that reaches no relay must not leave a different cadence on the
-  // screen from the one the church will actually nudge at. So the control is LOCKED on a delegated console
-  // and says who can, and on the owner's console a refused write puts the segment back where it was.
-  //
-  // ALSO GATES `doBackup`/`doRestore` BELOW — AUDIT-steward-doc-rules-round5-2026-09-23 finding 3.
-  // `a2d1e4c` marked ONLY the `history` settings row `owner: true`, but exportChurchData -> /export and
-  // restoreChurchData -> /import go through the very same `_exportAuth` in scripts/gateway.mjs that route
-  // refuses a delegate on. MEASURED (rendered tree of a delegated console, before this fix): "Back up
-  // church data" and "Restore or clone from a backup" render byte-for-byte the OWNER's — no aria-disabled,
-  // no padlock — and answer "Backup failed — the relay returned 401" / "Restore failed — the relay
-  // returned 401 (are you the church owner, and does that relay allow this church?)". Marking the whole
-  // `backup` settings row owner-only (the `history` fix's shape) would ALSO hide the reminder-cadence
-  // display this same page correctly leaves visible to a delegate — so the two controls below are gated
-  // individually instead, the way `_churchOnly` already gates DashSync's two buttons and DashSermons' three.
+  // THE CADENCE IS THE CHURCH'S TO SET — every steward and every device is meant to show the same nudge,
+  // which is the whole reason this document exists — and "the church" means the church's own console, not
+  // a delegate. For half a day on 2026-09-25 this was TWO flags — `_metaLocked` (a steward scoped to no
+  // capability at all) for the cadence, `_exportOwnerOnly` for export/restore — while the grant existed.
+  // Both names went with it; grep the 2026-09-25 commits, not this file, for that history. (This sentence
+  // said "briefly `_metaChurchOnly`", i.e. that the flag was briefly itself: a blanket rename had rewritten
+  // the name inside the comment describing the OLD name. Audit finding LOW-4, same day.)
+  // EXPORT/RESTORE ARE A SEPARATE, STILL-GENUINELY-OWNER-ONLY QUESTION — AUDIT-steward-doc-rules-round5-2026-09-23
+  // finding 3. `a2d1e4c` marked ONLY the `history` settings row `owner: true`, but exportChurchData ->
+  // /export and restoreChurchData -> /import go through the very same `_exportAuth` in scripts/gateway.mjs
+  // that route refuses a delegate on, and no capability changes that. MEASURED (rendered tree of a
+  // delegated console, before that fix): "Back up church data" and "Restore or clone from a backup" render
+  // byte-for-byte the OWNER's — no aria-disabled, no padlock — and answer "Backup failed — the relay
+  // returned 401" / "Restore failed — the relay returned 401 (are you the church owner, and does that relay
+  // allow this church?)". Kept separate from `_metaChurchOnly` above: marking the whole `backup` settings row
+  // owner-only (the `history` fix's shape) would ALSO hide the reminder-cadence display this page correctly
+  // leaves visible to a delegate, and would now ALSO lock the cadence control for a steward who is allowed
+  // to move it. THE TWO QUESTIONS HAVE THE SAME ANSWER TODAY and share one flag — but they are still two
+  // questions, and the 2026-09-25 round is the proof: the cadence half was delegated for half a day while
+  // export stayed owner-only. If the cadence is ever delegated again, split this flag again; do NOT mark
+  // the whole `backup` settings row owner-only (the `history` fix's shape), because that would also hide
+  // the cadence display this page correctly leaves VISIBLE to a delegate.
   const _metaChurchOnly = !stewCapState('content').owner;
   const setFrequency = async (f) => {
     setFreqMsg('');

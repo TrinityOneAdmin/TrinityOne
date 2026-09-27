@@ -3317,31 +3317,167 @@ window.Fellowship = {
     const cp0 = toPub(churchNpub); if (!cp0) { onSermons([]); return () => {}; }
     return _shared('sermons|' + cp0, (emit) => window.Fellowship._openSermons(cp0, emit))(onSermons);
   },
+  // OPTION A, PHASE 2 (2026-09-25): widened from `authors:[cp]` + an in-handler `e.pubkey !== cp` refusal to
+  // the SAME shape as subscribeChurchGroups/subscribeChurchCategories (further DOWN this file, ~1,400 lines
+  // below — NOT "just above", which is what this said until 2026-09-25) — the shared church-docs
+  // hub (`_onChurchDocs`, filters `authors:[cp]` OR `'#church':[cp]`), one version per author
+  // (`versions`/`_absorbById`/`_forgetById`, src/church-doc-store.src.js) and `_churchVoice` deciding which
+  // author's copy of a given sermon id is ever shown. `_churchVoice` is fail-CLOSED on an unknown roster: a
+  // steward-authored sermon does not render until the hub has actually absorbed this church's `stewards:`
+  // roster (`_absorbRoster`, which every hub with ANY handler open receives automatically, since it shares
+  // the same `authors:[cp]` filter) — a sermon rendered before that is a sermon rendered on no authority at
+  // all (`cached-paints-before-authority-arrives`). `onroster()` re-derives every winner the moment the
+  // roster changes, so a revoked steward's sermon stops being the one shown (promoting the church's own
+  // copy, if there is one) without waiting for a new event.
+  //
+  // ONE FIELD WAS DOING TWO JOBS, AND `contentTs` IS THE SECOND ONE (2026-09-25, later the same day). The
+  // note here used to end "re-saving a sermon's title now moves it back to the top of the list, which it did
+  // not before … every OTHER content type here already works this way", and treated that as a cosmetic
+  // side effect. It is not, because a sermon is the one content type that carries a date a PERSON chose:
+  //   · `ts` is the STORE's ordering key. It must stay the event's `created_at` — `_pickWinner`,
+  //     `_absorbById` and `_forgetById` (src/church-doc-store.src.js) compare it to decide which of two
+  //     authors' copies is shown and whether a tombstone is newer than the edit it withdraws. Back-date it
+  //     and a forward-dated copy beats the church's own, and a stale tombstone un-deletes a sermon.
+  //   · `contentTs` is WHEN IT WAS PREACHED — the `ts` the console wrote into the document's own content.
+  //     That is what the screens show and order by.
+  // MEASURED before this fix, driving the shipped bundles against a real relay: a sermon published on 31 Jul
+  // and retitled on 25 Sep was read back by a member's app as 25 Sep, in the Watch & Listen row, the video
+  // player header and the Listen tab's episode date, and it jumped above a sermon preached seven weeks later.
+  // The relay's copy of the ORIGINAL date survives one edit and is destroyed by the second (the console
+  // spreads the row it is showing back into publishSermon, and by then that row's `ts` is edit 1's clock).
+  // It falls back to `created_at` so a document with no `ts` of its own reads exactly as it did before.
   _openSermons(churchNpub, onSermons) {
     const cp = toPub(churchNpub); if (!cp) { onSermons([]); return () => {}; }
     const byId = new Map();
-    const emit = _coalesce(() => onSermons([...byId.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0))));
-    const sub = pool.subscribeMany(relaysForChurch(cp), [{ kinds: [30078], authors: [cp], '#t': [NET] }], {
-      onevent(e) {
-        if (e.pubkey !== cp) return; const d = _dtag(e); if (!d.startsWith(SERMON_D)) return;
-        try { const s = JSON.parse(e.content); if (s && s.sha256) { byId.set(d, { ...s, at: e.created_at }); emit(); } } catch {}
+    const versions = new Map();   // id -> Map(author -> their copy); see src/church-doc-store.src.js
+    const _trust = (rec) => _churchVoice(cp, rec);   // the church key, or a steward still on its signed roster
+    let eosed = false;   // sticky: hold last-known until the relay's EOSE — don't blank on a transient/roster-lagged empty
+    // A TOMBSTONE THAT ARRIVES BEFORE THE ROSTER IS HELD, NOT DROPPED — AND HELD INERT. (M3, 2026-09-26.)
+    // The delete branch below is `if (trusted) forget(); return;`, so a withdrawal signed by a steward this
+    // phone has not yet been able to confirm was thrown away and never revisited: `onroster()` re-reduces
+    // the versions it HOLDS (`_reduceAll`), and a discarded tombstone is not one of them. Measured against
+    // the shipped bundle, driving `_openSermons` through the member harness:
+    //     roster → sermon → delete                     = cleared         (the order that worked)
+    //     church's sermon → steward's delete → roster   = STILL ON SCREEN
+    //     steward's sermon → delete → roster            = BACK on screen once the roster vouched for her
+    // Both failing orders clear themselves on the next app start — `_docsHub()` absorbs the roster out of the
+    // persisted buffer BEFORE any handler registers, so the replay sees the delete with authority in hand —
+    // which is why this reads as "a sermon the church removed hung around until I closed the app".
+    //
+    // WHAT IS REMEMBERED IS A NOTE, NOT A WITHDRAWAL, and that distinction is the whole safety of it. The
+    // note lives here, in a Map of its own, and is never handed to the store: `_pickWinner`,
+    // `_reduceVersions`, `_absorbById` and `_forgetById` cannot see it, so it hides nothing, outranks
+    // nothing and cannot be mistaken for a `_tomb` record. A stranger — a plain member, or somebody from
+    // another church — therefore cannot suppress a sermon by getting a delete in first, not even for the
+    // instant before the roster lands (`cached-paints-before-authority-arrives`, in the direction that
+    // HIDES a church's content). Nothing is hidden until the church's signed roster has vouched for the
+    // author, and if the roster never arrives — offline, unauthenticated — nothing is hidden at all.
+    //
+    // ONLY WHILE THE ROSTER IS UNKNOWN, and the roster gets exactly one chance to answer. Once
+    // `_churchRoster` holds an entry for this church the question has been decided and a refusal is final:
+    // notes are cleared on the first `onroster()` whether they were honoured or not, so a person the church
+    // adds as a steward LATER, for unrelated reasons, does not thereby acquire the authority to have
+    // deleted something back when they had none. A church's own `for: '*'` (4a9141c) never comes through
+    // here at all — `_churchVoice` trusts `by === cp` with no roster — so that withdrawal is unchanged.
+    //
+    // Capped, because the only thing that can reach this path is a relay serving deletes we would refuse:
+    // past the cap we simply stop taking notes, which is today's behaviour and leaves the sermon VISIBLE.
+    // In-memory, closure-local, nothing serialises it — it dies with the subscription.
+    const pending = new Map();   // id + '|' + author -> an unvouched delete, waiting for the roster to rule on it
+    const PEND_CAP = 500;
+    // SORTED BY THE PREACHING DATE, NOT THE EVENT TIME — see `contentTs` above. Editing a title must not
+    // move a sermon; a list of sermons is in the order they were given.
+    const emit = _coalesce(() => { const v = [...byId.values()].filter(s => _churchVoice(cp, s)); if (!eosed && !v.length) return; onSermons(v.sort((a, b) => (b.contentTs || 0) - (a.contentTs || 0))); });
+    return _onChurchDocs(cp, {
+      emit,   // so the hub can cancel a queued emit when this handler tears down
+      want: [SERMON_D],   // replay only this slice of the hub (see _hubBufSet)
+      onevent(e, d) {
+        if (!d.startsWith(SERMON_D)) return;
+        const id = d.slice(SERMON_D.length);
+        // A DELETE IS A WRITE, honoured only from an author who could have written the doc — see the same
+        // note on subscribeChurchGroups above; identical shape, identical reason (AUDIT-2026-07-24).
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) {
+          if (_churchVoice(cp, { _by: e.pubkey })) { _forgetById(versions, byId, id, e.pubkey, e.created_at, _trust, { churchPub: cp, targets: _tombstoneTargets(e) }); emit(); return; }
+          // Unvouched. If the roster is simply not here yet, take a note (see `pending` above); if it IS
+          // here, it has already said no and there is nothing to wait for.
+          if (!_churchRoster.has(cp) && pending.size < PEND_CAP) pending.set(id + '|' + e.pubkey, { id, by: e.pubkey, ts: e.created_at, targets: _tombstoneTargets(e) });
+          return;
+        }
+        try { const s = JSON.parse(e.content); if (s && s.sha256) { _absorbById(versions, byId, id, { ...s, id, at: e.created_at, ts: e.created_at, contentTs: Number(s.ts) || e.created_at, _by: e.pubkey }, _trust); emit(); } } catch {}
       },
-      oneose() { emit(); },
+      // a revocation must promote the church's copy, not just hide theirs — and the roster rules, once, on
+      // every delete that arrived before it (M3). Honoured or refused, the note goes either way.
+      // The `_churchVoice` below is defence in depth and is meant to stay: MEASURED (sabotage row S3,
+      // 2026-09-26) that removing it alone changes nothing a screen can see, because `_forgetById` asks the
+      // same question again — an unvouched author's delete binds only their own copy, and a copy of theirs
+      // can never be the one on show. It is the gate every other delete in this file goes through, so a
+      // reader arriving here does not have to reconstruct that argument to know this is safe.
+      //
+      // ...AND ONLY WHEN IT REALLY IS THE ROSTER. `onroster()` CURRENTLY MEANS TWO DIFFERENT EVENTS, and
+      // that is the whole of this bug. `_docsHubOpen` fires this same fan-out from two branches: the one
+      // that absorbs the church-signed `stewards:` document (`_absorbRoster`, which sets `_churchRoster`
+      // first), and the one that ingests the church CARE KEY (`d === CAREKEY_D + cp`), which sets nothing.
+      // The notes above are cleared unconditionally and get exactly one chance, so a care key arriving
+      // between a tombstone and the roster consumed that chance and the delete was thrown away — putting
+      // back, on an entirely ordinary path, the bug `5ff5819` had just fixed. MEASURED on the shipped
+      // bundle, driving `_openSermons`, every callback shown:
+      //     church sermon → steward delete → roster                  [["Sunday"],[]]            cleared
+      //     church sermon → steward delete → CARE KEY → roster       [["Sunday"],["Sunday"]]    STILL LISTED
+      //     steward sermon → her own delete → CARE KEY → roster      [[],["Sunday"]]            BACK on screen
+      // Both relay orderings are ordinary: the two documents are church-signed, share the hub's filters and
+      // arrive in whatever order a multi-relay pool produces.
+      //
+      // The guard is the roster's own arrival, not a flag: until `_churchRoster` holds an entry for this
+      // church nothing has ruled on anything, so there is nothing to consume. The safeguarding direction is
+      // unchanged and measured — a stranger's early delete still hides nothing, before or after the roster.
+      // Skipping `_reduceAll`/`emit()` on the care-key path is deliberate and harmless: sermons are not
+      // sealed under the care key, and `_reduceAll` with an unchanged roster is a no-op.
+      //
+      // THE FOLLOW-UP IS TO RENAME THE OTHER ONE. One callback meaning two events is how this happened and
+      // is how it will happen again; the care-key fan-out wants its own hook so `onroster()` can mean the
+      // roster and nothing else. Deliberately NOT done here — it reaches every `onroster()` in this file
+      // plus `subscribeCareNeeds`, whose care-key replay exists for a measured reason of its own.
+      onroster() { if (!_churchRoster.has(cp)) return; for (const p of pending.values()) if (_churchVoice(cp, { _by: p.by })) _forgetById(versions, byId, p.id, p.by, p.ts, _trust, { churchPub: cp, targets: p.targets }); pending.clear(); _reduceAll(versions, byId, _trust); emit(); },
+      // EOSE ALWAYS EMITS HERE, EVEN EMPTY — and that is the one place this reader must NOT copy
+      // subscribeChurchGroups/subscribeChurchCategories, which guard the same line with `if (byId.size)`.
+      // Two differences make the guard wrong here, both measured 2026-09-25:
+      //   1. THE CALLER GATES A WHOLE TAB ON THE FIRST CALLBACK. app/screens-watch.jsx holds `sermonsReady`
+      //      false until onSermons fires (U8: tell "still loading" apart from "genuinely none"), and renders
+      //      the channel feed behind the same gate. Never calling back leaves Watch & Listen spinning, then
+      //      claiming "Can't reach {church} right now — check your connection" over a relay that answered
+      //      perfectly, with a Try again that loops. A church with NO sermons is the normal case in the
+      //      pilot, so that was most churches. The groups/categories readers gate no such flag.
+      //   2. THERE IS NO CACHE TO PROTECT. The sticky guard exists so a reconnect's EOSE-before-events
+      //      cannot blank a list already painted from localStorage (`_seedFromCache`). This reader seeds
+      //      from no cache — byId is only ever filled by live/replayed events — so an empty byId at EOSE
+      //      means "this church has no sermons", never "the cache has not been overwritten yet".
+      // `emit`'s own `!eosed && !v.length` guard still suppresses every PRE-EOSE empty, so the empty state
+      // cannot flash on a slow relay. Restores what this reader did before option A (`oneose() { emit(); }`).
+      oneose() { eosed = true; emit(); },
     });
-    return () => { emit.cancel(); try { sub.close(); } catch {} };   // cancel the queued emit: it would otherwise fire a tick after teardown
   },
-  // the church's currently-featured/pinned sermon (or null) — drives a Today card + a notification.
+  // the church's currently-featured/pinned sermon (or null) — drives a Today card + a notification. Widened
+  // the same way and for the same reason as _openSermons above; one constant store id ('pinned') because
+  // this is a single per-church document, not a list, so `_absorbById`'s per-author versioning picks the
+  // newest TRUSTED pin rather than whichever author's copy the relay happens to answer with first.
   subscribePinnedSermon(churchNpub, onPinned) {
     const cp = toPub(churchNpub); if (!cp) { onPinned(null); return () => {}; }
-    const sub = pool.subscribeMany(relaysForChurch(cp), [{ kinds: [30078], authors: [cp], '#d': [PINSERMON_D + cp] }], {
-      onevent(e) {
-        if (e.pubkey !== cp) return;
-        if ((e.tags.find(t => t[0] === 'deleted') || [])[1]) { onPinned(null); return; }
-        try { const p = JSON.parse(e.content); onPinned(p && p.sha256 ? { ...p, at: e.created_at } : null); } catch { onPinned(null); }
+    const id = 'pinned';
+    const versions = new Map();   // id -> Map(author -> their copy); see src/church-doc-store.src.js
+    const byId = new Map();
+    const _trust = (rec) => _churchVoice(cp, rec);
+    const emit = () => { const rec = byId.get(id); onPinned(rec && rec.sha256 ? rec : null); };
+    return _onChurchDocs(cp, {
+      emit,
+      want: [PINSERMON_D],
+      onevent(e, d) {
+        if (d !== PINSERMON_D + cp) return;
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { if (_churchVoice(cp, { _by: e.pubkey })) { _forgetById(versions, byId, id, e.pubkey, e.created_at, _trust, { churchPub: cp, targets: _tombstoneTargets(e) }); emit(); } return; }
+        try { const p = JSON.parse(e.content); _absorbById(versions, byId, id, { ...p, at: e.created_at, ts: e.created_at, _by: e.pubkey }, _trust); emit(); } catch {}
       },
-      oneose() {},
+      onroster() { _reduceAll(versions, byId, _trust); emit(); },
+      oneose() { emit(); },
     });
-    return () => { try { sub.close(); } catch {} };
   },
   // fetch a member-gated blob: sign a NIP-98 proof bound to the URL, download it, VERIFY the sha256 (content-
   // addressing = tamper-evident), optionally decrypt, and return an object URL the <audio>/<video> can play.
