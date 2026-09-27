@@ -826,6 +826,10 @@ function KeyDistributor() {
   // keep the envelope's author check current: a revoked steward's envelope must stop being accepted
   const stewardRoster = window.useStewardStewards ? window.useStewardStewards() : [];
   React.useEffect(() => { if (window.Steward && window.Steward.setCareRoster) window.Steward.setCareRoster(stewardRoster); }, [stewardRoster]);
+  // …and a ref for it, for the same reason membersRef exists: the mount re-check timers below run on a `[]`
+  // effect, so they close over the roster as it was at mount — which on a cold console is empty, and an empty
+  // roster is exactly the case that leaves a delegated steward without the sermon key.
+  const stewardRosterRef = React.useRef([]); stewardRosterRef.current = stewardRoster;
   // BLOCKED MEMBERS MUST NEVER BE RE-KEYED. useStewardMembers() does not filter the blocklist (DashMembers does
   // that itself), so every recipient set built here silently included people the steward had removed: the next
   // time anyone joined, `grew` fired and the freshly-rotated key was wrapped straight back to them. The care and
@@ -898,7 +902,12 @@ function KeyDistributor() {
     // #17: re-wrap the church MEDIA key for the current roster too. Unlike groups (keyed at create/edit), the media
     // key is only published at sermon UPLOAD, so a member who joined since is missing from it and can't decrypt
     // existing sermons. ensureMediaKeyForMembers self-guards (only republishes if someone's actually missing).
-    if (window.Steward && window.Steward.ensureMediaKeyForMembers) window.Steward.ensureMediaKeyForMembers(memberPubs);
+    // `stewardRoster` — a DELEGATED steward is not a member (their console key is minted fresh by
+    // "Help run a church"), so a want-list of [church, ...members] has no entry their key can open and the
+    // sermon upload screen refuses with "hasn't shared its media key with this account yet". Only this
+    // console — the owner's — may publish the envelope, so this is the only place the roster can be added.
+    // Same argument, same argument list, as the care key on the line below.
+    if (window.Steward && window.Steward.ensureMediaKeyForMembers) window.Steward.ensureMediaKeyForMembers(memberPubs, stewardRoster);
     // H3: and the CARE key, so every member can open a need and volunteer. Mints only after the
     // subscription has confirmed no envelope exists — never on a cold null, which is what orphaned
     // every sealed need in the first attempt. Stewards are included so a delegated console can re-key.
@@ -938,7 +947,7 @@ function KeyDistributor() {
   // the media key loads ASYNC (subscribeMediaKey) and may arrive AFTER the roster settles, so the effect above can run
   // before we hold the key. Re-check a couple of times on mount — ensureMediaKeyForMembers is idempotent + cheap.
   React.useEffect(() => {
-    const call = () => { if (window.Steward && window.Steward.ensureMediaKeyForMembers) window.Steward.ensureMediaKeyForMembers(membersRef.current.map(m => m.pubkey)); };
+    const call = () => { if (window.Steward && window.Steward.ensureMediaKeyForMembers) window.Steward.ensureMediaKeyForMembers(membersRef.current.map(m => m.pubkey), stewardRosterRef.current); };
     const t1 = setTimeout(call, 3500), t2 = setTimeout(call, 9000);
     return () => { clearTimeout(t1); clearTimeout(t2); };
   }, []);
@@ -6053,7 +6062,9 @@ function DashMembers() {
       // while the member kept the key. Nothing said otherwise.
       const rotations = [];
       if (window.Steward.rotateCareKey) rotations.push(Promise.resolve(window.Steward.rotateCareKey(remaining, stewardRoster || [])).then(r => ['the care key', r]));
-      if (window.Steward.rotateMediaKey) rotations.push(Promise.resolve(window.Steward.rotateMediaKey(remaining)).then(r => ['the sermon key', r]));
+      // `stewardRoster` — a rotation rewrites the whole recipient list, so without it blocking one member
+      // would take the sermon key away from every delegated steward. Same list rotateCareKey gets above.
+      if (window.Steward.rotateMediaKey) rotations.push(Promise.resolve(window.Steward.rotateMediaKey(remaining, stewardRoster || [])).then(r => ['the sermon key', r]));
       // THE NAME KEY IS IN THIS LIST TOO. It was fired and forgotten one line below while care and media were
       // awaited, which made it the worst of the three to lose: a blocked member still holding the name key can
       // read the whole congregation's names. It returns null for the cases where it deliberately declines

@@ -1238,7 +1238,7 @@ async function runMediaKey(answer, calls = 3, memberPubs = ['m1', 'm2'], saidNo 
   const decls = 'let _mediaKeyHex = "aa"; let _mediaKeyRing = ["aa"]; let _mediaKeyDocKeys = null; '
     + 'let _mediaKeyPushRefused = null;\n'
     + `globalThis.${peek} = () => ({ docKeys: _mediaKeyDocKeys, refused: _mediaKeyPushRefused });\n`;
-  const lifted = await runLifted('ensureMediaKeyForMembers(memberPubs)', 'ensureMediaKeyForMembers', answer, {
+  const lifted = await runLifted('ensureMediaKeyForMembers(memberPubs, stewardPubs)', 'ensureMediaKeyForMembers', answer, {
     publish: async (evt, opts) => {
       published.push({ evt, background: !!(opts && opts.background) });
       if (answer === false && opts && typeof opts === 'object') {
@@ -1380,8 +1380,8 @@ async function runMediaKeyForReal(answers, calls = 3, memberPubs = ['m1', 'm2'])
     + 'let _mediaKeyPushRefused = null; let _mediaKeyChecked = false;';
   const pubSrc = fnBody(BUNDLE, '  async function publish(evt, opts) {', 'publish in the shipped bundle');
   const family = [
-    fnBody(BUNDLE, '    async ensureMediaKeyForMembers(memberPubs) {', 'ensureMediaKeyForMembers in the shipped bundle'),
-    fnBody(BUNDLE, '    async rotateMediaKey(memberPubs) {', 'rotateMediaKey in the shipped bundle'),
+    fnBody(BUNDLE, '    async ensureMediaKeyForMembers(memberPubs, stewardPubs) {', 'ensureMediaKeyForMembers in the shipped bundle'),
+    fnBody(BUNDLE, '    async rotateMediaKey(memberPubs, stewardPubs) {', 'rotateMediaKey in the shipped bundle'),
     fnBody(BUNDLE, '    subscribeMediaKey() {', 'subscribeMediaKey in the shipped bundle'),
   ].join(',\n');
   const api = new Function('scope', `with (scope) { ${decls}

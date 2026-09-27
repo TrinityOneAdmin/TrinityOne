@@ -5434,7 +5434,18 @@ window.Steward = {
   // unlock key" dead-end). This re-wraps the EXISTING key (existing blobs stay decryptable — no re-encryption) and
   // republishes the doc, but ONLY when someone's actually missing (idempotent → safe to call on every roster change).
   // Returns false (no-op) if this device hasn't loaded the media key yet, or if no sermon has ever been encrypted.
-  async ensureMediaKeyForMembers(memberPubs) {
+  // `stewardPubs` — THE ROSTERED STEWARDS, and they are not members. Copied from ensureCareKeyForMembers,
+  // which learned this first. A delegated steward's console key is freshly minted by createKeyQuiet ("Help
+  // run a church", app/steward-root.jsx) and is deliberately NOT a member, so a want-list of
+  // [church, ...members] has no entry that key can open: subscribeMediaKey's `o.keys[_meKey]` lookup finds
+  // nothing, `_mediaKeyHex` stays null, and mediaEncryptor refuses the upload. The OWNER's console is the
+  // only one that may publish this envelope (see the guard below), so the owner sealing to the steward
+  // roster is the only route by which a delegate can ever hold the sermon key.
+  //
+  // Additive and backwards compatible: every reader looks up ONE entry by its own pubkey and ignores the
+  // rest — `o.keys[pub]` in fellowship's mediaDecryptor, `o.keys[_meKey] || o.keys[pub]` in
+  // subscribeMediaKey — so extra recipients cannot disturb an older client.
+  async ensureMediaKeyForMembers(memberPubs, stewardPubs) {
     // ⚠ A DELEGATED CONSOLE MUST NOT EVEN TRY — the same rule mediaEncryptor already keeps a few lines up,
     // and for the same reason: `trinityone/mediakey:<church>` is OWNER-ONLY at the relay
     // (`if (d.startsWith(MEDIAKEY_D)) return leaderOf(d.slice(MEDIAKEY_D.length));`, scripts/gateway.mjs) and
@@ -5456,7 +5467,7 @@ window.Steward = {
     // key-distributor effect and the mount re-check timers, both in app/stew-dashboard.jsx.
     if (actingChurch) return false;
     if (!sk || !_mediaKeyHex) return false;                       // no media key on this device → nothing to distribute yet
-    const want = [...new Set([pub, ...(memberPubs || []).filter(Boolean)])]
+    const want = [...new Set([pub, ...(memberPubs || []).filter(Boolean), ...(stewardPubs || []).filter(Boolean)])]
       .filter(p => !_localBlocked.has(String(p).toLowerCase()));   // a just-blocked member must not be re-keyed (item B)
     const have = _mediaKeyDocKeys || {};
     if (want.every(p => have[p])) return false;                   // everyone's already keyed — no republish
@@ -5524,7 +5535,11 @@ window.Steward = {
   // uploaded after they left. The ring keeps the superseded keys so nothing already encrypted becomes
   // unplayable, and the new envelope simply isn't wrapped to them. Protects future uploads only; anything they
   // already downloaded is theirs, and no key change alters that.
-  async rotateMediaKey(memberPubs) {
+  // `stewardPubs` for the same reason as ensureMediaKeyForMembers above, and it matters MORE here: a rotation
+  // rewrites the whole recipient list, so leaving the roster out would take the sermon key away from every
+  // delegated steward the moment anyone is blocked. rotateCareKey has taken a stewardPubs argument for the
+  // same reason since the care key was rotated at all.
+  async rotateMediaKey(memberPubs, stewardPubs) {
     // NOT AS A DELEGATED STEWARD, for the reason above ensureMediaKeyForMembers: the envelope is owner-only at
     // the relay and this console signs with its own key, so the rotation is refused and nothing is taken away
     // from the blocked member here whatever we do.
@@ -5545,7 +5560,7 @@ window.Steward = {
     if (!_mediaKeyHex) return false;                              // no key yet — mediaEncryptor mints the first
     const fresh = _hex(crypto.getRandomValues(new Uint8Array(32)));
     const ring = [fresh, ...(_mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex])].slice(0, 12);
-    const want = [...new Set([pub, ...(memberPubs || []).filter(Boolean)])];
+    const want = [...new Set([pub, ...(memberPubs || []).filter(Boolean), ...(stewardPubs || []).filter(Boolean)])];
     const payload = JSON.stringify(ring);
     const keys = await _sealEach(payload, want, (pl, mp) => nip44e(pl, nip44ck(sk, mp)));
     const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', MEDIAKEY_D + pub], ['t', NET]], content: JSON.stringify({ keys, rev: now() }) }));

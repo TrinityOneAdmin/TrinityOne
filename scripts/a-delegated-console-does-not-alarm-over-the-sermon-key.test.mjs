@@ -107,8 +107,8 @@ function engine({ actingChurch, mediaKeyHex = KEY }) {
   });
   const bodies = [
     fnBody(BUNDLE, '    async mediaEncryptor(memberPubs) {', 'mediaEncryptor in the shipped bundle'),
-    fnBody(BUNDLE, '    async ensureMediaKeyForMembers(memberPubs) {', 'ensureMediaKeyForMembers in the shipped bundle'),
-    fnBody(BUNDLE, '    async rotateMediaKey(memberPubs) {', 'rotateMediaKey in the shipped bundle'),
+    fnBody(BUNDLE, '    async ensureMediaKeyForMembers(memberPubs, stewardPubs) {', 'ensureMediaKeyForMembers in the shipped bundle'),
+    fnBody(BUNDLE, '    async rotateMediaKey(memberPubs, stewardPubs) {', 'rotateMediaKey in the shipped bundle'),
   ].join(',\n');
   const api = new Function('scope', `with (scope) { const _api = { ${bodies} }; return _api; }`)(proxy);
   return { api, attempts, blocked, scope };

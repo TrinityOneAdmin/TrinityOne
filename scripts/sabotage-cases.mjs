@@ -1663,4 +1663,49 @@ export const CASES = [
     replace: `    for (const base of bases) await one(base);`,
     test: 'scripts/the-church-creation-wait-is-named-and-short.test.mjs',
   },
+  // ── the church media key reaches a delegated steward ────────────────────────────────────────────────────
+  // Five cases because the fix has five removable parts: the recipient list in each of the two engine
+  // functions, and the argument at each of the three call sites. The two `want` anchors are byte-identical
+  // apart from their tails, so each one names enough of its own line to be unique in the file — a plain
+  // replace on the shared fragment would hit the sibling.
+  {
+    name: 'sermon key: the DISTRIBUTION envelope stops being sealed to the steward roster',
+    file: 'src/steward.src.js',
+    // the pre-fix line, exactly: church + members, and a delegated steward is neither
+    find: `    const want = [...new Set([pub, ...(memberPubs || []).filter(Boolean), ...(stewardPubs || []).filter(Boolean)])]
+      .filter(p => !_localBlocked.has(String(p).toLowerCase()));`,
+    replace: `    const want = [...new Set([pub, ...(memberPubs || []).filter(Boolean)])]
+      .filter(p => !_localBlocked.has(String(p).toLowerCase()));`,
+    test: 'scripts/a-delegated-steward-is-given-the-sermon-key.test.mjs',
+  },
+  {
+    name: 'sermon key: a ROTATION stops being sealed to the steward roster',
+    file: 'src/steward.src.js',
+    find: `    const want = [...new Set([pub, ...(memberPubs || []).filter(Boolean), ...(stewardPubs || []).filter(Boolean)])];`,
+    replace: `    const want = [...new Set([pub, ...(memberPubs || []).filter(Boolean)])];`,
+    test: 'scripts/a-delegated-steward-is-given-the-sermon-key.test.mjs',
+  },
+  {
+    name: 'sermon key: the key-distributor effect stops passing the steward roster',
+    file: 'app/stew-dashboard.jsx',
+    find: `if (window.Steward && window.Steward.ensureMediaKeyForMembers) window.Steward.ensureMediaKeyForMembers(memberPubs, stewardRoster);`,
+    replace: `if (window.Steward && window.Steward.ensureMediaKeyForMembers) window.Steward.ensureMediaKeyForMembers(memberPubs);`,
+    test: 'scripts/a-delegated-steward-is-given-the-sermon-key.test.mjs',
+  },
+  {
+    name: 'sermon key: the mount re-check timers send an empty roster',
+    file: 'app/stew-dashboard.jsx',
+    // the plausible careless version — a `[]`-deps effect cannot read the roster directly, and this is what
+    // it looks like when someone works around the lint instead of adding the ref
+    find: `window.Steward.ensureMediaKeyForMembers(membersRef.current.map(m => m.pubkey), stewardRosterRef.current);`,
+    replace: `window.Steward.ensureMediaKeyForMembers(membersRef.current.map(m => m.pubkey), []);`,
+    test: 'scripts/a-delegated-steward-is-given-the-sermon-key.test.mjs',
+  },
+  {
+    name: 'sermon key: blocking a member rotates without the steward roster',
+    file: 'app/stew-dashboard.jsx',
+    find: `if (window.Steward.rotateMediaKey) rotations.push(Promise.resolve(window.Steward.rotateMediaKey(remaining, stewardRoster || [])).then(r => ['the sermon key', r]));`,
+    replace: `if (window.Steward.rotateMediaKey) rotations.push(Promise.resolve(window.Steward.rotateMediaKey(remaining)).then(r => ['the sermon key', r]));`,
+    test: 'scripts/a-delegated-steward-is-given-the-sermon-key.test.mjs',
+  },
 ];
