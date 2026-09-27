@@ -59,7 +59,10 @@ function harness({ cached = false, origin = ORIGIN, answers = {} } = {}) {
     _regNeedsName: false, _armRegGate: () => {}, _openRegGate: () => {}, _markRegOk: () => {},
     npubEncode: (p) => 'npub_' + p,
     finalizeEvent: (e) => ({ ...e, id: 'evt', sig: 'sig', pubkey: 'PUB' }),
-    now: () => 1788500000,
+    // _credNow(): the corrected clock used for SHORT-LIVED CREDENTIALS only (the kind-24242 / kind-27235
+    // auth events a relay checks for freshness and discards). With no skew measured it returns exactly
+    // what now() returns, which is this harness's case — src/steward.src.js, above _blobBase().
+    now: () => 1788500000, _credNow: () => 1788500000,
     SELFREG_KEY: 'sr',
     localStorage: { getItem: () => '{}', setItem: () => {} },
     AbortSignal: { timeout: () => undefined },

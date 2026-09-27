@@ -3740,7 +3740,7 @@
       };
       if (tag("nonce").toLowerCase() !== nonce) return null;
       if (relayAddrKey(tag("relay")) !== relayAddrKey(wssUrl)) return null;
-      return { relayPub: String(ev.pubkey).toLowerCase(), url: tag("relay") };
+      return { relayPub: String(ev.pubkey).toLowerCase(), url: tag("relay"), at: Number(ev.created_at) || 0 };
     } catch {
       return null;
     }

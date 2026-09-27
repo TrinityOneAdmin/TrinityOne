@@ -161,7 +161,10 @@ test('registration is aimed at the box that served the console, not only at wher
     CANONICAL_RELAYS: ['wss://app.trinityone.church/relay'],
     SELFREG_KEY: 'sr',
     finalizeEvent: (e) => ({ ...e, id: 'evt', sig: 'sig', pubkey: 'PUB' }),
-    now: () => 1788500000,
+    // _credNow(): the corrected clock used for SHORT-LIVED CREDENTIALS only (the kind-24242 / kind-27235
+    // auth events a relay checks for freshness and discards). With no skew measured it returns exactly
+    // what now() returns, which is this harness's case — src/steward.src.js, above _blobBase().
+    now: () => 1788500000, _credNow: () => 1788500000,
     // The poisoned state: the box said "not ours", so ownRelay()/configBase() name the community pool.
     _ownOrigin: () => 'http://127.0.0.1:8000',
     window: { Steward: { configBase: () => 'https://app.trinityone.church' }, dispatchEvent: () => true },

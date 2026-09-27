@@ -55,7 +55,11 @@ function liftRegisterAtRelay(church) {
   const body = fnBody(VENDOR, 'async registerAtRelay(wssUrl, name) {', 'registerAtRelay');
   const scope = scopeOf({
     churchSk: church.sk, churchPub: church.pub,
+    // _credNow(): the corrected clock used for SHORT-LIVED CREDENTIALS only (the kind-24242 / kind-27235
+    // auth events a relay checks for freshness and discards). With no skew measured it returns exactly
+    // what now() returns, which is this harness's case — src/steward.src.js, above _blobBase().
     finalizeEvent, npubEncode, fetch, now: () => Math.floor(Date.now() / 1000),
+    _credNow: () => Math.floor(Date.now() / 1000),
   }, 'registerAtRelay');
   return new Function('scope', `with (scope) { return ({ ${body} }).registerAtRelay; }`)(scope);
 }

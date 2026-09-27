@@ -77,13 +77,18 @@ async function _openBackup(envelope) {                               // church-k
 }
 // a fresh NIP-98 (kind-27235) proof signed by the church key, bound to `url` + method — authorises /export,
 // /export-media, per-blob pulls (GET) and /import (POST). (sk/pub are the module's active church identity.)
-function _nip98(url, method) { return 'Nostr ' + btoa(JSON.stringify(finalizeEvent({ kind: 27235, created_at: now(), tags: [['u', url], ['method', method || 'GET'], ['church', pub]], content: '' }, sk))); }
+// _credNow(), not now(): the relay checks this proof's stamp against ITS clock (±300s in _exportAuth /
+// _blobMember, scripts/gateway.mjs) and then discards it. Stage 2 — nothing here is stored or ordered.
+function _nip98(url, method) { return 'Nostr ' + btoa(JSON.stringify(finalizeEvent({ kind: 27235, created_at: _credNow(), tags: [['u', url], ['method', method || 'GET'], ['church', pub]], content: '' }, sk))); }
 // restore one media blob to `base` with a signed kind-24242 upload auth (the church key passes _blobUploader).
 // (_sha256hex is defined below and used at call time.)
 async function _putBlob(base, bytes) {
   const sha = await _sha256hex(bytes);
   const native = !!(typeof window !== 'undefined' && window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
-  const auth = 'Nostr ' + btoa(JSON.stringify(finalizeEvent({ kind: 24242, created_at: now(), tags: [['t', 'upload'], ['x', sha], ['expiration', String(now() + 600)]], content: 'upload' }, sk)));
+  // ONE READING FOR BOTH FIELDS. `expiration` is compared to the relay's clock in _blobUploader and the
+  // stamp to nobody's, so taking _credNow() twice could straddle a second and leave the two disagreeing.
+  const _at = _credNow();
+  const auth = 'Nostr ' + btoa(JSON.stringify(finalizeEvent({ kind: 24242, created_at: _at, tags: [['t', 'upload'], ['x', sha], ['expiration', String(_at + 600)]], content: 'upload' }, sk)));
   const h = { Authorization: auth, 'Content-Type': 'application/octet-stream' };
   let body = bytes; if (native) { h['X-Blob-B64'] = '1'; body = _b64(bytes); }   // CapacitorHttp mangles raw binary -> base64 transport
   try { const r = await fetch(base + '/blob', { method: 'PUT', headers: h, body }); return r.ok; } catch { return false; }
@@ -1320,6 +1325,245 @@ function relays() { try { return _gate.admit(relaysRaw(), pub); } catch (e) { re
 // A publish that had candidates and none of them proved is not "no relay is configured", and the steward has
 // to be told which. Stable prefix; the console has no general write queue and this item does not add one.
 const NO_NETWORK_RELAY = 'no-network-relay';
+
+// ── HOW FAR OUT IS THIS CONSOLE'S CLOCK? MEASURE ONLY — NOTHING HERE CORRECTS ANYTHING ──────────────────
+//
+// Stage 1 of reference/SCOPE-RELAY-CORRECTED-TIME-2026-09-26.md. Read §4 before changing any of it.
+//
+// WHY A CONSOLE NEEDS THIS AT ALL. Two machines write the same church document and the app decides which
+// wins by which was stamped LATER — off each machine's own clock. A console eleven minutes fast writes
+// "not a child", the correct "is a child" that follows loses because by the clock it is older, the relay
+// says "a newer version is already stored", and nothing retries. That is not hypothetical: it is written
+// up on publishClearance in this file as a reproduced incident. Nobody knows how far out a real church's
+// clocks are, so before anything is corrected, the number gets measured and shown.
+//
+// ⚠ NOTHING IN THIS BLOCK IS CONSULTED BY ANY STAMP, ANY GATE OR ANY ADMISSION DECISION. `now()` keeps its
+// exact meaning; relays() and _gate are untouched; no event's created_at moves. It reads, it reports, and
+// the console's Relays panel shows the answer. Correcting stamps is stage 4 and is a separate decision.
+//
+// WHERE THE TIME COMES FROM, AND WHY NOT /status. `verifyRelayIdentity` already fetches a kind-27235 event
+// SIGNED by the relay's identity key, bound to a nonce we minted this call and to the address we dialled.
+// Its `created_at` is the relay's own clock with a signature over it. `/status`'s `now` is a bare string
+// over an unauthenticated GET — CLAUDE.md rule 10 says in as many words that that shape "is never proof".
+// The member app's measureRelaySkew reads `/status` because it predates the proof; this one prefers the
+// proof and records WHICH it used, so a later stage can refuse to correct silently off an unsigned number.
+let _relaySkewSec = 0;        // this console's clock minus the relay's, in seconds. + = this box is FAST
+let _skewMeasuredAt = 0;      // ms on the local clock; 0 = nothing has ever answered, and 0 means UNKNOWN
+let _skewProven = false;      // did the number come from the signed proof, or only from /status?
+let _skewSpreadSec = 0;       // widest disagreement between the relays that answered
+let _skewMeasuring = false;   // one measurement at a time; the boot kick and a reconnect can arrive together
+// THE MEASUREMENT IN PROGRESS, so a concurrent caller can await THAT ONE. Without it, `_skewMeasuring` made
+// a second caller take the PREVIOUS number the instant the first call started dialling — which is fine for a
+// diagnostic and useless for ensureSkew(), whose whole job is to WAIT for the answer. A bounded wait that
+// returns instantly because the boot kick got there first buys nothing at all.
+let _skewFlight = null;
+const _skewByRelay = new Map();   // url -> { sec, at, proven }
+// Half the relay's NIP-42 window. Same number and same reasoning as the member app's CLOCK_FAULT_SEC:
+// comfortably outside ordinary drift, comfortably inside "this clock cannot authenticate".
+const CLOCK_FAULT_SEC = 300;
+// ── TWO CAPS, TWO JOBS. DO NOT TIDY THEM INTO ONE. ──────────────────────────────────────────────────────
+//
+// SKEW_CAP_SEC is the cap on a SHORT-LIVED CREDENTIAL's correction (_credNow). 900 because that is put()'s
+// own future clamp in scripts/event-store.mjs: a credential corrected inside ±900s cannot produce anything
+// an honest relay would not already have accepted from a device that far out on its own clock. A credential
+// is checked against the RELAY's freshness windows and then thrown away. It is never stored, never ordered,
+// and no gate on THIS console ever reads one back.
+const SKEW_CAP_SEC = 900;
+// STAMP_CAP_SEC is the cap on a DOCUMENT's correction (_monotonic), and it is deliberately the SMALLER
+// number, tied to the console's OWN receive gate rather than to the relay's.
+//
+// WHY, and it is the defect this stage nearly shipped. `_relaySkewSec` is local-minus-relay, so a console
+// whose clock is SLOW measures a NEGATIVE skew and the correction pushes its stamps FORWARD. Capped at 900
+// it would stamp up to now()+900 — and `_authFuture` (below, `e.created_at > now() + _CLOCK_SKEW`) refuses
+// anything past now()+600 on the console's OWN safeguarding subscription. So a console more than ten
+// minutes slow would write its minors list, the relay would store it, correctly-clocked phones would read
+// it, and the WRITING console's own screen would drop it as future-dated. Worse, `minors` starts empty and
+// `minorsKnown()` falls back to sawEose-while-authed, so the first such write leaves that console asserting
+// "nobody here is a child" rather than admitting it does not know. The member app already names this exact
+// 600-to-900 band as a measured hazard, beside its own clearance clamp in src/fellowship.src.js: "Two
+// programs that must agree cannot run different rulebooks."
+//
+// Derived from `_CLOCK_SKEW`, never written out as another 600: this whole piece of work exists because
+// five different tolerance constants drifted apart. At exactly the cap the gate is `>`, so a stamp of
+// now()+600 is accepted — and time only ever passes between stamping and reading, which moves the gate
+// further away, never closer.
+const STAMP_CAP_SEC = _CLOCK_SKEW;
+// The bounded wait the eight safeguarding writers take before their FIRST stamp of a session, once.
+const SKEW_WAIT_MS = 6000;
+function clockLooksWrong() { return !!_skewMeasuredAt && Math.abs(_relaySkewSec) >= CLOCK_FAULT_SEC; }
+// SEVERAL RELAYS DISAGREEING (§4). Median, except at exactly two, where the median is the average and the
+// average is not the conservative answer — take the reading CLOSER TO LOCAL, so a correction built on this
+// can only ever be smaller. Ties go to the smaller magnitude for the same reason.
+function _pickSkew(list) {
+  const a = list.slice().sort((x, y) => x - y);
+  if (!a.length) return 0;
+  if (a.length === 2) return Math.abs(a[0]) <= Math.abs(a[1]) ? a[0] : a[1];
+  return a[(a.length - 1) >> 1];
+}
+// Best effort, always. Never throws, never blocks a write, and returns the last known figure when nothing
+// answers — a church on a thin pipe is the first audience, not the edge case.
+async function measureRelaySkew(preferUrl) {
+  // A CONCURRENT CALLER AWAITS THE MEASUREMENT IN PROGRESS, it does not take the previous number and walk
+  // away. The boot kick and a reconnect can arrive together — and, since stage 4, so can ensureSkew()'s
+  // bounded wait, whose entire job is to have an ANSWER before the first safeguarding stamp. Handing it the
+  // stale figure made that wait return in microseconds and buy nothing.
+  if (_skewMeasuring) return _skewFlight || _relaySkewSec;
+  _skewMeasuring = true;
+  let _flightDone = null;
+  _skewFlight = new Promise((r) => { _flightDone = r; });
+  try {
+    // ASK EVERY CANDIDATE, not the first. The member app's own comment records the cost of asking one:
+    // measured on the Oppo, the skew stayed 0 for three minutes with the clock a quarter-hour out, because
+    // the relay that happened to be picked was on a build too old to answer.
+    const cands = [];
+    const add = (u) => { const v = String(u || ''); if (v && !cands.includes(v)) cands.push(v); };
+    add(preferUrl);
+    try { relays().forEach(add); } catch (e) {}
+    // relaysRaw() as well as relays(): a candidate that has not proved itself yet is still a box whose clock
+    // is worth reading, and reading it decides nothing. This is a diagnostic, not an admission path — see
+    // CLAUDE.md rule 10. Nothing here adds, removes or reorders a relay.
+    try { relaysRaw().forEach(add); } catch (e) {}
+    for (const url of cands) {
+      let proof = null;
+      try { proof = await verifyRelayIdentity(url); } catch (e) { proof = null; }
+      if (proof && Number(proof.at) > 0) {
+        _skewByRelay.set(url, { sec: Math.round(Date.now() / 1000 - Number(proof.at)), at: Date.now(), proven: true });
+        continue;
+      }
+      // FALLBACK, AND IT IS MARKED AS ONE. A relay too old to carry `at` on its proof can still be read from
+      // /status, which is better than saying nothing to a steward whose console cannot save anything. It is
+      // recorded `proven: false` and a proven reading always wins over it, because a stage that corrects
+      // must be able to refuse an unsigned number.
+      const base = String(url).replace(/^wss:/i, 'https:').replace(/^ws:/i, 'http:').replace(/\/relay\/?$/i, '').replace(/\/+$/, '');
+      if (!/^https?:\/\/.+/i.test(base)) continue;
+      try {
+        const r = await fetch(base + '/status', { cache: 'no-store', signal: AbortSignal.timeout(6000) });
+        if (!r.ok) continue;
+        const j = await r.json();
+        if (!j || typeof j.now !== 'number') continue;   // too old to say — ask the next
+        _skewByRelay.set(url, { sec: Math.round(Date.now() / 1000 - j.now), at: Date.now(), proven: false });
+      } catch (e) { /* unreachable or not JSON — try the next */ }
+    }
+    const all = [..._skewByRelay.values()];
+    const proven = all.filter(v => v.proven);
+    const use = proven.length ? proven : all;
+    if (!use.length) return _relaySkewSec;   // nobody could tell us: say nothing about clocks rather than guess
+    const secs = use.map(v => v.sec);
+    _relaySkewSec = _pickSkew(secs);
+    _skewSpreadSec = Math.max(...secs) - Math.min(...secs);
+    _skewProven = !!proven.length;
+    _skewMeasuredAt = Date.now();
+    return _relaySkewSec;
+  } catch (e) { return _relaySkewSec; }
+  finally { _skewMeasuring = false; _skewFlight = null; try { _flightDone(_relaySkewSec); } catch (x) {} }
+}
+// ── THE BOUNDED WAIT, FOR THE EIGHT SAFEGUARDING WRITERS AND NOTHING ELSE ───────────────────────────────
+//
+// Returns null when there is nothing to wait for, and a promise that settles within `timeoutMs` otherwise.
+// Null is the overwhelmingly common answer, and it is what keeps a write synchronous exactly as it was.
+//
+// LATCHED AFTER ONE WAIT. A console with no relay reachable never sets `_skewMeasuredAt`, so without the
+// latch every mark-a-child would sit for six seconds, for ever, with nothing on the screen saying why. A
+// church on a thin pipe in Tehran is the first audience, not the edge case: it pays this once per session
+// and never again. Same shape as `_proofWaited` on the registration gate, and for the same reason.
+//
+// IT CAN NEVER FAIL A WRITE. Whatever happens — no relay, a throw, a hung fetch — it resolves and the
+// caller stamps from whatever it knows, which with no measurement is the local clock and today's behaviour.
+let _skewWaited = false;
+function ensureSkew(opts) {
+  if (_skewMeasuredAt || _skewWaited) return null;
+  _skewWaited = true;
+  const ms = Math.max(0, (opts && opts.timeoutMs) || SKEW_WAIT_MS);
+  let settle = null;
+  const bounded = new Promise((r) => { settle = r; setTimeout(r, ms); });
+  try { measureRelaySkew().then(() => settle(), () => settle()); } catch (e) { settle(); }
+  return bounded;
+}
+// The one line each safeguarding writer adds. `fn` runs SYNCHRONOUSLY when there is nothing to wait for, so
+// every write after the first behaves exactly as it did before this stage.
+function _skewGate(fn) {
+  const w = ensureSkew({ timeoutMs: SKEW_WAIT_MS });
+  return w ? w.then(fn) : Promise.resolve(fn());
+}
+// WHAT THE PANEL READS. `measuredAt: 0` is the honest "we do not know" and the screen must show nothing
+// rather than claim a zero skew — an unmeasured clock and a correct clock are not the same fact.
+function relaySkewState() {
+  return {
+    skewSec: _relaySkewSec,
+    measuredAt: _skewMeasuredAt,
+    proven: _skewProven,
+    spreadSec: _skewSpreadSec,
+    capSec: SKEW_CAP_SEC,
+    clockIsWrong: clockLooksWrong(),
+    // IS THE CORRECTION ACTUALLY ON? The scope document (§4) says a spread beyond the cap must raise the
+    // banner, and until 2026-09-26 nothing did: _skewShift refused silently while the panel painted a green
+    // dot and "your clock matches your relays", which is the calmest possible way to say "the thing you were
+    // told protects this church is switched off". A steward cannot act on a number that is not being used.
+    // `disagree` is the reason; `correcting` is the fact, and it is the same predicate _skewShift applies —
+    // read off the state rather than re-derived, so the panel and the stamp cannot drift apart.
+    disagree: Math.abs(_skewSpreadSec) > SKEW_CAP_SEC,
+    correcting: !!_skewMeasuredAt && !!_skewProven && Math.abs(_skewSpreadSec) <= SKEW_CAP_SEC,
+    relays: [..._skewByRelay.entries()].map(([url, v]) => ({ url, sec: v.sec, proven: v.proven })),
+  };
+}
+// ── THE ONE THING THE MEASUREMENT IS ALLOWED TO CHANGE: SHORT-LIVED CREDENTIALS ─────────────────────────
+//
+// Stage 2 of the same scope document (§6). `now()` keeps its exact meaning and every stamp in this file
+// still uses it. THIS IS FOR CREDENTIALS ONLY — the kind-27235 NIP-98 proofs and kind-24242 Blossom auth
+// events that a relay checks for FRESHNESS and then throws away. Seven of them, named in the commit. None
+// is stored, none is ordered against anything, and no newest-wins rule is anywhere near them.
+//
+// WHAT IT FIXES. Those relay-side checks are ±300s (_blobMember, _exportAuth, _syncAuth and the /config
+// addChurch branch in scripts/gateway.mjs) and the Blossom `expiration` is compared to the relay's clock in
+// _blobUploader. A console five minutes out therefore cannot download its own church's sermon, cannot take
+// a backup, cannot restore one, and cannot register itself with a relay — while every screen says only that
+// something went wrong.
+//
+// WHAT IT CANNOT REACH. Not a church document, not a safeguarding list, not a clearance, not an ordering
+// decision. If this function is wrong the worst outcome is a credential the relay refuses, which is exactly
+// what happens today; it cannot make a document win a race it should have lost.
+//
+// FOUR REFUSALS, all deliberate:
+//   * NOT MEASURED  → no correction. Byte-identical to the previous build. Offline is this case, and a
+//                     church on a thin pipe is the first audience, not the edge case.
+//   * NOT PROVEN    → no correction. A reading taken from `/status`'s unauthenticated `now` is shown to the
+//                     steward on the Relays panel and is never used to stamp anything. CLAUDE.md rule 10's
+//                     reasoning about `relayPub` is the same reasoning: a bare string is not proof.
+//   * RELAYS DISAGREE BY MORE THAN THE CAP → no correction. Boxes that contradict each other are not a
+//                     device-clock fault we can quietly fix.
+//   * BEYOND ±900s  → clamped to ±900s, and the panel already says the clock is wrong. 900 is put()'s own
+//                     future clamp in scripts/event-store.mjs, so a correction inside it cannot produce
+//                     anything an honest relay would not already accept from a device that far out on its
+//                     own. Above it the honest answer is to tell the person their clock is wrong.
+// HOW MANY SECONDS TO SUBTRACT FROM A LOCAL READING, and the three refusals above are all here. `capSec` is
+// the CALLER's bound, because the two callers answer to two different gates — see the note on SKEW_CAP_SEC
+// and STAMP_CAP_SEC above, and do not collapse them.
+//
+// The SPREAD refusal keeps SKEW_CAP_SEC for both callers deliberately: it is not a question about how far
+// we are willing to move, it is the question of whether the measurement is worth anything at all, and boxes
+// that contradict each other by a quarter of an hour are not a device-clock fault either caller can fix.
+//
+// It takes no clock reading of its own, so a caller that has already read the clock can shift THAT reading
+// rather than taking a second one and straddling a second boundary.
+function _skewShift(capSec) {
+  if (!_skewMeasuredAt || !_skewProven) return 0;
+  if (Math.abs(_skewSpreadSec) > SKEW_CAP_SEC) return 0;
+  let d = _relaySkewSec;
+  if (d > capSec) d = capSec;
+  if (d < -capSec) d = -capSec;
+  return d;
+}
+function _credNow() {
+  return now() - _skewShift(SKEW_CAP_SEC);
+}
+// Measure at start and when a relay comes back, so the number on the panel is about now and not about boot.
+// Both are deliberately delayed and both swallow everything: a measurement must never be able to delay or
+// fail anything the console is doing.
+try {
+  setTimeout(() => { measureRelaySkew().catch(() => {}); }, 2500);
+  window.addEventListener('steward-relay-returned', () => { setTimeout(() => { measureRelaySkew().catch(() => {}); }, 3000); });
+} catch (e) {}
+
 // Phase 5 Tier 2: the media host = this relay's HTTPS origin (self-hosted blobs live beside the relay).
 function _blobBase() { const r = ownRelay(); return r.replace(/^wss:\/\//i, 'https://').replace(/^ws:\/\//i, 'http://').replace(/\/relay\/?$/i, ''); }
 // FEDERATION Phase 3 — relay discovery for the steward console (mirrors the member engine). Probe a relay's
@@ -1395,7 +1639,7 @@ function _probeRelayEnforces(wssUrl, timeoutMs) {
     const ids = new Map();
     ws.onopen = () => {
       for (const pr of probes) {
-        const evt = finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', pr.d], ['t', NET]], content: JSON.stringify({ pubkeys: [] }) }, sk);
+        const evt = finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', pr.d], ['t', NET]], content: JSON.stringify({ pubkeys: [] }) }), sk);
         ids.set(evt.id, pr);
         try { ws.send(JSON.stringify(['EVENT', evt])); } catch (e) {}
       }
@@ -2929,13 +3173,69 @@ function _spreadOf(d) {
   const s = _lastSpread.get(d);
   return s ? { landed: s.landed.slice(), missed: s.missed.slice(), at: s.at } : null;
 }
+// ── ONE STAMP FOR EVERY DOCUMENT THIS CONSOLE WRITES ────────────────────────────────────────────────────
+//
+// Stage 3 of reference/SCOPE-RELAY-CORRECTED-TIME-2026-09-26.md. STILL THE LOCAL CLOCK — nothing here is
+// corrected; the only thing that changed is WHO comes through.
+//
+// WHAT IT DOES. `_lastStamp` remembers the created_at we last published for each `d` tag, and a second write
+// of the same document in the same second is stamped `last + 1` instead of tying. Ties matter because every
+// reader of an addressable document picks the copy with the larger created_at and the relay REFUSES the
+// loser outright ("a newer version of this is already stored"), which the console counts as nothing to
+// worry about. The same-second half of the incident recorded on publishClearance is exactly that: two
+// writes, one second, the wrong one kept, no banner, nothing retried.
+//
+// WHO COMES THROUGH IT. Every publisher in this file. 55 already arrived via feChurch(); stage 3 routed the
+// other 28 — which had been calling finalizeEvent() directly, deliberately, to avoid feChurch's ['church']
+// and ['for'] tags — through this function alone, so they keep their tags and gain the ordering. The eight
+// that made the case are the church's authority lists and the children's-desk clearances: setMinors,
+// setApproved, setGuardians, setStewards, grantCheckinPermission, revokeCheckinPermission,
+// publishCheckinHelpers, revokeCheckinHelpers. Every one is enumerated in the stage-3 commit.
+//
+// AND SINCE STAGE 4 IT IS ALSO THE CLOCK. `now()` keeps its exact meaning — the seven local-elapsed-time
+// sites in this file depend on it and would all break — but the number stamped on a DOCUMENT is the relay's
+// clock as best this console can tell, so two consoles in one church order their writes by the same clock
+// instead of by whose laptop is faster. That is the other half of the incident on publishClearance.
+//
+// THE CORRECTION IS BOUNDED BY STAMP_CAP_SEC (= _CLOCK_SKEW, 600), NOT by SKEW_CAP_SEC. A slow console
+// corrects FORWARD, and this console's own `_authFuture` refuses a document past now() + _CLOCK_SKEW. Tied
+// to the smaller number, a corrected stamp can never be one this console itself would refuse. The long
+// version is on STAMP_CAP_SEC; it is a real defect, not a style preference.
+//
+// AND IT IS STILL ZERO WHENEVER THE MEASUREMENT IS NOT WORTH HAVING: nothing measured, the reading unsigned,
+// or relays disagreeing beyond the cap all give a shift of 0 and an event byte-identical to the last build.
+// Offline is that case. The correction can never prevent, delay past its bound, or fail a write.
 function _monotonic(tmpl) {
   const d = ((tmpl.tags || []).find(t => t[0] === 'd') || [])[1] || ('kind:' + tmpl.kind);
-  const nowS = Math.floor(Date.now() / 1000);
-  const want = tmpl.created_at || nowS;
+  const localS = Math.floor(Date.now() / 1000);
+  // ONE reading, shifted — never a second reading of the clock, which could straddle a second boundary and
+  // leave `want` and `nowS` disagreeing about which second this is.
+  const shift = _skewShift(STAMP_CAP_SEC);
+  const nowS = localS - shift;
+  const want = (tmpl.created_at || localS) - shift;
   const last = _lastStamp.get(d) || 0;
   let at = want > last ? want : last + 1;
-  if (at > nowS + 600) at = want;   // never stamp into the relay's future-clamp; take the rare tie instead
+  // THE RUNAWAY GUARD, and it has TWO ceilings now because there are two gates and they move apart under a
+  // correction. `last + 1` must not climb into either one; when it would, take the rare tie instead.
+  //   * localS + STAMP_CAP_SEC — THIS console's own _authFuture, which reads its LOCAL clock.
+  //   * nowS + SKEW_CAP_SEC    — put()'s future clamp, which reads the RELAY's.
+  // With no measurement the shift is 0, both bases are the same second and this is exactly `nowS + 600`,
+  // byte-identical to the build before stage 4.
+  //
+  // WRITING IT AS `nowS + 600` ALONE WAS WRONG AND A TEST CAUGHT IT: a console 600s FAST corrects backwards
+  // by 600, so the ceiling drops to the second its FIRST write of the session already occupies, the guard
+  // fires, `at` falls back to `want` — and the second write of that document is stamped 600s BEFORE the
+  // first. The relay answers have-newer and drops it. That is the measured incident, reintroduced by the fix
+  // for it.
+  //
+  // SAID PLAINLY (rule 4): at the very edge — a console corrected by the full STAMP_CAP_SEC in the SLOW
+  // direction — the first ceiling sits exactly on the stamp, so a SECOND write of that same document in the
+  // same second ties instead of bumping. That is stage 3's guarantee degrading at the cap, and it is the
+  // lesser of the two evils: the alternative is a document one second past this console's own gate, which
+  // it would then refuse to show. It needs a console ten minutes slow AND two writes of one document inside
+  // one second.
+  const ceiling = Math.min(localS + STAMP_CAP_SEC, nowS + SKEW_CAP_SEC);
+  if (at > ceiling) at = want;
   _lastStamp.set(d, at);
   return at === tmpl.created_at ? tmpl : { ...tmpl, created_at: at };
 }
@@ -3130,7 +3430,7 @@ async function enrolRelayNet(opts) {
   // Nothing proved and nothing already signed in: publish NOTHING. An empty document is the church signing
   // "my network is empty", which is a statement, not a silence.
   if (!entries.length || !changed) return { published: false, entries, proven, unproven, seeded };
-  const ev = await publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', RELAY_NET_D]], content: JSON.stringify(entries) }, sk));
+  const ev = await publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', RELAY_NET_D]], content: JSON.stringify(entries) }), sk));
   return { published: !!ev, entries, proven, unproven, seeded };
 }
 
@@ -4386,7 +4686,7 @@ window.Steward = {
     // A SETTING NOBODY ACCEPTED IS NOT A SETTING. Audit 2026-09-02 #17.
     // This awaited the publish and discarded it, so "✓ Sync on" appeared over a document no relay took —
     // and the church believed its two boxes were mirroring each other when nothing had been told to.
-    const ev = await publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', 'trinityone/relays']], content: JSON.stringify(trusted) }, sk));
+    const ev = await publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', 'trinityone/relays']], content: JSON.stringify(trusted) }), sk));
     if (!ev) throw new Error('Sync could not be switched on — no relay accepted the setting. Nothing is mirroring yet; try again.');
     return { relays: trusted.length };
   },
@@ -4436,7 +4736,7 @@ window.Steward = {
     // other while the console said they had stopped. That is the wrong direction to be wrong in — this is
     // pressed when a church is decommissioning a relay or reacting to a seizure, and believing mirroring has
     // stopped when it has not is the whole harm.
-    const ev = await publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', 'trinityone/relays']], content: '[]' }, sk));
+    const ev = await publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', 'trinityone/relays']], content: '[]' }), sk));
     if (!ev) throw new Error('Sync could not be switched off — no relay accepted the change, so your relays are STILL mirroring each other. Try again.');
     return { relays: 0 };
   },
@@ -4656,7 +4956,7 @@ window.Steward = {
     let content;
     try { content = JSON.stringify({ n: nip44e(JSON.stringify({ name: (lastProfile && lastProfile.name) || '' }), nip44ck(sk, cp)) }); }
     catch (e) { content = JSON.stringify({ n: '' }); }
-    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', STEWARDREQ_D + cp], ['t', NET], ['p', cp]], content }, sk))
+    return publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', STEWARDREQ_D + cp], ['t', NET], ['p', cp]], content }), sk))
       // A REQUEST NOBODY RECEIVED MUST NOT SAY "sent". The screen shows "✓ Request sent — the church's
       // owner will approve you" on a truthy result, so discarding publish()'s false left someone waiting
       // indefinitely for an approval that was never asked for. (Audit 2026-09-05, the sweep around the
@@ -4723,7 +5023,8 @@ window.Steward = {
         sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: _b64ToU8(vapid.publicKey) });
       }
       // prove control of the church key (NIP-98), bound to this endpoint, so the gateway files it under churchPub
-      const auth = finalizeEvent({ kind: 27235, created_at: now(), tags: [['u', sub.endpoint], ['method', 'POST']], content: '' }, churchSk);
+      // _credNow(): /push/subscribe refuses a proof more than 300s from the RELAY's clock ('stale proof').
+      const auth = finalizeEvent({ kind: 27235, created_at: _credNow(), tags: [['u', sub.endpoint], ['method', 'POST']], content: '' }, churchSk);
       const r = await fetch('/push/subscribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sub, auth }) });
       return r.ok ? 'on' : 'error';
     } catch { return 'error'; }
@@ -4784,7 +5085,7 @@ window.Steward = {
     // Proven redundant by execution, not by reading: with it fully dead in the bundle, a real browser
     // driving the real wizard against a fresh relay still registered the church, recorded `by: "self"` —
     // the signature door, not the token one.
-    return publish(finalizeEvent({ kind: 0, created_at: now(), tags: [], content }, sk));
+    return publish(finalizeEvent(_monotonic({ kind: 0, created_at: now(), tags: [], content }), sk));
   },
   // NIP-65 relay-list (FEDERATION-PLAN Phase 1b): advertise, in a church-signed replaceable event (kind
   // 10002), WHICH relays carry this church's content — so a member can follow relay moves/additions
@@ -4795,7 +5096,7 @@ window.Steward = {
   publishRelayList() {
     if (!sk || actingChurch) return Promise.resolve(null);
     const tags = relays().map(r => ['r', r]);   // no read/write marker = both (church relays serve + accept)
-    return publish(finalizeEvent({ kind: 10002, created_at: now(), tags, content: '' }, sk));
+    return publish(finalizeEvent(_monotonic({ kind: 10002, created_at: now(), tags, content: '' }), sk));
   },
   publishFund(fund) {
     if (!sk) return Promise.resolve(null);
@@ -4864,7 +5165,10 @@ window.Steward = {
     const sha = await _sha256hex(bytes);
     const ctype = enc ? 'application/octet-stream' : (file.type || 'application/octet-stream');
     // one signed, host-agnostic kind-24242 upload auth, reused to PUT the SAME blob to the primary + each backup.
-    const authHdr = 'Nostr ' + btoa(JSON.stringify(finalizeEvent({ kind: 24242, created_at: now(), tags: [['t', 'upload'], ['x', sha], ['expiration', String(now() + 600)]], content: 'upload' }, sk)));
+    // _credNow() for both, read ONCE — see _putBlob. _blobUploader refuses when `expiration` is behind the
+    // RELAY's clock, so a console five minutes fast could not upload a sermon to its own relay.
+    const _upAt = _credNow();
+    const authHdr = 'Nostr ' + btoa(JSON.stringify(finalizeEvent({ kind: 24242, created_at: _upAt, tags: [['t', 'upload'], ['x', sha], ['expiration', String(_upAt + 600)]], content: 'upload' }, sk)));
     // native (CapacitorHttp) mangles a raw binary PUT body → send base64 text + a marker the gateway decodes; web sends raw bytes
     const native = _isNative(); const body = native ? _b64(bytes) : bytes;
     const put = async (b) => { const h = { Authorization: authHdr, 'Content-Type': ctype }; if (native) h['X-Blob-B64'] = '1'; const r = await fetch(b + '/blob', { method: 'PUT', headers: h, body }); if (!r.ok) { let m = ''; try { m = ((await r.json()) || {}).error || ''; } catch (e) {} throw new Error(m || ('Upload failed (' + r.status + ')')); } return r.json(); };
@@ -4919,7 +5223,10 @@ window.Steward = {
     const sha = s && typeof s === 'object' && s.sha256;
     const hosts = (s && typeof s === 'object' && ((s.hosts && s.hosts.length) ? s.hosts : (s.host ? [s.host] : []))) || [];
     if (sha && hosts.length) {
-      const auth = 'Nostr ' + btoa(JSON.stringify(finalizeEvent({ kind: 24242, created_at: now(), tags: [['t', 'delete'], ['x', sha], ['expiration', String(now() + 600)]], content: 'delete' }, sk)));
+      // _credNow() for both, read ONCE — same gate as the upload arm (_blobUploader, action 'delete').
+      // The TOMBSTONE above is a church document and keeps now(): stage 2 corrects credentials only.
+      const _delAt = _credNow();
+      const auth = 'Nostr ' + btoa(JSON.stringify(finalizeEvent({ kind: 24242, created_at: _delAt, tags: [['t', 'delete'], ['x', sha], ['expiration', String(_delAt + 600)]], content: 'delete' }, sk)));
       for (const h of hosts) { try { await fetch(String(h).replace(/\/+$/, '') + '/blob/' + sha, { method: 'DELETE', headers: { Authorization: auth } }); } catch (e) {} }
     }
     return true;
@@ -5533,14 +5840,14 @@ window.Steward = {
   // react to a group message (NIP-25 kind-7), interoperable with the member app. emoji '' or '-' retracts.
   reactGroup(groupId, msgId, targetPub, emoji) {
     if (!sk || !groupId || !msgId) return Promise.resolve(null);
-    return publish(finalizeEvent({ kind: 7, created_at: now(), tags: [['e', msgId], ['p', targetPub || ''], ['t', NET], ['t', groupId]], content: emoji || '-' }, sk));
+    return publish(finalizeEvent(_monotonic({ kind: 7, created_at: now(), tags: [['e', msgId], ['p', targetPub || ''], ['t', NET], ['t', groupId]], content: emoji || '-' }), sk));
   },
 
   // ---- direct messages: the church <-> a member (NIP-04 encrypted kind-4) ----
   async sendDM(peerHex, content) {
     if (!sk || !peerHex) return null;
     let enc = ''; try { enc = await nip04encrypt(sk, peerHex, content); } catch { return null; }
-    const evt = finalizeEvent({ kind: 4, created_at: now(), tags: [['p', peerHex], ['t', NET]], content: enc }, sk);
+    const evt = finalizeEvent(_monotonic({ kind: 4, created_at: now(), tags: [['p', peerHex], ['t', NET]], content: enc }), sk);
     // QUEUE FIRST, THEN ATTEMPT — the same rule the member app follows. If the publish fails the words are
     // still here, and the retry sends this exact event with its original id, so nothing duplicates.
     _sOutLoad();
@@ -5592,7 +5899,7 @@ window.Steward = {
   // react to a member's DM (NIP-25 kind-7). emoji '' or '-' retracts.
   async reactDM(peerHex, msgId, emoji) {
     if (!sk || !peerHex || !msgId) return null;
-    const evt = finalizeEvent({ kind: 7, created_at: now(), tags: [['e', msgId], ['p', peerHex], ['t', NET], ['k', '4']], content: emoji || '-' }, sk);
+    const evt = finalizeEvent(_monotonic({ kind: 7, created_at: now(), tags: [['e', msgId], ['p', peerHex], ['t', NET], ['k', '4']], content: emoji || '-' }), sk);
     return publish(evt);
   },
   // list of members who have a DM thread with the church (most recent first)
@@ -5823,7 +6130,6 @@ window.Steward = {
     // an un-updated phone would have opened Prayer or their life group to an EMPTY ROOM — no error, no spinner,
     // nothing to diagnose. The compat comment on the member side reasoned about the opposite direction only.
     // AUDIT-2026-07-27.
-    _senvTs[groupId] = now();
     // A MEMBER WE COULD NOT SEAL TO MUST NOT VANISH QUIETLY. This loop skipped any pubkey that threw and
     // carried on, and the publish reported success — so that member was simply absent from the envelope.
     // The member side treats "no copy for me" as REMOVAL and deletes any key it held, so they lose the room
@@ -5868,7 +6174,14 @@ window.Steward = {
     // `opts.background` is the CALLER's answer to "did a steward ask for this", never this function's own:
     // the interactive seal (sealGroup) and the edit-members rotation pass nothing and stay loud, while the
     // key-distributor effect and ensureGroupKeys pass true. See the note above publish().
-    const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', GROUPKEY_D + groupId], ['t', NET]], content }, churchSk), { background: !!opts.background });
+    const _env = feChurch({ kind: 30078, created_at: now(), tags: [['d', GROUPKEY_D + groupId], ['t', NET]], content }, churchSk);
+    // _senvTs IS THE STAMP WE ACTUALLY WROTE, not a second reading of the clock. It used to be set to now()
+    // a few lines above, before the envelope existed — and feChurch routes through _monotonic, which can
+    // hand back `last + 1` rather than the reading the call site took. The two therefore disagreed by a
+    // second or more, and stewIngestKey drops an envelope whose created_at is BELOW _senvTs, so our own
+    // envelope coming back off the relay could be discarded as stale. Take the number off the signed event.
+    _senvTs[groupId] = _env.created_at || 0;
+    const ok = await publish(_env, { background: !!opts.background });
     if (ok === false) return false;
     if (skipped.length) {
       console.warn('[steward] group key ' + groupId + ': could not seal to ' + skipped.length + ' member(s) — they cannot read or post in that room');
@@ -5968,7 +6281,7 @@ window.Steward = {
     // the two that lacked the block they AUTHENTICATED and read the entire adult group. The relay refuses to
     // authenticate a blocked key — but only a relay that HOLDS the block. A ban published single-accept is a
     // ban on one relay.
-    return _publishToRelays(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', BLOCKED_D + pub], ['t', NET]], content }, sk));
+    return _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', BLOCKED_D + pub], ['t', NET]], content }), sk));
   },
 
   // ---- safeguarding: two church-signed lists the relay reads to enforce child protection ----
@@ -6071,7 +6384,11 @@ window.Steward = {
     // every phone went on showing the CHURCH'S list while the relay obeyed the steward's. MEASURED, in this
     // order: the church suppresses Amy, Amy's photo is refused; a steward writes a list without Amy, and
     // AMY'S PHOTO IS ACCEPTED AGAIN — with nothing on any screen saying so.
-    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', NOPHOTO_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list }) }, sk));
+    // _skewGate, added 2026-09-26 with publishClearance. This is the list the relay refuses a child's
+    // photo from, it is written from the same Members screen by the same press, and losing its race
+    // un-suppresses a photo with nothing on any screen saying so — the failure the comment above
+    // records as MEASURED. Same criterion as the plan's eight: user-initiated, never on the boot path.
+    return _skewGate(() => publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', NOPHOTO_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list }) }, sk)));
   },
   // Tell ONE member what their own safeguarding status is, sealed to them. This exists so a member's app can
   // know whether THEY are a child or a cleared adult without the church publishing a cleartext list of its
@@ -6132,7 +6449,12 @@ window.Steward = {
     // second a church last edited its list of children, and told the member themselves — a fact the read gate
     // deliberately withholds from them. When delegated stewards get safeguarding, the revision check belongs
     // on the RELAY, which holds the list and can refuse a stale write outright. AUDIT-8.
-    return Promise.resolve(_publishToRelays(feChurch({ kind: 30078, created_at: now(), tags: [['d', CLEARANCE_D + mp], ['t', NET], ['p', mp], ['church', cp]], content: ct }), urls))
+    // _skewGate: THE BOUNDED WAIT, and this is the writer it exists for. The measured incident above is a
+    // clearance losing to a fast clock, so a clearance stamped before the first measurement has answered
+    // is the one write that must not go out uncorrected. Latched once per session and bounded, so the
+    // back-fill loop below pays it at most once — and _refreshClearancesNow awaits it before its batch
+    // timer starts, so the wait cannot be mistaken for a batch that timed out.
+    return Promise.resolve(_skewGate(() => _publishToRelays(feChurch({ kind: 30078, created_at: now(), tags: [['d', CLEARANCE_D + mp], ['t', NET], ['p', mp], ['church', cp]], content: ct }), urls)))
       .then(r => {
         // Remember what we just put on the wire, so a second writer moments later can tell it is redundant
         // WITHOUT waiting for the relay to echo it back. The read-before-write below closes the steady-state
@@ -6207,6 +6529,13 @@ window.Steward = {
     // AUDIT-8 test written to cover _viewingNetwork — which nothing had exercised, because all three harnesses
     // set `pub === churchPub` and the guard was constant-false.
     if (_viewingNetwork()) return { results: [], failed: 0, skipped: 0, total: 0, unverified: false };
+    // THE BOUNDED WAIT IS TAKEN HERE, ONCE, BEFORE THE BATCH TIMER EXISTS. publishClearance takes it too
+    // — it is on the public API and a future caller may reach it directly — but the latch means whoever
+    // arrives first pays, and it must not be the first member of the first batch: `_BATCH_MS` below is
+    // about six seconds, so a six-second wait inside the first write would consume the whole slice and
+    // report a roster's worth of children as UNCONFIRMED. Awaiting it out here costs the same wait and
+    // spends it where nothing is being timed.
+    try { const _w = ensureSkew({ timeoutMs: SKEW_WAIT_MS }); if (_w) await _w; } catch (e) {}
     const mins = new Set((minors || []).map(x => String(x || '').toLowerCase()));
     const appr = new Set((approved || []).map(x => String(x || '').toLowerCase()));
     let pubs = [...new Set((memberPubs || []).filter(Boolean))];
@@ -6587,7 +6916,7 @@ window.Steward = {
     // A partial write now reports FAILURE. A steward who ticks "mark as a child" and sees it succeed has been
     // told the protection is in force; if the record reached one relay of three, it is in force on one of
     // three. An error is recoverable, false reassurance is not.
-    return _publishToRelays(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', MINORS_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list }) }, sk));
+    return _skewGate(() => _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', MINORS_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list }) }), sk)));
   },
   // `opts.listKnown` — has the CALLER actually read this church's cleared list? The console has that answer
   // (its safeguarding subscription reports `loaded`) and this module does not: an empty remembered list means
@@ -6629,7 +6958,7 @@ window.Steward = {
       if (prior[p]) { cleared[p] = prior[p]; continue; }
       cleared[p] = (knownPrev && !knownPrev.has(p)) ? { by: pub, at: now() } : { by: '', at: 0 };
     }
-    return _publishToRelays(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', APPROVED_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list, cleared }) }, sk));
+    return _skewGate(() => _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', APPROVED_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list, cleared }) }), sk)));
   },
 
   // ---- safeguarding v2: parent↔child links. Parents publish a guardian-link REQUEST (guardreq:<childpub>,
@@ -6689,7 +7018,7 @@ window.Steward = {
     // A partial write now reports FAILURE. A steward who ticks "mark as a child" and sees it succeed has been
     // told the protection is in force; if the record reached one relay of three, it is in force on one of
     // three. An error is recoverable, false reassurance is not.
-    return _publishToRelays(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', GUARDIANS_D + pub], ['t', NET]], content: JSON.stringify({ links: clean }) }, sk));
+    return _skewGate(() => _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', GUARDIANS_D + pub], ['t', NET]], content: JSON.stringify({ links: clean }) }), sk)));
   },
   // safeguarding v2: tell a STEWARD-LINKED parent (who never set the child up on their own device, so has no
   // local record) that they're now a guardian — otherwise the child never appears in their app. Church-signed,
@@ -6704,7 +7033,7 @@ window.Steward = {
     let content;
     try { content = nip44e(JSON.stringify({ child: childPub, name: childName || '', church: churchPub }), nip44ck(sk, parentPub)); }
     catch (e) { return Promise.resolve(null); }
-    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', GUARDNOTICE_D + parentPub], ['t', NET], ['p', parentPub]], content }, sk));
+    return publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', GUARDNOTICE_D + parentPub], ['t', NET], ['p', parentPub]], content }), sk));
   },
 
   // THE OTHER HALF OF notifyGuardian. Linking a parent tells their app so the child appears in it; UNLINKING
@@ -6723,7 +7052,7 @@ window.Steward = {
     let content;
     try { content = nip44e(JSON.stringify({ removed: childPub, church: churchPub }), nip44ck(sk, parentPub)); }
     catch (e) { return Promise.resolve(null); }
-    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', GUARDNOTICE_D + parentPub], ['t', NET], ['p', parentPub]], content }, sk));
+    return publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', GUARDNOTICE_D + parentPub], ['t', NET], ['p', parentPub]], content }), sk));
   },
 
   // ---- joining: by default anyone with the invite/QR joins instantly. A steward can switch on
@@ -7217,7 +7546,7 @@ window.Steward = {
       doc.n = _stewardNamesCt;
     }
 
-    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', STEWARDS_D + pub], ['t', NET]], content: JSON.stringify(doc) }, sk));
+    return _skewGate(() => publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', STEWARDS_D + pub], ['t', NET]], content: JSON.stringify(doc) }), sk)));
   },
   // What this church has granted each steward. Empty array = nothing; ABSENT = everything (an unscoped
   // steward, which is every steward that existed before this feature).
@@ -7242,7 +7571,7 @@ window.Steward = {
     // disk. The church's OWN name stays public in its kind-0 profile, as it must be to be findable at all.
     const sealedVoice = _sealChurchDoc(doc);
     if (sealedVoice == null) return Promise.resolve(false);
-    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', VOICE_D + pub], ['t', NET]], content: sealedVoice }, sk));
+    return publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', VOICE_D + pub], ['t', NET]], content: sealedVoice }), sk));
   },
   setVoice(name, office) {
     _selfVoice = (name && String(name).trim()) ? { name: String(name).trim().slice(0, 60), office: String(office || '').trim().slice(0, 40) } : null;
@@ -7677,13 +8006,13 @@ window.Steward = {
     if (!sk || !msgId) return Promise.resolve(null);
     const tags = [['d', HIDE_D + msgId], ['t', NET], ['p', pub]];
     if (groupId) tags.push(['t', groupId]);   // scope to the group so a group leader is authorised
-    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags, content: JSON.stringify({ groupId: groupId || '' }) }, sk));
+    return publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags, content: JSON.stringify({ groupId: groupId || '' }) }), sk));
   },
   unhideMessage(groupId, msgId) {   // restore a hidden message (tombstone the hide doc)
     if (!sk || !msgId) return Promise.resolve(null);
     const tags = [['d', HIDE_D + msgId], ['t', NET], ['p', pub], ['deleted', '1']];
     if (groupId) tags.push(['t', groupId]);
-    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags, content: '' }, sk));
+    return publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags, content: '' }), sk));
   },
   // the set of hidden message ids → cb(Set<msgId>) on every change. Unsub fn.
   subscribeHidden(cb) {
@@ -8105,9 +8434,9 @@ window.Steward = {
     let body;
     try { body = buildCheckinPermission({ person, source: policy.source, lifetime: policy.lifetime, from: win.from, until: win.until }); }
     catch (e) { return null; }   // an undeclared source, a lifetime nobody implemented, a window past its cap
-    const ok = await _publishToRelays(finalizeEvent({ kind: 30078, created_at: now(),
+    const ok = await _skewGate(() => _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(),
       tags: [['d', CHECKINPERM_D + person], ['t', NET], ['church', cp], ['person', person]],
-      content: JSON.stringify(body) }, sk));
+      content: JSON.stringify(body) }), sk)));
     if (ok === false || ok == null) return null;
     return { ...body };
   },
@@ -8128,8 +8457,8 @@ window.Steward = {
     if (!sk || !_mayClearForCheckin()) return Promise.resolve(null);
     const who = String(person || '').trim().toLowerCase();
     if (!/^[0-9a-f]{64}$/.test(who)) return Promise.resolve(null);
-    return _publishToRelays(finalizeEvent({ kind: 30078, created_at: now(),
-      tags: [['d', CHECKINPERM_D + who], ['t', NET], ['church', pub], ['deleted', '1']], content: '' }, sk));
+    return _skewGate(() => _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(),
+      tags: [['d', CHECKINPERM_D + who], ['t', NET], ['church', pub], ['deleted', '1']], content: '' }), sk)));
   },
   // READ THE CLEARANCES BACK. Through readCheckinPermission — the relay's own parser — rather than a second
   // reading of the same JSON, so the console and the box cannot disagree about what a permission means. A
@@ -8463,9 +8792,9 @@ window.Steward = {
     // session to everyone else), but it must not be reported as a clean success. Same judgement as
     // _warnUnsealed, whose wording this borrows.
     if (built.failed.length) _warnUnsealed('check-in helper', built.failed);
-    const ok = await _publishToRelays(finalizeEvent({ kind: 30078, created_at: now(),
+    const ok = await _skewGate(() => _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(),
       tags: [['d', CHECKINHELPER_D + session], ['t', NET], ['church', cp], ['session', session]],
-      content: JSON.stringify(built.doc) }, sk));
+      content: JSON.stringify(built.doc) }), sk)));
     if (ok === false || ok == null) return null;
     return { session, source: GRANT_SOURCE, lifetime: policy.lifetime, from: win.from, until: win.until,
       pubs: built.doc.pubs, failed: built.failed, key: sessionKeyHex, reused: sessionKeyHex === reuse };
@@ -8502,8 +8831,8 @@ window.Steward = {
     if (!sk || !churchSkHeld() || actingChurch) return Promise.resolve(null);
     const sid = String(session || '');
     if (!sid) return Promise.resolve(null);
-    return _publishToRelays(finalizeEvent({ kind: 30078, created_at: now(),
-      tags: [['d', CHECKINHELPER_D + sid], ['t', NET], ['church', pub], ['deleted', '1']], content: '' }, sk));
+    return _skewGate(() => _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(),
+      tags: [['d', CHECKINHELPER_D + sid], ['t', NET], ['church', pub], ['deleted', '1']], content: '' }), sk)));
   },
 
   // ── THE TWO QUESTIONS THE CHECK-IN SCREEN HAS TO ASK BEFORE IT SAYS ANYTHING ────────────────────────────
@@ -9216,12 +9545,12 @@ window.Steward = {
     if (!sk) return Promise.resolve(null);
     const np = toPubHex(input); if (!np) return Promise.resolve(null);
     const content = JSON.stringify({ joined: true });
-    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', NETWORK_D + np], ['t', NET], ['p', np]], content }, sk)).then((ok) => (ok ? { networkPub: np, npub: npubEncode(np) } : null));   // publish() returns FALSE when no relay accepted
+    return publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', NETWORK_D + np], ['t', NET], ['p', np]], content }), sk)).then((ok) => (ok ? { networkPub: np, npub: npubEncode(np) } : null));   // publish() returns FALSE when no relay accepted
   },
   leaveNetwork(networkPub) {
     if (!sk) return Promise.resolve(null);
     const np = toPubHex(networkPub) || networkPub;
-    return publish(finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', NETWORK_D + np], ['t', NET], ['deleted', '1']], content: '' }, sk));
+    return publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', NETWORK_D + np], ['t', NET], ['deleted', '1']], content: '' }), sk));
   },
   // create a brand-new network: generate its key, join it (so the relay lets it post here), then
   // publish the network's profile + a starter announcements channel (signed by the network key).
@@ -9233,7 +9562,7 @@ window.Steward = {
     const nPub = getPublicKey(nsk);
     saveNetKey({ pub: nPub, mnemonic: m, name: name || 'Network' });   // keep the key so this console can publish AS the network
     await window.Steward.joinNetwork(nPub);   // church joins first so the relay whitelists the network key
-    await publish(finalizeEvent({ kind: 0, created_at: now(), tags: [], content: JSON.stringify({ name: name || 'Network' }) }, nsk));
+    await publish(finalizeEvent(_monotonic({ kind: 0, created_at: now(), tags: [], content: JSON.stringify({ name: name || 'Network' }) }), nsk));
     await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', GROUP_D + 'net-announce'], ['t', NET]], content: JSON.stringify({ name: 'Announcements', kind: 'broadcast', sub: 'From ' + (name || 'the network'), icon: 'globe', accent: 'var(--clay)' }) }, nsk));
     window.dispatchEvent(new CustomEvent('steward-networks'));
     return { networkPub: nPub, npub: npubEncode(nPub), mnemonic: m };
@@ -9243,7 +9572,7 @@ window.Steward = {
   // post a broadcast announcement AS an owned network (kind-1 into the net-announce channel)
   publishNetworkAnnouncement(networkPub, text) {
     const signer = skFor(networkPub); if (!signer || !text || !text.trim()) return Promise.resolve(null);
-    return publish(finalizeEvent({ kind: 1, created_at: now(), tags: [['t', NET], ['t', 'net-announce'], ['p', networkPub]], content: text.trim() }, signer));
+    return publish(finalizeEvent(_monotonic({ kind: 1, created_at: now(), tags: [['t', NET], ['t', 'net-announce'], ['p', networkPub]], content: text.trim() }), signer));
   },
   // a network's broadcast announcements (most recent first) — for previewing on the console
   subscribeNetworkAnnouncements(networkPub, onPosts) {
@@ -9651,7 +9980,8 @@ window.Steward = {
       if (!force && done[mark]) return;                       // already registered this key with this relay
       const url = base + '/config';
       try {
-        const auth = finalizeEvent({ kind: 27235, created_at: now(), tags: [['u', url], ['method', 'POST']], content: '' }, churchSk);
+        // _credNow(): same /config gate as registerAtRelay, reached by the church-creation fan-out.
+        const auth = finalizeEvent({ kind: 27235, created_at: _credNow(), tags: [['u', url], ['method', 'POST']], content: '' }, churchSk);
         // A TIMEOUT, like every other fetch in this file (:667, :773, :778, :853). saveName now awaits this
         // before publishing, and Continue is disabled while it runs — so without one a captive portal or a
         // thin pipe leaves the wizard's first step hanging with no cancel and nothing on screen but a
@@ -9736,7 +10066,8 @@ window.Steward = {
     const base = String(wssUrl || '').replace(/^wss:/i, 'https:').replace(/^ws:/i, 'http:').replace(/\/relay\/?$/i, '');
     const url = base + '/config';
     try {
-      const auth = finalizeEvent({ kind: 27235, created_at: now(), tags: [['u', url], ['method', 'POST']], content: '' }, churchSk);
+      // _credNow(): /config's addChurch branch requires the proof within 300s of the RELAY's clock.
+      const auth = finalizeEvent({ kind: 27235, created_at: _credNow(), tags: [['u', url], ['method', 'POST']], content: '' }, churchSk);
       const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ addChurch: { npub: npubEncode(churchPub), name: name || '' }, auth }) });
       // PASS THE RELAY'S OWN REASON BACK. A caller that knows only "not ok" can say nothing more useful than
       // "it might not have worked", and the relay's refusals are well written and actionable — H4's is "set
@@ -9817,6 +10148,15 @@ window.Steward = {
     if (picks.length) { try { await (window.Steward.publishRelayList ? window.Steward.publishRelayList() : null); } catch (e) {} }
     return picks;
   },
+  // HOW FAR OUT IS THIS CONSOLE'S CLOCK, against the relays that will store what it writes. Measurement
+  // only — see the block above _blobBase(). Nothing here corrects a stamp, and nothing reads either of
+  // these to decide anything; the Relays panel shows the number so a steward can act on a clock that was
+  // previously invisible to everybody.
+  // CALLERS (rule 2): app/steward-root.jsx `useStewardClockSkew`, read by DashRelaysCard in
+  // app/stew-dashboard.jsx. No writer, no gate and no publish path calls any of the three.
+  measureRelaySkew(preferUrl) { return measureRelaySkew(preferUrl); },
+  relaySkew() { return relaySkewState(); },
+  clockLooksWrong() { return clockLooksWrong(); },
   // probe each relay with a throwaway WS; resolves [{ url, status:'on'|'off', ms, member }]
   //
   // EVERY CANDIDATE, NOT THE PUBLISH SET — and `member` says which is which. A relay this church's data no

@@ -148,6 +148,17 @@ function engine({ authed = true, publishOk = true, delegated = null } = {}) {
       if (String(ct).indexOf(pre) !== 0) throw new Error('wrong key'); return String(ct).slice(pre.length); },
     decrypt: (ct, ck) => stubs.nip44d(ct, ck),
     finalizeEvent: (e) => ({ ...e, id: 'evt' + published.length, pubkey: stubs.pub, sig: 'sig' }),
+    // Stage 3 of reference/SCOPE-RELAY-CORRECTED-TIME-2026-09-26.md routed every raw publisher in the
+    // console through _monotonic(), so a lifted writer needs it in scope. IDENTITY here, deliberately:
+    // that is exactly what the shipped one returns for the first write of a document, and it leaves every
+    // row in this file measuring what it measured before. The ordering _monotonic adds is measured in
+    // scripts/two-safeguarding-writes-in-one-second-both-land.test.mjs; here it must decide nothing.
+    _monotonic: (t) => t,
+    // …and stage 4's bounded wait, which those writers now take before their first stamp of a session.
+    // Pass-through, which is what the shipped _skewGate does once a measurement has answered or been
+    // given up on — it runs `fn` synchronously and returns its result. The wait itself is measured in
+    // scripts/a-slow-console-does-not-write-past-its-own-gate.test.mjs; here it must decide nothing.
+    _skewGate: (fn) => Promise.resolve(fn()),
     _publishToRelays: async (e) => { probe.published++; published.push(e); return publishOk; },
     relays: () => ['wss://relay.test/relay'],
     pool: { subscribeMany: (_relays, filters, handlers) => { probe.opened++; subs.push({ filters, handlers }); return { close() {} }; } },

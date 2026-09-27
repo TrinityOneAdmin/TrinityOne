@@ -225,7 +225,14 @@ test('CONTROL: the shipped publishGroupKey still has BOTH halves of the merge in
   // separate from consoleApi() deliberately: when these lived in the helper, removing one half failed all
   // ten rows with the same fixture message and no sabotage could tell the two halves apart.
   const gkBody = fnBody(VENDOR, 'async publishGroupKey(', 'publishGroupKey');
-  assert.ok(/publish\(\s*feChurch\(/.test(gkBody),
+  // TWO SHAPES ARE ACCEPTED AND THE CLAIM IS THE SAME ONE. Stage 3 of the relay-corrected-time work split
+  // `publish(feChurch(…))` into `const _env = feChurch(…)` then `publish(_env, …)`, so that _senvTs can be
+  // set from the stamp feChurch ACTUALLY wrote rather than a second reading of the clock. The envelope that
+  // goes out is still one feChurch built; only the statement boundary moved. Deleting feChurch still fails
+  // this row, in either shape.
+  const viaVar = /(?:const|let)\s+(\w+)\s*=\s*feChurch\(/.exec(gkBody);
+  assert.ok(/publish\(\s*feChurch\(/.test(gkBody)
+            || (viaVar && new RegExp('publish\\(\\s*' + viaVar[1] + '\\b').test(gkBody)),
     'THE DOCUMENT HALF IS GONE: publishGroupKey no longer publishes through feChurch, so its envelope names ' +
     'no church. The relay stores the key and serves it to nobody, and the room draws EMPTY rather than ' +
     'broken on every phone in the congregation — so nobody reports it.');

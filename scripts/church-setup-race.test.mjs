@@ -23,7 +23,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { fnBody, stripComments } from './test-slice.mjs';
+import { fnBody, stmt, stripComments } from './test-slice.mjs';
 
 const VENDOR = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
 
@@ -44,10 +44,21 @@ function lift(anchor, name, stubs) {
   return new Function('scope', `with (scope) { return (${body}); }`)(scope);
 }
 
+// STAGE 4 (reference/SCOPE-RELAY-CORRECTED-TIME-2026-09-26.md) made _monotonic read the relay-clock
+// correction. These three rows are about the MONOTONIC rule, not the correction, so the shift is the
+// unmeasured case — zero — which is byte-identical to the build these rows were written against. The
+// two caps are lifted rather than typed out, so a change to either is seen here rather than assumed.
+const STAMP_SCOPE = {
+  _skewShift: () => 0,
+  STAMP_CAP_SEC: new Function(stmt(VENDOR, 'var _CLOCK_SKEW = ', '_CLOCK_SKEW')
+    + stmt(VENDOR, 'var STAMP_CAP_SEC = ', 'STAMP_CAP_SEC') + '\nreturn STAMP_CAP_SEC;')(),
+  SKEW_CAP_SEC: new Function(stmt(VENDOR, 'var SKEW_CAP_SEC = ', 'SKEW_CAP_SEC') + '\nreturn SKEW_CAP_SEC;')(),
+};
+
 test('two writes of one document in the same second get different timestamps', () => {
   const now = 1787149000;
   const _monotonic = lift('function _monotonic(tmpl) {', '_monotonic', {
-    _lastStamp: new Map(), Date: { now: () => now * 1000 },
+    _lastStamp: new Map(), Date: { now: () => now * 1000 }, ...STAMP_SCOPE,
   });
   const doc = (at) => ({ kind: 30078, created_at: at, tags: [['d', 'trinityone/joinpolicy:abc']] });
   const a = _monotonic(doc(now));
@@ -62,7 +73,7 @@ test('two writes of one document in the same second get different timestamps', (
 test('a normal write, seconds later, keeps its real timestamp', () => {
   let clock = 1787149000;
   const _monotonic = lift('function _monotonic(tmpl) {', '_monotonic', {
-    _lastStamp: new Map(), Date: { now: () => clock * 1000 },
+    _lastStamp: new Map(), Date: { now: () => clock * 1000 }, ...STAMP_SCOPE,
   });
   const doc = () => ({ kind: 30078, created_at: clock, tags: [['d', 'trinityone/joinpolicy:abc']] });
   _monotonic(doc());
@@ -75,7 +86,7 @@ test('a normal write, seconds later, keeps its real timestamp', () => {
 test('separate documents do not push each other forward', () => {
   const now = 1787149000;
   const _monotonic = lift('function _monotonic(tmpl) {', '_monotonic', {
-    _lastStamp: new Map(), Date: { now: () => now * 1000 },
+    _lastStamp: new Map(), Date: { now: () => now * 1000 }, ...STAMP_SCOPE,
   });
   _monotonic({ kind: 30078, created_at: now, tags: [['d', 'a']] });
   assert.equal(_monotonic({ kind: 30078, created_at: now, tags: [['d', 'b']] }).created_at, now,

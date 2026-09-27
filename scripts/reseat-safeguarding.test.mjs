@@ -278,6 +278,16 @@ function consoleSide() {
     _authFuture: (e) => (e.created_at || 0) > Math.floor(Date.now() / 1000) + 600,
     _CLOCK_SKEW: 600, now, toPubHex: (p) => (/^[0-9a-f]{64}$/i.test(p) ? p.toLowerCase() : null),
     [feName]: finalizeEvent, feChurch: (t) => finalizeEvent(t, church.sk),
+    // Stage 3 of reference/SCOPE-RELAY-CORRECTED-TIME-2026-09-26.md routed the raw publishers (here:
+    // setMinors, setApproved, setGuardians, setBlocked) through _monotonic(). Identity, which is what
+    // the shipped one returns for a first write of a document — the ordering it adds is measured in
+    // scripts/two-safeguarding-writes-in-one-second-both-land.test.mjs, not here.
+    _monotonic: (t) => t,
+    // …and stage 4's bounded wait, which those writers now take before their first stamp of a session.
+    // Pass-through, which is what the shipped _skewGate does once a measurement has answered or been
+    // given up on — it runs `fn` synchronously and returns its result. The wait itself is measured in
+    // scripts/a-slow-console-does-not-write-past-its-own-gate.test.mjs; here it must decide nothing.
+    _skewGate: (fn) => Promise.resolve(fn()),
     ...(gpName ? { [gpName]: getPublicKey } : {}), ...(nuName ? { [nuName]: (u) => u } : {}),
     [encName]: (a, k) => nip44v2.encrypt(a, k), [decName]: (c, k) => nip44v2.decrypt(c, k),
     [ckName]: (a, b) => nip44v2.utils.getConversationKey(a, b),

@@ -141,7 +141,10 @@ async function runLifted(sig, name, answer, scope = {}, args = [], decls = '') {
   const env = {
     publish: async (evt) => { published.push(evt); return answer; },
     feChurch: (t) => t,
-    now: () => 1700000000,
+    // _credNow(): the corrected clock used for SHORT-LIVED CREDENTIALS only (the kind-24242 / kind-27235
+    // auth events a relay checks for freshness and discards). With no skew measured it returns exactly
+    // what now() returns, which is this harness's case — src/steward.src.js, above _blobBase().
+    now: () => 1700000000, _credNow: () => 1700000000,
     sk: 'SK', pub: 'CP', NET: 'trinityone',
     // '' = the OWNER's console, which is what every test written before 2026-09-22 assumes. The three
     // delegated-console tests below pass 'CHURCHPUB' explicitly, because on that console it is the decision

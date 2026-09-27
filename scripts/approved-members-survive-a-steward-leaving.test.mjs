@@ -34,9 +34,19 @@ import { WebSocket } from 'ws';
 import { generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure';
 import { npubEncode } from 'nostr-tools/nip19';
 import { requireFreePort } from './test-ports.mjs';
-import { stripComments } from './test-slice.mjs';
+import { stmt, stripComments } from './test-slice.mjs';
 
 const STEWARD = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
+
+// STAGE 4's two caps, READ OUT OF THE BUNDLE rather than typed here. Five tolerance constants drifting apart
+// is the defect the relay-corrected-time work exists to stop, and a test that hard-codes a sixth copy of one
+// of them stops being able to see the drift.
+const CAPS = (() => {
+  const src = stmt(STEWARD, 'var _CLOCK_SKEW = ', '_CLOCK_SKEW')
+    + '\n' + stmt(STEWARD, 'var STAMP_CAP_SEC = ', 'STAMP_CAP_SEC')
+    + '\n' + stmt(STEWARD, 'var SKEW_CAP_SEC = ', 'SKEW_CAP_SEC');
+  return new Function(src + '\nreturn { STAMP_CAP_SEC, SKEW_CAP_SEC };')();
+})();
 
 const PORT = 19537;
 const WS_URL = `ws://127.0.0.1:${PORT}/relay`;
@@ -136,6 +146,11 @@ function shippedSetAdmitted({ signer, viewPub, acting }) {
   const captured = [];
   const scope = {
     [feName]: finalizeEvent, _lastStamp: new Map(), _monotonicUnused: 0,
+    // STAGE 4 (SCOPE-RELAY-CORRECTED-TIME-2026-09-26) made _monotonic read the relay-clock correction
+    // through _skewShift. Zero here — the unmeasured case, which is byte-identical to the build these
+    // rows were written against. The correction itself is measured in
+    // scripts/a-slow-console-does-not-write-past-its-own-gate.test.mjs, not here.
+    _skewShift: () => 0, ...CAPS,
     sk: signer.sk, pub: viewPub, actingChurch: acting,
     ADMITTED_D, NET, now,
     _requireTrustedView: () => {}, publish: (e) => { captured.push(e); return Promise.resolve(true); },

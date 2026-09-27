@@ -50,10 +50,15 @@ import { requireFreePort } from './test-ports.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const CHROME = ['/usr/bin/chromium-browser', '/usr/bin/chromium', '/usr/bin/google-chrome'].find((p) => existsSync(p));
-const PORT = 8853, CDP = 9382;   // unique across scripts/*.test.mjs and scripts/*.probe.mjs. WAS 8850, which
-// a-churchs-public-calendar-is-served-only-when-asked.test.mjs had already claimed on 2026-09-22 — the
-// "checked 2026-09-23" above was not, and scripts/test-ports.test.mjs has been red on the clash ever since.
+// 8853, not 8850: a-churchs-public-calendar-is-served-only-when-asked.test.mjs took 8850 on 2026-09-22 and
+// this file took it again on 2026-09-23 — the "checked" in the old comment was checked against a tree that
+// did not yet have the other file. Under the suite runner one binds it and the other loses its fixture,
+// which is not a code failure and reads exactly like one. `no two test files claim the same fixed port` in
+// scripts/test-ports.test.mjs is the guard; it was red on this pair (and on 8971) until both lines changed.
 // 8853 chosen 2026-09-26 by running that guard's own declaredPorts() over every .test.mjs and .probe.mjs.
+// (Two branches fixed this independently and both landed on 8853 — that is declaredPorts() being
+// deterministic, not a coincidence. Merged 2026-09-27; the code line was identical in both.)
+const PORT = 8853, CDP = 9382;   // unique across scripts/*.test.mjs and scripts/*.probe.mjs
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 let gateway, chrome, ws, id = 0, dataDir, profileDir, base;

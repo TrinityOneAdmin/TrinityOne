@@ -52,6 +52,15 @@ function runSetApproved({ pub, trail, pubkeys, listKnown }) {
     // esbuild renames imported bindings, so bind whatever name the SHIPPED bundle actually uses rather than
     // the one in the source. Discovered from the bundle, not guessed — a guess here fails as "refused".
     [FINALIZE]: (evt) => evt,
+    // Stage 3 of reference/SCOPE-RELAY-CORRECTED-TIME-2026-09-26.md put setApproved's write through
+    // _monotonic(). Identity, which is what the shipped one returns for a first write of a document;
+    // this file is about the CLEARED TRAIL inside the content, not about the stamp.
+    _monotonic: (t) => t,
+    // …and stage 4's bounded wait, which those writers now take before their first stamp of a session.
+    // Pass-through, which is what the shipped _skewGate does once a measurement has answered or been
+    // given up on — it runs `fn` synchronously and returns its result. The wait itself is measured in
+    // scripts/a-slow-console-does-not-write-past-its-own-gate.test.mjs; here it must decide nothing.
+    _skewGate: (fn) => Promise.resolve(fn()),
     _publishToRelays: (evt) => { published = JSON.parse(evt.content); return Promise.resolve(true); },
     APPROVED_D: 'trinityone/approved:',
     NET: 'trinityone',

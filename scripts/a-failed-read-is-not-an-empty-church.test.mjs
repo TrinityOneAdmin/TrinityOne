@@ -22,7 +22,12 @@ import { fnBody } from './test-slice.mjs';
 import { requireFreePort } from './test-ports.mjs';
 
 const SHIP = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
-const SILENT_PORT = 8971;   // unique across scripts/*.test.mjs AND scripts/*.probe.mjs
+// 8970, not 8971: clearance-backfill.test.mjs has owned 8971 since 2026-08-09 and this file took it on
+// 2026-09-12. `node --test` runs files in parallel, so under the suite runner one of the two bound it and
+// the other lost its whole fixture — 15 rows of clearance-backfill red with "port 8971 is already in use",
+// which is not a code failure and reads exactly like one. `no two test files claim the same fixed port` in
+// test-ports.test.mjs is the guard that names it, and it was red until this line changed.
+const SILENT_PORT = 8970;   // unique across scripts/*.test.mjs AND scripts/*.probe.mjs
 const DEAD_PORT = 8972;     // deliberately NEVER bound — this is the unreachable relay
 await requireFreePort(SILENT_PORT, 'a-failed-read-is-not-an-empty-church.test.mjs (the silent relay)');
 

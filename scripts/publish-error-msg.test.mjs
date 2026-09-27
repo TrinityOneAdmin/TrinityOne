@@ -41,15 +41,33 @@ test('only a real membership refusal is diagnosed as the wrong church', () => {
   }
 });
 
-test('a lost newest-wins race does not tell the steward to check the connection', () => {
+// REWRITTEN 2026-09-26, and the old assertions are the reason. This row used to require the sentence to say
+// "Someone else saved" and to point at RELOADING as the way out. Both were wrong, and the second sent the
+// steward round a loop with no exit: the relay keeps whichever copy carries the later created_at, and that
+// date is DERIVED, so a reload produces the same losing one. Measured against a real gateway while stage 4
+// of the relay-corrected-time work was being audited — a console writes uncorrected, restarts, measures
+// +601s, writes the correction, and is answered "a newer version of this is already stored" for ever until
+// real time catches up. The row now holds the true version of the same claim.
+test('a lost newest-wins race names both causes and does not send the steward round a loop', () => {
   const m = map('invalid: a newer version of this is already stored — reload and edit again');
   assert.doesNotMatch(m.msg, /check the connection/i, 'retrying can never fix this');
-  assert.match(m.msg, /reload/i, 'the steward needs to know reloading is the way out');
-  // Without a dedicated case this still falls through to the quoted-reason branch, which happens to contain
-  // "reload" — so assert the plain-English version too, or deleting the case goes unnoticed.
+  // Without a dedicated case this falls through to the quoted-reason branch, so assert the plain-English
+  // version too, or deleting the case goes unnoticed.
   assert.doesNotMatch(m.msg, /^The relay refused/,
     'the steward is being handed the relay’s raw wording for a case common enough to deserve a sentence of its own');
-  assert.match(m.msg, /Someone else saved/i, 'say plainly what happened: another device won the race');
+  assert.match(m.msg, /another console saved/i,
+    'one of the two causes is another console winning the race, and the sentence must still say so');
+  assert.match(m.msg, /clock running ahead|this console’s own/i,
+    'THE COMMONER CAUSE IS MISSING. A copy stamped from a clock that was ahead — including this console’s ' +
+    'own, before the relay-clock correction landed — beats the corrected write that follows. Telling the ' +
+    'steward it must have been somebody else sends them looking for a colleague who did nothing.');
+  assert.doesNotMatch(m.msg, /Reloading (the page )?(will|can) help|Reload the page and make your change again/i,
+    'the banner still offers reloading as the way out. The stamp is derived, not typed, so a reload writes ' +
+    'the same losing date — this is the loop the 2026-09-26 audit measured.');
+  assert.match(m.msg, /fifteen minutes|15 minutes/i,
+    'the one thing the steward can act on is missing: the stored copy stops winning once real time passes ' +
+    'the date it carries, and put() in scripts/event-store.mjs bounds that at 900s. Without the bound the ' +
+    'sentence is a refusal with no way forward.');
 });
 
 test('a genuine connection failure keeps the connection message, and is the only one that auto-dismisses', () => {

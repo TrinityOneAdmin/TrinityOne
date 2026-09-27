@@ -180,6 +180,9 @@ function blockRig(have) {
     const nip44e = encrypt3, nip44ck = getConversationKey;
     const _sealEach = async (payload, recips) => { const keys = {}; for (const pk of recips) keys[pk] = 'sealed'; return keys; };
     const finalizeEvent2 = (t) => t, finalizeEvent = finalizeEvent2, feChurch = (t) => t;
+    // Stage 3 of reference/SCOPE-RELAY-CORRECTED-TIME-2026-09-26.md put setBlocked's write through
+    // _monotonic(). Identity, which is what the shipped one returns for a first write of a document.
+    const _monotonic = (t) => t;
     // the blocklist publish NEVER resolves — the relay has not confirmed the block yet
     const publish = (evt) => {
       published.push(evt);

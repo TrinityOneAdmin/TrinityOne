@@ -116,13 +116,17 @@ function consoleWith(deps) {
     'enrolRelayNet no longer starts from what the church already signed — it would drop offline boxes');
   const f = new Function('verifyEvent', 'verifyEvent2', 'normalizeURL', 'normalizeURL2', 'fetch',
     'location', 'window', 'extraRelays', '_oneComplete', 'publish', 'sk', 'pub', 'now',
-    'finalizeEvent', 'finalizeEvent2', 'relays', 'ownRelay', '_boxHostsUs',
+    'finalizeEvent', 'finalizeEvent2', 'relays', 'ownRelay', '_boxHostsUs', '_monotonic',
     body + '\n' + more +
     '\nreturn { enrolRelayNet, relayNetCandidates, relayNetEntries, isNetworkRelay: isNetworkRelay2, _ownOrigin };');
   return f(verifyEvent, verifyEvent, normalizeURL, normalizeURL, globalThis.fetch,
     deps.location, undefined, deps.extraRelays || (() => []), deps.one, deps.publish, deps.sk, deps.pub,
     () => Math.floor(Date.now() / 1000), finalizeEvent, finalizeEvent,
-    deps.relays || (() => []), deps.ownRelay || (() => ''), deps.boxHostsUs);
+    deps.relays || (() => []), deps.ownRelay || (() => ''), deps.boxHostsUs,
+    // Stage 3 (SCOPE-RELAY-CORRECTED-TIME-2026-09-26) put enrolRelayNet's write through _monotonic().
+    // Identity here: the shipped one returns the template unchanged for a first write, so every row in
+    // this file measures what it measured before.
+    (t) => t);
 }
 
 // ── reading the relay, not the client ───────────────────────────────────────────────────────────────────

@@ -6507,7 +6507,7 @@
       };
       if (tag("nonce").toLowerCase() !== nonce) return null;
       if (relayAddrKey(tag("relay")) !== relayAddrKey(wssUrl)) return null;
-      return { relayPub: String(ev.pubkey).toLowerCase(), url: tag("relay") };
+      return { relayPub: String(ev.pubkey).toLowerCase(), url: tag("relay"), at: Number(ev.created_at) || 0 };
     } catch {
       return null;
     }
@@ -15186,12 +15186,13 @@ zoo`.split("\n");
     return { bytes: pt, fmt: e.fmt || "jsonl" };
   }
   function _nip98(url, method) {
-    return "Nostr " + btoa(JSON.stringify(finalizeEvent2({ kind: 27235, created_at: now(), tags: [["u", url], ["method", method || "GET"], ["church", pub]], content: "" }, sk)));
+    return "Nostr " + btoa(JSON.stringify(finalizeEvent2({ kind: 27235, created_at: _credNow(), tags: [["u", url], ["method", method || "GET"], ["church", pub]], content: "" }, sk)));
   }
   async function _putBlob(base, bytes) {
     const sha = await _sha256hex(bytes);
     const native = !!(typeof window !== "undefined" && window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
-    const auth = "Nostr " + btoa(JSON.stringify(finalizeEvent2({ kind: 24242, created_at: now(), tags: [["t", "upload"], ["x", sha], ["expiration", String(now() + 600)]], content: "upload" }, sk)));
+    const _at = _credNow();
+    const auth = "Nostr " + btoa(JSON.stringify(finalizeEvent2({ kind: 24242, created_at: _at, tags: [["t", "upload"], ["x", sha], ["expiration", String(_at + 600)]], content: "upload" }, sk)));
     const h = { Authorization: auth, "Content-Type": "application/octet-stream" };
     let body = bytes;
     if (native) {
@@ -15930,6 +15931,155 @@ zoo`.split("\n");
     }
   }
   var NO_NETWORK_RELAY = "no-network-relay";
+  var _relaySkewSec = 0;
+  var _skewMeasuredAt = 0;
+  var _skewProven = false;
+  var _skewSpreadSec = 0;
+  var _skewMeasuring = false;
+  var _skewFlight = null;
+  var _skewByRelay = /* @__PURE__ */ new Map();
+  var CLOCK_FAULT_SEC = 300;
+  var SKEW_CAP_SEC = 900;
+  var STAMP_CAP_SEC = _CLOCK_SKEW;
+  var SKEW_WAIT_MS = 6e3;
+  function clockLooksWrong() {
+    return !!_skewMeasuredAt && Math.abs(_relaySkewSec) >= CLOCK_FAULT_SEC;
+  }
+  function _pickSkew(list) {
+    const a = list.slice().sort((x, y) => x - y);
+    if (!a.length) return 0;
+    if (a.length === 2) return Math.abs(a[0]) <= Math.abs(a[1]) ? a[0] : a[1];
+    return a[a.length - 1 >> 1];
+  }
+  async function measureRelaySkew(preferUrl) {
+    if (_skewMeasuring) return _skewFlight || _relaySkewSec;
+    _skewMeasuring = true;
+    let _flightDone = null;
+    _skewFlight = new Promise((r) => {
+      _flightDone = r;
+    });
+    try {
+      const cands = [];
+      const add2 = (u) => {
+        const v = String(u || "");
+        if (v && !cands.includes(v)) cands.push(v);
+      };
+      add2(preferUrl);
+      try {
+        relays().forEach(add2);
+      } catch (e) {
+      }
+      try {
+        relaysRaw().forEach(add2);
+      } catch (e) {
+      }
+      for (const url of cands) {
+        let proof = null;
+        try {
+          proof = await verifyRelayIdentity(url);
+        } catch (e) {
+          proof = null;
+        }
+        if (proof && Number(proof.at) > 0) {
+          _skewByRelay.set(url, { sec: Math.round(Date.now() / 1e3 - Number(proof.at)), at: Date.now(), proven: true });
+          continue;
+        }
+        const base = String(url).replace(/^wss:/i, "https:").replace(/^ws:/i, "http:").replace(/\/relay\/?$/i, "").replace(/\/+$/, "");
+        if (!/^https?:\/\/.+/i.test(base)) continue;
+        try {
+          const r = await fetch(base + "/status", { cache: "no-store", signal: AbortSignal.timeout(6e3) });
+          if (!r.ok) continue;
+          const j = await r.json();
+          if (!j || typeof j.now !== "number") continue;
+          _skewByRelay.set(url, { sec: Math.round(Date.now() / 1e3 - j.now), at: Date.now(), proven: false });
+        } catch (e) {
+        }
+      }
+      const all = [..._skewByRelay.values()];
+      const proven = all.filter((v) => v.proven);
+      const use = proven.length ? proven : all;
+      if (!use.length) return _relaySkewSec;
+      const secs = use.map((v) => v.sec);
+      _relaySkewSec = _pickSkew(secs);
+      _skewSpreadSec = Math.max(...secs) - Math.min(...secs);
+      _skewProven = !!proven.length;
+      _skewMeasuredAt = Date.now();
+      return _relaySkewSec;
+    } catch (e) {
+      return _relaySkewSec;
+    } finally {
+      _skewMeasuring = false;
+      _skewFlight = null;
+      try {
+        _flightDone(_relaySkewSec);
+      } catch (x) {
+      }
+    }
+  }
+  var _skewWaited = false;
+  function ensureSkew(opts) {
+    if (_skewMeasuredAt || _skewWaited) return null;
+    _skewWaited = true;
+    const ms = Math.max(0, opts && opts.timeoutMs || SKEW_WAIT_MS);
+    let settle = null;
+    const bounded = new Promise((r) => {
+      settle = r;
+      setTimeout(r, ms);
+    });
+    try {
+      measureRelaySkew().then(() => settle(), () => settle());
+    } catch (e) {
+      settle();
+    }
+    return bounded;
+  }
+  function _skewGate(fn) {
+    const w = ensureSkew({ timeoutMs: SKEW_WAIT_MS });
+    return w ? w.then(fn) : Promise.resolve(fn());
+  }
+  function relaySkewState() {
+    return {
+      skewSec: _relaySkewSec,
+      measuredAt: _skewMeasuredAt,
+      proven: _skewProven,
+      spreadSec: _skewSpreadSec,
+      capSec: SKEW_CAP_SEC,
+      clockIsWrong: clockLooksWrong(),
+      // IS THE CORRECTION ACTUALLY ON? The scope document (§4) says a spread beyond the cap must raise the
+      // banner, and until 2026-09-26 nothing did: _skewShift refused silently while the panel painted a green
+      // dot and "your clock matches your relays", which is the calmest possible way to say "the thing you were
+      // told protects this church is switched off". A steward cannot act on a number that is not being used.
+      // `disagree` is the reason; `correcting` is the fact, and it is the same predicate _skewShift applies —
+      // read off the state rather than re-derived, so the panel and the stamp cannot drift apart.
+      disagree: Math.abs(_skewSpreadSec) > SKEW_CAP_SEC,
+      correcting: !!_skewMeasuredAt && !!_skewProven && Math.abs(_skewSpreadSec) <= SKEW_CAP_SEC,
+      relays: [..._skewByRelay.entries()].map(([url, v]) => ({ url, sec: v.sec, proven: v.proven }))
+    };
+  }
+  function _skewShift(capSec) {
+    if (!_skewMeasuredAt || !_skewProven) return 0;
+    if (Math.abs(_skewSpreadSec) > SKEW_CAP_SEC) return 0;
+    let d = _relaySkewSec;
+    if (d > capSec) d = capSec;
+    if (d < -capSec) d = -capSec;
+    return d;
+  }
+  function _credNow() {
+    return now() - _skewShift(SKEW_CAP_SEC);
+  }
+  try {
+    setTimeout(() => {
+      measureRelaySkew().catch(() => {
+      });
+    }, 2500);
+    window.addEventListener("steward-relay-returned", () => {
+      setTimeout(() => {
+        measureRelaySkew().catch(() => {
+        });
+      }, 3e3);
+    });
+  } catch (e) {
+  }
   function _blobBase() {
     const r = ownRelay();
     return r.replace(/^wss:\/\//i, "https://").replace(/^ws:\/\//i, "http://").replace(/\/relay\/?$/i, "");
@@ -15993,7 +16143,7 @@ zoo`.split("\n");
       const ids = /* @__PURE__ */ new Map();
       ws.onopen = () => {
         for (const pr of probes) {
-          const evt = finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", pr.d], ["t", NET]], content: JSON.stringify({ pubkeys: [] }) }, sk2);
+          const evt = finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", pr.d], ["t", NET]], content: JSON.stringify({ pubkeys: [] }) }), sk2);
           ids.set(evt.id, pr);
           try {
             ws.send(JSON.stringify(["EVENT", evt]));
@@ -16994,11 +17144,14 @@ zoo`.split("\n");
   }
   function _monotonic(tmpl) {
     const d = ((tmpl.tags || []).find((t) => t[0] === "d") || [])[1] || "kind:" + tmpl.kind;
-    const nowS = Math.floor(Date.now() / 1e3);
-    const want = tmpl.created_at || nowS;
+    const localS = Math.floor(Date.now() / 1e3);
+    const shift = _skewShift(STAMP_CAP_SEC);
+    const nowS = localS - shift;
+    const want = (tmpl.created_at || localS) - shift;
     const last = _lastStamp.get(d) || 0;
     let at = want > last ? want : last + 1;
-    if (at > nowS + 600) at = want;
+    const ceiling = Math.min(localS + STAMP_CAP_SEC, nowS + SKEW_CAP_SEC);
+    if (at > ceiling) at = want;
     _lastStamp.set(d, at);
     return at === tmpl.created_at ? tmpl : { ...tmpl, created_at: at };
   }
@@ -17154,7 +17307,7 @@ zoo`.split("\n");
     }
     const changed = JSON.stringify(entries) !== before;
     if (!entries.length || !changed) return { published: false, entries, proven, unproven, seeded };
-    const ev = await publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", RELAY_NET_D]], content: JSON.stringify(entries) }, sk));
+    const ev = await publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", RELAY_NET_D]], content: JSON.stringify(entries) }), sk));
     return { published: !!ev, entries, proven, unproven, seeded };
   }
   function isNetworkRelay2(cp, url) {
@@ -18107,7 +18260,7 @@ zoo`.split("\n");
       }
       const trusted = [...byBox.values()];
       if (trusted.length < 2) throw new Error("Sync needs at least two separate TrinityOne relays \u2014 add another the church runs.");
-      const ev = await publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", "trinityone/relays"]], content: JSON.stringify(trusted) }, sk));
+      const ev = await publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", "trinityone/relays"]], content: JSON.stringify(trusted) }), sk));
       if (!ev) throw new Error("Sync could not be switched on \u2014 no relay accepted the setting. Nothing is mirroring yet; try again.");
       return { relays: trusted.length };
     },
@@ -18148,7 +18301,7 @@ zoo`.split("\n");
     // resync: turn cross-relay sync OFF — publish an empty trusted-relays list (relays stop exchanging the corpus).
     async syncDisable() {
       if (!sk || !pub) throw new Error("No church key on this device");
-      const ev = await publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", "trinityone/relays"]], content: "[]" }, sk));
+      const ev = await publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", "trinityone/relays"]], content: "[]" }), sk));
       if (!ev) throw new Error("Sync could not be switched off \u2014 no relay accepted the change, so your relays are STILL mirroring each other. Try again.");
       return { relays: 0 };
     },
@@ -18353,7 +18506,7 @@ zoo`.split("\n");
       } catch (e) {
         content = JSON.stringify({ n: "" });
       }
-      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", STEWARDREQ_D + cp], ["t", NET], ["p", cp]], content }, sk)).then((ok) => ok ? { ok: true, church: cp, npub: npubEncode(cp) } : null);
+      return publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", STEWARDREQ_D + cp], ["t", NET], ["p", cp]], content }), sk)).then((ok) => ok ? { ok: true, church: cp, npub: npubEncode(cp) } : null);
     },
     // owner side: pending steward requests for THIS church → [{ pubkey, npub, name }] (excludes current stewards)
     subscribeStewardRequests(onReqs) {
@@ -18444,7 +18597,7 @@ zoo`.split("\n");
           if (!vapid || !vapid.publicKey) return "no-vapid";
           sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: _b64ToU8(vapid.publicKey) });
         }
-        const auth = finalizeEvent2({ kind: 27235, created_at: now(), tags: [["u", sub.endpoint], ["method", "POST"]], content: "" }, churchSk);
+        const auth = finalizeEvent2({ kind: 27235, created_at: _credNow(), tags: [["u", sub.endpoint], ["method", "POST"]], content: "" }, churchSk);
         const r = await fetch("/push/subscribe", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sub, auth }) });
         return r.ok ? "on" : "error";
       } catch {
@@ -18479,7 +18632,7 @@ zoo`.split("\n");
         if (local && host) nip05 = local + "@" + host;
       }
       const content = JSON.stringify({ name: m.name || "", about: m.about || "", nip05, picture: m.picture || "", banner: m.banner || "", bannerFade: typeof m.bannerFade === "number" ? m.bannerFade : 16, accent: m.accent || "", channel: m.channel || "", audioFeed: m.audioFeed || "", lud16: (m.lud16 || "").trim(), giving: !!m.giving, features: m.features && typeof m.features === "object" ? m.features : {}, rules: m.rules && typeof m.rules === "object" ? m.rules : {} });
-      return publish(finalizeEvent2({ kind: 0, created_at: now(), tags: [], content }, sk));
+      return publish(finalizeEvent2(_monotonic({ kind: 0, created_at: now(), tags: [], content }), sk));
     },
     // NIP-65 relay-list (FEDERATION-PLAN Phase 1b): advertise, in a church-signed replaceable event (kind
     // 10002), WHICH relays carry this church's content — so a member can follow relay moves/additions
@@ -18490,7 +18643,7 @@ zoo`.split("\n");
     publishRelayList() {
       if (!sk || actingChurch) return Promise.resolve(null);
       const tags = relays().map((r) => ["r", r]);
-      return publish(finalizeEvent2({ kind: 10002, created_at: now(), tags, content: "" }, sk));
+      return publish(finalizeEvent2(_monotonic({ kind: 10002, created_at: now(), tags, content: "" }), sk));
     },
     publishFund(fund) {
       if (!sk) return Promise.resolve(null);
@@ -18571,7 +18724,8 @@ zoo`.split("\n");
       if (enc) bytes = await encrypt4(bytes);
       const sha = await _sha256hex(bytes);
       const ctype = enc ? "application/octet-stream" : file.type || "application/octet-stream";
-      const authHdr = "Nostr " + btoa(JSON.stringify(finalizeEvent2({ kind: 24242, created_at: now(), tags: [["t", "upload"], ["x", sha], ["expiration", String(now() + 600)]], content: "upload" }, sk)));
+      const _upAt = _credNow();
+      const authHdr = "Nostr " + btoa(JSON.stringify(finalizeEvent2({ kind: 24242, created_at: _upAt, tags: [["t", "upload"], ["x", sha], ["expiration", String(_upAt + 600)]], content: "upload" }, sk)));
       const native = _isNative();
       const body = native ? _b64(bytes) : bytes;
       const put = async (b) => {
@@ -18622,7 +18776,8 @@ zoo`.split("\n");
       const sha = s && typeof s === "object" && s.sha256;
       const hosts = s && typeof s === "object" && (s.hosts && s.hosts.length ? s.hosts : s.host ? [s.host] : []) || [];
       if (sha && hosts.length) {
-        const auth = "Nostr " + btoa(JSON.stringify(finalizeEvent2({ kind: 24242, created_at: now(), tags: [["t", "delete"], ["x", sha], ["expiration", String(now() + 600)]], content: "delete" }, sk)));
+        const _delAt = _credNow();
+        const auth = "Nostr " + btoa(JSON.stringify(finalizeEvent2({ kind: 24242, created_at: _delAt, tags: [["t", "delete"], ["x", sha], ["expiration", String(_delAt + 600)]], content: "delete" }, sk)));
         for (const h of hosts) {
           try {
             await fetch(String(h).replace(/\/+$/, "") + "/blob/" + sha, { method: "DELETE", headers: { Authorization: auth } });
@@ -19396,7 +19551,7 @@ zoo`.split("\n");
     // react to a group message (NIP-25 kind-7), interoperable with the member app. emoji '' or '-' retracts.
     reactGroup(groupId, msgId, targetPub, emoji) {
       if (!sk || !groupId || !msgId) return Promise.resolve(null);
-      return publish(finalizeEvent2({ kind: 7, created_at: now(), tags: [["e", msgId], ["p", targetPub || ""], ["t", NET], ["t", groupId]], content: emoji || "-" }, sk));
+      return publish(finalizeEvent2(_monotonic({ kind: 7, created_at: now(), tags: [["e", msgId], ["p", targetPub || ""], ["t", NET], ["t", groupId]], content: emoji || "-" }), sk));
     },
     // ---- direct messages: the church <-> a member (NIP-04 encrypted kind-4) ----
     async sendDM(peerHex, content) {
@@ -19407,7 +19562,7 @@ zoo`.split("\n");
       } catch {
         return null;
       }
-      const evt = finalizeEvent2({ kind: 4, created_at: now(), tags: [["p", peerHex], ["t", NET]], content: enc }, sk);
+      const evt = finalizeEvent2(_monotonic({ kind: 4, created_at: now(), tags: [["p", peerHex], ["t", NET]], content: enc }), sk);
       _sOutLoad();
       _sOutbox.push({ evt, peer: peerHex, at: now(), tries: 0 });
       _sOutPlain.set(evt.id, content);
@@ -19507,7 +19662,7 @@ zoo`.split("\n");
     // react to a member's DM (NIP-25 kind-7). emoji '' or '-' retracts.
     async reactDM(peerHex, msgId, emoji) {
       if (!sk || !peerHex || !msgId) return null;
-      const evt = finalizeEvent2({ kind: 7, created_at: now(), tags: [["e", msgId], ["p", peerHex], ["t", NET], ["k", "4"]], content: emoji || "-" }, sk);
+      const evt = finalizeEvent2(_monotonic({ kind: 7, created_at: now(), tags: [["e", msgId], ["p", peerHex], ["t", NET], ["k", "4"]], content: emoji || "-" }), sk);
       return publish(evt);
     },
     // list of members who have a DM thread with the church (most recent first)
@@ -19713,7 +19868,6 @@ zoo`.split("\n");
       _skeys[groupId] = ring;
       const rev2 = _srev[groupId] || 1;
       _srev[groupId] = rev2;
-      _senvTs[groupId] = now();
       let skipped = [];
       const build = (r) => {
         const keys = {}, rings = {}, missed = [];
@@ -19737,7 +19891,9 @@ zoo`.split("\n");
         content = build(ring.slice(0, r));
         skipped = build.missed || [];
       }
-      const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", GROUPKEY_D + groupId], ["t", NET]], content }, churchSk), { background: !!opts.background });
+      const _env = feChurch({ kind: 30078, created_at: now(), tags: [["d", GROUPKEY_D + groupId], ["t", NET]], content }, churchSk);
+      _senvTs[groupId] = _env.created_at || 0;
+      const ok = await publish(_env, { background: !!opts.background });
       if (ok === false) return false;
       if (skipped.length) {
         console.warn("[steward] group key " + groupId + ": could not seal to " + skipped.length + " member(s) \u2014 they cannot read or post in that room");
@@ -19827,7 +19983,7 @@ zoo`.split("\n");
       const list = [...new Set((pubkeys || []).filter(Boolean))];
       _localBlocked = new Set(list.map((p) => String(p).toLowerCase()));
       const content = JSON.stringify({ pubkeys: list });
-      return _publishToRelays(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", BLOCKED_D + pub], ["t", NET]], content }, sk));
+      return _publishToRelays(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", BLOCKED_D + pub], ["t", NET]], content }), sk));
     },
     // ---- safeguarding: two church-signed lists the relay reads to enforce child protection ----
     // minors:<churchpub> = members marked as children; approved:<churchpub> = adults cleared to contact youth
@@ -19925,7 +20081,7 @@ zoo`.split("\n");
       _requireTrustedView("photo settings");
       if (!sk) return Promise.resolve(null);
       const list = [...new Set((pubkeys || []).filter(Boolean))];
-      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", NOPHOTO_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list }) }, sk));
+      return _skewGate(() => publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", NOPHOTO_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list }) }, sk)));
     },
     // Tell ONE member what their own safeguarding status is, sealed to them. This exists so a member's app can
     // know whether THEY are a child or a cleared adult without the church publishing a cleartext list of its
@@ -19946,7 +20102,7 @@ zoo`.split("\n");
         return Promise.resolve(null);
       }
       const cp = actingChurch || pub;
-      return Promise.resolve(_publishToRelays(feChurch({ kind: 30078, created_at: now(), tags: [["d", CLEARANCE_D + mp], ["t", NET], ["p", mp], ["church", cp]], content: ct }), urls)).then((r) => {
+      return Promise.resolve(_skewGate(() => _publishToRelays(feChurch({ kind: 30078, created_at: now(), tags: [["d", CLEARANCE_D + mp], ["t", NET], ["p", mp], ["church", cp]], content: ct }), urls))).then((r) => {
         if (r) {
           try {
             _clearanceSent.set(mp, { minor: !!(status && status.minor), cleared: !!(status && status.cleared), guardians: guards, at: Date.now(), urls: urls && urls.length ? urls.slice() : null });
@@ -20012,6 +20168,11 @@ zoo`.split("\n");
     },
     async _refreshClearancesNow(memberPubs, minors, approved, guardians) {
       if (_viewingNetwork()) return { results: [], failed: 0, skipped: 0, total: 0, unverified: false };
+      try {
+        const _w = ensureSkew({ timeoutMs: SKEW_WAIT_MS });
+        if (_w) await _w;
+      } catch (e) {
+      }
       const mins = new Set((minors || []).map((x) => String(x || "").toLowerCase()));
       const appr = new Set((approved || []).map((x) => String(x || "").toLowerCase()));
       let pubs = [...new Set((memberPubs || []).filter(Boolean))];
@@ -20265,7 +20426,7 @@ zoo`.split("\n");
       _requireTrustedView("list of children");
       if (!sk) return Promise.resolve(null);
       const list = [...new Set((pubkeys || []).filter(Boolean))];
-      return _publishToRelays(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", MINORS_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list }) }, sk));
+      return _skewGate(() => _publishToRelays(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", MINORS_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list }) }), sk)));
     },
     // `opts.listKnown` — has the CALLER actually read this church's cleared list? The console has that answer
     // (its safeguarding subscription reports `loaded`) and this module does not: an empty remembered list means
@@ -20290,7 +20451,7 @@ zoo`.split("\n");
         }
         cleared[p] = knownPrev && !knownPrev.has(p) ? { by: pub, at: now() } : { by: "", at: 0 };
       }
-      return _publishToRelays(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", APPROVED_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list, cleared }) }, sk));
+      return _skewGate(() => _publishToRelays(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", APPROVED_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list, cleared }) }), sk)));
     },
     // ---- safeguarding v2: parent↔child links. Parents publish a guardian-link REQUEST (guardreq:<childpub>,
     // p-tagged to us); the steward confirms it into the church-signed GUARDIANS map (guardians:<churchpub>),
@@ -20360,7 +20521,7 @@ zoo`.split("\n");
         const arr = [...new Set((ps || []).filter(Boolean))];
         if (c && arr.length) clean5[c] = arr;
       }
-      return _publishToRelays(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", GUARDIANS_D + pub], ["t", NET]], content: JSON.stringify({ links: clean5 }) }, sk));
+      return _skewGate(() => _publishToRelays(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", GUARDIANS_D + pub], ["t", NET]], content: JSON.stringify({ links: clean5 }) }), sk)));
     },
     // safeguarding v2: tell a STEWARD-LINKED parent (who never set the child up on their own device, so has no
     // local record) that they're now a guardian — otherwise the child never appears in their app. Church-signed,
@@ -20378,7 +20539,7 @@ zoo`.split("\n");
       } catch (e) {
         return Promise.resolve(null);
       }
-      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", GUARDNOTICE_D + parentPub], ["t", NET], ["p", parentPub]], content }, sk));
+      return publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", GUARDNOTICE_D + parentPub], ["t", NET], ["p", parentPub]], content }), sk));
     },
     // THE OTHER HALF OF notifyGuardian. Linking a parent tells their app so the child appears in it; UNLINKING
     // told them nothing at all, and the parent's app stores the link in localStorage where nothing ever removed
@@ -20399,7 +20560,7 @@ zoo`.split("\n");
       } catch (e) {
         return Promise.resolve(null);
       }
-      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", GUARDNOTICE_D + parentPub], ["t", NET], ["p", parentPub]], content }, sk));
+      return publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", GUARDNOTICE_D + parentPub], ["t", NET], ["p", parentPub]], content }), sk));
     },
     // ---- joining: by default anyone with the invite/QR joins instantly. A steward can switch on
     // "require approval", and then a new member is held as a pending request until admitted. The relay
@@ -20837,7 +20998,7 @@ zoo`.split("\n");
       } else if (_stewardNamesCt) {
         doc.n = _stewardNamesCt;
       }
-      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", STEWARDS_D + pub], ["t", NET]], content: JSON.stringify(doc) }, sk));
+      return _skewGate(() => publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", STEWARDS_D + pub], ["t", NET]], content: JSON.stringify(doc) }), sk)));
     },
     // What this church has granted each steward. Empty array = nothing; ABSENT = everything (an unscoped
     // steward, which is every steward that existed before this feature).
@@ -20865,7 +21026,7 @@ zoo`.split("\n");
       const doc = { self: _selfVoice && _selfVoice.name ? { ..._selfVoice, churchName: lastProfile.name || "" } : null, public: { ..._publicVoices } };
       const sealedVoice = _sealChurchDoc(doc);
       if (sealedVoice == null) return Promise.resolve(false);
-      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", VOICE_D + pub], ["t", NET]], content: sealedVoice }, sk));
+      return publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", VOICE_D + pub], ["t", NET]], content: sealedVoice }), sk));
     },
     setVoice(name, office) {
       _selfVoice = name && String(name).trim() ? { name: String(name).trim().slice(0, 60), office: String(office || "").trim().slice(0, 40) } : null;
@@ -21252,13 +21413,13 @@ zoo`.split("\n");
       if (!sk || !msgId) return Promise.resolve(null);
       const tags = [["d", HIDE_D + msgId], ["t", NET], ["p", pub]];
       if (groupId) tags.push(["t", groupId]);
-      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags, content: JSON.stringify({ groupId: groupId || "" }) }, sk));
+      return publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags, content: JSON.stringify({ groupId: groupId || "" }) }), sk));
     },
     unhideMessage(groupId, msgId) {
       if (!sk || !msgId) return Promise.resolve(null);
       const tags = [["d", HIDE_D + msgId], ["t", NET], ["p", pub], ["deleted", "1"]];
       if (groupId) tags.push(["t", groupId]);
-      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags, content: "" }, sk));
+      return publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags, content: "" }), sk));
     },
     // the set of hidden message ids → cb(Set<msgId>) on every change. Unsub fn.
     subscribeHidden(cb) {
@@ -21757,12 +21918,12 @@ zoo`.split("\n");
       } catch (e) {
         return null;
       }
-      const ok = await _publishToRelays(finalizeEvent2({
+      const ok = await _skewGate(() => _publishToRelays(finalizeEvent2(_monotonic({
         kind: 30078,
         created_at: now(),
         tags: [["d", CHECKINPERM_D + person], ["t", NET], ["church", cp], ["person", person]],
         content: JSON.stringify(body)
-      }, sk));
+      }), sk)));
       if (ok === false || ok == null) return null;
       return { ...body };
     },
@@ -21783,12 +21944,12 @@ zoo`.split("\n");
       if (!sk || !_mayClearForCheckin()) return Promise.resolve(null);
       const who = String(person || "").trim().toLowerCase();
       if (!/^[0-9a-f]{64}$/.test(who)) return Promise.resolve(null);
-      return _publishToRelays(finalizeEvent2({
+      return _skewGate(() => _publishToRelays(finalizeEvent2(_monotonic({
         kind: 30078,
         created_at: now(),
         tags: [["d", CHECKINPERM_D + who], ["t", NET], ["church", pub], ["deleted", "1"]],
         content: ""
-      }, sk));
+      }), sk)));
     },
     // READ THE CLEARANCES BACK. Through readCheckinPermission — the relay's own parser — rather than a second
     // reading of the same JSON, so the console and the box cannot disagree about what a permission means. A
@@ -22095,12 +22256,12 @@ zoo`.split("\n");
         return null;
       }
       if (built.failed.length) _warnUnsealed("check-in helper", built.failed);
-      const ok = await _publishToRelays(finalizeEvent2({
+      const ok = await _skewGate(() => _publishToRelays(finalizeEvent2(_monotonic({
         kind: 30078,
         created_at: now(),
         tags: [["d", CHECKINHELPER_D + session], ["t", NET], ["church", cp], ["session", session]],
         content: JSON.stringify(built.doc)
-      }, sk));
+      }), sk)));
       if (ok === false || ok == null) return null;
       return {
         session,
@@ -22148,12 +22309,12 @@ zoo`.split("\n");
       if (!sk || !churchSkHeld() || actingChurch) return Promise.resolve(null);
       const sid = String(session || "");
       if (!sid) return Promise.resolve(null);
-      return _publishToRelays(finalizeEvent2({
+      return _skewGate(() => _publishToRelays(finalizeEvent2(_monotonic({
         kind: 30078,
         created_at: now(),
         tags: [["d", CHECKINHELPER_D + sid], ["t", NET], ["church", pub], ["deleted", "1"]],
         content: ""
-      }, sk));
+      }), sk)));
     },
     // ── THE TWO QUESTIONS THE CHECK-IN SCREEN HAS TO ASK BEFORE IT SAYS ANYTHING ────────────────────────────
     //
@@ -23003,12 +23164,12 @@ zoo`.split("\n");
       const np = toPubHex(input);
       if (!np) return Promise.resolve(null);
       const content = JSON.stringify({ joined: true });
-      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", NETWORK_D + np], ["t", NET], ["p", np]], content }, sk)).then((ok) => ok ? { networkPub: np, npub: npubEncode(np) } : null);
+      return publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", NETWORK_D + np], ["t", NET], ["p", np]], content }), sk)).then((ok) => ok ? { networkPub: np, npub: npubEncode(np) } : null);
     },
     leaveNetwork(networkPub) {
       if (!sk) return Promise.resolve(null);
       const np = toPubHex(networkPub) || networkPub;
-      return publish(finalizeEvent2({ kind: 30078, created_at: now(), tags: [["d", NETWORK_D + np], ["t", NET], ["deleted", "1"]], content: "" }, sk));
+      return publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", NETWORK_D + np], ["t", NET], ["deleted", "1"]], content: "" }), sk));
     },
     // create a brand-new network: generate its key, join it (so the relay lets it post here), then
     // publish the network's profile + a starter announcements channel (signed by the network key).
@@ -23020,7 +23181,7 @@ zoo`.split("\n");
       const nPub = getPublicKey2(nsk);
       saveNetKey({ pub: nPub, mnemonic: m, name: name || "Network" });
       await window.Steward.joinNetwork(nPub);
-      await publish(finalizeEvent2({ kind: 0, created_at: now(), tags: [], content: JSON.stringify({ name: name || "Network" }) }, nsk));
+      await publish(finalizeEvent2(_monotonic({ kind: 0, created_at: now(), tags: [], content: JSON.stringify({ name: name || "Network" }) }), nsk));
       await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", GROUP_D + "net-announce"], ["t", NET]], content: JSON.stringify({ name: "Announcements", kind: "broadcast", sub: "From " + (name || "the network"), icon: "globe", accent: "var(--clay)" }) }, nsk));
       window.dispatchEvent(new CustomEvent("steward-networks"));
       return { networkPub: nPub, npub: npubEncode(nPub), mnemonic: m };
@@ -23033,7 +23194,7 @@ zoo`.split("\n");
     publishNetworkAnnouncement(networkPub, text) {
       const signer = skFor(networkPub);
       if (!signer || !text || !text.trim()) return Promise.resolve(null);
-      return publish(finalizeEvent2({ kind: 1, created_at: now(), tags: [["t", NET], ["t", "net-announce"], ["p", networkPub]], content: text.trim() }, signer));
+      return publish(finalizeEvent2(_monotonic({ kind: 1, created_at: now(), tags: [["t", NET], ["t", "net-announce"], ["p", networkPub]], content: text.trim() }), signer));
     },
     // a network's broadcast announcements (most recent first) — for previewing on the console
     subscribeNetworkAnnouncements(networkPub, onPosts) {
@@ -23480,7 +23641,7 @@ zoo`.split("\n");
           if (!force && done[mark]) return;
           const url = base + "/config";
           try {
-            const auth = finalizeEvent2({ kind: 27235, created_at: now(), tags: [["u", url], ["method", "POST"]], content: "" }, churchSk);
+            const auth = finalizeEvent2({ kind: 27235, created_at: _credNow(), tags: [["u", url], ["method", "POST"]], content: "" }, churchSk);
             const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ addChurch: { npub: np, name: name || "" }, auth }), signal: AbortSignal.timeout(6e3) });
             if (r && r.ok) {
               done[mark] = 1;
@@ -23551,7 +23712,7 @@ zoo`.split("\n");
       const base = String(wssUrl || "").replace(/^wss:/i, "https:").replace(/^ws:/i, "http:").replace(/\/relay\/?$/i, "");
       const url = base + "/config";
       try {
-        const auth = finalizeEvent2({ kind: 27235, created_at: now(), tags: [["u", url], ["method", "POST"]], content: "" }, churchSk);
+        const auth = finalizeEvent2({ kind: 27235, created_at: _credNow(), tags: [["u", url], ["method", "POST"]], content: "" }, churchSk);
         const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ addChurch: { npub: npubEncode(churchPub), name: name || "" }, auth }) });
         let why = "";
         if (!r.ok) {
@@ -23655,6 +23816,21 @@ zoo`.split("\n");
         }
       }
       return picks;
+    },
+    // HOW FAR OUT IS THIS CONSOLE'S CLOCK, against the relays that will store what it writes. Measurement
+    // only — see the block above _blobBase(). Nothing here corrects a stamp, and nothing reads either of
+    // these to decide anything; the Relays panel shows the number so a steward can act on a clock that was
+    // previously invisible to everybody.
+    // CALLERS (rule 2): app/steward-root.jsx `useStewardClockSkew`, read by DashRelaysCard in
+    // app/stew-dashboard.jsx. No writer, no gate and no publish path calls any of the three.
+    measureRelaySkew(preferUrl) {
+      return measureRelaySkew(preferUrl);
+    },
+    relaySkew() {
+      return relaySkewState();
+    },
+    clockLooksWrong() {
+      return clockLooksWrong();
     },
     // probe each relay with a throwaway WS; resolves [{ url, status:'on'|'off', ms, member }]
     //
