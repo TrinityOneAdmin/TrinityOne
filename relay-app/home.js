@@ -5,12 +5,17 @@
 // card's three choices are plain links, and scripts/suite-two-doors.test.mjs pins that this file has no
 // location.href).
 //
-// "SET UP" IS READ FROM WHAT EXISTS, NOT ONLY FROM A MARKER. Two markers other pages already write mean "a
-// wizard finished or was skipped": `to_relay_setup_seen` (control.js maybeFirstRun, and ONLY there — no exit
-// from the relay wizard writes it; it means "this box has a relay name or a church", read off the box) and
-// `trinityone.steward.wizard.done` (stew-dashboard.jsx finishWizard, and the restore/adopt paths). Either one
-// → the doors, at once and without a fetch. Without a marker (a fresh webview profile, or cleared site data)
-// the box itself is asked: /status.writePolicy is true iff this relay holds a church (public, no token), and
+// "SET UP" IS READ FROM WHAT EXISTS. THE BOX IS ASKED, ALWAYS — NO MARKER IS CONSULTED HERE.
+//
+// ⚠ CORRECTED 2026-09-27. This said two markers — `to_relay_setup_seen` (control.js maybeFirstRun) and
+// `trinityone.steward.wizard.done` (stew-dashboard.jsx finishWizard) — were "READ at the top of this file"
+// and gave "the doors, at once and without a fetch". THAT WAS FALSE. `571abbf` removed the marker read on
+// the owner's rule, 2026-09-23: *"the state of the box decides whether the card is retired, never which
+// button was pressed."* The prose was left behind. MEASURED: the only localStorage this file touches is
+// `suite.updDismissed` (two sites); it reads neither marker. Two independent reviewers flagged this comment
+// within one session, each having first believed it — which is what a false comment costs.
+//
+// What actually happens, every time, with no fast path: /status.writePolicy is true iff this relay holds a church (public, no token), and
 // /relay-names/mine.handle is the relay's name (via /local-token, which only a same-machine request gets — the
 // Suite always is one). A church or a name → the doors: something was set up here, whatever storage says. Both
 // absent AND no marker → the card. If either question cannot be answered at all — a network error, or a
@@ -173,6 +178,6 @@
 // now; the panel points at the console while the relay has no church (control.js, the next-step card).
 //
 // The `to_relay_setup_seen` marker is control.js's own — written there by maybeFirstRun() alone, from the
-// box's own answers, and READ at the top of this file as the fast path to the doors. Nothing in this file
-// WRITES it. The once-per-run `to_relay_setup_tried` marker existed only for the redirect and is gone with
+// box's own answers. This file neither writes it NOR READS IT (corrected 2026-09-27; it used to say this
+// file read it as a fast path, which stopped being true at `571abbf`). The once-per-run `to_relay_setup_tried` marker existed only for the redirect and is gone with
 // it.
