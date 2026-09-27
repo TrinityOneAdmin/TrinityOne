@@ -18,8 +18,13 @@
 // from a plain static server because the gateway refuses to serve relay-app/desktop/ (deliberately: those are
 // build sources), and it is pointed at the test's gateway with `?relay=`, which the shell never passes.
 //
+// TWO BOXES (2026-09-27). The launcher reads the BOX, never a marker, so the rows need two gateways: an
+// EMPTY one for "a first launch stays on the launcher", and one seeded with a throwaway church for the
+// owner's Back route, whose whole point is the launcher's two DOORS. See the second test for the detail.
+//
 // WHAT THIS CANNOT PROVE: the real shell is WebKitGTK, not Chromium; only a Suite build on a desktop shows
-// the real window. NOTHING REACHES PRODUCTION: the shipped hosts resolve to a dead port in the browser and
+// the real window — the owner intends to check that Back by hand, and nothing in this file stands in for it.
+// NOTHING REACHES PRODUCTION: the shipped hosts resolve to a dead port in the browser and
 // are refused inside the gateway.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -30,6 +35,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocket } from 'ws';
+import { generateSecretKey, getPublicKey } from 'nostr-tools/pure';
+import { npubEncode } from 'nostr-tools/nip19';
 import { freePort } from './relay-network-harness.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -44,8 +51,13 @@ globalThis.fetch = function (input, init) {
   if (/trinityone\\.church|\\.ts\\.net|trycloudflare/i.test(u)) return Promise.reject(new Error('blackholed by test: ' + u));
   return real.call(this, input, init);
 };\n`;
-let gw = null, splashSrv = null, splashBase = '';
-async function startGateway() {
+// TWO BOXES, BECAUSE THE LAUNCHER READS THE BOX AND THE ROWS NEED DIFFERENT ANSWERS (owner, 2026-09-23:
+// "the state of the box decides whether the card is retired, never which button was pressed"). `gw` is the
+// EMPTY box — no church, no name — and row 1 is about that box: a genuine first launch. `gwChurch` is the
+// same gateway with one church in it, which is the only honest way to reach the launcher's two doors now
+// that no marker can fake it. Nothing is shared between them but the code under test.
+let gw = null, gwChurch = null, splashSrv = null, splashBase = '';
+async function startGateway(extraEnv = {}) {
   const port = await freePort('the splash test\'s gateway');
   const dataDir = mkdtempSync(join(tmpdir(), 'trin-splash-'));
   const preload = join(dataDir, 'blackhole.mjs');
@@ -53,7 +65,7 @@ async function startGateway() {
   const proc = spawn(process.execPath, [join(ROOT, 'scripts/gateway.mjs'), String(port)], {
     cwd: ROOT, stdio: 'ignore',
     env: { ...process.env, TRINITY_DATA_DIR: dataDir, RELAY_SYNC: '0', RELAY_HOST: '127.0.0.1', RELAY_NO_OPEN: '1',
-      RELAY_DIRECTORY: 'http://127.0.0.1:9', TRINITY_TAILSCALE_BIN: '/nonexistent/tailscale', NODE_OPTIONS: '--import ' + preload },
+      RELAY_DIRECTORY: 'http://127.0.0.1:9', TRINITY_TAILSCALE_BIN: '/nonexistent/tailscale', NODE_OPTIONS: '--import ' + preload, ...extraEnv },
   });
   const base = `http://127.0.0.1:${port}`;
   let up = false;
@@ -96,6 +108,10 @@ async function startChrome(url) {
 before(async () => {
   if (!CHROME) return;
   gw = await startGateway();
+  // A throwaway church, minted here — never a real one, and never a constant somebody could mistake for one.
+  // CHURCH_NPUB is the gateway's own seed for "this relay serves this church"; it is what makes
+  // /status.writePolicy true (scripts/gateway.mjs: `writePolicy: CHURCH_PUBS.size > 0`).
+  gwChurch = await startGateway({ CHURCH_NPUB: npubEncode(getPublicKey(generateSecretKey())) });
   // the splash, byte for byte, from a port of its own
   const sp = await freePort('the splash test\'s static server');
   const html = readFileSync(SPLASH);
@@ -103,7 +119,7 @@ before(async () => {
   await new Promise(r => splashSrv.listen(sp, '127.0.0.1', r));
   splashBase = `http://127.0.0.1:${sp}`;
 });
-after(() => { if (gw) gw.stop(); if (splashSrv) splashSrv.close(); });
+after(() => { if (gw) gw.stop(); if (gwChurch) gwChurch.stop(); if (splashSrv) splashSrv.close(); });
 
 const doorsOn = (c) => c.evalIn(`[...document.querySelectorAll('a.mode')].map(a => a.getAttribute('href')).sort().join(' ')`);
 
@@ -137,18 +153,43 @@ test('a first launch STAYS on the launcher: the first-run card, no redirect, no 
 });
 
 // The regression guard the audit of cec135f found lost with the redirect's tests: the ROUTE the owner took.
+//
+// STAGED BY THE BOX, NOT BY A MARKER (owner's decision, 2026-09-27). Until 571abbf (2026-09-23) this row
+// wrote `to_relay_setup_seen` into localStorage to mean "not a first launch". That mechanism is gone: the
+// owner's rule is "the state of the box decides whether the card is retired, never which button was
+// pressed", relay-app/home.js reads no marker at all any more, and its sibling row
+// scripts/the-suite-first-run-is-one-guided-path.test.mjs ("the console wizard's 'done' marker does not
+// retire the first-run card") exists to keep it that way. So this row runs against a SECOND gateway that
+// really holds a church, on a fresh, EMPTY browser profile.
+//
+// WHAT THAT PROVES: on a box that genuinely has a church, the launcher shows its two doors, the "Manage a
+// relay" door opens the panel, and the panel's own "← Back" lands back on that launcher — with both doors
+// on it, not on the bundled splash and not below the launcher in history. The staging is a real HTTP answer
+// from a real gateway (/status.writePolicy, which scripts/gateway.mjs sets from CHURCH_PUBS.size), so
+// nothing here asserts against something the test itself faked: `fetch` is untouched and localStorage is
+// asserted empty at the point the launcher decides.
+//
+// WHAT IT DOES NOT PROVE: that a box with NO church behaves this way — a first launch shows the card, and
+// row 1 above is the one that measures that. Nor the real window: this is Chromium, and the Suite shell is
+// WebKitGTK, so only a Suite build on a desktop proves the actual Back. The owner intends to check that by
+// hand; nobody should read this row as covering it.
 test('from the launcher through "Manage a relay", the panel\'s "← Back" lands on the launcher with both doors — not below it',
   { skip: !CHROME ? 'no chromium' : false, timeout: 90000 }, async () => {
+  // re-anchor the staging before measuring anything with it: a gateway that stopped reporting its church
+  // would send this row down the first-run card path and it must say so, not quietly measure the wrong page.
+  assert.equal((await (await fetch(gwChurch.base + '/status')).json()).writePolicy, true,
+    'staging: the second gateway does not report the church it was seeded with, so this row measures nothing');
+  assert.equal((await (await fetch(gw.base + '/status')).json()).writePolicy, false,
+    'staging: the EMPTY gateway reports a church — the two boxes are no longer different and row 1 is measuring this one');
   const c = await startChrome('about:blank');
   try {
-    await c.goto(gw.base + '/relay-app/home.html');
-    await sleep(1500);
-    // A launch that is NOT the first: the relay wizard was once skipped, which is one of the markers the
-    // launcher reads (relay-app/home.js) — so the doors are on screen, not the first-run card.
-    await c.evalIn(`localStorage.setItem('to_relay_setup_seen', '1')`);
-    await c.goto(gw.base + '/relay-app/home.html');
-    await sleep(1500);
-    assert.equal(await c.evalIn(`document.body.getAttribute('data-first-run')`), 'doors', 'staging: the launcher did not show its doors on a non-first launch');
+    // A launch that is NOT the first, because the BOX is not fresh: this relay holds a church. No marker is
+    // set and none is read — the launcher asks the box (relay-app/home.js, /status.writePolicy).
+    await c.goto(gwChurch.base + '/relay-app/home.html');
+    await sleep(3000);
+    assert.equal(await c.evalIn(`localStorage.getItem('to_relay_setup_seen')`), null,
+      'staging: something wrote the old "a wizard finished" marker — the doors below must come from the box, not from storage');
+    assert.equal(await c.evalIn(`document.body.getAttribute('data-first-run')`), 'doors', 'staging: the launcher did not show its doors on a box that holds a church');
     // press the launcher's own door, as a person does (not a navigate)
     assert.equal(await c.evalIn(`(() => { const a = [...document.querySelectorAll('a.mode')].find(a => /control\.html/.test(a.href)); if (!a) return 'miss'; a.click(); return 'ok'; })()`), 'ok', 'no "Manage a relay" door');
     await sleep(2500);
@@ -161,7 +202,12 @@ test('from the launcher through "Manage a relay", the panel\'s "← Back" lands 
     assert.match(String(await c.evalIn('location.href')), /\/relay-app\/home\.html$/,
       'THE OWNER\'S ROUTE: Back from the panel landed on ' + (await c.evalIn('location.href')) + ', not the launcher');
     assert.equal(await doorsOn(c), '/relay-app/control.html /steward.html', 'the launcher Back landed on does not offer both doors');
-    assert.equal(await c.evalIn(`document.body.getAttribute('data-first-run')`), 'doors', 'the launcher Back landed on shows the first-run card over a relay whose wizard was already seen');
+    // ON SCREEN, not merely in the DOM: `doorsOn` reads href attributes, which survive `hidden`. The doors
+    // are the way out of this page, so a Back that lands on the first-run card instead is still the dead end.
+    const shown = await c.evalIn(`(() => { const on = (e) => { if (!e) return false; const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0 && getComputedStyle(e).visibility !== 'hidden'; }; return JSON.stringify({ card: on(document.getElementById('firstRun')), doors: [...document.querySelectorAll('a.mode')].map(on) }); })()`);
+    assert.deepEqual(JSON.parse(shown), { card: false, doors: [true, true] },
+      'the launcher Back landed on shows ' + shown + ' — expected both doors on screen over a relay that holds a church');
+    assert.equal(await c.evalIn(`document.body.getAttribute('data-first-run')`), 'doors', 'the launcher Back landed on shows the first-run card over a relay that holds a church');
   } finally { c.stop(); }
 });
 
