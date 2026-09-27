@@ -8575,12 +8575,45 @@ function DashSermons() {
     }
     setUpBusy(false); if (ok) setTimeout(() => setUpMsg(''), 3500);   // keep errors visible; only auto-clear success
   };
+  // ── REMOVING THE FEATURED SERMON CLEARS THE FEATURE TOO ──────────────────────────────────────────────────
+  // `removeSermon` publishes ONE document, `trinityone/sermon:<id>` — measured against the shipped
+  // vendor/steward.js, which published exactly that and nothing else. `trinityone/pinsermon:<church>` is a
+  // SEPARATE document, so a sermon that was featured stayed on every member's Today card, advertising a
+  // recording whose media file this same Remove has just deleted from every host. That record is
+  // addressable, so featuring a DIFFERENT sermon overwrites it eventually; the case that matters is a
+  // TAKEDOWN, where nothing else is coming and the recording someone asked to have removed goes on being
+  // pushed at the whole church.
+  //
+  // WHY THIS BELONGS ON THE SCREEN AND NOT IN THE ENGINE: the engine does not know which sermon is featured.
+  // `subscribePinnedSermon` (src/steward.src.js) keeps that in local variables inside the subscription and
+  // hands it out through the callback; this panel is what holds it, as `pinnedId`. And `unpinSermon`'s only
+  // other caller is `togglePin` above, on the sermon row's pin button — once the row is gone there is no
+  // control left that can clear it. A DELEGATE can clear it too: the relay grants `pinsermon:` to a content
+  // steward (scripts/gateway.mjs), the same grant that lets them remove the sermon in the first place.
+  //
+  // TWO THINGS THAT ARE PART OF THE FIX, not polish:
+  //  1. ONLY AFTER THE REMOVAL SUCCEEDED. `removeSermon` THROWS when no relay took the tombstone ("…so
+  //     nothing was deleted"), and on that path the sermon is still there and must stay featured.
+  //  2. NO SUCCESS OVER A FAILED UNPIN. `unpinSermon` resolves falsy when no relay took it, and the sermon
+  //     is then gone from the list while its Today card lives on. Saying nothing would read as success —
+  //     [[fix-the-control-not-the-label]], the same shape as the four writes in
+  //     scripts/a-saved-message-tag-nobody-took-is-not-saved.test.mjs. The steward is told, in this panel's
+  //     existing '✗ …' style (upMsg, below the Upload button), and told the one thing they can still do:
+  //     the record is addressable, so featuring another sermon replaces it.
+  const doRemove = async (s) => {
+    try { await window.Steward.removeSermon(s); }
+    catch (err) { setUpMsg('✗ ' + ((err && err.message) || 'Couldn’t remove that sermon')); return; }
+    if (!s || pinnedId !== s.id) return;   // not the featured one — leave the feature exactly as it is
+    let cleared = false;
+    try { cleared = !!(window.Steward.unpinSermon && await window.Steward.unpinSermon()); } catch (e) { cleared = false; }
+    if (!cleared) setUpMsg('✗ Removed “' + ((s && s.title) || 'that sermon') + '”, but it’s still featured on members’ Today — no relay took that change. Pin another sermon to replace it once you’re back online.');
+  };
   const fmtSize = (n) => n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
   return (
     <div className="no-scrollbar" style={{ height: '100%', overflowY: 'auto' }}>
       {pendingUpload ? <SermonEditModal upload={pendingUpload} sermon={{ title: pendingUpload.title, mime: pendingUpload.mime }} onSave={(fields) => doUpload(pendingUpload.file, fields)} onClose={() => setPendingUpload(null)} /> : null}
       {editing ? <SermonEditModal sermon={editing} onSave={(fields) => Promise.resolve(window.Steward.publishSermon({ ...editing, ...fields }))} onClose={() => setEditing(null)} /> : null}
-      {pendingDelete ? <SkConfirm icon="trash" title={'Remove “' + (pendingDelete.title || 'this') + '”?'} confirmLabel="Remove" body="It disappears from members’ apps and the stored file is deleted from your relay(s) to free the space. This can’t be undone." onConfirm={() => { const s = pendingDelete; setPendingDelete(null); Promise.resolve(window.Steward.removeSermon(s)).catch(err => setUpMsg('✗ ' + ((err && err.message) || 'Couldn’t remove that sermon'))); }} onCancel={() => setPendingDelete(null)} /> : null}
+      {pendingDelete ? <SkConfirm icon="trash" title={'Remove “' + (pendingDelete.title || 'this') + '”?'} confirmLabel="Remove" body="It disappears from members’ apps and the stored file is deleted from your relay(s) to free the space. This can’t be undone." onConfirm={() => { const s = pendingDelete; setPendingDelete(null); doRemove(s); }} onCancel={() => setPendingDelete(null)} /> : null}
       {pendingHevc ? <SkConfirm icon="alert" tint="var(--gold)" title="This video may not play in web browsers" confirmLabel="Upload anyway" body="It’s recorded in H.265/HEVC — your phone’s “High Efficiency” format. Phones play it fine, but web browsers (and some older devices) can’t. To reach everyone, set your camera to “Most Compatible” (H.264) and re-record. Upload this one anyway? Members on the phone app will still be able to watch it." onConfirm={() => { const f = pendingHevc; setPendingHevc(null); askThenUpload(f); }} onCancel={() => setPendingHevc(null)} /> : null}
       {pendingBigEnc ? <SkConfirm icon="alert" tint="var(--gold)" title="Large encrypted video" confirmLabel="Upload anyway" body={'This encrypted video is ' + fmtSize(pendingBigEnc.size) + '. Encrypted media has to download in full and decrypt in memory before it plays — which needs 2–3× its size in RAM, so on an older phone it may fail to play at all. To be safe, trim it, export at 720p, or leave encryption off for this one (it stays members-only either way). Upload it as-is?'} onConfirm={() => { const f = pendingBigEnc; setPendingBigEnc(null); askThenUpload(f); }} onCancel={() => setPendingBigEnc(null)} /> : null}
       <Panel title="Self-hosted sermons">
