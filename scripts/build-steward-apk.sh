@@ -102,20 +102,10 @@ sed -i 's#<string name="app_name">TrinityOne</string>#<string name="app_name">Tr
 #   The 8f5090e security rationale (debuggable=true → adb run-as reads the PIN-encrypted church key in ~30s;
 #   a silently-regenerated debug key can forge steward updates) is REAL and applies the moment anyone real is on it.
 npx cap copy android
-# Honour the same TRINITY_DEBUG=0 go-live switch as sync-web.sh (member APK). `npx cap copy` just re-copied
-# capacitor.config.json with webContentsDebuggingEnabled=true (the committed pilot value), and this build
-# never applied the switch — so a go-live run that disabled WebView debugging on the MEMBER app still shipped
-# the STEWARD app (which holds the church key) debuggable. Unset = leave it ON (owner's pilot decision);
-# TRINITY_DEBUG=0 = force it off here too, so one switch covers both apps.
-ASSETS_CFG="android/app/src/main/assets/capacitor.config.json"
-if [ -f "$ASSETS_CFG" ]; then
-  if [ "${TRINITY_DEBUG:-}" = "0" ]; then
-    node -e 'const f=process.argv[1],c=JSON.parse(require("fs").readFileSync(f,"utf8"));(c.android=c.android||{}).webContentsDebuggingEnabled=false;require("fs").writeFileSync(f,JSON.stringify(c,null,2)+"\n")' "$ASSETS_CFG"
-    echo "✔ TRINITY_DEBUG=0 — WebView remote debugging DISABLED in the steward APK (go-live posture)."
-  elif grep -q '"webContentsDebuggingEnabled": *true' "$ASSETS_CFG"; then
-    echo "⚠ Steward APK WebView remote debugging is ON (pilot). Ship with TRINITY_DEBUG=0 at go-live."
-  fi
-fi
+# WebView debugging is now controlled by the Gradle BUILD VARIANT via BuildConfig.WEB_DEBUG:
+#   assembleDebug   → WEB_DEBUG=true  (dev builds, CDP diagnosis via USB)
+#   assembleRelease → WEB_DEBUG=false (pilot/go-live, CDP locked out)
+# MainActivity overrides setWebContentsDebuggingEnabled() at runtime. TRINITY_DEBUG=0 is no longer needed.
 ( cd android && ./gradlew assembleDebug -q )
 cp android/app/build/outputs/apk/debug/app-debug.apk trinityone-steward.apk
 echo "→ trinityone-steward.apk ($(du -h trinityone-steward.apk | cut -f1))  [DEBUG-signed — pilot-deferred, see note above]"

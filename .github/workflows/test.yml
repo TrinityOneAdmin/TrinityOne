@@ -16,9 +16,15 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history — 8 tests depend on commit ancestry
       - uses: actions/setup-node@v4
         with:
           node-version: '22.22.2'   # pinned to the version the relay + build scripts are developed against
@@ -27,4 +33,5 @@ jobs:
       # Includes vendor-freshness.test.mjs, which rebuilds every src/*.src.js with the real build-*.sh and
       # asserts the committed vendor/ bundles match — the check that would have caught the stale
       # finance-ledger.js shipping unbranded statements to churches for three days.
-      - run: npm test
+      - name: Run tests (shard ${{ matrix.shard }}/4)
+        run: npm test -- --shard=${{ matrix.shard }}/4
