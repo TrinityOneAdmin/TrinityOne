@@ -108,8 +108,7 @@ const CHURCH_REPLACE_CAP = 200;
 const MEMBER_DOC_CAP = 500;         // M1: cap distinct addressable (30078) docs per member — one member can't disk-exhaust the relay with novel d-tags
 const MEMBER_DOC_CAP_STEMS = Object.freeze([
   'trinityone/rsvp:', 'trinityone/reqreply:', 'trinityone/carechat:', 'trinityone/carereq:',
-  'trinityone/guardreq:', 'trinityone/careslot:', 'trinityone/unavail:', 'trinityone/wallet:',
-  'trinityone/safe:', 'trinityone/stewardreq:',
+  'trinityone/guardreq:', 'trinityone/unavail:', 'trinityone/wallet:',
 ]);
 // relay feature toggles — what this box serves besides the Nostr relay itself (owner request). Defaults
 // preserve current behaviour (all on); edited via the token-gated /settings endpoint + the control dashboard.
