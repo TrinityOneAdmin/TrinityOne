@@ -23,7 +23,7 @@ function LibraryScreen({ ctx }) {
   const D = window.TrinityData;
   const [view, setView] = React.useState('library');
   return (
-    <ScreenScroll>
+    <ScreenScroll top="calc(env(safe-area-inset-top, 0px) + 8px)">
       <h1 style={{ margin: '0 0 14px', fontFamily: 'var(--font-display)', fontSize: 30, fontWeight: 700, letterSpacing: '-.5px', animation: 'lumenFade .5s ease both' }}>Library</h1>
 
       {/* segmented: Library / Watch & Listen.

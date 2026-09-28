@@ -1479,7 +1479,7 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
   if (edit) {
     return (
       <Overlay open={open} onClose={onClose}>
-        <div style={{ paddingTop: 50 }}>
+        <div style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 8px)' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 16px 6px' }}>
             <button onClick={() => setEdit(false)} style={{ border: 'none', background: 'none', color: 'var(--ink-2)', fontWeight: 600, fontSize: 15, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Cancel</button>
             <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17 }}>Edit profile</span>
@@ -1534,7 +1534,7 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
 
   return (
     <Overlay open={open} onClose={onClose}>
-      <div style={{ paddingTop: 50 }}>
+      <div style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 8px)' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 16px 6px' }}>
           <IconBtn name="chevL" onClick={onClose} />
           <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17 }}>You</span>

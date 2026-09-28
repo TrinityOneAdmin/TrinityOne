@@ -47,7 +47,7 @@ function VerseRow({ n, html, hl, note, bookmarked, selected, reading, onSelect, 
 function ReadHeader({ ctx, loc, version, onBook, onChapter, onVersion, onSettings, compare, onCompare, onListen, narrating, canListen }) {
   return (
     <div style={{
-      position: 'absolute', top: 0, left: 0, right: 0, zIndex: 20, paddingTop: 50,
+      position: 'absolute', top: 0, left: 0, right: 0, zIndex: 20, paddingTop: 'calc(env(safe-area-inset-top, 0px) + 8px)',
       background: 'color-mix(in oklab, var(--paper) 88%, transparent)',
       backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)',
       borderBottom: '1px solid var(--line-2)',
@@ -1019,7 +1019,7 @@ function ReadScreen({ ctx }) {
 
       <div ref={scrollRef} className="no-scrollbar"
         onTouchStart={onSwipeStart} onTouchMove={onSwipeMove} onTouchEnd={onSwipeEnd} onTouchCancel={() => { swipe.current = null; }}
-        style={{ position: 'absolute', inset: 0, overflowY: 'auto', overflowX: 'hidden', padding: '164px 18px 116px' }}>
+        style={{ position: 'absolute', inset: 0, overflowY: 'auto', overflowX: 'hidden', padding: 'calc(env(safe-area-inset-top, 0px) + 122px) 18px 116px' }}>
         <div style={{ animation: 'trinityFade .4s ease both' }}>
           <div style={{ textAlign: 'center', marginBottom: 22 }}>
             <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--clay)', letterSpacing: '1.5px', textTransform: 'uppercase' }}>{bname}</div>
