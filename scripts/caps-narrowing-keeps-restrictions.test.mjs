@@ -318,6 +318,33 @@ test("a narrowed treasurer's entries still hold the journal's place, so history 
   assert.equal((await publishAs(entry(church, 3))).ok, true, 'the next genuine entry must still be accepted');
 });
 
+// ── 7b. A REMOVED TREASURER — the handover case 7 does not reach ────────────────────────────────────────
+// Case 7 narrows the treasurer to 'content', so they stay on the roster and stewardCan(…, 'any') still holds.
+// A church handing its books to a new treasurer REMOVES the old one (or unticks their only box). Their
+// entries stay in the book (retractionExempt), so every console numbers the next entry after them — and the
+// relay must agree after it rehydrates, or the books refuse every new entry until someone re-adds them.
+test("a REMOVED treasurer's entries still hold the journal's place after the relay rehydrates", async () => {
+  const jane = K();
+  const rosterWith = (pubkeys, caps) => finalizeEvent({ kind: 30078, created_at: ++ts, tags: [['d', STEWARDS_D + cp], ['t', NET]],
+    content: JSON.stringify({ pubkeys, caps }) }, church.sk);
+  const entry = (signer, seq) => finalizeEvent({ kind: 30078, created_at: ++ts,
+    tags: [['d', 'finance/journal:' + seq], ['t', NET], ['church', cp]],
+    content: JSON.stringify({ seq, memo: 'collection ' + seq }) }, signer.sk);
+  const have = await readAs(church, { kinds: [30078], '#church': [cp] });
+  const top = Math.max(0, ...have.map(e => parseInt(((e.tags.find(t => t[0] === 'd') || [])[1] || '').replace('finance/journal:', ''), 10)).filter(Number.isInteger));
+  assert.equal((await publishAs(rosterWith([deborah.pub, jane.pub], { [deborah.pub]: ['content'], [jane.pub]: ['finance'] }))).ok, true);
+  assert.equal((await publishAs(entry(jane, top + 1))).ok, true, 'the treasurer writes the next entry');
+  assert.equal((await publishAs(entry(jane, top + 2))).ok, true, 'and the one after');
+  await sleep(150);
+  assert.equal((await publishAs(rosterWith([deborah.pub], { [deborah.pub]: ['content'] }))).ok, true, 'the church removes the treasurer');
+  await rehydrateByRestart();
+  const next = await publishAs(entry(church, top + 3));
+  assert.equal(next.ok, true,
+    "after the treasurer was removed and the relay restarted, the church's next entry was refused — the books are frozen");
+  const fork = await publishAs(entry(church, top + 1));
+  assert.equal(fork.ok, false, 'a sequence number the removed treasurer already used was accepted again — the book has forked');
+});
+
 // ── 8. ROTA VISIBILITY — the third untested gate ─────────────────────────────────────────────────────────
 test('a rota narrowed to serving teams is not served church-wide after its author is narrowed', async () => {
   // ROTA_SETTINGS was widened with the rest and had no test either — the builder for it was written and

@@ -342,7 +342,7 @@ test('the relay refuses a check-in write from anyone but the church or a SAFEGUA
   // and it must come BEFORE the member catch-all, or it never runs. Anchored on CODE, not on the comment
   // that explains the catch-all: comments are stripped here, and this repo has already shipped an assertion
   // that a comment satisfied.
-  const cap = gw.indexOf('authors: [e.pubkey], limit: MEMBER_DOC_CAP');   // the catch-all's BODY, not the declaration
+  const cap = gw.indexOf('countDocsByAuthor(e.pubkey, MEMBER_DOC_CAP_STEMS)');   // the catch-all's BODY, not the declaration
   assert.ok(cap > 0 && gw.indexOf('d.startsWith(CHECKIN_D)') < cap,
     're-anchor: the check-in rule now sits after the member doc-cap catch-all, where it can never be reached');
 });

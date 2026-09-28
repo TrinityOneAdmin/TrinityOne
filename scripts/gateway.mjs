@@ -106,6 +106,11 @@ const STEWARDREQ_CAP = 50;          // cap pending steward-requests per church f
 // dashboard could not save without silently deleting 150 congregations.
 const CHURCH_REPLACE_CAP = 200;
 const MEMBER_DOC_CAP = 500;         // M1: cap distinct addressable (30078) docs per member — one member can't disk-exhaust the relay with novel d-tags
+const MEMBER_DOC_CAP_STEMS = Object.freeze([
+  'trinityone/rsvp:', 'trinityone/reqreply:', 'trinityone/carechat:', 'trinityone/carereq:',
+  'trinityone/guardreq:', 'trinityone/careslot:', 'trinityone/unavail:', 'trinityone/wallet:',
+  'trinityone/safe:', 'trinityone/stewardreq:',
+]);
 // relay feature toggles — what this box serves besides the Nostr relay itself (owner request). Defaults
 // preserve current behaviour (all on); edited via the token-gated /settings endpoint + the control dashboard.
 const SETTINGS_FILE = join(DATA_DIR,'relay-settings.json');
@@ -1666,6 +1671,7 @@ const STEWARDS_BY = new Map();   // churchpub -> Set(steward pubkeys) from the o
 // Meal trains / care module state (rebuilt from stored events by note()):
 const ROSTER_PEOPLE = new Map();     // teamId(groupId) -> Set(pubkey) — people LINKED on a team roster; the care-team's members live here
 const ROSTER_BY = new Map();          // teamId(groupId) -> { by, cp } — who authored the roster (M2: void the care-admin grant if they're later revoked)
+const FIN_SEEN = new Map();           // churchpub -> Set(journal seqs stored for that book, ANY author) — FINANCE_SEQ is its contiguous prefix
 const FINANCE_SEQ = new Map();        // churchpub -> last accepted finance-journal seq — the relay is the ordering authority; the next write must be seq+1 (single-writer, no gaps/forks/edits)
 const MEALS_ADMIN_GROUP = new Map(); // churchpub -> care-team groupId (its roster people may open/manage care needs)
 const MEALS_OPEN_MEMBER = new Set(); // churchpubs whose meals-settings allow ANY member to open their own care need (openedBy='member')
@@ -3090,7 +3096,7 @@ function clearDerivedMaps() {
                    GROUP_LEADERS, GROUP_LEADER_BY, GROUP_EVENTPOLICY, STEWARDS_BY, STEWARD_CAPS, BLOCKED_BY, MINORS_BY, APPROVED_BY, NOPHOTO_BY,
                    GUARDIANS_BY, NETWORKS_BY, ADMITTED_BY, ADMITTED_SRC, ROSTER_BY, ROSTER_PEOPLE, MEALS_ADMIN_GROUP, ROTA_VIS, CHECKIN_HELPERS,
                    CHECKIN_PERMITS,
-                   FINANCE_SEQ, CARE_RECIPIENT, CARE_SKIPHASH, PEER_URLS, TRUSTED_RELAYS, EVENT_AUDIENCE, SHARE_BY, PUBEVENTS]) { try { m.clear(); } catch {} }
+                   FINANCE_SEQ, FIN_SEEN, CARE_RECIPIENT, CARE_SKIPHASH, PEER_URLS, TRUSTED_RELAYS, EVENT_AUDIENCE, SHARE_BY, PUBEVENTS]) { try { m.clear(); } catch {} }
   // CHECKIN_PERMITS was missing here, and it is the HALF OF THE CONJUNCTION THE WHOLE 2026-09-09 RESTRUCTURE
   // RESTS ON. Added 2026-09-10. It was the only line on which the two check-in siblings differed, and it
   // failed OPEN in exactly the class the GROUP_CHILDSAFE note below describes.
@@ -3406,9 +3412,14 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
   }
   else if (d.startsWith(FIN_JOURNAL_D)) {   // finance journal entry — track the book's high-water seq for the single-writer guard
     const fcp = finCp(e);
-    if (fcp && (e.pubkey === fcp || stewardCan(e.pubkey, fcp, 'any'))) {
-      const seq = parseInt(d.slice(FIN_JOURNAL_D.length), 10);
-      if (Number.isInteger(seq)) FINANCE_SEQ.set(fcp, Math.max(FINANCE_SEQ.get(fcp) || 0, seq));   // accepted entries are contiguous, so max == last-contiguous (rebuild-safe)
+    const seq = parseInt(d.slice(FIN_JOURNAL_D.length), 10);
+    if (fcp && Number.isInteger(seq) && seq > 0) {
+      let seen = FIN_SEEN.get(fcp); if (!seen) { seen = new Set(); FIN_SEEN.set(fcp, seen); }
+      seen.add(seq);
+      let n = FINANCE_SEQ.get(fcp) || 0;
+      if (e.pubkey === fcp || stewardCan(e.pubkey, fcp, 'any')) n = Math.max(n, seq);
+      while (seen.has(n + 1)) n++;
+      FINANCE_SEQ.set(fcp, n);
     }
   }
   else if (d === MEALS_SETTINGS_D) {   // optional Care module config — only the church key (or one of its stewards) sets it
@@ -3728,7 +3739,9 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
 }
 // the group id an event-doc is scoped to (its non-NET 't' tag), or '' for a whole-church event
 const eventGroup = (e) => { const t = (e.tags || []).find(t => t[0] === 't' && t[1] !== NET); return t ? t[1] : ''; };
+let _lastRefusalDocCap = false;
 function accept(e) {
+  _lastRefusalDocCap = false;
   // AN UNCONFIGURED BOX HOLDS NOBODY'S DATA, SO IT ACCEPTS NOBODY'S.
   //
   // This used to `return true` — a relay with no churches took every write from anyone. Defensible while a
@@ -4563,15 +4576,11 @@ function accept(e) {
     }
     // M1: catch-all for a member's own addressable (MyData) docs with a novel d-tag. Addressable docs are never
     // culled, so cap distinct docs per author — a member can't disk-exhaust the relay by spamming unique d-tags.
-    // Updating an existing d-tag is always fine; only a NEW one past the cap is refused.
     if (!isMember) return false;
-    // …AND ONLY FOR A TYPE THIS PRODUCT HAS DECLARED A MEMBER MAY WRITE. The church key and a network key keep
-    // the catch-all as it was — an ordinary member does not. Everything a member legitimately writes has a
-    // declared type (memberDocTypeOk), so what this refuses is a d-tag nobody has invented yet, or a
-    // church-only type somebody forgot to give a branch above — the two shapes that produced `voice:`.
     if (!(isAnyChurch || isNetwork) && !memberDocTypeOk(d)) return false;
-    const mine = store.query({ kinds: [30078], authors: [e.pubkey], limit: MEMBER_DOC_CAP + 1 });
-    if (mine.length > MEMBER_DOC_CAP && !mine.some(x => (x.tags.find(t => t[0] === 'd') || [])[1] === d)) return false;
+    if (isAnyChurch || isNetwork) return true;
+    if (store.hasDoc(e.pubkey, d)) return true;
+    if (store.countDocsByAuthor(e.pubkey, MEMBER_DOC_CAP_STEMS) >= MEMBER_DOC_CAP) { _lastRefusalDocCap = true; return false; }
     return true;
   }
   if (k === 1) {   // chat
@@ -7857,12 +7866,15 @@ wss.on('connection', (ws, req) => {
         const _rIsNetwork = _rcp ? networkOf(evt.pubkey, _rcp) : NETWORKS.has(evt.pubkey);
         const _undeclared = evt.kind === 30078 && MEMBERS.has(evt.pubkey) && !memberDocTypeOk(_rd) && !relayGatesType(_rd)
           && !(CHURCH_PUBS.has(evt.pubkey) || _rIsNetwork);
+        const _docCap = _lastRefusalDocCap;
         rejectLog(evt, ws, _stale ? 'care request from a build that predates self-naming ids'
           : _undeclared ? 'undeclared document type ' + _rd.slice(0, 40) + ' from a member'
+          : _docCap ? 'document limit reached for ' + (evt.pubkey || '').slice(0, 12)
           : 'not a member or not permitted for this group');
         ws.send(JSON.stringify(['OK', evt.id, false, _stale
           ? 'blocked: please update the app to ask for help — this version cannot send a request'
           : _undeclared ? 'blocked: undeclared document type — this relay has no rule for it, and a member may not write one'
+          : _docCap ? 'rate-limited: document limit reached — please contact a steward'
           : 'blocked: not a member or not permitted for this group']));
         return;
       }
