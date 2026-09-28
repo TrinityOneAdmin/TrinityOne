@@ -8228,7 +8228,7 @@ window.Steward = {
     // steward-chosen order first (groups without an order fall to the end, by age)
     const emit = () => { const arr = [...byId.values()].sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || (a.ts || 0) - (b.ts || 0)); try { localStorage.setItem(CACHE_KEY, JSON.stringify(arr)); } catch {} onGroups(arr); };
     // paint cached groups instantly so the page doesn't flash empty before the relay answers
-    try { const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || '[]'); if (Array.isArray(cached)) { _seedFromCache(versions, byId, cached, _consoleDisplay); if (cached.length) onGroups(cached); } } catch {}
+    try { const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || '[]'); if (Array.isArray(cached)) { _seedFromCache(versions, byId, cached, _consoleDisplay); for (const g of cached) if (g && g.encrypted) _sealedGroupIds.add(g.id); if (cached.length) onGroups(cached); } } catch {}
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
@@ -8240,7 +8240,7 @@ window.Steward = {
         // made to agree with each other while the two people HOLDING THE PENS each saw a different rota, and
         // every correction flipped the winner church-wide. Round 9's collision started here.
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { _forgetById(versions, byId, id, e.pubkey, e.created_at, _consoleDisplay, { churchPub: pub, targets: _tombstoneTargets(e), mayName: _consoleChurchVoice }); emit(); return; }
-        try { const g = JSON.parse(e.content); if (g.encrypted) _sealedGroupIds.add(id); _absorbById(versions, byId, id, { id, ...g, ts: e.created_at, _by: e.pubkey }, _consoleDisplay); emit(); } catch {}
+        try { const g = JSON.parse(e.content); if (g.encrypted) _sealedGroupIds.add(id); else _sealedGroupIds.delete(id); _absorbById(versions, byId, id, { id, ...g, ts: e.created_at, _by: e.pubkey }, _consoleDisplay); emit(); } catch {}
       },
       oneose() { emit(); },
     });

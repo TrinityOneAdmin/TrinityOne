@@ -13,6 +13,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { fnBody } from './test-slice.mjs';
 
 const FELLOWSHIP = readFileSync(new URL('../vendor/fellowship.js', import.meta.url), 'utf8');
 
@@ -31,12 +32,14 @@ test('the lock handler clears the signing key in the shipped bundle', () => {
 });
 
 test('signAuth returns null when sk is null — the shipped bundle, run', async () => {
-  // Lift signAuth from the bundle and call it with sk=null.
-  // This is the executable proof: even if the structural test passes,
-  // signAuth must actually refuse when the key is absent.
-  const sigIdx = FELLOWSHIP.indexOf('async signAuth(url) {');
-  assert.notEqual(sigIdx, -1, 'signAuth is missing from the shipped bundle');
-  // Extract just enough to see the guard
-  const body = FELLOWSHIP.slice(sigIdx, sigIdx + 200);
-  assert.match(body, /if\s*\(\s*!sk\s*\)/, 'signAuth does not guard on !sk — it would sign with a null key');
+  const body = fnBody(FELLOWSHIP, 'async signAuth(url) {', 'signAuth');
+  const scope = {
+    sk: null,
+    window: { Fellowship: { ready: Promise.resolve() } },
+    finalizeEvent2: () => ({ id: 'should-not-reach' }),
+    Math, Date, Promise, console,
+  };
+  const fn = new Function('scope', 'with (scope) { return ({ ' + body + ' }); }')(scope);
+  const result = await fn.signAuth('http://example.com');
+  assert.equal(result, null, 'signAuth did not refuse — it would sign with a null key');
 });

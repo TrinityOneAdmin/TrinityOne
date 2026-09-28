@@ -21591,6 +21591,7 @@ zoo`.split("\n");
         const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || "[]");
         if (Array.isArray(cached)) {
           _seedFromCache(versions, byId, cached, _consoleDisplay);
+          for (const g of cached) if (g && g.encrypted) _sealedGroupIds.add(g.id);
           if (cached.length) onGroups(cached);
         }
       } catch {
@@ -21612,6 +21613,7 @@ zoo`.split("\n");
           try {
             const g = JSON.parse(e.content);
             if (g.encrypted) _sealedGroupIds.add(id);
+            else _sealedGroupIds.delete(id);
             _absorbById(versions, byId, id, { id, ...g, ts: e.created_at, _by: e.pubkey }, _consoleDisplay);
             emit();
           } catch {
