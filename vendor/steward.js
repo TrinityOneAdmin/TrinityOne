@@ -15515,6 +15515,7 @@ zoo`.split("\n");
     }
   }
   var _skeys = {};
+  var _sealedGroupIds = /* @__PURE__ */ new Set();
   var GROUP_RING_MAX = 12;
   var _srev = {};
   var _senvTs = {};
@@ -19471,7 +19472,12 @@ zoo`.split("\n");
           body = encrypt3(content || "", gkey);
           encTag = [["enc", "1"]];
         } catch (e) {
+          console.warn("[steward] sealed-room encryption failed", e);
+          return Promise.resolve(null);
         }
+      } else if (group && _sealedGroupIds.has(group)) {
+        console.warn("[steward] refusing plaintext post into sealed room \u2014 no key for", group);
+        return Promise.resolve(null);
       }
       return publish(feChurch({ kind: 1, created_at: now(), tags: [["t", NET], ["t", group || "announce"], ["p", pub], ...encTag], content: body }));
     },
@@ -21604,7 +21610,9 @@ zoo`.split("\n");
             return;
           }
           try {
-            _absorbById(versions, byId, id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey }, _consoleDisplay);
+            const g = JSON.parse(e.content);
+            if (g.encrypted) _sealedGroupIds.add(id);
+            _absorbById(versions, byId, id, { id, ...g, ts: e.created_at, _by: e.pubkey }, _consoleDisplay);
             emit();
           } catch {
           }

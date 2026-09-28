@@ -860,6 +860,7 @@ function _loadVoice() {
   try { _publicVoices = JSON.parse(lsGet(_voicesKey()) || '{}') || {}; } catch (e) { _publicVoices = {}; }
 }
 const _skeys = {};   // groupId -> KEY RING [current, ...superseded], each Uint8Array(32) (church-side cache)
+const _sealedGroupIds = new Set();
 const GROUP_RING_MAX = 12;   // bound the envelope, and match the care key's ring exactly (see _careKeyRing).
 // 32 was too many now that every envelope carries the ring sealed PER RECIPIENT: a large church multiplied
 // that by its member count and pushed the event past the relay's 1 MB maxPayload. AUDIT-2026-07-27.
@@ -5874,8 +5875,13 @@ window.Steward = {
   publishPost(content, group) {
     if (!sk) return Promise.resolve(null);
     let body = content || '', encTag = [];
-    const gkey = group && (_skeys[group] || [])[0];   // encrypted group → seal the post under the CURRENT key (ring[0])
-    if (gkey) { try { body = nip44e(content || '', gkey); encTag = [['enc', '1']]; } catch (e) {} }
+    const gkey = group && (_skeys[group] || [])[0];
+    if (gkey) {
+      try { body = nip44e(content || '', gkey); encTag = [['enc', '1']]; } catch (e) { console.warn('[steward] sealed-room encryption failed', e); return Promise.resolve(null); }
+    } else if (group && _sealedGroupIds.has(group)) {
+      console.warn('[steward] refusing plaintext post into sealed room — no key for', group);
+      return Promise.resolve(null);
+    }
     return publish(feChurch({ kind: 1, created_at: now(), tags: [['t', NET], ['t', group || 'announce'], ['p', pub], ...encTag], content: body }));
   },
   // SAFETY CHECK (emergency "mark as safe" roll-call). Start one for the managed church — members are alerted
@@ -8234,7 +8240,7 @@ window.Steward = {
         // made to agree with each other while the two people HOLDING THE PENS each saw a different rota, and
         // every correction flipped the winner church-wide. Round 9's collision started here.
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { _forgetById(versions, byId, id, e.pubkey, e.created_at, _consoleDisplay, { churchPub: pub, targets: _tombstoneTargets(e), mayName: _consoleChurchVoice }); emit(); return; }
-        try { _absorbById(versions, byId, id, { id, ...JSON.parse(e.content), ts: e.created_at, _by: e.pubkey }, _consoleDisplay); emit(); } catch {}
+        try { const g = JSON.parse(e.content); if (g.encrypted) _sealedGroupIds.add(id); _absorbById(versions, byId, id, { id, ...g, ts: e.created_at, _by: e.pubkey }, _consoleDisplay); emit(); } catch {}
       },
       oneose() { emit(); },
     });

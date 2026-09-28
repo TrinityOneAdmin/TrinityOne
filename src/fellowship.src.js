@@ -2560,7 +2560,12 @@ function reconnectAll() {
   // nudge the app to re-run its serving subscriptions (connTick) → fresh, authenticated sockets
   try { window.dispatchEvent(new CustomEvent('trinity-reconnect')); } catch (e) {}
 }
-window.addEventListener('trinity-identity-lock', () => { deriveFromIdentity().catch(() => {}); });
+window.addEventListener('trinity-identity-lock', () => {
+  sk = null;
+  pub = null;
+  window.Fellowship.myPubkey = null;
+  reconnectAll();
+});
 
 // ── OUTBOX (UX-AUDIT-2026-07-20 E1) ───────────────────────────────────────────────────────────────
 // A message that couldn't be sent used to be gone: the composer cleared, the transport logged a warning,

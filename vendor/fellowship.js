@@ -8830,8 +8830,10 @@
     }
   }
   window.addEventListener("trinity-identity-lock", () => {
-    deriveFromIdentity().catch(() => {
-    });
+    sk = null;
+    pub = null;
+    window.Fellowship.myPubkey = null;
+    reconnectAll();
   });
   var OUTBOX_KEY = "trinityone.outbox";
   var OUTBOX_FAILED_KEY = "trinityone.outbox.failed";
