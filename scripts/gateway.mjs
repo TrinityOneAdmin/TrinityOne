@@ -1585,6 +1585,8 @@ function adminOK(req, allowQuery) { const t = reqToken(req, allowQuery); if (!t 
 // event body would put refused messages in the clear on the relay's disk, which is precisely what the rest
 // of this file works to avoid.
 const REJECT_LOG = join(DATA_DIR, 'rejected.log');
+const REJECT_LOG_MAX = 5 * 1024 * 1024;
+let _rejectLogSize = -1;
 function rejectLog(evt, ws, why) {
   try {
     const d = ((evt.tags || []).find(t => t[0] === 'd') || [])[1] || '';
@@ -1596,7 +1598,10 @@ function rejectLog(evt, ws, why) {
       d: d.slice(0, 60),
       why,
     }) + '\n';
+    if (_rejectLogSize < 0) { try { _rejectLogSize = statSync(REJECT_LOG).size; } catch { _rejectLogSize = 0; } }
+    if (_rejectLogSize >= REJECT_LOG_MAX) { try { renameSync(REJECT_LOG, REJECT_LOG + '.1'); } catch {} _rejectLogSize = 0; }
     appendFileSync(REJECT_LOG, line);
+    _rejectLogSize += line.length;
   } catch (e) { /* logging must never break the relay */ }
 }
 const STARTED_AT = Date.now();
@@ -4326,7 +4331,8 @@ function accept(e) {
       if (d.startsWith(ROSTER_D)) { const src = ROSTER_BY.get(d.slice(ROSTER_D.length)); if (!idOwnerOk(src && src.cp, e, d.slice(ROSTER_D.length))) return false; }
       return leaderOf(ownCp()) || stewardCan(e.pubkey, namedChurch(e), 'content');   // SECURITY-AUDIT-2026-06-24 M1: gate category writes
     }
-    if (d.startsWith(MEMBER_D) || d.startsWith(NETWORK_D)) return true;   // joining a church / a church joining a network
+    if (d.startsWith(NETWORK_D)) return CHURCH_PUBS.has(e.pubkey);   // only a church on this box may declare its network
+    if (d.startsWith(MEMBER_D)) { const cp = d.slice(MEMBER_D.length); return CHURCH_PUBS.has(cp) || store.query({ kinds: [30078], authors: [e.pubkey], '#d': [d], limit: 1 }).length > 0; }
     if (d.startsWith(STEWARDREQ_D)) {                          // requesting to steward a church — capped (L1: anti-flood)
       // AUDIT-2026-07-30, the sixth of the unscoped write rules. `isMember` is relay-wide, so a member of ANY
       // co-tenant church took the uncapped path into this church's console — and the anti-flood cap below
@@ -6851,7 +6857,8 @@ function serveStatic(req, res) {
     let child;
     try {
       child = spawn('tar', ['-czf', '-', '-C', DATA_DIR,
-        '--exclude=./cloudflared.log', '--exclude=./.restore-pending', '--exclude=./.bundle-cache', '--exclude=./relay-launch.log', '.'],
+        '--exclude=./cloudflared.log', '--exclude=./.restore-pending', '--exclude=./.bundle-cache', '--exclude=./relay-launch.log',
+        '--exclude=./rejected.log', '--exclude=./rejected.log.1', '.'],
         { stdio: ['ignore', 'pipe', 'ignore'] });
     } catch (e) { res.writeHead(500, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end('{"error":"tar not available on this box"}'); return; }
     res.writeHead(200, { 'Content-Type': 'application/gzip', 'Cache-Control': 'no-store', 'Content-Disposition': 'attachment; filename="' + fname + '"', ...SEC_HEADERS });
