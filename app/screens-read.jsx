@@ -1027,7 +1027,15 @@ function ReadScreen({ ctx }) {
             <div style={{ width: 40, height: 3, borderRadius: 2, background: 'var(--clay)', margin: '14px auto 0', opacity: .5 }} />
           </div>
 
-          {!compare ? (
+          {verses.length === 0 && !Bible.books(version).includes(loc.book) ? (
+            <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--ink-2)' }}>
+              <div style={{ fontSize: 15, lineHeight: 1.55, marginBottom: 18 }}>{bname} isn't in {version}</div>
+              <button onClick={() => { const b = Bible.books(version)[0]; if (b) ctx.setLoc({ book: b, chap: 1 }); }}
+                style={{ padding: '10px 20px', borderRadius: 10, background: 'var(--clay)', color: 'var(--on-clay)', border: 'none', fontWeight: 700, fontSize: 14, fontFamily: 'var(--font-ui)', cursor: 'pointer' }}>
+                Go to {Bible.bookName(Bible.books(version)[0])} 1
+              </button>
+            </div>
+          ) : !compare ? (
             <p className={cx('reader-body', !showStrongs && 'hide-strong')}
               style={{ fontFamily: readFont, fontSize: baseSize, lineHeight: 1.5, color: 'var(--ink)', margin: 0, textWrap: 'pretty' }}>
               {verses.map((row) => {
