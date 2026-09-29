@@ -7170,26 +7170,29 @@ window.Steward = {
     });
     return () => { try { sub.close(); } catch {} };
   },
-  subscribeGuardians(onMap) {   // the church's confirmed map → { childPub: [parentPub, …] }
-    let cur = {}, latest = 0;
+  subscribeGuardians(onData) {   // delivers { links: { childPub: [parentPub, …] }, closed: { "child|parent": unixTs } }
+    let cur = {}, curClosed = {}, latest = 0;
+    const _emit = () => onData({ links: cur, closed: curClosed });
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (d !== GUARDIANS_D + pub) return;
         if (_authFuture(e) || !_byChurch(e)) return;   // OWNER-ONLY safeguarding doc
         if (e.created_at < latest) return; latest = e.created_at;   // newest wins — a stale copy must not restore a removed guardian link
-        try { cur = (JSON.parse(e.content).links) || {}; } catch { cur = {}; }
-        onMap(cur);
+        try { const parsed = JSON.parse(e.content); cur = parsed.links || {}; curClosed = parsed.closed || {}; } catch { cur = {}; curClosed = {}; }
+        _emit();
       },
-      oneose() { onMap(cur); },
+      oneose() { _emit(); },
     });
     return () => { try { sub.close(); } catch {} };
   },
-  setGuardians(links) {   // replace the whole parent↔child map: { childPub: [parentPub, …] }
+  setGuardians(links, closed) {   // replace the whole parent↔child map: { childPub: [parentPub, …] }, closed: { "child|parent": unixTs }
     _requireTrustedView('parent links');
     if (!sk) return Promise.resolve(null);
     const clean = {};
     for (const [c, ps] of Object.entries(links || {})) { const arr = [...new Set((ps || []).filter(Boolean))]; if (c && arr.length) clean[c] = arr; }
+    const payload = { links: clean };
+    if (closed && Object.keys(closed).length) payload.closed = closed;
     // ALL RELAYS, NOT THE FIRST TO ANSWER. A relay polices a church's traffic with its OWN copy of this
     // document; a relay that never received it cannot police anything and fails open. `publish()` is
     // Promise.any — it resolves the moment one relay accepts — while members' apps fan their messages to every
@@ -7199,7 +7202,7 @@ window.Steward = {
     // A partial write now reports FAILURE. A steward who ticks "mark as a child" and sees it succeed has been
     // told the protection is in force; if the record reached one relay of three, it is in force on one of
     // three. An error is recoverable, false reassurance is not.
-    return _skewGate(() => _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', GUARDIANS_D + pub], ['t', NET]], content: JSON.stringify({ links: clean }) }), sk)));
+    return _skewGate(() => _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', GUARDIANS_D + pub], ['t', NET]], content: JSON.stringify(payload) }), sk)));
   },
   // safeguarding v2: tell a STEWARD-LINKED parent (who never set the child up on their own device, so has no
   // local record) that they're now a guardian — otherwise the child never appears in their app. Church-signed,
@@ -7226,12 +7229,14 @@ window.Steward = {
   // someone they are a child's guardian after the church has decided they are not, which in safeguarding is
   // its own kind of wrong. unlinkParent's own comment already said "removing a link matters more than adding
   // one"; this is the half that was missing.
-  notifyGuardianRemoved(parentPubIn, childPubIn) {
+  notifyGuardianRemoved(parentPubIn, childPubIn, closedMap) {
     if (!sk) return Promise.resolve(null);
     const parentPub = toPubHex(parentPubIn), childPub = toPubHex(childPubIn);
     if (!parentPub || !childPub) return Promise.resolve(null);
+    const removedAll = [];
+    if (closedMap) for (const k of Object.keys(closedMap)) { const [c] = k.split('|'); if (k.endsWith('|' + parentPub) && c) removedAll.push(c); }
     let content;
-    try { content = nip44e(JSON.stringify({ removed: childPub, church: churchPub }), nip44ck(sk, parentPub)); }
+    try { content = nip44e(JSON.stringify({ removed: childPub, removedAll: removedAll.length ? removedAll : undefined, church: churchPub }), nip44ck(sk, parentPub)); }
     catch (e) { return Promise.resolve(null); }
     return publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', GUARDNOTICE_D + parentPub], ['t', NET], ['p', parentPub]], content }), sk));
   },
@@ -7538,9 +7543,17 @@ window.Steward = {
         nextG[childK] = [...new Set([...low(nextG[childK] || parents), newH])];
       }
     }
+    // Move closed entries from old key to new key (both as child and as parent)
+    const gc = o.guardiansClosed || {};
+    let nextGC = null;
+    for (const k of Object.keys(gc)) {
+      const [c, p] = k.split('|');
+      const movedC = c === oldH ? newH : c, movedP = p === oldH ? newH : p;
+      if (movedC !== c || movedP !== p) { nextGC = nextGC || { ...gc }; nextGC[movedC + '|' + movedP] = gc[k]; delete nextGC[k]; }
+    }
     // The half no steward can repair by hand: re-ticking "child" restores the marking and still leaves the
     // parent unable to message their own child. Reported as done, it would never be looked at again.
-    if (nextG && !await w(() => window.Steward.setGuardians(nextG))) throw new Error('Couldn\u2019t save the parent link, so nothing was changed. Check your connection and try again \u2014 this is the part that cannot be put right by hand afterwards.');
+    if (nextG && !await w(() => window.Steward.setGuardians(nextG, nextGC || gc))) throw new Error('Couldn\u2019t save the parent link, so nothing was changed. Check your connection and try again \u2014 this is the part that cannot be put right by hand afterwards.');
 
     // (3) Record the vouch FIRST, then admit. If admitting failed on its own the member would be able to post
     // while the church still showed two of them; this order fails the safer way round. It only fails that way

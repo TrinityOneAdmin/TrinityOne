@@ -1519,6 +1519,8 @@ function App() {
   const _churchNameFor = (churches.find(c => c.id === activeChurch) || {}).name || 'Your church';
   const NOTIF_WINDOW = 60 * 24 * 3600;   // only surface things from the last ~60 days
   const _nowSec = Math.floor(Date.now() / 1000);
+  const _childSafeGroupIds = React.useMemo(() => { const s = new Set(); churchGroups.forEach(g => { if (g && g.childsafe) s.add(g.id); }); return s; }, [churchGroups]);
+  const _eventVisibleToMe = (e) => !safeguard.isMinor || !e.groupId || _childSafeGroupIds.has(e.groupId);
   const notifications = React.useMemo(() => {   // P8: recompute only when a notification source changes, not every render
     const out = [];
     netAnnouncements.forEach(a => out.push({ id: 'net:' + a.id, kind: 'network', group: a._network || 'Network', text: a.text, ts: a.ts, detail: true }));
@@ -1526,9 +1528,9 @@ function App() {
     churchDevos.forEach(d => out.push({ id: 'devo:' + d.id, kind: 'devotional', group: _churchNameFor, text: 'Shared a devotional · ' + (d.title || ''), ts: d.ts, devo: d }));
     if (pinnedSermon && pinnedSermon.sha256) out.push({ id: 'sermon:' + pinnedSermon.id, kind: 'sermon', group: _churchNameFor, text: (String(pinnedSermon.mime || '').startsWith('video') ? 'New video · ' : 'New audio clip · ') + (pinnedSermon.title || ''), ts: pinnedSermon.ts || pinnedSermon.at, sermon: pinnedSermon });
     churchPlans.forEach(p => out.push({ id: 'plan:' + p.id, kind: 'plan', group: _churchNameFor, text: 'Shared a reading plan · ' + (p.title || ''), ts: p.ts, go: 'plans' }));
-    churchEvents.forEach(e => out.push({ id: 'evt:' + e.id, kind: 'event', group: _churchNameFor, text: 'New event · ' + (e.title || ''), ts: e.ts, go: 'event', event: e }));
+    churchEvents.filter(_eventVisibleToMe).forEach(e => out.push({ id: 'evt:' + e.id, kind: 'event', group: _churchNameFor, text: 'New event · ' + (e.title || ''), ts: e.ts, go: 'event', event: e }));
     return out.filter(n => n.ts && (_nowSec - n.ts) < NOTIF_WINDOW).sort((a, b) => (b.ts || 0) - (a.ts || 0)).slice(0, 40);
-  }, [netAnnouncements, broadcastMsgs, churchDevos, pinnedSermon, churchPlans, churchEvents, churchGroups, _churchNameFor]);   // eslint-disable-line
+  }, [netAnnouncements, broadcastMsgs, churchDevos, pinnedSermon, churchPlans, churchEvents, churchGroups, safeguard, _churchNameFor]);   // eslint-disable-line
   // unread tracking (drives the bell badge); "seen" = newest ts the user has opened the panel at
   const [netSeenTs, setNetSeenTs] = useA(() => { try { return Number(localStorage.getItem('trinityone.net-seen') || 0); } catch { return 0; } });
   const netUnread = notifications.filter(n => (n.ts || 0) > netSeenTs).length;
@@ -1571,7 +1573,7 @@ function App() {
   // onto every occurrence, so the maximum is the same either way) and writes the answer.
   const markServingSeen = () => {
     if (!servSeenKey) return;
-    const top = servingSeenStamp([...churchEvents, ...groupEvents, ...netEvents], Math.floor(Date.now() / 1000));
+    const top = servingSeenStamp([...churchEvents.filter(_eventVisibleToMe), ...groupEvents, ...netEvents], Math.floor(Date.now() / 1000));
     try { localStorage.setItem(servSeenKey, String(top)); } catch {}
     setServSeenTs(top);
   };
@@ -2030,7 +2032,7 @@ function App() {
     openChurchDevo: (d) => setOpenDevo(d),
     // serving & events (church's own + aggregated from its network)
     servPending, servConfirmed, servDeclined, servNext, myRosterTeams,
-    churchEvents: (() => { const seen = new Set(churchEvents.map(e => e.id).filter(Boolean)); const all = [...churchEvents, ...groupEvents.filter(e => !seen.has(e.id)), ...netEvents]; return window.expandEvents ? window.expandEvents(all, new Date(Date.now() - 7 * 864e5).toISOString().slice(0, 10), 180) : all; })(),   // expand recurring church meetings into occurrences
+    churchEvents: (() => { const visible = churchEvents.filter(_eventVisibleToMe); const seen = new Set(visible.map(e => e.id).filter(Boolean)); const all = [...visible, ...groupEvents.filter(e => !seen.has(e.id)), ...netEvents]; return window.expandEvents ? window.expandEvents(all, new Date(Date.now() - 7 * 864e5).toISOString().slice(0, 10), 180) : all; })(),   // expand recurring church meetings into occurrences
     myRsvps,
     netAnnouncements, netUnread, markNetSeen, notifications,
     servingSeenTs: servSeenTs, markServingSeen,   // the Serving & events card's "something new" mark (see the block above)

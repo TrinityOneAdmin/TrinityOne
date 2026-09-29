@@ -20614,8 +20614,9 @@ zoo`.split("\n");
         }
       };
     },
-    subscribeGuardians(onMap) {
-      let cur = {}, latest = 0;
+    subscribeGuardians(onData) {
+      let cur = {}, curClosed = {}, latest = 0;
+      const _emit = () => onData({ links: cur, closed: curClosed });
       const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
@@ -20624,14 +20625,17 @@ zoo`.split("\n");
           if (e.created_at < latest) return;
           latest = e.created_at;
           try {
-            cur = JSON.parse(e.content).links || {};
+            const parsed = JSON.parse(e.content);
+            cur = parsed.links || {};
+            curClosed = parsed.closed || {};
           } catch {
             cur = {};
+            curClosed = {};
           }
-          onMap(cur);
+          _emit();
         },
         oneose() {
-          onMap(cur);
+          _emit();
         }
       });
       return () => {
@@ -20641,7 +20645,7 @@ zoo`.split("\n");
         }
       };
     },
-    setGuardians(links) {
+    setGuardians(links, closed) {
       _requireTrustedView("parent links");
       if (!sk) return Promise.resolve(null);
       const clean5 = {};
@@ -20649,7 +20653,9 @@ zoo`.split("\n");
         const arr = [...new Set((ps || []).filter(Boolean))];
         if (c && arr.length) clean5[c] = arr;
       }
-      return _skewGate(() => _publishToRelays(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", GUARDIANS_D + pub], ["t", NET]], content: JSON.stringify({ links: clean5 }) }), sk)));
+      const payload = { links: clean5 };
+      if (closed && Object.keys(closed).length) payload.closed = closed;
+      return _skewGate(() => _publishToRelays(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", GUARDIANS_D + pub], ["t", NET]], content: JSON.stringify(payload) }), sk)));
     },
     // safeguarding v2: tell a STEWARD-LINKED parent (who never set the child up on their own device, so has no
     // local record) that they're now a guardian — otherwise the child never appears in their app. Church-signed,
@@ -20678,13 +20684,18 @@ zoo`.split("\n");
     // someone they are a child's guardian after the church has decided they are not, which in safeguarding is
     // its own kind of wrong. unlinkParent's own comment already said "removing a link matters more than adding
     // one"; this is the half that was missing.
-    notifyGuardianRemoved(parentPubIn, childPubIn) {
+    notifyGuardianRemoved(parentPubIn, childPubIn, closedMap) {
       if (!sk) return Promise.resolve(null);
       const parentPub = toPubHex(parentPubIn), childPub = toPubHex(childPubIn);
       if (!parentPub || !childPub) return Promise.resolve(null);
+      const removedAll = [];
+      if (closedMap) for (const k of Object.keys(closedMap)) {
+        const [c] = k.split("|");
+        if (k.endsWith("|" + parentPub) && c) removedAll.push(c);
+      }
       let content;
       try {
-        content = encrypt3(JSON.stringify({ removed: childPub, church: churchPub }), getConversationKey(sk, parentPub));
+        content = encrypt3(JSON.stringify({ removed: childPub, removedAll: removedAll.length ? removedAll : void 0, church: churchPub }), getConversationKey(sk, parentPub));
       } catch (e) {
         return Promise.resolve(null);
       }
@@ -20994,7 +21005,18 @@ zoo`.split("\n");
           nextG[childK] = [.../* @__PURE__ */ new Set([...low(nextG[childK] || parents), newH])];
         }
       }
-      if (nextG && !await w(() => window.Steward.setGuardians(nextG))) throw new Error("Couldn\u2019t save the parent link, so nothing was changed. Check your connection and try again \u2014 this is the part that cannot be put right by hand afterwards.");
+      const gc = o.guardiansClosed || {};
+      let nextGC = null;
+      for (const k of Object.keys(gc)) {
+        const [c, p] = k.split("|");
+        const movedC = c === oldH ? newH : c, movedP = p === oldH ? newH : p;
+        if (movedC !== c || movedP !== p) {
+          nextGC = nextGC || { ...gc };
+          nextGC[movedC + "|" + movedP] = gc[k];
+          delete nextGC[k];
+        }
+      }
+      if (nextG && !await w(() => window.Steward.setGuardians(nextG, nextGC || gc))) throw new Error("Couldn\u2019t save the parent link, so nothing was changed. Check your connection and try again \u2014 this is the part that cannot be put right by hand afterwards.");
       const pairs = [...(o.reseats || []).filter((p) => p && p.new !== newH), { old: oldH, new: newH, name: o.name || "", at: now() }];
       if (!await w(() => window.Steward.setReseats(pairs))) throw new Error("Couldn\u2019t record the reconnection, so nothing was changed. Check your connection and try again.");
       if (!await w(() => window.Steward.setAdmitted([.../* @__PURE__ */ new Set([...o.admitted || [], newH])]))) throw new Error("Recorded the reconnection, but couldn\u2019t let the new phone in. Open Members and approve them, or run this again.");

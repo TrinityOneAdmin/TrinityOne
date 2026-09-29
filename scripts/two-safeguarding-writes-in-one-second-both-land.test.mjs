@@ -50,7 +50,7 @@ const SOMEBODY2 = getPublicKey(generateSecretKey());
 const WRITERS = [
   ['setMinors(pubkeys) {', 'setMinors', 'the church’s list of children'],
   ['setApproved(pubkeys, opts) {', 'setApproved', 'the cleared-to-work-with-children list'],
-  ['setGuardians(links) {', 'setGuardians', 'the parent↔child map'],
+  ['setGuardians(links, closed) {', 'setGuardians', 'the parent↔child map'],
   ['setStewards(pubkeys, caps, names) {', 'setStewards', 'the steward roster'],
   ['async grantCheckinPermission(opts) {', 'grantCheckinPermission', 'a children’s-desk clearance'],
   ['revokeCheckinPermission(person) {', 'revokeCheckinPermission', 'withdrawing a children’s-desk clearance'],

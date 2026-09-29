@@ -372,7 +372,7 @@ async function blockOnMembersPage() {
       useStewardChurch: () => ({ name: 'St Aidan', features: {} }),
       useStewardBlocked: () => [],
       useStewardSafeguard: () => ({ loaded: true, minorsKnown: true, clearedKnown: true, cleared: {}, minors: [], approved: [], nophoto: [] }),
-      useStewardGuardians: () => ({}), useStewardJoinPolicy: () => false, useStewardAdmitted: () => [],
+      useStewardGuardians: () => ({ links: {}, closed: {} }), useStewardJoinPolicy: () => false, useStewardAdmitted: () => [],
       useStewardMembers: () => [
         { pubkey: memberPub, npub: 'npub1aa', name: 'Bram Whitlock', count: 2, lastTs: NOW - 3600, joined: NOW - 86400 },
         { pubkey: strangerPub, npub: 'npub1bb', name: 'Ada Nwosu', count: 1, lastTs: NOW - 60, joined: NOW - 8000 },

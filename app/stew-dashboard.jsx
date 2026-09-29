@@ -5353,7 +5353,8 @@ function ReseatModal({ member, memberName, realName, isMinor, admittedList, onCl
   // the youth clearance, the parent link, and the record the member's own phone reads. Those lists live in
   // the console's subscriptions, so they are read here and handed to the engine, which owns the ordering.
   const sgNow = window.useStewardSafeguard ? window.useStewardSafeguard() : { minors: [], approved: [] };
-  const guardiansNow = window.useStewardGuardians ? window.useStewardGuardians() : {};
+  const _gdCheckin = window.useStewardGuardians ? window.useStewardGuardians() : { links: {}, closed: {} };
+  const guardiansNow = _gdCheckin.links || {};
   const blockedNow = window.useStewardBlocked ? window.useStewardBlocked() : [];
   const [taken, setTaken] = React.useState(false);   // "lost, or taken?" — see the note by the checkbox
   const [scan, setScan] = React.useState(false);
@@ -5807,7 +5808,7 @@ function DashMembers() {
         if (kept.length) nextG[c] = kept;
       });
       let okG = null;
-      try { okG = await Promise.resolve(window.Steward.setGuardians(nextG)); } catch (e) { okG = null; }
+      try { okG = await Promise.resolve(window.Steward.setGuardians(nextG, guardiansClosed)); } catch (e) { okG = null; }
       if (!okG) {
         setMinorNotice({ pk, tone: 'fail', text: (nameByPub[pk] || 'They') + ' is marked as a child, but they are STILL listed as a guardian of '
           + unlinkedFrom.map(c => nameByPub[c] || 'a child').join(', ') + ' — the relay didn’t accept the removal. A child is never a guardian; try again.' });
@@ -5888,8 +5889,10 @@ function DashMembers() {
   };
   // safeguarding v2: parent↔child links — pending parent requests + the confirmed map
   const guardReqs = window.useStewardGuardianRequests ? window.useStewardGuardianRequests() : [];
-  const guardians = window.useStewardGuardians ? window.useStewardGuardians() : {};
-  const pendingReqs = guardReqs.filter(r => !((guardians[r.child] || []).includes(r.parent)));
+  const _guardData = window.useStewardGuardians ? window.useStewardGuardians() : { links: {}, closed: {} };
+  const guardians = _guardData.links || {};
+  const guardiansClosed = _guardData.closed || {};
+  const pendingReqs = guardReqs.filter(r => !((guardians[r.child] || []).includes(r.parent)) && !guardiansClosed[r.child + '|' + r.parent]);
   const parentSet = new Set(); Object.values(guardians).forEach(ps => (ps || []).forEach(p => parentSet.add(p)));
   const nameByPub = {}; members.forEach(m => { if (m.name) nameByPub[m.pubkey] = m.name; });
   // C1: the guardian-link card must show identities a forger CANNOT control — the roster name we resolved
@@ -5921,7 +5924,7 @@ function DashMembers() {
     }
     const nextG = { ...guardians, [r.child]: [...new Set([...(guardians[r.child] || []), r.parent])] };
     let okG = null;
-    try { okG = await Promise.resolve(window.Steward.setGuardians(nextG)); } catch (e) { okG = null; }
+    try { okG = await Promise.resolve(window.Steward.setGuardians(nextG, guardiansClosed)); } catch (e) { okG = null; }
     if (!okG) {
       setMinorNotice({ pk: r.child, tone: 'fail', text: 'Couldn’t confirm that guardian link — the relay didn’t accept it, '
         + 'so nobody has been linked and the request is still waiting. Check the relay and try again.' });
@@ -5945,6 +5948,14 @@ function DashMembers() {
     _reseal(nextM, sg.approved || [], [r.child], nextG);
     return true;
   };
+  const declineGuardian = async (r) => {
+    const nextClosed = { ...guardiansClosed, [r.child + '|' + r.parent]: Math.floor(Date.now() / 1000) };
+    let ok = null;
+    try { ok = await Promise.resolve(window.Steward.setGuardians(guardians, nextClosed)); } catch (e) { ok = null; }
+    if (!ok) {
+      setMinorNotice({ pk: r.child, tone: 'fail', text: 'Couldn’t decline that request — the relay didn’t accept it, so it is still showing. Try again.' });
+    }
+  };
   // steward-initiated link (no parent request): pick an adult as the child's guardian, from the child's row
   const [linkChild, setLinkChild] = React.useState(null);
   const [reseatFor, setReseatFor] = React.useState(null);   // member who lost their 12 words and is back on a new key
@@ -5959,7 +5970,7 @@ function DashMembers() {
     if (childPub === parentPub || minorsSet.has(parentPub)) return;   // a parent must be a different, adult account
     const nextG = { ...guardians, [childPub]: [...new Set([...(guardians[childPub] || []), parentPub])] };
     let okG = null;
-    try { okG = await Promise.resolve(window.Steward.setGuardians(nextG)); } catch (e) { okG = null; }
+    try { okG = await Promise.resolve(window.Steward.setGuardians(nextG, guardiansClosed)); } catch (e) { okG = null; }
     if (!okG) {
       setMinorNotice({ pk: childPub, tone: 'fail', text: 'Couldn’t save that guardian link — the relay didn’t accept it, '
         + 'so nobody has been linked. Check the relay and try again.' });
@@ -5982,9 +5993,9 @@ function DashMembers() {
   };
   const unlinkParent = async (childPub, parentPub) => {
     const cur = (guardians[childPub] || []).filter(p => p !== parentPub);
-    const next = { ...guardians }; if (cur.length) next[childPub] = cur; else delete next[childPub];
+    const nextG = { ...guardians }; if (cur.length) nextG[childPub] = cur; else delete nextG[childPub];
     let okG = null;
-    try { okG = await Promise.resolve(window.Steward.setGuardians(next)); } catch (e) { okG = null; }
+    try { okG = await Promise.resolve(window.Steward.setGuardians(nextG, guardiansClosed)); } catch (e) { okG = null; }
     if (!okG) {
       // Failing to REMOVE a link is the worse direction: the adult stays a parent the child's app will always
       // let through. Never let the row imply it is gone.
@@ -5994,7 +6005,7 @@ function DashMembers() {
     }
     // Removing a link matters more than adding one: without this the child's phone keeps the old sealed answer
     // and goes on treating a removed adult as a parent it may always message.
-    _reseal(sg.minors || [], sg.approved || [], [childPub], next);
+    _reseal(sg.minors || [], sg.approved || [], [childPub], nextG);
     // ...and tell the PARENT'S app, which stores the link locally and had no other way to learn it was gone.
     if (window.Steward.notifyGuardianRemoved) window.Steward.notifyGuardianRemoved(parentPub, childPub);
   };
@@ -6452,7 +6463,10 @@ function DashMembers() {
                   <div style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--ink-3)', wordBreak: 'break-all', lineHeight: 1.3 }}>child {idOf(r.child)}</div>
                   <div style={{ marginTop: 5, fontSize: 11.5, color: 'var(--ink-3)' }}>Confirming lets this person DM the child directly and marks the child as under-18. Check both npubs are who you expect.</div>
                 </div>
-                <button onClick={() => approveGuardian(r)} disabled={minorsSet.has(r.parent)} aria-label={'Confirm guardian link: ' + knownName(r.parent) + ' for ' + knownName(r.child)} className="sk-btn sk-btn--clay" style={{ padding: '7px 13px', fontSize: 12.5, flexShrink: 0, opacity: minorsSet.has(r.parent) ? 0.5 : 1 }}><Icon name="check" size={14} color="var(--on-clay)" /> Confirm</button>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flexShrink: 0 }}>
+                  <button onClick={() => approveGuardian(r)} disabled={minorsSet.has(r.parent)} aria-label={'Confirm guardian link: ' + knownName(r.parent) + ' for ' + knownName(r.child)} className="sk-btn sk-btn--clay" style={{ padding: '7px 13px', fontSize: 12.5, opacity: minorsSet.has(r.parent) ? 0.5 : 1 }}><Icon name="check" size={14} color="var(--on-clay)" /> Confirm</button>
+                  <button onClick={() => declineGuardian(r)} aria-label={'Decline guardian request from ' + knownName(r.parent)} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: 'var(--ink-3)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 11.5, textAlign: 'center' }}>Decline</button>
+                </div>
               </div>
             ))}
             </div>
@@ -7201,7 +7215,8 @@ function DashCheckin() {
   const recs = window.useStewardCheckins ? window.useStewardCheckins() : [];
   const sg = window.useStewardSafeguard ? window.useStewardSafeguard() : { minors: [], minorsKnown: false };
   const minors = sg.minors || [];
-  const guardians = window.useStewardGuardians ? window.useStewardGuardians() : {};
+  const _gdCk = window.useStewardGuardians ? window.useStewardGuardians() : { links: {}, closed: {} };
+  const guardians = _gdCk.links || {};
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
   const nameFor = (pub) => { const m = members.find(x => x.pubkey === pub); return (m && m.name) || ('Child ' + (pub || '').slice(-6)); };
   // ADULT guardians only. A child wrongly left in another child's guardian list (D2) must never be printed as

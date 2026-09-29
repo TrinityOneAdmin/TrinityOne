@@ -6702,9 +6702,17 @@
   var SAFETY_D = "trinityone/safetycheck:";
   var SAFE_D = "trinityone/safe:";
   var FAMILY_KEY = "trinityone.family";
+  var FAMILY_REMOVED_KEY = "trinityone.family.removed";
   function _loadChildren() {
     try {
       return JSON.parse(localStorage.getItem(FAMILY_KEY) || "[]") || [];
+    } catch {
+      return [];
+    }
+  }
+  function _loadRemovedChildren() {
+    try {
+      return JSON.parse(localStorage.getItem(FAMILY_REMOVED_KEY) || "[]") || [];
     } catch {
       return [];
     }
@@ -6716,11 +6724,24 @@
       localStorage.setItem(FAMILY_KEY, JSON.stringify(list));
     } catch {
     }
+    if (link.viaSteward) {
+      const rm = _loadRemovedChildren().filter((c) => c !== link.child);
+      try {
+        localStorage.setItem(FAMILY_REMOVED_KEY, JSON.stringify(rm));
+      } catch {
+      }
+    }
   }
   function _removeChildLink(childPub) {
     const list = _loadChildren().filter((c) => c && c.child !== childPub);
     try {
       localStorage.setItem(FAMILY_KEY, JSON.stringify(list));
+    } catch {
+    }
+    const rm = _loadRemovedChildren();
+    if (!rm.includes(childPub)) rm.push(childPub);
+    try {
+      localStorage.setItem(FAMILY_REMOVED_KEY, JSON.stringify(rm));
     } catch {
     }
   }
@@ -6729,6 +6750,7 @@
     if (!pub || !cp) return Promise.resolve(0);
     return new Promise((resolve) => {
       let added = 0, done = false;
+      const removed = new Set(_loadRemovedChildren());
       const finish = () => {
         if (done) return;
         done = true;
@@ -6745,6 +6767,7 @@
           if ((e.tags || []).some((t) => t[0] === "deleted")) return;
           const child = d.slice("trinityone/guardreq:".length);
           if (!/^[0-9a-f]{64}$/i.test(child)) return;
+          if (removed.has(child)) return;
           if (_loadChildren().some((c) => c && c.child === child)) return;
           _saveChildLink({ child, name: "", churchPub: cp, ts: e.created_at || 0 });
           added++;
@@ -11284,6 +11307,9 @@
               window.dispatchEvent(new CustomEvent("trinity-guardian-removed", { detail: { child: dec.removed } }));
             } catch (x) {
             }
+            if (dec.removedAll && Array.isArray(dec.removedAll)) dec.removedAll.forEach((c) => {
+              if (c && c !== dec.removed) _removeChildLink(c);
+            });
             return;
           }
           if (!dec || !dec.child || dec.child === pub) return;

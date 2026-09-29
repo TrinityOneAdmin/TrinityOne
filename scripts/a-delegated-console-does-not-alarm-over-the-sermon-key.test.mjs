@@ -313,7 +313,7 @@ async function membersPage({ delegated, rotateMedia }) {
       useStewardGroups: () => [], useStewardStewards: () => [], useStewardChurch: () => ({ name: 'St Aidan', features: {} }),
       useStewardBlocked: () => [],
       useStewardSafeguard: () => ({ loaded: true, minorsKnown: true, clearedKnown: true, cleared: {}, minors: [], approved: [], nophoto: [] }),
-      useStewardGuardians: () => ({}), useStewardJoinPolicy: () => false, useStewardAdmitted: () => [],
+      useStewardGuardians: () => ({ links: {}, closed: {} }), useStewardJoinPolicy: () => false, useStewardAdmitted: () => [],
       useStewardMembers: () => [{ pubkey: MEMBER, npub: 'npub1aa', name: 'Bram Whitlock', count: 2, lastTs: NOW - 3600, joined: NOW - 86400 }],
       addEventListener() {}, removeEventListener() {},
       dispatchEvent: (e) => { fired.push({ type: e.type, detail: e.detail }); return true; },

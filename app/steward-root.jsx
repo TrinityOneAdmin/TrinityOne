@@ -237,7 +237,7 @@ window.usePendingStewards = makeSub(S, 'subscribeStewardRequests', () => []);
 // work until this line changed. An empty list plus "not known" is the honest starting state.
 window.useStewardSafeguard = makeSub(S, 'subscribeSafeguard', () => ({ minors: [], approved: [], minorsKnown: false }));
 window.useStewardGuardianRequests = makeSub(S, 'subscribeGuardianRequests', () => []);
-window.useStewardGuardians = makeSub(S, 'subscribeGuardians', () => ({}));
+window.useStewardGuardians = makeSub(S, 'subscribeGuardians', () => ({ links: {}, closed: {} }));
 window.useStewardJoinPolicy = makeSub(S, 'subscribeJoinPolicy', () => false);
 window.useStewardAdmitted = makeSub(S, 'subscribeAdmitted', () => []);
 window.useStewardReseats = makeSub(S, 'subscribeReseats', () => []);   // [{old,new,at}] — members who came back on a new key

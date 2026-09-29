@@ -79,7 +79,7 @@ async function membersPanel({ minors, guardians, requests = [], checkinCleared =
         setBlocked: () => Promise.resolve(true), setAdmitted: () => Promise.resolve(true),
         setMinors: (l) => { calls.minors.push(l); return Promise.resolve(true); },
         setApproved: () => Promise.resolve(true),
-        setGuardians: (m) => { calls.guardians.push(m); return Promise.resolve(true); },
+        setGuardians: (m, c) => { calls.guardians.push([m, c]); return Promise.resolve(true); },
         setNoPhoto: () => Promise.resolve(true),
         revokeCheckinPermission: (p) => { calls.ckRevoked.push(p); return Promise.resolve({ id: 'x' }); },
       },
@@ -87,7 +87,7 @@ async function membersPanel({ minors, guardians, requests = [], checkinCleared =
       useStewardCheckinPermissions: () => checkinCleared.map(p => ({ person: p, source: 'steward', lifetime: 'open', from: 0, until: null })),
       useStewardGroups: () => [], useStewardStewards: () => [], useStewardChurch: () => ({}), useStewardBlocked: () => [],
       useStewardSafeguard: () => ({ loaded: true, minorsKnown: true, clearedKnown: true, cleared: {}, minors, approved: [], nophoto: [], guardians }),
-      useStewardGuardians: () => guardians,
+      useStewardGuardians: () => ({ links: guardians, closed: {} }),
       useStewardGuardianRequests: () => requests,
       useStewardJoinPolicy: () => false, useStewardAdmitted: () => [],
       useStewardMembers: members,
@@ -129,7 +129,7 @@ test('CONTROL: a guardian request from an ADULT still has a live Confirm that li
   confirm[0].props.onClick();
   await tick();
   assert.equal(p.calls.guardians.length, 1, 'confirming an adult’s request linked nobody');
-  assert.deepEqual(p.calls.guardians[0], { [KID_B]: [ADULT] });
+  assert.deepEqual(p.calls.guardians[0][0], { [KID_B]: [ADULT] });
 });
 
 test('A GUARDIAN REQUEST FROM SOMEONE MARKED AS A CHILD CANNOT BE CONFIRMED', async () => {
@@ -178,7 +178,7 @@ async function checkin({ minors, guardians, present }) {
       // record this console can ever be handed. See scripts/the-register-shows-who-is-in-the-room.test.mjs.
       useStewardCheckins: () => present.map((child, i) => ({ id: 'r' + i, child, childName: NAMES[child], date: '2026-09-07', ts: NOW - 600, in: NOW - 600, code: '1234' })),
       useStewardSafeguard: () => ({ minors, minorsKnown: true }),
-      useStewardGuardians: () => guardians,
+      useStewardGuardians: () => ({ links: guardians, closed: {} }),
       useStewardMembers: members,
       // ADDED 2026-09-10 with slice 2 of check-in. The panel reads the calendar so a record can name its
       // session (the tag a cleared helper's read gate keys on) — an empty list here means "no service

@@ -102,6 +102,7 @@ function NostrBackend(cache) {
 
   function relays() { return (window.Fellowship && window.Fellowship.relays) || ['ws://127.0.0.1:7447']; }
   function tombKey(key) { return 'tomb/' + key; }
+  function tombAtKey(key) { return 'tombat/' + key; }
   function idset(arr) { var s = new Set(); (arr || []).forEach(function (it) { if (it && it.id != null) s.add(it.id); }); return s; }
   function encode(key, payload) { var j = JSON.stringify(payload); return SYNC[key].priv ? nip44.encrypt(j, ck) : j; }
   // Read BOTH shapes, write only the encrypted one. Members already have plaintext highlights/bookmarks/
@@ -125,7 +126,8 @@ function NostrBackend(cache) {
     if (!sk || !SYNC[key]) return;
     var doc = cache.getDoc(key);
     if (doc == null) return;
-    var payload = Array.isArray(doc) ? { items: doc, deleted: cache.getDoc(tombKey(key)) || [] } : { settings: doc };
+    var tombAt = cache.getDoc(tombAtKey(key)) || {};
+    var payload = Array.isArray(doc) ? { items: doc, deleted: cache.getDoc(tombKey(key)) || [], deletedAt: Object.keys(tombAt).length ? tombAt : undefined } : { settings: doc };
     var evt = finalizeEvent({ kind: KIND, created_at: Math.floor(Date.now() / 1000), tags: [['d', SYNC[key].d]], content: encode(key, payload) }, sk);
     try { Promise.any(pool.publish(relays(), evt)).catch(function () {}); } catch (e) { /* offline: local stays authoritative */ }
   }
@@ -135,10 +137,24 @@ function NostrBackend(cache) {
     if (payload && ('items' in payload)) {
       var local = cache.getDoc(key) || [];
       var tomb = new Set((cache.getDoc(tombKey(key)) || []).concat(payload.deleted || []));
+      var localTombAt = cache.getDoc(tombAtKey(key)) || {};
+      var remoteTombAt = (payload.deletedAt && typeof payload.deletedAt === 'object') ? payload.deletedAt : {};
+      var tombAt = {};
+      Object.keys(localTombAt).forEach(function (id) { tombAt[id] = localTombAt[id]; });
+      Object.keys(remoteTombAt).forEach(function (id) {
+        if (!tombAt[id] || remoteTombAt[id] > tombAt[id]) tombAt[id] = remoteTombAt[id];
+      });
       var byId = new Map();
-      // local first, then remote: keep the newer-by-ts; skip tombstoned ids
       local.concat(payload.items || []).forEach(function (it) {
-        if (!it || it.id == null || tomb.has(it.id)) return;
+        if (!it || it.id == null) return;
+        if (tomb.has(it.id)) {
+          var delTime = tombAt[it.id];
+          if (delTime != null && (it.ts || 0) > delTime) {
+            tomb.delete(it.id); delete tombAt[it.id];
+          } else {
+            return;
+          }
+        }
         var ex = byId.get(it.id);
         if (!ex || (it.ts || 0) >= (ex.ts || 0)) byId.set(it.id, it);
       });
@@ -146,10 +162,12 @@ function NostrBackend(cache) {
       var before = JSON.stringify(cache.getDoc(key)) + '|' + JSON.stringify(cache.getDoc(tombKey(key)));
       cache.putDoc(key, merged);
       cache.putDoc(tombKey(key), Array.from(tomb));
+      cache.putDoc(tombAtKey(key), tombAt);
       var localChanged = (JSON.stringify(merged) + '|' + JSON.stringify(Array.from(tomb))) !== before;
       // converge: if our merged view differs from what the relay had, republish
       var remoteSame = JSON.stringify(merged) === JSON.stringify(payload.items || []) &&
-                       JSON.stringify(Array.from(tomb)) === JSON.stringify(payload.deleted || []);
+                       JSON.stringify(Array.from(tomb)) === JSON.stringify(payload.deleted || []) &&
+                       JSON.stringify(tombAt) === JSON.stringify(remoteTombAt);
       if (!remoteSame) schedulePublish(key);
       return localChanged;
     }
@@ -221,7 +239,23 @@ function NostrBackend(cache) {
         idset(prev).forEach(function (id) { if (!nextIds.has(id)) removed.push(id); });
         if (removed.length) {
           var tomb = cache.getDoc(tombKey(key)) || [];
+          var tombAt = cache.getDoc(tombAtKey(key)) || {};
+          var ts = Date.now();
+          removed.forEach(function (id) { tombAt[id] = ts; });
           cache.putDoc(tombKey(key), Array.from(new Set(tomb.concat(removed))));
+          cache.putDoc(tombAtKey(key), tombAt);
+        }
+        var reAdded = [];
+        nextIds.forEach(function (id) {
+          var tomb = cache.getDoc(tombKey(key)) || [];
+          if (tomb.indexOf(id) !== -1) reAdded.push(id);
+        });
+        if (reAdded.length) {
+          var tb = cache.getDoc(tombKey(key)) || [];
+          var tba = cache.getDoc(tombAtKey(key)) || {};
+          cache.putDoc(tombKey(key), tb.filter(function (id) { return reAdded.indexOf(id) === -1; }));
+          reAdded.forEach(function (id) { delete tba[id]; });
+          cache.putDoc(tombAtKey(key), tba);
         }
       }
       cache.putDoc(key, value);
@@ -296,9 +330,10 @@ function MyDataStore(backend) {
       var items = read(type);
       var id = item.id != null ? item.id : ('it' + Date.now() + Math.random().toString(36).slice(2, 6));
       var existing = items.filter(function (it) { return it.id === id; })[0];
-      var next = Object.assign({ ts: Date.now() }, existing || {}, item, {
+      var next = Object.assign({}, existing || {}, item, {
         id: id,
         visibility: item.visibility || (existing && existing.visibility) || defVis(type),
+        ts: Date.now(),
       });
       var out = existing
         ? items.map(function (it) { return it.id === id ? next : it; })

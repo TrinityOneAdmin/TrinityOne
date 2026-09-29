@@ -532,7 +532,7 @@ test('11 · exactly the named writers take the bounded wait, and each is named w
      'THE document the measured incident is about — a clearance losing to a fast clock'],
     ['setMinors(pubkeys) {', 'setMinors', 'the church’s list of children'],
     ['setApproved(pubkeys, opts) {', 'setApproved', 'cleared to work with children'],
-    ['setGuardians(links) {', 'setGuardians', 'the parent↔child map'],
+    ['setGuardians(links, closed) {', 'setGuardians', 'the parent↔child map'],
     ['async grantCheckinPermission(opts) {', 'grantCheckinPermission', 'a children’s-desk clearance'],
     ['revokeCheckinPermission(person) {', 'revokeCheckinPermission', 'withdrawing one'],
     ['async publishCheckinHelpers(opts) {', 'publishCheckinHelpers', 'who may hold a session key at the desk'],

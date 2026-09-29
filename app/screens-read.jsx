@@ -111,7 +111,6 @@ function ActionSheet({ label, ctx, open, onClose, onColor, curColor, onNote, onC
         <button onClick={ctx._shrink} disabled={!isMulti} title="Remove the last verse" style={{ width: 38, height: 38, borderRadius: 999, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontSize: 22, fontWeight: 700, lineHeight: 1, cursor: isMulti ? 'pointer' : 'default', opacity: isMulti ? 1 : 0.4, fontFamily: 'var(--font-ui)' }}>−</button>
         <button onClick={ctx._extend} title="Add the next verse" style={{ width: 38, height: 38, borderRadius: 999, border: '1px solid var(--clay)', background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)', fontSize: 22, fontWeight: 700, lineHeight: 1, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>+</button>
       </div>
-      {!isMulti ? <React.Fragment>
       <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)', marginBottom: 9 }}>Highlight</div>
       <div style={{ display: 'flex', gap: 11, marginBottom: 20 }}>
         {HL_COLORS.map(c => (
@@ -128,7 +127,6 @@ function ActionSheet({ label, ctx, open, onClose, onColor, curColor, onNote, onC
           border: '2px solid var(--line)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--ink-3)',
         }}><Icon name="x" size={18} /></button>
       </div>
-      </React.Fragment> : null}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 10 }}>
         {acts.map(a => (
           <button key={a.label} onClick={a.fn} style={{
@@ -842,6 +840,7 @@ function ReadScreen({ ctx }) {
   // per-verse arm (Note / Bookmark / Highlight / Cross-refs, all anchored on `sel0` in THIS chapter) would
   // otherwise be offered for a selection whose first verse is in a chapter that is no longer on screen.
   const multi = passage.reduce((n, s) => n + s.verses.length, 0);
+  const passageKeys = passage.flatMap(p => p.verses.map(v => Bible.refKey({ book: p.book, chap: p.chap }, v)));
   const selRow = verses.find(x => String(x.v) === String(sel0));
   // ── THE REFERENCE LINE ────────────────────────────────────────────────────────────────────────────────
   // Collapse the passage into contiguous runs, then name them. Two verses join one run when they are
@@ -1070,7 +1069,8 @@ function ReadScreen({ ctx }) {
       </div>
 
       <ActionSheet label={rangeRef} multi={multi} ctx={sheetCtx} open={sheet === 'action'} onClose={close}
-        curColor={ctx.highlights[keyOf(sel0)]} onColor={(c) => { ctx.setHighlight(keyOf(sel0), c); }}
+        curColor={passageKeys.length && passageKeys.every(k => ctx.highlights[k] === ctx.highlights[passageKeys[0]]) ? ctx.highlights[passageKeys[0]] : null}
+        onColor={(c) => { passageKeys.forEach(k => ctx.setHighlight(k, c)); setSel([]); setCarry([]); setSheet(null); }}
         bookmarked={ctx.bookmarks.includes(keyOf(sel0))} hasNote={!!ctx.notes[keyOf(sel0)]}
         onNote={() => setSheet('note')} onCross={() => setSheet('cross')} onCommentary={() => { close(); setCommentaryOpen(true); }} />
       <WordStudySheet id={wordId} open={sheet === 'word'} onClose={close} onWord={pushWord} canBack={wordStack.length > 1} onBack={backWord} />

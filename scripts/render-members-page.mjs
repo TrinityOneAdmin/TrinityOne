@@ -25,7 +25,7 @@ export function renderMembersPage() {
     ],
     useStewardGroups: () => [], useStewardNetworks: () => [], useStewardCategories: () => [],
     useStewardRosters: () => ({}), useStewardChurch: () => ({ name: 'St X', features: {} }),
-    useStewardMinors: () => new Set(), useStewardApproved: () => new Set(), useStewardGuardians: () => ({}),
+    useStewardMinors: () => new Set(), useStewardApproved: () => new Set(), useStewardGuardians: () => ({ links: {}, closed: {} }),
     usePendingJoins: () => [], usePendingGuardians: () => [],
     Steward: { pubkey: 'zzz' },
     addEventListener() {}, removeEventListener() {}, dispatchEvent() {},

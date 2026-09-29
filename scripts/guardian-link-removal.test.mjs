@@ -27,7 +27,7 @@ const FELL = readFileSync(new URL('../src/fellowship.src.js', import.meta.url), 
 const DASH = stripComments(readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8'));
 
 test('the console can tell a parent a link was removed', () => {
-  const body = stripComments(fnBody(STEW, 'notifyGuardianRemoved(parentPubIn, childPubIn) {', 'notifyGuardianRemoved'));
+  const body = stripComments(fnBody(STEW, 'notifyGuardianRemoved(parentPubIn, childPubIn, closedMap) {', 'notifyGuardianRemoved'));
   assert.match(body, /removed: childPub/, 'the removal notice does not name the child being removed');
   assert.match(body, /nip44e\(/, 'the removal notice is not sealed to the parent — the child link would ride in cleartext');
   assert.match(body, /GUARDNOTICE_D \+ parentPub/, 're-anchor: the notice no longer goes to the parent\'s own doc');
@@ -39,10 +39,10 @@ test('unlinking actually sends it', () => {
   // slice of this function was almost entirely whitespace and missed the call it was looking for.
   const unlink = DASH.slice(DASH.indexOf('const unlinkParent ='), DASH.indexOf('const unlinkParent =') + 1600);
   assert.ok(unlink.length > 50, 're-anchor: unlinkParent is gone');
-  assert.match(unlink, /notifyGuardianRemoved\(parentPub, childPub\)/,
+  assert.match(unlink, /notifyGuardianRemoved\(parentPub, childPub/,
     'unlinkParent still tells the parent nothing, so their app keeps showing a child the church has ' +
     'removed them from — for ever, because the link lives in localStorage');
-  assert.match(unlink, /setGuardians\(next\)/, 're-anchor: the unlink no longer updates the church document');
+  assert.match(unlink, /setGuardians\(nextG/, 're-anchor: the unlink no longer updates the church document');
 });
 
 test('and the parent\'s app honours it', () => {

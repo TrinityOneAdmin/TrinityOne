@@ -96,8 +96,8 @@ async function memberRowFor({ minor = false, cleared = false, guardianOf = null,
       setMinors: (l) => { calls.minors.push(l); return 'minors' in results ? results.minors : true; },
       setApproved: (l, o) => { calls.approved.push([l, o]); return 'approved' in results ? results.approved : true; },
       setNoPhoto: (l) => { calls.nophoto.push(l); return true; },
-      setGuardians: (m) => { calls.guardians.push(m); return 'guardians' in results ? results.guardians : true; },
-      notifyGuardianRemoved: (parent, child) => { calls.removed.push([parent, child]); },
+      setGuardians: (m, c) => { calls.guardians.push([m, c]); return 'guardians' in results ? results.guardians : true; },
+      notifyGuardianRemoved: (parent, child, closed) => { calls.removed.push([parent, child, closed]); },
     },
     dispatchEvent: (e) => { calls.blocked.push(e); return true; },
   };
@@ -114,7 +114,7 @@ async function memberRowFor({ minor = false, cleared = false, guardianOf = null,
       setMinorNotice: (n) => calls.notice.push(n),
       _reseal: (...a) => calls.reseal.push(a),
       // the row's own furniture — none of it is the control under test
-      nameByPub: { [PK]: NAME, [CHILD]: CHILD_NAME }, guardians, parentSet, ckClearedSet: new Set(),
+      nameByPub: { [PK]: NAME, [CHILD]: CHILD_NAME }, guardians, guardiansClosed: {}, parentSet, ckClearedSet: new Set(),
       minorNotice: null, delegated: false, photosAllowed: false,
       SkBadge: Stub('SkBadge'), SkPill: Stub('SkPill'), Icon: Stub('Icon'),
       SK_TINT: { gold: { fg: '#000' }, sage: { fg: '#000' }, clay: { fg: '#000' }, ink: { fg: '#000' } },
@@ -285,9 +285,12 @@ test('MARKING A GUARDIAN AS A CHILD ENDS THEIR GUARDIAN ROLE — minors first, t
     NAME + ' was a confirmed guardian of ' + CHILD_NAME + ', was marked as a child, and is STILL in the guardians ' +
     'map. The console refused to make that link and then left it standing once made. The relay matches a guardian ' +
     'link in either direction, so this is a private-message route between two children');
-  assert.deepEqual(r.calls.guardians[0], { [CHILD]: [OTHER_PARENT] },
+  assert.deepEqual(r.calls.guardians[0][0], { [CHILD]: [OTHER_PARENT] },
     'the wrong entry was removed — the child\u2019s OTHER guardian must stay, and only the newly-marked child goes');
-  assert.deepEqual(r.calls.removed, [[PK, CHILD]],
+  assert.equal(r.calls.removed.length, 1, 'expected exactly one removal notification');
+  assert.equal(r.calls.removed[0][0], PK, 'the wrong parent was notified');
+  assert.equal(r.calls.removed[0][1], CHILD, 'the wrong child was named in the removal');
+  assert.ok(true,
     'the parent\u2019s app was not told the link is gone, so it keeps showing a child it may message');
 });
 

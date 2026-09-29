@@ -246,7 +246,7 @@ function consoleSide() {
     grab(STEWARD, 'refreshClearances(memberPubs, minors, approved, guardians)'),
     grab(STEWARD, 'async _refreshClearancesNow(memberPubs, minors, approved, guardians)'),
     grab(STEWARD, 'setMinors(pubkeys)'), grab(STEWARD, 'setApproved(pubkeys, opts)'),
-    grab(STEWARD, 'setGuardians(links)'), grab(STEWARD, 'setReseats(pairs)'),
+    grab(STEWARD, 'setGuardians(links, closed)'), grab(STEWARD, 'setReseats(pairs)'),
     grab(STEWARD, 'setAdmitted(pubkeys)'), grab(STEWARD, 'setBlocked(pubkeys)'),
     grab(STEWARD, 'async reseatMember(oldPub, newPub, o)'),
   ].join(',\n');

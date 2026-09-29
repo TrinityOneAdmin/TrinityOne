@@ -122,7 +122,7 @@ async function desk({ recs = [], minors = [KID, KID2], guardians = {}, today = T
     window: {
       useStewardCheckins: () => recs,
       useStewardSafeguard: () => ({ minors, minorsKnown: true }),
-      useStewardGuardians: () => guardians,
+      useStewardGuardians: () => ({ links: guardians, closed: {} }),
       useStewardMembers: () => ([{ pubkey: KID, name: 'Alice Fenn' }, { pubkey: KID2, name: 'Bobby Okafor' },
                                 { pubkey: MUM, name: 'Mum Fenn' }]),
       useStewardServices: () => [],

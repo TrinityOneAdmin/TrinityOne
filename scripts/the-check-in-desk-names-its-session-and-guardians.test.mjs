@@ -90,7 +90,7 @@ async function desk({ services = [], guardians = {}, minors = [KID, KID2], recs 
     window: {
       useStewardCheckins: () => recs,
       useStewardSafeguard: () => ({ minors, minorsKnown: true }),
-      useStewardGuardians: () => guardians,
+      useStewardGuardians: () => ({ links: guardians, closed: {} }),
       useStewardMembers: () => ([{ pubkey: KID, name: 'Alice' }, { pubkey: KID2, name: 'Bobby' },
                                 { pubkey: MUM, name: 'Mum' }, { pubkey: DAD, name: 'Dad' }]),
       useStewardServices: () => services,
