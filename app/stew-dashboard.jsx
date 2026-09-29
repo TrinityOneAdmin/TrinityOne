@@ -8577,9 +8577,10 @@ function DashSermons() {
       }
       const pub = await window.Steward.publishSermon({ title: (fields && fields.title) || f.name.replace(/\.[^.]+$/, ''), desc: (fields && fields.desc) || undefined, sha256: b.sha256, host: b.host, hosts: b.hosts, mime: b.mime, size: b.size, enc: b.enc });
       uploadedSigs.current.add(f.name + '|' + f.size + '|' + f.lastModified);   // published, so a repeat really would be a second copy
-      if (notify && pub && window.Steward.pinSermon) { try { await window.Steward.pinSermon(pub); } catch (e) {} }   // feature on members' Today → "New video / New audio clip" card + push
+      let pinned = false;
+      if (notify && pub && window.Steward.pinSermon) { try { pinned = !!(await window.Steward.pinSermon(pub)); } catch (e) {} }
       const backups = (b.hosts || []).length - 1;
-      setUpMsg('✓ Uploaded “' + f.name + '”' + (b.enc ? ' (encrypted)' : '') + (notify ? ' · members notified' : '') + (backups > 0 ? ` · ${backups} backup${backups > 1 ? 's' : ''}` : (mirrors.length ? ' · backups failed' : '')));
+      setUpMsg('✓ Uploaded “' + f.name + '”' + (b.enc ? ' (encrypted)' : '') + (notify ? (pinned ? ' · members notified' : ' · saved, but members weren’t notified — tap 📌 on it to try again') : '') + (backups > 0 ? ` · ${backups} backup${backups > 1 ? 's' : ''}` : (mirrors.length ? ' · backups failed' : '')));
       ok = true;
     } catch (err) {
       // RETHROW, so the modal stays open with the error ON it. Swallowing here made "close only on success"
