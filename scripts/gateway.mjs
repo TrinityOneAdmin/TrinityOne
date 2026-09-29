@@ -7416,16 +7416,17 @@ function serveStatic(req, res) {
   // So the extension rule below is a CLASS rule, not a list of the files I happened to find: config and
   // build descriptors, wherever they turn up. relay-app/install.sh stays served on purpose — the
   // documented one-liner curls it — and so do decks/*.pdf, which about.html links.
+  if (p.indexOf('\\') !== -1) { res.writeHead(404).end('not found'); return; }
   const DENY_DIR = new Set(['relay', 'android', 'ios', 'node_modules', 'docs', 'reference', 'scripts', 'src', 'deploy', 'ci']);
-  if (p.split('/').some(s => DENY_DIR.has(s) || (s && s[0] === '.'))) { res.writeHead(404).end('not found'); return; }
-  if (p.startsWith('/relay-app/desktop/')) { res.writeHead(404).end('not found'); return; }
+  if (p.split('/').some(s => { const lo = s.toLowerCase(); return DENY_DIR.has(lo) || (s && s[0] === '.') || /[. ]$/.test(s); })) { res.writeHead(404).end('not found'); return; }
+  if (p.toLowerCase().startsWith('/relay-app/desktop/')) { res.writeHead(404).end('not found'); return; }
   const DENY_EXT = new Set(['.md', '.service', '.yml', '.yaml', '.toml', '.rs', '.lock', '.gradle', '.pro']);
   if (DENY_EXT.has(extname(p).toLowerCase())) { res.writeHead(404).end('not found'); return; }
   // Build files that describe the box rather than serve it. package-lock fingerprints every dependency and
   // its exact version — a ready-made list of which published advisories to try — and capacitor.config.json
   // states plainly whether the shipped app has remote debugging enabled. Neither is referenced by any shell.
   // (manifest/catalog/ebible-catalog/apk-latest ARE needed, so this is a named list, not a blanket .json rule.)
-  if (['/package.json', '/package-lock.json', '/capacitor.config.json'].includes(p)) { res.writeHead(404).end('not found'); return; }
+  if (['/package.json', '/package-lock.json', '/capacitor.config.json'].includes(p.toLowerCase())) { res.writeHead(404).end('not found'); return; }
   let file = normalize(join(ROOT, p));
   // path-traversal guard: the resolved path must stay strictly inside ROOT. Normalize ROOT's trailing
   // separator first (it may already carry one), so the boundary is exactly `<root>/` — a sibling like
