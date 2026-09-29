@@ -7111,7 +7111,7 @@ function serveStatic(req, res) {
     const host = (req.headers.host || '').split(',')[0].trim();
     if (!_blobMember(req, _blobOwner(sha), host, route)) { res.writeHead(401, { 'Access-Control-Allow-Origin': '*', 'WWW-Authenticate': 'Nostr' }); res.end('members only'); return; }
     let ct = 'application/octet-stream'; try { ct = readFileSync(join(BLOB_DIR, sha + '.type'), 'utf8').trim() || ct; } catch {}
-    const base = { 'Content-Type': ct, 'Access-Control-Allow-Origin': '*', 'Accept-Ranges': 'bytes', 'Cache-Control': 'private, max-age=31536000, immutable', ...SEC_HEADERS };   // content-addressed → immutable; PRIVATE so a shared proxy can't replay a member's fetch to a non-member
+    const base = { 'Content-Type': ct, 'Access-Control-Allow-Origin': '*', 'Accept-Ranges': 'bytes', 'Cache-Control': 'no-store', ...SEC_HEADERS };   // SECURITY: no-store so the browser's HTTP disk cache does not keep sermon media for a year after the sermon is deleted, the member is blocked, or the app is locked. The old value (private, max-age=31536000, immutable) was content-addressed, but on a seized device any cached media is readable without auth. The SW cache is separately gated (a34a5bd).
     if (/[?&]b64/.test(req.url || '')) {   // native download: CapacitorHttp mangles a binary response body → serve base64 text, the client decodes
       if (req.method === 'HEAD') { res.writeHead(200, { ...base, 'Content-Type': 'text/plain; charset=ascii', 'X-Blob-B64': '1' }); res.end(); return; }
       // stream the file through a base64 encoder (bounded memory) instead of readFileSync().toString('base64')
