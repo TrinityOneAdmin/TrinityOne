@@ -5,8 +5,8 @@
   "main": "engine.js",
   "scripts": {
     "relay": "node relay/dev-relay.mjs",
-    "serve": "python3 -m http.server 8000",
-    "dev": "node relay/dev-relay.mjs & python3 -m http.server 8000",
+    "serve": "python3 -m http.server 8000 --bind 127.0.0.1",
+    "dev": "node relay/dev-relay.mjs & python3 -m http.server 8000 --bind 127.0.0.1",
     "build:vendor": "bash scripts/build-vendor.sh",
     "build:identity": "bash scripts/build-identity.sh",
     "build:fellowship": "bash scripts/build-fellowship.sh",
