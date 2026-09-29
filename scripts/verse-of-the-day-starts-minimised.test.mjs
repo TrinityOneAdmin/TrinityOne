@@ -55,7 +55,7 @@ import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, extname, normalize } from 'node:path';
 import { WebSocket } from 'ws';
-import { loadScreen, miniReact, find, texts } from './render-jsx-screen.mjs';
+import { compileScreen, loadScreen, miniReact, find, texts } from './render-jsx-screen.mjs';
 import { requireFreePort } from './test-ports.mjs';
 
 const ROOT = new URL('../', import.meta.url).pathname;
@@ -242,6 +242,19 @@ test('the bar says what it does — it has an accessible name that names the ver
   assert.equal(s.open[0].type, 'button',
     `the only way to reach the verse is a <${s.open[0].type}>, not a button — it is not focusable and does ` +
     `not answer the keyboard or an accessibility service`);
+});
+
+test('the real VOTD pool has 365 entries, each with a reference and text', () => {
+  const js = compileScreen('app/data.jsx');
+  const win = { TrinityData: null };
+  new Function('window', js)(win);
+  const pool = win.TrinityData && win.TrinityData.VOTD_POOL;
+  assert.ok(Array.isArray(pool), 'VOTD_POOL is not an array on window.TrinityData');
+  assert.equal(pool.length, 365, `VOTD_POOL has ${pool.length} entries, not 365`);
+  for (let i = 0; i < pool.length; i++) {
+    assert.ok(pool[i].ref && typeof pool[i].ref === 'string', `entry ${i} has no ref`);
+    assert.ok(pool[i].text && typeof pool[i].text === 'string', `entry ${i} has no text`);
+  }
 });
 
 // ── the touch target, measured in a real browser ───────────────────────────────────────────────────────────

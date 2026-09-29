@@ -206,7 +206,7 @@ const VOTD = {
 // rotated daily by day-of-year; text below is a fallback when the active
 // translation lacks the verse (otherwise the live module text is used).
 const VOTD_POOL = [
-  // ── the original 14 (kept) ──
+  // ── the original 14 references (text updated to WEB) ──
   { ref: 'John 1:5', text: 'The light shines in the darkness, and the darkness hasn\'t overcome it.' },
   { ref: 'Psalms 23:1', text: 'Yahweh is my shepherd: I shall lack nothing.' },
   { ref: 'Proverbs 3:5', text: 'Trust in Yahweh with all your heart, and don\'t lean on your own understanding.' },
