@@ -139,7 +139,7 @@ function CareNeedRow({ need, slots, skips, care, canManage, expanded, onToggle }
                     ? <span style={{ fontSize: 11.5, color: 'var(--ink-3)', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}><Icon name="check" size={12} color="var(--sage)" /> Covered</span>
                     : <button onClick={() => care.fill(need.id, iso)} style={careBtnHelp}>I’ll help</button>)}
                   {(isRecipient || (canManage && fills.length === 0)) && (skipped
-                    ? <button onClick={() => care.clearSkip(need.id, iso)} style={careBtnGhost}>Undo</button>
+                    ? <button onClick={() => care.clearSkip(need.id, iso, need._skipEnc, need._by)} style={careBtnGhost}>Undo</button>
                     : <button onClick={() => care.skip(need.id, iso, '', need._skipEnc, need._by)} style={isRecipient ? careBtnHelp : careBtnGhost}>{isRecipient ? (fills.length ? 'Thanks — I’m covered' : 'I’m covered') : 'Skip'}</button>)}
                 </div>
                 {mineFilled && !skipped && need.type === 'meals' ? (

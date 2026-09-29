@@ -7151,33 +7151,37 @@ window.Fellowship = {
     if (!sk) { try { await window.Fellowship.ready; } catch {} }
     if (!sk || !cp || !careId || !iso) return null;
     const tags = [['d', CARESKIP_D + careId + ':' + iso], ['t', NET], ['church', cp]];
+    let signingKey = sk;
     if (skipEnc) { try {
-      // Unseal against the need's AUTHOR (#13), not always the church key — a delegated steward's need is
-      // sealed with the steward's key, so unsealing with the church key would silently fail and the recipient
-      // could never decline. Then derive THIS day's token from the secret (#12): present only tok(iso), which
-      // unlocks this date alone. `.tok` is the v2 single-token fallback for any pre-redesign need.
       const authorPub = needAuthor || cp;
       const o = JSON.parse(nip44d(skipEnc, nip44ck(sk, authorPub)));
-      if (o && o.s) tags.push(['skiptok', await _sha256hex(new TextEncoder().encode(o.s + ':' + iso))]);   // UTF-8 bytes → same digest the seal computed
+      if (o && o.s) {
+        tags.push(['skiptok', await _sha256hex(new TextEncoder().encode(o.s + ':' + iso))]);
+        signingKey = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode('careskip-signer:' + o.s + ':' + iso)));
+      }
       else if (o && o.tok) tags.push(['skiptok', String(o.tok)]);
     } catch (e) {} }
-    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags, content: JSON.stringify({ careId, isoDate: iso, reason: String(reason || '').trim() }) }, sk);
-    try { await _publishBounded(churchRelays(), evt); evt._delivered = true; }   // bounded so an offline skip settles, not hangs
+    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags, content: JSON.stringify({ careId, isoDate: iso, reason: String(reason || '').trim() }) }, signingKey);
+    try { await _publishBounded(churchRelays(), evt); evt._delivered = true; }
     catch (e) { console.warn('[fellowship] care skip publish failed', e); evt._delivered = false; }
     return evt;
   },
-  async clearCareSkip(careId, iso) {
+  async clearCareSkip(careId, iso, skipEnc, needAuthor) {
     const cp = window.Fellowship.churchPub;
     if (!sk) { try { await window.Fellowship.ready; } catch {} }
     if (!sk || !cp || !careId || !iso) return null;
-    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CARESKIP_D + careId + ':' + iso], ['t', NET], ['church', cp], ['deleted', '1']], content: '' }, sk);
-    // Undoing a skip is the recipient saying "actually, yes please" — if it lands nowhere the day stays
-    // crossed out and nobody brings anything. markCareSkip above already reports through `_delivered`;
-    // this direction reported nothing at all.
-    // …AND THEN REPORTED ALL THREE FAILURES AS ONE. `{ ok, reason }` now, like its siblings: "that day is
-    // still marked as one to skip" is false over an undo nobody merely acknowledged, and it makes the
-    // recipient ask a second time for help they have already asked for. Fixed d-tag
-    // (`careskip:<careId>:<iso>`), so pressing again replaces the same document and is safe.
+    const tags = [['d', CARESKIP_D + careId + ':' + iso], ['t', NET], ['church', cp], ['deleted', '1']];
+    let signingKey = sk;
+    if (skipEnc) { try {
+      const authorPub = needAuthor || cp;
+      const o = JSON.parse(nip44d(skipEnc, nip44ck(sk, authorPub)));
+      if (o && o.s) {
+        tags.push(['skiptok', await _sha256hex(new TextEncoder().encode(o.s + ':' + iso))]);
+        signingKey = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode('careskip-signer:' + o.s + ':' + iso)));
+      }
+      else if (o && o.tok) tags.push(['skiptok', String(o.tok)]);
+    } catch (e) {} }
+    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags, content: '' }, signingKey);
     try { await _publishAny(churchRelays(), evt); }
     catch (e) { console.warn('[fellowship] clear care skip publish failed', e); return { ok: false, reason: _pubReason(e) }; }
     return { ok: true, evt };

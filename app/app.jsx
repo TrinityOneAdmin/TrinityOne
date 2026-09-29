@@ -2090,7 +2090,7 @@ function App() {
       // `r && r.ok`, never `if (r)` — clearCareSkip answers an object now and an object is always truthy.
       // Three outcomes: "that day is still marked as one to skip" is false over an undo nobody merely
       // acknowledged, and it makes the recipient ask again for help they have already asked for.
-      clearSkip: (careId, iso) => window.Fellowship.clearCareSkip(careId, iso).then(r => { if (r && r.ok) return r; toast(r && r.reason === 'unconfirmed' ? 'We couldn’t confirm that reached your church — it may well have. Tap Undo again if the day still shows as skipped; it won’t do any harm.' : 'That didn’t reach your church — that day is still marked as one to skip.', { error: true }); return r; }),
+      clearSkip: (careId, iso, skipEnc, author) => window.Fellowship.clearCareSkip(careId, iso, skipEnc, author).then(r => { if (r && r.ok) return r; toast(r && r.reason === 'unconfirmed' ? 'We couldn’t confirm that reached your church — it may well have. Tap Undo again if the day still shows as skipped; it won’t do any harm.' : 'That didn’t reach your church — that day is still marked as one to skip.', { error: true }); return r; }),
       // "I'm here to help": the list of members who are available, plus this member's own signal actions
       avail: careAvail,
       // `r && r.ok`, never `if (r)` — both answer an object now and an object is always truthy, so a plain

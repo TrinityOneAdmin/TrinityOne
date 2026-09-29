@@ -13558,16 +13558,19 @@
       }
       if (!sk || !cp || !careId || !iso) return null;
       const tags = [["d", CARESKIP_D + careId + ":" + iso], ["t", NET], ["church", cp]];
+      let signingKey = sk;
       if (skipEnc) {
         try {
           const authorPub = needAuthor || cp;
           const o = JSON.parse(decrypt(skipEnc, getConversationKey(sk, authorPub)));
-          if (o && o.s) tags.push(["skiptok", await _sha256hex(new TextEncoder().encode(o.s + ":" + iso))]);
-          else if (o && o.tok) tags.push(["skiptok", String(o.tok)]);
+          if (o && o.s) {
+            tags.push(["skiptok", await _sha256hex(new TextEncoder().encode(o.s + ":" + iso))]);
+            signingKey = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode("careskip-signer:" + o.s + ":" + iso)));
+          } else if (o && o.tok) tags.push(["skiptok", String(o.tok)]);
         } catch (e) {
         }
       }
-      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags, content: JSON.stringify({ careId, isoDate: iso, reason: String(reason || "").trim() }) }, sk);
+      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags, content: JSON.stringify({ careId, isoDate: iso, reason: String(reason || "").trim() }) }, signingKey);
       try {
         await _publishBounded(churchRelays(), evt);
         evt._delivered = true;
@@ -13577,7 +13580,7 @@
       }
       return evt;
     },
-    async clearCareSkip(careId, iso) {
+    async clearCareSkip(careId, iso, skipEnc, needAuthor) {
       const cp = window.Fellowship.churchPub;
       if (!sk) {
         try {
@@ -13586,7 +13589,20 @@
         }
       }
       if (!sk || !cp || !careId || !iso) return null;
-      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", CARESKIP_D + careId + ":" + iso], ["t", NET], ["church", cp], ["deleted", "1"]], content: "" }, sk);
+      const tags = [["d", CARESKIP_D + careId + ":" + iso], ["t", NET], ["church", cp], ["deleted", "1"]];
+      let signingKey = sk;
+      if (skipEnc) {
+        try {
+          const authorPub = needAuthor || cp;
+          const o = JSON.parse(decrypt(skipEnc, getConversationKey(sk, authorPub)));
+          if (o && o.s) {
+            tags.push(["skiptok", await _sha256hex(new TextEncoder().encode(o.s + ":" + iso))]);
+            signingKey = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode("careskip-signer:" + o.s + ":" + iso)));
+          } else if (o && o.tok) tags.push(["skiptok", String(o.tok)]);
+        } catch (e) {
+        }
+      }
+      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags, content: "" }, signingKey);
       try {
         await _publishAny(churchRelays(), evt);
       } catch (e) {
