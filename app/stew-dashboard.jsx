@@ -2425,7 +2425,7 @@ window.skPrintable = function (html) {
 // that on screen, never in a catch that swallows it — a button that fails silently is the defect this replaces.
 // The three wordings passed below replace saveFile's backup-specific defaults ("make a backup", "Save to
 // device"), which name buttons that do not exist on these screens.
-// Callers: saveQrPngFor (JoinCard, below), booksDownload and fsDownloadDoc (stew-finance.jsx).
+// Callers: saveQrPngFor (JoinCard, below), booksDownload, fsDownloadDoc and fsSavePdf (stew-finance.jsx), doBackup (DashBackup, below).
 async function saveConsoleFile(filename, data, opts) {
   const B = window.TrinityBackup;
   if (!B || !B.saveFile) throw new Error('This build can’t save files — open the console in a browser to download it.');
@@ -9740,22 +9740,13 @@ function DashBackup() {
     try {
       const { data, binary, mime, count, filename, encrypted, media: mediaCount } = await window.Steward.exportChurchData({ encrypt, includeMedia });
       const mediaBit = mediaCount ? ' + ' + mediaCount + ' media file' + (mediaCount > 1 ? 's' : '') : '';
-      const P = window.Capacitor && window.Capacitor.Plugins;
-      if (P && P.Filesystem && P.Share) {   // native: write to cache then hand to the OS share sheet (save/send anywhere)
-        let res;
-        if (binary) {   // zip bytes -> base64 for Filesystem (no encoding = base64)
-          let bin = ''; const CH = 0x8000; for (let i = 0; i < data.length; i += CH) bin += String.fromCharCode.apply(null, data.subarray(i, Math.min(i + CH, data.length)));
-          res = await P.Filesystem.writeFile({ path: filename, data: btoa(bin), directory: 'CACHE' });
-        } else {
-          res = await P.Filesystem.writeFile({ path: filename, data, directory: 'CACHE', encoding: 'utf8' });
-        }
-        await P.Share.share({ title: 'TrinityOne church backup', text: count + ' records' + mediaBit + (encrypted ? ' — encrypted; only your church key can open it.' : ' — keep this file somewhere safe.'), files: [res.uri] });
-      } else {   // web: a file download (Blob accepts string or Uint8Array)
-        const blob = new Blob([data], { type: mime });
-        const url = URL.createObjectURL(blob); const a = document.createElement('a');
-        a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove();
-        setTimeout(() => URL.revokeObjectURL(url), 3000);
-      }
+      let fileData = data;
+      if (binary) { let bin = ''; const CH = 0x8000; for (let i = 0; i < data.length; i += CH) bin += String.fromCharCode.apply(null, data.subarray(i, Math.min(i + CH, data.length))); fileData = btoa(bin); }
+      const saveMsg = await saveConsoleFile(filename, fileData, {
+        mime, base64: binary,
+        title: 'TrinityOne church backup',
+        blurb: count + ' records' + mediaBit + (encrypted ? ' — encrypted; only your church key can open it.' : ' — keep this file somewhere safe.'),
+      });
       const ts = Math.floor(Date.now() / 1000); setLast(ts); try { localStorage.setItem('trinityone.lastBackupAt', String(ts)); } catch {}
       // record church-wide so every steward's nudge resets — AND SAY SO WHEN IT DOES NOT. This was
       // fire-and-forget inside a try/catch, so a refused document left THIS console the only one that
@@ -9767,7 +9758,7 @@ function DashBackup() {
       // delegated console this is now always the owner-only one, because the relay gates backup-meta: to
       // the church key (2026-09-22) and the engine does not even ask.
       const _metaSay = _metaOk ? '' : ' ' + ((window.Steward && window.Steward.actingChurch) ? BACKUP_META_OWNER_ONLY : BACKUP_META_NO_RELAY);
-      setMsg({ ok: true, text: 'Saved ' + count + ' records' + mediaBit + (encrypted ? ' — encrypted to your church key.' : ' (unencrypted).') + _metaSay });
+      setMsg({ ok: true, text: (saveMsg || 'Saved') + ' ' + count + ' records' + mediaBit + (encrypted ? ' — encrypted to your church key.' : ' (unencrypted).') + _metaSay });
     } catch (e) { setMsg({ ok: false, text: e.message || 'Backup failed' }); }
     setBusy(false);
   };

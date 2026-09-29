@@ -420,15 +420,8 @@ function fsBuildStatementPdf(model, F) {
 // Desktop → direct download; Capacitor/Android → write to Cache then hand to the OS Share sheet (WebView has no
 // browser download). Same split as stew-dashboard.jsx savePdf.
 async function fsSavePdf(doc, fname) {
-  const isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
-  if (isNative && window.Capacitor.Plugins && window.Capacitor.Plugins.Filesystem) {
-    const b64 = doc.output('datauristring').split(',')[1];
-    const P = window.Capacitor.Plugins;
-    const res = await P.Filesystem.writeFile({ path: fname, data: b64, directory: 'CACHE' });
-    if (P.Share) await P.Share.share({ title: fname, text: 'Church financial statement', files: [res.uri], dialogTitle: 'Save or share statement' });
-  } else {
-    doc.save(fname);
-  }
+  const b64 = doc.output('datauristring').split(',')[1];
+  return saveConsoleFile(fname, b64, { mime: 'application/pdf', base64: true, title: 'Financial statement', blurb: 'Open it to print or share.' });
 }
 
 function FinanceShareStatement({ book, F, churchName, accent, logo, canPost, onPostToMembers, onClose }) {
@@ -472,7 +465,7 @@ function FinanceShareStatement({ book, F, churchName, accent, logo, canPost, onP
   const doCopy = async () => { try { await navigator.clipboard.writeText(F.statementText(model)); setFlash('Summary copied — paste it into an email or message.'); setTimeout(() => setFlash(''), 2600); } catch (e) { setFlash('Could not copy on this device.'); } };
   const doDownload = async () => {
     const base = fsSlug(title) + '-' + fsSlug(period.label);
-    try { const doc = fsBuildStatementPdf(model, F); if (doc) { await fsSavePdf(doc, base + '.pdf'); setFlash('Statement downloaded — ready to print or share.'); setTimeout(() => setFlash(''), 2600); return; } } catch (e) {}
+    try { const doc = fsBuildStatementPdf(model, F); if (doc) { const msg = await fsSavePdf(doc, base + '.pdf'); setFlash(msg || 'Statement downloaded — ready to print or share.'); setTimeout(() => setFlash(''), 2600); return; } } catch (e) {}
     // fallback: self-contained HTML. The sentence comes from the save, not from here — "Downloaded" was
     // printed over a WebView that had downloaded nothing.
     try {

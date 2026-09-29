@@ -14,74 +14,85 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { fnBody } from './test-slice.mjs';
 
 const SRC = readFileSync(new URL('../app/stew-finance.jsx', import.meta.url), 'utf8');
+const TOREVIEW_DECL = fnBody(SRC, 'const toReview = () => {', 'toReview');
+const TOREVIEW = TOREVIEW_DECL.replace(/^const toReview\s*=\s*/, '');
 
-// Extract the toReview function body. It's an arrow: `const toReview = () => {`
-// We need the held/map logic and the dup computation from it.
-// Instead of extracting the whole JSX-heavy function, we test the dup logic directly
-// by replicating the counting-Map pattern the fix introduced.
-
-// The fix is: the review screen builds a counting Map from book.journal importKeys,
-// then for each statement line decrements instead of just checking membership.
-// If the fix is reverted to a Set, this test fails.
-
-function dupFlags(journalKeys, statementKeys) {
-  // Read the source and verify it uses a counting Map, not a Set
-  const toReviewBody = SRC.slice(
-    SRC.indexOf('const toReview = () => {'),
-    SRC.indexOf('setLines(ls);')
+function runToReview(journalEntries, statementLines) {
+  let captured = null;
+  const scope = {
+    parsed: { rows: [] },
+    dec: 2,
+    monthFirst: true,
+    F: {
+      statementLines: () => statementLines,
+      suggestCategory: () => null,
+    },
+    builtMapping: () => ({}),
+    defAccount: () => 'bank:main',
+    book: {
+      journal: journalEntries,
+      accounts: new Map([['bank:main', { name: 'Main', type: 'asset' }]]),
+      funds: new Map([['general', { name: 'General' }]]),
+    },
+    setLines: () => {},
+    setRowState: (rs) => { captured = rs; },
+    setErr: () => {},
+    setStep: () => {},
+  };
+  const fn = new Function('scope', `with (scope) { return (${TOREVIEW}); }`)(
+    new Proxy(scope, {
+      has: (t, k) => (k in t) || !(String(k) in globalThis),
+      get: (t, k) => {
+        if (k === Symbol.unscopables) return undefined;
+        if (k in t) return t[k];
+        if (String(k) in globalThis) return globalThis[String(k)];
+        throw new ReferenceError('toReview needs `' + String(k) + '`');
+      },
+      set: (t, k, v) => { t[k] = v; return true; },
+    })
   );
-
-  // The fix: a counting Map. If someone reverts to importedKeys (a Set), this fails.
-  assert.ok(
-    toReviewBody.includes('held.get(') || toReviewBody.includes('held.set('),
-    'REVIEW SCREEN USES A SET, NOT A COUNTING MAP — two identical payments in a bank statement ' +
-    'where one is already imported will BOTH be greyed out as duplicates, silently dropping the ' +
-    'second legitimate payment'
-  );
-
-  // Now verify the actual logic by running the same pattern
-  const held = new Map();
-  for (const k of journalKeys) held.set(k, (held.get(k) || 0) + 1);
-  return statementKeys.map(k => {
-    const n = k ? (held.get(k) || 0) : 0;
-    const dup = n > 0;
-    if (dup) held.set(k, n - 1);
-    return dup;
-  });
+  fn();
+  return captured;
 }
 
+function line(key) { return { key, date: '2026-01-15', description: 'Payment', amountMinor: 10000, dir: 'in' }; }
+
 test('two identical statement lines, one already imported: only one is dup', () => {
-  const result = dupFlags(
-    ['pay-100-2026-01-15-acme'],             // journal has ONE entry with this key
-    ['pay-100-2026-01-15-acme', 'pay-100-2026-01-15-acme']  // statement has TWO
+  const rs = runToReview(
+    [{ importKey: 'pay-x' }],
+    [line('pay-x'), line('pay-x')]
   );
-  assert.deepEqual(result, [true, false],
+  assert.equal(rs.length, 2);
+  assert.equal(rs[0].dup, true, 'the first line with a matching key should be marked dup');
+  assert.equal(rs[1].dup, false,
     'THE SECOND IDENTICAL PAYMENT IS MARKED AS A DUPLICATE — a church that receives two £100 ' +
     'gifts on the same Sunday from the same person has one silently dropped from the import');
+  assert.equal(rs[1].selected, true, 'the non-dup line should be selected for import');
 });
 
 test('two identical statement lines, neither imported: both are new', () => {
-  const result = dupFlags(
-    [],                                       // empty journal
-    ['pay-100-2026-01-15-acme', 'pay-100-2026-01-15-acme']
-  );
-  assert.deepEqual(result, [false, false]);
+  const rs = runToReview([], [line('pay-x'), line('pay-x')]);
+  assert.equal(rs[0].dup, false);
+  assert.equal(rs[1].dup, false);
 });
 
 test('two identical statement lines, both already imported: both are dup', () => {
-  const result = dupFlags(
-    ['pay-100-2026-01-15-acme', 'pay-100-2026-01-15-acme'],  // journal has TWO
-    ['pay-100-2026-01-15-acme', 'pay-100-2026-01-15-acme']   // statement has TWO
+  const rs = runToReview(
+    [{ importKey: 'pay-x' }, { importKey: 'pay-x' }],
+    [line('pay-x'), line('pay-x')]
   );
-  assert.deepEqual(result, [true, true]);
+  assert.equal(rs[0].dup, true);
+  assert.equal(rs[1].dup, true);
 });
 
 test('CONTROL: a unique statement line already imported is dup', () => {
-  const result = dupFlags(
-    ['pay-200-2026-02-01-jones'],
-    ['pay-200-2026-02-01-jones']
+  const rs = runToReview(
+    [{ importKey: 'pay-y' }],
+    [line('pay-y')]
   );
-  assert.deepEqual(result, [true]);
+  assert.equal(rs[0].dup, true);
+  assert.equal(rs[0].selected, false);
 });
