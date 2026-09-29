@@ -148,7 +148,8 @@ test('the ONE column-derived list the spine reads only ever NARROWS', () => {
   // never granted, and every per-type rule stays in accept(). The registry's note above k() says why. This
   // pins the SHAPE of the use — a refusal — so it cannot quietly become a grant; the behaviour itself is
   // measured on a live gateway in scripts/relay-refuses-undeclared-member-doc-types.test.mjs.
-  assert.ok(Array.isArray(MEMBER_WRITABLE_TYPES) && MEMBER_WRITABLE_TYPES.length >= 21,
+  // 21 → 15 on 2026-09-29: 6 MyData types removed (bookmarks, highlights, notes, journal, prayer, settings)
+  assert.ok(Array.isArray(MEMBER_WRITABLE_TYPES) && MEMBER_WRITABLE_TYPES.length >= 15,
     'the registry no longer exports MEMBER_WRITABLE_TYPES, or it collapsed: ' + JSON.stringify(MEMBER_WRITABLE_TYPES));
   const uses = GATEWAY.match(/\bMEMBER_WRITABLE_TYPES\b/g) || [];
   assert.equal(uses.length, 2, 'MEMBER_WRITABLE_TYPES is read in ' + uses.length + ' places in gateway.mjs — expected the import and memberDocTypeOk() only');
@@ -212,7 +213,8 @@ test('the ONE column-derived list the spine reads only ever NARROWS', () => {
   // eslint-disable-next-line no-new-func
   const memberDocTypeOk = new Function('MEMBER_WRITABLE_TYPES', mdtSrc + '\nreturn memberDocTypeOk;')(MEMBER_WRITABLE_TYPES);
   assert.equal(memberDocTypeOk('trinityone/safe:abc'), true, 'a member type the registry declares is now refused — members could not write their own documents');
-  assert.equal(memberDocTypeOk('trinityone/notes'), true, 'a bare member type (the MyData six) is now refused');
+  assert.equal(memberDocTypeOk('trinityone/chatseen'), true, 'trinityone/chatseen (the surviving MyData type) is refused');
+  assert.equal(memberDocTypeOk('trinityone/notes'), false, 'a REMOVED MyData type should no longer be accepted');
   assert.equal(memberDocTypeOk('trinityone/sermon:1'), false,
     'THE LIST NO LONGER NARROWS ANYTHING: a steward-only type passes the member catch-all. Any member of ' +
     'any church on this box could write the church\'s own documents.');

@@ -324,18 +324,17 @@ export const DOC_TYPES = Object.freeze({
   // which binds a pubkey to a specific congregation. Both halves of that fix (encrypt here, default-deny at
   // the relay) are in place; declaring them is the third half — so the next person to touch this cannot
   // reintroduce it without something going red.
-  'trinityone/highlights':    { write: 'member',    read: 'author',  scope: 'none', gatedBy: 'authed === e.pubkey',   note: 'C1: was world-readable — a congregation-wide arrest list. Now NIP-44 self-sealed + default-deny' },
-  'trinityone/bookmarks':     { write: 'member',    read: 'author',  scope: 'none', gatedBy: 'authed === e.pubkey' },
-  'trinityone/notes':         { write: 'member',    read: 'author',  scope: 'none', gatedBy: 'authed === e.pubkey' },
-  'trinityone/journal':       { write: 'member',    read: 'author',  scope: 'none', gatedBy: 'authed === e.pubkey',   note: 'not finance/journal: — a member\'s private journal, unrelated' },
-  'trinityone/prayer':        { write: 'member',    read: 'author',  scope: 'none', gatedBy: 'authed === e.pubkey' },
-  'trinityone/settings':      { write: 'member',    read: 'author',  scope: 'none', gatedBy: 'authed === e.pubkey',   note: 'C1: carried plansFollowed, which binds a pubkey to a specific congregation' },
+  // REMOVED 2026-09-29: bookmarks, highlights, notes, journal, prayer, settings — the MyData module
+  // (src/mydata.src.js → vendor/mydata.js) no longer ships any of these d-tag prefixes. Only
+  // trinityone/chatseen survives. The C1 exposure is closed: if any of these are ever reintroduced,
+  // the "undeclared types" test will catch them before they ship without a relay rule.
   // F17, 2026-07-30. Which messages this member has already read: {groupSlug: unixSeconds}. Added so the marks
   // survive a locked-boot wipe — they are deleted from the device on lock (the slugs name the church's groups)
   // and restored from here on unlock. Same shape and policy as the five above: member writes, author-only
   // reads, no church tag, NIP-44 sealed to themselves. It names GROUPS, so it is the most church-revealing of
   // the MyData set — author-only is doing real work here, not just tidiness.
   'trinityone/chatseen':      { write: 'member',    read: 'author',  scope: 'none', gatedBy: 'authed === e.pubkey',   note: 'F17: unread marks, keyed by group slug — restored after a locked-boot wipe' },
+  'trinityone/wallet:':       { write: 'member',    read: 'author',  scope: 'none', gatedBy: 'authed === e.pubkey',   note: 'Cashu wallet: mint+proofs mirrored so a reinstall restores the balance. NIP-44 self-sealed, author-only read' },
 });
 
 // Types the CLIENTS use that the relay has no explicit rule for. They fall through to generic rules, which
@@ -380,7 +379,6 @@ export const DOC_TYPES = Object.freeze({
 // THE RULE THAT ADDS: a reader that will serve the result is the FIRST question, not the only one. The
 // second is whether the press a delegate can actually reach produces a true statement.
 export const UNDECLARED = Object.freeze({
-  'trinityone/wallet:':    'MEMBER-authored with no church tag, so canRead falls to author-only — verified: another member of the same church cannot read it',
 });
 
 // ── THE NAMES THE RELAY GATES BY. ARCHITECTURE-AUDIT-2026-07-30, rec 2's deferred second half ────────────
@@ -506,7 +504,6 @@ export const ALL_PREFIXES = Object.freeze([...Object.keys(DOC_TYPES), ...Object.
 // so the relay never reads DOC_TYPES itself.
 export const MEMBER_WRITABLE_TYPES = Object.freeze([
   ...Object.keys(DOC_TYPES).filter(p => DOC_TYPES[p].write === 'member'),
-  'trinityone/wallet:',
 ]);
 
 // Look a d-tag up. Returns the declaration, or null for an unknown type — which is the answer that should

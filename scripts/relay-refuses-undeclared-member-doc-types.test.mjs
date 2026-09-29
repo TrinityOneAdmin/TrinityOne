@@ -165,13 +165,11 @@ after(() => { try { relay && relay.kill('SIGKILL'); } catch {} try { rmSync(data
 // ── THE LIST, DERIVED HERE AND NOT TAKEN FROM THE REGISTRY'S EXPORT ─────────────────────────────────────
 const derived = [
   ...Object.keys(DOC_TYPES).filter(p => DOC_TYPES[p].write === 'member'),
-  'trinityone/wallet:',
 ];
 
 test('the registry exports exactly the member-writable list this file derives', () => {
-  assert.ok(derived.length >= 21, 'the derived list looks too small to be real: ' + derived.length);
-  assert.ok('trinityone/wallet:' in UNDECLARED && /MEMBER-authored/.test(UNDECLARED['trinityone/wallet:']),
-    'wallet: is no longer in UNDECLARED as a member-authored type — re-check whether it belongs in the list');
+  // 21 → 15 on 2026-09-29: 6 MyData types removed + wallet moved from UNDECLARED into DOC_TYPES
+  assert.ok(derived.length >= 15, 'the derived list looks too small to be real: ' + derived.length);
   assert.ok(Array.isArray(MEMBER_WRITABLE_TYPES), 'the registry exports no MEMBER_WRITABLE_TYPES list at all');
   assert.deepEqual([...MEMBER_WRITABLE_TYPES].sort(), [...derived].sort(),
     'MEMBER_WRITABLE_TYPES has drifted from "every write:member type, plus wallet:" — the relay would refuse ' +
@@ -288,12 +286,7 @@ const SHAPES = {
   'trinityone/reqreply:':       () => doc(mia, D.REQREPLY + 'req1', { answer: 'accept' }, [['p', church.pub]]),
   'trinityone/unavail:':        () => doc(mia, D.UNAVAIL + mia.pub, { dates: ['2026-10-11'] }, [['p', church.pub]]),
   // MyData: signed by the member, sealed to themselves, NO church tag of any kind — tags: [['d', …]] only.
-  'trinityone/highlights':      () => finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', 'trinityone/highlights']], content: 'SEALED' }, mia.sk),
-  'trinityone/bookmarks':       () => finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', 'trinityone/bookmarks']], content: 'SEALED' }, mia.sk),
-  'trinityone/notes':           () => finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', 'trinityone/notes']], content: 'SEALED' }, mia.sk),
-  'trinityone/journal':         () => finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', 'trinityone/journal']], content: 'SEALED' }, mia.sk),
-  'trinityone/prayer':          () => finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', 'trinityone/prayer']], content: 'SEALED' }, mia.sk),
-  'trinityone/settings':        () => finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', 'trinityone/settings']], content: 'SEALED' }, mia.sk),
+  // REMOVED 2026-09-29: bookmarks, highlights, notes, journal, prayer, settings — no longer shipped.
   'trinityone/chatseen':        () => finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', 'trinityone/chatseen']], content: 'SEALED' }, mia.sk),
   // the wallet, as src/fellowship.src.js publishes it: d = 'trinityone/wallet:<suffix>', a ['t'] tag, no church
   'trinityone/wallet:':         () => doc(mia, 'trinityone/wallet:main', 'SEALED-WALLET'),
