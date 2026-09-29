@@ -68,8 +68,8 @@ function runner(name, { publishFails, how }) {
   // that is lifted out of the bundle too rather than stubbed — a stub here would supply the very answer these
   // tests are named after.
   const _pubReason = new Function(fnBody(BUNDLE, 'function _pubReason(e)', '_pubReason') + '\nreturn _pubReason;')();
-  const obj = new Function('finalizeEvent2', '_publishAny', 'toPub', 'window', 'sk', 'NET', 'Date', 'JSON', 'Math', '_clearJoinSent', '_dropJoinIntent', '_pubReason',
-    'return ' + src)(finalizeEvent2, _publishAny, toPub, window, 'sk-bytes', 'trinityone', Date, JSON, Math, () => {}, () => {}, _pubReason);
+  const obj = new Function('finalizeEvent2', '_publishAny', 'toPub', 'window', 'sk', 'NET', 'Date', 'JSON', 'Math', '_clearJoinSent', '_dropJoinIntent', '_pubReason', '_forgetChurch',
+    'return ' + src)(finalizeEvent2, _publishAny, toPub, window, 'sk-bytes', 'trinityone', Date, JSON, Math, () => {}, () => {}, _pubReason, () => {});
   return { fn: obj[name], calls };
 }
 

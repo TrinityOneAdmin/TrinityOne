@@ -116,6 +116,7 @@ function leaveWriter(mode, { locked = false, intent = false } = {}) {
     _joinIntents: intent ? [{ cp: 'c'.repeat(64), forPub: 'p', at: 1 }] : [],
     _dropJoinIntent: () => {},
     _clearJoinSent: () => {},
+    _forgetChurch: () => {},
     _publishAny: async (_r, e) => {
       published.push(e);
       if (mode === 'ok') return true;

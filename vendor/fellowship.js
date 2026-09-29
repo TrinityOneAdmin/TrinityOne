@@ -9264,6 +9264,74 @@
     if (!c.length) return null;
     return { g: String(o.g), c };
   }
+  function _forgetChurch(cp) {
+    const dHub = _docsHubs.get(cp);
+    if (dHub) {
+      if (dHub.closer) {
+        try {
+          dHub.closer();
+        } catch {
+        }
+      }
+      if (dHub.saveT) clearTimeout(dHub.saveT);
+      _docsHubs.delete(cp);
+    }
+    const mHub = _memHubs.get(cp);
+    if (mHub) {
+      if (mHub.closer) {
+        try {
+          mHub.closer();
+        } catch {
+        }
+      }
+      if (mHub.saveT) clearTimeout(mHub.saveT);
+      _memHubs.delete(cp);
+    }
+    _nameKeys.delete(cp);
+    _nameKeyTs.delete(cp);
+    _churchRoster.delete(cp);
+    _churchRelays.delete(cp);
+    _churchList.delete(cp);
+    _applying.delete(cp);
+    _relayNetCache.delete(cp);
+    _reseatOld.delete(cp);
+    _reseatAt.delete(cp);
+    _ckMemberKeys.delete(cp);
+    _churchVoices.delete(cp);
+    delete _carekeys[cp];
+    delete _carekeyRev[cp];
+    delete _carekeyTs[cp];
+    for (const k of _sealedNames.keys()) {
+      if (k.startsWith(cp + "|")) _sealedNames.delete(k);
+    }
+    for (const k of _sealedMine.keys()) {
+      if (k.startsWith(cp + "|")) _sealedMine.delete(k);
+    }
+    for (const k of Object.keys(_gkeys)) {
+      if (k.startsWith(cp + "|")) {
+        delete _gkeys[k];
+        delete _gkeyTs[k];
+      }
+    }
+    const KEEP_PREFIX = ["trinityone.bringkids.", "trinityone.mykidnames.", "trinityone.arrivedat."];
+    try {
+      const npub = npubEncode(cp);
+      const kill = [];
+      for (let i3 = 0; i3 < localStorage.length; i3++) {
+        const k = localStorage.key(i3);
+        if (!k || !k.startsWith("trinityone.")) continue;
+        if (KEEP_PREFIX.some((p) => k.startsWith(p))) continue;
+        if (k.includes(cp) || k.includes(npub)) kill.push(k);
+      }
+      kill.forEach((k) => {
+        try {
+          localStorage.removeItem(k);
+        } catch {
+        }
+      });
+    } catch (e) {
+    }
+  }
   window.Fellowship = {
     relays: loadRelays(),
     // What the relay said about OUR proof, and how far this device's clock is from the relay's. A screen that
@@ -9775,6 +9843,10 @@
         return Promise.resolve([]);
       }
     },
+    forgetChurch(npubOrHex) {
+      const cp = toPub(npubOrHex);
+      if (cp) _forgetChurch(cp);
+    },
     // Community-PIN forensic hygiene: wipe the cached community CONTENT a locked phone should not be holding —
     // profiles, member rosters, group/category lists, doc + member hubs, chat-seen markers, family links, the
     // serving/rota caches and the care module's cached needs, slots, skips and settings. Called on lock and at
@@ -9959,6 +10031,7 @@
         localStorage.removeItem("trinityone.joinedAt:" + cp);
       } catch {
       }
+      _forgetChurch(cp);
       return { ok: true, evt };
     },
     // live count of a church's members — matches the steward's rule: distinct people (not the church)
