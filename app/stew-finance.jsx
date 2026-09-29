@@ -237,12 +237,15 @@ function FinanceImport({ book, F, onPost, onClose }) {
     if (!parsed) return;
     const ls = F.statementLines({ rows: parsed.rows, mapping: builtMapping(), decimals: dec, monthFirst });
     if (!ls.length) { setErr('No transactions found with those columns — check the amount column(s).'); return; }
-    const already = F.importedKeys(book);
+    const held = new Map();
+    for (const e of book.journal) if (e.importKey) held.set(e.importKey, (held.get(e.importKey) || 0) + 1);
     const rs = ls.map(l => {
       const sug = F.suggestCategory(l, []);
       const account = (sug && book.accounts.get(sug.account)) ? sug.account : defAccount(l.dir);
       const fund = (sug && sug.fund && book.funds.has(sug.fund)) ? sug.fund : 'general';
-      const dup = already.has(l.key);
+      const n = l.key ? (held.get(l.key) || 0) : 0;
+      const dup = n > 0;
+      if (dup) held.set(l.key, n - 1);
       return { account, fund, selected: !dup, dup };
     });
     setLines(ls); setRowState(rs); setErr(''); setStep('review');

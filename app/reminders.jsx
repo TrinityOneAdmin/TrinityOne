@@ -26,14 +26,30 @@
   }
 
   const webTimers = {};
+  async function cancelAll() {
+    const LN = cap();
+    const done = load();
+    const ids = Object.keys(done).map(Number).filter(Boolean);
+    if (LN && ids.length) { try { await LN.cancel({ notifications: ids.map(id => ({ id })) }); } catch {} }
+    Object.keys(webTimers).forEach(k => { clearTimeout(webTimers[k]); delete webTimers[k]; });
+    save({});
+  }
   async function sync(slots) {
     const prefs = getPrefs();
-    if (!prefs.enabled || !prefs.reminders) return;   // member turned serving reminders off
+    if (!prefs.enabled || !prefs.reminders) { await cancelAll(); return; }
     slots = (slots || []).filter(s => s && s.date);
-    if (!slots.length) return;
     const LN = cap();
     const done = load();
     const now = Date.now();
+    const wantIds = new Set();
+    slots.forEach(s => { const at = remindAt(s.date); if (at && at.getTime() > now) wantIds.add(hashId(s.id || (s.date + s.role))); });
+    const staleIds = Object.keys(done).map(Number).filter(id => id && !wantIds.has(id));
+    if (staleIds.length) {
+      if (LN) { try { await LN.cancel({ notifications: staleIds.map(id => ({ id })) }); } catch {} }
+      staleIds.forEach(id => { delete done[id]; if (webTimers[id]) { clearTimeout(webTimers[id]); delete webTimers[id]; } });
+      save(done);
+    }
+    if (!slots.length) return;
     if (!perm) { const ok = await ensurePerm(); if (!ok) return; }
 
     if (LN) {
@@ -55,7 +71,9 @@
       if (ms <= 0 || ms > 1000 * 60 * 60 * 24 * 20) return;     // setTimeout caps ~24.8 days
       if (webTimers[id]) return;
       webTimers[id] = setTimeout(() => { try { new Notification('You’re serving tomorrow', { body: `${s.teamName || 'Serving'} · ${s.role || ''}${s.time ? ' at ' + s.time : ''}` }); } catch (e) {} }, ms);
+      done[id] = true;
     });
+    save(done);
   }
 
   // ---- web push registration (PWA only; Capacitor uses local notifications) ----
@@ -131,6 +149,7 @@
       const p = { ...getPrefs(), ...patch };
       savePrefs(p);
       try { await registerPush(null, true); } catch {}
+      if (!p.enabled || !p.reminders) { try { await cancelAll(); } catch {} }
       return p;
     },
   };
