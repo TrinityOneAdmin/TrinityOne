@@ -66,6 +66,7 @@ function parent({ fails = [], children = [], failWith = null } = {}) {
     // ('not-sent' | 'refused' | 'unconfirmed'), and `createChildAccount` now records its answer per
     // document in `why`. A stub here would supply the very distinction the branch below is named after.
     _pubReason: new Function(grabMethod(SRC, 'function _pubReason(e)') + '\nreturn _pubReason;')(),
+    publishSetFor: () => ['wss://test.invalid'],
     sk: parentSk,
     pub: state.parentPub,
     toPub: () => CHURCH,
@@ -240,6 +241,7 @@ function nextLaunch({ relay, children, parentPub }) {
     toPub: () => CHURCH,
     pub: parentPub,
     relaysForChurch: () => ['wss://test.invalid'],
+    _loadRemovedChildren: () => [],
     _dtag: dOf,
     _loadChildren: () => children,
     _saveChildLink: (rec) => { children.push(rec); },

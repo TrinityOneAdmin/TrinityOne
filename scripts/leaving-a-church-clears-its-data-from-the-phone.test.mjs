@@ -60,6 +60,7 @@ test('leaveMembership clears per-church localStorage keys but keeps the parent\'
     finalizeEvent2: (tmpl, _sk) => { events.push(tmpl); return { ...tmpl, id: 'e1', sig: 'sig', pubkey: 'pk' }; },
     _publishAny: async () => true,
     _pubReason: () => 'test',
+    publishSetFor: () => ['wss://r'],
     _clearJoinSent: () => {},
     _dropJoinIntent: () => {},
     _joinSent: {},
@@ -79,6 +80,7 @@ test('leaveMembership clears per-church localStorage keys but keeps the parent\'
     _carekeys: {}, _carekeyRev: {}, _carekeyTs: {},
     _sealedNames: new Map(), _sealedMine: new Map(),
     _gkeys: {}, _gkeyTs: {},
+    _dropChurchBoxes: () => {},
     Object,
   };
   const proxy = new Proxy(scope, {
@@ -136,6 +138,7 @@ test('CONTROL: a second church\'s data is not affected by leaving the first', as
     finalizeEvent2: (tmpl, _sk) => ({ ...tmpl, id: 'e1', sig: 'sig', pubkey: 'pk' }),
     _publishAny: async () => true,
     _pubReason: () => 'test',
+    publishSetFor: () => ['wss://r'],
     _clearJoinSent: () => {},
     _dropJoinIntent: () => {},
     _joinSent: {},
@@ -155,6 +158,7 @@ test('CONTROL: a second church\'s data is not affected by leaving the first', as
     _carekeys: {}, _carekeyRev: {}, _carekeyTs: {},
     _sealedNames: new Map(), _sealedMine: new Map(),
     _gkeys: {}, _gkeyTs: {},
+    _dropChurchBoxes: () => {},
     Object,
   };
   const proxy = new Proxy(scope, {

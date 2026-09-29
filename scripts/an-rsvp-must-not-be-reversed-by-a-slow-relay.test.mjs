@@ -44,6 +44,7 @@ function engine(mode) {
       throw err;
     },
     _pubReason: new Function(fnBody(SHIP, 'function _pubReason(e)', '_pubReason') + '\nreturn _pubReason;')(),
+    publishSetFor: () => ['wss://x/relay'],
     String, JSON, Date, Math, Number, Array, Object, Boolean, console, Promise,
   };
   const proxy = new Proxy(scope, {

@@ -119,7 +119,8 @@ function liftWriteCheckin(actor, keys /* sid -> hex */) {
     // exists to stop. Lifting it means this harness gets whatever the bundle really does.
     _todayISO: new Function('return (' + stmt(FELLOWSHIP, 'var _todayISO = () =>', '_todayISO')
       .replace(/^var\s+\w+\s*=\s*/, '').replace(/;\s*$/, '') + ');')(),
-    CHECKIN_D: D.CHECKIN, NET, relaysForChurch: () => [],
+    CHECKIN_D: D.CHECKIN, NET, relaysForChurch: () => [], publishSetFor: () => [],
+    _pubReason: (e) => (e && e.refused) ? 'refused' : (e && e.unsent) ? 'not-sent' : 'unconfirmed',
     _publishAny: async (_relays, evt) => { captured.push(evt); return true; },
     String, Date, Math, JSON, Number, Array, Object, Boolean, RegExp, console,
   };
@@ -142,7 +143,8 @@ function liftWriteArrival(actor) {
     encrypt: (pt, k) => nip44.encrypt(pt, k),
     getConversationKey: (a, b) => nip44.utils.getConversationKey(a, b),
     finalizeEvent2: (t, sec) => finalizeEvent(t, sec),
-    CHECKINARRIVAL_D: D.CHECKINARRIVAL, NET, relaysForChurch: () => [],
+    CHECKINARRIVAL_D: D.CHECKINARRIVAL, NET, relaysForChurch: () => [], publishSetFor: () => [],
+    _pubReason: (e) => (e && e.refused) ? 'refused' : (e && e.unsent) ? 'not-sent' : 'unconfirmed',
     _publishAny: async (_relays, evt) => { captured.push(evt); return true; },
     String, Date, Math, JSON, Number, Array, Object, Boolean, RegExp, console,
   };
@@ -173,7 +175,8 @@ function liftReleaseCheckin(actor, keys) {
     // exists to stop. Lifting it means this harness gets whatever the bundle really does.
     _todayISO: new Function('return (' + stmt(FELLOWSHIP, 'var _todayISO = () =>', '_todayISO')
       .replace(/^var\s+\w+\s*=\s*/, '').replace(/;\s*$/, '') + ');')(),
-    CHECKIN_D: D.CHECKIN, NET, relaysForChurch: () => [],
+    CHECKIN_D: D.CHECKIN, NET, relaysForChurch: () => [], publishSetFor: () => [],
+    _pubReason: (e) => (e && e.refused) ? 'refused' : (e && e.unsent) ? 'not-sent' : 'unconfirmed',
     _publishAny: async (_relays, evt) => { captured.push(evt); return true; },
     String, Date, Math, JSON, Number, Array, Object, Boolean, RegExp, console,
   };
@@ -523,7 +526,7 @@ function liftArrivalWithPublish(actor, publishImpl) {
     encrypt: (pt, k) => nip44.encrypt(pt, k),
     getConversationKey: (a, b) => nip44.utils.getConversationKey(a, b),
     finalizeEvent2: (t, sec) => finalizeEvent(t, sec),
-    CHECKINARRIVAL_D: D.CHECKINARRIVAL, NET, relaysForChurch: () => ['wss://one.example/relay'],
+    CHECKINARRIVAL_D: D.CHECKINARRIVAL, NET, relaysForChurch: () => ['wss://one.example/relay'], publishSetFor: () => ['wss://one.example/relay'],
     _publishAny: publishImpl,
     String, Date, Math, JSON, Number, Array, Object, Boolean, RegExp, console,
   };

@@ -34,6 +34,7 @@ function makeScope({ withKey = true } = {}) {
       finalizeEvent2: (tmpl, _sk) => { const e = { ...tmpl, id: 'e1', sig: 'sig', pubkey: 'pk' }; return e; },
       _publishAny: async (relays, evt) => { published.push(evt); return true; },
       churchRelays: () => ['wss://r'],
+      publishSetFor: () => ['wss://r'],
       _pubReason: () => 'test',
       _nameKeys: nameKeys,
       _sealChurchDocMember: (cp, obj) => {

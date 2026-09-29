@@ -64,6 +64,7 @@ function engine(publishResult = true) {
     finalizeEvent2: finalizeEvent,
     _publishAny: async (_relays, evt) => { published.push(evt); if (!publishResult) throw new Error('refused'); return true; },
     churchRelays: () => ['wss://test.invalid'],
+    publishSetFor: () => ['wss://test.invalid'],
     NET: 'trinityone', CARE_D: 'trinityone/care:',
     console: { warn() {} },
   };

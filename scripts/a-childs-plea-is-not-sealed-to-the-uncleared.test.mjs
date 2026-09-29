@@ -117,6 +117,7 @@ function loadPublish({ team, childAudience, clearance = [], relayDocs = [], rela
     finalizeEvent,
     _publishAny: async (_relays, evt) => { published.push(evt); return evt; },
     churchRelays: () => ['wss://test.invalid', 'wss://second-relay.invalid'],
+    publishSetFor: () => ['wss://test.invalid', 'wss://second-relay.invalid'],
     NET: 'trinityone', CAREREQ_D: 'trinityone/carereq:', CARETEAM_D: 'trinityone/careteam:',
     console,
   };

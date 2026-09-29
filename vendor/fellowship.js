@@ -7352,6 +7352,31 @@
     } catch {
     }
   }
+  var CHURCH_BOXES_KEY = "trinityone.churchboxes";
+  function _loadChurchBoxes(cp) {
+    try {
+      const m = JSON.parse(localStorage.getItem(CHURCH_BOXES_KEY) || "{}");
+      return Array.isArray(m[cp]) ? m[cp] : [];
+    } catch {
+      return [];
+    }
+  }
+  function _saveChurchBoxes(cp, urls) {
+    try {
+      const m = JSON.parse(localStorage.getItem(CHURCH_BOXES_KEY) || "{}");
+      m[cp] = [...new Set(urls.filter(Boolean))];
+      localStorage.setItem(CHURCH_BOXES_KEY, JSON.stringify(m));
+    } catch {
+    }
+  }
+  function _dropChurchBoxes(cp) {
+    try {
+      const m = JSON.parse(localStorage.getItem(CHURCH_BOXES_KEY) || "{}");
+      delete m[cp];
+      localStorage.setItem(CHURCH_BOXES_KEY, JSON.stringify(m));
+    } catch {
+    }
+  }
   function _maybeDropRelay(url, exceptCp) {
     if (CANONICAL_RELAYS.includes(url) || DEFAULT_RELAYS.includes(url)) return;
     for (const [c, m] of _churchRelays) {
@@ -7393,6 +7418,7 @@
           _maybeDropRelay(u, cp);
         }
       }
+      if (own && own.size) _saveChurchBoxes(cp, [...own.keys()]);
       _saveHW(cp, at);
     } finally {
       _applying.delete(cp);
@@ -7405,6 +7431,15 @@
     const boxes = own ? new Set([...own.values()].filter(Boolean)).size : 0;
     if (boxes >= 2) return _netRelays([.../* @__PURE__ */ new Set([...ownUrls, ...global.filter((r) => !CANONICAL_RELAYS.includes(r))])], cp);
     return _netRelays([.../* @__PURE__ */ new Set([...global, ...ownUrls, ...CANONICAL_RELAYS])], cp);
+  }
+  function publishSetFor(cp) {
+    const live = cp && _churchRelays.get(cp) ? [..._churchRelays.get(cp).keys()] : [];
+    const persisted = live.length ? live : _loadChurchBoxes(cp);
+    if (!persisted.length) return relaysForChurch(cp);
+    const own = cp && _churchRelays.get(cp);
+    const distinctBoxes = own ? new Set([...own.values()].filter(Boolean)).size : 0;
+    const canonical = distinctBoxes >= 2 ? [] : CANONICAL_RELAYS;
+    return _netRelays([.../* @__PURE__ */ new Set([...persisted, ...canonical])], cp);
   }
   var RELAYS_KEY = "trinityone.relays";
   function loadRelays() {
@@ -9307,6 +9342,7 @@
     _churchRoster.delete(cp);
     _churchRelays.delete(cp);
     _churchList.delete(cp);
+    _dropChurchBoxes(cp);
     _applying.delete(cp);
     _relayNetCache.delete(cp);
     _reseatOld.delete(cp);
@@ -10055,7 +10091,7 @@
       }
       let ok = false;
       try {
-        await _publishAny(window.Fellowship.relays, evt);
+        await _publishAny(publishSetFor(cp), evt);
         ok = true;
         _markJoinSent(cp, evt);
         _outbox = _outbox.filter((o) => o.evt.id !== evt.id);
@@ -10103,7 +10139,7 @@
         content: ""
       }, sk);
       try {
-        await _publishAny(window.Fellowship.relays, evt);
+        await _publishAny(publishSetFor(cp), evt);
       } catch (e) {
         return { ok: false, reason: _pubReason(e) };
       }
@@ -10309,6 +10345,7 @@
           });
           if (ok) {
             if (!(window.Fellowship.relays || []).includes(url)) window.Fellowship.setRelays([...window.Fellowship.relays || [], url]);
+            _saveChurchBoxes(cp, [..._loadChurchBoxes(cp), url]);
             out.added.push(url);
             _clearInvitePending(cp, url);
             return true;
@@ -10507,7 +10544,7 @@
         content: payload
       }, sk);
       try {
-        await _publishAny(window.Fellowship.relays, evt);
+        await _publishAny(publishSetFor(cp), evt);
       } catch (e) {
         return null;
       }
@@ -10652,7 +10689,8 @@
     // publish a message to a group (kind 1, tagged with the network + group ids)
     async publishMessage(groupId, content, extraTags = [], opts = {}) {
       if (!sk) await window.Fellowship.ready;
-      const churchTag = window.Fellowship.churchPub ? [["p", window.Fellowship.churchPub]] : [];
+      const cp = window.Fellowship.churchPub;
+      const churchTag = cp ? [["p", cp]] : [];
       let body = content, encTag = [];
       const gkey = (_gkeys[_gkKey(window.Fellowship.churchPub, groupId)] || [])[0];
       const wantsEnc = _wantsEncrypted(groupId, opts.encrypted);
@@ -10671,10 +10709,11 @@
         tags: [["t", NET], ["t", groupId], ...churchTag, ...encTag, ...extraTags],
         content: body
       }, sk);
-      _outbox.push({ evt, groupId, at: Math.floor(Date.now() / 1e3), tries: 0, relays: [...window.Fellowship.relays || []] });
+      const msgRelays = publishSetFor(cp);
+      _outbox.push({ evt, groupId, at: Math.floor(Date.now() / 1e3), tries: 0, relays: [...msgRelays] });
       _outboxSave();
       try {
-        await _publishBounded(window.Fellowship.relays, evt);
+        await _publishBounded(msgRelays, evt);
         evt._delivered = true;
         _outbox = _outbox.filter((o) => o.evt.id !== evt.id);
         _outboxSave();
@@ -11025,6 +11064,7 @@
     // react to a message (NIP-25 kind 7). content = emoji, or '-' to retract.
     async react(groupId, targetId, targetPubkey, content) {
       if (!sk) await window.Fellowship.ready;
+      const cp = window.Fellowship.churchPub;
       const evt = finalizeEvent2({
         kind: 7,
         created_at: Math.floor(Date.now() / 1e3),
@@ -11032,7 +11072,7 @@
         content
       }, sk);
       try {
-        await _publishAny(window.Fellowship.relays, evt);
+        await _publishAny(publishSetFor(cp), evt);
       } catch (e) {
         console.warn("[fellowship] react failed", e);
       }
@@ -11098,10 +11138,11 @@
     // the kind-5 so every open client drops it live. Tagged to the group so it rides the group subscription.
     async deleteOwnMessage(groupId, msgId) {
       if (!sk) await window.Fellowship.ready;
-      const churchTag = window.Fellowship.churchPub ? [["p", window.Fellowship.churchPub]] : [];
+      const cp = window.Fellowship.churchPub;
+      const churchTag = cp ? [["p", cp]] : [];
       const evt = finalizeEvent2({ kind: 5, created_at: Math.floor(Date.now() / 1e3), tags: [["e", msgId], ["t", NET], ["t", groupId], ...churchTag], content: "" }, sk);
       try {
-        await _publishAny(window.Fellowship.relays, evt);
+        await _publishAny(publishSetFor(cp), evt);
       } catch (e) {
         console.warn("[fellowship] deleteOwnMessage failed", e);
         return null;
@@ -11229,7 +11270,7 @@
       const content = JSON.stringify({ msgId: msg.id, text: msg.text || "", by: msg.pubkey || msg.by || "", ts: msg._ts || msg.ts || Math.floor(Date.now() / 1e3) });
       const evt = finalizeEvent2(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", "trinityone/pin:" + groupId], ["t", NET], ["t", groupId], ["p", cp]], content }), sk);
       try {
-        await _publishBounded(window.Fellowship.relays, evt);
+        await _publishBounded(publishSetFor(cp), evt);
       } catch (e) {
         console.warn("[fellowship] pinPost failed", e);
         return { ok: false, reason: _pubReason(e) };
@@ -11242,7 +11283,7 @@
       if (!cp || !groupId) return { ok: false, reason: "not-sent" };
       const evt = finalizeEvent2(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", "trinityone/pin:" + groupId], ["t", NET], ["t", groupId], ["p", cp], ["deleted", "1"]], content: "" }), sk);
       try {
-        await _publishBounded(window.Fellowship.relays, evt);
+        await _publishBounded(publishSetFor(cp), evt);
       } catch (e) {
         console.warn("[fellowship] unpin failed", e);
         return { ok: false, reason: _pubReason(e) };
@@ -11257,7 +11298,7 @@
       if (groupId) tags.push(["t", groupId]);
       const evt = finalizeEvent2(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags, content: JSON.stringify({ groupId: groupId || "" }) }), sk);
       try {
-        await _publishBounded(window.Fellowship.relays, evt);
+        await _publishBounded(publishSetFor(cp), evt);
       } catch (e) {
         console.warn("[fellowship] hideMessage failed", e);
         return { ok: false, reason: _pubReason(e) };
@@ -11272,7 +11313,7 @@
       if (groupId) tags.push(["t", groupId]);
       const evt = finalizeEvent2(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags, content: "" }), sk);
       try {
-        await _publishBounded(window.Fellowship.relays, evt);
+        await _publishBounded(publishSetFor(cp), evt);
       } catch (e) {
         console.warn("[fellowship] unhideMessage failed", e);
         return { ok: false, reason: _pubReason(e) };
@@ -11561,7 +11602,7 @@
       const sent = async (e, key) => {
         if (!e) return false;
         try {
-          await _publishAny(window.Fellowship.relays, e);
+          await _publishAny(publishSetFor(cp), e);
           return true;
         } catch (err) {
           console.warn("[fellowship] child publish failed", err);
@@ -12450,7 +12491,7 @@
         content: body
       }, sk);
       try {
-        await _publishAny(relaysForChurch(cp), evt);
+        await _publishAny(publishSetFor(cp), evt);
       } catch (e) {
         return {
           ok: false,
@@ -12546,7 +12587,7 @@
         content: sentinel
       }, sk);
       try {
-        await _publishAny(relaysForChurch(cp), evt);
+        await _publishAny(publishSetFor(cp), evt);
       } catch (e) {
         return { ok: false, reason: _pubReason(e), message: String(e && e.message || e) };
       }
@@ -12605,7 +12646,7 @@
         content: sentinel
       }, sk);
       try {
-        await _publishAny(relaysForChurch(cp), evt);
+        await _publishAny(publishSetFor(cp), evt);
       } catch (e) {
         return { ok: false, reason: _pubReason(e), message: String(e && e.message || e) };
       }
@@ -13047,7 +13088,7 @@
       const id = pub.slice(0, 16) + "-" + (/^[0-9a-f]{8,32}$/.test(draft) ? draft : _hex(crypto.getRandomValues(new Uint8Array(8))));
       const evt = finalizeEvent2({ kind: 30078, created_at: body.at, tags: [["d", CAREREQ_D + id], ["t", NET], ["t", "carereq"], ["church", cp], ["aud", childish ? "cleared" : "team"]], content: JSON.stringify({ keys, enc }) }, sk);
       try {
-        await _publishAny(churchRelays(), evt);
+        await _publishAny(publishSetFor(cp), evt);
       } catch (e) {
         console.warn("[fellowship] care request publish failed", e);
         if (/update the app/i.test(String(e && e.message || ""))) return { error: "stale-app" };
@@ -13148,7 +13189,7 @@
       if (!sk || !cp || !id) return null;
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", CAREREQ_D + id], ["t", NET], ["t", "carereq"], ["church", cp], ["deleted", "1"]], content: "" }, sk);
       try {
-        await _publishAny(churchRelays(), evt);
+        await _publishAny(publishSetFor(cp), evt);
       } catch (e) {
         console.warn("[fellowship] cancel request publish failed", e);
         return null;
@@ -13170,7 +13211,7 @@
       if (requesterPub) tags.push(["p", requesterPub]);
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags, content: JSON.stringify({ status: String(o.status || "handled"), needId: String(o.needId || ""), by: pub, at: Math.floor(Date.now() / 1e3) }) }, sk);
       try {
-        await _publishAny(churchRelays(), evt);
+        await _publishAny(publishSetFor(cp), evt);
       } catch (e) {
         console.warn("[fellowship] care request status publish failed", e);
         return null;
@@ -13219,7 +13260,7 @@
       }
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags, content: JSON.stringify(body) }, sk);
       try {
-        await _publishAny(churchRelays(), evt);
+        await _publishAny(publishSetFor(cp), evt);
       } catch (e) {
         console.warn("[fellowship] approve\u2192need publish failed", e);
         return null;
@@ -13326,7 +13367,7 @@
       }
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags, content: JSON.stringify(body) }, sk);
       try {
-        await _publishAny(churchRelays(), evt);
+        await _publishAny(publishSetFor(cp), evt);
       } catch (e) {
         console.warn("[fellowship] member need publish failed", e);
         return { error: _pubReason(e) };
@@ -13349,7 +13390,7 @@
       if ((need.recipient || "").toLowerCase() !== (pub || "").toLowerCase()) return false;
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", CARE_D + need.id], ["t", NET], ["church", cp], ["deleted", "1"]], content: "" }, sk);
       try {
-        await _publishAny(churchRelays(), evt);
+        await _publishAny(publishSetFor(cp), evt);
       } catch (e) {
         return { ok: false, reason: _pubReason(e) };
       }
@@ -13377,7 +13418,7 @@
       if (requesterPub) tags.push(["p", requesterPub]);
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags, content: JSON.stringify(sealed) }, sk);
       try {
-        await _publishAny(churchRelays(), evt);
+        await _publishAny(publishSetFor(cp), evt);
       } catch (e) {
         return null;
       }
@@ -13433,7 +13474,7 @@
       if (!sk || !cp || !careId || !iso) return null;
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", CARESLOT_D + careId + ":" + iso], ["t", NET], ["church", cp]], content: JSON.stringify({ careId, isoDate: iso, note: String(note || "").trim() }) }, sk);
       try {
-        await _publishAny(churchRelays(), evt);
+        await _publishAny(publishSetFor(cp), evt);
       } catch (e) {
         console.warn("[fellowship] care slot publish failed", e);
         return { ok: false, reason: _pubReason(e) };
@@ -13451,7 +13492,7 @@
       if (!sk || !cp || !careId || !iso) return null;
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", CARESLOT_D + careId + ":" + iso], ["t", NET], ["church", cp], ["deleted", "1"]], content: "" }, sk);
       try {
-        await _publishAny(churchRelays(), evt);
+        await _publishAny(publishSetFor(cp), evt);
       } catch (e) {
         console.warn("[fellowship] clear care slot publish failed", e);
         return { ok: false, reason: _pubReason(e) };
@@ -13535,7 +13576,7 @@
       const ct = JSON.stringify({ v: 2, to });
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", SAFE_D + cp], ["t", NET], ["church", cp], ["p", check.by]], content: ct }, sk);
       try {
-        await _publishAny(churchRelays(), evt);
+        await _publishAny(publishSetFor(cp), evt);
         return { ok: true, narrowed: !!picked.narrowed, reason: "" };
       } catch (e) {
         console.warn("[fellowship] markSafe publish failed", e);
@@ -13572,7 +13613,7 @@
       }
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags, content: JSON.stringify({ careId, isoDate: iso, reason: String(reason || "").trim() }) }, signingKey);
       try {
-        await _publishBounded(churchRelays(), evt);
+        await _publishBounded(publishSetFor(cp), evt);
         evt._delivered = true;
       } catch (e) {
         console.warn("[fellowship] care skip publish failed", e);
@@ -13604,7 +13645,7 @@
       }
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags, content: "" }, signingKey);
       try {
-        await _publishAny(churchRelays(), evt);
+        await _publishAny(publishSetFor(cp), evt);
       } catch (e) {
         console.warn("[fellowship] clear care skip publish failed", e);
         return { ok: false, reason: _pubReason(e) };
@@ -13671,7 +13712,7 @@
       const clean4 = Array.isArray(tags) ? tags.map((t) => String(t || "").trim()).filter(Boolean).slice(0, 8) : [];
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", CAREAVAIL_D + cp], ["t", NET], ["church", cp]], content: _sealChurchDocMember(cp, { available: true, tags: clean4, note: String(note || "").trim().slice(0, 240) }) }, sk);
       try {
-        await _publishAny(churchRelays(), evt);
+        await _publishAny(publishSetFor(cp), evt);
       } catch (e) {
         console.warn("[fellowship] care avail publish failed", e);
         return { ok: false, reason: _pubReason(e) };
@@ -13689,7 +13730,7 @@
       if (!sk || !cp) return null;
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", CAREAVAIL_D + cp], ["t", NET], ["church", cp], ["deleted", "1"]], content: "" }, sk);
       try {
-        await _publishAny(churchRelays(), evt);
+        await _publishAny(publishSetFor(cp), evt);
       } catch (e) {
         return { ok: false, reason: _pubReason(e) };
       }
@@ -13788,7 +13829,7 @@
       const content = JSON.stringify({ date: ev.date || "", time: ev.time || "", title: ev.title || "Event", where: ev.where || "", blurb: ev.blurb || "", accent: ev.accent || "var(--clay)", image: ev.image || "", groupId });
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", "trinityone/event:" + id], ["t", NET], ["t", groupId], ["p", cp]], content }, sk);
       try {
-        await _publishAny(window.Fellowship.relays, evt);
+        await _publishAny(publishSetFor(cp), evt);
       } catch (e) {
         console.warn("[fellowship] publishGroupEvent failed", e);
         return null;
@@ -13880,7 +13921,7 @@
       const content = JSON.stringify({ request: requestId, v: verdict, swapTo: swapTo || "" });
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", "trinityone/reqreply:" + requestId], ["t", NET], ["p", cp]], content }, sk);
       try {
-        await _publishAny(window.Fellowship.relays, evt);
+        await _publishAny(publishSetFor(cp), evt);
       } catch (e) {
         return { ok: false, reason: _pubReason(e) };
       }
@@ -13941,7 +13982,7 @@
       const content = JSON.stringify({ event: eventId, v: verdict });
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", "trinityone/rsvp:" + eventId], ["t", NET], ["p", cp]], content }, sk);
       try {
-        await _publishAny(window.Fellowship.relays, evt);
+        await _publishAny(publishSetFor(cp), evt);
       } catch (e) {
         return { ok: false, reason: _pubReason(e) };
       }
@@ -13995,7 +14036,7 @@
       const content = JSON.stringify({ dates: list });
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", "trinityone/unavail:" + me], ["t", NET], ["p", cp]], content }, sk);
       try {
-        await _publishBounded(window.Fellowship.relays, evt);
+        await _publishBounded(publishSetFor(cp), evt);
       } catch (e) {
         try {
           e.reason = _pubReason(e);

@@ -99,6 +99,7 @@ function gateSource(src) {
     fnBody(src, 'function relayIdentityNonce', 'relayIdentityNonce'),
     fnBody(src, 'function relayHttpBase', 'relayHttpBase'),
     fnBody(src, 'function relayAddrKey', 'relayAddrKey'),
+    fnBody(src, 'async function verifyRelayIdentityDetailed', 'verifyRelayIdentityDetailed'),
     fnBody(src, 'async function verifyRelayIdentity(', 'verifyRelayIdentity'),
     stmt(src, 'var RELAY_NET_D = ', 'RELAY_NET_D'),
     fnBody(src, 'function _relayKey', '_relayKey'),
@@ -132,7 +133,6 @@ function memberOn({ church, relays = [], canonical = [], pins = {}, store = memS
   const pool = wirePool(me);
   const body = [
     gateSource(src),
-    fnBody(src, 'async function verifyRelayIdentityDetailed', 'verifyRelayIdentityDetailed'),
     fnBody(src, 'function churchRelaysRaw', 'churchRelaysRaw'),
     fnBody(src, 'function _adoptionOrigin', '_adoptionOrigin'),
     stmt(src, 'var _relayNetCache = ', '_relayNetCache'),
@@ -175,6 +175,8 @@ function memberOn({ church, relays = [], canonical = [], pins = {}, store = memS
     _native: false, _staticHost: false, _loc: null,
     normalizeURL, verifyEvent, finalizeEvent, CustomEvent: Ev,
     toPub: (x) => (/^[0-9a-f]{64}$/i.test(String(x)) ? String(x).toLowerCase() : ''),
+    _loadChurchBoxes: (cp) => { try { const m = JSON.parse(store.getItem('trinityone.churchboxes') || '{}'); return Array.isArray(m[cp]) ? m[cp] : []; } catch { return []; } },
+    _saveChurchBoxes: (cp, urls) => { try { const m = JSON.parse(store.getItem('trinityone.churchboxes') || '{}'); m[cp] = [...new Set((urls || []).filter(Boolean))]; store.setItem('trinityone.churchboxes', JSON.stringify(m)); } catch {} },
   });
   const api = new Function('scope', `with (scope) { ${body}
     const _api = { ${adopt}, ${resolve}, ${setRelays} };

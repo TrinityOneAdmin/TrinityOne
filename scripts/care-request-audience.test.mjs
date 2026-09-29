@@ -92,6 +92,8 @@ function loadPublish({ team, sgSelf, childAudience, clearanceEvents, relayAuthed
     finalizeEvent,
     _publishAny: async (_relays, evt) => { published.push(evt); return evt; },
     churchRelays: () => ['wss://test.invalid'],
+    publishSetFor: () => ['wss://test.invalid'],
+    isNoNetworkRelay: () => false,
     NET: 'trinityone', CAREREQ_D: 'trinityone/carereq:', CARETEAM_D: 'trinityone/careteam:',
     // Present so that reverting to the OLD inline lookup RUNS rather than dying on a missing name: the
     // sabotage must fail on the assertion, not on the harness. querySync resolving empty is the exact

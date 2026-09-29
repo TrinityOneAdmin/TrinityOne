@@ -80,6 +80,7 @@ function loadRebuild({ closeSocketAfterMs = 0 } = {}) {
     _loadChildren: () => store.family,
     _saveChildLink: (l) => { store.family = store.family.filter(c => c.child !== l.child).concat(l); },
     relaysForChurch: () => [WS_URL],
+    _loadRemovedChildren: () => [],
     pool: {
       subscribeMany(_r, filters, handlers) {
         let w = null, closed = false;

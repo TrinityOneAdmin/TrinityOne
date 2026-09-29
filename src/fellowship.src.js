@@ -943,6 +943,10 @@ const _applying     = new Set();   // cp currently inside _applyChurchList — c
 const LISTHW_KEY = 'trinityone.relaylist.hw';   // persisted {cp: created_at} high-water — blocks a replayed OLDER list from downgrading or resurrecting a burned relay (R2 anti-replay).
 function _loadHW(cp) { try { const v = JSON.parse(localStorage.getItem(LISTHW_KEY) || '{}')[cp]; return (typeof v === 'number' && isFinite(v)) ? v : 0; } catch { return 0; } }   // type-guarded: garbage → 0 (safe newest-wins-from-scratch)
 function _saveHW(cp, at) { try { const m = JSON.parse(localStorage.getItem(LISTHW_KEY) || '{}'); if (typeof m[cp] !== 'number' || at > m[cp]) { m[cp] = at; localStorage.setItem(LISTHW_KEY, JSON.stringify(m)); } } catch {} }
+const CHURCH_BOXES_KEY = 'trinityone.churchboxes';
+function _loadChurchBoxes(cp) { try { const m = JSON.parse(localStorage.getItem(CHURCH_BOXES_KEY) || '{}'); return Array.isArray(m[cp]) ? m[cp] : []; } catch { return []; } }
+function _saveChurchBoxes(cp, urls) { try { const m = JSON.parse(localStorage.getItem(CHURCH_BOXES_KEY) || '{}'); m[cp] = [...new Set(urls.filter(Boolean))]; localStorage.setItem(CHURCH_BOXES_KEY, JSON.stringify(m)); } catch {} }
+function _dropChurchBoxes(cp) { try { const m = JSON.parse(localStorage.getItem(CHURCH_BOXES_KEY) || '{}'); delete m[cp]; localStorage.setItem(CHURCH_BOXES_KEY, JSON.stringify(m)); } catch {} }
 // R2 revoke: the church dropped `url` from its newest list → stop using it. Remove from the live pool only when safe:
 // never the shared canonical pool, never the origin/invite bootstrap relay, never a relay another church still lists.
 function _maybeDropRelay(url, exceptCp) {
@@ -972,6 +976,7 @@ async function _applyChurchList(cp) {
     if ((_churchList.get(cp) || {}).at !== at) return;        // superseded during adoption → don't revoke or persist
     const own = _churchRelays.get(cp);
     if (own) for (const u of [...own.keys()]) { if (!want.has(u)) { own.delete(u); _maybeDropRelay(u, cp); } }   // burn the omitted relays
+    if (own && own.size) _saveChurchBoxes(cp, [...own.keys()]);
     _saveHW(cp, at);
   } finally { _applying.delete(cp); }
 }
@@ -993,6 +998,15 @@ function relaysForChurch(cp) {
   // because a relay admitted by ANOTHER church's signature is not admitted for this one.
   if (boxes >= 2) return _netRelays([...new Set([...ownUrls, ...global.filter(r => !CANONICAL_RELAYS.includes(r))])], cp);
   return _netRelays([...new Set([...global, ...ownUrls, ...CANONICAL_RELAYS])], cp);
+}
+function publishSetFor(cp) {
+  const live = cp && _churchRelays.get(cp) ? [..._churchRelays.get(cp).keys()] : [];
+  const persisted = live.length ? live : _loadChurchBoxes(cp);
+  if (!persisted.length) return relaysForChurch(cp);
+  const own = cp && _churchRelays.get(cp);
+  const distinctBoxes = own ? new Set([...own.values()].filter(Boolean)).size : 0;
+  const canonical = distinctBoxes >= 2 ? [] : CANONICAL_RELAYS;
+  return _netRelays([...new Set([...persisted, ...canonical])], cp);
 }
 const RELAYS_KEY = 'trinityone.relays';
 // THE CANDIDATE LIST ON DISK, AND IT IS NOT FILTERED HERE — the C4 gate runs after this, not before it.
@@ -3227,7 +3241,7 @@ function _forgetChurch(cp) {
   const mHub = _memHubs.get(cp);
   if (mHub) { if (mHub.closer) { try { mHub.closer(); } catch {} } if (mHub.saveT) clearTimeout(mHub.saveT); _memHubs.delete(cp); }
   _nameKeys.delete(cp); _nameKeyTs.delete(cp);
-  _churchRoster.delete(cp); _churchRelays.delete(cp); _churchList.delete(cp);
+  _churchRoster.delete(cp); _churchRelays.delete(cp); _churchList.delete(cp); _dropChurchBoxes(cp);
   _applying.delete(cp); _relayNetCache.delete(cp);
   _reseatOld.delete(cp); _reseatAt.delete(cp); _ckMemberKeys.delete(cp);
   _churchVoices.delete(cp);
@@ -3867,7 +3881,7 @@ window.Fellowship = {
     }
     let ok = false;
     try {
-      await _publishAny(window.Fellowship.relays, evt);
+      await _publishAny(publishSetFor(cp), evt);
       ok = true;
       _markJoinSent(cp, evt);   // the one place "sent" is a fact — see JOINSENT_KEY
       // DEQUEUE ON SUCCESS — the other half of "queue first, then attempt", and it was missing. sendMessage
@@ -3917,7 +3931,7 @@ window.Fellowship = {
     // A SEND THAT LANDED NOWHERE MUST NOT COME BACK LOOKING LIKE ONE THAT DID. Audit 2026-09-02 #6.
     // _publishAny THROWS when no relay accepted (and resolves true otherwise), and this swallowed that and
     // returned the event anyway — so every caller read a total failure as a success and said so on screen.
-    try { await _publishAny(window.Fellowship.relays, evt); } catch (e) { return { ok: false, reason: _pubReason(e) }; }
+    try { await _publishAny(publishSetFor(cp), evt); } catch (e) { return { ok: false, reason: _pubReason(e) }; }
     _clearJoinSent(cp);   // they have left: the next follow starts from "not yet asked", not from "sent"
     _dropJoinIntent(cp);  // …and no promise to join them survives the leaving
     try { localStorage.removeItem('trinityone.joinedAt:' + cp); } catch {}
@@ -4107,6 +4121,7 @@ window.Fellowship = {
         });
         if (ok) {
           if (!(window.Fellowship.relays || []).includes(url)) window.Fellowship.setRelays([...(window.Fellowship.relays || []), url]);
+          _saveChurchBoxes(cp, [..._loadChurchBoxes(cp), url]);
           out.added.push(url);
           _clearInvitePending(cp, url);
           return true;
@@ -4272,7 +4287,7 @@ window.Fellowship = {
     if (!payload) return null;
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000),
       tags: [['d', 'trinityone/name:' + cp], ['t', NET], ['church', cp]], content: payload }, sk);
-    try { await _publishAny(window.Fellowship.relays, evt); } catch (e) { return null; }
+    try { await _publishAny(publishSetFor(cp), evt); } catch (e) { return null; }
     _sealedNames.set(cp + '|' + pub, nm);
     _sealedMine.set(cp, nm + '|' + _ringId(cp));
     return evt;
@@ -4516,7 +4531,8 @@ window.Fellowship = {
   // publish a message to a group (kind 1, tagged with the network + group ids)
   async publishMessage(groupId, content, extraTags = [], opts = {}) {
     if (!sk) await window.Fellowship.ready;
-    const churchTag = window.Fellowship.churchPub ? [['p', window.Fellowship.churchPub]] : [];
+    const cp = window.Fellowship.churchPub;
+    const churchTag = cp ? [['p', cp]] : [];
     let body = content, encTag = [];
     const gkey = (_gkeys[_gkKey(window.Fellowship.churchPub, groupId)] || [])[0];   // encrypted group → seal under THIS church's CURRENT key, i.e. ring[0] (H5)
     // NEVER SEND IN CLEAR TO A ROOM THAT SAYS IT IS ENCRYPTED.
@@ -4554,14 +4570,15 @@ window.Fellowship = {
     // E1: queue FIRST, then attempt delivery. If the attempt fails the message stays queued and is retried
     // on the next reconnect, online event or tick — so it eventually arrives instead of being lost. The UI
     // renders queued items as pending bubbles (outboxFor), and the relay's echo removes them by id.
-    _outbox.push({ evt, groupId, at: Math.floor(Date.now() / 1000), tries: 0, relays: [...(window.Fellowship.relays || [])] });
+    const msgRelays = publishSetFor(cp);
+    _outbox.push({ evt, groupId, at: Math.floor(Date.now() / 1000), tries: 0, relays: [...msgRelays] });
     _outboxSave();
     try {
       // _publishBounded, not raw Promise.any: a socket that never opens leaves Promise.any pending forever,
       // so offline the await never settled — `_delivered` was never set false and the "No signal, we'll send
       // it when you're back" toast never fired in exactly the offline case it's for. Bounded → the signal
       // always arrives within 12s; the message is already queued above, so the 45s flush is the retry path.
-      await _publishBounded(window.Fellowship.relays, evt);
+      await _publishBounded(msgRelays, evt);
       evt._delivered = true;
       _outbox = _outbox.filter(o => o.evt.id !== evt.id); _outboxSave();
     } catch (e) {
@@ -4793,11 +4810,12 @@ window.Fellowship = {
   // react to a message (NIP-25 kind 7). content = emoji, or '-' to retract.
   async react(groupId, targetId, targetPubkey, content) {
     if (!sk) await window.Fellowship.ready;
+    const cp = window.Fellowship.churchPub;
     const evt = finalizeEvent({
       kind: 7, created_at: Math.floor(Date.now() / 1000),
       tags: [['e', targetId], ['p', targetPubkey || ''], ['t', NET], ['t', groupId]], content,
     }, sk);
-    try { await _publishAny(window.Fellowship.relays, evt); } catch (e) { console.warn('[fellowship] react failed', e); }
+    try { await _publishAny(publishSetFor(cp), evt); } catch (e) { console.warn('[fellowship] react failed', e); }
     return evt;
   },
 
@@ -4834,9 +4852,10 @@ window.Fellowship = {
   // the kind-5 so every open client drops it live. Tagged to the group so it rides the group subscription.
   async deleteOwnMessage(groupId, msgId) {
     if (!sk) await window.Fellowship.ready;
-    const churchTag = window.Fellowship.churchPub ? [['p', window.Fellowship.churchPub]] : [];
+    const cp = window.Fellowship.churchPub;
+    const churchTag = cp ? [['p', cp]] : [];
     const evt = finalizeEvent({ kind: 5, created_at: Math.floor(Date.now() / 1000), tags: [['e', msgId], ['t', NET], ['t', groupId], ...churchTag], content: '' }, sk);
-    try { await _publishAny(window.Fellowship.relays, evt); } catch (e) { console.warn('[fellowship] deleteOwnMessage failed', e); return null; }
+    try { await _publishAny(publishSetFor(cp), evt); } catch (e) { console.warn('[fellowship] deleteOwnMessage failed', e); return null; }
     return evt;
   },
 
@@ -4936,7 +4955,7 @@ window.Fellowship = {
     const cp = toPub(churchNpub); if (!cp || !groupId || !msg || !msg.id) return { ok: false, reason: 'not-sent' };
     const content = JSON.stringify({ msgId: msg.id, text: msg.text || '', by: msg.pubkey || msg.by || '', ts: msg._ts || msg.ts || Math.floor(Date.now() / 1000) });
     const evt = finalizeEvent(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/pin:' + groupId], ['t', NET], ['t', groupId], ['p', cp]], content }), sk);
-    try { await _publishBounded(window.Fellowship.relays, evt); }
+    try { await _publishBounded(publishSetFor(cp), evt); }
     catch (e) { console.warn('[fellowship] pinPost failed', e); return { ok: false, reason: _pubReason(e) }; }
     return { ok: true, evt };
   },
@@ -4944,7 +4963,7 @@ window.Fellowship = {
     if (!sk) await window.Fellowship.ready;
     const cp = toPub(churchNpub); if (!cp || !groupId) return { ok: false, reason: 'not-sent' };
     const evt = finalizeEvent(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/pin:' + groupId], ['t', NET], ['t', groupId], ['p', cp], ['deleted', '1']], content: '' }), sk);
-    try { await _publishBounded(window.Fellowship.relays, evt); }
+    try { await _publishBounded(publishSetFor(cp), evt); }
     catch (e) { console.warn('[fellowship] unpin failed', e); return { ok: false, reason: _pubReason(e) }; }
     return { ok: true, evt };
   },
@@ -4954,7 +4973,7 @@ window.Fellowship = {
     const tags = [['d', 'trinityone/hidden:' + msgId], ['t', NET], ['p', cp]];
     if (groupId) tags.push(['t', groupId]);
     const evt = finalizeEvent(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags, content: JSON.stringify({ groupId: groupId || '' }) }), sk);
-    try { await _publishBounded(window.Fellowship.relays, evt); }
+    try { await _publishBounded(publishSetFor(cp), evt); }
     catch (e) { console.warn('[fellowship] hideMessage failed', e); return { ok: false, reason: _pubReason(e) }; }
     return { ok: true, evt };
   },
@@ -4964,7 +4983,7 @@ window.Fellowship = {
     const tags = [['d', 'trinityone/hidden:' + msgId], ['t', NET], ['p', cp], ['deleted', '1']];
     if (groupId) tags.push(['t', groupId]);
     const evt = finalizeEvent(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags, content: '' }), sk);
-    try { await _publishBounded(window.Fellowship.relays, evt); }
+    try { await _publishBounded(publishSetFor(cp), evt); }
     catch (e) { console.warn('[fellowship] unhideMessage failed', e); return { ok: false, reason: _pubReason(e) }; }
     return { ok: true, evt };
   },
@@ -5263,7 +5282,7 @@ window.Fellowship = {
     // unacknowledged publish, all three would be truthy and the whole call would report SUCCESS over three
     // documents nobody confirmed. The reason goes in a parallel map instead; every existing contract holds.
     const why = { join: '', k0: '', name: '', req: '' };
-    const sent = async (e, key) => { if (!e) return false; try { await _publishAny(window.Fellowship.relays, e); return true; } catch (err) { console.warn('[fellowship] child publish failed', err); if (key) why[key] = _pubReason(err); return false; } };
+    const sent = async (e, key) => { if (!e) return false; try { await _publishAny(publishSetFor(cp), e); return true; } catch (err) { console.warn('[fellowship] child publish failed', err); if (key) why[key] = _pubReason(err); return false; } };
     const published = { join: false, k0: false, name: false, req: false };
     // A GATE, NOT A BATCH. The other three used to go out whatever became of the join. The join is what makes
     // the child a member, and the relay will not accept a name document from a pubkey it does not already know
@@ -6043,7 +6062,7 @@ window.Fellowship = {
     // on the wire and may already be on the worker's screen. A parent must not be sent to the desk to report a
     // failure that did not happen, so the caller gets a distinct reason and the screen says "we could not
     // confirm", never "that did not send".
-    try { await _publishAny(relaysForChurch(cp), evt); }
+    try { await _publishAny(publishSetFor(cp), evt); }
     catch (e) {
       return { ok: false, reason: _pubReason(e),
                message: String((e && e.message) || e), id: d };
@@ -6158,7 +6177,7 @@ window.Fellowship = {
     // rest of the window, with nothing prompting anyone to notice. Audit finding 2026-09-14.
     // `writeArrival` has answered these three ways since device finding F1 (2026-09-11) — the fix went into
     // one of three sibling writers. `err.refused` is set by `_publishAny` from _PUB_REFUSED.
-    try { await _publishAny(relaysForChurch(cp), evt); }
+    try { await _publishAny(publishSetFor(cp), evt); }
     catch (e) { return { ok: false, reason: _pubReason(e), message: String((e && e.message) || e) }; }
     return { ok: true, id };
   },
@@ -6227,7 +6246,7 @@ window.Fellowship = {
     // rest of the window, with nothing prompting anyone to notice. Audit finding 2026-09-14.
     // `writeArrival` has answered these three ways since device finding F1 (2026-09-11) — the fix went into
     // one of three sibling writers. `err.refused` is set by `_publishAny` from _PUB_REFUSED.
-    try { await _publishAny(relaysForChurch(cp), evt); }
+    try { await _publishAny(publishSetFor(cp), evt); }
     catch (e) { return { ok: false, reason: _pubReason(e), message: String((e && e.message) || e) }; }
     return { ok: true, id };
   },
@@ -6734,7 +6753,7 @@ window.Fellowship = {
     // message; swallowing it turned "your app is too old" into "check your connection", which sends somebody
     // asking for help off to look at their wifi. Everything else still returns null, so no existing caller
     // changes behaviour.
-    try { await _publishAny(churchRelays(), evt); }
+    try { await _publishAny(publishSetFor(cp), evt); }
     catch (e) {
       console.warn('[fellowship] care request publish failed', e);
       if (/update the app/i.test(String((e && e.message) || ''))) return { error: 'stale-app' };
@@ -6821,7 +6840,7 @@ window.Fellowship = {
     // A WITHDRAWAL THAT LANDED NOWHERE IS NOT A WITHDRAWAL. The request stays open on the care team's screen
     // and the member is told it is gone — so they neither expect help nor ask again. Same shape as the
     // serving reply and the RSVP; found in the 2026-09-04 sweep of every publish whose failure was swallowed.
-    try { await _publishAny(churchRelays(), evt); } catch (e) { console.warn('[fellowship] cancel request publish failed', e); return null; }
+    try { await _publishAny(publishSetFor(cp), evt); } catch (e) { console.warn('[fellowship] cancel request publish failed', e); return null; }
     return evt;
   },
   // ── care-team actions (careAdmin/steward): resolve a request, or approve it INTO a care need ──
@@ -6836,7 +6855,7 @@ window.Fellowship = {
     // …and neither is closing somebody's request. The asker reads this doc to learn what happened to them:
     // if it never lands they sit on "your care team will be in touch" for ever, and the team sees the request
     // still open and may work it twice.
-    try { await _publishAny(churchRelays(), evt); } catch (e) { console.warn('[fellowship] care request status publish failed', e); return null; }
+    try { await _publishAny(publishSetFor(cp), evt); } catch (e) { console.warn('[fellowship] care request status publish failed', e); return null; }
     return evt;
   },
   async declineCareRequest(req) {
@@ -6861,7 +6880,7 @@ window.Fellowship = {
     const recip = req.forSelf ? req.from : '';
     if (recip) { try { const secret = _hex(crypto.getRandomValues(new Uint8Array(32))); const skipTo = nip44e(JSON.stringify({ s: secret }), nip44ck(sk, recip)); if (skipTo) { body.skipEnc = skipTo; for (const day of dates) { const tokDay = await _sha256hex(new TextEncoder().encode(secret + ':' + day)); tags.push(['skiphash', day, await _sha256hex(new TextEncoder().encode(tokDay))]); } } } catch (e) { console.warn('[fellowship] skip token failed', e); } }
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags, content: JSON.stringify(body) }, sk);
-    try { await _publishAny(churchRelays(), evt); } catch (e) { console.warn('[fellowship] approve→need publish failed', e); return null; }
+    try { await _publishAny(publishSetFor(cp), evt); } catch (e) { console.warn('[fellowship] approve→need publish failed', e); return null; }
     const st = await window.Fellowship.setCareRequestStatus(req.id, req.from, { status: 'approved', needId: id });
     return { id, stillOpen: !st };
   },
@@ -6947,7 +6966,7 @@ window.Fellowship = {
     // Same three answers as every other writer, through the same `_pubReason` (see its CALLERS line). The
     // caller falls through to the private request only on the two SETTLED answers — `refused` (a box read
     // it and said no) and `not-sent` (nothing left the device) — and never on `unconfirmed`.
-    try { await _publishAny(churchRelays(), evt); }
+    try { await _publishAny(publishSetFor(cp), evt); }
     catch (e) { console.warn('[fellowship] member need publish failed', e); return { error: _pubReason(e) }; }
     return { id, need: true };
   },
@@ -6968,7 +6987,7 @@ window.Fellowship = {
     // told the church they are sorted to go and ask the care team to do a thing already done.
     // `{ ok, reason }` now. Fixed d-tag (`care:<need.id>` + deleted), so pressing again is safe.
     // The `!!r || true` it replaces was always `true` — _publishAny resolves `true` or throws.
-    try { await _publishAny(churchRelays(), evt); }
+    try { await _publishAny(publishSetFor(cp), evt); }
     catch (e) { return { ok: false, reason: _pubReason(e) }; }
     return { ok: true, evt };
   },
@@ -6994,7 +7013,7 @@ window.Fellowship = {
     const tags = [['d', CARECHAT_D + reqId + ':' + msgId], ['t', NET], ['t', 'carechat'], ['church', cp]];
     if (requesterPub) tags.push(['p', requesterPub]);
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags, content: JSON.stringify(sealed) }, sk);
-    try { await _publishAny(churchRelays(), evt); } catch (e) { return null; }
+    try { await _publishAny(publishSetFor(cp), evt); } catch (e) { return null; }
     return { id: msgId };
   },
   subscribeCareChat(reqId, cb) {
@@ -7030,7 +7049,7 @@ window.Fellowship = {
     // which sends a second cook to the same Tuesday, or makes the first one withdraw. The d-tag is fixed
     // (`careslot:<careId>:<iso>`), so pressing the button again REPLACES the same document and can never
     // double anything: the honest sentence is safe to act on. Same `{ ok, reason }` as setEventRsvp.
-    try { await _publishAny(churchRelays(), evt); }
+    try { await _publishAny(publishSetFor(cp), evt); }
     catch (e) { console.warn('[fellowship] care slot publish failed', e); return { ok: false, reason: _pubReason(e) }; }
     return { ok: true, evt };
   },
@@ -7041,7 +7060,7 @@ window.Fellowship = {
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CARESLOT_D + careId + ':' + iso], ['t', NET], ['church', cp], ['deleted', '1']], content: '' }, sk);
     // …and standing DOWN from one matters just as much: a person who believes they withdrew, and did not, is
     // still the only name against that day. Same three outcomes, same fixed d-tag, so the same safe retry.
-    try { await _publishAny(churchRelays(), evt); }
+    try { await _publishAny(publishSetFor(cp), evt); }
     catch (e) { console.warn('[fellowship] clear care slot publish failed', e); return { ok: false, reason: _pubReason(e) }; }
     return { ok: true, evt };
   },
@@ -7137,7 +7156,7 @@ window.Fellowship = {
     //  itself. Second time in three commits that a shipped rule-2 list named a function nobody can
     //  grep; a list that cannot be checked is not a list. Corrected 2026-09-15.) Nothing
     // in src/steward.src.js calls this; the console only READS safety replies.
-    try { await _publishAny(churchRelays(), evt); return { ok: true, narrowed: !!picked.narrowed, reason: '' }; }
+    try { await _publishAny(publishSetFor(cp), evt); return { ok: true, narrowed: !!picked.narrowed, reason: '' }; }
     catch (e) { console.warn('[fellowship] markSafe publish failed', e); return { ok: false, narrowed: false, reason: _pubReason(e) }; }
   },
   // the RECIPIENT marks a day they don't need help (relay rejects this from anyone but the recipient).
@@ -7162,7 +7181,7 @@ window.Fellowship = {
       else if (o && o.tok) tags.push(['skiptok', String(o.tok)]);
     } catch (e) {} }
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags, content: JSON.stringify({ careId, isoDate: iso, reason: String(reason || '').trim() }) }, signingKey);
-    try { await _publishBounded(churchRelays(), evt); evt._delivered = true; }
+    try { await _publishBounded(publishSetFor(cp), evt); evt._delivered = true; }
     catch (e) { console.warn('[fellowship] care skip publish failed', e); evt._delivered = false; }
     return evt;
   },
@@ -7182,7 +7201,7 @@ window.Fellowship = {
       else if (o && o.tok) tags.push(['skiptok', String(o.tok)]);
     } catch (e) {} }
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags, content: '' }, signingKey);
-    try { await _publishAny(churchRelays(), evt); }
+    try { await _publishAny(publishSetFor(cp), evt); }
     catch (e) { console.warn('[fellowship] clear care skip publish failed', e); return { ok: false, reason: _pubReason(e) }; }
     return { ok: true, evt };
   },
@@ -7231,7 +7250,7 @@ window.Fellowship = {
     // you — the church hasn't been told" was said over a listing that had very probably landed. The member
     // then either gives up on offering, or offers again out of band to a church that already has them.
     // Fixed d-tag (`careavail:<churchPub>`), so saving again replaces the same document.
-    try { await _publishAny(churchRelays(), evt); }
+    try { await _publishAny(publishSetFor(cp), evt); }
     catch (e) { console.warn('[fellowship] care avail publish failed', e); return { ok: false, reason: _pubReason(e) }; }
     return { ok: true, evt };
   },
@@ -7242,7 +7261,7 @@ window.Fellowship = {
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CAREAVAIL_D + cp], ['t', NET], ['church', cp], ['deleted', '1']], content: '' }, sk);
     // …and coming OFF the list must not be claimed either: a member who thinks they withdrew, and did not,
     // is still being counted on. Same three outcomes, same fixed d-tag, so the same safe retry.
-    try { await _publishAny(churchRelays(), evt); }
+    try { await _publishAny(publishSetFor(cp), evt); }
     catch (e) { return { ok: false, reason: _pubReason(e) }; }
     return { ok: true, evt };
   },
@@ -7325,7 +7344,7 @@ window.Fellowship = {
     const id = ev.id || ('evt' + Date.now().toString(36) + (++_evtSeq).toString(36) + Math.random().toString(36).slice(2, 6));
     const content = JSON.stringify({ date: ev.date || '', time: ev.time || '', title: ev.title || 'Event', where: ev.where || '', blurb: ev.blurb || '', accent: ev.accent || 'var(--clay)', image: ev.image || '', groupId });
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/event:' + id], ['t', NET], ['t', groupId], ['p', cp]], content }, sk);
-    try { await _publishAny(window.Fellowship.relays, evt); } catch (e) { console.warn('[fellowship] publishGroupEvent failed', e); return null; }
+    try { await _publishAny(publishSetFor(cp), evt); } catch (e) { console.warn('[fellowship] publishGroupEvent failed', e); return null; }
     return { id, ...JSON.parse(content) };
   },
   // the wider networks/groups-of-churches this church belongs to (it publishes network:<networkPub>)
@@ -7382,7 +7401,7 @@ window.Fellowship = {
     // arrives already decided and goes to the fixed d-tag `reqreply:<requestId>`, so pressing the same
     // button again writes the same document with the same answer. It cannot reverse itself the way
     // setEventRsvp's caller can.
-    try { await _publishAny(window.Fellowship.relays, evt); } catch (e) { return { ok: false, reason: _pubReason(e) }; }
+    try { await _publishAny(publishSetFor(cp), evt); } catch (e) { return { ok: false, reason: _pubReason(e) }; }
     return { ok: true, evt };
   },
   // my replies to serving requests (own reqreply docs) -> { requestId: verdict }
@@ -7421,7 +7440,7 @@ window.Fellowship = {
     // A SEND THAT LANDED NOWHERE MUST NOT COME BACK LOOKING LIKE ONE THAT DID. Audit 2026-09-02 #6.
     // _publishAny THROWS when no relay accepted (and resolves true otherwise), and this swallowed that and
     // returned the event anyway — so every caller read a total failure as a success and said so on screen.
-    try { await _publishAny(window.Fellowship.relays, evt); } catch (e) { return { ok: false, reason: _pubReason(e) }; }
+    try { await _publishAny(publishSetFor(cp), evt); } catch (e) { return { ok: false, reason: _pubReason(e) }; }
     return { ok: true, evt };
   },
   subscribeMyRsvps(onRsvps) {
@@ -7455,7 +7474,7 @@ window.Fellowship = {
     // with a bare `Error('timeout')` on the race, which carries neither flag, so `_pubReason` reads it as
     // `unconfirmed` — which is exactly right: the event is signed and on the wire and often lands a moment
     // later. Attached rather than returned, so every existing `catch` keeps working unchanged. 2026-09-16.
-    try { await _publishBounded(window.Fellowship.relays, evt); }
+    try { await _publishBounded(publishSetFor(cp), evt); }
     catch (e) { try { e.reason = _pubReason(e); } catch (x) {} throw e; }
     // Mirror only AFTER the church has it, so the sheet can never show dates the rota does not know about.
     try { localStorage.setItem(UNAVAIL_MIRROR + cp, JSON.stringify(list)); } catch (e) {}

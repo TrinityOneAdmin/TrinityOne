@@ -104,6 +104,7 @@ function engine(relay) {
     finalizeEvent,
     _publishAny: relay.publish,
     churchRelays: () => ['wss://test.invalid'],
+    publishSetFor: () => ['wss://test.invalid'],
     NET: 'trinityone', CAREREQ_D: 'trinityone/carereq:', CARE_D: 'trinityone/care:',
     CARETEAM_D: 'trinityone/careteam:',
     pool: { querySync: async () => [] },
