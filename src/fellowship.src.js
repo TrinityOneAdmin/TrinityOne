@@ -10,7 +10,7 @@ import { normalizeURL } from 'nostr-tools/utils';
 import { _absorbById, _forgetById, _seedFromCache, _reduceAll, _tombstoneTargets } from './church-doc-store.src.js';
 // Ask a relay to PROVE it holds the pubkey it advertises, instead of believing the string it prints.
 // Shared with the console so both surfaces answer that question the same way. See src/relay-identity.src.js.
-import { verifyRelayIdentity } from './relay-identity.src.js';
+import { verifyRelayIdentity, verifyRelayIdentityDetailed } from './relay-identity.src.js';
 // …and then decide whether the key it proved is one this church's network contains. Shared with the console
 // for the same reason: two surfaces that disagree about who is in the network is worse than either answer.
 // …and C4's gate, which is what actually keeps this church's data off a relay that cannot prove itself.
@@ -3043,6 +3043,9 @@ if (typeof window !== 'undefined') {
   // so the new connection has authenticated first; _flushing serialises it against the tick.
   window.addEventListener('trinity-relay-returned', () => { setTimeout(() => { _outboxFlush(); }, 3000); });
   window.addEventListener('online', () => { _outboxFlush(); });   // NB: navigator.onLine lies on native, but the EVENT still fires on a real transition
+  window.addEventListener('trinity-relay-returned', () => { setTimeout(_retryInvitePending, 5000); });
+  window.addEventListener('online', () => { setTimeout(_retryInvitePending, 3000); });
+  window.addEventListener('focus', () => { setTimeout(_retryInvitePending, 2000); });
   // Backoff (audit 2026-07-24): this fired every 45s forever. A member in a low-coverage area with a queued
   // message woke the radio every 45 seconds for hours — continuous battery drain for exactly the audience least
   // able to charge. Back off on repeated failure (45s → 15min cap) and reset the moment anything succeeds or the
@@ -3243,6 +3246,43 @@ function _forgetChurch(cp) {
     }
     kill.forEach(k => { try { localStorage.removeItem(k); } catch {} });
   } catch (e) {}
+}
+
+// ── invite-pending: retry unreachable relays from an invite ────────────────────────────────────────────────
+const _INVITE_PENDING_KEY = 'trinityone.invitepending';
+const _INVITE_PENDING_EXPIRY = 7 * 24 * 60 * 60 * 1000;
+const _INVITE_PENDING_MIN_GAP = 60 * 1000;
+function _getInvitePending() { try { return JSON.parse(localStorage.getItem(_INVITE_PENDING_KEY) || '[]'); } catch { return []; } }
+function _storeInvitePending(cp, url) {
+  const list = _getInvitePending().filter(p => !(p.cp === cp && p.url === url));
+  list.push({ cp, url, firstAt: Date.now(), lastTry: Date.now() });
+  try { localStorage.setItem(_INVITE_PENDING_KEY, JSON.stringify(list)); } catch {}
+}
+function _clearInvitePending(cp, url) {
+  const list = _getInvitePending().filter(p => !(p.cp === cp && p.url === url));
+  try { if (list.length) localStorage.setItem(_INVITE_PENDING_KEY, JSON.stringify(list)); else localStorage.removeItem(_INVITE_PENDING_KEY); } catch {}
+}
+let _retryPendingRunning = false;
+async function _retryInvitePending() {
+  if (_retryPendingRunning) return;
+  _retryPendingRunning = true;
+  try {
+    const list = _getInvitePending();
+    if (!list.length) return;
+    const now = Date.now();
+    const kept = [];
+    for (const p of list) {
+      if (now - p.firstAt > _INVITE_PENDING_EXPIRY) continue;
+      if (now - (p.lastTry || 0) < _INVITE_PENDING_MIN_GAP) { kept.push(p); continue; }
+      let ok = false;
+      try { ok = await isNetworkRelay(p.cp, p.url); } catch { ok = false; }
+      if (ok) {
+        if (!(window.Fellowship.relays || []).includes(p.url)) window.Fellowship.setRelays([...(window.Fellowship.relays || []), p.url]);
+        try { window.dispatchEvent(new CustomEvent('trinity-relay-returned', { detail: { url: p.url } })); } catch {}
+      } else { p.lastTry = now; kept.push(p); }
+    }
+    try { if (kept.length) localStorage.setItem(_INVITE_PENDING_KEY, JSON.stringify(kept)); else localStorage.removeItem(_INVITE_PENDING_KEY); } catch {}
+  } finally { _retryPendingRunning = false; }
 }
 
 window.Fellowship = {
@@ -4024,9 +4064,9 @@ window.Fellowship = {
   // messages went nowhere. Backwards compatibility (plan C5): enrol the pilot churches' relays BEFORE this
   // ships, or every printed invite naming one stops working.
   //
-  // → { added: [url], refused: [url] }
+  // → { added: [url], refused: [url], pending: [url] }
   async adoptInviteRelays(npubOrHex, raw) {
-    const out = { added: [], refused: [] };
+    const out = { added: [], refused: [], pending: [] };
     const cp = toPub(npubOrHex);
     if (!cp) return out;
     const s = String(raw || '');
@@ -4038,7 +4078,6 @@ window.Fellowship = {
     if (rm) { try { const u = decodeURIComponent(rm[1]); if (/^wss:\/\//i.test(u)) inviteUrl = u; } catch (e) {} }
     const take = async (url) => {
       if (!url) return false;
-      let ok = false;
       // NOT CHANGED TO `_gate.refresh`, DELIBERATELY — see the note in the batch 9 commit.
       //
       // The audit (#21) is right that this proves the address once here and the next publish proves it
@@ -4052,12 +4091,35 @@ window.Fellowship = {
       // most security-critical test in the repo, and re-injecting the gate into its lift, to save one
       // round trip on a join is a bad trade. If this is ever done, do it as its own change with that test
       // rewritten first and audited on its own.
-      try { ok = await isNetworkRelay(cp, url); } catch (e) { ok = false; }
-      if (ok) {
-        if (!(window.Fellowship.relays || []).includes(url)) window.Fellowship.setRelays([...(window.Fellowship.relays || []), url]);
-        out.added.push(url);
-      } else out.refused.push(url);
-      return ok;
+      //
+      // verifyRelayIdentityDetailed tells "unreachable" apart from "answered, not ours" — the one bit
+      // adoptInviteRelays lacked. The proof is passed straight to _isNetworkRelay so the address is
+      // proved and admitted in ONE round trip, not two.
+      let detail;
+      try { detail = await verifyRelayIdentityDetailed(url); } catch (e) { detail = { proof: null, reached: false }; }
+      if (detail.proof) {
+        const ok = await _isNetworkRelay(cp, url, {
+          verify: async () => detail.proof,
+          netEntries: churchRelayNet,
+          origin: _adoptionOrigin(),
+          pins: CANONICAL_RELAY_PUBS,
+        });
+        if (ok) {
+          if (!(window.Fellowship.relays || []).includes(url)) window.Fellowship.setRelays([...(window.Fellowship.relays || []), url]);
+          out.added.push(url);
+          _clearInvitePending(cp, url);
+          return true;
+        }
+        out.refused.push(url);
+        return false;
+      }
+      if (!detail.reached) {
+        _storeInvitePending(cp, url);
+        out.pending.push(url);
+        return false;
+      }
+      out.refused.push(url);
+      return false;
     };
     const got = await take(inviteUrl);
     // ?relayname= — the relay's STABLE directory name, because a self-hosted box behind a free tunnel gets a
@@ -4087,6 +4149,9 @@ window.Fellowship = {
     }
     if (out.refused.length) {
       try { window.dispatchEvent(new CustomEvent('trinity-relay-refused', { detail: { cp, urls: out.refused.slice() } })); } catch (e) {}
+    }
+    if (out.pending.length) {
+      try { window.dispatchEvent(new CustomEvent('trinity-relay-pending', { detail: { cp, urls: out.pending.slice() } })); } catch (e) {}
     }
     return out;
   },

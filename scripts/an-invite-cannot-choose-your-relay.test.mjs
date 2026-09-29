@@ -99,7 +99,7 @@ function gateSource(src) {
     fnBody(src, 'function relayIdentityNonce', 'relayIdentityNonce'),
     fnBody(src, 'function relayHttpBase', 'relayHttpBase'),
     fnBody(src, 'function relayAddrKey', 'relayAddrKey'),
-    fnBody(src, 'async function verifyRelayIdentity', 'verifyRelayIdentity'),
+    fnBody(src, 'async function verifyRelayIdentity(', 'verifyRelayIdentity'),
     stmt(src, 'var RELAY_NET_D = ', 'RELAY_NET_D'),
     fnBody(src, 'function _relayKey', '_relayKey'),
     stmt(src, 'var _isHex64 = ', '_isHex64'),
@@ -132,12 +132,21 @@ function memberOn({ church, relays = [], canonical = [], pins = {}, store = memS
   const pool = wirePool(me);
   const body = [
     gateSource(src),
+    fnBody(src, 'async function verifyRelayIdentityDetailed', 'verifyRelayIdentityDetailed'),
     fnBody(src, 'function churchRelaysRaw', 'churchRelaysRaw'),
     fnBody(src, 'function _adoptionOrigin', '_adoptionOrigin'),
     stmt(src, 'var _relayNetCache = ', '_relayNetCache'),
     stmt(src, 'var RELAY_NET_TTL_MS = ', 'RELAY_NET_TTL_MS'),
     fnBody(src, 'async function churchRelayNet', 'churchRelayNet'),
     fnBody(src, 'function isNetworkRelay2', 'isNetworkRelay2'),
+    stmt(src, 'var _INVITE_PENDING_KEY = ', '_INVITE_PENDING_KEY'),
+    stmt(src, 'var _INVITE_PENDING_EXPIRY = ', '_INVITE_PENDING_EXPIRY'),
+    stmt(src, 'var _INVITE_PENDING_MIN_GAP = ', '_INVITE_PENDING_MIN_GAP'),
+    fnBody(src, 'function _getInvitePending', '_getInvitePending'),
+    fnBody(src, 'function _storeInvitePending', '_storeInvitePending'),
+    fnBody(src, 'function _clearInvitePending', '_clearInvitePending'),
+    stmt(src, 'var _retryPendingRunning = ', '_retryPendingRunning'),
+    fnBody(src, 'async function _retryInvitePending', '_retryInvitePending'),
     stmt(src, 'var _gate = createRelayGate(', '_gate'),
     fnBody(src, 'function _netRelays', '_netRelays'),
     fnBody(src, 'function churchRelays()', 'churchRelays'),
@@ -149,8 +158,10 @@ function memberOn({ church, relays = [], canonical = [], pins = {}, store = memS
   const setRelays = fnBody(src, 'setRelays(urls) {', 'setRelays');
   // Guards on the lift. A slice that stopped containing the load-bearing line would leave every assertion
   // below passing over nothing at all.
-  assert.match(adopt, /await isNetworkRelay2\(cp, url\)/,
+  assert.match(adopt, /await verifyRelayIdentityDetailed\(url\)/,
     'vendor/fellowship.js: adoptInviteRelays no longer verifies before adopting — an invite is an instruction again');
+  assert.match(adopt, /await isNetworkRelay\(cp, url,/,
+    'vendor/fellowship.js: adoptInviteRelays no longer checks roots after the proof — an invite is an instruction again');
   assert.match(adopt, /if \(got\) return out;/,
     'vendor/fellowship.js: the name is resolved even when the invite\'s own address worked, which is AUDIT-2026-07-29 S3 ' +
     'reopened — a self-hosted church\'s joiner tells the shared directory they are joining, right now, at the ' +
@@ -171,9 +182,11 @@ function memberOn({ church, relays = [], canonical = [], pins = {}, store = memS
     window.Fellowship.resolveRelayName = (n) => _api.resolveRelayName(n);
     return { adoptInviteRelays: (c, r) => _api.adoptInviteRelays(c, r),
              resolveRelayName: (n) => _api.resolveRelayName(n),
+             retryInvitePending: () => _retryInvitePending(),
              churchRelays, churchRelaysRaw, gate: _gate }; }`)(scope);
   api.me = me;
   api.win = win;
+  api.store = store;
   api.relays = () => win.Fellowship.relays;
   // The lifted code closes over `fetch` in this scope, so a test that wants to watch which HOSTS are asked
   // swaps it here rather than wrapping globalThis — which would also catch this file's own fixtures.
@@ -637,6 +650,58 @@ test('a clone source that cannot prove who it is gets no request — and above a
     assert.deepEqual(seen.filter(r => r.path === '/export'), [],
       'the export was requested from an unproven host: ' + JSON.stringify(seen));
   } finally { con.close(); listener.stop(); }
+});
+
+// ── 8. SLOW-JOIN: an unreachable relay goes to pending, not refused ─────────────────────────────────────
+test('an unreachable invite relay is stored as pending and a retry adopts it when it comes back', async () => {
+  const store = memStore();
+  const blocked = secure(SIGNED.wsUrl);
+  const signedPort = new URL(SIGNED.base).port;
+  const blockingFetch = (u, o) => {
+    if (String(u).includes('127.0.0.1:' + signedPort)) return Promise.reject(new Error('simulated network down'));
+    return netFetch(u, o);
+  };
+  const app = memberOn({ church, relays: [secure(DIR.wsUrl)], canonical: [], store });
+  app.setFetch(blockingFetch);
+  try {
+    const res = await app.adoptInviteRelays(church.pub, '?follow=x&relay=' + encodeURIComponent(blocked));
+    assert.deepEqual(res.added, [], 'an unreachable relay was adopted without proving anything');
+    assert.deepEqual(res.refused, [], 'an unreachable relay was refused — it should be pending for retry');
+    assert.deepEqual(res.pending, [blocked], 'the unreachable relay was not stored as pending');
+    assert.equal(app.relays().includes(blocked), false, 'the relay was added before it proved anything');
+
+    const raw = store.getItem('trinityone.invitepending');
+    assert.ok(raw, 'nothing was stored in localStorage for the pending relay');
+    const entries = JSON.parse(raw);
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0].url, blocked);
+
+    const pev = app.win.events.filter(e => e.type === 'trinity-relay-pending');
+    assert.equal(pev.length, 1, 'no trinity-relay-pending event was dispatched');
+    assert.deepEqual(pev[0].detail.urls, [blocked]);
+
+    app.setFetch(netFetch);
+    entries[0].lastTry = 0;
+    store.setItem('trinityone.invitepending', JSON.stringify(entries));
+    await app.retryInvitePending();
+
+    assert.ok(app.relays().includes(blocked), 'the relay was not adopted after becoming reachable');
+    assert.equal(store.getItem('trinityone.invitepending'), null, 'the pending entry was not cleared after adoption');
+    const rev = app.win.events.filter(e => e.type === 'trinity-relay-returned');
+    assert.ok(rev.length > 0, 'no trinity-relay-returned event was dispatched after a pending relay was adopted');
+  } finally { app.close(); }
+});
+
+test('a REACHABLE relay that cannot prove identity is refused, not pending', async () => {
+  const store = memStore();
+  const app = memberOn({ church, relays: [secure(DIR.wsUrl)], canonical: [secure(SIGNED.wsUrl)], pins: { [secure(SIGNED.wsUrl)]: [SIGNED.relayPub] }, store });
+  try {
+    const res = await app.adoptInviteRelays(church.pub, '?follow=x&relay=' + encodeURIComponent(secure(STRANGER.wsUrl)));
+    assert.deepEqual(res.added, [], 'an unproven relay was adopted');
+    assert.deepEqual(res.refused, [secure(STRANGER.wsUrl)], 'the reachable-but-unproven relay was not refused');
+    assert.deepEqual(res.pending || [], [], 'a reachable relay that cannot prove identity should not be pending');
+    assert.equal(store.getItem('trinityone.invitepending'), null, 'a refused relay was stored as pending');
+  } finally { app.close(); }
 });
 
 test('a clone DESTINATION takes the full gate, and a non-member target ends up holding nothing', async () => {

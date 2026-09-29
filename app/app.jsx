@@ -1883,6 +1883,14 @@ function App() {
     window.addEventListener('trinity-relay-refused', onRefused);
     return () => window.removeEventListener('trinity-relay-refused', onRefused);
   }, []);
+  useAE(() => {
+    const onPending = (e) => {
+      const n = ((e && e.detail && e.detail.urls) || []).length;
+      if (n) toast(n === 1 ? 'Still reaching your church\'s relay — we\'ll keep trying' : 'Still reaching those relays — we\'ll keep trying');
+    };
+    window.addEventListener('trinity-relay-pending', onPending);
+    return () => window.removeEventListener('trinity-relay-pending', onPending);
+  }, []);
 
   const ctx = {
     dark: t.dark,

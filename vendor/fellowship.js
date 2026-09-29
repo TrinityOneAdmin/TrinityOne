@@ -3709,12 +3709,13 @@
       return str.toLowerCase().replace(/^wss?:\/\//, "").replace(/\/+$/, "");
     }
   }
-  async function verifyRelayIdentity(wssUrl) {
+  async function verifyRelayIdentityDetailed(wssUrl) {
+    let reached = false;
     try {
       const base = relayHttpBase(wssUrl);
-      if (!base) return null;
+      if (!base) return { proof: null, reached: false };
       const nonce = relayIdentityNonce();
-      if (!nonce) return null;
+      if (!nonce) return { proof: null, reached: false };
       const ctrl = new AbortController();
       const to = setTimeout(() => {
         try {
@@ -3730,6 +3731,7 @@
               base + "/relay-identity?nonce=" + nonce + "&for=" + encodeURIComponent(String(wssUrl || "")),
               { signal: ctrl.signal, cache: "no-store" }
             );
+            reached = true;
             return res.ok ? res.json() : null;
           })(),
           new Promise((_, rej) => setTimeout(() => rej(new Error("relay-identity timeout")), 6500))
@@ -3738,19 +3740,22 @@
         clearTimeout(to);
       }
       const ev = body && body.proof;
-      if (!ev || ev.kind !== 27235) return null;
-      if (typeof ev.pubkey !== "string" || !/^[0-9a-f]{64}$/i.test(ev.pubkey)) return null;
-      if (!verifyEvent2(ev)) return null;
+      if (!ev || ev.kind !== 27235) return { proof: null, reached };
+      if (typeof ev.pubkey !== "string" || !/^[0-9a-f]{64}$/i.test(ev.pubkey)) return { proof: null, reached };
+      if (!verifyEvent2(ev)) return { proof: null, reached };
       const tag = (n) => {
         const t = (ev.tags || []).find((x) => Array.isArray(x) && x[0] === n);
         return t ? String(t[1] || "") : "";
       };
-      if (tag("nonce").toLowerCase() !== nonce) return null;
-      if (relayAddrKey(tag("relay")) !== relayAddrKey(wssUrl)) return null;
-      return { relayPub: String(ev.pubkey).toLowerCase(), url: tag("relay"), at: Number(ev.created_at) || 0 };
+      if (tag("nonce").toLowerCase() !== nonce) return { proof: null, reached };
+      if (relayAddrKey(tag("relay")) !== relayAddrKey(wssUrl)) return { proof: null, reached };
+      return { proof: { relayPub: String(ev.pubkey).toLowerCase(), url: tag("relay"), at: Number(ev.created_at) || 0 }, reached: true };
     } catch {
-      return null;
+      return { proof: null, reached };
     }
+  }
+  async function verifyRelayIdentity(wssUrl) {
+    return (await verifyRelayIdentityDetailed(wssUrl)).proof;
   }
 
   // src/relay-net.src.js
@@ -9184,6 +9189,15 @@
     window.addEventListener("online", () => {
       _outboxFlush();
     });
+    window.addEventListener("trinity-relay-returned", () => {
+      setTimeout(_retryInvitePending, 5e3);
+    });
+    window.addEventListener("online", () => {
+      setTimeout(_retryInvitePending, 3e3);
+    });
+    window.addEventListener("focus", () => {
+      setTimeout(_retryInvitePending, 2e3);
+    });
     let _obFails = 0, _obTimer = null;
     const _obDelay = () => Math.min(9e5, 45e3 * Math.pow(2, Math.min(_obFails, 5)));
     window.__trinityOutboxOk = () => {
@@ -9330,6 +9344,73 @@
         }
       });
     } catch (e) {
+    }
+  }
+  var _INVITE_PENDING_KEY = "trinityone.invitepending";
+  var _INVITE_PENDING_EXPIRY = 7 * 24 * 60 * 60 * 1e3;
+  var _INVITE_PENDING_MIN_GAP = 60 * 1e3;
+  function _getInvitePending() {
+    try {
+      return JSON.parse(localStorage.getItem(_INVITE_PENDING_KEY) || "[]");
+    } catch {
+      return [];
+    }
+  }
+  function _storeInvitePending(cp, url) {
+    const list = _getInvitePending().filter((p) => !(p.cp === cp && p.url === url));
+    list.push({ cp, url, firstAt: Date.now(), lastTry: Date.now() });
+    try {
+      localStorage.setItem(_INVITE_PENDING_KEY, JSON.stringify(list));
+    } catch {
+    }
+  }
+  function _clearInvitePending(cp, url) {
+    const list = _getInvitePending().filter((p) => !(p.cp === cp && p.url === url));
+    try {
+      if (list.length) localStorage.setItem(_INVITE_PENDING_KEY, JSON.stringify(list));
+      else localStorage.removeItem(_INVITE_PENDING_KEY);
+    } catch {
+    }
+  }
+  var _retryPendingRunning = false;
+  async function _retryInvitePending() {
+    if (_retryPendingRunning) return;
+    _retryPendingRunning = true;
+    try {
+      const list = _getInvitePending();
+      if (!list.length) return;
+      const now = Date.now();
+      const kept = [];
+      for (const p of list) {
+        if (now - p.firstAt > _INVITE_PENDING_EXPIRY) continue;
+        if (now - (p.lastTry || 0) < _INVITE_PENDING_MIN_GAP) {
+          kept.push(p);
+          continue;
+        }
+        let ok = false;
+        try {
+          ok = await isNetworkRelay2(p.cp, p.url);
+        } catch {
+          ok = false;
+        }
+        if (ok) {
+          if (!(window.Fellowship.relays || []).includes(p.url)) window.Fellowship.setRelays([...window.Fellowship.relays || [], p.url]);
+          try {
+            window.dispatchEvent(new CustomEvent("trinity-relay-returned", { detail: { url: p.url } }));
+          } catch {
+          }
+        } else {
+          p.lastTry = now;
+          kept.push(p);
+        }
+      }
+      try {
+        if (kept.length) localStorage.setItem(_INVITE_PENDING_KEY, JSON.stringify(kept));
+        else localStorage.removeItem(_INVITE_PENDING_KEY);
+      } catch {
+      }
+    } finally {
+      _retryPendingRunning = false;
     }
   }
   window.Fellowship = {
@@ -10195,9 +10276,9 @@
     // messages went nowhere. Backwards compatibility (plan C5): enrol the pilot churches' relays BEFORE this
     // ships, or every printed invite naming one stops working.
     //
-    // → { added: [url], refused: [url] }
+    // → { added: [url], refused: [url], pending: [url] }
     async adoptInviteRelays(npubOrHex, raw) {
-      const out = { added: [], refused: [] };
+      const out = { added: [], refused: [], pending: [] };
       const cp = toPub(npubOrHex);
       if (!cp) return out;
       const s = String(raw || "");
@@ -10212,17 +10293,35 @@
       }
       const take = async (url) => {
         if (!url) return false;
-        let ok = false;
+        let detail;
         try {
-          ok = await isNetworkRelay2(cp, url);
+          detail = await verifyRelayIdentityDetailed(url);
         } catch (e) {
-          ok = false;
+          detail = { proof: null, reached: false };
         }
-        if (ok) {
-          if (!(window.Fellowship.relays || []).includes(url)) window.Fellowship.setRelays([...window.Fellowship.relays || [], url]);
-          out.added.push(url);
-        } else out.refused.push(url);
-        return ok;
+        if (detail.proof) {
+          const ok = await isNetworkRelay(cp, url, {
+            verify: async () => detail.proof,
+            netEntries: churchRelayNet,
+            origin: _adoptionOrigin(),
+            pins: CANONICAL_RELAY_PUBS
+          });
+          if (ok) {
+            if (!(window.Fellowship.relays || []).includes(url)) window.Fellowship.setRelays([...window.Fellowship.relays || [], url]);
+            out.added.push(url);
+            _clearInvitePending(cp, url);
+            return true;
+          }
+          out.refused.push(url);
+          return false;
+        }
+        if (!detail.reached) {
+          _storeInvitePending(cp, url);
+          out.pending.push(url);
+          return false;
+        }
+        out.refused.push(url);
+        return false;
       };
       const got = await take(inviteUrl);
       if (got) return out;
@@ -10239,6 +10338,12 @@
       if (out.refused.length) {
         try {
           window.dispatchEvent(new CustomEvent("trinity-relay-refused", { detail: { cp, urls: out.refused.slice() } }));
+        } catch (e) {
+        }
+      }
+      if (out.pending.length) {
+        try {
+          window.dispatchEvent(new CustomEvent("trinity-relay-pending", { detail: { cp, urls: out.pending.slice() } }));
         } catch (e) {
         }
       }
