@@ -5222,6 +5222,19 @@ function canRead(e, authed) {
     // and care PII. On the shared community relay (where /config self-registration is open by default) that
     // was a cross-tenant read of every congregation on the box. Both are now scoped to THIS church.
     if (authed === cp || networkOf(authed, cp) || stewardCan(authed, cp, 'any') || careAdmin(authed, cp)) return true;
+    // R-6: DRAFTS ARE NOT SERVED TO ORDINARY MEMBERS. A plan or devotional whose content says draft:true
+    // is withheld from anyone who is not the church, its network, or a steward (all returned true above).
+    // The console says "Hidden from members" and "members won't see it until you publish" — that was true
+    // of the screen and false of the relay, which handed drafts to every subscriber. The content is
+    // plaintext JSON, so the relay can read the flag. Also withholds future-scheduled items (publishAt in
+    // the future), since those are also meant to be hidden until their publish time.
+    if (d.startsWith(PLAN_D) || d.startsWith(DEVO_D)) {
+      try {
+        const body = JSON.parse(e.content);
+        if (body && body.draft) return false;
+        if (body && body.publishAt && body.publishAt > Math.floor(Date.now() / 1000)) return false;
+      } catch {}
+    }
     // WHO MAY FETCH THE ROTA. Default — and every church that existed before this setting — is unchanged:
     // any member of the church. A steward may narrow it to the people who actually serve, or to stewards.
     // The church key, its network, its stewards and care admins have already returned true above, so this
