@@ -1358,6 +1358,18 @@ function App() {
     if (!np || !F || !F.subscribeChurchSafeguard) { setSafeguard({ minors: [], approved: [], guardians: {}, isMinor: false, minorsKnown: false }); return; }
     return F.subscribeChurchSafeguard(np, setSafeguard);
   }, [activeChurch, churches, connTick, lazyReady]);
+  const [assumeMinor, setAssumeMinor] = useA(false);
+  useAE(() => {
+    let live = true;
+    const np = (churches.find(c => c.id === activeChurch) || {}).npub;
+    const F = window.Fellowship;
+    if (!np || !F || !F.assumeMinor) return;
+    Promise.resolve(F.assumeMinor(np))
+      .then(v => { if (live) setAssumeMinor(!!v); })
+      .catch(() => { if (live) setAssumeMinor(true); });
+    return () => { live = false; };
+  }, [activeChurch, churches, safeguard.isMinor]);
+  const iAmMinor = safeguard.isMinor || assumeMinor;
   // safeguarding: pick up STEWARD-INITIATED guardian links addressed to me (a church-signed, encrypted notice)
   // so a child a steward linked me to appears in my family view even though I never set it up on this device.
   useAE(() => {
@@ -1520,7 +1532,7 @@ function App() {
   const NOTIF_WINDOW = 60 * 24 * 3600;   // only surface things from the last ~60 days
   const _nowSec = Math.floor(Date.now() / 1000);
   const _childSafeGroupIds = React.useMemo(() => { const s = new Set(); churchGroups.forEach(g => { if (g && g.childsafe) s.add(g.id); }); return s; }, [churchGroups]);
-  const _eventVisibleToMe = (e) => !safeguard.isMinor || !e.groupId || _childSafeGroupIds.has(e.groupId);
+  const _eventVisibleToMe = (e) => !iAmMinor || !e.groupId || _childSafeGroupIds.has(e.groupId);
   const notifications = React.useMemo(() => {   // P8: recompute only when a notification source changes, not every render
     const out = [];
     netAnnouncements.forEach(a => out.push({ id: 'net:' + a.id, kind: 'network', group: a._network || 'Network', text: a.text, ts: a.ts, detail: true }));
@@ -1530,7 +1542,7 @@ function App() {
     churchPlans.forEach(p => out.push({ id: 'plan:' + p.id, kind: 'plan', group: _churchNameFor, text: 'Shared a reading plan · ' + (p.title || ''), ts: p.ts, go: 'plans' }));
     churchEvents.filter(_eventVisibleToMe).forEach(e => out.push({ id: 'evt:' + e.id, kind: 'event', group: _churchNameFor, text: 'New event · ' + (e.title || ''), ts: e.ts, go: 'event', event: e }));
     return out.filter(n => n.ts && (_nowSec - n.ts) < NOTIF_WINDOW).sort((a, b) => (b.ts || 0) - (a.ts || 0)).slice(0, 40);
-  }, [netAnnouncements, broadcastMsgs, churchDevos, pinnedSermon, churchPlans, churchEvents, churchGroups, safeguard, _churchNameFor]);   // eslint-disable-line
+  }, [netAnnouncements, broadcastMsgs, churchDevos, pinnedSermon, churchPlans, churchEvents, churchGroups, safeguard, assumeMinor, _churchNameFor]);   // eslint-disable-line
   // unread tracking (drives the bell badge); "seen" = newest ts the user has opened the panel at
   const [netSeenTs, setNetSeenTs] = useA(() => { try { return Number(localStorage.getItem('trinityone.net-seen') || 0); } catch { return 0; } });
   const netUnread = notifications.filter(n => (n.ts || 0) > netSeenTs).length;
