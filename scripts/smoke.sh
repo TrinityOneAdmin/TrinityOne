@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Headless smoke test: boots the app in real Chromium and asserts key screens render.
-# Requires the app served on :8000 (npm run serve) and Chromium installed.
-# Chat checks also need the dev relay (npm run relay). Exit non-zero on any failure.
+# Requires the gateway running (node scripts/gateway.mjs) and Chromium installed.
+# Exit non-zero on any failure.
 set -uo pipefail
-BASE="${BASE:-http://localhost:8000}"
+BASE="${BASE:-http://localhost:8090}"
 MOD="modules/eng-akjv.bbl.mybible"
 CHROME="$(command -v chromium || command -v chromium-browser || command -v google-chrome || command -v google-chrome-stable || true)"
 [ -z "$CHROME" ] && { echo "✗ no Chromium found"; exit 2; }
-curl -fsS -o /dev/null "$BASE/" || { echo "✗ app not served at $BASE (run: npm run serve)"; exit 2; }
+curl -fsS -o /dev/null "$BASE/" || { echo "✗ app not served at $BASE (run: node scripts/gateway.mjs)"; exit 2; }
 
 fails=0
 check() {            # check "name" "url" "grep-pattern"
