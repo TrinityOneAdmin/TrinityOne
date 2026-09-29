@@ -577,6 +577,7 @@ const _mediaBytesByChurch = new Map(); let _mediaBytesTotal = 0;   // usage, sca
 const _blobsByChurch = new Map();   // cp -> Map<sha, size>
 function _indexBlob(cp, sha, size) { if (!cp) return; let m = _blobsByChurch.get(cp); if (!m) { m = new Map(); _blobsByChurch.set(cp, m); } m.set(sha, size); }
 function _churchBlobList(cp) { const m = _blobsByChurch.get(cp); if (!m) return []; const out = []; for (const [sha, size] of m) out.push({ sha, size }); return out; }
+function _churchDeletedBlobs(cp) { const out = []; try { for (const f of readdirSync(BLOB_DIR)) { if (!f.endsWith('.deleted')) continue; try { if (readFileSync(join(BLOB_DIR, f), 'utf8').trim() === cp) out.push(f.slice(0, -8)); } catch {} } } catch {} return out; }
 // P7: tally media usage AFTER the relay starts listening (was a synchronous statSync-per-blob walk blocking boot
 // on a media-heavy box). SET the totals from the disk scan (authoritative) rather than accumulate, so any upload
 // that lands during the brief window isn't double-counted — the scan already sees it on disk.
@@ -6204,8 +6205,9 @@ function serveStatic(req, res) {
     const q = new URL(req.url, 'http://x').searchParams;
     if (!cp || q.get('church') !== cp) { res.writeHead(401, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }); res.end('unauthorized'); return; }
     const blobs = _churchBlobList(cp);
+    const deleted = _churchDeletedBlobs(cp);
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SEC_HEADERS });
-    res.end(JSON.stringify({ church: cp, blobs }));
+    res.end(JSON.stringify({ church: cp, blobs, ...(deleted.length ? { deleted } : {}) }));
     return;
   }
   // resync media (bytes): stream one blob to a trusted peer relay — only if the blob belongs to the authed church.
@@ -7087,6 +7089,7 @@ function serveStatic(req, res) {
       }
       try {
         if (isNew || !_blobOwner(sha)) writeFileSync(join(BLOB_DIR, sha + '.church'), who.church);   // S4: owner sidecar BEFORE the blob is reachable. Set it on first store OR to backfill a missing one — but do NOT flip ownership when another church dedup-re-uploads an identical blob.
+        try { unlinkSync(join(BLOB_DIR, sha + '.deleted')); } catch {}
         if (isNew) renameSync(tmp, finalPath); else cleanup();        // dedup: identical blob already stored → drop the temp
         const ct = req.headers['content-type'] || ''; if (ct && ct.indexOf('text/plain') !== 0) { try { writeFileSync(join(BLOB_DIR, sha + '.type'), ct); } catch {} }
       } catch (e) { cleanup(); res.writeHead(500, H); res.end('{"error":"store failed"}'); return; }
@@ -7108,6 +7111,7 @@ function serveStatic(req, res) {
     if (owner && owner !== who.church) { res.writeHead(403, H); res.end('{"error":"not your church\'s media"}'); return; }   // only the owning church may delete
     const file = join(BLOB_DIR, sha); let sz = 0; try { sz = statSync(file).size; } catch {}
     try { unlinkSync(file); } catch {} try { unlinkSync(file + '.church'); } catch {} try { unlinkSync(file + '.type'); } catch {}
+    try { writeFileSync(file + '.deleted', owner || who.church); } catch {}
     if (sz) { const ch = owner || who.church; _mediaBytesTotal = Math.max(0, _mediaBytesTotal - sz); _mediaBytesByChurch.set(ch, Math.max(0, (_mediaBytesByChurch.get(ch) || 0) - sz)); const m = _blobsByChurch.get(ch); if (m) m.delete(sha); }
     res.writeHead(200, H); res.end(JSON.stringify({ deleted: true, sha256: sha }));
     return;
@@ -7627,7 +7631,7 @@ async function syncMediaFromPeer(cp, peerBase) {
   let man; try { const r = await fetch(manUrl, { headers: { Authorization: relayProof(manUrl, 'GET', cp) } }); if (!r.ok) return 0; man = await r.json(); } catch { return 0; }
   let pulled = 0;
   for (const b of (man && man.blobs) || []) {
-    if (!b || !/^[0-9a-f]{64}$/.test(b.sha) || existsSync(join(BLOB_DIR, b.sha))) continue;   // already have it (or junk)
+    if (!b || !/^[0-9a-f]{64}$/.test(b.sha) || existsSync(join(BLOB_DIR, b.sha)) || existsSync(join(BLOB_DIR, b.sha + '.deleted'))) continue;
     const _mc = effMediaCap(), _cc = effChurchCap();                                          // honour panel-set caps, not just env
     if (_mc && _mediaBytesTotal + (b.size || 0) > _mc) break;                                 // this relay's media is full
     if (_cc && (_mediaBytesByChurch.get(cp) || 0) + (b.size || 0) > _cc) break;
@@ -7648,6 +7652,19 @@ async function syncMediaFromPeer(cp, peerBase) {
       _mediaBytesTotal += n; _mediaBytesByChurch.set(cp, (_mediaBytesByChurch.get(cp) || 0) + n); _indexBlob(cp, b.sha, n);
       pulled++;
     } catch { try { unlinkSync(tmp); } catch {} }
+  }
+  for (const sha of (man && man.deleted) || []) {
+    if (!/^[0-9a-f]{64}$/.test(sha)) continue;
+    const file = join(BLOB_DIR, sha);
+    if (!existsSync(file) && !existsSync(file + '.deleted')) continue;
+    if (existsSync(file)) {
+      const owner = _blobOwner(sha);
+      if (owner && owner !== cp) continue;
+      let sz = 0; try { sz = statSync(file).size; } catch {}
+      try { unlinkSync(file); } catch {} try { unlinkSync(file + '.church'); } catch {} try { unlinkSync(file + '.type'); } catch {}
+      if (sz) { _mediaBytesTotal = Math.max(0, _mediaBytesTotal - sz); _mediaBytesByChurch.set(cp, Math.max(0, (_mediaBytesByChurch.get(cp) || 0) - sz)); const m = _blobsByChurch.get(cp); if (m) m.delete(sha); }
+    }
+    if (!existsSync(file + '.deleted')) { try { writeFileSync(file + '.deleted', cp); } catch {} }
   }
   return pulled;
 }
