@@ -36,7 +36,7 @@ import { readHelperGrant, readCheckinPermission, isDeclaredSource, isPermissionS
          KEY_LEAD_SECONDS } from './checkin-role-source.mjs';
 import { verifyEvent, generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure';
 import webpush from 'web-push';
-import { randomBytes, timingSafeEqual, createHash } from 'crypto';
+import { randomBytes, timingSafeEqual, createHash, createPublicKey, verify as cryptoVerify } from 'crypto';
 import { spawn, spawnSync } from 'child_process';
 
 // A church's relay must NOT die from a background hiccup (a dropped cloudflared pipe, a stray rejected fetch).
@@ -293,6 +293,7 @@ function heldApks() {
       builtOn: stamped ? String(f.date || '') : '',
       at: (stamped && f.at) ? f.at : st.mtimeMs,   // when this box got the file
       stamped,
+      verified: stamped ? !!f.verified : false,
     };
   });
 }
@@ -344,6 +345,25 @@ function apkVerdict(held, facts) {
   return { state: 'unknown', ageDays, say: ORIGIN ? 'Could not reach the update source, so this could not be checked just now.' : 'This box has no update source to compare against.' };
 }
 
+// The release public key, used to verify APK manifests (R-9). Same key the bundle signature uses.
+let _releasePubKey = null;
+try { _releasePubKey = createPublicKey(readFileSync(process.env.RELEASE_PUBKEY_PATH || join(ROOT, 'relay-app', 'release-pubkey.pem'))); } catch {}
+async function fetchSignedApkManifest(base) {
+  if (!_releasePubKey) return null;
+  try {
+    const [mRes, sRes] = await Promise.all([
+      fetch(base + '/apk-manifest.json', { cache: 'no-store', signal: AbortSignal.timeout(6000) }),
+      fetch(base + '/apk-manifest.sig', { cache: 'no-store', signal: AbortSignal.timeout(6000) }),
+    ]);
+    if (!mRes.ok || !sRes.ok) return null;
+    const manifestBuf = Buffer.from(await mRes.arrayBuffer());
+    const sigBuf = Buffer.from(await sRes.arrayBuffer());
+    if (!cryptoVerify(null, manifestBuf, _releasePubKey, sigBuf)) return { error: 'the update source signed these installers with a key this box does not trust' };
+    const manifest = JSON.parse(manifestBuf.toString('utf8'));
+    if (!manifest || typeof manifest !== 'object') return null;
+    return { manifest };
+  } catch { return null; }
+}
 // Pull both APKs from the origin AND record what was pulled. Shared by the operator's button and the
 // automatic refresh below, so the two can never disagree about what landed on disk.
 async function fetchApksFromOrigin(auto = false) {
@@ -352,28 +372,31 @@ async function fetchApksFromOrigin(auto = false) {
   try { mkdirSync(APK_DIR, { recursive: true }); } catch {}
   let latest = null;
   try { const r = await fetch(base + '/apk-latest.json', { cache: 'no-store', signal: AbortSignal.timeout(6000) }); if (r.ok) latest = await r.json(); } catch {}
+  const signed = await fetchSignedApkManifest(base);
+  if (signed && signed.error) return { error: signed.error };
+  const manifest = signed && signed.manifest;
   let rec = {}; try { rec = JSON.parse(readFileSync(APK_HELD, 'utf8')) || {}; } catch {}
   const stamps = (rec && rec.files) || {};
   const files = {};
   for (const f of APK_NAMES) {
     try {
-      // A TIMEOUT, because this path is no longer only a button an operator is watching. Fifteen minutes is
-      // deliberately generous — 40 MB over the connections this product is built for is slow, and cutting a
-      // real download short would be worse than waiting — but an origin that accepts and then stalls must
-      // not wedge the automatic refresh for the life of the process.
       const r = await fetch(base + '/' + f, { signal: AbortSignal.timeout(900000) });
       if (!r.ok) throw new Error('HTTP ' + r.status);
       const buf = Buffer.from(await r.arrayBuffer());
       if (buf.length < 1000000) throw new Error('too small (' + buf.length + ' bytes) — origin may not have it');
+      const sha = createHash('sha256').update(buf).digest('hex');
+      if (manifest && manifest[f]) {
+        if (manifest[f].sha256 !== sha) throw new Error('the downloaded file does not match the signed manifest — refusing (expected ' + manifest[f].sha256.slice(0, 12) + '…, got ' + sha.slice(0, 12) + '…)');
+      }
       const tmp = join(APK_DIR, f + '.tmp'); writeFileSync(tmp, buf); renameSync(tmp, join(APK_DIR, f));
-      files[f] = { ok: true, bytes: buf.length };
-      // WHAT WE JUST PUT ON DISK, RECORDED BESIDE IT. Without this the box can say when a file arrived and
-      // nothing whatever about what it IS — which is the half both the operator and the member need.
+      files[f] = { ok: true, bytes: buf.length, verified: !!manifest };
+      const ver = manifest && manifest[f] ? manifest[f] : latest;
       stamps[f] = {
-        bytes: buf.length, sha256: createHash('sha256').update(buf).digest('hex'), at: Date.now(),
-        versionCode: +(latest && latest.versionCode) || 0,
-        versionName: String((latest && latest.versionName) || ''),
-        date: String((latest && latest.date) || ''),
+        bytes: buf.length, sha256: sha, at: Date.now(),
+        versionCode: +(ver && ver.versionCode) || 0,
+        versionName: String((ver && ver.versionName) || ''),
+        date: String((ver && ver.date) || ''),
+        verified: !!manifest,
       };
     } catch (e) { files[f] = { ok: false, error: String((e && e.message) || e) }; }
   }

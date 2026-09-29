@@ -119,6 +119,24 @@ if [[ $DO_APK == 1 ]]; then
   run "cp trinityone.apk relay/apks/trinityone.apk"
   run "cp trinityone-steward.apk relay/apks/trinityone-steward.apk"
   [[ $DRY == 0 ]] && say "APKs → trinityone.apk ($(du -h trinityone.apk | cut -f1)) + trinityone-steward.apk ($(du -h trinityone-steward.apk | cut -f1))"
+  # R-9: signed APK manifest — the gateway verifies this before trusting a downloaded APK.
+  # Same key the bundle signature uses (relay/release-key.pem); RELEASE_KEY overrides the path
+  # (publish-relay-bundle.sh uses the same var).
+  RKEY="${RELEASE_KEY:-$DIR/relay/release-key.pem}"
+  if [ -s "$RKEY" ]; then
+    MEMBER_SHA="$(sha256sum trinityone.apk | cut -c1-64)"
+    STEWARD_SHA="$(sha256sum trinityone-steward.apk | cut -c1-64)"
+    printf '{"trinityone.apk":{"sha256":"%s","versionCode":%s,"versionName":"%s","date":"%s"},"trinityone-steward.apk":{"sha256":"%s","versionCode":%s,"versionName":"%s","date":"%s"}}\n' \
+      "$MEMBER_SHA" "$nvc" "$vn" "$(date +%F)" \
+      "$STEWARD_SHA" "$nvc" "$vn" "$(date +%F)" > apk-manifest.json
+    openssl pkeyutl -sign -inkey "$RKEY" -rawin -in apk-manifest.json -out apk-manifest.sig \
+      || die "APK manifest signing failed"
+    run "cp apk-manifest.json relay/apks/apk-manifest.json"
+    run "cp apk-manifest.sig relay/apks/apk-manifest.sig"
+    [[ $DRY == 0 ]] && say "signed APK manifest → apk-manifest.json + apk-manifest.sig"
+  else
+    warn "no release key at $RKEY — APK manifest will not be signed (R-9 verification disabled)"
+  fi
 fi
 
 # 5. web → Cloudflare Pages (production) — AFTER the APKs, deliberately.
