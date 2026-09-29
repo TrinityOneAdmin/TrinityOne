@@ -138,7 +138,24 @@ test('R-9: a tampered APK is REFUSED when the manifest hash does not match', asy
     'the error message should say the hash does not match: ' + member.error);
 });
 
-// ── §4 · a manifest signed with the WRONG key is not trusted ─────────────────────────────────────────────
+// ── §4 · a manifest that omits an APK name REFUSES that APK ──────────────────────────────────────────────
+test('R-9 audit fix: a manifest that omits an APK name refuses that APK', async () => {
+  // Manifest lists only trinityone-steward.apk, not trinityone.apk
+  const partial = JSON.stringify({
+    'trinityone-steward.apk': { sha256: sha(GOOD_APK), versionCode: 300, versionName: '1.0.0', date: '2026-09-29' },
+  });
+  serveManifest = signManifest(partial);
+  serveApk = GOOD_APK;
+  const r = await fetchApk();
+  const files = r.files || {};
+  const member = files['trinityone.apk'] || {};
+  assert.equal(member.ok, false,
+    'a manifest that does not list trinityone.apk still accepted it — the verified flag would be a lie');
+  assert.ok((member.error || '').includes('does not list'),
+    'the error message should say the manifest does not list the file: ' + member.error);
+});
+
+// ── §5 · a manifest signed with the WRONG key is not trusted ─────────────────────────────────────────────
 test('a manifest signed with an unknown key is treated as unsigned', async () => {
   const { privateKey: wrongPriv } = generateKeyPairSync('ed25519');
   const m = JSON.stringify({

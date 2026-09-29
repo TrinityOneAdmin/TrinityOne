@@ -385,7 +385,8 @@ async function fetchApksFromOrigin(auto = false) {
       const buf = Buffer.from(await r.arrayBuffer());
       if (buf.length < 1000000) throw new Error('too small (' + buf.length + ' bytes) — origin may not have it');
       const sha = createHash('sha256').update(buf).digest('hex');
-      if (manifest && manifest[f]) {
+      if (manifest) {
+        if (!manifest[f]) throw new Error('the signed manifest does not list ' + f + ' — refusing (the manifest must name every APK this box serves)');
         if (manifest[f].sha256 !== sha) throw new Error('the downloaded file does not match the signed manifest — refusing (expected ' + manifest[f].sha256.slice(0, 12) + '…, got ' + sha.slice(0, 12) + '…)');
       }
       const tmp = join(APK_DIR, f + '.tmp'); writeFileSync(tmp, buf); renameSync(tmp, join(APK_DIR, f));
