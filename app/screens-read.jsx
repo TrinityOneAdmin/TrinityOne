@@ -464,7 +464,7 @@ function SettingsSheet({ open, onClose, scale, setScale, serif, setSerif, showSt
               <div style={{ display: 'flex', gap: 8 }}>
                 {aOpts.readers.map(r => <button key={r.id} onClick={() => pickAudio(vt, r.id)} style={{ ...aBtn(vr === r.id), padding: '10px' }}>{r.name}</button>)}
               </div>
-              <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 9, lineHeight: 1.45 }}>Streams · public-domain narration. Applies the next time you tap Listen.</div>
+              <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 9, lineHeight: 1.45 }}>Streams from helloao.org · public-domain narration. They can see which chapter you listen to. Applies the next time you tap Listen.</div>
             </React.Fragment>
           )}
         </div>

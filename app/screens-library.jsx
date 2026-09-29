@@ -920,6 +920,7 @@ function ModuleStore({ open, onClose, ctx, initialView, category }) {
             );
           })}
         </div>
+        {view === 'language' && <div style={{ fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.45, padding: '6px 18px 0' }}>Downloads from ebible.org. They can see which translation you install.</div>}
       </div>
 
       <div className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '14px 18px 30px' }}>
