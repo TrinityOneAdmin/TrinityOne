@@ -7608,6 +7608,7 @@
   }
   pool.automaticallyAuth = (url) => async (authEvent) => {
     if (!_needAuth) throw new Error("nip42: auth declined \u2014 no gated resource for this member");
+    if (!_gate.admits(url)) throw new Error("nip42: relay not admitted");
     if (!sk) {
       try {
         await window.Fellowship.ready;
@@ -10935,7 +10936,7 @@
         byPeer.set(peer, { peer, lastTs: e.created_at, preview: (e.pubkey === pub ? "You: " : "") + preview });
         emit();
       };
-      const sub = pool.subscribeMany(window.Fellowship.relays, [
+      const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [
         // PERF-AUDIT-2026-07-20 HIGH-4: these carried NO limit, so the relay shipped up to its 5000-event
         // default cap of DM envelopes on EVERY app open, just to render an inbox preview.
         //
@@ -10996,7 +10997,7 @@
     // happen to share a group id (e.g. "prayer") don't cross-contaminate each other's chat.
     subscribeGroups(groupIds, onEvent) {
       const set = new Set(groupIds);
-      const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [1], "#t": groupIds, limit: 500 }], {
+      const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [1], "#t": groupIds, limit: 500 }], {
         onevent(e) {
           const cp = window.Fellowship.churchPub;
           if (cp && !e.tags.some((t) => t[0] === "p" && t[1] === cp)) return;
@@ -11039,7 +11040,7 @@
     },
     // live reactions in a group; onReaction({ targetId, pubkey, content, ts })
     subscribeReactions(groupId, onReaction) {
-      const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [7], "#t": [groupId], limit: 400 }], {
+      const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [7], "#t": [groupId], limit: 400 }], {
         onevent(e) {
           const targetId = (e.tags.find((t) => t[0] === "e") || [])[1];
           if (targetId) {
@@ -11062,7 +11063,7 @@
     },
     // live subscription to a group's messages; returns an unsubscribe fn
     subscribeGroup(groupId, onEvent) {
-      const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [1, 5], "#t": [groupId], limit: 200 }], {
+      const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [1, 5], "#t": [groupId], limit: 200 }], {
         onevent(e) {
           if (!e.tags.some((t) => t[0] === "t" && t[1] === groupId)) return;
           const cp = window.Fellowship.churchPub;
@@ -11120,7 +11121,7 @@
       }
       const PIN_D = "trinityone/pin:";
       let latest = 0;
-      const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [30078], "#d": [PIN_D + groupId] }], {
+      const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [30078], "#d": [PIN_D + groupId] }], {
         onevent(e) {
           const cp = window.Fellowship.churchPub;
           if (cp && !_groupEventTrusted(cp, groupId, e.pubkey)) return;
@@ -11164,7 +11165,7 @@
       const HIDE_D = "trinityone/hidden:";
       const hidden = /* @__PURE__ */ new Map();
       const emit = _coalesce(() => cb(new Set([...hidden.entries()].filter(([, v]) => v && v.hidden).map(([id]) => id))));
-      const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [30078], "#t": [groupId] }], {
+      const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [30078], "#t": [groupId] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (!d.startsWith(HIDE_D)) return;
@@ -13704,7 +13705,7 @@
         emit();
       };
       window.addEventListener("trinity-church-trust", onTrust);
-      const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [30078], "#t": groups }], {
+      const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [30078], "#t": groups }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (!d.startsWith("trinityone/event:")) return;
@@ -13798,7 +13799,7 @@
       }
       const byId = /* @__PURE__ */ new Map();
       const emit = () => onPosts([...byId.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)));
-      const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [1], authors: [pubk], "#t": ["net-announce"] }], {
+      const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [1], authors: [pubk], "#t": ["net-announce"] }], {
         onevent(e) {
           byId.set(e.id, { id: e.id, text: e.content, ts: e.created_at, networkPub: pubk });
           emit();
@@ -13825,7 +13826,7 @@
       const REQUEST_D = "trinityone/request:";
       const byId = /* @__PURE__ */ new Map();
       const emit = () => onReqs([...byId.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)));
-      const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [30078], "#p": [me], "#t": [NET] }], {
+      const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [30078], "#p": [me], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (!d.startsWith(REQUEST_D)) return;
@@ -13879,7 +13880,7 @@
       }
       const RR = "trinityone/reqreply:";
       const byReq = {};
-      const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [30078], authors: [me], "#t": [NET] }], {
+      const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [30078], authors: [me], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (!d.startsWith(RR)) return;
@@ -13939,7 +13940,7 @@
       }
       const RSVP_D = "trinityone/rsvp:";
       const byEvent = {};
-      const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [30078], authors: [me], "#t": [NET] }], {
+      const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [30078], authors: [me], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (!d.startsWith(RSVP_D)) return;
@@ -14162,7 +14163,7 @@
         };
       }
       let latest = 0;
-      const sub = pool.subscribeMany(window.Fellowship.relays, [{ kinds: [0], authors: [pubk] }], {
+      const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [0], authors: [pubk] }], {
         // This is the one place the church's OWN doc is read, so it is where its photo decision is learned.
         // Everything else asks _churchPhotosOff() rather than keeping a second copy of the answer.
         onevent(e) {
