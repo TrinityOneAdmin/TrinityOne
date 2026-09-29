@@ -3,7 +3,7 @@
   var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
   var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
 
-  // node_modules/@noble/hashes/utils.js
+  // ../../../node_modules/@noble/hashes/utils.js
   function isBytes(a) {
     return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array";
   }
@@ -154,7 +154,7 @@
     oid: Uint8Array.from([6, 9, 96, 134, 72, 1, 101, 3, 4, 2, suffix])
   });
 
-  // node_modules/@noble/hashes/_md.js
+  // ../../../node_modules/@noble/hashes/_md.js
   function Chi(a, b, c) {
     return a & b ^ ~a & c;
   }
@@ -285,7 +285,7 @@
     327033209
   ]);
 
-  // node_modules/@noble/hashes/_u64.js
+  // ../../../node_modules/@noble/hashes/_u64.js
   var U32_MASK64 = /* @__PURE__ */ BigInt(2 ** 32 - 1);
   var _32n = /* @__PURE__ */ BigInt(32);
   function fromBig(n, le = false) {
@@ -320,7 +320,7 @@
   var add5L = (Al, Bl, Cl, Dl, El) => (Al >>> 0) + (Bl >>> 0) + (Cl >>> 0) + (Dl >>> 0) + (El >>> 0);
   var add5H = (low, Ah, Bh, Ch, Dh, Eh) => Ah + Bh + Ch + Dh + Eh + (low / 2 ** 32 | 0) | 0;
 
-  // node_modules/@noble/hashes/sha2.js
+  // ../../../node_modules/@noble/hashes/sha2.js
   var SHA256_K = /* @__PURE__ */ Uint32Array.from([
     1116352408,
     1899447441,
@@ -676,7 +676,7 @@
     /* @__PURE__ */ oidNist(3)
   );
 
-  // node_modules/@noble/curves/utils.js
+  // ../../../node_modules/@noble/curves/utils.js
   var _0n = /* @__PURE__ */ BigInt(0);
   var _1n = /* @__PURE__ */ BigInt(1);
   function abool(value, title = "") {
@@ -825,7 +825,7 @@
     };
   }
 
-  // node_modules/@noble/curves/abstract/modular.js
+  // ../../../node_modules/@noble/curves/abstract/modular.js
   var _0n2 = /* @__PURE__ */ BigInt(0);
   var _1n2 = /* @__PURE__ */ BigInt(1);
   var _2n = /* @__PURE__ */ BigInt(2);
@@ -1211,7 +1211,7 @@
     return isLE2 ? numberToBytesLE(reduced, fieldLen) : numberToBytesBE(reduced, fieldLen);
   }
 
-  // node_modules/@noble/curves/abstract/curve.js
+  // ../../../node_modules/@noble/curves/abstract/curve.js
   var _0n3 = /* @__PURE__ */ BigInt(0);
   var _1n3 = /* @__PURE__ */ BigInt(1);
   function negateCt(condition, item) {
@@ -1444,7 +1444,7 @@
     };
   }
 
-  // node_modules/@noble/hashes/hmac.js
+  // ../../../node_modules/@noble/hashes/hmac.js
   var _HMAC = class {
     constructor(hash, key) {
       __publicField(this, "oHash");
@@ -1515,7 +1515,7 @@
   var hmac = (hash, key, message) => new _HMAC(hash, key).update(message).digest();
   hmac.create = (hash, key) => new _HMAC(hash, key);
 
-  // node_modules/@noble/curves/abstract/weierstrass.js
+  // ../../../node_modules/@noble/curves/abstract/weierstrass.js
   var divNearest = (num2, den) => (num2 + (num2 >= 0 ? den : -den) / _2n2) / den;
   function _splitEndoScalar(k, basis, n) {
     const [[a1, b1], [a2, b2]] = basis;
@@ -2388,7 +2388,7 @@
     });
   }
 
-  // node_modules/@noble/curves/secp256k1.js
+  // ../../../node_modules/@noble/curves/secp256k1.js
   var secp256k1_CURVE = {
     p: BigInt("0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2f"),
     n: BigInt("0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141"),
@@ -2541,7 +2541,7 @@
     };
   })();
 
-  // node_modules/nostr-tools/lib/esm/pool.js
+  // ../../../node_modules/nostr-tools/lib/esm/pool.js
   var verifiedSymbol = /* @__PURE__ */ Symbol("verified");
   var isRecord = (obj) => obj instanceof Object;
   function validateEvent(event) {
@@ -3472,7 +3472,7 @@
     }
   };
 
-  // node_modules/nostr-tools/lib/esm/utils.js
+  // ../../../node_modules/nostr-tools/lib/esm/utils.js
   var utf8Decoder2 = new TextDecoder("utf-8");
   var utf8Encoder2 = new TextEncoder();
   function normalizeURL2(url) {
@@ -3599,7 +3599,7 @@
     for (const [id, vers] of versions) _reduceVersions(vers, byId, id, trusted);
   }
 
-  // node_modules/nostr-tools/lib/esm/pure.js
+  // ../../../node_modules/nostr-tools/lib/esm/pure.js
   var verifiedSymbol2 = /* @__PURE__ */ Symbol("verified");
   var isRecord2 = (obj) => obj instanceof Object;
   function validateEvent2(event) {
@@ -4021,7 +4021,7 @@
     };
   }
 
-  // node_modules/@noble/ciphers/utils.js
+  // ../../../node_modules/@noble/ciphers/utils.js
   function isBytes2(a) {
     return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array";
   }
@@ -4160,7 +4160,7 @@
     return Uint8Array.from(bytes);
   }
 
-  // node_modules/@noble/ciphers/_arx.js
+  // ../../../node_modules/@noble/ciphers/_arx.js
   var encodeStr = (str) => Uint8Array.from(str.split(""), (c) => c.charCodeAt(0));
   var sigma16 = encodeStr("expand 16-byte k");
   var sigma32 = encodeStr("expand 32-byte k");
@@ -4269,7 +4269,7 @@
     };
   }
 
-  // node_modules/@noble/ciphers/_poly1305.js
+  // ../../../node_modules/@noble/ciphers/_poly1305.js
   function u8to16(a, i3) {
     return a[i3++] & 255 | (a[i3++] & 255) << 8;
   }
@@ -4527,7 +4527,7 @@
   }
   var poly1305 = /* @__PURE__ */ (() => wrapConstructorWithKey((key) => new Poly1305(key)))();
 
-  // node_modules/@noble/ciphers/chacha.js
+  // ../../../node_modules/@noble/ciphers/chacha.js
   function chachaCore(s, k, n, out, cnt, rounds = 20) {
     let y00 = s[0], y01 = s[1], y02 = s[2], y03 = s[3], y04 = k[0], y05 = k[1], y06 = k[2], y07 = k[3], y08 = k[4], y09 = k[5], y10 = k[6], y11 = k[7], y12 = cnt, y13 = n[0], y14 = n[1], y15 = n[2];
     let x00 = y00, x01 = y01, x02 = y02, x03 = y03, x04 = y04, x05 = y05, x06 = y06, x07 = y07, x08 = y08, x09 = y09, x10 = y10, x11 = y11, x12 = y12, x13 = y13, x14 = y14, x15 = y15;
@@ -4757,7 +4757,7 @@
   var chacha20poly1305 = /* @__PURE__ */ wrapCipher({ blockSize: 64, nonceLength: 12, tagLength: 16 }, _poly1305_aead(chacha20));
   var xchacha20poly1305 = /* @__PURE__ */ wrapCipher({ blockSize: 64, nonceLength: 24, tagLength: 16 }, _poly1305_aead(xchacha20));
 
-  // node_modules/@noble/hashes/hkdf.js
+  // ../../../node_modules/@noble/hashes/hkdf.js
   function extract(hash, ikm, salt) {
     ahash(hash);
     if (salt === void 0)
@@ -4793,7 +4793,7 @@
     return okm.slice(0, length);
   }
 
-  // node_modules/@scure/base/index.js
+  // ../../../node_modules/@scure/base/index.js
   function isBytes3(a) {
     return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array";
   }
@@ -5192,7 +5192,7 @@
   }
   var bech32 = /* @__PURE__ */ genBech32("bech32");
 
-  // node_modules/nostr-tools/lib/esm/nip44.js
+  // ../../../node_modules/nostr-tools/lib/esm/nip44.js
   var utf8Decoder4 = new TextDecoder("utf-8");
   var utf8Encoder4 = new TextEncoder();
   var minPlaintextSize = 1;
@@ -5310,7 +5310,7 @@
     return unpad(padded);
   }
 
-  // node_modules/@noble/hashes/pbkdf2.js
+  // ../../../node_modules/@noble/hashes/pbkdf2.js
   function pbkdf2Init(hash, _password, _salt, _opts) {
     ahash(hash);
     const opts = checkOpts({ dkLen: 32, asyncTick: 10 }, _opts);
@@ -5355,7 +5355,7 @@
     return pbkdf2Output(PRF, PRFSalt, DK, prfW, u);
   }
 
-  // node_modules/nostr-tools/node_modules/@scure/bip39/index.js
+  // ../../../node_modules/nostr-tools/node_modules/@scure/bip39/index.js
   function nfkd(str) {
     if (typeof str !== "string")
       throw new TypeError("invalid mnemonic type: " + typeof str);
@@ -5373,7 +5373,7 @@
     return pbkdf2(sha512, normalize(mnemonic).nfkd, psalt(passphrase), { c: 2048, dkLen: 64 });
   }
 
-  // node_modules/@noble/hashes/legacy.js
+  // ../../../node_modules/@noble/hashes/legacy.js
   var Rho160 = /* @__PURE__ */ Uint8Array.from([
     7,
     4,
@@ -5491,7 +5491,7 @@
   };
   var ripemd160 = /* @__PURE__ */ createHasher(() => new _RIPEMD160());
 
-  // node_modules/@scure/bip32/index.js
+  // ../../../node_modules/@scure/bip32/index.js
   var Point = secp256k1.Point;
   var { Fn } = Point;
   var base58check = createBase58check(sha256);
@@ -5724,7 +5724,7 @@
     }
   };
 
-  // node_modules/nostr-tools/lib/esm/nip06.js
+  // ../../../node_modules/nostr-tools/lib/esm/nip06.js
   var DERIVATION_PATH = `m/44'/1237'`;
   function privateKeyFromSeedWords(mnemonic, passphrase, accountIndex = 0) {
     let root = HDKey.fromMasterSeed(mnemonicToSeedSync(mnemonic, passphrase));
@@ -5734,7 +5734,7 @@
     return privateKey;
   }
 
-  // node_modules/nostr-tools/lib/esm/nip19.js
+  // ../../../node_modules/nostr-tools/lib/esm/nip19.js
   var utf8Decoder5 = new TextDecoder("utf-8");
   var utf8Encoder5 = new TextEncoder();
   var Bech32MaxSize = 5e3;
@@ -5833,7 +5833,7 @@
     return encodeBech32(prefix, bytes);
   }
 
-  // node_modules/@noble/ciphers/aes.js
+  // ../../../node_modules/@noble/ciphers/aes.js
   var BLOCK_SIZE = 16;
   var POLY = 283;
   function validateKeyLength(key) {
@@ -6190,7 +6190,7 @@
   var cmac = (key, message) => new _CMAC(key).update(message).digest();
   cmac.create = (key) => new _CMAC(key);
 
-  // node_modules/nostr-tools/lib/esm/nip04.js
+  // ../../../node_modules/nostr-tools/lib/esm/nip04.js
   var utf8Decoder6 = new TextDecoder("utf-8");
   var utf8Encoder6 = new TextEncoder();
   function decrypt3(secretKey, pubkey, data) {
@@ -7370,6 +7370,39 @@
       _applying.delete(cp);
     }
   }
+  var _resolving = /* @__PURE__ */ new Set();
+  async function _reResolveRelayName(cp) {
+    if (_resolving.has(cp)) return;
+    const own = _churchRelays.get(cp);
+    if (own && own.size > 0) return;
+    let relayName;
+    try {
+      const ns = JSON.parse(localStorage.getItem("trinityone.relaynames") || "{}");
+      relayName = ns[cp];
+    } catch {
+    }
+    if (!relayName) return;
+    _resolving.add(cp);
+    try {
+      let hit = null;
+      try {
+        hit = await window.Fellowship.resolveRelayName(relayName);
+      } catch (e) {
+      }
+      if (!hit || !hit.url) return;
+      if ((window.Fellowship.relays || []).includes(hit.url)) return;
+      let ok = false;
+      try {
+        ok = await isNetworkRelay2(cp, hit.url);
+      } catch (e) {
+      }
+      if (ok) {
+        if (!(window.Fellowship.relays || []).includes(hit.url)) window.Fellowship.setRelays([...window.Fellowship.relays || [], hit.url]);
+      }
+    } finally {
+      _resolving.delete(cp);
+    }
+  }
   function relaysForChurch(cp) {
     const own = cp && _churchRelays.get(cp);
     const global = window.Fellowship.relays || [];
@@ -7638,6 +7671,9 @@
         return null;
       }
     })();
+    p.then((v) => {
+      if (!v) _relayInfoCache.delete(wssUrl);
+    });
     _relayInfoCache.set(wssUrl, p);
     return p;
   }
@@ -10109,16 +10145,34 @@
         return ok;
       };
       const got = await take(inviteUrl);
-      if (got) return out;
+      if (got) {
+        const nm0 = s.match(/[?&]relayname=([^&\s]+)/);
+        if (nm0) {
+          try {
+            const ns = JSON.parse(localStorage.getItem("trinityone.relaynames") || "{}");
+            ns[cp] = decodeURIComponent(nm0[1]);
+            localStorage.setItem("trinityone.relaynames", JSON.stringify(ns));
+          } catch {
+          }
+        }
+        return out;
+      }
       const nm = s.match(/[?&]relayname=([^&\s]+)/);
       if (nm) {
+        const relayName = decodeURIComponent(nm[1]);
         let hit = null;
         try {
-          hit = await window.Fellowship.resolveRelayName(decodeURIComponent(nm[1]));
+          hit = await window.Fellowship.resolveRelayName(relayName);
         } catch (e) {
           hit = null;
         }
         if (hit && hit.url) await take(hit.url);
+        try {
+          const ns = JSON.parse(localStorage.getItem("trinityone.relaynames") || "{}");
+          ns[cp] = relayName;
+          localStorage.setItem("trinityone.relaynames", JSON.stringify(ns));
+        } catch {
+        }
       }
       if (out.refused.length) {
         try {
@@ -13835,6 +13889,7 @@
       });
       const onchurn = () => {
         if (_churchList.has(cp)) _applyChurchList(cp);
+        _reResolveRelayName(cp);
       };
       if (typeof window !== "undefined" && window.addEventListener) window.addEventListener("trinity-relays", onchurn);
       return () => {
@@ -13895,6 +13950,32 @@
         if (!picked.includes(o)) picked.push(o);
       }
       return picked;
+    },
+    // M-9: probe whether a pubkey actually belongs to a church, before announcing membership. A church writes
+    // identifiable documents (kind-0 profile, stewards doc, group doc); an ordinary person's key has none of
+    // those in a TrinityOne context. Returns 'church' | 'not-found' | 'unknown'.
+    //   - 'church': at least one relay returned a church-authored document
+    //   - 'not-found': every relay answered EOSE with nothing (the key is real but not a church)
+    //   - 'unknown': at least one relay did not answer (timeout) and none said yes
+    // Owner decision 2026-09-03: never say "not found" just because a relay didn't answer.
+    async checkChurch(npubOrHex) {
+      const cp = toPub(npubOrHex);
+      if (!cp) return "not-found";
+      const relays = churchRelaysRaw();
+      if (!relays.length) return "unknown";
+      let found = false, allAnswered = true;
+      try {
+        const evts = await Promise.race([
+          pool.querySync(relays, [{ kinds: [0, 30078], authors: [cp], limit: 1 }]),
+          new Promise((_, rej) => setTimeout(() => rej(new Error("checkChurch timeout")), 8e3))
+        ]);
+        if (evts && evts.length > 0) found = true;
+      } catch (e) {
+        allAnswered = false;
+      }
+      if (found) return "church";
+      if (allAnswered) return "not-found";
+      return "unknown";
     },
     subscribeChurchProfile(churchNpub, onProfile) {
       const pubk = toPub(churchNpub);

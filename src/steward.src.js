@@ -1172,7 +1172,13 @@ async function refreshNamedRelays() {
       extra = extra.filter(u => u !== entry.url); extra.push(newUrl); entry.url = newUrl; changed = true;
     } catch (e) {}
   }
-  if (changed) { _writeExtraRelays(extra); setNamedRelays(named); }
+  if (changed) {
+    _writeExtraRelays(extra); setNamedRelays(named);
+    // M-7a: republish the kind-10002 relay list so member phones learn the new tunnel address. Without
+    // this, the console follows the move (refreshNamedRelays runs every 90s) but members keep trying the
+    // dead address and fall back to the shared relays until someone hands out a new slip.
+    try { if (window.Steward && window.Steward.publishRelayList) window.Steward.publishRelayList(); } catch (e) {}
+  }
   _refreshingNames = false;
 }
 // keep named relays pointed at the live url: on load, then every 90s, and whenever the app regains focus
@@ -2109,19 +2115,20 @@ function setKey(mnemonic) {
   window.Steward.activePub = pub;
   window.Steward.hasKey = true;
   // NO RELAY-LIST PUBLISH ON UNLOCK. This used to fire publishRelayList() here, deferred and
-  // fire-and-forget. The relay's write policy does not store kind:10002, so it came back "not a member or
-  // not permitted for this group" EVERY TIME any console unlocked — and publishErrorMessage() turns that
-  // string into "this relay is set up for a different church. Restore this church's key in Settings",
-  // stickily, on a perfectly healthy church. Measured on a church minutes old, signed by its own key
-  // (relay/rejected.log, by=a90cf8d0, kind=10002). Round 8 filed it as a delegate problem; it was every
-  // console, every unlock, the owner's included.
+  // fire-and-forget. On unlock it produced "not a member or not permitted for this group" for delegates
+  // (the relay accepts kind:10002 from the CHURCH KEY, not from delegates), and publishErrorMessage() turned
+  // that into "this relay is set up for a different church. Restore this church's key in Settings" —
+  // stickily, on a perfectly healthy church. The remedy that banner recommends OVERWRITES THE CHURCH KEY.
   //
-  // The remedy that banner recommends OVERWRITES THE CHURCH KEY, as the media-key effect in
-  // stew-dashboard already warns. A steward who believes it on a working church can lose it.
+  // CORRECTED 2026-09-29 (v5 audit item 5b): the original comment here said "the relay's write policy
+  // does not store kind:10002". That is false as a general statement: accept() stores kind:10002 for any
+  // event by a church registered on the box (measured with a church-signed 10002 — OK true). A stranger's
+  // is refused. It also said "nothing reads kind:10002 until Phase 2". Phase 2 shipped at db122e8
+  // (2026-07-07), six weeks before this comment was written (7209af8, 2026-08-21).
+  // subscribeChurchRelays reads 10002, and followChurch opens it. Both claims were wrong.
   //
-  // Nothing is lost by removing it: publishRelayList's own note says "nothing reads kind:10002 until
-  // Phase 2", and the list is still republished where there is an actual reason to (autoAddRelays, when
-  // the list has just changed). Removed 2026-08-21.
+  // The list IS still republished when there is an actual reason to (autoAddRelays, and
+  // refreshNamedRelays when a tunnel address swaps). Removed from unlock 2026-08-21.
 }
 
 // Everything in this module that is scoped to ONE church, cleared in one place.

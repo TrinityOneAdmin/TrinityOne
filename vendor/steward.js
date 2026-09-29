@@ -34,9 +34,9 @@
   ));
   var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
 
-  // node_modules/qrcode-generator/qrcode.js
+  // ../../../node_modules/qrcode-generator/qrcode.js
   var require_qrcode = __commonJS({
-    "node_modules/qrcode-generator/qrcode.js"(exports, module) {
+    "../../../node_modules/qrcode-generator/qrcode.js"(exports, module) {
       var qrcode2 = (function() {
         var qrcode3 = function(typeNumber, errorCorrectionLevel) {
           var PAD0 = 236;
@@ -1721,10 +1721,10 @@
     }
   });
 
-  // node_modules/@aparajita/capacitor-secure-storage/node_modules/@capacitor/core/dist/index.js
+  // ../../../node_modules/@aparajita/capacitor-secure-storage/node_modules/@capacitor/core/dist/index.js
   var createCapacitorPlatforms, initPlatforms, CapacitorPlatforms, addPlatform, setPlatform, ExceptionCode, CapacitorException, getPlatformId, createCapacitor, initCapacitorGlobal, Capacitor, registerPlugin, Plugins, WebPlugin, encode, decode2, CapacitorCookiesPluginWeb, CapacitorCookies, readBlobAsBase64, normalizeHttpHeaders, buildUrlParams, buildRequestInit, CapacitorHttpPluginWeb, CapacitorHttp;
   var init_dist = __esm({
-    "node_modules/@aparajita/capacitor-secure-storage/node_modules/@capacitor/core/dist/index.js"() {
+    "../../../node_modules/@aparajita/capacitor-secure-storage/node_modules/@capacitor/core/dist/index.js"() {
       createCapacitorPlatforms = (win) => {
         const defaultPlatformMap = /* @__PURE__ */ new Map();
         defaultPlatformMap.set("web", { name: "web" });
@@ -2228,10 +2228,10 @@
     }
   });
 
-  // node_modules/@aparajita/capacitor-secure-storage/dist/esm/definitions.js
+  // ../../../node_modules/@aparajita/capacitor-secure-storage/dist/esm/definitions.js
   var StorageErrorType, KeychainAccess, StorageError;
   var init_definitions = __esm({
-    "node_modules/@aparajita/capacitor-secure-storage/dist/esm/definitions.js"() {
+    "../../../node_modules/@aparajita/capacitor-secure-storage/dist/esm/definitions.js"() {
       (function(StorageErrorType2) {
         StorageErrorType2["missingKey"] = "missingKey";
         StorageErrorType2["invalidData"] = "invalidData";
@@ -2255,7 +2255,7 @@
     }
   });
 
-  // node_modules/async-mutex/index.mjs
+  // ../../../node_modules/async-mutex/index.mjs
   function insertSorted(a, v) {
     const i3 = findIndexFromEnd(a, (other) => v.priority <= other.priority);
     a.splice(i3 + 1, 0, v);
@@ -2270,7 +2270,7 @@
   }
   var E_TIMEOUT, E_ALREADY_LOCKED, E_CANCELED, __awaiter$2, Semaphore, __awaiter$1, Mutex;
   var init_async_mutex = __esm({
-    "node_modules/async-mutex/index.mjs"() {
+    "../../../node_modules/async-mutex/index.mjs"() {
       E_TIMEOUT = new Error("timeout while waiting for mutex to become available");
       E_ALREADY_LOCKED = new Error("mutex already locked");
       E_CANCELED = new Error("request for lock canceled");
@@ -2466,7 +2466,7 @@
     }
   });
 
-  // node_modules/@aparajita/capacitor-secure-storage/dist/esm/base.js
+  // ../../../node_modules/@aparajita/capacitor-secure-storage/dist/esm/base.js
   function isStorageErrorType(value) {
     return value !== void 0 && Object.keys(StorageErrorType).includes(value);
   }
@@ -2487,7 +2487,7 @@
   }
   var mutex, SecureStorageBase, isoDateRE;
   var init_base = __esm({
-    "node_modules/@aparajita/capacitor-secure-storage/dist/esm/base.js"() {
+    "../../../node_modules/@aparajita/capacitor-secure-storage/dist/esm/base.js"() {
       init_dist();
       init_async_mutex();
       init_definitions();
@@ -2631,14 +2631,14 @@
     }
   });
 
-  // node_modules/@aparajita/capacitor-secure-storage/dist/esm/web.js
+  // ../../../node_modules/@aparajita/capacitor-secure-storage/dist/esm/web.js
   var web_exports = {};
   __export(web_exports, {
     SecureStorageWeb: () => SecureStorageWeb
   });
   var SecureStorageWeb;
   var init_web = __esm({
-    "node_modules/@aparajita/capacitor-secure-storage/dist/esm/web.js"() {
+    "../../../node_modules/@aparajita/capacitor-secure-storage/dist/esm/web.js"() {
       init_base();
       SecureStorageWeb = class extends SecureStorageBase {
         // @native
@@ -2692,14 +2692,14 @@
     }
   });
 
-  // node_modules/@aparajita/capacitor-secure-storage/dist/esm/native.js
+  // ../../../node_modules/@aparajita/capacitor-secure-storage/dist/esm/native.js
   var native_exports = {};
   __export(native_exports, {
     SecureStorageNative: () => SecureStorageNative
   });
   var SecureStorageNative;
   var init_native = __esm({
-    "node_modules/@aparajita/capacitor-secure-storage/dist/esm/native.js"() {
+    "../../../node_modules/@aparajita/capacitor-secure-storage/dist/esm/native.js"() {
       init_base();
       SecureStorageNative = class extends SecureStorageBase {
         constructor(capProxy) {
@@ -2752,7 +2752,7 @@
     }
   });
 
-  // node_modules/@aparajita/capacitor-secure-storage/dist/esm/index.js
+  // ../../../node_modules/@aparajita/capacitor-secure-storage/dist/esm/index.js
   var esm_exports = {};
   __export(esm_exports, {
     KeychainAccess: () => KeychainAccess,
@@ -2762,7 +2762,7 @@
   });
   var proxy;
   var init_esm = __esm({
-    "node_modules/@aparajita/capacitor-secure-storage/dist/esm/index.js"() {
+    "../../../node_modules/@aparajita/capacitor-secure-storage/dist/esm/index.js"() {
       init_dist();
       init_definitions();
       proxy = registerPlugin("SecureStorage", {
@@ -2773,7 +2773,7 @@
     }
   });
 
-  // node_modules/@noble/hashes/utils.js
+  // ../../../node_modules/@noble/hashes/utils.js
   function isBytes(a) {
     return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array";
   }
@@ -2924,7 +2924,7 @@
     oid: Uint8Array.from([6, 9, 96, 134, 72, 1, 101, 3, 4, 2, suffix])
   });
 
-  // node_modules/@noble/hashes/_md.js
+  // ../../../node_modules/@noble/hashes/_md.js
   function Chi(a, b, c) {
     return a & b ^ ~a & c;
   }
@@ -3055,7 +3055,7 @@
     327033209
   ]);
 
-  // node_modules/@noble/hashes/_u64.js
+  // ../../../node_modules/@noble/hashes/_u64.js
   var U32_MASK64 = /* @__PURE__ */ BigInt(2 ** 32 - 1);
   var _32n = /* @__PURE__ */ BigInt(32);
   function fromBig(n, le = false) {
@@ -3090,7 +3090,7 @@
   var add5L = (Al, Bl, Cl, Dl, El) => (Al >>> 0) + (Bl >>> 0) + (Cl >>> 0) + (Dl >>> 0) + (El >>> 0);
   var add5H = (low, Ah, Bh, Ch, Dh, Eh) => Ah + Bh + Ch + Dh + Eh + (low / 2 ** 32 | 0) | 0;
 
-  // node_modules/@noble/hashes/sha2.js
+  // ../../../node_modules/@noble/hashes/sha2.js
   var SHA256_K = /* @__PURE__ */ Uint32Array.from([
     1116352408,
     1899447441,
@@ -3446,7 +3446,7 @@
     /* @__PURE__ */ oidNist(3)
   );
 
-  // node_modules/@noble/curves/utils.js
+  // ../../../node_modules/@noble/curves/utils.js
   var _0n = /* @__PURE__ */ BigInt(0);
   var _1n = /* @__PURE__ */ BigInt(1);
   function abool(value, title = "") {
@@ -3595,7 +3595,7 @@
     };
   }
 
-  // node_modules/@noble/curves/abstract/modular.js
+  // ../../../node_modules/@noble/curves/abstract/modular.js
   var _0n2 = /* @__PURE__ */ BigInt(0);
   var _1n2 = /* @__PURE__ */ BigInt(1);
   var _2n = /* @__PURE__ */ BigInt(2);
@@ -3981,7 +3981,7 @@
     return isLE2 ? numberToBytesLE(reduced, fieldLen) : numberToBytesBE(reduced, fieldLen);
   }
 
-  // node_modules/@noble/curves/abstract/curve.js
+  // ../../../node_modules/@noble/curves/abstract/curve.js
   var _0n3 = /* @__PURE__ */ BigInt(0);
   var _1n3 = /* @__PURE__ */ BigInt(1);
   function negateCt(condition, item) {
@@ -4214,7 +4214,7 @@
     };
   }
 
-  // node_modules/@noble/hashes/hmac.js
+  // ../../../node_modules/@noble/hashes/hmac.js
   var _HMAC = class {
     constructor(hash, key) {
       __publicField(this, "oHash");
@@ -4285,7 +4285,7 @@
   var hmac = (hash, key, message) => new _HMAC(hash, key).update(message).digest();
   hmac.create = (hash, key) => new _HMAC(hash, key);
 
-  // node_modules/@noble/curves/abstract/weierstrass.js
+  // ../../../node_modules/@noble/curves/abstract/weierstrass.js
   var divNearest = (num2, den) => (num2 + (num2 >= 0 ? den : -den) / _2n2) / den;
   function _splitEndoScalar(k, basis, n) {
     const [[a1, b1], [a2, b22]] = basis;
@@ -5158,7 +5158,7 @@
     });
   }
 
-  // node_modules/@noble/curves/secp256k1.js
+  // ../../../node_modules/@noble/curves/secp256k1.js
   var secp256k1_CURVE = {
     p: BigInt("0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2f"),
     n: BigInt("0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141"),
@@ -5311,7 +5311,7 @@
     };
   })();
 
-  // node_modules/nostr-tools/lib/esm/pool.js
+  // ../../../node_modules/nostr-tools/lib/esm/pool.js
   var verifiedSymbol = /* @__PURE__ */ Symbol("verified");
   var isRecord = (obj) => obj instanceof Object;
   function validateEvent(event) {
@@ -6242,7 +6242,7 @@
     }
   };
 
-  // node_modules/nostr-tools/lib/esm/utils.js
+  // ../../../node_modules/nostr-tools/lib/esm/utils.js
   var utf8Decoder2 = new TextDecoder("utf-8");
   var utf8Encoder2 = new TextEncoder();
   function normalizeURL2(url) {
@@ -6366,7 +6366,7 @@
     return did;
   }
 
-  // node_modules/nostr-tools/lib/esm/pure.js
+  // ../../../node_modules/nostr-tools/lib/esm/pure.js
   var verifiedSymbol2 = /* @__PURE__ */ Symbol("verified");
   var isRecord2 = (obj) => obj instanceof Object;
   function validateEvent2(event) {
@@ -6788,7 +6788,7 @@
     };
   }
 
-  // node_modules/@scure/bip39/node_modules/@noble/hashes/utils.js
+  // ../../../node_modules/@scure/bip39/node_modules/@noble/hashes/utils.js
   function isBytes2(a) {
     return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array" && "BYTES_PER_ELEMENT" in a && a.BYTES_PER_ELEMENT === 1;
   }
@@ -6847,7 +6847,7 @@
     oid: Uint8Array.from([6, 9, 96, 134, 72, 1, 101, 3, 4, 2, suffix])
   });
 
-  // node_modules/@scure/bip39/node_modules/@noble/hashes/_md.js
+  // ../../../node_modules/@scure/bip39/node_modules/@noble/hashes/_md.js
   function Chi2(a, b, c) {
     return a & b ^ ~a & c;
   }
@@ -6961,7 +6961,7 @@
     1541459225
   ]);
 
-  // node_modules/@scure/bip39/node_modules/@noble/hashes/sha2.js
+  // ../../../node_modules/@scure/bip39/node_modules/@noble/hashes/sha2.js
   var SHA256_K2 = /* @__PURE__ */ Uint32Array.from([
     1116352408,
     1899447441,
@@ -7112,7 +7112,7 @@
     /* @__PURE__ */ oidNist2(1)
   );
 
-  // node_modules/@scure/bip39/node_modules/@scure/base/index.js
+  // ../../../node_modules/@scure/bip39/node_modules/@scure/base/index.js
   function isBytes3(a) {
     return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array" && "BYTES_PER_ELEMENT" in a && a.BYTES_PER_ELEMENT === 1;
   }
@@ -7400,7 +7400,7 @@
     padding
   });
 
-  // node_modules/@scure/bip39/index.js
+  // ../../../node_modules/@scure/bip39/index.js
   function nfkd(str) {
     if (typeof str !== "string")
       throw new TypeError("invalid mnemonic type: " + typeof str);
@@ -7446,7 +7446,7 @@
     return true;
   }
 
-  // node_modules/@scure/bip39/wordlists/english.js
+  // ../../../node_modules/@scure/bip39/wordlists/english.js
   var wordlist = /* @__PURE__ */ Object.freeze(`abandon
 ability
 able
@@ -9496,7 +9496,7 @@ zero
 zone
 zoo`.split("\n"));
 
-  // node_modules/nostr-tools/node_modules/@scure/bip39/wordlists/english.js
+  // ../../../node_modules/nostr-tools/node_modules/@scure/bip39/wordlists/english.js
   var wordlist2 = `abandon
 ability
 able
@@ -11546,7 +11546,7 @@ zero
 zone
 zoo`.split("\n");
 
-  // node_modules/@noble/hashes/pbkdf2.js
+  // ../../../node_modules/@noble/hashes/pbkdf2.js
   function pbkdf2Init(hash, _password, _salt, _opts) {
     ahash(hash);
     const opts = checkOpts({ dkLen: 32, asyncTick: 10 }, _opts);
@@ -11591,7 +11591,7 @@ zoo`.split("\n");
     return pbkdf2Output(PRF, PRFSalt, DK, prfW, u);
   }
 
-  // node_modules/@scure/base/index.js
+  // ../../../node_modules/@scure/base/index.js
   function isBytes4(a) {
     return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array";
   }
@@ -12001,7 +12001,7 @@ zoo`.split("\n");
   }
   var bech32 = /* @__PURE__ */ genBech32("bech32");
 
-  // node_modules/nostr-tools/node_modules/@scure/bip39/index.js
+  // ../../../node_modules/nostr-tools/node_modules/@scure/bip39/index.js
   var isJapanese = (wordlist3) => wordlist3[0] === "\u3042\u3044\u3053\u304F\u3057\u3093";
   function nfkd2(str) {
     if (typeof str !== "string")
@@ -12049,7 +12049,7 @@ zoo`.split("\n");
     return pbkdf2(sha512, normalize2(mnemonic).nfkd, psalt(passphrase), { c: 2048, dkLen: 64 });
   }
 
-  // node_modules/@noble/hashes/legacy.js
+  // ../../../node_modules/@noble/hashes/legacy.js
   var Rho160 = /* @__PURE__ */ Uint8Array.from([
     7,
     4,
@@ -12167,7 +12167,7 @@ zoo`.split("\n");
   };
   var ripemd160 = /* @__PURE__ */ createHasher(() => new _RIPEMD160());
 
-  // node_modules/@scure/bip32/index.js
+  // ../../../node_modules/@scure/bip32/index.js
   var Point = secp256k1.Point;
   var { Fn } = Point;
   var base58check = createBase58check(sha256);
@@ -12400,7 +12400,7 @@ zoo`.split("\n");
     }
   };
 
-  // node_modules/nostr-tools/lib/esm/nip06.js
+  // ../../../node_modules/nostr-tools/lib/esm/nip06.js
   var DERIVATION_PATH = `m/44'/1237'`;
   function privateKeyFromSeedWords(mnemonic, passphrase, accountIndex = 0) {
     let root = HDKey.fromMasterSeed(mnemonicToSeedSync(mnemonic, passphrase));
@@ -12413,7 +12413,7 @@ zoo`.split("\n");
     return generateMnemonic(wordlist2);
   }
 
-  // node_modules/nostr-tools/lib/esm/nip19.js
+  // ../../../node_modules/nostr-tools/lib/esm/nip19.js
   var utf8Decoder4 = new TextDecoder("utf-8");
   var utf8Encoder4 = new TextEncoder();
   var Bech32MaxSize = 5e3;
@@ -12512,7 +12512,7 @@ zoo`.split("\n");
     return encodeBech32(prefix, bytes);
   }
 
-  // node_modules/@noble/ciphers/utils.js
+  // ../../../node_modules/@noble/ciphers/utils.js
   function isBytes5(a) {
     return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array";
   }
@@ -12651,7 +12651,7 @@ zoo`.split("\n");
     return Uint8Array.from(bytes);
   }
 
-  // node_modules/@noble/ciphers/aes.js
+  // ../../../node_modules/@noble/ciphers/aes.js
   var BLOCK_SIZE = 16;
   var POLY = 283;
   function validateKeyLength(key) {
@@ -13008,7 +13008,7 @@ zoo`.split("\n");
   var cmac = (key, message) => new _CMAC(key).update(message).digest();
   cmac.create = (key) => new _CMAC(key);
 
-  // node_modules/nostr-tools/lib/esm/nip04.js
+  // ../../../node_modules/nostr-tools/lib/esm/nip04.js
   var utf8Decoder5 = new TextDecoder("utf-8");
   var utf8Encoder5 = new TextEncoder();
   function encrypt2(secretKey, pubkey, text) {
@@ -13036,7 +13036,7 @@ zoo`.split("\n");
     return key.slice(1, 33);
   }
 
-  // node_modules/@noble/ciphers/_arx.js
+  // ../../../node_modules/@noble/ciphers/_arx.js
   var encodeStr = (str) => Uint8Array.from(str.split(""), (c) => c.charCodeAt(0));
   var sigma16 = encodeStr("expand 16-byte k");
   var sigma32 = encodeStr("expand 32-byte k");
@@ -13145,7 +13145,7 @@ zoo`.split("\n");
     };
   }
 
-  // node_modules/@noble/ciphers/_poly1305.js
+  // ../../../node_modules/@noble/ciphers/_poly1305.js
   function u8to16(a, i3) {
     return a[i3++] & 255 | (a[i3++] & 255) << 8;
   }
@@ -13403,7 +13403,7 @@ zoo`.split("\n");
   }
   var poly1305 = /* @__PURE__ */ (() => wrapConstructorWithKey((key) => new Poly1305(key)))();
 
-  // node_modules/@noble/ciphers/chacha.js
+  // ../../../node_modules/@noble/ciphers/chacha.js
   function chachaCore(s, k, n, out, cnt, rounds = 20) {
     let y00 = s[0], y01 = s[1], y02 = s[2], y03 = s[3], y04 = k[0], y05 = k[1], y06 = k[2], y07 = k[3], y08 = k[4], y09 = k[5], y10 = k[6], y11 = k[7], y12 = cnt, y13 = n[0], y14 = n[1], y15 = n[2];
     let x00 = y00, x01 = y01, x02 = y02, x03 = y03, x04 = y04, x05 = y05, x06 = y06, x07 = y07, x08 = y08, x09 = y09, x10 = y10, x11 = y11, x12 = y12, x13 = y13, x14 = y14, x15 = y15;
@@ -13633,7 +13633,7 @@ zoo`.split("\n");
   var chacha20poly1305 = /* @__PURE__ */ wrapCipher({ blockSize: 64, nonceLength: 12, tagLength: 16 }, _poly1305_aead(chacha20));
   var xchacha20poly1305 = /* @__PURE__ */ wrapCipher({ blockSize: 64, nonceLength: 24, tagLength: 16 }, _poly1305_aead(xchacha20));
 
-  // node_modules/@noble/hashes/hkdf.js
+  // ../../../node_modules/@noble/hashes/hkdf.js
   function extract(hash, ikm, salt) {
     ahash(hash);
     if (salt === void 0)
@@ -13669,7 +13669,7 @@ zoo`.split("\n");
     return okm.slice(0, length);
   }
 
-  // node_modules/nostr-tools/lib/esm/nip44.js
+  // ../../../node_modules/nostr-tools/lib/esm/nip44.js
   var utf8Decoder6 = new TextDecoder("utf-8");
   var utf8Encoder6 = new TextEncoder();
   var minPlaintextSize = 1;
@@ -13790,7 +13790,7 @@ zoo`.split("\n");
   // src/steward.src.js
   var import_qrcode_generator = __toESM(require_qrcode());
 
-  // node_modules/fflate/esm/browser.js
+  // ../../../node_modules/fflate/esm/browser.js
   var u82 = Uint8Array;
   var u16 = Uint16Array;
   var i32 = Int32Array;
@@ -15785,6 +15785,10 @@ zoo`.split("\n");
     if (changed) {
       _writeExtraRelays(extra);
       setNamedRelays(named);
+      try {
+        if (window.Steward && window.Steward.publishRelayList) window.Steward.publishRelayList();
+      } catch (e) {
+      }
     }
     _refreshingNames = false;
   }
