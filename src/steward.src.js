@@ -5006,12 +5006,12 @@ window.Steward = {
   // owner side: pending steward requests for THIS church → [{ pubkey, npub, name }] (excludes current stewards)
   subscribeStewardRequests(onReqs) {
     const byPub = new Map();
-    let roster = new Set();
+    let roster = new Set(), rosterAt = 0;
     const emit = () => onReqs([...byPub.values()].filter(r => !roster.has(r.pubkey)));
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], '#t': [NET] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
-        if (d === STEWARDS_D + pub) { try { roster = new Set((JSON.parse(e.content).pubkeys) || []); } catch {} emit(); return; }
+        if (d === STEWARDS_D + pub) { if (e.created_at < rosterAt) return; rosterAt = e.created_at; try { roster = new Set((JSON.parse(e.content).pubkeys) || []); } catch {} emit(); return; }
         if (d !== STEWARDREQ_D + pub || e.pubkey === pub) return;
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { byPub.delete(e.pubkey); emit(); return; }
         // `n` is the sealed form (2026-09-05), sealed by the requester to THIS church's key; `name` is what
@@ -9970,12 +9970,14 @@ window.Steward = {
       dialled = urls.slice();
       if (!dialled.length) return;            // nothing proved: keep listening for a relay to return
       [...stewardedChurches.keys()].forEach(resolveName);   // refresh names for cached entries
+      const seenAt = new Map();
       sub = pool.subscribeMany(dialled, [{ kinds: [30078], '#t': [NET] }], {
         onevent(e) {
           const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
           if (!d.startsWith(STEWARDS_D)) return;
           const cp = d.slice(STEWARDS_D.length);
           if (cp === me) return;   // our own roster doesn't make us our own steward
+          if (e.created_at < (seenAt.get(cp) || 0)) return; seenAt.set(cp, e.created_at);
           let listed = false;
           if (!(e.tags.some(t => t[0] === 'deleted') || !e.content)) { try { listed = ((JSON.parse(e.content).pubkeys) || []).includes(me); } catch {} }
           const had = stewardedChurches.has(cp);

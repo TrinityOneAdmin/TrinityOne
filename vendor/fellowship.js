@@ -13472,6 +13472,7 @@
         }
       }
       if (!sk || !cp) return null;
+      if (!(_nameKeys.get(cp) || [])[0]) return { ok: false, reason: "no-key" };
       const clean4 = Array.isArray(tags) ? tags.map((t) => String(t || "").trim()).filter(Boolean).slice(0, 8) : [];
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", CAREAVAIL_D + cp], ["t", NET], ["church", cp]], content: _sealChurchDocMember(cp, { available: true, tags: clean4, note: String(note || "").trim().slice(0, 240) }) }, sk);
       try {

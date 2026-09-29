@@ -18535,12 +18535,14 @@ zoo`.split("\n");
     // owner side: pending steward requests for THIS church → [{ pubkey, npub, name }] (excludes current stewards)
     subscribeStewardRequests(onReqs) {
       const byPub = /* @__PURE__ */ new Map();
-      let roster = /* @__PURE__ */ new Set();
+      let roster = /* @__PURE__ */ new Set(), rosterAt = 0;
       const emit = () => onReqs([...byPub.values()].filter((r) => !roster.has(r.pubkey)));
       const sub = pool.subscribeMany(relays(), [{ kinds: [30078], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (d === STEWARDS_D + pub) {
+            if (e.created_at < rosterAt) return;
+            rosterAt = e.created_at;
             try {
               roster = new Set(JSON.parse(e.content).pubkeys || []);
             } catch {
@@ -23540,12 +23542,15 @@ zoo`.split("\n");
         dialled = urls.slice();
         if (!dialled.length) return;
         [...stewardedChurches.keys()].forEach(resolveName);
+        const seenAt = /* @__PURE__ */ new Map();
         sub = pool.subscribeMany(dialled, [{ kinds: [30078], "#t": [NET] }], {
           onevent(e) {
             const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
             if (!d.startsWith(STEWARDS_D)) return;
             const cp = d.slice(STEWARDS_D.length);
             if (cp === me) return;
+            if (e.created_at < (seenAt.get(cp) || 0)) return;
+            seenAt.set(cp, e.created_at);
             let listed = false;
             if (!(e.tags.some((t) => t[0] === "deleted") || !e.content)) {
               try {

@@ -123,73 +123,95 @@ test('a second announce (heartbeat) writes hb:1 and keeps the original join time
 
 const STEWARD = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
 
-test('subscribeActivity skips a heartbeat (hb:1) member document', () => {
-  // Extract the onevent handler's member-doc branch from subscribeActivity.
-  // The fix: `if (!_hb) item = { ... "A new member joined" ... }`
-  // If the fix is reverted, _hb is never checked, and the item is always created.
-  //
-  // We run the actual handler from the vendor bundle: fnBody extracts subscribeActivity,
-  // then we find the member-doc parsing block and test it.
-
+test('subscribeActivity skips a heartbeat (hb:1) member document', async () => {
   const actBody = fnBody(STEWARD, 'subscribeActivity(onActivity', 'subscribeActivity');
+  let items = [], handler = null;
+  const scope = {
+    pool: { subscribeMany: (_u, _f, h) => { handler = h; return { close() {} }; } },
+    relays: () => ['wss://r'],
+    pub: 'churchpub',
+    NET: 'trinityone',
+    GROUP_D: 'trinityone/group:', FUND_D: 'trinityone/fund:',
+    JSON, Math, Date, console, String, Number, Map, Set, setTimeout, clearTimeout,
+  };
+  const fn = new Function('scope', `with (scope) { return ({ ${actBody} }).subscribeActivity; }`)(
+    new Proxy(scope, {
+      has: (t, k) => (k in t) || !(String(k) in globalThis),
+      get: (t, k) => {
+        if (k === Symbol.unscopables) return undefined;
+        if (k in t) return t[k];
+        if (String(k) in globalThis) return globalThis[String(k)];
+        return undefined;
+      },
+      set: (t, k, v) => { t[k] = v; return true; },
+    })
+  );
+  fn((list) => { items = list.slice(); });
+  assert.ok(handler, 'subscribeActivity did not open a subscription');
 
-  // The handler parses the event and decides whether to create an activity item.
-  // Simulate what the onevent handler does for a member doc with hb:1.
-  const heartbeatEvent = {
-    kind: 30078,
-    id: 'hb-evt',
-    pubkey: 'member1',
-    created_at: 1700000000,
+  handler.onevent({
+    kind: 30078, id: 'hb-evt', pubkey: 'member1', created_at: 1700000000,
     tags: [['d', 'trinityone/member:churchpub'], ['t', 'trinityone'], ['p', 'churchpub']],
     content: JSON.stringify({ joined: 1690000000, seen: 1700000000, hb: 1 }),
-  };
-
-  const joinEvent = {
-    kind: 30078,
-    id: 'join-evt',
-    pubkey: 'member2',
-    created_at: 1700000000,
-    tags: [['d', 'trinityone/member:churchpub'], ['t', 'trinityone'], ['p', 'churchpub']],
-    content: JSON.stringify({ joined: 1700000000 }),
-  };
-
-  // Simulate the onevent logic for the member-doc branch
-  function testEvent(e, pubkey) {
-    const own = e.pubkey === pubkey;
-    let item = null;
-    if (e.kind === 30078) {
-      const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
-      const deleted = e.tags.some(t => t[0] === 'deleted') || !e.content;
-
-      // This is the ACTUAL logic from the bundle — verify it matches
-      if (d.startsWith('trinityone/member:')) {
-        if (!deleted) {
-          let _hb = false;
-          try { _hb = !!JSON.parse(e.content).hb; } catch {}
-          if (!_hb) item = { ic: 'pray', tint: 'sage', text: 'A new member joined', to: 'members' };
-        }
-      }
-    }
-    return item;
-  }
-
-  // Verify the bundle contains the hb filter
-  assert.ok(actBody.includes('_hb') || actBody.includes('.hb'),
-    'subscribeActivity does not check for hb — heartbeats will flood the activity feed');
-
-  const hbResult = testEvent(heartbeatEvent, 'churchpub');
-  assert.equal(hbResult, null,
+  });
+  await new Promise(r => setTimeout(r, 200));
+  assert.ok(!items.some(i => i.text === 'A new member joined'),
     'A HEARTBEAT DOCUMENT PRODUCES "A new member joined" — the console activity panel is flooded ' +
     'with fake join events every morning');
 
-  const joinResult = testEvent(joinEvent, 'churchpub');
-  assert.ok(joinResult && joinResult.text === 'A new member joined',
-    'CONTROL: a real join should still produce a "new member joined" activity item');
+  handler.onevent({
+    kind: 30078, id: 'join-evt', pubkey: 'member2', created_at: 1700000001,
+    tags: [['d', 'trinityone/member:churchpub'], ['t', 'trinityone'], ['p', 'churchpub']],
+    content: JSON.stringify({ joined: 1700000001 }),
+  });
+  await new Promise(r => setTimeout(r, 200));
+  assert.ok(items.some(i => i.text === 'A new member joined'),
+    'CONTROL: a real join should produce a "new member joined" activity item');
 });
 
-test('subscribeMembers reads the seen field from a heartbeat document', () => {
+test('subscribeMembers reads the seen field from a heartbeat document', async () => {
   const stBody = fnBody(STEWARD, 'subscribeMembers(onMembers', 'subscribeMembers');
-  assert.ok(stBody.includes('.seen') || stBody.includes('seen'),
+  let members = [];
+  const handlers = [];
+  const storage = {};
+  const scope = {
+    pool: { subscribeMany: (_u, _f, h) => { handlers.push(h); return { close() {} }; } },
+    relays: () => ['wss://r'],
+    pub: 'churchpub',
+    NET: 'trinityone',
+    JSON, Math, Date, console, String, Number, Map, Set, Array, Infinity,
+    setTimeout, clearTimeout,
+    npubEncode: (x) => x,
+    localStorage: {
+      getItem: (k) => storage[k] || null,
+      setItem: (k, v) => { storage[k] = v; },
+    },
+    window: { Steward: { openMemberName: () => '' } },
+  };
+  const fn = new Function('scope', `with (scope) { return ({ ${stBody} }).subscribeMembers; }`)(
+    new Proxy(scope, {
+      has: (t, k) => (k in t) || !(String(k) in globalThis),
+      get: (t, k) => {
+        if (k === Symbol.unscopables) return undefined;
+        if (k in t) return t[k];
+        if (String(k) in globalThis) return globalThis[String(k)];
+        return undefined;
+      },
+      set: (t, k, v) => { t[k] = v; return true; },
+    })
+  );
+  fn((list) => { members = list.slice(); });
+  assert.ok(handlers.length >= 1, 'subscribeMembers did not open a subscription');
+
+  for (const h of handlers) h.onevent({
+    kind: 30078, id: 'mem-evt', pubkey: 'member1', created_at: 1700000000,
+    tags: [['d', 'trinityone/member:churchpub'], ['t', 'trinityone'], ['p', 'churchpub']],
+    content: JSON.stringify({ joined: 1690000000, seen: 1700000000, hb: 1 }),
+  });
+  await new Promise(r => setTimeout(r, 250));
+  const m = members.find(m => m.pubkey === 'member1');
+  assert.ok(m, 'the member was not added');
+  assert.equal(m.seen, 1700000000,
     'subscribeMembers does not read the seen field — the console has no way to know when a member ' +
     'was last active, because the heartbeat overwrites joined');
 });

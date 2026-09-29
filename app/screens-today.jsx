@@ -1060,9 +1060,11 @@ function CareAvailability({ ctx, part }) {
       .then((r) => {
         if (r && r.ok) { setOpt(true); return; }
         setOpt(null);
-        ctx.toast(r && r.reason === 'unconfirmed'
-          ? 'We couldn’t confirm that reached your church — it may well have. If the card still says you’re not listed in a moment, save again; it won’t list you twice.'
-          : 'Couldn’t list you — the church hasn’t been told. Try again when you have signal.', { error: true });
+        ctx.toast(r && r.reason === ‘no-key’
+          ? ‘Your church hasn’t shared its key with this phone yet — try again in a moment.’
+          : r && r.reason === ‘unconfirmed’
+          ? ‘We couldn’t confirm that reached your church — it may well have. If the card still says you’re not listed in a moment, save again; it won’t list you twice.’
+          : ‘Couldn’t list you — the church hasn’t been told. Try again when you have signal.’, { error: true });
       })
       .catch(() => { setOpt(null); ctx.toast('Couldn’t list you — the church hasn’t been told.', { error: true }); });
   };

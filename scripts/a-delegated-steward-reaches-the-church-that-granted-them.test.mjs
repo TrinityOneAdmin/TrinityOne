@@ -362,3 +362,62 @@ test('POINT OF USE: after the switch, the acting console\'s own relay is the box
   s.redraw();
   assert.match(s.words(), /STEWARD/, 'the badge does not say the console is acting as a steward');
 });
+
+// ── Stale roster guard (S-6) ──────────────────────────────────────────────────────────────────────────
+//
+// Two relays, one lags. The newer roster says "ME is a steward"; the older says "ME is not". Without a
+// created_at guard the older copy wins (it arrives last from the lagging relay) and the church vanishes
+// from the switcher. The reverse: a revoked steward is reinstated by a stale copy from the second box.
+
+const CHURCH2 = 'dd'.repeat(32);
+
+test('a stale roster that removes ME does not override a newer one that includes ME', async () => {
+  const h = harness({ cached: false });
+  h.subscribe(() => {});
+  await tick(5);
+  const d = h.discovery();
+  assert.equal(d.length, 1);
+  // Newer roster: ME is listed
+  d[0].handlers.onevent({
+    created_at: 1000,
+    tags: [['d', STEWARDS_D + CHURCH], ['t', 'trinityone']],
+    content: JSON.stringify({ pubkeys: [ME] }),
+  });
+  assert.ok(h.stewardedChurches.has(CHURCH), 'staging: the grant was not recorded');
+  // Stale roster from the lagging relay: ME is NOT listed
+  d[0].handlers.onevent({
+    created_at: 900,
+    tags: [['d', STEWARDS_D + CHURCH], ['t', 'trinityone']],
+    content: JSON.stringify({ pubkeys: [] }),
+  });
+  assert.ok(h.stewardedChurches.has(CHURCH),
+    'A STALE ROSTER REVOKED A STEWARD — the lagging relay\'s old copy overrode the newer grant');
+});
+
+test('a stale roster that includes ME does not override a newer one that removed ME', async () => {
+  const h = harness({ cached: false });
+  h.subscribe(() => {});
+  await tick(5);
+  const d = h.discovery();
+  // Newer roster: ME was removed (deleted or empty pubkeys)
+  d[0].handlers.onevent({
+    created_at: 1000,
+    tags: [['d', STEWARDS_D + CHURCH2], ['t', 'trinityone']],
+    content: JSON.stringify({ pubkeys: [ME] }),
+  });
+  assert.ok(h.stewardedChurches.has(CHURCH2), 'staging: the initial grant failed');
+  d[0].handlers.onevent({
+    created_at: 1100,
+    tags: [['d', STEWARDS_D + CHURCH2], ['t', 'trinityone']],
+    content: JSON.stringify({ pubkeys: [] }),
+  });
+  assert.ok(!h.stewardedChurches.has(CHURCH2), 'staging: the revocation failed');
+  // Stale roster from the lagging relay: ME is still listed
+  d[0].handlers.onevent({
+    created_at: 900,
+    tags: [['d', STEWARDS_D + CHURCH2], ['t', 'trinityone']],
+    content: JSON.stringify({ pubkeys: [ME] }),
+  });
+  assert.ok(!h.stewardedChurches.has(CHURCH2),
+    'A STALE ROSTER REINSTATED A REVOKED STEWARD — the lagging relay\'s old copy overrode the newer revocation');
+});
