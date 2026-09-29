@@ -54,23 +54,11 @@ function NostrBackend(cache) {
   // Nothing is lost by encrypting: pull() only ever reads authors:[pub] — your own docs — and no other
   // code in the tree subscribes to these d-tags. The relay-side default-deny gate (ea203ec) is the other
   // half of this fix; encrypting here means a non-enforcing relay in the pool can't leak them either.
+  // Personal documents (highlights, bookmarks, notes, journal, prayer, settings) are DEVICE-ONLY.
+  // Owner decision 2026-09-27 (D1): they stay on the phone, carried by the member's own backup file.
+  // They are NOT synced to relays. Only chatseen (unread marks) syncs — it is wiped at every lock
+  // and the relay copy is the only thing that restores it.
   var SYNC = {
-    'data/highlights': { d: 'trinityone/highlights', priv: true  },
-    'data/bookmarks':  { d: 'trinityone/bookmarks',  priv: true  },
-    'data/notes':      { d: 'trinityone/notes',      priv: true  },
-    'data/journal':    { d: 'trinityone/journal',    priv: true  },
-    'data/prayer':     { d: 'trinityone/prayer',     priv: true  },
-    'settings':        { d: 'trinityone/settings',   priv: true  },
-    // F17 (AUDIT-2026-07-28), fixed 2026-07-30. Which messages you have already read — {groupId: unixSeconds},
-    // about 20 bytes per group. It lived ONLY in localStorage under trinityone.chatSeen, and the locked-boot
-    // wipe deletes it, so setting a PIN made every conversation read as unread again for ever, with nothing
-    // able to restore it.
-    //
-    // Synced here so it can come BACK after an unlock. It is NOT made wipe-exempt like notes/journal: the map
-    // is keyed by group SLUG ('prayer', 'youth', 'life'), and the wipe also clears the cached group documents
-    // — so keeping this on the device would hand a seized locked phone the church's group names, which is
-    // precisely what that wipe exists to prevent. Wiped locally, restored from the relay. See the explicit
-    // carve-out in clearCommunityCache (src/fellowship.src.js).
     'data/chatseen':   { d: 'trinityone/chatseen',  priv: true  },
   };
   var D_TO_KEY = {};

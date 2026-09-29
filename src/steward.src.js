@@ -6296,13 +6296,12 @@ window.Steward = {
     // ROTATION KEEPS THE OLD KEYS. Replacing the ring with one fresh key is what made a block erase the group's
     // whole readable history on every phone — _decEvt drops what it cannot open, so the messages simply vanish.
     // Carry the superseded keys along, newest first, exactly as the care key does. AUDIT-2026-07-27.
+    let rev = _srev[groupId] || 1;
     if (opts.rotate || !key) {
       key = crypto.getRandomValues(new Uint8Array(32));
-      _srev[groupId] = (_srev[groupId] || 0) + 1;
+      rev = (_srev[groupId] || 0) + 1;
       ring = [key, ...ring].slice(0, GROUP_RING_MAX);
     } else if (!ring.length) ring = [key];
-    _skeys[groupId] = ring;
-    const rev = _srev[groupId] || 1; _srev[groupId] = rev;
     // TWO SHAPES, DELIBERATELY. `keys` holds ONLY the current key as bare hex — exactly what every already-
     // installed app expects. `rings` holds the whole ring as a JSON array for apps that understand it.
     // Writing only the ring shape was a silent field break in the direction that actually happens: the console
@@ -6361,9 +6360,11 @@ window.Steward = {
     // hand back `last + 1` rather than the reading the call site took. The two therefore disagreed by a
     // second or more, and stewIngestKey drops an envelope whose created_at is BELOW _senvTs, so our own
     // envelope coming back off the relay could be discarded as stale. Take the number off the signed event.
-    _senvTs[groupId] = _env.created_at || 0;
     const ok = await publish(_env, { background: !!opts.background });
     if (ok === false) return false;
+    _skeys[groupId] = ring;
+    _srev[groupId] = rev;
+    _senvTs[groupId] = _env.created_at || 0;
     if (skipped.length) {
       console.warn('[steward] group key ' + groupId + ': could not seal to ' + skipped.length + ' member(s) — they cannot read or post in that room');
       return { ok: true, skipped: skipped.slice() };
@@ -7025,13 +7026,14 @@ window.Steward = {
     }
     if (fitted.length < ring.length) console.warn('[steward] name key ring trimmed to ' + fitted.length + ' to fit ' + recips.length + ' members — names not yet re-sealed under the new key will be blank until that member is next online');
     ring = fitted;
-    _nameKeyRing = ring;
     const wrapped = JSON.stringify(ring);
     // Sealed one at a time WITH THE THREAD HANDED BACK. This ran as a synchronous loop over every recipient at
     // ~5 ms each on a workstation and several times that on a phone, so a 500-member church froze the console
     // for seconds — after a Block, which is precisely when a steward needs to see that something is happening.
     const keys = await _sealEach(wrapped, recips, (pl, pk) => nip44e(pl, nip44ck(churchSk, pk)));
     const out = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', NAMEKEY_D + cp], ['t', NET]], content: JSON.stringify({ rev: ring.length, keys }) }));
+    if (out === false) return false;
+    _nameKeyRing = ring;
     _nameKeyDocKeys = keys;
     return out;
   },

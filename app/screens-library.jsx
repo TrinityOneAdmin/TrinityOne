@@ -157,7 +157,7 @@ function BackupCard({ ctx }) {
   { ic: 'pen', label: 'Journals & notes' },
   { ic: 'marker', label: 'Highlights' },
   { ic: 'bookmark', label: 'Bookmarks' },
-  { ic: 'refresh', label: 'Your notes come back on their own', sub: 'once this phone reconnects to your church' }];
+  { ic: 'shield', label: 'Your notes stay on this phone', sub: 'back them up here so they travel with you' }];
 
   // NO "OK" RUNG. This file holds the member's twelve words, so it is not a document that a six-character
   // code protects — an attacker who has it guesses offline, on their own hardware, for as long as they like.

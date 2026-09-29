@@ -5187,22 +5187,6 @@
   function NostrBackend(cache) {
     var KIND = 30078;
     var SYNC = {
-      "data/highlights": { d: "trinityone/highlights", priv: true },
-      "data/bookmarks": { d: "trinityone/bookmarks", priv: true },
-      "data/notes": { d: "trinityone/notes", priv: true },
-      "data/journal": { d: "trinityone/journal", priv: true },
-      "data/prayer": { d: "trinityone/prayer", priv: true },
-      "settings": { d: "trinityone/settings", priv: true },
-      // F17 (AUDIT-2026-07-28), fixed 2026-07-30. Which messages you have already read — {groupId: unixSeconds},
-      // about 20 bytes per group. It lived ONLY in localStorage under trinityone.chatSeen, and the locked-boot
-      // wipe deletes it, so setting a PIN made every conversation read as unread again for ever, with nothing
-      // able to restore it.
-      //
-      // Synced here so it can come BACK after an unlock. It is NOT made wipe-exempt like notes/journal: the map
-      // is keyed by group SLUG ('prayer', 'youth', 'life'), and the wipe also clears the cached group documents
-      // — so keeping this on the device would hand a seized locked phone the church's group names, which is
-      // precisely what that wipe exists to prevent. Wiped locally, restored from the relay. See the explicit
-      // carve-out in clearCommunityCache (src/fellowship.src.js).
       "data/chatseen": { d: "trinityone/chatseen", priv: true }
     };
     var D_TO_KEY = {};

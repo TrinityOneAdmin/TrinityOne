@@ -19988,14 +19988,12 @@ zoo`.split("\n");
       let ring = _skeys[groupId] || [];
       let key = ring[0];
       if (!opts.rotate && !key && !_isRelayAuthed()) return Promise.resolve(null);
+      let rev2 = _srev[groupId] || 1;
       if (opts.rotate || !key) {
         key = crypto.getRandomValues(new Uint8Array(32));
-        _srev[groupId] = (_srev[groupId] || 0) + 1;
+        rev2 = (_srev[groupId] || 0) + 1;
         ring = [key, ...ring].slice(0, GROUP_RING_MAX);
       } else if (!ring.length) ring = [key];
-      _skeys[groupId] = ring;
-      const rev2 = _srev[groupId] || 1;
-      _srev[groupId] = rev2;
       let skipped = [];
       const build = (r) => {
         const keys = {}, rings = {}, missed = [];
@@ -20020,9 +20018,11 @@ zoo`.split("\n");
         skipped = build.missed || [];
       }
       const _env = feChurch({ kind: 30078, created_at: now(), tags: [["d", GROUPKEY_D + groupId], ["t", NET]], content }, churchSk);
-      _senvTs[groupId] = _env.created_at || 0;
       const ok = await publish(_env, { background: !!opts.background });
       if (ok === false) return false;
+      _skeys[groupId] = ring;
+      _srev[groupId] = rev2;
+      _senvTs[groupId] = _env.created_at || 0;
       if (skipped.length) {
         console.warn("[steward] group key " + groupId + ": could not seal to " + skipped.length + " member(s) \u2014 they cannot read or post in that room");
         return { ok: true, skipped: skipped.slice() };
@@ -20476,10 +20476,11 @@ zoo`.split("\n");
       }
       if (fitted.length < ring.length) console.warn("[steward] name key ring trimmed to " + fitted.length + " to fit " + recips.length + " members \u2014 names not yet re-sealed under the new key will be blank until that member is next online");
       ring = fitted;
-      _nameKeyRing = ring;
       const wrapped = JSON.stringify(ring);
       const keys = await _sealEach(wrapped, recips, (pl, pk) => encrypt3(pl, getConversationKey(churchSk, pk)));
       const out = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", NAMEKEY_D + cp], ["t", NET]], content: JSON.stringify({ rev: ring.length, keys }) }));
+      if (out === false) return false;
+      _nameKeyRing = ring;
       _nameKeyDocKeys = keys;
       return out;
     },
