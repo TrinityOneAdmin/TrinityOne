@@ -49,8 +49,8 @@ async function runUnlink(guardians, childPub, parentPub) {
     setGuardians: (g) => { calls.guardians.push(g); return true; },
     notifyGuardianRemoved: (parent, child) => { calls.notified.push([parent, child]); },
   } };
-  const fn = new Function('guardians', 'sg', 'window', '_reseal', 'setMinorNotice',
-    body + '\nreturn unlinkParent;')(guardians, sg, win, (...a) => calls.reseal.push(a), () => {});
+  const fn = new Function('guardians', 'guardiansClosed', 'sg', 'window', '_reseal', 'setMinorNotice',
+    body + '\nreturn unlinkParent;')(guardians, {}, sg, win, (...a) => calls.reseal.push(a), () => {});
   await fn(childPub, parentPub);
   return calls;
 }

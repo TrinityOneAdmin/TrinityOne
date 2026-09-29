@@ -68,8 +68,8 @@ function runner(name, { publishFails, how }) {
   // that is lifted out of the bundle too rather than stubbed — a stub here would supply the very answer these
   // tests are named after.
   const _pubReason = new Function(fnBody(BUNDLE, 'function _pubReason(e)', '_pubReason') + '\nreturn _pubReason;')();
-  const obj = new Function('finalizeEvent2', '_publishAny', 'toPub', 'window', 'sk', 'NET', 'Date', 'JSON', 'Math', '_clearJoinSent', '_dropJoinIntent', '_pubReason', '_forgetChurch',
-    'return ' + src)(finalizeEvent2, _publishAny, toPub, window, 'sk-bytes', 'trinityone', Date, JSON, Math, () => {}, () => {}, _pubReason, () => {});
+  const obj = new Function('finalizeEvent2', '_publishAny', 'publishSetFor', 'toPub', 'window', 'sk', 'NET', 'Date', 'JSON', 'Math', '_clearJoinSent', '_dropJoinIntent', '_pubReason', '_forgetChurch',
+    'return ' + src)(finalizeEvent2, _publishAny, () => ['wss://r.example/relay'], toPub, window, 'sk-bytes', 'trinityone', Date, JSON, Math, () => {}, () => {}, _pubReason, () => {});
   return { fn: obj[name], calls };
 }
 
@@ -180,10 +180,10 @@ function unavailRunner({ how }) {
   };
   const _pubReason = new Function(fnBody(BUNDLE, 'function _pubReason(e)', '_pubReason') + '\nreturn _pubReason;')();
   const window = { Fellowship: { relays: ['wss://r.example/relay'], ready: Promise.resolve(), myPubkey: 'me-pub' } };
-  return new Function('finalizeEvent2', '_publishBounded', 'toPub', 'window', 'sk', 'NET', 'UNAVAIL_MIRROR',
+  return new Function('finalizeEvent2', '_publishBounded', 'publishSetFor', 'toPub', 'window', 'sk', 'NET', 'UNAVAIL_MIRROR',
     'localStorage', '_pubReason', 'Date', 'JSON', 'Math', 'Array',
     'return ' + src)(
-    (e) => ({ ...e, id: 'evt-id' }), _publishBounded, (x) => String(x || '') || null, window, 'sk-bytes',
+    (e) => ({ ...e, id: 'evt-id' }), _publishBounded, () => ['wss://r.example/relay'], (x) => String(x || '') || null, window, 'sk-bytes',
     'trinityone', 'unavail:', { setItem() {}, getItem: () => null }, _pubReason, Date, JSON, Math, Array,
   ).setUnavailable;
 }
@@ -207,10 +207,10 @@ test('CONTROL: setUnavailable still resolves with its event when the publish wor
   // Without this, "always throw" would satisfy all three rows above.
   const src = '({ ' + liftMethod('setUnavailable') + ' })';
   const window = { Fellowship: { relays: ['wss://r.example/relay'], ready: Promise.resolve(), myPubkey: 'me-pub' } };
-  const fn = new Function('finalizeEvent2', '_publishBounded', 'toPub', 'window', 'sk', 'NET', 'UNAVAIL_MIRROR',
+  const fn = new Function('finalizeEvent2', '_publishBounded', 'publishSetFor', 'toPub', 'window', 'sk', 'NET', 'UNAVAIL_MIRROR',
     'localStorage', '_pubReason', 'Date', 'JSON', 'Math', 'Array',
     'return ' + src)(
-    (e) => ({ ...e, id: 'evt-id' }), async () => true, (x) => String(x || '') || null, window, 'sk-bytes',
+    (e) => ({ ...e, id: 'evt-id' }), async () => true, () => ['wss://r.example/relay'], (x) => String(x || '') || null, window, 'sk-bytes',
     'trinityone', 'unavail:', { setItem() {}, getItem: () => null }, () => 'unconfirmed', Date, JSON, Math, Array,
   ).setUnavailable;
   const out = await fn('npub1church', ['2026-09-20']);

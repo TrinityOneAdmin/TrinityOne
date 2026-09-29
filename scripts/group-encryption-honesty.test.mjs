@@ -127,6 +127,7 @@ function sendRig({ cache = [{ id: 'g1', encrypted: true }], hint, key = null, se
     _outbox: outbox,
     _outboxSave: () => {},
     _publishBounded: async (_r, e) => { published.push(e); return true; },
+    publishSetFor: () => ['wss://r'],
     console: { warn: () => {} },
   };
   const body = stripComments(fnBody(SRC, 'function _wantsEncrypted(groupId, hint)', '_wantsEncrypted'))

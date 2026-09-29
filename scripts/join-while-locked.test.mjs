@@ -37,6 +37,8 @@ function lift(overrides = {}) {
     finalizeEvent, finalizeEvent2: finalizeEvent,
     _joinSent: {}, _outbox: [], _outboxFailed: [], _outboxSave: () => {},
     _publishAny: async (relays, evt) => { published.push(evt); if (scope.refuse) throw new Error(scope.refuse); return true; },
+    publishSetFor: () => ['ws://x'],
+    _pubReason: (e) => (e && e.unsent) ? 'not-sent' : 'unconfirmed',
     _forgetChurch: () => {},
     toPub: (x) => { if (/^[0-9a-f]{64}$/.test(x)) return x; try { const d = nip19decode(x); return d.type === 'npub' ? d.data : null; } catch { return null; } },
     localStorage: fakeStorage(),

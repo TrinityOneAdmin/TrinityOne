@@ -46,6 +46,7 @@ function loadResolver({ answers = {}, admit = false } = {}) {
     toPub: (x) => String(x || ''),
     isNetworkRelay: async (cp, url) => { (admit ? added : refused).push(url); return !!admit; },
     CustomEvent: class { constructor(t, i) { this.type = t; this.detail = (i || {}).detail; } },
+    _storeInvitePending: () => {},
     AbortController, setTimeout, clearTimeout, Promise, String, decodeURIComponent, encodeURIComponent,
     fetch: async (u) => {
       asked.push(String(u));

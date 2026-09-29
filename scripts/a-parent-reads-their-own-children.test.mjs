@@ -122,6 +122,8 @@ function release(relId, { session = SESSION, manual = false, guardians = [], at 
     finalizeEvent2: (t, s) => finalizeEvent({ ...t, created_at: at }, s),
     CHECKIN_D: D.CHECKIN, NET: 'trinityone', relaysForChurch: () => [],
     _publishAny: async (_r, e) => { captured.push(e); return true; },
+    publishSetFor: () => [],
+    _pubReason: () => 'unconfirmed',
     String, Date, Math, JSON, Number, Array, Object, Boolean, RegExp, console,
   };
   const proxy = new Proxy(scope, {

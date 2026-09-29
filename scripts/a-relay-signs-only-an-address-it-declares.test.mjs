@@ -36,7 +36,8 @@ function lift(file) {
     grab('function relayIdentityNonce', 'relayIdentityNonce'),
     grab('function relayHttpBase', 'relayHttpBase'),
     grab('function relayAddrKey', 'relayAddrKey'),
-    grab('async function verifyRelayIdentity', 'verifyRelayIdentity'),
+    grab('async function verifyRelayIdentityDetailed', 'verifyRelayIdentityDetailed'),
+    grab('async function verifyRelayIdentity(wssUrl) {', 'verifyRelayIdentity'),
   ].join('\n');
   // Prove the lifted code really is the binding, not a version that carries the address without checking it.
   assert.match(body, /relayAddrKey\(/, `${file}: the lifted verifier never calls relayAddrKey — nothing is bound`);

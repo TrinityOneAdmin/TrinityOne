@@ -82,7 +82,7 @@ const askRelay = (authSk, filter) => new Promise((res, rej) => {
 function consoleApi({ signer, actingChurch }) {
   const scope = {
     sk: signer.sk, pub: cp, actingChurch, NET, REQUEST_D,
-    now, finalizeEvent,
+    now, finalizeEvent, _reqSeq: 0,
     _monotonic: (t) => t,   // the shipped one guards same-second replaceables; irrelevant here and it needs state
     sent: null,
     publish: async (evt) => { scope.sent = evt; const [ok] = await send(ws, evt); return ok; },

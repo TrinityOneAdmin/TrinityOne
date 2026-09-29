@@ -27,7 +27,7 @@ const FELL = readFileSync(new URL('../src/fellowship.src.js', import.meta.url), 
 const DASH = stripComments(readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8'));
 
 test('the console can tell a parent a link was removed', () => {
-  const body = stripComments(fnBody(STEW, 'notifyGuardianRemoved(parentPubIn, childPubIn, closedMap) {', 'notifyGuardianRemoved'));
+  const body = stripComments(fnBody(STEW, 'notifyGuardianRemoved(parentPubIn, childPubIn) {', 'notifyGuardianRemoved'));
   assert.match(body, /removed: childPub/, 'the removal notice does not name the child being removed');
   assert.match(body, /nip44e\(/, 'the removal notice is not sealed to the parent — the child link would ride in cleartext');
   assert.match(body, /GUARDNOTICE_D \+ parentPub/, 're-anchor: the notice no longer goes to the parent\'s own doc');

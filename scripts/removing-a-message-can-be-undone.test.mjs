@@ -30,11 +30,11 @@ function hiddenAfter(bundle, sliceAnchor, events, { memberSide = false } = {}) {
   const body = bundle.slice(i, end);
   let handlers = null, last = null;
   const pool = { subscribeMany: (_r, _f, h) => { handlers = h; return { close() {} }; } };
-  const obj = new Function('pool', 'relays', 'pub', 'HIDE_D', 'window', '_coalesce', '_groupEventTrusted', 'NET', 'Number', 'Set', 'Map',
+  const obj = new Function('pool', 'relays', 'pub', 'HIDE_D', 'window', '_coalesce', '_groupEventTrusted', 'NET', '_netRelays', 'Number', 'Set', 'Map',
     'return ({ ' + body + ' })')(
     pool, () => ['wss://r/relay'], 'churchpub', 'trinityone/hidden:',
     { Fellowship: { churchPub: 'churchpub', relays: ['wss://r/relay'] } },
-    (f) => f, () => true, 'trinityone', Number, Set, Map);
+    (f) => f, () => true, 'trinityone', (x) => x, Number, Set, Map);
   const fn = obj[Object.keys(obj)[0]];
   if (memberSide) fn('g1', (s) => { last = s; }); else fn((s) => { last = s; });
   for (const e of events) handlers.onevent(e);

@@ -156,6 +156,7 @@ async function runLifted(sig, name, answer, scope = {}, args = [], decls = '') {
     // The blob auth sites call this now (option A, H1). The REAL one, lifted out of the bundle rather than
     // stubbed: a stub returning `tags` unchanged would let every delegated-console test go green over an
     // upload that never names the church, which is the defect itself.
+    _localBlocked: new Set(),
     _blobAuthTags: new Function('actingChurch', fnBody(BUNDLE, 'function _blobAuthTags(tags) {', '_blobAuthTags') + '\nreturn _blobAuthTags;')(scope.actingChurch || ''),
     fetch: async () => ({ ok: true }),
     btoa: (s) => Buffer.from(s, 'binary').toString('base64'),
@@ -279,7 +280,7 @@ test('mediaEncryptor REFUSES TO ENCRYPT when the key envelope was refused', asyn
   // file with a key whose envelope never reached a relay and pushed the ciphertext to every host. Nobody,
   // the church included, can ever decrypt it. The mint gate a few lines above this one exists to prevent
   // exactly that loss; this is the same loss reached through the other door.
-  const decls = 'let _mediaKeyHex = "aa".repeat(32); let _mediaKeyRing = [_mediaKeyHex]; let _mediaKeyChecked = true;';
+  const decls = 'let _mediaKeyHex = null; let _mediaKeyRing = []; let _mediaKeyChecked = true; let _mediaKeyDocKeys = null;';
   const env = {
     _isRelayAuthed: () => true,
     _sealEach: async (payload, targets) => Object.fromEntries(targets.map(t => [t, 'WRAPPED'])),
@@ -299,6 +300,7 @@ test('mediaEncryptor REFUSES TO ENCRYPT when the key envelope was refused', asyn
 const MEDIA_ENV = (extra = '') => `
   let _mediaKeyRing = [];
   let _mediaKeyChecked = true;
+  let _mediaKeyDocKeys = null;
   const _isRelayAuthed = () => true;
   const _unhex = (h) => new Uint8Array(h.match(/../g).map(x => parseInt(x, 16)));
   const _hex = (b) => [...b].map(x => x.toString(16).padStart(2, '0')).join('');
@@ -590,6 +592,7 @@ test('THE SCREEN: a backup whose church-wide record was refused says so, and nam
         subscribeBackupMeta: () => () => {},
         mediaSize: async () => ({ count: 0, bytes: 0 }),
       },
+      TrinityBackup: { saveFile: async () => ({ where: 'downloads' }) },
       localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
       addEventListener() {}, removeEventListener() {},
       document: doc,

@@ -133,8 +133,13 @@ test('every activeChurch resolution still funnels through the same find()', () =
   // reason on screen, never a silent overwrite of every away-Sunday the church already holds.
   // ⚠ ADDED BY 68564c5 WITHOUT MOVING THIS COUNT, which is exactly the accounting CLAUDE.md rule 8 exists
   // for; caught by this test in the full-suite run of 2026-09-14, not by the commit that did it.
-  assert.equal(sites.length, 42,
-    `the active-church resolution sites changed (${sites.length} vs 42) — if that is deliberate, confirm each new one benefits from the heal, then update this count`);
+  // 42 → 43 on 2026-09-29: ctx.assumeMinor (the events gate's cached minor answer), which resolves the
+  // active church to its npub to consult F.subscribeChurchSafeguard's cached answer for the events card
+  // gate. Identical in shape to the safeguarding subscription beside it, and it benefits from the heal:
+  // with a stale id np is undefined, the gate falls back to the default (not minor), which is the SAFE
+  // direction for the events card — it shows rather than hides.
+  assert.equal(sites.length, 43,
+    `the active-church resolution sites changed (${sites.length} vs 43) — if that is deliberate, confirm each new one benefits from the heal, then update this count`);
 });
 
 test('a MISSING active church heals too, not only a dangling one', () => {

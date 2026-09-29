@@ -50,7 +50,8 @@ function lift(file) {
     fnBody(src, 'function relayIdentityNonce', 'relayIdentityNonce'),
     fnBody(src, 'function relayHttpBase', 'relayHttpBase'),
     fnBody(src, 'function relayAddrKey', 'relayAddrKey'),
-    fnBody(src, 'async function verifyRelayIdentity', 'verifyRelayIdentity'),
+    fnBody(src, 'async function verifyRelayIdentityDetailed', 'verifyRelayIdentityDetailed'),
+    fnBody(src, 'async function verifyRelayIdentity(wssUrl) {', 'verifyRelayIdentity'),
   ].join('\n');
   assert.match(body, /verifyEvent2?\(ev\)/,
     `${file}'s verifyRelayIdentity does not verify the event signature at all`);
