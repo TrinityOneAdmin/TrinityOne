@@ -2025,7 +2025,7 @@ function App() {
     bookmarks, toggleBookmark: (k) => { if (MD.has('bookmarks', k)) MD.remove('bookmarks', k); else MD.put('bookmarks', { id: k, ref: k }); },
     planProgress,
     devoProgress,
-    churchPlans: [...churchPlans, ...netPlans],
+    churchPlans: [...churchPlans, ...netPlans].map(p => (typeof p.len === 'number') ? p : { ...p, len: (p.days || []).length }),
     churchDevos,
     churchPeople, churchPeopleLoading,   // prefetched at app load so the People screen is instant
     myPubkey: (window.Fellowship && window.Fellowship.myPubkey) || null,
@@ -2321,6 +2321,8 @@ function App() {
   // back button: close the topmost open overlay/sheet (returns true if it closed one). Kept current
   // each render so the popstate handler always sees live state. Order ~ visual z (most modal first).
   window.trinityGoBack = () => {
+    const st = window.__trinityBackStack;
+    if (st && st.length) { st[st.length - 1].close(); return true; }
     const layers = [
       [wordOv, () => setWordOv(null)], [member, () => setMember(null)], [profile, () => setProfile(false)],
       [commSec, () => setCommSec(false)],

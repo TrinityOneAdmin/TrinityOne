@@ -806,6 +806,7 @@ function ReadScreen({ ctx }) {
   const vlist = Bible.versions();
   const cmpAbbr = compare === true ? ((vlist.find(v => v.abbr !== version) || {}).abbr || version) : compare;
   const cmpVerses = React.useMemo(() => cmpAbbr ? Bible.getVerses(loc.book, loc.chap, cmpAbbr) : [], [loc.book, loc.chap, cmpAbbr]);
+  const cmpIdx = React.useMemo(() => { const m = {}; cmpVerses.forEach(v => { const ids = String(v.v).split('-'); ids.forEach(id => { m[id] = v; }); }); return m; }, [cmpVerses]);
 
   const bname = Bible.bookName(loc.book);
   const labelOf = (v) => Bible.refLabel(loc, v);
@@ -1049,7 +1050,7 @@ function ReadScreen({ ctx }) {
                   </div>
                   <div style={{ flex: 1 }}>
                     <div style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--sage)', letterSpacing: '.5px', marginBottom: 2 }}>{cmpAbbr}</div>
-                    <p style={{ fontFamily: readFont, fontSize: 16 * scale * rs, lineHeight: 1.55, margin: 0, color: 'var(--ink-2)' }}>{cmpVerses[i] ? cmpVerses[i].text : ''}</p>
+                    <p style={{ fontFamily: readFont, fontSize: 16 * scale * rs, lineHeight: 1.55, margin: 0, color: 'var(--ink-2)' }}>{cmpIdx[String(row.v)] ? cmpIdx[String(row.v)].text : ''}</p>
                   </div>
                 </div>
               ))}

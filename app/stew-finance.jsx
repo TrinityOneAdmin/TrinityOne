@@ -791,7 +791,8 @@ function DashFinanceBook() {
     return { posted, failed, skipped };
   };
   const funds = F.fundBalances(book);
-  const ie = F.incomeExpenditure(book);
+  const fyStart = (() => { const mm = (book.fiscalYearStart || '01-01'); const y = new Date().getFullYear(); const t = y + '-' + mm; return t <= new Date().toISOString().slice(0, 10) ? t : (y - 1) + '-' + mm; })();
+  const ie = F.incomeExpenditure(book, { from: fyStart });
   const bank = F.trialBalance(book).rows.find(r => r.account === 'bank');
   const cash = bank ? bank.debit - bank.credit : 0;
   const recent = book.journal.slice().reverse().slice(0, 16);
@@ -833,7 +834,7 @@ function DashFinanceBook() {
         {stat('In the bank', booksFmt(cash, book))}
         {stat('Income this year', booksFmt(ie.income, book), 'var(--sage, #4f7a5e)')}
         {stat('Spending this year', booksFmt(ie.expenditure, book), 'var(--clay-deep, #b4462f)')}
-        {stat('Surplus', booksFmt(ie.surplus, book), ie.surplus < 0 ? 'var(--clay-deep, #b4462f)' : 'var(--sage, #4f7a5e)')}
+        {stat('Surplus this year', booksFmt(ie.surplus, book), ie.surplus < 0 ? 'var(--clay-deep, #b4462f)' : 'var(--sage, #4f7a5e)')}
       </div>
 
       <div style={{ ...bkCard, marginBottom: 16 }}>
@@ -874,7 +875,7 @@ function DashFinanceBook() {
         <button onClick={() => setReports(r => !r)} style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontWeight: 800, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 16, color: 'var(--ink)', padding: 0 }}>{reports ? '▾' : '▸'} Reports</button>
         {reports && (
           <div style={{ marginTop: 12 }}>
-            <div style={{ fontWeight: 700, margin: '4px 0 6px' }}>Income &amp; Expenditure</div>
+            <div style={{ fontWeight: 700, margin: '4px 0 6px' }}>Income &amp; Expenditure this year</div>
             {ie.byAccount.map(r => (
               <div key={r.account} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13.5, padding: '3px 0' }}>
                 <span>{(book.accounts.get(r.account) || {}).name || r.account}</span><span style={{ fontWeight: 700 }}>{booksFmt(Math.abs(r.amount), book)}</span>

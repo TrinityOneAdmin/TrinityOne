@@ -17526,6 +17526,8 @@ zoo`.split("\n");
     }
   }
   var _evtSeq = 0;
+  var _svcSeq = 0;
+  var _reqSeq = 0;
   var WEB_HORIZON_OK = /* @__PURE__ */ new Set([3, 6, 12]);
   var WEB_DEFAULT = Object.freeze({ calendar: false, sermons: false, plans: false, optOut: [], optIn: [], address: "own", horizonMonths: 6, calName: "", detail: "full" });
   var WEB_ID_OK = /^[A-Za-z0-9_-]{1,64}$/;
@@ -21859,7 +21861,7 @@ zoo`.split("\n");
     // service = { id?, date:'YYYY-MM-DD', time:'10:30', name }
     async publishService(svc) {
       if (!sk) return null;
-      const id = svc.id || "svc" + Date.now();
+      const id = svc.id || "svc" + Date.now().toString(36) + (++_svcSeq).toString(36) + Math.random().toString(36).slice(2, 7);
       const doc = { date: svc.date || "", time: svc.time || "10:30", name: svc.name || "Sunday Gathering" };
       const content = await _sealChurchDocReady(doc);
       if (content == null) return null;
@@ -22960,7 +22962,7 @@ zoo`.split("\n");
     // ---- serving requests: steward -> a member "can you serve?" (p-tagged to the member) ----
     sendServingRequest(req) {
       if (!sk || !req || !req.memberPub) return Promise.resolve(null);
-      const id = req.id || "req" + Date.now();
+      const id = req.id || "req" + Date.now().toString(36) + (++_reqSeq).toString(36) + Math.random().toString(36).slice(2, 7);
       const content = JSON.stringify({ serviceId: req.serviceId || "", teamId: req.teamId || "", roleId: req.roleId || "", role: req.role || "", teamName: req.teamName || "", icon: req.icon || "hand", accent: req.accent || "var(--clay)", date: req.date || "", time: req.time || "", service: req.service || "", from: req.from || "Your church", note: req.note || "" });
       return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", REQUEST_D + id], ["t", NET], ["p", req.memberPub]], content }, sk)).then((ok) => ok ? { id, ...JSON.parse(content), memberPub: req.memberPub } : null);
     },

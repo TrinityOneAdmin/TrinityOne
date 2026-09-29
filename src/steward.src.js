@@ -3838,6 +3838,8 @@ function _connectedRelays() {
 // removes the possibility rather than shrinking it. Same fix as _wizMeetingId, whose test drew 5000 ids and
 // was failing the release gate one run in five. AUDIT-2026-07-29 S5.
 let _evtSeq = 0;
+let _svcSeq = 0;
+let _reqSeq = 0;
 
 // ════════════ THE CHURCH'S WEBSITE — the public calendar feed ════════════
 // reference/DESIGN-embeddable-church-info.md, phase 1. A church that switches "Share our calendar on our
@@ -8417,7 +8419,7 @@ window.Steward = {
   // service = { id?, date:'YYYY-MM-DD', time:'10:30', name }
   async publishService(svc) {
     if (!sk) return null;
-    const id = svc.id || ('svc' + Date.now());
+    const id = svc.id || ('svc' + Date.now().toString(36) + (++_svcSeq).toString(36) + Math.random().toString(36).slice(2, 7));
     const doc = { date: svc.date || '', time: svc.time || '10:30', name: svc.name || 'Sunday Gathering' };
     const content = await _sealChurchDocReady(doc);
     if (content == null) return null;   // the church key never arrived: NOT saved, and never in the clear
@@ -9531,7 +9533,7 @@ window.Steward = {
   // ---- serving requests: steward -> a member "can you serve?" (p-tagged to the member) ----
   sendServingRequest(req) {
     if (!sk || !req || !req.memberPub) return Promise.resolve(null);
-    const id = req.id || ('req' + Date.now());
+    const id = req.id || ('req' + Date.now().toString(36) + (++_reqSeq).toString(36) + Math.random().toString(36).slice(2, 7));
     const content = JSON.stringify({ serviceId: req.serviceId || '', teamId: req.teamId || '', roleId: req.roleId || '', role: req.role || '', teamName: req.teamName || '', icon: req.icon || 'hand', accent: req.accent || 'var(--clay)', date: req.date || '', time: req.time || '', service: req.service || '', from: req.from || 'Your church', note: req.note || '' });
     // ⚠ feChurch, NOT a bare finalizeEvent. MEASURED against a live relay on 2026-09-16: as a bare
     // finalizeEvent this was REFUSED outright for a delegated steward — "blocked: not a member or not

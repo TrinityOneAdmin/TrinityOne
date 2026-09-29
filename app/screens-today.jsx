@@ -2093,7 +2093,7 @@ function TodayScreen({ ctx }) {
   let votd = { ref: pick.ref, text: pick.text, version: 'WEB' };
   const vloc = Bible.parseRef(pick.ref);
   if (vloc && Bible.loaded && Bible.books().includes(vloc.book)) {
-    const row = Bible.getVerses(vloc.book, vloc.chap).find(v => v.v === vloc.verse);
+    const row = Bible.getVerses(vloc.book, vloc.chap).find(v => String(v.v) === String(vloc.verse));
     if (row) votd = { ref: pick.ref, text: row.text, version: Bible.activeVersion };
   }
 

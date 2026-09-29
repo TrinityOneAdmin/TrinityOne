@@ -2,6 +2,7 @@
 // Data comes from the bundled trinity-videos.json (window.Bible.getVideos());
 // inside the APK that can refresh live from the channel RSS feed.
 const { useState: useW } = React;
+let _lastFeed = null;
 
 function parseYT(url) {
   if (!url) return null;
@@ -129,7 +130,7 @@ function WatchView({ ctx }) {
   }, [sermonsReady, data, retry]);
   React.useEffect(() => {
     let alive = true; setData(null);
-    const done = (d) => { if (alive) setData(d || { channel: null, videos: [] }); };
+    const done = (d) => { if (alive) { const v = d || { channel: null, videos: [] }; _lastFeed = v; setData(v); } };
     const FS = window.Fellowship;
     if (channelUrl && FS && FS.gatewayBase && FS.gatewayBase()) {
       // the church set a YouTube/Rumble channel — the gateway fetches its feed for us (CORS-free)
@@ -291,7 +292,7 @@ function VideoPlayer({ video, open, onClose, ctx }) {
   const [retry, setRetry] = useW(0);          // bump to re-attempt after an error
   const abortRef = React.useRef(null);
   const watchdog = React.useRef(null);        // fires if <video> neither plays nor errors (silent codec stall)
-  React.useEffect(() => { if (open) window.Bible.getVideos().then(setData); }, [open]);
+  React.useEffect(() => { if (open) { if (_lastFeed) setData(_lastFeed); else window.Bible.getVideos().then(setData); } }, [open]);
   React.useEffect(() => { if (open) setLiveId(video && video.ytId ? video.ytId : null); }, [open, video]);
   React.useEffect(() => {
     if (!open || !video || !video._sermon) { setSelfSrc(null); setSelfErr(''); setProg(null); return; }
@@ -387,7 +388,7 @@ function VideoPlayer({ video, open, onClose, ctx }) {
                 <div style={{ fontWeight: 700, fontSize: 14.5 }}>{ch.name || 'Church'}</div>
                 <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{ch.handle || 'YouTube'}</div>
               </div>
-              <button onClick={() => openExternal(ch.url)} style={{ border: 'none', background: 'var(--ink)', color: 'var(--paper)', padding: '9px 16px', borderRadius: 999, fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Channel</button>
+              {ch.url ? <button onClick={() => openExternal(ch.url)} style={{ border: 'none', background: 'var(--ink)', color: 'var(--paper)', padding: '9px 16px', borderRadius: 999, fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Channel</button> : null}
             </div>
           )}
 
