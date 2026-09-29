@@ -5413,21 +5413,15 @@ window.Steward = {
     // rather than reporting the mint failure the steward cannot act on.
     if (actingChurch && !_mediaKeyHex) throw new Error('Can’t encrypt this upload — your church hasn’t shared its media key with this account yet. Ask whoever holds the church key to add you as a member of the church, or to upload this one themselves. Nothing has been uploaded.');
     if (!actingChurch) {
-    if (!_mediaKeyHex) { _mediaKeyHex = _hex(crypto.getRandomValues(new Uint8Array(32))); _mediaKeyRing = [_mediaKeyHex]; }
-    const targets = [...new Set([pub, ...(memberPubs || []).filter(Boolean)])];
-    const _mring = JSON.stringify(_mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex]);
-    const keys = await _sealEach(_mring, targets, (pl, mp) => nip44e(pl, nip44ck(sk, mp)));
-    // THE ENVELOPE MUST LAND BEFORE WE HAND BACK AN ENCRYPTOR. This `await publish(...)` discarded its
-    // result, so a refused envelope still returned a working encryptor: the caller
-    // (app/stew-dashboard.jsx, the sermon upload) then encrypted the file with a key NOBODY HOLDS and
-    // uploaded the ciphertext to every host. That is unrecoverable — not a wrong toast, a permanently
-    // unplayable sermon — and it is the same loss the mint gate a few lines up exists to prevent, reached by
-    // the other door. The relay refuses this document to anything but the church key (mediakey: got its own
-    // rule on 2026-09-22; the envelope is sealed with the SIGNER's key, so a delegated steward's copy could
-    // not be opened by any member even if it were stored), which makes the refusal an ordinary, reachable
-    // case on a delegated console rather than a theoretical one.
-    const _env = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', MEDIAKEY_D + pub], ['t', NET]], content: JSON.stringify({ keys, rev: now() }) }));
-    if (_env === false) throw new Error('Can’t encrypt this upload — your church’s media key could not be saved, so nothing encrypted with it could ever be played. Nothing has been uploaded. A church media key can only be published from the console that holds the church’s own key.');
+    if (!_mediaKeyHex) {
+      _mediaKeyHex = _hex(crypto.getRandomValues(new Uint8Array(32))); _mediaKeyRing = [_mediaKeyHex];
+      const targets = [...new Set([pub, ...(memberPubs || []).filter(Boolean)])].filter(k => !_localBlocked || !_localBlocked.has(k));
+      const _mring = JSON.stringify(_mediaKeyRing);
+      const keys = await _sealEach(_mring, targets, (pl, mp) => nip44e(pl, nip44ck(sk, mp)));
+      const _env = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', MEDIAKEY_D + pub], ['t', NET]], content: JSON.stringify({ keys, rev: now() }) }));
+      if (_env === false) throw new Error('Can’t encrypt this upload — your church’s media key could not be saved, so nothing encrypted with it could ever be played. Nothing has been uploaded. A church media key can only be published from the console that holds the church’s own key.');
+      _mediaKeyDocKeys = keys;
+    }
     }
     const key = await crypto.subtle.importKey('raw', _unhex(_mediaKeyHex), 'AES-GCM', false, ['encrypt']);
     return async (bytes) => { const iv = crypto.getRandomValues(new Uint8Array(12)); const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, bytes)); const out = new Uint8Array(12 + ct.length); out.set(iv, 0); out.set(ct, 12); return out; };

@@ -13003,7 +13003,24 @@
       if (!enc) throw new Error("Couldn\u2019t seal the need \u2014 care key missing.");
       const id = "care" + _hex(crypto.getRandomValues(new Uint8Array(6)));
       const body = { id, type: req.type || "other", dates, startDate: dates[0] || "", endDate: dates[dates.length - 1] || "", meals: req.type === "meals" ? ["dinner"] : [], dayMeals: {}, enc };
-      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", CARE_D + id], ["t", NET], ["church", cp], ["enc", "care1"]], content: JSON.stringify(body) }, sk);
+      const tags = [["d", CARE_D + id], ["t", NET], ["church", cp], ["enc", "care1"]];
+      const recip = req.forSelf ? req.from : "";
+      if (recip) {
+        try {
+          const secret = _hex(crypto.getRandomValues(new Uint8Array(32)));
+          const skipTo = encrypt(JSON.stringify({ s: secret }), getConversationKey(sk, recip));
+          if (skipTo) {
+            body.skipEnc = skipTo;
+            for (const day of dates) {
+              const tokDay = await _sha256hex(new TextEncoder().encode(secret + ":" + day));
+              tags.push(["skiphash", day, await _sha256hex(new TextEncoder().encode(tokDay))]);
+            }
+          }
+        } catch (e) {
+          console.warn("[fellowship] skip token failed", e);
+        }
+      }
+      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags, content: JSON.stringify(body) }, sk);
       try {
         await _publishAny(churchRelays(), evt);
       } catch (e) {
@@ -13094,7 +13111,23 @@
       if (!enc) return { error: "no-care-key" };
       const id = "care" + _hex(crypto.getRandomValues(new Uint8Array(6)));
       const body = { id, type, types: uniq.length ? uniq : [type], dates, startDate: dates[0] || "", endDate: dates[dates.length - 1] || "", meals, dayMeals: {}, enc, by: pub, openedByMember: true };
-      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", CARE_D + id], ["t", NET], ["church", cp], ["enc", "care1"]], content: JSON.stringify(body) }, sk);
+      const tags = [["d", CARE_D + id], ["t", NET], ["church", cp], ["enc", "care1"]];
+      if (forSelf) {
+        try {
+          const secret = _hex(crypto.getRandomValues(new Uint8Array(32)));
+          const skipTo = encrypt(JSON.stringify({ s: secret }), getConversationKey(sk, pub));
+          if (skipTo) {
+            body.skipEnc = skipTo;
+            for (const day of dates) {
+              const tokDay = await _sha256hex(new TextEncoder().encode(secret + ":" + day));
+              tags.push(["skiphash", day, await _sha256hex(new TextEncoder().encode(tokDay))]);
+            }
+          }
+        } catch (e) {
+          console.warn("[fellowship] skip token failed", e);
+        }
+      }
+      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags, content: JSON.stringify(body) }, sk);
       try {
         await _publishAny(churchRelays(), evt);
       } catch (e) {

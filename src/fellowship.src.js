@@ -6754,7 +6754,10 @@ window.Fellowship = {
     if (!enc) throw new Error('Couldn’t seal the need — care key missing.');
     const id = 'care' + _hex(crypto.getRandomValues(new Uint8Array(6)));
     const body = { id, type: req.type || 'other', dates, startDate: dates[0] || '', endDate: dates[dates.length - 1] || '', meals: (req.type === 'meals' ? ['dinner'] : []), dayMeals: {}, enc };
-    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CARE_D + id], ['t', NET], ['church', cp], ['enc', 'care1']], content: JSON.stringify(body) }, sk);
+    const tags = [['d', CARE_D + id], ['t', NET], ['church', cp], ['enc', 'care1']];
+    const recip = req.forSelf ? req.from : '';
+    if (recip) { try { const secret = _hex(crypto.getRandomValues(new Uint8Array(32))); const skipTo = nip44e(JSON.stringify({ s: secret }), nip44ck(sk, recip)); if (skipTo) { body.skipEnc = skipTo; for (const day of dates) { const tokDay = await _sha256hex(new TextEncoder().encode(secret + ':' + day)); tags.push(['skiphash', day, await _sha256hex(new TextEncoder().encode(tokDay))]); } } } catch (e) { console.warn('[fellowship] skip token failed', e); } }
+    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags, content: JSON.stringify(body) }, sk);
     try { await _publishAny(churchRelays(), evt); } catch (e) { console.warn('[fellowship] approve→need publish failed', e); return null; }
     const st = await window.Fellowship.setCareRequestStatus(req.id, req.from, { status: 'approved', needId: id });
     return { id, stillOpen: !st };
@@ -6829,7 +6832,9 @@ window.Fellowship = {
     if (!enc) return { error: 'no-care-key' };
     const id = 'care' + _hex(crypto.getRandomValues(new Uint8Array(6)));
     const body = { id, type, types: uniq.length ? uniq : [type], dates, startDate: dates[0] || '', endDate: dates[dates.length - 1] || '', meals, dayMeals: {}, enc, by: pub, openedByMember: true };
-    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CARE_D + id], ['t', NET], ['church', cp], ['enc', 'care1']], content: JSON.stringify(body) }, sk);
+    const tags = [['d', CARE_D + id], ['t', NET], ['church', cp], ['enc', 'care1']];
+    if (forSelf) { try { const secret = _hex(crypto.getRandomValues(new Uint8Array(32))); const skipTo = nip44e(JSON.stringify({ s: secret }), nip44ck(sk, pub)); if (skipTo) { body.skipEnc = skipTo; for (const day of dates) { const tokDay = await _sha256hex(new TextEncoder().encode(secret + ':' + day)); tags.push(['skiphash', day, await _sha256hex(new TextEncoder().encode(tokDay))]); } } } catch (e) { console.warn('[fellowship] skip token failed', e); } }
+    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags, content: JSON.stringify(body) }, sk);
     // ⚠ A NEED IS PUBLIC, SO "WE COULD NOT CONFIRM IT" MUST NOT READ AS "IT DID NOT HAPPEN". This returned
     // `null` for every failure, and the sheet falls back to a PRIVATE care request on a falsy answer — so a
     // publish the relay took but did not acknowledge in time gave one tap a PUBLIC need on the relay AND a
