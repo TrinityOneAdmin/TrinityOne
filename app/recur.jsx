@@ -17,11 +17,13 @@
       if (!e.recur) { out.push({ ...e }); continue; }   // one-off — always kept (finite; consumers filter/sort by date)
       const anchor = e.date ? new Date(e.date + 'T00:00:00') : new Date(from);
       const day = (typeof e.day === 'number') ? e.day : anchor.getDay();
-      if (e.recur === 'monthly') {                      // once a month, on the first matching weekday of the month
+      if (e.recur === 'monthly') {
+        const nth = (typeof e.nth === 'number' && e.nth >= 1 && e.nth <= 5) ? e.nth : 1;
         let m = new Date(from.getFullYear(), from.getMonth(), 1);
         while (m <= to) {
           const occ = new Date(m); while (occ.getDay() !== day) occ.setDate(occ.getDate() + 1);
-          if (inRange(occ) && occ >= anchor) out.push({ ...e, date: iso(occ), seriesDate: e.date, recurring: true });
+          for (let w = 1; w < nth; w++) occ.setDate(occ.getDate() + 7);
+          if (occ.getMonth() === m.getMonth() && inRange(occ) && occ >= anchor) out.push({ ...e, date: iso(occ), seriesDate: e.date, recurring: true });
           m = new Date(m.getFullYear(), m.getMonth() + 1, 1);
         }
       } else {                                          // weekly / fortnightly

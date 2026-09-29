@@ -3941,6 +3941,7 @@ function _webCopyBody(ev) {
     title: String(ev.title || '').slice(0, 200), date: String(ev.date || '').slice(0, 10), time: String(ev.time || '').slice(0, 5),
     where: String(ev.where || '').slice(0, 200), blurb: String(ev.blurb || '').slice(0, 2000),
     recur, day: (recur && typeof ev.day === 'number') ? ev.day : null,
+    nth: (recur === 'monthly' && typeof ev.nth === 'number') ? ev.nth : null,
   });
 }
 // WHAT THIS CONSOLE CAN STILL TELL ABOUT AN EVENT IT CAN NO LONGER OPEN — which is almost nothing, and the
@@ -9377,7 +9378,7 @@ window.Steward = {
     const signer = skFor(asPub); if (!signer) return Promise.resolve(null);
     const id = ev.id || ('evt' + Date.now().toString(36) + (++_evtSeq).toString(36) + Math.random().toString(36).slice(2, 7));   // Date.now() alone collides for rows published in one loop — replaceable docs, so a collision DELETES the first
     const groupId = ev.groupId || '';
-    const doc = { date: ev.date || '', time: ev.time || '', title: ev.title || 'Event', where: ev.where || '', blurb: ev.blurb || '', accent: ev.accent || 'var(--clay)', image: ev.image || '', groupId, recur: ev.recur || '', day: (typeof ev.day === 'number' ? ev.day : null) };
+    const doc = { date: ev.date || '', time: ev.time || '', title: ev.title || 'Event', where: ev.where || '', blurb: ev.blurb || '', accent: ev.accent || 'var(--clay)', image: ev.image || '', groupId, recur: ev.recur || '', day: (typeof ev.day === 'number' ? ev.day : null), nth: (typeof ev.nth === 'number' && ev.nth >= 1 && ev.nth <= 5) ? ev.nth : null };
     const content = await _sealChurchDocReady(doc);
     if (content == null) return null;   // the church key never arrived: NOT saved, and never in the clear
     const tags = [['d', EVENT_D + id], ['t', NET]];
@@ -9393,7 +9394,7 @@ window.Steward = {
     if (!sk) return Promise.resolve(null);
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', EVENT_D + id], ['t', NET], ['deleted', '1']], content: '' }));
   },
-  subscribeEvents(onEvents) { return this._subAddr(EVENT_D, (c) => ({ date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || '', day: c.day, groupId: c.groupId || '', image: c.image || '' }), onEvents); },
+  subscribeEvents(onEvents) { return this._subAddr(EVENT_D, (c) => ({ date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || '', day: c.day, nth: c.nth || null, groupId: c.groupId || '', image: c.image || '' }), onEvents); },
 
   // ---- the church's website: the public calendar feed (see _webSync above the API object) ----
   // onShare({ calendar, sermons, plans, optOut, address, known }) — `known` is false until the relay has answered.
@@ -9489,7 +9490,7 @@ window.Steward = {
   },
   // publish a recurring meeting (the church's rhythm): a normal event with recur + day-of-week, expanded into
   // occurrences client-side by expandEvents(). `m` = { id?, title, day (0-6), time, where?, recur, from? (anchor) }.
-  publishMeeting(m) { return this.publishEvent({ id: m.id, title: m.title, time: m.time, where: m.where || '', date: m.from || _todayISO(), recur: m.recur || 'weekly', day: m.day, accent: m.accent || 'var(--clay)' }); },
+  publishMeeting(m) { return this.publishEvent({ id: m.id, title: m.title, time: m.time, where: m.where || '', date: m.from || _todayISO(), recur: m.recur || 'weekly', day: m.day, nth: m.nth, accent: m.accent || 'var(--clay)' }); },
   // a single group's upcoming events (for the group chat window) — the church's own + its stewards' (church-tagged)
   subscribeGroupEvents(groupId, onEvents) {
     const byId = new Map();
@@ -9517,7 +9518,7 @@ window.Steward = {
         // 2026-08-28, where members could see the event perfectly and the steward who created it could not.
         // An event we cannot open is marked _locked rather than dropped, so a key that has not arrived yet
         // leaves a placeholder instead of silently shortening the list.
-        try { const c = _openChurchDoc(e.content); if (c === null) { _absorbById(versions, byId, id, { id, _locked: true, ts: e.created_at, _by: e.pubkey }); emit(); return; } _absorbById(versions, byId, id, { id, date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || '', day: c.day, groupId: c.groupId || groupId, image: c.image || '', _by: e.pubkey, ts: e.created_at }); emit(); } catch {}
+        try { const c = _openChurchDoc(e.content); if (c === null) { _absorbById(versions, byId, id, { id, _locked: true, ts: e.created_at, _by: e.pubkey }); emit(); return; } _absorbById(versions, byId, id, { id, date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || '', day: c.day, nth: c.nth || null, groupId: c.groupId || groupId, image: c.image || '', _by: e.pubkey, ts: e.created_at }); emit(); } catch {}
       },
       oneose() { emit(); },
     });

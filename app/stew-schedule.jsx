@@ -361,7 +361,7 @@ function AssignModal({ slot, roster, assign, unavail, onAssign, onClear, onClose
   );
 }
 
-function SchRepeatRow({ repeat, setRepeat, until, setUntil }) {
+function SchRepeatRow({ repeat, setRepeat, until, setUntil, nth, setNth }) {
   return (
     <React.Fragment>
       <div style={schLbl}>Repeat</div>
@@ -370,6 +370,14 @@ function SchRepeatRow({ repeat, setRepeat, until, setUntil }) {
           <button key={v} onClick={() => setRepeat(v)} aria-pressed={repeat === v} style={{ flex: 1, padding: '9px 0', borderRadius: 10, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, border: repeat === v ? '2px solid var(--clay)' : '1px solid var(--line)', background: repeat === v ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'var(--surface)', color: 'var(--ink)' }}>{l}</button>
         ))}
       </div>
+      {repeat === 'monthly' && setNth ? (
+        <React.Fragment>
+          <div style={schLbl}>Which week</div>
+          <select aria-label="Which week of the month" value={nth || 1} onChange={e => setNth(+e.target.value)} style={schFld}>
+            <option value={1}>1st</option><option value={2}>2nd</option><option value={3}>3rd</option><option value={4}>4th</option><option value={5}>5th</option>
+          </select>
+        </React.Fragment>
+      ) : null}
       {repeat !== 'none' ? (<React.Fragment><div style={schLbl}>Until</div><input aria-label="Until" type="date" value={until} onChange={e => setUntil(e.target.value)} style={schFld} /></React.Fragment>) : null}
     </React.Fragment>
   );
@@ -1226,7 +1234,7 @@ function DashCalendar() {
                   onKeyDown={ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); setEvDetail(e); } }}
                   title="Open this event — details, edit, remove"
                   style={{ padding: 12, borderRadius: 13, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', marginBottom: 9, cursor: 'pointer', textAlign: 'left', width: '100%', font: 'inherit', color: 'inherit' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}><span style={{ width: 8, height: 8, borderRadius: 999, background: e.accent }} /><div style={{ fontWeight: 700, fontSize: 14 }}>{e.title}</div>{e.recur ? <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--ink-3)', border: '1px solid var(--line)', borderRadius: 6, padding: '1px 5px' }}>{e.recur === 'fortnightly' ? '2-WEEKLY' : e.recur === 'monthly' ? 'MONTHLY' : 'WEEKLY'}</span> : null}<Icon name="chevR" size={14} color="var(--ink-3)" style={{ marginLeft: 'auto' }} /></div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}><span style={{ width: 8, height: 8, borderRadius: 999, background: e.accent }} /><div style={{ fontWeight: 700, fontSize: 14 }}>{e.title}</div>{e.recur ? <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--ink-3)', border: '1px solid var(--line)', borderRadius: 6, padding: '1px 5px' }}>{e.recur === 'fortnightly' ? '2-WEEKLY' : e.recur === 'monthly' ? (['1ST','2ND','3RD','4TH','5TH'][(e.nth || 1) - 1] + ' ' + ['SUN','MON','TUE','WED','THU','FRI','SAT'][e.day || 0]) : 'WEEKLY'}</span> : null}<Icon name="chevR" size={14} color="var(--ink-3)" style={{ marginLeft: 'auto' }} /></div>
                   <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 2 }}>{e.time}{e.where ? ' · ' + e.where : ''}</div>
                   {e.blurb ? <p style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, margin: '7px 0 0' }}>{e.blurb}</p> : null}
                   {(() => {
@@ -1312,6 +1320,7 @@ function SchEventEdit({ event, onClose }) {
   const [date, setDate] = React.useState(e.date || '');
   const [day, setDay] = React.useState(typeof e.day === 'number' ? e.day : 0);
   const [recur, setRecur] = React.useState(e.recur || 'weekly');
+  const [nth, setNth] = React.useState(typeof e.nth === 'number' ? e.nth : 1);
   // "Not on the website" — see SchEventModal. Read from the share: document, written back on save.
   const canHold = !!(window.Steward.setWebsiteHeld && !(window.Steward.isDelegated && window.Steward.isDelegated()));
   const inGroup = !!String(e.groupId || '');   // a group's event is off the website unless ticked on — the inverse tick
@@ -1341,7 +1350,7 @@ function SchEventEdit({ event, onClose }) {
       r = await Promise.resolve(window.Steward.publishEvent({
         id: e.id, title: title.trim(), date: anchor, time, where: where.trim(), blurb: blurb.trim(),
         accent: e.accent || '', image: e.image || '', groupId: e.groupId || '',
-        ...(series ? { recur, day } : {}),
+        ...(series ? { recur, day, nth } : {}),
       }));
     } catch (x) { r = null; }
     // ONLY WRITE THE TICK WHEN THE STEWARD ACTUALLY TOUCHED IT IN THIS DIALOG (F1 above) — a Save where
@@ -1376,6 +1385,14 @@ function SchEventEdit({ event, onClose }) {
           <select aria-label="Repeats" value={recur} onChange={ev => setRecur(ev.target.value)} style={{ ...schFld, cursor: 'pointer' }}>
             <option value="weekly">Weekly</option><option value="fortnightly">Fortnightly</option><option value="monthly">Monthly</option>
           </select>
+          {recur === 'monthly' ? (
+            <React.Fragment>
+              <div style={schLbl}>Which week</div>
+              <select aria-label="Which week" value={nth} onChange={ev => setNth(+ev.target.value)} style={{ ...schFld, cursor: 'pointer' }}>
+                <option value={1}>1st</option><option value={2}>2nd</option><option value={3}>3rd</option><option value={4}>4th</option><option value={5}>5th</option>
+              </select>
+            </React.Fragment>
+          ) : null}
         </React.Fragment>
       ) : (
         <React.Fragment>
@@ -1450,7 +1467,7 @@ function SchEventDetail({ event, onClose }) {
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--ink-3)', fontWeight: 600, marginTop: 5, flexWrap: 'wrap' }}>
                 {e.time ? <React.Fragment><Icon name="clock" size={13} color="var(--ink-3)" /> {e.time}</React.Fragment> : null}
                 {e.where ? <React.Fragment>{e.time ? <span style={{ opacity: .5 }}>·</span> : null}<Icon name="marker" size={13} color="var(--ink-3)" /> {e.where}</React.Fragment> : null}
-                {e.recur ? <React.Fragment><span style={{ opacity: .5 }}>·</span><Icon name="refresh" size={13} color="var(--ink-3)" /> {e.recur === 'fortnightly' ? 'Every 2 weeks' : e.recur === 'monthly' ? 'Monthly' : 'Weekly'}</React.Fragment> : null}
+                {e.recur ? <React.Fragment><span style={{ opacity: .5 }}>·</span><Icon name="refresh" size={13} color="var(--ink-3)" /> {e.recur === 'fortnightly' ? 'Every 2 weeks' : e.recur === 'monthly' ? (['1st','2nd','3rd','4th','5th'][(e.nth || 1) - 1] + ' ' + ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][e.day || 0]) : 'Weekly'}</React.Fragment> : null}
               </div>
             </div>
           </div>

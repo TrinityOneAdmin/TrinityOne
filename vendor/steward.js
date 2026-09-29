@@ -17559,7 +17559,8 @@ zoo`.split("\n");
       where: String(ev.where || "").slice(0, 200),
       blurb: String(ev.blurb || "").slice(0, 2e3),
       recur,
-      day: recur && typeof ev.day === "number" ? ev.day : null
+      day: recur && typeof ev.day === "number" ? ev.day : null,
+      nth: recur === "monthly" && typeof ev.nth === "number" ? ev.nth : null
     });
   }
   function _webGroupKey(cp) {
@@ -22786,7 +22787,7 @@ zoo`.split("\n");
       if (!signer) return Promise.resolve(null);
       const id = ev.id || "evt" + Date.now().toString(36) + (++_evtSeq).toString(36) + Math.random().toString(36).slice(2, 7);
       const groupId = ev.groupId || "";
-      const doc = { date: ev.date || "", time: ev.time || "", title: ev.title || "Event", where: ev.where || "", blurb: ev.blurb || "", accent: ev.accent || "var(--clay)", image: ev.image || "", groupId, recur: ev.recur || "", day: typeof ev.day === "number" ? ev.day : null };
+      const doc = { date: ev.date || "", time: ev.time || "", title: ev.title || "Event", where: ev.where || "", blurb: ev.blurb || "", accent: ev.accent || "var(--clay)", image: ev.image || "", groupId, recur: ev.recur || "", day: typeof ev.day === "number" ? ev.day : null, nth: typeof ev.nth === "number" && ev.nth >= 1 && ev.nth <= 5 ? ev.nth : null };
       const content = await _sealChurchDocReady(doc);
       if (content == null) return null;
       const tags = [["d", EVENT_D + id], ["t", NET]];
@@ -22799,7 +22800,7 @@ zoo`.split("\n");
       return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", EVENT_D + id], ["t", NET], ["deleted", "1"]], content: "" }));
     },
     subscribeEvents(onEvents) {
-      return this._subAddr(EVENT_D, (c) => ({ date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || "", day: c.day, groupId: c.groupId || "", image: c.image || "" }), onEvents);
+      return this._subAddr(EVENT_D, (c) => ({ date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || "", day: c.day, nth: c.nth || null, groupId: c.groupId || "", image: c.image || "" }), onEvents);
     },
     // ---- the church's website: the public calendar feed (see _webSync above the API object) ----
     // onShare({ calendar, sermons, plans, optOut, address, known }) — `known` is false until the relay has answered.
@@ -22926,7 +22927,7 @@ zoo`.split("\n");
     // publish a recurring meeting (the church's rhythm): a normal event with recur + day-of-week, expanded into
     // occurrences client-side by expandEvents(). `m` = { id?, title, day (0-6), time, where?, recur, from? (anchor) }.
     publishMeeting(m) {
-      return this.publishEvent({ id: m.id, title: m.title, time: m.time, where: m.where || "", date: m.from || _todayISO(), recur: m.recur || "weekly", day: m.day, accent: m.accent || "var(--clay)" });
+      return this.publishEvent({ id: m.id, title: m.title, time: m.time, where: m.where || "", date: m.from || _todayISO(), recur: m.recur || "weekly", day: m.day, nth: m.nth, accent: m.accent || "var(--clay)" });
     },
     // a single group's upcoming events (for the group chat window) — the church's own + its stewards' (church-tagged)
     subscribeGroupEvents(groupId, onEvents) {
@@ -22951,7 +22952,7 @@ zoo`.split("\n");
               emit();
               return;
             }
-            _absorbById(versions, byId, id, { id, date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || "", day: c.day, groupId: c.groupId || groupId, image: c.image || "", _by: e.pubkey, ts: e.created_at });
+            _absorbById(versions, byId, id, { id, date: c.date, time: c.time, title: c.title, where: c.where, blurb: c.blurb, accent: c.accent, recur: c.recur || "", day: c.day, nth: c.nth || null, groupId: c.groupId || groupId, image: c.image || "", _by: e.pubkey, ts: e.created_at });
             emit();
           } catch {
           }

@@ -91,12 +91,13 @@ export function publicEventFields(ev) {
   const time = HHMM.test(String(ev.time || '')) ? String(ev.time) : '';
   const recur = RECUR.has(ev.recur) ? ev.recur : '';
   const day = (recur && DAY_OK(ev.day)) ? ev.day : null;
+  const nth = (recur === 'monthly' && typeof ev.nth === 'number' && ev.nth >= 1 && ev.nth <= 5) ? ev.nth : null;
   return {
     id, date, time,
     title: String(ev.title || '').slice(0, 200),
     where: String(ev.where || '').slice(0, 200),
     blurb: String(ev.blurb || '').slice(0, 2000),
-    recur, day,
+    recur, day, nth,
   };
 }
 
@@ -140,25 +141,23 @@ function firstOccurrence(date, day, fortnightly) {
 // The first occurrence is the first `day` of the anchor's OWN month if that is not before the anchor, else
 // the first `day` of the next month — which is exactly what expandEvents walks ("once a month, on the first
 // matching weekday of the month", occurrences before the anchor skipped).
-function firstMonthlyOccurrence(date, day) {
+function nthMonthlyOccurrence(date, day, nth) {
+  const n = (typeof nth === 'number' && nth >= 1 && nth <= 5) ? nth : 1;
   const p = isoParts(date);
   if (!p || !DAY_OK(day)) return date;
-  for (let ahead = 0; ahead < 2; ahead++) {
+  const limit = n >= 5 ? 6 : 2;
+  for (let ahead = 0; ahead < limit; ahead++) {
     const cur = new Date(Date.UTC(p.y, p.mo - 1 + ahead, 1));
     while (cur.getUTCDay() !== day) cur.setUTCDate(cur.getUTCDate() + 1);
-    if (cur.getTime() >= p.t) return isoOf(cur);
+    for (let w = 1; w < n; w++) cur.setUTCDate(cur.getUTCDate() + 7);
+    if (cur.getUTCMonth() === (p.mo - 1 + ahead) % 12 && cur.getTime() >= p.t) return isoOf(cur);
   }
-  // Now genuinely unreachable, which the comment that stood here claimed while it was not: the first `day` of
-  // the NEXT month is later than any date in this one — but only once the anchor really is a date in this one.
-  // `2026-02-31` was admitted above and Date.UTC turned it into 3 March, so both candidates fell before it and
-  // this line ran, emitting the anchor back as `DTSTART:20260231T193000` (audit R7). isoParts() is what makes
-  // the sentence true; this stays as a fail-safe that returns a real date rather than as a claim.
   return date;
 }
 // WHAT WEEKDAY A SERIES FALLS ON, read the same way in the DTSTART and in the RRULE. app/recur.jsx's
 // expandEvents falls back to the anchor's own weekday for a series with no usable `day`
 // (`const day = (typeof e.day === 'number') ? e.day : anchor.getDay()`), and rrule() below already did — but
-// firstMonthlyOccurrence was handed the raw `day`, saw null and returned the anchor untouched, so the file
+// nthMonthlyOccurrence was handed the raw `day`, saw null and returned the anchor untouched, so the file
 // carried `BYDAY=1TU` over a DTSTART that was not an instance of it for 281 of 365 anchors (audit R3).
 // publicEventFields nulls `day` for anything that is not an integer 0-6 — a string '2', 2.5, 7, -1 — and
 // src/steward.src.js publishEvent is where that `null` is minted (`typeof ev.day === 'number' ? ev.day :
@@ -173,7 +172,7 @@ const seriesDay = (ev) => {
 function dtstart(ev) {
   const day = seriesDay(ev);
   const date = !ev.recur ? ev.date
-    : ev.recur === 'monthly' ? firstMonthlyOccurrence(ev.date, day)
+    : ev.recur === 'monthly' ? nthMonthlyOccurrence(ev.date, day, ev.nth)
       : firstOccurrence(ev.date, day, ev.recur === 'fortnightly');
   if (!date) return null;                        // the series steps off the end of the calendar — see isoOf
   const d = date.replace(/-/g, '');
@@ -191,7 +190,8 @@ export const unfoldIcs = (text) => String(text == null ? '' : text).replace(/\r\
 function rrule(ev) {
   if (!ev.recur) return '';
   const day = seriesDay(ev);
-  if (ev.recur === 'monthly') return 'RRULE:FREQ=MONTHLY;BYDAY=1' + BYDAY[day];   // first <weekday> of the month, as expandEvents reads it
+  const nth = (typeof ev.nth === 'number' && ev.nth >= 1 && ev.nth <= 5) ? ev.nth : 1;
+  if (ev.recur === 'monthly') return 'RRULE:FREQ=MONTHLY;BYDAY=' + nth + BYDAY[day];
   return 'RRULE:FREQ=WEEKLY' + (ev.recur === 'fortnightly' ? ';INTERVAL=2' : '') + ';BYDAY=' + BYDAY[day];
 }
 

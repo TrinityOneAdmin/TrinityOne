@@ -30,6 +30,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { transformSync } from 'esbuild';
 import { buildCalendar, unfoldIcs, publicEventFields, foldLine } from './public-calendar.mjs';
+import { parseIcs, expandOccurrences } from './public-widget.mjs';
 
 const BYDAY = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
 
@@ -313,7 +314,7 @@ test('F6: what the builder itself puts in the file names nobody — measured thr
     assert.equal(text.includes(forbidden), false, 'the feed carries ' + forbidden);
   }
   assert.deepEqual(Object.keys(publicEventFields({ id: 'supper', date: '2026-10-03', groupId: 'g', creator: member })).sort(),
-    ['blurb', 'date', 'day', 'id', 'recur', 'time', 'title', 'where'], 'publicEventFields admits a field beyond the noticeboard ones');
+    ['blurb', 'date', 'day', 'id', 'nth', 'recur', 'time', 'title', 'where'], 'publicEventFields admits a field beyond the noticeboard ones');
 });
 
 // ── PHASE 2: the feed settings on Settings → Your website change the FILE ─────────────────────────────────
@@ -342,4 +343,97 @@ test('phase 2: detail "short" drops LOCATION and DESCRIPTION; "full" (the defaul
   assert.equal(full.includes('DESCRIPTION:All welcome'), true, 'detail: full should still carry DESCRIPTION');
   const defaulted = unfoldIcs(buildCalendar(ev, { uidScope: 'x' }));
   assert.equal(defaulted.includes('LOCATION:The hall'), true, 'the default (no detail given) should be full, not short');
+});
+
+// ── S-7: MONTHLY NTH — the feed, the app, and the widget all pick the same week ────────────────────────
+// S-7 adds `nth` (1-5) to a monthly meeting — "the 2nd Saturday" vs. the old default "the 1st Saturday".
+// Three things must agree: expandEvents (what the member app shows), buildCalendar (what the .ics says),
+// and the widget's parseIcs + expandOccurrences (what a church's website shows).
+
+const nthSuchWeekdayOfMonth = (compact, nth) => {
+  const d = new Date(Date.UTC(+compact.slice(0, 4), +compact.slice(4, 6) - 1, 1));
+  while (d.getUTCDay() !== dayOf(compact)) d.setUTCDate(d.getUTCDate() + 1);
+  for (let w = 1; w < nth; w++) d.setUTCDate(d.getUTCDate() + 7);
+  if (d.getUTCMonth() !== +compact.slice(4, 6) - 1) return null;
+  return d.toISOString().slice(0, 10).replace(/-/g, '');
+};
+
+test('S-7: expandEvents with nth picks the nth weekday of each month, not the 1st', () => {
+  const evs = expandEvents([{ id: 'elders', date: '2026-09-01', time: '10:00', recur: 'monthly', day: 6, nth: 2 }], '2026-09-01', 90);
+  assert.ok(evs.length >= 3, 'expected at least 3 monthly occurrences in 90 days, got ' + evs.length);
+  for (const occ of evs) {
+    const d = new Date(occ.date + 'T00:00:00');
+    assert.equal(d.getDay(), 6, `occurrence ${occ.date} is not a Saturday`);
+    assert.ok(d.getDate() >= 8 && d.getDate() <= 14,
+      `occurrence ${occ.date} is day ${d.getDate()} — not in the 2nd-Saturday range (8-14)`);
+  }
+  const evs4 = expandEvents([{ id: 'prayer', date: '2026-09-01', time: '19:30', recur: 'monthly', day: 3, nth: 4 }], '2026-09-01', 90);
+  assert.ok(evs4.length >= 3, 'expected at least 3 occurrences for 4th Wednesday');
+  for (const occ of evs4) {
+    const d = new Date(occ.date + 'T00:00:00');
+    assert.equal(d.getDay(), 3, `occurrence ${occ.date} is not a Wednesday`);
+    assert.ok(d.getDate() >= 22 && d.getDate() <= 28,
+      `occurrence ${occ.date} is day ${d.getDate()} — not in the 4th-Wednesday range (22-28)`);
+  }
+});
+
+test('S-7: buildCalendar with nth emits BYDAY=<n><day> and DTSTART is the nth occurrence', () => {
+  for (const [nth, day, byDay, label] of [[2, 6, '2SA', '2nd Saturday'], [3, 1, '3MO', '3rd Monday'], [5, 4, '5TH', '5th Thursday']]) {
+    const text = buildCalendar([{ id: 'e', title: 'E', date: '2026-09-01', time: '19:00', recur: 'monthly', day, nth }], { uidScope: 'x' });
+    const rule = prop(text, 'RRULE')[0];
+    assert.equal(rule, 'FREQ=MONTHLY;BYDAY=' + byDay, `nth=${nth}: RRULE should name ${label}`);
+    const start = prop(text, 'DTSTART')[0];
+    if (!start) { assert.ok(nth === 5, `nth=${nth}: no DTSTART emitted and nth is not 5`); continue; }
+    const compact = start.slice(0, 8);
+    assert.equal(BYDAY[dayOf(compact)], BYDAY[day], `nth=${nth}: DTSTART ${start} is not a ${BYDAY[day]}`);
+    const expected = nthSuchWeekdayOfMonth(compact, nth);
+    assert.ok(expected, `nth=${nth}: the ${label} does not exist in month ${compact.slice(0, 6)}`);
+    assert.equal(compact, expected,
+      `nth=${nth}: DTSTART ${start} is not the ${label} of its month`);
+  }
+});
+
+test('S-7: feed and app agree on the nth weekday — every anchor of 2 years × every nth', () => {
+  const SWEEP_YEARS = [2026, 2027];
+  const sweep = [];
+  for (const y of SWEEP_YEARS) for (let m = 1; m <= 12; m++) {
+    const dim = new Date(Date.UTC(y, m, 0)).getUTCDate();
+    for (let dom = 1; dom <= dim; dom++) sweep.push(`${y}-${String(m).padStart(2, '0')}-${String(dom).padStart(2, '0')}`);
+  }
+  let cases = 0, bad = 0, first = '';
+  for (const date of sweep) {
+    for (let day = 0; day <= 6; day++) {
+      for (let nth = 2; nth <= 5; nth++) {
+        const ev = { id: 'meeting', title: 'M', date, time: '19:30', recur: 'monthly', day, nth };
+        const text = buildCalendar([ev], { uidScope: 'x' });
+        if (!text.includes('BEGIN:VEVENT')) continue;
+        const compact = prop(text, 'DTSTART')[0].slice(0, 8);
+        const feed = compact.slice(0, 4) + '-' + compact.slice(4, 6) + '-' + compact.slice(6, 8);
+        const app = expandEvents([ev], date, 200)[0];
+        cases++;
+        if (!app || app.date !== feed) {
+          bad++;
+          if (!first) first = `anchor ${date} day ${day} nth ${nth}: feed=${feed}, app=${app ? app.date : '(none)'}`;
+        }
+      }
+    }
+  }
+  assert.ok(cases > 1000, 're-anchor: the sweep is too small (cases=' + cases + ')');
+  assert.equal(bad, 0, `${bad} of ${cases} anchors DISAGREE. e.g. ${first}`);
+});
+
+test('S-7: the widget parses nth from BYDAY and expands to the nth weekday', () => {
+  const ics = buildCalendar([{ id: 'board', title: 'Board', date: '2026-09-01', time: '19:00', recur: 'monthly', day: 1, nth: 3 }], { uidScope: 'x' });
+  const parsed = parseIcs(ics);
+  assert.equal(parsed.events.length, 1, 'the widget did not find the event');
+  assert.equal(parsed.events[0].rrule.nth, 3, 'the widget did not parse nth from BYDAY=3MO');
+  assert.equal(parsed.events[0].rrule.byday, 'MO');
+  const occs = expandOccurrences(parsed.events, { from: '2026-09-01', until: '2027-02-28' });
+  assert.ok(occs.length >= 5, 'expected at least 5 monthly occurrences, got ' + occs.length);
+  for (const occ of occs) {
+    const d = new Date(Date.UTC(+occ.date.slice(0, 4), +occ.date.slice(5, 7) - 1, +occ.date.slice(8, 10)));
+    assert.equal(d.getUTCDay(), 1, `widget occurrence ${occ.date} is not a Monday`);
+    assert.ok(d.getUTCDate() >= 15 && d.getUTCDate() <= 21,
+      `widget occurrence ${occ.date} is day ${d.getUTCDate()} — not in the 3rd-Monday range (15-21)`);
+  }
 });
