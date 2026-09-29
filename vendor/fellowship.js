@@ -9874,11 +9874,25 @@
         _queueJoinIntent(cp);
         return;
       }
+      const now = Math.floor(Date.now() / 1e3);
+      const jk = "trinityone.joinedAt:" + cp;
+      let firstJoined = 0;
+      try {
+        firstJoined = Number(localStorage.getItem(jk)) || 0;
+      } catch {
+      }
+      const content = firstJoined > 0 ? { joined: firstJoined, seen: now, hb: 1 } : { joined: now };
+      if (!firstJoined) {
+        try {
+          localStorage.setItem(jk, String(now));
+        } catch {
+        }
+      }
       const evt = finalizeEvent2({
         kind: 30078,
-        created_at: Math.floor(Date.now() / 1e3),
+        created_at: now,
         tags: [["d", "trinityone/member:" + cp], ["t", NET], ["p", cp]],
-        content: JSON.stringify({ joined: Math.floor(Date.now() / 1e3) })
+        content: JSON.stringify(content)
       }, sk);
       const dup = _outbox.some((o) => o && o.evt && o.evt.id === evt.id);
       if (!dup) {
@@ -9941,6 +9955,10 @@
       }
       _clearJoinSent(cp);
       _dropJoinIntent(cp);
+      try {
+        localStorage.removeItem("trinityone.joinedAt:" + cp);
+      } catch {
+      }
       return { ok: true, evt };
     },
     // live count of a church's members — matches the steward's rule: distinct people (not the church)

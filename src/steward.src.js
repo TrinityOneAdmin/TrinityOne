@@ -9674,7 +9674,7 @@ window.Steward = {
           const left = e.tags.some(t => t[0] === 'deleted') || !e.content;
           const m = get(e.pubkey);
           if (left) { m.joined = 0; if (m.count === 0) { byPub.delete(e.pubkey); emit(); return; } }
-          else { let j = e.created_at; try { j = JSON.parse(e.content).joined || e.created_at; } catch {} m.joined = j; }
+          else { let j = e.created_at, s = 0; try { const c = JSON.parse(e.content); j = c.joined || e.created_at; s = c.seen || 0; } catch {} m.joined = j; if (s) m.seen = s; }
           byPub.set(e.pubkey, m); ensureProfile(e.pubkey); emit(); return;
         }
         const m = get(e.pubkey);
@@ -10399,7 +10399,7 @@ window.Steward = {
           const deleted = e.tags.some(t => t[0] === 'deleted') || !e.content;
           // gid lets the dashboard open the group's chat straight from the activity row
           if (d.startsWith(GROUP_D)) { let n = ''; try { n = JSON.parse(e.content).name; } catch {} item = { ic: 'chat', tint: 'sage', text: deleted ? 'A group was removed' : `Group “${n || 'untitled'}” ${own ? 'created' : 'updated'}`, gid: deleted ? '' : d.slice(GROUP_D.length) }; }
-          else if (d.startsWith('trinityone/member:')) { if (!deleted) item = { ic: 'pray', tint: 'sage', text: 'A new member joined', to: 'members' }; }
+          else if (d.startsWith('trinityone/member:')) { if (!deleted) { let _hb = false; try { _hb = !!JSON.parse(e.content).hb; } catch {} if (!_hb) item = { ic: 'pray', tint: 'sage', text: 'A new member joined', to: 'members' }; } }
           else if (d.startsWith(FUND_D)) { let n = ''; try { n = JSON.parse(e.content).name; } catch {} item = { ic: 'gift', tint: 'gold', text: deleted ? 'A fund was removed' : `Fund “${n || ''}” updated`, to: 'finance' }; }
         } else if (e.kind === 1) {
           const g = (e.tags.find(t => t[0] === 't' && t[1] !== NET) || [])[1] || '';

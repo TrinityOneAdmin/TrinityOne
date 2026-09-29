@@ -3762,10 +3762,15 @@ window.Fellowship = {
     // when its key arrives (see JOININTENT_KEY). The return stays falsy on purpose: the heartbeat stamps its
     // 12-hour mark only on a truthy result, and an intent is not a landed announce.
     if (!sk) { _queueJoinIntent(cp); return; }
+    const now = Math.floor(Date.now() / 1000);
+    const jk = 'trinityone.joinedAt:' + cp;
+    let firstJoined = 0; try { firstJoined = Number(localStorage.getItem(jk)) || 0; } catch {}
+    const content = firstJoined > 0 ? { joined: firstJoined, seen: now, hb: 1 } : { joined: now };
+    if (!firstJoined) { try { localStorage.setItem(jk, String(now)); } catch {} }
     const evt = finalizeEvent({
-      kind: 30078, created_at: Math.floor(Date.now() / 1000),
+      kind: 30078, created_at: now,
       tags: [['d', 'trinityone/member:' + cp], ['t', NET], ['p', cp]],
-      content: JSON.stringify({ joined: Math.floor(Date.now() / 1000) }),
+      content: JSON.stringify(content),
     }, sk);
     // QUEUE FIRST, THEN ATTEMPT — the same rule as a group message (see the E1 note on _outbox.push). This
     // used to be a bare _publishAny with a console.warn on failure: no retry, no persistence, nothing on
@@ -3844,6 +3849,7 @@ window.Fellowship = {
     try { await _publishAny(window.Fellowship.relays, evt); } catch (e) { return { ok: false, reason: _pubReason(e) }; }
     _clearJoinSent(cp);   // they have left: the next follow starts from "not yet asked", not from "sent"
     _dropJoinIntent(cp);  // …and no promise to join them survives the leaving
+    try { localStorage.removeItem('trinityone.joinedAt:' + cp); } catch {}
     return { ok: true, evt };
   },
 

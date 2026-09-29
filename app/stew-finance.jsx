@@ -666,12 +666,13 @@ function DashFinanceBook() {
         for (const f of b.funds.values()) if (f.id !== 'general') S.encPublish('finance/fund:' + f.id, { name: f.name, kind: f.kind });
         return;
       }
-      const r = F.rebuildBook(docs); if (r.book) { bookRef.current = r.book; bump(); }
+      const r = F.rebuildBook(docs); if (r.book) { bookRef.current = r.book; setBookErrors(r.errors || []); bump(); }
     });
     return unsub;
     // [idv, conn], like every other subscription in this console — this one was the last still mounted with
     // [], so it never followed a church switch and never re-issued its REQ after a relay reconnect.
   }, [_bIdv, _bConn]);
+  const [bookErrors, setBookErrors] = React.useState([]);
   const [recording, setRecording] = React.useState(false);
   const [importing, setImporting] = React.useState(false);
   const [reports, setReports] = React.useState(false);
@@ -823,10 +824,15 @@ function DashFinanceBook() {
           <div style={{ color: 'var(--ink-3)', fontSize: 13, marginTop: 2 }}>Your church's accounts — double-entry, with fund tracking.</div>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <button onClick={() => setImporting(true)} className="sk-btn" style={{ padding: '10px 16px', fontSize: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)' }}><Icon name="receipt" size={16} color="var(--ink)" /> Import statement</button>
-          <button onClick={() => setRecording(true)} className="sk-btn sk-btn--clay" style={{ padding: '10px 16px', fontSize: 14 }}><Icon name="plus" size={16} color="var(--on-clay)" /> Record a transaction</button>
+          <button onClick={() => setImporting(true)} disabled={bookErrors.length > 0} className="sk-btn" style={{ padding: '10px 16px', fontSize: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', opacity: bookErrors.length ? 0.5 : 1 }}><Icon name="receipt" size={16} color="var(--ink)" /> Import statement</button>
+          <button onClick={() => setRecording(true)} disabled={bookErrors.length > 0} className="sk-btn sk-btn--clay" style={{ padding: '10px 16px', fontSize: 14, opacity: bookErrors.length ? 0.5 : 1 }}><Icon name="plus" size={16} color="var(--on-clay)" /> Record a transaction</button>
         </div>
       </div>
+
+      {bookErrors.length > 0 && <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 14px', borderRadius: 12, marginBottom: 16, background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 30%, var(--line))' }}>
+        <Icon name="alert" size={18} color="var(--clay)" style={{ flexShrink: 0, marginTop: 1 }} />
+        <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55 }}>Your books are incomplete — {bookErrors[0]}. Don't re-enter anything; new entries can't be saved until it arrives. If this persists, check your connection.</div>
+      </div>}
 
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
         {stat('In the bank', booksFmt(cash, book))}

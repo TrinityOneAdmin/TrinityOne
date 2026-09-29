@@ -6159,7 +6159,7 @@ function DashMembers() {
   // "last seen" = newest of a post or a membership heartbeat. No activity in 90 days → inactive list.
   const INACTIVE_DAYS = 90;
   const cutoff = Math.floor(Date.now() / 1000) - INACTIVE_DAYS * 86400;
-  const seen = (m) => Math.max(m.lastTs || 0, m.joined || 0);
+  const seen = (m) => Math.max(m.lastTs || 0, m.seen || 0, m.joined || 0);
   const activeM = members.filter(m => seen(m) >= cutoff && !isBlocked(m.pubkey) && !pendingSet.has(m.pubkey) && matchQ(m));
   const inactiveM = members.filter(m => seen(m) < cutoff && !isBlocked(m.pubkey) && !pendingSet.has(m.pubkey) && matchQ(m));
   const chatting = activeM.filter(m => m.count > 0).length;

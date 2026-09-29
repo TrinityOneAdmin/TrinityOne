@@ -23185,12 +23185,15 @@ zoo`.split("\n");
                 return;
               }
             } else {
-              let j = e.created_at;
+              let j = e.created_at, s = 0;
               try {
-                j = JSON.parse(e.content).joined || e.created_at;
+                const c = JSON.parse(e.content);
+                j = c.joined || e.created_at;
+                s = c.seen || 0;
               } catch {
               }
               m2.joined = j;
+              if (s) m2.seen = s;
             }
             byPub.set(e.pubkey, m2);
             ensureProfile(e.pubkey);
@@ -24083,7 +24086,14 @@ zoo`.split("\n");
               }
               item = { ic: "chat", tint: "sage", text: deleted ? "A group was removed" : `Group \u201C${n || "untitled"}\u201D ${own ? "created" : "updated"}`, gid: deleted ? "" : d.slice(GROUP_D.length) };
             } else if (d.startsWith("trinityone/member:")) {
-              if (!deleted) item = { ic: "pray", tint: "sage", text: "A new member joined", to: "members" };
+              if (!deleted) {
+                let _hb = false;
+                try {
+                  _hb = !!JSON.parse(e.content).hb;
+                } catch {
+                }
+                if (!_hb) item = { ic: "pray", tint: "sage", text: "A new member joined", to: "members" };
+              }
             } else if (d.startsWith(FUND_D)) {
               let n = "";
               try {
