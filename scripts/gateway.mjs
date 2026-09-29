@@ -87,7 +87,7 @@ const DB = process.env.RELAY_DB || join(DATA_DIR,'relay-db.json');              
 // ships its own signed build.
 const ANDROID_CERT_SHA256 = process.env.ANDROID_CERT_SHA256 || '9A:51:21:F0:9D:60:6B:83:E7:0F:19:22:06:CD:C6:17:05:2A:49:41:79:97:B8:24:C6:BB:97:97:AD:8C:A6:00';
 const SQLITE_DB = process.env.RELAY_SQLITE || join(DATA_DIR,'relay.sqlite');       // durable event store
-const MAX_EVENTS = parseInt(process.env.RELAY_MAX_EVENTS, 10) || 20000;   // ephemeral budget; raise on a shared/public relay
+const MAX_EVENTS = parseInt(process.env.RELAY_MAX_EVENTS, 10) || 200000;  // ephemeral budget; owner raised from 20k on 2026-09-29
 // Set when the store refuses a write, cleared when one succeeds. /status reports ok:false while it is set, so
 // an ordinary health check catches a relay that is up, listening, and losing everything it is sent.
 let STORE_DEGRADED = null;
