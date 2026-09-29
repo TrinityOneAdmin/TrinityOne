@@ -3,6 +3,12 @@
 // inside the APK that can refresh live from the channel RSS feed.
 const { useState: useW } = React;
 
+// M-12: the VideoPlayer used to read channel data from Bible.getVideos(), which returns the BUNDLED
+// trinity-videos.json — always {"channel":null,"videos":[]}. The WatchView has the real channel data
+// from the gateway's /feed endpoint, so we share it here. Module-level because VideoPlayer and WatchView
+// are siblings (both mounted by app.jsx), not parent-child.
+let _lastFeed = null;
+
 function parseYT(url) {
   if (!url) return null;
   const m = String(url).match(/(?:youtu\.be\/|v=|embed\/|shorts\/)([A-Za-z0-9_-]{11})/);
@@ -129,7 +135,7 @@ function WatchView({ ctx }) {
   }, [sermonsReady, data, retry]);
   React.useEffect(() => {
     let alive = true; setData(null);
-    const done = (d) => { if (alive) setData(d || { channel: null, videos: [] }); };
+    const done = (d) => { if (alive) { const v = d || { channel: null, videos: [] }; if (v.channel && v.channel.url) _lastFeed = v; setData(v); } };
     const FS = window.Fellowship;
     if (channelUrl && FS && FS.gatewayBase && FS.gatewayBase()) {
       // the church set a YouTube/Rumble channel — the gateway fetches its feed for us (CORS-free)
@@ -322,8 +328,11 @@ function VideoPlayer({ video, open, onClose, ctx }) {
     return () => { if (watchdog.current) { clearTimeout(watchdog.current); watchdog.current = null; } };
   }, [selfSrc, selfErr]);
   if (!video) return null;
-  const ch = (data && data.channel) || {};
-  const more = ((data && data.videos) || []).filter(v => v.id !== video.id).slice(0, 4);
+  // M-12: prefer the live feed data (from WatchView's /feed call) over the bundled fallback, which ships
+  // with channel:null and videos:[]. Without this the Channel button opens nothing and "Up next" is always empty.
+  const feedData = (data && data.channel && data.channel.url) ? data : (_lastFeed || data);
+  const ch = (feedData && feedData.channel) || {};
+  const more = ((feedData && feedData.videos) || []).filter(v => v.id !== video.id).slice(0, 4);
 
   return (
     <Overlay open={open} onClose={onClose}>
@@ -387,7 +396,7 @@ function VideoPlayer({ video, open, onClose, ctx }) {
                 <div style={{ fontWeight: 700, fontSize: 14.5 }}>{ch.name || 'Church'}</div>
                 <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{ch.handle || 'YouTube'}</div>
               </div>
-              <button onClick={() => openExternal(ch.url)} style={{ border: 'none', background: 'var(--ink)', color: 'var(--paper)', padding: '9px 16px', borderRadius: 999, fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Channel</button>
+              {ch.url ? <button onClick={() => openExternal(ch.url)} style={{ border: 'none', background: 'var(--ink)', color: 'var(--paper)', padding: '9px 16px', borderRadius: 999, fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Channel</button> : null}
             </div>
           )}
 
