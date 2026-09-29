@@ -119,7 +119,7 @@
 
   // ── setup wizard: read/write the relay's write policy (church.json) via /config ──
   const TOKEN_KEY = 'to_relay_admin_token';
-  let adminToken = localStorage.getItem(TOKEN_KEY) || '';
+  let adminToken = sessionStorage.getItem(TOKEN_KEY) || '';
   let cfgChurches = [];
   const esc = (s) => String(s||'').replace(/[&<>"]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
   const authHeaders = () => adminToken ? { 'Authorization': 'Bearer ' + adminToken } : {};
@@ -780,7 +780,7 @@
       const r = await fetch('/config', { headers: { 'Authorization': 'Bearer ' + t }, cache: 'no-store' });
       if (r.status === 401) { if (gm) { gm.style.color = 'var(--clay-ink)'; gm.textContent = '\u2717 That token wasn\u2019t accepted.'; } return; }
     } catch (e) { if (gm) { gm.style.color = 'var(--clay-ink)'; gm.textContent = '\u2717 Couldn\u2019t reach the relay.'; } return; }
-    adminToken = t; localStorage.setItem(TOKEN_KEY, adminToken);
+    adminToken = t; sessionStorage.setItem(TOKEN_KEY, adminToken);
     if (gm) gm.textContent = '';
     loadConfig(); gpTick(); loadRelayName(); maybeFirstRun(); loadApkStatus();
   };
@@ -790,7 +790,7 @@
   // requests, so this is a no-op when the dashboard is opened remotely over a tunnel.
   (async () => {
     if (!adminToken) {
-      try { const r = await fetch('/local-token', { cache: 'no-store' }); if (r.ok) { const j = await r.json(); if (j && j.token) { adminToken = j.token; localStorage.setItem(TOKEN_KEY, adminToken); } } } catch (e) {}
+      try { const r = await fetch('/local-token', { cache: 'no-store' }); if (r.ok) { const j = await r.json(); if (j && j.token) { adminToken = j.token; sessionStorage.setItem(TOKEN_KEY, adminToken); } } } catch (e) {}
     }
     // YIELD ONCE, ALWAYS. With the token already stored this ran synchronously — before the wizard's own
     // `let rswOpen` / `const RSW_SEEN` (further down this file) existed — so maybeFirstRun() threw a
