@@ -228,7 +228,7 @@ test('only the owner rotates, and only when somebody has actually lost access', 
     'the church that owns it');
   assert.match(body, /_isRelayAuthed\(\)/,
     'rotation can run on an unauthenticated read of the envelope — the same mistake that orphans key material');
-  assert.match(body, /slice\(0, 12\)/, 'the ring is unbounded, so an envelope can grow past what a relay accepts');
+  assert.match(body, /slice\(0, 50\)/, 'the ring is unbounded, so an envelope can grow past what a relay accepts');
 
   const ensure = stripComments(fnBody(VENDOR, 'async ensureCapKeyFor(kind, stewardPubs, caps) {', 'ensureCapKeyFor'));
   assert.match(ensure, /rotateCapKey/,

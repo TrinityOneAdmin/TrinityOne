@@ -6476,12 +6476,13 @@
       return str.toLowerCase().replace(/^wss?:\/\//, "").replace(/\/+$/, "");
     }
   }
-  async function verifyRelayIdentity(wssUrl) {
+  async function verifyRelayIdentityDetailed(wssUrl) {
+    let reached = false;
     try {
       const base = relayHttpBase(wssUrl);
-      if (!base) return null;
+      if (!base) return { proof: null, reached: false };
       const nonce = relayIdentityNonce();
-      if (!nonce) return null;
+      if (!nonce) return { proof: null, reached: false };
       const ctrl = new AbortController();
       const to = setTimeout(() => {
         try {
@@ -6497,6 +6498,7 @@
               base + "/relay-identity?nonce=" + nonce + "&for=" + encodeURIComponent(String(wssUrl || "")),
               { signal: ctrl.signal, cache: "no-store" }
             );
+            reached = true;
             return res.ok ? res.json() : null;
           })(),
           new Promise((_, rej) => setTimeout(() => rej(new Error("relay-identity timeout")), 6500))
@@ -6505,19 +6507,22 @@
         clearTimeout(to);
       }
       const ev = body && body.proof;
-      if (!ev || ev.kind !== 27235) return null;
-      if (typeof ev.pubkey !== "string" || !/^[0-9a-f]{64}$/i.test(ev.pubkey)) return null;
-      if (!verifyEvent2(ev)) return null;
+      if (!ev || ev.kind !== 27235) return { proof: null, reached };
+      if (typeof ev.pubkey !== "string" || !/^[0-9a-f]{64}$/i.test(ev.pubkey)) return { proof: null, reached };
+      if (!verifyEvent2(ev)) return { proof: null, reached };
       const tag = (n) => {
         const t = (ev.tags || []).find((x) => Array.isArray(x) && x[0] === n);
         return t ? String(t[1] || "") : "";
       };
-      if (tag("nonce").toLowerCase() !== nonce) return null;
-      if (relayAddrKey(tag("relay")) !== relayAddrKey(wssUrl)) return null;
-      return { relayPub: String(ev.pubkey).toLowerCase(), url: tag("relay"), at: Number(ev.created_at) || 0 };
+      if (tag("nonce").toLowerCase() !== nonce) return { proof: null, reached };
+      if (relayAddrKey(tag("relay")) !== relayAddrKey(wssUrl)) return { proof: null, reached };
+      return { proof: { relayPub: String(ev.pubkey).toLowerCase(), url: tag("relay"), at: Number(ev.created_at) || 0 }, reached: true };
     } catch {
-      return null;
+      return { proof: null, reached };
     }
+  }
+  async function verifyRelayIdentity(wssUrl) {
+    return (await verifyRelayIdentityDetailed(wssUrl)).proof;
   }
 
   // src/relay-net.src.js
@@ -15264,7 +15269,7 @@ zoo`.split("\n");
   var NOPHOTO_D = "trinityone/nophoto:";
   var GUARDREQ_D = "trinityone/guardreq:";
   var NAMEKEY_D = "trinityone/namekey:";
-  var NAME_RING_MAX = 12;
+  var NAME_RING_MAX = 50;
   function _sealChurchDoc(obj) {
     const body = JSON.stringify(obj);
     const k = _nameKeyRing[0];
@@ -15516,7 +15521,7 @@ zoo`.split("\n");
   }
   var _skeys = {};
   var _sealedGroupIds = /* @__PURE__ */ new Set();
-  var GROUP_RING_MAX = 12;
+  var GROUP_RING_MAX = 50;
   var _srev = {};
   var _senvTs = {};
   var _hex = (u) => Array.from(u).map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -19062,7 +19067,7 @@ zoo`.split("\n");
       if (!_isRelayAuthed()) return false;
       if (!_mediaKeyHex) return false;
       const fresh = _hex(crypto.getRandomValues(new Uint8Array(32)));
-      const ring = [fresh, ..._mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex]].slice(0, 12);
+      const ring = [fresh, ..._mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex]].slice(0, 50);
       const want = [.../* @__PURE__ */ new Set([pub, ...(memberPubs || []).filter(Boolean), ...(stewardPubs || []).filter(Boolean)])];
       const payload = JSON.stringify(ring);
       const keys = await _sealEach(payload, want, (pl, mp) => encrypt3(pl, getConversationKey(sk, mp)));
@@ -19210,7 +19215,7 @@ zoo`.split("\n");
       if (!_careKeyHex) return false;
       const fresh = _hex(crypto.getRandomValues(new Uint8Array(32)));
       const want = [...new Set([cp, churchPub, ...memberPubs || [], ...stewardPubs || []].filter(Boolean))];
-      const full = [fresh, ..._careKeyRing.length ? _careKeyRing : [_careKeyHex]].slice(0, 12);
+      const full = [fresh, ..._careKeyRing.length ? _careKeyRing : [_careKeyHex]].slice(0, 50);
       const probe = want[0];
       let ring = null;
       for (let n = full.length; n >= 1; n -= n > 4 ? 2 : 1) {
@@ -21286,7 +21291,7 @@ zoo`.split("\n");
               } catch (x) {
               }
               const incoming = ring && ring.length ? ring : [plain];
-              st.ring = [...incoming, ...st.ring.filter((k) => incoming.indexOf(k) === -1)].slice(0, 12);
+              st.ring = [...incoming, ...st.ring.filter((k) => incoming.indexOf(k) === -1)].slice(0, 50);
             } else if (!churchSkHeld()) {
               st.ring = [];
             }
@@ -21360,7 +21365,7 @@ zoo`.split("\n");
       if (!st.ring.length) return false;
       const cp = pub;
       const fresh = _hex(crypto.getRandomValues(new Uint8Array(32)));
-      const nextRing = [fresh, ...st.ring].slice(0, 12);
+      const nextRing = [fresh, ...st.ring].slice(0, 50);
       const nextRev = (st.rev || 1) + 1;
       const allowed = _capAllows(spec, caps);
       const want = [...new Set([cp, ...(stewardPubs || []).filter(allowed)].filter(Boolean))];

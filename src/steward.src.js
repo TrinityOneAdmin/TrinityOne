@@ -161,7 +161,7 @@ let _clearedTrail = { cp: '', map: {}, list: [], loaded: false };  // safeguardi
 const NOPHOTO_D = 'trinityone/nophoto:';    // moderation: members whose uploaded photo is suppressed, d=nophoto:<churchpub>
 const GUARDREQ_D = 'trinityone/guardreq:';  // safeguarding v2: a parent's guardian-link request (parent-authored), d=guardreq:<childpub>
 const NAMEKEY_D = 'trinityone/namekey:';   // per-church name key, wrapped per member (ring: current first)
-const NAME_RING_MAX = 12;   // same bound as the care key: the ring is sealed PER RECIPIENT, so it multiplies
+const NAME_RING_MAX = 50;   // raised from 12 (cloud audit finding 9): 12 removals dropped all earlier keys
 
 // ---- WHEN AND WHERE THIS CHURCH GATHERS — sealed under the church's name key ----
 //
@@ -861,7 +861,7 @@ function _loadVoice() {
 }
 const _skeys = {};   // groupId -> KEY RING [current, ...superseded], each Uint8Array(32) (church-side cache)
 const _sealedGroupIds = new Set();
-const GROUP_RING_MAX = 12;   // bound the envelope, and match the care key's ring exactly (see _careKeyRing).
+const GROUP_RING_MAX = 50;   // raised from 12 (cloud audit finding 9): 12 removals dropped all earlier keys
 // 32 was too many now that every envelope carries the ring sealed PER RECIPIENT: a large church multiplied
 // that by its member count and pushed the event past the relay's 1 MB maxPayload. AUDIT-2026-07-27.
 const _srev = {};    // groupId -> envelope revision (bumped on rotate)
@@ -5556,7 +5556,7 @@ window.Steward = {
     if (!_isRelayAuthed()) return false;                          // never act on an untrusted view (see the mint gate)
     if (!_mediaKeyHex) return false;                              // no key yet — mediaEncryptor mints the first
     const fresh = _hex(crypto.getRandomValues(new Uint8Array(32)));
-    const ring = [fresh, ...(_mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex])].slice(0, 12);
+    const ring = [fresh, ...(_mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex])].slice(0, 50);
     const want = [...new Set([pub, ...(memberPubs || []).filter(Boolean), ...(stewardPubs || []).filter(Boolean)])];
     const payload = JSON.stringify(ring);
     const keys = await _sealEach(payload, want, (pl, mp) => nip44e(pl, nip44ck(sk, mp)));
@@ -5682,7 +5682,7 @@ window.Steward = {
     // would turn a slow operation into an unusable one — measured, up to 48s at 500 members. One sealed
     // sample gives the exact per-member cost for that ring length, because the size depends on the ring and
     // not on who it is sealed to.
-    const full = [fresh, ...(_careKeyRing.length ? _careKeyRing : [_careKeyHex])].slice(0, 12);
+    const full = [fresh, ...(_careKeyRing.length ? _careKeyRing : [_careKeyHex])].slice(0, 50);
     const probe = want[0];
     let ring = null;
     for (let n = full.length; n >= 1; n -= (n > 4 ? 2 : 1)) {
@@ -6988,8 +6988,8 @@ window.Steward = {
     // and re-render every subscriber.
     if (!opts.rotate && ring.length === _nameKeyRing.length && recips.every(p2 => have[p2])) return Promise.resolve(null);
     // (6) FIT THE ENVELOPE TO THE CHURCH — the same 1 MB ceiling, and the same trade, as the care key. This
-    // document also carries one sealed copy of the ring PER RECIPIENT, and NAME_RING_MAX is 12 exactly as the
-    // care ring is, so it is refused by the relay at the same ~723 members. It was refused silently, and the
+    // document also carries one sealed copy of the ring PER RECIPIENT, and NAME_RING_MAX is 50, so at large
+    // churches the envelope size can force the ring to be trimmed. It was refused silently, and the
     // block handler did not await this call at all, so in a large church a Block took the care key away and
     // left the NAME key in place — and a blocked member holding the name key can still read the whole
     // congregation's names, which is the one thing this encryption exists to prevent.
@@ -7859,7 +7859,7 @@ window.Steward = {
             // mint then concludes "this church has no envelope" and publishes a fresh key over the real one.
             // Merging means the worst case is a redundant key in the ring rather than unreadable records —
             // and for the register there is no legacy fallback to catch them.
-            st.ring = [...incoming, ...st.ring.filter(k => incoming.indexOf(k) === -1)].slice(0, 12);
+            st.ring = [...incoming, ...st.ring.filter(k => incoming.indexOf(k) === -1)].slice(0, 50);
           } else if (!churchSkHeld()) {
             st.ring = [];                                  // we are not (or no longer) keyed for this
           }
@@ -7960,7 +7960,7 @@ window.Steward = {
     // COMPUTED, NOT ASSIGNED. Both older rotations adopt the new ring only after the publish succeeds. Doing
     // it first left a console sealing records with a key that existed nowhere but that tab's memory, and the
     // next reload overwrote it — unrecoverable for an append-only ledger.
-    const nextRing = [fresh, ...st.ring].slice(0, 12);
+    const nextRing = [fresh, ...st.ring].slice(0, 50);
     const nextRev = (st.rev || 1) + 1;
     const allowed = _capAllows(spec, caps);
     const want = [...new Set([cp, ...(stewardPubs || []).filter(allowed)].filter(Boolean))];
