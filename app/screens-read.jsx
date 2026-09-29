@@ -302,7 +302,7 @@ function VersionSheet({ open, onClose, version, onPick, onAdd, ctx }) {
   const installed = window.Bible.versions();   // [{abbr,name,kind}] — what's loaded now
   const owned = new Set(installed.map(v => v.abbr));
   const bibles = cat ? (((cat.categories || []).find(c => c.id === 'bibles') || {}).items || []) : [];
-  const available = bibles.filter(b => !owned.has(b.abbr) && !window.Bible.isInstalled(b.url));
+  const available = bibles.filter(b => !owned.has(b.abbr) && !(window.Bible.isInstalled(b.url) && window.Bible.isLoaded(b.url)));
 
   // AWAIT IT, AND BELIEVE THE ANSWER. This toasted "Removed BSB" the instant it was tapped, over a call it
   // never waited for — the same defect the Library's Installed tier had (small-fixes-round4 V2). A removal

@@ -697,7 +697,7 @@ function Spinner({ size = 18 }) {
 function StoreRow({ item, catIcon, ctx }) {
   const isImport = item.kind === 'import';
   const installing = !isImport && window.Bible.isInstalling(item.url);
-  const installed = !isImport && window.Bible.isInstalled(item.url);
+  const installed = !isImport && window.Bible.isInstalled(item.url) && window.Bible.isLoaded(item.url);
 
   const onGet = () => {
     if (isImport) { window.Bible.pickFile(); return; }

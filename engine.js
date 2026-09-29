@@ -441,7 +441,7 @@ window.safeImgUrl = function (v) {
   function idb(){ return new Promise((res, rej) => { const r = indexedDB.open("bible-modules", 1); r.onupgradeneeded = () => r.result.createObjectStore("modules"); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); }
   function idbStore(db, mode){ return db.transaction("modules", mode).objectStore("modules"); }
   async function cacheGet(key){ try{ const db = await idb(); return await new Promise((res, rej) => { const q = idbStore(db, "readonly").get(key); q.onsuccess = () => res(q.result || null); q.onerror = () => rej(q.error); }); }catch(e){ return null; } }
-  async function cachePut(key, u8){ try{ const db = await idb(); await new Promise((res, rej) => { const q = idbStore(db, "readwrite").put(u8, key); q.onsuccess = () => res(); q.onerror = () => rej(q.error); }); }catch(e){} }
+  async function cachePut(key, u8){ const db = await idb(); await new Promise((res, rej) => { const tx = db.transaction("modules", "readwrite"); tx.objectStore("modules").put(u8, key); tx.oncomplete = () => res(); tx.onabort = () => rej(tx.error || new DOMException("transaction aborted", "AbortError")); tx.onerror = () => rej(tx.error); }); }
   async function cacheKeys(){ try{ const db = await idb(); return await new Promise((res, rej) => { const q = idbStore(db, "readonly").getAllKeys(); q.onsuccess = () => res(q.result || []); q.onerror = () => rej(q.error); }); }catch(e){ return []; } }
   async function cacheDelete(key){ try{ const db = await idb(); await new Promise((res, rej) => { const q = idbStore(db, "readwrite").delete(key); q.onsuccess = () => res(); q.onerror = () => rej(q.error); }); }catch(e){} }
   // "IS IT STILL THERE?" — AND IT THROWS WHEN IT CANNOT LOOK. Every other helper above swallows its errors
@@ -644,7 +644,7 @@ window.safeImgUrl = function (v) {
     const res = await fetch(resolveAsset(url));
     if(!res.ok) throw new Error("HTTP " + res.status);
     const u8 = new Uint8Array(await res.arrayBuffer());
-    await cachePut(url, u8);
+    try{ await cachePut(url, u8); }catch(e){ console.warn("cachePut failed for asset (full phone?)", e); }
     return u8;
   }
   function assetCached(url){ return cacheGet(url).then(b => !!b).catch(() => false); }
@@ -712,6 +712,7 @@ window.safeImgUrl = function (v) {
   }
   function isInstalled(url){ return !!getInstalled()[url]; }
   function isInstalling(url){ return installing.has(url); }
+  function isLoaded(url){ return Object.values(urlOf).includes(url); }
 
   async function getCatalog(){
     if(!catalogPromise) catalogPromise = fetch("catalog.json").then(r => r.ok ? r.json() : { categories: [] }).catch(() => ({ categories: [] }));
@@ -860,9 +861,10 @@ window.safeImgUrl = function (v) {
         // (a module handed over by Quick Share must stick, not vanish when the app reopens).
         if(r && r.abbr){
           const url = "imported/" + f.name;
-          await cachePut(url, u8);
-          recordInstalled({ url, id: r.abbr, abbr: r.abbr, name: (modules[r.abbr] && modules[r.abbr].name) || r.abbr, kind: r.kind || "bible", category: r.kind === "dict" ? "dictionaries" : r.kind === "comment" ? "commentaries" : "bibles" });
-          noteLoadedFrom(url, r.abbr, r.kind === "dict" ? "dictionaries" : r.kind === "comment" ? "commentaries" : "bibles");
+          const cat = r.kind === "dict" ? "dictionaries" : r.kind === "comment" ? "commentaries" : "bibles";
+          try{ await cachePut(url, u8); }catch(e){ console.warn("cachePut failed for import (full phone?)", e); window.Bible._error = "Loaded " + r.abbr + " but couldn't save it — not enough space on this phone"; }
+          recordInstalled({ url, id: r.abbr, abbr: r.abbr, name: (modules[r.abbr] && modules[r.abbr].name) || r.abbr, kind: r.kind || "bible", category: cat });
+          noteLoadedFrom(url, r.abbr, cat);
         }
       }
       catch(err){ console.error(err); window.Bible._error = err.message; }
@@ -1172,7 +1174,7 @@ window.safeImgUrl = function (v) {
     BOOK_NAMES, bookName, bookAbbr, bookGroup, bookNum, parseRef,
     parseVerse, lex,
     loadModuleBytes, fetchAndCacheModule, loadAsset, assetCached, pickFile, exportModule,
-    cacheKeys, getCatalog, getMirror, getVideos, installModule, removeModule, isInstalled, isInstalling,
+    cacheKeys, getCatalog, getMirror, getVideos, installModule, removeModule, isInstalled, isInstalling, isLoaded,
     installedMap: getInstalled,
     subscribe(fn){ subs.add(fn); return () => subs.delete(fn); },
     get loaded(){ return order.length > 0; },
