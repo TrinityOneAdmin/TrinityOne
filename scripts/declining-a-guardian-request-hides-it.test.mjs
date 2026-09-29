@@ -98,22 +98,5 @@ test('declineGuardian writes the child|parent key into the closed map via setGua
   assert.ok(closed[CHILD_PUB + '|' + PARENT_PUB], 'the closed map should have the declined key');
 });
 
-// ── sabotage checks ──────────────────────────────────────────────────────────────────────────────────
-
-test('SABOTAGE: removing the guardiansClosed check from the pendingReqs filter lets declined requests through', () => {
-  const src = stripComments(STEW);
-  const at = src.indexOf('const pendingReqs = guardReqs.filter(');
-  assert.notEqual(at, -1, 're-anchor: pendingReqs filter is gone');
-  const filterLine = src.slice(at, src.indexOf(';', at) + 1);
-  assert.match(filterLine, /guardiansClosed/,
-    'the pendingReqs filter no longer consults guardiansClosed — a declined request reappears every ' +
-    'time the console loads, because nothing else removes it from the relay');
-});
-
-test('SABOTAGE: removing declineGuardian from the source removes the Decline capability', () => {
-  const src = stripComments(STEW);
-  assert.match(src, /const declineGuardian = async \(r\) =>/,
-    'declineGuardian is gone from stew-dashboard.jsx — no steward can decline a guardian request');
-  assert.match(src, /declineGuardian\(r\)/,
-    'declineGuardian is never called — the Decline button is not wired');
-});
+// ── sabotage: the executable tests above already catch deletion (buildPendingFilter fails at indexOf,
+// loadDecline fails at fnBody) — no text-matching sabotage needed (CLAUDE.md rule 3). ──

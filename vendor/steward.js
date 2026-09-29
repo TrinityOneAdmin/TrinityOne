@@ -20684,18 +20684,13 @@ zoo`.split("\n");
     // someone they are a child's guardian after the church has decided they are not, which in safeguarding is
     // its own kind of wrong. unlinkParent's own comment already said "removing a link matters more than adding
     // one"; this is the half that was missing.
-    notifyGuardianRemoved(parentPubIn, childPubIn, closedMap) {
+    notifyGuardianRemoved(parentPubIn, childPubIn) {
       if (!sk) return Promise.resolve(null);
       const parentPub = toPubHex(parentPubIn), childPub = toPubHex(childPubIn);
       if (!parentPub || !childPub) return Promise.resolve(null);
-      const removedAll = [];
-      if (closedMap) for (const k of Object.keys(closedMap)) {
-        const [c] = k.split("|");
-        if (k.endsWith("|" + parentPub) && c) removedAll.push(c);
-      }
       let content;
       try {
-        content = encrypt3(JSON.stringify({ removed: childPub, removedAll: removedAll.length ? removedAll : void 0, church: churchPub }), getConversationKey(sk, parentPub));
+        content = encrypt3(JSON.stringify({ removed: childPub, church: churchPub }), getConversationKey(sk, parentPub));
       } catch (e) {
         return Promise.resolve(null);
       }

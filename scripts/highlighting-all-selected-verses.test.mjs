@@ -108,7 +108,5 @@ test('ActionSheet renders highlight buttons when multi > 1', async () => {
   assert.equal(colorCalls.length, 1, 'the highlight button did not call onColor');
 });
 
-test('SABOTAGE: passageKeys must exist in the shipped source', () => {
-  assert.match(SRC, /passageKeys/,
-    'passageKeys is not in screens-read.jsx — multi-verse highlighting has no keys to write to');
-});
+// Sabotage: deletion of passageKeys is already caught — buildPassageKeys() fails at indexOf.
+// No text-matching sabotage needed (CLAUDE.md rule 3).
