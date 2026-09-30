@@ -2903,8 +2903,12 @@ function maybePush(evt) {
     const d = (evt.tags.find(t => t[0] === 'd') || [])[1] || '';
     if (!d.startsWith(REQUEST_D)) return;
     const target = (evt.tags.find(t => t[0] === 'p') || [])[1]; if (!target) return;
-    const c = JSON.parse(evt.content || '{}');
-    pushTo(target, { title: 'Can you serve?', body: `${c.teamName || 'Serving'} · ${c.role || ''}${c.date ? ' · ' + c.date : ''}`, url: '/?serving=1' }, 'serving');
+    // C-4. This read teamName, role and date out of the content and put them in the push body. Sealed, they
+    // are all undefined and the body became the literal "Serving · "; CLEARTEXT — every request written
+    // before C-4 — it handed the team, role and date to an outside push service beside a member's device
+    // token, which is a worse leak than the one the sealing is for. Same call the DM push made in
+    // AUDIT-2026-07-27: say the generic thing for both shapes. The phone opens the request itself.
+    pushTo(target, { title: 'Can you serve?', body: 'Your church has asked if you can serve', url: '/?serving=1' }, 'serving');
   } catch {}
 }
 // best-effort latest display name from a pubkey's most recent kind-0 profile

@@ -9558,10 +9558,17 @@ window.Steward = {
   },
 
   // ---- serving requests: steward -> a member "can you serve?" (p-tagged to the member) ----
-  sendServingRequest(req) {
-    if (!sk || !req || !req.memberPub) return Promise.resolve(null);
+  async sendServingRequest(req) {
+    if (!sk || !req || !req.memberPub) return null;
     const id = req.id || ('req' + Date.now().toString(36) + (++_reqSeq).toString(36) + Math.random().toString(36).slice(2, 7));
-    const content = JSON.stringify({ serviceId: req.serviceId || '', teamId: req.teamId || '', roleId: req.roleId || '', role: req.role || '', teamName: req.teamName || '', icon: req.icon || 'hand', accent: req.accent || 'var(--clay)', date: req.date || '', time: req.time || '', service: req.service || '', from: req.from || 'Your church', note: req.note || '' });
+    // C-4. This wrote role, team, date, time and the note as plain JSON beside a ['p', member] tag, so the
+    // relay's disk mapped "Kids Church / Children's worker / 12 Oct" to a named person — undoing the
+    // 2026-08-15 sealing of the timetable that publishService beside it already does. Seal under the church
+    // name key, and REFUSE rather than fall back to cleartext: _sealChurchDocReady waits out a late key and
+    // answers null only when none arrived, which every caller already treats as "not saved".
+    const doc = { serviceId: req.serviceId || '', teamId: req.teamId || '', roleId: req.roleId || '', role: req.role || '', teamName: req.teamName || '', icon: req.icon || 'hand', accent: req.accent || 'var(--clay)', date: req.date || '', time: req.time || '', service: req.service || '', from: req.from || 'Your church', note: req.note || '' };
+    const content = await _sealChurchDocReady(doc);
+    if (content == null) return null;   // the church name key never arrived: NOT sent, and never in the clear
     // ⚠ feChurch, NOT a bare finalizeEvent. MEASURED against a live relay on 2026-09-16: as a bare
     // finalizeEvent this was REFUSED outright for a delegated steward — "blocked: not a member or not
     // permitted for this group" — so their volunteers were never asked to serve at all. Not a display bug:
@@ -9582,7 +9589,9 @@ window.Steward = {
     // matters — an ORDINARY MEMBER with a church tag is still REFUSED, so the tag grants nothing on its own
     // and the capability check is still what decides.
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', REQUEST_D + id], ['t', NET], ['p', req.memberPub]], content }, sk))
-      .then((ok) => (ok ? { id, ...JSON.parse(content), memberPub: req.memberPub } : null));   // publish() returns FALSE when no relay accepted; see publishService
+      // `doc`, NOT JSON.parse(content): since C-4 `content` is the SEALED envelope `{e:<ciphertext>}`, so
+      // parsing it back would hand stew-schedule.jsx an object with no role, team or date at all.
+      .then((ok) => (ok ? { id, ...doc, memberPub: req.memberPub } : null));   // publish() returns FALSE when no relay accepted; see publishService
   },
   // the church's own "can you serve?" request docs (so the board can join replies to a slot)
   subscribeRequests(onRequests) {
@@ -9595,7 +9604,12 @@ window.Steward = {
         const id = d.slice(REQUEST_D.length);
         const memberPub = (e.tags.find(t => t[0] === 'p') || [])[1] || '';
         if (!e.content) { byId.delete(id); emit(); return; }
-        try { byId.set(id, { id, memberPub, ...JSON.parse(e.content), ts: e.created_at }); emit(); } catch {}
+        // _openChurchDoc, not JSON.parse: sealed under the church name key since C-4, and it still opens
+        // every cleartext request written before that. null means sealed with a key this console does not
+        // hold yet — mark it locked rather than dropping it, so the board says so instead of showing a gap.
+        const c = _openChurchDoc(e.content);
+        if (c === null) { byId.set(id, { id, memberPub, _locked: true, ts: e.created_at }); emit(); return; }
+        byId.set(id, { id, memberPub, ...c, ts: e.created_at }); emit();
       },
       oneose() { emit(); },
     });
@@ -9611,7 +9625,12 @@ window.Steward = {
         if (!d.startsWith(REQREPLY_D)) return;
         const id = d.slice(REQREPLY_D.length);
         if (!e.content) { byId.delete(id); emit(); return; }
-        try { byId.set(id, { id, by: e.pubkey, ...JSON.parse(e.content), ts: e.created_at }); emit(); } catch {}
+        // Sealed under the church name key since C-4 (the member side seals with the same ring). Cleartext
+        // replies written before that still open. A reply we cannot read is marked, never silently dropped:
+        // an unread "I can't make it" that shows as nothing leaves the slot looking unanswered.
+        const c = _openChurchDoc(e.content);
+        if (c === null) { byId.set(id, { id, by: e.pubkey, _locked: true, ts: e.created_at }); emit(); return; }
+        byId.set(id, { id, by: e.pubkey, ...c, ts: e.created_at }); emit();
       },
       oneose() { emit(); },
     });

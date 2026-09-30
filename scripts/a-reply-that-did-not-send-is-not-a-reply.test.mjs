@@ -68,8 +68,13 @@ function runner(name, { publishFails, how }) {
   // that is lifted out of the bundle too rather than stubbed — a stub here would supply the very answer these
   // tests are named after.
   const _pubReason = new Function(fnBody(BUNDLE, 'function _pubReason(e)', '_pubReason') + '\nreturn _pubReason;')();
-  const obj = new Function('finalizeEvent2', '_publishAny', 'publishSetFor', 'toPub', 'window', 'sk', 'NET', 'Date', 'JSON', 'Math', '_clearJoinSent', '_dropJoinIntent', '_pubReason', '_forgetChurch',
-    'return ' + src)(finalizeEvent2, _publishAny, () => ['wss://r.example/relay'], toPub, window, 'sk-bytes', 'trinityone', Date, JSON, Math, () => {}, () => {}, _pubReason, () => {});
+  // C-4 made respondToServingRequest seal its reply, so the lift needs _sealChurchDocMember in scope. It is
+  // LIFTED, not stubbed, for the reason above — but with an empty key map, so it takes its own documented
+  // cleartext path. What these tests measure is the publish OUTCOME; the content shape is not the subject.
+  const _sealChurchDocMember = new Function('_nameKeys',
+    fnBody(BUNDLE, 'function _sealChurchDocMember(', '_sealChurchDocMember') + '\nreturn _sealChurchDocMember;')(new Map());
+  const obj = new Function('finalizeEvent2', '_publishAny', 'publishSetFor', 'toPub', 'window', 'sk', 'NET', 'Date', 'JSON', 'Math', '_clearJoinSent', '_dropJoinIntent', '_pubReason', '_forgetChurch', '_sealChurchDocMember',
+    'return ' + src)(finalizeEvent2, _publishAny, () => ['wss://r.example/relay'], toPub, window, 'sk-bytes', 'trinityone', Date, JSON, Math, () => {}, () => {}, _pubReason, () => {}, _sealChurchDocMember);
   return { fn: obj[name], calls };
 }
 
