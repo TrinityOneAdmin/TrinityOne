@@ -117,3 +117,154 @@ test('adoptInviteRelays persists the relay name for this church', async () => {
   assert.match(adoptBody, /trinityone\.relaynames/,
     'adoptInviteRelays does not persist the relay name — member phones cannot re-resolve on dead boxes');
 });
+
+// ── M-7b: the churn handler in subscribeChurchRelays calls _reResolveRelayName ──────────────────────
+// Verified against the SHIPPED bundle (rule 3: text-match on vendor/*.js IS valid because the bundler
+// strips dead code, so deleting the call removes the reference from the bundle).
+test('subscribeChurchRelays churn handler calls _reResolveRelayName', () => {
+  const scrBody = fnBody(BUNDLE, 'subscribeChurchRelays(churchNpub)', 'subscribeChurchRelays');
+  assert.match(scrBody, /_reResolveRelayName/,
+    'subscribeChurchRelays does not call _reResolveRelayName — phones cannot follow a church\'s ' +
+    'relay to a new tunnel address on churn');
+});
+
+// ── M-7b: _reResolveRelayName lifted and EXECUTED ──────────────────────────────────────────────────
+// Drives the shipped bundle: the function is lifted, wrapped with stubs, and run. The test fails if
+// the function is deleted, or if its logic changes to skip the resolveRelayName or isNetworkRelay calls.
+
+test('_reResolveRelayName calls resolveRelayName with the stored name', async () => {
+  const CP = 'a'.repeat(64);
+  const body = fnBody(BUNDLE, 'async function _reResolveRelayName(cp)', '_reResolveRelayName');
+
+  let resolvedName = null;
+  const fn = new Function(
+    '_resolving', '_churchRelays', 'localStorage', 'window', 'isNetworkRelay2',
+    body + '\nreturn _reResolveRelayName;'
+  )(
+    new Set(),                                             // _resolving
+    new Map(),                                             // _churchRelays (empty = no working boxes)
+    {                                                      // localStorage
+      getItem: (k) => {
+        if (k === 'trinityone.relaynames') return JSON.stringify({ [CP]: 'mychurch.relay' });
+        return null;
+      },
+      setItem: () => {},
+    },
+    {                                                      // window.Fellowship
+      Fellowship: {
+        resolveRelayName: async (name) => { resolvedName = name; return { url: 'wss://new-tunnel.example.com' }; },
+        relays: ['wss://old.example.com'],
+        setRelays: () => {},
+      },
+    },
+    async () => true,                                      // isNetworkRelay2 (always passes)
+  );
+
+  await fn(CP);
+  assert.equal(resolvedName, 'mychurch.relay',
+    '_reResolveRelayName did not call resolveRelayName with the stored name — phones cannot ' +
+    'follow a church\'s relay to a new tunnel address');
+});
+
+test('_reResolveRelayName calls isNetworkRelay before adopting a new URL', async () => {
+  const CP = 'a'.repeat(64);
+  const body = fnBody(BUNDLE, 'async function _reResolveRelayName(cp)', '_reResolveRelayName');
+
+  let isNetworkRelayCalledWith = null;
+  let relaysSet = null;
+  const fn = new Function(
+    '_resolving', '_churchRelays', 'localStorage', 'window', 'isNetworkRelay2',
+    body + '\nreturn _reResolveRelayName;'
+  )(
+    new Set(),
+    new Map(),
+    {
+      getItem: (k) => {
+        if (k === 'trinityone.relaynames') return JSON.stringify({ [CP]: 'mychurch.relay' });
+        return null;
+      },
+      setItem: () => {},
+    },
+    {
+      Fellowship: {
+        resolveRelayName: async () => ({ url: 'wss://new-tunnel.example.com' }),
+        relays: ['wss://old.example.com'],
+        setRelays: (rs) => { relaysSet = rs; },
+      },
+    },
+    async (cp, url) => { isNetworkRelayCalledWith = { cp, url }; return true; },
+  );
+
+  await fn(CP);
+  assert.ok(isNetworkRelayCalledWith,
+    '_reResolveRelayName did not call isNetworkRelay — a new tunnel address is adopted without proof');
+  assert.equal(isNetworkRelayCalledWith.url, 'wss://new-tunnel.example.com',
+    'isNetworkRelay was called with the wrong URL');
+  assert.ok(relaysSet && relaysSet.includes('wss://new-tunnel.example.com'),
+    '_reResolveRelayName did not adopt the new URL after isNetworkRelay passed');
+});
+
+test('_reResolveRelayName does NOT adopt a URL that fails isNetworkRelay', async () => {
+  const CP = 'a'.repeat(64);
+  const body = fnBody(BUNDLE, 'async function _reResolveRelayName(cp)', '_reResolveRelayName');
+
+  let relaysSet = null;
+  const fn = new Function(
+    '_resolving', '_churchRelays', 'localStorage', 'window', 'isNetworkRelay2',
+    body + '\nreturn _reResolveRelayName;'
+  )(
+    new Set(),
+    new Map(),
+    {
+      getItem: (k) => {
+        if (k === 'trinityone.relaynames') return JSON.stringify({ [CP]: 'mychurch.relay' });
+        return null;
+      },
+      setItem: () => {},
+    },
+    {
+      Fellowship: {
+        resolveRelayName: async () => ({ url: 'wss://impostor.example.com' }),
+        relays: ['wss://old.example.com'],
+        setRelays: (rs) => { relaysSet = rs; },
+      },
+    },
+    async () => false,   // isNetworkRelay rejects
+  );
+
+  await fn(CP);
+  assert.equal(relaysSet, null,
+    '_reResolveRelayName adopted a URL that FAILED isNetworkRelay — an unproven relay gets the data');
+});
+
+test('_reResolveRelayName skips when the church already has working boxes', async () => {
+  const CP = 'a'.repeat(64);
+  const body = fnBody(BUNDLE, 'async function _reResolveRelayName(cp)', '_reResolveRelayName');
+
+  let resolvedName = null;
+  const ownRelays = new Map([['wss://healthy.example.com', 'abc']]);
+  const fn = new Function(
+    '_resolving', '_churchRelays', 'localStorage', 'window', 'isNetworkRelay2',
+    body + '\nreturn _reResolveRelayName;'
+  )(
+    new Set(),
+    new Map([[CP, ownRelays]]),                             // church has a working box
+    {
+      getItem: () => JSON.stringify({ [CP]: 'mychurch.relay' }),
+      setItem: () => {},
+    },
+    {
+      Fellowship: {
+        resolveRelayName: async (name) => { resolvedName = name; return { url: 'wss://new.example.com' }; },
+        relays: [],
+        setRelays: () => {},
+      },
+    },
+    async () => true,
+  );
+
+  await fn(CP);
+  assert.equal(resolvedName, null,
+    '_reResolveRelayName tried to re-resolve when the church already has working boxes — ' +
+    'unnecessary directory lookups leak which churches a member follows (S3 privacy)');
+});
