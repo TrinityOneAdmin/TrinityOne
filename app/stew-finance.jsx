@@ -790,7 +790,7 @@ function DashFinanceBook() {
     return { posted, failed, skipped };
   };
   const funds = F.fundBalances(book);
-  const fyStart = (() => { const mm = (book.fiscalYearStart || '01-01'); const y = new Date().getFullYear(); const t = y + '-' + mm; return t <= new Date().toISOString().slice(0, 10) ? t : (y - 1) + '-' + mm; })();
+  const fyStart = (() => { const mm = (book.fiscalYearStart || '01-01'); const y = new Date().getFullYear(); const t = y + '-' + mm; return t <= todayISO() ? t : (y - 1) + '-' + mm; })();   // LOCAL today, as the year above is local (calendar-day.test.mjs)
   const ie = F.incomeExpenditure(book, { from: fyStart });
   const bank = F.trialBalance(book).rows.find(r => r.account === 'bank');
   const cash = bank ? bank.debit - bank.credit : 0;
