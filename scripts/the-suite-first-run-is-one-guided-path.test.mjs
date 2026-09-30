@@ -761,7 +761,11 @@ test('the relay wizard opens on a second visit to the panel in the same profile,
   try {
     const OPEN = `document.getElementById('relaySetup') && document.getElementById('relaySetup').classList.contains('show')`;
     await waitFor(c, OPEN, 'the relay wizard on the first visit', 20000);
-    assert.equal(await c.evalIn(`!!localStorage.getItem('to_relay_admin_token')`), true, 'staging: the panel did not store the admin token the second visit relies on');
+    // sessionStorage, not localStorage, since 3e3c8f7 (R-11: the admin token must not outlive the session). The
+    // second visit below is the same tab, so it still has it. This read localStorage until 2026-09-30 and failed
+    // its own staging over a panel that was doing the right thing.
+    assert.equal(await c.evalIn(`!!sessionStorage.getItem('to_relay_admin_token')`), true, 'staging: the panel did not store the admin token the second visit relies on');
+    assert.equal(await c.evalIn(`!!localStorage.getItem('to_relay_admin_token')`), false, 'the admin token was written to localStorage, where it outlives the session (R-11)');
     assert.equal(await c.evalIn(`localStorage.getItem('to_relay_setup_seen')`), null, 'staging: the wizard is already marked seen');
     // leave without answering (the Back beneath the overlay, or the shell's own Back), then come back
     await c.goto(gw.base + HOME);
