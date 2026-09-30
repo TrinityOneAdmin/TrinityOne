@@ -77,32 +77,99 @@ test('ENGINE: checkChurch returns "unknown" on timeout — NEVER "not-found" ove
     'just because a relay didn\'t answer');
 });
 
-// ── POINT OF USE: followChurch in app.jsx defers announceMembership until checkChurch confirms ──────
-test('POINT OF USE: followChurch calls checkChurch before announceMembership', () => {
-  // Read the shipped followChurch and verify the check is wired in.
-  // CLAUDE.md rule 3 forbids asserting by matching text in app/*.jsx — but this is the SOURCE file
-  // being verified against the BUNDLE. The critical assertion is in the engine test above.
-  // For the screen, we verify that the followChurch function references checkChurch.
-  const followBody = fnBody(APPJSX, 'const followChurch = (raw) =>', 'followChurch');
-  assert.match(followBody, /checkChurch/,
-    'followChurch in app.jsx does not call checkChurch — a valid npub that is not a church will be ' +
-    'followed as "Church" with a signed membership document published');
-  assert.match(followBody, /not-found/,
-    'followChurch does not handle the "not-found" case — a non-church npub is followed silently');
-  assert.match(followBody, /No church found/,
-    'followChurch does not show the "No church found" message on not-found');
+// ── POINT OF USE: followChurch in app.jsx is lifted and EXECUTED (CLAUDE.md rule 3) ─────────────────
+//
+// The old tests 5-6 text-matched `app/app.jsx`, which violates rule 3: `false && ` in front of a condition
+// leaves every word in place and the match still passes. These lift the real function, supply stubs for the
+// closure variables it closes over, and RUN it — so the test fails if the feature is deleted from the screen.
+
+// Build a callable followChurch from the app source. Closure variables are replaced with the stubs passed in.
+function liftFollowChurch(appSrc) {
+  const body = fnBody(appSrc, 'const followChurch = (raw) =>', 'followChurch');
+  // followChurch is an arrow: `const followChurch = (raw) => { ... }` — the fnBody includes the full
+  // declaration. We need to extract just the function body and wrap it so the closure variables are injectable.
+  return body;
+}
+
+function makeFollowEnv(checkResult) {
+  const calls = { checkChurch: 0, announceMembership: 0, toast: [], setChurches: [], setActiveChurch: [] };
+  const churches = [];
+  const setChurches = (fn) => { calls.setChurches.push(typeof fn === 'function' ? fn(churches) : fn); };
+  const setActiveChurch = (fn) => { calls.setActiveChurch.push(typeof fn === 'function' ? fn(null) : fn); };
+  const lsSet = () => {};
+  const toast = (msg) => { calls.toast.push(msg); };
+  // window.Fellowship with spies
+  const Fellowship = {
+    toPub: (npub) => npub.startsWith('npub1') ? 'a'.repeat(64) : null,
+    addRelay: () => {},
+    CANONICAL_RELAYS: [],
+    adoptInviteRelays: () => {},
+    checkChurch: async (npub) => { calls.checkChurch++; return checkResult; },
+    announceMembership: (npub) => { calls.announceMembership++; },
+    subscribeChurchProfile: () => () => {},
+    subscribeChurchRelays: () => () => {},
+  };
+  return { churches, setChurches, setActiveChurch, lsSet, toast, Fellowship, calls };
+}
+
+test('POINT OF USE: followChurch calls checkChurch and announces membership only when "church" (executed)', async () => {
+  const body = liftFollowChurch(APPJSX);
+  const env = makeFollowEnv('church');
+  // Build the callable. The arrow function closes over churches, setChurches, setActiveChurch, lsSet, toast,
+  // and reads window.Fellowship. We inject them all.
+  const fn = new Function('churches', 'setChurches', 'setActiveChurch', 'lsSet', 'toast', 'window', 'setTimeout',
+    body + '\nreturn followChurch;'
+  )(env.churches, env.setChurches, env.setActiveChurch, env.lsSet, env.toast,
+    { Fellowship: env.Fellowship, addEventListener: () => {}, removeEventListener: () => {} }, setTimeout);
+
+  // A valid npub that checkChurch says IS a church → announceMembership must fire
+  fn('npub1gxa6a0eaga9hy2mpjk6gxpxaxvywwvezrnsrgxennkfhwru7ngnsevqeyr');
+  // Wait for the async _check call to complete
+  await new Promise(r => setTimeout(r, 50));
+
+  assert.equal(env.calls.checkChurch, 1,
+    'followChurch did not call checkChurch — the M-9 guard is missing from the screen');
+  assert.equal(env.calls.announceMembership, 1,
+    'followChurch did not call announceMembership after checkChurch returned "church"');
 });
 
-test('POINT OF USE: followChurch does NOT call announceMembership immediately for a new follow', () => {
-  const followBody = fnBody(APPJSX, 'const followChurch = (raw) =>', 'followChurch');
-  // The membership announcement must be INSIDE the checkChurch callback, not at the top level.
-  // Split the body: everything before the checkChurch call should not have announceMembership.
-  const checkIdx = followBody.indexOf('checkChurch');
-  assert.ok(checkIdx > 0, 'checkChurch not found in followChurch');
-  const beforeCheck = followBody.slice(0, checkIdx);
-  // announceMembership should NOT appear in the unconditional top-level code
-  // It should only appear inside the checkChurch result handler
-  assert.doesNotMatch(beforeCheck, /announceMembership\(/,
-    'announceMembership is called BEFORE checkChurch — a non-church npub gets a signed membership ' +
-    'document published immediately, which is the exact bug M-9 found');
+test('POINT OF USE: followChurch does NOT announce membership when checkChurch returns "not-found" (executed)', async () => {
+  const body = liftFollowChurch(APPJSX);
+  const env = makeFollowEnv('not-found');
+  const fn = new Function('churches', 'setChurches', 'setActiveChurch', 'lsSet', 'toast', 'window', 'setTimeout',
+    body + '\nreturn followChurch;'
+  )(env.churches, env.setChurches, env.setActiveChurch, env.lsSet, env.toast,
+    { Fellowship: env.Fellowship, addEventListener: () => {}, removeEventListener: () => {} }, setTimeout);
+
+  fn('npub1gxa6a0eaga9hy2mpjk6gxpxaxvywwvezrnsrgxennkfhwru7ngnsevqeyr');
+  await new Promise(r => setTimeout(r, 50));
+
+  assert.equal(env.calls.checkChurch, 1,
+    'followChurch did not call checkChurch — the M-9 guard is missing from the screen');
+  assert.equal(env.calls.announceMembership, 0,
+    'followChurch called announceMembership for a "not-found" npub — a non-church gets a signed ' +
+    'membership document published, which is the exact bug M-9 found');
+  assert.ok(env.calls.toast.some(m => /church/i.test(m) || /not.found/i.test(m)),
+    'followChurch did not show a toast on "not-found" — the user gets no feedback');
+});
+
+test('POINT OF USE: followChurch removes the church entry on "not-found" (executed)', async () => {
+  const body = liftFollowChurch(APPJSX);
+  const env = makeFollowEnv('not-found');
+  const fn = new Function('churches', 'setChurches', 'setActiveChurch', 'lsSet', 'toast', 'window', 'setTimeout',
+    body + '\nreturn followChurch;'
+  )(env.churches, env.setChurches, env.setActiveChurch, env.lsSet, env.toast,
+    { Fellowship: env.Fellowship, addEventListener: () => {}, removeEventListener: () => {} }, setTimeout);
+
+  fn('npub1gxa6a0eaga9hy2mpjk6gxpxaxvywwvezrnsrgxennkfhwru7ngnsevqeyr');
+  await new Promise(r => setTimeout(r, 50));
+
+  // The "not-found" handler calls setChurches with a filter that removes the npub
+  const filterCalls = env.calls.setChurches;
+  // The second call to setChurches should be a filter removing the church (first was the add)
+  assert.ok(filterCalls.length >= 2,
+    'followChurch did not call setChurches a second time to remove the non-church entry');
+  const filtered = filterCalls[filterCalls.length - 1];
+  assert.ok(Array.isArray(filtered) && !filtered.some(c => c.id === 'npub1gxa6a0eaga9hy2mpjk6gxpxaxvywwvezrnsrgxennkfhwru7ngnsevqeyr'),
+    'followChurch did not filter out the non-church entry — the "Church" placeholder stays on screen');
 });
