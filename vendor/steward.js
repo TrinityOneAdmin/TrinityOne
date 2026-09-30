@@ -16393,6 +16393,20 @@ zoo`.split("\n");
   var _localBlocked = /* @__PURE__ */ new Set();
   var EVENT_POLICIES = ["leaders", "stewards", "everyone"];
   var _nameKeyRing = [];
+  var _nameKeyListeners = /* @__PURE__ */ new Set();
+  function _onNameKeyRing(fn) {
+    _nameKeyListeners.add(fn);
+    return () => _nameKeyListeners.delete(fn);
+  }
+  function _nameKeyRingChanged() {
+    if (!_nameKeyRing.length) return;
+    for (const fn of [..._nameKeyListeners]) {
+      try {
+        fn();
+      } catch (x) {
+      }
+    }
+  }
   var _nameKeyBusy = null;
   var _nameKeyDocKeys = null;
   var _nameKeyChecked = false;
@@ -20553,6 +20567,7 @@ zoo`.split("\n");
       if (out === false) return false;
       _nameKeyRing = ring;
       _nameKeyDocKeys = keys;
+      _nameKeyRingChanged();
       return out;
     },
     // read the envelope back (the church's own copy) so the console can decrypt members' names
@@ -20574,6 +20589,7 @@ zoo`.split("\n");
             if (Array.isArray(r)) {
               const had = _nameKeyReady();
               _nameKeyRing = r.filter((x) => typeof x === "string" && /^[0-9a-f]+$/i.test(x));
+              _nameKeyRingChanged();
               if (!had && _nameKeyReady()) _webQueueSync();
             }
           } catch (x) {
@@ -23040,8 +23056,9 @@ zoo`.split("\n");
     // the church's own "can you serve?" request docs (so the board can join replies to a slot)
     subscribeRequests(onRequests) {
       const byId = /* @__PURE__ */ new Map();
+      const lockedRaw = /* @__PURE__ */ new Map();
       const emit = () => onRequests([...byId.values()]);
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
+      const handlers = {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (!d.startsWith(REQUEST_D)) return;
@@ -23054,29 +23071,37 @@ zoo`.split("\n");
           }
           const c = _openChurchDoc(e.content);
           if (c === null) {
+            lockedRaw.set(id, e);
             byId.set(id, { id, memberPub, _locked: true, ts: e.created_at });
             emit();
             return;
           }
+          lockedRaw.delete(id);
           byId.set(id, { id, memberPub, ...c, ts: e.created_at });
           emit();
         },
         oneose() {
           emit();
         }
+      };
+      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], handlers);
+      const stopKey = _onNameKeyRing(() => {
+        for (const e of [...lockedRaw.values()]) handlers.onevent(e);
       });
       return () => {
         try {
           sub.close();
         } catch {
         }
+        stopKey();
       };
     },
     // the steward's view of replies members sent back (reqreply docs p-tagged to the church)
     subscribeRequestReplies(onReplies) {
       const byId = /* @__PURE__ */ new Map();
+      const lockedRaw = /* @__PURE__ */ new Map();
       const emit = () => onReplies([...byId.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)));
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], "#p": [pub], "#t": [NET] }], {
+      const handlers = {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (!d.startsWith(REQREPLY_D)) return;
@@ -23088,22 +23113,29 @@ zoo`.split("\n");
           }
           const c = _openChurchDoc(e.content);
           if (c === null) {
+            lockedRaw.set(id, e);
             byId.set(id, { id, by: e.pubkey, _locked: true, ts: e.created_at });
             emit();
             return;
           }
+          lockedRaw.delete(id);
           byId.set(id, { id, by: e.pubkey, ...c, ts: e.created_at });
           emit();
         },
         oneose() {
           emit();
         }
+      };
+      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], "#p": [pub], "#t": [NET] }], handlers);
+      const stopKey = _onNameKeyRing(() => {
+        for (const e of [...lockedRaw.values()]) handlers.onevent(e);
       });
       return () => {
         try {
           sub.close();
         } catch {
         }
+        stopKey();
       };
     },
     // member unavailability docs p-tagged to the church -> { memberPub: [dates] } (for "Away" + Auto-fill)

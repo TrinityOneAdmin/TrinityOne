@@ -1862,8 +1862,17 @@ function _ingestNameKey(cp, e) {
     if (!Array.isArray(r)) return;
     _nameKeyTs.set(cp, e.created_at || 0);
     _nameKeys.set(cp, r.filter(x => typeof x === 'string' && /^[0-9a-f]+$/i.test(x)).map(_unhexF));
-  } catch (x) {}
+  } catch (x) { return; }
+  for (const fn of [..._nameKeyListeners]) { try { fn(cp); } catch (x) {} }
 }
+// WHO NEEDS TO KNOW WHEN A CHURCH NAME KEY LANDS, beyond the church-docs hub (which _replayChurchCalendar serves).
+// Serving requests and my own replies to them are sealed under this key but are NOT hub documents — they are
+// p-tagged to me, or written by me — so the hub replay never reached them and a request that arrived before
+// the key stayed locked for the whole session (audit 2026-09-30, findings 7 and 13). A reader that could not
+// open something keeps the raw event and re-reads it from here. Called on every usable envelope, not only the
+// first, because a rotation can be what makes an older document open.
+const _nameKeyListeners = new Set();
+function _onNameKey(fn) { _nameKeyListeners.add(fn); return () => _nameKeyListeners.delete(fn); }
 const _unhexF = (h) => new Uint8Array((String(h).match(/.{1,2}/g) || []).map(x => parseInt(x, 16)));
 // Re-open every sealed name we have already buffered for a church. A name key that arrives (or becomes usable)
 // AFTER the name documents is the normal case on a warm start, and without this the ciphertext just sits there.
@@ -7435,8 +7444,9 @@ window.Fellowship = {
     if (!me) { onReqs([]); return () => {}; }
     const REQUEST_D = 'trinityone/request:';
     const byId = new Map();
+    const lockedRaw = new Map();   // id -> the event we could not open yet, re-read when the name key lands
     const emit = () => onReqs([...byId.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)));
-    const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [30078], '#p': [me], '#t': [NET] }], {
+    const handlers = {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (!d.startsWith(REQUEST_D)) return;
@@ -7449,14 +7459,17 @@ window.Fellowship = {
         const cp = (e.tags.find(t => t[0] === 'church') || [])[1] || e.pubkey;
         const c = _openChurchDoc(cp, e.content);
         // A request this phone cannot open yet must show as LOCKED, never as nothing: dropping it silently
-        // is how a member never learns their church asked them to serve. The name-key replay re-delivers
-        // this event once the key lands, and the locked row is replaced by the real one.
-        if (c === null) { byId.set(id, { id, church: cp, _locked: true, ts: e.created_at }); emit(); return; }
+        // is how a member never learns their church asked them to serve. The raw event is kept and re-read
+        // when the church's name key lands (_onNameKey), and the locked row is replaced by the real one.
+        if (c === null) { lockedRaw.set(id, e); byId.set(id, { id, church: cp, _locked: true, ts: e.created_at }); emit(); return; }
+        lockedRaw.delete(id);
         byId.set(id, { id, church: cp, ...c, ts: e.created_at }); emit();
       },
       oneose() { if (byId.size) emit(); },   // sticky: don't blank the "you're serving" card on a reconnect's empty EOSE
-    });
-    return () => { try { sub.close(); } catch {} };
+    };
+    const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [30078], '#p': [me], '#t': [NET] }], handlers);
+    const stopKey = _onNameKey(() => { for (const e of [...lockedRaw.values()]) handlers.onevent(e); });
+    return () => { try { sub.close(); } catch {} stopKey(); };
   },
   // member -> church: reply to a serving request (accept/decline/swap) — p-tagged to the church
   async respondToServingRequest(churchNpub, requestId, verdict, swapTo) {
@@ -7489,13 +7502,18 @@ window.Fellowship = {
     const me = window.Fellowship.myPubkey;
     if (!me) { onReplies({}); return () => {}; }
     const RR = 'trinityone/reqreply:'; const byReq = {};
-    const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [30078], authors: [me], '#t': [NET] }], {
+    const lockedRaw = new Map();
+    const handlers = {
       // C-4: my own replies are sealed under the church name key now. The church is the ['p'] tag — these
       // are MY documents addressed to it. _openChurchDoc opens the cleartext ones written before C-4 too.
-      onevent(e) { const d = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (!d.startsWith(RR)) return; try { const cp = (e.tags.find(t => t[0] === 'p') || [])[1] || ''; const o = _openChurchDoc(cp, e.content); if (o) { byReq[d.slice(RR.length)] = o.v; onReplies({ ...byReq }); } } catch {} },
+      // A reply I cannot open yet is recorded as 'locked', never dropped: I DID answer, and dropping it put the
+      // request back in front of me as unanswered (audit 2026-09-30, finding 13). Re-read when the key lands.
+      onevent(e) { const d = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (!d.startsWith(RR)) return; const id = d.slice(RR.length); try { const cp = (e.tags.find(t => t[0] === 'p') || [])[1] || ''; const o = _openChurchDoc(cp, e.content); if (o) { lockedRaw.delete(id); byReq[id] = o.v; } else { lockedRaw.set(id, e); if (!byReq[id]) byReq[id] = 'locked'; } onReplies({ ...byReq }); } catch {} },
       oneose() { onReplies({ ...byReq }); },
-    });
-    return () => { try { sub.close(); } catch {} };
+    };
+    const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [30078], authors: [me], '#t': [NET] }], handlers);
+    const stopKey = _onNameKey(() => { for (const e of [...lockedRaw.values()]) handlers.onevent(e); });
+    return () => { try { sub.close(); } catch {} stopKey(); };
   },
   // member RSVP to a calendar event — one addressable doc per (member,event), p-tagged to church
   //

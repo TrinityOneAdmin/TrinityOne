@@ -8034,7 +8034,19 @@
       _nameKeyTs.set(cp, e.created_at || 0);
       _nameKeys.set(cp, r.filter((x) => typeof x === "string" && /^[0-9a-f]+$/i.test(x)).map(_unhexF));
     } catch (x) {
+      return;
     }
+    for (const fn of [..._nameKeyListeners]) {
+      try {
+        fn(cp);
+      } catch (x) {
+      }
+    }
+  }
+  var _nameKeyListeners = /* @__PURE__ */ new Set();
+  function _onNameKey(fn) {
+    _nameKeyListeners.add(fn);
+    return () => _nameKeyListeners.delete(fn);
   }
   var _unhexF = (h) => new Uint8Array((String(h).match(/.{1,2}/g) || []).map((x) => parseInt(x, 16)));
   function _ringId(cp) {
@@ -13964,8 +13976,9 @@
       }
       const REQUEST_D = "trinityone/request:";
       const byId = /* @__PURE__ */ new Map();
+      const lockedRaw = /* @__PURE__ */ new Map();
       const emit = () => onReqs([...byId.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)));
-      const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [30078], "#p": [me], "#t": [NET] }], {
+      const handlers = {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (!d.startsWith(REQUEST_D)) return;
@@ -13980,10 +13993,12 @@
           const cp = (e.tags.find((t) => t[0] === "church") || [])[1] || e.pubkey;
           const c = _openChurchDoc(cp, e.content);
           if (c === null) {
+            lockedRaw.set(id, e);
             byId.set(id, { id, church: cp, _locked: true, ts: e.created_at });
             emit();
             return;
           }
+          lockedRaw.delete(id);
           byId.set(id, { id, church: cp, ...c, ts: e.created_at });
           emit();
         },
@@ -13991,12 +14006,17 @@
           if (byId.size) emit();
         }
         // sticky: don't blank the "you're serving" card on a reconnect's empty EOSE
+      };
+      const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [30078], "#p": [me], "#t": [NET] }], handlers);
+      const stopKey = _onNameKey(() => {
+        for (const e of [...lockedRaw.values()]) handlers.onevent(e);
       });
       return () => {
         try {
           sub.close();
         } catch {
         }
+        stopKey();
       };
     },
     // member -> church: reply to a serving request (accept/decline/swap) — p-tagged to the church
@@ -14023,31 +14043,44 @@
       }
       const RR = "trinityone/reqreply:";
       const byReq = {};
-      const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [30078], authors: [me], "#t": [NET] }], {
+      const lockedRaw = /* @__PURE__ */ new Map();
+      const handlers = {
         // C-4: my own replies are sealed under the church name key now. The church is the ['p'] tag — these
         // are MY documents addressed to it. _openChurchDoc opens the cleartext ones written before C-4 too.
+        // A reply I cannot open yet is recorded as 'locked', never dropped: I DID answer, and dropping it put the
+        // request back in front of me as unanswered (audit 2026-09-30, finding 13). Re-read when the key lands.
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (!d.startsWith(RR)) return;
+          const id = d.slice(RR.length);
           try {
             const cp = (e.tags.find((t) => t[0] === "p") || [])[1] || "";
             const o = _openChurchDoc(cp, e.content);
             if (o) {
-              byReq[d.slice(RR.length)] = o.v;
-              onReplies({ ...byReq });
+              lockedRaw.delete(id);
+              byReq[id] = o.v;
+            } else {
+              lockedRaw.set(id, e);
+              if (!byReq[id]) byReq[id] = "locked";
             }
+            onReplies({ ...byReq });
           } catch {
           }
         },
         oneose() {
           onReplies({ ...byReq });
         }
+      };
+      const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [30078], authors: [me], "#t": [NET] }], handlers);
+      const stopKey = _onNameKey(() => {
+        for (const e of [...lockedRaw.values()]) handlers.onevent(e);
       });
       return () => {
         try {
           sub.close();
         } catch {
         }
+        stopKey();
       };
     },
     // member RSVP to a calendar event — one addressable doc per (member,event), p-tagged to church

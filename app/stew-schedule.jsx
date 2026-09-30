@@ -496,9 +496,14 @@ function DashRota({ onNewTeam }) {
 
   // verdict for an assigned slot: 'accept' | 'decline' | 'swap' | 'pending' (asked, no reply) | '' (not asked)
   const replyById = {}; replies.forEach(r => { if (r.id) replyById[r.id] = r.v; });
+  // A request this console cannot open yet (sealed under a name key that has not arrived) has no service, team
+  // or role — only who it was sent to. So for that person we cannot say which slot it is for: say "opening"
+  // rather than "not asked", and never re-ask them on the strength of a gap (audit 2026-09-30, finding 6). The
+  // engine re-reads it when the key lands, and the real row replaces it.
+  const lockedFor = (pub) => !!pub && requests.some(q => q && q._locked && q.memberPub === pub);
   const slotVerdict = (svcId, teamId, roleId, pub) => {
     const matches = requests.filter(q => q.serviceId === svcId && q.teamId === teamId && q.roleId === roleId && (!pub || !q.memberPub || q.memberPub === pub));
-    if (!matches.length) return '';
+    if (!matches.length) return lockedFor(pub) ? 'locked' : '';
     matches.sort((a, b) => (b.ts || 0) - (a.ts || 0));
     return replyById[matches[0].id] || 'pending';
   };
@@ -607,6 +612,9 @@ function DashRota({ onNewTeam }) {
       const a = assignMap[key]; if (!a || !a.pub) continue;
       const [teamId, roleId] = key.split('::');
       if (alreadyAsked(sId, teamId, roleId, a.pub)) continue;
+      // Holding a request to this person that we cannot open yet: it may BE this slot. Do not send a second one;
+      // count it as not asked yet, so the flash says so and a later Publish (key in hand) asks exactly if needed.
+      if (lockedFor(a.pub)) { jobs.push(Promise.resolve(null)); continue; }
       const team = teams.find(t => t.id === teamId); const m = team ? teamMeta(team) : {};
       const role = rosterFor(teamId).roles.find(r => r.id === roleId);
       jobs.push(Promise.resolve(window.Steward.sendServingRequest({ memberPub: a.pub, serviceId: sId, teamId, roleId, role: role ? role.name : '', teamName: m.name || (team && team.name) || 'Team', icon: m.icon, accent: m.accent, date: sDate, time: sTime, service: sName, note: `Can you serve on ${m.name || (team && team.name) || 'the team'} (${role ? role.name : ''})?` })).catch(() => null));
@@ -896,6 +904,7 @@ function DashRota({ onNewTeam }) {
                           decline: { fg: 'var(--clay)', bg: 'var(--clay)', soft: 9, line: 40, label: 'Declined', ic: 'x' },
                           swap: { fg: '#8a6717', bg: 'var(--gold)', soft: 10, line: 40, label: 'Wants swap', ic: 'swap' },
                           pending: { fg: 'var(--ink-3)', bg: 'var(--ink-3)', soft: 5, line: 20, label: 'Asked', ic: 'clock' },
+                          locked: { fg: 'var(--ink-3)', bg: 'var(--ink-3)', soft: 5, line: 20, label: 'Opening…', ic: 'clock' },
                           '': { fg: 'var(--sage)', bg: 'var(--sage)', soft: 8, line: 32, label: '', ic: 'check' },
                         };
                         const vm = vmap[verdict] || vmap[''];

@@ -1928,6 +1928,13 @@ let _localBlocked = new Set();
 // post events, and a group naming nobody is stewards-only as a consequence.
 const EVENT_POLICIES = ['leaders', 'stewards', 'everyone'];
 let _nameKeyRing = [];   // hex keys, current first — see ensureNameKeyForMembers
+// Readers that could not open a document keep it and re-read it when the ring is (re)filled. The serving board's
+// request and reply readers needed this: `_nameKeyRing` starts empty on every console boot and nothing re-ran
+// their subscriptions when it filled, so a request stayed "locked" — and the board re-asked everyone (audit
+// 2026-09-30, finding 6). Fired from both places the ring is set.
+const _nameKeyListeners = new Set();
+function _onNameKeyRing(fn) { _nameKeyListeners.add(fn); return () => _nameKeyListeners.delete(fn); }
+function _nameKeyRingChanged() { if (!_nameKeyRing.length) return; for (const fn of [..._nameKeyListeners]) { try { fn(); } catch (x) {} } }
 // ONE NAME-KEY PUBLISH AT A TIME. ensureNameKeyForMembers assigns the new ring synchronously and only
 // updates the recipient map after the envelope publishes — a gap that used to be nanoseconds. Sealing
 // per member and yielding every 25 stretched it into SECONDS on a large church, and the roster tick
@@ -7083,6 +7090,7 @@ window.Steward = {
     if (out === false) return false;
     _nameKeyRing = ring;
     _nameKeyDocKeys = keys;
+    _nameKeyRingChanged();
     return out;
   },
   // read the envelope back (the church's own copy) so the console can decrypt members' names
@@ -7103,6 +7111,7 @@ window.Steward = {
           if (Array.isArray(r)) {
             const had = _nameKeyReady();
             _nameKeyRing = r.filter(x => typeof x === 'string' && /^[0-9a-f]+$/i.test(x));
+            _nameKeyRingChanged();
             // THE KEY LANDING IS NEWS TO THE WEBSITE MIRROR. Nothing else tells it: _webSync's own 2 s retry
             // was the only thing that ever noticed, which is why that retry had to run for ever or the feed
             // would sit empty behind a key that had since arrived. Now the arrival itself asks for a sync.
@@ -9615,8 +9624,9 @@ window.Steward = {
   // the church's own "can you serve?" request docs (so the board can join replies to a slot)
   subscribeRequests(onRequests) {
     const byId = new Map();
+    const lockedRaw = new Map();   // id -> event not yet openable; re-read when the name key ring fills
     const emit = () => onRequests([...byId.values()]);
-    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
+    const handlers = {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (!d.startsWith(REQUEST_D)) return;
@@ -9627,18 +9637,22 @@ window.Steward = {
         // every cleartext request written before that. null means sealed with a key this console does not
         // hold yet — mark it locked rather than dropping it, so the board says so instead of showing a gap.
         const c = _openChurchDoc(e.content);
-        if (c === null) { byId.set(id, { id, memberPub, _locked: true, ts: e.created_at }); emit(); return; }
+        if (c === null) { lockedRaw.set(id, e); byId.set(id, { id, memberPub, _locked: true, ts: e.created_at }); emit(); return; }
+        lockedRaw.delete(id);
         byId.set(id, { id, memberPub, ...c, ts: e.created_at }); emit();
       },
       oneose() { emit(); },
-    });
-    return () => { try { sub.close(); } catch {} };
+    };
+    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], handlers);
+    const stopKey = _onNameKeyRing(() => { for (const e of [...lockedRaw.values()]) handlers.onevent(e); });
+    return () => { try { sub.close(); } catch {} stopKey(); };
   },
   // the steward's view of replies members sent back (reqreply docs p-tagged to the church)
   subscribeRequestReplies(onReplies) {
     const byId = new Map();
+    const lockedRaw = new Map();
     const emit = () => onReplies([...byId.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)));
-    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], '#p': [pub], '#t': [NET] }], {
+    const handlers = {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (!d.startsWith(REQREPLY_D)) return;
@@ -9648,12 +9662,15 @@ window.Steward = {
         // replies written before that still open. A reply we cannot read is marked, never silently dropped:
         // an unread "I can't make it" that shows as nothing leaves the slot looking unanswered.
         const c = _openChurchDoc(e.content);
-        if (c === null) { byId.set(id, { id, by: e.pubkey, _locked: true, ts: e.created_at }); emit(); return; }
+        if (c === null) { lockedRaw.set(id, e); byId.set(id, { id, by: e.pubkey, _locked: true, ts: e.created_at }); emit(); return; }
+        lockedRaw.delete(id);
         byId.set(id, { id, by: e.pubkey, ...c, ts: e.created_at }); emit();
       },
       oneose() { emit(); },
-    });
-    return () => { try { sub.close(); } catch {} };
+    };
+    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], '#p': [pub], '#t': [NET] }], handlers);
+    const stopKey = _onNameKeyRing(() => { for (const e of [...lockedRaw.values()]) handlers.onevent(e); });
+    return () => { try { sub.close(); } catch {} stopKey(); };
   },
   // member unavailability docs p-tagged to the church -> { memberPub: [dates] } (for "Away" + Auto-fill)
   subscribeUnavail(onUnavail) {

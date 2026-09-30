@@ -1633,7 +1633,9 @@ function App() {
   // then layer on any "can you serve?" request + my reply. (Before, this was request-only, so a member
   // placed on a published rota saw nothing until a request happened to arrive.)
   const _reqFor = (sid, tid, rid) => servReqs.find(r => r.serviceId === sid && r.teamId === tid && r.roleId === rid);
-  const _verdict = (q) => (q ? (servReplies[q.id] || 'pending') : 'none');
+  // 'locked': I answered, but my reply is sealed under a church key this phone does not hold yet. Show the slot
+  // as asked-and-waiting rather than guessing which answer it was; the real verdict replaces it when the key lands.
+  const _verdict = (q) => { if (!q) return 'none'; const v = servReplies[q.id]; return (!v || v === 'locked') ? 'pending' : v; };
   const _teamMeta = (id) => churchTeams.find(g => g.id === id) || {};
   const _roleName = (tid, rid) => { const r = churchRosters.find(x => x.team === tid); const role = r && (r.roles || []).find(ro => ro.id === rid); return role ? role.name : ''; };
   const myRotaSlots = [];
@@ -1654,7 +1656,10 @@ function App() {
     .filter(r => (r.people || []).some(p => p.pub === myServPub))
     .map(r => { const tm = _teamMeta(r.team); return { id: r.team, name: tm.name || 'Serving team', icon: tm.icon || 'hand', accent: tm.accent || 'var(--clay)' }; }) : [];
   // pending "can you serve?" asks not yet answered (these take priority over a plain rota placement)
-  const servPending = servReqs.filter(r => !servReplies[r.id] && (r.date || '') >= todayStr);
+  // A LOCKED request has no date, role or team until the church's name key opens it — keep it anyway. The date
+  // test dropped it (`'' >= today` is false), so a request this phone had received reached NO screen, and the
+  // "Locked" row built for exactly this case could never appear (audit 2026-09-30, finding 5).
+  const servPending = servReqs.filter(r => !servReplies[r.id] && (r._locked || (r.date || '') >= todayStr));
   const _pendKey = new Set(servPending.map(r => r.serviceId + '|' + r.teamId + '|' + r.roleId));
   const servConfirmed = myRotaSlots.filter(s => s._verdict !== 'decline' && s._verdict !== 'swap' && !_pendKey.has(s.serviceId + '|' + s.teamId + '|' + s.roleId));
   const servDeclined = myRotaSlots.filter(s => s._verdict === 'decline' || s._verdict === 'swap');
@@ -2260,6 +2265,9 @@ function App() {
       // know" or "Asked your leader" a frame later. Measured on a device 2026-08-19: a member on a published
       // rota with no matching request tapped "I'm away", saw the thank-you, and the relay received nothing.
       // The caller cannot know that without an answer, so give it one.
+      // …unless one has arrived and this phone cannot open it yet. Then the leader DID send it, and telling the
+      // member to ask for a re-publish sends every volunteer back to the steward over nothing.
+      if (!reqId && servReqs.some(r => r && r._locked)) { toast('Your church’s request is still opening on this phone — try again in a moment.'); return false; }
       if (!reqId) { toast('Your leader hasn’t sent a request for this yet — ask them to re-publish the rota.'); return false; }
       // AWAIT IT, AND SAY SO IF IT DID NOT GO. respondToServingRequest answers `{ ok, reason }` (it returned
       // `null` until 2026-09-16, which is what the next note is about).

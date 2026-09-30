@@ -40,6 +40,7 @@ function memberSide(me, withKey = true) {
     const NET = 'trinityone';
     const _nameKeys = new Map(), _nameKeyTs = new Map(), _sealedNames = new Map(), profiles = {};
     const _churchRoster = new Map();
+    const _nameKeyListeners = new Set();   // _ingestNameKey tells these a key landed (serving requests re-read on it)
     const _unhexF = (h) => new Uint8Array((String(h).match(/.{1,2}/g) || []).map(x => parseInt(x, 16)));
     const decrypt = nip44v2.decrypt, getConversationKey = nip44v2.utils.getConversationKey;
     const nip44d = decrypt, nip44ck = getConversationKey;
@@ -165,6 +166,7 @@ function blockRig(have) {
     let _localBlocked = new Set();
     let _nameKeyRing = ['11'.repeat(32)];
     let _nameKeyDocKeys = HAVE;
+    const _nameKeyRingChanged = () => {};   // tells the serving-board readers the ring filled; not under test here
     let _nameKeyChecked = true;
     const published = [];
     const churchSk = new Uint8Array(32).fill(3);
