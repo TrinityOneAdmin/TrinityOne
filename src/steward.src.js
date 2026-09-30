@@ -7106,7 +7106,7 @@ window.Steward = {
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], '#d': [NAMEKEY_D + cp] }], {
       onevent(e) {
         if (!_byChurchOrSteward(e)) return;   // church key or a CURRENT roster steward, same rule as every other envelope
-        if ((e.created_at || 0) < _nameKeyAt) return;   // an older copy from a relay that has not caught up — see _nameKeyAt
+        if (_authFuture(e) || (e.created_at || 0) < _nameKeyAt) return;   // future-dated (a wrong clock: the shared guard) or an older copy from a relay not caught up — see _nameKeyAt
         try {
           const env = JSON.parse(e.content || '{}');
           // Record the recipient map even when we cannot open our own copy: "an envelope exists" is exactly

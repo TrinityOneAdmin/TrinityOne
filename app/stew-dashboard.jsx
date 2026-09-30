@@ -5355,6 +5355,11 @@ function ReseatModal({ member, memberName, realName, isMinor, admittedList, onCl
   const sgNow = window.useStewardSafeguard ? window.useStewardSafeguard() : { minors: [], approved: [] };
   const _gdCheckin = window.useStewardGuardians ? window.useStewardGuardians() : { links: {}, closed: {} };
   const guardiansNow = _gdCheckin.links || {};
+  // …AND THE CLOSED PAIRS. reseatMember moves `closed` to the new key (src/steward.src.js), but only if it is
+  // handed them; without, it saved the guardian document with `closed` empty — so reconnecting any linked parent
+  // or child wiped every Decline and every removal, and each removed parent came back as a "Confirm" card
+  // (audit of a00d265, F2).
+  const guardiansClosedNow = _gdCheckin.closed || {};
   const blockedNow = window.useStewardBlocked ? window.useStewardBlocked() : [];
   const [taken, setTaken] = React.useState(false);   // "lost, or taken?" — see the note by the checkbox
   const [scan, setScan] = React.useState(false);
@@ -5379,7 +5384,7 @@ function ReseatModal({ member, memberName, realName, isMinor, admittedList, onCl
       // about all of them — including the stolen-phone block, which it never mentioned at all.
       const r = await window.Steward.reseatMember(member, newPub, {
         name: realName || '', reseats, admitted: admittedList,
-        minors: sgNow.minors, approved: sgNow.approved, guardians: guardiansNow,
+        minors: sgNow.minors, approved: sgNow.approved, guardians: guardiansNow, guardiansClosed: guardiansClosedNow,
         blocked: blockedNow, blockOld: taken,
       });
       setRes(r || {});

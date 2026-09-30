@@ -49,6 +49,8 @@ function console_() {
   const names = Object.keys(world);
   const body = `let _nameKeyRing = [], _nameKeyDocKeys = null, _nameKeyChecked = false;
     ${/var _nameKeyAt = 0;/.test(STEWARD) ? st('var _nameKeyAt = 0;') : ''}
+    ${st('var _CLOCK_SKEW = ')}
+    ${st('var _authFuture = (e) =>')}
     ${st('var _nameKeyListeners')}
     ${fn('function _nameKeyRingChanged()')}
     ${fn('function _nameKeyReady()')}
@@ -106,4 +108,17 @@ test("the console's OWN publish counts as the newest: an older copy arriving aft
   assert.notEqual(rotated, NEW, 'CONTROL: the rotation minted a new key');
   h.onevent(envelope(400, [NEW, OLD]));                          // another steward's copy from before our rotation
   assert.equal(c.api.ring()[0], rotated, "an older copy replaced the console's own newer rotation");
+});
+
+test('a copy dated in the FUTURE (a steward device with a wrong clock) does not pin the console to its ring', () => {
+  // The shared _authFuture guard, which a dozen other readers already use, now applies here too. Without it a
+  // fast-clocked device's update looked "newest" for as long as its clock was ahead, and the console refused
+  // every real update — including a Block's rotation (audit of a00d265, F1). Clock skew as a class is parked
+  // for a universal fix (owner, 2026-09-30); this is only the existing guard, reused.
+  const c = console_();
+  c.api.S.subscribeNameKey();
+  const h = c.handlers[0];
+  h.onevent(envelope(500 + 86400, [OLD]));                       // a device a day fast (the console's now() is 500)
+  h.onevent(envelope(400, [NEW, OLD]));                          // the real, current update
+  assert.equal(c.api.ring()[0], NEW, 'a future-dated copy pinned the console to its ring and refused the real update');
 });

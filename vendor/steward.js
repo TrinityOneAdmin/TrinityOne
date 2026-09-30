@@ -20580,7 +20580,7 @@ zoo`.split("\n");
       const sub = pool.subscribeMany(relays(), [{ kinds: [30078], "#d": [NAMEKEY_D + cp] }], {
         onevent(e) {
           if (!_byChurchOrSteward(e)) return;
-          if ((e.created_at || 0) < _nameKeyAt) return;
+          if (_authFuture(e) || (e.created_at || 0) < _nameKeyAt) return;
           try {
             const env = JSON.parse(e.content || "{}");
             if (env.keys && typeof env.keys === "object") {
