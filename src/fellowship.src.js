@@ -7691,8 +7691,12 @@ window.Fellowship = {
   // not-yet-member may read (canRead serves it to anyone), every church publishes one at setup and every
   // console boot repairs a missing one, and a TrinityOne relay ACCEPTS it only for a church it hosts
   // (gateway accept(): leaderOf/stewardCan on the d-tag's church). So a member's key can never have one.
-  // That guarantee holds only on our relay software, which is why the question goes ONLY to relays the gate
-  // has proved (_gate.refresh) — never wider than the old ungated read (CLAUDE.md rule 10).
+  // That guarantee holds only on our relay software, which is why the question goes ONLY to relays that are
+  // proved — never wider than the old ungated read (CLAUDE.md rule 10). PROVED WITHOUT RECORDING: a relay the
+  // gate already admits for this church (_gate.admits, read-only), or one that passes isNetworkRelay now — the
+  // same proof the gate and adoptInviteRelays use, which writes nothing. It used _gate.refresh(list, cp), and the
+  // gate keeps ONE church label per address, so checking church X re-labelled a shared relay away from a church
+  // the member already follows, dropping it there until the next re-proof (audit of 9862cdd, finding 4).
   //
   // THE ANSWER: 'church' if any proved relay returns that document; 'not-found' only if EVERY proved relay
   // really answered (a genuine end-of-results, not the library's timer) and the invite's own relay is not
@@ -7700,8 +7704,12 @@ window.Fellowship = {
   // Owner decision 2026-09-03: never say "not found" just because a relay didn't answer.
   async checkChurch(npubOrHex) {
     const cp = toPub(npubOrHex); if (!cp) return 'not-found';
-    let relays = [];
-    try { relays = await _gate.refresh([...churchRelaysRaw(), ..._loadChurchBoxes(cp)], cp); } catch (e) { relays = []; }
+    const candidates = [...new Set([...churchRelaysRaw(), ..._loadChurchBoxes(cp)].filter(Boolean))];
+    const proved = await Promise.all(candidates.map(async (u) => {
+      try { if (_gate.admits(u, cp)) return u; } catch (e) {}
+      try { return (await isNetworkRelay(cp, u)) ? u : null; } catch (e) { return null; }
+    }));
+    const relays = proved.filter(Boolean);
     if (!relays.length) return 'unknown';
     const d = 'trinityone/joinpolicy:' + cp;
     const answers = await Promise.all(relays.map(u => _askOneRelay(u, { kinds: [30078], '#d': [d] }, 8000)));

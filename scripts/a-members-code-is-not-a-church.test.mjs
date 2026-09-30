@@ -11,7 +11,8 @@
 // HOW IT ASSERTS. checkChurch and _askOneRelay are lifted from the SHIPPED bundle (vendor/fellowship.js) and run
 // with a real nostr-tools SimplePool against a real gateway. The church and the member are made the way the apps
 // make them: the church publishes its join policy, the member publishes a profile and joins. The only stubs are
-// the relay LIST inputs (churchRelaysRaw, the gate's refresh) and the invite-pending store — the question
+// the relay LIST inputs (churchRelaysRaw, the gate's read-only `admits`, the isNetworkRelay proof) and the
+// invite-pending store — the question
 // "church or member" is answered by the relay's data, never by a stub.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -43,20 +44,31 @@ function once(anchor) {
 }
 const ASK = once('function _askOneRelay(url, filter, ms)');
 const CHECK = once('async checkChurch(npubOrHex)');
+// esbuild renames the local isNetworkRelay (the relay-net import of the same name wins), and a stub under the
+// wrong name fails SILENTLY inside checkChurch's try — every relay would read as unproved. Read the name the
+// shipped code actually calls, and fail loudly if it cannot be found.
+const PROOF = (CHECK.match(/await (isNetworkRelay\d*)\(cp, u\)/) || [])[1];
+assert.ok(PROOF, 'checkChurch no longer proves relays with isNetworkRelay(cp, u) — re-read it before trusting this file');
 
-// A phone's worth of world. `relays` is what churchRelaysRaw() would return; `proved` is what the gate would
-// admit of it; `pending` is the invite-pending store.
+// A phone's worth of world. `relays` is what churchRelaysRaw() would return; `proved` (null = all) is which of
+// them pass the proof; `pending` is the invite-pending store. The gate's WRITE paths record every call, so a test
+// can prove the check never re-labels a relay in it.
 function phone({ relays = [URL_], proved = null, pending = [], as = null } = {}) {
   // `as`: the phone is signed in as this key and answers the relay's NIP-42 challenge, as the member app does.
   const pool = new SimplePool({ verifyEvent, websocketImplementation: WebSocket,
     ...(as ? { automaticallyAuth: () => async (evt) => finalizeEvent(evt, as.sk) } : {}) });
-  const seen = { refreshed: null };
+  const seen = { admitsAsked: [], gateWrites: [], proofs: [] };
   const world = {
     pool,
     toPub: (x) => (/^[0-9a-f]{64}$/.test(x) ? x : null),
     churchRelaysRaw: () => relays,
     _loadChurchBoxes: () => [],
-    _gate: { refresh: async (list, cp) => { seen.refreshed = { list, cp }; return proved === null ? list : proved; } },
+    _gate: {
+      admits: (u, cp) => { seen.admitsAsked.push(cp); return false; },   // nothing cached: every relay goes to the proof
+      refresh: (...a) => { seen.gateWrites.push(['refresh', ...a]); return []; },
+      admit: (...a) => { seen.gateWrites.push(['admit', ...a]); return []; },
+    },
+    [PROOF]: async (cp, u) => { seen.proofs.push([cp, u]); return proved === null || proved.includes(u); },
     _getInvitePending: () => pending,
   };
   const names = Object.keys(world);
@@ -142,10 +154,31 @@ test("the invite's own relay is still pending — \"unknown\", even though the s
   try { assert.equal(await p.check(stranger.pub), 'unknown'); } finally { p.close(); }
 });
 
-test('only relays the gate PROVED are asked (rule 10) — nothing proved is "unknown"', async () => {
+test('only PROVED relays are asked (rule 10) — nothing proved is "unknown"', async () => {
   const p = phone({ proved: [] });
   try {
     assert.equal(await p.check(church.pub), 'unknown', 'an unproved relay was believed');
-    assert.deepEqual(p.seen.refreshed && p.seen.refreshed.cp, church.pub, 'the gate was not asked about this church');
+    assert.deepEqual(p.seen.proofs.map(x => x[0]), [church.pub], 'the proof was not asked about this church');
+  } finally { p.close(); }
+});
+
+test('some relays proved, some not — ONLY the proved ones are asked (audit of 9862cdd, finding 5)', async () => {
+  // The silent relay is not proved. Asked, it would never answer and turn this into "unknown"; not asked, the
+  // one proved relay's genuine empty answer makes a stranger's code "not found". And it must see no REQ at all.
+  let reqs = 0; const onConn = (s) => s.on('message', (m) => { if (String(m).startsWith('["REQ"')) reqs++; });
+  silent.on('connection', onConn);
+  const p = phone({ relays: [URL_, SILENT_URL], proved: [URL_] });
+  try {
+    assert.equal(await p.check(stranger.pub), 'not-found', 'an unproved relay was asked');
+    assert.equal(reqs, 0, 'the unproved relay was sent a query');
+  } finally { p.close(); silent.off('connection', onConn); }
+});
+
+test('checking a code never writes to the gate, so it cannot re-label a relay another church uses (audit of 9862cdd, finding 4)', async () => {
+  const p = phone();
+  try {
+    assert.equal(await p.check(church.pub), 'church');
+    assert.deepEqual(p.seen.gateWrites, [], 'checkChurch called a gate method that records a proof');
+    assert.ok(p.seen.admitsAsked.length > 0, 'CONTROL: the read-only gate lookup was consulted');
   } finally { p.close(); }
 });
