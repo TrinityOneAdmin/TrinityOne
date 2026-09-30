@@ -980,6 +980,36 @@ async function _applyChurchList(cp) {
     _saveHW(cp, at);
   } finally { _applying.delete(cp); }
 }
+// M-7a: when none of a church's own boxes are reachable, re-resolve the stored relay name to follow a
+// tunnel move. Called from the churn handler in subscribeChurchRelays, AFTER _applyChurchList, so we
+// only re-resolve when the existing boxes failed their NIP-11 probe. Privacy (S3): the name resolution
+// hits the shared directory — do it only when the church's own boxes are all unreachable, exactly as
+// adoptInviteRelays does for the same reason.
+const _resolving = new Set();
+async function _reResolveRelayName(cp) {
+  if (_resolving.has(cp)) return;
+  // Do we have boxes that are already working? If so, no need to re-resolve.
+  const own = _churchRelays.get(cp);
+  if (own && own.size > 0) return;
+  // Look up the stored relay name for this church.
+  let relayName;
+  try { const ns = JSON.parse(localStorage.getItem('trinityone.relaynames') || '{}'); relayName = ns[cp]; } catch {}
+  if (!relayName) return;
+  _resolving.add(cp);
+  try {
+    let hit = null;
+    try { hit = await window.Fellowship.resolveRelayName(relayName); } catch (e) {}
+    if (!hit || !hit.url) return;
+    // Is this a new address we don't already have?
+    if ((window.Fellowship.relays || []).includes(hit.url)) return;
+    // Adopt through the same isNetworkRelay proof as the invite path.
+    let ok = false;
+    try { ok = await isNetworkRelay(cp, hit.url); } catch (e) {}
+    if (ok) {
+      if (!(window.Fellowship.relays || []).includes(hit.url)) window.Fellowship.setRelays([...(window.Fellowship.relays || []), hit.url]);
+    }
+  } finally { _resolving.delete(cp); }
+}
 // relaysForChurch(cp): the read set for ONE church. If the church declares >=2 enforcing relays of its own it's
 // self-sufficient — drop the a8 fallback FOR THIS CHURCH (a8 no longer sees or gatekeeps its traffic, and it's
 // no longer dependent on a8). Otherwise keep a8 (the pilot, and any church still on the shared relay). Per-church
@@ -1460,6 +1490,10 @@ function _relayInfo(wssUrl) {
       return (info && info.trinityone) ? { ...info.trinityone, name: info.name || '' } : null;
     } catch { return null; }   // fail-closed: unreachable/unparseable/timeout = no capability info
   })();
+  // M-7c: don't cache failed probes — a transient NIP-11 timeout must not strand a self-hosted member.
+  // The #3 recovery re-drive in subscribeChurchRelays re-reads this cache on every churn, so a cached
+  // null means "never probe again". Clearing on null lets the next churn retry.
+  p.then(v => { if (!v) _relayInfoCache.delete(wssUrl); });
   _relayInfoCache.set(wssUrl, p);
   return p;
 }
@@ -4154,14 +4188,24 @@ window.Fellowship = {
     // Resolving only when the slip's own address did not work leaves that request unmade in exactly the case
     // S3 is about (the church's box is up at the printed address). When the address IS dead the old code
     // fell through to the shared directory too, so nothing was traded away for the line that went.
-    if (got) return out;
+    if (got) {
+      // M-7a: persist the relay name even on the fast path — the ?relay= address worked NOW, but a tunnel
+      // restart will kill it. The name is what survives, and the member engine re-resolves it on dead boxes.
+      const nm0 = s.match(/[?&]relayname=([^&\s]+)/);
+      if (nm0) { try { const ns = JSON.parse(localStorage.getItem('trinityone.relaynames') || '{}'); ns[cp] = decodeURIComponent(nm0[1]); localStorage.setItem('trinityone.relaynames', JSON.stringify(ns)); } catch {} }
+      return out;
+    }
     const nm = s.match(/[?&]relayname=([^&\s]+)/);
     if (nm) {
+      const relayName = decodeURIComponent(nm[1]);
       let hit = null;
-      try { hit = await window.Fellowship.resolveRelayName(decodeURIComponent(nm[1])); } catch (e) { hit = null; }
+      try { hit = await window.Fellowship.resolveRelayName(relayName); } catch (e) { hit = null; }
       // resolveRelayName already refuses anything that is not wss:// — a directory record is a stranger's
       // string, and this is the second half of L5.
       if (hit && hit.url) await take(hit.url);
+      // M-7a: persist the relay name for this church so the member engine can re-resolve when the tunnel
+      // address dies. The key name deliberately holds no id, so a PIN lock does not wipe it.
+      try { const ns = JSON.parse(localStorage.getItem('trinityone.relaynames') || '{}'); ns[cp] = relayName; localStorage.setItem('trinityone.relaynames', JSON.stringify(ns)); } catch {}
     }
     if (out.refused.length) {
       try { window.dispatchEvent(new CustomEvent('trinity-relay-refused', { detail: { cp, urls: out.refused.slice() } })); } catch (e) {}
@@ -7573,7 +7617,7 @@ window.Fellowship = {
     // #3 recovery: a transient NIP-11 probe timeout (routine on 2G — the target network) must not strand a
     // self-hosted member. Re-drive the current list whenever the relay set churns (reconnect); _applyChurchList is a
     // cheap no-op once fully adopted (relay info is cached).
-    const onchurn = () => { if (_churchList.has(cp)) _applyChurchList(cp); };
+    const onchurn = () => { if (_churchList.has(cp)) _applyChurchList(cp); _reResolveRelayName(cp); };
     if (typeof window !== 'undefined' && window.addEventListener) window.addEventListener('trinity-relays', onchurn);
     return () => { try { if (typeof window !== 'undefined') window.removeEventListener('trinity-relays', onchurn); } catch {} try { sub.close(); } catch {} };
   },
@@ -7613,6 +7657,35 @@ window.Fellowship = {
     if (picked.length < n) for (const o of (offers || [])) { if (picked.length >= n) break; if (!picked.includes(o)) picked.push(o); }
     return picked;
   },
+  // M-9: probe whether a pubkey actually belongs to a church, before announcing membership. A church writes
+  // identifiable documents (kind-0 profile, stewards doc, group doc); an ordinary person's key has none of
+  // those in a TrinityOne context. Returns 'church' | 'not-found' | 'unknown'.
+  //   - 'church': at least one relay returned a church-authored document
+  //   - 'not-found': every relay answered EOSE with nothing (the key is real but not a church)
+  //   - 'unknown': at least one relay did not answer (timeout) and none said yes
+  // Owner decision 2026-09-03: never say "not found" just because a relay didn't answer.
+  async checkChurch(npubOrHex) {
+    const cp = toPub(npubOrHex); if (!cp) return 'not-found';
+    const relays = churchRelaysRaw();
+    if (!relays.length) return 'unknown';
+    // Query for any event authored by cp that only a church writes: kind-0, or a d-tagged doc with a
+    // trinityone/ prefix (stewards, groups, relay-net, etc.)
+    let found = false, allAnswered = true;
+    try {
+      const evts = await Promise.race([
+        pool.querySync(relays, [{ kinds: [0, 30078], authors: [cp], limit: 1 }]),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('checkChurch timeout')), 8000)),
+      ]);
+      if (evts && evts.length > 0) found = true;
+    } catch (e) {
+      // Timeout or network error — at least one relay did not answer
+      allAnswered = false;
+    }
+    if (found) return 'church';
+    if (allAnswered) return 'not-found';
+    return 'unknown';
+  },
+
   subscribeChurchProfile(churchNpub, onProfile) {
     const pubk = toPub(churchNpub);
     if (!pubk) { onProfile(null); return () => {}; }

@@ -830,10 +830,41 @@ function App() {
       // `trinity-relay-refused` with anything it turned away so the refusal can be shown where the person is.
       if (F.adoptInviteRelays) { try { F.adoptInviteRelays(npub, raw); } catch (e) {} }
     }
+    const alreadyFollowed = churches.find(c => c.id === npub);
     setChurches(cs => cs.find(c => c.id === npub) ? cs : [...cs, { id: npub, npub, name: 'Church', initials: 'CH', accent: 'var(--clay)', tagline: '', sub: 'Followed', verified: false, members: 0 }]);
     setActiveChurch(npub); lsSet('trinityone.activeChurch', npub);
-    // announce membership so the steward sees this person joined, even if they never post
-    if (window.Fellowship && window.Fellowship.announceMembership) window.Fellowship.announceMembership(npub);
+    // M-9: do NOT announce membership until we confirm this npub is actually a church. A valid npub that
+    // isn't a church (a steward's personal code, a friend's) used to be followed as "Church" with a signed
+    // membership document published — owner decision 2026-09-03: show "not found" instead. But NEVER say
+    // "not found" just because a relay didn't answer (thin link).
+    if (!alreadyFollowed && window.Fellowship && window.Fellowship.checkChurch) {
+      const _check = async (attempt) => {
+        try {
+          const result = await window.Fellowship.checkChurch(npub);
+          if (result === 'church') {
+            if (window.Fellowship.announceMembership) window.Fellowship.announceMembership(npub);
+          } else if (result === 'not-found') {
+            setChurches(cs => cs.filter(c => c.id !== npub));
+            setActiveChurch(ac => {
+              if (ac !== npub) return ac;
+              const rem = churches.filter(c => c.id !== npub);
+              const next = (rem.find(c => c.npub) || rem[0] || {}).id || null;
+              lsSet('trinityone.activeChurch', next);
+              return next;
+            });
+            toast('No church found for that code.');
+          } else if (attempt < 3) {
+            // 'unknown' — a relay didn't answer. Retry after a delay, but never say "not found".
+            setTimeout(() => _check(attempt + 1), 10000);
+          }
+          // After 3 retries of 'unknown', leave it: the profile subscription or heartbeat may succeed later.
+        } catch (e) {}
+      };
+      _check(0);
+    } else if (!alreadyFollowed) {
+      // Fallback when checkChurch is not available (stale bundle)
+      if (window.Fellowship && window.Fellowship.announceMembership) window.Fellowship.announceMembership(npub);
+    }
     if (!(window.Fellowship && window.Fellowship.subscribeChurchProfile)) return () => {};
     const _stopProfile = window.Fellowship.subscribeChurchProfile(npub, (p) => {
       if (!p) return;

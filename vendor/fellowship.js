@@ -7424,6 +7424,39 @@
       _applying.delete(cp);
     }
   }
+  var _resolving = /* @__PURE__ */ new Set();
+  async function _reResolveRelayName(cp) {
+    if (_resolving.has(cp)) return;
+    const own = _churchRelays.get(cp);
+    if (own && own.size > 0) return;
+    let relayName;
+    try {
+      const ns = JSON.parse(localStorage.getItem("trinityone.relaynames") || "{}");
+      relayName = ns[cp];
+    } catch {
+    }
+    if (!relayName) return;
+    _resolving.add(cp);
+    try {
+      let hit = null;
+      try {
+        hit = await window.Fellowship.resolveRelayName(relayName);
+      } catch (e) {
+      }
+      if (!hit || !hit.url) return;
+      if ((window.Fellowship.relays || []).includes(hit.url)) return;
+      let ok = false;
+      try {
+        ok = await isNetworkRelay2(cp, hit.url);
+      } catch (e) {
+      }
+      if (ok) {
+        if (!(window.Fellowship.relays || []).includes(hit.url)) window.Fellowship.setRelays([...window.Fellowship.relays || [], hit.url]);
+      }
+    } finally {
+      _resolving.delete(cp);
+    }
+  }
   function relaysForChurch(cp) {
     const own = cp && _churchRelays.get(cp);
     const global = window.Fellowship.relays || [];
@@ -7702,6 +7735,9 @@
         return null;
       }
     })();
+    p.then((v) => {
+      if (!v) _relayInfoCache.delete(wssUrl);
+    });
     _relayInfoCache.set(wssUrl, p);
     return p;
   }
@@ -10362,16 +10398,34 @@
         return false;
       };
       const got = await take(inviteUrl);
-      if (got) return out;
+      if (got) {
+        const nm0 = s.match(/[?&]relayname=([^&\s]+)/);
+        if (nm0) {
+          try {
+            const ns = JSON.parse(localStorage.getItem("trinityone.relaynames") || "{}");
+            ns[cp] = decodeURIComponent(nm0[1]);
+            localStorage.setItem("trinityone.relaynames", JSON.stringify(ns));
+          } catch {
+          }
+        }
+        return out;
+      }
       const nm = s.match(/[?&]relayname=([^&\s]+)/);
       if (nm) {
+        const relayName = decodeURIComponent(nm[1]);
         let hit = null;
         try {
-          hit = await window.Fellowship.resolveRelayName(decodeURIComponent(nm[1]));
+          hit = await window.Fellowship.resolveRelayName(relayName);
         } catch (e) {
           hit = null;
         }
         if (hit && hit.url) await take(hit.url);
+        try {
+          const ns = JSON.parse(localStorage.getItem("trinityone.relaynames") || "{}");
+          ns[cp] = relayName;
+          localStorage.setItem("trinityone.relaynames", JSON.stringify(ns));
+        } catch {
+        }
       }
       if (out.refused.length) {
         try {
@@ -14161,6 +14215,7 @@
       });
       const onchurn = () => {
         if (_churchList.has(cp)) _applyChurchList(cp);
+        _reResolveRelayName(cp);
       };
       if (typeof window !== "undefined" && window.addEventListener) window.addEventListener("trinity-relays", onchurn);
       return () => {
@@ -14221,6 +14276,32 @@
         if (!picked.includes(o)) picked.push(o);
       }
       return picked;
+    },
+    // M-9: probe whether a pubkey actually belongs to a church, before announcing membership. A church writes
+    // identifiable documents (kind-0 profile, stewards doc, group doc); an ordinary person's key has none of
+    // those in a TrinityOne context. Returns 'church' | 'not-found' | 'unknown'.
+    //   - 'church': at least one relay returned a church-authored document
+    //   - 'not-found': every relay answered EOSE with nothing (the key is real but not a church)
+    //   - 'unknown': at least one relay did not answer (timeout) and none said yes
+    // Owner decision 2026-09-03: never say "not found" just because a relay didn't answer.
+    async checkChurch(npubOrHex) {
+      const cp = toPub(npubOrHex);
+      if (!cp) return "not-found";
+      const relays = churchRelaysRaw();
+      if (!relays.length) return "unknown";
+      let found = false, allAnswered = true;
+      try {
+        const evts = await Promise.race([
+          pool.querySync(relays, [{ kinds: [0, 30078], authors: [cp], limit: 1 }]),
+          new Promise((_, rej) => setTimeout(() => rej(new Error("checkChurch timeout")), 8e3))
+        ]);
+        if (evts && evts.length > 0) found = true;
+      } catch (e) {
+        allAnswered = false;
+      }
+      if (found) return "church";
+      if (allAnswered) return "not-found";
+      return "unknown";
     },
     subscribeChurchProfile(churchNpub, onProfile) {
       const pubk = toPub(churchNpub);

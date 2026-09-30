@@ -15829,6 +15829,10 @@ zoo`.split("\n");
     if (changed) {
       _writeExtraRelays(extra);
       setNamedRelays(named);
+      try {
+        if (window.Steward && window.Steward.publishRelayList) window.Steward.publishRelayList();
+      } catch (e) {
+      }
     }
     _refreshingNames = false;
   }
