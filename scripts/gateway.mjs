@@ -645,7 +645,27 @@ function _releaseBlob(sha, cp) {
   return { remaining: 0, freed: sz };
 }
 function _churchBlobList(cp) { const m = _blobsByChurch.get(cp); if (!m) return []; const out = []; for (const [sha, size] of m) out.push({ sha, size }); return out; }
-function _churchDeletedBlobs(cp) { const out = []; try { for (const f of readdirSync(BLOB_DIR)) { if (!f.endsWith('.deleted')) continue; try { if (readFileSync(join(BLOB_DIR, f), 'utf8').trim() === cp) out.push(f.slice(0, -8)); } catch {} } } catch {} return out; }
+// A CHURCH'S DELETION IS RECORDED PER CHURCH: `<sha>.deleted.<cp>`. The older marker, `<sha>.deleted` holding one
+// church's key, is one per FILE — so when two churches shared a file and one deleted it, no marker could be written
+// (the other church still owned it), and the deleting church's partner relays kept serving it to its members.
+// Audit of 19e8e10, 2026-09-30. The old marker is still written when the last owner goes and still READ, as that
+// church's marker, so a relay's existing markers keep working and a downgrade loses nothing.
+// Readers: _churchDeletedBlobs (the /sync-media `deleted` list), _deletedFor (the sync pull's skip and the sync
+// delete pass). Writers: DELETE /blob, the sync delete pass. Cleared: PUT /blob by that church.
+function _markDeleted(sha, cp) { if (!cp) return; try { writeFileSync(join(BLOB_DIR, sha + '.deleted.' + cp), cp); } catch {} }
+function _deletedFor(sha, cp) {
+  if (existsSync(join(BLOB_DIR, sha + '.deleted.' + cp))) return true;
+  try { return readFileSync(join(BLOB_DIR, sha + '.deleted'), 'utf8').trim() === cp; } catch { return false; }
+}
+function _churchDeletedBlobs(cp) {
+  const out = new Set(); const tail = '.deleted.' + cp;
+  try { for (const f of readdirSync(BLOB_DIR)) {
+    if (f.endsWith(tail)) { out.add(f.slice(0, -tail.length)); continue; }
+    if (!f.endsWith('.deleted')) continue;
+    try { if (readFileSync(join(BLOB_DIR, f), 'utf8').trim() === cp) out.add(f.slice(0, -8)); } catch {}
+  } } catch {}
+  return [...out];
+}
 // P7: tally media usage AFTER the relay starts listening (was a synchronous statSync-per-blob walk blocking boot
 // on a media-heavy box). SET the totals from the disk scan (authoritative) rather than accumulate, so any upload
 // that lands during the brief window isn't double-counted — the scan already sees it on disk.
@@ -7212,6 +7232,7 @@ function serveStatic(req, res) {
       try {
         if (isNew || !_blobOwner(sha)) writeFileSync(join(BLOB_DIR, sha + '.church'), who.church);   // S4: owner sidecar BEFORE the blob is reachable. Set it on first store OR to backfill a missing one — but do NOT flip ownership when another church dedup-re-uploads an identical blob.
         try { unlinkSync(join(BLOB_DIR, sha + '.deleted')); } catch {}   // R-2: a re-upload lifts the tombstone, or a partner relay would refuse to re-pull it
+        try { unlinkSync(join(BLOB_DIR, sha + '.deleted.' + who.church)); } catch {}   // …and this church's own deletion marker
         _addBlobOwner(sha, who.church);   // R-4: track every church that uploaded this blob, so deleting one church's copy does not break the other's
         if (isNew) renameSync(tmp, finalPath); else cleanup();        // dedup: identical blob already stored → drop the temp
         const ct = req.headers['content-type'] || ''; if (ct && ct.indexOf('text/plain') !== 0) { try { writeFileSync(join(BLOB_DIR, sha + '.type'), ct); } catch {} }
@@ -7244,20 +7265,13 @@ function serveStatic(req, res) {
     // reads `owner`, a variable R-4 replaced with the `owners` Set — so it would have thrown
     // ReferenceError on EVERY blob delete. git could not see either problem.
     //
-    // THE TOMBSTONE GOES INSIDE the last-owner branch, and that placement is the whole point. `.deleted` is
-    // read two ways: the sync pull at _pullMedia skips any sha that has one, and _churchDeletedBlobs(cp)
-    // matches its CONTENT against a church to tell a partner what that church removed. Written while a
-    // co-owning church still holds the file, it would stop that church's own media syncing — the file is
-    // still on disk and still theirs, and a partner relay would refuse to fetch it for ever.
-    //
-    // KNOWN NARROWING, and it is the multi-owner case R-4's audit already called lenient: there is one
-    // tombstone per FILE, so it can name only one church. If A and B both own a blob, A deletes (no
-    // tombstone — correct, B still needs it) and B deletes later, the tombstone names B. A partner syncing
-    // A's media therefore does not learn A deleted it. Fixing that needs a per-church tombstone
-    // (`<sha>.deleted.<cp>`) and its own tests. Not done here: the single-owner path is the ordinary one,
-    // and this merge is not the place to add a feature neither branch had.
+    // THE DELETING CHURCH IS ALWAYS RECORDED, per church (see _markDeleted), whether or not another church still
+    // owns the file: its partner relays must release ITS copy. Each relay's sync pull skips a sha only for the
+    // church that deleted it, so a co-owner's media keeps syncing. The old per-FILE marker is still written when
+    // the last owner goes. (This replaces a note here that called the per-church marker future work.)
     const { remaining } = _releaseBlob(sha, who.church);
-    if (!remaining) { try { writeFileSync(file + '.deleted', who.church); } catch {} }   // R-2: last owner gone, so record it for the partner sync
+    _markDeleted(sha, who.church);
+    if (!remaining) { try { writeFileSync(file + '.deleted', who.church); } catch {} }   // R-2: last owner gone — the legacy per-file marker
     res.writeHead(200, H); res.end(JSON.stringify({ deleted: true, sha256: sha }));
     return;
   }
@@ -7780,7 +7794,7 @@ async function syncMediaFromPeer(cp, peerBase) {
   let man; try { const r = await fetch(manUrl, { headers: { Authorization: relayProof(manUrl, 'GET', cp) } }); if (!r.ok) return 0; man = await r.json(); } catch { return 0; }
   let pulled = 0;
   for (const b of (man && man.blobs) || []) {
-    if (!b || !/^[0-9a-f]{64}$/.test(b.sha) || existsSync(join(BLOB_DIR, b.sha)) || existsSync(join(BLOB_DIR, b.sha + '.deleted'))) continue;
+    if (!b || !/^[0-9a-f]{64}$/.test(b.sha) || existsSync(join(BLOB_DIR, b.sha)) || _deletedFor(b.sha, cp)) continue;   // skip only what THIS church deleted
     const _mc = effMediaCap(), _cc = effChurchCap();                                          // honour panel-set caps, not just env
     if (_mc && _mediaBytesTotal + (b.size || 0) > _mc) break;                                 // this relay's media is full
     if (_cc && (_mediaBytesByChurch.get(cp) || 0) + (b.size || 0) > _cc) break;
@@ -7806,16 +7820,15 @@ async function syncMediaFromPeer(cp, peerBase) {
   for (const sha of (man && man.deleted) || []) {
     if (!/^[0-9a-f]{64}$/.test(sha)) continue;
     const file = join(BLOB_DIR, sha);
-    if (!existsSync(file) && !existsSync(file + '.deleted')) continue;
-    if (existsSync(file)) {
-      // A partner says THIS church deleted it: release this church's hold, exactly as DELETE /blob does. Another
-      // church that still owns the file keeps it, and gets no tombstone — a tombstone would make its partner
-      // relays delete their copy too (audit 2026-09-30 finding 2).
-      const owners = _blobOwners(sha);
-      if (owners.size && !owners.has(cp)) continue;
-      if (_releaseBlob(sha, cp).remaining) continue;
-    }
-    if (!existsSync(file + '.deleted')) { try { writeFileSync(file + '.deleted', cp); } catch {} }
+    if (!existsSync(file)) continue;   // nothing of this church's here to release
+    // A partner says THIS church deleted it: release this church's hold, exactly as DELETE /blob does, and record
+    // the deletion for this church so it travels on to this relay's own partners. Another church that still owns
+    // the file keeps it (audit 2026-09-30 finding 2).
+    const owners = _blobOwners(sha);
+    if (owners.size && !owners.has(cp)) continue;
+    const { remaining } = _releaseBlob(sha, cp);
+    _markDeleted(sha, cp);
+    if (!remaining && !existsSync(file + '.deleted')) { try { writeFileSync(file + '.deleted', cp); } catch {} }
   }
   return pulled;
 }

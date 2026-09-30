@@ -33,7 +33,7 @@ import { generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure
 import { npubEncode } from 'nostr-tools/nip19';
 import { requireFreePort } from './test-ports.mjs';
 
-const PA = 8731, PB = 8732, PC = 8733;   // unique across scripts/*.test.mjs AND scripts/*.probe.mjs
+const PA = 8731, PB = 8732, PC = 8733, PD = 8734;   // unique across scripts/*.test.mjs AND scripts/*.probe.mjs
 const CAP = 300;                          // per-church media cap on relay C
 const MEMBER_D = 'trinityone/member:', RELAYS_D = 'trinityone/relays', NET = 'trinityone';
 const ROOT = new URL('..', import.meta.url).pathname;
@@ -85,14 +85,15 @@ const admin = r => JSON.parse(readFileSync(join(r.dir, 'admin.json'), 'utf8')).t
 const relayPub = r => JSON.parse(readFileSync(join(r.dir, 'relay-key.json'), 'utf8')).pub;
 async function config(r, body) { const res = await fetch(`http://127.0.0.1:${r.port}/config`, { method: 'POST', headers: { Authorization: 'Bearer ' + admin(r), 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); return [res.status, await res.json()]; }
 
-let A, B, C;
+let A, B, C, D;
 before(async () => {
-  for (const p of [PA, PB, PC]) await requireFreePort(p, 'relay-co-owned-media-survives.test.mjs');
+  for (const p of [PA, PB, PC, PD]) await requireFreePort(p, 'relay-co-owned-media-survives.test.mjs');
   A = spawnRelay(PA, [c1, c2]);                                  // hosts both churches
   B = spawnRelay(PB, [c1]);                                      // a partner relay of church 1 only
   C = spawnRelay(PC, [c1, c2], { RELAY_CHURCH_MEDIA_CAP: String(CAP) });
-  await Promise.all([ready(PA), ready(PB), ready(PC)]);
-  for (const port of [PA, PC]) {                                 // m2 is a member of church 2
+  D = spawnRelay(PD, [c2]);                                      // a partner relay of church 2 only
+  await Promise.all([ready(PA), ready(PB), ready(PC), ready(PD)]);
+  for (const port of [PA, PC, PD]) {                                 // m2 is a member of church 2
     const ws = await connect(port);
     assert.equal(await send(ws, finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', MEMBER_D + c2.pub]], content: JSON.stringify({ joined: now() }) }, m2.sk)), true, 'm2 joins c2');
     ws.close();
@@ -102,6 +103,13 @@ before(async () => {
   for (const port of [PA, PB]) {
     const ws = await connect(port);
     assert.equal(await send(ws, finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', RELAYS_D], ['t', NET]], content: JSON.stringify(list) }, c1.sk)), true, 'trusted-relays doc');
+    ws.close();
+  }
+  // church 2 names A and D, on both, so D will sync church 2 from A
+  const list2 = [{ pubkey: relayPub(A), url: `ws://127.0.0.1:${PA}` }, { pubkey: relayPub(D), url: `ws://127.0.0.1:${PD}` }];
+  for (const port of [PA, PD]) {
+    const ws = await connect(port);
+    assert.equal(await send(ws, finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', RELAYS_D], ['t', NET]], content: JSON.stringify(list2) }, c2.sk)), true, 'trusted-relays doc (church 2)');
     ws.close();
   }
   await sleep(400);
@@ -170,4 +178,37 @@ test("a church's usage never exceeds its cap by sharing then deleting a file (fi
   assert.ok(e.totalBytes <= CAP, `church 2 holds ${e.totalBytes} bytes against a ${CAP}-byte cap`);
   assert.equal(e.totalBytes, Z.length);
   assert.equal(await play(PC, m2, sx), 401, 'CONTROL: church 2 no longer owns X');
+});
+
+async function syncNow(r) { const res = await fetch(`http://127.0.0.1:${r.port}/sync-now`, { method: 'POST', headers: { Authorization: 'Bearer ' + admin(r) } }); assert.equal(res.status, 200, 'sync-now'); await res.text(); }
+async function until(pred, what) { for (let i = 0; i < 80; i++) { if (pred()) return; await sleep(100); } assert.fail('timed out waiting for: ' + what); }
+
+test("a church's delete of a SHARED file reaches its partner relay (audit of 19e8e10, finding 1)", async () => {
+  // Church 1 and church 2 both upload X to A. D is church 2's partner, so D copies X for church 2.
+  // Church 2 then deletes X on A — church 1 still owns it there, so A keeps the file. D must still let go.
+  const X = file(180), sx = shaOf(X);
+  assert.equal(await up(PA, c1, X), 201); assert.equal(await up(PA, c2, X), 201);
+  await syncNow(D);
+  await until(() => existsSync(join(D.dir, 'blobs', sx)), 'D to copy X for church 2');
+  assert.equal(await play(PD, m2, sx), 200, 'CONTROL: church 2 member plays the copy on its partner relay');
+  assert.equal(await del(PA, c2, sx), 200);
+  assert.ok(existsSync(join(A.dir, 'blobs', sx)), 'CONTROL: A keeps the file for church 1');
+  await syncNow(D);
+  await until(() => !existsSync(join(D.dir, 'blobs', sx)), 'D to act on church 2\'s delete');
+  assert.equal(await play(PD, m2, sx), 404, "church 2 deleted the sermon, and its partner relay still serves it to church 2's members");
+  // …and D does not pull it back from A on the next pass, although A still holds it for church 1
+  await syncNow(D); await sleep(800);
+  assert.equal(existsSync(join(D.dir, 'blobs', sx)), false, 'D pulled back a file church 2 deleted');
+  assert.equal(await del(PA, c1, sx), 200);   // leave A clean
+});
+
+test("sharing a file that would take a church over its cap is refused; its own file is not (finding 8)", async () => {
+  for (const c of [c1, c2]) for (const b of (await exportMedia(PC, c)).blobs) assert.equal(await del(PC, c, b.sha), 200);   // both churches start at 0
+  const X = file(200), sx = shaOf(X), Y = file(200);
+  assert.equal(await up(PC, c2, Y), 201, 'church 2 now holds 200 of 300');
+  assert.equal(await up(PC, c1, X), 201);
+  assert.equal(await up(PC, c2, X), 507, 'sharing a 200-byte file at 200 of 300 must be refused');
+  assert.deepEqual(JSON.parse(readFileSync(join(C.dir, 'blobs', sx + '.owners'), 'utf8')), [c1.pub], 'a refused share still made church 2 an owner');
+  assert.equal(await up(PC, c2, Y), 201, "re-uploading church 2's OWN file must not be refused at its cap");
+  assert.equal((await exportMedia(PC, c2)).totalBytes, Y.length, 'church 2 was billed twice for its own file');
 });
