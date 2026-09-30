@@ -20,7 +20,7 @@ import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools/pure
 import { npubEncode } from 'nostr-tools/nip19';
 import { requireFreePort } from './test-ports.mjs';
 
-const PORT = 8997;
+const PORT = 8741;
 const WS_URL = `ws://127.0.0.1:${PORT}/relay`;
 const NET = 'trinityone';
 

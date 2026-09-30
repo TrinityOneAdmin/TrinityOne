@@ -138,8 +138,13 @@ test('every activeChurch resolution still funnels through the same find()', () =
   // gate. Identical in shape to the safeguarding subscription beside it, and it benefits from the heal:
   // with a stale id np is undefined, the gate falls back to the default (not minor), which is the SAFE
   // direction for the events card — it shows rather than hides.
-  assert.equal(sites.length, 43,
-    `the active-church resolution sites changed (${sites.length} vs 43) — if that is deliberate, confirm each new one benefits from the heal, then update this count`);
+  // 43 → 44 on 2026-09-30: `_activeCp` in the serving derivation (660f063), which resolves the active church to its
+  // hex key so a LOCKED serving request is counted only for the active church. Identical in shape to the others,
+  // and it benefits from the heal: with a stale id it resolves to no key, no locked request is counted (the safe
+  // direction — nothing is shown as waiting that the member could not open here), and the heal puts it right on
+  // the same pass as everything else.
+  assert.equal(sites.length, 44,
+    `the active-church resolution sites changed (${sites.length} vs 44) — if that is deliberate, confirm each new one benefits from the heal, then update this count`);
 });
 
 test('a MISSING active church heals too, not only a dangling one', () => {

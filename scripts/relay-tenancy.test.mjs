@@ -37,12 +37,12 @@ const WS_URL = `ws://127.0.0.1:${PORT}/relay`;
 const D = {
   member: 'trinityone/member:', group: 'trinityone/group:', roster: 'trinityone/roster:',
   request: 'trinityone/request:', rota: 'trinityone/rota:', network: 'trinityone/network:',
-  // `highlights` names the member's own MyData document. It WAS trinityone/highlights; the owner's 2026-09-28
+  // `mydata` names the member's own MyData document. It WAS trinityone/highlights; the owner's 2026-09-28
   // decision made personal notes phone-only and 4a07065 stopped the relay accepting that type, so the seed below
   // was refused, nothing was stored, test 5 failed and two "not served to strangers" checks passed over nothing.
   // chatseen is the one MyData type that still syncs, with the same author-only read rule — so the checks keep
   // their meaning (found 2026-09-30).
-  minors: 'trinityone/minors:', joinpolicy: 'trinityone/joinpolicy:', highlights: 'trinityone/chatseen',
+  minors: 'trinityone/minors:', joinpolicy: 'trinityone/joinpolicy:', mydata: 'trinityone/chatseen',
 };
 const now = () => Math.floor(Date.now() / 1000);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -107,7 +107,7 @@ before(async () => {
   await publish(ws, finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', D.joinpolicy + aPub]], content: JSON.stringify({ approval: false }) }, aSk));
   // Alice's personal MyData doc. accept() requires isMember to write one, so the AUTHORS of these docs are by
   // construction the congregation — anonymously readable, they were a roster in disguise.
-  await publish(ws, finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', D.highlights]], content: JSON.stringify({ v: [{ ref: 'John 3:16' }] }) }, aliceSk));
+  await publish(ws, finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', D.mydata]], content: JSON.stringify({ v: [{ ref: 'John 3:16' }] }) }, aliceSk));
   // Church B declares a network. Before C4 this key became a leader for EVERY church on the relay.
   await publish(ws, finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', D.network + netPub]], content: JSON.stringify({ name: 'Some Network' }) }, bSk));
   ws.close();
@@ -129,9 +129,9 @@ test('C1: an ANONYMOUS client cannot read group / roster / request / rota docs',
 
 test('C1: an ANONYMOUS client cannot enumerate the congregation via MyData docs', async () => {
   const ws = await connect();
-  const got = await reqCollect(ws, 's2', { kinds: [30078], '#d': [D.highlights] }, null);
+  const got = await reqCollect(ws, 's2', { kinds: [30078], '#d': [D.mydata] }, null);
   ws.close();
-  assert.equal(got.length, 0, 'trinityone/highlights served to anon — its authors ARE the church roster');
+  assert.equal(got.length, 0, 'a member\u2019s MyData document (' + D.mydata + ') served to anon — its authors ARE the church roster');
 });
 
 test('C1 control: joinpolicy stays PUBLIC (a not-yet-joined member must read it)', async () => {
@@ -151,9 +151,9 @@ test('C1 control: an authenticated MEMBER can still read her church’s group + 
 
 test('C1 control: an author can always read her OWN MyData doc back', async () => {
   const ws = await connect();
-  const got = await reqCollect(ws, 's5', { kinds: [30078], '#d': [D.highlights] }, aliceSk, 1200);
+  const got = await reqCollect(ws, 's5', { kinds: [30078], '#d': [D.mydata] }, aliceSk, 1200);
   ws.close();
-  assert.equal(got.length > 0, true, 'author cannot read her own highlights — MyData sync would break');
+  assert.equal(got.length > 0, true, 'author cannot read her own MyData document (' + D.mydata + ') — MyData sync would break');
 });
 
 // ── C3: cross-tenant ──────────────────────────────────────────────────────────────────────────────
@@ -251,5 +251,5 @@ test('an unaffiliated outsider who authenticates reads none of it', async () => 
   ws.close();
   assert.equal(hasD(got, D.roster + 'g1'), false, 'a stranger read a church roster by merely authenticating');
   assert.equal(hasD(got, D.group + 'g1'), false, 'a stranger read an invite-only group');
-  assert.equal(hasD(got, D.highlights), false, 'a stranger read another member’s MyData');
+  assert.equal(hasD(got, D.mydata), false, 'a stranger read another member’s MyData');
 });

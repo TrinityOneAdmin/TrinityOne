@@ -18,7 +18,7 @@ import { generateSecretKey, getPublicKey } from 'nostr-tools/pure';
 import { npubEncode } from 'nostr-tools/nip19';
 import { requireFreePort } from './test-ports.mjs';
 
-const PORT = 8819;
+const PORT = 8742;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 let relay, dataDir;

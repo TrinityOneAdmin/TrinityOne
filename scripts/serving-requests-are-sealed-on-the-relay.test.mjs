@@ -36,6 +36,7 @@ import { generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure
 import { npubEncode } from 'nostr-tools/nip19';
 import { v2 as nip44 } from 'nostr-tools/nip44';
 import { fnBody } from './test-slice.mjs';
+import { requireFreePort } from './test-ports.mjs';
 
 const ROOT = new URL('../', import.meta.url);
 const STEW = readFileSync(new URL('vendor/steward.js', ROOT), 'utf8');
@@ -199,6 +200,7 @@ test('a seized relay disk holds no role, team or date for a serving request', as
   assert.ok(svcEvt && reqEvt, 'the console produced fewer than the two events this test sends');
 
   const DATA = mkdtempSync(join(tmpdir(), 'c4-relay-'));
+  await requireFreePort(PORT, 'serving-requests-are-sealed-on-the-relay.test.mjs');   // a leftover relay must not answer for this one
   const relay = spawn(process.execPath, ['scripts/gateway.mjs', String(PORT)], {
     cwd: new URL('.', ROOT).pathname,
     env: { ...process.env, TRINITY_DATA_DIR: DATA, CHURCH_NPUB: npubEncode(church.pub), RELAY_MAX_EVENTS: '5000' },

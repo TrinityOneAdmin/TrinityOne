@@ -83,7 +83,9 @@ const send = (ws, evt) => new Promise(res => { const on = d => { const m = JSON.
 const connect = () => new Promise((res, rej) => { const s = new WebSocket(URL_); s.on('open', () => res(s)); s.on('error', rej); });
 
 before(async () => {
-  for (const p of [PORT, DEAD, SILENT]) await requireFreePort(p, 'a-members-code-is-not-a-church.test.mjs');
+  await requireFreePort(PORT, 'a-members-code-is-not-a-church.test.mjs');
+  await requireFreePort(DEAD, 'a-members-code-is-not-a-church.test.mjs (the port that must stay unreachable)');
+  await requireFreePort(SILENT, 'a-members-code-is-not-a-church.test.mjs (the silent relay)');
   dir = mkdtempSync(join(tmpdir(), 'trin-churchcheck-'));
   relay = spawn(process.execPath, ['scripts/gateway.mjs', String(PORT)], {
     cwd: new URL('..', import.meta.url).pathname,
