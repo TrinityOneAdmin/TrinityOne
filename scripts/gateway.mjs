@@ -7856,7 +7856,11 @@ async function syncMediaFromPeer(cp, peerBase) {
       for (;;) { const { done, value } = await reader.read(); if (done) break; n += value.length; if (n > MAX_BLOB) { bad = true; try { await reader.cancel(); } catch {} break; } hash.update(value); if (!out.write(Buffer.from(value))) await new Promise(res => out.once('drain', res)); }
       await new Promise((res, rej) => out.end(err => err ? rej(err) : res()));
       if (bad || hash.digest('hex') !== b.sha) { try { unlinkSync(tmp); } catch {} continue; }   // content-addressed integrity check
-      if (onDisk) {   // proved: the peer holds these exact bytes. Keep the copy we have; take only the hold.
+      // proved: the peer holds these exact bytes. Keep the copy we have and take only the hold — IF we still have
+      // it. The download is awaited, and the file's only other owner can delete it in that time; taking the hold
+      // then made this church the owner of a file that was gone (audit of d86fbac/2065dba, #3). In that case the
+      // verified download simply becomes the copy, through the ordinary path below.
+      if (onDisk && existsSync(join(BLOB_DIR, b.sha))) {
         try { unlinkSync(tmp); } catch {}
         _addBlobOwner(b.sha, cp, bAt); _billBlob(cp, b.sha, diskSz); _clearDeleted(b.sha, cp); pulled++;
         continue;

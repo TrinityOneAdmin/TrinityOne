@@ -334,3 +334,67 @@ test("a relay remembers each church's hold time across a restart (audit of 9b335
   await syncNow(A); await sleep(1200);
   assert.equal(await play(PA, m2, sy), 200, "after a restart, an older deletion on D erased church 2's newer upload on A");
 });
+
+// ── After the audit of d86fbac / 2065dba ─────────────────────────────────────────────────────────────────────
+// A fake partner for a church on A: lists what it is told to, serves bytes only when released.
+async function fakePartner(cp, { blobs = [], deleted = [], deletedAt = {} }) {
+  let release = null, asked = false; const gate = new Promise(r => { release = r; });
+  const server = createServer(async (req, res) => {
+    // Answer ONLY for the church this partner serves, as a real one does (/sync-media?church=<cp>). Answering
+    // every church let church 3 — still pointed at this port by the take-over test — re-create the file and
+    // hide the very failure this is meant to catch (found by sabotage: the re-check removed, the file test passed).
+    const forUs = new URL(req.url, 'http://x').searchParams.get('church') === cp;
+    if (req.url.startsWith('/sync-media')) { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(forUs ? { church: cp, blobs: blobs.map(b => ({ sha: b.sha, size: b.size, at: b.at })), ...(deleted.length ? { deleted, deletedAt } : {}) } : { church: cp, blobs: [] })); return; }
+    const hit = forUs && blobs.find(b => req.url.startsWith('/sync-blob/' + b.sha));
+    if (hit) { asked = true; await gate; res.writeHead(200); res.end(hit.bytes); return; }
+    res.writeHead(404); res.end();
+  });
+  await new Promise(r => server.listen(PF, '127.0.0.1', r));
+  const ws = await connect(PA);
+  return { server, release: () => release(), asked: () => asked, close: () => new Promise(r => server.close(r)), ws };
+}
+async function partnerList(church, url) {
+  const ws = await connect(PA);
+  assert.equal(await send(ws, finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', RELAYS_D], ['t', NET]], content: JSON.stringify([{ pubkey: 'ee'.repeat(32), url }]) }, church.sk)), true, 'partner list');
+  ws.close(); await sleep(300);
+}
+
+test('a file deleted while the relay is downloading it to check does not leave a church owning nothing (audit #3)', async () => {
+  // Church 1 is the only owner of X on A. Church 4's partner serves X — slowly. While A is downloading it to check,
+  // church 1 deletes X. The verified download must become the copy, not be thrown away beside a hold on nothing.
+  const c4 = K();
+  const [s0] = await config(A, { addChurch: { npub: npubEncode(c4.pub) } }); assert.equal(s0, 200, 'addChurch');
+  const X = file(280), sx = shaOf(X);
+  assert.equal(await up(PA, c1, X), 201);
+  const fp = await fakePartner(c4.pub, { blobs: [{ sha: sx, size: X.length, at: Date.now(), bytes: X }] });
+  try {
+    await partnerList(c4, `ws://127.0.0.1:${PF}`);
+    const syncing = syncNow(A);                                     // /sync-now answers when the pass ENDS — do not wait on it here
+    await until(() => fp.asked(), 'A to start downloading X from church 4\'s partner');
+    assert.equal(await del(PA, c1, sx), 200);                       // the only other owner deletes it mid-download
+    assert.equal(has(A, sx), false, 'CONTROL: the delete removed the file');
+    fp.release();
+    await syncing;
+    const owners = () => { try { return JSON.parse(readFileSync(join(A.dir, 'blobs', sx + '.owners'), 'utf8')); } catch { return []; } };
+    await until(() => owners().includes(c4.pub), 'A to finish the pull for church 4');
+    assert.equal(has(A, sx), true, 'church 4 was made the owner of a file that is no longer on disk');
+  } finally { fp.ws.close(); await fp.close(); }
+});
+
+test("a partner's deletion time is capped at the relay's clock too (audit #6)", async () => {
+  // Church 4 holds Y on A. Its partner reports Y deleted at 9e15. The deletion applies — it is the church's own
+  // partner — but the record must not carry a time from the future, which would refuse every later copy for ever.
+  const c4 = K();
+  const [s0] = await config(A, { addChurch: { npub: npubEncode(c4.pub) } }); assert.equal(s0, 200, 'addChurch');
+  const Y = file(290), sy = shaOf(Y);
+  assert.equal(await up(PA, c4, Y), 201);
+  const fp = await fakePartner(c4.pub, { deleted: [sy], deletedAt: { [sy]: 9e15 } });
+  try {
+    await partnerList(c4, `ws://127.0.0.1:${PF}`);
+    await syncNow(A);
+    const marker = join(A.dir, 'blobs', sy + '.deleted.' + c4.pub);
+    await until(() => existsSync(marker), 'A to record church 4\'s deletion');
+    const at = JSON.parse(readFileSync(marker, 'utf8')).at;
+    assert.ok(at <= Date.now(), `a partner's future deletion time was stored: ${at}`);
+  } finally { fp.ws.close(); await fp.close(); }
+});
