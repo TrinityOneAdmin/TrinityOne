@@ -21,61 +21,11 @@ test('ENGINE: checkChurch is in the shipped bundle', () => {
     'checkChurch is not in the shipped bundle — a valid npub that is not a church will be followed as "Church"');
 });
 
-test('ENGINE: checkChurch returns "not-found" when no relay returns any church event', async () => {
-  const checkBody = fnBody(BUNDLE, 'async checkChurch(npubOrHex)', 'checkChurch');
-
-  // Stub: pool.querySync returns [] (every relay answered EOSE with nothing)
-  const pool = {
-    querySync: async () => [],
-  };
-  const fn = new Function('toPub', 'churchRelaysRaw', 'pool', 'Promise', 'setTimeout', 'Error',
-    'return (async function ' + checkBody.slice(checkBody.indexOf('checkChurch')) + ')')(
-    (x) => x.length === 64 ? x : 'a'.repeat(64),  // toPub
-    () => ['wss://relay1.example.com'],             // churchRelaysRaw
-    pool, Promise, setTimeout, Error,
-  );
-
-  const result = await fn('a'.repeat(64));
-  assert.equal(result, 'not-found',
-    'checkChurch should return "not-found" when every relay answered with nothing. Got: ' + result);
-});
-
-test('ENGINE: checkChurch returns "church" when a relay returns an event', async () => {
-  const checkBody = fnBody(BUNDLE, 'async checkChurch(npubOrHex)', 'checkChurch');
-
-  const pool = {
-    querySync: async () => [{ id: 'e1', pubkey: 'a'.repeat(64), kind: 0, content: '{}' }],
-  };
-  const fn = new Function('toPub', 'churchRelaysRaw', 'pool', 'Promise', 'setTimeout', 'Error',
-    'return (async function ' + checkBody.slice(checkBody.indexOf('checkChurch')) + ')')(
-    (x) => x.length === 64 ? x : 'a'.repeat(64),
-    () => ['wss://relay1.example.com'],
-    pool, Promise, setTimeout, Error,
-  );
-
-  const result = await fn('a'.repeat(64));
-  assert.equal(result, 'church',
-    'checkChurch should return "church" when a relay returns an event. Got: ' + result);
-});
-
-test('ENGINE: checkChurch returns "unknown" on timeout — NEVER "not-found" over a dead relay', async () => {
-  const checkBody = fnBody(BUNDLE, 'async checkChurch(npubOrHex)', 'checkChurch');
-
-  const pool = {
-    querySync: () => new Promise(() => {}),  // never resolves — simulates timeout
-  };
-  const fn = new Function('toPub', 'churchRelaysRaw', 'pool', 'Promise', 'setTimeout', 'Error',
-    'return (async function ' + checkBody.slice(checkBody.indexOf('checkChurch')) + ')')(
-    (x) => x.length === 64 ? x : 'a'.repeat(64),
-    () => ['wss://relay1.example.com'],
-    pool, Promise, setTimeout, Error,
-  );
-
-  const result = await fn('a'.repeat(64));
-  assert.equal(result, 'unknown',
-    'checkChurch returned "' + result + '" on a timeout — owner decision: NEVER say "not found" ' +
-    'just because a relay didn\'t answer');
-});
+// THREE ENGINE TESTS WERE REMOVED HERE on 2026-09-30 (audit 2026-09-30, finding 4). They stubbed
+// pool.querySync — which checkChurch no longer calls — and the 'church' case fed it `{kind: 0}`, which is a
+// MEMBER'S own profile: the stub supplied the very answer the test was named after. The engine is now tested
+// against a real relay in scripts/a-members-code-is-not-a-church.test.mjs (member vs church, unreachable,
+// silent, pending, unproved). The screen tests below stay: they prove followChurch consults the verdict.
 
 // ── POINT OF USE: followChurch in app.jsx is lifted and EXECUTED (CLAUDE.md rule 3) ─────────────────
 //
@@ -172,4 +122,27 @@ test('POINT OF USE: followChurch removes the church entry on "not-found" (execut
   const filtered = filterCalls[filterCalls.length - 1];
   assert.ok(Array.isArray(filtered) && !filtered.some(c => c.id === 'npub1gxa6a0eaga9hy2mpjk6gxpxaxvywwvezrnsrgxennkfhwru7ngnsevqeyr'),
     'followChurch did not filter out the non-church entry — the "Church" placeholder stays on screen');
+});
+
+test('POINT OF USE: followChurch waits for the invite relay to be proved before it asks (executed)', async () => {
+  // A self-hosted church's join policy may exist ONLY on its own box, which joins the relay list once
+  // adoptInviteRelays has proved it. Asking first would read a real church as "not found".
+  const body = liftFollowChurch(APPJSX);
+  const env = makeFollowEnv('church');
+  let adopted = false, resolveAdoption;
+  env.Fellowship.adoptInviteRelays = () => new Promise(r => { resolveAdoption = () => { adopted = true; r({ added: ['wss://box'] }); }; });
+  const seenAtCheck = [];
+  env.Fellowship.checkChurch = async () => { seenAtCheck.push(adopted); env.calls.checkChurch++; return 'church'; };
+  const fn = new Function('churches', 'setChurches', 'setActiveChurch', 'lsSet', 'toast', 'window', 'setTimeout',
+    body + '\nreturn followChurch;'
+  )(env.churches, env.setChurches, env.setActiveChurch, env.lsSet, env.toast,
+    { Fellowship: env.Fellowship, addEventListener: () => {}, removeEventListener: () => {} }, setTimeout);
+
+  fn('npub1gxa6a0eaga9hy2mpjk6gxpxaxvywwvezrnsrgxennkfhwru7ngnsevqeyr?relay=wss://box');
+  await new Promise(r => setTimeout(r, 50));
+  assert.equal(env.calls.checkChurch, 0, 'followChurch asked whether this is a church before the invite relay was proved');
+  resolveAdoption();
+  await new Promise(r => setTimeout(r, 50));
+  assert.deepEqual(seenAtCheck, [true], 'the church check did not run once, after the invite relay was proved');
+  assert.equal(env.calls.announceMembership, 1);
 });

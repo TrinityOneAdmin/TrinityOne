@@ -7353,6 +7353,34 @@
     }
   }
   var CHURCH_BOXES_KEY = "trinityone.churchboxes";
+  function _askOneRelay(url, filter, ms) {
+    return new Promise((resolve) => {
+      const events = [];
+      let done = false, sub = null;
+      const finish = (answered) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        try {
+          sub && sub.close();
+        } catch (e) {
+        }
+        resolve({ url, answered, events });
+      };
+      const timer = setTimeout(() => finish(false), ms);
+      Promise.resolve().then(() => pool.ensureRelay(url, { connectionTimeout: ms })).then((relay) => {
+        if (done) return;
+        sub = relay.subscribe([filter], {
+          eoseTimeout: ms + 2e3,
+          onevent: (e) => {
+            events.push(e);
+          },
+          oneose: () => finish(true),
+          onclose: () => finish(false)
+        });
+      }).catch(() => finish(false));
+    });
+  }
   function _loadChurchBoxes(cp) {
     try {
       const m = JSON.parse(localStorage.getItem(CHURCH_BOXES_KEY) || "{}");
@@ -14277,31 +14305,40 @@
       }
       return picked;
     },
-    // M-9: probe whether a pubkey actually belongs to a church, before announcing membership. A church writes
-    // identifiable documents (kind-0 profile, stewards doc, group doc); an ordinary person's key has none of
-    // those in a TrinityOne context. Returns 'church' | 'not-found' | 'unknown'.
-    //   - 'church': at least one relay returned a church-authored document
-    //   - 'not-found': every relay answered EOSE with nothing (the key is real but not a church)
-    //   - 'unknown': at least one relay did not answer (timeout) and none said yes
+    // M-9: is this code a CHURCH, before we announce membership to it? Returns 'church' | 'not-found' | 'unknown'.
+    //
+    // REWRITTEN 2026-09-30 (audit 2026-09-30, finding 4). The first version asked for ANY kind-0 or kind-30078
+    // authored by the code — and every member has both (their profile, and their own member:<church> doc), so
+    // it passed a steward's personal code or a friend's, the very case it was named after. And querySync never
+    // throws: an unreachable relay resolves empty, so a dead link said "not found", against the owner's rule.
+    //
+    // THE SIGNAL: the church's join policy, `trinityone/joinpolicy:<cp>`. It is the one church document a
+    // not-yet-member may read (canRead serves it to anyone), every church publishes one at setup and every
+    // console boot repairs a missing one, and a TrinityOne relay ACCEPTS it only for a church it hosts
+    // (gateway accept(): leaderOf/stewardCan on the d-tag's church). So a member's key can never have one.
+    // That guarantee holds only on our relay software, which is why the question goes ONLY to relays the gate
+    // has proved (_gate.refresh) — never wider than the old ungated read (CLAUDE.md rule 10).
+    //
+    // THE ANSWER: 'church' if any proved relay returns that document; 'not-found' only if EVERY proved relay
+    // really answered (a genuine end-of-results, not the library's timer) and the invite's own relay is not
+    // still pending; otherwise 'unknown', which the app retries and never shows as "not found".
     // Owner decision 2026-09-03: never say "not found" just because a relay didn't answer.
     async checkChurch(npubOrHex) {
       const cp = toPub(npubOrHex);
       if (!cp) return "not-found";
-      const relays = churchRelaysRaw();
-      if (!relays.length) return "unknown";
-      let found = false, allAnswered = true;
+      let relays = [];
       try {
-        const evts = await Promise.race([
-          pool.querySync(relays, [{ kinds: [0, 30078], authors: [cp], limit: 1 }]),
-          new Promise((_, rej) => setTimeout(() => rej(new Error("checkChurch timeout")), 8e3))
-        ]);
-        if (evts && evts.length > 0) found = true;
+        relays = await _gate.refresh([...churchRelaysRaw(), ..._loadChurchBoxes(cp)], cp);
       } catch (e) {
-        allAnswered = false;
+        relays = [];
       }
-      if (found) return "church";
-      if (allAnswered) return "not-found";
-      return "unknown";
+      if (!relays.length) return "unknown";
+      const d = "trinityone/joinpolicy:" + cp;
+      const answers = await Promise.all(relays.map((u) => _askOneRelay(u, { kinds: [30078], "#d": [d] }, 8e3)));
+      const isPolicy = (e) => !!e && e.kind === 30078 && (e.tags || []).some((t) => t[0] === "d" && t[1] === d) && (e.pubkey === cp || (e.tags || []).some((t) => t[0] === "church" && t[1] === cp));
+      if (answers.some((a) => a.events.some(isPolicy))) return "church";
+      if (_getInvitePending().some((p) => p.cp === cp)) return "unknown";
+      return answers.every((a) => a.answered) ? "not-found" : "unknown";
     },
     subscribeChurchProfile(churchNpub, onProfile) {
       const pubk = toPub(churchNpub);

@@ -810,6 +810,7 @@ function App() {
     // toPub returns null on a bad checksum → reject here so the Follow sheet shows its "couldn't find that church" error.
     if (window.Fellowship && window.Fellowship.toPub && !window.Fellowship.toPub(npub)) return false;
     const F = window.Fellowship;
+    let _adoption = null;   // the invite relay's proof, which the church check below waits for
     if (F && F.addRelay) {
       // always connect to the whole shared pool (the church publishes across all of it), so a member
       // gets every community node for redundancy — not just the single relay carried in their link.
@@ -828,7 +829,7 @@ function App() {
       // key it proves is one this church's own signature (or the canonical pin, or this origin) vouches for.
       // It is deliberately not awaited — following a church must not wait on a network probe — and it fires
       // `trinity-relay-refused` with anything it turned away so the refusal can be shown where the person is.
-      if (F.adoptInviteRelays) { try { F.adoptInviteRelays(npub, raw); } catch (e) {} }
+      if (F.adoptInviteRelays) { try { _adoption = F.adoptInviteRelays(npub, raw); } catch (e) {} }
     }
     const alreadyFollowed = churches.find(c => c.id === npub);
     setChurches(cs => cs.find(c => c.id === npub) ? cs : [...cs, { id: npub, npub, name: 'Church', initials: 'CH', accent: 'var(--clay)', tagline: '', sub: 'Followed', verified: false, members: 0 }]);
@@ -840,6 +841,10 @@ function App() {
     if (!alreadyFollowed && window.Fellowship && window.Fellowship.checkChurch) {
       const _check = async (attempt) => {
         try {
+          // The church's own box may be the only relay holding its join policy, and it reaches the relay list
+          // only once the invite's address has been proved. Ask before that and a self-hosted church reads as
+          // "not found". Following still does not wait on it — only this check does.
+          if (_adoption) { try { await _adoption; } catch (e) {} }
           const result = await window.Fellowship.checkChurch(npub);
           if (result === 'church') {
             if (window.Fellowship.announceMembership) window.Fellowship.announceMembership(npub);
