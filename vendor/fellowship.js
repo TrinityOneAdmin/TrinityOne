@@ -8970,6 +8970,12 @@
     }
   }
   window.addEventListener("trinity-identity-lock", () => {
+    const ID = window.TrinityIdentity;
+    if (!(ID && ID.locked)) {
+      deriveFromIdentity().catch(() => {
+      });
+      return;
+    }
     sk = null;
     pub = null;
     window.Fellowship.myPubkey = null;

@@ -2655,7 +2655,16 @@ function reconnectAll() {
   // nudge the app to re-run its serving subscriptions (connTick) → fresh, authenticated sockets
   try { window.dispatchEvent(new CustomEvent('trinity-reconnect')); } catch (e) {}
 }
+// THE SAME EVENT FIRES ON UNLOCK. The PIN screen (app/identity.jsx) sends 'trinity-identity-lock' after a
+// SUCCESSFUL unlock, to make the app re-read its lock state — so this handler must look at the lock rather
+// than assume one. Clearing the key unconditionally left a member who had just unlocked signed in on screen
+// and unable to send anything until a restart, whenever that event landed after the key had loaded (measured
+// 2026-09-30 in a real browser by delaying it; on the phone the key read is slower, which is exactly that
+// order). Both senders set TrinityIdentity.locked BEFORE they dispatch: lock() / applyLocked() to true, the
+// unlock path to false. So: locked -> forget the key and reconnect; unlocked -> re-derive, as before a34a5bd.
 window.addEventListener('trinity-identity-lock', () => {
+  const ID = window.TrinityIdentity;
+  if (!(ID && ID.locked)) { deriveFromIdentity().catch(() => {}); return; }
   sk = null;
   pub = null;
   window.Fellowship.myPubkey = null;
