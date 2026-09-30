@@ -835,6 +835,7 @@ function StewardRoot() {
               style={{ flexShrink: 0, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', borderRadius: 9, padding: '5px 11px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5 }}>Dismiss</button>
           </div>
         ) : null}
+        {window.UpdateBanner ? <UpdateBanner variant="steward" /> : null}
         {ks.locked ? <StewardUnlock />
           : !ks.has ? <StewardWelcome />
           : needsPin ? <StewardForcedPin />

@@ -95,7 +95,7 @@ if [[ $DO_APK == 1 ]]; then
   # in-app update check: refresh the manifest the member app reads on open (apk-latest.json, served
   # at ASSET_BASE). Old installs compare their versionCode to this and show an "Update available" banner.
   if [[ $DRY == 0 ]]; then
-    printf '{\n  "versionCode": %s,\n  "versionName": "%s",\n  "url": "trinityone.apk",\n  "date": "%s"\n}\n' "$nvc" "$vn" "$(date +%F)" > apk-latest.json
+    printf '{\n  "versionCode": %s,\n  "versionName": "%s",\n  "url": "trinityone.apk",\n  "stewardVersionCode": %s,\n  "stewardUrl": "trinityone-steward.apk",\n  "date": "%s"\n}\n' "$nvc" "$vn" "$nvc" "$(date +%F)" > apk-latest.json
     say "update manifest → apk-latest.json (versionCode $nvc)"
     # COMMIT IT. This file is tracked, and leaving it dirty meant the next release refused to run until
     # someone committed it by hand — and, worse, that the manifest describing THIS build sat outside the
