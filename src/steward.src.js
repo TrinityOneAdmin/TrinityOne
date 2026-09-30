@@ -7608,13 +7608,18 @@ window.Steward = {
         nextG[childK] = [...new Set([...low(nextG[childK] || parents), newH])];
       }
     }
-    // Move closed entries from old key to new key (both as child and as parent)
+    // COPY closed entries to the new key (both as child and as parent) — and KEEP the old ones. A parent's link
+    // request names the child's key as it was when the request was made, and stays on the relay; the Confirm list
+    // matches a request to `closed` by exact key. Moving the pair (deleting the old one) therefore brought a
+    // declined or removed parent's request back as a "Confirm" card whenever the CHILD, or that PARENT, was the one
+    // reconnected (audit of 27c380e, #2). Keeping the old pair is what keeps that request closed; the new pair
+    // covers anything that names the new key.
     const gc = o.guardiansClosed || {};
     let nextGC = null;
     for (const k of Object.keys(gc)) {
       const [c, p] = k.split('|');
       const movedC = c === oldH ? newH : c, movedP = p === oldH ? newH : p;
-      if (movedC !== c || movedP !== p) { nextGC = nextGC || { ...gc }; nextGC[movedC + '|' + movedP] = gc[k]; delete nextGC[k]; }
+      if (movedC !== c || movedP !== p) { nextGC = nextGC || { ...gc }; nextGC[movedC + '|' + movedP] = gc[k]; }
     }
     // The half no steward can repair by hand: re-ticking "child" restores the marking and still leaves the
     // parent unable to message their own child. Reported as done, it would never be looked at again.

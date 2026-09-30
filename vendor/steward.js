@@ -21102,7 +21102,6 @@ zoo`.split("\n");
         if (movedC !== c || movedP !== p) {
           nextGC = nextGC || { ...gc };
           nextGC[movedC + "|" + movedP] = gc[k];
-          delete nextGC[k];
         }
       }
       if (nextG && !await w(() => window.Steward.setGuardians(nextG, nextGC || gc))) throw new Error("Couldn\u2019t save the parent link, so nothing was changed. Check your connection and try again \u2014 this is the part that cannot be put right by hand afterwards.");
