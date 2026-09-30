@@ -15,8 +15,11 @@
 //
 // Users of the network-keys store (rule 2): saveNetKey's callers are createNetwork, importNetworkKey and the
 // subscribeNetworkProfile rename self-heal. netKeys' readers are skFor, ownedNetworks, identities (x2),
-// setActiveIdentity (x2) and the self-heal. _migrateNetKeysToSealed and app/backup.jsx's restore merge read
-// and write the raw store directly. (The S-1 commit named a "subscribeDelegatedChurches" caller; there is none.)
+// setActiveIdentity, subscribeStewardedChurches and the self-heal. The raw store is also read or written by
+// _migrateNetKeysToSealed and, in app/backup.jsx, by collectSteward (backup export), the restore merge and
+// _undoStewardRestore; none of those goes through saveNetKey. (The S-1 commit named a
+// "subscribeDelegatedChurches" caller; there is none. An earlier version of this header counted two
+// setActiveIdentity readers; one of them is subscribeStewardedChurches — corrected after audit.)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
