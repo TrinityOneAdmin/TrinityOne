@@ -1010,6 +1010,18 @@ function saveNetKey(rec) {
   if (rec.mnemonic && churchSk) {
     try { sealed.sealedMnemonic = nip44e(rec.mnemonic, churchSk); } catch { sealed.mnemonic = rec.mnemonic; }
   } else if (rec.mnemonic) { sealed.mnemonic = rec.mnemonic; }
+  else {
+    // A SAVE WITH NO WORDS IN HAND KEEPS THE WORDS ALREADY STORED. The 12 words are the only way to publish
+    // as the network, and this used to write just {pub, name} whenever it was handed a record it could not
+    // open — which is what netKeys() returns while the console is locked (churchSk null) or after a restore
+    // changed the church key. The rename self-heal in subscribeNetworkProfile does exactly that from a live
+    // relay subscription, so a network's words were erased with no user action and nothing on screen.
+    // The sealed copy is kept as-is: it cannot be re-sealed without the key, and it opens again once the key
+    // that sealed it is back. Audit 2026-09-30, finding 1.
+    const had = rec.sealedMnemonic ? rec : (_netKeysRaw().find(x => x.pub === rec.pub) || {});
+    if (had.sealedMnemonic) sealed.sealedMnemonic = had.sealedMnemonic;
+    else if (had.mnemonic) sealed.mnemonic = had.mnemonic;
+  }
   const a = _netKeysRaw().filter(x => x.pub !== rec.pub); a.push(sealed); lsSet(NETKEYS_LS, JSON.stringify(a));
 }
 function _migrateNetKeysToSealed() {

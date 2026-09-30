@@ -15678,6 +15678,10 @@ zoo`.split("\n");
       }
     } else if (rec.mnemonic) {
       sealed.mnemonic = rec.mnemonic;
+    } else {
+      const had = rec.sealedMnemonic ? rec : _netKeysRaw().find((x) => x.pub === rec.pub) || {};
+      if (had.sealedMnemonic) sealed.sealedMnemonic = had.sealedMnemonic;
+      else if (had.mnemonic) sealed.mnemonic = had.mnemonic;
     }
     const a = _netKeysRaw().filter((x) => x.pub !== rec.pub);
     a.push(sealed);
