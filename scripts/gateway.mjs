@@ -624,12 +624,32 @@ const _mediaBytesByChurch = new Map(); let _mediaBytesTotal = 0;   // usage, sca
 // records one blob everywhere; call it whenever a blob lands on disk with a known owner.
 const _blobsByChurch = new Map();   // cp -> Map<sha, size>
 function _indexBlob(cp, sha, size) { if (!cp) return; let m = _blobsByChurch.get(cp); if (!m) { m = new Map(); _blobsByChurch.set(cp, m); } m.set(sha, size); }
+// PER-CHURCH USAGE IS EVERY BLOB THAT CHURCH OWNS, at full size — a co-owner is billed and listed exactly
+// like the church that uploaded first. Audit 2026-09-30 findings 8 and 9: a dedup upload was neither billed nor
+// indexed, so the co-owner's file was missing from /export-media, /sync-media and the purge count, and a
+// dedup-then-delete subtracted bytes that had never been added (zeroing the church's usage under its cap).
+// _billBlob / _unbillBlob key on the index, so a church is charged once per sha and refunded only what it paid.
+function _billBlob(cp, sha, size) { if (!cp) return; const m = _blobsByChurch.get(cp); if (m && m.has(sha)) return; _mediaBytesByChurch.set(cp, (_mediaBytesByChurch.get(cp) || 0) + size); _indexBlob(cp, sha, size); }
+function _unbillBlob(cp, sha) { const m = _blobsByChurch.get(cp); if (!m || !m.has(sha)) return; const sz = m.get(sha); m.delete(sha); _mediaBytesByChurch.set(cp, Math.max(0, (_mediaBytesByChurch.get(cp) || 0) - sz)); }
+// Release ONE church's hold on a blob: the only way a blob leaves this relay. The file, its sidecars and the
+// relay-wide byte count go only when no church still owns it. Callers: DELETE /blob, the partner-sync delete
+// pass, and the church purge — all three used to unlink on their own terms, and two of them destroyed a
+// co-owning church's media (audit 2026-09-30 findings 2 and 3). The caller decides whether to tombstone.
+function _releaseBlob(sha, cp) {
+  _unbillBlob(cp, sha);
+  const file = join(BLOB_DIR, sha); let sz = 0; try { sz = statSync(file).size; } catch {}
+  const remaining = _removeBlobOwner(sha, cp);
+  if (remaining) return { remaining, freed: 0 };
+  try { unlinkSync(file); } catch {} try { unlinkSync(file + '.church'); } catch {} try { unlinkSync(file + '.type'); } catch {}
+  if (sz) _mediaBytesTotal = Math.max(0, _mediaBytesTotal - sz);
+  return { remaining: 0, freed: sz };
+}
 function _churchBlobList(cp) { const m = _blobsByChurch.get(cp); if (!m) return []; const out = []; for (const [sha, size] of m) out.push({ sha, size }); return out; }
 function _churchDeletedBlobs(cp) { const out = []; try { for (const f of readdirSync(BLOB_DIR)) { if (!f.endsWith('.deleted')) continue; try { if (readFileSync(join(BLOB_DIR, f), 'utf8').trim() === cp) out.push(f.slice(0, -8)); } catch {} } } catch {} return out; }
 // P7: tally media usage AFTER the relay starts listening (was a synchronous statSync-per-blob walk blocking boot
 // on a media-heavy box). SET the totals from the disk scan (authoritative) rather than accumulate, so any upload
 // that lands during the brief window isn't double-counted — the scan already sees it on disk.
-setTimeout(() => { try { let total = 0; const by = new Map(); const idx = new Map(); for (const f of readdirSync(BLOB_DIR)) { if (f.endsWith('.tmp')) { try { unlinkSync(join(BLOB_DIR, f)); } catch {} continue; }   /* orphaned upload/replication temp: at boot none is in flight, so any *.tmp is dead — sweep it */ if (!/^[0-9a-f]{64}$/.test(f)) continue; let sz; try { sz = statSync(join(BLOB_DIR, f)).size; } catch { continue; } total += sz; const o = _blobOwner(f); if (o) { by.set(o, (by.get(o) || 0) + sz); let m = idx.get(o); if (!m) { m = new Map(); idx.set(o, m); } m.set(f, sz); } } _mediaBytesTotal = total; _mediaBytesByChurch.clear(); for (const [k, v] of by) _mediaBytesByChurch.set(k, v); _blobsByChurch.clear(); for (const [k, v] of idx) _blobsByChurch.set(k, v); } catch {} }, 0);
+setTimeout(() => { try { let total = 0; const by = new Map(); const idx = new Map(); for (const f of readdirSync(BLOB_DIR)) { if (f.endsWith('.tmp')) { try { unlinkSync(join(BLOB_DIR, f)); } catch {} continue; }   /* orphaned upload/replication temp: at boot none is in flight, so any *.tmp is dead — sweep it */ if (!/^[0-9a-f]{64}$/.test(f)) continue; let sz; try { sz = statSync(join(BLOB_DIR, f)).size; } catch { continue; } total += sz; for (const o of _blobOwners(f)) { by.set(o, (by.get(o) || 0) + sz); let m = idx.get(o); if (!m) { m = new Map(); idx.set(o, m); } m.set(f, sz); } }   /* every owner, not just the .church primary — see _billBlob */ _mediaBytesTotal = total; _mediaBytesByChurch.clear(); for (const [k, v] of by) _mediaBytesByChurch.set(k, v); _blobsByChurch.clear(); for (const [k, v] of idx) _blobsByChurch.set(k, v); } catch {} }, 0);
 // Streaming base64 for the native (CapacitorHttp) blob path — encode/decode in aligned chunks so a big blob never
 // sits fully in RAM (a 200 MB video buffered + base64'd would cost ~450 MB). Each whole 3-byte group → 4 b64 chars
 // independently, so concatenating the chunks equals base64(file); only the final partial group is padded. Decode
@@ -6786,14 +6806,14 @@ function serveStatic(req, res) {
             const wantPurge = !!parsed.removeChurch.purge;
             const r = wantPurge && store.purgeChurch ? store.purgeChurch(hex) : { events: 0 };
             let blobsDeleted = 0, bytesFreed = 0;
+            // Release this church's hold on each file: one another church still owns stays, with its owner record
+            // intact (audit 2026-09-30 finding 3). No tombstone — this relay is dropping the church, not the church
+            // deleting its media, and a tombstone would tell its OTHER relays to erase their copies.
             for (const b of (wantPurge ? blobs : [])) {
-              try { unlinkSync(join(BLOB_DIR, b.sha)); blobsDeleted++; bytesFreed += (b.size || 0); } catch {}
-              try { unlinkSync(join(BLOB_DIR, b.sha + '.church')); } catch {}
-              try { unlinkSync(join(BLOB_DIR, b.sha + '.owners')); } catch {}   // R-4: clean multi-owner sidecar
+              const { remaining, freed } = _releaseBlob(b.sha, hex);
+              if (!remaining) { blobsDeleted++; bytesFreed += freed; }
             }
-            // keep the media accounting honest — only subtract what actually went (see the DELETE /blob note)
-            if (wantPurge) { _mediaBytesTotal = Math.max(0, _mediaBytesTotal - bytesFreed);
-              _mediaBytesByChurch.delete(hex); _blobsByChurch.delete(hex); }
+            if (wantPurge) { _mediaBytesByChurch.delete(hex); _blobsByChurch.delete(hex); }
             if (CHURCH_PUBS.has(hex)) writeChurches(remaining);   // also re-hydrates the derived maps (H1)
             else setImmediate(() => { try { hydrateMaps(); } catch {} });
             console.log(`[config] ${wantPurge ? 'purged' : 'removed'} church ${hex.slice(0, 8)}… — ${r.events} events, ${blobsDeleted} blobs, ${bytesFreed} bytes`);
@@ -7185,6 +7205,9 @@ function serveStatic(req, res) {
         const _mc = effMediaCap(), _cc = effChurchCap();
         if (_mc && _mediaBytesTotal + size > _mc) { cleanup(); res.writeHead(507, H); res.end('{"error":"this relay\'s media storage is full"}'); return; }
         if (_cc && (_mediaBytesByChurch.get(who.church) || 0) + size > _cc) { cleanup(); res.writeHead(507, H); res.end('{"error":"your church has reached its media storage limit on this relay"}'); return; }
+      } else if (!_blobOwners(sha).has(who.church)) {   // becoming a co-owner bills this church the full size (_billBlob), so its cap applies
+        const _cc = effChurchCap();
+        if (_cc && (_mediaBytesByChurch.get(who.church) || 0) + size > _cc) { cleanup(); res.writeHead(507, H); res.end('{"error":"your church has reached its media storage limit on this relay"}'); return; }
       }
       try {
         if (isNew || !_blobOwner(sha)) writeFileSync(join(BLOB_DIR, sha + '.church'), who.church);   // S4: owner sidecar BEFORE the blob is reachable. Set it on first store OR to backfill a missing one — but do NOT flip ownership when another church dedup-re-uploads an identical blob.
@@ -7193,7 +7216,8 @@ function serveStatic(req, res) {
         if (isNew) renameSync(tmp, finalPath); else cleanup();        // dedup: identical blob already stored → drop the temp
         const ct = req.headers['content-type'] || ''; if (ct && ct.indexOf('text/plain') !== 0) { try { writeFileSync(join(BLOB_DIR, sha + '.type'), ct); } catch {} }
       } catch (e) { cleanup(); res.writeHead(500, H); res.end('{"error":"store failed"}'); return; }
-      if (isNew) { _mediaBytesTotal += size; _mediaBytesByChurch.set(who.church, (_mediaBytesByChurch.get(who.church) || 0) + size); _indexBlob(who.church, sha, size); }   // account + index the new bytes
+      if (isNew) _mediaBytesTotal += size;   // the relay-wide count is disk bytes: a dedup adds none
+      _billBlob(who.church, sha, size);      // the church's count is what it owns: a co-owner is billed + listed too
       res.writeHead(201, H); res.end(JSON.stringify({ sha256: sha, size, url: '/blob/' + sha, type: req.headers['content-type'] || 'application/octet-stream' }));
     });
     return;
@@ -7211,7 +7235,7 @@ function serveStatic(req, res) {
     // unlink the file only when no church still references it.
     const owners = _blobOwners(sha);
     if (owners.size && !owners.has(who.church)) { res.writeHead(403, H); res.end('{"error":"not your church\'s media"}'); return; }
-    const file = join(BLOB_DIR, sha); let sz = 0; try { sz = statSync(file).size; } catch {}
+    const file = join(BLOB_DIR, sha);
     // ── R-2 AND R-4 BOTH CHANGED THIS BLOCK. Merged 2026-09-30; resolved by hand, not by git. ──────────
     // R-2 (840d164) wrote a `.deleted` tombstone here so a partner relay would not re-pull a recording the
     // church had removed. R-4 (b9dc9c5) made blobs reference-counted, so a delete removes only the calling
@@ -7232,13 +7256,8 @@ function serveStatic(req, res) {
     // A's media therefore does not learn A deleted it. Fixing that needs a per-church tombstone
     // (`<sha>.deleted.<cp>`) and its own tests. Not done here: the single-owner path is the ordinary one,
     // and this merge is not the place to add a feature neither branch had.
-    if (sz) { _mediaBytesByChurch.set(who.church, Math.max(0, (_mediaBytesByChurch.get(who.church) || 0) - sz)); const m = _blobsByChurch.get(who.church); if (m) m.delete(sha); }
-    const remaining = _removeBlobOwner(sha, who.church);
-    if (!remaining) {
-      try { unlinkSync(file); } catch {} try { unlinkSync(file + '.church'); } catch {} try { unlinkSync(file + '.type'); } catch {}
-      try { writeFileSync(file + '.deleted', who.church); } catch {}   // R-2: last owner gone, so record it for the partner sync
-      if (sz) _mediaBytesTotal = Math.max(0, _mediaBytesTotal - sz);
-    }
+    const { remaining } = _releaseBlob(sha, who.church);
+    if (!remaining) { try { writeFileSync(file + '.deleted', who.church); } catch {} }   // R-2: last owner gone, so record it for the partner sync
     res.writeHead(200, H); res.end(JSON.stringify({ deleted: true, sha256: sha }));
     return;
   }
@@ -7780,7 +7799,7 @@ async function syncMediaFromPeer(cp, peerBase) {
       writeFileSync(join(BLOB_DIR, b.sha + '.church'), cp);   // owner sidecar BEFORE the blob is reachable
       _addBlobOwner(b.sha, cp);                               // R-4: track in multi-owner set
       renameSync(tmp, join(BLOB_DIR, b.sha));                 // atomic publish — no partial file ever sits at <sha>
-      _mediaBytesTotal += n; _mediaBytesByChurch.set(cp, (_mediaBytesByChurch.get(cp) || 0) + n); _indexBlob(cp, b.sha, n);
+      _mediaBytesTotal += n; _billBlob(cp, b.sha, n);
       pulled++;
     } catch { try { unlinkSync(tmp); } catch {} }
   }
@@ -7789,11 +7808,12 @@ async function syncMediaFromPeer(cp, peerBase) {
     const file = join(BLOB_DIR, sha);
     if (!existsSync(file) && !existsSync(file + '.deleted')) continue;
     if (existsSync(file)) {
-      const owner = _blobOwner(sha);
-      if (owner && owner !== cp) continue;
-      let sz = 0; try { sz = statSync(file).size; } catch {}
-      try { unlinkSync(file); } catch {} try { unlinkSync(file + '.church'); } catch {} try { unlinkSync(file + '.type'); } catch {}
-      if (sz) { _mediaBytesTotal = Math.max(0, _mediaBytesTotal - sz); _mediaBytesByChurch.set(cp, Math.max(0, (_mediaBytesByChurch.get(cp) || 0) - sz)); const m = _blobsByChurch.get(cp); if (m) m.delete(sha); }
+      // A partner says THIS church deleted it: release this church's hold, exactly as DELETE /blob does. Another
+      // church that still owns the file keeps it, and gets no tombstone — a tombstone would make its partner
+      // relays delete their copy too (audit 2026-09-30 finding 2).
+      const owners = _blobOwners(sha);
+      if (owners.size && !owners.has(cp)) continue;
+      if (_releaseBlob(sha, cp).remaining) continue;
     }
     if (!existsSync(file + '.deleted')) { try { writeFileSync(file + '.deleted', cp); } catch {} }
   }
