@@ -9637,7 +9637,11 @@ window.Steward = {
         // every cleartext request written before that. null means sealed with a key this console does not
         // hold yet — mark it locked rather than dropping it, so the board says so instead of showing a gap.
         const c = _openChurchDoc(e.content);
-        if (c === null) { lockedRaw.set(id, e); byId.set(id, { id, memberPub, _locked: true, ts: e.created_at }); emit(); return; }
+        // `_locked` only while the ring is still EMPTY (the key has not arrived). A ring that is loaded and still
+        // cannot open it means the request was sealed under a key since trimmed from the ring (NAME_RING_MAX): it
+        // will never open, and treating it as "still opening" blocked the board from ever asking that member again
+        // (audit of d86fbac, #1). Such a row is `_unreadable`; the board ignores it. Still kept for a re-read.
+        if (c === null) { lockedRaw.set(id, e); byId.set(id, { id, memberPub, ...(_nameKeyReady() ? { _unreadable: true } : { _locked: true }), ts: e.created_at }); emit(); return; }
         lockedRaw.delete(id);
         byId.set(id, { id, memberPub, ...c, ts: e.created_at }); emit();
       },

@@ -1659,7 +1659,13 @@ function App() {
   // A LOCKED request has no date, role or team until the church's name key opens it — keep it anyway. The date
   // test dropped it (`'' >= today` is false), so a request this phone had received reached NO screen, and the
   // "Locked" row built for exactly this case could never appear (audit 2026-09-30, finding 5).
-  const servPending = servReqs.filter(r => !servReplies[r.id] && (r._locked || (r.date || '') >= todayStr));
+  //
+  // …and only the ACTIVE church's. The request feed spans every church this member belongs to, but a church's
+  // name key only loads while it is the active one — so church B's locked request sat on church A's screens
+  // promising to open, and never did there (audit of d86fbac, #2). `church` on a request is the church's hex key.
+  const _activeCp = (() => { try { const c = churches.find(x => x.id === activeChurch); return (c && c.npub && window.Fellowship && window.Fellowship.toPub) ? (window.Fellowship.toPub(c.npub) || '') : ''; } catch (e) { return ''; } })();
+  const _lockedHere = (r) => !!(r && r._locked && _activeCp && r.church === _activeCp);
+  const servPending = servReqs.filter(r => !servReplies[r.id] && (_lockedHere(r) || (!r._locked && (r.date || '') >= todayStr)));
   const _pendKey = new Set(servPending.map(r => r.serviceId + '|' + r.teamId + '|' + r.roleId));
   const servConfirmed = myRotaSlots.filter(s => s._verdict !== 'decline' && s._verdict !== 'swap' && !_pendKey.has(s.serviceId + '|' + s.teamId + '|' + s.roleId));
   const servDeclined = myRotaSlots.filter(s => s._verdict === 'decline' || s._verdict === 'swap');
@@ -2267,7 +2273,7 @@ function App() {
       // The caller cannot know that without an answer, so give it one.
       // …unless one has arrived and this phone cannot open it yet. Then the leader DID send it, and telling the
       // member to ask for a re-publish sends every volunteer back to the steward over nothing.
-      if (!reqId && servReqs.some(r => r && r._locked)) { toast('Your church’s request is still opening on this phone — try again in a moment.'); return false; }
+      if (!reqId && servReqs.some(_lockedHere)) { toast('Your church’s request is still opening on this phone — try again in a moment.'); return false; }
       if (!reqId) { toast('Your leader hasn’t sent a request for this yet — ask them to re-publish the rota.'); return false; }
       // AWAIT IT, AND SAY SO IF IT DID NOT GO. respondToServingRequest answers `{ ok, reason }` (it returned
       // `null` until 2026-09-16, which is what the next note is about).

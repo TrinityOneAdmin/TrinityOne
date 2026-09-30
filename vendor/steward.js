@@ -23072,7 +23072,7 @@ zoo`.split("\n");
           const c = _openChurchDoc(e.content);
           if (c === null) {
             lockedRaw.set(id, e);
-            byId.set(id, { id, memberPub, _locked: true, ts: e.created_at });
+            byId.set(id, { id, memberPub, ..._nameKeyReady() ? { _unreadable: true } : { _locked: true }, ts: e.created_at });
             emit();
             return;
           }

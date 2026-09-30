@@ -14000,7 +14000,8 @@
           const c = _openChurchDoc(cp, e.content);
           if (c === null) {
             lockedRaw.set(id, e);
-            byId.set(id, { id, church: cp, _locked: true, ts: e.created_at });
+            const waiting = !(_nameKeys.get(cp) || []).length;
+            byId.set(id, { id, church: cp, ...waiting ? { _locked: true } : { _unreadable: true }, ts: e.created_at });
             emit();
             return;
           }

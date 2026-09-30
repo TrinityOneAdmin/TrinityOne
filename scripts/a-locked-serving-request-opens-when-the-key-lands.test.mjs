@@ -15,6 +15,10 @@
 // statement-by-statement from app/app.jsx and app/stew-schedule.jsx and executed (CLAUDE.md rule 3). The key
 // arrives the way it really does: a signed name-key envelope handed to the shipped ingest function, never by
 // poking the key map. Real NIP-44 throughout.
+//
+// Tests 7-14 were added after the audit of d86fbac: a request sealed under a key the church has since trimmed
+// (it must read as unreadable, not "still opening" for ever), another church's locked request on the active
+// church's screens, a stale request list in the board's send, and five claims that had no test that could fail.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -28,12 +32,15 @@ const APPJSX = readFileSync(new URL('../app/app.jsx', import.meta.url), 'utf8');
 const SCHED = readFileSync(new URL('../app/stew-schedule.jsx', import.meta.url), 'utf8');
 
 const churchSk = generateSecretKey(), CP = getPublicKey(churchSk);
+const CP_B = getPublicKey(generateSecretKey());              // a second church this member also belongs to
 const meSk = generateSecretKey(), ME = getPublicKey(meSk);
 const NAMEKEY = generateSecretKey();                        // the church name key (32 random bytes)
+const OLDKEY = generateSecretKey();                         // a key the church has since trimmed from its ring
 const hex = (b) => Buffer.from(b).toString('hex');
 const unhex = (h) => new Uint8Array(Buffer.from(h, 'hex'));
 const DOC = { serviceId: 'svc1', teamId: 'kids', roleId: 'r1', role: 'Children’s worker', teamName: 'Kids Church', date: '2099-10-04', time: '10:30', service: 'Morning' };
-const sealed = (obj) => JSON.stringify({ e: nip44.encrypt(JSON.stringify(obj), NAMEKEY) });
+const sealedWith = (key, obj) => JSON.stringify({ e: nip44.encrypt(JSON.stringify(obj), key) });
+const sealed = (obj) => sealedWith(NAMEKEY, obj);
 
 function once(src, anchor, file) {
   const at = src.indexOf(anchor);
@@ -62,21 +69,28 @@ function memberPhone() {
     ${fn(FELLOW, 'function _openChurchDoc(cp, content)', 'fellowship.js')}
     const F = { ${fn(FELLOW, 'subscribeMyServingRequests(onReqs)', 'fellowship.js')},
                 ${fn(FELLOW, 'subscribeMyReqReplies(onReplies)', 'fellowship.js')} };
-    return { F, ingest: _ingestNameKey };`;
+    return { F, ingest: _ingestNameKey, onNameKey: _onNameKey };`;
   const api = new Function(...names, body)(...names.map(n => world[n]));
   // The envelope the console publishes: the ring, sealed to me, signed by the church.
-  const envelope = () => ({ pubkey: CP, created_at: 200, kind: 30078, tags: [['d', 'trinityone/namekey:' + CP]],
-    content: JSON.stringify({ keys: { [ME]: nip44.encrypt(JSON.stringify([hex(NAMEKEY)]), nip44.utils.getConversationKey(churchSk, ME)) } }) });
-  return { api, handlers, landKey: () => api.ingest(CP, envelope()) };
+  let at = 200;
+  const envelope = (content) => ({ pubkey: CP, created_at: ++at, kind: 30078, tags: [['d', 'trinityone/namekey:' + CP]], content });
+  const ringFor = (key) => JSON.stringify({ keys: { [ME]: nip44.encrypt(JSON.stringify([hex(key)]), nip44.utils.getConversationKey(churchSk, ME)) } });
+  return { api, handlers, landKey: (key = NAMEKEY) => api.ingest(CP, envelope(ringFor(key))),
+    landGarbage: () => api.ingest(CP, envelope(JSON.stringify({ keys: { [ME]: 'not-a-sealed-ring' } }))) };
 }
-const requestEvent = (id) => ({ pubkey: CP, created_at: 100, content: sealed(DOC), tags: [['d', 'trinityone/request:' + id], ['t', 'trinityone'], ['p', ME]] });
+const requestEvent = (id, key = NAMEKEY) => ({ pubkey: CP, created_at: 100, content: sealedWith(key, DOC), tags: [['d', 'trinityone/request:' + id], ['t', 'trinityone'], ['p', ME]] });
 const replyEvent = (id, v) => ({ pubkey: ME, created_at: 110, content: sealed({ request: id, v, swapTo: '' }), tags: [['d', 'trinityone/reqreply:' + id], ['t', 'trinityone'], ['p', CP]] });
 
-// app.jsx's own lines, sliced and run in order: _verdict and servPending.
+// app.jsx's own lines, sliced and run in order. `active` is the id of the active church: 'A' is CP, 'B' is CP_B.
+const ACTIVE_CP = st(APPJSX, 'const _activeCp = (() =>', 'app.jsx');
+const LOCKED_HERE = st(APPJSX, 'const _lockedHere = (r) =>', 'app.jsx');
 const VERDICT = st(APPJSX, 'const _verdict = (q) =>', 'app.jsx');
 const PENDING = st(APPJSX, 'const servPending = servReqs.filter(', 'app.jsx');
-const appDerive = (servReqs, servReplies, todayStr = '2026-09-30') =>
-  new Function('servReqs', 'servReplies', 'todayStr', `${VERDICT}\n${PENDING}\nreturn { servPending, _verdict };`)(servReqs, servReplies, todayStr);
+const CHURCHES = [{ id: 'A', npub: 'npubA' }, { id: 'B', npub: 'npubB' }];
+const WIN = { Fellowship: { toPub: (n) => ({ npubA: CP, npubB: CP_B })[n] || null } };
+const appDerive = (servReqs, servReplies, active = 'A', todayStr = '2026-09-30') =>
+  new Function('servReqs', 'servReplies', 'todayStr', 'churches', 'activeChurch', 'window',
+    `${ACTIVE_CP}\n${LOCKED_HERE}\n${VERDICT}\n${PENDING}\nreturn { servPending, _verdict, _lockedHere };`)(servReqs, servReplies, todayStr, CHURCHES, active, WIN);
 
 test('a request this phone cannot open yet reaches the screen as a pending, locked row (finding 5)', () => {
   const p = memberPhone();
@@ -120,24 +134,31 @@ test("my own reply that cannot be opened yet still counts as answered, and opens
   assert.equal(replies.req2, 'decline', 'my reply did not open when the key landed');
 });
 
+const RESPOND = fn(APPJSX, 'respondServing: async (item, verdict, swapTo) =>', 'app.jsx');
+const respondWith = (servReqs, active, toasts) => {
+  const { _lockedHere } = appDerive(servReqs, {}, active);
+  return new Function('churches', 'activeChurch', 'toast', 'servReqs', '_lockedHere', 'window',
+    `const o = { ${RESPOND} }; return o.respondServing;`)(CHURCHES, active, (m) => toasts.push(m), servReqs, _lockedHere, WIN);
+};
+
 test('"I can serve" on a rota slot while a request is still locked does not blame the leader (finding 5, knock-on)', async () => {
-  const src = fn(APPJSX, 'respondServing: async (item, verdict, swapTo) =>', 'app.jsx');
   const toasts = [];
-  const run = (servReqs) => new Function('churches', 'activeChurch', 'toast', 'servReqs', 'window',
-    `const o = { ${src} }; return o.respondServing;`)([{ id: 'c', npub: 'npub1x' }], 'c', (m) => toasts.push(m), servReqs, { Fellowship: {} });
-  await run([{ id: 'req9', _locked: true }])({ id: 'rota:svc1:kids::r1', req: null }, 'accept');
+  await respondWith([{ id: 'req9', church: CP, _locked: true }], 'A', toasts)({ id: 'rota:svc1:kids::r1', req: null }, 'accept');
   assert.match(toasts.at(-1), /still opening/i, 'the member was told their leader never sent a request');
-  await run([])({ id: 'rota:svc1:kids::r1', req: null }, 'accept');
+  await respondWith([], 'A', toasts)({ id: 'rota:svc1:kids::r1', req: null }, 'accept');
   assert.match(toasts.at(-1), /hasn’t sent a request/, 'CONTROL: with nothing locked, the original message stands');
 });
 
-// ── The console: shipped readers + shipped key-ring fill ──────────────────────────────────────────────────
+// ── The console: shipped readers + shipped key-ring fill + the shipped first-key mint ─────────────────────
 function console_() {
   const handlers = [];
   const world = {
     pub: CP, churchPub: CP, churchSk, actingChurch: '', NET: 'trinityone', REQUEST_D: 'trinityone/request:', REQREPLY_D: 'trinityone/reqreply:', NAMEKEY_D: 'trinityone/namekey:',
-    decrypt3: nip44.decrypt, getConversationKey: nip44.utils.getConversationKey, _unhex: unhex,
+    decrypt3: nip44.decrypt, encrypt3: nip44.encrypt, getConversationKey: nip44.utils.getConversationKey, _unhex: unhex, _hex: hex,
     relays: () => ['wss://r'], _byChurchOrSteward: () => true, _webQueueSync: () => {},
+    _isRelayAuthed: () => true, NAME_RING_MAX: 50, toPubHex: (p) => p, _localBlocked: new Set(),
+    _sealEach: async (pl, recips, f) => Object.fromEntries(recips.map(p => [p, f(pl, p)])),
+    publish: async () => ({ id: 'published' }), feChurch: (x) => x, now: () => 300,
     pool: { subscribeMany: (_r, _f, h) => { handlers.push(h); return { close() {} }; } },
   };
   const names = Object.keys(world);
@@ -148,13 +169,16 @@ function console_() {
     ${fn(STEWARD, 'function _nameKeyReady()', 'steward.js')}
     ${fn(STEWARD, 'function _openChurchDoc(content)', 'steward.js')}
     const S = { ${fn(STEWARD, 'subscribeRequests(onRequests)', 'steward.js')},
+                ${fn(STEWARD, 'subscribeRequestReplies(onReplies)', 'steward.js')},
+                ${fn(STEWARD, 'async _ensureNameKeyLocked(memberPubs, stewardPubs, opts = {})', 'steward.js')},
                 ${fn(STEWARD, 'subscribeNameKey()', 'steward.js')} };
-    return { S };`;
+    return { S, ring: () => _nameKeyRing };`;
   const api = new Function(...names, body)(...names.map(n => world[n]));
-  const envelope = { pubkey: CP, created_at: 200, kind: 30078, tags: [['d', 'trinityone/namekey:' + CP]],
-    content: JSON.stringify({ keys: { [CP]: nip44.encrypt(JSON.stringify([hex(NAMEKEY)]), nip44.utils.getConversationKey(churchSk, CP)) } }) };
-  return { api, handlers, envelope };
+  const envelopeFor = (key) => ({ pubkey: CP, created_at: 200, kind: 30078, tags: [['d', 'trinityone/namekey:' + CP]],
+    content: JSON.stringify({ keys: { [CP]: nip44.encrypt(JSON.stringify([hex(key)]), nip44.utils.getConversationKey(churchSk, CP)) } }) });
+  return { api, handlers, envelope: envelopeFor(NAMEKEY), envelopeFor };
 }
+const consoleRequest = (id, key = NAMEKEY) => ({ pubkey: CP, created_at: 100, content: sealedWith(key, DOC), tags: [['d', 'trinityone/request:' + id], ['p', ME], ['t', 'trinityone']] });
 
 test('the console re-opens a locked request when its key ring fills (findings 6, 7)', () => {
   const c = console_();
@@ -162,7 +186,7 @@ test('the console re-opens a locked request when its key ring fills (findings 6,
   c.api.S.subscribeRequests((r) => { reqs = r; });
   c.api.S.subscribeNameKey();
   const [reqH, keyH] = c.handlers;
-  reqH.onevent({ pubkey: CP, created_at: 100, content: sealed(DOC), tags: [['d', 'trinityone/request:req1'], ['p', ME], ['t', 'trinityone']] });
+  reqH.onevent(consoleRequest('req1'));
   assert.equal(reqs[0]._locked, true, 'CONTROL: with an empty ring the console marks it locked');
   keyH.onevent(c.envelope);                                       // the shipped reader of the church's own envelope
   assert.equal(reqs[0]._locked, undefined, 'the console request stayed locked after the ring filled');
@@ -173,27 +197,125 @@ test('the console re-opens a locked request when its key ring fills (findings 6,
 function board(requests) {
   const sent = [];
   const body = `${st(SCHED, 'const replyById = {};', 'stew-schedule.jsx')}
+    ${st(SCHED, 'const requestsRef = useSchR(requests)', 'stew-schedule.jsx')}
     ${st(SCHED, 'const lockedFor = (pub) =>', 'stew-schedule.jsx')}
     ${st(SCHED, 'const slotVerdict = (svcId, teamId, roleId, pub) =>', 'stew-schedule.jsx')}
     ${st(SCHED, 'const alreadyAsked = (sId, tId, rId, pub) =>', 'stew-schedule.jsx')}
     ${st(SCHED, 'const sendRequestsFor = async (sId, sDate, sTime, sName, assignMap) =>', 'stew-schedule.jsx')}
-    return { slotVerdict, sendRequestsFor };`;
+    return { slotVerdict, sendRequestsFor, requestsRef };`;
   const replies = [];
   const window = { Steward: { sendServingRequest: async (r) => { sent.push(r); return { id: 'new' }; } } };
-  const b = new Function('requests', 'replies', 'teams', 'teamMeta', 'rosterFor', 'window', body)(
-    requests, replies, [{ id: 'kids', name: 'Kids' }], () => ({ name: 'Kids' }), () => ({ roles: [{ id: 'r1', name: 'Worker' }], people: [] }), window);
+  const b = new Function('requests', 'replies', 'teams', 'teamMeta', 'rosterFor', 'window', 'useSchR', body)(
+    requests, replies, [{ id: 'kids', name: 'Kids' }], () => ({ name: 'Kids' }), () => ({ roles: [{ id: 'r1', name: 'Worker' }], people: [] }), window, (v) => ({ current: v }));
   return { ...b, sent };
 }
+const ASSIGN = { 'kids::r1': { name: 'Me', pub: ME } };
 
 test('the board does not re-ask someone whose request it cannot open yet, and says "opening" (finding 6)', async () => {
   const b = board([{ id: 'req1', memberPub: ME, _locked: true }]);
   assert.equal(b.slotVerdict('svc1', 'kids', 'r1', ME), 'locked', 'a slot behind a locked request reads as "not asked"');
-  const r = await b.sendRequestsFor('svc1', '2099-10-04', '10:30', 'Morning', { 'kids::r1': { name: 'Me', pub: ME } });
+  const r = await b.sendRequestsFor('svc1', '2099-10-04', '10:30', 'Morning', ASSIGN);
   assert.equal(b.sent.length, 0, 'Publish sent a second request to someone who may already have one');
-  assert.deepEqual(r, { tried: 1, failed: 1 }, 'the unsent ask is not counted, so the flash would claim everyone was asked');
+  assert.deepEqual(r, { tried: 0, failed: 0, held: 1 }, 'a held ask must be counted apart from a failed one, so the flash can say which');
   // CONTROL: nobody locked -> asked as before
   const b2 = board([]);
-  await b2.sendRequestsFor('svc1', '2099-10-04', '10:30', 'Morning', { 'kids::r1': { name: 'Me', pub: ME } });
+  await b2.sendRequestsFor('svc1', '2099-10-04', '10:30', 'Morning', ASSIGN);
   assert.equal(b2.sent.length, 1, 'CONTROL: an ordinary Publish asks the person');
   assert.equal(b2.slotVerdict('svc1', 'kids', 'r1', ME), '', 'CONTROL: not asked reads as not asked');
+});
+
+// ── After the audit of d86fbac ────────────────────────────────────────────────────────────────────────────
+
+test('console: a request sealed under a key since trimmed from a LOADED ring is unreadable, and the member is asked (audit #1)', async () => {
+  const c = console_();
+  let reqs = [];
+  c.api.S.subscribeRequests((r) => { reqs = r; });
+  c.api.S.subscribeNameKey();
+  const [reqH, keyH] = c.handlers;
+  keyH.onevent(c.envelopeFor(NAMEKEY));                           // the ring holds only the current key
+  reqH.onevent(consoleRequest('old', OLDKEY));                    // …and this request was sealed under a trimmed one
+  assert.equal(reqs[0]._locked, undefined, 'a request the loaded ring can never open is shown as "still opening"');
+  assert.equal(reqs[0]._unreadable, true);
+  const b = board(reqs);
+  assert.equal(b.slotVerdict('svc2', 'kids', 'r1', ME), '', 'the board reads every slot for this member as "opening", for ever');
+  await b.sendRequestsFor('svc2', '2099-10-11', '10:30', 'Morning', ASSIGN);
+  assert.equal(b.sent.length, 1, 'the board can never ask this member again');
+});
+
+test('phone: a request sealed under a trimmed key is unreadable, not pending, once the church key is held (audit #1)', async () => {
+  const p = memberPhone();
+  let reqs = [];
+  p.api.F.subscribeMyServingRequests((r) => { reqs = r; });
+  p.landKey(NAMEKEY);
+  p.handlers[0].onevent(requestEvent('old', OLDKEY));
+  assert.equal(reqs[0]._unreadable, true, 'a request that will never open is shown as waiting');
+  assert.equal(appDerive(reqs, {}).servPending.length, 0, 'a request that will never open is counted as waiting for a reply');
+  const toasts = [];
+  await respondWith(reqs, 'A', toasts)({ id: 'rota:svc1:kids::r1', req: null }, 'accept');
+  assert.doesNotMatch(toasts.at(-1), /still opening/i, 'the member is told a request that will never open is still opening');
+});
+
+test("another church's locked request stays off the active church's screens (audit #2)", async () => {
+  const lockedB = [{ id: 'reqB', church: CP_B, _locked: true, ts: 1 }];
+  assert.equal(appDerive(lockedB, {}, 'A').servPending.length, 0, "church B's locked request is counted on church A's screens");
+  const toasts = [];
+  await respondWith(lockedB, 'A', toasts)({ id: 'rota:svc1:kids::r1', req: null }, 'accept');
+  assert.match(toasts.at(-1), /hasn’t sent a request/, "church A's rota slot blames church B's locked request");
+  assert.equal(appDerive(lockedB, {}, 'B').servPending.length, 1, 'CONTROL: on church B it is shown');
+});
+
+test('the board sends against the LATEST request list, not the one from before the key wait (audit #5)', async () => {
+  const b = board([{ id: 'req1', memberPub: ME, _locked: true }]);
+  b.requestsRef.current = [{ id: 'req1', memberPub: ME, ...DOC }];   // the key landed during publish's wait and the request opened
+  await b.sendRequestsFor('svc9', '2099-10-18', '10:30', 'Evening', ASSIGN);
+  assert.equal(b.sent.length, 1, 'the send used a stale list and held back someone who was already openable');
+});
+
+test('console: minting the first name key re-reads what could not be opened (claim: "both places notify")', async () => {
+  const c = console_();
+  let reqs = [];
+  c.api.S.subscribeRequests((r) => { reqs = r; });
+  c.api.S.subscribeNameKey();
+  const [reqH, keyH] = c.handlers;
+  keyH.oneose();                                                  // the relay answered: no envelope yet
+  reqH.onevent(consoleRequest('r1', OLDKEY));
+  assert.equal(reqs[0]._locked, true, 'CONTROL: ring empty -> locked');
+  const out = await c.api.S._ensureNameKeyLocked([ME], []);
+  assert.ok(out && c.api.ring().length === 1, 'CONTROL: the console minted its first key');
+  assert.equal(reqs[0]._unreadable, true, 'minting a key did not re-read the locked request (ensureNameKeyForMembers does not notify)');
+});
+
+test('console: a reply it cannot open yet is kept and opens when the ring fills (claim: replies keep and re-read)', () => {
+  const c = console_();
+  let replies = [];
+  c.api.S.subscribeRequestReplies((r) => { replies = r; });
+  c.api.S.subscribeNameKey();
+  const [repH, keyH] = c.handlers;
+  repH.onevent({ pubkey: ME, created_at: 120, content: sealed({ request: 'req1', v: 'decline' }), tags: [['d', 'trinityone/reqreply:req1'], ['p', CP], ['t', 'trinityone']] });
+  assert.equal(replies[0]._locked, true);
+  keyH.onevent(c.envelope);
+  assert.equal(replies[0].v, 'decline', "the console's reply stayed unread after the ring filled");
+});
+
+test('phone: listeners are told only when a USABLE key lands (claim: notify only after a usable envelope)', () => {
+  const p = memberPhone();
+  let calls = 0; p.api.onNameKey(() => { calls++; });
+  p.landGarbage();                                                // an envelope addressed to me that does not open
+  assert.equal(calls, 0, 'a broken envelope told every reader a key had landed');
+  p.landKey();
+  assert.equal(calls, 1, 'CONTROL: a usable envelope notifies');
+});
+
+test('unsubscribing stops the re-read (phone and console)', () => {
+  const p = memberPhone();
+  let n = 0; const stop = p.api.F.subscribeMyServingRequests(() => { n++; });
+  p.handlers[0].onevent(requestEvent('req1'));
+  const before = n; stop(); p.landKey();
+  assert.equal(n, before, 'a closed phone subscription was still re-read when the key landed');
+  const c = console_();
+  let m = 0; const stopC = c.api.S.subscribeRequests(() => { m++; });
+  c.api.S.subscribeNameKey();
+  c.handlers[0].onevent(consoleRequest('req1'));
+  const beforeC = m; stopC(); c.handlers[1].onevent(c.envelope);
+  assert.equal(m, beforeC, 'a closed console subscription was still re-read when the ring filled');
 });
