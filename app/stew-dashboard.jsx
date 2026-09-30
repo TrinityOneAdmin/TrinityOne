@@ -5807,8 +5807,11 @@ function DashMembers() {
         if (kept.length !== ps.length) unlinkedFrom.push(c);
         if (kept.length) nextG[c] = kept;
       });
+      // …and close each pair, as unlinkParent does: otherwise their old requests come back as "Confirm" cards.
+      const nextClosed = { ...guardiansClosed }; const at = Math.floor(Date.now() / 1000);
+      unlinkedFrom.forEach(c => { nextClosed[c + '|' + pk] = at; });
       let okG = null;
-      try { okG = await Promise.resolve(window.Steward.setGuardians(nextG, guardiansClosed)); } catch (e) { okG = null; }
+      try { okG = await Promise.resolve(window.Steward.setGuardians(nextG, nextClosed)); } catch (e) { okG = null; }
       if (!okG) {
         setMinorNotice({ pk, tone: 'fail', text: (nameByPub[pk] || 'They') + ' is marked as a child, but they are STILL listed as a guardian of '
           + unlinkedFrom.map(c => nameByPub[c] || 'a child').join(', ') + ' — the relay didn’t accept the removal. A child is never a guardian; try again.' });
@@ -5994,8 +5997,13 @@ function DashMembers() {
   const unlinkParent = async (childPub, parentPub) => {
     const cur = (guardians[childPub] || []).filter(p => p !== parentPub);
     const nextG = { ...guardians }; if (cur.length) nextG[childPub] = cur; else delete nextG[childPub];
+    // RECORD THE REMOVAL AS A DECISION, the way Decline does. The Confirm list shows any parent request that is
+    // neither linked nor closed, and the parent's original request stays on the relay — so removing the link
+    // without closing the pair put that request straight back on the screen as a fresh "Confirm", one tap from
+    // re-linking the adult the steward had just removed (audit 2026-09-27 item 6; confirmed 2026-09-30).
+    const nextClosed = { ...guardiansClosed, [childPub + '|' + parentPub]: Math.floor(Date.now() / 1000) };
     let okG = null;
-    try { okG = await Promise.resolve(window.Steward.setGuardians(nextG, guardiansClosed)); } catch (e) { okG = null; }
+    try { okG = await Promise.resolve(window.Steward.setGuardians(nextG, nextClosed)); } catch (e) { okG = null; }
     if (!okG) {
       // Failing to REMOVE a link is the worse direction: the adult stays a parent the child's app will always
       // let through. Never let the row imply it is gone.

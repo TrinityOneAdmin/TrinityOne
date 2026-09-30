@@ -37,7 +37,9 @@ test('unlinking actually sends it', () => {
   // The whole defect was a missing call site, not a missing capability.
   // A GENEROUS WINDOW, because stripComments() replaces comments with SPACES to preserve offsets — a 700-char
   // slice of this function was almost entirely whitespace and missed the call it was looking for.
-  const unlink = DASH.slice(DASH.indexOf('const unlinkParent ='), DASH.indexOf('const unlinkParent =') + 1600);
+  // THE WHOLE FUNCTION, brace-matched — not a fixed window. The 1600-character window stopped reaching this call
+  // the day a comment was added above it (2026-09-30), and failed over code that still made the call.
+  const unlink = fnBody(DASH, 'const unlinkParent =', 'unlinkParent');
   assert.ok(unlink.length > 50, 're-anchor: unlinkParent is gone');
   assert.match(unlink, /notifyGuardianRemoved\(parentPub, childPub/,
     'unlinkParent still tells the parent nothing, so their app keeps showing a child the church has ' +
