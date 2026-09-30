@@ -7470,11 +7470,11 @@ window.Fellowship = {
         // A request this phone cannot open yet must show as LOCKED, never as nothing: dropping it silently
         // is how a member never learns their church asked them to serve. The raw event is kept and re-read
         // when the church's name key lands (_onNameKey), and the locked row is replaced by the real one.
-        // …but only while this phone has NO key for that church yet. With a key in hand and still no opening,
-        // the request was sealed under a key the church has since dropped from its ring: it will never open,
-        // so it is `_unreadable`, not waiting — shown as waiting it sat there for ever (audit of d86fbac, #1).
-        // Kept in lockedRaw either way: a rotation that brings the right key re-reads it.
-        if (c === null) { lockedRaw.set(id, e); const waiting = !(_nameKeys.get(cp) || []).length; byId.set(id, { id, church: cp, ...(waiting ? { _locked: true } : { _unreadable: true }), ts: e.created_at }); emit(); return; }
+        // …while it can still open: this phone holds NO key for that church yet, or the request is NEWER than the
+        // envelope its keys came from (it may be sealed under a key still on its way). No newer than a key it
+        // holds and still shut: sealed under a key the church has since trimmed — `_unreadable`, never pending
+        // (audit of d86fbac, #1; the newer-key case, audit of 660f063, #1). Kept in lockedRaw either way.
+        if (c === null) { lockedRaw.set(id, e); const waiting = !(_nameKeys.get(cp) || []).length || (e.created_at || 0) > (_nameKeyTs.get(cp) || 0); byId.set(id, { id, church: cp, ...(waiting ? { _locked: true } : { _unreadable: true }), ts: e.created_at }); emit(); return; }
         lockedRaw.delete(id);
         byId.set(id, { id, church: cp, ...c, ts: e.created_at }); emit();
       },

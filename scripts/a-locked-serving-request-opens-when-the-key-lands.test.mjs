@@ -75,10 +75,10 @@ function memberPhone() {
   let at = 200;
   const envelope = (content) => ({ pubkey: CP, created_at: ++at, kind: 30078, tags: [['d', 'trinityone/namekey:' + CP]], content });
   const ringFor = (key) => JSON.stringify({ keys: { [ME]: nip44.encrypt(JSON.stringify([hex(key)]), nip44.utils.getConversationKey(churchSk, ME)) } });
-  return { api, handlers, landKey: (key = NAMEKEY) => api.ingest(CP, envelope(ringFor(key))),
+  return { api, handlers, landKey: (key = NAMEKEY, ring) => api.ingest(CP, envelope(ring ? JSON.stringify({ keys: { [ME]: nip44.encrypt(JSON.stringify(ring), nip44.utils.getConversationKey(churchSk, ME)) } }) : ringFor(key))),
     landGarbage: () => api.ingest(CP, envelope(JSON.stringify({ keys: { [ME]: 'not-a-sealed-ring' } }))) };
 }
-const requestEvent = (id, key = NAMEKEY) => ({ pubkey: CP, created_at: 100, content: sealedWith(key, DOC), tags: [['d', 'trinityone/request:' + id], ['t', 'trinityone'], ['p', ME]] });
+const requestEvent = (id, key = NAMEKEY, at = 100) => ({ pubkey: CP, created_at: at, content: sealedWith(key, DOC), tags: [['d', 'trinityone/request:' + id], ['t', 'trinityone'], ['p', ME]] });
 const replyEvent = (id, v) => ({ pubkey: ME, created_at: 110, content: sealed({ request: id, v, swapTo: '' }), tags: [['d', 'trinityone/reqreply:' + id], ['t', 'trinityone'], ['p', CP]] });
 
 // app.jsx's own lines, sliced and run in order. `active` is the id of the active church: 'A' is CP, 'B' is CP_B.
@@ -135,10 +135,11 @@ test("my own reply that cannot be opened yet still counts as answered, and opens
 });
 
 const RESPOND = fn(APPJSX, 'respondServing: async (item, verdict, swapTo) =>', 'app.jsx');
-const respondWith = (servReqs, active, toasts) => {
+const respondWith = (servReqs, active, toasts, sentTo = []) => {
   const { _lockedHere } = appDerive(servReqs, {}, active);
-  return new Function('churches', 'activeChurch', 'toast', 'servReqs', '_lockedHere', 'window',
-    `const o = { ${RESPOND} }; return o.respondServing;`)(CHURCHES, active, (m) => toasts.push(m), servReqs, _lockedHere, WIN);
+  const win = { Fellowship: { ...WIN.Fellowship, respondToServingRequest: async (church, id, v) => { sentTo.push([church, id, v]); return { ok: true }; } } };
+  return new Function('churches', 'activeChurch', 'toast', 'servReqs', '_lockedHere', 'window', 'setServReplies',
+    `const o = { ${RESPOND} }; return o.respondServing;`)(CHURCHES, active, (m) => toasts.push(m), servReqs, _lockedHere, win, () => {});
 };
 
 test('"I can serve" on a rota slot while a request is still locked does not blame the leader (finding 5, knock-on)', async () => {
@@ -163,6 +164,7 @@ function console_() {
   };
   const names = Object.keys(world);
   const body = `let _nameKeyRing = [], _nameKeyDocKeys = null, _nameKeyChecked = false;
+    ${st(STEWARD, 'var _nameKeyAt = 0;', 'steward.js')}
     ${st(STEWARD, 'var _nameKeyListeners', 'steward.js')}
     ${fn(STEWARD, 'function _onNameKeyRing(fn)', 'steward.js')}
     ${fn(STEWARD, 'function _nameKeyRingChanged()', 'steward.js')}
@@ -174,11 +176,11 @@ function console_() {
                 ${fn(STEWARD, 'subscribeNameKey()', 'steward.js')} };
     return { S, ring: () => _nameKeyRing };`;
   const api = new Function(...names, body)(...names.map(n => world[n]));
-  const envelopeFor = (key) => ({ pubkey: CP, created_at: 200, kind: 30078, tags: [['d', 'trinityone/namekey:' + CP]],
-    content: JSON.stringify({ keys: { [CP]: nip44.encrypt(JSON.stringify([hex(key)]), nip44.utils.getConversationKey(churchSk, CP)) } }) });
+  const envelopeFor = (key, at = 200, ring = [hex(key)]) => ({ pubkey: CP, created_at: at, kind: 30078, tags: [['d', 'trinityone/namekey:' + CP]],
+    content: JSON.stringify({ keys: { [CP]: nip44.encrypt(JSON.stringify(ring), nip44.utils.getConversationKey(churchSk, CP)) } }) });
   return { api, handlers, envelope: envelopeFor(NAMEKEY), envelopeFor };
 }
-const consoleRequest = (id, key = NAMEKEY) => ({ pubkey: CP, created_at: 100, content: sealedWith(key, DOC), tags: [['d', 'trinityone/request:' + id], ['p', ME], ['t', 'trinityone']] });
+const consoleRequest = (id, key = NAMEKEY, at = 100) => ({ pubkey: CP, created_at: at, content: sealedWith(key, DOC), tags: [['d', 'trinityone/request:' + id], ['p', ME], ['t', 'trinityone']] });
 
 test('the console re-opens a locked request when its key ring fills (findings 6, 7)', () => {
   const c = console_();
@@ -196,13 +198,14 @@ test('the console re-opens a locked request when its key ring fills (findings 6,
 // ── The board: stew-schedule.jsx's own verdict + send logic, sliced and run ───────────────────────────────
 function board(requests) {
   const sent = [];
-  const body = `${st(SCHED, 'const replyById = {};', 'stew-schedule.jsx')}
+  const body = `${st(SCHED, 'const heldFlash = (lead, n, retry) =>', 'stew-schedule.jsx')}
+    ${st(SCHED, 'const replyById = {};', 'stew-schedule.jsx')}
     ${st(SCHED, 'const requestsRef = useSchR(requests)', 'stew-schedule.jsx')}
     ${st(SCHED, 'const lockedFor = (pub) =>', 'stew-schedule.jsx')}
     ${st(SCHED, 'const slotVerdict = (svcId, teamId, roleId, pub) =>', 'stew-schedule.jsx')}
     ${st(SCHED, 'const alreadyAsked = (sId, tId, rId, pub) =>', 'stew-schedule.jsx')}
     ${st(SCHED, 'const sendRequestsFor = async (sId, sDate, sTime, sName, assignMap) =>', 'stew-schedule.jsx')}
-    return { slotVerdict, sendRequestsFor, requestsRef };`;
+    return { slotVerdict, sendRequestsFor, requestsRef, heldFlash };`;
   const replies = [];
   const window = { Steward: { sendServingRequest: async (r) => { sent.push(r); return { id: 'new' }; } } };
   const b = new Function('requests', 'replies', 'teams', 'teamMeta', 'rosterFor', 'window', 'useSchR', body)(
@@ -216,7 +219,7 @@ test('the board does not re-ask someone whose request it cannot open yet, and sa
   assert.equal(b.slotVerdict('svc1', 'kids', 'r1', ME), 'locked', 'a slot behind a locked request reads as "not asked"');
   const r = await b.sendRequestsFor('svc1', '2099-10-04', '10:30', 'Morning', ASSIGN);
   assert.equal(b.sent.length, 0, 'Publish sent a second request to someone who may already have one');
-  assert.deepEqual(r, { tried: 0, failed: 0, held: 1 }, 'a held ask must be counted apart from a failed one, so the flash can say which');
+  assert.deepEqual(r, { tried: 0, failed: 0, held: 1, heldPubs: [ME] }, 'a held ask must be counted apart from a failed one, so the flash can say which');
   // CONTROL: nobody locked -> asked as before
   const b2 = board([]);
   await b2.sendRequestsFor('svc1', '2099-10-04', '10:30', 'Morning', ASSIGN);
@@ -318,4 +321,94 @@ test('unsubscribing stops the re-read (phone and console)', () => {
   c.handlers[0].onevent(consoleRequest('req1'));
   const beforeC = m; stopC(); c.handlers[1].onevent(c.envelope);
   assert.equal(m, beforeC, 'a closed console subscription was still re-read when the ring filled');
+});
+
+// ── After the audit of 660f063 ────────────────────────────────────────────────────────────────────────────
+
+test('console: a request NEWER than the ring it holds is waiting, not unreadable — and opens when the newer ring lands', async () => {
+  const c = console_();
+  let reqs = [];
+  c.api.S.subscribeRequests((r) => { reqs = r; });
+  c.api.S.subscribeNameKey();
+  const [reqH, keyH] = c.handlers;
+  keyH.onevent(c.envelopeFor(OLDKEY, 200));                      // this console holds the ring from before a rotation
+  reqH.onevent(consoleRequest('r1', NAMEKEY, 250));               // another steward sealed this under the NEW key
+  assert.equal(reqs[0]._locked, true, 'a request sealed under a key still on its way was written off as unreadable');
+  const b = board(reqs);
+  const out = await b.sendRequestsFor('svc1', '2099-10-04', '10:30', 'Morning', ASSIGN);
+  assert.equal(b.sent.length, 0, 'the board asked the same person twice');
+  assert.equal(out.held, 1);
+  keyH.onevent(c.envelopeFor(NAMEKEY, 300, [hex(NAMEKEY), hex(OLDKEY)]));   // the newer ring arrives
+  assert.equal(reqs[0].serviceId, DOC.serviceId, 'it did not open when the newer ring landed');
+});
+
+test('phone: a request NEWER than the keys it holds is waiting, not unreadable — and opens when the newer key lands', () => {
+  const p = memberPhone();
+  let reqs = [];
+  p.api.F.subscribeMyServingRequests((r) => { reqs = r; });
+  p.landKey(OLDKEY);                                              // envelope at 201
+  p.handlers[0].onevent(requestEvent('r1', NAMEKEY, 250));
+  assert.equal(reqs[0]._locked, true, 'a request sealed under a key still on its way was written off as unreadable');
+  assert.equal(appDerive(reqs, {}).servPending.length, 1, 'while it waits it must still reach the screen');
+  p.landKey(null, [hex(NAMEKEY), hex(OLDKEY)]);                   // envelope at 202 — the newer ring
+  assert.equal(reqs[0].role, DOC.role, 'it did not open when the newer key landed');
+});
+
+test('a request that opens during the wait, for the SAME slot, is not sent again (the ref, via alreadyAsked)', async () => {
+  const b = board([{ id: 'req1', memberPub: ME, _locked: true }]);
+  b.requestsRef.current = [{ id: 'req1', memberPub: ME, ...DOC }];   // it opened: it IS the svc1 / kids / r1 ask
+  const out = await b.sendRequestsFor('svc1', '2099-10-04', '10:30', 'Morning', ASSIGN);
+  assert.equal(b.sent.length, 0, 'a person already asked for this slot was asked again');
+  assert.deepEqual([out.tried, out.held], [0, 0]);
+});
+
+test("a request a DELEGATED steward signed (['church'] tag) shows on that church's screens", () => {
+  const p = memberPhone();
+  let reqs = [];
+  p.api.F.subscribeMyServingRequests((r) => { reqs = r; });
+  const delegate = getPublicKey(generateSecretKey());
+  p.handlers[0].onevent({ ...requestEvent('d1'), pubkey: delegate, tags: [['d', 'trinityone/request:d1'], ['t', 'trinityone'], ['p', ME], ['church', CP]] });
+  assert.equal(reqs[0].church, CP, "the request was filed under the delegate, not the church");
+  assert.equal(appDerive(reqs, {}, 'A').servPending.length, 1, "a delegate's request is hidden from the church's own screens");
+});
+
+test("answering another church's request sends the answer to THAT church, not the active one (audit #3)", async () => {
+  const toasts = [], sentTo = [];
+  const reqB = { id: 'reqB', church: CP_B, ...DOC };
+  await respondWith([reqB], 'A', toasts, sentTo)(reqB, 'accept');
+  assert.deepEqual(sentTo, [[CP_B, 'reqB', 'accept']], "the answer went to the active church, where church B never reads it");
+  const slot = { id: 'rota:svc1:kids::r1', req: { id: 'reqA', church: CP } };
+  await respondWith([slot.req], 'A', toasts, sentTo)(slot, 'decline');
+  assert.deepEqual(sentTo.at(-1), [CP, 'reqA', 'decline'], 'CONTROL: a rota slot answers its own church');
+});
+
+// The three publishers read `held` and name the right control (audit of 660f063, #4, #5).
+function publishers(asked) {
+  const flashes = [];
+  const svc = { id: 'svc1', date: '2099-10-04', time: '10:30', name: 'Morning' };
+  const world = {
+    window: { Steward: { publishRota: async () => ({ id: 'rota' }), publishService: async (x) => ({ ...x, id: x.id || 'n' }), nameKeyReady: () => true } },
+    svcId: 'svc1', svc, assign: ASSIGN, sortedSvcs: [svc], services: [svc], setFlash: (m) => flashes.push(m), setFillMenu: () => {}, setAssign: () => {},
+    SCH_NO_KEY: 'no key', setTimeout: () => {}, sendRequestsFor: async () => asked,
+    schAddMonths: () => '2099-10-05', schGenDates: () => ['2099-10-04'], fillAssign: () => ASSIGN, assignFor: () => ASSIGN,
+    rosterFor: () => ({ roles: [{ id: 'r1' }], pods: [{ name: 'Pod A', fills: {} }], people: [] }), todayISO: () => '2026-09-30',
+  };
+  const names = Object.keys(world);
+  const body = `${st(SCHED, 'const heldFlash = (lead, n, retry) =>', 'stew-schedule.jsx')}
+    ${st(SCHED, 'const unaskedFlash = (lead, failed, tried, retry) =>', 'stew-schedule.jsx')}
+    ${st(SCHED, 'const publish = async () =>', 'stew-schedule.jsx')}
+    ${st(SCHED, 'const rotatePods = (team) =>', 'stew-schedule.jsx')}
+    ${st(SCHED, 'const autoFillAhead = async (months) =>', 'stew-schedule.jsx')}
+    return { publish, rotatePods, autoFillAhead };`;
+  return { ...new Function(...names, body)(...names.map(n => world[n])), flashes };
+}
+
+test('all three publishers tell the steward about a held person, naming the control that will ask them', async () => {
+  const asked = { tried: 0, failed: 0, held: 1, heldPubs: [ME] };
+  const a = publishers(asked); await a.publish();
+  assert.match(a.flashes.at(-1) || '', /1 person has an earlier request still opening — press Publish again/, 'Publish ignored the held person');
+  const b = publishers(asked); b.rotatePods({ id: 'kids' }); await new Promise(r => setImmediate(r)); await new Promise(r => setImmediate(r));
+  assert.match(b.flashes.at(-1) || '', /still opening — Open each service and press Publish/, 'rotating pods ignored the held person, or named the wrong control');
+  const c = publishers(asked); await c.autoFillAhead(1);
+  assert.match(c.flashes.at(-1) || '', /still opening — Open each service and press Publish/, 'bulk create-and-fill ignored the held person, or named the wrong control');
 });

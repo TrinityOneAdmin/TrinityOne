@@ -16393,6 +16393,7 @@ zoo`.split("\n");
   var _localBlocked = /* @__PURE__ */ new Set();
   var EVENT_POLICIES = ["leaders", "stewards", "everyone"];
   var _nameKeyRing = [];
+  var _nameKeyAt = 0;
   var _nameKeyListeners = /* @__PURE__ */ new Set();
   function _onNameKeyRing(fn) {
     _nameKeyListeners.add(fn);
@@ -16526,6 +16527,7 @@ zoo`.split("\n");
     _nameKeyRing = [];
     _nameKeyDocKeys = null;
     _nameKeyChecked = false;
+    _nameKeyAt = 0;
     _localBlocked = /* @__PURE__ */ new Set();
     _applyNoPhotoList([]);
     _careKeyHex = null;
@@ -20563,10 +20565,12 @@ zoo`.split("\n");
       ring = fitted;
       const wrapped = JSON.stringify(ring);
       const keys = await _sealEach(wrapped, recips, (pl, pk) => encrypt3(pl, getConversationKey(churchSk, pk)));
-      const out = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", NAMEKEY_D + cp], ["t", NET]], content: JSON.stringify({ rev: ring.length, keys }) }));
+      const at = now();
+      const out = await publish(feChurch({ kind: 30078, created_at: at, tags: [["d", NAMEKEY_D + cp], ["t", NET]], content: JSON.stringify({ rev: ring.length, keys }) }));
       if (out === false) return false;
       _nameKeyRing = ring;
       _nameKeyDocKeys = keys;
+      _nameKeyAt = Math.max(_nameKeyAt, at);
       _nameKeyRingChanged();
       return out;
     },
@@ -20576,11 +20580,13 @@ zoo`.split("\n");
       const sub = pool.subscribeMany(relays(), [{ kinds: [30078], "#d": [NAMEKEY_D + cp] }], {
         onevent(e) {
           if (!_byChurchOrSteward(e)) return;
+          if ((e.created_at || 0) < _nameKeyAt) return;
           try {
             const env = JSON.parse(e.content || "{}");
             if (env.keys && typeof env.keys === "object") {
               _nameKeyDocKeys = env.keys;
               _nameKeyChecked = true;
+              _nameKeyAt = e.created_at || 0;
             }
             const mine = env.keys && churchPub && env.keys[churchPub];
             if (!mine || !churchSk) return;
@@ -23072,7 +23078,8 @@ zoo`.split("\n");
           const c = _openChurchDoc(e.content);
           if (c === null) {
             lockedRaw.set(id, e);
-            byId.set(id, { id, memberPub, ..._nameKeyReady() ? { _unreadable: true } : { _locked: true }, ts: e.created_at });
+            const gone = _nameKeyReady() && (e.created_at || 0) <= _nameKeyAt;
+            byId.set(id, { id, memberPub, ...gone ? { _unreadable: true } : { _locked: true }, ts: e.created_at });
             emit();
             return;
           }
@@ -23552,6 +23559,7 @@ zoo`.split("\n");
       _nameKeyRing = [];
       _nameKeyDocKeys = null;
       _nameKeyChecked = false;
+      _nameKeyAt = 0;
       _localBlocked = /* @__PURE__ */ new Set();
       _applyNoPhotoList([]);
       for (const k of Object.keys(CAP_KEYS)) _capState[k] = { ring: [], docKeys: null, rev: 1, at: 0, checked: false };

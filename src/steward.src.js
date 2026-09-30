@@ -1928,6 +1928,11 @@ let _localBlocked = new Set();
 // post events, and a group naming nobody is stewards-only as a consequence.
 const EVENT_POLICIES = ['leaders', 'stewards', 'everyone'];
 let _nameKeyRing = [];   // hex keys, current first — see ensureNameKeyForMembers
+// WHEN the envelope behind _nameKeyRing / _nameKeyDocKeys was published. Newest wins, as in the member app
+// (_nameKeyTs): a console reading two relays, one not yet synced after a rotation, could take the OLDER copy
+// last, and the next routine update then republished that pre-rotation ring as the newest — phones dropped the
+// new key and the key a Block had rotated away became current again (audit of 660f063, 2026-09-30; on main too).
+let _nameKeyAt = 0;
 // Readers that could not open a document keep it and re-read it when the ring is (re)filled. The serving board's
 // request and reply readers needed this: `_nameKeyRing` starts empty on every console boot and nothing re-ran
 // their subscriptions when it filled, so a request stayed "locked" — and the board re-asked everyone (audit
@@ -2201,7 +2206,7 @@ function _resetChurchScopedState() {
   // CARRIES THEM FORWARD on every edit, so adding one steward in church B would have published church A's
   // labels and join dates into B's roster. AUDIT-2026-08-30.
   _stewardCaps = {}; _stewardNames = {}; _stewardNamesCt = ''; _stewardSince = {};
-  _nameKeyRing = []; _nameKeyDocKeys = null; _nameKeyChecked = false;
+  _nameKeyRing = []; _nameKeyDocKeys = null; _nameKeyChecked = false; _nameKeyAt = 0;
   // church A's blocks must not suppress church B's members from B's envelopes (item B)
   _localBlocked = new Set();
   _applyNoPhotoList([]);
@@ -7086,10 +7091,12 @@ window.Steward = {
     // ~5 ms each on a workstation and several times that on a phone, so a 500-member church froze the console
     // for seconds — after a Block, which is precisely when a steward needs to see that something is happening.
     const keys = await _sealEach(wrapped, recips, (pl, pk) => nip44e(pl, nip44ck(churchSk, pk)));
-    const out = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', NAMEKEY_D + cp], ['t', NET]], content: JSON.stringify({ rev: ring.length, keys }) }));
+    const at = now();
+    const out = await publish(feChurch({ kind: 30078, created_at: at, tags: [['d', NAMEKEY_D + cp], ['t', NET]], content: JSON.stringify({ rev: ring.length, keys }) }));
     if (out === false) return false;
     _nameKeyRing = ring;
     _nameKeyDocKeys = keys;
+    _nameKeyAt = Math.max(_nameKeyAt, at);   // our own publish is the newest; its echo must not be refused, nor an older copy taken
     _nameKeyRingChanged();
     return out;
   },
@@ -7099,11 +7106,12 @@ window.Steward = {
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], '#d': [NAMEKEY_D + cp] }], {
       onevent(e) {
         if (!_byChurchOrSteward(e)) return;   // church key or a CURRENT roster steward, same rule as every other envelope
+        if ((e.created_at || 0) < _nameKeyAt) return;   // an older copy from a relay that has not caught up — see _nameKeyAt
         try {
           const env = JSON.parse(e.content || '{}');
           // Record the recipient map even when we cannot open our own copy: "an envelope exists" is exactly
           // what stops this console minting a second key over it.
-          if (env.keys && typeof env.keys === 'object') { _nameKeyDocKeys = env.keys; _nameKeyChecked = true; }
+          if (env.keys && typeof env.keys === 'object') { _nameKeyDocKeys = env.keys; _nameKeyChecked = true; _nameKeyAt = e.created_at || 0; }
           const mine = env.keys && churchPub && env.keys[churchPub];
           if (!mine || !churchSk) return;
           const plain = nip44d(mine, nip44ck(churchSk, e.pubkey));
@@ -9637,11 +9645,13 @@ window.Steward = {
         // every cleartext request written before that. null means sealed with a key this console does not
         // hold yet — mark it locked rather than dropping it, so the board says so instead of showing a gap.
         const c = _openChurchDoc(e.content);
-        // `_locked` only while the ring is still EMPTY (the key has not arrived). A ring that is loaded and still
-        // cannot open it means the request was sealed under a key since trimmed from the ring (NAME_RING_MAX): it
-        // will never open, and treating it as "still opening" blocked the board from ever asking that member again
-        // (audit of d86fbac, #1). Such a row is `_unreadable`; the board ignores it. Still kept for a re-read.
-        if (c === null) { lockedRaw.set(id, e); byId.set(id, { id, memberPub, ...(_nameKeyReady() ? { _unreadable: true } : { _locked: true }), ts: e.created_at }); emit(); return; }
+        // `_locked` = waiting for a key: the ring is still EMPTY, or the request is NEWER than the envelope the ring
+        // came from, so it may be sealed under a key this console has not received yet (a rotation in flight).
+        // `_unreadable` = the ring is loaded, the request is no newer than it, and it still will not open: sealed
+        // under a key since trimmed from the ring (NAME_RING_MAX). That never opens, and treating it as waiting
+        // blocked the board from asking that member again (audit of d86fbac, #1); treating a NEWER one as
+        // unreadable made the board ask twice (audit of 660f063, #1). Both kept in lockedRaw: a newer ring re-reads.
+        if (c === null) { lockedRaw.set(id, e); const gone = _nameKeyReady() && (e.created_at || 0) <= _nameKeyAt; byId.set(id, { id, memberPub, ...(gone ? { _unreadable: true } : { _locked: true }), ts: e.created_at }); emit(); return; }
         lockedRaw.delete(id);
         byId.set(id, { id, memberPub, ...c, ts: e.created_at }); emit();
       },
@@ -9948,7 +9958,7 @@ window.Steward = {
     // you steward carried church A's ring across — and the roster effect then published it as church B's name
     // key, wrapped to church B's members. That hands every member of B the key that opens A's sealed names.
     // AUDIT-2026-07-27.
-    _nameKeyRing = []; _nameKeyDocKeys = null; _nameKeyChecked = false;
+    _nameKeyRing = []; _nameKeyDocKeys = null; _nameKeyChecked = false; _nameKeyAt = 0;
     // The locally-known blocklist is per-CHURCH too (item B): carried across, church A's blocks would
     // silently drop church B's members from every envelope this console publishes for B.
     _localBlocked = new Set();

@@ -167,6 +167,7 @@ function blockRig(have) {
     let _nameKeyRing = ['11'.repeat(32)];
     let _nameKeyDocKeys = HAVE;
     const _nameKeyRingChanged = () => {};   // tells the serving-board readers the ring filled; not under test here
+    let _nameKeyAt = 0;                     // when the ring's envelope was published (newest wins); not under test here
     let _nameKeyChecked = true;
     const published = [];
     const churchSk = new Uint8Array(32).fill(3);

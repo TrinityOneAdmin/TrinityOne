@@ -584,7 +584,7 @@ function DashRota({ onNewTeam }) {
         .then(async r => {
           if (r == null) return { rota: null, failed: 0, tried: 0 };
           const asked = await sendRequestsFor(s.id, s.date, s.time, s.name, next);
-          return { rota: r, failed: asked.failed, tried: asked.tried, held: asked.held };
+          return { rota: r, failed: asked.failed, tried: asked.tried, heldPubs: asked.heldPubs };
         }));
     });
     Promise.all(saves).then(out => {
@@ -593,8 +593,8 @@ function DashRota({ onNewTeam }) {
       const unasked = out.reduce((n, r) => n + r.failed, 0);
       const rotLead = 'Rotated ' + pods.length + ' pods across ' + upcoming.length + ' service' + (upcoming.length === 1 ? '' : 's');
       if (unasked) { setFlash(unaskedFlash(rotLead, unasked, out.reduce((n, r) => n + r.tried, 0), 'Open each service and press Publish')); setTimeout(() => setFlash(''), 6000); return; }
-      const rotHeld = out.reduce((n, r) => n + (r.held || 0), 0);
-      if (rotHeld) { setFlash(heldFlash(rotLead, rotHeld)); setTimeout(() => setFlash(''), 6000); return; }
+      const rotHeld = new Set(out.flatMap(r => r.heldPubs || [])).size;   // PEOPLE, not slots: one person over four weeks is one
+      if (rotHeld) { setFlash(heldFlash(rotLead, rotHeld, 'Open each service and press Publish')); setTimeout(() => setFlash(''), 6000); return; }
       setFlash(rotLead);
       setTimeout(() => setFlash(''), 2600);
     });
@@ -613,14 +613,14 @@ function DashRota({ onNewTeam }) {
   // so an ask that never landed is not there, and pressing Publish again asks exactly the people who were
   // missed and nobody else.
   const sendRequestsFor = async (sId, sDate, sTime, sName, assignMap) => {
-    const jobs = []; let held = 0;
+    const jobs = []; const heldPubs = new Set();
     for (const key in assignMap) {
       const a = assignMap[key]; if (!a || !a.pub) continue;
       const [teamId, roleId] = key.split('::');
       if (alreadyAsked(sId, teamId, roleId, a.pub)) continue;
       // Holding a request to this person that we cannot open yet: it may BE this slot. Do not send a second one;
       // count it as not asked yet, so the flash says so and a later Publish (key in hand) asks exactly if needed.
-      if (lockedFor(a.pub)) { held++; continue; }
+      if (lockedFor(a.pub)) { heldPubs.add(a.pub); continue; }
       const team = teams.find(t => t.id === teamId); const m = team ? teamMeta(team) : {};
       const role = rosterFor(teamId).roles.find(r => r.id === roleId);
       jobs.push(Promise.resolve(window.Steward.sendServingRequest({ memberPub: a.pub, serviceId: sId, teamId, roleId, role: role ? role.name : '', teamName: m.name || (team && team.name) || 'Team', icon: m.icon, accent: m.accent, date: sDate, time: sTime, service: sName, note: `Can you serve on ${m.name || (team && team.name) || 'the team'} (${role ? role.name : ''})?` })).catch(() => null));
@@ -629,7 +629,7 @@ function DashRota({ onNewTeam }) {
     const failed = out.filter(r => r == null).length;
     // `held` is NOT a failure: nothing was sent and nothing went wrong — a request to that person is still opening.
     // Counted apart so the flash does not point at an error message that is not there (audit of d86fbac, #5).
-    return { tried: out.length, failed, held };
+    return { tried: out.length, failed, held: heldPubs.size, heldPubs: [...heldPubs] };
   };
   // "2 of 5 couldn't be asked", and what to do about it. One sentence, because it sits in a flash.
   //
@@ -644,7 +644,9 @@ function DashRota({ onNewTeam }) {
   // three different controls. Only publish() is reached by "Publish rota", and pressing it again re-sends
   // for the SELECTED service only — so on the bulk paths "press Publish again" named a button the steward
   // never pressed and would not have retried the other weeks anyway.
-  const heldFlash = (lead, held) => `${lead}. ${held} ${held === 1 ? 'person has' : 'people have'} an earlier request still opening — press Publish again in a moment to ask them.`;
+  // `retry` names the control, like unaskedFlash's: on the bulk paths "press Publish" re-sends for the SELECTED
+  // service only, so they say to open each service (audit of 660f063, #4).
+  const heldFlash = (lead, n, retry) => `${lead}. ${n} ${n === 1 ? 'person has' : 'people have'} an earlier request still opening — ${retry} in a moment to ask them.`;
   const unaskedFlash = (lead, failed, tried, retry) => `${lead}, but ${failed} of ${tried} couldn’t be asked yet. ${retry}; if it keeps failing, the message above says why.`;
   // pure: fill the gaps of `base` for a given date, not reusing anyone already on that day
   const fillAssign = (base, date, svcId) => {
@@ -711,7 +713,7 @@ function DashRota({ onNewTeam }) {
       const probe = await window.Steward.publishService({ id: svc.id, name: svc.name, date: svc.date, time: svc.time });
       if (probe == null) { setFlash(SCH_NO_KEY); setTimeout(() => setFlash(''), 4000); return; }
     }
-    let lost = 0, unasked = 0, triedAsks = 0, heldAsks = 0;
+    let lost = 0, unasked = 0, triedAsks = 0; const heldAsks = new Set();
     for (const dt of dates) {
       if (byDate[dt]) { ensured.push(byDate[dt]); continue; }
       const ns = await window.Steward.publishService({ name: svc.name, date: dt, time: svc.time });
@@ -722,13 +724,13 @@ function DashRota({ onNewTeam }) {
       const r = await window.Steward.publishRota({ service: s.id, published: true, assign: filled });
       if (r == null) { lost++; continue; }   // do not ask anyone to serve on a rota that does not exist
       const asked = await sendRequestsFor(s.id, s.date, s.time, s.name, filled);
-      unasked += asked.failed; triedAsks += asked.tried; heldAsks += asked.held;
+      unasked += asked.failed; triedAsks += asked.tried; (asked.heldPubs || []).forEach(p => heldAsks.add(p));
       if (s.id === svcId) setAssign(filled);
     }
     if (lost) { setFlash(SCH_NO_KEY); setTimeout(() => setFlash(''), 4000); return; }
     const madeLead = `Created + filled ${ensured.length} service${ensured.length > 1 ? 's' : ''}`;
     if (unasked) { setFlash(unaskedFlash(madeLead, unasked, triedAsks, 'Open each service and press Publish')); setTimeout(() => setFlash(''), 6000); return; }
-    if (heldAsks) { setFlash(heldFlash(madeLead, heldAsks)); setTimeout(() => setFlash(''), 6000); return; }
+    if (heldAsks.size) { setFlash(heldFlash(madeLead, heldAsks.size, 'Open each service and press Publish')); setTimeout(() => setFlash(''), 6000); return; }
     setFlash(madeLead); setTimeout(() => setFlash(''), 2800);
   };
   const assignFor = (id) => (draft[id] !== undefined ? draft[id] : (persisted(id) ? persisted(id).assign : null));
@@ -746,7 +748,7 @@ function DashRota({ onNewTeam }) {
     if (r == null) { setFlash(SCH_NO_KEY); setTimeout(() => setFlash(''), 4000); return; }
     const asked = await sendRequestsFor(svcId, svc.date, svc.time, svc.name, assign);
     if (asked.failed) { setFlash(unaskedFlash('Published', asked.failed, asked.tried, 'Press Publish again')); setTimeout(() => setFlash(''), 5000); return; }
-    if (asked.held) { setFlash(heldFlash('Published', asked.held)); setTimeout(() => setFlash(''), 5000); return; }
+    if (asked.held) { setFlash(heldFlash('Published', asked.held, 'press Publish again')); setTimeout(() => setFlash(''), 5000); return; }
     setFlash('Published — everyone assigned has been asked'); setTimeout(() => setFlash(''), 2400);
   };
 

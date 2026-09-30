@@ -152,9 +152,20 @@ test('locked -> unlock -> the stray event arrives late -> still able to send; th
     assert.equal(s.myPubkey, me, 'the unlock event arriving late cleared the member\'s identity from the engine');
     assert.equal(s.signed, true, 'the unlock event arriving late left an unlocked member unable to send');
 
-    // And the other direction must still hold: the real "Lock now" forgets the key.
-    await b.ev(`window.TrinityIdentity.lock()`);
-    await sleep(1500);
+    // And the other direction must still hold: the real "Lock now" BUTTON forgets the key — reached the way a
+    // member reaches it (You & settings -> Identity lock -> Lock now), so deleting the button's handler fails this test.
+    // (It called TrinityIdentity.lock() directly until the audit of ac77a53 pointed out that proves the engine,
+    // not the control.)
+    const clickText = async (re, what) => {
+      const hit = await b.ev(`(() => { const re = new RegExp(${JSON.stringify(re.source)}); const els = [...document.querySelectorAll('button, [role=button], a, div, span')].filter(el => re.test((el.innerText || '').trim()) && el.offsetParent !== null); if (!els.length) return false; els.sort((x, y) => (x.innerText || '').length - (y.innerText || '').length); els[0].click(); return true; })()`);
+      assert.ok(hit, 'could not find ' + what + ' on screen');
+      await sleep(1200);
+    };
+    const opened = await b.ev(`(() => { const btn = [...document.querySelectorAll('button[title="You & settings"]')].find(x => x.offsetParent !== null); if (!btn) return false; btn.click(); return true; })()`);
+    assert.ok(opened, 'no "You & settings" button in the tab bar');
+    await sleep(1200);
+    await clickText(/^Identity lock — on/, 'the Identity lock row');
+    await b.click('Lock now', 1500);
     s = await b.ev(CAN_SEND);
     assert.equal(s.locked, true, 'Lock now did not lock');
     assert.equal(s.signed, false, 'after Lock now the phone can still sign');

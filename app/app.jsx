@@ -2289,7 +2289,12 @@ function App() {
       // is safe: the verdict arrives already decided and goes to the fixed d-tag `reqreply:<requestId>`, so
       // a second press writes the same answer to the same document. (Unlike setEventRsvp, this is not a
       // toggle and cannot reverse itself.)
-      const sent = await window.Fellowship.respondToServingRequest(np, reqId, verdict, swapTo);
+      // ANSWER THE CHURCH THAT ASKED. The request feed spans every church this member belongs to, so the request
+      // on screen may be church B's while church A is active; sending to the active church put the answer where
+      // B never reads it, while the member believed they had replied (audit of 660f063, #3). A request carries
+      // its church's hex key (`church`, from the author or its ['church'] tag); respondToServingRequest takes hex.
+      const reqObj = item.req || (typeof item.id === 'string' && item.id.indexOf('rota:') !== 0 ? item : null);
+      const sent = await window.Fellowship.respondToServingRequest((reqObj && reqObj.church) || np, reqId, verdict, swapTo);
       if (!(sent && sent.ok)) {
         toast(sent && sent.reason === 'unconfirmed'
           ? 'We couldn’t confirm your answer reached your church — it may well have. Tap the same button again; it won’t change what you said.'
