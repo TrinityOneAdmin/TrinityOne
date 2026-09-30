@@ -32,8 +32,9 @@ import { WebSocket } from 'ws';
 import { generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure';
 import { npubEncode } from 'nostr-tools/nip19';
 import { requireFreePort } from './test-ports.mjs';
+import { createServer } from 'node:http';
 
-const PA = 8731, PB = 8732, PC = 8733, PD = 8734, PE = 8738;   // unique across scripts/*.test.mjs AND scripts/*.probe.mjs
+const PA = 8731, PB = 8732, PC = 8733, PD = 8734, PE = 8738, PF = 8739;   // PF: a fake partner server, not a relay   // unique across scripts/*.test.mjs AND scripts/*.probe.mjs
 const CAP = 300;                          // per-church media cap on relay C
 const MEMBER_D = 'trinityone/member:', RELAYS_D = 'trinityone/relays', NET = 'trinityone';
 const ROOT = new URL('..', import.meta.url).pathname;
@@ -87,7 +88,7 @@ async function config(r, body) { const res = await fetch(`http://127.0.0.1:${r.p
 
 let A, B, C, D, E;
 before(async () => {
-  for (const p of [PA, PB, PC, PD, PE]) await requireFreePort(p, 'relay-co-owned-media-survives.test.mjs');
+  for (const p of [PA, PB, PC, PD, PE, PF]) await requireFreePort(p, 'relay-co-owned-media-survives.test.mjs');
   A = spawnRelay(PA, [c1, c2]);                                  // hosts both churches
   B = spawnRelay(PB, [c1]);                                      // a partner relay of church 1 only
   C = spawnRelay(PC, [c1, c2], { RELAY_CHURCH_MEDIA_CAP: String(CAP) });
@@ -288,4 +289,48 @@ test('a copy taken from a partner keeps the ORIGINAL time — a deletion made be
   await restart(A, [c1, c2]);
   await syncNow(E); await until(() => !has(E, sv), "E to act on A's deletion");
   assert.equal(await play(PE, m2, sv), 404, 'a copy made after the deletion, but carrying the old upload, survived it');
+});
+
+test('a partner that LISTS another church\'s sermon but cannot serve it does not make its church an owner (audit of 9b33529, finding 1)', async () => {
+  // Church 1 owns X on A. Church 3, also on A, names a server it controls as its partner, and that server claims
+  // X with a time far in the future. Before the fix, A made church 3 an owner on the manifest's word alone.
+  const c3 = K();
+  const [s0] = await config(A, { addChurch: { npub: npubEncode(c3.pub) } }); assert.equal(s0, 200, 'addChurch');
+  const X = file(260), sx = shaOf(X);
+  assert.equal(await up(PA, c1, X), 201);
+  let serve = false;
+  const fake = createServer((req, res) => {
+    if (req.url.startsWith('/sync-media')) { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ church: c3.pub, blobs: [{ sha: sx, size: X.length, at: 9e15 }] })); return; }
+    if (req.url.startsWith('/sync-blob/') && serve) { res.writeHead(200); res.end(X); return; }
+    res.writeHead(404); res.end();
+  });
+  await new Promise(r => fake.listen(PF, '127.0.0.1', r));
+  try {
+    const ws = await connect(PA);
+    assert.equal(await send(ws, finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', RELAYS_D], ['t', NET]], content: JSON.stringify([{ pubkey: 'ff'.repeat(32), url: `ws://127.0.0.1:${PF}` }]) }, c3.sk)), true, "church 3's partner list");
+    ws.close(); await sleep(300);
+    const owners = () => JSON.parse(readFileSync(join(A.dir, 'blobs', sx + '.owners'), 'utf8'));
+    await syncNow(A); await sleep(1200);
+    assert.deepEqual(owners(), [c1.pub], "a manifest line with no bytes behind it made church 3 an owner of church 1's sermon");
+    // CONTROL, and the time cap: a partner that DOES serve the bytes gets the hold, as any real copy would — but
+    // its claimed time is never stored beyond this relay's own clock.
+    serve = true;
+    await syncNow(A); await until(() => owners().includes(c3.pub), 'A to take church 3\'s hold once the bytes were served');
+    const since = JSON.parse(readFileSync(join(A.dir, 'blobs', sx + '.since'), 'utf8'));
+    assert.ok(since[c3.pub] <= Date.now(), `a partner's future time was stored: ${since[c3.pub]}`);
+  } finally { await new Promise(r => fake.close(r)); }
+});
+
+test("a relay remembers each church's hold time across a restart (audit of 9b33529, finding 4)", async () => {
+  // Delete on A, D drops it, re-upload on A, RESTART A, then sync. The re-upload is newer than D's deletion only
+  // if A loaded its saved times at boot; without them the hold reads as time 0 and D's deletion erases it.
+  const Y = file(270), sy = shaOf(Y);
+  assert.equal(await up(PA, c2, Y), 201);
+  await syncNow(D); await until(() => has(D, sy), 'D to copy Y');
+  assert.equal(await del(PA, c2, sy), 200);
+  await syncNow(D); await until(() => !has(D, sy), 'D to drop Y');
+  assert.equal(await up(PA, c2, Y), 201);
+  await restart(A, [c1, c2]);
+  await syncNow(A); await sleep(1200);
+  assert.equal(await play(PA, m2, sy), 200, "after a restart, an older deletion on D erased church 2's newer upload on A");
 });

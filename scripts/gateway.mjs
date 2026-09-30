@@ -7825,21 +7825,25 @@ async function syncMediaFromPeer(cp, peerBase) {
   let pulled = 0;
   for (const b of (man && man.blobs) || []) {
     if (!b || !/^[0-9a-f]{64}$/.test(b.sha)) continue;
-    const bAt = +b.at || 0;
+    // A PEER'S TIME IS A CLAIM, NOT A FACT: never accept one from the future. Stored uncapped, a crafted
+    // `at: 9e15` made a hold that no deletion could ever beat (audit of 9b33529, finding 1).
+    const bAt = Math.min(+b.at || 0, Date.now());
     if (_deletedAt(b.sha, cp) >= bAt) continue;   // this church deleted it here, more recently than the peer's copy
-    if (existsSync(join(BLOB_DIR, b.sha))) {
-      // Already on disk. If this church does not hold it here yet (another church does, or its hold was released
-      // by an older deletion), take the hold from the peer's copy — no download, it is content-addressed.
-      if (!_blobOwners(b.sha).has(cp)) {
-        let sz = 0; try { sz = statSync(join(BLOB_DIR, b.sha)).size; } catch { continue; }
-        const _cc = effChurchCap(); if (_cc && (_mediaBytesByChurch.get(cp) || 0) + sz > _cc) continue;
-        _addBlobOwner(b.sha, cp, bAt); _billBlob(cp, b.sha, sz); _clearDeleted(b.sha, cp); pulled++;
-      } else if (bAt > _sinceOf(b.sha, cp)) _addBlobOwner(b.sha, cp, bAt);   // carry the newer time forward
-      continue;
+    const onDisk = existsSync(join(BLOB_DIR, b.sha));
+    let diskSz = 0;
+    if (onDisk) {
+      if (_blobOwners(b.sha).has(cp)) { if (bAt > _sinceOf(b.sha, cp)) _addBlobOwner(b.sha, cp, bAt); continue; }   // carry the newer time forward
+      // On disk for ANOTHER church. Taking this church's hold needs the same proof as any copy: the peer must
+      // SERVE the bytes and they must hash to the sha. A manifest line is not possession — taking the hold on
+      // its word let a church name a server it controls and become an owner of another church's sermon it
+      // never had, and keep it alive past that church's deletion (audit of 9b33529, finding 1).
+      try { diskSz = statSync(join(BLOB_DIR, b.sha)).size; } catch { continue; }
+      const _cc = effChurchCap(); if (_cc && (_mediaBytesByChurch.get(cp) || 0) + diskSz > _cc) continue;
+    } else {
+      const _mc = effMediaCap(), _cc = effChurchCap();                                        // honour panel-set caps, not just env
+      if (_mc && _mediaBytesTotal + (b.size || 0) > _mc) break;                               // this relay's media is full
+      if (_cc && (_mediaBytesByChurch.get(cp) || 0) + (b.size || 0) > _cc) break;
     }
-    const _mc = effMediaCap(), _cc = effChurchCap();                                          // honour panel-set caps, not just env
-    if (_mc && _mediaBytesTotal + (b.size || 0) > _mc) break;                                 // this relay's media is full
-    if (_cc && (_mediaBytesByChurch.get(cp) || 0) + (b.size || 0) > _cc) break;
     const blobUrl = peerBase + '/sync-blob/' + b.sha + '?church=' + encodeURIComponent(cp);
     const tmp = join(BLOB_DIR, '.dl-' + randomBytes(12).toString('hex') + '.tmp');
     try {
@@ -7852,6 +7856,11 @@ async function syncMediaFromPeer(cp, peerBase) {
       for (;;) { const { done, value } = await reader.read(); if (done) break; n += value.length; if (n > MAX_BLOB) { bad = true; try { await reader.cancel(); } catch {} break; } hash.update(value); if (!out.write(Buffer.from(value))) await new Promise(res => out.once('drain', res)); }
       await new Promise((res, rej) => out.end(err => err ? rej(err) : res()));
       if (bad || hash.digest('hex') !== b.sha) { try { unlinkSync(tmp); } catch {} continue; }   // content-addressed integrity check
+      if (onDisk) {   // proved: the peer holds these exact bytes. Keep the copy we have; take only the hold.
+        try { unlinkSync(tmp); } catch {}
+        _addBlobOwner(b.sha, cp, bAt); _billBlob(cp, b.sha, diskSz); _clearDeleted(b.sha, cp); pulled++;
+        continue;
+      }
       writeFileSync(join(BLOB_DIR, b.sha + '.church'), cp);   // owner sidecar BEFORE the blob is reachable
       _addBlobOwner(b.sha, cp, bAt);                          // R-4: track in multi-owner set, with the PEER's time, not now
       _clearDeleted(b.sha, cp);
@@ -7863,7 +7872,7 @@ async function syncMediaFromPeer(cp, peerBase) {
   const delAt = (man && man.deletedAt && typeof man.deletedAt === 'object') ? man.deletedAt : {};
   for (const sha of (man && man.deleted) || []) {
     if (!/^[0-9a-f]{64}$/.test(sha)) continue;
-    const at = +delAt[sha] || 0;   // a peer that predates times: 0, which loses to any hold taken since
+    const at = Math.min(+delAt[sha] || 0, Date.now());   // 0 from a peer that predates times; never from the future
     const file = join(BLOB_DIR, sha);
     if (existsSync(file)) {
       const owners = _blobOwners(sha);
