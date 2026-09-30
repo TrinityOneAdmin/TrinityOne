@@ -18025,6 +18025,10 @@ zoo`.split("\n");
         localStorage.removeItem(KEY_LS);
       } catch {
       }
+      try {
+        if (window.TrinityBackup && window.TrinityBackup._commitStewardRestore) window.TrinityBackup._commitStewardRestore();
+      } catch (e) {
+      }
       _setNeedsPin(false);
       return true;
     },
@@ -18141,6 +18145,10 @@ zoo`.split("\n");
     discardUnsavedKey() {
       if (!needsPin) return false;
       if (lsGet(KEY_LS)) return false;
+      try {
+        if (window.TrinityBackup && window.TrinityBackup._undoStewardRestore) window.TrinityBackup._undoStewardRestore();
+      } catch (e) {
+      }
       try {
         localStorage.removeItem(_boxHostsKey());
       } catch (e) {

@@ -4468,6 +4468,9 @@ window.Steward = {
     // PIN modal stays up and says so. Losing the plaintext on a write that did not land is not.
     if (!landed) return false;
     try { localStorage.removeItem(KEY_LS); } catch {}
+    // The file restore is now committed: the steward localStorage keys the file wrote are kept.
+    // Clear the snapshot so discardUnsavedKey cannot undo them after a successful PIN.
+    try { if (window.TrinityBackup && window.TrinityBackup._commitStewardRestore) window.TrinityBackup._commitStewardRestore(); } catch (e) {}
     _setNeedsPin(false);   // SECURITY-AUDIT-2026-06-25 Critical-2: encrypted form now persisted; clear the force flag
     return true;
   },
@@ -4587,6 +4590,10 @@ window.Steward = {
   discardUnsavedKey() {
     if (!needsPin) return false;
     if (lsGet(KEY_LS)) return false;
+    // UNDO any file-restore that wrote steward localStorage keys before the PIN. Without this,
+    // a file restore followed by "Keep my current church" leaves the file's network-keys and
+    // active-id on this device. See applySteward in app/backup.jsx.
+    try { if (window.TrinityBackup && window.TrinityBackup._undoStewardRestore) window.TrinityBackup._undoStewardRestore(); } catch (e) {}
     try { localStorage.removeItem(_boxHostsKey()); } catch (e) {}   // the discarded church's cache line (the restored or live church's, in the other two states)
     // Nothing is being founded any more; nothing should wait on its registration — and the NEXT church must be
     // able to arm its own. _openRegGate() resolves the gate but deliberately leaves `_regGate` set (selfRegister
