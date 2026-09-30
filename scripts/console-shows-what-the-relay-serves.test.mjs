@@ -84,6 +84,10 @@ function consoleAt({ relayAuthed = true, cache = null, mountGroups = 'now' } = {
     localStorage: { getItem: (k) => (stored.has(k) ? stored.get(k) : null), setItem: (k, v) => stored.set(k, v) },
     _careRoster: new Set(), _careRosterKnown: false, _careRosterSeen: false,
     _stewardCaps: {}, _stewardNames: {}, _stewardSince: {},
+    // subscribeGroups records which rooms are sealed (83248e3). Without this the lifted reader threw a
+    // ReferenceError inside its own try on EVERY group, absorbed nothing, and 11 tests failed as "the console was
+    // emptied" — over a shipped reader that was fine (bisected 2026-09-30; 13/13 on main before that commit).
+    _sealedGroupIds: new Set(),
   };
   const body = ['_pickWinner', '_reduceVersions', '_absorbById', '_forgetById', '_tombstoneTargets',
     // `_capsOf` is how both predicates read the capability list — it normalises it the way the relay does

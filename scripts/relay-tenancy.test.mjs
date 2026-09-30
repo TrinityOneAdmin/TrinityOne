@@ -37,7 +37,12 @@ const WS_URL = `ws://127.0.0.1:${PORT}/relay`;
 const D = {
   member: 'trinityone/member:', group: 'trinityone/group:', roster: 'trinityone/roster:',
   request: 'trinityone/request:', rota: 'trinityone/rota:', network: 'trinityone/network:',
-  minors: 'trinityone/minors:', joinpolicy: 'trinityone/joinpolicy:', highlights: 'trinityone/highlights',
+  // `highlights` names the member's own MyData document. It WAS trinityone/highlights; the owner's 2026-09-28
+  // decision made personal notes phone-only and 4a07065 stopped the relay accepting that type, so the seed below
+  // was refused, nothing was stored, test 5 failed and two "not served to strangers" checks passed over nothing.
+  // chatseen is the one MyData type that still syncs, with the same author-only read rule — so the checks keep
+  // their meaning (found 2026-09-30).
+  minors: 'trinityone/minors:', joinpolicy: 'trinityone/joinpolicy:', highlights: 'trinityone/chatseen',
 };
 const now = () => Math.floor(Date.now() / 1000);
 const sleep = ms => new Promise(r => setTimeout(r, ms));

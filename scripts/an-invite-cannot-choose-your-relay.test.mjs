@@ -162,7 +162,13 @@ function memberOn({ church, relays = [], canonical = [], pins = {}, store = memS
     'vendor/fellowship.js: adoptInviteRelays no longer verifies before adopting — an invite is an instruction again');
   assert.match(adopt, /await isNetworkRelay\(cp, url,/,
     'vendor/fellowship.js: adoptInviteRelays no longer checks roots after the proof — an invite is an instruction again');
-  assert.match(adopt, /if \(got\) return out;/,
+  // THE RULE, NOT THE SPELLING. This matched the literal `if (got) return out;` until M-7a (c4db997) made the
+  // fast path also REMEMBER the relay name before returning — still asking no directory. The literal stopped
+  // matching and all seven tests below failed over correct code (found 2026-09-30). What must hold is that the
+  // got-branch returns before anything resolves the name; the behavioural tests below (8 above all) prove the
+  // same thing by running it.
+  const gotBranch = (adopt.match(/if \(got\) (?:return out;|\{[\s\S]*?return out;\s*\})/) || [''])[0];
+  assert.ok(gotBranch && !/resolveRelayName|fetch\(/.test(gotBranch),
     'vendor/fellowship.js: the name is resolved even when the invite\'s own address worked, which is AUDIT-2026-07-29 S3 ' +
     'reopened — a self-hosted church\'s joiner tells the shared directory they are joining, right now, at the ' +
     'most sensitive moment there is');
