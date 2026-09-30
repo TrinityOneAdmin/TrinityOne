@@ -993,13 +993,36 @@ function _reCheckCareKeyPending() {
 function toPubHex(npubOrHex) { try { if (/^[0-9a-f]{64}$/i.test(npubOrHex)) return npubOrHex.toLowerCase(); const d = nip19decode(npubOrHex); return d && d.type === 'npub' ? d.data : null; } catch { return null; } }
 
 const RELAYS_LS = 'trinityone.steward.extra-relays';   // extra public relays the church also publishes to
-const NETKEYS_LS = 'trinityone.steward.network-keys';  // networks OWNED on this console: [{ pub, mnemonic, name }]
+const NETKEYS_LS = 'trinityone.steward.network-keys';  // networks OWNED on this console: [{ pub, mnemonic|sealedMnemonic, name }]
 function lsGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
 function lsSet(k, v) { try { localStorage.setItem(k, v); } catch {} }
-// networks whose signing key lives on this device (so this console can publish AS the network)
-function netKeys() { try { const a = JSON.parse(lsGet(NETKEYS_LS) || '[]'); return Array.isArray(a) ? a : []; } catch { return []; } }
+function _netKeysRaw() { try { const a = JSON.parse(lsGet(NETKEYS_LS) || '[]'); return Array.isArray(a) ? a : []; } catch { return []; } }
+function netKeys() {
+  return _netKeysRaw().map(r => {
+    if (r.sealedMnemonic && churchSk) {
+      try { return { ...r, mnemonic: nip44d(r.sealedMnemonic, churchSk), sealedMnemonic: undefined }; } catch {}
+    }
+    return r;
+  });
+}
 function saveNetKey(rec) {
-  const a = netKeys().filter(x => x.pub !== rec.pub); a.push(rec); lsSet(NETKEYS_LS, JSON.stringify(a));
+  const sealed = { pub: rec.pub, name: rec.name };
+  if (rec.mnemonic && churchSk) {
+    try { sealed.sealedMnemonic = nip44e(rec.mnemonic, churchSk); } catch { sealed.mnemonic = rec.mnemonic; }
+  } else if (rec.mnemonic) { sealed.mnemonic = rec.mnemonic; }
+  const a = _netKeysRaw().filter(x => x.pub !== rec.pub); a.push(sealed); lsSet(NETKEYS_LS, JSON.stringify(a));
+}
+function _migrateNetKeysToSealed() {
+  if (!churchSk) return;
+  const raw = _netKeysRaw();
+  let changed = false;
+  const out = raw.map(r => {
+    if (r.mnemonic && !r.sealedMnemonic) {
+      try { const s = { pub: r.pub, name: r.name, sealedMnemonic: nip44e(r.mnemonic, churchSk) }; changed = true; return s; } catch {}
+    }
+    return r;
+  });
+  if (changed) lsSet(NETKEYS_LS, JSON.stringify(out));
 }
 // The TrinityOne shared-relay pool — relays we operate that every church can use. On a static host
 // the steward publishes across all of them (they don't sync to each other). Add a URL here per host.
@@ -2089,6 +2112,7 @@ function setKey(mnemonic) {
   pub = getPublicKey(sk);
   churchSk = sk; churchPub = pub;           // the device's church key
   currentMnemonic = mnemonic;
+  try { _migrateNetKeysToSealed(); } catch (e) {}
   window.Steward.pubkey = pub;
   window.Steward.npub = npubEncode(pub);
   window.Steward.churchPub = pub;
@@ -4526,6 +4550,7 @@ window.Steward = {
     // church". Guarded HERE rather than in the timer, so every caller is covered. Adversarial review 2026-08-04.
     if (needsPin) return;
     sk = null; pub = null; currentMnemonic = null;
+    churchSk = null; churchPub = null;
     window.Steward.pubkey = null; window.Steward.npub = null; window.Steward.hasKey = false;
     window.Steward.locked = !!lsGet(ENC_LS);
     window.dispatchEvent(new CustomEvent('steward-key', { detail: { npub: null } }));

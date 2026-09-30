@@ -15649,7 +15649,7 @@ zoo`.split("\n");
     } catch {
     }
   }
-  function netKeys() {
+  function _netKeysRaw() {
     try {
       const a = JSON.parse(lsGet(NETKEYS_LS) || "[]");
       return Array.isArray(a) ? a : [];
@@ -15657,10 +15657,48 @@ zoo`.split("\n");
       return [];
     }
   }
+  function netKeys() {
+    return _netKeysRaw().map((r) => {
+      if (r.sealedMnemonic && churchSk) {
+        try {
+          return { ...r, mnemonic: decrypt3(r.sealedMnemonic, churchSk), sealedMnemonic: void 0 };
+        } catch {
+        }
+      }
+      return r;
+    });
+  }
   function saveNetKey(rec) {
-    const a = netKeys().filter((x) => x.pub !== rec.pub);
-    a.push(rec);
+    const sealed = { pub: rec.pub, name: rec.name };
+    if (rec.mnemonic && churchSk) {
+      try {
+        sealed.sealedMnemonic = encrypt3(rec.mnemonic, churchSk);
+      } catch {
+        sealed.mnemonic = rec.mnemonic;
+      }
+    } else if (rec.mnemonic) {
+      sealed.mnemonic = rec.mnemonic;
+    }
+    const a = _netKeysRaw().filter((x) => x.pub !== rec.pub);
+    a.push(sealed);
     lsSet(NETKEYS_LS, JSON.stringify(a));
+  }
+  function _migrateNetKeysToSealed() {
+    if (!churchSk) return;
+    const raw = _netKeysRaw();
+    let changed = false;
+    const out = raw.map((r) => {
+      if (r.mnemonic && !r.sealedMnemonic) {
+        try {
+          const s = { pub: r.pub, name: r.name, sealedMnemonic: encrypt3(r.mnemonic, churchSk) };
+          changed = true;
+          return s;
+        } catch {
+        }
+      }
+      return r;
+    });
+    if (changed) lsSet(NETKEYS_LS, JSON.stringify(out));
   }
   var CANONICAL_RELAYS = ["wss://app.trinityone.church/relay", "wss://trinityone-master-01.tailbeaac0.ts.net/relay"];
   var CANONICAL_RELAY = CANONICAL_RELAYS[0];
@@ -16432,6 +16470,10 @@ zoo`.split("\n");
     churchSk = sk;
     churchPub = pub;
     currentMnemonic = mnemonic;
+    try {
+      _migrateNetKeysToSealed();
+    } catch (e) {
+    }
     window.Steward.pubkey = pub;
     window.Steward.npub = npubEncode(pub);
     window.Steward.churchPub = pub;
@@ -18070,6 +18112,8 @@ zoo`.split("\n");
       sk = null;
       pub = null;
       currentMnemonic = null;
+      churchSk = null;
+      churchPub = null;
       window.Steward.pubkey = null;
       window.Steward.npub = null;
       window.Steward.hasKey = false;
