@@ -3,12 +3,17 @@
 // (apk-latest.json, served from the church domain), and if a higher versionCode is published we show a
 // dismissible banner that opens the APK download. Web/PWA updates handle themselves, so this is native-only.
 
-const UPDATE_MANIFEST = 'https://app.trinityone.church/apk-latest.json';   // { versionCode, versionName, url }
+const UPDATE_MANIFEST = 'https://app.trinityone.church/apk-latest.json';   // { versionCode, versionName, url, stewardVersionCode, stewardUrl }
 const UPDATE_APK_URL = 'https://app.trinityone.church/trinityone.apk';
+const UPDATE_STEWARD_APK_URL = 'https://app.trinityone.church/trinityone-steward.apk';
 const _updLaunched = new Set();   // module-level one-shot: version codes we've already launched a download for. Survives component remounts (a per-component ref does NOT), so the download fires AT MOST once per version per app session — the real fix for repeated downloads from one Update tap.
 
-function UpdateBanner({ ctx }) {
-  const [upd, setUpd] = React.useState(null);   // { name, code } once a newer build is found
+// `variant` prop: 'member' (default) reads the top-level versionCode/url; 'steward' reads
+// stewardVersionCode/stewardUrl. Without this, the steward APK would offer the MEMBER APK,
+// which has a different applicationId and installs as a second app.
+function UpdateBanner({ ctx, variant }) {
+  const isSteward = variant === 'steward';
+  const [upd, setUpd] = React.useState(null);   // { name, code, apkUrl } once a newer build is found
   const [busy, setBusy] = React.useState(false); // one-shot: a tapped download must not spawn duplicates
   const busyRef = React.useRef(false);           // SYNCHRONOUS guard — state lags a render, so rapid taps fired several downloads at once
   React.useEffect(() => {
@@ -23,16 +28,25 @@ function UpdateBanner({ ctx }) {
         const res = await fetch(UPDATE_MANIFEST + '?t=' + Date.now(), { cache: 'no-store' });
         if (!res.ok) return;
         const m = await res.json();
-        const latest = parseInt(m && m.versionCode, 10) || 0;
+        // Read the correct fields for this variant. The steward APK shares the same versionCode
+        // sequence (release.sh bumps android/app/build.gradle once for both), so a manifest that
+        // only carries the member fields (old format) is treated as "no update available" by the
+        // steward rather than offering the wrong APK.
+        const latest = parseInt(isSteward ? (m && m.stewardVersionCode) : (m && m.versionCode), 10) || 0;
+        const apkUrl = isSteward
+          ? (m && m.stewardUrl ? 'https://app.trinityone.church/' + m.stewardUrl : UPDATE_STEWARD_APK_URL)
+          : (m && m.url ? 'https://app.trinityone.church/' + m.url : UPDATE_APK_URL);
         if (!alive || !latest || latest <= installed) return;               // already current
-        let snoozed = 0; try { snoozed = parseInt(localStorage.getItem('trinityone.updateSnoozed') || '0', 10); } catch (e) {}
-        if (latest > snoozed) setUpd({ name: m.versionName || '', code: latest });   // honour "Later" per version
+        const snoozeKey = isSteward ? 'trinityone.steward.updateSnoozed' : 'trinityone.updateSnoozed';
+        let snoozed = 0; try { snoozed = parseInt(localStorage.getItem(snoozeKey) || '0', 10); } catch (e) {}
+        if (latest > snoozed) setUpd({ name: m.versionName || '', code: latest, apkUrl });   // honour "Later" per version
       } catch (e) {}
     })();
     return () => { alive = false; };
   }, []);
   if (!upd) return null;
-  const later = () => { try { localStorage.setItem('trinityone.updateSnoozed', String(upd.code)); } catch (e) {} setUpd(null); };
+  const snoozeKey = isSteward ? 'trinityone.steward.updateSnoozed' : 'trinityone.updateSnoozed';
+  const later = () => { try { localStorage.setItem(snoozeKey, String(upd.code)); } catch (e) {} setUpd(null); };
   const get = () => {
     const code = (upd && upd.code) || 0;
     // HARD one-shot: the module-level set survives remounts AND any number of taps, so the download launches
@@ -41,10 +55,10 @@ function UpdateBanner({ ctx }) {
     _updLaunched.add(code);
     busyRef.current = true;
     setBusy(true);
-    try { localStorage.setItem('trinityone.updateSnoozed', String(code)); } catch (e) {}   // persist too: a reopen never re-shows/re-downloads this version
+    try { localStorage.setItem(snoozeKey, String(code)); } catch (e) {}   // persist too: a reopen never re-shows/re-downloads this version
     setUpd(null);                                       // dismiss the banner immediately — no second tap is even possible
     // cache-bust by version so a CDN (Cloudflare) can't hand back a stale APK → downgrade → "App not installed"
-    const url = UPDATE_APK_URL + '?v=' + (code || Date.now());
+    const url = (upd.apkUrl || UPDATE_APK_URL) + '?v=' + (code || Date.now());
     try { window.open(url, '_blank'); } catch (e) {}   // single launch; the location.href fallback was a second download path — removed
   };
   return (

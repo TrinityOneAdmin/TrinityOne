@@ -7376,7 +7376,16 @@ window.Fellowship = {
         const id = d.slice(REQUEST_D.length);
         // AUDIT-2026-07-24 (my serving requests): A tombstone is only honoured from an author who could have written the doc in the first place. kind-30078 is per-author, so a stranger's delete never replaces the original on the relay — but keying purely on the d-tag meant honouring it here HID the real one from this member, and the blanked list was then persisted to localStorage. Fixed for care needs in b15c146; same everywhere.
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { if (e.pubkey === (window.Fellowship.churchPub || '')) { byId.delete(id); emit(); } return; }
-        try { byId.set(id, { id, church: e.pubkey, ...JSON.parse(e.content), ts: e.created_at }); emit(); } catch {}
+        // C-4: sealed under the church name key. The key is the CHURCH's, not the author's — a delegated
+        // steward signs with their own key and feChurch stamps ['church', cp], so read the tag first and
+        // fall back to the author for the ordinary case where the church itself signed.
+        const cp = (e.tags.find(t => t[0] === 'church') || [])[1] || e.pubkey;
+        const c = _openChurchDoc(cp, e.content);
+        // A request this phone cannot open yet must show as LOCKED, never as nothing: dropping it silently
+        // is how a member never learns their church asked them to serve. The name-key replay re-delivers
+        // this event once the key lands, and the locked row is replaced by the real one.
+        if (c === null) { byId.set(id, { id, church: cp, _locked: true, ts: e.created_at }); emit(); return; }
+        byId.set(id, { id, church: cp, ...c, ts: e.created_at }); emit();
       },
       oneose() { if (byId.size) emit(); },   // sticky: don't blank the "you're serving" card on a reconnect's empty EOSE
     });
@@ -7386,7 +7395,11 @@ window.Fellowship = {
   async respondToServingRequest(churchNpub, requestId, verdict, swapTo) {
     if (!sk) await window.Fellowship.ready;
     const cp = toPub(churchNpub); if (!cp || !sk) return;
-    const content = JSON.stringify({ request: requestId, v: verdict, swapTo: swapTo || '' });
+    // C-4: sealed under the church name key, like careavail: beside it. _sealChurchDocMember falls back to
+    // cleartext when this phone holds no key yet — deliberately, and unchanged here: a member who cannot
+    // seal must still be able to say "I can't make it", and that answer read by the relay is a far smaller
+    // matter than the request it answers. The console opens both shapes.
+    const content = _sealChurchDocMember(cp, { request: requestId, v: verdict, swapTo: swapTo || '' });
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/reqreply:' + requestId], ['t', NET], ['p', cp]], content }, sk);
     // A SEND THAT LANDED NOWHERE MUST NOT COME BACK LOOKING LIKE ONE THAT DID. Audit 2026-09-02 #6.
     // _publishAny THROWS when no relay accepted (and resolves true otherwise), and this swallowed that and
@@ -7410,7 +7423,9 @@ window.Fellowship = {
     if (!me) { onReplies({}); return () => {}; }
     const RR = 'trinityone/reqreply:'; const byReq = {};
     const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [30078], authors: [me], '#t': [NET] }], {
-      onevent(e) { const d = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (!d.startsWith(RR)) return; try { byReq[d.slice(RR.length)] = JSON.parse(e.content).v; onReplies({ ...byReq }); } catch {} },
+      // C-4: my own replies are sealed under the church name key now. The church is the ['p'] tag — these
+      // are MY documents addressed to it. _openChurchDoc opens the cleartext ones written before C-4 too.
+      onevent(e) { const d = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (!d.startsWith(RR)) return; try { const cp = (e.tags.find(t => t[0] === 'p') || [])[1] || ''; const o = _openChurchDoc(cp, e.content); if (o) { byReq[d.slice(RR.length)] = o.v; onReplies({ ...byReq }); } } catch {} },
       oneose() { onReplies({ ...byReq }); },
     });
     return () => { try { sub.close(); } catch {} };

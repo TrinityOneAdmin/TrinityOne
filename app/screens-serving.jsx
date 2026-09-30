@@ -1290,6 +1290,12 @@ function ServingScreen({ open, onClose, ctx, docked }) {
     } catch (err) {}
   }, [tab, open]);
   const pending = ctx.servPending || [];
+  // C-4: a request sealed under a church name key this phone does not hold yet arrives carrying `_locked`
+  // and nothing else — no date, role or team. Its card would be empty fields over a Yes/No pair answering a
+  // question the member cannot read, so render a count instead. `pending` itself keeps them: the tab badge
+  // and the "nothing waiting" state must both still know something IS waiting.
+  const pendingOpen = pending.filter(r => !(r && r._locked));
+  const pendingLocked = pending.filter(r => r && r._locked);
   const upcoming = ctx.servConfirmed || [];
   const declined = ctx.servDeclined || [];
   const next = ctx.servNext;
@@ -1406,7 +1412,13 @@ function ServingScreen({ open, onClose, ctx, docked }) {
       <div className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '16px 16px 28px' }}>
         {tab === 'serving' ? (
           <React.Fragment>
-            {pending.map(req => (
+            {pendingLocked.length ? (
+              <div style={{ borderRadius: 20, padding: 16, marginBottom: 16, background: 'var(--surface-2)', border: '1px solid var(--line)', fontSize: 13.5, lineHeight: 1.55, color: 'var(--ink-2)' }}>
+                <b style={{ color: 'var(--ink)' }}>{pendingLocked.length} request{pendingLocked.length === 1 ? '' : 's'} you can’t open yet.</b>{' '}
+                Your church sent {pendingLocked.length === 1 ? 'it' : 'them'} sealed, and this phone is still waiting for the key. {pendingLocked.length === 1 ? 'It' : 'They'} will appear on {pendingLocked.length === 1 ? 'its' : 'their'} own.
+              </div>
+            ) : null}
+            {pendingOpen.map(req => (
               <div key={req.id} style={{ borderRadius: 20, padding: 16, marginBottom: 16, background: 'var(--surface)', border: '1.5px solid color-mix(in oklab, var(--gold) 50%, var(--line))', boxShadow: 'var(--shadow)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 11, fontWeight: 800, letterSpacing: '.6px', color: '#8a6717', marginBottom: 12 }}><Icon name="sparkle" size={14} color="var(--gold)" /> CAN YOU SERVE?</div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 13, marginBottom: 13 }}>

@@ -13895,11 +13895,15 @@
             }
             return;
           }
-          try {
-            byId.set(id, { id, church: e.pubkey, ...JSON.parse(e.content), ts: e.created_at });
+          const cp = (e.tags.find((t) => t[0] === "church") || [])[1] || e.pubkey;
+          const c = _openChurchDoc(cp, e.content);
+          if (c === null) {
+            byId.set(id, { id, church: cp, _locked: true, ts: e.created_at });
             emit();
-          } catch {
+            return;
           }
+          byId.set(id, { id, church: cp, ...c, ts: e.created_at });
+          emit();
         },
         oneose() {
           if (byId.size) emit();
@@ -13918,7 +13922,7 @@
       if (!sk) await window.Fellowship.ready;
       const cp = toPub(churchNpub);
       if (!cp || !sk) return;
-      const content = JSON.stringify({ request: requestId, v: verdict, swapTo: swapTo || "" });
+      const content = _sealChurchDocMember(cp, { request: requestId, v: verdict, swapTo: swapTo || "" });
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", "trinityone/reqreply:" + requestId], ["t", NET], ["p", cp]], content }, sk);
       try {
         await _publishAny(publishSetFor(cp), evt);
@@ -13938,12 +13942,18 @@
       const RR = "trinityone/reqreply:";
       const byReq = {};
       const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [30078], authors: [me], "#t": [NET] }], {
+        // C-4: my own replies are sealed under the church name key now. The church is the ['p'] tag — these
+        // are MY documents addressed to it. _openChurchDoc opens the cleartext ones written before C-4 too.
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (!d.startsWith(RR)) return;
           try {
-            byReq[d.slice(RR.length)] = JSON.parse(e.content).v;
-            onReplies({ ...byReq });
+            const cp = (e.tags.find((t) => t[0] === "p") || [])[1] || "";
+            const o = _openChurchDoc(cp, e.content);
+            if (o) {
+              byReq[d.slice(RR.length)] = o.v;
+              onReplies({ ...byReq });
+            }
           } catch {
           }
         },
