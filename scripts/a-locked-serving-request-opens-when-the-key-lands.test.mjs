@@ -165,6 +165,8 @@ function console_() {
   const names = Object.keys(world);
   const body = `let _nameKeyRing = [], _nameKeyDocKeys = null, _nameKeyChecked = false;
     ${st(STEWARD, 'var _nameKeyAt = 0;', 'steward.js')}
+    ${st(STEWARD, 'var _CLOCK_SKEW = ', 'steward.js')}
+    ${st(STEWARD, 'var _authFuture = (e) =>', 'steward.js')}
     ${st(STEWARD, 'var _nameKeyListeners', 'steward.js')}
     ${fn(STEWARD, 'function _onNameKeyRing(fn)', 'steward.js')}
     ${fn(STEWARD, 'function _nameKeyRingChanged()', 'steward.js')}
