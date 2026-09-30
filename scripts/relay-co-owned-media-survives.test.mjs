@@ -33,7 +33,7 @@ import { generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure
 import { npubEncode } from 'nostr-tools/nip19';
 import { requireFreePort } from './test-ports.mjs';
 
-const PA = 8731, PB = 8732, PC = 8733, PD = 8734;   // unique across scripts/*.test.mjs AND scripts/*.probe.mjs
+const PA = 8731, PB = 8732, PC = 8733, PD = 8734, PE = 8738;   // unique across scripts/*.test.mjs AND scripts/*.probe.mjs
 const CAP = 300;                          // per-church media cap on relay C
 const MEMBER_D = 'trinityone/member:', RELAYS_D = 'trinityone/relays', NET = 'trinityone';
 const ROOT = new URL('..', import.meta.url).pathname;
@@ -59,7 +59,7 @@ async function ready(port) {
   throw new Error('relay on ' + port + ' did not start');
 }
 async function restart(r, churches, extra) {
-  r.proc.kill('SIGKILL'); await new Promise(res => r.proc.once('exit', res));
+  if (r.proc.exitCode === null && r.proc.signalCode === null) { r.proc.kill('SIGKILL'); await new Promise(res => r.proc.once('exit', res)); }   // may already be down
   r.proc = spawn(process.execPath, ['scripts/gateway.mjs', String(r.port)], {
     cwd: ROOT, env: { ...process.env, TRINITY_DATA_DIR: r.dir, CHURCH_NPUB: churches.map(c => npubEncode(c.pub)).join(','), RELAY_SYNC: '0', RELAY_MAX_EVENTS: '5000', ...extra }, stdio: 'ignore',
   });
@@ -85,15 +85,16 @@ const admin = r => JSON.parse(readFileSync(join(r.dir, 'admin.json'), 'utf8')).t
 const relayPub = r => JSON.parse(readFileSync(join(r.dir, 'relay-key.json'), 'utf8')).pub;
 async function config(r, body) { const res = await fetch(`http://127.0.0.1:${r.port}/config`, { method: 'POST', headers: { Authorization: 'Bearer ' + admin(r), 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); return [res.status, await res.json()]; }
 
-let A, B, C, D;
+let A, B, C, D, E;
 before(async () => {
-  for (const p of [PA, PB, PC, PD]) await requireFreePort(p, 'relay-co-owned-media-survives.test.mjs');
+  for (const p of [PA, PB, PC, PD, PE]) await requireFreePort(p, 'relay-co-owned-media-survives.test.mjs');
   A = spawnRelay(PA, [c1, c2]);                                  // hosts both churches
   B = spawnRelay(PB, [c1]);                                      // a partner relay of church 1 only
   C = spawnRelay(PC, [c1, c2], { RELAY_CHURCH_MEDIA_CAP: String(CAP) });
   D = spawnRelay(PD, [c2]);                                      // a partner relay of church 2 only
-  await Promise.all([ready(PA), ready(PB), ready(PC), ready(PD)]);
-  for (const port of [PA, PC, PD]) {                                 // m2 is a member of church 2
+  E = spawnRelay(PE, [c2]);                                      // a relay that hears of church 2 only through D (a chain)
+  await Promise.all([ready(PA), ready(PB), ready(PC), ready(PD), ready(PE)]);
+  for (const port of [PA, PC, PD, PE]) {                                 // m2 is a member of church 2
     const ws = await connect(port);
     assert.equal(await send(ws, finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', MEMBER_D + c2.pub]], content: JSON.stringify({ joined: now() }) }, m2.sk)), true, 'm2 joins c2');
     ws.close();
@@ -105,9 +106,11 @@ before(async () => {
     assert.equal(await send(ws, finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', RELAYS_D], ['t', NET]], content: JSON.stringify(list) }, c1.sk)), true, 'trusted-relays doc');
     ws.close();
   }
-  // church 2 names A and D, on both, so D will sync church 2 from A
-  const list2 = [{ pubkey: relayPub(A), url: `ws://127.0.0.1:${PA}` }, { pubkey: relayPub(D), url: `ws://127.0.0.1:${PD}` }];
-  for (const port of [PA, PD]) {
+  // church 2 names A, D and E. ONE list, as a real church has: the relays share the newest copy of it when they
+  // sync, so a different list per relay does not survive the first pass (tried; it silently cut D off from A).
+  const at = (r, port) => ({ pubkey: relayPub(r), url: `ws://127.0.0.1:${port}` });
+  const list2 = [at(A, PA), at(D, PD), at(E, PE)];
+  for (const port of [PA, PD, PE]) {
     const ws = await connect(port);
     assert.equal(await send(ws, finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', RELAYS_D], ['t', NET]], content: JSON.stringify(list2) }, c2.sk)), true, 'trusted-relays doc (church 2)');
     ws.close();
@@ -131,9 +134,9 @@ test('a co-owner lists the shared file in its archive, and still does after a re
 
 test("a partner relay's delete for church 1 leaves church 2's copy playable (finding 2)", async () => {
   const X = file(150), sx = shaOf(X);
-  assert.equal(await up(PB, c1, X), 201); assert.equal(await del(PB, c1, sx), 200);   // church 1 deleted it on B
-  assert.ok(existsSync(join(B.dir, 'blobs', sx + '.deleted')), 'CONTROL: B tombstoned church 1\'s delete');
   assert.equal(await up(PA, c1, X), 201); assert.equal(await up(PA, c2, X), 201);     // both own it on A
+  assert.equal(await up(PB, c1, X), 201); assert.equal(await del(PB, c1, sx), 200);   // later, church 1 deletes it on B
+  assert.ok(existsSync(join(B.dir, 'blobs', sx + '.deleted')), 'CONTROL: B tombstoned church 1\'s delete');
   assert.equal(await play(PA, m2, sx), 200, 'CONTROL: church 2 member plays it before the sync');
   const r = await fetch(`http://127.0.0.1:${PA}/sync-now`, { method: 'POST', headers: { Authorization: 'Bearer ' + admin(A) } });
   assert.equal(r.status, 200, 'sync-now'); await r.text();
@@ -211,4 +214,78 @@ test("sharing a file that would take a church over its cap is refused; its own f
   assert.deepEqual(JSON.parse(readFileSync(join(C.dir, 'blobs', sx + '.owners'), 'utf8')), [c1.pub], 'a refused share still made church 2 an owner');
   assert.equal(await up(PC, c2, Y), 201, "re-uploading church 2's OWN file must not be refused at its cap");
   assert.equal((await exportMedia(PC, c2)).totalBytes, Y.length, 'church 2 was billed twice for its own file');
+});
+
+// ── Deletions and re-uploads carry a time, and the newer one wins on every relay (audit of d6a85e9, finding 1) ──
+const has = (r, sha) => existsSync(join(r.dir, 'blobs', sha));
+
+test('a church re-uploads a sermon it deleted, on its partner relay — the old deletion does not erase it', async () => {
+  // Churches 1 and 2 share X on A. Church 2 deletes it on A, then uploads the same file again on D.
+  const X = file(210), sx = shaOf(X);
+  assert.equal(await up(PA, c1, X), 201); assert.equal(await up(PA, c2, X), 201);
+  assert.equal(await del(PA, c2, sx), 200);
+  assert.equal(await up(PD, c2, X), 201);
+  assert.equal(await play(PD, m2, sx), 200, 'CONTROL: the re-upload plays on D');
+  await syncNow(D); await sleep(800);                           // D hears A's (older) deletion
+  assert.equal(await play(PD, m2, sx), 200, "an older deletion on A erased church 2's newer upload on D");
+  await syncNow(A);                                             // A hears D's (newer) copy and takes church 2's hold back
+  await until(() => { try { return JSON.parse(readFileSync(join(A.dir, 'blobs', sx + '.owners'), 'utf8')).includes(c2.pub); } catch { return false; } }, 'A to take church 2\'s hold back');
+  assert.equal(await play(PA, m2, sx), 200, "A still treats church 2's sermon as deleted after the church uploaded it again");
+  assert.ok((await exportMedia(PA, c2)).blobs.some(b => b.sha === sx), "A's archive for church 2 is missing the re-uploaded sermon");
+  for (const [port, c] of [[PA, c1], [PA, c2], [PD, c2]]) assert.equal(await del(port, c, sx), 200);   // leave clean
+});
+
+test('delete on A, the partner drops it, re-upload on A — the partner does not erase the re-upload, and takes it back', async () => {
+  const Y = file(220), sy = shaOf(Y);
+  assert.equal(await up(PA, c2, Y), 201);
+  await syncNow(D); await until(() => has(D, sy), 'D to copy Y');
+  assert.equal(await del(PA, c2, sy), 200);
+  await syncNow(D); await until(() => !has(D, sy), 'D to drop Y');
+  assert.equal(await play(PD, m2, sy), 404, 'CONTROL: the deletion reached D');
+  assert.equal(await up(PA, c2, Y), 201);                        // uploaded again, after the deletion
+  await syncNow(A); await sleep(800);                           // A hears D's (older) deletion
+  assert.equal(await play(PA, m2, sy), 200, "D's older deletion erased church 2's newer upload on A");
+  await syncNow(D); await until(() => has(D, sy), 'D to take the re-upload back');
+  assert.equal(await play(PD, m2, sy), 200, 'D never took back the sermon the church uploaded again');
+});
+
+test('a relay does not fetch back a sermon the church deleted after that copy was made', async () => {
+  // D holds Z for church 2 from BEFORE church 2 deleted it on A. A must not pull Z back from D.
+  const Z = file(230), sz = shaOf(Z);
+  assert.equal(await up(PA, c2, Z), 201);
+  await syncNow(D); await until(() => has(D, sz), 'D to copy Z');
+  assert.equal(await del(PA, c2, sz), 200);
+  await syncNow(A); await sleep(800);                           // A reads D's manifest, which still lists Z
+  assert.equal(has(A, sz), false, 'A fetched back from D a sermon the church had deleted');
+  assert.equal(await play(PA, m2, sz), 404);
+  await syncNow(D); await until(() => !has(D, sz), 'D to drop Z');   // tidy: D hears the deletion
+});
+
+test('a deletion travels down a chain of relays, through one that never held the file', async () => {
+  // Church 2 holds W on A and on E. D never had it. A goes offline before E syncs, so E can hear of the deletion
+  // ONLY through D. Last in this file: A stays down.
+  const W = file(240), sw = shaOf(W);
+  assert.equal(await up(PA, c2, W), 201); assert.equal(await up(PE, c2, W), 201);
+  assert.equal(has(D, sw), false, 'CONTROL: D does not hold W');
+  assert.equal(await del(PA, c2, sw), 200);
+  await syncNow(D); await sleep(800);                           // D learns of it, with nothing of its own to drop
+  assert.equal(has(D, sw), false, 'D pulled W from E instead of recording the deletion');
+  A.proc.kill('SIGKILL'); await new Promise(res => A.proc.once('exit', res));
+  await syncNow(E); await until(() => !has(E, sw), 'E to hear of the deletion through D');
+  assert.equal(await play(PE, m2, sw), 404, 'the deletion never reached the far end of the chain');
+});
+
+test('a copy taken from a partner keeps the ORIGINAL time — a deletion made before the copy still wins', async () => {
+  // V is on A and D. Church 2 deletes it on A; A goes offline. E copies V from D, which has not heard yet.
+  // When A is back, E hears of the deletion — which is newer than church 2's upload, though older than E's copy.
+  await restart(A, [c1, c2]);                                     // the chain test left A down
+  const V = file(250), sv = shaOf(V);
+  assert.equal(await up(PA, c2, V), 201);
+  await syncNow(D); await until(() => has(D, sv), 'D to copy V');
+  assert.equal(await del(PA, c2, sv), 200);
+  A.proc.kill('SIGKILL'); await new Promise(res => A.proc.once('exit', res));
+  await syncNow(E); await until(() => has(E, sv), 'E to copy V from D');
+  await restart(A, [c1, c2]);
+  await syncNow(E); await until(() => !has(E, sv), "E to act on A's deletion");
+  assert.equal(await play(PE, m2, sv), 404, 'a copy made after the deletion, but carrying the old upload, survived it');
 });
