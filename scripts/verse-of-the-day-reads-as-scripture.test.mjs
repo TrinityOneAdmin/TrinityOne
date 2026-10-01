@@ -184,3 +184,41 @@ test('…and the same holds for every reader of `text`: the chapter, a nested he
   assert.equal(hits.length, 0, 'searching for a heading still finds the verse before it: ' + JSON.stringify(hits));
   assert.equal(Bible.search('fall, but the word', 10).length, 1, 'a phrase that runs across a poetry break is not found');
 });
+
+
+// ── OWNER, 2026-10-01 (audit of 3fe46eb, finding 6): A PSALM TITLE IS SCRIPTURE ──────────────────────────────
+// parseUSFM renders \d like a heading, and the first version of usfmText dropped it with the headings. The
+// owner's ruling: keep the Psalm title's words in the verse text (it is part of the canonical text, numbered as
+// verse 1 in the Hebrew); keep dropping section headings (\s), parallel references (\r) and the major-section
+// headings \ms / \mr, which are editorial.
+const PSALMS = [
+  '\\id PSA',
+  '\\c 1',
+  '\\ms BOOK I',
+  '\\mr (Psalms 1–41)',
+  '\\q1',
+  '\\v 1 Blessed is the man who does not walk in the counsel of the wicked,',
+  '\\c 3',
+  '\\d A Psalm of David, when he fled from his son Absalom.',
+  '\\q1',
+  '\\v 1 O Lord, how my foes have increased!',
+  '\\q2 How many rise up against me!',
+].join('\n');
+
+test('a Psalm title stays in the verse text and can be searched; major-section headings still go', async () => {
+  const Bible = realBible();
+  const r = await Bible.loadModuleBytes(new TextEncoder().encode(PSALMS), 'psa.usfm', { abbr: 'PST', name: 'Psalms Test', category: 'bibles' });
+  assert.equal(r.kind, 'bible', 'fixture: the Psalms did not load');
+  const v31 = Bible.getVerses(19, 3, 'PST').find(x => String(x.v) === '1');
+  assert.ok(v31, 'fixture: Psalm 3:1 is missing');
+  assert.equal(v31.text, 'A Psalm of David, when he fled from his son Absalom. O Lord, how my foes have increased! How many rise up against me!',
+    'THE PSALM TITLE IS NOT IN PSALM 3:1’s TEXT — copy, share, read-aloud and Verse of the Day drop scripture: ' + JSON.stringify(v31.text));
+  const hits = Bible.search('Absalom', 10, 'PST');
+  assert.equal(hits.length, 1, 'a word found only in a Psalm title is not found by search: ' + JSON.stringify(hits.map(h => h.ref)));
+  assert.equal(hits[0].chap, 3, 'the title search found the wrong psalm');
+  const v11 = Bible.getVerses(19, 1, 'PST').find(x => String(x.v) === '1');
+  assert.equal(v11.text, 'Blessed is the man who does not walk in the counsel of the wicked,',
+    'a major-section heading (\\ms / \\mr) leaked into Psalm 1:1: ' + JSON.stringify(v11.text));
+  // the reader still renders the title as a heading (the .sec rule in index.html matches it)
+  assert.match(v31.html, /<span class="sec d">A Psalm of David/, 'the Psalm title no longer renders as a heading in the reader');
+});

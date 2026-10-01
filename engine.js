@@ -245,7 +245,10 @@ window.safeImgUrl = function (v) {
       if((m = line.match(/^\\c\s+(\d+)/))){ flush(); chap = +m[1]; pending = ""; continue; }
       if(chap == null) continue;
       if((m = line.match(/^\\v\s+(\S+) ?([\s\S]*)$/))){ flush(); vnum = m[1]; vbuf = pending + (m[2]||""); pending = ""; continue; }
-      if((m = line.match(/^\\(?:s\d?|ms\d?|mr|d)\b ?([\s\S]*)$/))){ add('<br><span class="sec">' + inlineUSFM(m[1]||"") + "</span>"); continue; }
+      // \d — a Psalm title — IS scripture (owner, 2026-10-01): it renders like a heading, but carries a second
+      // class so usfmText keeps its words in the verse text. \s, \ms, \mr are editorial headings and are not.
+      if((m = line.match(/^\\d\b ?([\s\S]*)$/))){ add('<br><span class="sec d">' + inlineUSFM(m[1]||"") + "</span>"); continue; }
+      if((m = line.match(/^\\(?:s\d?|ms\d?|mr)\b ?([\s\S]*)$/))){ add('<br><span class="sec">' + inlineUSFM(m[1]||"") + "</span>"); continue; }
       if((m = line.match(/^\\r\b ?([\s\S]*)$/))){ add('<br><span class="parref">' + inlineUSFM(m[1]||"") + "</span>"); continue; }
       if((m = line.match(/^\\(q\d?|qm\d?)\b ?([\s\S]*)$/))){ const lvl = (m[1].match(/\d/)||["1"])[0]; add("<br>" + (lvl >= "2" ? "&emsp;" : "") + (m[2]||"")); continue; }
       if((m = line.match(/^\\(?:p|m|pi\d?|mi|nb|pc|cls|li\d?|pmo|pm|pr)\b ?([\s\S]*)$/))){ add("<br><br>" + (m[1]||"")); continue; }
@@ -381,8 +384,9 @@ window.safeImgUrl = function (v) {
   // MySword builders and the dictionary use it on a different markup.
   function usfmText(html){
     let s = String(html || "");
-    // Drop heading and parallel-reference spans WITH their content. Depth-counted, because inlineUSFM can
-    // nest a span inside a heading (`\s1 The \nd LORD\nd* reigns` → <span class="nd"> inside the sec span).
+    // Drop heading and parallel-reference spans WITH their content. NOT a Psalm title: parseUSFM writes \d as
+    // `<span class="sec d">`, which this pattern does not match, so its words stay in the text (owner,
+    // 2026-10-01). Depth-counted, because inlineUSFM can nest a span inside a heading (`\s1 The \nd LORD\nd* reigns` → <span class="nd"> inside the sec span).
     // BOUNDED BY THE HEADING'S OWN LINE. parseUSFM writes every heading as `<br><span class="sec">…</span>` from
     // ONE source line, and inlineUSFM never emits a <br>, so a heading cannot run past the next <br>. An
     // unclosed character style inside it (`\s1 The \nd Lord` with no `\nd*`) leaves the depth count short;
