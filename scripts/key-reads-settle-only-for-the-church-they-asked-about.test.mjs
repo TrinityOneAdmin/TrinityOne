@@ -47,6 +47,7 @@ function engine() {
   const subs = [];          // every subscription the lifted code opened: { url, d, handlers, opts, closed }
   const published = [];
   const signals = [];
+  const events = [];        // every window event the lifted code dispatched: { type, detail }
   const timers = [];        // the lifted code's setTimeout calls (backoff retries) — fired by hand
   const t = {
     pub: A.pub, actingChurch: '', churchPub: A.pub, churchSk: A.sk, sk: A.sk,
@@ -80,7 +81,8 @@ function engine() {
         return { close() { if (rec.closed) return; rec.closed = true; Promise.resolve().then(() => { try { handlers.oneose && handlers.oneose(); handlers.onclose && handlers.onclose(['closed by caller']); } catch (e) {} }); } };
       },
     },
-    window: { Steward: {}, dispatchEvent: (e) => { if (e.type === 'steward-keys-read') signals.push(e.detail.kind); return true; } },
+    window: { Steward: {}, dispatchEvent: (e) => { events.push({ type: e.type, detail: e.detail }); if (e.type === 'steward-keys-read') signals.push(e.detail.kind); return true; } },
+    BLOCKED_D: 'trinityone/blocked:', STEWARDS_D: 'trinityone/stewards:', _byChurch: (e) => e.pubkey === t.pub, _openChurchDoc: () => null,
     // what the REAL setActiveIdentity touches besides the key state (lifted below)
     stewardedChurches: new Map([[B.pub, { name: 'B' }]]), netKeys: () => [],
     localStorage: { setItem() {}, getItem() { return null; } }, ACTIVE_ID_KEY: 'k',
@@ -130,6 +132,9 @@ function engine() {
     M('    async mediaEncryptor(memberPubs) {'),
     M('    async ensureCapKeyFor(kind, stewardPubs, caps) {'), M('    async rotateCapKey(kind, stewardPubs, caps) {'),
     M('    setActiveIdentity(targetPub) {'),
+    M('    async ensureNameKeyForMembers(memberPubs, stewardPubs, opts = {}) {'),
+    M('    subscribeBlocked(onBlocked) {'), M('    subscribeStewards(onList) {'),
+    M('    listIsCurrent(list) {'), M('    keyWaitNote(kind) {'),
   ].join(',\n');
   t.t = t;
   const S = new Function('scope', `with (scope) { ${decls}\n return { ${methods} }; }`)(proxy);
@@ -147,7 +152,7 @@ function engine() {
   const eose = async (rec) => { rec.handlers.oneose(); await flush(); };
   const closedByRelay = async (rec, why = 'rate-limited: too many subscriptions') => { rec.handlers.oneose(); rec.handlers.onclose([why]); await flush(); };
   const fireTimers = () => { const due = timers.splice(0); for (const x of due) if (x.fn) x.fn(); return due.filter(x => x.fn).map(x => x.ms); };
-  return { S, t, subs, published, signals, timers, switchTo, eose, closedByRelay, fireTimers };
+  return { S, t, subs, published, signals, events, timers, switchTo, eose, closedByRelay, fireTimers };
 }
 const checked = (t, kind) => ({ care: t._careKeyChecked, name: t._nameKeyChecked, media: t._mediaKeyChecked })[kind];
 const KINDS = [['care', 'subscribeCareKey'], ['name', 'subscribeNameKey'], ['media', 'subscribeMediaKey']];
@@ -477,4 +482,167 @@ test('capability keys: a switch while sealing publishes nothing (ensureCapKeyFor
     assert.equal(await run, false, `${which}: an interrupted capability-key publish did not report failure`);
     assert.equal(e.published.length, 0, `${which}: a capability-key envelope was published after the console switched church`);
   }
+});
+
+// ── 5. NO LIST, AND NO QUEUED KEY OPERATION, CROSSES A CHURCH SWITCH (audit of 3bc8905) ─────────────────────────
+
+// THE POOL ITSELF: once the caller closes a subscription, its handlers are inert. nostr-tools fires `oneose` AS it
+// closes a subscription that had not yet answered; thirty-odd readers deliver their list from `oneose`, and one of
+// them (the member list) handed church A's members to the key enrolment after the console had moved to B.
+test('the shipped pool wrapper: no handler runs after its caller has closed the subscription — a relay\'s CLOSED still does', async () => {
+  const raw = [];
+  const scope = new Proxy({ pool: {}, _poolSubMany: (u, f, h) => { const rec = { h, closed: false }; raw.push(rec); return { close() { rec.closed = true; Promise.resolve().then(() => { h.oneose && h.oneose(); h.onclose && h.onclose(['closed by caller']); }); } }; }, setTimeout },
+    { has: () => true, get: (o, k) => (k === Symbol.unscopables ? undefined : (k in o ? o[k] : globalThis[k])), set: (o, k, v) => { o[k] = v; return true; } });
+  new Function('scope', `with (scope) { ${fnBody(BUNDLE, 'pool.subscribeMany = (urls, filters, handlers)', 'the pool wrapper in the shipped bundle')} }`)(scope);
+  const seen = [];
+  const sub = scope.pool.subscribeMany([R1], [{}], { onevent: () => seen.push('event'), oneose: () => seen.push('eose'), onclose: () => seen.push('close') });
+  sub.close();
+  await flush();
+  raw[0].h.onevent({}); raw[0].h.oneose();
+  assert.deepEqual(seen, [], 'A SUBSCRIPTION\'S HANDLERS RAN AFTER ITS CALLER CLOSED IT — a screen that had moved to another church is handed the old church\'s list (audit of 3bc8905)');
+  const sub2 = scope.pool.subscribeMany([R1], [{}], { oneose: () => seen.push('eose'), onclose: () => seen.push('close') });
+  raw[1].h.oneose(); raw[1].h.onclose(['rate-limited']);   // the RELAY closed it: not the caller
+  assert.deepEqual(seen, ['eose', 'close'], 'CONTROL: a relay\'s own CLOSED no longer reaches the handlers — _openKeyRead needs it');
+  void sub2;
+});
+
+test('a list is stamped with the church it was fetched for — after a switch, the old church\'s list is not current', async () => {
+  for (const [method, d] of [['subscribeBlocked', 'trinityone/blocked:'], ['subscribeStewards', 'trinityone/stewards:']]) {
+    const e = engine();
+    let got = null;
+    e.S[method]((list) => { got = list; });
+    const rec = e.subs.at(-1);
+    rec.handlers.onevent({ pubkey: A.pub, created_at: 100, kind: 30078, tags: [['d', d + A.pub]], content: JSON.stringify({ pubkeys: [M1.pub] }) });
+    assert.deepEqual([...got], [M1.pub], `CONTROL: ${method} delivered A's list`);
+    assert.equal(e.S.listIsCurrent(got), true, `${method}: a list fetched for the church we are on is not current`);
+    e.S.setActiveIdentity(B.pub);
+    assert.equal(e.S.listIsCurrent(got), false, `${method}: CHURCH A'S LIST IS STILL "CURRENT" AFTER THE SWITCH TO B — the enrolment would wrap B's keys to A's people`);
+    rec.handlers.oneose();                                 // a late answer from A's stream (before React closed it)
+    assert.equal(e.S.listIsCurrent(got), false, `${method}: a late delivery from A's stream became current in B`);
+    e.S[method]((list) => { got = list; }); e.subs.at(-1).handlers.oneose();
+    assert.equal(e.S.listIsCurrent(got), true, `${method}: CONTROL — B's own stream delivers a current list`);
+  }
+  const e = engine();
+  assert.equal(e.S.listIsCurrent([]), false, 'an unstamped list (a cache, a hook\'s initial value) counts as current');
+  assert.equal(e.S.listIsCurrent(null), false);
+  // …and a list from before a reset is not current even for the SAME church: the reset (here, re-entering A)
+  // starts a new epoch, and the lists are re-read with the state they are paired with
+  let got = null;
+  e.S.subscribeBlocked((list) => { got = list; });
+  e.subs.at(-1).handlers.oneose();
+  assert.equal(e.S.listIsCurrent(got), true, 'CONTROL: A\'s list is current in A');
+  e.S.setActiveIdentity(A.pub);
+  assert.equal(e.S.listIsCurrent(got), false, 'a list from before the reset is still "current" after re-entering the same church');
+});
+
+// THE NAME-KEY LOCK: the church is fixed when the call is made, not when it gets the lock. The audit's four rows.
+const RING_NB = ['b1'.repeat(32)];
+const MB = K();
+const onAName = (e) => { e.t._nameKeyChecked = true; e.t._nameKeyRing = RING_A.slice(); e.t._nameKeyDocKeys = { [A.pub]: 'x', [M1.pub]: 'x', [M2.pub]: 'x' }; };
+const deliverB = async (e) => {   // B's own envelope arrives on B's read: wrapped to B, to this console (A), and B's member MB
+  e.S.subscribeNameKey();
+  const s1 = e.subs.at(-1);
+  s1.handlers.onevent(envelope(NAMEKEY_D, B, B.pub, RING_NB, [B.pub, A.pub, MB.pub]));
+  await e.eose(s1);
+};
+const forB = (e) => e.published.filter(ev => dtag(ev) === NAMEKEY_D + B.pub).map(ev => Object.keys(JSON.parse(ev.content).keys));
+
+test('lock: a Block QUEUED behind a member-join publish, with a switch to B before it gets the lock, touches nothing of B and says it failed', async () => {
+  const e = engine(); onAName(e);
+  const g = holdSeal(e);
+  const grow = e.S.ensureNameKeyForMembers([M1.pub, M2.pub, M3.pub], []);     // a member joined A: holds the lock, sealing
+  await flush();
+  const blk = e.S.ensureNameKeyForMembers([M1.pub], [], { rotate: true });     // block() in A, queued
+  await flush();
+  assert.equal(e.S.setActiveIdentity(B.pub), true);
+  await deliverB(e);
+  g.release();
+  await grow; const rb = await blk;
+  for (const recips of forB(e)) {
+    assert.ok(!recips.includes(M1.pub) && !recips.includes(M2.pub), 'CHURCH B\'S NAME KEY WAS PUBLISHED WRAPPED TO CHURCH A\'S MEMBERS by a call queued across the switch (audit of 3bc8905)');
+    assert.ok(recips.includes(MB.pub), 'church B\'s own member was dropped from B\'s name envelope');
+  }
+  assert.equal(forB(e).length, 0, 'a call made for church A published church B\'s name envelope at all');
+  assert.equal(rb, false, 'the queued Block\'s rotation never ran, and it did not say so (block() warns on false and null)');
+});
+
+test('lock: a member-join QUEUED behind a Block, with a switch to B while the Block seals, wraps nothing of B to A\'s members', async () => {
+  const e = engine(); onAName(e);
+  const g = holdSeal(e);
+  const blk = e.S.ensureNameKeyForMembers([M1.pub], [], { rotate: true });
+  await flush();
+  const grow = e.S.ensureNameKeyForMembers([M1.pub, M2.pub], []);
+  await flush();
+  assert.equal(e.S.setActiveIdentity(B.pub), true);
+  await deliverB(e);
+  g.release();
+  const rb = await blk; await grow;
+  assert.equal(forB(e).length, 0, 'CHURCH B\'S NAME KEY WAS PUBLISHED by calls made for church A');
+  assert.equal(rb, false, 'the Block interrupted by the switch did not report failure');
+});
+
+test('lock: CONTROL — with no switch, the queued Block runs for A and leaves the blocked member out', async () => {
+  const e = engine(); onAName(e);
+  const g = holdSeal(e);
+  const grow = e.S.ensureNameKeyForMembers([M1.pub, M2.pub], []);
+  await flush();
+  const blk = e.S.ensureNameKeyForMembers([M1.pub], [], { rotate: true });
+  g.release();
+  await grow; const rb = await blk;
+  assert.ok(rb && rb !== true ? true : rb, 'CONTROL: the Block rotation did not publish');
+  const rot = e.published.filter(ev => dtag(ev) === NAMEKEY_D + A.pub).at(-1);
+  assert.ok(rot && !Object.keys(JSON.parse(rot.content).keys).includes(M2.pub), 'CONTROL: the rotation for A still wraps the key to the blocked member');
+});
+
+test('a Block when the church has NO name key yet is not reported as a failure (there is nothing to take away)', async () => {
+  const e = engine(); e.t._nameKeyChecked = true;          // read; no envelope; no ring
+  const r = await e.S.ensureNameKeyForMembers([M1.pub], [], { rotate: true });
+  assert.ok(r !== null && r !== false, `a Block with no name key to rotate returned ${r} — block() would warn about a key that does not exist`);
+  assert.equal(e.published.length, 0, 'a rotate with no ring published a fresh key');
+});
+
+// (c) THE MEDIA POST-PUBLISH CHECK IS NOT REDUNDANT: it is what keeps a REFUSAL that lands after a switch from
+// being remembered, and announced, in the church the console moved to.
+test('ensureMediaKeyForMembers: a refusal that lands after a switch is neither remembered nor announced in church B', async () => {
+  const e = engine(); onA(e, 'media');
+  const g = gate();
+  e.t.publish = async (evt, opts) => { e.published.push(evt); await g.p; if (opts && typeof opts === 'object') { opts.refused = true; opts.reason = 'blocked: not a member or not permitted for this group'; } return false; };
+  const run = e.S.ensureMediaKeyForMembers([M1.pub, M2.pub], []);
+  for (let i = 0; i < 200 && !e.published.length; i++) await flush();
+  e.S.setActiveIdentity(B.pub);
+  g.release();
+  await run;
+  assert.equal(e.t._mediaKeyPushRefused, null, 'CHURCH A\'S REFUSAL WAS REMEMBERED AS CHURCH B\'S — B\'s console stops offering its own members the sermon key');
+  assert.deepEqual(e.events.filter(x => x.type === 'steward-write-blocked'), [], 'a banner about church A\'s sermon key was raised while the console runs church B');
+  const e2 = engine(); onA(e2, 'media');                    // CONTROL: no switch → the refusal is remembered and said once
+  e2.t.publish = async (evt, opts) => { e2.published.push(evt); if (opts && typeof opts === 'object') { opts.refused = true; opts.reason = 'blocked: not a member or not permitted for this group'; } return false; };
+  await e2.S.ensureMediaKeyForMembers([M1.pub, M2.pub], []);
+  assert.ok(e2.t._mediaKeyPushRefused, 'CONTROL: a refusal with no switch was not remembered');
+  assert.equal(e2.events.filter(x => x.type === 'steward-write-blocked').length, 1, 'CONTROL: a refusal with no switch was not said');
+});
+
+// (d) WHO IS HOLDING THE KEY BACK: a proved relay that is down keeps a church's first key from being minted, by
+// design — so the screens that used to say "give it a moment" name it instead.
+test('keyWaitNote names the relay a key read is still waiting on — and only for the church and read we are on', async () => {
+  const e = engine(); e.t.relayList = [R1, R2];
+  e.S.subscribeNameKey();
+  const [r1] = e.subs.slice(-2);
+  assert.equal(e.S.keyWaitNote('name'), 'relay.example and second.example aren’t answering', 'before any answer, both relays are named');
+  await e.eose(r1);
+  assert.equal(e.S.keyWaitNote('name'), 'second.example isn’t answering', 'THE RELAY HOLDING THE NAME KEY BACK IS NOT NAMED — the steward is told only to wait, for as long as it stays down');
+  assert.equal(e.S.keyWaitNote('care'), '', 'a read that was never opened names a relay');
+  e.S.setActiveIdentity(B.pub);
+  assert.equal(e.S.keyWaitNote('name'), '', 'church A\'s read names a relay while the console runs church B');
+  const e2 = engine(); e2.t.relayList = [R1, R2];
+  e2.S.subscribeCareKey();
+  for (const r of e2.subs.slice(-2)) await e2.eose(r);
+  assert.equal(e2.t._careKeyChecked, true, 'CONTROL: both relays answered');
+  assert.equal(e2.S.keyWaitNote('care'), '', 'a settled read still names a relay');
+});
+
+test('mediaEncryptor: the "can’t encrypt yet" refusal names the relay that is not answering', async () => {
+  const e = engine(); e.t.relayList = [R1, R2];
+  e.S.subscribeMediaKey();
+  await e.eose(e.subs.slice(-2)[0]);                        // R1 answered; R2 never does
+  await assert.rejects(e.S.mediaEncryptor([M1.pub]), /second\.example isn’t answering/, 'the sermon upload is refused with "wait a moment" while a relay that is down holds back the church\'s first sermon key');
 });

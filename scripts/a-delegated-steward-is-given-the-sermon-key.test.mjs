@@ -269,6 +269,9 @@ async function renderKeyDistributor(rosters, members) {
         subscribeMediaKey: () => () => {}, subscribeCareKey: () => () => {},
         subscribeNameKey: () => () => {}, subscribeWebsiteShare: () => () => {},
         setCareRoster: () => {},
+        // every list on screen is the current church's — this file is about WHAT the screen passes, and the
+        // church gate on those lists is pinned in the-key-enrolment-waits-for-every-list
+        listIsCurrent: () => true,
         ensureMediaKeyForMembers: (...a) => { media.push(a); return Promise.resolve(true); },
         ensureCareKeyForMembers: () => Promise.resolve(true),
         ensureNameKeyForMembers: () => Promise.resolve(null),

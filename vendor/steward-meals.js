@@ -175,7 +175,13 @@
       const ct = S().careSeal ? S().careSeal(sealed) : null;
       if (!ct) {
         const looking = S().careKeyChecked && !S().careKeyChecked();
-        throw new Error(looking ? "Still connecting to your church \u2014 give it a moment and try again." : "Care needs are encrypted for the person\u2019s privacy, and this church\u2019s care key hasn\u2019t reached this device yet. Open Members once so it can sync, then try again.");
+        let why = "";
+        try {
+          why = S().keyWaitNote ? S().keyWaitNote("care") : "";
+        } catch (e2) {
+          why = "";
+        }
+        throw new Error(looking ? why ? "Still connecting to your church \u2014 " + why + "." : "Still connecting to your church \u2014 give it a moment and try again." : "Care needs are encrypted for the person\u2019s privacy, and this church\u2019s care key hasn\u2019t reached this device yet. Open Members once so it can sync, then try again.");
       }
       const tags = [["d", NEED_D + id], ["t", NET], ["enc", "care1"]];
       const body = { ...rec, enc: ct };

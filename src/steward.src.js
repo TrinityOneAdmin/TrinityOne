@@ -1924,12 +1924,33 @@ const pool = new SimplePool();
 // here is already written to survive — and the careful ones (_oneComplete, _newestByD, _fetchMyClearance)
 // separate it from "the church has nothing" by other means, which this does not disturb. Not answering at
 // all would be a NEW state that nothing in the app has ever had to handle.
+//
+// …AND NO HANDLER RUNS AFTER ITS CALLER HAS CLOSED THE SUBSCRIPTION (audit of 3bc8905, 2026-10-01). nostr-tools'
+// close() runs handleClose → handleEose, so closing a subscription that had not yet reached its EOSE fires its
+// `oneose` — after `await allOpened`, i.e. after the caller's cleanup has already run. Thirty-odd readers in this
+// file deliver their list from `oneose` (subscribeMembers, subscribeGroups, subscribeBlocked, subscribeStewards,
+// subscribeAdmitted, subscribeGuardians, subscribeSafeguard, subscribeStewardedChurches …), so every one of
+// them could hand a list to a screen that had already moved on. Measured: on a reload into a stewarded church
+// B, the dashboard's member list for the console's own church A was closed ~2 ms after it opened, its close-
+// fired `oneose` delivered A's members ~150 ms AFTER the switch, and the enrolment wrapped B's name and care keys
+// to A's congregation — 8 reloads of 8. One rule here covers every reader: once the caller closes, the handlers
+// are inert. (A relay's own CLOSED is not the caller's close, so it still reaches the handlers — _openKeyRead
+// depends on that.)
 const _poolSubMany = pool.subscribeMany.bind(pool);
 pool.subscribeMany = (urls, filters, handlers) => {
+  let closedByCaller = false;
+  const h = {};
+  for (const k of Object.keys(handlers || {})) {
+    const f = handlers[k];
+    h[k] = (typeof f === 'function') ? (...a) => { if (!closedByCaller) return f(...a); } : f;
+  }
   const u = (Array.isArray(urls) ? urls : []).filter(Boolean);
-  if (u.length) return _poolSubMany(u, filters, handlers);
-  try { setTimeout(() => { try { if (handlers && handlers.oneose) handlers.oneose(); } catch (e) {} }, 0); } catch (e) {}
-  return { close() {} };
+  if (u.length) {
+    const sub = _poolSubMany(u, filters, h);
+    return { ...sub, close(reason) { closedByCaller = true; return sub.close(reason); } };
+  }
+  try { setTimeout(() => { try { if (h.oneose) h.oneose(); } catch (e) {} }, 0); } catch (e) {}
+  return { close() { closedByCaller = true; } };
 };
 const _poolQuerySync = pool.querySync.bind(pool);
 pool.querySync = (urls, filter, opts) => {
@@ -2149,6 +2170,17 @@ const _KEY_READ_LONG_WAIT = 15000;     // nostr-tools' EOSE timer for a read of 
 // both at entry and asks this after EVERY await (audit of d1116f6: a switch mid-publish handed church A's keys
 // to church B).
 function _stillOn(cp0, ep0) { return _keyReadEpoch === ep0 && !!cp0 && (actingChurch || pub) === cp0; }
+// WHICH CHURCH A LIST WAS FETCHED FOR (audit of 3bc8905). The member, steward, group and blocked lists a screen
+// holds keep their last value until the new church's stream delivers, so for a beat after a switch the key
+// enrolment held church A's lists while the engine was on church B. Each of those readers stamps every list it
+// delivers with the church and epoch it was OPENED for; the enrolment uses a list only if that stamp is the
+// church and epoch the console is on now (Steward.listIsCurrent). A list from a cache, a hook's initial value,
+// or a stream opened before the switch carries no current stamp, so it is not used.
+function _listTag() { return { cp: actingChurch || pub, epoch: _keyReadEpoch }; }
+function _stampFor(list, tag) {
+  if (Array.isArray(list)) { try { Object.defineProperty(list, '_for', { value: tag, configurable: true, enumerable: false }); } catch (e) {} }
+  return list;
+}
 // true = a trustworthy answer from this relay for the church we are on; 'unauthed' = genuine, but this socket's
 // login has not been accepted; false = not an answer (our own close, a CLOSED, a reset since, the timer).
 function _keyReadOk(tok) {
@@ -2164,7 +2196,12 @@ function _runKeyReadAuthWaiters() {
 // Open a read of one church's key envelope: one subscription per relay in this console's set, `onevent` for
 // every envelope that arrives, and `onSettled` once — when every relay has answered trustworthily. Returns the
 // closer. Used by subscribeCareKey, subscribeNameKey and subscribeMediaKey.
-function _openKeyRead(cp, filters, onevent, onSettled) {
+// WHICH RELAYS A KEY READ IS STILL WAITING ON, per kind ('care' | 'name' | 'media'), for the church and epoch it
+// was opened for — so a screen that has to say "not saved, the key hasn't arrived" can name the relay that is not
+// answering (audit of 3bc8905, finding 3: with the per-relay rule a proved relay that is down holds back a church's
+// FIRST key, by design, and the steward was told only to wait). See _keyWaitNote.
+const _keyReadWaiting = new Map();   // kind -> { cp, epoch, urls, answers: Map(url -> true|false|'unauthed'), settled }
+function _openKeyRead(cp, filters, onevent, onSettled, kind) {
   const st = { stopped: false, gen: 0, subs: [], timer: null, tries: 0 };
   // MARK EACH TOKEN CLOSED BEFORE CLOSING: the close itself fires that subscription's oneose.
   const stopSubs = () => { for (const s of st.subs) { s.tok.closed = true; try { s.sub.close(); } catch (e) {} } st.subs = []; };
@@ -2175,12 +2212,13 @@ function _openKeyRead(cp, filters, onevent, onSettled) {
     const urls = relays();
     const epoch = _keyReadEpoch, at = Date.now();
     const answers = new Map();
+    if (kind) _keyReadWaiting.set(kind, { cp, epoch, urls: urls.slice(), answers, settled: false });
     const live = () => !st.stopped && gen === st.gen && epoch === _keyReadEpoch && cp === (actingChurch || pub);
     const retry = () => { if (!live()) return; const ms = Math.min(60000, 2000 * Math.pow(2, st.tries++)); st.timer = setTimeout(open, ms); };
     const evaluate = () => {
       if (!live() || answers.size < urls.length) return;     // superseded, or not every relay has answered yet
       const v = [...answers.values()];
-      if (v.every(x => x === true)) { st.tries = 0; onSettled(); return; }
+      if (v.every(x => x === true)) { st.tries = 0; const w = kind && _keyReadWaiting.get(kind); if (w && w.answers === answers) w.settled = true; onSettled(); return; }
       if (v.some(x => x === false)) { retry(); return; }     // a CLOSED, a timer, a drop: ask again, later
       _keyReadAfterAuth(() => { if (live()) open(); });     // genuine but not yet logged in: ask again on login
     };
@@ -2200,6 +2238,15 @@ function _openKeyRead(cp, filters, onevent, onSettled) {
   };
   open();
   return () => { st.stopped = true; clearTimeout(st.timer); st.timer = null; stopSubs(); };
+}
+// "relay.example.org isn't answering" — or '' when no read for the church we are on is held up by a relay. Short
+// on purpose (the owner prefers minimal instructional copy): the screens append it to their own "not saved".
+function _keyWaitNote(kind) {
+  const w = _keyReadWaiting.get(kind);
+  if (!w || w.settled || w.epoch !== _keyReadEpoch || w.cp !== (actingChurch || pub)) return '';
+  const hosts = w.urls.filter(u => w.answers.get(u) !== true).map(u => { try { return new URL(u).host; } catch (e) { return String(u); } });
+  if (!hosts.length) return '';
+  return hosts.length === 1 ? hosts[0] + ' isn’t answering' : hosts.join(' and ') + ' aren’t answering';
 }
 // Tell the dashboard a key read has settled, so the enrolment effect re-runs — "mint on a signal, not on a
 // stopwatch", as the capability mint does. Nothing else re-runs it when the answer arrives.
@@ -5769,7 +5816,9 @@ window.Steward = {
     // sermon with it and REPLACED the envelope — every previously-encrypted sermon then undecryptable by the
     // church and every member, permanently. Refuse to mint on an untrustworthy read (fail closed: the steward
     // sees "try again in a moment"; the alternative is silent, unrecoverable loss of the church's archive).
-    if (!_mediaKeyHex && (!_mediaKeyChecked || !_isRelayAuthed())) throw new Error('Can’t encrypt this upload yet — this device hasn’t finished connecting to your church’s relay, so it can’t tell whether your church already has a media key. Wait a moment and try again.');
+    // …AND NAME THE RELAY THAT IS HOLDING IT UP, when one is (_keyWaitNote) — "wait a moment" is not true of a relay
+    // that is down, and the per-relay rule means a down relay holds back the church's first sermon key.
+    if (!_mediaKeyHex && (!_mediaKeyChecked || !_isRelayAuthed())) { const _why = _keyWaitNote('media'); throw new Error('Can’t encrypt this upload yet — this device hasn’t finished connecting to your church’s relay, so it can’t tell whether your church already has a media key' + (_why ? ': ' + _why + '.' : '. Wait a moment and try again.')); }
     // A DELEGATED CONSOLE NEVER MINTS AND NEVER REPUBLISHES THE ENVELOPE. Minting here would seal a NEW
     // key as the steward and leave every sermon the church encrypted before now undecryptable — the same
     // unrecoverable loss the gate above exists to prevent, reached by the other door. It also cannot
@@ -5994,7 +6043,7 @@ window.Steward = {
         _ingestCareKeyEnv(e);
       },
       // "No envelope came back" opens the mint gate ONLY on a trustworthy answer from every relay — _openKeyRead.
-      () => { if (!_careKeyChecked) { _careKeyChecked = true; _keysReadSignal('care'); } });
+      () => { if (!_careKeyChecked) { _careKeyChecked = true; _keysReadSignal('care'); } }, 'care');
   },
   // Wrap the care key for everyone who needs it. MINTS only on a first run where we have positively
   // established there is no envelope — never on a cold `_careKeyHex === null`, which is the ordinary state
@@ -6186,7 +6235,7 @@ window.Steward = {
          console that was refused once would go on skipping until the roster itself changed. */
       function onMediaKeyEnvelope(e) { if (forPub !== pub || e.pubkey !== pub || ((e.tags || []).find(t => t[0] === 'd') || [])[1] !== MEDIAKEY_D + pub) return; try { const o = JSON.parse(e.content); _mediaKeyDocKeys = (o && o.keys) || null; _mediaKeyPushRefused = null; _mediaKeyVer++; const _meKey = _myOwnPub(); const mine = o.keys && (o.keys[_meKey] || (_meKey === pub ? null : o.keys[pub]));   /* OPTION A: on a DELEGATED console `pub` is the CHURCH, so o.keys[pub] is the entry sealed TO THE CHURCH and our key cannot open it — _mediaKeyHex stayed null and mediaEncryptor then tried to MINT. Our own entry is there already: the church seals to [church, ...members] and a delegated steward is normally also a member. Owner console: _myOwnPub() === pub, so this is the old lookup exactly. */ if (mine && sk) { const plain = nip44d(mine, nip44ck(sk, e.pubkey)); let r = null; try { const q = JSON.parse(plain); if (Array.isArray(q)) r = q.filter(k => typeof k === 'string' && k); } catch (x2) {} const incoming = (r && r.length) ? r : [plain]; _mediaKeyRing = [...incoming, ..._mediaKeyRing.filter(k => incoming.indexOf(k) === -1)]; _mediaKeyHex = _mediaKeyRing[0];   /* KEEP what this device already held: if we minted before the envelope arrived, discarding our key here would orphan anything encrypted in that window. Rotation must never drop a key that has already sealed something. */ } } catch (x) {} },
       // no envelope came back → it is safe to mint one, but ONLY on a trustworthy answer from every relay
-      () => { if (!_mediaKeyChecked) { _mediaKeyChecked = true; _keysReadSignal('media'); } });
+      () => { if (!_mediaKeyChecked) { _mediaKeyChecked = true; _keysReadSignal('media'); } }, 'media');
   },
   // true if every relay this console has opened is still connected. The console's reconnect ticker only
   // re-subscribes when this is FALSE — so a healthy socket never triggers a full-corpus re-query (the steward
@@ -6874,6 +6923,7 @@ window.Steward = {
   // ---- moderation: the church's blocklist (banned member pubkeys). The relay rejects their writes
   // and withholds their existing events. Replaceable doc d=blocked:<churchpub>. ----
   subscribeBlocked(onBlocked) {
+    { const _tag = _listTag(), _deliver = onBlocked; onBlocked = (list) => _deliver(_stampFor(list, _tag)); }   // stamped with the church it was opened for — see _listTag
     let cur = [], latest = 0;
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
       onevent(e) {
@@ -7391,11 +7441,19 @@ window.Steward = {
   // Modelled on ensureCareKeyForMembers, which had already learned all of this the hard way. Every guard below
   // exists because its absence destroys data rather than merely failing. AUDIT-2026-07-27.
   async ensureNameKeyForMembers(memberPubs, stewardPubs, opts = {}) {
+    // THE CHURCH THIS CALL IS FOR IS FIXED HERE, AT ENQUEUE — before waiting on the lock (audit of 3bc8905). The
+    // member list was the caller's view of the church it was on when it called; a call queued behind an in-flight
+    // publish used to capture whatever church was current when the lock freed, so a Block or a member-join from
+    // church A, queued across a switch, rotated or wrapped church B's name key with A's members. If the church or
+    // the epoch has moved by the time this call gets the lock, it does nothing: false for a Block's rotation (so
+    // block() warns), null for a routine grow (the next roster tick redoes it).
+    const cp0 = actingChurch || pub, ep0 = _keyReadEpoch;
     // Serialise: let any publish already in flight finish and commit its recipient map before deciding.
     while (_nameKeyBusy) { try { await _nameKeyBusy; } catch (e) { break; } }
     let _release;
     _nameKeyBusy = new Promise(r => { _release = r; });
     try {
+      if (!_stillOn(cp0, ep0)) return opts.rotate ? false : null;
       return await this._ensureNameKeyLocked(memberPubs, stewardPubs, opts);
     } finally { _nameKeyBusy = null; _release(); }
   },
@@ -7414,7 +7472,10 @@ window.Steward = {
     // church's name key. Members accept it, newest-wins, and every sealed name in the congregation stops
     // opening. Rotation does NOT excuse this: a rotate with no ring is exactly that bug.
     if (!ring.length && _nameKeyDocKeys) return Promise.resolve(null);
-    if (opts.rotate && !ring.length) return Promise.resolve(null);
+    // A Block with no name key to rotate (we have read this church, and it has none): nothing to take away. Not
+    // null — block() treats null as "the rotation did not happen" and warns (audit of 3bc8905) — and not a
+    // publish: a rotate with no ring is the bug above.
+    if (opts.rotate && !ring.length) return Promise.resolve({ rotated: false, reason: 'no name key yet' });
     if (opts.rotate || !ring.length) ring = [_hex(crypto.getRandomValues(new Uint8Array(32))), ...ring].slice(0, NAME_RING_MAX);
     // (3) Include the acting church and the steward roster, not just this device. Omitting `cp` is why a
     // delegated console could never read the envelope in the first place.
@@ -7526,7 +7587,7 @@ window.Steward = {
       },
       // the relay answered — a church with no envelope yet may now mint its first, but ONLY on a trustworthy
       // answer from every relay (_openKeyRead). This is the gate the audit of e6a2e02 watched open on our own close.
-      () => { if (!_nameKeyChecked) { _nameKeyChecked = true; _keysReadSignal('name'); } });
+      () => { if (!_nameKeyChecked) { _nameKeyChecked = true; _keysReadSignal('name'); } }, 'name');
   },
   // open a member's sealed name. Tries every key in the ring so a rotation never hides older names.
   openMemberName(content, authorPub) {
@@ -8128,6 +8189,7 @@ window.Steward = {
   // grants those keys day-to-day church powers (but never the roster/blocklist/relay-policy — owner-only),
   // and revocation = re-publish the roster without them. See STEWARD-ROSTER-DESIGN.md. ----
   subscribeStewards(onList) {   // the current steward roster → [hex pubkeys]
+    { const _tag = _listTag(), _deliver = onList; onList = (list) => _deliver(_stampFor(list, _tag)); }   // stamped with the church it was opened for — see _listTag
     let cur = [], latest = 0;
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
       onevent(e) {
@@ -8747,6 +8809,7 @@ window.Steward = {
     return () => { try { sub.close(); } catch {} };
   },
   subscribeGroups(onGroups) {
+    { const _tag = _listTag(), _deliver = onGroups; onGroups = (list) => _deliver(_stampFor(list, _tag)); }   // stamped with the church it was opened for — see _listTag
     const CACHE_KEY = 'trinityone.steward.groups.' + (pub || '');
     const byId = new Map();
     const versions = new Map();   // id -> Map(author -> their copy); see src/church-doc-store.src.js
@@ -10158,6 +10221,7 @@ window.Steward = {
   // church's pubkey (['p', churchPub]), so we read kind-1 events addressed to us, aggregate by
   // author, and resolve each author's kind-0 profile. The church's own posts are excluded.
   subscribeMembers(onMembers) {
+    { const _tag = _listTag(), _deliver = onMembers; onMembers = (list) => _deliver(_stampFor(list, _tag)); }   // stamped with the church it was opened for — see _listTag
     const MEMBER_D = 'trinityone/member:';
     const CACHE_KEY = 'trinityone.steward.members.' + (pub || '');
     const byPub = new Map();          // pubkey -> { pubkey, npub, name, picture, count, lastTs, firstTs, joined }
@@ -10464,6 +10528,11 @@ window.Steward = {
   },
   isViewingNetwork() { return _viewingNetwork(); },
   isDelegated() { return !!actingChurch; },
+  // Was this list fetched for the church and epoch the console is on now? See _listTag. The key enrolment
+  // (KeyDistributor, app/stew-dashboard.jsx) uses a list only when this says yes.
+  listIsCurrent(list) { const t = list && list._for; return !!t && !!t.cp && t.cp === (actingChurch || pub) && t.epoch === _keyReadEpoch; },
+  // "relay.x isn't answering" for a key read of the church we are on that a relay is holding up, or ''.
+  keyWaitNote(kind) { return _keyWaitNote(kind); },
   // discover churches whose owner-signed roster lists OUR key → we can act as their steward. Re-emits on change.
   subscribeStewardedChurches(cb) {
     const me = churchPub;

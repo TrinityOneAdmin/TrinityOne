@@ -16417,18 +16417,33 @@ zoo`.split("\n");
   var pool = new SimplePool();
   var _poolSubMany = pool.subscribeMany.bind(pool);
   pool.subscribeMany = (urls, filters, handlers) => {
+    let closedByCaller = false;
+    const h = {};
+    for (const k of Object.keys(handlers || {})) {
+      const f = handlers[k];
+      h[k] = typeof f === "function" ? (...a) => {
+        if (!closedByCaller) return f(...a);
+      } : f;
+    }
     const u = (Array.isArray(urls) ? urls : []).filter(Boolean);
-    if (u.length) return _poolSubMany(u, filters, handlers);
+    if (u.length) {
+      const sub = _poolSubMany(u, filters, h);
+      return { ...sub, close(reason) {
+        closedByCaller = true;
+        return sub.close(reason);
+      } };
+    }
     try {
       setTimeout(() => {
         try {
-          if (handlers && handlers.oneose) handlers.oneose();
+          if (h.oneose) h.oneose();
         } catch (e) {
         }
       }, 0);
     } catch (e) {
     }
     return { close() {
+      closedByCaller = true;
     } };
   };
   var _poolQuerySync = pool.querySync.bind(pool);
@@ -16553,6 +16568,18 @@ zoo`.split("\n");
   function _stillOn(cp0, ep0) {
     return _keyReadEpoch === ep0 && !!cp0 && (actingChurch || pub) === cp0;
   }
+  function _listTag() {
+    return { cp: actingChurch || pub, epoch: _keyReadEpoch };
+  }
+  function _stampFor(list, tag) {
+    if (Array.isArray(list)) {
+      try {
+        Object.defineProperty(list, "_for", { value: tag, configurable: true, enumerable: false });
+      } catch (e) {
+      }
+    }
+    return list;
+  }
   function _keyReadOk(tok) {
     if (!tok || tok.closed || tok.relayClosed || tok.epoch !== _keyReadEpoch || !tok.cp || tok.cp !== (actingChurch || pub)) return false;
     if (Date.now() - tok.at >= tok.wait - 100) return false;
@@ -16571,7 +16598,8 @@ zoo`.split("\n");
       }
     }
   }
-  function _openKeyRead(cp, filters, onevent, onSettled) {
+  var _keyReadWaiting = /* @__PURE__ */ new Map();
+  function _openKeyRead(cp, filters, onevent, onSettled, kind) {
     const st = { stopped: false, gen: 0, subs: [], timer: null, tries: 0 };
     const stopSubs = () => {
       for (const s of st.subs) {
@@ -16592,6 +16620,7 @@ zoo`.split("\n");
       const urls = relays();
       const epoch = _keyReadEpoch, at = Date.now();
       const answers = /* @__PURE__ */ new Map();
+      if (kind) _keyReadWaiting.set(kind, { cp, epoch, urls: urls.slice(), answers, settled: false });
       const live = () => !st.stopped && gen === st.gen && epoch === _keyReadEpoch && cp === (actingChurch || pub);
       const retry = () => {
         if (!live()) return;
@@ -16603,6 +16632,8 @@ zoo`.split("\n");
         const v = [...answers.values()];
         if (v.every((x) => x === true)) {
           st.tries = 0;
+          const w = kind && _keyReadWaiting.get(kind);
+          if (w && w.answers === answers) w.settled = true;
           onSettled();
           return;
         }
@@ -16652,6 +16683,19 @@ zoo`.split("\n");
       st.timer = null;
       stopSubs();
     };
+  }
+  function _keyWaitNote(kind) {
+    const w = _keyReadWaiting.get(kind);
+    if (!w || w.settled || w.epoch !== _keyReadEpoch || w.cp !== (actingChurch || pub)) return "";
+    const hosts = w.urls.filter((u) => w.answers.get(u) !== true).map((u) => {
+      try {
+        return new URL(u).host;
+      } catch (e) {
+        return String(u);
+      }
+    });
+    if (!hosts.length) return "";
+    return hosts.length === 1 ? hosts[0] + " isn\u2019t answering" : hosts.join(" and ") + " aren\u2019t answering";
   }
   function _keysReadSignal(kind) {
     try {
@@ -19338,7 +19382,10 @@ zoo`.split("\n");
     // so the host (and any cloud backup) only ever holds ciphertext; only members hold the key to decrypt.
     async mediaEncryptor(memberPubs) {
       if (!sk) throw new Error("no key");
-      if (!_mediaKeyHex && (!_mediaKeyChecked || !_isRelayAuthed())) throw new Error("Can\u2019t encrypt this upload yet \u2014 this device hasn\u2019t finished connecting to your church\u2019s relay, so it can\u2019t tell whether your church already has a media key. Wait a moment and try again.");
+      if (!_mediaKeyHex && (!_mediaKeyChecked || !_isRelayAuthed())) {
+        const _why = _keyWaitNote("media");
+        throw new Error("Can\u2019t encrypt this upload yet \u2014 this device hasn\u2019t finished connecting to your church\u2019s relay, so it can\u2019t tell whether your church already has a media key" + (_why ? ": " + _why + "." : ". Wait a moment and try again."));
+      }
       if (actingChurch && !_mediaKeyHex) throw new Error("Can\u2019t encrypt this upload \u2014 your church hasn\u2019t shared its media key with this account yet. Ask whoever holds the church key to add you as a member of the church, or to upload this one themselves. Nothing has been uploaded.");
       let useHex = _mediaKeyHex;
       if (!actingChurch) {
@@ -19493,7 +19540,8 @@ zoo`.split("\n");
             _careKeyChecked = true;
             _keysReadSignal("care");
           }
-        }
+        },
+        "care"
       );
     },
     // Wrap the care key for everyone who needs it. MINTS only on a first run where we have positively
@@ -19723,7 +19771,8 @@ zoo`.split("\n");
             _mediaKeyChecked = true;
             _keysReadSignal("media");
           }
-        }
+        },
+        "media"
       );
     },
     // true if every relay this console has opened is still connected. The console's reconnect ticker only
@@ -20499,6 +20548,10 @@ zoo`.split("\n");
     // ---- moderation: the church's blocklist (banned member pubkeys). The relay rejects their writes
     // and withholds their existing events. Replaceable doc d=blocked:<churchpub>. ----
     subscribeBlocked(onBlocked) {
+      {
+        const _tag = _listTag(), _deliver = onBlocked;
+        onBlocked = (list) => _deliver(_stampFor(list, _tag));
+      }
       let cur = [], latest = 0;
       const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
         onevent(e) {
@@ -20845,6 +20898,7 @@ zoo`.split("\n");
     // Modelled on ensureCareKeyForMembers, which had already learned all of this the hard way. Every guard below
     // exists because its absence destroys data rather than merely failing. AUDIT-2026-07-27.
     async ensureNameKeyForMembers(memberPubs, stewardPubs, opts = {}) {
+      const cp0 = actingChurch || pub, ep0 = _keyReadEpoch;
       while (_nameKeyBusy) {
         try {
           await _nameKeyBusy;
@@ -20857,6 +20911,7 @@ zoo`.split("\n");
         _release = r;
       });
       try {
+        if (!_stillOn(cp0, ep0)) return opts.rotate ? false : null;
         return await this._ensureNameKeyLocked(memberPubs, stewardPubs, opts);
       } finally {
         _nameKeyBusy = null;
@@ -20869,7 +20924,7 @@ zoo`.split("\n");
       if (!_nameKeyChecked || !_isRelayAuthed()) return Promise.resolve(null);
       let ring = _nameKeyRing.slice();
       if (!ring.length && _nameKeyDocKeys) return Promise.resolve(null);
-      if (opts.rotate && !ring.length) return Promise.resolve(null);
+      if (opts.rotate && !ring.length) return Promise.resolve({ rotated: false, reason: "no name key yet" });
       if (opts.rotate || !ring.length) ring = [_hex(crypto.getRandomValues(new Uint8Array(32))), ...ring].slice(0, NAME_RING_MAX);
       const want = [...new Set([cp, churchPub, ...memberPubs || [], ...stewardPubs || []].map((p) => toPubHex(p) || p).filter(Boolean))].filter((p) => !_localBlocked.has(String(p).toLowerCase()));
       const have = _nameKeyDocKeys || {};
@@ -20947,7 +21002,8 @@ zoo`.split("\n");
             _nameKeyChecked = true;
             _keysReadSignal("name");
           }
-        }
+        },
+        "name"
       );
     },
     // open a member's sealed name. Tries every key in the ring so a rotation never hides older names.
@@ -21524,6 +21580,10 @@ zoo`.split("\n");
     // grants those keys day-to-day church powers (but never the roster/blocklist/relay-policy — owner-only),
     // and revocation = re-publish the roster without them. See STEWARD-ROSTER-DESIGN.md. ----
     subscribeStewards(onList) {
+      {
+        const _tag = _listTag(), _deliver = onList;
+        onList = (list) => _deliver(_stampFor(list, _tag));
+      }
       let cur = [], latest = 0;
       const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
         onevent(e) {
@@ -22061,6 +22121,10 @@ zoo`.split("\n");
       };
     },
     subscribeGroups(onGroups) {
+      {
+        const _tag = _listTag(), _deliver = onGroups;
+        onGroups = (list) => _deliver(_stampFor(list, _tag));
+      }
       const CACHE_KEY = "trinityone.steward.groups." + (pub || "");
       const byId = /* @__PURE__ */ new Map();
       const versions = /* @__PURE__ */ new Map();
@@ -23576,6 +23640,10 @@ zoo`.split("\n");
     // church's pubkey (['p', churchPub]), so we read kind-1 events addressed to us, aggregate by
     // author, and resolve each author's kind-0 profile. The church's own posts are excluded.
     subscribeMembers(onMembers) {
+      {
+        const _tag = _listTag(), _deliver = onMembers;
+        onMembers = (list) => _deliver(_stampFor(list, _tag));
+      }
       const MEMBER_D = "trinityone/member:";
       const CACHE_KEY = "trinityone.steward.members." + (pub || "");
       const byPub = /* @__PURE__ */ new Map();
@@ -23967,6 +24035,16 @@ zoo`.split("\n");
     },
     isDelegated() {
       return !!actingChurch;
+    },
+    // Was this list fetched for the church and epoch the console is on now? See _listTag. The key enrolment
+    // (KeyDistributor, app/stew-dashboard.jsx) uses a list only when this says yes.
+    listIsCurrent(list) {
+      const t = list && list._for;
+      return !!t && !!t.cp && t.cp === (actingChurch || pub) && t.epoch === _keyReadEpoch;
+    },
+    // "relay.x isn't answering" for a key read of the church we are on that a relay is holding up, or ''.
+    keyWaitNote(kind) {
+      return _keyWaitNote(kind);
     },
     // discover churches whose owner-signed roster lists OUR key → we can act as their steward. Re-emits on change.
     subscribeStewardedChurches(cb) {

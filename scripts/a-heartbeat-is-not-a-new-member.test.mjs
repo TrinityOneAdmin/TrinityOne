@@ -18,7 +18,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { fnBody } from './test-slice.mjs';
+import { fnBody, liftKeyRead } from './test-slice.mjs';
 
 // ── Fellowship: test that announceMembership writes hb:1 on a heartbeat ──
 
@@ -188,7 +188,8 @@ test('subscribeMembers reads the seen field from a heartbeat document', async ()
     },
     window: { Steward: { openMemberName: () => '' } },
   };
-  const fn = new Function('scope', `with (scope) { return ({ ${stBody} }).subscribeMembers; }`)(
+  // the shipped list stamp (_listTag/_stampFor) — subscribeMembers stamps every list with the church it was opened for
+  const fn = new Function('scope', `with (scope) { ${liftKeyRead(STEWARD)}\n return ({ ${stBody} }).subscribeMembers; }`)(
     new Proxy(scope, {
       has: (t, k) => (k in t) || !(String(k) in globalThis),
       get: (t, k) => {
