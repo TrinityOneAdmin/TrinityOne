@@ -3871,7 +3871,15 @@ window.Fellowship = {
     // `arrivedat` goes with them deliberately: it is the outcome of the last "we're here" tap, it is useless
     // without the names beside it, and losing it re-offers a button over an arrival already on the worker's
     // screen.
-    const KEEP_PREFIX = ['trinityone.bringkids.', 'trinityone.mykidnames.', 'trinityone.arrivedat.'];
+    //
+    // `joinedAt:<church>` (2026-10-01): the date this phone first joined the church. announceMembership reads it
+    // to send `{ joined, seen, hb: 1 }` — a heartbeat from a member who has been there all along. Wiped, the
+    // next announce after a lock sent `{ joined: <now> }` with no `hb` — the steward console's activity feed
+    // reads a missing `hb` as "A new member joined" — and re-dated the member's join to the moment they typed
+    // their PIN. Nothing rebuilds the original date. It names a church the KEPT
+    // followedChurches already names, plus a timestamp. leaveMembership still removes it when they leave.
+    const KEEP_PREFIX = ['trinityone.bringkids.', 'trinityone.mykidnames.', 'trinityone.arrivedat.',
+      'trinityone.joinedAt:'];
     const doomed = (k) => !!k && k.startsWith('trinityone.') && !KEEP.has(k)
       && !KEEP_PREFIX.some(p => k.startsWith(p)) && (FORCE_WIPE.has(k) || (
       !k.startsWith('trinityone.mydata:') && !k.startsWith('trinityone.backedup.')

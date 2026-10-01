@@ -20,6 +20,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { fnBody } from './test-slice.mjs';
 
 const ROOT = new URL('..', import.meta.url).pathname;
 const F = readFileSync(ROOT + 'vendor/fellowship.js', 'utf8');
@@ -84,6 +85,9 @@ const DEVICE_KEYS = [
   'trinityone.bringkids.' + CHURCH + '|' + MEMBER,
   'trinityone.mykidnames.' + CHURCH + '|' + MEMBER,
   'trinityone.arrivedat.' + CHURCH + '|' + MEMBER,
+  // 2026-10-01: the date this phone first joined. Wiped, the next heartbeat re-announced the member as a NEW
+  // join (no `hb`), and nothing rebuilds the original date. See the point-of-use test at the foot of this file.
+  'trinityone.joinedAt:' + CHURCH,
 ];
 
 // ⚠ THREE PREFIXES ARE DELIBERATE KEEPS AND MUST BE NAMED HERE, or this assertion and the keep-list
@@ -92,7 +96,8 @@ const DEVICE_KEYS = [
 // locked boot destroying them permanently (2026-09-12), and ruled on by the owner: "the names being on the
 // phone is fine. A parent will likely have much more personal information on the phone anyway."
 // They are pinned by their own tests at the foot of this file.
-const DELIBERATE_KEEPS = /^trinityone\.(backedup|approvedToast|bringkids|mykidnames|arrivedat)\./;
+// joinedAt:<church> (2026-10-01) is the fourth — the date this phone first joined; see its own test below.
+const DELIBERATE_KEEPS = /^trinityone\.((backedup|approvedToast|bringkids|mykidnames|arrivedat)\.|joinedAt:)/;
 
 test('the caches the device was still holding are wiped', () => {
   const left = runWipe(DEVICE_KEYS);
@@ -313,10 +318,11 @@ test('…and the exemption is by PREFIX, so it cannot be dodged by a longer key'
 test('the exemption does NOT widen the wipe’s hole — a church cache with a similar name still goes', () => {
   // The other way to get a keep-list wrong. `trinityone.mykids…` is not `trinityone.mykidnames.`, and a
   // prefix test written loosely (startsWith('trinityone.mykid')) would spare a key nobody argued for.
-  const near = ['trinityone.mykids.' + CHURCH, 'trinityone.bringkid.' + CHURCH, 'trinityone.arrived.' + CHURCH];
+  const near = ['trinityone.mykids.' + CHURCH, 'trinityone.bringkid.' + CHURCH, 'trinityone.arrived.' + CHURCH,
+    'trinityone.joinedAt.' + CHURCH, 'trinityone.joined:' + CHURCH];
   const left = runWipe(near);
   assert.deepEqual(left, [],
-    'the keep-list is matching more than the three prefixes that were argued for, one at a time: ' + left.join(', '));
+    'the keep-list is matching more than the four prefixes that were argued for, one at a time: ' + left.join(', '));
 });
 
 // ── ITEM 7 (14-day audit, 2026-09-14): THE WIPE FIRES ON A PHONE THAT NEVER LOCKED ─────────────────────
@@ -399,4 +405,75 @@ test('…and an UNLOCKED phone is still never wiped, budget or no budget', () =>
   e.giveUp();
   assert.equal(e.wipes(), 0,
     'the give-up timer wiped a member who was never locked — which is the defect 5951edd was written to fix');
+});
+
+
+// ── 2026-10-01: A LOCK MADE AN OLD MEMBER LOOK LIKE A NEW ONE ──────────────────────────────────────────────
+// `trinityone.joinedAt:<church>` carries a 64-hex pubkey in its NAME, so the IDENTIFIER rule took it on every
+// locked boot. announceMembership reads it to decide what to send: present, a heartbeat `{ joined, seen, hb: 1 }`;
+// absent, a first join `{ joined: <now> }` — and it re-stamps "now" as the join date. The steward console's
+// activity feed reads a member: document with no `hb` as "A new member joined" (steward.src.js), so every PIN
+// lock re-announced a long-standing member as a newcomer, with their join re-dated to the moment they unlocked.
+// Confirmed by running, FIX-PLAN-2026-10-01 item 1(a).
+//
+// POINT OF USE: the SHIPPED announceMembership and the SHIPPED clearCommunityCache, lifted from the bundle
+// into ONE scope sharing one localStorage — announce, lock-wipe, announce again — and the assertion is on what
+// the second send actually carries. Deleting the keep entry turns it red; so would announceMembership ceasing
+// to read the key.
+function liftAnnounceAndWipe() {
+  const store = new Map();
+  const sent = [];
+  const localStorage = {
+    get length() { return store.size; },
+    key: (i) => [...store.keys()][i],
+    getItem: (k) => store.has(k) ? store.get(k) : null,
+    setItem: (k, v) => store.set(k, String(v)),
+    removeItem: (k) => store.delete(k),
+  };
+  const scope = {
+    toPub: (x) => x, sk: 'deadbeef', NET: 'trinityone',
+    // esbuild's name for the signer in this bundle; a missing stub THROWS below rather than reading undefined.
+    finalizeEvent2: (t) => { const e = { ...t, id: 'e' + (sent.length + 1), sig: 's', pubkey: MEMBER }; sent.push(e); return e; },
+    _outbox: [], _outboxSave: () => {}, _publishAny: async () => true, publishSetFor: () => ['wss://r'],
+    _queueJoinIntent: () => { throw new Error('keyless path taken — the stub key did not reach the function'); },
+    _markJoinSent: () => {},
+    window: { Fellowship: { ready: Promise.resolve(), myProfile: null } },
+    localStorage, profiles: {}, _k0Seen: new Set(),
+  };
+  const P = new Proxy(scope, {
+    has: (t, k) => (k in t) || !(String(k) in globalThis),
+    get: (t, k) => { if (k === Symbol.unscopables) return undefined; if (k in t) return t[k];
+      throw new ReferenceError('the shipped function needs a stub for ' + String(k) + ' — esbuild may have renamed it'); },
+    set: (t, k, v) => { t[k] = v; return true; },
+  });
+  const ann = fnBody(F, 'async announceMembership(npubOrHex) {', 'announceMembership');
+  const announce = new Function('scope',
+    `with (scope) { return (async function announceMembership(npubOrHex) ${ann.slice(ann.indexOf('{'))}); }`)(P);
+  const wipeBody = fnBody(F, 'clearCommunityCache() {', 'clearCommunityCache');
+  const wipe = new Function('scope',
+    `with (scope) { return ({ clearCommunityCache() ${wipeBody.slice(wipeBody.indexOf('{'))} }); }`)(P);
+  return { announce, wipe: () => wipe.clearCommunityCache(), sent, store };
+}
+
+test('a member who locks and unlocks is still an OLD member: the next heartbeat keeps their join date and hb', async () => {
+  const L = liftAnnounceAndWipe();
+  const realNow = Date.now;
+  try {
+    Date.now = () => 1_700_000_000_000;              // first join
+    await L.announce(CHURCH);
+    const first = JSON.parse(L.sent.at(-1).content);
+    assert.equal(first.joined, 1_700_000_000, 'the first announce did not stamp a join date — the rig is wrong');
+    assert.equal(first.hb, undefined, 'the first announce already claimed to be a heartbeat — the rig is wrong');
+
+    L.wipe();                                        // a locked boot
+
+    Date.now = () => 1_700_000_000_000 + 30 * 86400_000;   // a month later, after unlocking
+    await L.announce(CHURCH);
+    const again = JSON.parse(L.sent.at(-1).content);
+    assert.equal(again.joined, 1_700_000_000,
+      'AFTER A PIN LOCK THE MEMBER WAS RE-DATED AS JOINING TODAY (' + again.joined + '), not on their original date');
+    assert.equal(again.hb, 1,
+      'AFTER A PIN LOCK THE HEARTBEAT WENT OUT WITHOUT hb — the steward console reads that as "A new member joined"');
+    assert.ok(L.store.has('trinityone.joinedAt:' + CHURCH), 'the join date is gone from the phone after a lock');
+  } finally { Date.now = realNow; }
 });

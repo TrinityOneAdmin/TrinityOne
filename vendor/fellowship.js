@@ -10091,7 +10091,12 @@
         "trinityone.joinintent"
       ]);
       const FORCE_WIPE = /* @__PURE__ */ new Set(["trinityone.mydata:data/chatseen"]);
-      const KEEP_PREFIX = ["trinityone.bringkids.", "trinityone.mykidnames.", "trinityone.arrivedat."];
+      const KEEP_PREFIX = [
+        "trinityone.bringkids.",
+        "trinityone.mykidnames.",
+        "trinityone.arrivedat.",
+        "trinityone.joinedAt:"
+      ];
       const doomed = (k) => !!k && k.startsWith("trinityone.") && !KEEP.has(k) && !KEEP_PREFIX.some((p) => k.startsWith(p)) && (FORCE_WIPE.has(k) || !k.startsWith("trinityone.mydata:") && !k.startsWith("trinityone.backedup.") && !k.startsWith("trinityone.approvedToast.") && (PREFIXES.some((p) => k.startsWith(p)) || IDENTIFIER.test(k)));
       try {
         const kill = [];
