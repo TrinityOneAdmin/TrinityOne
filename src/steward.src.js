@@ -1910,6 +1910,10 @@ let sk = null, pub = null;                 // the ACTIVE signing identity (churc
 // accepted it. Narrowing that further would need the relay's OK on the auth event, which nostr-tools does not
 // surface here.
 const _authedRelays = new Map();   // normalised url -> the AbstractRelay instance that signed the challenge
+// …AND THE ONES THE RELAY ACCEPTED. `_authedRelays` records that we SIGNED (its honest limit, below); the key
+// reads need the relay's OK, because a relay that refuses the login still answers the read — with the private
+// envelope withheld — and that empty answer must not open a mint gate. See _keyReadAuthedOn.
+const _authAccepted = new Map();   // normalised url -> the AbstractRelay instance whose AUTH the relay accepted
 pool.automaticallyAuth = (url) => async (authEvent) => {
   if (!sk) throw new Error('no key');
   // SIGN FIRST, RECORD SECOND. Recording before signing means recording "this relay challenged us", not "we
@@ -1920,9 +1924,24 @@ pool.automaticallyAuth = (url) => async (authEvent) => {
   const signed = finalizeEvent(authEvent, sk);
   let k = url; try { k = normalizeURL(url); } catch (e) {}
   try { _authedRelays.set(k, pool.relays.get(k)); } catch (e) {}
-  // A key-envelope read that the relay answered BEFORE this socket authenticated is asked again now — see
-  // _keyReadOk. Deferred so the AUTH frame (sent once we return) reaches the relay ahead of the new REQ.
-  try { setTimeout(_runKeyReadAuthWaiters, 400); } catch (e) {}
+  // …AND GIVE THE RELAY TIME TO SAY YES — the rule publish() already keeps (see "GIVE A SLOW RELAY TIME TO SAY
+  // YES"). nostr-tools times a login out at its publishTimeout (4.4 s) and drops a later OK on the floor; on a
+  // link with 2.2 s each way the relay accepts the login and the console never learns it, so no key read could
+  // ever count (_keyReadAuthedOn). auth() reads the timeout after this signer returns, so raising it here applies.
+  try { const r0 = pool.relays.get(k); if (r0 && r0.publishTimeout < 12000) r0.publishTimeout = 12000; } catch (e) {}
+  // WAIT FOR THE RELAY'S OK. nostr-tools' relay.auth() holds a promise that settles on the relay's answer to
+  // this AUTH (it is created before this signer runs, assigned once it returns — hence the deferral). Accepted:
+  // record it, and ask again any key read the relay answered before this socket was logged in (_keyReadOk).
+  try {
+    setTimeout(() => {
+      try {
+        const r = pool.relays.get(k);
+        if (r && r.authPromise && typeof r.authPromise.then === 'function') {
+          r.authPromise.then(() => { try { _authAccepted.set(k, r); _runKeyReadAuthWaiters(); } catch (e) {} }, () => { try { if (_authAccepted.get(k) === r) _authAccepted.delete(k); } catch (e) {} });
+        }
+      } catch (e) {}
+    }, 0);
+  } catch (e) {}
   return signed;
 };
 // Are we currently connected, on the SAME socket we authenticated on, to a relay we are actually using?
@@ -1939,6 +1958,16 @@ function _isRelayAuthed() {
       if (authedOn && st.get(k) === true && pool.relays.get(k) === authedOn) return true;
     }
     return false;
+  } catch (e) { return false; }
+}
+// IS THIS ONE RELAY CONNECTED, ON THE SOCKET IT ACCEPTED OUR LOGIN ON? Per relay, and on the relay's OK rather
+// than our signature — the stricter question the key reads ask (_openKeyRead). Not the one _isRelayAuthed
+// answers, which is "is ANY relay in the set logged in (as far as we know)".
+function _keyReadAuthedOn(url) {
+  try {
+    let k = url; try { k = normalizeURL(url); } catch (e) {}
+    const r = pool.relays.get(k);
+    return !!r && r.connected === true && _authAccepted.get(k) === r;
   } catch (e) { return false; }
 }
 // ── HAS THIS CONSOLE ACTUALLY READ THIS CHURCH'S KEY ENVELOPE? — the care, name and media mint gates ─────────
@@ -1968,23 +1997,77 @@ function _isRelayAuthed() {
 //     socket still answers true — the honest limit _ckKeysSettled already records.)
 //
 // AND AUTHENTICATED, as the capability keys and _ckKeysSettled require: an envelope is private, so an
-// unauthenticated reader is answered with nothing. A genuine EOSE that arrives before this socket has signed
-// a challenge is not thrown away for ever, though — that is the normal boot order for a church that has no
-// envelope yet, and refusing it would mean the church never gets its first key. The read is asked again once
-// the socket authenticates (_runKeyReadAuthWaiters, from the signer), and that answer counts.
+// unauthenticated reader is answered with nothing.
+//
+// REVISED AFTER THE AUDIT OF d1116f6 (2026-10-01), which found three more ways to be wrong:
+//   • A CLOSED IS NOT AN ANSWER. A relay that refuses the REQ ("rate-limited: too many subscriptions") makes
+//     nostr-tools fire oneose too, and the console minted over the envelope that relay holds. → `onclose`
+//     marks the token, and oneose is evaluated a microtask later, after onclose has run;
+//   • ONE RELAY IS NOT THE CHURCH. With two relays, an authenticated empty answer from one opened the gate while
+//     the relay HOLDING the envelope was down, dropped, or refused our login. → the read is opened PER RELAY,
+//     and the gate opens only when EVERY relay in this console's set has given a trustworthy answer — each
+//     authenticated on its own socket, on the relay's OK (_keyReadAuthedOn), not merely our signature. A set
+//     with a relay that cannot be reached does not settle, so nothing is minted until it can be;
+//   • AND A MISSED ANSWER IS ASKED AGAIN. The 4.3 s cutoff with no retry left a church on a slow link (an EOSE
+//     at 4.5 s, or 2.2 s each way) with no keys until something else re-subscribed. → a read whose answer did
+//     not count is re-opened with backoff (2 s doubling to 60 s), and a read of a relay that is already
+//     connected passes `maxWait` so a slow but genuine EOSE beats nostr-tools' timer. (maxWait also sizes the
+//     CONNECTION timeout, so it is only passed when the socket is already up.) An unauthenticated answer is
+//     asked again when a login is accepted (_runKeyReadAuthWaiters), not on a timer.
 let _keyReadEpoch = 0;                 // bumped by both per-church resets
-const _keyReadAuthWaiters = new Set(); // { tok, again } — reads answered before this socket authenticated
-function _keyReadOpen(cp) { return { cp, epoch: _keyReadEpoch, at: Date.now(), closed: false }; }
-// true = a trustworthy answer for the church we are on; 'unauthed' = genuine but before auth; false = ignore.
+const _keyReadAuthWaiters = new Set(); // functions: re-open a read the relay answered before our login was accepted
+const _KEY_READ_LONG_WAIT = 15000;     // nostr-tools' EOSE timer for a read of an already-connected relay
+// true = a trustworthy answer from this relay for the church we are on; 'unauthed' = genuine, but this socket's
+// login has not been accepted; false = not an answer (our own close, a CLOSED, a reset since, the timer).
 function _keyReadOk(tok) {
-  if (!tok || tok.closed || tok.epoch !== _keyReadEpoch || !tok.cp || tok.cp !== (actingChurch || pub)) return false;
-  if (Date.now() - tok.at >= 4300) return false;     // nostr-tools' 4400 ms timer, not the relay
-  return _isRelayAuthed() ? true : 'unauthed';
+  if (!tok || tok.closed || tok.relayClosed || tok.epoch !== _keyReadEpoch || !tok.cp || tok.cp !== (actingChurch || pub)) return false;
+  if (Date.now() - tok.at >= tok.wait - 100) return false;     // nostr-tools' own timer fires at `wait`, not the relay
+  return _keyReadAuthedOn(tok.url) ? true : 'unauthed';
 }
-function _keyReadAfterAuth(tok, again) { _keyReadAuthWaiters.add({ tok, again }); }
+function _keyReadAfterAuth(again) { _keyReadAuthWaiters.add(again); }
 function _runKeyReadAuthWaiters() {
   const ws = [..._keyReadAuthWaiters]; _keyReadAuthWaiters.clear();
-  for (const w of ws) { if (!w.tok.closed && w.tok.epoch === _keyReadEpoch) { try { w.again(); } catch (e) {} } }
+  for (const again of ws) { try { again(); } catch (e) {} }
+}
+// Open a read of one church's key envelope: one subscription per relay in this console's set, `onevent` for
+// every envelope that arrives, and `onSettled` once — when every relay has answered trustworthily. Returns the
+// closer. Used by subscribeCareKey, subscribeNameKey and subscribeMediaKey.
+function _openKeyRead(cp, filters, onevent, onSettled) {
+  const st = { stopped: false, gen: 0, subs: [], timer: null, tries: 0 };
+  // MARK EACH TOKEN CLOSED BEFORE CLOSING: the close itself fires that subscription's oneose.
+  const stopSubs = () => { for (const s of st.subs) { s.tok.closed = true; try { s.sub.close(); } catch (e) {} } st.subs = []; };
+  const open = () => {
+    if (st.stopped) return;
+    stopSubs(); clearTimeout(st.timer); st.timer = null;
+    const gen = ++st.gen;
+    const urls = relays();
+    const epoch = _keyReadEpoch, at = Date.now();
+    const answers = new Map();
+    const live = () => !st.stopped && gen === st.gen && epoch === _keyReadEpoch && cp === (actingChurch || pub);
+    const retry = () => { if (!live()) return; const ms = Math.min(60000, 2000 * Math.pow(2, st.tries++)); st.timer = setTimeout(open, ms); };
+    const evaluate = () => {
+      if (!live() || answers.size < urls.length) return;     // superseded, or not every relay has answered yet
+      const v = [...answers.values()];
+      if (v.every(x => x === true)) { st.tries = 0; onSettled(); return; }
+      if (v.some(x => x === false)) { retry(); return; }     // a CLOSED, a timer, a drop: ask again, later
+      _keyReadAfterAuth(() => { if (live()) open(); });     // genuine but not yet logged in: ask again on login
+    };
+    if (!urls.length) { retry(); return; }
+    for (const url of urls) {
+      let up = false; try { const r = pool.relays.get(normalizeURL(url)); up = !!(r && r.connected); } catch (e) {}
+      const tok = { cp, epoch, at, url, wait: up ? _KEY_READ_LONG_WAIT : 4400, closed: false, relayClosed: false };
+      const sub = pool.subscribeMany([url], filters, {
+        ...(up ? { maxWait: _KEY_READ_LONG_WAIT } : {}),
+        onevent(e) { if (!tok.closed) onevent(e); },
+        // a microtask later, so a CLOSED's onclose (which nostr-tools runs right after this) has marked the token
+        oneose() { queueMicrotask(() => { answers.set(url, _keyReadOk(tok)); evaluate(); }); },
+        onclose() { tok.relayClosed = true; },
+      });
+      st.subs.push({ tok, sub });
+    }
+  };
+  open();
+  return () => { st.stopped = true; clearTimeout(st.timer); st.timer = null; stopSubs(); };
 }
 // Tell the dashboard a key read has settled, so the enrolment effect re-runs — "mint on a signal, not on a
 // stopwatch", as the capability mint does. Nothing else re-runs it when the answer arrives.
@@ -5746,33 +5829,18 @@ window.Steward = {
   // the church, so using it here is what made the previous attempt impossible to satisfy.
   subscribeCareKey() {
     const cp = actingChurch || pub; if (!cp) return () => {};
-    let sub = null, tok = null;
-    const open = () => {
-      const rd = tok = _keyReadOpen(cp);
-      sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [cp], '#d': [CAREKEY_D + cp] },
-                                          { kinds: [30078], '#church': [cp], '#d': [CAREKEY_D + cp] }], {
-        onevent(e) {
-          // Author discipline: the church itself, or one of its CURRENT rostered stewards. The relay enforces
-          // exactly this on write; the client check matters on a shared/non-enforcing relay. An author we can't
-          // verify YET (the steward roster loads asynchronously) is BUFFERED, not dropped — dropping a real
-          // steward envelope and then minting a fresh key is the mint-race that splits the care key.
-          if (!_careKeyAuthed(e)) { _careKeyPending.push({ e, at: Date.now() }); if (_careKeyPending.length > 10) _careKeyPending.shift(); return; }
-          _ingestCareKeyEnv(e);
-        },
-        // "No envelope came back" may open the mint gate ONLY on a trustworthy answer — see _keyReadOk: not our
-        // own close, not a read from before a reset, not nostr-tools' timer, and authenticated. A genuine answer
-        // from before this socket authenticated is asked again once it has.
-        oneose() {
-          const ok = _keyReadOk(rd);
-          if (ok === true) { if (!_careKeyChecked) { _careKeyChecked = true; _keysReadSignal('care'); } }
-          else if (ok === 'unauthed') _keyReadAfterAuth(rd, again);
-        },
-      });
-    };
-    const again = () => { if (tok) tok.closed = true; try { sub && sub.close(); } catch (e) {} open(); };
-    open();
-    // MARK IT CLOSED BEFORE CLOSING: the close itself fires this subscription's oneose.
-    return () => { if (tok) tok.closed = true; try { sub && sub.close(); } catch (e) {} };
+    return _openKeyRead(cp, [{ kinds: [30078], authors: [cp], '#d': [CAREKEY_D + cp] },
+                             { kinds: [30078], '#church': [cp], '#d': [CAREKEY_D + cp] }],
+      (e) => {
+        // Author discipline: the church itself, or one of its CURRENT rostered stewards. The relay enforces
+        // exactly this on write; the client check matters on a shared/non-enforcing relay. An author we can't
+        // verify YET (the steward roster loads asynchronously) is BUFFERED, not dropped — dropping a real
+        // steward envelope and then minting a fresh key is the mint-race that splits the care key.
+        if (!_careKeyAuthed(e)) { _careKeyPending.push({ e, at: Date.now() }); if (_careKeyPending.length > 10) _careKeyPending.shift(); return; }
+        _ingestCareKeyEnv(e);
+      },
+      // "No envelope came back" opens the mint gate ONLY on a trustworthy answer from every relay — _openKeyRead.
+      () => { if (!_careKeyChecked) { _careKeyChecked = true; _keysReadSignal('care'); } });
   },
   // Wrap the care key for everyone who needs it. MINTS only on a first run where we have positively
   // established there is no envelope — never on a cold `_careKeyHex === null`, which is the ordinary state
@@ -5940,33 +6008,20 @@ window.Steward = {
   // recover the church media key on THIS device (unwrap our own wrapped entry) — so a restored console re-keys.
   subscribeMediaKey() {
     if (!pub) return () => {};
-    // WHICH CHURCH THIS SUBSCRIPTION IS FOR. It can outlive a church switch by a beat (React closes it after the
-    // switch), and in that beat it must neither hand church A's key ring to church B nor tell B's mint gate
-    // "looked". Both handlers check the church is still the current one. (2026-10-01, audit5.)
+    // WHICH CHURCH THIS READ IS FOR. It can outlive a church switch by a beat (React closes it after the switch),
+    // and in that beat it must neither hand church A's key ring to church B nor tell B's mint gate "looked".
+    // (2026-10-01, audit5.)
     const forPub = pub;
-    let sub = null, tok = null;
-    const open = () => {
-      const rd = tok = _keyReadOpen(forPub);
-      sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#d': [MEDIAKEY_D + pub] }], {
-        // Ring-aware, and tolerant of the legacy shape: a wrapped value is a JSON array of keys now (newest
-        // first) but older envelopes hold one bare hex string. Reading only the new form would make every
-        // sermon encrypted before the upgrade undecryptable.
-        /* `_mediaKeyPushRefused = null` (F2): an envelope LANDING is new information — the recipient map has
-           changed under us, so whatever this console last had refused is worth asking again. Without this a
-           console that was refused once would go on skipping until the roster itself changed. */
-        onevent(e) { if (forPub !== pub || e.pubkey !== pub || ((e.tags || []).find(t => t[0] === 'd') || [])[1] !== MEDIAKEY_D + pub) return; try { const o = JSON.parse(e.content); _mediaKeyDocKeys = (o && o.keys) || null; _mediaKeyPushRefused = null; _mediaKeyVer++; const _meKey = _myOwnPub(); const mine = o.keys && (o.keys[_meKey] || (_meKey === pub ? null : o.keys[pub]));   /* OPTION A: on a DELEGATED console `pub` is the CHURCH, so o.keys[pub] is the entry sealed TO THE CHURCH and our key cannot open it — _mediaKeyHex stayed null and mediaEncryptor then tried to MINT. Our own entry is there already: the church seals to [church, ...members] and a delegated steward is normally also a member. Owner console: _myOwnPub() === pub, so this is the old lookup exactly. */ if (mine && sk) { const plain = nip44d(mine, nip44ck(sk, e.pubkey)); let r = null; try { const q = JSON.parse(plain); if (Array.isArray(q)) r = q.filter(k => typeof k === 'string' && k); } catch (x2) {} const incoming = (r && r.length) ? r : [plain]; _mediaKeyRing = [...incoming, ..._mediaKeyRing.filter(k => incoming.indexOf(k) === -1)]; _mediaKeyHex = _mediaKeyRing[0];   /* KEEP what this device already held: if we minted before the envelope arrived, discarding our key here would orphan anything encrypted in that window. Rotation must never drop a key that has already sealed something. */ } } catch (x) {} },
-        // no envelope came back → it is safe to mint one, but ONLY on a trustworthy answer (see _keyReadOk)
-        oneose() {
-          const ok = _keyReadOk(rd);
-          if (ok === true) { if (!_mediaKeyChecked) { _mediaKeyChecked = true; _keysReadSignal('media'); } }
-          else if (ok === 'unauthed') _keyReadAfterAuth(rd, again);
-        },
-      });
-    };
-    const again = () => { if (tok) tok.closed = true; try { sub && sub.close(); } catch (e) {} open(); };
-    open();
-    // MARK IT CLOSED BEFORE CLOSING: the close itself fires this subscription's oneose.
-    return () => { if (tok) tok.closed = true; try { sub && sub.close(); } catch {} };
+    return _openKeyRead(forPub, [{ kinds: [30078], authors: [pub], '#d': [MEDIAKEY_D + pub] }],
+      // Ring-aware, and tolerant of the legacy shape: a wrapped value is a JSON array of keys now (newest
+      // first) but older envelopes hold one bare hex string. Reading only the new form would make every
+      // sermon encrypted before the upgrade undecryptable.
+      /* `_mediaKeyPushRefused = null` (F2): an envelope LANDING is new information — the recipient map has
+         changed under us, so whatever this console last had refused is worth asking again. Without this a
+         console that was refused once would go on skipping until the roster itself changed. */
+      function onMediaKeyEnvelope(e) { if (forPub !== pub || e.pubkey !== pub || ((e.tags || []).find(t => t[0] === 'd') || [])[1] !== MEDIAKEY_D + pub) return; try { const o = JSON.parse(e.content); _mediaKeyDocKeys = (o && o.keys) || null; _mediaKeyPushRefused = null; _mediaKeyVer++; const _meKey = _myOwnPub(); const mine = o.keys && (o.keys[_meKey] || (_meKey === pub ? null : o.keys[pub]));   /* OPTION A: on a DELEGATED console `pub` is the CHURCH, so o.keys[pub] is the entry sealed TO THE CHURCH and our key cannot open it — _mediaKeyHex stayed null and mediaEncryptor then tried to MINT. Our own entry is there already: the church seals to [church, ...members] and a delegated steward is normally also a member. Owner console: _myOwnPub() === pub, so this is the old lookup exactly. */ if (mine && sk) { const plain = nip44d(mine, nip44ck(sk, e.pubkey)); let r = null; try { const q = JSON.parse(plain); if (Array.isArray(q)) r = q.filter(k => typeof k === 'string' && k); } catch (x2) {} const incoming = (r && r.length) ? r : [plain]; _mediaKeyRing = [...incoming, ..._mediaKeyRing.filter(k => incoming.indexOf(k) === -1)]; _mediaKeyHex = _mediaKeyRing[0];   /* KEEP what this device already held: if we minted before the envelope arrived, discarding our key here would orphan anything encrypted in that window. Rotation must never drop a key that has already sealed something. */ } } catch (x) {} },
+      // no envelope came back → it is safe to mint one, but ONLY on a trustworthy answer from every relay
+      () => { if (!_mediaKeyChecked) { _mediaKeyChecked = true; _keysReadSignal('media'); } });
   },
   // true if every relay this console has opened is still connected. The console's reconnect ticker only
   // re-subscribes when this is FALSE — so a healthy socket never triggers a full-corpus re-query (the steward
@@ -7271,50 +7326,37 @@ window.Steward = {
   // read the envelope back (the church's own copy) so the console can decrypt members' names
   subscribeNameKey() {
     const cp = actingChurch || pub;
-    // Both handlers check the church is still the one this subscription was opened for — it outlives a switch
-    // by a beat, and church A's envelope is authored by A, who passes church B's roster check when A stewards
-    // B. Without this, B's console took A's ring (2026-10-01, audit5).
-    let sub = null, tok = null;
-    const open = () => {
-      const rd = tok = _keyReadOpen(cp);
-      sub = pool.subscribeMany(relays(), [{ kinds: [30078], '#d': [NAMEKEY_D + cp] }], {
-        onevent(e) {
-          if (cp !== (actingChurch || pub) || ((e.tags || []).find(t => t[0] === 'd') || [])[1] !== NAMEKEY_D + cp) return;
-          if (!_byChurchOrSteward(e)) return;   // church key or a CURRENT roster steward, same rule as every other envelope
-          if (_authFuture(e) || (e.created_at || 0) < _nameKeyAt) return;   // future-dated (a wrong clock: the shared guard) or an older copy from a relay not caught up — see _nameKeyAt
-          try {
-            const env = JSON.parse(e.content || '{}');
-            // Record the recipient map even when we cannot open our own copy: "an envelope exists" is exactly
-            // what stops this console minting a second key over it.
-            if (env.keys && typeof env.keys === 'object') { _nameKeyDocKeys = env.keys; _nameKeyChecked = true; _nameKeyAt = e.created_at || 0; }
-            const mine = env.keys && churchPub && env.keys[churchPub];
-            if (!mine || !churchSk) return;
-            const plain = nip44d(mine, nip44ck(churchSk, e.pubkey));
-            const r = JSON.parse(plain);
-            if (Array.isArray(r)) {
-              const had = _nameKeyReady();
-              _nameKeyRing = r.filter(x => typeof x === 'string' && /^[0-9a-f]+$/i.test(x));
-              _nameKeyRingChanged();
-              // THE KEY LANDING IS NEWS TO THE WEBSITE MIRROR. Nothing else tells it: _webSync's own 2 s retry
-              // was the only thing that ever noticed, which is why that retry had to run for ever or the feed
-              // would sit empty behind a key that had since arrived. Now the arrival itself asks for a sync.
-              if (!had && _nameKeyReady()) _webQueueSync();
-            }
-          } catch (x) {}
-        },
-        // the relay answered — a church with no envelope yet may now mint its first, but ONLY on a trustworthy
-        // answer (see _keyReadOk). This is the gate the audit of e6a2e02 watched open on our own close.
-        oneose() {
-          const ok = _keyReadOk(rd);
-          if (ok === true) { if (!_nameKeyChecked) { _nameKeyChecked = true; _keysReadSignal('name'); } }
-          else if (ok === 'unauthed') _keyReadAfterAuth(rd, again);
-        },
-      });
-    };
-    const again = () => { if (tok) tok.closed = true; try { sub && sub.close(); } catch (e) {} open(); };
-    open();
-    // MARK IT CLOSED BEFORE CLOSING: the close itself fires this subscription's oneose.
-    return () => { if (tok) tok.closed = true; try { sub && sub.close(); } catch {} };
+    // The handler checks the church is still the one this read was opened for — it outlives a switch by a beat,
+    // and church A's envelope is authored by A, who passes church B's roster check when A stewards B. Without
+    // this, B's console took A's ring (2026-10-01, audit5).
+    return _openKeyRead(cp, [{ kinds: [30078], '#d': [NAMEKEY_D + cp] }],
+      (e) => {
+        if (cp !== (actingChurch || pub) || ((e.tags || []).find(t => t[0] === 'd') || [])[1] !== NAMEKEY_D + cp) return;
+        if (!_byChurchOrSteward(e)) return;   // church key or a CURRENT roster steward, same rule as every other envelope
+        if (_authFuture(e) || (e.created_at || 0) < _nameKeyAt) return;   // future-dated (a wrong clock: the shared guard) or an older copy from a relay not caught up — see _nameKeyAt
+        try {
+          const env = JSON.parse(e.content || '{}');
+          // Record the recipient map even when we cannot open our own copy: "an envelope exists" is exactly
+          // what stops this console minting a second key over it.
+          if (env.keys && typeof env.keys === 'object') { _nameKeyDocKeys = env.keys; _nameKeyChecked = true; _nameKeyAt = e.created_at || 0; }
+          const mine = env.keys && churchPub && env.keys[churchPub];
+          if (!mine || !churchSk) return;
+          const plain = nip44d(mine, nip44ck(churchSk, e.pubkey));
+          const r = JSON.parse(plain);
+          if (Array.isArray(r)) {
+            const had = _nameKeyReady();
+            _nameKeyRing = r.filter(x => typeof x === 'string' && /^[0-9a-f]+$/i.test(x));
+            _nameKeyRingChanged();
+            // THE KEY LANDING IS NEWS TO THE WEBSITE MIRROR. Nothing else tells it: _webSync's own 2 s retry
+            // was the only thing that ever noticed, which is why that retry had to run for ever or the feed
+            // would sit empty behind a key that had since arrived. Now the arrival itself asks for a sync.
+            if (!had && _nameKeyReady()) _webQueueSync();
+          }
+        } catch (x) {}
+      },
+      // the relay answered — a church with no envelope yet may now mint its first, but ONLY on a trustworthy
+      // answer from every relay (_openKeyRead). This is the gate the audit of e6a2e02 watched open on our own close.
+      () => { if (!_nameKeyChecked) { _nameKeyChecked = true; _keysReadSignal('name'); } });
   },
   // open a member's sealed name. Tries every key in the ring so a rotation never hides older names.
   openMemberName(content, authorPub) {

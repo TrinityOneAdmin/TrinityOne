@@ -157,7 +157,7 @@ function console_() {
     pub: CP, churchPub: CP, churchSk, actingChurch: '', NET: 'trinityone', REQUEST_D: 'trinityone/request:', REQREPLY_D: 'trinityone/reqreply:', NAMEKEY_D: 'trinityone/namekey:',
     decrypt3: nip44.decrypt, encrypt3: nip44.encrypt, getConversationKey: nip44.utils.getConversationKey, _unhex: unhex, _hex: hex,
     relays: () => ['wss://r'], _byChurchOrSteward: () => true, _webQueueSync: () => {},
-    _isRelayAuthed: () => true, NAME_RING_MAX: 50, toPubHex: (p) => p, _localBlocked: new Set(),
+    _isRelayAuthed: () => true, _keyReadAuthedOn: () => true, normalizeURL2: (u) => u, NAME_RING_MAX: 50, toPubHex: (p) => p, _localBlocked: new Set(),
     _sealEach: async (pl, recips, f) => Object.fromEntries(recips.map(p => [p, f(pl, p)])),
     publish: async () => ({ id: 'published' }), feChurch: (x) => x, now: () => 300,
     pool: { subscribeMany: (_r, _f, h) => { handlers.push(h); return { close() {} }; } },
@@ -283,7 +283,7 @@ test('console: minting the first name key re-reads what could not be opened (cla
   c.api.S.subscribeRequests((r) => { reqs = r; });
   c.api.S.subscribeNameKey();
   const [reqH, keyH] = c.handlers;
-  keyH.oneose();                                                  // the relay answered: no envelope yet
+  keyH.oneose(); await new Promise(r => setTimeout(r, 0));        // the relay answered: no envelope yet (evaluated a microtask later)
   reqH.onevent(consoleRequest('r1', OLDKEY));
   assert.equal(reqs[0]._locked, true, 'CONTROL: ring empty -> locked');
   const out = await c.api.S._ensureNameKeyLocked([ME], []);

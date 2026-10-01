@@ -175,7 +175,8 @@ async function runLifted(sig, name, answer, scope = {}, args = [], decls = '') {
   globalThis[key] = env;
   const preamble = Object.keys(env).map(k => `const ${k} = globalThis.${key}.${k};`).join('\n');
   const mod = await import('data:text/javascript;base64,' + Buffer.from(
-    preamble + '\n' + decls + '\nconst __o = { ' + src + ' };\nexport const fn = __o.' + name + '.bind(__o);\n').toString('base64'));
+    // the shipped key-read guards (_keyReadEpoch, _stillOn …): every key publisher consults them after its awaits
+    preamble + '\n' + liftKeyRead(BUNDLE) + '\n' + decls + '\nconst __o = { ' + src + ' };\nexport const fn = __o.' + name + '.bind(__o);\n').toString('base64'));
   return { fn: mod.fn, published, call: () => mod.fn(...args) };
 }
 
@@ -283,7 +284,7 @@ test('mediaEncryptor REFUSES TO ENCRYPT when the key envelope was refused', asyn
   // file with a key whose envelope never reached a relay and pushed the ciphertext to every host. Nobody,
   // the church included, can ever decrypt it. The mint gate a few lines above this one exists to prevent
   // exactly that loss; this is the same loss reached through the other door.
-  const decls = 'let _mediaKeyHex = null; let _mediaKeyRing = []; let _mediaKeyChecked = true; let _mediaKeyDocKeys = null;';
+  const decls = 'let _mediaKeyHex = null; let _mediaKeyRing = []; let _mediaKeyChecked = true; let _mediaKeyDocKeys = null; let _mediaKeyVer = 0;';
   const env = {
     _isRelayAuthed: () => true,
     _sealEach: async (payload, targets) => Object.fromEntries(targets.map(t => [t, 'WRAPPED'])),
@@ -301,7 +302,7 @@ test('mediaEncryptor REFUSES TO ENCRYPT when the key envelope was refused', asyn
 });
 
 const MEDIA_ENV = (extra = '') => `
-  let _mediaKeyRing = [];
+  let _mediaKeyRing = []; let _mediaKeyVer = 0;
   let _mediaKeyChecked = true;
   let _mediaKeyDocKeys = null;
   const _isRelayAuthed = () => true;
@@ -339,7 +340,6 @@ test('ENCRYPTION: a delegated console recovers the key from ITS OWN entry in the
     [DEC]: (payload, ck) => (payload.startsWith(ck.replace('ck:', '') + '/') ? payload.split('/')[1] : (() => { throw new Error('wrong recipient'); })()),
     [CK]: (_sk, other) => 'ck:' + other,
   }, [], `let _mediaKeyHex = null; let _mediaKeyRing = []; let _mediaKeyDocKeys = null; let _mediaKeyPushRefused = 'x'; let _mediaKeyChecked = false; let _mediaKeyVer = 0;
-     ${liftKeyRead(BUNDLE)}
      ${fnBody(BUNDLE, 'function _myOwnPub() {', '_myOwnPub')}
      globalThis['${peek}'] = () => _mediaKeyHex;`);
   r.fn();

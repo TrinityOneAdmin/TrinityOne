@@ -41,7 +41,7 @@ function console_() {
     pub: CP, churchPub: CP, churchSk, actingChurch: '', NET: 'trinityone', NAMEKEY_D: 'trinityone/namekey:',
     decrypt3: nip44.decrypt, encrypt3: nip44.encrypt, getConversationKey: ck, _hex: hex,
     relays: () => ['wss://a', 'wss://b'], _byChurchOrSteward: () => true, _webQueueSync: () => {},
-    _isRelayAuthed: () => true, NAME_RING_MAX: 50, toPubHex: (p) => p, _localBlocked: new Set(),
+    _isRelayAuthed: () => true, _keyReadAuthedOn: () => true, normalizeURL2: (u) => u, NAME_RING_MAX: 50, toPubHex: (p) => p, _localBlocked: new Set(),
     _sealEach: async (pl, recips, f) => Object.fromEntries(recips.map(p => [p, f(pl, p)])),
     publish: async (e) => { published.push(e); return e; }, feChurch: (x) => x, now: () => 500,
     pool: { subscribeMany: (_r, _f, h) => { handlers.push(h); return { close() {} }; } },
@@ -80,7 +80,7 @@ test('…so the next routine update publishes the NEW ring, not the old one', as
   const h = c.handlers[0];
   h.onevent(envelope(300, [NEW, OLD]));
   h.onevent(envelope(200, [OLD]));
-  h.oneose();
+  h.oneose(); await new Promise(r => setTimeout(r, 0));   // the read is evaluated a microtask later (_openKeyRead)
   const out = await c.api.S._ensureNameKeyLocked([M1, M2], []);   // a new member appears
   assert.ok(out, 'CONTROL: the update published');
   assert.equal(openRing(c.published.at(-1))[0], NEW, 'the update republished the pre-rotation ring as the newest — the Block is undone');
@@ -93,7 +93,7 @@ test('CONTROL: copies in the ordinary order — newest last — are unaffected',
   h.onevent(envelope(200, [OLD]));
   h.onevent(envelope(300, [NEW, OLD]));
   assert.equal(c.api.ring()[0], NEW);
-  h.oneose();
+  h.oneose(); await new Promise(r => setTimeout(r, 0));   // the read is evaluated a microtask later (_openKeyRead)
   await c.api.S._ensureNameKeyLocked([M1, M2], []);
   assert.equal(openRing(c.published.at(-1))[0], NEW);
 });
@@ -103,7 +103,7 @@ test("the console's OWN publish counts as the newest: an older copy arriving aft
   c.api.S.subscribeNameKey();
   const h = c.handlers[0];
   h.onevent(envelope(300, [NEW, OLD]));
-  h.oneose();
+  h.oneose(); await new Promise(r => setTimeout(r, 0));   // the read is evaluated a microtask later (_openKeyRead)
   await c.api.S._ensureNameKeyLocked([M1, M2], [], { rotate: true });   // a Block: rotate, published at now() = 500
   const rotated = c.api.ring()[0];
   assert.notEqual(rotated, NEW, 'CONTROL: the rotation minted a new key');

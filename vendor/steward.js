@@ -16377,6 +16377,7 @@ zoo`.split("\n");
   var sk = null;
   var pub = null;
   var _authedRelays = /* @__PURE__ */ new Map();
+  var _authAccepted = /* @__PURE__ */ new Map();
   pool.automaticallyAuth = (url) => async (authEvent) => {
     if (!sk) throw new Error("no key");
     const signed = finalizeEvent2(authEvent, sk);
@@ -16390,7 +16391,31 @@ zoo`.split("\n");
     } catch (e) {
     }
     try {
-      setTimeout(_runKeyReadAuthWaiters, 400);
+      const r0 = pool.relays.get(k);
+      if (r0 && r0.publishTimeout < 12e3) r0.publishTimeout = 12e3;
+    } catch (e) {
+    }
+    try {
+      setTimeout(() => {
+        try {
+          const r = pool.relays.get(k);
+          if (r && r.authPromise && typeof r.authPromise.then === "function") {
+            r.authPromise.then(() => {
+              try {
+                _authAccepted.set(k, r);
+                _runKeyReadAuthWaiters();
+              } catch (e) {
+              }
+            }, () => {
+              try {
+                if (_authAccepted.get(k) === r) _authAccepted.delete(k);
+              } catch (e) {
+              }
+            });
+          }
+        } catch (e) {
+        }
+      }, 0);
     } catch (e) {
     }
     return signed;
@@ -16412,30 +16437,121 @@ zoo`.split("\n");
       return false;
     }
   }
+  function _keyReadAuthedOn(url) {
+    try {
+      let k = url;
+      try {
+        k = normalizeURL2(url);
+      } catch (e) {
+      }
+      const r = pool.relays.get(k);
+      return !!r && r.connected === true && _authAccepted.get(k) === r;
+    } catch (e) {
+      return false;
+    }
+  }
   var _keyReadEpoch = 0;
   var _keyReadAuthWaiters = /* @__PURE__ */ new Set();
-  function _keyReadOpen(cp) {
-    return { cp, epoch: _keyReadEpoch, at: Date.now(), closed: false };
-  }
+  var _KEY_READ_LONG_WAIT = 15e3;
   function _keyReadOk(tok) {
-    if (!tok || tok.closed || tok.epoch !== _keyReadEpoch || !tok.cp || tok.cp !== (actingChurch || pub)) return false;
-    if (Date.now() - tok.at >= 4300) return false;
-    return _isRelayAuthed() ? true : "unauthed";
+    if (!tok || tok.closed || tok.relayClosed || tok.epoch !== _keyReadEpoch || !tok.cp || tok.cp !== (actingChurch || pub)) return false;
+    if (Date.now() - tok.at >= tok.wait - 100) return false;
+    return _keyReadAuthedOn(tok.url) ? true : "unauthed";
   }
-  function _keyReadAfterAuth(tok, again) {
-    _keyReadAuthWaiters.add({ tok, again });
+  function _keyReadAfterAuth(again) {
+    _keyReadAuthWaiters.add(again);
   }
   function _runKeyReadAuthWaiters() {
     const ws = [..._keyReadAuthWaiters];
     _keyReadAuthWaiters.clear();
-    for (const w of ws) {
-      if (!w.tok.closed && w.tok.epoch === _keyReadEpoch) {
+    for (const again of ws) {
+      try {
+        again();
+      } catch (e) {
+      }
+    }
+  }
+  function _openKeyRead(cp, filters, onevent, onSettled) {
+    const st = { stopped: false, gen: 0, subs: [], timer: null, tries: 0 };
+    const stopSubs = () => {
+      for (const s of st.subs) {
+        s.tok.closed = true;
         try {
-          w.again();
+          s.sub.close();
         } catch (e) {
         }
       }
-    }
+      st.subs = [];
+    };
+    const open = () => {
+      if (st.stopped) return;
+      stopSubs();
+      clearTimeout(st.timer);
+      st.timer = null;
+      const gen = ++st.gen;
+      const urls = relays();
+      const epoch = _keyReadEpoch, at = Date.now();
+      const answers = /* @__PURE__ */ new Map();
+      const live = () => !st.stopped && gen === st.gen && epoch === _keyReadEpoch && cp === (actingChurch || pub);
+      const retry = () => {
+        if (!live()) return;
+        const ms = Math.min(6e4, 2e3 * Math.pow(2, st.tries++));
+        st.timer = setTimeout(open, ms);
+      };
+      const evaluate = () => {
+        if (!live() || answers.size < urls.length) return;
+        const v = [...answers.values()];
+        if (v.every((x) => x === true)) {
+          st.tries = 0;
+          onSettled();
+          return;
+        }
+        if (v.some((x) => x === false)) {
+          retry();
+          return;
+        }
+        _keyReadAfterAuth(() => {
+          if (live()) open();
+        });
+      };
+      if (!urls.length) {
+        retry();
+        return;
+      }
+      for (const url of urls) {
+        let up = false;
+        try {
+          const r = pool.relays.get(normalizeURL2(url));
+          up = !!(r && r.connected);
+        } catch (e) {
+        }
+        const tok = { cp, epoch, at, url, wait: up ? _KEY_READ_LONG_WAIT : 4400, closed: false, relayClosed: false };
+        const sub = pool.subscribeMany([url], filters, {
+          ...up ? { maxWait: _KEY_READ_LONG_WAIT } : {},
+          onevent(e) {
+            if (!tok.closed) onevent(e);
+          },
+          // a microtask later, so a CLOSED's onclose (which nostr-tools runs right after this) has marked the token
+          oneose() {
+            queueMicrotask(() => {
+              answers.set(url, _keyReadOk(tok));
+              evaluate();
+            });
+          },
+          onclose() {
+            tok.relayClosed = true;
+          }
+        });
+        st.subs.push({ tok, sub });
+      }
+    };
+    open();
+    return () => {
+      st.stopped = true;
+      clearTimeout(st.timer);
+      st.timer = null;
+      stopSubs();
+    };
   }
   function _keysReadSignal(kind) {
     try {
@@ -19244,51 +19360,28 @@ zoo`.split("\n");
       const cp = actingChurch || pub;
       if (!cp) return () => {
       };
-      let sub = null, tok = null;
-      const open = () => {
-        const rd = tok = _keyReadOpen(cp);
-        sub = pool.subscribeMany(relays(), [
+      return _openKeyRead(
+        cp,
+        [
           { kinds: [30078], authors: [cp], "#d": [CAREKEY_D + cp] },
           { kinds: [30078], "#church": [cp], "#d": [CAREKEY_D + cp] }
-        ], {
-          onevent(e) {
-            if (!_careKeyAuthed(e)) {
-              _careKeyPending.push({ e, at: Date.now() });
-              if (_careKeyPending.length > 10) _careKeyPending.shift();
-              return;
-            }
-            _ingestCareKeyEnv(e);
-          },
-          // "No envelope came back" may open the mint gate ONLY on a trustworthy answer — see _keyReadOk: not our
-          // own close, not a read from before a reset, not nostr-tools' timer, and authenticated. A genuine answer
-          // from before this socket authenticated is asked again once it has.
-          oneose() {
-            const ok = _keyReadOk(rd);
-            if (ok === true) {
-              if (!_careKeyChecked) {
-                _careKeyChecked = true;
-                _keysReadSignal("care");
-              }
-            } else if (ok === "unauthed") _keyReadAfterAuth(rd, again);
+        ],
+        (e) => {
+          if (!_careKeyAuthed(e)) {
+            _careKeyPending.push({ e, at: Date.now() });
+            if (_careKeyPending.length > 10) _careKeyPending.shift();
+            return;
           }
-        });
-      };
-      const again = () => {
-        if (tok) tok.closed = true;
-        try {
-          sub && sub.close();
-        } catch (e) {
+          _ingestCareKeyEnv(e);
+        },
+        // "No envelope came back" opens the mint gate ONLY on a trustworthy answer from every relay — _openKeyRead.
+        () => {
+          if (!_careKeyChecked) {
+            _careKeyChecked = true;
+            _keysReadSignal("care");
+          }
         }
-        open();
-      };
-      open();
-      return () => {
-        if (tok) tok.closed = true;
-        try {
-          sub && sub.close();
-        } catch (e) {
-        }
-      };
+      );
     },
     // Wrap the care key for everyone who needs it. MINTS only on a first run where we have positively
     // established there is no envelope — never on a cold `_careKeyHex === null`, which is the ordinary state
@@ -19476,68 +19569,47 @@ zoo`.split("\n");
       if (!pub) return () => {
       };
       const forPub = pub;
-      let sub = null, tok = null;
-      const open = () => {
-        const rd = tok = _keyReadOpen(forPub);
-        sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#d": [MEDIAKEY_D + pub] }], {
-          // Ring-aware, and tolerant of the legacy shape: a wrapped value is a JSON array of keys now (newest
-          // first) but older envelopes hold one bare hex string. Reading only the new form would make every
-          // sermon encrypted before the upgrade undecryptable.
-          /* `_mediaKeyPushRefused = null` (F2): an envelope LANDING is new information — the recipient map has
-             changed under us, so whatever this console last had refused is worth asking again. Without this a
-             console that was refused once would go on skipping until the roster itself changed. */
-          onevent(e) {
-            if (forPub !== pub || e.pubkey !== pub || ((e.tags || []).find((t) => t[0] === "d") || [])[1] !== MEDIAKEY_D + pub) return;
-            try {
-              const o = JSON.parse(e.content);
-              _mediaKeyDocKeys = o && o.keys || null;
-              _mediaKeyPushRefused = null;
-              _mediaKeyVer++;
-              const _meKey = _myOwnPub();
-              const mine = o.keys && (o.keys[_meKey] || (_meKey === pub ? null : o.keys[pub]));
-              if (mine && sk) {
-                const plain = decrypt3(mine, getConversationKey(sk, e.pubkey));
-                let r = null;
-                try {
-                  const q = JSON.parse(plain);
-                  if (Array.isArray(q)) r = q.filter((k) => typeof k === "string" && k);
-                } catch (x2) {
-                }
-                const incoming = r && r.length ? r : [plain];
-                _mediaKeyRing = [...incoming, ..._mediaKeyRing.filter((k) => incoming.indexOf(k) === -1)];
-                _mediaKeyHex = _mediaKeyRing[0];
+      return _openKeyRead(
+        forPub,
+        [{ kinds: [30078], authors: [pub], "#d": [MEDIAKEY_D + pub] }],
+        // Ring-aware, and tolerant of the legacy shape: a wrapped value is a JSON array of keys now (newest
+        // first) but older envelopes hold one bare hex string. Reading only the new form would make every
+        // sermon encrypted before the upgrade undecryptable.
+        /* `_mediaKeyPushRefused = null` (F2): an envelope LANDING is new information — the recipient map has
+           changed under us, so whatever this console last had refused is worth asking again. Without this a
+           console that was refused once would go on skipping until the roster itself changed. */
+        function onMediaKeyEnvelope(e) {
+          if (forPub !== pub || e.pubkey !== pub || ((e.tags || []).find((t) => t[0] === "d") || [])[1] !== MEDIAKEY_D + pub) return;
+          try {
+            const o = JSON.parse(e.content);
+            _mediaKeyDocKeys = o && o.keys || null;
+            _mediaKeyPushRefused = null;
+            _mediaKeyVer++;
+            const _meKey = _myOwnPub();
+            const mine = o.keys && (o.keys[_meKey] || (_meKey === pub ? null : o.keys[pub]));
+            if (mine && sk) {
+              const plain = decrypt3(mine, getConversationKey(sk, e.pubkey));
+              let r = null;
+              try {
+                const q = JSON.parse(plain);
+                if (Array.isArray(q)) r = q.filter((k) => typeof k === "string" && k);
+              } catch (x2) {
               }
-            } catch (x) {
+              const incoming = r && r.length ? r : [plain];
+              _mediaKeyRing = [...incoming, ..._mediaKeyRing.filter((k) => incoming.indexOf(k) === -1)];
+              _mediaKeyHex = _mediaKeyRing[0];
             }
-          },
-          // no envelope came back → it is safe to mint one, but ONLY on a trustworthy answer (see _keyReadOk)
-          oneose() {
-            const ok = _keyReadOk(rd);
-            if (ok === true) {
-              if (!_mediaKeyChecked) {
-                _mediaKeyChecked = true;
-                _keysReadSignal("media");
-              }
-            } else if (ok === "unauthed") _keyReadAfterAuth(rd, again);
+          } catch (x) {
           }
-        });
-      };
-      const again = () => {
-        if (tok) tok.closed = true;
-        try {
-          sub && sub.close();
-        } catch (e) {
+        },
+        // no envelope came back → it is safe to mint one, but ONLY on a trustworthy answer from every relay
+        () => {
+          if (!_mediaKeyChecked) {
+            _mediaKeyChecked = true;
+            _keysReadSignal("media");
+          }
         }
-        open();
-      };
-      open();
-      return () => {
-        if (tok) tok.closed = true;
-        try {
-          sub && sub.close();
-        } catch {
-        }
-      };
+      );
     },
     // true if every relay this console has opened is still connected. The console's reconnect ticker only
     // re-subscribes when this is FALSE — so a healthy socket never triggers a full-corpus re-query (the steward
@@ -20725,63 +20797,42 @@ zoo`.split("\n");
     // read the envelope back (the church's own copy) so the console can decrypt members' names
     subscribeNameKey() {
       const cp = actingChurch || pub;
-      let sub = null, tok = null;
-      const open = () => {
-        const rd = tok = _keyReadOpen(cp);
-        sub = pool.subscribeMany(relays(), [{ kinds: [30078], "#d": [NAMEKEY_D + cp] }], {
-          onevent(e) {
-            if (cp !== (actingChurch || pub) || ((e.tags || []).find((t) => t[0] === "d") || [])[1] !== NAMEKEY_D + cp) return;
-            if (!_byChurchOrSteward(e)) return;
-            if (_authFuture(e) || (e.created_at || 0) < _nameKeyAt) return;
-            try {
-              const env = JSON.parse(e.content || "{}");
-              if (env.keys && typeof env.keys === "object") {
-                _nameKeyDocKeys = env.keys;
-                _nameKeyChecked = true;
-                _nameKeyAt = e.created_at || 0;
-              }
-              const mine = env.keys && churchPub && env.keys[churchPub];
-              if (!mine || !churchSk) return;
-              const plain = decrypt3(mine, getConversationKey(churchSk, e.pubkey));
-              const r = JSON.parse(plain);
-              if (Array.isArray(r)) {
-                const had = _nameKeyReady();
-                _nameKeyRing = r.filter((x) => typeof x === "string" && /^[0-9a-f]+$/i.test(x));
-                _nameKeyRingChanged();
-                if (!had && _nameKeyReady()) _webQueueSync();
-              }
-            } catch (x) {
+      return _openKeyRead(
+        cp,
+        [{ kinds: [30078], "#d": [NAMEKEY_D + cp] }],
+        (e) => {
+          if (cp !== (actingChurch || pub) || ((e.tags || []).find((t) => t[0] === "d") || [])[1] !== NAMEKEY_D + cp) return;
+          if (!_byChurchOrSteward(e)) return;
+          if (_authFuture(e) || (e.created_at || 0) < _nameKeyAt) return;
+          try {
+            const env = JSON.parse(e.content || "{}");
+            if (env.keys && typeof env.keys === "object") {
+              _nameKeyDocKeys = env.keys;
+              _nameKeyChecked = true;
+              _nameKeyAt = e.created_at || 0;
             }
-          },
-          // the relay answered — a church with no envelope yet may now mint its first, but ONLY on a trustworthy
-          // answer (see _keyReadOk). This is the gate the audit of e6a2e02 watched open on our own close.
-          oneose() {
-            const ok = _keyReadOk(rd);
-            if (ok === true) {
-              if (!_nameKeyChecked) {
-                _nameKeyChecked = true;
-                _keysReadSignal("name");
-              }
-            } else if (ok === "unauthed") _keyReadAfterAuth(rd, again);
+            const mine = env.keys && churchPub && env.keys[churchPub];
+            if (!mine || !churchSk) return;
+            const plain = decrypt3(mine, getConversationKey(churchSk, e.pubkey));
+            const r = JSON.parse(plain);
+            if (Array.isArray(r)) {
+              const had = _nameKeyReady();
+              _nameKeyRing = r.filter((x) => typeof x === "string" && /^[0-9a-f]+$/i.test(x));
+              _nameKeyRingChanged();
+              if (!had && _nameKeyReady()) _webQueueSync();
+            }
+          } catch (x) {
           }
-        });
-      };
-      const again = () => {
-        if (tok) tok.closed = true;
-        try {
-          sub && sub.close();
-        } catch (e) {
+        },
+        // the relay answered — a church with no envelope yet may now mint its first, but ONLY on a trustworthy
+        // answer from every relay (_openKeyRead). This is the gate the audit of e6a2e02 watched open on our own close.
+        () => {
+          if (!_nameKeyChecked) {
+            _nameKeyChecked = true;
+            _keysReadSignal("name");
+          }
         }
-        open();
-      };
-      open();
-      return () => {
-        if (tok) tok.closed = true;
-        try {
-          sub && sub.close();
-        } catch {
-        }
-      };
+      );
     },
     // open a member's sealed name. Tries every key in the ring so a rotation never hides older names.
     openMemberName(content, authorPub) {

@@ -98,6 +98,7 @@ function ownerEngine() {
   };
   const body = [
     fnBody(BUNDLE, '  async function _sealEach(payload, targets, sealTo, onProgress) {', '_sealEach in the shipped bundle'),
+    liftKeyRead(BUNDLE),   // _keyReadEpoch / _stillOn: the publishers check them after every await
     'const _api = { ' + [
       fnBody(BUNDLE, '    async ensureMediaKeyForMembers(memberPubs, stewardPubs) {', 'ensureMediaKeyForMembers in the shipped bundle'),
       fnBody(BUNDLE, '    async rotateMediaKey(memberPubs, stewardPubs) {', 'rotateMediaKey in the shipped bundle'),
