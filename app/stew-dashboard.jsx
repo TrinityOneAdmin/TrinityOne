@@ -807,10 +807,19 @@ function KeyDistributor() {
     window.addEventListener('steward-key', onKey);
     return () => window.removeEventListener('steward-key', onKey);
   }, []);
+  // THE THREE KEY SUBSCRIPTIONS FOLLOW THE CHURCH AND THE CONNECTION — [idv, conn, church], like makeSub in
+  // steward-root.jsx. They were mounted with `[]`, so after a church switch they went on reading the PREVIOUS
+  // church's envelopes and never read the new one's: switching A→B→A left the name key empty (every member
+  // "Anonymous") and church B's care needs were sealed with church A's care key. Measured 2026-10-01 (audit5).
+  // `_kdWho` covers the switch that fires no `steward-identity` event (a restore) and the church key arriving
+  // after mount; `conn` covers a returning socket, which does not re-issue its REQs.
+  const _kdIdv = window.useStewardIdv ? window.useStewardIdv() : 0;
+  const _kdConn = window.useStewardConn ? window.useStewardConn() : 0;
+  const _kdWho = (window.Steward && (window.Steward.actingChurch || window.Steward.activePub)) || '';
   // #17: load the church media key whenever the console is open (not only on the Sermons tab) so we can re-key joiners
-  React.useEffect(() => (window.Steward && window.Steward.subscribeMediaKey ? window.Steward.subscribeMediaKey() : undefined), []);
+  React.useEffect(() => (window.Steward && window.Steward.subscribeMediaKey ? window.Steward.subscribeMediaKey() : undefined), [_kdIdv, _kdConn, _kdWho]);
   // the church CARE key — same envelope, sealing the identifying half of care needs (H3)
-  React.useEffect(() => (window.Steward && window.Steward.subscribeCareKey ? window.Steward.subscribeCareKey() : undefined), []);
+  React.useEffect(() => (window.Steward && window.Steward.subscribeCareKey ? window.Steward.subscribeCareKey() : undefined), [_kdIdv, _kdConn, _kdWho]);
   // THE WEBSITE MIRROR RUNS WHILE THE CONSOLE IS OPEN, not only while Settings → Your website is on screen.
   // The engine's reconciler (src/steward.src.js _webSync) writes the public copy of an event added today
   // against a switch turned on yesterday, and tombstones a copy when its event is removed — but only while
@@ -822,7 +831,7 @@ function KeyDistributor() {
   React.useEffect(() => (window.Steward && window.Steward.subscribeWebsiteShare ? window.Steward.subscribeWebsiteShare(() => {}, { restart: true }) : undefined), [_webConn]);
   // the church NAME key — the envelope members seal their display name under, so the relay (and any mirror
   // holding a copy of this church) stores ciphertext instead of a named roster. AUDIT-2026-07-27.
-  React.useEffect(() => (window.Steward && window.Steward.subscribeNameKey ? window.Steward.subscribeNameKey() : undefined), []);
+  React.useEffect(() => (window.Steward && window.Steward.subscribeNameKey ? window.Steward.subscribeNameKey() : undefined), [_kdIdv, _kdConn, _kdWho]);
   // keep the envelope's author check current: a revoked steward's envelope must stop being accepted
   const stewardRoster = window.useStewardStewards ? window.useStewardStewards() : [];
   React.useEffect(() => { if (window.Steward && window.Steward.setCareRoster) window.Steward.setCareRoster(stewardRoster); }, [stewardRoster]);

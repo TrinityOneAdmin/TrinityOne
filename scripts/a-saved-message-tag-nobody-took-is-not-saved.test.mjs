@@ -323,7 +323,7 @@ test('ENCRYPTION: a delegated console recovers the key from ITS OWN entry in the
   let handlers = null;
   const peek = '__peek' + Math.random().toString(36).slice(2);
   const r = await runLifted('subscribeMediaKey()', 'subscribeMediaKey', { id: 'evt' }, {
-    actingChurch: 'CHURCHPUB', pub: CHURCH, sk: 'STEWARD_SK',
+    actingChurch: 'CHURCHPUB', pub: CHURCH, sk: 'STEWARD_SK', MEDIAKEY_D: 'trinityone/mediakey:',
     [GP]: () => STEWARD,   // ← the emitted name too: _myOwnPub calls `getPublicKey2` in today's bundle
     relays: () => ['wss://r'],
     pool: { subscribeMany: (_r, _f, h) => { handlers = h; return { close() {} }; } },
@@ -341,7 +341,7 @@ test('ENCRYPTION: a delegated console recovers the key from ITS OWN entry in the
   r.fn();
   assert.ok(handlers, 're-anchor this test: subscribeMediaKey did not open a subscription');
   // The church's envelope: a ring sealed to the CHURCH, and another sealed to US. Only ours is openable.
-  handlers.onevent({ pubkey: CHURCH, content: JSON.stringify({ keys: {
+  handlers.onevent({ pubkey: CHURCH, tags: [['d', 'trinityone/mediakey:' + CHURCH]], content: JSON.stringify({ keys: {
     [CHURCH]:  CHURCH  + '/' + JSON.stringify(['cc'.repeat(32)]),
     [STEWARD]: CHURCH  + '/' + JSON.stringify(['ab'.repeat(32)]),
   }, rev: 1 }) });
@@ -1505,7 +1505,7 @@ test('THE CLEARS: an envelope ARRIVING makes the console ask again too', async (
   assert.equal(p.subs.length, 1, 're-anchor: subscribeMediaKey opened no subscription, so no envelope can arrive');
   // A real envelope lands: somebody else's console re-keyed the church. The recipient map has changed under
   // us, so whatever this console last had refused is worth asking again.
-  p.subs[0].onevent({ pubkey: 'CP', content: JSON.stringify({ keys: { CP: 'x', m1: 'y' }, rev: 1 }) });
+  p.subs[0].onevent({ pubkey: 'CP', tags: [['d', 'trinityone/mediakey:CP']], content: JSON.stringify({ keys: { CP: 'x', m1: 'y' }, rev: 1 }) });
   assert.equal(p.api.peek().refused, null,
     'AN ARRIVING ENVELOPE NO LONGER CLEARS THE MEMO. The recipient map has changed underneath this console ' +
     'and it goes on skipping until the roster itself changes.');

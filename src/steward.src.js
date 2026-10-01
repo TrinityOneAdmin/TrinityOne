@@ -956,7 +956,14 @@ async function _churchHasCareNeeds() {
 // Care-key envelope handling, factored out so both the live subscription AND the pending-buffer re-check
 // share one code path. See the mint-gate race notes at the top of this file (care-key section).
 const _careKeyAuthed = (e) => { const cp = actingChurch || pub; return e.pubkey === cp || _careRoster.has(e.pubkey); };
+// THE CURRENT CHURCH'S ENVELOPE ONLY. A subscription opened for church A stays open for a beat after the console
+// switches to church B (the React cleanup runs after the switch), and so does anything A left in the pending
+// buffer. A's envelope is authored by A — and A is a rostered steward of B in the delegated case — so the author
+// check alone accepted it, and church B's care needs were sealed with church A's care key (measured
+// 2026-10-01, audit5). The d-tag names the church the envelope is for; it must be the one we are running.
+const _isCurrentCareEnv = (e) => { const cp = actingChurch || pub; return !!cp && ((e && e.tags || []).find(t => t[0] === 'd') || [])[1] === CAREKEY_D + cp; };
 function _ingestCareKeyEnv(e) {
+  if (!_isCurrentCareEnv(e)) return;
   try {
     const o = JSON.parse(e.content || '{}');
     if ((o.rev || 1) < _careKeyRev) return;                  // a lagging relay must not resurrect an older envelope
@@ -986,6 +993,7 @@ let _careKeyPending = [];
 function _reCheckCareKeyPending() {
   const nowMs = Date.now();
   _careKeyPending = _careKeyPending.filter(p => nowMs - p.at < _CAREKEY_PENDING_TTL);   // expired → treat as forgery, drop
+  _careKeyPending = _careKeyPending.filter(p => _isCurrentCareEnv(p.e));   // another church's envelope never blocks or feeds this one
   for (const p of _careKeyPending.slice()) {
     if (_careKeyAuthed(p.e)) { _ingestCareKeyEnv(p.e); _careKeyPending = _careKeyPending.filter(x => x !== p); }
   }
@@ -2212,7 +2220,7 @@ function _resetChurchScopedState() {
   _applyNoPhotoList([]);
   // The `*Checked` flags are the mint gates — "have we actually LOOKED for an envelope?". Carried across, they
   // report TRUE for a church nobody has looked at yet, which is what lets a stale ring be published as new.
-  _careKeyHex = null; _careKeyRing = []; _careKeyDocKeys = null; _careKeyRev = 0; _careKeyChecked = false;
+  _careKeyHex = null; _careKeyRing = []; _careKeyDocKeys = null; _careKeyRev = 0; _careKeyChecked = false; _careKeyPending = [];
   _mediaKeyHex = null; _mediaKeyRing = []; _mediaKeyDocKeys = null; _mediaKeyChecked = false; _mediaKeyPushRefused = null;
   // Every capability envelope belongs here too. The comment above is not decorative: carrying a `checked`
   // flag across a church switch answers "already looked" for a church nobody has looked at.
@@ -5646,7 +5654,10 @@ window.Steward = {
         if (!_careKeyAuthed(e)) { _careKeyPending.push({ e, at: Date.now() }); if (_careKeyPending.length > 10) _careKeyPending.shift(); return; }
         _ingestCareKeyEnv(e);
       },
-      oneose() { _careKeyChecked = true; },   // no envelope came back → it is safe to mint one
+      // …FOR THE CHURCH THIS SUBSCRIPTION ASKED ABOUT. A subscription opened for church A that answers after the
+      // console has switched to B would otherwise tell B's mint gate "looked, none here" — for a church nobody
+      // has looked at. That is how a second key gets minted over a real one.
+      oneose() { if (cp === (actingChurch || pub)) _careKeyChecked = true; },   // no envelope came back → it is safe to mint one
     });
     return () => { try { sub.close(); } catch (e) {} };
   },
@@ -5794,6 +5805,10 @@ window.Steward = {
   // recover the church media key on THIS device (unwrap our own wrapped entry) — so a restored console re-keys.
   subscribeMediaKey() {
     if (!pub) return () => {};
+    // WHICH CHURCH THIS SUBSCRIPTION IS FOR. It can outlive a church switch by a beat (React closes it after the
+    // switch), and in that beat it must neither hand church A's key ring to church B nor tell B's mint gate
+    // "looked". Both handlers check the church is still the current one. (2026-10-01, audit5.)
+    const forPub = pub;
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#d': [MEDIAKEY_D + pub] }], {
       // Ring-aware, and tolerant of the legacy shape: a wrapped value is a JSON array of keys now (newest
       // first) but older envelopes hold one bare hex string. Reading only the new form would make every
@@ -5801,8 +5816,8 @@ window.Steward = {
       /* `_mediaKeyPushRefused = null` (F2): an envelope LANDING is new information — the recipient map has
          changed under us, so whatever this console last had refused is worth asking again. Without this a
          console that was refused once would go on skipping until the roster itself changed. */
-      onevent(e) { try { const o = JSON.parse(e.content); _mediaKeyDocKeys = (o && o.keys) || null; _mediaKeyPushRefused = null; const _meKey = _myOwnPub(); const mine = o.keys && (o.keys[_meKey] || (_meKey === pub ? null : o.keys[pub]));   /* OPTION A: on a DELEGATED console `pub` is the CHURCH, so o.keys[pub] is the entry sealed TO THE CHURCH and our key cannot open it — _mediaKeyHex stayed null and mediaEncryptor then tried to MINT. Our own entry is there already: the church seals to [church, ...members] and a delegated steward is normally also a member. Owner console: _myOwnPub() === pub, so this is the old lookup exactly. */ if (mine && sk) { const plain = nip44d(mine, nip44ck(sk, e.pubkey)); let r = null; try { const q = JSON.parse(plain); if (Array.isArray(q)) r = q.filter(k => typeof k === 'string' && k); } catch (x2) {} const incoming = (r && r.length) ? r : [plain]; _mediaKeyRing = [...incoming, ..._mediaKeyRing.filter(k => incoming.indexOf(k) === -1)]; _mediaKeyHex = _mediaKeyRing[0];   /* KEEP what this device already held: if we minted before the envelope arrived, discarding our key here would orphan anything encrypted in that window. Rotation must never drop a key that has already sealed something. */ } } catch (x) {} },
-      oneose() { _mediaKeyChecked = true; },   // no envelope came back → it is safe to mint one
+      onevent(e) { if (forPub !== pub || e.pubkey !== pub || ((e.tags || []).find(t => t[0] === 'd') || [])[1] !== MEDIAKEY_D + pub) return; try { const o = JSON.parse(e.content); _mediaKeyDocKeys = (o && o.keys) || null; _mediaKeyPushRefused = null; const _meKey = _myOwnPub(); const mine = o.keys && (o.keys[_meKey] || (_meKey === pub ? null : o.keys[pub]));   /* OPTION A: on a DELEGATED console `pub` is the CHURCH, so o.keys[pub] is the entry sealed TO THE CHURCH and our key cannot open it — _mediaKeyHex stayed null and mediaEncryptor then tried to MINT. Our own entry is there already: the church seals to [church, ...members] and a delegated steward is normally also a member. Owner console: _myOwnPub() === pub, so this is the old lookup exactly. */ if (mine && sk) { const plain = nip44d(mine, nip44ck(sk, e.pubkey)); let r = null; try { const q = JSON.parse(plain); if (Array.isArray(q)) r = q.filter(k => typeof k === 'string' && k); } catch (x2) {} const incoming = (r && r.length) ? r : [plain]; _mediaKeyRing = [...incoming, ..._mediaKeyRing.filter(k => incoming.indexOf(k) === -1)]; _mediaKeyHex = _mediaKeyRing[0];   /* KEEP what this device already held: if we minted before the envelope arrived, discarding our key here would orphan anything encrypted in that window. Rotation must never drop a key that has already sealed something. */ } } catch (x) {} },
+      oneose() { if (forPub === pub) _mediaKeyChecked = true; },   // no envelope came back → it is safe to mint one
     });
     return () => { try { sub.close(); } catch {} };
   },
@@ -7103,8 +7118,12 @@ window.Steward = {
   // read the envelope back (the church's own copy) so the console can decrypt members' names
   subscribeNameKey() {
     const cp = actingChurch || pub;
+    // Both handlers check the church is still the one this subscription was opened for — it outlives a switch
+    // by a beat, and church A's envelope is authored by A, who passes church B's roster check when A stewards
+    // B. Without this, B's console took A's ring (2026-10-01, audit5).
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], '#d': [NAMEKEY_D + cp] }], {
       onevent(e) {
+        if (cp !== (actingChurch || pub) || ((e.tags || []).find(t => t[0] === 'd') || [])[1] !== NAMEKEY_D + cp) return;
         if (!_byChurchOrSteward(e)) return;   // church key or a CURRENT roster steward, same rule as every other envelope
         if (_authFuture(e) || (e.created_at || 0) < _nameKeyAt) return;   // future-dated (a wrong clock: the shared guard) or an older copy from a relay not caught up — see _nameKeyAt
         try {
@@ -7127,7 +7146,7 @@ window.Steward = {
           }
         } catch (x) {}
       },
-      oneose() { _nameKeyChecked = true; },   // the relay answered — a church with no envelope yet may now mint its first
+      oneose() { if (cp === (actingChurch || pub)) _nameKeyChecked = true; },   // the relay answered — a church with no envelope yet may now mint its first
     });
     return () => { try { sub.close(); } catch {} };
   },
@@ -9992,11 +10011,23 @@ window.Steward = {
     // Converging the two blocks is deliberately NOT done here — see the note below.
     _ckKeysSettled = '';
     _ckSessionKeys.clear();      // see _resetChurchScopedState — session ids can collide between churches
-    // NOTE: the block above is the same list as _resetChurchScopedState(), minus the care-key, media-key and
-    // NIP-42 state. Deliberately NOT converged in this commit — a SWITCH keeps this device's key while a
-    // RESTORE replaces it, so the wider reset is not obviously correct here and changing it is not what this
-    // fix is for. But the duplication IS the bug class that produced AUDIT-2026-07-27 and the 2026-08-04 key
-    // loss. If you are adding per-church state, add it to _resetChurchScopedState() and settle this properly.
+    // THE CARE AND MEDIA KEYS ARE PER CHURCH TOO (2026-10-01, audit5). They were left out of this block on the
+    // grounds that a switch keeps this device's key — but the KEY RING is the church's, not the device's. Carried
+    // across, church A's care key sealed every care need opened in church B: B's own stewards could not open
+    // them and A's could. Measured on the console: switch A→B, publishNeed succeeded with A's ring.
+    //
+    // Resetting is safe for the mint gates because it resets them to "not looked": `_careKeyChecked` and
+    // `_mediaKeyChecked` go false, and only the CURRENT church's subscription may set them true again (each
+    // oneose checks the church it was opened for — see subscribeCareKey / subscribeMediaKey). Nothing mints
+    // until this console has re-read the new church's envelope; KeyDistributor (app/stew-dashboard.jsx)
+    // re-subscribes on the identity change to do exactly that. The buffered-envelope list goes too: it held
+    // church A's unverified envelopes.
+    _careKeyHex = null; _careKeyRing = []; _careKeyDocKeys = null; _careKeyRev = 0; _careKeyChecked = false; _careKeyPending = [];
+    _mediaKeyHex = null; _mediaKeyRing = []; _mediaKeyDocKeys = null; _mediaKeyChecked = false; _mediaKeyPushRefused = null;
+    // NOTE: the block above is now the same list as _resetChurchScopedState(), minus the NIP-42 state. A
+    // SWITCH keeps this device's key while a RESTORE replaces it, so clearing the authenticated sockets here is
+    // not obviously correct and is not what this fix is for. The duplication IS the bug class that produced
+    // AUDIT-2026-07-27, the 2026-08-04 key loss and this one. If you add per-church state, add it to BOTH.
     window.Steward.pubkey = pub; window.Steward.npub = npubEncode(pub); window.Steward.activePub = pub;
     window.Steward.actingChurch = actingChurch;   // UI reads this to show "acting as steward" + hide owner-only controls
     window.dispatchEvent(new CustomEvent('steward-identity', { detail: { pub, actingChurch } }));

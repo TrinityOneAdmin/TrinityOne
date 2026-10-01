@@ -86,7 +86,9 @@ test('…nor before the console has actually LOOKED for an existing envelope', (
   assert.match(body('mediaEncryptor(', BUNDLE), /_mediaKeyChecked/,
     'mediaEncryptor mints when it has no key and the relay is merely AUTHENTICATED. It must also have '
     + 'positively observed that no envelope exists — otherwise a slow link mints over the church\'s archive.');
-  assert.match(body('subscribeMediaKey(', BUNDLE), /oneose\(\)\s*\{\s*_mediaKeyChecked = true/,
+  // Guarded since 2026-10-01: only the subscription for the CURRENT church may say "looked" (a subscription
+  // outlives a church switch by a beat — see scripts/console-keys-follow-the-church-switch.test.mjs).
+  assert.match(body('subscribeMediaKey(', BUNDLE), /oneose\(\)\s*\{\s*if \(forPub === pub\) _mediaKeyChecked = true/,
     'nothing ever sets _mediaKeyChecked, so the guard above can never open and encrypted uploads are blocked '
     + 'for ever — a flag that is only ever false is not a fix');
 });

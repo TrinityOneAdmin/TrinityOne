@@ -15591,7 +15591,12 @@ zoo`.split("\n");
     const cp = actingChurch || pub;
     return e.pubkey === cp || _careRoster.has(e.pubkey);
   };
+  var _isCurrentCareEnv = (e) => {
+    const cp = actingChurch || pub;
+    return !!cp && ((e && e.tags || []).find((t) => t[0] === "d") || [])[1] === CAREKEY_D + cp;
+  };
   function _ingestCareKeyEnv(e) {
+    if (!_isCurrentCareEnv(e)) return;
     try {
       const o = JSON.parse(e.content || "{}");
       if ((o.rev || 1) < _careKeyRev) return;
@@ -15618,6 +15623,7 @@ zoo`.split("\n");
   function _reCheckCareKeyPending() {
     const nowMs = Date.now();
     _careKeyPending = _careKeyPending.filter((p) => nowMs - p.at < _CAREKEY_PENDING_TTL);
+    _careKeyPending = _careKeyPending.filter((p) => _isCurrentCareEnv(p.e));
     for (const p of _careKeyPending.slice()) {
       if (_careKeyAuthed(p.e)) {
         _ingestCareKeyEnv(p.e);
@@ -16535,6 +16541,7 @@ zoo`.split("\n");
     _careKeyDocKeys = null;
     _careKeyRev = 0;
     _careKeyChecked = false;
+    _careKeyPending = [];
     _mediaKeyHex = null;
     _mediaKeyRing = [];
     _mediaKeyDocKeys = null;
@@ -19175,8 +19182,11 @@ zoo`.split("\n");
           }
           _ingestCareKeyEnv(e);
         },
+        // …FOR THE CHURCH THIS SUBSCRIPTION ASKED ABOUT. A subscription opened for church A that answers after the
+        // console has switched to B would otherwise tell B's mint gate "looked, none here" — for a church nobody
+        // has looked at. That is how a second key gets minted over a real one.
         oneose() {
-          _careKeyChecked = true;
+          if (cp === (actingChurch || pub)) _careKeyChecked = true;
         }
         // no envelope came back → it is safe to mint one
       });
@@ -19352,6 +19362,7 @@ zoo`.split("\n");
     subscribeMediaKey() {
       if (!pub) return () => {
       };
+      const forPub = pub;
       const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#d": [MEDIAKEY_D + pub] }], {
         // Ring-aware, and tolerant of the legacy shape: a wrapped value is a JSON array of keys now (newest
         // first) but older envelopes hold one bare hex string. Reading only the new form would make every
@@ -19360,6 +19371,7 @@ zoo`.split("\n");
            changed under us, so whatever this console last had refused is worth asking again. Without this a
            console that was refused once would go on skipping until the roster itself changed. */
         onevent(e) {
+          if (forPub !== pub || e.pubkey !== pub || ((e.tags || []).find((t) => t[0] === "d") || [])[1] !== MEDIAKEY_D + pub) return;
           try {
             const o = JSON.parse(e.content);
             _mediaKeyDocKeys = o && o.keys || null;
@@ -19382,7 +19394,7 @@ zoo`.split("\n");
           }
         },
         oneose() {
-          _mediaKeyChecked = true;
+          if (forPub === pub) _mediaKeyChecked = true;
         }
         // no envelope came back → it is safe to mint one
       });
@@ -20579,6 +20591,7 @@ zoo`.split("\n");
       const cp = actingChurch || pub;
       const sub = pool.subscribeMany(relays(), [{ kinds: [30078], "#d": [NAMEKEY_D + cp] }], {
         onevent(e) {
+          if (cp !== (actingChurch || pub) || ((e.tags || []).find((t) => t[0] === "d") || [])[1] !== NAMEKEY_D + cp) return;
           if (!_byChurchOrSteward(e)) return;
           if (_authFuture(e) || (e.created_at || 0) < _nameKeyAt) return;
           try {
@@ -20602,7 +20615,7 @@ zoo`.split("\n");
           }
         },
         oneose() {
-          _nameKeyChecked = true;
+          if (cp === (actingChurch || pub)) _nameKeyChecked = true;
         }
         // the relay answered — a church with no envelope yet may now mint its first
       });
@@ -23565,6 +23578,17 @@ zoo`.split("\n");
       _checkinMigrated = "";
       _ckKeysSettled = "";
       _ckSessionKeys.clear();
+      _careKeyHex = null;
+      _careKeyRing = [];
+      _careKeyDocKeys = null;
+      _careKeyRev = 0;
+      _careKeyChecked = false;
+      _careKeyPending = [];
+      _mediaKeyHex = null;
+      _mediaKeyRing = [];
+      _mediaKeyDocKeys = null;
+      _mediaKeyChecked = false;
+      _mediaKeyPushRefused = null;
       window.Steward.pubkey = pub;
       window.Steward.npub = npubEncode(pub);
       window.Steward.activePub = pub;

@@ -157,7 +157,7 @@ function consoleReads(envelope, mySk) {
   const api = new Function('scope', `with (scope) { return { ${body} }; }`)(scoped(scope));
   api.subscribeMediaKey();
   assert.ok(handlers, 're-anchor: subscribeMediaKey no longer subscribes');
-  handlers.onevent({ content: JSON.stringify(envelope), pubkey: churchPub });
+  handlers.onevent({ content: JSON.stringify(envelope), pubkey: churchPub, tags: [['d', 'trinityone/mediakey:' + churchPub]] });
   return scope._mediaKeyHex;
 }
 
