@@ -323,24 +323,85 @@ test('the rebuild counts only this parent’s own requests', async () => {
 });
 
 // ── 14. WHEN THE FAMILY IS KNOWN ────────────────────────────────────────────────────────────────────────────
-test('familyAnswered is false until a whole list or the rebuild answers, and each fires trinity-family-changed', async () => {
-  const storage = memStorage();
+test('familyAnswered is false until a whole list or a GENUINE rebuild answer, and each fires trinity-family-changed', async () => {
+  // Audit of 4d7ca23, E7: a subscription that merely FINISHES is not an answer — nostr-tools finishes one for a
+  // relay that refused the connection, and for one that never answered. It counts only at EOSE and only if the
+  // relay served one of this parent's own documents (served only over a socket authenticated as them).
+  const fast = (fn, ms) => setTimeout(fn, Math.min(ms, 30));
+  for (const [label, drive] of [
+    ['an EOSE that served none of this parent’s documents (a dead or empty relay)', (r) => r.handlers.oneose()],
+    ['a subscription that only timed out', () => {}],
+    ['own documents but no EOSE (timed out)', (r) => r.handlers.onevent(memberEvt(church, parent, 1000))],
+  ]) {
+    const P = scriptedPool();
+    const b = memberBoot(parent, memStorage(), { pool: P, publish: async () => true, setTimeout: fast });
+    const done = b.api._rebuildFamily(church.pub);
+    drive(P.rebuild());
+    await done;
+    assert.equal(b.api.familyAnswered(church.pub), false, 'THE FAMILY READ AS KNOWN AFTER ' + label.toUpperCase() + ' — an offline phone is told "make one below"');
+  }
   const P = scriptedPool();
-  const b = memberBoot(parent, storage, { pool: P, publish: async () => true });
+  const b = memberBoot(parent, memStorage(), { pool: P, publish: async () => true });
   assert.equal(b.api.familyAnswered(church.pub), false, 'the family reads as known before anything has answered');
   const done = b.api._rebuildFamily(church.pub);
+  P.rebuild().handlers.onevent(memberEvt(church, parent, 1000));
   P.rebuild().handlers.oneose();
   await done;
-  assert.equal(b.api.familyAnswered(church.pub), true, 'a finished rebuild did not mark the family known');
+  assert.equal(b.api.familyAnswered(church.pub), true, 'a rebuild a relay genuinely answered did not mark the family known');
   assert.ok(b.events.some(e => e.type === 'trinity-family-changed'), 'a finished rebuild fired nothing, so an open Family sheet never refreshes');
+  // a mid-session PIN lock forgets it: the list it showed is gone
+  b.api.clearCommunityCache();
+  assert.equal(b.api.familyAnswered(church.pub), false, 'THE LOCK LEFT THE FAMILY "KNOWN" OVER AN EMPTY LIST — the sheet says "make one below"');
   const other = K();
-  const b2 = memberBoot(parent, memStorage(), { pool: scriptedPool(), publish: async () => true });
-  assert.equal(b2.api.familyAnswered(other.pub), false);
-  const P2 = scriptedPool();
-  const b3 = memberBoot(parent, memStorage(), { pool: P2, publish: async () => true });
+  const P3 = scriptedPool();
+  const b3 = memberBoot(parent, memStorage(), { pool: P3, publish: async () => true });
   b3.api.subscribeGuardianNotices();
-  P2.notices().handlers.onevent(noticeEvt(other, parent, { church: other.pub, children: [] }, 10));
+  P3.notices().handlers.onevent(noticeEvt(other, parent, { church: other.pub, children: [] }, 10));
   await sleep(20);
   assert.equal(b3.api.familyAnswered(other.pub), true, 'an applied whole list did not mark the family known');
   assert.ok(b3.events.some(e => e.type === 'trinity-family-changed'), 'an applied whole list fired nothing');
+});
+
+// ── 15. A CLOSED REQUEST IS WITHDRAWN (owner's plan, 2026-10-01, item 4) ─────────────────────────────────────
+test('a whole list that names a closed request: the pending row goes and the parent’s own request is withdrawn', async () => {
+  const declined = K(), stillPending = K();
+  const storage = memStorage();
+  storage.setItem('trinityone.family', JSON.stringify([
+    { child: declined.pub, name: 'Dee', churchPub: church.pub, ts: 900 },
+    { child: stillPending.pub, name: 'Pat', churchPub: church.pub, ts: 900 },
+  ]));
+  const P = scriptedPool(), sent = [];
+  const b = memberBoot(parent, storage, { pool: P, publish: async (evt) => { sent.push(evt); return true; } });
+  b.api.subscribeGuardianNotices();
+  P.notices().handlers.onevent(N({ church: church.pub, children: [], closed: [declined.pub] }, 9500));
+  await sleep(30);
+  const shown = b.shown(church.pub);
+  assert.ok(!shown.includes(declined.pub), 'A DECLINED REQUEST STILL READS "WAITING FOR STEWARD TO CONFIRM"');
+  assert.ok(shown.includes(stillPending.pub), 'a request nobody has decided was dropped');
+  const r = retractionsOf(sent, declined);
+  assert.equal(r.length, 1, 'the parent’s own request for the closed child was not withdrawn on the relay');
+  assert.ok(r[0].created_at > 900, 'the withdrawal was not stamped after the request it withdraws');
+  assert.equal(retractionsOf(sent, stillPending).length, 0, 'a still-pending request was withdrawn');
+});
+
+// ── 16. THE NEWEST NOTICE SURVIVES A RESTART, AND A LOCK (item 2) ───────────────────────────────────────────
+test('after a restart — and after a lock — an OLDER notice is still older than the newest one applied', async () => {
+  const C = K();
+  for (const lock of [false, true]) {
+    const storage = memStorage();
+    const P1 = scriptedPool();
+    const b1 = memberBoot(parent, storage, { pool: P1, publish: async () => true });
+    b1.api.subscribeGuardianNotices();
+    P1.notices().handlers.onevent(N({ removed: C.pub, church: church.pub, children: [] }, 2000));   // the newest: C unlinked
+    await sleep(20);
+    if (lock) b1.api.clearCommunityCache();
+    // a cold boot that reaches only a relay holding the OLDER notice (the link)
+    const P2 = scriptedPool();
+    const b2 = memberBoot(parent, storage, { pool: P2, publish: async () => true });
+    b2.api.subscribeGuardianNotices();
+    P2.notices().handlers.onevent(N({ child: C.pub, name: 'Cal', church: church.pub, children: [C.pub] }, 1000));
+    await sleep(20);
+    assert.ok(!b2.shown(church.pub).includes(C.pub),
+      'AN OLDER NOTICE PUT BACK A CHILD THE CHURCH HAD UNLINKED after a restart' + (lock ? ' and a lock' : ''));
+  }
 });

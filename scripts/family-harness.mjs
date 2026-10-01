@@ -111,6 +111,11 @@ export function realPool(who) {
       }
       return { close() { closed = true; mine.forEach(w => { try { w.close(); } catch {} }); } };
     },
+    // nostr-tools' shape: one promise per relay — resolved when that relay says OK true, rejected otherwise
+    publish(urls, evt) {
+      return urls.map(u => publishTo(u, evt).then(([ok, why]) => { if (!ok) throw new Error(why || 'refused'); return why; },
+        () => { throw new Error('connection failure'); }));
+    },
     closeAll() { sockets.forEach(w => { try { w.close(); } catch {} }); },
   };
 }
@@ -171,6 +176,7 @@ export function memberBoot(parent, storage, opts = {}) {
   vm.runInContext([
     topVar(FELLOWSHIP, 'FAMILY_KEY'), topVar(FELLOWSHIP, 'FAMILY_REMOVED_KEY'), topVar(FELLOWSHIP, '_unlinkedNow'),
     topVar(FELLOWSHIP, '_retractedNow'), topVar(FELLOWSHIP, '_ownReqAt'), topVar(FELLOWSHIP, '_noticeSeen'),
+    topVar(FELLOWSHIP, 'NOTICE_SEEN_KEY'), topLevel(FELLOWSHIP, '_noticeSeenGet'), topLevel(FELLOWSHIP, '_noticeSeenSet'),
     topVar(FELLOWSHIP, '_familyAnswered'), topVar(FELLOWSHIP, '_isRetractedReq'), topVar(FELLOWSHIP, '_hex64'),
     topVar(FELLOWSHIP, '_ownRequestKnown'),
     topLevel(FELLOWSHIP, '_newerDoc'), topLevel(FELLOWSHIP, '_superseded'), topLevel(FELLOWSHIP, '_loadChildren'),
@@ -194,11 +200,20 @@ export function memberBoot(parent, storage, opts = {}) {
 }
 
 // ── the console's notice functions ────────────────────────────────────────────────────────────────────────────
-// opts: { relays, storage }. Publishes through the real relays; `published` records every notice it signed.
+// opts: { relays, pool, retryMs }. Publishes through the real relays (every one, with the shipped retries;
+// `retryMs` stands in for GUARD_RETRY_MS so a test need not wait two minutes); `published` records every notice
+// it signed, once.
 export function consoleBoot(church, opts = {}) {
   const relays = opts.relays || [];
   const published = [];
   const stamps = new Map();
+  const base = opts.pool || realPool(church);
+  const pool = {
+    ...base,
+    subscribeMany: (...a) => base.subscribeMany(...a),
+    closeAll: () => { if (base.closeAll) base.closeAll(); },
+    publish: (urls, evt) => { if (!published.some(e => e.id === evt.id)) published.push(evt); return base.publish(urls, evt); },
+  };
   const ctx = {
     sk: church.sk, pub: church.pub, churchPub: church.pub, churchSk: church.sk, actingChurch: '',
     churchSkHeld: () => true,
@@ -208,28 +223,28 @@ export function consoleBoot(church, opts = {}) {
     finalizeEvent2: (t, sk) => finalizeEvent(JSON.parse(JSON.stringify(t)), sk),
     // _monotonic's contract (strictly increasing created_at per d-tag on this console), without its skew machinery
     _monotonic: (t) => { const d = dOf(t); const last = stamps.get(d) || 0; const at = Math.max(t.created_at, last + 1); stamps.set(d, at); return { ...t, created_at: at }; },
-    publish: async (evt) => {
-      published.push(evt);
-      const rs = await Promise.all(relays.map(u => publishTo(u, evt).catch(() => [false])));
-      return rs.some(r => r[0]) ? evt : false;
-    },
+    // publish() is reached only when the church has no relay at all (its refusal path); record and refuse
+    publish: async (evt) => { if (!published.some(e => e.id === evt.id)) published.push(evt); return false; },
+    _waitForRegistration: async () => {},
+    window: { dispatchEvent() { return true; } }, CustomEvent: class { constructor(t, o) { this.type = t; this.detail = o && o.detail; } },
     now, localStorage: opts.storage || memStorage(),
-    pool: opts.pool || realPool(church), relays: () => relays,
+    pool, relays: () => relays,
     _authFuture: () => false, _byChurch: (e) => e.pubkey === church.pub,
     console: { warn() {}, log() {} },
     Promise, JSON, Math, Date, Set, Map, Object, Array, String, Number, Error, setTimeout, clearTimeout,
   };
   vm.createContext(ctx);
   vm.runInContext([
-    topLevel(STEWARD, 'toPubHex'), topLevel(STEWARD, '_childrenOfParent'), topLevel(STEWARD, '_sendGuardNotice'),
-    topVar(STEWARD, 'GUARDLIST_PASS_KEY'), topVar(STEWARD, '_guardListPassBusy'), topLevel(STEWARD, '_guardListPassOnce'),
+    topLevel(STEWARD, 'toPubHex'), topLevel(STEWARD, '_childrenOfParent'), topLevel(STEWARD, '_closedChildrenOfParent'),
+    topLevel(STEWARD, '_sendGuardNotice'), topLevel(STEWARD, '_publishGuardNotice'),
+    opts.retryMs ? 'var GUARD_RETRY_MS = ' + JSON.stringify(opts.retryMs) + ';' : topVar(STEWARD, 'GUARD_RETRY_MS'),
     'globalThis.API = {',
-    method(STEWARD, 'notifyGuardian(parentPubIn, childPubIn, childName, links) {', 'notifyGuardian') + ',',
-    method(STEWARD, 'notifyGuardianRemoved(parentPubIn, childPubIn, links, alsoRemoved) {', 'notifyGuardianRemoved') + ',',
-    method(STEWARD, 'notifyGuardianList(parentPubIn, links) {', 'notifyGuardianList') + ',',
+    method(STEWARD, 'notifyGuardian(parentPubIn, childPubIn, childName, links, closed) {', 'notifyGuardian') + ',',
+    method(STEWARD, 'notifyGuardianRemoved(parentPubIn, childPubIn, links, alsoRemoved, closed) {', 'notifyGuardianRemoved') + ',',
+    method(STEWARD, 'notifyGuardianList(parentPubIn, links, closed) {', 'notifyGuardianList') + ',',
     method(STEWARD, 'subscribeGuardians(onData) {', 'subscribeGuardians') + ',',
     method(STEWARD, 'subscribeGuardianRequests(onReqs) {', 'subscribeGuardianRequests') + ',',
-    '_guardListPassOnce };',
+    '};',
   ].join('\n'), ctx);
   return { api: ctx.API, published, ctx, close: () => { if (ctx.pool.closeAll) ctx.pool.closeAll(); } };
 }

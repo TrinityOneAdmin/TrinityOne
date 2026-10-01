@@ -5826,7 +5826,7 @@ function DashMembers() {
       // the children they were unlinked from learn from their own sealed clearance; the parent's app is told directly
       // — in ONE notice. The notice is a single slot per parent, so one per child kept only the last; this one names
       // them all (removedAll) and carries the parent's whole list from the map just written (owner, 2026-10-01).
-      if (unlinkedFrom.length) { try { if (window.Steward.notifyGuardianRemoved) window.Steward.notifyGuardianRemoved(pk, unlinkedFrom[0], nextG, unlinkedFrom); } catch (e) {} }
+      if (unlinkedFrom.length) { try { if (window.Steward.notifyGuardianRemoved) window.Steward.notifyGuardianRemoved(pk, unlinkedFrom[0], nextG, unlinkedFrom, nextClosed); } catch (e) {} }
     }
     // A CHILD IS NEVER A CLEARED CHECK-IN WORKER EITHER — so marking somebody withdraws the check-in clearance
     // they hold, as unmarking withdraws the youth one below. Owner's decision 2026-09-11 (device finding D4's
@@ -5957,7 +5957,7 @@ function DashMembers() {
     // marked a minor, so linking a parent to an already-marked child never reached that child's phone at all.
     _reseal(nextM, sg.approved || [], [r.child], nextG);
     // …and the parent's app gets its whole list, so the child it asked for reads as linked (owner, 2026-10-01).
-    if (window.Steward.notifyGuardianList) { try { window.Steward.notifyGuardianList(r.parent, nextG); } catch (e) {} }
+    if (window.Steward.notifyGuardianList) { try { window.Steward.notifyGuardianList(r.parent, nextG, guardiansClosed); } catch (e) {} }
     return true;
   };
   const declineGuardian = async (r) => {
@@ -5966,7 +5966,11 @@ function DashMembers() {
     try { ok = await Promise.resolve(window.Steward.setGuardians(guardians, nextClosed)); } catch (e) { ok = null; }
     if (!ok) {
       setMinorNotice({ pk: r.child, tone: 'fail', text: 'Couldn’t decline that request — the relay didn’t accept it, so it is still showing. Try again.' });
+      return;
     }
+    // …and the parent's app, so it withdraws its own request instead of reading "Waiting for steward to confirm"
+    // for ever: their list notice now names the closed request (owner, 2026-10-01).
+    if (window.Steward.notifyGuardianList) { try { window.Steward.notifyGuardianList(r.parent, guardians, nextClosed); } catch (e) {} }
   };
   // steward-initiated link (no parent request): pick an adult as the child's guardian, from the child's row
   const [linkChild, setLinkChild] = React.useState(null);
@@ -6002,7 +6006,7 @@ function DashMembers() {
     _reseal(nextM, sg.approved || [], [childPub], nextG);   // unconditional — see approveGuardian
     // notify the newly-linked parent so the child actually shows up in THEIR app (they never set it up locally)
     // …with the parent's whole list from the map just written, so the newest notice is the whole truth (2026-10-01)
-    if (window.Steward.notifyGuardian) window.Steward.notifyGuardian(parentPub, childPub, nameByPub[childPub] || '', nextG);
+    if (window.Steward.notifyGuardian) window.Steward.notifyGuardian(parentPub, childPub, nameByPub[childPub] || '', nextG, guardiansClosed);
   };
   const unlinkParent = async (childPub, parentPub) => {
     const cur = (guardians[childPub] || []).filter(p => p !== parentPub);
@@ -6026,7 +6030,7 @@ function DashMembers() {
     _reseal(sg.minors || [], sg.approved || [], [childPub], nextG);
     // ...and tell the PARENT'S app, which stores the link locally and had no other way to learn it was gone.
     // (with their whole remaining list from the map just written — owner, 2026-10-01)
-    if (window.Steward.notifyGuardianRemoved) window.Steward.notifyGuardianRemoved(parentPub, childPub, nextG);
+    if (window.Steward.notifyGuardianRemoved) window.Steward.notifyGuardianRemoved(parentPub, childPub, nextG, undefined, nextClosed);
   };
   // joining: when approval is on, members who haven't been admitted yet are pending requests
   const joinApproval = window.useStewardJoinPolicy ? window.useStewardJoinPolicy() : false;

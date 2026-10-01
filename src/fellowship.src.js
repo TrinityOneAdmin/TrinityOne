@@ -235,7 +235,34 @@ const _unlinkedNow = new Set();     // children removed this session: the rebuil
 const _retractedNow = new Set();    // …and whose request this session has already retracted on the relay
 const _ownReqAt = new Map();        // child -> created_at of this parent's newest LIVE request seen this session
 const _noticeSeen = new Map();      // "<church>|<parent>" -> { created_at, id } of the newest notice applied
-const _familyAnswered = new Set();  // churches whose family this session knows: a list applied, or a rebuild done
+// …AND IT SURVIVES A RESTART (audit of 4d7ca23, E4). In memory only, a cold boot with the up-to-date relay
+// unreachable applied whatever OLDER notice the reachable relay still held — a child the church had since
+// unlinked was back on the parent's phone. So the newest applied notice's created_at + id per (church, parent)
+// is persisted, and an older notice is ignored on a cold boot too. It holds no child, no name, nothing about a
+// link — a church key, this parent's own key, a time and an event id (owner, 2026-10-01: it reveals no child).
+// Kept through the PIN lock on purpose (clearCommunityCache's KEEP list): wiped, the guarantee would end at
+// the first lock.
+const NOTICE_SEEN_KEY = 'trinityone.guardnoticeSeen';
+function _noticeSeenGet(key) {
+  if (_noticeSeen.has(key)) return _noticeSeen.get(key);
+  try {
+    const all = JSON.parse(localStorage.getItem(NOTICE_SEEN_KEY) || '{}') || {};
+    const v = all[key];
+    if (v && typeof v === 'object') { _noticeSeen.set(key, v); return v; }
+  } catch (e) {}
+  return null;
+}
+function _noticeSeenSet(key, v) {
+  _noticeSeen.set(key, v);
+  try {
+    const all = JSON.parse(localStorage.getItem(NOTICE_SEEN_KEY) || '{}') || {};
+    all[key] = v;
+    localStorage.setItem(NOTICE_SEEN_KEY, JSON.stringify(all));
+  } catch (e) {}
+}
+// Churches whose family this session KNOWS — set only by a whole-list notice applied, or by a rebuild that got a
+// GENUINE answer (see _rebuildFamily); cleared by the PIN lock. Until then an empty family is "not known yet".
+const _familyAnswered = new Set();
 // NIP-01's order for two copies of one replaceable document, the order the relay's store keeps
 // (scripts/event-store.mjs): newer created_at wins; on a tie the LOWEST id wins.
 function _newerDoc(a, b) {
@@ -283,14 +310,17 @@ const _ownRequestKnown = (entry, child) => !!(entry && !entry.viaSteward) || _ow
 // APPLY A WHOLE-LIST NOTICE from church `cp`: this phone's links for that church become exactly `dec.children`.
 //   · a listed child is linked (added if this phone did not know it; a steward link if it never asked for it);
 //   · a child this phone held as LINKED and the list no longer names is gone, and so is any child the notice
-//     names as removed (`removed`, `removedAll`);
-//   · a request of the parent's own that no steward has acted on is not in the list and stays, pending;
+//     names as removed (`removed`, `removedAll`) or whose request from this parent the church has CLOSED
+//     (`closed`: declined, or the link removed) — so a removal this phone never saw (its slot overwritten by a
+//     later notice while the phone was locked) cannot come back as "Waiting for steward to confirm";
+//   · a request of the parent's own that no steward has acted on yet is not in either list and stays, pending;
 //   · another church's children are untouched.
 // Children of ours whose link was taken away have their request retracted where one is known (and the rebuild
 // retracts any it finds later — they are in _unlinkedNow). A key the church has re-seated is not listed.
 function _applyGuardianList(cp, dec, e) {
   const listed = new Set((dec.children || []).map(_hex64).filter(c => c && c !== pub && !_superseded(cp, c)));
-  const named = new Set([dec.removed, ...(Array.isArray(dec.removedAll) ? dec.removedAll : [])].map(_hex64).filter(c => c && !listed.has(c)));
+  const named = new Set([dec.removed, ...(Array.isArray(dec.removedAll) ? dec.removedAll : []), ...(Array.isArray(dec.closed) ? dec.closed : [])]
+    .map(_hex64).filter(c => c && !listed.has(c)));
   const keep = [], gone = [];
   for (const c of _loadChildren()) {
     if (!c || c.churchPub !== cp) { keep.push(c); continue; }
@@ -342,10 +372,10 @@ function _rebuildFamily(churchNpub) {
   const cp = toPub(churchNpub) || churchNpub;
   if (!pub || !cp) return Promise.resolve(0);
   return new Promise((resolve) => {
-    let added = 0, done = false;
+    let added = 0, done = false, sawOwn = false;
     const newest = new Map();     // child -> newest copy of guardreq:<child>
     const sawLive = new Set();    // children for which SOME live copy arrived
-    const finish = () => {
+    const finish = (eosed) => {
       if (done) return; done = true; try { sub.close(); } catch (e) {}
       const legacy = _loadRemovedChildren().map(_hex64);
       for (const [child, e] of newest) {
@@ -360,13 +390,21 @@ function _rebuildFamily(churchNpub) {
         _saveChildLink({ child, name: '', churchPub: cp, ts: e.created_at || 0 });
         added++;
       }
-      _familyAnswered.add(cp);
+      // A GENUINE ANSWER, OR NONE (audit of 4d7ca23, E7). This used to mark the family known whenever the
+      // subscription finished — and nostr-tools finishes it for a relay that refused the connection (in a few
+      // milliseconds) and for one that never answered (after ~4.4 s), so an offline phone told a parent "No
+      // children linked … you can make one below". It counts only if the subscription reached EOSE AND served
+      // at least one of this parent's OWN documents: those are served only over a socket authenticated as this
+      // parent (canRead's own-event rule), and every member has a member: document, so a relay that sent one
+      // answered for real. A timeout, a dead relay or an EOSE that served nothing proves nothing.
+      if (eosed && sawOwn) _familyAnswered.add(cp);
       _familyChanged(cp);
       resolve(added);
     };
     const sub = pool.subscribeMany(relaysForChurch(cp), [{ kinds: [30078], authors: [pub] }], {
       onevent(e) {
         if (!e || e.pubkey !== pub) return;
+        sawOwn = true;
         const d = _dtag(e);
         if (!d.startsWith('trinityone/guardreq:')) return;
         const child = _hex64(d.slice('trinityone/guardreq:'.length));
@@ -375,9 +413,9 @@ function _rebuildFamily(churchNpub) {
         const prev = newest.get(child);
         if (!prev || _newerDoc(e, prev)) newest.set(child, e);
       },
-      oneose: finish,
+      oneose: () => finish(true),
     });
-    setTimeout(finish, 9000);
+    setTimeout(() => finish(false), 9000);
   });
 }
 // SECURITY-AUDIT-2026-07-06 H5: cache group keys per CHURCH, not by bare group-id. Group ids are the
@@ -3950,9 +3988,12 @@ window.Fellowship = {
     // function alone into a scope of their own. And these notes sit ABOVE the literal, not inside it:
     // esbuild keeps comments inside an array literal, and name-key-integrity slices a fixed window of the
     // bundle from this function's first mention — prose inside the Set pushed `_k0Seen.clear()` out of it.
+    // guardnoticeSeen (2026-10-01): the newest guardian notice applied per (church, parent) — a time and an event
+    // id, no child. Wiped, a cold boot after the lock would apply an OLDER notice from a relay that missed the
+    // newest, and put back a child the church had unlinked (see NOTICE_SEEN_KEY).
     const KEEP = new Set(['trinityone.followedChurches', 'trinityone.activeChurch',
       'trinityone.outbox', 'trinityone.outbox.failed', 'trinityone.nostr.mnemonic.enc',
-      'trinityone.joinsent', 'trinityone.joinintent']);
+      'trinityone.joinsent', 'trinityone.joinintent', 'trinityone.guardnoticeSeen']);
     // backedup.<own npub> names the MEMBER, not the congregation, and their own key is on this device
     // anyway. Wiping it makes the app re-nag for a seed backup after every lock, which is a real cost for
     // no forensic gain.
@@ -4023,6 +4064,9 @@ window.Fellowship = {
       // the next edit republishes a kind-0 with an EMPTY picture — destroying the member's photo on the
       // relay. Found by an adversarial review of my own work, 2026-07-28.
       _k0Seen.clear();
+      // …and what this session knew about the family: the list it showed is gone, so until the church answers
+      // again the Family sheet must say "checking", not "no children linked — make one below".
+      _familyAnswered.clear();
       window.Fellowship.myProfile = null;
     } catch (e) { console.warn('[fellowship] clearCommunityCache failed', e); }
   },
@@ -5426,9 +5470,9 @@ window.Fellowship = {
         // The SAME copy again (every re-subscribe re-delivers it) is applied again: that is how a retraction
         // that failed, or a family wiped by a mid-session lock, is put right.
         const key = cp + '|' + pub;
-        const prevN = _noticeSeen.get(key);
+        const prevN = _noticeSeenGet(key);
         if (prevN && prevN.id !== e.id && _newerDoc(prevN, e)) return;
-        _noticeSeen.set(key, { created_at: e.created_at || 0, id: String(e.id || '') });
+        _noticeSeenSet(key, { created_at: e.created_at || 0, id: String(e.id || '') });
         if (Array.isArray(dec.children)) {
           _applyGuardianList(cp, dec, e);
           if (dec.children.length) _needAuth = true;

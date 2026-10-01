@@ -1922,16 +1922,18 @@ function FamilySheet({ open, onClose, ctx }) {
   // HAS THE CHURCH ANSWERED YET? Until it has — a whole-list notice applied, or the rebuild of this parent's own
   // requests finished — an empty list means "not known yet", not "no children". Saying "no children linked …
   // you can make one below" then invited a second account for a child whose link simply had not arrived.
-  // Bounded: after FAMILY_WAIT_MS the sheet says what it knows, so a church that never answers cannot hold it.
+  // Bounded: after FAMILY_WAIT_MS with no answer the sheet says it could not reach the church — and still not
+  // "make one below", which is only said once the church has genuinely answered that there are none.
   const answeredNow = () => !F || !F.familyAnswered || !!F.familyAnswered(ctx.church && ctx.church.npub);
   const [answered, setAnswered] = useId(answeredNow);
+  const [waitedOut, setWaitedOut] = useId(false);
   const refreshKids = () => { setKids(F && F.myChildren ? F.myChildren(ctx.church && ctx.church.npub) : []); setAnswered(answeredNow()); };
   // the engine fires these when a notice changes the links or a rebuild finishes, so the list follows without a reload
   useIdE(() => {
     const f = () => refreshKids();
     const evs = ['trinity-guardian-added', 'trinity-guardian-removed', 'trinity-family-changed'];
     evs.forEach(n => window.addEventListener(n, f));
-    const t = setTimeout(() => setAnswered(true), FAMILY_WAIT_MS);
+    const t = setTimeout(() => setWaitedOut(true), FAMILY_WAIT_MS);
     return () => { evs.forEach(n => window.removeEventListener(n, f)); clearTimeout(t); };
   }, []);
   const create = async () => {
@@ -2025,8 +2027,13 @@ function FamilySheet({ open, onClose, ctx }) {
                 </div>
               </div>
             )) : !answered ? <div style={{ textAlign: 'center', color: 'var(--ink-3)', padding: '24px 16px', fontSize: 14, lineHeight: 1.5 }}>
-              <div style={{ fontWeight: 700, color: 'var(--ink-2)', marginBottom: 6 }}>Checking with your church…</div>
-              Any children linked to you will appear here in a moment.
+              {waitedOut ? <React.Fragment>
+                <div style={{ fontWeight: 700, color: 'var(--ink-2)', marginBottom: 6 }}>Couldn’t reach your church just now</div>
+                Any children linked to you will appear here once it answers.
+              </React.Fragment> : <React.Fragment>
+                <div style={{ fontWeight: 700, color: 'var(--ink-2)', marginBottom: 6 }}>Checking with your church…</div>
+                Any children linked to you will appear here in a moment.
+              </React.Fragment>}
             </div> : <div style={{ textAlign: 'center', color: 'var(--ink-3)', padding: '24px 16px', fontSize: 14, lineHeight: 1.5 }}>
               {/* "No children set up yet." full stop, read to a parent whose child DOES have an account and IS
                   linked at the church, as "nothing is set up for my son". Round 7: the parent said she would

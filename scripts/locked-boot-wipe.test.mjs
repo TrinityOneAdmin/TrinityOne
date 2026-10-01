@@ -45,6 +45,7 @@ function runWipe(keys) {
     },
     profiles: { a: 1 },
     _k0Seen: new Set(['a']),
+    _familyAnswered: new Set(['a']),   // 2026-10-01: the lock forgets which churches had answered "who are my children"
     window: { Fellowship: { myProfile: { name: 'x' } } },
     console: { warn() {} },
     Object, Set,
@@ -79,6 +80,7 @@ const DEVICE_KEYS = [
   'trinityone.readerScale', 'trinityone.settings', 'trinityone.nostr.mnemonic.enc',
   'trinityone.backedup.' + NPUB,   // names the MEMBER, not the church — see the test below
   'trinityone.bible.translation', 'trinityone.reading.position',
+  'trinityone.guardnoticeSeen',   // 2026-10-01: the newest guardian notice applied per (church, parent) — a time and an id, no child
   'trinityone.readLoc.BSB',   // 2026-09-21: where the reader was, per translation — the key app.jsx actually writes
   // ⚠ AND THE THREE A PHONE ARGUED BACK ON. Every one of these carries a 64-hex pubkey in its NAME, so the
   // IDENTIFIER rule takes them unless something exempts them — and until bf25f49 nothing did.
@@ -126,7 +128,10 @@ test('the Bible, the member’s own writing and their unsent messages all surviv
     // their request was never sent. Its key names nobody; see JOINSENT_KEY in fellowship.src.js.
     // joinintent: the join a locked phone promised to make once unlocked. Wiped, the promise dies on the
     // very boot it was made to survive. See JOININTENT_KEY.
-    'trinityone.joinsent', 'trinityone.joinintent']) {
+    'trinityone.joinsent', 'trinityone.joinintent',
+    // 2026-10-01: wiped, a cold boot after the lock applies an OLDER guardian notice from a relay that missed
+    // the newest one, and a child the church unlinked is back on the parent's phone. See NOTICE_SEEN_KEY.
+    'trinityone.guardnoticeSeen']) {
     assert.ok(left.includes(k), 'the wipe destroyed ' + k);
   }
 });
@@ -438,7 +443,7 @@ function liftAnnounceAndWipe() {
     _queueJoinIntent: () => { throw new Error('keyless path taken — the stub key did not reach the function'); },
     _markJoinSent: () => {},
     window: { Fellowship: { ready: Promise.resolve(), myProfile: null } },
-    localStorage, profiles: {}, _k0Seen: new Set(),
+    localStorage, profiles: {}, _k0Seen: new Set(), _familyAnswered: new Set(),
   };
   const P = new Proxy(scope, {
     has: (t, k) => (k in t) || !(String(k) in globalThis),

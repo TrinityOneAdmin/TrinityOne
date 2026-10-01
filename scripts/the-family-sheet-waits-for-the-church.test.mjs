@@ -73,12 +73,18 @@ test('when the engine says the family changed, the sheet follows — the answer,
   assert.match(t, /Linked & protected/, 'a child the church’s list names is not shown as linked');
 });
 
-test('a church that never answers does not hold the sheet for ever', () => {
+test('a church that never answers: after the wait the sheet says it could not reach it — still not "make one below"', () => {
+  // Audit of 4d7ca23 (2026-10-01): the wait used to end by declaring the church answered, so an OFFLINE parent
+  // was told "No children linked … you can make one below" — the duplicate-account invitation this sheet exists
+  // to withhold until the church has genuinely said there are none.
   const s = sheet({ kids: [], answered: false });
   s.draw();
   const wait = s.timers.find(t => t.ms > 1000);
   assert.ok(wait, 'the sheet waits on the church with no time limit');
   assert.ok(wait.ms <= 20000, 'the sheet waits too long before saying what it knows: ' + wait.ms + 'ms');
   wait.fn();
-  assert.match(shows(s.draw()), /No children linked to you yet/, 'after the wait the sheet still says nothing');
+  const t = shows(s.draw());
+  assert.match(t, /Couldn’t reach your church/, 'after the wait the sheet says nothing about the church not answering');
+  assert.ok(!/No children linked to you yet/.test(t) && !/make one below/.test(t),
+    'AN OFFLINE SHEET INVITED A NEW ACCOUNT — the church never said there are no children');
 });

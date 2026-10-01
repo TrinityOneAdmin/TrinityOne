@@ -6712,6 +6712,29 @@
   var _retractedNow = /* @__PURE__ */ new Set();
   var _ownReqAt = /* @__PURE__ */ new Map();
   var _noticeSeen = /* @__PURE__ */ new Map();
+  var NOTICE_SEEN_KEY = "trinityone.guardnoticeSeen";
+  function _noticeSeenGet(key) {
+    if (_noticeSeen.has(key)) return _noticeSeen.get(key);
+    try {
+      const all = JSON.parse(localStorage.getItem(NOTICE_SEEN_KEY) || "{}") || {};
+      const v = all[key];
+      if (v && typeof v === "object") {
+        _noticeSeen.set(key, v);
+        return v;
+      }
+    } catch (e) {
+    }
+    return null;
+  }
+  function _noticeSeenSet(key, v) {
+    _noticeSeen.set(key, v);
+    try {
+      const all = JSON.parse(localStorage.getItem(NOTICE_SEEN_KEY) || "{}") || {};
+      all[key] = v;
+      localStorage.setItem(NOTICE_SEEN_KEY, JSON.stringify(all));
+    } catch (e) {
+    }
+  }
   var _familyAnswered = /* @__PURE__ */ new Set();
   function _newerDoc(a, b) {
     const at = a.created_at || 0, bt = b.created_at || 0;
@@ -6777,7 +6800,7 @@
   var _ownRequestKnown = (entry, child) => !!(entry && !entry.viaSteward) || _ownReqAt.has(child);
   function _applyGuardianList(cp, dec, e) {
     const listed = new Set((dec.children || []).map(_hex64).filter((c) => c && c !== pub && !_superseded(cp, c)));
-    const named = new Set([dec.removed, ...Array.isArray(dec.removedAll) ? dec.removedAll : []].map(_hex64).filter((c) => c && !listed.has(c)));
+    const named = new Set([dec.removed, ...Array.isArray(dec.removedAll) ? dec.removedAll : [], ...Array.isArray(dec.closed) ? dec.closed : []].map(_hex64).filter((c) => c && !listed.has(c)));
     const keep = [], gone = [];
     for (const c of _loadChildren()) {
       if (!c || c.churchPub !== cp) {
@@ -6834,10 +6857,10 @@
     const cp = toPub(churchNpub) || churchNpub;
     if (!pub || !cp) return Promise.resolve(0);
     return new Promise((resolve) => {
-      let added = 0, done = false;
+      let added = 0, done = false, sawOwn = false;
       const newest = /* @__PURE__ */ new Map();
       const sawLive = /* @__PURE__ */ new Set();
-      const finish = () => {
+      const finish = (eosed) => {
         if (done) return;
         done = true;
         try {
@@ -6860,13 +6883,14 @@
           _saveChildLink({ child, name: "", churchPub: cp, ts: e.created_at || 0 });
           added++;
         }
-        _familyAnswered.add(cp);
+        if (eosed && sawOwn) _familyAnswered.add(cp);
         _familyChanged(cp);
         resolve(added);
       };
       const sub = pool.subscribeMany(relaysForChurch(cp), [{ kinds: [30078], authors: [pub] }], {
         onevent(e) {
           if (!e || e.pubkey !== pub) return;
+          sawOwn = true;
           const d = _dtag(e);
           if (!d.startsWith("trinityone/guardreq:")) return;
           const child = _hex64(d.slice("trinityone/guardreq:".length));
@@ -6875,9 +6899,9 @@
           const prev = newest.get(child);
           if (!prev || _newerDoc(e, prev)) newest.set(child, e);
         },
-        oneose: finish
+        oneose: () => finish(true)
       });
-      setTimeout(finish, 9e3);
+      setTimeout(() => finish(false), 9e3);
     });
   }
   var _gkeys = {};
@@ -10186,7 +10210,8 @@
         "trinityone.outbox.failed",
         "trinityone.nostr.mnemonic.enc",
         "trinityone.joinsent",
-        "trinityone.joinintent"
+        "trinityone.joinintent",
+        "trinityone.guardnoticeSeen"
       ]);
       const FORCE_WIPE = /* @__PURE__ */ new Set(["trinityone.mydata:data/chatseen"]);
       const KEEP_PREFIX = [
@@ -10210,6 +10235,7 @@
         });
         for (const k of Object.keys(profiles)) delete profiles[k];
         _k0Seen.clear();
+        _familyAnswered.clear();
         window.Fellowship.myProfile = null;
       } catch (e) {
         console.warn("[fellowship] clearCommunityCache failed", e);
@@ -11746,9 +11772,9 @@
           if (!dec || typeof dec !== "object") return;
           const cp = e.pubkey;
           const key = cp + "|" + pub;
-          const prevN = _noticeSeen.get(key);
+          const prevN = _noticeSeenGet(key);
           if (prevN && prevN.id !== e.id && _newerDoc(prevN, e)) return;
-          _noticeSeen.set(key, { created_at: e.created_at || 0, id: String(e.id || "") });
+          _noticeSeenSet(key, { created_at: e.created_at || 0, id: String(e.id || "") });
           if (Array.isArray(dec.children)) {
             _applyGuardianList(cp, dec, e);
             if (dec.children.length) _needAuth = true;

@@ -13,7 +13,8 @@
 //     congregation which accounts are children. Asserted with a bystander's own authenticated read.
 //   · MEDIUM — the console keys pending requests by child, so a father's re-published request replaced the
 //     mother's genuinely pending one. Asserted through the console's own shipped subscribeGuardianRequests.
-// …and the one-time pass that gives parents linked before this build their list.
+// …and (2026-10-01, the owner's plan after the audit of 4d7ca23) a notice reaching every relay, the newest notice
+// surviving a restart, a removal the phone never saw, and an unreachable relay not counting as an answer.
 //
 // The member app's functions come out of vendor/fellowship.js and the console's out of vendor/steward.js, by
 // scripts/family-harness.mjs; nothing here re-types a function under test.
@@ -27,6 +28,7 @@ import {
 } from './family-harness.mjs';
 
 const PORT_A = 8982, PORT_B = 8984;   // unique across scripts/*.test.mjs AND scripts/*.probe.mjs
+const PORT_DEAD = 8946;               // never listened on: stands in for a relay that cannot be reached
 const church = K();
 let A, B;
 
@@ -131,32 +133,101 @@ test('after a steward links a father, no member can read that the child is a chi
   assert.equal(forC[0].parent, mum.pub, 'THE FATHER’S REQUEST REPLACED THE MOTHER’S PENDING ONE in the console');
 });
 
-// ── LINKS MADE BEFORE THIS BUILD ────────────────────────────────────────────────────────────────────────────
-test('a link made before this build reaches the parent after the console’s one-time pass, which runs once', async () => {
-  const P = K(), C = K(), P2 = K(), C2 = K();
-  await join(P, [A]); await join(P2, [A]);
-  // the church's guardians document, as an older console wrote it — no list notice was ever sent
-  const g = finalizeEvent({ kind: 30078, created_at: now() - 20, tags: [['d', 'trinityone/guardians:' + church.pub], ['t', 'trinityone']],
-    content: JSON.stringify({ links: { [C.pub]: [P.pub], [C2.pub]: [P2.pub, P.pub] } }) }, church.sk);
-  assert.equal((await publishTo(A.url, g))[0], true, 'fixture: the guardians document was refused');
-  const consoleStorage = memStorage();
-  const con = consoleBoot(church, { relays: [A.url], storage: consoleStorage });
-  let links = null;
-  const stop = con.api.subscribeGuardians((d) => { links = d.links; });
-  assert.ok(await until(() => con.published.length >= 2, 8000), 'THE ONE-TIME PASS SENT NOTHING — parents linked before this build never get their list');
-  try { stop(); } catch {} con.close();
-  assert.ok(links && links[C.pub], 'CONTROL: the console read the guardians document');
-  assert.equal(con.published.length, 2, 'the pass did not send exactly one notice per linked parent: ' + con.published.length);
-  // the parent's phone, from a cold start, now shows both children
-  const b = memberBoot(P, memStorage(), { relays: [A.url] });
-  const unsub = b.api.subscribeGuardianNotices();
-  assert.ok(await until(() => { const s = b.shown(church.pub); return s.includes(C.pub) && s.includes(C2.pub); }),
-    'the parent’s phone did not show the links made before this build: ' + JSON.stringify(b.shown(church.pub)));
-  unsub(); b.close();
-  // a second load of the same console sends nothing more
-  const con2 = consoleBoot(church, { relays: [A.url], storage: consoleStorage });
-  const stop2 = con2.api.subscribeGuardians(() => {});
-  await sleep(3000);
-  try { stop2(); } catch {} con2.close();
-  assert.equal(con2.published.length, 0, 'THE ONE-TIME PASS RAN AGAIN on the next load: ' + con2.published.length + ' more notices');
+// ── A NOTICE REACHES EVERY RELAY — INCLUDING ONE THAT WAS DOWN WHEN IT WAS SENT (owner's plan, item 3) ────────
+// The console published guardian notices first-accept-wins, so a relay that missed one kept the older notice,
+// and a phone that reads that relay kept a link the church had removed.
+test('a guardian notice goes to every relay, and to a relay that was down when it was sent once it comes up', async () => {
+  const P = K(), C = K();
+  await join(P, [A]);
+  const LATE = 8943, lateUrl = `ws://127.0.0.1:${LATE}/relay`;
+  await requireFreePort(LATE, 'a-removed-parent-never-sees-the-child-again.test.mjs');
+  const con = consoleBoot(church, { relays: [A.url, B.url, lateUrl], retryMs: [1500, 3000, 6000] });
+  const evt = await con.api.notifyGuardian(P.pub, C.pub, 'Cleo', { [C.pub]: [P.pub] }, {});
+  assert.ok(evt, 'the notice was reported refused though two relays were up');
+  for (const r of [A, B]) {
+    const got = (await ask(r.url, church, { kinds: [30078], authors: [church.pub] })).filter(e => e.id === evt.id);
+    assert.equal(got.length, 1, 'relay ' + r.url + ' did not get the notice at once — it went to the first relay to answer only');
+  }
+  let late = null;
+  try {
+    late = await startRelay(LATE, church.pub);
+    const ok = await until(async () => (await ask(late.url, church, { kinds: [30078], authors: [church.pub] }, 1500)).some(e => e.id === evt.id), 14000);
+    assert.ok(ok, 'A RELAY THAT WAS DOWN WHEN THE NOTICE WENT OUT NEVER GOT IT — a phone that reads it keeps the older notice');
+  } finally { late && late.stop(); con.close(); }
+});
+
+// ── THE NEWEST NOTICE SURVIVES A RESTART (owner's plan, item 2), on real relays ──────────────────────────────
+test('after a restart with the up-to-date relay unreachable, an older notice does not bring a child back — with or without a lock', async () => {
+  for (const lock of [false, true]) {
+    const P = K(), C = K();
+    await join(P, [A, B]);
+    // relay A still has the OLDER notice (the link); relay B has the newer one (C unlinked)
+    assert.equal((await publishTo(A.url, noticeEvt(church, P, { child: C.pub, name: 'Cal', church: church.pub, children: [C.pub] }, now() - 200)))[0], true);
+    assert.equal((await publishTo(B.url, noticeEvt(church, P, { removed: C.pub, church: church.pub, children: [] }, now() - 100)))[0], true);
+    const storage = memStorage();
+    const b1 = memberBoot(P, storage, { relays: [A.url, B.url] });
+    let u = b1.api.subscribeGuardianNotices();
+    await sleep(2000);
+    u(); b1.close();
+    assert.ok(!b1.shown(church.pub).includes(C.pub), 'CONTROL: with both relays reachable the newest notice did not win');
+    if (lock) b1.api.clearCommunityCache();
+    // restart; relay B unreachable
+    const b2 = memberBoot(P, storage, { relays: [A.url, `ws://127.0.0.1:${PORT_DEAD}/relay`] });
+    u = b2.api.subscribeGuardianNotices();
+    await sleep(2000);
+    const shown = b2.shown(church.pub);
+    u(); b2.close();
+    assert.ok(!shown.includes(C.pub),
+      'AFTER A RESTART' + (lock ? ' AND A LOCK' : '') + ', THE OLDER NOTICE ON THE REACHABLE RELAY PUT BACK A CHILD THE CHURCH HAD UNLINKED');
+  }
+});
+
+// ── THE AUDITOR'S E8, the sequence the plan names (item 4) ─────────────────────────────────────────────────────
+// The phone is locked. The steward unlinks C, then links D — the single notice slot now names D, and the
+// removal of C was never seen. On unlock C must not come back as "Waiting for steward to confirm", and the
+// parent's own request for C must be withdrawn on the relay.
+test('a removal the phone never saw (locked; unlink C, then link D): on unlock C is not shown and its request is withdrawn', async () => {
+  const P = K(), C = K(), D = K();
+  await join(P, [A]);
+  assert.equal((await publishTo(A.url, reqEvt(church, P, C, now() - 300, true)))[0], true, 'fixture: P set C up');
+  const storage = memStorage();   // the phone was locked: its family list is empty
+  const con = consoleBoot(church, { relays: [A.url] });
+  // the console's own notices, with the map and closed pairs after each change (as stew-dashboard passes them)
+  assert.ok(await con.api.notifyGuardianRemoved(P.pub, C.pub, {}, undefined, { [C.pub + '|' + P.pub]: now() }), 'fixture: the unlink notice');
+  assert.ok(await con.api.notifyGuardian(P.pub, D.pub, 'Dee', { [D.pub]: [P.pub] }, { [C.pub + '|' + P.pub]: now() }), 'fixture: the link notice');
+  con.close();
+  const b = memberBoot(P, storage, { relays: [A.url] });
+  const u = b.api.subscribeGuardianNotices();
+  await b.api._rebuildFamily(church.pub);
+  await until(() => b.shown(church.pub).includes(D.pub), 6000);
+  await sleep(600);
+  const shown = b.shown(church.pub);
+  u(); b.close();
+  assert.ok(shown.includes(D.pub), 'CONTROL: the newest notice’s child is missing');
+  assert.ok(!shown.includes(C.pub),
+    'A REMOVAL THE PHONE NEVER SAW CAME BACK AS "WAITING FOR STEWARD TO CONFIRM": ' + JSON.stringify(b.entries(church.pub)));
+  assert.ok(await until(async () => { const n = await newestReq(A.url, P, C); return n && isRetracted(n); }),
+    'the parent’s own request for C is still live on the relay');
+});
+
+// ── OFFLINE IS NOT AN ANSWER (owner's plan, item 5) ───────────────────────────────────────────────────────────
+// nostr-tools' own pool, as the app uses it, against a relay that refuses the connection: its subscription
+// "finishes" in milliseconds. That must not mark the family known.
+test('a rebuild over a relay that cannot be reached does not mark the family known', async () => {
+  const { SimplePool, useWebSocketImplementation } = await import('nostr-tools/pool');
+  const { WebSocket } = await import('ws');
+  useWebSocketImplementation(WebSocket);
+  const pool = new SimplePool();
+  const P = K();
+  const b = memberBoot(P, memStorage(), { relays: [`ws://127.0.0.1:${PORT_DEAD}/relay`], pool });
+  await b.api._rebuildFamily(church.pub);
+  try { pool.destroy(); } catch {}
+  assert.equal(b.api.familyAnswered(church.pub), false,
+    'AN UNREACHABLE RELAY COUNTED AS THE CHURCH ANSWERING — an offline parent is told "no children linked … make one below"');
+  // CONTROL: the same rebuild against the real relay, authenticated as the parent, does answer
+  await join(P, [A]);
+  const b2 = memberBoot(P, memStorage(), { relays: [A.url] });
+  await b2.api._rebuildFamily(church.pub);
+  b2.close();
+  assert.equal(b2.api.familyAnswered(church.pub), true, 'CONTROL: a relay that genuinely answered did not mark the family known');
 });

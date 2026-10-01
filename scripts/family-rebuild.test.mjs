@@ -58,5 +58,5 @@ test('and it actually runs after an identity arrives', () => {
 });
 
 test('it gives up rather than hanging', () => {
-  assert.match(fn, /setTimeout\(finish, \d+\)/, 'a relay that never EOSEs would leave the promise open for ever');
+  assert.match(fn, /setTimeout\(\(\) => finish\(false\), \d+\)/, 'a relay that never EOSEs would leave the promise open for ever');
 });

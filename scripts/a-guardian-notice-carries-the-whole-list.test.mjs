@@ -36,10 +36,14 @@ const sealed = async (fn) => {
 };
 const MAP = { [C1]: [P.pub], [C2]: [Q.pub, P.pub], [C3]: [Q.pub] };
 
-test('a link notice carries the child, its name, the church — and the parent’s whole list', async () => {
-  const d = await sealed(api => api.notifyGuardian(P.pub, C1, 'Cleo', MAP));
+test('a link notice carries the child, its name, the church — and the parent’s whole list and closed requests', async () => {
+  // closed pairs: C3 declined/removed for P; C1 closed once but linked again now; C2's pair is ANOTHER parent's
+  const CLOSED = { [C3 + '|' + P.pub]: 1, [C1 + '|' + P.pub]: 1, [C2 + '|' + Q.pub]: 1 };
+  const d = await sealed(api => api.notifyGuardian(P.pub, C1, 'Cleo', MAP, CLOSED));
   assert.equal(d.child, C1); assert.equal(d.name, 'Cleo'); assert.equal(d.church, church.pub);
   assert.deepEqual(d.children, [C1, C2].sort(), 'the notice does not carry the parent’s whole list (or carries another parent’s child)');
+  assert.deepEqual(d.closed, [C3],
+    'the notice does not name exactly this parent’s closed requests (minus any child linked now) — the phone keeps showing "Waiting"');
 });
 
 test('without a map a link notice is exactly the legacy shape — nothing repurposed', async () => {
@@ -91,13 +95,15 @@ const baseScope = (guardians, Steward, extra = {}) => ({
   ...extra,
 });
 
-test('linkParent: the link notice carries the map it just wrote', async () => {
+test('linkParent: the link notice carries the map it just wrote, and the closed pairs', async () => {
   const { calls, Steward } = recorder();
-  const fn = run('const linkParent = async (childPub, parentPub) => {', 'linkParent', baseScope({ [C2]: [P.pub] }, Steward));
+  const scope = baseScope({ [C2]: [P.pub] }, Steward, { guardiansClosed: { [C3 + '|' + P.pub]: 5 } });
+  const fn = run('const linkParent = async (childPub, parentPub) => {', 'linkParent', scope);
   await fn(C1, P.pub);
   assert.equal(calls.linked.length, 1, 'linking sent no notice');
   assert.deepEqual(calls.linked[0][3], calls.guardians[0], 'THE LINK NOTICE WAS NOT GIVEN THE MAP AFTER THE CHANGE');
   assert.deepEqual(calls.linked[0][3][C1], [P.pub]);
+  assert.deepEqual(calls.linked[0][4], { [C3 + '|' + P.pub]: 5 }, 'the link notice was not given the church’s closed pairs');
 });
 
 test('unlinkParent: the removal notice carries the map it just wrote', async () => {
@@ -107,6 +113,17 @@ test('unlinkParent: the removal notice carries the map it just wrote', async () 
   assert.equal(calls.removed.length, 1, 'unlinking sent no notice');
   assert.deepEqual(calls.removed[0][2], calls.guardians[0], 'THE REMOVAL NOTICE WAS NOT GIVEN THE MAP AFTER THE CHANGE');
   assert.deepEqual(calls.removed[0][2][C1], [Q.pub], 'the map handed over still links the removed parent');
+  assert.ok((calls.removed[0][4] || {})[C1 + '|' + P.pub], 'the removal notice was not given the closed pairs it just wrote');
+});
+
+test('declineGuardian: declining a request sends the parent their list with that request closed', async () => {
+  const { calls, Steward } = recorder();
+  const fn = run('const declineGuardian = async (r) => {', 'declineGuardian', baseScope({ [C2]: [P.pub] }, Steward));
+  await fn({ child: C1, parent: P.pub });
+  assert.equal(calls.listed.length, 1, 'DECLINING TOLD THE PARENT’S PHONE NOTHING — it reads "Waiting for steward to confirm" for ever');
+  assert.equal(calls.listed[0][0], P.pub);
+  assert.deepEqual(calls.listed[0][1], { [C2]: [P.pub] }, 'the list notice was not given the (unchanged) map');
+  assert.ok((calls.listed[0][2] || {})[C1 + '|' + P.pub], 'the list notice was not given the closed pair just written');
 });
 
 test('approveGuardian: confirming a parent’s own request sends them their whole list', async () => {
@@ -133,6 +150,8 @@ test('toggleMinor: marking a parent as a child sends ONE notice naming every chi
   assert.deepEqual([...all].sort(), [C1, C2].sort(), 'the notice does not name every child they were unlinked from');
   assert.ok([C1, C2].includes(first));
   assert.deepEqual(map, calls.guardians[0], 'the notice was not given the map after the change');
+  const closed = calls.removed[0][4] || {};
+  assert.ok(closed[C1 + '|' + P.pub] && closed[C2 + '|' + P.pub], 'the notice was not given the closed pairs just written');
 });
 
 // ── reseatMember (vendor/steward.js) ─────────────────────────────────────────────────────────────────────────
@@ -153,22 +172,10 @@ test('reseatMember: a parent reconnected on a new key gets their whole list on i
   assert.ok(r.saved, 'CONTROL: the reconnect rewrote the guardians map');
   assert.deepEqual(r.listed.map(a => a[0]), [NEWP], 'the reconnected parent’s new key was not sent a list');
   assert.deepEqual(r.listed[0][1], r.saved, 'the list was not computed from the map just written');
+  assert.ok(r.listed[0][2] && typeof r.listed[0][2] === 'object', 'the list notice was not given the closed pairs');
 });
 test('reseatMember: a child reconnected on a new key — every parent of theirs gets the new list', async () => {
   const NEWC = K().pub;
   const r = await reseat({ guardians: { [C1]: [P.pub, Q.pub] }, minors: [C1] }, C1, NEWC);
   assert.deepEqual(r.listed.map(a => a[0]).sort(), [P.pub, Q.pub].sort(), 'a parent of the reconnected child was not told');
-});
-
-// ── the one-time pass's marker (the end-to-end pass is in a-removed-parent-never-sees-the-child-again) ─────────
-test('the one-time pass sets its marker only when every notice was accepted, and never for an empty map', async () => {
-  const { memStorage } = await import('./family-harness.mjs');
-  const storage = memStorage();
-  const refused = consoleBoot(church, { relays: [], storage });   // no relay: every publish is refused
-  assert.equal(await refused.api._guardListPassOnce(MAP), 0, 'fixture: a refused publish counted as sent');
-  assert.equal(refused.published.length, 2, 'the pass did not try every linked parent');
-  assert.equal([...storage._map.keys()].length, 0, 'THE PASS MARKED ITSELF DONE WHILE ITS NOTICES WERE REFUSED — those parents never get their list');
-  const empty = consoleBoot(church, { relays: [], storage });
-  await empty.api._guardListPassOnce({});
-  assert.equal([...storage._map.keys()].length, 0, 'AN EMPTY MAP MARKED THE PASS DONE — the real map, read a moment later, is never sent');
 });
