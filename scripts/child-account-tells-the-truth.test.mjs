@@ -244,6 +244,10 @@ function nextLaunch({ relay, children, parentPub }) {
     _loadRemovedChildren: () => [],
     // 2026-10-01: the rebuild also consults the session's unlinked set and can retract a request.
     _unlinkedNow: new Set(), _retractGuardReq: async () => true,
+    // 2026-10-01 (audit of 4f08ca4): the rebuild keeps the newest copy per request, by the relay's own order.
+    _isRetractedReq: (e) => (e.tags || []).some(t => t[0] === 'deleted') || !e.content,
+    _newerDoc: (a, b) => (a.created_at || 0) > (b.created_at || 0) || ((a.created_at || 0) === (b.created_at || 0) && String(a.id || '') < String(b.id || '')),
+    _publishAny: async () => true,
     _dtag: dOf,
     _loadChildren: () => children,
     _saveChildLink: (rec) => { children.push(rec); },

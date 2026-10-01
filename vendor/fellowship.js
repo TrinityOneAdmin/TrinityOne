@@ -6710,6 +6710,14 @@
   var FAMILY_REMOVED_KEY = "trinityone.family.removed";
   var _unlinkedNow = /* @__PURE__ */ new Set();
   var _retractedNow = /* @__PURE__ */ new Set();
+  var _retractedAt = /* @__PURE__ */ new Map();
+  var _assertedNow = /* @__PURE__ */ new Set();
+  function _newerDoc(a, b) {
+    const at = a.created_at || 0, bt = b.created_at || 0;
+    return at > bt || at === bt && String(a.id || "") < String(b.id || "");
+  }
+  var _noticeSeen = /* @__PURE__ */ new Map();
+  var _isRetractedReq = (e) => (e.tags || []).some((t) => t[0] === "deleted") || !e.content;
   function _loadChildren() {
     try {
       return JSON.parse(localStorage.getItem(FAMILY_KEY) || "[]") || [];
@@ -6734,6 +6742,7 @@
     if (link.viaSteward) {
       _unlinkedNow.delete(link.child);
       _retractedNow.delete(link.child);
+      _assertedNow.delete(link.child);
       const rm = _loadRemovedChildren();
       if (rm.includes(link.child)) {
         try {
@@ -6760,12 +6769,33 @@
       tags: [["d", "trinityone/guardreq:" + childPub], ["t", NET], ["p", cp], ["deleted", "1"]],
       content: ""
     }, sk);
+    _retractedAt.set(childPub, Math.max(_retractedAt.get(childPub) || 0, evt.created_at));
     try {
       await _publishAny(publishSetFor(cp), evt);
       _retractedNow.add(childPub);
+      _assertedNow.delete(childPub);
       return true;
     } catch (e) {
       console.warn("[fellowship] guardian request retraction failed \u2014 retried when the notice is next delivered", e);
+      return false;
+    }
+  }
+  async function _assertGuardReq(childPub, cp) {
+    if (!sk || !pub || !cp || !/^[0-9a-f]{64}$/i.test(String(childPub || "")) || childPub === pub) return false;
+    if (_assertedNow.has(childPub)) return true;
+    const created_at = Math.max(Math.floor(Date.now() / 1e3), (_retractedAt.get(childPub) || 0) + 1);
+    const evt = finalizeEvent2({
+      kind: 30078,
+      created_at,
+      tags: [["d", "trinityone/guardreq:" + childPub], ["t", NET], ["p", cp], ["p", childPub]],
+      content: JSON.stringify({ child: childPub, parent: pub })
+    }, sk);
+    try {
+      await _publishAny(publishSetFor(cp), evt);
+      _assertedNow.add(childPub);
+      return true;
+    } catch (e) {
+      console.warn("[fellowship] guardian request re-publish failed \u2014 retried when the notice is next delivered", e);
       return false;
     }
   }
@@ -6773,49 +6803,64 @@
     const cp = toPub(churchNpub) || churchNpub;
     if (!pub || !cp) return Promise.resolve(0);
     return new Promise((resolve) => {
-      let added = 0, done = false;
-      const legacy = new Set(_loadRemovedChildren());
-      const retracting = [];
-      const finish = () => {
+      let added = 0, done = false, sawAny = false;
+      const newest = /* @__PURE__ */ new Map();
+      const sawLive = /* @__PURE__ */ new Set();
+      const finish = (eosed) => {
         if (done) return;
         done = true;
         try {
           sub.close();
         } catch (e) {
         }
-        if (legacy.size) Promise.all(retracting).then((oks) => {
-          if (oks.every(Boolean)) {
-            try {
-              localStorage.removeItem(FAMILY_REMOVED_KEY);
-            } catch (e) {
-            }
+        const legacy = _loadRemovedChildren();
+        const retracting = [];
+        for (const [child, e] of newest) {
+          if (_isRetractedReq(e)) {
+            if (sawLive.has(child)) _publishAny(relaysForChurch(cp), e).catch(() => {
+            });
+            continue;
           }
-        }).catch(() => {
-        });
+          if (_unlinkedNow.has(child)) {
+            _retractGuardReq(child, cp);
+            continue;
+          }
+          if (legacy.includes(child)) {
+            retracting.push(_retractGuardReq(child, cp));
+            continue;
+          }
+          if (_loadChildren().some((c) => c && c.child === child)) continue;
+          _saveChildLink({ child, name: "", churchPub: cp, ts: e.created_at || 0 });
+          added++;
+        }
+        if (legacy.length && eosed && sawAny) {
+          Promise.all(retracting).then((oks) => {
+            if (oks.every(Boolean)) {
+              try {
+                localStorage.removeItem(FAMILY_REMOVED_KEY);
+              } catch (e) {
+              }
+            }
+          }).catch(() => {
+          });
+        }
         resolve(added);
       };
       const sub = pool.subscribeMany(relaysForChurch(cp), [{ kinds: [30078], authors: [pub] }], {
         onevent(e) {
+          if (!e || e.pubkey !== pub) return;
+          sawAny = true;
           const d = _dtag(e);
           if (!d.startsWith("trinityone/guardreq:")) return;
-          if ((e.tags || []).some((t) => t[0] === "deleted")) return;
           const child = d.slice("trinityone/guardreq:".length);
           if (!/^[0-9a-f]{64}$/i.test(child)) return;
-          if (_unlinkedNow.has(child)) {
-            _retractGuardReq(child, cp);
-            return;
-          }
-          if (legacy.has(child) && _loadRemovedChildren().includes(child)) {
-            retracting.push(_retractGuardReq(child, cp));
-            return;
-          }
-          if (_loadChildren().some((c) => c && c.child === child)) return;
-          _saveChildLink({ child, name: "", churchPub: cp, ts: e.created_at || 0 });
-          added++;
+          if (!_isRetractedReq(e)) sawLive.add(child);
+          const prev = newest.get(child);
+          if (!prev || _newerDoc(e, prev)) newest.set(child, e);
         },
-        oneose: finish
+        oneose: () => finish(true)
       });
-      setTimeout(finish, 9e3);
+      setTimeout(() => finish(false), 9e3);
     });
   }
   var _gkeys = {};
@@ -11680,6 +11725,9 @@
           } catch {
             return;
           }
+          const prevN = _noticeSeen.get(pub);
+          if (prevN && prevN.id !== e.id && _newerDoc(prevN, e)) return;
+          _noticeSeen.set(pub, { created_at: e.created_at || 0, id: String(e.id || "") });
           if (dec && dec.removed) {
             if (!/^[0-9a-f]{64}$/i.test(String(dec.removed))) return;
             _removeChildLink(dec.removed);
@@ -11692,8 +11740,12 @@
           }
           if (!dec || !dec.child || dec.child === pub) return;
           const ex = _loadChildren().find((c) => c && c.child === dec.child);
-          if (ex && ex.viaSteward) return;
+          if (ex && ex.viaSteward) {
+            _assertGuardReq(dec.child, e.pubkey);
+            return;
+          }
           _saveChildLink({ child: dec.child, name: dec.name || ex && ex.name || "", churchPub: dec.church || e.pubkey, ts: ex && ex.ts || e.created_at || Math.floor(Date.now() / 1e3), viaSteward: true });
+          _assertGuardReq(dec.child, e.pubkey);
           _needAuth = true;
           try {
             window.dispatchEvent(new CustomEvent("trinity-guardian-added", { detail: { child: dec.child } }));

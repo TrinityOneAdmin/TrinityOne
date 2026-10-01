@@ -35,7 +35,12 @@ test('it only ever adds — never removes a link we already hold', () => {
 
 test('it ignores anything that is not a real child key', () => {
   assert.match(fn, /\^\[0-9a-f\]\{64\}\$/i, 'a malformed d-tag would be stored as a child');
-  assert.match(fn, /some\(t => t\[0\] === 'deleted'\)/, 'a withdrawn request would be restored as a live child');
+  // 2026-10-01: the "withdrawn" test moved into _isRetractedReq, shared with the newest-copy choice; the rebuild
+  // must still consult it, and it must still honour the `deleted` tag. (Executable proof of both lives in
+  // scripts/an-unlinked-child-stays-gone-after-a-lock.test.mjs.)
+  assert.match(fn, /_isRetractedReq\(e\)/, 'a withdrawn request would be restored as a live child');
+  assert.match(SRC, /const _isRetractedReq = \(e\) => \(e\.tags \|\| \[\]\)\.some\(t => t\[0\] === 'deleted'\)/,
+    'the withdrawn-request test no longer honours the `deleted` tag');
 });
 
 test('and it actually runs after an identity arrives', () => {
@@ -50,5 +55,5 @@ test('and it actually runs after an identity arrives', () => {
 });
 
 test('it gives up rather than hanging', () => {
-  assert.match(fn, /setTimeout\(finish, \d+\)/, 'a relay that never EOSEs would leave the promise open for ever');
+  assert.match(fn, /setTimeout\(\(\) => finish\(false\), \d+\)/, 'a relay that never EOSEs would leave the promise open for ever');
 });

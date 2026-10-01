@@ -67,11 +67,13 @@ async function sub(who, id, filters, onEvent, onEose) {
   w.send(JSON.stringify(['REQ', id, ...filters]));
   return w;
 }
-async function parentsRequests() {
+// The parent's guardian requests as the relay serves them — by default to the parent itself; `as` / `filter`
+// ask the way the steward console does (authenticated as the church, `#p: [church]`).
+async function parentsRequests(as = parent, filter = { kinds: [30078], authors: [parent.pub] }) {
   const got = [];
   let w;
   await new Promise(async res => {
-    w = await sub(parent, 'q', [{ kinds: [30078], authors: [parent.pub] }], e => got.push(e), res);
+    w = await sub(as, 'q', [filter], e => got.push(e), res);
     setTimeout(res, 6000);
   });
   w.close();
@@ -123,7 +125,9 @@ function method(sig, name) {
 }
 
 // One "boot" of the member app: a fresh module scope (fresh in-memory sets) over the SHARED localStorage.
-function boot(storage) {
+// `opts` swaps in a scripted pool / publish / timer for the cases a single real relay cannot stage (two relays
+// disagreeing, a publish that fails once, a relay that never answers). Everything else is the shipped code.
+function boot(storage, opts = {}) {
   const sockets = [];
   const ctx = {
     sk: parent.sk, pub: parent.pub, NET: 'trinityone', GUARDNOTICE_D: 'trinityone/guardnotice:',
@@ -137,12 +141,13 @@ function boot(storage) {
     decrypt: nip44.decrypt, getConversationKey: nip44.getConversationKey,
     publishSetFor: () => [WS_URL], relaysForChurch: () => [WS_URL], churchRelays: () => [WS_URL],
     async _publishAny(_relays, evt) {
+      if (opts.publish) return opts.publish(evt);
       const w = await conn();
       const [ok, why] = await send(w, evt); w.close();
       if (!ok) throw new Error(why);
       return true;
     },
-    pool: {
+    pool: opts.pool || {
       subscribeMany(_r, filters, handlers) {
         let w = null, closed = false;
         const id = 's' + Math.random().toString(36).slice(2, 8);
@@ -157,13 +162,14 @@ function boot(storage) {
     window: { Fellowship: { myProfile: null }, dispatchEvent() {} },
     CustomEvent: class { constructor(t, o) { this.type = t; this.detail = o && o.detail; } },
     console: { warn() {}, log() {} },
-    setTimeout, clearTimeout, Promise, JSON, Math, Date, Set, Map, Object, Array, String, Number, Error,
+    setTimeout: opts.setTimeout || setTimeout, clearTimeout, Promise, JSON, Math, Date, Set, Map, Object, Array, String, Number, Error,
   };
   vm.createContext(ctx);
   vm.runInContext([
     topVar('FAMILY_KEY'), topVar('FAMILY_REMOVED_KEY'), topVar('_unlinkedNow'), topVar('_retractedNow'),
-    topLevel('_loadChildren'), topLevel('_loadRemovedChildren'), topLevel('_saveChildLink'),
-    topLevel('_removeChildLink'), topLevel('_retractGuardReq'), topLevel('_rebuildFamily'),
+    topVar('_retractedAt'), topVar('_assertedNow'), topVar('_noticeSeen'), topVar('_isRetractedReq'),
+    topLevel('_newerDoc'), topLevel('_loadChildren'), topLevel('_loadRemovedChildren'), topLevel('_saveChildLink'),
+    topLevel('_removeChildLink'), topLevel('_retractGuardReq'), topLevel('_assertGuardReq'), topLevel('_rebuildFamily'),
     'globalThis.API = {',
     method('subscribeGuardianNotices() {', 'subscribeGuardianNotices') + ',',
     method('clearCommunityCache() {', 'clearCommunityCache') + ',',
@@ -233,6 +239,13 @@ test('an unlinked child stays gone after a PIN lock — notice, lock wipe, cold-
   assert.ok(reqs[removedKid.pub] && !isLive(reqs[removedKid.pub]),
     'the parent’s guardian request for the unlinked child is still live on the relay');
   assert.ok(isLive(reqs[keptKid.pub]), 'the retraction reached a child it was not about');
+  // …and the console SEES the retraction: it subscribes `#p: [church]` (steward.src.js subscribeGuardianRequests),
+  // so a retraction without the church's p tag would replace the request where the console cannot read it.
+  // Audit of 4f08ca4, finding 4.
+  const consoleView = await parentsRequests(church, { kinds: [30078], '#p': [church.pub] });
+  assert.ok(consoleView[removedKid.pub] && !isLive(consoleView[removedKid.pub]),
+    'THE STEWARD CONSOLE CANNOT SEE THE RETRACTION — the retraction is not p-tagged to the church, so a ' +
+    '`#p: [church]` subscription never receives it');
 });
 
 test('a removal an OLDER build recorded on the phone is retracted on the relay, then forgotten', async () => {
@@ -255,4 +268,194 @@ test('a removal an OLDER build recorded on the phone is retracted on the relay, 
   await b2.api._rebuildFamily(church.pub);
   b2.close();
   assert.ok(!shown(b2.api).includes(legacyKid.pub), 'the legacy-removed child came back after a lock');
+});
+
+
+// ── AUDIT OF 4f08ca4 ──────────────────────────────────────────────────────────────────────────────────────────
+const sealToParent = (obj) => nip44.encrypt(JSON.stringify(obj), nip44.getConversationKey(church.sk, parent.pub));
+// What the console's notifyGuardian / notifyGuardianRemoved publish: church-signed, one slot per parent.
+const noticeEvt = (obj, created_at) => finalizeEvent({ kind: 30078, created_at,
+  tags: [['d', 'trinityone/guardnotice:' + parent.pub], ['t', 'trinityone'], ['p', parent.pub]], content: sealToParent(obj) }, church.sk);
+const reqEvt = (kid, created_at, live = true) => finalizeEvent({ kind: 30078, created_at,
+  tags: [['d', 'trinityone/guardreq:' + kid.pub], ['t', 'trinityone'], ['p', church.pub], live ? ['p', kid.pub] : ['deleted', '1']],
+  content: live ? JSON.stringify({ child: kid.pub, parent: parent.pub }) : '' }, parent.sk);
+const memberEvt = () => finalizeEvent({ kind: 30078, created_at: 1000,
+  tags: [['d', 'trinityone/member:' + church.pub], ['t', 'trinityone'], ['p', church.pub]], content: '{}' }, parent.sk);
+const dOf = (e) => ((e.tags || []).find(t => t[0] === 'd') || [])[1] || '';
+function isRetracted(e) { return e.tags.some(t => t[0] === 'deleted') || !e.content; }
+const retractionsOf = (evts, kid) => evts.filter(e => dOf(e) === 'trinityone/guardreq:' + kid.pub && isRetracted(e));
+const liveReqsOf = (evts, kid) => evts.filter(e => dOf(e) === 'trinityone/guardreq:' + kid.pub && !isRetracted(e));
+// A pool that hands the shipped code exactly the deliveries a test scripts — two relays disagreeing, or one
+// that never answers. Subscriptions are told apart by their filter: the notices ask for a `#d`.
+function scriptedPool() {
+  const subs = [];
+  return {
+    subscribeMany(_r, filters, handlers) { const s = { filters, handlers }; subs.push(s); return { close() {} }; },
+    notices: () => subs.filter(s => s.filters.some(f => f['#d'])).at(-1),
+    rebuild: () => subs.filter(s => !s.filters.some(f => f['#d'])).at(-1),
+  };
+}
+
+// FINDING 1, the exact sequence, end to end on the real relay.
+test('a child the church RE-LINKS survives a later notice about a sibling, and a lock', async () => {
+  const C = K(), D = K();
+  const storage = memStorage();
+  const w = await conn();
+  const [ok, why] = await send(w, reqEvt(C, now() - 30));   // the parent set C up: createChildAccount's request
+  assert.equal(ok, true, 'fixture: ' + why);
+  storage.setItem('trinityone.family', JSON.stringify([{ child: C.pub, name: 'Cara', churchPub: church.pub, ts: now() - 30 }]));
+
+  const b1 = boot(storage);
+  const unsub = b1.api.subscribeGuardianNotices();
+  await sleep(1500);   // the notice stored by the tests above is delivered first; let it settle
+  const base = now() + 5;   // later than every notice stored above — the slot is newest-wins
+  const say = async (obj, ts) => { const [k, y] = await send(w, noticeEvt(obj, ts)); assert.equal(k, true, 'fixture: the relay refused a notice: ' + y); };
+
+  // 1. the steward unlinks C
+  await say({ removed: C.pub, church: church.pub }, base);
+  assert.ok(await until(() => !shown(b1.api).includes(C.pub)), 'the removal of C never reached the phone');
+  assert.ok(await until(async () => !isLive((await parentsRequests())[C.pub])), 'the removal did not retract C’s request on the relay');
+  // 2. the steward re-links C
+  await say({ child: C.pub, name: 'Cara', church: church.pub }, base + 1);
+  assert.ok(await until(() => shown(b1.api).includes(C.pub)), 'the re-link of C never reached the phone');
+  assert.ok(await until(async () => isLive((await parentsRequests())[C.pub])),
+    'THE RE-LINK DID NOT PUT THE PARENT’S REQUEST FOR C BACK ON THE RELAY — the only record of C is now a notice ' +
+    'the next link will overwrite');
+  // 3. the steward links D to the same parent — the one-slot notice now names D only
+  await say({ child: D.pub, name: 'Dan', church: church.pub }, base + 2);
+  assert.ok(await until(() => shown(b1.api).includes(D.pub)), 'the link of D never reached the phone');
+  unsub(); b1.close(); w.close();
+
+  // 4. a lock, then a normal boot: notices + the rebuild, as the app runs them
+  b1.api.clearCommunityCache();
+  const b2 = boot(storage);
+  const unsub2 = b2.api.subscribeGuardianNotices();
+  await b2.api._rebuildFamily(church.pub);
+  await until(() => shown(b2.api).includes(D.pub));
+  unsub2(); b2.close();
+  const after = shown(b2.api);
+  assert.ok(after.includes(D.pub), 'CONTROL: D, named by the current notice, is missing — the rig is wrong');
+  assert.ok(after.includes(C.pub),
+    'A CHILD THE CHURCH RE-LINKED IS GONE AFTER A LOCK. The re-link notice was overwritten by a later link for ' +
+    'a sibling, and the parent’s own request for C was still the retraction. Family screen: ' + JSON.stringify(after));
+});
+
+// FINDING 9: only the newest notice counts — an older one from a second relay must not undo a newer one.
+test('an OLDER removal notice arriving after a newer re-link is ignored', async () => {
+  const E = K();
+  const storage = memStorage();
+  storage.setItem('trinityone.family', JSON.stringify([]));
+  const P = scriptedPool(), sent = [];
+  const b = boot(storage, { pool: P, publish: async (evt) => { sent.push(evt); return true; } });
+  b.api.subscribeGuardianNotices();
+  P.notices().handlers.onevent(noticeEvt({ child: E.pub, church: church.pub }, 2000));     // relay A: the re-link
+  P.notices().handlers.onevent(noticeEvt({ removed: E.pub, church: church.pub }, 1000));   // relay B, late: the old removal
+  await sleep(50);
+  assert.ok(shown(b.api).includes(E.pub), 'AN OLDER REMOVAL NOTICE UNDID A NEWER RE-LINK on the family screen');
+  assert.equal(retractionsOf(sent, E).length, 0,
+    'AN OLDER REMOVAL NOTICE RETRACTED THE PARENT’S REQUEST ON THE RELAY after a newer re-link — durably');
+  P.notices().handlers.onevent(noticeEvt({ removed: E.pub, church: church.pub }, 3000));
+  await sleep(50);
+  assert.ok(!shown(b.api).includes(E.pub), 'CONTROL: a genuinely NEWER removal was ignored');
+});
+
+// FINDING 2: the legacy list is deleted only on proof.
+test('the legacy removal list survives a rebuild that proved nothing — no answer, or an answer from nowhere', async () => {
+  const L = K();
+  const fast = (fn, ms) => setTimeout(fn, Math.min(ms, 30));
+  for (const [label, drive] of [
+    ['a relay that never answered (the rebuild timed out)', () => {}],
+    ['an EOSE that served none of this parent’s documents', (r) => r.handlers.oneose()],
+  ]) {
+    const storage = memStorage();
+    storage.setItem('trinityone.family.removed', JSON.stringify([L.pub]));
+    const P = scriptedPool();
+    const b = boot(storage, { pool: P, setTimeout: fast, publish: async () => true });
+    const done = b.api._rebuildFamily(church.pub);
+    drive(P.rebuild());
+    await done; await sleep(30);
+    assert.notEqual(storage.getItem('trinityone.family.removed'), null,
+      'THE LEGACY REMOVAL LIST WAS DELETED AFTER ' + label.toUpperCase() + ' — nothing was retracted, so the ' +
+      'request may still be live and the next lock brings the child back');
+  }
+  // CONTROL: a relay that answered with this parent's documents and no live request for L — proof of absence.
+  const storage = memStorage();
+  storage.setItem('trinityone.family.removed', JSON.stringify([L.pub]));
+  const P = scriptedPool();
+  const b = boot(storage, { pool: P, publish: async () => true });
+  const done = b.api._rebuildFamily(church.pub);
+  P.rebuild().handlers.onevent(memberEvt()); P.rebuild().handlers.oneose();
+  await done; await sleep(30);
+  assert.equal(storage.getItem('trinityone.family.removed'), null, 'CONTROL: a relay that answered did not let the legacy list go');
+});
+
+// FINDING 3: two relays, one missed the retraction.
+test('a stale live request on a relay that missed the retraction does not bring the child back', async () => {
+  const G = K();
+  for (const order of ['retraction first', 'stale copy first']) {
+    const storage = memStorage();
+    storage.setItem('trinityone.family', JSON.stringify([]));
+    const P = scriptedPool(), sent = [];
+    const b = boot(storage, { pool: P, publish: async (evt) => { sent.push(evt); return true; } });
+    const done = b.api._rebuildFamily(church.pub);
+    const retraction = reqEvt(G, 2000, false), stale = reqEvt(G, 1000, true);
+    const r = P.rebuild().handlers;
+    r.onevent(memberEvt());
+    for (const e of (order === 'retraction first' ? [retraction, stale] : [stale, retraction])) r.onevent(e);
+    r.oneose();
+    await done;
+    assert.ok(!shown(b.api).includes(G.pub),
+      'A STALE LIVE REQUEST FROM A SECOND RELAY BROUGHT AN UNLINKED CHILD BACK (' + order + ')');
+    assert.ok(sent.some(e => e.id === retraction.id),
+      'the relay that missed the retraction was never sent it again (' + order + ') — it will serve the stale copy for ever');
+  }
+});
+
+// FINDING 4, second line: a retraction that has not landed — the rebuild skips the child AND retries.
+test('a retraction that failed is retried by the rebuild, and the child is not re-added meanwhile', async () => {
+  const H = K();
+  const storage = memStorage();
+  storage.setItem('trinityone.family', JSON.stringify([{ child: H.pub, name: 'Hal', churchPub: church.pub, ts: 900 }]));
+  const P = scriptedPool(), sent = [];
+  let failures = 1;
+  const b = boot(storage, { pool: P, publish: async (evt) => { sent.push(evt); if (failures-- > 0) throw new Error('offline'); return true; } });
+  b.api.subscribeGuardianNotices();
+  P.notices().handlers.onevent(noticeEvt({ removed: H.pub, church: church.pub }, 5000));
+  await sleep(30);
+  assert.equal(retractionsOf(sent, H).length, 1, 'fixture: the notice did not attempt a retraction');
+  const done = b.api._rebuildFamily(church.pub);
+  const r = P.rebuild().handlers;
+  r.onevent(memberEvt()); r.onevent(reqEvt(H, 900, true)); r.oneose();
+  await done; await sleep(30);
+  assert.ok(!shown(b.api).includes(H.pub), 'THE REBUILD RE-ADDED A CHILD UNLINKED THIS SESSION whose retraction had not landed');
+  assert.equal(retractionsOf(sent, H).length, 2, 'the rebuild found the request still live and did not retry the retraction');
+});
+
+// FINDING 4, third line: a steward re-link in the same session clears "unlinked this session".
+test('a re-link in the same session lets the rebuild find the child again', async () => {
+  const J = K();
+  const storage = memStorage();
+  storage.setItem('trinityone.family', JSON.stringify([{ child: J.pub, name: 'Jo', churchPub: church.pub, ts: 900 }]));
+  const P = scriptedPool(), sent = [];
+  const b = boot(storage, { pool: P, publish: async (evt) => { sent.push(evt); return true; } });
+  b.api.subscribeGuardianNotices();
+  P.notices().handlers.onevent(noticeEvt({ removed: J.pub, church: church.pub }, 6000));
+  P.notices().handlers.onevent(noticeEvt({ child: J.pub, name: 'Jo', church: church.pub }, 6001));
+  await sleep(30);
+  const live = liveReqsOf(sent, J);
+  assert.equal(live.length, 1, 'the re-link did not re-publish the parent’s request for J');
+  // The re-link came in while the retraction's publish was still in flight (both handled back to back). The
+  // re-published request must still post-date the retraction, or the two tie on created_at and the relay
+  // keeps whichever id happens to sort lower — a coin toss over whether the child survives the next lock.
+  assert.ok(live[0].created_at > retractionsOf(sent, J)[0].created_at,
+    'the re-published request (' + live[0].created_at + ') does not post-date the retraction (' +
+    retractionsOf(sent, J)[0].created_at + ') — a tie on created_at is settled by id order, i.e. by chance');
+  b.api.clearCommunityCache();   // a mid-session lock: same process, same in-memory state
+  const done = b.api._rebuildFamily(church.pub);
+  const r = P.rebuild().handlers;
+  r.onevent(memberEvt()); r.onevent(retractionsOf(sent, J)[0]); r.onevent(live[0]); r.oneose();
+  await done; await sleep(30);
+  assert.ok(shown(b.api).includes(J.pub),
+    'A CHILD RE-LINKED THIS SESSION WAS SKIPPED BY THE REBUILD — the session still counts it as unlinked');
+  assert.equal(retractionsOf(sent, J).length, 1, 'the rebuild retracted a request for a child the church had re-linked');
 });
