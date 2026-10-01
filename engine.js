@@ -261,16 +261,33 @@ window.safeImgUrl = function (v) {
         (chapters[chap] = chapters[chap] || []).push({ v: vnum, html: inlineUSFM(vbuf) });
       vbuf = null; vnum = null;
     };
+    // A PSALM TITLE AND ITS FIRST VERSE ON ONE LINE — `\d A Psalm of David. \v 1 Lord, how…` or `\d \v 1 For the
+    // director of music…`. The \d branch below took the whole rest of the line as the title, so verse 1 was
+    // swallowed into it: its words landed at the start of verse 2, or (with no other \v) the chapter had no
+    // verses at all. Split such a line at its verse marker, so the title stays the title (and, as scripture,
+    // in verse 1's text — owner, 2026-10-01) and verse 1 keeps its words. Only \d lines: no shipped module has
+    // a \v mid-line anywhere else (surveyed 2026-10-01), and changing that is a separate question.
+    const lines = [];
     for(const line of text.split(/\r?\n/)){
+      const at = /^\\d\b/.test(line) ? line.search(/\\v\s/) : -1;
+      if(at > 0){ lines.push(line.slice(0, at)); lines.push(line.slice(at)); } else lines.push(line);
+    }
+    for(const line of lines){
       let m;
       if((m = line.match(/^\\c\s+(\d+)/))){ flush(); chap = +m[1]; pending = ""; continue; }
       if(chap == null) continue;
       if((m = line.match(/^\\v\s+(\S+) ?([\s\S]*)$/))){ flush(); vnum = m[1]; vbuf = pending + (m[2]||""); pending = ""; continue; }
       // \d — a Psalm title — IS scripture (owner, 2026-10-01): it renders like a heading, but carries a second
       // class so usfmText keeps its words in the verse text. \s, \ms, \mr are editorial headings and are not.
-      if((m = line.match(/^\\d\b ?([\s\S]*)$/))){ add('<br><span class="sec d">' + _balancedInline(inlineUSFM(m[1]||"")) + "</span>"); continue; }
+      // The trailing space is a word break for `text` when verse 1 follows on the same line (`\d Title \v 1 words`);
+      // after a block-level span it renders as nothing.
+      if((m = line.match(/^\\d\b ?([\s\S]*)$/))){ if((m[1]||"").trim()) add('<br><span class="sec d">' + _balancedInline(inlineUSFM(m[1]||"")) + "</span> "); continue; }
       if((m = line.match(/^\\(?:s\d?|ms\d?|mr)\b ?([\s\S]*)$/))){ add('<br><span class="sec">' + _balancedInline(inlineUSFM(m[1]||"")) + "</span>"); continue; }
       if((m = line.match(/^\\r\b ?([\s\S]*)$/))){ add('<br><span class="parref">' + _balancedInline(inlineUSFM(m[1]||"")) + "</span>"); continue; }
+      // \sp — a SPEAKER LABEL ("Beloved", "Lover" in the Song of Songs): an editorial label, not scripture. It
+      // fell to the catch-all below and was read into the verse as a word. Rendered like a heading (the reader's
+      // .sec rule), and dropped from `text` by usfmText with the headings.
+      if((m = line.match(/^\\sp\b ?([\s\S]*)$/))){ add('<br><span class="sec sp">' + _balancedInline(inlineUSFM(m[1]||"")) + "</span>"); continue; }
       if((m = line.match(/^\\(q\d?|qm\d?)\b ?([\s\S]*)$/))){ const lvl = (m[1].match(/\d/)||["1"])[0]; add("<br>" + (lvl >= "2" ? "&emsp;" : "") + (m[2]||"")); continue; }
       if((m = line.match(/^\\(?:p|m|pi\d?|mi|nb|pc|cls|li\d?|pmo|pm|pr)\b ?([\s\S]*)$/))){ add("<br><br>" + (m[1]||"")); continue; }
       if(/^\\b\b/.test(line)){ add("<br>"); continue; }
@@ -412,7 +429,8 @@ window.safeImgUrl = function (v) {
     // (_balancedInline), so the heading's closing tag is always found before any verse text — an unclosed
     // `\nd` in a heading can no longer carry the drop into the verse words after it, whatever follows the
     // heading (a \v, a \q, a \qc, a \p). Audit of 3fe46eb finding 7, and its re-audit.
-    const OPEN = /<span class="(?:sec|parref)">/g;
+    // `sec sp` is a speaker label (\sp) — a label, not scripture, dropped like a heading (2026-10-01).
+    const OPEN = /<span class="(?:sec|sec sp|parref)">/g;
     let m;
     while((m = OPEN.exec(s))){
       let depth = 1, i = m.index + m[0].length;

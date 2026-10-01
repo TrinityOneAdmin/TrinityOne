@@ -213,7 +213,42 @@ const PSALMS = [
   '\\q1',
   '\\v 1 O Lord, how my foes have increased!',
   '\\q2 How many rise up against me!',
+  // Audit of a3c7c9b (2026-10-01): a Psalm title and verse 1 on ONE line, both shapes.
+  '\\c 4',
+  '\\d \\v 1 For the director of music. With stringed instruments. A psalm of David.',
+  '\\q1',
+  '\\v 2 Answer me when I call to you,',
+  '\\c 5',
+  '\\d For the director of music. \\v 1 Listen to my words, Lord,',
+  '\\q2 consider my lament.',
+  // …a Psalm title whose character style is never closed (SB16), and a heading with two STRAY closers (SB15).
+  '\\c 10',
+  '\\d A song of \\nd David',
+  '\\q1',
+  '\\v 1 Why, Lord, do you stand far off?',
+  '\\c 11',
+  '\\q1',
+  '\\v 1 In the Lord I take refuge.',
+  '\\s1 Selah \\wj* Interlude\\nd*',
+  '\\q1 How can you say to me,',
 ].join('\n');
+// The Song of Songs, with speaker labels (\sp) as the World English Bible carries them.
+const SONG = [
+  '\\id SNG',
+  '\\c 1',
+  '\\sp Beloved',
+  '\\q1',
+  '\\v 2 Let him kiss me with the kisses of his mouth;',
+  '\\sp Lover',
+  '\\q1',
+  '\\v 3 Your oils have a pleasing fragrance.',
+].join('\n');
+// span / i balance over one verse's html — what inlineUSFM and parseUSFM emit
+function unbalanced(html) {
+  const st = [], bad = []; const re = /<(\/?)(span|i)\b[^>]*>/g; let t;
+  while ((t = re.exec(html))) { if (!t[1]) st.push(t[2]); else if (st.length && st.at(-1) === t[2]) st.pop(); else bad.push('stray </' + t[2] + '>'); }
+  return [...st.map(x => 'unclosed <' + x + '>'), ...bad];
+}
 
 test('a Psalm title stays in the verse text and can be searched; major-section headings still go', async () => {
   const Bible = realBible();
@@ -272,4 +307,44 @@ test('usfmText, handed a heading span that never closes, keeps the words after i
   const usfmText = new Function(fn('stripTags') + fn('usfmText') + '; return usfmText;')();
   const out = usfmText('<span class="sec">Heading <span class="nd">Lord</span> and the words of the verse');
   assert.match(out, /and the words of the verse$/, 'malformed heading markup took the verse’s words with it: ' + JSON.stringify(out));
+});
+
+// ── AUDIT OF a3c7c9b (2026-10-01) ────────────────────────────────────────────────────────────────────────────
+test('a Psalm title on the same line as verse 1: the title stays in verse 1, and verse 1 keeps its words', async () => {
+  const Bible = realBible();
+  await Bible.loadModuleBytes(new TextEncoder().encode(PSALMS), 'psa.usfm', { abbr: 'PST', name: 'Psalms Test', category: 'bibles' });
+  const ch4 = Object.fromEntries(Bible.getVerses(19, 4, 'PST').map(r => [String(r.v), r.text]));
+  assert.equal(ch4['1'], 'For the director of music. With stringed instruments. A psalm of David.',
+    'PSALM 4:1 (`\\d \\v 1 …` on one line) LOST ITS WORDS: ' + JSON.stringify(ch4));
+  assert.equal(ch4['2'], 'Answer me when I call to you,', 'Psalm 4:2 begins with the words of verse 1: ' + JSON.stringify(ch4['2']));
+  const ch5 = Bible.getVerses(19, 5, 'PST');
+  assert.ok(ch5.length, 'PSALM 5 HAS NO VERSES — `\\d Title \\v 1 words` on one line swallowed the chapter');
+  assert.equal(ch5[0].text, 'For the director of music. Listen to my words, Lord, consider my lament.',
+    'Psalm 5:1 does not read as its title and its words: ' + JSON.stringify(ch5[0].text));
+});
+
+test('a speaker label (\\sp) is a label, not scripture: shown as a heading, left out of the verse and search', async () => {
+  const Bible = realBible();
+  await Bible.loadModuleBytes(new TextEncoder().encode(SONG), 'sng.usfm', { abbr: 'SNT', name: 'Song Test', category: 'bibles' });
+  const rows = Object.fromEntries(Bible.getVerses(22, 1, 'SNT').map(r => [String(r.v), r]));
+  assert.equal(rows['2'].text, 'Let him kiss me with the kisses of his mouth;', 'a speaker label leaked into the verse: ' + JSON.stringify(rows['2'].text));
+  assert.equal(rows['3'].text.includes('Lover'), false, 'a speaker label leaked into the verse after it: ' + JSON.stringify(rows['3'].text));
+  assert.match(rows['2'].html, /<span class="sec sp">Beloved<\/span>/, 'the reader no longer shows the speaker label');
+  assert.equal(Bible.search('Beloved', 10, 'SNT').length, 0, 'searching a speaker label finds a verse');
+});
+
+test('a heading’s markup is balanced inside it — a stray closer is dropped (SB15), an unclosed title is closed (SB16)', async () => {
+  const Bible = realBible();
+  await Bible.loadModuleBytes(new TextEncoder().encode(PSALMS), 'psa.usfm', { abbr: 'PST', name: 'Psalms Test', category: 'bibles' });
+  const v111 = Bible.getVerses(19, 11, 'PST').find(r => String(r.v) === '1');
+  assert.equal(v111.text, 'In the Lord I take refuge. How can you say to me,',
+    'A HEADING WITH A STRAY CLOSER LEAKED INTO THE VERSE: ' + JSON.stringify(v111.text));
+  const v101 = Bible.getVerses(19, 10, 'PST').find(r => String(r.v) === '1');
+  assert.equal(v101.text, 'A song of David Why, Lord, do you stand far off?', 'Psalm 10:1 does not read as its title and its words');
+  // every verse the reader renders is balanced, so no heading span stays open over the words after it
+  for (const ch of [1, 2, 3, 4, 5, 10, 11]) {
+    for (const r of Bible.getVerses(19, ch, 'PST')) {
+      assert.deepEqual(unbalanced(r.html), [], `Psalm ${ch}:${r.v}'s html is unbalanced — the reader styles the verse as a heading: ${r.html}`);
+    }
+  }
 });
