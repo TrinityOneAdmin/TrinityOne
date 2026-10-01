@@ -19,9 +19,17 @@
 //
 // What each row would catch:
 //   · deps back to `[]` in KeyDistributor → back in A, the name key never returns and the new member is never
-//     keyed (row 3), and A's care key never returns (row 3);
+//     keyed (the "back in church A" row), and A's care key never returns;
 //   · the care reset removed from setActiveIdentity → in B the console still holds A's care key and the need
-//     in B is published sealed with it (row 2).
+//     in B is published sealed with it (the "in church B" row);
+//   · AND THE AUDIT OF e6a2e02 (2026-10-01): nostr-tools fires `oneose` when a subscription is CLOSED, so
+//     re-entering the SAME church (setActiveIdentity twice a few ms apart, or tapping the row already active in
+//     the header switcher) marked it "looked, no key" and the console minted a fresh name ring over the
+//     church's real one, and left itself sealing care with a key the relay did not hold. The "same-church
+//     re-entry" row loops the timings the audit measured and requires that NOTHING is republished and the
+//     console's keys are the relay's; the "back in church A" row requires the SAME keys, not merely some keys;
+//     the "reload into B" row requires a console restored into B to hold none of A's rings.
+// Each engine-side guard is also pinned on its own in key-reads-settle-only-for-the-church-they-asked-about.
 //
 // Skips itself when chromium is unavailable, like scripts/app-boots.test.mjs.
 import { test, before, after } from 'node:test';
@@ -33,6 +41,7 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { WebSocket } from 'ws';
 import { finalizeEvent, nip19, nip44 } from 'nostr-tools';
+import { privateKeyFromSeedWords } from 'nostr-tools/nip06';
 import * as H from './relay-network-harness.mjs';
 
 const CHROME = ['/usr/bin/chromium-browser', '/usr/bin/chromium', '/usr/bin/google-chrome'].find(p => existsSync(p));
@@ -156,7 +165,20 @@ after(async () => {
 });
 
 const SKIP = !CHROME ? 'no chromium' : false;
-let ctA = '', careBefore = null, nameBefore = null;
+let ctA = '', careBefore = null, nameBefore = null, ASK = null, aName0 = null, aCare0 = null;
+// CHURCH A'S OWN ENVELOPES, read from the box's sqlite and opened with church A's key — the relay's truth.
+const ringOf = (d) => {
+  const env = envelopeOf(d + churchA); if (!env) return null;
+  const w = JSON.parse(env.e.content).keys[churchA]; if (!w) return null;
+  const pl = nip44.v2.decrypt(w, nip44.v2.utils.getConversationKey(ASK, env.pubkey));
+  let r; try { r = JSON.parse(pl); } catch { r = [pl]; } return { id: env.id, ring: Array.isArray(r) ? r : [r] };
+};
+// Does what the console seals with open under the relay's ring? (careSeal = the console's current care key)
+const careSealOpensWithRelayRing = async () => {
+  const ct = await evalIn(`window.Steward.careSeal({ probe: 'ring' })`);
+  if (!ct) return 'no-seal';
+  return ringOf(CAREKEY_D).ring.some(k => { try { nip44.v2.decrypt(ct, unhex(k)); return true; } catch { return false; } }) ? 'relay-ring' : 'NOT-THE-RELAY-RING';
+};
 
 test('CONTROL: in church A the console holds A\'s keys and opens a care need', { skip: SKIP, timeout: 120000 }, async () => {
   assert.equal(await evalIn(`window.Steward.activePub`), churchA);
@@ -166,6 +188,39 @@ test('CONTROL: in church A the console holds A\'s keys and opens a care need', {
   assert.ok(ctA, 'no care seal in A');
   careBefore = envelopeOf(CAREKEY_D + B.pub); nameBefore = envelopeOf(NAMEKEY_D + B.pub);
   assert.ok(careBefore && nameBefore, 'church B\'s envelopes are not on the box');
+  ASK = privateKeyFromSeedWords(await evalIn('window.Steward.exportMnemonic()'));
+  aName0 = ringOf(NAMEKEY_D); aCare0 = ringOf(CAREKEY_D);
+  assert.ok(aName0 && aName0.ring.length && aCare0 && aCare0.ring.length, 'church A\'s own name and care envelopes are not on the box');
+  assert.equal(await careSealOpensWithRelayRing(), 'relay-ring', 'CONTROL: the console\'s care key is not the relay\'s');
+});
+
+// THE AUDIT'S REPRODUCTION, at the timings it measured (8 of 10 minted before this fix). Church A has no admitted
+// members here, which is the case it found: an empty ring, no recipient map, and a gate that only asked "is this
+// still the current church?".
+test('same-church re-entry (double setActiveIdentity, 0–50 ms apart, and a tap on the active row) republishes nothing and keeps the relay\'s keys', { skip: SKIP, timeout: 240000 }, async () => {
+  const runs = [];
+  for (const gap of [0, 1, 2, 3, 5, 8, 13, 20, 35, 50]) {
+    await evalIn(`(async () => { const S = window.Steward, A = S.activePub; S.setActiveIdentity(A); await new Promise(r => setTimeout(r, ${gap})); S.setActiveIdentity(A); return 1; })()`);
+    await sleep(3000);
+    runs.push({ gap, name: ringOf(NAMEKEY_D), care: ringOf(CAREKEY_D), seal: await careSealOpensWithRelayRing(), nameReady: await evalIn('window.Steward.nameKeyReady()') });
+  }
+  // the real header switcher: open it and tap the row for the church we are already on
+  await switchTo('Your church', 'Church A Keyswitch');
+  await sleep(3000);
+  runs.push({ gap: 'header tap', name: ringOf(NAMEKEY_D), care: ringOf(CAREKEY_D), seal: await careSealOpensWithRelayRing(), nameReady: await evalIn('window.Steward.nameKeyReady()') });
+  for (const r of runs) {
+    assert.equal(r.name.id, aName0.id, `gap ${r.gap}: A NEW NAME-KEY ENVELOPE WAS PUBLISHED FOR CHURCH A — a fresh ring over the church's real one`);
+    assert.deepEqual(r.name.ring, aName0.ring, `gap ${r.gap}: church A's name ring changed`);
+    assert.equal(r.care.id, aCare0.id, `gap ${r.gap}: a new care-key envelope was published for church A`);
+    assert.notEqual(r.seal, 'NOT-THE-RELAY-RING', `gap ${r.gap}: THE CONSOLE SEALS CARE WITH A KEY THAT IS NOT IN THE RELAY'S CARE ENVELOPE — nobody else can open those needs`);
+  }
+  await waitFor(`window.Steward.nameKeyReady() && !!window.Steward.careSeal({ a: 1 })`, 30000, 'church A\'s keys after the re-entries');
+  assert.equal(await careSealOpensWithRelayRing(), 'relay-ring');
+  const need = await publishNeed('After the re-entries');
+  assert.ok(need.ok, 'a care need could not be opened after the re-entries: ' + need.err);
+  const enc = JSON.parse(envelopeOf(NEED_D + need.id).e.content).enc;
+  assert.ok(aCare0.ring.some(k => { try { nip44.v2.decrypt(enc, unhex(k)); return true; } catch { return false; } }),
+    'THE CARE NEED WAS SEALED WITH A KEY NOT IN CHURCH A\'S CARE ENVELOPE');
 });
 
 test('in church B (switched through the header) a care need is NOT sealed with church A\'s key, and B\'s keys are not overwritten', { skip: SKIP, timeout: 120000 }, async () => {
@@ -191,6 +246,25 @@ test('in church B (switched through the header) a care need is NOT sealed with c
   assert.equal(envelopeOf(NAMEKEY_D + B.pub).id, nameBefore.id, 'THE CONSOLE REPLACED CHURCH B\'S NAME KEY ENVELOPE — every sealed name in B is now unreadable');
 });
 
+// THE SUSPECTED LEAK AFTER A RELOAD. A console reloaded while acting for B is restored into B early in boot
+// (subscribeStewardedChurches), and church A's key subscriptions may already be open by then. B's envelopes are
+// wrapped to B only, so a console holding ANY ring in B can only have taken church A's.
+test('reload into church B: the restored console holds none of church A\'s rings', { skip: SKIP, timeout: 240000 }, async () => {
+  assert.equal(await evalIn(`window.Steward.actingChurch`), B.pub, 'CONTROL: the console is acting for church B before the reload');
+  await evalIn(`(() => { location.reload(); return 'ok'; })()`);
+  await sleep(3000);
+  await waitFor(`[...document.querySelectorAll('input')].some(x => (x.placeholder||'').includes('Your PIN or passphrase'))`, 90000, 'the unlock screen');
+  assert.equal(await evalIn(typePh('Your PIN or passphrase', PIN)), 'ok');
+  await press('/^Unlock/');
+  await waitFor(`window.Steward && window.Steward.actingChurch === ${JSON.stringify(B.pub)}`, 60000, 'the console restored into church B');
+  await sleep(10000);
+  assert.equal(await evalIn(`window.Steward.nameKeyReady()`), false, 'AFTER A RELOAD INTO B THE CONSOLE HOLDS A NAME RING — B\'s is wrapped to B only, so it is church A\'s');
+  assert.equal(await evalIn(`window.Steward.careSeal({ a: 1 })`), null, 'after a reload into B the console holds a care key — B\'s is wrapped to B only, so it is church A\'s');
+  assert.equal(await evalIn(`window.Steward.careOpen(${JSON.stringify(ctA)}) === null`), true, 'after a reload into B the console opens a record sealed in church A');
+  assert.equal(envelopeOf(CAREKEY_D + B.pub).id, careBefore.id, 'church B\'s care envelope was replaced');
+  assert.equal(envelopeOf(NAMEKEY_D + B.pub).id, nameBefore.id, 'church B\'s name envelope was replaced');
+});
+
 test('back in church A the keys return: a care need opens, and a member who joins now is keyed and named on screen', { skip: SKIP, timeout: 180000 }, async () => {
   // (the church row is labelled with the ACTIVE identity's profile name while delegated, so match its subtitle)
   await switchTo('Your church', '');
@@ -199,6 +273,13 @@ test('back in church A the keys return: a care need opens, and a member who join
   await waitFor(`!!window.Steward.careSeal({ a: 1 }) && window.Steward.careOpen(${JSON.stringify(ctA)}) !== null`, 30000, 'church A\'s care key back on the console');
   const r = await publishNeed('Back in A');
   assert.ok(r.ok, 'church A cannot open a care need after switching back: ' + r.err);
+  // THE SAME KEYS, NOT MERELY SOME KEYS. A fresh mint would also make nameKeyReady() true and careSeal() work.
+  await sleep(3000);
+  assert.equal(ringOf(NAMEKEY_D).id, aName0.id, 'A NEW NAME-KEY ENVELOPE WAS PUBLISHED FOR CHURCH A during the switch to B and back');
+  assert.equal(ringOf(CAREKEY_D).id, aCare0.id, 'a new care-key envelope was published for church A during the switch to B and back');
+  assert.equal(await careSealOpensWithRelayRing(), 'relay-ring', 'back in A the console seals care with a key that is not church A\'s');
+  { const enc = JSON.parse(envelopeOf(NEED_D + r.id).e.content).enc;
+    assert.ok(aCare0.ring.some(k => { try { nip44.v2.decrypt(enc, unhex(k)); return true; } catch { return false; } }), 'the need opened back in A is not sealed with church A\'s care key'); }
 
   // A NEW MEMBER JOINS NOW. The console must wrap A's name key to them (read back from the box), they seal
   // their name under it, and the Members screen shows it.
@@ -208,6 +289,7 @@ test('back in church A the keys return: a care need opens, and a member who join
   while (Date.now() - t0 < 60000) { env = envelopeOf(NAMEKEY_D + churchA); if (env && JSON.parse(env.e.content).keys[M.pub]) break; await sleep(500); }
   assert.ok(env && JSON.parse(env.e.content).keys[M.pub], 'A MEMBER WHO JOINED AFTER THE SWITCH WAS NEVER GIVEN THE NAME KEY — their name can never be sealed');
   const ring = JSON.parse(nip44.v2.decrypt(JSON.parse(env.e.content).keys[M.pub], nip44.v2.utils.getConversationKey(M.sk, env.pubkey)));
+  assert.deepEqual(ring, aName0.ring, 'the member was given a DIFFERENT name ring from the one church A had before the switches — a fresh mint, and every name sealed before it stops opening');
   const NAME = 'Miriam Okafor';
   await H.publishAll(relay, [finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', NAME_D + churchA], ['t', 'trinityone'], ['church', churchA]], content: nip44.v2.encrypt(JSON.stringify({ name: NAME }), unhex(ring[0])) }, M.sk)]);
   await press('/^Members$/', 'the Members section');

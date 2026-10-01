@@ -41,7 +41,7 @@ import { join } from 'node:path';
 import { generateSecretKey, getPublicKey } from 'nostr-tools/pure';
 import { v2 as nip44 } from 'nostr-tools/nip44';
 import { miniReact, find } from './render-jsx-screen.mjs';
-import { fnBody } from './test-slice.mjs';
+import { fnBody, liftKeyRead } from './test-slice.mjs';
 
 const ROOT = new URL('../', import.meta.url).pathname;
 const BUNDLE = readFileSync(join(ROOT, 'vendor/steward.js'), 'utf8');
@@ -85,7 +85,7 @@ function ownerEngine() {
   const scope = {
     actingChurch: '', pub: churchPub, sk: churchSk,
     _mediaKeyHex: KEY, _mediaKeyRing: [KEY], _mediaKeyDocKeys: null, _mediaKeyPushRefused: null,
-    _mediaKeyChecked: true, _localBlocked: new Set(), _sealEachFailed: [],
+    _mediaKeyChecked: true, _localBlocked: new Set(), _sealEachFailed: [], _mediaKeyVer: 0,
     _isRelayAuthed: () => true,
     MEDIAKEY_D: 'trinityone/mediakey:', NET: 'trinityone',
     now: () => 1758800000,
@@ -149,7 +149,7 @@ function consoleReads(envelope, mySk) {
   let handlers = null;
   const scope = {
     _mediaKeyDocKeys: null, _mediaKeyPushRefused: 'a-previous-refusal', _mediaKeyRing: [], _mediaKeyHex: null,
-    _mediaKeyChecked: false,
+    _mediaKeyChecked: false, _mediaKeyVer: 0, actingChurch: '', _isRelayAuthed: () => true,
     _myOwnPub: () => myPub, pub: churchPub, sk: mySk,
     MEDIAKEY_D: 'trinityone/mediakey:',
     relays: () => ['wss://relay.example'],
@@ -158,7 +158,7 @@ function consoleReads(envelope, mySk) {
     getConversationKey: (a, b) => nip44.utils.getConversationKey(a, b),
   };
   const body = fnBody(BUNDLE, '    subscribeMediaKey() {', 'subscribeMediaKey in the shipped bundle');
-  const api = new Function('scope', `with (scope) { return { ${body} }; }`)(scoped(scope));
+  const api = new Function('scope', `with (scope) { ${liftKeyRead(BUNDLE)}\n return { ${body} }; }`)(scoped(scope));
   api.subscribeMediaKey();
   assert.ok(handlers, 're-anchor: subscribeMediaKey no longer subscribes');
   handlers.onevent({ content: JSON.stringify(envelope), pubkey: churchPub, tags: [['d', 'trinityone/mediakey:' + churchPub]] });

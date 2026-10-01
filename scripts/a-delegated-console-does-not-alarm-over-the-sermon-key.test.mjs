@@ -77,7 +77,7 @@ function engine({ actingChurch, mediaKeyHex = KEY }) {
     _mediaKeyPushRefused: null,
     _mediaKeyChecked: true,
     _localBlocked: new Set(),
-    _isRelayAuthed: () => true, _fitKeyRing, console,
+    _isRelayAuthed: () => true, _fitKeyRing, console, _mediaKeyVer: 0,
     MEDIAKEY_D: 'trinityone/mediakey:',
     NET: 'trinityone',
     now: () => 1758800000,

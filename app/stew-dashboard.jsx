@@ -816,6 +816,15 @@ function KeyDistributor() {
   const _kdIdv = window.useStewardIdv ? window.useStewardIdv() : 0;
   const _kdConn = window.useStewardConn ? window.useStewardConn() : 0;
   const _kdWho = (window.Steward && (window.Steward.actingChurch || window.Steward.activePub)) || '';
+  // MINT ON A SIGNAL. The engine says when a key read has settled (`steward-keys-read`: a trustworthy, current
+  // "no envelope here"), and the enrolment effect below re-runs on it. Before, nothing re-ran that effect when
+  // the answer arrived, so a church whose read settled after the roster had stopped changing never minted.
+  const [keysReadTick, setKeysReadTick] = React.useState(0);
+  React.useEffect(() => {
+    const f = () => setKeysReadTick(t => t + 1);
+    window.addEventListener('steward-keys-read', f);
+    return () => window.removeEventListener('steward-keys-read', f);
+  }, []);
   // #17: load the church media key whenever the console is open (not only on the Sermons tab) so we can re-key joiners
   React.useEffect(() => (window.Steward && window.Steward.subscribeMediaKey ? window.Steward.subscribeMediaKey() : undefined), [_kdIdv, _kdConn, _kdWho]);
   // the church CARE key — same envelope, sealing the identifying half of care needs (H3)
@@ -952,7 +961,7 @@ function KeyDistributor() {
   // the key waited for some unrelated change to groups or members. That is the 8-minute gap measured on the
   // relay between the first calendar document and the namekey: envelope, and post-fix it is 8 minutes of the
   // calendar refusing to save rather than 8 minutes of writing in the clear.
-  }, [groups, members, stewardRoster, blockedList, unlockTick, church.name]);   // unlockTick: re-run the whole enrolment when the key comes back after a lock
+  }, [groups, members, stewardRoster, blockedList, unlockTick, church.name, keysReadTick]);   // unlockTick: re-run the whole enrolment when the key comes back after a lock; keysReadTick: when a key read settles
   // the media key loads ASYNC (subscribeMediaKey) and may arrive AFTER the roster settles, so the effect above can run
   // before we hold the key. Re-check a couple of times on mount — ensureMediaKeyForMembers is idempotent + cheap.
   React.useEffect(() => {

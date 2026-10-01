@@ -374,3 +374,14 @@ export function liftFetchMyClearance(bundle) {
   assert.ok(m, 'could not lift _fetchMyClearance from the bundle — re-anchor this helper, do not delete it');
   return m[0];
 }
+
+// "HAS THIS CONSOLE ACTUALLY READ THIS CHURCH'S KEY ENVELOPE?" — the key-read guards of vendor/steward.js
+// (`_keyReadEpoch` … `_keysReadSignal`), lifted as source text for harnesses that run subscribeCareKey /
+// subscribeNameKey / subscribeMediaKey out of the shipped bundle. Their `oneose` consults these to decide
+// whether an end-of-stored-events may open a mint gate; a stub would answer that question for the test.
+// Free variables the harness must provide: `actingChurch`, `pub`, `_isRelayAuthed`.
+export function liftKeyRead(bundle) {
+  const m = /\n  var _keyReadEpoch = 0;[\s\S]*?\n  function _keysReadSignal\(kind\) \{[\s\S]*?\n  \}/.exec(bundle);
+  assert.ok(m, 'could not lift the key-read guards from the bundle — re-anchor this helper, do not delete it');
+  return m[0];
+}

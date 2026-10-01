@@ -37,7 +37,7 @@ import { readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fnBody } from './test-slice.mjs';
+import { fnBody, liftKeyRead } from './test-slice.mjs';
 import { miniReact, texts, button, find, loadScreen, reads } from './render-jsx-screen.mjs';
 
 const ROOT = new URL('../', import.meta.url).pathname;
@@ -338,7 +338,8 @@ test('ENCRYPTION: a delegated console recovers the key from ITS OWN entry in the
     // Read them out of the bundle instead of hard-coding, because the numeric suffixes move on every build.
     [DEC]: (payload, ck) => (payload.startsWith(ck.replace('ck:', '') + '/') ? payload.split('/')[1] : (() => { throw new Error('wrong recipient'); })()),
     [CK]: (_sk, other) => 'ck:' + other,
-  }, [], `let _mediaKeyHex = null; let _mediaKeyRing = []; let _mediaKeyDocKeys = null; let _mediaKeyPushRefused = 'x'; let _mediaKeyChecked = false;
+  }, [], `let _mediaKeyHex = null; let _mediaKeyRing = []; let _mediaKeyDocKeys = null; let _mediaKeyPushRefused = 'x'; let _mediaKeyChecked = false; let _mediaKeyVer = 0;
+     ${liftKeyRead(BUNDLE)}
      ${fnBody(BUNDLE, 'function _myOwnPub() {', '_myOwnPub')}
      globalThis['${peek}'] = () => _mediaKeyHex;`);
   r.fn();
@@ -1242,7 +1243,7 @@ async function runMediaKey(answer, calls = 3, memberPubs = ['m1', 'm2'], saidNo 
   // this function ASSIGNS to _mediaKeyDocKeys and _mediaKeyPushRefused — a const would throw TypeError from
   // inside the lifted code, which an assertion about "it stopped publishing" would happily accept.
   const decls = 'let _mediaKeyHex = "aa"; let _mediaKeyRing = ["aa"]; let _mediaKeyDocKeys = null; '
-    + 'let _mediaKeyPushRefused = null;\n'
+    + 'let _mediaKeyPushRefused = null; let _mediaKeyVer = 0;\n'
     + `globalThis.${peek} = () => ({ docKeys: _mediaKeyDocKeys, refused: _mediaKeyPushRefused });\n`;
   const lifted = await runLifted('ensureMediaKeyForMembers(memberPubs, stewardPubs)', 'ensureMediaKeyForMembers', answer, {
     publish: async (evt, opts) => {
@@ -1384,7 +1385,7 @@ async function runMediaKeyForReal(answers, calls = 3, memberPubs = ['m1', 'm2'])
   // Mutable module state the lifted function ASSIGNS to must be `let`, or a const throws TypeError from
   // inside the lifted code and "it stopped publishing" would read as a pass.
   const decls = 'let _mediaKeyHex = "aa"; let _mediaKeyRing = ["aa"]; let _mediaKeyDocKeys = null; '
-    + 'let _mediaKeyPushRefused = null; let _mediaKeyChecked = false;';
+    + 'let _mediaKeyPushRefused = null; let _mediaKeyChecked = false; let _mediaKeyVer = 0;\n' + liftKeyRead(BUNDLE);
   const pubSrc = fnBody(BUNDLE, '  async function publish(evt, opts) {', 'publish in the shipped bundle');
   const family = [
     fnBody(BUNDLE, '    async ensureMediaKeyForMembers(memberPubs, stewardPubs) {', 'ensureMediaKeyForMembers in the shipped bundle'),

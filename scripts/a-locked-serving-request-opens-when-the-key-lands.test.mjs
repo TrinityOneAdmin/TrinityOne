@@ -24,7 +24,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { v2 as nip44 } from 'nostr-tools/nip44';
 import { generateSecretKey, getPublicKey } from 'nostr-tools/pure';
-import { fnBody, stmt } from './test-slice.mjs';
+import { fnBody, stmt, liftKeyRead } from './test-slice.mjs';
 
 const FELLOW = readFileSync(new URL('../vendor/fellowship.js', import.meta.url), 'utf8');
 const STEWARD = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
@@ -172,6 +172,7 @@ function console_() {
     ${fn(STEWARD, 'function _nameKeyRingChanged()', 'steward.js')}
     ${fn(STEWARD, 'function _nameKeyReady()', 'steward.js')}
     ${fn(STEWARD, 'function _openChurchDoc(content)', 'steward.js')}
+    ${liftKeyRead(STEWARD)}
     const S = { ${fn(STEWARD, 'subscribeRequests(onRequests)', 'steward.js')},
                 ${fn(STEWARD, 'subscribeRequestReplies(onReplies)', 'steward.js')},
                 ${fn(STEWARD, 'async _ensureNameKeyLocked(memberPubs, stewardPubs, opts = {})', 'steward.js')},

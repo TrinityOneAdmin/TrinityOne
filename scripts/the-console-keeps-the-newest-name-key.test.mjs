@@ -17,7 +17,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { v2 as nip44 } from 'nostr-tools/nip44';
 import { generateSecretKey, getPublicKey } from 'nostr-tools/pure';
-import { fnBody, stmt } from './test-slice.mjs';
+import { fnBody, stmt, liftKeyRead } from './test-slice.mjs';
 
 const STEWARD = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
 const churchSk = generateSecretKey(), CP = getPublicKey(churchSk);
@@ -54,6 +54,7 @@ function console_() {
     ${st('var _nameKeyListeners')}
     ${fn('function _nameKeyRingChanged()')}
     ${fn('function _nameKeyReady()')}
+    ${liftKeyRead(STEWARD)}
     const S = { ${fn('async _ensureNameKeyLocked(memberPubs, stewardPubs, opts = {})')}, ${fn('subscribeNameKey()')} };
     return { S, ring: () => _nameKeyRing };`;
   const api = new Function(...names, body)(...names.map(n => world[n]));

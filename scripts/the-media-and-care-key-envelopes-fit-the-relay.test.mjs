@@ -17,7 +17,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { nip44, generateSecretKey, getPublicKey } from 'nostr-tools';
-import { fnBody } from './test-slice.mjs';
+import { fnBody, stmt } from './test-slice.mjs';
 
 const ROOT = new URL('../', import.meta.url).pathname;
 const BUNDLE = readFileSync(join(ROOT, 'vendor/steward.js'), 'utf8');
@@ -43,9 +43,12 @@ function engine({ media = {}, care = {} } = {}) {
     _mediaKeyDocKeys: {}, _mediaKeyPushRefused: null,
     _careKeyHex: care.ring ? care.ring[0] : null, _careKeyRing: care.ring ? care.ring.slice() : [],
     _careKeyDocKeys: care.ring ? {} : null, _careKeyRev: 3, _careKeyChecked: true, _careKeyPending: [],
+    _mediaKeyVer: 0, _careKeyVer: 0,
+    CAREKEY_D: 'trinityone/carekey:', churchSk: CHURCH_SK,
+    decrypt3: (ct, ck) => nip44.v2.decrypt(ct, ck),
     _reCheckCareKeyPending: () => {}, _churchHasCareNeeds: async () => true,
     _localBlocked: new Set(), _isRelayAuthed: () => true,
-    MEDIAKEY_D: 'trinityone/mediakey:', CAREKEY_D: 'trinityone/carekey:', NET: 'trinityone',
+    MEDIAKEY_D: 'trinityone/mediakey:', NET: 'trinityone',
     now: () => 1759300000,
     _hex: hex,
     // the shipped bundle's names for nip44 encrypt / conversation key (esbuild renames nip44e / nip44ck)
@@ -68,12 +71,20 @@ function engine({ media = {}, care = {} } = {}) {
     },
     set: (t, k, v) => { t[k] = v; return true; },
   });
-  const fit = fnBody(BUNDLE, 'function _fitKeyRing(full, recipCount, sealSample) {', '_fitKeyRing in the shipped bundle');
+  const fit = [
+    fnBody(BUNDLE, 'function _fitKeyRing(full, recipCount, sealSample) {', '_fitKeyRing in the shipped bundle'),
+    // the care envelope reader, so a race can deliver a REAL envelope mid-await exactly as the subscription does
+    stmt(BUNDLE, 'var _isCurrentCareEnv = (e) =>', '_isCurrentCareEnv in the shipped bundle'),
+    fnBody(BUNDLE, 'function _ingestCareKeyEnv(e) {', '_ingestCareKeyEnv in the shipped bundle'),
+    'scope._ingest = _ingestCareKeyEnv;',
+  ].join('\n');
   const bodies = [
     fnBody(BUNDLE, '    async ensureMediaKeyForMembers(memberPubs, stewardPubs) {', 'ensureMediaKeyForMembers in the shipped bundle'),
     fnBody(BUNDLE, '    async rotateMediaKey(memberPubs, stewardPubs) {', 'rotateMediaKey in the shipped bundle'),
     fnBody(BUNDLE, '    async ensureCareKeyForMembers(memberPubs, stewardPubs, opts) {', 'ensureCareKeyForMembers in the shipped bundle'),
+    fnBody(BUNDLE, '    async rotateCareKey(memberPubs, stewardPubs) {', 'rotateCareKey in the shipped bundle'),
   ].join(',\n');
+  scope.scope = scope;
   const api = new Function('scope', `with (scope) { ${fit}\n const _api = { ${bodies} }; return _api; }`)(proxy);
   return { api, published, warned, scope };
 }
@@ -124,9 +135,10 @@ for (const [name, run, kind] of [
     assert.equal(got[0], RING[0], `${name}: the CURRENT key is not first — everything sealed from now on would be unreadable`);
     assert.deepEqual(got, RING.slice(0, got.length), `${name}: the keys kept are not the NEWEST ${got.length} — the wrong end of the ring was dropped`);
     assert.ok(e.warned.some(w => /ring trimmed/.test(w)), `${name}: the ring was trimmed silently`);
-    // the console's own ring now matches what it published, so its next publish does not re-grow it
+    // THE CONSOLE KEEPS ITS WHOLE RING (audit of e73ef5f, finding 4): the envelope is trimmed to fit, but a key
+    // this device holds may have sealed something, so the console must not forget it for that.
     const held = kind === 'media' ? e.scope._mediaKeyRing : e.scope._careKeyRing;
-    assert.deepEqual(held, got, `${name}: the console holds a different ring from the one it published`);
+    assert.deepEqual(held, RING, `${name}: the console dropped keys from its OWN ring because the envelope was trimmed`);
   });
 }
 
@@ -142,5 +154,114 @@ test('rotateMediaKey: a rotation for 300 people keeps the fresh key and the newe
   assert.equal(got[0], e.scope._mediaKeyHex, 'the fresh key is not the current one');
   assert.ok(!RING.includes(got[0]), 'no fresh key was minted');
   assert.deepEqual(got.slice(1), RING.slice(0, got.length - 1), 'the superseded keys kept are not the newest ones');
-  assert.deepEqual(e.scope._mediaKeyRing, got, 'the console holds a different ring from the one it published');
+  // the fresh key, then EVERY key the console held — the 50-key cap and the fit are what is PUBLISHED
+  assert.deepEqual(e.scope._mediaKeyRing, [got[0], ...RING], 'the console dropped keys from its OWN ring because the envelope was trimmed');
 });
+
+// ── THE STATE MOVING UNDER AN AWAITING PUBLISHER (audit of e6a2e02 / e73ef5f, 2026-10-01) ─────────────────────
+// Each publisher awaits — the care-needs check, the per-member sealing, the publish — and the console's key state
+// can change in any of those gaps: a Block's rotation lands, or the church's envelope arrives on the subscription.
+// A publisher that carries on from its pre-await snapshot puts an older ring back over the newer one.
+
+// A care envelope as the church's console publishes it: the ring sealed to the church (and a member).
+const careEnvelope = (ring, rev = 1, recips = [CHURCH]) => ({ pubkey: CHURCH, kind: 30078, created_at: 1759300000,
+  tags: [['d', 'trinityone/carekey:' + CHURCH], ['t', 'trinityone']],
+  content: JSON.stringify({ rev, keys: Object.fromEntries(recips.map(p => [p, nip44.v2.encrypt(JSON.stringify(ring), nip44.v2.utils.getConversationKey(CHURCH_SK, p))])) }) });
+const gateSeal = (e) => {   // hold the FIRST sealing pass open until released
+  let release; const gate = new Promise(r => { release = r; });
+  const real = e.scope._sealEach; let first = true;
+  e.scope._sealEach = async (pl, t, f) => { if (first) { first = false; await gate; } return real(pl, t, f); };
+  return () => release();
+};
+
+test('RACE: a Block\'s sermon-key rotation that lands while a routine enrolment is sealing is not undone by it', async () => {
+  const OLD = RING.slice(0, 3);
+  const e = engine({ media: { ring: OLD } });
+  const [blocked, a1, a2] = people(3), joiner = people(1)[0];
+  e.scope._mediaKeyDocKeys = Object.fromEntries([CHURCH, blocked.pub, a1.pub, a2.pub].map(p => [p, 'x']));
+  const release = gateSeal(e);
+  const routine = e.api.ensureMediaKeyForMembers([blocked.pub, a1.pub, a2.pub, joiner.pub], []);   // a member joined
+  await new Promise(r => setTimeout(r, 5));
+  assert.equal(await e.api.rotateMediaKey([a1.pub, a2.pub, joiner.pub], []), true, 'CONTROL: the Block\'s rotation landed');
+  const fresh = e.scope._mediaKeyHex;
+  assert.ok(!OLD.includes(fresh), 'CONTROL: the rotation minted a fresh key');
+  release(); await routine;
+  assert.equal(e.scope._mediaKeyHex, fresh, 'THE CONSOLE\'S CURRENT SERMON KEY WENT BACK TO THE OLD ONE — the key the blocked member holds');
+  assert.equal(e.published.length, 1, 'the routine enrolment published its pre-rotation ring AFTER the rotation, putting the blocked member back in the sermon envelope: ' + e.published.length + ' publishes');
+  assert.ok(!Object.keys(JSON.parse(e.published[0].content).keys).includes(blocked.pub), 'CONTROL: the rotation left the blocked member out');
+});
+
+test('RACE: the same for the care key — a rotation during a routine enrolment is not undone', async () => {
+  const OLD = RING.slice(0, 3);
+  const e = engine({ care: { ring: OLD } });
+  const [blocked, a1] = people(2), joiner = people(1)[0];
+  e.scope._careKeyDocKeys = Object.fromEntries([CHURCH, blocked.pub, a1.pub].map(p => [p, 'x']));
+  const release = gateSeal(e);
+  const routine = e.api.ensureCareKeyForMembers([blocked.pub, a1.pub, joiner.pub], []);
+  await new Promise(r => setTimeout(r, 5));
+  assert.equal(await e.api.rotateCareKey([a1.pub, joiner.pub], []), true, 'CONTROL: the Block\'s rotation landed');
+  const fresh = e.scope._careKeyHex;
+  release(); await routine;
+  assert.equal(e.scope._careKeyHex, fresh, 'the console\'s current care key went back to the pre-rotation one');
+  assert.equal(e.published.length, 1, 'the routine enrolment published its pre-rotation care ring after the rotation');
+});
+
+test('RACE: the church\'s care envelope landing while the console checks for care needs is ADOPTED, never minted over', async () => {
+  // The audit's 8-in-10: the mint gate opened, ensureCareKeyForMembers awaited _churchHasCareNeeds(), the real
+  // envelope arrived during that wait, and the console then minted over it and — finding everyone keyed —
+  // published nothing, sealing every need from then on with a key nobody else held.
+  const REAL = hex(new Uint8Array(32).fill(0x77));
+  const e = engine();
+  e.scope._careKeyChecked = true; e.scope._careKeyDocKeys = null; e.scope._careKeyRev = 0;
+  let release; const gate = new Promise(r => { release = r; });
+  e.scope._churchHasCareNeeds = async () => { await gate; return false; };
+  const run = e.api.ensureCareKeyForMembers([], []);
+  await new Promise(r => setTimeout(r, 5));
+  e.scope._ingest(careEnvelope([REAL]));        // the subscription delivers the church's real envelope
+  assert.equal(e.scope._careKeyHex, REAL, 'CONTROL: the envelope was ingested');
+  release();
+  assert.equal(await run, false, 'the console carried on with a mint decided before the envelope arrived');
+  assert.equal(e.scope._careKeyHex, REAL, 'THE CONSOLE REPLACED THE CHURCH\'S CARE KEY WITH ONE IT MINTED — needs sealed from now on open for nobody else');
+  assert.equal(e.published.length, 0, 'a care envelope was published over the church\'s real one');
+});
+
+test('RACE: a care envelope this console is NOT in, landing during that same wait, stops the mint too', async () => {
+  // The harder half: the envelope exists but was not wrapped to this console (a delegated steward the owner has
+  // not keyed yet). There is no key to adopt, so only the re-check after the await stands between the console
+  // and a fresh key published OVER the church's real envelope.
+  const other = people(1)[0];
+  const e = engine();
+  e.scope._careKeyChecked = true; e.scope._careKeyDocKeys = null; e.scope._careKeyRev = 0;
+  let release; const gate = new Promise(r => { release = r; });
+  e.scope._churchHasCareNeeds = async () => { await gate; return false; };
+  const run = e.api.ensureCareKeyForMembers([], []);
+  await new Promise(r => setTimeout(r, 5));
+  e.scope._ingest(careEnvelope([hex(new Uint8Array(32).fill(0x55))], 1, [other.pub]));   // not wrapped to us
+  assert.ok(e.scope._careKeyDocKeys && !e.scope._careKeyHex, 'CONTROL: the envelope was recorded, and holds no copy for this console');
+  release();
+  assert.equal(await run, false, 'the console carried on with a mint decided before the envelope arrived');
+  assert.equal(e.published.length, 0, 'A FRESH CARE KEY WAS PUBLISHED OVER THE CHURCH\'S REAL ENVELOPE — every need sealed under it is now unreadable');
+});
+
+test('a minted care key that the relay REFUSES is never used to seal (the network-view case)', async () => {
+  const e = engine();
+  e.scope._careKeyChecked = true; e.scope._careKeyDocKeys = null; e.scope._careKeyRev = 0;
+  e.scope._churchHasCareNeeds = async () => false;
+  e.scope.publish = async (evt, opts) => { e.published.push(evt); if (opts && typeof opts === 'object') opts.refused = true; return false; };
+  assert.equal(await e.api.ensureCareKeyForMembers([], []), false, 'CONTROL: the refused publish reported failure');
+  assert.equal(e.published.length, 1, 'CONTROL: the mint was attempted');
+  assert.equal(e.scope._careKeyHex, null, 'THE CONSOLE KEPT A CARE KEY THE RELAY NEVER RECEIVED — careSeal() would seal needs nobody else can open');
+});
+
+test('CONTROL: a first care key that DOES land is adopted, and seals', async () => {
+  const e = engine();
+  e.scope._careKeyChecked = true; e.scope._careKeyDocKeys = null; e.scope._careKeyRev = 0;
+  e.scope._churchHasCareNeeds = async () => false;
+  assert.notEqual(await e.api.ensureCareKeyForMembers([], []), false);
+  assert.equal(e.published.length, 1, 'the first care key was not published');
+  assert.ok(e.scope._careKeyHex, 'the console did not adopt the care key it published');
+  assert.deepEqual(ringForChurch(e.published[0]), [e.scope._careKeyHex], 'the console holds a different key from the one it published');
+});
+function ringForChurch(evt) {
+  return JSON.parse(nip44.v2.decrypt(JSON.parse(evt.content).keys[CHURCH], nip44.v2.utils.getConversationKey(CHURCH_SK, CHURCH)));
+}
