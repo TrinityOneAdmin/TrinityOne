@@ -1927,15 +1927,23 @@ function FamilySheet({ open, onClose, ctx }) {
   const answeredNow = () => !F || !F.familyAnswered || !!F.familyAnswered(ctx.church && ctx.church.npub);
   const [answered, setAnswered] = useId(answeredNow);
   const [waitedOut, setWaitedOut] = useId(false);
+  const [asks, setAsks] = useId(0);   // how many times this sheet has asked again (Try again restarts the wait)
   const refreshKids = () => { setKids(F && F.myChildren ? F.myChildren(ctx.church && ctx.church.npub) : []); setAnswered(answeredNow()); };
   // the engine fires these when a notice changes the links or a rebuild finishes, so the list follows without a reload
   useIdE(() => {
     const f = () => refreshKids();
     const evs = ['trinity-guardian-added', 'trinity-guardian-removed', 'trinity-family-changed'];
     evs.forEach(n => window.addEventListener(n, f));
-    const t = setTimeout(() => setWaitedOut(true), FAMILY_WAIT_MS);
-    return () => { evs.forEach(n => window.removeEventListener(n, f)); clearTimeout(t); };
+    return () => { evs.forEach(n => window.removeEventListener(n, f)); };
   }, []);
+  useIdE(() => {
+    const t = setTimeout(() => setWaitedOut(true), FAMILY_WAIT_MS);
+    return () => clearTimeout(t);
+  }, [asks]);
+  // TRY AGAIN — what Home + reopen did on the phone (device round 2026-10-01): re-subscribe and re-fetch, through
+  // the app's reconnect scheduler (ctx.reconnectNow). The sheet goes back to "Checking…" for the same bounded
+  // wait, so the tap visibly does something and nothing claims an answer that has not come.
+  const tryAgain = () => { setWaitedOut(false); setAsks(n => n + 1); try { if (ctx.reconnectNow) ctx.reconnectNow(); } catch (e) {} };
   const create = async () => {
     const n = name.trim(); if (!n) { setErr('Enter the child’s name.'); return; }
     setBusy(true); setErr('');
@@ -2030,6 +2038,7 @@ function FamilySheet({ open, onClose, ctx }) {
               {waitedOut ? <React.Fragment>
                 <div style={{ fontWeight: 700, color: 'var(--ink-2)', marginBottom: 6 }}>Couldn’t reach your church just now</div>
                 Any children linked to you will appear here once it answers.
+                <div><button onClick={tryAgain} style={{ marginTop: 10, border: 'none', background: 'none', padding: '8px 12px', color: 'var(--ink-2)', textDecoration: 'underline', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer' }}>Try again</button></div>
               </React.Fragment> : <React.Fragment>
                 <div style={{ fontWeight: 700, color: 'var(--ink-2)', marginBottom: 6 }}>Checking with your church…</div>
                 Any children linked to you will appear here in a moment.

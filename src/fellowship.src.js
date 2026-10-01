@@ -1350,13 +1350,18 @@ pool.querySync = (urls, filter, opts) => {
 // library's 4.4s and recorded a false silence on any slow link. That is the busiest moment there is, right
 // after a recovery, and it seeded the next count. Raising it as each relay is born covers what the loop
 // cannot reach; the loop stays as the belt to this braces, in case a library change renames this method.
+// …AND EVERY SOCKET IT OPENS IS NOTICED HERE, whichever path opened it (see _relayUp below). This is the one
+// door every pool path goes through — subscribe, publish, querySync, _askOneRelay — so it is where a socket
+// coming back after an outage can be seen at all; the library's own success hook fires on its subscribe path
+// only. A dial that FAILS is recorded here too, so the next socket that does come up is known to be a return.
 try {
   const _ensure = pool.ensureRelay.bind(pool);
   pool.ensureRelay = function (url, params) {
     return Promise.resolve(_ensure(url, params)).then((r) => {
       try { if (r && r.publishTimeout < 11000) r.publishTimeout = 11000; } catch (e) {}
+      try { _relayUp(url, r); } catch (e) {}
       return r;
-    });
+    }, (err) => { _relayFailed(url); throw err; });
   };
 } catch (e) {}
 
@@ -1382,17 +1387,35 @@ try {
 // subscription, not only on a new socket — so comparing urls would fire on every ordinary read and re-subscribe
 // the whole app in a loop. A real reconnect creates a new AbstractRelay; that is the only thing worth reacting
 // to. (The console's AUDIT-9 note records what the url-keyed version cost: 8 full-roster re-seals against 1.)
-const _liveRelay = new Map();
+//
+// AND "FIRST SIGHT" IS NOT ALWAYS A FIRST CONNECT. Device round 2026-10-01 (Oppo): a parent launched in
+// airplane mode, unlocked, opened Children's accounts ("Couldn't reach your church just now") and switched the
+// radio back on. It stayed on that for 5 min 40 s, relaysHealthy() true and relayReady() false throughout.
+// Reproduced in a headless browser against a real gateway: every subscription the app made while offline had
+// failed and closed; the FIRST socket to come back was opened by the outbox's retry of the unlock's queued
+// join announce — a publish, which never calls the library's success hook — and this handler treated it as
+// "first sight" anyway. So nothing re-subscribed, the relay (which challenges only a gated REQ) never asked us
+// to authenticate, and the 90-second beat skipped on relaysHealthy() for ever. So: a socket that comes up
+// after a FAILED dial to that relay is a return, and so is a new instance, whichever path opened it. A socket
+// on a boot that never failed is still first sight — the subscriptions that opened it are the live ones.
+const _liveRelay = new Map();   // normalizeURL(url) -> the AbstractRelay last seen connected there
+const _relayDown = new Set();   // normalizeURL(url) whose last dial failed and which has not come back since
+function _relayKey(url) { try { return normalizeURL(url); } catch (e) { return String(url || ''); } }
+function _relayFailed(url) { try { _relayDown.add(_relayKey(url)); } catch (e) {} }
+function _relayUp(url, live) {
+  if (!live) return;                         // can close between ensureRelay resolving and this callback
+  const key = _relayKey(url);
+  const prev = _liveRelay.get(key);
+  _liveRelay.set(key, live);
+  const wasDown = _relayDown.delete(key);
+  if (prev === live) return;                 // the same socket we already knew
+  if (prev === undefined && !wasDown) return;   // first sight on a connection that never failed
+  window.dispatchEvent(new CustomEvent('trinity-relay-returned', { detail: { url } }));
+}
 pool.onRelayConnectionSuccess = (url) => {
-  try {
-    const live = pool.relays.get(url);
-    if (!live) return;                       // can close between ensureRelay resolving and this callback
-    const prev = _liveRelay.get(url);
-    _liveRelay.set(url, live);
-    if (prev === undefined || prev === live) return;   // first sight, or the same socket we already knew
-    window.dispatchEvent(new CustomEvent('trinity-relay-returned', { detail: { url } }));
-  } catch (e) {}
+  try { _relayUp(url, pool.relays.get(url)); } catch (e) {}
 };
+pool.onRelayConnectionFailure = (url) => { _relayFailed(url); };
 
 let sk = null, pub = null;
 // Do we answer a relay's NIP-42 challenge? ALWAYS — this is deliberately hardcoded true.

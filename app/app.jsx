@@ -648,6 +648,12 @@ function App() {
   // down and re-establish the church subscriptions on resume, which re-queries and catches up anything
   // published while we were away (fixes "new devotionals/events don't appear until I reload").
   const [connTick, bumpConn] = useA(0);
+  // A SCREEN'S "TRY AGAIN" IS A FOREGROUNDING, so it goes through the same scheduler as one (ctx.reconnectNow).
+  // Device round 2026-10-01: what brought the Family sheet back after airplane mode was Home + reopen — the
+  // `visibilitychange` below — so a control on the sheet does exactly that, with the scheduler's debounce, and
+  // not something weaker. (Fellowship.relayStatus() looked like a cure on the phone once; it opens throwaway
+  // sockets outside the pool and cannot re-subscribe anything — the timing of that run fits the 90-second beat.)
+  const reconnectNowRef = useAR(null);
   useAE(() => {
     let last = Date.now();
     // force the church-doc hubs to re-fetch too (bumpConn alone can't reopen a hub the chat/care screens hold open)
@@ -655,6 +661,7 @@ function App() {
     // P3: one scheduler for every reconnect signal, so the debounce is shared. A phone that foregrounds AND
     // fires `online` in the same second must reconnect once, not twice.
     const sched = makeReconnectScheduler(() => { bumpConn(x => x + 1); refetch(); });
+    reconnectNowRef.current = () => sched.fire(true);   // the member asked, and is watching → no delay
     const onVis = () => { if (document.visibilityState === 'visible') sched.fire(true); };   // user is watching → no delay
     const onOnline = () => { sched.fire(false); };   // radio/router event → spread across the congregation
     document.addEventListener('visibilitychange', onVis);
@@ -743,7 +750,7 @@ function App() {
       if (F && F.relaysHealthy && F.relaysHealthy()) return;   // healthy → skip the storm
       sched.fire(false);   // P3: a relay restart drops EVERY member at once — jitter this one especially
     }, 90000);
-    return () => { document.removeEventListener('visibilitychange', onVis); window.removeEventListener('online', onOnline); window.removeEventListener('focus', onVis); window.removeEventListener('focus', retryIfRefused); window.removeEventListener('online', retryIfRefused); window.removeEventListener('trinity-reconnect', onReconnectNeeded); window.removeEventListener('trinity-relay-returned', onRelayReturned); if (appRemove) { try { appRemove(); } catch (e) {} } clearInterval(beat); sched.cancel(); };
+    return () => { document.removeEventListener('visibilitychange', onVis); window.removeEventListener('online', onOnline); window.removeEventListener('focus', onVis); window.removeEventListener('focus', retryIfRefused); window.removeEventListener('online', retryIfRefused); window.removeEventListener('trinity-reconnect', onReconnectNeeded); window.removeEventListener('trinity-relay-returned', onRelayReturned); if (appRemove) { try { appRemove(); } catch (e) {} } clearInterval(beat); sched.cancel(); reconnectNowRef.current = null; };
   }, []);
   // multi-church: groups + giving funds are scoped to the active church
   const [activeChurch, setActiveChurch] = useA(() => lsGet('trinityone.activeChurch', (window.TrinityData.CHURCHES[0] || {}).id || null));
@@ -1982,6 +1989,9 @@ function App() {
     // and reopen it, which is why the same room reads "stale" to someone sitting still and "fine" to someone
     // wandering. See FINDINGS-2026-08-16 item 2.
     connTick,
+    // …and the member's own "Try again": the foreground path above (re-subscribe everything + re-fetch the church
+    // docs), through the shared scheduler so repeated taps cannot storm the relay. See reconnectNowRef.
+    reconnectNow: () => { try { const f = reconnectNowRef.current; if (f) f(); } catch (e) {} },
     // OPENING A CONVERSATION IS READING IT. The dot used to clear only when the paper-plane INBOX was opened,
     // which was fine while that was the only way in. It is not any more: the Chat list now lists recent
     // conversations directly, and that is deliberately the route for people who never found the paper plane —

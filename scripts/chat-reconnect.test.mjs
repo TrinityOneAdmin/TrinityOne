@@ -32,17 +32,57 @@ const APP    = readFileSync(new URL('../app/app.jsx', import.meta.url), 'utf8');
 // The REAL handler, lifted from the SHIPPED bundle and executed against a fake pool — so a source-only fix
 // that was never built (or a build that dropped it) fails here rather than passing on the strength of a .js
 // file nobody loads.
-function loadHandler() {
-  const at = BUNDLE.indexOf('pool.onRelayConnectionSuccess =');
+// THE WHOLE BLOCK, not just the library hook (device round 2026-10-01): the hook now hands off to _relayUp, which
+// the pool's ensureRelay wrapper also calls — so a socket opened by a PUBLISH is noticed too — and a failed dial is
+// recorded by _relayFailed. Lifted from `var _liveRelay` to the failure hook, with the bundle's own copy of
+// nostr-tools' normalizeURL (by the name esbuild gave it), which is what the block keys relays by.
+function relayBlock() {
+  const at = BUNDLE.indexOf('var _liveRelay =');
   assert.notEqual(at, -1,
     'the reconnect handler is gone from vendor/fellowship.js — rebuild: bash scripts/build-fellowship.sh');
-  const src = BUNDLE.slice(at, BUNDLE.indexOf('\n  };', at) + 5);
+  const end = BUNDLE.indexOf('pool.onRelayConnectionFailure =', at);
+  assert.notEqual(end, -1, 'the failure hook is gone from the reconnect block — re-anchor this test');
+  return BUNDLE.slice(at, BUNDLE.indexOf('\n  };', end) + 5);
+}
+function loadHandler() {
+  const src = relayBlock();
+  const normName = (src.match(/return (normalizeURL\d*)\(url\)/) || [])[1];
+  assert.ok(normName, 'the block no longer keys relays by normalizeURL — re-anchor this test');
+  const norm = fnBody(BUNDLE, 'function ' + normName + '(url)');
   const pool = { relays: new Map() };
   const fired = [];
   const win = { dispatchEvent: (e) => { fired.push(e); return true; } };
   const CustomEvent = function (type, init) { this.type = type; this.detail = init && init.detail; };
-  const install = new Function('pool', 'window', 'CustomEvent', '_liveRelay', src + '; return pool.onRelayConnectionSuccess;');
-  return { onSuccess: install(pool, win, CustomEvent, new Map()), pool, fired };
+  const install = new Function('pool', 'window', 'CustomEvent', norm + '\n' + src +
+    '; return { onSuccess: pool.onRelayConnectionSuccess, onFailure: pool.onRelayConnectionFailure };');
+  const h = install(pool, win, CustomEvent);
+  return { onSuccess: h.onSuccess, onFailure: h.onFailure, pool, fired, install: () => install(pool, win, CustomEvent) };
+}
+// The pool's ensureRelay wrapper, lifted the same way and installed over a fake pool whose own ensureRelay is
+// scripted: it rejects while the radio is off and hands back a NEW relay object once it is on.
+function loadEnsure() {
+  const src = relayBlock();
+  const normName = (src.match(/return (normalizeURL\d*)\(url\)/) || [])[1];
+  const norm = fnBody(BUNDLE, 'function ' + normName + '(url)');
+  const at = BUNDLE.indexOf('const _ensure = pool.ensureRelay.bind(pool);');
+  assert.notEqual(at, -1, 'the ensureRelay wrapper is gone from vendor/fellowship.js — re-anchor this test');
+  const wrapper = BUNDLE.slice(at, BUNDLE.indexOf('\n    };', at) + 7);
+  const radio = { on: false, made: 0 };
+  const pool = {
+    relays: new Map(),
+    // nostr-tools' shape: reuse the live relay for the url, open a new one when there is none, drop it on failure
+    ensureRelay(url) {
+      if (!radio.on) { this.relays.delete(url); return Promise.reject(new Error('connection failed')); }
+      let r = this.relays.get(url);
+      if (!r) { r = { id: 'socket-' + (++radio.made), publishTimeout: 4400 }; this.relays.set(url, r); }
+      return Promise.resolve(r);
+    },
+  };
+  const fired = [];
+  const win = { dispatchEvent: (e) => { fired.push(e); return true; } };
+  const CustomEvent = function (type, init) { this.type = type; this.detail = init && init.detail; };
+  new Function('pool', 'window', 'CustomEvent', norm + '\n' + wrapper + '\n' + src)(pool, win, CustomEvent);
+  return { pool, radio, fired };
 }
 
 test('a returning socket announces itself, so the subscriptions can be rebuilt', () => {
@@ -81,6 +121,45 @@ test('each relay is tracked separately', () => {
   assert.equal(fired.length, 0, 'two first-connects, not a reconnect');
   pool.relays.set('wss://b/relay', { id: 'b2' }); onSuccess('wss://b/relay');
   assert.equal(fired.length, 1, 'one relay coming back must be noticed even while the other never moved');
+});
+
+// Device round 2026-10-01: an app launched OFFLINE had every subscription fail and close; the first socket seen
+// once the radio came back was the first ever seen, and "first sight" kept it silent — so nothing re-subscribed.
+test('the first socket after a FAILED dial is a return, even though it is the first one this session has seen', () => {
+  const { onSuccess, onFailure, pool, fired } = loadHandler();
+  onFailure('wss://church/relay');   // launched in airplane mode: the dial failed
+  pool.relays.set('wss://church/relay', { id: 'socket-1' });
+  onSuccess('wss://church/relay');
+  assert.equal(fired.length, 1, 'a socket that comes up after a failed dial was taken for a first connect — every subscription that died offline stays dead');
+  assert.equal(fired[0].type, 'trinity-relay-returned', 'the advisory event, not the mandatory teardown');
+  onSuccess('wss://church/relay');
+  assert.equal(fired.length, 1, 'and only once: the same socket again is an ordinary read');
+  // a url spelled differently (trailing slash) is the same relay: the pool keys by normalizeURL, and so must this
+  onFailure('wss://other/relay/');
+  pool.relays.set('wss://other/relay', { id: 'o1' });
+  onSuccess('wss://other/relay');
+  assert.equal(fired.length, 2, 'a failure recorded under one spelling of the url was missed under the other');
+});
+
+test('a socket a PUBLISH opens after an outage is noticed — the library’s success hook never fires on that path', async () => {
+  const { pool, radio, fired } = loadEnsure();
+  // airplane mode: the outbox's retry fails
+  await assert.rejects(() => pool.ensureRelay('wss://church/relay'), /connection failed/);
+  assert.equal(fired.length, 0);
+  // the radio is back and the next retry gets a socket — through ensureRelay, as pool.publish does it
+  radio.on = true;
+  const r = await pool.ensureRelay('wss://church/relay');
+  assert.equal(r.publishTimeout, 11000, 'CONTROL: the wrapper under test is the shipped one (it also raises the give-up)');
+  assert.equal(fired.length, 1,
+    'THE PHONE’S BUG: the socket came back through a publish, nothing announced it, nothing re-subscribed, and the 90-second beat skipped because relaysHealthy() was true');
+  // …and an ordinary publish over the same socket afterwards is not another return
+  await pool.ensureRelay('wss://church/relay');
+  assert.equal(fired.length, 1, 'every publish over a live socket re-announced it — a re-subscribe storm on every send');
+  // a socket that DROPPED (no failed dial in between) and is reopened by a publish is a return through this door too
+  pool.relays.delete('wss://church/relay');
+  await pool.ensureRelay('wss://church/relay');
+  assert.equal(radio.made, 2, 'CONTROL: the scripted pool opened a second socket');
+  assert.equal(fired.length, 2, 'a dropped socket reopened by a publish went unannounced');
 });
 
 // ── the two subscriptions must actually be wired to the signal ───────────────────────────────────────────
@@ -142,8 +221,9 @@ test('a returning socket is advisory, and does not share the mandatory event', (
   // …and the sender must use that name, or the listener is dead code.
   assert.match(BUNDLE, /'trinity-relay-returned'|"trinity-relay-returned"/,
     'the socket-return dispatch is gone from the bundle — rebuild: bash scripts/build-fellowship.sh');
-  const at = BUNDLE.indexOf('pool.onRelayConnectionSuccess =');
-  const handler = BUNDLE.slice(at, BUNDLE.indexOf('\n  };', at));
+  // the whole block the hook and the ensureRelay wrapper hand off to (it holds the dispatch now)
+  const handler = relayBlock();
+  assert.match(handler, /trinity-relay-returned/, 'CONTROL: the slice holds the dispatch — re-anchor if not');
   assert.doesNotMatch(handler, /trinity-reconnect/,
     'a socket returning must not fire the MANDATORY event — that is the storm this pair of tests exists to stop');
 });

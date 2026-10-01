@@ -7724,22 +7724,51 @@
           if (r && r.publishTimeout < 11e3) r.publishTimeout = 11e3;
         } catch (e) {
         }
+        try {
+          _relayUp(url, r);
+        } catch (e) {
+        }
         return r;
+      }, (err) => {
+        _relayFailed(url);
+        throw err;
       });
     };
   } catch (e) {
   }
   var _liveRelay = /* @__PURE__ */ new Map();
-  pool.onRelayConnectionSuccess = (url) => {
+  var _relayDown = /* @__PURE__ */ new Set();
+  function _relayKey2(url) {
     try {
-      const live = pool.relays.get(url);
-      if (!live) return;
-      const prev = _liveRelay.get(url);
-      _liveRelay.set(url, live);
-      if (prev === void 0 || prev === live) return;
-      window.dispatchEvent(new CustomEvent("trinity-relay-returned", { detail: { url } }));
+      return normalizeURL2(url);
+    } catch (e) {
+      return String(url || "");
+    }
+  }
+  function _relayFailed(url) {
+    try {
+      _relayDown.add(_relayKey2(url));
     } catch (e) {
     }
+  }
+  function _relayUp(url, live) {
+    if (!live) return;
+    const key = _relayKey2(url);
+    const prev = _liveRelay.get(key);
+    _liveRelay.set(key, live);
+    const wasDown = _relayDown.delete(key);
+    if (prev === live) return;
+    if (prev === void 0 && !wasDown) return;
+    window.dispatchEvent(new CustomEvent("trinity-relay-returned", { detail: { url } }));
+  }
+  pool.onRelayConnectionSuccess = (url) => {
+    try {
+      _relayUp(url, pool.relays.get(url));
+    } catch (e) {
+    }
+  };
+  pool.onRelayConnectionFailure = (url) => {
+    _relayFailed(url);
   };
   var sk = null;
   var pub = null;
