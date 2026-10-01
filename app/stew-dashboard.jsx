@@ -848,24 +848,26 @@ function KeyDistributor() {
   // effect, so they close over the roster as it was at mount — which on a cold console is empty, and an empty
   // roster is exactly the case that leaves a delegated steward without the sermon key.
   const stewardRosterRef = React.useRef([]); stewardRosterRef.current = stewardRoster;
+  const groupsRef = React.useRef([]); groupsRef.current = groups;
   // BLOCKED MEMBERS MUST NEVER BE RE-KEYED. useStewardMembers() does not filter the blocklist (DashMembers does
   // that itself), so every recipient set built here silently included people the steward had removed: the next
   // time anyone joined, `grew` fired and the freshly-rotated key was wrapped straight back to them. The care and
   // media re-key paths had the same hole via `want`. AUDIT-2026-07-27.
   const blockedList = window.useStewardBlocked ? window.useStewardBlocked() : [];
   const blockedSet = React.useMemo(() => new Set((blockedList || []).map(p => String(p || '').toLowerCase())), [blockedList]);
-  // THE LISTS ON SCREEN AT THE MOMENT OF A CHURCH SWITCH BELONG TO THE CHURCH WE LEFT. The member, steward and
-  // group hooks keep their last value until the new church's stream delivers, so for that beat this component
-  // held church A's members while the engine was on church B — and the enrolment below wrapped church B's keys
-  // to church A's congregation (audit of d1116f6: B's envelopes listed A's members, the person just blocked
-  // among them). Remember those exact arrays when the church changes, and enrol nobody until each has been
-  // replaced by the new church's own delivery (every one of those streams delivers at end-of-stored-events).
-  // Keyed on the identity switch (`idv`), which is what re-subscribes those streams; a key RESTORE fires no
-  // switch and useStewardMembers does not follow it — a known gap of that hook, recorded, not changed here.
-  const _kdFrom = React.useRef(null);
-  if (!_kdFrom.current || _kdFrom.current.idv !== _kdIdv) {
-    _kdFrom.current = _kdFrom.current ? { idv: _kdIdv, members, groups, stewardRoster } : { idv: _kdIdv };
-  }
+  const blockedRef = React.useRef([]); blockedRef.current = blockedList;
+  // EVERY LIST THE ENROLMENT USES MUST BE THE CURRENT CHURCH'S. The member, steward, group and blocked hooks keep
+  // their last value until the new church's stream delivers, so for a beat after a switch this component held
+  // church A's lists while the engine was on church B — and the enrolment below wrapped B's keys to A's members,
+  // the person just blocked among them (audits of d1116f6 and 3bc8905; the second found the list arriving AFTER
+  // the switch, from A's own closed stream, so "has it been replaced yet?" was not enough). The engine stamps each
+  // list with the church and epoch its stream was opened for, and enrolment runs only when all four carry the
+  // stamp of the church the console is on now (Steward.listIsCurrent). A cached or initial list has no stamp.
+  const _kdListsCurrent = (m, g, st, bl) => {
+    const S = window.Steward;
+    if (!S || !S.listIsCurrent) return false;
+    return S.listIsCurrent(m) && S.listIsCurrent(g) && S.listIsCurrent(st) && S.listIsCurrent(bl);
+  };
   const notBlocked = (pk) => pk && !blockedSet.has(String(pk).toLowerCase());
   React.useEffect(() => {
     // SAME GUARD AS THE CAPABILITY MINT, and for the same measured reason. A delegated steward viewing their
@@ -876,8 +878,7 @@ function KeyDistributor() {
     // this church's key in Settings…". That banner then sat on every screen telling a treasurer her work was
     // not saving WHILE THE RELAY ACCEPTED EVERY ENTRY, and its remedy destroys a church key if followed.
     if (!church.name) return;   // no church of our own to key — see the capability mint for the full note
-    { const f = _kdFrom.current || {};
-      if (members === f.members || groups === f.groups || stewardRoster === f.stewardRoster) return; }   // still the previous church's lists — see _kdFrom
+    if (!_kdListsCurrent(members, groups, stewardRoster, blockedList)) return;   // a list from another church, or none yet — see _kdListsCurrent
     const memberPubs = members.map(m => m.pubkey).filter(notBlocked);
     for (const g of groups) {
       if (!g.encrypted) continue;
@@ -980,9 +981,9 @@ function KeyDistributor() {
   // before we hold the key. Re-check a couple of times on mount — ensureMediaKeyForMembers is idempotent + cheap.
   React.useEffect(() => {
     const call = () => {
-      const f = _kdFrom.current || {};
-      if (membersRef.current === f.members || stewardRosterRef.current === f.stewardRoster) return;   // the previous church's lists — see _kdFrom
-      if (window.Steward && window.Steward.ensureMediaKeyForMembers) window.Steward.ensureMediaKeyForMembers(membersRef.current.map(m => m.pubkey), stewardRosterRef.current);
+      if (!_kdListsCurrent(membersRef.current, groupsRef.current, stewardRosterRef.current, blockedRef.current)) return;   // see _kdListsCurrent
+      const bs = new Set((blockedRef.current || []).map(p => String(p || '').toLowerCase()));
+      if (window.Steward && window.Steward.ensureMediaKeyForMembers) window.Steward.ensureMediaKeyForMembers(membersRef.current.map(m => m.pubkey).filter(p => p && !bs.has(String(p).toLowerCase())), stewardRosterRef.current);
     };
     const t1 = setTimeout(call, 3500), t2 = setTimeout(call, 9000);
     return () => { clearTimeout(t1); clearTimeout(t2); };
@@ -6175,7 +6176,11 @@ function DashMembers() {
       // rotations pushed below were collected into an array nothing was waiting on any more — the exact
       // fire-and-forget the rest of this handler exists to undo.
       Promise.all(rotations).then(rs => {
-        const failed = rs.filter(([, ok]) => ok === false).map(([what]) => what);
+        // NULL IS A FAILURE TOO (audit of 3bc8905). A rotation returns null when it did not happen — no trusted
+        // view, an envelope this console is not in, or a name-key Block queued across a church switch — and the
+        // blocked member then still holds that key. Only a DELEGATED console gets null by design (the owner-only
+        // sermon key), and it is told so below.
+        const failed = rs.filter(([, ok]) => ok === false || (ok == null && !delegated)).map(([what]) => what);
         if (failed.length) setBlockWarn('Removed them from the church, but could not change ' + failed.join(' or ') + '. They may still be able to open things sealed with it. Try blocking them again — and if it keeps failing, your church may have grown past what one key document can hold.');
       }).catch(() => {});
       // SAY SO. Both guards above are correct and both are silent: as a delegated steward you tap Block, the

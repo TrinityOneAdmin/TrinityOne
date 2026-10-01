@@ -261,7 +261,7 @@ test('the a6d13e0 regression, stated as a measurement: without a key in hand nei
 // `rotateMedia` is only ever supplied for the owner CONTROL, where the failure being reported is a refused
 // publish and the point is that the screen still reports it.
 
-async function membersPage({ delegated, rotateMedia }) {
+async function membersPage({ delegated, rotateMedia, nameResult = null }) {
   const e = engine({ actingChurch: delegated ? CHURCH : '' });
   const { React, draw } = miniReact();
   const NOW = Math.floor(Date.now() / 1000);
@@ -310,7 +310,7 @@ async function membersPage({ delegated, rotateMedia }) {
         // The two rotations block() awaits alongside the media key. Both succeed, so anything the screen
         // says about a key is about the SERMON key and nothing else.
         rotateCareKey: () => Promise.resolve(true),
-        ensureNameKeyForMembers: () => Promise.resolve(null),
+        ensureNameKeyForMembers: () => Promise.resolve(nameResult),
         rotateMediaKey: (pubs) => (rotateMedia === undefined ? e.api.rotateMediaKey(pubs) : Promise.resolve(rotateMedia)),
       },
       useStewardGroups: () => [], useStewardStewards: () => [], useStewardChurch: () => ({ name: 'St Aidan', features: {} }),
@@ -366,4 +366,19 @@ test('CONTROL: an OWNER whose rotation really failed is still warned about the s
   assert.match(p.said, /could not change the sermon key/,
     'AN OWNER’S FAILED ROTATION IS NOW SILENT. The blocked member may still hold the key to every sermon ' +
     'uploaded after they left and nothing on screen says so: ' + p.said);
+});
+
+// NULL IS A FAILURE TOO (audit of 3bc8905). block() warned only on `false`, but a name-key rotation returns null when
+// it did not happen — no trusted view, an envelope this console is not in, or a Block queued across a church switch
+// — and the blocked member then still holds the key to every name in the congregation. On an OWNER's console null
+// now warns; a delegate's (whose sermon-key rotation is null by design) does not — the rows above.
+test('THE CALL SITE: an OWNER whose name-key rotation did not happen (null) is warned', async () => {
+  const p = await membersPage({ delegated: false, rotateMedia: true, nameResult: null });
+  assert.match(p.said, /could not change the name key/,
+    'A NAME-KEY ROTATION THAT NEVER HAPPENED IS SILENT — the blocked member keeps the key to every name in the church and nothing on screen says so: ' + p.said);
+});
+
+test('CONTROL: an OWNER whose rotations all landed is told nothing is wrong', async () => {
+  const p = await membersPage({ delegated: false, rotateMedia: true, nameResult: { id: 'published' } });
+  assert.doesNotMatch(p.said, /could not change/, 'a Block whose rotations all landed raised the failure banner: ' + p.said);
 });

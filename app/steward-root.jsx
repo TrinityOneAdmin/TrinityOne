@@ -282,7 +282,11 @@ function useStewardMembers() {
   const idv = useStewardIdv();
   const conn = useStewardConn();
   const [members, setMembers] = useSt(() => { try { return JSON.parse(localStorage.getItem('trinityone.steward.members.' + ((window.Steward && window.Steward.churchPub) || '')) || '[]') || []; } catch { return []; } });
-  useStE(() => window.Steward.subscribeMembers(setMembers), [idv, conn]);   // re-subscribe after a relay drop/restart
+  // …AND WHEN THE CHURCH CHANGES WITHOUT A SWITCH EVENT (a key restore), like makeSub's `_who`. The key enrolment
+  // uses this list only while it is stamped with the current church (Steward.listIsCurrent), so a stream that
+  // never re-opened for the restored church would leave nobody enrolled until a reload.
+  const _who = (window.Steward && (window.Steward.actingChurch || window.Steward.churchPub)) || '';
+  useStE(() => window.Steward.subscribeMembers(setMembers), [idv, conn, _who]);   // re-subscribe after a relay drop/restart
   return members;
 }
 window.useStewardMembers = useStewardMembers;

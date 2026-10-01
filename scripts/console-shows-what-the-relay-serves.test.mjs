@@ -88,12 +88,14 @@ function consoleAt({ relayAuthed = true, cache = null, mountGroups = 'now' } = {
     // ReferenceError inside its own try on EVERY group, absorbed nothing, and 11 tests failed as "the console was
     // emptied" — over a shipped reader that was fine (bisected 2026-09-30; 13/13 on main before that commit).
     _sealedGroupIds: new Set(),
+    // both readers stamp each list with the church and epoch they were opened for (_listTag, lifted below)
+    actingChurch: '', _keyReadEpoch: 0,
   };
   const body = ['_pickWinner', '_reduceVersions', '_absorbById', '_forgetById', '_tombstoneTargets',
     // `_capsOf` is how both predicates read the capability list — it normalises it the way the relay does
     // (gateway.mjs:1611: non-empty strings, lower-cased) instead of counting the raw length. Lift it with
     // them, or they call a function that is not there.
-    '_seedFromCache', '_capsOf', '_consoleDisplay', '_consoleChurchVoice'].map(n => lift(STEWARD, n)).join('\n');
+    '_seedFromCache', '_capsOf', '_consoleDisplay', '_consoleChurchVoice', '_listTag', '_stampFor'].map(n => lift(STEWARD, n)).join('\n');
   const args = Object.keys(scope);
   const api = new Function(...args, `${body}\nreturn ({\n${grabMethod(STEWARD, 'subscribeStewards(onList)')},\n${grabMethod(STEWARD, 'subscribeGroups(onGroups)')}\n});`)
     (...args.map(k => scope[k]));
