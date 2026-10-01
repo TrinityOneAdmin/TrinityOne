@@ -43,6 +43,9 @@ import { miniReact, texts, button, find, loadScreen, reads } from './render-jsx-
 const ROOT = new URL('../', import.meta.url).pathname;
 const STEW = readFileSync(join(ROOT, 'app/stew-dashboard.jsx'), 'utf8');
 const BUNDLE = readFileSync(join(ROOT, 'vendor/steward.js'), 'utf8');
+// THE SHIPPED ring fitter (2026-10-01): the media-key publishers fit their envelope to the relay's 1 MB cap
+// through it, so a lifted publisher needs it in scope. Lifted, not re-typed.
+const _fitKeyRing = new Function('return ' + fnBody(BUNDLE, 'function _fitKeyRing(full, recipCount, sealSample) {', '_fitKeyRing in the shipped bundle'))();
 const tick = () => new Promise(r => setTimeout(r, 0));
 
 // ── the panel, compiled with the real esbuild ────────────────────────────────────────────────────────────
@@ -1250,9 +1253,10 @@ async function runMediaKey(answer, calls = 3, memberPubs = ['m1', 'm2'], saidNo 
       }
       return answer;
     },
-    _localBlocked: new Set(),
+    _localBlocked: new Set(), _fitKeyRing,
     _sealEach: async (pl, want) => Object.fromEntries(want.map(p => [p, 'sealed-for-' + p])),
     nip44e: (a) => a, nip44ck: () => 'ck',
+    encrypt3: (a) => a, getConversationKey: () => 'ck',   // the bundle's names — the ring fitter seals one sample
     window: { dispatchEvent: (e) => { events.push({ type: e.type, detail: e.detail }); } },
     CustomEvent: class { constructor(type, init) { this.type = type; this.detail = (init || {}).detail; } },
   }, [memberPubs], decls);
@@ -1337,7 +1341,7 @@ async function runMediaKeyForReal(answers, calls = 3, memberPubs = ['m1', 'm2'])
   let n = 0;
   const scope = {
     sk: 'SK', pub: 'CP', actingChurch: '',
-    _localBlocked: new Set(), _lastOk: new Map(),
+    _localBlocked: new Set(), _lastOk: new Map(), _fitKeyRing,
     MEDIAKEY_D: 'trinityone/mediakey:', NET: 'trinityone', NO_NETWORK_RELAY: 'no-network-relay',
     now: () => 1700000000 + n,
     feChurch: (t) => t,

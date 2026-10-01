@@ -15356,6 +15356,19 @@ zoo`.split("\n");
     }
     return keys;
   }
+  function _fitKeyRing(full, recipCount, sealSample) {
+    for (let n = full.length; n >= 1; n -= n > 4 ? 2 : 1) {
+      const cand = full.slice(0, n);
+      let per = 0;
+      try {
+        per = 64 + String(sealSample(JSON.stringify(cand))).length + 6;
+      } catch (e) {
+        return null;
+      }
+      if (per * recipCount < 9e5) return cand;
+    }
+    return null;
+  }
   var CARENEED_D = "trinityone/care:";
   var _careKeyHex = null;
   var _careKeyRing = [];
@@ -19115,13 +19128,22 @@ zoo`.split("\n");
       if (want.every((p) => have[p])) return false;
       const fp = want.slice().sort().join(",");
       if (_mediaKeyPushRefused === fp) return false;
-      const _mring = JSON.stringify(_mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex]);
+      const _mfull = _mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex];
+      const _mfit = _fitKeyRing(_mfull, want.length, (pl) => encrypt3(pl, getConversationKey(sk, want[0])));
+      if (!_mfit) {
+        console.warn("[steward] media key envelope too large for one document at " + want.length + " recipients");
+        return false;
+      }
+      if (_mfit.length < _mfull.length) console.warn("[steward] media key ring trimmed to " + _mfit.length + " to fit " + want.length + " recipients \u2014 sermons encrypted under the dropped keys will no longer play");
+      const _mring = JSON.stringify(_mfit);
       const keys = await _sealEach(_mring, want, (pl, mp) => encrypt3(pl, getConversationKey(sk, mp)));
       const _pubOpts = { background: true };
       const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", MEDIAKEY_D + pub], ["t", NET]], content: JSON.stringify({ keys, rev: now() }) }), _pubOpts);
       if (ok !== false) {
         _mediaKeyDocKeys = keys;
         _mediaKeyPushRefused = null;
+        _mediaKeyRing = _mfit;
+        _mediaKeyHex = _mfit[0];
         return ok;
       }
       if (!_pubOpts.refused) return ok;
@@ -19151,8 +19173,14 @@ zoo`.split("\n");
       if (!_isRelayAuthed()) return false;
       if (!_mediaKeyHex) return false;
       const fresh = _hex(crypto.getRandomValues(new Uint8Array(32)));
-      const ring = [fresh, ..._mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex]].slice(0, 50);
+      const full = [fresh, ..._mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex]].slice(0, 50);
       const want = [.../* @__PURE__ */ new Set([pub, ...(memberPubs || []).filter(Boolean), ...(stewardPubs || []).filter(Boolean)])];
+      const ring = _fitKeyRing(full, want.length, (pl) => encrypt3(pl, getConversationKey(sk, want[0])));
+      if (!ring) {
+        console.warn("[steward] media key rotation too large for one document at " + want.length + " recipients");
+        return false;
+      }
+      if (ring.length < full.length) console.warn("[steward] media key ring trimmed to " + ring.length + " to fit " + want.length + " recipients \u2014 sermons encrypted under the dropped keys will no longer play");
       const payload = JSON.stringify(ring);
       const keys = await _sealEach(payload, want, (pl, mp) => encrypt3(pl, getConversationKey(sk, mp)));
       const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", MEDIAKEY_D + pub], ["t", NET]], content: JSON.stringify({ keys, rev: now() }) }));
@@ -19221,10 +19249,21 @@ zoo`.split("\n");
       const want = [...new Set([cp, churchPub, ...memberPubs || [], ...stewardPubs || []].filter(Boolean))].filter((p) => !_localBlocked.has(String(p).toLowerCase()));
       const have = _careKeyDocKeys || {};
       if (want.every((p2) => have[p2])) return false;
-      const _ring = JSON.stringify(_careKeyRing.length ? _careKeyRing : [_careKeyHex]);
+      const _cfull = _careKeyRing.length ? _careKeyRing : [_careKeyHex];
+      const _cfit = _fitKeyRing(_cfull, want.length, (pl) => encrypt3(pl, getConversationKey(sk, want[0])));
+      if (!_cfit) {
+        console.warn("[steward] care key envelope too large for one document at " + want.length + " recipients");
+        return false;
+      }
+      if (_cfit.length < _cfull.length) console.warn("[steward] care key ring trimmed to " + _cfit.length + " to fit " + want.length + " recipients \u2014 older sealed care records will no longer open");
+      const _ring = JSON.stringify(_cfit);
       const keys = await _sealEach(_ring, want, (pl, mp) => encrypt3(pl, getConversationKey(sk, mp)));
       const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", CAREKEY_D + cp], ["t", NET]], content: JSON.stringify({ keys, rev: _careKeyRev }) }), { background: !!(opts && opts.background) });
-      if (ok !== false) _careKeyDocKeys = keys;
+      if (ok !== false) {
+        _careKeyDocKeys = keys;
+        _careKeyRing = _cfit;
+        _careKeyHex = _cfit[0];
+      }
       return ok;
     },
     // seal / open the sensitive half of a care doc. Returns null when this device has no key, so callers can

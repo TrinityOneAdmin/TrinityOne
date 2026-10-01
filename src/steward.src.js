@@ -317,6 +317,23 @@ async function _sealEach(payload, targets, sealTo, onProgress) {
   if (onProgress) { try { onProgress(list.length, list.length); } catch (e) {} }
   return keys;
 }
+// FIT A KEY RING INTO ONE ENVELOPE. An envelope carries one sealed copy of the whole ring per recipient, and the
+// relay refuses any message over 1 MB (scripts/gateway.mjs, `maxPayload`), so a big church with a long ring
+// cannot publish it at all. Same trade the care rotation, the name key and the group key already make (owner,
+// 2026-10-01): keep the CURRENT key (ring[0]) always, and drop the OLDEST keys until the envelope fits.
+// Sized from ONE sealed sample per candidate length — the size depends on the ring, not on who it is sealed
+// to — exactly as rotateCareKey does; see the note there for why trial-sealing the whole church is unusable.
+// Returns the (possibly shortened) ring, or null when even the current key alone will not fit.
+// Callers: ensureMediaKeyForMembers, rotateMediaKey, ensureCareKeyForMembers.
+function _fitKeyRing(full, recipCount, sealSample) {
+  for (let n = full.length; n >= 1; n -= (n > 4 ? 2 : 1)) {
+    const cand = full.slice(0, n);
+    let per = 0;
+    try { per = 64 + String(sealSample(JSON.stringify(cand))).length + 6; } catch (e) { return null; }
+    if (per * recipCount < 900000) return cand;
+  }
+  return null;
+}
 
 const CARENEED_D = 'trinityone/care:';   // a care need — its sealed half depends on the care key existing
 let _careKeyHex = null;          // this device's copy of the church care key (the CURRENT one = ring[0])
@@ -5546,7 +5563,13 @@ window.Steward = {
     const fp = want.slice().sort().join(',');
     if (_mediaKeyPushRefused === fp) return false;
 
-    const _mring = JSON.stringify(_mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex]);
+    // FIT THE ENVELOPE (owner, 2026-10-01): drop the oldest sermon keys rather than publish a document the
+    // relay must refuse. A trimmed key stops opening the sermons encrypted under it — the stated cost.
+    const _mfull = _mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex];
+    const _mfit = _fitKeyRing(_mfull, want.length, (pl) => nip44e(pl, nip44ck(sk, want[0])));
+    if (!_mfit) { console.warn('[steward] media key envelope too large for one document at ' + want.length + ' recipients'); return false; }
+    if (_mfit.length < _mfull.length) console.warn('[steward] media key ring trimmed to ' + _mfit.length + ' to fit ' + want.length + ' recipients — sermons encrypted under the dropped keys will no longer play');
+    const _mring = JSON.stringify(_mfit);
     const keys = await _sealEach(_mring, want, (pl, mp) => nip44e(pl, nip44ck(sk, mp)));
     // `{ background: true }` — NOBODY ASKED FOR THIS WRITE. Same reasoning as ensureCareKeyForMembers, whose
     // one caller is the same key-distributor effect and which was given this on 2026-09-17: the console's
@@ -5554,7 +5577,7 @@ window.Steward = {
     // reported, quietly and once, by PublishErrorBanner, and always to the log.
     const _pubOpts = { background: true };
     const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', MEDIAKEY_D + pub], ['t', NET]], content: JSON.stringify({ keys, rev: now() }) }), _pubOpts);
-    if (ok !== false) { _mediaKeyDocKeys = keys; _mediaKeyPushRefused = null; return ok; }   // reflect what we just published so we don't loop
+    if (ok !== false) { _mediaKeyDocKeys = keys; _mediaKeyPushRefused = null; _mediaKeyRing = _mfit; _mediaKeyHex = _mfit[0]; return ok; }   // reflect what we just published so we don't loop
     // ⚠ A BLIP IS NOT A RULE, AND THIS MEMO IS ONLY ALLOWED TO REMEMBER RULES.
     //
     // `publish()` returns false for a refusal AND for a connection failure AND for "no relay could be
@@ -5628,8 +5651,13 @@ window.Steward = {
     if (!_isRelayAuthed()) return false;                          // never act on an untrusted view (see the mint gate)
     if (!_mediaKeyHex) return false;                              // no key yet — mediaEncryptor mints the first
     const fresh = _hex(crypto.getRandomValues(new Uint8Array(32)));
-    const ring = [fresh, ...(_mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex])].slice(0, 50);
+    const full = [fresh, ...(_mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex])].slice(0, 50);
     const want = [...new Set([pub, ...(memberPubs || []).filter(Boolean), ...(stewardPubs || []).filter(Boolean)])];
+    // FIT THE ENVELOPE — rotate with a shorter history rather than not rotate at all (see rotateCareKey: a
+    // refused rotation leaves the blocked member holding the key). Owner, 2026-10-01.
+    const ring = _fitKeyRing(full, want.length, (pl) => nip44e(pl, nip44ck(sk, want[0])));
+    if (!ring) { console.warn('[steward] media key rotation too large for one document at ' + want.length + ' recipients'); return false; }
+    if (ring.length < full.length) console.warn('[steward] media key ring trimmed to ' + ring.length + ' to fit ' + want.length + ' recipients — sermons encrypted under the dropped keys will no longer play');
     const payload = JSON.stringify(ring);
     const keys = await _sealEach(payload, want, (pl, mp) => nip44e(pl, nip44ck(sk, mp)));
     const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', MEDIAKEY_D + pub], ['t', NET]], content: JSON.stringify({ keys, rev: now() }) }));
@@ -5698,10 +5726,16 @@ window.Steward = {
     const have = _careKeyDocKeys || {};
     if (want.every(p2 => have[p2])) return false;             // everyone's keyed — no republish
     
-    const _ring = JSON.stringify(_careKeyRing.length ? _careKeyRing : [_careKeyHex]);
+    // FIT THE ENVELOPE (owner, 2026-10-01) — the same trade rotateCareKey makes: keep the current key, drop
+    // the oldest until the document fits under the relay's 1 MB cap. A dropped key's needs stop opening.
+    const _cfull = _careKeyRing.length ? _careKeyRing : [_careKeyHex];
+    const _cfit = _fitKeyRing(_cfull, want.length, (pl) => nip44e(pl, nip44ck(sk, want[0])));
+    if (!_cfit) { console.warn('[steward] care key envelope too large for one document at ' + want.length + ' recipients'); return false; }
+    if (_cfit.length < _cfull.length) console.warn('[steward] care key ring trimmed to ' + _cfit.length + ' to fit ' + want.length + ' recipients — older sealed care records will no longer open');
+    const _ring = JSON.stringify(_cfit);
     const keys = await _sealEach(_ring, want, (pl, mp) => nip44e(pl, nip44ck(sk, mp)));
     const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', CAREKEY_D + cp], ['t', NET]], content: JSON.stringify({ keys, rev: _careKeyRev }) }), { background: !!(opts && opts.background) });
-    if (ok !== false) _careKeyDocKeys = keys;
+    if (ok !== false) { _careKeyDocKeys = keys; _careKeyRing = _cfit; _careKeyHex = _cfit[0]; }
     return ok;
   },
   // seal / open the sensitive half of a care doc. Returns null when this device has no key, so callers can

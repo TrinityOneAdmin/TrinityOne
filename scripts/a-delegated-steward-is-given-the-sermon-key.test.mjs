@@ -45,6 +45,9 @@ import { fnBody } from './test-slice.mjs';
 
 const ROOT = new URL('../', import.meta.url).pathname;
 const BUNDLE = readFileSync(join(ROOT, 'vendor/steward.js'), 'utf8');
+// THE SHIPPED ring fitter (2026-10-01): the media-key publishers fit their envelope to the relay's 1 MB cap
+// through it, so a lifted publisher needs it in scope. Lifted, not re-typed.
+const _fitKeyRing = new Function('return ' + fnBody(BUNDLE, 'function _fitKeyRing(full, recipCount, sealSample) {', '_fitKeyRing in the shipped bundle'))();
 const DASH = readFileSync(join(ROOT, 'app/stew-dashboard.jsx'), 'utf8');
 
 const churchSk = generateSecretKey(), churchPub = getPublicKey(churchSk);
@@ -90,6 +93,7 @@ function ownerEngine() {
     encrypt3: (pl, ck) => nip44.encrypt(pl, ck),
     getConversationKey: (a, b) => nip44.utils.getConversationKey(a, b),
     feChurch: (t) => ({ ...t, pubkey: churchPub }),      // the owner signs with the church key
+    _fitKeyRing,
     publish: async (evt) => { published.push(evt); return true; },
   };
   const body = [
