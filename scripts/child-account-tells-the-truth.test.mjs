@@ -243,11 +243,11 @@ function nextLaunch({ relay, children, parentPub }) {
     relaysForChurch: () => ['wss://test.invalid'],
     _loadRemovedChildren: () => [],
     // 2026-10-01: the rebuild also consults the session's unlinked set and can retract a request.
-    _unlinkedNow: new Set(), _retractGuardReq: async () => true,
-    // 2026-10-01 (audit of 4f08ca4): the rebuild keeps the newest copy per request, by the relay's own order.
-    _isRetractedReq: (e) => (e.tags || []).some(t => t[0] === 'deleted') || !e.content,
-    _newerDoc: (a, b) => (a.created_at || 0) > (b.created_at || 0) || ((a.created_at || 0) === (b.created_at || 0) && String(a.id || '') < String(b.id || '')),
-    _publishAny: async () => true,
+    // 2026-10-01: the rebuild's own helpers are the SHIPPED ones, lifted from the bundle (scripts/family-harness.mjs),
+    // never re-typed here — a copy would stay green over a regression in the real one (re-audit of b7624a8).
+    ..._shippedHelpers,
+    _unlinkedNow: new Set(), _ownReqAt: new Map(), _familyAnswered: new Set(),
+    _retractGuardReq: async () => true, _familyChanged: () => {}, _publishAny: async () => true,
     _dtag: dOf,
     _loadChildren: () => children,
     _saveChildLink: (rec) => { children.push(rec); },
@@ -310,6 +310,8 @@ test('GHOST ROW: …but a setup that WORKED is still rebuilt after the local lis
 // A text match would not do: app/*.jsx ships unbundled, so `if (false && r && r.ok === false)` leaves every
 // word of that block in place (rule 3). So LIFT the real handler and RUN it.
 import { fnBody } from './test-slice.mjs';
+import { shippedFamilyHelpers } from './family-harness.mjs';
+const _shippedHelpers = shippedFamilyHelpers();
 
 const IDENT = readFileSync(new URL('../app/identity.jsx', import.meta.url), 'utf8');
 // There are two `const create = async () =>` handlers in this file. Slice FamilySheet first so the anchor

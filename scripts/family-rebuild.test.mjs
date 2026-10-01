@@ -34,7 +34,10 @@ test('it only ever adds — never removes a link we already hold', () => {
 });
 
 test('it ignores anything that is not a real child key', () => {
-  assert.match(fn, /\^\[0-9a-f\]\{64\}\$/i, 'a malformed d-tag would be stored as a child');
+  // 2026-10-01: the key check is the shared _hex64 (an empty answer for anything that is not 64 hex characters).
+  assert.match(fn, /const child = _hex64\(/, 'a malformed d-tag would be stored as a child');
+  assert.match(fn, /if \(!child\) return;/, 'a malformed d-tag would be stored as a child');
+  assert.match(SRC, /const _hex64 = \(x\) => \(\/\^\[0-9a-f\]\{64\}\$\/i\.test/, 'the key check no longer insists on a 64-hex pubkey');
   // 2026-10-01: the "withdrawn" test moved into _isRetractedReq, shared with the newest-copy choice; the rebuild
   // must still consult it, and it must still honour the `deleted` tag. (Executable proof of both lives in
   // scripts/an-unlinked-child-stays-gone-after-a-lock.test.mjs.)
@@ -55,5 +58,5 @@ test('and it actually runs after an identity arrives', () => {
 });
 
 test('it gives up rather than hanging', () => {
-  assert.match(fn, /setTimeout\(\(\) => finish\(false\), \d+\)/, 'a relay that never EOSEs would leave the promise open for ever');
+  assert.match(fn, /setTimeout\(finish, \d+\)/, 'a relay that never EOSEs would leave the promise open for ever');
 });

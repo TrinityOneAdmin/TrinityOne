@@ -27,10 +27,13 @@ const FELL = readFileSync(new URL('../src/fellowship.src.js', import.meta.url), 
 const DASH = stripComments(readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8'));
 
 test('the console can tell a parent a link was removed', () => {
-  const body = stripComments(fnBody(STEW, 'notifyGuardianRemoved(parentPubIn, childPubIn) {', 'notifyGuardianRemoved'));
+  // 2026-10-01: every notice is sealed and sent by one helper, _sendGuardNotice (it adds the parent's whole list).
+  const body = stripComments(fnBody(STEW, 'notifyGuardianRemoved(parentPubIn, childPubIn, links, alsoRemoved) {', 'notifyGuardianRemoved'));
   assert.match(body, /removed: childPub/, 'the removal notice does not name the child being removed');
-  assert.match(body, /nip44e\(/, 'the removal notice is not sealed to the parent — the child link would ride in cleartext');
-  assert.match(body, /GUARDNOTICE_D \+ parentPub/, 're-anchor: the notice no longer goes to the parent\'s own doc');
+  assert.match(body, /_sendGuardNotice\(parentPub, /, 're-anchor: the removal notice no longer goes through _sendGuardNotice');
+  const send = stripComments(fnBody(STEW, 'function _sendGuardNotice(parentPub, body, links) {', '_sendGuardNotice'));
+  assert.match(send, /nip44e\(/, 'the removal notice is not sealed to the parent — the child link would ride in cleartext');
+  assert.match(send, /GUARDNOTICE_D \+ parentPub/, 're-anchor: the notice no longer goes to the parent\'s own doc');
 });
 
 test('unlinking actually sends it', () => {
@@ -50,7 +53,7 @@ test('unlinking actually sends it', () => {
 test('and the parent\'s app honours it', () => {
   const body = stripComments(fnBody(FELL, 'subscribeGuardianNotices() {', 'subscribeGuardianNotices'));
   assert.match(body, /dec\.removed/, 'the parent\'s app ignores a removal notice');
-  assert.match(body, /_removeChildLink\(dec\.removed\)/, 'the removal does not drop the locally stored link');
+  assert.match(body, /const child = _hex64\(dec\.removed\)[\s\S]{0,200}_removeChildLink\(child\)/, 'the removal does not drop the locally stored link');
   // and the removal must be handled BEFORE the "must have a child" guard, or it falls out as malformed
   const removedAt = body.indexOf('dec.removed');
   const childGuard = body.indexOf('!dec.child');

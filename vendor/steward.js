@@ -15571,6 +15571,62 @@ zoo`.split("\n");
     }
     throw err2;
   }
+  function _childrenOfParent(links, parentPub) {
+    const out = /* @__PURE__ */ new Set();
+    for (const [c, ps] of Object.entries(links || {})) {
+      const ch = toPubHex(c);
+      if (!ch) continue;
+      if ((ps || []).some((p) => toPubHex(p) === parentPub)) out.add(ch);
+    }
+    return [...out].sort();
+  }
+  function _sendGuardNotice(parentPub, body, links) {
+    if (links && typeof links === "object") body.children = _childrenOfParent(links, parentPub);
+    let content;
+    try {
+      content = encrypt3(JSON.stringify(body), getConversationKey(sk, parentPub));
+    } catch (e) {
+      return Promise.resolve(null);
+    }
+    return publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", GUARDNOTICE_D + parentPub], ["t", NET], ["p", parentPub]], content }), sk));
+  }
+  var GUARDLIST_PASS_KEY = "trinityone.steward.guardlists.v1.";
+  var _guardListPassBusy = /* @__PURE__ */ new Set();
+  async function _guardListPassOnce(links) {
+    if (!sk || actingChurch || !churchSkHeld() || pub !== churchPub || sk !== churchSk) return 0;
+    const cp = churchPub;
+    if (_guardListPassBusy.has(cp)) return 0;
+    try {
+      if (localStorage.getItem(GUARDLIST_PASS_KEY + cp)) return 0;
+    } catch (e) {
+      return 0;
+    }
+    const parents = [...new Set(Object.values(links || {}).flat().map(toPubHex).filter(Boolean))];
+    if (!parents.length) return 0;
+    _guardListPassBusy.add(cp);
+    let sent = 0, allOk = true;
+    try {
+      for (const p of parents) {
+        let r = null;
+        try {
+          r = await _sendGuardNotice(p, { church: cp }, links);
+        } catch (e) {
+          r = null;
+        }
+        if (r) sent++;
+        else allOk = false;
+      }
+      if (allOk) {
+        try {
+          localStorage.setItem(GUARDLIST_PASS_KEY + cp, String(now()));
+        } catch (e) {
+        }
+      }
+    } finally {
+      _guardListPassBusy.delete(cp);
+    }
+    return sent;
+  }
   async function _churchHasCareNeeds() {
     const cp = actingChurch || pub;
     if (!cp) return false;
@@ -20728,8 +20784,12 @@ zoo`.split("\n");
           }
           _emit();
         },
+        // …and once the newest copy this console can see is in, the one-time list pass (see _guardListPassOnce).
+        // Only when a guardians document actually arrived: an empty read sets no marker and sends nothing.
         oneose() {
           _emit();
+          if (latest > 0) _guardListPassOnce(cur).catch(() => {
+          });
         }
       });
       return () => {
@@ -20757,17 +20817,14 @@ zoo`.split("\n");
     // so the parent<->child link never leaks in cleartext (the authoritative map stays the gated guardians: doc).
     // d keyed by the parent alone, so even the tag doesn't reveal which child. (First parents self-request, so they
     // already have the child locally — this is only for steward-initiated links.)
-    notifyGuardian(parentPubIn, childPubIn, childName) {
+    //
+    // `links` (2026-10-01): the guardians map AFTER the change. When given, the notice also carries the parent's
+    // whole list — see _sendGuardNotice. The legacy fields are unchanged, so an older parent's app still works.
+    notifyGuardian(parentPubIn, childPubIn, childName, links) {
       if (!sk) return Promise.resolve(null);
       const parentPub = toPubHex(parentPubIn), childPub = toPubHex(childPubIn);
       if (!parentPub || !childPub || parentPub === childPub) return Promise.resolve(null);
-      let content;
-      try {
-        content = encrypt3(JSON.stringify({ child: childPub, name: childName || "", church: churchPub }), getConversationKey(sk, parentPub));
-      } catch (e) {
-        return Promise.resolve(null);
-      }
-      return publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", GUARDNOTICE_D + parentPub], ["t", NET], ["p", parentPub]], content }), sk));
+      return _sendGuardNotice(parentPub, { child: childPub, name: childName || "", church: churchPub }, links);
     },
     // THE OTHER HALF OF notifyGuardian. Linking a parent tells their app so the child appears in it; UNLINKING
     // told them nothing at all, and the parent's app stores the link in localStorage where nothing ever removed
@@ -20778,17 +20835,28 @@ zoo`.split("\n");
     // someone they are a child's guardian after the church has decided they are not, which in safeguarding is
     // its own kind of wrong. unlinkParent's own comment already said "removing a link matters more than adding
     // one"; this is the half that was missing.
-    notifyGuardianRemoved(parentPubIn, childPubIn) {
+    //
+    // `links` as for notifyGuardian. `alsoRemoved` (2026-10-01): every child this one change took from the parent —
+    // marking a parent as a child unlinks them from all their children at once, and the notice is ONE slot per
+    // parent, so one notice per child kept only the last. They ride in `removedAll`, which builds before 4f08ca4
+    // read; `removed` still names the first, for the builds in between.
+    notifyGuardianRemoved(parentPubIn, childPubIn, links, alsoRemoved) {
       if (!sk) return Promise.resolve(null);
       const parentPub = toPubHex(parentPubIn), childPub = toPubHex(childPubIn);
       if (!parentPub || !childPub) return Promise.resolve(null);
-      let content;
-      try {
-        content = encrypt3(JSON.stringify({ removed: childPub, church: churchPub }), getConversationKey(sk, parentPub));
-      } catch (e) {
-        return Promise.resolve(null);
-      }
-      return publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", GUARDNOTICE_D + parentPub], ["t", NET], ["p", parentPub]], content }), sk));
+      const body = { removed: childPub, church: churchPub };
+      const all = [.../* @__PURE__ */ new Set([childPub, ...(Array.isArray(alsoRemoved) ? alsoRemoved : []).map(toPubHex).filter(Boolean)])];
+      if (all.length > 1) body.removedAll = all;
+      return _sendGuardNotice(parentPub, body, links);
+    },
+    // A notice that carries ONLY the parent's whole list — for a change that is neither a link nor a removal
+    // from this parent's point of view (a request confirmed, a member reconnected on a new key) and for the
+    // one-time pass below. An older parent's app reads neither `child` nor `removed` here and ignores it.
+    notifyGuardianList(parentPubIn, links) {
+      if (!sk) return Promise.resolve(null);
+      const parentPub = toPubHex(parentPubIn);
+      if (!parentPub) return Promise.resolve(null);
+      return _sendGuardNotice(parentPub, { church: churchPub }, links || {});
     },
     // ---- joining: by default anyone with the invite/QR joins instantly. A steward can switch on
     // "require approval", and then a new member is held as a pending request until admitted. The relay
@@ -21105,6 +21173,18 @@ zoo`.split("\n");
         }
       }
       if (nextG && !await w(() => window.Steward.setGuardians(nextG, nextGC || gc))) throw new Error("Couldn\u2019t save the parent link, so nothing was changed. Check your connection and try again \u2014 this is the part that cannot be put right by hand afterwards.");
+      if (nextG) {
+        const told = /* @__PURE__ */ new Set();
+        if (Object.keys(nextG).some((c) => low(nextG[c]).indexOf(newH) !== -1)) told.add(newH);
+        for (const p of low(nextG[newH])) told.add(p);
+        for (const p of told) {
+          try {
+            Promise.resolve(window.Steward.notifyGuardianList(p, nextG)).catch(() => {
+            });
+          } catch (e) {
+          }
+        }
+      }
       const pairs = [...(o.reseats || []).filter((p) => p && p.new !== newH), { old: oldH, new: newH, name: o.name || "", at: now() }];
       if (!await w(() => window.Steward.setReseats(pairs))) throw new Error("Couldn\u2019t record the reconnection, so nothing was changed. Check your connection and try again.");
       if (!await w(() => window.Steward.setAdmitted([.../* @__PURE__ */ new Set([...o.admitted || [], newH])]))) throw new Error("Recorded the reconnection, but couldn\u2019t let the new phone in. Open Members and approve them, or run this again.");

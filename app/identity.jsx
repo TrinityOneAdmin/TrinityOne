@@ -1895,6 +1895,8 @@ function ChildrenAtChurchSheet({ open, onClose, ctx }) {
 }
 window.ChildrenAtChurchSheet = ChildrenAtChurchSheet;
 
+// How long the Family sheet waits for the church's first answer before showing what it knows (see `answered`).
+const FAMILY_WAIT_MS = 12000;
 function FamilySheet({ open, onClose, ctx }) {
   const F = window.Fellowship;
   const me = (F && F.myPubkey) || null;
@@ -1915,11 +1917,23 @@ function FamilySheet({ open, onClose, ctx }) {
   const guardians = (ctx.safeguard && ctx.safeguard.guardians) || {};
   // a link is "done" if the steward initiated it (viaSteward — the notice IS the confirmation) OR the church's
   // guardians map lists me (my own self-request was confirmed). Only a still-pending SELF-request shows "waiting".
-  const confirmed = (k) => !!(k && (k.viaSteward || (guardians[k.child] || []).includes(me)));
-  const refreshKids = () => setKids(F && F.myChildren ? F.myChildren(ctx.church && ctx.church.npub) : []);
-  // a steward-initiated guardian link arrives as an encrypted notice → the engine records the child, then
-  // fires this so it appears here without a reload.
-  useIdE(() => { const f = () => refreshKids(); window.addEventListener('trinity-guardian-added', f); return () => window.removeEventListener('trinity-guardian-added', f); }, []);
+  // `linked` (2026-10-01): the church's whole-list notice names this child — the church's own answer, so it is done.
+  const confirmed = (k) => !!(k && (k.viaSteward || k.linked || (guardians[k.child] || []).includes(me)));
+  // HAS THE CHURCH ANSWERED YET? Until it has — a whole-list notice applied, or the rebuild of this parent's own
+  // requests finished — an empty list means "not known yet", not "no children". Saying "no children linked …
+  // you can make one below" then invited a second account for a child whose link simply had not arrived.
+  // Bounded: after FAMILY_WAIT_MS the sheet says what it knows, so a church that never answers cannot hold it.
+  const answeredNow = () => !F || !F.familyAnswered || !!F.familyAnswered(ctx.church && ctx.church.npub);
+  const [answered, setAnswered] = useId(answeredNow);
+  const refreshKids = () => { setKids(F && F.myChildren ? F.myChildren(ctx.church && ctx.church.npub) : []); setAnswered(answeredNow()); };
+  // the engine fires these when a notice changes the links or a rebuild finishes, so the list follows without a reload
+  useIdE(() => {
+    const f = () => refreshKids();
+    const evs = ['trinity-guardian-added', 'trinity-guardian-removed', 'trinity-family-changed'];
+    evs.forEach(n => window.addEventListener(n, f));
+    const t = setTimeout(() => setAnswered(true), FAMILY_WAIT_MS);
+    return () => { evs.forEach(n => window.removeEventListener(n, f)); clearTimeout(t); };
+  }, []);
   const create = async () => {
     const n = name.trim(); if (!n) { setErr('Enter the child’s name.'); return; }
     setBusy(true); setErr('');
@@ -2010,7 +2024,10 @@ function FamilySheet({ open, onClose, ctx }) {
                     <Icon name={confirmed(k) ? 'check' : 'shield'} size={12} color="currentColor" /> {k.viaSteward ? 'Linked by your steward' : confirmed(k) ? 'Linked & protected' : 'Waiting for steward to confirm'}</div>
                 </div>
               </div>
-            )) : <div style={{ textAlign: 'center', color: 'var(--ink-3)', padding: '24px 16px', fontSize: 14, lineHeight: 1.5 }}>
+            )) : !answered ? <div style={{ textAlign: 'center', color: 'var(--ink-3)', padding: '24px 16px', fontSize: 14, lineHeight: 1.5 }}>
+              <div style={{ fontWeight: 700, color: 'var(--ink-2)', marginBottom: 6 }}>Checking with your church…</div>
+              Any children linked to you will appear here in a moment.
+            </div> : <div style={{ textAlign: 'center', color: 'var(--ink-3)', padding: '24px 16px', fontSize: 14, lineHeight: 1.5 }}>
               {/* "No children set up yet." full stop, read to a parent whose child DOES have an account and IS
                   linked at the church, as "nothing is set up for my son". Round 7: the parent said she would
                   have closed the app knowing no more than when she opened it. Say which case this is. */}

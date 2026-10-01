@@ -942,6 +942,57 @@ function _requireTrustedView(what) {
   try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what, message: err.message } })); } catch (e) {}
   throw err;
 }
+// ── A PARENT'S WHOLE LIST, IN EVERY GUARDIAN NOTICE (owner, 2026-10-01; reference/DOMAIN.md) ──────────────────
+// The notice is one replaceable slot per parent (d=guardnotice:<parent>), so a notice that names only the child
+// it is about is overwritten by the next one, and the parent's phone loses track of every earlier link. Every
+// notice now also carries `children`: the parent's COMPLETE current list of linked children in this church,
+// computed from the guardians map AFTER the change, sealed to the parent like the rest. The newest notice is
+// therefore the whole truth, and the parent's phone never needs to re-publish anything to hold on to a link.
+// The legacy fields (`child`/`name`, `removed`) are kept exactly as they were — add, never repurpose — so an
+// older parent's app keeps working off them.
+function _childrenOfParent(links, parentPub) {
+  const out = new Set();
+  for (const [c, ps] of Object.entries(links || {})) {
+    const ch = toPubHex(c); if (!ch) continue;
+    if ((ps || []).some(p => toPubHex(p) === parentPub)) out.add(ch);
+  }
+  return [...out].sort();
+}
+function _sendGuardNotice(parentPub, body, links) {
+  if (links && typeof links === 'object') body.children = _childrenOfParent(links, parentPub);
+  let content;
+  try { content = nip44e(JSON.stringify(body), nip44ck(sk, parentPub)); }
+  catch (e) { return Promise.resolve(null); }
+  return publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', GUARDNOTICE_D + parentPub], ['t', NET], ['p', parentPub]], content }), sk));
+}
+// THE ONE-TIME PASS (owner, 2026-10-01). Links made before this build were announced, if at all, by notices that
+// carry no list — and only the newest of those survives in each parent's slot. So once per church, the first
+// time this console reads its guardians map, every linked parent is sent a list-only notice. ONE PUBLISH PER
+// DISTINCT PARENT, sequentially; a church with 40 linked parents sends 40 small events once. Guarded by a
+// per-church marker in this console's storage, set only when every send was accepted — so a second console
+// device sends them once more, and a pass that partly failed runs again on the next load. Only the church key
+// may write a guardnotice: (gateway.mjs accept()), so a delegated console never runs it.
+const GUARDLIST_PASS_KEY = 'trinityone.steward.guardlists.v1.';
+const _guardListPassBusy = new Set();
+async function _guardListPassOnce(links) {
+  if (!sk || actingChurch || !churchSkHeld() || pub !== churchPub || sk !== churchSk) return 0;
+  const cp = churchPub;
+  if (_guardListPassBusy.has(cp)) return 0;
+  try { if (localStorage.getItem(GUARDLIST_PASS_KEY + cp)) return 0; } catch (e) { return 0; }
+  const parents = [...new Set(Object.values(links || {}).flat().map(toPubHex).filter(Boolean))];
+  if (!parents.length) return 0;   // nobody linked (or nothing read yet): no marker, so a later load still runs it
+  _guardListPassBusy.add(cp);
+  let sent = 0, allOk = true;
+  try {
+    for (const p of parents) {
+      let r = null;
+      try { r = await _sendGuardNotice(p, { church: cp }, links); } catch (e) { r = null; }
+      if (r) sent++; else allOk = false;
+    }
+    if (allOk) { try { localStorage.setItem(GUARDLIST_PASS_KEY + cp, String(now())); } catch (e) {} }
+  } finally { _guardListPassBusy.delete(cp); }
+  return sent;
+}
 async function _churchHasCareNeeds() {
   const cp = actingChurch || pub; if (!cp) return false;
   try {
@@ -7249,7 +7300,9 @@ window.Steward = {
         try { const parsed = JSON.parse(e.content); cur = parsed.links || {}; curClosed = parsed.closed || {}; } catch { cur = {}; curClosed = {}; }
         _emit();
       },
-      oneose() { _emit(); },
+      // …and once the newest copy this console can see is in, the one-time list pass (see _guardListPassOnce).
+      // Only when a guardians document actually arrived: an empty read sets no marker and sends nothing.
+      oneose() { _emit(); if (latest > 0) _guardListPassOnce(cur).catch(() => {}); },
     });
     return () => { try { sub.close(); } catch {} };
   },
@@ -7277,14 +7330,14 @@ window.Steward = {
   // so the parent<->child link never leaks in cleartext (the authoritative map stays the gated guardians: doc).
   // d keyed by the parent alone, so even the tag doesn't reveal which child. (First parents self-request, so they
   // already have the child locally — this is only for steward-initiated links.)
-  notifyGuardian(parentPubIn, childPubIn, childName) {
+  //
+  // `links` (2026-10-01): the guardians map AFTER the change. When given, the notice also carries the parent's
+  // whole list — see _sendGuardNotice. The legacy fields are unchanged, so an older parent's app still works.
+  notifyGuardian(parentPubIn, childPubIn, childName, links) {
     if (!sk) return Promise.resolve(null);
     const parentPub = toPubHex(parentPubIn), childPub = toPubHex(childPubIn);
     if (!parentPub || !childPub || parentPub === childPub) return Promise.resolve(null);
-    let content;
-    try { content = nip44e(JSON.stringify({ child: childPub, name: childName || '', church: churchPub }), nip44ck(sk, parentPub)); }
-    catch (e) { return Promise.resolve(null); }
-    return publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', GUARDNOTICE_D + parentPub], ['t', NET], ['p', parentPub]], content }), sk));
+    return _sendGuardNotice(parentPub, { child: childPub, name: childName || '', church: churchPub }, links);
   },
 
   // THE OTHER HALF OF notifyGuardian. Linking a parent tells their app so the child appears in it; UNLINKING
@@ -7296,14 +7349,28 @@ window.Steward = {
   // someone they are a child's guardian after the church has decided they are not, which in safeguarding is
   // its own kind of wrong. unlinkParent's own comment already said "removing a link matters more than adding
   // one"; this is the half that was missing.
-  notifyGuardianRemoved(parentPubIn, childPubIn) {
+  //
+  // `links` as for notifyGuardian. `alsoRemoved` (2026-10-01): every child this one change took from the parent —
+  // marking a parent as a child unlinks them from all their children at once, and the notice is ONE slot per
+  // parent, so one notice per child kept only the last. They ride in `removedAll`, which builds before 4f08ca4
+  // read; `removed` still names the first, for the builds in between.
+  notifyGuardianRemoved(parentPubIn, childPubIn, links, alsoRemoved) {
     if (!sk) return Promise.resolve(null);
     const parentPub = toPubHex(parentPubIn), childPub = toPubHex(childPubIn);
     if (!parentPub || !childPub) return Promise.resolve(null);
-    let content;
-    try { content = nip44e(JSON.stringify({ removed: childPub, church: churchPub }), nip44ck(sk, parentPub)); }
-    catch (e) { return Promise.resolve(null); }
-    return publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', GUARDNOTICE_D + parentPub], ['t', NET], ['p', parentPub]], content }), sk));
+    const body = { removed: childPub, church: churchPub };
+    const all = [...new Set([childPub, ...(Array.isArray(alsoRemoved) ? alsoRemoved : []).map(toPubHex).filter(Boolean)])];
+    if (all.length > 1) body.removedAll = all;
+    return _sendGuardNotice(parentPub, body, links);
+  },
+  // A notice that carries ONLY the parent's whole list — for a change that is neither a link nor a removal
+  // from this parent's point of view (a request confirmed, a member reconnected on a new key) and for the
+  // one-time pass below. An older parent's app reads neither `child` nor `removed` here and ignores it.
+  notifyGuardianList(parentPubIn, links) {
+    if (!sk) return Promise.resolve(null);
+    const parentPub = toPubHex(parentPubIn);
+    if (!parentPub) return Promise.resolve(null);
+    return _sendGuardNotice(parentPub, { church: churchPub }, links || {});
   },
 
   // ---- joining: by default anyone with the invite/QR joins instantly. A steward can switch on
@@ -7624,6 +7691,15 @@ window.Steward = {
     // The half no steward can repair by hand: re-ticking "child" restores the marking and still leaves the
     // parent unable to message their own child. Reported as done, it would never be looked at again.
     if (nextG && !await w(() => window.Steward.setGuardians(nextG, nextGC || gc))) throw new Error('Couldn\u2019t save the parent link, so nothing was changed. Check your connection and try again \u2014 this is the part that cannot be put right by hand afterwards.');
+    // TELL EVERY PARENT WHOSE LIST CHANGED (2026-10-01). A parent reconnected on a new key has no list on that
+    // key yet; a child reconnected changes each of their parents' lists. Each gets the whole new list. Not
+    // fatal and not awaited as a gate: the links above are what the relay enforces.
+    if (nextG) {
+      const told = new Set();
+      if (Object.keys(nextG).some(c => low(nextG[c]).indexOf(newH) !== -1)) told.add(newH);
+      for (const p of low(nextG[newH])) told.add(p);
+      for (const p of told) { try { Promise.resolve(window.Steward.notifyGuardianList(p, nextG)).catch(() => {}); } catch (e) {} }
+    }
 
     // (3) Record the vouch FIRST, then admit. If admitting failed on its own the member would be able to post
     // while the church still showed two of them; this order fails the safer way round. It only fails that way
