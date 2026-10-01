@@ -20,6 +20,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { createRequire } from 'node:module';
 import { loadScreen, miniReact, find, texts } from './render-jsx-screen.mjs';
 
 const ROOT = new URL('../', import.meta.url).pathname;
@@ -66,6 +67,8 @@ function realBible() {
     window: win, document: { readyState: 'loading', addEventListener() {} }, location: { search: '' },
     console: { error() {}, warn() {}, log() {} }, TextDecoder, TextEncoder, URLSearchParams, URL,
     setTimeout, clearTimeout, Promise, Uint8Array,
+    // the page loads fflate as a script before engine.js; a module ZIP is opened with it
+    fflate: createRequire(import.meta.url)('fflate'),
   };
   win.window = win;
   vm.createContext(ctx);
@@ -378,4 +381,24 @@ test('…and a \\d that is not one of Psalm 119’s letters stays scripture (Hab
   const v19 = Bible.getVerses(35, 3, 'HB').find(r => String(r.v) === '19');
   assert.equal(v19.text, 'The Lord God is my strength. For the Chief Musician, on my stringed instruments.',
     'HABAKKUK 3:19’s CLOSING LINE (a \\d) WAS DROPPED AS A LABEL: ' + JSON.stringify(v19.text));
+});
+
+// ── THE SHIPPED MODULES (whole-branch audit, 2026-10-01) ─────────────────────────────────────────────────────
+// The fixtures above carried ALEPH and BETH; the real eng-web spells three letters its own way ("KAPF",
+// "TZADHE") and writes one with character markup ("\\d SIN \\w AND|strong=…\\w* SHIN"), and those three were
+// still glued onto verses 80, 136 and 160. So: the files that SHIP, all 176 verses, all 22 letters.
+const LETTER_TOKEN = /\b(ALEPH|BETH|GIMEL|DALETH|HE|VAV|WAW|ZAYIN|HETH|TETH|YODH|KAPH|KAPF|LAMEDH|MEM|NUN|SAMEKH|AYIN|PE|TZADHE|TZADE|QOPH|KOPH|RESH|SIN|SHIN|TAV|TAW)\b/;
+test('in the SHIPPED eng-web and engbsb, no Psalm 119 verse carries a stanza letter', async () => {
+  for (const [file, abbr] of [['modules/eng-web.zip', 'WEBZ'], ['modules/engbsb.zip', 'BSBZ']]) {
+    const Bible = realBible();
+    const r = await Bible.loadModuleBytes(new Uint8Array(readFileSync(ROOT + file)), file.split('/').pop(), { abbr, name: abbr, category: 'bibles' });
+    assert.equal(r.kind, 'bible', 'fixture: ' + file + ' did not load');
+    const rows = Bible.getVerses(19, 119, abbr);
+    assert.equal(rows.length, 176, file + ': Psalm 119 does not have 176 verses: ' + rows.length);
+    const glued = [...rows].filter(v => LETTER_TOKEN.test(v.text)).map(v => '119:' + v.v + ' …' + v.text.slice(-24));
+    assert.equal(glued.length, 0, file + ': A STANZA LETTER IS STILL IN THE VERSE TEXT: ' + JSON.stringify(glued));
+    // and the reader still shows all 22 as labels
+    const labels = rows.reduce((n, v) => n + (v.html.match(/<span class="sec qa">/g) || []).length, 0);
+    assert.equal(labels, 22, file + ': the reader does not show all 22 stanza letters: ' + labels);
+  }
 });

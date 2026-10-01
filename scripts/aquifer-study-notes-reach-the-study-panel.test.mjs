@@ -118,6 +118,7 @@ function engineChain(probe = () => {}) {
     // The BSB's per-chapter VERSE counts need buildFromUSFM's lazy half too, so these three come along.
     fnBody(ENGINE, 'function inlineUSFM(s){'),
     fnBody(ENGINE, 'function _balancedInline(html){'),   // 2026-10-01: parseUSFM balances a heading's markup with it
+    stmt(ENGINE, 'const _HEB = ', '_HEB'),
     stmt(ENGINE, 'const HEBREW_LETTER = ', 'HEBREW_LETTER'),   // 2026-10-01: Psalm 119's \d letter names
     fnBody(ENGINE, 'function parseUSFM(text){'),
     fnBody(ENGINE, 'function stripTags(s){'),
