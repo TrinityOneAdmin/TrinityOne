@@ -575,6 +575,10 @@ function ChapterVerseMenu({ open, onClose, anchor, loc, version, onPick }) {
   const Bible = window.Bible;
   const [pick, setPick] = useS(loc.chap);   // chapter whose verses are listed below
   useE(() => { if (open) setPick(loc.chap); }, [open, loc.chap]);
+  // ANDROID BACK CLOSES IT, like every <BottomSheet>/<Overlay> (app/ui.jsx useBackLayer). Hand-rolled, this popover
+  // was on no back-stack, so Back fell through to "any other tab -> Today" and threw the reader out of the Bible
+  // with the popover still meant to be open. Device round 2026-10-01, twice. Before the early return: it is a hook.
+  useBackLayer(open && !!anchor, onClose);
   if (!open || !anchor) return null;
   const nCh = Bible.maxChapter(loc.book, version) || 1;
   const nV = ((Bible.getVerses(loc.book, pick, version) || []).length) || 1;

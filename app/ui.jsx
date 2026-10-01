@@ -508,4 +508,4 @@ function FeatureTrouble() {
   );
 }
 
-Object.assign(window, { cx, makeNameDisambiguator, PhoneFrame, TabBar, BottomSheet, Overlay, IconBtn, Chip, SectionLabel, Toast, FeatureTrouble });
+Object.assign(window, { cx, makeNameDisambiguator, PhoneFrame, TabBar, BottomSheet, Overlay, IconBtn, Chip, SectionLabel, Toast, useBackLayer, FeatureTrouble });

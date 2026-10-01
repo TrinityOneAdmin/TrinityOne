@@ -85,6 +85,7 @@ function reader({ loc = { book: 43, chap: 3 }, selection = '' } = {}) {
     lsGet: (k, d) => d, lsSet: () => {},
     useTrinityAudio: () => ({ track: null, playing: false }),
     Overlay: Stub('Overlay'), ReadPlansTabs: Stub('ReadPlansTabs'), BottomSheet: Stub('BottomSheet'),
+    useBackLayer: () => {},   // the Back stack (app/ui.jsx); ChapterVerseMenu registers on it
     Sheet: Stub('Sheet'), Modal: Stub('Modal'), Pill: Stub('Pill'), Row: Stub('Row'),
     IconBtn: Stub('IconBtn'), Halo: Stub('Halo'), SectionLabel: Stub('SectionLabel'),
   };
