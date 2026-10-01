@@ -45,6 +45,17 @@ const ISAIAH_40 = [
   '\\s1 The \\nd Lord\\nd* Reigns',
   '\\p',
   '\\v 10 Here comes the Lord God &amp; his arm rules for Him.',
+  // Audit of 3fe46eb, finding 5: a break between two \q1 lines (no &emsp; indent to hide behind) and a
+  // paragraph break INSIDE a verse — each must read as a word break.
+  '\\q1',
+  '\\v 11 He tends his flock like a shepherd;',
+  '\\q1 he gathers the lambs in his arms',
+  '\\v 12 Who has measured the waters',
+  '\\p in the hollow of his hand?',
+  // Finding 7: a heading MID-VERSE with an unclosed character style. The verse's words after it must survive.
+  '\\v 13 Who has understood the Spirit of the Lord,',
+  '\\s1 The \\nd Lord',
+  '\\q1 or instructed him as his counselor?',
 ].join('\n');
 
 // The REAL engine.js, run whole in a vm. `document.readyState: 'loading'` holds autoLoad back (it would try to
@@ -159,6 +170,12 @@ test('…and the same holds for every reader of `text`: the chapter, a nested he
   assert.equal(byV['9'], 'Go up on a high mountain, O Zion, herald of good news. Lift up your voice loudly, O Jerusalem.',
     'a heading with a nested \\nd span leaked into the verse before it: ' + JSON.stringify(byV['9']));
   assert.equal(byV['10'], 'Here comes the Lord God & his arm rules for Him.', 'an escaped ampersand in scripture is not decoded: ' + JSON.stringify(byV['10']));
+  assert.equal(byV['11'], 'He tends his flock like a shepherd; he gathers the lambs in his arms',
+    'two \\q1 lines of one verse are glued at the line break: ' + JSON.stringify(byV['11']));
+  assert.equal(byV['12'], 'Who has measured the waters in the hollow of his hand?',
+    'a paragraph break inside a verse glued two words together: ' + JSON.stringify(byV['12']));
+  assert.equal(byV['13'], 'Who has understood the Spirit of the Lord, or instructed him as his counselor?',
+    'A HEADING WITH AN UNCLOSED STYLE ATE THE REST OF THE VERSE: ' + JSON.stringify(byV['13']));
   // THE HTML IS UNTOUCHED: the reader still renders the heading where the module put it.
   assert.match(rows.find(r => String(r.v) === '8').html, /<span class="sec">Here Is Your God!<\/span>/,
     'the heading was removed from the reader’s html too — only `text` was meant to change');

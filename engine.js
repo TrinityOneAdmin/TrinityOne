@@ -383,14 +383,20 @@ window.safeImgUrl = function (v) {
     let s = String(html || "");
     // Drop heading and parallel-reference spans WITH their content. Depth-counted, because inlineUSFM can
     // nest a span inside a heading (`\s1 The \nd LORD\nd* reigns` → <span class="nd"> inside the sec span).
+    // BOUNDED BY THE HEADING'S OWN LINE. parseUSFM writes every heading as `<br><span class="sec">…</span>` from
+    // ONE source line, and inlineUSFM never emits a <br>, so a heading cannot run past the next <br>. An
+    // unclosed character style inside it (`\s1 The \nd Lord` with no `\nd*`) leaves the depth count short;
+    // the drop then stops at that <br> instead of eating the verse words after it. (Audit of 3fe46eb, finding 7.)
     const OPEN = /<span class="(?:sec|parref)">/g;
     let m;
     while((m = OPEN.exec(s))){
       let depth = 1, i = m.index + m[0].length;
+      const br = s.slice(i).search(/<br\s*\/?>/i);
+      const lineEnd = br === -1 ? s.length : i + br;
       const tag = /<span\b[^>]*>|<\/span>/g; tag.lastIndex = i;
       let t;
-      while(depth > 0 && (t = tag.exec(s))){ depth += (t[0] === "</span>") ? -1 : 1; i = t.index + t[0].length; }
-      if(depth > 0) i = s.length;   // unclosed: drop to the end rather than leak the heading
+      while(depth > 0 && (t = tag.exec(s)) && t.index < lineEnd){ depth += (t[0] === "</span>") ? -1 : 1; i = t.index + t[0].length; }
+      if(depth > 0) i = lineEnd;   // unclosed: drop to the end of the heading's line, never further
       s = s.slice(0, m.index) + " " + s.slice(i);
       OPEN.lastIndex = m.index;
     }
