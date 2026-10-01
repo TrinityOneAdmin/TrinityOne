@@ -6708,6 +6708,8 @@
   var SAFE_D = "trinityone/safe:";
   var FAMILY_KEY = "trinityone.family";
   var FAMILY_REMOVED_KEY = "trinityone.family.removed";
+  var _unlinkedNow = /* @__PURE__ */ new Set();
+  var _retractedNow = /* @__PURE__ */ new Set();
   function _loadChildren() {
     try {
       return JSON.parse(localStorage.getItem(FAMILY_KEY) || "[]") || [];
@@ -6730,10 +6732,14 @@
     } catch {
     }
     if (link.viaSteward) {
-      const rm = _loadRemovedChildren().filter((c) => c !== link.child);
-      try {
-        localStorage.setItem(FAMILY_REMOVED_KEY, JSON.stringify(rm));
-      } catch {
+      _unlinkedNow.delete(link.child);
+      _retractedNow.delete(link.child);
+      const rm = _loadRemovedChildren();
+      if (rm.includes(link.child)) {
+        try {
+          localStorage.setItem(FAMILY_REMOVED_KEY, JSON.stringify(rm.filter((c) => c !== link.child)));
+        } catch {
+        }
       }
     }
   }
@@ -6743,11 +6749,24 @@
       localStorage.setItem(FAMILY_KEY, JSON.stringify(list));
     } catch {
     }
-    const rm = _loadRemovedChildren();
-    if (!rm.includes(childPub)) rm.push(childPub);
+    _unlinkedNow.add(childPub);
+  }
+  async function _retractGuardReq(childPub, cp) {
+    if (!sk || !childPub || !cp) return false;
+    if (_retractedNow.has(childPub)) return true;
+    const evt = finalizeEvent2({
+      kind: 30078,
+      created_at: Math.floor(Date.now() / 1e3),
+      tags: [["d", "trinityone/guardreq:" + childPub], ["t", NET], ["p", cp], ["deleted", "1"]],
+      content: ""
+    }, sk);
     try {
-      localStorage.setItem(FAMILY_REMOVED_KEY, JSON.stringify(rm));
-    } catch {
+      await _publishAny(publishSetFor(cp), evt);
+      _retractedNow.add(childPub);
+      return true;
+    } catch (e) {
+      console.warn("[fellowship] guardian request retraction failed \u2014 retried when the notice is next delivered", e);
+      return false;
     }
   }
   function _rebuildFamily(churchNpub) {
@@ -6755,7 +6774,8 @@
     if (!pub || !cp) return Promise.resolve(0);
     return new Promise((resolve) => {
       let added = 0, done = false;
-      const removed = new Set(_loadRemovedChildren());
+      const legacy = new Set(_loadRemovedChildren());
+      const retracting = [];
       const finish = () => {
         if (done) return;
         done = true;
@@ -6763,6 +6783,15 @@
           sub.close();
         } catch (e) {
         }
+        if (legacy.size) Promise.all(retracting).then((oks) => {
+          if (oks.every(Boolean)) {
+            try {
+              localStorage.removeItem(FAMILY_REMOVED_KEY);
+            } catch (e) {
+            }
+          }
+        }).catch(() => {
+        });
         resolve(added);
       };
       const sub = pool.subscribeMany(relaysForChurch(cp), [{ kinds: [30078], authors: [pub] }], {
@@ -6772,7 +6801,14 @@
           if ((e.tags || []).some((t) => t[0] === "deleted")) return;
           const child = d.slice("trinityone/guardreq:".length);
           if (!/^[0-9a-f]{64}$/i.test(child)) return;
-          if (removed.has(child)) return;
+          if (_unlinkedNow.has(child)) {
+            _retractGuardReq(child, cp);
+            return;
+          }
+          if (legacy.has(child) && _loadRemovedChildren().includes(child)) {
+            retracting.push(_retractGuardReq(child, cp));
+            return;
+          }
           if (_loadChildren().some((c) => c && c.child === child)) return;
           _saveChildLink({ child, name: "", churchPub: cp, ts: e.created_at || 0 });
           added++;
@@ -11645,14 +11681,13 @@
             return;
           }
           if (dec && dec.removed) {
+            if (!/^[0-9a-f]{64}$/i.test(String(dec.removed))) return;
             _removeChildLink(dec.removed);
+            _retractGuardReq(dec.removed, e.pubkey);
             try {
               window.dispatchEvent(new CustomEvent("trinity-guardian-removed", { detail: { child: dec.removed } }));
             } catch (x) {
             }
-            if (dec.removedAll && Array.isArray(dec.removedAll)) dec.removedAll.forEach((c) => {
-              if (c && c !== dec.removed) _removeChildLink(c);
-            });
             return;
           }
           if (!dec || !dec.child || dec.child === pub) return;

@@ -207,22 +207,55 @@ const SAFETY_D = 'trinityone/safetycheck:';// the church's active safety check (
 const SAFE_D = 'trinityone/safe:';         // a member's response — d=safe:<churchpub>, content NIP-44-encrypted to the check's creator
 // safeguarding v2: a parent's local record of the child accounts they set up (no secrets — just the link)
 const FAMILY_KEY = 'trinityone.family';
-const FAMILY_REMOVED_KEY = 'trinityone.family.removed';
+// ── AN UNLINKED CHILD IS FORGOTTEN ON THE RELAY, NOT REMEMBERED ON THE PHONE. Owner's decision, 2026-10-01. ──
+// This key used to hold every child the church had unlinked this parent from, so _rebuildFamily would not
+// resurrect them from the parent's own guardreq: documents. But the locked-boot wipe takes every
+// `trinityone.family*` key, so after a PIN lock the list was gone, the rebuild found the request still on the
+// relay, and the child came back on the parent's phone. Keeping the list through the wipe would leave a seized
+// locked phone listing children — exactly what the owner ruled out: "Nothing about the removal is kept on
+// the phone." So the removal notice now RETRACTS the request on the relay (_retractGuardReq) and the rebuild
+// has nothing to find.
+//
+// NOTHING WRITES THIS KEY ANY MORE. It is READ for one reason: a phone that recorded a removal under the old
+// code and has not yet retracted the request. _rebuildFamily still skips those children, retracts their
+// requests, and deletes the key once every retraction has landed. The in-memory set beside it covers a
+// removal in THIS session whose retraction has not landed yet (offline) — it dies with the process, and the
+// church's notice, re-delivered on every subscribe, retries the retraction.
+const FAMILY_REMOVED_KEY = 'trinityone.family.removed';   // LEGACY — read, pruned and cleared; never added to
+const _unlinkedNow = new Set();     // children unlinked this session: the rebuild must not re-add them
+const _retractedNow = new Set();    // …and whose request this session has already retracted on the relay
 function _loadChildren() { try { return JSON.parse(localStorage.getItem(FAMILY_KEY) || '[]') || []; } catch { return []; } }
 function _loadRemovedChildren() { try { return JSON.parse(localStorage.getItem(FAMILY_REMOVED_KEY) || '[]') || []; } catch { return []; } }
 function _saveChildLink(link) {
   const list = _loadChildren().filter(c => c && c.child !== link.child); list.push(link);
   try { localStorage.setItem(FAMILY_KEY, JSON.stringify(list)); } catch {}
+  // A steward re-linking a child this parent was unlinked from: the link is real again — in this session's
+  // sets, and in the legacy list an older build may have left, which would otherwise retract it below.
   if (link.viaSteward) {
-    const rm = _loadRemovedChildren().filter(c => c !== link.child);
-    try { localStorage.setItem(FAMILY_REMOVED_KEY, JSON.stringify(rm)); } catch {}
+    _unlinkedNow.delete(link.child); _retractedNow.delete(link.child);
+    const rm = _loadRemovedChildren();
+    if (rm.includes(link.child)) { try { localStorage.setItem(FAMILY_REMOVED_KEY, JSON.stringify(rm.filter(c => c !== link.child))); } catch {} }
   }
 }
 function _removeChildLink(childPub) {
   const list = _loadChildren().filter(c => c && c.child !== childPub);
   try { localStorage.setItem(FAMILY_KEY, JSON.stringify(list)); } catch {}
-  const rm = _loadRemovedChildren(); if (!rm.includes(childPub)) rm.push(childPub);
-  try { localStorage.setItem(FAMILY_REMOVED_KEY, JSON.stringify(rm)); } catch {}
+  _unlinkedNow.add(childPub);
+}
+// RETRACT THIS PARENT'S OWN guardian-link request for a child: the same d-tag, `deleted`, empty content — the
+// shape leaveMembership uses for member:, and the shape both readers already honour (_rebuildFamily skips a
+// `deleted` tag; the console's subscribeGuardianRequests drops a deleted or empty request). p-tagged to the
+// church so the console's `#p` subscription sees it. The relay's guardreq: rule accepts it (empty content
+// parses as `{}`, so the "claimed parent = signer" check has nothing to refuse).
+// created_at is THIS phone's now: the request was signed by this phone's clock too, so the retraction is
+// newer than it whatever the steward's clock says. Returns true once a relay accepted it.
+async function _retractGuardReq(childPub, cp) {
+  if (!sk || !childPub || !cp) return false;
+  if (_retractedNow.has(childPub)) return true;
+  const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000),
+    tags: [['d', 'trinityone/guardreq:' + childPub], ['t', NET], ['p', cp], ['deleted', '1']], content: '' }, sk);
+  try { await _publishAny(publishSetFor(cp), evt); _retractedNow.add(childPub); return true; }
+  catch (e) { console.warn('[fellowship] guardian request retraction failed — retried when the notice is next delivered', e); return false; }
 }
 // REBUILD THE FAMILY LIST FROM THE RELAY. trinityone.family is written when a child account is created and
 // read straight back — nothing ever rebuilt it. It is also in the locked-boot wipe list, so restoring an
@@ -234,15 +267,23 @@ function _removeChildLink(childPub) {
 // served only to stewards now (it maps every child in the congregation to their parents), while a member may
 // always read back what they themselves signed.
 //
-// Merge only, never remove — a link the relay has not served yet must not delete one we already hold, and a
-// parent who has genuinely unlinked a child is handled by the church's map rather than here.
+// Merge only, never remove — a link the relay has not served yet must not delete one we already hold. A
+// child the church has unlinked this parent from is not here to find: the removal notice retracted the
+// request on the relay (see FAMILY_REMOVED_KEY above). The two sets below cover the gaps — a retraction this
+// session that has not landed, and a removal an older build recorded on this phone.
 function _rebuildFamily(churchNpub) {
   const cp = toPub(churchNpub) || churchNpub;
   if (!pub || !cp) return Promise.resolve(0);
   return new Promise((resolve) => {
     let added = 0, done = false;
-    const removed = new Set(_loadRemovedChildren());
-    const finish = () => { if (done) return; done = true; try { sub.close(); } catch (e) {} resolve(added); };
+    const legacy = new Set(_loadRemovedChildren());
+    const retracting = [];
+    const finish = () => {
+      if (done) return; done = true; try { sub.close(); } catch (e) {}
+      // The legacy list goes once every request it was guarding has been retracted on the relay.
+      if (legacy.size) Promise.all(retracting).then(oks => { if (oks.every(Boolean)) { try { localStorage.removeItem(FAMILY_REMOVED_KEY); } catch (e) {} } }).catch(() => {});
+      resolve(added);
+    };
     const sub = pool.subscribeMany(relaysForChurch(cp), [{ kinds: [30078], authors: [pub] }], {
       onevent(e) {
         const d = _dtag(e);
@@ -250,7 +291,10 @@ function _rebuildFamily(churchNpub) {
         if ((e.tags || []).some(t => t[0] === 'deleted')) return;
         const child = d.slice('trinityone/guardreq:'.length);
         if (!/^[0-9a-f]{64}$/i.test(child)) return;
-        if (removed.has(child)) return;
+        // Still on the relay: the retraction has not landed yet. Skip it, and try the retraction again.
+        if (_unlinkedNow.has(child)) { _retractGuardReq(child, cp); return; }
+        // Read live, not from the snapshot: a steward re-link since the rebuild began prunes it from the list.
+        if (legacy.has(child) && _loadRemovedChildren().includes(child)) { retracting.push(_retractGuardReq(child, cp)); return; }
         if (_loadChildren().some(c => c && c.child === child)) return;
         _saveChildLink({ child, name: '', churchPub: cp, ts: e.created_at || 0 });
         added++;
@@ -5297,10 +5341,14 @@ window.Fellowship = {
         let dec; try { dec = JSON.parse(nip44d(e.content, nip44ck(sk, e.pubkey))); } catch { return; }
         // A REMOVAL. The church has taken this guardian link away; drop it locally, or the parent's app goes
         // on showing a child it has been told they are no longer responsible for.
+        // AND RETRACT THIS PARENT'S OWN REQUEST FOR THAT CHILD ON THE RELAY (owner, 2026-10-01). Dropping the
+        // local link alone did not last: a PIN lock wipes the family list, and _rebuildFamily re-added the
+        // child from the request that was still there. Nothing about the removal is kept on the phone.
         if (dec && dec.removed) {
+          if (!/^[0-9a-f]{64}$/i.test(String(dec.removed))) return;
           _removeChildLink(dec.removed);
+          _retractGuardReq(dec.removed, e.pubkey);   // the author IS the church: the relay takes guardnotice: from a church key only
           try { window.dispatchEvent(new CustomEvent('trinity-guardian-removed', { detail: { child: dec.removed } })); } catch (x) {}
-          if (dec.removedAll && Array.isArray(dec.removedAll)) dec.removedAll.forEach(c => { if (c && c !== dec.removed) _removeChildLink(c); });
           return;
         }
         if (!dec || !dec.child || dec.child === pub) return;

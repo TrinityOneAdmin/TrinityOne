@@ -81,6 +81,8 @@ function loadRebuild({ closeSocketAfterMs = 0 } = {}) {
     _saveChildLink: (l) => { store.family = store.family.filter(c => c.child !== l.child).concat(l); },
     relaysForChurch: () => [WS_URL],
     _loadRemovedChildren: () => [],
+    // 2026-10-01: the rebuild also consults the session's unlinked set and can retract a request.
+    _unlinkedNow: new Set(), _retractGuardReq: async () => true,
     pool: {
       subscribeMany(_r, filters, handlers) {
         let w = null, closed = false;

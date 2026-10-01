@@ -242,6 +242,8 @@ function nextLaunch({ relay, children, parentPub }) {
     pub: parentPub,
     relaysForChurch: () => ['wss://test.invalid'],
     _loadRemovedChildren: () => [],
+    // 2026-10-01: the rebuild also consults the session's unlinked set and can retract a request.
+    _unlinkedNow: new Set(), _retractGuardReq: async () => true,
     _dtag: dOf,
     _loadChildren: () => children,
     _saveChildLink: (rec) => { children.push(rec); },
