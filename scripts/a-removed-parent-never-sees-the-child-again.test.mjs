@@ -21,6 +21,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { finalizeEvent } from 'nostr-tools/pure';
+import { createServer } from 'node:net';
 import { requireFreePort } from './test-ports.mjs';
 import {
   K, now, sleep, until, dOf, isRetracted, startRelay, publishTo, ask, memStorage, memberBoot, consoleBoot,
@@ -28,7 +29,14 @@ import {
 } from './family-harness.mjs';
 
 const PORT_A = 8982, PORT_B = 8984;   // unique across scripts/*.test.mjs AND scripts/*.probe.mjs
-const PORT_DEAD = 8946;               // never listened on: stands in for a relay that cannot be reached
+// A relay that cannot be reached: a port the OS just handed out and we closed again, so nothing is listening on
+// it — chosen at run time rather than fixed, so no other process can be sitting on it (scripts/test-ports.test.mjs).
+let DEAD = '';
+const freeEphemeralPort = () => new Promise((res, rej) => {
+  const s = createServer();
+  s.on('error', rej);
+  s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)); });
+});
 const church = K();
 let A, B;
 
@@ -37,6 +45,7 @@ before(async () => {
   await requireFreePort(PORT_B, 'a-removed-parent-never-sees-the-child-again.test.mjs');
   A = await startRelay(PORT_A, church.pub);
   B = await startRelay(PORT_B, church.pub);
+  DEAD = `ws://127.0.0.1:${await freeEphemeralPort()}/relay`;
 });
 after(() => { A && A.stop(); B && B.stop(); });
 
@@ -178,7 +187,7 @@ test('after a restart with the up-to-date relay unreachable, an older notice doe
     assert.ok(!b1.shown(church.pub).includes(C.pub), 'CONTROL: with both relays reachable the newest notice did not win');
     if (lock) b1.api.clearCommunityCache();
     // restart; relay B unreachable
-    const b2 = memberBoot(P, storage, { relays: [A.url, `ws://127.0.0.1:${PORT_DEAD}/relay`] });
+    const b2 = memberBoot(P, storage, { relays: [A.url, DEAD] });
     u = b2.api.subscribeGuardianNotices();
     await sleep(2000);
     const shown = b2.shown(church.pub);
@@ -225,7 +234,7 @@ test('a rebuild over a relay that cannot be reached does not mark the family kno
   useWebSocketImplementation(WebSocket);
   const pool = new SimplePool();
   const P = K();
-  const b = memberBoot(P, memStorage(), { relays: [`ws://127.0.0.1:${PORT_DEAD}/relay`], pool });
+  const b = memberBoot(P, memStorage(), { relays: [DEAD], pool });
   await b.api._rebuildFamily(church.pub);
   try { pool.destroy(); } catch {}
   assert.equal(b.api.familyAnswered(church.pub), false,
@@ -254,7 +263,7 @@ test('a linked parent after a lock, with the newest notice’s relay unreachable
   assert.ok(await until(() => b1.shown(church.pub).length === 2, 6000), 'fixture: both children did not show');
   u(); b1.close();
   b1.api.clearCommunityCache();   // the PIN lock
-  const dead = `ws://127.0.0.1:${PORT_DEAD}/relay`;
+  const dead = DEAD;
   const b2 = memberBoot(P, storage, { relays: [A.url, dead] });
   u = b2.api.subscribeGuardianNotices();
   await sleep(1500);
@@ -282,7 +291,7 @@ test('a declined request whose withdrawal reached one relay does not come back a
   assert.equal((await publishTo(B.url, noticeEvt(church, P, { church: church.pub, children: [], closed: [C.pub] }, now() - 100)))[0], true);
   const storage = memStorage();
   storage.setItem('trinityone.family', JSON.stringify([{ child: C.pub, name: 'Cal', churchPub: church.pub, ts: now() - 300 }]));
-  const dead = `ws://127.0.0.1:${PORT_DEAD}/relay`;
+  const dead = DEAD;
   const b1 = memberBoot(P, storage, { relays: [dead, B.url] });   // relay A down
   let u = b1.api.subscribeGuardianNotices();
   assert.ok(await until(() => !b1.shown(church.pub).includes(C.pub), 6000), 'fixture: the closing notice did not apply');

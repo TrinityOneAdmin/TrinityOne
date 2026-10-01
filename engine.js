@@ -251,7 +251,10 @@ window.safeImgUrl = function (v) {
     return out.join("");
   }
   // The 22 letter names, in the spellings English Bibles print over Psalm 119's stanzas (see the \d rule below).
-  const HEBREW_LETTER = /^(aleph|alef|beth|bet|gimel|gimmel|daleth|dalet|he|hey|vav|waw|zayin|zain|heth|het|cheth|chet|teth|tet|yodh|yod|jod|kaph|kaf|caph|lamedh|lamed|mem|nun|samekh|samech|ayin|pe|peh|tsadhe|tsade|tsaddi|tzaddi|tzade|qoph|qof|koph|resh|shin|sin|tav|taw)\.?$/i;
+  // Every spelling the shipped modules use is here (surveyed 2026-10-01: engbsb's \qa and eng-web's \d —
+  // including eng-web's KAPF and TZADHE), and a stanza may carry two joined by "and" ("SIN AND SHIN").
+  const _HEB = "aleph|alef|beth|bet|gimel|gimmel|daleth|dalet|he|hey|vav|waw|zayin|zain|heth|het|cheth|chet|teth|tet|yodh|yod|jod|kaph|kapf|kaf|caph|lamedh|lamed|mem|nun|samekh|samech|ayin|pe|peh|tsadhe|tsade|tsaddi|tzadhe|tzaddi|tzade|qoph|qof|koph|resh|shin|sin|tav|taw";
+  const HEBREW_LETTER = new RegExp("^(?:" + _HEB + ")(?:\\s+(?:and|&)\\s+(?:" + _HEB + "))?\\.?$", "i");
   function parseUSFM(text){
     const idm = text.match(/\\id\s+(\w+)/);
     const code = idm ? idm[1].toUpperCase() : null;

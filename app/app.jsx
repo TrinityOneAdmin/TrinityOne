@@ -1413,7 +1413,11 @@ function App() {
     const F = window.Fellowship;
     if (!F || !F.subscribeGuardianNotices) return;
     return F.subscribeGuardianNotices();
-  }, [connTick, lazyReady]);
+    // `keyReady` (whole-branch audit, 2026-10-01): with no key the subscription registers nothing, and connTick
+    // re-runs this only when an unlock's reconnect fires — which needs a church-doc hub already open (see the
+    // note on keyReady above). Unlock before one opens and the parent's notices are never read this session;
+    // with the saved stamp the Family sheet then says "Couldn't reach your church" all session.
+  }, [connTick, lazyReady, keyReady]);
   // joining: whether the active church gates joining behind steward approval, and whether I'm still pending
   const [joinState, setJoinState] = useA({ approval: false, isAdmitted: true, isPending: false });
   const joinChurchRef = React.useRef(null);

@@ -213,7 +213,7 @@ export function memberBoot(parent, storage, opts = {}) {
 // `retryMs` stands in for GUARD_RETRY_MS so a test need not wait two minutes); `published` records every notice
 // it signed, once.
 export function consoleBoot(church, opts = {}) {
-  const relays = opts.relays || [];
+  let relays = opts.relays || [];
   const published = [];
   const events = [];
   const stamps = new Map();
@@ -239,6 +239,7 @@ export function consoleBoot(church, opts = {}) {
     window: { dispatchEvent(ev) { events.push(ev); return true; } }, CustomEvent: class { constructor(t, o) { this.type = t; this.detail = o && o.detail; } },
     now, localStorage: opts.storage || memStorage(),
     pool, relays: () => relays,
+    stewardedChurches: new Map(),
     _authFuture: () => false, _byChurch: (e) => e.pubkey === church.pub,
     console: { warn() {}, log() {} },
     Promise, JSON, Math, Date, Set, Map, Object, Array, String, Number, Error, setTimeout, clearTimeout,
@@ -246,18 +247,22 @@ export function consoleBoot(church, opts = {}) {
   vm.createContext(ctx);
   vm.runInContext([
     topLevel(STEWARD, 'toPubHex'), topLevel(STEWARD, '_childrenOfParent'), topLevel(STEWARD, '_closedChildrenOfParent'),
+    topVar(STEWARD, '_guardScopes'), topLevel(STEWARD, '_guardScope'),
     topLevel(STEWARD, '_sendGuardNotice'), topVar(STEWARD, '_latestGuardNotice'), topLevel(STEWARD, '_guardTryOn'),
     topLevel(STEWARD, '_publishGuardNotice'),
     opts.retryMs ? 'var GUARD_RETRY_MS = ' + JSON.stringify(opts.retryMs) + ';' : topVar(STEWARD, 'GUARD_RETRY_MS'),
     'globalThis.API = {',
-    method(STEWARD, 'notifyGuardian(parentPubIn, childPubIn, childName, links, closed) {', 'notifyGuardian') + ',',
-    method(STEWARD, 'notifyGuardianRemoved(parentPubIn, childPubIn, links, alsoRemoved, closed) {', 'notifyGuardianRemoved') + ',',
-    method(STEWARD, 'notifyGuardianList(parentPubIn, links, closed) {', 'notifyGuardianList') + ',',
+    method(STEWARD, 'notifyGuardian(parentPubIn, childPubIn, childName, links, closed, scope) {', 'notifyGuardian') + ',',
+    method(STEWARD, 'notifyGuardianRemoved(parentPubIn, childPubIn, links, alsoRemoved, closed, scope) {', 'notifyGuardianRemoved') + ',',
+    method(STEWARD, 'notifyGuardianList(parentPubIn, links, closed, scope) {', 'notifyGuardianList') + ',',
     method(STEWARD, 'subscribeGuardians(onData) {', 'subscribeGuardians') + ',',
     method(STEWARD, 'subscribeGuardianRequests(onReqs) {', 'subscribeGuardianRequests') + ',',
+    method(STEWARD, 'guardNoticeScope() {', 'guardNoticeScope') + ',',
     '};',
   ].join('\n'), ctx);
-  return { api: ctx.API, published, events, ctx, close: () => { if (ctx.pool.closeAll) ctx.pool.closeAll(); } };
+  // switch the console to another identity in place, as setActiveIdentity does (key, church, relay set)
+  const become = (who, newRelays) => { ctx.sk = who.sk; ctx.pub = who.pub; ctx.churchPub = who.pub; ctx.churchSk = who.sk; relays = newRelays || relays; };
+  return { api: ctx.API, published, events, ctx, become, close: () => { if (ctx.pool.closeAll) ctx.pool.closeAll(); } };
 }
 
 // ── documents as the real writers sign them ───────────────────────────────────────────────────────────────────

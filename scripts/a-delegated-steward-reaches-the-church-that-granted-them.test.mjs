@@ -122,6 +122,8 @@ function harness({ cached = false, origin = ORIGIN, proven = [BOX, CANON], delay
     _ckKeysSettled: '', _ckSessionKeys: new Map(),
     // …and the care/media key state plus the key-read epoch and version counters (2026-10-01)
     _keyReadEpoch: 0, _careKeyVer: 0, _mediaKeyVer: 0,
+    // …and (2026-10-01) the pending guardian notices: one church's retries must not send another's
+    _latestGuardNotice: new Map(),
     CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init && init.detail; } },
     window: Object.assign(win, { Steward: {} }),
   };

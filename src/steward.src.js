@@ -992,15 +992,27 @@ function _closedChildrenOfParent(closed, parentPub, linked) {
   }
   return [...out].sort();
 }
-function _sendGuardNotice(parentPub, body, links, closed) {
+// A CHURCH CAPTURED BEFORE THE AWAIT (whole-branch audit, 2026-10-01). Every console path that sends a notice
+// awaits a guardians/minors write first — and with a relay down, _publishToRelays can take ~12 s. A church
+// switch in that wait used to send church A's list SIGNED WITH B's KEY to B's RELAYS: the parent's phone would
+// apply A's children under church B. So the caller captures a scope (guardNoticeScope) BEFORE its first
+// await and passes it; the notice is signed with that key, names that church and goes to that relay set,
+// whatever is active by then. The safe option of the two (the other was to skip and tell the steward): the
+// link was saved for church A, and A's parent is told by A, through A's relays. The secret key never
+// leaves this module — the scope the page holds is an opaque handle looked up here.
+const _guardScopes = new WeakMap();   // opaque handle -> { sk, churchPub, relays }
+function _guardScope(handle) { return (handle && typeof handle === 'object' && _guardScopes.get(handle)) || null; }
+function _sendGuardNotice(parentPub, body, links, closed, sc) {
+  const signer = sc ? sc.sk : sk;
+  if (!signer) return Promise.resolve(null);
   if (links && typeof links === 'object') {
     body.children = _childrenOfParent(links, parentPub);
     body.closed = _closedChildrenOfParent(closed, parentPub, body.children);
   }
   let content;
-  try { content = nip44e(JSON.stringify(body), nip44ck(sk, parentPub)); }
+  try { content = nip44e(JSON.stringify(body), nip44ck(signer, parentPub)); }
   catch (e) { return Promise.resolve(null); }
-  return _publishGuardNotice(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', GUARDNOTICE_D + parentPub], ['t', NET], ['p', parentPub]], content }), sk));
+  return _publishGuardNotice(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', GUARDNOTICE_D + parentPub], ['t', NET], ['p', parentPub]], content }), signer), sc);
 }
 // EVERY RELAY, AND AGAIN FOR THE ONES THAT MISSED IT (audit of 4d7ca23, 2026-10-01). publish() is
 // first-accept-wins: the moment one relay took a notice it resolved, and a relay that was down or slow just
@@ -1015,7 +1027,10 @@ const GUARD_RETRY_MS = [5000, 30000, 120000];
 // the event it was given, so with two notices for one parent waiting on a relay that was down, the OLDER chain
 // could fire first while the relay was briefly up and leave it holding the older notice. Every retry now sends
 // the newest notice this console has signed for that parent (keyed by d-tag) — never an older one.
-const _latestGuardNotice = new Map();   // d-tag -> newest notice signed for that parent this session
+// KEYED BY SIGNER + d-tag (whole-branch audit): two churches on one console each have a slot for the same parent,
+// and keyed by d-tag alone church A's retry sent church B's notice to A's relay and never resent A's. Cleared
+// by both per-church resets (setActiveIdentity, _resetChurchScopedState).
+const _latestGuardNotice = new Map();   // "<signer>|<d-tag>" -> newest notice signed for that parent this session
 // NOT-ACCEPTED, the way nostr-tools reports it: a refusal REJECTS, but an unreachable relay RESOLVES with a
 // "connection failure: …" string (nostr-tools 2.x). Both mean the relay does not hold the notice.
 async function _guardTryOn(urls, ev) {
@@ -1035,12 +1050,15 @@ async function _guardTryOn(urls, ev) {
   });
   return { missed, refused };
 }
-async function _publishGuardNotice(evt) {
-  await _waitForRegistration();   // the same gate as publish(): a church the relay has never heard of writes nothing
+async function _publishGuardNotice(evt, sc) {
+  // The relay set is read BEFORE the await (or taken from the caller's captured scope): never the active
+  // church's set as it is after a wait.
+  const targets = sc ? sc.relays : relays();
+  if (!sc) await _waitForRegistration();   // the same gate as publish(): a church the relay has never heard of writes nothing
   const d = ((evt.tags || []).find(t => t[0] === 'd') || [])[1] || '';
-  const prev = _latestGuardNotice.get(d);
-  if (!prev || (evt.created_at || 0) >= (prev.created_at || 0)) _latestGuardNotice.set(d, evt);
-  const targets = relays();
+  const key = evt.pubkey + '|' + d;
+  const prev = _latestGuardNotice.get(key);
+  if (!prev || (evt.created_at || 0) >= (prev.created_at || 0)) _latestGuardNotice.set(key, evt);
   if (!targets.length) return publish(evt);   // publish() reports "no relay" the way every other write does
   const first = await _guardTryOn(targets, evt);
   if (first.missed.length) {
@@ -1048,11 +1066,16 @@ async function _publishGuardNotice(evt) {
       let left = first.missed;
       for (const ms of GUARD_RETRY_MS) {
         await new Promise(r => setTimeout(r, ms));
-        try { left = (await _guardTryOn(left, _latestGuardNotice.get(d) || evt)).missed; } catch (e) {}
+        try { left = (await _guardTryOn(left, _latestGuardNotice.get(key) || evt)).missed; } catch (e) {}
         if (!left.length) return;
       }
     })().catch(() => {});
   }
+  // "A NEWER VERSION IS ALREADY STORED" from every relay means this parent's slot already holds a newer notice
+  // (another console, or this one a moment later): the parent is told by that one. The guardian link itself was
+  // saved before this ran, so raising "your change wasn't saved" (the banner's newer-version wording) would be
+  // false. Nothing to report.
+  if (first.missed.length === targets.length && first.refused.length && first.refused.every(r => /newer version/i.test(r.error || ''))) return false;
   if (first.missed.length === targets.length) {
     // THE RELAY'S OWN WORDS (audit of b4ac50d, item 5). A fixed "no relay accepted" made the banner say "check
     // the connection" for a real refusal — a wrong clock, "not a member" — that publish() used to pass through
@@ -2510,6 +2533,7 @@ function _resetChurchScopedState() {
   // not be re-challenged while they stay open, so _isRelayAuthed() would answer true for a church that has
   // never proved itself — the exact false-true the comment above it warns "silently destroys a church's keys".
   _authedRelays.clear();
+  _latestGuardNotice.clear();   // one church's pending notice retries must not send another's
 }
 
 // ── console PIN lock: encrypt the church seed at rest with a PIN/passphrase (AES-GCM, PBKDF2). A
@@ -7654,11 +7678,13 @@ window.Steward = {
   // `links`, `closed` (2026-10-01): the guardians document's map and closed pairs AFTER the change. When given,
   // the notice also carries the parent's whole list and their closed requests — see _sendGuardNotice. The
   // legacy fields are unchanged, so an older parent's app still works.
-  notifyGuardian(parentPubIn, childPubIn, childName, links, closed) {
-    if (!sk) return Promise.resolve(null);
+  // `scope` (2026-10-01): guardNoticeScope()'s handle, captured before the caller's first await — see _guardScopes.
+  notifyGuardian(parentPubIn, childPubIn, childName, links, closed, scope) {
+    const sc = _guardScope(scope);
+    if (!(sc ? sc.sk : sk)) return Promise.resolve(null);
     const parentPub = toPubHex(parentPubIn), childPub = toPubHex(childPubIn);
     if (!parentPub || !childPub || parentPub === childPub) return Promise.resolve(null);
-    return _sendGuardNotice(parentPub, { child: childPub, name: childName || '', church: churchPub }, links, closed);
+    return _sendGuardNotice(parentPub, { child: childPub, name: childName || '', church: sc ? sc.churchPub : churchPub }, links, closed, sc);
   },
 
   // THE OTHER HALF OF notifyGuardian. Linking a parent tells their app so the child appears in it; UNLINKING
@@ -7675,23 +7701,33 @@ window.Steward = {
   // marking a parent as a child unlinks them from all their children at once, and the notice is ONE slot per
   // parent, so one notice per child kept only the last. They ride in `removedAll`, which builds before 4f08ca4
   // read; `removed` still names the first, for the builds in between.
-  notifyGuardianRemoved(parentPubIn, childPubIn, links, alsoRemoved, closed) {
-    if (!sk) return Promise.resolve(null);
+  notifyGuardianRemoved(parentPubIn, childPubIn, links, alsoRemoved, closed, scope) {
+    const sc = _guardScope(scope);
+    if (!(sc ? sc.sk : sk)) return Promise.resolve(null);
     const parentPub = toPubHex(parentPubIn), childPub = toPubHex(childPubIn);
     if (!parentPub || !childPub) return Promise.resolve(null);
-    const body = { removed: childPub, church: churchPub };
+    const body = { removed: childPub, church: sc ? sc.churchPub : churchPub };
     const all = [...new Set([childPub, ...(Array.isArray(alsoRemoved) ? alsoRemoved : []).map(toPubHex).filter(Boolean)])];
     if (all.length > 1) body.removedAll = all;
-    return _sendGuardNotice(parentPub, body, links, closed);
+    return _sendGuardNotice(parentPub, body, links, closed, sc);
   },
   // A notice that carries ONLY the parent's whole list (and closed requests) — for a change that is neither a
   // link nor a removal from this parent's point of view: a request confirmed or declined, a member reconnected
   // on a new key. An older parent's app reads neither `child` nor `removed` here and ignores it.
-  notifyGuardianList(parentPubIn, links, closed) {
-    if (!sk) return Promise.resolve(null);
+  notifyGuardianList(parentPubIn, links, closed, scope) {
+    const sc = _guardScope(scope);
+    if (!(sc ? sc.sk : sk)) return Promise.resolve(null);
     const parentPub = toPubHex(parentPubIn);
     if (!parentPub) return Promise.resolve(null);
-    return _sendGuardNotice(parentPub, { church: churchPub }, links || {}, closed);
+    return _sendGuardNotice(parentPub, { church: sc ? sc.churchPub : churchPub }, links || {}, closed, sc);
+  },
+  // The church a guardian notice will be sent AS, captured now: call it before the first await, pass the handle
+  // to notify*. Opaque to the page (see _guardScopes); null with no key.
+  guardNoticeScope() {
+    if (!sk) return null;
+    const handle = Object.freeze({ church: actingChurch || pub });
+    _guardScopes.set(handle, { sk, churchPub, relays: relays().slice() });
+    return handle;
   },
 
   // ---- joining: by default anyone with the invite/QR joins instantly. A steward can switch on
@@ -7943,6 +7979,8 @@ window.Steward = {
   // bundle on its own and run it, so a helper reached through window.Steward is a helper they do not have.
   async reseatMember(oldPub, newPub, o) {
     o = o || {};
+    // captured before the first await: the parents' notices below go out as THIS church (see _guardScopes)
+    const _noticeScope = window.Steward.guardNoticeScope ? window.Steward.guardNoticeScope() : null;
     const w = async (fn) => {
       const first = await fn();
       if (first) return first;
@@ -8019,7 +8057,7 @@ window.Steward = {
       const told = new Set();
       if (Object.keys(nextG).some(c => low(nextG[c]).indexOf(newH) !== -1)) told.add(newH);
       for (const p of low(nextG[newH])) told.add(p);
-      for (const p of told) { try { Promise.resolve(window.Steward.notifyGuardianList(p, nextG, nextGC || gc)).catch(() => {}); } catch (e) {} }
+      for (const p of told) { try { Promise.resolve(window.Steward.notifyGuardianList(p, nextG, nextGC || gc, _noticeScope)).catch(() => {}); } catch (e) {} }
     }
 
     // (3) Record the vouch FIRST, then admit. If admitting failed on its own the member would be able to post
@@ -10414,6 +10452,7 @@ window.Steward = {
     // re-entering the SAME church passed every "is this still the current church?" check (audit of e6a2e02).
     // See _keyReadOk. The name key's flag is cleared above; this epoch covers it too.
     _keyReadEpoch++; _careKeyVer++; _mediaKeyVer++;
+    _latestGuardNotice.clear();  // see _resetChurchScopedState — one church's guardian-notice retries must not send another's
     // NOTE: the block above is now the same list as _resetChurchScopedState(), minus the NIP-42 state. A
     // SWITCH keeps this device's key while a RESTORE replaces it, so clearing the authenticated sockets here is
     // not obviously correct and is not what this fix is for. The duplication IS the bug class that produced

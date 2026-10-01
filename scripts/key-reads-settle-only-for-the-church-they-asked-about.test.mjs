@@ -90,7 +90,7 @@ function engine() {
     CAP_KEYS: { finance: { d: 'trinityone/financekey:', cap: 'finance', legacy: false, explicit: false } },
     _capState: { finance: { ring: [], docKeys: null, rev: 1, at: 0, checked: false } },
     churchSkHeld: () => !!t.churchSk, _capAllows: () => () => true, _warnUnsealed() {}, _sealEachFailed: [], _legacyBookKeyHex: () => '', _capRingChanged() {},
-    _checkinMigrated: '', _ckKeysSettled: '', _ckSessionKeys: new Map(), npubEncode: (p) => 'npub' + p,
+    _checkinMigrated: '', _ckKeysSettled: '', _ckSessionKeys: new Map(), _latestGuardNotice: new Map(), npubEncode: (p) => 'npub' + p,
     _clearedTrail: null, _authedRelays: new Map(), _authAccepted: new Map(),   // …and what _resetChurchScopedState touches
     CustomEvent: class { constructor(type, init) { this.type = type; this.detail = (init || {}).detail; } },
     console: { warn() {}, log() {}, error() {} },

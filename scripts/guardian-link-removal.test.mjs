@@ -28,10 +28,10 @@ const DASH = stripComments(readFileSync(new URL('../app/stew-dashboard.jsx', imp
 
 test('the console can tell a parent a link was removed', () => {
   // 2026-10-01: every notice is sealed and sent by one helper, _sendGuardNotice (it adds the parent's whole list).
-  const body = stripComments(fnBody(STEW, 'notifyGuardianRemoved(parentPubIn, childPubIn, links, alsoRemoved, closed) {', 'notifyGuardianRemoved'));
+  const body = stripComments(fnBody(STEW, 'notifyGuardianRemoved(parentPubIn, childPubIn, links, alsoRemoved, closed, scope) {', 'notifyGuardianRemoved'));
   assert.match(body, /removed: childPub/, 'the removal notice does not name the child being removed');
   assert.match(body, /_sendGuardNotice\(parentPub, /, 're-anchor: the removal notice no longer goes through _sendGuardNotice');
-  const send = stripComments(fnBody(STEW, 'function _sendGuardNotice(parentPub, body, links, closed) {', '_sendGuardNotice'));
+  const send = stripComments(fnBody(STEW, 'function _sendGuardNotice(parentPub, body, links, closed, sc) {', '_sendGuardNotice'));
   assert.match(send, /nip44e\(/, 'the removal notice is not sealed to the parent — the child link would ride in cleartext');
   assert.match(send, /GUARDNOTICE_D \+ parentPub/, 're-anchor: the notice no longer goes to the parent\'s own doc');
 });
