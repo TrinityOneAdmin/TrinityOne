@@ -120,6 +120,11 @@
   // ── setup wizard: read/write the relay's write policy (church.json) via /config ──
   const TOKEN_KEY = 'to_relay_admin_token';
   let adminToken = sessionStorage.getItem(TOKEN_KEY) || '';
+  // THE OLD COPY ON DISK. Until 3e3c8f7 the token was kept in localStorage; that commit moved the writes to
+  // sessionStorage and never removed what was already there, so a box that had opened this panel before kept
+  // its admin bearer token on disk for ever. Remove it on every load. Nothing reads this key from localStorage
+  // any more — not this file, and not the console that shares this origin on a Suite box.
+  try { localStorage.removeItem(TOKEN_KEY); } catch (e) {}
   let cfgChurches = [];
   const esc = (s) => String(s||'').replace(/[&<>"]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
   const authHeaders = () => adminToken ? { 'Authorization': 'Bearer ' + adminToken } : {};
