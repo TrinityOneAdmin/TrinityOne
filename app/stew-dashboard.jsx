@@ -807,10 +807,28 @@ function KeyDistributor() {
     window.addEventListener('steward-key', onKey);
     return () => window.removeEventListener('steward-key', onKey);
   }, []);
+  // THE THREE KEY SUBSCRIPTIONS FOLLOW THE CHURCH AND THE CONNECTION — [idv, conn, church], like makeSub in
+  // steward-root.jsx. They were mounted with `[]`, so after a church switch they went on reading the PREVIOUS
+  // church's envelopes and never read the new one's: switching A→B→A left the name key empty (every member
+  // "Anonymous") and church B's care needs were sealed with church A's care key. Measured 2026-10-01 (audit5).
+  // `_kdWho` covers the switch that fires no `steward-identity` event (a restore) and the church key arriving
+  // after mount; `conn` covers a returning socket, which does not re-issue its REQs.
+  const _kdIdv = window.useStewardIdv ? window.useStewardIdv() : 0;
+  const _kdConn = window.useStewardConn ? window.useStewardConn() : 0;
+  const _kdWho = (window.Steward && (window.Steward.actingChurch || window.Steward.activePub)) || '';
+  // MINT ON A SIGNAL. The engine says when a key read has settled (`steward-keys-read`: a trustworthy, current
+  // "no envelope here"), and the enrolment effect below re-runs on it. Before, nothing re-ran that effect when
+  // the answer arrived, so a church whose read settled after the roster had stopped changing never minted.
+  const [keysReadTick, setKeysReadTick] = React.useState(0);
+  React.useEffect(() => {
+    const f = () => setKeysReadTick(t => t + 1);
+    window.addEventListener('steward-keys-read', f);
+    return () => window.removeEventListener('steward-keys-read', f);
+  }, []);
   // #17: load the church media key whenever the console is open (not only on the Sermons tab) so we can re-key joiners
-  React.useEffect(() => (window.Steward && window.Steward.subscribeMediaKey ? window.Steward.subscribeMediaKey() : undefined), []);
+  React.useEffect(() => (window.Steward && window.Steward.subscribeMediaKey ? window.Steward.subscribeMediaKey() : undefined), [_kdIdv, _kdConn, _kdWho]);
   // the church CARE key — same envelope, sealing the identifying half of care needs (H3)
-  React.useEffect(() => (window.Steward && window.Steward.subscribeCareKey ? window.Steward.subscribeCareKey() : undefined), []);
+  React.useEffect(() => (window.Steward && window.Steward.subscribeCareKey ? window.Steward.subscribeCareKey() : undefined), [_kdIdv, _kdConn, _kdWho]);
   // THE WEBSITE MIRROR RUNS WHILE THE CONSOLE IS OPEN, not only while Settings → Your website is on screen.
   // The engine's reconciler (src/steward.src.js _webSync) writes the public copy of an event added today
   // against a switch turned on yesterday, and tombstones a copy when its event is removed — but only while
@@ -822,7 +840,7 @@ function KeyDistributor() {
   React.useEffect(() => (window.Steward && window.Steward.subscribeWebsiteShare ? window.Steward.subscribeWebsiteShare(() => {}, { restart: true }) : undefined), [_webConn]);
   // the church NAME key — the envelope members seal their display name under, so the relay (and any mirror
   // holding a copy of this church) stores ciphertext instead of a named roster. AUDIT-2026-07-27.
-  React.useEffect(() => (window.Steward && window.Steward.subscribeNameKey ? window.Steward.subscribeNameKey() : undefined), []);
+  React.useEffect(() => (window.Steward && window.Steward.subscribeNameKey ? window.Steward.subscribeNameKey() : undefined), [_kdIdv, _kdConn, _kdWho]);
   // keep the envelope's author check current: a revoked steward's envelope must stop being accepted
   const stewardRoster = window.useStewardStewards ? window.useStewardStewards() : [];
   React.useEffect(() => { if (window.Steward && window.Steward.setCareRoster) window.Steward.setCareRoster(stewardRoster); }, [stewardRoster]);
@@ -836,6 +854,18 @@ function KeyDistributor() {
   // media re-key paths had the same hole via `want`. AUDIT-2026-07-27.
   const blockedList = window.useStewardBlocked ? window.useStewardBlocked() : [];
   const blockedSet = React.useMemo(() => new Set((blockedList || []).map(p => String(p || '').toLowerCase())), [blockedList]);
+  // THE LISTS ON SCREEN AT THE MOMENT OF A CHURCH SWITCH BELONG TO THE CHURCH WE LEFT. The member, steward and
+  // group hooks keep their last value until the new church's stream delivers, so for that beat this component
+  // held church A's members while the engine was on church B — and the enrolment below wrapped church B's keys
+  // to church A's congregation (audit of d1116f6: B's envelopes listed A's members, the person just blocked
+  // among them). Remember those exact arrays when the church changes, and enrol nobody until each has been
+  // replaced by the new church's own delivery (every one of those streams delivers at end-of-stored-events).
+  // Keyed on the identity switch (`idv`), which is what re-subscribes those streams; a key RESTORE fires no
+  // switch and useStewardMembers does not follow it — a known gap of that hook, recorded, not changed here.
+  const _kdFrom = React.useRef(null);
+  if (!_kdFrom.current || _kdFrom.current.idv !== _kdIdv) {
+    _kdFrom.current = _kdFrom.current ? { idv: _kdIdv, members, groups, stewardRoster } : { idv: _kdIdv };
+  }
   const notBlocked = (pk) => pk && !blockedSet.has(String(pk).toLowerCase());
   React.useEffect(() => {
     // SAME GUARD AS THE CAPABILITY MINT, and for the same measured reason. A delegated steward viewing their
@@ -846,6 +876,8 @@ function KeyDistributor() {
     // this church's key in Settings…". That banner then sat on every screen telling a treasurer her work was
     // not saving WHILE THE RELAY ACCEPTED EVERY ENTRY, and its remedy destroys a church key if followed.
     if (!church.name) return;   // no church of our own to key — see the capability mint for the full note
+    { const f = _kdFrom.current || {};
+      if (members === f.members || groups === f.groups || stewardRoster === f.stewardRoster) return; }   // still the previous church's lists — see _kdFrom
     const memberPubs = members.map(m => m.pubkey).filter(notBlocked);
     for (const g of groups) {
       if (!g.encrypted) continue;
@@ -943,11 +975,15 @@ function KeyDistributor() {
   // the key waited for some unrelated change to groups or members. That is the 8-minute gap measured on the
   // relay between the first calendar document and the namekey: envelope, and post-fix it is 8 minutes of the
   // calendar refusing to save rather than 8 minutes of writing in the clear.
-  }, [groups, members, stewardRoster, blockedList, unlockTick, church.name]);   // unlockTick: re-run the whole enrolment when the key comes back after a lock
+  }, [groups, members, stewardRoster, blockedList, unlockTick, church.name, keysReadTick]);   // unlockTick: re-run the whole enrolment when the key comes back after a lock; keysReadTick: when a key read settles
   // the media key loads ASYNC (subscribeMediaKey) and may arrive AFTER the roster settles, so the effect above can run
   // before we hold the key. Re-check a couple of times on mount — ensureMediaKeyForMembers is idempotent + cheap.
   React.useEffect(() => {
-    const call = () => { if (window.Steward && window.Steward.ensureMediaKeyForMembers) window.Steward.ensureMediaKeyForMembers(membersRef.current.map(m => m.pubkey), stewardRosterRef.current); };
+    const call = () => {
+      const f = _kdFrom.current || {};
+      if (membersRef.current === f.members || stewardRosterRef.current === f.stewardRoster) return;   // the previous church's lists — see _kdFrom
+      if (window.Steward && window.Steward.ensureMediaKeyForMembers) window.Steward.ensureMediaKeyForMembers(membersRef.current.map(m => m.pubkey), stewardRosterRef.current);
+    };
     const t1 = setTimeout(call, 3500), t2 = setTimeout(call, 9000);
     return () => { clearTimeout(t1); clearTimeout(t2); };
   }, []);

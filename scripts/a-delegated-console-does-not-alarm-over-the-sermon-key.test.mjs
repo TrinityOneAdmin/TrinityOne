@@ -41,10 +41,13 @@ import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadScreen, miniReact, texts, find } from './render-jsx-screen.mjs';
-import { fnBody } from './test-slice.mjs';
+import { fnBody, liftKeyRead } from './test-slice.mjs';
 
 const ROOT = new URL('../', import.meta.url).pathname;
 const BUNDLE = readFileSync(join(ROOT, 'vendor/steward.js'), 'utf8');
+// THE SHIPPED ring fitter (2026-10-01): the media-key publishers fit their envelope to the relay's 1 MB cap
+// through it, so a lifted publisher needs it in scope. Lifted, not re-typed.
+const _fitKeyRing = new Function('return ' + fnBody(BUNDLE, 'function _fitKeyRing(full, recipCount, sealSample) {', '_fitKeyRing in the shipped bundle'))();
 const DASH = readFileSync(join(ROOT, 'app/stew-dashboard.jsx'), 'utf8');
 
 const CHURCH = '3eb1f889'.padEnd(64, '0');
@@ -74,7 +77,7 @@ function engine({ actingChurch, mediaKeyHex = KEY }) {
     _mediaKeyPushRefused: null,
     _mediaKeyChecked: true,
     _localBlocked: new Set(),
-    _isRelayAuthed: () => true,
+    _isRelayAuthed: () => true, _fitKeyRing, console, _mediaKeyVer: 0,
     MEDIAKEY_D: 'trinityone/mediakey:',
     NET: 'trinityone',
     now: () => 1758800000,
@@ -110,7 +113,7 @@ function engine({ actingChurch, mediaKeyHex = KEY }) {
     fnBody(BUNDLE, '    async ensureMediaKeyForMembers(memberPubs, stewardPubs) {', 'ensureMediaKeyForMembers in the shipped bundle'),
     fnBody(BUNDLE, '    async rotateMediaKey(memberPubs, stewardPubs) {', 'rotateMediaKey in the shipped bundle'),
   ].join(',\n');
-  const api = new Function('scope', `with (scope) { const _api = { ${bodies} }; return _api; }`)(proxy);
+  const api = new Function('scope', `with (scope) { ${liftKeyRead(BUNDLE)}\n const _api = { ${bodies} }; return _api; }`)(proxy);
   return { api, attempts, blocked, scope };
 }
 

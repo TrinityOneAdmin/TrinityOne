@@ -15356,6 +15356,19 @@ zoo`.split("\n");
     }
     return keys;
   }
+  function _fitKeyRing(full, recipCount, sealSample) {
+    for (let n = full.length; n >= 1; n -= n > 4 ? 2 : 1) {
+      const cand = full.slice(0, n);
+      let per = 0;
+      try {
+        per = 64 + String(sealSample(JSON.stringify(cand))).length + 6;
+      } catch (e) {
+        return null;
+      }
+      if (per * recipCount < 9e5) return cand;
+    }
+    return null;
+  }
   var CARENEED_D = "trinityone/care:";
   var _careKeyHex = null;
   var _careKeyRing = [];
@@ -15370,6 +15383,7 @@ zoo`.split("\n");
   var _mediaKeyRing = [];
   var _mediaKeyDocKeys = null;
   var _mediaKeyPushRefused = null;
+  var _mediaKeyVer = 0;
   var _mediaKeyChecked = false;
   async function _sha256hex(u83) {
     const d = await crypto.subtle.digest("SHA-256", u83);
@@ -15680,7 +15694,12 @@ zoo`.split("\n");
     const cp = actingChurch || pub;
     return e.pubkey === cp || _careRoster.has(e.pubkey);
   };
+  var _isCurrentCareEnv = (e) => {
+    const cp = actingChurch || pub;
+    return !!cp && ((e && e.tags || []).find((t) => t[0] === "d") || [])[1] === CAREKEY_D + cp;
+  };
   function _ingestCareKeyEnv(e) {
+    if (!_isCurrentCareEnv(e)) return;
     try {
       const o = JSON.parse(e.content || "{}");
       if ((o.rev || 1) < _careKeyRev) return;
@@ -15698,15 +15717,18 @@ zoo`.split("\n");
         _careKeyRing = ring && ring.length ? ring : [plain];
         _careKeyHex = _careKeyRing[0];
       }
+      _careKeyVer++;
     } catch (x) {
     }
     _careKeyChecked = true;
   }
   var _CAREKEY_PENDING_TTL = 12e3;
   var _careKeyPending = [];
+  var _careKeyVer = 0;
   function _reCheckCareKeyPending() {
     const nowMs = Date.now();
     _careKeyPending = _careKeyPending.filter((p) => nowMs - p.at < _CAREKEY_PENDING_TTL);
+    _careKeyPending = _careKeyPending.filter((p) => _isCurrentCareEnv(p.e));
     for (const p of _careKeyPending.slice()) {
       if (_careKeyAuthed(p.e)) {
         _ingestCareKeyEnv(p.e);
@@ -16444,6 +16466,7 @@ zoo`.split("\n");
   var sk = null;
   var pub = null;
   var _authedRelays = /* @__PURE__ */ new Map();
+  var _authAccepted = /* @__PURE__ */ new Map();
   pool.automaticallyAuth = (url) => async (authEvent) => {
     if (!sk) throw new Error("no key");
     const signed = finalizeEvent2(authEvent, sk);
@@ -16454,6 +16477,34 @@ zoo`.split("\n");
     }
     try {
       _authedRelays.set(k, pool.relays.get(k));
+    } catch (e) {
+    }
+    try {
+      const r0 = pool.relays.get(k);
+      if (r0 && r0.publishTimeout < 12e3) r0.publishTimeout = 12e3;
+    } catch (e) {
+    }
+    try {
+      setTimeout(() => {
+        try {
+          const r = pool.relays.get(k);
+          if (r && r.authPromise && typeof r.authPromise.then === "function") {
+            r.authPromise.then(() => {
+              try {
+                _authAccepted.set(k, r);
+                _runKeyReadAuthWaiters();
+              } catch (e) {
+              }
+            }, () => {
+              try {
+                if (_authAccepted.get(k) === r) _authAccepted.delete(k);
+              } catch (e) {
+              }
+            });
+          }
+        } catch (e) {
+        }
+      }, 0);
     } catch (e) {
     }
     return signed;
@@ -16473,6 +16524,131 @@ zoo`.split("\n");
       return false;
     } catch (e) {
       return false;
+    }
+  }
+  function _keyReadAuthedOn(url) {
+    try {
+      let k = url;
+      try {
+        k = normalizeURL2(url);
+      } catch (e) {
+      }
+      const r = pool.relays.get(k);
+      return !!r && r.connected === true && _authAccepted.get(k) === r;
+    } catch (e) {
+      return false;
+    }
+  }
+  var _keyReadEpoch = 0;
+  var _keyReadAuthWaiters = /* @__PURE__ */ new Set();
+  var _KEY_READ_LONG_WAIT = 15e3;
+  function _stillOn(cp0, ep0) {
+    return _keyReadEpoch === ep0 && !!cp0 && (actingChurch || pub) === cp0;
+  }
+  function _keyReadOk(tok) {
+    if (!tok || tok.closed || tok.relayClosed || tok.epoch !== _keyReadEpoch || !tok.cp || tok.cp !== (actingChurch || pub)) return false;
+    if (Date.now() - tok.at >= tok.wait - 100) return false;
+    return _keyReadAuthedOn(tok.url) ? true : "unauthed";
+  }
+  function _keyReadAfterAuth(again) {
+    _keyReadAuthWaiters.add(again);
+  }
+  function _runKeyReadAuthWaiters() {
+    const ws = [..._keyReadAuthWaiters];
+    _keyReadAuthWaiters.clear();
+    for (const again of ws) {
+      try {
+        again();
+      } catch (e) {
+      }
+    }
+  }
+  function _openKeyRead(cp, filters, onevent, onSettled) {
+    const st = { stopped: false, gen: 0, subs: [], timer: null, tries: 0 };
+    const stopSubs = () => {
+      for (const s of st.subs) {
+        s.tok.closed = true;
+        try {
+          s.sub.close();
+        } catch (e) {
+        }
+      }
+      st.subs = [];
+    };
+    const open = () => {
+      if (st.stopped) return;
+      stopSubs();
+      clearTimeout(st.timer);
+      st.timer = null;
+      const gen = ++st.gen;
+      const urls = relays();
+      const epoch = _keyReadEpoch, at = Date.now();
+      const answers = /* @__PURE__ */ new Map();
+      const live = () => !st.stopped && gen === st.gen && epoch === _keyReadEpoch && cp === (actingChurch || pub);
+      const retry = () => {
+        if (!live()) return;
+        const ms = Math.min(6e4, 2e3 * Math.pow(2, st.tries++));
+        st.timer = setTimeout(open, ms);
+      };
+      const evaluate = () => {
+        if (!live() || answers.size < urls.length) return;
+        const v = [...answers.values()];
+        if (v.every((x) => x === true)) {
+          st.tries = 0;
+          onSettled();
+          return;
+        }
+        if (v.some((x) => x === false)) {
+          retry();
+          return;
+        }
+        _keyReadAfterAuth(() => {
+          if (live()) open();
+        });
+      };
+      if (!urls.length) {
+        retry();
+        return;
+      }
+      for (const url of urls) {
+        let up = false;
+        try {
+          const r = pool.relays.get(normalizeURL2(url));
+          up = !!(r && r.connected);
+        } catch (e) {
+        }
+        const tok = { cp, epoch, at, url, wait: up ? _KEY_READ_LONG_WAIT : 4400, closed: false, relayClosed: false };
+        const sub = pool.subscribeMany([url], filters, {
+          ...up ? { maxWait: _KEY_READ_LONG_WAIT } : {},
+          onevent(e) {
+            if (!tok.closed) onevent(e);
+          },
+          // a microtask later, so a CLOSED's onclose (which nostr-tools runs right after this) has marked the token
+          oneose() {
+            queueMicrotask(() => {
+              answers.set(url, _keyReadOk(tok));
+              evaluate();
+            });
+          },
+          onclose() {
+            tok.relayClosed = true;
+          }
+        });
+        st.subs.push({ tok, sub });
+      }
+    };
+    open();
+    return () => {
+      st.stopped = true;
+      clearTimeout(st.timer);
+      st.timer = null;
+      stopSubs();
+    };
+  }
+  function _keysReadSignal(kind) {
+    try {
+      if (typeof window !== "undefined" && window.dispatchEvent) window.dispatchEvent(new CustomEvent("steward-keys-read", { detail: { kind } }));
+    } catch (e) {
     }
   }
   var _noPhoto = /* @__PURE__ */ new Set();
@@ -16624,11 +16800,15 @@ zoo`.split("\n");
     _careKeyDocKeys = null;
     _careKeyRev = 0;
     _careKeyChecked = false;
+    _careKeyPending = [];
     _mediaKeyHex = null;
     _mediaKeyRing = [];
     _mediaKeyDocKeys = null;
     _mediaKeyChecked = false;
     _mediaKeyPushRefused = null;
+    _keyReadEpoch++;
+    _careKeyVer++;
+    _mediaKeyVer++;
     for (const k of Object.keys(CAP_KEYS)) _capState[k] = { ring: [], docKeys: null, rev: 1, at: 0, checked: false };
     _checkinMigrated = "";
     _ckKeysSettled = "";
@@ -19151,19 +19331,26 @@ zoo`.split("\n");
       if (!sk) throw new Error("no key");
       if (!_mediaKeyHex && (!_mediaKeyChecked || !_isRelayAuthed())) throw new Error("Can\u2019t encrypt this upload yet \u2014 this device hasn\u2019t finished connecting to your church\u2019s relay, so it can\u2019t tell whether your church already has a media key. Wait a moment and try again.");
       if (actingChurch && !_mediaKeyHex) throw new Error("Can\u2019t encrypt this upload \u2014 your church hasn\u2019t shared its media key with this account yet. Ask whoever holds the church key to add you as a member of the church, or to upload this one themselves. Nothing has been uploaded.");
+      let useHex = _mediaKeyHex;
       if (!actingChurch) {
         if (!_mediaKeyHex) {
-          _mediaKeyHex = _hex(crypto.getRandomValues(new Uint8Array(32)));
-          _mediaKeyRing = [_mediaKeyHex];
-          const targets = [.../* @__PURE__ */ new Set([pub, ...(memberPubs || []).filter(Boolean)])].filter((k) => !_localBlocked || !_localBlocked.has(k));
-          const _mring = JSON.stringify(_mediaKeyRing);
-          const keys = await _sealEach(_mring, targets, (pl, mp) => encrypt3(pl, getConversationKey(sk, mp)));
-          const _env = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", MEDIAKEY_D + pub], ["t", NET]], content: JSON.stringify({ keys, rev: now() }) }));
+          const pub0 = pub, ep0 = _keyReadEpoch, sk0 = sk, v0 = _mediaKeyVer;
+          const fresh = _hex(crypto.getRandomValues(new Uint8Array(32)));
+          const targets = [.../* @__PURE__ */ new Set([pub0, ...(memberPubs || []).filter(Boolean)])].filter((k) => !_localBlocked || !_localBlocked.has(k));
+          const keys = await _sealEach(JSON.stringify([fresh]), targets, (pl, mp) => encrypt3(pl, getConversationKey(sk0, mp)));
+          const _moved = "Can\u2019t encrypt this upload \u2014 this console changed church, or your church\u2019s media key arrived, while the key was being prepared. Nothing has been uploaded. Try again.";
+          if (!_stillOn(pub0, ep0) || _mediaKeyVer !== v0 || _mediaKeyHex) throw new Error(_moved);
+          const _env = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", MEDIAKEY_D + pub0], ["t", NET]], content: JSON.stringify({ keys, rev: now() }) }));
           if (_env === false) throw new Error("Can\u2019t encrypt this upload \u2014 your church\u2019s media key could not be saved, so nothing encrypted with it could ever be played. Nothing has been uploaded. A church media key can only be published from the console that holds the church\u2019s own key.");
+          if (!_stillOn(pub0, ep0)) throw new Error(_moved);
+          _mediaKeyHex = fresh;
+          _mediaKeyRing = [fresh, ..._mediaKeyRing.filter((k) => k !== fresh)];
           _mediaKeyDocKeys = keys;
+          _mediaKeyVer++;
+          useHex = fresh;
         }
       }
-      const key = await crypto.subtle.importKey("raw", _unhex(_mediaKeyHex), "AES-GCM", false, ["encrypt"]);
+      const key = await crypto.subtle.importKey("raw", _unhex(useHex), "AES-GCM", false, ["encrypt"]);
       return async (bytes) => {
         const iv = crypto.getRandomValues(new Uint8Array(12));
         const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, bytes));
@@ -19192,24 +19379,38 @@ zoo`.split("\n");
     async ensureMediaKeyForMembers(memberPubs, stewardPubs) {
       if (actingChurch) return false;
       if (!sk || !_mediaKeyHex) return false;
-      const want = [.../* @__PURE__ */ new Set([pub, ...(memberPubs || []).filter(Boolean), ...(stewardPubs || []).filter(Boolean)])].filter((p) => !_localBlocked.has(String(p).toLowerCase()));
+      const pub0 = pub, ep0 = _keyReadEpoch, sk0 = sk;
+      const want = [.../* @__PURE__ */ new Set([pub0, ...(memberPubs || []).filter(Boolean), ...(stewardPubs || []).filter(Boolean)])].filter((p) => !_localBlocked.has(String(p).toLowerCase()));
       const have = _mediaKeyDocKeys || {};
       if (want.every((p) => have[p])) return false;
       const fp = want.slice().sort().join(",");
       if (_mediaKeyPushRefused === fp) return false;
-      const _mring = JSON.stringify(_mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex]);
-      const keys = await _sealEach(_mring, want, (pl, mp) => encrypt3(pl, getConversationKey(sk, mp)));
+      const _v0 = _mediaKeyVer;
+      const _mfull = _mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex];
+      const _mfit = _fitKeyRing(_mfull, want.length, (pl) => encrypt3(pl, getConversationKey(sk0, want[0])));
+      if (!_mfit) {
+        console.warn("[steward] media key envelope too large for one document at " + want.length + " recipients");
+        return false;
+      }
+      if (_mfit.length < _mfull.length) console.warn("[steward] media key ring trimmed to " + _mfit.length + " to fit " + want.length + " recipients \u2014 sermons encrypted under the dropped keys will no longer play");
+      const _mring = JSON.stringify(_mfit);
+      const keys = await _sealEach(_mring, want, (pl, mp) => encrypt3(pl, getConversationKey(sk0, mp)));
+      if (_mediaKeyVer !== _v0 || !_stillOn(pub0, ep0)) return false;
       const _pubOpts = { background: true };
-      const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", MEDIAKEY_D + pub], ["t", NET]], content: JSON.stringify({ keys, rev: now() }) }), _pubOpts);
+      const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", MEDIAKEY_D + pub0], ["t", NET]], content: JSON.stringify({ keys, rev: now() }) }), _pubOpts);
+      if (!_stillOn(pub0, ep0)) return ok;
       if (ok !== false) {
-        _mediaKeyDocKeys = keys;
-        _mediaKeyPushRefused = null;
+        if (_mediaKeyVer === _v0) {
+          _mediaKeyDocKeys = keys;
+          _mediaKeyPushRefused = null;
+          _mediaKeyVer++;
+        }
         return ok;
       }
       if (!_pubOpts.refused) return ok;
       _mediaKeyPushRefused = fp;
       try {
-        const missing = want.filter((p) => p !== pub && !have[p]).length;
+        const missing = want.filter((p) => p !== pub0 && !have[p]).length;
         const _why = /not a member|not permitted/i.test(String(_pubOpts.reason || "")) ? "Only the console that holds the church key can publish it." : "The relay refused it: " + String(_pubOpts.reason || "no reason given").trim().replace(/[.\s]+$/, "") + ".";
         window.dispatchEvent(new CustomEvent("steward-write-blocked", { detail: {
           what: "sermon key",
@@ -19230,19 +19431,30 @@ zoo`.split("\n");
     async rotateMediaKey(memberPubs, stewardPubs) {
       if (actingChurch) return null;
       if (!sk || !pub) return false;
+      const pub0 = pub, ep0 = _keyReadEpoch, sk0 = sk;
       if (!_isRelayAuthed()) return false;
       if (!_mediaKeyHex) return false;
+      _mediaKeyVer++;
       const fresh = _hex(crypto.getRandomValues(new Uint8Array(32)));
-      const ring = [fresh, ..._mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex]].slice(0, 50);
-      const want = [.../* @__PURE__ */ new Set([pub, ...(memberPubs || []).filter(Boolean), ...(stewardPubs || []).filter(Boolean)])];
+      const full = [fresh, ..._mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex]].slice(0, 50);
+      const want = [.../* @__PURE__ */ new Set([pub0, ...(memberPubs || []).filter(Boolean), ...(stewardPubs || []).filter(Boolean)])];
+      const ring = _fitKeyRing(full, want.length, (pl) => encrypt3(pl, getConversationKey(sk0, want[0])));
+      if (!ring) {
+        console.warn("[steward] media key rotation too large for one document at " + want.length + " recipients");
+        return false;
+      }
+      if (ring.length < full.length) console.warn("[steward] media key ring trimmed to " + ring.length + " to fit " + want.length + " recipients \u2014 sermons encrypted under the dropped keys will no longer play");
       const payload = JSON.stringify(ring);
-      const keys = await _sealEach(payload, want, (pl, mp) => encrypt3(pl, getConversationKey(sk, mp)));
-      const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", MEDIAKEY_D + pub], ["t", NET]], content: JSON.stringify({ keys, rev: now() }) }));
+      const keys = await _sealEach(payload, want, (pl, mp) => encrypt3(pl, getConversationKey(sk0, mp)));
+      if (!_stillOn(pub0, ep0)) return false;
+      const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", MEDIAKEY_D + pub0], ["t", NET]], content: JSON.stringify({ keys, rev: now() }) }));
       if (ok === false) return false;
-      _mediaKeyRing = ring;
+      if (!_stillOn(pub0, ep0)) return true;
+      _mediaKeyRing = [...full, ..._mediaKeyRing.filter((k) => full.indexOf(k) === -1)];
       _mediaKeyHex = fresh;
       _mediaKeyDocKeys = keys;
       _mediaKeyPushRefused = null;
+      _mediaKeyVer++;
       return true;
     },
     // ---- care key: same envelope as the media key, for the Care module's sensitive fields ----
@@ -19252,11 +19464,13 @@ zoo`.split("\n");
       const cp = actingChurch || pub;
       if (!cp) return () => {
       };
-      const sub = pool.subscribeMany(relays(), [
-        { kinds: [30078], authors: [cp], "#d": [CAREKEY_D + cp] },
-        { kinds: [30078], "#church": [cp], "#d": [CAREKEY_D + cp] }
-      ], {
-        onevent(e) {
+      return _openKeyRead(
+        cp,
+        [
+          { kinds: [30078], authors: [cp], "#d": [CAREKEY_D + cp] },
+          { kinds: [30078], "#church": [cp], "#d": [CAREKEY_D + cp] }
+        ],
+        (e) => {
           if (!_careKeyAuthed(e)) {
             _careKeyPending.push({ e, at: Date.now() });
             if (_careKeyPending.length > 10) _careKeyPending.shift();
@@ -19264,17 +19478,14 @@ zoo`.split("\n");
           }
           _ingestCareKeyEnv(e);
         },
-        oneose() {
-          _careKeyChecked = true;
+        // "No envelope came back" opens the mint gate ONLY on a trustworthy answer from every relay — _openKeyRead.
+        () => {
+          if (!_careKeyChecked) {
+            _careKeyChecked = true;
+            _keysReadSignal("care");
+          }
         }
-        // no envelope came back → it is safe to mint one
-      });
-      return () => {
-        try {
-          sub.close();
-        } catch (e) {
-        }
-      };
+      );
     },
     // Wrap the care key for everyone who needs it. MINTS only on a first run where we have positively
     // established there is no envelope — never on a cold `_careKeyHex === null`, which is the ordinary state
@@ -19284,7 +19495,7 @@ zoo`.split("\n");
     // grant is refused by the relay every time it runs. `opts` rather than a hard-coded `true` so that a
     // deliberate care control added later is loud by default, which is the way round this codebase needs.
     async ensureCareKeyForMembers(memberPubs, stewardPubs, opts) {
-      const cp = actingChurch || pub;
+      const cp = actingChurch || pub, ep0 = _keyReadEpoch, sk0 = sk;
       if (!sk || !cp || !churchPub) return false;
       if (!_careKeyChecked) return false;
       _reCheckCareKeyPending();
@@ -19292,18 +19503,36 @@ zoo`.split("\n");
       if (!_careKeyHex) {
         if (_careKeyDocKeys) return false;
         if (!_isRelayAuthed()) return false;
+        const _v0 = _careKeyVer;
         if (await _churchHasCareNeeds()) return false;
-        _careKeyHex = _hex(crypto.getRandomValues(new Uint8Array(32)));
-        _careKeyRing = [_careKeyHex];
-        _careKeyRev = 1;
+        if (_careKeyVer !== _v0 || _careKeyHex || _careKeyDocKeys || !_careKeyChecked || !_stillOn(cp, ep0)) return false;
       }
+      const minting = !_careKeyHex;
+      const ring0 = minting ? [_hex(crypto.getRandomValues(new Uint8Array(32)))] : _careKeyRing.length ? _careKeyRing : [_careKeyHex];
+      const rev2 = minting ? 1 : _careKeyRev;
       const want = [...new Set([cp, churchPub, ...memberPubs || [], ...stewardPubs || []].filter(Boolean))].filter((p) => !_localBlocked.has(String(p).toLowerCase()));
-      const have = _careKeyDocKeys || {};
+      const have = (minting ? null : _careKeyDocKeys) || {};
       if (want.every((p2) => have[p2])) return false;
-      const _ring = JSON.stringify(_careKeyRing.length ? _careKeyRing : [_careKeyHex]);
-      const keys = await _sealEach(_ring, want, (pl, mp) => encrypt3(pl, getConversationKey(sk, mp)));
-      const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", CAREKEY_D + cp], ["t", NET]], content: JSON.stringify({ keys, rev: _careKeyRev }) }), { background: !!(opts && opts.background) });
-      if (ok !== false) _careKeyDocKeys = keys;
+      const _v1 = _careKeyVer;
+      const _cfit = _fitKeyRing(ring0, want.length, (pl) => encrypt3(pl, getConversationKey(sk0, want[0])));
+      if (!_cfit) {
+        console.warn("[steward] care key envelope too large for one document at " + want.length + " recipients");
+        return false;
+      }
+      if (_cfit.length < ring0.length) console.warn("[steward] care key ring trimmed to " + _cfit.length + " to fit " + want.length + " recipients \u2014 older sealed care records will no longer open");
+      const _ring = JSON.stringify(_cfit);
+      const keys = await _sealEach(_ring, want, (pl, mp) => encrypt3(pl, getConversationKey(sk0, mp)));
+      if (_careKeyVer !== _v1 || !_stillOn(cp, ep0)) return false;
+      const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", CAREKEY_D + cp], ["t", NET]], content: JSON.stringify({ keys, rev: rev2 }) }), { background: !!(opts && opts.background) });
+      if (ok !== false && _careKeyVer === _v1 && _stillOn(cp, ep0)) {
+        if (minting) {
+          _careKeyRing = ring0.slice();
+          _careKeyHex = ring0[0];
+          _careKeyRev = rev2;
+        }
+        _careKeyDocKeys = keys;
+        _careKeyVer++;
+      }
       return ok;
     },
     // seal / open the sensitive half of a care doc. Returns null when this device has no key, so callers can
@@ -19375,10 +19604,11 @@ zoo`.split("\n");
     // never loses access to its own history (dropping it is how you destroy your records, not how you secure
     // them), and the new envelope simply isn't wrapped to the person who left.
     async rotateCareKey(memberPubs, stewardPubs) {
-      const cp = actingChurch || pub;
+      const cp = actingChurch || pub, ep0 = _keyReadEpoch, sk0 = sk, rev0 = (_careKeyRev || 1) + 1;
       if (!sk || !cp || !churchPub) return false;
       if (!_careKeyChecked || !_isRelayAuthed()) return false;
       if (!_careKeyHex) return false;
+      _careKeyVer++;
       const fresh = _hex(crypto.getRandomValues(new Uint8Array(32)));
       const want = [...new Set([cp, churchPub, ...memberPubs || [], ...stewardPubs || []].filter(Boolean))];
       const full = [fresh, ..._careKeyRing.length ? _careKeyRing : [_careKeyHex]].slice(0, 50);
@@ -19388,7 +19618,7 @@ zoo`.split("\n");
         const cand = full.slice(0, n);
         let per = 0;
         try {
-          per = 64 + String(encrypt3(JSON.stringify(cand), getConversationKey(sk, probe))).length + 6;
+          per = 64 + String(encrypt3(JSON.stringify(cand), getConversationKey(sk0, probe))).length + 6;
         } catch (e) {
           break;
         }
@@ -19400,19 +19630,22 @@ zoo`.split("\n");
       let keys = null;
       if (ring) {
         const payload = JSON.stringify(ring);
-        keys = await _sealEach(payload, want, (pl, mp) => encrypt3(pl, getConversationKey(sk, mp)));
+        keys = await _sealEach(payload, want, (pl, mp) => encrypt3(pl, getConversationKey(sk0, mp)));
       }
       if (!keys) {
         console.warn("[steward] care key rotation too large for one document at " + want.length + " members");
         return false;
       }
       if (ring.length < full.length) console.warn("[steward] care key ring trimmed to " + ring.length + " to fit " + want.length + " members \u2014 older sealed care records will no longer open");
-      const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", CAREKEY_D + cp], ["t", NET]], content: JSON.stringify({ keys, rev: (_careKeyRev || 1) + 1 }) }));
+      if (!_stillOn(cp, ep0)) return false;
+      const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", CAREKEY_D + cp], ["t", NET]], content: JSON.stringify({ keys, rev: rev0 }) }));
       if (ok === false) return false;
+      if (!_stillOn(cp, ep0)) return true;
       _careKeyRing = ring;
       _careKeyHex = fresh;
-      _careKeyRev = (_careKeyRev || 1) + 1;
+      _careKeyRev = rev0;
       _careKeyDocKeys = keys;
+      _careKeyVer++;
       return true;
     },
     // has this device actually completed a NIP-42 auth? Callers use it to tell "the church has none" apart
@@ -19441,18 +19674,23 @@ zoo`.split("\n");
     subscribeMediaKey() {
       if (!pub) return () => {
       };
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#d": [MEDIAKEY_D + pub] }], {
+      const forPub = pub;
+      return _openKeyRead(
+        forPub,
+        [{ kinds: [30078], authors: [pub], "#d": [MEDIAKEY_D + pub] }],
         // Ring-aware, and tolerant of the legacy shape: a wrapped value is a JSON array of keys now (newest
         // first) but older envelopes hold one bare hex string. Reading only the new form would make every
         // sermon encrypted before the upgrade undecryptable.
         /* `_mediaKeyPushRefused = null` (F2): an envelope LANDING is new information — the recipient map has
            changed under us, so whatever this console last had refused is worth asking again. Without this a
            console that was refused once would go on skipping until the roster itself changed. */
-        onevent(e) {
+        function onMediaKeyEnvelope(e) {
+          if (forPub !== pub || e.pubkey !== pub || ((e.tags || []).find((t) => t[0] === "d") || [])[1] !== MEDIAKEY_D + pub) return;
           try {
             const o = JSON.parse(e.content);
             _mediaKeyDocKeys = o && o.keys || null;
             _mediaKeyPushRefused = null;
+            _mediaKeyVer++;
             const _meKey = _myOwnPub();
             const mine = o.keys && (o.keys[_meKey] || (_meKey === pub ? null : o.keys[pub]));
             if (mine && sk) {
@@ -19470,17 +19708,14 @@ zoo`.split("\n");
           } catch (x) {
           }
         },
-        oneose() {
-          _mediaKeyChecked = true;
+        // no envelope came back → it is safe to mint one, but ONLY on a trustworthy answer from every relay
+        () => {
+          if (!_mediaKeyChecked) {
+            _mediaKeyChecked = true;
+            _keysReadSignal("media");
+          }
         }
-        // no envelope came back → it is safe to mint one
-      });
-      return () => {
-        try {
-          sub.close();
-        } catch {
-        }
-      };
+      );
     },
     // true if every relay this console has opened is still connected. The console's reconnect ticker only
     // re-subscribes when this is FALSE — so a healthy socket never triggers a full-corpus re-query (the steward
@@ -20621,7 +20856,7 @@ zoo`.split("\n");
     },
     async _ensureNameKeyLocked(memberPubs, stewardPubs, opts = {}) {
       if (!churchSk || !churchPub) return Promise.resolve(null);
-      const cp = actingChurch || pub;
+      const cp = actingChurch || pub, ep0 = _keyReadEpoch;
       if (!_nameKeyChecked || !_isRelayAuthed()) return Promise.resolve(null);
       let ring = _nameKeyRing.slice();
       if (!ring.length && _nameKeyDocKeys) return Promise.resolve(null);
@@ -20653,10 +20888,13 @@ zoo`.split("\n");
       if (fitted.length < ring.length) console.warn("[steward] name key ring trimmed to " + fitted.length + " to fit " + recips.length + " members \u2014 names not yet re-sealed under the new key will be blank until that member is next online");
       ring = fitted;
       const wrapped = JSON.stringify(ring);
+      const _dk0 = _nameKeyDocKeys, _r0 = _nameKeyRing;
       const keys = await _sealEach(wrapped, recips, (pl, pk) => encrypt3(pl, getConversationKey(churchSk, pk)));
+      if (_nameKeyDocKeys !== _dk0 || _nameKeyRing !== _r0 || !_stillOn(cp, ep0)) return opts.rotate ? false : null;
       const at = now();
       const out = await publish(feChurch({ kind: 30078, created_at: at, tags: [["d", NAMEKEY_D + cp], ["t", NET]], content: JSON.stringify({ rev: ring.length, keys }) }));
       if (out === false) return false;
+      if (!_stillOn(cp, ep0)) return out;
       _nameKeyRing = ring;
       _nameKeyDocKeys = keys;
       _nameKeyAt = Math.max(_nameKeyAt, at);
@@ -20666,8 +20904,11 @@ zoo`.split("\n");
     // read the envelope back (the church's own copy) so the console can decrypt members' names
     subscribeNameKey() {
       const cp = actingChurch || pub;
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], "#d": [NAMEKEY_D + cp] }], {
-        onevent(e) {
+      return _openKeyRead(
+        cp,
+        [{ kinds: [30078], "#d": [NAMEKEY_D + cp] }],
+        (e) => {
+          if (cp !== (actingChurch || pub) || ((e.tags || []).find((t) => t[0] === "d") || [])[1] !== NAMEKEY_D + cp) return;
           if (!_byChurchOrSteward(e)) return;
           if (_authFuture(e) || (e.created_at || 0) < _nameKeyAt) return;
           try {
@@ -20690,17 +20931,15 @@ zoo`.split("\n");
           } catch (x) {
           }
         },
-        oneose() {
-          _nameKeyChecked = true;
+        // the relay answered — a church with no envelope yet may now mint its first, but ONLY on a trustworthy
+        // answer from every relay (_openKeyRead). This is the gate the audit of e6a2e02 watched open on our own close.
+        () => {
+          if (!_nameKeyChecked) {
+            _nameKeyChecked = true;
+            _keysReadSignal("name");
+          }
         }
-        // the relay answered — a church with no envelope yet may now mint its first
-      });
-      return () => {
-        try {
-          sub.close();
-        } catch {
-        }
-      };
+      );
     },
     // open a member's sealed name. Tries every key in the ring so a rotation never hides older names.
     openMemberName(content, authorPub) {
@@ -21535,8 +21774,10 @@ zoo`.split("\n");
       }
       const keys = await _sealEach(JSON.stringify(nextRing), want, (pl, mp) => encrypt3(pl, getConversationKey(sk, mp)));
       _warnUnsealed(spec.cap, _sealEachFailed);
+      if (_capState[kind] !== st || pub !== cp) return false;
       const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", spec.d + cp], ["t", NET]], content: JSON.stringify({ keys, rev: st.rev }) }));
       if (ok === false || ok == null) return false;
+      if (_capState[kind] !== st) return ok;
       st.ring = nextRing;
       st.docKeys = keys;
       return ok;
@@ -21563,8 +21804,10 @@ zoo`.split("\n");
       const want = [...new Set([cp, ...(stewardPubs || []).filter(allowed)].filter(Boolean))];
       const keys = await _sealEach(JSON.stringify(nextRing), want, (pl, mp) => encrypt3(pl, getConversationKey(sk, mp)));
       _warnUnsealed(spec.cap, _sealEachFailed);
+      if (_capState[kind] !== st || pub !== cp) return false;
       const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", spec.d + cp], ["t", NET]], content: JSON.stringify({ keys, rev: nextRev }) }));
       if (ok === false) return false;
+      if (_capState[kind] !== st) return ok;
       st.ring = nextRing;
       st.rev = nextRev;
       st.docKeys = keys;
@@ -23675,6 +23918,20 @@ zoo`.split("\n");
       _checkinMigrated = "";
       _ckKeysSettled = "";
       _ckSessionKeys.clear();
+      _careKeyHex = null;
+      _careKeyRing = [];
+      _careKeyDocKeys = null;
+      _careKeyRev = 0;
+      _careKeyChecked = false;
+      _careKeyPending = [];
+      _mediaKeyHex = null;
+      _mediaKeyRing = [];
+      _mediaKeyDocKeys = null;
+      _mediaKeyChecked = false;
+      _mediaKeyPushRefused = null;
+      _keyReadEpoch++;
+      _careKeyVer++;
+      _mediaKeyVer++;
       window.Steward.pubkey = pub;
       window.Steward.npub = npubEncode(pub);
       window.Steward.activePub = pub;

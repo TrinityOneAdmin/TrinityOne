@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { generateSecretKey, getPublicKey } from 'nostr-tools/pure';
 import { v2 as nip44v2 } from 'nostr-tools/nip44';
-import { fnBody } from './test-slice.mjs';
+import { fnBody, liftKeyRead } from './test-slice.mjs';
 
 const FELLOWSHIP = readFileSync(new URL('../vendor/fellowship.js', import.meta.url), 'utf8');
 const STEWARD = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
@@ -196,6 +196,7 @@ function blockRig(have) {
     // _publishToRelays, not publish. Same in-flight semantics for the block doc — this test's whole point is
     // that the local filter must hold WHILE the publish is unresolved, whichever primitive carries it.
     const _publishToRelays = publish;
+    ${liftKeyRead(STEWARD)}   // _keyReadEpoch / _stillOn: the name-key publisher checks them after its awaits
     const api = { ${setBlockedM}, ${ensureM} };
     return { api, published };
   `;

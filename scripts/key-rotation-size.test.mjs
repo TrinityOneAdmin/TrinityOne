@@ -54,7 +54,7 @@ test('rotation trims the ring rather than giving up', () => {
   // Sized by sealing ONE sample per candidate ring length, not by encrypting the whole church each time:
   // sealing costs ~5 ms per member on a workstation and several times that on a phone, so trial-encrypting
   // everyone per candidate turned a slow operation into an unusable one (measured: up to 48 s at 500).
-  assert.match(body, /nip44e\(JSON\.stringify\(cand\), nip44ck\(sk, probe\)\)/,
+  assert.match(body, /nip44e\(JSON\.stringify\(cand\), nip44ck\(sk0?, probe\)\)/,   // sk0: the key captured at entry (2026-10-01)
     'the ring is sized by encrypting the entire church once per candidate length — that is quadratic in the ' +
     'thing that was already too slow');
   assert.doesNotMatch(body, /while \(ring\.length >= 1\)/, 'the trial-encrypt loop is back');

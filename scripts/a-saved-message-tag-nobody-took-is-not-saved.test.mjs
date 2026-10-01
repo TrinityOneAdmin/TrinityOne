@@ -37,12 +37,15 @@ import { readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fnBody } from './test-slice.mjs';
+import { fnBody, liftKeyRead } from './test-slice.mjs';
 import { miniReact, texts, button, find, loadScreen, reads } from './render-jsx-screen.mjs';
 
 const ROOT = new URL('../', import.meta.url).pathname;
 const STEW = readFileSync(join(ROOT, 'app/stew-dashboard.jsx'), 'utf8');
 const BUNDLE = readFileSync(join(ROOT, 'vendor/steward.js'), 'utf8');
+// THE SHIPPED ring fitter (2026-10-01): the media-key publishers fit their envelope to the relay's 1 MB cap
+// through it, so a lifted publisher needs it in scope. Lifted, not re-typed.
+const _fitKeyRing = new Function('return ' + fnBody(BUNDLE, 'function _fitKeyRing(full, recipCount, sealSample) {', '_fitKeyRing in the shipped bundle'))();
 const tick = () => new Promise(r => setTimeout(r, 0));
 
 // ── the panel, compiled with the real esbuild ────────────────────────────────────────────────────────────
@@ -172,7 +175,8 @@ async function runLifted(sig, name, answer, scope = {}, args = [], decls = '') {
   globalThis[key] = env;
   const preamble = Object.keys(env).map(k => `const ${k} = globalThis.${key}.${k};`).join('\n');
   const mod = await import('data:text/javascript;base64,' + Buffer.from(
-    preamble + '\n' + decls + '\nconst __o = { ' + src + ' };\nexport const fn = __o.' + name + '.bind(__o);\n').toString('base64'));
+    // the shipped key-read guards (_keyReadEpoch, _stillOn …): every key publisher consults them after its awaits
+    preamble + '\n' + liftKeyRead(BUNDLE) + '\n' + decls + '\nconst __o = { ' + src + ' };\nexport const fn = __o.' + name + '.bind(__o);\n').toString('base64'));
   return { fn: mod.fn, published, call: () => mod.fn(...args) };
 }
 
@@ -280,7 +284,7 @@ test('mediaEncryptor REFUSES TO ENCRYPT when the key envelope was refused', asyn
   // file with a key whose envelope never reached a relay and pushed the ciphertext to every host. Nobody,
   // the church included, can ever decrypt it. The mint gate a few lines above this one exists to prevent
   // exactly that loss; this is the same loss reached through the other door.
-  const decls = 'let _mediaKeyHex = null; let _mediaKeyRing = []; let _mediaKeyChecked = true; let _mediaKeyDocKeys = null;';
+  const decls = 'let _mediaKeyHex = null; let _mediaKeyRing = []; let _mediaKeyChecked = true; let _mediaKeyDocKeys = null; let _mediaKeyVer = 0;';
   const env = {
     _isRelayAuthed: () => true,
     _sealEach: async (payload, targets) => Object.fromEntries(targets.map(t => [t, 'WRAPPED'])),
@@ -298,7 +302,7 @@ test('mediaEncryptor REFUSES TO ENCRYPT when the key envelope was refused', asyn
 });
 
 const MEDIA_ENV = (extra = '') => `
-  let _mediaKeyRing = [];
+  let _mediaKeyRing = []; let _mediaKeyVer = 0;
   let _mediaKeyChecked = true;
   let _mediaKeyDocKeys = null;
   const _isRelayAuthed = () => true;
@@ -323,7 +327,7 @@ test('ENCRYPTION: a delegated console recovers the key from ITS OWN entry in the
   let handlers = null;
   const peek = '__peek' + Math.random().toString(36).slice(2);
   const r = await runLifted('subscribeMediaKey()', 'subscribeMediaKey', { id: 'evt' }, {
-    actingChurch: 'CHURCHPUB', pub: CHURCH, sk: 'STEWARD_SK',
+    actingChurch: 'CHURCHPUB', pub: CHURCH, sk: 'STEWARD_SK', MEDIAKEY_D: 'trinityone/mediakey:',
     [GP]: () => STEWARD,   // ← the emitted name too: _myOwnPub calls `getPublicKey2` in today's bundle
     relays: () => ['wss://r'],
     pool: { subscribeMany: (_r, _f, h) => { handlers = h; return { close() {} }; } },
@@ -335,13 +339,13 @@ test('ENCRYPTION: a delegated console recovers the key from ITS OWN entry in the
     // Read them out of the bundle instead of hard-coding, because the numeric suffixes move on every build.
     [DEC]: (payload, ck) => (payload.startsWith(ck.replace('ck:', '') + '/') ? payload.split('/')[1] : (() => { throw new Error('wrong recipient'); })()),
     [CK]: (_sk, other) => 'ck:' + other,
-  }, [], `let _mediaKeyHex = null; let _mediaKeyRing = []; let _mediaKeyDocKeys = null; let _mediaKeyPushRefused = 'x'; let _mediaKeyChecked = false;
+  }, [], `let _mediaKeyHex = null; let _mediaKeyRing = []; let _mediaKeyDocKeys = null; let _mediaKeyPushRefused = 'x'; let _mediaKeyChecked = false; let _mediaKeyVer = 0;
      ${fnBody(BUNDLE, 'function _myOwnPub() {', '_myOwnPub')}
      globalThis['${peek}'] = () => _mediaKeyHex;`);
   r.fn();
   assert.ok(handlers, 're-anchor this test: subscribeMediaKey did not open a subscription');
   // The church's envelope: a ring sealed to the CHURCH, and another sealed to US. Only ours is openable.
-  handlers.onevent({ pubkey: CHURCH, content: JSON.stringify({ keys: {
+  handlers.onevent({ pubkey: CHURCH, tags: [['d', 'trinityone/mediakey:' + CHURCH]], content: JSON.stringify({ keys: {
     [CHURCH]:  CHURCH  + '/' + JSON.stringify(['cc'.repeat(32)]),
     [STEWARD]: CHURCH  + '/' + JSON.stringify(['ab'.repeat(32)]),
   }, rev: 1 }) });
@@ -1239,7 +1243,7 @@ async function runMediaKey(answer, calls = 3, memberPubs = ['m1', 'm2'], saidNo 
   // this function ASSIGNS to _mediaKeyDocKeys and _mediaKeyPushRefused — a const would throw TypeError from
   // inside the lifted code, which an assertion about "it stopped publishing" would happily accept.
   const decls = 'let _mediaKeyHex = "aa"; let _mediaKeyRing = ["aa"]; let _mediaKeyDocKeys = null; '
-    + 'let _mediaKeyPushRefused = null;\n'
+    + 'let _mediaKeyPushRefused = null; let _mediaKeyVer = 0;\n'
     + `globalThis.${peek} = () => ({ docKeys: _mediaKeyDocKeys, refused: _mediaKeyPushRefused });\n`;
   const lifted = await runLifted('ensureMediaKeyForMembers(memberPubs, stewardPubs)', 'ensureMediaKeyForMembers', answer, {
     publish: async (evt, opts) => {
@@ -1250,9 +1254,10 @@ async function runMediaKey(answer, calls = 3, memberPubs = ['m1', 'm2'], saidNo 
       }
       return answer;
     },
-    _localBlocked: new Set(),
+    _localBlocked: new Set(), _fitKeyRing,
     _sealEach: async (pl, want) => Object.fromEntries(want.map(p => [p, 'sealed-for-' + p])),
     nip44e: (a) => a, nip44ck: () => 'ck',
+    encrypt3: (a) => a, getConversationKey: () => 'ck',   // the bundle's names — the ring fitter seals one sample
     window: { dispatchEvent: (e) => { events.push({ type: e.type, detail: e.detail }); } },
     CustomEvent: class { constructor(type, init) { this.type = type; this.detail = (init || {}).detail; } },
   }, [memberPubs], decls);
@@ -1337,7 +1342,7 @@ async function runMediaKeyForReal(answers, calls = 3, memberPubs = ['m1', 'm2'])
   let n = 0;
   const scope = {
     sk: 'SK', pub: 'CP', actingChurch: '',
-    _localBlocked: new Set(), _lastOk: new Map(),
+    _localBlocked: new Set(), _lastOk: new Map(), _fitKeyRing,
     MEDIAKEY_D: 'trinityone/mediakey:', NET: 'trinityone', NO_NETWORK_RELAY: 'no-network-relay',
     now: () => 1700000000 + n,
     feChurch: (t) => t,
@@ -1380,7 +1385,7 @@ async function runMediaKeyForReal(answers, calls = 3, memberPubs = ['m1', 'm2'])
   // Mutable module state the lifted function ASSIGNS to must be `let`, or a const throws TypeError from
   // inside the lifted code and "it stopped publishing" would read as a pass.
   const decls = 'let _mediaKeyHex = "aa"; let _mediaKeyRing = ["aa"]; let _mediaKeyDocKeys = null; '
-    + 'let _mediaKeyPushRefused = null; let _mediaKeyChecked = false;';
+    + 'let _mediaKeyPushRefused = null; let _mediaKeyChecked = false; let _mediaKeyVer = 0;\n' + liftKeyRead(BUNDLE);
   const pubSrc = fnBody(BUNDLE, '  async function publish(evt, opts) {', 'publish in the shipped bundle');
   const family = [
     fnBody(BUNDLE, '    async ensureMediaKeyForMembers(memberPubs, stewardPubs) {', 'ensureMediaKeyForMembers in the shipped bundle'),
@@ -1505,7 +1510,7 @@ test('THE CLEARS: an envelope ARRIVING makes the console ask again too', async (
   assert.equal(p.subs.length, 1, 're-anchor: subscribeMediaKey opened no subscription, so no envelope can arrive');
   // A real envelope lands: somebody else's console re-keyed the church. The recipient map has changed under
   // us, so whatever this console last had refused is worth asking again.
-  p.subs[0].onevent({ pubkey: 'CP', content: JSON.stringify({ keys: { CP: 'x', m1: 'y' }, rev: 1 }) });
+  p.subs[0].onevent({ pubkey: 'CP', tags: [['d', 'trinityone/mediakey:CP']], content: JSON.stringify({ keys: { CP: 'x', m1: 'y' }, rev: 1 }) });
   assert.equal(p.api.peek().refused, null,
     'AN ARRIVING ENVELOPE NO LONGER CLEARS THE MEMO. The recipient map has changed underneath this console ' +
     'and it goes on skipping until the roster itself changes.');
