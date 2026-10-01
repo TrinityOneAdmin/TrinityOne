@@ -942,6 +942,111 @@ function _requireTrustedView(what) {
   try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what, message: err.message } })); } catch (e) {}
   throw err;
 }
+// ── A PARENT'S WHOLE LIST, IN EVERY GUARDIAN NOTICE (owner, 2026-10-01; reference/DOMAIN.md) ──────────────────
+// The notice is one replaceable slot per parent (d=guardnotice:<parent>), so a notice that names only the child
+// it is about is overwritten by the next one, and the parent's phone loses track of every earlier link. Every
+// notice now also carries, sealed to the parent like the rest:
+//   · `children` — the parent's COMPLETE current list of linked children in this church, computed from the
+//     guardians map AFTER the change. The newest notice is therefore the whole truth about the links, and the
+//     parent's phone never needs to re-publish anything to hold on to one.
+//   · `closed` — the children whose request FROM THIS PARENT the church has closed (declined, or the link
+//     removed), from the same document's `closed` map, minus any child the parent is linked to now. The phone
+//     withdraws its own still-live request for those, so a removal it never saw cannot come back as "Waiting
+//     for steward to confirm", and a declined parent stops seeing "Waiting". It names only this parent's own
+//     children, to this parent.
+// The legacy fields (`child`/`name`, `removed`) are kept exactly as they were — add, never repurpose — so an
+// older parent's app keeps working off them.
+function _childrenOfParent(links, parentPub) {
+  const out = new Set();
+  for (const [c, ps] of Object.entries(links || {})) {
+    const ch = toPubHex(c); if (!ch) continue;
+    if ((ps || []).some(p => toPubHex(p) === parentPub)) out.add(ch);
+  }
+  return [...out].sort();
+}
+function _closedChildrenOfParent(closed, parentPub, linked) {
+  const out = new Set();
+  for (const k of Object.keys(closed || {})) {
+    const [c, p] = String(k).split('|');
+    const ch = toPubHex(c || '');
+    if (ch && toPubHex(p || '') === parentPub && !linked.includes(ch)) out.add(ch);
+  }
+  return [...out].sort();
+}
+function _sendGuardNotice(parentPub, body, links, closed) {
+  if (links && typeof links === 'object') {
+    body.children = _childrenOfParent(links, parentPub);
+    body.closed = _closedChildrenOfParent(closed, parentPub, body.children);
+  }
+  let content;
+  try { content = nip44e(JSON.stringify(body), nip44ck(sk, parentPub)); }
+  catch (e) { return Promise.resolve(null); }
+  return _publishGuardNotice(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', GUARDNOTICE_D + parentPub], ['t', NET], ['p', parentPub]], content }), sk));
+}
+// EVERY RELAY, AND AGAIN FOR THE ONES THAT MISSED IT (audit of 4d7ca23, 2026-10-01). publish() is
+// first-accept-wins: the moment one relay took a notice it resolved, and a relay that was down or slow just
+// then never got it — so a parent whose phone reads that relay kept the OLDER notice, and the newest-notice
+// rule had nothing newer to prefer. A notice now goes to every relay this church has proved (relays()), and
+// the ones that did not accept it are tried again in the background (GUARD_RETRY_MS). The answer to the
+// caller is still "did any relay take it", as publish() gave. A relay that refuses outright ("a newer version
+// is already stored") is retried too, harmlessly: the relay keeps the newest. The only caller is
+// _sendGuardNotice (notifyGuardian, notifyGuardianRemoved, notifyGuardianList).
+const GUARD_RETRY_MS = [5000, 30000, 120000];
+// A RETRY SENDS THE PARENT'S LATEST NOTICE (audit of b4ac50d, item 4). Each notice ran its own retry chain with
+// the event it was given, so with two notices for one parent waiting on a relay that was down, the OLDER chain
+// could fire first while the relay was briefly up and leave it holding the older notice. Every retry now sends
+// the newest notice this console has signed for that parent (keyed by d-tag) — never an older one.
+const _latestGuardNotice = new Map();   // d-tag -> newest notice signed for that parent this session
+// NOT-ACCEPTED, the way nostr-tools reports it: a refusal REJECTS, but an unreachable relay RESOLVES with a
+// "connection failure: …" string (nostr-tools 2.x). Both mean the relay does not hold the notice.
+async function _guardTryOn(urls, ev) {
+  let rs = [];
+  try {
+    rs = await Promise.allSettled(pool.publish(urls, ev).map(p => p.then(v => {
+      if (typeof v === 'string' && v.startsWith('connection failure')) throw new Error(v);
+      return v;
+    })));
+  } catch (e) { return { missed: urls.slice(), refused: urls.map(url => ({ url, error: String((e && e.message) || e || '') })) }; }
+  const missed = [], refused = [];
+  urls.forEach((url, i) => {
+    const r = rs[i];
+    if (r && r.status === 'fulfilled') return;
+    missed.push(url);
+    refused.push({ url, error: (r && r.reason && (r.reason.message || String(r.reason))) || '' });
+  });
+  return { missed, refused };
+}
+async function _publishGuardNotice(evt) {
+  await _waitForRegistration();   // the same gate as publish(): a church the relay has never heard of writes nothing
+  const d = ((evt.tags || []).find(t => t[0] === 'd') || [])[1] || '';
+  const prev = _latestGuardNotice.get(d);
+  if (!prev || (evt.created_at || 0) >= (prev.created_at || 0)) _latestGuardNotice.set(d, evt);
+  const targets = relays();
+  if (!targets.length) return publish(evt);   // publish() reports "no relay" the way every other write does
+  const first = await _guardTryOn(targets, evt);
+  if (first.missed.length) {
+    (async () => {
+      let left = first.missed;
+      for (const ms of GUARD_RETRY_MS) {
+        await new Promise(r => setTimeout(r, ms));
+        try { left = (await _guardTryOn(left, _latestGuardNotice.get(d) || evt)).missed; } catch (e) {}
+        if (!left.length) return;
+      }
+    })().catch(() => {});
+  }
+  if (first.missed.length === targets.length) {
+    // THE RELAY'S OWN WORDS (audit of b4ac50d, item 5). A fixed "no relay accepted" made the banner say "check
+    // the connection" for a real refusal — a wrong clock, "not a member" — that publish() used to pass through
+    // and the console's banner (stew-dashboard.jsx publishErrorMessage) raises its own alarm for. Same shape as
+    // publish(): the first reason a relay actually SAID, else the first reason at all.
+    const said = first.refused.find(r => r.error && !/^connection failure/i.test(r.error));
+    const reason = (said && said.error) || (first.refused[0] && first.refused[0].error) || 'no relay accepted the guardian notice';
+    try { window.dispatchEvent(new CustomEvent('steward-publish-error', { detail: { reason, evt, refused: first.refused } })); } catch (x) {}
+    return false;
+  }
+  try { window.dispatchEvent(new CustomEvent('steward-publish-ok', { detail: { evt } })); } catch (x) {}
+  return evt;
+}
 async function _churchHasCareNeeds() {
   const cp = actingChurch || pub; if (!cp) return false;
   try {
@@ -7277,14 +7382,15 @@ window.Steward = {
   // so the parent<->child link never leaks in cleartext (the authoritative map stays the gated guardians: doc).
   // d keyed by the parent alone, so even the tag doesn't reveal which child. (First parents self-request, so they
   // already have the child locally — this is only for steward-initiated links.)
-  notifyGuardian(parentPubIn, childPubIn, childName) {
+  //
+  // `links`, `closed` (2026-10-01): the guardians document's map and closed pairs AFTER the change. When given,
+  // the notice also carries the parent's whole list and their closed requests — see _sendGuardNotice. The
+  // legacy fields are unchanged, so an older parent's app still works.
+  notifyGuardian(parentPubIn, childPubIn, childName, links, closed) {
     if (!sk) return Promise.resolve(null);
     const parentPub = toPubHex(parentPubIn), childPub = toPubHex(childPubIn);
     if (!parentPub || !childPub || parentPub === childPub) return Promise.resolve(null);
-    let content;
-    try { content = nip44e(JSON.stringify({ child: childPub, name: childName || '', church: churchPub }), nip44ck(sk, parentPub)); }
-    catch (e) { return Promise.resolve(null); }
-    return publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', GUARDNOTICE_D + parentPub], ['t', NET], ['p', parentPub]], content }), sk));
+    return _sendGuardNotice(parentPub, { child: childPub, name: childName || '', church: churchPub }, links, closed);
   },
 
   // THE OTHER HALF OF notifyGuardian. Linking a parent tells their app so the child appears in it; UNLINKING
@@ -7296,14 +7402,28 @@ window.Steward = {
   // someone they are a child's guardian after the church has decided they are not, which in safeguarding is
   // its own kind of wrong. unlinkParent's own comment already said "removing a link matters more than adding
   // one"; this is the half that was missing.
-  notifyGuardianRemoved(parentPubIn, childPubIn) {
+  //
+  // `links` as for notifyGuardian. `alsoRemoved` (2026-10-01): every child this one change took from the parent —
+  // marking a parent as a child unlinks them from all their children at once, and the notice is ONE slot per
+  // parent, so one notice per child kept only the last. They ride in `removedAll`, which builds before 4f08ca4
+  // read; `removed` still names the first, for the builds in between.
+  notifyGuardianRemoved(parentPubIn, childPubIn, links, alsoRemoved, closed) {
     if (!sk) return Promise.resolve(null);
     const parentPub = toPubHex(parentPubIn), childPub = toPubHex(childPubIn);
     if (!parentPub || !childPub) return Promise.resolve(null);
-    let content;
-    try { content = nip44e(JSON.stringify({ removed: childPub, church: churchPub }), nip44ck(sk, parentPub)); }
-    catch (e) { return Promise.resolve(null); }
-    return publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', GUARDNOTICE_D + parentPub], ['t', NET], ['p', parentPub]], content }), sk));
+    const body = { removed: childPub, church: churchPub };
+    const all = [...new Set([childPub, ...(Array.isArray(alsoRemoved) ? alsoRemoved : []).map(toPubHex).filter(Boolean)])];
+    if (all.length > 1) body.removedAll = all;
+    return _sendGuardNotice(parentPub, body, links, closed);
+  },
+  // A notice that carries ONLY the parent's whole list (and closed requests) — for a change that is neither a
+  // link nor a removal from this parent's point of view: a request confirmed or declined, a member reconnected
+  // on a new key. An older parent's app reads neither `child` nor `removed` here and ignores it.
+  notifyGuardianList(parentPubIn, links, closed) {
+    if (!sk) return Promise.resolve(null);
+    const parentPub = toPubHex(parentPubIn);
+    if (!parentPub) return Promise.resolve(null);
+    return _sendGuardNotice(parentPub, { church: churchPub }, links || {}, closed);
   },
 
   // ---- joining: by default anyone with the invite/QR joins instantly. A steward can switch on
@@ -7624,6 +7744,15 @@ window.Steward = {
     // The half no steward can repair by hand: re-ticking "child" restores the marking and still leaves the
     // parent unable to message their own child. Reported as done, it would never be looked at again.
     if (nextG && !await w(() => window.Steward.setGuardians(nextG, nextGC || gc))) throw new Error('Couldn\u2019t save the parent link, so nothing was changed. Check your connection and try again \u2014 this is the part that cannot be put right by hand afterwards.');
+    // TELL EVERY PARENT WHOSE LIST CHANGED (2026-10-01). A parent reconnected on a new key has no list on that
+    // key yet; a child reconnected changes each of their parents' lists. Each gets the whole new list. Not
+    // fatal and not awaited as a gate: the links above are what the relay enforces.
+    if (nextG) {
+      const told = new Set();
+      if (Object.keys(nextG).some(c => low(nextG[c]).indexOf(newH) !== -1)) told.add(newH);
+      for (const p of low(nextG[newH])) told.add(p);
+      for (const p of told) { try { Promise.resolve(window.Steward.notifyGuardianList(p, nextG, nextGC || gc)).catch(() => {}); } catch (e) {} }
+    }
 
     // (3) Record the vouch FIRST, then admit. If admitting failed on its own the member would be able to post
     // while the church still showed two of them; this order fails the safer way round. It only fails that way

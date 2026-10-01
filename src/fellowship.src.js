@@ -207,57 +207,269 @@ const SAFETY_D = 'trinityone/safetycheck:';// the church's active safety check (
 const SAFE_D = 'trinityone/safe:';         // a member's response — d=safe:<churchpub>, content NIP-44-encrypted to the check's creator
 // safeguarding v2: a parent's local record of the child accounts they set up (no secrets — just the link)
 const FAMILY_KEY = 'trinityone.family';
-const FAMILY_REMOVED_KEY = 'trinityone.family.removed';
+// ── HOW A PARENT'S PHONE KNOWS ITS CHILDREN (owner, 2026-10-01; reference/DOMAIN.md) ────────────────────────
+// Every guardian notice the church sends carries, sealed to this parent, the parent's COMPLETE current list of
+// linked children in that church (`children`; src/steward.src.js _sendGuardNotice). The newest notice from a
+// church is the whole truth about that church's links, and _applyGuardianList makes this phone's links for
+// that church exactly that list. Alongside it the phone shows its OWN still-pending requests — a child it set
+// up that no steward has confirmed yet — read back from its guardreq: documents by _rebuildFamily.
+//
+// THE PHONE NEVER RE-PUBLISHES ITS OWN REQUEST TO RESTORE A LINK. b7624a8 did, and the re-audit measured what
+// it cost: the request is plain {child, parent}, readable by every member, so it published which accounts are
+// children — the thing a steward link was built never to leak; it replaced another parent's genuinely pending
+// request in the console (which keys requests by child); and with two relays a stale link notice re-published
+// it in the same second a newer removal retracted it, a tie the relay settles by id — the child came back on
+// a REMOVED parent's phone 5 runs in 12. A guardreq: is published live only by createChildAccount, when the
+// parent genuinely asks, and is only ever retracted after that (_retractGuardReq).
+//
+// Nothing about a removal is kept on the phone (owner, 2026-10-01): a seized locked phone must not list
+// children. A notice from an OLDER console carries no `children` and is applied the old way: one child added,
+// or one removed.
+//
+// The LEGACY key was written by builds before 4f08ca4 (children the church had unlinked, so the rebuild would
+// not resurrect them from the parent's own requests). Nothing writes it now. While it exists the rebuild skips
+// and retracts those children; once a whole-list notice has been applied it is redundant, and it is deleted as
+// soon as every retraction it still asks for has been accepted.
+const FAMILY_REMOVED_KEY = 'trinityone.family.removed';   // LEGACY — read and cleared; never written
+const _unlinkedNow = new Set();     // children removed this session: the rebuild must not re-add them as pending
+const _retractedNow = new Set();    // …and whose request this session has already retracted on the relay
+const _ownReqAt = new Map();        // child -> created_at of this parent's newest LIVE request seen this session
+const _noticeSeen = new Map();      // "<church>|<parent>" -> { created_at, id } of the newest notice applied
+// …AND IT SURVIVES A RESTART (audit of 4d7ca23, E4). In memory only, a cold boot with the up-to-date relay
+// unreachable applied whatever OLDER notice the reachable relay still held — a child the church had since
+// unlinked was back on the parent's phone. So the newest applied notice's created_at + id per (church, parent)
+// is persisted, and an older notice is ignored on a cold boot too. It holds no child, no name, nothing about a
+// link — a church key, this parent's own key, a time and an event id (owner, 2026-10-01: it reveals no child).
+// Kept through the PIN lock on purpose (clearCommunityCache's KEEP list): wiped, the guarantee would end at
+// the first lock.
+const NOTICE_SEEN_KEY = 'trinityone.guardnoticeSeen';
+function _noticeSeenGet(key) {
+  if (_noticeSeen.has(key)) return _noticeSeen.get(key);
+  try {
+    const all = JSON.parse(localStorage.getItem(NOTICE_SEEN_KEY) || '{}') || {};
+    const v = all[key];
+    if (v && typeof v === 'object') { _noticeSeen.set(key, v); return v; }
+  } catch (e) {}
+  return null;
+}
+function _noticeSeenSet(key, v) {
+  _noticeSeen.set(key, v);
+  try {
+    const all = JSON.parse(localStorage.getItem(NOTICE_SEEN_KEY) || '{}') || {};
+    all[key] = v;
+    localStorage.setItem(NOTICE_SEEN_KEY, JSON.stringify(all));
+  } catch (e) {}
+}
+// Churches whose family this session KNOWS — set only by a whole-list notice applied, or by a rebuild that got a
+// GENUINE answer (see _rebuildFamily); cleared by the PIN lock. Until then an empty family is "not known yet".
+const _familyAnswered = new Set();
+// WHAT THE PERSISTED STAMP MEANS FOR THE REST OF THE SESSION (audit of b4ac50d, NEW-1 / NEW-2). The stamp says
+// "a notice this new exists" — so until a notice at least that new has been APPLIED this session, this phone
+// does not know the church's current answer: the relay holding it is unreachable, and the one it can reach
+// holds an older notice the stamp (rightly) refuses. Two things follow, and both are decided here:
+//   · the family is NOT answered for that church (familyAnswered) — the sheet says "checking"/"couldn't
+//     reach", never "No children linked … make one below" to a parent the church has linked;
+//   · a request of the parent's own that is OLDER than the stamped notice is HELD, not shown as pending. Was
+//     the church's newest notice a decision on it? Only that notice can say — its `closed` names every
+//     declined or removed request of this parent's, its `children` every link — and this phone cannot read
+//     it. Shown, a declined request comes back as "Waiting for steward to confirm" from a relay that missed
+//     the withdrawal. NOT "older than the notice means closed or superseded": a request nobody has decided
+//     yet is older than any unrelated notice that followed it, and the notice simply does not name it. So
+//     the rule is to wait: once a notice at least as new as the stamp is applied, a held request it names
+//     as closed is withdrawn, one it lists is already linked, and any other is shown pending. A request
+//     NEWER than the stamp cannot have been decided by it and is shown at once.
+const _noticeApplied = new Set();   // "<church>|<parent>" whose stamped (or a newer) notice was applied this session
+const _heldReqs = new Map();        // church -> Map(child -> newest live request) held back until that happens
+const _rebuildAnswered = new Set(); // churches whose rebuild got a genuine answer this session (see _maybeRebuildFamily)
+// The PIN lock forgets all of this along with the family itself (clearCommunityCache).
+function _forgetFamilySession() { _familyAnswered.clear(); _noticeApplied.clear(); _heldReqs.clear(); _rebuildAnswered.clear(); }
+function _stampUnapplied(cp) { const key = cp + '|' + pub; return !!_noticeSeenGet(key) && !_noticeApplied.has(key); }
+// Release the requests held for church `cp` once its current notice has been applied: one it names as removed or
+// closed has already gone through _applyGuardianList's withdrawal (it is in _unlinkedNow); one it lists is
+// linked; any other is a genuinely pending request and is shown as one.
+function _releaseHeld(cp, skip) {
+  const held = _heldReqs.get(cp); if (!held) return;
+  _heldReqs.delete(cp);
+  for (const [child, e] of held) {
+    if ((skip && skip.has(child)) || _unlinkedNow.has(child)) continue;
+    if (_loadChildren().some(c => c && c.child === child)) continue;
+    _saveChildLink({ child, name: '', churchPub: cp, ts: e.created_at || 0 });
+  }
+}
+// NIP-01's order for two copies of one replaceable document, the order the relay's store keeps
+// (scripts/event-store.mjs): newer created_at wins; on a tie the LOWEST id wins.
+function _newerDoc(a, b) {
+  const at = a.created_at || 0, bt = b.created_at || 0;
+  return at > bt || (at === bt && String(a.id || '') < String(b.id || ''));
+}
+// A retracted guardian request: the `deleted` tag _retractGuardReq writes, or empty content — the console's
+// subscribeGuardianRequests reads either as "gone", and the rebuild must agree with it.
+const _isRetractedReq = (e) => (e.tags || []).some(t => t[0] === 'deleted') || !e.content;
+const _hex64 = (x) => (/^[0-9a-f]{64}$/i.test(String(x || '')) ? String(x).toLowerCase() : '');
 function _loadChildren() { try { return JSON.parse(localStorage.getItem(FAMILY_KEY) || '[]') || []; } catch { return []; } }
 function _loadRemovedChildren() { try { return JSON.parse(localStorage.getItem(FAMILY_REMOVED_KEY) || '[]') || []; } catch { return []; } }
 function _saveChildLink(link) {
   const list = _loadChildren().filter(c => c && c.child !== link.child); list.push(link);
   try { localStorage.setItem(FAMILY_KEY, JSON.stringify(list)); } catch {}
-  if (link.viaSteward) {
-    const rm = _loadRemovedChildren().filter(c => c !== link.child);
-    try { localStorage.setItem(FAMILY_REMOVED_KEY, JSON.stringify(rm)); } catch {}
-  }
 }
 function _removeChildLink(childPub) {
   const list = _loadChildren().filter(c => c && c.child !== childPub);
   try { localStorage.setItem(FAMILY_KEY, JSON.stringify(list)); } catch {}
-  const rm = _loadRemovedChildren(); if (!rm.includes(childPub)) rm.push(childPub);
-  try { localStorage.setItem(FAMILY_REMOVED_KEY, JSON.stringify(rm)); } catch {}
+  _unlinkedNow.add(childPub);
+}
+// The Family sheet listens for this: a notice applied, or a rebuild finished, changes what it should show.
+function _familyChanged(cp) { try { window.dispatchEvent(new CustomEvent('trinity-family-changed', { detail: { church: cp } })); } catch (e) {} }
+// RETRACT THIS PARENT'S OWN guardian-link request for a child: the same d-tag, `deleted`, empty content — the
+// shape leaveMembership uses for member:, and the shape both readers honour (_rebuildFamily skips it; the
+// console's subscribeGuardianRequests drops a deleted or empty request). p-tagged to the church so the
+// console's `#p` subscription sees it. The relay's guardreq: rule accepts it (empty content parses as `{}`).
+// STAMPED STRICTLY LATER than any request of this parent's for the child that this phone knows of (`knownAt`,
+// and every live copy the rebuild has seen) — this phone's own clock signed those too, and nothing on this
+// phone re-publishes a request afterwards, so no live copy can tie with or post-date the retraction.
+// Returns true once a relay accepted it.
+async function _retractGuardReq(childPub, cp, knownAt) {
+  if (!sk || !childPub || !cp) return false;
+  if (_retractedNow.has(childPub)) return true;
+  const created_at = Math.max(Math.floor(Date.now() / 1000), (_ownReqAt.get(childPub) || 0) + 1, (Number(knownAt) || 0) + 1);
+  const evt = finalizeEvent({ kind: 30078, created_at,
+    tags: [['d', 'trinityone/guardreq:' + childPub], ['t', NET], ['p', cp], ['deleted', '1']], content: '' }, sk);
+  try { await _publishAny(publishSetFor(cp), evt); _retractedNow.add(childPub); return true; }
+  catch (e) { console.warn('[fellowship] guardian request retraction failed — retried by the rebuild or the next notice', e); return false; }
+}
+// A REQUEST OF OUR OWN IS KNOWN to exist for this child: a local entry this phone set up itself (not a steward
+// link), or a live copy the rebuild has seen. Only then is there anything of ours on the relay to retract —
+// retracting where there is none would write a needless document for every steward-linked child.
+const _ownRequestKnown = (entry, child) => !!(entry && !entry.viaSteward) || _ownReqAt.has(child);
+// APPLY A WHOLE-LIST NOTICE from church `cp`: this phone's links for that church become exactly `dec.children`.
+//   · a listed child is linked (added if this phone did not know it; a steward link if it never asked for it);
+//   · a child this phone held as LINKED and the list no longer names is gone, and so is any child the notice
+//     names as removed (`removed`, `removedAll`) or whose request from this parent the church has CLOSED
+//     (`closed`: declined, or the link removed) — so a removal this phone never saw (its slot overwritten by a
+//     later notice while the phone was locked) cannot come back as "Waiting for steward to confirm";
+//   · a request of the parent's own that no steward has acted on yet is not in either list and stays, pending;
+//   · another church's children are untouched.
+// Children of ours whose link was taken away have their request retracted where one is known (and the rebuild
+// retracts any it finds later — they are in _unlinkedNow). A key the church has re-seated is not listed.
+function _applyGuardianList(cp, dec, e) {
+  const listed = new Set((dec.children || []).map(_hex64).filter(c => c && c !== pub && !_superseded(cp, c)));
+  const named = new Set([dec.removed, ...(Array.isArray(dec.removedAll) ? dec.removedAll : []), ...(Array.isArray(dec.closed) ? dec.closed : [])]
+    .map(_hex64).filter(c => c && !listed.has(c)));
+  const keep = [], gone = [];
+  for (const c of _loadChildren()) {
+    if (!c || c.churchPub !== cp) { keep.push(c); continue; }
+    if (listed.has(c.child)) { keep.push({ ...c, linked: true }); continue; }
+    if (c.viaSteward || c.linked || named.has(c.child)) { gone.push(c); continue; }
+    keep.push(c);
+  }
+  for (const child of listed) {
+    if (keep.some(c => c && c.churchPub === cp && c.child === child)) continue;
+    keep.push({ child, name: (dec.child === child && dec.name) || '', churchPub: cp, ts: e.created_at || 0, viaSteward: true, linked: true });
+  }
+  try { localStorage.setItem(FAMILY_KEY, JSON.stringify(keep)); } catch {}
+  for (const child of listed) _unlinkedNow.delete(child);
+  const goneBy = new Map(gone.map(c => [c.child, c]));
+  for (const child of new Set([...goneBy.keys(), ...named])) {
+    _unlinkedNow.add(child);
+    const entry = goneBy.get(child);
+    if (_ownRequestKnown(entry, child)) _retractGuardReq(child, cp, entry && entry.ts);
+  }
+  // THE LEGACY LIST IS REDUNDANT once a whole list has been applied. Each entry the list does not name is
+  // treated as removed; the key goes once every retraction asked for here has been accepted.
+  const legacy = _loadRemovedChildren();
+  if (legacy.length) {
+    const outs = [];
+    for (const child of legacy.map(_hex64).filter(Boolean)) {
+      if (listed.has(child)) continue;
+      _unlinkedNow.add(child);
+      if (_ownReqAt.has(child)) outs.push(_retractGuardReq(child, cp));
+    }
+    Promise.all(outs).then(oks => { if (oks.every(Boolean)) { try { localStorage.removeItem(FAMILY_REMOVED_KEY); } catch (x) {} } }).catch(() => {});
+  }
+  _releaseHeld(cp, listed);
+  _familyAnswered.add(cp);
+  _familyChanged(cp);
+}
+// THE REBUILD, ONCE PER CONNECTION THAT ANSWERED (audit of b4ac50d, item 2). The docs hub runs it at its EOSE,
+// once per connection (`hub.familyRebuilt`, re-armed by reconnectAll). After an OFFLINE start that EOSE is
+// nostr-tools giving up on a dead socket, the rebuild gets no genuine answer — and the flag was spent on it, so
+// coming back online (refetchChurchDocs reopens the hub; its EOSE fires again) did not redo it, and the Family
+// sheet said "Couldn't reach your church" for the rest of the session while online. The flag now stays set
+// only when the rebuild got a genuine answer (_rebuildAnswered); otherwise the next hub EOSE tries again.
+function _maybeRebuildFamily(hub) {
+  if (!sk || hub.familyRebuilt) return;
+  hub.familyRebuilt = true;
+  let p;
+  try { p = _rebuildFamily(hub.cp); } catch (err) { hub.familyRebuilt = false; _featureFailed('family rebuild', '', err); return; }
+  Promise.resolve(p).then(() => { if (!_rebuildAnswered.has(hub.cp)) hub.familyRebuilt = false; }, () => { hub.familyRebuilt = false; });
 }
 // REBUILD THE FAMILY LIST FROM THE RELAY. trinityone.family is written when a child account is created and
 // read straight back — nothing ever rebuilt it. It is also in the locked-boot wipe list, so restoring an
-// identity cleared it and a parent's children simply vanished from their phone. The accounts were never
-// lost: the church's guardian map still showed the link, which is exactly how this was reported —
-// "in the console the child is still linked, I just can't see it in my app". AUDIT-2026-07-28.
+// identity cleared it and a parent's children simply vanished from their phone. AUDIT-2026-07-28.
 //
-// Rebuilt from the parent's OWN guardreq documents, not the church's guardians map: that map is deliberately
-// served only to stewards now (it maps every child in the congregation to their parents), while a member may
-// always read back what they themselves signed.
+// What it rebuilds now (2026-10-01) is the parent's OWN still-pending requests: the linked children come from
+// the church's newest whole-list notice (_applyGuardianList), which subscribeGuardianNotices applies the moment
+// it arrives — the rebuild does not hold those up. Read from the parent's own guardreq documents, which a
+// member may always read back. Merge only, never remove.
 //
-// Merge only, never remove — a link the relay has not served yet must not delete one we already hold, and a
-// parent who has genuinely unlinked a child is handled by the church's map rather than here.
+// ONE COPY PER CHILD, THE NEWEST (audit of 4f08ca4, finding 3): a relay that missed a retraction still serves
+// the old live request, so the copies are collected and only the newest per d-tag is acted on, by the relay's
+// own order (_newerDoc). A stale live copy behind a newer retraction means some relay missed it, so the
+// retraction itself — the same signed event — is sent again. Only this parent's own documents count.
 function _rebuildFamily(churchNpub) {
   const cp = toPub(churchNpub) || churchNpub;
   if (!pub || !cp) return Promise.resolve(0);
   return new Promise((resolve) => {
-    let added = 0, done = false;
-    const removed = new Set(_loadRemovedChildren());
-    const finish = () => { if (done) return; done = true; try { sub.close(); } catch (e) {} resolve(added); };
-    const sub = pool.subscribeMany(relaysForChurch(cp), [{ kinds: [30078], authors: [pub] }], {
-      onevent(e) {
-        const d = _dtag(e);
-        if (!d.startsWith('trinityone/guardreq:')) return;
-        if ((e.tags || []).some(t => t[0] === 'deleted')) return;
-        const child = d.slice('trinityone/guardreq:'.length);
-        if (!/^[0-9a-f]{64}$/i.test(child)) return;
-        if (removed.has(child)) return;
-        if (_loadChildren().some(c => c && c.child === child)) return;
+    let added = 0, done = false, sawOwn = false;
+    const newest = new Map();     // child -> newest copy of guardreq:<child>
+    const sawLive = new Set();    // children for which SOME live copy arrived
+    const finish = (eosed) => {
+      if (done) return; done = true; try { sub.close(); } catch (e) {}
+      const legacy = _loadRemovedChildren().map(_hex64);
+      for (const [child, e] of newest) {
+        if (_isRetractedReq(e)) {
+          if (sawLive.has(child)) _publishAny(relaysForChurch(cp), e).catch(() => {});
+          continue;
+        }
+        _ownReqAt.set(child, Math.max(_ownReqAt.get(child) || 0, e.created_at || 0));
+        // Removed this session, or by an older build: skip it, and retract the request that is still live.
+        if (_unlinkedNow.has(child) || legacy.includes(child)) { _retractGuardReq(child, cp, e.created_at); continue; }
+        if (_loadChildren().some(c => c && c.child === child)) continue;
+        // older than the church's newest notice, whose content this phone cannot read yet: hold it (see _heldReqs)
+        const stamp = _stampUnapplied(cp) ? _noticeSeenGet(cp + '|' + pub) : null;
+        if (stamp && (e.created_at || 0) <= (stamp.created_at || 0)) {
+          if (!_heldReqs.has(cp)) _heldReqs.set(cp, new Map());
+          _heldReqs.get(cp).set(child, e);
+          continue;
+        }
         _saveChildLink({ child, name: '', churchPub: cp, ts: e.created_at || 0 });
         added++;
+      }
+      // A GENUINE ANSWER, OR NONE (audit of 4d7ca23, E7). This used to mark the family known whenever the
+      // subscription finished — and nostr-tools finishes it for a relay that refused the connection (in a few
+      // milliseconds) and for one that never answered (after ~4.4 s), so an offline phone told a parent "No
+      // children linked … you can make one below". It counts only if the subscription reached EOSE AND served
+      // at least one of this parent's OWN documents: those are served only over a socket authenticated as this
+      // parent (canRead's own-event rule), and every member has a member: document, so a relay that sent one
+      // answered for real. A timeout, a dead relay or an EOSE that served nothing proves nothing.
+      if (eosed && sawOwn) { _familyAnswered.add(cp); _rebuildAnswered.add(cp); }
+      _familyChanged(cp);
+      resolve(added);
+    };
+    const sub = pool.subscribeMany(relaysForChurch(cp), [{ kinds: [30078], authors: [pub] }], {
+      onevent(e) {
+        if (!e || e.pubkey !== pub) return;
+        sawOwn = true;
+        const d = _dtag(e);
+        if (!d.startsWith('trinityone/guardreq:')) return;
+        const child = _hex64(d.slice('trinityone/guardreq:'.length));
+        if (!child) return;
+        if (!_isRetractedReq(e)) sawLive.add(child);
+        const prev = newest.get(child);
+        if (!prev || _newerDoc(e, prev)) newest.set(child, e);
       },
-      oneose: finish,
+      oneose: () => finish(true),
     });
-    setTimeout(finish, 9000);
+    setTimeout(() => finish(false), 9000);
   });
 }
 // SECURITY-AUDIT-2026-07-06 H5: cache group keys per CHURCH, not by bare group-id. Group ids are the
@@ -2323,7 +2535,7 @@ function _docsHubOpen(hub) {
       // once we hold a signing key — so it survives the unlock reconnect that used to kill it, and it works
       // at a cold boot, where the old call site ran before any hub existed. Once per hub per connection;
       // reconnectAll clears the flag so a fresh authenticated socket tries again.
-      if (sk && !hub.familyRebuilt) { hub.familyRebuilt = true; try { _rebuildFamily(hub.cp); } catch (err) { _featureFailed('family rebuild', '', err); } }
+      _maybeRebuildFamily(hub);
       for (const h of [...hub.handlers]) { try { h.oneose && h.oneose(); } catch (err) { _featureFailed('load complete', '', err); } }
     },
   });
@@ -3830,9 +4042,12 @@ window.Fellowship = {
     // function alone into a scope of their own. And these notes sit ABOVE the literal, not inside it:
     // esbuild keeps comments inside an array literal, and name-key-integrity slices a fixed window of the
     // bundle from this function's first mention — prose inside the Set pushed `_k0Seen.clear()` out of it.
+    // guardnoticeSeen (2026-10-01): the newest guardian notice applied per (church, parent) — a time and an event
+    // id, no child. Wiped, a cold boot after the lock would apply an OLDER notice from a relay that missed the
+    // newest, and put back a child the church had unlinked (see NOTICE_SEEN_KEY).
     const KEEP = new Set(['trinityone.followedChurches', 'trinityone.activeChurch',
       'trinityone.outbox', 'trinityone.outbox.failed', 'trinityone.nostr.mnemonic.enc',
-      'trinityone.joinsent', 'trinityone.joinintent']);
+      'trinityone.joinsent', 'trinityone.joinintent', 'trinityone.guardnoticeSeen']);
     // backedup.<own npub> names the MEMBER, not the congregation, and their own key is on this device
     // anyway. Wiping it makes the app re-nag for a seed backup after every lock, which is a real cost for
     // no forensic gain.
@@ -3871,7 +4086,15 @@ window.Fellowship = {
     // `arrivedat` goes with them deliberately: it is the outcome of the last "we're here" tap, it is useless
     // without the names beside it, and losing it re-offers a button over an arrival already on the worker's
     // screen.
-    const KEEP_PREFIX = ['trinityone.bringkids.', 'trinityone.mykidnames.', 'trinityone.arrivedat.'];
+    //
+    // `joinedAt:<church>` (2026-10-01): the date this phone first joined the church. announceMembership reads it
+    // to send `{ joined, seen, hb: 1 }` — a heartbeat from a member who has been there all along. Wiped, the
+    // next announce after a lock sent `{ joined: <now> }` with no `hb` — the steward console's activity feed
+    // reads a missing `hb` as "A new member joined" — and re-dated the member's join to the moment they typed
+    // their PIN. Nothing rebuilds the original date. It names a church the KEPT
+    // followedChurches already names, plus a timestamp. leaveMembership still removes it when they leave.
+    const KEEP_PREFIX = ['trinityone.bringkids.', 'trinityone.mykidnames.', 'trinityone.arrivedat.',
+      'trinityone.joinedAt:'];
     const doomed = (k) => !!k && k.startsWith('trinityone.') && !KEEP.has(k)
       && !KEEP_PREFIX.some(p => k.startsWith(p)) && (FORCE_WIPE.has(k) || (
       !k.startsWith('trinityone.mydata:') && !k.startsWith('trinityone.backedup.')
@@ -3895,6 +4118,9 @@ window.Fellowship = {
       // the next edit republishes a kind-0 with an EMPTY picture — destroying the member's photo on the
       // relay. Found by an adversarial review of my own work, 2026-07-28.
       _k0Seen.clear();
+      // …and what this session knew about the family: the list it showed is gone, so until the church answers
+      // again the Family sheet must say "checking", not "no children linked — make one below".
+      _forgetFamilySession();
       window.Fellowship.myProfile = null;
     } catch (e) { console.warn('[fellowship] clearCommunityCache failed', e); }
   },
@@ -5275,10 +5501,11 @@ window.Fellowship = {
     });
   },
 
-  // safeguarding v2: receive a STEWARD-INITIATED guardian link. A parent the steward linked (who never set the
-  // child up locally) gets a church-signed, NIP-44-encrypted notice p-tagged to them — decrypt it, record the
-  // child locally so it appears in their family view, and flip _needAuth so they authenticate to read the
-  // church's confirmed guardians: map. Mirrors the self-request flow, so both kinds of parent end up the same.
+  // safeguarding v2: receive the church's GUARDIAN NOTICES — church-signed, NIP-44-encrypted, p-tagged to this
+  // parent, one replaceable slot per (church, parent). From a current console every notice carries the parent's
+  // whole list of linked children in that church, and _applyGuardianList makes this phone match it exactly (owner,
+  // 2026-10-01). From an older console it names one child linked (`child`) or removed (`removed`), applied the
+  // old way. Either way _needAuth flips so the parent authenticates to read the church's confirmation.
   subscribeGuardianNotices() {
     if (!pub) return () => {};
     const sub = pool.subscribeMany(churchRelays(), [{ kinds: [30078], '#d': [GUARDNOTICE_D + pub] }], {
@@ -5287,27 +5514,66 @@ window.Fellowship = {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (d !== GUARDNOTICE_D + pub) return;
         let dec; try { dec = JSON.parse(nip44d(e.content, nip44ck(sk, e.pubkey))); } catch { return; }
-        // A REMOVAL. The church has taken this guardian link away; drop it locally, or the parent's app goes
-        // on showing a child it has been told they are no longer responsible for.
-        if (dec && dec.removed) {
-          _removeChildLink(dec.removed);
-          try { window.dispatchEvent(new CustomEvent('trinity-guardian-removed', { detail: { child: dec.removed } })); } catch (x) {}
-          if (dec.removedAll && Array.isArray(dec.removedAll)) dec.removedAll.forEach(c => { if (c && c !== dec.removed) _removeChildLink(c); });
+        if (!dec || typeof dec !== 'object') return;
+        // The author IS the church: the relay takes guardnotice: from a church key only (gateway.mjs accept()).
+        const cp = e.pubkey;
+        // ONLY THE NEWEST NOTICE COUNTS, PER CHURCH (audit of 4f08ca4 finding 9; re-audit finding 4). Each church
+        // has its own slot for this parent, and a second relay can hand over an OLDER copy after a newer one has
+        // been applied — so an older copy than one already applied from THAT church this session is ignored, by
+        // the relay's own order (_newerDoc). Another church's notice is a different slot and is never compared.
+        // The SAME copy again (every re-subscribe re-delivers it) is applied again: that is how a retraction
+        // that failed, or a family wiped by a mid-session lock, is put right.
+        const key = cp + '|' + pub;
+        const prevN = _noticeSeenGet(key);
+        if (prevN && prevN.id !== e.id && _newerDoc(prevN, e)) return;
+        _noticeSeenSet(key, { created_at: e.created_at || 0, id: String(e.id || '') });
+        _noticeApplied.add(key);   // at least as new as the stamp, by the check above
+        if (Array.isArray(dec.children)) {
+          _applyGuardianList(cp, dec, e);
+          if (dec.children.length) _needAuth = true;
           return;
         }
-        if (!dec || !dec.child || dec.child === pub) return;
+        // ── AN OLDER CONSOLE: no list. ──
+        // A REMOVAL. Drop it locally, and retract this parent's own request for the child on the relay where one
+        // is known (owner, 2026-10-01) — dropping it locally alone did not survive a PIN lock: the rebuild
+        // re-added the child from the request still there. Nothing about the removal is kept on the phone.
+        if (dec.removed) {
+          const child = _hex64(dec.removed); if (!child) return;
+          const entry = _loadChildren().find(c => c && c.child === child);
+          _removeChildLink(child);
+          if (_ownRequestKnown(entry, child)) _retractGuardReq(child, cp, entry && entry.ts);
+          _releaseHeld(cp);   // an older console names no list: every other held request is shown pending, as before
+          try { window.dispatchEvent(new CustomEvent('trinity-guardian-removed', { detail: { child } })); } catch (x) {}
+          _familyChanged(cp);
+          return;
+        }
+        if (!dec.child || dec.child === pub) return;
         const ex = _loadChildren().find(c => c && c.child === dec.child);
         if (ex && ex.viaSteward) return;   // already recorded as a steward-initiated link — no-op
         // viaSteward: the steward INITIATED this link, so it's already done — the notice IS the confirmation. The
         // parent's UI shows it as linked, not "waiting for the steward to confirm". Also UPDATES an older link that
         // predates this flag (so parents linked before the fix heal on the next notice, without a re-link).
-        _saveChildLink({ child: dec.child, name: dec.name || (ex && ex.name) || '', churchPub: dec.church || e.pubkey, ts: (ex && ex.ts) || e.created_at || Math.floor(Date.now() / 1000), viaSteward: true });
+        _saveChildLink({ child: dec.child, name: dec.name || (ex && ex.name) || '', churchPub: cp, ts: (ex && ex.ts) || e.created_at || Math.floor(Date.now() / 1000), viaSteward: true });
+        _unlinkedNow.delete(dec.child);
+        _releaseHeld(cp);
         _needAuth = true;   // now a guardian → authenticate to read the church's confirmation
         try { window.dispatchEvent(new CustomEvent('trinity-guardian-added', { detail: { child: dec.child } })); } catch (x) {}
+        _familyChanged(cp);
       },
       oneose() {},
     });
     return () => { try { sub.close(); } catch {} };
+  },
+  // HAS THIS CHURCH ANSWERED "WHO ARE MY CHILDREN" YET, THIS SESSION? True once a whole-list notice from it has
+  // been applied or the rebuild of this parent's own requests got a genuine answer — and true at once with no
+  // key, when neither can ever happen. The Family sheet uses it to say "checking" instead of "no children
+  // linked … you can make one below", which invited a second account for a child whose link simply had not
+  // arrived yet. NOT answered while a stamped notice exists that this session has not applied (NEW-1, see
+  // _noticeApplied): the rebuild answering for the parent's own requests says nothing about the links.
+  familyAnswered(churchNpub) {
+    if (!sk) return true;
+    const cp = toPub(churchNpub) || churchNpub;
+    return !!cp && _familyAnswered.has(cp) && !_stampUnapplied(cp);
   },
 
   // ── safeguarding v2: a parent creates a child account they own (sets the child up in the church and asks
@@ -5391,7 +5657,7 @@ window.Fellowship = {
     // name is what the steward reads when confirming the link; the REQUEST is the only thing that ever asks
     // them to. `ok` left the request out, so a parent whose request alone failed was told it had worked and
     // the row read "Waiting for steward to confirm" for ever — nothing re-sends it, and this function is the
-    // only publisher of `guardreq:` in the codebase. It is also the likeliest of the four to fail: it alone is
+    // only publisher of a LIVE `guardreq:` in the codebase (_retractGuardReq writes only its retraction). It is also the likeliest of the four to fail: it alone is
     // signed by the PARENT's key, so it alone counts against the parent's per-member document cap. The kind-0
     // is an empty profile by design (AUDIT-2026-07-27) and costs nothing if it is late, so it is not counted.
     const ok = !!(published.join && published.name && published.req);

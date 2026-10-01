@@ -24,6 +24,8 @@ import { WebSocket } from 'ws';
 import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools/pure';
 import { npubEncode } from 'nostr-tools/nip19';
 import { requireFreePort } from './test-ports.mjs';
+import { shippedFamilyHelpers } from './family-harness.mjs';
+const _shippedHelpers = shippedFamilyHelpers();
 
 const ROOT = new URL('..', import.meta.url).pathname;
 const PORT = 8976;   // unique across scripts/*.test.mjs AND scripts/*.probe.mjs
@@ -81,6 +83,14 @@ function loadRebuild({ closeSocketAfterMs = 0 } = {}) {
     _saveChildLink: (l) => { store.family = store.family.filter(c => c.child !== l.child).concat(l); },
     relaysForChurch: () => [WS_URL],
     _loadRemovedChildren: () => [],
+    // 2026-10-01: the rebuild also consults the session's unlinked set and can retract a request.
+    // 2026-10-01: the rebuild's own helpers are the SHIPPED ones, lifted from the bundle (scripts/family-harness.mjs),
+    // never re-typed here — a copy would stay green over a regression in the real one (re-audit of b7624a8).
+    ..._shippedHelpers,
+    _unlinkedNow: new Set(), _ownReqAt: new Map(), _familyAnswered: new Set(),
+    // 2026-10-01 (audit of b4ac50d): no guardian notice was ever stamped on this phone, so nothing is held back
+    _stampUnapplied: () => false, _heldReqs: new Map(), _rebuildAnswered: new Set(),
+    _retractGuardReq: async () => true, _familyChanged: () => {}, _publishAny: async () => true,
     pool: {
       subscribeMany(_r, filters, handlers) {
         let w = null, closed = false;
@@ -142,9 +152,13 @@ test('it runs off a hub that has actually answered, with a key present', () => {
   // stops covering it, which is the bug class that bit five times in one session.
   const from = SRC.indexOf('function _docsHubOpen');
   const open = SRC.slice(from, SRC.indexOf('\nfunction ', from + 10));
-  assert.match(open, /if \(sk && !hub\.familyRebuilt\)/,
+  // 2026-10-01: the hub calls _maybeRebuildFamily, which holds the keyed, once-per-answering-connection guard
+  // (whether it re-runs after an offline start is RUN in an-unlinked-child-stays-gone-after-a-lock.test.mjs)
+  assert.match(open, /_maybeRebuildFamily\(hub\)/,
     'nothing rebuilds the family from a live, keyed socket, so a cold boot still never repairs the phone');
-  assert.match(open, /_rebuildFamily\(hub\.cp\)/, 'the rebuild is not called from the hub');
+  const mb = SRC.slice(SRC.indexOf('function _maybeRebuildFamily'), SRC.indexOf('\nfunction ', SRC.indexOf('function _maybeRebuildFamily') + 10));
+  assert.match(mb, /if \(!sk \|\| hub\.familyRebuilt\) return;/, 'the rebuild runs without a key, or on every reopen');
+  assert.match(mb, /_rebuildFamily\(hub\.cp\)/, 'the rebuild is not called from the hub');
 });
 
 test('a reconnect re-arms it', () => {

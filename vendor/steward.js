@@ -15571,6 +15571,95 @@ zoo`.split("\n");
     }
     throw err2;
   }
+  function _childrenOfParent(links, parentPub) {
+    const out = /* @__PURE__ */ new Set();
+    for (const [c, ps] of Object.entries(links || {})) {
+      const ch = toPubHex(c);
+      if (!ch) continue;
+      if ((ps || []).some((p) => toPubHex(p) === parentPub)) out.add(ch);
+    }
+    return [...out].sort();
+  }
+  function _closedChildrenOfParent(closed, parentPub, linked) {
+    const out = /* @__PURE__ */ new Set();
+    for (const k of Object.keys(closed || {})) {
+      const [c, p] = String(k).split("|");
+      const ch = toPubHex(c || "");
+      if (ch && toPubHex(p || "") === parentPub && !linked.includes(ch)) out.add(ch);
+    }
+    return [...out].sort();
+  }
+  function _sendGuardNotice(parentPub, body, links, closed) {
+    if (links && typeof links === "object") {
+      body.children = _childrenOfParent(links, parentPub);
+      body.closed = _closedChildrenOfParent(closed, parentPub, body.children);
+    }
+    let content;
+    try {
+      content = encrypt3(JSON.stringify(body), getConversationKey(sk, parentPub));
+    } catch (e) {
+      return Promise.resolve(null);
+    }
+    return _publishGuardNotice(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", GUARDNOTICE_D + parentPub], ["t", NET], ["p", parentPub]], content }), sk));
+  }
+  var GUARD_RETRY_MS = [5e3, 3e4, 12e4];
+  var _latestGuardNotice = /* @__PURE__ */ new Map();
+  async function _guardTryOn(urls, ev) {
+    let rs = [];
+    try {
+      rs = await Promise.allSettled(pool.publish(urls, ev).map((p) => p.then((v) => {
+        if (typeof v === "string" && v.startsWith("connection failure")) throw new Error(v);
+        return v;
+      })));
+    } catch (e) {
+      return { missed: urls.slice(), refused: urls.map((url) => ({ url, error: String(e && e.message || e || "") })) };
+    }
+    const missed = [], refused = [];
+    urls.forEach((url, i3) => {
+      const r = rs[i3];
+      if (r && r.status === "fulfilled") return;
+      missed.push(url);
+      refused.push({ url, error: r && r.reason && (r.reason.message || String(r.reason)) || "" });
+    });
+    return { missed, refused };
+  }
+  async function _publishGuardNotice(evt) {
+    await _waitForRegistration();
+    const d = ((evt.tags || []).find((t) => t[0] === "d") || [])[1] || "";
+    const prev = _latestGuardNotice.get(d);
+    if (!prev || (evt.created_at || 0) >= (prev.created_at || 0)) _latestGuardNotice.set(d, evt);
+    const targets = relays();
+    if (!targets.length) return publish(evt);
+    const first = await _guardTryOn(targets, evt);
+    if (first.missed.length) {
+      (async () => {
+        let left = first.missed;
+        for (const ms of GUARD_RETRY_MS) {
+          await new Promise((r) => setTimeout(r, ms));
+          try {
+            left = (await _guardTryOn(left, _latestGuardNotice.get(d) || evt)).missed;
+          } catch (e) {
+          }
+          if (!left.length) return;
+        }
+      })().catch(() => {
+      });
+    }
+    if (first.missed.length === targets.length) {
+      const said = first.refused.find((r) => r.error && !/^connection failure/i.test(r.error));
+      const reason = said && said.error || first.refused[0] && first.refused[0].error || "no relay accepted the guardian notice";
+      try {
+        window.dispatchEvent(new CustomEvent("steward-publish-error", { detail: { reason, evt, refused: first.refused } }));
+      } catch (x) {
+      }
+      return false;
+    }
+    try {
+      window.dispatchEvent(new CustomEvent("steward-publish-ok", { detail: { evt } }));
+    } catch (x) {
+    }
+    return evt;
+  }
   async function _churchHasCareNeeds() {
     const cp = actingChurch || pub;
     if (!cp) return false;
@@ -20757,17 +20846,15 @@ zoo`.split("\n");
     // so the parent<->child link never leaks in cleartext (the authoritative map stays the gated guardians: doc).
     // d keyed by the parent alone, so even the tag doesn't reveal which child. (First parents self-request, so they
     // already have the child locally — this is only for steward-initiated links.)
-    notifyGuardian(parentPubIn, childPubIn, childName) {
+    //
+    // `links`, `closed` (2026-10-01): the guardians document's map and closed pairs AFTER the change. When given,
+    // the notice also carries the parent's whole list and their closed requests — see _sendGuardNotice. The
+    // legacy fields are unchanged, so an older parent's app still works.
+    notifyGuardian(parentPubIn, childPubIn, childName, links, closed) {
       if (!sk) return Promise.resolve(null);
       const parentPub = toPubHex(parentPubIn), childPub = toPubHex(childPubIn);
       if (!parentPub || !childPub || parentPub === childPub) return Promise.resolve(null);
-      let content;
-      try {
-        content = encrypt3(JSON.stringify({ child: childPub, name: childName || "", church: churchPub }), getConversationKey(sk, parentPub));
-      } catch (e) {
-        return Promise.resolve(null);
-      }
-      return publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", GUARDNOTICE_D + parentPub], ["t", NET], ["p", parentPub]], content }), sk));
+      return _sendGuardNotice(parentPub, { child: childPub, name: childName || "", church: churchPub }, links, closed);
     },
     // THE OTHER HALF OF notifyGuardian. Linking a parent tells their app so the child appears in it; UNLINKING
     // told them nothing at all, and the parent's app stores the link in localStorage where nothing ever removed
@@ -20778,17 +20865,28 @@ zoo`.split("\n");
     // someone they are a child's guardian after the church has decided they are not, which in safeguarding is
     // its own kind of wrong. unlinkParent's own comment already said "removing a link matters more than adding
     // one"; this is the half that was missing.
-    notifyGuardianRemoved(parentPubIn, childPubIn) {
+    //
+    // `links` as for notifyGuardian. `alsoRemoved` (2026-10-01): every child this one change took from the parent —
+    // marking a parent as a child unlinks them from all their children at once, and the notice is ONE slot per
+    // parent, so one notice per child kept only the last. They ride in `removedAll`, which builds before 4f08ca4
+    // read; `removed` still names the first, for the builds in between.
+    notifyGuardianRemoved(parentPubIn, childPubIn, links, alsoRemoved, closed) {
       if (!sk) return Promise.resolve(null);
       const parentPub = toPubHex(parentPubIn), childPub = toPubHex(childPubIn);
       if (!parentPub || !childPub) return Promise.resolve(null);
-      let content;
-      try {
-        content = encrypt3(JSON.stringify({ removed: childPub, church: churchPub }), getConversationKey(sk, parentPub));
-      } catch (e) {
-        return Promise.resolve(null);
-      }
-      return publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", GUARDNOTICE_D + parentPub], ["t", NET], ["p", parentPub]], content }), sk));
+      const body = { removed: childPub, church: churchPub };
+      const all = [.../* @__PURE__ */ new Set([childPub, ...(Array.isArray(alsoRemoved) ? alsoRemoved : []).map(toPubHex).filter(Boolean)])];
+      if (all.length > 1) body.removedAll = all;
+      return _sendGuardNotice(parentPub, body, links, closed);
+    },
+    // A notice that carries ONLY the parent's whole list (and closed requests) — for a change that is neither a
+    // link nor a removal from this parent's point of view: a request confirmed or declined, a member reconnected
+    // on a new key. An older parent's app reads neither `child` nor `removed` here and ignores it.
+    notifyGuardianList(parentPubIn, links, closed) {
+      if (!sk) return Promise.resolve(null);
+      const parentPub = toPubHex(parentPubIn);
+      if (!parentPub) return Promise.resolve(null);
+      return _sendGuardNotice(parentPub, { church: churchPub }, links || {}, closed);
     },
     // ---- joining: by default anyone with the invite/QR joins instantly. A steward can switch on
     // "require approval", and then a new member is held as a pending request until admitted. The relay
@@ -21105,6 +21203,18 @@ zoo`.split("\n");
         }
       }
       if (nextG && !await w(() => window.Steward.setGuardians(nextG, nextGC || gc))) throw new Error("Couldn\u2019t save the parent link, so nothing was changed. Check your connection and try again \u2014 this is the part that cannot be put right by hand afterwards.");
+      if (nextG) {
+        const told = /* @__PURE__ */ new Set();
+        if (Object.keys(nextG).some((c) => low(nextG[c]).indexOf(newH) !== -1)) told.add(newH);
+        for (const p of low(nextG[newH])) told.add(p);
+        for (const p of told) {
+          try {
+            Promise.resolve(window.Steward.notifyGuardianList(p, nextG, nextGC || gc)).catch(() => {
+            });
+          } catch (e) {
+          }
+        }
+      }
       const pairs = [...(o.reseats || []).filter((p) => p && p.new !== newH), { old: oldH, new: newH, name: o.name || "", at: now() }];
       if (!await w(() => window.Steward.setReseats(pairs))) throw new Error("Couldn\u2019t record the reconnection, so nothing was changed. Check your connection and try again.");
       if (!await w(() => window.Steward.setAdmitted([.../* @__PURE__ */ new Set([...o.admitted || [], newH])]))) throw new Error("Recorded the reconnection, but couldn\u2019t let the new phone in. Open Members and approve them, or run this again.");

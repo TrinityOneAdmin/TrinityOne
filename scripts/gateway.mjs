@@ -4107,10 +4107,10 @@ function accept(e) {
       }
     }
     // a church->parent guardian-link NOTICE (d=guardnotice:<parentpub>). OWNER-signed only, and this is the
-    // WRITE rule. It IS read-gated: kind-30078 canRead is default-DENY with a public allowlist and this d-tag
-    // is not on it, so the parent reads it by authenticating as any member does (see the note at ~:5203, which
-    // records that canRead has gated GUARDNOTICE_D all along). Its content is also encrypted to the parent, so
-    // the gate is not the only thing protecting it. Explicit rule = exempt from the per-member doc cap.
+    // WRITE rule. The READ rule is canRead()'s GUARDNOTICE_D branch: the parent it names, the church, and a
+    // steward with the safeguarding job (2026-10-01 — until then it fell to the member rule and any
+    // authenticated member was served it). Its content is also encrypted to the parent, so the gate is not the
+    // only thing protecting it. Explicit rule = exempt from the per-member doc cap.
     if (d.startsWith(GUARDNOTICE_D)) return CHURCH_PUBS.has(e.pubkey);
     // SECURITY-AUDIT-2026-07-20 C1 (safeguarding, CRITICAL): a guardian-link REQUEST is d=guardreq:<childpub>,
     // and the steward console renders it as "<parentName> set up a child account for <childName> — Confirm to
@@ -4986,6 +4986,20 @@ function canRead(e, authed) {
         const ncp = (e.tags.find(t => t[0] === 'church') || [])[1] || '';
         if (authed && authed === subj) return true;                       // it is about you, and sealed to you
         return !!authed && !!ncp && (authed === ncp || stewardCan(authed, ncp, 'safeguarding') || careAdmin(authed, ncp));
+      }
+      // GUARDIAN NOTICES (2026-10-01). d=guardnotice:<parent>, church-signed (accept() admits no other author),
+      // sealed to that parent; scripts/trinity-doc-types.mjs has always declared them `read: 'subject'`. This
+      // branch did not exist, so they fell to the member rule below and EVERY authenticated member was served
+      // every parent's notices — by author, by d-tag, by p-tag. The content is sealed, but the envelope is not:
+      // which members are guardians of children in this church, and when each link changed, was a REQ away.
+      // Served now to the parent it is addressed to, the church itself (its own events return true above),
+      // and a steward the church gave the safeguarding job. Readers of guardnotice:, enumerated: the member
+      // app's subscribeGuardianNotices (the parent, `#d: [guardnotice:<own key>]`); nothing in the console
+      // reads them (it only writes, src/steward.src.js _sendGuardNotice); the relay itself reads none.
+      if (d.startsWith(GUARDNOTICE_D)) {
+        const subj = toHexPub(d.slice(GUARDNOTICE_D.length)) || '';
+        if (authed && subj && authed === subj) return true;
+        return !!authed && (authed === cp || stewardCan(authed, cp, 'safeguarding'));
       }
     }
     const ch = (e.tags.find(t => t[0] === 'church') || [])[1];

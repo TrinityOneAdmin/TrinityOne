@@ -34,8 +34,16 @@ test('it only ever adds — never removes a link we already hold', () => {
 });
 
 test('it ignores anything that is not a real child key', () => {
-  assert.match(fn, /\^\[0-9a-f\]\{64\}\$/i, 'a malformed d-tag would be stored as a child');
-  assert.match(fn, /some\(t => t\[0\] === 'deleted'\)/, 'a withdrawn request would be restored as a live child');
+  // 2026-10-01: the key check is the shared _hex64 (an empty answer for anything that is not 64 hex characters).
+  assert.match(fn, /const child = _hex64\(/, 'a malformed d-tag would be stored as a child');
+  assert.match(fn, /if \(!child\) return;/, 'a malformed d-tag would be stored as a child');
+  assert.match(SRC, /const _hex64 = \(x\) => \(\/\^\[0-9a-f\]\{64\}\$\/i\.test/, 'the key check no longer insists on a 64-hex pubkey');
+  // 2026-10-01: the "withdrawn" test moved into _isRetractedReq, shared with the newest-copy choice; the rebuild
+  // must still consult it, and it must still honour the `deleted` tag. (Executable proof of both lives in
+  // scripts/an-unlinked-child-stays-gone-after-a-lock.test.mjs.)
+  assert.match(fn, /_isRetractedReq\(e\)/, 'a withdrawn request would be restored as a live child');
+  assert.match(SRC, /const _isRetractedReq = \(e\) => \(e\.tags \|\| \[\]\)\.some\(t => t\[0\] === 'deleted'\)/,
+    'the withdrawn-request test no longer honours the `deleted` tag');
 });
 
 test('and it actually runs after an identity arrives', () => {
@@ -44,11 +52,15 @@ test('and it actually runs after an identity arrives', () => {
   // by reconnectAll on unlock). A string match cannot see either. The call now hangs off a hub that has
   // actually answered; whether it RETURNS A CHILD is proved by running it against a real relay in
   // scripts/family-rebuild-runs.test.mjs, which is where this assertion's real weight now lives.
-  assert.match(SRC, /if \(sk && !hub\.familyRebuilt\)[\s\S]{0,200}_rebuildFamily\(hub\.cp\)/,
+  // 2026-10-01: the once-per-connection guard moved into _maybeRebuildFamily, which the hub's EOSE calls; whether it
+  // re-runs after an offline start is RUN in scripts/an-unlinked-child-stays-gone-after-a-lock.test.mjs.
+  assert.match(SRC, /function _maybeRebuildFamily\(hub\) \{\s*if \(!sk \|\| hub\.familyRebuilt\) return;[\s\S]{0,200}_rebuildFamily\(hub\.cp\)/,
+    'nothing calls the rebuild from a live, keyed socket, so it can never repair a wiped phone');
+  assert.match(SRC, /_hubEosed\(hub\); _docsHubSaveSoon\(hub\);[\s\S]{0,800}_maybeRebuildFamily\(hub\);/,
     'nothing calls the rebuild from a live, keyed socket, so it can never repair a wiped phone');
   assert.match(V, /_rebuildFamily/, 'the rebuild is missing from the shipped bundle');
 });
 
 test('it gives up rather than hanging', () => {
-  assert.match(fn, /setTimeout\(finish, \d+\)/, 'a relay that never EOSEs would leave the promise open for ever');
+  assert.match(fn, /setTimeout\(\(\) => finish\(false\), \d+\)/, 'a relay that never EOSEs would leave the promise open for ever');
 });
