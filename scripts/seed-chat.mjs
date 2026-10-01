@@ -29,11 +29,22 @@ const P = (n) => people[n % people.length];
 // ── the week ──────────────────────────────────────────────────────────────────────────────────────────────
 // `at` is hours ago. Written so each room reads in order and sounds like the people in it: notices is one
 // voice, prayer is short and vulnerable, Tuesday group is chatty, welcome team is logistics.
+//
+// ⚠ NOTICES IS THE CHURCH'S OWN VOICE, so its lines are signed by the CHURCH key (`who` = CHURCH), not a member.
+// It is a kind:'broadcast' room since 2026-10-01 (see scripts/seed-church.mjs), and the relay refuses a
+// member's post into a broadcast. The shape is exactly what the console's publishPost() writes — kind 1,
+// ['t', NET], ['t', <group>], ['p', <church>], signed by the church — which is also what the console counts
+// on its Overview as Announcements (subscribeStats: a kind-1 the church authored). Those four lines are why
+// that card reads 4 rather than "—".
+//
+// The small groups are invite-only once scripts/seed-small-groups.mjs has run, so every member who speaks in
+// one below must be on that room's list there. Run that script FIRST, or those lines are refused.
+const CHURCH = 'church';
 const SCRIPT = [
-  ['notices', 0, 96, 'Sunday’s service is at the usual 10am. Ada Achebe is being baptised, so the church will be busier than normal — do come early if you’d like a seat near the front.'],
-  ['notices', 0, 70, 'The boiler engineer has been and gone. The hall is warm again. Thank you to everyone who put up with three cold weeks of coffee mornings.'],
-  ['notices', 0, 44, 'Reminder: bring-and-share lunch a week on Sunday. Bring something if you can — there is always plenty, and nobody minds if you can’t.'],
-  ['notices', 0, 18, 'The PCC papers went out by email this morning. If you’re on the PCC and haven’t had them, tell Margaret and she’ll re-send.'],
+  ['notices', CHURCH, 96, 'Sunday’s service is at the usual 10am. Ada Achebe is being baptised, so the church will be busier than normal — do come early if you’d like a seat near the front.'],
+  ['notices', CHURCH, 70, 'The boiler engineer has been and gone. The hall is warm again. Thank you to everyone who put up with three cold weeks of coffee mornings.'],
+  ['notices', CHURCH, 44, 'Reminder: bring-and-share lunch a week on Sunday. Bring something if you can — there is always plenty, and nobody minds if you can’t.'],
+  ['notices', CHURCH, 18, 'The PCC papers went out by email this morning. If you’re on the PCC and haven’t had them, tell Margaret and she’ll re-send.'],
 
   ['prayer', 3, 92, 'Please pray for my mum. She goes in for the scan on Thursday and she’s trying very hard not to worry about it.'],
   ['prayer', 7, 90, 'Praying, Grace. Let us know how Thursday goes.'],
@@ -86,7 +97,7 @@ const publish = (w, e, sk) => new Promise((res) => {
 const w = await conn();
 let ok = 0; const bad = [];
 for (const [groupId, who, hoursAgo, text] of SCRIPT) {
-  const p = P(who);
+  const p = who === CHURCH ? { sk: church.sk, name: 'the church' } : P(who);
   const sk = Uint8Array.from(Buffer.from(p.sk, 'hex'));
   const evt = finalizeEvent({
     kind: 1,

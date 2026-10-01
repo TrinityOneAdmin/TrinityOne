@@ -13,8 +13,9 @@
 // NEVER point this at a real church. It publishes as the church key it generates, and nothing else.
 import { writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { WebSocket } from 'ws';
-import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools/pure';
+import { finalizeEvent, getPublicKey } from 'nostr-tools/pure';
 import { npubEncode } from 'nostr-tools/nip19';
+import { generateSeedWords, privateKeyFromSeedWords } from 'nostr-tools/nip06';
 
 const RELAY = process.argv[2] || 'wss://app.trinityone.church/relay';
 const NET = 'trinityone';
@@ -22,16 +23,22 @@ const now = () => Math.floor(Date.now() / 1000);
 const KEYFILE = new URL('./.seed-church.json', import.meta.url);
 
 // ── the church ────────────────────────────────────────────────────────────────────────────────────────────
+// ⚠ MINTED FROM TWELVE WORDS (nip06), the same derivation the console's setKey() uses, so the seeded church can
+// be OPENED in the steward console — `Steward.init(words)` — and photographed there. A raw hex key cannot be:
+// the console only ever holds a church as a phrase. That was done by hand on 2026-09-15 for the first console
+// shot (commit bea47b9) and is done here now so the shot can be taken again. A key file written before this
+// change has no `words` and is still re-used as it is; it just cannot be opened in a console.
 let church;
 if (existsSync(KEYFILE)) {
   church = JSON.parse(readFileSync(KEYFILE, 'utf8'));
   console.log('re-using the church in scripts/.seed-church.json');
 } else {
-  const sk = generateSecretKey();
-  church = { sk: Buffer.from(sk).toString('hex'), pub: getPublicKey(sk) };
+  const words = generateSeedWords();
+  const sk = privateKeyFromSeedWords(words);
+  church = { sk: Buffer.from(sk).toString('hex'), pub: getPublicKey(sk), words };
   church.npub = npubEncode(church.pub);
   writeFileSync(KEYFILE, JSON.stringify(church, null, 1));
-  console.log('minted a new church key');
+  console.log('minted a new church key, from twelve words (kept in scripts/.seed-church.json)');
 }
 const CSK = Uint8Array.from(Buffer.from(church.sk, 'hex'));
 const CP = church.pub;
@@ -73,14 +80,27 @@ const PROFILE = {
   rules: {},
 };
 
-// kind: 'group' | 'channel' — channels are announcement-style, groups are conversations.
+// kind: 'broadcast' | 'group' — a broadcast is the church's own voice (only the church or a steward posts,
+// everyone reads); a group is a conversation. Those are the kinds the console writes and every reader knows.
+// ⚠ NOTICES WAS kind:'channel' UNTIL 2026-10-01, a kind nothing in the product reads. So it was an ordinary
+// open chat: any member could post in it, the console listed it as "120 members" like every other room, the
+// relay never treated it as a broadcast (scripts/gateway.mjs adds a room to BROADCAST only for 'broadcast'),
+// and nothing the church said there counted as an announcement. scripts/seed-chat.mjs now signs its notices
+// with the church key, as the console's publishPost does — a member's post into a broadcast is refused.
+//
+// Every room here starts OPEN. scripts/seed-small-groups.mjs then gives the small ones their own member lists,
+// as a church does — it needs the people from seed-members.mjs, which do not exist yet when this runs.
 const GROUPS = [
-  { id: 'notices',    name: 'Church notices',      kind: 'channel', sub: 'From the church office',        order: 0 },
+  { id: 'notices',    name: 'Church notices',      kind: 'broadcast', sub: 'From the church office',      order: 0 },
   { id: 'prayer',     name: 'Prayer requests',     kind: 'group',   sub: 'Pray for one another',          order: 1 },
   { id: 'tuesday',    name: 'Tuesday morning group', kind: 'group', sub: 'Meets at Margaret’s, 10am',     order: 2 },
   { id: 'stm-youth',      name: 'Youth (school years 7–11)', kind: 'group', sub: 'Fridays, 7pm, the hall',    order: 3 },
   { id: 'welcome',    name: 'Welcome team',        kind: 'group',   sub: 'Sunday door duty',              order: 4 },
   { id: 'musicians',  name: 'Musicians',           kind: 'group',   sub: 'Rehearsal chat',                order: 5 },
+  // The diary below already had a Wednesday life group with nowhere for its people to talk. ('stm-', like
+  // 'stm-youth': a common bare id may already be claimed by another church on a shared relay, and the relay
+  // rightly refuses a second church taking it — the detour recorded in commit bea47b9.)
+  { id: 'stm-wednesday', name: 'Wednesday life group', kind: 'group', sub: 'Wednesdays, 7.30pm, in a front room', order: 6 },
 ];
 
 // A term's worth of a real parish diary. Dates are generated relative to today so the calendar is never empty.
@@ -146,3 +166,5 @@ console.log('relay       : ' + RELAY);
 console.log(`published   : ${results.length - bad.length}/${results.length}`);
 if (bad.length) { console.log('\nrefused:'); bad.forEach(([l, , why]) => console.log('  ' + l + ' — ' + why)); }
 console.log('\nnext: node scripts/seed-members.mjs ' + church.npub + ' 120 ' + RELAY);
+console.log('then: node scripts/seed-names.mjs ' + RELAY + ' && node scripts/seed-small-groups.mjs ' + RELAY + ' && node scripts/seed-chat.mjs ' + RELAY);
+console.log('      (seed-small-groups BEFORE seed-chat: an invite-only room refuses a post from anyone not on its list)');
