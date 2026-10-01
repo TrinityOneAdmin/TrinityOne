@@ -250,6 +250,8 @@ window.safeImgUrl = function (v) {
     while(stack.length) out.push("</" + stack.pop() + ">");
     return out.join("");
   }
+  // The 22 letter names, in the spellings English Bibles print over Psalm 119's stanzas (see the \d rule below).
+  const HEBREW_LETTER = /^(aleph|alef|beth|bet|gimel|gimmel|daleth|dalet|he|hey|vav|waw|zayin|zain|heth|het|cheth|chet|teth|tet|yodh|yod|jod|kaph|kaf|caph|lamedh|lamed|mem|nun|samekh|samech|ayin|pe|peh|tsadhe|tsade|tsaddi|tzaddi|tzade|qoph|qof|koph|resh|shin|sin|tav|taw)\.?$/i;
   function parseUSFM(text){
     const idm = text.match(/\\id\s+(\w+)/);
     const code = idm ? idm[1].toUpperCase() : null;
@@ -281,6 +283,14 @@ window.safeImgUrl = function (v) {
       // class so usfmText keeps its words in the verse text. \s, \ms, \mr are editorial headings and are not.
       // The trailing space is a word break for `text` when verse 1 follows on the same line (`\d Title \v 1 words`);
       // after a block-level span it renders as nothing.
+      // …EXCEPT PSALM 119's ACROSTIC LETTERS, which the World English Bible marks \d ("\d BETH") — a label, like
+      // the \qa the BSB uses for the same letters (below), not a title: as \d it was glued into the verse before
+      // it ("…forsake me. BETH") and 119:1 began "ALEPH". The rule is narrow on purpose: Psalm 119, and a line
+      // whose whole content is one of the 22 letter names. A \d anywhere else stays scripture — Habakkuk 3:19
+      // ends with one ("For the Chief Musician…"), which is why "a \d after verse 1" is not the rule.
+      if((m = line.match(/^\\d\b ?([\s\S]*)$/)) && code === "PSA" && chap === 119 && HEBREW_LETTER.test(stripTags(inlineUSFM(m[1]||"")).trim())){
+        add('<br><span class="sec qa">' + _balancedInline(inlineUSFM(m[1]||"")) + "</span>"); continue;
+      }
       if((m = line.match(/^\\d\b ?([\s\S]*)$/))){ if((m[1]||"").trim()) add('<br><span class="sec d">' + _balancedInline(inlineUSFM(m[1]||"")) + "</span> "); continue; }
       if((m = line.match(/^\\(?:s\d?|ms\d?|mr)\b ?([\s\S]*)$/))){ add('<br><span class="sec">' + _balancedInline(inlineUSFM(m[1]||"")) + "</span>"); continue; }
       if((m = line.match(/^\\r\b ?([\s\S]*)$/))){ add('<br><span class="parref">' + _balancedInline(inlineUSFM(m[1]||"")) + "</span>"); continue; }
@@ -288,6 +298,10 @@ window.safeImgUrl = function (v) {
       // fell to the catch-all below and was read into the verse as a word. Rendered like a heading (the reader's
       // .sec rule), and dropped from `text` by usfmText with the headings.
       if((m = line.match(/^\\sp\b ?([\s\S]*)$/))){ add('<br><span class="sec sp">' + _balancedInline(inlineUSFM(m[1]||"")) + "</span>"); continue; }
+      // \qa — an ACROSTIC LETTER (Psalm 119's ALEPH, BETH…): a label, like \sp. It fell to the catch-all and was
+      // glued onto the end of the verse before it ("…do not utterly forsake me. BETH"). Shown as a heading,
+      // dropped from `text` with the headings.
+      if((m = line.match(/^\\qa\b ?([\s\S]*)$/))){ add('<br><span class="sec qa">' + _balancedInline(inlineUSFM(m[1]||"")) + "</span>"); continue; }
       if((m = line.match(/^\\(q\d?|qm\d?)\b ?([\s\S]*)$/))){ const lvl = (m[1].match(/\d/)||["1"])[0]; add("<br>" + (lvl >= "2" ? "&emsp;" : "") + (m[2]||"")); continue; }
       if((m = line.match(/^\\(?:p|m|pi\d?|mi|nb|pc|cls|li\d?|pmo|pm|pr)\b ?([\s\S]*)$/))){ add("<br><br>" + (m[1]||"")); continue; }
       if(/^\\b\b/.test(line)){ add("<br>"); continue; }
@@ -429,8 +443,9 @@ window.safeImgUrl = function (v) {
     // (_balancedInline), so the heading's closing tag is always found before any verse text — an unclosed
     // `\nd` in a heading can no longer carry the drop into the verse words after it, whatever follows the
     // heading (a \v, a \q, a \qc, a \p). Audit of 3fe46eb finding 7, and its re-audit.
-    // `sec sp` is a speaker label (\sp) — a label, not scripture, dropped like a heading (2026-10-01).
-    const OPEN = /<span class="(?:sec|sec sp|parref)">/g;
+    // `sec sp` is a speaker label (\sp), `sec qa` an acrostic letter (\qa, or Psalm 119's \d letters) — labels,
+    // not scripture, dropped like a heading (2026-10-01).
+    const OPEN = /<span class="(?:sec|sec sp|sec qa|parref)">/g;
     let m;
     while((m = OPEN.exec(s))){
       let depth = 1, i = m.index + m[0].length;

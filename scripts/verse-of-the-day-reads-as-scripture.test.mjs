@@ -348,3 +348,34 @@ test('a heading’s markup is balanced inside it — a stray closer is dropped (
     }
   }
 });
+
+// ── AUDIT OF b4ac50d, item 6: PSALM 119's ACROSTIC LETTERS ───────────────────────────────────────────────────
+// The BSB marks them \qa (19 of its stanza letters glued onto the verse before: "…forsake me. BETH"); the World
+// English Bible marks them \d (and 119:1 began "ALEPH"). Both are labels. A \d elsewhere stays scripture —
+// Habakkuk 3:19 ends with one, in the ASV that ships.
+const ACROSTIC = (mark) => [
+  '\\id PSA', '\\c 119',
+  mark + ' ALEPH', '\\q1', '\\v 1 Blessed are those whose way is blameless,',
+  '\\q1', '\\v 8 I will keep your statutes; do not utterly forsake me.',
+  mark + ' BETH', '\\q1', '\\v 9 How can a young man keep his way pure?',
+].join('\n');
+test('Psalm 119’s acrostic letters are labels, not scripture — the BSB’s \\qa and the WEB’s \\d alike', async () => {
+  for (const [mark, abbr] of [['\\qa', 'QA'], ['\\d', 'DL']]) {
+    const Bible = realBible();
+    await Bible.loadModuleBytes(new TextEncoder().encode(ACROSTIC(mark)), abbr + '.usfm', { abbr, name: abbr + ' Test', category: 'bibles' });
+    const byV = Object.fromEntries(Bible.getVerses(19, 119, abbr).map(r => [String(r.v), r]));
+    assert.equal(byV['8'].text, 'I will keep your statutes; do not utterly forsake me.',
+      mark + ': THE NEXT STANZA’S LETTER IS GLUED ONTO THE VERSE: ' + JSON.stringify(byV['8'].text));
+    assert.equal(byV['1'].text, 'Blessed are those whose way is blameless,', mark + ': Psalm 119:1 begins with its letter: ' + JSON.stringify(byV['1'].text));
+    assert.match(byV['8'].html, /<span class="sec qa">BETH<\/span>/, mark + ': the reader no longer shows the stanza letter');
+    assert.equal(Bible.search('BETH', 10, abbr).length, 0, mark + ': searching a stanza letter finds a verse');
+  }
+});
+test('…and a \\d that is not one of Psalm 119’s letters stays scripture (Habakkuk 3:19)', async () => {
+  const HAB = ['\\id HAB', '\\c 3', '\\q1', '\\v 19 The Lord God is my strength.', '\\d For the Chief Musician, on my stringed instruments.'].join('\n');
+  const Bible = realBible();
+  await Bible.loadModuleBytes(new TextEncoder().encode(HAB), 'hab.usfm', { abbr: 'HB', name: 'Hab Test', category: 'bibles' });
+  const v19 = Bible.getVerses(35, 3, 'HB').find(r => String(r.v) === '19');
+  assert.equal(v19.text, 'The Lord God is my strength. For the Chief Musician, on my stringed instruments.',
+    'HABAKKUK 3:19’s CLOSING LINE (a \\d) WAS DROPPED AS A LABEL: ' + JSON.stringify(v19.text));
+});
