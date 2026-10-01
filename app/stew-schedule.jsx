@@ -37,6 +37,14 @@ function sameAssign(a, b) { const k = o => Object.keys(o || {}).filter(x => (o[x
 // So each save below checks. A modal that failed stays OPEN with its content intact, because the steward's
 // typing is the thing that would otherwise be lost.
 const SCH_NO_KEY = 'Not saved — your church’s key hasn’t arrived yet. Give it a moment and try again.';
+// …AND WHEN A RELAY IS WHAT IS HOLDING THE KEY BACK, SAY WHICH (audit of 3bc8905). A church's first name key is
+// minted only once every relay of the church has answered, so a proved relay that is down holds it back — for as
+// long as it stays down — and "give it a moment" is not true. Steward.keyWaitNote names it; short on purpose.
+function schNoKey() {
+  let why = '';
+  try { why = (window.Steward && window.Steward.keyWaitNote) ? window.Steward.keyWaitNote('name') : ''; } catch (e) { why = ''; }
+  return why ? 'Not saved — your church’s key hasn’t arrived: ' + why + '.' : SCH_NO_KEY;
+}
 // THE LAST DATE THIS PRODUCT CAN WRITE DOWN. A year past 9999 leaves ISO 8601's four-digit form: Date's own
 // toISOString() switches to the expanded `+010000-01-01`, and the public calendar builder turned that into
 // `DTSTART:+01000001T193000`, a string no calendar can read (AUDIT-feeds-round3-2026-09-22 F3). The builder
@@ -207,7 +215,7 @@ function RosterModal({ team, roster, members, onClose, onCreate }) {
       // deliberately not written with everyone's name in the clear. Losing this silently would be worse than
       // the leak — the whole team, its roles and its pods are typed into this modal.
       const rosterSaved = await Promise.resolve(window.Steward.publishRoster(t.id, { roles, people, pods }));
-      if (rosterSaved == null) { setSaving(false); setSaveErr('Not saved — your church’s key hasn’t arrived yet. Give it a moment and try again.'); return; }
+      if (rosterSaved == null) { setSaving(false); setSaveErr(schNoKey()); return; }
       // …and keep the OTHER list in step, so the team the steward just built is also the team that can read
       // its own room. Only invite-only teams have an allowlist, and only the DELTA is applied — see the note
       // above teamPeopleForAllowlist for what a wholesale rewrite here cost.
@@ -400,7 +408,7 @@ function SchAddServiceModal({ onClose }) {
     const dates = repeat === 'none' ? [date] : schGenDates(date, repeat, until || schAddMonths(date, 3));
     const out = await Promise.all(dates.map(d => window.Steward.publishService({ name: name.trim() || 'Service', date: d, time })));
     setBusy(false);
-    if (out.some(r => r == null)) { setErr(SCH_NO_KEY); return; }   // stay open: nothing was written
+    if (out.some(r => r == null)) { setErr(schNoKey()); return; }   // stay open: nothing was written
     onClose();
   };
   return (
@@ -438,7 +446,7 @@ function RunsheetModal({ service, sheet, onClose }) {
     setBusy(true); setErr('');
     const r = await window.Steward.publishRunsheet(service.id, items.filter(it => (it.title || '').trim()));
     setBusy(false);
-    if (r == null) { setErr(SCH_NO_KEY); return; }   // the whole order of service is in this modal — never drop it
+    if (r == null) { setErr(schNoKey()); return; }   // the whole order of service is in this modal — never drop it
     onClose();
   };
   return (
@@ -589,7 +597,7 @@ function DashRota({ onNewTeam }) {
     });
     Promise.all(saves).then(out => {
       const lost = out.filter(r => r.rota == null).length;
-      if (lost) { setFlash(SCH_NO_KEY); setTimeout(() => setFlash(''), 4000); return; }
+      if (lost) { setFlash(schNoKey()); setTimeout(() => setFlash(''), 4000); return; }
       const unasked = out.reduce((n, r) => n + r.failed, 0);
       const rotLead = 'Rotated ' + pods.length + ' pods across ' + upcoming.length + ' service' + (upcoming.length === 1 ? '' : 's');
       if (unasked) { setFlash(unaskedFlash(rotLead, unasked, out.reduce((n, r) => n + r.tried, 0), 'Open each service and press Publish')); setTimeout(() => setFlash(''), 6000); return; }
@@ -711,7 +719,7 @@ function DashRota({ onNewTeam }) {
     // publish, tells us whether the key is there, and changes nothing.
     if (window.Steward.nameKeyReady && !window.Steward.nameKeyReady()) {
       const probe = await window.Steward.publishService({ id: svc.id, name: svc.name, date: svc.date, time: svc.time });
-      if (probe == null) { setFlash(SCH_NO_KEY); setTimeout(() => setFlash(''), 4000); return; }
+      if (probe == null) { setFlash(schNoKey()); setTimeout(() => setFlash(''), 4000); return; }
     }
     let lost = 0, unasked = 0, triedAsks = 0; const heldAsks = new Set();
     for (const dt of dates) {
@@ -727,7 +735,7 @@ function DashRota({ onNewTeam }) {
       unasked += asked.failed; triedAsks += asked.tried; (asked.heldPubs || []).forEach(p => heldAsks.add(p));
       if (s.id === svcId) setAssign(filled);
     }
-    if (lost) { setFlash(SCH_NO_KEY); setTimeout(() => setFlash(''), 4000); return; }
+    if (lost) { setFlash(schNoKey()); setTimeout(() => setFlash(''), 4000); return; }
     const madeLead = `Created + filled ${ensured.length} service${ensured.length > 1 ? 's' : ''}`;
     if (unasked) { setFlash(unaskedFlash(madeLead, unasked, triedAsks, 'Open each service and press Publish')); setTimeout(() => setFlash(''), 6000); return; }
     if (heldAsks.size) { setFlash(heldFlash(madeLead, heldAsks.size, 'Open each service and press Publish')); setTimeout(() => setFlash(''), 6000); return; }
@@ -745,7 +753,7 @@ function DashRota({ onNewTeam }) {
     const r = await window.Steward.publishRota({ service: svcId, published: true, assign });
     // Do NOT ask people to serve on a rota that was not saved: they would get the request and the rota would
     // not exist. sendRequestsFor is the outward-facing half, so it waits on the publish landing.
-    if (r == null) { setFlash(SCH_NO_KEY); setTimeout(() => setFlash(''), 4000); return; }
+    if (r == null) { setFlash(schNoKey()); setTimeout(() => setFlash(''), 4000); return; }
     const asked = await sendRequestsFor(svcId, svc.date, svc.time, svc.name, assign);
     if (asked.failed) { setFlash(unaskedFlash('Published', asked.failed, asked.tried, 'Press Publish again')); setTimeout(() => setFlash(''), 5000); return; }
     if (asked.held) { setFlash(heldFlash('Published', asked.held, 'press Publish again')); setTimeout(() => setFlash(''), 5000); return; }
@@ -1053,7 +1061,7 @@ function SchEventModal({ day, onClose }) {
       if (missed) { try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'website opt-in', message: SCH_SHOWN_MISSED } })); } catch (e) {} }
     }
     setBusy(false);
-    if (out.some(r => r == null)) { setErr(SCH_NO_KEY); return; }
+    if (out.some(r => r == null)) { setErr(schNoKey()); return; }
     onClose();
   };
   return (
@@ -1535,7 +1543,7 @@ function DashRooms() {
     setRoomBusy(true); setRoomErr('');
     const r = await window.Steward.publishRoom({ name: n });
     setRoomBusy(false);
-    if (r == null) { setRoomErr(SCH_NO_KEY); return; }   // keep what they typed
+    if (r == null) { setRoomErr(schNoKey()); return; }   // keep what they typed
     setNewRoom('');
   };
   const sorted = [...bookings].filter(b => b.roomId && b.date).sort((a, b) => (a.date || '').localeCompare(b.date || '') || (a.start || '').localeCompare(b.start || ''));
@@ -1625,7 +1633,7 @@ function RoomBookingModal({ bk, rooms, bookings, onClose }) {
     setBusy(true); setErr('');
     const r = await window.Steward.publishBooking({ id: bk.id, roomId, date, start, end, title, note });
     setBusy(false);
-    if (r == null) { setErr(SCH_NO_KEY); return; }
+    if (r == null) { setErr(schNoKey()); return; }
     onClose();
   };
   const dlgRef = useStewDialog(onClose);   // a11y: Escape + focus (dialog semantics on the panel below)

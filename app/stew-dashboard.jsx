@@ -3788,7 +3788,7 @@ function GroupChatModal({ group, onClose }) {
     let r = null;
     try { r = await window.Steward.publishEvent({ ...evt, title: evt.title.trim(), where: evt.where.trim(), groupId: group.id }); } catch (e) { r = null; }
     setEvtBusy(false);
-    if (r == null) { setEvtErr('Not saved — your church’s key hasn’t arrived yet. Give it a moment and try again.'); return; }
+    if (r == null) { let why = ''; try { why = window.Steward.keyWaitNote ? window.Steward.keyWaitNote('name') : ''; } catch (e) {} setEvtErr(why ? 'Not saved — your church’s key hasn’t arrived: ' + why + '.' : 'Not saved — your church’s key hasn’t arrived yet. Give it a moment and try again.'); return; }   // name the relay holding the key back (schNoKey, stew-schedule.jsx)
     setComposeEvt(false); setEvt({ title: '', date: '', time: '', where: '' });
   };
   const isTeam = group.kind === 'team';

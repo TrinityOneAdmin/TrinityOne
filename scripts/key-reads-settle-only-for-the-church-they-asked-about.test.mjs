@@ -134,7 +134,7 @@ function engine() {
     M('    setActiveIdentity(targetPub) {'),
     M('    async ensureNameKeyForMembers(memberPubs, stewardPubs, opts = {}) {'),
     M('    subscribeBlocked(onBlocked) {'), M('    subscribeStewards(onList) {'),
-    M('    listIsCurrent(list) {'),
+    M('    listIsCurrent(list) {'), M('    keyWaitNote(kind) {'),
   ].join(',\n');
   t.t = t;
   const S = new Function('scope', `with (scope) { ${decls}\n return { ${methods} }; }`)(proxy);
@@ -619,4 +619,30 @@ test('ensureMediaKeyForMembers: a refusal that lands after a switch is neither r
   await e2.S.ensureMediaKeyForMembers([M1.pub, M2.pub], []);
   assert.ok(e2.t._mediaKeyPushRefused, 'CONTROL: a refusal with no switch was not remembered');
   assert.equal(e2.events.filter(x => x.type === 'steward-write-blocked').length, 1, 'CONTROL: a refusal with no switch was not said');
+});
+
+// (d) WHO IS HOLDING THE KEY BACK: a proved relay that is down keeps a church's first key from being minted, by
+// design — so the screens that used to say "give it a moment" name it instead.
+test('keyWaitNote names the relay a key read is still waiting on — and only for the church and read we are on', async () => {
+  const e = engine(); e.t.relayList = [R1, R2];
+  e.S.subscribeNameKey();
+  const [r1] = e.subs.slice(-2);
+  assert.equal(e.S.keyWaitNote('name'), 'relay.example and second.example aren’t answering', 'before any answer, both relays are named');
+  await e.eose(r1);
+  assert.equal(e.S.keyWaitNote('name'), 'second.example isn’t answering', 'THE RELAY HOLDING THE NAME KEY BACK IS NOT NAMED — the steward is told only to wait, for as long as it stays down');
+  assert.equal(e.S.keyWaitNote('care'), '', 'a read that was never opened names a relay');
+  e.S.setActiveIdentity(B.pub);
+  assert.equal(e.S.keyWaitNote('name'), '', 'church A\'s read names a relay while the console runs church B');
+  const e2 = engine(); e2.t.relayList = [R1, R2];
+  e2.S.subscribeCareKey();
+  for (const r of e2.subs.slice(-2)) await e2.eose(r);
+  assert.equal(e2.t._careKeyChecked, true, 'CONTROL: both relays answered');
+  assert.equal(e2.S.keyWaitNote('care'), '', 'a settled read still names a relay');
+});
+
+test('mediaEncryptor: the "can’t encrypt yet" refusal names the relay that is not answering', async () => {
+  const e = engine(); e.t.relayList = [R1, R2];
+  e.S.subscribeMediaKey();
+  await e.eose(e.subs.slice(-2)[0]);                        // R1 answered; R2 never does
+  await assert.rejects(e.S.mediaEncryptor([M1.pub]), /second\.example isn’t answering/, 'the sermon upload is refused with "wait a moment" while a relay that is down holds back the church\'s first sermon key');
 });

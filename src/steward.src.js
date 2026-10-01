@@ -2068,7 +2068,12 @@ function _runKeyReadAuthWaiters() {
 // Open a read of one church's key envelope: one subscription per relay in this console's set, `onevent` for
 // every envelope that arrives, and `onSettled` once — when every relay has answered trustworthily. Returns the
 // closer. Used by subscribeCareKey, subscribeNameKey and subscribeMediaKey.
-function _openKeyRead(cp, filters, onevent, onSettled) {
+// WHICH RELAYS A KEY READ IS STILL WAITING ON, per kind ('care' | 'name' | 'media'), for the church and epoch it
+// was opened for — so a screen that has to say "not saved, the key hasn't arrived" can name the relay that is not
+// answering (audit of 3bc8905, finding 3: with the per-relay rule a proved relay that is down holds back a church's
+// FIRST key, by design, and the steward was told only to wait). See _keyWaitNote.
+const _keyReadWaiting = new Map();   // kind -> { cp, epoch, urls, answers: Map(url -> true|false|'unauthed'), settled }
+function _openKeyRead(cp, filters, onevent, onSettled, kind) {
   const st = { stopped: false, gen: 0, subs: [], timer: null, tries: 0 };
   // MARK EACH TOKEN CLOSED BEFORE CLOSING: the close itself fires that subscription's oneose.
   const stopSubs = () => { for (const s of st.subs) { s.tok.closed = true; try { s.sub.close(); } catch (e) {} } st.subs = []; };
@@ -2079,12 +2084,13 @@ function _openKeyRead(cp, filters, onevent, onSettled) {
     const urls = relays();
     const epoch = _keyReadEpoch, at = Date.now();
     const answers = new Map();
+    if (kind) _keyReadWaiting.set(kind, { cp, epoch, urls: urls.slice(), answers, settled: false });
     const live = () => !st.stopped && gen === st.gen && epoch === _keyReadEpoch && cp === (actingChurch || pub);
     const retry = () => { if (!live()) return; const ms = Math.min(60000, 2000 * Math.pow(2, st.tries++)); st.timer = setTimeout(open, ms); };
     const evaluate = () => {
       if (!live() || answers.size < urls.length) return;     // superseded, or not every relay has answered yet
       const v = [...answers.values()];
-      if (v.every(x => x === true)) { st.tries = 0; onSettled(); return; }
+      if (v.every(x => x === true)) { st.tries = 0; const w = kind && _keyReadWaiting.get(kind); if (w && w.answers === answers) w.settled = true; onSettled(); return; }
       if (v.some(x => x === false)) { retry(); return; }     // a CLOSED, a timer, a drop: ask again, later
       _keyReadAfterAuth(() => { if (live()) open(); });     // genuine but not yet logged in: ask again on login
     };
@@ -2104,6 +2110,15 @@ function _openKeyRead(cp, filters, onevent, onSettled) {
   };
   open();
   return () => { st.stopped = true; clearTimeout(st.timer); st.timer = null; stopSubs(); };
+}
+// "relay.example.org isn't answering" — or '' when no read for the church we are on is held up by a relay. Short
+// on purpose (the owner prefers minimal instructional copy): the screens append it to their own "not saved".
+function _keyWaitNote(kind) {
+  const w = _keyReadWaiting.get(kind);
+  if (!w || w.settled || w.epoch !== _keyReadEpoch || w.cp !== (actingChurch || pub)) return '';
+  const hosts = w.urls.filter(u => w.answers.get(u) !== true).map(u => { try { return new URL(u).host; } catch (e) { return String(u); } });
+  if (!hosts.length) return '';
+  return hosts.length === 1 ? hosts[0] + ' isn’t answering' : hosts.join(' and ') + ' aren’t answering';
 }
 // Tell the dashboard a key read has settled, so the enrolment effect re-runs — "mint on a signal, not on a
 // stopwatch", as the capability mint does. Nothing else re-runs it when the answer arrives.
@@ -5672,7 +5687,9 @@ window.Steward = {
     // sermon with it and REPLACED the envelope — every previously-encrypted sermon then undecryptable by the
     // church and every member, permanently. Refuse to mint on an untrustworthy read (fail closed: the steward
     // sees "try again in a moment"; the alternative is silent, unrecoverable loss of the church's archive).
-    if (!_mediaKeyHex && (!_mediaKeyChecked || !_isRelayAuthed())) throw new Error('Can’t encrypt this upload yet — this device hasn’t finished connecting to your church’s relay, so it can’t tell whether your church already has a media key. Wait a moment and try again.');
+    // …AND NAME THE RELAY THAT IS HOLDING IT UP, when one is (_keyWaitNote) — "wait a moment" is not true of a relay
+    // that is down, and the per-relay rule means a down relay holds back the church's first sermon key.
+    if (!_mediaKeyHex && (!_mediaKeyChecked || !_isRelayAuthed())) { const _why = _keyWaitNote('media'); throw new Error('Can’t encrypt this upload yet — this device hasn’t finished connecting to your church’s relay, so it can’t tell whether your church already has a media key' + (_why ? ': ' + _why + '.' : '. Wait a moment and try again.')); }
     // A DELEGATED CONSOLE NEVER MINTS AND NEVER REPUBLISHES THE ENVELOPE. Minting here would seal a NEW
     // key as the steward and leave every sermon the church encrypted before now undecryptable — the same
     // unrecoverable loss the gate above exists to prevent, reached by the other door. It also cannot
@@ -5897,7 +5914,7 @@ window.Steward = {
         _ingestCareKeyEnv(e);
       },
       // "No envelope came back" opens the mint gate ONLY on a trustworthy answer from every relay — _openKeyRead.
-      () => { if (!_careKeyChecked) { _careKeyChecked = true; _keysReadSignal('care'); } });
+      () => { if (!_careKeyChecked) { _careKeyChecked = true; _keysReadSignal('care'); } }, 'care');
   },
   // Wrap the care key for everyone who needs it. MINTS only on a first run where we have positively
   // established there is no envelope — never on a cold `_careKeyHex === null`, which is the ordinary state
@@ -6089,7 +6106,7 @@ window.Steward = {
          console that was refused once would go on skipping until the roster itself changed. */
       function onMediaKeyEnvelope(e) { if (forPub !== pub || e.pubkey !== pub || ((e.tags || []).find(t => t[0] === 'd') || [])[1] !== MEDIAKEY_D + pub) return; try { const o = JSON.parse(e.content); _mediaKeyDocKeys = (o && o.keys) || null; _mediaKeyPushRefused = null; _mediaKeyVer++; const _meKey = _myOwnPub(); const mine = o.keys && (o.keys[_meKey] || (_meKey === pub ? null : o.keys[pub]));   /* OPTION A: on a DELEGATED console `pub` is the CHURCH, so o.keys[pub] is the entry sealed TO THE CHURCH and our key cannot open it — _mediaKeyHex stayed null and mediaEncryptor then tried to MINT. Our own entry is there already: the church seals to [church, ...members] and a delegated steward is normally also a member. Owner console: _myOwnPub() === pub, so this is the old lookup exactly. */ if (mine && sk) { const plain = nip44d(mine, nip44ck(sk, e.pubkey)); let r = null; try { const q = JSON.parse(plain); if (Array.isArray(q)) r = q.filter(k => typeof k === 'string' && k); } catch (x2) {} const incoming = (r && r.length) ? r : [plain]; _mediaKeyRing = [...incoming, ..._mediaKeyRing.filter(k => incoming.indexOf(k) === -1)]; _mediaKeyHex = _mediaKeyRing[0];   /* KEEP what this device already held: if we minted before the envelope arrived, discarding our key here would orphan anything encrypted in that window. Rotation must never drop a key that has already sealed something. */ } } catch (x) {} },
       // no envelope came back → it is safe to mint one, but ONLY on a trustworthy answer from every relay
-      () => { if (!_mediaKeyChecked) { _mediaKeyChecked = true; _keysReadSignal('media'); } });
+      () => { if (!_mediaKeyChecked) { _mediaKeyChecked = true; _keysReadSignal('media'); } }, 'media');
   },
   // true if every relay this console has opened is still connected. The console's reconnect ticker only
   // re-subscribes when this is FALSE — so a healthy socket never triggers a full-corpus re-query (the steward
@@ -7441,7 +7458,7 @@ window.Steward = {
       },
       // the relay answered — a church with no envelope yet may now mint its first, but ONLY on a trustworthy
       // answer from every relay (_openKeyRead). This is the gate the audit of e6a2e02 watched open on our own close.
-      () => { if (!_nameKeyChecked) { _nameKeyChecked = true; _keysReadSignal('name'); } });
+      () => { if (!_nameKeyChecked) { _nameKeyChecked = true; _keysReadSignal('name'); } }, 'name');
   },
   // open a member's sealed name. Tries every key in the ring so a rotation never hides older names.
   openMemberName(content, authorPub) {
@@ -10346,6 +10363,8 @@ window.Steward = {
   // Was this list fetched for the church and epoch the console is on now? See _listTag. The key enrolment
   // (KeyDistributor, app/stew-dashboard.jsx) uses a list only when this says yes.
   listIsCurrent(list) { const t = list && list._for; return !!t && !!t.cp && t.cp === (actingChurch || pub) && t.epoch === _keyReadEpoch; },
+  // "relay.x isn't answering" for a key read of the church we are on that a relay is holding up, or ''.
+  keyWaitNote(kind) { return _keyWaitNote(kind); },
   // discover churches whose owner-signed roster lists OUR key → we can act as their steward. Re-emits on change.
   subscribeStewardedChurches(cb) {
     const me = churchPub;

@@ -16501,7 +16501,8 @@ zoo`.split("\n");
       }
     }
   }
-  function _openKeyRead(cp, filters, onevent, onSettled) {
+  var _keyReadWaiting = /* @__PURE__ */ new Map();
+  function _openKeyRead(cp, filters, onevent, onSettled, kind) {
     const st = { stopped: false, gen: 0, subs: [], timer: null, tries: 0 };
     const stopSubs = () => {
       for (const s of st.subs) {
@@ -16522,6 +16523,7 @@ zoo`.split("\n");
       const urls = relays();
       const epoch = _keyReadEpoch, at = Date.now();
       const answers = /* @__PURE__ */ new Map();
+      if (kind) _keyReadWaiting.set(kind, { cp, epoch, urls: urls.slice(), answers, settled: false });
       const live = () => !st.stopped && gen === st.gen && epoch === _keyReadEpoch && cp === (actingChurch || pub);
       const retry = () => {
         if (!live()) return;
@@ -16533,6 +16535,8 @@ zoo`.split("\n");
         const v = [...answers.values()];
         if (v.every((x) => x === true)) {
           st.tries = 0;
+          const w = kind && _keyReadWaiting.get(kind);
+          if (w && w.answers === answers) w.settled = true;
           onSettled();
           return;
         }
@@ -16582,6 +16586,19 @@ zoo`.split("\n");
       st.timer = null;
       stopSubs();
     };
+  }
+  function _keyWaitNote(kind) {
+    const w = _keyReadWaiting.get(kind);
+    if (!w || w.settled || w.epoch !== _keyReadEpoch || w.cp !== (actingChurch || pub)) return "";
+    const hosts = w.urls.filter((u) => w.answers.get(u) !== true).map((u) => {
+      try {
+        return new URL(u).host;
+      } catch (e) {
+        return String(u);
+      }
+    });
+    if (!hosts.length) return "";
+    return hosts.length === 1 ? hosts[0] + " isn\u2019t answering" : hosts.join(" and ") + " aren\u2019t answering";
   }
   function _keysReadSignal(kind) {
     try {
@@ -19267,7 +19284,10 @@ zoo`.split("\n");
     // so the host (and any cloud backup) only ever holds ciphertext; only members hold the key to decrypt.
     async mediaEncryptor(memberPubs) {
       if (!sk) throw new Error("no key");
-      if (!_mediaKeyHex && (!_mediaKeyChecked || !_isRelayAuthed())) throw new Error("Can\u2019t encrypt this upload yet \u2014 this device hasn\u2019t finished connecting to your church\u2019s relay, so it can\u2019t tell whether your church already has a media key. Wait a moment and try again.");
+      if (!_mediaKeyHex && (!_mediaKeyChecked || !_isRelayAuthed())) {
+        const _why = _keyWaitNote("media");
+        throw new Error("Can\u2019t encrypt this upload yet \u2014 this device hasn\u2019t finished connecting to your church\u2019s relay, so it can\u2019t tell whether your church already has a media key" + (_why ? ": " + _why + "." : ". Wait a moment and try again."));
+      }
       if (actingChurch && !_mediaKeyHex) throw new Error("Can\u2019t encrypt this upload \u2014 your church hasn\u2019t shared its media key with this account yet. Ask whoever holds the church key to add you as a member of the church, or to upload this one themselves. Nothing has been uploaded.");
       let useHex = _mediaKeyHex;
       if (!actingChurch) {
@@ -19422,7 +19442,8 @@ zoo`.split("\n");
             _careKeyChecked = true;
             _keysReadSignal("care");
           }
-        }
+        },
+        "care"
       );
     },
     // Wrap the care key for everyone who needs it. MINTS only on a first run where we have positively
@@ -19652,7 +19673,8 @@ zoo`.split("\n");
             _mediaKeyChecked = true;
             _keysReadSignal("media");
           }
-        }
+        },
+        "media"
       );
     },
     // true if every relay this console has opened is still connected. The console's reconnect ticker only
@@ -20882,7 +20904,8 @@ zoo`.split("\n");
             _nameKeyChecked = true;
             _keysReadSignal("name");
           }
-        }
+        },
+        "name"
       );
     },
     // open a member's sealed name. Tries every key in the ring so a rotation never hides older names.
@@ -23885,6 +23908,10 @@ zoo`.split("\n");
     listIsCurrent(list) {
       const t = list && list._for;
       return !!t && !!t.cp && t.cp === (actingChurch || pub) && t.epoch === _keyReadEpoch;
+    },
+    // "relay.x isn't answering" for a key read of the church we are on that a relay is holding up, or ''.
+    keyWaitNote(kind) {
+      return _keyWaitNote(kind);
     },
     // discover churches whose owner-signed roster lists OUR key → we can act as their steward. Re-emits on change.
     subscribeStewardedChurches(cb) {
