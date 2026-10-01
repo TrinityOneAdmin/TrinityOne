@@ -46,6 +46,7 @@ function runWipe(keys) {
     profiles: { a: 1 },
     _k0Seen: new Set(['a']),
     _familyAnswered: new Set(['a']),   // 2026-10-01: the lock forgets which churches had answered "who are my children"
+    _forgetFamilySession: () => {},    // …through this (its own behaviour: an-unlinked-child-stays-gone-after-a-lock)
     window: { Fellowship: { myProfile: { name: 'x' } } },
     console: { warn() {} },
     Object, Set,
@@ -443,7 +444,7 @@ function liftAnnounceAndWipe() {
     _queueJoinIntent: () => { throw new Error('keyless path taken — the stub key did not reach the function'); },
     _markJoinSent: () => {},
     window: { Fellowship: { ready: Promise.resolve(), myProfile: null } },
-    localStorage, profiles: {}, _k0Seen: new Set(), _familyAnswered: new Set(),
+    localStorage, profiles: {}, _k0Seen: new Set(), _familyAnswered: new Set(), _forgetFamilySession: () => {},
   };
   const P = new Proxy(scope, {
     has: (t, k) => (k in t) || !(String(k) in globalThis),

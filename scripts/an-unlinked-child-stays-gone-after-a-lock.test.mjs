@@ -68,9 +68,13 @@ test('an unlinked child stays gone after a PIN lock — old-console removal, loc
   b1.api.clearCommunityCache();
   assert.deepEqual([...storage._map.keys()].filter(k => k.startsWith('trinityone.family')), [], 'something about the family survived the lock wipe');
 
+  // the next boot runs both, as the app does: the notices (re-delivered) and the rebuild. Until the church's
+  // newest notice is applied again, a request older than it is held (_heldReqs, 2026-10-01) — so wait for it.
   const b2 = memberBoot(parent, storage, { relays: [relay.url] });
+  const unsub2 = b2.api.subscribeGuardianNotices();
   await b2.api._rebuildFamily(church.pub);
-  b2.close();
+  await until(() => b2.shown(church.pub).includes(keptKid.pub), 6000);
+  unsub2(); b2.close();
   const after = b2.shown(church.pub);
   assert.ok(after.includes(keptKid.pub), 'CONTROL: the rebuild did not find the child who is still requested — the rig cannot see the relay');
   assert.ok(!after.includes(removedKid.pub),
@@ -404,4 +408,101 @@ test('after a restart — and after a lock — an OLDER notice is still older th
     assert.ok(!b2.shown(church.pub).includes(C.pub),
       'AN OLDER NOTICE PUT BACK A CHILD THE CHURCH HAD UNLINKED after a restart' + (lock ? ' and a lock' : ''));
   }
+});
+
+
+// ── 17. A REQUEST OLDER THAN THE STAMPED NOTICE WAITS FOR IT (audit of b4ac50d, NEW-2's rule) ─────────────────
+// Until a notice at least as new as the stamp is applied this session, the phone cannot know whether the church
+// decided an older request — so it holds it (not "Waiting for steward to confirm", not gone) and the family is
+// not answered. Once the notice is applied: a request it names as closed is withdrawn, any other is pending.
+// A request NEWER than the stamp cannot have been decided by it and shows at once.
+test('a request older than the stamped notice is held until that notice is applied; then the notice decides it', async () => {
+  const X = K(), Y = K(), Z = K();
+  const storage = memStorage();
+  const stamped = N({ church: church.pub, children: [], closed: [X.pub] }, 5000);
+  const P1 = scriptedPool();
+  const b1 = memberBoot(parent, storage, { pool: P1, publish: async () => true });
+  b1.api.subscribeGuardianNotices();
+  P1.notices().handlers.onevent(stamped);   // seen once: the stamp is persisted
+  await sleep(20);
+  b1.api.clearCommunityCache();             // a lock; then a cold boot
+  const P = scriptedPool(), sent = [];
+  const b = memberBoot(parent, storage, { pool: P, publish: async (evt) => { sent.push(evt); return true; } });
+  b.api.subscribeGuardianNotices();
+  const done = b.api._rebuildFamily(church.pub);
+  const r = P.rebuild().handlers;
+  r.onevent(memberEvt(church, parent, 1000));
+  r.onevent(reqEvt(church, parent, X, 4000, true));   // older than the stamp — the stamped notice closed it
+  r.onevent(reqEvt(church, parent, Y, 4500, true));   // older than the stamp — undecided
+  r.onevent(reqEvt(church, parent, Z, 6000, true));   // newer than the stamp
+  r.oneose();
+  await done;
+  let shown = b.shown(church.pub);
+  assert.deepEqual(shown, [Z.pub],
+    'WITH THE STAMPED NOTICE UNREAD, AN OLDER REQUEST WAS SHOWN AS PENDING — a declined one reads "Waiting for steward to confirm": ' + JSON.stringify(shown));
+  assert.equal(b.api.familyAnswered(church.pub), false,
+    'THE FAMILY READ AS ANSWERED WHILE THE CHURCH’S NEWEST NOTICE IS UNREAD — a linked parent is told "make one below"');
+  P.notices().handlers.onevent(stamped);   // the relay holding it is reachable again
+  await sleep(30);
+  shown = b.shown(church.pub);
+  assert.ok(!shown.includes(X.pub), 'a request the stamped notice closed was shown');
+  assert.equal(retractionsOf(sent, X).length, 1, 'a request the stamped notice closed was not withdrawn');
+  assert.ok(shown.includes(Y.pub) && shown.includes(Z.pub), 'an undecided request was not shown pending once the notice was applied: ' + JSON.stringify(shown));
+  assert.equal(b.api.familyAnswered(church.pub), true, 'CONTROL: with the notice applied and the rebuild answered, the family is answered');
+});
+
+// ── 18. THE REBUILD RUNS AGAIN WHEN THE CONNECTION COMES BACK (audit of b4ac50d, item 2) ──────────────────────
+// The SHIPPED docs hub (_docsHubOpen) and refetchChurchDocs — which the app calls on `online`, on resume and when
+// a relay returns — over a scripted pool: an offline EOSE, then the same hub reopened online.
+test('after an offline start the rebuild runs again once the connection is back — and only until it is answered', async () => {
+  const P = scriptedPool();
+  const subs = [];
+  const pool = { subscribeMany(r, filters, handlers) { const x = P.subscribeMany(r, filters, handlers); subs.push({ filters, handlers }); return x; } };
+  const b = memberBoot(parent, memStorage(), { pool, publish: async () => true, withHub: true });
+  const hubSubs = () => subs.filter(s => s.filters.some(f => (f.authors || []).includes(church.pub) || f['#church']));
+  const rebuildSubs = () => subs.filter(s => s.filters.some(f => (f.authors || []).includes(parent.pub)));
+  const hub = { cp: church.pub, buf: new Map(), handlers: new Set(), closer: null, familyRebuilt: false };
+  b.ctx._docsHubs.set(church.pub, hub);
+  b.ctx._docsHubOpen(hub);
+  hubSubs().at(-1).handlers.oneose();                       // offline: nostr-tools gives up on the dead socket
+  assert.equal(rebuildSubs().length, 1, 'the hub’s EOSE did not run the family rebuild');
+  rebuildSubs().at(-1).handlers.oneose();                   // …and so does the rebuild's subscription: no answer
+  await sleep(20);
+  assert.equal(b.api.familyAnswered(church.pub), false, 'fixture: an empty EOSE answered');
+  b.ctx.refetchChurchDocs();                                // back online: the app reopens the church docs
+  hubSubs().at(-1).handlers.oneose();
+  assert.equal(rebuildSubs().length, 2,
+    'COMING BACK ONLINE DID NOT REDO THE REBUILD — the flag was spent on the offline attempt, and the sheet says "Couldn’t reach your church" all session');
+  rebuildSubs().at(-1).handlers.onevent(memberEvt(church, parent, 1000));
+  rebuildSubs().at(-1).handlers.oneose();
+  await sleep(20);
+  assert.equal(b.api.familyAnswered(church.pub), true, 'the online rebuild did not answer');
+  b.ctx.refetchChurchDocs();
+  hubSubs().at(-1).handlers.oneose();
+  assert.equal(rebuildSubs().length, 2, 'an answered rebuild ran again on the next reopen — it is once per answering connection');
+});
+
+// ── 19. THE STAMP BREAKS A SAME-SECOND TIE BY ID, AS THE RELAY DOES (audit of b4ac50d, N8x) ──────────────────
+test('two notices in the same second: the one the relay keeps (lowest id) wins — before and after a restart', async () => {
+  const C = K();
+  let keep, lose;
+  for (;;) {   // the relay keeps the LOWEST id on a tie: make that the removal
+    keep = N({ church: church.pub, children: [] }, 7000);
+    lose = N({ child: C.pub, church: church.pub, children: [C.pub] }, 7000);
+    if (keep.id < lose.id) break;
+  }
+  const storage = memStorage();
+  const P1 = scriptedPool();
+  const b1 = memberBoot(parent, storage, { pool: P1, publish: async () => true });
+  b1.api.subscribeGuardianNotices();
+  P1.notices().handlers.onevent(keep);
+  P1.notices().handlers.onevent(lose);
+  await sleep(20);
+  assert.ok(!b1.shown(church.pub).includes(C.pub), 'A SAME-SECOND NOTICE THE RELAY WOULD HAVE DROPPED WAS APPLIED OVER THE ONE IT KEEPS');
+  const P2 = scriptedPool();
+  const b2 = memberBoot(parent, storage, { pool: P2, publish: async () => true });
+  b2.api.subscribeGuardianNotices();
+  P2.notices().handlers.onevent(lose);
+  await sleep(20);
+  assert.ok(!b2.shown(church.pub).includes(C.pub), 'after a restart the stamp lost the tie-break: the dropped same-second notice was applied');
 });

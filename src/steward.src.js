@@ -992,33 +992,56 @@ function _sendGuardNotice(parentPub, body, links, closed) {
 // is already stored") is retried too, harmlessly: the relay keeps the newest. The only caller is
 // _sendGuardNotice (notifyGuardian, notifyGuardianRemoved, notifyGuardianList).
 const GUARD_RETRY_MS = [5000, 30000, 120000];
+// A RETRY SENDS THE PARENT'S LATEST NOTICE (audit of b4ac50d, item 4). Each notice ran its own retry chain with
+// the event it was given, so with two notices for one parent waiting on a relay that was down, the OLDER chain
+// could fire first while the relay was briefly up and leave it holding the older notice. Every retry now sends
+// the newest notice this console has signed for that parent (keyed by d-tag) — never an older one.
+const _latestGuardNotice = new Map();   // d-tag -> newest notice signed for that parent this session
+// NOT-ACCEPTED, the way nostr-tools reports it: a refusal REJECTS, but an unreachable relay RESOLVES with a
+// "connection failure: …" string (nostr-tools 2.x). Both mean the relay does not hold the notice.
+async function _guardTryOn(urls, ev) {
+  let rs = [];
+  try {
+    rs = await Promise.allSettled(pool.publish(urls, ev).map(p => p.then(v => {
+      if (typeof v === 'string' && v.startsWith('connection failure')) throw new Error(v);
+      return v;
+    })));
+  } catch (e) { return { missed: urls.slice(), refused: urls.map(url => ({ url, error: String((e && e.message) || e || '') })) }; }
+  const missed = [], refused = [];
+  urls.forEach((url, i) => {
+    const r = rs[i];
+    if (r && r.status === 'fulfilled') return;
+    missed.push(url);
+    refused.push({ url, error: (r && r.reason && (r.reason.message || String(r.reason))) || '' });
+  });
+  return { missed, refused };
+}
 async function _publishGuardNotice(evt) {
   await _waitForRegistration();   // the same gate as publish(): a church the relay has never heard of writes nothing
+  const d = ((evt.tags || []).find(t => t[0] === 'd') || [])[1] || '';
+  const prev = _latestGuardNotice.get(d);
+  if (!prev || (evt.created_at || 0) >= (prev.created_at || 0)) _latestGuardNotice.set(d, evt);
   const targets = relays();
   if (!targets.length) return publish(evt);   // publish() reports "no relay" the way every other write does
-  const tryOn = async (urls) => {
-    let rs = [];
-    try {
-      rs = await Promise.allSettled(pool.publish(urls, evt).map(p => p.then(v => {
-        if (typeof v === 'string' && v.startsWith('connection failure')) throw new Error(v);
-        return v;
-      })));
-    } catch (e) { return urls.slice(); }
-    return urls.filter((u, i) => !rs[i] || rs[i].status !== 'fulfilled');
-  };
-  const missed = await tryOn(targets);
-  if (missed.length) {
+  const first = await _guardTryOn(targets, evt);
+  if (first.missed.length) {
     (async () => {
-      let left = missed;
+      let left = first.missed;
       for (const ms of GUARD_RETRY_MS) {
         await new Promise(r => setTimeout(r, ms));
-        try { left = await tryOn(left); } catch (e) {}
+        try { left = (await _guardTryOn(left, _latestGuardNotice.get(d) || evt)).missed; } catch (e) {}
         if (!left.length) return;
       }
     })().catch(() => {});
   }
-  if (missed.length === targets.length) {
-    try { window.dispatchEvent(new CustomEvent('steward-publish-error', { detail: { reason: 'no relay accepted the guardian notice', evt } })); } catch (x) {}
+  if (first.missed.length === targets.length) {
+    // THE RELAY'S OWN WORDS (audit of b4ac50d, item 5). A fixed "no relay accepted" made the banner say "check
+    // the connection" for a real refusal — a wrong clock, "not a member" — that publish() used to pass through
+    // and the console's banner (stew-dashboard.jsx publishErrorMessage) raises its own alarm for. Same shape as
+    // publish(): the first reason a relay actually SAID, else the first reason at all.
+    const said = first.refused.find(r => r.error && !/^connection failure/i.test(r.error));
+    const reason = (said && said.error) || (first.refused[0] && first.refused[0].error) || 'no relay accepted the guardian notice';
+    try { window.dispatchEvent(new CustomEvent('steward-publish-error', { detail: { reason, evt, refused: first.refused } })); } catch (x) {}
     return false;
   }
   try { window.dispatchEvent(new CustomEvent('steward-publish-ok', { detail: { evt } })); } catch (x) {}

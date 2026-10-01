@@ -15603,30 +15603,41 @@ zoo`.split("\n");
     return _publishGuardNotice(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", GUARDNOTICE_D + parentPub], ["t", NET], ["p", parentPub]], content }), sk));
   }
   var GUARD_RETRY_MS = [5e3, 3e4, 12e4];
+  var _latestGuardNotice = /* @__PURE__ */ new Map();
+  async function _guardTryOn(urls, ev) {
+    let rs = [];
+    try {
+      rs = await Promise.allSettled(pool.publish(urls, ev).map((p) => p.then((v) => {
+        if (typeof v === "string" && v.startsWith("connection failure")) throw new Error(v);
+        return v;
+      })));
+    } catch (e) {
+      return { missed: urls.slice(), refused: urls.map((url) => ({ url, error: String(e && e.message || e || "") })) };
+    }
+    const missed = [], refused = [];
+    urls.forEach((url, i3) => {
+      const r = rs[i3];
+      if (r && r.status === "fulfilled") return;
+      missed.push(url);
+      refused.push({ url, error: r && r.reason && (r.reason.message || String(r.reason)) || "" });
+    });
+    return { missed, refused };
+  }
   async function _publishGuardNotice(evt) {
     await _waitForRegistration();
+    const d = ((evt.tags || []).find((t) => t[0] === "d") || [])[1] || "";
+    const prev = _latestGuardNotice.get(d);
+    if (!prev || (evt.created_at || 0) >= (prev.created_at || 0)) _latestGuardNotice.set(d, evt);
     const targets = relays();
     if (!targets.length) return publish(evt);
-    const tryOn = async (urls) => {
-      let rs = [];
-      try {
-        rs = await Promise.allSettled(pool.publish(urls, evt).map((p) => p.then((v) => {
-          if (typeof v === "string" && v.startsWith("connection failure")) throw new Error(v);
-          return v;
-        })));
-      } catch (e) {
-        return urls.slice();
-      }
-      return urls.filter((u, i3) => !rs[i3] || rs[i3].status !== "fulfilled");
-    };
-    const missed = await tryOn(targets);
-    if (missed.length) {
+    const first = await _guardTryOn(targets, evt);
+    if (first.missed.length) {
       (async () => {
-        let left = missed;
+        let left = first.missed;
         for (const ms of GUARD_RETRY_MS) {
           await new Promise((r) => setTimeout(r, ms));
           try {
-            left = await tryOn(left);
+            left = (await _guardTryOn(left, _latestGuardNotice.get(d) || evt)).missed;
           } catch (e) {
           }
           if (!left.length) return;
@@ -15634,9 +15645,11 @@ zoo`.split("\n");
       })().catch(() => {
       });
     }
-    if (missed.length === targets.length) {
+    if (first.missed.length === targets.length) {
+      const said = first.refused.find((r) => r.error && !/^connection failure/i.test(r.error));
+      const reason = said && said.error || first.refused[0] && first.refused[0].error || "no relay accepted the guardian notice";
       try {
-        window.dispatchEvent(new CustomEvent("steward-publish-error", { detail: { reason: "no relay accepted the guardian notice", evt } }));
+        window.dispatchEvent(new CustomEvent("steward-publish-error", { detail: { reason, evt, refused: first.refused } }));
       } catch (x) {
       }
       return false;

@@ -6736,6 +6736,29 @@
     }
   }
   var _familyAnswered = /* @__PURE__ */ new Set();
+  var _noticeApplied = /* @__PURE__ */ new Set();
+  var _heldReqs = /* @__PURE__ */ new Map();
+  var _rebuildAnswered = /* @__PURE__ */ new Set();
+  function _forgetFamilySession() {
+    _familyAnswered.clear();
+    _noticeApplied.clear();
+    _heldReqs.clear();
+    _rebuildAnswered.clear();
+  }
+  function _stampUnapplied(cp) {
+    const key = cp + "|" + pub;
+    return !!_noticeSeenGet(key) && !_noticeApplied.has(key);
+  }
+  function _releaseHeld(cp, skip) {
+    const held = _heldReqs.get(cp);
+    if (!held) return;
+    _heldReqs.delete(cp);
+    for (const [child, e] of held) {
+      if (skip && skip.has(child) || _unlinkedNow.has(child)) continue;
+      if (_loadChildren().some((c) => c && c.child === child)) continue;
+      _saveChildLink({ child, name: "", churchPub: cp, ts: e.created_at || 0 });
+    }
+  }
   function _newerDoc(a, b) {
     const at = a.created_at || 0, bt = b.created_at || 0;
     return at > bt || at === bt && String(a.id || "") < String(b.id || "");
@@ -6850,8 +6873,26 @@
       }).catch(() => {
       });
     }
+    _releaseHeld(cp, listed);
     _familyAnswered.add(cp);
     _familyChanged(cp);
+  }
+  function _maybeRebuildFamily(hub) {
+    if (!sk || hub.familyRebuilt) return;
+    hub.familyRebuilt = true;
+    let p;
+    try {
+      p = _rebuildFamily(hub.cp);
+    } catch (err) {
+      hub.familyRebuilt = false;
+      _featureFailed("family rebuild", "", err);
+      return;
+    }
+    Promise.resolve(p).then(() => {
+      if (!_rebuildAnswered.has(hub.cp)) hub.familyRebuilt = false;
+    }, () => {
+      hub.familyRebuilt = false;
+    });
   }
   function _rebuildFamily(churchNpub) {
     const cp = toPub(churchNpub) || churchNpub;
@@ -6880,10 +6921,19 @@
             continue;
           }
           if (_loadChildren().some((c) => c && c.child === child)) continue;
+          const stamp = _stampUnapplied(cp) ? _noticeSeenGet(cp + "|" + pub) : null;
+          if (stamp && (e.created_at || 0) <= (stamp.created_at || 0)) {
+            if (!_heldReqs.has(cp)) _heldReqs.set(cp, /* @__PURE__ */ new Map());
+            _heldReqs.get(cp).set(child, e);
+            continue;
+          }
           _saveChildLink({ child, name: "", churchPub: cp, ts: e.created_at || 0 });
           added++;
         }
-        if (eosed && sawOwn) _familyAnswered.add(cp);
+        if (eosed && sawOwn) {
+          _familyAnswered.add(cp);
+          _rebuildAnswered.add(cp);
+        }
         _familyChanged(cp);
         resolve(added);
       };
@@ -8676,14 +8726,7 @@
       oneose() {
         _hubEosed(hub);
         _docsHubSaveSoon(hub);
-        if (sk && !hub.familyRebuilt) {
-          hub.familyRebuilt = true;
-          try {
-            _rebuildFamily(hub.cp);
-          } catch (err) {
-            _featureFailed("family rebuild", "", err);
-          }
-        }
+        _maybeRebuildFamily(hub);
         for (const h of [...hub.handlers]) {
           try {
             h.oneose && h.oneose();
@@ -10235,7 +10278,7 @@
         });
         for (const k of Object.keys(profiles)) delete profiles[k];
         _k0Seen.clear();
-        _familyAnswered.clear();
+        _forgetFamilySession();
         window.Fellowship.myProfile = null;
       } catch (e) {
         console.warn("[fellowship] clearCommunityCache failed", e);
@@ -11775,6 +11818,7 @@
           const prevN = _noticeSeenGet(key);
           if (prevN && prevN.id !== e.id && _newerDoc(prevN, e)) return;
           _noticeSeenSet(key, { created_at: e.created_at || 0, id: String(e.id || "") });
+          _noticeApplied.add(key);
           if (Array.isArray(dec.children)) {
             _applyGuardianList(cp, dec, e);
             if (dec.children.length) _needAuth = true;
@@ -11786,6 +11830,7 @@
             const entry = _loadChildren().find((c) => c && c.child === child);
             _removeChildLink(child);
             if (_ownRequestKnown(entry, child)) _retractGuardReq(child, cp, entry && entry.ts);
+            _releaseHeld(cp);
             try {
               window.dispatchEvent(new CustomEvent("trinity-guardian-removed", { detail: { child } }));
             } catch (x) {
@@ -11798,6 +11843,7 @@
           if (ex && ex.viaSteward) return;
           _saveChildLink({ child: dec.child, name: dec.name || ex && ex.name || "", churchPub: cp, ts: ex && ex.ts || e.created_at || Math.floor(Date.now() / 1e3), viaSteward: true });
           _unlinkedNow.delete(dec.child);
+          _releaseHeld(cp);
           _needAuth = true;
           try {
             window.dispatchEvent(new CustomEvent("trinity-guardian-added", { detail: { child: dec.child } }));
@@ -11816,13 +11862,15 @@
       };
     },
     // HAS THIS CHURCH ANSWERED "WHO ARE MY CHILDREN" YET, THIS SESSION? True once a whole-list notice from it has
-    // been applied or the rebuild of this parent's own requests has finished — and true at once with no key, when
-    // neither can ever happen. The Family sheet uses it to say "checking" instead of "no children linked … you
-    // can make one below", which invited a second account for a child whose link simply had not arrived yet.
+    // been applied or the rebuild of this parent's own requests got a genuine answer — and true at once with no
+    // key, when neither can ever happen. The Family sheet uses it to say "checking" instead of "no children
+    // linked … you can make one below", which invited a second account for a child whose link simply had not
+    // arrived yet. NOT answered while a stamped notice exists that this session has not applied (NEW-1, see
+    // _noticeApplied): the rebuild answering for the parent's own requests says nothing about the links.
     familyAnswered(churchNpub) {
       if (!sk) return true;
       const cp = toPub(churchNpub) || churchNpub;
-      return !!cp && _familyAnswered.has(cp);
+      return !!cp && _familyAnswered.has(cp) && !_stampUnapplied(cp);
     },
     // ── safeguarding v2: a parent creates a child account they own (sets the child up in the church and asks
     // the steward to confirm the link). Returns { childPub, mnemonic, npub, name, published, ok } so the UI can

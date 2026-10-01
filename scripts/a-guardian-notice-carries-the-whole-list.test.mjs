@@ -19,7 +19,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fnBody } from './test-slice.mjs';
-import { K, consoleBoot, decryptNotice, STEWARD } from './family-harness.mjs';
+import { K, sleep, consoleBoot, decryptNotice, STEWARD } from './family-harness.mjs';
 
 const DASH = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
 const church = K(), P = K(), Q = K();
@@ -37,8 +37,11 @@ const sealed = async (fn) => {
 const MAP = { [C1]: [P.pub], [C2]: [Q.pub, P.pub], [C3]: [Q.pub] };
 
 test('a link notice carries the child, its name, the church — and the parent’s whole list and closed requests', async () => {
-  // closed pairs: C3 declined/removed for P; C1 closed once but linked again now; C2's pair is ANOTHER parent's
-  const CLOSED = { [C3 + '|' + P.pub]: 1, [C1 + '|' + P.pub]: 1, [C2 + '|' + Q.pub]: 1 };
+  // closed pairs: C3 declined/removed for P; C1 closed once but linked again now; C2's pair is ANOTHER parent's;
+  // and C4's pair is another parent's for a child P is NOT linked to — so only the parent check can exclude it
+  // (audit of b4ac50d, C3x: without C4 nothing caught that check being removed)
+  const C4 = K().pub;
+  const CLOSED = { [C3 + '|' + P.pub]: 1, [C1 + '|' + P.pub]: 1, [C2 + '|' + Q.pub]: 1, [C4 + '|' + Q.pub]: 1 };
   const d = await sealed(api => api.notifyGuardian(P.pub, C1, 'Cleo', MAP, CLOSED));
   assert.equal(d.child, C1); assert.equal(d.name, 'Cleo'); assert.equal(d.church, church.pub);
   assert.deepEqual(d.children, [C1, C2].sort(), 'the notice does not carry the parent’s whole list (or carries another parent’s child)');
@@ -178,4 +181,58 @@ test('reseatMember: a child reconnected on a new key — every parent of theirs 
   const NEWC = K().pub;
   const r = await reseat({ guardians: { [C1]: [P.pub, Q.pub] }, minors: [C1] }, C1, NEWC);
   assert.deepEqual(r.listed.map(a => a[0]).sort(), [P.pub, Q.pub].sort(), 'a parent of the reconnected child was not told');
+});
+
+// ── how a guardian notice is published (audit of b4ac50d, items 4 and 5) ────────────────────────────────────────
+// A pool in nostr-tools' own shape: an unreachable relay RESOLVES "connection failure: …"; a refusal REJECTS.
+function shapedPool(state) {
+  const calls = [];
+  return {
+    calls,
+    subscribeMany() { return { close() {} }; },
+    publish(urls, evt) {
+      return urls.map(u => { calls.push({ url: u, id: evt.id });
+        if (state.refuse) return Promise.reject(new Error(state.refuse));
+        if (!state.up.has(u)) return Promise.resolve('connection failure: ' + u + ' unreachable');
+        return Promise.resolve(''); });
+    },
+  };
+}
+test('a retry sends the parent’s LATEST notice — never an older one the relay would then keep', async () => {
+  const state = { up: new Set(['wss://a']) };
+  const pool = shapedPool(state);
+  const con = consoleBoot(church, { relays: ['wss://a', 'wss://r'], pool, retryMs: [40, 80, 160] });
+  const first = await con.api.notifyGuardian(P.pub, C1, 'Cleo', { [C1]: [P.pub] }, {});
+  const second = await con.api.notifyGuardian(P.pub, C2, 'Cy', { [C1]: [P.pub], [C2]: [P.pub] }, {});
+  assert.ok(first && second && first.id !== second.id, 'fixture: two notices for one parent');
+  state.up.add('wss://r');   // relay R comes back
+  await sleep(400);
+  const toR = pool.calls.filter(c => c.url === 'wss://r');
+  const afterSecond = toR.slice(toR.findIndex(c => c.id === second.id));
+  assert.ok(afterSecond.length > 1, 'fixture: nothing was retried to the relay that was down');
+  assert.deepEqual([...new Set(afterSecond.map(c => c.id))], [second.id],
+    'A RETRY SENT AN OLDER NOTICE after a newer one for the same parent — a relay up briefly keeps the older one');
+});
+test('an unreachable relay ("connection failure", resolved) counts as missed and is retried', async () => {
+  const state = { up: new Set(['wss://a']) };
+  const pool = shapedPool(state);
+  const con = consoleBoot(church, { relays: ['wss://a', 'wss://r'], pool, retryMs: [40, 80, 160] });
+  const evt = await con.api.notifyGuardian(P.pub, C1, 'Cleo', { [C1]: [P.pub] }, {});
+  assert.ok(evt, 'the notice was reported refused though one relay took it');
+  await sleep(300);
+  assert.ok(pool.calls.filter(c => c.url === 'wss://r').length > 1,
+    'A RELAY THAT ANSWERED "connection failure" WAS COUNTED AS HOLDING THE NOTICE and never retried');
+});
+test('when every relay refuses a notice, the console is told the relay’s own words — and says the right thing', async () => {
+  const state = { up: new Set(['wss://a', 'wss://b']), refuse: 'blocked: not a member of this church' };
+  const con = consoleBoot(church, { relays: ['wss://a', 'wss://b'], pool: shapedPool(state), retryMs: [5000] });
+  const r = await con.api.notifyGuardian(P.pub, C1, 'Cleo', { [C1]: [P.pub] }, {});
+  assert.equal(r, false, 'a notice every relay refused was reported sent');
+  const err = con.events.find(e => e.type === 'steward-publish-error');
+  assert.ok(err, 'no publish error was raised');
+  assert.match(String(err.detail.reason), /not a member/, 'THE REFUSAL WAS REPLACED BY A FIXED STRING: ' + JSON.stringify(err.detail.reason));
+  // …and the console's banner (the SHIPPED publishErrorMessage) reads it as the relay-rejection it is
+  const pem = new Function('window', fnBody(DASH, 'function publishErrorMessage(reason, evt, opts) {', 'publishErrorMessage') + '\nreturn publishErrorMessage;')({ Steward: {} });
+  const msg = pem(err.detail.reason, err.detail.evt, {});
+  assert.equal(msg.wrongChurch, true, 'the banner said "check the connection" for a relay that refused this church: ' + msg.msg);
 });

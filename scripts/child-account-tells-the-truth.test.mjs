@@ -247,6 +247,8 @@ function nextLaunch({ relay, children, parentPub }) {
     // never re-typed here — a copy would stay green over a regression in the real one (re-audit of b7624a8).
     ..._shippedHelpers,
     _unlinkedNow: new Set(), _ownReqAt: new Map(), _familyAnswered: new Set(),
+    // 2026-10-01 (audit of b4ac50d): no guardian notice was ever stamped on this phone, so nothing is held back
+    _stampUnapplied: () => false, _heldReqs: new Map(), _rebuildAnswered: new Set(),
     _retractGuardReq: async () => true, _familyChanged: () => {}, _publishAny: async () => true,
     _dtag: dOf,
     _loadChildren: () => children,

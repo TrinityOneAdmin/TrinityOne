@@ -111,10 +111,11 @@ export function realPool(who) {
       }
       return { close() { closed = true; mine.forEach(w => { try { w.close(); } catch {} }); } };
     },
-    // nostr-tools' shape: one promise per relay — resolved when that relay says OK true, rejected otherwise
+    // nostr-tools' shape (2.x): one promise per relay — resolved when that relay says OK true, REJECTED when it
+    // refuses, and RESOLVED with "connection failure: …" when it cannot be reached (audit of b4ac50d, C2x)
     publish(urls, evt) {
       return urls.map(u => publishTo(u, evt).then(([ok, why]) => { if (!ok) throw new Error(why || 'refused'); return why; },
-        () => { throw new Error('connection failure'); }));
+        () => 'connection failure: ' + u));
     },
     closeAll() { sockets.forEach(w => { try { w.close(); } catch {} }); },
   };
@@ -167,6 +168,8 @@ export function memberBoot(parent, storage, opts = {}) {
     _publishAny: async (_r, evt) => (opts.publish || realPublish(relays))(evt),
     pool,
     profiles: {}, _k0Seen: new Set(), _needAuth: false,
+    _docsHubs: new Map(), _hubSince: () => 0, _hubEosed: () => {}, _docsHubSaveSoon: () => {},
+    _featureFailed: (...a) => { events.push({ type: 'feature-failed', detail: a }); },
     window: { Fellowship: { myProfile: null }, dispatchEvent(ev) { events.push(ev); return true; } },
     CustomEvent: class { constructor(t, o) { this.type = t; this.detail = o && o.detail; } },
     console: { warn() {}, log() {} },
@@ -177,6 +180,12 @@ export function memberBoot(parent, storage, opts = {}) {
     topVar(FELLOWSHIP, 'FAMILY_KEY'), topVar(FELLOWSHIP, 'FAMILY_REMOVED_KEY'), topVar(FELLOWSHIP, '_unlinkedNow'),
     topVar(FELLOWSHIP, '_retractedNow'), topVar(FELLOWSHIP, '_ownReqAt'), topVar(FELLOWSHIP, '_noticeSeen'),
     topVar(FELLOWSHIP, 'NOTICE_SEEN_KEY'), topLevel(FELLOWSHIP, '_noticeSeenGet'), topLevel(FELLOWSHIP, '_noticeSeenSet'),
+    topVar(FELLOWSHIP, '_noticeApplied'), topVar(FELLOWSHIP, '_heldReqs'), topVar(FELLOWSHIP, '_rebuildAnswered'),
+    topLevel(FELLOWSHIP, '_forgetFamilySession'), topLevel(FELLOWSHIP, '_stampUnapplied'), topLevel(FELLOWSHIP, '_releaseHeld'),
+    topLevel(FELLOWSHIP, '_maybeRebuildFamily'),
+    // the church-docs hub, for the tests of when the rebuild runs: the SHIPPED _docsHubOpen and refetchChurchDocs.
+    // Its EOSE path is what is driven; the names it only touches on that path are no-ops here.
+    ...(opts.withHub ? [topLevel(FELLOWSHIP, '_docsHubOpen'), topLevel(FELLOWSHIP, 'refetchChurchDocs')] : []),
     topVar(FELLOWSHIP, '_familyAnswered'), topVar(FELLOWSHIP, '_isRetractedReq'), topVar(FELLOWSHIP, '_hex64'),
     topVar(FELLOWSHIP, '_ownRequestKnown'),
     topLevel(FELLOWSHIP, '_newerDoc'), topLevel(FELLOWSHIP, '_superseded'), topLevel(FELLOWSHIP, '_loadChildren'),
@@ -206,6 +215,7 @@ export function memberBoot(parent, storage, opts = {}) {
 export function consoleBoot(church, opts = {}) {
   const relays = opts.relays || [];
   const published = [];
+  const events = [];
   const stamps = new Map();
   const base = opts.pool || realPool(church);
   const pool = {
@@ -226,7 +236,7 @@ export function consoleBoot(church, opts = {}) {
     // publish() is reached only when the church has no relay at all (its refusal path); record and refuse
     publish: async (evt) => { if (!published.some(e => e.id === evt.id)) published.push(evt); return false; },
     _waitForRegistration: async () => {},
-    window: { dispatchEvent() { return true; } }, CustomEvent: class { constructor(t, o) { this.type = t; this.detail = o && o.detail; } },
+    window: { dispatchEvent(ev) { events.push(ev); return true; } }, CustomEvent: class { constructor(t, o) { this.type = t; this.detail = o && o.detail; } },
     now, localStorage: opts.storage || memStorage(),
     pool, relays: () => relays,
     _authFuture: () => false, _byChurch: (e) => e.pubkey === church.pub,
@@ -236,7 +246,8 @@ export function consoleBoot(church, opts = {}) {
   vm.createContext(ctx);
   vm.runInContext([
     topLevel(STEWARD, 'toPubHex'), topLevel(STEWARD, '_childrenOfParent'), topLevel(STEWARD, '_closedChildrenOfParent'),
-    topLevel(STEWARD, '_sendGuardNotice'), topLevel(STEWARD, '_publishGuardNotice'),
+    topLevel(STEWARD, '_sendGuardNotice'), topVar(STEWARD, '_latestGuardNotice'), topLevel(STEWARD, '_guardTryOn'),
+    topLevel(STEWARD, '_publishGuardNotice'),
     opts.retryMs ? 'var GUARD_RETRY_MS = ' + JSON.stringify(opts.retryMs) + ';' : topVar(STEWARD, 'GUARD_RETRY_MS'),
     'globalThis.API = {',
     method(STEWARD, 'notifyGuardian(parentPubIn, childPubIn, childName, links, closed) {', 'notifyGuardian') + ',',
@@ -246,7 +257,7 @@ export function consoleBoot(church, opts = {}) {
     method(STEWARD, 'subscribeGuardianRequests(onReqs) {', 'subscribeGuardianRequests') + ',',
     '};',
   ].join('\n'), ctx);
-  return { api: ctx.API, published, ctx, close: () => { if (ctx.pool.closeAll) ctx.pool.closeAll(); } };
+  return { api: ctx.API, published, events, ctx, close: () => { if (ctx.pool.closeAll) ctx.pool.closeAll(); } };
 }
 
 // ── documents as the real writers sign them ───────────────────────────────────────────────────────────────────

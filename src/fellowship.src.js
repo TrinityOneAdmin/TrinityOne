@@ -263,6 +263,39 @@ function _noticeSeenSet(key, v) {
 // Churches whose family this session KNOWS — set only by a whole-list notice applied, or by a rebuild that got a
 // GENUINE answer (see _rebuildFamily); cleared by the PIN lock. Until then an empty family is "not known yet".
 const _familyAnswered = new Set();
+// WHAT THE PERSISTED STAMP MEANS FOR THE REST OF THE SESSION (audit of b4ac50d, NEW-1 / NEW-2). The stamp says
+// "a notice this new exists" — so until a notice at least that new has been APPLIED this session, this phone
+// does not know the church's current answer: the relay holding it is unreachable, and the one it can reach
+// holds an older notice the stamp (rightly) refuses. Two things follow, and both are decided here:
+//   · the family is NOT answered for that church (familyAnswered) — the sheet says "checking"/"couldn't
+//     reach", never "No children linked … make one below" to a parent the church has linked;
+//   · a request of the parent's own that is OLDER than the stamped notice is HELD, not shown as pending. Was
+//     the church's newest notice a decision on it? Only that notice can say — its `closed` names every
+//     declined or removed request of this parent's, its `children` every link — and this phone cannot read
+//     it. Shown, a declined request comes back as "Waiting for steward to confirm" from a relay that missed
+//     the withdrawal. NOT "older than the notice means closed or superseded": a request nobody has decided
+//     yet is older than any unrelated notice that followed it, and the notice simply does not name it. So
+//     the rule is to wait: once a notice at least as new as the stamp is applied, a held request it names
+//     as closed is withdrawn, one it lists is already linked, and any other is shown pending. A request
+//     NEWER than the stamp cannot have been decided by it and is shown at once.
+const _noticeApplied = new Set();   // "<church>|<parent>" whose stamped (or a newer) notice was applied this session
+const _heldReqs = new Map();        // church -> Map(child -> newest live request) held back until that happens
+const _rebuildAnswered = new Set(); // churches whose rebuild got a genuine answer this session (see _maybeRebuildFamily)
+// The PIN lock forgets all of this along with the family itself (clearCommunityCache).
+function _forgetFamilySession() { _familyAnswered.clear(); _noticeApplied.clear(); _heldReqs.clear(); _rebuildAnswered.clear(); }
+function _stampUnapplied(cp) { const key = cp + '|' + pub; return !!_noticeSeenGet(key) && !_noticeApplied.has(key); }
+// Release the requests held for church `cp` once its current notice has been applied: one it names as removed or
+// closed has already gone through _applyGuardianList's withdrawal (it is in _unlinkedNow); one it lists is
+// linked; any other is a genuinely pending request and is shown as one.
+function _releaseHeld(cp, skip) {
+  const held = _heldReqs.get(cp); if (!held) return;
+  _heldReqs.delete(cp);
+  for (const [child, e] of held) {
+    if ((skip && skip.has(child)) || _unlinkedNow.has(child)) continue;
+    if (_loadChildren().some(c => c && c.child === child)) continue;
+    _saveChildLink({ child, name: '', churchPub: cp, ts: e.created_at || 0 });
+  }
+}
 // NIP-01's order for two copies of one replaceable document, the order the relay's store keeps
 // (scripts/event-store.mjs): newer created_at wins; on a tie the LOWEST id wins.
 function _newerDoc(a, b) {
@@ -352,8 +385,22 @@ function _applyGuardianList(cp, dec, e) {
     }
     Promise.all(outs).then(oks => { if (oks.every(Boolean)) { try { localStorage.removeItem(FAMILY_REMOVED_KEY); } catch (x) {} } }).catch(() => {});
   }
+  _releaseHeld(cp, listed);
   _familyAnswered.add(cp);
   _familyChanged(cp);
+}
+// THE REBUILD, ONCE PER CONNECTION THAT ANSWERED (audit of b4ac50d, item 2). The docs hub runs it at its EOSE,
+// once per connection (`hub.familyRebuilt`, re-armed by reconnectAll). After an OFFLINE start that EOSE is
+// nostr-tools giving up on a dead socket, the rebuild gets no genuine answer — and the flag was spent on it, so
+// coming back online (refetchChurchDocs reopens the hub; its EOSE fires again) did not redo it, and the Family
+// sheet said "Couldn't reach your church" for the rest of the session while online. The flag now stays set
+// only when the rebuild got a genuine answer (_rebuildAnswered); otherwise the next hub EOSE tries again.
+function _maybeRebuildFamily(hub) {
+  if (!sk || hub.familyRebuilt) return;
+  hub.familyRebuilt = true;
+  let p;
+  try { p = _rebuildFamily(hub.cp); } catch (err) { hub.familyRebuilt = false; _featureFailed('family rebuild', '', err); return; }
+  Promise.resolve(p).then(() => { if (!_rebuildAnswered.has(hub.cp)) hub.familyRebuilt = false; }, () => { hub.familyRebuilt = false; });
 }
 // REBUILD THE FAMILY LIST FROM THE RELAY. trinityone.family is written when a child account is created and
 // read straight back — nothing ever rebuilt it. It is also in the locked-boot wipe list, so restoring an
@@ -387,6 +434,13 @@ function _rebuildFamily(churchNpub) {
         // Removed this session, or by an older build: skip it, and retract the request that is still live.
         if (_unlinkedNow.has(child) || legacy.includes(child)) { _retractGuardReq(child, cp, e.created_at); continue; }
         if (_loadChildren().some(c => c && c.child === child)) continue;
+        // older than the church's newest notice, whose content this phone cannot read yet: hold it (see _heldReqs)
+        const stamp = _stampUnapplied(cp) ? _noticeSeenGet(cp + '|' + pub) : null;
+        if (stamp && (e.created_at || 0) <= (stamp.created_at || 0)) {
+          if (!_heldReqs.has(cp)) _heldReqs.set(cp, new Map());
+          _heldReqs.get(cp).set(child, e);
+          continue;
+        }
         _saveChildLink({ child, name: '', churchPub: cp, ts: e.created_at || 0 });
         added++;
       }
@@ -397,7 +451,7 @@ function _rebuildFamily(churchNpub) {
       // at least one of this parent's OWN documents: those are served only over a socket authenticated as this
       // parent (canRead's own-event rule), and every member has a member: document, so a relay that sent one
       // answered for real. A timeout, a dead relay or an EOSE that served nothing proves nothing.
-      if (eosed && sawOwn) _familyAnswered.add(cp);
+      if (eosed && sawOwn) { _familyAnswered.add(cp); _rebuildAnswered.add(cp); }
       _familyChanged(cp);
       resolve(added);
     };
@@ -2481,7 +2535,7 @@ function _docsHubOpen(hub) {
       // once we hold a signing key — so it survives the unlock reconnect that used to kill it, and it works
       // at a cold boot, where the old call site ran before any hub existed. Once per hub per connection;
       // reconnectAll clears the flag so a fresh authenticated socket tries again.
-      if (sk && !hub.familyRebuilt) { hub.familyRebuilt = true; try { _rebuildFamily(hub.cp); } catch (err) { _featureFailed('family rebuild', '', err); } }
+      _maybeRebuildFamily(hub);
       for (const h of [...hub.handlers]) { try { h.oneose && h.oneose(); } catch (err) { _featureFailed('load complete', '', err); } }
     },
   });
@@ -4066,7 +4120,7 @@ window.Fellowship = {
       _k0Seen.clear();
       // …and what this session knew about the family: the list it showed is gone, so until the church answers
       // again the Family sheet must say "checking", not "no children linked — make one below".
-      _familyAnswered.clear();
+      _forgetFamilySession();
       window.Fellowship.myProfile = null;
     } catch (e) { console.warn('[fellowship] clearCommunityCache failed', e); }
   },
@@ -5473,6 +5527,7 @@ window.Fellowship = {
         const prevN = _noticeSeenGet(key);
         if (prevN && prevN.id !== e.id && _newerDoc(prevN, e)) return;
         _noticeSeenSet(key, { created_at: e.created_at || 0, id: String(e.id || '') });
+        _noticeApplied.add(key);   // at least as new as the stamp, by the check above
         if (Array.isArray(dec.children)) {
           _applyGuardianList(cp, dec, e);
           if (dec.children.length) _needAuth = true;
@@ -5487,6 +5542,7 @@ window.Fellowship = {
           const entry = _loadChildren().find(c => c && c.child === child);
           _removeChildLink(child);
           if (_ownRequestKnown(entry, child)) _retractGuardReq(child, cp, entry && entry.ts);
+          _releaseHeld(cp);   // an older console names no list: every other held request is shown pending, as before
           try { window.dispatchEvent(new CustomEvent('trinity-guardian-removed', { detail: { child } })); } catch (x) {}
           _familyChanged(cp);
           return;
@@ -5499,6 +5555,7 @@ window.Fellowship = {
         // predates this flag (so parents linked before the fix heal on the next notice, without a re-link).
         _saveChildLink({ child: dec.child, name: dec.name || (ex && ex.name) || '', churchPub: cp, ts: (ex && ex.ts) || e.created_at || Math.floor(Date.now() / 1000), viaSteward: true });
         _unlinkedNow.delete(dec.child);
+        _releaseHeld(cp);
         _needAuth = true;   // now a guardian → authenticate to read the church's confirmation
         try { window.dispatchEvent(new CustomEvent('trinity-guardian-added', { detail: { child: dec.child } })); } catch (x) {}
         _familyChanged(cp);
@@ -5508,13 +5565,15 @@ window.Fellowship = {
     return () => { try { sub.close(); } catch {} };
   },
   // HAS THIS CHURCH ANSWERED "WHO ARE MY CHILDREN" YET, THIS SESSION? True once a whole-list notice from it has
-  // been applied or the rebuild of this parent's own requests has finished — and true at once with no key, when
-  // neither can ever happen. The Family sheet uses it to say "checking" instead of "no children linked … you
-  // can make one below", which invited a second account for a child whose link simply had not arrived yet.
+  // been applied or the rebuild of this parent's own requests got a genuine answer — and true at once with no
+  // key, when neither can ever happen. The Family sheet uses it to say "checking" instead of "no children
+  // linked … you can make one below", which invited a second account for a child whose link simply had not
+  // arrived yet. NOT answered while a stamped notice exists that this session has not applied (NEW-1, see
+  // _noticeApplied): the rebuild answering for the parent's own requests says nothing about the links.
   familyAnswered(churchNpub) {
     if (!sk) return true;
     const cp = toPub(churchNpub) || churchNpub;
-    return !!cp && _familyAnswered.has(cp);
+    return !!cp && _familyAnswered.has(cp) && !_stampUnapplied(cp);
   },
 
   // ── safeguarding v2: a parent creates a child account they own (sets the child up in the church and asks

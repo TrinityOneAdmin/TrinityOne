@@ -141,7 +141,13 @@ test('a guardian notice goes to every relay, and to a relay that was down when i
   await join(P, [A]);
   const LATE = 8943, lateUrl = `ws://127.0.0.1:${LATE}/relay`;
   await requireFreePort(LATE, 'a-removed-parent-never-sees-the-child-again.test.mjs');
-  const con = consoleBoot(church, { relays: [A.url, B.url, lateUrl], retryMs: [1500, 3000, 6000] });
+  // nostr-tools' OWN pool, as the console uses it: an unreachable relay answers "connection failure" by RESOLVING
+  // (audit of b4ac50d, C2x — a harness pool that rejected instead hid a broken check)
+  const { SimplePool, useWebSocketImplementation } = await import('nostr-tools/pool');
+  const { WebSocket } = await import('ws');
+  useWebSocketImplementation(WebSocket);
+  const sp = new SimplePool();
+  const con = consoleBoot(church, { relays: [A.url, B.url, lateUrl], retryMs: [1500, 3000, 6000], pool: sp });
   const evt = await con.api.notifyGuardian(P.pub, C.pub, 'Cleo', { [C.pub]: [P.pub] }, {});
   assert.ok(evt, 'the notice was reported refused though two relays were up');
   for (const r of [A, B]) {
@@ -153,7 +159,7 @@ test('a guardian notice goes to every relay, and to a relay that was down when i
     late = await startRelay(LATE, church.pub);
     const ok = await until(async () => (await ask(late.url, church, { kinds: [30078], authors: [church.pub] }, 1500)).some(e => e.id === evt.id), 14000);
     assert.ok(ok, 'A RELAY THAT WAS DOWN WHEN THE NOTICE WENT OUT NEVER GOT IT — a phone that reads it keeps the older notice');
-  } finally { late && late.stop(); con.close(); }
+  } finally { late && late.stop(); try { sp.destroy(); } catch {} }
 });
 
 // ── THE NEWEST NOTICE SURVIVES A RESTART (owner's plan, item 2), on real relays ──────────────────────────────
@@ -230,4 +236,74 @@ test('a rebuild over a relay that cannot be reached does not mark the family kno
   await b2.api._rebuildFamily(church.pub);
   b2.close();
   assert.equal(b2.api.familyAnswered(church.pub), true, 'CONTROL: a relay that genuinely answered did not mark the family known');
+});
+
+// ── THE STAMP AND THE REBUILD AFTER A LOCK (audit of b4ac50d, NEW-1 and NEW-2), on real relays ──────────────────
+// NEW-1: a parent linked to C and D; the notice adding D reached relay B only. Lock; relay B unreachable. The
+// stamp rightly refuses relay A's older notice — but the rebuild of the parent's own requests then marked the
+// family answered, and the sheet told a linked parent "No children linked … make one below".
+test('a linked parent after a lock, with the newest notice’s relay unreachable: not answered — then the children return', async () => {
+  const P = K(), C = K(), D = K();
+  await join(P, [A, B]);
+  const n1 = noticeEvt(church, P, { child: C.pub, name: 'Cal', church: church.pub, children: [C.pub], closed: [] }, now() - 200);
+  for (const r of [A, B]) assert.equal((await publishTo(r.url, n1))[0], true);
+  assert.equal((await publishTo(B.url, noticeEvt(church, P, { child: D.pub, name: 'Dee', church: church.pub, children: [C.pub, D.pub], closed: [] }, now() - 100)))[0], true);
+  const storage = memStorage();
+  const b1 = memberBoot(P, storage, { relays: [A.url, B.url] });
+  let u = b1.api.subscribeGuardianNotices();
+  assert.ok(await until(() => b1.shown(church.pub).length === 2, 6000), 'fixture: both children did not show');
+  u(); b1.close();
+  b1.api.clearCommunityCache();   // the PIN lock
+  const dead = `ws://127.0.0.1:${PORT_DEAD}/relay`;
+  const b2 = memberBoot(P, storage, { relays: [A.url, dead] });
+  u = b2.api.subscribeGuardianNotices();
+  await sleep(1500);
+  await b2.api._rebuildFamily(church.pub);   // the docs hub's EOSE runs this — relay A answers it genuinely
+  const shown = b2.shown(church.pub), answered = b2.api.familyAnswered(church.pub);
+  u(); b2.close();
+  assert.equal(shown.length, 0, 'CONTROL: the stamp let relay A’s older notice through');
+  assert.equal(answered, false,
+    'A LINKED PARENT’S FAMILY READ AS ANSWERED WITH NOTHING IN IT — the sheet says "No children linked … make one below"');
+  // relay B reachable again: the newest notice applies, and both children are back
+  const b3 = memberBoot(P, storage, { relays: [A.url, B.url] });
+  u = b3.api.subscribeGuardianNotices();
+  const back = await until(() => b3.shown(church.pub).length === 2, 6000);
+  u(); b3.close();
+  assert.ok(back && b3.api.familyAnswered(church.pub), 'once the newest notice was reachable the children did not come back');
+});
+
+// NEW-2: a request the church declined; the phone saw the closing notice on relay B and its withdrawal reached
+// relay B only. Lock; only relay A reachable — holding the live request and no notice. It came back as
+// "Waiting for steward to confirm".
+test('a declined request whose withdrawal reached one relay does not come back as "Waiting" from the other', async () => {
+  const P = K(), C = K();
+  await join(P, [A, B]);
+  for (const r of [A, B]) assert.equal((await publishTo(r.url, reqEvt(church, P, C, now() - 300, true)))[0], true, 'fixture: the request');
+  assert.equal((await publishTo(B.url, noticeEvt(church, P, { church: church.pub, children: [], closed: [C.pub] }, now() - 100)))[0], true);
+  const storage = memStorage();
+  storage.setItem('trinityone.family', JSON.stringify([{ child: C.pub, name: 'Cal', churchPub: church.pub, ts: now() - 300 }]));
+  const dead = `ws://127.0.0.1:${PORT_DEAD}/relay`;
+  const b1 = memberBoot(P, storage, { relays: [dead, B.url] });   // relay A down
+  let u = b1.api.subscribeGuardianNotices();
+  assert.ok(await until(() => !b1.shown(church.pub).includes(C.pub), 6000), 'fixture: the closing notice did not apply');
+  await sleep(800);
+  u(); b1.close();
+  b1.api.clearCommunityCache();   // the PIN lock
+  const b2 = memberBoot(P, storage, { relays: [A.url, dead] });   // relay B down, relay A up
+  u = b2.api.subscribeGuardianNotices();
+  await sleep(1200);
+  await b2.api._rebuildFamily(church.pub);
+  await sleep(300);
+  const shown = b2.shown(church.pub), answered = b2.api.familyAnswered(church.pub);
+  u(); b2.close();
+  assert.ok(!shown.includes(C.pub), 'A DECLINED REQUEST CAME BACK AS "WAITING FOR STEWARD TO CONFIRM" from the relay that missed its withdrawal');
+  assert.equal(answered, false, 'the family read as answered while the church’s newest notice was unreachable');
+  // both relays reachable: the notice applies, and the request still live on relay A is withdrawn there too
+  const b3 = memberBoot(P, storage, { relays: [A.url, B.url] });
+  u = b3.api.subscribeGuardianNotices();
+  await b3.api._rebuildFamily(church.pub);
+  const gone = await until(async () => { const n = await newestReq(A.url, P, C); return n && isRetracted(n); }, 8000);
+  u(); b3.close();
+  assert.ok(!b3.shown(church.pub).includes(C.pub), 'the declined request showed once both relays were reachable');
+  assert.ok(gone, 'the request still live on relay A was not withdrawn once the closing notice was applied');
 });

@@ -52,7 +52,11 @@ test('and it actually runs after an identity arrives', () => {
   // by reconnectAll on unlock). A string match cannot see either. The call now hangs off a hub that has
   // actually answered; whether it RETURNS A CHILD is proved by running it against a real relay in
   // scripts/family-rebuild-runs.test.mjs, which is where this assertion's real weight now lives.
-  assert.match(SRC, /if \(sk && !hub\.familyRebuilt\)[\s\S]{0,200}_rebuildFamily\(hub\.cp\)/,
+  // 2026-10-01: the once-per-connection guard moved into _maybeRebuildFamily, which the hub's EOSE calls; whether it
+  // re-runs after an offline start is RUN in scripts/an-unlinked-child-stays-gone-after-a-lock.test.mjs.
+  assert.match(SRC, /function _maybeRebuildFamily\(hub\) \{\s*if \(!sk \|\| hub\.familyRebuilt\) return;[\s\S]{0,200}_rebuildFamily\(hub\.cp\)/,
+    'nothing calls the rebuild from a live, keyed socket, so it can never repair a wiped phone');
+  assert.match(SRC, /_hubEosed\(hub\); _docsHubSaveSoon\(hub\);[\s\S]{0,800}_maybeRebuildFamily\(hub\);/,
     'nothing calls the rebuild from a live, keyed socket, so it can never repair a wiped phone');
   assert.match(V, /_rebuildFamily/, 'the rebuild is missing from the shipped bundle');
 });
