@@ -36,3 +36,11 @@ open edge is **0.7 self-hosting** — the Relay app wizard (in scope now) — an
 - Release narrow, prove with real people, widen slowly (`reference/trinityone-release-roadmap.md`).
 - Anything touching **keys, relays, or money** is propose-then-go. Giving is post-1.0 on purpose.
 - Each version updates this table + the SPINE roadmap; nothing else needs to move.
+
+## Later improvements (noted, not scheduled)
+
+- **Re-lock old sermons with the current sermon key.** Each Block rotates the sermon key, and the members' key
+  envelope keeps older keys so earlier sermons still play. The relay caps one document at 1 MB, so in a large
+  church (about 200+ members) that has rotated many times the oldest keys are dropped to fit, and sermons
+  sealed under them stop playing. Re-encrypting older sermons under the current key would remove that cost.
+  (Owner, 2026-10-01.)
