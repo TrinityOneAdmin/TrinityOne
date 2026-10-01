@@ -229,6 +229,27 @@ window.safeImgUrl = function (v) {
     s = s.replace(/\\\+?[a-z]+\d?\b ?/gi, "");
     return s.replace(/[ \t]{2,}/g, " ").trim();
   }
+  // A HEADING'S MARKUP CLOSES INSIDE THE HEADING. inlineUSFM turns `\nd` into `<span class="nd">` and `\nd*` into
+  // `</span>`; a heading line with an opener and no closer (`\s1 The \nd Lord`) used to leave the heading's
+  // own `</span>` closing the inner span, so the heading span stayed open over the verse that followed — in
+  // the reader it styled the verse as a heading, and usfmText dropped the verse's words with the heading
+  // (Psalm 2:1 lost "Why do the nations rage,"). Walk the fragment's span/i tags: drop a closer with no
+  // opener, close what is left open, innermost first. Used ONLY for heading-like lines (\d, \s, \ms, \mr,
+  // \r): a character style in verse text may legitimately run across poetry lines.
+  function _balancedInline(html){
+    const out = [], stack = [];
+    let last = 0, t;
+    const re = /<(\/?)(span|i)\b[^>]*>/g;
+    while((t = re.exec(html))){
+      out.push(html.slice(last, t.index)); last = t.index + t[0].length;
+      if(!t[1]){ stack.push(t[2]); out.push(t[0]); }
+      else if(stack.length && stack[stack.length - 1] === t[2]){ stack.pop(); out.push(t[0]); }
+      // else: a closer with nothing open inside this heading — dropped
+    }
+    out.push(html.slice(last));
+    while(stack.length) out.push("</" + stack.pop() + ">");
+    return out.join("");
+  }
   function parseUSFM(text){
     const idm = text.match(/\\id\s+(\w+)/);
     const code = idm ? idm[1].toUpperCase() : null;
@@ -247,9 +268,9 @@ window.safeImgUrl = function (v) {
       if((m = line.match(/^\\v\s+(\S+) ?([\s\S]*)$/))){ flush(); vnum = m[1]; vbuf = pending + (m[2]||""); pending = ""; continue; }
       // \d — a Psalm title — IS scripture (owner, 2026-10-01): it renders like a heading, but carries a second
       // class so usfmText keeps its words in the verse text. \s, \ms, \mr are editorial headings and are not.
-      if((m = line.match(/^\\d\b ?([\s\S]*)$/))){ add('<br><span class="sec d">' + inlineUSFM(m[1]||"") + "</span>"); continue; }
-      if((m = line.match(/^\\(?:s\d?|ms\d?|mr)\b ?([\s\S]*)$/))){ add('<br><span class="sec">' + inlineUSFM(m[1]||"") + "</span>"); continue; }
-      if((m = line.match(/^\\r\b ?([\s\S]*)$/))){ add('<br><span class="parref">' + inlineUSFM(m[1]||"") + "</span>"); continue; }
+      if((m = line.match(/^\\d\b ?([\s\S]*)$/))){ add('<br><span class="sec d">' + _balancedInline(inlineUSFM(m[1]||"")) + "</span>"); continue; }
+      if((m = line.match(/^\\(?:s\d?|ms\d?|mr)\b ?([\s\S]*)$/))){ add('<br><span class="sec">' + _balancedInline(inlineUSFM(m[1]||"")) + "</span>"); continue; }
+      if((m = line.match(/^\\r\b ?([\s\S]*)$/))){ add('<br><span class="parref">' + _balancedInline(inlineUSFM(m[1]||"")) + "</span>"); continue; }
       if((m = line.match(/^\\(q\d?|qm\d?)\b ?([\s\S]*)$/))){ const lvl = (m[1].match(/\d/)||["1"])[0]; add("<br>" + (lvl >= "2" ? "&emsp;" : "") + (m[2]||"")); continue; }
       if((m = line.match(/^\\(?:p|m|pi\d?|mi|nb|pc|cls|li\d?|pmo|pm|pr)\b ?([\s\S]*)$/))){ add("<br><br>" + (m[1]||"")); continue; }
       if(/^\\b\b/.test(line)){ add("<br>"); continue; }
@@ -386,21 +407,20 @@ window.safeImgUrl = function (v) {
     let s = String(html || "");
     // Drop heading and parallel-reference spans WITH their content. NOT a Psalm title: parseUSFM writes \d as
     // `<span class="sec d">`, which this pattern does not match, so its words stay in the text (owner,
-    // 2026-10-01). Depth-counted, because inlineUSFM can nest a span inside a heading (`\s1 The \nd LORD\nd* reigns` → <span class="nd"> inside the sec span).
-    // BOUNDED BY THE HEADING'S OWN LINE. parseUSFM writes every heading as `<br><span class="sec">…</span>` from
-    // ONE source line, and inlineUSFM never emits a <br>, so a heading cannot run past the next <br>. An
-    // unclosed character style inside it (`\s1 The \nd Lord` with no `\nd*`) leaves the depth count short;
-    // the drop then stops at that <br> instead of eating the verse words after it. (Audit of 3fe46eb, finding 7.)
+    // 2026-10-01). Depth-counted, because inlineUSFM can nest a span inside a heading (`\s1 The \nd LORD\nd*
+    // reigns` → <span class="nd"> inside the sec span). parseUSFM balances every heading's own markup
+    // (_balancedInline), so the heading's closing tag is always found before any verse text — an unclosed
+    // `\nd` in a heading can no longer carry the drop into the verse words after it, whatever follows the
+    // heading (a \v, a \q, a \qc, a \p). Audit of 3fe46eb finding 7, and its re-audit.
     const OPEN = /<span class="(?:sec|parref)">/g;
     let m;
     while((m = OPEN.exec(s))){
       let depth = 1, i = m.index + m[0].length;
-      const br = s.slice(i).search(/<br\s*\/?>/i);
-      const lineEnd = br === -1 ? s.length : i + br;
       const tag = /<span\b[^>]*>|<\/span>/g; tag.lastIndex = i;
       let t;
-      while(depth > 0 && (t = tag.exec(s)) && t.index < lineEnd){ depth += (t[0] === "</span>") ? -1 : 1; i = t.index + t[0].length; }
-      if(depth > 0) i = lineEnd;   // unclosed: drop to the end of the heading's line, never further
+      while(depth > 0 && (t = tag.exec(s))){ depth += (t[0] === "</span>") ? -1 : 1; i = t.index + t[0].length; }
+      // Malformed html that did not come from parseUSFM: drop only the opening tag, never the words after it.
+      if(depth > 0) i = m.index + m[0].length;
       s = s.slice(0, m.index) + " " + s.slice(i);
       OPEN.lastIndex = m.index;
     }

@@ -198,6 +198,16 @@ const PSALMS = [
   '\\mr (Psalms 1–41)',
   '\\q1',
   '\\v 1 Blessed is the man who does not walk in the counsel of the wicked,',
+  // Re-audit of 3fe46eb finding 7: a heading whose character style is never closed, directly before a \v (no
+  // poetry line between them), and another mid-verse directly before a \qc line.
+  '\\c 2',
+  '\\s1 The \\nd Lord’s Anointed',
+  '\\v 1 Why do the nations rage',
+  '\\q2 and the peoples plot in vain?',
+  '\\v 2 The kings of the earth take their stand',
+  '\\s1 Against the \\nd Lord',
+  '\\qc and the rulers gather together,',
+  '\\q1 against the Lord.',
   '\\c 3',
   '\\d A Psalm of David, when he fled from his son Absalom.',
   '\\q1',
@@ -221,4 +231,45 @@ test('a Psalm title stays in the verse text and can be searched; major-section h
     'a major-section heading (\\ms / \\mr) leaked into Psalm 1:1: ' + JSON.stringify(v11.text));
   // the reader still renders the title as a heading (the .sec rule in index.html matches it)
   assert.match(v31.html, /<span class="sec d">A Psalm of David/, 'the Psalm title no longer renders as a heading in the reader');
+});
+
+
+test('a heading with an unclosed style never takes verse words with it — before a \\v, before a \\qc', async () => {
+  const Bible = realBible();
+  await Bible.loadModuleBytes(new TextEncoder().encode(PSALMS), 'psa.usfm', { abbr: 'PST', name: 'Psalms Test', category: 'bibles' });
+  const ch2 = Bible.getVerses(19, 2, 'PST');
+  const byV = Object.fromEntries(ch2.map(r => [String(r.v), r]));
+  assert.equal(byV['1'].text, 'Why do the nations rage and the peoples plot in vain?',
+    'PSALM 2:1 LOST ITS WORDS to the unclosed heading before it: ' + JSON.stringify(byV['1'].text));
+  assert.equal(byV['2'].text, 'The kings of the earth take their stand and the rulers gather together, against the Lord.',
+    'a mid-verse heading with an unclosed style ate the \\qc line after it: ' + JSON.stringify(byV['2'].text));
+  // …and in the READER the heading closes before the verse: an open heading span would style the whole verse
+  // as a heading. The heading's own markup is closed inside it.
+  assert.ok(byV['1'].html.includes('<span class="sec">The <span class="nd">Lord’s Anointed</span></span>Why'),
+    'the heading span is not closed before Psalm 2:1’s words in the reader’s html: ' + JSON.stringify(byV['1'].html));
+});
+
+test('the reader still styles a Psalm title as a heading — the .sec rule matches the two-class span', async () => {
+  // index.html ships as-is (no bundler), and a CSS class selector matches any element whose class LIST holds
+  // the class — so `.reader-body .sec` styles the title span as long as its class list contains `sec`.
+  // Pinned on both sides: the rule in the shipped stylesheet, and the class list the shipped parser writes.
+  const html = readFileSync(ROOT + 'index.html', 'utf8');
+  assert.match(html, /\.reader-body \.sec \{[^}]*display: block/, 'the reader’s heading rule for .sec is gone or renamed');
+  const Bible = realBible();
+  await Bible.loadModuleBytes(new TextEncoder().encode(PSALMS), 'psa.usfm', { abbr: 'PST', name: 'Psalms Test', category: 'bibles' });
+  const v31 = Bible.getVerses(19, 3, 'PST').find(x => String(x.v) === '1');
+  const cls = ((v31.html.match(/<span class="([^"]*)">A Psalm of David/) || [])[1] || '').split(/\s+/);
+  assert.ok(cls.includes('sec'), 'the Psalm title span no longer carries the `sec` class, so the reader no longer styles it as a heading: ' + JSON.stringify(cls));
+});
+
+test('usfmText, handed a heading span that never closes, keeps the words after it', () => {
+  // parseUSFM always balances a heading (above), so this is the defensive half: if malformed html ever reaches
+  // usfmText, the heading's opening tag goes and the words stay — dropping scripture is the worse failure.
+  // Lifted from the shipped engine.js (which ships as-is, no bundler).
+  const E = readFileSync(ROOT + 'engine.js', 'utf8');
+  const fn = (name) => { const at = E.indexOf('function ' + name + '('); assert.notEqual(at, -1, name + ' is gone from engine.js');
+    let d = 0; for (let i = E.indexOf('{', at); i < E.length; i++) { if (E[i] === '{') d++; else if (E[i] === '}' && --d === 0) return E.slice(at, i + 1); } };
+  const usfmText = new Function(fn('stripTags') + fn('usfmText') + '; return usfmText;')();
+  const out = usfmText('<span class="sec">Heading <span class="nd">Lord</span> and the words of the verse');
+  assert.match(out, /and the words of the verse$/, 'malformed heading markup took the verse’s words with it: ' + JSON.stringify(out));
 });

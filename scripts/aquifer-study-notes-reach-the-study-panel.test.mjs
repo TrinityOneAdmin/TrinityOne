@@ -117,6 +117,7 @@ function engineChain(probe = () => {}) {
     fnBody(ENGINE, 'function buildFromUSFM(files, fallbackName){'),
     // The BSB's per-chapter VERSE counts need buildFromUSFM's lazy half too, so these three come along.
     fnBody(ENGINE, 'function inlineUSFM(s){'),
+    fnBody(ENGINE, 'function _balancedInline(html){'),   // 2026-10-01: parseUSFM balances a heading's markup with it
     fnBody(ENGINE, 'function parseUSFM(text){'),
     fnBody(ENGINE, 'function stripTags(s){'),
     // 2026-10-01: a USFM verse's `text` comes from usfmText now (it calls stripTags, so the probe still sees it).
