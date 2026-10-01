@@ -34,9 +34,13 @@ import { WebSocket } from 'ws';
 import { generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure';
 import { npubEncode } from 'nostr-tools/nip19';
 import { requireFreePort } from './test-ports.mjs';
-import { stmt, stripComments } from './test-slice.mjs';
+import { fnBody, stmt, stripComments } from './test-slice.mjs';
 
 const STEWARD = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
+// THE SHIPPED LANDING REPORT (_landed, 2026-10-02): every guarded list write now returns through it, so a lifted
+// setter needs it in scope. Lifted, not re-typed.
+const _landedSrc = fnBody(STEWARD, 'function _landed(what, p) {', '_landed in the shipped bundle');
+const _landedShipped = new Function('return ' + _landedSrc)();
 
 // STAGE 4's two caps, READ OUT OF THE BUNDLE rather than typed here. Five tolerance constants drifting apart
 // is the defect the relay-corrected-time work exists to stop, and a test that hard-codes a sixth copy of one
@@ -153,7 +157,7 @@ function shippedSetAdmitted({ signer, viewPub, acting }) {
     _skewShift: () => 0, ...CAPS,
     sk: signer.sk, pub: viewPub, actingChurch: acting,
     ADMITTED_D, NET, now,
-    _requireTrustedView: () => {}, publish: (e) => { captured.push(e); return Promise.resolve(true); },
+    _requireTrustedView: () => {}, _landed: _landedShipped, publish: (e) => { captured.push(e); return Promise.resolve(true); },
   };
   const keys = Object.keys(scope);
   const api = new Function(...keys, src + '\nreturn api;')(...keys.map(k => scope[k]));

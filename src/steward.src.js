@@ -958,8 +958,20 @@ const _viewingNetwork = () => pub !== churchPub && !actingChurch;
 function _requireTrustedView(what) {
   if (_isRelayAuthed()) return;
   const err = new Error('Couldn’t save the ' + what + ' — nothing was changed. This console hasn’t finished connecting to your church, so it can’t see the current list. Reopen it to try again. If nobody has joined your church yet, this clears when your first member joins.');
+  err.notConnected = true;   // so a screen can say which failure it was without reading the sentence
   try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what, message: err.message } })); } catch (e) {}
   throw err;
+}
+// …AND WHEN THE SAME LIST IS SAVED AFTERWARDS, SAY THAT TOO (device round 2026-10-01). The refusal above raises
+// a banner that stays until dismissed — rightly, a refused write is actionable — so on the Oppo it sat there,
+// collapsed to "Couldn't save the appr…", after the retry had let the person in. Every list guarded above
+// reports here when its write lands, by the same `what`, and the banner clears the message that named it.
+// Landed = the publish answered truthy (publish() the event, _publishToRelays() true); a partial write is not.
+function _landed(what, p) {
+  return Promise.resolve(p).then((r) => {
+    if (r) { try { window.dispatchEvent(new CustomEvent('steward-write-landed', { detail: { what } })); } catch (e) {} }
+    return r;
+  });
 }
 async function _churchHasCareNeeds() {
   const cp = actingChurch || pub; if (!cp) return false;
@@ -6886,7 +6898,7 @@ window.Steward = {
     // the two that lacked the block they AUTHENTICATED and read the entire adult group. The relay refuses to
     // authenticate a blocked key — but only a relay that HOLDS the block. A ban published single-accept is a
     // ban on one relay.
-    return _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', BLOCKED_D + pub], ['t', NET]], content }), sk));
+    return _landed('blocked list', _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', BLOCKED_D + pub], ['t', NET]], content }), sk)));
   },
 
   // ---- safeguarding: two church-signed lists the relay reads to enforce child protection ----
@@ -6993,7 +7005,7 @@ window.Steward = {
     // photo from, it is written from the same Members screen by the same press, and losing its race
     // un-suppresses a photo with nothing on any screen saying so — the failure the comment above
     // records as MEASURED. Same criterion as the plan's eight: user-initiated, never on the boot path.
-    return _skewGate(() => publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', NOPHOTO_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list }) }, sk)));
+    return _landed('photo settings', _skewGate(() => publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', NOPHOTO_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list }) }, sk))));
   },
   // Tell ONE member what their own safeguarding status is, sealed to them. This exists so a member's app can
   // know whether THEY are a child or a cleared adult without the church publishing a cleartext list of its
@@ -7553,7 +7565,7 @@ window.Steward = {
     // A partial write now reports FAILURE. A steward who ticks "mark as a child" and sees it succeed has been
     // told the protection is in force; if the record reached one relay of three, it is in force on one of
     // three. An error is recoverable, false reassurance is not.
-    return _skewGate(() => _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', MINORS_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list }) }), sk)));
+    return _landed('list of children', _skewGate(() => _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', MINORS_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list }) }), sk))));
   },
   // `opts.listKnown` — has the CALLER actually read this church's cleared list? The console has that answer
   // (its safeguarding subscription reports `loaded`) and this module does not: an empty remembered list means
@@ -7595,7 +7607,7 @@ window.Steward = {
       if (prior[p]) { cleared[p] = prior[p]; continue; }
       cleared[p] = (knownPrev && !knownPrev.has(p)) ? { by: pub, at: now() } : { by: '', at: 0 };
     }
-    return _skewGate(() => _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', APPROVED_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list, cleared }) }), sk)));
+    return _landed('cleared-adults list', _skewGate(() => _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', APPROVED_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list, cleared }) }), sk))));
   },
 
   // ---- safeguarding v2: parent↔child links. Parents publish a guardian-link REQUEST (guardreq:<childpub>,
@@ -7658,7 +7670,7 @@ window.Steward = {
     // A partial write now reports FAILURE. A steward who ticks "mark as a child" and sees it succeed has been
     // told the protection is in force; if the record reached one relay of three, it is in force on one of
     // three. An error is recoverable, false reassurance is not.
-    return _skewGate(() => _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', GUARDIANS_D + pub], ['t', NET]], content: JSON.stringify(payload) }), sk)));
+    return _landed('parent links', _skewGate(() => _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', GUARDIANS_D + pub], ['t', NET]], content: JSON.stringify(payload) }), sk))));
   },
   // safeguarding v2: tell a STEWARD-LINKED parent (who never set the child up on their own device, so has no
   // local record) that they're now a guardian — otherwise the child never appears in their app. Church-signed,
@@ -7891,7 +7903,7 @@ window.Steward = {
     // stamp it adds makes the doc match the member app's subscription (authors:[cp] OR #church:[cp]). Without
     // it the relay would still store and gate the doc correctly, but no member would ever receive it — the
     // church would keep showing two of the same person and the reconnect would look like it did nothing.
-    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', RESEAT_D + pub], ['t', NET]], content: JSON.stringify({ pairs: clean }) }));
+    return _landed('re-seat map', publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', RESEAT_D + pub], ['t', NET]], content: JSON.stringify({ pairs: clean }) })));
   },
   // RECONNECT A MEMBER ONTO A NEW KEY, as one action. Lives here rather than in the modal because a re-seat
   // is not two writes — it is a seat MOVING, and everything attached to the seat has to move with it. Every
@@ -8075,7 +8087,7 @@ window.Steward = {
     _requireTrustedView('approved-members list');
     if (!sk) return Promise.resolve(null);
     const list = [...new Set((pubkeys || []).filter(Boolean))];
-    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', ADMITTED_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list }) }));
+    return _landed('approved-members list', publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', ADMITTED_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list }) })));
   },
 
   // ---- delegated stewards: the OWNER (this church key) signs a roster of co-steward pubkeys. The relay
@@ -8200,7 +8212,7 @@ window.Steward = {
       doc.n = _stewardNamesCt;
     }
 
-    return _skewGate(() => publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', STEWARDS_D + pub], ['t', NET]], content: JSON.stringify(doc) }), sk)));
+    return _landed('steward roster', _skewGate(() => publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', STEWARDS_D + pub], ['t', NET]], content: JSON.stringify(doc) }), sk))));
   },
   // What this church has granted each steward. Empty array = nothing; ABSENT = everything (an unscoped
   // steward, which is every steward that existed before this feature).

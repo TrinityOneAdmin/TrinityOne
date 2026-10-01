@@ -260,3 +260,33 @@ test('launched with NO network, then the first socket back is opened by a publis
   assert.deepEqual(out, []);
   assert.deepEqual(errors, [], 'the console threw:\n  ' + errors.join('\n  '));
 });
+
+// THE DEVICE'S OWN SEQUENCE, END TO END (device round 2026-10-01): Approve pressed while the console cannot reach its
+// relay is refused — on the row and on the banner, with nothing thrown out of the click — and once it is back, the
+// retry lets the person in and the banner that named the approved-members list goes.
+test('an Approve refused while the console is out says so and throws nothing; the retry lands and the banner goes', { skip: SKIP, timeout: 300000 }, async () => {
+  await waitFor(`window.Steward.relayAuthed() && window.Steward.relaysHealthy()`, 120000, 'logged in and healthy first');
+  const k = H.key();
+  await H.publishAll(relay, [joinTo(churchA, k)]);
+  await waitFor(`[...document.querySelectorAll('button')].filter(x => (x.textContent||'').trim() === 'Approve').length === 1`, 30000, 'the join request on the Members screen');
+  const before = errors.length;
+  // the radio goes: every socket dies and nothing new gets through
+  await evalIn(`(() => { window.__radioOff = true; return 1; })()`);
+  await closeAll();
+  await waitFor(`!window.Steward.relayAuthed()`, 10000, 'the console to notice it is out');
+  await press('/^Approve$/', 'the Approve button');
+  await sleep(1500);
+  const said = await evalIn(`document.body.innerText.replace(/\\s+/g, ' ')`);
+  assert.deepEqual(errors.slice(before), [], 'APPROVE THREW OUT OF THE CLICK (device round 2026-10-01: Uncaught Error … at admitMember)');
+  assert.match(said, /Couldn’t save the approved-members list/, 'the refusal is not on the banner');
+  assert.match(said, /Couldn’t let [^—]* in — this console hasn’t finished connecting to your church/, 'the row said nothing about the refused Approve');
+  assert.ok(!admitted().includes(k.pub), 'CONTROL: the refused Approve was written anyway — this row proves nothing');
+  // the radio comes back; the console logs back in by itself, and the retry lets them in
+  await evalIn(`(() => { window.__radioOff = false; return 1; })()`);
+  assert.notEqual(await within(`window.Steward.relayAuthed()`, 60000), null, 'the console never logged back in once the radio was back');
+  await press('/^Approve$/', 'the Approve button, again');
+  { const t1 = Date.now(); let ok = false; while (!ok && Date.now() - t1 < 15000) { ok = admitted().includes(k.pub); if (!ok) await sleep(400); } assert.ok(ok, 'the retried Approve never reached the relay'); }
+  await sleep(1500);
+  assert.doesNotMatch(await evalIn(`document.body.innerText.replace(/\\s+/g, ' ')`), /Couldn’t save the approved-members list/,
+    'THE BANNER STAYED after the retry let the person in (on the Oppo it sat there, collapsed: "Couldn\'t save the appr…")');
+});

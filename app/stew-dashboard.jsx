@@ -465,6 +465,10 @@ function PublishErrorBanner() {
   // without `saidQuiet` this would flash the note over and over — the same defect in a lighter colour.
   const [bgMsg, setBgMsg] = React.useState('');
   const saidQuiet = React.useRef({});
+  // WHICH LIST THE STANDING MESSAGE IS ABOUT, when it is a refused list write (`steward-write-blocked`), so the
+  // write that later lands can take it down (`steward-write-landed`, src/steward.src.js _landed). Device round
+  // 2026-10-01: the "Couldn't save the approved-members list" strip stayed after the retry let the person in.
+  const msgWhat = React.useRef(null);
   // ⚠ WHILE A DIALOG IS OPEN THIS BANNER MOVES TO THE BOTTOM AND SHRINKS TO ONE LINE.
   //
   // Both of the rules below it are still true and neither is being undone:
@@ -537,6 +541,7 @@ function PublishErrorBanner() {
         f._q = setTimeout(() => setBgMsg(''), 12000);
         return;
       }
+      msgWhat.current = null;
       setMsg(m);
       clearTimeout(f._t);
       if (!sticky) f._t = setTimeout(() => setMsg(''), 9000);   // actionable failures stay until dismissed
@@ -552,11 +557,18 @@ function PublishErrorBanner() {
       // rather than equality, so a future "church registration (retry)" lands here too rather than
       // silently falling back into the evictable slot.
       if (/^church (registration|relay)/.test(String(d.what || ''))) { setRegMsg(text); return; }
-      clearTimeout(f._t); setMsg(text);
+      clearTimeout(f._t); msgWhat.current = d.what || null; setMsg(text);
+    };
+    // THE SAME LIST, SAVED: the refusal it was about is over. Only that message — anything that has replaced it
+    // since stays, and so does a message about a different list.
+    const landed = (e) => {
+      const what = (e && e.detail && e.detail.what) || '';
+      if (what && msgWhat.current === what) { msgWhat.current = null; setMsg(''); }
     };
     window.addEventListener('steward-publish-error', f);
     window.addEventListener('steward-write-blocked', g);
-    return () => { window.removeEventListener('steward-publish-error', f); window.removeEventListener('steward-write-blocked', g); };
+    window.addEventListener('steward-write-landed', landed);
+    return () => { window.removeEventListener('steward-publish-error', f); window.removeEventListener('steward-write-blocked', g); window.removeEventListener('steward-write-landed', landed); };
   }, []);
   if (!msg && !sgMsg && !regMsg && !bgMsg) return null;
   // role="alert" + aria-live so a screen reader ANNOUNCES it. The console's only failure banner was the one
@@ -5677,7 +5689,8 @@ function DashMembers() {
   const [minorNotice, setMinorNotice] = React.useState(null);   // { pk, text }
   // does THIS church allow children to have photographs at all? (church profile → features.childPhotos)
   const kidPhotosAllowed = !!(church && church.features && church.features.childPhotos === true);
-  const toggleNoPhoto = (pk) => window.Steward.setNoPhoto(nophotoSet.has(pk) ? (sg.nophoto || []).filter(p => p !== pk) : [...(sg.nophoto || []), pk]);
+  // (a refusal is already on the banner — _requireTrustedView raised it — and must not escape the click uncaught)
+  const toggleNoPhoto = (pk) => { try { return Promise.resolve(window.Steward.setNoPhoto(nophotoSet.has(pk) ? (sg.nophoto || []).filter(p => p !== pk) : [...(sg.nophoto || []), pk])).catch(() => null); } catch (e) { return Promise.resolve(null); } };
   // Whenever either safeguarding list changes, re-seal the affected member's OWN clearance. Their app reads that
   // instead of the church's list of children, which the relay no longer serves to ordinary members.
   // AUDIT-2026-07-27. Best-effort and deliberately not awaited: the list write is the authoritative one.
@@ -5927,7 +5940,7 @@ function DashMembers() {
     // ONLY TELL THE MEMBER'S PHONE ONCE THE CHURCH'S OWN DOCUMENT SAYS SO. The first version resealed straight
     // away, so a write that failed still put "your church has cleared you to work with young people" on the
     // volunteer's screen while the church document said nothing and the relay still refused them.
-    const r = Promise.resolve(window.Steward.setApproved(next, { listKnown: !!sg.clearedKnown }))
+    const r = (() => { try { return Promise.resolve(window.Steward.setApproved(next, { listKnown: !!sg.clearedKnown })); } catch (e) { return Promise.reject(e); } })()   // a synchronous refusal is a rejection here, not an uncaught throw
       .then((ok) => { if (ok !== false) _reseal(sg.minors || [], next, [pk]); return ok; })
       .catch(() => false);
     return r;
@@ -6073,10 +6086,16 @@ function DashMembers() {
   const pendingSet = new Set(pendingJoins.map(m => m.pubkey));
   // Its bulk sibling admitAll already checks its result; this one did not, so a single Approve that the relay
   // refused still moved the row out of the waiting list on screen while the relay kept refusing the member.
-  const admitMember = (pk) => Promise.resolve(window.Steward.setAdmitted([...admittedList, pk]))
+  // A THROW BECOMES A REJECTION. setAdmitted's guard (_requireTrustedView) throws SYNCHRONOUSLY when this console
+  // is not logged in to its relay, and `Promise.resolve(setAdmitted(…))` evaluates the call before any promise
+  // exists — so the throw left the click handler UNCAUGHT and the row said nothing (device round 2026-10-01,
+  // Oppo: Uncaught Error … at admitMember). Still called at once (not a tick later, which every other write here
+  // is too); the catch below says which failure it was.
+  const admitMember = (pk) => (() => { try { return Promise.resolve(window.Steward.setAdmitted([...admittedList, pk])); } catch (e) { return Promise.reject(e); } })()
     .then((ok) => { if (!ok) setMinorNotice({ pk, tone: 'fail', text: 'Couldn’t let ' + (nameByPub[pk] || 'them')
       + ' in — the relay didn’t accept it, so they are still waiting. Check the relay and try again.' }); return ok; })
-    .catch(() => { setMinorNotice({ pk, tone: 'fail', text: 'Couldn’t let ' + (nameByPub[pk] || 'them') + ' in — the relay could not be reached.' }); return null; });
+    .catch((e) => { setMinorNotice({ pk, tone: 'fail', text: 'Couldn’t let ' + (nameByPub[pk] || 'them') + ' in — '
+      + ((e && e.notConnected) ? 'this console hasn’t finished connecting to your church, so nothing was changed and they are still waiting.' : 'the relay could not be reached.') }); return null; });
   // ONE DECISION, ONE PRESS. Opening a church means admitting everyone who came in off the invite at once;
   // Miriam pressed Approve eighteen times to do it, and setAdmitted takes the whole list anyway, so that was
   // eighteen round trips for a single decision.
@@ -6114,7 +6133,9 @@ function DashMembers() {
   // already read are past — no key change can retract those, and we don't pretend otherwise.)
   const block = (pk) => {
     setConfirmBlock(null);
-    window.Steward.setBlocked([...blockedList, pk]);
+    // A REFUSED blocklist write stops here, said on the banner (_requireTrustedView) — not an uncaught throw
+    // out of the click, and not a key rotation for a block that was never written.
+    try { window.Steward.setBlocked([...blockedList, pk]); } catch (e) { return; }
     try {
       const remaining = members.map(m => m.pubkey).filter(p => p && p.toLowerCase() !== String(pk || '').toLowerCase() && !isBlocked(p));
       // AWAIT THESE, AND REPORT A FAILURE. Rotation is what actually takes the keys away from the person
@@ -6205,7 +6226,7 @@ function DashMembers() {
   // false on a partial write, so "unblocked" could otherwise be true on one relay and false on another.
   const [confirmUnblock, setConfirmUnblock] = React.useState(null);
   const [blockErr, setBlockErr] = React.useState('');
-  const unblock = (pk) => Promise.resolve(window.Steward.setBlocked(blockedList.filter(p => p !== pk)))
+  const unblock = (pk) => (() => { try { return Promise.resolve(window.Steward.setBlocked(blockedList.filter(p => p !== pk))); } catch (e) { return Promise.reject(e); } })()   // a synchronous refusal is a rejection, not an uncaught throw
     .then((ok) => { setConfirmUnblock(null); setBlockErr(ok ? '' : 'Couldn’t unblock ' + (nameByPub[pk] || 'that member')
       + ' — the relay didn’t accept it, so they are still blocked. Try again.'); return ok; })
     .catch(() => { setConfirmUnblock(null); setBlockErr('Couldn’t reach the relay to unblock them.'); return null; });
@@ -6468,7 +6489,7 @@ function DashMembers() {
               const named = !!m.name; const label = named ? m.name : 'Anonymous';
               const initials = (named ? m.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'AN').toUpperCase();
               return (
-                <div key={m.pubkey} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 10, background: 'var(--surface)', border: '1px solid var(--line)' }}>
+                <div key={m.pubkey} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 10, background: 'var(--surface)', border: '1px solid var(--line)' }}>
                   <SkBadge initials={initials} av={m.av} pubkey={m.pubkey} size={32} radius={10} accent={SK_TINT[named ? 'gold' : 'sage'].fg} />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontWeight: 700, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</div>
@@ -6492,6 +6513,16 @@ function DashMembers() {
                         <button onClick={() => setConfirmBlock(null)} aria-label="Cancel — leave them waiting" title="Cancel" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 9px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0 }}><Icon name="x" size={15} color="currentColor" /></button>
                       </React.Fragment>
                     : <button onClick={() => setConfirmBlock(m.pubkey)} aria-label={'Decline ' + (m.name || nameHandle(m) || shortNpub(m.npub)) + ' — asks you to confirm'} title="Decline — blocks this person from joining or posting" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 9px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0 }}><Icon name="x" size={15} color="currentColor" /></button>}
+                  {/* WHAT HAPPENED TO THIS APPROVE, ON THIS ROW. admitMember's notice (minorNotice) was drawn only on the
+                      member list's rows, and a person waiting to join is not on that list — so a refused Approve
+                      said nothing where it was pressed (device round 2026-10-01: only the banner spoke). */}
+                  {minorNotice && minorNotice.pk === m.pubkey ? (
+                    <div role={minorNotice.tone === 'fail' ? 'alert' : 'status'} style={{ flexBasis: '100%', fontSize: 12.5, lineHeight: 1.45, padding: '9px 12px', borderRadius: 11,
+                      background: minorNotice.tone === 'fail' ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'color-mix(in oklab, var(--gold) 12%, var(--surface))',
+                      border: '1px solid ' + (minorNotice.tone === 'fail' ? 'color-mix(in oklab, var(--clay) 38%, var(--line))' : 'color-mix(in oklab, var(--gold) 34%, var(--line))'), color: 'var(--ink)' }}>
+                      {minorNotice.text}
+                    </div>
+                  ) : null}
                 </div>
               );
             })}
@@ -8148,7 +8179,7 @@ function DashStewardsPanel({ church }) {
   const setCaps = (pk, list) => {
     const next = { ...caps };
     if (list === null) delete next[pk]; else next[pk] = list;
-    window.Steward.setStewards(stewards, next);
+    try { window.Steward.setStewards(stewards, next); } catch (e) {}   // a refusal is on the banner (_requireTrustedView)
   };
   const [approvePin, setApprovePin] = React.useState('');
   const [approveErr, setApproveErr] = React.useState('');
@@ -8159,7 +8190,7 @@ function DashStewardsPanel({ church }) {
     // "unscoped", which is the everything-by-accident this exists to remove.
     const nextCaps = { ...caps, [pk]: Array.isArray(grants) ? grants.slice() : [] };
     setNewLabel(''); setNewCaps([]);
-    window.Steward.setStewards([...stewards, pk], nextCaps, nextNames); };
+    try { window.Steward.setStewards([...stewards, pk], nextCaps, nextNames); } catch (e) {} };
   // approving a steward request is a sensitive action → step up with the console PIN when one is set
   const startApprove = (pk) => { if (hasPin) { setApproving(pk); setApprovePin(''); setApproveErr(''); } else { add(pk); } };
   const confirmApprove = async () => {
@@ -8168,7 +8199,7 @@ function DashStewardsPanel({ church }) {
     add(approving);
   };
   const pending = requests.filter(r => !dismissed[r.pubkey] && !stewardSet.has(r.pubkey) && r.pubkey !== ownerPub);
-  const remove = (pk) => { setConfirmRemove(null); window.Steward.setStewards(stewards.filter(p => p !== pk)); };
+  const remove = (pk) => { setConfirmRemove(null); try { window.Steward.setStewards(stewards.filter(p => p !== pk)); } catch (e) {} };
   // add by the steward's own code/npub (from their Steward app → "Become a steward"). The correct path:
   // it names the exact key they'll act with, with no dependency on them being a member here.
   const addByCode = (text) => {
@@ -9107,7 +9138,9 @@ function DashFeaturesPanel({ church, show = null }) {
   const fAdmitted = window.useStewardAdmitted ? window.useStewardAdmitted() : [];
   const toggleApproval = () => {
     // turning ON: grandfather everyone already here so only NEW joiners wait for approval
-    if (!approval) window.Steward.setAdmitted([...new Set([...fAdmitted, ...fMembers.map(m => m.pubkey)])]);
+    // …and if that list cannot be written (refused — on the banner), approval is NOT switched on: everyone
+    // already here would be left waiting at the door. Before, the throw escaped the click uncaught.
+    if (!approval) { try { window.Steward.setAdmitted([...new Set([...fAdmitted, ...fMembers.map(m => m.pubkey)])]); } catch (e) { return; } }
     window.Steward.setJoinPolicy(!approval);
   };
   // TWO CARDS, ONE COMPONENT, because they share this component's state — the encrypt-all switch reads the

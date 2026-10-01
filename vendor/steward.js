@@ -15579,11 +15579,23 @@ zoo`.split("\n");
   function _requireTrustedView(what) {
     if (_isRelayAuthed()) return;
     const err2 = new Error("Couldn\u2019t save the " + what + " \u2014 nothing was changed. This console hasn\u2019t finished connecting to your church, so it can\u2019t see the current list. Reopen it to try again. If nobody has joined your church yet, this clears when your first member joins.");
+    err2.notConnected = true;
     try {
       window.dispatchEvent(new CustomEvent("steward-write-blocked", { detail: { what, message: err2.message } }));
     } catch (e) {
     }
     throw err2;
+  }
+  function _landed(what, p) {
+    return Promise.resolve(p).then((r) => {
+      if (r) {
+        try {
+          window.dispatchEvent(new CustomEvent("steward-write-landed", { detail: { what } }));
+        } catch (e) {
+        }
+      }
+      return r;
+    });
   }
   async function _churchHasCareNeeds() {
     const cp = actingChurch || pub;
@@ -20547,7 +20559,7 @@ zoo`.split("\n");
       const list = [...new Set((pubkeys || []).filter(Boolean))];
       _localBlocked = new Set(list.map((p) => String(p).toLowerCase()));
       const content = JSON.stringify({ pubkeys: list });
-      return _publishToRelays(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", BLOCKED_D + pub], ["t", NET]], content }), sk));
+      return _landed("blocked list", _publishToRelays(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", BLOCKED_D + pub], ["t", NET]], content }), sk)));
     },
     // ---- safeguarding: two church-signed lists the relay reads to enforce child protection ----
     // minors:<churchpub> = members marked as children; approved:<churchpub> = adults cleared to contact youth
@@ -20645,7 +20657,7 @@ zoo`.split("\n");
       _requireTrustedView("photo settings");
       if (!sk) return Promise.resolve(null);
       const list = [...new Set((pubkeys || []).filter(Boolean))];
-      return _skewGate(() => publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", NOPHOTO_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list }) }, sk)));
+      return _landed("photo settings", _skewGate(() => publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", NOPHOTO_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list }) }, sk))));
     },
     // Tell ONE member what their own safeguarding status is, sealed to them. This exists so a member's app can
     // know whether THEY are a child or a cleared adult without the church publishing a cleartext list of its
@@ -21004,7 +21016,7 @@ zoo`.split("\n");
       _requireTrustedView("list of children");
       if (!sk) return Promise.resolve(null);
       const list = [...new Set((pubkeys || []).filter(Boolean))];
-      return _skewGate(() => _publishToRelays(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", MINORS_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list }) }), sk)));
+      return _landed("list of children", _skewGate(() => _publishToRelays(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", MINORS_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list }) }), sk))));
     },
     // `opts.listKnown` — has the CALLER actually read this church's cleared list? The console has that answer
     // (its safeguarding subscription reports `loaded`) and this module does not: an empty remembered list means
@@ -21029,7 +21041,7 @@ zoo`.split("\n");
         }
         cleared[p] = knownPrev && !knownPrev.has(p) ? { by: pub, at: now() } : { by: "", at: 0 };
       }
-      return _skewGate(() => _publishToRelays(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", APPROVED_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list, cleared }) }), sk)));
+      return _landed("cleared-adults list", _skewGate(() => _publishToRelays(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", APPROVED_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list, cleared }) }), sk))));
     },
     // ---- safeguarding v2: parent↔child links. Parents publish a guardian-link REQUEST (guardreq:<childpub>,
     // p-tagged to us); the steward confirms it into the church-signed GUARDIANS map (guardians:<churchpub>),
@@ -21105,7 +21117,7 @@ zoo`.split("\n");
       }
       const payload = { links: clean5 };
       if (closed && Object.keys(closed).length) payload.closed = closed;
-      return _skewGate(() => _publishToRelays(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", GUARDIANS_D + pub], ["t", NET]], content: JSON.stringify(payload) }), sk)));
+      return _landed("parent links", _skewGate(() => _publishToRelays(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", GUARDIANS_D + pub], ["t", NET]], content: JSON.stringify(payload) }), sk))));
     },
     // safeguarding v2: tell a STEWARD-LINKED parent (who never set the child up on their own device, so has no
     // local record) that they're now a guardian — otherwise the child never appears in their app. Church-signed,
@@ -21358,7 +21370,7 @@ zoo`.split("\n");
         }
         return out;
       });
-      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", RESEAT_D + pub], ["t", NET]], content: JSON.stringify({ pairs: clean5 }) }));
+      return _landed("re-seat map", publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", RESEAT_D + pub], ["t", NET]], content: JSON.stringify({ pairs: clean5 }) })));
     },
     // RECONNECT A MEMBER ONTO A NEW KEY, as one action. Lives here rather than in the modal because a re-seat
     // is not two writes — it is a seat MOVING, and everything attached to the seat has to move with it. Every
@@ -21503,7 +21515,7 @@ zoo`.split("\n");
       _requireTrustedView("approved-members list");
       if (!sk) return Promise.resolve(null);
       const list = [...new Set((pubkeys || []).filter(Boolean))];
-      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", ADMITTED_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list }) }));
+      return _landed("approved-members list", publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", ADMITTED_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list }) })));
     },
     // ---- delegated stewards: the OWNER (this church key) signs a roster of co-steward pubkeys. The relay
     // grants those keys day-to-day church powers (but never the roster/blocklist/relay-policy — owner-only),
@@ -21596,7 +21608,7 @@ zoo`.split("\n");
       } else if (_stewardNamesCt) {
         doc.n = _stewardNamesCt;
       }
-      return _skewGate(() => publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", STEWARDS_D + pub], ["t", NET]], content: JSON.stringify(doc) }), sk)));
+      return _landed("steward roster", _skewGate(() => publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", STEWARDS_D + pub], ["t", NET]], content: JSON.stringify(doc) }), sk))));
     },
     // What this church has granted each steward. Empty array = nothing; ABSENT = everything (an unscoped
     // steward, which is every steward that existed before this feature).

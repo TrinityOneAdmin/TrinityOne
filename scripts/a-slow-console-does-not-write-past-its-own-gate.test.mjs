@@ -38,6 +38,10 @@ import { fnBody, stmt, stripComments } from './test-slice.mjs';
 
 const ROOT = new URL('../', import.meta.url).pathname;
 const SHIP = readFileSync(join(ROOT, 'vendor/steward.js'), 'utf8');
+// THE SHIPPED LANDING REPORT (_landed, 2026-10-02): every guarded list write now returns through it, so a lifted
+// setter needs it in scope. Lifted, not re-typed.
+const _landedSrc = fnBody(SHIP, 'function _landed(what, p) {', '_landed in the shipped bundle');
+const _landedShipped = new Function('return ' + _landedSrc)();
 
 // ── A RELAY THAT ANSWERS /relay-identity OFF ITS OWN CLOCK ───────────────────────────────────────────────
 // The signed kind-27235 proof is the only clock stage 1 will read; /status's `now` is an unauthenticated
@@ -122,7 +126,7 @@ function console_(relayList, churchSk, churchPub) {
     sk: churchSk, pub: churchPub,
     finalizeEvent, finalizeEvent2: finalizeEvent,
     now: () => Math.floor(Date.now() / 1000),
-    _requireTrustedView: () => {},
+    _requireTrustedView: () => {}, _landed: _landedShipped,
     _publishToRelays: (evt) => { sent.push(evt); return Promise.resolve(evt); },
     // publishClearance's world. None of it decides a stamp.
     actingChurch: '', _viewingNetwork: () => false, _clearanceSent: new Map(),

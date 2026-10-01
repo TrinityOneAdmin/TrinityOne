@@ -13,6 +13,10 @@ import { fnBody, liftKeyRead } from './test-slice.mjs';
 
 const FELLOWSHIP = readFileSync(new URL('../vendor/fellowship.js', import.meta.url), 'utf8');
 const STEWARD = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
+// THE SHIPPED LANDING REPORT (_landed, 2026-10-02): every guarded list write now returns through it, so a lifted
+// setter needs it in scope. Lifted, not re-typed.
+const _landedSrc = fnBody(STEWARD, 'function _landed(what, p) {', '_landed in the shipped bundle');
+const _landedShipped = new Function('return ' + _landedSrc)();
 const DASH = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
 const hex = (u8) => [...u8].map(b => b.toString(16).padStart(2, '0')).join('');
 const K = () => { const sk = generateSecretKey(); return { sk, pub: getPublicKey(sk) }; };
@@ -175,6 +179,7 @@ function blockRig(have) {
     const NAME_RING_MAX = 12, NAMEKEY_D = 'trinityone/namekey:', BLOCKED_D = 'trinityone/blocked:', NET = 'trinityone';
     const _isRelayAuthed = () => true;
     const _requireTrustedView = () => {};
+    ${_landedSrc}
     const now = () => 1000;
     const _hex = (u8) => Array.from(u8, (b) => b.toString(16).padStart(2, '0')).join('');
     const toPubHex = (p) => /^[0-9a-f]{64}$/i.test(p) ? String(p).toLowerCase() : null;

@@ -23,6 +23,10 @@ import { fnBody, stripComments } from './test-slice.mjs';
 import { v2 as nip44v2 } from 'nostr-tools/nip44';
 
 const VENDOR = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
+// THE SHIPPED LANDING REPORT (_landed, 2026-10-02): every guarded list write now returns through it, so a lifted
+// setter needs it in scope. Lifted, not re-typed.
+const _landedSrc = fnBody(VENDOR, 'function _landed(what, p) {', '_landed in the shipped bundle');
+const _landedShipped = new Function('return ' + _landedSrc)();
 
 // THE NAMES ARE SEALED SINCE 2026-09-05 (finding 1). This document held {"names":{"<pub>":"Ruth Bexley"}}
 // in plain text on the relay — the church's officers, by name, beside the keys that identify them. The
@@ -54,7 +58,7 @@ const TOM = 'a'.repeat(64), GRACE = 'b'.repeat(64);
 function loadSetStewards(existingCaps, existingNames, existingCt = '') {
   const published = [];
   const fn = lift('setStewards(pubkeys, caps, names) {', 'setStewards', {
-    _requireTrustedView: () => {}, sk: new Uint8Array(32), pub: 'church'.padEnd(64, '0'),
+    _requireTrustedView: () => {}, _landed: _landedShipped, sk: new Uint8Array(32), pub: 'church'.padEnd(64, '0'),
     _stewardCaps: existingCaps, _stewardNames: existingNames, _stewardNamesCt: existingCt, _stewardSince: {},
     now: () => 1787150000, _selfVoice: null, _publicVoices: {}, lastProfile: {},   // the console's public by-line rides this same roster (2026-08-26). Empty here deliberately:
     // these cases assert that the owner's PRIVATE labels are stored and carried forward, and a church that has
