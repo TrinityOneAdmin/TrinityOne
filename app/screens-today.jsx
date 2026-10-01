@@ -2048,6 +2048,15 @@ function ServingNewDot({ n }) {
   );
 }
 
+// THE VERSE CARD'S OWN QUOTE MARKS — only where the verse does not already carry one. Device round 2026-10-01: the
+// BSB's Isaiah 40:8 ends with the closing quote of the speech that opens in 40:6, and the card added its own after
+// it: "…stands forever.””". Each edge is decided on its own: an opening mark at the start (“ ‘ or a straight ")
+// means the card adds no opening; a closing mark at the end (” ’ or ") means it adds no closing. A straight
+// apostrophe does not count — at the edge of a verse it is likelier a contraction or possessive than a quote.
+function votdQuoteMarks(text) {
+  const t = String(text || '').trim();
+  return { open: /^[“‘"]/.test(t) ? '' : '“', close: /[”’"]$/.test(t) ? '' : '”' };
+}
 function TodayScreen({ ctx }) {
   const D = window.TrinityData;
   const Bible = window.Bible;
@@ -2098,6 +2107,7 @@ function TodayScreen({ ctx }) {
     const row = Bible.getVerses(vloc.book, vloc.chap).find(v => String(v.v) === String(vloc.verse));
     if (row) votd = { ref: pick.ref, text: row.text, version: Bible.activeVersion };
   }
+  const votdQ = votdQuoteMarks(votd.text);
 
   // continue reading — from the live reading location
   const loc = ctx.loc;
@@ -2318,7 +2328,7 @@ function TodayScreen({ ctx }) {
             <button onClick={(e) => { e.stopPropagation(); toggleVotd(); }} aria-label="Minimise" style={{ border: 'none', background: 'rgba(255,255,255,.18)', color: '#fff', width: 28, height: 28, borderRadius: 999, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="chevU" size={16} color="#fff" /></button>
           </div>
           <p style={{ fontFamily: 'var(--font-read)', fontSize: 23, lineHeight: 1.38, margin: '14px 0 14px', fontWeight: 500, textWrap: 'pretty' }}>
-            “{votd.text}”
+            {votdQ.open}{votd.text}{votdQ.close}
           </p>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <span style={{ fontWeight: 700, fontSize: 14, letterSpacing: '.2px' }}>{votd.ref} · {votd.version}</span>

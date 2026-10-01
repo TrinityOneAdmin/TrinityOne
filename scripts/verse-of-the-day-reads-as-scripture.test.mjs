@@ -88,7 +88,7 @@ async function bibleWithIsaiah() {
 // The real TodayScreen, with the verse card OPEN ('trinityone.votd-min' = '0', a member who tapped it open)
 // and the pool forced to the one verse that showed the bug.
 const Stub = n => { const f = function () { return null; }; Object.defineProperty(f, 'name', { value: n }); return f; };
-function today(Bible) {
+function today(Bible, ref = 'Isaiah 40:8') {
   const { React, draw } = miniReact();
   const { Icon } = loadScreen('app/icons.jsx', ['Icon'], { React, window: {} });
   const { ChurchBadge } = loadScreen('app/screens-church.jsx', ['ChurchBadge'], { React, window: {}, safeCssColor: (c, d) => d, safeImgUrl: () => '' });
@@ -100,7 +100,7 @@ function today(Bible) {
     Fellowship: { subscribeCareRequests: () => () => {}, cancelCareRequest() {}, childCareAudience: async () => [] },
     ChurchBadge,
     TrinityData: { NOTIFICATIONS: [], PLANS: [{ id: 'p1', name: 'Plan', days: [{ d: 1, ref: 'John 1' }] }],
-      VOTD_POOL: [{ ref: 'Isaiah 40:8', text: 'FALLBACK — the engine was not consulted' }] },
+      VOTD_POOL: [{ ref, text: 'FALLBACK — the engine was not consulted' }] },
     Bible,
   };
   const globals = {
@@ -152,8 +152,9 @@ test('Today’s Verse of the Day from a USFM Bible reads as the verse: no markup
   assert.ok(!/Here Is Your God/.test(shown), 'THE NEXT SECTION’S HEADING IS PRINTED AS PART OF THE VERSE: ' + JSON.stringify(shown));
   assert.ok(!/Romans 11/.test(shown), 'THE PARALLEL-PASSAGE REFERENCE IS PRINTED AS PART OF THE VERSE: ' + JSON.stringify(shown));
   assert.ok(!/fall,but/.test(shown), 'TWO POETRY LINES ARE GLUED TOGETHER WITH NO SPACE: ' + JSON.stringify(shown));
-  // the card's own quotes around the verse's own closing quote — exactly as the module has it
-  assert.equal(shown, '“The grass withers and the flowers fall, but the word of our God stands forever.””',
+  // the card's own opening quote and the verse's own closing one — the card adds no second closing quote after
+  // it (device round 2026-10-01: it read "…forever.””"; see the quote-mark tests at the end of this file)
+  assert.equal(shown, '“The grass withers and the flowers fall, but the word of our God stands forever.”',
     'the Verse of the Day does not read exactly as Isaiah 40:8');
 
   // TAPPING THE CARD shares what it shows — the share sheet (and copy from it) gets the same clean text.
@@ -400,5 +401,57 @@ test('in the SHIPPED eng-web and engbsb, no Psalm 119 verse carries a stanza let
     // and the reader still shows all 22 as labels
     const labels = rows.reduce((n, v) => n + (v.html.match(/<span class="sec qa">/g) || []).length, 0);
     assert.equal(labels, 22, file + ': the reader does not show all 22 stanza letters: ' + labels);
+  }
+});
+
+// ── THE CARD'S OWN QUOTE MARKS (device round 2026-10-01) ─────────────────────────────────────────────────────
+// The card wraps the verse in “ ”. The BSB's Isaiah 40:8 already ends with ” (the speech that opens in 40:6), and
+// on the Oppo the card read "…stands forever.””". The card now adds its mark at an edge only where the verse has
+// none there — opening and closing decided separately, straight and curly alike. A straight apostrophe at an edge
+// is not taken for a quote.
+// Found WITHOUT relying on the card's own “ (verseCard above does): a verse that opens with its own quote
+// renders none. The open card is the tappable block labelled Verse of the day that holds the scripture paragraph.
+function anyVerseCard(tree) {
+  const cards = find(tree, n => typeof (n.props || {}).onClick === 'function' && texts(n).some(t => /Verse of the day/i.test(t)) && find(n, m => m.type === 'p').length > 0);
+  assert.ok(cards.length >= 1, 'the open Verse of the Day card is not on the screen');
+  return cards[cards.length - 1];
+}
+const card = (Bible, ref) => verseText(anyVerseCard(today(Bible, ref).draw()));
+test('the SHIPPED BSB’s Isaiah 40:8, on the real card, ends with ONE closing quote', async () => {
+  const Bible = realBible();
+  const r = await Bible.loadModuleBytes(new Uint8Array(readFileSync(ROOT + 'modules/engbsb.zip')), 'engbsb.zip', { abbr: 'BSBQ', name: 'BSBQ', category: 'bibles' });
+  assert.equal(r.kind, 'bible', 'fixture: engbsb.zip did not load');
+  const text = Bible.getVerses(23, 40, 'BSBQ').find(v => String(v.v) === '8').text;
+  assert.ok(text.endsWith('”'), 'CONTROL: the shipped BSB’s Isaiah 40:8 no longer ends with a closing quote, so this row tests nothing: ' + JSON.stringify(text));
+  const shown = card(Bible, 'Isaiah 40:8');
+  assert.ok(!/[”"]\s*[”"]$/.test(shown), 'THE CARD DOUBLES THE VERSE’S OWN CLOSING QUOTE: ' + JSON.stringify(shown));
+  assert.equal(shown, '“' + text, 'the card does not read as the verse with one opening quote of its own: ' + JSON.stringify(shown));
+});
+
+const QUOTED = [
+  '\\id ISA', '\\c 41', '\\p',
+  '\\v 1 “Comfort, comfort My people,” says your God.',
+  '\\v 2 Jesus said, "I am the way."',
+  '\\v 3 "Do not be afraid."',
+  '\\v 4 He said, “Write: ‘Blessed are the dead.’',
+  '\\v 5 Be strong and courageous.',
+  '\\v 6 These are the portions of the Levites\'',
+].join('\n');
+test('each edge is decided on its own: an opening or closing mark the verse already has is not added again', async () => {
+  const Bible = realBible();
+  const r = await Bible.loadModuleBytes(new TextEncoder().encode(QUOTED), 'q.usfm', { abbr: 'QT', name: 'Quote Test', category: 'bibles' });
+  assert.equal(r.kind, 'bible', 'fixture: the quote-test book did not load');
+  const rows = [
+    ['Isaiah 41:1', '“Comfort, comfort My people,” says your God.”', 'an OPENING curly quote is not doubled'],
+    ['Isaiah 41:2', '“Jesus said, "I am the way."', 'a STRAIGHT closing quote is not doubled'],
+    ['Isaiah 41:3', '"Do not be afraid."', 'straight quotes at BOTH edges: the card adds neither'],
+    ['Isaiah 41:4', '“He said, “Write: ‘Blessed are the dead.’', 'a closing SINGLE curly quote counts as a closing mark'],
+    ['Isaiah 41:5', '“Be strong and courageous.”', 'CONTROL: a verse with no quote marks gets the card’s two'],
+    ['Isaiah 41:6', '“These are the portions of the Levites\'”', 'a straight APOSTROPHE at the end is not a quote'],
+  ];
+  for (const [ref, want, why] of rows) {
+    const shown = card(Bible, ref);
+    assert.ok(!/FALLBACK/.test(shown), 'the card did not read ' + ref + ' from the engine: ' + shown);
+    assert.equal(shown, want, why + ' — ' + ref + ' read ' + JSON.stringify(shown));
   }
 });
