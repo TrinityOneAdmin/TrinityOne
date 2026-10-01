@@ -80,6 +80,9 @@ const ID_OK = /^[A-Za-z0-9_-]{1,64}$/;
 // Both occurrence walks step forward until `cur.getUTCDay() === day`. A `day` that no weekday can equal would
 // spin for ever, so neither walk is entered without this. seriesDay() below is what makes it always true.
 const DAY_OK = (day) => Number.isInteger(day) && day >= 0 && day <= 6;
+// A monthly meeting's week: 1-5 = the 1st…5th such weekday, -1 = the LAST one (app/recur.jsx NTH_LAST, owner
+// decision 2026-10-01). -1 is also RFC 5545's own spelling, so rrule() below writes it straight through.
+const NTH_OK = (n) => Number.isInteger(n) && ((n >= 1 && n <= 5) || n === -1);
 
 // Read one event down to the fields this file may carry. Returns null for anything that cannot be placed on
 // a calendar at all (no id, no valid date), which the builder then skips rather than emitting a broken VEVENT.
@@ -91,7 +94,7 @@ export function publicEventFields(ev) {
   const time = HHMM.test(String(ev.time || '')) ? String(ev.time) : '';
   const recur = RECUR.has(ev.recur) ? ev.recur : '';
   const day = (recur && DAY_OK(ev.day)) ? ev.day : null;
-  const nth = (recur === 'monthly' && typeof ev.nth === 'number' && ev.nth >= 1 && ev.nth <= 5) ? ev.nth : null;
+  const nth = (recur === 'monthly' && NTH_OK(ev.nth)) ? ev.nth : null;
   return {
     id, date, time,
     title: String(ev.title || '').slice(0, 200),
@@ -142,9 +145,17 @@ function firstOccurrence(date, day, fortnightly) {
 // the first `day` of the next month — which is exactly what expandEvents walks ("once a month, on the first
 // matching weekday of the month", occurrences before the anchor skipped).
 function nthMonthlyOccurrence(date, day, nth) {
-  const n = (typeof nth === 'number' && nth >= 1 && nth <= 5) ? nth : 1;
+  const n = NTH_OK(nth) ? nth : 1;
   const p = isoParts(date);
   if (!p || !DAY_OK(day)) return date;
+  if (n === -1) {                                // the LAST <day>: every month has one, so this month or next
+    for (let ahead = 0; ahead < 2; ahead++) {
+      const cur = new Date(Date.UTC(p.y, p.mo + ahead, 0));   // day 0 of the month after = this month's last day
+      while (cur.getUTCDay() !== day) cur.setUTCDate(cur.getUTCDate() - 1);
+      if (cur.getTime() >= p.t) return isoOf(cur);
+    }
+    return date;
+  }
   const limit = n >= 5 ? 6 : 2;
   for (let ahead = 0; ahead < limit; ahead++) {
     const cur = new Date(Date.UTC(p.y, p.mo - 1 + ahead, 1));
@@ -190,7 +201,7 @@ export const unfoldIcs = (text) => String(text == null ? '' : text).replace(/\r\
 function rrule(ev) {
   if (!ev.recur) return '';
   const day = seriesDay(ev);
-  const nth = (typeof ev.nth === 'number' && ev.nth >= 1 && ev.nth <= 5) ? ev.nth : 1;
+  const nth = NTH_OK(ev.nth) ? ev.nth : 1;
   if (ev.recur === 'monthly') return 'RRULE:FREQ=MONTHLY;BYDAY=' + nth + BYDAY[day];
   return 'RRULE:FREQ=WEEKLY' + (ev.recur === 'fortnightly' ? ';INTERVAL=2' : '') + ';BYDAY=' + BYDAY[day];
 }

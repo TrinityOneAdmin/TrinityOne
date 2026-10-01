@@ -1322,7 +1322,7 @@ function StewSetupWizard({ church, onDone, onTab, onSettings, onInvite, onNewPos
       // regardless, so an offline or wrong-key relay produced exactly the empty calendar this step exists to
       // prevent — with the only signal a generic 9-second toast the steward was already scrolling past.
       for (const m of rows) {
-        const r = await Promise.resolve(window.Steward.publishMeeting({ id: m.id, title: m.title.trim(), day: m.day, time: m.time, recur: m.recur }));
+        const r = await Promise.resolve(window.Steward.publishMeeting({ id: m.id, title: m.title.trim(), day: m.day, time: m.time, recur: m.recur, ...(m.recur === 'monthly' && typeof m.nth === 'number' ? { nth: m.nth } : {}) }));   // which week — WizMeetings sets it; dropping it published every monthly meeting as the 1st
         if (!r) failed++;
       }
     } catch (e) { failed = rows.length; }

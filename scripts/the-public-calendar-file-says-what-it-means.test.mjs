@@ -437,3 +437,58 @@ test('S-7: the widget parses nth from BYDAY and expands to the nth weekday', () 
       `widget occurrence ${occ.date} is day ${d.getUTCDate()} — not in the 3rd-Monday range (15-21)`);
   }
 });
+
+// ── "LAST <weekday>" (nth -1) — owner decision 2026-10-01 ─────────────────────────────────────────────────
+// A monthly meeting started on the 29th-31st is the LAST such weekday of every month: the 4th in some
+// months, the 5th in others. Stored as nth -1 (RFC 5545's own spelling, BYDAY=-1FR). The app, the feed and
+// the widget must all name the same night, so each is held to an independent "last <day> of the month".
+const lastWeekdayOf = (y, m0, day) => { const d = new Date(Date.UTC(y, m0 + 1, 0)); while (d.getUTCDay() !== day) d.setUTCDate(d.getUTCDate() - 1); return d.toISOString().slice(0, 10); };
+
+test('last: expandEvents puts nth -1 on the last such weekday of every month', () => {
+  const evs = expandEvents([{ id: 'p', date: '2026-10-30', time: '19:30', recur: 'monthly', day: 5, nth: -1 }], '2026-10-01', 400);
+  assert.ok(evs.length >= 12, 'expected a year of occurrences, got ' + evs.length);
+  for (const e of evs) {
+    assert.equal(e.date, lastWeekdayOf(+e.date.slice(0, 4), +e.date.slice(5, 7) - 1, 5), `${e.date} is not the last Friday of its month`);
+  }
+  assert.deepEqual(evs.slice(0, 4).map(e => e.date), ['2026-10-30', '2026-11-27', '2026-12-25', '2027-01-29']);
+});
+
+test('last: the feed writes BYDAY=-1<day>, its DTSTART is the app\'s first occurrence, every anchor × weekday', () => {
+  let cases = 0, bad = 0, first = '';
+  for (const y of [2026, 2027]) for (let m = 1; m <= 12; m++) {
+    const dim = new Date(Date.UTC(y, m, 0)).getUTCDate();
+    for (let dom = 1; dom <= dim; dom++) {
+      const date = `${y}-${String(m).padStart(2, '0')}-${String(dom).padStart(2, '0')}`;
+      for (let day = 0; day <= 6; day++) {
+        const ev = { id: 'meeting', title: 'M', date, time: '19:30', recur: 'monthly', day, nth: -1 };
+        const text = buildCalendar([ev], { uidScope: 'x' });
+        cases++;
+        const rule = prop(text, 'RRULE')[0];
+        const start = (prop(text, 'DTSTART')[0] || '').slice(0, 8);
+        const feed = start.slice(0, 4) + '-' + start.slice(4, 6) + '-' + start.slice(6, 8);
+        const app = expandEvents([ev], date, 70)[0];
+        const ok = rule === 'FREQ=MONTHLY;BYDAY=-1' + BYDAY[day] && app && app.date === feed
+          && feed === lastWeekdayOf(+feed.slice(0, 4), +feed.slice(5, 7) - 1, day);
+        if (!ok) { bad++; if (!first) first = `anchor ${date} day ${day}: rule=${rule} feed=${feed} app=${app ? app.date : '(none)'}`; }
+      }
+    }
+  }
+  assert.ok(cases > 5000, 're-anchor: the sweep is too small');
+  assert.equal(bad, 0, `${bad} of ${cases} "last" anchors disagree. e.g. ${first}`);
+});
+
+test('last: the public copy keeps nth -1 (it is not dropped to "1st")', () => {
+  const f = publicEventFields({ id: 'e', date: '2026-10-30', recur: 'monthly', day: 5, nth: -1 });
+  assert.equal(f.nth, -1);
+  assert.equal(publicEventFields({ id: 'e', date: '2026-10-30', recur: 'monthly', day: 5, nth: -2 }).nth, null, 'a nonsense week was admitted');
+});
+
+test('last: the widget parses BYDAY=-1FR and shows the last Friday of each month', () => {
+  const ics = buildCalendar([{ id: 'pray', title: 'Prayer', date: '2026-10-30', time: '19:30', recur: 'monthly', day: 5, nth: -1 }], { uidScope: 'x' });
+  const parsed = parseIcs(ics);
+  assert.equal(parsed.events[0].rrule.nth, -1, 'the widget did not read -1 from BYDAY=-1FR');
+  assert.equal(parsed.events[0].rrule.byday, 'FR');
+  const occs = expandOccurrences(parsed.events, { from: '2026-10-01', until: '2027-09-30' });
+  assert.equal(occs.length, 12, 'expected one occurrence a month for a year, got ' + occs.length);
+  for (const o of occs) assert.equal(o.date, lastWeekdayOf(+o.date.slice(0, 4), +o.date.slice(5, 7) - 1, 5), `widget occurrence ${o.date} is not the last Friday`);
+});
