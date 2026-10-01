@@ -20,22 +20,27 @@ function schAddMonths(iso, n) { const d = schDate(iso); d.setMonth(d.getMonth() 
 // Friday" would skip most months.
 function schNthOf(iso) { const d = schDate(iso).getDate(); return d >= 29 ? -1 : Math.ceil(d / 7); }
 const SCH_NTH_OPTS = [[1, '1st'], [2, '2nd'], [3, '3rd'], [4, '4th'], [-1, 'Last']];
+// Where a monthly repeat's first date lands — shown under the picker only when it is not the date typed.
+function schFirstMonthly(date, nth) { return date ? (schGenDates(date, 'monthly', schAddMonths(date, 2), nth)[0] || '') : ''; }
+const SCH_NO_DATES = 'No date matches before “Until”.';
 function schNthLabel(n) { return n === -1 ? 'Last' : (['1st', '2nd', '3rd', '4th', '5th'][(n || 1) - 1] || '1st'); }
 // dates from start (inclusive) stepping weekly/monthly up to and including untilIso. MONTHLY STEPS BY WEEKDAY,
 // not by calendar date: the start's weekday, in week `nth` of each month (default schNthOf(start)). Stepping
 // the date instead put a Tuesday meeting on Friday 13 Nov, and 31 Jan on 3 Mar. The months after the start
 // come from app/recur.jsx's expandEvents — the same walk that paints a recurring meeting — so the one-off
-// services and events published here land where a monthly meeting would. The start itself is always
-// included: it is the date the steward typed.
+// services and events published here land where a monthly meeting would. EVERY date is an occurrence of the
+// rule: when the steward picks a week other than the start date's own (start 13 Oct, the 2nd Tuesday, pick
+// "Last"), the first date is the first such week ON OR AFTER the start (27 Oct), never the typed date plus
+// the rule — that published 13 Oct AND 27 Oct, two in one month (audit of 484cc00, finding 1). So a monthly
+// result can be EMPTY (until before the first occurrence); callers must say so rather than publish nothing.
 function schGenDates(startIso, cadence, untilIso, nth) {
-  if (!startIso) return []; const out = [startIso]; let cur = startIso, guard = 0;
+  if (!startIso) return [];
   if (cadence === 'monthly') {
-    if (!untilIso || untilIso <= startIso) return out;
-    const span = Math.round((schDate(untilIso) - schDate(startIso)) / 864e5);
+    const span = Math.max(0, Math.round((schDate(untilIso || startIso) - schDate(startIso)) / 864e5));
     const series = { id: 'sch', date: startIso, recur: 'monthly', day: schDate(startIso).getDay(), nth: (typeof nth === 'number') ? nth : schNthOf(startIso) };
-    for (const o of window.expandEvents([series], startIso, span)) if (o.date > startIso && o.date <= untilIso && out.length < 400) out.push(o.date);
-    return out;
+    return window.expandEvents([series], startIso, span).map(o => o.date).filter(d => d >= startIso && d <= (untilIso || startIso)).slice(0, 400);
   }
+  const out = [startIso]; let cur = startIso, guard = 0;
   while (guard++ < 400) { cur = schAddDays(cur, 7); if (!untilIso || cur > untilIso) break; out.push(cur); }
   return out;
 }
@@ -380,7 +385,7 @@ function AssignModal({ slot, roster, assign, unavail, onAssign, onClear, onClose
   );
 }
 
-function SchRepeatRow({ repeat, setRepeat, until, setUntil, nth, setNth }) {
+function SchRepeatRow({ repeat, setRepeat, until, setUntil, nth, setNth, firstOn }) {
   return (
     <React.Fragment>
       <div style={schLbl}>Repeat</div>
@@ -395,6 +400,7 @@ function SchRepeatRow({ repeat, setRepeat, until, setUntil, nth, setNth }) {
           <select aria-label="Which week of the month" value={nth || 1} onChange={e => setNth(+e.target.value)} style={schFld}>
             {SCH_NTH_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
           </select>
+          {firstOn ? (() => { const p = schParts(firstOn); return <div role="status" style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 6 }}>First: {p.dow} {p.day} {p.mon}</div>; })() : null}
         </React.Fragment>
       ) : null}
       {repeat !== 'none' ? (<React.Fragment><div style={schLbl}>Until</div><input aria-label="Until" type="date" value={until} onChange={e => setUntil(e.target.value)} style={schFld} /></React.Fragment>) : null}
@@ -421,6 +427,7 @@ function SchAddServiceModal({ onClose }) {
     if (!date || busy) return;
     setBusy(true); setErr('');
     const dates = repeat === 'none' ? [date] : schGenDates(date, repeat, until || schAddMonths(date, 3), nth);
+    if (!dates.length) { setBusy(false); setErr(SCH_NO_DATES); return; }   // a monthly week whose first date is after Until
     const out = await Promise.all(dates.map(d => window.Steward.publishService({ name: name.trim() || 'Service', date: d, time })));
     setBusy(false);
     if (out.some(r => r == null)) { setErr(SCH_NO_KEY); return; }   // stay open: nothing was written
@@ -434,7 +441,7 @@ function SchAddServiceModal({ onClose }) {
         <div style={{ flex: 1 }}><div style={schLbl}>Date</div><input aria-label="Date" type="date" value={date} onChange={e => setDate(e.target.value)} style={schFld} /></div>
         <div style={{ width: 130 }}><div style={schLbl}>Time</div><input aria-label="Time" type="time" value={time} onChange={e => setTime(e.target.value)} style={schFld} /></div>
       </div>
-      <SchRepeatRow repeat={repeat} setRepeat={setRepeat} until={until} setUntil={setUntil} nth={nth} setNth={setNthPick} />
+      <SchRepeatRow repeat={repeat} setRepeat={setRepeat} until={until} setUntil={setUntil} nth={nth} setNth={setNthPick} firstOn={repeat === 'monthly' && schFirstMonthly(date, nth) !== date ? schFirstMonthly(date, nth) : ''} />
       {repeat !== 'none' && until && until <= date ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', marginTop: 8, lineHeight: 1.4 }}>The “until” date is on or before the start, so only the first service will be added — pick a later date to repeat.</div> : null}
       <div style={{ display: 'flex', gap: 10, marginTop: 22 }}>
         <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
@@ -1059,6 +1066,7 @@ function SchEventModal({ day, onClose }) {
     if (!title.trim() || !date || busy) return;
     setBusy(true); setErr('');
     const dates = repeat === 'none' ? [date] : schGenDates(date, repeat, until || schAddMonths(date, 3), nth);
+    if (!dates.length) { setBusy(false); setErr(SCH_NO_DATES); return; }   // a monthly week whose first date is after Until
     // a group is church-scoped, so a network-wide event never belongs to a church group
     const gid = asNetwork ? '' : group;
     const out = await Promise.all(dates.map(d => window.Steward.publishEvent({ title: title.trim(), date: d, time, where: where.trim(), blurb: blurb.trim(), accent, image, groupId: gid }, asPub)));
@@ -1160,7 +1168,7 @@ function SchEventModal({ day, onClose }) {
       )}
       <div style={schLbl}>Note (optional)</div>
       <textarea aria-label="Note (optional)" value={blurb} onChange={e => setBlurb(e.target.value)} rows={3} placeholder="A short description members will read." style={{ ...schFld, height: 'auto', padding: '11px 13px', lineHeight: 1.5, resize: 'vertical', fontFamily: 'var(--font-ui)' }} />
-      <SchRepeatRow repeat={repeat} setRepeat={setRepeat} until={until} setUntil={setUntil} nth={nth} setNth={setNthPick} />
+      <SchRepeatRow repeat={repeat} setRepeat={setRepeat} until={until} setUntil={setUntil} nth={nth} setNth={setNthPick} firstOn={repeat === 'monthly' && schFirstMonthly(date, nth) !== date ? schFirstMonthly(date, nth) : ''} />
     </SchModal>
   );
 }
