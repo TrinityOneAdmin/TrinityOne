@@ -16362,25 +16362,86 @@ zoo`.split("\n");
       const fresh = live && _subbedOn.get(url) !== live;
       _relaysTouched.add(url);
       if (live && !_subbedOn.has(url)) _subbedOn.set(url, live);
+      if (live) _watchSocket(url, live);
       if (fresh) {
         _clearanceSent.clear();
-        if (_returnAnnounced.get(url) !== live) {
-          _returnAnnounced.set(url, live);
-          try {
-            window.dispatchEvent(new CustomEvent("steward-relay-returned", { detail: { url } }));
-          } catch (e) {
-          }
-        }
+        _announceReturn(url, live);
       }
     } catch (e) {
     }
   };
+  function _announceReturn(url, live) {
+    if (_returnAnnounced.get(url) === live) return;
+    _returnAnnounced.set(url, live);
+    try {
+      window.dispatchEvent(new CustomEvent("steward-relay-returned", { detail: { url } }));
+    } catch (e) {
+    }
+  }
+  var _NOT_LISTENING = Object.freeze({ notListening: true });
+  function _relayKey2(url) {
+    try {
+      return normalizeURL2(url);
+    } catch (e) {
+      return String(url || "");
+    }
+  }
+  function _noteDialFailed(url) {
+    const k = _relayKey2(url);
+    _relaysTouched.add(k);
+    const r = pool.relays.get(k);
+    if (!(r && r.connected === true)) _subbedOn.set(k, _NOT_LISTENING);
+  }
+  function _watchSocket(url, live) {
+    if (!live || live.__t1Watched) return;
+    live.__t1Watched = true;
+    const k = _relayKey2(url), prev = live.onclose;
+    live.onclose = function() {
+      try {
+        if (typeof prev === "function") prev.apply(this, arguments);
+      } finally {
+        try {
+          if (!live.__t1Dropped && _subbedOn.get(k) === live) {
+            live.__t1Dropped = true;
+            window.dispatchEvent(new CustomEvent("steward-relay-dropped", { detail: { url: k } }));
+          }
+        } catch (e) {
+        }
+      }
+    };
+  }
   pool.onRelayConnectionFailure = (url) => {
     try {
-      _relaysTouched.add(url);
+      _noteDialFailed(url);
     } catch (e) {
     }
   };
+  try {
+    const _ensure = pool.ensureRelay.bind(pool);
+    pool.ensureRelay = function(url, params) {
+      return Promise.resolve(_ensure(url, params)).then((r) => {
+        try {
+          if (r) {
+            const k = _relayKey2(url);
+            _watchSocket(k, r);
+            if (_subbedOn.get(k) !== r && _returnAnnounced.get(k) !== r) {
+              _clearanceSent.clear();
+              _announceReturn(k, r);
+            }
+          }
+        } catch (e) {
+        }
+        return r;
+      }, (err2) => {
+        try {
+          _noteDialFailed(url);
+        } catch (e) {
+        }
+        throw err2;
+      });
+    };
+  } catch (e) {
+  }
   function _b64ToU8(base642) {
     const pad2 = "=".repeat((4 - base642.length % 4) % 4);
     const s = (base642 + pad2).replace(/-/g, "+").replace(/_/g, "/");

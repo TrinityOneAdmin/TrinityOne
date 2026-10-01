@@ -151,14 +151,15 @@ function consoleSide(urls) {
   const pick = (src, base) => (src.match(new RegExp('\\b(' + base + '\\d*)\\(')) || [])[1];
   const feName = pick(authWiring, 'finalizeEvent') || 'finalizeEvent';
   const normName = pick(authWiring, 'normalizeURL') || 'normalizeURL';
+  const events = [];   // what the lifted wiring tells the page (steward-relay-returned / -dropped)
   const scope = { pool, relays: () => urls, [normName]: normalizeURL, [feName]: finalizeEvent,
     sk: church.sk, console: { warn() {}, log() {} }, Set, Map, String, JSON,
-    window: { Steward: {}, dispatchEvent() {} },
+    window: { Steward: {}, dispatchEvent(e) { events.push(e && e.type); } },
     CustomEvent: function (t, d) { this.type = t; this.detail = (d || {}).detail; },
     setTimeout, Promise };
   const args = Object.keys(scope);
   const built = new Function(...args, `${wiring}\n${isAuthedSrc}\n${publishSrc}\nreturn ({ publish, ${healthy},\n ${reconnect},\n ${relayAuthedM},\n ${markM} });`)(...args.map(k => scope[k]));
-  return { ...built, pool, close: () => { try { pool.destroy(); } catch {} } };
+  return { ...built, pool, events, close: () => { try { pool.destroy(); } catch {} } };
 }
 
 // The relay's NIP-42 challenge is lazy — only a REQ naming a safeguarding/safety/invite doc provokes one.
@@ -307,11 +308,15 @@ function ticker(stewardStub) {
     'the ticker no longer probes before re-subscribing, so it is back to re-querying the whole church on a ' +
     'signal that a durably-dead relay pins false for ever');
   let bumped = 0;
-  const api = new Function('window', 'Date', 'Math',
+  // ITS OWN CLOCK, so its timers too: the ticker defers a call its floor turns away and retries a probe that
+  // found nothing (device round 2026-10-01). Recorded, and run only when a test says so.
+  const timers = [];
+  const fakeSetTimeout = (fn, ms) => { timers.push({ fn, ms }); return timers.length; };
+  const api = new Function('window', 'Date', 'Math', 'setTimeout',
     src + '\nreturn { bump: _maybeBumpConn, listeners: _connListeners };'
-  )({ Steward: stewardStub }, { now: () => stewardStub.clock }, Math);
+  )({ Steward: stewardStub }, { now: () => stewardStub.clock }, Math, fakeSetTimeout);
   api.listeners.add(() => { bumped++; });
-  return { ...api, bumps: () => bumped };
+  return { ...api, bumps: () => bumped, timers };
 }
 
 test('A PERMANENTLY DEAD RELAY MUST NEVER RE-QUERY THE CHURCH', async () => {
@@ -578,6 +583,187 @@ test('A SOCKET RE-OPENED BY AN ORDINARY READ MUST NOT READ AS HEALTHY EITHER', a
     'subscription and nothing is listening. The ticker returns at its first line, so the console stays deaf ' +
     'to new members and every safeguarding write stays refused, for the rest of the session.');
   s.close();
+});
+
+// ── AFTER A LAUNCH WITH NO NETWORK (device round 2026-10-01; the member app's 252b055, in the console) ─────
+// Every boot subscription failed, so nothing of ours is listening anywhere — and the first socket back was
+// opened by a write or a one-shot read. Before the fix a read SEEDED "our subscriptions live here" with it
+// (first connect only) and a write was never seen at all, so relaysHealthy() said yes, the ticker never
+// re-subscribed, and the relay never challenged: deaf, and every safeguarding write refused.
+async function launchedOffline() {
+  relay.kill('SIGKILL');
+  await sleep(800);
+  const s = consoleSide([WS_URL]);
+  const boot = s.pool.subscribeMany([WS_URL], [{ kinds: [30078], '#d': [MEMBER_D + church.pub] }], { onevent() {}, oneose() {} });
+  await sleep(2500);            // maxWaitForConnection is 1500ms: the boot subscription has failed
+  try { boot.close(); } catch {}
+  assert.equal(s.pool.listConnectionStatus().get(normalizeURL(WS_URL)), undefined, 'fixture: the boot dial did not fail');
+  await startRelay();
+  return s;
+}
+test('AFTER A LAUNCH WITH NO NETWORK, A SOCKET OPENED BY A WRITE MUST NOT READ AS HEALTHY', async () => {
+  const s = await launchedOffline();
+  await s.publish(finalizeEvent({ kind: 30078, created_at: now(),
+    tags: [['d', 'trinityone/minors:' + church.pub], ['t', 'trinityone'], ['church', church.pub]],
+    content: '{"pubkeys":[]}' }, church.sk));
+  await sleep(800);
+  assert.equal(s.pool.listConnectionStatus().get(normalizeURL(WS_URL)), true, 'fixture: the write did not open the socket');
+  assert.equal(s.relaysHealthy(), false,
+    'after a launch with no network the first socket back was opened by a write, and the console calls itself ' +
+    'healthy on it — nothing of its is listening there, the ticker will never re-subscribe, and the relay will ' +
+    'never ask it to log in: deaf to new members, every safeguarding write refused, for the session');
+  s.close();
+});
+test('…NOR ONE OPENED BY A ONE-SHOT READ', async () => {
+  const s = await launchedOffline();
+  await new Promise(res => {
+    const one = s.pool.subscribeMany([WS_URL], [{ kinds: [30078], '#d': [MEMBER_D + church.pub] }],
+      { onevent() {}, oneose() { try { one.close(); } catch {} res(); } });
+    setTimeout(res, 4000);
+  });
+  await sleep(600);
+  assert.equal(s.pool.listConnectionStatus().get(normalizeURL(WS_URL)), true, 'fixture: the read did not open the socket');
+  assert.equal(s.relaysHealthy(), false,
+    'after a launch with no network the first socket back was opened by a one-shot read, which recorded it as ' +
+    '"our subscriptions live here" — and closed. The console calls itself healthy and stays deaf.');
+  s.markResubscribed();          // what the ticker does once it has rebuilt them
+  assert.equal(s.relaysHealthy(), true, 'CONTROL: re-subscribed, and still unhealthy — the ticker would loop');
+  s.close();
+});
+test('THE SOCKET OUR SUBSCRIPTIONS LIVE ON DROPPING IS SAID, once', async () => {
+  // steward-root.jsx's ticker listens for it and looks a moment later; before, nothing looked until the beat.
+  const s = consoleSide([WS_URL]);
+  const sub = s.pool.subscribeMany([WS_URL], [{ kinds: [30078], '#d': [MEMBER_D + church.pub] }], { onevent() {}, oneose() {} });
+  await sleep(700);
+  assert.equal(s.events.filter(t => t === 'steward-relay-dropped').length, 0, 'fixture: a drop said before anything dropped');
+  relay.kill('SIGKILL');
+  await sleep(1200);
+  assert.equal(s.events.filter(t => t === 'steward-relay-dropped').length, 1,
+    'the console\'s socket closed and nothing said so — the next look is the 90-second beat (20–70 s on the Oppo)');
+  try { sub.close(); } catch {}
+  s.close();
+  await startRelay();
+});
+test('A SIGNAL THE FLOOR TURNS AWAY IS DEFERRED, NOT DROPPED', async () => {
+  // The first look found the relay not back yet; the socket came back seconds later — inside the 20-second
+  // floor — and that signal used to be thrown away, leaving the next look to the 90-second beat.
+  let up = false, probes = 0;
+  const stub = { clock: 1000000, relaysHealthy: () => up, relaysReplaced: () => false, markResubscribed: () => {},
+    reconnectDownRelays: async () => { probes++; return up; } };
+  const t = ticker(stub);
+  await t.bump();                                   // the resume: not back yet
+  assert.equal(t.bumps(), 0, 'fixture: re-subscribed with nothing back');
+  stub.clock += 5000;
+  stub.relaysHealthy = () => false;
+  stub.reconnectDownRelays = async () => { probes++; return true; };   // it is back now
+  await t.bump();                                   // the "it's back" signal, inside the floor
+  assert.equal(probes, 1, 'fixture: the floor did not turn the second signal away');
+  assert.ok(t.timers.length >= 1, 'the signal inside the floor was dropped — nothing will look again until the 90-second beat');
+  stub.clock += 20000;
+  for (const tm of t.timers.splice(0)) await tm.fn();   // (the probe's own 15 s race timer is in here too; harmless)
+  await sleep(0);
+  assert.equal(t.bumps(), 1, 'the deferred look did not re-subscribe once the relay was back');
+});
+test('A SOCKET ALREADY BACK IS RE-SUBSCRIBED WITHOUT WAITING OUT THE 20-SECOND FLOOR', async () => {
+  // The beat's probe failed (radio still off); seconds later the radio is back and a publish has opened a socket
+  // nothing of ours is listening on. Re-subscribing fixes that and stops — it is the probe the floor protects.
+  let replaced = false;
+  const stub = { clock: 1000000, relaysHealthy: () => false, relaysReplaced: () => replaced, markResubscribed: () => { replaced = false; },
+    reconnectDownRelays: async () => false };
+  const t = ticker(stub);
+  await t.bump();                                   // the failed probe: the floor starts, and its 20 s retry is pending
+  assert.equal(t.bumps(), 0, 'fixture: re-subscribed with nothing back');
+  stub.clock += 4000; replaced = true;              // a socket is up now, opened by something else
+  await t.bump();
+  assert.equal(t.bumps(), 1, 'a socket already back waited out the 20-second floor before anything re-subscribed or logged in');
+  stub.clock += 1000; replaced = true;              // and a link flapping faster than every 3 s is not re-queried each time
+  await t.bump();
+  assert.equal(t.bumps(), 1, 'a flapping link re-queried the whole church twice in a second');
+});
+test('…AND WHEN IT COMES BACK INSIDE THE SHORT FLOOR, THE LOOK IT ASKS FOR IS THE SOONER ONE, not the probe\'s 20 s retry', async () => {
+  let replaced = false;
+  const stub = { clock: 1000000, relaysHealthy: () => false, relaysReplaced: () => replaced, markResubscribed: () => { replaced = false; },
+    reconnectDownRelays: async () => false };
+  const t = ticker(stub);
+  await t.bump();                                   // failed probe at T: a retry is pending for T+20 s
+  stub.clock += 1000; replaced = true;              // a socket back 1 s later: inside the 3-second floor
+  await t.bump();
+  assert.equal(t.bumps(), 0, 'fixture: the short floor did not apply');
+  const soon = t.timers.filter(x => x.ms <= 3000);
+  assert.ok(soon.length >= 1, 'the look a returned socket asked for was swallowed by the probe\'s pending 20 s retry (measured on the browser test: 20 s)');
+  stub.clock += 2500;
+  for (const tm of soon) await tm.fn();
+  await sleep(0);
+  assert.equal(t.bumps(), 1, 'the sooner look did not re-subscribe');
+});
+test('A PROBE THAT FOUND NOTHING IS ASKED AGAIN WITHIN 20 s — with no other signal, not left to the 90-second beat', async () => {
+  // On coming back to the foreground the first look can run before the radio or the relay is back. Nothing else
+  // may say anything (Android's `online` is unreliable), so the look must schedule its own second chance.
+  let up = false, probes = 0;
+  const stub = { clock: 1000000, relaysHealthy: () => false, relaysReplaced: () => false, markResubscribed: () => {},
+    reconnectDownRelays: async () => { probes++; return up; } };
+  const t = ticker(stub);
+  await t.bump();                                   // nothing back yet
+  assert.equal(t.bumps(), 0, 'fixture: re-subscribed with nothing back');
+  const again = t.timers.filter(x => x.ms === 20000);
+  assert.equal(again.length, 1, 'a probe that found nothing did not ask again — the next look is the 90-second beat');
+  up = true; stub.clock += 20000;
+  await again[0].fn();
+  await sleep(0);
+  assert.equal(t.bumps(), 1, 'the second look found the relay back and did not re-subscribe');
+});
+test('…and a relay that never comes back costs a few extra probes per episode, then only the beat', async () => {
+  let probes = 0;
+  const stub = { clock: 1000000, relaysHealthy: () => false, relaysReplaced: () => false, markResubscribed: () => {},
+    reconnectDownRelays: async () => { probes++; return false; } };
+  const t = ticker(stub);
+  await t.bump();
+  for (let i = 0; i < 20 && t.timers.length; i++) { stub.clock += 20000; for (const tm of t.timers.splice(0)) await tm.fn(); await sleep(0); }
+  assert.ok(probes <= 4, `${probes} probes in one episode against a relay that is not coming back`);
+  assert.equal(t.timers.length, 0, 'the retries never stop — a dead relay is probed every 20 s for ever');
+});
+
+// THE SIGNALS THAT START A LOOK, wired (device round 2026-10-01). The WebView's visibilitychange is not reliable on
+// Android, and on the Oppo the console learned its sockets had closed only after it resumed — so the ticker also
+// listens for the native foreground signal (Capacitor appStateChange), a frozen page resuming, a page restored
+// from the back-forward cache, and the engine saying a socket dropped or came back. Each is driven here through
+// the shipped wiring (_wireStewardConn) and must reach a probe.
+function wiredTicker(stewardStub) {
+  const R = readFileSync(new URL('../app/steward-root.jsx', import.meta.url), 'utf8');
+  const from = R.indexOf('const _connListeners = new Set();');
+  const end = R.indexOf('function useStewardConn(');
+  assert.ok(from > 0 && end > from, 're-anchor: the shared reconnect ticker moved in steward-root.jsx');
+  const on = { window: {}, document: {}, app: {} };
+  const add = (bag) => (ev, fn) => { (bag[ev] = bag[ev] || []).push(fn); };
+  const timers = [];
+  const win = { Steward: stewardStub, addEventListener: add(on.window),
+    Capacitor: { Plugins: { App: { addListener: (ev, fn) => { add(on.app)(ev, fn); return { remove() {} }; } } } } };
+  const doc = { visibilityState: 'visible', addEventListener: add(on.document) };
+  const api = new Function('window', 'document', 'Date', 'Math', 'setTimeout', 'setInterval',
+    R.slice(from, end) + '\nreturn { wire: _wireStewardConn, listeners: _connListeners };'
+  )(win, doc, { now: () => stewardStub.clock }, Math, (fn, ms) => { timers.push({ fn, ms }); return timers.length; }, () => 0);
+  api.wire();
+  const fire = async (bag, ev, arg) => { for (const fn of (on[bag][ev] || [])) await fn(arg); for (const tm of timers.splice(0)) await tm.fn(); await sleep(0); };
+  return { fire, on };
+}
+test('THE SIGNALS THAT START A LOOK ARE WIRED: native foreground, a resumed page, a dropped or returned socket', async () => {
+  for (const [bag, ev, arg] of [['app', 'appStateChange', { isActive: true }], ['document', 'resume'], ['window', 'pageshow'],
+    ['window', 'steward-relay-dropped'], ['window', 'steward-relay-returned']]) {
+    let probes = 0;
+    const stub = { clock: 1000000 + Math.random() * 1e6, relaysHealthy: () => false, relaysReplaced: () => false, markResubscribed: () => {},
+      reconnectDownRelays: async () => { probes++; return false; } };
+    const t = wiredTicker(stub);
+    assert.ok((t.on[bag][ev] || []).length >= 1, `nothing listens for ${ev} — re-anchor, or the console no longer looks on it`);
+    await t.fire(bag, ev, arg);
+    assert.ok(probes >= 1, `${ev} reached the ticker and nothing looked — after it the console waits for the 90-second beat`);
+  }
+  // the native signal that the app went to the BACKGROUND does not look
+  let probes = 0;
+  const stub = { clock: 5000000, relaysHealthy: () => false, relaysReplaced: () => false, markResubscribed: () => {},
+    reconnectDownRelays: async () => { probes++; return false; } };
+  const t = wiredTicker(stub);
+  await t.fire('app', 'appStateChange', { isActive: false });
+  assert.equal(probes, 0, 'CONTROL: the app going to the background started a look');
 });
 
 test('…and the ticker rebuilds the subscriptions in that state', async () => {

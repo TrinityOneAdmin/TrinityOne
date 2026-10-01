@@ -1883,16 +1883,76 @@ pool.onRelayConnectionSuccess = (url) => {
     // also cleared the back-fill cooldown, read-before-write cancelled its own completion marker and looped:
     // measured at 8 full-roster re-seals against 1. Keyed on the live relay INSTANCE, so a genuine reconnect
     // (which creates a new AbstractRelay) announces exactly once. AUDIT-9.
+    if (live) _watchSocket(url, live);   // so its drop is said (below) — first, so nothing after can skip it
     if (fresh) {
       _clearanceSent.clear();
-      if (_returnAnnounced.get(url) !== live) {
-        _returnAnnounced.set(url, live);
-        try { window.dispatchEvent(new CustomEvent('steward-relay-returned', { detail: { url } })); } catch (e) {}
-      }
+      _announceReturn(url, live);
     }
   } catch (e) {}
 };
-pool.onRelayConnectionFailure = (url) => { try { _relaysTouched.add(url); } catch (e) {} };
+// ONCE PER RETURN (AUDIT-9, above), shared by the subscribe path above and the ensureRelay door below.
+function _announceReturn(url, live) {
+  if (_returnAnnounced.get(url) === live) return;
+  _returnAnnounced.set(url, live);
+  try { window.dispatchEvent(new CustomEvent('steward-relay-returned', { detail: { url } })); } catch (e) {}
+}
+// ── A SOCKET OPENED BY ANY PATH IS SEEN, AND ONE THAT DROPS IS SAID (device round 2026-10-01) ─────────────────
+// The member app's 252b055 found the shape first: nostr-tools calls onRelayConnectionSuccess on its SUBSCRIBE
+// path only, so a socket re-opened by a publish (or the first one after a launch with no network) was never
+// noticed. The console had the same hole and one of its own:
+//   • AFTER A FAILED DIAL NOTHING OF OURS IS LISTENING. A dial fails only when the pool holds no live socket
+//     for that relay, so every subscription that was on it is gone. Before this, an OFFLINE LAUNCH left the
+//     console deaf for the session: every boot subscription failed, and the first socket back was opened by a
+//     one-shot read — which seeded `_subbedOn` with it ("first connect only") — or by a publish, which nothing
+//     saw at all. relaysHealthy() then said yes, the ticker never re-subscribed, the relay (which challenges
+//     only a gated REQ) never asked this console to log in, and every safeguarding write was refused.
+//     → a failed dial records `_NOT_LISTENING`, a "socket" no live one can ever be, so whatever comes up next
+//       reads as connected-but-not-listening (relaysReplaced) and the ticker rebuilds the subscriptions.
+//   • A DROP WAS NOTICED ONLY BY THE 90-SECOND BEAT. Foregrounding the console on the Oppo left it unable to
+//     approve anyone for 20–70 s: the WebView closes the page's sockets when it is backgrounded, the console
+//     learns of it when it resumes — after (or without) the visibilitychange the ticker listens for — and
+//     the next thing to look was the beat. → when the socket our subscriptions live on closes, say so
+//     (`steward-relay-dropped`); steward-root.jsx's ticker probes and re-subscribes a moment later.
+const _NOT_LISTENING = Object.freeze({ notListening: true });
+function _relayKey(url) { try { return normalizeURL(url); } catch (e) { return String(url || ''); } }
+function _noteDialFailed(url) {
+  const k = _relayKey(url);
+  _relaysTouched.add(k);
+  const r = pool.relays.get(k);
+  if (!(r && r.connected === true)) _subbedOn.set(k, _NOT_LISTENING);
+}
+function _watchSocket(url, live) {
+  if (!live || live.__t1Watched) return;
+  live.__t1Watched = true;
+  const k = _relayKey(url), prev = live.onclose;
+  live.onclose = function () {
+    try { if (typeof prev === 'function') prev.apply(this, arguments); }
+    finally {
+      try {
+        if (!live.__t1Dropped && _subbedOn.get(k) === live) {   // only the socket our subscriptions were on, once
+          live.__t1Dropped = true;
+          window.dispatchEvent(new CustomEvent('steward-relay-dropped', { detail: { url: k } }));
+        }
+      } catch (e) {}
+    }
+  };
+}
+pool.onRelayConnectionFailure = (url) => { try { _noteDialFailed(url); } catch (e) {} };
+// THE ONE DOOR EVERY POOL PATH GOES THROUGH — subscribe, publish, querySync, and the ticker's own probe — so it
+// is where a socket can be seen whichever path opened it. A socket our subscriptions are not on is a return
+// (announced once per socket, as above); first sight on a boot that never failed is announced the same way
+// it always was, and only the subscribe path above may seed `_subbedOn` (AUDIT-5).
+try {
+  const _ensure = pool.ensureRelay.bind(pool);
+  pool.ensureRelay = function (url, params) {
+    return Promise.resolve(_ensure(url, params)).then((r) => {
+      // ONCE per socket, the clearance cache included: this door sees every publish, and a cache wiped by the
+      // very write it recorded is the AUDIT-9 loop (8 re-seals against 1).
+      try { if (r) { const k = _relayKey(url); _watchSocket(k, r); if (_subbedOn.get(k) !== r && _returnAnnounced.get(k) !== r) { _clearanceSent.clear(); _announceReturn(k, r); } } } catch (e) {}
+      return r;
+    }, (err) => { try { _noteDialFailed(url); } catch (e) {} throw err; });
+  };
+} catch (e) {}
 // decode a base64url VAPID key to the Uint8Array the Push API wants
 function _b64ToU8(base64) {
   const pad = '='.repeat((4 - base64.length % 4) % 4);
