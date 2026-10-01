@@ -854,6 +854,18 @@ function KeyDistributor() {
   // media re-key paths had the same hole via `want`. AUDIT-2026-07-27.
   const blockedList = window.useStewardBlocked ? window.useStewardBlocked() : [];
   const blockedSet = React.useMemo(() => new Set((blockedList || []).map(p => String(p || '').toLowerCase())), [blockedList]);
+  // THE LISTS ON SCREEN AT THE MOMENT OF A CHURCH SWITCH BELONG TO THE CHURCH WE LEFT. The member, steward and
+  // group hooks keep their last value until the new church's stream delivers, so for that beat this component
+  // held church A's members while the engine was on church B — and the enrolment below wrapped church B's keys
+  // to church A's congregation (audit of d1116f6: B's envelopes listed A's members, the person just blocked
+  // among them). Remember those exact arrays when the church changes, and enrol nobody until each has been
+  // replaced by the new church's own delivery (every one of those streams delivers at end-of-stored-events).
+  // Keyed on the identity switch (`idv`), which is what re-subscribes those streams; a key RESTORE fires no
+  // switch and useStewardMembers does not follow it — a known gap of that hook, recorded, not changed here.
+  const _kdFrom = React.useRef(null);
+  if (!_kdFrom.current || _kdFrom.current.idv !== _kdIdv) {
+    _kdFrom.current = _kdFrom.current ? { idv: _kdIdv, members, groups, stewardRoster } : { idv: _kdIdv };
+  }
   const notBlocked = (pk) => pk && !blockedSet.has(String(pk).toLowerCase());
   React.useEffect(() => {
     // SAME GUARD AS THE CAPABILITY MINT, and for the same measured reason. A delegated steward viewing their
@@ -864,6 +876,8 @@ function KeyDistributor() {
     // this church's key in Settings…". That banner then sat on every screen telling a treasurer her work was
     // not saving WHILE THE RELAY ACCEPTED EVERY ENTRY, and its remedy destroys a church key if followed.
     if (!church.name) return;   // no church of our own to key — see the capability mint for the full note
+    { const f = _kdFrom.current || {};
+      if (members === f.members || groups === f.groups || stewardRoster === f.stewardRoster) return; }   // still the previous church's lists — see _kdFrom
     const memberPubs = members.map(m => m.pubkey).filter(notBlocked);
     for (const g of groups) {
       if (!g.encrypted) continue;
@@ -965,7 +979,11 @@ function KeyDistributor() {
   // the media key loads ASYNC (subscribeMediaKey) and may arrive AFTER the roster settles, so the effect above can run
   // before we hold the key. Re-check a couple of times on mount — ensureMediaKeyForMembers is idempotent + cheap.
   React.useEffect(() => {
-    const call = () => { if (window.Steward && window.Steward.ensureMediaKeyForMembers) window.Steward.ensureMediaKeyForMembers(membersRef.current.map(m => m.pubkey), stewardRosterRef.current); };
+    const call = () => {
+      const f = _kdFrom.current || {};
+      if (membersRef.current === f.members || stewardRosterRef.current === f.stewardRoster) return;   // the previous church's lists — see _kdFrom
+      if (window.Steward && window.Steward.ensureMediaKeyForMembers) window.Steward.ensureMediaKeyForMembers(membersRef.current.map(m => m.pubkey), stewardRosterRef.current);
+    };
     const t1 = setTimeout(call, 3500), t2 = setTimeout(call, 9000);
     return () => { clearTimeout(t1); clearTimeout(t2); };
   }, []);

@@ -41,7 +41,7 @@ import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadScreen, miniReact, texts, find } from './render-jsx-screen.mjs';
-import { fnBody } from './test-slice.mjs';
+import { fnBody, liftKeyRead } from './test-slice.mjs';
 
 const ROOT = new URL('../', import.meta.url).pathname;
 const BUNDLE = readFileSync(join(ROOT, 'vendor/steward.js'), 'utf8');
@@ -113,7 +113,7 @@ function engine({ actingChurch, mediaKeyHex = KEY }) {
     fnBody(BUNDLE, '    async ensureMediaKeyForMembers(memberPubs, stewardPubs) {', 'ensureMediaKeyForMembers in the shipped bundle'),
     fnBody(BUNDLE, '    async rotateMediaKey(memberPubs, stewardPubs) {', 'rotateMediaKey in the shipped bundle'),
   ].join(',\n');
-  const api = new Function('scope', `with (scope) { const _api = { ${bodies} }; return _api; }`)(proxy);
+  const api = new Function('scope', `with (scope) { ${liftKeyRead(BUNDLE)}\n const _api = { ${bodies} }; return _api; }`)(proxy);
   return { api, attempts, blocked, scope };
 }
 

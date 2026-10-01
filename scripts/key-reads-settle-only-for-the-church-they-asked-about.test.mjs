@@ -1,4 +1,5 @@
-// A KEY READ MAY OPEN A MINT GATE ONLY FOR THE CHURCH IT ASKED ABOUT, AND ONLY ON A REAL ANSWER.
+// A KEY READ MAY OPEN A MINT GATE ONLY FOR THE CHURCH IT ASKED ABOUT, AND ONLY ON A REAL ANSWER — AND A KEY
+// PUBLISHER NEVER CARRIES ONE CHURCH'S RESULT INTO ANOTHER.
 //   Run: node --test scripts/key-reads-settle-only-for-the-church-they-asked-about.test.mjs
 //
 // `_careKeyChecked`, `_nameKeyChecked` and `_mediaKeyChecked` mean "we looked and this church has no envelope",
@@ -6,10 +7,12 @@
 // e6a2e02 (2026-10-01) measured it wrong 8 times in 10 on a real console: nostr-tools fires `oneose` when a
 // subscription is CLOSED before its EOSE, the dashboard closes and re-opens these subscriptions on every
 // identity change, and re-entering the SAME church passed every "still the current church?" check. The audit of
-// d1116f6 then found a relay's CLOSED counted as an answer, one relay of two answering for the church, and a
-// 4.3 s cutoff with no retry.
+// d1116f6 then found a relay's CLOSED counted as an answer, one relay of two answering for the church, a 4.3 s
+// cutoff with no retry — and, the worst of it, a church switch while a key publish was in flight carrying church
+// A's keys into church B's envelopes.
 //
-// The browser test (console-keys-follow-the-church-switch) drives the real screen; key-reads-over-real-sockets runs the reads over nostr-tools against scripted relays;
+// The browser tests (console-keys-follow-the-church-switch, a-church-switch-mid-publish-hands-over-no-keys)
+// drive the real screen; key-reads-over-real-sockets runs the reads over nostr-tools against scripted relays;
 // this file pins each guard on its own, which neither can do deterministically. Everything below is sliced out
 // of the SHIPPED vendor/steward.js and run with real NIP-44. The pool is a fake that behaves like nostr-tools in
 // the ways that matter here: one subscription per call; close() fires the subscription's oneose AND onclose,
@@ -384,4 +387,94 @@ test('name: CONTROL — with nothing arriving, the first name key is minted and 
   assert.ok(out, 'the first name key was not published');
   assert.equal(e.published.length, 1);
   assert.equal(e.t._nameKeyRing.length, 1, 'the console did not adopt the key it published');
+});
+
+// ── 4. A CHURCH SWITCH WHILE A KEY PUBLISH IS IN FLIGHT HANDS NOTHING OVER ──────────────────────────────────
+// The audit of d1116f6, in the real console: Block a member in church A, switch to church B while the rotation
+// is publishing, and the console in B held A's fresh care and name keys — then published them AS B's envelopes,
+// wrapped to A's members, the one just blocked among them. Every publisher captures its church and epoch at
+// entry and checks both after every await; these rows switch through the REAL setActiveIdentity at each await.
+const RING_A = ['a1'.repeat(32), 'a2'.repeat(32)];
+const M1 = K(), M2 = K(), M3 = K();
+const onA = (e, kind) => {   // church A, read and keyed, as the console holds it before the Block
+  if (kind === 'care') { e.t._careKeyChecked = true; e.t._careKeyHex = RING_A[0]; e.t._careKeyRing = RING_A.slice(); e.t._careKeyDocKeys = { [A.pub]: 'x', [M1.pub]: 'x', [M2.pub]: 'x' }; e.t._careKeyRev = 1; }
+  if (kind === 'media') { e.t._mediaKeyChecked = true; e.t._mediaKeyHex = RING_A[0]; e.t._mediaKeyRing = RING_A.slice(); e.t._mediaKeyDocKeys = { [A.pub]: 'x', [M1.pub]: 'x' }; }
+  if (kind === 'name') { e.t._nameKeyChecked = true; e.t._nameKeyRing = RING_A.slice(); e.t._nameKeyDocKeys = { [A.pub]: 'x', [M1.pub]: 'x' }; }
+};
+const holdSeal = (e) => { const g = gate(); const real = e.t._sealEach; e.t._sealEach = async (...a) => { await g.p; return real(...a); }; return g; };
+const holdPublish = (e) => { const g = gate(); const real = e.t.publish; e.t.publish = async (...a) => { const r = await real(...a); await g.p; return r; }; return g; };
+const nothingOfAIn = (e, kind) => {   // the console, now on B, holds none of A's keys — not the old ones, not fresh ones
+  const ring = kind === 'care' ? e.t._careKeyRing : kind === 'media' ? e.t._mediaKeyRing : e.t._nameKeyRing;
+  const hexk = kind === 'care' ? e.t._careKeyHex : kind === 'media' ? e.t._mediaKeyHex : (ring[0] || null);
+  return ring.length === 0 && hexk === null;
+};
+const PUBLISHERS = [
+  // [label, kind, call, a Block? (false must be reported when nothing was published)]
+  ['rotateCareKey (a Block)', 'care', (e) => e.S.rotateCareKey([M2.pub], []), true],
+  ['rotateMediaKey (a Block)', 'media', (e) => e.S.rotateMediaKey([M2.pub], []), true],
+  ['the name key\'s Block rotation', 'name', (e) => e.S._ensureNameKeyLocked([M2.pub], [], { rotate: true }), true],
+  ['ensureCareKeyForMembers (a member joined)', 'care', (e) => e.S.ensureCareKeyForMembers([M1.pub, M2.pub, M3.pub], []), false],
+  ['ensureMediaKeyForMembers (a member joined)', 'media', (e) => e.S.ensureMediaKeyForMembers([M1.pub, M2.pub], []), false],
+  ['the name key\'s routine grow (a member joined)', 'name', (e) => e.S._ensureNameKeyLocked([M1.pub, M2.pub], []), false],
+];
+for (const [label, kind, call, isBlock] of PUBLISHERS) {
+  test(`${label}: a switch to church B WHILE SEALING publishes nothing and leaves B's state alone`, async () => {
+    const e = engine(); onA(e, kind);
+    const g = holdSeal(e);
+    const run = call(e);
+    await flush();
+    assert.equal(e.S.setActiveIdentity(B.pub), true, 'CONTROL: switched to B');
+    g.release();
+    const out = await run;
+    assert.equal(e.published.length, 0, `${label} PUBLISHED AFTER THE CONSOLE HAD SWITCHED CHURCH: ${JSON.stringify(e.published.map(dtag))}`);
+    assert.ok(nothingOfAIn(e, kind), `${label}: THE CONSOLE, NOW ON CHURCH B, HOLDS CHURCH A'S ${kind.toUpperCase()} KEYS — its next enrolment publishes them as B's (audit of d1116f6)`);
+    if (isBlock) assert.equal(out, false, `${label} was interrupted before publishing and did not say so — block() reports only false, so the steward believes the key was changed`);
+  });
+
+  test(`${label}: a switch to church B WHILE PUBLISHING adopts nothing into B, and the envelope is church A's`, async () => {
+    const e = engine(); onA(e, kind);
+    const g = holdPublish(e);
+    const run = call(e);
+    for (let i = 0; i < 200 && !e.published.length; i++) await flush();
+    assert.equal(e.S.setActiveIdentity(B.pub), true, 'CONTROL: switched to B');
+    g.release();
+    await run;
+    assert.equal(e.published.length, 1);
+    const d = dtag(e.published[0]);
+    assert.equal(d, { care: CAREKEY_D, media: MEDIAKEY_D, name: NAMEKEY_D }[kind] + A.pub, `${label} published under ${d} — the envelope must be church A's, the church it started on`);
+    assert.ok(nothingOfAIn(e, kind), `${label}: THE CONSOLE, NOW ON CHURCH B, ADOPTED CHURCH A'S ${kind.toUpperCase()} KEYS (audit of d1116f6: they were then published as B's envelopes)`);
+  });
+}
+
+test('mediaEncryptor: a switch while the first sermon key is being sealed uploads nothing and adopts nothing', async () => {
+  for (const at of ['seal', 'publish']) {
+    const e = engine(); e.t._mediaKeyChecked = true;
+    const g = at === 'seal' ? holdSeal(e) : holdPublish(e);
+    const run = e.S.mediaEncryptor([M1.pub]);
+    if (at === 'seal') await flush(); else for (let i = 0; i < 200 && !e.published.length; i++) await flush();
+    e.S.setActiveIdentity(B.pub);
+    g.release();
+    await assert.rejects(run, /changed church/, `${at}: the upload went on to encrypt after the console switched church`);
+    assert.equal(e.published.length, at === 'seal' ? 0 : 1, `${at}: unexpected publishes ${JSON.stringify(e.published.map(dtag))}`);
+    if (e.published.length) assert.equal(dtag(e.published[0]), MEDIAKEY_D + A.pub, 'the sermon key envelope must be church A\'s');
+    assert.equal(e.t._mediaKeyHex, null, `${at}: the console on church B holds church A's freshly minted sermon key`);
+  }
+  const e = engine(); e.t._mediaKeyChecked = true;          // CONTROL: no switch → the key is minted, adopted, used
+  const enc = await e.S.mediaEncryptor([M1.pub]);
+  assert.equal(typeof enc, 'function');
+  assert.ok(e.t._mediaKeyHex, 'CONTROL: the minted sermon key was not adopted');
+});
+
+test('capability keys: a switch while sealing publishes nothing (ensureCapKeyFor and rotateCapKey)', async () => {
+  for (const which of ['ensure', 'rotate']) {
+    const e = engine();
+    e.t._capState.finance = { ring: which === 'rotate' ? ['f1'.repeat(32)] : [], docKeys: which === 'rotate' ? { [A.pub]: 'x', [M1.pub]: 'x' } : null, rev: 1, at: 0, checked: true };
+    const g = holdSeal(e);
+    const run = which === 'ensure' ? e.S.ensureCapKeyFor('finance', [M1.pub], {}) : e.S.rotateCapKey('finance', [], {});
+    await flush();
+    e.S.setActiveIdentity(B.pub);
+    g.release();
+    assert.equal(await run, false, `${which}: an interrupted capability-key publish did not report failure`);
+    assert.equal(e.published.length, 0, `${which}: a capability-key envelope was published after the console switched church`);
+  }
 });

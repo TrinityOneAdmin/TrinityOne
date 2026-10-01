@@ -17,7 +17,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { nip44, generateSecretKey, getPublicKey } from 'nostr-tools';
-import { fnBody, stmt } from './test-slice.mjs';
+import { fnBody, stmt, liftKeyRead } from './test-slice.mjs';
 
 const ROOT = new URL('../', import.meta.url).pathname;
 const BUNDLE = readFileSync(join(ROOT, 'vendor/steward.js'), 'utf8');
@@ -77,6 +77,7 @@ function engine({ media = {}, care = {} } = {}) {
     stmt(BUNDLE, 'var _isCurrentCareEnv = (e) =>', '_isCurrentCareEnv in the shipped bundle'),
     fnBody(BUNDLE, 'function _ingestCareKeyEnv(e) {', '_ingestCareKeyEnv in the shipped bundle'),
     'scope._ingest = _ingestCareKeyEnv;',
+    liftKeyRead(BUNDLE),   // _keyReadEpoch / _stillOn: every publisher checks them after its awaits
   ].join('\n');
   const bodies = [
     fnBody(BUNDLE, '    async ensureMediaKeyForMembers(memberPubs, stewardPubs) {', 'ensureMediaKeyForMembers in the shipped bundle'),
@@ -264,4 +265,55 @@ test('CONTROL: a first care key that DOES land is adopted, and seals', async () 
 });
 function ringForChurch(evt) {
   return JSON.parse(nip44.v2.decrypt(JSON.parse(evt.content).keys[CHURCH], nip44.v2.utils.getConversationKey(CHURCH_SK, CHURCH)));
+}
+
+// ── WHAT THE PUBLISHERS PROMISE ABOUT AWAITS, PINNED ONE BY ONE (rule 4; audit of d1116f6) ──────────────────
+// Each sealing pass waits on its own gate, released by hand in the order a row needs.
+const gateEverySeal = (e) => {
+  const gates = [];
+  const real = e.scope._sealEach;
+  e.scope._sealEach = async (pl, t, f) => { let release; const g = new Promise(r => { release = r; }); gates.push(release); await g; return real(pl, t, f); };
+  return gates;
+};
+
+test('care: an envelope arriving DURING the publish is not overwritten by what this console published', async () => {
+  const e = engine({ care: { ring: RING.slice(0, 2) } });
+  const [a1] = people(1), joiner = people(1)[0];
+  e.scope._careKeyDocKeys = { [CHURCH]: 'x', [a1.pub]: 'x' };
+  const theirs = { [CHURCH]: 'theirs', [a1.pub]: 'theirs', [joiner.pub]: 'theirs' };
+  e.scope.publish = async (evt) => { e.published.push(evt); e.scope._careKeyDocKeys = theirs; e.scope._careKeyVer++; return { id: 'ok' }; };   // the subscription delivers another console's envelope mid-publish
+  await e.api.ensureCareKeyForMembers([a1.pub, joiner.pub], []);
+  assert.equal(e.published.length, 1, 'CONTROL: the enrolment published');
+  assert.equal(e.scope._careKeyDocKeys, theirs, 'THE CONSOLE OVERWROTE THE ENVELOPE THAT ARRIVED DURING ITS PUBLISH with its own older view');
+});
+
+test('media: an envelope arriving DURING the publish is not overwritten by what this console published', async () => {
+  const e = engine({ media: { ring: RING.slice(0, 2) } });
+  const [a1] = people(1), joiner = people(1)[0];
+  e.scope._mediaKeyDocKeys = { [CHURCH]: 'x', [a1.pub]: 'x' };
+  const theirs = { [CHURCH]: 'theirs', [a1.pub]: 'theirs', [joiner.pub]: 'theirs' };
+  e.scope.publish = async (evt, opts) => { e.published.push(evt); e.scope._mediaKeyDocKeys = theirs; e.scope._mediaKeyVer++; if (opts && typeof opts === 'object') opts.refused = false; return { id: 'ok' }; };
+  await e.api.ensureMediaKeyForMembers([a1.pub, joiner.pub], []);
+  assert.equal(e.published.length, 1, 'CONTROL: the enrolment published');
+  assert.equal(e.scope._mediaKeyDocKeys, theirs, 'THE CONSOLE OVERWROTE THE ENVELOPE THAT ARRIVED DURING ITS PUBLISH with its own older view');
+});
+
+for (const kind of ['care', 'media']) {
+  test(`${kind}: a rotation that has STARTED (still sealing) stops a routine enrolment from publishing the old ring`, async () => {
+    const e = engine({ [kind]: { ring: RING.slice(0, 2) } });
+    const [blocked, a1] = people(2), joiner = people(1)[0];
+    e.scope[kind === 'care' ? '_careKeyDocKeys' : '_mediaKeyDocKeys'] = { [CHURCH]: 'x', [blocked.pub]: 'x', [a1.pub]: 'x' };
+    const gates = gateEverySeal(e);
+    const routine = kind === 'care' ? e.api.ensureCareKeyForMembers([blocked.pub, a1.pub, joiner.pub], []) : e.api.ensureMediaKeyForMembers([blocked.pub, a1.pub, joiner.pub], []);
+    await new Promise(r => setTimeout(r, 5));
+    const block = kind === 'care' ? e.api.rotateCareKey([a1.pub, joiner.pub], []) : e.api.rotateMediaKey([a1.pub, joiner.pub], []);
+    await new Promise(r => setTimeout(r, 5));
+    assert.equal(gates.length, 2, 'CONTROL: both are sealing');
+    gates[0]();                                       // the enrolment finishes sealing FIRST, the rotation still running
+    await routine;
+    assert.equal(e.published.length, 0, `THE ENROLMENT PUBLISHED THE PRE-ROTATION ${kind.toUpperCase()} RING, WITH THE MEMBER BEING BLOCKED IN IT, while the Block's rotation was under way`);
+    gates[1](); assert.equal(await block, true, 'CONTROL: the rotation landed');
+    assert.equal(e.published.length, 1, 'CONTROL: only the rotation published');
+    assert.ok(!Object.keys(JSON.parse(e.published[0].content).keys).includes(blocked.pub), 'CONTROL: the rotation left the blocked member out');
+  });
 }

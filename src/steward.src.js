@@ -2017,6 +2017,10 @@ function _keyReadAuthedOn(url) {
 let _keyReadEpoch = 0;                 // bumped by both per-church resets
 const _keyReadAuthWaiters = new Set(); // functions: re-open a read the relay answered before our login was accepted
 const _KEY_READ_LONG_WAIT = 15000;     // nostr-tools' EOSE timer for a read of an already-connected relay
+// Has the console stayed on the church, in the epoch, that a publisher started in? Every key publisher captures
+// both at entry and asks this after EVERY await (audit of d1116f6: a switch mid-publish handed church A's keys
+// to church B).
+function _stillOn(cp0, ep0) { return _keyReadEpoch === ep0 && !!cp0 && (actingChurch || pub) === cp0; }
 // true = a trustworthy answer from this relay for the church we are on; 'unauthed' = genuine, but this socket's
 // login has not been accepted; false = not an answer (our own close, a CLOSED, a reset since, the timer).
 function _keyReadOk(tok) {
@@ -5647,18 +5651,29 @@ window.Steward = {
     // which is why this half needed no member-app change. When there is no copy to read, say so plainly
     // rather than reporting the mint failure the steward cannot act on.
     if (actingChurch && !_mediaKeyHex) throw new Error('Can’t encrypt this upload — your church hasn’t shared its media key with this account yet. Ask whoever holds the church key to add you as a member of the church, or to upload this one themselves. Nothing has been uploaded.');
+    // THE KEY THIS UPLOAD IS ENCRYPTED WITH IS DECIDED HERE, ONCE, and never re-read after an await: the console
+    // can switch church mid-upload, and re-reading `_mediaKeyHex` then would encrypt church A's sermon with
+    // church B's key (or with nothing). Audit of d1116f6.
+    let useHex = _mediaKeyHex;
     if (!actingChurch) {
     if (!_mediaKeyHex) {
-      _mediaKeyHex = _hex(crypto.getRandomValues(new Uint8Array(32))); _mediaKeyRing = [_mediaKeyHex];
-      const targets = [...new Set([pub, ...(memberPubs || []).filter(Boolean)])].filter(k => !_localBlocked || !_localBlocked.has(k));
-      const _mring = JSON.stringify(_mediaKeyRing);
-      const keys = await _sealEach(_mring, targets, (pl, mp) => nip44e(pl, nip44ck(sk, mp)));
-      const _env = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', MEDIAKEY_D + pub], ['t', NET]], content: JSON.stringify({ keys, rev: now() }) }));
+      // MINTED INTO A LOCAL, adopted only once the relay has the envelope and the console is still on the same
+      // church — the rule ensureCareKeyForMembers keeps. Before, the key was the console's from the first line:
+      // a refused publish left it in place, and the next upload encrypted with a key the church never received.
+      const pub0 = pub, ep0 = _keyReadEpoch, sk0 = sk, v0 = _mediaKeyVer;
+      const fresh = _hex(crypto.getRandomValues(new Uint8Array(32)));
+      const targets = [...new Set([pub0, ...(memberPubs || []).filter(Boolean)])].filter(k => !_localBlocked || !_localBlocked.has(k));
+      const keys = await _sealEach(JSON.stringify([fresh]), targets, (pl, mp) => nip44e(pl, nip44ck(sk0, mp)));
+      const _moved = 'Can’t encrypt this upload — this console changed church, or your church’s media key arrived, while the key was being prepared. Nothing has been uploaded. Try again.';
+      if (!_stillOn(pub0, ep0) || _mediaKeyVer !== v0 || _mediaKeyHex) throw new Error(_moved);
+      const _env = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', MEDIAKEY_D + pub0], ['t', NET]], content: JSON.stringify({ keys, rev: now() }) }));
       if (_env === false) throw new Error('Can’t encrypt this upload — your church’s media key could not be saved, so nothing encrypted with it could ever be played. Nothing has been uploaded. A church media key can only be published from the console that holds the church’s own key.');
-      _mediaKeyDocKeys = keys;
+      if (!_stillOn(pub0, ep0)) throw new Error(_moved);
+      _mediaKeyHex = fresh; _mediaKeyRing = [fresh, ..._mediaKeyRing.filter(k => k !== fresh)]; _mediaKeyDocKeys = keys; _mediaKeyVer++;
+      useHex = fresh;
     }
     }
-    const key = await crypto.subtle.importKey('raw', _unhex(_mediaKeyHex), 'AES-GCM', false, ['encrypt']);
+    const key = await crypto.subtle.importKey('raw', _unhex(useHex), 'AES-GCM', false, ['encrypt']);
     return async (bytes) => { const iv = crypto.getRandomValues(new Uint8Array(12)); const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, bytes)); const out = new Uint8Array(12 + ct.length); out.set(iv, 0); out.set(ct, 12); return out; };
   },
   // #17: make sure the CURRENT church media key is wrapped for everyone in `memberPubs`. A member who joins AFTER an
@@ -5699,7 +5714,10 @@ window.Steward = {
     // key-distributor effect and the mount re-check timers, both in app/stew-dashboard.jsx.
     if (actingChurch) return false;
     if (!sk || !_mediaKeyHex) return false;                       // no media key on this device → nothing to distribute yet
-    const want = [...new Set([pub, ...(memberPubs || []).filter(Boolean), ...(stewardPubs || []).filter(Boolean)])]
+    // CAPTURED AT ENTRY, CHECKED AFTER EVERY AWAIT (audit of d1116f6): the console can switch church while this
+    // runs, and a result committed or published after the switch hands this church's keys to the next one.
+    const pub0 = pub, ep0 = _keyReadEpoch, sk0 = sk;
+    const want = [...new Set([pub0, ...(memberPubs || []).filter(Boolean), ...(stewardPubs || []).filter(Boolean)])]
       .filter(p => !_localBlocked.has(String(p).toLowerCase()));   // a just-blocked member must not be re-keyed (item B)
     const have = _mediaKeyDocKeys || {};
     if (want.every(p => have[p])) return false;                   // everyone's already keyed — no republish
@@ -5713,21 +5731,22 @@ window.Steward = {
     // relay must refuse. A trimmed key stops opening the sermons encrypted under it — the stated cost.
     const _v0 = _mediaKeyVer;
     const _mfull = _mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex];
-    const _mfit = _fitKeyRing(_mfull, want.length, (pl) => nip44e(pl, nip44ck(sk, want[0])));
+    const _mfit = _fitKeyRing(_mfull, want.length, (pl) => nip44e(pl, nip44ck(sk0, want[0])));
     if (!_mfit) { console.warn('[steward] media key envelope too large for one document at ' + want.length + ' recipients'); return false; }
     if (_mfit.length < _mfull.length) console.warn('[steward] media key ring trimmed to ' + _mfit.length + ' to fit ' + want.length + ' recipients — sermons encrypted under the dropped keys will no longer play');
     const _mring = JSON.stringify(_mfit);
-    const keys = await _sealEach(_mring, want, (pl, mp) => nip44e(pl, nip44ck(sk, mp)));
+    const keys = await _sealEach(_mring, want, (pl, mp) => nip44e(pl, nip44ck(sk0, mp)));
     // THE STATE MAY HAVE MOVED WHILE WE SEALED — above all a Block's rotateMediaKey, which publishes a fresh
     // key. Publishing this ring now would put the pre-rotation key back as the current one, held by the person
     // just blocked. Stop; the next roster tick redoes it from the new state. (Audit of e73ef5f, race.mjs.)
-    if (_mediaKeyVer !== _v0 || actingChurch) return false;
+    if (_mediaKeyVer !== _v0 || !_stillOn(pub0, ep0)) return false;
     // `{ background: true }` — NOBODY ASKED FOR THIS WRITE. Same reasoning as ensureCareKeyForMembers, whose
     // one caller is the same key-distributor effect and which was given this on 2026-09-17: the console's
     // standing alarm says "That change wasn't saved", and there was no change and no steward. It is still
     // reported, quietly and once, by PublishErrorBanner, and always to the log.
     const _pubOpts = { background: true };
-    const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', MEDIAKEY_D + pub], ['t', NET]], content: JSON.stringify({ keys, rev: now() }) }), _pubOpts);
+    const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', MEDIAKEY_D + pub0], ['t', NET]], content: JSON.stringify({ keys, rev: now() }) }), _pubOpts);
+    if (!_stillOn(pub0, ep0)) return ok;                    // landed for pub0 (or not); nothing to adopt or remember here
     // Reflect what we just published so we don't loop — unless something moved during the publish, in which
     // case the newer state stands. The console's OWN ring is left as it was: the envelope may be trimmed to fit,
     // but a key this device holds may have sealed something and must not be forgotten for that.
@@ -5759,7 +5778,7 @@ window.Steward = {
     try {
       // `p !== pub` — the church's own copy is in `want` and is not a member, so counting it would tell a
       // church with two unkeyed members that three people are locked out.
-      const missing = want.filter(p => p !== pub && !have[p]).length;
+      const missing = want.filter(p => p !== pub0 && !have[p]).length;
       // …AND SAY WHAT ACTUALLY HAPPENED. "Only the console that holds the church key can publish it" is
       // true of the membership/permission refusal — which is the relay's mediakey: rule — and a guess about
       // every other one ("invalid: a newer version is already stored", "restricted: …"). The house rule for
@@ -5802,21 +5821,27 @@ window.Steward = {
     // d=trinityone/mediakey:<church> signed by the STEWARD with `background: false`, refused, returning false.
     if (actingChurch) return null;
     if (!sk || !pub) return false;
+    // CAPTURED AT ENTRY, CHECKED AFTER EVERY AWAIT (audit of d1116f6): the console can switch church while this
+    // runs, and a result committed or published after the switch hands this church's keys to the next one.
+    // `pub` is NEVER read after an await below: the envelope's d-tag and recipients come from `pub0`.
+    const pub0 = pub, ep0 = _keyReadEpoch, sk0 = sk;
     if (!_isRelayAuthed()) return false;                          // never act on an untrusted view (see the mint gate)
     if (!_mediaKeyHex) return false;                              // no key yet — mediaEncryptor mints the first
     _mediaKeyVer++;   // a rotation is under way: an ensureMediaKeyForMembers still sealing the old ring must not publish it
     const fresh = _hex(crypto.getRandomValues(new Uint8Array(32)));
     const full = [fresh, ...(_mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex])].slice(0, 50);
-    const want = [...new Set([pub, ...(memberPubs || []).filter(Boolean), ...(stewardPubs || []).filter(Boolean)])];
+    const want = [...new Set([pub0, ...(memberPubs || []).filter(Boolean), ...(stewardPubs || []).filter(Boolean)])];
     // FIT THE ENVELOPE — rotate with a shorter history rather than not rotate at all (see rotateCareKey: a
     // refused rotation leaves the blocked member holding the key). Owner, 2026-10-01.
-    const ring = _fitKeyRing(full, want.length, (pl) => nip44e(pl, nip44ck(sk, want[0])));
+    const ring = _fitKeyRing(full, want.length, (pl) => nip44e(pl, nip44ck(sk0, want[0])));
     if (!ring) { console.warn('[steward] media key rotation too large for one document at ' + want.length + ' recipients'); return false; }
     if (ring.length < full.length) console.warn('[steward] media key ring trimmed to ' + ring.length + ' to fit ' + want.length + ' recipients — sermons encrypted under the dropped keys will no longer play');
     const payload = JSON.stringify(ring);
-    const keys = await _sealEach(payload, want, (pl, mp) => nip44e(pl, nip44ck(sk, mp)));
-    const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', MEDIAKEY_D + pub], ['t', NET]], content: JSON.stringify({ keys, rev: now() }) }));
+    const keys = await _sealEach(payload, want, (pl, mp) => nip44e(pl, nip44ck(sk0, mp)));
+    if (!_stillOn(pub0, ep0)) return false;                  // switched while sealing: nothing published, Block reports it
+    const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', MEDIAKEY_D + pub0], ['t', NET]], content: JSON.stringify({ keys, rev: now() }) }));
     if (ok === false) return false;
+    if (!_stillOn(pub0, ep0)) return true;                   // it landed for pub0; adopt nothing into the church we moved to
     // …and the refusal memo goes with it (F2): a rotation that landed proves this console CAN write the
     // envelope, so the reason ensureMediaKeyForMembers stopped asking no longer holds.
     // The console keeps the WHOLE ring it rotated from (plus anything that arrived meanwhile), not the fitted
@@ -5850,7 +5875,9 @@ window.Steward = {
   // grant is refused by the relay every time it runs. `opts` rather than a hard-coded `true` so that a
   // deliberate care control added later is loud by default, which is the way round this codebase needs.
   async ensureCareKeyForMembers(memberPubs, stewardPubs, opts) {
-    const cp = actingChurch || pub;
+    // CAPTURED AT ENTRY, CHECKED AFTER EVERY AWAIT (audit of d1116f6): the console can switch church while this
+    // runs, and a result committed or published after the switch hands this church's keys to the next one.
+    const cp = actingChurch || pub, ep0 = _keyReadEpoch, sk0 = sk;
     if (!sk || !cp || !churchPub) return false;
     if (!_careKeyChecked) return false;                       // haven't looked yet — minting now would orphan
     _reCheckCareKeyPending();                                 // adopt any envelope now verifiable; drop expired forgeries
@@ -5872,7 +5899,7 @@ window.Steward = {
       // (3) …AND NOTHING MOVED WHILE WE ASKED. The envelope can land during that await; minting after it
       // overwrote the key it had just delivered and then, finding everyone "keyed", published nothing — the
       // console sealed every need from then on with a key no one else held (audit of e6a2e02, 8 runs in 10).
-      if (_careKeyVer !== _v0 || _careKeyHex || _careKeyDocKeys || !_careKeyChecked) return false;
+      if (_careKeyVer !== _v0 || _careKeyHex || _careKeyDocKeys || !_careKeyChecked || !_stillOn(cp, ep0)) return false;
     }
     // MINTED INTO A LOCAL, NEVER INTO _careKeyHex, until the relay has the envelope. careSeal() reads
     // _careKeyHex, so a key set before the publish sealed needs with a key the church never received whenever
@@ -5889,18 +5916,18 @@ window.Steward = {
     const _v1 = _careKeyVer;
     // FIT THE ENVELOPE (owner, 2026-10-01) — the same trade rotateCareKey makes: keep the current key, drop
     // the oldest until the document fits under the relay's 1 MB cap. A dropped key's needs stop opening.
-    const _cfit = _fitKeyRing(ring0, want.length, (pl) => nip44e(pl, nip44ck(sk, want[0])));
+    const _cfit = _fitKeyRing(ring0, want.length, (pl) => nip44e(pl, nip44ck(sk0, want[0])));
     if (!_cfit) { console.warn('[steward] care key envelope too large for one document at ' + want.length + ' recipients'); return false; }
     if (_cfit.length < ring0.length) console.warn('[steward] care key ring trimmed to ' + _cfit.length + ' to fit ' + want.length + ' recipients — older sealed care records will no longer open');
     const _ring = JSON.stringify(_cfit);
-    const keys = await _sealEach(_ring, want, (pl, mp) => nip44e(pl, nip44ck(sk, mp)));
+    const keys = await _sealEach(_ring, want, (pl, mp) => nip44e(pl, nip44ck(sk0, mp)));
     // THE STATE MAY HAVE MOVED WHILE WE SEALED — an envelope arrived, a rotation landed, the church changed.
     // Publishing now would put a ring decided on before that back over it. Stop; the next roster tick redoes it.
-    if (_careKeyVer !== _v1 || cp !== (actingChurch || pub)) return false;
+    if (_careKeyVer !== _v1 || !_stillOn(cp, ep0)) return false;
     const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', CAREKEY_D + cp], ['t', NET]], content: JSON.stringify({ keys, rev }) }), { background: !!(opts && opts.background) });
     // Adopt what we published only if nothing moved during the publish either. The console's OWN ring is not
     // shortened to the fitted one: a trimmed key may still have sealed something on this device.
-    if (ok !== false && _careKeyVer === _v1) {
+    if (ok !== false && _careKeyVer === _v1 && _stillOn(cp, ep0)) {
       if (minting) { _careKeyRing = ring0.slice(); _careKeyHex = ring0[0]; _careKeyRev = rev; }
       _careKeyDocKeys = keys; _careKeyVer++;
     }
@@ -5936,7 +5963,11 @@ window.Steward = {
   // never loses access to its own history (dropping it is how you destroy your records, not how you secure
   // them), and the new envelope simply isn't wrapped to the person who left.
   async rotateCareKey(memberPubs, stewardPubs) {
-    const cp = actingChurch || pub;
+    // CAPTURED AT ENTRY, CHECKED AFTER EVERY AWAIT (audit of d1116f6): the console can switch church while this
+    // runs, and a result committed or published after the switch hands this church's keys to the next one.
+    // A Block interrupted by a switch says so: false before anything is published (block() warns), and nothing
+    // is ever adopted into the state of the church the console moved to.
+    const cp = actingChurch || pub, ep0 = _keyReadEpoch, sk0 = sk, rev0 = (_careKeyRev || 1) + 1;
     if (!sk || !cp || !churchPub) return false;
     if (!_careKeyChecked || !_isRelayAuthed()) return false;  // same trusted-view rule as minting
     if (!_careKeyHex) return false;                            // nothing to rotate yet — ensureCareKeyForMembers mints the first
@@ -5966,13 +5997,13 @@ window.Steward = {
     for (let n = full.length; n >= 1; n -= (n > 4 ? 2 : 1)) {
       const cand = full.slice(0, n);
       let per = 0;
-      try { per = 64 + String(nip44e(JSON.stringify(cand), nip44ck(sk, probe))).length + 6; } catch (e) { break; }
+      try { per = 64 + String(nip44e(JSON.stringify(cand), nip44ck(sk0, probe))).length + 6; } catch (e) { break; }
       if (per * want.length < 900000) { ring = cand; break; }
     }
     let keys = null;
     if (ring) {
       const payload = JSON.stringify(ring);
-      keys = await _sealEach(payload, want, (pl, mp) => nip44e(pl, nip44ck(sk, mp)));
+      keys = await _sealEach(payload, want, (pl, mp) => nip44e(pl, nip44ck(sk0, mp)));
     }
     if (!keys) {
       // Even a single-key ring will not fit — past roughly 1,400 members this document needs splitting across
@@ -5981,9 +6012,14 @@ window.Steward = {
       return false;
     }
     if (ring.length < full.length) console.warn('[steward] care key ring trimmed to ' + ring.length + ' to fit ' + want.length + ' members — older sealed care records will no longer open');
-    const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', CAREKEY_D + cp], ['t', NET]], content: JSON.stringify({ keys, rev: (_careKeyRev || 1) + 1 }) }));
+    if (!_stillOn(cp, ep0)) return false;                    // switched while sealing: nothing published, Block reports it
+    const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', CAREKEY_D + cp], ['t', NET]], content: JSON.stringify({ keys, rev: rev0 }) }));
     if (ok === false) return false;
-    _careKeyRing = ring; _careKeyHex = fresh; _careKeyRev = (_careKeyRev || 1) + 1; _careKeyDocKeys = keys; _careKeyVer++;
+    // It landed, on THIS church's envelope (cp, captured) — so the rotation happened. But if the console has
+    // moved on, the new ring belongs to a church it is no longer running: adopt nothing; it is read back from the
+    // relay when the console returns.
+    if (!_stillOn(cp, ep0)) return true;
+    _careKeyRing = ring; _careKeyHex = fresh; _careKeyRev = rev0; _careKeyDocKeys = keys; _careKeyVer++;
     return true;
   },
   // has this device actually completed a NIP-42 auth? Callers use it to tell "the church has none" apart
@@ -7236,7 +7272,9 @@ window.Steward = {
   },
   async _ensureNameKeyLocked(memberPubs, stewardPubs, opts = {}) {
     if (!churchSk || !churchPub) return Promise.resolve(null);
-    const cp = actingChurch || pub;
+    // CAPTURED AT ENTRY, CHECKED AFTER EVERY AWAIT (audit of d1116f6): a member joined church A, the console
+    // switched to B while this was publishing, and A's name ring was committed as B's — then published as B's.
+    const cp = actingChurch || pub, ep0 = _keyReadEpoch;
     // (1) NEVER act on a view we have not established. "The relay returned no envelope" is not proof that none
     // exists — the envelope is private, so an unauthenticated or unreachable relay gives the same empty answer.
     if (!_nameKeyChecked || !_isRelayAuthed()) return Promise.resolve(null);
@@ -7313,10 +7351,13 @@ window.Steward = {
     // or the console reset or changed church. Publishing now would put a ring decided on before that over it.
     // A routine grow says nothing (null — the next roster tick redoes it); a Block's rotation says false, which
     // block() reports, so the steward is told to try again rather than believing the key was taken away.
-    if (_nameKeyDocKeys !== _dk0 || _nameKeyRing !== _r0 || cp !== (actingChurch || pub)) return opts.rotate ? false : null;
+    if (_nameKeyDocKeys !== _dk0 || _nameKeyRing !== _r0 || !_stillOn(cp, ep0)) return opts.rotate ? false : null;
     const at = now();
     const out = await publish(feChurch({ kind: 30078, created_at: at, tags: [['d', NAMEKEY_D + cp], ['t', NET]], content: JSON.stringify({ rev: ring.length, keys }) }));
     if (out === false) return false;
+    // It landed on `cp`'s envelope (captured). If the console has moved on, that ring is not the current church's:
+    // adopt nothing — it is read back from the relay on return. A Block's rotation still DID happen, so it says so.
+    if (!_stillOn(cp, ep0)) return out;
     _nameKeyRing = ring;
     _nameKeyDocKeys = keys;
     _nameKeyAt = Math.max(_nameKeyAt, at);   // our own publish is the newest; its echo must not be refused, nor an older copy taken
@@ -8223,6 +8264,10 @@ window.Steward = {
     }
     const keys = await _sealEach(JSON.stringify(nextRing), want, (pl, mp) => nip44e(pl, nip44ck(sk, mp)));
     _warnUnsealed(spec.cap, _sealEachFailed);
+    // SWITCHED CHURCH WHILE SEALING? A switch REPLACES _capState[kind], so `st` is the church we started on and the
+    // commit below could only ever write into that detached object — but the publish would still go out after
+    // the console had moved on. Stop instead (audit of d1116f6: every key publisher checks after its awaits).
+    if (_capState[kind] !== st || pub !== cp) return false;
     // KNOWN GAP, recorded 2026-08-20 by the third review and deliberately not changed here.
     // publish() resolves on Promise.any — "some relay took it". If the church's own relay is momentarily
     // unreachable and a public relay in extraRelays() accepts, this envelope lands ONLY on the public relay
@@ -8239,6 +8284,7 @@ window.Steward = {
     // exists nowhere else. It would then seal the church's records with it, and the next reload — which
     // rebuilds the ring from the envelope that was never written — could not open any of them.
     if (ok === false || ok == null) return false;   // nothing adopted — st.ring was never touched
+    if (_capState[kind] !== st) return ok;          // it landed for `cp`; the console has moved on — nothing to adopt here
     st.ring = nextRing; st.docKeys = keys;
     return ok;
   },
@@ -8267,8 +8313,10 @@ window.Steward = {
     const want = [...new Set([cp, ...(stewardPubs || []).filter(allowed)].filter(Boolean))];
     const keys = await _sealEach(JSON.stringify(nextRing), want, (pl, mp) => nip44e(pl, nip44ck(sk, mp)));
     _warnUnsealed(spec.cap, _sealEachFailed);
+    if (_capState[kind] !== st || pub !== cp) return false;  // switched church while sealing — see ensureCapKeyFor
     const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', spec.d + cp], ['t', NET]], content: JSON.stringify({ keys, rev: nextRev }) }));
     if (ok === false) return false;                          // nothing adopted — the old ring is still the truth
+    if (_capState[kind] !== st) return ok;                   // landed for `cp`; nothing to adopt into the next church
     st.ring = nextRing; st.rev = nextRev; st.docKeys = keys;
     _capRingChanged(kind);
     return ok;

@@ -22,7 +22,7 @@ import { join } from 'node:path';
 import { webcrypto } from 'node:crypto';
 import { generateSecretKey, getPublicKey } from 'nostr-tools/pure';
 import { v2 as nip44 } from 'nostr-tools/nip44';
-import { fnBody } from './test-slice.mjs';
+import { fnBody, liftKeyRead } from './test-slice.mjs';
 
 const ROOT = new URL('../', import.meta.url).pathname;
 const BUNDLE = readFileSync(join(ROOT, 'vendor/steward.js'), 'utf8');
@@ -43,7 +43,7 @@ function ownerScope(opts = {}) {
     _mediaKeyRing: opts.hasKey ? [KEY] : [],
     _mediaKeyDocKeys: opts.hasKey ? { [churchPub]: 'sealed-blob' } : null,
     _mediaKeyChecked: true,
-    _mediaKeyPushRefused: null,
+    _mediaKeyPushRefused: null, _mediaKeyVer: 0,
     _localBlocked: new Set(),
     _sealEachFailed: [],
     _isRelayAuthed: () => true,
@@ -68,7 +68,8 @@ function ownerScope(opts = {}) {
     },
     set: (t, k, v) => { t[k] = v; return true; },
   });
-  const api = new Function('scope', `with (scope) { ${SEAL_EACH} return { ${ENCRYPTOR} }; }`)(proxy);
+  // the shipped key-read guards (_keyReadEpoch, _stillOn): mediaEncryptor checks them after its awaits
+  const api = new Function('scope', `with (scope) { ${SEAL_EACH} ${liftKeyRead(BUNDLE)}\n return { ${ENCRYPTOR} }; }`)(proxy);
   return { api, published, scope };
 }
 
