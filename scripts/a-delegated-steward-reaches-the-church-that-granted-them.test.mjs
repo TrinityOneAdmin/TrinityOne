@@ -120,6 +120,8 @@ function harness({ cached = false, origin = ORIGIN, proven = [BOX, CANON], delay
     // KEYS themselves with piece 1 — a key from church A must never seal or open a record in church B,
     // and the map is keyed by session id, which two churches on one box can perfectly well share.
     _ckKeysSettled: '', _ckSessionKeys: new Map(),
+    // …and (2026-10-01) the pending guardian notices: one church's retries must not send another's
+    _latestGuardNotice: new Map(),
     CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init && init.detail; } },
     window: Object.assign(win, { Steward: {} }),
   };

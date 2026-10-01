@@ -15589,18 +15589,24 @@ zoo`.split("\n");
     }
     return [...out].sort();
   }
-  function _sendGuardNotice(parentPub, body, links, closed) {
+  var _guardScopes = /* @__PURE__ */ new WeakMap();
+  function _guardScope(handle) {
+    return handle && typeof handle === "object" && _guardScopes.get(handle) || null;
+  }
+  function _sendGuardNotice(parentPub, body, links, closed, sc) {
+    const signer = sc ? sc.sk : sk;
+    if (!signer) return Promise.resolve(null);
     if (links && typeof links === "object") {
       body.children = _childrenOfParent(links, parentPub);
       body.closed = _closedChildrenOfParent(closed, parentPub, body.children);
     }
     let content;
     try {
-      content = encrypt3(JSON.stringify(body), getConversationKey(sk, parentPub));
+      content = encrypt3(JSON.stringify(body), getConversationKey(signer, parentPub));
     } catch (e) {
       return Promise.resolve(null);
     }
-    return _publishGuardNotice(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", GUARDNOTICE_D + parentPub], ["t", NET], ["p", parentPub]], content }), sk));
+    return _publishGuardNotice(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", GUARDNOTICE_D + parentPub], ["t", NET], ["p", parentPub]], content }), signer), sc);
   }
   var GUARD_RETRY_MS = [5e3, 3e4, 12e4];
   var _latestGuardNotice = /* @__PURE__ */ new Map();
@@ -15623,12 +15629,13 @@ zoo`.split("\n");
     });
     return { missed, refused };
   }
-  async function _publishGuardNotice(evt) {
-    await _waitForRegistration();
+  async function _publishGuardNotice(evt, sc) {
+    const targets = sc ? sc.relays : relays();
+    if (!sc) await _waitForRegistration();
     const d = ((evt.tags || []).find((t) => t[0] === "d") || [])[1] || "";
-    const prev = _latestGuardNotice.get(d);
-    if (!prev || (evt.created_at || 0) >= (prev.created_at || 0)) _latestGuardNotice.set(d, evt);
-    const targets = relays();
+    const key = evt.pubkey + "|" + d;
+    const prev = _latestGuardNotice.get(key);
+    if (!prev || (evt.created_at || 0) >= (prev.created_at || 0)) _latestGuardNotice.set(key, evt);
     if (!targets.length) return publish(evt);
     const first = await _guardTryOn(targets, evt);
     if (first.missed.length) {
@@ -15637,7 +15644,7 @@ zoo`.split("\n");
         for (const ms of GUARD_RETRY_MS) {
           await new Promise((r) => setTimeout(r, ms));
           try {
-            left = (await _guardTryOn(left, _latestGuardNotice.get(d) || evt)).missed;
+            left = (await _guardTryOn(left, _latestGuardNotice.get(key) || evt)).missed;
           } catch (e) {
           }
           if (!left.length) return;
@@ -15645,6 +15652,7 @@ zoo`.split("\n");
       })().catch(() => {
       });
     }
+    if (first.missed.length === targets.length && first.refused.length && first.refused.every((r) => /newer version/i.test(r.error || ""))) return false;
     if (first.missed.length === targets.length) {
       const said = first.refused.find((r) => r.error && !/^connection failure/i.test(r.error));
       const reason = said && said.error || first.refused[0] && first.refused[0].error || "no relay accepted the guardian notice";
@@ -16634,6 +16642,7 @@ zoo`.split("\n");
     _ckKeysSettled = "";
     _ckSessionKeys.clear();
     _authedRelays.clear();
+    _latestGuardNotice.clear();
   }
   var ENC_LS = "trinityone.steward.church-key.enc";
   var ENC_PENDING_LS = "trinityone.steward.church-key.removing";
@@ -20850,11 +20859,13 @@ zoo`.split("\n");
     // `links`, `closed` (2026-10-01): the guardians document's map and closed pairs AFTER the change. When given,
     // the notice also carries the parent's whole list and their closed requests — see _sendGuardNotice. The
     // legacy fields are unchanged, so an older parent's app still works.
-    notifyGuardian(parentPubIn, childPubIn, childName, links, closed) {
-      if (!sk) return Promise.resolve(null);
+    // `scope` (2026-10-01): guardNoticeScope()'s handle, captured before the caller's first await — see _guardScopes.
+    notifyGuardian(parentPubIn, childPubIn, childName, links, closed, scope) {
+      const sc = _guardScope(scope);
+      if (!(sc ? sc.sk : sk)) return Promise.resolve(null);
       const parentPub = toPubHex(parentPubIn), childPub = toPubHex(childPubIn);
       if (!parentPub || !childPub || parentPub === childPub) return Promise.resolve(null);
-      return _sendGuardNotice(parentPub, { child: childPub, name: childName || "", church: churchPub }, links, closed);
+      return _sendGuardNotice(parentPub, { child: childPub, name: childName || "", church: sc ? sc.churchPub : churchPub }, links, closed, sc);
     },
     // THE OTHER HALF OF notifyGuardian. Linking a parent tells their app so the child appears in it; UNLINKING
     // told them nothing at all, and the parent's app stores the link in localStorage where nothing ever removed
@@ -20870,23 +20881,33 @@ zoo`.split("\n");
     // marking a parent as a child unlinks them from all their children at once, and the notice is ONE slot per
     // parent, so one notice per child kept only the last. They ride in `removedAll`, which builds before 4f08ca4
     // read; `removed` still names the first, for the builds in between.
-    notifyGuardianRemoved(parentPubIn, childPubIn, links, alsoRemoved, closed) {
-      if (!sk) return Promise.resolve(null);
+    notifyGuardianRemoved(parentPubIn, childPubIn, links, alsoRemoved, closed, scope) {
+      const sc = _guardScope(scope);
+      if (!(sc ? sc.sk : sk)) return Promise.resolve(null);
       const parentPub = toPubHex(parentPubIn), childPub = toPubHex(childPubIn);
       if (!parentPub || !childPub) return Promise.resolve(null);
-      const body = { removed: childPub, church: churchPub };
+      const body = { removed: childPub, church: sc ? sc.churchPub : churchPub };
       const all = [.../* @__PURE__ */ new Set([childPub, ...(Array.isArray(alsoRemoved) ? alsoRemoved : []).map(toPubHex).filter(Boolean)])];
       if (all.length > 1) body.removedAll = all;
-      return _sendGuardNotice(parentPub, body, links, closed);
+      return _sendGuardNotice(parentPub, body, links, closed, sc);
     },
     // A notice that carries ONLY the parent's whole list (and closed requests) — for a change that is neither a
     // link nor a removal from this parent's point of view: a request confirmed or declined, a member reconnected
     // on a new key. An older parent's app reads neither `child` nor `removed` here and ignores it.
-    notifyGuardianList(parentPubIn, links, closed) {
-      if (!sk) return Promise.resolve(null);
+    notifyGuardianList(parentPubIn, links, closed, scope) {
+      const sc = _guardScope(scope);
+      if (!(sc ? sc.sk : sk)) return Promise.resolve(null);
       const parentPub = toPubHex(parentPubIn);
       if (!parentPub) return Promise.resolve(null);
-      return _sendGuardNotice(parentPub, { church: churchPub }, links || {}, closed);
+      return _sendGuardNotice(parentPub, { church: sc ? sc.churchPub : churchPub }, links || {}, closed, sc);
+    },
+    // The church a guardian notice will be sent AS, captured now: call it before the first await, pass the handle
+    // to notify*. Opaque to the page (see _guardScopes); null with no key.
+    guardNoticeScope() {
+      if (!sk) return null;
+      const handle = Object.freeze({ church: actingChurch || pub });
+      _guardScopes.set(handle, { sk, churchPub, relays: relays().slice() });
+      return handle;
     },
     // ---- joining: by default anyone with the invite/QR joins instantly. A steward can switch on
     // "require approval", and then a new member is held as a pending request until admitted. The relay
@@ -21153,6 +21174,7 @@ zoo`.split("\n");
     // bundle on its own and run it, so a helper reached through window.Steward is a helper they do not have.
     async reseatMember(oldPub, newPub, o) {
       o = o || {};
+      const _noticeScope = window.Steward.guardNoticeScope ? window.Steward.guardNoticeScope() : null;
       const w = async (fn) => {
         const first = await fn();
         if (first) return first;
@@ -21209,7 +21231,7 @@ zoo`.split("\n");
         for (const p of low(nextG[newH])) told.add(p);
         for (const p of told) {
           try {
-            Promise.resolve(window.Steward.notifyGuardianList(p, nextG, nextGC || gc)).catch(() => {
+            Promise.resolve(window.Steward.notifyGuardianList(p, nextG, nextGC || gc, _noticeScope)).catch(() => {
             });
           } catch (e) {
           }
@@ -23675,6 +23697,7 @@ zoo`.split("\n");
       _checkinMigrated = "";
       _ckKeysSettled = "";
       _ckSessionKeys.clear();
+      _latestGuardNotice.clear();
       window.Steward.pubkey = pub;
       window.Steward.npub = npubEncode(pub);
       window.Steward.activePub = pub;

@@ -236,3 +236,92 @@ test('when every relay refuses a notice, the console is told the relay’s own w
   const msg = pem(err.detail.reason, err.detail.evt, {});
   assert.equal(msg.wrongChurch, true, 'the banner said "check the connection" for a relay that refused this church: ' + msg.msg);
 });
+
+
+// ── WHOLE-BRANCH AUDIT, 2026-10-01 ────────────────────────────────────────────────────────────────────────────
+// Item 3: two churches on one console both send a notice to the same parent (the same d-tag). The latest-notice
+// memory was keyed by d-tag alone, so church A's retry sent church B's notice and A's never reached the relay.
+test('two churches, one parent, a relay down: each church’s retry sends ITS OWN latest notice', async () => {
+  const other = K();
+  const state = { up: new Set(['wss://a']) };
+  const pool = shapedPool(state);
+  const con = consoleBoot(church, { relays: ['wss://a', 'wss://r'], pool, retryMs: [40, 80, 160] });
+  const fromA = await con.api.notifyGuardian(P.pub, C1, 'Cleo', { [C1]: [P.pub] }, {});
+  con.become(other, ['wss://a', 'wss://r']);   // the console switches church; B also notifies P
+  const fromB = await con.api.notifyGuardian(P.pub, C2, 'Cy', { [C2]: [P.pub] }, {});
+  assert.ok(fromA && fromB && fromA.pubkey === church.pub && fromB.pubkey === other.pub, 'fixture: one notice from each church');
+  state.up.add('wss://r');
+  await sleep(400);
+  const toR = new Set(pool.calls.filter(c => c.url === 'wss://r').slice(2).map(c => c.id));   // after each first attempt
+  assert.ok(toR.has(fromA.id), 'CHURCH A’S NOTICE NEVER REACHED THE RELAY THAT WAS DOWN — A’s retry sent church B’s instead');
+  assert.ok(toR.has(fromB.id), 'church B’s notice never reached the relay that was down');
+});
+
+// …and both per-church resets forget the pending notices — run as shipped, every name they touch stubbed.
+function runReset(src, name, call) {
+  const latest = new Map([['x|trinityone/guardnotice:y', { id: 'e' }]]);
+  const any = new Proxy(function () {}, { get: (t, k) => (k === Symbol.toPrimitive ? () => '' : any), apply: () => undefined, construct: () => any });
+  const scope = new Proxy({ _latestGuardNotice: latest, Object, Set, Map, JSON, String, Array, Math, Date, churchPub: 'cp', churchSk: 'sk' }, {
+    has: () => true,
+    get: (t, k) => (k === Symbol.unscopables ? undefined : (k in t ? t[k] : any)),
+    set: (t, k, v) => { t[k] = v; return true; },
+  });
+  new Function('scope', 'with (scope) { ' + src + '\n' + call + ' }')(scope);
+  return latest.size;
+}
+test('both per-church resets forget the pending guardian notices', () => {
+  const reset = fnBody(STEWARD, '  function _resetChurchScopedState() {', '_resetChurchScopedState');
+  assert.equal(runReset(reset, '_resetChurchScopedState', '_resetChurchScopedState();'), 0,
+    '_resetChurchScopedState left another church’s pending guardian notice in place');
+  const sai = fnBody(STEWARD, '    setActiveIdentity(targetPub) {', 'setActiveIdentity');
+  assert.equal(runReset('const o = { ' + sai + ' };', 'setActiveIdentity', "o.setActiveIdentity('cp');"), 0,
+    'setActiveIdentity left the previous church’s pending guardian notice in place');
+});
+
+// Item 4: a church switch during the await before a notice. The notice goes out AS THE CHURCH CAPTURED BEFORE
+// THE AWAIT — signed with its key, naming it, to its relays — never as whatever is active afterwards.
+test('a notice sent with a scope captured before a church switch goes out as that church, to its relays', async () => {
+  const other = K();
+  const state = { up: new Set(['wss://a', 'wss://b']) };
+  const pool = shapedPool(state);
+  const con = consoleBoot(church, { relays: ['wss://a'], pool, retryMs: [5000] });
+  const scope = con.api.guardNoticeScope();
+  assert.ok(scope && !('sk' in scope), 'the scope handle exposes the key to the page');
+  con.become(other, ['wss://b']);              // the switch, during the steward's await
+  const evt = await con.api.notifyGuardian(P.pub, C1, 'Cleo', { [C1]: [P.pub] }, {}, scope);
+  assert.ok(evt, 'the scoped notice was not sent');
+  assert.equal(evt.pubkey, church.pub, 'A CHURCH-A NOTICE WAS SIGNED WITH CHURCH B’S KEY after a switch');
+  assert.equal(decryptNotice(P, evt).church, church.pub, 'the scoped notice names the church switched to');
+  assert.deepEqual(pool.calls.filter(c => c.id === evt.id).map(c => c.url), ['wss://a'], 'the scoped notice went to the other church’s relays');
+});
+test('every console path captures the church BEFORE its first await and hands that scope to the notice', async () => {
+  for (const [anchor, name, call, scopeExtra] of [
+    ['const linkParent = async (childPub, parentPub) => {', 'linkParent', (fn) => fn(C1, P.pub), {}],
+    ['const unlinkParent = async (childPub, parentPub) => {', 'unlinkParent', (fn) => fn(C1, P.pub), {}],
+    ['const approveGuardian = async (r) => {', 'approveGuardian', (fn) => fn({ child: C1, parent: P.pub }), {}],
+    ['const declineGuardian = async (r) => {', 'declineGuardian', (fn) => fn({ child: C1, parent: P.pub }), {}],
+    ['const toggleMinor = async (pk) => {', 'toggleMinor', (fn) => fn(P.pub), { approvedSet: new Set(), nophotoSet: new Set(), kidPhotosAllowed: true, parentSet: new Set([P.pub]), ckClearedSet: new Set(), CustomEvent: class {} }],
+  ]) {
+    const { calls, Steward } = recorder();
+    let active = 'A';
+    Steward.guardNoticeScope = () => Object.freeze({ church: active });
+    const save = Steward.setGuardians;
+    Steward.setGuardians = async (...a) => { active = 'B'; await sleep(5); return save(...a); };   // switched mid-await
+    Steward.setMinors = async () => { active = 'B'; return true; };
+    const fn = run(anchor, name, baseScope({ [C1]: [P.pub] }, Steward, scopeExtra));
+    await call(fn);
+    const sent = [...calls.linked, ...calls.removed, ...calls.listed];
+    assert.equal(sent.length, 1, name + ': expected exactly one notice');
+    const scope = sent[0][sent[0].length - 1];
+    assert.ok(scope && scope.church === 'A', name + ': THE NOTICE WAS NOT GIVEN THE CHURCH CAPTURED BEFORE THE AWAIT: ' + JSON.stringify(scope));
+  }
+});
+
+// Item 5a: every relay already holding a NEWER notice for this parent is not "your change wasn't saved".
+test('a notice every relay answers with "a newer version is already stored" raises no error banner', async () => {
+  const state = { up: new Set(['wss://a', 'wss://b']), refuse: 'invalid: a newer version of this is already stored — reload and edit again' };
+  const con = consoleBoot(church, { relays: ['wss://a', 'wss://b'], pool: shapedPool(state), retryMs: [5000] });
+  await con.api.notifyGuardian(P.pub, C1, 'Cleo', { [C1]: [P.pub] }, {});
+  assert.equal(con.events.filter(e => e.type === 'steward-publish-error').length, 0,
+    'A NEWER NOTICE ALREADY STORED RAISED "YOUR CHANGE WASN’T SAVED" — the guardian link itself was saved');
+});
