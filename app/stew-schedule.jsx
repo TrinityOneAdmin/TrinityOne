@@ -14,10 +14,29 @@ function schKey(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padSt
 function schParts(s) { const d = schDate(s); return { dow: SCH_DOW[d.getDay()], day: d.getDate(), mon: SCH_MON[d.getMonth()] }; }
 function schAddDays(iso, n) { const d = schDate(iso); d.setDate(d.getDate() + n); return schKey(d); }
 function schAddMonths(iso, n) { const d = schDate(iso); d.setMonth(d.getMonth() + n); return schKey(d); }
-// dates from start (inclusive) stepping weekly/monthly up to and including untilIso
-function schGenDates(startIso, cadence, untilIso) {
+// WHICH WEEK OF THE MONTH a date is, as a monthly repeat's default (owner decision 2026-10-01, DOMAIN.md):
+// the same weekday in the same week of the month — 13 Oct 2026 is the 2nd Tuesday, so the 2nd Tuesday of every
+// month — except a start on the 29th-31st, which is the LAST such weekday (-1, app/recur.jsx NTH_LAST): a "5th
+// Friday" would skip most months.
+function schNthOf(iso) { const d = schDate(iso).getDate(); return d >= 29 ? -1 : Math.ceil(d / 7); }
+const SCH_NTH_OPTS = [[1, '1st'], [2, '2nd'], [3, '3rd'], [4, '4th'], [-1, 'Last']];
+function schNthLabel(n) { return n === -1 ? 'Last' : (['1st', '2nd', '3rd', '4th', '5th'][(n || 1) - 1] || '1st'); }
+// dates from start (inclusive) stepping weekly/monthly up to and including untilIso. MONTHLY STEPS BY WEEKDAY,
+// not by calendar date: the start's weekday, in week `nth` of each month (default schNthOf(start)). Stepping
+// the date instead put a Tuesday meeting on Friday 13 Nov, and 31 Jan on 3 Mar. The months after the start
+// come from app/recur.jsx's expandEvents — the same walk that paints a recurring meeting — so the one-off
+// services and events published here land where a monthly meeting would. The start itself is always
+// included: it is the date the steward typed.
+function schGenDates(startIso, cadence, untilIso, nth) {
   if (!startIso) return []; const out = [startIso]; let cur = startIso, guard = 0;
-  while (guard++ < 400) { cur = cadence === 'monthly' ? schAddMonths(cur, 1) : schAddDays(cur, 7); if (!untilIso || cur > untilIso) break; out.push(cur); }
+  if (cadence === 'monthly') {
+    if (!untilIso || untilIso <= startIso) return out;
+    const span = Math.round((schDate(untilIso) - schDate(startIso)) / 864e5);
+    const series = { id: 'sch', date: startIso, recur: 'monthly', day: schDate(startIso).getDay(), nth: (typeof nth === 'number') ? nth : schNthOf(startIso) };
+    for (const o of window.expandEvents([series], startIso, span)) if (o.date > startIso && o.date <= untilIso && out.length < 400) out.push(o.date);
+    return out;
+  }
+  while (guard++ < 400) { cur = schAddDays(cur, 7); if (!untilIso || cur > untilIso) break; out.push(cur); }
   return out;
 }
 function teamMeta(t) { return { name: t.name, icon: t.icon || 'hand', accent: t.accent || 'var(--clay)' }; }
@@ -374,7 +393,7 @@ function SchRepeatRow({ repeat, setRepeat, until, setUntil, nth, setNth }) {
         <React.Fragment>
           <div style={schLbl}>Which week</div>
           <select aria-label="Which week of the month" value={nth || 1} onChange={e => setNth(+e.target.value)} style={schFld}>
-            <option value={1}>1st</option><option value={2}>2nd</option><option value={3}>3rd</option><option value={4}>4th</option><option value={5}>5th</option>
+            {SCH_NTH_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
           </select>
         </React.Fragment>
       ) : null}
@@ -394,10 +413,14 @@ function SchAddServiceModal({ onClose }) {
   // they await up to NAME_KEY_WAIT_MS for a late church key, and the button stayed live for all of it — two
   // presses meant two sets of documents with distinct ids, both landing. (Audit of 7a45d4d, finding 4.)
   const [busy, setBusy] = useSch(false);
+  // WHICH WEEK, for a monthly repeat: null until the steward picks one, and until then it follows the date
+  // (schNthOf) — so changing the date re-seeds it, and an explicit pick is kept.
+  const [nthPick, setNthPick] = useSch(null);
+  const nth = nthPick == null ? (date ? schNthOf(date) : 1) : nthPick;
   const save = async () => {
     if (!date || busy) return;
     setBusy(true); setErr('');
-    const dates = repeat === 'none' ? [date] : schGenDates(date, repeat, until || schAddMonths(date, 3));
+    const dates = repeat === 'none' ? [date] : schGenDates(date, repeat, until || schAddMonths(date, 3), nth);
     const out = await Promise.all(dates.map(d => window.Steward.publishService({ name: name.trim() || 'Service', date: d, time })));
     setBusy(false);
     if (out.some(r => r == null)) { setErr(SCH_NO_KEY); return; }   // stay open: nothing was written
@@ -411,7 +434,7 @@ function SchAddServiceModal({ onClose }) {
         <div style={{ flex: 1 }}><div style={schLbl}>Date</div><input aria-label="Date" type="date" value={date} onChange={e => setDate(e.target.value)} style={schFld} /></div>
         <div style={{ width: 130 }}><div style={schLbl}>Time</div><input aria-label="Time" type="time" value={time} onChange={e => setTime(e.target.value)} style={schFld} /></div>
       </div>
-      <SchRepeatRow repeat={repeat} setRepeat={setRepeat} until={until} setUntil={setUntil} />
+      <SchRepeatRow repeat={repeat} setRepeat={setRepeat} until={until} setUntil={setUntil} nth={nth} setNth={setNthPick} />
       {repeat !== 'none' && until && until <= date ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', marginTop: 8, lineHeight: 1.4 }}>The “until” date is on or before the start, so only the first service will be added — pick a later date to repeat.</div> : null}
       <div style={{ display: 'flex', gap: 10, marginTop: 22 }}>
         <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
@@ -1029,10 +1052,13 @@ function SchEventModal({ day, onClose }) {
   const [err, setErr] = useSch('');
   // Busy while it awaits a late church key — see SchAddServiceModal for the full note.
   const [busy, setBusy] = useSch(false);
+  // Which week of the month for a monthly repeat — follows the date until picked (see SchAddServiceModal).
+  const [nthPick, setNthPick] = useSch(null);
+  const nth = nthPick == null ? (date ? schNthOf(date) : 1) : nthPick;
   const save = async () => {
     if (!title.trim() || !date || busy) return;
     setBusy(true); setErr('');
-    const dates = repeat === 'none' ? [date] : schGenDates(date, repeat, until || schAddMonths(date, 3));
+    const dates = repeat === 'none' ? [date] : schGenDates(date, repeat, until || schAddMonths(date, 3), nth);
     // a group is church-scoped, so a network-wide event never belongs to a church group
     const gid = asNetwork ? '' : group;
     const out = await Promise.all(dates.map(d => window.Steward.publishEvent({ title: title.trim(), date: d, time, where: where.trim(), blurb: blurb.trim(), accent, image, groupId: gid }, asPub)));
@@ -1134,7 +1160,7 @@ function SchEventModal({ day, onClose }) {
       )}
       <div style={schLbl}>Note (optional)</div>
       <textarea aria-label="Note (optional)" value={blurb} onChange={e => setBlurb(e.target.value)} rows={3} placeholder="A short description members will read." style={{ ...schFld, height: 'auto', padding: '11px 13px', lineHeight: 1.5, resize: 'vertical', fontFamily: 'var(--font-ui)' }} />
-      <SchRepeatRow repeat={repeat} setRepeat={setRepeat} until={until} setUntil={setUntil} />
+      <SchRepeatRow repeat={repeat} setRepeat={setRepeat} until={until} setUntil={setUntil} nth={nth} setNth={setNthPick} />
     </SchModal>
   );
 }
@@ -1256,7 +1282,7 @@ function DashCalendar() {
                   onKeyDown={ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); setEvDetail(e); } }}
                   title="Open this event — details, edit, remove"
                   style={{ padding: 12, borderRadius: 13, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', marginBottom: 9, cursor: 'pointer', textAlign: 'left', width: '100%', font: 'inherit', color: 'inherit' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}><span style={{ width: 8, height: 8, borderRadius: 999, background: e.accent }} /><div style={{ fontWeight: 700, fontSize: 14 }}>{e.title}</div>{e.recur ? <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--ink-3)', border: '1px solid var(--line)', borderRadius: 6, padding: '1px 5px' }}>{e.recur === 'fortnightly' ? '2-WEEKLY' : e.recur === 'monthly' ? (['1ST','2ND','3RD','4TH','5TH'][(e.nth || 1) - 1] + ' ' + ['SUN','MON','TUE','WED','THU','FRI','SAT'][e.day || 0]) : 'WEEKLY'}</span> : null}<Icon name="chevR" size={14} color="var(--ink-3)" style={{ marginLeft: 'auto' }} /></div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}><span style={{ width: 8, height: 8, borderRadius: 999, background: e.accent }} /><div style={{ fontWeight: 700, fontSize: 14 }}>{e.title}</div>{e.recur ? <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--ink-3)', border: '1px solid var(--line)', borderRadius: 6, padding: '1px 5px' }}>{e.recur === 'fortnightly' ? '2-WEEKLY' : e.recur === 'monthly' ? (schNthLabel(e.nth).toUpperCase() + ' ' + ['SUN','MON','TUE','WED','THU','FRI','SAT'][e.day || 0]) : 'WEEKLY'}</span> : null}<Icon name="chevR" size={14} color="var(--ink-3)" style={{ marginLeft: 'auto' }} /></div>
                   <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 2 }}>{e.time}{e.where ? ' · ' + e.where : ''}</div>
                   {e.blurb ? <p style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, margin: '7px 0 0' }}>{e.blurb}</p> : null}
                   {(() => {
@@ -1411,7 +1437,7 @@ function SchEventEdit({ event, onClose }) {
             <React.Fragment>
               <div style={schLbl}>Which week</div>
               <select aria-label="Which week" value={nth} onChange={ev => setNth(+ev.target.value)} style={{ ...schFld, cursor: 'pointer' }}>
-                <option value={1}>1st</option><option value={2}>2nd</option><option value={3}>3rd</option><option value={4}>4th</option><option value={5}>5th</option>
+                <option value={1}>1st</option><option value={2}>2nd</option><option value={3}>3rd</option><option value={4}>4th</option><option value={5}>5th</option><option value={-1}>Last</option>
               </select>
             </React.Fragment>
           ) : null}
@@ -1489,7 +1515,7 @@ function SchEventDetail({ event, onClose }) {
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--ink-3)', fontWeight: 600, marginTop: 5, flexWrap: 'wrap' }}>
                 {e.time ? <React.Fragment><Icon name="clock" size={13} color="var(--ink-3)" /> {e.time}</React.Fragment> : null}
                 {e.where ? <React.Fragment>{e.time ? <span style={{ opacity: .5 }}>·</span> : null}<Icon name="marker" size={13} color="var(--ink-3)" /> {e.where}</React.Fragment> : null}
-                {e.recur ? <React.Fragment><span style={{ opacity: .5 }}>·</span><Icon name="refresh" size={13} color="var(--ink-3)" /> {e.recur === 'fortnightly' ? 'Every 2 weeks' : e.recur === 'monthly' ? (['1st','2nd','3rd','4th','5th'][(e.nth || 1) - 1] + ' ' + ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][e.day || 0]) : 'Weekly'}</React.Fragment> : null}
+                {e.recur ? <React.Fragment><span style={{ opacity: .5 }}>·</span><Icon name="refresh" size={13} color="var(--ink-3)" /> {e.recur === 'fortnightly' ? 'Every 2 weeks' : e.recur === 'monthly' ? (schNthLabel(e.nth) + ' ' + ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][e.day || 0]) : 'Weekly'}</React.Fragment> : null}
               </div>
             </div>
           </div>

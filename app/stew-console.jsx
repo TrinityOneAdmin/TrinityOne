@@ -78,7 +78,7 @@ function WizMeetings({ meetings, setMeetings }) {
             {m.recur === 'monthly' ? (
               <div style={{ display: 'flex', gap: 9, alignItems: 'center' }}>
                 <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--ink-2)', whiteSpace: 'nowrap' }}>Which week</span>
-                <select value={m.nth || 1} onChange={e => set(i, { nth: +e.target.value })} style={{ ...fld, flex: '1 1 100px', cursor: 'pointer', fontWeight: 600 }}><option value={1}>1st</option><option value={2}>2nd</option><option value={3}>3rd</option><option value={4}>4th</option><option value={5}>5th</option></select>
+                <select value={m.nth || 1} onChange={e => set(i, { nth: +e.target.value })} style={{ ...fld, flex: '1 1 100px', cursor: 'pointer', fontWeight: 600 }}><option value={1}>1st</option><option value={2}>2nd</option><option value={3}>3rd</option><option value={4}>4th</option><option value={5}>5th</option><option value={-1}>Last</option></select>
               </div>
             ) : null}
           </div>

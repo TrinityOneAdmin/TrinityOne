@@ -22868,7 +22868,7 @@ zoo`.split("\n");
       if (!signer) return Promise.resolve(null);
       const id = ev.id || "evt" + Date.now().toString(36) + (++_evtSeq).toString(36) + Math.random().toString(36).slice(2, 7);
       const groupId = ev.groupId || "";
-      const doc = { date: ev.date || "", time: ev.time || "", title: ev.title || "Event", where: ev.where || "", blurb: ev.blurb || "", accent: ev.accent || "var(--clay)", image: ev.image || "", groupId, recur: ev.recur || "", day: typeof ev.day === "number" ? ev.day : null, nth: typeof ev.nth === "number" && ev.nth >= 1 && ev.nth <= 5 ? ev.nth : null };
+      const doc = { date: ev.date || "", time: ev.time || "", title: ev.title || "Event", where: ev.where || "", blurb: ev.blurb || "", accent: ev.accent || "var(--clay)", image: ev.image || "", groupId, recur: ev.recur || "", day: typeof ev.day === "number" ? ev.day : null, nth: typeof ev.nth === "number" && (ev.nth >= 1 && ev.nth <= 5 || ev.nth === -1) ? ev.nth : null };
       const content = await _sealChurchDocReady(doc);
       if (content == null) return null;
       const tags = [["d", EVENT_D + id], ["t", NET]];

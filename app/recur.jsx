@@ -7,6 +7,26 @@
   const iso = (d) => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
   const DOW = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
+  // "WHICH WEEK" OF A MONTHLY MEETING. nth 1-5 is the 1st…5th such weekday; nth -1 (NTH_LAST) is the LAST one in
+  // the month — the 4th in some months and the 5th in others, which no fixed number can say (owner decision
+  // 2026-10-01: a monthly meeting started on the 29th-31st defaults to "last <weekday>", not a 5th that skips
+  // most months). -1 is the iCalendar spelling too (RRULE BYDAY=-1FR), so scripts/public-calendar.mjs writes it
+  // straight through. AN OLDER APP reads -1 as "not 1-5" and falls back to the 1st weekday (as it does for a
+  // missing nth): wrong, but a valid date, and the same thing it would do with any other spelling.
+  // Returns a local Date, or null when the month has no such weekday (a 5th that does not exist).
+  const NTH_LAST = -1;
+  function nthWeekdayOfMonth(y, m, day, nth) {
+    if (nth === NTH_LAST) {
+      const d = new Date(y, m + 1, 0);              // the month's last day
+      while (d.getDay() !== day) d.setDate(d.getDate() - 1);
+      return d;
+    }
+    const d = new Date(y, m, 1);
+    while (d.getDay() !== day) d.setDate(d.getDate() + 1);
+    d.setDate(d.getDate() + 7 * ((nth || 1) - 1));
+    return d.getMonth() === m ? d : null;
+  }
+
   function expandEvents(events, fromISO, days) {
     const out = [];
     const from = new Date((fromISO || iso(new Date())) + 'T00:00:00'); from.setHours(0, 0, 0, 0);
@@ -18,12 +38,11 @@
       const anchor = e.date ? new Date(e.date + 'T00:00:00') : new Date(from);
       const day = (typeof e.day === 'number') ? e.day : anchor.getDay();
       if (e.recur === 'monthly') {
-        const nth = (typeof e.nth === 'number' && e.nth >= 1 && e.nth <= 5) ? e.nth : 1;
+        const nth = (typeof e.nth === 'number' && ((e.nth >= 1 && e.nth <= 5) || e.nth === NTH_LAST)) ? e.nth : 1;
         let m = new Date(from.getFullYear(), from.getMonth(), 1);
         while (m <= to) {
-          const occ = new Date(m); while (occ.getDay() !== day) occ.setDate(occ.getDate() + 1);
-          for (let w = 1; w < nth; w++) occ.setDate(occ.getDate() + 7);
-          if (occ.getMonth() === m.getMonth() && inRange(occ) && occ >= anchor) out.push({ ...e, date: iso(occ), seriesDate: e.date, recurring: true });
+          const occ = nthWeekdayOfMonth(m.getFullYear(), m.getMonth(), day, nth);
+          if (occ && inRange(occ) && occ >= anchor) out.push({ ...e, date: iso(occ), seriesDate: e.date, recurring: true });
           m = new Date(m.getFullYear(), m.getMonth() + 1, 1);
         }
       } else {                                          // weekly / fortnightly
