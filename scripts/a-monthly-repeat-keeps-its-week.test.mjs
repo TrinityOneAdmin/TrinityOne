@@ -213,9 +213,26 @@ test('the new-event clash note checks the dates that will be published, not the 
   // Choir at 19:30 on 13 Oct does not — nothing will be published that day (re-audit of ffcdcfe, finding 2).
   const choir = (date) => ({ useStewardEvents: () => [{ id: 'c', title: 'Choir', date, time: '19:30' }] });
   const onFirst = await saveMonthly('SchEventModal', { date: '2026-10-13', pick: -1, until: '2026-12-31', hooks: choir('2026-10-27') });
-  assert.equal(onFirst.clash, 'same time as Choir', 'no clash note for an event at the same time on the first date that will be published');
+  assert.equal(onFirst.clash, 'same time as Choir on Tue 27 Oct',
+    'the clash note does not name the date it clashes on — for a repeat that is not the date typed (audit of 812948b, item 2)');
   const onTyped = await saveMonthly('SchEventModal', { date: '2026-10-13', pick: -1, until: '2026-12-31', hooks: choir('2026-10-13') });
   assert.equal(onTyped.clash, '', 'a clash note for the typed date, which this save does not publish');
+});
+
+test('a far-off Until does not make every render walk to the year 9999', async () => {
+  // schPlanned runs on every render; the monthly walk grew with Until — 9999-12-31 cost ~370 ms a call, on
+  // every keystroke (audit of 812948b, item 1). Capped at 400 months, the ceiling the weekly walk has.
+  // Asserted on the span handed to the engine, which is what the cost grows with, not on a wall clock.
+  for (const component of ['SchAddServiceModal', 'SchEventModal']) {
+    const spans = [];
+    const real = realExpandEvents();
+    const hooks = { expandEvents: (evs, from, days) => { spans.push(days); return real(evs, from, days); } };
+    const r = await saveMonthly(component, { date: '2026-10-13', until: '9999-12-31', hooks });
+    assert.ok(spans.length > 0, 're-anchor: the dialog never reached expandEvents');
+    assert.ok(Math.max(...spans) <= 400 * 31, `${component}: a monthly repeat to 9999 walked ${Math.max(...spans)} days on a render — uncapped`);
+    assert.equal(r.dates.length, 400, `${component}: expected the 400-date ceiling, got ${r.dates.length}`);
+    assert.equal(r.dates[0], '2026-10-13');
+  }
 });
 
 test('SchEventEdit keeps a "Last" meeting as Last when it is saved', async () => {

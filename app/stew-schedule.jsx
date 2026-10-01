@@ -40,7 +40,12 @@ function schNthLabel(n) { return n === -1 ? 'Last' : (['1st', '2nd', '3rd', '4th
 function schGenDates(startIso, cadence, untilIso, nth) {
   if (!startIso) return [];
   if (cadence === 'monthly') {
-    const end = (untilIso && untilIso > startIso) ? untilIso : startIso;
+    // AT MOST 400 MONTHS, the 400-date ceiling the weekly walk below has. Without it the walk grew with Until —
+    // schPlanned runs on every render, and Until 9999-12-31 cost ~370 ms a call, so every keystroke in the
+    // dialog stalled (audit of 812948b, item 1).
+    const cap = schAddMonths(startIso, 400);
+    let end = (untilIso && untilIso > startIso) ? untilIso : startIso;
+    if (end > cap) end = cap;
     const span = Math.round((schDate(end) - schDate(startIso)) / 864e5);
     const series = { id: 'sch', date: startIso, recur: 'monthly', day: schDate(startIso).getDay(), nth: (typeof nth === 'number') ? nth : schNthOf(startIso) };
     return window.expandEvents([series], startIso, span).map(o => o.date).filter(d => d >= startIso && d <= end).slice(0, 400);
@@ -1138,7 +1143,7 @@ function SchEventModal({ day, onClose }) {
       {clashes.length ? (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 9, padding: '9px 12px', borderRadius: 11, background: 'color-mix(in oklab, var(--gold) 12%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 30%, var(--line))', fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.4 }}>
           <Icon name="bell" size={15} color="#8a6717" style={{ flexShrink: 0 }} />
-          <span>This is at the same time as <b>{clashes[0].title}</b>{clashes.length > 1 ? ' and ' + (clashes.length - 1) + ' more' : ''} — just so you know.</span>
+          <span>This is at the same time as <b>{clashes[0].title}</b> on {(() => { const p = schParts(clashes[0].date); return p.dow + ' ' + p.day + ' ' + p.mon; })()}{clashes.length > 1 ? ' and ' + (clashes.length - 1) + ' more' : ''} — just so you know.</span>
         </div>
       ) : null}
       <div style={schLbl}>Where</div>

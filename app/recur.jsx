@@ -44,8 +44,14 @@
     for (const e of (events || [])) {
       if (!e) continue;
       if (!e.recur) { out.push({ ...e }); continue; }   // one-off — always kept (finite; consumers filter/sort by date)
+      // A SERIES WITH A DATE THAT IS NOT YYYY-MM-DD IS SKIPPED, NOT WALKED. "2026-10-13T19:30" made an Invalid
+      // Date, every step below compared NaN against the weekday for ever, and the calendar hung — the member
+      // app's subscribeChurchEvents passes a relay document's date through unchecked (audit of 812948b, item 3).
+      // A `day` that no weekday can equal (7, 2.5, '2') spun the same loops, so it falls back to the anchor's
+      // own weekday, as scripts/public-calendar.mjs does for the feed.
+      if (e.date && !(/^\d{4}-\d{2}-\d{2}$/.test(e.date) && !isNaN(new Date(e.date + 'T12:00:00')))) continue;
       const anchor = e.date ? new Date(e.date + 'T12:00:00') : new Date(from);
-      const day = (typeof e.day === 'number') ? e.day : anchor.getDay();
+      const day = (Number.isInteger(e.day) && e.day >= 0 && e.day <= 6) ? e.day : anchor.getDay();
       if (e.recur === 'monthly') {
         const nth = (typeof e.nth === 'number' && ((e.nth >= 1 && e.nth <= 5) || e.nth === NTH_LAST)) ? e.nth : 1;
         let m = new Date(from.getFullYear(), from.getMonth(), 1, 12);
