@@ -69,15 +69,20 @@ function mountSched(componentName, props, steward, hooks = {}) {
   return { nodes, byLabel, text, states };
 }
 
-// Type a monthly repeat into a dialog and press its save button. Returns the published dates, in order.
-async function saveMonthly(component, { date, until, pick, changeDateTo, title = 'Elders' }) {
+// The exact copy of the one line a monthly repeat with no date to add shows. Pinned here, not read from the
+// file, so swapping it for any other words fails (re-audit of ffcdcfe, finding 4).
+const NO_DATES = 'No date matches before “Until”.';
+
+// Type a monthly repeat into a dialog and press its save button (whether or not it is enabled — a disabled
+// button that still published would be the defect). Returns the published dates and what the dialog showed.
+async function saveMonthly(component, { date, until, pick, changeDateTo, title = 'Elders', hooks = {} }) {
   const published = [];
   const steward = {
     publishService: async (s) => { published.push(s); return { id: 'svc' + published.length, ...s }; },
     publishEvent: async (e) => { published.push(e); return { id: 'evt' + published.length, ...e }; },
   };
   let closed = false;
-  const m = mountSched(component, { onClose() { closed = true; }, day: '' }, steward);
+  const m = mountSched(component, { onClose() { closed = true; }, day: '' }, steward, hooks);
   if (m.byLabel('Title')) m.byLabel('Title').props.onChange({ target: { value: title } });
   m.byLabel('Date').props.onChange({ target: { value: date } });
   const monthly = m.nodes().find(n => n.type === 'button' && m.text(n) === 'Monthly');
@@ -90,13 +95,30 @@ async function saveMonthly(component, { date, until, pick, changeDateTo, title =
   if (changeDateTo) m.byLabel('Date').props.onChange({ target: { value: changeDateTo } });
   sel = m.byLabel('Which week of the month');
   const shown = +sel.props.value;
-  const status = m.nodes().find(n => n.props.role === 'status');
-  const first = status ? m.text(status) : '';
-  const saves = m.nodes().filter(n => n.type === 'button' && n.props.disabled === false);
-  assert.equal(saves.length, 1, component + ': expected one enabled save button — re-anchor');
+  const before = m.nodes();
+  const all = m.text(before);
+  const firstLine = before.find(n => n.props.role === 'status' && m.text(n).startsWith('First:'));
+  const noneLine = before.find(n => n.props.role === 'status' && !m.text(n).startsWith('First:'));
+  const saves = before.filter(n => n.type === 'button' && typeof n.props.disabled === 'boolean');
+  assert.equal(saves.length, 1, component + ': expected one save button — re-anchor');
   await saves[0].props.onClick();
   const alert = m.nodes().find(n => n.props.role === 'alert');
-  return { dates: published.map(p => p.date), shown, first, closed, alert: alert ? m.text(alert) : '', options: m.nodes().filter(n => n.type === 'option' && n.props.value !== undefined), published };
+  return {
+    dates: published.map(p => p.date), shown, closed, disabled: saves[0].props.disabled,
+    first: firstLine ? m.text(firstLine) : '', none: noneLine ? m.text(noneLine) : '',
+    amber: /only the first/.test(all), clash: (all.match(/same time as [^—]*/) || [''])[0].trim(),
+    alert: alert ? m.text(alert) : '', options: m.nodes().filter(n => n.type === 'option' && n.props.value !== undefined), published,
+  };
+}
+
+// Run fn with the process in another time zone (Node re-reads TZ when it is assigned), always restoring it.
+async function inZone(tz, fn) {
+  const was = process.env.TZ;
+  process.env.TZ = tz;
+  try {
+    assert.equal(new Intl.DateTimeFormat().resolvedOptions().timeZone, tz, 're-anchor: this Node did not switch to ' + tz);
+    return await fn();
+  } finally { if (was === undefined) delete process.env.TZ; else process.env.TZ = was; }
 }
 
 for (const component of ['SchAddServiceModal', 'SchEventModal']) {
@@ -146,13 +168,55 @@ for (const component of ['SchAddServiceModal', 'SchEventModal']) {
     assert.equal(own.first, '', 'a "First:" line shows when the first date IS the date typed — copy nobody needs');
   });
 
-  test(`${component}: a week whose first date is after "Until" publishes nothing and says so`, async () => {
+  test(`${component}: a week whose first date is after "Until" shows one line, and Save does what it says`, async () => {
     const r = await saveMonthly(component, { date: '2026-10-13', pick: -1, until: '2026-10-20' });
+    assert.equal(r.none, NO_DATES, 'the "no date" line is missing or says something else');
+    assert.equal(r.first, '', 'a "First:" line shows beside "no date matches" — two lines that disagree');
+    assert.equal(r.amber, false, 'the "only the first will be added" line shows over a save that adds nothing');
+    assert.equal(r.disabled, true, 'Save is enabled although there is no date to add');
     assert.deepEqual(r.dates, [], 'a date that is not an occurrence of the rule was published');
     assert.equal(r.closed, false, 'the dialog closed over a save that published nothing');
-    assert.ok(r.alert, 'nothing on screen says why nothing was added');
+  });
+
+  test(`${component}: Until on or before the start means the start day, as weekly does`, async () => {
+    // a different week picked: the start day is not an occurrence -> nothing, said once
+    const other = await saveMonthly(component, { date: '2026-10-13', pick: -1, until: '2026-10-13' });
+    assert.equal(other.none, NO_DATES);
+    assert.equal(other.first, '', 'First:, "no date" and the amber line all showed at once (re-audit finding 1)');
+    assert.equal(other.amber, false);
+    assert.deepEqual(other.dates, []);
+    // the start's own week: the start IS an occurrence -> just the start, and no "no date" line
+    const own = await saveMonthly(component, { date: '2026-10-13', until: '2026-10-01' });
+    assert.deepEqual(own.dates, ['2026-10-13'], 'Until before the start should add just the start, like weekly');
+    assert.equal(own.none, '', 'a "no date" line shows over a save that adds the start');
+    assert.equal(own.closed, true);
+    if (component === 'SchAddServiceModal') assert.equal(own.amber, true, 'the service dialog no longer warns that only the first will be added');
+  });
+
+  test(`${component}: Until is inclusive — a repeat falling ON Until is published`, async () => {
+    const r = await saveMonthly(component, { date: '2026-10-13', until: '2026-12-08' });
+    assert.deepEqual(r.dates, ['2026-10-13', '2026-11-10', '2026-12-08'], 'the 2nd Tuesday on Until itself (8 Dec) was dropped');
+  });
+
+  test(`${component}: a clock change at midnight does not drop the date on Until (Santiago, Beirut)`, async () => {
+    // Chile goes forward at 00:00 on Sun 6 Sep 2026; walking day by day across it put 7 Sep at 01:00, past
+    // the window's end of 00:00 on 7 Sep. Lebanon does the same at 00:00 on Sun 28 Mar 2027.
+    const santiago = await inZone('America/Santiago', () => saveMonthly(component, { date: '2026-08-10', pick: 1, until: '2026-09-07' }));
+    assert.deepEqual(santiago.dates, ['2026-09-07'], 'America/Santiago: the 1st Monday on Until (7 Sep) was dropped');
+    const beirut = await inZone('Asia/Beirut', () => saveMonthly(component, { date: '2027-03-11', pick: -1, until: '2027-03-25' }));
+    assert.deepEqual(beirut.dates, ['2027-03-25'], 'Asia/Beirut: the last Thursday on Until (25 Mar) was dropped');
   });
 }
+
+test('the new-event clash note checks the dates that will be published, not the date typed', async () => {
+  // start 13 Oct, Monthly, "Last": the first date published is 27 Oct. Choir at 19:30 on 27 Oct clashes;
+  // Choir at 19:30 on 13 Oct does not — nothing will be published that day (re-audit of ffcdcfe, finding 2).
+  const choir = (date) => ({ useStewardEvents: () => [{ id: 'c', title: 'Choir', date, time: '19:30' }] });
+  const onFirst = await saveMonthly('SchEventModal', { date: '2026-10-13', pick: -1, until: '2026-12-31', hooks: choir('2026-10-27') });
+  assert.equal(onFirst.clash, 'same time as Choir', 'no clash note for an event at the same time on the first date that will be published');
+  const onTyped = await saveMonthly('SchEventModal', { date: '2026-10-13', pick: -1, until: '2026-12-31', hooks: choir('2026-10-13') });
+  assert.equal(onTyped.clash, '', 'a clash note for the typed date, which this save does not publish');
+});
 
 test('SchEventEdit keeps a "Last" meeting as Last when it is saved', async () => {
   let sent = null;

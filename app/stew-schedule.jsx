@@ -20,8 +20,9 @@ function schAddMonths(iso, n) { const d = schDate(iso); d.setMonth(d.getMonth() 
 // Friday" would skip most months.
 function schNthOf(iso) { const d = schDate(iso).getDate(); return d >= 29 ? -1 : Math.ceil(d / 7); }
 const SCH_NTH_OPTS = [[1, '1st'], [2, '2nd'], [3, '3rd'], [4, '4th'], [-1, 'Last']];
-// Where a monthly repeat's first date lands — shown under the picker only when it is not the date typed.
-function schFirstMonthly(date, nth) { return date ? (schGenDates(date, 'monthly', schAddMonths(date, 2), nth)[0] || '') : ''; }
+// What a dialog will publish for these fields — computed once per render, so the "First:" line, the "no
+// date" line, the Save button, the clash note and the save itself all read the same list.
+function schPlanned(date, repeat, until, nth) { return !date ? [] : repeat === 'none' ? [date] : schGenDates(date, repeat, until || schAddMonths(date, 3), nth); }
 const SCH_NO_DATES = 'No date matches before “Until”.';
 function schNthLabel(n) { return n === -1 ? 'Last' : (['1st', '2nd', '3rd', '4th', '5th'][(n || 1) - 1] || '1st'); }
 // dates from start (inclusive) stepping weekly/monthly up to and including untilIso. MONTHLY STEPS BY WEEKDAY,
@@ -33,12 +34,16 @@ function schNthLabel(n) { return n === -1 ? 'Last' : (['1st', '2nd', '3rd', '4th
 // "Last"), the first date is the first such week ON OR AFTER the start (27 Oct), never the typed date plus
 // the rule — that published 13 Oct AND 27 Oct, two in one month (audit of 484cc00, finding 1). So a monthly
 // result can be EMPTY (until before the first occurrence); callers must say so rather than publish nothing.
+// UNTIL IS INCLUSIVE, AND AN UNTIL ON OR BEFORE THE START MEANS THE START DAY — the same as weekly, which
+// publishes just the start then. So monthly with Until <= start publishes the start if it IS an occurrence of
+// the picked week, and nothing if it is not (re-audit of ffcdcfe, finding 1).
 function schGenDates(startIso, cadence, untilIso, nth) {
   if (!startIso) return [];
   if (cadence === 'monthly') {
-    const span = Math.max(0, Math.round((schDate(untilIso || startIso) - schDate(startIso)) / 864e5));
+    const end = (untilIso && untilIso > startIso) ? untilIso : startIso;
+    const span = Math.round((schDate(end) - schDate(startIso)) / 864e5);
     const series = { id: 'sch', date: startIso, recur: 'monthly', day: schDate(startIso).getDay(), nth: (typeof nth === 'number') ? nth : schNthOf(startIso) };
-    return window.expandEvents([series], startIso, span).map(o => o.date).filter(d => d >= startIso && d <= (untilIso || startIso)).slice(0, 400);
+    return window.expandEvents([series], startIso, span).map(o => o.date).filter(d => d >= startIso && d <= end).slice(0, 400);
   }
   const out = [startIso]; let cur = startIso, guard = 0;
   while (guard++ < 400) { cur = schAddDays(cur, 7); if (!untilIso || cur > untilIso) break; out.push(cur); }
@@ -385,7 +390,11 @@ function AssignModal({ slot, roster, assign, unavail, onAssign, onClear, onClose
   );
 }
 
-function SchRepeatRow({ repeat, setRepeat, until, setUntil, nth, setNth, firstOn }) {
+// `planned` = what the dialog will publish (schPlanned). Empty -> ONE line saying so, and the dialog's Save is
+// disabled; a monthly first date that is not the date typed -> "First: Tue 27 Oct". Never both.
+function SchRepeatRow({ repeat, setRepeat, until, setUntil, nth, setNth, date, planned }) {
+  const none = repeat !== 'none' && !!date && Array.isArray(planned) && !planned.length;
+  const firstOn = repeat === 'monthly' && Array.isArray(planned) && planned[0] && planned[0] !== date ? planned[0] : '';   // empty planned -> no First line
   return (
     <React.Fragment>
       <div style={schLbl}>Repeat</div>
@@ -404,6 +413,7 @@ function SchRepeatRow({ repeat, setRepeat, until, setUntil, nth, setNth, firstOn
         </React.Fragment>
       ) : null}
       {repeat !== 'none' ? (<React.Fragment><div style={schLbl}>Until</div><input aria-label="Until" type="date" value={until} onChange={e => setUntil(e.target.value)} style={schFld} /></React.Fragment>) : null}
+      {none ? <div role="status" style={{ fontSize: 12.5, color: 'var(--clay-ink)', marginTop: 8, lineHeight: 1.4 }}>{SCH_NO_DATES}</div> : null}
     </React.Fragment>
   );
 }
@@ -423,11 +433,11 @@ function SchAddServiceModal({ onClose }) {
   // (schNthOf) — so changing the date re-seeds it, and an explicit pick is kept.
   const [nthPick, setNthPick] = useSch(null);
   const nth = nthPick == null ? (date ? schNthOf(date) : 1) : nthPick;
+  const planned = schPlanned(date, repeat, until, nth);
   const save = async () => {
-    if (!date || busy) return;
+    if (!date || busy || !planned.length) return;   // no date to add: SchRepeatRow already says so, and Save is disabled
     setBusy(true); setErr('');
-    const dates = repeat === 'none' ? [date] : schGenDates(date, repeat, until || schAddMonths(date, 3), nth);
-    if (!dates.length) { setBusy(false); setErr(SCH_NO_DATES); return; }   // a monthly week whose first date is after Until
+    const dates = planned;
     const out = await Promise.all(dates.map(d => window.Steward.publishService({ name: name.trim() || 'Service', date: d, time })));
     setBusy(false);
     if (out.some(r => r == null)) { setErr(SCH_NO_KEY); return; }   // stay open: nothing was written
@@ -441,11 +451,11 @@ function SchAddServiceModal({ onClose }) {
         <div style={{ flex: 1 }}><div style={schLbl}>Date</div><input aria-label="Date" type="date" value={date} onChange={e => setDate(e.target.value)} style={schFld} /></div>
         <div style={{ width: 130 }}><div style={schLbl}>Time</div><input aria-label="Time" type="time" value={time} onChange={e => setTime(e.target.value)} style={schFld} /></div>
       </div>
-      <SchRepeatRow repeat={repeat} setRepeat={setRepeat} until={until} setUntil={setUntil} nth={nth} setNth={setNthPick} firstOn={repeat === 'monthly' && schFirstMonthly(date, nth) !== date ? schFirstMonthly(date, nth) : ''} />
-      {repeat !== 'none' && until && until <= date ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', marginTop: 8, lineHeight: 1.4 }}>The “until” date is on or before the start, so only the first service will be added — pick a later date to repeat.</div> : null}
+      <SchRepeatRow repeat={repeat} setRepeat={setRepeat} until={until} setUntil={setUntil} nth={nth} setNth={setNthPick} date={date} planned={planned} />
+      {repeat !== 'none' && until && until <= date && planned.length === 1 ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', marginTop: 8, lineHeight: 1.4 }}>The “until” date is on or before the start, so only the first service will be added — pick a later date to repeat.</div> : null}
       <div style={{ display: 'flex', gap: 10, marginTop: 22 }}>
         <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
-        <button onClick={save} disabled={!date || busy} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: (date && !busy) ? 1 : 0.55 }}><Icon name="plus" size={16} color="var(--on-clay)" /> {repeat === 'none' ? 'Add service' : 'Add services'}</button>
+        <button onClick={save} disabled={!date || busy || !planned.length} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: (date && !busy && planned.length) ? 1 : 0.55 }}><Icon name="plus" size={16} color="var(--on-clay)" /> {repeat === 'none' ? 'Add service' : 'Add services'}</button>
       </div>
       <SchNotSaved msg={err} />
     </SchModal>
@@ -1044,8 +1054,6 @@ function SchEventModal({ day, onClose }) {
   const ownedNets = React.useMemo(() => (window.Steward.ownedNetworks ? window.Steward.ownedNetworks() : []), []);
   const [asPub, setAsPub] = useSch('');          // '' = the church; else an owned network's pub
   const asNetwork = !!asPub;
-  // gentle clash check (task 19): any existing event already at this exact date + time — informational, never blocks Save
-  const clashes = React.useMemo(() => (date && time) ? (existingEvents || []).filter(e => e && e.date === date && e.time === time && (e.title || '').trim()) : [], [existingEvents, date, time]);
   const onImage = (file) => {
     if (!file) return;
     const r = new FileReader();
@@ -1062,11 +1070,16 @@ function SchEventModal({ day, onClose }) {
   // Which week of the month for a monthly repeat — follows the date until picked (see SchAddServiceModal).
   const [nthPick, setNthPick] = useSch(null);
   const nth = nthPick == null ? (date ? schNthOf(date) : 1) : nthPick;
+  const planned = schPlanned(date, repeat, until, nth);
+  const plannedKey = planned.join(',');
+  // gentle clash check (task 19): any existing event at the same time on a date THIS SAVE WILL PUBLISH —
+  // informational, never blocks Save. It checked the typed date, which a monthly repeat with another week
+  // picked does not publish at all (re-audit of ffcdcfe, finding 2).
+  const clashes = React.useMemo(() => (planned.length && time) ? (existingEvents || []).filter(e => e && planned.includes(e.date) && e.time === time && (e.title || '').trim()) : [], [existingEvents, plannedKey, time]);
   const save = async () => {
-    if (!title.trim() || !date || busy) return;
+    if (!title.trim() || !date || busy || !planned.length) return;   // no date to add: SchRepeatRow says so; Save is disabled
     setBusy(true); setErr('');
-    const dates = repeat === 'none' ? [date] : schGenDates(date, repeat, until || schAddMonths(date, 3), nth);
-    if (!dates.length) { setBusy(false); setErr(SCH_NO_DATES); return; }   // a monthly week whose first date is after Until
+    const dates = planned;
     // a group is church-scoped, so a network-wide event never belongs to a church group
     const gid = asNetwork ? '' : group;
     const out = await Promise.all(dates.map(d => window.Steward.publishEvent({ title: title.trim(), date: d, time, where: where.trim(), blurb: blurb.trim(), accent, image, groupId: gid }, asPub)));
@@ -1095,7 +1108,7 @@ function SchEventModal({ day, onClose }) {
       <React.Fragment>
         <div style={{ display: 'flex', gap: 10 }}>
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
-          <button onClick={save} disabled={!title.trim() || !date || busy} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: (title.trim() && date && !busy) ? 1 : 0.55 }}><Icon name="calPlus" size={16} color="var(--on-clay)" /> {repeat === 'none' ? 'Add event' : 'Add events'}</button>
+          <button onClick={save} disabled={!title.trim() || !date || busy || !planned.length} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: (title.trim() && date && !busy && planned.length) ? 1 : 0.55 }}><Icon name="calPlus" size={16} color="var(--on-clay)" /> {repeat === 'none' ? 'Add event' : 'Add events'}</button>
         </div>
         {/* in the footer, not the body: a "not saved" under a scrolled-away body is a failure nobody sees */}
         <SchNotSaved msg={err} />
@@ -1168,7 +1181,7 @@ function SchEventModal({ day, onClose }) {
       )}
       <div style={schLbl}>Note (optional)</div>
       <textarea aria-label="Note (optional)" value={blurb} onChange={e => setBlurb(e.target.value)} rows={3} placeholder="A short description members will read." style={{ ...schFld, height: 'auto', padding: '11px 13px', lineHeight: 1.5, resize: 'vertical', fontFamily: 'var(--font-ui)' }} />
-      <SchRepeatRow repeat={repeat} setRepeat={setRepeat} until={until} setUntil={setUntil} nth={nth} setNth={setNthPick} firstOn={repeat === 'monthly' && schFirstMonthly(date, nth) !== date ? schFirstMonthly(date, nth) : ''} />
+      <SchRepeatRow repeat={repeat} setRepeat={setRepeat} until={until} setUntil={setUntil} nth={nth} setNth={setNthPick} date={date} planned={planned} />
     </SchModal>
   );
 }
