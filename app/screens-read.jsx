@@ -9,8 +9,36 @@ const HL_COLORS = [
   { id: 'clay', v: 'var(--hl-clay)' },
 ];
 
+// A VERSE THAT OPENS WITH A HEADING. The engine's USFM parser hangs a heading (with its parallel reference, and a
+// Psalm's title) on the END of the verse before it — but at the start of a chapter there is none, so it goes at
+// the START of verse 1's html (the shipped BSB: 1,189 verses, John 1:1 and Psalm 3:1 among them). VerseRow printed
+// the number first, so on the phone the "1" sat alone ABOVE the headings (device round 2026-10-01). This splits
+// off that leading run — line breaks, whitespace and whole heading / parallel-reference spans (nested spans
+// allowed) — so the number can follow it. Returns [lead, body]; lead is '' when the verse does not open with a
+// heading, and an unbalanced span leaves everything in the body, as before. Nothing moves between verses.
+function splitVerseLead(html) {
+  const s = String(html || '');
+  const isHead = (cls) => /(^|\s)(sec|parref)(\s|$)/.test(cls);
+  let i = 0, sawHead = false;
+  while (i < s.length) {
+    const rest = s.slice(i);
+    const gap = rest.match(/^(?:\s+|<br\s*\/?>)/i);
+    if (gap) { i += gap[0].length; continue; }
+    const open = rest.match(/^<span class="([^"]*)">/);
+    if (!open || !isHead(open[1])) break;
+    const re = /<(\/?)span\b[^>]*>/gi;
+    re.lastIndex = i;
+    let depth = 0, end = -1, m;
+    while ((m = re.exec(s))) { if (!m[1]) depth++; else if (--depth === 0) { end = re.lastIndex; break; } }
+    if (end < 0) return ['', s];
+    i = end; sawHead = true;
+  }
+  return sawHead ? [s.slice(0, i), s.slice(i)] : ['', s];
+}
 // ── one verse: real markup HTML, tappable Strong's superscripts, highlight + selection ──
 function VerseRow({ n, html, hl, note, bookmarked, selected, reading, onSelect, onWord }) {
+  // a heading the verse opens with is drawn BEFORE its number (see splitVerseLead), still inside this verse's row
+  const [lead, body] = splitVerseLead(html);
   return (
     <span id={'rv-' + n} style={{ position: 'relative' }}>
       <span
@@ -28,6 +56,7 @@ function VerseRow({ n, html, hl, note, bookmarked, selected, reading, onSelect, 
           WebkitBoxDecorationBreak: 'clone', boxDecorationBreak: 'clone',
           transition: 'background .2s',
         }}>
+        {lead ? <span dangerouslySetInnerHTML={{ __html: window.sanitizeHtml(lead) }} /> : null}
         <sup style={{
           fontFamily: 'var(--font-ui)', fontSize: '.58em', fontWeight: 700,
           color: bookmarked ? 'var(--clay)' : 'var(--ink-3)', marginRight: 3, verticalAlign: 'super',
@@ -36,7 +65,7 @@ function VerseRow({ n, html, hl, note, bookmarked, selected, reading, onSelect, 
         <span style={hl ? {
           background: hl, borderRadius: 3, padding: '1px 1px',
           WebkitBoxDecorationBreak: 'clone', boxDecorationBreak: 'clone',
-        } : null} dangerouslySetInnerHTML={{ __html: window.sanitizeHtml(html) }} />
+        } : null} dangerouslySetInnerHTML={{ __html: window.sanitizeHtml(body) }} />
         {note ? <Icon name="note" size={14} color="var(--gold)" style={{ verticalAlign: 'middle', marginLeft: 4 }} /> : null}
       </span>{' '}
     </span>
