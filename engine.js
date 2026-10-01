@@ -360,12 +360,49 @@ window.safeImgUrl = function (v) {
       if(!parsed[b]){ const raw = rawByBook[b]; parsed[b] = raw ? (parseUSFM(raw).chapters || {}) : {}; rawByBook[b] = null; }
       return parsed[b];
     };
-    const get = (b, c) => { const ch = chaptersFor(b); return (ch && ch[c]) ? ch[c].map(x => ({ v: x.v, html: x.html, text: stripTags(x.html) })) : []; };
+    const get = (b, c) => { const ch = chaptersFor(b); return (ch && ch[c]) ? ch[c].map(x => ({ v: x.v, html: x.html, text: usfmText(x.html) })) : []; };
     return {
       abbr: (fallbackName || "USFM").replace(/\.(zip|usfm|sfm)$/i, "").slice(0, 12) || "USFM",
       name: fallbackName || "USFM Bible", kind: "usfm", books, maxChap,
       getVerses: get, plain: (b, c) => get(b, c).map(x => ({ v: x.v, text: x.text }))
     };
+  }
+  // THE PLAIN TEXT OF A USFM VERSE, from the html parseUSFM built for it. (2026-10-01, FIX-PLAN item 3.)
+  // This used stripTags(html), which is written for MySword markup and gets three things wrong here, all
+  // seen on Today's Verse of the Day from a USFM Bible (Isaiah 40:8 in an open.bible text):
+  //   · a section heading or parallel reference parseUSFM attached to the END of the verse before it
+  //     (`<span class="sec">Here Is Your God!</span>`, `<span class="parref">(Romans 11:33–36)</span>`) kept
+  //     its words — stripTags drops the tags, not the content — so the heading was read as scripture;
+  //   · a poetry line break (`<br>`) became nothing, gluing "fall,but";
+  //   · the indent entity `&emsp;` was printed as the six characters "&emsp;".
+  // The html is untouched — the reader still renders headings, indents and breaks from it. Only `text`
+  // changes, and with it everything that reads `text`: Today's verse card, copy, share, read-aloud, the
+  // compare pane, and the USFM search (search() → plain() → this). stripTags itself is NOT changed: the
+  // MySword builders and the dictionary use it on a different markup.
+  function usfmText(html){
+    let s = String(html || "");
+    // Drop heading and parallel-reference spans WITH their content. Depth-counted, because inlineUSFM can
+    // nest a span inside a heading (`\s1 The \nd LORD\nd* reigns` → <span class="nd"> inside the sec span).
+    const OPEN = /<span class="(?:sec|parref)">/g;
+    let m;
+    while((m = OPEN.exec(s))){
+      let depth = 1, i = m.index + m[0].length;
+      const tag = /<span\b[^>]*>|<\/span>/g; tag.lastIndex = i;
+      let t;
+      while(depth > 0 && (t = tag.exec(s))){ depth += (t[0] === "</span>") ? -1 : 1; i = t.index + t[0].length; }
+      if(depth > 0) i = s.length;   // unclosed: drop to the end rather than leak the heading
+      s = s.slice(0, m.index) + " " + s.slice(i);
+      OPEN.lastIndex = m.index;
+    }
+    s = s.replace(/<br\s*\/?>/gi, " ");                    // a line break is a word break
+    s = stripTags(s);                                       // the remaining markup and USFM codes, as before
+    s = s.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (all, e) => {
+      if(e[0] === "#"){ const n = e[1] === "x" || e[1] === "X" ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10); return (n > 0 && n < 0x110000) ? String.fromCodePoint(n) : all; }
+      const named = { emsp: " ", ensp: " ", thinsp: " ", nbsp: " ", amp: "&", lt: "<", gt: ">", quot: "\"", apos: "'" };
+      const k = e.toLowerCase();
+      return Object.prototype.hasOwnProperty.call(named, k) ? named[k] : all;
+    });
+    return s.replace(/\s+/g, " ").trim();
   }
   // clean display/search text: drop note CONTENT (not just tags), Strong's, markup
   function stripTags(s){
