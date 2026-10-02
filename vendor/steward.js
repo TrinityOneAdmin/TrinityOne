@@ -15683,6 +15683,14 @@ zoo`.split("\n");
     } catch {
     }
   }
+  var OWN_NAME_LS = "trinityone.steward.ownname.";
+  function _rememberOwnName(n) {
+    const v = String(n || "").trim().slice(0, 80);
+    if (v && churchPub) lsSet(OWN_NAME_LS + churchPub, v);
+  }
+  function _ownChurchName() {
+    return churchPub && lsGet(OWN_NAME_LS + churchPub) || "";
+  }
   function _netKeysRaw() {
     try {
       const a = JSON.parse(lsGet(NETKEYS_LS) || "[]");
@@ -23790,6 +23798,7 @@ zoo`.split("\n");
             const p = JSON.parse(e.content);
             lastProfile = { ...lastProfile, ...p };
             _profileLoaded = true;
+            if (e.pubkey === churchPub) _rememberOwnName(p && p.name);
             onProfile(p);
             try {
               window.dispatchEvent(new CustomEvent("steward-profile", { detail: lastProfile }));
@@ -23885,7 +23894,9 @@ zoo`.split("\n");
     identities() {
       const held = /* @__PURE__ */ new Set([churchPub, ...netKeys().map((r) => r.pub)]);
       return [
-        { kind: "church", pub: churchPub, npub: churchPub ? npubEncode(churchPub) : "" },
+        // `name`: the console's OWN church, as last read from its own kind-0 (_ownChurchName) — so the switcher can
+        // name it while the console is acting for somebody else. '' when this device has never read it.
+        { kind: "church", pub: churchPub, npub: churchPub ? npubEncode(churchPub) : "", name: _ownChurchName() },
         ...netKeys().map((r) => ({ kind: "network", pub: r.pub, npub: npubEncode(r.pub), name: r.name || "Network" })),
         ...[...stewardedChurches.entries()].filter(([cp]) => !held.has(cp)).map(([cp, m]) => ({ kind: "steward", pub: cp, npub: npubEncode(cp), name: m && m.name || "Church" }))
       ];

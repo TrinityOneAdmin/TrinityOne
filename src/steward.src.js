@@ -1041,6 +1041,12 @@ const RELAYS_LS = 'trinityone.steward.extra-relays';   // extra public relays th
 const NETKEYS_LS = 'trinityone.steward.network-keys';  // networks OWNED on this console: [{ pub, mnemonic|sealedMnemonic, name }]
 function lsGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
 function lsSet(k, v) { try { localStorage.setItem(k, v); } catch {} }
+// THE CONSOLE'S OWN CHURCH NAME, remembered per church key whenever its own kind-0 is read (subscribeProfile), so
+// the identity switcher can name it while the console is acting for a stewarded church or viewing a network —
+// when the profile on screen is the OTHER one's (device round 2026-10-01). A display string, public anyway.
+const OWN_NAME_LS = 'trinityone.steward.ownname.';
+function _rememberOwnName(n) { const v = String(n || '').trim().slice(0, 80); if (v && churchPub) lsSet(OWN_NAME_LS + churchPub, v); }
+function _ownChurchName() { return (churchPub && lsGet(OWN_NAME_LS + churchPub)) || ''; }
 function _netKeysRaw() { try { const a = JSON.parse(lsGet(NETKEYS_LS) || '[]'); return Array.isArray(a) ? a : []; } catch { return []; } }
 function netKeys() {
   return _netKeysRaw().map(r => {
@@ -10240,7 +10246,7 @@ window.Steward = {
     // with the others (avatar/picture shows everywhere at once, not only where it was just edited)
     try { if (lastProfile && Object.keys(lastProfile).length) onProfile(lastProfile); } catch {}
     const sub = pool.subscribeMany(relays(), [{ kinds: [0], authors: [pub] }], {
-      onevent(e) { if (e.created_at < latest) return; latest = e.created_at; try { const p = JSON.parse(e.content); lastProfile = { ...lastProfile, ...p }; _profileLoaded = true; onProfile(p); try { window.dispatchEvent(new CustomEvent('steward-profile', { detail: lastProfile })); } catch (x) {} } catch {} },
+      onevent(e) { if (e.created_at < latest) return; latest = e.created_at; try { const p = JSON.parse(e.content); lastProfile = { ...lastProfile, ...p }; _profileLoaded = true; if (e.pubkey === churchPub) _rememberOwnName(p && p.name); onProfile(p); try { window.dispatchEvent(new CustomEvent('steward-profile', { detail: lastProfile })); } catch (x) {} } catch {} },
       oneose() { _profileLoaded = true; },   // the relay answered; a church with no profile yet can still publish its first
     });
     return () => { try { sub.close(); } catch {} };
@@ -10305,7 +10311,9 @@ window.Steward = {
   identities() {
     const held = new Set([churchPub, ...netKeys().map(r => r.pub)]);   // keys we HOLD — never also list them as "stewarded"
     return [
-      { kind: 'church', pub: churchPub, npub: churchPub ? npubEncode(churchPub) : '' },
+      // `name`: the console's OWN church, as last read from its own kind-0 (_ownChurchName) — so the switcher can
+      // name it while the console is acting for somebody else. '' when this device has never read it.
+      { kind: 'church', pub: churchPub, npub: churchPub ? npubEncode(churchPub) : '', name: _ownChurchName() },
       ...netKeys().map(r => ({ kind: 'network', pub: r.pub, npub: npubEncode(r.pub), name: r.name || 'Network' })),
       ...[...stewardedChurches.entries()].filter(([cp]) => !held.has(cp)).map(([cp, m]) => ({ kind: 'steward', pub: cp, npub: npubEncode(cp), name: (m && m.name) || 'Church' })),
     ];

@@ -218,7 +218,12 @@ function IdentitySwitcher({ church, churchName, initials, onEditName, compact = 
         <div style={popStyle}>
           {ids.map(idn => {
             const on = idn.pub === activePub;
-            const label = idn.kind === 'church' ? (church.name || 'Your church') : (idn.name || (idn.kind === 'steward' ? 'Church' : 'Network'));
+            // THE OWN CHURCH'S ROW NAMES THE OWN CHURCH. `church` is the profile of whatever the console is
+            // running NOW, so while acting for a stewarded church (or viewing a network) this row said that
+            // church's name — "Your church: St Bede's" over St Bede's own row (device round 2026-10-01). The
+            // engine remembers the own church's name (identities(), _ownChurchName); with none known, the
+            // honest generic, never another church's name.
+            const label = idn.kind === 'church' ? ((!offChurch && church.name) || idn.name || 'Your church') : (idn.name || (idn.kind === 'steward' ? 'Church' : 'Network'));
             const subtitle = idn.kind === 'network' ? 'Network console' : idn.kind === 'steward' ? 'You steward this church' : 'Your church';
             const icon = idn.kind === 'network' ? 'globe' : idn.kind === 'steward' ? 'shield' : 'bank';
             return (
@@ -1718,12 +1723,7 @@ window.StewQRScanner = StewQRScanner;
 // pick, on the backdrop, on Escape, on Back and on its own × — and Help, which lived in the header row on
 // the phone, is its last row: the header has no room for a fifth 44px control beside the section name.
 function StewSectionsMenu({ nav, tab, onPick, onHelp, onClose }) {
-  const dlgRef = useStewDialog(onClose);
-  React.useEffect(() => {
-    let sub;
-    try { const P = window.Capacitor && window.Capacitor.Plugins; if (P && P.App && P.App.addListener) sub = P.App.addListener('backButton', () => onClose()); } catch (e) {}
-    return () => { try { sub && sub.remove && sub.remove(); } catch (e) {} };
-  }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+  const dlgRef = useStewDialog(onClose);   // …and Android Back: the console's dialog stack (stew-modal.jsx _stewBackSync)
   const row = { display: 'flex', alignItems: 'center', gap: 12, width: '100%', minHeight: 44, flexShrink: 0, padding: '10px 12px', borderRadius: 11, border: 'none', cursor: 'pointer', textAlign: 'left', background: 'transparent', color: 'var(--ink-2)', fontWeight: 600, fontSize: 14.5, fontFamily: 'var(--font-ui)' };
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'color-mix(in oklab, var(--ink) 34%, transparent)', backdropFilter: 'blur(3px)', animation: 'lumenFade .18s ease both' }}>
@@ -1782,13 +1782,8 @@ function StewMemberSheet({ label, initials, av, pubkey, accent, facts, actions, 
   // block armed — so ⋯ → Remove / block → Back left the arm in place, and the NEXT ⋯ opened with a one-tap
   // "Confirm: block" in the slot "Remove / block" normally fills. Found by the audit of this branch with a
   // fake App plugin in the real console. useStewDialog's Escape path already keeps a ref for exactly this.
-  const closeRef = React.useRef(onClose);
-  closeRef.current = onClose;
-  React.useEffect(() => {
-    let sub;
-    try { const P = window.Capacitor && window.Capacitor.Plugins; if (P && P.App && P.App.addListener) sub = P.App.addListener('backButton', () => { try { closeRef.current && closeRef.current(); } catch (e) {} }); } catch (e) {}
-    return () => { try { sub && sub.remove && sub.remove(); } catch (e) {} };
-  }, []);
+  // Back now comes through the console's dialog stack (stew-modal.jsx _stewBackSync), which calls the CURRENT
+  // onClose through useStewDialog's own ref — the property this listener was rewritten to have.
   const row = { display: 'flex', alignItems: 'center', gap: 12, width: '100%', minHeight: 48, flexShrink: 0, padding: '10px 12px', borderRadius: 11, border: 'none', cursor: 'pointer', textAlign: 'left', background: 'transparent', color: 'var(--ink-2)', fontWeight: 600, fontSize: 14.5, fontFamily: 'var(--font-ui)' };
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 200, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', background: 'color-mix(in oklab, var(--ink) 34%, transparent)', backdropFilter: 'blur(3px)', animation: 'lumenFade .18s ease both' }}>

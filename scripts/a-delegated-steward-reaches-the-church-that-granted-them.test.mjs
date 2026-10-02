@@ -306,6 +306,13 @@ async function screen(h) {
   const { React, draw } = miniReact();
   const picked = [];
   const win = h.stubs.window;
+  // identities() names the console's OWN church from what this device last read of its kind-0 (2026-10-02): the
+  // shipped helper, lifted with the two lines it reads through.
+  if (!('_ownChurchName' in h.stubs)) {
+    const at = VENDOR.indexOf('var OWN_NAME_LS = ');
+    const decl = VENDOR.slice(at, VENDOR.indexOf(';', at) + 1);
+    h.stubs._ownChurchName = new Function('scope', `with (scope) { ${decl}\n${fnBody(VENDOR, 'function lsGet(k) {', 'lsGet')}\n${fnBody(VENDOR, 'function _ownChurchName() {', '_ownChurchName')}\nreturn _ownChurchName; }`)(proxyOf(h.stubs));
+  }
   win.Steward.identities = new Function('scope', `with (scope) { return ({ ${fnBody(VENDOR, 'identities() {', 'identities')} }).identities; }`)(proxyOf(h.stubs));
   const realSwitch = win.Steward.setActiveIdentity;
   win.Steward.setActiveIdentity = (p) => { picked.push(p); return realSwitch(p); };
