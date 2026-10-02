@@ -577,6 +577,18 @@ test('a list is stamped with the church it was fetched for — after a switch, t
   assert.equal(e.S.listIsCurrent(got), false, 'a list from before the reset is still "current" after re-entering the same church');
 });
 
+// THE CHURCH TERM OF listIsCurrent (audit of 5276297: no test failed with it removed). A key RESTORE changes the church
+// without a switch — the stamp's epoch may still match — and a list fetched for the old key must not count.
+test('a list fetched for one church is not current once the church changes WITHOUT a new epoch (a key restore)', async () => {
+  const e = engine();
+  let got = null;
+  e.S.subscribeStewards((list) => { got = list; });
+  e.subs.at(-1).handlers.oneose();
+  assert.equal(e.S.listIsCurrent(got), true, 'CONTROL: the list is current for the church it was fetched for');
+  e.t.pub = B.pub; e.t.churchPub = B.pub;                   // the church key replaced; no switch, no new epoch
+  assert.equal(e.S.listIsCurrent(got), false, 'A LIST FETCHED FOR THE OLD CHURCH IS "CURRENT" AFTER A KEY RESTORE — the enrolment would wrap the new church\'s keys to the old one\'s people');
+});
+
 // THE BLOCKLIST COUNTS ONLY ON A GENUINE ANSWER (audit of 5276297, HIGH 2). On a slow link nostr-tools' own EOSE timer
 // answered the blocklist's stream first, with nothing in it, stamped current — and the keys went to the member the owner
 // had blocked. The stream still feeds the screens; the stamp waits for the narrow read of the blocklist document.
@@ -719,9 +731,13 @@ test('keyWaitNote names the relay a key read is still waiting on — and only fo
   const e = engine(); e.t.relayList = [R1, R2];
   e.S.subscribeNameKey();
   const [r1] = e.subs.slice(-2);
-  assert.equal(e.S.keyWaitNote('name'), 'relay.example and second.example aren’t answering', 'before any answer, both relays are named');
+  assert.equal(e.S.keyWaitNote('name'), '', 'A RELAY IS NAMED AS NOT ANSWERING BEFORE IT HAS HAD TIME TO — on a healthy relay, for the ~200 ms after an unlock (audit of 5276297)');
   await e.eose(r1);
+  e.t.clock += 9000;                                        // …and now the read has waited long enough to say so
   assert.equal(e.S.keyWaitNote('name'), 'second.example isn’t answering', 'THE RELAY HOLDING THE NAME KEY BACK IS NOT NAMED — the steward is told only to wait, for as long as it stays down');
+  { const e3 = engine(); e3.t.relayList = [R1, R2];
+    e3.S.subscribeNameKey(); e3.t.clock += 9000;
+    assert.equal(e3.S.keyWaitNote('name'), 'relay.example and second.example aren’t answering', 'a read that has waited with no answer at all does not name both relays'); }
   assert.equal(e.S.keyWaitNote('care'), '', 'a read that was never opened names a relay');
   e.S.setActiveIdentity(B.pub);
   assert.equal(e.S.keyWaitNote('name'), '', 'church A\'s read names a relay while the console runs church B');
@@ -736,5 +752,6 @@ test('mediaEncryptor: the "can’t encrypt yet" refusal names the relay that is 
   const e = engine(); e.t.relayList = [R1, R2];
   e.S.subscribeMediaKey();
   await e.eose(e.subs.slice(-2)[0]);                        // R1 answered; R2 never does
+  e.t.clock += 9000;                                        // (a relay is named only once the read has waited — see the row above)
   await assert.rejects(e.S.mediaEncryptor([M1.pub]), /second\.example isn’t answering/, 'the sermon upload is refused with "wait a moment" while a relay that is down holds back the church\'s first sermon key');
 });

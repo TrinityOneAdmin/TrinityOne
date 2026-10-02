@@ -36,10 +36,11 @@ async function keyDistributor() {
   } finally { rmSync(tmp, { force: true }); }
   const current = new WeakSet();
   const calls = [];
+  const timers = [];
   const lists = { members: [], groups: [], stewards: [], blocked: [] };
   const record = (name) => (...a) => { calls.push({ name, members: (a[0] || []).slice() }); return Promise.resolve(null); };
   const g = {
-    React, setTimeout: () => 0, clearTimeout: () => {},
+    React, setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; }, clearTimeout: () => {},   // the mount re-check timers, fired by hand
     window: {
       Steward: {
         listIsCurrent: (l) => !!l && current.has(l),
@@ -63,7 +64,7 @@ async function keyDistributor() {
   delete globalThis[key];
   const set = (name, arr, isCurrent) => { if (isCurrent) current.add(arr); lists[name] = arr; };
   const render = () => draw(mod.KeyDistributor, {});
-  return { set, render, calls, steward: g.window.Steward };
+  return { set, render, calls, timers, steward: g.window.Steward };
 }
 const enrolled = (calls) => calls.filter(c => c.name === 'care' || c.name === 'name' || c.name === 'media');
 
@@ -112,4 +113,46 @@ test('a room the distributor saw in one church is a FIRST sighting in the next �
   k.set('members', [{ pubkey: MB2 }, { pubkey: MB }], true); k.set('groups', [{ ...room }], true);
   k.render();
   assert.equal(k.calls.filter(c => c.name === 'groupkey').length, 1, 'CONTROL: a room whose members grew in the same church was not re-keyed');
+});
+
+// THE MOUNT RE-CHECK TIMERS (3.5 s and 9 s) go through the same two rules as the effect (audits of 3bc8905 and 5276297:
+// with either rule deleted from them, no test failed). They call ensureMediaKeyForMembers on their own.
+test('the mount re-check timers do nothing while a list is not the current church\'s', async () => {
+  const k = await keyDistributor();
+  k.set('members', [{ pubkey: MB }], false); k.set('groups', [], true); k.set('stewards', [ST], true); k.set('blocked', [], true);
+  k.render();
+  assert.ok(k.timers.length >= 2, 're-anchor: the distributor no longer re-checks on mount');
+  for (const t of k.timers.splice(0)) t.fn();
+  assert.deepEqual(k.calls.filter(c => c.name === 'media'), [], 'A RE-CHECK TIMER WRAPPED THE SERMON KEY with a member list from another church');
+});
+test('…and when they do run, they leave out the members the church has blocked', async () => {
+  const k = await keyDistributor();
+  k.set('members', [{ pubkey: MB }, { pubkey: MB2 }], true); k.set('groups', [], true); k.set('stewards', [ST], true); k.set('blocked', [MB2], true);
+  k.render();
+  const before = k.calls.length;
+  for (const t of k.timers.splice(0)) t.fn();
+  const fromTimers = k.calls.slice(before).filter(c => c.name === 'media');
+  assert.ok(fromTimers.length >= 1, 'CONTROL: the re-check timers did not run the sermon-key check');
+  for (const c of fromTimers) assert.deepEqual(c.members, [MB], 'A RE-CHECK TIMER OFFERED THE SERMON KEY TO A MEMBER THE CHURCH HAS BLOCKED');
+});
+
+// THE MEMBER LIST FOLLOWS A KEY RESTORE (8aa8fc1's useStewardMembers change: no test failed with it removed). The
+// enrolment uses the list only while it is stamped with the current church, so a stream that never re-opened for the
+// restored church would leave nobody enrolled until a reload.
+test('useStewardMembers re-subscribes when the church changes without a switch (a key restore)', () => {
+  const ROOTJ = readFileSync(join(ROOT, 'app/steward-root.jsx'), 'utf8');
+  const { React, draw } = miniReact();
+  let subs = 0;
+  const window = { Steward: { churchPub: 'a'.repeat(64), actingChurch: '', subscribeMembers: () => { subs++; return () => {}; } } };
+  const useStewardMembers = new Function('useStewardIdv', 'useStewardConn', 'useSt', 'useStE', 'localStorage', 'window',
+    fnBody(ROOTJ, 'function useStewardMembers() {', 'useStewardMembers') + '\nreturn useStewardMembers;')(
+    () => 0, () => 0, React.useState, React.useEffect, { getItem: () => null }, window);
+  const C = () => { useStewardMembers(); return null; };
+  draw(C, {});
+  assert.equal(subs, 1, 'CONTROL: the member list did not subscribe');
+  draw(C, {});
+  assert.equal(subs, 1, 'CONTROL: it re-subscribed with nothing changed');
+  window.Steward.churchPub = 'c'.repeat(64);       // a key restore: the church changes, no switch event
+  draw(C, {});
+  assert.equal(subs, 2, 'THE MEMBER LIST STAYED ON THE OLD CHURCH after a key restore — nobody would be enrolled until a reload');
 });

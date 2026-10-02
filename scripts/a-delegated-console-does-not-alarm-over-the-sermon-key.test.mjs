@@ -63,7 +63,7 @@ const reads = (t) => texts(t).join(' ').replace(/\s+/g, ' ').trim();
 // sliced out of vendor/steward.js and executed. The relay stub enforces the one rule that matters — the
 // mediakey: envelope is admitted from the CHURCH key only — so a delegated console's copy is refused exactly
 // as the real box refuses it.
-function engine({ actingChurch, mediaKeyHex = KEY }) {
+function engine({ actingChurch, mediaKeyHex = KEY, mediaDocKeys = 'default', mediaChecked = true }) {
   const attempts = [];
   const blocked = [];
   const scope = {
@@ -73,9 +73,9 @@ function engine({ actingChurch, mediaKeyHex = KEY }) {
     sk: new Uint8Array(32).fill(7),
     _mediaKeyHex: mediaKeyHex,
     _mediaKeyRing: mediaKeyHex ? [mediaKeyHex] : [],
-    _mediaKeyDocKeys: { [CHURCH]: 'sealed-church', [MEMBER]: 'sealed-member' },
+    _mediaKeyDocKeys: mediaDocKeys === 'default' ? { [CHURCH]: 'sealed-church', [MEMBER]: 'sealed-member' } : mediaDocKeys,
     _mediaKeyPushRefused: null,
-    _mediaKeyChecked: true,
+    _mediaKeyChecked: mediaChecked,
     _localBlocked: new Set(),
     _isRelayAuthed: () => true, _fitKeyRing, console, _mediaKeyVer: 0,
     MEDIAKEY_D: 'trinityone/mediakey:',
@@ -261,8 +261,8 @@ test('the a6d13e0 regression, stated as a measurement: without a key in hand nei
 // `rotateMedia` is only ever supplied for the owner CONTROL, where the failure being reported is a refused
 // publish and the point is that the screen still reports it.
 
-async function membersPage({ delegated, rotateMedia, nameResult = null }) {
-  const e = engine({ actingChurch: delegated ? CHURCH : '' });
+async function membersPage({ delegated, rotateMedia, nameResult = null, engineOpts = {} }) {
+  const e = engine({ actingChurch: delegated ? CHURCH : '', ...engineOpts });
   const { React, draw } = miniReact();
   const NOW = Math.floor(Date.now() / 1000);
   const src = fnBody(DASH, 'function DashMembers()', 'DashMembers');
@@ -381,4 +381,15 @@ test('THE CALL SITE: an OWNER whose name-key rotation did not happen (null) is w
 test('CONTROL: an OWNER whose rotations all landed is told nothing is wrong', async () => {
   const p = await membersPage({ delegated: false, rotateMedia: true, nameResult: { id: 'published' } });
   assert.doesNotMatch(p.said, /could not change/, 'a Block whose rotations all landed raised the failure banner: ' + p.said);
+});
+
+// NOTHING TO ROTATE (audit of 5276297, MEDIUM): every owner's Block in a church that never uploaded an encrypted sermon
+// said "could not change the sermon key … Try blocking them again" — rotateMediaKey returned false for "no key".
+test('THE CALL SITE: an OWNER\'s Block in a church with NO sermon key says nothing about the sermon key', async () => {
+  const p = await membersPage({ delegated: false, nameResult: { id: 'published' }, engineOpts: { mediaKeyHex: null, mediaDocKeys: null, mediaChecked: true } });
+  assert.doesNotMatch(p.said, /could not change the sermon key/, 'THE BLOCK WARNS ABOUT A SERMON KEY THE CHURCH NEVER HAD: ' + p.said);
+});
+test('CONTROL: …but one whose sermon-key read has not settled (it may HAVE one) is still warned', async () => {
+  const p = await membersPage({ delegated: false, nameResult: { id: 'published' }, engineOpts: { mediaKeyHex: null, mediaDocKeys: null, mediaChecked: false } });
+  assert.match(p.said, /could not change the sermon key/, 'a sermon key the console has not looked for is treated as absent — a blocked member may still hold it: ' + p.said);
 });

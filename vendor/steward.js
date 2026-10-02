@@ -16597,7 +16597,7 @@ zoo`.split("\n");
   }
   var _keyReadWaiting = /* @__PURE__ */ new Map();
   function _openKeyRead(cp, filters, onevent, onSettled, kind) {
-    const st = { stopped: false, gen: 0, subs: [], timer: null, tries: 0 };
+    const st = { stopped: false, gen: 0, subs: [], timer: null, tries: 0, since: 0 };
     const stopSubs = () => {
       for (const s of st.subs) {
         s.tok.closed = true;
@@ -16617,7 +16617,8 @@ zoo`.split("\n");
       const urls = relays();
       const epoch = _keyReadEpoch, at = Date.now();
       const answers = /* @__PURE__ */ new Map();
-      if (kind) _keyReadWaiting.set(kind, { cp, epoch, urls: urls.slice(), answers, settled: false });
+      if (!st.since) st.since = Date.now();
+      if (kind) _keyReadWaiting.set(kind, { cp, epoch, urls: urls.slice(), answers, settled: false, since: st.since });
       const live = () => !st.stopped && gen === st.gen && epoch === _keyReadEpoch && cp === (actingChurch || pub);
       const retry = () => {
         if (!live()) return;
@@ -16629,6 +16630,7 @@ zoo`.split("\n");
         const v = [...answers.values()];
         if (v.every((x) => x === true)) {
           st.tries = 0;
+          st.since = 0;
           const w = kind && _keyReadWaiting.get(kind);
           if (w && w.answers === answers) w.settled = true;
           onSettled();
@@ -16681,9 +16683,11 @@ zoo`.split("\n");
       stopSubs();
     };
   }
+  var _KEY_WAIT_NOTE_MS = 8e3;
   function _keyWaitNote(kind) {
     const w = _keyReadWaiting.get(kind);
     if (!w || w.settled || w.epoch !== _keyReadEpoch || w.cp !== (actingChurch || pub)) return "";
+    if (!w.since || Date.now() - w.since < _KEY_WAIT_NOTE_MS) return "";
     const hosts = w.urls.filter((u) => w.answers.get(u) !== true).map((u) => {
       try {
         return new URL(u).host;
@@ -19504,7 +19508,7 @@ zoo`.split("\n");
       if (!sk || !pub) return false;
       const pub0 = pub, ep0 = _keyReadEpoch, sk0 = sk;
       if (!_isRelayAuthed()) return false;
-      if (!_mediaKeyHex) return false;
+      if (!_mediaKeyHex) return _mediaKeyChecked && !_mediaKeyDocKeys ? { rotated: false, reason: "no sermon key yet" } : false;
       _mediaKeyVer++;
       const fresh = _hex(crypto.getRandomValues(new Uint8Array(32)));
       const full = [fresh, ..._mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex]].slice(0, 50);

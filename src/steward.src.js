@@ -2177,7 +2177,7 @@ function _runKeyReadAuthWaiters() {
 // FIRST key, by design, and the steward was told only to wait). See _keyWaitNote.
 const _keyReadWaiting = new Map();   // kind -> { cp, epoch, urls, answers: Map(url -> true|false|'unauthed'), settled }
 function _openKeyRead(cp, filters, onevent, onSettled, kind) {
-  const st = { stopped: false, gen: 0, subs: [], timer: null, tries: 0 };
+  const st = { stopped: false, gen: 0, subs: [], timer: null, tries: 0, since: 0 };   // since: when this read began waiting (_keyWaitNote)
   // MARK EACH TOKEN CLOSED BEFORE CLOSING: the close itself fires that subscription's oneose.
   const stopSubs = () => { for (const s of st.subs) { s.tok.closed = true; try { s.sub.close(); } catch (e) {} } st.subs = []; };
   const open = () => {
@@ -2187,13 +2187,14 @@ function _openKeyRead(cp, filters, onevent, onSettled, kind) {
     const urls = relays();
     const epoch = _keyReadEpoch, at = Date.now();
     const answers = new Map();
-    if (kind) _keyReadWaiting.set(kind, { cp, epoch, urls: urls.slice(), answers, settled: false });
+    if (!st.since) st.since = Date.now();
+    if (kind) _keyReadWaiting.set(kind, { cp, epoch, urls: urls.slice(), answers, settled: false, since: st.since });
     const live = () => !st.stopped && gen === st.gen && epoch === _keyReadEpoch && cp === (actingChurch || pub);
     const retry = () => { if (!live()) return; const ms = Math.min(60000, 2000 * Math.pow(2, st.tries++)); st.timer = setTimeout(open, ms); };
     const evaluate = () => {
       if (!live() || answers.size < urls.length) return;     // superseded, or not every relay has answered yet
       const v = [...answers.values()];
-      if (v.every(x => x === true)) { st.tries = 0; const w = kind && _keyReadWaiting.get(kind); if (w && w.answers === answers) w.settled = true; onSettled(); return; }
+      if (v.every(x => x === true)) { st.tries = 0; st.since = 0; const w = kind && _keyReadWaiting.get(kind); if (w && w.answers === answers) w.settled = true; onSettled(); return; }
       if (v.some(x => x === false)) { retry(); return; }     // a CLOSED, a timer, a drop: ask again, later
       _keyReadAfterAuth(() => { if (live()) open(); });     // genuine but not yet logged in: ask again on login
     };
@@ -2216,9 +2217,14 @@ function _openKeyRead(cp, filters, onevent, onSettled, kind) {
 }
 // "relay.example.org isn't answering" — or '' when no read for the church we are on is held up by a relay. Short
 // on purpose (the owner prefers minimal instructional copy): the screens append it to their own "not saved".
+// …AND ONLY ONCE IT HAS HAD TIME TO (audit of 5276297, LOW): a healthy relay is still "waiting" for the ~200 ms after
+// an unlock, and was named as not answering. A relay is named only when the read has waited _KEY_WAIT_NOTE_MS
+// without a trustworthy answer from it — across retries, since the read began waiting.
+const _KEY_WAIT_NOTE_MS = 8000;
 function _keyWaitNote(kind) {
   const w = _keyReadWaiting.get(kind);
   if (!w || w.settled || w.epoch !== _keyReadEpoch || w.cp !== (actingChurch || pub)) return '';
+  if (!w.since || Date.now() - w.since < _KEY_WAIT_NOTE_MS) return '';
   const hosts = w.urls.filter(u => w.answers.get(u) !== true).map(u => { try { return new URL(u).host; } catch (e) { return String(u); } });
   if (!hosts.length) return '';
   return hosts.length === 1 ? hosts[0] + ' isn’t answering' : hosts.join(' and ') + ' aren’t answering';
@@ -6000,7 +6006,11 @@ window.Steward = {
     // `pub` is NEVER read after an await below: the envelope's d-tag and recipients come from `pub0`.
     const pub0 = pub, ep0 = _keyReadEpoch, sk0 = sk;
     if (!_isRelayAuthed()) return false;                          // never act on an untrusted view (see the mint gate)
-    if (!_mediaKeyHex) return false;                              // no key yet — mediaEncryptor mints the first
+    // NOTHING TO ROTATE (audit of 5276297, MEDIUM): a church that has never uploaded an encrypted sermon has no
+    // sermon key, and `false` here made every owner's Block say "could not change the sermon key … Try blocking
+    // them again". Only when we have genuinely LOOKED (a settled read) and there is no envelope at all — the name
+    // key's answer for the same case. Not yet looked, or an envelope we cannot open: still false, still said.
+    if (!_mediaKeyHex) return (_mediaKeyChecked && !_mediaKeyDocKeys) ? { rotated: false, reason: 'no sermon key yet' } : false;
     _mediaKeyVer++;   // a rotation is under way: an ensureMediaKeyForMembers still sealing the old ring must not publish it
     const fresh = _hex(crypto.getRandomValues(new Uint8Array(32)));
     const full = [fresh, ...(_mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex])].slice(0, 50);

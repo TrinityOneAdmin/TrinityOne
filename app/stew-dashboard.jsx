@@ -3801,7 +3801,7 @@ function GroupChatModal({ group, onClose }) {
     let r = null;
     try { r = await window.Steward.publishEvent({ ...evt, title: evt.title.trim(), where: evt.where.trim(), groupId: group.id }); } catch (e) { r = null; }
     setEvtBusy(false);
-    if (r == null) { let why = ''; try { why = window.Steward.keyWaitNote ? window.Steward.keyWaitNote('name') : ''; } catch (e) {} setEvtErr(why ? 'Not saved — your church’s key hasn’t arrived: ' + why + '.' : 'Not saved — your church’s key hasn’t arrived yet. Give it a moment and try again.'); return; }   // name the relay holding the key back (schNoKey, stew-schedule.jsx)
+    if (r == null) { let why = ''; try { why = (window.Steward.keyWaitNote && window.Steward.nameKeyReady && !window.Steward.nameKeyReady()) ? window.Steward.keyWaitNote('name') : ''; } catch (e) {} setEvtErr(why ? 'Not saved — your church’s key hasn’t arrived: ' + why + '.' : 'Not saved — your church’s key hasn’t arrived yet. Give it a moment and try again.'); return; }   // name the relay holding the key back (schNoKey, stew-schedule.jsx)
     setComposeEvt(false); setEvt({ title: '', date: '', time: '', where: '' });
   };
   const isTeam = group.kind === 'team';
@@ -6150,9 +6150,11 @@ function DashMembers() {
       if (window.Steward.rotateMediaKey) rotations.push(Promise.resolve(window.Steward.rotateMediaKey(remaining, stewardRoster || [])).then(r => ['the sermon key', r]));
       // THE NAME KEY IS IN THIS LIST TOO. It was fired and forgotten one line below while care and media were
       // awaited, which made it the worst of the three to lose: a blocked member still holding the name key can
-      // read the whole congregation's names. It returns null for the cases where it deliberately declines
-      // (nothing to rotate, no trusted view, delegated console) and false only when the envelope will not fit,
-      // and only false is reported below — so declining stays quiet and failing does not.
+      // read the whole congregation's names. What is reported below (audit of 3bc8905, and this comment
+      // corrected after the audit of 5276297): `false` always, and `null` on an OWNER's console — a rotation that
+      // did not happen leaves the blocked member holding the key. A DELEGATED console's `null` is the deliberate
+      // decline (the owner-only keys) and is said separately below; "nothing to rotate" comes back as an object
+      // ({ rotated: false }), not null, so it stays quiet.
       //
       // NOT AS A DELEGATED STEWARD. A delegated console can never read the owner's name-key envelope, so it
       // holds an EMPTY ring; rotating from empty minted a brand-new single-key ring and published it as the
