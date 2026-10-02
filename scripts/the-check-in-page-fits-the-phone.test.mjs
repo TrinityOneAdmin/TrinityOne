@@ -204,7 +204,7 @@ function checkinPage({ width = 360, longNote = false } = {}) {
       { id: 'r2', child: CHILD_B, childName: NAMES[CHILD_B], date: iso(-1), ts: REALNOW - 3600, in: REALNOW - 3600, out: REALNOW - 600, code: '9079' },
     ],
     useStewardSafeguard: () => ({ minors: [CHILD_A, CHILD_B], minorsKnown: true }),
-    useStewardGuardians: () => ({ [CHILD_A]: [MUM, DAD], [CHILD_B]: [MUM] }),
+    useStewardGuardians: () => ({ links: { [CHILD_A]: [MUM, DAD], [CHILD_B]: [MUM] }, closed: {} }),
     useStewardMembers: () => Object.keys(NAMES).map(p => ({ pubkey: p, name: NAMES[p] })),
     useStewardServices: () => [
       { id: 'svc-a', name: 'Sunday Morning', date: iso(0), time: '10:30' },

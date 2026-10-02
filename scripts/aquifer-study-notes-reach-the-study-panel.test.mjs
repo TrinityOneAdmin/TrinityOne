@@ -117,8 +117,13 @@ function engineChain(probe = () => {}) {
     fnBody(ENGINE, 'function buildFromUSFM(files, fallbackName){'),
     // The BSB's per-chapter VERSE counts need buildFromUSFM's lazy half too, so these three come along.
     fnBody(ENGINE, 'function inlineUSFM(s){'),
+    fnBody(ENGINE, 'function _balancedInline(html){'),   // 2026-10-01: parseUSFM balances a heading's markup with it
+    stmt(ENGINE, 'const _HEB = ', '_HEB'),
+    stmt(ENGINE, 'const HEBREW_LETTER = ', 'HEBREW_LETTER'),   // 2026-10-01: Psalm 119's \d letter names
     fnBody(ENGINE, 'function parseUSFM(text){'),
     fnBody(ENGINE, 'function stripTags(s){'),
+    // 2026-10-01: a USFM verse's `text` comes from usfmText now (it calls stripTags, so the probe still sees it).
+    fnBody(ENGINE, 'function usfmText(html){'),
     // COUNT THE EXPENSIVE HALF. `function f(){}` declares a MUTABLE binding, so reassigning it here means
     // buildFromUSFM's closure calls the wrapper — which is the only way to observe from outside whether
     // listing the books parsed any verses. Wrapping the returned object instead would prove nothing: the

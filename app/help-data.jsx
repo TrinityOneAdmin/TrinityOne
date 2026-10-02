@@ -134,7 +134,7 @@ window.HelpData = {
         ] },
         { type: 'note', text: 'Bibles download only when you choose one, to keep the app small. Once downloaded, they’re yours offline. To switch versions, just tap the name at the top and pick.' },
         { type: 'callout', tone: 'sage', text: 'Want to find a verse? Use Search to look across every translation you’ve installed — by word or by reference.' },
-        { type: 'tech', text: 'Translations are stored locally (IndexedDB) and read with a bundled WebAssembly SQLite engine, so the reader is fully offline once downloaded. Modules use open formats (MySword .bbl.mybible and USFM / Open.Bible); the 1,000+ extra translations mirror eBible.org.' },
+        { type: 'tech', text: 'Translations are stored locally (IndexedDB) and read with a bundled WebAssembly SQLite engine, so the reader is fully offline once downloaded. Modules use open formats (MySword .bbl.mybible and USFM / Open.Bible); the 1,000+ extra translations are available from eBible.org.' },
       ],
     },
     {

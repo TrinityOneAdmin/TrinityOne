@@ -1231,7 +1231,7 @@ test('THE CHECK-IN PAGE MOUNTS THE ISSUER PANEL — or none of the tests above i
     window: {
       useStewardCheckins: () => [],
       useStewardSafeguard: () => ({ minors: [], approved: [], minorsKnown: true }),
-      useStewardGuardians: () => ({}),
+      useStewardGuardians: () => ({ links: {}, closed: {} }),
       useStewardMembers: () => [],
       useStewardServices: () => [svc('svc-a', SERVICE)],
       useStewardIdv: () => 1,

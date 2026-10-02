@@ -196,24 +196,73 @@
     let key = ''; try { key = (window.Steward && window.Steward.exportMnemonic && window.Steward.exportMnemonic()) || ''; } catch {}
     return { v: 1, app: 'trinityone', kind: 'steward', createdAt: new Date().toISOString(), churchKey: key, local: snapshot(STEWARD_PREFIXES) };
   }
+  // DEFERRED RESTORE. A file restore must NOT write steward localStorage keys until the PIN is set.
+  // Without this, "Keep my current church" leaves the file’s network-keys and active-id on this device,
+  // because discardUnsavedKey only clears the memory key — it cannot know what restoreLocal overwrote.
+  //
+  // Snapshot the current values before the restore, stash them, and put them back on discard.
+  // On setPin success the stash is consumed, and restoreLocal runs then.
+  let _restoreSnap = null;
+
   function applySteward(obj) {
     if (obj.kind !== 'steward') throw new Error(obj.kind ? ('That’s a ' + obj.kind + ' backup, not a church backup.') : 'That file doesn’t say what it is, so it isn’t safe to restore.');
     if (obj.churchKey && window.Steward && window.Steward.restoreKey) window.Steward.restoreKey(obj.churchKey);
-    // NOT the device-bound wrap — restoreLocal excludes it outright, so the OLD device's blob never lands here
-    // and this device's own marker is never disturbed.
-    //
-    // K1. This used to write the backup's copy and then `removeItem` it on the next line. That removal was
-    // unconditional, so it deleted THIS device's marker whether or not the file carried one — and on native the
-    // marker is all that points at the hardware store, where the real ciphertext lives untouched. hasEnc() then
-    // read false over a key that was still physically present, and a steward who closed the console before
-    // setting the new PIN reopened it to "Set up a new church".
-    //
-    // Nothing needs to be cleared here. restoreKey keeps the seed in memory and sets needsPin; the forced-PIN
-    // modal's setPin() overwrites the same slot in both stores. An ABANDONED file restore therefore leaves the
-    // previous key intact and openable, which is the same rule cd67c7a established for the phrase path — the
-    // steward keeps the church they had instead of losing both.
-    restoreLocal(obj.local, STEWARD_PREFIXES.concat([]).filter(Boolean));
+
+    // Snapshot every steward key the file COULD overwrite, so we can put them back if the user chooses
+    // "Keep my current church" at the PIN screen. The snapshot is taken BEFORE restoreLocal, not after.
+    const before = snapshot(STEWARD_PREFIXES);
+
+    // ALSO EXCLUDE two keys that restoreLocal’s general church-key.enc exclusion does not cover:
+    //  - trinityone.steward.church-key: the LEGACY plain seed. Writing it makes _bootKeyState answer
+    //    ‘plaintext’ on the next boot, hides the Back button, and blocks discardUnsavedKey.
+    //  - trinityone.steward.church-key.removing: the removal breadcrumb. A crafted file carrying it
+    //    puts this device into mid-removal state.
+    const localFiltered = {};
+    const STEWARD_EXCLUDE = /\.church-key$|\.church-key\.removing$/;
+    for (const [k, v] of Object.entries(obj.local || {})) {
+      if (!STEWARD_EXCLUDE.test(k)) localFiltered[k] = v;
+    }
+
+    // Merge network-keys by pub rather than overwriting: the file’s networks are added alongside this
+    // device’s own, so neither side loses keys. De-duplicate by pub, with this device’s copy winning
+    // (it was created here and may hold a fresher name).
+    const NK = 'trinityone.steward.network-keys';
+    try {
+      const mine = JSON.parse(before[NK] || '[]');
+      const theirs = JSON.parse((localFiltered[NK]) || '[]');
+      if (Array.isArray(mine) && Array.isArray(theirs)) {
+        const byPub = new Map();
+        for (const r of theirs) if (r && r.pub) byPub.set(r.pub, r);
+        for (const r of mine) if (r && r.pub) byPub.set(r.pub, r);   // mine wins
+        localFiltered[NK] = JSON.stringify([...byPub.values()]);
+      }
+    } catch {}
+
+    restoreLocal(localFiltered, STEWARD_PREFIXES.concat([]).filter(Boolean));
+    _restoreSnap = before;
   }
+
+  // Called from discardUnsavedKey’s event listener to undo a file restore that was abandoned at the
+  // PIN screen. Puts back every steward key to its pre-restore value.
+  function _undoStewardRestore() {
+    if (!_restoreSnap) return;
+    const snap = _restoreSnap; _restoreSnap = null;
+    // Restore every key that was in the snapshot, and remove any new keys the file added.
+    // Walk current steward keys and remove those not in the snapshot.
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const k = localStorage.key(i);
+      if (k && STEWARD_PREFIXES.some(p => k.startsWith(p)) && !(k in snap)) {
+        try { localStorage.removeItem(k); } catch {}
+      }
+    }
+    // Restore the snapshot values.
+    for (const [k, v] of Object.entries(snap)) {
+      try { localStorage.setItem(k, v); } catch {}
+    }
+  }
+
+  // Consume the snapshot on a successful setPin (the restore is committed).
+  function _commitStewardRestore() { _restoreSnap = null; }
 
   // SAVE THE ENCRYPTED TEXT — AND NEVER REPORT A SAVE THAT DID NOT HAPPEN.
   //
@@ -375,5 +424,5 @@
       return !!np;
     } catch (e) { return false; }
   }
-  window.TrinityBackup = { encryptObj, decryptStr, checkPass, PASS_MIN, collectMember, applyMember, collectSteward, applySteward, saveFile, savedWhere, readFile, recordBackup };
+  window.TrinityBackup = { encryptObj, decryptStr, checkPass, PASS_MIN, collectMember, applyMember, collectSteward, applySteward, saveFile, savedWhere, readFile, recordBackup, _undoStewardRestore, _commitStewardRestore };
 })();

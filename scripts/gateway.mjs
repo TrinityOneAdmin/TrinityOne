@@ -36,7 +36,7 @@ import { readHelperGrant, readCheckinPermission, isDeclaredSource, isPermissionS
          KEY_LEAD_SECONDS } from './checkin-role-source.mjs';
 import { verifyEvent, generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure';
 import webpush from 'web-push';
-import { randomBytes, timingSafeEqual, createHash } from 'crypto';
+import { randomBytes, timingSafeEqual, createHash, createPublicKey, verify as cryptoVerify } from 'crypto';
 import { spawn, spawnSync } from 'child_process';
 
 // A church's relay must NOT die from a background hiccup (a dropped cloudflared pipe, a stray rejected fetch).
@@ -87,7 +87,7 @@ const DB = process.env.RELAY_DB || join(DATA_DIR,'relay-db.json');              
 // ships its own signed build.
 const ANDROID_CERT_SHA256 = process.env.ANDROID_CERT_SHA256 || '9A:51:21:F0:9D:60:6B:83:E7:0F:19:22:06:CD:C6:17:05:2A:49:41:79:97:B8:24:C6:BB:97:97:AD:8C:A6:00';
 const SQLITE_DB = process.env.RELAY_SQLITE || join(DATA_DIR,'relay.sqlite');       // durable event store
-const MAX_EVENTS = parseInt(process.env.RELAY_MAX_EVENTS, 10) || 20000;   // ephemeral budget; raise on a shared/public relay
+const MAX_EVENTS = parseInt(process.env.RELAY_MAX_EVENTS, 10) || 200000;  // ephemeral budget; owner raised from 20k on 2026-09-29
 // Set when the store refuses a write, cleared when one succeeds. /status reports ok:false while it is set, so
 // an ordinary health check catches a relay that is up, listening, and losing everything it is sent.
 let STORE_DEGRADED = null;
@@ -106,6 +106,10 @@ const STEWARDREQ_CAP = 50;          // cap pending steward-requests per church f
 // dashboard could not save without silently deleting 150 congregations.
 const CHURCH_REPLACE_CAP = 200;
 const MEMBER_DOC_CAP = 500;         // M1: cap distinct addressable (30078) docs per member — one member can't disk-exhaust the relay with novel d-tags
+const MEMBER_DOC_CAP_STEMS = Object.freeze([
+  'trinityone/rsvp:', 'trinityone/reqreply:', 'trinityone/carechat:', 'trinityone/carereq:',
+  'trinityone/guardreq:', 'trinityone/unavail:', 'trinityone/wallet:',
+]);
 // relay feature toggles — what this box serves besides the Nostr relay itself (owner request). Defaults
 // preserve current behaviour (all on); edited via the token-gated /settings endpoint + the control dashboard.
 const SETTINGS_FILE = join(DATA_DIR,'relay-settings.json');
@@ -289,6 +293,7 @@ function heldApks() {
       builtOn: stamped ? String(f.date || '') : '',
       at: (stamped && f.at) ? f.at : st.mtimeMs,   // when this box got the file
       stamped,
+      verified: stamped ? !!f.verified : false,
     };
   });
 }
@@ -340,6 +345,25 @@ function apkVerdict(held, facts) {
   return { state: 'unknown', ageDays, say: ORIGIN ? 'Could not reach the update source, so this could not be checked just now.' : 'This box has no update source to compare against.' };
 }
 
+// The release public key, used to verify APK manifests (R-9). Same key the bundle signature uses.
+let _releasePubKey = null;
+try { _releasePubKey = createPublicKey(readFileSync(process.env.RELEASE_PUBKEY_PATH || join(ROOT, 'relay-app', 'release-pubkey.pem'))); } catch {}
+async function fetchSignedApkManifest(base) {
+  if (!_releasePubKey) return null;
+  try {
+    const [mRes, sRes] = await Promise.all([
+      fetch(base + '/apk-manifest.json', { cache: 'no-store', signal: AbortSignal.timeout(6000) }),
+      fetch(base + '/apk-manifest.sig', { cache: 'no-store', signal: AbortSignal.timeout(6000) }),
+    ]);
+    if (!mRes.ok || !sRes.ok) return null;
+    const manifestBuf = Buffer.from(await mRes.arrayBuffer());
+    const sigBuf = Buffer.from(await sRes.arrayBuffer());
+    if (!cryptoVerify(null, manifestBuf, _releasePubKey, sigBuf)) return { error: 'the update source signed these installers with a key this box does not trust' };
+    const manifest = JSON.parse(manifestBuf.toString('utf8'));
+    if (!manifest || typeof manifest !== 'object') return null;
+    return { manifest };
+  } catch { return null; }
+}
 // Pull both APKs from the origin AND record what was pulled. Shared by the operator's button and the
 // automatic refresh below, so the two can never disagree about what landed on disk.
 async function fetchApksFromOrigin(auto = false) {
@@ -348,28 +372,32 @@ async function fetchApksFromOrigin(auto = false) {
   try { mkdirSync(APK_DIR, { recursive: true }); } catch {}
   let latest = null;
   try { const r = await fetch(base + '/apk-latest.json', { cache: 'no-store', signal: AbortSignal.timeout(6000) }); if (r.ok) latest = await r.json(); } catch {}
+  const signed = await fetchSignedApkManifest(base);
+  if (signed && signed.error) return { error: signed.error };
+  const manifest = signed && signed.manifest;
   let rec = {}; try { rec = JSON.parse(readFileSync(APK_HELD, 'utf8')) || {}; } catch {}
   const stamps = (rec && rec.files) || {};
   const files = {};
   for (const f of APK_NAMES) {
     try {
-      // A TIMEOUT, because this path is no longer only a button an operator is watching. Fifteen minutes is
-      // deliberately generous — 40 MB over the connections this product is built for is slow, and cutting a
-      // real download short would be worse than waiting — but an origin that accepts and then stalls must
-      // not wedge the automatic refresh for the life of the process.
       const r = await fetch(base + '/' + f, { signal: AbortSignal.timeout(900000) });
       if (!r.ok) throw new Error('HTTP ' + r.status);
       const buf = Buffer.from(await r.arrayBuffer());
       if (buf.length < 1000000) throw new Error('too small (' + buf.length + ' bytes) — origin may not have it');
+      const sha = createHash('sha256').update(buf).digest('hex');
+      if (manifest) {
+        if (!manifest[f]) throw new Error('the signed manifest does not list ' + f + ' — refusing (the manifest must name every APK this box serves)');
+        if (manifest[f].sha256 !== sha) throw new Error('the downloaded file does not match the signed manifest — refusing (expected ' + manifest[f].sha256.slice(0, 12) + '…, got ' + sha.slice(0, 12) + '…)');
+      }
       const tmp = join(APK_DIR, f + '.tmp'); writeFileSync(tmp, buf); renameSync(tmp, join(APK_DIR, f));
-      files[f] = { ok: true, bytes: buf.length };
-      // WHAT WE JUST PUT ON DISK, RECORDED BESIDE IT. Without this the box can say when a file arrived and
-      // nothing whatever about what it IS — which is the half both the operator and the member need.
+      files[f] = { ok: true, bytes: buf.length, verified: !!manifest };
+      const ver = manifest && manifest[f] ? manifest[f] : latest;
       stamps[f] = {
-        bytes: buf.length, sha256: createHash('sha256').update(buf).digest('hex'), at: Date.now(),
-        versionCode: +(latest && latest.versionCode) || 0,
-        versionName: String((latest && latest.versionName) || ''),
-        date: String((latest && latest.date) || ''),
+        bytes: buf.length, sha256: sha, at: Date.now(),
+        versionCode: +(ver && ver.versionCode) || 0,
+        versionName: String((ver && ver.versionName) || ''),
+        date: String((ver && ver.date) || ''),
+        verified: !!manifest,
       };
     } catch (e) { files[f] = { ok: false, error: String((e && e.message) || e) }; }
   }
@@ -559,6 +587,45 @@ const MAX_BLOB = parseInt(process.env.RELAY_MAX_BLOB, 10) || 200 * 1024 * 1024; 
 const MAX_IMPORT = parseInt(process.env.RELAY_MAX_IMPORT, 10) || 256 * 1024 * 1024;   // restore/clone: cap the events JSONL body (blobs come separately via PUT /blob)
 const _blobRe = /^[0-9a-f]{64}$/;
 function _blobOwner(sha) { try { return readFileSync(join(BLOB_DIR, sha + '.church'), 'utf8').trim(); } catch { return ''; } }
+// R-4: multi-owner reference counting. A blob may be uploaded by several churches (same unencrypted file).
+// The `.owners` sidecar holds a JSON array of church pubkeys. `.church` is kept as the FIRST/primary owner
+// for backwards compatibility (boot scan, sync, accounting). _blobOwners returns the full set.
+function _blobOwners(sha) {
+  try { const raw = readFileSync(join(BLOB_DIR, sha + '.owners'), 'utf8'); const arr = JSON.parse(raw); if (Array.isArray(arr)) return new Set(arr); } catch {}
+  // fallback: no .owners file yet (pre-R-4 blobs) — derive from .church
+  const primary = _blobOwner(sha); return primary ? new Set([primary]) : new Set();
+}
+// WHEN EACH CHURCH GOT ITS HOLD ON A FILE: `<sha>.since` = {cp: ms}, mirrored in _blobSince. A deletion wins only
+// over a hold OLDER than it, and a hold wins over an older deletion — on every relay, because /sync-media carries
+// both times. Without it a deletion record lived for ever: a church that removed a sermon by mistake and uploaded
+// it again had the new copy erased by the next sync with a partner that still held the old deletion (audit of
+// d6a85e9, 2026-09-30, finding 1). Times are the relay clocks'; a hold with no recorded time counts as 0, so a
+// file from before this change behaves exactly as it did.
+const _blobSince = new Map();   // cp + ':' + sha -> ms
+function _readSince(sha) { try { const o = JSON.parse(readFileSync(join(BLOB_DIR, sha + '.since'), 'utf8')); return o && typeof o === 'object' ? o : {}; } catch { return {}; } }
+function _sinceOf(sha, cp) { return _blobSince.get(cp + ':' + sha) || 0; }
+function _addBlobOwner(sha, cp, at = Date.now()) {
+  const owners = _blobOwners(sha); owners.add(cp);
+  writeFileSync(join(BLOB_DIR, sha + '.owners'), JSON.stringify([...owners]));
+  const since = _readSince(sha); since[cp] = Math.max(since[cp] || 0, at || 0);
+  try { writeFileSync(join(BLOB_DIR, sha + '.since'), JSON.stringify(since)); } catch {}
+  _blobSince.set(cp + ':' + sha, since[cp]);
+}
+function _removeBlobOwner(sha, cp) {
+  const owners = _blobOwners(sha); owners.delete(cp);
+  _blobSince.delete(cp + ':' + sha);
+  const since = _readSince(sha); if (cp in since) { delete since[cp]; try { if (owners.size) writeFileSync(join(BLOB_DIR, sha + '.since'), JSON.stringify(since)); } catch {} }
+  if (!owners.size) { try { unlinkSync(join(BLOB_DIR, sha + '.since')); } catch {} }
+  if (owners.size) {
+    writeFileSync(join(BLOB_DIR, sha + '.owners'), JSON.stringify([...owners]));
+    // update .church primary if the removed church was the primary
+    const primary = _blobOwner(sha);
+    if (primary === cp) writeFileSync(join(BLOB_DIR, sha + '.church'), [...owners][0]);
+  } else {
+    try { unlinkSync(join(BLOB_DIR, sha + '.owners')); } catch {}
+  }
+  return owners.size;
+}
 // Operator storage controls (public/shared relays): a relay operator can DISABLE media hosting entirely, or
 // cap total / per-church media bytes, so many churches sharing one node can't exhaust its disk. (Docs/events
 // are already bounded by MEMBER_DOC_CAP + ephemeral retention; this is the equivalent for blobs.)
@@ -572,11 +639,64 @@ const _mediaBytesByChurch = new Map(); let _mediaBytesTotal = 0;   // usage, sca
 // records one blob everywhere; call it whenever a blob lands on disk with a known owner.
 const _blobsByChurch = new Map();   // cp -> Map<sha, size>
 function _indexBlob(cp, sha, size) { if (!cp) return; let m = _blobsByChurch.get(cp); if (!m) { m = new Map(); _blobsByChurch.set(cp, m); } m.set(sha, size); }
+// PER-CHURCH USAGE IS EVERY BLOB THAT CHURCH OWNS, at full size — a co-owner is billed and listed exactly
+// like the church that uploaded first. Audit 2026-09-30 findings 8 and 9: a dedup upload was neither billed nor
+// indexed, so the co-owner's file was missing from /export-media, /sync-media and the purge count, and a
+// dedup-then-delete subtracted bytes that had never been added (zeroing the church's usage under its cap).
+// _billBlob / _unbillBlob key on the index, so a church is charged once per sha and refunded only what it paid.
+function _billBlob(cp, sha, size) { if (!cp) return; const m = _blobsByChurch.get(cp); if (m && m.has(sha)) return; _mediaBytesByChurch.set(cp, (_mediaBytesByChurch.get(cp) || 0) + size); _indexBlob(cp, sha, size); }
+function _unbillBlob(cp, sha) { const m = _blobsByChurch.get(cp); if (!m || !m.has(sha)) return; const sz = m.get(sha); m.delete(sha); _mediaBytesByChurch.set(cp, Math.max(0, (_mediaBytesByChurch.get(cp) || 0) - sz)); }
+// Release ONE church's hold on a blob: the only way a blob leaves this relay. The file, its sidecars and the
+// relay-wide byte count go only when no church still owns it. Callers: DELETE /blob, the partner-sync delete
+// pass, and the church purge — all three used to unlink on their own terms, and two of them destroyed a
+// co-owning church's media (audit 2026-09-30 findings 2 and 3). The caller decides whether to tombstone.
+function _releaseBlob(sha, cp) {
+  _unbillBlob(cp, sha);
+  const file = join(BLOB_DIR, sha); let sz = 0; try { sz = statSync(file).size; } catch {}
+  const remaining = _removeBlobOwner(sha, cp);
+  if (remaining) return { remaining, freed: 0 };
+  try { unlinkSync(file); } catch {} try { unlinkSync(file + '.church'); } catch {} try { unlinkSync(file + '.type'); } catch {}
+  if (sz) _mediaBytesTotal = Math.max(0, _mediaBytesTotal - sz);
+  return { remaining: 0, freed: sz };
+}
 function _churchBlobList(cp) { const m = _blobsByChurch.get(cp); if (!m) return []; const out = []; for (const [sha, size] of m) out.push({ sha, size }); return out; }
+// A CHURCH'S DELETION IS RECORDED PER CHURCH: `<sha>.deleted.<cp>`. The older marker, `<sha>.deleted` holding one
+// church's key, is one per FILE — so when two churches shared a file and one deleted it, no marker could be written
+// (the other church still owned it), and the deleting church's partner relays kept serving it to its members.
+// Audit of 19e8e10, 2026-09-30. The old marker is still written when the last owner goes and still READ, as that
+// church's marker, so a relay's existing markers keep working and a downgrade loses nothing.
+// Readers: _churchDeletedBlobs (the /sync-media `deleted` list), _deletedAt (the sync pull's skip and the sync
+// delete pass). Writers: DELETE /blob, the sync delete pass. Cleared (_clearDeleted): PUT /blob by that church, and a sync that takes a NEWER hold from a peer.
+// Each marker holds WHEN the church deleted it ({cp, at}); see _blobSince. A marker written before times existed
+// (plain cp text, or the legacy per-file `<sha>.deleted`) reads as at = 0.
+function _markDeleted(sha, cp, at = Date.now()) {
+  if (!cp) return; const prev = _deletedAt(sha, cp); if (prev >= (at || 0)) return;
+  try { writeFileSync(join(BLOB_DIR, sha + '.deleted.' + cp), JSON.stringify({ cp, at: at || 0 })); } catch {}
+}
+function _clearDeleted(sha, cp) {
+  try { unlinkSync(join(BLOB_DIR, sha + '.deleted.' + cp)); } catch {}
+  try { if (readFileSync(join(BLOB_DIR, sha + '.deleted'), 'utf8').trim() === cp) unlinkSync(join(BLOB_DIR, sha + '.deleted')); } catch {}
+}
+function _markerAt(txt) { try { const o = JSON.parse(txt); if (o && typeof o === 'object') return +o.at || 0; } catch {} return 0; }
+// -1 = this church has no deletion recorded here; otherwise when it deleted (0 = before times were kept).
+function _deletedAt(sha, cp) {
+  try { return _markerAt(readFileSync(join(BLOB_DIR, sha + '.deleted.' + cp), 'utf8')); } catch {}
+  try { if (readFileSync(join(BLOB_DIR, sha + '.deleted'), 'utf8').trim() === cp) return 0; } catch {}
+  return -1;
+}
+function _churchDeletedBlobs(cp) {   // -> [{ sha, at }]
+  const out = new Map(); const tail = '.deleted.' + cp;
+  try { for (const f of readdirSync(BLOB_DIR)) {
+    if (f.endsWith(tail)) { const sha = f.slice(0, -tail.length); let at = 0; try { at = _markerAt(readFileSync(join(BLOB_DIR, f), 'utf8')); } catch {} out.set(sha, Math.max(out.get(sha) ?? 0, at)); continue; }
+    if (!f.endsWith('.deleted')) continue;
+    try { if (readFileSync(join(BLOB_DIR, f), 'utf8').trim() === cp) { const sha = f.slice(0, -8); if (!out.has(sha)) out.set(sha, 0); } } catch {}
+  } } catch {}
+  return [...out].map(([sha, at]) => ({ sha, at }));
+}
 // P7: tally media usage AFTER the relay starts listening (was a synchronous statSync-per-blob walk blocking boot
 // on a media-heavy box). SET the totals from the disk scan (authoritative) rather than accumulate, so any upload
 // that lands during the brief window isn't double-counted — the scan already sees it on disk.
-setTimeout(() => { try { let total = 0; const by = new Map(); const idx = new Map(); for (const f of readdirSync(BLOB_DIR)) { if (f.endsWith('.tmp')) { try { unlinkSync(join(BLOB_DIR, f)); } catch {} continue; }   /* orphaned upload/replication temp: at boot none is in flight, so any *.tmp is dead — sweep it */ if (!/^[0-9a-f]{64}$/.test(f)) continue; let sz; try { sz = statSync(join(BLOB_DIR, f)).size; } catch { continue; } total += sz; const o = _blobOwner(f); if (o) { by.set(o, (by.get(o) || 0) + sz); let m = idx.get(o); if (!m) { m = new Map(); idx.set(o, m); } m.set(f, sz); } } _mediaBytesTotal = total; _mediaBytesByChurch.clear(); for (const [k, v] of by) _mediaBytesByChurch.set(k, v); _blobsByChurch.clear(); for (const [k, v] of idx) _blobsByChurch.set(k, v); } catch {} }, 0);
+setTimeout(() => { try { let total = 0; const by = new Map(); const idx = new Map(); for (const f of readdirSync(BLOB_DIR)) { if (f.endsWith('.tmp')) { try { unlinkSync(join(BLOB_DIR, f)); } catch {} continue; }   /* orphaned upload/replication temp: at boot none is in flight, so any *.tmp is dead — sweep it */ if (!/^[0-9a-f]{64}$/.test(f)) continue; let sz; try { sz = statSync(join(BLOB_DIR, f)).size; } catch { continue; } total += sz; const _since = _readSince(f); for (const o of _blobOwners(f)) { if (_since[o]) _blobSince.set(o + ':' + f, _since[o]); by.set(o, (by.get(o) || 0) + sz); let m = idx.get(o); if (!m) { m = new Map(); idx.set(o, m); } m.set(f, sz); } }   /* every owner, not just the .church primary — see _billBlob */ _mediaBytesTotal = total; _mediaBytesByChurch.clear(); for (const [k, v] of by) _mediaBytesByChurch.set(k, v); _blobsByChurch.clear(); for (const [k, v] of idx) _blobsByChurch.set(k, v); } catch {} }, 0);
 // Streaming base64 for the native (CapacitorHttp) blob path — encode/decode in aligned chunks so a big blob never
 // sits fully in RAM (a 200 MB video buffered + base64'd would cost ~450 MB). Each whole 3-byte group → 4 b64 chars
 // independently, so concatenating the chunks equals base64(file); only the final partial group is padded. Decode
@@ -1580,6 +1700,8 @@ function adminOK(req, allowQuery) { const t = reqToken(req, allowQuery); if (!t 
 // event body would put refused messages in the clear on the relay's disk, which is precisely what the rest
 // of this file works to avoid.
 const REJECT_LOG = join(DATA_DIR, 'rejected.log');
+const REJECT_LOG_MAX = 5 * 1024 * 1024;
+let _rejectLogSize = -1;
 function rejectLog(evt, ws, why) {
   try {
     const d = ((evt.tags || []).find(t => t[0] === 'd') || [])[1] || '';
@@ -1591,7 +1713,10 @@ function rejectLog(evt, ws, why) {
       d: d.slice(0, 60),
       why,
     }) + '\n';
+    if (_rejectLogSize < 0) { try { _rejectLogSize = statSync(REJECT_LOG).size; } catch { _rejectLogSize = 0; } }
+    if (_rejectLogSize >= REJECT_LOG_MAX) { try { renameSync(REJECT_LOG, REJECT_LOG + '.1'); } catch {} _rejectLogSize = 0; }
     appendFileSync(REJECT_LOG, line);
+    _rejectLogSize += line.length;
   } catch (e) { /* logging must never break the relay */ }
 }
 const STARTED_AT = Date.now();
@@ -1666,6 +1791,7 @@ const STEWARDS_BY = new Map();   // churchpub -> Set(steward pubkeys) from the o
 // Meal trains / care module state (rebuilt from stored events by note()):
 const ROSTER_PEOPLE = new Map();     // teamId(groupId) -> Set(pubkey) — people LINKED on a team roster; the care-team's members live here
 const ROSTER_BY = new Map();          // teamId(groupId) -> { by, cp } — who authored the roster (M2: void the care-admin grant if they're later revoked)
+const FIN_SEEN = new Map();           // churchpub -> Set(journal seqs stored for that book, ANY author) — FINANCE_SEQ is its contiguous prefix
 const FINANCE_SEQ = new Map();        // churchpub -> last accepted finance-journal seq — the relay is the ordering authority; the next write must be seq+1 (single-writer, no gaps/forks/edits)
 const MEALS_ADMIN_GROUP = new Map(); // churchpub -> care-team groupId (its roster people may open/manage care needs)
 const MEALS_OPEN_MEMBER = new Set(); // churchpubs whose meals-settings allow ANY member to open their own care need (openedBy='member')
@@ -2783,6 +2909,10 @@ const GROUP_NAMES = new Map();   // groupId -> display name (for push titles)
 // the one safeguarding control that wasn't relay-enforced, while the kind-4 DM gate, the NIP-17 block and the
 // care-thread gate all are. Recorded here so accept()/canRead() can enforce it like the rest.
 const GROUP_CHILDSAFE = new Set();   // groupIds a church explicitly marked child-safe
+// R-7: a deleted group stays in GROUP_CHURCH/GROUP_VIS/GROUP_MEMBERS so the read and write gates keep working.
+// GROUP_GONE records the id so canRead() and accept() can refuse outsiders and new posts. Undo (a non-tombstone
+// re-publish of the group doc) clears it.
+const GROUP_GONE = new Set();        // groupIds whose definition has been tombstoned (removed)
 
 // WHO WAS A CANCELLED EVENT FOR? Cancelling an event is the only shape this product has ever had for "it is
 // not happening": removeEvent() publishes a TOMBSTONE at the same d-tag — empty content, ['deleted','1'] —
@@ -2868,8 +2998,12 @@ function maybePush(evt) {
     const d = (evt.tags.find(t => t[0] === 'd') || [])[1] || '';
     if (!d.startsWith(REQUEST_D)) return;
     const target = (evt.tags.find(t => t[0] === 'p') || [])[1]; if (!target) return;
-    const c = JSON.parse(evt.content || '{}');
-    pushTo(target, { title: 'Can you serve?', body: `${c.teamName || 'Serving'} · ${c.role || ''}${c.date ? ' · ' + c.date : ''}`, url: '/?serving=1' }, 'serving');
+    // C-4. This read teamName, role and date out of the content and put them in the push body. Sealed, they
+    // are all undefined and the body became the literal "Serving · "; CLEARTEXT — every request written
+    // before C-4 — it handed the team, role and date to an outside push service beside a member's device
+    // token, which is a worse leak than the one the sealing is for. Same call the DM push made in
+    // AUDIT-2026-07-27: say the generic thing for both shapes. The phone opens the request itself.
+    pushTo(target, { title: 'Can you serve?', body: 'Your church has asked if you can serve', url: '/?serving=1' }, 'serving');
   } catch {}
 }
 // best-effort latest display name from a pubkey's most recent kind-0 profile
@@ -3090,7 +3224,7 @@ function clearDerivedMaps() {
                    GROUP_LEADERS, GROUP_LEADER_BY, GROUP_EVENTPOLICY, STEWARDS_BY, STEWARD_CAPS, BLOCKED_BY, MINORS_BY, APPROVED_BY, NOPHOTO_BY,
                    GUARDIANS_BY, NETWORKS_BY, ADMITTED_BY, ADMITTED_SRC, ROSTER_BY, ROSTER_PEOPLE, MEALS_ADMIN_GROUP, ROTA_VIS, CHECKIN_HELPERS,
                    CHECKIN_PERMITS,
-                   FINANCE_SEQ, CARE_RECIPIENT, CARE_SKIPHASH, PEER_URLS, TRUSTED_RELAYS, EVENT_AUDIENCE, SHARE_BY, PUBEVENTS]) { try { m.clear(); } catch {} }
+                   FINANCE_SEQ, FIN_SEEN, CARE_RECIPIENT, CARE_SKIPHASH, PEER_URLS, TRUSTED_RELAYS, EVENT_AUDIENCE, SHARE_BY, PUBEVENTS]) { try { m.clear(); } catch {} }
   // CHECKIN_PERMITS was missing here, and it is the HALF OF THE CONJUNCTION THE WHOLE 2026-09-09 RESTRUCTURE
   // RESTS ON. Added 2026-09-10. It was the only line on which the two check-in siblings differed, and it
   // failed OPEN in exactly the class the GROUP_CHILDSAFE note below describes.
@@ -3105,7 +3239,7 @@ function clearDerivedMaps() {
   // deletes its entry), so the flag self-corrects for any group whose document still exists — but a
   // group culled from the corpus kept a stale child-safe marking, and that one fails OPEN: it is the
   // flag that lets minors read a room.
-  for (const s of [BROADCAST, REQUIRE_APPROVAL, MEALS_OPEN_MEMBER, GROUP_CHILDSAFE, CHILD_PHOTOS_OK, MEMBER_PHOTOS_OFF]) { try { s.clear(); } catch {} }
+  for (const s of [BROADCAST, REQUIRE_APPROVAL, MEALS_OPEN_MEMBER, GROUP_CHILDSAFE, CHILD_PHOTOS_OK, MEMBER_PHOTOS_OFF, GROUP_GONE]) { try { s.clear(); } catch {} }
 }
 let _churchHydratePending = false;   // coalesce writeChurches's whole-corpus rehydrate across rapid saves
 function hydrateMaps() {
@@ -3264,7 +3398,11 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
   else if (d.startsWith(GROUP_D) && (CHURCH_PUBS.has(e.pubkey) || networkOf(e.pubkey, namedChurch(e)) || stewardCan(e.pubkey, namedChurch(e), 'any'))) {
     const id = d.slice(GROUP_D.length); let c = {}; try { c = JSON.parse(e.content); } catch {}
     if (!idOwnerOk(GROUP_CHURCH.get(id), e, id)) return;   // AUDIT-2026-07-24 C1: another church already owns this group id — never let a co-tenant redefine it (rehydrate path too, so a stored forgery can't win on restart)
-    if (removed) { BROADCAST.delete(id); GROUP_LEADERS.delete(id); GROUP_LEADER_BY.delete(id); GROUP_VIS.delete(id); GROUP_MEMBERS.delete(id); GROUP_NAMES.delete(id); GROUP_CHURCH.delete(id); GROUP_CHILDSAFE.delete(id); GROUP_EVENTPOLICY.delete(id); return; }
+    // R-7: keep GROUP_CHURCH, GROUP_VIS, GROUP_MEMBERS so canRead()/accept() still know the ownership and
+    // visibility of a deleted room — clearing them made the room fall through to the default-allow path.
+    // GROUP_GONE marks it as tombstoned; canRead() and accept() check it.
+    if (removed) { BROADCAST.delete(id); GROUP_LEADERS.delete(id); GROUP_LEADER_BY.delete(id); GROUP_NAMES.delete(id); GROUP_CHILDSAFE.delete(id); GROUP_EVENTPOLICY.delete(id); GROUP_GONE.add(id); return; }
+    GROUP_GONE.delete(id);   // R-7: undo — a non-tombstone re-publish restores the room
     if (c.childsafe === true) GROUP_CHILDSAFE.add(id); else GROUP_CHILDSAFE.delete(id);   // safeguarding: adults-only unless the church says otherwise
     GROUP_CHURCH.set(id, namedChurch(e) || e.pubkey);   // owning church/network — per-church retention attribution
     if (c.name) GROUP_NAMES.set(id, String(c.name).slice(0, 60));
@@ -3406,9 +3544,14 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
   }
   else if (d.startsWith(FIN_JOURNAL_D)) {   // finance journal entry — track the book's high-water seq for the single-writer guard
     const fcp = finCp(e);
-    if (fcp && (e.pubkey === fcp || stewardCan(e.pubkey, fcp, 'any'))) {
-      const seq = parseInt(d.slice(FIN_JOURNAL_D.length), 10);
-      if (Number.isInteger(seq)) FINANCE_SEQ.set(fcp, Math.max(FINANCE_SEQ.get(fcp) || 0, seq));   // accepted entries are contiguous, so max == last-contiguous (rebuild-safe)
+    const seq = parseInt(d.slice(FIN_JOURNAL_D.length), 10);
+    if (fcp && Number.isInteger(seq) && seq > 0) {
+      let seen = FIN_SEEN.get(fcp); if (!seen) { seen = new Set(); FIN_SEEN.set(fcp, seen); }
+      seen.add(seq);
+      let n = FINANCE_SEQ.get(fcp) || 0;
+      if (e.pubkey === fcp || stewardCan(e.pubkey, fcp, 'any')) n = Math.max(n, seq);
+      while (seen.has(n + 1)) n++;
+      FINANCE_SEQ.set(fcp, n);
     }
   }
   else if (d === MEALS_SETTINGS_D) {   // optional Care module config — only the church key (or one of its stewards) sets it
@@ -3728,7 +3871,9 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
 }
 // the group id an event-doc is scoped to (its non-NET 't' tag), or '' for a whole-church event
 const eventGroup = (e) => { const t = (e.tags || []).find(t => t[0] === 't' && t[1] !== NET); return t ? t[1] : ''; };
+let _lastRefusalDocCap = false;
 function accept(e) {
+  _lastRefusalDocCap = false;
   // AN UNCONFIGURED BOX HOLDS NOBODY'S DATA, SO IT ACCEPTS NOBODY'S.
   //
   // This used to `return true` — a relay with no churches took every write from anyone. Defensible while a
@@ -3962,10 +4107,10 @@ function accept(e) {
       }
     }
     // a church->parent guardian-link NOTICE (d=guardnotice:<parentpub>). OWNER-signed only, and this is the
-    // WRITE rule. It IS read-gated: kind-30078 canRead is default-DENY with a public allowlist and this d-tag
-    // is not on it, so the parent reads it by authenticating as any member does (see the note at ~:5203, which
-    // records that canRead has gated GUARDNOTICE_D all along). Its content is also encrypted to the parent, so
-    // the gate is not the only thing protecting it. Explicit rule = exempt from the per-member doc cap.
+    // WRITE rule. The READ rule is canRead()'s GUARDNOTICE_D branch: the parent it names, the church, and a
+    // steward with the safeguarding job (2026-10-01 — until then it fell to the member rule and any
+    // authenticated member was served it). Its content is also encrypted to the parent, so the gate is not the
+    // only thing protecting it. Explicit rule = exempt from the per-member doc cap.
     if (d.startsWith(GUARDNOTICE_D)) return CHURCH_PUBS.has(e.pubkey);
     // SECURITY-AUDIT-2026-07-20 C1 (safeguarding, CRITICAL): a guardian-link REQUEST is d=guardreq:<childpub>,
     // and the steward console renders it as "<parentName> set up a child account for <childName> — Confirm to
@@ -4313,7 +4458,8 @@ function accept(e) {
       if (d.startsWith(ROSTER_D)) { const src = ROSTER_BY.get(d.slice(ROSTER_D.length)); if (!idOwnerOk(src && src.cp, e, d.slice(ROSTER_D.length))) return false; }
       return leaderOf(ownCp()) || stewardCan(e.pubkey, namedChurch(e), 'content');   // SECURITY-AUDIT-2026-06-24 M1: gate category writes
     }
-    if (d.startsWith(MEMBER_D) || d.startsWith(NETWORK_D)) return true;   // joining a church / a church joining a network
+    if (d.startsWith(NETWORK_D)) return CHURCH_PUBS.has(e.pubkey);   // only a church on this box may declare its network
+    if (d.startsWith(MEMBER_D)) { const cp = d.slice(MEMBER_D.length); return CHURCH_PUBS.has(cp) || store.query({ kinds: [30078], authors: [e.pubkey], '#d': [d], limit: 1 }).length > 0; }
     if (d.startsWith(STEWARDREQ_D)) {                          // requesting to steward a church — capped (L1: anti-flood)
       // AUDIT-2026-07-30, the sixth of the unscoped write rules. `isMember` is relay-wide, so a member of ANY
       // co-tenant church took the uncapped path into this church's console — and the anti-flood cap below
@@ -4563,19 +4709,19 @@ function accept(e) {
     }
     // M1: catch-all for a member's own addressable (MyData) docs with a novel d-tag. Addressable docs are never
     // culled, so cap distinct docs per author — a member can't disk-exhaust the relay by spamming unique d-tags.
-    // Updating an existing d-tag is always fine; only a NEW one past the cap is refused.
     if (!isMember) return false;
-    // …AND ONLY FOR A TYPE THIS PRODUCT HAS DECLARED A MEMBER MAY WRITE. The church key and a network key keep
-    // the catch-all as it was — an ordinary member does not. Everything a member legitimately writes has a
-    // declared type (memberDocTypeOk), so what this refuses is a d-tag nobody has invented yet, or a
-    // church-only type somebody forgot to give a branch above — the two shapes that produced `voice:`.
     if (!(isAnyChurch || isNetwork) && !memberDocTypeOk(d)) return false;
-    const mine = store.query({ kinds: [30078], authors: [e.pubkey], limit: MEMBER_DOC_CAP + 1 });
-    if (mine.length > MEMBER_DOC_CAP && !mine.some(x => (x.tags.find(t => t[0] === 'd') || [])[1] === d)) return false;
+    if (isAnyChurch || isNetwork) return true;
+    if (store.hasDoc(e.pubkey, d)) return true;
+    if (store.countDocsByAuthor(e.pubkey, MEMBER_DOC_CAP_STEMS) >= MEMBER_DOC_CAP) { _lastRefusalDocCap = true; return false; }
     return true;
   }
   if (k === 1) {   // chat
     const g = gidOf(e);
+    // R-7: refuse new posts into a deleted group. The dialog says "won't be shown", and without this the
+    // relay continues to accept writes (the maps that the invite/team gates consult stayed populated in the
+    // old code because note() cleared them; now they stay AND GROUP_GONE marks the room as tombstoned).
+    if (g && GROUP_GONE.has(g)) return false;
     // REVIEW-2026-07-20 B-2: `isLeader` folds in an UNSCOPED network check for events carrying no ['church']
     // tag, and kind-1 scopes by GROUP, not by d-tag — so the "every church-scoped rule keys off the d-tag
     // suffix" reasoning did not hold here. A key any church had declared a network could omit the tag and
@@ -4840,6 +4986,20 @@ function canRead(e, authed) {
         const ncp = (e.tags.find(t => t[0] === 'church') || [])[1] || '';
         if (authed && authed === subj) return true;                       // it is about you, and sealed to you
         return !!authed && !!ncp && (authed === ncp || stewardCan(authed, ncp, 'safeguarding') || careAdmin(authed, ncp));
+      }
+      // GUARDIAN NOTICES (2026-10-01). d=guardnotice:<parent>, church-signed (accept() admits no other author),
+      // sealed to that parent; scripts/trinity-doc-types.mjs has always declared them `read: 'subject'`. This
+      // branch did not exist, so they fell to the member rule below and EVERY authenticated member was served
+      // every parent's notices — by author, by d-tag, by p-tag. The content is sealed, but the envelope is not:
+      // which members are guardians of children in this church, and when each link changed, was a REQ away.
+      // Served now to the parent it is addressed to, the church itself (its own events return true above),
+      // and a steward the church gave the safeguarding job. Readers of guardnotice:, enumerated: the member
+      // app's subscribeGuardianNotices (the parent, `#d: [guardnotice:<own key>]`); nothing in the console
+      // reads them (it only writes, src/steward.src.js _sendGuardNotice); the relay itself reads none.
+      if (d.startsWith(GUARDNOTICE_D)) {
+        const subj = toHexPub(d.slice(GUARDNOTICE_D.length)) || '';
+        if (authed && subj && authed === subj) return true;
+        return !!authed && (authed === cp || stewardCan(authed, cp, 'safeguarding'));
       }
     }
     const ch = (e.tags.find(t => t[0] === 'church') || [])[1];
@@ -5186,6 +5346,19 @@ function canRead(e, authed) {
     // and care PII. On the shared community relay (where /config self-registration is open by default) that
     // was a cross-tenant read of every congregation on the box. Both are now scoped to THIS church.
     if (authed === cp || networkOf(authed, cp) || stewardCan(authed, cp, 'any') || careAdmin(authed, cp)) return true;
+    // R-6: DRAFTS ARE NOT SERVED TO ORDINARY MEMBERS. A plan or devotional whose content says draft:true
+    // is withheld from anyone who is not the church, its network, or a steward (all returned true above).
+    // The console says "Hidden from members" and "members won't see it until you publish" — that was true
+    // of the screen and false of the relay, which handed drafts to every subscriber. The content is
+    // plaintext JSON, so the relay can read the flag. Also withholds future-scheduled items (publishAt in
+    // the future), since those are also meant to be hidden until their publish time.
+    if (d.startsWith(PLAN_D) || d.startsWith(DEVO_D)) {
+      try {
+        const body = JSON.parse(e.content);
+        if (body && body.draft) return false;
+        if (body && body.publishAt && body.publishAt > Math.floor(Date.now() / 1000)) return false;
+      } catch {}
+    }
     // WHO MAY FETCH THE ROTA. Default — and every church that existed before this setting — is unchanged:
     // any member of the church. A steward may narrow it to the people who actually serve, or to stewards.
     // The church key, its network, its stewards and care admins have already returned true above, so this
@@ -5237,6 +5410,13 @@ function canRead(e, authed) {
     // steward keeps sight of a team they have not staffed yet. Stewards/church already returned true above.
     if (d.startsWith(GROUP_D)) {
       const gid = d.slice(GROUP_D.length);
+      // R-7: a deleted group's definition is served only to the church and content-stewards (recovery/undo),
+      // not to ordinary members — the member app drops deleted rooms from its list, but the definition
+      // itself (which carries the room's name and members) should not be served back.
+      if (GROUP_GONE.has(gid)) {
+        const gcp = GROUP_CHURCH.get(gid) || idNamesOwner(gid);
+        return !!gcp && !!authed && (authed === gcp || networkOf(authed, gcp) || stewardCan(authed, gcp, 'content'));
+      }
       if (GROUP_VIS.get(gid) === 'team') {
         const ppl = ROSTER_PEOPLE.get(gid);
         return !!authed && !!(ppl && ppl.has(authed));
@@ -5416,6 +5596,13 @@ function canRead(e, authed) {
   // kind-30078 branch above already applied.
   if (g) {
     if (!authed) return false;
+    // R-7: a deleted group's messages are served only to the church, its network, and stewards with content
+    // capability — not to ordinary members. The dialog says "won't be shown", and without this the relay
+    // keeps serving every message to any subscriber (the member hub's `#p` filter pulls them in).
+    if (GROUP_GONE.has(g)) {
+      const gcp = GROUP_CHURCH.get(g) || idNamesOwner(g);
+      return !!gcp && (authed === gcp || networkOf(authed, gcp) || stewardCan(authed, gcp, 'content'));
+    }
     const gcp = GROUP_CHURCH.get(g) || idNamesOwner(g);   // …and the same fallback here: see the note in accept()
     if (gcp) {
       if (!churchReader(authed, gcp)) return false;
@@ -6195,9 +6382,13 @@ function serveStatic(req, res) {
     const cp = _syncAuth(req, req.headers['host'] || '', '/sync-media');
     const q = new URL(req.url, 'http://x').searchParams;
     if (!cp || q.get('church') !== cp) { res.writeHead(401, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }); res.end('unauthorized'); return; }
-    const blobs = _churchBlobList(cp);
+    // `at` on a blob and `deletedAt` are ADDITIVE: a relay that predates them reads `blobs[].sha/size` and
+    // `deleted` exactly as before. See _blobSince.
+    const blobs = _churchBlobList(cp).map(b => ({ ...b, at: _sinceOf(b.sha, cp) }));
+    const del = _churchDeletedBlobs(cp);
+    const deleted = del.map(x => x.sha), deletedAt = Object.fromEntries(del.map(x => [x.sha, x.at]));
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SEC_HEADERS });
-    res.end(JSON.stringify({ church: cp, blobs }));
+    res.end(JSON.stringify({ church: cp, blobs, ...(deleted.length ? { deleted, deletedAt } : {}) }));
     return;
   }
   // resync media (bytes): stream one blob to a trusted peer relay — only if the blob belongs to the authed church.
@@ -6205,7 +6396,7 @@ function serveStatic(req, res) {
     const sha = route.slice('/sync-blob/'.length).toLowerCase();
     const cp = _syncAuth(req, req.headers['host'] || '', route);
     const q = new URL(req.url, 'http://x').searchParams;
-    if (!cp || q.get('church') !== cp || !/^[0-9a-f]{64}$/.test(sha) || _blobOwner(sha) !== cp) { res.writeHead(401, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }); res.end('unauthorized'); return; }
+    if (!cp || q.get('church') !== cp || !/^[0-9a-f]{64}$/.test(sha) || !_blobOwners(sha).has(cp)) { res.writeHead(401, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }); res.end('unauthorized'); return; }   // R-4: check owners set, not just primary
     const file = join(BLOB_DIR, sha); let st; try { st = statSync(file); } catch { res.writeHead(404, { 'Cache-Control': 'no-store' }); res.end('not found'); return; }
     res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': st.size, 'Cache-Control': 'no-store', ...SEC_HEADERS });
     createReadStream(file).on('error', () => { try { res.destroy(); } catch {} }).pipe(res);   // stream, don't buffer a 200MB blob in RAM
@@ -6679,13 +6870,14 @@ function serveStatic(req, res) {
             const wantPurge = !!parsed.removeChurch.purge;
             const r = wantPurge && store.purgeChurch ? store.purgeChurch(hex) : { events: 0 };
             let blobsDeleted = 0, bytesFreed = 0;
+            // Release this church's hold on each file: one another church still owns stays, with its owner record
+            // intact (audit 2026-09-30 finding 3). No tombstone — this relay is dropping the church, not the church
+            // deleting its media, and a tombstone would tell its OTHER relays to erase their copies.
             for (const b of (wantPurge ? blobs : [])) {
-              try { unlinkSync(join(BLOB_DIR, b.sha)); blobsDeleted++; bytesFreed += (b.size || 0); } catch {}
-              try { unlinkSync(join(BLOB_DIR, b.sha + '.church')); } catch {}
+              const { remaining, freed } = _releaseBlob(b.sha, hex);
+              if (!remaining) { blobsDeleted++; bytesFreed += freed; }
             }
-            // keep the media accounting honest — only subtract what actually went (see the DELETE /blob note)
-            if (wantPurge) { _mediaBytesTotal = Math.max(0, _mediaBytesTotal - bytesFreed);
-              _mediaBytesByChurch.delete(hex); _blobsByChurch.delete(hex); }
+            if (wantPurge) { _mediaBytesByChurch.delete(hex); _blobsByChurch.delete(hex); }
             if (CHURCH_PUBS.has(hex)) writeChurches(remaining);   // also re-hydrates the derived maps (H1)
             else setImmediate(() => { try { hydrateMaps(); } catch {} });
             console.log(`[config] ${wantPurge ? 'purged' : 'removed'} church ${hex.slice(0, 8)}… — ${r.events} events, ${blobsDeleted} blobs, ${bytesFreed} bytes`);
@@ -6841,7 +7033,8 @@ function serveStatic(req, res) {
     let child;
     try {
       child = spawn('tar', ['-czf', '-', '-C', DATA_DIR,
-        '--exclude=./cloudflared.log', '--exclude=./.restore-pending', '--exclude=./.bundle-cache', '--exclude=./relay-launch.log', '.'],
+        '--exclude=./cloudflared.log', '--exclude=./.restore-pending', '--exclude=./.bundle-cache', '--exclude=./relay-launch.log',
+        '--exclude=./rejected.log', '--exclude=./rejected.log.1', '.'],
         { stdio: ['ignore', 'pipe', 'ignore'] });
     } catch (e) { res.writeHead(500, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end('{"error":"tar not available on this box"}'); return; }
     res.writeHead(200, { 'Content-Type': 'application/gzip', 'Cache-Control': 'no-store', 'Content-Disposition': 'attachment; filename="' + fname + '"', ...SEC_HEADERS });
@@ -7076,13 +7269,20 @@ function serveStatic(req, res) {
         const _mc = effMediaCap(), _cc = effChurchCap();
         if (_mc && _mediaBytesTotal + size > _mc) { cleanup(); res.writeHead(507, H); res.end('{"error":"this relay\'s media storage is full"}'); return; }
         if (_cc && (_mediaBytesByChurch.get(who.church) || 0) + size > _cc) { cleanup(); res.writeHead(507, H); res.end('{"error":"your church has reached its media storage limit on this relay"}'); return; }
+      } else if (!_blobOwners(sha).has(who.church)) {   // becoming a co-owner bills this church the full size (_billBlob), so its cap applies
+        const _cc = effChurchCap();
+        if (_cc && (_mediaBytesByChurch.get(who.church) || 0) + size > _cc) { cleanup(); res.writeHead(507, H); res.end('{"error":"your church has reached its media storage limit on this relay"}'); return; }
       }
       try {
         if (isNew || !_blobOwner(sha)) writeFileSync(join(BLOB_DIR, sha + '.church'), who.church);   // S4: owner sidecar BEFORE the blob is reachable. Set it on first store OR to backfill a missing one — but do NOT flip ownership when another church dedup-re-uploads an identical blob.
+        try { unlinkSync(join(BLOB_DIR, sha + '.deleted')); } catch {}   // R-2: a re-upload lifts the tombstone, or a partner relay would refuse to re-pull it
+        _clearDeleted(sha, who.church);   // …and this church's own deletion marker
+        _addBlobOwner(sha, who.church, Date.now());   // R-4 + times: this church holds it AS OF NOW, which beats any older deletion on any relay
         if (isNew) renameSync(tmp, finalPath); else cleanup();        // dedup: identical blob already stored → drop the temp
         const ct = req.headers['content-type'] || ''; if (ct && ct.indexOf('text/plain') !== 0) { try { writeFileSync(join(BLOB_DIR, sha + '.type'), ct); } catch {} }
       } catch (e) { cleanup(); res.writeHead(500, H); res.end('{"error":"store failed"}'); return; }
-      if (isNew) { _mediaBytesTotal += size; _mediaBytesByChurch.set(who.church, (_mediaBytesByChurch.get(who.church) || 0) + size); _indexBlob(who.church, sha, size); }   // account + index the new bytes
+      if (isNew) _mediaBytesTotal += size;   // the relay-wide count is disk bytes: a dedup adds none
+      _billBlob(who.church, sha, size);      // the church's count is what it owns: a co-owner is billed + listed too
       res.writeHead(201, H); res.end(JSON.stringify({ sha256: sha, size, url: '/blob/' + sha, type: req.headers['content-type'] || 'application/octet-stream' }));
     });
     return;
@@ -7096,11 +7296,26 @@ function serveStatic(req, res) {
     const who = _blobUploader(req, 'delete');
     if (!who) { res.writeHead(401, H); res.end('{"error":"unauthorized: sign a kind-24242 t=delete auth (x=sha) with the church or steward key"}'); return; }
     if (who.want && who.want !== sha) { res.writeHead(400, H); res.end('{"error":"auth x tag does not match the blob"}'); return; }
-    const owner = _blobOwner(sha);
-    if (owner && owner !== who.church) { res.writeHead(403, H); res.end('{"error":"not your church\'s media"}'); return; }   // only the owning church may delete
-    const file = join(BLOB_DIR, sha); let sz = 0; try { sz = statSync(file).size; } catch {}
-    try { unlinkSync(file); } catch {} try { unlinkSync(file + '.church'); } catch {} try { unlinkSync(file + '.type'); } catch {}
-    if (sz) { const ch = owner || who.church; _mediaBytesTotal = Math.max(0, _mediaBytesTotal - sz); _mediaBytesByChurch.set(ch, Math.max(0, (_mediaBytesByChurch.get(ch) || 0) - sz)); const m = _blobsByChurch.get(ch); if (m) m.delete(sha); }
+    // R-4: multi-owner reference counting. Only remove THIS church from the owners set;
+    // unlink the file only when no church still references it.
+    const owners = _blobOwners(sha);
+    if (owners.size && !owners.has(who.church)) { res.writeHead(403, H); res.end('{"error":"not your church\'s media"}'); return; }
+    const file = join(BLOB_DIR, sha);
+    // ── R-2 AND R-4 BOTH CHANGED THIS BLOCK. Merged 2026-09-30; resolved by hand, not by git. ──────────
+    // R-2 (840d164) wrote a `.deleted` tombstone here so a partner relay would not re-pull a recording the
+    // church had removed. R-4 (b9dc9c5) made blobs reference-counted, so a delete removes only the calling
+    // church from the owner set and unlinks the file only when the last owner goes. Taking either side alone
+    // was wrong: R-4 dropped the tombstone (deleted sermons come back on the next sync), and R-2's line
+    // reads `owner`, a variable R-4 replaced with the `owners` Set — so it would have thrown
+    // ReferenceError on EVERY blob delete. git could not see either problem.
+    //
+    // THE DELETING CHURCH IS ALWAYS RECORDED, per church (see _markDeleted), whether or not another church still
+    // owns the file: its partner relays must release ITS copy. Each relay's sync pull skips a sha only for the
+    // church that deleted it, so a co-owner's media keeps syncing. The old per-FILE marker is still written when
+    // the last owner goes. (This replaces a note here that called the per-church marker future work.)
+    const { remaining } = _releaseBlob(sha, who.church);
+    _markDeleted(sha, who.church);
+    if (!remaining) { try { writeFileSync(file + '.deleted', who.church); } catch {} }   // R-2: last owner gone — the legacy per-file marker
     res.writeHead(200, H); res.end(JSON.stringify({ deleted: true, sha256: sha }));
     return;
   }
@@ -7109,9 +7324,12 @@ function serveStatic(req, res) {
     if (!_blobRe.test(sha)) { res.writeHead(400, { 'Access-Control-Allow-Origin': '*' }); res.end('bad hash'); return; }
     const file = join(BLOB_DIR, sha); let st; try { st = statSync(file); } catch { res.writeHead(404, { 'Access-Control-Allow-Origin': '*' }); res.end('not found'); return; }
     const host = (req.headers.host || '').split(',')[0].trim();
-    if (!_blobMember(req, _blobOwner(sha), host, route)) { res.writeHead(401, { 'Access-Control-Allow-Origin': '*', 'WWW-Authenticate': 'Nostr' }); res.end('members only'); return; }
+    // R-4: check membership against ALL owning churches, not just the primary. A blob shared by two
+    // churches must be playable by members of either.
+    const _owners = _blobOwners(sha);
+    if (!_owners.size || ![..._owners].some(oc => _blobMember(req, oc, host, route))) { res.writeHead(401, { 'Access-Control-Allow-Origin': '*', 'WWW-Authenticate': 'Nostr' }); res.end('members only'); return; }
     let ct = 'application/octet-stream'; try { ct = readFileSync(join(BLOB_DIR, sha + '.type'), 'utf8').trim() || ct; } catch {}
-    const base = { 'Content-Type': ct, 'Access-Control-Allow-Origin': '*', 'Accept-Ranges': 'bytes', 'Cache-Control': 'private, max-age=31536000, immutable', ...SEC_HEADERS };   // content-addressed → immutable; PRIVATE so a shared proxy can't replay a member's fetch to a non-member
+    const base = { 'Content-Type': ct, 'Access-Control-Allow-Origin': '*', 'Accept-Ranges': 'bytes', 'Cache-Control': 'no-store', ...SEC_HEADERS };   // SECURITY: no-store so the browser's HTTP disk cache does not keep sermon media for a year after the sermon is deleted, the member is blocked, or the app is locked. The old value (private, max-age=31536000, immutable) was content-addressed, but on a seized device any cached media is readable without auth. The SW cache is separately gated (a34a5bd).
     if (/[?&]b64/.test(req.url || '')) {   // native download: CapacitorHttp mangles a binary response body → serve base64 text, the client decodes
       if (req.method === 'HEAD') { res.writeHead(200, { ...base, 'Content-Type': 'text/plain; charset=ascii', 'X-Blob-B64': '1' }); res.end(); return; }
       // stream the file through a base64 encoder (bounded memory) instead of readFileSync().toString('base64')
@@ -7404,16 +7622,17 @@ function serveStatic(req, res) {
   // So the extension rule below is a CLASS rule, not a list of the files I happened to find: config and
   // build descriptors, wherever they turn up. relay-app/install.sh stays served on purpose — the
   // documented one-liner curls it — and so do decks/*.pdf, which about.html links.
+  if (p.indexOf('\\') !== -1) { res.writeHead(404).end('not found'); return; }
   const DENY_DIR = new Set(['relay', 'android', 'ios', 'node_modules', 'docs', 'reference', 'scripts', 'src', 'deploy', 'ci']);
-  if (p.split('/').some(s => DENY_DIR.has(s) || (s && s[0] === '.'))) { res.writeHead(404).end('not found'); return; }
-  if (p.startsWith('/relay-app/desktop/')) { res.writeHead(404).end('not found'); return; }
+  if (p.split('/').some(s => { const lo = s.toLowerCase(); return DENY_DIR.has(lo) || (s && s[0] === '.') || /[. ]$/.test(s); })) { res.writeHead(404).end('not found'); return; }
+  if (p.toLowerCase().startsWith('/relay-app/desktop/')) { res.writeHead(404).end('not found'); return; }
   const DENY_EXT = new Set(['.md', '.service', '.yml', '.yaml', '.toml', '.rs', '.lock', '.gradle', '.pro']);
   if (DENY_EXT.has(extname(p).toLowerCase())) { res.writeHead(404).end('not found'); return; }
   // Build files that describe the box rather than serve it. package-lock fingerprints every dependency and
   // its exact version — a ready-made list of which published advisories to try — and capacitor.config.json
   // states plainly whether the shipped app has remote debugging enabled. Neither is referenced by any shell.
   // (manifest/catalog/ebible-catalog/apk-latest ARE needed, so this is a named list, not a blanket .json rule.)
-  if (['/package.json', '/package-lock.json', '/capacitor.config.json'].includes(p)) { res.writeHead(404).end('not found'); return; }
+  if (['/package.json', '/package-lock.json', '/capacitor.config.json'].includes(p.toLowerCase())) { res.writeHead(404).end('not found'); return; }
   let file = normalize(join(ROOT, p));
   // path-traversal guard: the resolved path must stay strictly inside ROOT. Normalize ROOT's trailing
   // separator first (it may already carry one), so the boundary is exactly `<root>/` — a sibling like
@@ -7619,10 +7838,26 @@ async function syncMediaFromPeer(cp, peerBase) {
   let man; try { const r = await fetch(manUrl, { headers: { Authorization: relayProof(manUrl, 'GET', cp) } }); if (!r.ok) return 0; man = await r.json(); } catch { return 0; }
   let pulled = 0;
   for (const b of (man && man.blobs) || []) {
-    if (!b || !/^[0-9a-f]{64}$/.test(b.sha) || existsSync(join(BLOB_DIR, b.sha))) continue;   // already have it (or junk)
-    const _mc = effMediaCap(), _cc = effChurchCap();                                          // honour panel-set caps, not just env
-    if (_mc && _mediaBytesTotal + (b.size || 0) > _mc) break;                                 // this relay's media is full
-    if (_cc && (_mediaBytesByChurch.get(cp) || 0) + (b.size || 0) > _cc) break;
+    if (!b || !/^[0-9a-f]{64}$/.test(b.sha)) continue;
+    // A PEER'S TIME IS A CLAIM, NOT A FACT: never accept one from the future. Stored uncapped, a crafted
+    // `at: 9e15` made a hold that no deletion could ever beat (audit of 9b33529, finding 1).
+    const bAt = Math.min(+b.at || 0, Date.now());
+    if (_deletedAt(b.sha, cp) >= bAt) continue;   // this church deleted it here, more recently than the peer's copy
+    const onDisk = existsSync(join(BLOB_DIR, b.sha));
+    let diskSz = 0;
+    if (onDisk) {
+      if (_blobOwners(b.sha).has(cp)) { if (bAt > _sinceOf(b.sha, cp)) _addBlobOwner(b.sha, cp, bAt); continue; }   // carry the newer time forward
+      // On disk for ANOTHER church. Taking this church's hold needs the same proof as any copy: the peer must
+      // SERVE the bytes and they must hash to the sha. A manifest line is not possession — taking the hold on
+      // its word let a church name a server it controls and become an owner of another church's sermon it
+      // never had, and keep it alive past that church's deletion (audit of 9b33529, finding 1).
+      try { diskSz = statSync(join(BLOB_DIR, b.sha)).size; } catch { continue; }
+      const _cc = effChurchCap(); if (_cc && (_mediaBytesByChurch.get(cp) || 0) + diskSz > _cc) continue;
+    } else {
+      const _mc = effMediaCap(), _cc = effChurchCap();                                        // honour panel-set caps, not just env
+      if (_mc && _mediaBytesTotal + (b.size || 0) > _mc) break;                               // this relay's media is full
+      if (_cc && (_mediaBytesByChurch.get(cp) || 0) + (b.size || 0) > _cc) break;
+    }
     const blobUrl = peerBase + '/sync-blob/' + b.sha + '?church=' + encodeURIComponent(cp);
     const tmp = join(BLOB_DIR, '.dl-' + randomBytes(12).toString('hex') + '.tmp');
     try {
@@ -7635,11 +7870,40 @@ async function syncMediaFromPeer(cp, peerBase) {
       for (;;) { const { done, value } = await reader.read(); if (done) break; n += value.length; if (n > MAX_BLOB) { bad = true; try { await reader.cancel(); } catch {} break; } hash.update(value); if (!out.write(Buffer.from(value))) await new Promise(res => out.once('drain', res)); }
       await new Promise((res, rej) => out.end(err => err ? rej(err) : res()));
       if (bad || hash.digest('hex') !== b.sha) { try { unlinkSync(tmp); } catch {} continue; }   // content-addressed integrity check
+      // proved: the peer holds these exact bytes. Keep the copy we have and take only the hold — IF we still have
+      // it. The download is awaited, and the file's only other owner can delete it in that time; taking the hold
+      // then made this church the owner of a file that was gone (audit of d86fbac/2065dba, #3). In that case the
+      // verified download simply becomes the copy, through the ordinary path below.
+      if (onDisk && existsSync(join(BLOB_DIR, b.sha))) {
+        try { unlinkSync(tmp); } catch {}
+        _addBlobOwner(b.sha, cp, bAt); _billBlob(cp, b.sha, diskSz); _clearDeleted(b.sha, cp); pulled++;
+        continue;
+      }
       writeFileSync(join(BLOB_DIR, b.sha + '.church'), cp);   // owner sidecar BEFORE the blob is reachable
+      _addBlobOwner(b.sha, cp, bAt);                          // R-4: track in multi-owner set, with the PEER's time, not now
+      _clearDeleted(b.sha, cp);
       renameSync(tmp, join(BLOB_DIR, b.sha));                 // atomic publish — no partial file ever sits at <sha>
-      _mediaBytesTotal += n; _mediaBytesByChurch.set(cp, (_mediaBytesByChurch.get(cp) || 0) + n); _indexBlob(cp, b.sha, n);
+      _mediaBytesTotal += n; _billBlob(cp, b.sha, n);
       pulled++;
     } catch { try { unlinkSync(tmp); } catch {} }
+  }
+  const delAt = (man && man.deletedAt && typeof man.deletedAt === 'object') ? man.deletedAt : {};
+  for (const sha of (man && man.deleted) || []) {
+    if (!/^[0-9a-f]{64}$/.test(sha)) continue;
+    const at = Math.min(+delAt[sha] || 0, Date.now());   // 0 from a peer that predates times; never from the future
+    const file = join(BLOB_DIR, sha);
+    if (existsSync(file)) {
+      const owners = _blobOwners(sha);
+      if (owners.size && !owners.has(cp)) { _markDeleted(sha, cp, at); continue; }   // not this church's here; still pass the deletion on
+      // This church's hold is NEWER than the deletion (it uploaded it again since): keep it, and record nothing —
+      // this relay's own listing, with its time, is what tells the peer the church wants it back.
+      if (owners.has(cp) && _sinceOf(sha, cp) > at) continue;
+      // Release this church's hold, exactly as DELETE /blob does. Another church that owns the file keeps it
+      // (audit 2026-09-30 finding 2).
+      const { remaining } = _releaseBlob(sha, cp);
+      if (!remaining && !existsSync(file + '.deleted')) { try { writeFileSync(file + '.deleted', cp); } catch {} }
+    }
+    _markDeleted(sha, cp, at);   // recorded even with no copy here, so the deletion travels on down a chain of relays
   }
   return pulled;
 }
@@ -7857,12 +8121,15 @@ wss.on('connection', (ws, req) => {
         const _rIsNetwork = _rcp ? networkOf(evt.pubkey, _rcp) : NETWORKS.has(evt.pubkey);
         const _undeclared = evt.kind === 30078 && MEMBERS.has(evt.pubkey) && !memberDocTypeOk(_rd) && !relayGatesType(_rd)
           && !(CHURCH_PUBS.has(evt.pubkey) || _rIsNetwork);
+        const _docCap = _lastRefusalDocCap;
         rejectLog(evt, ws, _stale ? 'care request from a build that predates self-naming ids'
           : _undeclared ? 'undeclared document type ' + _rd.slice(0, 40) + ' from a member'
+          : _docCap ? 'document limit reached for ' + (evt.pubkey || '').slice(0, 12)
           : 'not a member or not permitted for this group');
         ws.send(JSON.stringify(['OK', evt.id, false, _stale
           ? 'blocked: please update the app to ask for help — this version cannot send a request'
           : _undeclared ? 'blocked: undeclared document type — this relay has no rule for it, and a member may not write one'
+          : _docCap ? 'rate-limited: document limit reached — please contact a steward'
           : 'blocked: not a member or not permitted for this group']));
         return;
       }

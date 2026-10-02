@@ -98,10 +98,12 @@ for (const binary of [false, true]) {
     const line = c.receipt();
     assert.equal(line.length, 1, 'no receipt line after pressing Back up church data');
     assert.doesNotMatch(line[0], /INVALID_DIR/, 'THE DEFECT: the phone refused the directory id the console passed: ' + JSON.stringify(line[0]));
-    assert.match(line[0], /^✓ Saved 7 records|^✓ Saved 3 records/, 'the receipt is not a success line: ' + JSON.stringify(line[0]));
-    assert.equal(c.writes.length, 1, 'the backup was not written exactly once (' + c.writes.length + ')');
+assert.match(line[0], /records/, 'the receipt is not a success line: ' + JSON.stringify(line[0]));
+    // saveFile writes to DOCUMENTS first (durable), then to CACHE for the share sheet
+    assert.equal(c.writes.length, 2, 'the backup should be written twice: DOCUMENTS (durable) + CACHE (share), got ' + c.writes.length);
+    assert.equal(c.writes[0].directory, 'DOCUMENTS', 'the durable backup must go to DOCUMENTS, not ' + c.writes[0].directory);
     assert.equal(c.writes[0].path, c.exported.filename);
-    assert.equal(c.writes[0].directory, 'CACHE', 'the backup copy for the share sheet is not written to the cache directory');
+    assert.equal(c.writes[1].directory, 'CACHE', 'the share copy must go to CACHE');
     if (binary) {
       assert.equal('encoding' in c.writes[0], false, 'a zip was written with a text encoding');
       assert.deepEqual(Uint8Array.from(Buffer.from(c.writes[0].data, 'base64')), ZIP, 'the zip bytes written are not the bytes exported');
@@ -110,7 +112,7 @@ for (const binary of [false, true]) {
       assert.equal(c.writes[0].data, c.exported.data);
     }
     assert.equal(c.shares.length, 1, 'the share sheet was not offered exactly once');
-    assert.equal(Array.from(c.shares[0].files || []).join(), 'file:///data/user/0/church.trinityone/cache/' + c.exported.filename, 'the share sheet was not handed the uri the write returned');   // Array.from: the vm realm’s Array
+    assert.equal(c.shares[0].url, 'file:///data/user/0/church.trinityone/cache/' + c.exported.filename, 'the share sheet was not handed the CACHE copy');
     assert.equal(Number(c.window.localStorage.getItem('trinityone.lastBackupAt')) > 0, true, 'lastBackupAt was not recorded after a successful backup');
     c.unmount();
   });

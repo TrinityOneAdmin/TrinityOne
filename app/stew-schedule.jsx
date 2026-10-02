@@ -14,10 +14,44 @@ function schKey(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padSt
 function schParts(s) { const d = schDate(s); return { dow: SCH_DOW[d.getDay()], day: d.getDate(), mon: SCH_MON[d.getMonth()] }; }
 function schAddDays(iso, n) { const d = schDate(iso); d.setDate(d.getDate() + n); return schKey(d); }
 function schAddMonths(iso, n) { const d = schDate(iso); d.setMonth(d.getMonth() + n); return schKey(d); }
-// dates from start (inclusive) stepping weekly/monthly up to and including untilIso
-function schGenDates(startIso, cadence, untilIso) {
-  if (!startIso) return []; const out = [startIso]; let cur = startIso, guard = 0;
-  while (guard++ < 400) { cur = cadence === 'monthly' ? schAddMonths(cur, 1) : schAddDays(cur, 7); if (!untilIso || cur > untilIso) break; out.push(cur); }
+// WHICH WEEK OF THE MONTH a date is, as a monthly repeat's default (owner decision 2026-10-01, DOMAIN.md):
+// the same weekday in the same week of the month — 13 Oct 2026 is the 2nd Tuesday, so the 2nd Tuesday of every
+// month — except a start on the 29th-31st, which is the LAST such weekday (-1, app/recur.jsx NTH_LAST): a "5th
+// Friday" would skip most months.
+function schNthOf(iso) { const d = schDate(iso).getDate(); return d >= 29 ? -1 : Math.ceil(d / 7); }
+const SCH_NTH_OPTS = [[1, '1st'], [2, '2nd'], [3, '3rd'], [4, '4th'], [-1, 'Last']];
+// What a dialog will publish for these fields — computed once per render, so the "First:" line, the "no
+// date" line, the Save button, the clash note and the save itself all read the same list.
+function schPlanned(date, repeat, until, nth) { return !date ? [] : repeat === 'none' ? [date] : schGenDates(date, repeat, until || schAddMonths(date, 3), nth); }
+const SCH_NO_DATES = 'No date matches before “Until”.';
+function schNthLabel(n) { return n === -1 ? 'Last' : (['1st', '2nd', '3rd', '4th', '5th'][(n || 1) - 1] || '1st'); }
+// dates from start (inclusive) stepping weekly/monthly up to and including untilIso. MONTHLY STEPS BY WEEKDAY,
+// not by calendar date: the start's weekday, in week `nth` of each month (default schNthOf(start)). Stepping
+// the date instead put a Tuesday meeting on Friday 13 Nov, and 31 Jan on 3 Mar. The months after the start
+// come from app/recur.jsx's expandEvents — the same walk that paints a recurring meeting — so the one-off
+// services and events published here land where a monthly meeting would. EVERY date is an occurrence of the
+// rule: when the steward picks a week other than the start date's own (start 13 Oct, the 2nd Tuesday, pick
+// "Last"), the first date is the first such week ON OR AFTER the start (27 Oct), never the typed date plus
+// the rule — that published 13 Oct AND 27 Oct, two in one month (audit of 484cc00, finding 1). So a monthly
+// result can be EMPTY (until before the first occurrence); callers must say so rather than publish nothing.
+// UNTIL IS INCLUSIVE, AND AN UNTIL ON OR BEFORE THE START MEANS THE START DAY — the same as weekly, which
+// publishes just the start then. So monthly with Until <= start publishes the start if it IS an occurrence of
+// the picked week, and nothing if it is not (re-audit of ffcdcfe, finding 1).
+function schGenDates(startIso, cadence, untilIso, nth) {
+  if (!startIso) return [];
+  if (cadence === 'monthly') {
+    // AT MOST 400 MONTHS, the 400-date ceiling the weekly walk below has. Without it the walk grew with Until —
+    // schPlanned runs on every render, and Until 9999-12-31 cost ~370 ms a call, so every keystroke in the
+    // dialog stalled (audit of 812948b, item 1).
+    const cap = schAddMonths(startIso, 400);
+    let end = (untilIso && untilIso > startIso) ? untilIso : startIso;
+    if (end > cap) end = cap;
+    const span = Math.round((schDate(end) - schDate(startIso)) / 864e5);
+    const series = { id: 'sch', date: startIso, recur: 'monthly', day: schDate(startIso).getDay(), nth: (typeof nth === 'number') ? nth : schNthOf(startIso) };
+    return window.expandEvents([series], startIso, span).map(o => o.date).filter(d => d >= startIso && d <= end).slice(0, 400);
+  }
+  const out = [startIso]; let cur = startIso, guard = 0;
+  while (guard++ < 400) { cur = schAddDays(cur, 7); if (!untilIso || cur > untilIso) break; out.push(cur); }
   return out;
 }
 function teamMeta(t) { return { name: t.name, icon: t.icon || 'hand', accent: t.accent || 'var(--clay)' }; }
@@ -37,6 +71,16 @@ function sameAssign(a, b) { const k = o => Object.keys(o || {}).filter(x => (o[x
 // So each save below checks. A modal that failed stays OPEN with its content intact, because the steward's
 // typing is the thing that would otherwise be lost.
 const SCH_NO_KEY = 'Not saved — your church’s key hasn’t arrived yet. Give it a moment and try again.';
+// …AND WHEN A RELAY IS WHAT IS HOLDING THE KEY BACK, SAY WHICH (audit of 3bc8905). A church's first name key is
+// minted only once every relay of the church has answered, so a proved relay that is down holds it back — for as
+// long as it stays down — and "give it a moment" is not true. Steward.keyWaitNote names it; short on purpose.
+// …ONLY WHEN THE KEY IS WHAT IS MISSING (audit of 5276297, LOW): a save can come back empty for other reasons, and a
+// relay's name on those would send the steward after the wrong thing.
+function schNoKey() {
+  let why = '';
+  try { const S = window.Steward; why = (S && S.keyWaitNote && S.nameKeyReady && !S.nameKeyReady()) ? S.keyWaitNote('name') : ''; } catch (e) { why = ''; }
+  return why ? 'Not saved — your church’s key hasn’t arrived: ' + why + '.' : SCH_NO_KEY;
+}
 // THE LAST DATE THIS PRODUCT CAN WRITE DOWN. A year past 9999 leaves ISO 8601's four-digit form: Date's own
 // toISOString() switches to the expanded `+010000-01-01`, and the public calendar builder turned that into
 // `DTSTART:+01000001T193000`, a string no calendar can read (AUDIT-feeds-round3-2026-09-22 F3). The builder
@@ -207,7 +251,7 @@ function RosterModal({ team, roster, members, onClose, onCreate }) {
       // deliberately not written with everyone's name in the clear. Losing this silently would be worse than
       // the leak — the whole team, its roles and its pods are typed into this modal.
       const rosterSaved = await Promise.resolve(window.Steward.publishRoster(t.id, { roles, people, pods }));
-      if (rosterSaved == null) { setSaving(false); setSaveErr('Not saved — your church’s key hasn’t arrived yet. Give it a moment and try again.'); return; }
+      if (rosterSaved == null) { setSaving(false); setSaveErr(schNoKey()); return; }
       // …and keep the OTHER list in step, so the team the steward just built is also the team that can read
       // its own room. Only invite-only teams have an allowlist, and only the DELTA is applied — see the note
       // above teamPeopleForAllowlist for what a wholesale rewrite here cost.
@@ -361,7 +405,11 @@ function AssignModal({ slot, roster, assign, unavail, onAssign, onClear, onClose
   );
 }
 
-function SchRepeatRow({ repeat, setRepeat, until, setUntil }) {
+// `planned` = what the dialog will publish (schPlanned). Empty -> ONE line saying so, and the dialog's Save is
+// disabled; a monthly first date that is not the date typed -> "First: Tue 27 Oct". Never both.
+function SchRepeatRow({ repeat, setRepeat, until, setUntil, nth, setNth, date, planned }) {
+  const none = repeat !== 'none' && !!date && Array.isArray(planned) && !planned.length;
+  const firstOn = repeat === 'monthly' && Array.isArray(planned) && planned[0] && planned[0] !== date ? planned[0] : '';   // empty planned -> no First line
   return (
     <React.Fragment>
       <div style={schLbl}>Repeat</div>
@@ -370,7 +418,17 @@ function SchRepeatRow({ repeat, setRepeat, until, setUntil }) {
           <button key={v} onClick={() => setRepeat(v)} aria-pressed={repeat === v} style={{ flex: 1, padding: '9px 0', borderRadius: 10, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, border: repeat === v ? '2px solid var(--clay)' : '1px solid var(--line)', background: repeat === v ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'var(--surface)', color: 'var(--ink)' }}>{l}</button>
         ))}
       </div>
+      {repeat === 'monthly' && setNth ? (
+        <React.Fragment>
+          <div style={schLbl}>Which week</div>
+          <select aria-label="Which week of the month" value={nth || 1} onChange={e => setNth(+e.target.value)} style={schFld}>
+            {SCH_NTH_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+          </select>
+          {firstOn ? (() => { const p = schParts(firstOn); return <div role="status" style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 6 }}>First: {p.dow} {p.day} {p.mon}</div>; })() : null}
+        </React.Fragment>
+      ) : null}
       {repeat !== 'none' ? (<React.Fragment><div style={schLbl}>Until</div><input aria-label="Until" type="date" value={until} onChange={e => setUntil(e.target.value)} style={schFld} /></React.Fragment>) : null}
+      {none ? <div role="status" style={{ fontSize: 12.5, color: 'var(--clay-ink)', marginTop: 8, lineHeight: 1.4 }}>{SCH_NO_DATES}</div> : null}
     </React.Fragment>
   );
 }
@@ -386,13 +444,18 @@ function SchAddServiceModal({ onClose }) {
   // they await up to NAME_KEY_WAIT_MS for a late church key, and the button stayed live for all of it — two
   // presses meant two sets of documents with distinct ids, both landing. (Audit of 7a45d4d, finding 4.)
   const [busy, setBusy] = useSch(false);
+  // WHICH WEEK, for a monthly repeat: null until the steward picks one, and until then it follows the date
+  // (schNthOf) — so changing the date re-seeds it, and an explicit pick is kept.
+  const [nthPick, setNthPick] = useSch(null);
+  const nth = nthPick == null ? (date ? schNthOf(date) : 1) : nthPick;
+  const planned = schPlanned(date, repeat, until, nth);
   const save = async () => {
-    if (!date || busy) return;
+    if (!date || busy || !planned.length) return;   // no date to add: SchRepeatRow already says so, and Save is disabled
     setBusy(true); setErr('');
-    const dates = repeat === 'none' ? [date] : schGenDates(date, repeat, until || schAddMonths(date, 3));
+    const dates = planned;
     const out = await Promise.all(dates.map(d => window.Steward.publishService({ name: name.trim() || 'Service', date: d, time })));
     setBusy(false);
-    if (out.some(r => r == null)) { setErr(SCH_NO_KEY); return; }   // stay open: nothing was written
+    if (out.some(r => r == null)) { setErr(schNoKey()); return; }   // stay open: nothing was written
     onClose();
   };
   return (
@@ -403,11 +466,11 @@ function SchAddServiceModal({ onClose }) {
         <div style={{ flex: 1 }}><div style={schLbl}>Date</div><input aria-label="Date" type="date" value={date} onChange={e => setDate(e.target.value)} style={schFld} /></div>
         <div style={{ width: 130 }}><div style={schLbl}>Time</div><input aria-label="Time" type="time" value={time} onChange={e => setTime(e.target.value)} style={schFld} /></div>
       </div>
-      <SchRepeatRow repeat={repeat} setRepeat={setRepeat} until={until} setUntil={setUntil} />
-      {repeat !== 'none' && until && until <= date ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', marginTop: 8, lineHeight: 1.4 }}>The “until” date is on or before the start, so only the first service will be added — pick a later date to repeat.</div> : null}
+      <SchRepeatRow repeat={repeat} setRepeat={setRepeat} until={until} setUntil={setUntil} nth={nth} setNth={setNthPick} date={date} planned={planned} />
+      {repeat !== 'none' && until && until <= date && planned.length === 1 ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', marginTop: 8, lineHeight: 1.4 }}>The “until” date is on or before the start, so only the first service will be added — pick a later date to repeat.</div> : null}
       <div style={{ display: 'flex', gap: 10, marginTop: 22 }}>
         <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
-        <button onClick={save} disabled={!date || busy} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: (date && !busy) ? 1 : 0.55 }}><Icon name="plus" size={16} color="var(--on-clay)" /> {repeat === 'none' ? 'Add service' : 'Add services'}</button>
+        <button onClick={save} disabled={!date || busy || !planned.length} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: (date && !busy && planned.length) ? 1 : 0.55 }}><Icon name="plus" size={16} color="var(--on-clay)" /> {repeat === 'none' ? 'Add service' : 'Add services'}</button>
       </div>
       <SchNotSaved msg={err} />
     </SchModal>
@@ -430,7 +493,7 @@ function RunsheetModal({ service, sheet, onClose }) {
     setBusy(true); setErr('');
     const r = await window.Steward.publishRunsheet(service.id, items.filter(it => (it.title || '').trim()));
     setBusy(false);
-    if (r == null) { setErr(SCH_NO_KEY); return; }   // the whole order of service is in this modal — never drop it
+    if (r == null) { setErr(schNoKey()); return; }   // the whole order of service is in this modal — never drop it
     onClose();
   };
   return (
@@ -488,9 +551,18 @@ function DashRota({ onNewTeam }) {
 
   // verdict for an assigned slot: 'accept' | 'decline' | 'swap' | 'pending' (asked, no reply) | '' (not asked)
   const replyById = {}; replies.forEach(r => { if (r.id) replyById[r.id] = r.v; });
+  // A request this console cannot open yet (sealed under a name key that has not arrived) has no service, team
+  // or role — only who it was sent to. So for that person we cannot say which slot it is for: say "opening"
+  // rather than "not asked", and never re-ask them on the strength of a gap (audit 2026-09-30, finding 6). The
+  // engine re-reads it when the key lands, and the real row replaces it.
+  // READ THROUGH A REF, not the render's `requests`. publish() awaits the rota landing — up to NAME_KEY_WAIT_MS
+  // for a late key — and the key arriving re-reads the locked requests; a send that used the snapshot from
+  // before that wait still saw them locked and held back people who were already openable (audit of d86fbac, #5).
+  const requestsRef = useSchR(requests); requestsRef.current = requests;
+  const lockedFor = (pub) => !!pub && requestsRef.current.some(q => q && q._locked && q.memberPub === pub);
   const slotVerdict = (svcId, teamId, roleId, pub) => {
     const matches = requests.filter(q => q.serviceId === svcId && q.teamId === teamId && q.roleId === roleId && (!pub || !q.memberPub || q.memberPub === pub));
-    if (!matches.length) return '';
+    if (!matches.length) return lockedFor(pub) ? 'locked' : '';
     matches.sort((a, b) => (b.ts || 0) - (a.ts || 0));
     return replyById[matches[0].id] || 'pending';
   };
@@ -567,22 +639,24 @@ function DashRota({ onNewTeam }) {
         .then(async r => {
           if (r == null) return { rota: null, failed: 0, tried: 0 };
           const asked = await sendRequestsFor(s.id, s.date, s.time, s.name, next);
-          return { rota: r, failed: asked.failed, tried: asked.tried };
+          return { rota: r, failed: asked.failed, tried: asked.tried, heldPubs: asked.heldPubs };
         }));
     });
     Promise.all(saves).then(out => {
       const lost = out.filter(r => r.rota == null).length;
-      if (lost) { setFlash(SCH_NO_KEY); setTimeout(() => setFlash(''), 4000); return; }
+      if (lost) { setFlash(schNoKey()); setTimeout(() => setFlash(''), 4000); return; }
       const unasked = out.reduce((n, r) => n + r.failed, 0);
       const rotLead = 'Rotated ' + pods.length + ' pods across ' + upcoming.length + ' service' + (upcoming.length === 1 ? '' : 's');
       if (unasked) { setFlash(unaskedFlash(rotLead, unasked, out.reduce((n, r) => n + r.tried, 0), 'Open each service and press Publish')); setTimeout(() => setFlash(''), 6000); return; }
+      const rotHeld = new Set(out.flatMap(r => r.heldPubs || [])).size;   // PEOPLE, not slots: one person over four weeks is one
+      if (rotHeld) { setFlash(heldFlash(rotLead, rotHeld, 'Open each service and press Publish')); setTimeout(() => setFlash(''), 6000); return; }
       setFlash(rotLead);
       setTimeout(() => setFlash(''), 2600);
     });
     return upcoming.length;
   };
   // already asked this person for this exact slot? (don't re-send on every publish)
-  const alreadyAsked = (sId, tId, rId, pub) => requests.some(q => q.serviceId === sId && q.teamId === tId && q.roleId === rId && q.memberPub === pub);
+  const alreadyAsked = (sId, tId, rId, pub) => requestsRef.current.some(q => q.serviceId === sId && q.teamId === tId && q.roleId === rId && q.memberPub === pub);
   // ⚠ THIS RETURNS A COUNT, AND EVERY CALLER MUST USE IT. It used to be a plain loop that threw away every
   // answer, so a steward whose requests all failed still read "Published — everyone assigned has been asked".
   // Measured 2026-09-16 by driving this screen with the requests refused: the flash was byte-identical to the
@@ -594,18 +668,23 @@ function DashRota({ onNewTeam }) {
   // so an ask that never landed is not there, and pressing Publish again asks exactly the people who were
   // missed and nobody else.
   const sendRequestsFor = async (sId, sDate, sTime, sName, assignMap) => {
-    const jobs = [];
+    const jobs = []; const heldPubs = new Set();
     for (const key in assignMap) {
       const a = assignMap[key]; if (!a || !a.pub) continue;
       const [teamId, roleId] = key.split('::');
       if (alreadyAsked(sId, teamId, roleId, a.pub)) continue;
+      // Holding a request to this person that we cannot open yet: it may BE this slot. Do not send a second one;
+      // count it as not asked yet, so the flash says so and a later Publish (key in hand) asks exactly if needed.
+      if (lockedFor(a.pub)) { heldPubs.add(a.pub); continue; }
       const team = teams.find(t => t.id === teamId); const m = team ? teamMeta(team) : {};
       const role = rosterFor(teamId).roles.find(r => r.id === roleId);
       jobs.push(Promise.resolve(window.Steward.sendServingRequest({ memberPub: a.pub, serviceId: sId, teamId, roleId, role: role ? role.name : '', teamName: m.name || (team && team.name) || 'Team', icon: m.icon, accent: m.accent, date: sDate, time: sTime, service: sName, note: `Can you serve on ${m.name || (team && team.name) || 'the team'} (${role ? role.name : ''})?` })).catch(() => null));
     }
     const out = await Promise.all(jobs);
     const failed = out.filter(r => r == null).length;
-    return { tried: out.length, failed };
+    // `held` is NOT a failure: nothing was sent and nothing went wrong — a request to that person is still opening.
+    // Counted apart so the flash does not point at an error message that is not there (audit of d86fbac, #5).
+    return { tried: out.length, failed, held: heldPubs.size, heldPubs: [...heldPubs] };
   };
   // "2 of 5 couldn't be asked", and what to do about it. One sentence, because it sits in a flash.
   //
@@ -620,6 +699,9 @@ function DashRota({ onNewTeam }) {
   // three different controls. Only publish() is reached by "Publish rota", and pressing it again re-sends
   // for the SELECTED service only — so on the bulk paths "press Publish again" named a button the steward
   // never pressed and would not have retried the other weeks anyway.
+  // `retry` names the control, like unaskedFlash's: on the bulk paths "press Publish" re-sends for the SELECTED
+  // service only, so they say to open each service (audit of 660f063, #4).
+  const heldFlash = (lead, n, retry) => `${lead}. ${n} ${n === 1 ? 'person has' : 'people have'} an earlier request still opening — ${retry} in a moment to ask them.`;
   const unaskedFlash = (lead, failed, tried, retry) => `${lead}, but ${failed} of ${tried} couldn’t be asked yet. ${retry}; if it keeps failing, the message above says why.`;
   // pure: fill the gaps of `base` for a given date, not reusing anyone already on that day
   const fillAssign = (base, date, svcId) => {
@@ -684,9 +766,9 @@ function DashRota({ onNewTeam }) {
     // publish, tells us whether the key is there, and changes nothing.
     if (window.Steward.nameKeyReady && !window.Steward.nameKeyReady()) {
       const probe = await window.Steward.publishService({ id: svc.id, name: svc.name, date: svc.date, time: svc.time });
-      if (probe == null) { setFlash(SCH_NO_KEY); setTimeout(() => setFlash(''), 4000); return; }
+      if (probe == null) { setFlash(schNoKey()); setTimeout(() => setFlash(''), 4000); return; }
     }
-    let lost = 0, unasked = 0, triedAsks = 0;
+    let lost = 0, unasked = 0, triedAsks = 0; const heldAsks = new Set();
     for (const dt of dates) {
       if (byDate[dt]) { ensured.push(byDate[dt]); continue; }
       const ns = await window.Steward.publishService({ name: svc.name, date: dt, time: svc.time });
@@ -697,12 +779,13 @@ function DashRota({ onNewTeam }) {
       const r = await window.Steward.publishRota({ service: s.id, published: true, assign: filled });
       if (r == null) { lost++; continue; }   // do not ask anyone to serve on a rota that does not exist
       const asked = await sendRequestsFor(s.id, s.date, s.time, s.name, filled);
-      unasked += asked.failed; triedAsks += asked.tried;
+      unasked += asked.failed; triedAsks += asked.tried; (asked.heldPubs || []).forEach(p => heldAsks.add(p));
       if (s.id === svcId) setAssign(filled);
     }
-    if (lost) { setFlash(SCH_NO_KEY); setTimeout(() => setFlash(''), 4000); return; }
+    if (lost) { setFlash(schNoKey()); setTimeout(() => setFlash(''), 4000); return; }
     const madeLead = `Created + filled ${ensured.length} service${ensured.length > 1 ? 's' : ''}`;
     if (unasked) { setFlash(unaskedFlash(madeLead, unasked, triedAsks, 'Open each service and press Publish')); setTimeout(() => setFlash(''), 6000); return; }
+    if (heldAsks.size) { setFlash(heldFlash(madeLead, heldAsks.size, 'Open each service and press Publish')); setTimeout(() => setFlash(''), 6000); return; }
     setFlash(madeLead); setTimeout(() => setFlash(''), 2800);
   };
   const assignFor = (id) => (draft[id] !== undefined ? draft[id] : (persisted(id) ? persisted(id).assign : null));
@@ -717,9 +800,10 @@ function DashRota({ onNewTeam }) {
     const r = await window.Steward.publishRota({ service: svcId, published: true, assign });
     // Do NOT ask people to serve on a rota that was not saved: they would get the request and the rota would
     // not exist. sendRequestsFor is the outward-facing half, so it waits on the publish landing.
-    if (r == null) { setFlash(SCH_NO_KEY); setTimeout(() => setFlash(''), 4000); return; }
+    if (r == null) { setFlash(schNoKey()); setTimeout(() => setFlash(''), 4000); return; }
     const asked = await sendRequestsFor(svcId, svc.date, svc.time, svc.name, assign);
     if (asked.failed) { setFlash(unaskedFlash('Published', asked.failed, asked.tried, 'Press Publish again')); setTimeout(() => setFlash(''), 5000); return; }
+    if (asked.held) { setFlash(heldFlash('Published', asked.held, 'press Publish again')); setTimeout(() => setFlash(''), 5000); return; }
     setFlash('Published — everyone assigned has been asked'); setTimeout(() => setFlash(''), 2400);
   };
 
@@ -888,6 +972,7 @@ function DashRota({ onNewTeam }) {
                           decline: { fg: 'var(--clay)', bg: 'var(--clay)', soft: 9, line: 40, label: 'Declined', ic: 'x' },
                           swap: { fg: '#8a6717', bg: 'var(--gold)', soft: 10, line: 40, label: 'Wants swap', ic: 'swap' },
                           pending: { fg: 'var(--ink-3)', bg: 'var(--ink-3)', soft: 5, line: 20, label: 'Asked', ic: 'clock' },
+                          locked: { fg: 'var(--ink-3)', bg: 'var(--ink-3)', soft: 5, line: 20, label: 'Opening…', ic: 'clock' },
                           '': { fg: 'var(--sage)', bg: 'var(--sage)', soft: 8, line: 32, label: '', ic: 'check' },
                         };
                         const vm = vmap[verdict] || vmap[''];
@@ -984,8 +1069,6 @@ function SchEventModal({ day, onClose }) {
   const ownedNets = React.useMemo(() => (window.Steward.ownedNetworks ? window.Steward.ownedNetworks() : []), []);
   const [asPub, setAsPub] = useSch('');          // '' = the church; else an owned network's pub
   const asNetwork = !!asPub;
-  // gentle clash check (task 19): any existing event already at this exact date + time — informational, never blocks Save
-  const clashes = React.useMemo(() => (date && time) ? (existingEvents || []).filter(e => e && e.date === date && e.time === time && (e.title || '').trim()) : [], [existingEvents, date, time]);
   const onImage = (file) => {
     if (!file) return;
     const r = new FileReader();
@@ -999,10 +1082,19 @@ function SchEventModal({ day, onClose }) {
   const [err, setErr] = useSch('');
   // Busy while it awaits a late church key — see SchAddServiceModal for the full note.
   const [busy, setBusy] = useSch(false);
+  // Which week of the month for a monthly repeat — follows the date until picked (see SchAddServiceModal).
+  const [nthPick, setNthPick] = useSch(null);
+  const nth = nthPick == null ? (date ? schNthOf(date) : 1) : nthPick;
+  const planned = schPlanned(date, repeat, until, nth);
+  const plannedKey = planned.join(',');
+  // gentle clash check (task 19): any existing event at the same time on a date THIS SAVE WILL PUBLISH —
+  // informational, never blocks Save. It checked the typed date, which a monthly repeat with another week
+  // picked does not publish at all (re-audit of ffcdcfe, finding 2).
+  const clashes = React.useMemo(() => (planned.length && time) ? (existingEvents || []).filter(e => e && planned.includes(e.date) && e.time === time && (e.title || '').trim()) : [], [existingEvents, plannedKey, time]);
   const save = async () => {
-    if (!title.trim() || !date || busy) return;
+    if (!title.trim() || !date || busy || !planned.length) return;   // no date to add: SchRepeatRow says so; Save is disabled
     setBusy(true); setErr('');
-    const dates = repeat === 'none' ? [date] : schGenDates(date, repeat, until || schAddMonths(date, 3));
+    const dates = planned;
     // a group is church-scoped, so a network-wide event never belongs to a church group
     const gid = asNetwork ? '' : group;
     const out = await Promise.all(dates.map(d => window.Steward.publishEvent({ title: title.trim(), date: d, time, where: where.trim(), blurb: blurb.trim(), accent, image, groupId: gid }, asPub)));
@@ -1023,7 +1115,7 @@ function SchEventModal({ day, onClose }) {
       if (missed) { try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'website opt-in', message: SCH_SHOWN_MISSED } })); } catch (e) {} }
     }
     setBusy(false);
-    if (out.some(r => r == null)) { setErr(SCH_NO_KEY); return; }
+    if (out.some(r => r == null)) { setErr(schNoKey()); return; }
     onClose();
   };
   return (
@@ -1031,7 +1123,7 @@ function SchEventModal({ day, onClose }) {
       <React.Fragment>
         <div style={{ display: 'flex', gap: 10 }}>
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
-          <button onClick={save} disabled={!title.trim() || !date || busy} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: (title.trim() && date && !busy) ? 1 : 0.55 }}><Icon name="calPlus" size={16} color="var(--on-clay)" /> {repeat === 'none' ? 'Add event' : 'Add events'}</button>
+          <button onClick={save} disabled={!title.trim() || !date || busy || !planned.length} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: (title.trim() && date && !busy && planned.length) ? 1 : 0.55 }}><Icon name="calPlus" size={16} color="var(--on-clay)" /> {repeat === 'none' ? 'Add event' : 'Add events'}</button>
         </div>
         {/* in the footer, not the body: a "not saved" under a scrolled-away body is a failure nobody sees */}
         <SchNotSaved msg={err} />
@@ -1061,7 +1153,7 @@ function SchEventModal({ day, onClose }) {
       {clashes.length ? (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 9, padding: '9px 12px', borderRadius: 11, background: 'color-mix(in oklab, var(--gold) 12%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 30%, var(--line))', fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.4 }}>
           <Icon name="bell" size={15} color="#8a6717" style={{ flexShrink: 0 }} />
-          <span>This is at the same time as <b>{clashes[0].title}</b>{clashes.length > 1 ? ' and ' + (clashes.length - 1) + ' more' : ''} — just so you know.</span>
+          <span>This is at the same time as <b>{clashes[0].title}</b> on {(() => { const p = schParts(clashes[0].date); return p.dow + ' ' + p.day + ' ' + p.mon; })()}{clashes.length > 1 ? ' and ' + (clashes.length - 1) + ' more' : ''} — just so you know.</span>
         </div>
       ) : null}
       <div style={schLbl}>Where</div>
@@ -1104,7 +1196,7 @@ function SchEventModal({ day, onClose }) {
       )}
       <div style={schLbl}>Note (optional)</div>
       <textarea aria-label="Note (optional)" value={blurb} onChange={e => setBlurb(e.target.value)} rows={3} placeholder="A short description members will read." style={{ ...schFld, height: 'auto', padding: '11px 13px', lineHeight: 1.5, resize: 'vertical', fontFamily: 'var(--font-ui)' }} />
-      <SchRepeatRow repeat={repeat} setRepeat={setRepeat} until={until} setUntil={setUntil} />
+      <SchRepeatRow repeat={repeat} setRepeat={setRepeat} until={until} setUntil={setUntil} nth={nth} setNth={setNthPick} date={date} planned={planned} />
     </SchModal>
   );
 }
@@ -1226,7 +1318,7 @@ function DashCalendar() {
                   onKeyDown={ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); setEvDetail(e); } }}
                   title="Open this event — details, edit, remove"
                   style={{ padding: 12, borderRadius: 13, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', marginBottom: 9, cursor: 'pointer', textAlign: 'left', width: '100%', font: 'inherit', color: 'inherit' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}><span style={{ width: 8, height: 8, borderRadius: 999, background: e.accent }} /><div style={{ fontWeight: 700, fontSize: 14 }}>{e.title}</div>{e.recur ? <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--ink-3)', border: '1px solid var(--line)', borderRadius: 6, padding: '1px 5px' }}>{e.recur === 'fortnightly' ? '2-WEEKLY' : e.recur === 'monthly' ? 'MONTHLY' : 'WEEKLY'}</span> : null}<Icon name="chevR" size={14} color="var(--ink-3)" style={{ marginLeft: 'auto' }} /></div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}><span style={{ width: 8, height: 8, borderRadius: 999, background: e.accent }} /><div style={{ fontWeight: 700, fontSize: 14 }}>{e.title}</div>{e.recur ? <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--ink-3)', border: '1px solid var(--line)', borderRadius: 6, padding: '1px 5px' }}>{e.recur === 'fortnightly' ? '2-WEEKLY' : e.recur === 'monthly' ? (schNthLabel(e.nth).toUpperCase() + ' ' + ['SUN','MON','TUE','WED','THU','FRI','SAT'][e.day || 0]) : 'WEEKLY'}</span> : null}<Icon name="chevR" size={14} color="var(--ink-3)" style={{ marginLeft: 'auto' }} /></div>
                   <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 2 }}>{e.time}{e.where ? ' · ' + e.where : ''}</div>
                   {e.blurb ? <p style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, margin: '7px 0 0' }}>{e.blurb}</p> : null}
                   {(() => {
@@ -1312,6 +1404,7 @@ function SchEventEdit({ event, onClose }) {
   const [date, setDate] = React.useState(e.date || '');
   const [day, setDay] = React.useState(typeof e.day === 'number' ? e.day : 0);
   const [recur, setRecur] = React.useState(e.recur || 'weekly');
+  const [nth, setNth] = React.useState(typeof e.nth === 'number' ? e.nth : 1);
   // "Not on the website" — see SchEventModal. Read from the share: document, written back on save.
   const canHold = !!(window.Steward.setWebsiteHeld && !(window.Steward.isDelegated && window.Steward.isDelegated()));
   const inGroup = !!String(e.groupId || '');   // a group's event is off the website unless ticked on — the inverse tick
@@ -1341,7 +1434,7 @@ function SchEventEdit({ event, onClose }) {
       r = await Promise.resolve(window.Steward.publishEvent({
         id: e.id, title: title.trim(), date: anchor, time, where: where.trim(), blurb: blurb.trim(),
         accent: e.accent || '', image: e.image || '', groupId: e.groupId || '',
-        ...(series ? { recur, day } : {}),
+        ...(series ? { recur, day, nth } : {}),
       }));
     } catch (x) { r = null; }
     // ONLY WRITE THE TICK WHEN THE STEWARD ACTUALLY TOUCHED IT IN THIS DIALOG (F1 above) — a Save where
@@ -1376,6 +1469,14 @@ function SchEventEdit({ event, onClose }) {
           <select aria-label="Repeats" value={recur} onChange={ev => setRecur(ev.target.value)} style={{ ...schFld, cursor: 'pointer' }}>
             <option value="weekly">Weekly</option><option value="fortnightly">Fortnightly</option><option value="monthly">Monthly</option>
           </select>
+          {recur === 'monthly' ? (
+            <React.Fragment>
+              <div style={schLbl}>Which week</div>
+              <select aria-label="Which week" value={nth} onChange={ev => setNth(+ev.target.value)} style={{ ...schFld, cursor: 'pointer' }}>
+                <option value={1}>1st</option><option value={2}>2nd</option><option value={3}>3rd</option><option value={4}>4th</option><option value={5}>5th</option><option value={-1}>Last</option>
+              </select>
+            </React.Fragment>
+          ) : null}
         </React.Fragment>
       ) : (
         <React.Fragment>
@@ -1450,7 +1551,7 @@ function SchEventDetail({ event, onClose }) {
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--ink-3)', fontWeight: 600, marginTop: 5, flexWrap: 'wrap' }}>
                 {e.time ? <React.Fragment><Icon name="clock" size={13} color="var(--ink-3)" /> {e.time}</React.Fragment> : null}
                 {e.where ? <React.Fragment>{e.time ? <span style={{ opacity: .5 }}>·</span> : null}<Icon name="marker" size={13} color="var(--ink-3)" /> {e.where}</React.Fragment> : null}
-                {e.recur ? <React.Fragment><span style={{ opacity: .5 }}>·</span><Icon name="refresh" size={13} color="var(--ink-3)" /> {e.recur === 'fortnightly' ? 'Every 2 weeks' : e.recur === 'monthly' ? 'Monthly' : 'Weekly'}</React.Fragment> : null}
+                {e.recur ? <React.Fragment><span style={{ opacity: .5 }}>·</span><Icon name="refresh" size={13} color="var(--ink-3)" /> {e.recur === 'fortnightly' ? 'Every 2 weeks' : e.recur === 'monthly' ? (schNthLabel(e.nth) + ' ' + ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][e.day || 0]) : 'Weekly'}</React.Fragment> : null}
               </div>
             </div>
           </div>
@@ -1496,7 +1597,7 @@ function DashRooms() {
     setRoomBusy(true); setRoomErr('');
     const r = await window.Steward.publishRoom({ name: n });
     setRoomBusy(false);
-    if (r == null) { setRoomErr(SCH_NO_KEY); return; }   // keep what they typed
+    if (r == null) { setRoomErr(schNoKey()); return; }   // keep what they typed
     setNewRoom('');
   };
   const sorted = [...bookings].filter(b => b.roomId && b.date).sort((a, b) => (a.date || '').localeCompare(b.date || '') || (a.start || '').localeCompare(b.start || ''));
@@ -1586,7 +1687,7 @@ function RoomBookingModal({ bk, rooms, bookings, onClose }) {
     setBusy(true); setErr('');
     const r = await window.Steward.publishBooking({ id: bk.id, roomId, date, start, end, title, note });
     setBusy(false);
-    if (r == null) { setErr(SCH_NO_KEY); return; }
+    if (r == null) { setErr(schNoKey()); return; }
     onClose();
   };
   const dlgRef = useStewDialog(onClose);   // a11y: Escape + focus (dialog semantics on the panel below)

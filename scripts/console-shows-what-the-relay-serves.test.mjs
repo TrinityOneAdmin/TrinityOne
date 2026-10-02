@@ -68,10 +68,11 @@ const NET = 'trinityone';
 // the cache paint, because _seedFromCache consults the display predicate at mount time and there is no
 // _reduceAll to revisit it. Mounting first (the default) hides that entirely: an earlier draft of the cache
 // test did exactly that and survived its own sabotage.
-function consoleAt({ relayAuthed = true, cache = null, mountGroups = 'now' } = {}) {
+function consoleAt({ relayAuthed = true, cache = null, oldCache = null, mountGroups = 'now' } = {}) {
   const opened = [];
   const stored = new Map();
-  if (cache) stored.set('trinityone.steward.groups.' + CHURCH, JSON.stringify(cache));
+  if (cache) stored.set('trinityone.steward.groups.v2.' + CHURCH, JSON.stringify(cache));
+  if (oldCache) stored.set('trinityone.steward.groups.' + CHURCH, JSON.stringify(oldCache));   // written before 2026-10-02
   const scope = {
     pool: { subscribeMany: (_r, _f, h) => { opened.push(h); return { close() {} }; } },
     relays: () => ['wss://relay.example'],
@@ -84,12 +85,18 @@ function consoleAt({ relayAuthed = true, cache = null, mountGroups = 'now' } = {
     localStorage: { getItem: (k) => (stored.has(k) ? stored.get(k) : null), setItem: (k, v) => stored.set(k, v) },
     _careRoster: new Set(), _careRosterKnown: false, _careRosterSeen: false,
     _stewardCaps: {}, _stewardNames: {}, _stewardSince: {},
+    // subscribeGroups records which rooms are sealed (83248e3). Without this the lifted reader threw a
+    // ReferenceError inside its own try on EVERY group, absorbed nothing, and 11 tests failed as "the console was
+    // emptied" — over a shipped reader that was fine (bisected 2026-09-30; 13/13 on main before that commit).
+    _sealedGroupIds: new Set(),
+    // both readers stamp each list with the church and epoch they were opened for (_listTag, lifted below)
+    actingChurch: '', _keyReadEpoch: 0,
   };
   const body = ['_pickWinner', '_reduceVersions', '_absorbById', '_forgetById', '_tombstoneTargets',
     // `_capsOf` is how both predicates read the capability list — it normalises it the way the relay does
     // (gateway.mjs:1611: non-empty strings, lower-cased) instead of counting the raw length. Lift it with
     // them, or they call a function that is not there.
-    '_seedFromCache', '_capsOf', '_consoleDisplay', '_consoleChurchVoice'].map(n => lift(STEWARD, n)).join('\n');
+    '_seedFromCache', '_capsOf', '_consoleDisplay', '_consoleChurchVoice', '_listTag', '_stampFor'].map(n => lift(STEWARD, n)).join('\n');
   const args = Object.keys(scope);
   const api = new Function(...args, `${body}\nreturn ({\n${grabMethod(STEWARD, 'subscribeStewards(onList)')},\n${grabMethod(STEWARD, 'subscribeGroups(onGroups)')}\n});`)
     (...args.map(k => scope[k]));
@@ -126,7 +133,8 @@ function consoleAt({ relayAuthed = true, cache = null, mountGroups = 'now' } = {
     }),
     eose: () => sub().oneose(),
     names: () => groups.map(g => g.name).filter(Boolean).sort(),
-    cached: () => JSON.parse(stored.get('trinityone.steward.groups.' + CHURCH) || '[]').map(g => g.name).filter(Boolean).sort(),
+    painted: () => groups,
+    cached: () => JSON.parse(stored.get('trinityone.steward.groups.v2.' + CHURCH) || '[]').map(g => g.name).filter(Boolean).sort(),
   };
 }
 
@@ -303,4 +311,15 @@ test('READER: a delete does not re-filter what the console was already showing',
   c.deleteGroup(CHURCH, 'g1');
   assert.deepEqual(c.names(), ['Youth'],
     'deleting one group silently re-filtered the screen and took a steward’s group with it');
+});
+
+// A CACHE WRITTEN BEFORE THE CHURCH-TAG RULE (audit of 5276297, HIGH 1) may hold rooms this console wrote while acting
+// for ANOTHER church — they came back in this church's own read and were cached under its key, and the cache is
+// painted (and handed to the key distributor) before the relay answers. So the groups reader starts a new cache key.
+test('READER: a groups cache written before 2026-10-02 — which may hold another church\'s rooms — is not painted', () => {
+  const c = consoleAt({ oldCache: [{ id: 'bede-room', name: 'Another Church\'s Room', ts: 50, _by: CHURCH, encrypted: true }] });
+  assert.deepEqual(c.painted().map(g => g.name), [], 'THE OLD CACHE WAS PAINTED — a room the console wrote for another church is back on this church\'s list before the relay says a word');
+  // CONTROL: the current cache is painted
+  const d = consoleAt({ cache: [{ id: 'g1', name: 'Sunday Prayer', ts: 50, _by: CHURCH }] });
+  assert.deepEqual(d.painted().map(g => g.name), ['Sunday Prayer'], 'CONTROL: the current cache is no longer painted at all');
 });

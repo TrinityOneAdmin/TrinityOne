@@ -115,26 +115,27 @@ export function relayAddrKey(u) {
 // FAILS CLOSED ON EVERYTHING ELSE — unreachable, non-200, unparseable, wrong kind, bad signature, a nonce
 // that is not the one we sent, a timestamp outside the window. There is no partial answer and no "probably":
 // a caller that cannot tell those apart from success would be back to trusting a string.
-export async function verifyRelayIdentity(wssUrl) {
+//
+// `verifyRelayIdentityDetailed` adds ONE bit: `reached` — true when the HTTP request got a response (even a
+// non-200 or unparseable one), false when the host timed out or the network was down. This is what lets
+// adoptInviteRelays retry an unreachable box instead of refusing it. Every other caller uses the wrapper
+// below and is unchanged.
+export async function verifyRelayIdentityDetailed(wssUrl) {
+  let reached = false;
   try {
     const base = relayHttpBase(wssUrl);
-    if (!base) return null;
+    if (!base) return { proof: null, reached: false };
     const nonce = relayIdentityNonce();
-    if (!nonce) return null;
-    // Hard timeout via Promise.race as well as the signal — CapacitorHttp (native Android/iOS) patches fetch
-    // and may IGNORE an AbortController, so the race is what actually bounds a hung probe on a device.
+    if (!nonce) return { proof: null, reached: false };
     const ctrl = new AbortController();
     const to = setTimeout(() => { try { ctrl.abort(); } catch (e) {} }, 6000);
     let body = null;
     try {
       body = await Promise.race([
         (async () => {
-          // `for=` names the address we are about to trust, so the relay can bind the PATH as well as the
-          // host — this HTTP request carries no trace of the socket URL otherwise. The relay signs it only
-          // if it is one of the addresses it declares, so this chooses among declared entries and can never
-          // introduce one.
           const res = await fetch(base + '/relay-identity?nonce=' + nonce + '&for=' + encodeURIComponent(String(wssUrl || '')),
             { signal: ctrl.signal, cache: 'no-store' });
+          reached = true;
           return res.ok ? res.json() : null;
         })(),
         new Promise((_, rej) => setTimeout(() => rej(new Error('relay-identity timeout')), 6500)),
@@ -142,20 +143,12 @@ export async function verifyRelayIdentity(wssUrl) {
     } finally { clearTimeout(to); }
 
     const ev = body && body.proof;
-    if (!ev || ev.kind !== 27235) return null;
-    if (typeof ev.pubkey !== 'string' || !/^[0-9a-f]{64}$/i.test(ev.pubkey)) return null;
-    // The signature is checked against the pubkey INSIDE the event, so an impostor putting the real relay's
-    // pubkey in the field it wants to claim has to sign as that key to get past here — which is the point.
-    if (!verifyEvent(ev)) return null;
+    if (!ev || ev.kind !== 27235) return { proof: null, reached };
+    if (typeof ev.pubkey !== 'string' || !/^[0-9a-f]{64}$/i.test(ev.pubkey)) return { proof: null, reached };
+    if (!verifyEvent(ev)) return { proof: null, reached };
     const tag = (n) => { const t = (ev.tags || []).find(x => Array.isArray(x) && x[0] === n); return t ? String(t[1] || '') : ''; };
-    // OUR question, not one this host was asked earlier by somebody else. This single line is what makes a
-    // captured proof worthless and a static pre-signed answer detectable.
-    if (tag('nonce').toLowerCase() !== nonce) return null;
-    // THE ADDRESS BINDING. The signed `relay` tag must be the address we dialled. A forwarder that sends its
-    // own Host gets no proof at all (the relay refuses to sign an address it does not declare); a forwarder
-    // that rewrites Host to the real relay's name gets a proof naming THAT relay, which is not what we
-    // dialled. Compare against `wssUrl`, the argument — never anything derived from the response.
-    if (relayAddrKey(tag('relay')) !== relayAddrKey(wssUrl)) return null;
+    if (tag('nonce').toLowerCase() !== nonce) return { proof: null, reached };
+    if (relayAddrKey(tag('relay')) !== relayAddrKey(wssUrl)) return { proof: null, reached };
     // NO CLOCK CHECK HERE, DELIBERATELY. THE NONCE IS THE FRESHNESS.
     //
     // This used to also require |now - created_at| <= 300s, and that one line sat underneath every other
@@ -182,6 +175,9 @@ export async function verifyRelayIdentity(wssUrl) {
     // (scripts/a-slow-clock-does-not-lose-the-church.test.mjs asserts this function reads no clock of its
     // own). Whoever consumes `at` decides what to do with it; this function still admits every relay it
     // admitted before, at every skew, and refuses exactly the same ones.
-    return { relayPub: String(ev.pubkey).toLowerCase(), url: tag('relay'), at: Number(ev.created_at) || 0 };
-  } catch { return null; }
+    return { proof: { relayPub: String(ev.pubkey).toLowerCase(), url: tag('relay'), at: Number(ev.created_at) || 0 }, reached: true };
+  } catch { return { proof: null, reached }; }
+}
+export async function verifyRelayIdentity(wssUrl) {
+  return (await verifyRelayIdentityDetailed(wssUrl)).proof;
 }

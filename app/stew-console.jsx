@@ -75,6 +75,12 @@ function WizMeetings({ meetings, setMeetings }) {
               <input type="time" value={m.time} onChange={e => set(i, { time: e.target.value })} style={{ ...fld, flex: '1 1 100px' }} />
               <select value={m.recur} onChange={e => set(i, { recur: e.target.value })} style={{ ...fld, flex: '1.2 1 120px', cursor: 'pointer', fontWeight: 600 }}><option value="weekly">Weekly</option><option value="fortnightly">Fortnightly</option><option value="monthly">Monthly</option></select>
             </div>
+            {m.recur === 'monthly' ? (
+              <div style={{ display: 'flex', gap: 9, alignItems: 'center' }}>
+                <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--ink-2)', whiteSpace: 'nowrap' }}>Which week</span>
+                <select value={m.nth || 1} onChange={e => set(i, { nth: +e.target.value })} style={{ ...fld, flex: '1 1 100px', cursor: 'pointer', fontWeight: 600 }}><option value={1}>1st</option><option value={2}>2nd</option><option value={3}>3rd</option><option value={4}>4th</option><option value={5}>5th</option><option value={-1}>Last</option></select>
+              </div>
+            ) : null}
           </div>
         ))}
         <button onClick={() => setMeetings(a => [...a, { id: _wizMeetingId(), title: '', day: 0, time: '10:00', recur: 'weekly' }])} className="sk-btn sk-btn--ghost" style={{ padding: '11px 15px', fontSize: 14, justifyContent: 'center' }}><Icon name="plus" size={16} color="currentColor" /> Add another meeting</button>

@@ -80,6 +80,9 @@ const ID_OK = /^[A-Za-z0-9_-]{1,64}$/;
 // Both occurrence walks step forward until `cur.getUTCDay() === day`. A `day` that no weekday can equal would
 // spin for ever, so neither walk is entered without this. seriesDay() below is what makes it always true.
 const DAY_OK = (day) => Number.isInteger(day) && day >= 0 && day <= 6;
+// A monthly meeting's week: 1-5 = the 1st…5th such weekday, -1 = the LAST one (app/recur.jsx NTH_LAST, owner
+// decision 2026-10-01). -1 is also RFC 5545's own spelling, so rrule() below writes it straight through.
+const NTH_OK = (n) => Number.isInteger(n) && ((n >= 1 && n <= 5) || n === -1);
 
 // Read one event down to the fields this file may carry. Returns null for anything that cannot be placed on
 // a calendar at all (no id, no valid date), which the builder then skips rather than emitting a broken VEVENT.
@@ -91,12 +94,13 @@ export function publicEventFields(ev) {
   const time = HHMM.test(String(ev.time || '')) ? String(ev.time) : '';
   const recur = RECUR.has(ev.recur) ? ev.recur : '';
   const day = (recur && DAY_OK(ev.day)) ? ev.day : null;
+  const nth = (recur === 'monthly' && NTH_OK(ev.nth)) ? ev.nth : null;
   return {
     id, date, time,
     title: String(ev.title || '').slice(0, 200),
     where: String(ev.where || '').slice(0, 200),
     blurb: String(ev.blurb || '').slice(0, 2000),
-    recur, day,
+    recur, day, nth,
   };
 }
 
@@ -140,25 +144,31 @@ function firstOccurrence(date, day, fortnightly) {
 // The first occurrence is the first `day` of the anchor's OWN month if that is not before the anchor, else
 // the first `day` of the next month — which is exactly what expandEvents walks ("once a month, on the first
 // matching weekday of the month", occurrences before the anchor skipped).
-function firstMonthlyOccurrence(date, day) {
+function nthMonthlyOccurrence(date, day, nth) {
+  const n = NTH_OK(nth) ? nth : 1;
   const p = isoParts(date);
   if (!p || !DAY_OK(day)) return date;
-  for (let ahead = 0; ahead < 2; ahead++) {
+  if (n === -1) {                                // the LAST <day>: every month has one, so this month or next
+    for (let ahead = 0; ahead < 2; ahead++) {
+      const cur = new Date(Date.UTC(p.y, p.mo + ahead, 0));   // day 0 of the month after = this month's last day
+      while (cur.getUTCDay() !== day) cur.setUTCDate(cur.getUTCDate() - 1);
+      if (cur.getTime() >= p.t) return isoOf(cur);
+    }
+    return date;
+  }
+  const limit = n >= 5 ? 6 : 2;
+  for (let ahead = 0; ahead < limit; ahead++) {
     const cur = new Date(Date.UTC(p.y, p.mo - 1 + ahead, 1));
     while (cur.getUTCDay() !== day) cur.setUTCDate(cur.getUTCDate() + 1);
-    if (cur.getTime() >= p.t) return isoOf(cur);
+    for (let w = 1; w < n; w++) cur.setUTCDate(cur.getUTCDate() + 7);
+    if (cur.getUTCMonth() === (p.mo - 1 + ahead) % 12 && cur.getTime() >= p.t) return isoOf(cur);
   }
-  // Now genuinely unreachable, which the comment that stood here claimed while it was not: the first `day` of
-  // the NEXT month is later than any date in this one — but only once the anchor really is a date in this one.
-  // `2026-02-31` was admitted above and Date.UTC turned it into 3 March, so both candidates fell before it and
-  // this line ran, emitting the anchor back as `DTSTART:20260231T193000` (audit R7). isoParts() is what makes
-  // the sentence true; this stays as a fail-safe that returns a real date rather than as a claim.
   return date;
 }
 // WHAT WEEKDAY A SERIES FALLS ON, read the same way in the DTSTART and in the RRULE. app/recur.jsx's
 // expandEvents falls back to the anchor's own weekday for a series with no usable `day`
 // (`const day = (typeof e.day === 'number') ? e.day : anchor.getDay()`), and rrule() below already did — but
-// firstMonthlyOccurrence was handed the raw `day`, saw null and returned the anchor untouched, so the file
+// nthMonthlyOccurrence was handed the raw `day`, saw null and returned the anchor untouched, so the file
 // carried `BYDAY=1TU` over a DTSTART that was not an instance of it for 281 of 365 anchors (audit R3).
 // publicEventFields nulls `day` for anything that is not an integer 0-6 — a string '2', 2.5, 7, -1 — and
 // src/steward.src.js publishEvent is where that `null` is minted (`typeof ev.day === 'number' ? ev.day :
@@ -173,7 +183,7 @@ const seriesDay = (ev) => {
 function dtstart(ev) {
   const day = seriesDay(ev);
   const date = !ev.recur ? ev.date
-    : ev.recur === 'monthly' ? firstMonthlyOccurrence(ev.date, day)
+    : ev.recur === 'monthly' ? nthMonthlyOccurrence(ev.date, day, ev.nth)
       : firstOccurrence(ev.date, day, ev.recur === 'fortnightly');
   if (!date) return null;                        // the series steps off the end of the calendar — see isoOf
   const d = date.replace(/-/g, '');
@@ -191,7 +201,8 @@ export const unfoldIcs = (text) => String(text == null ? '' : text).replace(/\r\
 function rrule(ev) {
   if (!ev.recur) return '';
   const day = seriesDay(ev);
-  if (ev.recur === 'monthly') return 'RRULE:FREQ=MONTHLY;BYDAY=1' + BYDAY[day];   // first <weekday> of the month, as expandEvents reads it
+  const nth = NTH_OK(ev.nth) ? ev.nth : 1;
+  if (ev.recur === 'monthly') return 'RRULE:FREQ=MONTHLY;BYDAY=' + nth + BYDAY[day];
   return 'RRULE:FREQ=WEEKLY' + (ev.recur === 'fortnightly' ? ';INTERVAL=2' : '') + ';BYDAY=' + BYDAY[day];
 }
 

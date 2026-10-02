@@ -82,7 +82,7 @@ const askRelay = (authSk, filter) => new Promise((res, rej) => {
 function consoleApi({ signer, actingChurch }) {
   const scope = {
     sk: signer.sk, pub: cp, actingChurch, NET, REQUEST_D,
-    now, finalizeEvent,
+    now, finalizeEvent, _reqSeq: 0,
     _monotonic: (t) => t,   // the shipped one guards same-second replaceables; irrelevant here and it needs state
     sent: null,
     publish: async (evt) => { scope.sent = evt; const [ok] = await send(ws, evt); return ok; },
@@ -96,8 +96,19 @@ function consoleApi({ signer, actingChurch }) {
     'this fixture rather than deleting it. Body seen:\n' + feBody.slice(0, 400));
   scope[signerName] = finalizeEvent;
   scope.feChurch = new Function('scope', `with (scope) { ${feBody} return feChurch; }`)(scope);
-  const body = fnBody(VENDOR, 'sendServingRequest(req) {', 'sendServingRequest');
-  scope.sendServingRequest = new Function('scope', `with (scope) { return ({ ${body} }).sendServingRequest; }`)(scope);
+  // C-4 SEALED THE REQUEST, so the shipped function is now `async` and awaits _sealChurchDocReady. Lift the
+  // real sealer too and give the ring a key: this test is about the church TAG reaching the relay, not about
+  // the sealing, and with an empty ring the shipped function correctly refuses to send anything at all.
+  const sealBody = fnBody(VENDOR, 'function _sealChurchDoc(', '_sealChurchDoc');
+  const readyBody = fnBody(VENDOR, 'function _sealChurchDocReady(', '_sealChurchDocReady');
+  const encName = (/\{\s*e:\s*(\w+)\(body,/.exec(sealBody) || [])[1];
+  assert.ok(encName, '_sealChurchDoc in vendor/steward.js no longer seals with { e: <enc>(body, …) } — ' +
+    're-anchor this fixture. Body seen:\n' + sealBody.slice(0, 300));
+  scope[encName] = (b) => 'ct:' + b;   // the transport is what this test measures; the cipher is not
+  scope._nameKeyRing = ['00'.repeat(32)];
+  scope._unhex = (s) => Uint8Array.from(String(s).match(/.{1,2}/g).map(b => parseInt(b, 16)));
+  const body = fnBody(VENDOR, 'async sendServingRequest(req) {', 'sendServingRequest');
+  scope.sendServingRequest = new Function('scope', `with (scope) { const NAME_KEY_WAIT_MS = 10; ${sealBody}\n${readyBody}\n return ({ ${body} }).sendServingRequest; }`)(scope);
   return scope;
 }
 

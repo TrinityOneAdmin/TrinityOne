@@ -648,6 +648,12 @@ function App() {
   // down and re-establish the church subscriptions on resume, which re-queries and catches up anything
   // published while we were away (fixes "new devotionals/events don't appear until I reload").
   const [connTick, bumpConn] = useA(0);
+  // A SCREEN'S "TRY AGAIN" IS A FOREGROUNDING, so it goes through the same scheduler as one (ctx.reconnectNow).
+  // Device round 2026-10-01: what brought the Family sheet back after airplane mode was Home + reopen — the
+  // `visibilitychange` below — so a control on the sheet does exactly that, with the scheduler's debounce, and
+  // not something weaker. (Fellowship.relayStatus() looked like a cure on the phone once; it opens throwaway
+  // sockets outside the pool and cannot re-subscribe anything — the timing of that run fits the 90-second beat.)
+  const reconnectNowRef = useAR(null);
   useAE(() => {
     let last = Date.now();
     // force the church-doc hubs to re-fetch too (bumpConn alone can't reopen a hub the chat/care screens hold open)
@@ -655,6 +661,7 @@ function App() {
     // P3: one scheduler for every reconnect signal, so the debounce is shared. A phone that foregrounds AND
     // fires `online` in the same second must reconnect once, not twice.
     const sched = makeReconnectScheduler(() => { bumpConn(x => x + 1); refetch(); });
+    reconnectNowRef.current = () => sched.fire(true);   // the member asked, and is watching → no delay
     const onVis = () => { if (document.visibilityState === 'visible') sched.fire(true); };   // user is watching → no delay
     const onOnline = () => { sched.fire(false); };   // radio/router event → spread across the congregation
     document.addEventListener('visibilitychange', onVis);
@@ -743,7 +750,7 @@ function App() {
       if (F && F.relaysHealthy && F.relaysHealthy()) return;   // healthy → skip the storm
       sched.fire(false);   // P3: a relay restart drops EVERY member at once — jitter this one especially
     }, 90000);
-    return () => { document.removeEventListener('visibilitychange', onVis); window.removeEventListener('online', onOnline); window.removeEventListener('focus', onVis); window.removeEventListener('focus', retryIfRefused); window.removeEventListener('online', retryIfRefused); window.removeEventListener('trinity-reconnect', onReconnectNeeded); window.removeEventListener('trinity-relay-returned', onRelayReturned); if (appRemove) { try { appRemove(); } catch (e) {} } clearInterval(beat); sched.cancel(); };
+    return () => { document.removeEventListener('visibilitychange', onVis); window.removeEventListener('online', onOnline); window.removeEventListener('focus', onVis); window.removeEventListener('focus', retryIfRefused); window.removeEventListener('online', retryIfRefused); window.removeEventListener('trinity-reconnect', onReconnectNeeded); window.removeEventListener('trinity-relay-returned', onRelayReturned); if (appRemove) { try { appRemove(); } catch (e) {} } clearInterval(beat); sched.cancel(); reconnectNowRef.current = null; };
   }, []);
   // multi-church: groups + giving funds are scoped to the active church
   const [activeChurch, setActiveChurch] = useA(() => lsGet('trinityone.activeChurch', (window.TrinityData.CHURCHES[0] || {}).id || null));
@@ -810,6 +817,7 @@ function App() {
     // toPub returns null on a bad checksum → reject here so the Follow sheet shows its "couldn't find that church" error.
     if (window.Fellowship && window.Fellowship.toPub && !window.Fellowship.toPub(npub)) return false;
     const F = window.Fellowship;
+    let _adoption = null;   // the invite relay's proof, which the church check below waits for
     if (F && F.addRelay) {
       // always connect to the whole shared pool (the church publishes across all of it), so a member
       // gets every community node for redundancy — not just the single relay carried in their link.
@@ -828,12 +836,47 @@ function App() {
       // key it proves is one this church's own signature (or the canonical pin, or this origin) vouches for.
       // It is deliberately not awaited — following a church must not wait on a network probe — and it fires
       // `trinity-relay-refused` with anything it turned away so the refusal can be shown where the person is.
-      if (F.adoptInviteRelays) { try { F.adoptInviteRelays(npub, raw); } catch (e) {} }
+      if (F.adoptInviteRelays) { try { _adoption = F.adoptInviteRelays(npub, raw); } catch (e) {} }
     }
+    const alreadyFollowed = churches.find(c => c.id === npub);
     setChurches(cs => cs.find(c => c.id === npub) ? cs : [...cs, { id: npub, npub, name: 'Church', initials: 'CH', accent: 'var(--clay)', tagline: '', sub: 'Followed', verified: false, members: 0 }]);
     setActiveChurch(npub); lsSet('trinityone.activeChurch', npub);
-    // announce membership so the steward sees this person joined, even if they never post
-    if (window.Fellowship && window.Fellowship.announceMembership) window.Fellowship.announceMembership(npub);
+    // M-9: do NOT announce membership until we confirm this npub is actually a church. A valid npub that
+    // isn't a church (a steward's personal code, a friend's) used to be followed as "Church" with a signed
+    // membership document published — owner decision 2026-09-03: show "not found" instead. But NEVER say
+    // "not found" just because a relay didn't answer (thin link).
+    if (!alreadyFollowed && window.Fellowship && window.Fellowship.checkChurch) {
+      const _check = async (attempt) => {
+        try {
+          // The church's own box may be the only relay holding its join policy, and it reaches the relay list
+          // only once the invite's address has been proved. Ask before that and a self-hosted church reads as
+          // "not found". Following still does not wait on it — only this check does.
+          if (_adoption) { try { await _adoption; } catch (e) {} }
+          const result = await window.Fellowship.checkChurch(npub);
+          if (result === 'church') {
+            if (window.Fellowship.announceMembership) window.Fellowship.announceMembership(npub);
+          } else if (result === 'not-found') {
+            setChurches(cs => cs.filter(c => c.id !== npub));
+            setActiveChurch(ac => {
+              if (ac !== npub) return ac;
+              const rem = churches.filter(c => c.id !== npub);
+              const next = (rem.find(c => c.npub) || rem[0] || {}).id || null;
+              lsSet('trinityone.activeChurch', next);
+              return next;
+            });
+            toast('No church found for that code.');
+          } else if (attempt < 3) {
+            // 'unknown' — a relay didn't answer. Retry after a delay, but never say "not found".
+            setTimeout(() => _check(attempt + 1), 10000);
+          }
+          // After 3 retries of 'unknown', leave it: the profile subscription or heartbeat may succeed later.
+        } catch (e) {}
+      };
+      _check(0);
+    } else if (!alreadyFollowed) {
+      // Fallback when checkChurch is not available (stale bundle)
+      if (window.Fellowship && window.Fellowship.announceMembership) window.Fellowship.announceMembership(npub);
+    }
     if (!(window.Fellowship && window.Fellowship.subscribeChurchProfile)) return () => {};
     const _stopProfile = window.Fellowship.subscribeChurchProfile(npub, (p) => {
       if (!p) return;
@@ -1358,6 +1401,18 @@ function App() {
     if (!np || !F || !F.subscribeChurchSafeguard) { setSafeguard({ minors: [], approved: [], guardians: {}, isMinor: false, minorsKnown: false }); return; }
     return F.subscribeChurchSafeguard(np, setSafeguard);
   }, [activeChurch, churches, connTick, lazyReady]);
+  const [assumeMinor, setAssumeMinor] = useA(false);
+  useAE(() => {
+    let live = true;
+    const np = (churches.find(c => c.id === activeChurch) || {}).npub;
+    const F = window.Fellowship;
+    if (!np || !F || !F.assumeMinor) return;
+    Promise.resolve(F.assumeMinor(np))
+      .then(v => { if (live) setAssumeMinor(!!v); })
+      .catch(() => { if (live) setAssumeMinor(true); });
+    return () => { live = false; };
+  }, [activeChurch, churches, safeguard.isMinor]);
+  const iAmMinor = safeguard.isMinor || assumeMinor;
   // safeguarding: pick up STEWARD-INITIATED guardian links addressed to me (a church-signed, encrypted notice)
   // so a child a steward linked me to appears in my family view even though I never set it up on this device.
   useAE(() => {
@@ -1365,7 +1420,11 @@ function App() {
     const F = window.Fellowship;
     if (!F || !F.subscribeGuardianNotices) return;
     return F.subscribeGuardianNotices();
-  }, [connTick, lazyReady]);
+    // `keyReady` (whole-branch audit, 2026-10-01): with no key the subscription registers nothing, and connTick
+    // re-runs this only when an unlock's reconnect fires — which needs a church-doc hub already open (see the
+    // note on keyReady above). Unlock before one opens and the parent's notices are never read this session;
+    // with the saved stamp the Family sheet then says "Couldn't reach your church" all session.
+  }, [connTick, lazyReady, keyReady]);
   // joining: whether the active church gates joining behind steward approval, and whether I'm still pending
   const [joinState, setJoinState] = useA({ approval: false, isAdmitted: true, isPending: false });
   const joinChurchRef = React.useRef(null);
@@ -1519,6 +1578,8 @@ function App() {
   const _churchNameFor = (churches.find(c => c.id === activeChurch) || {}).name || 'Your church';
   const NOTIF_WINDOW = 60 * 24 * 3600;   // only surface things from the last ~60 days
   const _nowSec = Math.floor(Date.now() / 1000);
+  const _childSafeGroupIds = React.useMemo(() => { const s = new Set(); churchGroups.forEach(g => { if (g && g.childsafe) s.add(g.id); }); return s; }, [churchGroups]);
+  const _eventVisibleToMe = (e) => !iAmMinor || !e.groupId || _childSafeGroupIds.has(e.groupId);
   const notifications = React.useMemo(() => {   // P8: recompute only when a notification source changes, not every render
     const out = [];
     netAnnouncements.forEach(a => out.push({ id: 'net:' + a.id, kind: 'network', group: a._network || 'Network', text: a.text, ts: a.ts, detail: true }));
@@ -1526,9 +1587,9 @@ function App() {
     churchDevos.forEach(d => out.push({ id: 'devo:' + d.id, kind: 'devotional', group: _churchNameFor, text: 'Shared a devotional · ' + (d.title || ''), ts: d.ts, devo: d }));
     if (pinnedSermon && pinnedSermon.sha256) out.push({ id: 'sermon:' + pinnedSermon.id, kind: 'sermon', group: _churchNameFor, text: (String(pinnedSermon.mime || '').startsWith('video') ? 'New video · ' : 'New audio clip · ') + (pinnedSermon.title || ''), ts: pinnedSermon.ts || pinnedSermon.at, sermon: pinnedSermon });
     churchPlans.forEach(p => out.push({ id: 'plan:' + p.id, kind: 'plan', group: _churchNameFor, text: 'Shared a reading plan · ' + (p.title || ''), ts: p.ts, go: 'plans' }));
-    churchEvents.forEach(e => out.push({ id: 'evt:' + e.id, kind: 'event', group: _churchNameFor, text: 'New event · ' + (e.title || ''), ts: e.ts, go: 'event', event: e }));
+    churchEvents.filter(_eventVisibleToMe).forEach(e => out.push({ id: 'evt:' + e.id, kind: 'event', group: _churchNameFor, text: 'New event · ' + (e.title || ''), ts: e.ts, go: 'event', event: e }));
     return out.filter(n => n.ts && (_nowSec - n.ts) < NOTIF_WINDOW).sort((a, b) => (b.ts || 0) - (a.ts || 0)).slice(0, 40);
-  }, [netAnnouncements, broadcastMsgs, churchDevos, pinnedSermon, churchPlans, churchEvents, churchGroups, _churchNameFor]);   // eslint-disable-line
+  }, [netAnnouncements, broadcastMsgs, churchDevos, pinnedSermon, churchPlans, churchEvents, churchGroups, safeguard, assumeMinor, _churchNameFor]);   // eslint-disable-line
   // unread tracking (drives the bell badge); "seen" = newest ts the user has opened the panel at
   const [netSeenTs, setNetSeenTs] = useA(() => { try { return Number(localStorage.getItem('trinityone.net-seen') || 0); } catch { return 0; } });
   const netUnread = notifications.filter(n => (n.ts || 0) > netSeenTs).length;
@@ -1571,7 +1632,7 @@ function App() {
   // onto every occurrence, so the maximum is the same either way) and writes the answer.
   const markServingSeen = () => {
     if (!servSeenKey) return;
-    const top = servingSeenStamp([...churchEvents, ...groupEvents, ...netEvents], Math.floor(Date.now() / 1000));
+    const top = servingSeenStamp([...churchEvents.filter(_eventVisibleToMe), ...groupEvents, ...netEvents], Math.floor(Date.now() / 1000));
     try { localStorage.setItem(servSeenKey, String(top)); } catch {}
     setServSeenTs(top);
   };
@@ -1583,7 +1644,9 @@ function App() {
   // then layer on any "can you serve?" request + my reply. (Before, this was request-only, so a member
   // placed on a published rota saw nothing until a request happened to arrive.)
   const _reqFor = (sid, tid, rid) => servReqs.find(r => r.serviceId === sid && r.teamId === tid && r.roleId === rid);
-  const _verdict = (q) => (q ? (servReplies[q.id] || 'pending') : 'none');
+  // 'locked': I answered, but my reply is sealed under a church key this phone does not hold yet. Show the slot
+  // as asked-and-waiting rather than guessing which answer it was; the real verdict replaces it when the key lands.
+  const _verdict = (q) => { if (!q) return 'none'; const v = servReplies[q.id]; return (!v || v === 'locked') ? 'pending' : v; };
   const _teamMeta = (id) => churchTeams.find(g => g.id === id) || {};
   const _roleName = (tid, rid) => { const r = churchRosters.find(x => x.team === tid); const role = r && (r.roles || []).find(ro => ro.id === rid); return role ? role.name : ''; };
   const myRotaSlots = [];
@@ -1604,7 +1667,16 @@ function App() {
     .filter(r => (r.people || []).some(p => p.pub === myServPub))
     .map(r => { const tm = _teamMeta(r.team); return { id: r.team, name: tm.name || 'Serving team', icon: tm.icon || 'hand', accent: tm.accent || 'var(--clay)' }; }) : [];
   // pending "can you serve?" asks not yet answered (these take priority over a plain rota placement)
-  const servPending = servReqs.filter(r => !servReplies[r.id] && (r.date || '') >= todayStr);
+  // A LOCKED request has no date, role or team until the church's name key opens it — keep it anyway. The date
+  // test dropped it (`'' >= today` is false), so a request this phone had received reached NO screen, and the
+  // "Locked" row built for exactly this case could never appear (audit 2026-09-30, finding 5).
+  //
+  // …and only the ACTIVE church's. The request feed spans every church this member belongs to, but a church's
+  // name key only loads while it is the active one — so church B's locked request sat on church A's screens
+  // promising to open, and never did there (audit of d86fbac, #2). `church` on a request is the church's hex key.
+  const _activeCp = (() => { try { const c = churches.find(x => x.id === activeChurch); return (c && c.npub && window.Fellowship && window.Fellowship.toPub) ? (window.Fellowship.toPub(c.npub) || '') : ''; } catch (e) { return ''; } })();
+  const _lockedHere = (r) => !!(r && r._locked && _activeCp && r.church === _activeCp);
+  const servPending = servReqs.filter(r => !servReplies[r.id] && (_lockedHere(r) || (!r._locked && (r.date || '') >= todayStr)));
   const _pendKey = new Set(servPending.map(r => r.serviceId + '|' + r.teamId + '|' + r.roleId));
   const servConfirmed = myRotaSlots.filter(s => s._verdict !== 'decline' && s._verdict !== 'swap' && !_pendKey.has(s.serviceId + '|' + s.teamId + '|' + s.roleId));
   const servDeclined = myRotaSlots.filter(s => s._verdict === 'decline' || s._verdict === 'swap');
@@ -1881,6 +1953,14 @@ function App() {
     window.addEventListener('trinity-relay-refused', onRefused);
     return () => window.removeEventListener('trinity-relay-refused', onRefused);
   }, []);
+  useAE(() => {
+    const onPending = (e) => {
+      const n = ((e && e.detail && e.detail.urls) || []).length;
+      if (n) toast(n === 1 ? 'Still reaching your church\'s relay — we\'ll keep trying' : 'Still reaching those relays — we\'ll keep trying');
+    };
+    window.addEventListener('trinity-relay-pending', onPending);
+    return () => window.removeEventListener('trinity-relay-pending', onPending);
+  }, []);
 
   const ctx = {
     dark: t.dark,
@@ -1909,6 +1989,9 @@ function App() {
     // and reopen it, which is why the same room reads "stale" to someone sitting still and "fine" to someone
     // wandering. See FINDINGS-2026-08-16 item 2.
     connTick,
+    // …and the member's own "Try again": the foreground path above (re-subscribe everything + re-fetch the church
+    // docs), through the shared scheduler so repeated taps cannot storm the relay. See reconnectNowRef.
+    reconnectNow: () => { try { const f = reconnectNowRef.current; if (f) f(); } catch (e) {} },
     // OPENING A CONVERSATION IS READING IT. The dot used to clear only when the paper-plane INBOX was opened,
     // which was fine while that was the only way in. It is not any more: the Chat list now lists recent
     // conversations directly, and that is deliberately the route for people who never found the paper plane —
@@ -2023,14 +2106,14 @@ function App() {
     bookmarks, toggleBookmark: (k) => { if (MD.has('bookmarks', k)) MD.remove('bookmarks', k); else MD.put('bookmarks', { id: k, ref: k }); },
     planProgress,
     devoProgress,
-    churchPlans: [...churchPlans, ...netPlans],
+    churchPlans: [...churchPlans, ...netPlans].map(p => (typeof p.len === 'number') ? p : { ...p, len: (p.days || []).length }),
     churchDevos,
     churchPeople, churchPeopleLoading,   // prefetched at app load so the People screen is instant
     myPubkey: (window.Fellowship && window.Fellowship.myPubkey) || null,
     openChurchDevo: (d) => setOpenDevo(d),
     // serving & events (church's own + aggregated from its network)
     servPending, servConfirmed, servDeclined, servNext, myRosterTeams,
-    churchEvents: (() => { const seen = new Set(churchEvents.map(e => e.id).filter(Boolean)); const all = [...churchEvents, ...groupEvents.filter(e => !seen.has(e.id)), ...netEvents]; return window.expandEvents ? window.expandEvents(all, new Date(Date.now() - 7 * 864e5).toISOString().slice(0, 10), 180) : all; })(),   // expand recurring church meetings into occurrences
+    churchEvents: (() => { const visible = churchEvents.filter(_eventVisibleToMe); const seen = new Set(visible.map(e => e.id).filter(Boolean)); const all = [...visible, ...groupEvents.filter(e => !seen.has(e.id)), ...netEvents]; return window.expandEvents ? window.expandEvents(all, new Date(Date.now() - 7 * 864e5).toISOString().slice(0, 10), 180) : all; })(),   // expand recurring church meetings into occurrences
     myRsvps,
     netAnnouncements, netUnread, markNetSeen, notifications,
     servingSeenTs: servSeenTs, markServingSeen,   // the Serving & events card's "something new" mark (see the block above)
@@ -2080,7 +2163,7 @@ function App() {
       // `r && r.ok`, never `if (r)` — clearCareSkip answers an object now and an object is always truthy.
       // Three outcomes: "that day is still marked as one to skip" is false over an undo nobody merely
       // acknowledged, and it makes the recipient ask again for help they have already asked for.
-      clearSkip: (careId, iso) => window.Fellowship.clearCareSkip(careId, iso).then(r => { if (r && r.ok) return r; toast(r && r.reason === 'unconfirmed' ? 'We couldn’t confirm that reached your church — it may well have. Tap Undo again if the day still shows as skipped; it won’t do any harm.' : 'That didn’t reach your church — that day is still marked as one to skip.', { error: true }); return r; }),
+      clearSkip: (careId, iso, skipEnc, author) => window.Fellowship.clearCareSkip(careId, iso, skipEnc, author).then(r => { if (r && r.ok) return r; toast(r && r.reason === 'unconfirmed' ? 'We couldn’t confirm that reached your church — it may well have. Tap Undo again if the day still shows as skipped; it won’t do any harm.' : 'That didn’t reach your church — that day is still marked as one to skip.', { error: true }); return r; }),
       // "I'm here to help": the list of members who are available, plus this member's own signal actions
       avail: careAvail,
       // `r && r.ok`, never `if (r)` — both answer an object now and an object is always truthy, so a plain
@@ -2202,6 +2285,9 @@ function App() {
       // know" or "Asked your leader" a frame later. Measured on a device 2026-08-19: a member on a published
       // rota with no matching request tapped "I'm away", saw the thank-you, and the relay received nothing.
       // The caller cannot know that without an answer, so give it one.
+      // …unless one has arrived and this phone cannot open it yet. Then the leader DID send it, and telling the
+      // member to ask for a re-publish sends every volunteer back to the steward over nothing.
+      if (!reqId && servReqs.some(_lockedHere)) { toast('Your church’s request is still opening on this phone — try again in a moment.'); return false; }
       if (!reqId) { toast('Your leader hasn’t sent a request for this yet — ask them to re-publish the rota.'); return false; }
       // AWAIT IT, AND SAY SO IF IT DID NOT GO. respondToServingRequest answers `{ ok, reason }` (it returned
       // `null` until 2026-09-16, which is what the next note is about).
@@ -2217,7 +2303,12 @@ function App() {
       // is safe: the verdict arrives already decided and goes to the fixed d-tag `reqreply:<requestId>`, so
       // a second press writes the same answer to the same document. (Unlike setEventRsvp, this is not a
       // toggle and cannot reverse itself.)
-      const sent = await window.Fellowship.respondToServingRequest(np, reqId, verdict, swapTo);
+      // ANSWER THE CHURCH THAT ASKED. The request feed spans every church this member belongs to, so the request
+      // on screen may be church B's while church A is active; sending to the active church put the answer where
+      // B never reads it, while the member believed they had replied (audit of 660f063, #3). A request carries
+      // its church's hex key (`church`, from the author or its ['church'] tag); respondToServingRequest takes hex.
+      const reqObj = item.req || (typeof item.id === 'string' && item.id.indexOf('rota:') !== 0 ? item : null);
+      const sent = await window.Fellowship.respondToServingRequest((reqObj && reqObj.church) || np, reqId, verdict, swapTo);
       if (!(sent && sent.ok)) {
         toast(sent && sent.reason === 'unconfirmed'
           ? 'We couldn’t confirm your answer reached your church — it may well have. Tap the same button again; it won’t change what you said.'
@@ -2319,6 +2410,8 @@ function App() {
   // back button: close the topmost open overlay/sheet (returns true if it closed one). Kept current
   // each render so the popstate handler always sees live state. Order ~ visual z (most modal first).
   window.trinityGoBack = () => {
+    const st = window.__trinityBackStack;
+    if (st && st.length) { st[st.length - 1].close(); return true; }
     const layers = [
       [wordOv, () => setWordOv(null)], [member, () => setMember(null)], [profile, () => setProfile(false)],
       [commSec, () => setCommSec(false)],

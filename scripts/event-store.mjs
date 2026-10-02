@@ -226,6 +226,17 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
 
   function count() { return qCount.get().n; }
 
+  function countDocsByAuthor(pubkey, prefixes) {
+    const conds = prefixes.map(p => p.endsWith(':') ? 'dtag LIKE ?' : 'dtag = ?');
+    const sql = 'SELECT COUNT(*) AS n FROM events WHERE kind = 30078 AND pubkey = ? AND (' + conds.join(' OR ') + ')';
+    const args = [pubkey, ...prefixes.map(p => p.endsWith(':') ? p + '%' : p)];
+    return db.prepare(sql).get(...args).n;
+  }
+
+  function hasDoc(pubkey, dtag) {
+    return !!db.prepare('SELECT 1 FROM events WHERE kind = 30078 AND pubkey = ? AND dtag = ? LIMIT 1').get(pubkey, dtag);
+  }
+
   // A tiny key/value table for relay bookkeeping that must survive restarts (currently the deletion-backfill
   // watermark). Kept here so it shares the store's transaction + file, not a second sidecar to keep in sync.
   const qKindCount = db.prepare('SELECT COUNT(*) AS n FROM events WHERE kind = ?');
@@ -406,5 +417,5 @@ export function openStore(dbPath, { maxEvents = 20000 } = {}) {
   // /relay-backup already checkpoints before it tars, so the official path was always correct; this makes a
   // clean shutdown correct too, which is what a runbook, a snapshot or a `systemctl stop` relies on.
   const checkpoint = () => { try { db.pragma('wal_checkpoint(TRUNCATE)'); return true; } catch (e) { return false; } };
-  return { db, put, query, eachKind, count, countKind, countDeletions, getMeta, setMeta, authorOf, del, applyDeletion, isDeleted, exportChurch, exportChurchSince, churchEventIds, syncEventsByIds, cull, reattribute, importAll, countChurchData, purgeChurch, activity, checkpoint, close: () => { try { checkpoint(); } catch (e) {} try { db.close(); } catch {} }, replKey, matchFilter };
+  return { db, put, query, eachKind, count, countKind, countDocsByAuthor, hasDoc, countDeletions, getMeta, setMeta, authorOf, del, applyDeletion, isDeleted, exportChurch, exportChurchSince, churchEventIds, syncEventsByIds, cull, reattribute, importAll, countChurchData, purgeChurch, activity, checkpoint, close: () => { try { checkpoint(); } catch (e) {} try { db.close(); } catch {} }, replKey, matchFilter };
 }

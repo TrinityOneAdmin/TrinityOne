@@ -85,7 +85,9 @@ function booksParse(str, book) {
 function booksEntryView(book, e) {
   const other = e.postings.find(p => { const a = book.accounts.get(p.account); return a && (a.type === 'income' || a.type === 'expense'); }) || e.postings[0];
   const a = book.accounts.get(other.account);
-  return { date: e.date, memo: e.memo, category: a ? a.name : other.account, fund: other.fund, amount: other.amount, inflow: !!(a && a.type === 'income'), reversed: e.reverses != null };
+  const isReversal = e.reverses != null;
+  const wasReversed = !isReversal && book.journal.some(j => j.reverses === e.seq);
+  return { date: e.date, memo: e.memo, category: a ? a.name : other.account, fund: other.fund, amount: other.amount, inflow: !!(a && a.type === 'income'), isReversal, wasReversed };
 }
 
 const bkFld = { width: '100%', boxSizing: 'border-box', height: 44, padding: '0 13px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', outline: 'none', fontSize: 14.5, color: 'var(--ink)', fontFamily: 'var(--font-ui)' };
@@ -235,12 +237,15 @@ function FinanceImport({ book, F, onPost, onClose }) {
     if (!parsed) return;
     const ls = F.statementLines({ rows: parsed.rows, mapping: builtMapping(), decimals: dec, monthFirst });
     if (!ls.length) { setErr('No transactions found with those columns — check the amount column(s).'); return; }
-    const already = F.importedKeys(book);
+    const held = new Map();
+    for (const e of book.journal) if (e.importKey) held.set(e.importKey, (held.get(e.importKey) || 0) + 1);
     const rs = ls.map(l => {
       const sug = F.suggestCategory(l, []);
       const account = (sug && book.accounts.get(sug.account)) ? sug.account : defAccount(l.dir);
       const fund = (sug && sug.fund && book.funds.has(sug.fund)) ? sug.fund : 'general';
-      const dup = already.has(l.key);
+      const n = l.key ? (held.get(l.key) || 0) : 0;
+      const dup = n > 0;
+      if (dup) held.set(l.key, n - 1);
       return { account, fund, selected: !dup, dup };
     });
     setLines(ls); setRowState(rs); setErr(''); setStep('review');
@@ -415,15 +420,8 @@ function fsBuildStatementPdf(model, F) {
 // Desktop → direct download; Capacitor/Android → write to Cache then hand to the OS Share sheet (WebView has no
 // browser download). Same split as stew-dashboard.jsx savePdf.
 async function fsSavePdf(doc, fname) {
-  const isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
-  if (isNative && window.Capacitor.Plugins && window.Capacitor.Plugins.Filesystem) {
-    const b64 = doc.output('datauristring').split(',')[1];
-    const P = window.Capacitor.Plugins;
-    const res = await P.Filesystem.writeFile({ path: fname, data: b64, directory: 'CACHE' });
-    if (P.Share) await P.Share.share({ title: fname, text: 'Church financial statement', files: [res.uri], dialogTitle: 'Save or share statement' });
-  } else {
-    doc.save(fname);
-  }
+  const b64 = doc.output('datauristring').split(',')[1];
+  return saveConsoleFile(fname, b64, { mime: 'application/pdf', base64: true, title: 'Financial statement', blurb: 'Open it to print or share.' });
 }
 
 function FinanceShareStatement({ book, F, churchName, accent, logo, canPost, onPostToMembers, onClose }) {
@@ -467,7 +465,7 @@ function FinanceShareStatement({ book, F, churchName, accent, logo, canPost, onP
   const doCopy = async () => { try { await navigator.clipboard.writeText(F.statementText(model)); setFlash('Summary copied — paste it into an email or message.'); setTimeout(() => setFlash(''), 2600); } catch (e) { setFlash('Could not copy on this device.'); } };
   const doDownload = async () => {
     const base = fsSlug(title) + '-' + fsSlug(period.label);
-    try { const doc = fsBuildStatementPdf(model, F); if (doc) { await fsSavePdf(doc, base + '.pdf'); setFlash('Statement downloaded — ready to print or share.'); setTimeout(() => setFlash(''), 2600); return; } } catch (e) {}
+    try { const doc = fsBuildStatementPdf(model, F); if (doc) { const msg = await fsSavePdf(doc, base + '.pdf'); setFlash(msg || 'Statement downloaded — ready to print or share.'); setTimeout(() => setFlash(''), 2600); return; } } catch (e) {}
     // fallback: self-contained HTML. The sentence comes from the save, not from here — "Downloaded" was
     // printed over a WebView that had downloaded nothing.
     try {
@@ -668,12 +666,13 @@ function DashFinanceBook() {
         for (const f of b.funds.values()) if (f.id !== 'general') S.encPublish('finance/fund:' + f.id, { name: f.name, kind: f.kind });
         return;
       }
-      const r = F.rebuildBook(docs); if (r.book) { bookRef.current = r.book; bump(); }
+      const r = F.rebuildBook(docs); if (r.book) { bookRef.current = r.book; setBookErrors(r.errors || []); bump(); }
     });
     return unsub;
     // [idv, conn], like every other subscription in this console — this one was the last still mounted with
     // [], so it never followed a church switch and never re-issued its REQ after a relay reconnect.
   }, [_bIdv, _bConn]);
+  const [bookErrors, setBookErrors] = React.useState([]);
   const [recording, setRecording] = React.useState(false);
   const [importing, setImporting] = React.useState(false);
   const [reports, setReports] = React.useState(false);
@@ -791,7 +790,8 @@ function DashFinanceBook() {
     return { posted, failed, skipped };
   };
   const funds = F.fundBalances(book);
-  const ie = F.incomeExpenditure(book);
+  const fyStart = (() => { const mm = (book.fiscalYearStart || '01-01'); const y = new Date().getFullYear(); const t = y + '-' + mm; return t <= todayISO() ? t : (y - 1) + '-' + mm; })();   // LOCAL today, as the year above is local (calendar-day.test.mjs)
+  const ie = F.incomeExpenditure(book, { from: fyStart });
   const bank = F.trialBalance(book).rows.find(r => r.account === 'bank');
   const cash = bank ? bank.debit - bank.credit : 0;
   const recent = book.journal.slice().reverse().slice(0, 16);
@@ -824,16 +824,21 @@ function DashFinanceBook() {
           <div style={{ color: 'var(--ink-3)', fontSize: 13, marginTop: 2 }}>Your church's accounts — double-entry, with fund tracking.</div>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <button onClick={() => setImporting(true)} className="sk-btn" style={{ padding: '10px 16px', fontSize: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)' }}><Icon name="receipt" size={16} color="var(--ink)" /> Import statement</button>
-          <button onClick={() => setRecording(true)} className="sk-btn sk-btn--clay" style={{ padding: '10px 16px', fontSize: 14 }}><Icon name="plus" size={16} color="var(--on-clay)" /> Record a transaction</button>
+          <button onClick={() => setImporting(true)} disabled={bookErrors.length > 0} className="sk-btn" style={{ padding: '10px 16px', fontSize: 14, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', opacity: bookErrors.length ? 0.5 : 1 }}><Icon name="receipt" size={16} color="var(--ink)" /> Import statement</button>
+          <button onClick={() => setRecording(true)} disabled={bookErrors.length > 0} className="sk-btn sk-btn--clay" style={{ padding: '10px 16px', fontSize: 14, opacity: bookErrors.length ? 0.5 : 1 }}><Icon name="plus" size={16} color="var(--on-clay)" /> Record a transaction</button>
         </div>
       </div>
+
+      {bookErrors.length > 0 && <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 14px', borderRadius: 12, marginBottom: 16, background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 30%, var(--line))' }}>
+        <Icon name="alert" size={18} color="var(--clay)" style={{ flexShrink: 0, marginTop: 1 }} />
+        <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.55 }}>Your books are incomplete — {bookErrors[0]}. Don't re-enter anything; new entries can't be saved until it arrives. If this persists, check your connection.</div>
+      </div>}
 
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
         {stat('In the bank', booksFmt(cash, book))}
         {stat('Income this year', booksFmt(ie.income, book), 'var(--sage, #4f7a5e)')}
         {stat('Spending this year', booksFmt(ie.expenditure, book), 'var(--clay-deep, #b4462f)')}
-        {stat('Surplus', booksFmt(ie.surplus, book), ie.surplus < 0 ? 'var(--clay-deep, #b4462f)' : 'var(--sage, #4f7a5e)')}
+        {stat('Surplus this year', booksFmt(ie.surplus, book), ie.surplus < 0 ? 'var(--clay-deep, #b4462f)' : 'var(--sage, #4f7a5e)')}
       </div>
 
       <div style={{ ...bkCard, marginBottom: 16 }}>
@@ -861,11 +866,11 @@ function DashFinanceBook() {
         {recent.map(e => { const v = booksEntryView(book, e); return (
           <div key={e.seq} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '9px 0', borderTop: '1px solid var(--line)' }}>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontWeight: 700, fontSize: 14, textDecoration: v.reversed ? 'line-through' : 'none', opacity: v.reversed ? .6 : 1 }}>{v.category}{v.memo ? <span style={{ color: 'var(--ink-3)', fontWeight: 400 }}> · {v.memo}</span> : ''}</div>
+              <div style={{ fontWeight: 700, fontSize: 14, textDecoration: v.wasReversed ? 'line-through' : 'none', opacity: v.wasReversed ? .6 : 1 }}>{v.category}{v.memo ? <span style={{ color: 'var(--ink-3)', fontWeight: 400 }}> · {v.memo}</span> : ''}{v.wasReversed ? <span style={{ color: 'var(--ink-3)', fontWeight: 400, fontSize: 12, marginLeft: 6 }}>reversed</span> : ''}</div>
               <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{v.date}{v.fund && v.fund !== 'general' ? ' · ' + ((book.funds.get(v.fund) || {}).name || v.fund) : ''}</div>
             </div>
             <div style={{ fontWeight: 800, fontSize: 14.5, color: v.inflow ? 'var(--sage, #4f7a5e)' : 'var(--clay-deep, #b4462f)', whiteSpace: 'nowrap' }}>{v.inflow ? '+' : '−'}{booksFmt(v.amount, book)}</div>
-            {!v.reversed && e.reverses == null && <button title="Reverse this entry" onClick={() => undo(e.seq)} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--ink-3)', fontSize: 15, padding: 4 }}>↩</button>}
+            {!v.isReversal && !v.wasReversed && <button title="Reverse this entry" onClick={() => undo(e.seq)} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--ink-3)', fontSize: 15, padding: 4 }}>↩</button>}
           </div>
         ); })}
       </div>
@@ -874,7 +879,7 @@ function DashFinanceBook() {
         <button onClick={() => setReports(r => !r)} style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontWeight: 800, fontFamily: 'var(--font-display, var(--font-ui))', fontSize: 16, color: 'var(--ink)', padding: 0 }}>{reports ? '▾' : '▸'} Reports</button>
         {reports && (
           <div style={{ marginTop: 12 }}>
-            <div style={{ fontWeight: 700, margin: '4px 0 6px' }}>Income &amp; Expenditure</div>
+            <div style={{ fontWeight: 700, margin: '4px 0 6px' }}>Income &amp; Expenditure this year</div>
             {ie.byAccount.map(r => (
               <div key={r.account} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13.5, padding: '3px 0' }}>
                 <span>{(book.accounts.get(r.account) || {}).name || r.account}</span><span style={{ fontWeight: 700 }}>{booksFmt(Math.abs(r.amount), book)}</span>

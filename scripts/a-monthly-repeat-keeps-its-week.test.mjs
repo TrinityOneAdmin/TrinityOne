@@ -1,0 +1,337 @@
+// A MONTHLY REPEAT LANDS ON THE SAME WEEKDAY IN THE SAME WEEK OF EVERY MONTH.
+// Run: node --test scripts/a-monthly-repeat-keeps-its-week.test.mjs
+//
+// THE DEFECT (FIX-PLAN-2026-10-01 item 2). The console's "Add a service" and "New event" dialogs publish a
+// monthly repeat as one-off documents, one per month, and they stepped by CALENDAR DATE: a Tuesday meeting
+// started on 13 Oct 2026 went out as Friday 13 Nov, and a start on 31 Jan landed on 3 Mar. Neither dialog
+// passed a week to the "Which week" picker either, so it never showed. And the setup wizard let a steward
+// pick "2nd" and then called publishMeeting without it, so every monthly meeting it made was the 1st.
+//
+// THE OWNER'S RULE (2026-10-01, DOMAIN.md): a monthly repeat defaults to the same weekday in the same week of
+// the month as its start (13 Oct = 2nd Tuesday), and there is a "Last <weekday>" choice, which is the default
+// for a start on the 29th-31st — a 5th weekday that skips most months is not what a church means.
+//
+// POINT OF USE (CLAUDE.md rule 1). These mount the REAL dialogs out of app/stew-schedule.jsx, type into the
+// real fields, press the real Save, and read what reached Steward.publishService / publishEvent. The months
+// are walked by the REAL app/recur.jsx (the dialogs call window.expandEvents), executed here — not a copy.
+// The wizard test drives the real WizMeetings picker into the real saveMeetings and on into the shipped
+// vendor/steward.js publishMeeting -> publishEvent, and reads the document it would seal.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { transformSync } from 'esbuild';
+import { fnBody, stripComments } from './test-slice.mjs';
+
+const read = (p) => readFileSync(new URL(p, import.meta.url), 'utf8');
+const SCHED = read('../app/stew-schedule.jsx');
+const RECUR = read('../app/recur.jsx');
+const CONSOLE = read('../app/stew-console.jsx');
+const DASH = read('../app/stew-dashboard.jsx');
+const VENDOR = read('../vendor/steward.js');
+const jsx = (src) => transformSync(src, { loader: 'jsx', jsx: 'transform', jsxFactory: 'h', jsxFragment: 'Frag' }).code;
+
+function realExpandEvents() {
+  const win = {};
+  new Function('window', jsx(RECUR))(win);
+  assert.equal(typeof win.expandEvents, 'function', 'app/recur.jsx did not define expandEvents — re-anchor');
+  return win.expandEvents;
+}
+
+// A small renderer: fake hooks real enough to hold state (by call order, re-read on every render), and EVERY
+// function component expanded, so the picker inside SchRepeatRow is on the tree like it is on the screen.
+function mountSched(componentName, props, steward, hooks = {}) {
+  const states = []; let idx = 0;
+  const React = {
+    useState(init) { const i = idx++; if (states.length <= i) states.push(typeof init === 'function' ? init() : init); return [states[i], (v) => { states[i] = typeof v === 'function' ? v(states[i]) : v; }]; },
+    useEffect() {}, useRef: (v) => ({ current: v }), useMemo: (f) => f(), useCallback: (f) => f, Fragment: 'Frag',
+  };
+  const h = (type, p, ...kids) => ({ type, props: { ...(p || {}), children: kids.flat() } });
+  const window = {
+    Steward: steward, expandEvents: realExpandEvents(),
+    useStewardGroups: () => [], useStewardEvents: () => [], dispatchEvent() {}, ...hooks,
+  };
+  const scope = {
+    React, h, Frag: 'Frag', window, Icon: () => null, useStewDialog: () => ({ current: null }), todayISO: () => '2026-10-01',
+    SchModal: (p) => h('modal', {}, p.footer, p.children), CustomEvent: class {},
+  };
+  const names = Object.keys(scope);
+  const mod = new Function(...names, jsx(SCHED) + `\nreturn { ${componentName} };`)(...names.map(n => scope[n]));
+  const expand = (n) => {
+    if (Array.isArray(n)) return n.map(expand);
+    if (!n || typeof n !== 'object') return n;
+    if (typeof n.type === 'function') return expand(n.type(n.props));
+    return { ...n, props: { ...n.props, children: expand(n.props.children) } };
+  };
+  const flat = (n, out = []) => { if (Array.isArray(n)) n.forEach(x => flat(x, out)); else if (n && typeof n === 'object') { out.push(n); flat(n.props.children, out); } return out; };
+  const nodes = () => { idx = 0; return flat(expand(mod[componentName](props))); };
+  const text = (n) => (Array.isArray(n) ? n.map(text).join('') : (n && typeof n === 'object') ? text(n.props.children) : (n == null || n === false ? '' : String(n)));
+  const byLabel = (l) => nodes().find(n => n.props['aria-label'] === l);
+  return { nodes, byLabel, text, states };
+}
+
+// The exact copy of the one line a monthly repeat with no date to add shows. Pinned here, not read from the
+// file, so swapping it for any other words fails (re-audit of ffcdcfe, finding 4).
+const NO_DATES = 'No date matches before “Until”.';
+
+// Type a monthly repeat into a dialog and press its save button (whether or not it is enabled — a disabled
+// button that still published would be the defect). Returns the published dates and what the dialog showed.
+async function saveMonthly(component, { date, until, pick, changeDateTo, title = 'Elders', hooks = {} }) {
+  const published = [];
+  const steward = {
+    publishService: async (s) => { published.push(s); return { id: 'svc' + published.length, ...s }; },
+    publishEvent: async (e) => { published.push(e); return { id: 'evt' + published.length, ...e }; },
+  };
+  let closed = false;
+  const m = mountSched(component, { onClose() { closed = true; }, day: '' }, steward, hooks);
+  if (m.byLabel('Title')) m.byLabel('Title').props.onChange({ target: { value: title } });
+  m.byLabel('Date').props.onChange({ target: { value: date } });
+  const monthly = m.nodes().find(n => n.type === 'button' && m.text(n) === 'Monthly');
+  assert.ok(monthly, component + ': no "Monthly" button — re-anchor');
+  monthly.props.onClick();
+  m.byLabel('Until').props.onChange({ target: { value: until } });
+  let sel = m.byLabel('Which week of the month');
+  assert.ok(sel, component + ': THE DEFECT — a monthly repeat shows no "Which week" picker, so the steward cannot say which Tuesday');
+  if (pick !== undefined) sel.props.onChange({ target: { value: String(pick) } });
+  if (changeDateTo) m.byLabel('Date').props.onChange({ target: { value: changeDateTo } });
+  sel = m.byLabel('Which week of the month');
+  const shown = +sel.props.value;
+  const before = m.nodes();
+  const all = m.text(before);
+  const firstLine = before.find(n => n.props.role === 'status' && m.text(n).startsWith('First:'));
+  const noneLine = before.find(n => n.props.role === 'status' && !m.text(n).startsWith('First:'));
+  const saves = before.filter(n => n.type === 'button' && typeof n.props.disabled === 'boolean');
+  assert.equal(saves.length, 1, component + ': expected one save button — re-anchor');
+  await saves[0].props.onClick();
+  const alert = m.nodes().find(n => n.props.role === 'alert');
+  return {
+    dates: published.map(p => p.date), shown, closed, disabled: saves[0].props.disabled,
+    first: firstLine ? m.text(firstLine) : '', none: noneLine ? m.text(noneLine) : '',
+    amber: /only the first/.test(all), clash: (all.match(/same time as [^—]*/) || [''])[0].trim(),
+    alert: alert ? m.text(alert) : '', options: m.nodes().filter(n => n.type === 'option' && n.props.value !== undefined), published,
+  };
+}
+
+// Run fn with the process in another time zone (Node re-reads TZ when it is assigned), always restoring it.
+async function inZone(tz, fn) {
+  const was = process.env.TZ;
+  process.env.TZ = tz;
+  try {
+    assert.equal(new Intl.DateTimeFormat().resolvedOptions().timeZone, tz, 're-anchor: this Node did not switch to ' + tz);
+    return await fn();
+  } finally { if (was === undefined) delete process.env.TZ; else process.env.TZ = was; }
+}
+
+for (const component of ['SchAddServiceModal', 'SchEventModal']) {
+  test(`${component}: a 2nd-Tuesday start repeats on the 2nd Tuesday, not on the 13th`, async () => {
+    const r = await saveMonthly(component, { date: '2026-10-13', until: '2027-01-31' });
+    assert.equal(r.shown, 2, 'the picker did not default to the start date\'s week (13 Oct 2026 is the 2nd Tuesday)');
+    assert.deepEqual(r.dates, ['2026-10-13', '2026-11-10', '2026-12-08', '2027-01-12'],
+      'THE DEFECT: monthly stepped by calendar date (13 Nov 2026 is a Friday) instead of by "2nd Tuesday"');
+  });
+
+  test(`${component}: a start on the 30th is the LAST Friday, every month`, async () => {
+    const r = await saveMonthly(component, { date: '2026-10-30', until: '2027-01-31' });
+    assert.equal(r.shown, -1, 'a start on the 29th-31st should default to "Last", not a 5th that skips months');
+    assert.deepEqual(r.dates, ['2026-10-30', '2026-11-27', '2026-12-25', '2027-01-29']);
+  });
+
+  test(`${component}: 31 January does not drift to 3 March`, async () => {
+    const r = await saveMonthly(component, { date: '2027-01-31', until: '2027-04-30' });
+    assert.ok(!r.dates.includes('2027-03-03'), 'THE DEFECT: 31 Jan + 1 month rolled over into March');
+    assert.deepEqual(r.dates, ['2027-01-31', '2027-02-28', '2027-03-28', '2027-04-25'], 'the last Sunday of each month');
+  });
+
+  test(`${component}: the week follows the date until the steward picks one, and a pick is kept`, async () => {
+    const reseeded = await saveMonthly(component, { date: '2026-10-13', changeDateTo: '2026-10-30', until: '2026-12-31' });
+    assert.equal(reseeded.shown, -1, 'changing the date did not re-seed the week');
+    assert.deepEqual(reseeded.dates, ['2026-10-30', '2026-11-27', '2026-12-25']);
+    const picked = await saveMonthly(component, { date: '2026-10-13', pick: 1, changeDateTo: '2026-10-14', until: '2027-01-31' });
+    assert.equal(picked.shown, 1, 'the steward\'s explicit pick was overwritten by a date change');
+    // 14 Oct is a Wednesday, the 2nd; "1st" means the first 1st Wednesday ON OR AFTER it — 4 Nov. The typed
+    // date is not an occurrence of the rule, so it is not published (audit of 484cc00, finding 1).
+    assert.deepEqual(picked.dates, ['2026-11-04', '2026-12-02', '2027-01-06'],
+      'the picked week did not reach the published dates, or a date that is not a 1st Wednesday was published');
+    assert.equal(picked.first, 'First: Wed 4 Nov', 'the dialog does not show where the first one lands');
+    const labels = picked.options.map(o => [o.props.value, o.props.children.join('')]);
+    assert.ok(labels.some(([v, l]) => v === -1 && l === 'Last'), 'the picker offers no "Last" option');
+  });
+
+  test(`${component}: a picked week other than the start's own starts at that week, never on the typed date too`, async () => {
+    const last = await saveMonthly(component, { date: '2026-10-13', pick: -1, until: '2027-01-31' });
+    assert.deepEqual(last.dates, ['2026-10-27', '2026-11-24', '2026-12-29', '2027-01-26'],
+      'THE AUDIT DEFECT: start 13 Oct + "Last" published 13 Oct AND 27 Oct — two in one month');
+    assert.equal(last.first, 'First: Tue 27 Oct');
+    const first = await saveMonthly(component, { date: '2026-10-13', pick: 1, until: '2027-01-31' });
+    assert.deepEqual(first.dates, ['2026-11-03', '2026-12-01', '2027-01-05'], 'start 13 Oct + "1st" must begin on 3 Nov');
+    assert.equal(first.first, 'First: Tue 3 Nov');
+    const own = await saveMonthly(component, { date: '2026-10-13', until: '2026-12-31' });
+    assert.equal(own.first, '', 'a "First:" line shows when the first date IS the date typed — copy nobody needs');
+  });
+
+  test(`${component}: a week whose first date is after "Until" shows one line, and Save does what it says`, async () => {
+    const r = await saveMonthly(component, { date: '2026-10-13', pick: -1, until: '2026-10-20' });
+    assert.equal(r.none, NO_DATES, 'the "no date" line is missing or says something else');
+    assert.equal(r.first, '', 'a "First:" line shows beside "no date matches" — two lines that disagree');
+    assert.equal(r.amber, false, 'the "only the first will be added" line shows over a save that adds nothing');
+    assert.equal(r.disabled, true, 'Save is enabled although there is no date to add');
+    assert.deepEqual(r.dates, [], 'a date that is not an occurrence of the rule was published');
+    assert.equal(r.closed, false, 'the dialog closed over a save that published nothing');
+  });
+
+  test(`${component}: Until on or before the start means the start day, as weekly does`, async () => {
+    // a different week picked: the start day is not an occurrence -> nothing, said once
+    const other = await saveMonthly(component, { date: '2026-10-13', pick: -1, until: '2026-10-13' });
+    assert.equal(other.none, NO_DATES);
+    assert.equal(other.first, '', 'First:, "no date" and the amber line all showed at once (re-audit finding 1)');
+    assert.equal(other.amber, false);
+    assert.deepEqual(other.dates, []);
+    // the start's own week: the start IS an occurrence -> just the start, and no "no date" line
+    const own = await saveMonthly(component, { date: '2026-10-13', until: '2026-10-01' });
+    assert.deepEqual(own.dates, ['2026-10-13'], 'Until before the start should add just the start, like weekly');
+    assert.equal(own.none, '', 'a "no date" line shows over a save that adds the start');
+    assert.equal(own.closed, true);
+    if (component === 'SchAddServiceModal') assert.equal(own.amber, true, 'the service dialog no longer warns that only the first will be added');
+  });
+
+  test(`${component}: Until is inclusive — a repeat falling ON Until is published`, async () => {
+    const r = await saveMonthly(component, { date: '2026-10-13', until: '2026-12-08' });
+    assert.deepEqual(r.dates, ['2026-10-13', '2026-11-10', '2026-12-08'], 'the 2nd Tuesday on Until itself (8 Dec) was dropped');
+  });
+
+  test(`${component}: a clock change at midnight does not drop the date on Until (Santiago, Beirut)`, async () => {
+    // Chile goes forward at 00:00 on Sun 6 Sep 2026; walking day by day across it put 7 Sep at 01:00, past
+    // the window's end of 00:00 on 7 Sep. Lebanon does the same at 00:00 on Sun 28 Mar 2027.
+    const santiago = await inZone('America/Santiago', () => saveMonthly(component, { date: '2026-08-10', pick: 1, until: '2026-09-07' }));
+    assert.deepEqual(santiago.dates, ['2026-09-07'], 'America/Santiago: the 1st Monday on Until (7 Sep) was dropped');
+    const beirut = await inZone('Asia/Beirut', () => saveMonthly(component, { date: '2027-03-11', pick: -1, until: '2027-03-25' }));
+    assert.deepEqual(beirut.dates, ['2027-03-25'], 'Asia/Beirut: the last Thursday on Until (25 Mar) was dropped');
+  });
+}
+
+test('the new-event clash note checks the dates that will be published, not the date typed', async () => {
+  // start 13 Oct, Monthly, "Last": the first date published is 27 Oct. Choir at 19:30 on 27 Oct clashes;
+  // Choir at 19:30 on 13 Oct does not — nothing will be published that day (re-audit of ffcdcfe, finding 2).
+  const choir = (date) => ({ useStewardEvents: () => [{ id: 'c', title: 'Choir', date, time: '19:30' }] });
+  const onFirst = await saveMonthly('SchEventModal', { date: '2026-10-13', pick: -1, until: '2026-12-31', hooks: choir('2026-10-27') });
+  assert.equal(onFirst.clash, 'same time as Choir on Tue 27 Oct',
+    'the clash note does not name the date it clashes on — for a repeat that is not the date typed (audit of 812948b, item 2)');
+  const onTyped = await saveMonthly('SchEventModal', { date: '2026-10-13', pick: -1, until: '2026-12-31', hooks: choir('2026-10-13') });
+  assert.equal(onTyped.clash, '', 'a clash note for the typed date, which this save does not publish');
+});
+
+test('a far-off Until does not make every render walk to the year 9999', async () => {
+  // schPlanned runs on every render; the monthly walk grew with Until — 9999-12-31 cost ~370 ms a call, on
+  // every keystroke (audit of 812948b, item 1). Capped at 400 months, the ceiling the weekly walk has.
+  // Asserted on the span handed to the engine, which is what the cost grows with, not on a wall clock.
+  for (const component of ['SchAddServiceModal', 'SchEventModal']) {
+    const spans = [];
+    const real = realExpandEvents();
+    const hooks = { expandEvents: (evs, from, days) => { spans.push(days); return real(evs, from, days); } };
+    const r = await saveMonthly(component, { date: '2026-10-13', until: '9999-12-31', hooks });
+    assert.ok(spans.length > 0, 're-anchor: the dialog never reached expandEvents');
+    assert.ok(Math.max(...spans) <= 400 * 31, `${component}: a monthly repeat to 9999 walked ${Math.max(...spans)} days on a render — uncapped`);
+    assert.equal(r.dates.length, 400, `${component}: expected the 400-date ceiling, got ${r.dates.length}`);
+    assert.equal(r.dates[0], '2026-10-13');
+  }
+});
+
+test('SchEventEdit keeps a "Last" meeting as Last when it is saved', async () => {
+  let sent = null;
+  const m = mountSched('SchEventEdit', { onClose() {}, event: { id: 'e1', title: 'Prayer', date: '2026-10-30', time: '19:30', recur: 'monthly', day: 5, nth: -1 } },
+    { publishEvent: async (e) => { sent = e; return { id: 'e1' }; } });
+  const sel = m.byLabel('Which week');
+  assert.ok(sel, 'the edit dialog has no "Which week" picker — re-anchor');
+  assert.equal(sel.props.value, -1);
+  assert.ok(m.nodes().some(n => n.type === 'option' && n.props.value === -1), 'the edit dialog cannot show "Last" — the select would show some other week');
+  const save = m.nodes().find(n => n.type === 'button' && m.text(n) === 'Save changes');
+  assert.ok(save, 're-anchor: no "Save changes" button');
+  await save.props.onClick();
+  assert.ok(sent, 're-anchor: Save did not publish');
+  assert.equal(sent.nth, -1, 'saving the edit dialog changed a "Last" meeting');
+});
+
+// ── THE WIZARD: picker -> saveMeetings -> the shipped publishMeeting/publishEvent ───────────────────────────
+function realWizMeetings() {
+  const src = fnBody(CONSOLE, 'function WizMeetings({ meetings, setMeetings })', 'WizMeetings');
+  const h = (type, p, ...kids) => ({ type, props: { ...(p || {}), children: kids.flat() } });
+  return new Function('React', 'h', 'Frag', 'Icon', '_wizMeetingId', jsx(src) + '\nreturn WizMeetings;')({}, h, 'Frag', () => null, () => 'id');
+}
+function realSaveMeetings(scope) {
+  // the arrow's body, executed with its free names resolved from `scope` (as a-new-church-can-finish-its-own-setup does)
+  const at = DASH.indexOf('const saveMeetings = async () => {');
+  assert.notEqual(at, -1, 'saveMeetings is gone — re-anchor');
+  const body = fnBody(DASH, at + 'const saveMeetings = '.length, 'saveMeetings');
+  const proxy = new Proxy(scope, {
+    has: (t, k) => (k in t) || !(String(k) in globalThis),
+    get: (t, k) => { if (k === Symbol.unscopables) return undefined; if (k in t) return t[k]; throw new ReferenceError('saveMeetings needs `' + String(k) + '` — add a stub'); },
+    set: (t, k, v) => { t[k] = v; return true; },
+  });
+  return new Function('scope', `with (scope) { return (${body}); }`)(proxy);
+}
+// The SHIPPED publishMeeting and publishEvent, lifted out of vendor/steward.js, with the relay and the seal
+// replaced by a recorder: the document handed to the seal is exactly what would be stored.
+function realSteward(sealed) {
+  const pe = stripComments(fnBody(VENDOR, 'async publishEvent(ev, asPub) {', 'publishEvent'));
+  const pm = stripComments(fnBody(VENDOR, 'publishMeeting(m) {', 'publishMeeting'));
+  const scope = {
+    skFor: () => 'sk', _evtSeq: 0, EVENT_D: 'trinityone/event:', NET: 'trinityone', actingChurch: '',
+    _sealChurchDocReady: async (doc) => { sealed.push(doc); return JSON.stringify(doc); },
+    publish: async () => true, feChurch: (x) => x, now: () => 1, _todayISO: () => '2026-10-01',
+  };
+  const names = Object.keys(scope);
+  return new Function(...names, `return { ${pe}, ${pm} };`)(...names.map(n => scope[n]));
+}
+
+for (const [label, value] of [['2nd', 2], ['Last', -1]]) {
+  test(`wizard: choosing "${label}" reaches the stored meeting as nth ${value}`, async () => {
+    let meetings = [{ id: 'm1', title: 'Elders', day: 6, time: '10:00', recur: 'monthly' }];
+    const setMeetings = (f) => { meetings = typeof f === 'function' ? f(meetings) : f; };
+    const tree = realWizMeetings()({ meetings, setMeetings });
+    const flat = (n, out = []) => { if (Array.isArray(n)) n.forEach(x => flat(x, out)); else if (n && typeof n === 'object') { out.push(n); flat(n.props.children, out); } return out; };
+    const all = flat(tree);
+    const week = all.find(n => n.type === 'select' && flat(n.props.children).some(o => o.type === 'option' && o.props.children.join('') === '2nd'));
+    assert.ok(week, 'the wizard shows no "Which week" picker for a monthly meeting — re-anchor');
+    const opt = flat(week.props.children).find(o => o.type === 'option' && o.props.children.join('') === label);
+    assert.ok(opt, `the wizard's picker has no "${label}" option`);
+    week.props.onChange({ target: { value: String(opt.props.value) } });
+    assert.equal(meetings[0].nth, value, 're-anchor: the picker did not set nth on the row');
+
+    const sealed = [];
+    const st = { advanced: 0, err: '' };
+    const save = realSaveMeetings({
+      meetings, setBusy() {}, setMeetingErr: (v) => { st.err = v; }, next: () => { st.advanced++; },
+      localStorage: { getItem: () => null }, window: { Steward: realSteward(sealed) }, setTimeout, Promise,
+    });
+    await save();
+    assert.equal(st.advanced, 1, 're-anchor: the wizard did not advance (' + st.err + ')');
+    assert.equal(sealed.length, 1);
+    assert.equal(sealed[0].recur, 'monthly');
+    assert.equal(sealed[0].nth, value,
+      `THE DEFECT: the steward chose "${label}" and the stored meeting says nth ${sealed[0].nth} — every member's calendar shows the 1st`);
+  });
+}
+
+// ── THE "LAST" LABELS (audit of 484cc00, finding 2: claimed, never rendered) ──────────────────────────────
+test('the event detail card says "Last Friday" for a last-Friday meeting', () => {
+  const m = mountSched('SchEventDetail', { onClose() {}, event: { id: 'e1', title: 'Prayer', date: '2026-10-30', time: '19:30', recur: 'monthly', day: 5, nth: -1 } },
+    { isWebsiteHeld: () => false });
+  const all = m.text(m.nodes()[0]);
+  assert.match(all, /Last Friday/, 'the detail card does not say "Last Friday": ' + all.slice(0, 300));
+});
+
+test('the console calendar badge says "LAST FRI" for a last-Friday meeting', () => {
+  const now = new Date();
+  const first = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+  const ev = { id: 'e1', title: 'Prayer', date: first, time: '19:30', recur: 'monthly', day: 5, nth: -1, accent: 'var(--clay)' };
+  const m = mountSched('DashCalendar', {}, {}, {
+    useStewardServices: () => [], useStewardEvents: () => [ev], useStewardRotas: () => ({}), useStewardRosters: () => ({}),
+    useStewardGroups: () => [], useStewardRsvps: () => ({}), useStewardMembers: () => [],
+  });
+  // tap the month grid's cell for this month's last Friday, as a steward would, to open that day's list
+  const lastFri = new Date(now.getFullYear(), now.getMonth() + 1, 0); while (lastFri.getDay() !== 5) lastFri.setDate(lastFri.getDate() - 1);
+  const cell = m.nodes().find(n => typeof n.props.onClick === 'function' && m.text(n) === lastFri.getDate() + 'Prayer');
+  assert.ok(cell, 're-anchor: no calendar cell for the last Friday carrying the meeting');
+  cell.props.onClick();
+  const all = m.text(m.nodes()[0]);
+  assert.match(all, /PrayerLAST FRI/, 'the calendar badge for a last-Friday meeting does not read "LAST FRI": ' + all.slice(0, 300));
+});

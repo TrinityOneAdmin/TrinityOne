@@ -72,6 +72,13 @@ fi
 [ "$REMOTE_SHA" = "$LOCAL_SHA" ] || die "'$TAG' names $REMOTE_SHA on GitHub but $LOCAL_SHA here — the Suite CI built and this bundle would disagree; fetch the tag and try again"
 ok "$TAG → $LOCAL_SHA, and GitHub agrees"
 
+# ── 1b. the tests ─────────────────────────────────────────────────────────────────────────────────────────
+say "running the test suite — a red test stops the release"
+if ! npm test; then
+  die "tests failed — refusing to sign or upload. Nothing has been published."
+fi
+ok "tests passed"
+
 # ── 2. the key ─────────────────────────────────────────────────────────────────────────────────────────────
 KEY="${RELEASE_KEY:-$DIR/relay/release-key.pem}"
 # THE KEY THE TAG SHIPS, NOT THE ONE ON DISK. The fleet checks a bundle against the release-pubkey.pem baked into

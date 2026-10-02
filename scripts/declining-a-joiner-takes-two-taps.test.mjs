@@ -59,7 +59,7 @@ async function joinQueue() {
       useStewardGroups: () => [], useStewardStewards: () => [], useStewardChurch: () => ({}),
       useStewardBlocked: () => [],
       useStewardSafeguard: () => ({ loaded: true, minorsKnown: true, clearedKnown: true, cleared: {}, minors: [], approved: [], nophoto: [] }),
-      useStewardGuardians: () => ({}),
+      useStewardGuardians: () => ({ links: {}, closed: {} }),
       // approval ON and this person NOT admitted = they are sitting in the join queue
       useStewardJoinPolicy: () => true, useStewardAdmitted: () => [],
       useStewardMembers: () => [{ pubkey: WAITING, npub: 'npub1dd', name: 'Nia Okafor', count: 0, lastTs: NOW - 600, joined: NOW - 600 }],

@@ -113,13 +113,17 @@ function harness({ cached = false, origin = ORIGIN, proven = [BOX, CANON], delay
     lastProfile: {}, _profileLoaded: false, _clearanceSent: new Map(),
     _careRoster: new Set(), _careRosterKnown: false, _careRosterSeen: false,
     _stewardCaps: {}, _stewardNames: {}, _stewardNamesCt: '', _stewardSince: {},
-    _nameKeyRing: [], _nameKeyDocKeys: null, _nameKeyChecked: false, _localBlocked: new Set(),
+    _nameKeyRing: [], _nameKeyDocKeys: null, _nameKeyChecked: false, _localBlocked: new Set(), _localBlockedAt: 0, _blockedLastSet: () => new Set(),   // (the switch seeds the church's last blocklist, 2026-10-02: not this file's question)
     _applyNoPhotoList: () => {}, CAP_KEYS: {}, _capState: {}, _checkinMigrated: '',
     // setActiveIdentity's OWN per-church reset block, which this file lifts. It gained the check-in
     // session-key read stamp on 2026-09-10 (the piece-3 audit's identity-switch defect) and the session
     // KEYS themselves with piece 1 — a key from church A must never seal or open a record in church B,
     // and the map is keyed by session id, which two churches on one box can perfectly well share.
     _ckKeysSettled: '', _ckSessionKeys: new Map(),
+    // …and the care/media key state plus the key-read epoch and version counters (2026-10-01)
+    _keyReadEpoch: 0, _careKeyVer: 0, _mediaKeyVer: 0,
+    // …and (2026-10-01) the pending guardian notices: one church's retries must not send another's
+    _latestGuardNotice: new Map(),
     CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init && init.detail; } },
     window: Object.assign(win, { Steward: {} }),
   };
@@ -140,6 +144,7 @@ function harness({ cached = false, origin = ORIGIN, proven = [BOX, CANON], delay
     switchTo: (p) => switchTo.call(stubs.window.Steward, p),
     // the owner's roster for CHURCH, naming ME, arriving on the discovery subscription
     grant: (sub) => sub.handlers.onevent({
+      created_at: Math.floor(Date.now() / 1000),
       tags: [['d', STEWARDS_D + CHURCH], ['t', 'trinityone']],
       content: JSON.stringify({ pubkeys: [ME] }),
     }),
@@ -303,6 +308,13 @@ async function screen(h) {
   const { React, draw } = miniReact();
   const picked = [];
   const win = h.stubs.window;
+  // identities() names the console's OWN church from what this device last read of its kind-0 (2026-10-02): the
+  // shipped helper, lifted with the two lines it reads through.
+  if (!('_ownChurchName' in h.stubs)) {
+    const at = VENDOR.indexOf('var OWN_NAME_LS = ');
+    const decl = VENDOR.slice(at, VENDOR.indexOf(';', at) + 1);
+    h.stubs._ownChurchName = new Function('scope', `with (scope) { ${decl}\n${fnBody(VENDOR, 'function lsGet(k) {', 'lsGet')}\n${fnBody(VENDOR, 'function _ownChurchName() {', '_ownChurchName')}\nreturn _ownChurchName; }`)(proxyOf(h.stubs));
+  }
   win.Steward.identities = new Function('scope', `with (scope) { return ({ ${fnBody(VENDOR, 'identities() {', 'identities')} }).identities; }`)(proxyOf(h.stubs));
   const realSwitch = win.Steward.setActiveIdentity;
   win.Steward.setActiveIdentity = (p) => { picked.push(p); return realSwitch(p); };
@@ -361,4 +373,180 @@ test('POINT OF USE: after the switch, the acting console\'s own relay is the box
   assert.equal(h.stubs.ownRelay(), BOX, 'acting as the church, ownRelay() names ' + h.stubs.ownRelay() + ' — the steward\'s own "no" survived the switch');
   s.redraw();
   assert.match(s.words(), /STEWARD/, 'the badge does not say the console is acting as a steward');
+});
+
+// ── Stale roster guard (S-6) ──────────────────────────────────────────────────────────────────────────
+//
+// Two relays, one lags. The newer roster says "ME is a steward"; the older says "ME is not". Without a
+// created_at guard the older copy wins (it arrives last from the lagging relay) and the church vanishes
+// from the switcher. The reverse: a revoked steward is reinstated by a stale copy from the second box.
+
+const CHURCH2 = 'dd'.repeat(32);
+
+test('a stale roster that removes ME does not override a newer one that includes ME', async () => {
+  const h = harness({ cached: false });
+  h.subscribe(() => {});
+  await tick(5);
+  const d = h.discovery();
+  assert.equal(d.length, 1);
+  // Newer roster: ME is listed
+  d[0].handlers.onevent({
+    created_at: 1000,
+    tags: [['d', STEWARDS_D + CHURCH], ['t', 'trinityone']],
+    content: JSON.stringify({ pubkeys: [ME] }),
+  });
+  assert.ok(h.stewardedChurches.has(CHURCH), 'staging: the grant was not recorded');
+  // Stale roster from the lagging relay: ME is NOT listed
+  d[0].handlers.onevent({
+    created_at: 900,
+    tags: [['d', STEWARDS_D + CHURCH], ['t', 'trinityone']],
+    content: JSON.stringify({ pubkeys: [] }),
+  });
+  assert.ok(h.stewardedChurches.has(CHURCH),
+    'A STALE ROSTER REVOKED A STEWARD — the lagging relay\'s old copy overrode the newer grant');
+});
+
+test('a stale roster that includes ME does not override a newer one that removed ME', async () => {
+  const h = harness({ cached: false });
+  h.subscribe(() => {});
+  await tick(5);
+  const d = h.discovery();
+  // Newer roster: ME was removed (deleted or empty pubkeys)
+  d[0].handlers.onevent({
+    created_at: 1000,
+    tags: [['d', STEWARDS_D + CHURCH2], ['t', 'trinityone']],
+    content: JSON.stringify({ pubkeys: [ME] }),
+  });
+  assert.ok(h.stewardedChurches.has(CHURCH2), 'staging: the initial grant failed');
+  d[0].handlers.onevent({
+    created_at: 1100,
+    tags: [['d', STEWARDS_D + CHURCH2], ['t', 'trinityone']],
+    content: JSON.stringify({ pubkeys: [] }),
+  });
+  assert.ok(!h.stewardedChurches.has(CHURCH2), 'staging: the revocation failed');
+  // Stale roster from the lagging relay: ME is still listed
+  d[0].handlers.onevent({
+    created_at: 900,
+    tags: [['d', STEWARDS_D + CHURCH2], ['t', 'trinityone']],
+    content: JSON.stringify({ pubkeys: [ME] }),
+  });
+  assert.ok(!h.stewardedChurches.has(CHURCH2),
+    'A STALE ROSTER REINSTATED A REVOKED STEWARD — the lagging relay\'s old copy overrode the newer revocation');
+});
+
+// ── subscribeStewardRequests rosterAt guard (S-6 companion) ──────────────────────────────────────────
+//
+// subscribeStewardRequests shows pending steward requests MINUS anyone already on the roster. The roster
+// arrives from the same subscription. Without a created_at guard a stale roster can remove someone who
+// was just added (so their request reappears as pending) or re-add someone who was just removed (so
+// their pending request vanishes when it shouldn't).
+
+const STEWARDREQ_D = 'trinityone/stewardreq:';
+const REQUESTER = 'ee'.repeat(32);
+
+test('subscribeStewardRequests: a stale roster does not un-filter a request that was already on the roster', async () => {
+  const stBody = fnBody(VENDOR, 'subscribeStewardRequests(onReqs', 'subscribeStewardRequests');
+  let reqs = [];
+  let handler = null;
+  const scope = {
+    pool: { subscribeMany: (_u, _f, h) => { handler = h; return { close() {} }; } },
+    relays: () => ['wss://r'],
+    pub: CHURCH,
+    NET: 'trinityone',
+    STEWARDS_D, STEWARDREQ_D,
+    JSON, Math, Date, console, String, Number, Map, Set,
+    npubEncode: (x) => 'npub_' + x.slice(0, 8),
+    nip44d: () => '', nip44ck: () => '',
+    sk: 'aa'.repeat(32),
+  };
+  const fn = new Function('scope', `with (scope) { return ({ ${stBody} }).subscribeStewardRequests; }`)(
+    new Proxy(scope, {
+      has: (t, k) => (k in t) || !(String(k) in globalThis),
+      get: (t, k) => {
+        if (k === Symbol.unscopables) return undefined;
+        if (k in t) return t[k];
+        if (String(k) in globalThis) return globalThis[String(k)];
+        return undefined;
+      },
+      set: (t, k, v) => { t[k] = v; return true; },
+    })
+  );
+  fn((list) => { reqs = list.slice(); });
+  assert.ok(handler, 'subscribeStewardRequests did not open a subscription');
+
+  handler.onevent({
+    kind: 30078, pubkey: REQUESTER, created_at: 1000,
+    tags: [['d', STEWARDREQ_D + CHURCH], ['t', 'trinityone']],
+    content: JSON.stringify({ name: 'Alice' }),
+  });
+  assert.equal(reqs.length, 1, 'staging: request was not recorded');
+  handler.onevent({
+    kind: 30078, pubkey: CHURCH, created_at: 1000,
+    tags: [['d', STEWARDS_D + CHURCH], ['t', 'trinityone']],
+    content: JSON.stringify({ pubkeys: [REQUESTER] }),
+  });
+  assert.equal(reqs.length, 0, 'staging: requester should be filtered out once on the roster');
+  handler.onevent({
+    kind: 30078, pubkey: CHURCH, created_at: 900,
+    tags: [['d', STEWARDS_D + CHURCH], ['t', 'trinityone']],
+    content: JSON.stringify({ pubkeys: [] }),
+  });
+  assert.equal(reqs.length, 0,
+    'A STALE ROSTER RE-SURFACED A PENDING REQUEST — the requester is already a steward but a lagging relay made them look pending again');
+});
+
+test('subscribeStewardRequests: a stale roster does not hide a request from someone just removed', async () => {
+  const stBody = fnBody(VENDOR, 'subscribeStewardRequests(onReqs', 'subscribeStewardRequests');
+  let reqs = [];
+  let handler = null;
+  const scope = {
+    pool: { subscribeMany: (_u, _f, h) => { handler = h; return { close() {} }; } },
+    relays: () => ['wss://r'],
+    pub: CHURCH,
+    NET: 'trinityone',
+    STEWARDS_D, STEWARDREQ_D,
+    JSON, Math, Date, console, String, Number, Map, Set,
+    npubEncode: (x) => 'npub_' + x.slice(0, 8),
+    nip44d: () => '', nip44ck: () => '',
+    sk: 'aa'.repeat(32),
+  };
+  const fn = new Function('scope', `with (scope) { return ({ ${stBody} }).subscribeStewardRequests; }`)(
+    new Proxy(scope, {
+      has: (t, k) => (k in t) || !(String(k) in globalThis),
+      get: (t, k) => {
+        if (k === Symbol.unscopables) return undefined;
+        if (k in t) return t[k];
+        if (String(k) in globalThis) return globalThis[String(k)];
+        return undefined;
+      },
+      set: (t, k, v) => { t[k] = v; return true; },
+    })
+  );
+  fn((list) => { reqs = list.slice(); });
+
+  handler.onevent({
+    kind: 30078, pubkey: REQUESTER, created_at: 1000,
+    tags: [['d', STEWARDREQ_D + CHURCH], ['t', 'trinityone']],
+    content: JSON.stringify({ name: 'Alice' }),
+  });
+  assert.equal(reqs.length, 1, 'staging: request was not recorded');
+  handler.onevent({
+    kind: 30078, pubkey: CHURCH, created_at: 1000,
+    tags: [['d', STEWARDS_D + CHURCH], ['t', 'trinityone']],
+    content: JSON.stringify({ pubkeys: [REQUESTER] }),
+  });
+  assert.equal(reqs.length, 0, 'staging: accepted requester should be filtered');
+  handler.onevent({
+    kind: 30078, pubkey: CHURCH, created_at: 1100,
+    tags: [['d', STEWARDS_D + CHURCH], ['t', 'trinityone']],
+    content: JSON.stringify({ pubkeys: [] }),
+  });
+  assert.equal(reqs.length, 1, 'staging: removal should resurface the request');
+  handler.onevent({
+    kind: 30078, pubkey: CHURCH, created_at: 900,
+    tags: [['d', STEWARDS_D + CHURCH], ['t', 'trinityone']],
+    content: JSON.stringify({ pubkeys: [REQUESTER] }),
+  });
+  assert.equal(reqs.length, 1,
+    'A STALE ROSTER HID A PENDING REQUEST — the requester was removed from the roster but a lagging relay made them look accepted again');
 });

@@ -55,7 +55,7 @@ async function membersTab({ names = true } = {}) {
       useStewardGroups: () => [], useStewardStewards: () => [], useStewardChurch: () => ({}),
       useStewardBlocked: () => [BLOCKED, NAMELESS],
       useStewardSafeguard: () => ({ loaded: true, minorsKnown: true, clearedKnown: true, cleared: {}, minors: [], approved: [], nophoto: [] }),
-      useStewardGuardians: () => ({}), useStewardJoinPolicy: () => false, useStewardAdmitted: () => [],
+      useStewardGuardians: () => ({ links: {}, closed: {} }), useStewardJoinPolicy: () => false, useStewardAdmitted: () => [],
       useStewardMembers: () => (names
         ? [{ pubkey: BLOCKED, npub: 'npub1bb', name: 'Bram Whitlock', count: 2, lastTs: NOW - 3600, joined: NOW - 86400 }]
         : []),

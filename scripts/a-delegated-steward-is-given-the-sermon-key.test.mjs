@@ -41,10 +41,13 @@ import { join } from 'node:path';
 import { generateSecretKey, getPublicKey } from 'nostr-tools/pure';
 import { v2 as nip44 } from 'nostr-tools/nip44';
 import { miniReact, find } from './render-jsx-screen.mjs';
-import { fnBody } from './test-slice.mjs';
+import { fnBody, liftKeyRead } from './test-slice.mjs';
 
 const ROOT = new URL('../', import.meta.url).pathname;
 const BUNDLE = readFileSync(join(ROOT, 'vendor/steward.js'), 'utf8');
+// THE SHIPPED ring fitter (2026-10-01): the media-key publishers fit their envelope to the relay's 1 MB cap
+// through it, so a lifted publisher needs it in scope. Lifted, not re-typed.
+const _fitKeyRing = new Function('return ' + fnBody(BUNDLE, 'function _fitKeyRing(full, recipCount, sealSample) {', '_fitKeyRing in the shipped bundle'))();
 const DASH = readFileSync(join(ROOT, 'app/stew-dashboard.jsx'), 'utf8');
 
 const churchSk = generateSecretKey(), churchPub = getPublicKey(churchSk);
@@ -82,7 +85,7 @@ function ownerEngine() {
   const scope = {
     actingChurch: '', pub: churchPub, sk: churchSk,
     _mediaKeyHex: KEY, _mediaKeyRing: [KEY], _mediaKeyDocKeys: null, _mediaKeyPushRefused: null,
-    _mediaKeyChecked: true, _localBlocked: new Set(), _sealEachFailed: [],
+    _mediaKeyChecked: true, _localBlocked: new Set(), _sealEachFailed: [], _mediaKeyVer: 0,
     _isRelayAuthed: () => true,
     MEDIAKEY_D: 'trinityone/mediakey:', NET: 'trinityone',
     now: () => 1758800000,
@@ -90,10 +93,12 @@ function ownerEngine() {
     encrypt3: (pl, ck) => nip44.encrypt(pl, ck),
     getConversationKey: (a, b) => nip44.utils.getConversationKey(a, b),
     feChurch: (t) => ({ ...t, pubkey: churchPub }),      // the owner signs with the church key
+    _fitKeyRing,
     publish: async (evt) => { published.push(evt); return true; },
   };
   const body = [
     fnBody(BUNDLE, '  async function _sealEach(payload, targets, sealTo, onProgress) {', '_sealEach in the shipped bundle'),
+    liftKeyRead(BUNDLE),   // _keyReadEpoch / _stillOn: the publishers check them after every await
     'const _api = { ' + [
       fnBody(BUNDLE, '    async ensureMediaKeyForMembers(memberPubs, stewardPubs) {', 'ensureMediaKeyForMembers in the shipped bundle'),
       fnBody(BUNDLE, '    async rotateMediaKey(memberPubs, stewardPubs) {', 'rotateMediaKey in the shipped bundle'),
@@ -145,7 +150,7 @@ function consoleReads(envelope, mySk) {
   let handlers = null;
   const scope = {
     _mediaKeyDocKeys: null, _mediaKeyPushRefused: 'a-previous-refusal', _mediaKeyRing: [], _mediaKeyHex: null,
-    _mediaKeyChecked: false,
+    _mediaKeyChecked: false, _mediaKeyVer: 0, actingChurch: '', _isRelayAuthed: () => true,
     _myOwnPub: () => myPub, pub: churchPub, sk: mySk,
     MEDIAKEY_D: 'trinityone/mediakey:',
     relays: () => ['wss://relay.example'],
@@ -154,10 +159,10 @@ function consoleReads(envelope, mySk) {
     getConversationKey: (a, b) => nip44.utils.getConversationKey(a, b),
   };
   const body = fnBody(BUNDLE, '    subscribeMediaKey() {', 'subscribeMediaKey in the shipped bundle');
-  const api = new Function('scope', `with (scope) { return { ${body} }; }`)(scoped(scope));
+  const api = new Function('scope', `with (scope) { ${liftKeyRead(BUNDLE)}\n return { ${body} }; }`)(scoped(scope));
   api.subscribeMediaKey();
   assert.ok(handlers, 're-anchor: subscribeMediaKey no longer subscribes');
-  handlers.onevent({ content: JSON.stringify(envelope), pubkey: churchPub });
+  handlers.onevent({ content: JSON.stringify(envelope), pubkey: churchPub, tags: [['d', 'trinityone/mediakey:' + churchPub]] });
   return scope._mediaKeyHex;
 }
 
@@ -264,6 +269,9 @@ async function renderKeyDistributor(rosters, members) {
         subscribeMediaKey: () => () => {}, subscribeCareKey: () => () => {},
         subscribeNameKey: () => () => {}, subscribeWebsiteShare: () => () => {},
         setCareRoster: () => {},
+        // every list on screen is the current church's — this file is about WHAT the screen passes, and the
+        // church gate on those lists is pinned in the-key-enrolment-waits-for-every-list
+        listIsCurrent: () => true,
         ensureMediaKeyForMembers: (...a) => { media.push(a); return Promise.resolve(true); },
         ensureCareKeyForMembers: () => Promise.resolve(true),
         ensureNameKeyForMembers: () => Promise.resolve(null),
@@ -372,7 +380,7 @@ async function blockOnMembersPage() {
       useStewardChurch: () => ({ name: 'St Aidan', features: {} }),
       useStewardBlocked: () => [],
       useStewardSafeguard: () => ({ loaded: true, minorsKnown: true, clearedKnown: true, cleared: {}, minors: [], approved: [], nophoto: [] }),
-      useStewardGuardians: () => ({}), useStewardJoinPolicy: () => false, useStewardAdmitted: () => [],
+      useStewardGuardians: () => ({ links: {}, closed: {} }), useStewardJoinPolicy: () => false, useStewardAdmitted: () => [],
       useStewardMembers: () => [
         { pubkey: memberPub, npub: 'npub1aa', name: 'Bram Whitlock', count: 2, lastTs: NOW - 3600, joined: NOW - 86400 },
         { pubkey: strangerPub, npub: 'npub1bb', name: 'Ada Nwosu', count: 1, lastTs: NOW - 60, joined: NOW - 8000 },

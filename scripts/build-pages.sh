@@ -92,6 +92,8 @@ RDR
 CF_CAP=26214400
 [ -f trinityone-steward.apk ] && [ "$(stat -c%s trinityone-steward.apk)" -lt "$CF_CAP" ] && cp trinityone-steward.apk "$OUT/trinityone-steward.apk"
 [ -f trinityone.apk ] && [ "$(stat -c%s trinityone.apk)" -lt "$CF_CAP" ] && cp trinityone.apk "$OUT/trinityone.apk"
+[ -f apk-manifest.json ] && cp apk-manifest.json "$OUT/apk-manifest.json"
+[ -f apk-manifest.sig ] && cp apk-manifest.sig "$OUT/apk-manifest.sig"
 
 # safety: never ship secrets, and nothing over Cloudflare's 25 MiB/file cap
 if find "$OUT" \( -name 'admin.json' -o -name 'vapid.json' -o -name 'church.json' -o -name 'push-subs.json' -o -name 'relay-db.json' \) | grep -q .; then

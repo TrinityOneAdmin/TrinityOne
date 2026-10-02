@@ -19,6 +19,10 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const STEWARD = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
+// THE SHIPPED LANDING REPORT (_landed, 2026-10-02): every guarded list write now returns through it, so a lifted
+// setter needs it in scope. Lifted, not re-typed.
+const _landedSrc = fnBody(STEWARD, 'function _landed(what, p) {', '_landed in the shipped bundle');
+const _landedShipped = new Function('return ' + _landedSrc)();
 
 function grab(src, sig) {
   let at = src.indexOf(sig);
@@ -44,7 +48,7 @@ function runSetApproved({ pub, trail, pubkeys, listKnown }) {
   assert.ok(FINALIZE, 'the shipped function no longer signs an event — re-anchor this test');
   let published = null;
   const scope = {
-    _requireTrustedView: () => {},
+    _requireTrustedView: () => {}, _landed: _landedShipped,
     sk: new Uint8Array(32),
     pub,
     now: () => NOW,
@@ -123,7 +127,7 @@ test('nothing sensitive is invited into a document members can read', async () =
 });
 
 // ── the two screens that show it ───────────────────────────────────────────────────────────────────
-import { stripComments } from './test-slice.mjs';
+import { fnBody, stripComments } from './test-slice.mjs';
 const IDENT = stripComments(readFileSync(new URL('../app/identity.jsx', import.meta.url), 'utf8'));
 const STEWD = stripComments(readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8'));
 

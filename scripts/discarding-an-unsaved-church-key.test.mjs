@@ -41,6 +41,7 @@ function engine(storeInit = {}) {
     _loadBoxHosts: () => { store['trinityone.steward.boxhosts.' + 'ab'.repeat(32)] = '0'; },   // what the real one leaves behind on a Suite box
     _refreshBoxHostsUs: () => {}, _gate: { refresh() {} }, relaysRaw: () => [],
     _armRegGate: () => {}, _openRegGate: () => { calls.openRegGate++; }, _resetChurchScopedState: () => { calls.reset++; },
+    _blockedLastSet: () => new Set(), _localBlocked: new Set(), _localBlockedAt: 0,   // setKey/setActiveIdentity now seed the church's last blocklist (2026-10-02): not this file's question
     pool: { relays: new Map([['ws://relay.test/', {}]]), close: (urls) => { closed.push(...urls); } },
     needsPin: false,
     window: { Steward, dispatchEvent: (e) => { events.push(e.type); }, CustomEvent: function (type, init) { this.type = type; this.detail = init && init.detail; } },
@@ -144,6 +145,7 @@ function engineWithRealGate(regGateMs) {
     generateSeedWords: () => 'fine flash wait silly next awkward charge front scout build damage river',
     _loadBoxHosts: () => {}, _refreshBoxHostsUs: () => {}, _gate: { refresh() {}, admit: () => [] }, relaysRaw: () => [],
     _resetChurchScopedState: () => {},
+    _blockedLastSet: () => new Set(), _localBlocked: new Set(), _localBlockedAt: 0,   // setKey/setActiveIdentity now seed the church's last blocklist (2026-10-02): not this file's question
     pool: { relays: new Map(), close: () => {} },
     needsPin: false, actingChurch: false,
     window: { Steward, dispatchEvent: () => {}, CustomEvent: function (type, init) { this.type = type; this.detail = init && init.detail; } },

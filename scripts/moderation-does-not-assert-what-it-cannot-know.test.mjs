@@ -51,6 +51,7 @@ function modWriter(name, mode) {
     NET: 'trinityone',
     _monotonicF: (e) => e,
     finalizeEvent2: (t) => ({ ...t, id: 'evt-' + published.length, sig: 'sig' }),
+    publishSetFor: () => ['wss://x/relay'],
     _publishBounded: async (_r, e) => {
       published.push(e);
       if (mode === 'ok') return true;
@@ -116,6 +117,8 @@ function leaveWriter(mode, { locked = false, intent = false } = {}) {
     _joinIntents: intent ? [{ cp: 'c'.repeat(64), forPub: 'p', at: 1 }] : [],
     _dropJoinIntent: () => {},
     _clearJoinSent: () => {},
+    _forgetChurch: () => {},
+    publishSetFor: () => ['wss://x/relay'],
     _publishAny: async (_r, e) => {
       published.push(e);
       if (mode === 'ok') return true;

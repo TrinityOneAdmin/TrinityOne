@@ -761,14 +761,25 @@ test('the relay wizard opens on a second visit to the panel in the same profile,
   try {
     const OPEN = `document.getElementById('relaySetup') && document.getElementById('relaySetup').classList.contains('show')`;
     await waitFor(c, OPEN, 'the relay wizard on the first visit', 20000);
-    assert.equal(await c.evalIn(`!!localStorage.getItem('to_relay_admin_token')`), true, 'staging: the panel did not store the admin token the second visit relies on');
+    // sessionStorage, not localStorage, since 3e3c8f7 (R-11: the admin token must not outlive the session). The
+    // second visit below is the same tab, so it still has it. This read localStorage until 2026-09-30 and failed
+    // its own staging over a panel that was doing the right thing.
+    assert.equal(await c.evalIn(`!!sessionStorage.getItem('to_relay_admin_token')`), true, 'staging: the panel did not store the admin token the second visit relies on');
+    assert.equal(await c.evalIn(`!!localStorage.getItem('to_relay_admin_token')`), false, 'the admin token was written to localStorage, where it outlives the session (R-11)');
     assert.equal(await c.evalIn(`localStorage.getItem('to_relay_setup_seen')`), null, 'staging: the wizard is already marked seen');
+    // A BOX THAT OPENED THIS PANEL BEFORE 3e3c8f7 still has the token in localStorage: that commit moved the
+    // writes and never removed the old copy. Plant one, as such a box would have it, for the next load to clear.
+    await c.evalIn(`localStorage.setItem('to_relay_admin_token', 'stale-token-from-before-3e3c8f7'), 1`);
+    assert.equal(await c.evalIn(`localStorage.getItem('to_relay_admin_token')`), 'stale-token-from-before-3e3c8f7', 'staging: the stale token was not planted');
     // leave without answering (the Back beneath the overlay, or the shell's own Back), then come back
     await c.goto(gw.base + HOME);
     await launcherSettled(c);
     assert.equal(await clickId(c, 'setupRelay'), 'ok', 'the launcher did not offer "Just a relay" again — nothing was set up');
     await waitFor(c, `/control\\.html\\?setup=relay$/.test(location.href)`, 'the relay panel again', 15000);
     await waitFor(c, `document.readyState === 'complete'`, 'the panel to load', 15000);
+    assert.equal(await c.evalIn(`localStorage.getItem('to_relay_admin_token')`), null,
+      'THE OLD ADMIN TOKEN IS STILL ON DISK: the panel loaded and left the pre-3e3c8f7 localStorage copy in place, where it outlives the session (R-11)');
+    assert.equal(await c.evalIn(`!!sessionStorage.getItem('to_relay_admin_token')`), true, 'clearing the old copy took the session token with it');
     await sleep(2500);
     assert.equal(await c.evalIn(OPEN), true,
       'THE WIZARD DID NOT OPEN ON A SECOND VISIT. The card promised it; the person got the dashboard. At 6b6e66d maybeFirstRun() threw in the temporal dead zone on every load with the token already stored.');

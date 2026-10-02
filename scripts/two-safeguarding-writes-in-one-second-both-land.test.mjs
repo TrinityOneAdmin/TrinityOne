@@ -38,6 +38,10 @@ import { fnBody, stmt, stripComments } from './test-slice.mjs';
 
 const ROOT = new URL('../', import.meta.url).pathname;
 const SHIP = readFileSync(join(ROOT, 'vendor/steward.js'), 'utf8');
+// THE SHIPPED LANDING REPORT (_landed, 2026-10-02): every guarded list write now returns through it, so a lifted
+// setter needs it in scope. Lifted, not re-typed.
+const _landedSrc = fnBody(SHIP, 'function _landed(what, p) {', '_landed in the shipped bundle');
+const _landedShipped = new Function('return ' + _landedSrc)();
 
 const CHURCH_SK = generateSecretKey();
 const CHURCH_PUB = getPublicKey(CHURCH_SK);
@@ -50,7 +54,7 @@ const SOMEBODY2 = getPublicKey(generateSecretKey());
 const WRITERS = [
   ['setMinors(pubkeys) {', 'setMinors', 'the church’s list of children'],
   ['setApproved(pubkeys, opts) {', 'setApproved', 'the cleared-to-work-with-children list'],
-  ['setGuardians(links) {', 'setGuardians', 'the parent↔child map'],
+  ['setGuardians(links, closed) {', 'setGuardians', 'the parent↔child map'],
   ['setStewards(pubkeys, caps, names) {', 'setStewards', 'the steward roster'],
   ['async grantCheckinPermission(opts) {', 'grantCheckinPermission', 'a children’s-desk clearance'],
   ['revokeCheckinPermission(person) {', 'revokeCheckinPermission', 'withdrawing a children’s-desk clearance'],
@@ -71,7 +75,7 @@ function consoleWriters(fixedSec) {
     _publishToRelays: (evt) => { sent.push(evt); return Promise.resolve(evt); },
     publish: (evt) => { sent.push(evt); return Promise.resolve(evt); },
     // ── preconditions: WHO MAY WRITE is a different question and a different test ──
-    _requireTrustedView: () => {},
+    _requireTrustedView: () => {}, _landed: _landedShipped,
     _mayClearForCheckin: () => true,
     churchSkHeld: () => true,
     _capAllows: () => () => true,

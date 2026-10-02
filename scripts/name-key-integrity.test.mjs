@@ -9,10 +9,14 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { generateSecretKey, getPublicKey } from 'nostr-tools/pure';
 import { v2 as nip44v2 } from 'nostr-tools/nip44';
-import { fnBody } from './test-slice.mjs';
+import { fnBody, liftKeyRead } from './test-slice.mjs';
 
 const FELLOWSHIP = readFileSync(new URL('../vendor/fellowship.js', import.meta.url), 'utf8');
 const STEWARD = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
+// THE SHIPPED LANDING REPORT (_landed, 2026-10-02): every guarded list write now returns through it, so a lifted
+// setter needs it in scope. Lifted, not re-typed.
+const _landedSrc = fnBody(STEWARD, 'function _landed(what, p) {', '_landed in the shipped bundle');
+const _landedShipped = new Function('return ' + _landedSrc)();
 const DASH = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
 const hex = (u8) => [...u8].map(b => b.toString(16).padStart(2, '0')).join('');
 const K = () => { const sk = generateSecretKey(); return { sk, pub: getPublicKey(sk) }; };
@@ -40,6 +44,7 @@ function memberSide(me, withKey = true) {
     const NET = 'trinityone';
     const _nameKeys = new Map(), _nameKeyTs = new Map(), _sealedNames = new Map(), profiles = {};
     const _churchRoster = new Map();
+    const _nameKeyListeners = new Set();   // _ingestNameKey tells these a key landed (serving requests re-read on it)
     const _unhexF = (h) => new Uint8Array((String(h).match(/.{1,2}/g) || []).map(x => parseInt(x, 16)));
     const decrypt = nip44v2.decrypt, getConversationKey = nip44v2.utils.getConversationKey;
     const nip44d = decrypt, nip44ck = getConversationKey;
@@ -163,8 +168,11 @@ function blockRig(have) {
   const ensureM = fnBody(STEWARD, 'async _ensureNameKeyLocked(', '_ensureNameKeyLocked in the shipped bundle');
   const src = `
     let _localBlocked = new Set();
+    let _localBlockedAt = 0; const lsSet = () => {}; const BLOCKED_LAST_LS = 'trinityone.steward.blockedlast.';   // setBlocked keeps a copy on the device (2026-10-02): not this file's question
     let _nameKeyRing = ['11'.repeat(32)];
     let _nameKeyDocKeys = HAVE;
+    const _nameKeyRingChanged = () => {};   // tells the serving-board readers the ring filled; not under test here
+    let _nameKeyAt = 0;                     // when the ring's envelope was published (newest wins); not under test here
     let _nameKeyChecked = true;
     const published = [];
     const churchSk = new Uint8Array(32).fill(3);
@@ -172,6 +180,7 @@ function blockRig(have) {
     const NAME_RING_MAX = 12, NAMEKEY_D = 'trinityone/namekey:', BLOCKED_D = 'trinityone/blocked:', NET = 'trinityone';
     const _isRelayAuthed = () => true;
     const _requireTrustedView = () => {};
+    ${_landedSrc}
     const now = () => 1000;
     const _hex = (u8) => Array.from(u8, (b) => b.toString(16).padStart(2, '0')).join('');
     const toPubHex = (p) => /^[0-9a-f]{64}$/i.test(p) ? String(p).toLowerCase() : null;
@@ -193,6 +202,7 @@ function blockRig(have) {
     // _publishToRelays, not publish. Same in-flight semantics for the block doc — this test's whole point is
     // that the local filter must hold WHILE the publish is unresolved, whichever primitive carries it.
     const _publishToRelays = publish;
+    ${liftKeyRead(STEWARD)}   // _keyReadEpoch / _stillOn: the name-key publisher checks them after its awaits
     const api = { ${setBlockedM}, ${ensureM} };
     return { api, published };
   `;
@@ -224,7 +234,7 @@ test('unblocking replaces the local set — the filter follows the newest list, 
   const C = K().pub, D = K().pub;
   const rig = blockRig({ [church.pub]: 1, [alice.pub]: 1 });
   rig.api.setBlocked([C]);
-  rig.api.setBlocked([]);                                         // the steward unblocks — full replacement, not append
+  rig.api.setBlocked([], { unblock: [C] });                       // the steward unblocks C (the Members screen's Unblock names them: setBlocked keeps everyone this console holds as blocked unless told, owner 2026-10-02)
   await rig.api._ensureNameKeyLocked([alice.pub, C, D], []);
   const env = _nameEnvs(rig)[0];
   assert.ok(env, 'after the unblock the envelope must publish for the returning member');

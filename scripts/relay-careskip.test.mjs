@@ -197,3 +197,12 @@ test('v3: a per-day token skips ITS day but is REFUSED for another day (no reusa
   assert.equal(reused, false, `a day-1 token was accepted for day 2 — the per-day binding failed: ${why}`);
   assert.equal((await publish(ws, skip(recipient, 'c-perday', days[1], dayTok(secret, days[1]))))[0], true, "day-2's own token must skip day 2");
 });
+
+test('a throwaway key with a valid token is accepted', async () => {
+  const tok = hex(webcrypto.getRandomValues(new Uint8Array(32)));
+  assert.equal((await publish(ws, sealedNeed('c-throwaway', tok)))[0], true, 'the church could not publish the need');
+  const throwaway = { sk: generateSecretKey() };
+  throwaway.pub = getPublicKey(throwaway.sk);
+  const [ok, msg] = await publish(ws, skip(throwaway, 'c-throwaway', '2026-08-01', tok));
+  assert.equal(ok, true, `a throwaway key with a valid token was refused: ${msg}`);
+});

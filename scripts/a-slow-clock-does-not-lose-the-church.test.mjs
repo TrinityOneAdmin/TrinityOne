@@ -44,7 +44,8 @@ function lift(file) {
     slice(src, 'function relayIdentityNonce', 'relayIdentityNonce'),
     slice(src, 'function relayHttpBase', 'relayHttpBase'),
     slice(src, 'function relayAddrKey', 'relayAddrKey'),
-    slice(src, 'async function verifyRelayIdentity', 'verifyRelayIdentity'),
+    slice(src, 'async function verifyRelayIdentityDetailed', 'verifyRelayIdentityDetailed'),
+    slice(src, 'async function verifyRelayIdentity(wssUrl) {', 'verifyRelayIdentity'),
   ].join('\n');
   return new Function('verifyEvent', 'verifyEvent2', 'fetch',
     body + '\nreturn { verifyRelayIdentity };')(verifyEvent, verifyEvent, globalThis.fetch);
@@ -80,7 +81,7 @@ test('no freshness WINDOW has been reintroduced into the shipped verifier', () =
   // line was responsible. Separated, the tests below fail on what verifyRelayIdentity actually RETURNS.
   for (const f of BUNDLES) {
     const src = readFileSync(new URL('../' + f, import.meta.url), 'utf8');
-    const body = slice(src, 'async function verifyRelayIdentity', 'verifyRelayIdentity');
+    const body = slice(src, 'async function verifyRelayIdentityDetailed', 'verifyRelayIdentityDetailed');
     // NOT the constant's NAME. A window reintroduced under any other name — an inline number, a fresh
     // constant, a helper — would sail past that, and the name is the one thing a future edit is least likely
     // to reuse. Audit 2026-09-04.

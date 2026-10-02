@@ -9,8 +9,36 @@ const HL_COLORS = [
   { id: 'clay', v: 'var(--hl-clay)' },
 ];
 
+// A VERSE THAT OPENS WITH A HEADING. The engine's USFM parser hangs a heading (with its parallel reference, and a
+// Psalm's title) on the END of the verse before it — but at the start of a chapter there is none, so it goes at
+// the START of verse 1's html (the shipped BSB: 1,189 verses, John 1:1 and Psalm 3:1 among them). VerseRow printed
+// the number first, so on the phone the "1" sat alone ABOVE the headings (device round 2026-10-01). This splits
+// off that leading run — line breaks, whitespace and whole heading / parallel-reference spans (nested spans
+// allowed) — so the number can follow it. Returns [lead, body]; lead is '' when the verse does not open with a
+// heading, and an unbalanced span leaves everything in the body, as before. Nothing moves between verses.
+function splitVerseLead(html) {
+  const s = String(html || '');
+  const isHead = (cls) => /(^|\s)(sec|parref)(\s|$)/.test(cls);
+  let i = 0, sawHead = false;
+  while (i < s.length) {
+    const rest = s.slice(i);
+    const gap = rest.match(/^(?:\s+|<br\s*\/?>)/i);
+    if (gap) { i += gap[0].length; continue; }
+    const open = rest.match(/^<span class="([^"]*)">/);
+    if (!open || !isHead(open[1])) break;
+    const re = /<(\/?)span\b[^>]*>/gi;
+    re.lastIndex = i;
+    let depth = 0, end = -1, m;
+    while ((m = re.exec(s))) { if (!m[1]) depth++; else if (--depth === 0) { end = re.lastIndex; break; } }
+    if (end < 0) return ['', s];
+    i = end; sawHead = true;
+  }
+  return sawHead ? [s.slice(0, i), s.slice(i)] : ['', s];
+}
 // ── one verse: real markup HTML, tappable Strong's superscripts, highlight + selection ──
 function VerseRow({ n, html, hl, note, bookmarked, selected, reading, onSelect, onWord }) {
+  // a heading the verse opens with is drawn BEFORE its number (see splitVerseLead), still inside this verse's row
+  const [lead, body] = splitVerseLead(html);
   return (
     <span id={'rv-' + n} style={{ position: 'relative' }}>
       <span
@@ -28,6 +56,7 @@ function VerseRow({ n, html, hl, note, bookmarked, selected, reading, onSelect, 
           WebkitBoxDecorationBreak: 'clone', boxDecorationBreak: 'clone',
           transition: 'background .2s',
         }}>
+        {lead ? <span dangerouslySetInnerHTML={{ __html: window.sanitizeHtml(lead) }} /> : null}
         <sup style={{
           fontFamily: 'var(--font-ui)', fontSize: '.58em', fontWeight: 700,
           color: bookmarked ? 'var(--clay)' : 'var(--ink-3)', marginRight: 3, verticalAlign: 'super',
@@ -36,7 +65,7 @@ function VerseRow({ n, html, hl, note, bookmarked, selected, reading, onSelect, 
         <span style={hl ? {
           background: hl, borderRadius: 3, padding: '1px 1px',
           WebkitBoxDecorationBreak: 'clone', boxDecorationBreak: 'clone',
-        } : null} dangerouslySetInnerHTML={{ __html: window.sanitizeHtml(html) }} />
+        } : null} dangerouslySetInnerHTML={{ __html: window.sanitizeHtml(body) }} />
         {note ? <Icon name="note" size={14} color="var(--gold)" style={{ verticalAlign: 'middle', marginLeft: 4 }} /> : null}
       </span>{' '}
     </span>
@@ -47,7 +76,7 @@ function VerseRow({ n, html, hl, note, bookmarked, selected, reading, onSelect, 
 function ReadHeader({ ctx, loc, version, onBook, onChapter, onVersion, onSettings, compare, onCompare, onListen, narrating, canListen }) {
   return (
     <div style={{
-      position: 'absolute', top: 0, left: 0, right: 0, zIndex: 20, paddingTop: 50,
+      position: 'absolute', top: 0, left: 0, right: 0, zIndex: 20, paddingTop: 'calc(env(safe-area-inset-top, 0px) + 8px)',
       background: 'color-mix(in oklab, var(--paper) 88%, transparent)',
       backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)',
       borderBottom: '1px solid var(--line-2)',
@@ -111,7 +140,6 @@ function ActionSheet({ label, ctx, open, onClose, onColor, curColor, onNote, onC
         <button onClick={ctx._shrink} disabled={!isMulti} title="Remove the last verse" style={{ width: 38, height: 38, borderRadius: 999, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontSize: 22, fontWeight: 700, lineHeight: 1, cursor: isMulti ? 'pointer' : 'default', opacity: isMulti ? 1 : 0.4, fontFamily: 'var(--font-ui)' }}>−</button>
         <button onClick={ctx._extend} title="Add the next verse" style={{ width: 38, height: 38, borderRadius: 999, border: '1px solid var(--clay)', background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)', fontSize: 22, fontWeight: 700, lineHeight: 1, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>+</button>
       </div>
-      {!isMulti ? <React.Fragment>
       <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)', marginBottom: 9 }}>Highlight</div>
       <div style={{ display: 'flex', gap: 11, marginBottom: 20 }}>
         {HL_COLORS.map(c => (
@@ -128,7 +156,6 @@ function ActionSheet({ label, ctx, open, onClose, onColor, curColor, onNote, onC
           border: '2px solid var(--line)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--ink-3)',
         }}><Icon name="x" size={18} /></button>
       </div>
-      </React.Fragment> : null}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 10 }}>
         {acts.map(a => (
           <button key={a.label} onClick={a.fn} style={{
@@ -304,7 +331,7 @@ function VersionSheet({ open, onClose, version, onPick, onAdd, ctx }) {
   const installed = window.Bible.versions();   // [{abbr,name,kind}] — what's loaded now
   const owned = new Set(installed.map(v => v.abbr));
   const bibles = cat ? (((cat.categories || []).find(c => c.id === 'bibles') || {}).items || []) : [];
-  const available = bibles.filter(b => !owned.has(b.abbr) && !window.Bible.isInstalled(b.url));
+  const available = bibles.filter(b => !owned.has(b.abbr) && !(window.Bible.isInstalled(b.url) && window.Bible.isLoaded(b.url)));
 
   // AWAIT IT, AND BELIEVE THE ANSWER. This toasted "Removed BSB" the instant it was tapped, over a call it
   // never waited for — the same defect the Library's Installed tier had (small-fixes-round4 V2). A removal
@@ -466,7 +493,7 @@ function SettingsSheet({ open, onClose, scale, setScale, serif, setSerif, showSt
               <div style={{ display: 'flex', gap: 8 }}>
                 {aOpts.readers.map(r => <button key={r.id} onClick={() => pickAudio(vt, r.id)} style={{ ...aBtn(vr === r.id), padding: '10px' }}>{r.name}</button>)}
               </div>
-              <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 9, lineHeight: 1.45 }}>Streams · public-domain narration. Applies the next time you tap Listen.</div>
+              <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 9, lineHeight: 1.45 }}>Streams from helloao.org · public-domain narration. They can see which chapter you listen to. Applies the next time you tap Listen.</div>
             </React.Fragment>
           )}
         </div>
@@ -577,6 +604,10 @@ function ChapterVerseMenu({ open, onClose, anchor, loc, version, onPick }) {
   const Bible = window.Bible;
   const [pick, setPick] = useS(loc.chap);   // chapter whose verses are listed below
   useE(() => { if (open) setPick(loc.chap); }, [open, loc.chap]);
+  // ANDROID BACK CLOSES IT, like every <BottomSheet>/<Overlay> (app/ui.jsx useBackLayer). Hand-rolled, this popover
+  // was on no back-stack, so Back fell through to "any other tab -> Today" and threw the reader out of the Bible
+  // with the popover still meant to be open. Device round 2026-10-01, twice. Before the early return: it is a hook.
+  useBackLayer(open && !!anchor, onClose);
   if (!open || !anchor) return null;
   const nCh = Bible.maxChapter(loc.book, version) || 1;
   const nV = ((Bible.getVerses(loc.book, pick, version) || []).length) || 1;
@@ -808,6 +839,7 @@ function ReadScreen({ ctx }) {
   const vlist = Bible.versions();
   const cmpAbbr = compare === true ? ((vlist.find(v => v.abbr !== version) || {}).abbr || version) : compare;
   const cmpVerses = React.useMemo(() => cmpAbbr ? Bible.getVerses(loc.book, loc.chap, cmpAbbr) : [], [loc.book, loc.chap, cmpAbbr]);
+  const cmpIdx = React.useMemo(() => { const m = {}; cmpVerses.forEach(v => { const ids = String(v.v).split('-'); ids.forEach(id => { m[id] = v; }); }); return m; }, [cmpVerses]);
 
   const bname = Bible.bookName(loc.book);
   const labelOf = (v) => Bible.refLabel(loc, v);
@@ -842,6 +874,7 @@ function ReadScreen({ ctx }) {
   // per-verse arm (Note / Bookmark / Highlight / Cross-refs, all anchored on `sel0` in THIS chapter) would
   // otherwise be offered for a selection whose first verse is in a chapter that is no longer on screen.
   const multi = passage.reduce((n, s) => n + s.verses.length, 0);
+  const passageKeys = passage.flatMap(p => p.verses.map(v => Bible.refKey({ book: p.book, chap: p.chap }, v)));
   const selRow = verses.find(x => String(x.v) === String(sel0));
   // ── THE REFERENCE LINE ────────────────────────────────────────────────────────────────────────────────
   // Collapse the passage into contiguous runs, then name them. Two verses join one run when they are
@@ -1019,7 +1052,7 @@ function ReadScreen({ ctx }) {
 
       <div ref={scrollRef} className="no-scrollbar"
         onTouchStart={onSwipeStart} onTouchMove={onSwipeMove} onTouchEnd={onSwipeEnd} onTouchCancel={() => { swipe.current = null; }}
-        style={{ position: 'absolute', inset: 0, overflowY: 'auto', overflowX: 'hidden', padding: '164px 18px 116px' }}>
+        style={{ position: 'absolute', inset: 0, overflowY: 'auto', overflowX: 'hidden', padding: 'calc(env(safe-area-inset-top, 0px) + 122px) 18px 116px' }}>
         <div style={{ animation: 'trinityFade .4s ease both' }}>
           <div style={{ textAlign: 'center', marginBottom: 22 }}>
             <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--clay)', letterSpacing: '1.5px', textTransform: 'uppercase' }}>{bname}</div>
@@ -1027,7 +1060,15 @@ function ReadScreen({ ctx }) {
             <div style={{ width: 40, height: 3, borderRadius: 2, background: 'var(--clay)', margin: '14px auto 0', opacity: .5 }} />
           </div>
 
-          {!compare ? (
+          {verses.length === 0 && !Bible.books(version).includes(loc.book) ? (
+            <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--ink-2)' }}>
+              <div style={{ fontSize: 15, lineHeight: 1.55, marginBottom: 18 }}>{bname} isn't in {version}</div>
+              <button onClick={() => { const b = Bible.books(version)[0]; if (b) ctx.setLoc({ book: b, chap: 1 }); }}
+                style={{ padding: '10px 20px', borderRadius: 10, background: 'var(--clay)', color: 'var(--on-clay)', border: 'none', fontWeight: 700, fontSize: 14, fontFamily: 'var(--font-ui)', cursor: 'pointer' }}>
+                Go to {Bible.bookName(Bible.books(version)[0])} 1
+              </button>
+            </div>
+          ) : !compare ? (
             <p className={cx('reader-body', !showStrongs && 'hide-strong')}
               style={{ fontFamily: readFont, fontSize: baseSize, lineHeight: 1.5, color: 'var(--ink)', margin: 0, textWrap: 'pretty' }}>
               {verses.map((row) => {
@@ -1050,7 +1091,7 @@ function ReadScreen({ ctx }) {
                   </div>
                   <div style={{ flex: 1 }}>
                     <div style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--sage)', letterSpacing: '.5px', marginBottom: 2 }}>{cmpAbbr}</div>
-                    <p style={{ fontFamily: readFont, fontSize: 16 * scale * rs, lineHeight: 1.55, margin: 0, color: 'var(--ink-2)' }}>{cmpVerses[i] ? cmpVerses[i].text : ''}</p>
+                    <p style={{ fontFamily: readFont, fontSize: 16 * scale * rs, lineHeight: 1.55, margin: 0, color: 'var(--ink-2)' }}>{cmpIdx[String(row.v)] ? cmpIdx[String(row.v)].text : ''}</p>
                   </div>
                 </div>
               ))}
@@ -1070,7 +1111,8 @@ function ReadScreen({ ctx }) {
       </div>
 
       <ActionSheet label={rangeRef} multi={multi} ctx={sheetCtx} open={sheet === 'action'} onClose={close}
-        curColor={ctx.highlights[keyOf(sel0)]} onColor={(c) => { ctx.setHighlight(keyOf(sel0), c); }}
+        curColor={passageKeys.length && passageKeys.every(k => ctx.highlights[k] === ctx.highlights[passageKeys[0]]) ? ctx.highlights[passageKeys[0]] : null}
+        onColor={(c) => { passageKeys.forEach(k => ctx.setHighlight(k, c)); setSel([]); setCarry([]); setSheet(null); }}
         bookmarked={ctx.bookmarks.includes(keyOf(sel0))} hasNote={!!ctx.notes[keyOf(sel0)]}
         onNote={() => setSheet('note')} onCross={() => setSheet('cross')} onCommentary={() => { close(); setCommentaryOpen(true); }} />
       <WordStudySheet id={wordId} open={sheet === 'word'} onClose={close} onWord={pushWord} canBack={wordStack.length > 1} onBack={backWord} />

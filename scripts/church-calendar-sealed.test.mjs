@@ -134,9 +134,15 @@ test('a locked document is kept and marked, not dropped', () => {
 });
 
 test('all five calendar documents are sealed, not just the one that was measured', () => {
-  const sealed = (stripComments(STEW).match(/const content = await _sealChurchDocReady\(doc\);/g) || []).length;
-  assert.equal(sealed, 5,
-    `${sealed} of the 5 calendar documents are sealed. event, service, room, booking and rota each carry the ` +
+  // PER PUBLISHER, NOT A COUNT. This counted the sealing line across the whole file and expected exactly 5; C-4
+  // (3bea749) sealed serving requests with the same line, the count became 6, and the test failed while every
+  // calendar document was still sealed (found 2026-09-30). A count also passes if one publisher loses its seal
+  // while another file gains one. So: each of the five, by name.
+  const src = stripComments(STEW);
+  const unsealed = ['async publishEvent(', 'async publishService(', 'async publishRoom(', 'async publishBooking(', 'async publishRota(']
+    .filter(a => !/const content = await _sealChurchDocReady\(doc\);/.test(fnBody(src, a, a)));
+  assert.deepEqual(unsealed, [],
+    `not sealed: ${unsealed.join(', ')}. event, service, room, booking and rota each carry the ` +
     'time or the place of a gathering; leaving any one of them readable leaks the same fact by another route');
 });
 

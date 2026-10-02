@@ -23,7 +23,7 @@ function LibraryScreen({ ctx }) {
   const D = window.TrinityData;
   const [view, setView] = React.useState('library');
   return (
-    <ScreenScroll>
+    <ScreenScroll top="calc(env(safe-area-inset-top, 0px) + 8px)">
       <h1 style={{ margin: '0 0 14px', fontFamily: 'var(--font-display)', fontSize: 30, fontWeight: 700, letterSpacing: '-.5px', animation: 'lumenFade .5s ease both' }}>Library</h1>
 
       {/* segmented: Library / Watch & Listen.
@@ -157,7 +157,7 @@ function BackupCard({ ctx }) {
   { ic: 'pen', label: 'Journals & notes' },
   { ic: 'marker', label: 'Highlights' },
   { ic: 'bookmark', label: 'Bookmarks' },
-  { ic: 'refresh', label: 'Your notes come back on their own', sub: 'once this phone reconnects to your church' }];
+  { ic: 'shield', label: 'Your notes stay on this phone', sub: 'back them up here so they travel with you' }];
 
   // NO "OK" RUNG. This file holds the member's twelve words, so it is not a document that a six-character
   // code protects — an attacker who has it guesses offline, on their own hardware, for as long as they like.
@@ -697,7 +697,7 @@ function Spinner({ size = 18 }) {
 function StoreRow({ item, catIcon, ctx }) {
   const isImport = item.kind === 'import';
   const installing = !isImport && window.Bible.isInstalling(item.url);
-  const installed = !isImport && window.Bible.isInstalled(item.url);
+  const installed = !isImport && window.Bible.isInstalled(item.url) && window.Bible.isLoaded(item.url);
 
   const onGet = () => {
     if (isImport) { window.Bible.pickFile(); return; }
@@ -920,6 +920,7 @@ function ModuleStore({ open, onClose, ctx, initialView, category }) {
             );
           })}
         </div>
+        {view === 'language' && <div style={{ fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.45, padding: '6px 18px 0' }}>Downloads from ebible.org. They can see which translation you install.</div>}
       </div>
 
       <div className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '14px 18px 30px' }}>

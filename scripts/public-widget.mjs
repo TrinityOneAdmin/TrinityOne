@@ -74,8 +74,9 @@ export function parseIcs(text) {
       const fm = /FREQ=(WEEKLY|MONTHLY)/.exec(value);
       if (fm) {
         const interval = /INTERVAL=2/.test(value) ? 2 : 1;
-        const bm = /BYDAY=(?:1)?(SU|MO|TU|WE|TH|FR|SA)/.exec(value);
-        cur.rrule = { freq: fm[1], interval, byday: bm ? bm[1] : null };
+        const bm = /BYDAY=(-?\d)?(SU|MO|TU|WE|TH|FR|SA)/.exec(value);   // -1FR = the last Friday
+        const nth = fm[1] === 'MONTHLY' ? (bm && bm[1] ? parseInt(bm[1], 10) : 1) : undefined;
+        cur.rrule = { freq: fm[1], interval, byday: bm ? bm[2] : null, ...(nth !== undefined && { nth }) };
       }
     }
   }
@@ -89,6 +90,17 @@ export function firstWeekdayOnOrAfter(y, m, day, byday) {
   let d = Date.UTC(y, m, day);
   while (new Date(d).getUTCDay() !== byday) d += 86400000;
   return d;
+}
+function nthWeekdayOf(y, m, byday, nth) {
+  if (nth === -1) {                              // BYDAY=-1<day>: the LAST such weekday of the month
+    let e = Date.UTC(y, m + 1, 0);
+    while (new Date(e).getUTCDay() !== byday) e -= 86400000;
+    return e;
+  }
+  let d = Date.UTC(y, m, 1);
+  while (new Date(d).getUTCDay() !== byday) d += 86400000;
+  d += (nth - 1) * 7 * 86400000;
+  return new Date(d).getUTCMonth() === m ? d : 0;
 }
 function occFrom(ev, date) {
   return { date, time: ev.dtstart.time, allDay: ev.dtstart.allDay, summary: ev.summary || '', location: ev.location || '', description: ev.description || '', recur: ev.rrule ? ev.rrule.freq : '', uid: ev.uid || '' };
@@ -123,13 +135,16 @@ export function expandOccurrences(events, opts) {
     } else if (ev.rrule.freq === 'MONTHLY') {
       const byday = bydayIndex(ev.rrule.byday);
       if (byday === undefined) continue;
+      const nth = ev.rrule.nth || 1;
       const anchor = new Date(isoToUtc(ev.dtstart.date));
       let y = anchor.getUTCFullYear(), m = anchor.getUTCMonth();
       for (let n = 0; n < 60; n++) {
-        const t = firstWeekdayOnOrAfter(y, m, 1, byday);
-        const iso = utcToIso(t);
-        if (iso > until) break;
-        if (iso >= from) out.push(occFrom(ev, iso));
+        const t = nthWeekdayOf(y, m, byday, nth);
+        if (t) {
+          const iso = utcToIso(t);
+          if (iso > until) break;
+          if (iso >= from) out.push(occFrom(ev, iso));
+        }
         m += 1; if (m > 11) { m = 0; y += 1; }
       }
     }

@@ -100,14 +100,14 @@ test('the ENGINE reports a care listing that reached no relay', async () => {
     // The classifier is lifted from the SHIPPED bundle, never stubbed — an injected outcome cannot catch a
     // dead classifier, and this one is one character from always answering the same word.
     const _pubReason = new Function(fnBody(bundle, 'function _pubReason(e)', '_pubReason') + '\nreturn _pubReason;')();
-    const mk = (fails) => new Function('window', 'sk', 'finalizeEvent2', '_publishAny', 'churchRelays',
-      'CAREAVAIL_D', 'NET', '_sealChurchDocMember', '_pubReason', 'JSON', 'Date', 'Math', 'Array', 'String', 'console',
+    const mk = (fails) => new Function('window', 'sk', 'finalizeEvent2', '_publishAny', 'publishSetFor',
+      'CAREAVAIL_D', 'NET', '_sealChurchDocMember', '_pubReason', '_nameKeys', 'JSON', 'Date', 'Math', 'Array', 'String', 'console',
       'return ({ ' + body + ' })')(
       { Fellowship: { churchPub: 'cc', ready: Promise.resolve() } }, 'sk',
       (e) => ({ ...e, id: 'x' }),
       async () => { if (fails) { const e = new Error('NO_NETWORK_RELAY'); e.unsent = true; throw e; } return true; },
       () => ['wss://r/relay'], 'trinityone/careavail:', 'trinityone',
-      () => 'sealed', _pubReason, JSON, Date, Math, Array, String, { warn() {} })[name];
+      () => 'sealed', _pubReason, new Map([['cc', [new Uint8Array([1])]]]), JSON, Date, Math, Array, String, { warn() {} })[name];
     // 2026-09-16: these answer `{ ok, reason }` now rather than `evt | null`, so that the card can tell
     // "the church was never told" from "nobody answered, and it may well have landed" — two sentences that
     // send a member in opposite directions. The invariant this test exists for is unchanged: a send that

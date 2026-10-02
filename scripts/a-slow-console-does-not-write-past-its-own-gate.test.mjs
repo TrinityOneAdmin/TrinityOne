@@ -38,6 +38,10 @@ import { fnBody, stmt, stripComments } from './test-slice.mjs';
 
 const ROOT = new URL('../', import.meta.url).pathname;
 const SHIP = readFileSync(join(ROOT, 'vendor/steward.js'), 'utf8');
+// THE SHIPPED LANDING REPORT (_landed, 2026-10-02): every guarded list write now returns through it, so a lifted
+// setter needs it in scope. Lifted, not re-typed.
+const _landedSrc = fnBody(SHIP, 'function _landed(what, p) {', '_landed in the shipped bundle');
+const _landedShipped = new Function('return ' + _landedSrc)();
 
 // ── A RELAY THAT ANSWERS /relay-identity OFF ITS OWN CLOCK ───────────────────────────────────────────────
 // The signed kind-27235 proof is the only clock stage 1 will read; /status's `now` is an unauthenticated
@@ -76,7 +80,8 @@ function console_(relayList, churchSk, churchPub) {
     fnBody(SHIP, 'function relayIdentityNonce', 'relayIdentityNonce'),
     fnBody(SHIP, 'function relayHttpBase', 'relayHttpBase'),
     fnBody(SHIP, 'function relayAddrKey', 'relayAddrKey'),
-    fnBody(SHIP, 'async function verifyRelayIdentity', 'verifyRelayIdentity'),
+    fnBody(SHIP, 'async function verifyRelayIdentityDetailed', 'verifyRelayIdentityDetailed'),
+    fnBody(SHIP, 'async function verifyRelayIdentity(wssUrl) {', 'verifyRelayIdentity'),
     stmt(SHIP, 'var _CLOCK_SKEW = ', '_CLOCK_SKEW'),
     stmt(SHIP, 'var _relaySkewSec = 0', '_relaySkewSec'),
     stmt(SHIP, 'var _skewMeasuredAt = 0', '_skewMeasuredAt'),
@@ -121,7 +126,7 @@ function console_(relayList, churchSk, churchPub) {
     sk: churchSk, pub: churchPub,
     finalizeEvent, finalizeEvent2: finalizeEvent,
     now: () => Math.floor(Date.now() / 1000),
-    _requireTrustedView: () => {},
+    _requireTrustedView: () => {}, _landed: _landedShipped,
     _publishToRelays: (evt) => { sent.push(evt); return Promise.resolve(evt); },
     // publishClearance's world. None of it decides a stamp.
     actingChurch: '', _viewingNetwork: () => false, _clearanceSent: new Map(),
@@ -532,7 +537,7 @@ test('11 · exactly the named writers take the bounded wait, and each is named w
      'THE document the measured incident is about — a clearance losing to a fast clock'],
     ['setMinors(pubkeys) {', 'setMinors', 'the church’s list of children'],
     ['setApproved(pubkeys, opts) {', 'setApproved', 'cleared to work with children'],
-    ['setGuardians(links) {', 'setGuardians', 'the parent↔child map'],
+    ['setGuardians(links, closed) {', 'setGuardians', 'the parent↔child map'],
     ['async grantCheckinPermission(opts) {', 'grantCheckinPermission', 'a children’s-desk clearance'],
     ['revokeCheckinPermission(person) {', 'revokeCheckinPermission', 'withdrawing one'],
     ['async publishCheckinHelpers(opts) {', 'publishCheckinHelpers', 'who may hold a session key at the desk'],

@@ -229,6 +229,32 @@ window.safeImgUrl = function (v) {
     s = s.replace(/\\\+?[a-z]+\d?\b ?/gi, "");
     return s.replace(/[ \t]{2,}/g, " ").trim();
   }
+  // A HEADING'S MARKUP CLOSES INSIDE THE HEADING. inlineUSFM turns `\nd` into `<span class="nd">` and `\nd*` into
+  // `</span>`; a heading line with an opener and no closer (`\s1 The \nd Lord`) used to leave the heading's
+  // own `</span>` closing the inner span, so the heading span stayed open over the verse that followed — in
+  // the reader it styled the verse as a heading, and usfmText dropped the verse's words with the heading
+  // (Psalm 2:1 lost "Why do the nations rage,"). Walk the fragment's span/i tags: drop a closer with no
+  // opener, close what is left open, innermost first. Used ONLY for heading-like lines (\d, \s, \ms, \mr,
+  // \r): a character style in verse text may legitimately run across poetry lines.
+  function _balancedInline(html){
+    const out = [], stack = [];
+    let last = 0, t;
+    const re = /<(\/?)(span|i)\b[^>]*>/g;
+    while((t = re.exec(html))){
+      out.push(html.slice(last, t.index)); last = t.index + t[0].length;
+      if(!t[1]){ stack.push(t[2]); out.push(t[0]); }
+      else if(stack.length && stack[stack.length - 1] === t[2]){ stack.pop(); out.push(t[0]); }
+      // else: a closer with nothing open inside this heading — dropped
+    }
+    out.push(html.slice(last));
+    while(stack.length) out.push("</" + stack.pop() + ">");
+    return out.join("");
+  }
+  // The 22 letter names, in the spellings English Bibles print over Psalm 119's stanzas (see the \d rule below).
+  // Every spelling the shipped modules use is here (surveyed 2026-10-01: engbsb's \qa and eng-web's \d —
+  // including eng-web's KAPF and TZADHE), and a stanza may carry two joined by "and" ("SIN AND SHIN").
+  const _HEB = "aleph|alef|beth|bet|gimel|gimmel|daleth|dalet|he|hey|vav|waw|zayin|zain|heth|het|cheth|chet|teth|tet|yodh|yod|jod|kaph|kapf|kaf|caph|lamedh|lamed|mem|nun|samekh|samech|ayin|pe|peh|tsadhe|tsade|tsaddi|tzadhe|tzaddi|tzade|qoph|qof|koph|resh|shin|sin|tav|taw";
+  const HEBREW_LETTER = new RegExp("^(?:" + _HEB + ")(?:\\s+(?:and|&)\\s+(?:" + _HEB + "))?\\.?$", "i");
   function parseUSFM(text){
     const idm = text.match(/\\id\s+(\w+)/);
     const code = idm ? idm[1].toUpperCase() : null;
@@ -240,13 +266,45 @@ window.safeImgUrl = function (v) {
         (chapters[chap] = chapters[chap] || []).push({ v: vnum, html: inlineUSFM(vbuf) });
       vbuf = null; vnum = null;
     };
+    // A PSALM TITLE AND ITS FIRST VERSE ON ONE LINE — `\d A Psalm of David. \v 1 Lord, how…` or `\d \v 1 For the
+    // director of music…`. The \d branch below took the whole rest of the line as the title, so verse 1 was
+    // swallowed into it: its words landed at the start of verse 2, or (with no other \v) the chapter had no
+    // verses at all. Split such a line at its verse marker, so the title stays the title (and, as scripture,
+    // in verse 1's text — owner, 2026-10-01) and verse 1 keeps its words. Only \d lines: no shipped module has
+    // a \v mid-line anywhere else (surveyed 2026-10-01), and changing that is a separate question.
+    const lines = [];
     for(const line of text.split(/\r?\n/)){
+      const at = /^\\d\b/.test(line) ? line.search(/\\v\s/) : -1;
+      if(at > 0){ lines.push(line.slice(0, at)); lines.push(line.slice(at)); } else lines.push(line);
+    }
+    for(const line of lines){
       let m;
       if((m = line.match(/^\\c\s+(\d+)/))){ flush(); chap = +m[1]; pending = ""; continue; }
       if(chap == null) continue;
       if((m = line.match(/^\\v\s+(\S+) ?([\s\S]*)$/))){ flush(); vnum = m[1]; vbuf = pending + (m[2]||""); pending = ""; continue; }
-      if((m = line.match(/^\\(?:s\d?|ms\d?|mr|d)\b ?([\s\S]*)$/))){ add('<br><span class="sec">' + inlineUSFM(m[1]||"") + "</span>"); continue; }
-      if((m = line.match(/^\\r\b ?([\s\S]*)$/))){ add('<br><span class="parref">' + inlineUSFM(m[1]||"") + "</span>"); continue; }
+      // \d — a Psalm title — IS scripture (owner, 2026-10-01): it renders like a heading, but carries a second
+      // class so usfmText keeps its words in the verse text. \s, \ms, \mr are editorial headings and are not.
+      // The trailing space is a word break for `text` when verse 1 follows on the same line (`\d Title \v 1 words`);
+      // after a block-level span it renders as nothing.
+      // …EXCEPT PSALM 119's ACROSTIC LETTERS, which the World English Bible marks \d ("\d BETH") — a label, like
+      // the \qa the BSB uses for the same letters (below), not a title: as \d it was glued into the verse before
+      // it ("…forsake me. BETH") and 119:1 began "ALEPH". The rule is narrow on purpose: Psalm 119, and a line
+      // whose whole content is one of the 22 letter names. A \d anywhere else stays scripture — Habakkuk 3:19
+      // ends with one ("For the Chief Musician…"), which is why "a \d after verse 1" is not the rule.
+      if((m = line.match(/^\\d\b ?([\s\S]*)$/)) && code === "PSA" && chap === 119 && HEBREW_LETTER.test(stripTags(inlineUSFM(m[1]||"")).trim())){
+        add('<br><span class="sec qa">' + _balancedInline(inlineUSFM(m[1]||"")) + "</span>"); continue;
+      }
+      if((m = line.match(/^\\d\b ?([\s\S]*)$/))){ if((m[1]||"").trim()) add('<br><span class="sec d">' + _balancedInline(inlineUSFM(m[1]||"")) + "</span> "); continue; }
+      if((m = line.match(/^\\(?:s\d?|ms\d?|mr)\b ?([\s\S]*)$/))){ add('<br><span class="sec">' + _balancedInline(inlineUSFM(m[1]||"")) + "</span>"); continue; }
+      if((m = line.match(/^\\r\b ?([\s\S]*)$/))){ add('<br><span class="parref">' + _balancedInline(inlineUSFM(m[1]||"")) + "</span>"); continue; }
+      // \sp — a SPEAKER LABEL ("Beloved", "Lover" in the Song of Songs): an editorial label, not scripture. It
+      // fell to the catch-all below and was read into the verse as a word. Rendered like a heading (the reader's
+      // .sec rule), and dropped from `text` by usfmText with the headings.
+      if((m = line.match(/^\\sp\b ?([\s\S]*)$/))){ add('<br><span class="sec sp">' + _balancedInline(inlineUSFM(m[1]||"")) + "</span>"); continue; }
+      // \qa — an ACROSTIC LETTER (Psalm 119's ALEPH, BETH…): a label, like \sp. It fell to the catch-all and was
+      // glued onto the end of the verse before it ("…do not utterly forsake me. BETH"). Shown as a heading,
+      // dropped from `text` with the headings.
+      if((m = line.match(/^\\qa\b ?([\s\S]*)$/))){ add('<br><span class="sec qa">' + _balancedInline(inlineUSFM(m[1]||"")) + "</span>"); continue; }
       if((m = line.match(/^\\(q\d?|qm\d?)\b ?([\s\S]*)$/))){ const lvl = (m[1].match(/\d/)||["1"])[0]; add("<br>" + (lvl >= "2" ? "&emsp;" : "") + (m[2]||"")); continue; }
       if((m = line.match(/^\\(?:p|m|pi\d?|mi|nb|pc|cls|li\d?|pmo|pm|pr)\b ?([\s\S]*)$/))){ add("<br><br>" + (m[1]||"")); continue; }
       if(/^\\b\b/.test(line)){ add("<br>"); continue; }
@@ -360,12 +418,57 @@ window.safeImgUrl = function (v) {
       if(!parsed[b]){ const raw = rawByBook[b]; parsed[b] = raw ? (parseUSFM(raw).chapters || {}) : {}; rawByBook[b] = null; }
       return parsed[b];
     };
-    const get = (b, c) => { const ch = chaptersFor(b); return (ch && ch[c]) ? ch[c].map(x => ({ v: x.v, html: x.html, text: stripTags(x.html) })) : []; };
+    const get = (b, c) => { const ch = chaptersFor(b); return (ch && ch[c]) ? ch[c].map(x => ({ v: x.v, html: x.html, text: usfmText(x.html) })) : []; };
     return {
       abbr: (fallbackName || "USFM").replace(/\.(zip|usfm|sfm)$/i, "").slice(0, 12) || "USFM",
       name: fallbackName || "USFM Bible", kind: "usfm", books, maxChap,
       getVerses: get, plain: (b, c) => get(b, c).map(x => ({ v: x.v, text: x.text }))
     };
+  }
+  // THE PLAIN TEXT OF A USFM VERSE, from the html parseUSFM built for it. (2026-10-01, FIX-PLAN item 3.)
+  // This used stripTags(html), which is written for MySword markup and gets three things wrong here, all
+  // seen on Today's Verse of the Day from a USFM Bible (Isaiah 40:8 in an open.bible text):
+  //   · a section heading or parallel reference parseUSFM attached to the END of the verse before it
+  //     (`<span class="sec">Here Is Your God!</span>`, `<span class="parref">(Romans 11:33–36)</span>`) kept
+  //     its words — stripTags drops the tags, not the content — so the heading was read as scripture;
+  //   · a poetry line break (`<br>`) became nothing, gluing "fall,but";
+  //   · the indent entity `&emsp;` was printed as the six characters "&emsp;".
+  // The html is untouched — the reader still renders headings, indents and breaks from it. Only `text`
+  // changes, and with it everything that reads `text`: Today's verse card, copy, share, read-aloud, the
+  // compare pane, and the USFM search (search() → plain() → this). stripTags itself is NOT changed: the
+  // MySword builders and the dictionary use it on a different markup.
+  function usfmText(html){
+    let s = String(html || "");
+    // Drop heading and parallel-reference spans WITH their content. NOT a Psalm title: parseUSFM writes \d as
+    // `<span class="sec d">`, which this pattern does not match, so its words stay in the text (owner,
+    // 2026-10-01). Depth-counted, because inlineUSFM can nest a span inside a heading (`\s1 The \nd LORD\nd*
+    // reigns` → <span class="nd"> inside the sec span). parseUSFM balances every heading's own markup
+    // (_balancedInline), so the heading's closing tag is always found before any verse text — an unclosed
+    // `\nd` in a heading can no longer carry the drop into the verse words after it, whatever follows the
+    // heading (a \v, a \q, a \qc, a \p). Audit of 3fe46eb finding 7, and its re-audit.
+    // `sec sp` is a speaker label (\sp), `sec qa` an acrostic letter (\qa, or Psalm 119's \d letters) — labels,
+    // not scripture, dropped like a heading (2026-10-01).
+    const OPEN = /<span class="(?:sec|sec sp|sec qa|parref)">/g;
+    let m;
+    while((m = OPEN.exec(s))){
+      let depth = 1, i = m.index + m[0].length;
+      const tag = /<span\b[^>]*>|<\/span>/g; tag.lastIndex = i;
+      let t;
+      while(depth > 0 && (t = tag.exec(s))){ depth += (t[0] === "</span>") ? -1 : 1; i = t.index + t[0].length; }
+      // Malformed html that did not come from parseUSFM: drop only the opening tag, never the words after it.
+      if(depth > 0) i = m.index + m[0].length;
+      s = s.slice(0, m.index) + " " + s.slice(i);
+      OPEN.lastIndex = m.index;
+    }
+    s = s.replace(/<br\s*\/?>/gi, " ");                    // a line break is a word break
+    s = stripTags(s);                                       // the remaining markup and USFM codes, as before
+    s = s.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (all, e) => {
+      if(e[0] === "#"){ const n = e[1] === "x" || e[1] === "X" ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10); return (n > 0 && n < 0x110000) ? String.fromCodePoint(n) : all; }
+      const named = { emsp: " ", ensp: " ", thinsp: " ", nbsp: " ", amp: "&", lt: "<", gt: ">", quot: "\"", apos: "'" };
+      const k = e.toLowerCase();
+      return Object.prototype.hasOwnProperty.call(named, k) ? named[k] : all;
+    });
+    return s.replace(/\s+/g, " ").trim();
   }
   // clean display/search text: drop note CONTENT (not just tags), Strong's, markup
   function stripTags(s){
@@ -441,7 +544,7 @@ window.safeImgUrl = function (v) {
   function idb(){ return new Promise((res, rej) => { const r = indexedDB.open("bible-modules", 1); r.onupgradeneeded = () => r.result.createObjectStore("modules"); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); }
   function idbStore(db, mode){ return db.transaction("modules", mode).objectStore("modules"); }
   async function cacheGet(key){ try{ const db = await idb(); return await new Promise((res, rej) => { const q = idbStore(db, "readonly").get(key); q.onsuccess = () => res(q.result || null); q.onerror = () => rej(q.error); }); }catch(e){ return null; } }
-  async function cachePut(key, u8){ try{ const db = await idb(); await new Promise((res, rej) => { const q = idbStore(db, "readwrite").put(u8, key); q.onsuccess = () => res(); q.onerror = () => rej(q.error); }); }catch(e){} }
+  async function cachePut(key, u8){ const db = await idb(); await new Promise((res, rej) => { const tx = db.transaction("modules", "readwrite"); tx.objectStore("modules").put(u8, key); tx.oncomplete = () => res(); tx.onabort = () => rej(tx.error || new DOMException("transaction aborted", "AbortError")); tx.onerror = () => rej(tx.error); }); }
   async function cacheKeys(){ try{ const db = await idb(); return await new Promise((res, rej) => { const q = idbStore(db, "readonly").getAllKeys(); q.onsuccess = () => res(q.result || []); q.onerror = () => rej(q.error); }); }catch(e){ return []; } }
   async function cacheDelete(key){ try{ const db = await idb(); await new Promise((res, rej) => { const q = idbStore(db, "readwrite").delete(key); q.onsuccess = () => res(); q.onerror = () => rej(q.error); }); }catch(e){} }
   // "IS IT STILL THERE?" — AND IT THROWS WHEN IT CANNOT LOOK. Every other helper above swallows its errors
@@ -644,7 +747,7 @@ window.safeImgUrl = function (v) {
     const res = await fetch(resolveAsset(url));
     if(!res.ok) throw new Error("HTTP " + res.status);
     const u8 = new Uint8Array(await res.arrayBuffer());
-    await cachePut(url, u8);
+    try{ await cachePut(url, u8); }catch(e){ console.warn("cachePut failed for asset (full phone?)", e); }
     return u8;
   }
   function assetCached(url){ return cacheGet(url).then(b => !!b).catch(() => false); }
@@ -712,6 +815,7 @@ window.safeImgUrl = function (v) {
   }
   function isInstalled(url){ return !!getInstalled()[url]; }
   function isInstalling(url){ return installing.has(url); }
+  function isLoaded(url){ return Object.values(urlOf).includes(url); }
 
   async function getCatalog(){
     if(!catalogPromise) catalogPromise = fetch("catalog.json").then(r => r.ok ? r.json() : { categories: [] }).catch(() => ({ categories: [] }));
@@ -860,9 +964,10 @@ window.safeImgUrl = function (v) {
         // (a module handed over by Quick Share must stick, not vanish when the app reopens).
         if(r && r.abbr){
           const url = "imported/" + f.name;
-          await cachePut(url, u8);
-          recordInstalled({ url, id: r.abbr, abbr: r.abbr, name: (modules[r.abbr] && modules[r.abbr].name) || r.abbr, kind: r.kind || "bible", category: r.kind === "dict" ? "dictionaries" : r.kind === "comment" ? "commentaries" : "bibles" });
-          noteLoadedFrom(url, r.abbr, r.kind === "dict" ? "dictionaries" : r.kind === "comment" ? "commentaries" : "bibles");
+          const cat = r.kind === "dict" ? "dictionaries" : r.kind === "comment" ? "commentaries" : "bibles";
+          try{ await cachePut(url, u8); }catch(e){ console.warn("cachePut failed for import (full phone?)", e); window.Bible._error = "Loaded " + r.abbr + " but couldn't save it — not enough space on this phone"; }
+          recordInstalled({ url, id: r.abbr, abbr: r.abbr, name: (modules[r.abbr] && modules[r.abbr].name) || r.abbr, kind: r.kind || "bible", category: cat });
+          noteLoadedFrom(url, r.abbr, cat);
         }
       }
       catch(err){ console.error(err); window.Bible._error = err.message; }
@@ -1172,7 +1277,7 @@ window.safeImgUrl = function (v) {
     BOOK_NAMES, bookName, bookAbbr, bookGroup, bookNum, parseRef,
     parseVerse, lex,
     loadModuleBytes, fetchAndCacheModule, loadAsset, assetCached, pickFile, exportModule,
-    cacheKeys, getCatalog, getMirror, getVideos, installModule, removeModule, isInstalled, isInstalling,
+    cacheKeys, getCatalog, getMirror, getVideos, installModule, removeModule, isInstalled, isInstalling, isLoaded,
     installedMap: getInstalled,
     subscribe(fn){ subs.add(fn); return () => subs.delete(fn); },
     get loaded(){ return order.length > 0; },

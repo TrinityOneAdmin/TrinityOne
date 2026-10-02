@@ -218,7 +218,12 @@ function IdentitySwitcher({ church, churchName, initials, onEditName, compact = 
         <div style={popStyle}>
           {ids.map(idn => {
             const on = idn.pub === activePub;
-            const label = idn.kind === 'church' ? (church.name || 'Your church') : (idn.name || (idn.kind === 'steward' ? 'Church' : 'Network'));
+            // THE OWN CHURCH'S ROW NAMES THE OWN CHURCH. `church` is the profile of whatever the console is
+            // running NOW, so while acting for a stewarded church (or viewing a network) this row said that
+            // church's name — "Your church: St Bede's" over St Bede's own row (device round 2026-10-01). The
+            // engine remembers the own church's name (identities(), _ownChurchName); with none known, the
+            // honest generic, never another church's name.
+            const label = idn.kind === 'church' ? ((!offChurch && church.name) || idn.name || 'Your church') : (idn.name || (idn.kind === 'steward' ? 'Church' : 'Network'));
             const subtitle = idn.kind === 'network' ? 'Network console' : idn.kind === 'steward' ? 'You steward this church' : 'Your church';
             const icon = idn.kind === 'network' ? 'globe' : idn.kind === 'steward' ? 'shield' : 'bank';
             return (
@@ -465,6 +470,10 @@ function PublishErrorBanner() {
   // without `saidQuiet` this would flash the note over and over — the same defect in a lighter colour.
   const [bgMsg, setBgMsg] = React.useState('');
   const saidQuiet = React.useRef({});
+  // WHICH LIST THE STANDING MESSAGE IS ABOUT, when it is a refused list write (`steward-write-blocked`), so the
+  // write that later lands can take it down (`steward-write-landed`, src/steward.src.js _landed). Device round
+  // 2026-10-01: the "Couldn't save the approved-members list" strip stayed after the retry let the person in.
+  const msgWhat = React.useRef(null);
   // ⚠ WHILE A DIALOG IS OPEN THIS BANNER MOVES TO THE BOTTOM AND SHRINKS TO ONE LINE.
   //
   // Both of the rules below it are still true and neither is being undone:
@@ -537,6 +546,7 @@ function PublishErrorBanner() {
         f._q = setTimeout(() => setBgMsg(''), 12000);
         return;
       }
+      msgWhat.current = null;
       setMsg(m);
       clearTimeout(f._t);
       if (!sticky) f._t = setTimeout(() => setMsg(''), 9000);   // actionable failures stay until dismissed
@@ -552,11 +562,18 @@ function PublishErrorBanner() {
       // rather than equality, so a future "church registration (retry)" lands here too rather than
       // silently falling back into the evictable slot.
       if (/^church (registration|relay)/.test(String(d.what || ''))) { setRegMsg(text); return; }
-      clearTimeout(f._t); setMsg(text);
+      clearTimeout(f._t); msgWhat.current = d.what || null; setMsg(text);
+    };
+    // THE SAME LIST, SAVED: the refusal it was about is over. Only that message — anything that has replaced it
+    // since stays, and so does a message about a different list.
+    const landed = (e) => {
+      const what = (e && e.detail && e.detail.what) || '';
+      if (what && msgWhat.current === what) { msgWhat.current = null; setMsg(''); }
     };
     window.addEventListener('steward-publish-error', f);
     window.addEventListener('steward-write-blocked', g);
-    return () => { window.removeEventListener('steward-publish-error', f); window.removeEventListener('steward-write-blocked', g); };
+    window.addEventListener('steward-write-landed', landed);
+    return () => { window.removeEventListener('steward-publish-error', f); window.removeEventListener('steward-write-blocked', g); window.removeEventListener('steward-write-landed', landed); };
   }, []);
   if (!msg && !sgMsg && !regMsg && !bgMsg) return null;
   // role="alert" + aria-live so a screen reader ANNOUNCES it. The console's only failure banner was the one
@@ -782,6 +799,15 @@ function KeyDistributor() {
   const pending = React.useRef({});    // group id → a publish is in flight; do not start another
   const nextTry = React.useRef({});    // group id → earliest Date.now() a REFUSED publish may retry
   const failCount = React.useRef({});  // group id → consecutive refusals, for the exponential backoff
+  // THESE ARE PER CHURCH. They survived a church switch, so a room id seen while acting for church B had a
+  // `last` entry when the console came back to A — and A's members looked like new recipients of B's room key
+  // (audit of 5276297, HIGH 1). KEPT per church, not wiped (audit of 831dcea): wiping them made A's rooms a first
+  // sighting on the way back from B, so a member who joined A meanwhile was recorded as keyed and never was.
+  const memos = React.useRef({});      // church → its { last, pending, nextTry, failCount }
+  const memoFor = React.useRef(null);
+  { const cpNow = (window.Steward && (window.Steward.actingChurch || window.Steward.churchPub)) || '';
+    if (memoFor.current !== cpNow) { memoFor.current = cpNow; const m = memos.current[cpNow] || (memos.current[cpNow] = { last: {}, pending: {}, nextTry: {}, failCount: {} });
+      last.current = m.last; pending.current = m.pending; nextTry.current = m.nextTry; failCount.current = m.failCount; } }
   const membersRef = React.useRef([]); membersRef.current = members;
   // CATCH UP AFTER A LOCK. The console auto-locks after 10 minutes idle and `Steward.lock()` forgets the key,
   // so every envelope published in that window is refused — and the backoff above then records those refusals
@@ -800,17 +826,37 @@ function KeyDistributor() {
   React.useEffect(() => {
     const onKey = () => {
       // the failures were the lock, not the relay — start the backoff clean rather than making a returning
-      // steward wait out a penalty for an outage they caused by walking away
+      // steward wait out a penalty for an outage they caused by walking away — in every church's memo (`memos`)
       pending.current = {}; nextTry.current = {}; failCount.current = {};
+      for (const x of Object.values(memos.current)) { x.pending = {}; x.nextTry = {}; x.failCount = {}; }
+      const m = memos.current[memoFor.current]; if (m) { m.pending = pending.current; m.nextTry = nextTry.current; m.failCount = failCount.current; }
       setUnlockTick(t => t + 1);
     };
     window.addEventListener('steward-key', onKey);
     return () => window.removeEventListener('steward-key', onKey);
   }, []);
+  // THE THREE KEY SUBSCRIPTIONS FOLLOW THE CHURCH AND THE CONNECTION — [idv, conn, church], like makeSub in
+  // steward-root.jsx. They were mounted with `[]`, so after a church switch they went on reading the PREVIOUS
+  // church's envelopes and never read the new one's: switching A→B→A left the name key empty (every member
+  // "Anonymous") and church B's care needs were sealed with church A's care key. Measured 2026-10-01 (audit5).
+  // `_kdWho` covers the switch that fires no `steward-identity` event (a restore) and the church key arriving
+  // after mount; `conn` covers a returning socket, which does not re-issue its REQs.
+  const _kdIdv = window.useStewardIdv ? window.useStewardIdv() : 0;
+  const _kdConn = window.useStewardConn ? window.useStewardConn() : 0;
+  const _kdWho = (window.Steward && (window.Steward.actingChurch || window.Steward.activePub)) || '';
+  // MINT ON A SIGNAL. The engine says when a key read has settled (`steward-keys-read`: a trustworthy, current
+  // "no envelope here"), and the enrolment effect below re-runs on it. Before, nothing re-ran that effect when
+  // the answer arrived, so a church whose read settled after the roster had stopped changing never minted.
+  const [keysReadTick, setKeysReadTick] = React.useState(0);
+  React.useEffect(() => {
+    const f = () => setKeysReadTick(t => t + 1);
+    window.addEventListener('steward-keys-read', f);
+    return () => window.removeEventListener('steward-keys-read', f);
+  }, []);
   // #17: load the church media key whenever the console is open (not only on the Sermons tab) so we can re-key joiners
-  React.useEffect(() => (window.Steward && window.Steward.subscribeMediaKey ? window.Steward.subscribeMediaKey() : undefined), []);
+  React.useEffect(() => (window.Steward && window.Steward.subscribeMediaKey ? window.Steward.subscribeMediaKey() : undefined), [_kdIdv, _kdConn, _kdWho]);
   // the church CARE key — same envelope, sealing the identifying half of care needs (H3)
-  React.useEffect(() => (window.Steward && window.Steward.subscribeCareKey ? window.Steward.subscribeCareKey() : undefined), []);
+  React.useEffect(() => (window.Steward && window.Steward.subscribeCareKey ? window.Steward.subscribeCareKey() : undefined), [_kdIdv, _kdConn, _kdWho]);
   // THE WEBSITE MIRROR RUNS WHILE THE CONSOLE IS OPEN, not only while Settings → Your website is on screen.
   // The engine's reconciler (src/steward.src.js _webSync) writes the public copy of an event added today
   // against a switch turned on yesterday, and tombstones a copy when its event is removed — but only while
@@ -822,7 +868,7 @@ function KeyDistributor() {
   React.useEffect(() => (window.Steward && window.Steward.subscribeWebsiteShare ? window.Steward.subscribeWebsiteShare(() => {}, { restart: true }) : undefined), [_webConn]);
   // the church NAME key — the envelope members seal their display name under, so the relay (and any mirror
   // holding a copy of this church) stores ciphertext instead of a named roster. AUDIT-2026-07-27.
-  React.useEffect(() => (window.Steward && window.Steward.subscribeNameKey ? window.Steward.subscribeNameKey() : undefined), []);
+  React.useEffect(() => (window.Steward && window.Steward.subscribeNameKey ? window.Steward.subscribeNameKey() : undefined), [_kdIdv, _kdConn, _kdWho]);
   // keep the envelope's author check current: a revoked steward's envelope must stop being accepted
   const stewardRoster = window.useStewardStewards ? window.useStewardStewards() : [];
   React.useEffect(() => { if (window.Steward && window.Steward.setCareRoster) window.Steward.setCareRoster(stewardRoster); }, [stewardRoster]);
@@ -830,12 +876,26 @@ function KeyDistributor() {
   // effect, so they close over the roster as it was at mount — which on a cold console is empty, and an empty
   // roster is exactly the case that leaves a delegated steward without the sermon key.
   const stewardRosterRef = React.useRef([]); stewardRosterRef.current = stewardRoster;
+  const groupsRef = React.useRef([]); groupsRef.current = groups;
   // BLOCKED MEMBERS MUST NEVER BE RE-KEYED. useStewardMembers() does not filter the blocklist (DashMembers does
   // that itself), so every recipient set built here silently included people the steward had removed: the next
   // time anyone joined, `grew` fired and the freshly-rotated key was wrapped straight back to them. The care and
   // media re-key paths had the same hole via `want`. AUDIT-2026-07-27.
   const blockedList = window.useStewardBlocked ? window.useStewardBlocked() : [];
   const blockedSet = React.useMemo(() => new Set((blockedList || []).map(p => String(p || '').toLowerCase())), [blockedList]);
+  const blockedRef = React.useRef([]); blockedRef.current = blockedList;
+  // EVERY LIST THE ENROLMENT USES MUST BE THE CURRENT CHURCH'S. The member, steward, group and blocked hooks keep
+  // their last value until the new church's stream delivers, so for a beat after a switch this component held
+  // church A's lists while the engine was on church B — and the enrolment below wrapped B's keys to A's members,
+  // the person just blocked among them (audits of d1116f6 and 3bc8905; the second found the list arriving AFTER
+  // the switch, from A's own closed stream, so "has it been replaced yet?" was not enough). The engine stamps each
+  // list with the church and epoch its stream was opened for, and enrolment runs only when all four carry the
+  // stamp of the church the console is on now (Steward.listIsCurrent). A cached or initial list has no stamp.
+  const _kdListsCurrent = (m, g, st, bl) => {
+    const S = window.Steward;
+    if (!S || !S.listIsCurrent) return false;
+    return S.listIsCurrent(m) && S.listIsCurrent(g) && S.listIsCurrent(st) && S.listIsCurrent(bl);
+  };
   const notBlocked = (pk) => pk && !blockedSet.has(String(pk).toLowerCase());
   React.useEffect(() => {
     // SAME GUARD AS THE CAPABILITY MINT, and for the same measured reason. A delegated steward viewing their
@@ -846,6 +906,7 @@ function KeyDistributor() {
     // this church's key in Settings…". That banner then sat on every screen telling a treasurer her work was
     // not saving WHILE THE RELAY ACCEPTED EVERY ENTRY, and its remedy destroys a church key if followed.
     if (!church.name) return;   // no church of our own to key — see the capability mint for the full note
+    if (!_kdListsCurrent(members, groups, stewardRoster, blockedList)) return;   // a list from another church, or none yet — see _kdListsCurrent
     const memberPubs = members.map(m => m.pubkey).filter(notBlocked);
     for (const g of groups) {
       if (!g.encrypted) continue;
@@ -875,16 +936,19 @@ function KeyDistributor() {
           // gets no backoff, because the call is free and the retry is the whole repair.
           if (pending.current[g.id]) continue;
           if (Date.now() < (nextTry.current[g.id] || 0)) continue;
-          pending.current[g.id] = true;
+          // THIS church's memo, held for the answer: the console may be on another church by the time it lands,
+          // and the result belongs to the church the publish was made for (the memo is per church — above).
+          const L = last.current, P = pending.current, N = nextTry.current, F = failCount.current;
+          P[g.id] = true;
           Promise.resolve(window.Steward.publishGroupKey(g.id, recips, { reuseOnly: true, background: true })).then(r => {
-            pending.current[g.id] = false;
+            P[g.id] = false;
             if (r === false) {
-              const n = (failCount.current[g.id] || 0) + 1; failCount.current[g.id] = n;
-              nextTry.current[g.id] = Date.now() + Math.min(60000, 2000 * Math.pow(2, n - 1));
+              const n = (F[g.id] || 0) + 1; F[g.id] = n;
+              N[g.id] = Date.now() + Math.min(60000, 2000 * Math.pow(2, n - 1));
             }
             if (r === null || r === false) return;                       // not keyed — leave `last` alone so we come back
-            last.current[g.id] = key;
-            delete failCount.current[g.id]; delete nextTry.current[g.id];
+            L[g.id] = key;
+            delete F[g.id]; delete N[g.id];
             const missed = r && r.skipped;
             // The console's existing warning channel, rather than a new banner nobody knows to look at.
             if (missed && missed.length) {
@@ -893,7 +957,7 @@ function KeyDistributor() {
                   message: missed.length + ' member(s) could not be given the key for “' + (g.name || 'a group') + '”. They will not be able to read or post in that room. Open the group and save it again to re-send.' } }));
               } catch (e) {}
             }
-          }).catch(() => { pending.current[g.id] = false; });   // a throw must not wedge the guard shut
+          }).catch(() => { P[g.id] = false; });   // a throw must not wedge the guard shut
         } else {
           last.current[g.id] = key;                                      // nothing to publish (shrank, or no key API)
         }
@@ -943,11 +1007,15 @@ function KeyDistributor() {
   // the key waited for some unrelated change to groups or members. That is the 8-minute gap measured on the
   // relay between the first calendar document and the namekey: envelope, and post-fix it is 8 minutes of the
   // calendar refusing to save rather than 8 minutes of writing in the clear.
-  }, [groups, members, stewardRoster, blockedList, unlockTick, church.name]);   // unlockTick: re-run the whole enrolment when the key comes back after a lock
+  }, [groups, members, stewardRoster, blockedList, unlockTick, church.name, keysReadTick]);   // unlockTick: re-run the whole enrolment when the key comes back after a lock; keysReadTick: when a key read settles
   // the media key loads ASYNC (subscribeMediaKey) and may arrive AFTER the roster settles, so the effect above can run
   // before we hold the key. Re-check a couple of times on mount — ensureMediaKeyForMembers is idempotent + cheap.
   React.useEffect(() => {
-    const call = () => { if (window.Steward && window.Steward.ensureMediaKeyForMembers) window.Steward.ensureMediaKeyForMembers(membersRef.current.map(m => m.pubkey), stewardRosterRef.current); };
+    const call = () => {
+      if (!_kdListsCurrent(membersRef.current, groupsRef.current, stewardRosterRef.current, blockedRef.current)) return;   // see _kdListsCurrent
+      const bs = new Set((blockedRef.current || []).map(p => String(p || '').toLowerCase()));
+      if (window.Steward && window.Steward.ensureMediaKeyForMembers) window.Steward.ensureMediaKeyForMembers(membersRef.current.map(m => m.pubkey).filter(p => p && !bs.has(String(p).toLowerCase())), stewardRosterRef.current);
+    };
     const t1 = setTimeout(call, 3500), t2 = setTimeout(call, 9000);
     return () => { clearTimeout(t1); clearTimeout(t2); };
   }, []);
@@ -1322,7 +1390,7 @@ function StewSetupWizard({ church, onDone, onTab, onSettings, onInvite, onNewPos
       // regardless, so an offline or wrong-key relay produced exactly the empty calendar this step exists to
       // prevent — with the only signal a generic 9-second toast the steward was already scrolling past.
       for (const m of rows) {
-        const r = await Promise.resolve(window.Steward.publishMeeting({ id: m.id, title: m.title.trim(), day: m.day, time: m.time, recur: m.recur }));
+        const r = await Promise.resolve(window.Steward.publishMeeting({ id: m.id, title: m.title.trim(), day: m.day, time: m.time, recur: m.recur, ...(m.recur === 'monthly' && typeof m.nth === 'number' ? { nth: m.nth } : {}) }));   // which week — WizMeetings sets it; dropping it published every monthly meeting as the 1st
         if (!r) failed++;
       }
     } catch (e) { failed = rows.length; }
@@ -1669,12 +1737,7 @@ window.StewQRScanner = StewQRScanner;
 // pick, on the backdrop, on Escape, on Back and on its own × — and Help, which lived in the header row on
 // the phone, is its last row: the header has no room for a fifth 44px control beside the section name.
 function StewSectionsMenu({ nav, tab, onPick, onHelp, onClose }) {
-  const dlgRef = useStewDialog(onClose);
-  React.useEffect(() => {
-    let sub;
-    try { const P = window.Capacitor && window.Capacitor.Plugins; if (P && P.App && P.App.addListener) sub = P.App.addListener('backButton', () => onClose()); } catch (e) {}
-    return () => { try { sub && sub.remove && sub.remove(); } catch (e) {} };
-  }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+  const dlgRef = useStewDialog(onClose);   // …and Android Back: the console's dialog stack (stew-modal.jsx _stewBackSync)
   const row = { display: 'flex', alignItems: 'center', gap: 12, width: '100%', minHeight: 44, flexShrink: 0, padding: '10px 12px', borderRadius: 11, border: 'none', cursor: 'pointer', textAlign: 'left', background: 'transparent', color: 'var(--ink-2)', fontWeight: 600, fontSize: 14.5, fontFamily: 'var(--font-ui)' };
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'color-mix(in oklab, var(--ink) 34%, transparent)', backdropFilter: 'blur(3px)', animation: 'lumenFade .18s ease both' }}>
@@ -1733,13 +1796,8 @@ function StewMemberSheet({ label, initials, av, pubkey, accent, facts, actions, 
   // block armed — so ⋯ → Remove / block → Back left the arm in place, and the NEXT ⋯ opened with a one-tap
   // "Confirm: block" in the slot "Remove / block" normally fills. Found by the audit of this branch with a
   // fake App plugin in the real console. useStewDialog's Escape path already keeps a ref for exactly this.
-  const closeRef = React.useRef(onClose);
-  closeRef.current = onClose;
-  React.useEffect(() => {
-    let sub;
-    try { const P = window.Capacitor && window.Capacitor.Plugins; if (P && P.App && P.App.addListener) sub = P.App.addListener('backButton', () => { try { closeRef.current && closeRef.current(); } catch (e) {} }); } catch (e) {}
-    return () => { try { sub && sub.remove && sub.remove(); } catch (e) {} };
-  }, []);
+  // Back now comes through the console's dialog stack (stew-modal.jsx _stewBackSync), which calls the CURRENT
+  // onClose through useStewDialog's own ref — the property this listener was rewritten to have.
   const row = { display: 'flex', alignItems: 'center', gap: 12, width: '100%', minHeight: 48, flexShrink: 0, padding: '10px 12px', borderRadius: 11, border: 'none', cursor: 'pointer', textAlign: 'left', background: 'transparent', color: 'var(--ink-2)', fontWeight: 600, fontSize: 14.5, fontFamily: 'var(--font-ui)' };
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 200, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', background: 'color-mix(in oklab, var(--ink) 34%, transparent)', backdropFilter: 'blur(3px)', animation: 'lumenFade .18s ease both' }}>
@@ -2425,7 +2483,7 @@ window.skPrintable = function (html) {
 // that on screen, never in a catch that swallows it — a button that fails silently is the defect this replaces.
 // The three wordings passed below replace saveFile's backup-specific defaults ("make a backup", "Save to
 // device"), which name buttons that do not exist on these screens.
-// Callers: saveQrPngFor (JoinCard, below), booksDownload and fsDownloadDoc (stew-finance.jsx).
+// Callers: saveQrPngFor (JoinCard, below), booksDownload, fsDownloadDoc and fsSavePdf (stew-finance.jsx), doBackup (DashBackup, below).
 async function saveConsoleFile(filename, data, opts) {
   const B = window.TrinityBackup;
   if (!B || !B.saveFile) throw new Error('This build can’t save files — open the console in a browser to download it.');
@@ -3751,7 +3809,7 @@ function GroupChatModal({ group, onClose }) {
     let r = null;
     try { r = await window.Steward.publishEvent({ ...evt, title: evt.title.trim(), where: evt.where.trim(), groupId: group.id }); } catch (e) { r = null; }
     setEvtBusy(false);
-    if (r == null) { setEvtErr('Not saved — your church’s key hasn’t arrived yet. Give it a moment and try again.'); return; }
+    if (r == null) { let why = ''; try { why = (window.Steward.keyWaitNote && window.Steward.nameKeyReady && !window.Steward.nameKeyReady()) ? window.Steward.keyWaitNote('name') : ''; } catch (e) {} setEvtErr(why ? 'Not saved — your church’s key hasn’t arrived: ' + why + '.' : 'Not saved — your church’s key hasn’t arrived yet. Give it a moment and try again.'); return; }   // name the relay holding the key back (schNoKey, stew-schedule.jsx)
     setComposeEvt(false); setEvt({ title: '', date: '', time: '', where: '' });
   };
   const isTeam = group.kind === 'team';
@@ -4497,7 +4555,7 @@ function DashRelaysCard() {
         ) : backup && backup.syncOn ? (
           <div style={{ display: 'flex', gap: 9, alignItems: 'center', padding: '10px 13px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)', marginBottom: 14 }}>
             <span style={{ width: 8, height: 8, borderRadius: 999, background: 'var(--sage)', flexShrink: 0 }} />
-            <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5 }}><b style={{ color: 'var(--ink)' }}>Backup on.</b> Your {backup.boxes} relays mirror each other — if one goes down, nothing is lost.</div>
+            <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5 }}><b style={{ color: 'var(--ink)' }}>Backup on.</b> Your {backup.boxes} relays mirror each other — if one goes offline, the others still have a copy.</div>
           </div>
         ) : null}
         {checking ? <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '8px 2px' }}>Checking relays…</div> : null}
@@ -4839,7 +4897,7 @@ function DashRelayHistoryCard() {
       </Panel>
         {/* cross-relay sync: the church's own TrinityOne relays continuously exchange their full history */}
       <Panel title="Keep your relays in sync">
-        <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 11 }}>Your church’s own relays can continuously exchange their full history — so if one goes offline it catches up when it’s back, and nothing is lost. {backup != null ? (backup.boxes >= 2 ? <b>{backup.boxes} separate relays can sync{backup.syncOn ? ' — sync is on.' : '.'}</b> : 'Add a second relay your church runs to switch this on.') : 'Checking…'}</div>
+        <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55, marginBottom: 11 }}>Your church’s own relays can continuously exchange their full history — so if one goes offline it catches up when it’s back. {backup != null ? (backup.boxes >= 2 ? <b>{backup.boxes} separate relays can sync{backup.syncOn ? ' — sync is on.' : '.'}</b> : 'Add a second relay your church runs to switch this on.') : 'Checking…'}</div>
         {/* MARKED, NOT HIDDEN — the same choice DashSermons, the nav and the header's "New post" make: a
             button that vanishes reads as a broken console, a locked one that says why reads as a church
             that has scoped you. `aria-disabled`, not `disabled`, so the press still lands and can answer
@@ -5353,7 +5411,13 @@ function ReseatModal({ member, memberName, realName, isMinor, admittedList, onCl
   // the youth clearance, the parent link, and the record the member's own phone reads. Those lists live in
   // the console's subscriptions, so they are read here and handed to the engine, which owns the ordering.
   const sgNow = window.useStewardSafeguard ? window.useStewardSafeguard() : { minors: [], approved: [] };
-  const guardiansNow = window.useStewardGuardians ? window.useStewardGuardians() : {};
+  const _gdCheckin = window.useStewardGuardians ? window.useStewardGuardians() : { links: {}, closed: {} };
+  const guardiansNow = _gdCheckin.links || {};
+  // …AND THE CLOSED PAIRS. reseatMember copies `closed` to the new key and keeps the old pairs (src/steward.src.js,
+  // 4ab4742), but only if it is handed them; without, it saved the guardian document with `closed` empty — so
+  // reconnecting any linked parent or child wiped every Decline and every removal, and each removed parent came
+  // back as a "Confirm" card (audit of a00d265, F2).
+  const guardiansClosedNow = _gdCheckin.closed || {};
   const blockedNow = window.useStewardBlocked ? window.useStewardBlocked() : [];
   const [taken, setTaken] = React.useState(false);   // "lost, or taken?" — see the note by the checkbox
   const [scan, setScan] = React.useState(false);
@@ -5378,7 +5442,7 @@ function ReseatModal({ member, memberName, realName, isMinor, admittedList, onCl
       // about all of them — including the stolen-phone block, which it never mentioned at all.
       const r = await window.Steward.reseatMember(member, newPub, {
         name: realName || '', reseats, admitted: admittedList,
-        minors: sgNow.minors, approved: sgNow.approved, guardians: guardiansNow,
+        minors: sgNow.minors, approved: sgNow.approved, guardians: guardiansNow, guardiansClosed: guardiansClosedNow,
         blocked: blockedNow, blockOld: taken,
       });
       setRes(r || {});
@@ -5634,7 +5698,8 @@ function DashMembers() {
   const [minorNotice, setMinorNotice] = React.useState(null);   // { pk, text }
   // does THIS church allow children to have photographs at all? (church profile → features.childPhotos)
   const kidPhotosAllowed = !!(church && church.features && church.features.childPhotos === true);
-  const toggleNoPhoto = (pk) => window.Steward.setNoPhoto(nophotoSet.has(pk) ? (sg.nophoto || []).filter(p => p !== pk) : [...(sg.nophoto || []), pk]);
+  // (a refusal is already on the banner — _requireTrustedView raised it — and must not escape the click uncaught)
+  const toggleNoPhoto = (pk) => { try { return Promise.resolve(window.Steward.setNoPhoto(nophotoSet.has(pk) ? (sg.nophoto || []).filter(p => p !== pk) : [...(sg.nophoto || []), pk])).catch(() => null); } catch (e) { return Promise.resolve(null); } };
   // Whenever either safeguarding list changes, re-seal the affected member's OWN clearance. Their app reads that
   // instead of the church's list of children, which the relay no longer serves to ordinary members.
   // AUDIT-2026-07-27. Best-effort and deliberately not awaited: the list write is the authoritative one.
@@ -5768,7 +5833,11 @@ function DashMembers() {
   // church's traffic with its OWN copy. "Marked as a child" landing on one relay of three means the child is
   // protected on one of three, while the row says it is done. toggleApproved below already gates its reseal
   // on the result; this brings its siblings up to that standard.
+  // THE CHURCH A GUARDIAN NOTICE GOES OUT AS is captured BEFORE the first await in each of the five paths below
+  // (toggleMinor, approveGuardian, declineGuardian, linkParent, unlinkParent): a church switch during the
+  // guardians/minors write must not send this church's list as another (see guardNoticeScope).
   const toggleMinor = async (pk) => {
+    const noticeScope = window.Steward.guardNoticeScope ? window.Steward.guardNoticeScope() : null;
     const unmarking = minorsSet.has(pk);
     const next = unmarking ? (sg.minors || []).filter(p => p !== pk) : [...(sg.minors || []), pk];
     const nextApproved = unmarking ? (sg.approved || []).filter(p => p !== pk) : (sg.approved || []);
@@ -5806,8 +5875,11 @@ function DashMembers() {
         if (kept.length !== ps.length) unlinkedFrom.push(c);
         if (kept.length) nextG[c] = kept;
       });
+      // …and close each pair, as unlinkParent does: otherwise their old requests come back as "Confirm" cards.
+      const nextClosed = { ...guardiansClosed }; const at = Math.floor(Date.now() / 1000);
+      unlinkedFrom.forEach(c => { nextClosed[c + '|' + pk] = at; });
       let okG = null;
-      try { okG = await Promise.resolve(window.Steward.setGuardians(nextG)); } catch (e) { okG = null; }
+      try { okG = await Promise.resolve(window.Steward.setGuardians(nextG, nextClosed)); } catch (e) { okG = null; }
       if (!okG) {
         setMinorNotice({ pk, tone: 'fail', text: (nameByPub[pk] || 'They') + ' is marked as a child, but they are STILL listed as a guardian of '
           + unlinkedFrom.map(c => nameByPub[c] || 'a child').join(', ') + ' — the relay didn’t accept the removal. A child is never a guardian; try again.' });
@@ -5815,7 +5887,9 @@ function DashMembers() {
         return r;
       }
       // the children they were unlinked from learn from their own sealed clearance; the parent's app is told directly
-      unlinkedFrom.forEach(c => { try { if (window.Steward.notifyGuardianRemoved) window.Steward.notifyGuardianRemoved(pk, c); } catch (e) {} });
+      // — in ONE notice. The notice is a single slot per parent, so one per child kept only the last; this one names
+      // them all (removedAll) and carries the parent's whole list from the map just written (owner, 2026-10-01).
+      if (unlinkedFrom.length) { try { if (window.Steward.notifyGuardianRemoved) window.Steward.notifyGuardianRemoved(pk, unlinkedFrom[0], nextG, unlinkedFrom, nextClosed, noticeScope); } catch (e) {} }
     }
     // A CHILD IS NEVER A CLEARED CHECK-IN WORKER EITHER — so marking somebody withdraws the check-in clearance
     // they hold, as unmarking withdraws the youth one below. Owner's decision 2026-09-11 (device finding D4's
@@ -5881,15 +5955,17 @@ function DashMembers() {
     // ONLY TELL THE MEMBER'S PHONE ONCE THE CHURCH'S OWN DOCUMENT SAYS SO. The first version resealed straight
     // away, so a write that failed still put "your church has cleared you to work with young people" on the
     // volunteer's screen while the church document said nothing and the relay still refused them.
-    const r = Promise.resolve(window.Steward.setApproved(next, { listKnown: !!sg.clearedKnown }))
+    const r = (() => { try { return Promise.resolve(window.Steward.setApproved(next, { listKnown: !!sg.clearedKnown })); } catch (e) { return Promise.reject(e); } })()   // a synchronous refusal is a rejection here, not an uncaught throw
       .then((ok) => { if (ok !== false) _reseal(sg.minors || [], next, [pk]); return ok; })
       .catch(() => false);
     return r;
   };
   // safeguarding v2: parent↔child links — pending parent requests + the confirmed map
   const guardReqs = window.useStewardGuardianRequests ? window.useStewardGuardianRequests() : [];
-  const guardians = window.useStewardGuardians ? window.useStewardGuardians() : {};
-  const pendingReqs = guardReqs.filter(r => !((guardians[r.child] || []).includes(r.parent)));
+  const _guardData = window.useStewardGuardians ? window.useStewardGuardians() : { links: {}, closed: {} };
+  const guardians = _guardData.links || {};
+  const guardiansClosed = _guardData.closed || {};
+  const pendingReqs = guardReqs.filter(r => !((guardians[r.child] || []).includes(r.parent)) && !guardiansClosed[r.child + '|' + r.parent]);
   const parentSet = new Set(); Object.values(guardians).forEach(ps => (ps || []).forEach(p => parentSet.add(p)));
   const nameByPub = {}; members.forEach(m => { if (m.name) nameByPub[m.pubkey] = m.name; });
   // C1: the guardian-link card must show identities a forger CANNOT control — the roster name we resolved
@@ -5912,6 +5988,7 @@ function DashMembers() {
   };
   const knownName = (pk) => nameByPub[pk] || (members.some(m => m.pubkey === pk) ? 'a member with no name set' : 'someone not on your roster');
   const approveGuardian = async (r) => {
+    const noticeScope = window.Steward.guardNoticeScope ? window.Steward.guardNoticeScope() : null;
     // The guard linkParent has always had, and this path did not: a request from someone the church has marked
     // as a child must be refused, not confirmed. A child is never a guardian (D2; reference/DOMAIN.md).
     if (minorsSet.has(r.parent)) {
@@ -5921,7 +5998,7 @@ function DashMembers() {
     }
     const nextG = { ...guardians, [r.child]: [...new Set([...(guardians[r.child] || []), r.parent])] };
     let okG = null;
-    try { okG = await Promise.resolve(window.Steward.setGuardians(nextG)); } catch (e) { okG = null; }
+    try { okG = await Promise.resolve(window.Steward.setGuardians(nextG, guardiansClosed)); } catch (e) { okG = null; }
     if (!okG) {
       setMinorNotice({ pk: r.child, tone: 'fail', text: 'Couldn’t confirm that guardian link — the relay didn’t accept it, '
         + 'so nobody has been linked and the request is still waiting. Check the relay and try again.' });
@@ -5943,7 +6020,22 @@ function DashMembers() {
     // Re-seal UNCONDITIONALLY once both halves are in. This used to run only when the child was not already
     // marked a minor, so linking a parent to an already-marked child never reached that child's phone at all.
     _reseal(nextM, sg.approved || [], [r.child], nextG);
+    // …and the parent's app gets its whole list, so the child it asked for reads as linked (owner, 2026-10-01).
+    if (window.Steward.notifyGuardianList) { try { window.Steward.notifyGuardianList(r.parent, nextG, guardiansClosed, noticeScope); } catch (e) {} }
     return true;
+  };
+  const declineGuardian = async (r) => {
+    const noticeScope = window.Steward.guardNoticeScope ? window.Steward.guardNoticeScope() : null;
+    const nextClosed = { ...guardiansClosed, [r.child + '|' + r.parent]: Math.floor(Date.now() / 1000) };
+    let ok = null;
+    try { ok = await Promise.resolve(window.Steward.setGuardians(guardians, nextClosed)); } catch (e) { ok = null; }
+    if (!ok) {
+      setMinorNotice({ pk: r.child, tone: 'fail', text: 'Couldn’t decline that request — the relay didn’t accept it, so it is still showing. Try again.' });
+      return;
+    }
+    // …and the parent's app, so it withdraws its own request instead of reading "Waiting for steward to confirm"
+    // for ever: their list notice now names the closed request (owner, 2026-10-01).
+    if (window.Steward.notifyGuardianList) { try { window.Steward.notifyGuardianList(r.parent, guardians, nextClosed, noticeScope); } catch (e) {} }
   };
   // steward-initiated link (no parent request): pick an adult as the child's guardian, from the child's row
   const [linkChild, setLinkChild] = React.useState(null);
@@ -5957,9 +6049,10 @@ function DashMembers() {
   const delegated = !!(window.Steward && window.Steward.actingChurch);
   const linkParent = async (childPub, parentPub) => {
     if (childPub === parentPub || minorsSet.has(parentPub)) return;   // a parent must be a different, adult account
+    const noticeScope = window.Steward.guardNoticeScope ? window.Steward.guardNoticeScope() : null;
     const nextG = { ...guardians, [childPub]: [...new Set([...(guardians[childPub] || []), parentPub])] };
     let okG = null;
-    try { okG = await Promise.resolve(window.Steward.setGuardians(nextG)); } catch (e) { okG = null; }
+    try { okG = await Promise.resolve(window.Steward.setGuardians(nextG, guardiansClosed)); } catch (e) { okG = null; }
     if (!okG) {
       setMinorNotice({ pk: childPub, tone: 'fail', text: 'Couldn’t save that guardian link — the relay didn’t accept it, '
         + 'so nobody has been linked. Check the relay and try again.' });
@@ -5978,13 +6071,20 @@ function DashMembers() {
     }
     _reseal(nextM, sg.approved || [], [childPub], nextG);   // unconditional — see approveGuardian
     // notify the newly-linked parent so the child actually shows up in THEIR app (they never set it up locally)
-    if (window.Steward.notifyGuardian) window.Steward.notifyGuardian(parentPub, childPub, nameByPub[childPub] || '');
+    // …with the parent's whole list from the map just written, so the newest notice is the whole truth (2026-10-01)
+    if (window.Steward.notifyGuardian) window.Steward.notifyGuardian(parentPub, childPub, nameByPub[childPub] || '', nextG, guardiansClosed, noticeScope);
   };
   const unlinkParent = async (childPub, parentPub) => {
+    const noticeScope = window.Steward.guardNoticeScope ? window.Steward.guardNoticeScope() : null;
     const cur = (guardians[childPub] || []).filter(p => p !== parentPub);
-    const next = { ...guardians }; if (cur.length) next[childPub] = cur; else delete next[childPub];
+    const nextG = { ...guardians }; if (cur.length) nextG[childPub] = cur; else delete nextG[childPub];
+    // RECORD THE REMOVAL AS A DECISION, the way Decline does. The Confirm list shows any parent request that is
+    // neither linked nor closed, and the parent's original request stays on the relay — so removing the link
+    // without closing the pair put that request straight back on the screen as a fresh "Confirm", one tap from
+    // re-linking the adult the steward had just removed (audit 2026-09-27 item 6; confirmed 2026-09-30).
+    const nextClosed = { ...guardiansClosed, [childPub + '|' + parentPub]: Math.floor(Date.now() / 1000) };
     let okG = null;
-    try { okG = await Promise.resolve(window.Steward.setGuardians(next)); } catch (e) { okG = null; }
+    try { okG = await Promise.resolve(window.Steward.setGuardians(nextG, nextClosed)); } catch (e) { okG = null; }
     if (!okG) {
       // Failing to REMOVE a link is the worse direction: the adult stays a parent the child's app will always
       // let through. Never let the row imply it is gone.
@@ -5994,9 +6094,10 @@ function DashMembers() {
     }
     // Removing a link matters more than adding one: without this the child's phone keeps the old sealed answer
     // and goes on treating a removed adult as a parent it may always message.
-    _reseal(sg.minors || [], sg.approved || [], [childPub], next);
+    _reseal(sg.minors || [], sg.approved || [], [childPub], nextG);
     // ...and tell the PARENT'S app, which stores the link locally and had no other way to learn it was gone.
-    if (window.Steward.notifyGuardianRemoved) window.Steward.notifyGuardianRemoved(parentPub, childPub);
+    // (with their whole remaining list from the map just written — owner, 2026-10-01)
+    if (window.Steward.notifyGuardianRemoved) window.Steward.notifyGuardianRemoved(parentPub, childPub, nextG, undefined, nextClosed, noticeScope);
   };
   // joining: when approval is on, members who haven't been admitted yet are pending requests
   const joinApproval = window.useStewardJoinPolicy ? window.useStewardJoinPolicy() : false;
@@ -6012,10 +6113,16 @@ function DashMembers() {
   const pendingSet = new Set(pendingJoins.map(m => m.pubkey));
   // Its bulk sibling admitAll already checks its result; this one did not, so a single Approve that the relay
   // refused still moved the row out of the waiting list on screen while the relay kept refusing the member.
-  const admitMember = (pk) => Promise.resolve(window.Steward.setAdmitted([...admittedList, pk]))
+  // A THROW BECOMES A REJECTION. setAdmitted's guard (_requireTrustedView) throws SYNCHRONOUSLY when this console
+  // is not logged in to its relay, and `Promise.resolve(setAdmitted(…))` evaluates the call before any promise
+  // exists — so the throw left the click handler UNCAUGHT and the row said nothing (device round 2026-10-01,
+  // Oppo: Uncaught Error … at admitMember). Still called at once (not a tick later, which every other write here
+  // is too); the catch below says which failure it was.
+  const admitMember = (pk) => (() => { try { return Promise.resolve(window.Steward.setAdmitted([...admittedList, pk])); } catch (e) { return Promise.reject(e); } })()
     .then((ok) => { if (!ok) setMinorNotice({ pk, tone: 'fail', text: 'Couldn’t let ' + (nameByPub[pk] || 'them')
       + ' in — the relay didn’t accept it, so they are still waiting. Check the relay and try again.' }); return ok; })
-    .catch(() => { setMinorNotice({ pk, tone: 'fail', text: 'Couldn’t let ' + (nameByPub[pk] || 'them') + ' in — the relay could not be reached.' }); return null; });
+    .catch((e) => { setMinorNotice({ pk, tone: 'fail', text: 'Couldn’t let ' + (nameByPub[pk] || 'them') + ' in — '
+      + ((e && e.notConnected) ? 'this console hasn’t finished connecting to your church, so nothing was changed and they are still waiting.' : 'the relay could not be reached.') }); return null; });
   // ONE DECISION, ONE PRESS. Opening a church means admitting everyone who came in off the invite at once;
   // Miriam pressed Approve eighteen times to do it, and setAdmitted takes the whole list anyway, so that was
   // eighteen round trips for a single decision.
@@ -6053,7 +6160,9 @@ function DashMembers() {
   // already read are past — no key change can retract those, and we don't pretend otherwise.)
   const block = (pk) => {
     setConfirmBlock(null);
-    window.Steward.setBlocked([...blockedList, pk]);
+    // A REFUSED blocklist write stops here, said on the banner (_requireTrustedView) — not an uncaught throw
+    // out of the click, and not a key rotation for a block that was never written.
+    try { window.Steward.setBlocked([...blockedList, pk]); } catch (e) { return; }
     try {
       const remaining = members.map(m => m.pubkey).filter(p => p && p.toLowerCase() !== String(pk || '').toLowerCase() && !isBlocked(p));
       // AWAIT THESE, AND REPORT A FAILURE. Rotation is what actually takes the keys away from the person
@@ -6067,9 +6176,11 @@ function DashMembers() {
       if (window.Steward.rotateMediaKey) rotations.push(Promise.resolve(window.Steward.rotateMediaKey(remaining, stewardRoster || [])).then(r => ['the sermon key', r]));
       // THE NAME KEY IS IN THIS LIST TOO. It was fired and forgotten one line below while care and media were
       // awaited, which made it the worst of the three to lose: a blocked member still holding the name key can
-      // read the whole congregation's names. It returns null for the cases where it deliberately declines
-      // (nothing to rotate, no trusted view, delegated console) and false only when the envelope will not fit,
-      // and only false is reported below — so declining stays quiet and failing does not.
+      // read the whole congregation's names. What is reported below (audit of 3bc8905, and this comment
+      // corrected after the audit of 5276297): `false` always, and `null` on an OWNER's console — a rotation that
+      // did not happen leaves the blocked member holding the key. A DELEGATED console's `null` is the deliberate
+      // decline (the owner-only keys) and is said separately below; "nothing to rotate" comes back as an object
+      // ({ rotated: false }), not null, so it stays quiet.
       //
       // NOT AS A DELEGATED STEWARD. A delegated console can never read the owner's name-key envelope, so it
       // holds an EMPTY ring; rotating from empty minted a brand-new single-key ring and published it as the
@@ -6115,7 +6226,11 @@ function DashMembers() {
       // rotations pushed below were collected into an array nothing was waiting on any more — the exact
       // fire-and-forget the rest of this handler exists to undo.
       Promise.all(rotations).then(rs => {
-        const failed = rs.filter(([, ok]) => ok === false).map(([what]) => what);
+        // NULL IS A FAILURE TOO (audit of 3bc8905). A rotation returns null when it did not happen — no trusted
+        // view, an envelope this console is not in, or a name-key Block queued across a church switch — and the
+        // blocked member then still holds that key. Only a DELEGATED console gets null by design (the owner-only
+        // sermon key), and it is told so below.
+        const failed = rs.filter(([, ok]) => ok === false || (ok == null && !delegated)).map(([what]) => what);
         if (failed.length) setBlockWarn('Removed them from the church, but could not change ' + failed.join(' or ') + '. They may still be able to open things sealed with it. Try blocking them again — and if it keeps failing, your church may have grown past what one key document can hold.');
       }).catch(() => {});
       // SAY SO. Both guards above are correct and both are silent: as a delegated steward you tap Block, the
@@ -6140,7 +6255,8 @@ function DashMembers() {
   // false on a partial write, so "unblocked" could otherwise be true on one relay and false on another.
   const [confirmUnblock, setConfirmUnblock] = React.useState(null);
   const [blockErr, setBlockErr] = React.useState('');
-  const unblock = (pk) => Promise.resolve(window.Steward.setBlocked(blockedList.filter(p => p !== pk)))
+  // `unblock: [pk]` — the only way setBlocked takes anyone off the list (it keeps everyone this console holds as blocked)
+  const unblock = (pk) => (() => { try { return Promise.resolve(window.Steward.setBlocked(blockedList.filter(p => p !== pk), { unblock: [pk] })); } catch (e) { return Promise.reject(e); } })()   // a synchronous refusal is a rejection, not an uncaught throw
     .then((ok) => { setConfirmUnblock(null); setBlockErr(ok ? '' : 'Couldn’t unblock ' + (nameByPub[pk] || 'that member')
       + ' — the relay didn’t accept it, so they are still blocked. Try again.'); return ok; })
     .catch(() => { setConfirmUnblock(null); setBlockErr('Couldn’t reach the relay to unblock them.'); return null; });
@@ -6148,7 +6264,7 @@ function DashMembers() {
   // "last seen" = newest of a post or a membership heartbeat. No activity in 90 days → inactive list.
   const INACTIVE_DAYS = 90;
   const cutoff = Math.floor(Date.now() / 1000) - INACTIVE_DAYS * 86400;
-  const seen = (m) => Math.max(m.lastTs || 0, m.joined || 0);
+  const seen = (m) => Math.max(m.lastTs || 0, m.seen || 0, m.joined || 0);
   const activeM = members.filter(m => seen(m) >= cutoff && !isBlocked(m.pubkey) && !pendingSet.has(m.pubkey) && matchQ(m));
   const inactiveM = members.filter(m => seen(m) < cutoff && !isBlocked(m.pubkey) && !pendingSet.has(m.pubkey) && matchQ(m));
   const chatting = activeM.filter(m => m.count > 0).length;
@@ -6403,7 +6519,7 @@ function DashMembers() {
               const named = !!m.name; const label = named ? m.name : 'Anonymous';
               const initials = (named ? m.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'AN').toUpperCase();
               return (
-                <div key={m.pubkey} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 10, background: 'var(--surface)', border: '1px solid var(--line)' }}>
+                <div key={m.pubkey} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 10, background: 'var(--surface)', border: '1px solid var(--line)' }}>
                   <SkBadge initials={initials} av={m.av} pubkey={m.pubkey} size={32} radius={10} accent={SK_TINT[named ? 'gold' : 'sage'].fg} />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontWeight: 700, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</div>
@@ -6427,6 +6543,16 @@ function DashMembers() {
                         <button onClick={() => setConfirmBlock(null)} aria-label="Cancel — leave them waiting" title="Cancel" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 9px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0 }}><Icon name="x" size={15} color="currentColor" /></button>
                       </React.Fragment>
                     : <button onClick={() => setConfirmBlock(m.pubkey)} aria-label={'Decline ' + (m.name || nameHandle(m) || shortNpub(m.npub)) + ' — asks you to confirm'} title="Decline — blocks this person from joining or posting" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 9px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0 }}><Icon name="x" size={15} color="currentColor" /></button>}
+                  {/* WHAT HAPPENED TO THIS APPROVE, ON THIS ROW. admitMember's notice (minorNotice) was drawn only on the
+                      member list's rows, and a person waiting to join is not on that list — so a refused Approve
+                      said nothing where it was pressed (device round 2026-10-01: only the banner spoke). */}
+                  {minorNotice && minorNotice.pk === m.pubkey ? (
+                    <div role={minorNotice.tone === 'fail' ? 'alert' : 'status'} style={{ flexBasis: '100%', fontSize: 12.5, lineHeight: 1.45, padding: '9px 12px', borderRadius: 11,
+                      background: minorNotice.tone === 'fail' ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'color-mix(in oklab, var(--gold) 12%, var(--surface))',
+                      border: '1px solid ' + (minorNotice.tone === 'fail' ? 'color-mix(in oklab, var(--clay) 38%, var(--line))' : 'color-mix(in oklab, var(--gold) 34%, var(--line))'), color: 'var(--ink)' }}>
+                      {minorNotice.text}
+                    </div>
+                  ) : null}
                 </div>
               );
             })}
@@ -6452,7 +6578,10 @@ function DashMembers() {
                   <div style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--ink-3)', wordBreak: 'break-all', lineHeight: 1.3 }}>child {idOf(r.child)}</div>
                   <div style={{ marginTop: 5, fontSize: 11.5, color: 'var(--ink-3)' }}>Confirming lets this person DM the child directly and marks the child as under-18. Check both npubs are who you expect.</div>
                 </div>
-                <button onClick={() => approveGuardian(r)} disabled={minorsSet.has(r.parent)} aria-label={'Confirm guardian link: ' + knownName(r.parent) + ' for ' + knownName(r.child)} className="sk-btn sk-btn--clay" style={{ padding: '7px 13px', fontSize: 12.5, flexShrink: 0, opacity: minorsSet.has(r.parent) ? 0.5 : 1 }}><Icon name="check" size={14} color="var(--on-clay)" /> Confirm</button>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flexShrink: 0 }}>
+                  <button onClick={() => approveGuardian(r)} disabled={minorsSet.has(r.parent)} aria-label={'Confirm guardian link: ' + knownName(r.parent) + ' for ' + knownName(r.child)} className="sk-btn sk-btn--clay" style={{ padding: '7px 13px', fontSize: 12.5, opacity: minorsSet.has(r.parent) ? 0.5 : 1 }}><Icon name="check" size={14} color="var(--on-clay)" /> Confirm</button>
+                  <button onClick={() => declineGuardian(r)} aria-label={'Decline guardian request from ' + knownName(r.parent)} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: 'var(--ink-3)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 11.5, textAlign: 'center' }}>Decline</button>
+                </div>
               </div>
             ))}
             </div>
@@ -7201,7 +7330,8 @@ function DashCheckin() {
   const recs = window.useStewardCheckins ? window.useStewardCheckins() : [];
   const sg = window.useStewardSafeguard ? window.useStewardSafeguard() : { minors: [], minorsKnown: false };
   const minors = sg.minors || [];
-  const guardians = window.useStewardGuardians ? window.useStewardGuardians() : {};
+  const _gdCk = window.useStewardGuardians ? window.useStewardGuardians() : { links: {}, closed: {} };
+  const guardians = _gdCk.links || {};
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
   const nameFor = (pub) => { const m = members.find(x => x.pubkey === pub); return (m && m.name) || ('Child ' + (pub || '').slice(-6)); };
   // ADULT guardians only. A child wrongly left in another child's guardian list (D2) must never be printed as
@@ -8079,7 +8209,7 @@ function DashStewardsPanel({ church }) {
   const setCaps = (pk, list) => {
     const next = { ...caps };
     if (list === null) delete next[pk]; else next[pk] = list;
-    window.Steward.setStewards(stewards, next);
+    try { window.Steward.setStewards(stewards, next); } catch (e) {}   // a refusal is on the banner (_requireTrustedView)
   };
   const [approvePin, setApprovePin] = React.useState('');
   const [approveErr, setApproveErr] = React.useState('');
@@ -8090,7 +8220,7 @@ function DashStewardsPanel({ church }) {
     // "unscoped", which is the everything-by-accident this exists to remove.
     const nextCaps = { ...caps, [pk]: Array.isArray(grants) ? grants.slice() : [] };
     setNewLabel(''); setNewCaps([]);
-    window.Steward.setStewards([...stewards, pk], nextCaps, nextNames); };
+    try { window.Steward.setStewards([...stewards, pk], nextCaps, nextNames); } catch (e) {} };
   // approving a steward request is a sensitive action → step up with the console PIN when one is set
   const startApprove = (pk) => { if (hasPin) { setApproving(pk); setApprovePin(''); setApproveErr(''); } else { add(pk); } };
   const confirmApprove = async () => {
@@ -8099,7 +8229,7 @@ function DashStewardsPanel({ church }) {
     add(approving);
   };
   const pending = requests.filter(r => !dismissed[r.pubkey] && !stewardSet.has(r.pubkey) && r.pubkey !== ownerPub);
-  const remove = (pk) => { setConfirmRemove(null); window.Steward.setStewards(stewards.filter(p => p !== pk)); };
+  const remove = (pk) => { setConfirmRemove(null); try { window.Steward.setStewards(stewards.filter(p => p !== pk)); } catch (e) {} };
   // add by the steward's own code/npub (from their Steward app → "Become a steward"). The correct path:
   // it names the exact key they'll act with, with no dependency on them being a member here.
   const addByCode = (text) => {
@@ -8353,7 +8483,7 @@ function DashMediaPanel({ church }) {
   return (
     <Panel title="Video & audio">
       <div style={lbl}>Video channel · Watch tab</div>
-      <div className="set-note" style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>Your church’s <b>YouTube</b> or <b>Rumble</b> channel — or an <b>unlisted YouTube playlist</b> (not publicly searchable — a private set only your members see). Videos appear in members’ Watch tab, auto-updated.</div>
+      <div className="set-note" style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>Your church’s <b>YouTube</b> or <b>Rumble</b> channel — or an <b>unlisted YouTube playlist</b> (not publicly searchable on YouTube, but the link is in your church's public profile). Videos appear in members’ Watch tab, auto-updated. Thumbnails and playback go through YouTube or Rumble directly.</div>
       <div style={{ display: 'flex', gap: 9 }}>
         <input value={vid} onChange={e => setVid(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') saveVid(); }} spellCheck={false} autoCapitalize="none" aria-label="Video channel address" placeholder="youtube.com/@yourchurch · youtube.com/playlist?list=… · rumble.com/c/…" style={inp} />
         <button onClick={saveVid} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13 }}><Icon name={vidSaved ? 'check' : 'send'} size={15} color="var(--on-clay)" /> {vidSaved ? 'Saved' : 'Save'}</button>
@@ -8361,7 +8491,7 @@ function DashMediaPanel({ church }) {
       {church.channel ? <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 8 }}>Current: <span style={{ fontFamily: 'var(--mono)' }}>{church.channel}</span></div> : null}
       <div style={{ height: 1, background: 'var(--line)', margin: '16px 0' }} />
       <div style={lbl}>Audio / podcast · Listen tab</div>
-      <div className="set-note" style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>A <b>podcast RSS feed</b> (sermons, devotionals) — episodes stream in the Listen tab. Most hosts (Buzzsprout, Podbean, Apple, Spotify for Podcasters) give an RSS link. An <b>unlisted / private feed URL works too</b> — keep the link unguessable and it stays members-only.</div>
+      <div className="set-note" style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 10 }}>A <b>podcast RSS feed</b> (sermons, devotionals) — episodes stream in the Listen tab. Most hosts (Buzzsprout, Podbean, Apple, Spotify for Podcasters) give an RSS link. An <b>unlisted / private feed URL works too</b> — but the link is part of your church's public profile, so treat it as reachable.</div>
       <div style={{ display: 'flex', gap: 9 }}>
         <input value={aud} onChange={e => setAud(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') saveAud(); }} spellCheck={false} autoCapitalize="none" aria-label="Podcast RSS feed address" placeholder="https://feeds.yourhost.com/yourchurch.xml" style={inp} />
         <button onClick={saveAud} className="sk-btn sk-btn--clay" style={{ padding: '0 16px', fontSize: 13 }}><Icon name={audSaved ? 'check' : 'send'} size={15} color="var(--on-clay)" /> {audSaved ? 'Saved' : 'Save'}</button>
@@ -8562,9 +8692,10 @@ function DashSermons() {
       }
       const pub = await window.Steward.publishSermon({ title: (fields && fields.title) || f.name.replace(/\.[^.]+$/, ''), desc: (fields && fields.desc) || undefined, sha256: b.sha256, host: b.host, hosts: b.hosts, mime: b.mime, size: b.size, enc: b.enc });
       uploadedSigs.current.add(f.name + '|' + f.size + '|' + f.lastModified);   // published, so a repeat really would be a second copy
-      if (notify && pub && window.Steward.pinSermon) { try { await window.Steward.pinSermon(pub); } catch (e) {} }   // feature on members' Today → "New video / New audio clip" card + push
+      let pinned = false;
+      if (notify && pub && window.Steward.pinSermon) { try { pinned = !!(await window.Steward.pinSermon(pub)); } catch (e) {} }
       const backups = (b.hosts || []).length - 1;
-      setUpMsg('✓ Uploaded “' + f.name + '”' + (b.enc ? ' (encrypted)' : '') + (notify ? ' · members notified' : '') + (backups > 0 ? ` · ${backups} backup${backups > 1 ? 's' : ''}` : (mirrors.length ? ' · backups failed' : '')));
+      setUpMsg('✓ Uploaded “' + f.name + '”' + (b.enc ? ' (encrypted)' : '') + (notify ? (pinned ? ' · members notified' : ' · saved, but members weren’t notified — tap 📌 on it to try again') : '') + (backups > 0 ? ` · ${backups} backup${backups > 1 ? 's' : ''}` : (mirrors.length ? ' · backups failed' : '')));
       ok = true;
     } catch (err) {
       // RETHROW, so the modal stays open with the error ON it. Swallowing here made "close only on success"
@@ -9037,7 +9168,9 @@ function DashFeaturesPanel({ church, show = null }) {
   const fAdmitted = window.useStewardAdmitted ? window.useStewardAdmitted() : [];
   const toggleApproval = () => {
     // turning ON: grandfather everyone already here so only NEW joiners wait for approval
-    if (!approval) window.Steward.setAdmitted([...new Set([...fAdmitted, ...fMembers.map(m => m.pubkey)])]);
+    // …and if that list cannot be written (refused — on the banner), approval is NOT switched on: everyone
+    // already here would be left waiting at the door. Before, the throw escaped the click uncaught.
+    if (!approval) { try { window.Steward.setAdmitted([...new Set([...fAdmitted, ...fMembers.map(m => m.pubkey)])]); } catch (e) { return; } }
     window.Steward.setJoinPolicy(!approval);
   };
   // TWO CARDS, ONE COMPONENT, because they share this component's state — the encrypt-all switch reads the
@@ -9724,22 +9857,13 @@ function DashBackup() {
     try {
       const { data, binary, mime, count, filename, encrypted, media: mediaCount } = await window.Steward.exportChurchData({ encrypt, includeMedia });
       const mediaBit = mediaCount ? ' + ' + mediaCount + ' media file' + (mediaCount > 1 ? 's' : '') : '';
-      const P = window.Capacitor && window.Capacitor.Plugins;
-      if (P && P.Filesystem && P.Share) {   // native: write to cache then hand to the OS share sheet (save/send anywhere)
-        let res;
-        if (binary) {   // zip bytes -> base64 for Filesystem (no encoding = base64)
-          let bin = ''; const CH = 0x8000; for (let i = 0; i < data.length; i += CH) bin += String.fromCharCode.apply(null, data.subarray(i, Math.min(i + CH, data.length)));
-          res = await P.Filesystem.writeFile({ path: filename, data: btoa(bin), directory: 'CACHE' });
-        } else {
-          res = await P.Filesystem.writeFile({ path: filename, data, directory: 'CACHE', encoding: 'utf8' });
-        }
-        await P.Share.share({ title: 'TrinityOne church backup', text: count + ' records' + mediaBit + (encrypted ? ' — encrypted; only your church key can open it.' : ' — keep this file somewhere safe.'), files: [res.uri] });
-      } else {   // web: a file download (Blob accepts string or Uint8Array)
-        const blob = new Blob([data], { type: mime });
-        const url = URL.createObjectURL(blob); const a = document.createElement('a');
-        a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove();
-        setTimeout(() => URL.revokeObjectURL(url), 3000);
-      }
+      let fileData = data;
+      if (binary) { let bin = ''; const CH = 0x8000; for (let i = 0; i < data.length; i += CH) bin += String.fromCharCode.apply(null, data.subarray(i, Math.min(i + CH, data.length))); fileData = btoa(bin); }
+      const saveMsg = await saveConsoleFile(filename, fileData, {
+        mime, base64: binary,
+        title: 'TrinityOne church backup',
+        blurb: count + ' records' + mediaBit + (encrypted ? ' — encrypted; only your church key can open it.' : ' — keep this file somewhere safe.'),
+      });
       const ts = Math.floor(Date.now() / 1000); setLast(ts); try { localStorage.setItem('trinityone.lastBackupAt', String(ts)); } catch {}
       // record church-wide so every steward's nudge resets — AND SAY SO WHEN IT DOES NOT. This was
       // fire-and-forget inside a try/catch, so a refused document left THIS console the only one that
@@ -9751,7 +9875,7 @@ function DashBackup() {
       // delegated console this is now always the owner-only one, because the relay gates backup-meta: to
       // the church key (2026-09-22) and the engine does not even ask.
       const _metaSay = _metaOk ? '' : ' ' + ((window.Steward && window.Steward.actingChurch) ? BACKUP_META_OWNER_ONLY : BACKUP_META_NO_RELAY);
-      setMsg({ ok: true, text: 'Saved ' + count + ' records' + mediaBit + (encrypted ? ' — encrypted to your church key.' : ' (unencrypted).') + _metaSay });
+      setMsg({ ok: true, text: (saveMsg || 'Saved') + ' ' + count + ' records' + mediaBit + (encrypted ? ' — encrypted to your church key.' : ' (unencrypted).') + _metaSay });
     } catch (e) { setMsg({ ok: false, text: e.message || 'Backup failed' }); }
     setBusy(false);
   };

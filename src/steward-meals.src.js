@@ -175,8 +175,10 @@ import { _absorbById } from './church-doc-store.src.js';   // one rule for who w
       // so refuse and say why. careKeyChecked() distinguishes "still loading" from "genuinely absent", so the
       // steward gets an accurate reason rather than being sent somewhere that won't help.
       const looking = S().careKeyChecked && !S().careKeyChecked();
+      // …and when a relay is what is holding the care key back, say which (Steward.keyWaitNote, audit of 3bc8905)
+      let why = ''; try { why = S().keyWaitNote ? S().keyWaitNote('care') : ''; } catch (e) { why = ''; }
       throw new Error(looking
-        ? 'Still connecting to your church — give it a moment and try again.'
+        ? (why ? 'Still connecting to your church — ' + why + '.' : 'Still connecting to your church — give it a moment and try again.')
         : 'Care needs are encrypted for the person’s privacy, and this church’s care key hasn’t reached this device yet. Open Members once so it can sync, then try again.');
     }
     const tags = [['d', NEED_D + id], ['t', NET], ['enc', 'care1']];

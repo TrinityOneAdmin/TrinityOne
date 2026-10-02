@@ -41,10 +41,13 @@ import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadScreen, miniReact, texts, find } from './render-jsx-screen.mjs';
-import { fnBody } from './test-slice.mjs';
+import { fnBody, liftKeyRead } from './test-slice.mjs';
 
 const ROOT = new URL('../', import.meta.url).pathname;
 const BUNDLE = readFileSync(join(ROOT, 'vendor/steward.js'), 'utf8');
+// THE SHIPPED ring fitter (2026-10-01): the media-key publishers fit their envelope to the relay's 1 MB cap
+// through it, so a lifted publisher needs it in scope. Lifted, not re-typed.
+const _fitKeyRing = new Function('return ' + fnBody(BUNDLE, 'function _fitKeyRing(full, recipCount, sealSample) {', '_fitKeyRing in the shipped bundle'))();
 const DASH = readFileSync(join(ROOT, 'app/stew-dashboard.jsx'), 'utf8');
 
 const CHURCH = '3eb1f889'.padEnd(64, '0');
@@ -60,7 +63,7 @@ const reads = (t) => texts(t).join(' ').replace(/\s+/g, ' ').trim();
 // sliced out of vendor/steward.js and executed. The relay stub enforces the one rule that matters — the
 // mediakey: envelope is admitted from the CHURCH key only — so a delegated console's copy is refused exactly
 // as the real box refuses it.
-function engine({ actingChurch, mediaKeyHex = KEY }) {
+function engine({ actingChurch, mediaKeyHex = KEY, mediaDocKeys = 'default', mediaChecked = true }) {
   const attempts = [];
   const blocked = [];
   const scope = {
@@ -70,11 +73,11 @@ function engine({ actingChurch, mediaKeyHex = KEY }) {
     sk: new Uint8Array(32).fill(7),
     _mediaKeyHex: mediaKeyHex,
     _mediaKeyRing: mediaKeyHex ? [mediaKeyHex] : [],
-    _mediaKeyDocKeys: { [CHURCH]: 'sealed-church', [MEMBER]: 'sealed-member' },
+    _mediaKeyDocKeys: mediaDocKeys === 'default' ? { [CHURCH]: 'sealed-church', [MEMBER]: 'sealed-member' } : mediaDocKeys,
     _mediaKeyPushRefused: null,
-    _mediaKeyChecked: true,
+    _mediaKeyChecked: mediaChecked,
     _localBlocked: new Set(),
-    _isRelayAuthed: () => true,
+    _isRelayAuthed: () => true, _fitKeyRing, console, _mediaKeyVer: 0,
     MEDIAKEY_D: 'trinityone/mediakey:',
     NET: 'trinityone',
     now: () => 1758800000,
@@ -110,7 +113,7 @@ function engine({ actingChurch, mediaKeyHex = KEY }) {
     fnBody(BUNDLE, '    async ensureMediaKeyForMembers(memberPubs, stewardPubs) {', 'ensureMediaKeyForMembers in the shipped bundle'),
     fnBody(BUNDLE, '    async rotateMediaKey(memberPubs, stewardPubs) {', 'rotateMediaKey in the shipped bundle'),
   ].join(',\n');
-  const api = new Function('scope', `with (scope) { const _api = { ${bodies} }; return _api; }`)(proxy);
+  const api = new Function('scope', `with (scope) { ${liftKeyRead(BUNDLE)}\n const _api = { ${bodies} }; return _api; }`)(proxy);
   return { api, attempts, blocked, scope };
 }
 
@@ -258,8 +261,8 @@ test('the a6d13e0 regression, stated as a measurement: without a key in hand nei
 // `rotateMedia` is only ever supplied for the owner CONTROL, where the failure being reported is a refused
 // publish and the point is that the screen still reports it.
 
-async function membersPage({ delegated, rotateMedia }) {
-  const e = engine({ actingChurch: delegated ? CHURCH : '' });
+async function membersPage({ delegated, rotateMedia, nameResult = null, engineOpts = {} }) {
+  const e = engine({ actingChurch: delegated ? CHURCH : '', ...engineOpts });
   const { React, draw } = miniReact();
   const NOW = Math.floor(Date.now() / 1000);
   const src = fnBody(DASH, 'function DashMembers()', 'DashMembers');
@@ -307,13 +310,13 @@ async function membersPage({ delegated, rotateMedia }) {
         // The two rotations block() awaits alongside the media key. Both succeed, so anything the screen
         // says about a key is about the SERMON key and nothing else.
         rotateCareKey: () => Promise.resolve(true),
-        ensureNameKeyForMembers: () => Promise.resolve(null),
+        ensureNameKeyForMembers: () => Promise.resolve(nameResult),
         rotateMediaKey: (pubs) => (rotateMedia === undefined ? e.api.rotateMediaKey(pubs) : Promise.resolve(rotateMedia)),
       },
       useStewardGroups: () => [], useStewardStewards: () => [], useStewardChurch: () => ({ name: 'St Aidan', features: {} }),
       useStewardBlocked: () => [],
       useStewardSafeguard: () => ({ loaded: true, minorsKnown: true, clearedKnown: true, cleared: {}, minors: [], approved: [], nophoto: [] }),
-      useStewardGuardians: () => ({}), useStewardJoinPolicy: () => false, useStewardAdmitted: () => [],
+      useStewardGuardians: () => ({ links: {}, closed: {} }), useStewardJoinPolicy: () => false, useStewardAdmitted: () => [],
       useStewardMembers: () => [{ pubkey: MEMBER, npub: 'npub1aa', name: 'Bram Whitlock', count: 2, lastTs: NOW - 3600, joined: NOW - 86400 }],
       addEventListener() {}, removeEventListener() {},
       dispatchEvent: (e) => { fired.push({ type: e.type, detail: e.detail }); return true; },
@@ -363,4 +366,30 @@ test('CONTROL: an OWNER whose rotation really failed is still warned about the s
   assert.match(p.said, /could not change the sermon key/,
     'AN OWNER’S FAILED ROTATION IS NOW SILENT. The blocked member may still hold the key to every sermon ' +
     'uploaded after they left and nothing on screen says so: ' + p.said);
+});
+
+// NULL IS A FAILURE TOO (audit of 3bc8905). block() warned only on `false`, but a name-key rotation returns null when
+// it did not happen — no trusted view, an envelope this console is not in, or a Block queued across a church switch
+// — and the blocked member then still holds the key to every name in the congregation. On an OWNER's console null
+// now warns; a delegate's (whose sermon-key rotation is null by design) does not — the rows above.
+test('THE CALL SITE: an OWNER whose name-key rotation did not happen (null) is warned', async () => {
+  const p = await membersPage({ delegated: false, rotateMedia: true, nameResult: null });
+  assert.match(p.said, /could not change the name key/,
+    'A NAME-KEY ROTATION THAT NEVER HAPPENED IS SILENT — the blocked member keeps the key to every name in the church and nothing on screen says so: ' + p.said);
+});
+
+test('CONTROL: an OWNER whose rotations all landed is told nothing is wrong', async () => {
+  const p = await membersPage({ delegated: false, rotateMedia: true, nameResult: { id: 'published' } });
+  assert.doesNotMatch(p.said, /could not change/, 'a Block whose rotations all landed raised the failure banner: ' + p.said);
+});
+
+// NOTHING TO ROTATE (audit of 5276297, MEDIUM): every owner's Block in a church that never uploaded an encrypted sermon
+// said "could not change the sermon key … Try blocking them again" — rotateMediaKey returned false for "no key".
+test('THE CALL SITE: an OWNER\'s Block in a church with NO sermon key says nothing about the sermon key', async () => {
+  const p = await membersPage({ delegated: false, nameResult: { id: 'published' }, engineOpts: { mediaKeyHex: null, mediaDocKeys: null, mediaChecked: true } });
+  assert.doesNotMatch(p.said, /could not change the sermon key/, 'THE BLOCK WARNS ABOUT A SERMON KEY THE CHURCH NEVER HAD: ' + p.said);
+});
+test('CONTROL: …but one whose sermon-key read has not settled (it may HAVE one) is still warned', async () => {
+  const p = await membersPage({ delegated: false, nameResult: { id: 'published' }, engineOpts: { mediaKeyHex: null, mediaDocKeys: null, mediaChecked: false } });
+  assert.match(p.said, /could not change the sermon key/, 'a sermon key the console has not looked for is treated as absent — a blocked member may still hold it: ' + p.said);
 });

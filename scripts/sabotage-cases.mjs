@@ -745,9 +745,9 @@ export const CASES = [
     file: 'src/fellowship.src.js',
     // removing the whole handler puts the app back where it was: healthy socket, dead subscriptions, and a
     // 90-second safety net that skips because relaysHealthy() is (correctly) true
-    find: `    if (prev === undefined || prev === live) return;   // first sight, or the same socket we already knew
-    window.dispatchEvent(new CustomEvent('trinity-relay-returned', { detail: { url } }));`,
-    replace: ``,
+    find: `  if (prev === undefined && !wasDown) return;   // first sight on a connection that never failed
+  window.dispatchEvent(new CustomEvent('trinity-relay-returned', { detail: { url } }));`,
+    replace: `  return;`,
     test: 'scripts/chat-reconnect.test.mjs',
   },
   {
@@ -755,8 +755,26 @@ export const CASES = [
     file: 'src/fellowship.src.js',
     // the plausible wrong fix — key on the url instead of the live relay instance. nostr-tools calls this from
     // its subscribe path on EVERY subscription, so this re-subscribes the whole app on every ordinary read.
-    find: `    if (prev === undefined || prev === live) return;   // first sight, or the same socket we already knew`,
-    replace: `    if (prev === undefined) return;`,
+    find: `  if (prev === live) return;                 // the same socket we already knew`,
+    replace: ``,
+    test: 'scripts/chat-reconnect.test.mjs',
+  },
+  {
+    name: 'chat: a socket back after an outage is taken for a first connect',
+    file: 'src/fellowship.src.js',
+    // the rule before the device round of 2026-10-01: any first socket is "first sight", so after an OFFLINE
+    // launch the socket the outbox's retry opened announced nothing and every dead subscription stayed dead
+    find: `  if (prev === undefined && !wasDown) return;   // first sight on a connection that never failed`,
+    replace: `  if (prev === undefined) return;`,
+    test: 'scripts/chat-reconnect.test.mjs',
+  },
+  {
+    name: 'chat: a socket a publish opens is never noticed',
+    file: 'src/fellowship.src.js',
+    // the library's success hook fires on its subscribe path only; the ensureRelay wrapper is the one door a
+    // publish goes through
+    find: `      try { _relayUp(url, r); } catch (e) {}`,
+    replace: ``,
     test: 'scripts/chat-reconnect.test.mjs',
   },
   {

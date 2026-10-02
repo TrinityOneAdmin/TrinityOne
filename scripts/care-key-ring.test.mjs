@@ -74,7 +74,10 @@ test('rotation exists, is gated like minting, and keeps the old keys', () => {
 test('the MEDIA key has the same ring + rotation (a removed member must not keep sermon access)', () => {
   const rot = body('rotateMediaKey(');
   assert.match(rot, /_isRelayAuthed\(\)/, 'media rotation must not run from an untrusted view');
-  assert.match(rot, /ring\s*=\s*\[\s*fresh\s*,\s*\.\.\./, 'the new ring must be [fresh, ...previous], or every existing sermon becomes unplayable');
+  // `full` since 2026-10-01, as rotateCareKey above: the ring is fitted to the relay's 1 MB cap, so the full
+  // history and the ring published are two things. Whatever is published starts from the fresh key.
+  assert.match(rot, /full\s*=\s*\[\s*fresh\s*,\s*\.\.\./, 'the new ring must be [fresh, ...previous], or every existing sermon becomes unplayable');
+  assert.match(rot, /ring = _fitKeyRing\(full,/, 'the published ring must be fitted from that list, not minted separately');
   // both publishers must ship the ring, not a lone key, or members lose older sermons
   assert.match(body('mediaEncryptor('), /_mediaKeyRing/, 'upload path must publish the ring');
   assert.match(body('ensureMediaKeyForMembers('), /_mediaKeyRing/, 'distribution path must publish the ring');

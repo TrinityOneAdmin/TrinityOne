@@ -45,7 +45,7 @@ test('a fortnightly and a monthly RRULE are read with the right interval and wee
   const parsed = parseIcs(ics);
   const [youth, pcc] = parsed.events;
   assert.deepEqual(youth.rrule, { freq: 'WEEKLY', interval: 2, byday: 'TH' });
-  assert.deepEqual(pcc.rrule, { freq: 'MONTHLY', interval: 1, byday: 'TU' });
+  assert.deepEqual(pcc.rrule, { freq: 'MONTHLY', interval: 1, byday: 'TU', nth: 1 });
 });
 
 test('a long DESCRIPTION that folds across content lines still parses as one unfolded value', () => {

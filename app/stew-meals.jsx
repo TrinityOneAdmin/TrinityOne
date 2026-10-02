@@ -111,7 +111,7 @@ function AnnounceCareModal({ onClose }) {
       // publishPost resolves FALSE when every relay rejects it rather than throwing, so awaiting alone would
       // have closed this sheet on a failure exactly as it closes on a success.
       const ok = await window.Steward.publishPost(text.trim(), target);
-      if (ok === false) throw new Error('Every relay refused it \u2014 nothing was posted. Check your connection and try again.');
+      if (!ok) throw new Error('Every relay refused it \u2014 nothing was posted. Check your connection and try again.');
       onClose();
     }
     catch (e) { setErr((e && e.message) || 'Couldn\u2019t post \u2014 check your connection and try again.'); setBusy(false); }

@@ -66,6 +66,7 @@ function parent({ fails = [], children = [], failWith = null } = {}) {
     // ('not-sent' | 'refused' | 'unconfirmed'), and `createChildAccount` now records its answer per
     // document in `why`. A stub here would supply the very distinction the branch below is named after.
     _pubReason: new Function(grabMethod(SRC, 'function _pubReason(e)') + '\nreturn _pubReason;')(),
+    publishSetFor: () => ['wss://test.invalid'],
     sk: parentSk,
     pub: state.parentPub,
     toPub: () => CHURCH,
@@ -240,6 +241,15 @@ function nextLaunch({ relay, children, parentPub }) {
     toPub: () => CHURCH,
     pub: parentPub,
     relaysForChurch: () => ['wss://test.invalid'],
+    _loadRemovedChildren: () => [],
+    // 2026-10-01: the rebuild also consults the session's unlinked set and can retract a request.
+    // 2026-10-01: the rebuild's own helpers are the SHIPPED ones, lifted from the bundle (scripts/family-harness.mjs),
+    // never re-typed here — a copy would stay green over a regression in the real one (re-audit of b7624a8).
+    ..._shippedHelpers,
+    _unlinkedNow: new Set(), _ownReqAt: new Map(), _familyAnswered: new Set(),
+    // 2026-10-01 (audit of b4ac50d): no guardian notice was ever stamped on this phone, so nothing is held back
+    _stampUnapplied: () => false, _heldReqs: new Map(), _rebuildAnswered: new Set(),
+    _retractGuardReq: async () => true, _familyChanged: () => {}, _publishAny: async () => true,
     _dtag: dOf,
     _loadChildren: () => children,
     _saveChildLink: (rec) => { children.push(rec); },
@@ -302,6 +312,8 @@ test('GHOST ROW: …but a setup that WORKED is still rebuilt after the local lis
 // A text match would not do: app/*.jsx ships unbundled, so `if (false && r && r.ok === false)` leaves every
 // word of that block in place (rule 3). So LIFT the real handler and RUN it.
 import { fnBody } from './test-slice.mjs';
+import { shippedFamilyHelpers } from './family-harness.mjs';
+const _shippedHelpers = shippedFamilyHelpers();
 
 const IDENT = readFileSync(new URL('../app/identity.jsx', import.meta.url), 'utf8');
 // There are two `const create = async () =>` handlers in this file. Slice FamilySheet first so the anchor

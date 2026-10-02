@@ -108,7 +108,8 @@ function gateSource(src) {
     fnBody(src, 'function relayIdentityNonce', 'relayIdentityNonce'),
     fnBody(src, 'function relayHttpBase', 'relayHttpBase'),
     fnBody(src, 'function relayAddrKey', 'relayAddrKey'),
-    fnBody(src, 'async function verifyRelayIdentity', 'verifyRelayIdentity'),
+    fnBody(src, 'async function verifyRelayIdentityDetailed', 'verifyRelayIdentityDetailed'),
+    fnBody(src, 'async function verifyRelayIdentity(', 'verifyRelayIdentity'),
     stmt(src, 'var RELAY_NET_D = ', 'RELAY_NET_D'),
     fnBody(src, 'function _relayKey', '_relayKey'),
     stmt(src, 'var _isHex64 = ', '_isHex64'),
@@ -631,6 +632,8 @@ function memberOn({ church, relays = [], canonical = [], pins = {}, store = memS
     stmt(src, 'var NO_NETWORK_RELAY = ', 'NO_NETWORK_RELAY'),
     stmt(src, 'var isNoNetworkRelay = ', 'isNoNetworkRelay'),
     fnBody(src, 'function churchRelays()', 'churchRelays'),
+    fnBody(src, 'function relaysForChurch', 'relaysForChurch'),
+    fnBody(src, 'function publishSetFor', 'publishSetFor'),
     stmt(src, 'var _PUB_FAILED = ', '_PUB_FAILED'),
     stmt(src, 'var _PUB_SILENT = ', '_PUB_SILENT'),
     stmt(src, 'var WEDGE_ACK_MS = ', 'WEDGE_ACK_MS'),
@@ -679,6 +682,7 @@ function memberOn({ church, relays = [], canonical = [], pins = {}, store = memS
     _sgSelf: { cp: church.pub, me: me.pub, isMinor: false, known: true },
     _sgMine: () => ({ cp: church.pub, me: me.pub, isMinor: false, known: true }),
     NET: 'trinityone', CAREREQ_D: 'trinityone/carereq:', CARETEAM_D: 'trinityone/careteam:',
+    _churchRelays: new Map(), _loadChurchBoxes: () => [],
   });
   const api = new Function('scope', `with (scope) { ${body}
     const _api = { ${care}, ${healthy}, ${verified} };
@@ -820,6 +824,8 @@ test('a read over an empty publish set settles instead of spinning for ever', as
 
   for (const [file, src] of [['vendor/fellowship.js', FELLOW], ['vendor/steward.js', STEWARD]]) {
     const body = [
+      // the console's wrappers also apply the church-tag rule (2026-10-02): its two helpers, out of the same bundle
+      ...(src === STEWARD ? [fnBody(src, 'function _taggedForAnotherChurch(e, cp) {', '_taggedForAnotherChurch'), fnBody(src, 'function _asksForOwnAuthorship(filters, cp) {', '_asksForOwnAuthorship')] : []),
       fnBody(src, 'pool.subscribeMany = (urls, filters, handlers)', 'subscribeMany guard'),
       fnBody(src, 'pool.querySync = (urls, filter, opts)', 'querySync guard'),
     ].join('\n');
@@ -827,6 +833,7 @@ test('a read over an empty publish set settles instead of spinning for ever', as
     const scope = scopeOf({
       pool: {}, _poolSubMany: (...a) => { calls.push(a); return { close() {} }; },
       _poolQuerySync: async () => { calls.push('query'); return ['real']; },
+      pub: '',   // (the console's wrappers read which church a read is for; none here)
     });
     new Function('scope', `with (scope) { ${body} }`)(scope);
     let eosed = false;

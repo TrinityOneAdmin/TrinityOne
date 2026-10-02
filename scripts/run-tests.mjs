@@ -39,8 +39,10 @@
 // availableParallelism() follows an affinity mask but NOT a cgroup CPU quota, so a container limited with
 // `--cpus=2` still reports the host's core count and would take the 24.
 import { spawn } from 'node:child_process';
-import { readdirSync } from 'node:fs';
+import { readdirSync, readFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { availableParallelism } from 'node:os';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const CEILING = 24;
@@ -54,25 +56,46 @@ const concurrency = Math.max(1, Math.min(CEILING, availableParallelism() - 1));
 // of this file, using the very command someone would type to reproduce this file's own measurements
 // (`--test-concurrency=8`).
 const argv = process.argv.slice(2);
-const flags = argv.filter(a => a.startsWith('-'));
+const shardArg = argv.find(a => /^--shard=\d+\/\d+$/.test(a));
+const flags = argv.filter(a => a.startsWith('-') && a !== shardArg);
 const named = argv.filter(a => !a.startsWith('-'));
 
 // Explicit files win (`npm test -- scripts/one.test.mjs`); otherwise every *.test.mjs, resolved HERE rather
 // than by a shell glob so the command behaves the same from any directory and under any shell.
 const dir = fileURLToPath(new URL('.', import.meta.url));
-const files = named.length ? named : readdirSync(dir).filter(f => f.endsWith('.test.mjs')).sort().map(f => dir + f);
+let files = named.length ? named : readdirSync(dir).filter(f => f.endsWith('.test.mjs')).sort().map(f => dir + f);
+const totalFiles = files.length;
+
+// --shard=M/N: run only the Mth slice of N equal(ish) parts, sorted by filename for determinism.
+// M is 1-based. Each shard gets ceil(total/N) or floor(total/N) files; the assignment is stable
+// across runs as long as the file list doesn't change.
+if (shardArg) {
+  const [m, n] = shardArg.replace('--shard=', '').split('/').map(Number);
+  if (m < 1 || m > n || n < 1) { console.error(`run-tests: invalid --shard=${m}/${n}`); process.exit(1); }
+  files = files.filter((_, i) => i % n === m - 1);
+  console.error(`run-tests: shard ${m}/${n} — ${files.length} of ${totalFiles} files`);
+}
 
 if (!files.length) { console.error('run-tests: no *.test.mjs found in ' + dir); process.exit(1); }
 // A caller who names a concurrency means it — don't hand node two --test-concurrency flags and hope.
 const ownFlags = flags.some(f => f.startsWith('--test-concurrency')) ? [] : [`--test-concurrency=${concurrency}`];
 console.error(`run-tests: ${files.length} files, concurrency ${ownFlags.length ? concurrency : '(caller-set)'} of ${availableParallelism()} threads${flags.length ? ', flags: ' + flags.join(' ') : ''}`);
 
+// Write a TAP stream to a temp file so the count floor can read it after the run, without piping
+// stdout through this process (which deadlocks under the suite's output volume).
+const tapDir = mkdtempSync(join(tmpdir(), 'trinityone-test-'));
+const tapFile = join(tapDir, 'tap.txt');
+const reporterFlags = flags.some(f => f.startsWith('--test-reporter'))
+  ? [] // caller controls reporters — don't add ours
+  : ['--test-reporter=spec', '--test-reporter-destination=stdout',
+     '--test-reporter=tap', `--test-reporter-destination=${tapFile}`];
+
 // `detached` + a process-GROUP kill, because a plain SIGTERM to this process left the whole tree alive:
 // measured, the `--test` child and its workers survived, and up to 24 file processes plus their gateways go
 // on squatting FIXED ports — the exact wedge scripts/test-ports.mjs exists to diagnose, and which once cost a
 // 900s suite timeout. Ctrl-C at a terminal was never affected (the tty signals the group); this is for
 // `timeout(1)`, a cancelled CI step, and any programmatic kill.
-const child = spawn(process.execPath, ['--test', ...ownFlags, ...flags, ...files], { stdio: 'inherit', detached: true });
+const child = spawn(process.execPath, ['--test', ...ownFlags, ...reporterFlags, ...flags, ...files], { stdio: 'inherit', detached: true });
 const signalGroup = (sig) => { try { process.kill(-child.pid, sig); } catch { try { child.kill(sig); } catch {} } };
 // …THEN ESCALATE. Measured: a plain group SIGTERM left 2 test processes and 3 gateways alive, because the
 // relay fixtures install their own handlers and node's test workers do not die on request. Survivors hold
@@ -85,11 +108,36 @@ const stop = (sig) => {
   setTimeout(() => { signalGroup('SIGKILL'); process.exit(1); }, 3000).unref();
 };
 for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(sig, () => stop(sig));
+// TEST COUNT FLOOR. The TAP reporter counts subtests (~4800 across 514 files, Sept 2026).
+// A silent deletion (scripted edit overshooting, a rebase that drops a file) must go red, not green.
+// Set below the real count to absorb concurrency failures (~150 browser-collision flakes on the
+// dev box) while still catching a bulk deletion. Only checked on full-suite runs, not targeted ones.
+const FLOOR_TOTAL = 4000;
+const SKIP_BUDGET = 15;
+
 child.on('exit', (code, signal) => {
-  // ORDER MATTERS. The escalation timer above is useless on its own: the direct child dies first, this
-  // handler fires, and process.exit() cancels the pending SIGKILL — measured, leaving 2 test processes and
-  // 3 gateways alive on fixed ports. So sweep the group HERE, once the runner is already on its way out.
-  // With the sweep, measured end to end: 3 processes running → SIGTERM → 0 left, no stray gateways.
   if (stopping) signalGroup('SIGKILL');
-  process.exit(signal ? 1 : (code ?? 1));
+  let exitCode = signal ? 1 : (code ?? 1);
+  // Parse the TAP summary from the temp file (lines like "# pass 512", "# skipped 2").
+  try {
+    const tapTail = readFileSync(tapFile, 'utf8').slice(-512);
+    const passMatch = tapTail.match(/^# pass\s+(\d+)/m);
+    const skipMatch = tapTail.match(/^# skipped\s+(\d+)/m);
+    const pass = passMatch ? Number(passMatch[1]) : null;
+    const skip = skipMatch ? Number(skipMatch[1]) : 0;
+    if (pass !== null && !named.length) {
+      const shardN = shardArg ? Number(shardArg.split('/')[1]) : 1;
+      const floor = Math.floor(FLOOR_TOTAL / shardN);
+      if (pass < floor) {
+        console.error(`\n✗ test count floor: ${pass} passed, need at least ${floor} (${FLOOR_TOTAL} total ÷ ${shardN} shards)`);
+        exitCode = 1;
+      }
+      if (skip > SKIP_BUDGET) {
+        console.error(`\n✗ skip budget: ${skip} skipped, budget is ${SKIP_BUDGET}`);
+        exitCode = 1;
+      }
+    }
+  } catch {}
+  try { rmSync(tapDir, { recursive: true }); } catch {}
+  process.exit(exitCode);
 });

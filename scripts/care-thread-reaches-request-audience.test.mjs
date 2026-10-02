@@ -77,11 +77,11 @@ function buildSender({ requestEvent }) {
   const published = [];
   const pool = { querySync: async () => (requestEvent ? [requestEvent] : []) };
   const fn = new Function(
-    'pool', 'churchRelays', 'CAREREQ_D', 'CARECHAT_D', 'NET', 'sk', 'pub', 'window', 'crypto',
+    'pool', 'churchRelays', 'publishSetFor', 'isNoNetworkRelay', 'CAREREQ_D', 'CARECHAT_D', 'NET', 'sk', 'pub', 'window', 'crypto',
     'nip44e', 'nip44ck', '_hex', 'finalizeEvent', '_publishAny', 'published',
     `${audienceFn}\n${sealFn}\nconst api = { ${method} __end(){} };\nreturn api.sendCareChat;`
   )(
-    pool, () => ['ws://x'], 'trinityone/carereq:', 'trinityone/carechat:', 'trinityone',
+    pool, () => ['ws://x'], () => ['ws://x'], () => false, 'trinityone/carereq:', 'trinityone/carechat:', 'trinityone',
     grace.sk, grace.pub,
     { Fellowship: { churchPub: church.pub, ready: Promise.resolve() } },
     crypto, nip44e, nip44ck, hexOf,
@@ -100,11 +100,11 @@ test('the cleared adult can open the child’s reply — the whole point', async
   const published = [];
   const reqEvent = { created_at: 100, pubkey: ellie.pub, content: JSON.stringify(CHILD_REQUEST) };
   const send = new Function(
-    'pool', 'churchRelays', 'CAREREQ_D', 'CARECHAT_D', 'NET', 'sk', 'pub', 'window', 'crypto',
+    'pool', 'churchRelays', 'publishSetFor', 'isNoNetworkRelay', 'CAREREQ_D', 'CARECHAT_D', 'NET', 'sk', 'pub', 'window', 'crypto',
     'nip44e', 'nip44ck', '_hex', 'finalizeEvent', '_publishAny',
     `${audienceFn}\n${sealFn}\nconst api = { ${method} __end(){} };\nreturn api.sendCareChat;`
   )(
-    { querySync: async () => [reqEvent] }, () => ['ws://x'],
+    { querySync: async () => [reqEvent] }, () => ['ws://x'], () => ['ws://x'], () => false,
     'trinityone/carereq:', 'trinityone/carechat:', 'trinityone',
     ellie.sk, ellie.pub,
     { Fellowship: { churchPub: church.pub, ready: Promise.resolve() } },
@@ -131,11 +131,11 @@ test('and the care rota, who were never in the request, are not given a key to i
   const published = [];
   const reqEvent = { created_at: 100, pubkey: ellie.pub, content: JSON.stringify(CHILD_REQUEST) };
   const send = new Function(
-    'pool', 'churchRelays', 'CAREREQ_D', 'CARECHAT_D', 'NET', 'sk', 'pub', 'window', 'crypto',
+    'pool', 'churchRelays', 'publishSetFor', 'isNoNetworkRelay', 'CAREREQ_D', 'CARECHAT_D', 'NET', 'sk', 'pub', 'window', 'crypto',
     'nip44e', 'nip44ck', '_hex', 'finalizeEvent', '_publishAny',
     `${audienceFn}\n${sealFn}\nconst api = { ${method} __end(){} };\nreturn api.sendCareChat;`
   )(
-    { querySync: async () => [reqEvent] }, () => ['ws://x'],
+    { querySync: async () => [reqEvent] }, () => ['ws://x'], () => ['ws://x'], () => false,
     'trinityone/carereq:', 'trinityone/carechat:', 'trinityone',
     ellie.sk, ellie.pub,
     { Fellowship: { churchPub: church.pub, ready: Promise.resolve() } },
@@ -164,11 +164,11 @@ test('a request document forged by somebody else is ignored', async () => {
   const forged = { created_at: 999, pubkey: rota.pub,
     content: JSON.stringify(sealTo(rota.sk, [rota.pub], { note: 'mine now' })) };
   const send = new Function(
-    'pool', 'churchRelays', 'CAREREQ_D', 'CARECHAT_D', 'NET', 'sk', 'pub', 'window', 'crypto',
+    'pool', 'churchRelays', 'publishSetFor', 'isNoNetworkRelay', 'CAREREQ_D', 'CARECHAT_D', 'NET', 'sk', 'pub', 'window', 'crypto',
     'nip44e', 'nip44ck', '_hex', 'finalizeEvent', '_publishAny',
     `${audienceFn}\n${sealFn}\nconst api = { ${method} __end(){} };\nreturn api.sendCareChat;`
   )(
-    { querySync: async () => [real, forged] }, () => ['ws://x'],
+    { querySync: async () => [real, forged] }, () => ['ws://x'], () => ['ws://x'], () => false,
     'trinityone/carereq:', 'trinityone/carechat:', 'trinityone',
     ellie.sk, ellie.pub,
     { Fellowship: { churchPub: church.pub, ready: Promise.resolve() } },
@@ -272,11 +272,11 @@ function sendWith({ reqTags, careTeam }) {
   const published = [];
   const reqEvent = { created_at: 100, pubkey: ellie.pub, tags: reqTags, content: JSON.stringify(CHILD_REQUEST) };
   const send = new Function(
-    'pool', 'churchRelays', 'CAREREQ_D', 'CARECHAT_D', 'NET', 'sk', 'pub', 'window', 'crypto',
+    'pool', 'churchRelays', 'publishSetFor', 'isNoNetworkRelay', 'CAREREQ_D', 'CARECHAT_D', 'NET', 'sk', 'pub', 'window', 'crypto',
     'nip44e', 'nip44ck', '_hex', 'finalizeEvent', '_publishAny', '_fetchCareTeam',
     `${audienceFn}\n${sealFn}\nconst api = { ${method} __end(){} };\nreturn api.sendCareChat;`
   )(
-    { querySync: async () => [reqEvent] }, () => ['ws://x'],
+    { querySync: async () => [reqEvent] }, () => ['ws://x'], () => ['ws://x'], () => false,
     'trinityone/carereq:', 'trinityone/carechat:', 'trinityone',
     ellie.sk, ellie.pub,
     { Fellowship: { churchPub: church.pub, ready: Promise.resolve() } },

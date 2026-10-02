@@ -210,6 +210,7 @@ function distributor(groups) {
     Steward: {
       subscribeMediaKey: () => () => {}, subscribeCareKey: () => () => {}, subscribeNameKey: () => () => {},
       setCareRoster: () => {},
+      listIsCurrent: () => true,   // the lists are the current church's — the gate is pinned in the-key-enrolment-waits-for-every-list
       ensureMediaKeyForMembers: (...a) => calls.push(['media', a]),
       ensureCareKeyForMembers: (...a) => calls.push(['care', a]),
       ensureNameKeyForMembers: (...a) => calls.push(['name', a]),

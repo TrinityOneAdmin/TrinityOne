@@ -50,6 +50,7 @@ function lift(open) {
     // version of this file pass with refusal detection deleted outright.
     _pubReason,
     relaysForChurch: () => ['wss://x/relay'],
+    publishSetFor: () => ['wss://x/relay'],
     toPub: (x) => String(x || ''), sk: 'a'.repeat(64), pub: 'b'.repeat(64),
     _ckMemKeyGet: () => '11'.repeat(32),
     // The bundler renames these on the way in (nip44e→encrypt, nip44ck→getConversationKey,

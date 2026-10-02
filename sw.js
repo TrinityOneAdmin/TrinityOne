@@ -1,7 +1,7 @@
 // TrinityOne service worker — makes the app boot offline.
 // The app SHELL (html/jsx/libs/fonts) is cached here; Bible MODULES live in IndexedDB (engine.js)
 // and chat goes over the relay WebSocket — neither is touched by this worker.
-const CACHE = 'trinity-shell-v264';   // bump on each app deploy so installed PWAs refresh the shell
+const CACHE = 'trinity-shell-v265';   // bump on each app deploy so installed PWAs refresh the shell
 // SECURITY-AUDIT-2026-06-25 Critical-1: query-string params that MUST NOT enter the SW cache key.
 // The classic case is `?invite=<full 12-word BIP-39 seed>` — even after the React app strips the URL
 // via history.replaceState (app.jsx ~L466), the SW fetch handler has already cached the response
@@ -85,7 +85,7 @@ self.addEventListener('fetch', (e) => {
   // are left alone — NEVER cached. Caching a live-state route froze the desktop control panel: the SW
   // cached /tunnel/state="not running" once and served it forever, so the panel showed "not public" long
   // after the tunnel came up. relay/ (prefix) also covers /relay-app/ (desktop control UI) + /relay-names.
-  if (/^\/(relay|modules\/|push\/|config|status|feed|audiofeed|audiozip|tunnel|tailscale|suite-update|local-token|settings|update)/.test(url.pathname)) return;
+  if (/^\/(relay|modules\/|push\/|config|status|feed|audiofeed|audiozip|tunnel|tailscale|suite-update|local-token|settings|update|export|blob)/.test(url.pathname)) return;
   // App shell (navigations + HTML/JSX source) is network-first, so a new deploy is picked up on the
   // next load instead of being pinned to the old cached copy; it falls back to cache when offline.
   const isShell = e.request.mode === 'navigate' || url.pathname === '/' || /\.(html|jsx)$/.test(url.pathname);

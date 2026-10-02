@@ -115,7 +115,7 @@ test('CHECK-IN SAYS WHICH EMPTY IT IS: no children marked, or the list has not a
       // useStewardServices / useStewNarrow / CheckinClearances arrived 2026-09-10 with slice 2 of check-in:
       // the panel now names its session on each record and sits beside the clearances panel. Neither is what
       // this file is about — it is about which EMPTY the screen claims — so both are the neutral answer.
-      window: { useStewardCheckins: () => [], useStewardSafeguard: () => sg, useStewardGuardians: () => ({}),
+      window: { useStewardCheckins: () => [], useStewardSafeguard: () => sg, useStewardGuardians: () => ({ links: {}, closed: {} }),
                 useStewardMembers: () => [], useStewardServices: () => [],
                 useStewardIdv: () => 1, useStewardConn: () => 1,
                 addEventListener() {}, removeEventListener() {}, dispatchEvent: () => true },
@@ -180,7 +180,7 @@ test('…and check-in says loading rather than claiming the church marked nobody
   const { React, draw } = miniReact();
   const Comp = await loadFrom('app/stew-dashboard.jsx', 'DashCheckin', 'function DashCheckin()', {
     React,
-    window: { useStewardCheckins: () => [], useStewardSafeguard: () => ({ minors: [] }), useStewardGuardians: () => ({}),
+    window: { useStewardCheckins: () => [], useStewardSafeguard: () => ({ minors: [] }), useStewardGuardians: () => ({ links: {}, closed: {} }),
               useStewardMembers: () => [], useStewardServices: () => [],
               useStewardIdv: () => 1, useStewardConn: () => 1,
               addEventListener() {}, removeEventListener() {}, dispatchEvent: () => true },

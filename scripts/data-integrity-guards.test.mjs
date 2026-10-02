@@ -14,6 +14,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { stmt } from './test-slice.mjs';
 
 const BUNDLE = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
 const FINANCE = readFileSync(new URL('../app/stew-finance.jsx', import.meta.url), 'utf8');
@@ -58,7 +59,7 @@ const WHOLE_LIST_WRITERS = [
   ['setNoPhoto', 'photo suppression is lifted for every child'],
   ['setMinors', 'every other child stops being a minor — the relay stops blocking adult↔minor DMs'],
   ['setApproved', 'every youth-cleared adult loses clearance', 'setApproved(pubkeys, opts)'],
-  ['setGuardians', 'every parent↔child link is dropped', 'setGuardians(links)'],
+  ['setGuardians', 'every parent↔child link is dropped', 'setGuardians(links, closed)'],
   ['setAdmitted', 'the whole congregation returns to "waiting for approval"', 'setAdmitted(pubkeys)'],
   ['setStewards', 'every delegated steward is revoked', 'setStewards(pubkeys, caps, names)'],   // caps: what each steward may do
 ];
@@ -86,7 +87,10 @@ test('…nor before the console has actually LOOKED for an existing envelope', (
   assert.match(body('mediaEncryptor(', BUNDLE), /_mediaKeyChecked/,
     'mediaEncryptor mints when it has no key and the relay is merely AUTHENTICATED. It must also have '
     + 'positively observed that no envelope exists — otherwise a slow link mints over the church\'s archive.');
-  assert.match(body('subscribeMediaKey(', BUNDLE), /oneose\(\)\s*\{\s*_mediaKeyChecked = true/,
+  // Guarded since 2026-10-01: only a TRUSTWORTHY end-of-stored-events — not our own close, not a read from
+  // before a reset, not nostr-tools' timer, and authenticated — may say "looked" (see _keyReadOk;
+  // scripts/console-keys-follow-the-church-switch.test.mjs drives it).
+  assert.match(body('subscribeMediaKey(', BUNDLE), /_openKeyRead\([\s\S]*\(\) => \{\s*if \(!_mediaKeyChecked\) \{\s*_mediaKeyChecked = true/,
     'nothing ever sets _mediaKeyChecked, so the guard above can never open and encrypted uploads are blocked '
     + 'for ever — a flag that is only ever false is not a fix');
 });
@@ -123,7 +127,8 @@ test('the trusted-view signal is a real auth, not a constant — and it cannot o
   // socket goes. Same invariant, one more clause: it must be able to become false again.
   const at = BUNDLE.indexOf('pool.automaticallyAuth =');
   assert.notEqual(at, -1, 'the NIP-42 auth hook is missing');
-  assert.match(BUNDLE.slice(at, at + 500), /_authedRelays\.set\(/,
+  // the WHOLE hook, to its closing `;` — a fixed 500 characters stopped short of it once it grew (test-windows.test.mjs)
+  assert.match(stmt(BUNDLE, 'pool.automaticallyAuth =', 'the NIP-42 auth hook'), /_authedRelays\.set\(/,
     'the authenticated relay must be recorded where the auth event is signed');
   assert.doesNotMatch(BUNDLE, /_authedRelays = new (?:Set|Map)\(\[[^\]]/,
     'it must start empty, or it asserts an auth that never happened');

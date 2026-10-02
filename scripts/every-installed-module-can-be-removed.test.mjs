@@ -113,28 +113,28 @@ const ENGINE = readFileSync(ROOT + 'engine.js', 'utf8');
 // objectStore + get/put/delete/getAllKeys, each an async request object). `breakDeleteOf` makes one key
 // undeletable, which is how the honest-failure path is exercised — that is a broken store, not a broken
 // engine, and the engine must notice and say so.
-function fakeIndexedDB({ breakDeleteOf = null, unavailable = false, missingStore = false, abortReads = false } = {}) {
+function fakeIndexedDB({ breakDeleteOf = null, unavailable = false, missingStore = false, abortReads = false, quotaFull = false } = {}) {
   const stores = new Map();
   let upgraded = false;
   const req = () => ({ onsuccess: null, onerror: null, onupgradeneeded: null, result: undefined, error: null });
   const settle = (r, value) => { setTimeout(() => { r.result = value; if (r.onsuccess) r.onsuccess(); }, 0); return r; };
   const db = {
     createObjectStore(name) { if (!stores.has(name)) stores.set(name, new Map()); return {}; },
-    transaction(name) {
-      // A store that is not there throws SYNCHRONOUSLY from transaction(), exactly as IndexedDB does.
+    transaction(name, mode) {
       if (missingStore) { const e = new Error('no object store named ' + name); e.name = 'NotFoundError'; throw e; }
       const m = stores.get(name) || stores.set(name, new Map()).get(name);
-      // `abortReads` models a transaction that dies without the REQUEST ever firing: a version change, the
-      // database being deleted, the quota withdrawn mid-read. Only tx.onabort is called — which is why a
-      // reader that listens for onsuccess/onerror alone simply never settles.
-      const tx = { onabort: null, onerror: null, error: null };
+      const tx = { oncomplete: null, onabort: null, onerror: null, error: null };
+      const commitTx = () => setTimeout(() => {
+        if (quotaFull && mode === 'readwrite') { tx.error = new DOMException('quota exceeded', 'QuotaExceededError'); if (tx.onabort) tx.onabort(); }
+        else { if (tx.oncomplete) tx.oncomplete(); }
+      }, 0);
       const store = {
         transaction: tx,
-        get: (k) => { const r = req(); if (abortReads) setTimeout(() => { if (tx.onabort) tx.onabort(); }, 0); else settle(r, m.has(k) ? m.get(k) : undefined); return r; },
-        count: (k) => settle(req(), m.has(k) ? 1 : 0),
-        put: (v, k) => { m.set(k, v); return settle(req(), k); },
-        delete: (k) => { if (k !== breakDeleteOf) m.delete(k); return settle(req(), undefined); },
-        getAllKeys: () => settle(req(), [...m.keys()]),
+        get: (k) => { const r = req(); if (abortReads) setTimeout(() => { if (tx.onabort) tx.onabort(); }, 0); else { settle(r, m.has(k) ? m.get(k) : undefined); commitTx(); } return r; },
+        count: (k) => { const r = settle(req(), m.has(k) ? 1 : 0); commitTx(); return r; },
+        put: (v, k) => { if (!quotaFull) m.set(k, v); const r = settle(req(), k); commitTx(); return r; },
+        delete: (k) => { if (k !== breakDeleteOf) m.delete(k); const r = settle(req(), undefined); commitTx(); return r; },
+        getAllKeys: () => { const r = settle(req(), [...m.keys()]); commitTx(); return r; },
       };
       tx.objectStore = () => store;
       return tx;
@@ -156,6 +156,7 @@ function fakeIndexedDB({ breakDeleteOf = null, unavailable = false, missingStore
   api._breakOpen = (v) => { unavailable = !!v; };
   api._loseStore = (v) => { missingStore = !!v; };
   api._abortReads = (v) => { abortReads = !!v; };
+  api._quotaFull = (v) => { quotaFull = !!v; };
   api._keys = () => [...(stores.get('modules') || new Map()).keys()];
   api._bytes = () => [...(stores.get('modules') || new Map()).values()].reduce((n, v) => n + (v.byteLength || v.length || 0), 0);
   return api;
@@ -169,8 +170,8 @@ function fakeLocalStorage() {
 // ── the engine, lifted and run ────────────────────────────────────────────────────────────────────────────
 // Declarations first (taken from engine.js as source text, not retyped), then the functions that close over
 // them. `notify` is counted so a harness that never reaches engine.js cannot pass vacuously.
-function engine({ breakDeleteOf = null, unavailable = false, search = '' } = {}) {
-  const idb = fakeIndexedDB({ breakDeleteOf, unavailable });
+function engine({ breakDeleteOf = null, unavailable = false, quotaFull = false, search = '' } = {}) {
+  const idb = fakeIndexedDB({ breakDeleteOf, unavailable, quotaFull });
   // what each url serves, by basename — see FIXTURE below
   const fixture = (nameOrUrl) => {
     const f = FIXTURE.get(String(nameOrUrl).split('/').pop());
@@ -250,6 +251,7 @@ function engine({ breakDeleteOf = null, unavailable = false, search = '' } = {})
     fnBody(ENGINE, 'function recordInstalled(item){'),
     fnBody(ENGINE, 'function noteRegisteredAbbr(url, abbr){'),
     fnBody(ENGINE, 'function isInstalled(url){'),
+    fnBody(ENGINE, 'function isLoaded(url){'),
     fnBody(ENGINE, 'async function removeModule(id, category){'),
     fnBody(ENGINE, 'function getCommentary(b, c, version){'),
     // lex() is how a dictionary is actually consulted — a tap on a Strong's number. It needs the built-in
@@ -267,7 +269,7 @@ function engine({ breakDeleteOf = null, unavailable = false, search = '' } = {})
     parts.join('\n') +
     '\nreturn { modules, dicts, _pendingDicts, commentaries, installing, addDict, _ensureDicts, loadDictJSON,' +
     ' addCommentary, addSource, cacheGet, cachePut, cacheKeys, cacheDelete, getInstalled, recordInstalled,' +
-    ' isInstalled, removeModule, getCommentary, lex, searchDict, cacheHas, noteRegisteredAbbr, installModule, setInstalled,' +
+    ' isInstalled, isLoaded, removeModule, getCommentary, lex, searchDict, cacheHas, noteRegisteredAbbr, installModule, setInstalled,' +
     ' noteLoadedFrom, activeUrl: () => (active && urlOf[urlKey("bibles", active)]) || null,' +
     ' restoreInstalled, autoLoad, subscribe: _sub.subscribe,' +
     ' order: () => order, active: () => active, setActive: (a) => { active = a; } };'
@@ -1319,4 +1321,40 @@ test('an ambiguous name is still REFUSED when the loaded copy is not one of the 
       "it deleted the bytes of a module that was not even a candidate for the name it was given");
     assert.ok(e.getInstalled()[TWIN_C.url], 'it removed the record of a module that was not a candidate');
   })();
+});
+
+// ── T35: installing on a full phone does not claim success ──────────────────────────────────────────────
+test('A FULL PHONE GETS AN HONEST REFUSAL AND NO RECORD — the old cachePut swallowed the error', async () => {
+  const e = engine({ quotaFull: true });
+  // install should throw because cachePut rejects on quota abort
+  await assert.rejects(() => e.installModule(BIBLE),
+    'installModule did not throw on a full phone — a member is told "Installed" over bytes that never reached the store');
+  assert.equal(e.isInstalled(BIBLE.url), false,
+    'A RECORD WAS WRITTEN FOR BYTES THAT NEVER REACHED THE STORE — on relaunch, "Installed" with no Get, and no way to recover');
+  assert.deepEqual(e.idb._keys(), [],
+    'bytes reached the store even though the transaction aborted');
+});
+
+// ── T36: control — installing with room succeeds (the fix cannot break the happy path) ─────────────────
+test('CONTROL — installing with room succeeds and the module is both recorded and loaded', async () => {
+  const e = engine();
+  await e.installModule(BIBLE);
+  assert.equal(e.isInstalled(BIBLE.url), true, 'not recorded');
+  assert.equal(e.isLoaded(BIBLE.url), true, 'not loaded');
+  assert.ok(e.idb._keys().includes(BIBLE.url), 'bytes not in store');
+});
+
+// ── T37: a module recorded but not loaded is distinguished by isLoaded ─────────────────────────────────
+test('isLoaded is false for a module whose record survived but whose bytes did not — the healing path', async () => {
+  const e = engine();
+  await e.installModule(BIBLE);
+  assert.equal(e.isLoaded(BIBLE.url), true, 'control: should be loaded right after install');
+  // simulate a relaunch where the bytes are gone: new engine, same localStorage, empty IndexedDB
+  const e2 = engine();
+  // copy the installed record from e into e2's localStorage (fakeLocalStorage is per-engine, so
+  // we need to replant it)
+  e2.setInstalled(e.getInstalled());
+  assert.equal(e2.isInstalled(BIBLE.url), true, 'the record should survive');
+  assert.equal(e2.isLoaded(BIBLE.url), false,
+    'isLoaded should be false for a module whose bytes are not loaded into memory');
 });

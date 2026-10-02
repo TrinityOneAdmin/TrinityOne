@@ -31,6 +31,7 @@ function lift({ mode }) {
     sk: 'a'.repeat(64),
     window: { Fellowship: { churchPub: 'c'.repeat(64), ready: Promise.resolve(), relays: ['wss://x/relay'] } },
     churchRelays: () => ['wss://x/relay'],
+    publishSetFor: () => ['wss://x/relay'],
     _fetchCareTeam: async () => ['r'.repeat(64)],
     _churchRoster: new Map([['c'.repeat(64), new Set(['r'.repeat(64)])]]),
     _safeReaders: () => ({ readers: ['r'.repeat(64)], narrowed: mode === 'narrow' }),

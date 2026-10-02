@@ -3,6 +3,18 @@
 // inside the APK that can refresh live from the channel RSS feed.
 const { useState: useW } = React;
 
+// M-12: the VideoPlayer used to read channel data from Bible.getVideos(), which returns the BUNDLED
+// trinity-videos.json — always {"channel":null,"videos":[]}. The WatchView has the real channel data
+// from the gateway's /feed endpoint, so we share it here. Module-level because VideoPlayer and WatchView
+// are siblings (both mounted by app.jsx), not parent-child.
+//
+// ONE DECLARATION. M-12 was fixed twice independently — 7ae78c3 (Part 6) and 7339e5a (audit-member-app)
+// — and the 2026-09-30 merge of the two took BOTH `let _lastFeed = null;` lines. That is a redeclaration
+// SyntaxError, and this file ships unbundled as text/babel, so it would have blanked the Watch screen on
+// the phone while every bundle still built clean. The same shape as cc2f3bd. Caught by the screen test,
+// not by the build.
+let _lastFeed = null;
+
 function parseYT(url) {
   if (!url) return null;
   const m = String(url).match(/(?:youtu\.be\/|v=|embed\/|shorts\/)([A-Za-z0-9_-]{11})/);
@@ -129,7 +141,14 @@ function WatchView({ ctx }) {
   }, [sermonsReady, data, retry]);
   React.useEffect(() => {
     let alive = true; setData(null);
-    const done = (d) => { if (alive) setData(d || { channel: null, videos: [] }); };
+    // ⚠ CACHE UNCONDITIONALLY, INCLUDING A CHANNEL-LESS FEED. M-12 was fixed twice, independently —
+    // 7ae78c3 (Part 6) and 7339e5a (the audit-member-app branch) — and the two differ only here. The
+    // second guarded this write with `if (v.channel && v.channel.url)`, which looks like it protects a
+    // good cached value and in fact leaks one church's channel into another's video: view church A (which
+    // has a channel), switch to church B (which has none), and _lastFeed still holds A — so VideoPlayer's
+    // fallback below renders A's Channel button over B's video. Overwriting with the channel-less feed is
+    // what makes the button correctly disappear. The `ch.url ?` guards at the two buttons then hide it.
+    const done = (d) => { if (alive) { const v = d || { channel: null, videos: [] }; _lastFeed = v; setData(v); } };
     const FS = window.Fellowship;
     if (channelUrl && FS && FS.gatewayBase && FS.gatewayBase()) {
       // the church set a YouTube/Rumble channel — the gateway fetches its feed for us (CORS-free)
@@ -291,7 +310,7 @@ function VideoPlayer({ video, open, onClose, ctx }) {
   const [retry, setRetry] = useW(0);          // bump to re-attempt after an error
   const abortRef = React.useRef(null);
   const watchdog = React.useRef(null);        // fires if <video> neither plays nor errors (silent codec stall)
-  React.useEffect(() => { if (open) window.Bible.getVideos().then(setData); }, [open]);
+  React.useEffect(() => { if (open) { if (_lastFeed) setData(_lastFeed); else window.Bible.getVideos().then(setData); } }, [open]);
   React.useEffect(() => { if (open) setLiveId(video && video.ytId ? video.ytId : null); }, [open, video]);
   React.useEffect(() => {
     if (!open || !video || !video._sermon) { setSelfSrc(null); setSelfErr(''); setProg(null); return; }
@@ -322,8 +341,11 @@ function VideoPlayer({ video, open, onClose, ctx }) {
     return () => { if (watchdog.current) { clearTimeout(watchdog.current); watchdog.current = null; } };
   }, [selfSrc, selfErr]);
   if (!video) return null;
-  const ch = (data && data.channel) || {};
-  const more = ((data && data.videos) || []).filter(v => v.id !== video.id).slice(0, 4);
+  // M-12: prefer the live feed data (from WatchView's /feed call) over the bundled fallback, which ships
+  // with channel:null and videos:[]. Without this the Channel button opens nothing and "Up next" is always empty.
+  const feedData = (data && data.channel && data.channel.url) ? data : (_lastFeed || data);
+  const ch = (feedData && feedData.channel) || {};
+  const more = ((feedData && feedData.videos) || []).filter(v => v.id !== video.id).slice(0, 4);
 
   return (
     <Overlay open={open} onClose={onClose}>
@@ -387,7 +409,7 @@ function VideoPlayer({ video, open, onClose, ctx }) {
                 <div style={{ fontWeight: 700, fontSize: 14.5 }}>{ch.name || 'Church'}</div>
                 <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{ch.handle || 'YouTube'}</div>
               </div>
-              <button onClick={() => openExternal(ch.url)} style={{ border: 'none', background: 'var(--ink)', color: 'var(--paper)', padding: '9px 16px', borderRadius: 999, fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Channel</button>
+              {ch.url ? <button onClick={() => openExternal(ch.url)} style={{ border: 'none', background: 'var(--ink)', color: 'var(--paper)', padding: '9px 16px', borderRadius: 999, fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Channel</button> : null}
             </div>
           )}
 

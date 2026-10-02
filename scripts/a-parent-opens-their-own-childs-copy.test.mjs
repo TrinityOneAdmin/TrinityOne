@@ -140,7 +140,8 @@ function workerWriter(actor, keys, name) {
     // exists to stop. Lifting it means this harness gets whatever the bundle really does.
     _todayISO: new Function('return (' + stmt(FELLOWSHIP, 'var _todayISO = () =>', '_todayISO')
       .replace(/^var\s+\w+\s*=\s*/, '').replace(/;\s*$/, '') + ');')(),
-    CHECKIN_D: D.CHECKIN, NET: 'trinityone', relaysForChurch: () => [],
+    CHECKIN_D: D.CHECKIN, NET: 'trinityone', relaysForChurch: () => [], publishSetFor: () => [],
+    _pubReason: (e) => (e && e.refused) ? 'refused' : (e && e.unsent) ? 'not-sent' : 'unconfirmed',
     _publishAny: async (_relays, evt) => { captured.push(evt); return true; },
     String, Date, Math, JSON, Number, Array, Object, Boolean, RegExp, console,
   };

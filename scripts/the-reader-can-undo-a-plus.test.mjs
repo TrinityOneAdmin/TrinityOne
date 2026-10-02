@@ -116,7 +116,7 @@ function reader(opts = {}) {
     history: { back() {}, pushState() {}, replaceState() {}, state: null },
     fetch: async () => ({ ok: false, json: async () => ({}) }),
   };
-  const { BottomSheet } = loadScreen('app/ui.jsx', ['BottomSheet'], base);
+  const { BottomSheet, useBackLayer } = loadScreen('app/ui.jsx', ['BottomSheet', 'useBackLayer'], base);
   const { Icon } = loadScreen('app/icons.jsx', ['Icon'], { React, window: {} });
   win.Bible = {
     loaded: true, activeVersion: 'WEB',
@@ -141,7 +141,7 @@ function reader(opts = {}) {
     getCatalog: async () => [], isInstalled: () => true, isInstalling: () => false, installModule: async () => ({}),
   };
   const { ReadScreen } = loadScreen('app/screens-read.jsx', ['ReadScreen'], {
-    ...base, BottomSheet, Icon, Bible: win.Bible,
+    ...base, BottomSheet, useBackLayer, Icon, Bible: win.Bible,
     IconBtn: Stub('IconBtn'), Sheet: Stub('Sheet'), Halo: Stub('Halo'),
     SectionLabel: Stub('SectionLabel'), EmptyState: Stub('EmptyState'), ReadPlansTabs: Stub('ReadPlansTabs'),
     ChurchBadge: Stub('ChurchBadge'), Overlay: Stub('Overlay'),

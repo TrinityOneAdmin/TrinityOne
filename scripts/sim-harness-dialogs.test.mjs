@@ -43,7 +43,7 @@ const drivers = readdirSync(DIR)
   .filter(x => x.src.includes('Page.enable'));
 
 test('every driver that enables the Page domain also handles dialogs',
-  { skip: drivers.length ? false : 'no sim drivers on disk — see the note above' }, () => {
+  { skip: noActor || (!drivers.length && 'no sim drivers on disk — see the note above') }, () => {
   assert.ok(drivers.length >= 3, `only ${drivers.length} drivers found — has this file moved?`);
   for (const { f, src } of drivers) {
     assert.match(src, /Page\.javascriptDialogOpening/,

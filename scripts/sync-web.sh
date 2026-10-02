@@ -88,22 +88,14 @@ echo "www/ populated:"; du -sh "$WWW"
 # if the native project exists, copy assets in
 if [ -d "$ROOT/android" ]; then
   npx cap sync android
-  # webContentsDebuggingEnabled is ON during the pilot — an OWNER DECISION, deliberately held so real
-  # devices can be diagnosed over CDP (scripts/smoke-device.sh depends on it). It must be turned OFF before
-  # go-live: while it is on, any USB-connected machine — or any app that can reach the abstract socket
-  # webview_devtools_remote_<pid> — gets a full CDP session against the app origin: read localStorage (the
-  # member's key, group keys), run arbitrary JS, exfiltrate the roster.
-  #
-  # This block does NOT decide that; it makes the state impossible to forget, and gives go-live one switch:
-  #     TRINITY_DEBUG=0 bash scripts/sync-web.sh     → packaged config forced to false (the go-live build)
-  # Anything else leaves capacitor.config.json's committed value alone and says loudly what shipped.
+  # WebView debugging is now controlled by the Gradle BUILD VARIANT, not by the Capacitor config.
+  # MainActivity overrides setWebContentsDebuggingEnabled() at runtime using BuildConfig.WEB_DEBUG:
+  #   assembleDebug   → WEB_DEBUG=true  (dev builds, CDP diagnosis via USB)
+  #   assembleRelease → WEB_DEBUG=false (pilot/go-live, CDP locked out)
+  # The capacitor.config.json value is still read by the Bridge first, but the Java override wins.
+  # TRINITY_DEBUG=0 is no longer needed — use assembleRelease instead.
   ASSETS_CFG="$ROOT/android/app/src/main/assets/capacitor.config.json"
-  if [ -f "$ASSETS_CFG" ]; then
-    if [ "${TRINITY_DEBUG:-}" = "0" ]; then
-      node -e 'const f=process.argv[1],c=JSON.parse(require("fs").readFileSync(f,"utf8"));(c.android=c.android||{}).webContentsDebuggingEnabled=false;require("fs").writeFileSync(f,JSON.stringify(c,null,2)+"\n")' "$ASSETS_CFG"
-      echo "✔ TRINITY_DEBUG=0 — WebView remote debugging DISABLED in this build (go-live posture)."
-    elif grep -q '"webContentsDebuggingEnabled": *true' "$ASSETS_CFG"; then
-      echo "⚠ WebView remote debugging is ON in this build (pilot diagnosis). Ship with TRINITY_DEBUG=0 at go-live."
-    fi
+  if [ -f "$ASSETS_CFG" ] && grep -q '"webContentsDebuggingEnabled": *true' "$ASSETS_CFG"; then
+    echo "ℹ capacitor.config.json says debug=true; the Gradle variant decides what actually ships."
   fi
 fi

@@ -80,16 +80,17 @@ function runner(name, { publishFails, how }) {
     return true;
   };
   const churchRelays = () => ['wss://r.example/relay'];
+  const publishSetFor = () => ['wss://r.example/relay'];
   const window = { Fellowship: { churchPub: 'church-pub-hex', ready: Promise.resolve() } };
   // ⚠ A LIFTED FUNCTION HAS TWO CALLER LISTS: the code that calls it, and the tests that SLICE IT BY NAME
   // with a hand-written `names` array like this one. `_pubReason` was added to fillCareSlot and
   // clearCareSlot on 2026-09-16; without it here they throw ReferenceError and every row below fails for a
   // reason that has nothing to do with what it is testing. The REAL classifier is injected, never a stub —
   // an injected outcome cannot catch a dead classifier.
-  const names  = ['finalizeEvent2', '_publishAny', 'churchRelays', 'window', 'sk', 'pub', 'NET', '_pubReason',
+  const names  = ['finalizeEvent2', '_publishAny', 'churchRelays', 'publishSetFor', 'window', 'sk', 'pub', 'NET', '_pubReason',
                   'CAREREQ_D', 'CAREREQSTATUS_D', 'CARESLOT_D', 'CARESKIP_D', 'CARE_D', 'String',
                   'Date', 'JSON', 'Math', 'console'];
-  const values = [finalizeEvent2, _publishAny, churchRelays, window, 'sk-bytes', 'me-pub', 'trinityone', _pubReason,
+  const values = [finalizeEvent2, _publishAny, churchRelays, publishSetFor, window, 'sk-bytes', 'me-pub', 'trinityone', _pubReason,
                   'carereq:', 'carereqstatus:', 'careslot:', 'careskip:', 'care:', String,
                   Date, JSON, Math,
                   { warn() {} }];   // the real ones log; keep the test output clean
@@ -182,10 +183,10 @@ test('approveCareRequest reports the half that did not land', async () => {
       async setCareRequestStatus() { statusResults.push(statusLands); return statusLands ? { id: 'status-evt' } : null; },
     } };
     const names  = ['window', 'sk', '_carekeys', 'profiles', '_careSeal', '_hex', 'crypto', 'finalizeEvent2',
-                    '_publishAny', 'churchRelays', 'CARE_D', 'NET', 'Date', 'JSON', 'Math', 'String', 'Array', 'Set', 'console'];
+                    '_publishAny', 'churchRelays', 'publishSetFor', 'CARE_D', 'NET', 'Date', 'JSON', 'Math', 'String', 'Array', 'Set', 'console'];
     const values = [window, 'sk-bytes', { 'church-pub-hex': 'k' }, {}, () => 'sealed-blob', () => 'abc123',
                     { getRandomValues: (a) => a }, (e) => ({ ...e, id: 'evt-id' }), async () => true,
-                    () => ['wss://r.example/relay'], 'care:', 'trinityone', Date, JSON, Math, String, Array, Set,
+                    () => ['wss://r.example/relay'], () => ['wss://r.example/relay'], 'care:', 'trinityone', Date, JSON, Math, String, Array, Set,
                     { warn() {} }];
     return new Function(...names, 'return ' + src)(...values).approveCareRequest;
   };

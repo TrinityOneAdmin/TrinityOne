@@ -41,17 +41,19 @@ function liftMonotonic() {
 function pair(a, b, frozenSecond) {
   const published = [];
   const src = '({ ' + liftMethod(a) + ', ' + liftMethod(b) + ' })';
-  const names  = ['sk', 'window', 'toPub', 'NET', '_publishBounded', 'finalizeEvent2', '_monotonicF',
-                  '_lastStampF', 'Date', 'JSON', 'Math', 'Number', 'String', 'console'];
+  const names  = ['sk', 'window', 'toPub', 'NET', '_publishBounded', 'publishSetFor', 'finalizeEvent2', '_monotonicF',
+                  '_lastStampF', '_pubReason', 'Date', 'JSON', 'Math', 'Number', 'String', 'console'];
   const FrozenDate = class extends Date { static now() { return frozenSecond * 1000; } };
   const values = ['sk', { Fellowship: { ready: Promise.resolve(), relays: ['wss://r/relay'] } },
                   (x) => String(x || 'cp'), 'trinityone',
                   async (_r, e) => { published.push(e); return true; },
+                  () => ['wss://r/relay'],
                   (e) => ({ ...e, id: 'id-' + published.length }), null, new Map(),
+                  () => 'unconfirmed',
                   FrozenDate, JSON, Math, Number, String, { warn() {} }];
   // _monotonicF must be the SHIPPED one, closing over the _lastStampF we hand in.
-  const mono = new Function('_lastStampF', 'Date', 'Math', 'return ' + liftMonotonic().replace(/^function _monotonicF/, 'function'))(values[7], FrozenDate, Math);
-  values[6] = mono;
+  const mono = new Function('_lastStampF', 'Date', 'Math', 'return ' + liftMonotonic().replace(/^function _monotonicF/, 'function'))(values[8], FrozenDate, Math);
+  values[7] = mono;
   const obj = new Function(...names, 'return ' + src)(...values);
   return { fns: obj, published };
 }

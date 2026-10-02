@@ -42,6 +42,9 @@ function harness(store) {
     getItem: (k) => (map.has(k) ? map.get(k) : null),
     setItem: (k, v) => map.set(k, String(v)),
     removeItem: (k) => map.delete(k),
+    // snapshot() walks the store by index (S-10, bd63c2f), as the real localStorage allows.
+    get length() { return map.size; },
+    key: (i) => [...map.keys()][i] ?? null,
   };
   const restored = [];
   const Steward = { restoreKey: (m) => { restored.push(m); return { npub: 'npub1fake' }; } };
@@ -53,6 +56,10 @@ function harness(store) {
   const body = [
     routing,
     grab(SRC, 'function restoreLocal(map, allow, exact)'),
+    // S-10 (bd63c2f) made applySteward take a snapshot first and keep it for "Keep my current church". Lifted
+    // with it — without them all three tests threw ReferenceError and checked nothing (found 2026-09-30).
+    grab(SRC, 'function snapshot(prefixes, exact)'),
+    'let _restoreSnap = null;',
     grab(SRC, 'function applySteward(obj)'),
     "const STEWARD_PREFIXES = ['trinityone.steward'];",
   ].join('\n');

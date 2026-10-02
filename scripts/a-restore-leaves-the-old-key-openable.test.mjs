@@ -34,6 +34,7 @@ function stewardWithKey() {
     validateMnemonic: () => true, wordlist: [],
     _loadBoxHosts: () => {}, _refreshBoxHostsUs: () => {},
     _resetChurchScopedState: () => {}, _setNeedsPin: () => {},
+    _blockedLastSet: () => new Set(), _localBlocked: new Set(), _localBlockedAt: 0,   // setKey/setActiveIdentity now seed the church's last blocklist (2026-10-02): not this file's question
     lsGet: (k) => (k in store ? store[k] : null),
     lsSet: (k, v) => { store[k] = v; },
     lsDel: (k) => { removed.push(k); delete store[k]; },
@@ -90,6 +91,7 @@ test('a phrase that fails its checksum restores NOTHING', () => {
         privateKeyFromSeedWords: () => new Uint8Array(32), getPublicKey: () => 'f'.repeat(64), getPublicKey2: () => 'f'.repeat(64),
         npubEncode: () => 'n', _loadBoxHosts: () => {}, _refreshBoxHostsUs: () => {},
         _resetChurchScopedState: () => {}, _setNeedsPin: () => {},
+        _blockedLastSet: () => new Set(), _localBlocked: new Set(), _localBlockedAt: 0,   // setKey/setActiveIdentity now seed the church's last blocklist (2026-10-02): not this file's question
         window: { Steward: {}, dispatchEvent: () => {}, CustomEvent: function () {} },
         String, JSON, Array, Object, Boolean, Number, Math, Promise, console, RegExp, Error, Uint8Array }, {
         has: (t, k) => (k in t) || !(String(k) in globalThis),
