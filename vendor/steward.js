@@ -16705,6 +16705,22 @@ zoo`.split("\n");
     _noPhoto = pubSet(list);
   };
   var _localBlocked = /* @__PURE__ */ new Set();
+  var _localBlockedAt = 0;
+  var BLOCKED_LAST_LS = "trinityone.steward.blockedlast.";
+  function _blockedLastSet(cp) {
+    try {
+      const l = JSON.parse(lsGet(BLOCKED_LAST_LS + cp) || "[]");
+      return new Set((Array.isArray(l) ? l : []).map((p) => String(p).toLowerCase()));
+    } catch (e) {
+      return /* @__PURE__ */ new Set();
+    }
+  }
+  function _noteBlockedList(cp, epoch, list, at) {
+    if (!_stillOn(cp, epoch) || (at || 0) < _localBlockedAt) return;
+    _localBlocked = new Set((list || []).map((p) => String(p).toLowerCase()));
+    _localBlockedAt = at || 0;
+    lsSet(BLOCKED_LAST_LS + cp, JSON.stringify([..._localBlocked]));
+  }
   var EVENT_POLICIES = ["leaders", "stewards", "everyone"];
   var _nameKeyRing = [];
   var _nameKeyAt = 0;
@@ -16814,6 +16830,8 @@ zoo`.split("\n");
     window.Steward.pubkey = pub;
     window.Steward.npub = npubEncode(pub);
     window.Steward.churchPub = pub;
+    _localBlocked = _blockedLastSet(pub);
+    _localBlockedAt = 0;
     try {
       _loadBoxHosts();
       _refreshBoxHostsUs();
@@ -16842,7 +16860,8 @@ zoo`.split("\n");
     _nameKeyDocKeys = null;
     _nameKeyChecked = false;
     _nameKeyAt = 0;
-    _localBlocked = /* @__PURE__ */ new Set();
+    _localBlocked = _blockedLastSet(actingChurch || pub);
+    _localBlockedAt = 0;
     _applyNoPhotoList([]);
     _careKeyHex = null;
     _careKeyRing = [];
@@ -20544,32 +20563,53 @@ zoo`.split("\n");
     // ---- moderation: the church's blocklist (banned member pubkeys). The relay rejects their writes
     // and withholds their existing events. Replaceable doc d=blocked:<churchpub>. ----
     subscribeBlocked(onBlocked) {
-      {
-        const _tag = _listTag(), _deliver = onBlocked;
-        onBlocked = (list) => _deliver(_stampFor(list, _tag));
-      }
+      const _tag = _listTag(), _deliver = onBlocked, cp0 = pub;
+      let genuine = false;
+      onBlocked = (list) => _deliver(genuine ? _stampFor(list, _tag) : list);
       let cur = [], latest = 0;
+      const take = (e) => {
+        const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+        if (d !== BLOCKED_D + cp0) return false;
+        if (_authFuture(e) || !_byChurch(e)) return false;
+        if (e.created_at < latest) return false;
+        latest = e.created_at;
+        try {
+          cur = JSON.parse(e.content).pubkeys || [];
+        } catch {
+          cur = [];
+        }
+        if (genuine) _noteBlockedList(cp0, _tag.epoch, cur, latest);
+        return true;
+      };
       const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
         onevent(e) {
-          const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
-          if (d !== BLOCKED_D + pub) return;
-          if (_authFuture(e) || !_byChurch(e)) return;
-          if (e.created_at < latest) return;
-          latest = e.created_at;
-          try {
-            cur = JSON.parse(e.content).pubkeys || [];
-          } catch {
-            cur = [];
-          }
-          onBlocked(cur);
+          if (take(e)) onBlocked(cur);
         },
         oneose() {
           onBlocked(cur);
         }
       });
+      const stopRead = _openKeyRead(
+        cp0,
+        [{ kinds: [30078], authors: [cp0], "#d": [BLOCKED_D + cp0] }],
+        (e) => {
+          if (take(e)) onBlocked(cur);
+        },
+        () => {
+          if (genuine) return;
+          genuine = true;
+          cur = [...cur];
+          _noteBlockedList(cp0, _tag.epoch, cur, latest);
+          onBlocked(cur);
+        }
+      );
       return () => {
         try {
           sub.close();
+        } catch {
+        }
+        try {
+          stopRead();
         } catch {
         }
       };
@@ -20579,6 +20619,8 @@ zoo`.split("\n");
       if (!sk) return Promise.resolve(null);
       const list = [...new Set((pubkeys || []).filter(Boolean))];
       _localBlocked = new Set(list.map((p) => String(p).toLowerCase()));
+      _localBlockedAt = now();
+      lsSet(BLOCKED_LAST_LS + (actingChurch || pub), JSON.stringify([..._localBlocked]));
       const content = JSON.stringify({ pubkeys: list });
       return _landed("blocked list", _publishToRelays(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", BLOCKED_D + pub], ["t", NET]], content }), sk)));
     },
@@ -23967,7 +24009,8 @@ zoo`.split("\n");
       _nameKeyDocKeys = null;
       _nameKeyChecked = false;
       _nameKeyAt = 0;
-      _localBlocked = /* @__PURE__ */ new Set();
+      _localBlocked = _blockedLastSet(actingChurch || pub);
+      _localBlockedAt = 0;
       _applyNoPhotoList([]);
       for (const k of Object.keys(CAP_KEYS)) _capState[k] = { ring: [], docKeys: null, rev: 1, at: 0, checked: false };
       _checkinMigrated = "";

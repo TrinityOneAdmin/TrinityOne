@@ -2245,6 +2245,26 @@ const _applyNoPhotoList = (list) => { _noPhoto = pubSet(list); };   // shared no
 // lowercased on both sides (the blockedSet normalisation), because a case-mismatch here would silently drop
 // LEGITIMATE members from envelopes.
 let _localBlocked = new Set();
+// …AND IT NO LONGER STARTS EMPTY (audit of 5276297, HIGH 2). "Fails open toward the subscription list" assumed the
+// subscription's first answer was the church's blocklist. On a slow link it was not: nostr-tools' own EOSE timer
+// (4.4 s) answered first, with no blocklist in it, and the enrolment wrapped the name and care keys to the member
+// the owner had blocked before reloading. So the console keeps the LAST GENUINE blocklist it saw for each church
+// (subscribeBlocked, below, and every Block made here) and starts from it when that church becomes active; a newer
+// genuine list from the relay replaces it, an older one never does (`_localBlockedAt`). The blocklist is the
+// church's own document, already readable by this console from its relay; this keeps a copy on the device that
+// runs the church, beside the member list it already keeps.
+let _localBlockedAt = 0;   // created_at of the list `_localBlocked` holds (0 = seeded from the device, or nothing)
+const BLOCKED_LAST_LS = 'trinityone.steward.blockedlast.';
+function _blockedLastSet(cp) {
+  try { const l = JSON.parse(lsGet(BLOCKED_LAST_LS + cp) || '[]'); return new Set((Array.isArray(l) ? l : []).map(p => String(p).toLowerCase())); }
+  catch (e) { return new Set(); }
+}
+function _noteBlockedList(cp, epoch, list, at) {
+  if (!_stillOn(cp, epoch) || (at || 0) < _localBlockedAt) return;   // another church now, or older than what we hold
+  _localBlocked = new Set((list || []).map(p => String(p).toLowerCase()));
+  _localBlockedAt = at || 0;
+  lsSet(BLOCKED_LAST_LS + cp, JSON.stringify([..._localBlocked]));
+}
 // WHO MAY CREATE AN EVENT IN A GROUP. Order matters: index 0 is the default and is never written to the
 // document, so a church that has not touched this setting publishes exactly the group definition it always
 // did. 'leaders' is that default because it is what the relay has always enforced — the named leaders may
@@ -2469,6 +2489,7 @@ function setKey(mnemonic) {
   window.Steward.pubkey = pub;
   window.Steward.npub = npubEncode(pub);
   window.Steward.churchPub = pub;
+  _localBlocked = _blockedLastSet(pub); _localBlockedAt = 0;   // this church's last genuine blocklist (HIGH 2, by `let _localBlocked`)
   // …and find out whether this computer actually holds this church, now that we know which church it is.
   try { _loadBoxHosts(); _refreshBoxHostsUs(); } catch (e) {}
   // C4: prove this church's relays now that we know which church is asking. Membership is per church — the
@@ -2530,8 +2551,9 @@ function _resetChurchScopedState() {
   // labels and join dates into B's roster. AUDIT-2026-08-30.
   _stewardCaps = {}; _stewardNames = {}; _stewardNamesCt = ''; _stewardSince = {};
   _nameKeyRing = []; _nameKeyDocKeys = null; _nameKeyChecked = false; _nameKeyAt = 0;
-  // church A's blocks must not suppress church B's members from B's envelopes (item B)
-  _localBlocked = new Set();
+  // church A's blocks must not suppress church B's members from B's envelopes (item B) — B starts from ITS last
+  // genuine blocklist on this device (HIGH 2, above)
+  _localBlocked = _blockedLastSet(actingChurch || pub); _localBlockedAt = 0;
   _applyNoPhotoList([]);
   // The `*Checked` flags are the mint gates — "have we actually LOOKED for an envelope?". Carried across, they
   // report TRUE for a church nobody has looked at yet, which is what lets a stale ring be published as new.
@@ -6897,23 +6919,38 @@ window.Steward = {
   // ---- moderation: the church's blocklist (banned member pubkeys). The relay rejects their writes
   // and withholds their existing events. Replaceable doc d=blocked:<churchpub>. ----
   subscribeBlocked(onBlocked) {
-    { const _tag = _listTag(), _deliver = onBlocked; onBlocked = (list) => _deliver(_stampFor(list, _tag)); }   // stamped with the church it was opened for — see _listTag
+    // A LIST IS CURRENT ONLY ON A GENUINE ANSWER (audit of 5276297, HIGH 2). The blocklist is the one list the
+    // key enrolment reads whose ABSENCE ADDS recipients. Its stream delivers from `oneose`, and on a slow link
+    // nostr-tools' own EOSE timer (4.4 s) fired first: `blocked: []`, stamped current, and ~30 ms later the name
+    // and care envelopes went to the member the owner had blocked before reloading; the real list came ~5 s later,
+    // too late (the enrolment only grows). So the stream still feeds the screens, but the list is stamped for the
+    // church (Steward.listIsCurrent, which the enrolment requires) only once a NARROW read of the blocklist
+    // document has settled with a genuine answer from every relay — the key reads' machinery (_openKeyRead): not
+    // our own close, not the library's timer, the current church and epoch, an authenticated socket, per relay.
+    const _tag = _listTag(), _deliver = onBlocked, cp0 = pub;
+    let genuine = false;
+    onBlocked = (list) => _deliver(genuine ? _stampFor(list, _tag) : list);   // stamped with the church it was opened for — see _listTag
     let cur = [], latest = 0;
+    const take = (e) => {
+      const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+      if (d !== BLOCKED_D + cp0) return false;
+      if (_authFuture(e) || !_byChurch(e)) return false;   // owner-only; drop forgeries + future-dated pins
+      // NEWEST WINS. This is a replaceable doc and we read it from every relay, so without this the copy
+      // that ARRIVES last wins rather than the one that was WRITTEN last — a relay holding an older
+      // blocklist silently reinstates blocks the owner has already lifted.
+      if (e.created_at < latest) return false; latest = e.created_at;
+      try { cur = (JSON.parse(e.content).pubkeys) || []; } catch { cur = []; }
+      if (genuine) _noteBlockedList(cp0, _tag.epoch, cur, latest);
+      return true;
+    };
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
-      onevent(e) {
-        const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
-        if (d !== BLOCKED_D + pub) return;
-        if (_authFuture(e) || !_byChurch(e)) return;   // owner-only; drop forgeries + future-dated pins
-        // NEWEST WINS. This is a replaceable doc and we read it from every relay, so without this the copy
-        // that ARRIVES last wins rather than the one that was WRITTEN last — a relay holding an older
-        // blocklist silently reinstates blocks the owner has already lifted.
-        if (e.created_at < latest) return; latest = e.created_at;
-        try { cur = (JSON.parse(e.content).pubkeys) || []; } catch { cur = []; }
-        onBlocked(cur);
-      },
+      onevent(e) { if (take(e)) onBlocked(cur); },
       oneose() { onBlocked(cur); },
     });
-    return () => { try { sub.close(); } catch {} };
+    const stopRead = _openKeyRead(cp0, [{ kinds: [30078], authors: [cp0], '#d': [BLOCKED_D + cp0] }],
+      (e) => { if (take(e)) onBlocked(cur); },
+      () => { if (genuine) return; genuine = true; cur = [...cur]; _noteBlockedList(cp0, _tag.epoch, cur, latest); onBlocked(cur); });
+    return () => { try { sub.close(); } catch {} try { stopRead(); } catch {} };
   },
   setBlocked(pubkeys) {   // replace the whole blocklist (pass hex pubkeys)
     _requireTrustedView('blocked list');
@@ -6923,6 +6960,8 @@ window.Steward = {
     // block in the same tick it happens, not after the relay round-trip — that lag is the window in which the
     // roster effect re-keyed the person just blocked. Full replacement, so an unblock clears it too.
     _localBlocked = new Set(list.map(p => String(p).toLowerCase()));
+    _localBlockedAt = now();
+    lsSet(BLOCKED_LAST_LS + (actingChurch || pub), JSON.stringify([..._localBlocked]));   // what this console just blocked, kept (HIGH 2)
     const content = JSON.stringify({ pubkeys: list });
     // ALL RELAYS, NOT THE FIRST TO ANSWER — see setMinors for the full reasoning. A red-team insider proved
     // this one on 2026-08-18: their ban reached only one of the three relays their app connected to, and on
@@ -10409,8 +10448,9 @@ window.Steward = {
     // AUDIT-2026-07-27.
     _nameKeyRing = []; _nameKeyDocKeys = null; _nameKeyChecked = false; _nameKeyAt = 0;
     // The locally-known blocklist is per-CHURCH too (item B): carried across, church A's blocks would
-    // silently drop church B's members from every envelope this console publishes for B.
-    _localBlocked = new Set();
+    // silently drop church B's members from every envelope this console publishes for B. The church switched TO
+    // starts from its own last genuine blocklist on this device (HIGH 2, by `let _localBlocked`).
+    _localBlocked = _blockedLastSet(actingChurch || pub); _localBlockedAt = 0;
     // F6: photo suppression is PER CHURCH. Carrying it across an identity switch would suppress whichever
     // members of the new church happened to share a pubkey position with the old list — and, worse, leak one
     // church's moderation decisions into another's screen. Cleared here beside the other per-identity state;

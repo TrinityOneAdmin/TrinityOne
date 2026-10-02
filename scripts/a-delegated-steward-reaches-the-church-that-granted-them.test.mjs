@@ -113,7 +113,7 @@ function harness({ cached = false, origin = ORIGIN, proven = [BOX, CANON], delay
     lastProfile: {}, _profileLoaded: false, _clearanceSent: new Map(),
     _careRoster: new Set(), _careRosterKnown: false, _careRosterSeen: false,
     _stewardCaps: {}, _stewardNames: {}, _stewardNamesCt: '', _stewardSince: {},
-    _nameKeyRing: [], _nameKeyDocKeys: null, _nameKeyChecked: false, _localBlocked: new Set(),
+    _nameKeyRing: [], _nameKeyDocKeys: null, _nameKeyChecked: false, _localBlocked: new Set(), _localBlockedAt: 0, _blockedLastSet: () => new Set(),   // (the switch seeds the church's last blocklist, 2026-10-02: not this file's question)
     _applyNoPhotoList: () => {}, CAP_KEYS: {}, _capState: {}, _checkinMigrated: '',
     // setActiveIdentity's OWN per-church reset block, which this file lifts. It gained the check-in
     // session-key read stamp on 2026-09-10 (the piece-3 audit's identity-switch defect) and the session

@@ -56,7 +56,7 @@ function engine() {
     _careRoster: new Set(), _CAREKEY_PENDING_TTL: 12000,
     _mediaKeyHex: null, _mediaKeyRing: [], _mediaKeyDocKeys: null, _mediaKeyChecked: false, _mediaKeyPushRefused: null, _mediaKeyVer: 0,
     _nameKeyRing: [], _nameKeyDocKeys: null, _nameKeyChecked: false, _nameKeyAt: 0, _nameKeyBusy: null,
-    _localBlocked: new Set(), toPubHex: (p) => p, _myOwnPub: () => A.pub,
+    _localBlocked: new Set(), _localBlockedAt: 0, toPubHex: (p) => p, _myOwnPub: () => A.pub,
     // login state: `authed` for the whole set (the mint gates' _isRelayAuthed); per relay, the relay's OK
     authed: true, refused: new Set(), _isRelayAuthed: () => t.authed,
     _keyReadAuthedOn: (url) => t.authed && !t.refused.has(url),
@@ -85,7 +85,8 @@ function engine() {
     BLOCKED_D: 'trinityone/blocked:', STEWARDS_D: 'trinityone/stewards:', _byChurch: (e) => e.pubkey === t.pub, _openChurchDoc: () => null,
     // what the REAL setActiveIdentity touches besides the key state (lifted below)
     stewardedChurches: new Map([[B.pub, { name: 'B' }]]), netKeys: () => [],
-    localStorage: { setItem() {}, getItem() { return null; } }, ACTIVE_ID_KEY: 'k',
+    // remembers what it is given: the console keeps each church's last genuine blocklist (2026-10-02)
+    localStorage: { _m: new Map(), setItem(k, v) { this._m.set(k, String(v)); }, getItem(k) { return this._m.has(k) ? this._m.get(k) : null; } }, ACTIVE_ID_KEY: 'k',
     _loadBoxHosts() {}, _refreshBoxHostsUs() {}, _gate: { refresh() {} }, relaysRaw: () => [],
     lastProfile: {}, _profileLoaded: false, _clearanceSent: new Map(), _careRosterKnown: false, _careRosterSeen: false,
     _stewardCaps: {}, _stewardNames: {}, _stewardNamesCt: '', _stewardSince: {}, _applyNoPhotoList() {},
@@ -94,6 +95,12 @@ function engine() {
     churchSkHeld: () => !!t.churchSk, _capAllows: () => () => true, _warnUnsealed() {}, _sealEachFailed: [], _legacyBookKeyHex: () => '', _capRingChanged() {},
     _checkinMigrated: '', _ckKeysSettled: '', _ckSessionKeys: new Map(), npubEncode: (p) => 'npub' + p,
     _clearedTrail: null, _authedRelays: new Map(), _authAccepted: new Map(),   // …and what _resetChurchScopedState touches
+    // …and setKey (a church unlocked, or the console reloaded): the seed words stand for a church here; the bundle's
+    // own name for getPublicKey is read off the shipped body, not guessed
+    privateKeyFromSeedWords: (m) => (m === 'B' ? B.sk : A.sk), [(BUNDLE.match(/pub = (getPublicKey\d*)\(sk\);/) || [])[1] || 'getPublicKey']: getPublicKey,
+    currentMnemonic: null, _migrateNetKeysToSealed() {},
+    _requireTrustedView() {}, _publishToRelays: async () => true, _monotonic: (x) => x,
+    [(BUNDLE.match(/_publishToRelays\((finalizeEvent\d*)\(_monotonic\(\{ kind: 30078, created_at: now\(\), tags: \[\["d", BLOCKED_D/) || [])[1] || 'finalizeEvent']: (x) => x,
     CustomEvent: class { constructor(type, init) { this.type = type; this.detail = (init || {}).detail; } },
     console: { warn() {}, log() {}, error() {} },
     JSON, Set, Map, Object, Array, String, Number, Boolean, Promise, Error, Math, Uint8Array,
@@ -120,6 +127,13 @@ function engine() {
     fnBody(BUNDLE, 'function _nameKeyReady() {'),
     fnBody(BUNDLE, 'function _fitKeyRing(full, recipCount, sealSample) {'),
     fnBody(BUNDLE, 'function _resetChurchScopedState() {'),
+    // the per-church blocklist the console keeps (audit of 5276297, HIGH 2)
+    fnBody(BUNDLE, 'function lsGet(k) {'), fnBody(BUNDLE, 'function lsSet(k, v) {'),
+    stmt(BUNDLE, 'var BLOCKED_LAST_LS = '),
+    fnBody(BUNDLE, 'function _blockedLastSet(cp) {'), fnBody(BUNDLE, 'function _noteBlockedList(cp, epoch, list, at) {'),
+    't.__noteBlockedList = _noteBlockedList;',
+    fnBody(BUNDLE, 'function setKey(mnemonic) {'), 't.__setKey = setKey;',   // a church unlocked / a reload: where a church starts
+    fnBody(BUNDLE, 'function _landed(what, p) {'),                               // …and a Block made here (setBlocked, below)
     't.__runAuthWaiters = _runKeyReadAuthWaiters;',
     't.__resetChurchScopedState = _resetChurchScopedState;',
   ].join('\n');
@@ -134,7 +148,7 @@ function engine() {
     M('    setActiveIdentity(targetPub) {'),
     M('    async ensureNameKeyForMembers(memberPubs, stewardPubs, opts = {}) {'),
     M('    subscribeBlocked(onBlocked) {'), M('    subscribeStewards(onList) {'),
-    M('    listIsCurrent(list) {'), M('    keyWaitNote(kind) {'),
+    M('    listIsCurrent(list) {'), M('    keyWaitNote(kind) {'), M('    setBlocked(pubkeys) {'),
   ].join(',\n');
   t.t = t;
   const S = new Function('scope', `with (scope) { ${decls}\n return { ${methods} }; }`)(proxy);
@@ -538,15 +552,16 @@ test('a list is stamped with the church it was fetched for — after a switch, t
     const e = engine();
     let got = null;
     e.S[method]((list) => { got = list; });
-    const rec = e.subs.at(-1);
+    const rec = e.subs.at(-1);               // (for the blocklist: its narrow, genuine-answer read — see the row below)
     rec.handlers.onevent({ pubkey: A.pub, created_at: 100, kind: 30078, tags: [['d', d + A.pub]], content: JSON.stringify({ pubkeys: [M1.pub] }) });
+    if (method === 'subscribeBlocked') await e.eose(rec);   // the blocklist counts only on a settled genuine answer (HIGH 2)
     assert.deepEqual([...got], [M1.pub], `CONTROL: ${method} delivered A's list`);
     assert.equal(e.S.listIsCurrent(got), true, `${method}: a list fetched for the church we are on is not current`);
     e.S.setActiveIdentity(B.pub);
     assert.equal(e.S.listIsCurrent(got), false, `${method}: CHURCH A'S LIST IS STILL "CURRENT" AFTER THE SWITCH TO B — the enrolment would wrap B's keys to A's people`);
     rec.handlers.oneose();                                 // a late answer from A's stream (before React closed it)
     assert.equal(e.S.listIsCurrent(got), false, `${method}: a late delivery from A's stream became current in B`);
-    e.S[method]((list) => { got = list; }); e.subs.at(-1).handlers.oneose();
+    e.S[method]((list) => { got = list; }); await e.eose(e.subs.at(-1));
     assert.equal(e.S.listIsCurrent(got), true, `${method}: CONTROL — B's own stream delivers a current list`);
   }
   const e = engine();
@@ -556,10 +571,60 @@ test('a list is stamped with the church it was fetched for — after a switch, t
   // starts a new epoch, and the lists are re-read with the state they are paired with
   let got = null;
   e.S.subscribeBlocked((list) => { got = list; });
-  e.subs.at(-1).handlers.oneose();
+  await e.eose(e.subs.at(-1));
   assert.equal(e.S.listIsCurrent(got), true, 'CONTROL: A\'s list is current in A');
   e.S.setActiveIdentity(A.pub);
   assert.equal(e.S.listIsCurrent(got), false, 'a list from before the reset is still "current" after re-entering the same church');
+});
+
+// THE BLOCKLIST COUNTS ONLY ON A GENUINE ANSWER (audit of 5276297, HIGH 2). On a slow link nostr-tools' own EOSE timer
+// answered the blocklist's stream first, with nothing in it, stamped current — and the keys went to the member the owner
+// had blocked. The stream still feeds the screens; the stamp waits for the narrow read of the blocklist document.
+test('the blocklist is the church\'s current list only once its narrow read has settled with a genuine answer — not on the stream\'s (timer) EOSE', async () => {
+  const e = engine();
+  let got = null;
+  e.S.subscribeBlocked((list) => { got = list; });
+  const narrow = e.subs.find(r => r.d === 'trinityone/blocked:' + A.pub), stream = e.subs.find(r => r !== narrow);
+  assert.ok(narrow && stream, 're-anchor: subscribeBlocked no longer opens a stream AND a narrow read of the blocklist document');
+  stream.handlers.oneose();                                   // nostr-tools' 4.4 s timer, on a stream that has said nothing
+  await flush();
+  assert.ok(got && got.length === 0, 'CONTROL: the stream\'s (empty) answer still reaches the screens');
+  assert.equal(e.S.listIsCurrent(got), false, 'THE STREAM\'S TIMER ANSWER — NO BLOCKLIST IN IT — COUNTS AS THE CHURCH\'S LIST: the enrolment wraps the keys to the blocked (audit of 5276297, HIGH 2)');
+  narrow.handlers.onevent({ pubkey: A.pub, created_at: 100, kind: 30078, tags: [['d', 'trinityone/blocked:' + A.pub]], content: JSON.stringify({ pubkeys: [M1.pub] }) });
+  assert.equal(e.S.listIsCurrent(got), false, 'a list counted as current before its read had settled');
+  await e.eose(narrow);                                       // the relay's own answer, authenticated, in time
+  assert.deepEqual([...got], [M1.pub], 'the settled read did not deliver the blocklist');
+  assert.equal(e.S.listIsCurrent(got), true, 'the GENUINE answer does not count — the enrolment would wait for ever');
+  assert.ok(e.t._localBlocked.has(M1.pub), 'the genuine blocklist did not become the console\'s locally-known one');
+  assert.deepEqual(JSON.parse(e.t.localStorage.getItem('trinityone.steward.blockedlast.' + A.pub)), [M1.pub], 'the genuine blocklist was not kept on the device for the next start');
+});
+test('…and the device\'s copy is where a church starts: the switch seeds it, and an OLDER relay list never undoes a newer Block', async () => {
+  { // a RELOAD (setKey): the church starts from its own last genuine blocklist, before its relay has said a word
+    const e0 = engine();
+    e0.t.localStorage.setItem('trinityone.steward.blockedlast.' + B.pub, JSON.stringify([M2.pub]));
+    e0.t.__setKey('B');
+    assert.equal(e0.t.pub, B.pub, 'CONTROL: setKey did not make B the church');
+    assert.ok(e0.t._localBlocked.has(M2.pub), 'AFTER A RELOAD THE CONSOLE FORGOT WHOM THE CHURCH BLOCKED — until the relay answers, the key builders would wrap to them (audit of 5276297, HIGH 2)');
+  }
+  { // a KEY RESTORE (_resetChurchScopedState, after the new key is set): the same
+    const e1 = engine();
+    e1.t.localStorage.setItem('trinityone.steward.blockedlast.' + A.pub, JSON.stringify([M2.pub]));
+    e1.t.__resetChurchScopedState();
+    assert.ok(e1.t._localBlocked.has(M2.pub), 'after a key restore the console forgot whom the church blocked');
+  }
+  const e = engine();
+  e.t.localStorage.setItem('trinityone.steward.blockedlast.' + B.pub, JSON.stringify([M2.pub]));
+  e.S.setActiveIdentity(B.pub);
+  assert.ok(e.t._localBlocked.has(M2.pub), 'church B did not start from its own last genuine blocklist — before B\'s relay answers, B\'s keys would go to the member B blocked');
+  assert.ok(!e.t._localBlocked.has(M1.pub), 'CONTROL: B started with another church\'s blocklist');
+  e.t._localBlockedAt = 2000;                                // a Block made on this console at t=2000
+  e.t.__noteBlockedList(B.pub, e.t._keyReadEpoch, [], 1000);    // a relay copy from BEFORE it
+  assert.ok(e.t._localBlocked.has(M2.pub), 'an OLDER relay blocklist undid a newer Block made on this console');
+  e.t.__noteBlockedList(B.pub, e.t._keyReadEpoch, [], 3000);    // the owner unblocked since (a newer list)
+  assert.equal(e.t._localBlocked.size, 0, 'CONTROL: a NEWER genuine blocklist no longer replaces the one the console holds');
+  // a Block made on this console is kept on the device at once — before the relay has echoed it
+  await e.S.setBlocked([M1.pub]);
+  assert.deepEqual(JSON.parse(e.t.localStorage.getItem('trinityone.steward.blockedlast.' + B.pub)), [M1.pub], 'a Block made here was not kept for the next start — a reload before the relay answers would wrap the keys to them');
 });
 
 // THE NAME-KEY LOCK: the church is fixed when the call is made, not when it gets the lock. The audit's four rows.
