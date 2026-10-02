@@ -7177,6 +7177,12 @@ window.Steward = {
     const opts = arguments[1];   // read here, not named in the signature: six test harnesses lift this method by `setBlocked(pubkeys) {`
     _requireTrustedView('blocked list');
     if (!sk) return Promise.resolve(null);
+    // THE CHURCH KEY ALONE WRITES THE BLOCKLIST — the relay refuses a delegated steward's (gateway.mjs, BLOCKED_D:
+    // leaderOf). Refused HERE, before the remembered list below is touched: a refused delegate's Block used to leave
+    // this console permanently treating the person as blocked (left out of every key list it builds, remembered across
+    // reloads) while the church had blocked nobody. Sim finding 28. `false`, not a throw: reseatMember asks for a
+    // block and already turns a falsy answer into its own message.
+    if (actingChurch) return Promise.resolve(false);
     // NOBODY THIS CONSOLE HOLDS AS BLOCKED IS DROPPED UNLESS THIS ACTION UNBLOCKS THEM (owner, 2026-10-02 — see
     // subscribeBlocked). The callers write back the list a screen was given plus or minus one person; a screen list
     // from before the blocklist read settled, or without the floor, would otherwise publish — newer, so it wins

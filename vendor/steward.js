@@ -20792,6 +20792,7 @@ zoo`.split("\n");
       const opts = arguments[1];
       _requireTrustedView("blocked list");
       if (!sk) return Promise.resolve(null);
+      if (actingChurch) return Promise.resolve(false);
       const off = new Set((opts && opts.unblock || []).map((p) => String(p).toLowerCase()));
       const given = (pubkeys || []).filter(Boolean);
       const named = new Set(given.map((p) => String(p).toLowerCase()));

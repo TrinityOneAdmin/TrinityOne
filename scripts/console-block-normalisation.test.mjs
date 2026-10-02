@@ -130,7 +130,7 @@ function liftBlock() {
   const fnLine = (SRC.match(/^\s*const isBlocked = .*$/m) || { 0: '  const isBlocked = (pk) => blockedSet.has(pk);' })[0];
   // eslint-disable-next-line no-new-func
   return new Function('window', 'deps', `
-    const { blockedList, members, stewardRoster, delegated, groups, setConfirmBlock } = deps;
+    const { blockedList, members, stewardRoster, delegated, groups, setConfirmBlock, nameByPub } = deps;
     ${setLine}
     ${fnLine}
     ${rotateSrc}
@@ -139,7 +139,8 @@ function liftBlock() {
   `);
 }
 
-function runBlock({ blockedList, members, groups, target }) {
+// block() now waits for the blocklist write before it rotates (sim 28), so it hands back a promise: await it.
+async function runBlock({ blockedList, members, groups, target }) {
   const calls = { publishGroupKey: [], publishGroup: [], rotateCareKey: [], setBlocked: [] };
   const win = {
     Steward: {
@@ -153,17 +154,17 @@ function runBlock({ blockedList, members, groups, target }) {
     dispatchEvent: () => {},
   };
   const block = liftBlock()(win, {
-    blockedList, members, groups, stewardRoster: [], delegated: false, setConfirmBlock: () => {},
+    blockedList, members, groups, stewardRoster: [], delegated: false, setConfirmBlock: () => {}, nameByPub: {},
   });
-  block(target);
+  await block(target);
   return calls;
 }
 
 const M = (p) => ({ pubkey: p });
 
-test('THE REAL HANDLER: blocking removes them from the rotated group key', () => {
+test('THE REAL HANDLER: blocking removes them from the rotated group key', async () => {
   const bad = 'ab'.repeat(32), good = 'cd'.repeat(32), other = 'ef'.repeat(32);
-  const calls = runBlock({
+  const calls = await runBlock({
     blockedList: [], members: [M(bad), M(good), M(other)], target: bad,
     groups: [{ id: 'g1', encrypted: true, visibility: 'invite', members: [bad, good, other] }],
   });
@@ -174,12 +175,12 @@ test('THE REAL HANDLER: blocking removes them from the rotated group key', () =>
   assert.deepEqual(recips.sort(), [good, other].sort(), 'the remaining members did not all get the new key — they lose the group');
 });
 
-test('THE REAL HANDLER: a previously-blocked member in a different case is still excluded', () => {
+test('THE REAL HANDLER: a previously-blocked member in a different case is still excluded', async () => {
   // The defect this fix exists for. blockedList carries an UPPER-CASE pubkey; the raw lookup at ~3381 missed
   // it, so that member stayed in `recips` and was handed the new key.
   const UP = 'AB'.repeat(32), lower = UP.toLowerCase();
   const good = 'cd'.repeat(32), target = 'ef'.repeat(32);
-  const calls = runBlock({
+  const calls = await runBlock({
     blockedList: [UP], members: [M(lower), M(good), M(target)], target,
     groups: [{ id: 'g1', encrypted: true, visibility: 'invite', members: [lower, good, target] }],
   });
@@ -190,9 +191,9 @@ test('THE REAL HANDLER: a previously-blocked member in a different case is still
   assert.deepEqual(recips, [good], 'the wrong recipient set was published');
 });
 
-test('THE REAL HANDLER: an open encrypted group re-keys to everyone who remains', () => {
+test('THE REAL HANDLER: an open encrypted group re-keys to everyone who remains', async () => {
   const bad = 'ab'.repeat(32), good = 'cd'.repeat(32);
-  const calls = runBlock({
+  const calls = await runBlock({
     blockedList: [], members: [M(bad), M(good)], target: bad,
     groups: [{ id: 'g2', encrypted: true, visibility: 'open' }],
   });
@@ -200,10 +201,10 @@ test('THE REAL HANDLER: an open encrypted group re-keys to everyone who remains'
   assert.deepEqual(calls.publishGroupKey[0].recips, [good], 'the open group re-keyed to the wrong set');
 });
 
-test('THE REAL HANDLER: an unencrypted group is left alone', () => {
+test('THE REAL HANDLER: an unencrypted group is left alone', async () => {
   // Over-reach check: re-keying a group that has no key would be a different bug.
   const bad = 'ab'.repeat(32), good = 'cd'.repeat(32);
-  const calls = runBlock({
+  const calls = await runBlock({
     blockedList: [], members: [M(bad), M(good)], target: bad,
     groups: [{ id: 'g3', encrypted: false, visibility: 'open' }],
   });

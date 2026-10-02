@@ -67,7 +67,33 @@ export async function press(tree, matcher, { which = 0 } = {}) {
   const hits = find(tree, n => n && n.props && typeof n.props.onClick === 'function' && !n.props.disabled
     && matcher.test(String(n.props['aria-label'] || '') + '|' + String(n.props.title || '') + '|' + said(n)));
   if (!hits.length) throw new Error('no control matches ' + matcher + ' — re-anchor this test');
-  await hits[which].props.onClick({ stopPropagation() {}, preventDefault() {}, target: { value: '' } });
+  // NOT awaited: a handler may return a promise that is meant to stay pending (a write that has not answered yet)
+  const ret = hits[which].props.onClick({ stopPropagation() {}, preventDefault() {}, target: { value: '' } });
+  if (ret && typeof ret.then === 'function') ret.then(() => {}, () => {});
   for (let i = 0; i < 6; i++) await new Promise(res => setImmediate(res));
 }
 export { find, texts };
+
+// ── DashMembers' globals, shared by the Block tests ───────────────────────────────────────────────────────────
+// Everything DashMembers takes from other files, with the people and lists the test wants. `steward` is the fake
+// window.Steward (what the console would PUBLISH is recorded there; nothing here decides anything).
+export function membersGlobals({ steward, members, blocked = [], groups = [], stewards = [], minors = [], approved = [], admitted = null, extraWindow = {} }) {
+  return {
+    ...common(),
+    nameHandle: () => '', shortNpub: (np) => String(np || '').slice(0, 12), ago: () => '2 days ago',
+    Avatar: () => null, StewMemberSheet: () => null, ReseatModal: () => null, GuardianLinkModal: () => null, BulkInviteModal: () => null,
+    stewCapState: () => ({ allowed: true }),
+    window: {
+      Steward: steward,
+      useStewardGroups: () => groups, useStewardStewards: () => stewards, useStewardChurch: () => ({ name: 'St Aidan', features: { childPhotos: false } }),
+      useStewardBlocked: () => blocked,
+      useStewardSafeguard: () => ({ loaded: true, minorsKnown: true, clearedKnown: true, cleared: {}, minors, approved, nophoto: [] }),
+      useStewardGuardians: () => ({ links: {}, closed: {} }), useStewardJoinPolicy: () => false,
+      useStewardAdmitted: () => admitted || members.map(m => m.pubkey),
+      stewardStreamLoaded: () => true, useStewardIdv: () => 0,
+      useStewardMembers: () => members,
+      addEventListener() {}, removeEventListener() {}, dispatchEvent: () => true,
+      ...extraWindow,
+    },
+  };
+}

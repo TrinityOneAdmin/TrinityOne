@@ -660,10 +660,19 @@ test('…and the device\'s copy is where a church starts: the switch seeds it, a
   assert.ok(e.t._localBlocked.has(M2.pub), 'an OLDER relay blocklist undid a newer Block made on this console');
   e.t.__noteBlockedList(B.pub, e.t._keyReadEpoch, [], 3000);    // the owner unblocked since (a newer list)
   assert.equal(e.t._localBlocked.size, 0, 'CONTROL: a NEWER genuine blocklist no longer replaces the one the console holds');
-  // a Block made on this console is kept on the device at once — before the relay has echoed it
-  await e.S.setBlocked([M1.pub]);
-  assert.deepEqual(JSON.parse(e.t.localStorage.getItem('trinityone.steward.blockedlast.' + B.pub)), [M1.pub], 'a Block made here was not kept for the next start — a reload before the relay answers would wrap the keys to them');
-});
+  // a Block made on this console is kept on the device at once — before the relay has echoed it. THE OWNER'S: this
+  // used to be asserted through `e` above, which is acting for church B on A's key — a DELEGATE — and a delegate's Block
+  // is refused (the relay will not take it), so the engine no longer remembers it (sim finding 28). The owner is the
+  // engine whose own key is the church.
+  const own = engine();
+  await own.S.setBlocked([M1.pub]);
+  assert.deepEqual(JSON.parse(own.t.localStorage.getItem('trinityone.steward.blockedlast.' + A.pub)), [M1.pub], 'a Block made here was not kept for the next start — a reload before the relay answers would wrap the keys to them');
+  // …and the delegate's is refused WITHOUT being remembered: the church blocked nobody, so this console must not either
+  assert.ok(e.t.actingChurch, 'CONTROL: the engine above is not acting for another church, so the next row proves nothing');
+  const before = e.t.localStorage.getItem('trinityone.steward.blockedlast.' + B.pub);
+  assert.equal(await e.S.setBlocked([M1.pub]), false, 'a delegate’s Block did not answer false');
+  assert.equal(e.t.localStorage.getItem('trinityone.steward.blockedlast.' + B.pub), before, 'A REFUSED DELEGATE BLOCK WAS REMEMBERED ON THE DEVICE — it is kept across reloads and the person is left out of every key list');
+  assert.ok(!e.t._localBlocked.has(M1.pub), 'a refused delegate Block was added to the console’s own blocked set');});
 
 // A RELAY THAT IS DOWN DOES NOT HOLD THE BLOCKLIST (audit of 831dcea). "A genuine answer from every relay" waited for a
 // relay that was down — for up to 30 days — and no new member was keyed. The list is current once every CONNECTED relay

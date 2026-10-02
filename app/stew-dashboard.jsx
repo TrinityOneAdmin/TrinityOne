@@ -6247,32 +6247,38 @@ function DashMembers() {
   // already read are past — no key change can retract those, and we don't pretend otherwise.)
   const block = (pk) => {
     setConfirmBlock(null);
+    const who = nameByPub[pk] || 'this member';
+    // ONLY THE CHURCH KEY BLOCKS (sim finding 28). The relay refuses a delegated steward's blocklist (it is the owner's
+    // alone), so a delegate's Block never blocked anyone — but it used to run on regardless: the person was greyed out,
+    // the console wrote them into its OWN remembered blocklist (so every key list it built left them out and a reload
+    // kept them out), and the only words shown said "removed from the roster". None of it was true. Refused HERE, before
+    // anything is written or remembered, and said plainly.
+    if (delegated) {
+      setBlockWarn('Only the church owner can block someone. Nothing was changed — ask them to block ' + who + ' from their own console.');
+      return;
+    }
     // A REFUSED blocklist write stops here, said on the banner (_requireTrustedView) — not an uncaught throw
     // out of the click, and not a key rotation for a block that was never written.
-    try { window.Steward.setBlocked([...blockedList, pk]); } catch (e) { return; }
-    try {
+    let wrote;
+    try { wrote = Promise.resolve(window.Steward.setBlocked([...blockedList, pk])); } catch (e) { return; }
+    // AWAIT THE WRITE BEFORE ROTATING, and read it. This dropped the promise, rotated, and showed "Removed them from
+    // the church" whatever the relay said. `null` = nothing was written (no signing key): nothing changed, say so.
+    // `false` = every relay refused it or only SOME took it (setBlocked answers false for both): the block may be in force
+    // on one relay and this console holds them as blocked either way, so keys are STILL rotated away from them — that is
+    // the safe direction — and the steward is told it may be only partly saved, not that it worked.
+    return wrote.then((ok) => {
+      if (ok == null) { setBlockWarn('Couldn’t block ' + who + ' — this console isn’t signed in to your church, so nothing was changed. Try again.'); return; }
+      const saveNote = ok === false
+        ? 'Couldn’t save the block on every relay, so ' + who + ' may not be blocked everywhere yet. This console holds them as blocked and has changed the keys; press Block again, or check your relay.'
+        : '';
+      if (saveNote) setBlockWarn(saveNote);
       const remaining = members.map(m => m.pubkey).filter(p => p && p.toLowerCase() !== String(pk || '').toLowerCase() && !isBlocked(p));
       // AWAITED, AND A FAILURE REPORTED: rotation is what actually takes the keys away from the person being
       // blocked. The body, and every reason it is written the way it is, is rotateChurchKeys (above DashMembers).
-      rotateChurchKeys({ memberPubs: remaining, stewardPubs: stewardRoster || [], groups, delegated, dropPk: pk, isBlocked }).then(failed => {
-        if (failed.length) setBlockWarn('Removed them from the church, but could not change ' + failed.join(' or ') + '. They may still be able to open things sealed with it. Try blocking them again — and if it keeps failing, your church may have grown past what one key document can hold.');
-      }).catch(() => {});
-      // SAY SO. Both guards above are correct and both are silent: as a delegated steward you tap Block, the
-      // row greys out, and the removed member's phone keeps decrypting every future message in every encrypted
-      // group and keeps reading the congregation's names — indefinitely, with nothing on screen suggesting a
-      // second step exists. AUDIT-2026-07-27.
-      //
-      // ENCRYPTED SERMONS ARE NAMED HERE TOO, added with the delegated guard in rotateMediaKey. That guard
-      // makes the sermon key the third thing a delegated Block cannot change; it declines with `null` so it
-      // does not raise the blockWarn above, whose advice ("try blocking them again") is untrue for a delegate.
-      // This one sentence is where the steward is told, and it is the same second step for all three.
-      if (delegated) {
-        const encrypted = (Array.isArray(groups) ? groups : []).some(g => g && g.encrypted);
-        if (encrypted || window.Steward.ensureNameKeyForMembers) {
-          try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'block', message: 'They have been removed from the roster, but only the church owner can change the keys that lock them out of encrypted groups, encrypted sermons and members’ names. Ask the owner to open their own console and block them there as well.' } })); } catch (e2) {}
-        }
-      }
-    } catch (e) {}
+      return rotateChurchKeys({ memberPubs: remaining, stewardPubs: stewardRoster || [], groups, delegated, dropPk: pk, isBlocked }).then(failed => {
+        if (failed.length) setBlockWarn(saveNote ? saveNote + ' It also could not change ' + failed.join(' or ') + ', so they may still be able to open things sealed with it.' : 'Removed them from the church, but could not change ' + failed.join(' or ') + '. They may still be able to open things sealed with it. Try blocking them again — and if it keeps failing, your church may have grown past what one key document can hold.');
+      });
+    }).catch(() => {});
   };
   // Letting someone back in is a decision too, and it is made from a list that until now would not even
   // say who they were. Two taps, and read the result — setBlocked goes through _publishToRelays and returns

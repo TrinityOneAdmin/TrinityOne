@@ -349,15 +349,18 @@ test('THE CALL SITE: a delegated Block no longer warns that the sermon key could
     'church has outgrown one key document; neither is true, and neither can ever come right: ' + p.said);
 });
 
-test('…and the delegate IS still told the sermon key is the owner’s to change', async () => {
+test('…and the delegate is told plainly that only the owner can block — nothing is written, nothing says they were removed', async () => {
   // CLAUDE.md rule 1 in both directions: quiet is not the goal, and this codebase's standing failure is a
-  // refusal that reaches no screen at all.
+  // refusal that reaches no screen at all. This row used to expect the delegate's Block to go ahead and then
+  // be told "removed from the roster, but only the church owner can change the keys" — which was untrue: the
+  // relay refuses a delegate's blocklist, so nobody was removed (sim finding 28). It now reads the refusal.
   const p = await membersPage({ delegated: true });
+  assert.match(p.said, /Only the church owner can block someone\. Nothing was changed/,
+    'the delegated Block says nothing about being refused: ' + p.said);
+  assert.doesNotMatch(p.said, /removed from the roster|Removed them from the church/,
+    'THE DELEGATE IS TOLD THEY REMOVED SOMEONE. The relay refused it; nobody was blocked: ' + p.said);
   const note = p.fired.filter(f => f.type === 'steward-write-blocked' && f.detail && f.detail.what === 'block');
-  assert.equal(note.length, 1, 'the delegated Block now says nothing about the keys it could not change');
-  assert.match(note[0].detail.message, /encrypted sermons/,
-    'the owner-only note lists encrypted groups and members’ names and not sermons, so the one thing this ' +
-    'fix made silent is the one thing nothing tells them about');
+  assert.equal(note.length, 0, 'the old "removed from the roster" event is back');
 });
 
 test('CONTROL: an OWNER whose rotation really failed is still warned about the sermon key', async () => {
