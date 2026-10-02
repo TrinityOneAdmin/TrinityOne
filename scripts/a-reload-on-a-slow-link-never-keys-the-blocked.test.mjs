@@ -143,8 +143,8 @@ before(async () => {
   await press('/^Members$/', 'the Members section'); await sleep(1500);
   await evalIn(`(() => { if (document.querySelector('button[title="Remove / block this member"]')) return 'direct'; const b = [...document.querySelectorAll('button')].find(x => /^More for /.test(x.getAttribute('aria-label') || '')); if (b) b.click(); return 'more'; })()`);
   await sleep(600);
-  const opened = await evalIn(`(() => { const npub = ${JSON.stringify(nip19.npubEncode(M.pub))}; const btns = [...document.querySelectorAll('button[title="Remove / block this member"], button[title="Decline — blocks this person from joining or posting"]')];
-    const mine = btns.find(b => { let n = b; for (let i = 0; i < 8 && n; i++) { n = n.parentElement; if (n && (n.textContent || '').includes(npub.slice(0, 12))) return true; } return false; }) || null;
+  const opened = await evalIn(`(() => { const npub = ${JSON.stringify(nip19.npubEncode(M.pub))}, other = ${JSON.stringify(nip19.npubEncode(M3.pub))}; const btns = [...document.querySelectorAll('button[title="Remove / block this member"], button[title="Decline — blocks this person from joining or posting"]')];
+    const mine = btns.find(b => { let n = b; for (let i = 0; i < 8 && n; i++) { n = n.parentElement; const t = (n && n.textContent) || ''; if (t.includes(npub.slice(0, 12))) return !t.includes(other.slice(0, 12)); if (t.includes(other.slice(0, 12))) return false; } return false; }) || null;
     if (!mine) return 'miss:' + btns.length; mine.click(); return 'ok'; })()`);
   assert.equal(opened, 'ok', 'no Block button for M');
   await sleep(500);
