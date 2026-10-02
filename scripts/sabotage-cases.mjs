@@ -1726,4 +1726,12 @@ export const CASES = [
     replace: `if (window.Steward.rotateMediaKey) rotations.push(Promise.resolve(window.Steward.rotateMediaKey(remaining)).then(r => ['the sermon key', r]));`,
     test: 'scripts/a-delegated-steward-is-given-the-sermon-key.test.mjs',
   },
+  // ── a new church's keys in its first session (2026-10-02) ─────────────────────────────────────────────────
+  {
+    name: 'new church: the console no longer asks its relay to sign it in',
+    file: 'src/steward.src.js',
+    find: `      try { if (r) _loginSoon(url, r); } catch (e) {}   // a socket that is not asked to sign in within a moment is asked — see _loginSoon`,
+    replace: ``,
+    test: 'scripts/a-new-church-signs-in-on-its-own.test.mjs',
+  },
 ];

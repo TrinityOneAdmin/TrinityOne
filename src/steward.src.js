@@ -2109,6 +2109,53 @@ function _watchSocket(url, live) {
   };
 }
 pool.onRelayConnectionFailure = (url) => { try { _noteDialFailed(url); } catch (e) {} };
+// ── A CONSOLE SIGNS IN WITHOUT WAITING TO BE ASKED (a new church's keys, 2026-10-02) ───────────────────────
+// The relay challenges LAZILY (NIP-42): only a REQ that names invite-only content, or that matches something it
+// would withhold, gets an AUTH frame. A brand-new church has nothing private yet, so nothing the console asked
+// for was ever withheld — and a console that is never challenged never signs in, and every key gate here
+// (_isRelayAuthed, _keyReadAuthedOn) is shut for a console that has not. Measured on 2026-10-02 against a fresh
+// relay, church made through the real screens: 53 s on the Overview with no challenge, a service and a rota
+// refused after their 4 s wait, "Still connecting to your church" on a care need, the wizard's rooms created
+// without their key. It cured itself only when the steward happened to open a tab whose reads matched something
+// private.
+//
+// So the console asks. A moment after a socket to one of THIS church's relays is up (long enough for the
+// ordinary reads to have provoked the challenge themselves, which is what every established church gets), a
+// socket that has not been asked to sign in sends the one question every relay already answers with an AUTH
+// frame — the same filter subscribeSafetyCheck uses (`#d: safetycheck:<church>`; the relay challenges from the
+// FILTER, so the answer is the same whether or not a check is live). pool.automaticallyAuth does the rest, and
+// the key reads that were waiting on a login ask again on it (_runKeyReadAuthWaiters). It works on every relay
+// that has ever shipped: the safety-check challenge is older than this change.
+//
+// ONLY TO A RELAY THIS CHURCH ALREADY TALKS TO (CLAUDE.md rule 10): the check runs against relays() — the
+// proved set — at the moment it fires, and a socket that is not in it is left alone. Nothing here dials a relay,
+// widens the set, or sends anything but a read filter naming this church. ONCE PER SOCKET: a reconnect is a new
+// socket and gets its own check; a relay that refuses the login is not asked again on the same socket.
+const LOGIN_PROVOKE_MS = 1500;
+const _loginWatched = new WeakSet();   // sockets (AbstractRelay instances) that have had, or are waiting for, their one check
+function _loginSoon(url, inst) {
+  try {
+    if (!inst || _loginWatched.has(inst)) return;
+    _loginWatched.add(inst);
+    const t = setTimeout(() => _loginCheck(url, inst), LOGIN_PROVOKE_MS);
+    try { if (t && typeof t.unref === 'function') t.unref(); } catch (e) {}   // node (the tests): never hold a process open for this
+  } catch (e) {}
+}
+function _loginCheck(url, inst) {
+  try {
+    const cp = actingChurch || pub;
+    // Locked, or not yet a church: nothing to sign with. Forget the socket so the next time it is seen it is checked.
+    if (!sk || !cp) { _loginWatched.delete(inst); return; }
+    const k = _relayKey(url);
+    if (pool.relays.get(k) !== inst || inst.connected !== true) return;          // that socket has gone: a new one is its own check
+    if (!relays().some(u => _relayKey(u) === k)) { _loginWatched.delete(inst); return; }   // not (yet) one of this church's relays
+    if (_authedRelays.get(k) === inst) return;                                    // it has already asked this socket to sign in
+    let s = null, done = false;
+    s = pool.subscribeMany([url], [{ kinds: [30078], '#d': [SAFETY_D + cp], limit: 1 }], {
+      oneose() { if (done) return; done = true; try { s && s.close(); } catch (e) {} },
+    });
+  } catch (e) {}
+}
 // THE ONE DOOR EVERY POOL PATH GOES THROUGH — subscribe, publish, querySync, and the ticker's own probe — so it
 // is where a socket can be seen whichever path opened it. A socket our subscriptions are not on is a return
 // (announced once per socket, as above); first sight on a boot that never failed is announced the same way
@@ -2120,6 +2167,7 @@ try {
       // ONCE per socket, the clearance cache included: this door sees every publish, and a cache wiped by the
       // very write it recorded is the AUDIT-9 loop (8 re-seals against 1).
       try { if (r) { const k = _relayKey(url); _watchSocket(k, r); if (_subbedOn.get(k) !== r && _returnAnnounced.get(k) !== r) { _clearanceSent.clear(); _announceReturn(k, r); } } } catch (e) {}
+      try { if (r) _loginSoon(url, r); } catch (e) {}   // a socket that is not asked to sign in within a moment is asked — see _loginSoon
       return r;
     }, (err) => { try { _noteDialFailed(url); } catch (e) {} throw err; });
   };

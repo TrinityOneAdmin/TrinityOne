@@ -16546,6 +16546,48 @@ zoo`.split("\n");
     } catch (e) {
     }
   };
+  var LOGIN_PROVOKE_MS = 1500;
+  var _loginWatched = /* @__PURE__ */ new WeakSet();
+  function _loginSoon(url, inst) {
+    try {
+      if (!inst || _loginWatched.has(inst)) return;
+      _loginWatched.add(inst);
+      const t = setTimeout(() => _loginCheck(url, inst), LOGIN_PROVOKE_MS);
+      try {
+        if (t && typeof t.unref === "function") t.unref();
+      } catch (e) {
+      }
+    } catch (e) {
+    }
+  }
+  function _loginCheck(url, inst) {
+    try {
+      const cp = actingChurch || pub;
+      if (!sk || !cp) {
+        _loginWatched.delete(inst);
+        return;
+      }
+      const k = _relayKey2(url);
+      if (pool.relays.get(k) !== inst || inst.connected !== true) return;
+      if (!relays().some((u) => _relayKey2(u) === k)) {
+        _loginWatched.delete(inst);
+        return;
+      }
+      if (_authedRelays.get(k) === inst) return;
+      let s = null, done = false;
+      s = pool.subscribeMany([url], [{ kinds: [30078], "#d": [SAFETY_D + cp], limit: 1 }], {
+        oneose() {
+          if (done) return;
+          done = true;
+          try {
+            s && s.close();
+          } catch (e) {
+          }
+        }
+      });
+    } catch (e) {
+    }
+  }
   try {
     const _ensure = pool.ensureRelay.bind(pool);
     pool.ensureRelay = function(url, params) {
@@ -16559,6 +16601,10 @@ zoo`.split("\n");
               _announceReturn(k, r);
             }
           }
+        } catch (e) {
+        }
+        try {
+          if (r) _loginSoon(url, r);
         } catch (e) {
         }
         return r;
