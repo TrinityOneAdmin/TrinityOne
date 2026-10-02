@@ -234,7 +234,7 @@ test('unblocking replaces the local set — the filter follows the newest list, 
   const C = K().pub, D = K().pub;
   const rig = blockRig({ [church.pub]: 1, [alice.pub]: 1 });
   rig.api.setBlocked([C]);
-  rig.api.setBlocked([]);                                         // the steward unblocks — full replacement, not append
+  rig.api.setBlocked([], { unblock: [C] });                       // the steward unblocks C (the Members screen's Unblock names them: setBlocked keeps everyone this console holds as blocked unless told, owner 2026-10-02)
   await rig.api._ensureNameKeyLocked([alice.pub, C, D], []);
   const env = _nameEnvs(rig)[0];
   assert.ok(env, 'after the unblock the envelope must publish for the returning member');

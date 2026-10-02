@@ -20693,7 +20693,7 @@ zoo`.split("\n");
       const _tag = _listTag(), _deliver = onBlocked, cp0 = pub;
       let genuine = false, floored = false;
       const withFloor = (list) => floored ? [.../* @__PURE__ */ new Set([...(list || []).map((p) => String(p).toLowerCase()), ..._blockedLastSet(cp0)])] : list;
-      onBlocked = (list) => _deliver(genuine ? _stampFor(list, _tag) : list);
+      onBlocked = (list) => _deliver(genuine ? _stampFor(withFloor(list), _tag) : list);
       let cur = [], latest = 0;
       const take = (e) => {
         const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
@@ -20746,9 +20746,13 @@ zoo`.split("\n");
       };
     },
     setBlocked(pubkeys) {
+      const opts = arguments[1];
       _requireTrustedView("blocked list");
       if (!sk) return Promise.resolve(null);
-      const list = [...new Set((pubkeys || []).filter(Boolean))];
+      const off = new Set((opts && opts.unblock || []).map((p) => String(p).toLowerCase()));
+      const given = (pubkeys || []).filter(Boolean);
+      const named = new Set(given.map((p) => String(p).toLowerCase()));
+      const list = [.../* @__PURE__ */ new Set([...given, ...[..._localBlocked].filter((p) => !named.has(p) && !off.has(p))])];
       _localBlocked = new Set(list.map((p) => String(p).toLowerCase()));
       _localBlockedAt = now();
       lsSet(BLOCKED_LAST_LS + (actingChurch || pub), JSON.stringify([..._localBlocked]));

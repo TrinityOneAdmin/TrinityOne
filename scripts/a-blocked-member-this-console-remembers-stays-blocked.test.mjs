@@ -1,28 +1,25 @@
-// A BLOCKLIST HELD BY ONE OF TWO RELAYS: THE KEYS STILL REACH NEW MEMBERS, AND WHOM THIS CONSOLE REMEMBERS AS BLOCKED STAYS BLOCKED.
-//   Run: node --test scripts/a-blocklist-held-by-one-of-two-relays.test.mjs
+// WHOM THIS CONSOLE REMEMBERS AS BLOCKED STAYS BLOCKED — THROUGH A BLOCK, AN UNBLOCK OF SOMEONE ELSE, AND A RECONNECT.
+//   Run: node --test scripts/a-blocked-member-this-console-remembers-stays-blocked.test.mjs
 //
-// The audit of 29d4941/51d6ebf (at 34b1b19), two findings, a row each:
-//   1. TWO HEALTHY RELAYS COULD STALL THE KEY READS FOR GOOD (HIGH; 3/3 at 34b1b19, 1/1 at 831dcea). _openKeyRead
-//      registered its "ask again after login" waiter only once the LAST relay had answered. A relay that answered
-//      before its login was accepted — that login accepted before the other relay answered — was never asked again:
-//      the blocklist read never settled, and no member was keyed (50 s+). The same machinery gates the care, name
-//      and sermon key reads.
-//   2. THE FLOOR REACHED THE SCREENS (MEDIUM; caused by 29d4941). While a relay is down, the device's copy of the
-//      blocklist is a floor for who may be given keys. It also reached every screen that reads the blocklist, and the
-//      Members screen's Block writes that list back whole — so a member another console had unblocked was
-//      re-published as blocked (newer, so it wins), and the Block's key rotation left them out.
-//      THE OWNER HAS SINCE DECIDED THAT IS THE RULE (2026-10-02, reference/DOMAIN.md): someone this console remembers
-//      as blocked, whom the reachable relay does not list, STAYS blocked — in the keys AND in every list written back.
-//      Safe side wins; re-blocking someone another steward unblocked elsewhere is the accepted cost. Row 2 asserts the
-//      rule (an earlier version, ce15f92, asserted the opposite and let a Block drop someone still blocked — HIGH).
+// The owner's rule (2026-10-02, reference/DOMAIN.md): if this console remembers someone as blocked and the reachable
+// relay does not list them, they STAY blocked — in who may be given keys AND in every list the console writes back
+// (Block, Unblock, the re-seat's "block the old phone"). Safe side wins.
+//
+// The audit of ce15f92 (HIGH): with relay 2 down (it holds the Block of MX; relay 1 missed it) and this device's copy
+// naming MX, a Block of M on the Members screen left relay 1 holding [M] — MX dropped, and that newer list wins
+// church-wide when relay 2 returns — the device copy [M], and the name, care and room keys wrapped to MX. Two causes:
+// setBlocked replaced the list (and `_localBlocked`, and the device copy) with what the screen handed it, and the
+// screen had been handed the relays' list without the floor; and rotateCareKey / rotateMediaKey never filtered by
+// `_localBlocked`. Derived from the audit's floorblock.test.mjs.
 //
 // THE POINT OF USE (CLAUDE.md rule 1): two real gateways on FREE ports, the real console in headless chromium, church
 // A by the wizard, relay 2 added through the console's addRelay and proved, and a real Block pressed on the Members
-// screen — which reaches relay 2 only: the page drops the blocklist EVENT on relay 1's socket, so relay 1 "missed"
-// it. Every key envelope the console sends is captured off its socket; what the relays hold is read from their
-// databases. TEST-ENV ONLY: Page.setBypassCSP — the console's CSP allows https:/wss:/ws: but not a second plain-http
-// loopback origin, which is where the relay-identity proof is fetched from here; production relays are https.
-// Derived from the audit's window.test.mjs (SCEN=alive and SCEN=reblock). Skips itself without chromium.
+// screen — which reaches relay 2 only: the page drops the blocklist EVENT on relay 1's socket, so relay 1 "missed" it.
+// Relay 2 is then killed and the console reopened, and the three writes are made through the Members screen's own
+// controls: Block, Unblock (of someone else), and Reconnect with "stolen or taken". Every key envelope the console sends
+// is captured off its socket; what relay 1 holds is read from its database. TEST-ENV ONLY: Page.setBypassCSP — the
+// console's CSP allows https:/wss:/ws: but not a second plain-http loopback origin, which is where the relay-identity
+// proof is fetched from here; production relays are https. Skips itself without chromium.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -43,9 +40,9 @@ const BLOCKED_D = 'trinityone/blocked:';
 const WAIT = 30000;   // the stall: nothing in 50 s+; the fixed console keys a joiner within a couple of seconds
 
 let r1, r2, chr, ws, prof, evalIn, cdpSend, churchA = '', ASK = null, roomId = '';
-const B = H.key(), M = H.key(), MX = H.key(), M2 = H.key();
+const B = H.key(), M = H.key(), MX = H.key(), M2 = H.key(), M3 = H.key(), M3N = H.key();
 const errors = [];
-const nm = (p) => p === churchA ? 'A' : p === M.pub ? 'M' : p === MX.pub ? 'MX' : p === M2.pub ? 'M2' : String(p).slice(0, 6);
+const nm = (p) => p === churchA ? 'A' : p === M.pub ? 'M' : p === MX.pub ? 'MX' : p === M2.pub ? 'M2' : p === M3.pub ? 'M3' : p === M3N.pub ? 'M3N' : String(p).slice(0, 6);
 function held(relay, where, ...args) {
   const db = new DatabaseSync(join(relay.dataDir, 'relay.sqlite'), { readOnly: true });
   try { return db.prepare('SELECT raw FROM events WHERE kind = 30078 AND ' + where).all(...args).map(r => { try { return JSON.parse(String(r.raw || '')); } catch { return {}; } }); }
@@ -97,10 +94,10 @@ const HOOK = `(() => { if (window.__envHooked) return; window.__envHooked = 1; w
 
 before(async () => {
   if (!CHROME) return;
-  r1 = await H.startRelay({ name: 'one-of-two-1', env: { TRINITY_TAILSCALE_BIN: '/nonexistent' } });
-  r2 = await H.startRelay({ name: 'one-of-two-2', env: { TRINITY_TAILSCALE_BIN: '/nonexistent' } });
-  const cdp = await H.freePort('the one-of-two test\'s Chrome debug port');
-  prof = mkdtempSync(join(tmpdir(), 'trin-oneoftwo-chr-'));
+  r1 = await H.startRelay({ name: 'remembers-1', env: { TRINITY_TAILSCALE_BIN: '/nonexistent' } });
+  r2 = await H.startRelay({ name: 'remembers-2', env: { TRINITY_TAILSCALE_BIN: '/nonexistent' } });
+  const cdp = await H.freePort('the remembered-block test\'s Chrome debug port');
+  prof = mkdtempSync(join(tmpdir(), 'trin-remembers-chr-'));
   const BLOCK_PROD = '--host-resolver-rules=MAP app.trinityone.church 127.0.0.1:9, MAP *.ts.net 127.0.0.1:9, MAP trinityone.church 127.0.0.1:9';
   chr = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${cdp}`, '--no-sandbox', '--disable-gpu', BLOCK_PROD, `--user-data-dir=${prof}`, '--window-size=1280,1200', `${r1.base}/steward.html`], { stdio: 'ignore' });
   let targets = null;
@@ -131,7 +128,7 @@ before(async () => {
   await waitFor(`!!document.querySelector('input[aria-label="Church name"]')`, 90000, 'the wizard name step');
   churchA = await evalIn(`window.Steward && window.Steward.churchPub || ''`);
   const npubA = await evalIn(`window.Steward.npub || ''`);
-  assert.equal(await evalIn(typeInto('input[aria-label="Church name"]', 'St Oswald One Of Two')), 'ok');
+  assert.equal(await evalIn(typeInto('input[aria-label="Church name"]', 'St Chad Remembers')), 'ok');
   await sleep(300);
   await press('/^Continue$/');
   { const t0 = Date.now(); let ok = false; while (!ok && Date.now() - t0 < 30000) { try { ok = (JSON.parse(readFileSync(join(r1.dataDir, 'church.json'), 'utf8')).churches || []).some(c => c && c.npub === npubA); } catch {} if (!ok) await sleep(400); } assert.ok(ok, 'relay 1 never registered church A'); }
@@ -167,13 +164,13 @@ before(async () => {
   await waitFor(`(window.Steward.relayList() || []).length >= 2`, 60000, 'relay 2 still admitted after a reload');
   await waitFor(`window.Steward.nameKeyReady() && !!window.Steward.careSeal({ a: 1 })`, 90000, 'church A\'s own name and care keys');
   // CONTROL, both relays up: two members join and are keyed
-  await H.publishAll(r1, [joinTo(churchA, M), joinTo(churchA, MX)]); await H.publishAll(r2, [joinTo(churchA, M), joinTo(churchA, MX)]);
+  await H.publishAll(r1, [joinTo(churchA, M), joinTo(churchA, MX), joinTo(churchA, M3)]); await H.publishAll(r2, [joinTo(churchA, M), joinTo(churchA, MX), joinTo(churchA, M3)]);
   assert.ok(await until(() => { const n = recipsOn(r1, NAMEKEY_D + churchA); return n.includes(M.pub) && n.includes(MX.pub); }, 60000),
     'CONTROL: with both relays up, the members who joined were never given the name key — the rows below would prove nothing');
   await sleep(3000);
   // THE BLOCK of MX, which reaches relay 2 only
   await evalIn(`(() => { window.__dropBlockedOn = ${r1.port}; return 1; })()`);
-  await blockOnScreen(MX, [M]);
+  await blockOnScreen(MX, [M, M3]);
   assert.ok(await until(() => { const n = recipsOn(r1, NAMEKEY_D + churchA), c = recipsOn(r1, CAREKEY_D + churchA); return !n.includes(MX.pub) && !c.includes(MX.pub) && n.includes(M.pub); }, 30000),
     'CONTROL: the Block did not take MX out of A\'s name and care keys');
   await sleep(5000);
@@ -182,11 +179,26 @@ before(async () => {
   assert.ok(blockedOn(r2).some(l => l.includes(MX.pub)), 'CONTROL: relay 2 does not hold the Block');
   assert.ok(!blockedOn(r1).some(l => l.includes(MX.pub)), 'CONTROL: relay 1 holds the Block — it was meant to miss it');
   // an OPEN encrypted room, keyed to A's members
-  const made = await evalIn(`(async () => { const S = window.Steward; const g = await S.publishGroup({ name: 'Oswald Sealed', encrypted: true });
+  const made = await evalIn(`(async () => { const S = window.Steward; const g = await S.publishGroup({ name: 'Chad Sealed', encrypted: true });
     if (!g || !g.id) return { err: 'no group' }; const r = await S.publishGroupKey(g.id, [${JSON.stringify(M.pub)}]); return { id: g.id, key: r === null ? 'null' : r === false ? 'false' : 'ok' }; })()`);
   assert.equal(made.key, 'ok', 'CONTROL: the room\'s key was not published: ' + JSON.stringify(made));
   roomId = made.id;
   await sleep(3000);
+  // RELAY 2 GOES DOWN while the console is closed, and the console is opened again: the floor (this device's copy,
+  // naming MX) is in force, and relay 1 — the only relay it can reach — does not list MX
+  await evalIn(`(() => { location.href = 'about:blank'; return 1; })()`).catch(() => {});
+  await sleep(2000);
+  r2.proc.kill('SIGKILL');
+  await sleep(2000);
+  assert.equal(r2.alive(), false, 'CONTROL: relay 2 is still running');
+  await cdpSend('Page.navigate', { url: r1.base + '/steward.html' });
+  await sleep(3000);
+  await unlock();
+  assert.ok((await devCopy()).includes(MX.pub), 'CONTROL: the device\'s copy does not name MX — the rule these rows are about is not in play');
+  assert.ok((await evalIn('window.Steward.relayList()')).includes(r2.wsUrl), 'CONTROL: relay 2 left the church\'s set');
+  assert.ok(!blockedOn(r1).some(l => l.includes(MX.pub)), 'CONTROL: relay 1 lists MX — it was meant to have missed the Block');
+  await sleep(12000);
+  assert.ok(!recipsOn(r1, NAMEKEY_D + churchA).includes(MX.pub), 'CONTROL: MX was keyed after the reopen');
 });
 
 after(async () => {
@@ -197,51 +209,83 @@ after(async () => {
 });
 
 const SKIP = !CHROME ? 'no chromium' : false;
+const MEDIAKEY_D = 'trinityone/mediakey:';
 const sentTo = async (who) => (await evalIn('window.__env || []')).filter(x => x.d.endsWith(churchA) || x.d.includes(roomId)).filter(x => x.recips.includes(who)).map(x => x.d);
+const devCopy = async () => JSON.parse(await evalIn(`localStorage.getItem('trinityone.steward.blockedlast.' + ${JSON.stringify(churchA)}) || '[]'`));
+// MX keeps no key: nothing sent to MX since `__env` was last cleared, and relay 1 holds no key wrapped to MX
+async function mxHasNoKey(label) {
+  assert.deepEqual(await sentTo(MX.pub), [], `${label}: A KEY ENVELOPE WAS SENT WRAPPED TO MX, whom this console remembers as blocked`);
+  for (const d of [NAMEKEY_D + churchA, CAREKEY_D + churchA, MEDIAKEY_D + churchA, GROUPKEY_D + roomId]) assert.ok(!recipsOn(r1, d).includes(MX.pub), `${label}: relay 1 holds ${d.slice(11, 19)} wrapped to MX`);
+}
+// the Members screen's own controls for the blocked list: "See blocked", a row's Unblock, and its confirmation
+async function unblockOnScreen(who) {
+  await press('/^Members$/', 'the Members section'); await sleep(1500);
+  await evalIn(`(() => { const b = [...document.querySelectorAll('button')].find(x => /^See blocked/.test((x.textContent || '').trim())); if (b) b.click(); return 1; })()`);
+  await sleep(800);
+  const hex = who.pub.slice(0, 12);
+  const row = `[...document.querySelectorAll('button')].filter(b => /^Unblock /.test(b.getAttribute('aria-label') || '')).find(b => (b.parentElement && b.parentElement.textContent || '').includes(${JSON.stringify(hex)}))`;
+  assert.equal(await evalIn(`(() => { const b = ${row}; if (!b) return 'miss'; b.click(); return 'ok'; })()`), 'ok', 'no Unblock button for ' + nm(who.pub));
+  await sleep(500);
+  assert.equal(await evalIn(`(() => { const b = [...document.querySelectorAll('button')].find(x => /^Confirm: let /.test(x.getAttribute('aria-label') || '') && (x.parentElement && x.parentElement.textContent || '').includes(${JSON.stringify(hex)})); if (!b) return 'miss'; b.click(); return 'ok'; })()`), 'ok', 'no Unblock confirmation for ' + nm(who.pub));
+}
+// the Members screen's Reconnect for `who`, onto `to`, with "stolen or taken" ticked (the re-seat's "block the old phone")
+async function reconnectStolenOnScreen(who, to, others) {
+  await press('/^Members$/', 'the Members section'); await sleep(1500);
+  const me = nip19.npubEncode(who.pub).slice(0, 12), oth = others.map(o => nip19.npubEncode(o.pub).slice(0, 12));
+  // a member still waiting to join has no Reconnect: Approve them first, on the same screen
+  const rowOf = (sel) => `(() => { const me = ${JSON.stringify(me)}, others = ${JSON.stringify(oth)};
+    const btns = [...document.querySelectorAll('button')].filter(${sel});
+    return btns.find(b => { let n = b; for (let i = 0; i < 8 && n; i++) { n = n.parentElement; const t = (n && n.textContent) || ''; if (t.includes(me)) return !others.some(o => t.includes(o)); if (others.some(o => t.includes(o))) return false; } return false; }) || null; })()`;
+  const approve = await evalIn(`(() => { const b = ${rowOf("b => (b.textContent || '').trim() === 'Approve'")}; if (!b) return 'none'; b.click(); return 'ok'; })()`);
+  if (approve === 'ok') await waitFor(`!!${rowOf("b => /^They lost their 12 words/.test(b.getAttribute('title') || '')")}`, 30000, 'the Reconnect button once ' + nm(who.pub) + ' is approved');
+  const opened = await evalIn(`(() => { const me = ${JSON.stringify(me)}, others = ${JSON.stringify(oth)};
+    const btns = [...document.querySelectorAll('button')].filter(b => /^They lost their 12 words/.test(b.getAttribute('title') || ''));
+    const mine = btns.find(b => { let n = b; for (let i = 0; i < 8 && n; i++) { n = n.parentElement; const t = (n && n.textContent) || ''; if (t.includes(me)) return !others.some(o => t.includes(o)); if (others.some(o => t.includes(o))) return false; } return false; }) || null;
+    if (!mine) return 'miss:' + btns.length; mine.click(); return 'ok'; })()`);
+  assert.equal(opened, 'ok', 'no Reconnect button for ' + nm(who.pub));
+  await waitFor(`[...document.querySelectorAll('input')].some(x => (x.placeholder || '').includes('paste their new code'))`, 15000, 'the Reconnect dialog');
+  assert.equal(await evalIn(`(() => { const c = [...document.querySelectorAll('label')].find(l => /stolen or taken/.test(l.textContent || '')); const i = c && c.querySelector('input[type=checkbox]'); if (!i) return 'miss'; i.click(); return i.checked ? 'ok' : 'unticked'; })()`), 'ok', 'no "stolen or taken" box');
+  assert.equal(await evalIn(typePh('paste their new code', nip19.npubEncode(to.pub))), 'ok');
+  await sleep(500);
+  await press('/^Yes — this is /', 'the Reconnect confirmation');
+}
 
-test('two healthy relays, only relay 2 holding the Block: after a reload a member who joins is given the name, care and room keys — and the blocked member is not', { skip: SKIP, timeout: 300000 }, async () => {
-  await reload();
-  await sleep(10000);
-  await evalIn('(() => { window.__env = []; return 1; })()');
-  await H.publishAll(r1, [joinTo(churchA, M2)]); await H.publishAll(r2, [joinTo(churchA, M2)]);
-  const got = await until(() => recipsOn(r1, NAMEKEY_D + churchA).includes(M2.pub) && recipsOn(r1, CAREKEY_D + churchA).includes(M2.pub) && recipsOn(r1, GROUPKEY_D + roomId).includes(M2.pub), WAIT);
-  const now = (d) => recipsOn(r1, d).map(nm).sort().join(',');
-  assert.ok(got, `TWO HEALTHY RELAYS HELD BACK A NEW MEMBER'S KEYS for ${WAIT / 1000} s — the read that answered before its login was accepted was never asked again (audit of 29d4941/51d6ebf): name [${now(NAMEKEY_D + churchA)}], care [${now(CAREKEY_D + churchA)}], room [${now(GROUPKEY_D + roomId)}]`);
-  assert.deepEqual(await sentTo(MX.pub), [], 'a key envelope was sent wrapped to MX, whom the church blocked (relay 2 holds the Block)');
-  for (const d of [NAMEKEY_D + churchA, CAREKEY_D + churchA, GROUPKEY_D + roomId]) assert.ok(!recipsOn(r1, d).includes(MX.pub), `relay 1 now holds ${d.slice(11, 19)} wrapped to MX`);
-});
 
-// THE OWNER'S RULE, AND ITS ACCEPTED COST. The console is closed; another console unblocks MX (a newer blocklist without
-// MX, on both relays); relay 2 goes down; the console is opened again. This device's copy still names MX, and relay 2
-// is left out as failed, so the copy is the floor. Then the steward Blocks M on the Members screen. MX stays blocked:
-// relay 1 ends holding MX and M (the unblock made elsewhere is undone — the accepted cost), and MX is given no key.
-test('relay 2 down, an unblock made on another console: MX, whom this console remembers as blocked, stays blocked through a Block of M — on relay 1 and in the keys', { skip: SKIP, timeout: 300000 }, async () => {
-  await evalIn(`(() => { location.href = 'about:blank'; return 1; })()`).catch(() => {});   // the console is closed
-  await sleep(2000);
-  const unblocked = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000) + 1, tags: [['d', BLOCKED_D + churchA], ['t', 'trinityone']], content: JSON.stringify({ pubkeys: [] }) }, ASK);
-  await H.publishAll(r1, [unblocked]); await H.publishAll(r2, [unblocked]);   // another console's unblock, signed by the church
-  assert.ok(blockedOn(r1).every(l => !l.includes(MX.pub)) && blockedOn(r2).every(l => !l.includes(MX.pub)), 'CONTROL: a relay still holds the Block after the unblock');
-  r2.proc.kill('SIGKILL');
-  await sleep(2000);
-  assert.equal(r2.alive(), false, 'CONTROL: relay 2 is still running');
-  await cdpSend('Page.navigate', { url: r1.base + '/steward.html' });
-  await sleep(3000);
-  await unlock();
-  assert.ok(JSON.parse(await evalIn(`localStorage.getItem('trinityone.steward.blockedlast.' + ${JSON.stringify(churchA)}) || '[]'`)).includes(MX.pub), 'CONTROL: the device\'s copy does not name MX — the floor this row is about is not in force');
-  assert.ok((await evalIn('window.Steward.relayList()')).includes(r2.wsUrl), 'CONTROL: relay 2 left the church\'s set');
-  await sleep(12000);
-  assert.ok(!recipsOn(r1, NAMEKEY_D + churchA).includes(MX.pub), 'CONTROL: MX was keyed after the reopen — the floor for who may be given keys is not in force, so this row proves nothing');
+test('the Members screen shows MX as blocked, and a Block of M keeps MX on the list relay 1 holds — and MX is given no key', { skip: SKIP, timeout: 300000 }, async () => {
+  await press('/^Members$/', 'the Members section'); await sleep(1500);
+  await evalIn(`(() => { const b = [...document.querySelectorAll('button')].find(x => /^See blocked/.test((x.textContent || '').trim())); if (b) b.click(); return 1; })()`);
+  await sleep(800);
+  assert.ok(await evalIn(`[...document.querySelectorAll('button')].some(b => /^Unblock /.test(b.getAttribute('aria-label') || '') && (b.parentElement && b.parentElement.textContent || '').includes(${JSON.stringify(MX.pub.slice(0, 12))}))`),
+    'THE MEMBERS SCREEN DOES NOT SHOW MX AS BLOCKED, though this console holds MX as blocked (the owner\'s rule: it is visible)');
   await evalIn('(() => { window.__env = []; return 1; })()');
-  await blockOnScreen(M, [MX, M2]);
+  await blockOnScreen(M, [MX, M3]);
   assert.ok(await until(() => blockedOn(r1).some(l => l.includes(M.pub)), 30000), 'CONTROL: the Block of M never reached relay 1');
   await sleep(10000);
   const list = blockedOn(r1)[0] || [];
-  assert.ok(list.includes(MX.pub), `A BLOCK DROPPED MX, WHOM THIS CONSOLE REMEMBERS AS BLOCKED — relay 1 now holds [${list.map(nm)}], newer, so it wins church-wide (the owner's rule, 2026-10-02; audit of ce15f92)`);
-  assert.deepEqual(list.map(nm).sort(), ['M', 'MX'], 'relay 1 does not hold exactly the floor and the Block made here');
-  // …and nobody blocked is given a key: not MX (the floor), not M (just blocked)
-  assert.deepEqual(await sentTo(MX.pub), [], 'A KEY ENVELOPE WAS SENT WRAPPED TO MX, whom this console remembers as blocked');
-  const n = recipsOn(r1, NAMEKEY_D + churchA), c = recipsOn(r1, CAREKEY_D + churchA), g = recipsOn(r1, GROUPKEY_D + roomId);
-  assert.ok(!n.includes(MX.pub) && !c.includes(MX.pub) && !g.includes(MX.pub), `relay 1 holds a key wrapped to MX: name [${n.map(nm)}], care [${c.map(nm)}], room [${g.map(nm)}]`);
-  assert.ok(!n.includes(M.pub) && !c.includes(M.pub), `the Block's rotation kept M, just blocked: name [${n.map(nm)}], care [${c.map(nm)}]`);
+  assert.ok(list.includes(MX.pub), `A BLOCK DROPPED MX — relay 1 now holds [${list.map(nm)}], newer, so it wins church-wide when relay 2 returns (audit of ce15f92)`);
+  assert.ok((await devCopy()).includes(MX.pub), 'the Block took MX off this device\'s copy');
+  await mxHasNoKey('after the Block of M');
+  const n = recipsOn(r1, NAMEKEY_D + churchA), c = recipsOn(r1, CAREKEY_D + churchA);
+  assert.ok(!n.includes(M.pub) && !c.includes(M.pub), `CONTROL: the Block's rotation kept M: name [${n.map(nm)}], care [${c.map(nm)}]`);
+});
+
+test('an Unblock of someone else (M) keeps MX on the list relay 1 holds — and MX is given no key', { skip: SKIP, timeout: 300000 }, async () => {
+  await evalIn('(() => { window.__env = []; return 1; })()');
+  await unblockOnScreen(M);
+  assert.ok(await until(() => { const l = blockedOn(r1)[0] || []; return !l.includes(M.pub); }, 30000), 'CONTROL: the Unblock of M never reached relay 1');
+  await sleep(10000);
+  const list = blockedOn(r1)[0] || [];
+  assert.ok(list.includes(MX.pub), `UNBLOCKING M DROPPED MX — relay 1 now holds [${list.map(nm)}] (the owner's rule: only an explicit unblock takes someone off)`);
+  await mxHasNoKey('after the Unblock of M');
+});
+
+test('a Reconnect with "stolen or taken" (the re-seat blocks the old key) keeps MX on the list relay 1 holds — and MX is given no key', { skip: SKIP, timeout: 300000 }, async () => {
+  await evalIn('(() => { window.__env = []; return 1; })()');
+  await reconnectStolenOnScreen(M3, M3N, [M, MX]);
+  assert.ok(await until(() => blockedOn(r1).some(l => l.includes(M3.pub)), 30000), 'CONTROL: the re-seat never blocked M3\'s old key on relay 1');
+  await sleep(10000);
+  const list = blockedOn(r1)[0] || [];
+  assert.ok(list.includes(MX.pub), `THE RE-SEAT'S BLOCK OF THE OLD PHONE DROPPED MX — relay 1 now holds [${list.map(nm)}]`);
+  await mxHasNoKey('after the Reconnect');
   assert.deepEqual(errors, [], 'the console threw:\n  ' + errors.join('\n  '));
 });

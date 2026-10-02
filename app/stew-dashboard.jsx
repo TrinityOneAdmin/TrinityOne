@@ -6255,7 +6255,8 @@ function DashMembers() {
   // false on a partial write, so "unblocked" could otherwise be true on one relay and false on another.
   const [confirmUnblock, setConfirmUnblock] = React.useState(null);
   const [blockErr, setBlockErr] = React.useState('');
-  const unblock = (pk) => (() => { try { return Promise.resolve(window.Steward.setBlocked(blockedList.filter(p => p !== pk))); } catch (e) { return Promise.reject(e); } })()   // a synchronous refusal is a rejection, not an uncaught throw
+  // `unblock: [pk]` — the only way setBlocked takes anyone off the list (it keeps everyone this console holds as blocked)
+  const unblock = (pk) => (() => { try { return Promise.resolve(window.Steward.setBlocked(blockedList.filter(p => p !== pk), { unblock: [pk] })); } catch (e) { return Promise.reject(e); } })()   // a synchronous refusal is a rejection, not an uncaught throw
     .then((ok) => { setConfirmUnblock(null); setBlockErr(ok ? '' : 'Couldn’t unblock ' + (nameByPub[pk] || 'that member')
       + ' — the relay didn’t accept it, so they are still blocked. Try again.'); return ok; })
     .catch(() => { setConfirmUnblock(null); setBlockErr('Couldn’t reach the relay to unblock them.'); return null; });

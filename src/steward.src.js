@@ -7100,18 +7100,21 @@ window.Steward = {
     // re-subscribe, no new member got a name, care or room key for as long as it stayed down. THE RULE: the list
     // is current once every relay that is CONNECTED has given a genuine answer and at least one has
     // (_openKeyRead's `withoutFailed`). When a relay was left out that way, this church's last genuine blocklist
-    // on this device (`_blockedLastSet`, which every Block made here also writes) is the FLOOR — FOR WHO MAY BE
-    // GIVEN KEYS, AND NOTHING ELSE: `_localBlocked` (which every key builder filters its recipients by) and the
-    // device copy are the relays' list PLUS everyone on the device copy, so a Block that only the missing relay
-    // holds — but this console made or saw — is not undone by a relay that missed it.
-    // THE LIST DELIVERED IS THE RELAYS' OWN (audit of 29d4941): the screens that read it write it back whole —
-    // the Members screen's Block and Unblock, the re-seat's "block the old phone" — so a floored list there
-    // re-published, as a newer blocklist, someone another console had unblocked. They see only what the relays said.
+    // on this device (`_blockedLastSet`, which every Block made here also writes) is the FLOOR: the list the
+    // screens get (stamped for the enrolment), `_localBlocked` (which every key builder filters its recipients by)
+    // and the device copy are the relays' list PLUS everyone on the device copy, so a Block that only the missing
+    // relay holds — but this console made or saw — is not undone by a relay that missed it.
+    // THE OWNER'S RULE (2026-10-02, reference/DOMAIN.md): someone this console remembers as blocked, whom the
+    // reachable relay does not list, STAYS blocked — in who may be given keys AND in every list the console writes
+    // back (Block, Unblock, the re-seat's "block the old phone"), which is why the screens get the floored list and
+    // the Members screen shows them as blocked. Safe side wins; the accepted cost is re-blocking, church-wide, someone
+    // another steward unblocked elsewhere while a relay was down (the audit of 29d4941/51d6ebf). setBlocked keeps
+    // the floor too, against a screen list from before this read settled.
     // Every relay answering genuinely is the old rule unchanged: the relays' newest list replaces the device copy.
     const _tag = _listTag(), _deliver = onBlocked, cp0 = pub;
     let genuine = false, floored = false;
     const withFloor = (list) => (floored ? [...new Set([...(list || []).map(p => String(p).toLowerCase()), ..._blockedLastSet(cp0)])] : list);
-    onBlocked = (list) => _deliver(genuine ? _stampFor(list, _tag) : list);   // stamped with the church it was opened for — see _listTag
+    onBlocked = (list) => _deliver(genuine ? _stampFor(withFloor(list), _tag) : list);   // stamped with the church it was opened for — see _listTag
     let cur = [], latest = 0;
     const take = (e) => {
       const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
@@ -7135,10 +7138,18 @@ window.Steward = {
       undefined, { withoutFailed: true });
     return () => { try { sub.close(); } catch {} try { stopRead(); } catch {} };
   },
-  setBlocked(pubkeys) {   // replace the whole blocklist (pass hex pubkeys)
+  setBlocked(pubkeys) {   // replace the whole blocklist (pass hex pubkeys); a 2nd argument { unblock: [...] } names who THIS action lets back in
+    const opts = arguments[1];   // read here, not named in the signature: six test harnesses lift this method by `setBlocked(pubkeys) {`
     _requireTrustedView('blocked list');
     if (!sk) return Promise.resolve(null);
-    const list = [...new Set((pubkeys || []).filter(Boolean))];
+    // NOBODY THIS CONSOLE HOLDS AS BLOCKED IS DROPPED UNLESS THIS ACTION UNBLOCKS THEM (owner, 2026-10-02 — see
+    // subscribeBlocked). The callers write back the list a screen was given plus or minus one person; a screen list
+    // from before the blocklist read settled, or without the floor, would otherwise publish — newer, so it wins
+    // church-wide — a list missing someone `_localBlocked` holds. Only `opts.unblock` takes anyone off.
+    const off = new Set(((opts && opts.unblock) || []).map(p => String(p).toLowerCase()));
+    const given = (pubkeys || []).filter(Boolean);
+    const named = new Set(given.map(p => String(p).toLowerCase()));
+    const list = [...new Set([...given, ...[..._localBlocked].filter(p => !named.has(p) && !off.has(p))])];
     // SYNCHRONOUS, before the publish (AUDIT-2026-08-10 item B): the recipient builders must know about the
     // block in the same tick it happens, not after the relay round-trip — that lag is the window in which the
     // roster effect re-keyed the person just blocked. Full replacement, so an unblock clears it too.

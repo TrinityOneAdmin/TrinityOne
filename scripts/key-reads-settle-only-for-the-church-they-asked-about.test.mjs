@@ -665,10 +665,11 @@ test('…and the device\'s copy is where a church starts: the switch seeds it, a
 
 // A RELAY THAT IS DOWN DOES NOT HOLD THE BLOCKLIST (audit of 831dcea). "A genuine answer from every relay" waited for a
 // relay that was down — for up to 30 days — and no new member was keyed. The list is current once every CONNECTED relay
-// has answered genuinely and at least one has; when a failed relay was left out, the device's copy is the floor — for
-// who may be given keys (`_localBlocked`) and the device copy ONLY: the list the screens get, and write back whole, is
-// the relays' own (audit of 29d4941/51d6ebf). (The browser rows: a-relay-that-is-down-does-not-hold-back-new-members-
-// keys.test.mjs, and a-blocklist-held-by-one-of-two-relays.test.mjs for the write-back.)
+// has answered genuinely and at least one has; when a failed relay was left out, the device's copy is the floor — in
+// who may be given keys (`_localBlocked`), the device copy AND the list the screens get and write back (the owner's rule,
+// 2026-10-02: someone this console remembers as blocked stays blocked). (The browser rows: a-relay-that-is-down-does-
+// not-hold-back-new-members-keys.test.mjs, a-blocklist-held-by-one-of-two-relays.test.mjs and
+// a-blocked-member-this-console-remembers-stays-blocked.test.mjs.)
 const blockedReads = (e) => e.subs.filter(r => r.d === 'trinityone/blocked:' + A.pub);
 const blockedDoc = (list, at = 100) => ({ pubkey: A.pub, created_at: at, kind: 30078, tags: [['d', 'trinityone/blocked:' + A.pub]], content: JSON.stringify({ pubkeys: list }) });
 test('the blocklist: a relay whose connection FAILED does not hold it — the connected relay\'s genuine answer counts, with the device\'s copy as the floor', async () => {
@@ -687,7 +688,7 @@ test('the blocklist: a relay whose connection FAILED does not hold it — the co
   r1.handlers.onevent(blockedDoc([M1.pub]));                               // R1's copy does not have M2
   await e.eose(r1);
   assert.ok(got && e.S.listIsCurrent(got), 'A RELAY THAT IS DOWN HELD THE BLOCKLIST BACK — no new member is keyed while it stays down (audit of 831dcea)');
-  assert.deepEqual([...got], [M1.pub], 'THE FLOOR REACHED THE LIST THE SCREENS GET — and the Members screen\'s Block, its Unblock and the re-seat write that list back whole, re-publishing someone another console unblocked (audit of 29d4941/51d6ebf)');
+  assert.deepEqual([...got].sort(), [M1.pub, M2.pub].sort(), 'THE SCREENS DO NOT SEE THE FLOOR — the Members screen would not show M2 as blocked, and its Block, its Unblock and the re-seat write that list back whole, dropping M2 church-wide (the owner\'s rule, 2026-10-02)');
   assert.ok(e.t._localBlocked.has(M1.pub) && e.t._localBlocked.has(M2.pub), 'THE DEVICE\'S BLOCKLIST WAS NOT THE FLOOR FOR WHO MAY BE KEYED (`_localBlocked`) — a relay copy without the Block undid it while the relay holding it was down');
   assert.deepEqual(JSON.parse(e.t.localStorage.getItem('trinityone.steward.blockedlast.' + A.pub)).sort(), [M1.pub, M2.pub].sort(), 'the device copy shrank on an answer with a relay missing');
 });
@@ -712,6 +713,28 @@ test('…but a CONNECTED relay that has not answered genuinely still holds it �
   assert.ok(got && e.S.listIsCurrent(got), 'CONTROL: both relays answered genuinely and the list is not current');
   assert.deepEqual([...got], [M1.pub], 'every relay answered, yet the device\'s copy was added — the floor is only for a relay that is down');
   assert.deepEqual(JSON.parse(e.t.localStorage.getItem('trinityone.steward.blockedlast.' + A.pub)), [M1.pub], 'CONTROL: the relays\' genuine list no longer replaces the device copy');
+});
+
+// THE OWNER'S RULE IN THE WRITE (2026-10-02; audit of ce15f92, HIGH): setBlocked replaced the list — and `_localBlocked` and
+// the device copy — with whatever it was handed, so a screen list without someone this console holds as blocked
+// published, newer and so church-wide, a blocklist without them, and the keys followed. Only `{ unblock }` takes anyone off.
+test('setBlocked never drops someone this console holds as blocked — only an explicit unblock takes them off', async () => {
+  const e = engine(); e.t.relayList = [R1, R2]; e.t.up = new Set([R1]);   // the floor, as in the row above
+  e.t.localStorage.setItem('trinityone.steward.blockedlast.' + A.pub, JSON.stringify([M2.pub]));
+  let got = null; e.S.subscribeBlocked((list) => { got = list; });
+  const [r1, r2] = blockedReads(e);
+  await e.closedByRelay(r2, 'connection failure: relay unreachable');
+  r1.handlers.onevent(blockedDoc([M1.pub])); await e.eose(r1);
+  assert.ok(e.t._localBlocked.has(M2.pub), 'CONTROL: the floor is not in force');
+  const sent = []; e.t._publishToRelays = async (ev) => { sent.push(JSON.parse(ev.content).pubkeys); return true; };
+  await e.S.setBlocked([M1.pub, M3.pub]);                                  // a Block of M3 from a list without M2
+  assert.ok(sent.at(-1).includes(M2.pub) && sent.at(-1).includes(M3.pub), 'A BLOCK PUBLISHED A BLOCKLIST WITHOUT M2, whom this console holds as blocked — newer, so it wins church-wide (audit of ce15f92): ' + JSON.stringify(sent.at(-1)));
+  assert.ok(e.t._localBlocked.has(M2.pub), 'the Block took M2 out of who may NOT be given keys');
+  assert.ok(JSON.parse(e.t.localStorage.getItem('trinityone.steward.blockedlast.' + A.pub)).includes(M2.pub), 'the Block took M2 off the device copy');
+  await e.S.setBlocked([M1.pub, M2.pub], { unblock: [M3.pub] });           // Unblock M3 — someone else
+  assert.ok(sent.at(-1).includes(M2.pub) && !sent.at(-1).includes(M3.pub), 'unblocking someone else dropped M2, or kept M3: ' + JSON.stringify(sent.at(-1)));
+  await e.S.setBlocked([M1.pub], { unblock: [M2.pub] });                   // CONTROL: the steward unblocks M2 explicitly
+  assert.ok(!sent.at(-1).includes(M2.pub) && !e.t._localBlocked.has(M2.pub), 'CONTROL: an explicit unblock of M2 did not take M2 off');
 });
 
 // THE NAME-KEY LOCK: the church is fixed when the call is made, not when it gets the lock. The audit's four rows.
