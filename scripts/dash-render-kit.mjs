@@ -32,9 +32,13 @@ export const said = (n) => {
   return out.join('').replace(/\s+/g, ' ').trim();
 };
 
+// `extra` names top-level functions the component calls: a string is read from the same file, `{ src, name }` from another
+// (e.g. publishCareTeamFor from stew-schedule.jsx, which the dashboard reaches as a global).
+export const SCH = readFileSync(join(ROOT, 'app/stew-schedule.jsx'), 'utf8');
 export async function compiled(name, globals, extra = [], src0 = DASH) {
   const { React, draw } = miniReact();
-  const src = [fnBody(src0, 'function ' + name + '(', name), ...extra.map(e => fnBody(src0, 'function ' + e + '(', e))].join('\n');
+  const pick = (e) => (typeof e === 'string' ? fnBody(src0, 'function ' + e + '(', e) : fnBody(e.src, 'function ' + e.name + '(', e.name));
+  const src = [fnBody(src0, 'function ' + name + '(', name), ...extra.map(pick)].join('\n');
   const tmp = join(tmpdir(), 'dk-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
   let js;
   try {

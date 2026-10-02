@@ -567,7 +567,16 @@ function DashRota({ onNewTeam }) {
     return replyById[matches[0].id] || 'pending';
   };
 
-  const rosterFor = (id) => rosters.find(r => r.team === id) || { roles: [], people: [] };
+  // A BLOCKED PERSON IS NEVER OFFERED FOR A SLOT (sim finding 14). Blocking also takes them off every roster
+  // (stew-dashboard.jsx, takeOffEveryTeam), but that write can lag, fail, or never have been made by an older
+  // console — so every picker below reads the roster through this and a person this console holds as blocked is not in it.
+  // `rosterRaw` is the roster as published, for the one place that EDITS it (RosterModal). Off-app volunteers have no
+  // `pub` and are never filtered. Not filtered in useStewardMembers: the Members screen needs those rows to list
+  // the blocked and offer Unblock.
+  const blockedKeys = new Set(((window.useStewardBlocked ? window.useStewardBlocked() : []) || []).map(p => String(p || '').toLowerCase()));
+  const notBlocked = (pk) => !(pk && blockedKeys.has(String(pk).toLowerCase()));
+  const rosterRaw = (id) => rosters.find(r => r.team === id) || { roles: [], people: [] };
+  const rosterFor = (id) => { const r = rosterRaw(id); return { ...r, people: (r.people || []).filter(p => notBlocked(p && p.pub)) }; };
   const persisted = (svcId) => rotas.find(r => r.service === svcId) || null;
   const sortedSvcs = services.slice().sort((a, b) => (a.date || '').localeCompare(b.date || ''));
   const todayStr = schKey(new Date());
@@ -1006,7 +1015,7 @@ function DashRota({ onNewTeam }) {
 
       {flash ? <div style={{ position: 'absolute', bottom: 8, left: '50%', transform: 'translateX(-50%)', background: 'var(--ink)', color: 'var(--paper)', padding: '9px 16px', borderRadius: 999, fontSize: 13, fontWeight: 700, boxShadow: 'var(--shadow-lg)', zIndex: 80 }}>{flash}</div> : null}
       {assignSlot ? <AssignModal slot={assignSlot} roster={rosterFor(assignSlot.team.id)} assign={assign} unavail={unavail} onAssign={(p) => doAssign(assignSlot, p)} onClear={() => clearSlot(assignSlot)} onClose={() => setAssignSlot(null)} /> : null}
-      {rosterTeam ? <RosterModal team={rosterTeam} roster={rosterFor(rosterTeam.id)} members={members} onClose={() => setRosterTeam(null)} /> : null}
+      {rosterTeam ? <RosterModal team={rosterTeam} roster={rosterRaw(rosterTeam.id)} members={members.filter(m => notBlocked(m && m.pubkey))} onClose={() => setRosterTeam(null)} /> : null}
       {adding ? <SchAddServiceModal onClose={() => setAdding(false)} /> : null}
     </div>
   );

@@ -140,6 +140,7 @@ function DashMealsPanel({ church }) {
   const groups = window.useStewardGroups ? window.useStewardGroups() : [];
   const teamGroups = (groups || []).filter(g => g && (g.kind === 'team' || g.kind === 'group'));
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
+  const blockedKeys = new Set(((window.useStewardBlocked ? window.useStewardBlocked() : []) || []).map(p => String(p || '').toLowerCase()));   // never offered in a picker — sim finding 14
   const rosters = window.useStewardRosters ? window.useStewardRosters() : [];
   // care-team membership lives on the ROSTER (publishRoster people) — that's what the relay (careAdmin) and the
   // member CareCard (onCareRoster) both read. So manage it with the same RosterModal the Rota page uses.
@@ -264,7 +265,7 @@ function DashMealsPanel({ church }) {
           <button onClick={createCareTeam} disabled={creating} style={{ marginTop: 10, display: 'inline-flex', alignItems: 'center', gap: 7, border: '1px dashed var(--line)', background: 'var(--surface-2)', color: 'var(--clay-ink)', borderRadius: 11, padding: '9px 14px', fontSize: 13, fontWeight: 700, cursor: creating ? 'default' : 'pointer', fontFamily: 'var(--font-ui)', opacity: creating ? 0.6 : 1 }}>
             <Icon name="plus" size={15} color="currentColor" /> {creating ? 'Creating…' : 'Create a care team'}</button>
         </div>
-        {editTeam ? <RosterModal team={editTeam} roster={rosters.find(r => r.team === editTeam.id)} members={members} onCreate={publishCareTeam} onClose={() => setEditTeam(null)} /> : null}
+        {editTeam ? <RosterModal team={editTeam} roster={rosters.find(r => r.team === editTeam.id)} members={(members || []).filter(m => !(m && m.pubkey && blockedKeys.has(String(m.pubkey).toLowerCase())))} onCreate={publishCareTeam} onClose={() => setEditTeam(null)} /> : null}
       </React.Fragment> : null}
     </React.Fragment>
   );
@@ -860,6 +861,7 @@ function MealsNeedModal({ need, onClose, onSaved, onDeleted }) {
   const effMeals = (iso) => (dayMeals[iso] && dayMeals[iso].length) ? dayMeals[iso] : meals;
   const toggleDayMeal = (iso, m) => setDayMeals(dm => { const cur = (dm[iso] && dm[iso].length) ? dm[iso] : meals; const next = cur.includes(m) ? (cur.length > 1 ? cur.filter(x => x !== m) : cur) : MEAL_KINDS.map(k => k[0]).filter(k => cur.includes(k) || k === m); return { ...dm, [iso]: next }; });
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
+  const blockedKeys = new Set(((window.useStewardBlocked ? window.useStewardBlocked() : []) || []).map(p => String(p || '').toLowerCase()));   // never offered in a picker — sim finding 14
   // zero-audience guard (task 18): a team-visibility need with an empty care team reaches nobody
   const mealsS = window.useMealsSettings ? window.useMealsSettings() : {};
   const careRosters = window.useStewardRosters ? window.useStewardRosters() : [];
@@ -921,7 +923,7 @@ function MealsNeedModal({ need, onClose, onSaved, onDeleted }) {
         <div style={{ fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.45, marginBottom: 14 }}>You decide what reads right. A real name brings the church closer; a discreet label protects dignity. Up to you.</div>
 
         <div style={mealsLbl}>LINK THEIR ACCOUNT (OPTIONAL)</div>
-        <RecipientPicker members={members} value={recipient} onChange={setRecipient} />
+        <RecipientPicker members={(members || []).filter(m => !(m && m.pubkey && blockedKeys.has(String(m.pubkey).toLowerCase())))} value={recipient} onChange={setRecipient} />
         <div style={{ fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.45, marginBottom: 14 }}>If the person uses the app, link them — then <b>they alone</b> can tick off days they’re already covered, so the church doesn’t double up. Leave unlinked if they’re not on the app.</div>
 
         <div style={mealsLbl}>WHAT KIND OF CARE?</div>

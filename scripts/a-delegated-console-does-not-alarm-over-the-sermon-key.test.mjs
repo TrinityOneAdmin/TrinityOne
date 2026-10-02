@@ -266,7 +266,7 @@ async function membersPage({ delegated, rotateMedia, nameResult = null, engineOp
   const { React, draw } = miniReact();
   const NOW = Math.floor(Date.now() / 1000);
   // block() calls rotateChurchKeys, the shipped top-level function beside DashMembers — compiled with it, not stubbed
-  const src = fnBody(DASH, 'function rotateChurchKeys(', 'rotateChurchKeys') + '\n' + fnBody(DASH, 'function DashMembers()', 'DashMembers');
+  const src = fnBody(DASH, 'function rotateChurchKeys(', 'rotateChurchKeys') + '\n' + fnBody(DASH, 'function takeOffEveryTeam(', 'takeOffEveryTeam') + '\n' + fnBody(DASH, 'function DashMembers()', 'DashMembers');
   const tmp = join(tmpdir(), 'mk-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
   let js;
   try {

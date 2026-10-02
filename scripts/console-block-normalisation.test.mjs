@@ -125,12 +125,14 @@ function liftBlock() {
   // block() calls rotateChurchKeys, the top-level function above DashMembers — executed here from the same source
   const rotateAt = SRC.indexOf('function rotateChurchKeys(');
   assert.notEqual(rotateAt, -1, 'rotateChurchKeys is gone — block() has no rotation');
+  // …and takeOffEveryTeam (the roster / care-team / rota half of Block), which sits beside it
   const rotateSrc = SRC.slice(rotateAt, SRC.indexOf('function DashMembers()', rotateAt));
   const setLine = SRC.match(SET_LINE_RE)[0];
   const fnLine = (SRC.match(/^\s*const isBlocked = .*$/m) || { 0: '  const isBlocked = (pk) => blockedSet.has(pk);' })[0];
   // eslint-disable-next-line no-new-func
   return new Function('window', 'deps', `
     const { blockedList, members, stewardRoster, delegated, groups, setConfirmBlock, nameByPub } = deps;
+    const rostersAll = [], rotasAll = [], servicesAll = [], careTeamId = '';   // nobody is on a team here; the teams half of Block is covered by a-blocked-member-leaves-every-team.test.mjs
     ${setLine}
     ${fnLine}
     ${rotateSrc}

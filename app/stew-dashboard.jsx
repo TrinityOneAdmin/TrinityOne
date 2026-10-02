@@ -4218,7 +4218,9 @@ function DashGroups() {
 // pick which members may post events for a group. The chosen pubkeys go into the group def's `leaders`;
 // the relay then lets exactly those members publish events scoped to this group.
 function GroupLeadersModal({ group, onClose }) {
-  const members = window.useStewardMembers().filter(m => m.pubkey);
+  // a person this console holds as blocked is not offered as a leader (sim finding 14); the Members screen keeps their row
+  const blockedKeys = new Set(((window.useStewardBlocked ? window.useStewardBlocked() : []) || []).map(p => String(p || '').toLowerCase()));
+  const members = window.useStewardMembers().filter(m => m.pubkey && !blockedKeys.has(String(m.pubkey).toLowerCase()));
   const [sel, setSel] = React.useState(() => new Set(group.leaders || []));
   const [pol, setPol] = React.useState(() => (['leaders', 'stewards', 'everyone'].includes(group.eventPolicy) ? group.eventPolicy : 'leaders'));
   const [saving, setSaving] = React.useState(false);
@@ -5748,6 +5750,47 @@ function rotateChurchKeys({ memberPubs, stewardPubs, groups, delegated, dropPk, 
   });
 }
 
+// TAKE A BLOCKED PERSON OFF EVERY TEAM AND OUT OF EVERY FUTURE SLOT (sim finding 14; owner, 2026-10-02: "blocking
+// someone removes them from every team and the care list; unblocking doesn't re-add", and their future rota slots are
+// cleared silently). Until now Block left them on every roster (still offered for slots, still listed) and - worse -
+// on the care team's roster, which is what the relay reads to grant a read over every care need and request for help.
+//
+// Called by block() only, and only once the blocklist write has landed. `rosters`, `rotas`, `services` are what the
+// console has READ: a roster that has not arrived is never published from (a whole-document write from nothing would
+// wipe its roles), so such a team is simply not touched. Each roster is republished with ONLY that person taken out,
+// from the copy just read. Off-app volunteers have no `pub` and are never touched.
+// Resolves to the names of what could not be changed ([] = all done).
+function takeOffEveryTeam({ pk, rosters, rotas, services, careTeamId }) {
+  const S = window.Steward, failed = [];
+  const lc = String(pk || '').toLowerCase();
+  const isHim = (pub) => !!pub && String(pub).toLowerCase() === lc;
+  const jobs = [];
+  for (const r of (Array.isArray(rosters) ? rosters : [])) {
+    if (!r || !r.team || !(r.people || []).some(p => p && isHim(p.pub))) continue;
+    const people = (r.people || []).filter(p => !(p && isHim(p.pub)));
+    jobs.push(Promise.resolve(S.publishRoster(r.team, { roles: r.roles || [], people, pods: r.pods || [] }))
+      .then((ok) => {
+        // null: the church name key never arrived, so the roster was NOT saved (and the care list must not be written from it)
+        if (ok == null || ok === false) { failed.push('a team\u2019s roster'); return null; }
+        return Promise.resolve(publishCareTeamFor(r.team, careTeamId, people)).then((res) => { if (res === false) failed.push('the care team\u2019s list'); });
+      }).catch(() => { failed.push('a team\u2019s roster'); }));
+  }
+  // FUTURE SLOTS ONLY: a service dated today or later. Past rotas are the record of who served.
+  const today = window.todayISO ? window.todayISO() : '';
+  for (const ro of (Array.isArray(rotas) ? rotas : [])) {
+    const svc = (Array.isArray(services) ? services : []).find(x => x && ro && x.id === ro.service);
+    if (!ro || !svc || !svc.date || svc.date < today) continue;
+    const assign = ro.assign || {};
+    const keys = Object.keys(assign).filter(k => assign[k] && isHim(assign[k].pub));
+    if (!keys.length) continue;
+    const next = { ...assign }; keys.forEach(k => { delete next[k]; });
+    jobs.push(Promise.resolve(S.publishRota({ service: ro.service, published: !!ro.published, assign: next }))
+      .then((ok) => { if (ok == null || ok === false) failed.push('a future rota'); })
+      .catch(() => { failed.push('a future rota'); }));
+  }
+  return Promise.all(jobs).then(() => [...new Set(failed)]);
+}
+
 function DashMembers() {
   // needed by block(): rotating an encrypted group's key on removal requires knowing the groups.
   const groups = window.useStewardGroups ? window.useStewardGroups() : [];
@@ -5756,6 +5799,11 @@ function DashMembers() {
   const church = window.useStewardChurch ? window.useStewardChurch() : {};
   const photosAllowed = !(church.features && church.features.memberPhotos === false);   // member photos on by default; church can opt out
   const blockedList = window.useStewardBlocked ? window.useStewardBlocked() : [];
+  // what block() takes the person off (takeOffEveryTeam): the rosters and the care team, and the future rota slots
+  const rostersAll = window.useStewardRosters ? window.useStewardRosters() : [];
+  const rotasAll = window.useStewardRotas ? window.useStewardRotas() : [];
+  const servicesAll = window.useStewardServices ? window.useStewardServices() : [];
+  const careTeamId = window.useMealsSettings ? ((window.useMealsSettings() || {}).adminGroupId || '') : '';
   // ARCHITECTURE-AUDIT-2026-07-30 A3. NORMALISE ON THE WAY IN AND ON LOOKUP — the same shape already proved
   // correct at the top of this file (`notBlocked`, ~line 240), and the same rule scripts/trinity-rules.mjs
   // holds for photo suppression. This set was built raw, and its two most important readers then disagreed
@@ -6275,8 +6323,14 @@ function DashMembers() {
       const remaining = members.map(m => m.pubkey).filter(p => p && p.toLowerCase() !== String(pk || '').toLowerCase() && !isBlocked(p));
       // AWAITED, AND A FAILURE REPORTED: rotation is what actually takes the keys away from the person being
       // blocked. The body, and every reason it is written the way it is, is rotateChurchKeys (above DashMembers).
-      return rotateChurchKeys({ memberPubs: remaining, stewardPubs: stewardRoster || [], groups, delegated, dropPk: pk, isBlocked }).then(failed => {
-        if (failed.length) setBlockWarn(saveNote ? saveNote + ' It also could not change ' + failed.join(' or ') + ', so they may still be able to open things sealed with it.' : 'Removed them from the church, but could not change ' + failed.join(' or ') + '. They may still be able to open things sealed with it. Try blocking them again — and if it keeps failing, your church may have grown past what one key document can hold.');
+      const rotating = rotateChurchKeys({ memberPubs: remaining, stewardPubs: stewardRoster || [], groups, delegated, dropPk: pk, isBlocked });
+      // ...and off every team, the care list and the future rota slots - only for a Block that LANDED (`ok === false` may
+      // be only partly saved, and unblocking does not put anyone back). See takeOffEveryTeam.
+      const teams = ok === false ? Promise.resolve([]) : takeOffEveryTeam({ pk, rosters: rostersAll, rotas: rotasAll, services: servicesAll, careTeamId });
+      return Promise.all([rotating, teams]).then(([failed, teamFailed]) => {
+        const teamNote = teamFailed.length ? 'They are blocked, but this console could not take them off ' + teamFailed.join(' or ') + ' \u2014 take them off by hand.' : '';
+        if (failed.length) setBlockWarn((saveNote ? saveNote + ' It also could not change ' + failed.join(' or ') + ', so they may still be able to open things sealed with it.' : 'Removed them from the church, but could not change ' + failed.join(' or ') + '. They may still be able to open things sealed with it. Try blocking them again — and if it keeps failing, your church may have grown past what one key document can hold.') + (teamNote ? ' ' + teamNote : ''));
+        else if (teamNote) setBlockWarn((saveNote ? saveNote + ' ' : '') + teamNote);
       });
     }).catch(() => {});
   };
@@ -8186,6 +8240,7 @@ function DashStewardsPanel({ church }) {
   // What remove() needs to re-key the church: the encrypted rooms, and who this console holds as blocked.
   const groups = window.useStewardGroups ? window.useStewardGroups() : [];
   const blockedList = window.useStewardBlocked ? window.useStewardBlocked() : [];
+  const isBlockedHere = (pk) => (blockedList || []).some(p => String(p || '').toLowerCase() === String(pk || '').toLowerCase());
   const [removeNote, setRemoveNote] = React.useState(null);   // { tone: 'ok' | 'fail', text } — what removing someone did
   const [adding, setAdding] = React.useState(false);
   const [q, setQ] = React.useState('');
@@ -8305,7 +8360,7 @@ function DashStewardsPanel({ church }) {
     if (!newLabel.trim()) { setAddErr('Give them a name first — you’ll need it to tell your stewards apart.'); return; }
     add(pk, newLabel, newCaps);
   };
-  const candidates = members.filter(m => m.pubkey && m.pubkey !== ownerPub && !stewardSet.has(m.pubkey)
+  const candidates = members.filter(m => m.pubkey && m.pubkey !== ownerPub && !stewardSet.has(m.pubkey) && !isBlockedHere(m.pubkey)   // a blocked person is not offered as a steward (sim finding 14)
     && (!q || (m.name || '').toLowerCase().includes(q.toLowerCase()) || (m.npub || '').includes(q)));
   const initialsOf = (m) => (m && m.name ? m.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'ST').toUpperCase();
   const niceName = (pk) => (window.Steward.stewardName ? window.Steward.stewardName(pk) : '') || 'Steward';

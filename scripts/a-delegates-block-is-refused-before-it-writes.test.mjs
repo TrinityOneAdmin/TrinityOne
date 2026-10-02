@@ -47,7 +47,7 @@ function rig({ delegated = false, setBlocked } = {}) {
 }
 
 async function blockBram(r) {
-  const { C, draw } = await compiled('DashMembers', r.g, ['rotateChurchKeys']);
+  const { C, draw } = await compiled('DashMembers', r.g, ['rotateChurchKeys', 'takeOffEveryTeam']);
   let tree = draw(C, {});
   await press(tree, /Remove \/ block this member/, { which: 0 });
   tree = draw(C, {});
@@ -70,7 +70,7 @@ test('a DELEGATE’s Block is refused up front: nothing written, nothing rotated
 test('an OWNER’s Block rotates only AFTER the blocklist write has landed', async () => {
   let land;
   const r = rig({ setBlocked: () => new Promise(res => { land = res; }) });
-  const { C, draw } = await compiled('DashMembers', r.g, ['rotateChurchKeys']);
+  const { C, draw } = await compiled('DashMembers', r.g, ['rotateChurchKeys', 'takeOffEveryTeam']);
   let tree = draw(C, {});
   await press(tree, /Remove \/ block this member/);
   tree = draw(C, {});
