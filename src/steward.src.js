@@ -6171,7 +6171,8 @@ window.Steward = {
     _mediaKeyVer++;   // a rotation is under way: an ensureMediaKeyForMembers still sealing the old ring must not publish it
     const fresh = _hex(crypto.getRandomValues(new Uint8Array(32)));
     const full = [fresh, ...(_mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex])].slice(0, 50);
-    const want = [...new Set([pub0, ...(memberPubs || []).filter(Boolean), ...(stewardPubs || []).filter(Boolean)])];
+    const want = [...new Set([pub0, ...(memberPubs || []).filter(Boolean), ...(stewardPubs || []).filter(Boolean)])]
+      .filter(p => !_localBlocked.has(String(p).toLowerCase()));   // the blocked are never given a key — the caller's list is not the last word (audit of ce15f92)
     // FIT THE ENVELOPE — rotate with a shorter history rather than not rotate at all (see rotateCareKey: a
     // refused rotation leaves the blocked member holding the key). Owner, 2026-10-01.
     const ring = _fitKeyRing(full, want.length, (pl) => nip44e(pl, nip44ck(sk0, want[0])));
@@ -6314,7 +6315,8 @@ window.Steward = {
     if (!_careKeyHex) return false;                            // nothing to rotate yet — ensureCareKeyForMembers mints the first
     _careKeyVer++;   // a rotation is under way: any publish still sealing the old ring must not land after it
     const fresh = _hex(crypto.getRandomValues(new Uint8Array(32)));
-    const want = [...new Set([cp, churchPub, ...(memberPubs || []), ...(stewardPubs || [])].filter(Boolean))];
+    const want = [...new Set([cp, churchPub, ...(memberPubs || []), ...(stewardPubs || [])].filter(Boolean))]
+      .filter(p => !_localBlocked.has(String(p).toLowerCase()));   // the blocked are never given a key — the caller's list is not the last word (audit of ce15f92)
     // FIT THE ENVELOPE TO THE CHURCH, and rotate a shorter history rather than not rotating at all.
     //
     // This document carries one sealed copy of the key ring per member, and the relay caps a single message

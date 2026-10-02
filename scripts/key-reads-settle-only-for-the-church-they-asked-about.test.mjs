@@ -737,6 +737,24 @@ test('setBlocked never drops someone this console holds as blocked — only an e
   assert.ok(!sent.at(-1).includes(M2.pub) && !e.t._localBlocked.has(M2.pub), 'CONTROL: an explicit unblock of M2 did not take M2 off');
 });
 
+// THE ROTATIONS LEAVE OUT THE BLOCKED THEMSELVES (audit of ce15f92). rotateCareKey and rotateMediaKey took their recipients
+// from the caller (block()'s `remaining`) and filtered nothing, unlike every other key builder.
+test('rotateCareKey and rotateMediaKey never wrap the new key to someone this console holds as blocked, whatever list they are handed', async () => {
+  const e = engine();
+  e.t._localBlocked = new Set([M2.pub]);
+  e.t._careKeyHex = 'aa'.repeat(32); e.t._careKeyRing = ['aa'.repeat(32)]; e.t._careKeyChecked = true; e.t._careKeyRev = 1;
+  e.t._mediaKeyHex = 'cc'.repeat(32); e.t._mediaKeyRing = ['cc'.repeat(32)]; e.t._mediaKeyChecked = true;
+  for (const [what, call, d] of [['care', () => e.S.rotateCareKey([M1.pub, M2.pub], []), CAREKEY_D], ['sermon', () => e.S.rotateMediaKey([M1.pub, M2.pub], []), MEDIAKEY_D]]) {
+    const p0 = e.published.length;
+    await call();
+    const env = e.published.slice(p0).find(ev => dtag(ev) === d + A.pub);
+    assert.ok(env, `CONTROL: no ${what} key rotation was published`);
+    const to = Object.keys(JSON.parse(env.content).keys || {});
+    assert.ok(to.includes(M1.pub), `CONTROL: the ${what} key rotation left out a member who is not blocked`);
+    assert.ok(!to.includes(M2.pub), `THE ${what.toUpperCase()} KEY ROTATION WRAPPED THE NEW KEY TO M2, whom this console holds as blocked (audit of ce15f92)`);
+  }
+});
+
 // THE NAME-KEY LOCK: the church is fixed when the call is made, not when it gets the lock. The audit's four rows.
 const RING_NB = ['b1'.repeat(32)];
 const MB = K();
