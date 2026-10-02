@@ -5608,6 +5608,12 @@ window.Fellowship = {
   async createChildAccount(churchNpub, childName, opts) {
     if (!sk) await window.Fellowship.ready;
     const cp = toPub(churchNpub); if (!cp || !sk) throw new Error('Join a church first.');
+    // A MARKED CHILD DOES NOT SET UP OTHER CHILDREN'S ACCOUNTS (sim A2 #10). The screen hides the row; this is
+    // the backstop for a build that shows it anyway. It fails OPEN on purpose: only a CONFIRMED answer for THIS
+    // member in THIS church refuses (_sgMine is null for anyone else, and for a cold start), so a parent whose
+    // clearance has not arrived yet is not locked out. Nothing is minted or published before this line.
+    const _me = _sgMine(cp);
+    if (_me && _me.isMinor) throw new Error('A young person’s account can’t set up another account.');
     const name = String(childName || '').trim(); if (!name) throw new Error('Enter the child’s name.');
     // THE KEY COMES FROM THE CALLER, so "try again" finishes THIS child rather than starting another. It was
     // minted here, and the UI's only retry was to call this function again: one child, TWO accounts, two

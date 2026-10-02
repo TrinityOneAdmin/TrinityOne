@@ -1653,7 +1653,10 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
                   children's accounts because it is the one most families need — most children checked into a
                   crèche have no phone and no account at all (design §7). */}
               <Row icon="child" label="Children at church" sub="Say you bring children, and their names — kept on this phone" accent="var(--sage)" onClick={() => setKidsAt(true)} />
-              {window.Fellowship && window.Fellowship.createChildAccount ? (
+              {/* A YOUNG PERSON IS NOT OFFERED THE CONTROLS THAT MINT AND LINK CHILD ACCOUNTS (sim A2 #10). Same
+                  clause as the wallet row and the young-person notices beside it. The engine refuses too — see
+                  createChildAccount — because a modified build could otherwise do what this hides. */}
+              {window.Fellowship && window.Fellowship.createChildAccount && !(ctx.safeguard && ctx.safeguard.isMinor) ? (
                 <Row icon="pray" label="Children’s accounts" sub="Set up and look after a child’s account in your church" accent="var(--sage)" onClick={() => setFamily(true)} />
               ) : null}
             </Group>

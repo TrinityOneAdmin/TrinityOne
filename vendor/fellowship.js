@@ -11911,6 +11911,8 @@
       if (!sk) await window.Fellowship.ready;
       const cp = toPub(churchNpub);
       if (!cp || !sk) throw new Error("Join a church first.");
+      const _me = _sgMine(cp);
+      if (_me && _me.isMinor) throw new Error("A young person\u2019s account can\u2019t set up another account.");
       const name = String(childName || "").trim();
       if (!name) throw new Error("Enter the child\u2019s name.");
       const mnemonic = opts && opts.mnemonic || window.TrinityIdentity.makeInvite().mnemonic;

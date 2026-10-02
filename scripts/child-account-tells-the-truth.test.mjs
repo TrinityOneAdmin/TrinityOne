@@ -47,7 +47,9 @@ const dOf = (e) => (e.tags.find(t => t[0] === 'd') || [])[1] || '';
 // Default is a bare Error, which is an unacknowledged publish ('unconfirmed'); pass `refused` or `unsent`
 // to get the settled kinds. Added 2026-09-15: the join's failure KIND decides whether the screen may
 // promise a restart is safe.
-function parent({ fails = [], children = [], failWith = null } = {}) {
+// `self` — what the app has heard about THIS member from the church: null = nothing (a cold start), or
+// { isMinor, known }. It is fed to the SHIPPED _sgMine (lifted below), not to a stub that answers for it.
+function parent({ fails = [], children = [], failWith = null, self = null } = {}) {
   // `order` = every document the function ATTEMPTED, in order; `published` = the ones the relay took;
   // `relay` = the events actually sitting on the relay afterwards; `minted` = every key the engine minted.
   const state = { published: [], order: [], saved: null, relay: [], minted: [], children };
@@ -61,7 +63,13 @@ function parent({ fails = [], children = [], failWith = null } = {}) {
   };
   const parentSk = generateSecretKey();
   state.parentPub = getPublicKey(parentSk);
+  const sgSelf = self ? { cp: CHURCH, me: state.parentPub, isMinor: !!self.isMinor, known: !!self.known }
+                      : { cp: '', me: '', isMinor: false, known: false };
   const scope = {
+    // The member's own safeguarding answer: the SHIPPED `_sgMine` over a `_sgSelf` the test controls.
+    _sgSelf: sgSelf,
+    _mePub: () => state.parentPub,
+    _sgMine: new Function('_sgSelf', '_mePub', grabMethod(SRC, 'function _sgMine(cp)') + '\nreturn _sgMine;')(sgSelf, () => state.parentPub),
     // LIFTED, NOT STUBBED. `_pubReason` is the shipped four-way classifier
     // ('not-sent' | 'refused' | 'unconfirmed'), and `createChildAccount` now records its answer per
     // document in `why`. A stub here would supply the very distinction the branch below is named after.
@@ -227,6 +235,31 @@ test('which is exactly why the caller must hold the key: two bare calls are two 
   const p = parent();
   const a = await p.call(), b = await p.call();
   assert.notEqual(a.childPub, b.childPub);
+});
+
+
+// ── (e) A MARKED CHILD DOES NOT SET UP OTHER CHILDREN'S ACCOUNTS (sim A2 #10) ────────────────────────────
+// The screen no longer offers a young person "Children's accounts" (scripts/a-child-is-not-offered-childrens-
+// accounts.test.mjs). This is the engine half: a modified build that shows the row anyway must not be able to
+// mint accounts, join them to the church and file guardian requests. Fails OPEN for everyone the church has
+// not confirmed as a child, so a parent on a cold start is not locked out of their own family.
+test('a member the church has marked as a child cannot create a child account — nothing is minted or sent', async () => {
+  const p = parent({ self: { isMinor: true, known: true } });
+  await assert.rejects(() => p.call(), /young person/,
+    'a marked child minted an account, joined it to the church and filed a guardian request');
+  assert.deepEqual(p.state.order, [], 'documents were published before the refusal: ' + JSON.stringify(p.state.order));
+  assert.equal(p.state.minted.length, 0, 'a key was minted for an account that must not exist');
+  assert.equal(p.state.saved, null, 'a family link was remembered for a refused account');
+});
+
+test('…but a confirmed ADULT still creates one', async () => {
+  const r = await parent({ self: { isMinor: false, known: true } }).call();
+  assert.equal(r.ok, true, 'the guard refused an adult parent');
+});
+
+test('…and so does a parent whose own answer has not arrived yet (it fails OPEN, not closed)', async () => {
+  const r = await parent({ self: null }).call();
+  assert.equal(r.ok, true, 'a parent on a cold start was locked out of setting up their family');
 });
 
 
