@@ -96,7 +96,10 @@ test('normalising did not make it block people it should not', () => {
 // shared-rules.test.mjs's "both engines must actually GO THROUGH it".
 test('the block-and-rotate path uses the helper, not its own lookup', () => {
   const block = SRC.slice(SRC.indexOf('const block = (pk) =>'));
-  const body = block.slice(0, block.indexOf('\n  };'));
+  // the group-key loop is in rotateChurchKeys (shared with removing a delegate); the rule is read over both
+  const rotate = SRC.slice(SRC.indexOf('function rotateChurchKeys('), SRC.indexOf('function DashMembers()'));
+  assert.ok(rotate.includes('function rotateChurchKeys('), 'rotateChurchKeys is gone — block() has no rotation');
+  const body = block.slice(0, block.indexOf('\n  };')) + '\n' + rotate;
   assert.ok(body.length > 200 && body.includes('publishGroupKey'),
     'could not isolate block() — this guard is not reading the function it claims to');
   assert.doesNotMatch(body, /blockedSet\.has\(/,
@@ -119,6 +122,10 @@ function liftBlock() {
   const end = SRC.indexOf('\n  };', at);
   assert.notEqual(end, -1, 'could not find the end of block()');
   const body = SRC.slice(at, end + 5);
+  // block() calls rotateChurchKeys, the top-level function above DashMembers — executed here from the same source
+  const rotateAt = SRC.indexOf('function rotateChurchKeys(');
+  assert.notEqual(rotateAt, -1, 'rotateChurchKeys is gone — block() has no rotation');
+  const rotateSrc = SRC.slice(rotateAt, SRC.indexOf('function DashMembers()', rotateAt));
   const setLine = SRC.match(SET_LINE_RE)[0];
   const fnLine = (SRC.match(/^\s*const isBlocked = .*$/m) || { 0: '  const isBlocked = (pk) => blockedSet.has(pk);' })[0];
   // eslint-disable-next-line no-new-func
@@ -126,6 +133,7 @@ function liftBlock() {
     const { blockedList, members, stewardRoster, delegated, groups, setConfirmBlock } = deps;
     ${setLine}
     ${fnLine}
+    ${rotateSrc}
     ${body}
     return block;
   `);

@@ -18,6 +18,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { fnBody } from './test-slice.mjs';
 
 const SRC = readFileSync(new URL('../src/steward.src.js', import.meta.url), 'utf8');
 const VENDOR = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
@@ -96,7 +97,8 @@ test('the name key is fitted to the church, not just published and hoped for', (
 
 test('blocking waits for the name key too, and says so if it did not land', () => {
   const at = DASH.indexOf('const block = (pk) =>');
-  const body = DASH.slice(at, DASH.indexOf('\n  };', at));
+  // block() hands the rotation to rotateChurchKeys (the one body Block and removing a delegate share); read both.
+  const body = DASH.slice(at, DASH.indexOf('\n  };', at)) + '\n' + fnBody(DASH, 'function rotateChurchKeys(', 'rotateChurchKeys');
   assert.match(body, /rotations\.push\(Promise\.resolve\(window\.Steward\.ensureNameKeyForMembers\(/,
     'the name key is fired and forgotten while the care and sermon keys are awaited beside it. A large church ' +
     'is told the person is blocked while they keep the key to the whole congregation\'s names');

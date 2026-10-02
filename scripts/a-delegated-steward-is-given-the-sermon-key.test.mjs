@@ -336,7 +336,8 @@ test('THE MOUNT RE-CHECK TIMERS read the roster as it is WHEN THEY FIRE, not at 
 async function blockOnMembersPage() {
   const { React, draw } = miniReact();
   const NOW = Math.floor(Date.now() / 1000);
-  const src = fnBody(DASH, 'function DashMembers()', 'DashMembers');
+  // block() calls rotateChurchKeys, the shipped top-level function beside DashMembers — compiled with it, not stubbed
+  const src = fnBody(DASH, 'function rotateChurchKeys(', 'rotateChurchKeys') + '\n' + fnBody(DASH, 'function DashMembers()', 'DashMembers');
   const tmp = join(tmpdir(), 'dm-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
   let js;
   try {

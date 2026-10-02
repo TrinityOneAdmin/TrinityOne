@@ -150,7 +150,8 @@ test('blocking is refused while acting as a delegated steward, and never re-keys
   // Brace-matched, not a fixed 2600-character window: adding the delegated name-key guard and its explanation
   // pushed the group guard out of view and turned a correct fix red. Third time a fixed window has done this.
   const body = (() => { let d = 0; for (let i = DASH.indexOf('{', at); i < DASH.length; i++) { const c = DASH[i]; if (c === '{') d++; else if (c === '}' && --d === 0) return DASH.slice(at, i + 1); } return DASH.slice(at); })();
-  assert.match(body, /!delegated\s*&&\s*Array\.isArray\(groups\)/,
+  // the group rotation itself lives in rotateChurchKeys now (the body Block and removing a delegate share)
+  assert.match(body + '\n' + fnBody(DASH, 'function rotateChurchKeys(', 'rotateChurchKeys'), /!delegated\s*&&\s*Array\.isArray\(groups\)/,
     'a delegated steward can re-key another church’s group under the wrong key and lock the owner out');
   const dist = DASH.slice(DASH.indexOf('const memberPubs = members.map'), DASH.indexOf('const memberPubs = members.map') + 600);
   assert.match(dist, /filter\(notBlocked\)/,

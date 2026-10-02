@@ -5661,6 +5661,93 @@ try { window.addEventListener('steward-relay-returned', () => { clearanceBackfil
 let clearanceBackfillLastSig = '';   // which signature that failure belonged to — a CHANGED roster skips the wait
 const CLEARANCE_RETRY_MS = 60000;
 
+// ROTATE EVERY CHURCH KEY, LEAVING SOMEONE OUT — the one body behind Block (DashMembers.block) and removing a
+// delegated steward (DashStewardsPanel.remove). Rotation is what actually takes keys away; the lists alone are
+// a note. Both callers used to need the same ~60 lines, and the second one had none (removing a delegate left
+// them holding the care, name, sermon and room keys), which is why it is one function now.
+//
+// `memberPubs`  who gets the new keys (church members, blocked people already left out by the caller)
+// `stewardPubs` the steward roster AFTER the change — a rotation rewrites the whole recipient list, so a
+//               removed delegate is left out simply by not being in this list
+// `dropPk`      Block only: the person leaving. Skips invite-only rooms they were not in, and takes them out of
+//               the member list of the rooms they were in. Omit it when removing a delegate.
+// Returns a promise of the names of the keys that did NOT rotate ([] = all did). The calls themselves are made
+// synchronously, before the promise exists. Capability keys (finance, check-in) are not here: they re-key
+// themselves from the steward roster (ensureCapKeyFor), whoever changed it.
+function rotateChurchKeys({ memberPubs, stewardPubs, groups, delegated, dropPk, isBlocked }) {
+  // AWAIT THESE, AND REPORT A FAILURE. Rotation is what actually takes the keys away from the person
+  // being blocked; the block list alone is a note. These were fire-and-forget, so on a church large
+  // enough for the envelope to be refused (measured: ~723 members for care) the steward saw "blocked"
+  // while the member kept the key. Nothing said otherwise.
+  const rotations = [];
+  if (window.Steward.rotateCareKey) rotations.push(Promise.resolve(window.Steward.rotateCareKey(memberPubs, stewardPubs || [])).then(r => ['the care key', r]));
+  // `stewardRoster` — a rotation rewrites the whole recipient list, so without it blocking one member
+  // would take the sermon key away from every delegated steward. Same list rotateCareKey gets above.
+  if (window.Steward.rotateMediaKey) rotations.push(Promise.resolve(window.Steward.rotateMediaKey(memberPubs, stewardPubs || [])).then(r => ['the sermon key', r]));
+  // THE NAME KEY IS IN THIS LIST TOO. It was fired and forgotten one line below while care and media were
+  // awaited, which made it the worst of the three to lose: a blocked member still holding the name key can
+  // read the whole congregation's names. What is reported below (audit of 3bc8905, and this comment
+  // corrected after the audit of 5276297): `false` always, and `null` on an OWNER's console — a rotation that
+  // did not happen leaves the blocked member holding the key. A DELEGATED console's `null` is the deliberate
+  // decline (the owner-only keys) and is said separately below; "nothing to rotate" comes back as an object
+  // ({ rotated: false }), not null, so it stays quiet.
+  //
+  // NOT AS A DELEGATED STEWARD. A delegated console can never read the owner's name-key envelope, so it
+  // holds an EMPTY ring; rotating from empty minted a brand-new single-key ring and published it as the
+  // church's name key. Members accept it (newest wins, steward-authored is allowed) and every sealed name
+  // in the congregation stops opening — the whole roster goes anonymous from one Block tap. steward.src.js
+  // refuses this from its own side too; both guards stay. AUDIT-2026-07-27.
+  if (!delegated && window.Steward.ensureNameKeyForMembers) rotations.push(Promise.resolve(window.Steward.ensureNameKeyForMembers(memberPubs, stewardPubs || [], { rotate: true })).then(r => ['the name key', r]));
+  // ENCRYPTED GROUPS TOO. Blocking rotated the care and media keys and nothing else, so a blocked person's
+  // phone carried on decrypting every future message in every encrypted group — forever. The background
+  // distributor cannot cover it: it only republishes when the recipient set GREW, and a block shrinks it,
+  // so a removal published nothing at all. The only {rotate:true} call site was the invite-only members
+  // editor, which does not exist for an OPEN encrypted group. The contract in steward.src.js says removal
+  // MUST rotate; this is the path that was missing it. AUDIT-2026-07-27.
+  // NOT AS A DELEGATED STEWARD. publishGroupKey always signs with churchSk and always seeded the recipient
+  // set with churchPub — this device's OWN church key. Acting for a church we merely steward, that re-keys
+  // THEIR group under OUR key and left the owning church out of the recipients, locking them out of their
+  // own room. The same commit added exactly this guard to publishProfile and missed it here. AUDIT-2026-07-27.
+  //
+  // ⚠ HALF OF THAT REASON IS GONE AND THE GUARD IS DELIBERATELY KEPT. Since the 2026-09-17 merge,
+  // publishGroupKey seeds from `actingChurch || churchPub`, so the owning church IS a recipient now and
+  // the lockout above can no longer happen (proved in scripts/a-sealed-room-reaches-the-church-that-owns-it
+  // .test.mjs, "the CHURCH can really UNWRAP its own entry"). The guard stays because letting a delegated
+  // console re-key every encrypted room in someone else's church as a side effect of ONE Block tap is a
+  // separate decision, and it is the owner's to make, not a merge's. What it costs today: blocking someone
+  // from a delegated console does not rotate that church's room keys, so the blocked person's phone can
+  // still read future messages in rooms they were in until the owner's own console blocks them too. THAT
+  // IS AN OPEN GAP, reported and not patched here — it needs the owner's call and a phone.
+  const grps = (!delegated && Array.isArray(groups)) ? groups : [];
+  for (const g of grps) {
+    if (!g || !g.encrypted) continue;
+    const invite = g.visibility === 'invite';
+    // BLOCK passes `dropPk` and skips an invite-only room the person was never in (nothing of theirs to rotate).
+    // REMOVING A DELEGATE passes none: they may hold any room's key (a delegate that minted one is in its
+    // envelope), so every encrypted room is re-keyed.
+    if (dropPk && invite && !(g.members || []).includes(dropPk)) continue;
+    const recips = (invite ? (g.members || []).filter(p => p !== dropPk && !isBlocked(p)) : memberPubs);
+    // AWAITED AND REPORTED, like care and the name key beside them. This was fire-and-forget, and it
+    // became the more serious of the two once the member app started REFUSING to send into an encrypted
+    // room without a key (fellowship publishMessage): a rotation that quietly fails no longer leaks the
+    // room to the blocked member — it locks the remaining members out of talking in it, while the app
+    // tells them it will sort itself out shortly. Silence is not survivable in either direction.
+    if (window.Steward.publishGroupKey) rotations.push(Promise.resolve(window.Steward.publishGroupKey(g.id, recips, { rotate: true })).then(r => ['the key for ' + (g.name || 'a group'), r]));
+    // Only a Block takes the person out of an invite-only room's own member list.
+    if (dropPk && invite && window.Steward.publishGroup) window.Steward.publishGroup({ ...g, members: recips });
+  }
+  // AWAITED AFTER THE GROUP LOOP, not before it. This sat above the loop, so the group-key
+  // rotations pushed below were collected into an array nothing was waiting on any more — the exact
+  // fire-and-forget the rest of this handler exists to undo.
+  return Promise.all(rotations).then(rs => {
+    // NULL IS A FAILURE TOO (audit of 3bc8905). A rotation returns null when it did not happen — no trusted
+    // view, an envelope this console is not in, or a name-key Block queued across a church switch — and the
+    // blocked member then still holds that key. Only a DELEGATED console gets null by design (the owner-only
+    // sermon key), and it is told so by block().
+    return rs.filter(([, ok]) => ok === false || (ok == null && !delegated)).map(([what]) => what);
+  });
+}
+
 function DashMembers() {
   // needed by block(): rotating an encrypted group's key on removal requires knowing the groups.
   const groups = window.useStewardGroups ? window.useStewardGroups() : [];
@@ -6165,72 +6252,9 @@ function DashMembers() {
     try { window.Steward.setBlocked([...blockedList, pk]); } catch (e) { return; }
     try {
       const remaining = members.map(m => m.pubkey).filter(p => p && p.toLowerCase() !== String(pk || '').toLowerCase() && !isBlocked(p));
-      // AWAIT THESE, AND REPORT A FAILURE. Rotation is what actually takes the keys away from the person
-      // being blocked; the block list alone is a note. These were fire-and-forget, so on a church large
-      // enough for the envelope to be refused (measured: ~723 members for care) the steward saw "blocked"
-      // while the member kept the key. Nothing said otherwise.
-      const rotations = [];
-      if (window.Steward.rotateCareKey) rotations.push(Promise.resolve(window.Steward.rotateCareKey(remaining, stewardRoster || [])).then(r => ['the care key', r]));
-      // `stewardRoster` — a rotation rewrites the whole recipient list, so without it blocking one member
-      // would take the sermon key away from every delegated steward. Same list rotateCareKey gets above.
-      if (window.Steward.rotateMediaKey) rotations.push(Promise.resolve(window.Steward.rotateMediaKey(remaining, stewardRoster || [])).then(r => ['the sermon key', r]));
-      // THE NAME KEY IS IN THIS LIST TOO. It was fired and forgotten one line below while care and media were
-      // awaited, which made it the worst of the three to lose: a blocked member still holding the name key can
-      // read the whole congregation's names. What is reported below (audit of 3bc8905, and this comment
-      // corrected after the audit of 5276297): `false` always, and `null` on an OWNER's console — a rotation that
-      // did not happen leaves the blocked member holding the key. A DELEGATED console's `null` is the deliberate
-      // decline (the owner-only keys) and is said separately below; "nothing to rotate" comes back as an object
-      // ({ rotated: false }), not null, so it stays quiet.
-      //
-      // NOT AS A DELEGATED STEWARD. A delegated console can never read the owner's name-key envelope, so it
-      // holds an EMPTY ring; rotating from empty minted a brand-new single-key ring and published it as the
-      // church's name key. Members accept it (newest wins, steward-authored is allowed) and every sealed name
-      // in the congregation stops opening — the whole roster goes anonymous from one Block tap. steward.src.js
-      // refuses this from its own side too; both guards stay. AUDIT-2026-07-27.
-      if (!delegated && window.Steward.ensureNameKeyForMembers) rotations.push(Promise.resolve(window.Steward.ensureNameKeyForMembers(remaining, stewardRoster || [], { rotate: true })).then(r => ['the name key', r]));
-      // ENCRYPTED GROUPS TOO. Blocking rotated the care and media keys and nothing else, so a blocked person's
-      // phone carried on decrypting every future message in every encrypted group — forever. The background
-      // distributor cannot cover it: it only republishes when the recipient set GREW, and a block shrinks it,
-      // so a removal published nothing at all. The only {rotate:true} call site was the invite-only members
-      // editor, which does not exist for an OPEN encrypted group. The contract in steward.src.js says removal
-      // MUST rotate; this is the path that was missing it. AUDIT-2026-07-27.
-      // NOT AS A DELEGATED STEWARD. publishGroupKey always signs with churchSk and always seeded the recipient
-      // set with churchPub — this device's OWN church key. Acting for a church we merely steward, that re-keys
-      // THEIR group under OUR key and left the owning church out of the recipients, locking them out of their
-      // own room. The same commit added exactly this guard to publishProfile and missed it here. AUDIT-2026-07-27.
-      //
-      // ⚠ HALF OF THAT REASON IS GONE AND THE GUARD IS DELIBERATELY KEPT. Since the 2026-09-17 merge,
-      // publishGroupKey seeds from `actingChurch || churchPub`, so the owning church IS a recipient now and
-      // the lockout above can no longer happen (proved in scripts/a-sealed-room-reaches-the-church-that-owns-it
-      // .test.mjs, "the CHURCH can really UNWRAP its own entry"). The guard stays because letting a delegated
-      // console re-key every encrypted room in someone else's church as a side effect of ONE Block tap is a
-      // separate decision, and it is the owner's to make, not a merge's. What it costs today: blocking someone
-      // from a delegated console does not rotate that church's room keys, so the blocked person's phone can
-      // still read future messages in rooms they were in until the owner's own console blocks them too. THAT
-      // IS AN OPEN GAP, reported and not patched here — it needs the owner's call and a phone.
-      const grps = (!delegated && Array.isArray(groups)) ? groups : [];
-      for (const g of grps) {
-        if (!g || !g.encrypted) continue;
-        const wasIn = g.visibility === 'invite' ? (g.members || []).includes(pk) : true;   // an open group includes everyone
-        if (!wasIn) continue;
-        const recips = (g.visibility === 'invite' ? (g.members || []).filter(p => p !== pk && !isBlocked(p)) : remaining);
-        // AWAITED AND REPORTED, like care and the name key beside them. This was fire-and-forget, and it
-        // became the more serious of the two once the member app started REFUSING to send into an encrypted
-        // room without a key (fellowship publishMessage): a rotation that quietly fails no longer leaks the
-        // room to the blocked member — it locks the remaining members out of talking in it, while the app
-        // tells them it will sort itself out shortly. Silence is not survivable in either direction.
-        if (window.Steward.publishGroupKey) rotations.push(Promise.resolve(window.Steward.publishGroupKey(g.id, recips, { rotate: true })).then(r => ['the key for ' + (g.name || 'a group'), r]));
-        if (g.visibility === 'invite' && window.Steward.publishGroup) window.Steward.publishGroup({ ...g, members: recips });
-      }
-      // AWAITED AFTER THE GROUP LOOP, not before it. This sat above the loop, so the group-key
-      // rotations pushed below were collected into an array nothing was waiting on any more — the exact
-      // fire-and-forget the rest of this handler exists to undo.
-      Promise.all(rotations).then(rs => {
-        // NULL IS A FAILURE TOO (audit of 3bc8905). A rotation returns null when it did not happen — no trusted
-        // view, an envelope this console is not in, or a name-key Block queued across a church switch — and the
-        // blocked member then still holds that key. Only a DELEGATED console gets null by design (the owner-only
-        // sermon key), and it is told so below.
-        const failed = rs.filter(([, ok]) => ok === false || (ok == null && !delegated)).map(([what]) => what);
+      // AWAITED, AND A FAILURE REPORTED: rotation is what actually takes the keys away from the person being
+      // blocked. The body, and every reason it is written the way it is, is rotateChurchKeys (above DashMembers).
+      rotateChurchKeys({ memberPubs: remaining, stewardPubs: stewardRoster || [], groups, delegated, dropPk: pk, isBlocked }).then(failed => {
         if (failed.length) setBlockWarn('Removed them from the church, but could not change ' + failed.join(' or ') + '. They may still be able to open things sealed with it. Try blocking them again — and if it keeps failing, your church may have grown past what one key document can hold.');
       }).catch(() => {});
       // SAY SO. Both guards above are correct and both are silent: as a delegated steward you tap Block, the
@@ -8153,6 +8177,10 @@ function DashStewardsPanel({ church }) {
   const stewardSet = new Set(stewards);
   const byPub = new Map(members.map(m => [m.pubkey, m]));
   const ownerPub = (window.Steward && window.Steward.pubkey) || '';
+  // What remove() needs to re-key the church: the encrypted rooms, and who this console holds as blocked.
+  const groups = window.useStewardGroups ? window.useStewardGroups() : [];
+  const blockedList = window.useStewardBlocked ? window.useStewardBlocked() : [];
+  const [removeNote, setRemoveNote] = React.useState(null);   // { tone: 'ok' | 'fail', text } — what removing someone did
   const [adding, setAdding] = React.useState(false);
   const [q, setQ] = React.useState('');
   const [code, setCode] = React.useState('');
@@ -8229,7 +8257,35 @@ function DashStewardsPanel({ church }) {
     add(approving);
   };
   const pending = requests.filter(r => !dismissed[r.pubkey] && !stewardSet.has(r.pubkey) && r.pubkey !== ownerPub);
-  const remove = (pk) => { setConfirmRemove(null); try { window.Steward.setStewards(stewards.filter(p => p !== pk)); } catch (e) {} };
+  // REMOVING A DELEGATE RE-KEYS THE CHURCH (sim finding 5). This used to write the shorter roster and stop: the
+  // relay stopped honouring their writes, but they kept every key already wrapped to them — care, names, sermons
+  // and every encrypted room — and the next list refresh could not take them away, because those keys only ever
+  // GAIN recipients. Capability keys (finance, check-in) re-key themselves from the roster; the rest are rotated
+  // here, to the church's members and the stewards who remain, by the same function Block uses.
+  //
+  // Rotation only protects what is sealed from now on — what they could already open stays open — and a delegate
+  // who is ALSO a member keeps member-level keys (to put someone out of the church, block them). The note says both.
+  const remove = (pk) => {
+    setConfirmRemove(null); setRemoveNote(null);
+    const next = stewards.filter(p => p !== pk);
+    const who = labels[pk] || (byPub.get(pk) || {}).name || niceName(pk);
+    let wrote;
+    try { wrote = Promise.resolve(window.Steward.setStewards(next)); } catch (e) { return; }   // a refusal is on the banner (_requireTrustedView)
+    const blockedSet = new Set((blockedList || []).map(p => String(p || '').toLowerCase()));
+    const isBlocked = (p) => blockedSet.has(String(p || '').toLowerCase());
+    const alsoMember = !!(byPub.get(pk) && byPub.get(pk).joined);
+    wrote.then((ok) => {
+      // A removal that did not land rotates nothing: they are still a steward, and re-keying around a steward
+      // the relay still honours would only lock out the wrong person.
+      if (!ok) { setRemoveNote({ tone: 'fail', text: 'Couldn’t remove ' + who + ' — the relay didn’t accept it, so they are STILL a steward and nothing was re-keyed. Try again.' }); return null; }
+      const memberPubs = members.map(m => m.pubkey).filter(p => p && !isBlocked(p));
+      return rotateChurchKeys({ memberPubs, stewardPubs: next, groups, delegated: false, isBlocked }).then((failed) => {
+        const tail = alsoMember ? ' They are also a member, so they keep what members can open — to put them out of the church, block them from Members.' : '';
+        if (failed.length) setRemoveNote({ tone: 'fail', text: who + ' is no longer a steward, but this console could not change ' + failed.join(' or ') + ', so they may still be able to open things sealed with it. Try removing them again.' + tail });
+        else setRemoveNote({ tone: 'ok', text: who + ' is no longer a steward, and the church’s keys have been changed so they can’t open anything sealed from now on. What they could already open stays open.' + tail }); setTimeout(() => setRemoveNote(n => (n && n.tone === 'ok') ? null : n), 8000);   // a confirmation is a moment; a failure stays
+      });
+    }).catch(() => { setRemoveNote({ tone: 'fail', text: 'Couldn’t finish removing ' + who + ' — the relay could not be reached. Check whether they are still listed, and try again.' }); });
+  };
   // add by the steward's own code/npub (from their Steward app → "Become a steward"). The correct path:
   // it names the exact key they'll act with, with no dependency on them being a member here.
   const addByCode = (text) => {
@@ -8335,6 +8391,12 @@ function DashStewardsPanel({ church }) {
           </div>
         ))}
       </div> : null}
+      {removeNote ? (
+        <div role={removeNote.tone === 'fail' ? 'alert' : 'status'} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 12px', borderRadius: 12, marginBottom: 12, background: removeNote.tone === 'fail' ? 'var(--clay-soft)' : 'var(--surface-2)', border: '1px solid ' + (removeNote.tone === 'fail' ? 'var(--clay)' : 'var(--line)') }}>
+          <div style={{ flex: 1, minWidth: 0, fontSize: 13, lineHeight: 1.45, color: 'var(--ink)' }}>{removeNote.text}</div>
+          <button onClick={() => setRemoveNote(null)} aria-label="Dismiss" style={{ flexShrink: 0, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', fontSize: 16, lineHeight: 1, padding: 2 }}>×</button>
+        </div>
+      ) : null}
       {stewards.length === 0
         ? <div style={{ fontSize: 13, color: 'var(--ink-3)', padding: '2px 0 10px' }}>No delegated stewards yet.</div>
         : <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>{stewards.map(pk => <React.Fragment key={pk}>{row(pk)}{scoping === pk ? scopeEditor(pk) : null}</React.Fragment>)}</div>}

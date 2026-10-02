@@ -59,7 +59,8 @@ test('blocking a member rotates every encrypted group they could read', () => {
   const start = DASH.indexOf('const block = (pk)');
   assert.notEqual(start, -1, 'block() moved or was renamed');
   const stop = DASH.indexOf('const unblock', start);
-  const fn = DASH.slice(start, stop > start ? stop : start + 4000);
+  // block() hands the rotation to rotateChurchKeys (the one body Block and removing a delegate share); read both.
+  const fn = DASH.slice(start, stop > start ? stop : start + 4000) + '\n' + fnBody(DASH, 'function rotateChurchKeys(', 'rotateChurchKeys');
   assert.match(fn, /rotateCareKey/, 'care-key rotation on block is gone');
   assert.match(fn, /publishGroupKey\([^)]*\{\s*rotate:\s*true\s*\}/,
     'blocking no longer rotates encrypted GROUP keys — the blocked member keeps reading every future message');

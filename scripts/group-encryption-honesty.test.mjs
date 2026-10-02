@@ -305,7 +305,8 @@ test('a member who cannot send is told why, and keeps their words', () => {
 });
 
 test('blocking waits for the group-key rotations it fires', () => {
-  const fn = stripComments(fnBody(DASH, 'const block = (pk) =>', 'block'));
+  // block() hands the rotation to rotateChurchKeys (the one body Block and removing a delegate share); read both.
+  const fn = stripComments(fnBody(DASH, 'const block = (pk) =>', 'block') + '\n' + fnBody(DASH, 'function rotateChurchKeys(', 'rotateChurchKeys'));
   assert.match(fn, /rotations\.push\(Promise\.resolve\(window\.Steward\.publishGroupKey\(/,
     'group-key rotation is fired and forgotten. That mattered before because the blocked member kept the ' +
     'key; it matters MORE now, because a silent failure leaves the remaining members unable to send into ' +

@@ -214,7 +214,8 @@ test('the console mints and maintains the name key', () => {
 test('blocking a member rotates the name key too', () => {
   const DASH = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
   const at = DASH.indexOf('const block = (pk)');
-  const body = fnBody(DASH, at);
+  // block() hands the rotation to rotateChurchKeys (the one body Block and removing a delegate share); read both.
+  const body = fnBody(DASH, at) + '\n' + fnBody(DASH, 'function rotateChurchKeys(', 'rotateChurchKeys');
   assert.match(body, /ensureNameKeyForMembers\([^)]*\{\s*rotate:\s*true\s*\}/,
     'a blocked member keeps the key and can still read the congregation’s names — the one thing this stops');
 });
