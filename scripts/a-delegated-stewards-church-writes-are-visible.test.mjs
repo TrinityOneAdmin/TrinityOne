@@ -84,6 +84,10 @@ const GROUP_D = 'trinityone/group:', GROUPKEY_D = 'trinityone/groupkey:';
 const JOINPOLICY_D = 'trinityone/joinpolicy:', NOPHOTO_D = 'trinityone/nophoto:';
 const MINORS_D = 'trinityone/minors:';
 const VENDOR = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
+// THE SHIPPED LANDING REPORT (_landed, 2026-10-02): every guarded list write now returns through it, so a lifted
+// setter needs it in scope. Lifted, not re-typed.
+const _landedSrc = fnBody(VENDOR, 'function _landed(what, p) {', '_landed in the shipped bundle');
+const _landedShipped = new Function('return ' + _landedSrc)();
 const FELLOWSHIP = readFileSync(new URL('../vendor/fellowship.js', import.meta.url), 'utf8');
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -145,7 +149,7 @@ function consoleApi({ signer, actingChurch }) {
     NET, GROUPKEY_D, JOINPOLICY_D, NOPHOTO_D, GROUP_RING_MAX: 12,
     _skeys: {}, _srev: {}, _senvTs: {}, _localBlocked: new Set(),
     _isRelayAuthed: () => true,
-    _requireTrustedView: () => {},
+    _requireTrustedView: () => {}, _landed: _landedShipped,
     _monotonic: (t) => t,   // the shipped one guards same-second replaceables; it needs state and is irrelevant here
     // Stage 4's bounded wait, added to publishClearance and setNoPhoto after the 2026-09-26 audit.
     // Pass-through, which is what the shipped _skewGate does once a measurement has answered or been

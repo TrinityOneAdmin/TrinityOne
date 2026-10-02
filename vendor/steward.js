@@ -15579,6 +15579,7 @@ zoo`.split("\n");
   function _requireTrustedView(what) {
     if (_isRelayAuthed()) return;
     const err2 = new Error("Couldn\u2019t save the " + what + " \u2014 nothing was changed. This console hasn\u2019t finished connecting to your church, so it can\u2019t see the current list. Reopen it to try again. If nobody has joined your church yet, this clears when your first member joins.");
+    err2.notConnected = true;
     try {
       window.dispatchEvent(new CustomEvent("steward-write-blocked", { detail: { what, message: err2.message } }));
     } catch (e) {
@@ -15682,6 +15683,17 @@ zoo`.split("\n");
     }
     return evt;
   }
+  function _landed(what, p) {
+    return Promise.resolve(p).then((r) => {
+      if (r) {
+        try {
+          window.dispatchEvent(new CustomEvent("steward-write-landed", { detail: { what } }));
+        } catch (e) {
+        }
+      }
+      return r;
+    });
+  }
   async function _churchHasCareNeeds() {
     const cp = actingChurch || pub;
     if (!cp) return false;
@@ -15767,6 +15779,14 @@ zoo`.split("\n");
       localStorage.setItem(k, v);
     } catch {
     }
+  }
+  var OWN_NAME_LS = "trinityone.steward.ownname.";
+  function _rememberOwnName(n) {
+    const v = String(n || "").trim().slice(0, 80);
+    if (v && churchPub) lsSet(OWN_NAME_LS + churchPub, v);
+  }
+  function _ownChurchName() {
+    return churchPub && lsGet(OWN_NAME_LS + churchPub) || "";
   }
   function _netKeysRaw() {
     try {
@@ -16415,15 +16435,26 @@ zoo`.split("\n");
     return picked;
   }
   var pool = new SimplePool();
+  function _taggedForAnotherChurch(e, cp) {
+    const t = (e && e.tags || []).find((x) => x && x[0] === "church");
+    return !!(t && t[1] && t[1] !== cp);
+  }
+  function _asksForOwnAuthorship(filters, cp) {
+    if (!cp) return false;
+    return (Array.isArray(filters) ? filters : [filters]).some((f) => f && Array.isArray(f.authors) && f.authors.includes(cp));
+  }
   var _poolSubMany = pool.subscribeMany.bind(pool);
   pool.subscribeMany = (urls, filters, handlers) => {
     let closedByCaller = false;
+    const cp = pub, own = _asksForOwnAuthorship(filters, cp);
     const h = {};
     for (const k of Object.keys(handlers || {})) {
       const f = handlers[k];
-      h[k] = typeof f === "function" ? (...a) => {
+      h[k] = typeof f !== "function" ? f : k === "onevent" && own ? (e) => {
+        if (!closedByCaller && !_taggedForAnotherChurch(e, cp)) return f(e);
+      } : (...a) => {
         if (!closedByCaller) return f(...a);
-      } : f;
+      };
     }
     const u = (Array.isArray(urls) ? urls : []).filter(Boolean);
     if (u.length) {
@@ -16449,7 +16480,9 @@ zoo`.split("\n");
   var _poolQuerySync = pool.querySync.bind(pool);
   pool.querySync = (urls, filter, opts) => {
     const u = (Array.isArray(urls) ? urls : []).filter(Boolean);
-    return u.length ? _poolQuerySync(u, filter, opts) : Promise.resolve([]);
+    if (!u.length) return Promise.resolve([]);
+    const cp = pub, own = _asksForOwnAuthorship(filter, cp);
+    return own ? _poolQuerySync(u, filter, opts).then((evs) => (evs || []).filter((e) => !_taggedForAnotherChurch(e, cp))) : _poolQuerySync(u, filter, opts);
   };
   var _relaysTouched = /* @__PURE__ */ new Set();
   var _subbedOn = /* @__PURE__ */ new Map();
@@ -16459,25 +16492,86 @@ zoo`.split("\n");
       const fresh = live && _subbedOn.get(url) !== live;
       _relaysTouched.add(url);
       if (live && !_subbedOn.has(url)) _subbedOn.set(url, live);
+      if (live) _watchSocket(url, live);
       if (fresh) {
         _clearanceSent.clear();
-        if (_returnAnnounced.get(url) !== live) {
-          _returnAnnounced.set(url, live);
-          try {
-            window.dispatchEvent(new CustomEvent("steward-relay-returned", { detail: { url } }));
-          } catch (e) {
-          }
-        }
+        _announceReturn(url, live);
       }
     } catch (e) {
     }
   };
+  function _announceReturn(url, live) {
+    if (_returnAnnounced.get(url) === live) return;
+    _returnAnnounced.set(url, live);
+    try {
+      window.dispatchEvent(new CustomEvent("steward-relay-returned", { detail: { url } }));
+    } catch (e) {
+    }
+  }
+  var _NOT_LISTENING = Object.freeze({ notListening: true });
+  function _relayKey2(url) {
+    try {
+      return normalizeURL2(url);
+    } catch (e) {
+      return String(url || "");
+    }
+  }
+  function _noteDialFailed(url) {
+    const k = _relayKey2(url);
+    _relaysTouched.add(k);
+    const r = pool.relays.get(k);
+    if (!(r && r.connected === true)) _subbedOn.set(k, _NOT_LISTENING);
+  }
+  function _watchSocket(url, live) {
+    if (!live || live.__t1Watched) return;
+    live.__t1Watched = true;
+    const k = _relayKey2(url), prev = live.onclose;
+    live.onclose = function() {
+      try {
+        if (typeof prev === "function") prev.apply(this, arguments);
+      } finally {
+        try {
+          if (!live.__t1Dropped && _subbedOn.get(k) === live) {
+            live.__t1Dropped = true;
+            window.dispatchEvent(new CustomEvent("steward-relay-dropped", { detail: { url: k } }));
+          }
+        } catch (e) {
+        }
+      }
+    };
+  }
   pool.onRelayConnectionFailure = (url) => {
     try {
-      _relaysTouched.add(url);
+      _noteDialFailed(url);
     } catch (e) {
     }
   };
+  try {
+    const _ensure = pool.ensureRelay.bind(pool);
+    pool.ensureRelay = function(url, params) {
+      return Promise.resolve(_ensure(url, params)).then((r) => {
+        try {
+          if (r) {
+            const k = _relayKey2(url);
+            _watchSocket(k, r);
+            if (_subbedOn.get(k) !== r && _returnAnnounced.get(k) !== r) {
+              _clearanceSent.clear();
+              _announceReturn(k, r);
+            }
+          }
+        } catch (e) {
+        }
+        return r;
+      }, (err2) => {
+        try {
+          _noteDialFailed(url);
+        } catch (e) {
+        }
+        throw err2;
+      });
+    };
+  } catch (e) {
+  }
   function _b64ToU8(base642) {
     const pad2 = "=".repeat((4 - base642.length % 4) % 4);
     const s = (base642 + pad2).replace(/-/g, "+").replace(/_/g, "/");
@@ -16600,7 +16694,7 @@ zoo`.split("\n");
   }
   var _keyReadWaiting = /* @__PURE__ */ new Map();
   function _openKeyRead(cp, filters, onevent, onSettled, kind) {
-    const st = { stopped: false, gen: 0, subs: [], timer: null, tries: 0 };
+    const st = { stopped: false, gen: 0, subs: [], timer: null, tries: 0, since: 0 };
     const stopSubs = () => {
       for (const s of st.subs) {
         s.tok.closed = true;
@@ -16620,7 +16714,8 @@ zoo`.split("\n");
       const urls = relays();
       const epoch = _keyReadEpoch, at = Date.now();
       const answers = /* @__PURE__ */ new Map();
-      if (kind) _keyReadWaiting.set(kind, { cp, epoch, urls: urls.slice(), answers, settled: false });
+      if (!st.since) st.since = Date.now();
+      if (kind) _keyReadWaiting.set(kind, { cp, epoch, urls: urls.slice(), answers, settled: false, since: st.since });
       const live = () => !st.stopped && gen === st.gen && epoch === _keyReadEpoch && cp === (actingChurch || pub);
       const retry = () => {
         if (!live()) return;
@@ -16632,6 +16727,7 @@ zoo`.split("\n");
         const v = [...answers.values()];
         if (v.every((x) => x === true)) {
           st.tries = 0;
+          st.since = 0;
           const w = kind && _keyReadWaiting.get(kind);
           if (w && w.answers === answers) w.settled = true;
           onSettled();
@@ -16684,9 +16780,11 @@ zoo`.split("\n");
       stopSubs();
     };
   }
+  var _KEY_WAIT_NOTE_MS = 8e3;
   function _keyWaitNote(kind) {
     const w = _keyReadWaiting.get(kind);
     if (!w || w.settled || w.epoch !== _keyReadEpoch || w.cp !== (actingChurch || pub)) return "";
+    if (!w.since || Date.now() - w.since < _KEY_WAIT_NOTE_MS) return "";
     const hosts = w.urls.filter((u) => w.answers.get(u) !== true).map((u) => {
       try {
         return new URL(u).host;
@@ -16708,6 +16806,22 @@ zoo`.split("\n");
     _noPhoto = pubSet(list);
   };
   var _localBlocked = /* @__PURE__ */ new Set();
+  var _localBlockedAt = 0;
+  var BLOCKED_LAST_LS = "trinityone.steward.blockedlast.";
+  function _blockedLastSet(cp) {
+    try {
+      const l = JSON.parse(lsGet(BLOCKED_LAST_LS + cp) || "[]");
+      return new Set((Array.isArray(l) ? l : []).map((p) => String(p).toLowerCase()));
+    } catch (e) {
+      return /* @__PURE__ */ new Set();
+    }
+  }
+  function _noteBlockedList(cp, epoch, list, at) {
+    if (!_stillOn(cp, epoch) || (at || 0) < _localBlockedAt) return;
+    _localBlocked = new Set((list || []).map((p) => String(p).toLowerCase()));
+    _localBlockedAt = at || 0;
+    lsSet(BLOCKED_LAST_LS + cp, JSON.stringify([..._localBlocked]));
+  }
   var EVENT_POLICIES = ["leaders", "stewards", "everyone"];
   var _nameKeyRing = [];
   var _nameKeyAt = 0;
@@ -16817,6 +16931,8 @@ zoo`.split("\n");
     window.Steward.pubkey = pub;
     window.Steward.npub = npubEncode(pub);
     window.Steward.churchPub = pub;
+    _localBlocked = _blockedLastSet(pub);
+    _localBlockedAt = 0;
     try {
       _loadBoxHosts();
       _refreshBoxHostsUs();
@@ -16845,7 +16961,8 @@ zoo`.split("\n");
     _nameKeyDocKeys = null;
     _nameKeyChecked = false;
     _nameKeyAt = 0;
-    _localBlocked = /* @__PURE__ */ new Set();
+    _localBlocked = _blockedLastSet(actingChurch || pub);
+    _localBlockedAt = 0;
     _applyNoPhotoList([]);
     _careKeyHex = null;
     _careKeyRing = [];
@@ -19489,7 +19606,7 @@ zoo`.split("\n");
       if (!sk || !pub) return false;
       const pub0 = pub, ep0 = _keyReadEpoch, sk0 = sk;
       if (!_isRelayAuthed()) return false;
-      if (!_mediaKeyHex) return false;
+      if (!_mediaKeyHex) return _mediaKeyChecked && !_mediaKeyDocKeys ? { rotated: false, reason: "no sermon key yet" } : false;
       _mediaKeyVer++;
       const fresh = _hex(crypto.getRandomValues(new Uint8Array(32)));
       const full = [fresh, ..._mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex]].slice(0, 50);
@@ -20548,32 +20665,53 @@ zoo`.split("\n");
     // ---- moderation: the church's blocklist (banned member pubkeys). The relay rejects their writes
     // and withholds their existing events. Replaceable doc d=blocked:<churchpub>. ----
     subscribeBlocked(onBlocked) {
-      {
-        const _tag = _listTag(), _deliver = onBlocked;
-        onBlocked = (list) => _deliver(_stampFor(list, _tag));
-      }
+      const _tag = _listTag(), _deliver = onBlocked, cp0 = pub;
+      let genuine = false;
+      onBlocked = (list) => _deliver(genuine ? _stampFor(list, _tag) : list);
       let cur = [], latest = 0;
+      const take = (e) => {
+        const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+        if (d !== BLOCKED_D + cp0) return false;
+        if (_authFuture(e) || !_byChurch(e)) return false;
+        if (e.created_at < latest) return false;
+        latest = e.created_at;
+        try {
+          cur = JSON.parse(e.content).pubkeys || [];
+        } catch {
+          cur = [];
+        }
+        if (genuine) _noteBlockedList(cp0, _tag.epoch, cur, latest);
+        return true;
+      };
       const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
         onevent(e) {
-          const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
-          if (d !== BLOCKED_D + pub) return;
-          if (_authFuture(e) || !_byChurch(e)) return;
-          if (e.created_at < latest) return;
-          latest = e.created_at;
-          try {
-            cur = JSON.parse(e.content).pubkeys || [];
-          } catch {
-            cur = [];
-          }
-          onBlocked(cur);
+          if (take(e)) onBlocked(cur);
         },
         oneose() {
           onBlocked(cur);
         }
       });
+      const stopRead = _openKeyRead(
+        cp0,
+        [{ kinds: [30078], authors: [cp0], "#d": [BLOCKED_D + cp0] }],
+        (e) => {
+          if (take(e)) onBlocked(cur);
+        },
+        () => {
+          if (genuine) return;
+          genuine = true;
+          cur = [...cur];
+          _noteBlockedList(cp0, _tag.epoch, cur, latest);
+          onBlocked(cur);
+        }
+      );
       return () => {
         try {
           sub.close();
+        } catch {
+        }
+        try {
+          stopRead();
         } catch {
         }
       };
@@ -20583,8 +20721,10 @@ zoo`.split("\n");
       if (!sk) return Promise.resolve(null);
       const list = [...new Set((pubkeys || []).filter(Boolean))];
       _localBlocked = new Set(list.map((p) => String(p).toLowerCase()));
+      _localBlockedAt = now();
+      lsSet(BLOCKED_LAST_LS + (actingChurch || pub), JSON.stringify([..._localBlocked]));
       const content = JSON.stringify({ pubkeys: list });
-      return _publishToRelays(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", BLOCKED_D + pub], ["t", NET]], content }), sk));
+      return _landed("blocked list", _publishToRelays(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", BLOCKED_D + pub], ["t", NET]], content }), sk)));
     },
     // ---- safeguarding: two church-signed lists the relay reads to enforce child protection ----
     // minors:<churchpub> = members marked as children; approved:<churchpub> = adults cleared to contact youth
@@ -20682,7 +20822,7 @@ zoo`.split("\n");
       _requireTrustedView("photo settings");
       if (!sk) return Promise.resolve(null);
       const list = [...new Set((pubkeys || []).filter(Boolean))];
-      return _skewGate(() => publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", NOPHOTO_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list }) }, sk)));
+      return _landed("photo settings", _skewGate(() => publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", NOPHOTO_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list }) }, sk))));
     },
     // Tell ONE member what their own safeguarding status is, sealed to them. This exists so a member's app can
     // know whether THEY are a child or a cleared adult without the church publishing a cleartext list of its
@@ -21041,7 +21181,7 @@ zoo`.split("\n");
       _requireTrustedView("list of children");
       if (!sk) return Promise.resolve(null);
       const list = [...new Set((pubkeys || []).filter(Boolean))];
-      return _skewGate(() => _publishToRelays(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", MINORS_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list }) }), sk)));
+      return _landed("list of children", _skewGate(() => _publishToRelays(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", MINORS_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list }) }), sk))));
     },
     // `opts.listKnown` — has the CALLER actually read this church's cleared list? The console has that answer
     // (its safeguarding subscription reports `loaded`) and this module does not: an empty remembered list means
@@ -21066,7 +21206,7 @@ zoo`.split("\n");
         }
         cleared[p] = knownPrev && !knownPrev.has(p) ? { by: pub, at: now() } : { by: "", at: 0 };
       }
-      return _skewGate(() => _publishToRelays(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", APPROVED_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list, cleared }) }), sk)));
+      return _landed("cleared-adults list", _skewGate(() => _publishToRelays(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", APPROVED_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list, cleared }) }), sk))));
     },
     // ---- safeguarding v2: parent↔child links. Parents publish a guardian-link REQUEST (guardreq:<childpub>,
     // p-tagged to us); the steward confirms it into the church-signed GUARDIANS map (guardians:<churchpub>),
@@ -21142,7 +21282,7 @@ zoo`.split("\n");
       }
       const payload = { links: clean5 };
       if (closed && Object.keys(closed).length) payload.closed = closed;
-      return _skewGate(() => _publishToRelays(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", GUARDIANS_D + pub], ["t", NET]], content: JSON.stringify(payload) }), sk)));
+      return _landed("parent links", _skewGate(() => _publishToRelays(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", GUARDIANS_D + pub], ["t", NET]], content: JSON.stringify(payload) }), sk))));
     },
     // safeguarding v2: tell a STEWARD-LINKED parent (who never set the child up on their own device, so has no
     // local record) that they're now a guardian — otherwise the child never appears in their app. Church-signed,
@@ -21416,7 +21556,7 @@ zoo`.split("\n");
         }
         return out;
       });
-      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", RESEAT_D + pub], ["t", NET]], content: JSON.stringify({ pairs: clean5 }) }));
+      return _landed("re-seat map", publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", RESEAT_D + pub], ["t", NET]], content: JSON.stringify({ pairs: clean5 }) })));
     },
     // RECONNECT A MEMBER ONTO A NEW KEY, as one action. Lives here rather than in the modal because a re-seat
     // is not two writes — it is a seat MOVING, and everything attached to the seat has to move with it. Every
@@ -21574,7 +21714,7 @@ zoo`.split("\n");
       _requireTrustedView("approved-members list");
       if (!sk) return Promise.resolve(null);
       const list = [...new Set((pubkeys || []).filter(Boolean))];
-      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", ADMITTED_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list }) }));
+      return _landed("approved-members list", publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", ADMITTED_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list }) })));
     },
     // ---- delegated stewards: the OWNER (this church key) signs a roster of co-steward pubkeys. The relay
     // grants those keys day-to-day church powers (but never the roster/blocklist/relay-policy — owner-only),
@@ -21667,7 +21807,7 @@ zoo`.split("\n");
       } else if (_stewardNamesCt) {
         doc.n = _stewardNamesCt;
       }
-      return _skewGate(() => publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", STEWARDS_D + pub], ["t", NET]], content: JSON.stringify(doc) }), sk)));
+      return _landed("steward roster", _skewGate(() => publish(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", STEWARDS_D + pub], ["t", NET]], content: JSON.stringify(doc) }), sk))));
     },
     // What this church has granted each steward. Empty array = nothing; ABSENT = everything (an unscoped
     // steward, which is every steward that existed before this feature).
@@ -22125,7 +22265,7 @@ zoo`.split("\n");
         const _tag = _listTag(), _deliver = onGroups;
         onGroups = (list) => _deliver(_stampFor(list, _tag));
       }
-      const CACHE_KEY = "trinityone.steward.groups." + (pub || "");
+      const CACHE_KEY = "trinityone.steward.groups.v2." + (pub || "");
       const byId = /* @__PURE__ */ new Map();
       const versions = /* @__PURE__ */ new Map();
       const emit = () => {
@@ -22196,7 +22336,7 @@ zoo`.split("\n");
       return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", PLAN_D + id], ["t", NET], ["deleted", "1"]], content: "" }));
     },
     subscribePlans(onPlans) {
-      const CACHE_KEY = "trinityone.steward.plans." + (pub || "");
+      const CACHE_KEY = "trinityone.steward.plans.v2." + (pub || "");
       const byId = /* @__PURE__ */ new Map();
       const versions = /* @__PURE__ */ new Map();
       const emit = () => {
@@ -22260,7 +22400,7 @@ zoo`.split("\n");
       return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", DEVO_D + id], ["t", NET], ["deleted", "1"]], content: "" }));
     },
     subscribeDevotionals(onDevos) {
-      const CACHE_KEY = "trinityone.steward.devos." + (pub || "");
+      const CACHE_KEY = "trinityone.steward.devos.v2." + (pub || "");
       const byId = /* @__PURE__ */ new Map();
       const versions = /* @__PURE__ */ new Map();
       const ord = (d) => typeof d.order === "number" ? d.order : Infinity;
@@ -22311,7 +22451,7 @@ zoo`.split("\n");
     // ════════════ SERVING / ROTA / CALENDAR (the coverage board) ════════════
     // A generic addressable-doc subscription over the church's own kind-30078 with a given d-prefix.
     _subAddr(prefix, map, onItems) {
-      const CACHE_KEY = "trinityone.steward.addr." + prefix + (pub || "");
+      const CACHE_KEY = "trinityone.steward.addr.v2." + prefix + (pub || "");
       const byId = /* @__PURE__ */ new Map();
       const versions = /* @__PURE__ */ new Map();
       try {
@@ -23849,6 +23989,7 @@ zoo`.split("\n");
             const p = JSON.parse(e.content);
             lastProfile = { ...lastProfile, ...p };
             _profileLoaded = true;
+            if (e.pubkey === churchPub) _rememberOwnName(p && p.name);
             onProfile(p);
             try {
               window.dispatchEvent(new CustomEvent("steward-profile", { detail: lastProfile }));
@@ -23944,7 +24085,9 @@ zoo`.split("\n");
     identities() {
       const held = /* @__PURE__ */ new Set([churchPub, ...netKeys().map((r) => r.pub)]);
       return [
-        { kind: "church", pub: churchPub, npub: churchPub ? npubEncode(churchPub) : "" },
+        // `name`: the console's OWN church, as last read from its own kind-0 (_ownChurchName) — so the switcher can
+        // name it while the console is acting for somebody else. '' when this device has never read it.
+        { kind: "church", pub: churchPub, npub: churchPub ? npubEncode(churchPub) : "", name: _ownChurchName() },
         ...netKeys().map((r) => ({ kind: "network", pub: r.pub, npub: npubEncode(r.pub), name: r.name || "Network" })),
         ...[...stewardedChurches.entries()].filter(([cp]) => !held.has(cp)).map(([cp, m]) => ({ kind: "steward", pub: cp, npub: npubEncode(cp), name: m && m.name || "Church" }))
       ];
@@ -24002,7 +24145,8 @@ zoo`.split("\n");
       _nameKeyDocKeys = null;
       _nameKeyChecked = false;
       _nameKeyAt = 0;
-      _localBlocked = /* @__PURE__ */ new Set();
+      _localBlocked = _blockedLastSet(actingChurch || pub);
+      _localBlockedAt = 0;
       _applyNoPhotoList([]);
       for (const k of Object.keys(CAP_KEYS)) _capState[k] = { ring: [], docKeys: null, rev: 1, at: 0, checked: false };
       _checkinMigrated = "";

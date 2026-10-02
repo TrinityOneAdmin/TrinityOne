@@ -74,9 +74,11 @@ const SCH_NO_KEY = 'Not saved — your church’s key hasn’t arrived yet. Give
 // …AND WHEN A RELAY IS WHAT IS HOLDING THE KEY BACK, SAY WHICH (audit of 3bc8905). A church's first name key is
 // minted only once every relay of the church has answered, so a proved relay that is down holds it back — for as
 // long as it stays down — and "give it a moment" is not true. Steward.keyWaitNote names it; short on purpose.
+// …ONLY WHEN THE KEY IS WHAT IS MISSING (audit of 5276297, LOW): a save can come back empty for other reasons, and a
+// relay's name on those would send the steward after the wrong thing.
 function schNoKey() {
   let why = '';
-  try { why = (window.Steward && window.Steward.keyWaitNote) ? window.Steward.keyWaitNote('name') : ''; } catch (e) { why = ''; }
+  try { const S = window.Steward; why = (S && S.keyWaitNote && S.nameKeyReady && !S.nameKeyReady()) ? S.keyWaitNote('name') : ''; } catch (e) { why = ''; }
   return why ? 'Not saved — your church’s key hasn’t arrived: ' + why + '.' : SCH_NO_KEY;
 }
 // THE LAST DATE THIS PRODUCT CAN WRITE DOWN. A year past 9999 leaves ISO 8601's four-digit form: Date's own

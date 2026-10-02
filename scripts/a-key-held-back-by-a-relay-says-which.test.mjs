@@ -21,8 +21,8 @@ const ROOT = new URL('../', import.meta.url).pathname;
 const SCHEDULE = readFileSync(join(ROOT, 'app/stew-schedule.jsx'), 'utf8');
 const MEALS = readFileSync(join(ROOT, 'vendor/steward-meals.js'), 'utf8');
 
-function schNoKey(note) {
-  const window = { Steward: { keyWaitNote: (kind) => (kind === 'name' ? note : 'WRONG KIND ASKED') } };
+function schNoKey(note, keyReady = false) {
+  const window = { Steward: { keyWaitNote: (kind) => (kind === 'name' ? note : 'WRONG KIND ASKED'), nameKeyReady: () => keyReady } };
   return new Function('window', `${stmt(SCHEDULE, "const SCH_NO_KEY = ")}\n${fnBody(SCHEDULE, 'function schNoKey() {', 'schNoKey in app/stew-schedule.jsx')}\nreturn schNoKey();`)(window);
 }
 
@@ -50,4 +50,11 @@ test('the care screen\'s refusal names the relay holding the care key back', asy
   assert.match(String(msg), /box\.example\.org isn’t answering/, 'THE CARE SCREEN SAYS ONLY "GIVE IT A MOMENT" while a relay that is down holds back the church\'s first care key: ' + msg);
   assert.equal(await careError(''), 'Still connecting to your church — give it a moment and try again.', 'CONTROL: with no relay to name, the message is the one it always was');
   assert.match(String(await careError('box.example.org isn’t answering', true)), /care key hasn’t reached this device/, 'CONTROL: once the read has settled the other message stands');
+});
+
+// …AND ONLY WHEN THE KEY IS WHAT IS MISSING (audit of 5276297, LOW): a save can come back empty for other reasons, and
+// a relay's name appended to those sends the steward after the wrong thing.
+test('the schedule "not saved" names a relay ONLY when the name key really has not arrived', () => {
+  assert.equal(schNoKey('box.example.org isn’t answering', true), 'Not saved — your church’s key hasn’t arrived yet. Give it a moment and try again.',
+    'A RELAY WAS NAMED ON A SAVE THAT FAILED FOR ANOTHER REASON — the church\'s name key is here');
 });

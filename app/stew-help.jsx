@@ -54,15 +54,14 @@ function StewardHelp({ onClose, initialId }) {
   const ra = window.useReadAloud ? window.useReadAloud() : { supported: false, speaking: false, speak() {}, stop() {} };
   const articles = stewHelpArticles();
   const article = openId ? articles.find(a => a.id === openId) : null;
-  // Hardware back on the phone closes the dialog (Capacitor App + popstate) — the InvitePosterModal pattern,
-  // so a steward in the APK is never trapped behind a guide with no way out but the X.
+  // Hardware back on the phone closes the dialog — the console's dialog stack (stew-modal.jsx _stewBackSync,
+  // through useStewDialog above) — and the browser's Back does too (popstate), so a steward is never trapped
+  // behind a guide with no way out but the X.
   React.useEffect(() => {
     try { history.pushState({ stewhelp: 1 }, ''); } catch (e) {}
     const onPop = () => onClose();
     window.addEventListener('popstate', onPop);
-    let sub;
-    try { const P = window.Capacitor && window.Capacitor.Plugins; if (P && P.App && P.App.addListener) sub = P.App.addListener('backButton', () => onClose()); } catch (e) {}
-    return () => { window.removeEventListener('popstate', onPop); try { sub && sub.remove && sub.remove(); } catch (e) {} };
+    return () => { window.removeEventListener('popstate', onPop); };
   }, []);   // eslint-disable-line react-hooks/exhaustive-deps
   const back = () => { ra.stop(); setOpenId(null); };
   const Illo = window.HelpIllo;

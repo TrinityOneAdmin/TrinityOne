@@ -47,11 +47,42 @@ window.useStewardIdv = useStewardIdv;
 const _connListeners = new Set();
 let _connWired = false, _connLast = 0, _connBusy = false;
 const _CONN_FLOOR_MS = 20000;    // don't hammer the probe on rapid foreground/visibility churn
+const _CONN_FLOOR_BACK_MS = 3000;   // …but a socket already back is re-subscribed sooner (see _maybeBumpConn)
 function _stewardHealthy() { try { return !window.Steward || !window.Steward.relaysHealthy || window.Steward.relaysHealthy(); } catch (e) { return true; } }
+// A CALL THE FLOOR TURNS AWAY IS DEFERRED, NOT DROPPED, AND A PROBE THAT FOUND NOTHING IS ASKED AGAIN — a few
+// times (device round 2026-10-01). Foregrounding the console on the Oppo left it unable to approve anyone for
+// 20–70 s: the first look came before the radio and the relay were back (or before the console had even seen
+// its sockets close), and every later signal inside the 20-second floor was thrown away, so the next look was
+// the 90-second beat. Bounded per episode (`_connMisses`, reset by each new signal and by health): a relay that
+// is never coming back still costs one connect attempt per beat after the first few, as the note above requires.
+let _connRetryT = null, _connRetryAt = 0, _connMisses = 0;
+const _CONN_RETRIES = 3;
+let _connNativeFg = null;   // Capacitor's appStateChange, when it has spoken: the WebView's own visibility is unreliable
+function _connFg() { return _connNativeFg !== null ? _connNativeFg : (typeof document === 'undefined' || document.visibilityState === 'visible'); }
+function _connLater(ms) {
+  const at = Date.now() + Math.max(250, ms);
+  // ONE PENDING AT A TIME — THE SOONER ONE. A socket back seconds after a failed probe asks for a look in ~3 s; the
+  // probe's own retry was 20 s away, and keeping that one instead is the 20-second wait this exists to remove.
+  if (_connRetryT && _connRetryAt <= at) return;
+  if (!_connRetryT && _connMisses >= _CONN_RETRIES) return;   // …and a few per episode
+  if (_connRetryT) { try { clearTimeout(_connRetryT); } catch (e) {} } else _connMisses++;
+  _connRetryAt = at;
+  _connRetryT = setTimeout(() => { _connRetryT = null; if (_connFg()) _maybeBumpConn(); }, at - Date.now());
+}
+// a NEW reason to look — a resume, a drop, a socket back, the network back — starts a fresh episode
+function _connKick() { _connMisses = 0; if (_connFg()) _maybeBumpConn(); }
 async function _maybeBumpConn() {
   if (_connBusy) return;
-  if (_stewardHealthy()) return;                                  // nothing we depend on is missing
-  if (_connLast && Date.now() - _connLast < _CONN_FLOOR_MS) return;
+  if (_stewardHealthy()) { _connMisses = 0; return; }             // nothing we depend on is missing
+  // A SOCKET IS ALREADY BACK (REPLACED, below): re-subscribing fixes it and then stops, so the 20-second floor —
+  // which is there to keep foreground churn from hammering the PROBE — does not hold it up; a 3-second one keeps a
+  // flapping link from re-querying the church more often than that. Device round 2026-10-01: the beat's probe
+  // failed with the radio still off, the radio came back a few seconds later, and the socket a publish opened
+  // then waited out the rest of the floor (20.6 s measured) before anything re-subscribed or logged in.
+  let replaced = false;
+  try { replaced = !!window.Steward.relaysReplaced(); } catch (e) {}
+  const floor = replaced ? _CONN_FLOOR_BACK_MS : _CONN_FLOOR_MS;
+  if (_connLast && Date.now() - _connLast < floor) { _connLater(_connLast + floor - Date.now()); return; }
   _connBusy = true;
   _connLast = Date.now();
   try {
@@ -65,8 +96,6 @@ async function _maybeBumpConn() {
     //              so there is no storm to guard against.
     //   DOWN     — the relay is unreachable. Probe it cheaply and re-subscribe ONLY if it actually came back.
     //              A relay that is never coming back must cost one connect attempt per heartbeat, no more.
-    let replaced = false;
-    try { replaced = !!window.Steward.relaysReplaced(); } catch (e) {}
     let back = false;
     if (!replaced) {
       // BOUNDED. _connBusy is the re-entry guard for the console's ONLY reconnect ticker — 90s heartbeat,
@@ -88,15 +117,29 @@ async function _maybeBumpConn() {
       // Record which sockets the rebuilt subscriptions live on. Only this counts — a bare successful connect
       // does not, because one-shot reads produce those too and leave nothing listening (AUDIT-5).
       try { window.Steward.markResubscribed(); } catch (e) {}
-    }
+      _connMisses = 0;
+    } else _connLater(_CONN_FLOOR_MS);   // nothing came back yet: look again soon
   } finally { _connBusy = false; }
 }
 function _wireStewardConn() {
   if (_connWired || typeof document === 'undefined') return; _connWired = true;
-  const onVis = () => { if (document.visibilityState === 'visible' && Date.now() - _connLast > 2500) _maybeBumpConn(); };
+  const onVis = () => { if (document.visibilityState === 'visible' && Date.now() - _connLast > 2500) _connKick(); };
   document.addEventListener('visibilitychange', onVis);
-  window.addEventListener('online', _maybeBumpConn);
+  window.addEventListener('online', _connKick);
   window.addEventListener('focus', onVis);
+  // A FROZEN PAGE THAT RESUMES (Page Lifecycle), a page restored from the back-forward cache, and the native
+  // foreground signal — the WebView's visibilitychange is not reliable on Android (app.jsx says the same and
+  // listens for appStateChange too).
+  document.addEventListener('resume', _connKick);
+  window.addEventListener('pageshow', _connKick);
+  try {
+    const AppP = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App;
+    if (AppP && AppP.addListener) AppP.addListener('appStateChange', (st) => { _connNativeFg = !!(st && st.isActive); if (_connNativeFg) _connKick(); });
+  } catch (e) {}
+  // THE ENGINE SAYS WHEN A SOCKET COMES BACK OR DROPS (src/steward.src.js, _watchSocket / the ensureRelay door),
+  // whichever path saw it. A beat later, so the pool has finished its own bookkeeping for that socket.
+  window.addEventListener('steward-relay-dropped', () => setTimeout(_connKick, 1500));
+  window.addEventListener('steward-relay-returned', () => setTimeout(_connKick, 500));
   setInterval(() => { if (document.visibilityState === 'visible') _maybeBumpConn(); }, 90000);   // insurance for a silently-dropped socket that no foreground event caught
 }
 function useStewardConn() {

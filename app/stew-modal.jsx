@@ -10,6 +10,32 @@
 // `active` defaults true (for the common conditionally-mounted `{cond && <Modal/>}` pattern); pass the open flag
 // for a modal that stays mounted and toggles an `open` prop.
 const _stewBack = [];
+// ANDROID BACK CLOSES THE TOPMOST DIALOG — the member app's way (app/ui.jsx useBackLayer: one stack, one
+// handler), and the same stack Escape already uses. Device round 2026-10-01 (Oppo): CkModal dialogs ("Parents
+// of …") and the schedule's service dialog ignored Back, because only a handful of console dialogs had wired
+// their own Capacitor listener, one by one. Now every dialog that comes through useStewDialog has it.
+// ONE native listener, present only WHILE A DIALOG IS OPEN: with none open, Back does what it always did. And
+// one, not one per dialog, because Capacitor calls EVERY backButton listener — a dialog over a dialog that each
+// held its own closed both on one press. The dialogs that used to register their own (StewSectionsMenu,
+// StewMemberSheet, StewardHelp) no longer do; InvitePosterModal and the printable overlay are not on this
+// stack and keep theirs.
+let _stewBackSub = null, _stewBackWait = false;
+function _stewBackSync() {
+  try {
+    const AppP = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App;
+    if (_stewBack.length && !_stewBackSub && !_stewBackWait && AppP && AppP.addListener) {
+      const h = AppP.addListener('backButton', () => { const top = _stewBack[_stewBack.length - 1]; if (top) { try { top.close(); } catch (e) {} } });
+      if (h && typeof h.remove === 'function') _stewBackSub = h;   // Capacitor's handle (also a promise on some versions)
+      else if (h && typeof h.then === 'function') {
+        _stewBackWait = true;
+        h.then((hh) => { _stewBackWait = false; _stewBackSub = hh || null; _stewBackSync(); }, () => { _stewBackWait = false; });
+      }
+    } else if (!_stewBack.length && _stewBackSub) {
+      const h = _stewBackSub; _stewBackSub = null;
+      try { h.remove(); } catch (e) {}
+    }
+  } catch (e) {}
+}
 if (typeof document !== 'undefined' && !window.__stewEscWired) {
   window.__stewEscWired = true;
   document.addEventListener('keydown', (e) => {
@@ -73,6 +99,7 @@ function useStewDialog(onClose, active) {
     if (!on) return;
     const entry = { close: () => { try { closeRef.current && closeRef.current(); } catch (e) {} } };
     _stewBack.push(entry);
+    _stewBackSync();
     const prevFocus = (typeof document !== 'undefined') ? document.activeElement : null;
     const t = setTimeout(() => { const p = panelRef.current; if (p && !p.contains(document.activeElement)) { try { p.focus(); } catch (e) {} } }, 60);
     const onKey = (e) => {
@@ -89,6 +116,7 @@ function useStewDialog(onClose, active) {
       clearTimeout(t);
       if (p) p.removeEventListener('keydown', onKey);
       const i = _stewBack.indexOf(entry); if (i >= 0) _stewBack.splice(i, 1);
+      _stewBackSync();
       if (prevFocus && prevFocus.focus) { try { prevFocus.focus(); } catch (e) {} }
     };
   }, [on]);
