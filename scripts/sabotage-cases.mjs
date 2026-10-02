@@ -1730,8 +1730,10 @@ export const CASES = [
   {
     name: 'new church: the console no longer asks its relay to sign it in',
     file: 'src/steward.src.js',
-    find: `      try { if (r) _loginSoon(url, r); } catch (e) {}   // a socket that is not asked to sign in within a moment is asked — see _loginSoon`,
-    replace: ``,
+    // _loginSoon ITSELF, not one of its two callers (the socket door, and _noteRelaySet's re-arm for a relay that
+    // is admitted after its socket was up): either caller alone still sends the question.
+    find: `    if (!inst || _loginWatched.has(inst)) return;`,
+    replace: `    return;`,
     test: 'scripts/a-new-church-signs-in-on-its-own.test.mjs',
   },
   {
@@ -1754,5 +1756,22 @@ export const CASES = [
     find: `typeof d === 'string' && KEY_ENVELOPE_D.some(p => d.startsWith(p))`,
     replace: `typeof d === 'string'`,
     test: 'scripts/relay-challenges-a-key-read.test.mjs',
+  },
+  {
+    name: 'new church: a relay admitted after the streams opened no longer says re-subscribe',
+    file: 'app/steward-root.jsx',
+    // the console still signs in (A and B are untouched) and still holds no keys: its lists were never opened
+    find: `  return _connRelayUrls().some(u => !_connSeen.has(u));`,
+    replace: `  return false;`,
+    test: 'scripts/a-new-church-gets-its-keys-in-its-first-session.test.mjs',
+  },
+  {
+    name: 'new church: neither the console nor the relay asks for a sign-in (A and B removed together)',
+    file: 'src/steward.src.js',
+    // each alone leaves the other doing the job; together nothing provokes a challenge in a church with nothing private
+    find: `    if (!inst || _loginWatched.has(inst)) return;`,
+    replace: `    return;`,
+    also: [{ file: 'scripts/gateway.mjs', find: `if (wantsInvite || wantsSafeguard || wantsSafetyD || wantsKeyD) {`, replace: `if (wantsInvite || wantsSafeguard || wantsSafetyD) {` }],
+    test: 'scripts/a-new-church-gets-its-keys-in-its-first-session.test.mjs',
   },
 ];

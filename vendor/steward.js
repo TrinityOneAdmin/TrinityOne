@@ -16547,20 +16547,24 @@ zoo`.split("\n");
     }
   };
   var LOGIN_PROVOKE_MS = 1500;
+  var LOGIN_PROVOKE_TRIES = 8;
   var _loginWatched = /* @__PURE__ */ new WeakSet();
+  function _loginLater(url, inst, tries) {
+    const t = setTimeout(() => _loginCheck(url, inst, tries), LOGIN_PROVOKE_MS);
+    try {
+      if (t && typeof t.unref === "function") t.unref();
+    } catch (e) {
+    }
+  }
   function _loginSoon(url, inst) {
     try {
       if (!inst || _loginWatched.has(inst)) return;
       _loginWatched.add(inst);
-      const t = setTimeout(() => _loginCheck(url, inst), LOGIN_PROVOKE_MS);
-      try {
-        if (t && typeof t.unref === "function") t.unref();
-      } catch (e) {
-      }
+      _loginLater(url, inst, 0);
     } catch (e) {
     }
   }
-  function _loginCheck(url, inst) {
+  function _loginCheck(url, inst, tries) {
     try {
       const cp = actingChurch || pub;
       if (!sk || !cp) {
@@ -16570,7 +16574,8 @@ zoo`.split("\n");
       const k = _relayKey2(url);
       if (pool.relays.get(k) !== inst || inst.connected !== true) return;
       if (!relays().some((u) => _relayKey2(u) === k)) {
-        _loginWatched.delete(inst);
+        if ((tries || 0) < LOGIN_PROVOKE_TRIES) _loginLater(url, inst, (tries || 0) + 1);
+        else _loginWatched.delete(inst);
         return;
       }
       if (_authedRelays.get(k) === inst) return;

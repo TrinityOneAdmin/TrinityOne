@@ -22,7 +22,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { WebSocket } from 'ws';
-import { finalizeEvent, getPublicKey } from 'nostr-tools';
+import { finalizeEvent, getPublicKey, nip44 } from 'nostr-tools';
 import { privateKeyFromSeedWords } from 'nostr-tools/nip06';
 import * as H from './relay-network-harness.mjs';
 
@@ -62,6 +62,34 @@ export function rawReq(relay, filter) {
     });
     w.on('open', () => w.send(JSON.stringify(['REQ', 'q', filter])));
     w.on('error', (e) => { clearTimeout(timer); reject(e); });
+  });
+}
+
+// A MEMBER'S OWN PHONE, in miniature: a plain client signed in as `member` (a key from H.key()) that reads the
+// church's name-key envelope, unwraps its own copy, and tries to open one rota with the ring. Not a browser — it
+// is the member app's open path (nip44 unwrap with its own key, then the ring over the sealed {e}) and nothing
+// the member app adds on top. Resolves { gotEnvelope, gotRota, opened, assigned } where `assigned` says the opened
+// rota names this member.
+export function memberOpensRota(relay, member, churchPub, serviceId) {
+  return new Promise((resolve) => {
+    const w = new WebSocket(relay.wsUrl), st = { ring: null, rota: null, authed: false, envMissing: false };
+    const hex = (k) => Uint8Array.from(k.match(/../g).map(b => parseInt(b, 16)));
+    const fin = () => {
+      let opened = null;
+      if (st.ring && st.rota) { try { const ct = JSON.parse(st.rota.content).e; for (const k of st.ring) { try { opened = JSON.parse(nip44.v2.decrypt(ct, hex(k))); break; } catch {} } } catch {} }
+      return { gotEnvelope: !!st.ring, gotRota: !!st.rota, opened: !!opened, assigned: !!(opened && JSON.stringify(opened.assign || {}).includes(member.pub)) };
+    };
+    const timer = setTimeout(() => { try { w.close(); } catch {} resolve({ ...fin(), timeout: true }); }, 12000);
+    const done = () => { if (st.rota && (st.ring || st.envMissing)) { clearTimeout(timer); try { w.close(); } catch {} resolve(fin()); } };
+    w.on('message', (d) => {
+      let m; try { m = JSON.parse(d); } catch { return; }
+      if (m[0] === 'AUTH') w.send(JSON.stringify(['AUTH', finalizeEvent({ kind: 22242, created_at: Math.floor(Date.now() / 1000), tags: [['relay', relay.wsUrl], ['challenge', m[1]]], content: '' }, member.sk)]));
+      else if (m[0] === 'OK' && m[2] && !st.authed) { st.authed = true; w.send(JSON.stringify(['REQ', 'nk', { kinds: [30078], '#d': ['trinityone/namekey:' + churchPub] }])); w.send(JSON.stringify(['REQ', 'rt', { kinds: [30078], '#d': ['trinityone/rota:' + serviceId] }])); }
+      else if (m[0] === 'EVENT' && m[1] === 'nk') { try { const w1 = JSON.parse(m[2].content).keys[member.pub]; if (w1) st.ring = JSON.parse(nip44.v2.decrypt(w1, nip44.v2.utils.getConversationKey(member.sk, m[2].pubkey))); } catch {} done(); }
+      else if (m[0] === 'EVENT' && m[1] === 'rt') { st.rota = m[2]; done(); }
+      else if (m[0] === 'EOSE' && m[1] === 'nk') setTimeout(() => { if (!st.ring) { st.envMissing = true; done(); } }, 200);
+    });
+    w.on('open', () => w.send(JSON.stringify(['REQ', 'prov', { kinds: [30078], '#d': ['trinityone/safetycheck:' + churchPub] }])));   // the question every relay answers with a challenge
   });
 }
 
@@ -147,6 +175,8 @@ export async function openNewChurch({ gateway, wizard = 'skip', logger = true, n
     s.churchPub = await s.ev(`window.Steward.churchPub`);
     s.mnemonic = await s.ev(`window.Steward.exportMnemonic()`);
     s.tChurch = Date.now() - t0;
+    // what the console says when a write is refused (the console's own "not saved" channel), kept for the tests to read
+    await s.ev(`(() => { window.__blocked = []; window.addEventListener('steward-write-blocked', e => window.__blocked.push(e.detail)); return 1; })()`);
     if (logger) await startLogger(s);
     await s.ev(typeInto('input[aria-label="Church name"]', 'First Session Church'));
     await s.press(/^Continue$/);

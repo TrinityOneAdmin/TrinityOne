@@ -133,11 +133,24 @@ for (const c of cases) {
     bad++;
     continue;
   }
+  // `also` — OTHER edits applied TOGETHER with the first, for a guard whose fix has a twin: two independent
+  // fixes that each provoke the same outcome (a relay's challenge and the console's own question), where
+  // removing either one alone leaves the behaviour in place and so cannot turn any test red. Each edit has its
+  // own anchor check; one case, one verdict. Absent for every case that predates it.
+  const extras = [];
+  for (const x of (c.also || [])) {
+    const xt = join(SANDBOX, x.file), xo = readFileSync(xt, 'utf8'), xn = xo.split(x.find).length - 1;
+    if (xn !== (x.count || 1)) { rows.push([c.name, 'NO-ANCHOR', `also ${x.file}: expected ${x.count || 1} occurrence(s) of the anchor, found ${xn}`]); bad++; extras.length = 0; extras.push(null); break; }
+    extras.push({ x, xt, xo });
+  }
+  if (extras.includes(null)) continue;
   writeFileSync(target, original.split(c.find).join(c.replace));
-  const built = rebuild(c.file);
+  for (const e of extras) writeFileSync(e.xt, e.xo.split(e.x.find).join(e.x.replace));
+  const built = [c.file, ...extras.map(e => e.x.file)].every(f => rebuild(f));
   const broken = built ? runTest(c.test) : { passed: false };
   writeFileSync(target, original);
-  rebuild(c.file);   // leave the sandbox consistent for the next case
+  for (const e of extras) writeFileSync(e.xt, e.xo);
+  for (const f of new Set([c.file, ...extras.map(e => e.x.file)])) rebuild(f);   // leave the sandbox consistent for the next case
 
   if (broken.passed) {
     rows.push([c.name, 'BLIND GUARD', 'the fix was removed and the test still passed — nothing is watching this']);

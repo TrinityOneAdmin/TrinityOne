@@ -2132,23 +2132,30 @@ pool.onRelayConnectionFailure = (url) => { try { _noteDialFailed(url); } catch (
 // widens the set, or sends anything but a read filter naming this church. ONCE PER SOCKET: a reconnect is a new
 // socket and gets its own check; a relay that refuses the login is not asked again on the same socket.
 const LOGIN_PROVOKE_MS = 1500;
+const LOGIN_PROVOKE_TRIES = 8;         // how many times to look again for a relay that is not yet in the proved set (~12 s)
 const _loginWatched = new WeakSet();   // sockets (AbstractRelay instances) that have had, or are waiting for, their one check
+function _loginLater(url, inst, tries) {
+  const t = setTimeout(() => _loginCheck(url, inst, tries), LOGIN_PROVOKE_MS);
+  try { if (t && typeof t.unref === 'function') t.unref(); } catch (e) {}   // node (the tests): never hold a process open for this
+}
 function _loginSoon(url, inst) {
   try {
     if (!inst || _loginWatched.has(inst)) return;
     _loginWatched.add(inst);
-    const t = setTimeout(() => _loginCheck(url, inst), LOGIN_PROVOKE_MS);
-    try { if (t && typeof t.unref === 'function') t.unref(); } catch (e) {}   // node (the tests): never hold a process open for this
+    _loginLater(url, inst, 0);
   } catch (e) {}
 }
-function _loginCheck(url, inst) {
+function _loginCheck(url, inst, tries) {
   try {
     const cp = actingChurch || pub;
     // Locked, or not yet a church: nothing to sign with. Forget the socket so the next time it is seen it is checked.
     if (!sk || !cp) { _loginWatched.delete(inst); return; }
     const k = _relayKey(url);
     if (pool.relays.get(k) !== inst || inst.connected !== true) return;          // that socket has gone: a new one is its own check
-    if (!relays().some(u => _relayKey(u) === k)) { _loginWatched.delete(inst); return; }   // not (yet) one of this church's relays
+    // Not (yet) one of this church's relays: on a device that has never proved one the set is empty for the first
+    // moments (see relays()). Look again a few times — it is admitted within a second or two on a healthy link — and
+    // never send anything to a socket that is not in the set.
+    if (!relays().some(u => _relayKey(u) === k)) { if ((tries || 0) < LOGIN_PROVOKE_TRIES) _loginLater(url, inst, (tries || 0) + 1); else _loginWatched.delete(inst); return; }
     if (_authedRelays.get(k) === inst) return;                                    // it has already asked this socket to sign in
     let s = null, done = false;
     s = pool.subscribeMany([url], [{ kinds: [30078], '#d': [SAFETY_D + cp], limit: 1 }], {

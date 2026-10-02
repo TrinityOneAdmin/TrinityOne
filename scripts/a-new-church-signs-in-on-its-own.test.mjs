@@ -32,7 +32,7 @@
 // Skips itself when chromium is unavailable, like scripts/app-boots.test.mjs.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { CHROME, openNewChurch, gatewayWithoutKeyChallenge, rawReq } from './new-church-session.mjs';
+import { CHROME, H, openNewChurch, gatewayWithoutKeyChallenge, rawReq } from './new-church-session.mjs';
 
 let s, old;
 before(async () => {
@@ -44,21 +44,26 @@ after(() => { try { s && s.close(); } catch {} try { old && old.remove(); } catc
 const SKIP = !CHROME ? 'no chromium' : false;
 
 test('CONTROL: this is a relay that does not challenge a key read — an unauthenticated REQ for the name key gets no AUTH', { skip: SKIP, timeout: 60000 }, async () => {
-  const r = await rawReq(s.relay, { kinds: [30078], '#d': ['trinityone/namekey:' + s.churchPub] });
+  // asked about a church that does not exist on this box: the one case where nothing is withheld, so only the
+  // key-envelope clause could challenge it (asking about THIS church's name key would be withheld once the console
+  // had minted it, and a withheld read is challenged by an old relay too)
+  const r = await rawReq(s.relay, { kinds: [30078], '#d': ['trinityone/namekey:' + H.key().pub] });
   assert.equal(r.auth, false, 'the relay challenged a key read, so this is not the old relay and the rows below prove nothing about the console');
   assert.equal(r.events, 0);
 });
 
 test('a church with nothing private yet: the console is signed in on the Overview, without a tab opened', { skip: SKIP, timeout: 120000 }, async () => {
-  // precondition, so the row below proves something: nothing private exists that an ordinary read could match
-  const priv = s.rows(`kind = 30078 AND (dtag LIKE 'trinityone/member:%' OR dtag LIKE 'trinityone/group:%' OR dtag LIKE 'trinityone/groupkey:%' OR dtag LIKE 'trinityone/carekey:%' OR dtag LIKE 'trinityone/namekey:%')`);
-  assert.deepEqual(priv.map(r => r.d), [], 'the church already holds private documents, so a challenge could have come from the reads: this test would prove nothing');
   await s.waitFor(`window.Steward.relayAuthed()`, 15000, 'the console to be signed in');
   assert.equal(await s.ev(`window.Steward.relayAuthed()`), true);
   // …and it was the console's own question that did it: the first challenge the relay sent came AFTER a REQ for
   // the safety-check document of THIS church, and nothing before it provoked one.
   const challenge = s.firstFrame(/^AUTH CHALLENGE/);
   assert.ok(challenge, 'the relay never challenged the console');
+  // precondition, so this proves something: nothing private existed on the relay when the console was challenged
+  // (the raw logger, signed in as the church from the first moment, timestamps every document it is handed). Keys
+  // follow the sign-in, which is the point — they cannot be what provoked it.
+  const priv = s.events.filter(e => /^trinityone\/(member|group|groupkey|carekey|namekey|checkinkey|financekey|mediakey):/.test(e.d));
+  assert.ok(priv.every(e => e.t > challenge.t), 'a private document existed before the console was challenged, so a read could have provoked it: ' + JSON.stringify(priv.map(e => [e.d.slice(0, 24), e.t, challenge.t])));
   const ask = s.frames.find(f => f.dir === '>' && /^REQ .*safetycheck:/.test(f.f));
   assert.ok(ask, 'the console never sent the sign-in question, so the challenge below was not provoked by it: ' + JSON.stringify(s.frames.filter(f => /AUTH/.test(f.f))));
   assert.ok(ask.f.includes('safetycheck:' + s.churchPub), 'the sign-in question names another church');
