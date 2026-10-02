@@ -56,7 +56,7 @@ function engine() {
     _careRoster: new Set(), _CAREKEY_PENDING_TTL: 12000,
     _mediaKeyHex: null, _mediaKeyRing: [], _mediaKeyDocKeys: null, _mediaKeyChecked: false, _mediaKeyPushRefused: null, _mediaKeyVer: 0,
     _nameKeyRing: [], _nameKeyDocKeys: null, _nameKeyChecked: false, _nameKeyAt: 0, _nameKeyBusy: null,
-    _localBlocked: new Set(), _localBlockedAt: 0, toPubHex: (p) => p, _myOwnPub: () => A.pub,
+    _localBlocked: new Set(), _localBlockedAt: 0, _setBlockedSeq: 0, toPubHex: (p) => p, _myOwnPub: () => A.pub,
     // login state: `authed` for the whole set (the mint gates' _isRelayAuthed); per relay, the relay's OK
     authed: true, refused: new Set(), _isRelayAuthed: () => t.authed,
     _keyReadAuthedOn: (url) => t.authed && !t.refused.has(url),

@@ -16957,6 +16957,7 @@ zoo`.split("\n");
   };
   var _localBlocked = /* @__PURE__ */ new Set();
   var _localBlockedAt = 0;
+  var _setBlockedSeq = 0;
   var BLOCKED_LAST_LS = "trinityone.steward.blockedlast.";
   function _blockedLastSet(cp) {
     try {
@@ -20941,11 +20942,21 @@ zoo`.split("\n");
       const given = (pubkeys || []).filter(Boolean);
       const named = new Set(given.map((p) => String(p).toLowerCase()));
       const list = [.../* @__PURE__ */ new Set([...given, ...[..._localBlocked].filter((p) => !named.has(p) && !off.has(p))])];
-      _localBlocked = new Set(list.map((p) => String(p).toLowerCase()));
+      const low = list.map((p) => String(p).toLowerCase());
+      const cp0 = actingChurch || pub, seq = ++_setBlockedSeq;
+      const drop = [..._localBlocked].filter((p) => !low.includes(p));
+      _localBlocked = /* @__PURE__ */ new Set([..._localBlocked, ...low]);
       _localBlockedAt = now();
-      lsSet(BLOCKED_LAST_LS + (actingChurch || pub), JSON.stringify([..._localBlocked]));
+      lsSet(BLOCKED_LAST_LS + cp0, JSON.stringify([..._localBlocked]));
       const content = JSON.stringify({ pubkeys: list });
-      return _landed("blocked list", _publishToRelays(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", BLOCKED_D + pub], ["t", NET]], content }), sk)));
+      const sent = _publishToRelays(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", BLOCKED_D + pub], ["t", NET]], content }), sk));
+      return _landed("blocked list", Promise.resolve(sent).then((ok) => {
+        if (ok && drop.length && seq === _setBlockedSeq && (actingChurch || pub) === cp0) {
+          for (const p of drop) _localBlocked.delete(p);
+          lsSet(BLOCKED_LAST_LS + cp0, JSON.stringify([..._localBlocked]));
+        }
+        return ok;
+      }));
     },
     // ---- safeguarding: two church-signed lists the relay reads to enforce child protection ----
     // minors:<churchpub> = members marked as children; approved:<churchpub> = adults cleared to contact youth

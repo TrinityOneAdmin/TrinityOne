@@ -1,4 +1,4 @@
-// WHOM THIS CONSOLE REMEMBERS AS BLOCKED STAYS BLOCKED — THROUGH A BLOCK, AN UNBLOCK OF SOMEONE ELSE, AND A RECONNECT.
+// WHOM THIS CONSOLE REMEMBERS AS BLOCKED STAYS BLOCKED — THROUGH A FAILED UNBLOCK, A BLOCK, AN UNBLOCK OF SOMEONE ELSE, AND A RECONNECT.
 //   Run: node --test scripts/a-blocked-member-this-console-remembers-stays-blocked.test.mjs
 //
 // The owner's rule (2026-10-02, reference/DOMAIN.md): if this console remembers someone as blocked and the reachable
@@ -40,9 +40,9 @@ const BLOCKED_D = 'trinityone/blocked:';
 const WAIT = 30000;   // the stall: nothing in 50 s+; the fixed console keys a joiner within a couple of seconds
 
 let r1, r2, chr, ws, prof, evalIn, cdpSend, churchA = '', ASK = null, roomId = '';
-const B = H.key(), M = H.key(), MX = H.key(), M2 = H.key(), M3 = H.key(), M3N = H.key();
+const B = H.key(), M = H.key(), MX = H.key(), M2 = H.key(), M3 = H.key(), M3N = H.key(), M4 = H.key();
 const errors = [];
-const nm = (p) => p === churchA ? 'A' : p === M.pub ? 'M' : p === MX.pub ? 'MX' : p === M2.pub ? 'M2' : p === M3.pub ? 'M3' : p === M3N.pub ? 'M3N' : String(p).slice(0, 6);
+const nm = (p) => p === churchA ? 'A' : p === M.pub ? 'M' : p === MX.pub ? 'MX' : p === M2.pub ? 'M2' : p === M3.pub ? 'M3' : p === M3N.pub ? 'M3N' : p === M4.pub ? 'M4' : String(p).slice(0, 6);
 function held(relay, where, ...args) {
   const db = new DatabaseSync(join(relay.dataDir, 'relay.sqlite'), { readOnly: true });
   try { return db.prepare('SELECT raw FROM events WHERE kind = 30078 AND ' + where).all(...args).map(r => { try { return JSON.parse(String(r.raw || '')); } catch { return {}; } }); }
@@ -250,6 +250,46 @@ async function reconnectStolenOnScreen(who, to, others) {
   await press('/^Yes — this is /', 'the Reconnect confirmation');
 }
 
+
+// is MX listed under "See blocked" on the Members screen?
+async function shownBlocked(who) {
+  await press('/^Members$/', 'the Members section'); await sleep(1500);
+  await evalIn(`(() => { const b = [...document.querySelectorAll('button')].find(x => /^See blocked/.test((x.textContent || '').trim())); if (b) b.click(); return 1; })()`);
+  await sleep(800);
+  return await evalIn(`[...document.querySelectorAll('button')].some(b => /^Unblock /.test(b.getAttribute('aria-label') || '') && (b.parentElement && b.parentElement.textContent || '').includes(${JSON.stringify(who.pub.slice(0, 12))}))`);
+}
+
+// AN UNBLOCK THE RELAY NEVER TAKES (audit of c8e772a..5d4092b, LOW; from the audit's unblock-mx-write-fails probe). MX is
+// held as blocked only by this device. The steward Unblocks MX, and the write never reaches relay 1 (the page drops the
+// blocklist EVENT on its socket): the screen says "Couldn't unblock … they are still blocked. Try again". setBlocked had
+// already dropped MX from `_localBlocked` and the device copy before sending, so on the next reopen MX was gone from the
+// list and given the name and care keys, though nothing was saved. First, while relay 1 still does not list MX.
+test('an Unblock of MX that relay 1 never takes leaves MX blocked here — on the screen, on the device, and keyless after a reopen', { skip: SKIP, timeout: 300000 }, async () => {
+  assert.ok(await shownBlocked(MX), 'CONTROL: MX is not shown as blocked before the Unblock');
+  await evalIn(`(() => { window.__dropBlockedOn = ${r1.port}; window.__droppedN = 0; window.__env = []; return 1; })()`);
+  await unblockOnScreen(MX);
+  await sleep(16000);                                        // the publish waits for relay 1's answer, which never comes
+  assert.ok(await evalIn('window.__droppedN') > 0, 'CONTROL: the Unblock\'s blocklist EVENT never went towards relay 1, so nothing was dropped');
+  assert.ok(await evalIn(`/Couldn.t unblock/.test(document.body.innerText)`), 'CONTROL: the screen did not say the Unblock failed — this row is about one that did');
+  await evalIn(`(() => { window.__dropBlockedOn = 0; return 1; })()`);
+  assert.ok((await devCopy()).includes(MX.pub), 'A REFUSED UNBLOCK TOOK MX OFF THIS DEVICE\'S COPY — the next reopen forgets the block, though the screen said "they are still blocked" (audit of c8e772a..5d4092b)');
+  assert.ok(await shownBlocked(MX), 'a refused Unblock took MX off the Members screen\'s blocked list');
+  assert.ok(!(blockedOn(r1)[0] || []).includes(MX.pub), 'CONTROL: relay 1 lists MX — this row is about a block only this device holds');
+  // the console is closed and opened again; a new member joins, so the enrolment demonstrably runs
+  await evalIn(`(() => { location.href = 'about:blank'; return 1; })()`).catch(() => {});
+  await sleep(1500);
+  await cdpSend('Page.navigate', { url: r1.base + '/steward.html' });
+  await sleep(3000);
+  await unlock();
+  await sleep(10000);
+  await evalIn('(() => { window.__env = []; return 1; })()');
+  await H.publishAll(r1, [joinTo(churchA, M4)]);
+  assert.ok(await until(() => recipsOn(r1, NAMEKEY_D + churchA).includes(M4.pub), 45000), 'CONTROL: M4 was never given the name key — the enrolment did not run after the reopen, so this row proves nothing');
+  await sleep(3000);
+  assert.ok((await devCopy()).includes(MX.pub), 'after the reopen the device\'s copy no longer names MX');
+  assert.ok(await shownBlocked(MX), 'AFTER THE REOPEN MX IS GONE FROM THE BLOCKED LIST, though the Unblock was never saved');
+  await mxHasNoKey('after a refused Unblock and a reopen');
+});
 
 test('the Members screen shows MX as blocked, and a Block of M keeps MX on the list relay 1 holds — and MX is given no key', { skip: SKIP, timeout: 300000 }, async () => {
   await press('/^Members$/', 'the Members section'); await sleep(1500);

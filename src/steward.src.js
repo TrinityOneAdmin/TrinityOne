@@ -2546,6 +2546,7 @@ let _localBlocked = new Set();
 // church's own document, already readable by this console from its relay; this keeps a copy on the device that
 // runs the church, beside the member list it already keeps.
 let _localBlockedAt = 0;   // created_at of the list `_localBlocked` holds (0 = seeded from the device, or nothing)
+let _setBlockedSeq = 0;    // the newest setBlocked call: only its relay's yes may take anyone off `_localBlocked` (see setBlocked)
 const BLOCKED_LAST_LS = 'trinityone.steward.blockedlast.';
 function _blockedLastSet(cp) {
   try { const l = JSON.parse(lsGet(BLOCKED_LAST_LS + cp) || '[]'); return new Set((Array.isArray(l) ? l : []).map(p => String(p).toLowerCase())); }
@@ -7348,19 +7349,36 @@ window.Steward = {
     const given = (pubkeys || []).filter(Boolean);
     const named = new Set(given.map(p => String(p).toLowerCase()));
     const list = [...new Set([...given, ...[..._localBlocked].filter(p => !named.has(p) && !off.has(p))])];
-    // SYNCHRONOUS, before the publish (AUDIT-2026-08-10 item B): the recipient builders must know about the
-    // block in the same tick it happens, not after the relay round-trip — that lag is the window in which the
-    // roster effect re-keyed the person just blocked. Full replacement, so an unblock clears it too.
-    _localBlocked = new Set(list.map(p => String(p).toLowerCase()));
+    const low = list.map(p => String(p).toLowerCase());
+    const cp0 = actingChurch || pub, seq = ++_setBlockedSeq;
+    const drop = [..._localBlocked].filter(p => !low.includes(p));   // whom this call lets back in — taken off below, on the relay's yes
+    // A BLOCK TAKES EFFECT HERE, SYNCHRONOUSLY, before the publish (AUDIT-2026-08-10 item B): the recipient builders
+    // must know about the block in the same tick it happens, not after the relay round-trip — that lag is the
+    // window in which the roster effect re-keyed the person just blocked. It is ADDED to what the console holds,
+    // and kept on the device, whatever the relay then says: holding someone blocked is the safe side.
+    _localBlocked = new Set([..._localBlocked, ...low]);
     _localBlockedAt = now();
-    lsSet(BLOCKED_LAST_LS + (actingChurch || pub), JSON.stringify([..._localBlocked]));   // what this console just blocked, kept (HIGH 2)
+    lsSet(BLOCKED_LAST_LS + cp0, JSON.stringify([..._localBlocked]));   // what this console just blocked, kept (HIGH 2)
     const content = JSON.stringify({ pubkeys: list });
     // ALL RELAYS, NOT THE FIRST TO ANSWER — see setMinors for the full reasoning. A red-team insider proved
     // this one on 2026-08-18: their ban reached only one of the three relays their app connected to, and on
     // the two that lacked the block they AUTHENTICATED and read the entire adult group. The relay refuses to
     // authenticate a blocked key — but only a relay that HOLDS the block. A ban published single-accept is a
     // ban on one relay.
-    return _landed('blocked list', _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', BLOCKED_D + pub], ['t', NET]], content }), sk)));
+    // AN UNBLOCK TAKES EFFECT ONLY ON THE RELAY'S YES (audit of c8e772a..5d4092b, LOW). It used to drop the person
+    // here, before the publish: an Unblock whose write was refused said "they are still blocked. Try again" while
+    // the console had already forgotten the block, and on the next reopen they were gone from the list and given
+    // the name and care keys, though nothing was saved. So the people it lets back in leave `_localBlocked` and the
+    // device copy only once every relay written to accepted it — and only for the newest call, on the church it
+    // was made for. Nothing else is touched then: a list that arrived meanwhile keeps what it added.
+    const sent = _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', BLOCKED_D + pub], ['t', NET]], content }), sk));
+    return _landed('blocked list', Promise.resolve(sent).then((ok) => {
+      if (ok && drop.length && seq === _setBlockedSeq && (actingChurch || pub) === cp0) {
+        for (const p of drop) _localBlocked.delete(p);
+        lsSet(BLOCKED_LAST_LS + cp0, JSON.stringify([..._localBlocked]));
+      }
+      return ok;
+    }));
   },
 
   // ---- safeguarding: two church-signed lists the relay reads to enforce child protection ----

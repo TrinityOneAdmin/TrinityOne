@@ -163,12 +163,13 @@ test('the envelope grows and never silently shrinks', () => {
 // This EXECUTES the shipped setBlocked and _ensureNameKeyLocked, lifted from vendor/steward.js, with the
 // blocklist publish left UNRESOLVED — the exact window the bug lives in. The sync `_localBlocked` statement
 // under test is the SAME statement the shipped code runs, not a test-local reimplementation.
-function blockRig(have) {
+function blockRig(have, answer) {   // answer: what the relay says to the blocklist write (undefined: it never answers)
   const setBlockedM = fnBody(STEWARD, 'setBlocked(pubkeys)', 'setBlocked in the shipped bundle');
   const ensureM = fnBody(STEWARD, 'async _ensureNameKeyLocked(', '_ensureNameKeyLocked in the shipped bundle');
   const src = `
     let _localBlocked = new Set();
     let _localBlockedAt = 0; const lsSet = () => {}; const BLOCKED_LAST_LS = 'trinityone.steward.blockedlast.';   // setBlocked keeps a copy on the device (2026-10-02): not this file's question
+    let _setBlockedSeq = 0;                 // setBlocked's newest-call counter (an unblock applies on the relay's yes)
     let _nameKeyRing = ['11'.repeat(32)];
     let _nameKeyDocKeys = HAVE;
     const _nameKeyRingChanged = () => {};   // tells the serving-board readers the ring filled; not under test here
@@ -196,7 +197,7 @@ function blockRig(have) {
     const publish = (evt) => {
       published.push(evt);
       const d = ((evt.tags || []).find((t) => t[0] === 'd') || [])[1] || '';
-      return d.startsWith(BLOCKED_D) ? new Promise(() => {}) : Promise.resolve(evt);
+      return d.startsWith(BLOCKED_D) ? (ANSWER === undefined ? new Promise(() => {}) : Promise.resolve(ANSWER)) : Promise.resolve(evt);
     };
     // setBlocked moved onto the all-must-accept path (safeguarding replication, 2026-08-18); it now calls
     // _publishToRelays, not publish. Same in-flight semantics for the block doc — this test's whole point is
@@ -206,7 +207,7 @@ function blockRig(have) {
     const api = { ${setBlockedM}, ${ensureM} };
     return { api, published };
   `;
-  return new Function('CP', 'HAVE', src)(church.pub, have);
+  return new Function('CP', 'HAVE', 'ANSWER', src)(church.pub, have, answer);
 }
 const _nameEnvs = (rig) => rig.published.filter(e => String(((e.tags || []).find(t => t[0] === 'd') || [])[1] || '').startsWith('trinityone/namekey:'));
 
@@ -232,15 +233,31 @@ test('a block is honoured before the relay confirms it', async () => {
 
 test('unblocking replaces the local set — the filter follows the newest list, not history', async () => {
   const C = K().pub, D = K().pub;
-  const rig = blockRig({ [church.pub]: 1, [alice.pub]: 1 });
-  rig.api.setBlocked([C]);
-  rig.api.setBlocked([], { unblock: [C] });                       // the steward unblocks C (the Members screen's Unblock names them: setBlocked keeps everyone this console holds as blocked unless told, owner 2026-10-02)
+  const rig = blockRig({ [church.pub]: 1, [alice.pub]: 1 }, true);   // the relay accepts the blocklist writes
+  await rig.api.setBlocked([C]);
+  await rig.api.setBlocked([], { unblock: [C] });                 // the steward unblocks C (the Members screen's Unblock names them: setBlocked keeps everyone this console holds as blocked unless told, owner 2026-10-02) — and the relay says yes
   await rig.api._ensureNameKeyLocked([alice.pub, C, D], []);
   const env = _nameEnvs(rig)[0];
   assert.ok(env, 'after the unblock the envelope must publish for the returning member');
   const keys = JSON.parse(env.content).keys;
   assert.ok(keys[C], 'the unblocked member must get keys back — the set is replaced, never merely appended to');
   assert.ok(keys[D] && keys[alice.pub]);
+});
+
+// …BUT ONLY ON THE RELAY'S YES (audit of c8e772a..5d4092b, LOW). An Unblock whose write the relay refused told the
+// steward "they are still blocked. Try again" while the console had already dropped them — and they were keyed.
+test('an unblock the relay refuses — or never answers — leaves the member blocked here, and keyless', async () => {
+  for (const answer of [false, undefined]) {
+    const C = K().pub, D = K().pub;
+    const rig = blockRig({ [church.pub]: 1, [alice.pub]: 1 }, answer);
+    rig.api.setBlocked([C]);                                       // blocked here at once, whatever the relay says
+    const r = rig.api.setBlocked([], { unblock: [C] });            // the Unblock…
+    if (answer === false) assert.equal(await r, false, 'CONTROL: the refused write was not reported as refused');
+    await rig.api._ensureNameKeyLocked([alice.pub, C, D], []);    // …and the enrolment runs before (or without) any yes
+    const env = _nameEnvs(rig)[0];
+    assert.ok(env && JSON.parse(env.content).keys[D], 'CONTROL: the enrolment did not run');
+    assert.equal(JSON.parse(env.content).keys[C], undefined, `AN UNBLOCK THE RELAY ${answer === false ? 'REFUSED' : 'HAD NOT ANSWERED'} GAVE C THE NAME KEY — the screen still says C is blocked (audit of c8e772a..5d4092b)`);
+  }
 });
 
 test('switching church resets the name key', () => {

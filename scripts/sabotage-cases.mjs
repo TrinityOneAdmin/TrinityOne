@@ -615,11 +615,13 @@ export const CASES = [
     name: 'blocklist: the local set updates only after the relay confirms',
     file: 'src/steward.src.js',
     // semantically "the same code, later" — but the whole point is the window BEFORE the publish resolves,
-    // which is exactly when the roster effect re-keys the person just blocked
-    find: `    _localBlocked = new Set(list.map(p => String(p).toLowerCase()));
-    const content = JSON.stringify({ pubkeys: list });`,
-    replace: `    const content = JSON.stringify({ pubkeys: list });
-    const _localBlocked = new Set(list.map(p => String(p).toLowerCase()));  // MOVED after the content build, still before publish — but the sabotage is that it is no longer set SYNCHRONOUSLY where the roster effect reads it`,
+    // which is exactly when the roster effect re-keys the person just blocked. RE-ANCHORED 2026-10-02: b1dffb3 put
+    // the device copy's lines between the old anchor's two statements, and this case matched nothing from then
+    // on; and setBlocked now ADDS a block at once but lets anyone back in only on the relay's yes, so the
+    // sabotage is the synchronous add removed — a block that waits for the relay, the bug this case names.
+    find: `    _localBlocked = new Set([..._localBlocked, ...low]);
+    _localBlockedAt = now();`,
+    replace: `    _localBlockedAt = now();   // SABOTAGE: the block is no longer added to the local set before the publish`,
     test: 'scripts/name-key-integrity.test.mjs',
   },
   {
