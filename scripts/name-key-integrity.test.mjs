@@ -185,8 +185,8 @@ function blockRig(have) {
     const _hex = (u8) => Array.from(u8, (b) => b.toString(16).padStart(2, '0')).join('');
     const toPubHex = (p) => /^[0-9a-f]{64}$/i.test(p) ? String(p).toLowerCase() : null;
     // esbuild renames the nip44 imports in the bundle — provide both spellings (see memberSide above)
-    const encrypt3 = () => 'ct', getConversationKey = () => 'ck';
-    const nip44e = encrypt3, nip44ck = getConversationKey;
+    const encrypt2 = () => 'ct', getConversationKey = () => 'ck';
+    const nip44e = encrypt2, nip44ck = getConversationKey;
     const _sealEach = async (payload, recips) => { const keys = {}; for (const pk of recips) keys[pk] = 'sealed'; return keys; };
     const finalizeEvent2 = (t) => t, finalizeEvent = finalizeEvent2, feChurch = (t) => t;
     // Stage 3 of reference/SCOPE-RELAY-CORRECTED-TIME-2026-09-26.md put setBlocked's write through

@@ -21,7 +21,7 @@
 //
 // ⚠ THE BUNDLE, NOT THE SOURCE. `npm run build:fellowship` / `bash scripts/build-steward.sh` make vendor/*.js.
 // ⚠ ESBUILD RENAMES ON COLLISION: in vendor/fellowship.js the nip44 pair are `decrypt` / `getConversationKey`
-//   and in vendor/steward.js `encrypt3` / `getConversationKey`. Stub the src/ spellings and the scope Proxy
+//   and in vendor/steward.js `encrypt2` / `getConversationKey`. Stub the src/ spellings and the scope Proxy
 //   throws, which is the loud failure this harness wants.
 //
 // NO RELAY AND NO PORT.
@@ -75,7 +75,7 @@ assert.ok(Number.isFinite(MYKIDS_WINDOW) && MYKIDS_WINDOW > 3600,
 function consoleWriter(actor, sessionKeys) {
   const scope = {
     sk: actor.sk, _ckSessionKeys: sessionKeys,
-    encrypt3: nip44.v2.encrypt,
+    encrypt2: nip44.v2.encrypt,
     getConversationKey: (a, b) => nip44.v2.utils.getConversationKey(a, b),
     checkinGuardianCopies, _unhex: unhex,
     JSON, Math, String, Array, Object, Set, RegExp, Boolean, Number,

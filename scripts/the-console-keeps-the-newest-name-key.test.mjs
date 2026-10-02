@@ -39,7 +39,7 @@ function console_() {
   const handlers = [], published = [];
   const world = {
     pub: CP, churchPub: CP, churchSk, actingChurch: '', NET: 'trinityone', NAMEKEY_D: 'trinityone/namekey:',
-    decrypt3: nip44.decrypt, encrypt3: nip44.encrypt, getConversationKey: ck, _hex: hex,
+    decrypt3: nip44.decrypt, encrypt2: nip44.encrypt, getConversationKey: ck, _hex: hex,
     relays: () => ['wss://a', 'wss://b'], _byChurchOrSteward: () => true, _webQueueSync: () => {},
     _isRelayAuthed: () => true, _keyReadAuthedOn: () => true, normalizeURL2: (u) => u, NAME_RING_MAX: 50, toPubHex: (p) => p, _localBlocked: new Set(),
     _sealEach: async (pl, recips, f) => Object.fromEntries(recips.map(p => [p, f(pl, p)])),

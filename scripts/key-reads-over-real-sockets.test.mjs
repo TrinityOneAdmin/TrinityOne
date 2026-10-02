@@ -108,7 +108,7 @@ function engine(A, urls) {
     _nameKeyRing: [], _nameKeyDocKeys: null, _nameKeyChecked: false, _nameKeyAt: 0, _nameKeyBusy: null,
     _localBlocked: new Set(), toPubHex: (p) => p, _myOwnPub: () => A.pub,
     now: () => Math.floor(Date.now() / 1000), _CLOCK_SKEW: 600,
-    decrypt3: (c, k) => nip44.v2.decrypt(c, k), encrypt3: (p, k) => nip44.v2.encrypt(p, k), getConversationKey: ck,
+    decrypt3: (c, k) => nip44.v2.decrypt(c, k), encrypt2: (p, k) => nip44.v2.encrypt(p, k), getConversationKey: ck,
     _hex: hex, _unhex: unhex, crypto,
     _webQueueSync: () => {}, _churchHasCareNeeds: async () => false,
     _sealEach: async (pl, targets, f) => Object.fromEntries([...targets].map(p => [p, f(pl, p)])),

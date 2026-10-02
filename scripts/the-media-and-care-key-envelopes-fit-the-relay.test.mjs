@@ -52,7 +52,7 @@ function engine({ media = {}, care = {} } = {}) {
     now: () => 1759300000,
     _hex: hex,
     // the shipped bundle's names for nip44 encrypt / conversation key (esbuild renames nip44e / nip44ck)
-    encrypt3: (pl, ck) => nip44.v2.encrypt(pl, ck),
+    encrypt2: (pl, ck) => nip44.v2.encrypt(pl, ck),
     getConversationKey: (a, b) => nip44.v2.utils.getConversationKey(a, b),
     _sealEach: async (pl, targets, sealTo) => Object.fromEntries([...targets].map(t => [t, sealTo(pl, t)])),
     feChurch: (t) => ({ ...t, pubkey: CHURCH }),

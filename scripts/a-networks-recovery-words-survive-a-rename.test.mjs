@@ -56,7 +56,7 @@ function harness(initial) {
     churchSk: CHURCH_SK, NETKEYS_LS,
     lsGet: (k) => (store.has(k) ? store.get(k) : null),
     lsSet: (k, v) => { store.set(k, v); },
-    encrypt3: (m, k) => nip44.encrypt(m, k),
+    encrypt2: (m, k) => nip44.encrypt(m, k),
     decrypt3: (c, k) => nip44.decrypt(c, k),
     toPubHex: (x) => (/^[0-9a-f]{64}$/i.test(x) ? x.toLowerCase() : null),
     relays: () => ['wss://relay.example'],

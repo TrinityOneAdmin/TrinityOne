@@ -13016,17 +13016,6 @@ zoo`.split("\n");
   // node_modules/nostr-tools/lib/esm/nip04.js
   var utf8Decoder5 = new TextDecoder("utf-8");
   var utf8Encoder5 = new TextEncoder();
-  function encrypt2(secretKey, pubkey, text) {
-    const privkey = secretKey instanceof Uint8Array ? secretKey : hexToBytes(secretKey);
-    const key = secp256k1.getSharedSecret(privkey, hexToBytes("02" + pubkey));
-    const normalizedKey = getNormalizedX(key);
-    let iv = Uint8Array.from(randomBytes(16));
-    let plaintext = utf8Encoder5.encode(text);
-    let ciphertext = cbc(normalizedKey, iv).encrypt(plaintext);
-    let ctb64 = base64.encode(new Uint8Array(ciphertext));
-    let ivb64 = base64.encode(new Uint8Array(iv.buffer));
-    return `${ctb64}?iv=${ivb64}`;
-  }
   function decrypt2(secretKey, pubkey, data) {
     const privkey = secretKey instanceof Uint8Array ? secretKey : hexToBytes(secretKey);
     let [ctb64, ivb64] = data.split("?iv=");
@@ -13775,7 +13764,7 @@ zoo`.split("\n");
       mac: data.subarray(-32)
     };
   }
-  function encrypt3(plaintext, conversationKey, nonce = randomBytes(32)) {
+  function encrypt2(plaintext, conversationKey, nonce = randomBytes(32)) {
     const { chacha_key, chacha_nonce, hmac_key } = getMessageKeys(conversationKey, nonce);
     const padded = pad(plaintext);
     const ciphertext = chacha20(chacha_key, chacha_nonce, padded);
@@ -15275,7 +15264,7 @@ zoo`.split("\n");
     const k = _nameKeyRing[0];
     if (!k) return null;
     try {
-      return JSON.stringify({ e: encrypt3(body, _unhex(k)) });
+      return JSON.stringify({ e: encrypt2(body, _unhex(k)) });
     } catch (e) {
       return null;
     }
@@ -15482,7 +15471,7 @@ zoo`.split("\n");
     const keyHex = _ckSessionKeys.get(sid) || "";
     if (!/^[0-9a-f]{64}$/.test(keyHex)) return [];
     try {
-      return [["ck", encrypt3(JSON.stringify(obj), _unhex(keyHex))]];
+      return [["ck", encrypt2(JSON.stringify(obj), _unhex(keyHex))]];
     } catch (e) {
       return [];
     }
@@ -15490,7 +15479,7 @@ zoo`.split("\n");
   var _encGuardianCopies = (kind, obj) => {
     if (kind !== "checkin") return [];
     if (!sk) return [];
-    return checkinGuardianCopies(obj, (plain, guardianPub) => encrypt3(plain, getConversationKey(sk, guardianPub)));
+    return checkinGuardianCopies(obj, (plain, guardianPub) => encrypt2(plain, getConversationKey(sk, guardianPub)));
   };
   var _ckSessionKeys = /* @__PURE__ */ new Map();
   var _encOpenSealedCopy = (kind, tags) => {
@@ -15617,7 +15606,7 @@ zoo`.split("\n");
     }
     let content;
     try {
-      content = encrypt3(JSON.stringify(body), getConversationKey(signer, parentPub));
+      content = encrypt2(JSON.stringify(body), getConversationKey(signer, parentPub));
     } catch (e) {
       return Promise.resolve(null);
     }
@@ -15811,7 +15800,7 @@ zoo`.split("\n");
     const sealed = { pub: rec.pub, name: rec.name };
     if (rec.mnemonic && churchSk) {
       try {
-        sealed.sealedMnemonic = encrypt3(rec.mnemonic, churchSk);
+        sealed.sealedMnemonic = encrypt2(rec.mnemonic, churchSk);
       } catch {
         sealed.mnemonic = rec.mnemonic;
       }
@@ -15833,7 +15822,7 @@ zoo`.split("\n");
     const out = raw.map((r) => {
       if (r.mnemonic && !r.sealedMnemonic) {
         try {
-          const s = { pub: r.pub, name: r.name, sealedMnemonic: encrypt3(r.mnemonic, churchSk) };
+          const s = { pub: r.pub, name: r.name, sealedMnemonic: encrypt2(r.mnemonic, churchSk) };
           changed = true;
           return s;
         } catch {
@@ -17459,6 +17448,14 @@ zoo`.split("\n");
     return evt;
   }
   var S_OUTBOX_MAX = 200;
+  var _dmEncrypt = (sk2, peerPub, text) => encrypt2(text, getConversationKey(sk2, peerPub));
+  var _dmDecrypt = async (sk2, peerPub, ct) => {
+    try {
+      return decrypt3(ct, getConversationKey(sk2, peerPub));
+    } catch {
+      return await decrypt2(sk2, peerPub, ct);
+    }
+  };
   var _sOutKey = () => "trinityone.steward.outbox:" + (pub || "");
   var _sOutbox = [];
   var _sOutPlain = /* @__PURE__ */ new Map();
@@ -19078,7 +19075,7 @@ zoo`.split("\n");
       if (cp === churchPub) return Promise.resolve({ ok: false, error: "That\u2019s your own church." });
       let content;
       try {
-        content = JSON.stringify({ n: encrypt3(JSON.stringify({ name: lastProfile && lastProfile.name || "" }), getConversationKey(sk, cp)) });
+        content = JSON.stringify({ n: encrypt2(JSON.stringify({ name: lastProfile && lastProfile.name || "" }), getConversationKey(sk, cp)) });
       } catch (e) {
         content = JSON.stringify({ n: "" });
       }
@@ -19541,7 +19538,7 @@ zoo`.split("\n");
           const pub0 = pub, ep0 = _keyReadEpoch, sk0 = sk, v0 = _mediaKeyVer;
           const fresh = _hex(crypto.getRandomValues(new Uint8Array(32)));
           const targets = [.../* @__PURE__ */ new Set([pub0, ...(memberPubs || []).filter(Boolean)])].filter((k) => !_localBlocked || !_localBlocked.has(k));
-          const keys = await _sealEach(JSON.stringify([fresh]), targets, (pl, mp) => encrypt3(pl, getConversationKey(sk0, mp)));
+          const keys = await _sealEach(JSON.stringify([fresh]), targets, (pl, mp) => encrypt2(pl, getConversationKey(sk0, mp)));
           const _moved = "Can\u2019t encrypt this upload \u2014 this console changed church, or your church\u2019s media key arrived, while the key was being prepared. Nothing has been uploaded. Try again.";
           if (!_stillOn(pub0, ep0) || _mediaKeyVer !== v0 || _mediaKeyHex) throw new Error(_moved);
           const _env = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", MEDIAKEY_D + pub0], ["t", NET]], content: JSON.stringify({ keys, rev: now() }) }));
@@ -19591,14 +19588,14 @@ zoo`.split("\n");
       if (_mediaKeyPushRefused === fp) return false;
       const _v0 = _mediaKeyVer;
       const _mfull = _mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex];
-      const _mfit = _fitKeyRing(_mfull, want.length, (pl) => encrypt3(pl, getConversationKey(sk0, want[0])));
+      const _mfit = _fitKeyRing(_mfull, want.length, (pl) => encrypt2(pl, getConversationKey(sk0, want[0])));
       if (!_mfit) {
         console.warn("[steward] media key envelope too large for one document at " + want.length + " recipients");
         return false;
       }
       if (_mfit.length < _mfull.length) console.warn("[steward] media key ring trimmed to " + _mfit.length + " to fit " + want.length + " recipients \u2014 sermons encrypted under the dropped keys will no longer play");
       const _mring = JSON.stringify(_mfit);
-      const keys = await _sealEach(_mring, want, (pl, mp) => encrypt3(pl, getConversationKey(sk0, mp)));
+      const keys = await _sealEach(_mring, want, (pl, mp) => encrypt2(pl, getConversationKey(sk0, mp)));
       if (_mediaKeyVer !== _v0 || !_stillOn(pub0, ep0)) return false;
       const _pubOpts = { background: true };
       const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", MEDIAKEY_D + pub0], ["t", NET]], content: JSON.stringify({ keys, rev: now() }) }), _pubOpts);
@@ -19642,14 +19639,14 @@ zoo`.split("\n");
       const fresh = _hex(crypto.getRandomValues(new Uint8Array(32)));
       const full = [fresh, ..._mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex]].slice(0, 50);
       const want = [.../* @__PURE__ */ new Set([pub0, ...(memberPubs || []).filter(Boolean), ...(stewardPubs || []).filter(Boolean)])].filter((p) => !_localBlocked.has(String(p).toLowerCase()));
-      const ring = _fitKeyRing(full, want.length, (pl) => encrypt3(pl, getConversationKey(sk0, want[0])));
+      const ring = _fitKeyRing(full, want.length, (pl) => encrypt2(pl, getConversationKey(sk0, want[0])));
       if (!ring) {
         console.warn("[steward] media key rotation too large for one document at " + want.length + " recipients");
         return false;
       }
       if (ring.length < full.length) console.warn("[steward] media key ring trimmed to " + ring.length + " to fit " + want.length + " recipients \u2014 sermons encrypted under the dropped keys will no longer play");
       const payload = JSON.stringify(ring);
-      const keys = await _sealEach(payload, want, (pl, mp) => encrypt3(pl, getConversationKey(sk0, mp)));
+      const keys = await _sealEach(payload, want, (pl, mp) => encrypt2(pl, getConversationKey(sk0, mp)));
       if (!_stillOn(pub0, ep0)) return false;
       const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", MEDIAKEY_D + pub0], ["t", NET]], content: JSON.stringify({ keys, rev: now() }) }));
       if (ok === false) return false;
@@ -19719,14 +19716,14 @@ zoo`.split("\n");
       const have = (minting ? null : _careKeyDocKeys) || {};
       if (want.every((p2) => have[p2])) return false;
       const _v1 = _careKeyVer;
-      const _cfit = _fitKeyRing(ring0, want.length, (pl) => encrypt3(pl, getConversationKey(sk0, want[0])));
+      const _cfit = _fitKeyRing(ring0, want.length, (pl) => encrypt2(pl, getConversationKey(sk0, want[0])));
       if (!_cfit) {
         console.warn("[steward] care key envelope too large for one document at " + want.length + " recipients");
         return false;
       }
       if (_cfit.length < ring0.length) console.warn("[steward] care key ring trimmed to " + _cfit.length + " to fit " + want.length + " recipients \u2014 older sealed care records will no longer open");
       const _ring = JSON.stringify(_cfit);
-      const keys = await _sealEach(_ring, want, (pl, mp) => encrypt3(pl, getConversationKey(sk0, mp)));
+      const keys = await _sealEach(_ring, want, (pl, mp) => encrypt2(pl, getConversationKey(sk0, mp)));
       if (_careKeyVer !== _v1 || !_stillOn(cp, ep0)) return false;
       const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", CAREKEY_D + cp], ["t", NET]], content: JSON.stringify({ keys, rev: rev2 }) }), { background: !!(opts && opts.background) });
       if (ok !== false && _careKeyVer === _v1 && _stillOn(cp, ep0)) {
@@ -19744,7 +19741,7 @@ zoo`.split("\n");
     // refuse rather than publish PII in the clear by accident.
     careSeal(obj) {
       try {
-        return _careKeyHex ? encrypt3(JSON.stringify(obj), _unhex(_careKeyHex)) : null;
+        return _careKeyHex ? encrypt2(JSON.stringify(obj), _unhex(_careKeyHex)) : null;
       } catch (e) {
         return null;
       }
@@ -19761,7 +19758,7 @@ zoo`.split("\n");
     },
     careSealTo(recipientPub, obj) {
       try {
-        return encrypt3(JSON.stringify(obj), getConversationKey(sk, recipientPub));
+        return encrypt2(JSON.stringify(obj), getConversationKey(sk, recipientPub));
       } catch (e) {
         return null;
       }
@@ -19783,11 +19780,11 @@ zoo`.split("\n");
       try {
         const kb = crypto.getRandomValues(new Uint8Array(32));
         const khex = Array.from(kb).map((x) => x.toString(16).padStart(2, "0")).join("");
-        const enc = encrypt3(JSON.stringify(obj), kb);
+        const enc = encrypt2(JSON.stringify(obj), kb);
         const keys = {};
         for (const p of [...new Set((recips || []).filter(Boolean))]) {
           try {
-            keys[p] = encrypt3(khex, getConversationKey(sk, p));
+            keys[p] = encrypt2(khex, getConversationKey(sk, p));
           } catch (e) {
           }
         }
@@ -19823,7 +19820,7 @@ zoo`.split("\n");
         const cand = full.slice(0, n);
         let per = 0;
         try {
-          per = 64 + String(encrypt3(JSON.stringify(cand), getConversationKey(sk0, probe))).length + 6;
+          per = 64 + String(encrypt2(JSON.stringify(cand), getConversationKey(sk0, probe))).length + 6;
         } catch (e) {
           break;
         }
@@ -19835,7 +19832,7 @@ zoo`.split("\n");
       let keys = null;
       if (ring) {
         const payload = JSON.stringify(ring);
-        keys = await _sealEach(payload, want, (pl, mp) => encrypt3(pl, getConversationKey(sk0, mp)));
+        keys = await _sealEach(payload, want, (pl, mp) => encrypt2(pl, getConversationKey(sk0, mp)));
       }
       if (!keys) {
         console.warn("[steward] care key rotation too large for one document at " + want.length + " members");
@@ -20086,7 +20083,7 @@ zoo`.split("\n");
       const gkey = group && (_skeys[group] || [])[0];
       if (gkey) {
         try {
-          body = encrypt3(content || "", gkey);
+          body = encrypt2(content || "", gkey);
           encTag = [["enc", "1"]];
         } catch (e) {
           console.warn("[steward] sealed-room encryption failed", e);
@@ -20303,7 +20300,7 @@ zoo`.split("\n");
       if (!sk || !peerHex) return null;
       let enc = "";
       try {
-        enc = await encrypt2(sk, peerHex, content);
+        enc = _dmEncrypt(sk, peerHex, content);
       } catch {
         return null;
       }
@@ -20362,13 +20359,14 @@ zoo`.split("\n");
         if (byId.has(e.id)) return;
         const mine = e.pubkey === pub;
         const other = mine ? peerHex : e.pubkey;
-        let text = "";
+        let text = "", undecryptable = false;
         try {
-          text = await decrypt2(sk, other, e.content);
+          text = await _dmDecrypt(sk, other, e.content);
         } catch {
-          return;
+          text = "\u{1F512} (could not decrypt)";
+          undecryptable = true;
         }
-        byId.set(e.id, { id: e.id, mine, text, ts: e.created_at });
+        byId.set(e.id, { id: e.id, mine, text, ts: e.created_at, undecryptable });
         emit();
       };
       const takeRx = (e) => {
@@ -20618,8 +20616,8 @@ zoo`.split("\n");
         for (const pk of recips) {
           try {
             const ck = getConversationKey(churchSk, pk);
-            keys[pk] = encrypt3(cur, ck);
-            rings[pk] = encrypt3(wrapped, ck);
+            keys[pk] = encrypt2(cur, ck);
+            rings[pk] = encrypt2(wrapped, ck);
           } catch (e) {
             missed.push(pk);
           }
@@ -20877,7 +20875,7 @@ zoo`.split("\n");
       const body = JSON.stringify({ minor: !!(status && status.minor), cleared: !!(status && status.cleared), guardians: guards, at: now() });
       let ct = "";
       try {
-        ct = encrypt3(body, getConversationKey(sk, mp));
+        ct = encrypt2(body, getConversationKey(sk, mp));
       } catch (e) {
         return Promise.resolve(null);
       }
@@ -21115,7 +21113,7 @@ zoo`.split("\n");
         const cand = ring.slice(0, n);
         let per = 0;
         try {
-          per = 64 + String(encrypt3(JSON.stringify(cand), getConversationKey(churchSk, probe))).length + 6;
+          per = 64 + String(encrypt2(JSON.stringify(cand), getConversationKey(churchSk, probe))).length + 6;
         } catch (e) {
           break;
         }
@@ -21132,7 +21130,7 @@ zoo`.split("\n");
       ring = fitted;
       const wrapped = JSON.stringify(ring);
       const _dk0 = _nameKeyDocKeys, _r0 = _nameKeyRing;
-      const keys = await _sealEach(wrapped, recips, (pl, pk) => encrypt3(pl, getConversationKey(churchSk, pk)));
+      const keys = await _sealEach(wrapped, recips, (pl, pk) => encrypt2(pl, getConversationKey(churchSk, pk)));
       if (_nameKeyDocKeys !== _dk0 || _nameKeyRing !== _r0 || !_stillOn(cp, ep0)) return opts.rotate ? false : null;
       const at = now();
       const out = await publish(feChurch({ kind: 30078, created_at: at, tags: [["d", NAMEKEY_D + cp], ["t", NET]], content: JSON.stringify({ rev: ring.length, keys }) }));
@@ -22033,7 +22031,7 @@ zoo`.split("\n");
         const lost = Object.keys(have).filter((p2) => want.indexOf(p2) < 0);
         if (lost.length) return window.Steward.rotateCapKey(kind, stewardPubs, caps);
       }
-      const keys = await _sealEach(JSON.stringify(nextRing), want, (pl, mp) => encrypt3(pl, getConversationKey(sk, mp)));
+      const keys = await _sealEach(JSON.stringify(nextRing), want, (pl, mp) => encrypt2(pl, getConversationKey(sk, mp)));
       _warnUnsealed(spec.cap, _sealEachFailed);
       if (_capState[kind] !== st || pub !== cp) return false;
       const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", spec.d + cp], ["t", NET]], content: JSON.stringify({ keys, rev: st.rev }) }));
@@ -22063,7 +22061,7 @@ zoo`.split("\n");
       const nextRev = (st.rev || 1) + 1;
       const allowed = _capAllows(spec, caps);
       const want = [...new Set([cp, ...(stewardPubs || []).filter(allowed)].filter(Boolean))];
-      const keys = await _sealEach(JSON.stringify(nextRing), want, (pl, mp) => encrypt3(pl, getConversationKey(sk, mp)));
+      const keys = await _sealEach(JSON.stringify(nextRing), want, (pl, mp) => encrypt2(pl, getConversationKey(sk, mp)));
       _warnUnsealed(spec.cap, _sealEachFailed);
       if (_capState[kind] !== st || pub !== cp) return false;
       const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", spec.d + cp], ["t", NET]], content: JSON.stringify({ keys, rev: nextRev }) }));
@@ -22092,8 +22090,8 @@ zoo`.split("\n");
       const st = _capState[kind];
       if (!st) return null;
       try {
-        if (st.ring.length) return encrypt3(JSON.stringify(obj), _unhex(st.ring[0]));
-        if (CAP_KEYS[kind] && CAP_KEYS[kind].legacy && churchSkHeld()) return encrypt3(JSON.stringify(obj), getConversationKey(churchSk, churchPub));
+        if (st.ring.length) return encrypt2(JSON.stringify(obj), _unhex(st.ring[0]));
+        if (CAP_KEYS[kind] && CAP_KEYS[kind].legacy && churchSkHeld()) return encrypt2(JSON.stringify(obj), getConversationKey(churchSk, churchPub));
       } catch (e) {
       }
       return null;
@@ -23110,7 +23108,7 @@ zoo`.split("\n");
           helpers,
           keepers,
           sessionKeyHex,
-          wrap: (p2, plaintext) => encrypt3(plaintext, getConversationKey(sk, p2))
+          wrap: (p2, plaintext) => encrypt2(plaintext, getConversationKey(sk, p2))
         });
       } catch (e) {
         return null;

@@ -3423,6 +3423,13 @@ async function publish(evt, opts) {
 // queued item holds ciphertext that was going to a relay anyway, so a seized laptop gains nothing it would
 // not have had, while a "waiting to send" bubble can still show the words while the app is open.
 const S_OUTBOX_MAX = 200;
+// DM CRYPTO, THE SAME AS THE MEMBER APP'S (src/fellowship.src.js _dmEncrypt/_dmDecrypt). The member app SENDS
+// NIP-44 and reads NIP-44 first, then NIP-04. The console was NIP-04 ONLY, so a member's "Contact your church"
+// message — NIP-44 — made nip04decrypt throw inside subscribeDMThread and was dropped without a trace (sim A2
+// #2): the member saw it sent, the church never saw it. Read both; send NIP-44. The conversation key is
+// symmetric, so the same call opens a message in either direction.
+const _dmEncrypt = (sk, peerPub, text) => nip44e(text, nip44ck(sk, peerPub));
+const _dmDecrypt = async (sk, peerPub, ct) => { try { return nip44d(ct, nip44ck(sk, peerPub)); } catch { return await nip04decrypt(sk, peerPub, ct); } };
 const _sOutKey = () => 'trinityone.steward.outbox:' + (pub || '');
 let _sOutbox = [];
 const _sOutPlain = new Map();
@@ -6688,7 +6695,7 @@ window.Steward = {
   // ---- direct messages: the church <-> a member (NIP-04 encrypted kind-4) ----
   async sendDM(peerHex, content) {
     if (!sk || !peerHex) return null;
-    let enc = ''; try { enc = await nip04encrypt(sk, peerHex, content); } catch { return null; }
+    let enc = ''; try { enc = _dmEncrypt(sk, peerHex, content); } catch { return null; }   // NIP-44, as the member app sends
     const evt = finalizeEvent(_monotonic({ kind: 4, created_at: now(), tags: [['p', peerHex], ['t', NET]], content: enc }), sk);
     // QUEUE FIRST, THEN ATTEMPT — the same rule the member app follows. If the publish fails the words are
     // still here, and the retry sends this exact event with its original id, so nothing duplicates.
@@ -6721,8 +6728,11 @@ window.Steward = {
     const take = async (e) => {
       if (byId.has(e.id)) return;
       const mine = e.pubkey === pub; const other = mine ? peerHex : e.pubkey;
-      let text = ''; try { text = await nip04decrypt(sk, other, e.content); } catch { return; }
-      byId.set(e.id, { id: e.id, mine, text, ts: e.created_at }); emit();
+      // NIP-44 first, then NIP-04 (_dmDecrypt). On total failure SHOW A PLACEHOLDER rather than `return`: a
+      // message that vanishes from the thread with no trace is how the church never learns somebody wrote.
+      let text = '', undecryptable = false;
+      try { text = await _dmDecrypt(sk, other, e.content); } catch { text = '🔒 (could not decrypt)'; undecryptable = true; }
+      byId.set(e.id, { id: e.id, mine, text, ts: e.created_at, undecryptable }); emit();
     };
     const takeRx = (e) => {
       const tid = (e.tags.find(t => t[0] === 'e') || [])[1]; if (!tid) return;

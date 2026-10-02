@@ -190,7 +190,7 @@ const consoleBuild = (recips) => {
   }
   const src = `
     const rev2 = 2, recips = RECIPS, churchSk = SK;
-    const _hex = HEX, getConversationKey = CK, encrypt3 = ENC;
+    const _hex = HEX, getConversationKey = CK, encrypt2 = ENC;
     ${STEWARD.slice(at, end)};
     return build;
   `.replace('RECIPS', JSON.stringify(recips)).replace('SK', 'SKV').replace('HEX', 'HEXV').replace('CK', 'CKV').replace('ENC', 'ENCV');
@@ -291,8 +291,8 @@ test('a locally-blocked member is excluded from the group key envelope', async (
     const _hex = (u8) => Array.from(u8, (b) => b.toString(16).padStart(2, '0')).join('');
     const toPubHex = (p) => /^[0-9a-f]{64}$/i.test(p) ? String(p).toLowerCase() : null;
     // esbuild renames the nip44 imports in the bundle — provide both spellings
-    const encrypt3 = () => 'ct', getConversationKey = () => 'ck';
-    const nip44e = encrypt3, nip44ck = getConversationKey;
+    const encrypt2 = () => 'ct', getConversationKey = () => 'ck';
+    const nip44e = encrypt2, nip44ck = getConversationKey;
     const published = [];
     const publish = async (evt) => { published.push(evt); return evt; };
     const finalizeEvent2 = (t) => t, finalizeEvent = finalizeEvent2;
