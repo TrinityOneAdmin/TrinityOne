@@ -801,10 +801,13 @@ function KeyDistributor() {
   const failCount = React.useRef({});  // group id → consecutive refusals, for the exponential backoff
   // THESE ARE PER CHURCH. They survived a church switch, so a room id seen while acting for church B had a
   // `last` entry when the console came back to A — and A's members looked like new recipients of B's room key
-  // (audit of 5276297, HIGH 1). Started afresh whenever the church this console runs changes.
+  // (audit of 5276297, HIGH 1). KEPT per church, not wiped (audit of 831dcea): wiping them made A's rooms a first
+  // sighting on the way back from B, so a member who joined A meanwhile was recorded as keyed and never was.
+  const memos = React.useRef({});      // church → its { last, pending, nextTry, failCount }
   const memoFor = React.useRef(null);
   { const cpNow = (window.Steward && (window.Steward.actingChurch || window.Steward.churchPub)) || '';
-    if (memoFor.current !== cpNow) { memoFor.current = cpNow; last.current = {}; pending.current = {}; nextTry.current = {}; failCount.current = {}; } }
+    if (memoFor.current !== cpNow) { memoFor.current = cpNow; const m = memos.current[cpNow] || (memos.current[cpNow] = { last: {}, pending: {}, nextTry: {}, failCount: {} });
+      last.current = m.last; pending.current = m.pending; nextTry.current = m.nextTry; failCount.current = m.failCount; } }
   const membersRef = React.useRef([]); membersRef.current = members;
   // CATCH UP AFTER A LOCK. The console auto-locks after 10 minutes idle and `Steward.lock()` forgets the key,
   // so every envelope published in that window is refused — and the backoff above then records those refusals
@@ -823,8 +826,10 @@ function KeyDistributor() {
   React.useEffect(() => {
     const onKey = () => {
       // the failures were the lock, not the relay — start the backoff clean rather than making a returning
-      // steward wait out a penalty for an outage they caused by walking away
+      // steward wait out a penalty for an outage they caused by walking away — in every church's memo (`memos`)
       pending.current = {}; nextTry.current = {}; failCount.current = {};
+      for (const x of Object.values(memos.current)) { x.pending = {}; x.nextTry = {}; x.failCount = {}; }
+      const m = memos.current[memoFor.current]; if (m) { m.pending = pending.current; m.nextTry = nextTry.current; m.failCount = failCount.current; }
       setUnlockTick(t => t + 1);
     };
     window.addEventListener('steward-key', onKey);
@@ -931,16 +936,19 @@ function KeyDistributor() {
           // gets no backoff, because the call is free and the retry is the whole repair.
           if (pending.current[g.id]) continue;
           if (Date.now() < (nextTry.current[g.id] || 0)) continue;
-          pending.current[g.id] = true;
+          // THIS church's memo, held for the answer: the console may be on another church by the time it lands,
+          // and the result belongs to the church the publish was made for (the memo is per church — above).
+          const L = last.current, P = pending.current, N = nextTry.current, F = failCount.current;
+          P[g.id] = true;
           Promise.resolve(window.Steward.publishGroupKey(g.id, recips, { reuseOnly: true, background: true })).then(r => {
-            pending.current[g.id] = false;
+            P[g.id] = false;
             if (r === false) {
-              const n = (failCount.current[g.id] || 0) + 1; failCount.current[g.id] = n;
-              nextTry.current[g.id] = Date.now() + Math.min(60000, 2000 * Math.pow(2, n - 1));
+              const n = (F[g.id] || 0) + 1; F[g.id] = n;
+              N[g.id] = Date.now() + Math.min(60000, 2000 * Math.pow(2, n - 1));
             }
             if (r === null || r === false) return;                       // not keyed — leave `last` alone so we come back
-            last.current[g.id] = key;
-            delete failCount.current[g.id]; delete nextTry.current[g.id];
+            L[g.id] = key;
+            delete F[g.id]; delete N[g.id];
             const missed = r && r.skipped;
             // The console's existing warning channel, rather than a new banner nobody knows to look at.
             if (missed && missed.length) {
@@ -949,7 +957,7 @@ function KeyDistributor() {
                   message: missed.length + ' member(s) could not be given the key for “' + (g.name || 'a group') + '”. They will not be able to read or post in that room. Open the group and save it again to re-send.' } }));
               } catch (e) {}
             }
-          }).catch(() => { pending.current[g.id] = false; });   // a throw must not wedge the guard shut
+          }).catch(() => { P[g.id] = false; });   // a throw must not wedge the guard shut
         } else {
           last.current[g.id] = key;                                      // nothing to publish (shrank, or no key API)
         }

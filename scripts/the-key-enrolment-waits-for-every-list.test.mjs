@@ -114,6 +114,42 @@ test('a room the distributor saw in one church is a FIRST sighting in the next �
   k.render();
   assert.equal(k.calls.filter(c => c.name === 'groupkey').length, 1, 'CONTROL: a room whose members grew in the same church was not re-keyed');
 });
+// …AND IT IS KEPT PER CHURCH, NOT WIPED (audit of 831dcea). Wiping it on every switch made A's rooms a first sighting on
+// the way back from B, so a member who joined A while the console was on B was recorded as already keyed — and was
+// never given A's room key. (The browser row: a-member-who-joined-while-the-console-was-away-gets-the-room-key.)
+test('a member who joined church A while the console was on church B is given A\'s room key when it comes back to A', async () => {
+  const k = await keyDistributor();
+  const room = { id: 'room-a', name: 'Sealed', encrypted: true };
+  k.set('members', [{ pubkey: MB }], true); k.set('groups', [room], true); k.set('stewards', [ST], true); k.set('blocked', [], true);
+  k.render();                                     // church A: the room, keyed to MB
+  k.steward.actingChurch = 'e'.repeat(64);        // the console acts for church B
+  k.set('members', [{ pubkey: ST }], true); k.set('groups', [], true); k.set('stewards', [ST], true); k.set('blocked', [], true);
+  k.render();
+  assert.equal(k.calls.filter(c => c.name === 'groupkey').length, 0, 'CONTROL: a room key was published before anyone joined');
+  k.steward.actingChurch = '';                    // back to A — where MB2 joined while the console was away
+  k.set('members', [{ pubkey: MB }, { pubkey: MB2 }], true); k.set('groups', [{ ...room }], true); k.set('stewards', [ST], true); k.set('blocked', [], true);
+  k.render();
+  const keyed = k.calls.filter(c => c.name === 'groupkey');
+  assert.equal(keyed.length, 1, 'A MEMBER WHO JOINED CHURCH A WHILE THE CONSOLE WAS ON B WAS NEVER GIVEN A\'S ROOM KEY — the room was a "first sighting" on the way back (audit of 831dcea)');
+});
+// …and a room-key publish that answers after a switch settles ITS church's memo, not the one the console is on now:
+// written into B's, A's "in flight" mark would stay set and A's room would never be re-keyed again.
+test('a room-key publish that answers after a switch is recorded for the church it was made for', async () => {
+  const k = await keyDistributor();
+  const room = { id: 'room-a', name: 'Sealed', encrypted: true };
+  let answer; const inFlight = new Promise(r => { answer = r; });
+  k.steward.publishGroupKey = () => { k.calls.push({ name: 'groupkey' }); return inFlight; };
+  k.set('members', [{ pubkey: MB }], true); k.set('groups', [room], true); k.set('stewards', [ST], true); k.set('blocked', [], true);
+  k.render();                                     // A: first sighting
+  k.set('members', [{ pubkey: MB }, { pubkey: MB2 }], true); k.render();   // A grows: the publish starts…
+  assert.equal(k.calls.filter(c => c.name === 'groupkey').length, 1, 'CONTROL: the grown room was not re-keyed');
+  k.steward.actingChurch = 'e'.repeat(64);        // …the console switches to B before it answers
+  k.set('members', [{ pubkey: ST }], true); k.set('groups', [], true); k.render();
+  answer({ ok: true }); await new Promise(r => setTimeout(r, 0));   // …and it answers, keyed
+  k.steward.actingChurch = '';                    // back on A, a third member joins
+  k.set('members', [{ pubkey: MB }, { pubkey: MB2 }, { pubkey: ST }], true); k.set('groups', [{ ...room }], true); k.render();
+  assert.equal(k.calls.filter(c => c.name === 'groupkey').length, 2, 'THE PUBLISH THAT ANSWERED ON B LEFT A\'S ROOM MARKED "IN FLIGHT" — nobody who joins A is given its key again');
+});
 
 // THE MOUNT RE-CHECK TIMERS (3.5 s and 9 s) go through the same two rules as the effect (audits of 3bc8905 and 5276297:
 // with either rule deleted from them, no test failed). They call ensureMediaKeyForMembers on their own.
