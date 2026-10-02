@@ -9306,7 +9306,12 @@ function DashFeaturesPanel({ church, show = null }) {
   const toggleFullName = () => window.Steward.publishProfile({ rules: { ...rules, fullName: !fullName } });
   const fMembers = window.useStewardMembers ? window.useStewardMembers() : [];
   const fAdmitted = window.useStewardAdmitted ? window.useStewardAdmitted() : [];
+  // WHO MAY CHANGE IT (owner, 2026-10-02): a delegated steward WITH the Members power; a delegate without it must not. The relay
+  // has always refused the write (accept(): leaderOf || stewardCan(.., 'members')), but the switch used to be offered anyway, and a
+  // Finance-only delegate pressed it, saw it refused behind a banner, and never learned why. Gated here the way Reconnect is.
+  const _joinCap = stewCapState('members');
   const toggleApproval = () => {
+    if (!_joinCap.allowed) return;
     // turning ON: grandfather everyone already here so only NEW joiners wait for approval
     // …and if that list cannot be written (refused — on the banner), approval is NOT switched on: everyone
     // already here would be left waiting at the door. Before, the throw escaped the click uncaught.
@@ -9430,6 +9435,7 @@ function DashFeaturesPanel({ church, show = null }) {
           <span style={{ position: 'absolute', top: 3, left: approval ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
         </button>
       </div>
+      {!_joinCap.allowed ? <div role="note" className="set-desc" style={{ color: 'var(--ink-2)', margin: '6px 2px 0' }}>{_joinCap.why} Only a steward with Members can change this.</div> : null}
 
       <div style={{ height: 1, background: 'var(--line)', margin: '14px 0 11px' }} />
       <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', marginBottom: 6 }}>Member names</div>

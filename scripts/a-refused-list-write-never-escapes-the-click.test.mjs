@@ -138,6 +138,8 @@ test('turning join approval on while the approved list cannot be written: nothin
   const steward = { ...allRefused(), setJoinPolicy: () => { policy++; return Promise.resolve(true); }, publishProfile: () => Promise.resolve(true), sealGroup: () => Promise.resolve(true) };
   const { C, draw } = await compiled('DashFeaturesPanel', {
     ...common(), SkConfirm: () => null, DashGivingPanel: () => null, DashMealsPanel: () => null,
+    // the join-approval switch now asks whether this steward holds Members (sim 4); the owner console does, and that is not what this row is about
+    stewCapState: () => ({ allowed: true, owner: true, why: '' }),
     window: { Steward: steward, useStewardJoinPolicy: () => false, useStewardAdmitted: () => [], useStewardMembers: () => [{ pubkey: MEMBER }],
       useStewardGroups: () => [], useStewardChurch: () => ({ name: 'St Aidan', features: {}, rules: {} }), addEventListener() {}, removeEventListener() {}, dispatchEvent: () => true },
   });

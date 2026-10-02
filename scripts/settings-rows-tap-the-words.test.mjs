@@ -93,6 +93,8 @@ async function featuresPanel(church = {}, groups = []) {
     // its own test below, driving the real component.
     DashMealsPanel: function DashMealsPanel() { return null; },
     DashGivingPanel: function DashGivingPanel() { return null; },
+    // the join-approval row now asks whether this steward holds Members (sim 4); this file's console is the owner's. The real rule is a-delegate-without-members-cannot-change-approval-to-join.test.mjs
+    stewCapState: () => ({ allowed: true, owner: true, why: '' }),
     ...furniture(React),
   });
   return { draw: () => draw(Comp, { church }), published, joinPolicy, admitted };
