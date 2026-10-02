@@ -16707,7 +16707,7 @@ zoo`.split("\n");
     }
   }
   function _openKeyRead(cp, filters, onevent, onSettled, kind, opts) {
-    const st = { stopped: false, gen: 0, subs: [], timer: null, tries: 0, since: 0 };
+    const st = { stopped: false, gen: 0, subs: [], timer: null, tries: 0, since: 0, again: null };
     const stopSubs = () => {
       for (const s of st.subs) {
         s.tok.closed = true;
@@ -16723,6 +16723,7 @@ zoo`.split("\n");
       stopSubs();
       clearTimeout(st.timer);
       st.timer = null;
+      if (st.again) _keyReadAuthWaiters.delete(st.again);
       const gen = ++st.gen;
       const urls = relays();
       const epoch = _keyReadEpoch, at = Date.now();
@@ -16738,12 +16739,17 @@ zoo`.split("\n");
       const again = () => {
         if (live()) open();
       };
+      st.again = again;
+      const settled = () => {
+        _keyReadAuthWaiters.delete(again);
+        st.tries = 0;
+        st.since = 0;
+      };
       const evaluate = () => {
         if (!live() || answers.size < urls.length) return;
         const v = [...answers.values()];
         if (v.every((x) => x === true)) {
-          st.tries = 0;
-          st.since = 0;
+          settled();
           const w = kind && _keyReadWaiting.get(kind);
           if (w && w.answers === answers) w.settled = true;
           onSettled();
@@ -16752,8 +16758,7 @@ zoo`.split("\n");
         if (opts && opts.withoutFailed) {
           const without = urls.filter((u) => answers.get(u) !== true);
           if (without.length < urls.length && without.every((u) => !_keyReadConnected(u))) {
-            st.tries = 0;
-            st.since = 0;
+            settled();
             onSettled({ without });
             return;
           }
@@ -16803,6 +16808,7 @@ zoo`.split("\n");
       clearTimeout(st.timer);
       st.timer = null;
       stopSubs();
+      if (st.again) _keyReadAuthWaiters.delete(st.again);
     };
   }
   var _KEY_WAIT_NOTE_MS = 8e3;

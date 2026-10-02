@@ -2323,12 +2323,13 @@ function _keyReadConnected(url) {
 // to `onSettled` ({ without: [urls] }) so the caller can apply its floor. A connected relay that has not answered
 // trustworthily — the library's timer, our own close, a CLOSED, an unaccepted login — still holds the read.
 function _openKeyRead(cp, filters, onevent, onSettled, kind, opts) {
-  const st = { stopped: false, gen: 0, subs: [], timer: null, tries: 0, since: 0 };   // since: when this read began waiting (_keyWaitNote)
+  const st = { stopped: false, gen: 0, subs: [], timer: null, tries: 0, since: 0, again: null };   // since: when this read began waiting (_keyWaitNote); again: this opening's login waiter
   // MARK EACH TOKEN CLOSED BEFORE CLOSING: the close itself fires that subscription's oneose.
   const stopSubs = () => { for (const s of st.subs) { s.tok.closed = true; try { s.sub.close(); } catch (e) {} } st.subs = []; };
   const open = () => {
     if (st.stopped) return;
     stopSubs(); clearTimeout(st.timer); st.timer = null;
+    if (st.again) _keyReadAuthWaiters.delete(st.again);   // the previous opening's waiter goes with it (below)
     const gen = ++st.gen;
     const urls = relays();
     const epoch = _keyReadEpoch, at = Date.now();
@@ -2342,14 +2343,18 @@ function _openKeyRead(cp, filters, onevent, onSettled, kind, opts) {
     // accepted, with that login accepted before the last relay answered, was never asked again — the read never
     // settled, on two healthy relays, and no member was keyed. One function per opening, so the waiter set holds it
     // once however many relays answered early.
+    // …AND IT LEAVES WITH THE OPENING (audit of 637bc0c, LOW): one was added per retry and kept after a close or a
+    // settle until the next accepted login. A new opening, a settle and the closer each take this one out.
     const again = () => { if (live()) open(); };
+    st.again = again;
+    const settled = () => { _keyReadAuthWaiters.delete(again); st.tries = 0; st.since = 0; };
     const evaluate = () => {
       if (!live() || answers.size < urls.length) return;     // superseded, or not every relay has answered yet
       const v = [...answers.values()];
-      if (v.every(x => x === true)) { st.tries = 0; st.since = 0; const w = kind && _keyReadWaiting.get(kind); if (w && w.answers === answers) w.settled = true; onSettled(); return; }
+      if (v.every(x => x === true)) { settled(); const w = kind && _keyReadWaiting.get(kind); if (w && w.answers === answers) w.settled = true; onSettled(); return; }
       if (opts && opts.withoutFailed) {                        // see `opts.withoutFailed`, above
         const without = urls.filter(u => answers.get(u) !== true);
-        if (without.length < urls.length && without.every(u => !_keyReadConnected(u))) { st.tries = 0; st.since = 0; onSettled({ without }); return; }
+        if (without.length < urls.length && without.every(u => !_keyReadConnected(u))) { settled(); onSettled({ without }); return; }
       }
       if (v.some(x => x === false)) { retry(); return; }     // a CLOSED, a timer, a drop: ask again, later
       _keyReadAfterAuth(again);                              // genuine but not yet logged in: ask again on login (held since its answer — `again`)
@@ -2369,7 +2374,7 @@ function _openKeyRead(cp, filters, onevent, onSettled, kind, opts) {
     }
   };
   open();
-  return () => { st.stopped = true; clearTimeout(st.timer); st.timer = null; stopSubs(); };
+  return () => { st.stopped = true; clearTimeout(st.timer); st.timer = null; stopSubs(); if (st.again) _keyReadAuthWaiters.delete(st.again); };
 }
 // "relay.example.org isn't answering" — or '' when no read for the church we are on is held up by a relay. Short
 // on purpose (the owner prefers minimal instructional copy): the screens append it to their own "not saved".

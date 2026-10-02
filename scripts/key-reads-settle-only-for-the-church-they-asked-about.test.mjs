@@ -136,6 +136,7 @@ function engine() {
     fnBody(BUNDLE, 'function _landed(what, p) {'),                               // …and a Block made here (setBlocked, below)
     't.__runAuthWaiters = _runKeyReadAuthWaiters;',
     't.__resetChurchScopedState = _resetChurchScopedState;',
+    't.__authWaiters = _keyReadAuthWaiters;',                                    // the login waiters a read leaves behind (audit of 637bc0c)
   ].join('\n');
   const M = (a) => fnBody(BUNDLE, a, a + ' in the shipped bundle');
   const methods = [
@@ -753,6 +754,33 @@ test('rotateCareKey and rotateMediaKey never wrap the new key to someone this co
     assert.ok(to.includes(M1.pub), `CONTROL: the ${what} key rotation left out a member who is not blocked`);
     assert.ok(!to.includes(M2.pub), `THE ${what.toUpperCase()} KEY ROTATION WRAPPED THE NEW KEY TO M2, whom this console holds as blocked (audit of ce15f92)`);
   }
+});
+
+// A READ'S "ASK AGAIN ON LOGIN" LEAVES WITH IT (audit of 637bc0c, LOW): one was added per retry, and kept after a close or a
+// settle until the next accepted login.
+test('a key read holds one login waiter however often it retries, and none once it settles or closes', async () => {
+  const e = engine(); e.t.relayList = [R1, R2]; e.t.up = new Set([R1, R2]); e.t.refused = new Set([R1]);   // R1's login not accepted
+  const close = e.S.subscribeNameKey();
+  const held = [];
+  for (let i = 0; i < 5; i++) {
+    if (i) { e.fireTimers(); await flush(); }               // the retry re-opens the read
+    const [a, b] = e.subs.slice(-2);
+    await e.eose(a);                                        // R1: genuine, before its login → waits on login
+    await e.closedByRelay(b);                               // R2: a CLOSED → the read retries
+    held.push(e.t.__authWaiters.size);
+  }
+  assert.deepEqual(held, [1, 1, 1, 1, 1], `A READ PILED UP LOGIN WAITERS — one per retry, each re-opening it on the next login (audit of 637bc0c): ${JSON.stringify(held)}`);
+  close(); await flush();
+  assert.equal(e.t.__authWaiters.size, 0, 'a CLOSED read kept its login waiter until the next accepted login');
+  // …and a blocklist read that settles without the relay that answered before its login (its socket dropped)
+  const e2 = engine(); e2.t.relayList = [R1, R2]; e2.t.up = new Set([R1, R2]); e2.t.refused = new Set([R1]);
+  e2.S.subscribeBlocked(() => {});
+  const [c, d] = blockedReads(e2);
+  await e2.eose(c);
+  assert.equal(e2.t.__authWaiters.size, 1, 'CONTROL: an answer before the login was accepted does not wait on the login');
+  e2.t.up = new Set([R2]);                                  // R1's socket drops
+  await e2.eose(d);                                         // R2 answers genuinely: the read settles without R1
+  assert.equal(e2.t.__authWaiters.size, 0, 'a SETTLED read kept its login waiter — the next login re-opens a finished read');
 });
 
 // THE NAME-KEY LOCK: the church is fixed when the call is made, not when it gets the lock. The audit's four rows.
