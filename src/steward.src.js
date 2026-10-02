@@ -342,6 +342,34 @@ let _careKeyDocKeys = null;      // the envelope's wrapped-per-member map (to de
 let _careKeyRev = 0;             // envelope revision — rotation is NOT wired yet, but readers must tolerate it
 let _careKeyChecked = false;     // have we actually LOOKED for an envelope? mint gate — see (1) above
 let _careRoster = new Set();     // the church's current steward pubkeys — who may author the envelope
+// A STEWARD WHO ONLY POSTS IS NOT A MEMBER (sim finding 29). The relay lets a steward write chat without a
+// `member:` document, and subscribeMembers turns any kind-1 addressed to the church into a member row — so a
+// delegate's own posts listed them as a "joiner", offered them in "waiting to be let in", and had the console
+// key them as a congregation member. subscribeMembers hides a row that has no `member:` document (`joined`)
+// when its key is a steward. REMOVING the steward must not bring the row back (the enrolment effect would
+// re-wrap every key to them, undoing the rotation done on removal), so ex-stewards are remembered per church.
+const _exStewardsKey = () => 'trinityone.steward.exstewards.' + (pub || '');
+function _exStewardSet() {
+  try { const a = JSON.parse(localStorage.getItem(_exStewardsKey()) || '[]'); return new Set(Array.isArray(a) ? a.filter(x => typeof x === 'string') : []); } catch (e) { return new Set(); }
+}
+// `before` is the roster we held, `after` the one now in force; whoever left it is an ex-steward.
+function _rememberExStewards(before, after) {
+  try {
+    const now_ = new Set(after || []); const gone = [...(before || [])].filter(p => p && !now_.has(p));
+    if (!gone.length) return;
+    const ex = _exStewardSet(); let grew = false;
+    for (const p of gone) if (!ex.has(p)) { ex.add(p); grew = true; }
+    if (grew) localStorage.setItem(_exStewardsKey(), JSON.stringify([...ex].slice(-200)));
+  } catch (e) {}
+}
+// Every open Members subscription registers its `emit` here so a roster that arrives (or changes) after the
+// rows were painted re-filters them instead of waiting for the next member event.
+const _memberEmitters = new Set();
+function _pokeMemberLists() { for (const f of [..._memberEmitters]) { try { f(); } catch (e) {} } }
+// ONE CALL from subscribeStewards when a roster document lands: whoever it dropped becomes an ex-steward, and the
+// Members lists already on screen are re-filtered against the new roster. (Kept as one name on purpose — a
+// second free variable in subscribeStewards breaks every test that lifts it.)
+function _stewardRosterChanged(before, after) { _rememberExStewards(before, after); _pokeMemberLists(); }
 // HAVE WE ACTUALLY SEEN A ROSTER, as opposed to simply not having one yet? An empty set means both, and the
 // difference decides whether a steward-authored clearance is "an author the member honours" or "nobody".
 // Reading it as the latter during the boot race turned the cross-author check off and skipped the member.
@@ -8446,9 +8474,11 @@ window.Steward = {
         // fills on the first emit, so a console that reached Members first judged every steward-authored copy
         // as unauthored-by-anyone and skipped the member. The engine's own subscription is the earliest honest
         // moment this is knowable. AUDIT-8.
+        const _rosterBefore = _careRoster;
         _careRoster = new Set(cur.filter(Boolean));
         _careRosterKnown = true;
         _careRosterSeen = true;   // a real roster DOCUMENT, as opposed to the oneose below — see _consoleDisplay
+        _stewardRosterChanged(_rosterBefore, cur);   // remember who left it, and re-filter the open Members lists
         onList(cur);
       },
       oneose() {
@@ -10440,7 +10470,11 @@ window.Steward = {
     const CACHE_KEY = 'trinityone.steward.members.' + (pub || '');
     const byPub = new Map();          // pubkey -> { pubkey, npub, name, picture, count, lastTs, firstTs, joined }
     // paint the last-known roster instantly so the Members list doesn't flash empty→list on reload
-    try { const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || '[]'); if (Array.isArray(cached)) { cached.forEach(m => { if (m && m.pubkey) byPub.set(m.pubkey, m); }); if (cached.length) onMembers(cached); } } catch {}
+    // A steward who only POSTS is not a member (sim finding 29): no `member:` document (`joined`) and the key is a
+    // current or former steward. The row is kept in `byPub` (a later member document brings it straight back) but
+    // never handed out.
+    const isGhost = (m, ex = _exStewardSet()) => !m.joined && (_careRoster.has(m.pubkey) || ex.has(m.pubkey));
+    try { const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || '[]'); if (Array.isArray(cached)) { cached.forEach(m => { if (m && m.pubkey) byPub.set(m.pubkey, m); }); const shown = cached.filter(m => m && m.pubkey && !isGhost(m)); if (shown.length) onMembers(shown); } } catch {}
     // SECURITY-AUDIT-2026-07-18 (perf): debounce the heavy roster serialize. emit() ran a full sort +
     // JSON.stringify(entire roster) + localStorage write + setState on EVERY incoming event; on a large church's
     // load that was thousands of full-roster serializations. Coalesce to ~150ms (trailing fire keeps final state).
@@ -10461,13 +10495,16 @@ window.Steward = {
     const sealedRaw = new Map();
     const emitNow = () => {
       const sealedName = (pk) => { const c = sealedRaw.get(pk); if (!c) return ''; try { return window.Steward.openMemberName(c, pk) || ''; } catch (x) { return ''; } };
+      const ex = _exStewardSet();
       const arr = [...byPub.values()].filter(m => !reseatOld.has(m.pubkey))
+        .filter(m => !isGhost(m, ex))   // a steward who only posts is not a member
         .map(m => { if (m.name) return m; const sn = sealedName(m.pubkey); return sn ? { ...m, name: sn, viaSealed: true } : m; })
         .map(m => (m.name || !reseatName.get(m.pubkey)) ? m : { ...m, name: reseatName.get(m.pubkey), viaReseat: true })
         .sort((a, b) => ((b.lastTs || b.joined || 0) - (a.lastTs || a.joined || 0)));
       try { localStorage.setItem(CACHE_KEY, JSON.stringify(arr)); } catch {} onMembers(arr);
     };
     const emit = () => { if (emitTimer) return; emitTimer = setTimeout(() => { emitTimer = null; emitNow(); }, 150); };
+    _memberEmitters.add(emit);   // the steward roster re-filters this list when it arrives or changes — see _pokeMemberLists
     const get = (pk) => byPub.get(pk) || { pubkey: pk, npub: npubEncode(pk), name: '', picture: '', count: 0, lastTs: 0, firstTs: Infinity, joined: 0 };
     // SECURITY-AUDIT-2026-07-18 (perf — "names blank = sub cap"): resolve profiles with ONE batched kind-0
     // subscription (authors:[…]) instead of one sub PER member. Past ~64 members the per-member fan-out saturated
@@ -10539,7 +10576,7 @@ window.Steward = {
       },
       oneose() {},
     });
-    return () => { try { sub.close(); } catch {} try { reseatSub.close(); } catch {} if (emitTimer) { try { clearTimeout(emitTimer); } catch {} } if (profTimer) { try { clearTimeout(profTimer); } catch {} } if (profSub) { try { profSub.close(); } catch {} } };
+    return () => { _memberEmitters.delete(emit); try { sub.close(); } catch {} try { reseatSub.close(); } catch {} if (emitTimer) { try { clearTimeout(emitTimer); } catch {} } if (profTimer) { try { clearTimeout(profTimer); } catch {} } if (profSub) { try { profSub.close(); } catch {} } };
   },
 
   // ---- church profile (kind-0): name etc. shown to members and in the console ----

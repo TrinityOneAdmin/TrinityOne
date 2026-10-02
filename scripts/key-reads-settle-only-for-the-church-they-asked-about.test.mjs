@@ -100,6 +100,7 @@ function engine() {
     privateKeyFromSeedWords: (m) => (m === 'B' ? B.sk : A.sk), [(BUNDLE.match(/pub = (getPublicKey\d*)\(sk\);/) || [])[1] || 'getPublicKey']: getPublicKey,
     currentMnemonic: null, _migrateNetKeysToSealed() {},
     _requireTrustedView() {}, _publishToRelays: async () => true, _monotonic: (x) => x,
+    _stewardRosterChanged() {},   // subscribeStewards' hook for the Members list (finding 29) — not what this file reads
     [(BUNDLE.match(/_publishToRelays\((finalizeEvent\d*)\(_monotonic\(\{ kind: 30078, created_at: now\(\), tags: \[\["d", BLOCKED_D/) || [])[1] || 'finalizeEvent']: (x) => x,
     CustomEvent: class { constructor(type, init) { this.type = type; this.detail = (init || {}).detail; } },
     console: { warn() {}, log() {}, error() {} },

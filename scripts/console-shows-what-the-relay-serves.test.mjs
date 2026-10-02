@@ -85,6 +85,9 @@ function consoleAt({ relayAuthed = true, cache = null, oldCache = null, mountGro
     localStorage: { getItem: (k) => (stored.has(k) ? stored.get(k) : null), setItem: (k, v) => stored.set(k, v) },
     _careRoster: new Set(), _careRosterKnown: false, _careRosterSeen: false,
     _stewardCaps: {}, _stewardNames: {}, _stewardSince: {},
+    // subscribeStewards tells the open Members lists (and the ex-steward memory) when a roster lands (sim finding 29,
+    // covered by a-steward-who-only-posts-is-not-a-member.test.mjs). Nothing in THIS file is about member rows.
+    _stewardRosterChanged: () => {},
     // subscribeGroups records which rooms are sealed (83248e3). Without this the lifted reader threw a
     // ReferenceError inside its own try on EVERY group, absorbed nothing, and 11 tests failed as "the console was
     // emptied" — over a shipped reader that was fine (bisected 2026-09-30; 13/13 on main before that commit).

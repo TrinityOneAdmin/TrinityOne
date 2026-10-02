@@ -182,6 +182,9 @@ test('subscribeMembers reads the seen field from a heartbeat document', async ()
     JSON, Math, Date, console, String, Number, Map, Set, Array, Infinity,
     setTimeout, clearTimeout,
     npubEncode: (x) => x,
+    // subscribeMembers now consults the steward roster to hide a steward who only posts (sim finding 29,
+    // covered by a-steward-who-only-posts-is-not-a-member.test.mjs). This test is about `seen`, so nobody here is a steward.
+    _careRoster: new Set(), _memberEmitters: new Set(), _exStewardSet: () => new Set(),
     localStorage: {
       getItem: (k) => storage[k] || null,
       setItem: (k, v) => { storage[k] = v; },

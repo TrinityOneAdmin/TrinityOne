@@ -15376,6 +15376,43 @@ zoo`.split("\n");
   var _careKeyRev = 0;
   var _careKeyChecked = false;
   var _careRoster = /* @__PURE__ */ new Set();
+  var _exStewardsKey = () => "trinityone.steward.exstewards." + (pub || "");
+  function _exStewardSet() {
+    try {
+      const a = JSON.parse(localStorage.getItem(_exStewardsKey()) || "[]");
+      return new Set(Array.isArray(a) ? a.filter((x) => typeof x === "string") : []);
+    } catch (e) {
+      return /* @__PURE__ */ new Set();
+    }
+  }
+  function _rememberExStewards(before, after) {
+    try {
+      const now_ = new Set(after || []);
+      const gone = [...before || []].filter((p) => p && !now_.has(p));
+      if (!gone.length) return;
+      const ex = _exStewardSet();
+      let grew = false;
+      for (const p of gone) if (!ex.has(p)) {
+        ex.add(p);
+        grew = true;
+      }
+      if (grew) localStorage.setItem(_exStewardsKey(), JSON.stringify([...ex].slice(-200)));
+    } catch (e) {
+    }
+  }
+  var _memberEmitters = /* @__PURE__ */ new Set();
+  function _pokeMemberLists() {
+    for (const f of [..._memberEmitters]) {
+      try {
+        f();
+      } catch (e) {
+      }
+    }
+  }
+  function _stewardRosterChanged(before, after) {
+    _rememberExStewards(before, after);
+    _pokeMemberLists();
+  }
   var _careRosterKnown = false;
   var _careRosterSeen = false;
   var MEDIAKEY_D = "trinityone/mediakey:";
@@ -21800,9 +21837,11 @@ zoo`.split("\n");
               _stewardSince = {};
             }
           }
+          const _rosterBefore = _careRoster;
           _careRoster = new Set(cur.filter(Boolean));
           _careRosterKnown = true;
           _careRosterSeen = true;
+          _stewardRosterChanged(_rosterBefore, cur);
           onList(cur);
         },
         oneose() {
@@ -23826,13 +23865,15 @@ zoo`.split("\n");
       const MEMBER_D = "trinityone/member:";
       const CACHE_KEY = "trinityone.steward.members." + (pub || "");
       const byPub = /* @__PURE__ */ new Map();
+      const isGhost = (m, ex = _exStewardSet()) => !m.joined && (_careRoster.has(m.pubkey) || ex.has(m.pubkey));
       try {
         const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || "[]");
         if (Array.isArray(cached)) {
           cached.forEach((m) => {
             if (m && m.pubkey) byPub.set(m.pubkey, m);
           });
-          if (cached.length) onMembers(cached);
+          const shown = cached.filter((m) => m && m.pubkey && !isGhost(m));
+          if (shown.length) onMembers(shown);
         }
       } catch {
       }
@@ -23849,7 +23890,8 @@ zoo`.split("\n");
             return "";
           }
         };
-        const arr = [...byPub.values()].filter((m) => !reseatOld.has(m.pubkey)).map((m) => {
+        const ex = _exStewardSet();
+        const arr = [...byPub.values()].filter((m) => !reseatOld.has(m.pubkey)).filter((m) => !isGhost(m, ex)).map((m) => {
           if (m.name) return m;
           const sn = sealedName(m.pubkey);
           return sn ? { ...m, name: sn, viaSealed: true } : m;
@@ -23867,6 +23909,7 @@ zoo`.split("\n");
           emitNow();
         }, 150);
       };
+      _memberEmitters.add(emit);
       const get = (pk) => byPub.get(pk) || { pubkey: pk, npub: npubEncode(pk), name: "", picture: "", count: 0, lastTs: 0, firstTs: Infinity, joined: 0 };
       const profWanted = /* @__PURE__ */ new Set();
       let profSub = null, profTimer = null;
@@ -23985,6 +24028,7 @@ zoo`.split("\n");
         }
       });
       return () => {
+        _memberEmitters.delete(emit);
         try {
           sub.close();
         } catch {
