@@ -16735,6 +16735,9 @@ zoo`.split("\n");
         const ms = Math.min(6e4, 2e3 * Math.pow(2, st.tries++));
         st.timer = setTimeout(open, ms);
       };
+      const again = () => {
+        if (live()) open();
+      };
       const evaluate = () => {
         if (!live() || answers.size < urls.length) return;
         const v = [...answers.values()];
@@ -16759,9 +16762,7 @@ zoo`.split("\n");
           retry();
           return;
         }
-        _keyReadAfterAuth(() => {
-          if (live()) open();
-        });
+        _keyReadAfterAuth(again);
       };
       if (!urls.length) {
         retry();
@@ -16783,7 +16784,9 @@ zoo`.split("\n");
           // a microtask later, so a CLOSED's onclose (which nostr-tools runs right after this) has marked the token
           oneose() {
             queueMicrotask(() => {
-              answers.set(url, _keyReadOk(tok));
+              const v = _keyReadOk(tok);
+              answers.set(url, v);
+              if (v === "unauthed" && live()) _keyReadAfterAuth(again);
               evaluate();
             });
           },

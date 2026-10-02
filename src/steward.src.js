@@ -2337,6 +2337,12 @@ function _openKeyRead(cp, filters, onevent, onSettled, kind, opts) {
     if (kind) _keyReadWaiting.set(kind, { cp, epoch, urls: urls.slice(), answers, settled: false, since: st.since });
     const live = () => !st.stopped && gen === st.gen && epoch === _keyReadEpoch && cp === (actingChurch || pub);
     const retry = () => { if (!live()) return; const ms = Math.min(60000, 2000 * Math.pow(2, st.tries++)); st.timer = setTimeout(open, ms); };
+    // ASK AGAIN ON LOGIN — REGISTERED THE MOMENT A RELAY ANSWERS BEFORE ITS LOGIN WAS ACCEPTED (audit of 29d4941/
+    // 51d6ebf). It was registered only once the LAST relay had answered: a relay that answered before its login was
+    // accepted, with that login accepted before the last relay answered, was never asked again — the read never
+    // settled, on two healthy relays, and no member was keyed. One function per opening, so the waiter set holds it
+    // once however many relays answered early.
+    const again = () => { if (live()) open(); };
     const evaluate = () => {
       if (!live() || answers.size < urls.length) return;     // superseded, or not every relay has answered yet
       const v = [...answers.values()];
@@ -2346,7 +2352,7 @@ function _openKeyRead(cp, filters, onevent, onSettled, kind, opts) {
         if (without.length < urls.length && without.every(u => !_keyReadConnected(u))) { st.tries = 0; st.since = 0; onSettled({ without }); return; }
       }
       if (v.some(x => x === false)) { retry(); return; }     // a CLOSED, a timer, a drop: ask again, later
-      _keyReadAfterAuth(() => { if (live()) open(); });     // genuine but not yet logged in: ask again on login
+      _keyReadAfterAuth(again);                              // genuine but not yet logged in: ask again on login (held since its answer — `again`)
     };
     if (!urls.length) { retry(); return; }
     for (const url of urls) {
@@ -2356,7 +2362,7 @@ function _openKeyRead(cp, filters, onevent, onSettled, kind, opts) {
         ...(up ? { maxWait: _KEY_READ_LONG_WAIT } : {}),
         onevent(e) { if (!tok.closed) onevent(e); },
         // a microtask later, so a CLOSED's onclose (which nostr-tools runs right after this) has marked the token
-        oneose() { queueMicrotask(() => { answers.set(url, _keyReadOk(tok)); evaluate(); }); },
+        oneose() { queueMicrotask(() => { const v = _keyReadOk(tok); answers.set(url, v); if (v === 'unauthed' && live()) _keyReadAfterAuth(again); evaluate(); }); },
         onclose() { tok.relayClosed = true; },
       });
       st.subs.push({ tok, sub });

@@ -297,6 +297,30 @@ test('two relays: one that cannot be reached keeps the gate shut, and is asked a
   assert.deepEqual(e.fireTimers(), [2000], 'the unreachable relay was never asked again');
 });
 
+// A RELAY THAT ANSWERED BEFORE ITS LOGIN WAS ACCEPTED IS ASKED AGAIN, WHATEVER ORDER THE OTHERS ANSWER IN (audit of
+// 29d4941/51d6ebf). The "ask again on login" waiter was registered only once the LAST relay had answered, so with two
+// healthy relays — the first answering before its login was accepted, that login accepted before the second answered —
+// nothing ever asked again: the read never settled, and no member was keyed. (The browser row:
+// a-blocklist-held-by-one-of-two-relays.test.mjs.)
+for (const [kind, method] of [...KINDS, ['blocked', 'subscribeBlocked']]) {
+  test(`${kind}: two healthy relays — one answers before its login is accepted, the login lands, then the other answers: the read is asked again and settles`, async () => {
+    const e = engine(); e.t.relayList = [R1, R2]; e.t.up = new Set([R1, R2]); e.t.refused = new Set([R1]);   // R1's login not accepted yet
+    let got = null;
+    if (kind === 'blocked') e.S.subscribeBlocked((list) => { got = list; }); else e.S[method]();
+    const reads = () => (kind === 'blocked' ? e.subs.filter(r => r.d === 'trinityone/blocked:' + A.pub) : e.subs);
+    const [r1, r2] = reads();
+    assert.deepEqual([r1.url, r2.url], [R1, R2], 're-anchor: the read is no longer opened per relay');
+    await e.eose(r1);                                       // R1 answers — before its login was accepted
+    e.t.refused = new Set(); e.t.__runAuthWaiters();        // R1's login is accepted…
+    await e.eose(r2);                                       // …and only then does R2 answer
+    const again = reads().slice(-2);
+    assert.notEqual(again[0], r1, `THE ${kind.toUpperCase()} READ WAS NEVER ASKED AGAIN — the relay that answered before its login was accepted held it for good, on two healthy relays (audit of 29d4941/51d6ebf)`);
+    await e.eose(again[0]); await e.eose(again[1]);
+    if (kind === 'blocked') assert.ok(got && e.S.listIsCurrent(got), 'CONTROL: both relays re-answered genuinely and the blocklist is not current');
+    else assert.equal(checked(e.t, kind), true, 'CONTROL: both relays re-answered genuinely and the gate is still shut');
+  });
+}
+
 test('a relay that is already connected is read with a longer wait, so a slow genuine answer counts', async () => {
   const e = engine(); e.t.up = new Set([R1]);
   e.S.subscribeMediaKey();
