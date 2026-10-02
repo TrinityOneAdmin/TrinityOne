@@ -6939,7 +6939,10 @@ window.Steward = {
       // we read can be trusted — including the emptiness we were about to act on.
       const canary = await pool.querySync(relays(), [{ kinds: [30078], '#d': [GROUP_D + g.id], limit: 1 }]);
       if (!Array.isArray(canary) || !canary.length) continue;   // reads are not working — conclude nothing
-      const envelopes = await pool.querySync(relays(), [{ kinds: [30078], authors: [churchPub], '#d': [GROUPKEY_D + g.id], limit: 1 }]);
+      // THE ENVELOPE'S AUTHOR IS THE CHURCH, which on a delegated console is NOT `churchPub` (that is this device's OWN key -
+      // "our key signs, the church's context reads"). Asking only for `churchPub` never found the owner's envelope, so a
+      // delegate with no sealed traffic yet to refuse on minted a competing, newer one (sim finding 3).
+      const envelopes = await pool.querySync(relays(), [{ kinds: [30078], authors: [...new Set([cp, churchPub])], '#d': [GROUPKEY_D + g.id], limit: 1 }]);
       const sealed = await pool.querySync(relays(), [{ kinds: [1], '#t': [g.id], limit: 20 }]);
       if (!Array.isArray(envelopes) || !Array.isArray(sealed)) continue;
       if (envelopes.length) continue;                 // the envelope exists; we simply have not ingested it yet
@@ -6951,7 +6954,14 @@ window.Steward = {
       }
       // BACKGROUND: this whole function runs from the key-distributor effect and from nowhere else, so a
       // refusal here is not a steward's failed action. See the note above publish().
-      const r = await this.publishGroupKey(g.id, memberPubs || [], { background: true });
+      // WHO GETS THE KEY IS THE ROOM'S OWN AUDIENCE. An invite-only room is keyed to ITS members; the whole congregation
+      // is the audience only of an open one. This passed the church-wide list for every room, so a key minted for an
+      // invite-only room (the Leaders room, say) was wrapped to everyone - a child included - and the room was readable
+      // by them. KeyDistributor already makes this distinction for its own rotation (`recips`); this is the same rule.
+      // The church and this console's own key are always added by publishGroupKey itself. An invite-only room nobody has
+      // been invited to yet is keyed to the church alone, which is correct.
+      const recips = g.visibility === 'invite' ? (g.members || []) : (memberPubs || []);
+      const r = await this.publishGroupKey(g.id, recips, { background: true });
       out.push({ id: g.id, name: g.name || '', state: (r === null || r === false) ? 'failed' : 'issued' });
     }
     return out;

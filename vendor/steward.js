@@ -20621,7 +20621,7 @@ zoo`.split("\n");
         if ((_skeys[g.id] || []).length) continue;
         const canary = await pool.querySync(relays(), [{ kinds: [30078], "#d": [GROUP_D + g.id], limit: 1 }]);
         if (!Array.isArray(canary) || !canary.length) continue;
-        const envelopes = await pool.querySync(relays(), [{ kinds: [30078], authors: [churchPub], "#d": [GROUPKEY_D + g.id], limit: 1 }]);
+        const envelopes = await pool.querySync(relays(), [{ kinds: [30078], authors: [.../* @__PURE__ */ new Set([cp, churchPub])], "#d": [GROUPKEY_D + g.id], limit: 1 }]);
         const sealed = await pool.querySync(relays(), [{ kinds: [1], "#t": [g.id], limit: 20 }]);
         if (!Array.isArray(envelopes) || !Array.isArray(sealed)) continue;
         if (envelopes.length) continue;
@@ -20629,7 +20629,8 @@ zoo`.split("\n");
           out.push({ id: g.id, name: g.name || "", state: "needs-decision" });
           continue;
         }
-        const r = await this.publishGroupKey(g.id, memberPubs || [], { background: true });
+        const recips = g.visibility === "invite" ? g.members || [] : memberPubs || [];
+        const r = await this.publishGroupKey(g.id, recips, { background: true });
         out.push({ id: g.id, name: g.name || "", state: r === null || r === false ? "failed" : "issued" });
       }
       return out;
