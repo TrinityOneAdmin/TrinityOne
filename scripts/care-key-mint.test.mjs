@@ -19,6 +19,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { stmt } from './test-slice.mjs';
 
 const BUNDLE = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
 
@@ -79,7 +80,9 @@ test('the authenticated-view signal is a real auth, not hardcoded — and it EXP
   // auth, and it must not be able to outlive the connection.
   const at = BUNDLE.indexOf('pool.automaticallyAuth =');
   assert.notEqual(at, -1, 'the NIP-42 auth hook is missing from the shipped bundle');
-  const near = BUNDLE.slice(at, at + 500);
+  // THE WHOLE HOOK, to its closing `;` — not a fixed 500 characters: the hook grew past that (test-windows.test.mjs),
+  // and a window that stops short reads only part of what this asserts about.
+  const near = stmt(BUNDLE, 'pool.automaticallyAuth =', 'the NIP-42 auth hook in the shipped bundle');
   assert.match(near, /_authedRelays\.set\(/,
     'the authenticated relay must be recorded where the auth event is actually signed');
   assert.doesNotMatch(BUNDLE, /_authedRelays = new (?:Set|Map)\(\[[^\]]/,

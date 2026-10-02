@@ -14,6 +14,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { stmt } from './test-slice.mjs';
 
 const BUNDLE = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
 const FINANCE = readFileSync(new URL('../app/stew-finance.jsx', import.meta.url), 'utf8');
@@ -126,7 +127,8 @@ test('the trusted-view signal is a real auth, not a constant — and it cannot o
   // socket goes. Same invariant, one more clause: it must be able to become false again.
   const at = BUNDLE.indexOf('pool.automaticallyAuth =');
   assert.notEqual(at, -1, 'the NIP-42 auth hook is missing');
-  assert.match(BUNDLE.slice(at, at + 500), /_authedRelays\.set\(/,
+  // the WHOLE hook, to its closing `;` — a fixed 500 characters stopped short of it once it grew (test-windows.test.mjs)
+  assert.match(stmt(BUNDLE, 'pool.automaticallyAuth =', 'the NIP-42 auth hook'), /_authedRelays\.set\(/,
     'the authenticated relay must be recorded where the auth event is signed');
   assert.doesNotMatch(BUNDLE, /_authedRelays = new (?:Set|Map)\(\[[^\]]/,
     'it must start empty, or it asserts an auth that never happened');
