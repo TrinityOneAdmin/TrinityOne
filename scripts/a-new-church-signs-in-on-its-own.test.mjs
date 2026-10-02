@@ -1,4 +1,4 @@
-// A NEW CHURCH'S CONSOLE SIGNS IN WITHOUT WAITING TO BE ASKED.
+// A NEW CHURCH'S CONSOLE SIGNS IN WITHOUT WAITING TO BE ASKED — AND DOES NOT NEED THE RELAY TO HAVE LEARNT TO ASK.
 //   Run: node --test scripts/a-new-church-signs-in-on-its-own.test.mjs
 //
 // THE DEFECT (measured 2026-10-02, main at d73d8fb). The relay challenges lazily (NIP-42): only a REQ that names
@@ -13,6 +13,14 @@
 // that has not been asked to sign in sends the one filter every relay answers with an AUTH frame
 // (`#d: safetycheck:<church>`) — _loginSoon / _loginCheck in src/steward.src.js.
 //
+// WHY THIS RUNS AGAINST A RELAY WITHOUT THE KEY-ENVELOPE CHALLENGE. The relay now also challenges a REQ that names
+// a key-envelope d-tag (gateway.mjs `wantsKeyD`; relay-challenges-a-key-read.test.mjs). Against that relay the
+// console's first key read provokes the challenge itself and this fix would be invisible — a test that stays
+// green with the fix deleted. Production runs the previous main, which does not have it, so this is also the
+// deployment that matters: a console that works against a relay that has never heard of the change. The relay
+// used here is the working tree's gateway with exactly that clause removed (gatewayWithoutKeyChallenge), and
+// the first row proves it is the old behaviour by asking it.
+//
 // THE POINT OF USE (CLAUDE.md rule 1). A real gateway on a FREE port, the real console in headless chromium, a
 // church made through the real screens and left on the Overview — nothing private exists (no member, no room, no
 // key) and no tab is opened, which is exactly the state in which nothing else provokes a challenge. The test reads
@@ -20,18 +28,26 @@
 //
 // WHAT EACH ROW WOULD CATCH
 //   · _loginSoon deleted from the socket door (src/steward.src.js)  → the console is never challenged; red.
-// The relay needs no change for this: it works against every relay that already challenges a REQ for the
-// safety-check document.
 //
 // Skips itself when chromium is unavailable, like scripts/app-boots.test.mjs.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { CHROME, openNewChurch } from './new-church-session.mjs';
+import { CHROME, openNewChurch, gatewayWithoutKeyChallenge, rawReq } from './new-church-session.mjs';
 
-let s;
-before(async () => { if (!CHROME) return; s = await openNewChurch({ wizard: 'skip', name: 'signin' }); });
-after(() => { try { s && s.close(); } catch {} });
+let s, old;
+before(async () => {
+  if (!CHROME) return;
+  old = gatewayWithoutKeyChallenge();
+  s = await openNewChurch({ wizard: 'skip', name: 'signin', gateway: old.path });
+});
+after(() => { try { s && s.close(); } catch {} try { old && old.remove(); } catch {} });
 const SKIP = !CHROME ? 'no chromium' : false;
+
+test('CONTROL: this is a relay that does not challenge a key read — an unauthenticated REQ for the name key gets no AUTH', { skip: SKIP, timeout: 60000 }, async () => {
+  const r = await rawReq(s.relay, { kinds: [30078], '#d': ['trinityone/namekey:' + s.churchPub] });
+  assert.equal(r.auth, false, 'the relay challenged a key read, so this is not the old relay and the rows below prove nothing about the console');
+  assert.equal(r.events, 0);
+});
 
 test('a church with nothing private yet: the console is signed in on the Overview, without a tab opened', { skip: SKIP, timeout: 120000 }, async () => {
   // precondition, so the row below proves something: nothing private exists that an ordinary read could match

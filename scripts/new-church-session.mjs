@@ -17,7 +17,7 @@
 // a browser over a socket to a relay; three tests need that, and three copies of 150 lines of CDP are three
 // places for a wizard change to break quietly. Derived from scripts/console-keys-follow-the-church-switch.test.mjs.
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -46,6 +46,41 @@ function brief(p) {
     if (t === 'OK') return 'OK ' + String(m[1]).slice(0, 8) + ' ' + m[2] + ' ' + (m[3] || '');
     return t + ' ' + (m[1] || '');
   } catch { return String(p).slice(0, 80); }
+}
+
+// ONE UNAUTHENTICATED REQ, raw: did the relay send an AUTH challenge, and did it serve any event? Resolves at EOSE.
+export function rawReq(relay, filter) {
+  return new Promise((resolve, reject) => {
+    const w = new WebSocket(relay.wsUrl), out = { auth: false, events: 0, frames: [] };
+    const timer = setTimeout(() => { try { w.close(); } catch {} reject(new Error('no EOSE for ' + JSON.stringify(filter))); }, 8000);
+    w.on('message', (d) => {
+      let m; try { m = JSON.parse(d); } catch { return; }
+      out.frames.push(m[0]);
+      if (m[0] === 'AUTH') out.auth = true;
+      if (m[0] === 'EVENT') out.events++;
+      if (m[0] === 'EOSE') { clearTimeout(timer); setTimeout(() => { try { w.close(); } catch {} resolve(out); }, 250); }   // a challenge sent right after the EOSE still counts
+    });
+    w.on('open', () => w.send(JSON.stringify(['REQ', 'q', filter])));
+    w.on('error', (e) => { clearTimeout(timer); reject(e); });
+  });
+}
+
+// A RELAY THAT PREDATES THE KEY-ENVELOPE CHALLENGE — this gateway with exactly that one clause removed. Production
+// runs the previous main, so the client's own sign-in (the console's _loginSoon) has to work without it. The copy
+// must sit beside the real one so its imports and the static files it serves resolve (the harness's old builds
+// serve no console); it is named *.tmp.* so .gitignore covers a crashed run, and it is removed on exit. Returns
+// { path, remove }. The caller proves it is an old relay by asking it (see relay-challenges-a-key-read.test.mjs).
+export function gatewayWithoutKeyChallenge() {
+  const real = join(H.ROOT, 'scripts', 'gateway.mjs');
+  const src = readFileSync(real, 'utf8');
+  const anchor = " || wantsKeyD) { try { ws.send(JSON.stringify(['AUTH', ws._challenge])); } catch {} }";
+  const n = src.split(anchor).length - 1;
+  if (n !== 1) throw new Error('expected the key-envelope challenge clause exactly once in scripts/gateway.mjs, found ' + n + ' — re-anchor this helper rather than widening it');
+  const path = join(H.ROOT, 'scripts', '.gateway-before-key-challenge-' + process.pid + '.tmp.mjs');
+  writeFileSync(path, src.replace(anchor, ") { try { ws.send(JSON.stringify(['AUTH', ws._challenge])); } catch {} }"));
+  const remove = () => { try { rmSync(path, { force: true }); } catch {} };
+  process.on('exit', remove);
+  return { path, remove };
 }
 
 // opts.gateway — a different gateway.mjs to run (the "old relay" case); opts.wizard — 'skip' (default) | 'rooms'

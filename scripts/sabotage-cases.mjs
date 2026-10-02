@@ -1734,4 +1734,25 @@ export const CASES = [
     replace: ``,
     test: 'scripts/a-new-church-signs-in-on-its-own.test.mjs',
   },
+  {
+    name: 'new church relay: a key-envelope REQ is no longer challenged',
+    file: 'scripts/gateway.mjs',
+    find: `if (wantsInvite || wantsSafeguard || wantsSafetyD || wantsKeyD) {`,
+    replace: `if (wantsInvite || wantsSafeguard || wantsSafetyD) {`,
+    test: 'scripts/relay-challenges-a-key-read.test.mjs',
+  },
+  {
+    name: 'new church relay: one key-envelope type missing from the challenge list',
+    file: 'scripts/gateway.mjs',
+    find: `const KEY_ENVELOPE_D = [NAMEKEY_D, CAREKEY_D, MEDIAKEY_D, GROUPKEY_D, FINANCEKEY_D, CHECKINKEY_D];`,
+    replace: `const KEY_ENVELOPE_D = [NAMEKEY_D, CAREKEY_D, MEDIAKEY_D, GROUPKEY_D, FINANCEKEY_D];`,
+    test: 'scripts/relay-challenges-a-key-read.test.mjs',
+  },
+  {
+    name: 'new church relay: the challenge widened to every #d read',
+    file: 'scripts/gateway.mjs',
+    find: `typeof d === 'string' && KEY_ENVELOPE_D.some(p => d.startsWith(p))`,
+    replace: `typeof d === 'string'`,
+    test: 'scripts/relay-challenges-a-key-read.test.mjs',
+  },
 ];
