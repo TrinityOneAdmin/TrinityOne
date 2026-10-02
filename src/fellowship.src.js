@@ -6441,6 +6441,12 @@ window.Fellowship = {
   async writeArrival(churchNpub, rec) {
     const cp = toPub(churchNpub);
     if (!cp || !sk || !pub) return { ok: false, reason: 'no-identity' };
+    // A MARKED CHILD DOES NOT ANNOUNCE ARRIVAL (owner, 2026-09-30; sim A2 #11). The screen no longer offers the
+    // button (arrivalBlockedForMinor in app/screens-today.jsx); this is the backstop for a build that does, and
+    // the relay refuses too. Fails OPEN: only a CONFIRMED answer for THIS member in THIS church refuses, so a
+    // parent whose clearance has not arrived is never stopped at the door. Nothing is sealed or published first.
+    const _me = _sgMine(cp);
+    if (_me && _me.isMinor) return { ok: false, reason: 'minor' };
     const sid = String((rec || {}).session || '').trim();
     if (!sid) return { ok: false, reason: 'no-session' };
     // THE ADDRESS NAMES ME. The relay enforces this at all four doors (arrivalIdOk); composing it from `pub`

@@ -2015,7 +2015,15 @@ function wereHereNames(ctx) {
   const names = (brings && F && F.myChildNames) ? F.myChildNames(np) : [];
   return Array.isArray(names) ? names : [];
 }
+// A PERSON THE CHURCH HAS MARKED AS A CHILD DOES NOT ANNOUNCE ARRIVAL (owner, 2026-09-30: "blocked fully for now,
+// screen AND relay" — and "we may find that teens drop their younger siblings off", so this is ONE LINE to relax,
+// here, with its engine twin in writeArrival and its relay twin in gateway.mjs accept()). CONFIRMED isMinor only,
+// never ctx.minorState === 'maybe': a parent who cannot announce arrival at a door is the worse failure (this
+// file's own header: "never required"), and the relay is the backstop for the unresolved window. It is the
+// "marked as a child" mark for chat, NOT the check-in register's — those are two different lists.
+function arrivalBlockedForMinor(ctx) { return !!(ctx && ctx.safeguard && ctx.safeguard.isMinor); }
 function wereHereOffers(ctx) {
+  if (arrivalBlockedForMinor(ctx)) return null;
   const names = wereHereNames(ctx);
   if (!names.length) return null;
   const now = (ctx && ctx.churchServices) ? arrivalNow(window.Fellowship, ctx.churchServices) : null;

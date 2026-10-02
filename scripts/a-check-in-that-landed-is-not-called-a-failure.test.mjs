@@ -49,6 +49,7 @@ function lift(open) {
     // so a stub here would supply the very answer these tests are named after — the trap that let an earlier
     // version of this file pass with refusal detection deleted outright.
     _pubReason,
+    _sgMine: () => null,   // writeArrival now asks whether THIS member is a confirmed child; "nothing known" = a cold start, never refused
     relaysForChurch: () => ['wss://x/relay'],
     publishSetFor: () => ['wss://x/relay'],
     toPub: (x) => String(x || ''), sk: 'a'.repeat(64), pub: 'b'.repeat(64),

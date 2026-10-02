@@ -398,6 +398,7 @@ function liftWriteArrival(actor, dev) {
     finalizeEvent2: (t, sec) => finalizeEvent(t, sec),
     CHECKINARRIVAL_D: D.CHECKINARRIVAL, NET, relaysForChurch: () => [], publishSetFor: () => [],
     _pubReason: (e) => (e && e.refused) ? 'refused' : (e && e.unsent) ? 'not-sent' : 'unconfirmed',
+    _sgMine: () => null,   // writeArrival now asks whether THIS member is a confirmed child; "nothing known" = a cold start, never refused
     localStorage: dev.localStorage,
     _publishAny: async (_relays, evt) => { captured.push(evt); return true; },
     String, Date, Math, JSON, Number, Array, Object, Boolean, RegExp, console,

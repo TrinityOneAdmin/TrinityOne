@@ -12820,6 +12820,8 @@
     async writeArrival(churchNpub, rec) {
       const cp = toPub(churchNpub);
       if (!cp || !sk || !pub) return { ok: false, reason: "no-identity" };
+      const _me = _sgMine(cp);
+      if (_me && _me.isMinor) return { ok: false, reason: "minor" };
       const sid = String((rec || {}).session || "").trim();
       if (!sid) return { ok: false, reason: "no-session" };
       const d = CHECKINARRIVAL_D + sid + ":" + pub;

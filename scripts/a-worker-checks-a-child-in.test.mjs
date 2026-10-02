@@ -121,6 +121,7 @@ function liftWriteCheckin(actor, keys /* sid -> hex */) {
       .replace(/^var\s+\w+\s*=\s*/, '').replace(/;\s*$/, '') + ');')(),
     CHECKIN_D: D.CHECKIN, NET, relaysForChurch: () => [], publishSetFor: () => [],
     _pubReason: (e) => (e && e.refused) ? 'refused' : (e && e.unsent) ? 'not-sent' : 'unconfirmed',
+    _sgMine: () => null,   // writeArrival now asks whether THIS member is a confirmed child; "nothing known" = a cold start, never refused
     _publishAny: async (_relays, evt) => { captured.push(evt); return true; },
     String, Date, Math, JSON, Number, Array, Object, Boolean, RegExp, console,
   };
@@ -145,6 +146,7 @@ function liftWriteArrival(actor) {
     finalizeEvent2: (t, sec) => finalizeEvent(t, sec),
     CHECKINARRIVAL_D: D.CHECKINARRIVAL, NET, relaysForChurch: () => [], publishSetFor: () => [],
     _pubReason: (e) => (e && e.refused) ? 'refused' : (e && e.unsent) ? 'not-sent' : 'unconfirmed',
+    _sgMine: () => null,   // writeArrival now asks whether THIS member is a confirmed child; "nothing known" = a cold start, never refused
     _publishAny: async (_relays, evt) => { captured.push(evt); return true; },
     String, Date, Math, JSON, Number, Array, Object, Boolean, RegExp, console,
   };
@@ -177,6 +179,7 @@ function liftReleaseCheckin(actor, keys) {
       .replace(/^var\s+\w+\s*=\s*/, '').replace(/;\s*$/, '') + ');')(),
     CHECKIN_D: D.CHECKIN, NET, relaysForChurch: () => [], publishSetFor: () => [],
     _pubReason: (e) => (e && e.refused) ? 'refused' : (e && e.unsent) ? 'not-sent' : 'unconfirmed',
+    _sgMine: () => null,   // writeArrival now asks whether THIS member is a confirmed child; "nothing known" = a cold start, never refused
     _publishAny: async (_relays, evt) => { captured.push(evt); return true; },
     String, Date, Math, JSON, Number, Array, Object, Boolean, RegExp, console,
   };
@@ -528,6 +531,7 @@ function liftArrivalWithPublish(actor, publishImpl) {
     finalizeEvent2: (t, sec) => finalizeEvent(t, sec),
     CHECKINARRIVAL_D: D.CHECKINARRIVAL, NET, relaysForChurch: () => ['wss://one.example/relay'], publishSetFor: () => ['wss://one.example/relay'],
     _publishAny: publishImpl,
+    _sgMine: () => null,   // writeArrival now asks whether THIS member is a confirmed child; "nothing known" = a cold start, never refused
     String, Date, Math, JSON, Number, Array, Object, Boolean, RegExp, console,
   };
   const proxy = new Proxy(scope, {

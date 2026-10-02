@@ -4692,6 +4692,16 @@ function accept(e) {
       // member write arrivals into this congregation's children's session. churchWriter delegates to
       // effMemberOf, which is the per-church rule every other church-scoped gate on this box asks.
       if (!churchWriter(e.pubkey, cp)) return false;
+      // A PERSON THE CHURCH HAS MARKED AS A CHILD DOES NOT ANNOUNCE ARRIVAL (owner, 2026-09-30: blocked fully for
+      // now, screen AND relay; "teens may drop their younger siblings off" so it is one line to relax, here).
+      // The member app's button and writeArrival refuse too; this is the boundary. It is the CHAT mark (minors:),
+      // scoped to the NAMED church (minorOf), not the check-in register. A TOMBSTONE IS EXEMPT: a child must
+      // always be able to take their own record down, and a tombstone reaches no live session that a new
+      // arrival would. IN accept() ONLY, never arrivalIdOk: that half also runs on /import and relay-to-relay,
+      // which replay history through store.put without accept(), and a write gate replayed over an import has
+      // deleted data here before.
+      const _arrivalTomb = e.tags.some(t => t[0] === 'deleted') || !e.content;
+      if (!_arrivalTomb && minorOf(e.pubkey, cp)) return false;
       const sid = arrivalSid(d);
       const tagSid = (e.tags.find(t => t[0] === 'session') || [])[1] || '';
       if (!sid || tagSid !== sid) return false;                // the tag readers route by IS the address they live at
