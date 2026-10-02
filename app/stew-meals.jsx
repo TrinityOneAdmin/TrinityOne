@@ -41,7 +41,9 @@ const recipRow = { display: 'block', width: '100%', textAlign: 'left', padding: 
 function RecipientPicker({ members, value, onChange }) {
   const [open, setOpen] = React.useState(false);
   const [q, setQ] = React.useState('');
-  const list = (members || []).filter(m => m && m.pubkey);
+  // Not somebody still waiting to join, not the blocked (sim A2 #7) — but whoever is already chosen stays listed.
+  const pickable = window.useStewardPickableMembers ? window.useStewardPickableMembers(members || [], value ? [value] : []) : (members || []);
+  const list = pickable.filter(m => m && m.pubkey);
   const sel = list.find(m => m.pubkey === value);
   const ql = q.trim().toLowerCase();
   const shown = ql ? list.filter(m => (m.name || '').toLowerCase().includes(ql) || m.pubkey.toLowerCase().includes(ql)) : list;
