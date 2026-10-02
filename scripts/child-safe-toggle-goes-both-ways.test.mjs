@@ -152,7 +152,11 @@ async function newGroupModal() {
   const published = [];
   const win = {
     Steward: { publishGroup: (g) => { published.push(g); return Promise.resolve({ id: 'g1', ...g, ts: 1 }); },
-      publishGroupKey: async () => ({ skipped: [] }) },
+      publishGroupKey: async () => ({ skipped: [] }),
+      // a new church's rooms are encrypted by default, and an encrypted room comes through createEncryptedGroup (key
+      // first, then the flagged room — src/steward.src.js). Same contract here, recording the room it publishes, so what
+      // this file reads — the group document the dialog handed to Steward, childsafe flag and all — is unchanged.
+      createEncryptedGroup: async (g) => ({ ok: true, group: await win.Steward.publishGroup({ ...g, encrypted: true }), skipped: [] }) },
     useStewardMembers: () => [], useStewardCategories: () => [],
     useStewardChurch: () => ({ features: {} }), dispatchEvent: () => true,
   };

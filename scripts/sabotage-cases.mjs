@@ -1774,4 +1774,54 @@ export const CASES = [
     also: [{ file: 'scripts/gateway.mjs', find: `if (wantsInvite || wantsSafeguard || wantsSafetyD || wantsKeyD) {`, replace: `if (wantsInvite || wantsSafeguard || wantsSafetyD) {` }],
     test: 'scripts/a-new-church-gets-its-keys-in-its-first-session.test.mjs',
   },
+  // ── part D: nothing meant to be encrypted is ever created without its key; a console still signing in says so ──
+  {
+    name: 'new church: the New group dialog creates the room in the clear when its key fails (the old fallback, restored)',
+    file: 'app/stew-dashboard.jsx',
+    find: `      setBusy(false);
+      if (!r || !r.ok) {
+`,
+    replace: `      setBusy(false);
+      if (!r || !r.ok) {
+        try { await window.Steward.publishGroup(g); } catch (e) {}
+        onClose(); return;
+`,
+    test: 'scripts/an-encrypted-room-is-never-made-without-its-key.test.mjs',
+  },
+  {
+    name: 'new church: createEncryptedGroup publishes the room before its key',
+    file: 'src/steward.src.js',
+    find: `    try { k = await window.Steward.publishGroupKey(id, memberPubs || []); } catch (e) { k = null; }`,
+    replace: `    try { await window.Steward.publishGroup({ ...group, id, encrypted: true }); k = await window.Steward.publishGroupKey(id, memberPubs || []); } catch (e) { k = null; }`,
+    test: 'scripts/an-encrypted-room-is-never-made-without-its-key.test.mjs',
+  },
+  {
+    name: 'new church: the wizard un-flags a sealed room when its key fails (the old fallback, restored)',
+    file: 'app/stew-dashboard.jsx',
+    find: `          if (!r || !r.ok) { failed++; if (!r || r.reason !== 'group-not-saved') keyless++; continue; }
+          pub = r.group;`,
+    replace: `          if (!r || !r.ok) { pub = await Promise.resolve(window.Steward.publishGroup({ name: g.name, kind: g.kind, sub: g.sub })); } else { pub = r.group; }`,
+    test: 'scripts/the-wizard-does-not-advance-over-rooms-it-never-made.test.mjs',
+  },
+  {
+    name: 'new church: the wizard\'s first rooms and meetings fail in the first session (the dashboard\'s streams are not re-opened)',
+    file: 'app/steward-root.jsx',
+    find: `  return _connRelayUrls().some(u => !_connSeen.has(u));`,
+    replace: `  return false;`,
+    test: 'scripts/the-wizard-seals-a-new-churchs-first-rooms.test.mjs',
+  },
+  {
+    name: 'new church: a schedule screen still says "hasn\'t arrived" while the console is signing in',
+    file: 'app/stew-schedule.jsx',
+    find: `if (S0 && S0.keysSettingUp && S0.keysSettingUp('name')) return 'Setting up your church’s keys… try again in a moment.';`,
+    replace: ``,
+    test: 'scripts/a-key-held-back-by-a-relay-says-which.test.mjs',
+  },
+  {
+    name: 'new church: a care need no longer waits for its care key while the console is signing in',
+    file: 'src/steward-meals.src.js',
+    find: `      try { await S().waitForKey('care', 12000); } catch (e) {}`,
+    replace: ``,
+    test: 'scripts/a-key-held-back-by-a-relay-says-which.test.mjs',
+  },
 ];

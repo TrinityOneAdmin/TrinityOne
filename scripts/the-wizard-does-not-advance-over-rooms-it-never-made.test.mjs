@@ -52,15 +52,17 @@ const STARTERS = [{ id: 'a', name: 'Whole Church', kind: 'group', sub: '' },
                   { id: 'b', name: 'Notices', kind: 'broadcast', sub: '' },
                   { id: 'c', name: 'Prayer', kind: 'group', sub: '' }];
 
-function groupsScope({ publish }) {
-  const st = { advanced: 0, err: '', picks: new Set(['a', 'b', 'c']), busy: [] };
+// `enc` — the church seals its rooms by default (encByDefaultWiz); `create` — Steward.createEncryptedGroup, the only
+// door a room meant to be encrypted may come through; `picked` — which starter rows are ticked.
+function groupsScope({ publish, enc = false, create = undefined, picked = ['a', 'b', 'c'] }) {
+  const st = { advanced: 0, err: '', picks: new Set(picked), busy: [] };
   const scope = {
-    STARTERS, picks: st.picks, encByDefaultWiz: false,
+    STARTERS, picks: st.picks, encByDefaultWiz: enc,
     setBusy: (v) => st.busy.push(v),
     setGroupErr: (v) => { st.err = typeof v === 'function' ? v(st.err) : v; },
     setPicks: (f) => { st.picks = typeof f === 'function' ? f(st.picks) : f; },
     next: () => { st.advanced++; },
-    window: { Steward: { publishGroup: publish, publishGroupKey: async () => ({ ok: 1 }) } },
+    window: { Steward: { publishGroup: publish, publishGroupKey: async () => ({ ok: 1 }), ...(create ? { createEncryptedGroup: create } : {}) } },
     Promise, React: { useState: () => [null, () => {}] },
   };
   return { st, fn: run('const saveGroups = async () => {', scope) };
@@ -134,4 +136,48 @@ test('a team whose ROLES failed says so — a team with no roles cannot hold a r
   assert.match(st.err, /roles didn’t save/,
     'the team was created with no roles and the wizard moved on — the steward reaches the Rota page and ' +
     'cannot put anybody on a Sunday, which is the 2026-08-19 finding this step already had a fix for');
+});
+
+// ── A ROOM MEANT TO BE ENCRYPTED IS NEVER CREATED WITHOUT ITS KEY (new church, 2026-10-02) ─────────────────────
+// The wizard used to publish each sealed room flagged `encrypted`, try its key, and on failure publish it AGAIN with
+// `encrypted: false` and say nothing — and a new church's console has not signed in during the wizard, so the church's
+// first rooms came out unencrypted, silently, every time (measured: Whole Church and Prayer, no flag, no key, no word on
+// screen). These execute the real saveGroups with the church's default on (encByDefaultWiz) against a Steward whose
+// createEncryptedGroup succeeds or refuses, and a publishGroup that is a SPY: the claim is about what is published.
+test('a sealed room is made through createEncryptedGroup and never through publishGroup; a broadcast channel is not sealed; nothing is ever unflagged', async () => {
+  const published = [], created = [];
+  const g = groupsScope({ enc: true,
+    publish: async (spec) => { published.push(spec); return { id: 'p' + published.length, ...spec, ts: 1 }; },
+    create: async (spec, recips) => { created.push({ spec, recips }); return { ok: true, group: { id: 'k' + created.length, ...spec, encrypted: true, ts: 1 }, skipped: [] }; } });
+  await g.fn();
+  assert.deepEqual(created.map(c => c.spec.name), ['Whole Church', 'Prayer'], 'the two group rooms were not made through createEncryptedGroup');
+  assert.ok(created.every(c => Array.isArray(c.recips) && c.recips.length === 0), 'a new church has no members yet: the key seals to nobody but the church');
+  assert.deepEqual(published.map(p => p.name), ['Notices'], 'a sealed room went through publishGroup, or the broadcast channel did not');
+  assert.ok(published.every(p => p.encrypted === undefined), 'a room was published carrying an `encrypted` flag outside createEncryptedGroup — or UNflagged: ' + JSON.stringify(published));
+  assert.equal(g.st.advanced, 1, 'a wholly successful step must move on');
+  assert.equal(g.st.err, '');
+});
+
+test('THE REGRESSION: the key cannot be made — no sealed room is created in the clear, the rows stay picked, and the step says why', async () => {
+  const published = [];
+  const g = groupsScope({ enc: true,
+    publish: async (spec) => { published.push(spec); return { id: 'p' + published.length, ...spec, ts: 1 }; },
+    create: async () => ({ ok: false, reason: 'not-signed-in' }) });
+  await g.fn();
+  assert.deepEqual(published.map(p => p.name), ['Notices'],
+    'THE DEFECT: with the church\'s key unavailable a room the steward chose to encrypt was published anyway: ' + JSON.stringify(published));
+  assert.equal(g.st.advanced, 0, 'the wizard moved on over two rooms that were never made');
+  assert.deepEqual([...g.st.picks].sort(), ['a', 'c'], 'the rooms that were not made are no longer ticked, so the steward cannot simply try again');
+  assert.match(g.st.err, /keys aren’t ready/, 'it said nothing about the keys');
+  assert.match(g.st.err, /nothing was made unencrypted/, 'it did not say what did NOT happen');
+  assert.equal(g.st.busy[g.st.busy.length - 1], false, 'busy was left set, which disables Continue AND Back');
+});
+
+test('a key made but a room the relay refused says the relay refused it — not the keys', async () => {
+  const g = groupsScope({ enc: true, picked: ['a', 'c'], publish: async () => null,
+    create: async () => ({ ok: false, reason: 'group-not-saved' }) });
+  await g.fn();
+  assert.equal(g.st.advanced, 0);
+  assert.match(g.st.err, /Couldn’t create your rooms — the relay didn’t accept them/, 'a refused room was blamed on the keys');
+  assert.doesNotMatch(g.st.err, /keys aren’t ready/);
 });

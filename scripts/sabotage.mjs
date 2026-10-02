@@ -81,6 +81,9 @@ process.env.TRINITY_GIT_ROOT = ROOT;
 // strength of a test that never saw the mutation in half the code it lifts.
 const BUILD_FOR = {
   'src/steward.src.js': ['scripts/build-steward.sh'],
+  // the care screen's publishNeed is read from THIS bundle by the tests that lift it; without the entry a case on
+  // src/steward-meals.src.js mutates a file nothing reads and reports BLIND GUARD for a guard that never saw it
+  'src/steward-meals.src.js': ['scripts/build-steward-meals.sh'],
   'src/identity.src.js': ['scripts/build-identity.sh'],
   'src/fellowship.src.js': ['scripts/build-fellowship.sh'],
   'src/relay-identity.src.js': ['scripts/build-fellowship.sh', 'scripts/build-steward.sh'],

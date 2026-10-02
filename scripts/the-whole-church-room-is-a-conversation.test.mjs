@@ -64,6 +64,10 @@ function wizard() {
       setPin: async () => true,
       publishGroup: (g) => { published.push(g); return { id: 'gid' + published.length, ...g }; },
       publishGroupKey: async () => true,
+      // a room meant to be encrypted comes through createEncryptedGroup (key first, then the flagged room — see
+      // src/steward.src.js); this stand-in has the same contract and records the room it publishes, so what this
+      // file reads (the group documents the wizard handed to Steward) is unchanged
+      createEncryptedGroup: async (g) => ({ ok: true, group: win.Steward.publishGroup({ ...g, encrypted: true }), skipped: [] }),
       publishMeeting: async () => ({ id: 'm' }),
       publishRoster: async () => true,
       addRelay: () => true,

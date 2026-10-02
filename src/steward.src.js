@@ -2450,6 +2450,39 @@ function _keyWaitNote(kind) {
 function _keysReadSignal(kind) {
   try { if (typeof window !== 'undefined' && window.dispatchEvent) window.dispatchEvent(new CustomEvent('steward-keys-read', { detail: { kind } })); } catch (e) {}
 }
+// ── "SETTING UP YOUR CHURCH'S KEYS" — WHAT A SCREEN MAY SAY, AND WHAT IT MAY WAIT FOR (new church, 2026-10-02) ──
+// A console in its first moments is still signing in and reading: it holds no key YET, and "your key hasn't
+// arrived" / "this device hasn't finished connecting" is the wrong thing to tell a steward who has done nothing
+// wrong and need only wait a second or two. keysSettingUp(kind) says when that is the true state — the console is
+// not yet signed in on any relay, or has not yet had a trustworthy answer about the key — and is false once the
+// read has settled (then a missing key is a real absence, and the older, plainer message stands). It is only about
+// the first moments: it never answers true for a console that has signed in and read and still has no key.
+// whenSignedIn / waitForKey are the bounded waits a screen may use instead of refusing on the spot.
+function _keysSettingUp(kind) {
+  try {
+    if (!sk || !(actingChurch || pub)) return false;
+    if (kind === 'care') return !_careKeyHex && (!_isRelayAuthed() || !_careKeyChecked);
+    return !_nameKeyRing[0] && (!_isRelayAuthed() || !_nameKeyChecked);
+  } catch (e) { return false; }
+}
+function _pollUntil(pred, ms) {
+  return new Promise((resolve) => {
+    const t0 = Date.now();
+    const tick = () => {
+      let ok = false; try { ok = !!pred(); } catch (e) {}
+      if (ok) return resolve(true);
+      if (Date.now() - t0 >= ms) return resolve(false);
+      setTimeout(tick, 100);
+    };
+    tick();
+  });
+}
+function _whenSignedIn(ms) { return _pollUntil(() => _isRelayAuthed(), ms); }
+function _waitForKey(kind, ms) { return _pollUntil(() => (kind === 'care' ? !!_careKeyHex : !!_nameKeyRing[0]), ms); }
+// How long a screen may hold a steward on "Setting up your church's keys…" before it gives up and says so. Longer
+// than the ~1.5 s a healthy link needs (the console asks to sign in 1.5 s after the socket is up) by a wide margin,
+// shorter than a human's patience.
+const KEY_SETUP_WAIT_MS = 15000;
 // AUDIT-2026-07-28 F6. Pubkeys whose uploaded photo a steward has switched off. The MEMBER app has always
 // honoured this (fellowship.src.js _avSuppressPhoto, called inside displayFor so every surface inherits it);
 // the console had no equivalent, so a photo suppressed for safeguarding still drew on the steward's own
@@ -7087,6 +7120,39 @@ window.Steward = {
     }
     return true;
   },
+  // ---- CREATE a room that is meant to be encrypted: it is never created without its key (new church, 2026-10-02). ----
+  //
+  // The two creation screens (the New group dialog, and the setup wizard's rooms step) used to publish the room
+  // flagged `encrypted`, THEN try to publish its key, and when the key could not be saved — which is every time in
+  // a console that has not signed in yet, the first minutes of every new church — UNFLAG the room again and carry
+  // on: a room the steward chose to encrypt, created in the clear, with a one-line warning in the dialog and none
+  // at all in the wizard. A church's FIRST rooms were exactly the ones that came out unencrypted.
+  //
+  // This is sealGroup's order (key FIRST, flag SECOND — AUDIT-2026-08-10 item A) applied to a room that does not
+  // exist yet. Nothing is published until the console is signed in (waiting, bounded, for the sign-in that part A
+  // of this branch makes happen within a second or two); then the room's key envelope, then the room itself flagged
+  // encrypted. The relay accepts an envelope for a room it has not seen yet when the id names its church (the id is
+  // namespaced, as publishGroup's own is) — the group-key rule in scripts/gateway.mjs resolves the owner from
+  // `GROUP_CHURCH || idNamesOwner(gid) || the signer` — so there is no window with a flagged room and no key.
+  // Every failure leaves NOTHING cleartext behind: at worst an unused envelope on the relay, which a retry reuses.
+  //
+  // Returns { ok: true, group, skipped } or { ok: false, reason } where reason is 'cannot-key' (no church key on this
+  // device, or the key could not be made), 'not-signed-in' (the wait ran out), 'relay-refused' (the envelope reached
+  // no relay) or 'group-not-saved' (the key is on the relay, the room is not — nothing sealed yet, nobody muted).
+  // `memberPubs` is exactly what publishGroupKey takes: the recipients besides the church itself.
+  async createEncryptedGroup(group, memberPubs) {
+    if (!group || !churchSk || !churchPub) return { ok: false, reason: 'cannot-key' };
+    if (!(await _whenSignedIn(KEY_SETUP_WAIT_MS))) return { ok: false, reason: 'not-signed-in' };
+    // THE SAME ID publishGroup would mint (namespaced by the acting church), minted here because the key goes first.
+    const id = group.id || ((String(pub || '').slice(0, 16) || 'grp') + '-' + Date.now().toString(36));
+    let k = null;
+    try { k = await window.Steward.publishGroupKey(id, memberPubs || []); } catch (e) { k = null; }
+    if (k === null || k === false) return { ok: false, reason: k === null ? 'cannot-key' : 'relay-refused' };
+    let made = null;
+    try { made = await window.Steward.publishGroup({ ...group, id, encrypted: true }); } catch (e) { made = null; }
+    if (!made || !made.id) return { ok: false, reason: 'group-not-saved' };
+    return { ok: true, group: made, skipped: (k && k.skipped) ? k.skipped.slice() : [] };
+  },
   // ---- seal a group interactively: key FIRST, flag SECOND, both awaited, every result honoured. ----
   //
   // AUDIT-2026-08-10 item A. The seal used to fire publishGroup({encrypted:true}) and publishGroupKey side
@@ -10805,6 +10871,9 @@ window.Steward = {
   listIsCurrent(list) { const t = list && list._for; return !!t && !!t.cp && t.cp === (actingChurch || pub) && t.epoch === _keyReadEpoch; },
   // "relay.x isn't answering" for a key read of the church we are on that a relay is holding up, or ''.
   keyWaitNote(kind) { return _keyWaitNote(kind); },
+  keysSettingUp(kind) { return _keysSettingUp(kind); },          // true only while the console is still signing in / reading — see _keysSettingUp
+  whenSignedIn(ms) { return _whenSignedIn(ms == null ? KEY_SETUP_WAIT_MS : ms); },
+  waitForKey(kind, ms) { return _waitForKey(kind, ms == null ? KEY_SETUP_WAIT_MS : ms); },
   // discover churches whose owner-signed roster lists OUR key → we can act as their steward. Re-emits on change.
   subscribeStewardedChurches(cb) {
     const me = churchPub;
