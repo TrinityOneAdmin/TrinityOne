@@ -385,3 +385,15 @@ export function liftKeyRead(bundle) {
   assert.ok(m, 'could not lift the key-read guards from the bundle — re-anchor this helper, do not delete it');
   return m[0];
 }
+
+// "NEVER WRAP A KEY TO SOMEONE THE CHURCH BLOCKED" — vendor/fellowship.js's BLOCKED_DOC + _withoutBlocked, lifted as
+// source text for harnesses that run publishCareRequest / sendCareChat / childCareAudience out of the shipped
+// bundle (owner, 2026-10-02: Block means no private access of any kind). Lifted, not stubbed: a pass-through stub
+// would answer "who may read this?" for the harness. It reads only the church's own blocked: document (author AND
+// d-tag checked), so a fake querySync that ignores its filter cannot make it drop anyone.
+// Free variables the harness must provide: `pool.querySync`, `churchRelays`, `pub`.
+export function liftWithoutBlocked(bundle) {
+  const m = /\n  var BLOCKED_DOC = [^\n]*\n  async function _withoutBlocked\(cp, list\) \{[\s\S]*?\n  \}/.exec(bundle);
+  assert.ok(m, 'could not lift _withoutBlocked from the bundle — re-anchor this helper, do not delete it');
+  return m[0];
+}

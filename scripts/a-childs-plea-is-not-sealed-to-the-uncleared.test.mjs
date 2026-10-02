@@ -32,7 +32,7 @@ import { readFileSync } from 'node:fs';
 import { webcrypto } from 'node:crypto';
 import { generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure';
 import { v2 as nip44 } from 'nostr-tools/nip44';
-import { fnBody, liftSgMine, liftFetchMyClearance } from './test-slice.mjs';
+import { fnBody, liftSgMine, liftFetchMyClearance, liftWithoutBlocked } from './test-slice.mjs';
 
 const VENDOR = readFileSync(new URL('../vendor/fellowship.js', import.meta.url), 'utf8');
 const hex = (u8) => Array.from(u8).map(b => b.toString(16).padStart(2, '0')).join('');
@@ -131,7 +131,7 @@ function loadPublish({ team, childAudience, clearance = [], relayDocs = [], rela
       throw new ReferenceError('the lifted function needs `' + String(k) + '` — add a stub for it in loadPublish()');
     },
   });
-  const fn = new Function('scope', `with (scope) { ${sgMine} ${fetchClr} ${pubReason} return ({ ${body} }).publishCareRequest; }`)(scope);
+  const fn = new Function('scope', `with (scope) { ${sgMine} ${fetchClr} ${pubReason} ${liftWithoutBlocked(VENDOR)} return ({ ${body} }).publishCareRequest; }`)(scope);
   return { fn, published };
 }
 

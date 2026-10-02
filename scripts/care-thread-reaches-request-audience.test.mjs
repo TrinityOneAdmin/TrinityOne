@@ -41,6 +41,9 @@ const slice = (src, from, to) => {
   return src.slice(a, b);
 };
 
+// sendCareChat now drops anyone the church has blocked before sealing (owner, 2026-10-02) — the real helper,
+// lifted beside the others; with no blocked: document in these fixtures it changes no audience.
+const BLOCKED_FN = slice(SRC, 'const BLOCKED_DOC = ', '\n}\n') + '\n}';
 const K = () => { const sk = generateSecretKey(); return { sk, pub: getPublicKey(sk) }; };
 const church = K();      // the console
 const ellie  = K();      // 15, marked as a child
@@ -80,7 +83,7 @@ function buildSender({ requestEvent }) {
   const fn = new Function(
     'pool', 'churchRelays', 'publishSetFor', 'isNoNetworkRelay', 'CAREREQ_D', 'CARECHAT_D', 'NET', 'sk', 'pub', 'window', 'crypto',
     'nip44e', 'nip44ck', '_hex', 'finalizeEvent', '_publishAny', 'published',
-    `${monoFn}\n${audienceFn}\n${sealFn}\nconst api = { ${method} __end(){} };\nreturn api.sendCareChat;`
+    `${monoFn}\n${audienceFn}\n${sealFn}\n${BLOCKED_FN}\nconst api = { ${method} __end(){} };\nreturn api.sendCareChat;`
   )(
     pool, () => ['ws://x'], () => ['ws://x'], () => false, 'trinityone/carereq:', 'trinityone/carechat:', 'trinityone',
     grace.sk, grace.pub,
@@ -104,7 +107,7 @@ test('the cleared adult can open the child’s reply — the whole point', async
   const send = new Function(
     'pool', 'churchRelays', 'publishSetFor', 'isNoNetworkRelay', 'CAREREQ_D', 'CARECHAT_D', 'NET', 'sk', 'pub', 'window', 'crypto',
     'nip44e', 'nip44ck', '_hex', 'finalizeEvent', '_publishAny',
-    `${monoFn}\n${audienceFn}\n${sealFn}\nconst api = { ${method} __end(){} };\nreturn api.sendCareChat;`
+    `${monoFn}\n${audienceFn}\n${sealFn}\n${BLOCKED_FN}\nconst api = { ${method} __end(){} };\nreturn api.sendCareChat;`
   )(
     { querySync: async () => [reqEvent] }, () => ['ws://x'], () => ['ws://x'], () => false,
     'trinityone/carereq:', 'trinityone/carechat:', 'trinityone',
@@ -136,7 +139,7 @@ test('and the care rota, who were never in the request, are not given a key to i
   const send = new Function(
     'pool', 'churchRelays', 'publishSetFor', 'isNoNetworkRelay', 'CAREREQ_D', 'CARECHAT_D', 'NET', 'sk', 'pub', 'window', 'crypto',
     'nip44e', 'nip44ck', '_hex', 'finalizeEvent', '_publishAny',
-    `${monoFn}\n${audienceFn}\n${sealFn}\nconst api = { ${method} __end(){} };\nreturn api.sendCareChat;`
+    `${monoFn}\n${audienceFn}\n${sealFn}\n${BLOCKED_FN}\nconst api = { ${method} __end(){} };\nreturn api.sendCareChat;`
   )(
     { querySync: async () => [reqEvent] }, () => ['ws://x'], () => ['ws://x'], () => false,
     'trinityone/carereq:', 'trinityone/carechat:', 'trinityone',
@@ -170,7 +173,7 @@ test('a request document forged by somebody else is ignored', async () => {
   const send = new Function(
     'pool', 'churchRelays', 'publishSetFor', 'isNoNetworkRelay', 'CAREREQ_D', 'CARECHAT_D', 'NET', 'sk', 'pub', 'window', 'crypto',
     'nip44e', 'nip44ck', '_hex', 'finalizeEvent', '_publishAny',
-    `${monoFn}\n${audienceFn}\n${sealFn}\nconst api = { ${method} __end(){} };\nreturn api.sendCareChat;`
+    `${monoFn}\n${audienceFn}\n${sealFn}\n${BLOCKED_FN}\nconst api = { ${method} __end(){} };\nreturn api.sendCareChat;`
   )(
     { querySync: async () => [real, forged] }, () => ['ws://x'], () => ['ws://x'], () => false,
     'trinityone/carereq:', 'trinityone/carechat:', 'trinityone',
@@ -280,7 +283,7 @@ function sendWith({ reqTags, careTeam }) {
   const send = new Function(
     'pool', 'churchRelays', 'publishSetFor', 'isNoNetworkRelay', 'CAREREQ_D', 'CARECHAT_D', 'NET', 'sk', 'pub', 'window', 'crypto',
     'nip44e', 'nip44ck', '_hex', 'finalizeEvent', '_publishAny', '_fetchCareTeam',
-    `${monoFn}\n${audienceFn}\n${sealFn}\nconst api = { ${method} __end(){} };\nreturn api.sendCareChat;`
+    `${monoFn}\n${audienceFn}\n${sealFn}\n${BLOCKED_FN}\nconst api = { ${method} __end(){} };\nreturn api.sendCareChat;`
   )(
     { querySync: async () => [reqEvent] }, () => ['ws://x'], () => ['ws://x'], () => false,
     'trinityone/carereq:', 'trinityone/carechat:', 'trinityone',

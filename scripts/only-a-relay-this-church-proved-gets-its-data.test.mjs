@@ -51,7 +51,7 @@ import { normalizeURL } from 'nostr-tools/utils';
 // than a second normaliser that agreed with it by coincidence until it didn't.
 import { relayAddrKey } from '../src/relay-identity.src.js';
 import * as nip44 from 'nostr-tools/nip44';
-import { fnBody, stmt } from './test-slice.mjs';
+import { fnBody, stmt, liftWithoutBlocked } from './test-slice.mjs';
 import * as H from './relay-network-harness.mjs';
 
 const RELAY_NET_D = 'trinityone/relay-net';
@@ -684,7 +684,7 @@ function memberOn({ church, relays = [], canonical = [], pins = {}, store = memS
     NET: 'trinityone', CAREREQ_D: 'trinityone/carereq:', CARETEAM_D: 'trinityone/careteam:',
     _churchRelays: new Map(), _loadChurchBoxes: () => [],
   });
-  const api = new Function('scope', `with (scope) { ${body}
+  const api = new Function('scope', `with (scope) { ${body} ${liftWithoutBlocked(src)}
     const _api = { ${care}, ${healthy}, ${verified} };
     return { churchRelays, churchRelaysRaw, _publishAny, gate: _gate, isNoNetworkRelay,
              relaysHealthy: () => _api.relaysHealthy(), relayVerified: (u) => _api.relayVerified(u),

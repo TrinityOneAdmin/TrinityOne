@@ -376,7 +376,8 @@
       if (!S() || !S().publishSigned || !S().churchPub) return Promise.resolve(null);
       if (S().actingChurch) return Promise.resolve(null);
       const cp = S().churchPub;
-      const pubs = [.../* @__PURE__ */ new Set([cp, ...(memberPubs || []).map((p) => String(p || "").trim().toLowerCase()).filter(Boolean)])];
+      const blocked = new Set((S().blockedHere && S().blockedHere() || []).map((p) => String(p || "").toLowerCase()));
+      const pubs = [.../* @__PURE__ */ new Set([cp, ...(memberPubs || []).map((p) => String(p || "").trim().toLowerCase()).filter((p) => p && !blocked.has(p))])];
       return S().publishSigned({ kind: 30078, created_at: now(), tags: [["d", CARETEAM_D + cp], ["t", NET]], content: JSON.stringify({ pubs, updated: now() }) });
     }
     function subscribeCareRequests(cb) {
@@ -610,6 +611,8 @@
         } catch (e) {
         }
       }
+      const blockedNow = new Set((S().blockedHere && S().blockedHere() || []).map((p) => String(p || "").toLowerCase()));
+      const toPubs = [...audience, ...extra].filter((p) => !blockedNow.has(String(p || "").toLowerCase()));
       const msgId = Math.random().toString(36).slice(2, 10);
       const dtag = CARECHAT_D + reqId + ":" + msgId;
       const at = _monotonicM(dtag);
@@ -617,7 +620,7 @@
       if (body) payload.text = body;
       if (reaction) payload.reaction = reaction;
       if (replyTo) payload.replyTo = replyTo;
-      const sealed = S().sealToPubs([...audience, ...extra, cp], payload);
+      const sealed = S().sealToPubs([...toPubs, cp], payload);
       if (!sealed) return null;
       const tags = [["d", dtag], ["t", NET], ["t", "carechat"], ["church", cp]];
       if (requesterPub) tags.push(["p", requesterPub]);

@@ -7331,6 +7331,9 @@ window.Steward = {
       undefined, { withoutFailed: true });
     return () => { try { sub.close(); } catch {} try { stopRead(); } catch {} };
   },
+  // Who this console holds as blocked, for the acting church — the same floored set every key builder filters by.
+  // A copy, lower-case hex. Readers: StewardMeals.publishCareTeam and StewardMeals.sendCareChat (steward-meals.src.js).
+  blockedHere() { return [..._localBlocked]; },
   setBlocked(pubkeys) {   // replace the whole blocklist (pass hex pubkeys); a 2nd argument { unblock: [...] } names who THIS action lets back in
     const opts = arguments[1];   // read here, not named in the signature: six test harnesses lift this method by `setBlocked(pubkeys) {`
     _requireTrustedView('blocked list');
@@ -9462,7 +9465,13 @@ window.Steward = {
   async publishRoster(teamId, roster) {
     if (!sk || !teamId) return null;
     const roles = (roster.roles || []).map(r => ({ id: r.id || ('r' + Math.random().toString(36).slice(2, 7)), name: r.name || 'Role' }));
-    const people = (roster.people || []).map(p => ({ id: p.id || ('p' + Math.random().toString(36).slice(2, 7)), name: p.name || '', pub: p.pub || '' }));
+    // NOBODY THIS CONSOLE HOLDS AS BLOCKED IS WRITTEN ONTO A TEAM (owner, 2026-10-02: blocking removes someone
+    // from every team). The single door every roster write goes through — RosterModal, the invite-only members
+    // editor, team creation and Block itself — so a stale copy of a roster (a modal opened before the block, the
+    // care panel's effect) can never put them back. `_localBlocked` is the floored list (owner's rule of
+    // 2026-10-02), and the roster's pubkeys are what the relay reads for careAdmin() and team-room access.
+    const people = (roster.people || []).filter(p => !(p && p.pub && _localBlocked.has(String(p.pub).toLowerCase())))
+      .map(p => ({ id: p.id || ('p' + Math.random().toString(36).slice(2, 7)), name: p.name || '', pub: p.pub || '' }));
     // serving pods: a named set of role->person mappings, applied to a service in one tap. fills = { roleId: personId }
     const pods = (roster.pods || []).map(p => ({ id: p.id || ('pod' + Math.random().toString(36).slice(2, 7)), name: p.name || 'Pod', fills: (p.fills && typeof p.fills === 'object') ? p.fills : {} }));
     // A MIXED DOCUMENT: the KEYS in the clear for the relay, the NAMES sealed under the church name key.

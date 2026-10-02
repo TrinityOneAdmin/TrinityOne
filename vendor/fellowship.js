@@ -7319,6 +7319,32 @@
     if (!_relayAuthedAt) return null;
     return { found: false };
   }
+  var BLOCKED_DOC = "trinityone/blocked:";
+  async function _withoutBlocked(cp, list) {
+    if (!Array.isArray(list) || !list.length || !cp) return list;
+    let blocked = null;
+    try {
+      const evs = await pool.querySync(churchRelays(), [{ kinds: [30078], authors: [cp], "#d": [BLOCKED_DOC + cp] }]);
+      let best = null;
+      for (const e of evs || []) {
+        if (e.pubkey !== cp || ((e.tags || []).find((t) => t[0] === "d") || [])[1] !== BLOCKED_DOC + cp) continue;
+        if (!best || (e.created_at || 0) > (best.created_at || 0)) best = e;
+      }
+      blocked = /* @__PURE__ */ new Set();
+      if (best) {
+        const o = JSON.parse(best.content || "{}");
+        for (const p of Array.isArray(o.pubkeys) ? o.pubkeys : []) blocked.add(String(p || "").toLowerCase());
+      }
+    } catch (e) {
+      blocked = null;
+    }
+    if (!blocked || !blocked.size) return list;
+    const keep = /* @__PURE__ */ new Set([String(cp).toLowerCase(), String(pub || "").toLowerCase()]);
+    return list.filter((p) => {
+      const k = String(p || "").toLowerCase();
+      return keep.has(k) || !blocked.has(k);
+    });
+  }
   async function _fetchCareThreadAudience(cp, reqId, requesterPub) {
     if (!cp || !reqId || !requesterPub) return null;
     try {
@@ -13565,7 +13591,8 @@
     async childCareAudience(churchNpub) {
       const cp = toPub(churchNpub) || window.Fellowship.churchPub;
       if (!cp) return null;
-      return _fetchChildCareAudience(cp);
+      const aud = await _fetchChildCareAudience(cp);
+      return Array.isArray(aud) ? _withoutBlocked(cp, aud) : aud;
     },
     async publishCareRequest(fields) {
       const cp = window.Fellowship.churchPub;
@@ -13591,7 +13618,8 @@
           if (audience.length) return { error: "unknown-clearance" };
         }
       }
-      const team = childish ? audience !== null ? audience : await _fetchChildCareAudience(cp) : await _fetchCareTeam(cp);
+      const team0 = childish ? audience !== null ? audience : await _fetchChildCareAudience(cp) : await _fetchCareTeam(cp);
+      const team = Array.isArray(team0) ? await _withoutBlocked(cp, team0) : team0;
       if (childish && team === null) return { error: "unknown-audience" };
       if (childish && (!team || !team.length)) return { error: "no-one-cleared" };
       const pubs = Array.isArray(team) ? team.filter(Boolean) : [];
@@ -13982,6 +14010,7 @@
       const audience = await _fetchCareThreadAudience(cp, reqId, requesterPub);
       if (!audience) return null;
       const extra = audience.team ? await _fetchCareTeam(cp) || [] : [];
+      const toPubs = await _withoutBlocked(cp, [...audience.pubs, ...extra]);
       const msgId = _hex(crypto.getRandomValues(new Uint8Array(6)));
       const tags = [["d", CARECHAT_D + reqId + ":" + msgId], ["t", NET], ["t", "carechat"], ["church", cp]];
       if (requesterPub) tags.push(["p", requesterPub]);
@@ -13990,7 +14019,7 @@
       if (body) payload.text = body;
       if (reaction) payload.reaction = reaction;
       if (replyTo) payload.replyTo = replyTo;
-      const sealed = _sealToPubs([...audience.pubs, ...extra, cp, pub], payload);
+      const sealed = _sealToPubs([...toPubs, cp, pub], payload);
       if (!sealed) return null;
       const evt = finalizeEvent2({ ...tmpl, content: JSON.stringify(sealed) }, sk);
       try {

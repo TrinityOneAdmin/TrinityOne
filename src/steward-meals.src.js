@@ -382,7 +382,12 @@ import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   //
     // truth the effect runs, and this keeps it a no-op exactly as it was.
     if (S().actingChurch) return Promise.resolve(null);
     const cp = S().churchPub;
-    const pubs = [...new Set([cp, ...((memberPubs || []).map(p => String(p || '').trim().toLowerCase()).filter(Boolean))])];
+    // NEVER SOMEONE THIS CONSOLE HOLDS AS BLOCKED (owner, 2026-10-02: blocking removes someone from the care list).
+    // The one door this document is written through — Block, the roster editor (publishCareTeamFor) and the Care
+    // settings panel's effect, which republishes from whatever roster it last saw — so a stale roster cannot put
+    // them back. Members' phones seal every new ask for help to this list.
+    const blocked = new Set(((S().blockedHere && S().blockedHere()) || []).map(p => String(p || '').toLowerCase()));
+    const pubs = [...new Set([cp, ...((memberPubs || []).map(p => String(p || '').trim().toLowerCase()).filter(p => p && !blocked.has(p)))])];
     return S().publishSigned({ kind: 30078, created_at: now(), tags: [['d', CARETEAM_D + cp], ['t', NET]], content: JSON.stringify({ pubs, updated: now() }) });
   }
 
@@ -516,6 +521,9 @@ import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   //
         if (ev2) { const o2 = JSON.parse(ev2.content || '{}'); if (Array.isArray(o2.pubs)) extra = o2.pubs.filter(Boolean); }
       } catch (e) {}
     }
+    // …minus anyone this console holds as blocked: the request may have been sealed to them before the block.
+    const blockedNow = new Set(((S().blockedHere && S().blockedHere()) || []).map(p => String(p || '').toLowerCase()));
+    const toPubs = [...audience, ...extra].filter(p => !blockedNow.has(String(p || '').toLowerCase()));
     const msgId = Math.random().toString(36).slice(2, 10);
     const dtag = CARECHAT_D + reqId + ':' + msgId;
     const at = _monotonicM(dtag);
@@ -523,7 +531,7 @@ import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   //
     if (body) payload.text = body;
     if (reaction) payload.reaction = reaction;
     if (replyTo) payload.replyTo = replyTo;
-    const sealed = S().sealToPubs([...audience, ...extra, cp], payload);
+    const sealed = S().sealToPubs([...toPubs, cp], payload);
     if (!sealed) return null;
     const tags = [['d', dtag], ['t', NET], ['t', 'carechat'], ['church', cp]];
     if (requesterPub) tags.push(['p', requesterPub]);

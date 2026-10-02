@@ -45,6 +45,7 @@ function rosterRig(ring = [KEY]) {
     NAME_KEY_WAIT_MS: 150, ROSTER_D: 'trinityone/roster:', NET: 'trinityone',
     now: () => 1788573385, feChurch: (e) => e,
     publish: (e) => { sent.push(e); return Promise.resolve(true); },
+    _localBlocked: new Set(),   // publishRoster drops anyone this console holds as blocked (sim-six item 5); nobody is, here
   };
   const body = stripComments(fnBody(STEW, 'function _sealChurchDoc(obj)', '_sealChurchDoc'))
     + '\n' + stripComments(fnBody(STEW, 'function _sealChurchDocReady(obj)', '_sealChurchDocReady'))

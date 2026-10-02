@@ -33,7 +33,7 @@ import { webcrypto } from 'node:crypto';
 import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools/pure';
 import * as nip44 from 'nostr-tools/nip44';
 import { loadScreen, miniReact, texts, find, button, reads } from './render-jsx-screen.mjs';
-import { fnBody, stmt, liftSgMine } from './test-slice.mjs';
+import { fnBody, stmt, liftSgMine, liftWithoutBlocked } from './test-slice.mjs';
 
 const VENDOR = readFileSync(new URL('../vendor/fellowship.js', import.meta.url), 'utf8');
 
@@ -125,7 +125,7 @@ function engine(relay) {
       throw new ReferenceError('the lifted engine needs `' + String(k) + '` — add a stub for it in engine()');
     },
   });
-  return new Function('scope', `with (scope) { ${SGMINE} ${NEED_GUARD} ${PUB_REASON} ${NO_NET} ${IS_NO_NET}
+  return new Function('scope', `with (scope) { ${SGMINE} ${NEED_GUARD} ${PUB_REASON} ${NO_NET} ${IS_NO_NET} ${liftWithoutBlocked(VENDOR)}
     return { ${REQ}, ${NEED} }; }`)(scope);
 }
 

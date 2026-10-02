@@ -903,6 +903,36 @@ async function _fetchMyClearance(cp) {
 // seal their reply away from the child and from the cleared adult. That is the same "child answers and nobody
 // comes" failure this function exists to prevent, re-opened from the other end. Nothing legitimately publishes
 // a request on somebody else's behalf, so the asker is the only author whose copy may decide the audience.
+// NEVER WRAP A KEY TO SOMEONE THIS CHURCH BLOCKED (owner, 2026-10-02: "Block means NO private access of any
+// kind"). Measured with the shipped sealing code against a real relay (verify-six): after the church blocked a
+// care-team member, a member's NEW ask for help was still sealed to them — careteam: still named them — and a
+// child's to a blocked youth-cleared adult, because the cleared list had no block filter. The relay now refuses
+// to SERVE them anything; this stops the phone handing them a key in the first place, for a relay that is
+// older, or a copy that reaches them some other way.
+//
+// Read from the church's OWN blocklist (owner-only document, so only the church key's copy is believed). A list
+// we could not read leaves the audience as it was: the relay is the gate, and refusing to send a request for
+// help because one extra read failed would be the larger harm. The church key and the sender are never removed.
+// Callers: publishCareRequest (the audience it seals to), sendCareChat (a reply's audience) and childCareAudience
+// (what the "ask for help" screen asks before offering a child a form). Not the safety-check reply: the relay
+// refuses to serve a safe: answer to a blocked reader, and that path is not changed here.
+const BLOCKED_DOC = 'trinityone/blocked:';
+async function _withoutBlocked(cp, list) {
+  if (!Array.isArray(list) || !list.length || !cp) return list;
+  let blocked = null;
+  try {
+    const evs = await pool.querySync(churchRelays(), [{ kinds: [30078], authors: [cp], '#d': [BLOCKED_DOC + cp] }]);
+    let best = null;
+    // THE CHURCH'S OWN blocked: DOCUMENT AND NOTHING ELSE — a relay that answers with other church documents (an
+    // older or a hostile one) must not get its `pubkeys` read as a blocklist and drop real readers.
+    for (const e of (evs || [])) { if (e.pubkey !== cp || ((e.tags || []).find(t => t[0] === 'd') || [])[1] !== BLOCKED_DOC + cp) continue; if (!best || (e.created_at || 0) > (best.created_at || 0)) best = e; }
+    blocked = new Set();
+    if (best) { const o = JSON.parse(best.content || '{}'); for (const p of (Array.isArray(o.pubkeys) ? o.pubkeys : [])) blocked.add(String(p || '').toLowerCase()); }
+  } catch (e) { blocked = null; }
+  if (!blocked || !blocked.size) return list;
+  const keep = new Set([String(cp).toLowerCase(), String(pub || '').toLowerCase()]);
+  return list.filter(p => { const k = String(p || '').toLowerCase(); return keep.has(k) || !blocked.has(k); });
+}
 async function _fetchCareThreadAudience(cp, reqId, requesterPub) {
   if (!cp || !reqId || !requesterPub) return null;
   try {
@@ -7157,7 +7187,10 @@ window.Fellowship = {
   async childCareAudience(churchNpub) {
     const cp = toPub(churchNpub) || window.Fellowship.churchPub;
     if (!cp) return null;
-    return _fetchChildCareAudience(cp);
+    // the same people publishCareRequest will seal to — so a blocked cleared adult is not counted as someone
+    // the child can reach (_withoutBlocked)
+    const aud = await _fetchChildCareAudience(cp);
+    return Array.isArray(aud) ? _withoutBlocked(cp, aud) : aud;
   },
   async publishCareRequest(fields) {
     const cp = window.Fellowship.churchPub;
@@ -7241,7 +7274,10 @@ window.Fellowship = {
         if (audience.length) return { error: 'unknown-clearance' };     // this church uses safeguarding — do not guess
       }
     }
-    const team = childish ? (audience !== null ? audience : await _fetchChildCareAudience(cp)) : await _fetchCareTeam(cp);
+    const team0 = childish ? (audience !== null ? audience : await _fetchChildCareAudience(cp)) : await _fetchCareTeam(cp);
+    // …MINUS ANYONE THIS CHURCH BLOCKED, before the emptiness check below: a child whose only cleared adult has
+    // been blocked has nobody to reach, and is told so rather than sealed to the person the church removed.
+    const team = Array.isArray(team0) ? await _withoutBlocked(cp, team0) : team0;
     if (childish && team === null) return { error: 'unknown-audience' };   // could not establish — never a wide fallback
     if (childish && (!team || !team.length)) return { error: 'no-one-cleared' };
     const pubs = Array.isArray(team) ? team.filter(Boolean) : [];
@@ -7605,6 +7641,8 @@ window.Fellowship = {
     // the adults the church cleared, and widening it to the rota is the whole defect this file was written
     // for. Only the request's own `aud` tag may authorise the widening.
     const extra = audience.team ? ((await _fetchCareTeam(cp)) || []) : [];
+    // The request's own recipients may include someone the church has since BLOCKED — never wrap them a reply.
+    const toPubs = await _withoutBlocked(cp, [...audience.pubs, ...extra]);
     const msgId = _hex(crypto.getRandomValues(new Uint8Array(6)));
     const tags = [['d', CARECHAT_D + reqId + ':' + msgId], ['t', NET], ['t', 'carechat'], ['church', cp]];
     if (requesterPub) tags.push(['p', requesterPub]);
@@ -7613,7 +7651,7 @@ window.Fellowship = {
     if (body) payload.text = body;
     if (reaction) payload.reaction = reaction;
     if (replyTo) payload.replyTo = replyTo;
-    const sealed = _sealToPubs([...audience.pubs, ...extra, cp, pub], payload);
+    const sealed = _sealToPubs([...toPubs, cp, pub], payload);
     if (!sealed) return null;
     const evt = finalizeEvent({ ...tmpl, content: JSON.stringify(sealed) }, sk);
     try { await _publishAny(publishSetFor(cp), evt); } catch (e) { return null; }

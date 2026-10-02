@@ -20933,6 +20933,11 @@ zoo`.split("\n");
         }
       };
     },
+    // Who this console holds as blocked, for the acting church — the same floored set every key builder filters by.
+    // A copy, lower-case hex. Readers: StewardMeals.publishCareTeam and StewardMeals.sendCareChat (steward-meals.src.js).
+    blockedHere() {
+      return [..._localBlocked];
+    },
     setBlocked(pubkeys) {
       const opts = arguments[1];
       _requireTrustedView("blocked list");
@@ -22849,7 +22854,7 @@ zoo`.split("\n");
     async publishRoster(teamId, roster) {
       if (!sk || !teamId) return null;
       const roles = (roster.roles || []).map((r) => ({ id: r.id || "r" + Math.random().toString(36).slice(2, 7), name: r.name || "Role" }));
-      const people = (roster.people || []).map((p) => ({ id: p.id || "p" + Math.random().toString(36).slice(2, 7), name: p.name || "", pub: p.pub || "" }));
+      const people = (roster.people || []).filter((p) => !(p && p.pub && _localBlocked.has(String(p.pub).toLowerCase()))).map((p) => ({ id: p.id || "p" + Math.random().toString(36).slice(2, 7), name: p.name || "", pub: p.pub || "" }));
       const pods = (roster.pods || []).map((p) => ({ id: p.id || "pod" + Math.random().toString(36).slice(2, 7), name: p.name || "Pod", fills: p.fills && typeof p.fills === "object" ? p.fills : {} }));
       const sealed = await _sealChurchDocReady({ roles, people, pods });
       if (sealed == null) return null;
