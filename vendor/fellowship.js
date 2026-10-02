@@ -13817,6 +13817,8 @@
         }
       }
       if (!sk || !cp || !careId || !iso) return null;
+      const _me = _sgMine(cp);
+      if (_me && _me.isMinor) return { ok: false, reason: "minor" };
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", CARESLOT_D + careId + ":" + iso], ["t", NET], ["church", cp]], content: JSON.stringify({ careId, isoDate: iso, note: String(note || "").trim() }) }, sk);
       try {
         await _publishAny(publishSetFor(cp), evt);

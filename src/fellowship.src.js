@@ -7435,6 +7435,13 @@ window.Fellowship = {
     const cp = window.Fellowship.churchPub;
     if (!sk) { try { await window.Fellowship.ready; } catch {} }
     if (!sk || !cp || !careId || !iso) return null;
+    // A MARKED CHILD DOES NOT SIGN UP TO HELP WITH SOMEBODY ELSE'S NEED (owner, 2026-10-02; sim A2 #8). The screen
+    // no longer offers it; this is the backstop for a build that does. Fails OPEN: only a CONFIRMED answer for THIS
+    // member in THIS church refuses (_sgMine is null for anyone else and on a cold start). clearCareSlot is left
+    // alone on purpose - a child who holds a slot must always be able to stand down. There is no relay half yet
+    // (an owner decision), so a modified build can still write one straight at the relay.
+    const _me = _sgMine(cp);
+    if (_me && _me.isMinor) return { ok: false, reason: 'minor' };
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CARESLOT_D + careId + ':' + iso], ['t', NET], ['church', cp]], content: JSON.stringify({ careId, isoDate: iso, note: String(note || '').trim() }) }, sk);
     // SIGNING UP TO BRING A MEAL IS A PROMISE TO A FAMILY. If it lands nowhere the slot still reads empty to
     // everyone else — worst case nobody comes, and the one person who thought they had it never finds out.

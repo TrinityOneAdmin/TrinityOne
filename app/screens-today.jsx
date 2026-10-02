@@ -62,7 +62,10 @@ function careCoverLabel(dayCount, openCount) {
   return { text: openCount + ' day' + (openCount === 1 ? '' : 's') + ' still open', done: false };
 }
 
-function CareNeedRow({ need, slots, skips, care, canManage, expanded, onToggle }) {
+// `canVolunteer === false` takes the "I'll help" control off an OPEN day (sim A2 #8: a child is never offered a
+// sign-up). Anything else - including no prop at all, which is every other caller - keeps it. A day the reader
+// ALREADY holds still shows "You're helping" and its cancel, because standing down must always be possible.
+function CareNeedRow({ need, slots, skips, care, canManage, expanded, onToggle, canVolunteer }) {
   const myPub = care.myPub || '';
   const dates = (Array.isArray(need.dates) && need.dates.length) ? [...need.dates].sort() : careDateRange(need.startDate, need.endDate);
   const skipSet = new Set(skips.filter(k => k.needId === need.id).map(k => k.isoDate));
@@ -137,7 +140,7 @@ function CareNeedRow({ need, slots, skips, care, canManage, expanded, onToggle }
                     ? <button onClick={() => care.clearFill(need.id, iso)} style={careBtnMine} title="You’re signed up — tap to cancel"><Icon name="check" size={12} color="var(--sage)" stroke={3} /> You’re helping</button>
                     : fills.length
                     ? <span style={{ fontSize: 11.5, color: 'var(--ink-3)', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}><Icon name="check" size={12} color="var(--sage)" /> Covered</span>
-                    : <button onClick={() => care.fill(need.id, iso)} style={careBtnHelp}>I’ll help</button>)}
+                    : (canVolunteer === false ? null : <button onClick={() => care.fill(need.id, iso)} style={careBtnHelp}>I’ll help</button>))}
                   {(isRecipient || (canManage && fills.length === 0)) && (skipped
                     ? <button onClick={() => care.clearSkip(need.id, iso, need._skipEnc, need._by)} style={careBtnGhost}>Undo</button>
                     : <button onClick={() => care.skip(need.id, iso, '', need._skipEnc, need._by)} style={isRecipient ? careBtnHelp : careBtnGhost}>{isRecipient ? (fills.length ? 'Thanks — I’m covered' : 'I’m covered') : 'Skip'}</button>)}
@@ -1174,6 +1177,15 @@ function CareCard({ ctx, embedded }) {
   const _split = splitCareNeeds({ needs: care.needs, today, visibility: s.visibility, onCareRoster, myPub });
   const mineNeeds = _split.mine;
   let live = _split.others;
+  // A CHILD IS NEVER OFFERED A SIGN-UP FOR SOMEBODY ELSE'S NEED (owner, 2026-10-02; sim A2 #8). Not a confirmed
+  // minor, and not the 'maybe' window either (a child on a cold start, before their own clearance has landed —
+  // ctx.minorState, app/app.jsx). A shell too old to say has no minorState and behaves as an adult, as before.
+  // What they KEEP: needs they already hold a day on (signed up before being marked, or by another route), with
+  // "I'll help" off but "You're helping — cancel" on; `mineBlock` below (a need FOR them) is untouched, and so is
+  // asking for help. The "If you can help" section goes with the list when nothing is left under it.
+  const canVolunteer = !_minorHere && ctx.minorState !== 'minor' && ctx.minorState !== 'maybe';
+  const _heldByMe = (n) => (care.slots || []).some(sl => sl && sl.needId === n.id && String(sl.pubkey || '').toLowerCase() === myPub);
+  const liveShown = canVolunteer ? live : live.filter(_heldByMe);
   // AND NEVER OFFER SOMEONE THEIR OWN NEED. Verity found her own name, twice, under "Someone in the church
   // could use a hand — sign up for a day". The list was filtered by date alone; the recipient was consulted
   // only on the team-only setting, so on the default whole-church setting the person who asked was invited to
@@ -1194,14 +1206,14 @@ function CareCard({ ctx, embedded }) {
       </div>
     </div>
   ) : null;
-  const needsBlock = live.length ? (
+  const needsBlock = liveShown.length ? (
     <div style={{ padding: 14, borderRadius: 18, background: 'color-mix(in oklab, var(--sage) 7%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 26%, var(--line))', boxShadow: 'var(--shadow)' }}>
-      <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 11 }}>Someone in the church could use a hand. Sign up for a day — a meal, a ride, an errand.</div>
+      <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 11 }}>{canVolunteer ? 'Someone in the church could use a hand. Sign up for a day — a meal, a ride, an errand.' : 'You’re signed up to help with this. You can cancel a day if you need to.'}</div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
-        {live.map(n => <CareNeedRow key={n.id} need={n} slots={care.slots || []} skips={care.skips || []} care={care} canManage={onCareRoster} expanded={openId === n.id} onToggle={() => setOpenId(openId === n.id ? null : n.id)} />)}
+        {liveShown.map(n => <CareNeedRow key={n.id} need={n} slots={care.slots || []} skips={care.skips || []} care={care} canManage={onCareRoster} canVolunteer={canVolunteer} expanded={openId === n.id} onToggle={() => setOpenId(openId === n.id ? null : n.id)} />)}
       </div>
     </div>
-  ) : (
+  ) : !canVolunteer ? null : (
     <div style={{ textAlign: 'center', padding: '36px 24px 8px', color: 'var(--ink-3)' }}>
       <div style={{ width: 56, height: 56, borderRadius: 18, margin: '0 auto 14px', background: 'color-mix(in oklab, var(--sage) 12%, var(--surface))', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="heart" size={26} stroke={1.5} color="var(--sage)" /></div>
       {/* THIS IS WHAT CALLUM READ WHILE VERITY WAS WAITING. He had listed himself as ready for DIY, Moving and
@@ -1229,11 +1241,13 @@ function CareCard({ ctx, embedded }) {
           <CareAvailability ctx={ctx} part="others" />
           {readyCount === 0 ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.5, padding: '0 2px 4px' }}>{_minorHere ? 'Nobody else has listed themselves as available yet — asking above reaches the people at your church who can help.' : 'Nobody else has listed themselves as available yet — asking your care team above reaches them directly.'}</div> : null}
         </CareSection>
-        <CareSection id="give" icon="hand" title="If you can help" sub="Tell your church you’re available, and sign up for what’s open" count={live.length}>
-          <CareAvailability ctx={ctx} part="mine" />
-          {mineBlock}
-          {needsBlock}
-        </CareSection>
+        {canVolunteer || mineBlock || needsBlock ? (
+          <CareSection id="give" icon="hand" title="If you can help" sub="Tell your church you’re available, and sign up for what’s open" count={liveShown.length}>
+            {canVolunteer ? <CareAvailability ctx={ctx} part="mine" /> : null}
+            {mineBlock}
+            {needsBlock}
+          </CareSection>
+        ) : null}
       </React.Fragment>
     );
   }
