@@ -937,6 +937,15 @@ function AskForHelp({ ctx, linkOnly }) {
   // The alternative is what this replaces: a form, a send, a thank-you, and not one person who can read it.
   // For a child working up to telling someone something difficult, that is the worst thing the app can do.
   const isMinor = !!(ctx.safeguard && ctx.safeguard.isMinor);
+  // WHILE THE APP IS STILL FINDING OUT WHO IS HOLDING THE PHONE (sim A2 #9), WORD THE CARD FOR NOBODY IN PARTICULAR.
+  // `isMinor` is false until this member's own sealed clearance arrives, so a child was shown "Tell your care team
+  // what would help" — adult wording — for that window. `ctx.minorState` is 'maybe' for exactly that window (and
+  // while the engine assumes a child). The card is never blanked: a hidden ask control is worse than neutral
+  // words, so 'maybe' keeps the button and uses the sentence a young person already gets, which names no care
+  // team and makes no claim about who reads it. The "nobody is cleared" notice and the audience fetch stay on the
+  // CONFIRMED `isMinor`: keying them to 'maybe' would tell an adult who is merely offline that their church "hasn't
+  // set up who can help young people".
+  const neutralWords = isMinor || ctx.minorState === 'maybe';
   const [audience, setAudience] = React.useState(undefined);
   // WHO IS CLEARED CHANGES WHILE A CHILD IS LOOKING AT THIS SCREEN, and this used to be fetched once.
   // Measured on the OPPO, 2026-08-27: with nobody cleared, a young person is correctly told "your church
@@ -963,7 +972,7 @@ function AskForHelp({ ctx, linkOnly }) {
   if (!careOn) return null;
   return (
     <div style={{ marginBottom: 18 }}>
-      {mine.map(r => <MyRequestRow key={r.id} r={r} isMinor={isMinor} onCancel={() => window.Fellowship.cancelCareRequest(r.id)} onMessage={() => { if (linkOnly) { ctx.openServing && ctx.openServing('care'); return; } setChatting({ reqId: r.id, requesterPub: (care.myPub || ''), title: (isMinor ? 'Your church' : 'Your care team') }); }} />)}
+      {mine.map(r => <MyRequestRow key={r.id} r={r} isMinor={neutralWords} onCancel={() => window.Fellowship.cancelCareRequest(r.id)} onMessage={() => { if (linkOnly) { ctx.openServing && ctx.openServing('care'); return; } setChatting({ reqId: r.id, requesterPub: (care.myPub || ''), title: (neutralWords ? 'Your church' : 'Your care team') }); }} />)}
       {!linkOnly && chatting ? <CareChatSheet reqId={chatting.reqId} requesterPub={chatting.requesterPub} title={chatting.title} onClose={() => setChatting(null)} /> : null}
       {isMinor && (audience !== undefined) && (!audience || !audience.length) ? (
         // NO FORM. Not a disabled button either — a greyed-out control invites tapping it and reads as a fault
@@ -984,7 +993,7 @@ function AskForHelp({ ctx, linkOnly }) {
         <div style={{ width: 42, height: 42, borderRadius: 13, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay)' }}><Icon name="heart" size={22} /></div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, color: 'var(--ink)' }}>Ask for help</div>
-          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.4 }}>{isMinor ? 'Tell someone at your church what would help — privately.'
+          <div style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 1, lineHeight: 1.4 }}>{neutralWords ? 'Tell someone at your church what would help — privately.'
               : (care.settings && care.settings.openedBy) === 'member' ? 'Tell your church what would help.'
               : 'Tell your care team what would help — privately.'}</div>
         </div>
