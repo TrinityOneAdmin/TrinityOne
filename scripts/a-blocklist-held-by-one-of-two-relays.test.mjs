@@ -1,11 +1,16 @@
-// A BLOCKLIST HELD BY ONE OF TWO RELAYS: THE KEYS STILL REACH NEW MEMBERS.
+// A BLOCKLIST HELD BY ONE OF TWO RELAYS: THE KEYS STILL REACH NEW MEMBERS, AND A BLOCK WRITES BACK ONLY WHAT THE RELAYS SAID.
 //   Run: node --test scripts/a-blocklist-held-by-one-of-two-relays.test.mjs
 //
-// The audit of 29d4941/51d6ebf (at 34b1b19): TWO HEALTHY RELAYS COULD STALL THE KEY READS FOR GOOD (HIGH; 3/3 at
-// 34b1b19, 1/1 at 831dcea). _openKeyRead registered its "ask again after login" waiter only once the LAST relay had
-// answered. A relay that answered before its login was accepted — that login accepted before the other relay
-// answered — was never asked again: the blocklist read never settled, and no member was keyed (50 s+). The same
-// machinery gates the care, name and sermon key reads.
+// The audit of 29d4941/51d6ebf (at 34b1b19), two findings, a row each:
+//   1. TWO HEALTHY RELAYS COULD STALL THE KEY READS FOR GOOD (HIGH; 3/3 at 34b1b19, 1/1 at 831dcea). _openKeyRead
+//      registered its "ask again after login" waiter only once the LAST relay had answered. A relay that answered
+//      before its login was accepted — that login accepted before the other relay answered — was never asked again:
+//      the blocklist read never settled, and no member was keyed (50 s+). The same machinery gates the care, name
+//      and sermon key reads.
+//   2. THE FLOOR REACHED THE SCREENS (MEDIUM; caused by 29d4941). While a relay is down, the device's copy of the
+//      blocklist is a floor for who may be given keys. It also reached every screen that reads the blocklist, and the
+//      Members screen's Block writes that list back whole — so a member another console had unblocked was
+//      re-published as blocked (newer, so it wins), and the Block's key rotation left them out.
 //
 // THE POINT OF USE (CLAUDE.md rule 1): two real gateways on FREE ports, the real console in headless chromium, church
 // A by the wizard, relay 2 added through the console's addRelay and proved, and a real Block pressed on the Members
@@ -13,7 +18,7 @@
 // it. Every key envelope the console sends is captured off its socket; what the relays hold is read from their
 // databases. TEST-ENV ONLY: Page.setBypassCSP — the console's CSP allows https:/wss:/ws: but not a second plain-http
 // loopback origin, which is where the relay-identity proof is fetched from here; production relays are https.
-// Derived from the audit's window.test.mjs (SCEN=alive). Skips itself without chromium.
+// Derived from the audit's window.test.mjs (SCEN=alive and SCEN=reblock). Skips itself without chromium.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -200,4 +205,38 @@ test('two healthy relays, only relay 2 holding the Block: after a reload a membe
   assert.ok(got, `TWO HEALTHY RELAYS HELD BACK A NEW MEMBER'S KEYS for ${WAIT / 1000} s — the read that answered before its login was accepted was never asked again (audit of 29d4941/51d6ebf): name [${now(NAMEKEY_D + churchA)}], care [${now(CAREKEY_D + churchA)}], room [${now(GROUPKEY_D + roomId)}]`);
   assert.deepEqual(await sentTo(MX.pub), [], 'a key envelope was sent wrapped to MX, whom the church blocked (relay 2 holds the Block)');
   for (const d of [NAMEKEY_D + churchA, CAREKEY_D + churchA, GROUPKEY_D + roomId]) assert.ok(!recipsOn(r1, d).includes(MX.pub), `relay 1 now holds ${d.slice(11, 19)} wrapped to MX`);
+});
+
+// THE FLOOR STAYS OUT OF THE SCREENS. The console is closed; another console unblocks MX (a newer blocklist without MX,
+// on both relays); relay 2 goes down; the console is opened again. This device's copy still names MX, and relay 2 is
+// left out as failed, so the copy is the floor: MX may not be given keys. Then the steward Blocks M on the Members
+// screen — which writes back the list it was given. Relay 1 must end holding M, not MX.
+test('relay 2 down, an unblock made on another console: a Block on the Members screen writes back the relays\' list, not the device\'s floor', { skip: SKIP, timeout: 300000 }, async () => {
+  await evalIn(`(() => { location.href = 'about:blank'; return 1; })()`).catch(() => {});   // the console is closed
+  await sleep(2000);
+  const unblocked = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000) + 1, tags: [['d', BLOCKED_D + churchA], ['t', 'trinityone']], content: JSON.stringify({ pubkeys: [] }) }, ASK);
+  await H.publishAll(r1, [unblocked]); await H.publishAll(r2, [unblocked]);   // another console's unblock, signed by the church
+  assert.ok(blockedOn(r1).every(l => !l.includes(MX.pub)) && blockedOn(r2).every(l => !l.includes(MX.pub)), 'CONTROL: a relay still holds the Block after the unblock');
+  r2.proc.kill('SIGKILL');
+  await sleep(2000);
+  assert.equal(r2.alive(), false, 'CONTROL: relay 2 is still running');
+  await cdpSend('Page.navigate', { url: r1.base + '/steward.html' });
+  await sleep(3000);
+  await unlock();
+  assert.ok(JSON.parse(await evalIn(`localStorage.getItem('trinityone.steward.blockedlast.' + ${JSON.stringify(churchA)}) || '[]'`)).includes(MX.pub), 'CONTROL: the device\'s copy does not name MX — the floor this row is about is not in force');
+  assert.ok((await evalIn('window.Steward.relayList()')).includes(r2.wsUrl), 'CONTROL: relay 2 left the church\'s set');
+  await sleep(12000);
+  assert.ok(!recipsOn(r1, NAMEKEY_D + churchA).includes(MX.pub), 'CONTROL: MX was keyed after the reopen — the floor for who may be given keys is not in force, so this row proves nothing');
+  await evalIn('(() => { window.__env = []; return 1; })()');
+  await blockOnScreen(M, [MX, M2]);
+  assert.ok(await until(() => blockedOn(r1).some(l => l.includes(M.pub)), 30000), 'CONTROL: the Block of M never reached relay 1');
+  await sleep(10000);
+  const list = blockedOn(r1)[0] || [];
+  assert.ok(!list.includes(MX.pub), `THE MEMBERS SCREEN WROTE THE DEVICE'S FLOOR BACK TO THE RELAY — MX, unblocked on another console, is blocked again on relay 1: [${list.map(nm)}] (audit of 29d4941/51d6ebf)`);
+  assert.deepEqual(list.map(nm), ['M'], 'relay 1 does not hold exactly the Block made here');
+  // …and the Block's rotation follows the list it wrote: the member the church unblocked is keyed, the one blocked here is not
+  const n = recipsOn(r1, NAMEKEY_D + churchA), c = recipsOn(r1, CAREKEY_D + churchA);
+  assert.ok(n.includes(MX.pub) && c.includes(MX.pub), `the Block's rotation left out MX, whom the church had unblocked: name [${n.map(nm)}], care [${c.map(nm)}]`);
+  assert.ok(!n.includes(M.pub) && !c.includes(M.pub), `the Block's rotation kept M, just blocked: name [${n.map(nm)}], care [${c.map(nm)}]`);
+  assert.deepEqual(errors, [], 'the console threw:\n  ' + errors.join('\n  '));
 });

@@ -665,8 +665,10 @@ test('…and the device\'s copy is where a church starts: the switch seeds it, a
 
 // A RELAY THAT IS DOWN DOES NOT HOLD THE BLOCKLIST (audit of 831dcea). "A genuine answer from every relay" waited for a
 // relay that was down — for up to 30 days — and no new member was keyed. The list is current once every CONNECTED relay
-// has answered genuinely and at least one has; when a failed relay was left out, the device's copy is the floor.
-// (The browser row: a-relay-that-is-down-does-not-hold-back-new-members-keys.test.mjs.)
+// has answered genuinely and at least one has; when a failed relay was left out, the device's copy is the floor — for
+// who may be given keys (`_localBlocked`) and the device copy ONLY: the list the screens get, and write back whole, is
+// the relays' own (audit of 29d4941/51d6ebf). (The browser rows: a-relay-that-is-down-does-not-hold-back-new-members-
+// keys.test.mjs, and a-blocklist-held-by-one-of-two-relays.test.mjs for the write-back.)
 const blockedReads = (e) => e.subs.filter(r => r.d === 'trinityone/blocked:' + A.pub);
 const blockedDoc = (list, at = 100) => ({ pubkey: A.pub, created_at: at, kind: 30078, tags: [['d', 'trinityone/blocked:' + A.pub]], content: JSON.stringify({ pubkeys: list }) });
 test('the blocklist: a relay whose connection FAILED does not hold it — the connected relay\'s genuine answer counts, with the device\'s copy as the floor', async () => {
@@ -685,8 +687,8 @@ test('the blocklist: a relay whose connection FAILED does not hold it — the co
   r1.handlers.onevent(blockedDoc([M1.pub]));                               // R1's copy does not have M2
   await e.eose(r1);
   assert.ok(got && e.S.listIsCurrent(got), 'A RELAY THAT IS DOWN HELD THE BLOCKLIST BACK — no new member is keyed while it stays down (audit of 831dcea)');
-  assert.deepEqual([...got].sort(), [M1.pub, M2.pub].sort(), 'THE DEVICE\'S BLOCKLIST WAS NOT THE FLOOR — a relay copy without the Block undid it while the relay holding it was down');
-  assert.ok(e.t._localBlocked.has(M1.pub) && e.t._localBlocked.has(M2.pub), 'the key builders\' blocklist (`_localBlocked`) lost the floor');
+  assert.deepEqual([...got], [M1.pub], 'THE FLOOR REACHED THE LIST THE SCREENS GET — and the Members screen\'s Block, its Unblock and the re-seat write that list back whole, re-publishing someone another console unblocked (audit of 29d4941/51d6ebf)');
+  assert.ok(e.t._localBlocked.has(M1.pub) && e.t._localBlocked.has(M2.pub), 'THE DEVICE\'S BLOCKLIST WAS NOT THE FLOOR FOR WHO MAY BE KEYED (`_localBlocked`) — a relay copy without the Block undid it while the relay holding it was down');
   assert.deepEqual(JSON.parse(e.t.localStorage.getItem('trinityone.steward.blockedlast.' + A.pub)).sort(), [M1.pub, M2.pub].sort(), 'the device copy shrank on an answer with a relay missing');
 });
 test('…but a CONNECTED relay that has not answered genuinely still holds it — and every relay answering is the old rule, no floor', async () => {

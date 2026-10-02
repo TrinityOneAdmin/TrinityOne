@@ -7100,15 +7100,18 @@ window.Steward = {
     // re-subscribe, no new member got a name, care or room key for as long as it stayed down. THE RULE: the list
     // is current once every relay that is CONNECTED has given a genuine answer and at least one has
     // (_openKeyRead's `withoutFailed`). When a relay was left out that way, this church's last genuine blocklist
-    // on this device (`_blockedLastSet`, which every Block made here also writes) is the FLOOR: the list stamped
-    // for the enrolment, `_localBlocked` and the device copy are the relays' list PLUS everyone on the device copy,
-    // so a Block that only the missing relay holds — but this console made or saw — is not undone by a relay that
-    // missed it. (A floor only adds: an unblock made on another device waits until every relay answers again.)
+    // on this device (`_blockedLastSet`, which every Block made here also writes) is the FLOOR — FOR WHO MAY BE
+    // GIVEN KEYS, AND NOTHING ELSE: `_localBlocked` (which every key builder filters its recipients by) and the
+    // device copy are the relays' list PLUS everyone on the device copy, so a Block that only the missing relay
+    // holds — but this console made or saw — is not undone by a relay that missed it.
+    // THE LIST DELIVERED IS THE RELAYS' OWN (audit of 29d4941): the screens that read it write it back whole —
+    // the Members screen's Block and Unblock, the re-seat's "block the old phone" — so a floored list there
+    // re-published, as a newer blocklist, someone another console had unblocked. They see only what the relays said.
     // Every relay answering genuinely is the old rule unchanged: the relays' newest list replaces the device copy.
     const _tag = _listTag(), _deliver = onBlocked, cp0 = pub;
     let genuine = false, floored = false;
     const withFloor = (list) => (floored ? [...new Set([...(list || []).map(p => String(p).toLowerCase()), ..._blockedLastSet(cp0)])] : list);
-    onBlocked = (list) => _deliver(genuine ? _stampFor(withFloor(list), _tag) : list);   // stamped with the church it was opened for — see _listTag
+    onBlocked = (list) => _deliver(genuine ? _stampFor(list, _tag) : list);   // stamped with the church it was opened for — see _listTag
     let cur = [], latest = 0;
     const take = (e) => {
       const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';

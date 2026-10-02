@@ -20693,7 +20693,7 @@ zoo`.split("\n");
       const _tag = _listTag(), _deliver = onBlocked, cp0 = pub;
       let genuine = false, floored = false;
       const withFloor = (list) => floored ? [.../* @__PURE__ */ new Set([...(list || []).map((p) => String(p).toLowerCase()), ..._blockedLastSet(cp0)])] : list;
-      onBlocked = (list) => _deliver(genuine ? _stampFor(withFloor(list), _tag) : list);
+      onBlocked = (list) => _deliver(genuine ? _stampFor(list, _tag) : list);
       let cur = [], latest = 0;
       const take = (e) => {
         const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
