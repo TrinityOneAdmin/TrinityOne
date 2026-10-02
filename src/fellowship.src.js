@@ -4966,7 +4966,7 @@ window.Fellowship = {
   // silence with extra steps. Same shape as outboxFor so the screen can share one rendering path.
   outboxForPeer(peerPub) { const p = toPub(peerPub) || peerPub; return [
     ..._outbox.filter(o => o.peer === p).map(o => ({ ...o.evt, _pending: true, _tries: o.tries || 0 })),
-    ..._outboxFailed.filter(o => o.peer === p).map(o => ({ ...o.evt, _failed: true, _reason: o.lastError || '' })),
+    ..._outboxFailed.filter(o => o.peer === p).map(o => ({ ...o.evt, _failed: true, _reason: o.lastError || '', _permanent: !!o.permanent })),
   ]; },
   dmPlaintextOf(id) { return _dmPlain.get(id) || ''; },
   outboxCount() { return _outbox.length; },
@@ -5033,7 +5033,22 @@ window.Fellowship = {
       // adult vanished the same way. Simulation round 3, 2026-08-19: "all sent successfully", zero on the wire.
       // The machinery to tell these apart has been here all along (isPermanentRefusal / isConnectionFailure);
       // this path simply threw the reason away.
-      if (isPermanentRefusal(e)) evt._refused = String((e && e.message) || e || '').trim();
+      if (isPermanentRefusal(e)) {
+        evt._refused = String((e && e.message) || e || '').trim();
+        // AND MOVE IT OUT OF THE QUEUE NOW (sim A2 #12). The item used to stay in _outbox until the 45-second flush
+        // tick re-tried it, so for that long the thread drew a message the relay had ALREADY REFUSED as "Waiting
+        // to send" — a promise the app knew was false. It is the same move _outboxFlush makes for a permanent
+        // refusal (failed + permanent, into _outboxFailed), made here at the moment we learn it. _dmPlain keeps
+        // the words readable. _outboxSave tells the thread. A transient failure (timeout, auth-required,
+        // rate-limited) is NOT matched by isPermanentRefusal and stays queued as "Waiting to send".
+        const item = _outbox.find(o => o.evt.id === evt.id);
+        if (item) {
+          item.failed = true; item.permanent = true; item.lastError = evt._refused.slice(0, 120);
+          _outbox = _outbox.filter(o => o.evt.id !== evt.id);
+          _outboxFailed.push(item); if (_outboxFailed.length > 50) _outboxFailed.shift();
+          _outboxSave();
+        }
+      }
     }
     return evt;
   },

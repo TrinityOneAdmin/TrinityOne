@@ -11086,7 +11086,7 @@
       const p = toPub(peerPub) || peerPub;
       return [
         ..._outbox.filter((o) => o.peer === p).map((o) => ({ ...o.evt, _pending: true, _tries: o.tries || 0 })),
-        ..._outboxFailed.filter((o) => o.peer === p).map((o) => ({ ...o.evt, _failed: true, _reason: o.lastError || "" }))
+        ..._outboxFailed.filter((o) => o.peer === p).map((o) => ({ ...o.evt, _failed: true, _reason: o.lastError || "", _permanent: !!o.permanent }))
       ];
     },
     dmPlaintextOf(id) {
@@ -11172,7 +11172,19 @@
       } catch (e) {
         console.warn("[fellowship] DM publish failed", e);
         evt._delivered = false;
-        if (isPermanentRefusal(e)) evt._refused = String(e && e.message || e || "").trim();
+        if (isPermanentRefusal(e)) {
+          evt._refused = String(e && e.message || e || "").trim();
+          const item = _outbox.find((o) => o.evt.id === evt.id);
+          if (item) {
+            item.failed = true;
+            item.permanent = true;
+            item.lastError = evt._refused.slice(0, 120);
+            _outbox = _outbox.filter((o) => o.evt.id !== evt.id);
+            _outboxFailed.push(item);
+            if (_outboxFailed.length > 50) _outboxFailed.shift();
+            _outboxSave();
+          }
+        }
       }
       return evt;
     },
