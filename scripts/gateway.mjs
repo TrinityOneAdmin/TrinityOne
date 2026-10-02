@@ -721,7 +721,8 @@ function _blobUploader(req, action) {
   if (tag('t') !== (action || 'upload')) return null;
   const exp = parseInt(tag('expiration') || '0', 10); if (!exp || exp < Math.floor(Date.now() / 1000)) return null;   // must expire (anti-replay)
   const cp = tag('church');
-  if (cp && stewardCan(ev.pubkey, cp, 'any')) return { church: cp, want: (tag('x') || '').toLowerCase() };
+  // a steward THIS CHURCH HAS BLOCKED uploads and deletes nothing (sim finding 1: block is no private access of any kind)
+  if (cp && stewardCan(ev.pubkey, cp, 'any') && !blockedBy(ev.pubkey, cp)) return { church: cp, want: (tag('x') || '').toLowerCase() };
   if (CHURCH_PUBS.has(ev.pubkey)) return { church: ev.pubkey, want: (tag('x') || '').toLowerCase() };
   return null;
 }
@@ -745,7 +746,8 @@ function _blobMember(req, ownerCp, host, path) {
   const md = MEMBER_DOCS.get(ownerCp);
   const gated = REQUIRE_APPROVAL.has(ownerCp), admitted = ADMITTED_BY.get(ownerCp);
   const effectiveMember = !!(md && md.has(p)) && !blockedBy(p, ownerCp) && (!gated || !!(admitted && admitted.has(p)));
-  return p === ownerCp || stewardCan(p, ownerCp, 'any') || effectiveMember;   // church / steward / effective member of the OWNING church
+  // …and a steward the church has BLOCKED is not one for this purpose (sim finding 1) — effectiveMember already says the same of members
+  return p === ownerCp || (stewardCan(p, ownerCp, 'any') && !blockedBy(p, ownerCp)) || effectiveMember;   // church / steward / effective member of the OWNING church
 }
 
 // backup export gate: a fresh NIP-98 (kind 27235) proof bound to THIS url, signed by the church key OR one of
@@ -4847,6 +4849,26 @@ function canRead(e, authed) {
   }
   if (e.kind === 30078) {
     const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+    // A BLOCKED READER IS ANONYMOUS FOR THAT CHURCH'S DOCUMENTS (sim finding 1; owner, 2026-10-02: "Block means NO
+    // private access of any kind"). Every grant below that is not "effective member" — stewardCan() (a delegate's
+    // reads), careAdmin() (the care team's roster), childCareReader()/approvedIn() (the cleared-adults list), the
+    // minors:/guardians:/clearance:/guardnotice: branches, the care-request branches — asked who the reader IS and never
+    // whether the church had BLOCKED them; only effMemberOf did. So a blocked care-team member, cleared adult or
+    // delegate went on being served help requests, children's lists and parent links. Rather than add a block check
+    // to each grant, the reader is demoted to "no one signed in" for this church's documents, once, here — which
+    // is also why NONE of those grants (stewardCan, careAdmin, approvedIn) is edited: grantorOk() asks stewardCan of
+    // whoever WROTE a roster, and a block there would silently revoke every roster a since-blocked steward wrote.
+    //
+    // THE REST IS UNTOUCHED ON PURPOSE. Per church: blockedBy(pub, cp) asks the church that owns THIS document, so a
+    // ban by A never reaches B (one-churchs-ban-is-not-every-churchs.test.mjs). A document the reader AUTHORED passes
+    // this check as it always did (authed === e.pubkey; the REQ scan separately withholds a blocked AUTHOR's events,
+    // which is older and unchanged), and public documents (joinpolicy, relay-net) stay public, because a demoted
+    // reader falls to exactly the anonymous branches below. canRead's three callers — the live broadcast, the REQ scan and the
+    // NIP-42 replay — all pass through here, so one place covers all three.
+    if (authed && authed !== e.pubkey) {
+      const rcp = d.startsWith(SAFE_D) ? d.slice(SAFE_D.length) : owningChurch(e, d);
+      if (rcp && blockedBy(authed, rcp)) authed = null;
+    }
     if (d.startsWith(SAFE_D)) {   // a member's safety response: only the author, the check's CREATOR (p-tag), and the church + its stewards/care-admins may read it (content is NIP-44-encrypted to the creator)
       const cp = d.slice(SAFE_D.length);
       const p = (e.tags.find(t => t[0] === 'p') || [])[1]; const pHex = p ? (toHexPub(p) || p) : '';

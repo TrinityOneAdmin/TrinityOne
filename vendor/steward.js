@@ -22066,7 +22066,7 @@ zoo`.split("\n");
         if (legacy && nextRing.indexOf(legacy) < 0) nextRing = [...nextRing, legacy];
       }
       const allowed = _capAllows(spec, caps);
-      const want = [...new Set([cp, ...(stewardPubs || []).filter(allowed)].filter(Boolean))];
+      const want = [...new Set([cp, ...(stewardPubs || []).filter(allowed)].filter(Boolean))].filter((p2) => p2 === cp || !_localBlocked.has(String(p2).toLowerCase()));
       const have = st.docKeys || {};
       if (want.every((p2) => have[p2]) && Object.keys(have).length === want.length) return false;
       if (st.docKeys) {
@@ -22102,7 +22102,7 @@ zoo`.split("\n");
       const nextRing = [fresh, ...st.ring].slice(0, 50);
       const nextRev = (st.rev || 1) + 1;
       const allowed = _capAllows(spec, caps);
-      const want = [...new Set([cp, ...(stewardPubs || []).filter(allowed)].filter(Boolean))];
+      const want = [...new Set([cp, ...(stewardPubs || []).filter(allowed)].filter(Boolean))].filter((p2) => p2 === cp || !_localBlocked.has(String(p2).toLowerCase()));
       const keys = await _sealEach(JSON.stringify(nextRing), want, (pl, mp) => encrypt3(pl, getConversationKey(sk, mp)));
       _warnUnsealed(spec.cap, _sealEachFailed);
       if (_capState[kind] !== st || pub !== cp) return false;

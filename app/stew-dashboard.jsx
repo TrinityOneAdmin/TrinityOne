@@ -6327,8 +6327,25 @@ function DashMembers() {
       // ...and off every team, the care list and the future rota slots - only for a Block that LANDED (`ok === false` may
       // be only partly saved, and unblocking does not put anyone back). See takeOffEveryTeam.
       const teams = ok === false ? Promise.resolve([]) : takeOffEveryTeam({ pk, rosters: rostersAll, rotas: rotasAll, services: servicesAll, careTeamId });
-      return Promise.all([rotating, teams]).then(([failed, teamFailed]) => {
-        const teamNote = teamFailed.length ? 'They are blocked, but this console could not take them off ' + teamFailed.join(' or ') + ' \u2014 take them off by hand.' : '';
+      // BLOCK WITHDRAWS YOUTH CLEARANCE TOO (sim finding 1; owner, 2026-10-02: "Block means NO private access of any
+      // kind"). A blocked adult stayed on the cleared list, and the child's phone seals its plea for help to that list.
+      // Same rule as the teams: only for a Block that landed. No _reseal for them: a blocked person is told nothing.
+      const clearing = (ok === false || !approvedSet.has(pk)) ? Promise.resolve([]) : (() => {
+        try {
+          return Promise.resolve(window.Steward.setApproved((sg.approved || []).filter(p => String(p).toLowerCase() !== String(pk).toLowerCase()), { listKnown: !!sg.clearedKnown }))
+            .then((r) => ((r === false || r == null) ? ['their youth clearance'] : []));
+        } catch (e) { return Promise.resolve(['their youth clearance']); }
+      })().catch(() => ['their youth clearance']);
+      // CAPABILITY KEYS (finance, check-in): re-wrap them without the blocked steward now rather than on the next roster
+      // change — the engine leaves anyone this console holds as blocked out of the wrap, and rotates when that shrinks it.
+      // Not awaited or reported: ensureCapKeyFor answers false for "nothing to change" as well as for a failure, and the
+      // dashboard's own effect repeats it on every key delivery until the blocked steward is out of the envelope.
+      if (window.Steward.ensureCapKeyFor) for (const kind of ['finance', 'checkin']) {
+        try { Promise.resolve(window.Steward.ensureCapKeyFor(kind, stewardRoster || [], (window.Steward.stewardCaps && window.Steward.stewardCaps()) || {})).catch(() => {}); } catch (e) {}
+      }
+      return Promise.all([rotating, teams, clearing]).then(([failed, teamFailed, clearFailed]) => {
+        const offFailed = [...teamFailed, ...clearFailed];
+        const teamNote = offFailed.length ? 'They are blocked, but this console could not take them off ' + offFailed.join(' or ') + ' \u2014 take them off by hand.' : '';
         if (failed.length) setBlockWarn((saveNote ? saveNote + ' It also could not change ' + failed.join(' or ') + ', so they may still be able to open things sealed with it.' : 'Removed them from the church, but could not change ' + failed.join(' or ') + '. They may still be able to open things sealed with it. Try blocking them again — and if it keeps failing, your church may have grown past what one key document can hold.') + (teamNote ? ' ' + teamNote : ''));
         else if (teamNote) setBlockWarn((saveNote ? saveNote + ' ' : '') + teamNote);
       });

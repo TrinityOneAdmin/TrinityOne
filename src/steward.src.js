@@ -8722,7 +8722,10 @@ window.Steward = {
       if (legacy && nextRing.indexOf(legacy) < 0) nextRing = [...nextRing, legacy];
     }
     const allowed = _capAllows(spec, caps);
-    const want = [...new Set([cp, ...(stewardPubs || []).filter(allowed)].filter(Boolean))];
+    // A STEWARD THIS CONSOLE HOLDS AS BLOCKED IS NEVER WRAPPED A CAPABILITY KEY (sim finding 1; owner, 2026-10-02: "Block
+    // means no private access of any kind") — the caller's list is not the last word, the rule rotateCareKey and
+    // rotateMediaKey already keep. When this shrinks an envelope that held them, the `lost` branch below rotates.
+    const want = [...new Set([cp, ...(stewardPubs || []).filter(allowed)].filter(Boolean))].filter(p2 => p2 === cp || !_localBlocked.has(String(p2).toLowerCase()));
     const have = st.docKeys || {};
     if (want.every(p2 => have[p2]) && Object.keys(have).length === want.length) return false;   // nothing changed
     // THE FIRST MINT HAS TO BE ABLE TO HAPPEN. This used to read `if (!docKeys) return false` — guarding a
@@ -8789,7 +8792,7 @@ window.Steward = {
     const nextRing = [fresh, ...st.ring].slice(0, 50);
     const nextRev = (st.rev || 1) + 1;
     const allowed = _capAllows(spec, caps);
-    const want = [...new Set([cp, ...(stewardPubs || []).filter(allowed)].filter(Boolean))];
+    const want = [...new Set([cp, ...(stewardPubs || []).filter(allowed)].filter(Boolean))].filter(p2 => p2 === cp || !_localBlocked.has(String(p2).toLowerCase()));   // the blocked are never given a key — see ensureCapKeyFor
     const keys = await _sealEach(JSON.stringify(nextRing), want, (pl, mp) => nip44e(pl, nip44ck(sk, mp)));
     _warnUnsealed(spec.cap, _sealEachFailed);
     if (_capState[kind] !== st || pub !== cp) return false;  // switched church while sealing — see ensureCapKeyFor

@@ -253,6 +253,7 @@ function runRotate({ ring, allowed, caps }) {
       feChurch: (t) => t, publish: async (e) => { published.push(e); return e; },
       now: () => 1787280000, NET: 'trinityone',
       _capRingChanged: () => {},   // the retry notifier — nothing is subscribed in this harness
+      _localBlocked: new Set(),    // whom this console holds as blocked (a blocked steward is left out of the wrap — a-blocked-steward-is-left-out-of-the-capability-keys.test.mjs); nobody here
       _warnUnsealed: () => {}, _sealEachFailed: [], _capAllows: SHIPPED_CAP_ALLOWS,
       window: { Steward: {} },
     };
@@ -292,6 +293,7 @@ function runEnsure({ ring, docKeys, checked = true, publishOk = true, unsealable
       for (const w of want) { if (unsealable.indexOf(w) >= 0) { stubs._sealEachFailed.push(w); continue; } o[w] = seal(payload, w); } return o; },
     feChurch: (t) => t, publish: async (e) => { if (!publishOk) return false; published.push(e); return e; },
     now: () => 1787280000, NET: 'trinityone', _capRingChanged: () => {},
+    _localBlocked: new Set(),    // see runRotate: nobody is blocked in these cases
     window: { Steward: {} },
   };
   const scope = new Proxy(stubs, {
