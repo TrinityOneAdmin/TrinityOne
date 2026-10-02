@@ -639,6 +639,55 @@ test('…and the device\'s copy is where a church starts: the switch seeds it, a
   assert.deepEqual(JSON.parse(e.t.localStorage.getItem('trinityone.steward.blockedlast.' + B.pub)), [M1.pub], 'a Block made here was not kept for the next start — a reload before the relay answers would wrap the keys to them');
 });
 
+// A RELAY THAT IS DOWN DOES NOT HOLD THE BLOCKLIST (audit of 831dcea). "A genuine answer from every relay" waited for a
+// relay that was down — for up to 30 days — and no new member was keyed. The list is current once every CONNECTED relay
+// has answered genuinely and at least one has; when a failed relay was left out, the device's copy is the floor.
+// (The browser row: a-relay-that-is-down-does-not-hold-back-new-members-keys.test.mjs.)
+const blockedReads = (e) => e.subs.filter(r => r.d === 'trinityone/blocked:' + A.pub);
+const blockedDoc = (list, at = 100) => ({ pubkey: A.pub, created_at: at, kind: 30078, tags: [['d', 'trinityone/blocked:' + A.pub]], content: JSON.stringify({ pubkeys: list }) });
+test('the blocklist: a relay whose connection FAILED does not hold it — the connected relay\'s genuine answer counts, with the device\'s copy as the floor', async () => {
+  { // CONTROL: no relay connected, none answered genuinely — "at least one" keeps it shut
+    const e = engine(); e.t.relayList = [R1, R2];
+    let got = null; e.S.subscribeBlocked((list) => { got = list; });
+    for (const r of blockedReads(e)) await e.closedByRelay(r, 'connection failure: relay unreachable');
+    assert.ok(!got || !e.S.listIsCurrent(got), 'a blocklist nobody answered for counted as the church\'s');
+  }
+  const e = engine(); e.t.relayList = [R1, R2]; e.t.up = new Set([R1]);   // R1 connected; R2's dial fails
+  e.t.localStorage.setItem('trinityone.steward.blockedlast.' + A.pub, JSON.stringify([M2.pub]));   // a Block this console made
+  let got = null; e.S.subscribeBlocked((list) => { got = list; });
+  const [r1, r2] = blockedReads(e);
+  assert.deepEqual([r1.url, r2.url], [R1, R2], 're-anchor: the blocklist read is no longer opened per relay');
+  await e.closedByRelay(r2, 'connection failure: relay unreachable');      // nostr-tools: connect fails → handleClose
+  r1.handlers.onevent(blockedDoc([M1.pub]));                               // R1's copy does not have M2
+  await e.eose(r1);
+  assert.ok(got && e.S.listIsCurrent(got), 'A RELAY THAT IS DOWN HELD THE BLOCKLIST BACK — no new member is keyed while it stays down (audit of 831dcea)');
+  assert.deepEqual([...got].sort(), [M1.pub, M2.pub].sort(), 'THE DEVICE\'S BLOCKLIST WAS NOT THE FLOOR — a relay copy without the Block undid it while the relay holding it was down');
+  assert.ok(e.t._localBlocked.has(M1.pub) && e.t._localBlocked.has(M2.pub), 'the key builders\' blocklist (`_localBlocked`) lost the floor');
+  assert.deepEqual(JSON.parse(e.t.localStorage.getItem('trinityone.steward.blockedlast.' + A.pub)).sort(), [M1.pub, M2.pub].sort(), 'the device copy shrank on an answer with a relay missing');
+});
+test('…but a CONNECTED relay that has not answered genuinely still holds it — and every relay answering is the old rule, no floor', async () => {
+  const e = engine(); e.t.relayList = [R1, R2]; e.t.up = new Set([R1, R2]);   // both connected; R2 is on a slow link
+  e.t.localStorage.setItem('trinityone.steward.blockedlast.' + A.pub, JSON.stringify([M2.pub]));
+  let got = null; e.S.subscribeBlocked((list) => { got = list; });
+  const [r1, r2] = blockedReads(e);
+  r1.handlers.onevent(blockedDoc([M1.pub]));
+  await e.eose(r1);
+  e.t.clock += 15000;                                                      // nostr-tools' timer (maxWait) answers for R2
+  await e.eose(r2);
+  assert.ok(!got || !e.S.listIsCurrent(got), 'A CONNECTED RELAY\'S TIMER ANSWER WAS LEFT OUT — the slow link\'s protection (audit of 5276297, HIGH 2) is gone');
+  e.t.refused = new Set([R2]);                                             // …nor one whose login it has not accepted
+  e.fireTimers();
+  const [s1, s2] = blockedReads(e).slice(-2);
+  s1.handlers.onevent(blockedDoc([M1.pub])); await e.eose(s1); await e.eose(s2);
+  assert.ok(!got || !e.S.listIsCurrent(got), 'a connected relay that has not accepted our login was left out');
+  e.t.refused = new Set(); e.t.__runAuthWaiters();
+  const [t1, t2] = blockedReads(e).slice(-2);
+  t1.handlers.onevent(blockedDoc([M1.pub])); await e.eose(t1); await e.eose(t2);
+  assert.ok(got && e.S.listIsCurrent(got), 'CONTROL: both relays answered genuinely and the list is not current');
+  assert.deepEqual([...got], [M1.pub], 'every relay answered, yet the device\'s copy was added — the floor is only for a relay that is down');
+  assert.deepEqual(JSON.parse(e.t.localStorage.getItem('trinityone.steward.blockedlast.' + A.pub)), [M1.pub], 'CONTROL: the relays\' genuine list no longer replaces the device copy');
+});
+
 // THE NAME-KEY LOCK: the church is fixed when the call is made, not when it gets the lock. The audit's four rows.
 const RING_NB = ['b1'.repeat(32)];
 const MB = K();

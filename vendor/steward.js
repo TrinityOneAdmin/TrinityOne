@@ -16693,7 +16693,20 @@ zoo`.split("\n");
     }
   }
   var _keyReadWaiting = /* @__PURE__ */ new Map();
-  function _openKeyRead(cp, filters, onevent, onSettled, kind) {
+  function _keyReadConnected(url) {
+    try {
+      let k = url;
+      try {
+        k = normalizeURL2(url);
+      } catch (e) {
+      }
+      const r = pool.relays.get(k);
+      return !!r && r.connected === true;
+    } catch (e) {
+      return true;
+    }
+  }
+  function _openKeyRead(cp, filters, onevent, onSettled, kind, opts) {
     const st = { stopped: false, gen: 0, subs: [], timer: null, tries: 0, since: 0 };
     const stopSubs = () => {
       for (const s of st.subs) {
@@ -16732,6 +16745,15 @@ zoo`.split("\n");
           if (w && w.answers === answers) w.settled = true;
           onSettled();
           return;
+        }
+        if (opts && opts.withoutFailed) {
+          const without = urls.filter((u) => answers.get(u) !== true);
+          if (without.length < urls.length && without.every((u) => !_keyReadConnected(u))) {
+            st.tries = 0;
+            st.since = 0;
+            onSettled({ without });
+            return;
+          }
         }
         if (v.some((x) => x === false)) {
           retry();
@@ -20666,8 +20688,9 @@ zoo`.split("\n");
     // and withholds their existing events. Replaceable doc d=blocked:<churchpub>. ----
     subscribeBlocked(onBlocked) {
       const _tag = _listTag(), _deliver = onBlocked, cp0 = pub;
-      let genuine = false;
-      onBlocked = (list) => _deliver(genuine ? _stampFor(list, _tag) : list);
+      let genuine = false, floored = false;
+      const withFloor = (list) => floored ? [.../* @__PURE__ */ new Set([...(list || []).map((p) => String(p).toLowerCase()), ..._blockedLastSet(cp0)])] : list;
+      onBlocked = (list) => _deliver(genuine ? _stampFor(withFloor(list), _tag) : list);
       let cur = [], latest = 0;
       const take = (e) => {
         const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
@@ -20680,7 +20703,7 @@ zoo`.split("\n");
         } catch {
           cur = [];
         }
-        if (genuine) _noteBlockedList(cp0, _tag.epoch, cur, latest);
+        if (genuine) _noteBlockedList(cp0, _tag.epoch, withFloor(cur), latest);
         return true;
       };
       const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
@@ -20697,13 +20720,16 @@ zoo`.split("\n");
         (e) => {
           if (take(e)) onBlocked(cur);
         },
-        () => {
+        (how) => {
           if (genuine) return;
           genuine = true;
+          floored = !!(how && how.without && how.without.length);
           cur = [...cur];
-          _noteBlockedList(cp0, _tag.epoch, cur, latest);
+          _noteBlockedList(cp0, _tag.epoch, withFloor(cur), latest);
           onBlocked(cur);
-        }
+        },
+        void 0,
+        { withoutFailed: true }
       );
       return () => {
         try {

@@ -2304,7 +2304,25 @@ function _runKeyReadAuthWaiters() {
 // answering (audit of 3bc8905, finding 3: with the per-relay rule a proved relay that is down holds back a church's
 // FIRST key, by design, and the steward was told only to wait). See _keyWaitNote.
 const _keyReadWaiting = new Map();   // kind -> { cp, epoch, urls, answers: Map(url -> true|false|'unauthed'), settled }
-function _openKeyRead(cp, filters, onevent, onSettled, kind) {
+// IS THIS RELAY'S SOCKET UP RIGHT NOW? After a failed dial nostr-tools drops the relay from `pool.relays`
+// (ensureRelay's catch, and a dropped socket's onclose), so "not there, or not connected" is a connection that
+// has FAILED. Ambiguity (a throw) answers "connected" — the caller then waits for that relay, the safe side.
+function _keyReadConnected(url) {
+  try {
+    let k = url; try { k = normalizeURL(url); } catch (e) {}
+    const r = pool.relays.get(k);
+    return !!r && r.connected === true;
+  } catch (e) { return true; }
+}
+// `opts.withoutFailed` — THE BLOCKLIST'S READ ONLY (subscribeBlocked; audit of 831dcea). The mint gates above need
+// every relay, because minting over an envelope a down relay holds destroys a church's keys. The blocklist read
+// gates no mint: it gates the ENROLMENT of members, and a relay that is down for days (a self-hosted box switched
+// off stays admitted for up to 30 days; the built-in relays cannot be removed) held every new member's keys back
+// for as long as it was down. With it, the read also settles once every relay that is CONNECTED has given a
+// trustworthy answer and at least one has: the relays whose connection has failed are left out, and are named
+// to `onSettled` ({ without: [urls] }) so the caller can apply its floor. A connected relay that has not answered
+// trustworthily — the library's timer, our own close, a CLOSED, an unaccepted login — still holds the read.
+function _openKeyRead(cp, filters, onevent, onSettled, kind, opts) {
   const st = { stopped: false, gen: 0, subs: [], timer: null, tries: 0, since: 0 };   // since: when this read began waiting (_keyWaitNote)
   // MARK EACH TOKEN CLOSED BEFORE CLOSING: the close itself fires that subscription's oneose.
   const stopSubs = () => { for (const s of st.subs) { s.tok.closed = true; try { s.sub.close(); } catch (e) {} } st.subs = []; };
@@ -2323,6 +2341,10 @@ function _openKeyRead(cp, filters, onevent, onSettled, kind) {
       if (!live() || answers.size < urls.length) return;     // superseded, or not every relay has answered yet
       const v = [...answers.values()];
       if (v.every(x => x === true)) { st.tries = 0; st.since = 0; const w = kind && _keyReadWaiting.get(kind); if (w && w.answers === answers) w.settled = true; onSettled(); return; }
+      if (opts && opts.withoutFailed) {                        // see `opts.withoutFailed`, above
+        const without = urls.filter(u => answers.get(u) !== true);
+        if (without.length < urls.length && without.every(u => !_keyReadConnected(u))) { st.tries = 0; st.since = 0; onSettled({ without }); return; }
+      }
       if (v.some(x => x === false)) { retry(); return; }     // a CLOSED, a timer, a drop: ask again, later
       _keyReadAfterAuth(() => { if (live()) open(); });     // genuine but not yet logged in: ask again on login
     };
@@ -7066,9 +7088,21 @@ window.Steward = {
     // church (Steward.listIsCurrent, which the enrolment requires) only once a NARROW read of the blocklist
     // document has settled with a genuine answer from every relay — the key reads' machinery (_openKeyRead): not
     // our own close, not the library's timer, the current church and epoch, an authenticated socket, per relay.
+    //
+    // …AND A RELAY WHOSE CONNECTION HAS FAILED DOES NOT HOLD IT (audit of 831dcea). "Every relay" included a relay
+    // that is down — and a proved relay stays in the set for up to 30 days — so after a reload, a switch or any
+    // re-subscribe, no new member got a name, care or room key for as long as it stayed down. THE RULE: the list
+    // is current once every relay that is CONNECTED has given a genuine answer and at least one has
+    // (_openKeyRead's `withoutFailed`). When a relay was left out that way, this church's last genuine blocklist
+    // on this device (`_blockedLastSet`, which every Block made here also writes) is the FLOOR: the list stamped
+    // for the enrolment, `_localBlocked` and the device copy are the relays' list PLUS everyone on the device copy,
+    // so a Block that only the missing relay holds — but this console made or saw — is not undone by a relay that
+    // missed it. (A floor only adds: an unblock made on another device waits until every relay answers again.)
+    // Every relay answering genuinely is the old rule unchanged: the relays' newest list replaces the device copy.
     const _tag = _listTag(), _deliver = onBlocked, cp0 = pub;
-    let genuine = false;
-    onBlocked = (list) => _deliver(genuine ? _stampFor(list, _tag) : list);   // stamped with the church it was opened for — see _listTag
+    let genuine = false, floored = false;
+    const withFloor = (list) => (floored ? [...new Set([...(list || []).map(p => String(p).toLowerCase()), ..._blockedLastSet(cp0)])] : list);
+    onBlocked = (list) => _deliver(genuine ? _stampFor(withFloor(list), _tag) : list);   // stamped with the church it was opened for — see _listTag
     let cur = [], latest = 0;
     const take = (e) => {
       const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
@@ -7079,7 +7113,7 @@ window.Steward = {
       // blocklist silently reinstates blocks the owner has already lifted.
       if (e.created_at < latest) return false; latest = e.created_at;
       try { cur = (JSON.parse(e.content).pubkeys) || []; } catch { cur = []; }
-      if (genuine) _noteBlockedList(cp0, _tag.epoch, cur, latest);
+      if (genuine) _noteBlockedList(cp0, _tag.epoch, withFloor(cur), latest);
       return true;
     };
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
@@ -7088,7 +7122,8 @@ window.Steward = {
     });
     const stopRead = _openKeyRead(cp0, [{ kinds: [30078], authors: [cp0], '#d': [BLOCKED_D + cp0] }],
       (e) => { if (take(e)) onBlocked(cur); },
-      () => { if (genuine) return; genuine = true; cur = [...cur]; _noteBlockedList(cp0, _tag.epoch, cur, latest); onBlocked(cur); });
+      (how) => { if (genuine) return; genuine = true; floored = !!(how && how.without && how.without.length); cur = [...cur]; _noteBlockedList(cp0, _tag.epoch, withFloor(cur), latest); onBlocked(cur); },
+      undefined, { withoutFailed: true });
     return () => { try { sub.close(); } catch {} try { stopRead(); } catch {} };
   },
   setBlocked(pubkeys) {   // replace the whole blocklist (pass hex pubkeys)
