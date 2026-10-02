@@ -9,20 +9,6 @@ const SCH_DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 // The toolbar label for each rota-visibility setting. Short enough for the button; the menu carries the
 // explanation, and the caveat that this applies from now on rather than retroactively.
 const ROTA_VIS_LABEL = { church: 'Everyone', team: 'Serving teams', stewards: 'Stewards only' };
-// UNSAVED ROTA EDITS OUTLIVE THE BOARD. The draft lives in DashRota's own state, so clicking to Calendar or
-// Members and back unmounted the board and threw away everything not yet published - a steward could lose an
-// hour of arranging to a mis-click on the sidebar (sim 2026-10-02 #57). This holds the drafts for as long as the
-// console page stays open, per church. It is memory only: a reload still clears it (a draft names people, and
-// writing it to disk is a different decision), and Publish is still the only thing that tells anybody anything.
-// THE TIME A CHURCH ACTUALLY MEETS AT, remembered across New event forms (sim 2026-10-02 #50: every monthly event
-// came out at 19:30 whatever the church does, and the fix was editing each date). The form opened at a fixed 19:30;
-// it now opens at the time this console last saved an event with. A stored value that is not HH:MM is ignored.
-const SCH_EVENT_TIME_KEY = 'trinityone.steward.eventTime';
-function schLastEventTime() {
-  try { const v = localStorage.getItem(SCH_EVENT_TIME_KEY); return /^\d{2}:\d{2}$/.test(v || '') ? v : '19:30'; } catch (e) { return '19:30'; }
-}
-const SCH_DRAFT_STORE = {};   // church pubkey -> { svcId: assignMap }
-const schDraftChurch = () => String((window.Steward && window.Steward.pubkey) || '');
 function schDate(s) { try { return new Date(s + 'T00:00'); } catch { return new Date(); } }
 function schKey(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
 function schParts(s) { const d = schDate(s); return { dow: SCH_DOW[d.getDay()], day: d.getDate(), mon: SCH_MON[d.getMonth()] }; }
@@ -69,6 +55,15 @@ function schGenDates(startIso, cadence, untilIso, nth) {
   return out;
 }
 function teamMeta(t) { return { name: t.name, icon: t.icon || 'hand', accent: t.accent || 'var(--clay)' }; }
+// WHOM THIS CONSOLE HOLDS AS BLOCKED, lower-case hex — so no picker on this page offers them (owner, 2026-10-02:
+// blocking removes someone from every team). A HOOK (it reads useStewardBlocked): call it at the top of a
+// component, unconditionally. Block also takes them off the rosters themselves (blockOffTeamsAndCare); this keeps
+// the pickers right while that lands, and for a roster this console could not rewrite.
+// Callers: DashRota (auto-fill, pods), AssignModal, RosterModal.
+function useSchBlocked() {
+  const list = (window.useStewardBlocked ? window.useStewardBlocked() : []) || [];
+  return new Set(list.map(p => String(p || '').toLowerCase()));
+}
 function memDisplay(m) { return (m && m.name && m.name.trim()) || ('Anon · ' + ((m && (m.npub || m.pubkey)) || '').slice(-6)); }
 function sameAssign(a, b) { const k = o => Object.keys(o || {}).filter(x => (o[x] && o[x].name)).sort().map(x => x + '=' + o[x].name + '/' + (o[x].pub || '')).join('|'); return k(a) === k(b); }
 
@@ -91,10 +86,6 @@ const SCH_NO_KEY = 'Not saved — your church’s key hasn’t arrived yet. Give
 // …ONLY WHEN THE KEY IS WHAT IS MISSING (audit of 5276297, LOW): a save can come back empty for other reasons, and a
 // relay's name on those would send the steward after the wrong thing.
 function schNoKey() {
-  // …AND WHILE THE CONSOLE IS STILL SIGNING IN (a new church's first minutes) SAY SO — nothing is wrong, and "your
-  // church's key hasn't arrived" sends a steward looking for a fault. Steward.keysSettingUp is true only until the
-  // sign-in and the key read have settled; after that the plainer message below stands.
-  try { const S0 = window.Steward; if (S0 && S0.keysSettingUp && S0.keysSettingUp('name')) return 'Setting up your church’s keys… try again in a moment.'; } catch (e) {}
   let why = '';
   try { const S = window.Steward; why = (S && S.keyWaitNote && S.nameKeyReady && !S.nameKeyReady()) ? S.keyWaitNote('name') : ''; } catch (e) { why = ''; }
   return why ? 'Not saved — your church’s key hasn’t arrived: ' + why + '.' : SCH_NO_KEY;
@@ -225,10 +216,7 @@ function publishCareTeamFor(teamId, careTeamId, people) {
 }
 
 // ── manage a team's roster: the roles it needs + the people who can serve ──
-function RosterModal({ team, roster, members: allMembers, onClose, onCreate }) {
-  // WHO CAN BE LINKED TO A ROSTER PERSON: not somebody still waiting to join, not the blocked (sim A2 #7). Done HERE
-  // so both callers (DashRota and DashMealsPanel's care team) get it. Everything below reads `members`.
-  const members = window.useStewardPickableMembers ? window.useStewardPickableMembers(allMembers) : allMembers;
+function RosterModal({ team, roster, members, onClose, onCreate }) {
   const [roles, setRoles] = useSch(() => (roster && roster.roles ? roster.roles.map(r => ({ ...r })) : []));
   const [people, setPeople] = useSch(() => (roster && roster.people ? roster.people.map(p => ({ ...p })) : []));
   const [pods, setPods] = useSch(() => (roster && roster.pods ? roster.pods.map(p => ({ ...p, fills: { ...(p.fills || {}) } })) : []));
@@ -236,6 +224,7 @@ function RosterModal({ team, roster, members: allMembers, onClose, onCreate }) {
   const [newPerson, setNewPerson] = useSch('');
   const [linkPub, setLinkPub] = useSch('');
   const careTeamId = window.useMealsSettings ? (window.useMealsSettings().adminGroupId || '') : '';   // which team is THE care team
+  const blockedR = useSchBlocked();
   // SAVE NOW TAKES A MOMENT, SO IT HAS TO SAY SO. It used to be fire-and-forget and closed instantly, which
   // made a second click impossible. It now awaits up to four publishes with the modal still open and nothing
   // on screen changing — so a steward who sees no response clicks again, and the second run republishes the
@@ -246,26 +235,6 @@ function RosterModal({ team, roster, members: allMembers, onClose, onCreate }) {
   // The allowlist as it stood when this modal opened, so Save can apply what the steward CHANGED rather than
   // replacing the room's membership with the rota.
   const startPubs = useSchR((roster && roster.people ? roster.people : []).map(p => p && p.pub).filter(Boolean));
-  // ⚠ WHICH VERSION OF THE ROSTER THIS FORM WAS BUILT FROM, AND WHETHER SOMEONE ELSE HAS WRITTEN SINCE.
-  // A roster is ONE document per team and Save REPLACES it whole, so two stewards editing the same team
-  // overwrote each other: whoever pressed Save second silently won, and the first one's people and roles were
-  // gone with no word to either (sim 2026-10-02, item 17 — the relay held two authors' copies of one team).
-  //
-  // `roster.ts` is the created_at of the version the console is currently showing; the form copied its
-  // contents when it opened, so if that has moved on, what is on this form is out of date. This is DETECTION,
-  // not a merge: the steward is told, and must pick — take their version, or knowingly keep theirs. Two edits
-  // inside the same second share a timestamp and cannot be told apart; that is the limit of the approach.
-  const openedTs = useSchR((roster && roster.ts) || 0);
-  const liveTs = (roster && roster.ts) || 0;
-  const theirs = !!liveTs && liveTs !== openedTs.current && !saving;
-  // Take the roster as it now stands: the form, the pods, and the allowlist baseline Save diffs against.
-  const reloadTheirs = () => {
-    setRoles(roster && roster.roles ? roster.roles.map(r => ({ ...r })) : []);
-    setPeople(roster && roster.people ? roster.people.map(p => ({ ...p })) : []);
-    setPods(roster && roster.pods ? roster.pods.map(p => ({ ...p, fills: { ...(p.fills || {}) } })) : []);
-    startPubs.current = (roster && roster.people ? roster.people : []).map(p => p && p.pub).filter(Boolean);
-    openedTs.current = liveTs; setSaveErr('');
-  };
   const rid = () => 'r' + Math.random().toString(36).slice(2, 7);
   const pid = () => 'p' + Math.random().toString(36).slice(2, 7);
   const addRole = () => { if (!newRole.trim()) return; setRoles(r => [...r, { id: rid(), name: newRole.trim() }]); setNewRole(''); };
@@ -282,8 +251,6 @@ function RosterModal({ team, roster, members: allMembers, onClose, onCreate }) {
   const setPodName = (id, name) => setPods(ps => ps.map(p => p.id === id ? { ...p, name } : p));
   const setPodFill = (id, roleId, pid) => setPods(ps => ps.map(p => p.id === id ? { ...p, fills: { ...p.fills, [roleId]: pid } } : p));
   const delPod = (id) => setPods(ps => ps.filter(p => p.id !== id));
-  // (When `theirs` is true the ordinary Save button is not rendered at all — the footer offers only
-  // "Reload their version" and "Save mine anyway" — so this is only ever reached by an explicit choice.)
   const save = async () => {
     if (saving) return;
     setSaving(true); setSaveErr('');
@@ -367,7 +334,7 @@ function RosterModal({ team, roster, members: allMembers, onClose, onCreate }) {
         <input value={newPerson} onChange={e => setNewPerson(e.target.value)} placeholder="Name" style={schFld} disabled={!!linkPub} />
         <select value={linkPub} onChange={e => setLinkPub(e.target.value)} aria-label="Link this person to a member account" style={schFld}>
           <option value="">…or link a member</option>
-          {(members || []).filter(mm => !people.some(p => p.pub && p.pub === mm.pubkey)).map(mm => <option key={mm.pubkey} value={mm.pubkey}>{memDisplay(mm)}</option>)}
+          {(members || []).filter(mm => !people.some(p => p.pub && p.pub === mm.pubkey) && !blockedR.has(String(mm.pubkey || '').toLowerCase())).map(mm => <option key={mm.pubkey} value={mm.pubkey}>{memDisplay(mm)}</option>)}
         </select>
         <button onClick={addPerson} title="Add this person to the team" aria-label="Add this person to the team" className="sk-btn sk-btn--ghost" style={{ padding: '0 16px' }}><Icon name="plus" size={15} color="currentColor" /></button>
       </div>
@@ -398,18 +365,10 @@ function RosterModal({ team, roster, members: allMembers, onClose, onCreate }) {
       </div>
       <button onClick={addPod} className="sk-btn sk-btn--ghost" style={{ padding: '9px 14px', fontSize: 13 }}><Icon name="plus" size={15} color="currentColor" /> Add a pod</button>
 
-      {theirs ? <div role="alert" style={{ fontSize: 13, color: 'var(--clay-ink)', fontWeight: 700, lineHeight: 1.5, marginTop: 18, padding: '10px 12px', borderRadius: 12, background: 'color-mix(in oklab, var(--gold) 12%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 40%, transparent)' }}>Someone else changed this roster after you opened it. Reload to see their version — or keep yours, which replaces theirs.</div> : null}
-      <div style={{ display: 'flex', gap: 10, marginTop: theirs ? 10 : 22 }}>
+      <div style={{ display: 'flex', gap: 10, marginTop: 22 }}>
         <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
         {saveErr ? <div role="alert" style={{ flexBasis: '100%', fontSize: 13, color: 'var(--clay-ink)', fontWeight: 700, lineHeight: 1.5, marginBottom: 10, padding: '10px 12px', borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 32%, transparent)' }}>{saveErr}</div> : null}
-        {theirs ? (
-          <React.Fragment>
-            <button onClick={reloadTheirs} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14 }}><Icon name="refresh" size={16} color="var(--on-clay)" /> Reload their version</button>
-            <button onClick={() => save()} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Save mine anyway</button>
-          </React.Fragment>
-        ) : (
-          <button onClick={() => save()} disabled={saving} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: saving ? 0.6 : 1, cursor: saving ? 'default' : 'pointer' }}><Icon name="check" size={16} color="var(--on-clay)" /> {saving ? 'Saving…' : 'Save roster'}</button>
-        )}
+        <button onClick={save} disabled={saving} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: saving ? 0.6 : 1, cursor: saving ? 'default' : 'pointer' }}><Icon name="check" size={16} color="var(--on-clay)" /> {saving ? 'Saving…' : 'Save roster'}</button>
       </div>
     </SchModal>
   );
@@ -417,13 +376,14 @@ function RosterModal({ team, roster, members: allMembers, onClose, onCreate }) {
 
 // ── the assign picker: suggestions for a gap, free-first ──
 function AssignModal({ slot, roster, assign, unavail, onAssign, onClear, onClose }) {
+  const blockedA = useSchBlocked();
   const m = teamMeta(slot.team);
   const date = slot.service.date;
   // who's already on the rota this service (by pub or name)
   const taken = new Set();
   Object.values(assign || {}).forEach(a => { if (a && a.name) { taken.add('n:' + a.name); if (a.pub) taken.add('p:' + a.pub); } });
   const cur = assign[slot.key];
-  const ranked = (roster && roster.people ? roster.people : []).map(p => {
+  const ranked = (roster && roster.people ? roster.people : []).filter(p => !(p && p.pub && blockedA.has(String(p.pub).toLowerCase()))).map(p => {
     const away = p.pub && (unavail[p.pub] || []).includes(date);
     const onRota = taken.has('n:' + p.name) || (p.pub && taken.has('p:' + p.pub));
     const isThis = cur && ((cur.pub && cur.pub === p.pub) || cur.name === p.name);
@@ -578,21 +538,30 @@ function RunsheetModal({ service, sheet, onClose }) {
     </SchModal>
   );
 }
-// DID THE PERSON ON THIS SLOT SAY NO? True only for the NEWEST request that person was sent for this exact
-// slot, and only when the reply the church holds for it reads 'decline'. Pure and top-level so the rota board
-// (DashRota) and the calendar's coverage chips (DashCalendar) cannot disagree about it.
+// ── WHAT A SLOT'S REPLY SAYS, AND WHETHER IT COVERS THE SLOT ─────────────────────────────────────────────────
+// One rule for every screen that counts cover: the Rota header and team cards, and the Calendar. They counted ANY
+// assigned name as filled, so a slot whose only person had said "Can't make it" read "1/1 roles filled · Fully
+// covered" in green over a struck-through Declined name (sim round 2026-10-02, Ruth, twice).
 //
-// WHY IT EXISTS. Both boards counted a slot as filled the moment a NAME sat in it, so a person who had
-// answered "can't make it" still read as cover: "1/1 roles filled - Fully covered", drawn over a struck-through
-// Declined name (sim 2026-10-02, item 26). A declined slot is a gap the steward still has to fill. A 'swap'
-// ask is NOT counted out: that person still holds the slot until someone is confirmed in their place.
-function schSlotDeclined(requests, replies, svcId, teamId, roleId, pub) {
-  const matches = (requests || []).filter(q => q && q.serviceId === svcId && q.teamId === teamId && q.roleId === roleId && (!pub || !q.memberPub || q.memberPub === pub));
-  if (!matches.length) return false;
+// rotaSlotVerdict: 'accept' | 'decline' | 'swap' | 'pending' (asked, no reply) | 'locked' (a request that cannot
+// be opened yet) | '' (never asked).
+//   ⚠ A KEYLESS ASSIGNEE GETS NO VERDICT. An off-app volunteer (a name the steward typed) is never asked, so no
+// request is theirs — and matching every request for the slot handed them the PREVIOUS person's "Declined" when a
+// steward put the organist in Dan's place (verify-six). `locked` = this person has a request this console cannot
+// open yet (the caller works that out — see lockedFor in DashRota).
+// Callers: DashRota (slotVerdict -> the slot label, fillAssign, the cover counts), DashCalendar (coverageFor).
+function rotaSlotVerdict(requests, replyById, svcId, teamId, roleId, pub, locked) {
+  if (!pub) return '';
+  const matches = (requests || []).filter(q => q && q.serviceId === svcId && q.teamId === teamId && q.roleId === roleId && (!q.memberPub || q.memberPub === pub));
+  if (!matches.length) return locked ? 'locked' : '';
   matches.sort((a, b) => (b.ts || 0) - (a.ts || 0));
-  const r = (replies || []).find(x => x && x.id === matches[0].id);
-  return !!r && r.v === 'decline';
+  return (replyById && replyById[matches[0].id]) || 'pending';
 }
+// Does this slot count as covered? Only if somebody is on it AND their answer is not "no": declined, asked to swap,
+// or blocked by the church (blocking takes someone off every team — owner, 2026-10-02) are all GAPS. "Asked" and
+// "opening" still count: not answering yet is not a no.
+function rotaSlotCovers(a, verdict) { return !!(a && a.name) && verdict !== 'decline' && verdict !== 'swap' && verdict !== 'blocked'; }
+
 function DashRota({ onNewTeam }) {
   const teams = window.useStewardGroups().filter(g => g.kind === 'team');
   const rosters = window.useStewardRosters();
@@ -601,6 +570,8 @@ function DashRota({ onNewTeam }) {
   const members = window.useStewardMembers();
   const unavail = window.useStewardUnavail();
   const requests = window.useStewardRequests();          // "can you serve?" docs we sent
+  const blockedRota = useSchBlocked();                     // never auto-filled or applied from a pod (blocking removes them from every team)
+  const isBlockedPub = (pub) => !!pub && blockedRota.has(String(pub).toLowerCase());
   const replies = window.useStewardRequestReplies();     // members' accept/decline/swap
   const narrow = (typeof useStewNarrow === 'function') ? useStewNarrow() : false;   // stack the toolbar on phones
   const runsheets = (typeof window.useStewardRunsheets === 'function') ? window.useStewardRunsheets() : [];
@@ -626,53 +597,17 @@ function DashRota({ onNewTeam }) {
   // before that wait still saw them locked and held back people who were already openable (audit of d86fbac, #5).
   const requestsRef = useSchR(requests); requestsRef.current = requests;
   const lockedFor = (pub) => !!pub && requestsRef.current.some(q => q && q._locked && q.memberPub === pub);
-  const slotVerdict = (svcId, teamId, roleId, pub) => {
-    const matches = requests.filter(q => q.serviceId === svcId && q.teamId === teamId && q.roleId === roleId && (!pub || !q.memberPub || q.memberPub === pub));
-    if (!matches.length) return lockedFor(pub) ? 'locked' : '';
-    matches.sort((a, b) => (b.ts || 0) - (a.ts || 0));
-    return replyById[matches[0].id] || 'pending';
-  };
+  const slotVerdict = (svcId, teamId, roleId, pub) => isBlockedPub(pub) ? 'blocked'
+    : rotaSlotVerdict(requests, replyById, svcId, teamId, roleId, pub, lockedFor(pub));
 
-  // A BLOCKED PERSON IS NEVER OFFERED FOR A SLOT (sim finding 14). Blocking also takes them off every roster
-  // (stew-dashboard.jsx, takeOffEveryTeam), but that write can lag, fail, or never have been made by an older
-  // console — so every picker below reads the roster through this and a person this console holds as blocked is not in it.
-  // `rosterRaw` is the roster as published, for the one place that EDITS it (RosterModal). Off-app volunteers have no
-  // `pub` and are never filtered. Not filtered in useStewardMembers: the Members screen needs those rows to list
-  // the blocked and offer Unblock.
-  const blockedKeys = new Set(((window.useStewardBlocked ? window.useStewardBlocked() : []) || []).map(p => String(p || '').toLowerCase()));
-  const notBlocked = (pk) => !(pk && blockedKeys.has(String(pk).toLowerCase()));
-  const rosterRaw = (id) => rosters.find(r => r.team === id) || { roles: [], people: [] };
-  const rosterFor = (id) => { const r = rosterRaw(id); return { ...r, people: (r.people || []).filter(p => notBlocked(p && p.pub)) }; };
-  // WHO A SWAP ASK NAMED, AND WHAT THEY SAID. The member's 'swap' reply has always carried `swapTo`, and this
-  // board has never read it — it only ever showed "Wants swap" (sim 2026-10-02, item 25). Now the member's app
-  // also asks that teammate directly, and the teammate's yes arrives as its own reply (`swapans~<requestId>`).
-  // This pairs the two, for ONE slot, and is what the steward's one-tap confirm rests on. It answers null unless:
-  //   · the newest request for this slot was answered 'swap' BY THE PERSON ON THE SLOT (an answer from anyone
-  //     else is not theirs to give), and
-  //   · the person it names is on this team's roster (otherwise there is nobody to put in the slot), and
-  //   · `yes` is true only for an answer AUTHORED BY THAT TEAMMATE — the author is the one thing nobody can forge,
-  //     so a third member writing a "swapyes" for someone else's request changes nothing here.
-  const swapInfo = (svcId, teamId, roleId, askerPub) => {
-    const matches = requests.filter(q => q && q.serviceId === svcId && q.teamId === teamId && q.roleId === roleId && (!askerPub || !q.memberPub || q.memberPub === askerPub));
-    if (!matches.length) return null;
-    matches.sort((a, b) => (b.ts || 0) - (a.ts || 0));
-    const req = matches[0];
-    const r = replies.find(x => x && x.id === req.id);
-    if (!r || r.v !== 'swap' || !r.swapTo || (askerPub && r.by && r.by !== askerPub)) return null;
-    const mate = (rosterFor(teamId).people || []).find(p => p && p.pub && p.pub === r.swapTo) || null;
-    const ans = replies.find(x => x && x.id === 'swapans~' + req.id && x.by === r.swapTo) || null;
-    return { reqId: req.id, to: r.swapTo, mate, yes: ans ? ans.v === 'swapyes' : null };
-  };
+  const rosterFor = (id) => rosters.find(r => r.team === id) || { roles: [], people: [] };
   const persisted = (svcId) => rotas.find(r => r.service === svcId) || null;
   const sortedSvcs = services.slice().sort((a, b) => (a.date || '').localeCompare(b.date || ''));
   const todayStr = schKey(new Date());
   const defaultSvc = (sortedSvcs.find(s => (s.date || '') >= todayStr) || sortedSvcs[sortedSvcs.length - 1] || {}).id;
 
   const [sel, setSel] = useSch(null);
-  // Restored from SCH_DRAFT_STORE on mount, written through on every change - see the note above it.
-  const draftChurch = schDraftChurch();
-  const [draft, setDraftState] = useSch(() => ({ ...(SCH_DRAFT_STORE[draftChurch] || {}) }));   // { svcId: assignMap } — local unsaved edits
-  const setDraft = (v) => setDraftState(d => { const n = typeof v === 'function' ? v(d) : v; SCH_DRAFT_STORE[draftChurch] = n; return n; });
+  const [draft, setDraft] = useSch({});         // { svcId: assignMap } — local unsaved edits
   const seeded = useSchR(new Set());
   const [assignSlot, setAssignSlot] = useSch(null);
   const [rosterTeam, setRosterTeam] = useSch(null);
@@ -683,8 +618,7 @@ function DashRota({ onNewTeam }) {
   // seed each service's draft from its published rota the first time we see it
   useSchE(() => {
     let changed = false; const next = { ...draft };
-    // …and a draft restored from the store is NOT overwritten by the published copy it was made from.
-    rotas.forEach(r => { if (!seeded.current.has(r.service)) { seeded.current.add(r.service); if (next[r.service] === undefined) { next[r.service] = { ...(r.assign || {}) }; changed = true; } } });
+    rotas.forEach(r => { if (!seeded.current.has(r.service)) { seeded.current.add(r.service); next[r.service] = { ...(r.assign || {}) }; changed = true; } });
     if (changed) setDraft(next);
   }, [rotas]);
 
@@ -694,11 +628,8 @@ function DashRota({ onNewTeam }) {
   const setAssign = (next) => setDraft(d => ({ ...d, [svcId]: next }));
 
   // coverage across all teams for this service
-  // A NAME IN THE SLOT IS NOT COVER IF THAT PERSON DECLINED — see schSlotDeclined. Same test for the headline
-  // count and for each team card's own count below, so the two can never disagree.
-  const slotCovered = (teamId, role) => { const a = assign[teamId + '::' + role.id]; return !!(a && a.name) && !schSlotDeclined(requests, replies, svcId, teamId, role.id, a.pub); };
   let total = 0, filled = 0;
-  teams.forEach(t => { const rs = rosterFor(t.id).roles; total += rs.length; rs.forEach(role => { if (slotCovered(t.id, role)) filled++; }); });
+  teams.forEach(t => { const rs = rosterFor(t.id).roles; total += rs.length; rs.forEach(role => { const a = assign[t.id + '::' + role.id]; if (svcId && rotaSlotCovers(a, a && slotVerdict(svcId, t.id, role.id, a.pub))) filled++; }); });
   const gaps = total - filled;
 
   const pers = persisted(svcId);
@@ -717,7 +648,7 @@ function DashRota({ onNewTeam }) {
     (r.roles || []).forEach(role => {
       const pid = pod.fills && pod.fills[role.id];
       const person = pid ? (r.people || []).find(p => p.id === pid) : null;
-      if (person) next[team.id + '::' + role.id] = { id: person.id, name: person.name, pub: person.pub || '' };
+      if (person && !isBlockedPub(person.pub)) next[team.id + '::' + role.id] = { id: person.id, name: person.name, pub: person.pub || '' };
     });
     setAssign(next); setFlash('Applied ' + pod.name); setTimeout(() => setFlash(''), 2000);
   };
@@ -734,7 +665,7 @@ function DashRota({ onNewTeam }) {
       (r.roles || []).forEach(role => {
         const pid = pod.fills && pod.fills[role.id];
         const person = pid ? (r.people || []).find(p => p.id === pid) : null;
-        if (person) next[team.id + '::' + role.id] = { id: person.id, name: person.name, pub: person.pub || '' };
+        if (person && !isBlockedPub(person.pub)) next[team.id + '::' + role.id] = { id: person.id, name: person.name, pub: person.pub || '' };
       });
       if (s.id === svcId) setAssign(next);
       saves.push(window.Steward.publishRota({ service: s.id, published: true, assign: next })
@@ -805,28 +736,8 @@ function DashRota({ onNewTeam }) {
   // service only, so they say to open each service (audit of 660f063, #4).
   const heldFlash = (lead, n, retry) => `${lead}. ${n} ${n === 1 ? 'person has' : 'people have'} an earlier request still opening — ${retry} in a moment to ask them.`;
   const unaskedFlash = (lead, failed, tried, retry) => `${lead}, but ${failed} of ${tried} couldn’t be asked yet. ${retry}; if it keeps failing, the message above says why.`;
-  // How many slots each person ALREADY holds, over every service this board knows (drafts included), as a
-  // Map of 'n:<name>' -> count. This is what Auto-fill rotates by — see fillAssign.
-  const loadOf = () => {
-    const m = new Map();
-    (services || []).forEach(sv => {
-      const a = assignFor(sv.id);
-      if (a) Object.values(a).forEach(x => { if (x && x.name) m.set('n:' + x.name, (m.get('n:' + x.name) || 0) + 1); });
-    });
-    return m;
-  };
-  // pure: fill the gaps of `base` for a given date, not reusing anyone already on that day.
-  //
-  // ⚠ IT ROTATES. `load` is the running tally of how many slots each person holds; the one passed by a bulk run
-  // is SHARED across every service it fills, so the next service starts from where the last one left off.
-  // This used to take `avail[0]` — the first person listed on the roster — every time, so a quarter of weekly
-  // services gave that one person a slot every single week and left everybody else on the roster idle (sim
-  // 2026-10-02, item 33). Now it takes whoever holds the FEWEST, and breaks ties in roster order, so the first
-  // person listed still goes first when everyone is level. Called with no `load` (a single-service fill) it
-  // seeds one from what the board already shows, so that fill too lands on whoever has had least.
-  const fillAssign = (base, date, svcId, load) => {
-    const L = load || {};
-    if (!L.counts) L.counts = loadOf();
+  // pure: fill the gaps of `base` for a given date, not reusing anyone already on that day
+  const fillAssign = (base, date, svcId) => {
     const next = { ...base };
     // clear slots whose member declined / asked to swap, so Auto-fill treats them as open — and
     // remember who said no so we don't put them straight back on.
@@ -835,7 +746,7 @@ function DashRota({ onNewTeam }) {
       const a = next[key]; if (!a || !a.name) continue;
       const [teamId, roleId] = key.split('::');
       const v = svcId ? slotVerdict(svcId, teamId, roleId, a.pub) : '';
-      if (v === 'decline' || v === 'swap') { const s = noFor[key] = noFor[key] || new Set(); s.add('n:' + a.name); if (a.pub) s.add('p:' + a.pub); delete next[key]; }
+      if (v === 'decline' || v === 'swap' || v === 'blocked') { const s = noFor[key] = noFor[key] || new Set(); s.add('n:' + a.name); if (a.pub) s.add('p:' + a.pub); delete next[key]; }
     }
     const used = new Set(Object.values(next).filter(a => a && a.name).map(a => 'n:' + a.name));
     // gather every empty slot + its eligible roster people (not away, not declined)
@@ -843,7 +754,7 @@ function DashRota({ onNewTeam }) {
     teams.forEach(t => { const r = rosterFor(t.id); r.roles.forEach(role => {
       const key = t.id + '::' + role.id; if (next[key] && next[key].name) return;
       const no = noFor[key] || new Set();
-      const cand = r.people.filter(p => !no.has('n:' + p.name) && !(p.pub && no.has('p:' + p.pub)) && !(p.pub && (unavail[p.pub] || []).includes(date)));
+      const cand = r.people.filter(p => !no.has('n:' + p.name) && !(p.pub && no.has('p:' + p.pub)) && !(p.pub && (unavail[p.pub] || []).includes(date)) && !isBlockedPub(p.pub));
       slots.push({ key, cand });
     }); });
     // fill the MOST-CONSTRAINED slot first (fewest free people), so people shared across teams don't
@@ -857,27 +768,18 @@ function DashRota({ onNewTeam }) {
         if (!best || avail.length < best.avail.length) best = { s, avail };
       }
       if (!best) break;
-      // sort() is stable, so people with equal load stay in roster order
-      const pick = best.avail.slice().sort((a, b) => (L.counts.get('n:' + a.name) || 0) - (L.counts.get('n:' + b.name) || 0))[0];
+      const pick = best.avail[0];
       next[best.s.key] = { name: pick.name, pub: pick.pub || '' };
       used.add('n:' + pick.name);
-      L.counts.set('n:' + pick.name, (L.counts.get('n:' + pick.name) || 0) + 1);
     }
     return next;
   };
   const autoFill = () => { setAssign(fillAssign(assign, svc.date, svc.id)); setFlash('Filled the gaps — including anyone who said no'); setTimeout(() => setFlash(''), 2200); };
   // create + fill: generate weekly services for the period (if missing), then auto-fill & publish each
-  //
-  // TWO THINGS THIS CAN MEAN, and the menu now says which it is doing (sim 2026-10-02, item 33):
-  //   default            CREATE a weekly copy of the service on screen, from its date, for `months`, then fill them
-  //   { existingOnly }   create NOTHING: fill the gaps on the services already on the calendar in that window
-  // The first used to be the only one, and it clones whatever is on screen — so a one-off (a Christmas service)
-  // became a weekly service for a quarter with nothing but the word "weekly" in a confirm box.
-  const autoFillAhead = async (months, opts) => {
+  const autoFillAhead = async (months) => {
     setFillMenu(false);
-    const createCopies = !(opts && opts.existingOnly);
     const until = schAddMonths(svc.date, months);
-    const dates = createCopies ? schGenDates(svc.date, 'weekly', until) : sortedSvcs.filter(x => x.date >= svc.date && x.date <= until).map(x => x.date);
+    const dates = schGenDates(svc.date, 'weekly', until);
     const byDate = {}; sortedSvcs.forEach(s => { byDate[s.date] = s; });
     const ensured = [];
     // THE BULK PATH, AND THE ONE THE FIRST PASS OF THIS FIX MISSED (audit of 7a45d4d, finding 1). It was
@@ -900,14 +802,13 @@ function DashRota({ onNewTeam }) {
       if (probe == null) { setFlash(schNoKey()); setTimeout(() => setFlash(''), 4000); return; }
     }
     let lost = 0, unasked = 0, triedAsks = 0; const heldAsks = new Set();
-    const load = { counts: null };   // shared across every service below, so the fill ROTATES — see fillAssign
     for (const dt of dates) {
       if (byDate[dt]) { ensured.push(byDate[dt]); continue; }
       const ns = await window.Steward.publishService({ name: svc.name, date: dt, time: svc.time });
       if (ns) ensured.push(ns); else lost++;
     }
     for (const s of ensured) {
-      const filled = fillAssign(assignFor(s.id) || {}, s.date, s.id, load);
+      const filled = fillAssign(assignFor(s.id) || {}, s.date, s.id);
       const r = await window.Steward.publishRota({ service: s.id, published: true, assign: filled });
       if (r == null) { lost++; continue; }   // do not ask anyone to serve on a rota that does not exist
       const asked = await sendRequestsFor(s.id, s.date, s.time, s.name, filled);
@@ -915,7 +816,7 @@ function DashRota({ onNewTeam }) {
       if (s.id === svcId) setAssign(filled);
     }
     if (lost) { setFlash(schNoKey()); setTimeout(() => setFlash(''), 4000); return; }
-    const madeLead = `${createCopies ? 'Created + filled' : 'Filled the gaps on'} ${ensured.length} service${ensured.length > 1 ? 's' : ''}`;
+    const madeLead = `Created + filled ${ensured.length} service${ensured.length > 1 ? 's' : ''}`;
     if (unasked) { setFlash(unaskedFlash(madeLead, unasked, triedAsks, 'Open each service and press Publish')); setTimeout(() => setFlash(''), 6000); return; }
     if (heldAsks.size) { setFlash(heldFlash(madeLead, heldAsks.size, 'Open each service and press Publish')); setTimeout(() => setFlash(''), 6000); return; }
     setFlash(madeLead); setTimeout(() => setFlash(''), 2800);
@@ -937,20 +838,6 @@ function DashRota({ onNewTeam }) {
     if (asked.failed) { setFlash(unaskedFlash('Published', asked.failed, asked.tried, 'Press Publish again')); setTimeout(() => setFlash(''), 5000); return; }
     if (asked.held) { setFlash(heldFlash('Published', asked.held, 'press Publish again')); setTimeout(() => setFlash(''), 5000); return; }
     setFlash('Published — everyone assigned has been asked'); setTimeout(() => setFlash(''), 2400);
-  };
-
-  // ONE TAP TO CONFIRM A SWAP (owner, 2026-10-02: "after the teammate says yes, the steward confirms the swap with
-  // one tap"). Puts the teammate on the slot, publishes the rota, and asks them through the ordinary "Can you
-  // serve?" request (alreadyAsked is per person, so they have none for this slot yet). It sends nothing if the rota
-  // did not save — the same rule publish() keeps — and says so.
-  const confirmSwap = async (slot, from, mate) => {
-    const next = { ...assign, [slot.key]: { id: mate.id, name: mate.name, pub: mate.pub || '' } };
-    setAssign(next);
-    const r = await window.Steward.publishRota({ service: svcId, published: true, assign: next });
-    if (r == null) { setFlash(schNoKey()); setTimeout(() => setFlash(''), 4000); return; }
-    const asked = await sendRequestsFor(svcId, svc.date, svc.time, svc.name, next);
-    if (asked.failed) { setFlash(unaskedFlash('Swapped — ' + mate.name + ' is on ' + (slot.role.name || 'the role'), asked.failed, asked.tried, 'Press Publish again')); setTimeout(() => setFlash(''), 5000); return; }
-    setFlash('Swapped: ' + mate.name + ' now covers ' + (slot.role.name || 'the role') + ' for ' + from); setTimeout(() => setFlash(''), 3200);
   };
 
   if (teams.length === 0) {
@@ -1003,27 +890,10 @@ function DashRota({ onNewTeam }) {
               {fillMenu ? (
                 <React.Fragment>
                   <div onClick={() => setFillMenu(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
-                  <div style={{ position: 'absolute', top: '110%', right: 0, zIndex: 41, width: 292, maxWidth: '86vw', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 6 }}>
-                    {/* SAY WHAT EACH ENTRY DOES, AND NAME THE SERVICE IT DOES IT TO. The two "Create + fill" entries
-                        cloned whichever service was on screen into a weekly series, and said so only as "weekly"
-                        inside a confirm box — so a one-off (a Christmas service) could turn into a quarter of
-                        weekly services (sim 2026-10-02, item 33). There are now two kinds of entry and the labels
-                        keep them apart: FILL fills gaps on services that already exist and creates nothing; ADD
-                        WEEKLY COPIES creates new ones from the service on screen. */}
-                    {(() => {
-                      const when = schParts(svc.date).dow + ' ' + schParts(svc.date).day + ' ' + schParts(svc.date).mon;
-                      const nm = svc.name || 'this service';
-                      const span = (m) => { const until = schAddMonths(svc.date, m); return { until, existing: sortedSvcs.filter(x => x.date >= svc.date && x.date <= until).length, copies: schGenDates(svc.date, 'weekly', until).length }; };
-                      const entries = [['This service only', () => { setFillMenu(false); autoFill(); }, 'Fill the gaps on ' + nm + ', ' + when]];
-                      [[1, 'this month', '~4 weeks'], [3, 'this quarter', '~3 months']].forEach(([m, lbl, long]) => {
-                        const sp = span(m);
-                        entries.push(['Fill existing services — ' + lbl, () => { setFillMenu(false); if (window.confirm('Fill the gaps on the ' + sp.existing + ' service' + (sp.existing === 1 ? '' : 's') + ' already on the calendar over the next ' + long + ', starting ' + when + '? This creates nothing new. It publishes each rota and asks the people assigned to serve.')) autoFillAhead(m, { existingOnly: true }); },
-                          'The ' + sp.existing + ' service' + (sp.existing === 1 ? '' : 's') + ' already on the calendar. Creates nothing']);
-                        entries.push(['Add weekly copies — ' + lbl, () => { setFillMenu(false); if (window.confirm('Add a copy of “' + nm + '” (' + (svc.time || '') + ') EVERY WEEK from ' + when + ' for the next ' + long + ' — ' + sp.copies + ' services in all, any already on the calendar kept — and fill them? This publishes them and asks the people assigned to serve.')) autoFillAhead(m); },
-                          'Repeats “' + nm + '” every week — adds up to ' + sp.copies + ' services']);
-                      });
-                      return entries;
-                    })().map(([t, go, s]) => (
+                  <div style={{ position: 'absolute', top: '110%', right: 0, zIndex: 41, width: 232, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 6 }}>
+                    {[['This service', () => { setFillMenu(false); autoFill(); }, 'Fill the gaps on this service only'],
+                      ['Create + fill this month', () => { setFillMenu(false); if (window.confirm('Create weekly services for the next ~4 weeks and auto-fill them? This publishes them and asks the people assigned to serve.')) autoFillAhead(1); }, 'Add weekly services for ~4 weeks and fill them'],
+                      ['Create + fill this quarter', () => { setFillMenu(false); if (window.confirm('Create weekly services for the next ~3 months (around 13) and auto-fill them? This publishes them and asks everyone assigned to serve.')) autoFillAhead(3); }, 'Add weekly services for ~3 months and fill them']].map(([t, go, s]) => (
                       <button key={t} onClick={go} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '9px 11px', borderRadius: 9, border: 'none', background: 'transparent', cursor: 'pointer', fontFamily: 'var(--font-ui)' }} onMouseDown={e => e.preventDefault()}>
                         <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--ink)' }}>{t}</div>
                         <div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>{s}</div>
@@ -1102,7 +972,7 @@ function DashRota({ onNewTeam }) {
           <div className="no-scrollbar" style={{ flex: 1, minHeight: narrow ? 120 : 0, overflow: 'auto', marginTop: 14, display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gridAutoRows: 'max-content', gap: 14, alignContent: 'start' }}>
             {teams.map(t => {
               const m = teamMeta(t); const r = rosterFor(t.id);
-              const tFilled = r.roles.filter(role => slotCovered(t.id, role)).length;
+              const tFilled = r.roles.filter(role => { const a = assign[t.id + '::' + role.id]; return rotaSlotCovers(a, a && slotVerdict(svc.id, t.id, role.id, a.pub)); }).length;
               return (
                 <div key={t.id} style={{ borderRadius: 18, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', overflow: 'hidden' }}>
                   <div style={{ padding: '13px 15px', borderBottom: '1px solid var(--line)' }}>
@@ -1136,27 +1006,19 @@ function DashRota({ onNewTeam }) {
                           swap: { fg: '#8a6717', bg: 'var(--gold)', soft: 10, line: 40, label: 'Wants swap', ic: 'swap' },
                           pending: { fg: 'var(--ink-3)', bg: 'var(--ink-3)', soft: 5, line: 20, label: 'Asked', ic: 'clock' },
                           locked: { fg: 'var(--ink-3)', bg: 'var(--ink-3)', soft: 5, line: 20, label: 'Opening…', ic: 'clock' },
+                          blocked: { fg: 'var(--clay)', bg: 'var(--clay)', soft: 9, line: 40, label: 'Blocked', ic: 'x' },
                           '': { fg: 'var(--sage)', bg: 'var(--sage)', soft: 8, line: 32, label: '', ic: 'check' },
                         };
-                        const sw = verdict === 'swap' ? swapInfo(svc.id, t.id, role.id, a.pub) : null;
-                        const swFirst = sw && sw.mate ? (sw.mate.name || '').split(' ')[0] : '';
-                        // The label says WHO was asked and what they answered, instead of a bare "Wants swap".
-                        const swapLabel = !swFirst ? 'Wants swap' : sw.yes === true ? swFirst + ' said yes' : sw.yes === false ? 'Wants swap — ' + swFirst + ' said no' : 'Wants swap — asked ' + swFirst;
-                        const vm = verdict === 'swap' ? { ...vmap.swap, label: swapLabel } : (vmap[verdict] || vmap['']);
+                        const vm = vmap[verdict] || vmap[''];
                         return (
-                          <React.Fragment key={role.id}>
-                          <button onClick={() => setAssignSlot(slot)} title="Change who’s on this slot" aria-label={(role.name || 'This role') + ': ' + a.name + (vm.label ? ' — ' + vm.label : '') + '. Change who’s on this slot'} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 12, cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', border: `1px solid color-mix(in oklab, ${vm.bg} ${vm.line}%, var(--line))`, background: `color-mix(in oklab, ${vm.bg} ${vm.soft}%, var(--surface))` }}>
+                          <button key={role.id} onClick={() => setAssignSlot(slot)} title="Change who’s on this slot" aria-label={(role.name || 'This role') + ': ' + a.name + (vm.label ? ' — ' + vm.label : '') + '. Change who’s on this slot'} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 12, cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', border: `1px solid color-mix(in oklab, ${vm.bg} ${vm.line}%, var(--line))`, background: `color-mix(in oklab, ${vm.bg} ${vm.soft}%, var(--surface))` }}>
                             <div style={{ width: 28, height: 28, borderRadius: 999, flexShrink: 0, background: `linear-gradient(150deg, ${m.accent}, color-mix(in oklab, ${m.accent} 60%, #16120c))`, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 10.5 }}>{a.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}</div>
                             <div style={{ flex: 1, minWidth: 0 }}>
                               <div style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 600 }}>{role.name}{vm.label ? <span style={{ color: vm.fg, marginLeft: 6, fontWeight: 700 }}>· {vm.label}</span> : null}</div>
-                              <div style={{ fontWeight: 700, fontSize: 13.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', textDecoration: verdict === 'decline' ? 'line-through' : 'none', color: verdict === 'decline' ? 'var(--ink-3)' : 'var(--ink)' }}>{a.name}</div>
+                              <div style={{ fontWeight: 700, fontSize: 13.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', textDecoration: (verdict === 'decline' || verdict === 'blocked') ? 'line-through' : 'none', color: (verdict === 'decline' || verdict === 'blocked') ? 'var(--ink-3)' : 'var(--ink)' }}>{a.name}</div>
                             </div>
                             <Icon name={vm.ic} size={15} stroke={2.4} color={vm.fg} />
                           </button>
-                          {sw && sw.mate && sw.yes === true ? (
-                            <button onClick={() => confirmSwap(slot, a.name, sw.mate)} aria-label={'Confirm the swap: ' + sw.mate.name + ' takes ' + (role.name || 'this role') + ' from ' + a.name} className="sk-btn sk-btn--clay" style={{ padding: '8px 11px', fontSize: 12.5 }}><Icon name="check" size={14} color="var(--on-clay)" /> Confirm: {sw.mate.name} covers</button>
-                          ) : null}
-                          </React.Fragment>
                         );
                       }
                       return (
@@ -1178,7 +1040,7 @@ function DashRota({ onNewTeam }) {
 
       {flash ? <div style={{ position: 'absolute', bottom: 8, left: '50%', transform: 'translateX(-50%)', background: 'var(--ink)', color: 'var(--paper)', padding: '9px 16px', borderRadius: 999, fontSize: 13, fontWeight: 700, boxShadow: 'var(--shadow-lg)', zIndex: 80 }}>{flash}</div> : null}
       {assignSlot ? <AssignModal slot={assignSlot} roster={rosterFor(assignSlot.team.id)} assign={assign} unavail={unavail} onAssign={(p) => doAssign(assignSlot, p)} onClear={() => clearSlot(assignSlot)} onClose={() => setAssignSlot(null)} /> : null}
-      {rosterTeam ? <RosterModal team={rosterTeam} roster={rosterRaw(rosterTeam.id)} members={members.filter(m => notBlocked(m && m.pubkey))} onClose={() => setRosterTeam(null)} /> : null}
+      {rosterTeam ? <RosterModal team={rosterTeam} roster={rosterFor(rosterTeam.id)} members={members} onClose={() => setRosterTeam(null)} /> : null}
       {adding ? <SchAddServiceModal onClose={() => setAdding(false)} /> : null}
     </div>
   );
@@ -1224,7 +1086,7 @@ function SchEventModal({ day, onClose }) {
   const existingEvents = window.useStewardEvents ? window.useStewardEvents() : [];   // to gently warn on a same-time clash
   const [title, setTitle] = useSch('');
   const [date, setDate] = useSch(day || '');
-  const [time, setTime] = useSch(schLastEventTime);
+  const [time, setTime] = useSch('19:30');
   const [where, setWhere] = useSch('');
   const [blurb, setBlurb] = useSch('');
   const [accent, setAccent] = useSch('var(--clay)');
@@ -1288,7 +1150,6 @@ function SchEventModal({ day, onClose }) {
     }
     setBusy(false);
     if (out.some(r => r == null)) { setErr(schNoKey()); return; }
-    try { if (/^\d{2}:\d{2}$/.test(time || '')) localStorage.setItem(SCH_EVENT_TIME_KEY, time); } catch (e) {}   // next form opens at this time
     onClose();
   };
   return (
@@ -1323,9 +1184,6 @@ function SchEventModal({ day, onClose }) {
         <div style={{ flex: 1 }}><div style={schLbl}>Date</div><input aria-label="Date" type="date" value={date} max={SCH_MAX_DATE} onChange={e => setDate(e.target.value)} style={schFld} /></div>
         <div style={{ width: 130 }}><div style={schLbl}>Time</div><input aria-label="Time" type="time" value={time} onChange={e => setTime(e.target.value)} style={schFld} /></div>
       </div>
-      {/* A REPEAT PUBLISHES ONE EVENT PER DATE, ALL AT THIS ONE TIME - and nothing said so, so a steward who left the
-          default found out by editing each date afterwards (sim 2026-10-02 #50). */}
-      {planned.length > 1 ? <div role="status" style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 6, lineHeight: 1.4 }}>All {planned.length} dates use this time — set it here, once, before you add them.</div> : null}
       {clashes.length ? (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 9, padding: '9px 12px', borderRadius: 11, background: 'color-mix(in oklab, var(--gold) 12%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 30%, var(--line))', fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.4 }}>
           <Icon name="bell" size={15} color="#8a6717" style={{ flexShrink: 0 }} />
@@ -1387,6 +1245,10 @@ function DashCalendar() {
   const rosters = window.useStewardRosters();
   const teams = window.useStewardGroups().filter(g => g.kind === 'team');
   const rsvps = window.useStewardRsvps();              // { eventId: { memberPub: 'going'|'maybe'|'no' } }
+  // the replies, so a service whose only person said no does not read "1/1 filled" here either (rotaSlotCovers)
+  const calRequests = (typeof window.useStewardRequests === 'function') ? window.useStewardRequests() : [];
+  const calReplies = (typeof window.useStewardRequestReplies === 'function') ? window.useStewardRequestReplies() : [];
+  const calBlocked = useSchBlocked();
   const members = window.useStewardMembers();
   const bookings = (typeof window.useStewardBookings === 'function') ? window.useStewardBookings() : [];
   const rooms = (typeof window.useStewardRooms === 'function') ? window.useStewardRooms() : [];
@@ -1416,12 +1278,16 @@ function DashCalendar() {
   const [calRunsheet, setCalRunsheet] = useSch(null);    // …and the editor for it
   const calRunsheets = (typeof window.useStewardRunsheets === 'function') ? window.useStewardRunsheets() : [];
 
-  const calRequests = (typeof window.useStewardRequests === 'function') ? window.useStewardRequests() : [];
-  const calReplies = (typeof window.useStewardRequestReplies === 'function') ? window.useStewardRequestReplies() : [];
   const coverageFor = (svcId) => {
     const rota = rotas.find(r => r.service === svcId); const assign = rota ? rota.assign : {};
+    const calReplyById = {}; (calReplies || []).forEach(x => { if (x && x.id) calReplyById[x.id] = x.v; });
+    const calLockedFor = (pub) => !!pub && (calRequests || []).some(q => q && q._locked && q.memberPub === pub);
     let total = 0, filled = 0;
-    teams.forEach(t => { const r = rosters.find(x => x.team === t.id) || { roles: [] }; total += r.roles.length; r.roles.forEach(role => { const a = assign[t.id + '::' + role.id]; if (a && a.name && !schSlotDeclined(calRequests, calReplies, svcId, t.id, role.id, a.pub)) filled++; }); });
+    teams.forEach(t => { const r = rosters.find(x => x.team === t.id) || { roles: [] }; total += r.roles.length; r.roles.forEach(role => {
+      const a = assign[t.id + '::' + role.id];
+      const v = (a && a.pub && calBlocked.has(String(a.pub).toLowerCase())) ? 'blocked' : (a ? rotaSlotVerdict(calRequests, calReplyById, svcId, t.id, role.id, a.pub, calLockedFor(a.pub)) : '');
+      if (rotaSlotCovers(a, v)) filled++;
+    }); });
     return { total, filled, published: rota && rota.published };
   };
   const dayItems = (key) => ({

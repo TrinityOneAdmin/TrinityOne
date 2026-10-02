@@ -201,7 +201,11 @@ test('the console re-opens a locked request when its key ring fills (findings 6,
 // ── The board: stew-schedule.jsx's own verdict + send logic, sliced and run ───────────────────────────────
 function board(requests) {
   const sent = [];
-  const body = `${st(SCHED, 'const heldFlash = (lead, n, retry) =>', 'stew-schedule.jsx')}
+  // The verdict rule is file-level since 2026-10-02 (rotaSlotVerdict, shared with the calendar and the coverage
+  // counts), and DashRota's slotVerdict reads the church's blocked list first; nobody here is blocked.
+  const body = `${fn(SCHED, 'function rotaSlotVerdict(requests, replyById, svcId, teamId, roleId, pub, locked)', 'stew-schedule.jsx')}
+    const isBlockedPub = () => false;
+    ${st(SCHED, 'const heldFlash = (lead, n, retry) =>', 'stew-schedule.jsx')}
     ${st(SCHED, 'const replyById = {};', 'stew-schedule.jsx')}
     ${st(SCHED, 'const requestsRef = useSchR(requests)', 'stew-schedule.jsx')}
     ${st(SCHED, 'const lockedFor = (pub) =>', 'stew-schedule.jsx')}
@@ -410,7 +414,11 @@ function publishers(asked) {
     rosterFor: () => ({ roles: [{ id: 'r1' }], pods: [{ name: 'Pod A', fills: {} }], people: [] }), todayISO: () => '2026-09-30',
   };
   const names = Object.keys(world);
-  const body = `${st(SCHED, 'const heldFlash = (lead, n, retry) =>', 'stew-schedule.jsx')}
+  // The verdict rule is file-level since 2026-10-02 (rotaSlotVerdict, shared with the calendar and the coverage
+  // counts), and DashRota's slotVerdict reads the church's blocked list first; nobody here is blocked.
+  const body = `${fn(SCHED, 'function rotaSlotVerdict(requests, replyById, svcId, teamId, roleId, pub, locked)', 'stew-schedule.jsx')}
+    const isBlockedPub = () => false;
+    ${st(SCHED, 'const heldFlash = (lead, n, retry) =>', 'stew-schedule.jsx')}
     ${st(SCHED, 'const unaskedFlash = (lead, failed, tried, retry) =>', 'stew-schedule.jsx')}
     ${st(SCHED, 'const publish = async () =>', 'stew-schedule.jsx')}
     ${st(SCHED, 'const rotatePods = (team) =>', 'stew-schedule.jsx')}
