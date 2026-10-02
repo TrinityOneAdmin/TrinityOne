@@ -489,11 +489,13 @@ test('capability keys: a switch while sealing publishes nothing (ensureCapKeyFor
 // THE POOL ITSELF: once the caller closes a subscription, its handlers are inert. nostr-tools fires `oneose` AS it
 // closes a subscription that had not yet answered; thirty-odd readers deliver their list from `oneose`, and one of
 // them (the member list) handed church A's members to the key enrolment after the console had moved to B.
+// the church-tag rule the pool wrapper applies (audit of 5276297, HIGH 1) — its two helpers, out of the bundle
+const POOL_RULE = fnBody(BUNDLE, 'function _taggedForAnotherChurch(e, cp) {', '_taggedForAnotherChurch') + '\n' + fnBody(BUNDLE, 'function _asksForOwnAuthorship(filters, cp) {', '_asksForOwnAuthorship');
 test('the shipped pool wrapper: no handler runs after its caller has closed the subscription — a relay\'s CLOSED still does', async () => {
   const raw = [];
   const scope = new Proxy({ pool: {}, _poolSubMany: (u, f, h) => { const rec = { h, closed: false }; raw.push(rec); return { close() { rec.closed = true; Promise.resolve().then(() => { h.oneose && h.oneose(); h.onclose && h.onclose(['closed by caller']); }); } }; }, setTimeout },
     { has: () => true, get: (o, k) => (k === Symbol.unscopables ? undefined : (k in o ? o[k] : globalThis[k])), set: (o, k, v) => { o[k] = v; return true; } });
-  new Function('scope', `with (scope) { ${fnBody(BUNDLE, 'pool.subscribeMany = (urls, filters, handlers)', 'the pool wrapper in the shipped bundle')} }`)(scope);
+  new Function('scope', `with (scope) { ${POOL_RULE} ${fnBody(BUNDLE, 'pool.subscribeMany = (urls, filters, handlers)', 'the pool wrapper in the shipped bundle')} }`)(scope);
   const seen = [];
   const sub = scope.pool.subscribeMany([R1], [{}], { onevent: () => seen.push('event'), oneose: () => seen.push('eose'), onclose: () => seen.push('close') });
   sub.close();
@@ -504,6 +506,31 @@ test('the shipped pool wrapper: no handler runs after its caller has closed the 
   raw[1].h.oneose(); raw[1].h.onclose(['rate-limited']);   // the RELAY closed it: not the caller
   assert.deepEqual(seen, ['eose', 'close'], 'CONTROL: a relay\'s own CLOSED no longer reaches the handlers — _openKeyRead needs it');
   void sub2;
+});
+
+// A CHURCH'S OWN READ NEVER RETURNS WHAT THIS CONSOLE WROTE FOR ANOTHER CHURCH (audit of 5276297, HIGH 1). Acting for B
+// the console signs with A's key and tags ['church', B]; A's readers ask for `authors: [A]`, so it all came back.
+test('the shipped pool wrapper: a read of the church\'s own authorship drops a document tagged for ANOTHER church — and only that', async () => {
+  const raw = [];
+  const scope = new Proxy({ pool: {}, pub: A.pub, _poolSubMany: (u, f, h) => { raw.push({ f, h }); return { close() {} }; }, _poolQuerySync: (u, f) => Promise.resolve(raw.qs || []), setTimeout },
+    { has: () => true, get: (o, k) => (k === Symbol.unscopables ? undefined : (k in o ? o[k] : globalThis[k])), set: (o, k, v) => { o[k] = v; return true; } });
+  new Function('scope', `with (scope) { ${POOL_RULE} ${fnBody(BUNDLE, 'pool.subscribeMany = (urls, filters, handlers)', 'the pool wrapper in the shipped bundle')}
+    ${fnBody(BUNDLE, 'pool.querySync = (urls, filter, opts)', 'the querySync wrapper in the shipped bundle')} }`)(scope);
+  const forB = { pubkey: A.pub, kind: 30078, tags: [['d', 'trinityone/group:x'], ['church', B.pub]] };
+  const ownUntagged = { pubkey: A.pub, kind: 30078, tags: [['d', 'trinityone/group:y']] };
+  const ownTagged = { pubkey: A.pub, kind: 30078, tags: [['d', 'trinityone/group:z'], ['church', A.pub]] };
+  const got = [];
+  scope.pool.subscribeMany([R1], [{ kinds: [30078], authors: [A.pub], '#t': ['trinityone'] }, { kinds: [30078], '#church': [A.pub] }], { onevent: (e) => got.push(e) });
+  for (const e of [forB, ownUntagged, ownTagged]) raw[0].h.onevent(e);
+  assert.ok(!got.includes(forB), 'A DOCUMENT THE CONSOLE WROTE FOR CHURCH B CAME BACK IN CHURCH A\'S OWN READ — B\'s room on A\'s list, and its key re-published to A\'s people');
+  assert.ok(got.includes(ownUntagged) && got.includes(ownTagged), 'CONTROL: the church\'s own documents were dropped too');
+  const other = [];
+  scope.pool.subscribeMany([R1], [{ kinds: [30078], '#t': ['trinityone'] }], { onevent: (e) => other.push(e) });
+  raw[1].h.onevent(forB);
+  assert.deepEqual(other, [forB], 'CONTROL: a read that does not ask for the church\'s own authorship was filtered too');
+  raw.qs = [forB, ownUntagged];
+  const q = await scope.pool.querySync([R1], { kinds: [30078], authors: [A.pub] });
+  assert.deepEqual(q, [ownUntagged], 'a one-shot read of the church\'s own authorship returned what the console wrote for B');
 });
 
 test('a list is stamped with the church it was fetched for — after a switch, the old church\'s list is not current', async () => {

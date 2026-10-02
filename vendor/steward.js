@@ -16338,15 +16338,26 @@ zoo`.split("\n");
     return picked;
   }
   var pool = new SimplePool();
+  function _taggedForAnotherChurch(e, cp) {
+    const t = (e && e.tags || []).find((x) => x && x[0] === "church");
+    return !!(t && t[1] && t[1] !== cp);
+  }
+  function _asksForOwnAuthorship(filters, cp) {
+    if (!cp) return false;
+    return (Array.isArray(filters) ? filters : [filters]).some((f) => f && Array.isArray(f.authors) && f.authors.includes(cp));
+  }
   var _poolSubMany = pool.subscribeMany.bind(pool);
   pool.subscribeMany = (urls, filters, handlers) => {
     let closedByCaller = false;
+    const cp = pub, own = _asksForOwnAuthorship(filters, cp);
     const h = {};
     for (const k of Object.keys(handlers || {})) {
       const f = handlers[k];
-      h[k] = typeof f === "function" ? (...a) => {
+      h[k] = typeof f !== "function" ? f : k === "onevent" && own ? (e) => {
+        if (!closedByCaller && !_taggedForAnotherChurch(e, cp)) return f(e);
+      } : (...a) => {
         if (!closedByCaller) return f(...a);
-      } : f;
+      };
     }
     const u = (Array.isArray(urls) ? urls : []).filter(Boolean);
     if (u.length) {
@@ -16372,7 +16383,9 @@ zoo`.split("\n");
   var _poolQuerySync = pool.querySync.bind(pool);
   pool.querySync = (urls, filter, opts) => {
     const u = (Array.isArray(urls) ? urls : []).filter(Boolean);
-    return u.length ? _poolQuerySync(u, filter, opts) : Promise.resolve([]);
+    if (!u.length) return Promise.resolve([]);
+    const cp = pub, own = _asksForOwnAuthorship(filter, cp);
+    return own ? _poolQuerySync(u, filter, opts).then((evs) => (evs || []).filter((e) => !_taggedForAnotherChurch(e, cp))) : _poolQuerySync(u, filter, opts);
   };
   var _relaysTouched = /* @__PURE__ */ new Set();
   var _subbedOn = /* @__PURE__ */ new Map();
@@ -22074,7 +22087,7 @@ zoo`.split("\n");
         const _tag = _listTag(), _deliver = onGroups;
         onGroups = (list) => _deliver(_stampFor(list, _tag));
       }
-      const CACHE_KEY = "trinityone.steward.groups." + (pub || "");
+      const CACHE_KEY = "trinityone.steward.groups.v2." + (pub || "");
       const byId = /* @__PURE__ */ new Map();
       const versions = /* @__PURE__ */ new Map();
       const emit = () => {
@@ -22145,7 +22158,7 @@ zoo`.split("\n");
       return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", PLAN_D + id], ["t", NET], ["deleted", "1"]], content: "" }));
     },
     subscribePlans(onPlans) {
-      const CACHE_KEY = "trinityone.steward.plans." + (pub || "");
+      const CACHE_KEY = "trinityone.steward.plans.v2." + (pub || "");
       const byId = /* @__PURE__ */ new Map();
       const versions = /* @__PURE__ */ new Map();
       const emit = () => {
@@ -22209,7 +22222,7 @@ zoo`.split("\n");
       return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", DEVO_D + id], ["t", NET], ["deleted", "1"]], content: "" }));
     },
     subscribeDevotionals(onDevos) {
-      const CACHE_KEY = "trinityone.steward.devos." + (pub || "");
+      const CACHE_KEY = "trinityone.steward.devos.v2." + (pub || "");
       const byId = /* @__PURE__ */ new Map();
       const versions = /* @__PURE__ */ new Map();
       const ord = (d) => typeof d.order === "number" ? d.order : Infinity;
@@ -22260,7 +22273,7 @@ zoo`.split("\n");
     // ════════════ SERVING / ROTA / CALENDAR (the coverage board) ════════════
     // A generic addressable-doc subscription over the church's own kind-30078 with a given d-prefix.
     _subAddr(prefix, map, onItems) {
-      const CACHE_KEY = "trinityone.steward.addr." + prefix + (pub || "");
+      const CACHE_KEY = "trinityone.steward.addr.v2." + prefix + (pub || "");
       const byId = /* @__PURE__ */ new Map();
       const versions = /* @__PURE__ */ new Map();
       try {

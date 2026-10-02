@@ -799,6 +799,12 @@ function KeyDistributor() {
   const pending = React.useRef({});    // group id → a publish is in flight; do not start another
   const nextTry = React.useRef({});    // group id → earliest Date.now() a REFUSED publish may retry
   const failCount = React.useRef({});  // group id → consecutive refusals, for the exponential backoff
+  // THESE ARE PER CHURCH. They survived a church switch, so a room id seen while acting for church B had a
+  // `last` entry when the console came back to A — and A's members looked like new recipients of B's room key
+  // (audit of 5276297, HIGH 1). Started afresh whenever the church this console runs changes.
+  const memoFor = React.useRef(null);
+  { const cpNow = (window.Steward && (window.Steward.actingChurch || window.Steward.churchPub)) || '';
+    if (memoFor.current !== cpNow) { memoFor.current = cpNow; last.current = {}; pending.current = {}; nextTry.current = {}; failCount.current = {}; } }
   const membersRef = React.useRef([]); membersRef.current = members;
   // CATCH UP AFTER A LOCK. The console auto-locks after 10 minutes idle and `Steward.lock()` forgets the key,
   // so every envelope published in that window is refused — and the backoff above then records those refusals

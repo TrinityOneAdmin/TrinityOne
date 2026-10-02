@@ -47,7 +47,7 @@ async function keyDistributor() {
         subscribeWebsiteShare: () => () => {}, setCareRoster: () => {},
         ensureMediaKeyForMembers: record('media'), ensureCareKeyForMembers: record('care'), ensureNameKeyForMembers: record('name'),
         ensureGroupKeys: record('groups'), publishGroupKey: record('groupkey'),
-        actingChurch: '', activePub: 'a'.repeat(64),
+        actingChurch: '', activePub: 'a'.repeat(64), churchPub: 'a'.repeat(64),
       },
       useStewardChurch: () => ({ name: 'St Aidan' }),
       useStewardGroups: () => lists.groups, useStewardMembers: () => lists.members,
@@ -63,7 +63,7 @@ async function keyDistributor() {
   delete globalThis[key];
   const set = (name, arr, isCurrent) => { if (isCurrent) current.add(arr); lists[name] = arr; };
   const render = () => draw(mod.KeyDistributor, {});
-  return { set, render, calls };
+  return { set, render, calls, steward: g.window.Steward };
 }
 const enrolled = (calls) => calls.filter(c => c.name === 'care' || c.name === 'name' || c.name === 'media');
 
@@ -92,4 +92,24 @@ test('no enrolment while the MEMBER list is another church\'s (the reload-into-B
     k.render();
     assert.deepEqual(enrolled(k.calls), [], `THE KEYS WERE ENROLLED WITH A ${stale.toUpperCase()} LIST FROM ANOTHER CHURCH`);
   }
+});
+
+// THE KEY DISTRIBUTOR'S MEMORY IS PER CHURCH (audit of 5276297, HIGH 1). Its `last` map — the recipients it last keyed
+// each room to — survived a church switch, so a room id it had seen in one church was "already keyed" in the next,
+// and that church's members looked like new recipients: it re-published the room's key to them.
+test('a room the distributor saw in one church is a FIRST sighting in the next — no key is re-published to the new church\'s people', async () => {
+  const k = await keyDistributor();
+  const room = { id: 'room-x', name: 'Sealed', encrypted: true };
+  k.set('members', [{ pubkey: MB }], true); k.set('groups', [room], true); k.set('stewards', [ST], true); k.set('blocked', [], true);
+  k.render();                                     // church A: first sighting of the room, remembered
+  assert.equal(k.calls.filter(c => c.name === 'groupkey').length, 0, 'CONTROL: a first sighting published a room key');
+  k.steward.actingChurch = 'b'.repeat(64);        // the console switches church; the same room id is on the list it sees
+  k.set('members', [{ pubkey: MB2 }], true); k.set('groups', [{ ...room }], true); k.set('stewards', [ST], true); k.set('blocked', [], true);
+  k.render();
+  const keyed = k.calls.filter(c => c.name === 'groupkey');
+  assert.deepEqual(keyed, [], 'THE ROOM\'S KEY WAS RE-PUBLISHED TO THE NEXT CHURCH\'S MEMBERS because the distributor remembered it from the last church: ' + JSON.stringify(keyed));
+  // CONTROL: in one church, a room whose members grew IS re-keyed — the memo still does its job
+  k.set('members', [{ pubkey: MB2 }, { pubkey: MB }], true); k.set('groups', [{ ...room }], true);
+  k.render();
+  assert.equal(k.calls.filter(c => c.name === 'groupkey').length, 1, 'CONTROL: a room whose members grew in the same church was not re-keyed');
 });

@@ -824,6 +824,8 @@ test('a read over an empty publish set settles instead of spinning for ever', as
 
   for (const [file, src] of [['vendor/fellowship.js', FELLOW], ['vendor/steward.js', STEWARD]]) {
     const body = [
+      // the console's wrappers also apply the church-tag rule (2026-10-02): its two helpers, out of the same bundle
+      ...(src === STEWARD ? [fnBody(src, 'function _taggedForAnotherChurch(e, cp) {', '_taggedForAnotherChurch'), fnBody(src, 'function _asksForOwnAuthorship(filters, cp) {', '_asksForOwnAuthorship')] : []),
       fnBody(src, 'pool.subscribeMany = (urls, filters, handlers)', 'subscribeMany guard'),
       fnBody(src, 'pool.querySync = (urls, filter, opts)', 'querySync guard'),
     ].join('\n');
@@ -831,6 +833,7 @@ test('a read over an empty publish set settles instead of spinning for ever', as
     const scope = scopeOf({
       pool: {}, _poolSubMany: (...a) => { calls.push(a); return { close() {} }; },
       _poolQuerySync: async () => { calls.push('query'); return ['real']; },
+      pub: '',   // (the console's wrappers read which church a read is for; none here)
     });
     new Function('scope', `with (scope) { ${body} }`)(scope);
     let eosed = false;

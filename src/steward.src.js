@@ -1826,13 +1826,36 @@ const pool = new SimplePool();
 // to A's congregation — 8 reloads of 8. One rule here covers every reader: once the caller closes, the handlers
 // are inert. (A relay's own CLOSED is not the caller's close, so it still reaches the handlers — _openKeyRead
 // depends on that.)
+//
+// …AND A CHURCH'S OWN READ NEVER RETURNS WHAT THIS CONSOLE WROTE FOR ANOTHER CHURCH (audit of 5276297, HIGH 1).
+// Acting for a stewarded church B, the console signs with ITS OWN key (church A's) and feChurch stamps
+// ['church', B]. Every church reader asks for `authors: [<the church>]` (plus `#church`), so back on A, every
+// document it had written for B came back in A's lists: B's encrypted room showed on A's Overview and Groups,
+// the key distributor saw its "members" (A's) as new recipients and re-published B's room key — signed by A,
+// wrapped to A and A's members only. The relay accepted it (A is B's steward) and, same author and same d-tag,
+// it REPLACED the envelope A had written for B: B's members lost the room. The church tag says whose document
+// it is, so in a subscription that asks for the church's own authorship, a document tagged for ANOTHER church
+// is not delivered. A document with no church tag, or tagged for this church, is unchanged; so is every
+// subscription that does not ask for the church's own authorship. `pub` is read when the subscription opens —
+// the same `pub` the reader built its filter from, in the same tick.
+function _taggedForAnotherChurch(e, cp) {
+  const t = ((e && e.tags) || []).find(x => x && x[0] === 'church');
+  return !!(t && t[1] && t[1] !== cp);
+}
+function _asksForOwnAuthorship(filters, cp) {
+  if (!cp) return false;
+  return (Array.isArray(filters) ? filters : [filters]).some(f => f && Array.isArray(f.authors) && f.authors.includes(cp));
+}
 const _poolSubMany = pool.subscribeMany.bind(pool);
 pool.subscribeMany = (urls, filters, handlers) => {
   let closedByCaller = false;
+  const cp = pub, own = _asksForOwnAuthorship(filters, cp);
   const h = {};
   for (const k of Object.keys(handlers || {})) {
     const f = handlers[k];
-    h[k] = (typeof f === 'function') ? (...a) => { if (!closedByCaller) return f(...a); } : f;
+    h[k] = (typeof f !== 'function') ? f
+      : (k === 'onevent' && own) ? (e) => { if (!closedByCaller && !_taggedForAnotherChurch(e, cp)) return f(e); }
+      : (...a) => { if (!closedByCaller) return f(...a); };
   }
   const u = (Array.isArray(urls) ? urls : []).filter(Boolean);
   if (u.length) {
@@ -1845,7 +1868,9 @@ pool.subscribeMany = (urls, filters, handlers) => {
 const _poolQuerySync = pool.querySync.bind(pool);
 pool.querySync = (urls, filter, opts) => {
   const u = (Array.isArray(urls) ? urls : []).filter(Boolean);
-  return u.length ? _poolQuerySync(u, filter, opts) : Promise.resolve([]);
+  if (!u.length) return Promise.resolve([]);
+  const cp = pub, own = _asksForOwnAuthorship(filter, cp);   // the same rule as subscribeMany, above
+  return own ? _poolQuerySync(u, filter, opts).then(evs => (evs || []).filter(e => !_taggedForAnotherChurch(e, cp))) : _poolQuerySync(u, filter, opts);
 };
 // HANDOFF-2026-07-31 (4). Relays this console has actually TRIED to open, by normalised url. relaysHealthy()
 // needs this because nostr-tools does not record a dead relay as down — `ensureRelay` sets
@@ -8721,7 +8746,7 @@ window.Steward = {
   },
   subscribeGroups(onGroups) {
     { const _tag = _listTag(), _deliver = onGroups; onGroups = (list) => _deliver(_stampFor(list, _tag)); }   // stamped with the church it was opened for — see _listTag
-    const CACHE_KEY = 'trinityone.steward.groups.' + (pub || '');
+    const CACHE_KEY = 'trinityone.steward.groups.v2.' + (pub || '');   // v2: see _taggedForAnotherChurch — an older cache may hold another church's rooms
     const byId = new Map();
     const versions = new Map();   // id -> Map(author -> their copy); see src/church-doc-store.src.js
     // steward-chosen order first (groups without an order fall to the end, by age)
@@ -8763,7 +8788,7 @@ window.Steward = {
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', PLAN_D + id], ['t', NET], ['deleted', '1']], content: '' }));
   },
   subscribePlans(onPlans) {
-    const CACHE_KEY = 'trinityone.steward.plans.' + (pub || '');
+    const CACHE_KEY = 'trinityone.steward.plans.v2.' + (pub || '');   // v2: see _taggedForAnotherChurch
     const byId = new Map();
     const versions = new Map();   // id -> Map(author -> their copy); see src/church-doc-store.src.js
     const emit = () => { const arr = [...byId.values()].sort((a, b) => (a.ts || 0) - (b.ts || 0)); try { localStorage.setItem(CACHE_KEY, JSON.stringify(arr)); } catch {} onPlans(arr); };
@@ -8800,7 +8825,7 @@ window.Steward = {
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', DEVO_D + id], ['t', NET], ['deleted', '1']], content: '' }));
   },
   subscribeDevotionals(onDevos) {
-    const CACHE_KEY = 'trinityone.steward.devos.' + (pub || '');
+    const CACHE_KEY = 'trinityone.steward.devos.v2.' + (pub || '');   // v2: see _taggedForAnotherChurch
     const byId = new Map();
     const versions = new Map();   // id -> Map(author -> their copy); see src/church-doc-store.src.js
     // explicit steward order first (lower = earlier); the rest fall back to newest-first
@@ -8824,7 +8849,7 @@ window.Steward = {
   // ════════════ SERVING / ROTA / CALENDAR (the coverage board) ════════════
   // A generic addressable-doc subscription over the church's own kind-30078 with a given d-prefix.
   _subAddr(prefix, map, onItems) {
-    const CACHE_KEY = 'trinityone.steward.addr.' + prefix + (pub || '');
+    const CACHE_KEY = 'trinityone.steward.addr.v2.' + prefix + (pub || '');   // v2: see _taggedForAnotherChurch
     const byId = new Map();
     const versions = new Map();   // id -> Map(author -> their copy); see src/church-doc-store.src.js
     // paint the last-known docs instantly so the page doesn't flash empty before the relay answers
