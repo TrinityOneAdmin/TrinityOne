@@ -447,11 +447,23 @@ function SectionLabel({ children, action, onAction }) {
 // `msg` still accepts a plain string, which is what all ~120 existing callers pass, and that keeps its tick.
 // A caller that knows better passes { text, kind: 'error' }. Failures also stay up longer — see app.jsx's
 // toast(), where the dwell time now follows the kind: nobody can read a sentence that long in 1.9s.
+// WHICH KIND IS THIS TOAST? Sim round 2026-10-02 #52: the opt-in `{ error: true }` above was adopted by the
+// handful of sites written after the audit, and the other ~120 plain-string callers kept their green tick -
+// including "Couldn't send - nothing was sent" and "Backup failed". Rather than hope every future caller
+// remembers, a plain string that reads as a failure is treated as one. An explicit kind always wins in both
+// directions: { kind: 'error' } is an error whatever it says, and an object with any other kind is not
+// second-guessed. The patterns are the words this app's own failure sentences are built from.
+const TOAST_FAILURE_WORDS = /(couldn[’']?t|could not|didn[’']?t|did not|can[’']?t|cannot|isn[’']?t|aren[’']?t|wasn[’']?t|won[’']?t|hasn[’']?t|failed|failure|not (sent|saved|shared|signed up|available|delivered|installed)|nothing was sent|no church found|invalid|unavailable|try again|refused|went wrong)/i;
+function toastKind(msg) {
+  if (!msg) return 'ok';
+  if (typeof msg === 'object') return msg.kind === 'error' ? 'error' : 'ok';
+  return TOAST_FAILURE_WORDS.test(String(msg)) ? 'error' : 'ok';
+}
 function Toast({ msg }) {
   if (!msg) return null;
   const isObj = msg && typeof msg === 'object';
   const text = isObj ? msg.text : msg;
-  const bad = isObj && msg.kind === 'error';
+  const bad = toastKind(msg) === 'error';
   if (!text) return null;
   return (
     <div role={bad ? 'alert' : 'status'} style={{
@@ -508,4 +520,4 @@ function FeatureTrouble() {
   );
 }
 
-Object.assign(window, { cx, makeNameDisambiguator, PhoneFrame, TabBar, BottomSheet, Overlay, IconBtn, Chip, SectionLabel, Toast, useBackLayer, FeatureTrouble });
+Object.assign(window, { cx, makeNameDisambiguator, PhoneFrame, TabBar, BottomSheet, Overlay, IconBtn, Chip, SectionLabel, Toast, toastKind, useBackLayer, FeatureTrouble });

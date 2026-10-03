@@ -1935,7 +1935,8 @@ function App() {
   // failure sentence in this app is often 20-30 words ("you're still a member there", "write the words down
   // instead"), and 1.9s is not enough for any of them. Audit 2026-09-02 #12.
   const toast = (msg, opts) => {
-    const bad = !!(opts && opts.error);
+    // toastKind (ui.jsx) also reads a plain string that is plainly a failure as one - sim 2026-10-02 #52
+    const bad = !!(opts && opts.error) || toastKind(msg) === 'error';
     setToastMsg(bad ? { text: msg, kind: 'error' } : msg);
     clearTimeout(toastTimer.current);
     toastTimer.current = setTimeout(() => setToastMsg(''), bad ? 6000 : 1900);
