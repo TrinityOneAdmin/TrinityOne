@@ -5711,19 +5711,43 @@ window.Fellowship = {
   subscribeChurchJoin(churchNpub, onState) {
     const pubk = toPub(churchNpub);
     if (!pubk) { onState({ approval: false, isAdmitted: true, isPending: false }); return () => {}; }
-    let approval = false, admitted = [];
+    let approval = false;
+    // THE ADMITTED LIST IS A UNION OF EVERY AUTHOR'S NEWEST COPY, NOT WHICHEVER DOCUMENT ARRIVED LAST. `admitted:` is
+    // one replaceable document PER AUTHOR (the church, and each steward who approves people), the relay's gate
+    // unions them (scripts/gateway.mjs rebuildAdmitted), and so does the console (subscribeAdmitted). This kept one
+    // `admitted` variable and overwrote it on every arrival, so a steward's approval followed by ANY later copy from
+    // the church (which does not carry the steward's names) left the approved member on "Waiting for approval" on a
+    // phone the relay was already treating as admitted. Sim item 22, 2026-10-02.
+    // Each author's own newer list replaces their own older one (a name they drop is really dropped from their copy);
+    // trust is applied when the union is READ, so a copy that arrived before the steward roster did is counted as soon
+    // as the roster arrives (onroster -> emit) instead of being thrown away, and a steward later revoked stops counting.
+    const admittedByAuthor = new Map();   // author pubkey -> { at, pubkeys }
+    const _admittedUnion = () => {
+      const all = new Set();
+      for (const [author, v] of admittedByAuthor) {
+        if (author !== pubk && !(_churchRoster.get(pubk) && _churchRoster.get(pubk).has(author))) continue;   // church key or a current roster steward (M2)
+        for (const pk of v.pubkeys) if (pk) all.add(pk);
+      }
+      return all;
+    };
     const me = window.Fellowship.myPubkey || pub;
     // CARRY WHETHER WE WERE ABLE TO ASK. `admitted` is a GATED read: if the relay refused our NIP-42 proof it
     // comes back empty, which is indistinguishable from "the church has not admitted you". The screen that
     // renders this then tells an admitted member their request is still waiting. Emit the raw signal and let
     // the app decide what to say — this file must not own that copy.
-    const emit = () => { const isAdmitted = !!(me && admitted.includes(me));
+    const emit = () => { const isAdmitted = !!(me && _admittedUnion().has(me));
       onState({ approval, isAdmitted, isPending: approval && !isAdmitted, authFailed: authState().failed }); };
     return _onChurchDocs(pubk, {
       onevent(e, d) {
+        if (d === 'trinityone/admitted:' + pubk) {
+          const prev = admittedByAuthor.get(e.pubkey);
+          if (prev && e.created_at < prev.at) return;   // this author's own older list
+          let list = []; try { list = (JSON.parse(e.content).pubkeys) || []; } catch { list = []; }
+          admittedByAuthor.set(e.pubkey, { at: e.created_at, pubkeys: Array.isArray(list) ? list : [] });
+          emit(); return;   // who counts is decided in _admittedUnion, when it is read
+        }
         if (e.pubkey !== pubk && !(_churchRoster.get(pubk) && _churchRoster.get(pubk).has(e.pubkey))) return;   // trust church key or a current roster steward (M2)
         if (d === 'trinityone/joinpolicy:' + pubk) { if (e.tags.some(t => t[0] === 'deleted') || !e.content) approval = false; else { try { approval = !!JSON.parse(e.content).approval; } catch { approval = false; } } emit(); }
-        else if (d === 'trinityone/admitted:' + pubk) { try { admitted = (JSON.parse(e.content).pubkeys) || []; } catch { admitted = []; } emit(); }
       },
       onroster() { emit(); },
       oneose() { emit(); },
