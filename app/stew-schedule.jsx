@@ -527,6 +527,21 @@ function RunsheetModal({ service, sheet, onClose }) {
     </SchModal>
   );
 }
+// DID THE PERSON ON THIS SLOT SAY NO? True only for the NEWEST request that person was sent for this exact
+// slot, and only when the reply the church holds for it reads 'decline'. Pure and top-level so the rota board
+// (DashRota) and the calendar's coverage chips (DashCalendar) cannot disagree about it.
+//
+// WHY IT EXISTS. Both boards counted a slot as filled the moment a NAME sat in it, so a person who had
+// answered "can't make it" still read as cover: "1/1 roles filled - Fully covered", drawn over a struck-through
+// Declined name (sim 2026-10-02, item 26). A declined slot is a gap the steward still has to fill. A 'swap'
+// ask is NOT counted out: that person still holds the slot until someone is confirmed in their place.
+function schSlotDeclined(requests, replies, svcId, teamId, roleId, pub) {
+  const matches = (requests || []).filter(q => q && q.serviceId === svcId && q.teamId === teamId && q.roleId === roleId && (!pub || !q.memberPub || q.memberPub === pub));
+  if (!matches.length) return false;
+  matches.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+  const r = (replies || []).find(x => x && x.id === matches[0].id);
+  return !!r && r.v === 'decline';
+}
 function DashRota({ onNewTeam }) {
   const teams = window.useStewardGroups().filter(g => g.kind === 'team');
   const rosters = window.useStewardRosters();
@@ -595,8 +610,11 @@ function DashRota({ onNewTeam }) {
   const setAssign = (next) => setDraft(d => ({ ...d, [svcId]: next }));
 
   // coverage across all teams for this service
+  // A NAME IN THE SLOT IS NOT COVER IF THAT PERSON DECLINED — see schSlotDeclined. Same test for the headline
+  // count and for each team card's own count below, so the two can never disagree.
+  const slotCovered = (teamId, role) => { const a = assign[teamId + '::' + role.id]; return !!(a && a.name) && !schSlotDeclined(requests, replies, svcId, teamId, role.id, a.pub); };
   let total = 0, filled = 0;
-  teams.forEach(t => { const rs = rosterFor(t.id).roles; total += rs.length; rs.forEach(role => { if (assign[t.id + '::' + role.id] && assign[t.id + '::' + role.id].name) filled++; }); });
+  teams.forEach(t => { const rs = rosterFor(t.id).roles; total += rs.length; rs.forEach(role => { if (slotCovered(t.id, role)) filled++; }); });
   const gaps = total - filled;
 
   const pers = persisted(svcId);
@@ -939,7 +957,7 @@ function DashRota({ onNewTeam }) {
           <div className="no-scrollbar" style={{ flex: 1, minHeight: narrow ? 120 : 0, overflow: 'auto', marginTop: 14, display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gridAutoRows: 'max-content', gap: 14, alignContent: 'start' }}>
             {teams.map(t => {
               const m = teamMeta(t); const r = rosterFor(t.id);
-              const tFilled = r.roles.filter(role => assign[t.id + '::' + role.id] && assign[t.id + '::' + role.id].name).length;
+              const tFilled = r.roles.filter(role => slotCovered(t.id, role)).length;
               return (
                 <div key={t.id} style={{ borderRadius: 18, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', overflow: 'hidden' }}>
                   <div style={{ padding: '13px 15px', borderBottom: '1px solid var(--line)' }}>
@@ -1240,10 +1258,12 @@ function DashCalendar() {
   const [calRunsheet, setCalRunsheet] = useSch(null);    // …and the editor for it
   const calRunsheets = (typeof window.useStewardRunsheets === 'function') ? window.useStewardRunsheets() : [];
 
+  const calRequests = (typeof window.useStewardRequests === 'function') ? window.useStewardRequests() : [];
+  const calReplies = (typeof window.useStewardRequestReplies === 'function') ? window.useStewardRequestReplies() : [];
   const coverageFor = (svcId) => {
     const rota = rotas.find(r => r.service === svcId); const assign = rota ? rota.assign : {};
     let total = 0, filled = 0;
-    teams.forEach(t => { const r = rosters.find(x => x.team === t.id) || { roles: [] }; total += r.roles.length; r.roles.forEach(role => { if (assign[t.id + '::' + role.id] && assign[t.id + '::' + role.id].name) filled++; }); });
+    teams.forEach(t => { const r = rosters.find(x => x.team === t.id) || { roles: [] }; total += r.roles.length; r.roles.forEach(role => { const a = assign[t.id + '::' + role.id]; if (a && a.name && !schSlotDeclined(calRequests, calReplies, svcId, t.id, role.id, a.pub)) filled++; }); });
     return { total, filled, published: rota && rota.published };
   };
   const dayItems = (key) => ({
