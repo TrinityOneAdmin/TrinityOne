@@ -15190,12 +15190,21 @@ zoo`.split("\n");
   }
   async function _openBackup(envelope) {
     if (!sk) throw new Error("No church key on this device");
-    const e = typeof envelope === "string" ? JSON.parse(envelope) : envelope;
+    let e;
+    try {
+      e = typeof envelope === "string" ? JSON.parse(envelope) : envelope;
+    } catch (x) {
+      throw new Error("This file is not a TrinityOne backup \u2014 it could not be read as one.");
+    }
     if (!e || e.trinityone_backup !== "encrypted-v1") throw new Error("Not an encrypted TrinityOne backup");
-    const convKey = getConversationKey(sk, e.epk);
-    const key = await crypto.subtle.importKey("raw", convKey, "AES-GCM", false, ["decrypt"]);
-    const pt = new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: _b64ToU8(e.iv) }, key, _b64ToU8(e.ct)));
-    return { bytes: pt, fmt: e.fmt || "jsonl" };
+    try {
+      const convKey = getConversationKey(sk, e.epk);
+      const key = await crypto.subtle.importKey("raw", convKey, "AES-GCM", false, ["decrypt"]);
+      const pt = new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: _b64ToU8(e.iv) }, key, _b64ToU8(e.ct)));
+      return { bytes: pt, fmt: e.fmt || "jsonl" };
+    } catch (x) {
+      throw new Error("This backup was made for a different church, or the file is damaged \u2014 only the church key it was sealed to can open it. Check you are signed in as that church, then choose the file again.");
+    }
   }
   function _nip98(url, method) {
     return "Nostr " + btoa(JSON.stringify(finalizeEvent2({ kind: 27235, created_at: _credNow(), tags: [["u", url], ["method", method || "GET"], ["church", pub]], content: "" }, sk)));
@@ -18918,15 +18927,22 @@ zoo`.split("\n");
         } catch {
         }
       }
+      const _unzip = (bytes) => {
+        try {
+          return unzipSync(bytes);
+        } catch (x) {
+          throw new Error("This backup file is damaged \u2014 its archive could not be opened. Try the file again from where you saved it, or use another backup.");
+        }
+      };
       if (env && env.trinityone_backup === "encrypted-v1") {
         const opened = await _openBackup(env);
         if (opened.fmt === "zip") {
-          const f = unzipSync(opened.bytes);
+          const f = _unzip(opened.bytes);
           events = strFromU8(f["events.jsonl"] || new Uint8Array());
           for (const k in f) if (k.indexOf("blobs/") === 0) blobs[k.slice(6)] = f[k];
         } else events = strFromU8(opened.bytes);
       } else if (u83[0] === 80 && u83[1] === 75) {
-        const f = unzipSync(u83);
+        const f = _unzip(u83);
         events = strFromU8(f["events.jsonl"] || new Uint8Array());
         for (const k in f) if (k.indexOf("blobs/") === 0) blobs[k.slice(6)] = f[k];
       } else {

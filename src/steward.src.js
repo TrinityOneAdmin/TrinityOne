@@ -68,12 +68,20 @@ async function _sealToChurch(bytes, churchPubHex, fmt) {
 }
 async function _openBackup(envelope) {                               // church-key holder decrypts -> { bytes, fmt } (restore + verify)
   if (!sk) throw new Error('No church key on this device');
-  const e = (typeof envelope === 'string') ? JSON.parse(envelope) : envelope;
+  // EVERY FAILURE HERE SAYS WHAT IT WAS. The browser rejects a wrong-key decrypt with an OperationError whose
+  // message is "" (Node: "The operation failed for an operation-specific reason"), so the console's catch fell
+  // back to its own bare "Restore failed" - the one moment a steward most needs a reason. Sim 2026-10-02 #54.
+  let e;
+  try { e = (typeof envelope === 'string') ? JSON.parse(envelope) : envelope; } catch (x) { throw new Error('This file is not a TrinityOne backup — it could not be read as one.'); }
   if (!e || e.trinityone_backup !== 'encrypted-v1') throw new Error('Not an encrypted TrinityOne backup');
-  const convKey = nip44ck(sk, e.epk);                                // ECDH is symmetric: (church, ephemeral) == (ephemeral, church)
-  const key = await crypto.subtle.importKey('raw', convKey, 'AES-GCM', false, ['decrypt']);
-  const pt = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: _b64ToU8(e.iv) }, key, _b64ToU8(e.ct)));
-  return { bytes: pt, fmt: e.fmt || 'jsonl' };
+  try {
+    const convKey = nip44ck(sk, e.epk);                              // ECDH is symmetric: (church, ephemeral) == (ephemeral, church)
+    const key = await crypto.subtle.importKey('raw', convKey, 'AES-GCM', false, ['decrypt']);
+    const pt = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: _b64ToU8(e.iv) }, key, _b64ToU8(e.ct)));
+    return { bytes: pt, fmt: e.fmt || 'jsonl' };
+  } catch (x) {
+    throw new Error('This backup was made for a different church, or the file is damaged — only the church key it was sealed to can open it. Check you are signed in as that church, then choose the file again.');
+  }
 }
 // a fresh NIP-98 (kind-27235) proof signed by the church key, bound to `url` + method — authorises /export,
 // /export-media, per-blob pulls (GET) and /import (POST). (sk/pub are the module's active church identity.)
@@ -5386,12 +5394,14 @@ window.Steward = {
     let events = '', blobs = {};
     let asText = null; try { asText = strFromU8(u8); } catch {}
     let env = null; if (asText) { try { env = JSON.parse(asText); } catch {} }
+    // An archive fflate cannot open throws "invalid zip data" - true, and no help to a steward. Said plainly.
+    const _unzip = (bytes) => { try { return unzipSync(bytes); } catch (x) { throw new Error('This backup file is damaged — its archive could not be opened. Try the file again from where you saved it, or use another backup.'); } };
     if (env && env.trinityone_backup === 'encrypted-v1') {          // sealed to the church key -> decrypt
       const opened = await _openBackup(env);
-      if (opened.fmt === 'zip') { const f = unzipSync(opened.bytes); events = strFromU8(f['events.jsonl'] || new Uint8Array()); for (const k in f) if (k.indexOf('blobs/') === 0) blobs[k.slice(6)] = f[k]; }
+      if (opened.fmt === 'zip') { const f = _unzip(opened.bytes); events = strFromU8(f['events.jsonl'] || new Uint8Array()); for (const k in f) if (k.indexOf('blobs/') === 0) blobs[k.slice(6)] = f[k]; }
       else events = strFromU8(opened.bytes);
     } else if (u8[0] === 0x50 && u8[1] === 0x4b) {                   // 'PK' magic -> plaintext zip (events + media)
-      const f = unzipSync(u8); events = strFromU8(f['events.jsonl'] || new Uint8Array()); for (const k in f) if (k.indexOf('blobs/') === 0) blobs[k.slice(6)] = f[k];
+      const f = _unzip(u8); events = strFromU8(f['events.jsonl'] || new Uint8Array()); for (const k in f) if (k.indexOf('blobs/') === 0) blobs[k.slice(6)] = f[k];
     } else { events = asText || ''; }                                // plaintext jsonl (events only)
     if (!events.trim()) throw new Error('This file has no church data to restore.');
     // 1. import the events (a fresh relay registers the church here)
