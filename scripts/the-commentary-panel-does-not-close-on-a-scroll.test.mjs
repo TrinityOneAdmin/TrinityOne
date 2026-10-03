@@ -23,7 +23,11 @@ function mountPanel({ docked = false } = {}) {
   const { React, reset, flush } = fakeReact();
   const closed = [];
   const ctx = { notes: {}, version: 'kjv', setNote() {} };
-  const g = { React, useS: React.useState, useE: React.useEffect, useR: React.useRef, window: { Bible: { getCommentary: () => [], subscribe: () => () => {} } },
+  // The panel now reads its notes through three small functions that sit beside it in app/screens-read.jsx
+  // (item 36, 2026-10-03). They are LIFTED from that file the same way the panel is, not re-written here.
+  const helpers = ['noteKeyOf', 'notesByVerse', 'legacyKeysFor'].map(n => fnBody(SRC, SRC.indexOf('function ' + n + '('), n)).join('\n');
+  const lifted = new Function('Bible', helpers + '\nreturn { noteKeyOf, notesByVerse, legacyKeysFor };')({});
+  const g = { ...lifted, React, useS: React.useState, useE: React.useEffect, useR: React.useRef, window: { Bible: { getCommentary: () => [], subscribe: () => () => {} } },
     // components the panel places; the fake React never calls children, so a name is all each needs
     Icon: () => null, IconBtn: () => null, Btn: () => null, Empty: () => null, Pill: () => null, Chip: () => null, console, Math, Object, String, parseInt, Array, JSON, Number, Date, Set, Map, Promise, setTimeout, clearTimeout };
   return { React, reset, flush, closed, ctx, g, code };
