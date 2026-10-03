@@ -1360,6 +1360,7 @@ try {
     return Promise.resolve(_ensure(url, params)).then((r) => {
       try { if (r && r.publishTimeout < 11000) r.publishTimeout = 11000; } catch (e) {}
       try { _relayUp(url, r); } catch (e) {}
+      try { _watchRelayClose(url, r); } catch (e) {}   // …and noticed again if it DROPS — see _scheduleRedial
       return r;
     }, (err) => { _relayFailed(url); throw err; });
   };
@@ -1416,6 +1417,81 @@ pool.onRelayConnectionSuccess = (url) => {
   try { _relayUp(url, pool.relays.get(url)); } catch (e) {}
 };
 pool.onRelayConnectionFailure = (url) => { _relayFailed(url); };
+
+// A RELAY THAT DROPS UNDER US IS DIALLED AGAIN — because with two relays, nothing else ever did.
+// Sim 2026-10-02, item 18: "phones stop getting church updates after a relay restart".
+//
+// nostr-tools does not reconnect a socket that closes (enableReconnect is off, and turning it on is the broader
+// change that also has to replay REQs and re-answer NIP-42). The pool simply forgets the relay, and its
+// subscriptions are closed. Redialling therefore happened only when SOMETHING ELSE next asked the pool for that
+// address — a new subscription, a publish. Nothing asks for no reason, so:
+//   • one relay: relaysHealthy() goes false, the 90-second beat re-subscribes, and it recovers (slowly);
+//   • TWO or more, one of which restarts: relaysHealthy() stays TRUE ("one live socket is enough to work"), the
+//     beat skips for ever, and the restarted relay is never spoken to again. Everything this phone reads
+//     through it — services, rotas, requests — stops until the app is restarted. Reproduced in a headless
+//     browser against two real gateways: after the restart a published service never arrived in 108 seconds.
+//
+// WHAT THIS DOES. When a socket that WAS connected closes and WE did not close it, wait, then ask the pool for
+// that address again. Success runs through the ensureRelay wrapper above, so `_relayUp` sees a new instance and
+// fires `trinity-relay-returned` — the app's existing, debounced, jittered re-subscribe signal. This adds no new
+// recovery logic; it makes the existing one reachable.
+//
+// WHAT IT DELIBERATELY DOES NOT DO.
+//   • Dial an address it never connected to, or one the relay gate no longer admits (`_netRelays`): re-dialling
+//     is not a way to widen which relays a church talks to (CLAUDE.md rule 10). Only an address this pool had
+//     already reached, and still passes the gate.
+//   • Redial a socket WE closed. reconnectAll() and _maybeDropRelay() close on purpose; they are marked first.
+//   • Hammer. 5s, 15s, 45s, 2min, 5min — each plus up to 5s of jitter, because a relay restart drops EVERY phone
+//     in the congregation at the same instant and a fixed delay would bring them all back in the same second.
+//     After the last attempt it stops; foregrounding the app re-subscribes and dials as it always did.
+//   • Run while the app is in the background (the foreground path covers that), or while a dial is already
+//     pending for that address.
+const _REDIAL_MS = [5000, 15000, 45000, 120000, 300000];
+const _redialState = new Map();     // normalizeURL(url) -> { n: attempts made, timer }
+const _closedByUs = new WeakSet();  // relay objects WE closed on purpose
+try {
+  const _close = pool.close.bind(pool);
+  pool.close = function (urls) {
+    try { for (const u of (urls || [])) { const r = pool.relays.get(_relayKey(u)); if (r) _closedByUs.add(r); } } catch (e) {}
+    return _close(urls);
+  };
+} catch (e) {}
+const _REDIAL_STABLE_MS = 60000;   // a connection that lasted this long was a real one: its eventual drop starts the count afresh
+function _watchRelayClose(url, r) {
+  if (!r || r._t1Watched) return;
+  r._t1Watched = true;
+  r._t1At = Date.now();
+  const prev = r.onclose;
+  r.onclose = function () {
+    try { if (typeof prev === 'function') prev.apply(this, arguments); } catch (e) {}
+    try {
+      if (_closedByUs.has(r)) return;
+      // A socket that connects and drops again at once (a box crash-looping, a refusal that closes) must NOT earn
+      // a fresh set of attempts each time it connects, or this becomes a re-subscribe every few seconds for ever.
+      // The count is therefore only forgotten once a connection has proved itself by staying up.
+      if (Date.now() - (r._t1At || 0) >= _REDIAL_STABLE_MS) _redialState.delete(_relayKey(url));
+      _scheduleRedial(url);
+    } catch (e) {}
+  };
+}
+function _scheduleRedial(url) {
+  const key = _relayKey(url);
+  let st = _redialState.get(key);
+  if (!st) { st = { n: 0, timer: null }; _redialState.set(key, st); }
+  if (st.timer || st.n >= _REDIAL_MS.length) return;   // one pending at a time; and it gives up rather than hammer
+  const delay = _REDIAL_MS[st.n] + Math.floor(Math.random() * 5000);
+  st.timer = setTimeout(() => { st.timer = null; _redialNow(url, key, st); }, delay);
+}
+async function _redialNow(url, key, st) {
+  try {
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') { _redialState.delete(key); return; }   // backgrounded: coming back re-subscribes and dials
+    if (!_netRelays([url]).length) { _redialState.delete(key); return; }                                                // not (or no longer) one of ours
+    const there = pool.relays.get(key);
+    if (there && there.connected) { _redialState.delete(key); return; }                                                  // something else already brought it back
+    st.n++;
+    await pool.ensureRelay(url);   // success: _relayUp fires trinity-relay-returned and _watchRelayClose re-arms
+  } catch (e) { _scheduleRedial(url); }
+}
 
 let sk = null, pub = null;
 // Do we answer a relay's NIP-42 challenge? ALWAYS — this is deliberately hardcoded true.

@@ -7728,6 +7728,10 @@
           _relayUp(url, r);
         } catch (e) {
         }
+        try {
+          _watchRelayClose(url, r);
+        } catch (e) {
+        }
         return r;
       }, (err) => {
         _relayFailed(url);
@@ -7770,6 +7774,77 @@
   pool.onRelayConnectionFailure = (url) => {
     _relayFailed(url);
   };
+  var _REDIAL_MS = [5e3, 15e3, 45e3, 12e4, 3e5];
+  var _redialState = /* @__PURE__ */ new Map();
+  var _closedByUs = /* @__PURE__ */ new WeakSet();
+  try {
+    const _close = pool.close.bind(pool);
+    pool.close = function(urls) {
+      try {
+        for (const u of urls || []) {
+          const r = pool.relays.get(_relayKey2(u));
+          if (r) _closedByUs.add(r);
+        }
+      } catch (e) {
+      }
+      return _close(urls);
+    };
+  } catch (e) {
+  }
+  var _REDIAL_STABLE_MS = 6e4;
+  function _watchRelayClose(url, r) {
+    if (!r || r._t1Watched) return;
+    r._t1Watched = true;
+    r._t1At = Date.now();
+    const prev = r.onclose;
+    r.onclose = function() {
+      try {
+        if (typeof prev === "function") prev.apply(this, arguments);
+      } catch (e) {
+      }
+      try {
+        if (_closedByUs.has(r)) return;
+        if (Date.now() - (r._t1At || 0) >= _REDIAL_STABLE_MS) _redialState.delete(_relayKey2(url));
+        _scheduleRedial(url);
+      } catch (e) {
+      }
+    };
+  }
+  function _scheduleRedial(url) {
+    const key = _relayKey2(url);
+    let st = _redialState.get(key);
+    if (!st) {
+      st = { n: 0, timer: null };
+      _redialState.set(key, st);
+    }
+    if (st.timer || st.n >= _REDIAL_MS.length) return;
+    const delay = _REDIAL_MS[st.n] + Math.floor(Math.random() * 5e3);
+    st.timer = setTimeout(() => {
+      st.timer = null;
+      _redialNow(url, key, st);
+    }, delay);
+  }
+  async function _redialNow(url, key, st) {
+    try {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+        _redialState.delete(key);
+        return;
+      }
+      if (!_netRelays([url]).length) {
+        _redialState.delete(key);
+        return;
+      }
+      const there = pool.relays.get(key);
+      if (there && there.connected) {
+        _redialState.delete(key);
+        return;
+      }
+      st.n++;
+      await pool.ensureRelay(url);
+    } catch (e) {
+      _scheduleRedial(url);
+    }
+  }
   var sk = null;
   var pub = null;
   var _needAuth = true;
