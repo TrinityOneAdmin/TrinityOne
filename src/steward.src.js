@@ -9743,7 +9743,12 @@ window.Steward = {
     const win = lifetimeWindow(policy.lifetime, o.service, { before: o.before, after: o.after });
     if (!win) return null;
     const at = Number.isFinite(o.at) ? Math.floor(o.at) : win.from;
-    const helpers = permittedHelpers(Array.isArray(o.permissions) ? o.permissions : [], at);
+    // `alsoAt` is the issuer's second instant (see issueCheckinSessionKeys): a clearance made after the session
+    // opened is judged at NOW inside the window. Omitted by every other caller, which keeps judging at `at` only.
+    const permsIn = Array.isArray(o.permissions) ? o.permissions : [];
+    const helpers = Number.isFinite(o.alsoAt)
+      ? [...new Set([...permittedHelpers(permsIn, at), ...permittedHelpers(permsIn, Math.floor(o.alsoAt))])]
+      : permittedHelpers(permsIn, at);
     // The keepers: the church, plus every steward the church has actually ticked for the register. Reusing
     // _capAllows against CAP_KEYS.checkin — which is `explicit: true` — so this cannot disagree with who holds
     // trinityone/checkinkey:. `stewards` is passed IN, exactly as ensureCapKeyFor(kind, stewardPubs, caps) takes
@@ -9908,7 +9913,16 @@ window.Steward = {
       if (!win) { out.failed.push({ session, why: 'no date this console can place' }); continue; }
       if (win.until <= at) { out.skipped.push({ session, why: 'over' }); continue; }
       if (win.from - at > horizon) { out.skipped.push({ session, why: 'beyond the horizon' }); continue; }
-      const want = permittedHelpers(perms, win.from);
+      // WHO HOLDS A KEY FOR THIS SESSION IS JUDGED AT TWO INSTANTS, and the union is the point (sim item 31,
+      // 2026-10-02). Judged at the session's START alone, a clearance made AFTER the service opened is never
+      // eligible: 'dated' and 'open' clearances begin at the moment they are made (permissionWindow), so
+      // `at < perm.from` at win.from and the person got no key for the Sunday that was already under way.
+      // ('day' begins at midnight, which is why that shape worked.) So the session is ALSO judged at NOW,
+      // clamped into the session's own window — never later than its end. The union can only ADD people to
+      // what the start-instant answer gave: a clearance that lapses part-way through still keeps the key it
+      // has. The relay re-checks the permission on every request, so naming somebody here widens nothing.
+      const nowIn = Math.min(Math.max(at, win.from), win.until);
+      const want = [...new Set([...permittedHelpers(perms, win.from), ...permittedHelpers(perms, nowIn)])];
       const have = held.get(session);
       // A SESSION THE CHURCH STOOD DOWN IS LEFT ALONE. Added 2026-09-10; before it, this was the defect.
       // revokeCheckinHelpers tombstones the envelope, subscribeCheckinSessionKeys used to FORGET the id
@@ -9956,7 +9970,7 @@ window.Steward = {
       // that a steward can neither see nor undo, and it is where the keeper warning has been re-aimed —
       // see _warnCheckinKeyRotated for what may and may not be claimed about it today.
       const rotating = !!(have && !keyHex);
-      const res = await this.publishCheckinHelpers({ session, service: svc, permissions: perms, at: win.from,
+      const res = await this.publishCheckinHelpers({ session, service: svc, permissions: perms, at: win.from, alsoAt: nowIn,
         stewards: o.stewards, caps: o.caps, lifetime: policy.lifetime, before: o.before, after: o.after,
         sessionKeyHex: keyHex });
       if (res) { out.issued.push(res); if (rotating) out.rotated.push(session); }

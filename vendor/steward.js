@@ -23094,7 +23094,8 @@ zoo`.split("\n");
       const win = lifetimeWindow(policy.lifetime, o.service, { before: o.before, after: o.after });
       if (!win) return null;
       const at = Number.isFinite(o.at) ? Math.floor(o.at) : win.from;
-      const helpers = permittedHelpers(Array.isArray(o.permissions) ? o.permissions : [], at);
+      const permsIn = Array.isArray(o.permissions) ? o.permissions : [];
+      const helpers = Number.isFinite(o.alsoAt) ? [.../* @__PURE__ */ new Set([...permittedHelpers(permsIn, at), ...permittedHelpers(permsIn, Math.floor(o.alsoAt))])] : permittedHelpers(permsIn, at);
       const allowed = _capAllows(CAP_KEYS.checkin, o.caps || _stewardCaps);
       const keepers = [cp, ...(Array.isArray(o.stewards) ? o.stewards : []).filter(allowed)];
       const reuse = String(o.sessionKeyHex || "");
@@ -23259,7 +23260,8 @@ zoo`.split("\n");
           out.skipped.push({ session, why: "beyond the horizon" });
           continue;
         }
-        const want = permittedHelpers(perms, win.from);
+        const nowIn = Math.min(Math.max(at, win.from), win.until);
+        const want = [.../* @__PURE__ */ new Set([...permittedHelpers(perms, win.from), ...permittedHelpers(perms, nowIn)])];
         const have = held.get(session);
         if (have && have.standDown) {
           out.skipped.push({ session, why: "stood down" });
@@ -23284,6 +23286,7 @@ zoo`.split("\n");
           service: svc,
           permissions: perms,
           at: win.from,
+          alsoAt: nowIn,
           stewards: o.stewards,
           caps: o.caps,
           lifetime: policy.lifetime,
