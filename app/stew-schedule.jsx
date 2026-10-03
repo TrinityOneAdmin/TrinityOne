@@ -721,8 +721,28 @@ function DashRota({ onNewTeam }) {
   // service only, so they say to open each service (audit of 660f063, #4).
   const heldFlash = (lead, n, retry) => `${lead}. ${n} ${n === 1 ? 'person has' : 'people have'} an earlier request still opening — ${retry} in a moment to ask them.`;
   const unaskedFlash = (lead, failed, tried, retry) => `${lead}, but ${failed} of ${tried} couldn’t be asked yet. ${retry}; if it keeps failing, the message above says why.`;
-  // pure: fill the gaps of `base` for a given date, not reusing anyone already on that day
-  const fillAssign = (base, date, svcId) => {
+  // How many slots each person ALREADY holds, over every service this board knows (drafts included), as a
+  // Map of 'n:<name>' -> count. This is what Auto-fill rotates by — see fillAssign.
+  const loadOf = () => {
+    const m = new Map();
+    (services || []).forEach(sv => {
+      const a = assignFor(sv.id);
+      if (a) Object.values(a).forEach(x => { if (x && x.name) m.set('n:' + x.name, (m.get('n:' + x.name) || 0) + 1); });
+    });
+    return m;
+  };
+  // pure: fill the gaps of `base` for a given date, not reusing anyone already on that day.
+  //
+  // ⚠ IT ROTATES. `load` is the running tally of how many slots each person holds; the one passed by a bulk run
+  // is SHARED across every service it fills, so the next service starts from where the last one left off.
+  // This used to take `avail[0]` — the first person listed on the roster — every time, so a quarter of weekly
+  // services gave that one person a slot every single week and left everybody else on the roster idle (sim
+  // 2026-10-02, item 33). Now it takes whoever holds the FEWEST, and breaks ties in roster order, so the first
+  // person listed still goes first when everyone is level. Called with no `load` (a single-service fill) it
+  // seeds one from what the board already shows, so that fill too lands on whoever has had least.
+  const fillAssign = (base, date, svcId, load) => {
+    const L = load || {};
+    if (!L.counts) L.counts = loadOf();
     const next = { ...base };
     // clear slots whose member declined / asked to swap, so Auto-fill treats them as open — and
     // remember who said no so we don't put them straight back on.
@@ -753,18 +773,27 @@ function DashRota({ onNewTeam }) {
         if (!best || avail.length < best.avail.length) best = { s, avail };
       }
       if (!best) break;
-      const pick = best.avail[0];
+      // sort() is stable, so people with equal load stay in roster order
+      const pick = best.avail.slice().sort((a, b) => (L.counts.get('n:' + a.name) || 0) - (L.counts.get('n:' + b.name) || 0))[0];
       next[best.s.key] = { name: pick.name, pub: pick.pub || '' };
       used.add('n:' + pick.name);
+      L.counts.set('n:' + pick.name, (L.counts.get('n:' + pick.name) || 0) + 1);
     }
     return next;
   };
   const autoFill = () => { setAssign(fillAssign(assign, svc.date, svc.id)); setFlash('Filled the gaps — including anyone who said no'); setTimeout(() => setFlash(''), 2200); };
   // create + fill: generate weekly services for the period (if missing), then auto-fill & publish each
-  const autoFillAhead = async (months) => {
+  //
+  // TWO THINGS THIS CAN MEAN, and the menu now says which it is doing (sim 2026-10-02, item 33):
+  //   default            CREATE a weekly copy of the service on screen, from its date, for `months`, then fill them
+  //   { existingOnly }   create NOTHING: fill the gaps on the services already on the calendar in that window
+  // The first used to be the only one, and it clones whatever is on screen — so a one-off (a Christmas service)
+  // became a weekly service for a quarter with nothing but the word "weekly" in a confirm box.
+  const autoFillAhead = async (months, opts) => {
     setFillMenu(false);
+    const createCopies = !(opts && opts.existingOnly);
     const until = schAddMonths(svc.date, months);
-    const dates = schGenDates(svc.date, 'weekly', until);
+    const dates = createCopies ? schGenDates(svc.date, 'weekly', until) : sortedSvcs.filter(x => x.date >= svc.date && x.date <= until).map(x => x.date);
     const byDate = {}; sortedSvcs.forEach(s => { byDate[s.date] = s; });
     const ensured = [];
     // THE BULK PATH, AND THE ONE THE FIRST PASS OF THIS FIX MISSED (audit of 7a45d4d, finding 1). It was
@@ -787,13 +816,14 @@ function DashRota({ onNewTeam }) {
       if (probe == null) { setFlash(schNoKey()); setTimeout(() => setFlash(''), 4000); return; }
     }
     let lost = 0, unasked = 0, triedAsks = 0; const heldAsks = new Set();
+    const load = { counts: null };   // shared across every service below, so the fill ROTATES — see fillAssign
     for (const dt of dates) {
       if (byDate[dt]) { ensured.push(byDate[dt]); continue; }
       const ns = await window.Steward.publishService({ name: svc.name, date: dt, time: svc.time });
       if (ns) ensured.push(ns); else lost++;
     }
     for (const s of ensured) {
-      const filled = fillAssign(assignFor(s.id) || {}, s.date, s.id);
+      const filled = fillAssign(assignFor(s.id) || {}, s.date, s.id, load);
       const r = await window.Steward.publishRota({ service: s.id, published: true, assign: filled });
       if (r == null) { lost++; continue; }   // do not ask anyone to serve on a rota that does not exist
       const asked = await sendRequestsFor(s.id, s.date, s.time, s.name, filled);
@@ -801,7 +831,7 @@ function DashRota({ onNewTeam }) {
       if (s.id === svcId) setAssign(filled);
     }
     if (lost) { setFlash(schNoKey()); setTimeout(() => setFlash(''), 4000); return; }
-    const madeLead = `Created + filled ${ensured.length} service${ensured.length > 1 ? 's' : ''}`;
+    const madeLead = `${createCopies ? 'Created + filled' : 'Filled the gaps on'} ${ensured.length} service${ensured.length > 1 ? 's' : ''}`;
     if (unasked) { setFlash(unaskedFlash(madeLead, unasked, triedAsks, 'Open each service and press Publish')); setTimeout(() => setFlash(''), 6000); return; }
     if (heldAsks.size) { setFlash(heldFlash(madeLead, heldAsks.size, 'Open each service and press Publish')); setTimeout(() => setFlash(''), 6000); return; }
     setFlash(madeLead); setTimeout(() => setFlash(''), 2800);
@@ -875,10 +905,27 @@ function DashRota({ onNewTeam }) {
               {fillMenu ? (
                 <React.Fragment>
                   <div onClick={() => setFillMenu(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
-                  <div style={{ position: 'absolute', top: '110%', right: 0, zIndex: 41, width: 232, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 6 }}>
-                    {[['This service', () => { setFillMenu(false); autoFill(); }, 'Fill the gaps on this service only'],
-                      ['Create + fill this month', () => { setFillMenu(false); if (window.confirm('Create weekly services for the next ~4 weeks and auto-fill them? This publishes them and asks the people assigned to serve.')) autoFillAhead(1); }, 'Add weekly services for ~4 weeks and fill them'],
-                      ['Create + fill this quarter', () => { setFillMenu(false); if (window.confirm('Create weekly services for the next ~3 months (around 13) and auto-fill them? This publishes them and asks everyone assigned to serve.')) autoFillAhead(3); }, 'Add weekly services for ~3 months and fill them']].map(([t, go, s]) => (
+                  <div style={{ position: 'absolute', top: '110%', right: 0, zIndex: 41, width: 292, maxWidth: '86vw', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 6 }}>
+                    {/* SAY WHAT EACH ENTRY DOES, AND NAME THE SERVICE IT DOES IT TO. The two "Create + fill" entries
+                        cloned whichever service was on screen into a weekly series, and said so only as "weekly"
+                        inside a confirm box — so a one-off (a Christmas service) could turn into a quarter of
+                        weekly services (sim 2026-10-02, item 33). There are now two kinds of entry and the labels
+                        keep them apart: FILL fills gaps on services that already exist and creates nothing; ADD
+                        WEEKLY COPIES creates new ones from the service on screen. */}
+                    {(() => {
+                      const when = schParts(svc.date).dow + ' ' + schParts(svc.date).day + ' ' + schParts(svc.date).mon;
+                      const nm = svc.name || 'this service';
+                      const span = (m) => { const until = schAddMonths(svc.date, m); return { until, existing: sortedSvcs.filter(x => x.date >= svc.date && x.date <= until).length, copies: schGenDates(svc.date, 'weekly', until).length }; };
+                      const entries = [['This service only', () => { setFillMenu(false); autoFill(); }, 'Fill the gaps on ' + nm + ', ' + when]];
+                      [[1, 'this month', '~4 weeks'], [3, 'this quarter', '~3 months']].forEach(([m, lbl, long]) => {
+                        const sp = span(m);
+                        entries.push(['Fill existing services — ' + lbl, () => { setFillMenu(false); if (window.confirm('Fill the gaps on the ' + sp.existing + ' service' + (sp.existing === 1 ? '' : 's') + ' already on the calendar over the next ' + long + ', starting ' + when + '? This creates nothing new. It publishes each rota and asks the people assigned to serve.')) autoFillAhead(m, { existingOnly: true }); },
+                          'The ' + sp.existing + ' service' + (sp.existing === 1 ? '' : 's') + ' already on the calendar. Creates nothing']);
+                        entries.push(['Add weekly copies — ' + lbl, () => { setFillMenu(false); if (window.confirm('Add a copy of “' + nm + '” (' + (svc.time || '') + ') EVERY WEEK from ' + when + ' for the next ' + long + ' — ' + sp.copies + ' services in all, any already on the calendar kept — and fill them? This publishes them and asks the people assigned to serve.')) autoFillAhead(m); },
+                          'Repeats “' + nm + '” every week — adds up to ' + sp.copies + ' services']);
+                      });
+                      return entries;
+                    })().map(([t, go, s]) => (
                       <button key={t} onClick={go} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '9px 11px', borderRadius: 9, border: 'none', background: 'transparent', cursor: 'pointer', fontFamily: 'var(--font-ui)' }} onMouseDown={e => e.preventDefault()}>
                         <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--ink)' }}>{t}</div>
                         <div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>{s}</div>

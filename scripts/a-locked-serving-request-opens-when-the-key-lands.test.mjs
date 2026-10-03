@@ -401,7 +401,7 @@ function publishers(asked) {
     ${st(SCHED, 'const unaskedFlash = (lead, failed, tried, retry) =>', 'stew-schedule.jsx')}
     ${st(SCHED, 'const publish = async () =>', 'stew-schedule.jsx')}
     ${st(SCHED, 'const rotatePods = (team) =>', 'stew-schedule.jsx')}
-    ${st(SCHED, 'const autoFillAhead = async (months) =>', 'stew-schedule.jsx')}
+    ${st(SCHED, 'const autoFillAhead = async (months, opts) =>', 'stew-schedule.jsx')}
     return { publish, rotatePods, autoFillAhead };`;
   return { ...new Function(...names, body)(...names.map(n => world[n])), flashes };
 }
