@@ -14,6 +14,13 @@ const ROTA_VIS_LABEL = { church: 'Everyone', team: 'Serving teams', stewards: 'S
 // hour of arranging to a mis-click on the sidebar (sim 2026-10-02 #57). This holds the drafts for as long as the
 // console page stays open, per church. It is memory only: a reload still clears it (a draft names people, and
 // writing it to disk is a different decision), and Publish is still the only thing that tells anybody anything.
+// THE TIME A CHURCH ACTUALLY MEETS AT, remembered across New event forms (sim 2026-10-02 #50: every monthly event
+// came out at 19:30 whatever the church does, and the fix was editing each date). The form opened at a fixed 19:30;
+// it now opens at the time this console last saved an event with. A stored value that is not HH:MM is ignored.
+const SCH_EVENT_TIME_KEY = 'trinityone.steward.eventTime';
+function schLastEventTime() {
+  try { const v = localStorage.getItem(SCH_EVENT_TIME_KEY); return /^\d{2}:\d{2}$/.test(v || '') ? v : '19:30'; } catch (e) { return '19:30'; }
+}
 const SCH_DRAFT_STORE = {};   // church pubkey -> { svcId: assignMap }
 const schDraftChurch = () => String((window.Steward && window.Steward.pubkey) || '');
 function schDate(s) { try { return new Date(s + 'T00:00'); } catch { return new Date(); } }
@@ -1063,7 +1070,7 @@ function SchEventModal({ day, onClose }) {
   const existingEvents = window.useStewardEvents ? window.useStewardEvents() : [];   // to gently warn on a same-time clash
   const [title, setTitle] = useSch('');
   const [date, setDate] = useSch(day || '');
-  const [time, setTime] = useSch('19:30');
+  const [time, setTime] = useSch(schLastEventTime);
   const [where, setWhere] = useSch('');
   const [blurb, setBlurb] = useSch('');
   const [accent, setAccent] = useSch('var(--clay)');
@@ -1127,6 +1134,7 @@ function SchEventModal({ day, onClose }) {
     }
     setBusy(false);
     if (out.some(r => r == null)) { setErr(schNoKey()); return; }
+    try { if (/^\d{2}:\d{2}$/.test(time || '')) localStorage.setItem(SCH_EVENT_TIME_KEY, time); } catch (e) {}   // next form opens at this time
     onClose();
   };
   return (
@@ -1161,6 +1169,9 @@ function SchEventModal({ day, onClose }) {
         <div style={{ flex: 1 }}><div style={schLbl}>Date</div><input aria-label="Date" type="date" value={date} max={SCH_MAX_DATE} onChange={e => setDate(e.target.value)} style={schFld} /></div>
         <div style={{ width: 130 }}><div style={schLbl}>Time</div><input aria-label="Time" type="time" value={time} onChange={e => setTime(e.target.value)} style={schFld} /></div>
       </div>
+      {/* A REPEAT PUBLISHES ONE EVENT PER DATE, ALL AT THIS ONE TIME - and nothing said so, so a steward who left the
+          default found out by editing each date afterwards (sim 2026-10-02 #50). */}
+      {planned.length > 1 ? <div role="status" style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 6, lineHeight: 1.4 }}>All {planned.length} dates use this time — set it here, once, before you add them.</div> : null}
       {clashes.length ? (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 9, padding: '9px 12px', borderRadius: 11, background: 'color-mix(in oklab, var(--gold) 12%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 30%, var(--line))', fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.4 }}>
           <Icon name="bell" size={15} color="#8a6717" style={{ flexShrink: 0 }} />
