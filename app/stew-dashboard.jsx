@@ -3479,7 +3479,17 @@ function NewGroupModal({ open, onClose }) {
   // loneliness"; Priya hesitated before posting a prayer request, having already said which hospital ward she
   // works on. Only an explicit `false` — a steward deliberately turning it off — leaves new rooms unsealed.
   // Owner's decision, 2026-08-22. Existing groups are untouched: this is the default for NEW ones.
-  const encByDefault = !church.features || church.features.encryptComms !== false;
+  //
+  // …BUT IT MUST AGREE WITH THE SWITCH THE STEWARD CAN SEE. A church that still has an unsealed room reads
+  // "Encrypt all comms: Off" on the Rules page, and a form that then ticked Encrypted by default contradicted
+  // it (sim 2026-10-02 #58). The predicate below is the Rules page switch's own (DashFeaturesPanel's `encOn`:
+  // the flag is not `false` AND no non-team room is unsealed); scripts/a-new-room-follows-the-encrypt-switch
+  // renders both and fails if they ever disagree. It is written out here rather than shared because the
+  // console tests slice components out of this file one at a time. This changes the DEFAULT only; the tick is
+  // still the steward's to set either way.
+  const allGroupsForDefault = window.useStewardGroups ? window.useStewardGroups() : [];
+  const encByDefault = (!church.features || church.features.encryptComms !== false)
+    && !(allGroupsForDefault || []).some(g => g && g.kind !== 'team' && !g.encrypted);
   React.useEffect(() => { if (open) { setName(''); setKind('group'); setSub(''); setInviteOnly(false); setEncrypted(encByDefault); setChildsafe(false); setSel(new Set()); setCategory(''); } }, [open]);
   // BEFORE THE EARLY RETURN, so hook order is stable — the same note the sibling modal below carries.
   // This sat AFTER `if (!open) return null;` for one commit, which is a conditional hook call: the modal is
