@@ -9,6 +9,42 @@ const HL_COLORS = [
   { id: 'clay', v: 'var(--hl-clay)' },
 ];
 
+// ── ONE NAME FOR A VERSE'S NOTE ──────────────────────────────────────────────────────────────────────────
+// A note is stored under a key. The verse card has always written "book.chap.verse" (Bible.refKey — "43.1.51"),
+// but the Study panel's own "New note" button wrote "John 1:1" and the panel only listed keys that began with
+// "John 1:" — so a note made on a verse never appeared in the panel (sim 2026-10-02, item 36), and a note made
+// in the panel never showed on its verse. BOTH forms are on real phones (a note is never deleted by an update),
+// so the READERS accept both and the WRITERS use the one canonical form. Nothing is migrated in bulk: an old
+// note is folded into its verse when it is read, and the old key is dropped only when that verse's note is
+// next saved, after its text has been carried over.
+//   noteKeyOf(ref)     "John 1:51" | "43.1.51" -> "43.1.51"; anything it cannot place comes back unchanged
+//   notesByVerse(raw)  { rawKey: text } -> { canonicalKey: text }. If a verse has a note under BOTH forms and
+//                      the texts differ, both are kept (canonical first) rather than one silently hiding the other
+//   legacyKeysFor(raw, key)  the raw keys that are the SAME verse as `key` but spelt the other way
+//   verseRefLabel(ref) "43.1.51" -> "John 1:51" for display; any other text is returned as it is
+function noteKeyOf(ref) {
+  const s = String(ref == null ? '' : ref);
+  if (/^\d+\.\d+\.\d+$/.test(s)) return s;
+  try { const p = Bible.parseRef(s); if (p && p.verse != null) return Bible.refKey(p, p.verse); } catch (e) {}
+  return s;
+}
+function notesByVerse(raw) {
+  const keys = Object.keys(raw || {}), out = {};
+  keys.forEach(k => { if (noteKeyOf(k) === k) out[k] = raw[k]; });
+  keys.forEach(k => {
+    const c = noteKeyOf(k); if (c === k) return;
+    if (!(c in out)) out[c] = raw[k];
+    else if (out[c] !== raw[k] && out[c].indexOf(raw[k]) < 0) out[c] = out[c] + '\n\n' + raw[k];
+  });
+  return out;
+}
+function legacyKeysFor(raw, key) { return Object.keys(raw || {}).filter(k => k !== key && noteKeyOf(k) === key); }
+function verseRefLabel(ref) {
+  const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(String(ref == null ? '' : ref));
+  if (!m) return ref;
+  try { return Bible.refLabel({ book: +m[1], chap: +m[2] }, +m[3]); } catch (e) { return ref; }
+}
+
 // A VERSE THAT OPENS WITH A HEADING. The engine's USFM parser hangs a heading (with its parallel reference, and a
 // Psalm's title) on the END of the verse before it — but at the start of a chapter there is none, so it goes at
 // the START of verse 1's html (the shipped BSB: 1,189 verses, John 1:1 and Psalm 3:1 among them). VerseRow printed
@@ -656,7 +692,17 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked }) {
   const [view, setView] = useS('commentary');   // 'commentary' | 'notes'
   const [comm, setComm] = useS([]);              // installed commentary modules + active-Bible footnotes
   const [composing, setComposing] = useS(false); const [cText, setCText] = useS(''); const [cVerse, setCVerse] = useS('1');
-  const saveNewNote = () => { const v = Math.max(1, parseInt(cVerse, 10) || 1); if (cText.trim()) ctx.setNote(label + ':' + v, cText.trim()); setComposing(false); setCText(''); };
+  // Written under the SAME key the verse card uses, so the note shows on its verse as well as in this list. A
+  // verse that already has a note gets this one added under it, never replaced by it.
+  const saveNewNote = () => {
+    const v = Math.max(1, parseInt(cVerse, 10) || 1);
+    if (cText.trim()) {
+      const k = Bible.refKey(loc, v), had = notesByVerse(ctx.notes)[k];
+      ctx.setNote(k, had ? had + '\n\n' + cText.trim() : cText.trim());
+      legacyKeysFor(ctx.notes, k).forEach(l => ctx.setNote(l, ''));
+    }
+    setComposing(false); setCText('');
+  };
   // A COMMENTARY REMOVED WHILE THIS PANEL IS OPEN HAS TO LEAVE IT. getCommentary() reads the engine's live
   // `commentaries` map, but the rows were copied into state by an effect that only re-ran on a new chapter
   // or a new translation — so a module uninstalled from the Library went on being read here, out of a copy,
@@ -675,10 +721,12 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked }) {
   // away mid-read (owner, on the phone, 2026-09-20). The reader's own page-turn swipe (onSwipeEnd below) has
   // always required the sideways distance to beat the vertical by SWIPE_DOMINANCE; this now asks the same.
   const sx = useR(null);
-  // the reader's own notes for this chapter (keys look like "John 1:4")
-  const prefix = label + ':';
-  const myNotes = Object.keys(ctx.notes || {}).filter(k => k.indexOf(prefix) === 0)
-    .map(k => ({ ref: k, v: parseInt(k.slice(prefix.length), 10) || 0, text: ctx.notes[k] }))
+  // the reader's own notes for this chapter. Keys are "book.chap.verse" (see noteKeyOf: older notes spelt
+  // "John 1:4" are folded in), shown as "John 1:4".
+  const prefix = loc.book + '.' + loc.chap + '.';
+  const chapNotes = notesByVerse(ctx.notes);
+  const myNotes = Object.keys(chapNotes).filter(k => k.indexOf(prefix) === 0 && /^\d+$/.test(k.slice(prefix.length)))
+    .map(k => ({ ref: k, v: parseInt(k.slice(prefix.length), 10) || 0, text: chapNotes[k] }))
     .sort((a, b) => a.v - b.v);
   const seg = (k, lbl) => (
     <button onClick={() => setView(k)} style={{ flex: 1, padding: '8px 10px', borderRadius: 10, border: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, background: view === k ? 'var(--clay)' : 'transparent', color: view === k ? '#fff' : 'var(--ink-2)' }}>{lbl}</button>
@@ -730,8 +778,8 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked }) {
                 <button onClick={() => { setComposing(true); setCVerse(String((loc && loc.verse) || 1)); }} style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, padding: '11px', borderRadius: 12, border: '1px dashed color-mix(in oklab, var(--clay) 45%, var(--line))', background: 'color-mix(in oklab, var(--clay) 5%, var(--surface))', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', marginBottom: 14 }}><Icon name="plus" size={16} color="var(--clay)" /> New note</button>
               )}
             {myNotes.length ? myNotes.map(n => (
-              <div key={n.ref} onClick={() => { onClose(); ctx.gotoRef && (() => { const l = window.Bible.parseRef(n.ref); if (l) ctx.gotoRef(l.book, l.chap, l.verse); })(); }} style={{ marginBottom: 12, padding: 13, borderRadius: 14, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', cursor: 'pointer' }}>
-                <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--clay)', marginBottom: 4 }}>{n.ref}</div>
+              <div key={n.ref} onClick={() => { onClose(); ctx.gotoRef && ctx.gotoRef(loc.book, loc.chap, n.v); }} style={{ marginBottom: 12, padding: 13, borderRadius: 14, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', cursor: 'pointer' }}>
+                <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--clay)', marginBottom: 4 }}>{label}:{n.v}</div>
                 <p style={{ fontFamily: 'var(--font-read)', fontSize: 15.5, lineHeight: 1.55, color: 'var(--ink)', margin: 0, textWrap: 'pretty' }}>{n.text}</p>
               </div>
             )) : (
@@ -848,6 +896,9 @@ function ReadScreen({ ctx }) {
   const audioOnThis = !!(audio.track && audio.track.id === ('bible:' + loc.book + ':' + loc.chap));
   const listenChapter = () => { if (audioOnThis) window.TrinityAudio.toggle(); else if (window.playBibleChapter) window.playBibleChapter(loc.book, loc.chap); };
   const keyOf = (v) => Bible.refKey(loc, v);
+  // every reader of a verse's note below goes through THIS map, so a note kept under the older "John 1:4" key
+  // is on its verse, in its editor and in Share note, exactly like one made from the verse card
+  const notes = notesByVerse(ctx.notes);
 
   const close = () => setSheet(null);
   // tap a verse to select (opens the action sheet); tap the same verse again to deselect.
@@ -916,7 +967,7 @@ function ReadScreen({ ctx }) {
     _bm: () => { const k = keyOf(sel0); ctx.toggleBookmark(k); ctx.toast(ctx.bookmarks.includes(k) ? 'Bookmark removed' : 'Bookmarked'); },
     _copy: () => { try { navigator.clipboard && navigator.clipboard.writeText(rangeRef + ' — ' + passageText()).catch(() => {}); } catch (e) {} close(); ctx.toast(multi > 1 ? 'Passage copied' : 'Copied to clipboard'); },
     _share: () => { close(); ctx.openShareSheet({ ref: rangeRef, text: passageText(), version }); },
-    _shareNote: () => { close(); ctx.openShareSheet({ type: 'note', ref: labelOf(sel0), text: selRow ? selRow.text : '', version, note: ctx.notes[keyOf(sel0)] || '' }); },
+    _shareNote: () => { close(); ctx.openShareSheet({ type: 'note', ref: labelOf(sel0), text: selRow ? selRow.text : '', version, note: notes[keyOf(sel0)] || '' }); },
     // GROW THE PASSAGE ONE VERSE AT A TIME, from inside the sheet. There used to be TWO buttons here, "+
     // before" and "+ after", and the comment that lived on this line said they were needed because "the
     // backdrop blocks tapping more verses". That backdrop was removed on 2026-06-27 (6958ae7 made this sheet
@@ -1075,7 +1126,7 @@ function ReadScreen({ ctx }) {
                 const k = keyOf(row.v);
                 return (
                   <VerseRow key={row.v} n={row.v} html={row.html}
-                    hl={ctx.highlights[k]} note={ctx.notes[k]} bookmarked={ctx.bookmarks.includes(k)}
+                    hl={ctx.highlights[k]} note={notes[k]} bookmarked={ctx.bookmarks.includes(k)}
                     selected={selSorted.some(v => String(v) === String(row.v))} reading={narrateState !== 'idle' && String(narrateV) === String(row.v)} onSelect={selectVerse} onWord={openWord} />
                 );
               })}
@@ -1113,14 +1164,14 @@ function ReadScreen({ ctx }) {
       <ActionSheet label={rangeRef} multi={multi} ctx={sheetCtx} open={sheet === 'action'} onClose={close}
         curColor={passageKeys.length && passageKeys.every(k => ctx.highlights[k] === ctx.highlights[passageKeys[0]]) ? ctx.highlights[passageKeys[0]] : null}
         onColor={(c) => { passageKeys.forEach(k => ctx.setHighlight(k, c)); setSel([]); setCarry([]); setSheet(null); }}
-        bookmarked={ctx.bookmarks.includes(keyOf(sel0))} hasNote={!!ctx.notes[keyOf(sel0)]}
+        bookmarked={ctx.bookmarks.includes(keyOf(sel0))} hasNote={!!notes[keyOf(sel0)]}
         onNote={() => setSheet('note')} onCross={() => setSheet('cross')} onCommentary={() => { close(); setCommentaryOpen(true); }} />
       <WordStudySheet id={wordId} open={sheet === 'word'} onClose={close} onWord={pushWord} canBack={wordStack.length > 1} onBack={backWord} />
       <CrossRefSheet loc={loc} v={sel0} label={labelOf(sel0)} open={sheet === 'cross'} onClose={() => setSheet('action')} ctx={ctx} />
       {ctx.desktop ? null : <CommentaryEdge open={commentaryOpen} onToggle={() => setCommentaryOpen(o => !o)} />}
       {ctx.desktop ? null : <CommentaryPanel loc={loc} label={bname + ' ' + loc.chap} open={commentaryOpen} onClose={() => setCommentaryOpen(false)} ctx={ctx} />}
-      <NoteEditor label={labelOf(sel0)} open={sheet === 'note'} value={ctx.notes[keyOf(sel0)]} onClose={() => setSheet('action')}
-        onSave={(t) => { ctx.setNote(keyOf(sel0), t); setSheet('action'); ctx.toast('Note saved'); }} />
+      <NoteEditor label={labelOf(sel0)} open={sheet === 'note'} value={notes[keyOf(sel0)]} onClose={() => setSheet('action')}
+        onSave={(t) => { const k = keyOf(sel0); ctx.setNote(k, t); legacyKeysFor(ctx.notes, k).forEach(l => ctx.setNote(l, '')); setSheet('action'); ctx.toast('Note saved'); }} />
       <VersionSheet open={sheet === 'version'} onClose={close} version={version} ctx={ctx} onPick={(k) => { ctx.setVersion(k); close(); }} onAdd={() => { close(); ctx.addModule(); }} />
       <SettingsSheet open={sheet === 'settings'} onClose={close} scale={scale} setScale={setScale}
         serif={serif} setSerif={setSerif} showStrongs={showStrongs} setShowStrongs={setShowStrongs} ctx={ctx} />
@@ -1153,4 +1204,4 @@ const navBtnStyle = {
   cursor: 'pointer', color: 'var(--ink-2)', fontWeight: 600, fontSize: 14, fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)',
 };
 
-Object.assign(window, { ReadScreen });
+Object.assign(window, { ReadScreen, verseRefLabel });

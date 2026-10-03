@@ -651,7 +651,7 @@ function CollectionView({ coll, open, onClose, ctx }) {
                     {isXref ? <Icon name="link" size={14} color="var(--clay)" /> : null}
                     {coll.id === 'bookmarks' ? <Icon name="bookmark" size={13} color="var(--clay)" fill /> : null}
                     {isPrayer ? <Icon name="pray" size={14} color="var(--clay)" /> : null}
-                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{isPrayer ? it.who : it.ref}{isPrayer && it.answered ? ' · answered 🙏' : ''}</span>
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{isPrayer ? it.who : (window.verseRefLabel ? window.verseRefLabel(it.ref) : it.ref)}{isPrayer && it.answered ? ' · answered 🙏' : ''}</span>
                   </span>
                   {isNotes || isPrayer ? <span style={{ fontSize: 12, color: 'var(--ink-3)', flexShrink: 0 }}>{it.date}</span> : (!owned ? <Icon name="chevR" size={16} color="var(--ink-3)" /> : null)}
                 </div>
