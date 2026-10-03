@@ -8368,9 +8368,69 @@ window.Steward = {
     catch (e) { clr = null; }
     if (!clr || clr.failed > 0 || clr.unverified) failed.push('clearance');
 
+    // (5) THE TEAMS AND THE ROTA. Reported, never fatal, for the same reason as (4): the seat has moved.
+    //
+    // A team's roster names its people by PUBKEY (roster:<team>.people[].pub), and so does every filled rota slot
+    // (rota:<service>.assign['<team>::<role>'].pub). Neither is touched by anything above, so after a Reconnect the
+    // new phone's Serving tab said "not on a serving team" while the Rota tab still listed them, under a key
+    // nobody holds any more (sim item 21, 2026-10-02). This is a KEY SWAP, not a removal: the person stays on the
+    // team and in the slot, with their name and their place, and only the key changes.
+    //
+    // The inputs are what the console is looking at (`o.rosters`, `o.rotas`, as subscribeRosters / subscribeRotas
+    // hand them over), exactly as the safeguarding lists are handed in above; with none given, nothing here runs.
+    // A document this console could not open (`_locked`, or no `people`/`assign`) is skipped, never rewritten from
+    // an empty guess. Every write goes through `w`, so a same-second tie gets its one retry.
+    //
+    // If the new key is ALREADY on a team (a steward added them by hand first) the old row is dropped instead of
+    // swapped, and any pod slot that named the old row now names the surviving one, so there is never a person
+    // listed twice and no pod is left pointing at nobody.
+    const isOld = (x) => !!x && String(x.pub || '').toLowerCase() === oldH;
+    let teamsMoved = 0, slotsMoved = 0, careTeamPeople = null;
+    for (const r of (Array.isArray(o.rosters) ? o.rosters : [])) {
+      if (!r || r._locked || !r.team || !Array.isArray(r.people) || !r.people.some(isOld)) continue;
+      const surviving = r.people.find(x => x && String(x.pub || '').toLowerCase() === newH);
+      let people, pods = Array.isArray(r.pods) ? r.pods : [];
+      if (surviving) {
+        const goneIds = new Set(r.people.filter(isOld).map(x => x.id));
+        people = r.people.filter(x => !isOld(x));
+        pods = pods.map(pd => {
+          const fills = {};
+          for (const k of Object.keys((pd && pd.fills) || {})) fills[k] = goneIds.has(pd.fills[k]) ? surviving.id : pd.fills[k];
+          return { ...pd, fills };
+        });
+      } else {
+        people = r.people.map(x => isOld(x) ? { ...x, pub: newH } : x);
+      }
+      let saved = null;
+      try { saved = await w(() => window.Steward.publishRoster(r.team, { roles: r.roles || [], people, pods })); } catch (e) { saved = null; }
+      if (saved) { teamsMoved++; if (o.careTeamId && r.team === o.careTeamId) careTeamPeople = people; } else failed.push('team:' + r.team);
+    }
+    // The care team is TWO documents: the roster above (what the relay reads to grant care access) and
+    // careteam:<church>, the list a member's request for help is sealed to. The second is built from the first, so
+    // it is republished whenever the care team's roster moved -- otherwise a reconnected carer is on the team and
+    // never receives a request.
+    if (careTeamPeople) {
+      let ok = null;
+      try {
+        const SM = window.StewardMeals;
+        if (SM && SM.publishCareTeam) ok = await w(() => SM.publishCareTeam([...new Set(careTeamPeople.map(x => x && x.pub).filter(Boolean))]));
+      } catch (e) { ok = null; }
+      if (!ok) failed.push('careteam');
+    }
+    for (const r of (Array.isArray(o.rotas) ? o.rotas : [])) {
+      if (!r || r._locked || !r.service || !r.assign || typeof r.assign !== 'object') continue;
+      if (!Object.keys(r.assign).some(k => isOld(r.assign[k]))) continue;
+      const assign = {};
+      for (const k of Object.keys(r.assign)) assign[k] = isOld(r.assign[k]) ? { ...r.assign[k], pub: newH } : r.assign[k];
+      let saved = null;
+      try { saved = await w(() => window.Steward.publishRota({ service: r.service, published: !!r.published, assign })); } catch (e) { saved = null; }
+      if (saved) slotsMoved++; else failed.push('rota:' + r.service);
+    }
+
     return {
       minorCarried: wasMinor, clearedCarried: wasCleared, guardiansCarried: !!nextG,
       blockedOld: !!o.blockOld,   // only reachable if the block LANDED — a refusal threw above
+      teamsMoved, rotasMoved: slotsMoved,
       failed,
     };
   },

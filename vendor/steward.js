@@ -21722,12 +21722,66 @@ zoo`.split("\n");
         clr = null;
       }
       if (!clr || clr.failed > 0 || clr.unverified) failed.push("clearance");
+      const isOld = (x) => !!x && String(x.pub || "").toLowerCase() === oldH;
+      let teamsMoved = 0, slotsMoved = 0, careTeamPeople = null;
+      for (const r of Array.isArray(o.rosters) ? o.rosters : []) {
+        if (!r || r._locked || !r.team || !Array.isArray(r.people) || !r.people.some(isOld)) continue;
+        const surviving = r.people.find((x) => x && String(x.pub || "").toLowerCase() === newH);
+        let people, pods = Array.isArray(r.pods) ? r.pods : [];
+        if (surviving) {
+          const goneIds = new Set(r.people.filter(isOld).map((x) => x.id));
+          people = r.people.filter((x) => !isOld(x));
+          pods = pods.map((pd) => {
+            const fills = {};
+            for (const k of Object.keys(pd && pd.fills || {})) fills[k] = goneIds.has(pd.fills[k]) ? surviving.id : pd.fills[k];
+            return { ...pd, fills };
+          });
+        } else {
+          people = r.people.map((x) => isOld(x) ? { ...x, pub: newH } : x);
+        }
+        let saved = null;
+        try {
+          saved = await w(() => window.Steward.publishRoster(r.team, { roles: r.roles || [], people, pods }));
+        } catch (e) {
+          saved = null;
+        }
+        if (saved) {
+          teamsMoved++;
+          if (o.careTeamId && r.team === o.careTeamId) careTeamPeople = people;
+        } else failed.push("team:" + r.team);
+      }
+      if (careTeamPeople) {
+        let ok = null;
+        try {
+          const SM = window.StewardMeals;
+          if (SM && SM.publishCareTeam) ok = await w(() => SM.publishCareTeam([...new Set(careTeamPeople.map((x) => x && x.pub).filter(Boolean))]));
+        } catch (e) {
+          ok = null;
+        }
+        if (!ok) failed.push("careteam");
+      }
+      for (const r of Array.isArray(o.rotas) ? o.rotas : []) {
+        if (!r || r._locked || !r.service || !r.assign || typeof r.assign !== "object") continue;
+        if (!Object.keys(r.assign).some((k) => isOld(r.assign[k]))) continue;
+        const assign = {};
+        for (const k of Object.keys(r.assign)) assign[k] = isOld(r.assign[k]) ? { ...r.assign[k], pub: newH } : r.assign[k];
+        let saved = null;
+        try {
+          saved = await w(() => window.Steward.publishRota({ service: r.service, published: !!r.published, assign }));
+        } catch (e) {
+          saved = null;
+        }
+        if (saved) slotsMoved++;
+        else failed.push("rota:" + r.service);
+      }
       return {
         minorCarried: wasMinor,
         clearedCarried: wasCleared,
         guardiansCarried: !!nextG,
         blockedOld: !!o.blockOld,
         // only reachable if the block LANDED — a refusal threw above
+        teamsMoved,
+        rotasMoved: slotsMoved,
         failed
       };
     },
