@@ -87,7 +87,12 @@ function booksEntryView(book, e) {
   const a = book.accounts.get(other.account);
   const isReversal = e.reverses != null;
   const wasReversed = !isReversal && book.journal.some(j => j.reverses === e.seq);
-  return { date: e.date, memo: e.memo, category: a ? a.name : other.account, fund: other.fund, amount: other.amount, inflow: !!(a && a.type === 'income'), isReversal, wasReversed };
+  // INFLOW IS THE DIRECTION OF THE POSTING, NOT THE KIND OF ACCOUNT. It was `a.type === 'income'`, so the reversal of a
+  // £100 gift (which DEBITS the income account to take it back out) still read "+£100" in green: a deduction shown as
+  // a receipt (sim round 2 finding 61). A credit to income/expense is money in (a gift; an expense taken back); a
+  // debit is money out (a payment; a gift reversed).
+  const inflow = !!(a && (a.type === 'income' || a.type === 'expense') && other.dir === 'cr');
+  return { date: e.date, memo: e.memo, category: a ? a.name : other.account, fund: other.fund, amount: other.amount, inflow, isReversal, wasReversed };
 }
 
 const bkFld = { width: '100%', boxSizing: 'border-box', height: 44, padding: '0 13px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', outline: 'none', fontSize: 14.5, color: 'var(--ink)', fontFamily: 'var(--font-ui)' };
@@ -268,7 +273,13 @@ function FinanceImport({ book, F, onPost, onClose }) {
     if (!picks.length) { setErr('Select at least one transaction to import.'); return; }
     setErr(''); setPosting(true);
     let res = null;
-    try { res = await onPost(picks); } catch (e) { res = null; }
+    // WHAT THIS SCREEN ALREADY SET AGAINST THE BOOK. A line flagged `dup` was matched to an entry the book holds
+    // (toReview), and is not in `picks`. importStatement must not count that same entry a second time against
+    // a pick that shares its key — that dropped a real second payment with no message (sim round 2, finding 16:
+    // a £45 cleaner imported before, two on the next statement, one posted, books £45 short of the bank).
+    const accounted = new Map();
+    lines.forEach((l, i) => { const r = rowState[i]; if (r && r.dup && l && l.key) accounted.set(l.key, (accounted.get(l.key) || 0) + 1); });
+    try { res = await onPost(picks, accounted); } catch (e) { res = null; }
     setPosting(false);
     const failed = (res && res.failed) || [];
     if (res && !failed.length) { onClose(); return; }
@@ -747,7 +758,7 @@ function DashFinanceBook() {
   // Slower on a long statement; it is the only order the relay will accept, so the parallel version was not
   // faster, it was wrong. The de-dup guard is re-read from the book on EVERY call rather than trusting the
   // modal's flags, because that is the layer a stale screen cannot get past.
-  const importStatement = async (picks) => {
+  const importStatement = async (picks, accounted) => {
     const b = bookRef.current;
     // COUNT, DO NOT ASK "IS THIS KEY PRESENT". Audit #5, and it is the SAME £45-becomes-£25 defect one tap
     // further on. `lineKey` is date|amount|description, so two identical payments on one day share a key K.
@@ -761,6 +772,12 @@ function DashFinanceBook() {
     // file (2 held, 2 offered -> post 0), and a retry after a partial failure (1 held, 2 offered -> post 1).
     const held = new Map();
     for (const k of (b.journal || [])) if (k.importKey) held.set(k.importKey, (held.get(k.importKey) || 0) + 1);
+    // ...MINUS THE ONES THE SCREEN ALREADY USED UP. `picks` leaves out the lines the review flagged as already
+    // imported, so each of those has consumed one held entry of its key. Counting it again here made the guard
+    // see "1 held" for a pick that was the SECOND of two identical lines and skip it: the review ticked it,
+    // "Post 1 transaction" closed with no message, and the payment never reached the books. `accounted` is
+    // key -> how many lines of that key the screen set against the book (absent: nothing, the old behaviour).
+    if (accounted) for (const [k, n] of accounted) held.set(k, Math.max(0, (held.get(k) || 0) - n));
     const failed = [], skipped = [];
     let posted = 0;
     for (let i = 0; i < picks.length; i++) {
@@ -796,8 +813,8 @@ function DashFinanceBook() {
   const cash = bank ? bank.debit - bank.credit : 0;
   const recent = book.journal.slice().reverse().slice(0, 16);
   const exportCsv = async () => {
-    const rows = [['seq', 'date', 'memo', 'account', 'fund', 'debit', 'credit']];
-    for (const e of book.journal) for (const p of e.postings) rows.push([e.seq, e.date, e.memo, (book.accounts.get(p.account) || {}).name || p.account, p.fund || '', p.dir === 'dr' ? p.amount : '', p.dir === 'cr' ? p.amount : '']);
+    // MAJOR UNITS (pounds), not the ledger's integer pence — F.journalCsvRows does the conversion (sim 2026-10-02 #62).
+    const rows = F.journalCsvRows(book);
     // SECURITY-AUDIT-2026-07-06 H6: CSV formula-injection guard. `memo` carries bank-statement descriptions
     // imported verbatim (attacker-controllable via a payment reference). RFC-4180 quoting does NOT stop a cell
     // that STARTS with = + - @ (or tab/CR) from being run as a formula when the treasurer opens the file in

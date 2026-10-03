@@ -35,7 +35,7 @@ function lift(anchor, what) {
   }
   throw new Error('unbalanced braces slicing ' + what);
 }
-const liftImportStatement = () => lift('const importStatement = async (picks) => {', 'importStatement');
+const liftImportStatement = () => lift('const importStatement = async (picks, accounted) => {', 'importStatement');
 // record() and _dropIfRefused are lifted too, rather than stubbed. A hand-written _dropIfRefused would prove
 // that dropFrom works and say nothing about whether record() CALLS it — which is the whole claim, and is the
 // trap this codebase keeps falling into. Measured: with record()'s rollback deleted, the stubbed version of
