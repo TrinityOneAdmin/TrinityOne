@@ -11,13 +11,39 @@ function relTimeNotif(ts) {
   return Math.floor(s / 86400) + 'd';
 }
 
-const NOTIF_ICON = { message: 'chat', prayer: 'pray', giving: 'bolt', amen: 'heart', notice: 'bell', plan: 'plans', network: 'globe', devotional: 'read', event: 'calendar', sermon: 'play' };
-const NOTIF_ACCENT = { network: 'var(--clay)', notice: 'var(--clay)', devotional: 'var(--sage)', plan: 'var(--gold)', event: 'var(--clay)' };
+const NOTIF_ICON = { message: 'chat', prayer: 'pray', giving: 'bolt', amen: 'heart', notice: 'bell', plan: 'plans', network: 'globe', devotional: 'read', event: 'calendar', sermon: 'play', serving: 'hand' };
+const NOTIF_ACCENT = { network: 'var(--clay)', notice: 'var(--clay)', devotional: 'var(--sage)', plan: 'var(--gold)', event: 'var(--clay)', serving: 'var(--sage)' };
+
+// WHEN IS IT, NOT ONLY WHEN DID IT ARRIVE. Sim round 2026-10-02 #49: four notifications reading "New event ·
+// ZZ Prayer breakfast" with nothing to tell them apart - a monthly event publishes one event per date, and the
+// row said only how long ago it was published ("2h"). The row now also says the day (and time) the thing is on.
+// A REPEATING meeting (`recur`) is one event whose `date` is only the day the series started, so it says
+// nothing rather than a date that is wrong for every week after the first.
+const NOTIF_DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const NOTIF_MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function notifWhen(n) {
+  const o = (n && (n.event || n.req)) || null;
+  if (!o || o.recur || !/^\d{4}-\d{2}-\d{2}$/.test(String(o.date || ''))) return '';
+  const d = new Date(o.date + 'T00:00:00');
+  if (isNaN(d)) return '';
+  return NOTIF_DOW[d.getDay()] + ' ' + d.getDate() + ' ' + NOTIF_MON[d.getMonth()] + (/^\d{1,2}:\d{2}$/.test(String(o.time || '')) ? ' · ' + o.time : '');
+}
+// "You've been put on the rota" - the member's own serving requests, as notifications. Until now a member was
+// asked to serve and the bell stayed silent (sim #49). Only requests this phone can read and that are still
+// ahead of today; the request already carries role, team, date and the time it was sent.
+function notifServingItems(reqs, todayIso, churchName) {
+  const out = [];
+  (reqs || []).forEach(r => {
+    if (!r || r._locked || r._unreadable || !r.id || !r.ts || !r.date || String(r.date) < todayIso) return;
+    out.push({ id: 'req:' + r.id, kind: 'serving', group: churchName, text: 'Asked you to serve' + (r.role ? ' · ' + r.role : '') + (r.teamName ? ' · ' + r.teamName : ''), ts: r.ts, go: 'serving', req: r });
+  });
+  return out;
+}
 
 function NotificationsScreen({ open, onClose, ctx }) {
   const [detail, setDetail] = useX(null);   // a notification opened for its full text
   const netSeen = (() => { try { return Number(localStorage.getItem('trinityone.net-seen') || 0); } catch { return 0; } })();
-  const items = (ctx.notifications || []).map(n => ({ ...n, time: relTimeNotif(n.ts), unread: (n.ts || 0) > netSeen, accent: NOTIF_ACCENT[n.kind] || 'var(--clay)' }));
+  const items = (ctx.notifications || []).map(n => ({ ...n, time: relTimeNotif(n.ts), when: notifWhen(n), unread: (n.ts || 0) > netSeen, accent: NOTIF_ACCENT[n.kind] || 'var(--clay)' }));
   // mark seen when this screen opens
   React.useEffect(() => { if (open && ctx.markNetSeen) ctx.markNetSeen(); }, [open]);
   const onRowClick = (n) => {
@@ -102,6 +128,7 @@ function NotifRow({ n, ic, onClick }) {
         <p style={{ margin: '3px 0 0', fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.4, textWrap: 'pretty', overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
           <b style={{ color: 'var(--ink)', fontWeight: 700 }}>{n.who}</b> {n.text}
         </p>
+        {n.when ? <div style={{ marginTop: 3, fontSize: 12.5, color: 'var(--ink-3)', fontWeight: 600 }}>{n.when}</div> : null}
       </div>
       {n.unread ? <div style={{ width: 8, height: 8, borderRadius: 999, background: 'var(--clay)', flexShrink: 0, marginTop: 6 }} /> : null}
     </button>
