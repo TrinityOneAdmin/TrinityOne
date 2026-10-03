@@ -59,7 +59,9 @@ function makeFollowEnv(checkResult) {
     subscribeChurchProfile: () => () => {},
     subscribeChurchRelays: () => () => {},
   };
-  return { churches, setChurches, setActiveChurch, lsSet, toast, Fellowship, calls };
+  // the React.useRef(new Set()) app.jsx declares just above followChurch (sim item 20)
+  const unconfirmed = { current: new Set() };
+  return { churches, setChurches, setActiveChurch, lsSet, toast, Fellowship, calls, unconfirmed };
 }
 
 test('POINT OF USE: followChurch calls checkChurch and announces membership only when "church" (executed)', async () => {
@@ -67,10 +69,10 @@ test('POINT OF USE: followChurch calls checkChurch and announces membership only
   const env = makeFollowEnv('church');
   // Build the callable. The arrow function closes over churches, setChurches, setActiveChurch, lsSet, toast,
   // and reads window.Fellowship. We inject them all.
-  const fn = new Function('churches', 'setChurches', 'setActiveChurch', 'lsSet', 'toast', 'window', 'setTimeout',
+  const fn = new Function('churches', 'setChurches', 'setActiveChurch', 'lsSet', 'toast', 'window', 'setTimeout', 'unconfirmedChurches',
     body + '\nreturn followChurch;'
   )(env.churches, env.setChurches, env.setActiveChurch, env.lsSet, env.toast,
-    { Fellowship: env.Fellowship, addEventListener: () => {}, removeEventListener: () => {} }, setTimeout);
+    { Fellowship: env.Fellowship, addEventListener: () => {}, removeEventListener: () => {} }, setTimeout, env.unconfirmed);
 
   // A valid npub that checkChurch says IS a church → announceMembership must fire
   fn('npub1gxa6a0eaga9hy2mpjk6gxpxaxvywwvezrnsrgxennkfhwru7ngnsevqeyr');
@@ -86,10 +88,10 @@ test('POINT OF USE: followChurch calls checkChurch and announces membership only
 test('POINT OF USE: followChurch does NOT announce membership when checkChurch returns "not-found" (executed)', async () => {
   const body = liftFollowChurch(APPJSX);
   const env = makeFollowEnv('not-found');
-  const fn = new Function('churches', 'setChurches', 'setActiveChurch', 'lsSet', 'toast', 'window', 'setTimeout',
+  const fn = new Function('churches', 'setChurches', 'setActiveChurch', 'lsSet', 'toast', 'window', 'setTimeout', 'unconfirmedChurches',
     body + '\nreturn followChurch;'
   )(env.churches, env.setChurches, env.setActiveChurch, env.lsSet, env.toast,
-    { Fellowship: env.Fellowship, addEventListener: () => {}, removeEventListener: () => {} }, setTimeout);
+    { Fellowship: env.Fellowship, addEventListener: () => {}, removeEventListener: () => {} }, setTimeout, env.unconfirmed);
 
   fn('npub1gxa6a0eaga9hy2mpjk6gxpxaxvywwvezrnsrgxennkfhwru7ngnsevqeyr');
   await new Promise(r => setTimeout(r, 50));
@@ -106,10 +108,10 @@ test('POINT OF USE: followChurch does NOT announce membership when checkChurch r
 test('POINT OF USE: followChurch removes the church entry on "not-found" (executed)', async () => {
   const body = liftFollowChurch(APPJSX);
   const env = makeFollowEnv('not-found');
-  const fn = new Function('churches', 'setChurches', 'setActiveChurch', 'lsSet', 'toast', 'window', 'setTimeout',
+  const fn = new Function('churches', 'setChurches', 'setActiveChurch', 'lsSet', 'toast', 'window', 'setTimeout', 'unconfirmedChurches',
     body + '\nreturn followChurch;'
   )(env.churches, env.setChurches, env.setActiveChurch, env.lsSet, env.toast,
-    { Fellowship: env.Fellowship, addEventListener: () => {}, removeEventListener: () => {} }, setTimeout);
+    { Fellowship: env.Fellowship, addEventListener: () => {}, removeEventListener: () => {} }, setTimeout, env.unconfirmed);
 
   fn('npub1gxa6a0eaga9hy2mpjk6gxpxaxvywwvezrnsrgxennkfhwru7ngnsevqeyr');
   await new Promise(r => setTimeout(r, 50));
@@ -133,10 +135,10 @@ test('POINT OF USE: followChurch waits for the invite relay to be proved before 
   env.Fellowship.adoptInviteRelays = () => new Promise(r => { resolveAdoption = () => { adopted = true; r({ added: ['wss://box'] }); }; });
   const seenAtCheck = [];
   env.Fellowship.checkChurch = async () => { seenAtCheck.push(adopted); env.calls.checkChurch++; return 'church'; };
-  const fn = new Function('churches', 'setChurches', 'setActiveChurch', 'lsSet', 'toast', 'window', 'setTimeout',
+  const fn = new Function('churches', 'setChurches', 'setActiveChurch', 'lsSet', 'toast', 'window', 'setTimeout', 'unconfirmedChurches',
     body + '\nreturn followChurch;'
   )(env.churches, env.setChurches, env.setActiveChurch, env.lsSet, env.toast,
-    { Fellowship: env.Fellowship, addEventListener: () => {}, removeEventListener: () => {} }, setTimeout);
+    { Fellowship: env.Fellowship, addEventListener: () => {}, removeEventListener: () => {} }, setTimeout, env.unconfirmed);
 
   fn('npub1gxa6a0eaga9hy2mpjk6gxpxaxvywwvezrnsrgxennkfhwru7ngnsevqeyr?relay=wss://box');
   await new Promise(r => setTimeout(r, 50));
@@ -145,4 +147,63 @@ test('POINT OF USE: followChurch waits for the invite relay to be proved before 
   await new Promise(r => setTimeout(r, 50));
   assert.deepEqual(seenAtCheck, [true], 'the church check did not run once, after the invite relay was proved');
   assert.equal(env.calls.announceMembership, 1);
+});
+
+// ── SIM ITEM 20 (2026-10-02): the membership HEARTBEAT must not announce to a code whose check is still out ──
+//
+// followChurch makes the church ACTIVE before checkChurch answers, and app.jsx's heartbeat effect is keyed on the
+// active church, so it announced on the very render that followed. followChurch now records the code in
+// `unconfirmedChurches` (a ref) BEFORE it sets the active church, and the heartbeat stays out of anything in it.
+// These run the real followChurch and look at what is in that set at the moment the heartbeat would run.
+// (The heartbeat itself is driven in a real browser by scripts/a-church-code-check-sends-nothing.test.mjs.)
+const NPUB20 = 'npub1gxa6a0eaga9hy2mpjk6gxpxaxvywwvezrnsrgxennkfhwru7ngnsevqeyr';
+function liftWithGate(checkResult, { setTimeoutImpl = setTimeout, followed = [] } = {}) {
+  const body = liftFollowChurch(APPJSX);
+  const env = makeFollowEnv(checkResult);
+  followed.forEach(c => env.churches.push(c));
+  const atActive = [];   // what the set held when setActiveChurch ran -- i.e. when the heartbeat effect would next run
+  env.setActiveChurch = (fn) => { atActive.push(typeof fn === 'function' ? 'fn' : env.unconfirmed.current.has(fn)); };
+  const fn = new Function('churches', 'setChurches', 'setActiveChurch', 'lsSet', 'toast', 'window', 'setTimeout', 'unconfirmedChurches',
+    body + '\nreturn followChurch;'
+  )(env.churches, env.setChurches, env.setActiveChurch, env.lsSet, env.toast,
+    { Fellowship: env.Fellowship, addEventListener: () => {}, removeEventListener: () => {} }, setTimeoutImpl, env.unconfirmed);
+  return { fn, env, atActive };
+}
+const tick = (ms = 60) => new Promise(r => setTimeout(r, ms));
+
+test('POINT OF USE (item 20): the code is held back from the heartbeat the moment it becomes active, and released with an announce only when it IS a church (executed)', async () => {
+  let release; const gate = new Promise(r => { release = r; });
+  const { fn, env, atActive } = liftWithGate('church');
+  env.Fellowship.checkChurch = async () => { env.calls.checkChurch++; await gate; return 'church'; };
+  fn(NPUB20);
+  await tick();
+  assert.deepEqual(atActive, [true], 'the church was made active BEFORE it was marked unconfirmed -- the heartbeat would announce straight away');
+  assert.equal(env.unconfirmed.current.has(NPUB20), true, 'the code is not held back while the check is still out');
+  assert.equal(env.calls.announceMembership, 0, 'a membership was announced before checkChurch answered');
+  release(); await tick();
+  assert.equal(env.unconfirmed.current.has(NPUB20), false, 'a confirmed church is still held back from the heartbeat');
+  assert.equal(env.calls.announceMembership, 1);
+});
+
+test('POINT OF USE (item 20): a code that is not a church is released with NO announce (executed)', async () => {
+  const { fn, env } = liftWithGate('not-found');
+  fn(NPUB20); await tick();
+  assert.equal(env.unconfirmed.current.has(NPUB20), false, 'a dropped code is still in the held-back set');
+  assert.equal(env.calls.announceMembership, 0);
+});
+
+test('POINT OF USE (item 20): a relay that never answers is not "not found" -- after the retries the join is sent, once (executed)', async () => {
+  const { fn, env } = liftWithGate('unknown', { setTimeoutImpl: (f) => { Promise.resolve().then(f); } });
+  fn(NPUB20); await tick(120);
+  assert.equal(env.calls.checkChurch, 4, 'expected the first ask plus three retries');
+  assert.equal(env.calls.announceMembership, 1, 'a real church on a thin link never got its join request');
+  assert.equal(env.unconfirmed.current.has(NPUB20), false, 'the code is still held back after the retries ran out');
+  assert.deepEqual(env.calls.toast, [], 'an unanswered relay must never say "not found"');
+});
+
+test('POINT OF USE (item 20): a church this phone already follows is never held back (executed)', async () => {
+  const { fn, env, atActive } = liftWithGate('church', { followed: [{ id: NPUB20, npub: NPUB20 }] });
+  fn(NPUB20); await tick();
+  assert.deepEqual(atActive, [false], 'an already-followed church was marked unconfirmed -- its heartbeat would stop for no reason');
+  assert.equal(env.calls.checkChurch, 0);
 });
