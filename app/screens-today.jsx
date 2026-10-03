@@ -1264,7 +1264,7 @@ function SafetyDock({ ctx, onOpenToday }) {
   const [answered, setAnswered] = React.useState('');
   const [narrow, setNarrow] = React.useState(false);   // delivered, but not to the audience the check named
   const [dismissed, setDismissed] = React.useState(false);
-  const [sending, setSending] = React.useState(false);
+  const [sending, setSending] = React.useState('');   // '' | 'safe' | 'help' — WHICH reply is in flight, so only that button says Sending…
   const [err, setErr] = React.useState('');
   React.useEffect(() => {
     if (!ctx.church || !(window.Fellowship && window.Fellowship.subscribeSafetyCheck)) return;
@@ -1293,13 +1293,13 @@ function SafetyDock({ ctx, onOpenToday }) {
   // over someone's shoulder — which matters most to exactly the churches this feature exists for.
   const dismiss = () => { setDismissed(true); try { localStorage.setItem('trinityone.safetydockx.' + check.id, '1'); } catch (e) {} };
   const respond = async (s) => {
-    if (sending) return; setSending(true); setErr('');
+    if (sending) return; setSending(s); setErr('');
     // ⚠ markSafe ANSWERS FOUR WAYS NOW, AND `if (res)` WOULD BE WRONG — an object is truthy, so truth-testing
     // it marks a member safe over a send that failed. Read `res.ok`. (A truthy STRING would invert the same
     // way, which is why this is an object: it cannot be got wrong quietly.)
     let res = null;
     try { res = await window.Fellowship.markSafe(check, s, ''); } catch (e) {}
-    setSending(false);
+    setSending('');
     if (res && res.ok) { safetyAck(check.id, s); setAnswered(s); if (res.narrowed) setNarrow(true); }
     // NOBODY ANSWERED IN TIME IS NOT A FAILURE TO SEND. The reply is signed and on the wire and may already
     // be with the church. Telling someone in an emergency that nobody knows — when they do — is the worst
@@ -1336,8 +1336,8 @@ function SafetyDock({ ctx, onOpenToday }) {
         </div>
       ) : (
       <div style={{ display: 'flex', gap: 9, marginTop: 11 }}>
-        <button disabled={sending} onClick={() => respond('safe')} style={btn({ background: 'var(--sage, #4f7a5e)' })}>{sending ? 'Sending…' : 'I’m safe'}</button>
-        <button disabled={sending} onClick={() => respond('help')} style={btn({ background: 'var(--clay)' })}>{sending ? 'Sending…' : 'I need help'}</button>
+        <button disabled={sending} onClick={() => respond('safe')} style={btn({ background: 'var(--sage, #4f7a5e)' })}>{sending === 'safe' ? 'Sending…' : 'I’m safe'}</button>
+        <button disabled={sending} onClick={() => respond('help')} style={btn({ background: 'var(--clay)' })}>{sending === 'help' ? 'Sending…' : 'I need help'}</button>
       </div>
       )}
       {err ? <div style={{ fontSize: 12.5, color: 'var(--clay-deep, #b4462f)', fontWeight: 700, marginTop: 8 }}>{err}</div> : null}
@@ -1352,7 +1352,7 @@ function SafetyBanner({ ctx, persistent }) {
   const [check, setCheck] = React.useState(null);
   const [status, setStatus] = React.useState('');   // '' | 'safe' | 'help' (what I've told them)
   const [note, setNote] = React.useState('');
-  const [sending, setSending] = React.useState(false);
+  const [sending, setSending] = React.useState('');   // '' | 'safe' | 'help' — WHICH reply is in flight, so only that button says Sending…
   const [err, setErr] = React.useState('');   // delivery failed → retry prompt, never a false confirmation
   // The answered state is a MOMENT of confirmation, not a fixture: it used to sit at full height on Today for as
   // long as the check stayed open, pushing the day's content down long after it had said all it had to say. Show
@@ -1414,11 +1414,11 @@ function SafetyBanner({ ctx, persistent }) {
     );
   }
   const respond = async (s) => {
-    if (sending) return; setSending(true); setErr('');
+    if (sending) return; setSending(s); setErr('');
     // See the note on the dock's respond(): `res.ok`, never `if (res)`.
     let res = null;
     try { res = await window.Fellowship.markSafe(check, s, note); } catch (e) {}
-    setSending(false);
+    setSending('');
     // 'narrow' means delivered, but we could not resolve the audience the steward chose — so it reached
     // the church leader and not (yet) the team it was addressed to. Saying so is the whole point: what
     // this replaces reported a full delivery that never happened.
@@ -1490,8 +1490,8 @@ function SafetyBanner({ ctx, persistent }) {
       <div style={{ fontSize: 14.5, color: 'var(--ink)', marginTop: 5, lineHeight: 1.45 }}>{check.message || 'Are you safe?'}</div>
       <input value={note} onChange={e => setNote(e.target.value)} placeholder="Add a note (optional)" maxLength={240} style={{ width: '100%', boxSizing: 'border-box', height: 42, padding: '0 13px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', outline: 'none', fontSize: 14, color: 'var(--ink)', fontFamily: 'var(--font-ui)', margin: '12px 0 0' }} />
       <div style={{ display: 'flex', gap: 10, marginTop: 11 }}>
-        <button disabled={sending} onClick={() => respond('safe')} style={btn({ background: 'var(--sage, #4f7a5e)', color: '#fff' })}>{sending ? 'Sending…' : 'I’m safe'}</button>
-        <button disabled={sending} onClick={() => respond('help')} style={btn({ background: 'var(--clay)', color: 'var(--on-clay)' })}>{sending ? 'Sending…' : 'I need help'}</button>
+        <button disabled={sending} onClick={() => respond('safe')} style={btn({ background: 'var(--sage, #4f7a5e)', color: '#fff' })}>{sending === 'safe' ? 'Sending…' : 'I’m safe'}</button>
+        <button disabled={sending} onClick={() => respond('help')} style={btn({ background: 'var(--clay)', color: 'var(--on-clay)' })}>{sending === 'help' ? 'Sending…' : 'I need help'}</button>
       </div>
       {err ? <div style={{ fontSize: 13.5, color: 'var(--clay-deep, #b4462f)', fontWeight: 700, marginTop: 9 }}>{err}</div> : null}
       <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 9, lineHeight: 1.4 }}>Only the people your church chose for this check can open your reply — not other members. The relay can see that you replied and when, but not what you said.</div>
