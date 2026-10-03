@@ -12,7 +12,7 @@
 import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
 
-// `bundle` picks which shipped file to run: 'fellowship' (the member app, window.Fellowship) or 'steward' (the
+// `bundle` picks which shipped file to run: 'fellowship' (window.Fellowship), 'identity' (window.TrinityIdentity) or 'steward' (the
 // console engine, window.Steward). The same stand-ins serve both.
 export function loadFellowship({ expose = [], storage = {}, bundle = 'fellowship' } = {}) {
   let src = readFileSync(new URL('../vendor/' + bundle + '.js', import.meta.url), 'utf8');
@@ -43,5 +43,5 @@ export function loadFellowship({ expose = [], storage = {}, bundle = 'fellowship
   vm.runInContext(src, ctx);
   const exposed = {};
   for (const name of expose) exposed[name] = ctx['__x_' + name];
-  return { F: ctx.Fellowship, S: ctx.Steward, win: ctx, exposed, store, events };
+  return { F: ctx.Fellowship, S: ctx.Steward, TI: ctx.TrinityIdentity, win: ctx, exposed, store, events };
 }

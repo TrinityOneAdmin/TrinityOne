@@ -328,7 +328,10 @@ function pinRuleError(pin, native) {
   if (p.length < PIN_MIN) return 'Choose a PIN of at least ' + PIN_MIN + ' characters. Adding letters makes it much harder to guess.';
   const onDevice = (typeof native === 'boolean') ? native : isNative();
   if (!onDevice && /^\d+$/.test(p) && p.length < PIN_MIN_NUMERIC_SOFT) {
-    return 'On a computer an all-number PIN is easy to guess — use ' + PIN_MIN_NUMERIC_SOFT + '+ digits, or add letters.';
+    // SAY WHY, NOT ONLY WHAT (sim 2026-10-02 #59). A member who tried six digits here, having been told six is
+    // fine, got a bare "easy to guess" and no way to tell the rule from a bug. The reason is the storage: on a
+    // phone the key sits in the secure store, in a browser it sits in this page's own storage.
+    return 'In a web browser a PIN made only of numbers needs ' + PIN_MIN_NUMERIC_SOFT + '+ digits, because here your key is kept in the browser itself rather than in the phone’s secure store, so it is easier to guess. Use ' + PIN_MIN_NUMERIC_SOFT + '+ digits or add letters — the phone app accepts 6.';
   }
   return '';
 }
