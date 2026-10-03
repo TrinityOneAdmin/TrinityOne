@@ -172,10 +172,47 @@ function svChurchRota(ctx) {
 }
 
 // teammates I could ask to swap (the team's roster people, minus me)
+//
+// A CHILD IS ONLY OFFERED PEOPLE THEY MAY MESSAGE (owner, 2026-10-02: "a child can only swap with cleared adults or
+// their own parent"). ctx.canDMPeer is the app's one answer to "may I reach this person privately" — for a child
+// it is true for a cleared adult or a linked parent and false for everyone else — and a swap ask is a private
+// message to one person, so it asks the same question. For an ADULT it is true for everyone: an ordinary phone is
+// not served the list of children (it would be a roll of the congregation's minors), so it cannot know whom to
+// leave out; the child's own phone is where the other half of the rule is enforced (svSwapView).
 function svTeamMates(ctx, teamId) {
   const roster = (ctx.churchRosters || []).find(r => r.team === teamId);
   const me = ctx.myPubkey;
-  return ((roster && roster.people) || []).filter(p => p && p.name && (!me || p.pub !== me));
+  return ((roster && roster.people) || []).filter(p => p && p.name && (!me || p.pub !== me)
+    && (!p.pub || typeof ctx.canDMPeer !== 'function' || ctx.canDMPeer(p.pub)));
+}
+// The name this phone knows a pubkey by: the church's team rosters, which every member reads.
+function svNameOf(ctx, pub) {
+  if (!pub) return '';
+  for (const r of (ctx.churchRosters || [])) { const m = ((r && r.people) || []).find(p => p && p.pub === pub); if (m && m.name) return m.name; }
+  return '';
+}
+// SWAP ASKS AS THIS PHONE MAY SHOW THEM — the ones sent to me, and the answers to the ones I sent.
+//
+// On a CHILD's phone an ask or an answer is shown only if it comes from someone the child could message (a cleared
+// adult or their parent); everything else is hidden and COUNTED, so the screen can say so rather than pretend
+// there was nothing (owner, 2026-10-02: "the child's phone hides any swap ask or answer from anyone else and
+// says so honestly"). While this phone does not yet know whether it belongs to a child, `ctx.iAmMinor` is the
+// conservative reading (isMinor OR assumeMinor), the same one the group list uses. A child phone with no way to
+// ask who may reach it hides everything: default-deny.
+function svSwapView(ctx) {
+  const asks = ctx.swapAsks || [];
+  const answers = ctx.swapAnswers || {};
+  const minor = !!(ctx.iAmMinor || (ctx.safeguard && ctx.safeguard.isMinor));
+  const ok = (pub) => !minor || (typeof ctx.canDMPeer === 'function' && !!ctx.canDMPeer(pub));
+  const shown = asks.filter(a => ok(a.from));
+  let hiddenAnswers = 0;
+  Object.keys(answers).forEach(rid => Object.keys(answers[rid] || {}).forEach(by => { if (!ok(by)) hiddenAnswers++; }));
+  return {
+    asks: shown,
+    hidden: (asks.length - shown.length) + hiddenAnswers,
+    // The answer to MY ask `rid` from the ONE person I named (`by`) — never anyone else's, however many there are.
+    answerFor: (rid, by) => { const a = by && answers[rid] ? answers[rid][by] : null; return a && ok(by) ? a : null; },
+  };
 }
 // the teams I'm on: those I have a request or a published slot for, AND those whose roster lists me.
 //
@@ -259,7 +296,7 @@ function SwapSheet({ open, item, onClose, ctx }) {
         <div style={{ fontFamily: 'var(--font-display)', fontSize: 20, fontWeight: 700 }}>Ask someone to swap</div><IconBtn name="x" onClick={onClose} />
       </div>
       <p style={{ fontSize: 13.5, color: 'var(--ink-2)', margin: '0 0 16px', lineHeight: 1.5 }}>
-        For <b style={{ color: 'var(--ink)' }}>{svParts(item.date).dow} {svParts(item.date).day} {svParts(item.date).mon}</b> · {item.teamName} · {item.role}. They’ll get a friendly ask — nothing changes until they say yes.</p>
+        For <b style={{ color: 'var(--ink)' }}>{svParts(item.date).dow} {svParts(item.date).day} {svParts(item.date).mon}</b> · {item.teamName} · {item.role}. They’ll get a friendly ask — nothing changes until they say yes and your leader confirms.</p>
       {mates.length ? (
         <React.Fragment>
           <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', marginBottom: 10 }}>ON YOUR TEAM</div>
@@ -1340,6 +1377,7 @@ function ServingScreen({ open, onClose, ctx, docked }) {
     } catch (err) {}
   }, [tab, open]);
   const pending = ctx.servPending || [];
+  const swapView = svSwapView(ctx);
   // C-4: a request sealed under a church name key this phone does not hold yet arrives carrying `_locked`
   // and nothing else — no date, role or team. Its card would be empty fields over a Yes/No pair answering a
   // question the member cannot read, so render a count instead. `pending` itself keeps them: the tab badge
@@ -1450,7 +1488,7 @@ function ServingScreen({ open, onClose, ctx, docked }) {
             const on = tab === k;
             return (
               <button key={k} ref={(el) => { tabEls.current[k] = el; }} onClick={() => setTab(k)} style={{ flex: '1 0 0%', minWidth: 'max-content', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: 10, borderRadius: 12, border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13.5, background: on ? 'var(--clay)' : 'var(--surface)', color: on ? '#fff' : 'var(--ink-2)' }}>
-                <Icon name={ic} size={16} color={on ? '#fff' : 'var(--ink-3)'} /> {lbl}{k === 'serving' && pending.length ? <span style={{ minWidth: 18, height: 18, padding: '0 5px', borderRadius: 999, background: on ? 'rgba(255,255,255,.25)' : 'var(--clay)', color: 'var(--on-clay)', fontSize: 11, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{pending.length}</span> : null}
+                <Icon name={ic} size={16} color={on ? '#fff' : 'var(--ink-3)'} /> {lbl}{k === 'serving' && (pending.length + swapView.asks.length) ? <span style={{ minWidth: 18, height: 18, padding: '0 5px', borderRadius: 999, background: on ? 'rgba(255,255,255,.25)' : 'var(--clay)', color: 'var(--on-clay)', fontSize: 11, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{pending.length + swapView.asks.length}</span> : null}
               </button>
             );
           })}
@@ -1466,6 +1504,34 @@ function ServingScreen({ open, onClose, ctx, docked }) {
               <div style={{ borderRadius: 20, padding: 16, marginBottom: 16, background: 'var(--surface-2)', border: '1px solid var(--line)', fontSize: 13.5, lineHeight: 1.55, color: 'var(--ink-2)' }}>
                 <b style={{ color: 'var(--ink)' }}>{pendingLocked.length} request{pendingLocked.length === 1 ? '' : 's'} you can’t open yet.</b>{' '}
                 Your church sent {pendingLocked.length === 1 ? 'it' : 'them'} sealed, and this phone is still waiting for the key. {pendingLocked.length === 1 ? 'It' : 'They'} will appear on {pendingLocked.length === 1 ? 'its' : 'their'} own.
+              </div>
+            ) : null}
+            {/* A TEAMMATE ASKED ME TO COVER (owner, 2026-10-02). The ask arrives from the other member's phone, not
+                from the church; saying yes tells the asker and the church, and the church confirms the swap with
+                one tap. Nothing about the rota changes until then. */}
+            {swapView.asks.map(a => {
+              const who = svNameOf(ctx, a.from) || 'A teammate';
+              const sl = a.slot || {};
+              return (
+                <div key={a.from + '|' + a.id} style={{ borderRadius: 20, padding: 16, marginBottom: 16, background: 'var(--surface)', border: '1.5px solid color-mix(in oklab, var(--gold) 50%, var(--line))', boxShadow: 'var(--shadow)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 11, fontWeight: 800, letterSpacing: '.6px', color: '#8a6717', marginBottom: 12 }}><Icon name="swap" size={14} color="var(--gold)" /> {who.toUpperCase()} ASKED YOU TO COVER</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 13, marginBottom: 13 }}>
+                    <ServDateBlock iso={sl.date} accent="var(--gold)" />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16 }}>{sl.teamName || 'Serving'}{sl.role ? ' · ' + sl.role : ''}</div>
+                      <div style={{ fontSize: 13, color: 'var(--ink-2)', marginTop: 2 }}>{sl.time}{sl.time && sl.service ? ' · ' : ''}{sl.service}</div>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 9 }}>
+                    <button onClick={async () => { const ok = await ctx.answerSwap(a, true); if (ok) ctx.toast('Told ' + who.split(' ')[0] + ' you’ll cover — your leader confirms the swap'); }} style={{ ...svPrimary(), flex: 1, padding: 14, fontSize: 15 }}><Icon name="check" size={19} stroke={2.4} color="#fff" /> Yes, I’ll cover</button>
+                    <button onClick={async () => { const ok = await ctx.answerSwap(a, false); if (ok) ctx.toast('Told ' + who.split(' ')[0] + ' you can’t this time'); }} style={{ flexShrink: 0, padding: '0 16px', borderRadius: 15, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', fontWeight: 700, fontSize: 14.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Not this time</button>
+                  </div>
+                </div>
+              );
+            })}
+            {swapView.hidden ? (
+              <div style={{ borderRadius: 16, padding: '12px 14px', marginBottom: 16, background: 'var(--surface-2)', border: '1px solid var(--line)', fontSize: 13, lineHeight: 1.5, color: 'var(--ink-2)' }}>
+                {swapView.hidden} swap {swapView.hidden === 1 ? 'message was' : 'messages were'} hidden — {swapView.hidden === 1 ? 'it' : 'they'} came from someone you can’t message here.
               </div>
             ) : null}
             {pendingOpen.map(req => (
@@ -1617,6 +1683,12 @@ function ServingScreen({ open, onClose, ctx, docked }) {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                   {declined.map(it => {
                     const isSwap = it._verdict === 'swap';
+                    // WHO I ASKED, AND WHAT THEY SAID. The reply names the teammate (ctx.servSwapTo, by request id),
+                    // and the teammate's answer arrives on its own document (ctx.swapAnswers).
+                    const swapRid = (it.req && it.req.id) || it.id;
+                    const askedPub = isSwap ? (ctx.servSwapTo || {})[swapRid] : '';
+                    const askedFirst = (svNameOf(ctx, askedPub) || '').split(' ')[0];
+                    const swapAnsOk = isSwap && askedPub ? swapView.answerFor(swapRid, askedPub) : null;
                     const statusFg = isSwap ? '#8a6717' : 'var(--ink-3)';
                     const statusBg = isSwap ? 'var(--gold-tint)' : 'var(--surface-2)';
                     return (
@@ -1628,6 +1700,7 @@ function ServingScreen({ open, onClose, ctx, docked }) {
                             <span style={{ fontSize: 10.5, fontWeight: 700, color: statusFg, background: statusBg, borderRadius: 999, padding: '2px 8px' }}>{isSwap ? 'Swap asked' : 'Can’t make it'}</span>
                           </div>
                           <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 1 }}>{it.role} · {svParts(it.date).dow} {svParts(it.date).day} {svParts(it.date).mon}</div>
+                          {isSwap && askedFirst ? <div style={{ fontSize: 12.5, color: swapAnsOk ? (swapAnsOk.yes ? 'var(--sage-ink)' : 'var(--ink-3)') : 'var(--ink-3)', fontWeight: 600, marginTop: 3 }}>{swapAnsOk ? (swapAnsOk.yes ? askedFirst + ' said yes — your leader will confirm' : askedFirst + ' said no') : 'Asked ' + askedFirst + ' — waiting'}</div> : null}
                         </div>
                         {/* ONE STATE SHOWN AT A TIME. A declined row used to carry a "Can't make it" badge AND an
                             "I can serve" button, which reads as two answers given at once (sim 2026-10-02, item

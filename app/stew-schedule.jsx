@@ -613,6 +613,26 @@ function DashRota({ onNewTeam }) {
   };
 
   const rosterFor = (id) => rosters.find(r => r.team === id) || { roles: [], people: [] };
+  // WHO A SWAP ASK NAMED, AND WHAT THEY SAID. The member's 'swap' reply has always carried `swapTo`, and this
+  // board has never read it — it only ever showed "Wants swap" (sim 2026-10-02, item 25). Now the member's app
+  // also asks that teammate directly, and the teammate's yes arrives as its own reply (`swapans~<requestId>`).
+  // This pairs the two, for ONE slot, and is what the steward's one-tap confirm rests on. It answers null unless:
+  //   · the newest request for this slot was answered 'swap' BY THE PERSON ON THE SLOT (an answer from anyone
+  //     else is not theirs to give), and
+  //   · the person it names is on this team's roster (otherwise there is nobody to put in the slot), and
+  //   · `yes` is true only for an answer AUTHORED BY THAT TEAMMATE — the author is the one thing nobody can forge,
+  //     so a third member writing a "swapyes" for someone else's request changes nothing here.
+  const swapInfo = (svcId, teamId, roleId, askerPub) => {
+    const matches = requests.filter(q => q && q.serviceId === svcId && q.teamId === teamId && q.roleId === roleId && (!askerPub || !q.memberPub || q.memberPub === askerPub));
+    if (!matches.length) return null;
+    matches.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+    const req = matches[0];
+    const r = replies.find(x => x && x.id === req.id);
+    if (!r || r.v !== 'swap' || !r.swapTo || (askerPub && r.by && r.by !== askerPub)) return null;
+    const mate = (rosterFor(teamId).people || []).find(p => p && p.pub && p.pub === r.swapTo) || null;
+    const ans = replies.find(x => x && x.id === 'swapans~' + req.id && x.by === r.swapTo) || null;
+    return { reqId: req.id, to: r.swapTo, mate, yes: ans ? ans.v === 'swapyes' : null };
+  };
   const persisted = (svcId) => rotas.find(r => r.service === svcId) || null;
   const sortedSvcs = services.slice().sort((a, b) => (a.date || '').localeCompare(b.date || ''));
   const todayStr = schKey(new Date());
@@ -885,6 +905,20 @@ function DashRota({ onNewTeam }) {
     setFlash('Published — everyone assigned has been asked'); setTimeout(() => setFlash(''), 2400);
   };
 
+  // ONE TAP TO CONFIRM A SWAP (owner, 2026-10-02: "after the teammate says yes, the steward confirms the swap with
+  // one tap"). Puts the teammate on the slot, publishes the rota, and asks them through the ordinary "Can you
+  // serve?" request (alreadyAsked is per person, so they have none for this slot yet). It sends nothing if the rota
+  // did not save — the same rule publish() keeps — and says so.
+  const confirmSwap = async (slot, from, mate) => {
+    const next = { ...assign, [slot.key]: { id: mate.id, name: mate.name, pub: mate.pub || '' } };
+    setAssign(next);
+    const r = await window.Steward.publishRota({ service: svcId, published: true, assign: next });
+    if (r == null) { setFlash(schNoKey()); setTimeout(() => setFlash(''), 4000); return; }
+    const asked = await sendRequestsFor(svcId, svc.date, svc.time, svc.name, next);
+    if (asked.failed) { setFlash(unaskedFlash('Swapped — ' + mate.name + ' is on ' + (slot.role.name || 'the role'), asked.failed, asked.tried, 'Press Publish again')); setTimeout(() => setFlash(''), 5000); return; }
+    setFlash('Swapped: ' + mate.name + ' now covers ' + (slot.role.name || 'the role') + ' for ' + from); setTimeout(() => setFlash(''), 3200);
+  };
+
   if (teams.length === 0) {
     return (
       <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -1070,9 +1104,14 @@ function DashRota({ onNewTeam }) {
                           locked: { fg: 'var(--ink-3)', bg: 'var(--ink-3)', soft: 5, line: 20, label: 'Opening…', ic: 'clock' },
                           '': { fg: 'var(--sage)', bg: 'var(--sage)', soft: 8, line: 32, label: '', ic: 'check' },
                         };
-                        const vm = vmap[verdict] || vmap[''];
+                        const sw = verdict === 'swap' ? swapInfo(svc.id, t.id, role.id, a.pub) : null;
+                        const swFirst = sw && sw.mate ? (sw.mate.name || '').split(' ')[0] : '';
+                        // The label says WHO was asked and what they answered, instead of a bare "Wants swap".
+                        const swapLabel = !swFirst ? 'Wants swap' : sw.yes === true ? swFirst + ' said yes' : sw.yes === false ? 'Wants swap — ' + swFirst + ' said no' : 'Wants swap — asked ' + swFirst;
+                        const vm = verdict === 'swap' ? { ...vmap.swap, label: swapLabel } : (vmap[verdict] || vmap['']);
                         return (
-                          <button key={role.id} onClick={() => setAssignSlot(slot)} title="Change who’s on this slot" aria-label={(role.name || 'This role') + ': ' + a.name + (vm.label ? ' — ' + vm.label : '') + '. Change who’s on this slot'} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 12, cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', border: `1px solid color-mix(in oklab, ${vm.bg} ${vm.line}%, var(--line))`, background: `color-mix(in oklab, ${vm.bg} ${vm.soft}%, var(--surface))` }}>
+                          <React.Fragment key={role.id}>
+                          <button onClick={() => setAssignSlot(slot)} title="Change who’s on this slot" aria-label={(role.name || 'This role') + ': ' + a.name + (vm.label ? ' — ' + vm.label : '') + '. Change who’s on this slot'} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 12, cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', border: `1px solid color-mix(in oklab, ${vm.bg} ${vm.line}%, var(--line))`, background: `color-mix(in oklab, ${vm.bg} ${vm.soft}%, var(--surface))` }}>
                             <div style={{ width: 28, height: 28, borderRadius: 999, flexShrink: 0, background: `linear-gradient(150deg, ${m.accent}, color-mix(in oklab, ${m.accent} 60%, #16120c))`, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 10.5 }}>{a.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}</div>
                             <div style={{ flex: 1, minWidth: 0 }}>
                               <div style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 600 }}>{role.name}{vm.label ? <span style={{ color: vm.fg, marginLeft: 6, fontWeight: 700 }}>· {vm.label}</span> : null}</div>
@@ -1080,6 +1119,10 @@ function DashRota({ onNewTeam }) {
                             </div>
                             <Icon name={vm.ic} size={15} stroke={2.4} color={vm.fg} />
                           </button>
+                          {sw && sw.mate && sw.yes === true ? (
+                            <button onClick={() => confirmSwap(slot, a.name, sw.mate)} aria-label={'Confirm the swap: ' + sw.mate.name + ' takes ' + (role.name || 'this role') + ' from ' + a.name} className="sk-btn sk-btn--clay" style={{ padding: '8px 11px', fontSize: 12.5 }}><Icon name="check" size={14} color="var(--on-clay)" /> Confirm: {sw.mate.name} covers</button>
+                          ) : null}
+                          </React.Fragment>
                         );
                       }
                       return (

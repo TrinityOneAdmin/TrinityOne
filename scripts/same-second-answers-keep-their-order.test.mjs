@@ -47,7 +47,7 @@ function writers() {
   return {
     published,
     setEventRsvp: lift('async setEventRsvp(churchNpub, eventId, verdict)', 'setEventRsvp'),
-    respondToServingRequest: lift('async respondToServingRequest(churchNpub, requestId, verdict, swapTo)', 'respondToServingRequest'),
+    respondToServingRequest: lift('async respondToServingRequest(churchNpub, requestId, verdict, swapTo, slot)', 'respondToServingRequest'),
     setUnavailable: lift('async setUnavailable(churchNpub, dates)', 'setUnavailable'),
   };
 }

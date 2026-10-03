@@ -91,10 +91,10 @@ export function mountBoard({
     // a button whose visible text contains `label`; throws (not returns undefined) when there is none, so a
     // test can never pass because it clicked nothing
     press: async (label) => {
-      const b = find(draw(), n => n.type === 'button' && texts(n).join(' ').includes(label));
+      const b = find(draw(), n => n.type === 'button' && reads(n).includes(label));
       if (!b.length) throw new Error('no button reading ' + JSON.stringify(label) + ' on the rota board');
       return b[0].props.onClick();
     },
-    has: (label) => find(draw(), n => n.type === 'button' && texts(n).join(' ').includes(label)).length > 0,
+    has: (label) => find(draw(), n => n.type === 'button' && reads(n).includes(label)).length > 0,
   };
 }

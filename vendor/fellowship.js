@@ -14258,18 +14258,152 @@
       };
     },
     // member -> church: reply to a serving request (accept/decline/swap) — p-tagged to the church
-    async respondToServingRequest(churchNpub, requestId, verdict, swapTo) {
+    async respondToServingRequest(churchNpub, requestId, verdict, swapTo, slot) {
       if (!sk) await window.Fellowship.ready;
       const cp = toPub(churchNpub);
       if (!cp || !sk) return;
-      const content = _sealChurchDocMember(cp, { request: requestId, v: verdict, swapTo: swapTo || "" });
-      const evt = finalizeEvent2(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", "trinityone/reqreply:" + requestId], ["t", NET], ["p", cp]], content }), sk);
+      const swapHex = verdict === "swap" ? toPub(swapTo) || "" : "";
+      const body = { request: requestId, v: verdict, swapTo: swapTo || "" };
+      if (swapHex && slot && typeof slot === "object") {
+        body.slot = {};
+        for (const f of ["serviceId", "teamId", "roleId", "teamName", "role", "date", "time", "service"]) {
+          if (typeof slot[f] === "string") body.slot[f] = slot[f].slice(0, 80);
+        }
+      }
+      const content = _sealChurchDocMember(cp, body);
+      const replyTags = [["d", "trinityone/reqreply:" + requestId], ["t", NET], ["p", cp]];
+      if (swapHex && swapHex !== cp && swapHex !== window.Fellowship.myPubkey) replyTags.push(["p", swapHex]);
+      const evt = finalizeEvent2(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: replyTags, content }), sk);
       try {
         await _publishAny(publishSetFor(cp), evt);
       } catch (e) {
         return { ok: false, reason: _pubReason(e) };
       }
       return { ok: true, evt };
+    },
+    // ── THE TEAMMATE'S HALF OF A SWAP (owner, 2026-10-02) ───────────────────────────────────────────────────
+    // The asker's reply (respondToServingRequest, verdict 'swap') now reaches the named teammate's phone, and this
+    // is how the teammate answers it. The answer is one more member-authored doc under the SAME prefix the relay
+    // already admits from members — `reqreply:swapans~<askerRequestId>` — so it needs no new document type and no
+    // relay change: it is p-tagged to the church (so the console reads it, which is what lets a steward confirm the
+    // swap with one tap) and to the asker (so their phone can say "Colin said yes").
+    //
+    // THE ANSWER CONFIRMS NOTHING BY ITSELF. It is a member saying "yes, I'd cover that"; the rota changes only when
+    // a steward confirms from the rota the church holds, and the console checks the answer's AUTHOR is the person
+    // the asker named. One document per (teammate, request), at a fixed d-tag, so answering again replaces it.
+    async answerSwapAsk(churchNpub, ask, yes) {
+      if (!sk) await window.Fellowship.ready;
+      const cp = toPub(churchNpub);
+      if (!cp || !sk) return { ok: false, reason: "not-sent" };
+      const to = toPub(ask && ask.from) || "";
+      const rid = ask && typeof ask.id === "string" ? ask.id.slice(0, 100) : "";
+      if (!to || !rid) return { ok: false, reason: "not-sent" };
+      const content = _sealChurchDocMember(cp, { request: rid, v: yes ? "swapyes" : "swapno", for: to });
+      const tags = [["d", "trinityone/reqreply:swapans~" + rid], ["t", NET], ["p", cp]];
+      if (to !== cp) tags.push(["p", to]);
+      const evt = finalizeEvent2(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags, content }), sk);
+      try {
+        await _publishAny(publishSetFor(cp), evt);
+      } catch (e) {
+        return { ok: false, reason: _pubReason(e) };
+      }
+      return { ok: true, evt };
+    },
+    // Swap asks addressed to ME, and answers to MY asks. onTraffic({ asks: [{ id, from, church, slot, ts }],
+    // answers: { <myRequestId>: { <authorPubkey>: { by, yes, ts } } } }).
+    //
+    // ANSWERS ARE KEPT PER AUTHOR, NOT PER REQUEST. Any member can write a `swapans~` document for any request, so a
+    // map keyed by request alone let one stranger's forged answer overwrite the real teammate's — and the asker's
+    // screen, which only trusts the person it named, would then have shown neither. Held per author, a forgery sits
+    // beside the real answer and the reader picks the one that counts.
+    //
+    // WHAT MAKES A DOC AN ASK: authored by someone else, `reqreply:<id>`, opens under the church's name key, says
+    // `v: 'swap'` and names ME in `swapTo`. WHAT MAKES ONE AN ANSWER: `reqreply:swapans~<id>`, says swapyes/swapno
+    // and names ME in `for`. Everything else under that prefix (the church's other members' accepts and declines,
+    // which this phone is also served) is ignored, never shown.
+    //
+    // KNOWN LIMIT, stated: if the asker later changes their reply (accepts, declines, or asks someone else), the new
+    // document no longer p-tags this teammate, so THIS live subscription never sees it and the ask stays on the
+    // teammate's screen until the app next restarts. It is harmless — the console confirms a swap only while the
+    // asker's CURRENT reply still names this teammate — but it can show one stale card.
+    subscribeSwapTraffic(onTraffic) {
+      const me = window.Fellowship.myPubkey;
+      if (!me) {
+        onTraffic({ asks: [], answers: {} });
+        return () => {
+        };
+      }
+      const RR = "trinityone/reqreply:", ANS = "swapans~";
+      const asks = /* @__PURE__ */ new Map();
+      const answers = /* @__PURE__ */ new Map();
+      const lockedRaw = /* @__PURE__ */ new Map();
+      const clip = (v) => typeof v === "string" ? v.slice(0, 80) : "";
+      const emit = () => onTraffic({
+        asks: [...asks.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)),
+        answers: Object.fromEntries([...answers].map(([rid, byAuthor]) => [rid, { ...byAuthor }]))
+      });
+      const handlers = {
+        onevent(e) {
+          const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+          if (!d.startsWith(RR) || e.pubkey === me || !e.content) return;
+          const rest = d.slice(RR.length);
+          const cp = e.tags.filter((t) => t[0] === "p").map((t) => t[1]).find((x) => x && x !== me) || "";
+          if (!cp) return;
+          const o = _openChurchDoc(cp, e.content);
+          if (o === null) {
+            lockedRaw.set(e.id, e);
+            return;
+          }
+          lockedRaw.delete(e.id);
+          if (rest.startsWith(ANS)) {
+            const rid = rest.slice(ANS.length);
+            if (!rid || toPub(o.for) !== me || o.v !== "swapyes" && o.v !== "swapno") return;
+            const byAuthor = answers.get(rid) || {};
+            const prev2 = byAuthor[e.pubkey];
+            if (prev2 && prev2.ts >= e.created_at) return;
+            byAuthor[e.pubkey] = { id: rid, by: e.pubkey, yes: o.v === "swapyes", ts: e.created_at };
+            answers.set(rid, byAuthor);
+            emit();
+            return;
+          }
+          if (!rest || o.v !== "swap" || toPub(o.swapTo) !== me) return;
+          const key = e.pubkey + "|" + rest;
+          const prev = asks.get(key);
+          if (prev && prev.ts >= e.created_at) return;
+          const sl = o.slot && typeof o.slot === "object" ? o.slot : {};
+          asks.set(key, {
+            id: rest,
+            from: e.pubkey,
+            church: cp,
+            ts: e.created_at,
+            slot: {
+              serviceId: clip(sl.serviceId),
+              teamId: clip(sl.teamId),
+              roleId: clip(sl.roleId),
+              teamName: clip(sl.teamName),
+              role: clip(sl.role),
+              date: clip(sl.date),
+              time: clip(sl.time),
+              service: clip(sl.service)
+            }
+          });
+          emit();
+        },
+        oneose() {
+          emit();
+        }
+      };
+      const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [30078], "#p": [me], "#t": [NET] }], handlers);
+      const stopKey = _onNameKey(() => {
+        for (const e of [...lockedRaw.values()]) handlers.onevent(e);
+      });
+      return () => {
+        try {
+          sub.close();
+        } catch {
+        }
+        stopKey();
+      };
     },
     // my replies to serving requests (own reqreply docs) -> { requestId: verdict }
     subscribeMyReqReplies(onReplies) {
@@ -14281,6 +14415,7 @@
       }
       const RR = "trinityone/reqreply:";
       const byReq = {};
+      const swapTo = {};
       const lockedRaw = /* @__PURE__ */ new Map();
       const handlers = {
         // C-4: my own replies are sealed under the church name key now. The church is the ['p'] tag — these
@@ -14297,16 +14432,18 @@
             if (o) {
               lockedRaw.delete(id);
               byReq[id] = o.v;
+              if (o.v === "swap" && o.swapTo) swapTo[id] = o.swapTo;
+              else delete swapTo[id];
             } else {
               lockedRaw.set(id, e);
               if (!byReq[id]) byReq[id] = "locked";
             }
-            onReplies({ ...byReq });
+            onReplies({ ...byReq }, { swapTo: { ...swapTo } });
           } catch {
           }
         },
         oneose() {
-          onReplies({ ...byReq });
+          onReplies({ ...byReq }, { swapTo: { ...swapTo } });
         }
       };
       const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [30078], authors: [me], "#t": [NET] }], handlers);
