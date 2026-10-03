@@ -11930,6 +11930,7 @@ zoo`.split("\n"));
   var memMnemonic = null;
   var webPersisted = false;
   var sessionMnemonic = null;
+  var _lockWork = Promise.resolve();
   var XFER_PREFIX = "trinityone:xfer:";
   var xferSk = null;
   var xferPending = null;
@@ -12602,7 +12603,8 @@ zoo`.split("\n"));
     lock() {
       if (!hasEnc()) return false;
       sessionMnemonic = null;
-      rememberClear();
+      _lockWork = Promise.resolve(rememberClear()).catch(() => {
+      });
       window.TrinityIdentity.locked = true;
       try {
         if (window.Fellowship && window.Fellowship.clearCommunityCache) window.Fellowship.clearCommunityCache();
@@ -12610,6 +12612,11 @@ zoo`.split("\n"));
       }
       applyLocked();
       return true;
+    },
+    // Resolves once lock()'s clearing of the remembered seed has finished (immediately if nothing is pending).
+    // Never rejects. The member app's "Lock now" waits on this before it restarts.
+    lockSettled() {
+      return _lockWork;
     },
     // steward onboarding: mint a NEW identity to hand to a member (does NOT touch yours)
     makeInvite() {

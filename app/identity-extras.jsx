@@ -320,7 +320,19 @@ function CommunitySecuritySheet({ open, onClose, ctx }) {
     const ok = await ID.removePin(off); setBusy(false);
     if (ok) done('Protection turned off'); else setErr('Couldn’t turn protection off — check your PIN and try again.');
   };
-  const doLock = () => { if (ID.lock) ID.lock(); done('Church community locked'); };
+  // "LOCK NOW" RESTARTS THE APP (owner, 2026-10-02; sim item 6). lock() forgets the key and clears the cached
+  // church data, but an app that was ALREADY OPEN still held names, rotas and care needs in the screens'
+  // own state — Today kept showing them behind the PIN gate. The only way to be sure the screen is wiped is
+  // to start it again, so after locking we reload; the next boot is a locked boot and shows the PIN door.
+  // WAIT FOR lockSettled() FIRST: lock() also clears the remembered seed, and a reload that beat that write
+  // would boot straight back into the account. A secure store that never answers must not strand the member
+  // on a screen full of church data, so the wait is capped and the restart happens regardless.
+  const doLock = async () => {
+    if (ID.lock) ID.lock();
+    onClose();      // the sheet would otherwise flip to its unlock view for the moment before the restart
+    try { await Promise.race([ID.lockSettled ? ID.lockSettled() : null, new Promise(r => setTimeout(r, 2500))]); } catch (e) {}
+    try { window.location.reload(); } catch (e) {}
+  };
 
   const inp = { width: '100%', boxSizing: 'border-box', height: 46, border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface)', padding: '0 14px', fontSize: 16, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', letterSpacing: '2px' };
   const primary = { width: '100%', padding: 14, borderRadius: 14, border: 'none', background: 'var(--sage)', color: '#fff', fontWeight: 700, fontSize: 15, cursor: 'pointer', fontFamily: 'var(--font-ui)', opacity: busy ? 0.6 : 1 };
