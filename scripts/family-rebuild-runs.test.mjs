@@ -88,6 +88,9 @@ function loadRebuild({ closeSocketAfterMs = 0 } = {}) {
     // never re-typed here — a copy would stay green over a regression in the real one (re-audit of b7624a8).
     ..._shippedHelpers,
     _unlinkedNow: new Set(), _ownReqAt: new Map(), _familyAnswered: new Set(),
+    // sim item 30: the rebuild skips a child the church has re-seated. Nothing here is re-seated; the behaviour itself
+    // is driven (shipped, with a real relay) in a-reconnected-child-is-one-child-on-the-parents-phone.test.mjs.
+    _superseded: () => false,
     // 2026-10-01 (audit of b4ac50d): no guardian notice was ever stamped on this phone, so nothing is held back
     _stampUnapplied: () => false, _heldReqs: new Map(), _rebuildAnswered: new Set(),
     _retractGuardReq: async () => true, _familyChanged: () => {}, _publishAny: async () => true,

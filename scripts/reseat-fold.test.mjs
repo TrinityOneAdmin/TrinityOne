@@ -38,6 +38,9 @@ function memberSide({ me = '', myName = '' } = {}) {
     const _reseatOld = new Map(), _reseatAt = new Map(), _churchRoster = new Map(), _reseatNamed = new Set();
     const profiles = {};
     const published = [];
+    // _noteReseat now also purges the parent's family list (sim item 30). These tests are about parsing the document; the
+    // purge is driven, shipped, in a-reconnected-child-is-one-child-on-the-parents-phone.test.mjs.
+    const _dropSupersededChildren = () => {};
     let pub = ${JSON.stringify(me)};
     const window = { Fellowship: { myProfile: ${JSON.stringify(myName ? { name: myName } : null)}, setProfile(meta) { published.push(meta); return Promise.resolve(null); } } };
     ${grab('_noteReseat')}

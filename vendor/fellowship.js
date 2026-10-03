@@ -6916,6 +6916,7 @@
             continue;
           }
           _ownReqAt.set(child, Math.max(_ownReqAt.get(child) || 0, e.created_at || 0));
+          if (_superseded(cp, child)) continue;
           if (_unlinkedNow.has(child) || legacy.includes(child)) {
             _retractGuardReq(child, cp, e.created_at);
             continue;
@@ -8447,6 +8448,17 @@
     return "";
   }
   var _reseatNamed = /* @__PURE__ */ new Set();
+  function _dropSupersededChildren(cp, olds) {
+    if (!olds || !olds.size) return;
+    const all = _loadChildren();
+    const keep = all.filter((c) => !(c && c.churchPub === cp && olds.has(String(c.child || "").toLowerCase())));
+    if (keep.length === all.length) return;
+    try {
+      localStorage.setItem(FAMILY_KEY, JSON.stringify(keep));
+    } catch {
+    }
+    _familyChanged(cp);
+  }
   function _noteReseat(cp, e) {
     if (e.pubkey !== cp && !(_churchRoster.get(cp) && _churchRoster.get(cp).has(e.pubkey))) return;
     if ((e.created_at || 0) < (_reseatAt.get(cp) || 0)) return;
@@ -8470,6 +8482,7 @@
     } catch (x) {
     }
     _reseatOld.set(cp, s);
+    _dropSupersededChildren(cp, s);
     if (!mine || !pub) return;
     const key = cp + "|" + pub;
     if (_reseatNamed.has(key)) return;

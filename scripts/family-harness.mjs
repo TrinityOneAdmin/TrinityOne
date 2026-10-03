@@ -159,6 +159,7 @@ export function memberBoot(parent, storage, opts = {}) {
     toPub: (x) => (/^[0-9a-f]{64}$/i.test(String(x || '')) ? String(x).toLowerCase() : null),
     _dtag: dOf,
     displayFor: () => ({ name: '' }),
+    _openChurchDoc: () => null,   // only reached by _noteReseat for a sealed vouched name, which these tests do not use
     _reseatOld: opts.reseated || new Map(),
     // esbuild's name for the signer in this bundle. JSON round trip: a template built inside the vm is another
     // realm's object, which nostr-tools' validator refuses.
@@ -192,12 +193,16 @@ export function memberBoot(parent, storage, opts = {}) {
     topLevel(FELLOWSHIP, '_loadRemovedChildren'), topLevel(FELLOWSHIP, '_saveChildLink'), topLevel(FELLOWSHIP, '_removeChildLink'),
     topLevel(FELLOWSHIP, '_familyChanged'), topLevel(FELLOWSHIP, '_retractGuardReq'), topLevel(FELLOWSHIP, '_applyGuardianList'),
     topLevel(FELLOWSHIP, '_rebuildFamily'),
+    // the re-seat document's arrival (sim item 30): _noteReseat fills the `_reseatOld` this rig is handed, and now also
+    // purges the family list, so a test can deliver a re-seat to a parent's phone in either order with the notice
+    topVar(FELLOWSHIP, 'RESEAT_D'), topVar(FELLOWSHIP, '_reseatAt'), topVar(FELLOWSHIP, '_churchRoster'), topVar(FELLOWSHIP, '_reseatNamed'),
+    topLevel(FELLOWSHIP, '_dropSupersededChildren'), topLevel(FELLOWSHIP, '_noteReseat'),
     'globalThis.API = {',
     method(FELLOWSHIP, 'subscribeGuardianNotices() {', 'subscribeGuardianNotices') + ',',
     method(FELLOWSHIP, 'familyAnswered(churchNpub) {', 'familyAnswered') + ',',
     method(FELLOWSHIP, 'clearCommunityCache() {', 'clearCommunityCache') + ',',
     method(FELLOWSHIP, 'myChildren(churchNpub) {', 'myChildren') + ',',
-    '_rebuildFamily };',
+    '_rebuildFamily, _noteReseat };',
   ].join('\n'), ctx);
   const api = ctx.API;
   return {

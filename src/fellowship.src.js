@@ -431,6 +431,9 @@ function _rebuildFamily(churchNpub) {
           continue;
         }
         _ownReqAt.set(child, Math.max(_ownReqAt.get(child) || 0, e.created_at || 0));
+        // A child the church has re-seated onto a new key is the same child: this request names the OLD key, and
+        // adding it back would show the child twice (the new key arrives with the church's notice). Sim item 30.
+        if (_superseded(cp, child)) continue;
         // Removed this session, or by an older build: skip it, and retract the request that is still live.
         if (_unlinkedNow.has(child) || legacy.includes(child)) { _retractGuardReq(child, cp, e.created_at); continue; }
         if (_loadChildren().some(c => c && c.child === child)) continue;
@@ -2301,6 +2304,21 @@ function _openSealedName(cp, author, content) {
   return '';
 }
 const _reseatNamed = new Set();   // cp|pub we have already adopted a vouched name for, this session
+// A CHILD THE CHURCH HAS RE-SEATED STOPS BEING SHOWN, WHICHEVER ARRIVED FIRST. _applyGuardianList drops a superseded key
+// from a notice it applies, but only if the re-seat document has ALREADY arrived. The console sends the parent's
+// notice (which still names the child's OLD key beside the new one) a moment before it publishes the re-seat, and a
+// cold boot replays them oldest-first, so the notice routinely lands first: the Family sheet then showed the same child
+// twice, and nothing ever looked at the list again when the re-seat turned up. Called from _noteReseat; removes only
+// this church's entries for a superseded key, and says so (trinity-family-changed) so an open sheet redraws.
+// Sim item 30, 2026-10-02.
+function _dropSupersededChildren(cp, olds) {
+  if (!olds || !olds.size) return;
+  const all = _loadChildren();
+  const keep = all.filter(c => !(c && c.churchPub === cp && olds.has(String(c.child || '').toLowerCase())));
+  if (keep.length === all.length) return;
+  try { localStorage.setItem(FAMILY_KEY, JSON.stringify(keep)); } catch {}
+  _familyChanged(cp);
+}
 function _noteReseat(cp, e) {
   if (e.pubkey !== cp && !(_churchRoster.get(cp) && _churchRoster.get(cp).has(e.pubkey))) return;
   if ((e.created_at || 0) < (_reseatAt.get(cp) || 0)) return;
@@ -2324,6 +2342,7 @@ function _noteReseat(cp, e) {
     }
   } catch (x) {}
   _reseatOld.set(cp, s);
+  _dropSupersededChildren(cp, s);   // a parent's list that was built before this document arrived (sim item 30)
   // THE NAME COMES BACK. A member re-seated by their church arrives on a key with no kind-0 at all — they never
   // passed through the name step, because the whole route exists for people who cannot get back in on their
   // own. So take the name the church vouched for and publish it as our OWN profile: after this the name is
