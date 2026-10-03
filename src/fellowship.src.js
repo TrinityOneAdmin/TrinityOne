@@ -23,6 +23,7 @@ import { encrypt as nip04encrypt, decrypt as nip04decrypt } from 'nostr-tools/ni
 // Rules the console has to agree with, written once. See scripts/trinity-rules.mjs — the two copies of photo
 // suppression had already drifted apart on case handling. ARCHITECTURE-2026-07-29.
 import { pubSet, suppressPhotoAv, isPhotoSuppressed } from '../scripts/trinity-rules.mjs';
+import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   // which care requests' threads need a steward's eyes
 // THE SAME PARSERS THE RELAY AND THE CONSOLE USE, not a fourth copy of the rules. What a malformed grant or a
 // malformed helper copy MEANS is a safeguarding decision, and three implementations of it are three chances to
 // disagree — which is the whole reason scripts/checkin-role-source.mjs exists (see its header). `helperKeyFor`
@@ -7179,10 +7180,36 @@ window.Fellowship = {
     const byId = new Map();        // id -> request
     const statusById = new Map();  // id -> { status, needId, _ts }
     const tomb = new Map();        // id -> withdrawal ts — so a lagging relay re-serving the older carereq can't resurrect it
-    const emit = () => { try { cb([...byId.values()].map(r => { const s = statusById.get(r.id) || {}; return { ...r, status: s.status || 'open', needId: s.needId || '' }; }).sort((a, b) => (b.at || 0) - (a.at || 0))); } catch (e) {} };
-    const sub = pool.subscribeMany(churchRelays(), [{ kinds: [30078], '#t': ['carereq', 'carereqstatus'], '#church': [cp] }], {
+    // THE THREAD, AS FAR AS ATTENTION GOES: reqId -> msgId -> { from, at } for every message this phone can OPEN.
+    // Sim item 24, the care-team PHONE's half (the console's was 2249380). A request left this phone's list the
+    // moment "Set up help" (or Close) wrote its status, and took its only Message button with it, so a person who
+    // kept writing was heard by nobody. Each request is now emitted with `newMessage` — true when it was set up
+    // or closed and the ASKER has written since, with no team reply after that — decided by careThreadAttention,
+    // the one place that rule lives. Only a message this phone can decrypt counts, exactly as subscribeCareChat
+    // shows only those: a stranger's event at somebody's d-tag cannot make a request look unanswered or answered.
+    // Stamped by the EVENT's created_at, the same clock the status document carries, so the two compare.
+    const chat = new Map();
+    const emit = () => { try { cb([...byId.values()].map(r => {
+      const s = statusById.get(r.id) || {}; const status = s.status || 'open';
+      let askerAt = 0, teamAt = 0;
+      for (const m of (chat.get(r.id) || new Map()).values()) { if (m.from === r.from) askerAt = Math.max(askerAt, m.at); else teamAt = Math.max(teamAt, m.at); }
+      const att = careThreadAttention({ status, statusTs: s._ts || 0, askerAt, teamAt });
+      return { ...r, status, needId: s.needId || '', newMessage: att.returned };
+    }).sort((a, b) => (b.at || 0) - (a.at || 0))); } catch (e) {} };
+    const sub = pool.subscribeMany(churchRelays(), [{ kinds: [30078], '#t': ['carereq', 'carereqstatus'], '#church': [cp] }, { kinds: [30078], '#t': ['carechat'], '#church': [cp] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+        if (d.startsWith(CARECHAT_D)) {
+          const rest = d.slice(CARECHAT_D.length), at = rest.lastIndexOf(':'); if (at < 1) return;
+          const rid = rest.slice(0, at), mid = rest.slice(at + 1);
+          let b = null; try { b = _openSealed(JSON.parse(e.content), e.pubkey); } catch (x) {}
+          if (!b || !b.text) return;   // undecryptable (non-audience) or empty → not ours to count
+          let m = chat.get(rid); if (!m) { m = new Map(); chat.set(rid, m); }
+          if (m.has(mid)) return;
+          m.set(mid, { from: e.pubkey, at: e.created_at || 0 });
+          if (byId.has(rid)) emit();   // a thread whose request has not arrived yet is counted when it does
+          return;
+        }
         if (d.startsWith(CAREREQSTATUS_D)) {
           const id = d.slice(CAREREQSTATUS_D.length);
           const prev = statusById.get(id); if (prev && prev._ts >= e.created_at) return;

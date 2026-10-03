@@ -345,7 +345,12 @@ function MyRequestRow({ r, onCancel, onMessage, isMinor }) {
 
 // ── Care-team Requests (care-admins only): incoming ask-for-help requests to triage → Approve into a need,
 // Message the person, or Decline. Visible only to a member on the care-team roster.
-function CareRequestCard({ r, ctx, child, onApprove, onDecline, canMessage, onMessage }) {
+function CareRequestCard({ r, ctx, child, onApprove, onDecline, onSeen, canMessage, onMessage }) {
+  // A RETURNED THREAD: set up or closed, and the person has written since (sim item 24). It is on this list only
+  // so there is a door to what they said, so it gets no "Close" — that would tell them "closed" over help that
+  // is already set up. "Seen" re-writes the SAME status and need with a fresh stamp, which takes the row off until
+  // they write again; replying does the same by itself.
+  const returned = (r.status || 'open') !== 'open';
   const [busy, setBusy] = React.useState('');
   // Closing somebody's request for help is the one action here that cannot be seen to have worked: the card
   // stays until the relay echoes the change back. Silence therefore reads as success. The console's copy of
@@ -360,7 +365,7 @@ function CareRequestCard({ r, ctx, child, onApprove, onDecline, canMessage, onMe
         <div style={{ width: 36, height: 36, borderRadius: 11, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)' }}><Icon name={CARE_TYPE_ICON[r.type] || 'heart'} size={19} /></div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, color: 'var(--ink)' }}>{careTypeLabel(r)} · for {who}</div>
-          <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{[when, urg].filter(Boolean).join(' · ') || 'Asked for help'}</div>
+          <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{returned ? (r.status === 'approved' ? 'Wrote again — help is already set up' : 'Wrote again — you had closed this request') : ([when, urg].filter(Boolean).join(' · ') || 'Asked for help')}</div>
         </div>
       </div>
       {r.sealed ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', fontStyle: 'italic' }}>Details hidden — this device isn’t on the care team’s key list.</div>
@@ -371,11 +376,11 @@ function CareRequestCard({ r, ctx, child, onApprove, onDecline, canMessage, onMe
             notice-board item, so the control is absent rather than disabled: a greyed button invites a tap and
             reads as a fault. `child` is passed from the caller, and `onApprove` is null there as well, so a
             future edit that forgets one of the two still does not publish a child's words. */}
-        {!r.sealed && !child ? <button onClick={onApprove} className="care-btn" style={{ flex: 1, minWidth: 120, padding: '10px', borderRadius: 12, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 800, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}><Icon name="check" size={15} color="var(--on-clay)" stroke={2.6} /> Set up help</button> : null}
+        {!r.sealed && !child && r.status !== 'approved' ? <button onClick={onApprove} className="care-btn" style={{ flex: 1, minWidth: 120, padding: '10px', borderRadius: 12, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 800, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}><Icon name="check" size={15} color="var(--on-clay)" stroke={2.6} /> Set up help</button> : null}
         {canMessage ? <button onClick={onMessage} style={{ padding: '10px 14px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'inline-flex', alignItems: 'center', gap: 6 }}><Icon name="chat" size={14} color="currentColor" /> Message</button> : null}
-        <button onClick={async () => { setBusy('d'); setFailed(false); let ok = null; try { ok = await onDecline(); } catch (e) {} setFailed(!ok); setBusy(''); }} disabled={busy === 'd'} style={{ padding: '10px 14px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-3)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>{busy === 'd' ? '…' : 'Close — not needed'}</button>
+        <button onClick={async () => { setBusy('d'); setFailed(false); let ok = null; try { ok = await (returned ? onSeen() : onDecline()); } catch (e) {} setFailed(!ok); setBusy(''); }} disabled={busy === 'd'} style={{ padding: '10px 14px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-3)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>{busy === 'd' ? '…' : (returned ? 'Seen — no reply needed' : 'Close — not needed')}</button>
       </div>
-      {failed ? <div role="alert" style={{ fontSize: 12.5, color: 'var(--clay-deep, #b4462f)', marginTop: 9, lineHeight: 1.45 }}>That didn’t reach the church — this request is still open, and the person who asked has not been told anything.</div> : null}
+      {failed ? <div role="alert" style={{ fontSize: 12.5, color: 'var(--clay-deep, #b4462f)', marginTop: 9, lineHeight: 1.45 }}>{returned ? 'That didn’t reach the church — it will stay on your list until it does.' : 'That didn’t reach the church — this request is still open, and the person who asked has not been told anything.'}</div> : null}
     </div>
   );
 }
@@ -539,14 +544,28 @@ function CareRequests({ ctx }) {
     // wrote hid it from the only screen where it can be approved into a need. In a church with a single admin
     // nobody could action it at all. Audit, 2026-08-28. `forSelf` is false only when they picked "Someone
     // else" on the form, and they can always open their own request, so the flag is readable here.
-    try { unsub = window.Fellowship.subscribeCareRequests(list => setReqs((list || []).filter(r => r.status === 'open' && !(String(r.from || '').toLowerCase() === myPub && r.forSelf !== false))), ctx.church && ctx.church.npub); } catch (e) {}
+    // A REQUEST STAYS ON THIS LIST WHILE ITS THREAD HAS A MESSAGE NOBODY HAS ANSWERED (sim item 24 — the console's half is
+    // 2249380). It used to leave the moment "Set up help" or Close wrote its status, and took its only Message button
+    // with it, so a person who went on writing after that was heard by nobody. `newMessage` is decided by the engine
+    // (careThreadAttention): set up or closed, the ASKER has written since, and no team reply follows.
+    // …but never one I wrote myself: I am not waiting on my own message. A care admin who filed a request for somebody
+    // housebound IS its author, so her own follow-ups would otherwise put it back on her own list for ever. Another
+    // member of the team still sees it return, because for them the author is somebody else.
+    try { unsub = window.Fellowship.subscribeCareRequests(list => setReqs((list || []).filter(r => {
+      const mine = String(r.from || '').toLowerCase() === myPub;
+      return r.status === 'open' ? !(mine && r.forSelf !== false) : !!(r.newMessage && !mine);
+    })), ctx.church && ctx.church.npub); } catch (e) {}
     return () => { try { unsub && unsub(); } catch (e) {} };
     // …and on ctx.connTick. Without it a socket that dropped and returned left this list frozen: the console's
     // twin showed a care request as still needing "Set up help" while the need made from it already existed
     // (measured 2026-09-04), and a care admin reading that sets the same help up twice. screens-chat.jsx
     // carries the same dep for the same reason.
   }, [isCareAdmin, isCleared, myPub, ctx.church && ctx.church.npub, ctx.connTick]);
-  if (!(isCareAdmin || isCleared) || !reqs.length) return null;
+  // THE CHAT SHEET OUTLIVES THE LIST. A reply makes the request's newest message the team's, which takes a RETURNED
+  // row off the list — and with it, when it was the last row, this whole component, and so the conversation the
+  // care admin was in the middle of typing (the console's StewCareRequests had the same hole and was fixed first).
+  // Hold the component open while a conversation is.
+  if (!(isCareAdmin || isCleared) || (!reqs.length && !chatting)) return null;
   // WHICH OF THESE CAME FROM A YOUNG PERSON. A care admin is served the church's list of children and can
   // simply look. A cleared adult who is NOT a care admin is not served that list — and does not need it: the
   // relay serves them a child's request and nothing else, so everything they are holding is one. Reading the
@@ -585,7 +604,7 @@ function CareRequests({ ctx }) {
     return _minorsKnown ? _kids.has(String(r.from || '').toLowerCase()) : true;
   };
   const childReqs = reqs.filter(fromChild), adultReqs = reqs.filter(r => !fromChild(r));
-  const row = (r, child) => <CareRequestCard key={r.id} r={r} ctx={ctx} child={child} onApprove={child ? null : () => setApproving(r)} onDecline={() => window.Fellowship.declineCareRequest(r)} canMessage={!!(!ctx.canDMPeer || ctx.canDMPeer(r.from))} onMessage={() => setChatting({ reqId: r.id, requesterPub: r.from, title: 'Help · ' + (r.forSelf ? (careName(r.from, '') || 'a member') : (r.forName || 'someone')) })} />;
+  const row = (r, child) => <CareRequestCard key={r.id} r={r} ctx={ctx} child={child} onApprove={child ? null : () => setApproving(r)} onDecline={() => window.Fellowship.declineCareRequest(r)} onSeen={() => window.Fellowship.setCareRequestStatus(r.id, r.from, { status: r.status, needId: r.needId })} canMessage={!!(!ctx.canDMPeer || ctx.canDMPeer(r.from))} onMessage={() => setChatting({ reqId: r.id, requesterPub: r.from, title: 'Help · ' + (r.forSelf ? (careName(r.from, '') || 'a member') : (r.forName || 'someone')) })} />;
   return (
     <div style={{ marginBottom: 18 }}>
       {childReqs.length ? (
