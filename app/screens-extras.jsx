@@ -52,9 +52,7 @@ function NotificationsScreen({ open, onClose, ctx }) {
       <div style={{ paddingTop: 50, flexShrink: 0, borderBottom: '1px solid var(--line-2)',
         background: 'color-mix(in oklab, var(--paper) 92%, transparent)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px 14px' }}>
-          <button onClick={onClose} aria-label="Back" style={{ width: 40, height: 40, borderRadius: 13, border: '1px solid var(--line)',
-            background: 'var(--surface)', color: 'var(--ink)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: 'var(--shadow)' }}>
-            <Icon name="chevL" size={20} /></button>
+          <IconBtn name="chevL" onClick={onClose} />
           <div style={{ flex: 1 }}>
             <h1 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 24, fontWeight: 700, letterSpacing: '-.4px' }}>Notifications</h1>
           </div>
@@ -176,9 +174,7 @@ function ListenScreen({ open, onClose, ctx }) {
     <Overlay open={open} onClose={onClose}>
       <div style={{ paddingTop: 50, flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px 6px' }}>
-          <button onClick={onClose} aria-label="Back" style={{ width: 40, height: 40, borderRadius: 13, border: '1px solid var(--line)',
-            background: 'var(--surface)', color: 'var(--ink)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: 'var(--shadow)' }}>
-            <Icon name="chevL" size={20} /></button>
+          <IconBtn name="chevL" onClick={onClose} />
           <div style={{ flex: 1, minWidth: 0 }}>
             <h1 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 24, fontWeight: 700, letterSpacing: '-.4px' }}>Listen</h1>
             {data && data.channel && data.channel.name ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{data.channel.name}</div> : null}
@@ -313,8 +309,7 @@ function NotifSettingsScreen({ open, onClose, ctx }) {
     <Overlay open={open} onClose={onClose}>
       <div style={{ paddingTop: 50, flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px 6px' }}>
-          <button onClick={onClose} aria-label="Back" style={{ width: 40, height: 40, borderRadius: 13, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: 'var(--shadow)' }}>
-            <Icon name="chevL" size={20} /></button>
+          <IconBtn name="chevL" onClick={onClose} />
           <h1 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 24, fontWeight: 700, letterSpacing: '-.4px' }}>Notifications</h1>
         </div>
       </div>
@@ -381,8 +376,7 @@ function CurrencyScreen({ open, onClose, ctx }) {
     <Overlay open={open} onClose={onClose}>
       <div style={{ paddingTop: 50, flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px 6px' }}>
-          <button onClick={onClose} aria-label="Back" style={{ width: 40, height: 40, borderRadius: 13, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: 'var(--shadow)' }}>
-            <Icon name="chevL" size={20} /></button>
+          <IconBtn name="chevL" onClick={onClose} />
           <h1 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 24, fontWeight: 700, letterSpacing: '-.4px' }}>Currency</h1>
         </div>
       </div>

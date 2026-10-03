@@ -134,7 +134,7 @@ function NostrSheet({ open, onClose, ctx, initialPane }) {
   const Header = ({ title, back }) => (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-        {back ? <button aria-label="Back" onClick={() => setPane('main')} style={{ width: 34, height: 34, borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', color: 'var(--ink)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="chevL" size={19} /></button>
+        {back ? <IconBtn name="chevL" onClick={() => setPane('main')} size={19} style={{ height: 34, minWidth: 34, borderRadius: 11 }} />
           : <div style={{ width: 38, height: 38, borderRadius: 12, background: 'var(--clay-soft)', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="shield" size={21} /></div>}
         <div style={{ fontFamily: 'var(--font-display)', fontSize: 19, fontWeight: 700 }}>{title}</div>
       </div>
@@ -1546,7 +1546,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
       <div style={{ paddingTop: docked ? 12 : 50, background: 'color-mix(in oklab, var(--surface) 92%, transparent)',
         backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)', borderBottom: '1px solid var(--line)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '8px 14px 11px' }}>
-          {!docked ? <button aria-label="Back" onClick={onClose} style={{ width: 38, height: 38, borderRadius: 12, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="chevL" size={22} /></button> : null}
+          {!docked ? <IconBtn name="chevL" onClick={onClose} size={22} style={{ height: 38, minWidth: 38, borderRadius: 12, border: 'none', background: 'none', boxShadow: 'none' }} /> : null}
           <div style={{ width: 40, height: 40, borderRadius: 13, background: `color-mix(in oklab, ${safeCssColor(group.accent)} 16%, var(--surface))`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: safeCssColor(group.accent), flexShrink: 0 }}>
             <Icon name={isBroadcast ? 'send' : group.prayer ? 'pray' : 'chat'} size={22} /></div>
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -2060,7 +2060,7 @@ function DMThread({ peer, open, onClose, ctx, docked }) {
     <Overlay open={open} onClose={onClose} docked={docked}>
       <div style={{ paddingTop: docked ? 12 : 50, background: 'var(--surface)', borderBottom: '1px solid var(--line)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '8px 14px 11px' }}>
-          <button aria-label="Back" onClick={onClose} style={{ width: 38, height: 38, borderRadius: 12, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="chevL" size={22} /></button>
+          <IconBtn name="chevL" onClick={onClose} size={22} style={{ height: 38, minWidth: 38, borderRadius: 12, border: 'none', background: 'none', boxShadow: 'none' }} />
           <UserAvatar av={avOf(d)} name={d.handle} size={38} />
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, lineHeight: 1.1 }}>{d.handle}</div>

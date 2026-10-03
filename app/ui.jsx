@@ -389,16 +389,23 @@ const ICON_LABELS = {
   bookmark: 'Bookmark', compare: 'Compare translations', headphones: 'Listen', shield: 'Who can see this room',
   sliders: 'Reading settings',
 };
-function IconBtn({ name, onClick, size = 20, badge, style = {}, stroke = 1.9, title, ...rest }) {
+// A BACK ARROW SAYS "Back". Sim round 2026-10-02 #53 (Grace): "unlabelled back arrows" - a bare chevron on a
+// 40px square, on every full-screen surface, with the word only for a screen reader. A person who has not met
+// the app's conventions has to guess what it does, and on a phone the arrow is also the smallest target on the
+// screen. The back control now draws its word beside the arrow and is as tall as before. The accessible name is
+// unchanged. A caller that truly has no room can pass `iconOnly`.
+function IconBtn({ name, onClick, size = 20, badge, style = {}, stroke = 1.9, title, iconOnly, ...rest }) {
   const _name = title || ICON_LABELS[name] || undefined;
+  const withWord = name === 'chevL' && !iconOnly;
   return (
     <button onClick={onClick} title={title} aria-label={_name} {...rest} style={{
-      width: 40, height: 40, borderRadius: 14, border: '1px solid var(--line)',
+      width: withWord ? 'auto' : 40, minWidth: 40, height: 40, borderRadius: 14, border: '1px solid var(--line)',
       background: 'var(--surface)', color: 'var(--ink)', cursor: 'pointer',
       display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative',
-      boxShadow: 'var(--shadow)', flexShrink: 0, ...style,
+      boxShadow: 'var(--shadow)', flexShrink: 0, ...(withWord ? { gap: 2, padding: '0 13px 0 7px', fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 600 } : null), ...style,
     }}>
       <Icon name={name} size={size} stroke={stroke} />
+      {withWord ? <span>Back</span> : null}
       {badge ? <span style={{
         position: 'absolute', top: -4, right: -4, minWidth: 16, height: 16, padding: '0 4px',
         borderRadius: 8, background: 'var(--clay)', color: 'var(--on-clay)', fontSize: 10, fontWeight: 700,

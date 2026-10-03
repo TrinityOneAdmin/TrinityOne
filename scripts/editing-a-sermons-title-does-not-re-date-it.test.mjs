@@ -242,7 +242,7 @@ async function listenTab(events) {
   };
   const globals = {
     React, window: win,
-    Icon: () => null, useTrinityAudio: () => ({ track: null, playing: false, t: 0, d: 0 }),
+    Icon: () => null, IconBtn: () => null, useTrinityAudio: () => ({ track: null, playing: false, t: 0, d: 0 }),
     Sheet: ({ children }) => children, Screen: ({ children }) => children, Overlay: ({ children }) => children,
     setTimeout, clearTimeout, fetch: async () => { throw new Error('the screen must not fetch a feed with no feed url set'); },
     Math, Date, JSON, String, Number, Boolean, Object, Array, Set, Map, console, Promise, RegExp, localStorage: { getItem: () => null, setItem() {} },

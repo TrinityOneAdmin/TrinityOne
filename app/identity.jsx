@@ -1355,8 +1355,7 @@ function NewIdentitySheet({ open, identity, onCreate, onClose, ctx }) {
       <div style={wrap}>
         <div style={{ paddingTop: 56, paddingBottom: 20, textAlign: 'center', position: 'relative', overflow: 'hidden',
           background: 'radial-gradient(120% 80% at 50% -20%, var(--gold-tint), transparent 55%)' }}>
-          <button onClick={() => setStep('warn')} aria-label="Back" style={{ position: 'absolute', left: 16, top: 50, width: 40, height: 40, borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--ink)' }}>
-            <Icon name="chevL" size={20} /></button>
+          <IconBtn name="chevL" onClick={() => setStep('warn')} style={{ position: 'absolute', left: 16, top: 50 }} />
           <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 14 }}>
             <UserAvatar av={av} name={name} size={84} />
           </div>
@@ -1845,8 +1844,7 @@ function ChildrenAtChurchSheet({ open, onClose, ctx }) {
     <Overlay open={open} onClose={onClose}>
       <div style={{ paddingTop: 50, flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px 6px' }}>
-          <button onClick={onClose} aria-label="Back" style={{ width: 40, height: 40, borderRadius: 13, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: 'var(--shadow)' }}>
-            <Icon name="chevL" size={20} /></button>
+          <IconBtn name="chevL" onClick={onClose} />
           <h1 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 24, fontWeight: 700, letterSpacing: '-.4px' }}>Children at church</h1>
         </div>
       </div>
