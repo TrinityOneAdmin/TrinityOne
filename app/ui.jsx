@@ -389,16 +389,23 @@ const ICON_LABELS = {
   bookmark: 'Bookmark', compare: 'Compare translations', headphones: 'Listen', shield: 'Who can see this room',
   sliders: 'Reading settings',
 };
-function IconBtn({ name, onClick, size = 20, badge, style = {}, stroke = 1.9, title, ...rest }) {
+// A BACK ARROW SAYS "Back". Sim round 2026-10-02 #53 (Grace): "unlabelled back arrows" - a bare chevron on a
+// 40px square, on every full-screen surface, with the word only for a screen reader. A person who has not met
+// the app's conventions has to guess what it does, and on a phone the arrow is also the smallest target on the
+// screen. The back control now draws its word beside the arrow and is as tall as before. The accessible name is
+// unchanged. A caller that truly has no room can pass `iconOnly`.
+function IconBtn({ name, onClick, size = 20, badge, style = {}, stroke = 1.9, title, iconOnly, ...rest }) {
   const _name = title || ICON_LABELS[name] || undefined;
+  const withWord = name === 'chevL' && !iconOnly;
   return (
     <button onClick={onClick} title={title} aria-label={_name} {...rest} style={{
-      width: 40, height: 40, borderRadius: 14, border: '1px solid var(--line)',
+      width: withWord ? 'auto' : 40, minWidth: 40, height: 40, borderRadius: 14, border: '1px solid var(--line)',
       background: 'var(--surface)', color: 'var(--ink)', cursor: 'pointer',
       display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative',
-      boxShadow: 'var(--shadow)', flexShrink: 0, ...style,
+      boxShadow: 'var(--shadow)', flexShrink: 0, ...(withWord ? { gap: 2, padding: '0 13px 0 7px', fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 600 } : null), ...style,
     }}>
       <Icon name={name} size={size} stroke={stroke} />
+      {withWord ? <span>Back</span> : null}
       {badge ? <span style={{
         position: 'absolute', top: -4, right: -4, minWidth: 16, height: 16, padding: '0 4px',
         borderRadius: 8, background: 'var(--clay)', color: 'var(--on-clay)', fontSize: 10, fontWeight: 700,
@@ -447,11 +454,23 @@ function SectionLabel({ children, action, onAction }) {
 // `msg` still accepts a plain string, which is what all ~120 existing callers pass, and that keeps its tick.
 // A caller that knows better passes { text, kind: 'error' }. Failures also stay up longer — see app.jsx's
 // toast(), where the dwell time now follows the kind: nobody can read a sentence that long in 1.9s.
+// WHICH KIND IS THIS TOAST? Sim round 2026-10-02 #52: the opt-in `{ error: true }` above was adopted by the
+// handful of sites written after the audit, and the other ~120 plain-string callers kept their green tick -
+// including "Couldn't send - nothing was sent" and "Backup failed". Rather than hope every future caller
+// remembers, a plain string that reads as a failure is treated as one. An explicit kind always wins in both
+// directions: { kind: 'error' } is an error whatever it says, and an object with any other kind is not
+// second-guessed. The patterns are the words this app's own failure sentences are built from.
+const TOAST_FAILURE_WORDS = /(couldn[’']?t|could not|didn[’']?t|did not|can[’']?t|cannot|isn[’']?t|aren[’']?t|wasn[’']?t|won[’']?t|hasn[’']?t|failed|failure|not (sent|saved|shared|signed up|available|delivered|installed)|nothing was sent|no church found|invalid|unavailable|try again|refused|went wrong)/i;
+function toastKind(msg) {
+  if (!msg) return 'ok';
+  if (typeof msg === 'object') return msg.kind === 'error' ? 'error' : 'ok';
+  return TOAST_FAILURE_WORDS.test(String(msg)) ? 'error' : 'ok';
+}
 function Toast({ msg }) {
   if (!msg) return null;
   const isObj = msg && typeof msg === 'object';
   const text = isObj ? msg.text : msg;
-  const bad = isObj && msg.kind === 'error';
+  const bad = toastKind(msg) === 'error';
   if (!text) return null;
   return (
     <div role={bad ? 'alert' : 'status'} style={{
@@ -508,4 +527,4 @@ function FeatureTrouble() {
   );
 }
 
-Object.assign(window, { cx, makeNameDisambiguator, PhoneFrame, TabBar, BottomSheet, Overlay, IconBtn, Chip, SectionLabel, Toast, useBackLayer, FeatureTrouble });
+Object.assign(window, { cx, makeNameDisambiguator, PhoneFrame, TabBar, BottomSheet, Overlay, IconBtn, Chip, SectionLabel, Toast, toastKind, useBackLayer, FeatureTrouble });

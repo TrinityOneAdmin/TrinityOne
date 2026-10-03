@@ -9099,7 +9099,13 @@
   var AV_SYMBOLS = ["halo", "dove", "fish", "flame", "vine", "wheat", "anchor", "crook", "chalice", "olive", "mountain", "well", "star"];
   var _noPhoto = /* @__PURE__ */ new Set();
   var _photosOffChurches = /* @__PURE__ */ new Set();
+  var _churchNames = /* @__PURE__ */ new Map();
   function _notePhotoPolicy(churchPub, content) {
+    try {
+      const nm = content && String(content.name || content.display_name || "").trim();
+      if (nm) _churchNames.set(String(churchPub).toLowerCase(), nm);
+    } catch (e) {
+    }
     const f = content && content.features;
     const off = !!(f && f.memberPhotos === false);
     const had = _photosOffChurches.has(churchPub);
@@ -9130,9 +9136,21 @@
     const base = profile(pubkey);
     const p = profiles[pubkey];
     const av = _avSuppressPhoto(pubkey, p && p.av || { kind: "symbol", color: base.color, symbol: AV_SYMBOLS[hashStr(pubkey || "") % AV_SYMBOLS.length] });
-    const voice = churchVoiceFor(pubkey);
+    let voice = churchVoiceFor(pubkey);
+    if (!voice && pubkey && pubkey !== pub) {
+      const pk = String(pubkey).toLowerCase();
+      if (_churchNames.has(pk) || String(window.Fellowship && window.Fellowship.churchPub || "").toLowerCase() === pk) voice = { isChurch: true, churchName: _churchNames.get(pk) || "" };
+      else {
+        for (const set of _churchRoster.values()) {
+          if (set && set.has(pubkey)) {
+            voice = { isChurch: false, stewardFallback: true };
+            break;
+          }
+        }
+      }
+    }
     const chosen = p && p.name || voice && voice.isChurch && (voice.churchName || "") || voice && voice.name || "";
-    const handle = chosen || (voice && voice.isChurch ? "Your church" : UNNAMED);
+    const handle = chosen || (voice && voice.isChurch ? "Your church" : voice && voice.stewardFallback ? "A church steward" : UNNAMED);
     return {
       pubkey,
       handle,

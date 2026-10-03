@@ -1672,8 +1672,11 @@ function App() {
     if (pinnedSermon && pinnedSermon.sha256) out.push({ id: 'sermon:' + pinnedSermon.id, kind: 'sermon', group: _churchNameFor, text: (String(pinnedSermon.mime || '').startsWith('video') ? 'New video · ' : 'New audio clip · ') + (pinnedSermon.title || ''), ts: pinnedSermon.ts || pinnedSermon.at, sermon: pinnedSermon });
     churchPlans.forEach(p => out.push({ id: 'plan:' + p.id, kind: 'plan', group: _churchNameFor, text: 'Shared a reading plan · ' + (p.title || ''), ts: p.ts, go: 'plans' }));
     churchEvents.filter(_eventVisibleToMe).forEach(e => out.push({ id: 'evt:' + e.id, kind: 'event', group: _churchNameFor, text: 'New event · ' + (e.title || ''), ts: e.ts, go: 'event', event: e }));
+    // asked to serve / put on the rota (sim 2026-10-02 #49) - built by notifServingItems in screens-extras.jsx
+    const _d0 = new Date(); const _todayIso = _d0.getFullYear() + '-' + String(_d0.getMonth() + 1).padStart(2, '0') + '-' + String(_d0.getDate()).padStart(2, '0');
+    notifServingItems(servReqs, _todayIso, _churchNameFor).forEach(x => out.push(x));
     return out.filter(n => n.ts && (_nowSec - n.ts) < NOTIF_WINDOW).sort((a, b) => (b.ts || 0) - (a.ts || 0)).slice(0, 40);
-  }, [netAnnouncements, broadcastMsgs, churchDevos, pinnedSermon, churchPlans, churchEvents, churchGroups, safeguard, assumeMinor, _churchNameFor]);   // eslint-disable-line
+  }, [netAnnouncements, broadcastMsgs, churchDevos, pinnedSermon, churchPlans, churchEvents, churchGroups, safeguard, assumeMinor, _churchNameFor, servReqs]);   // eslint-disable-line
   // unread tracking (drives the bell badge); "seen" = newest ts the user has opened the panel at
   const [netSeenTs, setNetSeenTs] = useA(() => { try { return Number(localStorage.getItem('trinityone.net-seen') || 0); } catch { return 0; } });
   const netUnread = notifications.filter(n => (n.ts || 0) > netSeenTs).length;
@@ -2023,7 +2026,8 @@ function App() {
   // failure sentence in this app is often 20-30 words ("you're still a member there", "write the words down
   // instead"), and 1.9s is not enough for any of them. Audit 2026-09-02 #12.
   const toast = (msg, opts) => {
-    const bad = !!(opts && opts.error);
+    // toastKind (ui.jsx) also reads a plain string that is plainly a failure as one - sim 2026-10-02 #52
+    const bad = !!(opts && opts.error) || toastKind(msg) === 'error';
     setToastMsg(bad ? { text: msg, kind: 'error' } : msg);
     clearTimeout(toastTimer.current);
     toastTimer.current = setTimeout(() => setToastMsg(''), bad ? 6000 : 1900);

@@ -15179,12 +15179,21 @@ zoo`.split("\n");
   }
   async function _openBackup(envelope) {
     if (!sk) throw new Error("No church key on this device");
-    const e = typeof envelope === "string" ? JSON.parse(envelope) : envelope;
+    let e;
+    try {
+      e = typeof envelope === "string" ? JSON.parse(envelope) : envelope;
+    } catch (x) {
+      throw new Error("This file is not a TrinityOne backup \u2014 it could not be read as one.");
+    }
     if (!e || e.trinityone_backup !== "encrypted-v1") throw new Error("Not an encrypted TrinityOne backup");
-    const convKey = getConversationKey(sk, e.epk);
-    const key = await crypto.subtle.importKey("raw", convKey, "AES-GCM", false, ["decrypt"]);
-    const pt = new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: _b64ToU8(e.iv) }, key, _b64ToU8(e.ct)));
-    return { bytes: pt, fmt: e.fmt || "jsonl" };
+    try {
+      const convKey = getConversationKey(sk, e.epk);
+      const key = await crypto.subtle.importKey("raw", convKey, "AES-GCM", false, ["decrypt"]);
+      const pt = new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: _b64ToU8(e.iv) }, key, _b64ToU8(e.ct)));
+      return { bytes: pt, fmt: e.fmt || "jsonl" };
+    } catch (x) {
+      throw new Error("This backup was made for a different church, or the file is damaged \u2014 only the church key it was sealed to can open it. Check you are signed in as that church, then choose the file again.");
+    }
   }
   function _nip98(url, method) {
     return "Nostr " + btoa(JSON.stringify(finalizeEvent2({ kind: 27235, created_at: _credNow(), tags: [["u", url], ["method", method || "GET"], ["church", pub]], content: "" }, sk)));
@@ -19035,15 +19044,22 @@ zoo`.split("\n");
         } catch {
         }
       }
+      const _unzip = (bytes) => {
+        try {
+          return unzipSync(bytes);
+        } catch (x) {
+          throw new Error("This backup file is damaged \u2014 its archive could not be opened. Try the file again from where you saved it, or use another backup.");
+        }
+      };
       if (env && env.trinityone_backup === "encrypted-v1") {
         const opened = await _openBackup(env);
         if (opened.fmt === "zip") {
-          const f = unzipSync(opened.bytes);
+          const f = _unzip(opened.bytes);
           events = strFromU8(f["events.jsonl"] || new Uint8Array());
           for (const k in f) if (k.indexOf("blobs/") === 0) blobs[k.slice(6)] = f[k];
         } else events = strFromU8(opened.bytes);
       } else if (u83[0] === 80 && u83[1] === 75) {
-        const f = unzipSync(u83);
+        const f = _unzip(u83);
         events = strFromU8(f["events.jsonl"] || new Uint8Array());
         for (const k in f) if (k.indexOf("blobs/") === 0) blobs[k.slice(6)] = f[k];
       } else {
@@ -25010,6 +25026,15 @@ zoo`.split("\n");
     // longer goes to must not simply VANISH from the panel: silently changing where a church's data goes is
     // how the divergence in ROADMAP-NOTES §6 became invisible. Reachable and not-in-our-network are two
     // different facts and the card shows both.
+    //
+    // A RELAY THIS CONSOLE IS ALREADY TALKING TO IS NOT "DOWN". Sim 2026-10-02 #63: "Your relay: Down" all
+    // afternoon while publishing worked. The probe below dials a THROWAWAY socket every 30 seconds and calls the
+    // relay off if that one fails to open in 2.5s - and a relay that rate-limits new connections, or a slow link,
+    // refuses the throwaway while the pool's own long-lived socket, the one every publish and subscription rides,
+    // is open and healthy. So when the probe says "off" but the pool reports that very relay connected, the answer
+    // is "on" (`viaPool`, no latency - nothing was timed). A probe that succeeds is reported exactly as before.
+    // CALLERS (rule 2): app/steward-root.jsx useStewardRelays (-> DashOverview's "Your relay" card, which reads
+    // `status === 'on'`) and nothing else; Relays-panel rows read the same array and gain only the `viaPool` flag.
     relayStatus() {
       return Promise.all(relaysRaw().map((url) => new Promise((res) => {
         let done = false;
@@ -25021,6 +25046,14 @@ zoo`.split("\n");
             return false;
           }
         })();
+        const poolUp = () => {
+          try {
+            const st = pool.listConnectionStatus();
+            return st.get(url) === true || st.get(_relayKey2(url)) === true;
+          } catch (e) {
+            return false;
+          }
+        };
         const finish = (status) => {
           if (done) return;
           done = true;
@@ -25028,13 +25061,14 @@ zoo`.split("\n");
             ws.close();
           } catch {
           }
+          if (status !== "on" && poolUp()) return res({ url, status: "on", ms: null, member, viaPool: true });
           res({ url, status, ms: status === "on" ? Date.now() - t0 : null, member });
         };
         let ws;
         try {
           ws = new WebSocket(url);
         } catch {
-          return res({ url, status: "off", ms: null, member });
+          return finish("off");
         }
         const to = setTimeout(() => finish("off"), 2500);
         ws.onopen = () => {

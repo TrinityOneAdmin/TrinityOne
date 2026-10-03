@@ -1398,8 +1398,7 @@ function NewIdentitySheet({ open, identity, onCreate, onClose, ctx }) {
       <div style={wrap}>
         <div style={{ paddingTop: 56, paddingBottom: 20, textAlign: 'center', position: 'relative', overflow: 'hidden',
           background: 'radial-gradient(120% 80% at 50% -20%, var(--gold-tint), transparent 55%)' }}>
-          <button onClick={() => setStep('warn')} aria-label="Back" style={{ position: 'absolute', left: 16, top: 50, width: 40, height: 40, borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--ink)' }}>
-            <Icon name="chevL" size={20} /></button>
+          <IconBtn name="chevL" onClick={() => setStep('warn')} style={{ position: 'absolute', left: 16, top: 50 }} />
           <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 14 }}>
             <UserAvatar av={av} name={name} size={84} />
           </div>
@@ -1695,12 +1694,16 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
                   and not the other, and the stored key carries the church for that reason. It sits ABOVE
                   children's accounts because it is the one most families need — most children checked into a
                   crèche have no phone and no account at all (design §7). */}
-              <Row icon="child" label="Children at church" sub="Say you bring children, and their names — kept on this phone" accent="var(--sage)" onClick={() => setKidsAt(true)} />
+              {/* TWO ROWS, TWO JOBS, AND THEY READ AS ONE (sim 2026-10-02 #60: "two near-identical children screens for
+                  parents"). They are different things: this one is names on this phone for the check-in desk, no
+                  account anywhere; the next is a real account for a child who has their own phone. The
+                  subtitles now say which is which; the labels stay, because help articles point at them. */}
+              <Row icon="child" label="Children at church" sub="For the Sunday children’s desk — their names, no account needed. Kept on this phone" accent="var(--sage)" onClick={() => setKidsAt(true)} />
               {/* A YOUNG PERSON IS NOT OFFERED THE CONTROLS THAT MINT AND LINK CHILD ACCOUNTS (sim A2 #10). Same
                   clause as the wallet row and the young-person notices beside it. The engine refuses too — see
                   createChildAccount — because a modified build could otherwise do what this hides. */}
               {window.Fellowship && window.Fellowship.createChildAccount && !(ctx.safeguard && ctx.safeguard.isMinor) ? (
-                <Row icon="pray" label="Children’s accounts" sub="Set up and look after a child’s account in your church" accent="var(--sage)" onClick={() => setFamily(true)} />
+                <Row icon="pray" label="Children’s accounts" sub="Only if your child has their own phone — set up their account and link it to you" accent="var(--sage)" onClick={() => setFamily(true)} />
               ) : null}
             </Group>
           </React.Fragment>
@@ -1891,8 +1894,7 @@ function ChildrenAtChurchSheet({ open, onClose, ctx }) {
     <Overlay open={open} onClose={onClose}>
       <div style={{ paddingTop: 50, flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px 6px' }}>
-          <button onClick={onClose} aria-label="Back" style={{ width: 40, height: 40, borderRadius: 13, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: 'var(--shadow)' }}>
-            <Icon name="chevL" size={20} /></button>
+          <IconBtn name="chevL" onClick={onClose} />
           <h1 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 24, fontWeight: 700, letterSpacing: '-.4px' }}>Children at church</h1>
         </div>
       </div>

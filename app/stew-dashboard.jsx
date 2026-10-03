@@ -2856,8 +2856,8 @@ function JoinCard({ qrSize = 92, center = false }) {
       {linkPrivate ? <div role="alert" style={{ padding: '10px 12px', borderRadius: 11, marginBottom: 10, background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', border: '1px solid var(--line)', fontSize: 12.5, lineHeight: 1.5, color: 'var(--ink-2)' }}>
         <b>This link only works on this computer.</b> Your church’s relay is running here and hasn’t been
         made reachable from outside yet, so the address inside the link points at whoever opens it. Hand out
-        the short code below instead — or turn on “go public” for your relay in Settings → Network &amp; relays,
-        and this link will work everywhere.
+        the short code below instead — or turn on “go public” in your relay’s control panel (<b>Reach members
+        from anywhere</b>), and this link will work everywhere.
       </div> : null}
       <GoPublicNote gate={gate} />
     <div style={{ display: 'flex', flexDirection: center ? 'column' : 'row', gap: 16, alignItems: 'center', textAlign: center ? 'center' : 'left' }}>
@@ -2940,8 +2940,8 @@ function JoinCard({ qrSize = 92, center = false }) {
     {(!install.url && install.why === 'local' && !linkPrivate) ? (
       <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--line)', fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55 }}>
         <b>Members can’t install from this machine yet.</b> Your relay is only reachable at this computer’s
-        own address, which on someone else’s phone means their phone. Turn on “go public” for your relay in
-        Settings → Network &amp; relays, and an install code will appear here.
+        own address, which on someone else’s phone means their phone. Turn on “go public” in your relay’s
+        control panel (<b>Reach members from anywhere</b>), and an install code will appear here.
       </div>
     ) : null}
     </React.Fragment>
@@ -3500,7 +3500,18 @@ function NewGroupModal({ open, onClose }) {
   // loneliness"; Priya hesitated before posting a prayer request, having already said which hospital ward she
   // works on. Only an explicit `false` — a steward deliberately turning it off — leaves new rooms unsealed.
   // Owner's decision, 2026-08-22. Existing groups are untouched: this is the default for NEW ones.
-  const encByDefault = !church.features || church.features.encryptComms !== false;
+  //
+  // …BUT IT MUST AGREE WITH THE SWITCH THE STEWARD CAN SEE. A church that still has an unsealed room reads
+  // "Encrypt all comms: Off" on the Rules page, and a form that then ticked Encrypted by default contradicted
+  // it (sim 2026-10-02 #58). The predicate below is the Rules page switch's own (DashFeaturesPanel's `encOn`:
+  // the flag is not `false` AND no GROUP room is unsealed); scripts/a-new-room-follows-the-encrypt-switch
+  // renders both and fails if they ever disagree. It is written out here rather than shared because the
+  // console tests slice components out of this file one at a time. This changes the DEFAULT only; the tick is
+  // still the steward's to set either way. Broadcasts are excluded: the wizard deliberately creates them
+  // unsealed ("the church's own voice"), and a wizard default must not drag the encrypt switch off.
+  const allGroupsForDefault = window.useStewardGroups ? window.useStewardGroups() : [];
+  const encByDefault = (!church.features || church.features.encryptComms !== false)
+    && !(allGroupsForDefault || []).some(g => g && g.kind === 'group' && !g.encrypted);
   React.useEffect(() => { if (open) { setName(''); setKind('group'); setSub(''); setInviteOnly(false); setEncrypted(encByDefault); setChildsafe(false); setSel(new Set()); setCategory(''); setBusy(false); setNote(''); } }, [open]);
   // BEFORE THE EARLY RETURN, so hook order is stable — the same note the sibling modal below carries.
   // This sat AFTER `if (!open) return null;` for one commit, which is a conditional hook call: the modal is
@@ -3750,7 +3761,24 @@ function EditGroupMembersModal({ group, onClose }) {
 function GroupChatModal({ group, onClose }) {
   const [msgs, setMsgs] = React.useState([]);
   const members = window.useStewardMembers ? window.useStewardMembers() : [];   // resolve a sender's display name
-  const nameFor = (pub) => { const mm = members.find(x => x.pubkey === pub); return (mm && (mm.name || '').trim()) || ('member …' + (pub || '').slice(-8)); };
+  // THE CHURCH AND ITS STEWARDS ARE NOT "member …1a2b3c4d". This is the console's own chat, where the owner
+  // and every delegated steward post AS THE CHURCH, so the commonest author on the screen was the one it could
+  // not name: the church key is not in the members list, and neither is a delegate who never set a member
+  // name. Sim round 2026-10-02 #51: church and delegate posts read as an anonymous member. A member's own
+  // name still wins; then the church's name for the church key; then the owner's label for a steward, or plain
+  // "A steward" — never a hex tail for someone the roster itself vouches for.
+  const gcChurch = window.useStewardChurch ? window.useStewardChurch() : { name: '' };
+  const gcStewards = window.useStewardStewards ? window.useStewardStewards() : [];
+  const gcLabels = (window.Steward.stewardLabels && window.Steward.stewardLabels()) || {};
+  const nameFor = (pub) => {
+    const mm = members.find(x => x.pubkey === pub);
+    const real = mm && (mm.name || '').trim();
+    if (real) return real;
+    if (pub && pub === window.Steward.pubkey) return (gcChurch && gcChurch.name) || 'Your church';
+    if (pub && gcLabels[pub]) return gcLabels[pub];
+    if (pub && (gcStewards || []).indexOf(pub) !== -1) return 'A steward';
+    return 'member …' + (pub || '').slice(-8);
+  };
   // The console's chat has never shown who is speaking beyond a name — no face, no symbol, nothing. On a busy
   // group that is the hardest possible way to follow a conversation, and it is the same data the members list
   // already draws. SkBadge does the safety work (data: images only, hex colours only). AUDIT-2026-07-28.
@@ -6599,7 +6627,9 @@ function DashMembers() {
             const S = window.Steward;
             const nm = ((S.stewardLabels && S.stewardLabels()) || {})[pk] || (S.stewardName ? S.stewardName(pk) : '') || 'Steward';
             const cp = ((S.stewardCaps && S.stewardCaps()) || {})[pk];
-            const what = !Array.isArray(cp) ? 'everything' : (cp.length ? cp.join(', ') : 'nothing yet');
+            // THE SAME WORDS THE DELEGATED-STEWARDS PANEL USES: this line printed the stored capability keys
+            // raw ("content, sealedrooms"). Sim 2026-10-02 #55.
+            const what = !Array.isArray(cp) ? 'everything' : (cp.length ? cp.map(c => STEW_CAP_LABEL[c] || c).join(', ') : 'nothing yet');
             return (
               <div key={pk} style={{ display: 'flex', alignItems: 'baseline', gap: 8, fontSize: 13, color: 'var(--ink-2)', padding: '2px 0' }}>
                 <span style={{ fontWeight: 700, color: 'var(--ink)' }}>{nm}</span>
@@ -9310,8 +9340,10 @@ function DashFeaturesPanel({ church, show = null }) {
   // ones will be. On a brand-new church there are no rooms, so absent-means-on is honest and the switch reads
   // ON from the first minute. On an existing church that still has unsealed rooms it reads OFF — tapping it
   // seals them — because a church shown a protection it does not have is the one failure this project cannot
-  // afford. Teams are excluded: the encrypt control is not offered for them (see the group list).
-  const encUnsealed = (allGroups || []).filter(g => g && g.kind !== 'team' && !g.encrypted);
+  // afford. Teams and broadcasts are excluded: teams have no encrypt control, and broadcasts are
+  // deliberately unsealed by the wizard ("the church's own voice") — a wizard default must not
+  // drag the switch off.
+  const encUnsealed = (allGroups || []).filter(g => g && g.kind === 'group' && !g.encrypted);
   // …and the switch must SAY so. The confirmation was corrected to name the exclusion; the always-visible
   // row above it still read “every group sealed end-to-end”, which is the claim a steward actually lives
   // with. Only shown to a church that HAS a serving team, so nobody is warned about a room they don't have.

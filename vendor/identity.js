@@ -12174,7 +12174,7 @@ zoo`.split("\n"));
     if (p.length < PIN_MIN) return "Choose a PIN of at least " + PIN_MIN + " characters. Adding letters makes it much harder to guess.";
     const onDevice = typeof native === "boolean" ? native : isNative();
     if (!onDevice && /^\d+$/.test(p) && p.length < PIN_MIN_NUMERIC_SOFT) {
-      return "On a computer an all-number PIN is easy to guess \u2014 use " + PIN_MIN_NUMERIC_SOFT + "+ digits, or add letters.";
+      return "In a web browser a PIN made only of numbers needs " + PIN_MIN_NUMERIC_SOFT + "+ digits, because here your key is kept in the browser itself rather than in the phone\u2019s secure store, so it is easier to guess. Use " + PIN_MIN_NUMERIC_SOFT + "+ digits or add letters \u2014 the phone app accepts 6.";
     }
     return "";
   }
