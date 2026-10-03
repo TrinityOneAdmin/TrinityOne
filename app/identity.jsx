@@ -1651,9 +1651,13 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
                   and not the other, and the stored key carries the church for that reason. It sits ABOVE
                   children's accounts because it is the one most families need — most children checked into a
                   crèche have no phone and no account at all (design §7). */}
-              <Row icon="child" label="Children at church" sub="Say you bring children, and their names — kept on this phone" accent="var(--sage)" onClick={() => setKidsAt(true)} />
+              {/* TWO ROWS, TWO JOBS, AND THEY READ AS ONE (sim 2026-10-02 #60: "two near-identical children screens for
+                  parents"). They are different things: this one is names on this phone for the check-in desk, no
+                  account anywhere; the next is a real account for a child who has their own phone. The
+                  subtitles now say which is which; the labels stay, because help articles point at them. */}
+              <Row icon="child" label="Children at church" sub="For the Sunday children’s desk — their names, no account needed. Kept on this phone" accent="var(--sage)" onClick={() => setKidsAt(true)} />
               {window.Fellowship && window.Fellowship.createChildAccount ? (
-                <Row icon="pray" label="Children’s accounts" sub="Set up and look after a child’s account in your church" accent="var(--sage)" onClick={() => setFamily(true)} />
+                <Row icon="pray" label="Children’s accounts" sub="Only if your child has their own phone — set up their account and link it to you" accent="var(--sage)" onClick={() => setFamily(true)} />
               ) : null}
             </Group>
           </React.Fragment>
