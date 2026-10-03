@@ -3195,18 +3195,23 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
   const careOn = window.useMealsSettings ? !!window.useMealsSettings().enabled : false;
   const careAllowed = !!(careOn && stewCapState('care').allowed);
   const [openCareReqs, setOpenCareReqs] = React.useState(0);
+  // …AND THE REQUESTS ALREADY SET UP OR CLOSED WHOSE PERSON HAS WRITTEN AGAIN (sim item 24; owner, 2026-10-02:
+  // "a message in a set-up or closed care thread counts on the Overview banner"). `newMessage` is decided by the
+  // engine — see careThreadAttention — and is the same flag the Care list keeps those rows on screen for, so the
+  // banner and the list cannot disagree about what is waiting.
+  const [careNewMsgs, setCareNewMsgs] = React.useState(0);
   React.useEffect(() => {
-    if (!careAllowed || !(window.StewardMeals && window.StewardMeals.subscribeCareRequests)) { setOpenCareReqs(0); return; }
+    if (!careAllowed || !(window.StewardMeals && window.StewardMeals.subscribeCareRequests)) { setOpenCareReqs(0); setCareNewMsgs(0); return; }
     let u = null;
-    try { u = window.StewardMeals.subscribeCareRequests(list => setOpenCareReqs((list || []).filter(r => r && r.status === 'open').length)); } catch (e) {}
+    try { u = window.StewardMeals.subscribeCareRequests(list => { setOpenCareReqs((list || []).filter(r => r && r.status === 'open').length); setCareNewMsgs((list || []).filter(r => r && r.status !== 'open' && r.newMessage).length); }); } catch (e) {}
     return () => { try { u && u(); } catch (e) {} };
   }, [careAllowed, _ovConn]);
-  const careReqBanner = openCareReqs ? (
+  const careReqBanner = (openCareReqs || careNewMsgs) ? (
     <button onClick={() => onTab('meals')} style={{ display: 'flex', alignItems: 'center', gap: 13, width: '100%', textAlign: 'left', cursor: 'pointer', padding: '16px 18px', borderRadius: 16, background: 'color-mix(in oklab, var(--clay) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 30%, var(--line))', marginBottom: 12, fontFamily: 'var(--font-ui)' }}>
       <div style={{ width: 42, height: 42, borderRadius: 12, flexShrink: 0, background: 'var(--clay)', color: 'var(--on-clay)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="heart" size={21} color="currentColor" /></div>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontWeight: 800, fontSize: 16, color: 'var(--clay-ink)' }}>{openCareReqs} {openCareReqs === 1 ? 'person has' : 'people have'} asked for help</div>
-        <div style={{ fontSize: 13, color: 'var(--ink-2)' }}>Nobody can offer until you open it as a need — set it up in Care.</div>
+        <div style={{ fontWeight: 800, fontSize: 16, color: 'var(--clay-ink)' }}>{[openCareReqs ? openCareReqs + ' ' + (openCareReqs === 1 ? 'person has' : 'people have') + ' asked for help' : '', careNewMsgs ? careNewMsgs + ' new ' + (careNewMsgs === 1 ? 'message' : 'messages') + ' on requests you’ve already dealt with' : ''].filter(Boolean).join(' · ')}</div>
+        <div style={{ fontSize: 13, color: 'var(--ink-2)' }}>{openCareReqs ? 'Nobody can offer until you open it as a need — set it up in Care.' : 'Open Care to read and reply.'}</div>
       </div>
       <span className="sk-btn sk-btn--clay" style={{ padding: '9px 14px', fontSize: 13.5, flexShrink: 0 }}>Open <Icon name="chevR" size={15} color="var(--on-clay)" /></span>
     </button>

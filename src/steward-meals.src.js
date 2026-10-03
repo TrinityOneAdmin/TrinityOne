@@ -36,6 +36,7 @@
 //     stewards) — see scripts/gateway.mjs accept() carve-out.
 
 import { _absorbById } from './church-doc-store.src.js';   // one rule for who wins, shared with the app and the console
+import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   // which requests' threads need a steward
 
 (function () {
   const S = () => window.Steward;
@@ -362,10 +363,33 @@ import { _absorbById } from './church-doc-store.src.js';   // one rule for who w
   function subscribeCareRequests(cb) {
     if (!S() || !S().subscribeMany || !S().churchPub) { cb([]); return () => {}; }
     const cp = S().churchPub; const byId = new Map(), statusById = new Map(), tomb = new Map();
-    const emit = () => { try { cb([...byId.values()].map(r => { const s = statusById.get(r.id) || {}; return { ...r, status: s.status || 'open', needId: s.needId || '' }; }).sort((a, b) => (b.at || 0) - (a.at || 0))); } catch (e) {} };
-    const sub = S().subscribeMany([{ kinds: [30078], '#t': ['carereq', 'carereqstatus'], '#church': [cp] }], {
+    // THE THREAD, AS FAR AS ATTENTION GOES: reqId -> msgId -> { from, at } for every message this console can OPEN.
+    // Sim item 24: a request left the console's list the moment "Set up help" (or Close) wrote its status, and
+    // took its only Message button with it, so a member who kept writing was heard by nobody. Each request is now
+    // emitted with `newMessage` — true when it was set up or closed and the ASKER has written since, with no
+    // team reply after that — decided by careThreadAttention, the one place that rule lives. Only a message the
+    // console can decrypt counts, exactly as subscribeCareChat shows only those: a stranger's event at somebody's
+    // d-tag cannot make a request look unanswered or answered.
+    const chat = new Map();
+    const emit = () => { try { cb([...byId.values()].map(r => {
+      const s = statusById.get(r.id) || {}; const status = s.status || 'open';
+      let askerAt = 0, teamAt = 0;
+      for (const m of (chat.get(r.id) || new Map()).values()) { if (m.from === r.from) askerAt = Math.max(askerAt, m.at); else teamAt = Math.max(teamAt, m.at); }
+      const att = careThreadAttention({ status, statusTs: s._ts || 0, askerAt, teamAt });
+      return { ...r, status, needId: s.needId || '', newMessage: att.returned };
+    }).sort((a, b) => (b.at || 0) - (a.at || 0))); } catch (e) {} };
+    const sub = S().subscribeMany([{ kinds: [30078], '#t': ['carereq', 'carereqstatus'], '#church': [cp] }, { kinds: [30078], '#t': ['carechat'], '#church': [cp] }], {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+        if (d.startsWith(CARECHAT_D)) {
+          const rest = d.slice(CARECHAT_D.length), at = rest.lastIndexOf(':'); if (at < 1) return;
+          const rid = rest.slice(0, at), mid = rest.slice(at + 1);
+          let b = null; try { b = S().openSealedFromPeer(JSON.parse(e.content), e.pubkey); } catch (x) {}
+          if (!b || !b.text) return;
+          let m = chat.get(rid); if (!m) { m = new Map(); chat.set(rid, m); }
+          if (m.has(mid)) return;
+          m.set(mid, { from: e.pubkey, at: e.created_at || 0 }); emit(); return;
+        }
         if (d.startsWith(CARESTATUS_D)) { const id = d.slice(CARESTATUS_D.length); const p = statusById.get(id); if (p && p._ts >= e.created_at) return; try { const s = JSON.parse(e.content || '{}'); statusById.set(id, { status: String(s.status || 'handled'), needId: String(s.needId || ''), _ts: e.created_at }); emit(); } catch (x) {} return; }
         if (!d.startsWith(CAREREQ_D)) return;
         const id = d.slice(CAREREQ_D.length);
