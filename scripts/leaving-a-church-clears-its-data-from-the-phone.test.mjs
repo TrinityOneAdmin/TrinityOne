@@ -57,6 +57,9 @@ test('leaveMembership clears per-church localStorage keys but keeps the parent\'
     toPub: (x) => x,
     sk: 'deadbeef',
     finalizeEvent: (tmpl, _sk) => { events.push(tmpl); return { ...tmpl, id: 'e1', sig: 'sig', pubkey: 'pk' }; },
+    // setEventRsvp / announceMembership / leaveMembership stamp through _monotonicF (sim item 19). These tests are about
+    // something else, so the stamp is the identity here; its own behaviour is a-second-write-in-the-same-second-is-not-a-failure.test.mjs.
+    _monotonicF: (t) => t,
     finalizeEvent2: (tmpl, _sk) => { events.push(tmpl); return { ...tmpl, id: 'e1', sig: 'sig', pubkey: 'pk' }; },
     _publishAny: async () => true,
     _pubReason: () => 'test',
@@ -135,6 +138,9 @@ test('CONTROL: a second church\'s data is not affected by leaving the first', as
     toPub: (x) => x,
     sk: 'deadbeef',
     finalizeEvent: (tmpl, _sk) => ({ ...tmpl, id: 'e1', sig: 'sig', pubkey: 'pk' }),
+    // setEventRsvp / announceMembership / leaveMembership stamp through _monotonicF (sim item 19). These tests are about
+    // something else, so the stamp is the identity here; its own behaviour is a-second-write-in-the-same-second-is-not-a-failure.test.mjs.
+    _monotonicF: (t) => t,
     finalizeEvent2: (tmpl, _sk) => ({ ...tmpl, id: 'e1', sig: 'sig', pubkey: 'pk' }),
     _publishAny: async () => true,
     _pubReason: () => 'test',

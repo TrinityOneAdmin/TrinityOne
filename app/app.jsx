@@ -39,7 +39,7 @@ function makeReconnectScheduler(bump, opts) {
   let last = -Infinity, pending = null;
   const drop = () => { if (pending) { clear(pending); pending = null; } };
   const run = () => { drop(); last = now(); bump(); };
-  return {
+  const api = {
     // ADVISORY signals: "it might be worth refreshing". Safe to collapse, safe to delay.
     //   immediate=true  — the member foregrounded the app and is watching the screen.
     //   immediate=false — a radio or router event, spread across the congregation.
@@ -67,8 +67,27 @@ function makeReconnectScheduler(bump, opts) {
     //
     // The rule: a signal that REPAIRS state must not share a gate with signals that merely REFRESH it.
     force() { run(); return true; },
+    // A SOCKET COMING BACK IS NOT AN ORDINARY ADVISORY SIGNAL, AND THE DEBOUNCE MUST NOT EAT IT.
+    // Sim 2026-10-02, item 18. `fire(false)` drops anything that arrives within debounceMs of the last run, on the
+    // reasoning that the run just made already covers it. That is true of a radio blip and false here: every REQ
+    // that run sent went out BEFORE this socket existed — onto a socket the relay had already killed (a half-open
+    // one only finds out when the first write is answered with a reset), or to a relay that was not back yet.
+    // So the subscriptions it opened are dead, the new socket has none, and the church-doc hubs stay silent. Seen
+    // in a headless browser against a real relay restart: foreground, socket returns 100ms later, signal dropped,
+    // services and rotas never arrive.
+    // Outside the window this is exactly fire(false) — jittered, collapsed, one run for a congregation. Inside it,
+    // one run is deferred to the end of the window instead of being thrown away; the debounce still bounds the
+    // rate (never more than one run per window), it just stops discarding the one run that was needed.
+    returned() {
+      const t = now();
+      if (t - last >= debounceMs) return api.fire(false);
+      if (pending) return false;                      // a run is already due, and it goes out after this socket exists
+      pending = timer(run, debounceMs - (t - last));
+      return true;
+    },
     cancel() { drop(); },
   };
+  return api;
 }
 
 function _readableOn(hex) {
@@ -686,7 +705,7 @@ function App() {
     // scheduler exists to prevent, and reconnect-storm.test.mjs is right to insist the two never share a
     // handler — an earlier version of this branch overloaded the one event name and that test caught it.
     // So: its own event, on the advisory path. Mirrors the console's `steward-relay-returned`.
-    const onRelayReturned = () => { sched.fire(false); };
+    const onRelayReturned = () => { sched.returned(); };
     window.addEventListener('trinity-relay-returned', onRelayReturned);
     window.addEventListener('trinity-reconnect', onReconnectNeeded);
     // Native resume: web visibilitychange/focus are unreliable in the Android WebView, so RETURNING to a

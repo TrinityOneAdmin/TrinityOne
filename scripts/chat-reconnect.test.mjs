@@ -212,8 +212,12 @@ test('a returning socket is advisory, and does not share the mandatory event', (
   assert.doesNotMatch(mandatory, /sched\.fire\(/, 'and it must never share the advisory gate');
 
   const advisory = effect.slice(effect.indexOf('const onRelayReturned'), effect.indexOf('const onRelayReturned') + 200);
-  assert.match(advisory, /sched\.fire\(false\)/,
+  // `returned()` (sim item 18) IS the advisory path — outside the debounce window it is exactly fire(false), jittered
+  // and collapsed — except that inside the window it defers one run instead of dropping it. Its behaviour is run,
+  // not read, in a-socket-that-returns-inside-the-debounce-is-not-lost.test.mjs; this only keeps it off force().
+  assert.match(advisory, /sched\.returned\(\)/,
     'a returning socket is advisory — collapse it and jitter it across the congregation');
+  assert.doesNotMatch(advisory, /sched\.force\(/, 'a returning socket must never take the mandatory, undebounced path');
   assert.match(effect, /addEventListener\('trinity-relay-returned',\s*onRelayReturned\)/, 'nothing listens for it');
   assert.match(effect, /removeEventListener\('trinity-relay-returned',\s*onRelayReturned\)/,
     'an unremoved listener survives every remount and multiplies the rebuilds it was added to reduce');

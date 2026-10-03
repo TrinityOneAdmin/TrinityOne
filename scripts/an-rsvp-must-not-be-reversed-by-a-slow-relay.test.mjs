@@ -34,6 +34,9 @@ function engine(mode) {
     window: { Fellowship: { ready: Promise.resolve(), relays: ['wss://x/relay'] } },
     toPub: (x) => (x ? 'c'.repeat(64) : null),
     NET: 'trinityone',
+    // setEventRsvp / announceMembership / leaveMembership stamp through _monotonicF (sim item 19). These tests are about
+    // something else, so the stamp is the identity here; its own behaviour is a-second-write-in-the-same-second-is-not-a-failure.test.mjs.
+    _monotonicF: (t) => t,
     finalizeEvent2: (t) => ({ ...t, id: 'evt-' + published.length, sig: 'sig' }),
     _publishAny: async (_r, e) => {
       published.push(e);

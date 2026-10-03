@@ -3203,6 +3203,16 @@ function applyDeletions(evt) {
   }
 }
 
+// DOES THIS careskip: CARRY THE RECIPIENT'S PROOF FOR ITS DAY? — one definition, asked by accept() (may it be
+// written at all) and by resolveChurch() (whose church is it). The recipient proves who they are WITHOUT being
+// identified: they present THIS day's token, we hash it and compare with the need's per-day hash for THIS date
+// (falling back to the v2 whole-need hash). A token captured for one day cannot skip another.
+function skipTokOk(e, careId, date) {
+  const tok = ((e.tags || []).find(t => t[0] === 'skiptok') || [])[1] || '';
+  const want = CARE_SKIPHASH.get(careId);
+  const wantHash = want && ((want.perDay && want.perDay.get(date)) || want.legacy || '');
+  return !!(wantHash && tok && createHash('sha256').update(String(tok)).digest('hex') === wantHash);
+}
 function resolveChurch(e) {
   // SECURITY-2026-07-13: honor a self-declared ['church',cp] tag ONLY when the author actually BELONGS to cp. Trusting
   // it blindly let a member of church A tag events ['church', B] and inject them into B's per-church retention bucket
@@ -3214,6 +3224,16 @@ function resolveChurch(e) {
     const md = MEMBER_DOCS.get(cp), gated = REQUIRE_APPROVAL.has(cp), admitted = ADMITTED_BY.get(cp);
     const effMember = !!(md && md.has(e.pubkey)) && !blockedBy(e.pubkey, cp) && (!gated || !!(admitted && admitted.has(e.pubkey)));
     if (e.pubkey === cp || networkOf(e.pubkey, cp) || stewardCan(e.pubkey, cp, 'any') || effMember) return cp;   // B3: scoped
+    // A RECIPIENT'S "I'M COVERED" IS SIGNED BY A KEY THAT BELONGS TO NOBODY (sim 2026-10-02, item 23). The member
+    // app signs a skip with a throwaway key derived from the need's secret, precisely so the relay cannot tell who
+    // the recipient is. That key is not a member, a steward or a church, so every test above said no, the row was
+    // filed under church '' and the church-column read — which is the ONLY way the member hub and the console
+    // ask for care sign-ups and skips (`#church`) — never matched it. The skip was stored and acknowledged and
+    // read by nobody: the day went back to "Open" the moment the phone's own copy was gone.
+    // WHAT MAKES THIS SAFE: the proof is the same one accept() demanded to let it in — this day's token hashes to
+    // the hash the NEED carries — and the church is the one the need belongs to, not merely the one the skip
+    // claims. A skip that names another church, or carries no valid token, is attributed no further than before.
+    { const d = dtag(e); if (d.startsWith(SKIP_D)) { const parts = d.slice(SKIP_D.length).split(':'); if (CARE_CHURCH.get(parts[0]) === cp && skipTokOk(e, parts[0], parts[1] || '')) return cp; } }
   }
   if (CHURCH_PUBS.has(e.pubkey) || NETWORKS.has(e.pubkey)) return e.pubkey;
   const g = gidOf(e); if (g && GROUP_CHURCH.has(g)) return GROUP_CHURCH.get(g);
@@ -4529,10 +4549,7 @@ function accept(e) {
       // recipient-only, proven WITHOUT identifying them: present THIS day's token, we hash and compare it to
       // the need's per-day hash for THIS date. A token captured for one day cannot skip another. Falls back
       // to the v2 whole-need hash, then the v1 cleartext-recipient check, for needs published before v3.
-      const tok = (e.tags.find(t => t[0] === 'skiptok') || [])[1] || '';
-      const want = CARE_SKIPHASH.get(careId);
-      const wantHash = want && ((want.perDay && want.perDay.get(date)) || want.legacy || '');
-      const tokOk = !!(wantHash && tok && createHash('sha256').update(String(tok)).digest('hex') === wantHash);
+      const tokOk = skipTokOk(e, careId, date);   // one definition, shared with resolveChurch()
       // AUDIT-2026-07-24: `isLeader` folds in an UNSCOPED network check for an untagged event, so any church
       // key — or any key any church ever declared a network — could forge "the recipient doesn't need help
       // that day" against ANY need on the box, defeating the per-day skiphash directly above. Same B-2 fix
@@ -5454,7 +5471,24 @@ function canRead(e, authed) {
       // itself (which carries the room's name and members) should not be served back.
       if (GROUP_GONE.has(gid)) {
         const gcp = GROUP_CHURCH.get(gid) || idNamesOwner(gid);
-        return !!gcp && !!authed && (authed === gcp || networkOf(authed, gcp) || stewardCan(authed, gcp, 'content'));
+        if (!!gcp && !!authed && (authed === gcp || networkOf(authed, gcp) || stewardCan(authed, gcp, 'content'))) return true;
+        // THE TOMBSTONE ITSELF IS HOW A PHONE LEARNS THE ROOM IS GONE (sim 2026-10-02, item 38). This branch
+        // refused EVERYTHING at this id to everyone but the church and its content stewards — including the
+        // empty, content-less tombstone the church wrote to delete it — so the retraction was withheld from the
+        // very members it had to reach. An open phone kept the room in its list (a post into it showing as
+        // ciphertext, then "blocked") until a restart; a fresh fetch cannot help, because the tombstone has
+        // replaced the definition in the store and is withheld just the same. The member app's delete path was
+        // always right; it was never handed the delete.
+        // WHAT THIS SERVES, AND WHAT IT DOES NOT. Only a TOMBSTONE (a `deleted` tag or no content): it carries
+        // the room's id and nothing else — no name, no members, no history. Any other copy of the definition at
+        // this id (a steward's, left behind by the church's delete) is still church/content-steward only, and the
+        // room's MESSAGES are gated separately (GROUP_GONE, below) and stay closed to former members.
+        // IT FALLS THROUGH to the rules a live room's definition would meet, so a tombstone reaches exactly the
+        // people the definition reached: a team room's roster (not the congregation), and never a young person
+        // for a room that was not child-safe (GROUP_CHILDSAFE is cleared on delete, so a child hears nothing —
+        // "you do not see what you are not part of" — at the cost that a deleted CHILD-SAFE room also lingers
+        // on a child's open phone until restart).
+        if (!((e.tags || []).some(t => t[0] === 'deleted') || !e.content)) return false;
       }
       if (GROUP_VIS.get(gid) === 'team') {
         const ppl = ROSTER_PEOPLE.get(gid);
