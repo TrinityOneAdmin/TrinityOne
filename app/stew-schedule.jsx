@@ -9,6 +9,13 @@ const SCH_DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 // The toolbar label for each rota-visibility setting. Short enough for the button; the menu carries the
 // explanation, and the caveat that this applies from now on rather than retroactively.
 const ROTA_VIS_LABEL = { church: 'Everyone', team: 'Serving teams', stewards: 'Stewards only' };
+// UNSAVED ROTA EDITS OUTLIVE THE BOARD. The draft lives in DashRota's own state, so clicking to Calendar or
+// Members and back unmounted the board and threw away everything not yet published - a steward could lose an
+// hour of arranging to a mis-click on the sidebar (sim 2026-10-02 #57). This holds the drafts for as long as the
+// console page stays open, per church. It is memory only: a reload still clears it (a draft names people, and
+// writing it to disk is a different decision), and Publish is still the only thing that tells anybody anything.
+const SCH_DRAFT_STORE = {};   // church pubkey -> { svcId: assignMap }
+const schDraftChurch = () => String((window.Steward && window.Steward.pubkey) || '');
 function schDate(s) { try { return new Date(s + 'T00:00'); } catch { return new Date(); } }
 function schKey(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
 function schParts(s) { const d = schDate(s); return { dow: SCH_DOW[d.getDay()], day: d.getDate(), mon: SCH_MON[d.getMonth()] }; }
@@ -574,7 +581,10 @@ function DashRota({ onNewTeam }) {
   const defaultSvc = (sortedSvcs.find(s => (s.date || '') >= todayStr) || sortedSvcs[sortedSvcs.length - 1] || {}).id;
 
   const [sel, setSel] = useSch(null);
-  const [draft, setDraft] = useSch({});         // { svcId: assignMap } — local unsaved edits
+  // Restored from SCH_DRAFT_STORE on mount, written through on every change - see the note above it.
+  const draftChurch = schDraftChurch();
+  const [draft, setDraftState] = useSch(() => ({ ...(SCH_DRAFT_STORE[draftChurch] || {}) }));   // { svcId: assignMap } — local unsaved edits
+  const setDraft = (v) => setDraftState(d => { const n = typeof v === 'function' ? v(d) : v; SCH_DRAFT_STORE[draftChurch] = n; return n; });
   const seeded = useSchR(new Set());
   const [assignSlot, setAssignSlot] = useSch(null);
   const [rosterTeam, setRosterTeam] = useSch(null);
@@ -585,7 +595,8 @@ function DashRota({ onNewTeam }) {
   // seed each service's draft from its published rota the first time we see it
   useSchE(() => {
     let changed = false; const next = { ...draft };
-    rotas.forEach(r => { if (!seeded.current.has(r.service)) { seeded.current.add(r.service); next[r.service] = { ...(r.assign || {}) }; changed = true; } });
+    // …and a draft restored from the store is NOT overwritten by the published copy it was made from.
+    rotas.forEach(r => { if (!seeded.current.has(r.service)) { seeded.current.add(r.service); if (next[r.service] === undefined) { next[r.service] = { ...(r.assign || {}) }; changed = true; } } });
     if (changed) setDraft(next);
   }, [rotas]);
 
