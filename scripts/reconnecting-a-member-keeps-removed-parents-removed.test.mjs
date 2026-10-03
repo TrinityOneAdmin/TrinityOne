@@ -29,6 +29,9 @@ const DIALOG = [
   sliceIn(MODAL, 'const _gdCheckin = window.useStewardGuardians', 'the dialog reading the guardian document'),
   sliceIn(MODAL, 'const guardiansNow = ', 'guardiansNow'),
   ...(MODAL.includes('const guardiansClosedNow = ') ? [sliceIn(MODAL, 'const guardiansClosedNow = ', 'guardiansClosedNow')] : []),
+  // the dialog now also reads the team rosters, the rotas and which team is the care team (sim item 21) and hands them to
+  // the engine, so those statements have to run for the call below to have its inputs
+  ...['const rostersNow = ', 'const rotasNow = ', 'const careTeamIdNow = '].filter(a => MODAL.includes(a)).map(a => sliceIn(MODAL, a, a)),
   sliceIn(MODAL, 'const r = await window.Steward.reseatMember(member, newPub, {', "the dialog's reseatMember call"),
 ].join('\n');
 const RESEAT = (() => { const a = '    async reseatMember(oldPub, newPub, o) {'; const at = STEWARD.indexOf(a); assert.notEqual(at, -1, 'reseatMember is missing from vendor/steward.js'); return fnBody(STEWARD, at, 'reseatMember'); })();

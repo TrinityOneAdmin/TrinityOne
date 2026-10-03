@@ -808,6 +808,12 @@ function App() {
   // active, and resolve its name from the relay. The church's real groups (published by its console)
   // then load in chat. Accepts a bare npub OR anything containing one (a ?follow= link). Returns
   // false if no valid npub is found, else an unsubscribe fn.
+  // CODES WHOSE "IS THIS A CHURCH?" ANSWER HAS NOT COME BACK YET. followChurch puts a church in the list and makes
+  // it active BEFORE checkChurch answers, and the membership heartbeat below is keyed on the active church — so it
+  // announced membership to a code that was not a church (a member's own code, a mistyped one) on the very render
+  // that followed it. The relay refuses those, but the phone still signed and queued the request and retried it.
+  // The heartbeat stays out of a church while it is in here. Sim item 20, 2026-10-02.
+  const unconfirmedChurches = React.useRef(new Set());
   const followChurch = (raw) => {
     const m = String(raw || '').match(/npub1[0-9a-z]{20,}/);
     if (!m) return false;
@@ -839,6 +845,8 @@ function App() {
       if (F.adoptInviteRelays) { try { _adoption = F.adoptInviteRelays(npub, raw); } catch (e) {} }
     }
     const alreadyFollowed = churches.find(c => c.id === npub);
+    // Marked BEFORE setActiveChurch below: the heartbeat effect runs on the render that follows it.
+    if (!alreadyFollowed && window.Fellowship && window.Fellowship.checkChurch) unconfirmedChurches.current.add(npub);
     setChurches(cs => cs.find(c => c.id === npub) ? cs : [...cs, { id: npub, npub, name: 'Church', initials: 'CH', accent: 'var(--clay)', tagline: '', sub: 'Followed', verified: false, members: 0 }]);
     setActiveChurch(npub); lsSet('trinityone.activeChurch', npub);
     // M-9: do NOT announce membership until we confirm this npub is actually a church. A valid npub that
@@ -854,8 +862,10 @@ function App() {
           if (_adoption) { try { await _adoption; } catch (e) {} }
           const result = await window.Fellowship.checkChurch(npub);
           if (result === 'church') {
+            unconfirmedChurches.current.delete(npub);
             if (window.Fellowship.announceMembership) window.Fellowship.announceMembership(npub);
           } else if (result === 'not-found') {
+            unconfirmedChurches.current.delete(npub);
             setChurches(cs => cs.filter(c => c.id !== npub));
             setActiveChurch(ac => {
               if (ac !== npub) return ac;
@@ -868,9 +878,14 @@ function App() {
           } else if (attempt < 3) {
             // 'unknown' — a relay didn't answer. Retry after a delay, but never say "not found".
             setTimeout(() => _check(attempt + 1), 10000);
+          } else {
+            // After 3 retries of 'unknown' nobody has said "not a church" -- and a relay that never answered is not
+            // "not found" (owner, 2026-09-03). A REAL church on a thin link must still get its join request, so
+            // stop holding the heartbeat back and send it now, as the heartbeat did before the gate existed.
+            unconfirmedChurches.current.delete(npub);
+            if (window.Fellowship.announceMembership) window.Fellowship.announceMembership(npub);
           }
-          // After 3 retries of 'unknown', leave it: the profile subscription or heartbeat may succeed later.
-        } catch (e) {}
+        } catch (e) { unconfirmedChurches.current.delete(npub); }
       };
       _check(0);
     } else if (!alreadyFollowed) {
@@ -926,6 +941,8 @@ function App() {
     const np = (churches.find(c => c.id === activeChurch) || {}).npub;
     const F = window.Fellowship;
     if (!np || !(F && F.announceMembership)) return;
+    // Not until followChurch has heard that this code IS a church (see unconfirmedChurches).
+    if (unconfirmedChurches.current.has(np)) return;
     let last = 0; try { last = Number(localStorage.getItem('trinityone.hb:' + np) || 0); } catch {}
     if (Date.now() - last < 12 * 3600 * 1000) return;
     // ON A PIN-LOCKED BOOT THIS FIRES WITH NO KEY, every time: the lock wiped hb:<npub>, so the 12-hour check

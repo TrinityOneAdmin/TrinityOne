@@ -6924,6 +6924,7 @@
             continue;
           }
           _ownReqAt.set(child, Math.max(_ownReqAt.get(child) || 0, e.created_at || 0));
+          if (_superseded(cp, child)) continue;
           if (_unlinkedNow.has(child) || legacy.includes(child)) {
             _retractGuardReq(child, cp, e.created_at);
             continue;
@@ -8455,6 +8456,17 @@
     return "";
   }
   var _reseatNamed = /* @__PURE__ */ new Set();
+  function _dropSupersededChildren(cp, olds) {
+    if (!olds || !olds.size) return;
+    const all = _loadChildren();
+    const keep = all.filter((c) => !(c && c.churchPub === cp && olds.has(String(c.child || "").toLowerCase())));
+    if (keep.length === all.length) return;
+    try {
+      localStorage.setItem(FAMILY_KEY, JSON.stringify(keep));
+    } catch {
+    }
+    _familyChanged(cp);
+  }
   function _noteReseat(cp, e) {
     if (e.pubkey !== cp && !(_churchRoster.get(cp) && _churchRoster.get(cp).has(e.pubkey))) return;
     if ((e.created_at || 0) < (_reseatAt.get(cp) || 0)) return;
@@ -8478,6 +8490,7 @@
     } catch (x) {
     }
     _reseatOld.set(cp, s);
+    _dropSupersededChildren(cp, s);
     if (!mine || !pub) return;
     const key = cp + "|" + pub;
     if (_reseatNamed.has(key)) return;
@@ -11993,14 +12006,36 @@
         return () => {
         };
       }
-      let approval = false, admitted = [];
+      let approval = false;
+      const admittedByAuthor = /* @__PURE__ */ new Map();
+      const _admittedUnion = () => {
+        const all = /* @__PURE__ */ new Set();
+        for (const [author, v] of admittedByAuthor) {
+          if (author !== pubk && !(_churchRoster.get(pubk) && _churchRoster.get(pubk).has(author))) continue;
+          for (const pk of v.pubkeys) if (pk) all.add(pk);
+        }
+        return all;
+      };
       const me = window.Fellowship.myPubkey || pub;
       const emit = () => {
-        const isAdmitted = !!(me && admitted.includes(me));
+        const isAdmitted = !!(me && _admittedUnion().has(me));
         onState({ approval, isAdmitted, isPending: approval && !isAdmitted, authFailed: authState().failed });
       };
       return _onChurchDocs(pubk, {
         onevent(e, d) {
+          if (d === "trinityone/admitted:" + pubk) {
+            const prev = admittedByAuthor.get(e.pubkey);
+            if (prev && e.created_at < prev.at) return;
+            let list = [];
+            try {
+              list = JSON.parse(e.content).pubkeys || [];
+            } catch {
+              list = [];
+            }
+            admittedByAuthor.set(e.pubkey, { at: e.created_at, pubkeys: Array.isArray(list) ? list : [] });
+            emit();
+            return;
+          }
           if (e.pubkey !== pubk && !(_churchRoster.get(pubk) && _churchRoster.get(pubk).has(e.pubkey))) return;
           if (d === "trinityone/joinpolicy:" + pubk) {
             if (e.tags.some((t) => t[0] === "deleted") || !e.content) approval = false;
@@ -12010,13 +12045,6 @@
               } catch {
                 approval = false;
               }
-            }
-            emit();
-          } else if (d === "trinityone/admitted:" + pubk) {
-            try {
-              admitted = JSON.parse(e.content).pubkeys || [];
-            } catch {
-              admitted = [];
             }
             emit();
           }

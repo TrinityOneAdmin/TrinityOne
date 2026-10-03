@@ -5455,6 +5455,11 @@ function ReseatModal({ member, memberName, realName, isMinor, admittedList, onCl
   // back as a "Confirm" card (audit of a00d265, F2).
   const guardiansClosedNow = _gdCheckin.closed || {};
   const blockedNow = window.useStewardBlocked ? window.useStewardBlocked() : [];
+  // TEAMS AND ROTA MOVE WITH THE SEAT TOO (sim item 21): a roster and a rota slot name a person by key, so the engine
+  // is handed what this console is looking at, and swaps the old key for the new one in each.
+  const rostersNow = window.useStewardRosters ? window.useStewardRosters() : [];
+  const rotasNow = window.useStewardRotas ? window.useStewardRotas() : [];
+  const careTeamIdNow = (window.useMealsSettings ? (window.useMealsSettings() || {}).adminGroupId : '') || '';
   const [taken, setTaken] = React.useState(false);   // "lost, or taken?" — see the note by the checkbox
   const [scan, setScan] = React.useState(false);
   const [text, setText] = React.useState('');
@@ -5480,6 +5485,7 @@ function ReseatModal({ member, memberName, realName, isMinor, admittedList, onCl
         name: realName || '', reseats, admitted: admittedList,
         minors: sgNow.minors, approved: sgNow.approved, guardians: guardiansNow, guardiansClosed: guardiansClosedNow,
         blocked: blockedNow, blockOld: taken,
+        rosters: rostersNow, rotas: rotasNow, careTeamId: careTeamIdNow,
       });
       setRes(r || {});
       setDone(true);
@@ -5509,6 +5515,8 @@ function ReseatModal({ member, memberName, realName, isMinor, admittedList, onCl
             res.guardiansCarried ? 'parent link' : null,
           ].filter(Boolean).reduce((a, s, i, arr) => i === 0 ? s : (i === arr.length - 1 ? a + ' and ' + s : a + ', ' + s), '')}</b> moved across with
           them{res.failed && res.failed.includes('clearance') ? ', though their new phone has not confirmed it yet — it should pick it up shortly' : ', and their new phone has been told'}. </React.Fragment> : null}
+          {res && (res.teamsMoved || res.rotasMoved) ? <React.Fragment>They are still on {res.teamsMoved ? (res.teamsMoved === 1 ? 'their serving team' : 'their ' + res.teamsMoved + ' serving teams') : ''}{res.teamsMoved && res.rotasMoved ? ' and in ' : ''}{res.rotasMoved ? (res.rotasMoved === 1 ? 'the rota they were on' : 'the ' + res.rotasMoved + ' rotas they were on') : ''}, under the new key. </React.Fragment> : null}
+          {res && res.failed && res.failed.some(f => /^(team|careteam|rota)/.test(f)) ? <b>Some of their serving places could not be moved across — open Teams and the Rota and check them. </b> : null}
           One thing to finish by hand: if they were in any <b>invite-only</b> groups, open Groups and add them
           again. Ordinary groups need nothing — they are already back in those.
         </p>

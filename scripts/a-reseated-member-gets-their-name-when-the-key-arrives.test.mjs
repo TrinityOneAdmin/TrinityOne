@@ -44,6 +44,7 @@ function rig({ keyHeld, withReplay = false }) {
     RESEAT_D: 'trinityone/reseat:',
     _dtag: (e) => (e.tags.find(t => t[0] === 'd') || [])[1] || '',
     _churchRoster: new Map(),
+    _dropSupersededChildren: () => {},   // sim item 30: the family-list purge; driven, shipped, in a-reconnected-child-is-one-child-on-the-parents-phone.test.mjs
     _reseatMap: new Map(), _returnAnnounced: new Map(),
     pub: MINE,
     profiles: {},
