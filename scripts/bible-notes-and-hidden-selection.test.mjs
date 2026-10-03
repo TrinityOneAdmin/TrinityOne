@@ -234,3 +234,91 @@ test('36: the Library names a verse-card note "John 1:51", not "43.1.51"', () =>
   assert.doesNotMatch(t, /43\.1\.51/);
   assert.match(t, /John 1:1/, 'a note already spelt as a name must read unchanged');
 });
+
+// ═══ ITEM 37 ═══════════════════════════════════════════════════════════════════════════════════════════════
+// NO VERSE IS SELECTED THAT THE READER DID NOT PICK. Two routes put a verse into the reader's selection without
+// a tap: (1) arriving on a verse ("Continue reading", Today, Search) wrote it into `sel` with no card open, and
+// (2) the card's ✕ closed the card but left the verses selected. Either way the NEXT tap made a two-verse
+// selection and Highlight / Copy / Share / Note acted on a verse nobody had chosen (sim: "Psalms 3:1,3";
+// "John 1:4,51"; Highlight green coloured both).
+//
+// These drive the real ReadScreen: taps are the handlers on real verse rows, ✕ is the real button inside the
+// real ActionSheet, and "what is selected" is read twice — off the reference line on the card, and off the
+// highlights the screen actually wrote when Highlight is pressed.
+const cardLabel = (R) => {
+  const h = find(R.tree(), x => x.props && x.props.style && String(x.props.style.fontFamily || '') === 'var(--font-display)'
+    && /^John \d+:/.test(reads(x)))[0];
+  return h ? reads(h) : null;
+};
+const tintOf = (R, n) => {
+  const row = find(R.tree(), x => x.props && x.props.id === 'rv-' + n)[0];
+  const t = find(row, x => x.props && x.props.style && /var\(--clay\) \d+%/.test(String(x.props.style.background || '')))[0];
+  return t ? /var\(--clay\) (\d+)%/.exec(t.props.style.background)[1] : null;
+};
+const pressHighlight = (R, colour) => {
+  const b = find(R.tree(), x => x.type === 'button' && x.props && x.props.title === 'Highlight ' + colour)[0];
+  assert.ok(b, 'no Highlight ' + colour + ' button on the card'); b.props.onClick(); return R.redraw();
+};
+const pressCardX = (R) => {
+  const sheet = find(R.tree(), x => x.type && x.type.name === 'ActionSheet')[0];
+  assert.ok(sheet, 'no ActionSheet in the reader');
+  const x = find(sheet, n => n.type && n.type.name === 'IconBtn' && n.props.name === 'x')[0];
+  assert.ok(x && x.props.onClick, 'the verse card has no ✕'); x.props.onClick(); return R.redraw();
+};
+const cardOpen = (R) => !!find(R.tree(), x => x.type && x.type.name === 'ActionSheet' && x.props.open)[0];
+
+test('37: arriving on a verse does not select it — the next tap selects ONLY the verse tapped', () => {
+  // "Continue reading" Psalms 3 opened on verse 1: tapping verse 3 gave "Psalms 3:1,3"
+  const R = reader({ start: { book: 43, chap: 3, verse: 1 } });
+  assert.equal(cardOpen(R), false, 'the card should not open just because the reader arrived on a verse');
+  R.tapVerse(3);
+  assert.equal(cardLabel(R), 'John 3:3', 'the arrival verse is silently part of the selection: ' + cardLabel(R));
+  pressHighlight(R, 'green');
+  assert.deepEqual(Object.keys(R.ctx.highlights), ['43.3.3'], 'Highlight coloured a verse the reader never chose: ' + JSON.stringify(R.ctx.highlights));
+});
+
+test('37: the arrival verse is still marked as "you are here", but lighter than a selection, and tapping it selects it', () => {
+  const R = reader({ start: { book: 43, chap: 3, verse: 5 } });
+  assert.equal(tintOf(R, 5), '16', 'the verse the reader arrived at should carry the light marker tint, got ' + tintOf(R, 5));
+  assert.equal(tintOf(R, 6), null);
+  R.tapVerse(5);
+  assert.equal(cardLabel(R), 'John 3:5');
+  assert.equal(tintOf(R, 5), '30', 'a tapped verse carries the full selection tint');
+  R.tapVerse(8);
+  assert.equal(cardLabel(R), 'John 3:5,8');
+});
+
+test('37: after the arrival marker, tapping ANOTHER verse drops the marker', () => {
+  const R = reader({ start: { book: 43, chap: 3, verse: 5 } });
+  R.tapVerse(9);
+  assert.equal(tintOf(R, 5), null, 'verse 5 is still tinted after the reader moved on to verse 9');
+  assert.equal(tintOf(R, 9), '30');
+  // and it does not come back when the reader un-picks: tap 9 again, card closes, verse 5 is not "here" any more
+  R.tapVerse(9);
+  assert.equal(cardOpen(R), false);
+  assert.equal(tintOf(R, 5), null, 'the arrival marker came back after the reader had tapped and un-tapped another verse');
+});
+
+test('37: ✕ on the verse card cancels the selection, so the next tap starts fresh', () => {
+  // the sim repro: tap 51, ✕, tap 4 -> "John 1:4,51"; Highlight green coloured both
+  const R = reader();
+  R.tapVerse(51);
+  assert.equal(cardOpen(R), true);
+  pressCardX(R);
+  assert.equal(cardOpen(R), false, '✕ should close the card');
+  assert.equal(tintOf(R, 51), null, 'verse 51 is still painted selected after ✕');
+  R.tapVerse(4);
+  assert.equal(cardLabel(R), 'John 1:4', '✕ left verse 51 selected out of sight: ' + cardLabel(R));
+  pressHighlight(R, 'green');
+  assert.deepEqual(Object.keys(R.ctx.highlights), ['43.1.4'], 'Highlight coloured a verse the reader never chose: ' + JSON.stringify(R.ctx.highlights));
+});
+
+test('37: a verse the reader DID pick still highlights, and tapping the same verse twice still deselects it', () => {
+  const R = reader();
+  R.tapVerse(2); R.tapVerse(3);
+  assert.equal(cardLabel(R), 'John 1:2-3');
+  pressHighlight(R, 'yellow');
+  assert.deepEqual(Object.keys(R.ctx.highlights).sort(), ['43.1.2', '43.1.3']);
+  R.tapVerse(7); assert.equal(cardOpen(R), true);
+  R.tapVerse(7); assert.equal(cardOpen(R), false, 'tapping the only selected verse again should deselect it and close the card');
+});

@@ -838,6 +838,13 @@ function ReadScreen({ ctx }) {
   const [serif, setSerif] = useS(() => lsGet('trinityone.readerSerif', true));
   const [showStrongs, setShowStrongs] = useS(false);
   const [sel, setSel] = useS([]);   // selected verse numbers — multi-select to copy/share a passage together
+  // ⚠ THE VERSE THE READER ARRIVED AT IS NOT A SELECTION (sim item 37, 2026-10-02). Opening the reader on
+  // "Continue reading", or jumping from Today / Search / the book picker, lands on a verse. That used to be
+  // written straight into `sel` — painted as selected, but with no card open, so nothing told the reader
+  // anything was held. The next tap then made a two-verse selection ("Psalms 3:1,3") and Highlight, Copy,
+  // Share and Note acted on a verse they never chose. The arrival verse is only MARKED (the light "you are
+  // here" tint, and scrolled to); it joins `sel` only if the reader taps it themselves. Any tap forgets it.
+  const [arrived, setArrived] = useS(null);
   // ── A PASSAGE THAT CROSSES A CHAPTER LINE ──────────────────────────────────────────────────────────────
   // The reader paints ONE chapter, so `sel` is verse numbers in the chapter now on screen and stays that
   // way. Pressing + at the last verse of a chapter rolls the reader into the next one (the owner:
@@ -874,7 +881,7 @@ function ReadScreen({ ctx }) {
     const roll = rollRef.current; rollRef.current = null;   // consumed here whether it matches or not
     // A roll-over already set `sel` and `carry` for THIS chapter in the same handler that called setLoc.
     // Every other arrival is a fresh place in the Bible: one verse or none, and nothing carried.
-    if (!(roll && roll.book === loc.book && roll.chap === loc.chap)) { setSel(loc.verse ? [loc.verse] : []); setCarry([]); }
+    if (!(roll && roll.book === loc.book && roll.chap === loc.chap)) { setSel([]); setCarry([]); setArrived(loc.verse || null); }
     const sc = scrollRef.current; if (!sc) return;
     if (loc.verse) {
       setTimeout(() => { const el = sc.querySelector('#rv-' + loc.verse); if (el && el.scrollIntoView) el.scrollIntoView({ block: 'center' }); else sc.scrollTop = 0; }, 60);
@@ -906,8 +913,12 @@ function ReadScreen({ ctx }) {
   const selectVerse = (n) => {
     const has = sel.some(x => String(x) === String(n));
     const next = has ? sel.filter(x => String(x) !== String(n)) : [...sel, n];
-    setSel(next); setCarry([]); setSheet(next.length ? 'action' : null);
+    setSel(next); setCarry([]); setArrived(null); setSheet(next.length ? 'action' : null);
   };
+  // ✕ (and the Back button) on the verse card CANCELS the selection, not just the card. It used to close the
+  // card and leave the verses selected and unseen, so the next tap added to them (sim item 37). Copy and
+  // Share still use plain `close` — they finish the job and have never cleared the selection.
+  const dismiss = () => { setSel([]); setCarry([]); setArrived(null); setSheet(null); };
   const openWord = (id) => { setWordStack([id]); setSheet('word'); };            // fresh lookup (tapping a verse's Strong's number)
   const pushWord = (id) => { setWordStack(s => [...s, id]); };                    // follow a cross-reference, keeping history
   const backWord = () => setWordStack(s => s.length > 1 ? s.slice(0, -1) : s);    // return to the previous definition
@@ -1127,7 +1138,7 @@ function ReadScreen({ ctx }) {
                 return (
                   <VerseRow key={row.v} n={row.v} html={row.html}
                     hl={ctx.highlights[k]} note={notes[k]} bookmarked={ctx.bookmarks.includes(k)}
-                    selected={selSorted.some(v => String(v) === String(row.v))} reading={narrateState !== 'idle' && String(narrateV) === String(row.v)} onSelect={selectVerse} onWord={openWord} />
+                    selected={selSorted.some(v => String(v) === String(row.v))} reading={(narrateState !== 'idle' && String(narrateV) === String(row.v)) || (arrived != null && String(arrived) === String(row.v))} onSelect={selectVerse} onWord={openWord} />
                 );
               })}
             </p>
@@ -1161,9 +1172,9 @@ function ReadScreen({ ctx }) {
         </div>
       </div>
 
-      <ActionSheet label={rangeRef} multi={multi} ctx={sheetCtx} open={sheet === 'action'} onClose={close}
+      <ActionSheet label={rangeRef} multi={multi} ctx={sheetCtx} open={sheet === 'action'} onClose={dismiss}
         curColor={passageKeys.length && passageKeys.every(k => ctx.highlights[k] === ctx.highlights[passageKeys[0]]) ? ctx.highlights[passageKeys[0]] : null}
-        onColor={(c) => { passageKeys.forEach(k => ctx.setHighlight(k, c)); setSel([]); setCarry([]); setSheet(null); }}
+        onColor={(c) => { passageKeys.forEach(k => ctx.setHighlight(k, c)); setSel([]); setCarry([]); setArrived(null); setSheet(null); }}
         bookmarked={ctx.bookmarks.includes(keyOf(sel0))} hasNote={!!notes[keyOf(sel0)]}
         onNote={() => setSheet('note')} onCross={() => setSheet('cross')} onCommentary={() => { close(); setCommentaryOpen(true); }} />
       <WordStudySheet id={wordId} open={sheet === 'word'} onClose={close} onWord={pushWord} canBack={wordStack.length > 1} onBack={backWord} />

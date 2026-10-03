@@ -37,7 +37,7 @@ function buildOnColor() {
   const end = clean.indexOf('}}', at);
   assert.notEqual(end, -1, 're-anchor: onColor handler is malformed');
   const arrow = clean.slice(at + 'onColor={'.length, end + 1);
-  return new Function('passageKeys', 'ctx', 'setSel', 'setCarry', 'setSheet', 'return (' + arrow + ');');
+  return new Function('passageKeys', 'ctx', 'setSel', 'setCarry', 'setSheet', 'setArrived', 'return (' + arrow + ');');
 }
 
 test('passageKeys is built from ALL selected verses across multiple chapters', () => {
@@ -57,13 +57,14 @@ test('onColor calls setHighlight for EVERY passageKey and clears the selection',
   const makeFn = buildOnColor();
   const highlighted = {};
   const ctx = { setHighlight: (k, c) => { highlighted[k] = c; } };
-  const calls = { sel: [], carry: [], sheet: [] };
+  const calls = { sel: [], carry: [], sheet: [], arrived: [] };
   const handler = makeFn(
     ['GEN.1.1', 'GEN.1.2', 'GEN.1.3'],
     ctx,
     (v) => calls.sel.push(v),
     (v) => calls.carry.push(v),
     (v) => calls.sheet.push(v),
+    (v) => calls.arrived.push(v),   // item 37 (2026-10-03): onColor also forgets the arrival marker
   );
   handler('yellow');
   assert.deepEqual(highlighted, { 'GEN.1.1': 'yellow', 'GEN.1.2': 'yellow', 'GEN.1.3': 'yellow' },
@@ -71,6 +72,7 @@ test('onColor calls setHighlight for EVERY passageKey and clears the selection',
     'and the rest of the selection would be silently dropped');
   assert.deepEqual(calls.sel, [[]], 'onColor did not clear the selection');
   assert.deepEqual(calls.sheet, [null], 'onColor did not close the action sheet');
+  assert.deepEqual(calls.arrived, [null], 'onColor did not clear the arrival marker');
 });
 
 test('ActionSheet renders highlight buttons when multi > 1', async () => {
