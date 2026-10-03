@@ -225,6 +225,26 @@ function RosterModal({ team, roster, members, onClose, onCreate }) {
   // The allowlist as it stood when this modal opened, so Save can apply what the steward CHANGED rather than
   // replacing the room's membership with the rota.
   const startPubs = useSchR((roster && roster.people ? roster.people : []).map(p => p && p.pub).filter(Boolean));
+  // ⚠ WHICH VERSION OF THE ROSTER THIS FORM WAS BUILT FROM, AND WHETHER SOMEONE ELSE HAS WRITTEN SINCE.
+  // A roster is ONE document per team and Save REPLACES it whole, so two stewards editing the same team
+  // overwrote each other: whoever pressed Save second silently won, and the first one's people and roles were
+  // gone with no word to either (sim 2026-10-02, item 17 — the relay held two authors' copies of one team).
+  //
+  // `roster.ts` is the created_at of the version the console is currently showing; the form copied its
+  // contents when it opened, so if that has moved on, what is on this form is out of date. This is DETECTION,
+  // not a merge: the steward is told, and must pick — take their version, or knowingly keep theirs. Two edits
+  // inside the same second share a timestamp and cannot be told apart; that is the limit of the approach.
+  const openedTs = useSchR((roster && roster.ts) || 0);
+  const liveTs = (roster && roster.ts) || 0;
+  const theirs = !!liveTs && liveTs !== openedTs.current && !saving;
+  // Take the roster as it now stands: the form, the pods, and the allowlist baseline Save diffs against.
+  const reloadTheirs = () => {
+    setRoles(roster && roster.roles ? roster.roles.map(r => ({ ...r })) : []);
+    setPeople(roster && roster.people ? roster.people.map(p => ({ ...p })) : []);
+    setPods(roster && roster.pods ? roster.pods.map(p => ({ ...p, fills: { ...(p.fills || {}) } })) : []);
+    startPubs.current = (roster && roster.people ? roster.people : []).map(p => p && p.pub).filter(Boolean);
+    openedTs.current = liveTs; setSaveErr('');
+  };
   const rid = () => 'r' + Math.random().toString(36).slice(2, 7);
   const pid = () => 'p' + Math.random().toString(36).slice(2, 7);
   const addRole = () => { if (!newRole.trim()) return; setRoles(r => [...r, { id: rid(), name: newRole.trim() }]); setNewRole(''); };
@@ -241,6 +261,8 @@ function RosterModal({ team, roster, members, onClose, onCreate }) {
   const setPodName = (id, name) => setPods(ps => ps.map(p => p.id === id ? { ...p, name } : p));
   const setPodFill = (id, roleId, pid) => setPods(ps => ps.map(p => p.id === id ? { ...p, fills: { ...p.fills, [roleId]: pid } } : p));
   const delPod = (id) => setPods(ps => ps.filter(p => p.id !== id));
+  // (When `theirs` is true the ordinary Save button is not rendered at all — the footer offers only
+  // "Reload their version" and "Save mine anyway" — so this is only ever reached by an explicit choice.)
   const save = async () => {
     if (saving) return;
     setSaving(true); setSaveErr('');
@@ -355,10 +377,18 @@ function RosterModal({ team, roster, members, onClose, onCreate }) {
       </div>
       <button onClick={addPod} className="sk-btn sk-btn--ghost" style={{ padding: '9px 14px', fontSize: 13 }}><Icon name="plus" size={15} color="currentColor" /> Add a pod</button>
 
-      <div style={{ display: 'flex', gap: 10, marginTop: 22 }}>
+      {theirs ? <div role="alert" style={{ fontSize: 13, color: 'var(--clay-ink)', fontWeight: 700, lineHeight: 1.5, marginTop: 18, padding: '10px 12px', borderRadius: 12, background: 'color-mix(in oklab, var(--gold) 12%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 40%, transparent)' }}>Someone else changed this roster after you opened it. Reload to see their version — or keep yours, which replaces theirs.</div> : null}
+      <div style={{ display: 'flex', gap: 10, marginTop: theirs ? 10 : 22 }}>
         <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
         {saveErr ? <div role="alert" style={{ flexBasis: '100%', fontSize: 13, color: 'var(--clay-ink)', fontWeight: 700, lineHeight: 1.5, marginBottom: 10, padding: '10px 12px', borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 32%, transparent)' }}>{saveErr}</div> : null}
-        <button onClick={save} disabled={saving} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: saving ? 0.6 : 1, cursor: saving ? 'default' : 'pointer' }}><Icon name="check" size={16} color="var(--on-clay)" /> {saving ? 'Saving…' : 'Save roster'}</button>
+        {theirs ? (
+          <React.Fragment>
+            <button onClick={reloadTheirs} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14 }}><Icon name="refresh" size={16} color="var(--on-clay)" /> Reload their version</button>
+            <button onClick={() => save()} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Save mine anyway</button>
+          </React.Fragment>
+        ) : (
+          <button onClick={() => save()} disabled={saving} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: saving ? 0.6 : 1, cursor: saving ? 'default' : 'pointer' }}><Icon name="check" size={16} color="var(--on-clay)" /> {saving ? 'Saving…' : 'Save roster'}</button>
+        )}
       </div>
     </SchModal>
   );
