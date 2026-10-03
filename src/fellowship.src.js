@@ -7782,7 +7782,10 @@ window.Fellowship = {
     // seal must still be able to say "I can't make it", and that answer read by the relay is a far smaller
     // matter than the request it answers. The console opens both shapes.
     const content = _sealChurchDocMember(cp, { request: requestId, v: verdict, swapTo: swapTo || '' });
-    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/reqreply:' + requestId], ['t', NET], ['p', cp]], content }, sk);
+    // MONOTONIC PER DOCUMENT, as setEventRsvp's. A member who taps "I'll serve" and then "Can't make it" (or the
+    // reverse) inside one second writes the same d-tag twice with the same created_at, and the relay keeps
+    // whichever event id sorts lower — so the church could be left holding the answer the member took back.
+    const evt = finalizeEvent(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/reqreply:' + requestId], ['t', NET], ['p', cp]], content }), sk);
     // A SEND THAT LANDED NOWHERE MUST NOT COME BACK LOOKING LIKE ONE THAT DID. Audit 2026-09-02 #6.
     // _publishAny THROWS when no relay accepted (and resolves true otherwise), and this swallowed that and
     // returned the event anyway — so every caller read a total failure as a success and said so on screen.
@@ -7838,7 +7841,12 @@ window.Fellowship = {
     if (!sk) await window.Fellowship.ready;
     const cp = toPub(churchNpub); if (!cp || !sk) return { ok: false, reason: 'not-sent' };
     const content = JSON.stringify({ event: eventId, v: verdict });
-    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/rsvp:' + eventId], ['t', NET], ['p', cp]], content }, sk);
+    // MONOTONIC PER DOCUMENT (owner, 2026-10-02: "same-second writes should use monotonic timestamps"). This is
+    // an addressable doc at a fixed d-tag and `created_at` is whole seconds, so a second write inside the same
+    // second TIES, and the relay breaks the tie by keeping the LOWEST event id — a coin toss. Going then Not
+    // going in one second therefore kept the older answer about half the time, and the relay still ACKed the
+    // newer one. _monotonicF only ever breaks a tie (see its note, and undo-beats-the-thing-it-undoes.test.mjs).
+    const evt = finalizeEvent(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/rsvp:' + eventId], ['t', NET], ['p', cp]], content }), sk);
     // A SEND THAT LANDED NOWHERE MUST NOT COME BACK LOOKING LIKE ONE THAT DID. Audit 2026-09-02 #6.
     // _publishAny THROWS when no relay accepted (and resolves true otherwise), and this swallowed that and
     // returned the event anyway — so every caller read a total failure as a success and said so on screen.
@@ -7870,7 +7878,9 @@ window.Fellowship = {
     const me = window.Fellowship.myPubkey;
     const list = Array.isArray(dates) ? dates : [];
     const content = JSON.stringify({ dates: list });
-    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/unavail:' + me], ['t', NET], ['p', cp]], content }, sk);
+    // MONOTONIC PER DOCUMENT — ticking a Sunday, saving, and un-ticking it again inside a second writes this
+    // fixed d-tag twice with one created_at; see setEventRsvp.
+    const evt = finalizeEvent(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/unavail:' + me], ['t', NET], ['p', cp]], content }), sk);
     // ⚠ IT STILL THROWS — but the caller must be able to tell "nothing left this phone" from "nobody
     // answered in time", because the honest sentence is opposite in the two cases. `_publishBounded` rejects
     // with a bare `Error('timeout')` on the race, which carries neither flag, so `_pubReason` reads it as

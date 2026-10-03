@@ -44,6 +44,10 @@ function engine(mode) {
       throw err;
     },
     _pubReason: new Function(fnBody(SHIP, 'function _pubReason(e)', '_pubReason') + '\nreturn _pubReason;')(),
+    // 2026-10-03 (Block B3): setEventRsvp stamps its write with the SHIPPED `_monotonicF`, lifted not stubbed.
+    _lastStampF: new Map(),
+    _monotonicF: new Function('_lastStampF', 'Date', 'Math',
+      fnBody(SHIP, 'function _monotonicF(', '_monotonicF') + '\nreturn _monotonicF;')(new Map(), Date, Math),
     publishSetFor: () => ['wss://x/relay'],
     String, JSON, Date, Math, Number, Array, Object, Boolean, console, Promise,
   };

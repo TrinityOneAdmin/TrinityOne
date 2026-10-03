@@ -14263,7 +14263,7 @@
       const cp = toPub(churchNpub);
       if (!cp || !sk) return;
       const content = _sealChurchDocMember(cp, { request: requestId, v: verdict, swapTo: swapTo || "" });
-      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", "trinityone/reqreply:" + requestId], ["t", NET], ["p", cp]], content }, sk);
+      const evt = finalizeEvent2(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", "trinityone/reqreply:" + requestId], ["t", NET], ["p", cp]], content }), sk);
       try {
         await _publishAny(publishSetFor(cp), evt);
       } catch (e) {
@@ -14343,7 +14343,7 @@
       const cp = toPub(churchNpub);
       if (!cp || !sk) return { ok: false, reason: "not-sent" };
       const content = JSON.stringify({ event: eventId, v: verdict });
-      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", "trinityone/rsvp:" + eventId], ["t", NET], ["p", cp]], content }, sk);
+      const evt = finalizeEvent2(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", "trinityone/rsvp:" + eventId], ["t", NET], ["p", cp]], content }), sk);
       try {
         await _publishAny(publishSetFor(cp), evt);
       } catch (e) {
@@ -14397,7 +14397,7 @@
       const me = window.Fellowship.myPubkey;
       const list = Array.isArray(dates) ? dates : [];
       const content = JSON.stringify({ dates: list });
-      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", "trinityone/unavail:" + me], ["t", NET], ["p", cp]], content }, sk);
+      const evt = finalizeEvent2(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", "trinityone/unavail:" + me], ["t", NET], ["p", cp]], content }), sk);
       try {
         await _publishBounded(publishSetFor(cp), evt);
       } catch (e) {

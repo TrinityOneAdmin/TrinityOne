@@ -39,6 +39,11 @@ function liftMethod(name) {
   throw new Error('unbalanced braces slicing ' + name);
 }
 
+// The SHIPPED `_monotonicF` with its own stamp memory (Block B3, 2026-10-03: the three member writers below stamp
+// their fixed-d-tag documents with it). Lifted out of the bundle, never stubbed.
+const liftMonotonicF = () => new Function('_lastStampF', 'Date', 'Math',
+  fnBody(BUNDLE, 'function _monotonicF(', '_monotonicF') + '\nreturn _monotonicF;')(new Map(), Date, Math);
+
 function runner(name, { publishFails, how }) {
   const body = liftMethod(name);
   // `async foo() {}` is object-method syntax; wrap it in an object literal to make it callable.
@@ -73,8 +78,12 @@ function runner(name, { publishFails, how }) {
   // cleartext path. What these tests measure is the publish OUTCOME; the content shape is not the subject.
   const _sealChurchDocMember = new Function('_nameKeys',
     fnBody(BUNDLE, 'function _sealChurchDocMember(', '_sealChurchDocMember') + '\nreturn _sealChurchDocMember;')(new Map());
-  const obj = new Function('finalizeEvent2', '_publishAny', 'publishSetFor', 'toPub', 'window', 'sk', 'NET', 'Date', 'JSON', 'Math', '_clearJoinSent', '_dropJoinIntent', '_pubReason', '_forgetChurch', '_sealChurchDocMember',
-    'return ' + src)(finalizeEvent2, _publishAny, () => ['wss://r.example/relay'], toPub, window, 'sk-bytes', 'trinityone', Date, JSON, Math, () => {}, () => {}, _pubReason, () => {}, _sealChurchDocMember);
+  // 2026-10-03 (Block B3): setEventRsvp and respondToServingRequest stamp their writes with the SHIPPED
+  // `_monotonicF` (owner: same-second writes must be monotonic). Lifted, never stubbed — the writers' outcome is
+  // what these rows measure, and a stub would answer for the stamp.
+  const _monotonicF = liftMonotonicF();
+  const obj = new Function('finalizeEvent2', '_publishAny', 'publishSetFor', 'toPub', 'window', 'sk', 'NET', 'Date', 'JSON', 'Math', '_clearJoinSent', '_dropJoinIntent', '_pubReason', '_forgetChurch', '_sealChurchDocMember', '_monotonicF',
+    'return ' + src)(finalizeEvent2, _publishAny, () => ['wss://r.example/relay'], toPub, window, 'sk-bytes', 'trinityone', Date, JSON, Math, () => {}, () => {}, _pubReason, () => {}, _sealChurchDocMember, _monotonicF);
   return { fn: obj[name], calls };
 }
 
@@ -186,10 +195,10 @@ function unavailRunner({ how }) {
   const _pubReason = new Function(fnBody(BUNDLE, 'function _pubReason(e)', '_pubReason') + '\nreturn _pubReason;')();
   const window = { Fellowship: { relays: ['wss://r.example/relay'], ready: Promise.resolve(), myPubkey: 'me-pub' } };
   return new Function('finalizeEvent2', '_publishBounded', 'publishSetFor', 'toPub', 'window', 'sk', 'NET', 'UNAVAIL_MIRROR',
-    'localStorage', '_pubReason', 'Date', 'JSON', 'Math', 'Array',
+    'localStorage', '_pubReason', 'Date', 'JSON', 'Math', 'Array', '_monotonicF',
     'return ' + src)(
     (e) => ({ ...e, id: 'evt-id' }), _publishBounded, () => ['wss://r.example/relay'], (x) => String(x || '') || null, window, 'sk-bytes',
-    'trinityone', 'unavail:', { setItem() {}, getItem: () => null }, _pubReason, Date, JSON, Math, Array,
+    'trinityone', 'unavail:', { setItem() {}, getItem: () => null }, _pubReason, Date, JSON, Math, Array, liftMonotonicF(),
   ).setUnavailable;
 }
 
@@ -213,10 +222,10 @@ test('CONTROL: setUnavailable still resolves with its event when the publish wor
   const src = '({ ' + liftMethod('setUnavailable') + ' })';
   const window = { Fellowship: { relays: ['wss://r.example/relay'], ready: Promise.resolve(), myPubkey: 'me-pub' } };
   const fn = new Function('finalizeEvent2', '_publishBounded', 'publishSetFor', 'toPub', 'window', 'sk', 'NET', 'UNAVAIL_MIRROR',
-    'localStorage', '_pubReason', 'Date', 'JSON', 'Math', 'Array',
+    'localStorage', '_pubReason', 'Date', 'JSON', 'Math', 'Array', '_monotonicF',
     'return ' + src)(
     (e) => ({ ...e, id: 'evt-id' }), async () => true, () => ['wss://r.example/relay'], (x) => String(x || '') || null, window, 'sk-bytes',
-    'trinityone', 'unavail:', { setItem() {}, getItem: () => null }, () => 'unconfirmed', Date, JSON, Math, Array,
+    'trinityone', 'unavail:', { setItem() {}, getItem: () => null }, () => 'unconfirmed', Date, JSON, Math, Array, liftMonotonicF(),
   ).setUnavailable;
   const out = await fn('npub1church', ['2026-09-20']);
   assert.ok(out && out.kind === 30078, 'setUnavailable no longer returns its event on the happy path');
