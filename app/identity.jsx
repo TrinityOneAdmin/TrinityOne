@@ -111,6 +111,8 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
   const [rShowPass, setRShowPass] = useId(false);
   const [rPending, setRPending] = useId(null);      // decrypted backup waiting on "yes, replace what's here"
   const [rReplaceOk, setRReplaceOk] = useId(false); // they said yes — next run through applies it
+  // The same question for TYPED WORDS. Holds the church name (or '') the warning should name; null = no warning up.
+  const [rWordsWarn, setRWordsWarn] = useId(null);
   // CHOOSE THE FILE FIRST, AND SAY WHAT IT IS BEFORE ASKING FOR ANYTHING. The old order asked for the
   // passphrase in a native prompt BEFORE reading the file, so picking the wrong one wasted the passphrase and
   // produced a confusing error afterwards. Here a wrong file costs nothing: they have typed nothing yet.
@@ -284,10 +286,40 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
     try { await finishRestore(); }
     catch (e) { setXferStage('scan'); setRBusy(''); setRErr('Your account came across, but we couldn’t finish looking for your church. Go back and use your church’s invite link or QR code.'); }
   };
-  const doRestore = async () => {
+  // IS THERE AN ACCOUNT ON THIS PHONE WORTH ASKING ABOUT? The same test doRestoreFile makes inline (that copy is
+  // left as it is because scripts/restore-from-file.test.mjs reads its text); keep the two in step. Fails closed,
+  // for the reason given in doRestoreFile.
+  const accountInUse = () => {
+    let used = true;
+    try { used = !!JSON.parse(localStorage.getItem('trinityone.onboarded') || 'false'); } catch (e) { used = true; }
+    if (!used) { try { used = ((JSON.parse(localStorage.getItem('trinityone.followedChurches') || '[]')) || []).length > 0; } catch (e) { used = true; } }
+    return used;
+  };
+  // The name of the church this phone follows now, for the warning. '' when unnamed or unreadable — the warning
+  // then says "on this phone" rather than guessing.
+  const currentChurchName = () => {
+    try {
+      const list = JSON.parse(localStorage.getItem('trinityone.followedChurches') || '[]') || [];
+      const act = JSON.parse(localStorage.getItem('trinityone.activeChurch') || 'null');
+      const hit = list.find(c => c && (c.id === act || c.npub === act)) || list[0];
+      return (hit && typeof hit.name === 'string') ? hit.name.trim() : '';
+    } catch (e) { return ''; }
+  };
+  // TYPING 12 WORDS REPLACES THE ACCOUNT ON THIS PHONE, so ask first — but only when there is something to lose
+  // and the words are a DIFFERENT account. Typing the words of the account already here is the ordinary "log
+  // me in again" and must not be frightened. The typed words stay in the box whatever is answered, so a wrong
+  // word costs a re-read, not a re-type. `consented` is passed as an argument, not read from state, for the same
+  // closure reason as the file route's button. 2026-10-03 (sim item 15).
+  const doRestore = async (consented) => {
     const words = (rPhrase || '').trim().toLowerCase().replace(/\s+/g, ' ');
     if (words.split(' ').length < 12) { setRErr('Enter all 12 words, separated by spaces.'); return; }
-    setRBusy('Checking your words…'); setRErr(''); rTypedWords.current = true;
+    setRErr('');
+    let standing = 'unknown';
+    try { standing = window.TrinityIdentity.whoseMnemonic(words); }
+    catch (e) { setRErr((e && e.message) || 'That phrase isn’t valid — check the words and their order.'); return; }   // a bad phrase is told so BEFORE any "this replaces your account" scare
+    if (consented !== true && standing === 'different' && accountInUse()) { setRWordsWarn(currentChurchName()); return; }
+    setRWordsWarn(null);
+    setRBusy('Checking your words…'); rTypedWords.current = true;
     try {
       await window.TrinityIdentity.importMnemonic(words);   // validates the checksum; throws on a bad phrase
     } catch (e) { setRBusy(''); setRErr((e && e.message) || 'That phrase isn’t valid — check the words and their order.'); return; }
@@ -859,11 +891,21 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
           <p style={{ textAlign: 'center', fontSize: 15, lineHeight: 1.55, color: 'var(--ink-2)', margin: '0 auto 18px', maxWidth: 380, fontFamily: 'var(--font-read)', textWrap: 'pretty' }}>
             Type the 12 words you wrote down. They bring back the same account, so your church knows you’re you.
           </p>
-          <textarea value={rPhrase} onChange={e => { setRPhrase(e.target.value); setRErr(''); }} rows={4} autoCapitalize="none" autoCorrect="off" spellCheck={false}
+          <textarea value={rPhrase} onChange={e => { setRPhrase(e.target.value); setRErr(''); setRWordsWarn(null); }} rows={4} autoCapitalize="none" autoCorrect="off" spellCheck={false}
             placeholder="word one  word two  word three …"
             style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 14, background: 'var(--surface)', padding: '13px 15px', fontSize: 14.5, fontFamily: 'var(--mono)', color: 'var(--ink)', outline: 'none', resize: 'vertical', lineHeight: 1.7 }} />
           {rErr ? <div style={{ fontSize: 13, color: 'var(--clay-ink)', fontWeight: 700, marginTop: 10 }}>{rErr}</div> : null}
           {rBusy ? <div style={{ fontSize: 13, color: 'var(--ink-2)', fontWeight: 600, marginTop: 10 }}>{rBusy}</div> : null}
+          {/* The words typed are a DIFFERENT account from the one on this phone, which has been used. Said in the
+              app (never window.confirm), with the words still in the box above. */}
+          {rWordsWarn !== null ? (
+            <div style={{ marginTop: 14, padding: '13px 15px', borderRadius: 14, background: 'color-mix(in oklab, var(--clay) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 34%, transparent)' }}>
+              <div style={{ fontWeight: 800, fontSize: 14.5, color: 'var(--ink)', marginBottom: 5 }}>{rWordsWarn ? 'You already have an account with ' + rWordsWarn : 'You already have an account on this phone'}</div>
+              <div style={{ fontSize: 13.5, lineHeight: 1.55, color: 'var(--ink-2)' }}>
+                These words are for a <b>different</b> account. Restoring them replaces the one on here, which can only come back if you have <b>its</b> 12 words written down. If a word might be wrong, check them again first.
+              </div>
+            </div>
+          ) : null}
           <p style={{ fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.5, margin: '14px 0 0' }}>
             Your notes, journal and highlights are kept only on your old phone — restore your backup file in Settings afterwards to bring those across too.
           </p>
@@ -871,8 +913,9 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
       </div>
       <div style={{ flexShrink: 0, padding: '10px 22px 26px', borderTop: '1px solid var(--line)', background: 'var(--paper)' }}>
         <div style={{ maxWidth: 440, margin: '0 auto' }}>
-          <button onClick={doRestore} disabled={!!rBusy || !rPhrase.trim()} style={{ width: '100%', padding: 16, borderRadius: 16, border: 'none', cursor: (rBusy || !rPhrase.trim()) ? 'not-allowed' : 'pointer', background: 'var(--clay)', color: 'var(--on-clay)', fontFamily: 'var(--font-ui)', fontSize: 16, fontWeight: 700, opacity: (rBusy || !rPhrase.trim()) ? .5 : 1 }}>{rBusy || 'Restore my account'}</button>
-          <button onClick={() => { setRPhrase(''); setRErr(''); setRBusy(''); setRMode('choose'); }} disabled={!!rBusy} style={{ width: '100%', padding: 12, borderRadius: 14, border: 'none', background: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 700, color: 'var(--ink-3)', marginTop: 4 }}>Back</button>
+          <button onClick={() => doRestore(rWordsWarn !== null)} disabled={!!rBusy || !rPhrase.trim()} style={{ width: '100%', padding: 16, borderRadius: 16, border: 'none', cursor: (rBusy || !rPhrase.trim()) ? 'not-allowed' : 'pointer', background: 'var(--clay)', color: 'var(--on-clay)', fontFamily: 'var(--font-ui)', fontSize: 16, fontWeight: 700, opacity: (rBusy || !rPhrase.trim()) ? .5 : 1 }}>{rBusy || (rWordsWarn !== null ? 'Replace it and restore' : 'Restore my account')}</button>
+          {rWordsWarn !== null ? <button onClick={() => setRWordsWarn(null)} disabled={!!rBusy} style={{ width: '100%', padding: 12, borderRadius: 14, border: 'none', background: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 700, color: 'var(--ink-2)', marginTop: 4 }}>Keep my account</button> : null}
+          <button onClick={() => { setRPhrase(''); setRErr(''); setRBusy(''); setRWordsWarn(null); setRMode('choose'); }} disabled={!!rBusy} style={{ width: '100%', padding: 12, borderRadius: 14, border: 'none', background: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 14, fontWeight: 700, color: 'var(--ink-3)', marginTop: 4 }}>Back</button>
         </div>
       </div>
     </div>
