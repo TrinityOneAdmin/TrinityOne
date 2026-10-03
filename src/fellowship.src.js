@@ -2739,7 +2739,11 @@ let _noPhoto = new Set();
 // across churches, exactly as the relay does it — belonging to one church that allows photos does not undo
 // another church's decision.
 const _photosOffChurches = new Set();
+const _churchNames = new Map();   // church hex pubkey (lower) -> its kind-0 name; read by displayFor()
 function _notePhotoPolicy(churchPub, content) {
+  // the church's own name, for displayFor(): a church that never set a by-line has no voice document, and its
+  // key must still read as the church, not as "Member" (sim 2026-10-02 #51)
+  try { const nm = content && String(content.name || content.display_name || '').trim(); if (nm) _churchNames.set(String(churchPub).toLowerCase(), nm); } catch (e) {}
   const f = content && content.features;
   const off = !!(f && f.memberPhotos === false);
   const had = _photosOffChurches.has(churchPub);
@@ -2778,9 +2782,20 @@ function displayFor(pubkey) {
   // A CHURCH IS NOT AN UNNAMED MEMBER. Before this, a notice from the church key fell through to "Member"
   // because the church publishes its profile on a different subscription that never reaches this map. The
   // church's name is the honest answer, and the person who wrote it goes underneath (`office`).
-  const voice = churchVoiceFor(pubkey);
+  let voice = churchVoiceFor(pubkey);
+  // ...AND A CHURCH THAT HAS NEVER WRITTEN A BY-LINE IS STILL THE CHURCH. `voice` above exists only once the owner
+  // has saved "Your name as a steward"; until then the church's own key fell through to "Member" (sim round
+  // 2026-10-02 #51). The church key is known by its own kind-0 profile (subscribeChurchProfile feeds
+  // `_churchNames`), so name it from that. A delegated steward with no chosen name and no by-line is likewise
+  // known to be a steward - the church-signed roster says so, and members can read it - so say that rather
+  // than calling them a member. Both are cosmetic; neither grants anything.
+  if (!voice && pubkey && pubkey !== pub) {   // never relabel the reader's own key
+    const pk = String(pubkey).toLowerCase();
+    if (_churchNames.has(pk) || String((window.Fellowship && window.Fellowship.churchPub) || '').toLowerCase() === pk) voice = { isChurch: true, churchName: _churchNames.get(pk) || '' };
+    else { for (const set of _churchRoster.values()) { if (set && set.has(pubkey)) { voice = { isChurch: false, stewardFallback: true }; break; } } }
+  }
   const chosen = (p && p.name) || (voice && voice.isChurch && (voice.churchName || '')) || (voice && voice.name) || '';
-  const handle = chosen || (voice && voice.isChurch ? 'Your church' : UNNAMED);
+  const handle = chosen || (voice && voice.isChurch ? 'Your church' : (voice && voice.stewardFallback ? 'A church steward' : UNNAMED));
   return { pubkey, handle, name: handle, named: !!chosen, color: av.color || base.color, av, picture: p && p.picture, nip05: (p && p.nip05) || '',
     // who signed it, for the second line of the by-line — "St Bride's Church · Rev Ada, Vicar"
     signedBy: (voice && voice.name) ? voice.name : '', signedRole: (voice && voice.office) ? voice.office : '', isChurch: !!(voice && voice.isChurch) };

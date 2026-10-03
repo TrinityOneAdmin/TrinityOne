@@ -3717,7 +3717,24 @@ function EditGroupMembersModal({ group, onClose }) {
 function GroupChatModal({ group, onClose }) {
   const [msgs, setMsgs] = React.useState([]);
   const members = window.useStewardMembers ? window.useStewardMembers() : [];   // resolve a sender's display name
-  const nameFor = (pub) => { const mm = members.find(x => x.pubkey === pub); return (mm && (mm.name || '').trim()) || ('member …' + (pub || '').slice(-8)); };
+  // THE CHURCH AND ITS STEWARDS ARE NOT "member …1a2b3c4d". This is the console's own chat, where the owner
+  // and every delegated steward post AS THE CHURCH, so the commonest author on the screen was the one it could
+  // not name: the church key is not in the members list, and neither is a delegate who never set a member
+  // name. Sim round 2026-10-02 #51: church and delegate posts read as an anonymous member. A member's own
+  // name still wins; then the church's name for the church key; then the owner's label for a steward, or plain
+  // "A steward" — never a hex tail for someone the roster itself vouches for.
+  const gcChurch = window.useStewardChurch ? window.useStewardChurch() : { name: '' };
+  const gcStewards = window.useStewardStewards ? window.useStewardStewards() : [];
+  const gcLabels = (window.Steward.stewardLabels && window.Steward.stewardLabels()) || {};
+  const nameFor = (pub) => {
+    const mm = members.find(x => x.pubkey === pub);
+    const real = mm && (mm.name || '').trim();
+    if (real) return real;
+    if (pub && pub === window.Steward.pubkey) return (gcChurch && gcChurch.name) || 'Your church';
+    if (pub && gcLabels[pub]) return gcLabels[pub];
+    if (pub && (gcStewards || []).indexOf(pub) !== -1) return 'A steward';
+    return 'member …' + (pub || '').slice(-8);
+  };
   // The console's chat has never shown who is speaking beyond a name — no face, no symbol, nothing. On a busy
   // group that is the hardest possible way to follow a conversation, and it is the same data the members list
   // already draws. SkBadge does the safety work (data: images only, hex colours only). AUDIT-2026-07-28.
