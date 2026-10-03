@@ -8599,9 +8599,20 @@ function DashSermons() {
   const [mirrorHosts, setMirrorHosts] = React.useState(autoBackups.join(', '));   // auto-filled from the church's other relays; editable
   const [pinnedId, setPinnedId] = React.useState(null);   // the currently-featured sermon (pushed to members' Today)
   const conn = window.useStewardConn ? window.useStewardConn() : 0;   // re-subscribe after a relay restart / reconnect (else a sermon uploaded elsewhere never appears)
-  React.useEffect(() => (window.Steward.subscribeSermons ? window.Steward.subscribeSermons(list => { setSermons(list || []); setSermonsLoaded(true); }) : undefined), [conn]);
-  React.useEffect(() => (window.Steward.subscribeMediaKey ? window.Steward.subscribeMediaKey() : undefined), [conn]);
-  React.useEffect(() => (window.Steward.subscribePinnedSermon ? window.Steward.subscribePinnedSermon(p => setPinnedId(p && p.id)) : undefined), [conn]);
+  // FOLLOW A CHURCH SWITCH. These three were keyed on `conn` alone, so an owner who stewards a second church and
+  // switches to it kept the FIRST church's subscription open and its sermons on screen — "church 1's sermons show
+  // in church 2's console" (sim round 2, finding 32). subscribeSermons reads `pub` once, when it is called, so
+  // the only way it can follow the active church is to be called again: the identity version is a dependency,
+  // exactly as in every other subscription in this console (DashFinanceBook, the members and profile hooks).
+  // The reset runs FIRST so the old church's list is gone before the new church's arrives. `pinnedId` is NOT
+  // cleared here on purpose: setPinnedId has exactly one writer, the relay subscription (a test guards that, so
+  // a success label can never be painted over a refused pin), and a sermon id is unique to its church so the old
+  // one can match nothing in the new list in the meantime.
+  const _sermIdv = window.useStewardIdv ? window.useStewardIdv() : 0;
+  React.useEffect(() => { setSermons([]); setSermonsLoaded(false); }, [_sermIdv]);
+  React.useEffect(() => (window.Steward.subscribeSermons ? window.Steward.subscribeSermons(list => { setSermons(list || []); setSermonsLoaded(true); }) : undefined), [conn, _sermIdv]);
+  React.useEffect(() => (window.Steward.subscribeMediaKey ? window.Steward.subscribeMediaKey() : undefined), [conn, _sermIdv]);
+  React.useEffect(() => (window.Steward.subscribePinnedSermon ? window.Steward.subscribePinnedSermon(p => setPinnedId(p && p.id)) : undefined), [conn, _sermIdv]);
   const togglePin = (s) => { if (pinnedId === s.id) window.Steward.unpinSermon(); else window.Steward.pinSermon(s); };
   // ── A CONSOLE THAT MAY NOT PUBLISH LEARNS SO BEFORE ANY BYTES LEAVE THE PHONE ───────────────────────────
   // AUDIT-steward-doc-rules-round2-2026-09-22, finding R1. At the time this was written the engine refused
