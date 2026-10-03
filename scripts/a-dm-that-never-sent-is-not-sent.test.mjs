@@ -4,7 +4,7 @@
 // AUDIT 2026-08-30. Both sendDM implementations return `null` from paths that run BEFORE they touch their
 // outbox, so on those paths the words are not on the wire, not queued, and not on the screen:
 //   · window.Fellowship.sendDM  (src/fellowship.src.js) — `_dmEncrypt` throws;
-//   · window.Steward.sendDM     (src/steward.src.js)    — no signing key, no peer hex, or nip04 encrypt throws.
+//   · window.Steward.sendDM     (src/steward.src.js)    — no signing key, no peer hex, or the encrypt step throws.
 // Commit e06cb36 taught the callers to read `_refused` and `_delivered === false`. It did not teach them that
 // `null` is falsy, so a null fell straight through into the success arm.
 //

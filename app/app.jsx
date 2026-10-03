@@ -1402,17 +1402,35 @@ function App() {
     return F.subscribeChurchSafeguard(np, setSafeguard);
   }, [activeChurch, churches, connTick, lazyReady]);
   const [assumeMinor, setAssumeMinor] = useA(false);
+  // WHICH CHURCH `assumeMinor` HAS ACTUALLY BEEN ANSWERED FOR (sim A2 #9). `assumeMinor` itself starts FALSE and
+  // must keep doing so — `_eventVisibleToMe` below reads it, and starting it true would hide events from every
+  // adult on every boot — which means `false` cannot tell "the engine says adult" from "the engine has not
+  // answered yet". This does: it holds the active church's id once the effect below has settled (answer OR
+  // failure) for it, so a church switch needs no explicit reset (the stored id simply stops matching). It is the
+  // id, not the npub, so this adds no new `churches.find(...)` resolution site (scripts/active-church-heal pins
+  // the count of those).
+  const [assumeKnownFor, setAssumeKnownFor] = useA('');
   useAE(() => {
     let live = true;
     const np = (churches.find(c => c.id === activeChurch) || {}).npub;
     const F = window.Fellowship;
     if (!np || !F || !F.assumeMinor) return;
     Promise.resolve(F.assumeMinor(np))
-      .then(v => { if (live) setAssumeMinor(!!v); })
-      .catch(() => { if (live) setAssumeMinor(true); });
+      .then(v => { if (live) { setAssumeMinor(!!v); setAssumeKnownFor(activeChurch); } })
+      .catch(() => { if (live) { setAssumeMinor(true); setAssumeKnownFor(activeChurch); } });
     return () => { live = false; };
   }, [activeChurch, churches, safeguard.isMinor]);
   const iAmMinor = safeguard.isMinor || assumeMinor;
+  // THREE ANSWERS for the screens that must not word themselves for an adult while the app is still finding out
+  // who is holding the phone (sim A2 #8, #9):
+  //   'minor' — the church has told this phone, in this person's own sealed clearance, that they are a child
+  //   'maybe' — we have not heard yet, OR the engine assumes a child (safeguarding is in use here and nothing says
+  //             this member is an adult). `safeguard.isMinor` alone is false for the whole of that window, so a child
+  //             was shown the ADULT care card until their clearance landed.
+  //   'adult' — the engine has answered for THIS church and the answer is "not a child"
+  // With no church there is nothing to decide, so it is 'adult'. Additive: nothing that reads `safeguard.isMinor`
+  // changed.
+  const minorState = safeguard.isMinor ? 'minor' : ((activeChurch && assumeKnownFor !== activeChurch) || assumeMinor) ? 'maybe' : 'adult';
   // safeguarding: pick up STEWARD-INITIATED guardian links addressed to me (a church-signed, encrypted notice)
   // so a child a steward linked me to appears in my family view even though I never set it up on this device.
   useAE(() => {
@@ -2174,6 +2192,7 @@ function App() {
     },
     // safeguarding: this member's child status + whether a DM with a given peer is permitted (relay-enforced too)
     safeguard,
+    minorState,   // 'minor' | 'maybe' | 'adult' — see where it is derived, above `_eventVisibleToMe`'s inputs
     // Children's check-in, the WORKER's read view (Serving → Kids). Nothing to do with `safeguard.cleared`,
     // which is the youth-contact clearance from trinityone/clearance: — these are two independent decisions a
     // church makes, and a churchwarden sim on 2026-09-10 found that doing one and believing you had done the

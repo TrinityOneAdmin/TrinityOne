@@ -162,7 +162,7 @@ function consoleSide(urls, clock, ident, mutate, extra) {
   assert.ok(sentDecl, 'the just-published clearance cache is gone — the sub-second toggle collision is back');
   assert.ok(queueDecl, 'refreshClearances is no longer serialised, so two concurrent runs collide again');
 
-  // esbuild RENAMES imported bindings (encrypt3, decrypt3, finalizeEvent2, normalizeURL2 today). Bind the
+  // esbuild RENAMES imported bindings (encrypt2, decrypt3, finalizeEvent2, normalizeURL2 today). Bind the
   // names it actually emitted, and fail loudly if a rebuild renumbers them. This is not fussiness: binding
   // `finalizeEvent` when the bundle says `finalizeEvent2` made the auth signer throw, nostr-tools logged
   // `subscribe auth function failed`, no AUTH frame was ever sent, the relay withheld every private doc, and

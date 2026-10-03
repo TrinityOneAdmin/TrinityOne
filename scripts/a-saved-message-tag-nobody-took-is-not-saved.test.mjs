@@ -1257,7 +1257,7 @@ async function runMediaKey(answer, calls = 3, memberPubs = ['m1', 'm2'], saidNo 
     _localBlocked: new Set(), _fitKeyRing,
     _sealEach: async (pl, want) => Object.fromEntries(want.map(p => [p, 'sealed-for-' + p])),
     nip44e: (a) => a, nip44ck: () => 'ck',
-    encrypt3: (a) => a, getConversationKey: () => 'ck',   // the bundle's names — the ring fitter seals one sample
+    encrypt2: (a) => a, getConversationKey: () => 'ck',   // the bundle's names — the ring fitter seals one sample
     window: { dispatchEvent: (e) => { events.push({ type: e.type, detail: e.detail }); } },
     CustomEvent: class { constructor(type, init) { this.type = type; this.detail = (init || {}).detail; } },
   }, [memberPubs], decls);
@@ -1347,7 +1347,7 @@ async function runMediaKeyForReal(answers, calls = 3, memberPubs = ['m1', 'm2'])
     now: () => 1700000000 + n,
     feChurch: (t) => t,
     _sealEach: async (pl, want) => Object.fromEntries(want.map(p => [p, 'sealed-for-' + p])),
-    encrypt3: (a) => a, getConversationKey: () => 'ck',
+    encrypt2: (a) => a, getConversationKey: () => 'ck',
     _waitForRegistration: async () => {},
     relays: () => ['wss://one.example/relay'], relaysRaw: () => ['wss://one.example/relay'],
     console: { warn() {}, log() {}, error() {} },

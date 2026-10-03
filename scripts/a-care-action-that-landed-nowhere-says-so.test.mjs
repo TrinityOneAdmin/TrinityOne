@@ -89,11 +89,16 @@ function runner(name, { publishFails, how }) {
   // an injected outcome cannot catch a dead classifier.
   const names  = ['finalizeEvent2', '_publishAny', 'churchRelays', 'publishSetFor', 'window', 'sk', 'pub', 'NET', '_pubReason',
                   'CAREREQ_D', 'CAREREQSTATUS_D', 'CARESLOT_D', 'CARESKIP_D', 'CARE_D', 'String',
-                  'Date', 'JSON', 'Math', 'console'];
+                  'Date', 'JSON', 'Math', 'console', '_sgMine'];
   const values = [finalizeEvent2, _publishAny, churchRelays, publishSetFor, window, 'sk-bytes', 'me-pub', 'trinityone', _pubReason,
                   'carereq:', 'carereqstatus:', 'careslot:', 'careskip:', 'care:', String,
                   Date, JSON, Math,
-                  { warn() {} }];   // the real ones log; keep the test output clean
+                  { warn() {} },   // the real ones log; keep the test output clean
+                  // fillCareSlot now asks `_sgMine(cp)` (a marked child may not sign up — see
+                  // scripts/a-child-is-not-offered-care-sign-up.test.mjs, which lifts the REAL one). Here the
+                  // question is about publish OUTCOMES, so the answer is "nothing known about this member",
+                  // which is what a cold start gives and what must never block an adult.
+                  () => null];
   const obj = new Function(...names, 'return ' + src)(...values);
   return { fn: obj[name], calls };
 }

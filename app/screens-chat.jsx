@@ -2017,6 +2017,8 @@ function DMThread({ peer, open, onClose, ctx, docked }) {
       // stayed that way all evening, which reads as corruption rather than as waiting.
       content: (F.dmPlaintextOf && F.dmPlaintextOf(e.id)) || '',
       _pending: !e._failed, _failed: !!e._failed, _reason: e._reason || '',
+      // the relay REFUSED it, by policy (sim A2 #12) — see the failed bubble below
+      _permanent: !!e._permanent,
     })));
     refresh();
     return F.onOutbox(refresh);
@@ -2102,8 +2104,11 @@ function DMThread({ peer, open, onClose, ctx, docked }) {
                 but show it." */}
             {m.mine && (m._failed || m._pending) ? (m._failed ? (
               <span style={{ fontSize: 11, color: 'var(--clay-ink)', margin: '3px 4px 0', display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                <Icon name="bolt" size={11} color="currentColor" />Couldn’t send{m._reason ? ' — ' + m._reason : ''}
-                <button onClick={() => window.Fellowship.requeue(m.id)} style={{ border: 'none', background: 'none', padding: 0, color: 'var(--clay-ink)', fontWeight: 700, cursor: 'pointer' }}>Try again</button>
+                {/* A message the relay REFUSED BY POLICY will never be accepted, so it says so — in the words
+                    dmFailWording already uses, which must not say WHY the other person is restricted — and
+                    offers no "Try again" and no raw relay string. Anything else keeps the old wording. */}
+                <Icon name="bolt" size={11} color="currentColor" />{m._permanent ? 'Not sent — private messages with this person are limited for safeguarding' : 'Couldn’t send' + (m._reason ? ' — ' + m._reason : '')}
+                {m._permanent ? null : <button onClick={() => window.Fellowship.requeue(m.id)} style={{ border: 'none', background: 'none', padding: 0, color: 'var(--clay-ink)', fontWeight: 700, cursor: 'pointer' }}>Try again</button>}
                 <button onClick={() => window.Fellowship.dropQueued(m.id)} style={{ border: 'none', background: 'none', padding: 0, color: 'var(--ink-3)', fontWeight: 700, cursor: 'pointer' }}>Discard</button>
               </span>
             ) : (

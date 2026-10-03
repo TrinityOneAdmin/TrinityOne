@@ -134,7 +134,7 @@ function console_(relayList, churchSk, churchPub) {
     // esbuild renames the nip44 imports in the bundle; bind the names the SHIPPED text actually uses, or
     // the seal throws inside publishClearance's own try/catch and it returns null, which reads exactly
     // like the bug under test.
-    encrypt3: (plain) => 'sealed:' + plain, getConversationKey: () => 'ck',
+    encrypt2: (plain) => 'sealed:' + plain, getConversationKey: () => 'ck',
     nip44e: (plain) => 'sealed:' + plain, nip44ck: () => 'ck',
   };
   const api = new Function('scope', 'with (scope) {\n' + parts +

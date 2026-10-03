@@ -72,7 +72,7 @@ const opensFor = (who, evt) => readCheckinGuardianCopy(evt.tags, (ct) => nip44.v
 // All three derivations, with the console's real crypto. A stub for any of them would be this file answering
 // the question it is named after.
 //
-// ⚠ THE BUNDLE'S SPELLINGS. esbuild renames on collision: `nip44e` is `encrypt3` in vendor/steward.js and
+// ⚠ THE BUNDLE'S SPELLINGS. esbuild renames on collision: `nip44e` is `encrypt2` in vendor/steward.js and
 // `nip44ck` is `getConversationKey`. Stub the src/ spellings and the scope Proxy throws — which is the loud
 // failure this harness wants, because `_encSealedCopies` and `checkinGuardianCopies` both SWALLOW their own
 // failures and answer [], so a mis-stubbed harness silently produces records with no second copy at all and
@@ -81,7 +81,7 @@ function consoleWriter(actor, sessionKeys) {
   const scope = {
     sk: actor.sk,
     _ckSessionKeys: sessionKeys,
-    encrypt3: nip44.v2.encrypt,
+    encrypt2: nip44.v2.encrypt,
     getConversationKey: (a, b) => nip44.v2.utils.getConversationKey(a, b),
     checkinGuardianCopies,
     _unhex: unhex,

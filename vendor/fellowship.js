@@ -11086,7 +11086,7 @@
       const p = toPub(peerPub) || peerPub;
       return [
         ..._outbox.filter((o) => o.peer === p).map((o) => ({ ...o.evt, _pending: true, _tries: o.tries || 0 })),
-        ..._outboxFailed.filter((o) => o.peer === p).map((o) => ({ ...o.evt, _failed: true, _reason: o.lastError || "" }))
+        ..._outboxFailed.filter((o) => o.peer === p).map((o) => ({ ...o.evt, _failed: true, _reason: o.lastError || "", _permanent: !!o.permanent }))
       ];
     },
     dmPlaintextOf(id) {
@@ -11172,7 +11172,19 @@
       } catch (e) {
         console.warn("[fellowship] DM publish failed", e);
         evt._delivered = false;
-        if (isPermanentRefusal(e)) evt._refused = String(e && e.message || e || "").trim();
+        if (isPermanentRefusal(e)) {
+          evt._refused = String(e && e.message || e || "").trim();
+          const item = _outbox.find((o) => o.evt.id === evt.id);
+          if (item) {
+            item.failed = true;
+            item.permanent = true;
+            item.lastError = evt._refused.slice(0, 120);
+            _outbox = _outbox.filter((o) => o.evt.id !== evt.id);
+            _outboxFailed.push(item);
+            if (_outboxFailed.length > 50) _outboxFailed.shift();
+            _outboxSave();
+          }
+        }
       }
       return evt;
     },
@@ -11911,6 +11923,8 @@
       if (!sk) await window.Fellowship.ready;
       const cp = toPub(churchNpub);
       if (!cp || !sk) throw new Error("Join a church first.");
+      const _me = _sgMine(cp);
+      if (_me && _me.isMinor) throw new Error("A young person\u2019s account can\u2019t set up another account.");
       const name = String(childName || "").trim();
       if (!name) throw new Error("Enter the child\u2019s name.");
       const mnemonic = opts && opts.mnemonic || window.TrinityIdentity.makeInvite().mnemonic;
@@ -12806,6 +12820,8 @@
     async writeArrival(churchNpub, rec) {
       const cp = toPub(churchNpub);
       if (!cp || !sk || !pub) return { ok: false, reason: "no-identity" };
+      const _me = _sgMine(cp);
+      if (_me && _me.isMinor) return { ok: false, reason: "minor" };
       const sid = String((rec || {}).session || "").trim();
       if (!sid) return { ok: false, reason: "no-session" };
       const d = CHECKINARRIVAL_D + sid + ":" + pub;
@@ -13803,6 +13819,8 @@
         }
       }
       if (!sk || !cp || !careId || !iso) return null;
+      const _me = _sgMine(cp);
+      if (_me && _me.isMinor) return { ok: false, reason: "minor" };
       const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", CARESLOT_D + careId + ":" + iso], ["t", NET], ["church", cp]], content: JSON.stringify({ careId, isoDate: iso, note: String(note || "").trim() }) }, sk);
       try {
         await _publishAny(publishSetFor(cp), evt);

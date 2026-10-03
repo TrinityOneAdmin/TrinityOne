@@ -83,7 +83,7 @@ function engine({ actingChurch, mediaKeyHex = KEY, mediaDocKeys = 'default', med
     now: () => 1758800000,
     _hex: (u8) => [...u8].map(b => b.toString(16).padStart(2, '0')).join(''),
     _sealEach: async (pl, targets) => Object.fromEntries(targets.map(t => [t, 'sealed:' + String(t).slice(0, 6)])),
-    encrypt3: (pl) => pl,
+    encrypt2: (pl) => pl,
     getConversationKey: () => new Uint8Array(32),
     _unhex: (h) => new Uint8Array(h.match(/../g).map(b => parseInt(b, 16))),
     // feChurch signs with the ACTIVE key: our own while delegated, the church's otherwise.

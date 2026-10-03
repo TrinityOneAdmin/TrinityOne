@@ -90,7 +90,7 @@ function ownerEngine() {
     MEDIAKEY_D: 'trinityone/mediakey:', NET: 'trinityone',
     now: () => 1758800000,
     _hex: (u8) => [...u8].map(b => b.toString(16).padStart(2, '0')).join(''),
-    encrypt3: (pl, ck) => nip44.encrypt(pl, ck),
+    encrypt2: (pl, ck) => nip44.encrypt(pl, ck),
     getConversationKey: (a, b) => nip44.utils.getConversationKey(a, b),
     feChurch: (t) => ({ ...t, pubkey: churchPub }),      // the owner signs with the church key
     _fitKeyRing,

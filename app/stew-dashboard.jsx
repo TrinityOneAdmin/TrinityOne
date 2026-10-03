@@ -3470,6 +3470,9 @@ function NewGroupModal({ open, onClose }) {
   const [sel, setSel] = React.useState(new Set());   // chosen member pubkeys for an invite-only group
   const [category, setCategory] = React.useState('');   // chosen category id ('' = uncategorised)
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
+  // WHAT THE STEWARD IS OFFERED TO TICK — not people still waiting at the door, not the blocked (sim A2 #7).
+  // `members` stays the FULL list on purpose: an open encrypted room is keyed to everyone (`recips` below).
+  const pickList = window.useStewardPickableMembers ? window.useStewardPickableMembers(members) : members;
   const cats = window.useStewardCategories ? window.useStewardCategories() : [];
   const church = window.useStewardChurch ? window.useStewardChurch() : {};
   // ENCRYPTED UNLESS THE CHURCH SAID OTHERWISE. Absent = ON: a brand-new church has no features object at
@@ -3578,9 +3581,9 @@ function NewGroupModal({ open, onClose }) {
               {inviteOnly ? (
                 <div style={{ marginTop: 14 }}>
                   <div style={lbl}>WHO’S IN · {sel.size}</div>
-                  {members.length === 0 ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.5 }}>No members have joined yet — create the group, then add people here once they’re in.</div> : (
+                  {pickList.length === 0 ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.5 }}>No members have joined yet — create the group, then add people here once they’re in.</div> : (
                     <div className="no-scrollbar" style={{ maxHeight: 200, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
-                      {members.map(m => { const on = sel.has(m.pubkey); return (
+                      {pickList.map(m => { const on = sel.has(m.pubkey); return (
                         <button key={m.pubkey} type="button" onClick={() => togglePk(m.pubkey)} title="Tick to add this person to the group, untick to leave them out" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 10, border: '1px solid ' + (on ? 'color-mix(in oklab, var(--sage) 45%, var(--line))' : 'var(--line)'), background: on ? 'color-mix(in oklab, var(--sage) 8%, var(--surface))' : 'var(--surface)', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)' }}>
                           <div style={{ width: 20, height: 20, borderRadius: 6, border: '2px solid ' + (on ? 'var(--sage)' : 'var(--line)'), background: on ? 'var(--sage)' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{on ? <Icon name="check" size={13} stroke={3} color="#fff" /> : null}</div>
                           <span style={{ fontWeight: 700, fontSize: 13.5 }}>{m.name || 'Anonymous'}</span>
@@ -3607,6 +3610,10 @@ function NewGroupModal({ open, onClose }) {
 // group with the new member set — the relay then enforces posting + the read-gate against it.
 function EditGroupMembersModal({ group, onClose }) {
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
+  // WHAT IS OFFERED: not people still waiting to join, not the blocked (sim A2 #7) — but whoever is ALREADY in
+  // the group stays listed so they can be un-ticked. `members` stays the full list for `known`/`orphans` and the
+  // roster reconcile below, which are about who exists, not who may be chosen.
+  const pickList = window.useStewardPickableMembers ? window.useStewardPickableMembers(members, group.members) : members;
   // A team also has a ROSTER, and that is the list the rota and the care team are read from — see the
   // note above RosterModal in stew-schedule.jsx. Ticking someone into a care team here and nowhere else
   // is how a church ends up with a care team the relay treats as empty.
@@ -3694,7 +3701,7 @@ function EditGroupMembersModal({ group, onClose }) {
         </div>
         <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 24px', display: 'flex', flexDirection: 'column', gap: 6 }}>
           <div style={lbl}>MEMBERS · {sel.size}</div>
-          {members.length === 0 ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>No members have joined yet.</div> : members.map(m => { const on = sel.has(m.pubkey); return (
+          {pickList.length === 0 ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>No members have joined yet.</div> : pickList.map(m => { const on = sel.has(m.pubkey); return (
             <button key={m.pubkey} type="button" onClick={() => togglePk(m.pubkey)} title="Tick to keep this person in the group, untick to remove them" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 10, border: '1px solid ' + (on ? 'color-mix(in oklab, var(--sage) 45%, var(--line))' : 'var(--line)'), background: on ? 'color-mix(in oklab, var(--sage) 8%, var(--surface))' : 'var(--surface)', cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)' }}>
               <div style={{ width: 20, height: 20, borderRadius: 6, border: '2px solid ' + (on ? 'var(--sage)' : 'var(--line)'), background: on ? 'var(--sage)' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{on ? <Icon name="check" size={13} stroke={3} color="#fff" /> : null}</div>
               <span style={{ fontWeight: 700, fontSize: 13.5 }}>{m.name || 'Anonymous'}</span>
@@ -4218,9 +4225,10 @@ function DashGroups() {
 // pick which members may post events for a group. The chosen pubkeys go into the group def's `leaders`;
 // the relay then lets exactly those members publish events scoped to this group.
 function GroupLeadersModal({ group, onClose }) {
-  // a person this console holds as blocked is not offered as a leader (sim finding 14); the Members screen keeps their row
-  const blockedKeys = new Set(((window.useStewardBlocked ? window.useStewardBlocked() : []) || []).map(p => String(p || '').toLowerCase()));
-  const members = window.useStewardMembers().filter(m => m.pubkey && !blockedKeys.has(String(m.pubkey).toLowerCase()));
+  // Not people still waiting to join, not the blocked (sim A2 #7) — but existing leaders stay listed so they can
+  // be un-ticked. Every use of `members` below is a pick list or a lookup of someone already ticked.
+  const allMembers = window.useStewardMembers().filter(m => m.pubkey);
+  const members = window.useStewardPickableMembers ? window.useStewardPickableMembers(allMembers, group.leaders) : allMembers;
   const [sel, setSel] = React.useState(() => new Set(group.leaders || []));
   const [pol, setPol] = React.useState(() => (['leaders', 'stewards', 'everyone'].includes(group.eventPolicy) ? group.eventPolicy : 'leaders'));
   const [saving, setSaving] = React.useState(false);
@@ -5532,7 +5540,10 @@ function GuardianLinkModal({ child, childName, members, guardians, minorsSet, on
   const [q, setQ] = React.useState('');
   const linked = guardians[child] || [];
   const nameFor = (pub) => { const m = members.find(x => x.pubkey === pub); return (m && m.name) || ('…' + (pub || '').slice(-6)); };
-  const candidates = members
+  // Not somebody still waiting to join, not the blocked (sim A2 #7): a link makes a person this child's parent.
+  // `members` stays the full list for `nameFor`, which names parents already linked.
+  const pickList = window.useStewardPickableMembers ? window.useStewardPickableMembers(members) : members;
+  const candidates = pickList
     .filter(m => m.pubkey !== child && !minorsSet.has(m.pubkey) && !linked.includes(m.pubkey))
     .filter(m => !q.trim() || (m.name || '').toLowerCase().includes(q.toLowerCase()));
   return (
@@ -7319,7 +7330,11 @@ function ClearPersonModal({ members, rosters, groups, nameFor, already, minors, 
   // …AND NEVER A MARKED CHILD, from either source: a team roster can carry a young helper the church has since
   // marked (the ordinary route into safeguarding here — reference/DOMAIN.md), and "everyone" plainly can.
   const minors0 = (minors && typeof minors.has === 'function') ? minors : new Set();
-  const candidates = (suggested !== null ? suggested.map(pub => ({ pubkey: pub })) : members)
+  // …AND NOBODY STILL WAITING TO JOIN OR BLOCKED, from either source (sim A2 #7): clearing someone to work with
+  // children before the church has admitted them is the wrong order.
+  const base = suggested !== null ? suggested.map(pub => ({ pubkey: pub })) : members;
+  const pickList = window.useStewardPickableMembers ? window.useStewardPickableMembers(base) : base;
+  const candidates = pickList
     .filter(m => m && m.pubkey && !already0.has(m.pubkey) && !minors0.has(m.pubkey));
   // WOULD THIS BE ACCEPTED, AND IF NOT WHY — asked before anything is published, off the same two functions
   // the grant itself uses. reference/SCOPE-CHECKIN-SURFACES-2026-09-09.md, the audit's fifth item: a
@@ -8377,7 +8392,10 @@ function DashStewardsPanel({ church }) {
     if (!newLabel.trim()) { setAddErr('Give them a name first — you’ll need it to tell your stewards apart.'); return; }
     add(pk, newLabel, newCaps);
   };
-  const candidates = members.filter(m => m.pubkey && m.pubkey !== ownerPub && !stewardSet.has(m.pubkey) && !isBlockedHere(m.pubkey)   // a blocked person is not offered as a steward (sim finding 14)
+  // Somebody still waiting to join (or blocked) is not offered the keys to the console (sim A2 #7). `members`
+  // stays the full list for `byPub` above — it names the stewards already appointed.
+  const pickList = window.useStewardPickableMembers ? window.useStewardPickableMembers(members) : members;
+  const candidates = pickList.filter(m => m.pubkey && m.pubkey !== ownerPub && !stewardSet.has(m.pubkey)
     && (!q || (m.name || '').toLowerCase().includes(q.toLowerCase()) || (m.npub || '').includes(q)));
   const initialsOf = (m) => (m && m.name ? m.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'ST').toUpperCase();
   const niceName = (pk) => (window.Steward.stewardName ? window.Steward.stewardName(pk) : '') || 'Steward';

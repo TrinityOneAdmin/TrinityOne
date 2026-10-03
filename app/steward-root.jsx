@@ -334,6 +334,36 @@ function useStewardMembers() {
 }
 window.useStewardMembers = useStewardMembers;
 
+// WHO MAY BE OFFERED IN A PICKER (sim A2 #7). `useStewardMembers` returns every member doc the relay has ever
+// served — including people still waiting for approval and people who were blocked — and it MUST keep doing so:
+// key recipients, counts, name lookups and the pending list itself all need the full list. But a list a steward
+// CHOOSES FROM must not offer somebody they have not admitted (they could be put in a group, made a leader or a
+// steward, linked as a child's parent, cleared to work with children, rostered, or named as a care recipient
+// before anyone has said they belong). So this is the picker's view: not blocked, and — only when the church
+// requires approval AND the admitted/blocked streams have actually arrived — admitted. Before they arrive nobody
+// is assumed pending (on a hard reload those sets are briefly empty); the cost is that a slow link shows a
+// waiting person for a moment, the same trade the member-count makes (useRealMemberCount in stew-dashboard.jsx,
+// which states the same rule and is NOT changed here).
+//   from — the list to filter (a picker's own prop or a narrower list); omitted = the whole member list
+//   keep — pubkeys that stay visible whatever: the people ALREADY in the thing being edited (a group's
+//          members, its leaders, the linked member), so a steward can still un-tick or see them
+// CALLERS (rule 2): NewGroupModal, EditGroupMembersModal, GroupLeadersModal, DashStewardsPanel, GuardianLinkModal,
+// ClearPersonModal (stew-dashboard.jsx); RosterModal (stew-schedule.jsx — reached from DashRota and from
+// DashMealsPanel); RecipientPicker (stew-meals.jsx). Nothing else: the other useStewardMembers readers are not pickers.
+function useStewardPickableMembers(from, keep) {
+  const all = from || (window.useStewardMembers ? window.useStewardMembers() : []);
+  const admitted = new Set(window.useStewardAdmitted ? window.useStewardAdmitted() : []);
+  const blocked = new Set((window.useStewardBlocked ? window.useStewardBlocked() : []).map(p => String(p || '').toLowerCase()));
+  const joinApproval = window.useStewardJoinPolicy ? window.useStewardJoinPolicy() : false;
+  const idv = window.useStewardIdv ? window.useStewardIdv() : 0;
+  const rosterLoaded = !window.stewardStreamLoaded
+    || (window.stewardStreamLoaded('subscribeAdmitted', idv) && window.stewardStreamLoaded('subscribeBlocked', idv));
+  const keepSet = new Set(keep || []);
+  return (all || []).filter(m => m && m.pubkey && (keepSet.has(m.pubkey)
+    || (!blocked.has(String(m.pubkey).toLowerCase()) && !(joinApproval && rosterLoaded && !admitted.has(m.pubkey)))));
+}
+window.useStewardPickableMembers = useStewardPickableMembers;
+
 // pubkey -> member, for name lookups (derived from the members list)
 function useStewardDirectory() {
   const members = useStewardMembers();

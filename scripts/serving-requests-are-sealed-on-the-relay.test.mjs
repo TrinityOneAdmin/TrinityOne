@@ -63,7 +63,7 @@ function liftConsole({ church, nameKey }) {
     sk: church.sk, pub: church.pub, actingChurch: null, NET: 'trinityone',
     REQUEST_D: 'trinityone/request:', SERVICE_D: 'trinityone/service:',
     _nameKeyRing: nameKey ? [nameKey] : [],
-    _unhex: unhex, encrypt3: nip44.encrypt, decrypt3: nip44.decrypt,
+    _unhex: unhex, encrypt2: nip44.encrypt, decrypt3: nip44.decrypt,
     feChurch: (t) => finalizeEvent(t, church.sk), now, captured: [], _reqSeq: 0, _svcSeq: 0,
     publish: async (e) => { S.captured.push(e); return true; },
   };
@@ -73,7 +73,7 @@ function liftConsole({ church, nameKey }) {
   const svcFn = fnBody(STEW, 'async publishService(', 'publishService');
   const reqFn = fnBody(STEW, 'async sendServingRequest(req) {', 'sendServingRequest');
   // If the bundler renames these the lift silently tests nothing — anchor on what the body must contain.
-  assert.match(sealFn, /encrypt3/, 'bundle rename: _sealChurchDoc no longer calls encrypt3');
+  assert.match(sealFn, /encrypt2/, 'bundle rename: _sealChurchDoc no longer calls encrypt2');
   assert.match(reqFn, /_sealChurchDocReady/,
     'sendServingRequest does not call _sealChurchDocReady — the request is written in the clear (C-4)');
   const api = new Function('S', `with (S) { const NAME_KEY_WAIT_MS = 10; ${sealFn}\n${readyFn}\n${openFn}\n return ({ ${svcFn}, ${reqFn}, _open: _openChurchDoc }); }`)(S);

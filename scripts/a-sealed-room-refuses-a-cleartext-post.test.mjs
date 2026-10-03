@@ -29,7 +29,7 @@ test('publishPost returns null for a sealed group with no key — shipped bundle
     NET: 'test',
     pub: 'aabb',
     nip44e: () => { throw new Error('should not be called'); },
-    encrypt3: () => { throw new Error('should not be called'); },
+    encrypt2: () => { throw new Error('should not be called'); },
     Promise,
     console,
   };
@@ -52,7 +52,7 @@ test('publishPost encrypts normally when the key IS available — shipped bundle
     now: () => 1000,
     NET: 'test',
     pub: 'aabb',
-    encrypt3: (text, key) => 'ENCRYPTED:' + text,
+    encrypt2: (text, key) => 'ENCRYPTED:' + text,
     Promise,
     console,
   };

@@ -97,12 +97,12 @@ function clearance(who, over = {}) {
 // carries the helper's copy and what it is sealed under; `_encCleartextTags` decides the ['session'] tag the
 // reader routes on. Both stubbed would be the test answering its own question.
 const consoleSealer = (sessionKeys) => {
-  // ⚠ `encrypt3`, NOT `nip44e`. In vendor/steward.js esbuild renamed nip44's encrypt on collision, and
+  // ⚠ `encrypt2`, NOT `nip44e`. In vendor/steward.js esbuild renamed nip44's encrypt on collision, and
   // _encSealedCopies CATCHES its own failure and returns [] — so stubbing the src/ spelling produces a record
   // with NO ['ck'] tag and every "the worker read her register" assertion in this file fails while every
   // "she opened nothing" assertion passes VACUOUSLY. It cost this file one debugging round; the `ck` assertion
   // in record() below is the guard that makes it impossible to ship green.
-  const scope = { _ckSessionKeys: sessionKeys, encrypt3: nip44.encrypt, _unhex, JSON, Math, String, Array, Object, Set, RegExp };
+  const scope = { _ckSessionKeys: sessionKeys, encrypt2: nip44.encrypt, _unhex, JSON, Math, String, Array, Object, Set, RegExp };
   const proxy = new Proxy(scope, {
     has: (t, k) => (k in t) || !(String(k) in globalThis),
     get: (t, k) => { if (k === Symbol.unscopables) return undefined; if (k in t) return t[k];

@@ -1653,7 +1653,10 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
                   children's accounts because it is the one most families need — most children checked into a
                   crèche have no phone and no account at all (design §7). */}
               <Row icon="child" label="Children at church" sub="Say you bring children, and their names — kept on this phone" accent="var(--sage)" onClick={() => setKidsAt(true)} />
-              {window.Fellowship && window.Fellowship.createChildAccount ? (
+              {/* A YOUNG PERSON IS NOT OFFERED THE CONTROLS THAT MINT AND LINK CHILD ACCOUNTS (sim A2 #10). Same
+                  clause as the wallet row and the young-person notices beside it. The engine refuses too — see
+                  createChildAccount — because a modified build could otherwise do what this hides. */}
+              {window.Fellowship && window.Fellowship.createChildAccount && !(ctx.safeguard && ctx.safeguard.isMinor) ? (
                 <Row icon="pray" label="Children’s accounts" sub="Set up and look after a child’s account in your church" accent="var(--sage)" onClick={() => setFamily(true)} />
               ) : null}
             </Group>
@@ -1883,11 +1886,14 @@ function ChildrenAtChurchSheet({ open, onClose, ctx }) {
         <p style={{ fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.55, margin: '8px 6px 0' }}>
           These names stay on this phone. Your church is never sent them, and nobody else can see them. They are shown, on screen, only to the person checking your children in — and only when you hold up the code.
         </p>
-        {/* AND THE HONEST BOUNDARY. A PIN lock wipes every stored thing that names a church or a member, this
-            list included, because a children's list on a seized locked phone is exactly what that wipe is
-            for. Saying so here is cheaper than a parent wondering where the names went. */}
+        {/* AND THE HONEST BOUNDARY. This list is DELIBERATELY KEPT when the app is PIN-locked, closed, or the
+            church is left: clearCommunityCache's KEEP_PREFIX exempts bringkids/mykidnames/arrivedat, and
+            _forgetChurch keeps them too (owner ruling 2026-09-12 — a parent at the door with an empty card is
+            the worse failure; pinned by scripts/locked-boot-wipe.test.mjs DELIBERATE_KEEPS). This paragraph
+            used to say the lock CLEARS the list, which was false. It now says what is true: the names stay
+            until the parent removes them. Do not "fix" it the other way by making the wipe clear the list. */}
         <p style={{ fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.55, margin: '10px 6px 0' }}>
-          If you lock the app with a PIN, this list is cleared from the phone along with everything else about your church. You can type it again — and the children’s desk works whether you do or not.
+          These names stay on this phone until you remove them, even if you lock the app. Remove them here whenever you like.
         </p>
       </div>
     </Overlay>

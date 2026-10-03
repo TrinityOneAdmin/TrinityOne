@@ -207,7 +207,10 @@ function publishCareTeamFor(teamId, careTeamId, people) {
 }
 
 // ── manage a team's roster: the roles it needs + the people who can serve ──
-function RosterModal({ team, roster, members, onClose, onCreate }) {
+function RosterModal({ team, roster, members: allMembers, onClose, onCreate }) {
+  // WHO CAN BE LINKED TO A ROSTER PERSON: not somebody still waiting to join, not the blocked (sim A2 #7). Done HERE
+  // so both callers (DashRota and DashMealsPanel's care team) get it. Everything below reads `members`.
+  const members = window.useStewardPickableMembers ? window.useStewardPickableMembers(allMembers) : allMembers;
   const [roles, setRoles] = useSch(() => (roster && roster.roles ? roster.roles.map(r => ({ ...r })) : []));
   const [people, setPeople] = useSch(() => (roster && roster.people ? roster.people.map(p => ({ ...p })) : []));
   const [pods, setPods] = useSch(() => (roster && roster.pods ? roster.pods.map(p => ({ ...p, fills: { ...(p.fills || {}) } })) : []));

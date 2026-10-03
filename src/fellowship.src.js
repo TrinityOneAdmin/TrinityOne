@@ -4966,7 +4966,7 @@ window.Fellowship = {
   // silence with extra steps. Same shape as outboxFor so the screen can share one rendering path.
   outboxForPeer(peerPub) { const p = toPub(peerPub) || peerPub; return [
     ..._outbox.filter(o => o.peer === p).map(o => ({ ...o.evt, _pending: true, _tries: o.tries || 0 })),
-    ..._outboxFailed.filter(o => o.peer === p).map(o => ({ ...o.evt, _failed: true, _reason: o.lastError || '' })),
+    ..._outboxFailed.filter(o => o.peer === p).map(o => ({ ...o.evt, _failed: true, _reason: o.lastError || '', _permanent: !!o.permanent })),
   ]; },
   dmPlaintextOf(id) { return _dmPlain.get(id) || ''; },
   outboxCount() { return _outbox.length; },
@@ -5033,7 +5033,22 @@ window.Fellowship = {
       // adult vanished the same way. Simulation round 3, 2026-08-19: "all sent successfully", zero on the wire.
       // The machinery to tell these apart has been here all along (isPermanentRefusal / isConnectionFailure);
       // this path simply threw the reason away.
-      if (isPermanentRefusal(e)) evt._refused = String((e && e.message) || e || '').trim();
+      if (isPermanentRefusal(e)) {
+        evt._refused = String((e && e.message) || e || '').trim();
+        // AND MOVE IT OUT OF THE QUEUE NOW (sim A2 #12). The item used to stay in _outbox until the 45-second flush
+        // tick re-tried it, so for that long the thread drew a message the relay had ALREADY REFUSED as "Waiting
+        // to send" — a promise the app knew was false. It is the same move _outboxFlush makes for a permanent
+        // refusal (failed + permanent, into _outboxFailed), made here at the moment we learn it. _dmPlain keeps
+        // the words readable. _outboxSave tells the thread. A transient failure (timeout, auth-required,
+        // rate-limited) is NOT matched by isPermanentRefusal and stays queued as "Waiting to send".
+        const item = _outbox.find(o => o.evt.id === evt.id);
+        if (item) {
+          item.failed = true; item.permanent = true; item.lastError = evt._refused.slice(0, 120);
+          _outbox = _outbox.filter(o => o.evt.id !== evt.id);
+          _outboxFailed.push(item); if (_outboxFailed.length > 50) _outboxFailed.shift();
+          _outboxSave();
+        }
+      }
     }
     return evt;
   },
@@ -5608,6 +5623,12 @@ window.Fellowship = {
   async createChildAccount(churchNpub, childName, opts) {
     if (!sk) await window.Fellowship.ready;
     const cp = toPub(churchNpub); if (!cp || !sk) throw new Error('Join a church first.');
+    // A MARKED CHILD DOES NOT SET UP OTHER CHILDREN'S ACCOUNTS (sim A2 #10). The screen hides the row; this is
+    // the backstop for a build that shows it anyway. It fails OPEN on purpose: only a CONFIRMED answer for THIS
+    // member in THIS church refuses (_sgMine is null for anyone else, and for a cold start), so a parent whose
+    // clearance has not arrived yet is not locked out. Nothing is minted or published before this line.
+    const _me = _sgMine(cp);
+    if (_me && _me.isMinor) throw new Error('A young person’s account can’t set up another account.');
     const name = String(childName || '').trim(); if (!name) throw new Error('Enter the child’s name.');
     // THE KEY COMES FROM THE CALLER, so "try again" finishes THIS child rather than starting another. It was
     // minted here, and the UI's only retry was to call this function again: one child, TWO accounts, two
@@ -6420,6 +6441,12 @@ window.Fellowship = {
   async writeArrival(churchNpub, rec) {
     const cp = toPub(churchNpub);
     if (!cp || !sk || !pub) return { ok: false, reason: 'no-identity' };
+    // A MARKED CHILD DOES NOT ANNOUNCE ARRIVAL (owner, 2026-09-30; sim A2 #11). The screen no longer offers the
+    // button (arrivalBlockedForMinor in app/screens-today.jsx); this is the backstop for a build that does, and
+    // the relay refuses too. Fails OPEN: only a CONFIRMED answer for THIS member in THIS church refuses, so a
+    // parent whose clearance has not arrived is never stopped at the door. Nothing is sealed or published first.
+    const _me = _sgMine(cp);
+    if (_me && _me.isMinor) return { ok: false, reason: 'minor' };
     const sid = String((rec || {}).session || '').trim();
     if (!sid) return { ok: false, reason: 'no-session' };
     // THE ADDRESS NAMES ME. The relay enforces this at all four doors (arrivalIdOk); composing it from `pub`
@@ -7414,6 +7441,13 @@ window.Fellowship = {
     const cp = window.Fellowship.churchPub;
     if (!sk) { try { await window.Fellowship.ready; } catch {} }
     if (!sk || !cp || !careId || !iso) return null;
+    // A MARKED CHILD DOES NOT SIGN UP TO HELP WITH SOMEBODY ELSE'S NEED (owner, 2026-10-02; sim A2 #8). The screen
+    // no longer offers it; this is the backstop for a build that does. Fails OPEN: only a CONFIRMED answer for THIS
+    // member in THIS church refuses (_sgMine is null for anyone else and on a cold start). clearCareSlot is left
+    // alone on purpose - a child who holds a slot must always be able to stand down. There is no relay half yet
+    // (an owner decision), so a modified build can still write one straight at the relay.
+    const _me = _sgMine(cp);
+    if (_me && _me.isMinor) return { ok: false, reason: 'minor' };
     const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', CARESLOT_D + careId + ':' + iso], ['t', NET], ['church', cp]], content: JSON.stringify({ careId, isoDate: iso, note: String(note || '').trim() }) }, sk);
     // SIGNING UP TO BRING A MEAL IS A PROMISE TO A FAMILY. If it lands nowhere the slot still reads empty to
     // everyone else — worst case nobody comes, and the one person who thought they had it never finds out.

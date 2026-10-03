@@ -155,7 +155,7 @@ function console_() {
   const handlers = [];
   const world = {
     pub: CP, churchPub: CP, churchSk, actingChurch: '', NET: 'trinityone', REQUEST_D: 'trinityone/request:', REQREPLY_D: 'trinityone/reqreply:', NAMEKEY_D: 'trinityone/namekey:',
-    decrypt3: nip44.decrypt, encrypt3: nip44.encrypt, getConversationKey: nip44.utils.getConversationKey, _unhex: unhex, _hex: hex,
+    decrypt3: nip44.decrypt, encrypt2: nip44.encrypt, getConversationKey: nip44.utils.getConversationKey, _unhex: unhex, _hex: hex,
     relays: () => ['wss://r'], _byChurchOrSteward: () => true, _webQueueSync: () => {},
     _isRelayAuthed: () => true, _keyReadAuthedOn: () => true, normalizeURL2: (u) => u, NAME_RING_MAX: 50, toPubHex: (p) => p, _localBlocked: new Set(),
     _sealEach: async (pl, recips, f) => Object.fromEntries(recips.map(p => [p, f(pl, p)])),
