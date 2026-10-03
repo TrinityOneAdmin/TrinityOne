@@ -148,11 +148,20 @@ function svTeamMates(ctx, teamId) {
   const me = ctx.myPubkey;
   return ((roster && roster.people) || []).filter(p => p && p.name && (!me || p.pub !== me));
 }
-// the teams I'm on (derived from my requests/commitments)
+// the teams I'm on: those I have a request or a published slot for, AND those whose roster lists me.
+//
+// IT USED TO READ ONLY THE FIRST HALF, and the Serving screen's big card reads ctx.myRosterTeams (the second).
+// A member on a team's roster with nothing scheduled yet therefore saw "You're on the Welcome team" in the
+// card and "No teams yet — your leader adds you" in the strip below it, both true to their own source and
+// contradicting each other on one screen (sim 2026-10-02, item 48). It was a state inconsistency, not timing.
+// One list now answers both: a team the roster puts me on is a team I am on.
 function svMyTeams(ctx) {
   const seen = new Map();
   [...(ctx.servPending || []), ...(ctx.servConfirmed || [])].forEach(r => {
     if (r.teamId && !seen.has(r.teamId)) seen.set(r.teamId, { id: r.teamId, name: r.teamName || 'Team', icon: r.icon || 'hand', accent: r.accent || 'var(--clay)' });
+  });
+  (ctx.myRosterTeams || []).forEach(t => {
+    if (t && t.id && !seen.has(t.id)) seen.set(t.id, { id: t.id, name: t.name || 'Team', icon: t.icon || 'hand', accent: t.accent || 'var(--clay)' });
   });
   return [...seen.values()];
 }
