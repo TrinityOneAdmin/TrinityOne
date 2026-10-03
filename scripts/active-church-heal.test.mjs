@@ -143,8 +143,10 @@ test('every activeChurch resolution still funnels through the same find()', () =
   // and it benefits from the heal: with a stale id it resolves to no key, no locked request is counted (the safe
   // direction — nothing is shown as waiting that the member could not open here), and the heal puts it right on
   // the same pass as everything else.
-  assert.equal(sites.length, 44,
-    `the active-church resolution sites changed (${sites.length} vs 44) — if that is deliberate, confirm each new one benefits from the heal, then update this count`);
+  // 44 → 45: answerSwap resolves activeChurch to its npub for the swap answer's church. With a stale id, np is
+  // undefined and `ask.church || np` falls back to the ask's own church — the safe direction.
+  assert.equal(sites.length, 45,
+    `the active-church resolution sites changed (${sites.length} vs 45) — if that is deliberate, confirm each new one benefits from the heal, then update this count`);
 });
 
 test('a MISSING active church heals too, not only a dangling one', () => {

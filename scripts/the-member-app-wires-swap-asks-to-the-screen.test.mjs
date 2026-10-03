@@ -114,3 +114,8 @@ test('the member\'s answers to MY asks reach ctx.swapAnswers, per author', () =>
   const ctx = ctxOf(draw());
   assert.equal(ctx.swapAnswers.req1[COLIN].yes, true);
 });
+
+test('ctx.iAmMinor reaches the screen so svSwapView can hide asks from uncleared adults', () => {
+  const ctx = ctxOf(draw());
+  assert.equal(typeof ctx.iAmMinor, 'boolean', 'ctx.iAmMinor is not wired — svSwapView cannot gate swap asks for a child');
+});

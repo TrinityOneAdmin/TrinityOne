@@ -303,6 +303,19 @@ test('console: a reply it cannot open yet is kept and opens when the ring fills 
   assert.equal(replies[0].v, 'decline', "the console's reply stayed unread after the ring filled");
 });
 
+test('console: a reply whose content carries a "by" field cannot override the event author', () => {
+  const c = console_();
+  let replies = [];
+  c.api.S.subscribeRequestReplies((r) => { replies = r; });
+  c.api.S.subscribeNameKey();
+  const [repH, keyH] = c.handlers;
+  const ATTACKER = 'ff'.repeat(32);
+  keyH.onevent(c.envelope);
+  repH.onevent({ pubkey: ME, created_at: 130, content: sealed({ request: 'req1', v: 'swapyes', by: ATTACKER }), tags: [['d', 'trinityone/reqreply:req1'], ['p', CP], ['t', 'trinityone']] });
+  assert.equal(replies[0].by, ME, 'a "by" field inside the reply content overrode the event author — a forged swap answer would be trusted');
+  assert.equal(replies[0].v, 'swapyes');
+});
+
 test('phone: listeners are told only when a USABLE key lands (claim: notify only after a usable envelope)', () => {
   const p = memberPhone();
   let calls = 0; p.api.onNameKey(() => { calls++; });
