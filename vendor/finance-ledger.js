@@ -39,7 +39,9 @@ var FinanceLedger = (() => {
     guessColumns: () => guessColumns,
     importedKeys: () => importedKeys,
     incomeExpenditure: () => incomeExpenditure,
+    journalCsvRows: () => journalCsvRows,
     lineKey: () => lineKey,
+    minorToMajorText: () => minorToMajorText,
     parseCsv: () => parseCsv,
     parseDate: () => parseDate,
     parseMoney: () => parseMoney,
@@ -411,6 +413,26 @@ var FinanceLedger = (() => {
     const sym = SYM[currency] || "";
     const s = (minor / Math.pow(10, decimals)).toLocaleString("en-GB", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
     return currency === "sats" ? s + " " + sym : sym + s;
+  }
+  function minorToMajorText(minor, decimals = 2) {
+    const d = Number.isInteger(decimals) && decimals >= 0 ? decimals : 2;
+    return (Number(minor) / Math.pow(10, d)).toFixed(d);
+  }
+  function journalCsvRows(book) {
+    const dec = book.decimals != null ? book.decimals : 2;
+    const rows = [["seq", "date", "memo", "account", "fund", "debit", "credit"]];
+    for (const e of book.journal) for (const p of e.postings) {
+      rows.push([
+        e.seq,
+        e.date,
+        e.memo,
+        (book.accounts.get(p.account) || {}).name || p.account,
+        p.fund || "",
+        p.dir === "dr" ? minorToMajorText(p.amount, dec) : "",
+        p.dir === "cr" ? minorToMajorText(p.amount, dec) : ""
+      ]);
+    }
+    return rows;
   }
   var pad = (n) => String(n).padStart(2, "0");
   function quarterRange(year, q) {

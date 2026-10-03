@@ -65,7 +65,11 @@
     const CARECHAT_D = NET + "/carechat:";
     const uid = (p) => p + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
     const now = () => Math.floor(Date.now() / 1e3);
-    const enKey = () => "trinityone.meals.enabled." + (S() && S().churchPub || "");
+    const activeChurch = () => {
+      const s = S();
+      return s && (s.actingChurch || s.churchPub) || "";
+    };
+    const enKey = () => "trinityone.meals.enabled." + activeChurch();
     function cachedEnabled() {
       try {
         return localStorage.getItem(enKey()) === "1";
@@ -75,11 +79,12 @@
     }
     const DEFAULTS = { enabled: false, visibility: "all", openedBy: "steward", adminGroupId: "" };
     function subscribeSettings(cb) {
-      if (!S() || !S().subscribeMany || !S().churchPub) {
+      if (!S() || !S().subscribeMany || !activeChurch()) {
         cb({ ...DEFAULTS });
         return () => {
         };
       }
+      const cp = activeChurch();
       cb({ ...DEFAULTS, enabled: cachedEnabled() });
       const seen = { ts: 0, doc: { ...DEFAULTS } };
       const emit = () => {
@@ -90,7 +95,7 @@
         cb({ ...seen.doc });
       };
       const sub = S().subscribeMany(
-        [{ kinds: [30078], authors: [S().churchPub], "#t": [NET] }, { kinds: [30078], "#church": [S().churchPub], "#t": [NET] }],
+        [{ kinds: [30078], authors: [cp], "#t": [NET] }, { kinds: [30078], "#church": [cp], "#t": [NET] }],
         {
           onevent(e) {
             const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
@@ -241,16 +246,17 @@
       return S().publishSigned({ kind: 30078, created_at: now(), tags: [["d", SKIP_D + careId + ":" + iso], ["t", NET], ["deleted", "1"]], content: "" });
     }
     function subscribeNeeds(cb) {
-      if (!S() || !S().subscribeMany || !S().churchPub) {
+      if (!S() || !S().subscribeMany || !activeChurch()) {
         cb([]);
         return () => {
         };
       }
+      const cp = activeChurch();
       const byId = /* @__PURE__ */ new Map();
       const versions = /* @__PURE__ */ new Map();
       const tombs = /* @__PURE__ */ new Map();
       let openedByMember = false;
-      const delOk = (by, need) => !openedByMember || by === S().churchPub || !!need && need._by === by;
+      const delOk = (by, need) => !openedByMember || by === cp || by === S().churchPub || !!need && need._by === by;
       const retracted = (id, need) => {
         const s = tombs.get(id);
         if (!s) return false;
@@ -261,12 +267,12 @@
       };
       const emit = () => cb([...byId.entries()].filter(([id, n]) => !retracted(id, n)).map(([, n]) => n).sort((a, b) => (a.startDate || "").localeCompare(b.startDate || "") || (a.ts || 0) - (b.ts || 0)));
       const sub = S().subscribeMany(
-        [{ kinds: [30078], authors: [S().churchPub], "#t": [NET] }, { kinds: [30078], "#church": [S().churchPub], "#t": [NET] }],
+        [{ kinds: [30078], authors: [cp], "#t": [NET] }, { kinds: [30078], "#church": [cp], "#t": [NET] }],
         {
           onevent(e) {
             const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
             if (d === SETTINGS_D) {
-              if (e.pubkey === S().churchPub) {
+              if (e.pubkey === cp) {
                 try {
                   openedByMember = JSON.parse(e.content || "{}").openedBy === "member";
                   emit();
@@ -305,7 +311,7 @@
       };
     }
     function _subscribeChurchTagged(prefix, normalise, cb) {
-      if (!S() || !S().subscribeMany || !S().churchPub) {
+      if (!S() || !S().subscribeMany || !activeChurch()) {
         cb([]);
         return () => {
         };
@@ -313,7 +319,7 @@
       const byKey = /* @__PURE__ */ new Map();
       const emit = () => cb([...byKey.values()]);
       const sub = S().subscribeMany(
-        [{ kinds: [30078], "#church": [S().churchPub], "#t": [NET] }],
+        [{ kinds: [30078], "#church": [activeChurch()], "#t": [NET] }],
         {
           onevent(e) {
             const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
@@ -362,6 +368,7 @@
     }
     function publishCareTeam(memberPubs) {
       if (!S() || !S().publishSigned || !S().churchPub) return Promise.resolve(null);
+      if (S().actingChurch) return Promise.resolve(null);
       const cp = S().churchPub;
       const pubs = [.../* @__PURE__ */ new Set([cp, ...(memberPubs || []).map((p) => String(p || "").trim().toLowerCase()).filter(Boolean)])];
       return S().publishSigned({ kind: 30078, created_at: now(), tags: [["d", CARETEAM_D + cp], ["t", NET]], content: JSON.stringify({ pubs, updated: now() }) });

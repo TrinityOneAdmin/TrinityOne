@@ -374,6 +374,17 @@ function Splash({ onDone, ready }) {
   );
 }
 
+// The featured (pinned) sermon as it should be SHOWN: the pin document, with the title taken from the church's
+// current sermon list when that list holds the same sermon. Only the title is overlaid: a sermon edited in the
+// console keeps its id, sha256 and hosts (a re-upload is a new sermon), so the title is the one field that goes
+// stale in the pin. A pin whose sermon is not in the list (not arrived yet, or removed) is shown as pinned.
+// Callers: App's `pinnedSermon` below (the Today card, the bell entry); nothing else.
+function featuredSermonNow(pin, sermons) {
+  if (!pin || !pin.sha256) return pin;
+  const cur = (sermons || []).find(x => x && x.id === pin.id && x.title);
+  return cur && cur.title !== pin.title ? { ...pin, title: cur.title } : pin;
+}
+
 function App() {
   const [t, setTweak] = useSettings();
   const Bible = useBible();
@@ -1196,12 +1207,23 @@ function App() {
     return window.Fellowship.subscribeChurchDevotionals(np, d => { setChurchDevos(d); lsSet('trinityone.devos.' + np, d); });
   }, [activeChurch, churches, connTick]);
   // the church's featured/pinned sermon (a steward pushes it) → a Today card + a notification
-  const [pinnedSermon, setPinnedSermon] = useA(null);
+  // THE PIN IS A SNAPSHOT: it carries the title as it was the moment a steward pressed pin, so an edited sermon
+  // kept its OLD name on this Today card and in the bell (sim 2026-10-02, finding 34). The title that counts is
+  // the one in the church's sermon list (the same list Watch & Listen shows), so the card is the pin overlaid
+  // with that — see featuredSermonNow below. The list is shared with those screens (one REQ), not a new one.
+  const [pinnedSermonRaw, setPinnedSermon] = useA(null);
+  const [featuredSermonList, setFeaturedSermonList] = useA([]);
   useAE(() => {
     const np = (churches.find(c => c.id === activeChurch) || {}).npub;
     if (!np || !(window.Fellowship && window.Fellowship.subscribePinnedSermon)) { setPinnedSermon(null); return; }
     return window.Fellowship.subscribePinnedSermon(np, setPinnedSermon);
   }, [activeChurch, churches, connTick]);
+  useAE(() => {
+    const np = (churches.find(c => c.id === activeChurch) || {}).npub;
+    if (!np || !(window.Fellowship && window.Fellowship.subscribeSermons)) { setFeaturedSermonList([]); return; }
+    return window.Fellowship.subscribeSermons(np, (l) => setFeaturedSermonList(l || []));
+  }, [activeChurch, churches, connTick]);
+  const pinnedSermon = React.useMemo(() => featuredSermonNow(pinnedSermonRaw, featuredSermonList), [pinnedSermonRaw, featuredSermonList]);
   // ── Care / Meal trains: open needs the church shared that a member can sign up to help with ──
   const [careSettings, setCareSettings] = useA({ enabled: false, visibility: 'all', openedBy: 'steward', adminGroupId: '' });
   const [careNeeds, setCareNeeds] = useA([]);

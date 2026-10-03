@@ -25,6 +25,27 @@ export function fmtMoney(minor, currency = 'GBP', decimals = 2) {
   return currency === 'sats' ? (s + ' ' + sym) : (sym + s);
 }
 
+// A minor-unit integer as a plain major-unit decimal for a spreadsheet: 4500 -> "45.00" (2 decimals), 4500 -> "4500"
+// (0 decimals, sats). No currency symbol and no thousands separator, so Excel/Sheets read it as a number.
+export function minorToMajorText(minor, decimals = 2) {
+  const d = Number.isInteger(decimals) && decimals >= 0 ? decimals : 2;
+  return (Number(minor) / Math.pow(10, d)).toFixed(d);
+}
+
+// The rows of "Export CSV" on the Finance screen: one row per posting, debit/credit in MAJOR units (pounds, not
+// pence — sim round 2 found the file carried raw minor units, so a £45.00 payment read as 4500 in the
+// treasurer's spreadsheet). Header first. Cells are returned raw; quoting is the caller's job.
+// Callers: exportCsv in app/stew-finance.jsx (the only one).
+export function journalCsvRows(book) {
+  const dec = book.decimals != null ? book.decimals : 2;
+  const rows = [['seq', 'date', 'memo', 'account', 'fund', 'debit', 'credit']];
+  for (const e of book.journal) for (const p of e.postings) {
+    rows.push([e.seq, e.date, e.memo, (book.accounts.get(p.account) || {}).name || p.account, p.fund || '',
+      p.dir === 'dr' ? minorToMajorText(p.amount, dec) : '', p.dir === 'cr' ? minorToMajorText(p.amount, dec) : '']);
+  }
+  return rows;
+}
+
 // ── period helpers (ISO 'YYYY-MM-DD'; `to` is inclusive) ──
 const pad = n => String(n).padStart(2, '0');
 export function quarterRange(year, q) {                     // q = 1..4
