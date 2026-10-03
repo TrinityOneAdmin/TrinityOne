@@ -439,6 +439,9 @@ function liftAnnounceAndWipe() {
   const scope = {
     toPub: (x) => x, sk: 'deadbeef', NET: 'trinityone',
     // esbuild's name for the signer in this bundle; a missing stub THROWS below rather than reading undefined.
+    // setEventRsvp / announceMembership / leaveMembership stamp through _monotonicF (sim item 19). These tests are about
+    // something else, so the stamp is the identity here; its own behaviour is a-second-write-in-the-same-second-is-not-a-failure.test.mjs.
+    _monotonicF: (t) => t,
     finalizeEvent2: (t) => { const e = { ...t, id: 'e' + (sent.length + 1), sig: 's', pubkey: MEMBER }; sent.push(e); return e; },
     _outbox: [], _outboxSave: () => {}, _publishAny: async () => true, publishSetFor: () => ['wss://r'],
     _queueJoinIntent: () => { throw new Error('keyless path taken — the stub key did not reach the function'); },

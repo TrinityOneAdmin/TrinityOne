@@ -1443,7 +1443,12 @@ let _needAuth = true;
 //
 // The console has had this since it was written (`_monotonic` in src/steward.src.js, applied inside
 // _publishSigned). This is the same rule for the member app, and it is kept deliberately narrow — only the
-// four moderation writes below, which are the ones a person can genuinely repeat inside a second.
+// writes a person (or a launch) can genuinely repeat inside a second.
+// CALLERS (rule 2, complete, grepped 2026-10-03): the four moderation writes (pinPost, unpin,
+// hideMessage, unhideMessage), and since sim item 19 setEventRsvp, announceMembership (the join AND its
+// heartbeat) and leaveMembership. Other toggles that write one fixed d-tag (serving replies, unavailability,
+// care sign-ups/skips/availability) have the same exposure and are NOT stamped here (noticed 2026-10-03,
+// left alone: outside the two writers the sim reported).
 //
 // The +600s bound is OURS, not the relay's — the relay refuses past +900s (event-store.mjs) and the console
 // uses 600 in `_monotonic`. Two programs that must agree keep the tighter number; 700 undos in one second
@@ -4176,11 +4181,15 @@ window.Fellowship = {
     let firstJoined = 0; try { firstJoined = Number(localStorage.getItem(jk)) || 0; } catch {}
     const content = firstJoined > 0 ? { joined: firstJoined, seen: now, hb: 1 } : { joined: now };
     if (!firstJoined) { try { localStorage.setItem(jk, String(now)); } catch {} }
-    const evt = finalizeEvent({
+    // THE JOIN AND THE HEARTBEAT ARE TWO WRITES TO ONE DOCUMENT, and a launch fires both inside the same
+    // second (sim 2026-10-02, item 19: "could not be sent" over a join the relay held). Stamped plainly the
+    // pair tie on `created_at`, the relay keeps the lower id and refuses the other as "a newer version is
+    // already stored", and a refusal is permanent — the join was marked failed. See _monotonicF.
+    const evt = finalizeEvent(_monotonicF({
       kind: 30078, created_at: now,
       tags: [['d', 'trinityone/member:' + cp], ['t', NET], ['p', cp]],
       content: JSON.stringify(content),
-    }, sk);
+    }), sk);
     // QUEUE FIRST, THEN ATTEMPT — the same rule as a group message (see the E1 note on _outbox.push). This
     // used to be a bare _publishAny with a console.warn on failure: no retry, no persistence, nothing on
     // screen. And this single event is the ONLY thing that makes a member visible to a steward — the pending
@@ -4248,10 +4257,11 @@ window.Fellowship = {
       if (!_joinSent[cp] && _joinIntents.some(i => i.cp === cp)) { _dropJoinIntent(cp); return { ok: true, local: true }; }
       return { ok: false, reason: 'not-sent' };
     }
-    const evt = finalizeEvent({
+    // Same document as the join and the heartbeat, so leaving within a second of either must still win.
+    const evt = finalizeEvent(_monotonicF({
       kind: 30078, created_at: Math.floor(Date.now() / 1000),
       tags: [['d', 'trinityone/member:' + cp], ['t', NET], ['p', cp], ['deleted', '1']], content: '',
-    }, sk);
+    }), sk);
     // A SEND THAT LANDED NOWHERE MUST NOT COME BACK LOOKING LIKE ONE THAT DID. Audit 2026-09-02 #6.
     // _publishAny THROWS when no relay accepted (and resolves true otherwise), and this swallowed that and
     // returned the event anyway — so every caller read a total failure as a success and said so on screen.
@@ -7838,7 +7848,11 @@ window.Fellowship = {
     if (!sk) await window.Fellowship.ready;
     const cp = toPub(churchNpub); if (!cp || !sk) return { ok: false, reason: 'not-sent' };
     const content = JSON.stringify({ event: eventId, v: verdict });
-    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/rsvp:' + eventId], ['t', NET], ['p', cp]], content }, sk);
+    // A SECOND TAP IN THE SAME SECOND MUST BEAT THE FIRST (sim 2026-10-02, item 19). `created_at` is whole
+    // seconds and the relay keeps the LOWEST id on a tie, so "Going" then "Can't make it" inside one second
+    // was a coin toss that the relay answered with "a newer version is already stored" — which the caller
+    // reports as "couldn't send", over an answer that may or may not have landed. See _monotonicF.
+    const evt = finalizeEvent(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/rsvp:' + eventId], ['t', NET], ['p', cp]], content }), sk);
     // A SEND THAT LANDED NOWHERE MUST NOT COME BACK LOOKING LIKE ONE THAT DID. Audit 2026-09-02 #6.
     // _publishAny THROWS when no relay accepted (and resolves true otherwise), and this swallowed that and
     // returned the event anyway — so every caller read a total failure as a success and said so on screen.

@@ -35,6 +35,9 @@ function lift(overrides = {}) {
     sk: null, pub: null, NET: 'trinityone', JOINSENT_KEY: 'trinityone.joinsent', JOININTENT_KEY: 'trinityone.joinintent', _joinIntents: [],
     // esbuild gives fellowship's nostr import the suffixed name; both are the real signer
     finalizeEvent, finalizeEvent2: finalizeEvent,
+    // setEventRsvp / announceMembership / leaveMembership stamp through _monotonicF (sim item 19). These tests are about
+    // something else, so the stamp is the identity here; its own behaviour is a-second-write-in-the-same-second-is-not-a-failure.test.mjs.
+    _monotonicF: (t) => t,
     _joinSent: {}, _outbox: [], _outboxFailed: [], _outboxSave: () => {},
     _publishAny: async (relays, evt) => { published.push(evt); if (scope.refuse) throw new Error(scope.refuse); return true; },
     publishSetFor: () => ['ws://x'],

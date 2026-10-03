@@ -10361,12 +10361,12 @@
         } catch {
         }
       }
-      const evt = finalizeEvent2({
+      const evt = finalizeEvent2(_monotonicF({
         kind: 30078,
         created_at: now,
         tags: [["d", "trinityone/member:" + cp], ["t", NET], ["p", cp]],
         content: JSON.stringify(content)
-      }, sk);
+      }), sk);
       const dup = _outbox.some((o) => o && o.evt && o.evt.id === evt.id);
       if (!dup) {
         _outbox.push({ evt, groupId: null, join: cp, at: Math.floor(Date.now() / 1e3), tries: 0, relays: [] });
@@ -10415,12 +10415,12 @@
         }
         return { ok: false, reason: "not-sent" };
       }
-      const evt = finalizeEvent2({
+      const evt = finalizeEvent2(_monotonicF({
         kind: 30078,
         created_at: Math.floor(Date.now() / 1e3),
         tags: [["d", "trinityone/member:" + cp], ["t", NET], ["p", cp], ["deleted", "1"]],
         content: ""
-      }, sk);
+      }), sk);
       try {
         await _publishAny(publishSetFor(cp), evt);
       } catch (e) {
@@ -14343,7 +14343,7 @@
       const cp = toPub(churchNpub);
       if (!cp || !sk) return { ok: false, reason: "not-sent" };
       const content = JSON.stringify({ event: eventId, v: verdict });
-      const evt = finalizeEvent2({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", "trinityone/rsvp:" + eventId], ["t", NET], ["p", cp]], content }, sk);
+      const evt = finalizeEvent2(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags: [["d", "trinityone/rsvp:" + eventId], ["t", NET], ["p", cp]], content }), sk);
       try {
         await _publishAny(publishSetFor(cp), evt);
       } catch (e) {

@@ -73,8 +73,10 @@ function runner(name, { publishFails, how }) {
   // cleartext path. What these tests measure is the publish OUTCOME; the content shape is not the subject.
   const _sealChurchDocMember = new Function('_nameKeys',
     fnBody(BUNDLE, 'function _sealChurchDocMember(', '_sealChurchDocMember') + '\nreturn _sealChurchDocMember;')(new Map());
-  const obj = new Function('finalizeEvent2', '_publishAny', 'publishSetFor', 'toPub', 'window', 'sk', 'NET', 'Date', 'JSON', 'Math', '_clearJoinSent', '_dropJoinIntent', '_pubReason', '_forgetChurch', '_sealChurchDocMember',
-    'return ' + src)(finalizeEvent2, _publishAny, () => ['wss://r.example/relay'], toPub, window, 'sk-bytes', 'trinityone', Date, JSON, Math, () => {}, () => {}, _pubReason, () => {}, _sealChurchDocMember);
+  const obj = new Function('finalizeEvent2', '_publishAny', 'publishSetFor', 'toPub', 'window', 'sk', 'NET', 'Date', 'JSON', 'Math', '_clearJoinSent', '_dropJoinIntent', '_pubReason', '_forgetChurch', '_sealChurchDocMember', '_monotonicF',
+    'return ' + src)(finalizeEvent2, _publishAny, () => ['wss://r.example/relay'], toPub, window, 'sk-bytes', 'trinityone', Date, JSON, Math, () => {}, () => {}, _pubReason, () => {}, _sealChurchDocMember,
+    // the same-second stamp (sim item 19) is not what this file is about; its own test is a-second-write-in-the-same-second-is-not-a-failure
+    (t) => t);
   return { fn: obj[name], calls };
 }
 
