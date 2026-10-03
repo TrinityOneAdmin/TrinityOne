@@ -57,18 +57,29 @@ import { _absorbById } from './church-doc-store.src.js';   // one rule for who w
   // Single church-signed doc at SETTINGS_D. The `enabled` flag also gates the steward nav item —
   // reading from the relay takes a round-trip, so we mirror it in localStorage per-church for instant
   // first-paint (same trick Finance uses).
-  const enKey = () => 'trinityone.meals.enabled.' + ((S() && S().churchPub) || '');
+  // WHICH CHURCH THIS CONSOLE IS READING. `Steward.churchPub` is the DEVICE's own church key. A delegated steward
+  // (the owner of church 1 running church 2, or a volunteer running somebody else's church) keeps their own key
+  // there and runs the other church as `Steward.actingChurch` (setActiveIdentity: `pub = tp; actingChurch = tp`,
+  // churchPub untouched) — so reading `churchPub` read the delegate's OWN, empty church: the care switch showed
+  // Off while the church had it On, and the Care page listed nothing (sim round 2, finding 35). Owners, and a
+  // console viewing a network, have no actingChurch and get exactly what they got before. makeSub in
+  // app/steward-root.jsx already files its cache under `actingChurch || churchPub`; this is the same rule.
+  // Used for the settings, needs, slots and skips READS. The request/chat/careteam paths further down still
+  // use churchPub: they mix "the church" with "me" and need a per-site decision (see publishCareTeam).
+  const activeChurch = () => { const s = S(); return (s && (s.actingChurch || s.churchPub)) || ''; };
+  const enKey = () => 'trinityone.meals.enabled.' + activeChurch();
   function cachedEnabled() { try { return localStorage.getItem(enKey()) === '1'; } catch (e) { return false; } }
 
   const DEFAULTS = { enabled: false, visibility: 'all', openedBy: 'steward', adminGroupId: '' };
 
   function subscribeSettings(cb) {
-    if (!S() || !S().subscribeMany || !S().churchPub) { cb({ ...DEFAULTS }); return () => {}; }
+    if (!S() || !S().subscribeMany || !activeChurch()) { cb({ ...DEFAULTS }); return () => {}; }
+    const cp = activeChurch();
     cb({ ...DEFAULTS, enabled: cachedEnabled() });   // paint immediately so the nav item is correct on first render
     const seen = { ts: 0, doc: { ...DEFAULTS } };
     const emit = () => { try { localStorage.setItem(enKey(), seen.doc.enabled ? '1' : '0'); } catch (e) {} cb({ ...seen.doc }); };
     const sub = S().subscribeMany(
-      [{ kinds: [30078], authors: [S().churchPub], '#t': [NET] }, { kinds: [30078], '#church': [S().churchPub], '#t': [NET] }],
+      [{ kinds: [30078], authors: [cp], '#t': [NET] }, { kinds: [30078], '#church': [cp], '#t': [NET] }],
       {
         onevent(e) {
           const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
@@ -245,7 +256,8 @@ import { _absorbById } from './church-doc-store.src.js';   // one rule for who w
   }
 
   function subscribeNeeds(cb) {
-    if (!S() || !S().subscribeMany || !S().churchPub) { cb([]); return () => {}; }
+    if (!S() || !S().subscribeMany || !activeChurch()) { cb([]); return () => {}; }
+    const cp = activeChurch();
     const byId = new Map();
     const versions = new Map();   // needId -> Map(author -> their copy); see src/church-doc-store.src.js
     // Deletion authority (mirrors the member client): when the church opens needs to ANY member, the relay lets
@@ -255,16 +267,16 @@ import { _absorbById } from './church-doc-store.src.js';   // one rule for who w
     // tombstone that reaches us is authorised. Tracked per id so event order doesn't matter.
     const tombs = new Map();          // careId -> Set(pubkeys that published a deletion)
     let openedByMember = false;       // from the church-signed meals-settings (same sub — it's church-authored + NET-tagged)
-    const delOk = (by, need) => !openedByMember || by === S().churchPub || (!!need && need._by === by);
+    const delOk = (by, need) => !openedByMember || by === cp || by === S().churchPub || (!!need && need._by === by);
     const retracted = (id, need) => { const s = tombs.get(id); if (!s) return false; for (const by of s) { if (delOk(by, need)) return true; } return false; };
     const emit = () => cb([...byId.entries()].filter(([id, n]) => !retracted(id, n)).map(([, n]) => n).sort((a, b) => (a.startDate || '').localeCompare(b.startDate || '') || (a.ts || 0) - (b.ts || 0)));
     const sub = S().subscribeMany(
-      [{ kinds: [30078], authors: [S().churchPub], '#t': [NET] }, { kinds: [30078], '#church': [S().churchPub], '#t': [NET] }],
+      [{ kinds: [30078], authors: [cp], '#t': [NET] }, { kinds: [30078], '#church': [cp], '#t': [NET] }],
       {
         onevent(e) {
           const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
           // capture the church's openedBy so deletion authority can be judged (church-signed doc, same filters)
-          if (d === SETTINGS_D) { if (e.pubkey === S().churchPub) { try { openedByMember = JSON.parse(e.content || '{}').openedBy === 'member'; emit(); } catch (x) {} } return; }
+          if (d === SETTINGS_D) { if (e.pubkey === cp) { try { openedByMember = JSON.parse(e.content || '{}').openedBy === 'member'; emit(); } catch (x) {} } return; }
           if (!d.startsWith(NEED_D)) return;
           const id = d.slice(NEED_D.length);
           const deleted = e.tags.some(t => t[0] === 'deleted') || !e.content;
@@ -296,11 +308,11 @@ import { _absorbById } from './church-doc-store.src.js';   // one rule for who w
   // for the church-tag stream. Slots are filtered by the SLOT_D prefix; skips by SKIP_D. We expose
   // them as separate streams so the UI can apply skips as a mask over slots.
   function _subscribeChurchTagged(prefix, normalise, cb) {
-    if (!S() || !S().subscribeMany || !S().churchPub) { cb([]); return () => {}; }
+    if (!S() || !S().subscribeMany || !activeChurch()) { cb([]); return () => {}; }
     const byKey = new Map();   // key = needId|isoDate|pubkey   (one entry per member-per-(need,date))
     const emit = () => cb([...byKey.values()]);
     const sub = S().subscribeMany(
-      [{ kinds: [30078], '#church': [S().churchPub], '#t': [NET] }],
+      [{ kinds: [30078], '#church': [activeChurch()], '#t': [NET] }],
       {
         onevent(e) {
           const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
@@ -350,6 +362,11 @@ import { _absorbById } from './church-doc-store.src.js';   // one rule for who w
   // from the console, which holds the rosters). Just pubkeys, no secrets. Re-published when the team changes.
   function publishCareTeam(memberPubs) {
     if (!S() || !S().publishSigned || !S().churchPub) return Promise.resolve(null);
+    // A DELEGATED CONSOLE DOES NOT PUBLISH THIS. `cp` below is `churchPub` — the delegate's own key, not the church
+    // they are running — so the document would be d-tagged to a key that is nobody's church. It was never reached
+    // while a delegate's care switch read Off (the panel's effect is gated on it); now that the switch tells the
+    // truth the effect runs, and this keeps it a no-op exactly as it was.
+    if (S().actingChurch) return Promise.resolve(null);
     const cp = S().churchPub;
     const pubs = [...new Set([cp, ...((memberPubs || []).map(p => String(p || '').trim().toLowerCase()).filter(Boolean))])];
     return S().publishSigned({ kind: 30078, created_at: now(), tags: [['d', CARETEAM_D + cp], ['t', NET]], content: JSON.stringify({ pubs, updated: now() }) });
