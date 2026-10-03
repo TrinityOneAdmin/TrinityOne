@@ -10658,7 +10658,7 @@ window.Steward = {
         const c = _openChurchDoc(e.content);
         if (c === null) { lockedRaw.set(id, e); byId.set(id, { id, by: e.pubkey, _locked: true, ts: e.created_at }); emit(); return; }
         lockedRaw.delete(id);
-        byId.set(id, { id, by: e.pubkey, ...c, ts: e.created_at }); emit();
+        byId.set(id, { ...c, id, by: e.pubkey, ts: e.created_at }); emit();
       },
       oneose() { emit(); },
     };

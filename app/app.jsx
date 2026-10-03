@@ -1254,6 +1254,12 @@ function App() {
   // ── serving & events: the member is driven by the requests the church p-tags to them ──
   const [servReqs, setServReqs] = useA([]);     // serving requests addressed to me ("can you serve?")
   const [servReplies, setServReplies] = useA({}); // my replies: { requestId: 'accept'|'decline'|'swap' }
+  // SWAP ASKS (owner, 2026-10-02: the member's app asks the named teammate directly). `swapTraffic.asks` are asks
+  // OTHER members addressed to ME; `swapTraffic.answers` are teammates' answers to MY asks, by my request id.
+  // `servSwapTo` is who each of my own swap asks named, by request id. Deliberately NOT cached to localStorage:
+  // they are a record of who asked whom, and they repaint from the relay within a second.
+  const [swapTraffic, setSwapTraffic] = useA({ asks: [], answers: {} });
+  const [servSwapTo, setServSwapTo] = useA({});
   const [churchEvents, setChurchEvents] = useA([]);
   const [myRsvps, setMyRsvps] = useA({});       // { eventId: 'going'|'maybe'|'no' }
   // THE LAST RSVP ATTEMPT THAT DID NOT COME BACK CONFIRMED, per event: { verdict, next }. A REF, not state:
@@ -1272,9 +1278,11 @@ function App() {
     setServReqs(lsGet('trinityone.serv.reqs.' + np, []));
     setServReplies(lsGet('trinityone.serv.replies.' + np, {}));
     setMyRsvps(lsGet('trinityone.serv.rsvps.' + np, {}));
+    setSwapTraffic({ asks: [], answers: {} }); setServSwapTo({});
     const subs = [];
+    if (F.subscribeSwapTraffic) subs.push(F.subscribeSwapTraffic(x => setSwapTraffic(x || { asks: [], answers: {} })));
     if (F.subscribeMyServingRequests) subs.push(F.subscribeMyServingRequests(x => { setServReqs(x); lsSet('trinityone.serv.reqs.' + np, x); }));
-    if (F.subscribeMyReqReplies) subs.push(F.subscribeMyReqReplies(x => { setServReplies(x); lsSet('trinityone.serv.replies.' + np, x); }));
+    if (F.subscribeMyReqReplies) subs.push(F.subscribeMyReqReplies((x, extra) => { setServReplies(x); setServSwapTo((extra && extra.swapTo) || {}); lsSet('trinityone.serv.replies.' + np, x); }));
     if (F.subscribeMyRsvps) subs.push(F.subscribeMyRsvps(x => { setMyRsvps(x); lsSet('trinityone.serv.rsvps.' + np, x); }));
     return () => subs.forEach(u => { try { u && u(); } catch {} });
   }, [activeChurch, idTick, connTick]);
@@ -1734,6 +1742,10 @@ function App() {
   const _pendKey = new Set(servPending.map(r => r.serviceId + '|' + r.teamId + '|' + r.roleId));
   const servConfirmed = myRotaSlots.filter(s => s._verdict !== 'decline' && s._verdict !== 'swap' && !_pendKey.has(s.serviceId + '|' + s.teamId + '|' + s.roleId));
   const servDeclined = myRotaSlots.filter(s => s._verdict === 'decline' || s._verdict === 'swap');
+  // Swap asks other members sent ME, for THIS church, not yet answered by me and not already past. The child rule
+  // (a child sees an ask only from a cleared adult or their parent) is applied where it is drawn, in
+  // ServingScreen, so that deleting the screen's check cannot leave it enforced somewhere nobody looks.
+  const swapAsks = (swapTraffic.asks || []).filter(a => a && a.church === _activeCp && !servReplies['swapans~' + a.id] && ((a.slot && a.slot.date) || '') >= todayStr);
   const servNext = servConfirmed[0] || null;
   // schedule local reminders for confirmed slots (the day before) + register web-push (PWA)
   // THE DEPS DID NOT INCLUDE WHAT servConfirmed IS MADE OF. It derives from churchRotas/Services/Rosters/
@@ -2167,6 +2179,23 @@ function App() {
     openChurchDevo: (d) => setOpenDevo(d),
     // serving & events (church's own + aggregated from its network)
     servPending, servConfirmed, servDeclined, servNext, myRosterTeams,
+    // swap: asks to me, answers to my asks, who my own asks named, and how I answer one (see answerSwap below)
+    swapAsks, swapAnswers: swapTraffic.answers || {}, servSwapTo, iAmMinor,
+    answerSwap: async (ask, yes) => {
+      const F = window.Fellowship;
+      if (!(F && F.answerSwapAsk) || !ask) return false;
+      const np = (churches.find(c => c.id === activeChurch) || {}).npub;
+      // `sent && sent.ok`, never `if (sent)` — an object is always truthy (the markSafe trap), as in respondServing.
+      const sent = await F.answerSwapAsk(ask.church || np, ask, !!yes);
+      if (!(sent && sent.ok)) {
+        toast(sent && sent.reason === 'unconfirmed'
+          ? 'We couldn’t confirm your answer reached them — it may well have. Tap the same button again; it won’t change what you said.'
+          : 'Couldn’t send your answer. Try again when you have signal.', { error: true });
+        return false;
+      }
+      setServReplies(m => ({ ...m, ['swapans~' + ask.id]: yes ? 'swapyes' : 'swapno' }));
+      return true;
+    },
     churchEvents: (() => { const visible = churchEvents.filter(_eventVisibleToMe); const seen = new Set(visible.map(e => e.id).filter(Boolean)); const all = [...visible, ...groupEvents.filter(e => !seen.has(e.id)), ...netEvents]; return window.expandEvents ? window.expandEvents(all, new Date(Date.now() - 7 * 864e5).toISOString().slice(0, 10), 180) : all; })(),   // expand recurring church meetings into occurrences
     myRsvps,
     netAnnouncements, netUnread, markNetSeen, notifications,
@@ -2363,7 +2392,10 @@ function App() {
       // B never reads it, while the member believed they had replied (audit of 660f063, #3). A request carries
       // its church's hex key (`church`, from the author or its ['church'] tag); respondToServingRequest takes hex.
       const reqObj = item.req || (typeof item.id === 'string' && item.id.indexOf('rota:') !== 0 ? item : null);
-      const sent = await window.Fellowship.respondToServingRequest((reqObj && reqObj.church) || np, reqId, verdict, swapTo);
+      // A SWAP carries the slot it is about, so the named teammate's phone can say what is being asked; nothing
+      // else needs it, and it is built from `item` alone (a request and a rota slot both carry these fields).
+      const slotInfo = verdict === 'swap' ? { serviceId: item.serviceId, teamId: item.teamId, roleId: item.roleId, teamName: item.teamName, role: item.role, date: item.date, time: item.time, service: item.service } : undefined;
+      const sent = await window.Fellowship.respondToServingRequest((reqObj && reqObj.church) || np, reqId, verdict, swapTo, slotInfo);
       if (!(sent && sent.ok)) {
         toast(sent && sent.reason === 'unconfirmed'
           ? 'We couldn’t confirm your answer reached your church — it may well have. Tap the same button again; it won’t change what you said.'

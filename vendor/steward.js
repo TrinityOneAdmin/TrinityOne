@@ -23964,7 +23964,7 @@ zoo`.split("\n");
             return;
           }
           lockedRaw.delete(id);
-          byId.set(id, { id, by: e.pubkey, ...c, ts: e.created_at });
+          byId.set(id, { ...c, id, by: e.pubkey, ts: e.created_at });
           emit();
         },
         oneose() {

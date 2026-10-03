@@ -7964,15 +7964,40 @@ window.Fellowship = {
     return () => { try { sub.close(); } catch {} stopKey(); };
   },
   // member -> church: reply to a serving request (accept/decline/swap) — p-tagged to the church
-  async respondToServingRequest(churchNpub, requestId, verdict, swapTo) {
+  async respondToServingRequest(churchNpub, requestId, verdict, swapTo, slot) {
     if (!sk) await window.Fellowship.ready;
     const cp = toPub(churchNpub); if (!cp || !sk) return;
     // C-4: sealed under the church name key, like careavail: beside it. _sealChurchDocMember falls back to
     // cleartext when this phone holds no key yet — deliberately, and unchanged here: a member who cannot
     // seal must still be able to say "I can't make it", and that answer read by the relay is a far smaller
     // matter than the request it answers. The console opens both shapes.
-    const content = _sealChurchDocMember(cp, { request: requestId, v: verdict, swapTo: swapTo || '' });
-    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/reqreply:' + requestId], ['t', NET], ['p', cp]], content }, sk);
+    // A SWAP ASK NAMES ITS TEAMMATE, AND CARRIES WHAT IS BEING ASKED (owner, 2026-10-02: "the member's app asks
+    // the named teammate directly"). The reply already said `swapTo`, but only the church ever read it, so the
+    // sheet's "They'll get a friendly ask" was a promise to nobody (sim item 25). Now, for a swap that names a
+    // LINKED teammate, (a) the slot's team/role/date ride inside the sealed content, so the teammate's phone can
+    // say what is being asked without a second lookup, and (b) the event is also p-tagged to the teammate, which is
+    // all it takes for their phone to receive it: they already subscribe to documents p-tagged to them, and the
+    // relay serves a member the documents of their own church (reqreply: is `read: 'members'`).
+    //
+    // WHAT THE TEAMMATE'S PHONE MAY TRUST FROM THIS: the AUTHOR (signed) and nothing else. Every field of `slot`
+    // is the asker's own text, so the reader clips it and shows it as plain text, and a swap only ever happens
+    // when the CHURCH confirms it from the rota it holds (see DashRota).
+    // ADDITIVE ON PURPOSE: an old console reads `{ request, v, swapTo }` exactly as before and ignores `slot`.
+    const swapHex = verdict === 'swap' ? (toPub(swapTo) || '') : '';
+    const body = { request: requestId, v: verdict, swapTo: swapTo || '' };
+    if (swapHex && slot && typeof slot === 'object') {
+      body.slot = {};
+      for (const f of ['serviceId', 'teamId', 'roleId', 'teamName', 'role', 'date', 'time', 'service']) {
+        if (typeof slot[f] === 'string') body.slot[f] = slot[f].slice(0, 80);
+      }
+    }
+    const content = _sealChurchDocMember(cp, body);
+    const replyTags = [['d', 'trinityone/reqreply:' + requestId], ['t', NET], ['p', cp]];
+    if (swapHex && swapHex !== cp && swapHex !== window.Fellowship.myPubkey) replyTags.push(['p', swapHex]);
+    // MONOTONIC PER DOCUMENT, as setEventRsvp's. A member who taps "I'll serve" and then "Can't make it" (or the
+    // reverse) inside one second writes the same d-tag twice with the same created_at, and the relay keeps
+    // whichever event id sorts lower — so the church could be left holding the answer the member took back.
+    const evt = finalizeEvent(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: replyTags, content }), sk);
     // A SEND THAT LANDED NOWHERE MUST NOT COME BACK LOOKING LIKE ONE THAT DID. Audit 2026-09-02 #6.
     // _publishAny THROWS when no relay accepted (and resolves true otherwise), and this swallowed that and
     // returned the event anyway — so every caller read a total failure as a success and said so on screen.
@@ -7989,19 +8014,112 @@ window.Fellowship = {
     try { await _publishAny(publishSetFor(cp), evt); } catch (e) { return { ok: false, reason: _pubReason(e) }; }
     return { ok: true, evt };
   },
+  // ── THE TEAMMATE'S HALF OF A SWAP (owner, 2026-10-02) ───────────────────────────────────────────────────
+  // The asker's reply (respondToServingRequest, verdict 'swap') now reaches the named teammate's phone, and this
+  // is how the teammate answers it. The answer is one more member-authored doc under the SAME prefix the relay
+  // already admits from members — `reqreply:swapans~<askerRequestId>` — so it needs no new document type and no
+  // relay change: it is p-tagged to the church (so the console reads it, which is what lets a steward confirm the
+  // swap with one tap) and to the asker (so their phone can say "Colin said yes").
+  //
+  // THE ANSWER CONFIRMS NOTHING BY ITSELF. It is a member saying "yes, I'd cover that"; the rota changes only when
+  // a steward confirms from the rota the church holds, and the console checks the answer's AUTHOR is the person
+  // the asker named. One document per (teammate, request), at a fixed d-tag, so answering again replaces it.
+  async answerSwapAsk(churchNpub, ask, yes) {
+    if (!sk) await window.Fellowship.ready;
+    const cp = toPub(churchNpub); if (!cp || !sk) return { ok: false, reason: 'not-sent' };
+    const to = toPub(ask && ask.from) || '';
+    const rid = ask && typeof ask.id === 'string' ? ask.id.slice(0, 100) : '';
+    if (!to || !rid) return { ok: false, reason: 'not-sent' };
+    const content = _sealChurchDocMember(cp, { request: rid, v: yes ? 'swapyes' : 'swapno', for: to });
+    const tags = [['d', 'trinityone/reqreply:swapans~' + rid], ['t', NET], ['p', cp]];
+    if (to !== cp) tags.push(['p', to]);
+    const evt = finalizeEvent(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags, content }), sk);
+    try { await _publishAny(publishSetFor(cp), evt); } catch (e) { return { ok: false, reason: _pubReason(e) }; }
+    return { ok: true, evt };
+  },
+  // Swap asks addressed to ME, and answers to MY asks. onTraffic({ asks: [{ id, from, church, slot, ts }],
+  // answers: { <myRequestId>: { <authorPubkey>: { by, yes, ts } } } }).
+  //
+  // ANSWERS ARE KEPT PER AUTHOR, NOT PER REQUEST. Any member can write a `swapans~` document for any request, so a
+  // map keyed by request alone let one stranger's forged answer overwrite the real teammate's — and the asker's
+  // screen, which only trusts the person it named, would then have shown neither. Held per author, a forgery sits
+  // beside the real answer and the reader picks the one that counts.
+  //
+  // WHAT MAKES A DOC AN ASK: authored by someone else, `reqreply:<id>`, opens under the church's name key, says
+  // `v: 'swap'` and names ME in `swapTo`. WHAT MAKES ONE AN ANSWER: `reqreply:swapans~<id>`, says swapyes/swapno
+  // and names ME in `for`. Everything else under that prefix (the church's other members' accepts and declines,
+  // which this phone is also served) is ignored, never shown.
+  //
+  // KNOWN LIMIT, stated: if the asker later changes their reply (accepts, declines, or asks someone else), the new
+  // document no longer p-tags this teammate, so THIS live subscription never sees it and the ask stays on the
+  // teammate's screen until the app next restarts. It is harmless — the console confirms a swap only while the
+  // asker's CURRENT reply still names this teammate — but it can show one stale card.
+  subscribeSwapTraffic(onTraffic) {
+    const me = window.Fellowship.myPubkey;
+    if (!me) { onTraffic({ asks: [], answers: {} }); return () => {}; }
+    const RR = 'trinityone/reqreply:', ANS = 'swapans~';
+    const asks = new Map();       // author|requestId -> ask
+    const answers = new Map();    // my requestId -> { author -> answer }
+    const lockedRaw = new Map();  // event id -> an event we could not open yet; re-read when the name key lands
+    const clip = (v) => (typeof v === 'string' ? v.slice(0, 80) : '');
+    const emit = () => onTraffic({
+      asks: [...asks.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)),
+      answers: Object.fromEntries([...answers].map(([rid, byAuthor]) => [rid, { ...byAuthor }])),
+    });
+    const handlers = {
+      onevent(e) {
+        const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+        if (!d.startsWith(RR) || e.pubkey === me || !e.content) return;
+        const rest = d.slice(RR.length);
+        // the church is the p-tag that is not me (an ask carries exactly [church, teammate])
+        const cp = (e.tags.filter(t => t[0] === 'p').map(t => t[1]).find(x => x && x !== me)) || '';
+        if (!cp) return;
+        const o = _openChurchDoc(cp, e.content);
+        if (o === null) { lockedRaw.set(e.id, e); return; }
+        lockedRaw.delete(e.id);
+        if (rest.startsWith(ANS)) {
+          const rid = rest.slice(ANS.length);
+          if (!rid || toPub(o.for) !== me || (o.v !== 'swapyes' && o.v !== 'swapno')) return;
+          const byAuthor = answers.get(rid) || {};
+          const prev = byAuthor[e.pubkey];
+          if (prev && prev.ts >= e.created_at) return;
+          byAuthor[e.pubkey] = { id: rid, by: e.pubkey, yes: o.v === 'swapyes', ts: e.created_at };
+          answers.set(rid, byAuthor);
+          emit(); return;
+        }
+        if (!rest || o.v !== 'swap' || toPub(o.swapTo) !== me) return;
+        const key = e.pubkey + '|' + rest;
+        const prev = asks.get(key);
+        if (prev && prev.ts >= e.created_at) return;
+        const sl = (o.slot && typeof o.slot === 'object') ? o.slot : {};
+        asks.set(key, { id: rest, from: e.pubkey, church: cp, ts: e.created_at,
+          slot: { serviceId: clip(sl.serviceId), teamId: clip(sl.teamId), roleId: clip(sl.roleId), teamName: clip(sl.teamName),
+                  role: clip(sl.role), date: clip(sl.date), time: clip(sl.time), service: clip(sl.service) } });
+        emit();
+      },
+      oneose() { emit(); },
+    };
+    const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [30078], '#p': [me], '#t': [NET] }], handlers);
+    const stopKey = _onNameKey(() => { for (const e of [...lockedRaw.values()]) handlers.onevent(e); });
+    return () => { try { sub.close(); } catch {} stopKey(); };
+  },
   // my replies to serving requests (own reqreply docs) -> { requestId: verdict }
   subscribeMyReqReplies(onReplies) {
     const me = window.Fellowship.myPubkey;
     if (!me) { onReplies({}); return () => {}; }
     const RR = 'trinityone/reqreply:'; const byReq = {};
+    // WHO EACH OF MY SWAP ASKS NAMED, handed to the caller as an optional SECOND argument, so every existing
+    // one-argument consumer is unchanged. The member's own screen needs it to say "asked Colin" and to look up
+    // Colin's answer.
+    const swapTo = {};
     const lockedRaw = new Map();
     const handlers = {
       // C-4: my own replies are sealed under the church name key now. The church is the ['p'] tag — these
       // are MY documents addressed to it. _openChurchDoc opens the cleartext ones written before C-4 too.
       // A reply I cannot open yet is recorded as 'locked', never dropped: I DID answer, and dropping it put the
       // request back in front of me as unanswered (audit 2026-09-30, finding 13). Re-read when the key lands.
-      onevent(e) { const d = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (!d.startsWith(RR)) return; const id = d.slice(RR.length); try { const cp = (e.tags.find(t => t[0] === 'p') || [])[1] || ''; const o = _openChurchDoc(cp, e.content); if (o) { lockedRaw.delete(id); byReq[id] = o.v; } else { lockedRaw.set(id, e); if (!byReq[id]) byReq[id] = 'locked'; } onReplies({ ...byReq }); } catch {} },
-      oneose() { onReplies({ ...byReq }); },
+      onevent(e) { const d = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (!d.startsWith(RR)) return; const id = d.slice(RR.length); try { const cp = (e.tags.find(t => t[0] === 'p') || [])[1] || ''; const o = _openChurchDoc(cp, e.content); if (o) { lockedRaw.delete(id); byReq[id] = o.v; if (o.v === 'swap' && o.swapTo) swapTo[id] = o.swapTo; else delete swapTo[id]; } else { lockedRaw.set(id, e); if (!byReq[id]) byReq[id] = 'locked'; } onReplies({ ...byReq }, { swapTo: { ...swapTo } }); } catch {} },
+      oneose() { onReplies({ ...byReq }, { swapTo: { ...swapTo } }); },
     };
     const sub = pool.subscribeMany(_netRelays(window.Fellowship.relays), [{ kinds: [30078], authors: [me], '#t': [NET] }], handlers);
     const stopKey = _onNameKey(() => { for (const e of [...lockedRaw.values()]) handlers.onevent(e); });
@@ -8028,10 +8146,11 @@ window.Fellowship = {
     if (!sk) await window.Fellowship.ready;
     const cp = toPub(churchNpub); if (!cp || !sk) return { ok: false, reason: 'not-sent' };
     const content = JSON.stringify({ event: eventId, v: verdict });
-    // A SECOND TAP IN THE SAME SECOND MUST BEAT THE FIRST (sim 2026-10-02, item 19). `created_at` is whole
-    // seconds and the relay keeps the LOWEST id on a tie, so "Going" then "Can't make it" inside one second
-    // was a coin toss that the relay answered with "a newer version is already stored" — which the caller
-    // reports as "couldn't send", over an answer that may or may not have landed. See _monotonicF.
+    // MONOTONIC PER DOCUMENT (owner, 2026-10-02: "same-second writes should use monotonic timestamps"). This is
+    // an addressable doc at a fixed d-tag and `created_at` is whole seconds, so a second write inside the same
+    // second TIES, and the relay breaks the tie by keeping the LOWEST event id — a coin toss. Going then Not
+    // going in one second therefore kept the older answer about half the time, and the relay still ACKed the
+    // newer one. _monotonicF only ever breaks a tie (see its note, and undo-beats-the-thing-it-undoes.test.mjs).
     const evt = finalizeEvent(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/rsvp:' + eventId], ['t', NET], ['p', cp]], content }), sk);
     // A SEND THAT LANDED NOWHERE MUST NOT COME BACK LOOKING LIKE ONE THAT DID. Audit 2026-09-02 #6.
     // _publishAny THROWS when no relay accepted (and resolves true otherwise), and this swallowed that and
@@ -8064,7 +8183,9 @@ window.Fellowship = {
     const me = window.Fellowship.myPubkey;
     const list = Array.isArray(dates) ? dates : [];
     const content = JSON.stringify({ dates: list });
-    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/unavail:' + me], ['t', NET], ['p', cp]], content }, sk);
+    // MONOTONIC PER DOCUMENT — ticking a Sunday, saving, and un-ticking it again inside a second writes this
+    // fixed d-tag twice with one created_at; see setEventRsvp.
+    const evt = finalizeEvent(_monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags: [['d', 'trinityone/unavail:' + me], ['t', NET], ['p', cp]], content }), sk);
     // ⚠ IT STILL THROWS — but the caller must be able to tell "nothing left this phone" from "nobody
     // answered in time", because the honest sentence is opposite in the two cases. `_publishBounded` rejects
     // with a bare `Error('timeout')` on the race, which carries neither flag, so `_pubReason` reads it as

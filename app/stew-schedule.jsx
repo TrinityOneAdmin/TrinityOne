@@ -232,6 +232,26 @@ function RosterModal({ team, roster, members: allMembers, onClose, onCreate }) {
   // The allowlist as it stood when this modal opened, so Save can apply what the steward CHANGED rather than
   // replacing the room's membership with the rota.
   const startPubs = useSchR((roster && roster.people ? roster.people : []).map(p => p && p.pub).filter(Boolean));
+  // ⚠ WHICH VERSION OF THE ROSTER THIS FORM WAS BUILT FROM, AND WHETHER SOMEONE ELSE HAS WRITTEN SINCE.
+  // A roster is ONE document per team and Save REPLACES it whole, so two stewards editing the same team
+  // overwrote each other: whoever pressed Save second silently won, and the first one's people and roles were
+  // gone with no word to either (sim 2026-10-02, item 17 — the relay held two authors' copies of one team).
+  //
+  // `roster.ts` is the created_at of the version the console is currently showing; the form copied its
+  // contents when it opened, so if that has moved on, what is on this form is out of date. This is DETECTION,
+  // not a merge: the steward is told, and must pick — take their version, or knowingly keep theirs. Two edits
+  // inside the same second share a timestamp and cannot be told apart; that is the limit of the approach.
+  const openedTs = useSchR((roster && roster.ts) || 0);
+  const liveTs = (roster && roster.ts) || 0;
+  const theirs = !!liveTs && liveTs !== openedTs.current && !saving;
+  // Take the roster as it now stands: the form, the pods, and the allowlist baseline Save diffs against.
+  const reloadTheirs = () => {
+    setRoles(roster && roster.roles ? roster.roles.map(r => ({ ...r })) : []);
+    setPeople(roster && roster.people ? roster.people.map(p => ({ ...p })) : []);
+    setPods(roster && roster.pods ? roster.pods.map(p => ({ ...p, fills: { ...(p.fills || {}) } })) : []);
+    startPubs.current = (roster && roster.people ? roster.people : []).map(p => p && p.pub).filter(Boolean);
+    openedTs.current = liveTs; setSaveErr('');
+  };
   const rid = () => 'r' + Math.random().toString(36).slice(2, 7);
   const pid = () => 'p' + Math.random().toString(36).slice(2, 7);
   const addRole = () => { if (!newRole.trim()) return; setRoles(r => [...r, { id: rid(), name: newRole.trim() }]); setNewRole(''); };
@@ -248,6 +268,8 @@ function RosterModal({ team, roster, members: allMembers, onClose, onCreate }) {
   const setPodName = (id, name) => setPods(ps => ps.map(p => p.id === id ? { ...p, name } : p));
   const setPodFill = (id, roleId, pid) => setPods(ps => ps.map(p => p.id === id ? { ...p, fills: { ...p.fills, [roleId]: pid } } : p));
   const delPod = (id) => setPods(ps => ps.filter(p => p.id !== id));
+  // (When `theirs` is true the ordinary Save button is not rendered at all — the footer offers only
+  // "Reload their version" and "Save mine anyway" — so this is only ever reached by an explicit choice.)
   const save = async () => {
     if (saving) return;
     setSaving(true); setSaveErr('');
@@ -362,10 +384,18 @@ function RosterModal({ team, roster, members: allMembers, onClose, onCreate }) {
       </div>
       <button onClick={addPod} className="sk-btn sk-btn--ghost" style={{ padding: '9px 14px', fontSize: 13 }}><Icon name="plus" size={15} color="currentColor" /> Add a pod</button>
 
-      <div style={{ display: 'flex', gap: 10, marginTop: 22 }}>
+      {theirs ? <div role="alert" style={{ fontSize: 13, color: 'var(--clay-ink)', fontWeight: 700, lineHeight: 1.5, marginTop: 18, padding: '10px 12px', borderRadius: 12, background: 'color-mix(in oklab, var(--gold) 12%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 40%, transparent)' }}>Someone else changed this roster after you opened it. Reload to see their version — or keep yours, which replaces theirs.</div> : null}
+      <div style={{ display: 'flex', gap: 10, marginTop: theirs ? 10 : 22 }}>
         <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
         {saveErr ? <div role="alert" style={{ flexBasis: '100%', fontSize: 13, color: 'var(--clay-ink)', fontWeight: 700, lineHeight: 1.5, marginBottom: 10, padding: '10px 12px', borderRadius: 12, background: 'color-mix(in oklab, var(--clay) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 32%, transparent)' }}>{saveErr}</div> : null}
-        <button onClick={save} disabled={saving} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: saving ? 0.6 : 1, cursor: saving ? 'default' : 'pointer' }}><Icon name="check" size={16} color="var(--on-clay)" /> {saving ? 'Saving…' : 'Save roster'}</button>
+        {theirs ? (
+          <React.Fragment>
+            <button onClick={reloadTheirs} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14 }}><Icon name="refresh" size={16} color="var(--on-clay)" /> Reload their version</button>
+            <button onClick={() => save()} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Save mine anyway</button>
+          </React.Fragment>
+        ) : (
+          <button onClick={() => save()} disabled={saving} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: saving ? 0.6 : 1, cursor: saving ? 'default' : 'pointer' }}><Icon name="check" size={16} color="var(--on-clay)" /> {saving ? 'Saving…' : 'Save roster'}</button>
+        )}
       </div>
     </SchModal>
   );
@@ -534,6 +564,21 @@ function RunsheetModal({ service, sheet, onClose }) {
     </SchModal>
   );
 }
+// DID THE PERSON ON THIS SLOT SAY NO? True only for the NEWEST request that person was sent for this exact
+// slot, and only when the reply the church holds for it reads 'decline'. Pure and top-level so the rota board
+// (DashRota) and the calendar's coverage chips (DashCalendar) cannot disagree about it.
+//
+// WHY IT EXISTS. Both boards counted a slot as filled the moment a NAME sat in it, so a person who had
+// answered "can't make it" still read as cover: "1/1 roles filled - Fully covered", drawn over a struck-through
+// Declined name (sim 2026-10-02, item 26). A declined slot is a gap the steward still has to fill. A 'swap'
+// ask is NOT counted out: that person still holds the slot until someone is confirmed in their place.
+function schSlotDeclined(requests, replies, svcId, teamId, roleId, pub) {
+  const matches = (requests || []).filter(q => q && q.serviceId === svcId && q.teamId === teamId && q.roleId === roleId && (!pub || !q.memberPub || q.memberPub === pub));
+  if (!matches.length) return false;
+  matches.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+  const r = (replies || []).find(x => x && x.id === matches[0].id);
+  return !!r && r.v === 'decline';
+}
 function DashRota({ onNewTeam }) {
   const teams = window.useStewardGroups().filter(g => g.kind === 'team');
   const rosters = window.useStewardRosters();
@@ -584,6 +629,26 @@ function DashRota({ onNewTeam }) {
   const notBlocked = (pk) => !(pk && blockedKeys.has(String(pk).toLowerCase()));
   const rosterRaw = (id) => rosters.find(r => r.team === id) || { roles: [], people: [] };
   const rosterFor = (id) => { const r = rosterRaw(id); return { ...r, people: (r.people || []).filter(p => notBlocked(p && p.pub)) }; };
+  // WHO A SWAP ASK NAMED, AND WHAT THEY SAID. The member's 'swap' reply has always carried `swapTo`, and this
+  // board has never read it — it only ever showed "Wants swap" (sim 2026-10-02, item 25). Now the member's app
+  // also asks that teammate directly, and the teammate's yes arrives as its own reply (`swapans~<requestId>`).
+  // This pairs the two, for ONE slot, and is what the steward's one-tap confirm rests on. It answers null unless:
+  //   · the newest request for this slot was answered 'swap' BY THE PERSON ON THE SLOT (an answer from anyone
+  //     else is not theirs to give), and
+  //   · the person it names is on this team's roster (otherwise there is nobody to put in the slot), and
+  //   · `yes` is true only for an answer AUTHORED BY THAT TEAMMATE — the author is the one thing nobody can forge,
+  //     so a third member writing a "swapyes" for someone else's request changes nothing here.
+  const swapInfo = (svcId, teamId, roleId, askerPub) => {
+    const matches = requests.filter(q => q && q.serviceId === svcId && q.teamId === teamId && q.roleId === roleId && (!askerPub || !q.memberPub || q.memberPub === askerPub));
+    if (!matches.length) return null;
+    matches.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+    const req = matches[0];
+    const r = replies.find(x => x && x.id === req.id);
+    if (!r || r.v !== 'swap' || !r.swapTo || (askerPub && r.by && r.by !== askerPub)) return null;
+    const mate = (rosterFor(teamId).people || []).find(p => p && p.pub && p.pub === r.swapTo) || null;
+    const ans = replies.find(x => x && x.id === 'swapans~' + req.id && x.by === r.swapTo) || null;
+    return { reqId: req.id, to: r.swapTo, mate, yes: ans ? ans.v === 'swapyes' : null };
+  };
   const persisted = (svcId) => rotas.find(r => r.service === svcId) || null;
   const sortedSvcs = services.slice().sort((a, b) => (a.date || '').localeCompare(b.date || ''));
   const todayStr = schKey(new Date());
@@ -611,8 +676,11 @@ function DashRota({ onNewTeam }) {
   const setAssign = (next) => setDraft(d => ({ ...d, [svcId]: next }));
 
   // coverage across all teams for this service
+  // A NAME IN THE SLOT IS NOT COVER IF THAT PERSON DECLINED — see schSlotDeclined. Same test for the headline
+  // count and for each team card's own count below, so the two can never disagree.
+  const slotCovered = (teamId, role) => { const a = assign[teamId + '::' + role.id]; return !!(a && a.name) && !schSlotDeclined(requests, replies, svcId, teamId, role.id, a.pub); };
   let total = 0, filled = 0;
-  teams.forEach(t => { const rs = rosterFor(t.id).roles; total += rs.length; rs.forEach(role => { if (assign[t.id + '::' + role.id] && assign[t.id + '::' + role.id].name) filled++; }); });
+  teams.forEach(t => { const rs = rosterFor(t.id).roles; total += rs.length; rs.forEach(role => { if (slotCovered(t.id, role)) filled++; }); });
   const gaps = total - filled;
 
   const pers = persisted(svcId);
@@ -719,8 +787,28 @@ function DashRota({ onNewTeam }) {
   // service only, so they say to open each service (audit of 660f063, #4).
   const heldFlash = (lead, n, retry) => `${lead}. ${n} ${n === 1 ? 'person has' : 'people have'} an earlier request still opening — ${retry} in a moment to ask them.`;
   const unaskedFlash = (lead, failed, tried, retry) => `${lead}, but ${failed} of ${tried} couldn’t be asked yet. ${retry}; if it keeps failing, the message above says why.`;
-  // pure: fill the gaps of `base` for a given date, not reusing anyone already on that day
-  const fillAssign = (base, date, svcId) => {
+  // How many slots each person ALREADY holds, over every service this board knows (drafts included), as a
+  // Map of 'n:<name>' -> count. This is what Auto-fill rotates by — see fillAssign.
+  const loadOf = () => {
+    const m = new Map();
+    (services || []).forEach(sv => {
+      const a = assignFor(sv.id);
+      if (a) Object.values(a).forEach(x => { if (x && x.name) m.set('n:' + x.name, (m.get('n:' + x.name) || 0) + 1); });
+    });
+    return m;
+  };
+  // pure: fill the gaps of `base` for a given date, not reusing anyone already on that day.
+  //
+  // ⚠ IT ROTATES. `load` is the running tally of how many slots each person holds; the one passed by a bulk run
+  // is SHARED across every service it fills, so the next service starts from where the last one left off.
+  // This used to take `avail[0]` — the first person listed on the roster — every time, so a quarter of weekly
+  // services gave that one person a slot every single week and left everybody else on the roster idle (sim
+  // 2026-10-02, item 33). Now it takes whoever holds the FEWEST, and breaks ties in roster order, so the first
+  // person listed still goes first when everyone is level. Called with no `load` (a single-service fill) it
+  // seeds one from what the board already shows, so that fill too lands on whoever has had least.
+  const fillAssign = (base, date, svcId, load) => {
+    const L = load || {};
+    if (!L.counts) L.counts = loadOf();
     const next = { ...base };
     // clear slots whose member declined / asked to swap, so Auto-fill treats them as open — and
     // remember who said no so we don't put them straight back on.
@@ -751,18 +839,27 @@ function DashRota({ onNewTeam }) {
         if (!best || avail.length < best.avail.length) best = { s, avail };
       }
       if (!best) break;
-      const pick = best.avail[0];
+      // sort() is stable, so people with equal load stay in roster order
+      const pick = best.avail.slice().sort((a, b) => (L.counts.get('n:' + a.name) || 0) - (L.counts.get('n:' + b.name) || 0))[0];
       next[best.s.key] = { name: pick.name, pub: pick.pub || '' };
       used.add('n:' + pick.name);
+      L.counts.set('n:' + pick.name, (L.counts.get('n:' + pick.name) || 0) + 1);
     }
     return next;
   };
   const autoFill = () => { setAssign(fillAssign(assign, svc.date, svc.id)); setFlash('Filled the gaps — including anyone who said no'); setTimeout(() => setFlash(''), 2200); };
   // create + fill: generate weekly services for the period (if missing), then auto-fill & publish each
-  const autoFillAhead = async (months) => {
+  //
+  // TWO THINGS THIS CAN MEAN, and the menu now says which it is doing (sim 2026-10-02, item 33):
+  //   default            CREATE a weekly copy of the service on screen, from its date, for `months`, then fill them
+  //   { existingOnly }   create NOTHING: fill the gaps on the services already on the calendar in that window
+  // The first used to be the only one, and it clones whatever is on screen — so a one-off (a Christmas service)
+  // became a weekly service for a quarter with nothing but the word "weekly" in a confirm box.
+  const autoFillAhead = async (months, opts) => {
     setFillMenu(false);
+    const createCopies = !(opts && opts.existingOnly);
     const until = schAddMonths(svc.date, months);
-    const dates = schGenDates(svc.date, 'weekly', until);
+    const dates = createCopies ? schGenDates(svc.date, 'weekly', until) : sortedSvcs.filter(x => x.date >= svc.date && x.date <= until).map(x => x.date);
     const byDate = {}; sortedSvcs.forEach(s => { byDate[s.date] = s; });
     const ensured = [];
     // THE BULK PATH, AND THE ONE THE FIRST PASS OF THIS FIX MISSED (audit of 7a45d4d, finding 1). It was
@@ -785,13 +882,14 @@ function DashRota({ onNewTeam }) {
       if (probe == null) { setFlash(schNoKey()); setTimeout(() => setFlash(''), 4000); return; }
     }
     let lost = 0, unasked = 0, triedAsks = 0; const heldAsks = new Set();
+    const load = { counts: null };   // shared across every service below, so the fill ROTATES — see fillAssign
     for (const dt of dates) {
       if (byDate[dt]) { ensured.push(byDate[dt]); continue; }
       const ns = await window.Steward.publishService({ name: svc.name, date: dt, time: svc.time });
       if (ns) ensured.push(ns); else lost++;
     }
     for (const s of ensured) {
-      const filled = fillAssign(assignFor(s.id) || {}, s.date, s.id);
+      const filled = fillAssign(assignFor(s.id) || {}, s.date, s.id, load);
       const r = await window.Steward.publishRota({ service: s.id, published: true, assign: filled });
       if (r == null) { lost++; continue; }   // do not ask anyone to serve on a rota that does not exist
       const asked = await sendRequestsFor(s.id, s.date, s.time, s.name, filled);
@@ -799,7 +897,7 @@ function DashRota({ onNewTeam }) {
       if (s.id === svcId) setAssign(filled);
     }
     if (lost) { setFlash(schNoKey()); setTimeout(() => setFlash(''), 4000); return; }
-    const madeLead = `Created + filled ${ensured.length} service${ensured.length > 1 ? 's' : ''}`;
+    const madeLead = `${createCopies ? 'Created + filled' : 'Filled the gaps on'} ${ensured.length} service${ensured.length > 1 ? 's' : ''}`;
     if (unasked) { setFlash(unaskedFlash(madeLead, unasked, triedAsks, 'Open each service and press Publish')); setTimeout(() => setFlash(''), 6000); return; }
     if (heldAsks.size) { setFlash(heldFlash(madeLead, heldAsks.size, 'Open each service and press Publish')); setTimeout(() => setFlash(''), 6000); return; }
     setFlash(madeLead); setTimeout(() => setFlash(''), 2800);
@@ -821,6 +919,20 @@ function DashRota({ onNewTeam }) {
     if (asked.failed) { setFlash(unaskedFlash('Published', asked.failed, asked.tried, 'Press Publish again')); setTimeout(() => setFlash(''), 5000); return; }
     if (asked.held) { setFlash(heldFlash('Published', asked.held, 'press Publish again')); setTimeout(() => setFlash(''), 5000); return; }
     setFlash('Published — everyone assigned has been asked'); setTimeout(() => setFlash(''), 2400);
+  };
+
+  // ONE TAP TO CONFIRM A SWAP (owner, 2026-10-02: "after the teammate says yes, the steward confirms the swap with
+  // one tap"). Puts the teammate on the slot, publishes the rota, and asks them through the ordinary "Can you
+  // serve?" request (alreadyAsked is per person, so they have none for this slot yet). It sends nothing if the rota
+  // did not save — the same rule publish() keeps — and says so.
+  const confirmSwap = async (slot, from, mate) => {
+    const next = { ...assign, [slot.key]: { id: mate.id, name: mate.name, pub: mate.pub || '' } };
+    setAssign(next);
+    const r = await window.Steward.publishRota({ service: svcId, published: true, assign: next });
+    if (r == null) { setFlash(schNoKey()); setTimeout(() => setFlash(''), 4000); return; }
+    const asked = await sendRequestsFor(svcId, svc.date, svc.time, svc.name, next);
+    if (asked.failed) { setFlash(unaskedFlash('Swapped — ' + mate.name + ' is on ' + (slot.role.name || 'the role'), asked.failed, asked.tried, 'Press Publish again')); setTimeout(() => setFlash(''), 5000); return; }
+    setFlash('Swapped: ' + mate.name + ' now covers ' + (slot.role.name || 'the role') + ' for ' + from); setTimeout(() => setFlash(''), 3200);
   };
 
   if (teams.length === 0) {
@@ -873,10 +985,27 @@ function DashRota({ onNewTeam }) {
               {fillMenu ? (
                 <React.Fragment>
                   <div onClick={() => setFillMenu(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
-                  <div style={{ position: 'absolute', top: '110%', right: 0, zIndex: 41, width: 232, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 6 }}>
-                    {[['This service', () => { setFillMenu(false); autoFill(); }, 'Fill the gaps on this service only'],
-                      ['Create + fill this month', () => { setFillMenu(false); if (window.confirm('Create weekly services for the next ~4 weeks and auto-fill them? This publishes them and asks the people assigned to serve.')) autoFillAhead(1); }, 'Add weekly services for ~4 weeks and fill them'],
-                      ['Create + fill this quarter', () => { setFillMenu(false); if (window.confirm('Create weekly services for the next ~3 months (around 13) and auto-fill them? This publishes them and asks everyone assigned to serve.')) autoFillAhead(3); }, 'Add weekly services for ~3 months and fill them']].map(([t, go, s]) => (
+                  <div style={{ position: 'absolute', top: '110%', right: 0, zIndex: 41, width: 292, maxWidth: '86vw', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 6 }}>
+                    {/* SAY WHAT EACH ENTRY DOES, AND NAME THE SERVICE IT DOES IT TO. The two "Create + fill" entries
+                        cloned whichever service was on screen into a weekly series, and said so only as "weekly"
+                        inside a confirm box — so a one-off (a Christmas service) could turn into a quarter of
+                        weekly services (sim 2026-10-02, item 33). There are now two kinds of entry and the labels
+                        keep them apart: FILL fills gaps on services that already exist and creates nothing; ADD
+                        WEEKLY COPIES creates new ones from the service on screen. */}
+                    {(() => {
+                      const when = schParts(svc.date).dow + ' ' + schParts(svc.date).day + ' ' + schParts(svc.date).mon;
+                      const nm = svc.name || 'this service';
+                      const span = (m) => { const until = schAddMonths(svc.date, m); return { until, existing: sortedSvcs.filter(x => x.date >= svc.date && x.date <= until).length, copies: schGenDates(svc.date, 'weekly', until).length }; };
+                      const entries = [['This service only', () => { setFillMenu(false); autoFill(); }, 'Fill the gaps on ' + nm + ', ' + when]];
+                      [[1, 'this month', '~4 weeks'], [3, 'this quarter', '~3 months']].forEach(([m, lbl, long]) => {
+                        const sp = span(m);
+                        entries.push(['Fill existing services — ' + lbl, () => { setFillMenu(false); if (window.confirm('Fill the gaps on the ' + sp.existing + ' service' + (sp.existing === 1 ? '' : 's') + ' already on the calendar over the next ' + long + ', starting ' + when + '? This creates nothing new. It publishes each rota and asks the people assigned to serve.')) autoFillAhead(m, { existingOnly: true }); },
+                          'The ' + sp.existing + ' service' + (sp.existing === 1 ? '' : 's') + ' already on the calendar. Creates nothing']);
+                        entries.push(['Add weekly copies — ' + lbl, () => { setFillMenu(false); if (window.confirm('Add a copy of “' + nm + '” (' + (svc.time || '') + ') EVERY WEEK from ' + when + ' for the next ' + long + ' — ' + sp.copies + ' services in all, any already on the calendar kept — and fill them? This publishes them and asks the people assigned to serve.')) autoFillAhead(m); },
+                          'Repeats “' + nm + '” every week — adds up to ' + sp.copies + ' services']);
+                      });
+                      return entries;
+                    })().map(([t, go, s]) => (
                       <button key={t} onClick={go} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '9px 11px', borderRadius: 9, border: 'none', background: 'transparent', cursor: 'pointer', fontFamily: 'var(--font-ui)' }} onMouseDown={e => e.preventDefault()}>
                         <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--ink)' }}>{t}</div>
                         <div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>{s}</div>
@@ -955,7 +1084,7 @@ function DashRota({ onNewTeam }) {
           <div className="no-scrollbar" style={{ flex: 1, minHeight: narrow ? 120 : 0, overflow: 'auto', marginTop: 14, display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gridAutoRows: 'max-content', gap: 14, alignContent: 'start' }}>
             {teams.map(t => {
               const m = teamMeta(t); const r = rosterFor(t.id);
-              const tFilled = r.roles.filter(role => assign[t.id + '::' + role.id] && assign[t.id + '::' + role.id].name).length;
+              const tFilled = r.roles.filter(role => slotCovered(t.id, role)).length;
               return (
                 <div key={t.id} style={{ borderRadius: 18, background: 'var(--surface)', border: '1px solid var(--line)', boxShadow: 'var(--shadow)', overflow: 'hidden' }}>
                   <div style={{ padding: '13px 15px', borderBottom: '1px solid var(--line)' }}>
@@ -991,9 +1120,14 @@ function DashRota({ onNewTeam }) {
                           locked: { fg: 'var(--ink-3)', bg: 'var(--ink-3)', soft: 5, line: 20, label: 'Opening…', ic: 'clock' },
                           '': { fg: 'var(--sage)', bg: 'var(--sage)', soft: 8, line: 32, label: '', ic: 'check' },
                         };
-                        const vm = vmap[verdict] || vmap[''];
+                        const sw = verdict === 'swap' ? swapInfo(svc.id, t.id, role.id, a.pub) : null;
+                        const swFirst = sw && sw.mate ? (sw.mate.name || '').split(' ')[0] : '';
+                        // The label says WHO was asked and what they answered, instead of a bare "Wants swap".
+                        const swapLabel = !swFirst ? 'Wants swap' : sw.yes === true ? swFirst + ' said yes' : sw.yes === false ? 'Wants swap — ' + swFirst + ' said no' : 'Wants swap — asked ' + swFirst;
+                        const vm = verdict === 'swap' ? { ...vmap.swap, label: swapLabel } : (vmap[verdict] || vmap['']);
                         return (
-                          <button key={role.id} onClick={() => setAssignSlot(slot)} title="Change who’s on this slot" aria-label={(role.name || 'This role') + ': ' + a.name + (vm.label ? ' — ' + vm.label : '') + '. Change who’s on this slot'} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 12, cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', border: `1px solid color-mix(in oklab, ${vm.bg} ${vm.line}%, var(--line))`, background: `color-mix(in oklab, ${vm.bg} ${vm.soft}%, var(--surface))` }}>
+                          <React.Fragment key={role.id}>
+                          <button onClick={() => setAssignSlot(slot)} title="Change who’s on this slot" aria-label={(role.name || 'This role') + ': ' + a.name + (vm.label ? ' — ' + vm.label : '') + '. Change who’s on this slot'} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 12, cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', border: `1px solid color-mix(in oklab, ${vm.bg} ${vm.line}%, var(--line))`, background: `color-mix(in oklab, ${vm.bg} ${vm.soft}%, var(--surface))` }}>
                             <div style={{ width: 28, height: 28, borderRadius: 999, flexShrink: 0, background: `linear-gradient(150deg, ${m.accent}, color-mix(in oklab, ${m.accent} 60%, #16120c))`, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 10.5 }}>{a.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}</div>
                             <div style={{ flex: 1, minWidth: 0 }}>
                               <div style={{ fontSize: 11, color: 'var(--ink-3)', fontWeight: 600 }}>{role.name}{vm.label ? <span style={{ color: vm.fg, marginLeft: 6, fontWeight: 700 }}>· {vm.label}</span> : null}</div>
@@ -1001,6 +1135,10 @@ function DashRota({ onNewTeam }) {
                             </div>
                             <Icon name={vm.ic} size={15} stroke={2.4} color={vm.fg} />
                           </button>
+                          {sw && sw.mate && sw.yes === true ? (
+                            <button onClick={() => confirmSwap(slot, a.name, sw.mate)} aria-label={'Confirm the swap: ' + sw.mate.name + ' takes ' + (role.name || 'this role') + ' from ' + a.name} className="sk-btn sk-btn--clay" style={{ padding: '8px 11px', fontSize: 12.5 }}><Icon name="check" size={14} color="var(--on-clay)" /> Confirm: {sw.mate.name} covers</button>
+                          ) : null}
+                          </React.Fragment>
                         );
                       }
                       return (
@@ -1256,10 +1394,12 @@ function DashCalendar() {
   const [calRunsheet, setCalRunsheet] = useSch(null);    // …and the editor for it
   const calRunsheets = (typeof window.useStewardRunsheets === 'function') ? window.useStewardRunsheets() : [];
 
+  const calRequests = (typeof window.useStewardRequests === 'function') ? window.useStewardRequests() : [];
+  const calReplies = (typeof window.useStewardRequestReplies === 'function') ? window.useStewardRequestReplies() : [];
   const coverageFor = (svcId) => {
     const rota = rotas.find(r => r.service === svcId); const assign = rota ? rota.assign : {};
     let total = 0, filled = 0;
-    teams.forEach(t => { const r = rosters.find(x => x.team === t.id) || { roles: [] }; total += r.roles.length; r.roles.forEach(role => { if (assign[t.id + '::' + role.id] && assign[t.id + '::' + role.id].name) filled++; }); });
+    teams.forEach(t => { const r = rosters.find(x => x.team === t.id) || { roles: [] }; total += r.roles.length; r.roles.forEach(role => { const a = assign[t.id + '::' + role.id]; if (a && a.name && !schSlotDeclined(calRequests, calReplies, svcId, t.id, role.id, a.pub)) filled++; }); });
     return { total, filled, published: rota && rota.published };
   };
   const dayItems = (key) => ({

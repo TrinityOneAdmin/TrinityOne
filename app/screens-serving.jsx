@@ -111,9 +111,38 @@ function svServiceRoster(ctx, serviceId) {
 async function svRespond(ctx, item, verdict, swapTo, okLabel, onSent) {
   const sent = await ctx.respondServing(item, verdict, swapTo);
   if (sent === false) return false;
-  if (okLabel) ctx.toast(okLabel);
+  let label = okLabel;
+  // "I'LL SERVE" AND "I'M AWAY" ARE ONE QUESTION ASKED TWICE. Saying yes to a Sunday the member has marked away
+  // used to leave BOTH standing, with no warning (sim 2026-10-02, item 47) — the rota would honour whichever
+  // the steward happened to read. Taking a Sunday on takes it off the away list. svClearAway never writes over
+  // an away list it could not read, and only an 'accept' reaches it.
+  if (verdict === 'accept') {
+    const away = await svClearAway(ctx, item && item.date);
+    if (away === 'cleared') label = (okLabel ? okLabel + ' — ' : '') + 'you’re no longer marked away that day';
+    else if (away === 'still') label = (okLabel ? okLabel + '. ' : '') + 'You’re still marked away that day — open “Set unavailable” to change it';
+  }
+  if (label) ctx.toast(label);
   if (onSent) onSent();
   return true;
+}
+// Take ONE date off this member's away list. Answers 'cleared' | 'still' (it is on the list and could not be
+// taken off) | 'none' (nothing to do) | 'unknown' (the church did not answer and the phone's copy has nothing).
+//
+// ⚠ IT READS THE CHURCH FIRST AND WRITES ONLY ON AN ANSWERED READ. The away document is addressable and every
+// save REPLACES the whole list, so writing from a list that could not be confirmed deletes the dates the church
+// actually holds — the exact failure UnavailSheet is built around (audit 2026-09-14). That guard is repeated
+// here rather than assumed: a read nobody answered is "unknown", never "you are not away".
+async function svClearAway(ctx, iso) {
+  if (!iso || !ctx.readUnavailableDates || !ctx.setUnavailableDates) return 'none';
+  let r = null;
+  try { r = await ctx.readUnavailableDates(); } catch (e) { r = null; }
+  if (!r || !r.complete) {
+    let mirror = [];
+    try { mirror = (ctx.getUnavailableDates && ctx.getUnavailableDates()) || []; } catch (e) { mirror = []; }
+    return mirror.includes(iso) ? 'still' : 'unknown';
+  }
+  if (!(r.dates || []).includes(iso)) return 'none';
+  try { await ctx.setUnavailableDates(r.dates.filter(d => d !== iso)); return 'cleared'; } catch (e) { return 'still'; }
 }
 
 // ── the CHURCH'S rota: every upcoming service and who is on it ────────────────────────────────────────────
@@ -143,16 +172,62 @@ function svChurchRota(ctx) {
 }
 
 // teammates I could ask to swap (the team's roster people, minus me)
+//
+// A CHILD IS ONLY OFFERED PEOPLE THEY MAY MESSAGE (owner, 2026-10-02: "a child can only swap with cleared adults or
+// their own parent"). ctx.canDMPeer is the app's one answer to "may I reach this person privately" — for a child
+// it is true for a cleared adult or a linked parent and false for everyone else — and a swap ask is a private
+// message to one person, so it asks the same question. For an ADULT it is true for everyone: an ordinary phone is
+// not served the list of children (it would be a roll of the congregation's minors), so it cannot know whom to
+// leave out; the child's own phone is where the other half of the rule is enforced (svSwapView).
 function svTeamMates(ctx, teamId) {
   const roster = (ctx.churchRosters || []).find(r => r.team === teamId);
   const me = ctx.myPubkey;
-  return ((roster && roster.people) || []).filter(p => p && p.name && (!me || p.pub !== me));
+  return ((roster && roster.people) || []).filter(p => p && p.name && (!me || p.pub !== me)
+    && (!p.pub || typeof ctx.canDMPeer !== 'function' || ctx.canDMPeer(p.pub)));
 }
-// the teams I'm on (derived from my requests/commitments)
+// The name this phone knows a pubkey by: the church's team rosters, which every member reads.
+function svNameOf(ctx, pub) {
+  if (!pub) return '';
+  for (const r of (ctx.churchRosters || [])) { const m = ((r && r.people) || []).find(p => p && p.pub === pub); if (m && m.name) return m.name; }
+  return '';
+}
+// SWAP ASKS AS THIS PHONE MAY SHOW THEM — the ones sent to me, and the answers to the ones I sent.
+//
+// On a CHILD's phone an ask or an answer is shown only if it comes from someone the child could message (a cleared
+// adult or their parent); everything else is hidden and COUNTED, so the screen can say so rather than pretend
+// there was nothing (owner, 2026-10-02: "the child's phone hides any swap ask or answer from anyone else and
+// says so honestly"). While this phone does not yet know whether it belongs to a child, `ctx.iAmMinor` is the
+// conservative reading (isMinor OR assumeMinor), the same one the group list uses. A child phone with no way to
+// ask who may reach it hides everything: default-deny.
+function svSwapView(ctx) {
+  const asks = ctx.swapAsks || [];
+  const answers = ctx.swapAnswers || {};
+  const minor = !!(ctx.iAmMinor || (ctx.safeguard && ctx.safeguard.isMinor));
+  const ok = (pub) => !minor || (typeof ctx.canDMPeer === 'function' && !!ctx.canDMPeer(pub));
+  const shown = asks.filter(a => ok(a.from));
+  let hiddenAnswers = 0;
+  Object.keys(answers).forEach(rid => Object.keys(answers[rid] || {}).forEach(by => { if (!ok(by)) hiddenAnswers++; }));
+  return {
+    asks: shown,
+    hidden: (asks.length - shown.length) + hiddenAnswers,
+    // The answer to MY ask `rid` from the ONE person I named (`by`) — never anyone else's, however many there are.
+    answerFor: (rid, by) => { const a = by && answers[rid] ? answers[rid][by] : null; return a && ok(by) ? a : null; },
+  };
+}
+// the teams I'm on: those I have a request or a published slot for, AND those whose roster lists me.
+//
+// IT USED TO READ ONLY THE FIRST HALF, and the Serving screen's big card reads ctx.myRosterTeams (the second).
+// A member on a team's roster with nothing scheduled yet therefore saw "You're on the Welcome team" in the
+// card and "No teams yet — your leader adds you" in the strip below it, both true to their own source and
+// contradicting each other on one screen (sim 2026-10-02, item 48). It was a state inconsistency, not timing.
+// One list now answers both: a team the roster puts me on is a team I am on.
 function svMyTeams(ctx) {
   const seen = new Map();
   [...(ctx.servPending || []), ...(ctx.servConfirmed || [])].forEach(r => {
     if (r.teamId && !seen.has(r.teamId)) seen.set(r.teamId, { id: r.teamId, name: r.teamName || 'Team', icon: r.icon || 'hand', accent: r.accent || 'var(--clay)' });
+  });
+  (ctx.myRosterTeams || []).forEach(t => {
+    if (t && t.id && !seen.has(t.id)) seen.set(t.id, { id: t.id, name: t.name || 'Team', icon: t.icon || 'hand', accent: t.accent || 'var(--clay)' });
   });
   return [...seen.values()];
 }
@@ -221,7 +296,7 @@ function SwapSheet({ open, item, onClose, ctx }) {
         <div style={{ fontFamily: 'var(--font-display)', fontSize: 20, fontWeight: 700 }}>Ask someone to swap</div><IconBtn name="x" onClick={onClose} />
       </div>
       <p style={{ fontSize: 13.5, color: 'var(--ink-2)', margin: '0 0 16px', lineHeight: 1.5 }}>
-        For <b style={{ color: 'var(--ink)' }}>{svParts(item.date).dow} {svParts(item.date).day} {svParts(item.date).mon}</b> · {item.teamName} · {item.role}. They’ll get a friendly ask — nothing changes until they say yes.</p>
+        For <b style={{ color: 'var(--ink)' }}>{svParts(item.date).dow} {svParts(item.date).day} {svParts(item.date).mon}</b> · {item.teamName} · {item.role}. They’ll get a friendly ask — nothing changes until they say yes and your leader confirms.</p>
       {mates.length ? (
         <React.Fragment>
           <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', marginBottom: 10 }}>ON YOUR TEAM</div>
@@ -365,7 +440,19 @@ function UnavailSheet({ open, onClose, ctx }) {
         setBusy(true); setErr('');
         try {
           await ctx.setUnavailableDates(sel);
-          ctx.toast(sel.length ? `Marked ${sel.length} ${sel.length === 1 ? 'Sunday' : 'Sundays'} away` : 'Cleared — you’re available again');
+          // WITHDRAW ANY "I'LL SERVE" FOR A SUNDAY JUST MARKED AWAY. Both used to stand at once with nothing to
+          // say so (sim 2026-10-02, item 47). Only an explicit yes is withdrawn (`_verdict === 'accept'`); a
+          // slot the member was merely placed on, with no answer from them, is the leader's to move. It goes
+          // through svRespond like every other answer, so a failed send is not thanked, and it runs AFTER the
+          // away list saved, so a refused save leaves nothing half-done.
+          const clash = (ctx.servConfirmed || []).filter(s => s && s._verdict === 'accept' && sel.includes(s.date));
+          let withdrawn = 0;
+          for (const s of clash) { try { if (await svRespond(ctx, s, 'decline', '')) withdrawn++; } catch (e) {} }   // a throw here must not be reported as "nothing was saved": the away list HAS saved
+          const base = sel.length ? `Marked ${sel.length} ${sel.length === 1 ? 'Sunday' : 'Sundays'} away` : 'Cleared — you’re available again';
+          const stuck = clash.length - withdrawn;
+          ctx.toast(base
+            + (withdrawn ? ` — and took you off ${withdrawn} ${withdrawn === 1 ? 'slot' : 'slots'} you’d said yes to` : '')
+            + (stuck ? `${withdrawn ? '. But' : ', but'} couldn’t take you off ${stuck === 1 ? 'a slot' : stuck + ' slots'} you’d said yes to — do it from your Serving page` : ''));
           onClose();
         } catch (e) {
           // ⚠ "NOTHING WAS SAVED" IS A CLAIM, AND FOR ONE OF THE THREE OUTCOMES IT IS FALSE.
@@ -1290,6 +1377,7 @@ function ServingScreen({ open, onClose, ctx, docked }) {
     } catch (err) {}
   }, [tab, open]);
   const pending = ctx.servPending || [];
+  const swapView = svSwapView(ctx);
   // C-4: a request sealed under a church name key this phone does not hold yet arrives carrying `_locked`
   // and nothing else — no date, role or team. Its card would be empty fields over a Yes/No pair answering a
   // question the member cannot read, so render a count instead. `pending` itself keeps them: the tab badge
@@ -1400,7 +1488,7 @@ function ServingScreen({ open, onClose, ctx, docked }) {
             const on = tab === k;
             return (
               <button key={k} ref={(el) => { tabEls.current[k] = el; }} onClick={() => setTab(k)} style={{ flex: '1 0 0%', minWidth: 'max-content', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: 10, borderRadius: 12, border: '1px solid var(--line)', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13.5, background: on ? 'var(--clay)' : 'var(--surface)', color: on ? '#fff' : 'var(--ink-2)' }}>
-                <Icon name={ic} size={16} color={on ? '#fff' : 'var(--ink-3)'} /> {lbl}{k === 'serving' && pending.length ? <span style={{ minWidth: 18, height: 18, padding: '0 5px', borderRadius: 999, background: on ? 'rgba(255,255,255,.25)' : 'var(--clay)', color: 'var(--on-clay)', fontSize: 11, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{pending.length}</span> : null}
+                <Icon name={ic} size={16} color={on ? '#fff' : 'var(--ink-3)'} /> {lbl}{k === 'serving' && (pending.length + swapView.asks.length) ? <span style={{ minWidth: 18, height: 18, padding: '0 5px', borderRadius: 999, background: on ? 'rgba(255,255,255,.25)' : 'var(--clay)', color: 'var(--on-clay)', fontSize: 11, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{pending.length + swapView.asks.length}</span> : null}
               </button>
             );
           })}
@@ -1418,6 +1506,34 @@ function ServingScreen({ open, onClose, ctx, docked }) {
                 Your church sent {pendingLocked.length === 1 ? 'it' : 'them'} sealed, and this phone is still waiting for the key. {pendingLocked.length === 1 ? 'It' : 'They'} will appear on {pendingLocked.length === 1 ? 'its' : 'their'} own.
               </div>
             ) : null}
+            {/* A TEAMMATE ASKED ME TO COVER (owner, 2026-10-02). The ask arrives from the other member's phone, not
+                from the church; saying yes tells the asker and the church, and the church confirms the swap with
+                one tap. Nothing about the rota changes until then. */}
+            {swapView.asks.map(a => {
+              const who = svNameOf(ctx, a.from) || 'A teammate';
+              const sl = a.slot || {};
+              return (
+                <div key={a.from + '|' + a.id} style={{ borderRadius: 20, padding: 16, marginBottom: 16, background: 'var(--surface)', border: '1.5px solid color-mix(in oklab, var(--gold) 50%, var(--line))', boxShadow: 'var(--shadow)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 11, fontWeight: 800, letterSpacing: '.6px', color: '#8a6717', marginBottom: 12 }}><Icon name="swap" size={14} color="var(--gold)" /> {who.toUpperCase()} ASKED YOU TO COVER</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 13, marginBottom: 13 }}>
+                    <ServDateBlock iso={sl.date} accent="var(--gold)" />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16 }}>{sl.teamName || 'Serving'}{sl.role ? ' · ' + sl.role : ''}</div>
+                      <div style={{ fontSize: 13, color: 'var(--ink-2)', marginTop: 2 }}>{sl.time}{sl.time && sl.service ? ' · ' : ''}{sl.service}</div>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 9 }}>
+                    <button onClick={async () => { const ok = await ctx.answerSwap(a, true); if (ok) ctx.toast('Told ' + who.split(' ')[0] + ' you’ll cover — your leader confirms the swap'); }} style={{ ...svPrimary(), flex: 1, padding: 14, fontSize: 15 }}><Icon name="check" size={19} stroke={2.4} color="#fff" /> Yes, I’ll cover</button>
+                    <button onClick={async () => { const ok = await ctx.answerSwap(a, false); if (ok) ctx.toast('Told ' + who.split(' ')[0] + ' you can’t this time'); }} style={{ flexShrink: 0, padding: '0 16px', borderRadius: 15, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', fontWeight: 700, fontSize: 14.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Not this time</button>
+                  </div>
+                </div>
+              );
+            })}
+            {swapView.hidden ? (
+              <div style={{ borderRadius: 16, padding: '12px 14px', marginBottom: 16, background: 'var(--surface-2)', border: '1px solid var(--line)', fontSize: 13, lineHeight: 1.5, color: 'var(--ink-2)' }}>
+                {swapView.hidden} swap {swapView.hidden === 1 ? 'message was' : 'messages were'} hidden — {swapView.hidden === 1 ? 'it' : 'they'} came from someone you can’t message here.
+              </div>
+            ) : null}
             {pendingOpen.map(req => (
               <div key={req.id} style={{ borderRadius: 20, padding: 16, marginBottom: 16, background: 'var(--surface)', border: '1.5px solid color-mix(in oklab, var(--gold) 50%, var(--line))', boxShadow: 'var(--shadow)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 11, fontWeight: 800, letterSpacing: '.6px', color: '#8a6717', marginBottom: 12 }}><Icon name="sparkle" size={14} color="var(--gold)" /> CAN YOU SERVE?</div>
@@ -1432,6 +1548,11 @@ function ServingScreen({ open, onClose, ctx, docked }) {
                   <button onClick={() => svRespond(ctx, req, 'accept', '', `You’re serving ${svParts(req.date).dow} ${svParts(req.date).day}`)} style={{ ...svPrimary(), flex: 1, padding: 14, fontSize: 15 }}><Icon name="check" size={19} stroke={2.4} color="#fff" /> Yes, I can serve</button>
                   <button onClick={() => setSheet({ kind: 'respond', item: req })} style={{ flexShrink: 0, padding: '0 16px', borderRadius: 15, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', fontWeight: 700, fontSize: 14.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Can’t make it</button>
                 </div>
+                {/* SWAP IS ONE TAP FROM THE REQUEST, NOT BEHIND "CAN'T MAKE IT". It used to be reachable only by
+                    pressing "Can't make it" and then "Suggest someone" inside the sheet that opens — so a member
+                    who could not come but WANTED to find cover first had to open a decline dialog to do it (sim
+                    2026-10-02, item 46). Opens the same SwapSheet; nothing is recorded until they pick someone. */}
+                <button onClick={() => setSheet({ kind: 'swap', item: req })} style={{ width: '100%', marginTop: 9, padding: '10px 12px', borderRadius: 13, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7 }}><Icon name="swap" size={16} color="var(--ink-2)" /> Ask a teammate to swap</button>
               </div>
             ))}
 
@@ -1562,6 +1683,12 @@ function ServingScreen({ open, onClose, ctx, docked }) {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                   {declined.map(it => {
                     const isSwap = it._verdict === 'swap';
+                    // WHO I ASKED, AND WHAT THEY SAID. The reply names the teammate (ctx.servSwapTo, by request id),
+                    // and the teammate's answer arrives on its own document (ctx.swapAnswers).
+                    const swapRid = (it.req && it.req.id) || it.id;
+                    const askedPub = isSwap ? (ctx.servSwapTo || {})[swapRid] : '';
+                    const askedFirst = (svNameOf(ctx, askedPub) || '').split(' ')[0];
+                    const swapAnsOk = isSwap && askedPub ? swapView.answerFor(swapRid, askedPub) : null;
                     const statusFg = isSwap ? '#8a6717' : 'var(--ink-3)';
                     const statusBg = isSwap ? 'var(--gold-tint)' : 'var(--surface-2)';
                     return (
@@ -1573,8 +1700,24 @@ function ServingScreen({ open, onClose, ctx, docked }) {
                             <span style={{ fontSize: 10.5, fontWeight: 700, color: statusFg, background: statusBg, borderRadius: 999, padding: '2px 8px' }}>{isSwap ? 'Swap asked' : 'Can’t make it'}</span>
                           </div>
                           <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 1 }}>{it.role} · {svParts(it.date).dow} {svParts(it.date).day} {svParts(it.date).mon}</div>
+                          {isSwap && askedFirst ? <div style={{ fontSize: 12.5, color: swapAnsOk ? (swapAnsOk.yes ? 'var(--sage-ink)' : 'var(--ink-3)') : 'var(--ink-3)', fontWeight: 600, marginTop: 3 }}>{swapAnsOk ? (swapAnsOk.yes ? askedFirst + ' said yes — your leader will confirm' : askedFirst + ' said no') : 'Asked ' + askedFirst + ' — waiting'}</div> : null}
                         </div>
-                        <button onClick={() => svRespond(ctx, it, 'accept', '', 'Great — you’re back on')} style={{ flexShrink: 0, padding: '9px 13px', borderRadius: 12, border: '1px solid var(--clay)', background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', gap: 6 }}><Icon name="check" size={15} color="var(--clay)" /> {isSwap ? 'I’ll serve' : 'I can serve'}</button>
+                        {/* ONE STATE SHOWN AT A TIME. A declined row used to carry a "Can't make it" badge AND an
+                            "I can serve" button, which reads as two answers given at once (sim 2026-10-02, item
+                            44). A decline now shows its state and an UNDO; the undo still records "I'll serve",
+                            since that is what taking it back means.
+                            A SWAP ASK has two ways out and neither needs the other first: "I'll serve" (keep the
+                            slot) and "Can't make it" (give it up). Until now the row offered only the first, so
+                            declining after asking for a swap meant pressing "I'll serve" — recording a yes —
+                            and then declining (item 46). */}
+                        {isSwap ? (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flexShrink: 0 }}>
+                            <button onClick={() => svRespond(ctx, it, 'accept', '', 'Great — you’re back on')} style={{ padding: '9px 13px', borderRadius: 12, border: '1px solid var(--clay)', background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}><Icon name="check" size={15} color="var(--clay)" /> I’ll serve</button>
+                            <button onClick={() => svRespond(ctx, it, 'decline', '', 'Declined — your leader has been told')} style={{ padding: '9px 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Can’t make it</button>
+                          </div>
+                        ) : (
+                          <button onClick={() => svRespond(ctx, it, 'accept', '', 'Undone — you’re back on')} aria-label="Undo: tell your leader you can serve after all" title="Undo — you can serve after all" style={{ flexShrink: 0, padding: '9px 13px', borderRadius: 12, border: '1px solid var(--clay)', background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', gap: 6 }}><Icon name="history" size={15} color="var(--clay)" /> Undo</button>
+                        )}
                       </div>
                     );
                   })}
