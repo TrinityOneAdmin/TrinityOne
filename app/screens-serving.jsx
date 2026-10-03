@@ -1583,7 +1583,16 @@ function ServingScreen({ open, onClose, ctx, docked }) {
                           </div>
                           <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 1 }}>{it.role} · {svParts(it.date).dow} {svParts(it.date).day} {svParts(it.date).mon}</div>
                         </div>
-                        <button onClick={() => svRespond(ctx, it, 'accept', '', 'Great — you’re back on')} style={{ flexShrink: 0, padding: '9px 13px', borderRadius: 12, border: '1px solid var(--clay)', background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', gap: 6 }}><Icon name="check" size={15} color="var(--clay)" /> {isSwap ? 'I’ll serve' : 'I can serve'}</button>
+                        {/* ONE STATE SHOWN AT A TIME. A declined row used to carry a "Can't make it" badge AND an
+                            "I can serve" button, which reads as two answers given at once (sim 2026-10-02, item
+                            44). A decline now shows its state and an UNDO; the undo still records "I'll serve",
+                            since that is what taking it back means. A swap ask keeps its "I'll serve", which
+                            is an answer to "will you still serve?" rather than an undo of a refusal. */}
+                        {isSwap ? (
+                          <button onClick={() => svRespond(ctx, it, 'accept', '', 'Great — you’re back on')} style={{ flexShrink: 0, padding: '9px 13px', borderRadius: 12, border: '1px solid var(--clay)', background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', gap: 6 }}><Icon name="check" size={15} color="var(--clay)" /> I’ll serve</button>
+                        ) : (
+                          <button onClick={() => svRespond(ctx, it, 'accept', '', 'Undone — you’re back on')} aria-label="Undo: tell your leader you can serve after all" title="Undo — you can serve after all" style={{ flexShrink: 0, padding: '9px 13px', borderRadius: 12, border: '1px solid var(--clay)', background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', gap: 6 }}><Icon name="history" size={15} color="var(--clay)" /> Undo</button>
+                        )}
                       </div>
                     );
                   })}
