@@ -3483,13 +3483,14 @@ function NewGroupModal({ open, onClose }) {
   // …BUT IT MUST AGREE WITH THE SWITCH THE STEWARD CAN SEE. A church that still has an unsealed room reads
   // "Encrypt all comms: Off" on the Rules page, and a form that then ticked Encrypted by default contradicted
   // it (sim 2026-10-02 #58). The predicate below is the Rules page switch's own (DashFeaturesPanel's `encOn`:
-  // the flag is not `false` AND no non-team room is unsealed); scripts/a-new-room-follows-the-encrypt-switch
+  // the flag is not `false` AND no GROUP room is unsealed); scripts/a-new-room-follows-the-encrypt-switch
   // renders both and fails if they ever disagree. It is written out here rather than shared because the
   // console tests slice components out of this file one at a time. This changes the DEFAULT only; the tick is
-  // still the steward's to set either way.
+  // still the steward's to set either way. Broadcasts are excluded: the wizard deliberately creates them
+  // unsealed ("the church's own voice"), and a wizard default must not drag the encrypt switch off.
   const allGroupsForDefault = window.useStewardGroups ? window.useStewardGroups() : [];
   const encByDefault = (!church.features || church.features.encryptComms !== false)
-    && !(allGroupsForDefault || []).some(g => g && g.kind !== 'team' && !g.encrypted);
+    && !(allGroupsForDefault || []).some(g => g && g.kind === 'group' && !g.encrypted);
   React.useEffect(() => { if (open) { setName(''); setKind('group'); setSub(''); setInviteOnly(false); setEncrypted(encByDefault); setChildsafe(false); setSel(new Set()); setCategory(''); } }, [open]);
   // BEFORE THE EARLY RETURN, so hook order is stable — the same note the sibling modal below carries.
   // This sat AFTER `if (!open) return null;` for one commit, which is a conditional hook call: the modal is
@@ -9136,8 +9137,10 @@ function DashFeaturesPanel({ church, show = null }) {
   // ones will be. On a brand-new church there are no rooms, so absent-means-on is honest and the switch reads
   // ON from the first minute. On an existing church that still has unsealed rooms it reads OFF — tapping it
   // seals them — because a church shown a protection it does not have is the one failure this project cannot
-  // afford. Teams are excluded: the encrypt control is not offered for them (see the group list).
-  const encUnsealed = (allGroups || []).filter(g => g && g.kind !== 'team' && !g.encrypted);
+  // afford. Teams and broadcasts are excluded: teams have no encrypt control, and broadcasts are
+  // deliberately unsealed by the wizard ("the church's own voice") — a wizard default must not
+  // drag the switch off.
+  const encUnsealed = (allGroups || []).filter(g => g && g.kind === 'group' && !g.encrypted);
   // …and the switch must SAY so. The confirmation was corrected to name the exclusion; the always-visible
   // row above it still read “every group sealed end-to-end”, which is the claim a steward actually lives
   // with. Only shown to a church that HAS a serving team, so nobody is warned about a room they don't have.

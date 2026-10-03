@@ -72,6 +72,11 @@ test('a team does not count as an unsealed room (the encrypt control is not offe
   assert.equal(formFor({ features: {} }, [SEALED, { id: 't', kind: 'team', encrypted: false }]), true);
 });
 
+test('a broadcast does not count as an unsealed room (the wizard creates them unsealed on purpose)', () => {
+  assert.equal(formFor({ features: {} }, [SEALED, { id: 'n', kind: 'broadcast', encrypted: false }]), true,
+    'an unsealed broadcast dragged the encrypt default off — a wizard default must not affect the rest');
+});
+
 // The switch itself must read what it always did - the helper replaced an inline expression there.
 function switchReads(church, groups) {
   const tree = mount('DashFeaturesPanel', { church, show: 'privacy' }, { church, groups });
@@ -83,6 +88,7 @@ test('the Rules page switch and the form agree in every case above', () => {
   for (const [church, groups] of [
     [{ features: {} }, [SEALED, OPEN]], [{ features: {} }, [SEALED]], [{}, []],
     [{ features: { encryptComms: false } }, [SEALED]], [{ features: {} }, [SEALED, { id: 't', kind: 'team', encrypted: false }]],
+    [{ features: {} }, [SEALED, { id: 'n', kind: 'broadcast', encrypted: false }]],
   ]) assert.equal(switchReads(church, groups), formFor(church, groups),
     'the switch and the form disagree for ' + JSON.stringify({ church, groups }));
 });
