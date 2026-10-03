@@ -10453,8 +10453,23 @@ window.Steward = {
     const MEMBER_D = 'trinityone/member:';
     const CACHE_KEY = 'trinityone.steward.members.' + (pub || '');
     const byPub = new Map();          // pubkey -> { pubkey, npub, name, picture, count, lastTs, firstTs, joined }
+    // MESSAGE COUNTS MUST NOT CLIMB WITH NO NEW MESSAGES (sim item 27, SIM-VERIFY-2026-10-02). `count` used to be
+    // seeded from the cached roster and then `count++` for EVERY kind-1 the relay replayed — and a relay replays
+    // its whole history on every (re)subscribe: each page reload, each relay reconnect (the console re-opens this
+    // on `conn`), each church switch. So every member's number grew by their full message history each time,
+    // with nobody having said anything. Now:
+    //   · `liveCount` counts DISTINCT events this run saw (by id — two relays serving the same message, or the
+    //     same relay serving it twice, is one message);
+    //   · `baseCount` is the tally the cache carried, kept ONLY so the number does not drop to zero while the
+    //     replay is still arriving;
+    //   · what is shown is the larger of the two. A replay of the same history can therefore never lift it above
+    //     the true count, and one genuinely new message lifts it by exactly one.
+    // A cache written before this fix may already be inflated, and there is no way to tell which numbers are:
+    // rows are stamped `cv: 2` when saved, and a row without the stamp has its stored count IGNORED, so a
+    // console that already climbed corrects itself on the first load rather than carrying the inflation for ever.
+    const baseCount = new Map(), liveCount = new Map(), liveIds = new Set();
     // paint the last-known roster instantly so the Members list doesn't flash empty→list on reload
-    try { const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || '[]'); if (Array.isArray(cached)) { cached.forEach(m => { if (m && m.pubkey) byPub.set(m.pubkey, m); }); if (cached.length) onMembers(cached); } } catch {}
+    try { const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || '[]'); if (Array.isArray(cached)) { cached.forEach(m => { if (m && m.pubkey) { const c = m.cv === 2 ? (Number(m.count) || 0) : 0; baseCount.set(m.pubkey, c); m.count = c; byPub.set(m.pubkey, m); } }); if (cached.length) onMembers(cached); } } catch {}
     // SECURITY-AUDIT-2026-07-18 (perf): debounce the heavy roster serialize. emit() ran a full sort +
     // JSON.stringify(entire roster) + localStorage write + setState on EVERY incoming event; on a large church's
     // load that was thousands of full-roster serializations. Coalesce to ~150ms (trailing fire keeps final state).
@@ -10479,7 +10494,7 @@ window.Steward = {
         .map(m => { if (m.name) return m; const sn = sealedName(m.pubkey); return sn ? { ...m, name: sn, viaSealed: true } : m; })
         .map(m => (m.name || !reseatName.get(m.pubkey)) ? m : { ...m, name: reseatName.get(m.pubkey), viaReseat: true })
         .sort((a, b) => ((b.lastTs || b.joined || 0) - (a.lastTs || a.joined || 0)));
-      try { localStorage.setItem(CACHE_KEY, JSON.stringify(arr)); } catch {} onMembers(arr);
+      try { localStorage.setItem(CACHE_KEY, JSON.stringify(arr.map(m => ({ ...m, cv: 2 })))); } catch {} onMembers(arr);
     };
     const emit = () => { if (emitTimer) return; emitTimer = setTimeout(() => { emitTimer = null; emitNow(); }, 150); };
     const get = (pk) => byPub.get(pk) || { pubkey: pk, npub: npubEncode(pk), name: '', picture: '', count: 0, lastTs: 0, firstTs: Infinity, joined: 0 };
@@ -10518,8 +10533,11 @@ window.Steward = {
           else { let j = e.created_at, s = 0; try { const c = JSON.parse(e.content); j = c.joined || e.created_at; s = c.seen || 0; } catch {} m.joined = j; if (s) m.seen = s; }
           byPub.set(e.pubkey, m); ensureProfile(e.pubkey); emit(); return;
         }
+        if (e.id) { if (liveIds.has(e.id)) return; liveIds.add(e.id); }   // a message already counted this run — see baseCount above
         const m = get(e.pubkey);
-        m.count++; if (e.created_at > m.lastTs) m.lastTs = e.created_at; if (e.created_at < m.firstTs) m.firstTs = e.created_at;
+        liveCount.set(e.pubkey, (liveCount.get(e.pubkey) || 0) + 1);
+        m.count = Math.max(baseCount.get(e.pubkey) || 0, liveCount.get(e.pubkey));
+        if (e.created_at > m.lastTs) m.lastTs = e.created_at; if (e.created_at < m.firstTs) m.firstTs = e.created_at;
         byPub.set(e.pubkey, m); ensureProfile(e.pubkey); emit();
       },
       oneose() { emit(); },

@@ -23829,11 +23829,17 @@ zoo`.split("\n");
       const MEMBER_D = "trinityone/member:";
       const CACHE_KEY = "trinityone.steward.members." + (pub || "");
       const byPub = /* @__PURE__ */ new Map();
+      const baseCount = /* @__PURE__ */ new Map(), liveCount = /* @__PURE__ */ new Map(), liveIds = /* @__PURE__ */ new Set();
       try {
         const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || "[]");
         if (Array.isArray(cached)) {
           cached.forEach((m) => {
-            if (m && m.pubkey) byPub.set(m.pubkey, m);
+            if (m && m.pubkey) {
+              const c = m.cv === 2 ? Number(m.count) || 0 : 0;
+              baseCount.set(m.pubkey, c);
+              m.count = c;
+              byPub.set(m.pubkey, m);
+            }
           });
           if (cached.length) onMembers(cached);
         }
@@ -23858,7 +23864,7 @@ zoo`.split("\n");
           return sn ? { ...m, name: sn, viaSealed: true } : m;
         }).map((m) => m.name || !reseatName.get(m.pubkey) ? m : { ...m, name: reseatName.get(m.pubkey), viaReseat: true }).sort((a, b) => (b.lastTs || b.joined || 0) - (a.lastTs || a.joined || 0));
         try {
-          localStorage.setItem(CACHE_KEY, JSON.stringify(arr));
+          localStorage.setItem(CACHE_KEY, JSON.stringify(arr.map((m) => ({ ...m, cv: 2 }))));
         } catch {
         }
         onMembers(arr);
@@ -23939,8 +23945,13 @@ zoo`.split("\n");
             emit();
             return;
           }
+          if (e.id) {
+            if (liveIds.has(e.id)) return;
+            liveIds.add(e.id);
+          }
           const m = get(e.pubkey);
-          m.count++;
+          liveCount.set(e.pubkey, (liveCount.get(e.pubkey) || 0) + 1);
+          m.count = Math.max(baseCount.get(e.pubkey) || 0, liveCount.get(e.pubkey));
           if (e.created_at > m.lastTs) m.lastTs = e.created_at;
           if (e.created_at < m.firstTs) m.firstTs = e.created_at;
           byPub.set(e.pubkey, m);
