@@ -172,7 +172,14 @@
       const rec = _normNeed(need);
       const sealed = {};
       for (const f of SEALED_FIELDS) sealed[f] = rec[f];
-      const ct = S().careSeal ? S().careSeal(sealed) : null;
+      let ct = S().careSeal ? S().careSeal(sealed) : null;
+      if (!ct && S().keysSettingUp && S().keysSettingUp("care") && S().waitForKey) {
+        try {
+          await S().waitForKey("care", 12e3);
+        } catch (e2) {
+        }
+        ct = S().careSeal ? S().careSeal(sealed) : null;
+      }
       if (!ct) {
         const looking = S().careKeyChecked && !S().careKeyChecked();
         let why = "";
@@ -181,7 +188,13 @@
         } catch (e2) {
           why = "";
         }
-        throw new Error(looking ? why ? "Still connecting to your church \u2014 " + why + "." : "Still connecting to your church \u2014 give it a moment and try again." : "Care needs are encrypted for the person\u2019s privacy, and this church\u2019s care key hasn\u2019t reached this device yet. Open Members once so it can sync, then try again.");
+        let settingUp = false;
+        try {
+          settingUp = !!(S().keysSettingUp && S().keysSettingUp("care"));
+        } catch (e2) {
+          settingUp = false;
+        }
+        throw new Error(settingUp ? "Setting up your church\u2019s keys\u2026 try again in a moment." : looking ? why ? "Still connecting to your church \u2014 " + why + "." : "Still connecting to your church \u2014 give it a moment and try again." : "Care needs are encrypted for the person\u2019s privacy, and this church\u2019s care key hasn\u2019t reached this device yet. Open Members once so it can sync, then try again.");
       }
       const tags = [["d", NEED_D + id], ["t", NET], ["enc", "care1"]];
       const body = { ...rec, enc: ct };

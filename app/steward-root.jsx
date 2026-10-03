@@ -46,6 +46,29 @@ window.useStewardIdv = useStewardIdv;
 // the common one — is picked up on the next tick and re-subscribed exactly once.
 const _connListeners = new Set();
 let _connWired = false, _connLast = 0, _connBusy = false;
+// A RELAY ADMITTED AFTER THE STREAMS OPENED IS A REASON TO RE-SUBSCRIBE (a new church's keys, 2026-10-02).
+// Every stream the dashboard holds — the church's name, its members, groups, stewards, the blocklist — is opened
+// over relayList(), the PROVED set, when its screen mounts. On a device that has never proved a relay (a brand-new
+// church on a new device: the dashboard mounts the moment the key is made) that set is EMPTY at mount, an empty
+// subscription answers with an empty list, and nothing opened the real stream afterwards: the gate announces the
+// admission (`steward-relay-returned`) and this ticker found nothing wrong — the relay never dropped, it was just
+// admitted late, so relaysHealthy() said yes. Measured 2026-10-02 on a fresh relay, church made through the real
+// screens: the Overview read "Your Church" for as long as it stayed open, and the key distributor (which will not
+// mint without the church's name) never ran, so the console held no name key, no care key and could seal nothing.
+// Opening a tab cured it (a fresh hook, opened over the by-then proved set).
+//
+// So the ticker remembers the set the streams were opened over — taken when the first hook mounts (_wireStewardConn),
+// and again at every re-subscribe — and a relay in the set now that was not in it then is a reason to re-subscribe,
+// through the same path a dropped socket takes. A relay LEAVING the set is not (that is the ticker's own business).
+// An established church boots with its relays already proved, so the set at mount is the set now: nothing happens.
+// This opens nothing and admits nothing: it re-opens streams over relays the gate has already admitted.
+let _connSeen = null;   // Set of relay urls, or null before the first hook mounts
+function _connRelayUrls() { try { const l = window.Steward && window.Steward.relayList && window.Steward.relayList(); return Array.isArray(l) ? l.map(String) : []; } catch (e) { return []; } }
+function _connNoteRelays() { _connSeen = new Set(_connRelayUrls()); }
+function _connRelayGrew() {
+  if (_connSeen === null) return false;
+  return _connRelayUrls().some(u => !_connSeen.has(u));
+}
 const _CONN_FLOOR_MS = 20000;    // don't hammer the probe on rapid foreground/visibility churn
 const _CONN_FLOOR_BACK_MS = 3000;   // …but a socket already back is re-subscribed sooner (see _maybeBumpConn)
 function _stewardHealthy() { try { return !window.Steward || !window.Steward.relaysHealthy || window.Steward.relaysHealthy(); } catch (e) { return true; } }
@@ -73,14 +96,15 @@ function _connLater(ms) {
 function _connKick() { _connMisses = 0; if (_connFg()) _maybeBumpConn(); }
 async function _maybeBumpConn() {
   if (_connBusy) return;
-  if (_stewardHealthy()) { _connMisses = 0; return; }             // nothing we depend on is missing
+  const grew = _connRelayGrew();                                  // a relay admitted since the streams opened — see _connSeen
+  if (!grew && _stewardHealthy()) { _connMisses = 0; return; }    // nothing we depend on is missing
   // A SOCKET IS ALREADY BACK (REPLACED, below): re-subscribing fixes it and then stops, so the 20-second floor —
   // which is there to keep foreground churn from hammering the PROBE — does not hold it up; a 3-second one keeps a
   // flapping link from re-querying the church more often than that. Device round 2026-10-01: the beat's probe
   // failed with the radio still off, the radio came back a few seconds later, and the socket a publish opened
   // then waited out the rest of the floor (20.6 s measured) before anything re-subscribed or logged in.
-  let replaced = false;
-  try { replaced = !!window.Steward.relaysReplaced(); } catch (e) {}
+  let replaced = grew;   // the socket is up and listening to nothing it has not been told about: the same remedy
+  try { replaced = replaced || !!window.Steward.relaysReplaced(); } catch (e) {}
   const floor = replaced ? _CONN_FLOOR_BACK_MS : _CONN_FLOOR_MS;
   if (_connLast && Date.now() - _connLast < floor) { _connLater(_connLast + floor - Date.now()); return; }
   _connBusy = true;
@@ -113,6 +137,7 @@ async function _maybeBumpConn() {
     // Re-subscribing issues the gated REQs that provoke the relay's NIP-42 challenge, so this is also what
     // unlocks writing again after a drop.
     if (replaced || back) {
+      _connNoteRelays();   // the streams about to be rebuilt open over the set as it is NOW
       _connListeners.forEach(fn => { try { fn(x => x + 1); } catch (e) {} });
       // Record which sockets the rebuilt subscriptions live on. Only this counts — a bare successful connect
       // does not, because one-shot reads produce those too and leave nothing listening (AUDIT-5).
@@ -123,6 +148,7 @@ async function _maybeBumpConn() {
 }
 function _wireStewardConn() {
   if (_connWired || typeof document === 'undefined') return; _connWired = true;
+  _connNoteRelays();   // the first hook has mounted: this is the set its stream opens over
   const onVis = () => { if (document.visibilityState === 'visible' && Date.now() - _connLast > 2500) _connKick(); };
   document.addEventListener('visibilitychange', onVis);
   window.addEventListener('online', _connKick);

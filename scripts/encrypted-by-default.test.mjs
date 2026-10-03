@@ -55,19 +55,12 @@ test('turning it off is still possible, and still explicit', () => {
     'a steward can no longer turn encryption off — the decision was "default", not "compulsory"');
 });
 
-test('the wizard seals the church\'s FIRST rooms too', () => {
-  // The default lived only in the New Group modal, so the rooms every church starts with — the ones the
-  // wizard makes — were the only ones created unencrypted. Measured on a live church built after the flag
-  // change: three groups, all enc=None. A church with some rooms sealed and some not, decided by which screen
-  // happened to create them, is worse than either extreme.
-  const save = DASH.slice(DASH.indexOf('const saveGroups = async'));
-  const body = save.slice(0, save.indexOf('\n  const '));
-  assert.match(body, /encrypted: true/,
-    'the wizard still creates the church\'s first rooms unencrypted');
-  assert.match(body, /publishGroupKey/,
-    'a room flagged encrypted with no key envelope refuses every member\'s send, for ever and silently — the ' +
-    'key must be published, exactly as the New Group modal does');
-  assert.match(body, /encrypted: false/,
-    'if the key cannot be published the room must be UNFLAGGED rather than left claiming an encryption it ' +
-    'does not have');
-});
+// REMOVED 2026-10-02 (new church, part D): 'the wizard seals the church's FIRST rooms too'. It matched TEXT in
+// app/stew-dashboard.jsx (rule 3 — `false &&` in front of the line would have left it green) and it asserted the
+// very fallback this branch removes on purpose: "if the key cannot be published the room must be UNFLAGGED" — i.e.
+// a room the steward chose to encrypt, created in the clear, which on a new church (its console has not signed in
+// yet) was every one of the church's first rooms, silently. The wizard now never creates a sealed room without its
+// key (Steward.createEncryptedGroup, key first). What that test meant — the church's first rooms ARE sealed — is
+// asserted by EXECUTING the real saveGroups, in scripts/the-wizard-does-not-advance-over-rooms-it-never-made.test.mjs
+// ('a sealed room is made through createEncryptedGroup…', and the two rows after it), and against a real console
+// in scripts/the-wizard-seals-a-new-churchs-first-rooms.test.mjs. Test count: this file 4 -> 3.

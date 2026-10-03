@@ -975,6 +975,13 @@ const CHECKINKEY_D = D.CHECKINKEY;   // the children's register key, wrapped to 
 const GUARDREQ_D = D.GUARDREQ;   // safeguarding v2: a PARENT's guardian-link request — d=guardreq:<childpub>, p-tagged to the church. SECURITY-AUDIT-2026-07-20 C1: the author IS the claimed parent (enforced in accept()); the console must never trust a `parent` field in the content.
 const NOPHOTO_D = D.NOPHOTO;     // moderation: members whose uploaded photo is suppressed — d=nophoto:<churchpub> (owner/steward only)
 const MEDIAKEY_D = D.MEDIAKEY;   // Tier-2 media key wrapped per-member — its object keys ARE the member roster, so gate reads to effective members (else it's a world-readable membership list)
+// EVERY KEY-ENVELOPE D-TAG THE RELAY SERVES, in one list — what a REQ naming one of them is challenged for (the
+// REQ handler's `wantsKeyD`). Built from the same constants canRead / accept branch on, one per envelope: the
+// per-church name, care and media keys, one encrypted room's key, and the two capability keys (finance, and the
+// children's register). NOT checkinhelper: — that is a per-session grant to a named helper, not a church's key.
+// scripts/relay-challenges-a-key-read.test.mjs derives the same set from the doc registry (every D.*KEY) and
+// fails when a key-envelope type is added there and not here.
+const KEY_ENVELOPE_D = [NAMEKEY_D, CAREKEY_D, MEDIAKEY_D, GROUPKEY_D, FINANCEKEY_D, CHECKINKEY_D];
 // (a parent's guardian-link REQUEST is d=trinityone/guardreq:<childpub>, authored by the parent — member-writable, falls to the default member rule)
 const JOINPOLICY_D = D.JOINPOLICY; // church-signed join policy — d=joinpolicy:<churchpub>, content {approval:bool}; ON = members need steward approval to post
 const ADMITTED_D = D.ADMITTED;   // church-signed allowlist of approved members — d=admitted:<churchpub> (only meaningful when approval is ON)
@@ -8288,7 +8295,17 @@ wss.on('connection', (ws, req) => {
       // Emergency-timing oracle: challenge from the FILTER (not only a found event) so an anon REQ for a safety d-tag
       // gets an identical AUTH whether or not a check is live — no "is this church under attack right now?" distinguisher.
       const wantsSafetyD = !ws._auth && filters.some(f => (f['#d'] || []).some(d => typeof d === 'string' && (d.startsWith(SAFETY_D) || d.startsWith(SAFE_D))));
-      if (wantsInvite || wantsSafeguard || wantsSafetyD) { try { ws.send(JSON.stringify(['AUTH', ws._challenge])); } catch {} }   // safeguarding: challenge so a member's client auths + gets the lists (AUTH-success re-delivers)
+      // A KEY ENVELOPE IS ASKED FOR BY ITS D-TAG, so the FILTER is the reason to challenge — whether or not a
+      // document matched. Why this is needed: a church's key envelopes are private, but a BRAND-NEW church has
+      // none yet, so nothing was withheld, no challenge was sent, and its console never signed in — which every
+      // key it needs to mint (name, care, media, room, capability) requires (measured 2026-10-02). The same
+      // shape as wantsSafetyD above: identical answer whether or not the document exists, so nothing is
+      // learned from it, and nothing is read that was not readable: canRead is untouched, so this changes who is
+      // ASKED to sign in, never who is SERVED. It costs one AUTH round-trip, only for a console or a member
+      // asking for keys, who need to be signed in to use the answer anyway. The EOSE is not held (as for
+      // wantsSafetyD): nothing was withheld, so the empty answer is not a lie.
+      const wantsKeyD = !ws._auth && filters.some(f => (f['#d'] || []).some(d => typeof d === 'string' && KEY_ENVELOPE_D.some(p => d.startsWith(p))));
+      if (wantsInvite || wantsSafeguard || wantsSafetyD || wantsKeyD) { try { ws.send(JSON.stringify(['AUTH', ws._challenge])); } catch {} }   // safeguarding: challenge so a member's client auths + gets the lists (AUTH-success re-delivers)
       // NIP-01's `limit` is per-filter. Taking the MAX across the merged union meant a REQ mixing one limited
       // and one unlimited filter was bounded only by the 5,000 default — the shipped client sends two
       // 1000-limit DM filters and could receive 1000 total instead of 1000+1000. Sum the declared limits so a

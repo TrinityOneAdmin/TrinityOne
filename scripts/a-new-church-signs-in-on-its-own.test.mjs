@@ -1,0 +1,81 @@
+// A NEW CHURCH'S CONSOLE SIGNS IN WITHOUT WAITING TO BE ASKED — AND DOES NOT NEED THE RELAY TO HAVE LEARNT TO ASK.
+//   Run: node --test scripts/a-new-church-signs-in-on-its-own.test.mjs
+//
+// THE DEFECT (measured 2026-10-02, main at d73d8fb). The relay challenges lazily (NIP-42): only a REQ that names
+// invite-only content, or matches something it would withhold, gets an AUTH frame. A brand-new church has nothing
+// private yet, so the console is never challenged, never signs in, and every key gate in it (_isRelayAuthed,
+// _keyReadAuthedOn) stays shut. Church made through the real screens on a fresh relay, no reload, no tab opened:
+// 53 s on the Overview with no AUTH challenge; a service and a rota refused after their 4 s wait; "Still
+// connecting to your church" on a care need. It cured itself only when the steward opened a tab whose reads
+// happened to match something private.
+//
+// THE FIX under test is the console's: a moment after a socket to one of the church's relays is up, a socket
+// that has not been asked to sign in sends the one filter every relay answers with an AUTH frame
+// (`#d: safetycheck:<church>`) — _loginSoon / _loginCheck in src/steward.src.js.
+//
+// WHY THIS RUNS AGAINST A RELAY WITHOUT THE KEY-ENVELOPE CHALLENGE. The relay now also challenges a REQ that names
+// a key-envelope d-tag (gateway.mjs `wantsKeyD`; relay-challenges-a-key-read.test.mjs). Against that relay the
+// console's first key read provokes the challenge itself and this fix would be invisible — a test that stays
+// green with the fix deleted. Production runs the previous main, which does not have it, so this is also the
+// deployment that matters: a console that works against a relay that has never heard of the change. The relay
+// used here is the working tree's gateway with exactly that clause removed (gatewayWithoutKeyChallenge), and
+// the first row proves it is the old behaviour by asking it.
+//
+// THE POINT OF USE (CLAUDE.md rule 1). A real gateway on a FREE port, the real console in headless chromium, a
+// church made through the real screens and left on the Overview — nothing private exists (no member, no room, no
+// key) and no tab is opened, which is exactly the state in which nothing else provokes a challenge. The test reads
+// the console's own frames (CDP) and its own answer to relayAuthed(). Rule 3: nothing here matches text in app/*.jsx.
+//
+// WHAT EACH ROW WOULD CATCH
+//   · _loginSoon deleted from the socket door (src/steward.src.js)  → the console is never challenged; red.
+//
+// Skips itself when chromium is unavailable, like scripts/app-boots.test.mjs.
+import { test, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { CHROME, H, openNewChurch, gatewayWithoutKeyChallenge, rawReq } from './new-church-session.mjs';
+
+let s, old;
+before(async () => {
+  if (!CHROME) return;
+  old = gatewayWithoutKeyChallenge();
+  s = await openNewChurch({ wizard: 'skip', name: 'signin', gateway: old.path });
+});
+after(() => { try { s && s.close(); } catch {} try { old && old.remove(); } catch {} });
+const SKIP = !CHROME ? 'no chromium' : false;
+
+test('CONTROL: this is a relay that does not challenge a key read — an unauthenticated REQ for the name key gets no AUTH', { skip: SKIP, timeout: 60000 }, async () => {
+  // asked about a church that does not exist on this box: the one case where nothing is withheld, so only the
+  // key-envelope clause could challenge it (asking about THIS church's name key would be withheld once the console
+  // had minted it, and a withheld read is challenged by an old relay too)
+  const r = await rawReq(s.relay, { kinds: [30078], '#d': ['trinityone/namekey:' + H.key().pub] });
+  assert.equal(r.auth, false, 'the relay challenged a key read, so this is not the old relay and the rows below prove nothing about the console');
+  assert.equal(r.events, 0);
+});
+
+test('a church with nothing private yet: the console is signed in on the Overview, without a tab opened', { skip: SKIP, timeout: 120000 }, async () => {
+  await s.waitFor(`window.Steward.relayAuthed()`, 15000, 'the console to be signed in');
+  assert.equal(await s.ev(`window.Steward.relayAuthed()`), true);
+  // …and it was the console's own question that did it: the first challenge the relay sent came AFTER a REQ for
+  // the safety-check document of THIS church, and nothing before it provoked one.
+  const challenge = s.firstFrame(/^AUTH CHALLENGE/);
+  assert.ok(challenge, 'the relay never challenged the console');
+  // precondition, so this proves something: nothing private existed on the relay when the console was challenged
+  // (the raw logger, signed in as the church from the first moment, timestamps every document it is handed). Keys
+  // follow the sign-in, which is the point — they cannot be what provoked it.
+  const priv = s.events.filter(e => /^trinityone\/(member|group|groupkey|carekey|namekey|checkinkey|financekey|mediakey):/.test(e.d));
+  assert.ok(priv.every(e => e.t > challenge.t), 'a private document existed before the console was challenged, so a read could have provoked it: ' + JSON.stringify(priv.map(e => [e.d.slice(0, 24), e.t, challenge.t])));
+  const ask = s.frames.find(f => f.dir === '>' && /^REQ .*safetycheck:/.test(f.f));
+  assert.ok(ask, 'the console never sent the sign-in question, so the challenge below was not provoked by it: ' + JSON.stringify(s.frames.filter(f => /AUTH/.test(f.f))));
+  assert.ok(ask.f.includes('safetycheck:' + s.churchPub), 'the sign-in question names another church');
+  assert.ok(ask.t <= challenge.t, 'the challenge came before the console asked: something else provoked it, and this test is not about the console\'s question');
+  // a moment, not a minute: from the first frame this console sent to the challenge
+  const first = s.frames.find(f => f.dir === '>');
+  assert.ok(challenge.t - first.t < 6000, 'it took ' + (challenge.t - first.t) + ' ms from the console\'s first frame to be challenged');
+});
+
+test('the console answers the challenge it provoked, and asks a bounded number of times, only about its own church', { skip: SKIP, timeout: 60000 }, async () => {
+  const asks = s.frames.filter(f => f.dir === '>' && /^REQ .*safetycheck:/.test(f.f));
+  assert.ok(asks.length >= 1 && asks.length <= 3, 'the sign-in question was sent ' + asks.length + ' times');
+  assert.ok(asks.every(f => f.f.includes('safetycheck:' + s.churchPub)), 'a sign-in question named another church: ' + asks.map(f => f.f).join(' | '));
+  assert.ok(s.frames.some(f => f.dir === '>' && f.f === 'AUTH RESPONSE'), 'the console never answered a challenge');
+});

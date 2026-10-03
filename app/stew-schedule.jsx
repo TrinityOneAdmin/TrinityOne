@@ -77,6 +77,10 @@ const SCH_NO_KEY = 'Not saved — your church’s key hasn’t arrived yet. Give
 // …ONLY WHEN THE KEY IS WHAT IS MISSING (audit of 5276297, LOW): a save can come back empty for other reasons, and a
 // relay's name on those would send the steward after the wrong thing.
 function schNoKey() {
+  // …AND WHILE THE CONSOLE IS STILL SIGNING IN (a new church's first minutes) SAY SO — nothing is wrong, and "your
+  // church's key hasn't arrived" sends a steward looking for a fault. Steward.keysSettingUp is true only until the
+  // sign-in and the key read have settled; after that the plainer message below stands.
+  try { const S0 = window.Steward; if (S0 && S0.keysSettingUp && S0.keysSettingUp('name')) return 'Setting up your church’s keys… try again in a moment.'; } catch (e) {}
   let why = '';
   try { const S = window.Steward; why = (S && S.keyWaitNote && S.nameKeyReady && !S.nameKeyReady()) ? S.keyWaitNote('name') : ''; } catch (e) { why = ''; }
   return why ? 'Not saved — your church’s key hasn’t arrived: ' + why + '.' : SCH_NO_KEY;

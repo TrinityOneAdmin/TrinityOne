@@ -169,7 +169,15 @@ import { _absorbById } from './church-doc-store.src.js';   // one rule for who w
     const id = need.id || uid('care');
     const rec = _normNeed(need);
     const sealed = {}; for (const f of SEALED_FIELDS) sealed[f] = rec[f];
-    const ct = S().careSeal ? S().careSeal(sealed) : null;
+    let ct = S().careSeal ? S().careSeal(sealed) : null;
+    // A CONSOLE STILL SIGNING IN WAITS FOR ITS CARE KEY rather than refusing on the spot (a new church's first
+    // minutes: the key follows the sign-in by a second or so). Only while the console is genuinely still setting up
+    // (Steward.keysSettingUp) and only for a bounded time (waitForKey); a console that has signed in and read and
+    // holds no key is refused at once, as before.
+    if (!ct && S().keysSettingUp && S().keysSettingUp('care') && S().waitForKey) {
+      try { await S().waitForKey('care', 12000); } catch (e) {}
+      ct = S().careSeal ? S().careSeal(sealed) : null;
+    }
     if (!ct) {
       // No care key on this device. Publishing the PII in the clear would silently reintroduce the finding,
       // so refuse and say why. careKeyChecked() distinguishes "still loading" from "genuinely absent", so the
@@ -177,7 +185,10 @@ import { _absorbById } from './church-doc-store.src.js';   // one rule for who w
       const looking = S().careKeyChecked && !S().careKeyChecked();
       // …and when a relay is what is holding the care key back, say which (Steward.keyWaitNote, audit of 3bc8905)
       let why = ''; try { why = S().keyWaitNote ? S().keyWaitNote('care') : ''; } catch (e) { why = ''; }
-      throw new Error(looking
+      // …and while the console is still signing in at all (a new church's first minutes) say THAT, not "connecting"
+      // or "hasn't reached this device": nothing is wrong, and a retry in a moment will do (Steward.keysSettingUp).
+      let settingUp = false; try { settingUp = !!(S().keysSettingUp && S().keysSettingUp('care')); } catch (e) { settingUp = false; }
+      throw new Error(settingUp ? 'Setting up your church’s keys… try again in a moment.' : looking
         ? (why ? 'Still connecting to your church — ' + why + '.' : 'Still connecting to your church — give it a moment and try again.')
         : 'Care needs are encrypted for the person’s privacy, and this church’s care key hasn’t reached this device yet. Open Members once so it can sync, then try again.');
     }

@@ -1266,11 +1266,15 @@ function StewSetupWizard({ church, onDone, onTab, onSettings, onInvite, onNewPos
   // unencrypted. Measured on a live church: three groups, all enc=None. A church ending up with some rooms
   // sealed and some not, by accident of which screen made them, is worse than either extreme.
   //
-  // Mirrors the modal's safety exactly: if the key cannot be published, the room is UNFLAGGED rather than
-  // left claiming an encryption it does not have (a group flagged `encrypted` with no envelope refuses every
-  // member's send, for ever, silently). There are no members yet at this point, so the key seals to nobody
-  // and the roster effect keys each person as they join — its "first sighting" skip records the empty set,
-  // so the first real member counts as growth and triggers distribution.
+  // A ROOM THAT IS MEANT TO BE ENCRYPTED IS NEVER CREATED WITHOUT ITS KEY (new church, 2026-10-02). This used to
+  // publish the room flagged `encrypted`, try the key, and on failure UNFLAG it and say nothing — and a new church's
+  // console has not signed in yet during its first minutes, so its first rooms (these ones) came out unencrypted,
+  // silently, every time. Now Steward.createEncryptedGroup makes the key FIRST and the flagged room second, waiting
+  // (bounded) for the sign-in; if it cannot, nothing is created, the rows stay picked and the step says why. A group
+  // flagged `encrypted` with no envelope refuses every member's send, for ever, silently — which is why the order
+  // is key first. There are no members yet at this point, so the key seals to nobody and the roster effect keys
+  // each person as they join — its "first sighting" skip records the empty set, so the first real member counts as
+  // growth and triggers distribution.
   const [groupErr, setGroupErr] = React.useState('');
   const saveGroups = async () => {
     const chosen = STARTERS.filter(s => picks.has(s.id));
@@ -1285,23 +1289,30 @@ function StewSetupWizard({ church, onDone, onTab, onSettings, onInvite, onNewPos
     // false reassurance is not". DROP THE ONES THAT LANDED: every publishGroup mints a fresh id, so
     // retrying a partially-successful step would create a second copy of the rooms that worked.
     const done = [];
-    let failed = 0;
+    let failed = 0, keyless = 0;   // keyless: rooms that were NOT made because their key could not be (never made without it)
     try {
       for (const g of chosen) {
         const seal = encByDefaultWiz && g.kind === 'group';   // broadcast channels are the church's own voice
-        const pub = await Promise.resolve(window.Steward.publishGroup({ name: g.name, kind: g.kind, sub: g.sub, ...(seal ? { encrypted: true } : {}) }));
+        let pub = null;
+        if (seal) {
+          // the console may still be signing in — say what is happening while createEncryptedGroup waits for it
+          try { if (window.Steward.keysSettingUp && window.Steward.keysSettingUp('name')) setGroupErr('Setting up your church’s keys…'); } catch (e) {}
+          const r = window.Steward.createEncryptedGroup ? await Promise.resolve(window.Steward.createEncryptedGroup({ name: g.name, kind: g.kind, sub: g.sub }, [])) : null;
+          setGroupErr('');
+          if (!r || !r.ok) { failed++; if (!r || r.reason !== 'group-not-saved') keyless++; continue; }
+          pub = r.group;
+        } else {
+          pub = await Promise.resolve(window.Steward.publishGroup({ name: g.name, kind: g.kind, sub: g.sub }));
+        }
         if (!pub) { failed++; continue; }
         done.push(g.id);
-        if (seal && pub.id && window.Steward.publishGroupKey) {
-          let r = null;
-          try { r = await window.Steward.publishGroupKey(pub.id, []); } catch (e) { r = null; }
-          if (r === null || r === false) { try { await window.Steward.publishGroup({ ...pub, encrypted: false }); } catch (e) {} }
-        }
       }
     } catch (e) { failed = chosen.length - done.length; }
     finally { setBusy(false); }   // ALWAYS: `busy` disables Continue AND Back AND every other step's button
     if (done.length) setPicks(p => { const n = new Set(p); done.forEach(id => n.delete(id)); return n; });
-    if (failed) { setGroupErr(failed === chosen.length
+    if (failed) { setGroupErr(keyless
+      ? 'Your church’s keys aren’t ready yet, so these rooms weren’t created — nothing was made unencrypted. Your choices are still here; try again in a moment.'
+      : failed === chosen.length
       ? 'Couldn’t create your rooms — the relay didn’t accept them. Check you’re online and try again; your choices are still here.'
       : `Created ${done.length} of ${chosen.length}. Try again to create the rest.`); return; }
     next();
@@ -3469,6 +3480,8 @@ function NewGroupModal({ open, onClose }) {
   const [childsafe, setChildsafe] = React.useState(false);
   const [sel, setSel] = React.useState(new Set());   // chosen member pubkeys for an invite-only group
   const [category, setCategory] = React.useState('');   // chosen category id ('' = uncategorised)
+  const [busy, setBusy] = React.useState(false);   // an encrypted room is being made: key first, then the room (createEncryptedGroup)
+  const [note, setNote] = React.useState('');      // what the dialog says while that happens, or why it could not
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
   // WHAT THE STEWARD IS OFFERED TO TICK — not people still waiting at the door, not the blocked (sim A2 #7).
   // `members` stays the FULL list on purpose: an open encrypted room is keyed to everyone (`recips` below).
@@ -3483,7 +3496,7 @@ function NewGroupModal({ open, onClose }) {
   // works on. Only an explicit `false` — a steward deliberately turning it off — leaves new rooms unsealed.
   // Owner's decision, 2026-08-22. Existing groups are untouched: this is the default for NEW ones.
   const encByDefault = !church.features || church.features.encryptComms !== false;
-  React.useEffect(() => { if (open) { setName(''); setKind('group'); setSub(''); setInviteOnly(false); setEncrypted(encByDefault); setChildsafe(false); setSel(new Set()); setCategory(''); } }, [open]);
+  React.useEffect(() => { if (open) { setName(''); setKind('group'); setSub(''); setInviteOnly(false); setEncrypted(encByDefault); setChildsafe(false); setSel(new Set()); setCategory(''); setBusy(false); setNote(''); } }, [open]);
   // BEFORE THE EARLY RETURN, so hook order is stable — the same note the sibling modal below carries.
   // This sat AFTER `if (!open) return null;` for one commit, which is a conditional hook call: the modal is
   // always mounted with `open` toggling, so opening it changed the hook count and React threw #310 and
@@ -3493,18 +3506,44 @@ function NewGroupModal({ open, onClose }) {
   const ngDlgRef = useStewDialog(onClose, open);
   if (!open) return null;
   const togglePk = (pk) => setSel(s => { const n = new Set(s); n.has(pk) ? n.delete(pk) : n.add(pk); return n; });
-  const create = () => {
-    if (!name.trim()) return;
+  const create = async () => {
+    if (!name.trim() || busy) return;
     const g = { name: name.trim(), kind, sub: sub.trim() };
     if (category) g.category = category;
     if (kind === 'group' && inviteOnly) { g.visibility = 'invite'; g.members = [...sel]; }
-    if (kind === 'group' && encrypted) g.encrypted = true;
     if (childsafe) g.childsafe = true;
-    // AUDIT-2026-08-10 item A. The group id only exists after the doc publish, so key-first isn't available
-    // here — instead every result is read. A failed key publish used to leave the room born dead: flagged
-    // `encrypted` with no envelope, every member's send refused for ever, and nobody told. Now it unflags
-    // the just-created room (nothing sealed yet, no members muted) and says so out loud. The corrective's
-    // own failure window is tolerable because it is LOUD either way.
+    const sealed = kind === 'group' && encrypted;
+    // A ROOM THE STEWARD CHOSE TO ENCRYPT IS NEVER CREATED WITHOUT ITS KEY (new church, 2026-10-02). This used to
+    // publish the room, try the key, and on failure UNFLAG the room and say "was created WITHOUT encryption" — and
+    // a console that has not signed in yet (a new church's first minutes) failed every time, so the church's first
+    // rooms came out unencrypted. Steward.createEncryptedGroup makes the KEY FIRST and the flagged room second,
+    // waiting (bounded) for the sign-in. If it cannot, NOTHING is created: this dialog stays open with everything
+    // typed, and says why. There is no fallback to a cleartext room.
+    if (sealed) {
+      // Recipients: the allowlist (invite) or everyone (open).
+      const recips = inviteOnly ? [...sel] : members.map(m => m.pubkey);
+      setBusy(true); setNote('');
+      try { if (window.Steward.keysSettingUp && window.Steward.keysSettingUp('name')) setNote('Setting up your church’s keys…'); } catch (e) {}
+      let r = null;
+      try { r = window.Steward.createEncryptedGroup ? await window.Steward.createEncryptedGroup(g, recips) : null; } catch (e) { r = null; }
+      setBusy(false);
+      if (!r || !r.ok) {
+        setNote(r && r.reason === 'group-not-saved'
+          ? 'Couldn’t create “' + g.name + '” — the relay didn’t accept it. Nothing was made; check your connection and try again.'
+          : 'Your church’s keys aren’t ready yet, so “' + g.name + '” wasn’t created — nothing was made unencrypted. Your details are still here; try again in a moment.');
+        return;
+      }
+      setNote('');
+      if (r.skipped && r.skipped.length) {
+        try {
+          window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'group key',
+            message: r.skipped.length + ' member(s) could not be given the key for “' + g.name + '”. They will not be able to read or post in that room. Open the group and save it again to re-send.' } }));
+        } catch (e) {}
+      }
+      onClose();
+      return;
+    }
+    // not encrypted: published as before, and the dialog closes at once
     (async () => {
       let pub = null;
       try { pub = await window.Steward.publishGroup(g); } catch (e) { pub = null; }
@@ -3514,25 +3553,6 @@ function NewGroupModal({ open, onClose }) {
           window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'group',
             message: '“' + g.name + '” could not be created — the relay didn’t accept it. Check your connection and try again.' } }));
         } catch (e) {}
-        return;
-      }
-      // encrypted → mint + distribute the group key. Recipients: the allowlist (invite) or everyone (open).
-      if (encrypted && window.Steward.publishGroupKey) {
-        const recips = inviteOnly ? [...sel] : members.map(m => m.pubkey);
-        let r = null;
-        try { r = await window.Steward.publishGroupKey(pub.id, recips); } catch (e) { r = null; }
-        if (r === null || r === false) {
-          try { await window.Steward.publishGroup({ ...pub, encrypted: false }); } catch (e) {}
-          try {
-            window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'group key',
-              message: '“' + g.name + '” was created WITHOUT encryption — its key could not be saved. Seal it from the Groups list once this console is connected.' } }));
-          } catch (e) {}
-        } else if (r && r.skipped && r.skipped.length) {
-          try {
-            window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'group key',
-              message: r.skipped.length + ' member(s) could not be given the key for “' + g.name + '”. They will not be able to read or post in that room. Open the group and save it again to re-send.' } }));
-          } catch (e) {}
-        }
       }
     })();
     onClose();
@@ -3597,9 +3617,10 @@ function NewGroupModal({ open, onClose }) {
             </React.Fragment>
           ) : null}
         </div>
+        {note ? <div role="status" style={{ padding: '14px 26px 0', fontSize: 13, color: busy ? 'var(--ink-2)' : 'var(--clay-ink)', lineHeight: 1.45, fontWeight: busy ? 500 : 600 }}>{note}</div> : null}
         <div style={{ display: 'flex', gap: 10, padding: '20px 26px 22px' }}>
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: '12px' }}>Cancel</button>
-          <button onClick={create} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: '12px', opacity: name.trim() ? 1 : .5 }}><Icon name="plus" size={16} color="var(--on-clay)" /> Create group</button>
+          <button onClick={create} disabled={busy} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: '12px', opacity: (name.trim() && !busy) ? 1 : .5 }}><Icon name="plus" size={16} color="var(--on-clay)" /> Create group</button>
         </div>
       </div>
     </div>
@@ -3816,7 +3837,7 @@ function GroupChatModal({ group, onClose }) {
     let r = null;
     try { r = await window.Steward.publishEvent({ ...evt, title: evt.title.trim(), where: evt.where.trim(), groupId: group.id }); } catch (e) { r = null; }
     setEvtBusy(false);
-    if (r == null) { let why = ''; try { why = (window.Steward.keyWaitNote && window.Steward.nameKeyReady && !window.Steward.nameKeyReady()) ? window.Steward.keyWaitNote('name') : ''; } catch (e) {} setEvtErr(why ? 'Not saved — your church’s key hasn’t arrived: ' + why + '.' : 'Not saved — your church’s key hasn’t arrived yet. Give it a moment and try again.'); return; }   // name the relay holding the key back (schNoKey, stew-schedule.jsx)
+    if (r == null) { let why = ''; try { if (window.Steward.keysSettingUp && window.Steward.keysSettingUp('name')) { setEvtErr('Setting up your church’s keys… try again in a moment.'); return; } why = (window.Steward.keyWaitNote && window.Steward.nameKeyReady && !window.Steward.nameKeyReady()) ? window.Steward.keyWaitNote('name') : ''; } catch (e) {} setEvtErr(why ? 'Not saved — your church’s key hasn’t arrived: ' + why + '.' : 'Not saved — your church’s key hasn’t arrived yet. Give it a moment and try again.'); return; }   // name the relay holding the key back (schNoKey, stew-schedule.jsx)
     setComposeEvt(false); setEvt({ title: '', date: '', time: '', where: '' });
   };
   const isTeam = group.kind === 'team';

@@ -52,6 +52,51 @@ test('the care screen\'s refusal names the relay holding the care key back', asy
   assert.match(String(await careError('box.example.org isn’t answering', true)), /care key hasn’t reached this device/, 'CONTROL: once the read has settled the other message stands');
 });
 
+// ── A CONSOLE STILL SIGNING IN SAYS SO (new church, 2026-10-02) ─────────────────────────────────────────────────
+// In a new church's first moments the console holds no key YET because it is still signing in and reading — nothing
+// is wrong, and "your key hasn't arrived" / "still connecting" sends a steward looking for a fault. Steward.keysSettingUp
+// is true only until the sign-in and the key read have settled; both screens say "Setting up your church's keys…" then,
+// and the care screen WAITS (bounded) for its key instead of refusing on the spot.
+test('the schedule "not saved" says the keys are being set up while the console is still signing in — and only then', () => {
+  const run = (setting) => {
+    const window = { Steward: { keysSettingUp: (k) => (k === 'name' ? setting : 'WRONG KIND ASKED'), keyWaitNote: () => 'box.example.org isn’t answering', nameKeyReady: () => false } };
+    return new Function('window', `${stmt(SCHEDULE, "const SCH_NO_KEY = ")}\n${fnBody(SCHEDULE, 'function schNoKey() {', 'schNoKey in app/stew-schedule.jsx')}\nreturn schNoKey();`)(window);
+  };
+  assert.equal(run(true), 'Setting up your church’s keys… try again in a moment.', 'a console still signing in told the steward its key "hasn\'t arrived"');
+  assert.match(run(false), /box\.example\.org isn’t answering/, 'CONTROL: once the sign-in and read have settled, the plainer message that names the relay stands');
+});
+
+async function careRun(S0) {
+  const S = { publishSigned: async (e) => ({ ...e, created_at: 1 }), ...S0 };
+  const scope = { S: () => S, uid: (p) => p + '1', crypto, TextEncoder,
+    _normNeed: (n) => ({ ...n, dates: [], displayLabel: n.displayLabel || '', notes: '', recipient: '', dietary: [] }),
+    NEED_D: 'trinityone/care:', NET: 'trinityone', now: () => 1 };
+  const body = `${stmt(MEALS, 'const SEALED_FIELDS = ')}\n${fnBody(MEALS, 'async function publishNeed(need) {', 'publishNeed in vendor/steward-meals.js')}\nreturn publishNeed;`;
+  const publishNeed = new Function(...Object.keys(scope), body)(...Object.values(scope));
+  try { return { saved: await publishNeed({ type: 'meals', displayLabel: 'x' }) }; } catch (e) { return { err: String(e.message) }; }
+}
+test('a care need opened while the console is still signing in WAITS for the care key and then saves, sealed', async () => {
+  let ready = false, waited = null;
+  const r = await careRun({
+    keysSettingUp: (k) => k === 'care' && !ready,
+    waitForKey: async (k, ms) => { waited = [k, ms]; ready = true; return true; },   // the key lands while we wait
+    careSeal: () => (ready ? 'SEALED' : null), careKeyChecked: () => ready,
+  });
+  assert.deepEqual(waited && waited[0], 'care', 'publishNeed did not wait for the care key');
+  assert.ok(waited[1] > 0 && waited[1] <= 20000, 'the wait is not bounded sensibly: ' + waited[1]);
+  assert.ok(r.saved && r.saved.id, 'the need was refused although the key arrived while it waited: ' + JSON.stringify(r));
+});
+test('a care need whose key never comes says the keys are being set up, not "still connecting"', async () => {
+  const r = await careRun({ keysSettingUp: () => true, waitForKey: async () => false, careSeal: () => null, careKeyChecked: () => false });
+  assert.equal(r.err, 'Setting up your church’s keys… try again in a moment.');
+});
+test('CONTROL: a console that has signed in and read and holds no care key is refused at once, without waiting', async () => {
+  let waited = false;
+  const r = await careRun({ keysSettingUp: () => false, waitForKey: async () => { waited = true; return false; }, careSeal: () => null, careKeyChecked: () => true });
+  assert.equal(waited, false, 'it waited for a key that is not coming');
+  assert.match(r.err, /care key hasn’t reached this device/);
+});
+
 // …AND ONLY WHEN THE KEY IS WHAT IS MISSING (audit of 5276297, LOW): a save can come back empty for other reasons, and
 // a relay's name appended to those sends the steward after the wrong thing.
 test('the schedule "not saved" names a relay ONLY when the name key really has not arrived', () => {
