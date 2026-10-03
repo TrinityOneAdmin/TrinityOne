@@ -62,13 +62,27 @@ function careCoverLabel(dayCount, openCount) {
   return { text: openCount + ' day' + (openCount === 1 ? '' : 's') + ' still open', done: false };
 }
 
+// WHICH DAYS OF A NEED ARE STILL OPEN — one answer, asked by the row ("all covered", "2 days still open") AND by
+// the card header that decides whether to say "Someone in the church could use a hand". Sim item 43
+// (2026-10-02): the header was drawn for any non-empty list of needs, so a church whose every need was fully
+// covered still read "could use a hand. Sign up for a day" over rows that all said "all covered". A day is open
+// when nobody has taken it and the care team has not skipped it. `covered` is the same test careCoverLabel
+// makes — days exist and none is open — so a need with NO days is NOT covered (nothing to sign up to, nothing
+// handled either). Keep this beside careCoverLabel: both are classic-script top-level names in this bundle.
+function careNeedDays(need, slots, skips) {
+  const dates = (Array.isArray(need.dates) && need.dates.length) ? [...need.dates].sort() : careDateRange(need.startDate, need.endDate);
+  const skipSet = new Set((skips || []).filter(k => k.needId === need.id).map(k => k.isoDate));
+  const taken = (iso) => (slots || []).some(s => s.needId === need.id && s.isoDate === iso);
+  const openDays = dates.filter(d => !skipSet.has(d) && !taken(d));
+  return { dates, openDays, covered: dates.length > 0 && openDays.length === 0 };
+}
+
 function CareNeedRow({ need, slots, skips, care, canManage, expanded, onToggle }) {
   const myPub = care.myPub || '';
-  const dates = (Array.isArray(need.dates) && need.dates.length) ? [...need.dates].sort() : careDateRange(need.startDate, need.endDate);
+  const { dates, openDays } = careNeedDays(need, slots, skips);
   const skipSet = new Set(skips.filter(k => k.needId === need.id).map(k => k.isoDate));
   const fillsFor = (iso) => slots.filter(s => s.needId === need.id && s.isoDate === iso);
   const isRecipient = !!need.recipient && need.recipient === myPub.toLowerCase();
-  const openDays = dates.filter(d => !skipSet.has(d) && fillsFor(d).length === 0);
   const cover = careCoverLabel(dates.length, openDays.length);
   const filledDays = dates.filter(d => fillsFor(d).length > 0).length;
   const accent = 'var(--sage)';
@@ -1185,9 +1199,12 @@ function CareCard({ ctx, embedded }) {
       </div>
     </div>
   ) : null;
+  // Needs with a day still to take. A fully covered one stays listed (its own row says "all covered") but must
+  // not make the header ask for help, nor count towards "If you can help".
+  const stillNeedHelp = live.filter(n => !careNeedDays(n, care.slots || [], care.skips || []).covered);
   const needsBlock = live.length ? (
     <div style={{ padding: 14, borderRadius: 18, background: 'color-mix(in oklab, var(--sage) 7%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 26%, var(--line))', boxShadow: 'var(--shadow)' }}>
-      <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 11 }}>Someone in the church could use a hand. Sign up for a day — a meal, a ride, an errand.</div>
+      <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 11 }}>{stillNeedHelp.length ? 'Someone in the church could use a hand. Sign up for a day — a meal, a ride, an errand.' : 'All covered — every day on these is taken. Thank you.'}</div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
         {live.map(n => <CareNeedRow key={n.id} need={n} slots={care.slots || []} skips={care.skips || []} care={care} canManage={onCareRoster} expanded={openId === n.id} onToggle={() => setOpenId(openId === n.id ? null : n.id)} />)}
       </div>
@@ -1220,7 +1237,7 @@ function CareCard({ ctx, embedded }) {
           <CareAvailability ctx={ctx} part="others" />
           {readyCount === 0 ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.5, padding: '0 2px 4px' }}>{_minorHere ? 'Nobody else has listed themselves as available yet — asking above reaches the people at your church who can help.' : 'Nobody else has listed themselves as available yet — asking your care team above reaches them directly.'}</div> : null}
         </CareSection>
-        <CareSection id="give" icon="hand" title="If you can help" sub="Tell your church you’re available, and sign up for what’s open" count={live.length}>
+        <CareSection id="give" icon="hand" title="If you can help" sub="Tell your church you’re available, and sign up for what’s open" count={stillNeedHelp.length}>
           <CareAvailability ctx={ctx} part="mine" />
           {mineBlock}
           {needsBlock}
