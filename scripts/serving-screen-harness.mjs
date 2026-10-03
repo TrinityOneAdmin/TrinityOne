@@ -20,7 +20,7 @@ export function loadServing() {
   window.TrinityData = {};
   const mod = loadApp({
     React: r.React, window,
-    expr: '({ ServingScreen, RespondSheet, SwapSheet, ManageSheet, UnavailSheet, svRespond, svMyTeams })',
+    expr: '({ ServingScreen, RespondSheet, SwapSheet, ManageSheet, UnavailSheet, svRespond, svMyTeams, svNextSundays, svClearAway })',
     vendor: ['engine.js'],
   });
   return { mod, r, window };

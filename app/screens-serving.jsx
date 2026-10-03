@@ -111,9 +111,38 @@ function svServiceRoster(ctx, serviceId) {
 async function svRespond(ctx, item, verdict, swapTo, okLabel, onSent) {
   const sent = await ctx.respondServing(item, verdict, swapTo);
   if (sent === false) return false;
-  if (okLabel) ctx.toast(okLabel);
+  let label = okLabel;
+  // "I'LL SERVE" AND "I'M AWAY" ARE ONE QUESTION ASKED TWICE. Saying yes to a Sunday the member has marked away
+  // used to leave BOTH standing, with no warning (sim 2026-10-02, item 47) — the rota would honour whichever
+  // the steward happened to read. Taking a Sunday on takes it off the away list. svClearAway never writes over
+  // an away list it could not read, and only an 'accept' reaches it.
+  if (verdict === 'accept') {
+    const away = await svClearAway(ctx, item && item.date);
+    if (away === 'cleared') label = (okLabel ? okLabel + ' — ' : '') + 'you’re no longer marked away that day';
+    else if (away === 'still') label = (okLabel ? okLabel + '. ' : '') + 'You’re still marked away that day — open “Set unavailable” to change it';
+  }
+  if (label) ctx.toast(label);
   if (onSent) onSent();
   return true;
+}
+// Take ONE date off this member's away list. Answers 'cleared' | 'still' (it is on the list and could not be
+// taken off) | 'none' (nothing to do) | 'unknown' (the church did not answer and the phone's copy has nothing).
+//
+// ⚠ IT READS THE CHURCH FIRST AND WRITES ONLY ON AN ANSWERED READ. The away document is addressable and every
+// save REPLACES the whole list, so writing from a list that could not be confirmed deletes the dates the church
+// actually holds — the exact failure UnavailSheet is built around (audit 2026-09-14). That guard is repeated
+// here rather than assumed: a read nobody answered is "unknown", never "you are not away".
+async function svClearAway(ctx, iso) {
+  if (!iso || !ctx.readUnavailableDates || !ctx.setUnavailableDates) return 'none';
+  let r = null;
+  try { r = await ctx.readUnavailableDates(); } catch (e) { r = null; }
+  if (!r || !r.complete) {
+    let mirror = [];
+    try { mirror = (ctx.getUnavailableDates && ctx.getUnavailableDates()) || []; } catch (e) { mirror = []; }
+    return mirror.includes(iso) ? 'still' : 'unknown';
+  }
+  if (!(r.dates || []).includes(iso)) return 'none';
+  try { await ctx.setUnavailableDates(r.dates.filter(d => d !== iso)); return 'cleared'; } catch (e) { return 'still'; }
 }
 
 // ── the CHURCH'S rota: every upcoming service and who is on it ────────────────────────────────────────────
@@ -374,7 +403,19 @@ function UnavailSheet({ open, onClose, ctx }) {
         setBusy(true); setErr('');
         try {
           await ctx.setUnavailableDates(sel);
-          ctx.toast(sel.length ? `Marked ${sel.length} ${sel.length === 1 ? 'Sunday' : 'Sundays'} away` : 'Cleared — you’re available again');
+          // WITHDRAW ANY "I'LL SERVE" FOR A SUNDAY JUST MARKED AWAY. Both used to stand at once with nothing to
+          // say so (sim 2026-10-02, item 47). Only an explicit yes is withdrawn (`_verdict === 'accept'`); a
+          // slot the member was merely placed on, with no answer from them, is the leader's to move. It goes
+          // through svRespond like every other answer, so a failed send is not thanked, and it runs AFTER the
+          // away list saved, so a refused save leaves nothing half-done.
+          const clash = (ctx.servConfirmed || []).filter(s => s && s._verdict === 'accept' && sel.includes(s.date));
+          let withdrawn = 0;
+          for (const s of clash) { try { if (await svRespond(ctx, s, 'decline', '')) withdrawn++; } catch (e) {} }   // a throw here must not be reported as "nothing was saved": the away list HAS saved
+          const base = sel.length ? `Marked ${sel.length} ${sel.length === 1 ? 'Sunday' : 'Sundays'} away` : 'Cleared — you’re available again';
+          const stuck = clash.length - withdrawn;
+          ctx.toast(base
+            + (withdrawn ? ` — and took you off ${withdrawn} ${withdrawn === 1 ? 'slot' : 'slots'} you’d said yes to` : '')
+            + (stuck ? `${withdrawn ? '. But' : ', but'} couldn’t take you off ${stuck === 1 ? 'a slot' : stuck + ' slots'} you’d said yes to — do it from your Serving page` : ''));
           onClose();
         } catch (e) {
           // ⚠ "NOTHING WAS SAVED" IS A CLAIM, AND FOR ONE OF THE THREE OUTCOMES IT IS FALSE.
