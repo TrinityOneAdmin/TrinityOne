@@ -15365,6 +15365,43 @@ zoo`.split("\n");
   var _careKeyRev = 0;
   var _careKeyChecked = false;
   var _careRoster = /* @__PURE__ */ new Set();
+  var _exStewardsKey = () => "trinityone.steward.exstewards." + (pub || "");
+  function _exStewardSet() {
+    try {
+      const a = JSON.parse(localStorage.getItem(_exStewardsKey()) || "[]");
+      return new Set(Array.isArray(a) ? a.filter((x) => typeof x === "string") : []);
+    } catch (e) {
+      return /* @__PURE__ */ new Set();
+    }
+  }
+  function _rememberExStewards(before, after) {
+    try {
+      const now_ = new Set(after || []);
+      const gone = [...before || []].filter((p) => p && !now_.has(p));
+      if (!gone.length) return;
+      const ex = _exStewardSet();
+      let grew = false;
+      for (const p of gone) if (!ex.has(p)) {
+        ex.add(p);
+        grew = true;
+      }
+      if (grew) localStorage.setItem(_exStewardsKey(), JSON.stringify([...ex].slice(-200)));
+    } catch (e) {
+    }
+  }
+  var _memberEmitters = /* @__PURE__ */ new Set();
+  function _pokeMemberLists() {
+    for (const f of [..._memberEmitters]) {
+      try {
+        f();
+      } catch (e) {
+      }
+    }
+  }
+  function _stewardRosterChanged(before, after) {
+    _rememberExStewards(before, after);
+    _pokeMemberLists();
+  }
   var _careRosterKnown = false;
   var _careRosterSeen = false;
   var MEDIAKEY_D = "trinityone/mediakey:";
@@ -20665,7 +20702,7 @@ zoo`.split("\n");
         if ((_skeys[g.id] || []).length) continue;
         const canary = await pool.querySync(relays(), [{ kinds: [30078], "#d": [GROUP_D + g.id], limit: 1 }]);
         if (!Array.isArray(canary) || !canary.length) continue;
-        const envelopes = await pool.querySync(relays(), [{ kinds: [30078], authors: [churchPub], "#d": [GROUPKEY_D + g.id], limit: 1 }]);
+        const envelopes = await pool.querySync(relays(), [{ kinds: [30078], authors: [.../* @__PURE__ */ new Set([cp, churchPub])], "#d": [GROUPKEY_D + g.id], limit: 1 }]);
         const sealed = await pool.querySync(relays(), [{ kinds: [1], "#t": [g.id], limit: 20 }]);
         if (!Array.isArray(envelopes) || !Array.isArray(sealed)) continue;
         if (envelopes.length) continue;
@@ -20673,7 +20710,8 @@ zoo`.split("\n");
           out.push({ id: g.id, name: g.name || "", state: "needs-decision" });
           continue;
         }
-        const r = await this.publishGroupKey(g.id, memberPubs || [], { background: true });
+        const recips = g.visibility === "invite" ? g.members || [] : memberPubs || [];
+        const r = await this.publishGroupKey(g.id, recips, { background: true });
         out.push({ id: g.id, name: g.name || "", state: r === null || r === false ? "failed" : "issued" });
       }
       return out;
@@ -20876,6 +20914,7 @@ zoo`.split("\n");
       const opts = arguments[1];
       _requireTrustedView("blocked list");
       if (!sk) return Promise.resolve(null);
+      if (actingChurch) return Promise.resolve(false);
       const off = new Set((opts && opts.unblock || []).map((p) => String(p).toLowerCase()));
       const given = (pubkeys || []).filter(Boolean);
       const named = new Set(given.map((p) => String(p).toLowerCase()));
@@ -21975,9 +22014,11 @@ zoo`.split("\n");
               _stewardSince = {};
             }
           }
+          const _rosterBefore = _careRoster;
           _careRoster = new Set(cur.filter(Boolean));
           _careRosterKnown = true;
           _careRosterSeen = true;
+          _stewardRosterChanged(_rosterBefore, cur);
           onList(cur);
         },
         oneose() {
@@ -22201,7 +22242,7 @@ zoo`.split("\n");
         if (legacy && nextRing.indexOf(legacy) < 0) nextRing = [...nextRing, legacy];
       }
       const allowed = _capAllows(spec, caps);
-      const want = [...new Set([cp, ...(stewardPubs || []).filter(allowed)].filter(Boolean))];
+      const want = [...new Set([cp, ...(stewardPubs || []).filter(allowed)].filter(Boolean))].filter((p2) => p2 === cp || !_localBlocked.has(String(p2).toLowerCase()));
       const have = st.docKeys || {};
       if (want.every((p2) => have[p2]) && Object.keys(have).length === want.length) return false;
       if (st.docKeys) {
@@ -22237,7 +22278,7 @@ zoo`.split("\n");
       const nextRing = [fresh, ...st.ring].slice(0, 50);
       const nextRev = (st.rev || 1) + 1;
       const allowed = _capAllows(spec, caps);
-      const want = [...new Set([cp, ...(stewardPubs || []).filter(allowed)].filter(Boolean))];
+      const want = [...new Set([cp, ...(stewardPubs || []).filter(allowed)].filter(Boolean))].filter((p2) => p2 === cp || !_localBlocked.has(String(p2).toLowerCase()));
       const keys = await _sealEach(JSON.stringify(nextRing), want, (pl, mp) => encrypt2(pl, getConversationKey(sk, mp)));
       _warnUnsealed(spec.cap, _sealEachFailed);
       if (_capState[kind] !== st || pub !== cp) return false;
@@ -24007,6 +24048,7 @@ zoo`.split("\n");
       const CACHE_KEY = "trinityone.steward.members." + (pub || "");
       const byPub = /* @__PURE__ */ new Map();
       const baseCount = /* @__PURE__ */ new Map(), liveCount = /* @__PURE__ */ new Map(), liveIds = /* @__PURE__ */ new Set();
+      const isGhost = (m, ex = _exStewardSet()) => !m.joined && (_careRoster.has(m.pubkey) || ex.has(m.pubkey));
       try {
         const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || "[]");
         if (Array.isArray(cached)) {
@@ -24018,7 +24060,8 @@ zoo`.split("\n");
               byPub.set(m.pubkey, m);
             }
           });
-          if (cached.length) onMembers(cached);
+          const shown = cached.filter((m) => m && m.pubkey && !isGhost(m));
+          if (shown.length) onMembers(shown);
         }
       } catch {
       }
@@ -24035,7 +24078,8 @@ zoo`.split("\n");
             return "";
           }
         };
-        const arr = [...byPub.values()].filter((m) => !reseatOld.has(m.pubkey)).map((m) => {
+        const ex = _exStewardSet();
+        const arr = [...byPub.values()].filter((m) => !reseatOld.has(m.pubkey)).filter((m) => !isGhost(m, ex)).map((m) => {
           if (m.name) return m;
           const sn = sealedName(m.pubkey);
           return sn ? { ...m, name: sn, viaSealed: true } : m;
@@ -24053,6 +24097,7 @@ zoo`.split("\n");
           emitNow();
         }, 150);
       };
+      _memberEmitters.add(emit);
       const get = (pk) => byPub.get(pk) || { pubkey: pk, npub: npubEncode(pk), name: "", picture: "", count: 0, lastTs: 0, firstTs: Infinity, joined: 0 };
       const profWanted = /* @__PURE__ */ new Set();
       let profSub = null, profTimer = null;
@@ -24176,6 +24221,7 @@ zoo`.split("\n");
         }
       });
       return () => {
+        _memberEmitters.delete(emit);
         try {
           sub.close();
         } catch {
