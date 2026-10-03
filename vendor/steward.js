@@ -24779,6 +24779,15 @@ zoo`.split("\n");
     // longer goes to must not simply VANISH from the panel: silently changing where a church's data goes is
     // how the divergence in ROADMAP-NOTES §6 became invisible. Reachable and not-in-our-network are two
     // different facts and the card shows both.
+    //
+    // A RELAY THIS CONSOLE IS ALREADY TALKING TO IS NOT "DOWN". Sim 2026-10-02 #63: "Your relay: Down" all
+    // afternoon while publishing worked. The probe below dials a THROWAWAY socket every 30 seconds and calls the
+    // relay off if that one fails to open in 2.5s - and a relay that rate-limits new connections, or a slow link,
+    // refuses the throwaway while the pool's own long-lived socket, the one every publish and subscription rides,
+    // is open and healthy. So when the probe says "off" but the pool reports that very relay connected, the answer
+    // is "on" (`viaPool`, no latency - nothing was timed). A probe that succeeds is reported exactly as before.
+    // CALLERS (rule 2): app/steward-root.jsx useStewardRelays (-> DashOverview's "Your relay" card, which reads
+    // `status === 'on'`) and nothing else; Relays-panel rows read the same array and gain only the `viaPool` flag.
     relayStatus() {
       return Promise.all(relaysRaw().map((url) => new Promise((res) => {
         let done = false;
@@ -24790,6 +24799,14 @@ zoo`.split("\n");
             return false;
           }
         })();
+        const poolUp = () => {
+          try {
+            const st = pool.listConnectionStatus();
+            return st.get(url) === true || st.get(_relayKey2(url)) === true;
+          } catch (e) {
+            return false;
+          }
+        };
         const finish = (status) => {
           if (done) return;
           done = true;
@@ -24797,13 +24814,14 @@ zoo`.split("\n");
             ws.close();
           } catch {
           }
+          if (status !== "on" && poolUp()) return res({ url, status: "on", ms: null, member, viaPool: true });
           res({ url, status, ms: status === "on" ? Date.now() - t0 : null, member });
         };
         let ws;
         try {
           ws = new WebSocket(url);
         } catch {
-          return res({ url, status: "off", ms: null, member });
+          return finish("off");
         }
         const to = setTimeout(() => finish("off"), 2500);
         ws.onopen = () => {
