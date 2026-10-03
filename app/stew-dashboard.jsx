@@ -6470,7 +6470,9 @@ function DashMembers() {
             const S = window.Steward;
             const nm = ((S.stewardLabels && S.stewardLabels()) || {})[pk] || (S.stewardName ? S.stewardName(pk) : '') || 'Steward';
             const cp = ((S.stewardCaps && S.stewardCaps()) || {})[pk];
-            const what = !Array.isArray(cp) ? 'everything' : (cp.length ? cp.join(', ') : 'nothing yet');
+            // THE SAME WORDS THE DELEGATED-STEWARDS PANEL USES: this line printed the stored capability keys
+            // raw ("content, sealedrooms"). Sim 2026-10-02 #55.
+            const what = !Array.isArray(cp) ? 'everything' : (cp.length ? cp.map(c => STEW_CAP_LABEL[c] || c).join(', ') : 'nothing yet');
             return (
               <div key={pk} style={{ display: 'flex', alignItems: 'baseline', gap: 8, fontSize: 13, color: 'var(--ink-2)', padding: '2px 0' }}>
                 <span style={{ fontWeight: 700, color: 'var(--ink)' }}>{nm}</span>
