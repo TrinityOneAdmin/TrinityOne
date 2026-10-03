@@ -1441,6 +1441,11 @@ function ServingScreen({ open, onClose, ctx, docked }) {
                   <button onClick={() => svRespond(ctx, req, 'accept', '', `You’re serving ${svParts(req.date).dow} ${svParts(req.date).day}`)} style={{ ...svPrimary(), flex: 1, padding: 14, fontSize: 15 }}><Icon name="check" size={19} stroke={2.4} color="#fff" /> Yes, I can serve</button>
                   <button onClick={() => setSheet({ kind: 'respond', item: req })} style={{ flexShrink: 0, padding: '0 16px', borderRadius: 15, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', fontWeight: 700, fontSize: 14.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Can’t make it</button>
                 </div>
+                {/* SWAP IS ONE TAP FROM THE REQUEST, NOT BEHIND "CAN'T MAKE IT". It used to be reachable only by
+                    pressing "Can't make it" and then "Suggest someone" inside the sheet that opens — so a member
+                    who could not come but WANTED to find cover first had to open a decline dialog to do it (sim
+                    2026-10-02, item 46). Opens the same SwapSheet; nothing is recorded until they pick someone. */}
+                <button onClick={() => setSheet({ kind: 'swap', item: req })} style={{ width: '100%', marginTop: 9, padding: '10px 12px', borderRadius: 13, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7 }}><Icon name="swap" size={16} color="var(--ink-2)" /> Ask a teammate to swap</button>
               </div>
             ))}
 
@@ -1586,10 +1591,16 @@ function ServingScreen({ open, onClose, ctx, docked }) {
                         {/* ONE STATE SHOWN AT A TIME. A declined row used to carry a "Can't make it" badge AND an
                             "I can serve" button, which reads as two answers given at once (sim 2026-10-02, item
                             44). A decline now shows its state and an UNDO; the undo still records "I'll serve",
-                            since that is what taking it back means. A swap ask keeps its "I'll serve", which
-                            is an answer to "will you still serve?" rather than an undo of a refusal. */}
+                            since that is what taking it back means.
+                            A SWAP ASK has two ways out and neither needs the other first: "I'll serve" (keep the
+                            slot) and "Can't make it" (give it up). Until now the row offered only the first, so
+                            declining after asking for a swap meant pressing "I'll serve" — recording a yes —
+                            and then declining (item 46). */}
                         {isSwap ? (
-                          <button onClick={() => svRespond(ctx, it, 'accept', '', 'Great — you’re back on')} style={{ flexShrink: 0, padding: '9px 13px', borderRadius: 12, border: '1px solid var(--clay)', background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', gap: 6 }}><Icon name="check" size={15} color="var(--clay)" /> I’ll serve</button>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flexShrink: 0 }}>
+                            <button onClick={() => svRespond(ctx, it, 'accept', '', 'Great — you’re back on')} style={{ padding: '9px 13px', borderRadius: 12, border: '1px solid var(--clay)', background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}><Icon name="check" size={15} color="var(--clay)" /> I’ll serve</button>
+                            <button onClick={() => svRespond(ctx, it, 'decline', '', 'Declined — your leader has been told')} style={{ padding: '9px 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Can’t make it</button>
+                          </div>
                         ) : (
                           <button onClick={() => svRespond(ctx, it, 'accept', '', 'Undone — you’re back on')} aria-label="Undo: tell your leader you can serve after all" title="Undo — you can serve after all" style={{ flexShrink: 0, padding: '9px 13px', borderRadius: 12, border: '1px solid var(--clay)', background: 'color-mix(in oklab, var(--clay) 8%, var(--surface))', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'flex', alignItems: 'center', gap: 6 }}><Icon name="history" size={15} color="var(--clay)" /> Undo</button>
                         )}
