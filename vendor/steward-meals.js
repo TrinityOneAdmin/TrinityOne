@@ -42,6 +42,14 @@
     return !!win && win._by === by;
   }
 
+  // scripts/care-thread-attention.mjs
+  function careThreadAttention({ status, statusTs, askerAt, teamAt }) {
+    const st = String(status || "open");
+    if (st === "open") return { needs: true, returned: false };
+    const returned = Number(askerAt) > Number(statusTs || 0) && Number(askerAt) > Number(teamAt || 0);
+    return { needs: returned, returned };
+  }
+
   // src/steward-meals.src.js
   (function() {
     const S = () => window.Steward;
@@ -366,18 +374,46 @@
       }
       const cp = S().churchPub;
       const byId = /* @__PURE__ */ new Map(), statusById = /* @__PURE__ */ new Map(), tomb = /* @__PURE__ */ new Map();
+      const chat = /* @__PURE__ */ new Map();
       const emit = () => {
         try {
           cb([...byId.values()].map((r) => {
             const s = statusById.get(r.id) || {};
-            return { ...r, status: s.status || "open", needId: s.needId || "" };
+            const status = s.status || "open";
+            let askerAt = 0, teamAt = 0;
+            for (const m of (chat.get(r.id) || /* @__PURE__ */ new Map()).values()) {
+              if (m.from === r.from) askerAt = Math.max(askerAt, m.at);
+              else teamAt = Math.max(teamAt, m.at);
+            }
+            const att = careThreadAttention({ status, statusTs: s._ts || 0, askerAt, teamAt });
+            return { ...r, status, needId: s.needId || "", newMessage: att.returned };
           }).sort((a, b) => (b.at || 0) - (a.at || 0)));
         } catch (e) {
         }
       };
-      const sub = S().subscribeMany([{ kinds: [30078], "#t": ["carereq", "carereqstatus"], "#church": [cp] }], {
+      const sub = S().subscribeMany([{ kinds: [30078], "#t": ["carereq", "carereqstatus"], "#church": [cp] }, { kinds: [30078], "#t": ["carechat"], "#church": [cp] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+          if (d.startsWith(CARECHAT_D)) {
+            const rest = d.slice(CARECHAT_D.length), at = rest.lastIndexOf(":");
+            if (at < 1) return;
+            const rid = rest.slice(0, at), mid = rest.slice(at + 1);
+            let b = null;
+            try {
+              b = S().openSealedFromPeer(JSON.parse(e.content), e.pubkey);
+            } catch (x) {
+            }
+            if (!b || !b.text) return;
+            let m = chat.get(rid);
+            if (!m) {
+              m = /* @__PURE__ */ new Map();
+              chat.set(rid, m);
+            }
+            if (m.has(mid)) return;
+            m.set(mid, { from: e.pubkey, at: e.created_at || 0 });
+            emit();
+            return;
+          }
           if (d.startsWith(CARESTATUS_D)) {
             const id2 = d.slice(CARESTATUS_D.length);
             const p2 = statusById.get(id2);

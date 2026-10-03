@@ -6232,6 +6232,14 @@
     return { kind: "symbol", color: av.color, symbol: av.symbol || (symbolFor ? symbolFor(pubkey) : void 0) };
   }
 
+  // scripts/care-thread-attention.mjs
+  function careThreadAttention({ status, statusTs, askerAt, teamAt }) {
+    const st = String(status || "open");
+    if (st === "open") return { needs: true, returned: false };
+    const returned = Number(askerAt) > Number(statusTs || 0) && Number(askerAt) > Number(teamAt || 0);
+    return { needs: returned, returned };
+  }
+
   // scripts/checkin-role-source.mjs
   var HELPER_LIFETIMES = Object.freeze({
     // THE DEFAULT, and the tightest. A church that never opens the setting gets the safest behaviour rather than
@@ -13470,18 +13478,46 @@
       const byId = /* @__PURE__ */ new Map();
       const statusById = /* @__PURE__ */ new Map();
       const tomb = /* @__PURE__ */ new Map();
+      const chat = /* @__PURE__ */ new Map();
       const emit = () => {
         try {
           cb([...byId.values()].map((r) => {
             const s = statusById.get(r.id) || {};
-            return { ...r, status: s.status || "open", needId: s.needId || "" };
+            const status = s.status || "open";
+            let askerAt = 0, teamAt = 0;
+            for (const m of (chat.get(r.id) || /* @__PURE__ */ new Map()).values()) {
+              if (m.from === r.from) askerAt = Math.max(askerAt, m.at);
+              else teamAt = Math.max(teamAt, m.at);
+            }
+            const att = careThreadAttention({ status, statusTs: s._ts || 0, askerAt, teamAt });
+            return { ...r, status, needId: s.needId || "", newMessage: att.returned };
           }).sort((a, b) => (b.at || 0) - (a.at || 0)));
         } catch (e) {
         }
       };
-      const sub = pool.subscribeMany(churchRelays(), [{ kinds: [30078], "#t": ["carereq", "carereqstatus"], "#church": [cp] }], {
+      const sub = pool.subscribeMany(churchRelays(), [{ kinds: [30078], "#t": ["carereq", "carereqstatus"], "#church": [cp] }, { kinds: [30078], "#t": ["carechat"], "#church": [cp] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+          if (d.startsWith(CARECHAT_D)) {
+            const rest = d.slice(CARECHAT_D.length), at = rest.lastIndexOf(":");
+            if (at < 1) return;
+            const rid = rest.slice(0, at), mid = rest.slice(at + 1);
+            let b = null;
+            try {
+              b = _openSealed(JSON.parse(e.content), e.pubkey);
+            } catch (x) {
+            }
+            if (!b || !b.text) return;
+            let m = chat.get(rid);
+            if (!m) {
+              m = /* @__PURE__ */ new Map();
+              chat.set(rid, m);
+            }
+            if (m.has(mid)) return;
+            m.set(mid, { from: e.pubkey, at: e.created_at || 0 });
+            if (byId.has(rid)) emit();
+            return;
+          }
           if (d.startsWith(CAREREQSTATUS_D)) {
             const id2 = d.slice(CAREREQSTATUS_D.length);
             const prev2 = statusById.get(id2);

@@ -556,8 +556,12 @@ function StewCareRequests() {
   // carereqstatus that closed it, and a reload was the only cure. A steward reading that screen sets the
   // same help up twice. The Overview banner beside this already carries _ovConn for exactly this reason
   // (app/stew-dashboard.jsx:2112); this is the same fix, and useStewardConn is the same source of truth.
+  // A REQUEST STAYS ON THIS LIST WHILE ITS THREAD HAS A MESSAGE NOBODY HAS ANSWERED (sim item 24). It used to
+  // leave the moment "Set up help" or Close wrote its status, and took its only Message button with it — so a
+  // member who went on writing after that was heard by nobody. `newMessage` is decided by the engine
+  // (careThreadAttention): set up or closed, the ASKER has written since, and no team reply follows.
   const _careConn = window.useStewardConn ? window.useStewardConn() : 0;
-  React.useEffect(() => { let u = null; try { u = window.StewardMeals.subscribeCareRequests(list => setReqs((list || []).filter(r => r.status === 'open'))); } catch (e) {} return () => { try { u && u(); } catch (e) {} }; }, [church.npub, _careConn]);
+  React.useEffect(() => { let u = null; try { u = window.StewardMeals.subscribeCareRequests(list => setReqs((list || []).filter(r => r.status === 'open' || r.newMessage))); } catch (e) {} return () => { try { u && u(); } catch (e) {} }; }, [church.npub, _careConn]);
   // A YOUNG PERSON'S REQUEST IS NOT ORDINARY CARE, AND MUST NOT SIT IN THE SAME LIST.
   // Owner, 2026-08-26: children's care must be "separate to other standard care requests".
   //
@@ -587,24 +591,37 @@ function StewCareRequests() {
   const _minorsKnown = _sg.minorsKnown === true;
   const isChild = (r) => !_minorsKnown || _minors.has(String(r && r.from || '').toLowerCase());
   const childReqs = reqs.filter(isChild), adultReqs = reqs.filter(r => !isChild(r));
-  if (!reqs.length) return null;
+  // THE CHAT MODAL OUTLIVES THE LIST. A reply makes the request's newest message the team's, which takes a returned
+  // row OFF the list — and with it, when it was the last row, this whole component, and so the conversation the
+  // steward was in the middle of typing. Hold the component open while a conversation is.
+  if (!reqs.length && !chatting) return null;
   const renderRow = (r, child) => (
         <div key={r.id} style={{ padding: 14, borderRadius: 14, background: 'var(--surface)', border: '1.5px solid color-mix(in oklab, var(--clay) 32%, var(--line))', marginBottom: 9 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
             <div style={{ width: 34, height: 34, borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay-ink)' }}><Icon name={MEALS_TYPE_ICON[r.type] || 'heart'} size={18} /></div>
-            <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14.5 }}>{mealsTypeLabel(r)}{r.forSelf === false && r.forName ? ' · for ' + r.forName : (nameOf(r.from) ? ' · for ' + nameOf(r.from) : '')}</div><div style={{ fontSize: 12, color: 'var(--ink-3)' }}>Asked for help</div></div>
+            <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14.5 }}>{mealsTypeLabel(r)}{r.forSelf === false && r.forName ? ' · for ' + r.forName : (nameOf(r.from) ? ' · for ' + nameOf(r.from) : '')}</div><div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{r.status === 'open' ? 'Asked for help' : (r.status === 'approved' ? 'Wrote again — help is already set up' : 'Wrote again — you had closed this request')}</div></div>
           </div>
           {closeErr && closing === null ? <div role="alert" style={{ fontSize: 12.5, color: 'var(--clay-ink)', marginBottom: 6 }}>{closeErr}</div> : null}
           {r.sealed ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', fontStyle: 'italic' }}>Details hidden — this device can’t open the seal.</div> : r.note ? <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>{r.note}</div> : null}
           <div style={{ display: 'flex', gap: 8, marginTop: 11, flexWrap: 'wrap' }}>
-            {!r.sealed && !child ? <button onClick={() => setApproving(r)} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="check" size={14} color="var(--on-clay)" /> Set up help</button> : null}
+            {!r.sealed && !child && r.status !== 'approved' ? <button onClick={() => setApproving(r)} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="check" size={14} color="var(--on-clay)" /> Set up help</button> : null}
             <button onClick={() => setChatting({ reqId: r.id, requesterPub: r.from, title: mealsTypeLabel(r) })} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="chat" size={14} color="currentColor" /> Message</button>
             {/* CLOSING SOMEBODY'S REQUEST FOR HELP IS NOT AN UNDO-ABLE TAP. Audit 2026-09-02 #17.
                 One press ended a member's request outright, with no confirmation and no check that it
                 landed. On a CHILD's row the wording avoids "care team" deliberately — a young person's
                 request is not seen by the rota (DOMAIN.md), and copy that implies otherwise is the error
                 this section exists to prevent. */}
-            {closing === r.id
+            {r.status !== 'open'
+              /* A RETURNED THREAD HAS NO "CLOSE — NOT NEEDED": that would tell the asker "closed" over help that is
+                 already set up. "Seen" re-writes the SAME status with a fresh stamp, which is what takes the row
+                 off the list until they write again. Replying does the same, by itself. */
+              ? <button onClick={() => {
+                  setCloseErr('');
+                  Promise.resolve(window.StewardMeals.setCareRequestStatus(r.id, r.from, { status: r.status, needId: r.needId }))
+                    .then((ok) => { if (!ok) setCloseErr('Couldn’t mark that as seen — the relay didn’t accept it, so it will stay here.'); })
+                    .catch(() => setCloseErr('Couldn’t mark that as seen — the relay could not be reached.'));
+                }} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }}>Seen — no reply needed</button>
+              : closing === r.id
               ? <React.Fragment>
                   <button onClick={() => {
                     setClosing(null);

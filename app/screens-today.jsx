@@ -62,16 +62,27 @@ function careCoverLabel(dayCount, openCount) {
   return { text: openCount + ' day' + (openCount === 1 ? '' : 's') + ' still open', done: false };
 }
 
-// `canVolunteer === false` takes the "I'll help" control off an OPEN day (sim A2 #8: a child is never offered a
-// sign-up). Anything else - including no prop at all, which is every other caller - keeps it. A day the reader
-// ALREADY holds still shows "You're helping" and its cancel, because standing down must always be possible.
+// WHICH DAYS OF A NEED ARE STILL OPEN — one answer, asked by the row ("all covered", "2 days still open") AND by
+// the card header that decides whether to say "Someone in the church could use a hand". Sim item 43
+// (2026-10-02): the header was drawn for any non-empty list of needs, so a church whose every need was fully
+// covered still read "could use a hand. Sign up for a day" over rows that all said "all covered". A day is open
+// when nobody has taken it and the care team has not skipped it. `covered` is the same test careCoverLabel
+// makes — days exist and none is open — so a need with NO days is NOT covered (nothing to sign up to, nothing
+// handled either). Keep this beside careCoverLabel: both are classic-script top-level names in this bundle.
+function careNeedDays(need, slots, skips) {
+  const dates = (Array.isArray(need.dates) && need.dates.length) ? [...need.dates].sort() : careDateRange(need.startDate, need.endDate);
+  const skipSet = new Set((skips || []).filter(k => k.needId === need.id).map(k => k.isoDate));
+  const taken = (iso) => (slots || []).some(s => s.needId === need.id && s.isoDate === iso);
+  const openDays = dates.filter(d => !skipSet.has(d) && !taken(d));
+  return { dates, openDays, covered: dates.length > 0 && openDays.length === 0 };
+}
+
 function CareNeedRow({ need, slots, skips, care, canManage, expanded, onToggle, canVolunteer }) {
   const myPub = care.myPub || '';
-  const dates = (Array.isArray(need.dates) && need.dates.length) ? [...need.dates].sort() : careDateRange(need.startDate, need.endDate);
+  const { dates, openDays } = careNeedDays(need, slots, skips);
   const skipSet = new Set(skips.filter(k => k.needId === need.id).map(k => k.isoDate));
   const fillsFor = (iso) => slots.filter(s => s.needId === need.id && s.isoDate === iso);
   const isRecipient = !!need.recipient && need.recipient === myPub.toLowerCase();
-  const openDays = dates.filter(d => !skipSet.has(d) && fillsFor(d).length === 0);
   const cover = careCoverLabel(dates.length, openDays.length);
   const filledDays = dates.filter(d => fillsFor(d).length > 0).length;
   const accent = 'var(--sage)';
@@ -334,7 +345,12 @@ function MyRequestRow({ r, onCancel, onMessage, isMinor }) {
 
 // ── Care-team Requests (care-admins only): incoming ask-for-help requests to triage → Approve into a need,
 // Message the person, or Decline. Visible only to a member on the care-team roster.
-function CareRequestCard({ r, ctx, child, onApprove, onDecline, canMessage, onMessage }) {
+function CareRequestCard({ r, ctx, child, onApprove, onDecline, onSeen, canMessage, onMessage }) {
+  // A RETURNED THREAD: set up or closed, and the person has written since (sim item 24). It is on this list only
+  // so there is a door to what they said, so it gets no "Close" — that would tell them "closed" over help that
+  // is already set up. "Seen" re-writes the SAME status and need with a fresh stamp, which takes the row off until
+  // they write again; replying does the same by itself.
+  const returned = (r.status || 'open') !== 'open';
   const [busy, setBusy] = React.useState('');
   // Closing somebody's request for help is the one action here that cannot be seen to have worked: the card
   // stays until the relay echoes the change back. Silence therefore reads as success. The console's copy of
@@ -349,7 +365,7 @@ function CareRequestCard({ r, ctx, child, onApprove, onDecline, canMessage, onMe
         <div style={{ width: 36, height: 36, borderRadius: 11, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)' }}><Icon name={CARE_TYPE_ICON[r.type] || 'heart'} size={19} /></div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, color: 'var(--ink)' }}>{careTypeLabel(r)} · for {who}</div>
-          <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{[when, urg].filter(Boolean).join(' · ') || 'Asked for help'}</div>
+          <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{returned ? (r.status === 'approved' ? 'Wrote again — help is already set up' : 'Wrote again — you had closed this request') : ([when, urg].filter(Boolean).join(' · ') || 'Asked for help')}</div>
         </div>
       </div>
       {r.sealed ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', fontStyle: 'italic' }}>Details hidden — this device isn’t on the care team’s key list.</div>
@@ -360,11 +376,11 @@ function CareRequestCard({ r, ctx, child, onApprove, onDecline, canMessage, onMe
             notice-board item, so the control is absent rather than disabled: a greyed button invites a tap and
             reads as a fault. `child` is passed from the caller, and `onApprove` is null there as well, so a
             future edit that forgets one of the two still does not publish a child's words. */}
-        {!r.sealed && !child ? <button onClick={onApprove} className="care-btn" style={{ flex: 1, minWidth: 120, padding: '10px', borderRadius: 12, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 800, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}><Icon name="check" size={15} color="var(--on-clay)" stroke={2.6} /> Set up help</button> : null}
+        {!r.sealed && !child && r.status !== 'approved' ? <button onClick={onApprove} className="care-btn" style={{ flex: 1, minWidth: 120, padding: '10px', borderRadius: 12, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 800, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}><Icon name="check" size={15} color="var(--on-clay)" stroke={2.6} /> Set up help</button> : null}
         {canMessage ? <button onClick={onMessage} style={{ padding: '10px 14px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'inline-flex', alignItems: 'center', gap: 6 }}><Icon name="chat" size={14} color="currentColor" /> Message</button> : null}
-        <button onClick={async () => { setBusy('d'); setFailed(false); let ok = null; try { ok = await onDecline(); } catch (e) {} setFailed(!ok); setBusy(''); }} disabled={busy === 'd'} style={{ padding: '10px 14px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-3)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>{busy === 'd' ? '…' : 'Close — not needed'}</button>
+        <button onClick={async () => { setBusy('d'); setFailed(false); let ok = null; try { ok = await (returned ? onSeen() : onDecline()); } catch (e) {} setFailed(!ok); setBusy(''); }} disabled={busy === 'd'} style={{ padding: '10px 14px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-3)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>{busy === 'd' ? '…' : (returned ? 'Seen — no reply needed' : 'Close — not needed')}</button>
       </div>
-      {failed ? <div role="alert" style={{ fontSize: 12.5, color: 'var(--clay-deep, #b4462f)', marginTop: 9, lineHeight: 1.45 }}>That didn’t reach the church — this request is still open, and the person who asked has not been told anything.</div> : null}
+      {failed ? <div role="alert" style={{ fontSize: 12.5, color: 'var(--clay-deep, #b4462f)', marginTop: 9, lineHeight: 1.45 }}>{returned ? 'That didn’t reach the church — it will stay on your list until it does.' : 'That didn’t reach the church — this request is still open, and the person who asked has not been told anything.'}</div> : null}
     </div>
   );
 }
@@ -528,14 +544,28 @@ function CareRequests({ ctx }) {
     // wrote hid it from the only screen where it can be approved into a need. In a church with a single admin
     // nobody could action it at all. Audit, 2026-08-28. `forSelf` is false only when they picked "Someone
     // else" on the form, and they can always open their own request, so the flag is readable here.
-    try { unsub = window.Fellowship.subscribeCareRequests(list => setReqs((list || []).filter(r => r.status === 'open' && !(String(r.from || '').toLowerCase() === myPub && r.forSelf !== false))), ctx.church && ctx.church.npub); } catch (e) {}
+    // A REQUEST STAYS ON THIS LIST WHILE ITS THREAD HAS A MESSAGE NOBODY HAS ANSWERED (sim item 24 — the console's half is
+    // 2249380). It used to leave the moment "Set up help" or Close wrote its status, and took its only Message button
+    // with it, so a person who went on writing after that was heard by nobody. `newMessage` is decided by the engine
+    // (careThreadAttention): set up or closed, the ASKER has written since, and no team reply follows.
+    // …but never one I wrote myself: I am not waiting on my own message. A care admin who filed a request for somebody
+    // housebound IS its author, so her own follow-ups would otherwise put it back on her own list for ever. Another
+    // member of the team still sees it return, because for them the author is somebody else.
+    try { unsub = window.Fellowship.subscribeCareRequests(list => setReqs((list || []).filter(r => {
+      const mine = String(r.from || '').toLowerCase() === myPub;
+      return r.status === 'open' ? !(mine && r.forSelf !== false) : !!(r.newMessage && !mine);
+    })), ctx.church && ctx.church.npub); } catch (e) {}
     return () => { try { unsub && unsub(); } catch (e) {} };
     // …and on ctx.connTick. Without it a socket that dropped and returned left this list frozen: the console's
     // twin showed a care request as still needing "Set up help" while the need made from it already existed
     // (measured 2026-09-04), and a care admin reading that sets the same help up twice. screens-chat.jsx
     // carries the same dep for the same reason.
   }, [isCareAdmin, isCleared, myPub, ctx.church && ctx.church.npub, ctx.connTick]);
-  if (!(isCareAdmin || isCleared) || !reqs.length) return null;
+  // THE CHAT SHEET OUTLIVES THE LIST. A reply makes the request's newest message the team's, which takes a RETURNED
+  // row off the list — and with it, when it was the last row, this whole component, and so the conversation the
+  // care admin was in the middle of typing (the console's StewCareRequests had the same hole and was fixed first).
+  // Hold the component open while a conversation is.
+  if (!(isCareAdmin || isCleared) || (!reqs.length && !chatting)) return null;
   // WHICH OF THESE CAME FROM A YOUNG PERSON. A care admin is served the church's list of children and can
   // simply look. A cleared adult who is NOT a care admin is not served that list — and does not need it: the
   // relay serves them a child's request and nothing else, so everything they are holding is one. Reading the
@@ -574,7 +604,7 @@ function CareRequests({ ctx }) {
     return _minorsKnown ? _kids.has(String(r.from || '').toLowerCase()) : true;
   };
   const childReqs = reqs.filter(fromChild), adultReqs = reqs.filter(r => !fromChild(r));
-  const row = (r, child) => <CareRequestCard key={r.id} r={r} ctx={ctx} child={child} onApprove={child ? null : () => setApproving(r)} onDecline={() => window.Fellowship.declineCareRequest(r)} canMessage={!!(!ctx.canDMPeer || ctx.canDMPeer(r.from))} onMessage={() => setChatting({ reqId: r.id, requesterPub: r.from, title: 'Help · ' + (r.forSelf ? (careName(r.from, '') || 'a member') : (r.forName || 'someone')) })} />;
+  const row = (r, child) => <CareRequestCard key={r.id} r={r} ctx={ctx} child={child} onApprove={child ? null : () => setApproving(r)} onDecline={() => window.Fellowship.declineCareRequest(r)} onSeen={() => window.Fellowship.setCareRequestStatus(r.id, r.from, { status: r.status, needId: r.needId })} canMessage={!!(!ctx.canDMPeer || ctx.canDMPeer(r.from))} onMessage={() => setChatting({ reqId: r.id, requesterPub: r.from, title: 'Help · ' + (r.forSelf ? (careName(r.from, '') || 'a member') : (r.forName || 'someone')) })} />;
   return (
     <div style={{ marginBottom: 18 }}>
       {childReqs.length ? (
@@ -1206,9 +1236,12 @@ function CareCard({ ctx, embedded }) {
       </div>
     </div>
   ) : null;
-  const needsBlock = liveShown.length ? (
+  // Needs with a day still to take. A fully covered one stays listed (its own row says "all covered") but must
+  // not make the header ask for help, nor count towards "If you can help".
+  const stillNeedHelp = live.filter(n => !careNeedDays(n, care.slots || [], care.skips || []).covered);
+  const needsBlock = live.length ? (
     <div style={{ padding: 14, borderRadius: 18, background: 'color-mix(in oklab, var(--sage) 7%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 26%, var(--line))', boxShadow: 'var(--shadow)' }}>
-      <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 11 }}>{canVolunteer ? 'Someone in the church could use a hand. Sign up for a day — a meal, a ride, an errand.' : 'You’re signed up to help with this. You can cancel a day if you need to.'}</div>
+      <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 11 }}>{!canVolunteer ? 'You\'re signed up to help with this. You can cancel a day if you need to.' : stillNeedHelp.length ? 'Someone in the church could use a hand. Sign up for a day — a meal, a ride, an errand.' : 'All covered — every day on these is taken. Thank you.'}</div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
         {liveShown.map(n => <CareNeedRow key={n.id} need={n} slots={care.slots || []} skips={care.skips || []} care={care} canManage={onCareRoster} canVolunteer={canVolunteer} expanded={openId === n.id} onToggle={() => setOpenId(openId === n.id ? null : n.id)} />)}
       </div>
@@ -1242,7 +1275,7 @@ function CareCard({ ctx, embedded }) {
           {readyCount === 0 ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', lineHeight: 1.5, padding: '0 2px 4px' }}>{_minorHere ? 'Nobody else has listed themselves as available yet — asking above reaches the people at your church who can help.' : 'Nobody else has listed themselves as available yet — asking your care team above reaches them directly.'}</div> : null}
         </CareSection>
         {canVolunteer || mineBlock || needsBlock ? (
-          <CareSection id="give" icon="hand" title="If you can help" sub="Tell your church you’re available, and sign up for what’s open" count={liveShown.length}>
+          <CareSection id="give" icon="hand" title="If you can help" sub="Tell your church you're available, and sign up for what's open" count={stillNeedHelp.length}>
             {canVolunteer ? <CareAvailability ctx={ctx} part="mine" /> : null}
             {mineBlock}
             {needsBlock}
@@ -1287,7 +1320,7 @@ function SafetyDock({ ctx, onOpenToday }) {
   const [answered, setAnswered] = React.useState('');
   const [narrow, setNarrow] = React.useState(false);   // delivered, but not to the audience the check named
   const [dismissed, setDismissed] = React.useState(false);
-  const [sending, setSending] = React.useState(false);
+  const [sending, setSending] = React.useState('');   // '' | 'safe' | 'help' — WHICH reply is in flight, so only that button says Sending…
   const [err, setErr] = React.useState('');
   React.useEffect(() => {
     if (!ctx.church || !(window.Fellowship && window.Fellowship.subscribeSafetyCheck)) return;
@@ -1316,13 +1349,13 @@ function SafetyDock({ ctx, onOpenToday }) {
   // over someone's shoulder — which matters most to exactly the churches this feature exists for.
   const dismiss = () => { setDismissed(true); try { localStorage.setItem('trinityone.safetydockx.' + check.id, '1'); } catch (e) {} };
   const respond = async (s) => {
-    if (sending) return; setSending(true); setErr('');
+    if (sending) return; setSending(s); setErr('');
     // ⚠ markSafe ANSWERS FOUR WAYS NOW, AND `if (res)` WOULD BE WRONG — an object is truthy, so truth-testing
     // it marks a member safe over a send that failed. Read `res.ok`. (A truthy STRING would invert the same
     // way, which is why this is an object: it cannot be got wrong quietly.)
     let res = null;
     try { res = await window.Fellowship.markSafe(check, s, ''); } catch (e) {}
-    setSending(false);
+    setSending('');
     if (res && res.ok) { safetyAck(check.id, s); setAnswered(s); if (res.narrowed) setNarrow(true); }
     // NOBODY ANSWERED IN TIME IS NOT A FAILURE TO SEND. The reply is signed and on the wire and may already
     // be with the church. Telling someone in an emergency that nobody knows — when they do — is the worst
@@ -1359,8 +1392,8 @@ function SafetyDock({ ctx, onOpenToday }) {
         </div>
       ) : (
       <div style={{ display: 'flex', gap: 9, marginTop: 11 }}>
-        <button disabled={sending} onClick={() => respond('safe')} style={btn({ background: 'var(--sage, #4f7a5e)' })}>{sending ? 'Sending…' : 'I’m safe'}</button>
-        <button disabled={sending} onClick={() => respond('help')} style={btn({ background: 'var(--clay)' })}>{sending ? 'Sending…' : 'I need help'}</button>
+        <button disabled={sending} onClick={() => respond('safe')} style={btn({ background: 'var(--sage, #4f7a5e)' })}>{sending === 'safe' ? 'Sending…' : 'I’m safe'}</button>
+        <button disabled={sending} onClick={() => respond('help')} style={btn({ background: 'var(--clay)' })}>{sending === 'help' ? 'Sending…' : 'I need help'}</button>
       </div>
       )}
       {err ? <div style={{ fontSize: 12.5, color: 'var(--clay-deep, #b4462f)', fontWeight: 700, marginTop: 8 }}>{err}</div> : null}
@@ -1375,7 +1408,7 @@ function SafetyBanner({ ctx, persistent }) {
   const [check, setCheck] = React.useState(null);
   const [status, setStatus] = React.useState('');   // '' | 'safe' | 'help' (what I've told them)
   const [note, setNote] = React.useState('');
-  const [sending, setSending] = React.useState(false);
+  const [sending, setSending] = React.useState('');   // '' | 'safe' | 'help' — WHICH reply is in flight, so only that button says Sending…
   const [err, setErr] = React.useState('');   // delivery failed → retry prompt, never a false confirmation
   // The answered state is a MOMENT of confirmation, not a fixture: it used to sit at full height on Today for as
   // long as the check stayed open, pushing the day's content down long after it had said all it had to say. Show
@@ -1437,11 +1470,11 @@ function SafetyBanner({ ctx, persistent }) {
     );
   }
   const respond = async (s) => {
-    if (sending) return; setSending(true); setErr('');
+    if (sending) return; setSending(s); setErr('');
     // See the note on the dock's respond(): `res.ok`, never `if (res)`.
     let res = null;
     try { res = await window.Fellowship.markSafe(check, s, note); } catch (e) {}
-    setSending(false);
+    setSending('');
     // 'narrow' means delivered, but we could not resolve the audience the steward chose — so it reached
     // the church leader and not (yet) the team it was addressed to. Saying so is the whole point: what
     // this replaces reported a full delivery that never happened.
@@ -1513,8 +1546,8 @@ function SafetyBanner({ ctx, persistent }) {
       <div style={{ fontSize: 14.5, color: 'var(--ink)', marginTop: 5, lineHeight: 1.45 }}>{check.message || 'Are you safe?'}</div>
       <input value={note} onChange={e => setNote(e.target.value)} placeholder="Add a note (optional)" maxLength={240} style={{ width: '100%', boxSizing: 'border-box', height: 42, padding: '0 13px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', outline: 'none', fontSize: 14, color: 'var(--ink)', fontFamily: 'var(--font-ui)', margin: '12px 0 0' }} />
       <div style={{ display: 'flex', gap: 10, marginTop: 11 }}>
-        <button disabled={sending} onClick={() => respond('safe')} style={btn({ background: 'var(--sage, #4f7a5e)', color: '#fff' })}>{sending ? 'Sending…' : 'I’m safe'}</button>
-        <button disabled={sending} onClick={() => respond('help')} style={btn({ background: 'var(--clay)', color: 'var(--on-clay)' })}>{sending ? 'Sending…' : 'I need help'}</button>
+        <button disabled={sending} onClick={() => respond('safe')} style={btn({ background: 'var(--sage, #4f7a5e)', color: '#fff' })}>{sending === 'safe' ? 'Sending…' : 'I’m safe'}</button>
+        <button disabled={sending} onClick={() => respond('help')} style={btn({ background: 'var(--clay)', color: 'var(--on-clay)' })}>{sending === 'help' ? 'Sending…' : 'I need help'}</button>
       </div>
       {err ? <div style={{ fontSize: 13.5, color: 'var(--clay-deep, #b4462f)', fontWeight: 700, marginTop: 9 }}>{err}</div> : null}
       <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 9, lineHeight: 1.4 }}>Only the people your church chose for this check can open your reply — not other members. The relay can see that you replied and when, but not what you said.</div>

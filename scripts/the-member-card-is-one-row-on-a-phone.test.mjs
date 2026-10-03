@@ -71,7 +71,11 @@ const PEOPLE = {
   pending:  { pubkey: pk('e'), name: 'Nia Okafor',       joined: NOW - 600 },
   inactive: { pubkey: pk('f'), name: 'Gideon Marsh',     joined: NOW - 200 * 86400 },
 };
-const ROSTER = Object.values(PEOPLE).map(p => ({ npub: 'npub1' + p.pubkey.slice(0, 58), picture: '', count: 0, lastTs: 0, firstTs: 0, ...p }));
+// `cv: 2` is the stamp subscribeMembers puts on every roster row it caches (sim item 27, message-counts-do-not-climb-on-replay):
+// a cached row WITHOUT it has its stored message count ignored, because an older build may have inflated it. These rows
+// stand in for what the shipped code wrote, so they carry it — otherwise Ruth's cached 12 messages read as 0 and she is
+// drawn with a "joined" pill she would never have on a real console.
+const ROSTER = Object.values(PEOPLE).map(p => ({ npub: 'npub1' + p.pubkey.slice(0, 58), picture: '', count: 0, lastTs: 0, firstTs: 0, cv: 2, ...p }));
 const ADMITTED = Object.entries(PEOPLE).filter(([k]) => k !== 'pending').map(([, p]) => p.pubkey);
 
 let relay, chr, ws, dataDir, prof, evalIn, send, booted = '';

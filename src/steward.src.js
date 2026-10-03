@@ -9885,8 +9885,10 @@ window.Steward = {
   // existed; it is served properly now by granting that person a one-day permission, which is what the finding
   // asks for ("keep per-session as the narrower option … a parent helping out just this week").
   //
-  // WHICH INSTANT THE PERMISSIONS ARE JUDGED AT: the session's own start. A clearance that lapses before the
-  // service begins does not put anybody on it. THE ENVELOPE IS ONLY EVER A FILTER, not the authority — the relay
+  // WHICH INSTANT THE PERMISSIONS ARE JUDGED AT: `at` (the session's own start, from the issuer) — and ALSO
+  // `alsoAt` when the issuer passes it (now, inside the session's window), so a clearance made after the service
+  // opened still gets a key; see issueCheckinSessionKeys. A clearance that lapses before the service begins does
+  // not put anybody on it. THE ENVELOPE IS ONLY EVER A FILTER, not the authority — the relay
   // re-checks the permission at the moment of every request, so a clearance withdrawn after this ran stops
   // working whatever this document says. That conjunction is what makes one revocation enough.
   //
@@ -9923,7 +9925,12 @@ window.Steward = {
     const win = lifetimeWindow(policy.lifetime, o.service, { before: o.before, after: o.after });
     if (!win) return null;
     const at = Number.isFinite(o.at) ? Math.floor(o.at) : win.from;
-    const helpers = permittedHelpers(Array.isArray(o.permissions) ? o.permissions : [], at);
+    // `alsoAt` is the issuer's second instant (see issueCheckinSessionKeys): a clearance made after the session
+    // opened is judged at NOW inside the window. Omitted by every other caller, which keeps judging at `at` only.
+    const permsIn = Array.isArray(o.permissions) ? o.permissions : [];
+    const helpers = Number.isFinite(o.alsoAt)
+      ? [...new Set([...permittedHelpers(permsIn, at), ...permittedHelpers(permsIn, Math.floor(o.alsoAt))])]
+      : permittedHelpers(permsIn, at);
     // The keepers: the church, plus every steward the church has actually ticked for the register. Reusing
     // _capAllows against CAP_KEYS.checkin — which is `explicit: true` — so this cannot disagree with who holds
     // trinityone/checkinkey:. `stewards` is passed IN, exactly as ensureCapKeyFor(kind, stewardPubs, caps) takes
@@ -10088,7 +10095,16 @@ window.Steward = {
       if (!win) { out.failed.push({ session, why: 'no date this console can place' }); continue; }
       if (win.until <= at) { out.skipped.push({ session, why: 'over' }); continue; }
       if (win.from - at > horizon) { out.skipped.push({ session, why: 'beyond the horizon' }); continue; }
-      const want = permittedHelpers(perms, win.from);
+      // WHO HOLDS A KEY FOR THIS SESSION IS JUDGED AT TWO INSTANTS, and the union is the point (sim item 31,
+      // 2026-10-02). Judged at the session's START alone, a clearance made AFTER the service opened is never
+      // eligible: 'dated' and 'open' clearances begin at the moment they are made (permissionWindow), so
+      // `at < perm.from` at win.from and the person got no key for the Sunday that was already under way.
+      // ('day' begins at midnight, which is why that shape worked.) So the session is ALSO judged at NOW,
+      // clamped into the session's own window — never later than its end. The union can only ADD people to
+      // what the start-instant answer gave: a clearance that lapses part-way through still keeps the key it
+      // has. The relay re-checks the permission on every request, so naming somebody here widens nothing.
+      const nowIn = Math.min(Math.max(at, win.from), win.until);
+      const want = [...new Set([...permittedHelpers(perms, win.from), ...permittedHelpers(perms, nowIn)])];
       const have = held.get(session);
       // A SESSION THE CHURCH STOOD DOWN IS LEFT ALONE. Added 2026-09-10; before it, this was the defect.
       // revokeCheckinHelpers tombstones the envelope, subscribeCheckinSessionKeys used to FORGET the id
@@ -10136,7 +10152,7 @@ window.Steward = {
       // that a steward can neither see nor undo, and it is where the keeper warning has been re-aimed —
       // see _warnCheckinKeyRotated for what may and may not be claimed about it today.
       const rotating = !!(have && !keyHex);
-      const res = await this.publishCheckinHelpers({ session, service: svc, permissions: perms, at: win.from,
+      const res = await this.publishCheckinHelpers({ session, service: svc, permissions: perms, at: win.from, alsoAt: nowIn,
         stewards: o.stewards, caps: o.caps, lifetime: policy.lifetime, before: o.before, after: o.after,
         sessionKeyHex: keyHex });
       if (res) { out.issued.push(res); if (rotating) out.rotated.push(session); }
@@ -10619,12 +10635,27 @@ window.Steward = {
     const MEMBER_D = 'trinityone/member:';
     const CACHE_KEY = 'trinityone.steward.members.' + (pub || '');
     const byPub = new Map();          // pubkey -> { pubkey, npub, name, picture, count, lastTs, firstTs, joined }
+    // MESSAGE COUNTS MUST NOT CLIMB WITH NO NEW MESSAGES (sim item 27, SIM-VERIFY-2026-10-02). `count` used to be
+    // seeded from the cached roster and then `count++` for EVERY kind-1 the relay replayed — and a relay replays
+    // its whole history on every (re)subscribe: each page reload, each relay reconnect (the console re-opens this
+    // on `conn`), each church switch. So every member's number grew by their full message history each time,
+    // with nobody having said anything. Now:
+    //   · `liveCount` counts DISTINCT events this run saw (by id — two relays serving the same message, or the
+    //     same relay serving it twice, is one message);
+    //   · `baseCount` is the tally the cache carried, kept ONLY so the number does not drop to zero while the
+    //     replay is still arriving;
+    //   · what is shown is the larger of the two. A replay of the same history can therefore never lift it above
+    //     the true count, and one genuinely new message lifts it by exactly one.
+    // A cache written before this fix may already be inflated, and there is no way to tell which numbers are:
+    // rows are stamped `cv: 2` when saved, and a row without the stamp has its stored count IGNORED, so a
+    // console that already climbed corrects itself on the first load rather than carrying the inflation for ever.
+    const baseCount = new Map(), liveCount = new Map(), liveIds = new Set();
     // paint the last-known roster instantly so the Members list doesn't flash empty→list on reload
     // A steward who only POSTS is not a member (sim finding 29): no `member:` document (`joined`) and the key is a
     // current or former steward. The row is kept in `byPub` (a later member document brings it straight back) but
     // never handed out.
     const isGhost = (m, ex = _exStewardSet()) => !m.joined && (_careRoster.has(m.pubkey) || ex.has(m.pubkey));
-    try { const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || '[]'); if (Array.isArray(cached)) { cached.forEach(m => { if (m && m.pubkey) byPub.set(m.pubkey, m); }); const shown = cached.filter(m => m && m.pubkey && !isGhost(m)); if (shown.length) onMembers(shown); } } catch {}
+    try { const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || '[]'); if (Array.isArray(cached)) { cached.forEach(m => { if (m && m.pubkey) { const c = m.cv === 2 ? (Number(m.count) || 0) : 0; baseCount.set(m.pubkey, c); m.count = c; byPub.set(m.pubkey, m); } }); const shown = cached.filter(m => m && m.pubkey && !isGhost(m)); if (shown.length) onMembers(shown); } } catch {}
     // SECURITY-AUDIT-2026-07-18 (perf): debounce the heavy roster serialize. emit() ran a full sort +
     // JSON.stringify(entire roster) + localStorage write + setState on EVERY incoming event; on a large church's
     // load that was thousands of full-roster serializations. Coalesce to ~150ms (trailing fire keeps final state).
@@ -10651,7 +10682,7 @@ window.Steward = {
         .map(m => { if (m.name) return m; const sn = sealedName(m.pubkey); return sn ? { ...m, name: sn, viaSealed: true } : m; })
         .map(m => (m.name || !reseatName.get(m.pubkey)) ? m : { ...m, name: reseatName.get(m.pubkey), viaReseat: true })
         .sort((a, b) => ((b.lastTs || b.joined || 0) - (a.lastTs || a.joined || 0)));
-      try { localStorage.setItem(CACHE_KEY, JSON.stringify(arr)); } catch {} onMembers(arr);
+      try { localStorage.setItem(CACHE_KEY, JSON.stringify(arr.map(m => ({ ...m, cv: 2 })))); } catch {} onMembers(arr);
     };
     const emit = () => { if (emitTimer) return; emitTimer = setTimeout(() => { emitTimer = null; emitNow(); }, 150); };
     _memberEmitters.add(emit);   // the steward roster re-filters this list when it arrives or changes — see _pokeMemberLists
@@ -10691,8 +10722,11 @@ window.Steward = {
           else { let j = e.created_at, s = 0; try { const c = JSON.parse(e.content); j = c.joined || e.created_at; s = c.seen || 0; } catch {} m.joined = j; if (s) m.seen = s; }
           byPub.set(e.pubkey, m); ensureProfile(e.pubkey); emit(); return;
         }
+        if (e.id) { if (liveIds.has(e.id)) return; liveIds.add(e.id); }   // a message already counted this run — see baseCount above
         const m = get(e.pubkey);
-        m.count++; if (e.created_at > m.lastTs) m.lastTs = e.created_at; if (e.created_at < m.firstTs) m.firstTs = e.created_at;
+        liveCount.set(e.pubkey, (liveCount.get(e.pubkey) || 0) + 1);
+        m.count = Math.max(baseCount.get(e.pubkey) || 0, liveCount.get(e.pubkey));
+        if (e.created_at > m.lastTs) m.lastTs = e.created_at; if (e.created_at < m.firstTs) m.firstTs = e.created_at;
         byPub.set(e.pubkey, m); ensureProfile(e.pubkey); emit();
       },
       oneose() { emit(); },

@@ -23184,8 +23184,10 @@ zoo`.split("\n");
     // existed; it is served properly now by granting that person a one-day permission, which is what the finding
     // asks for ("keep per-session as the narrower option … a parent helping out just this week").
     //
-    // WHICH INSTANT THE PERMISSIONS ARE JUDGED AT: the session's own start. A clearance that lapses before the
-    // service begins does not put anybody on it. THE ENVELOPE IS ONLY EVER A FILTER, not the authority — the relay
+    // WHICH INSTANT THE PERMISSIONS ARE JUDGED AT: `at` (the session's own start, from the issuer) — and ALSO
+    // `alsoAt` when the issuer passes it (now, inside the session's window), so a clearance made after the service
+    // opened still gets a key; see issueCheckinSessionKeys. A clearance that lapses before the service begins does
+    // not put anybody on it. THE ENVELOPE IS ONLY EVER A FILTER, not the authority — the relay
     // re-checks the permission at the moment of every request, so a clearance withdrawn after this ran stops
     // working whatever this document says. That conjunction is what makes one revocation enough.
     //
@@ -23215,7 +23217,8 @@ zoo`.split("\n");
       const win = lifetimeWindow(policy.lifetime, o.service, { before: o.before, after: o.after });
       if (!win) return null;
       const at = Number.isFinite(o.at) ? Math.floor(o.at) : win.from;
-      const helpers = permittedHelpers(Array.isArray(o.permissions) ? o.permissions : [], at);
+      const permsIn = Array.isArray(o.permissions) ? o.permissions : [];
+      const helpers = Number.isFinite(o.alsoAt) ? [.../* @__PURE__ */ new Set([...permittedHelpers(permsIn, at), ...permittedHelpers(permsIn, Math.floor(o.alsoAt))])] : permittedHelpers(permsIn, at);
       const allowed = _capAllows(CAP_KEYS.checkin, o.caps || _stewardCaps);
       const keepers = [cp, ...(Array.isArray(o.stewards) ? o.stewards : []).filter(allowed)];
       const reuse = String(o.sessionKeyHex || "");
@@ -23380,7 +23383,8 @@ zoo`.split("\n");
           out.skipped.push({ session, why: "beyond the horizon" });
           continue;
         }
-        const want = permittedHelpers(perms, win.from);
+        const nowIn = Math.min(Math.max(at, win.from), win.until);
+        const want = [.../* @__PURE__ */ new Set([...permittedHelpers(perms, win.from), ...permittedHelpers(perms, nowIn)])];
         const have = held.get(session);
         if (have && have.standDown) {
           out.skipped.push({ session, why: "stood down" });
@@ -23405,6 +23409,7 @@ zoo`.split("\n");
           service: svc,
           permissions: perms,
           at: win.from,
+          alsoAt: nowIn,
           stewards: o.stewards,
           caps: o.caps,
           lifetime: policy.lifetime,
@@ -23947,11 +23952,17 @@ zoo`.split("\n");
       const MEMBER_D = "trinityone/member:";
       const CACHE_KEY = "trinityone.steward.members." + (pub || "");
       const byPub = /* @__PURE__ */ new Map();
+      const baseCount = /* @__PURE__ */ new Map(), liveCount = /* @__PURE__ */ new Map(), liveIds = /* @__PURE__ */ new Set();
       try {
         const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || "[]");
         if (Array.isArray(cached)) {
           cached.forEach((m) => {
-            if (m && m.pubkey) byPub.set(m.pubkey, m);
+            if (m && m.pubkey) {
+              const c = m.cv === 2 ? Number(m.count) || 0 : 0;
+              baseCount.set(m.pubkey, c);
+              m.count = c;
+              byPub.set(m.pubkey, m);
+            }
           });
           if (cached.length) onMembers(cached);
         }
@@ -23976,7 +23987,7 @@ zoo`.split("\n");
           return sn ? { ...m, name: sn, viaSealed: true } : m;
         }).map((m) => m.name || !reseatName.get(m.pubkey) ? m : { ...m, name: reseatName.get(m.pubkey), viaReseat: true }).sort((a, b) => (b.lastTs || b.joined || 0) - (a.lastTs || a.joined || 0));
         try {
-          localStorage.setItem(CACHE_KEY, JSON.stringify(arr));
+          localStorage.setItem(CACHE_KEY, JSON.stringify(arr.map((m) => ({ ...m, cv: 2 }))));
         } catch {
         }
         onMembers(arr);
@@ -24057,8 +24068,13 @@ zoo`.split("\n");
             emit();
             return;
           }
+          if (e.id) {
+            if (liveIds.has(e.id)) return;
+            liveIds.add(e.id);
+          }
           const m = get(e.pubkey);
-          m.count++;
+          liveCount.set(e.pubkey, (liveCount.get(e.pubkey) || 0) + 1);
+          m.count = Math.max(baseCount.get(e.pubkey) || 0, liveCount.get(e.pubkey));
           if (e.created_at > m.lastTs) m.lastTs = e.created_at;
           if (e.created_at < m.firstTs) m.firstTs = e.created_at;
           byPub.set(e.pubkey, m);

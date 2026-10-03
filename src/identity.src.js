@@ -35,6 +35,7 @@ const COLORS = ['#5E8C6A', '#C2913A', '#C25A38', '#5360D6', '#1F9488', '#C24B7A'
 let memMnemonic = null;   // in-memory fallback (private mode / localStorage unavailable)
 let webPersisted = false; // true once the seed is saved in THIS browser's localStorage
 let sessionMnemonic = null;   // seed decrypted from the PIN blob, held in memory for THIS session only (never re-persisted as plaintext)
+let _lockWork = Promise.resolve();   // the in-flight clearing of the remembered seed that lock() started — see lockSettled()
 
 // ── phone-to-phone transfer (see beginTransfer/sealTransfer/acceptTransfer below) ──
 const XFER_PREFIX = 'trinityone:xfer:';
@@ -734,13 +735,20 @@ window.TrinityIdentity = {
     // launch, so the one control a member reaches for when someone is about to pick up their phone would be
     // undone by restarting the app. Fire-and-forget: the in-memory seed is already gone above, so the lock is
     // effective immediately whatever the store does.
-    rememberClear();
+    // Kept, not dropped: "Lock now" restarts the app (owner, 2026-10-02) and a restart that beat this write
+    // would boot straight back into the remembered account. lockSettled() hands the promise to the one caller
+    // that has to wait for it. A rejection is swallowed HERE so an unwaited lock never raises an unhandled one.
+    _lockWork = Promise.resolve(rememberClear()).catch(() => {});
     window.TrinityIdentity.locked = true;
     // best-effort forensic hygiene: drop cached community data if Fellowship is present
     try { if (window.Fellowship && window.Fellowship.clearCommunityCache) window.Fellowship.clearCommunityCache(); } catch (e) {}
     applyLocked();
     return true;
   },
+
+  // Resolves once lock()'s clearing of the remembered seed has finished (immediately if nothing is pending).
+  // Never rejects. The member app's "Lock now" waits on this before it restarts.
+  lockSettled() { return _lockWork; },
 
   // steward onboarding: mint a NEW identity to hand to a member (does NOT touch yours)
   makeInvite() {
