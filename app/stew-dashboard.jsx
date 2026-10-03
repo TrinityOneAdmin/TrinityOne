@@ -2845,8 +2845,8 @@ function JoinCard({ qrSize = 92, center = false }) {
       {linkPrivate ? <div role="alert" style={{ padding: '10px 12px', borderRadius: 11, marginBottom: 10, background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', border: '1px solid var(--line)', fontSize: 12.5, lineHeight: 1.5, color: 'var(--ink-2)' }}>
         <b>This link only works on this computer.</b> Your church’s relay is running here and hasn’t been
         made reachable from outside yet, so the address inside the link points at whoever opens it. Hand out
-        the short code below instead — or turn on “go public” for your relay in Settings → Network &amp; relays,
-        and this link will work everywhere.
+        the short code below instead — or turn on “go public” in your relay’s control panel (<b>Reach members
+        from anywhere</b>), and this link will work everywhere.
       </div> : null}
       <GoPublicNote gate={gate} />
     <div style={{ display: 'flex', flexDirection: center ? 'column' : 'row', gap: 16, alignItems: 'center', textAlign: center ? 'center' : 'left' }}>
@@ -2929,8 +2929,8 @@ function JoinCard({ qrSize = 92, center = false }) {
     {(!install.url && install.why === 'local' && !linkPrivate) ? (
       <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--line)', fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.55 }}>
         <b>Members can’t install from this machine yet.</b> Your relay is only reachable at this computer’s
-        own address, which on someone else’s phone means their phone. Turn on “go public” for your relay in
-        Settings → Network &amp; relays, and an install code will appear here.
+        own address, which on someone else’s phone means their phone. Turn on “go public” in your relay’s
+        control panel (<b>Reach members from anywhere</b>), and an install code will appear here.
       </div>
     ) : null}
     </React.Fragment>
