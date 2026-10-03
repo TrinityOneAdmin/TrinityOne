@@ -9705,8 +9705,10 @@ window.Steward = {
   // existed; it is served properly now by granting that person a one-day permission, which is what the finding
   // asks for ("keep per-session as the narrower option … a parent helping out just this week").
   //
-  // WHICH INSTANT THE PERMISSIONS ARE JUDGED AT: the session's own start. A clearance that lapses before the
-  // service begins does not put anybody on it. THE ENVELOPE IS ONLY EVER A FILTER, not the authority — the relay
+  // WHICH INSTANT THE PERMISSIONS ARE JUDGED AT: `at` (the session's own start, from the issuer) — and ALSO
+  // `alsoAt` when the issuer passes it (now, inside the session's window), so a clearance made after the service
+  // opened still gets a key; see issueCheckinSessionKeys. A clearance that lapses before the service begins does
+  // not put anybody on it. THE ENVELOPE IS ONLY EVER A FILTER, not the authority — the relay
   // re-checks the permission at the moment of every request, so a clearance withdrawn after this ran stops
   // working whatever this document says. That conjunction is what makes one revocation enough.
   //
