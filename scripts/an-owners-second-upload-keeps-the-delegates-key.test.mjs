@@ -51,7 +51,7 @@ function ownerScope(opts = {}) {
     now: () => 1758800000,
     _hex: (u8) => [...u8].map(b => b.toString(16).padStart(2, '0')).join(''),
     _unhex: (h) => new Uint8Array(h.match(/.{2}/g).map(b => parseInt(b, 16))),
-    encrypt3: (pl, ck) => nip44.encrypt(pl, ck),
+    encrypt2: (pl, ck) => nip44.encrypt(pl, ck),
     getConversationKey: (a, b) => nip44.utils.getConversationKey(a, b),
     feChurch: (t) => ({ ...t, pubkey: churchPub }),
     publish: async (evt) => { published.push(evt); return true; },

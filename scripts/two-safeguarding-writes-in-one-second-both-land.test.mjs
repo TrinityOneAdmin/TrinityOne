@@ -97,7 +97,7 @@ function consoleWriters(fixedSec) {
     measureRelaySkew: async () => 0,
     setTimeout,
     // ── real crypto; the envelope is really sealed ──
-    crypto: globalThis.crypto, encrypt3: nip44e, getConversationKey: nip44ck,
+    crypto: globalThis.crypto, encrypt2: nip44e, getConversationKey: nip44ck,
     _hex: (u) => Array.from(u).map(b => b.toString(16).padStart(2, '0')).join(''),
     JSON, Math, Number, String, Object, Array, Set, Date, RegExp, Promise, Error,
   };

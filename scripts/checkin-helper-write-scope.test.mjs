@@ -375,7 +375,7 @@ test('the SHIPPED register, fed what the relay serves, still shows the church\'s
     _capState: { checkin: { ring: [RING], docKeys: null, rev: 1, checked: true, at: 0 } },
     _ckSessionKeys: new Map([[MORNING, KEY_AM], [AFTERNOON, KEY_PM]]),
     _unhex: unhex,
-    encrypt3: (pl, k) => nip44.encrypt(pl, k),
+    encrypt2: (pl, k) => nip44.encrypt(pl, k),
     decrypt3: (ct, k) => { openTries++; return nip44.decrypt(ct, k); },
     getConversationKey: (sk, p) => nip44.utils.getConversationKey(sk, p),
     checkinSessionOf,

@@ -229,7 +229,7 @@ export function consoleBoot(church, opts = {}) {
     churchSkHeld: () => true,
     NET: 'trinityone', GUARDNOTICE_D: 'trinityone/guardnotice:', GUARDIANS_D: 'trinityone/guardians:', GUARDREQ_D: 'trinityone/guardreq:',
     decode: nip19decode,
-    encrypt3: nip44.encrypt, getConversationKey: nip44.getConversationKey,
+    encrypt2: nip44.encrypt, getConversationKey: nip44.getConversationKey,
     finalizeEvent2: (t, sk) => finalizeEvent(JSON.parse(JSON.stringify(t)), sk),
     // _monotonic's contract (strictly increasing created_at per d-tag on this console), without its skew machinery
     _monotonic: (t) => { const d = dOf(t); const last = stamps.get(d) || 0; const at = Math.max(t.created_at, last + 1); stamps.set(d, at); return { ...t, created_at: at }; },
