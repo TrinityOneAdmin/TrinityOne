@@ -5902,6 +5902,25 @@ window.Fellowship = {
   },
 
   // ── read the reading plans a church shares (kind-30078, d=plan:) ──
+  subscribeChurchVersePrompt(churchNpub, cb) {
+    const pubk = toPub(churchNpub);
+    if (!pubk) { cb(null); return () => {}; }
+    let current = null;
+    const _trust = (e) => _churchVoice(pubk, { _by: e.pubkey });
+    const stop = _onChurchDocs(pubk, {
+      want: ['trinityone/verse-prompt'],
+      onevent(e, d) {
+        if (d !== 'trinityone/verse-prompt') return;
+        if (!_trust(e)) return;
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { if (current) { current = null; cb(null); } return; }
+        if (current && current.ts >= e.created_at) return;
+        try { const j = JSON.parse(e.content); current = { ref: j.ref || '', note: j.note || '', ts: e.created_at }; cb(current); } catch {}
+      },
+      oneose() { cb(current); },
+    });
+    return stop;
+  },
+
   subscribeChurchPlans(churchNpub, onPlans) {
     const pubk = toPub(churchNpub);
     if (!pubk) { onPlans([]); return () => {}; }

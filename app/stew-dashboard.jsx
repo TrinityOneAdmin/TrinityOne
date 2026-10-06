@@ -5046,6 +5046,45 @@ function NewPlanModal({ onClose }) {
   );
 }
 
+function VersePromptCard() {
+  const [vp, setVp] = React.useState(null);
+  const [ref, setRef] = React.useState('');
+  const [note, setNote] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const [msg, setMsg] = React.useState('');
+  React.useEffect(() => {
+    if (!window.Steward.subscribeVersePrompt) return;
+    return window.Steward.subscribeVersePrompt(v => { setVp(v); if (v && v.ref) { setRef(v.ref); setNote(v.note || ''); } });
+  }, []);
+  const push = async () => {
+    if (!ref.trim()) return;
+    setBusy(true); setMsg('');
+    try { await window.Steward.publishVersePrompt(ref.trim(), note.trim()); setMsg('✓ Sent'); setTimeout(() => setMsg(''), 2000); }
+    catch (e) { setMsg('✗ ' + (e.message || 'failed')); }
+    setBusy(false);
+  };
+  const clear = async () => {
+    setBusy(true); setMsg('');
+    try { await window.Steward.removeVersePrompt(); setRef(''); setNote(''); setVp(null); setMsg('✓ Cleared'); setTimeout(() => setMsg(''), 2000); }
+    catch (e) { setMsg('✗ ' + (e.message || 'failed')); }
+    setBusy(false);
+  };
+  return (
+    <Panel title="Verse prompt" action={vp && vp.ref ? <SkPill tint="sage">Live</SkPill> : null}>
+      <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 12 }}>Push a verse for the whole church to read. It appears on every member’s home screen.</div>
+      <div style={{ display: 'flex', gap: 9, flexWrap: 'wrap' }}>
+        <input value={ref} onChange={e => setRef(e.target.value)} placeholder="e.g. John 3:16" aria-label="Bible reference" style={{ flex: '1 1 140px', height: 42, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 14, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
+        <input value={note} onChange={e => setNote(e.target.value)} placeholder="Note (optional)" aria-label="Note to members" style={{ flex: '2 1 180px', height: 42, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 14, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
+      </div>
+      <div style={{ display: 'flex', gap: 9, marginTop: 10, alignItems: 'center' }}>
+        <button onClick={push} disabled={busy || !ref.trim()} className="sk-btn sk-btn--clay" style={{ padding: '9px 15px', fontSize: 13, opacity: (busy || !ref.trim()) ? 0.55 : 1 }}><Icon name="send" size={14} color="var(--on-clay)" /> Push to church</button>
+        {vp && vp.ref ? <button onClick={clear} disabled={busy} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}>Clear</button> : null}
+        {msg ? <span style={{ fontSize: 12.5, fontWeight: 600, color: msg[0] === '✓' ? 'var(--sage-ink)' : 'var(--clay-ink)' }}>{msg}</span> : null}
+      </div>
+    </Panel>
+  );
+}
+
 function DashPlans() {
   const shared = window.useStewardPlans();          // plans currently shared with the church
   const [creating, setCreating] = React.useState(false);
@@ -5075,6 +5114,7 @@ function DashPlans() {
       {creating ? <NewPlanModal onClose={() => setCreating(false)} /> : null}
       {/* single scroll container so a long drafts list can't push the library off the bottom */}
       <div className="no-scrollbar" style={{ display: 'flex', flexDirection: 'column', gap: 16, flex: 1, minHeight: 0, overflowY: 'auto', paddingBottom: 12 }}>
+      <VersePromptCard />
       <Panel title={`Shared with your church${shared.length ? ` · ${shared.length}` : ''}`}
         action={<div style={{ display: 'flex', gap: 8 }}>
           {planDrafts.length > 0 ? <button onClick={() => { if (confirm(`Publish ${planDrafts.length} draft plan${planDrafts.length === 1 ? '' : 's'}? Scheduled ones still wait for their date.`)) planDrafts.forEach(p => window.Steward.publishPlan({ ...p, draft: false })); }} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }} title="Take all held draft plans live"><Icon name="send" size={15} color="var(--on-clay)" /> Publish {planDrafts.length} draft{planDrafts.length === 1 ? '' : 's'}</button> : null}

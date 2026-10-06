@@ -2177,6 +2177,22 @@ function TodayScreen({ ctx }) {
   }
   const votdQ = votdQuoteMarks(votd.text);
 
+  // church verse prompt — a steward pushed a specific verse for all members
+  const [versePrompt, setVersePrompt] = React.useState(null);
+  React.useEffect(() => {
+    if (!window.Fellowship || !window.Fellowship.subscribeChurchVersePrompt || !ctx.churchNpub) return;
+    return window.Fellowship.subscribeChurchVersePrompt(ctx.churchNpub, setVersePrompt);
+  }, [ctx.churchNpub]);
+  let vpText = versePrompt ? versePrompt.ref : '';
+  let vpVersion = '';
+  if (versePrompt && versePrompt.ref && Bible.loaded) {
+    const vl = Bible.parseRef(versePrompt.ref);
+    if (vl && Bible.books().includes(vl.book)) {
+      const vr = Bible.getVerses(vl.book, vl.chap).find(v => String(v.v) === String(vl.verse));
+      if (vr) { vpText = vr.text; vpVersion = Bible.activeVersion; }
+    }
+  }
+
   // continue reading — from the live reading location
   const loc = ctx.loc;
   const contName = loc ? Bible.bookName(loc.book) : 'Genesis';
@@ -2452,6 +2468,34 @@ function TodayScreen({ ctx }) {
         </div>
         );
       })() : null}
+
+      {/* Church verse prompt — steward-pushed verse for the whole congregation */}
+      {versePrompt && versePrompt.ref ? (
+        <div onClick={() => { const vl = Bible.parseRef(versePrompt.ref); if (vl) ctx.goToVerse(vl.book, vl.chap, vl.verse); }} style={{
+          position: 'relative', borderRadius: 22, overflow: 'hidden', cursor: 'pointer',
+          background: 'linear-gradient(155deg, var(--sage) 0%, var(--sage-ink) 100%)',
+          padding: '20px 20px 16px', color: '#fff', marginBottom: 16, boxShadow: 'var(--shadow-lg)',
+          animation: 'trinityFade .5s ease both',
+        }}>
+          <div style={{ position: 'absolute', inset: 0, opacity: .4,
+            background: 'radial-gradient(circle at 80% 15%, rgba(255,255,255,.3), transparent 45%)' }} />
+          <div style={{ position: 'absolute', right: -20, bottom: -28, opacity: .12 }}>
+            <Icon name="book" size={150} stroke={1.2} color="#fff" />
+          </div>
+          <div style={{ position: 'relative' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 11, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', opacity: .88 }}>
+              <Icon name="sparkle" size={14} stroke={2} /> Your church is reading
+            </div>
+            {vpText && vpText !== versePrompt.ref ? (
+              <p style={{ fontFamily: 'var(--font-read)', fontSize: 20, lineHeight: 1.38, margin: '12px 0 10px', fontWeight: 500, textWrap: 'pretty' }}>
+                {votdQuoteMarks(vpText).open}{vpText}{votdQuoteMarks(vpText).close}
+              </p>
+            ) : null}
+            <div style={{ fontWeight: 700, fontSize: 14, letterSpacing: '.2px' }}>{versePrompt.ref}{vpVersion ? ' · ' + vpVersion : ''}</div>
+            {versePrompt.note ? <div style={{ fontSize: 13, opacity: .88, marginTop: 8, lineHeight: 1.45, fontStyle: 'italic' }}>{versePrompt.note}</div> : null}
+          </div>
+        </div>
+      ) : null}
 
       {/* Verse of the day — minimisable hero (near the reading section) */}
       {votdMin ? (

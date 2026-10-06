@@ -141,6 +141,7 @@ const SAFE_D = 'trinityone/safe:';            // a member's response (content NI
 const CATEGORY_D = 'trinityone/category:';  // a named container that groups together (e.g. "Lifegroups"), d=category:<id>
 const PLAN_D = 'trinityone/plan:';
 const DEVO_D = 'trinityone/devotional:';
+const VERSE_PROMPT_D = 'trinityone/verse-prompt';
 const ROSTER_D = 'trinityone/roster:';      // per-team roles + people (church)
 const SERVICE_D = 'trinityone/service:';    // a dated gathering (church)
 const RUNSHEET_D = 'trinityone/runsheet:';  // a service's order-of-service + songs (church) — d=runsheet:<serviceId>
@@ -9351,6 +9352,28 @@ window.Steward = {
   removeDevotional(id) {
     if (!sk) return Promise.resolve(null);
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', DEVO_D + id], ['t', NET], ['deleted', '1']], content: '' }));
+  },
+  publishVersePrompt(ref, note) {
+    if (!sk) return Promise.resolve(null);
+    const content = JSON.stringify({ ref: String(ref || ''), note: String(note || '') });
+    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', VERSE_PROMPT_D], ['t', NET]], content }))
+      .then(e => ({ ref, note, ts: e && e.created_at }));
+  },
+  removeVersePrompt() {
+    if (!sk) return Promise.resolve(null);
+    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', VERSE_PROMPT_D], ['t', NET], ['deleted', '1']], content: '' }));
+  },
+  subscribeVersePrompt(cb) {
+    let current = null;
+    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#d': [VERSE_PROMPT_D] }, { kinds: [30078], '#church': [pub], '#d': [VERSE_PROMPT_D] }], {
+      onevent(e) {
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { if (current) { current = null; cb(null); } return; }
+        if (current && current.ts >= e.created_at) return;
+        try { const j = JSON.parse(e.content); current = { ref: j.ref || '', note: j.note || '', ts: e.created_at }; cb(current); } catch {}
+      },
+      oneose() { cb(current); },
+    });
+    return () => { try { sub.close(); } catch {} };
   },
   subscribeDevotionals(onDevos) {
     const CACHE_KEY = 'trinityone.steward.devos.v2.' + (pub || '');   // v2: see _taggedForAnotherChurch
