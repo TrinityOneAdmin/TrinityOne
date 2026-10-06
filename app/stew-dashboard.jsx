@@ -3225,7 +3225,7 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
     <button onClick={() => onTab('meals')} style={{ display: 'flex', alignItems: 'center', gap: 13, width: '100%', textAlign: 'left', cursor: 'pointer', padding: '16px 18px', borderRadius: 16, background: 'color-mix(in oklab, var(--clay) 9%, var(--surface))', border: '1px solid color-mix(in oklab, var(--clay) 30%, var(--line))', marginBottom: 12, fontFamily: 'var(--font-ui)' }}>
       <div style={{ width: 42, height: 42, borderRadius: 12, flexShrink: 0, background: 'var(--clay)', color: 'var(--on-clay)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="heart" size={21} color="currentColor" /></div>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontWeight: 800, fontSize: 16, color: 'var(--clay-ink)' }}>{[openCareReqs ? openCareReqs + ' ' + (openCareReqs === 1 ? 'person has' : 'people have') + ' asked for help' : '', careNewMsgs ? careNewMsgs + ' new ' + (careNewMsgs === 1 ? 'message' : 'messages') + ' on requests you’ve already dealt with' : ''].filter(Boolean).join(' · ')}</div>
+        <div style={{ fontWeight: 800, fontSize: 16, color: 'var(--clay-ink)' }}>{[openCareReqs ? openCareReqs + ' ' + (openCareReqs === 1 ? 'person has' : 'people have') + ' asked for help' : '', careNewMsgs ? careNewMsgs + ‘ ‘ + (careNewMsgs === 1 ? ‘person wrote’ : ‘people wrote’) + ‘ back on care’ : ‘’].filter(Boolean).join(‘ · ‘)}</div>
         <div style={{ fontSize: 13, color: 'var(--ink-2)' }}>{openCareReqs ? 'Nobody can offer until you open it as a need — set it up in Care.' : 'Open Care to read and reply.'}</div>
       </div>
       <span className="sk-btn sk-btn--clay" style={{ padding: '9px 14px', fontSize: 13.5, flexShrink: 0 }}>Open <Icon name="chevR" size={15} color="var(--on-clay)" /></span>
@@ -4145,6 +4145,7 @@ function DashGroups() {
   const [teamMembers, setTeamMembers] = React.useState(null);   // { team, people }
   const [leadersFor, setLeadersFor] = React.useState(null);     // group whose event-leaders we're editing
   const [editMembersFor, setEditMembersFor] = React.useState(null);   // invite-only group whose members we're editing
+  const [settingsFor, setSettingsFor] = React.useState(null);       // APK: group whose settings sheet is open
   const [pendingDelete, setPendingDelete] = React.useState(null);   // group awaiting delete confirmation
   const [undo, setUndo] = React.useState(null);                     // recently-deleted group (restorable)
   const undoTimer = React.useRef(null);
@@ -4191,6 +4192,7 @@ function DashGroups() {
     if (undo) pubOr(window.Steward.publishGroup(raw(undo)), 'Couldn’t restore “' + (undo.name || 'that group') + '” — the relay didn’t accept it. Nothing was brought back; try Undo again.');
     clearTimeout(undoTimer.current); setUndo(null);
   };
+  const isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
   const pdDlgRef = useStewDialog(() => setPendingDelete(null), !!pendingDelete);   // a11y: delete-confirm
   const tmDlgRef = useStewDialog(() => setTeamMembers(null), !!teamMembers);        // a11y: team-members list
   return (
@@ -4203,7 +4205,8 @@ function DashGroups() {
               <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 20 }}>Delete “{pendingDelete.name}”?</div>
             </div>
             <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '0 0 8px' }}>This removes the {pendingDelete.kind === 'team' ? 'team and its rota roles' : 'group'} for everyone. Members will no longer see it{pendingDelete.kind === 'team' ? ', and its rota assignments stop applying' : ' or its chat'}.</p>
-            <p style={{ fontSize: 13, color: 'var(--ink-3)', lineHeight: 1.5, margin: '0 0 20px' }}>Past messages stay on the relay but won’t be shown. You can undo this for a few seconds.</p>
+            <p style={{ fontSize: 13, color: ‘var(--ink-3)’, lineHeight: 1.5, margin: ‘0 0 6px’ }}>Past messages stay on the relay but won’t be shown. You can undo this for a few seconds.</p>
+            <p style={{ fontSize: 13.5, fontWeight: 800, color: ‘var(--clay-ink)’, lineHeight: 1.5, margin: ‘0 0 20px’ }}>THIS CANNOT BE UNDONE.</p>
             <div style={{ display: 'flex', gap: 10 }}>
               <button onClick={() => setPendingDelete(null)} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 13, fontSize: 14 }}>Keep it</button>
               <button onClick={confirmDelete} className="sk-btn" style={{ flex: 1, padding: 13, fontSize: 14, background: 'var(--clay-ink)', color: 'var(--on-clay)' }}><Icon name="trash" size={15} color="var(--on-clay)" /> Delete</button>
@@ -4229,22 +4232,24 @@ function DashGroups() {
         reorderable onReorder={(arr) => arr.forEach((g, i) => { if (g.order !== i) window.Steward.publishGroup({ ...raw(g), order: i }); })}
         empty="No groups yet — create your church's first chat room (or a team on the Rota page)."
         headerExtra={<button onClick={() => setCatsOpen(true)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }} title="Create named categories (e.g. Lifegroups) to group your groups"><Icon name="books" size={15} /> Categories{cats.length ? ' · ' + cats.length : ''}</button>}
-        renderRight={(it) => (
+        renderRight={(it) => isNative ? (
+          <button onClick={() => setSettingsFor(raw(it))} title=”Group settings” style={{ border: ‘1px solid var(--line)’, background: ‘var(--surface)’, borderRadius: 9, padding: ‘8px 10px’, cursor: ‘pointer’, color: ‘var(--ink-2)’, display: ‘flex’, alignItems: ‘center’, justifyContent: ‘center’ }}><Icon name=”sliders” size={16} /></button>
+        ) : (
           <React.Fragment>
-            {it.kind !== 'team' && cats.length ? (
-              <select value={it.category || ''} onChange={(e) => pubOr(window.Steward.publishGroup({ ...raw(it), category: e.target.value || undefined }), 'Couldn’t move “' + (it.name || 'that group') + '” into that category — the relay didn’t accept it.')} title="Put this group in a category" onClick={(e) => e.stopPropagation()} style={{ border: '1px solid ' + (it.category ? 'color-mix(in oklab, var(--clay) 35%, var(--line))' : 'var(--line)'), background: it.category ? 'color-mix(in oklab, var(--clay) 7%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '5px 8px', cursor: 'pointer', color: it.category ? 'var(--clay-ink)' : 'var(--ink-3)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
-                <option value="">No category</option>
+            {it.kind !== ‘team’ && cats.length ? (
+              <select value={it.category || ‘’} onChange={(e) => pubOr(window.Steward.publishGroup({ ...raw(it), category: e.target.value || undefined }), ‘Couldn’t move “’ + (it.name || ‘that group’) + ‘” into that category — the relay didn’t accept it.’)} title=”Put this group in a category” onClick={(e) => e.stopPropagation()} style={{ border: ‘1px solid ‘ + (it.category ? ‘color-mix(in oklab, var(--clay) 35%, var(--line))’ : ‘var(--line)’), background: it.category ? ‘color-mix(in oklab, var(--clay) 7%, var(--surface))’ : ‘var(--surface)’, borderRadius: 9, padding: ‘5px 8px’, cursor: ‘pointer’, color: it.category ? ‘var(--clay-ink)’ : ‘var(--ink-3)’, fontFamily: ‘var(--font-ui)’, fontWeight: 700, fontSize: 12 }}>
+                <option value=””>No category</option>
                 {cats.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
             ) : null}
-            {it.kind === 'broadcast' ? <SkPill tint="gold">Broadcast</SkPill> : null}
-            {it.kind === 'team' ? <button onClick={() => { const r = rosters.find(x => x.team === it.id) || { people: [] }; setTeamMembers({ team: it, people: r.people || [] }); }} title="See team members" style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer' }}><SkPill tint="clay">Team · {(rosters.find(x => x.team === it.id) || { people: [] }).people.length}</SkPill></button> : null}
-            {(it.leaders && it.leaders.length) ? <SkPill tint="sage">{it.leaders.length} leader{it.leaders.length === 1 ? '' : 's'}</SkPill> : null}
-            <button onClick={() => pubOr(window.Steward.publishGroup({ ...raw(it), childsafe: !it.childsafe }), 'Couldn’t change child-safe on “' + (it.name || 'that group') + '” — the relay didn’t accept it, so it is unchanged. Check the relay and try again.')} aria-pressed={!!it.childsafe} aria-label={(it.name || 'This group') + ' — child-safe is ' + (it.childsafe ? 'on. Press to restrict it to adults' : 'off. Press to let members marked as a child join')} title={it.childsafe ? 'Child-safe — members marked as a child can join. Click to restrict to adults' : 'Hidden from children. Click to mark child-safe so under-18s can join'} style={{ border: '1px solid ' + (it.childsafe ? 'color-mix(in oklab, var(--sage) 40%, var(--line))' : 'var(--line)'), background: it.childsafe ? 'color-mix(in oklab, var(--sage) 8%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: it.childsafe ? 'var(--sage-ink)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name={it.childsafe ? 'check' : 'pray'} size={14} color="currentColor" /> {it.childsafe ? 'Child-safe' : 'Child-safe?'}</button>
-            {it.kind !== 'team' ? <button onClick={() => toggleEncrypt(it)} aria-pressed={!!it.encrypted} aria-label={(it.name || 'This group') + ' — encryption is ' + (it.encrypted ? 'on. Press to turn it off' : 'off. Press to seal it end-to-end')} title={it.encrypted ? 'Sealed end-to-end — even the relay can’t read it. Click to turn off' : 'Encrypt this group end-to-end. Click to seal'} style={{ border: '1px solid ' + (it.encrypted ? 'color-mix(in oklab, var(--clay) 40%, var(--line))' : 'var(--line)'), background: it.encrypted ? 'color-mix(in oklab, var(--clay) 8%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: it.encrypted ? 'var(--clay-ink)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="lock" size={14} color="currentColor" /> {it.encrypted ? 'Encrypted' : 'Encrypt?'}</button> : null}
-            {it.visibility === 'invite' ? <button onClick={() => setEditMembersFor(it)} title="Manage who's in this invite-only group" style={{ border: '1px solid color-mix(in oklab, var(--clay) 35%, var(--line))', background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="lock" size={14} color="currentColor" /> Invite · {(it.members || []).length}</button> : null}
-            <button onClick={() => setLeadersFor(it)} title="Members who help run this group" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--sage-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="users" size={15} color="currentColor" /> Leaders</button>
-            <button onClick={() => window.dispatchEvent(new CustomEvent('steward-open-group-chat', { detail: it }))} title="Open chat" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="chat" size={15} color="currentColor" /> Chat</button>
+            {it.kind === ‘broadcast’ ? <SkPill tint=”gold”>Broadcast</SkPill> : null}
+            {it.kind === ‘team’ ? <button onClick={() => { const r = rosters.find(x => x.team === it.id) || { people: [] }; setTeamMembers({ team: it, people: r.people || [] }); }} title=”See team members” style={{ border: ‘none’, background: ‘none’, padding: 0, cursor: ‘pointer’ }}><SkPill tint=”clay”>Team · {(rosters.find(x => x.team === it.id) || { people: [] }).people.length}</SkPill></button> : null}
+            {(it.leaders && it.leaders.length) ? <SkPill tint=”sage”>{it.leaders.length} leader{it.leaders.length === 1 ? ‘’ : ‘s’}</SkPill> : null}
+            <button onClick={() => pubOr(window.Steward.publishGroup({ ...raw(it), childsafe: !it.childsafe }), ‘Couldn’t change child-safe on “’ + (it.name || ‘that group’) + ‘” — the relay didn’t accept it, so it is unchanged. Check the relay and try again.’)} aria-pressed={!!it.childsafe} aria-label={(it.name || ‘This group’) + ‘ — child-safe is ‘ + (it.childsafe ? ‘on. Press to restrict it to adults’ : ‘off. Press to let members marked as a child join’)} title={it.childsafe ? ‘Child-safe — members marked as a child can join. Click to restrict to adults’ : ‘Hidden from children. Click to mark child-safe so under-18s can join’} style={{ border: ‘1px solid ‘ + (it.childsafe ? ‘color-mix(in oklab, var(--sage) 40%, var(--line))’ : ‘var(--line)’), background: it.childsafe ? ‘color-mix(in oklab, var(--sage) 8%, var(--surface))’ : ‘var(--surface)’, borderRadius: 9, padding: ‘5px 9px’, cursor: ‘pointer’, color: it.childsafe ? ‘var(--sage-ink)’ : ‘var(--ink-3)’, display: ‘flex’, alignItems: ‘center’, gap: 5, fontFamily: ‘var(--font-ui)’, fontWeight: 700, fontSize: 12 }}><Icon name={it.childsafe ? ‘check’ : ‘pray’} size={14} color=”currentColor” /> {it.childsafe ? ‘Child-safe’ : ‘Child-safe?’}</button>
+            {it.kind !== ‘team’ ? <button onClick={() => toggleEncrypt(it)} aria-pressed={!!it.encrypted} aria-label={(it.name || ‘This group’) + ‘ — encryption is ‘ + (it.encrypted ? ‘on. Press to turn it off’ : ‘off. Press to seal it end-to-end’)} title={it.encrypted ? ‘Sealed end-to-end — even the relay can’t read it. Click to turn off’ : ‘Encrypt this group end-to-end. Click to seal’} style={{ border: ‘1px solid ‘ + (it.encrypted ? ‘color-mix(in oklab, var(--clay) 40%, var(--line))’ : ‘var(--line)’), background: it.encrypted ? ‘color-mix(in oklab, var(--clay) 8%, var(--surface))’ : ‘var(--surface)’, borderRadius: 9, padding: ‘5px 9px’, cursor: ‘pointer’, color: it.encrypted ? ‘var(--clay-ink)’ : ‘var(--ink-3)’, display: ‘flex’, alignItems: ‘center’, gap: 5, fontFamily: ‘var(--font-ui)’, fontWeight: 700, fontSize: 12 }}><Icon name=”lock” size={14} color=”currentColor” /> {it.encrypted ? ‘Encrypted’ : ‘Encrypt?’}</button> : null}
+            {it.visibility === ‘invite’ ? <button onClick={() => setEditMembersFor(it)} title=”Manage who’s in this invite-only group” style={{ border: ‘1px solid color-mix(in oklab, var(--clay) 35%, var(--line))’, background: ‘color-mix(in oklab, var(--clay) 7%, var(--surface))’, borderRadius: 9, padding: ‘5px 9px’, cursor: ‘pointer’, color: ‘var(--clay-ink)’, display: ‘flex’, alignItems: ‘center’, gap: 5, fontFamily: ‘var(--font-ui)’, fontWeight: 700, fontSize: 12 }}><Icon name=”lock” size={14} color=”currentColor” /> Invite · {(it.members || []).length}</button> : null}
+            <button onClick={() => setLeadersFor(it)} title=”Members who help run this group” style={{ border: ‘1px solid var(--line)’, background: ‘var(--surface)’, borderRadius: 9, padding: ‘5px 9px’, cursor: ‘pointer’, color: ‘var(--sage-ink)’, display: ‘flex’, alignItems: ‘center’, gap: 5, fontFamily: ‘var(--font-ui)’, fontWeight: 700, fontSize: 12 }}><Icon name=”users” size={15} color=”currentColor” /> Leaders</button>
+            <button onClick={() => window.dispatchEvent(new CustomEvent(‘steward-open-group-chat’, { detail: it }))} title=”Open chat” style={{ border: ‘1px solid var(--line)’, background: ‘var(--surface)’, borderRadius: 9, padding: ‘5px 9px’, cursor: ‘pointer’, color: ‘var(--clay-ink)’, display: ‘flex’, alignItems: ‘center’, gap: 5, fontFamily: ‘var(--font-ui)’, fontWeight: 700, fontSize: 12 }}><Icon name=”chat” size={15} color=”currentColor” /> Chat</button>
           </React.Fragment>
         )}
         renderAside={(it) => (
@@ -4275,7 +4280,68 @@ function DashGroups() {
       ) : null}
       {leadersFor ? <GroupLeadersModal group={leadersFor} onClose={() => setLeadersFor(null)} /> : null}
       {editMembersFor ? <EditGroupMembersModal group={editMembersFor} onClose={() => setEditMembersFor(null)} /> : null}
-      {sealing ? <SkConfirm icon="lock" title={(sealing.on ? 'Seal “' : 'Unseal “') + sealing.g.name + '”?'} confirmLabel={sealing.busy ? 'Sealing…' : (sealing.on ? 'Seal it' : 'Unseal')} busy={!!sealing.busy} err={sealing.err || ''} body={sealing.on ? 'From now on its messages are encrypted end-to-end — not even the relay can read them. Messages already posted stay as they are.' : 'New messages become readable by the relay again. Messages already sealed stay sealed.'} onConfirm={doSeal} onCancel={() => { if (!sealing.busy) setSealing(null); }} /> : null}
+      {settingsFor ? (() => {
+        const g = settingsFor;
+        const sToggle = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 0', borderBottom: '1px solid var(--line)' };
+        const sLabel = { display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 0 };
+        const sName = { fontWeight: 700, fontSize: 14 };
+        const sSub = { fontSize: 12, color: 'var(--ink-3)', marginTop: 2, lineHeight: 1.4 };
+        return (
+          <div onClick={() => setSettingsFor(null)} style={{ position: 'fixed', inset: 0, zIndex: 95, background: 'rgba(40,32,24,.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
+            <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 480, maxHeight: '82vh', overflowY: 'auto', background: 'var(--surface)', borderRadius: '22px 22px 0 0', padding: '22px 20px 28px', boxShadow: 'var(--shadow-lg)', animation: 'lumenScale .2s ease both' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginBottom: 16 }}>
+                <div style={{ width: 40, height: 40, borderRadius: 12, background: `color-mix(in oklab, ${g.accent || (g.kind === 'team' ? 'var(--clay)' : 'var(--sage)')} 16%, var(--surface))`, color: g.accent || (g.kind === 'team' ? 'var(--clay-ink)' : 'var(--sage)'), display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={g.kind === 'team' ? (g.icon || 'shield') : g.kind === 'broadcast' ? 'send' : 'chat'} size={20} /></div>
+                <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 18 }}>{g.name}</div><div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{g.kind === 'team' ? 'Team' : g.kind === 'broadcast' ? 'Broadcast' : 'Group'} settings</div></div>
+                <button onClick={() => setSettingsFor(null)} title=”Close” style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', display: 'flex' }}><Icon name=”x” size={16} /></button>
+              </div>
+
+              <div style={sToggle}>
+                <div style={sLabel}><Icon name={g.childsafe ? 'check' : 'pray'} size={18} color={g.childsafe ? 'var(--sage)' : 'var(--ink-3)'} /><div><div style={sName}>Child-safe</div><div style={sSub}>{g.childsafe ? 'Members marked as a child can join' : 'Hidden from children'}</div></div></div>
+                <input type=”checkbox” className=”sw” checked={!!g.childsafe} onChange={() => { pubOr(window.Steward.publishGroup({ ...raw(g), childsafe: !g.childsafe }), 'Couldn't change child-safe — the relay didn't accept it.'); setSettingsFor({ ...g, childsafe: !g.childsafe }); }} />
+              </div>
+
+              {g.kind !== 'team' ? (
+                <div style={sToggle}>
+                  <div style={sLabel}><Icon name=”lock” size={18} color={g.encrypted ? 'var(--clay-ink)' : 'var(--ink-3)'} /><div><div style={sName}>End-to-end encrypted</div><div style={sSub}>{g.encrypted ? 'Sealed — not even the relay can read it' : 'Messages are readable by the relay'}</div></div></div>
+                  <input type=”checkbox” className=”sw” checked={!!g.encrypted} onChange={() => { toggleEncrypt(g); setSettingsFor(null); }} />
+                </div>
+              ) : null}
+
+              {g.kind !== 'team' && cats.length ? (
+                <div style={sToggle}>
+                  <div style={sLabel}><Icon name=”books” size={18} color=”var(--ink-3)” /><div><div style={sName}>Category</div><div style={sSub}>{g.category ? cats.find(c => c.id === g.category)?.name || 'Unknown' : 'No category'}</div></div></div>
+                  <select value={g.category || ''} onChange={(e) => { pubOr(window.Steward.publishGroup({ ...raw(g), category: e.target.value || undefined }), 'Couldn't change category.'); setSettingsFor({ ...g, category: e.target.value || undefined }); }} style={{ border: '1px solid var(--line)', background: 'var(--surface-2)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13 }}>
+                    <option value=””>None</option>
+                    {cats.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </select>
+                </div>
+              ) : null}
+
+              {g.visibility === 'invite' ? (
+                <div style={{ ...sToggle, cursor: 'pointer' }} onClick={() => { setEditMembersFor(raw(g)); setSettingsFor(null); }}>
+                  <div style={sLabel}><Icon name=”lock” size={18} color=”var(--clay-ink)” /><div><div style={sName}>Invite-only members</div><div style={sSub}>{(g.members || []).length} member{(g.members || []).length === 1 ? '' : 's'}</div></div></div>
+                  <Icon name=”chevR” size={16} color=”var(--ink-3)” />
+                </div>
+              ) : null}
+
+              <div style={{ ...sToggle, cursor: 'pointer' }} onClick={() => { setLeadersFor(raw(g)); setSettingsFor(null); }}>
+                <div style={sLabel}><Icon name=”users” size={18} color=”var(--sage-ink)” /><div><div style={sName}>Leaders</div><div style={sSub}>{(g.leaders || []).length ? g.leaders.length + ' leader' + (g.leaders.length === 1 ? '' : 's') : 'No leaders set'}</div></div></div>
+                <Icon name=”chevR” size={16} color=”var(--ink-3)” />
+              </div>
+
+              <div style={{ ...sToggle, cursor: 'pointer' }} onClick={() => { window.dispatchEvent(new CustomEvent('steward-open-group-chat', { detail: g })); setSettingsFor(null); }}>
+                <div style={sLabel}><Icon name=”chat” size={18} color=”var(--clay-ink)” /><div><div style={sName}>Open chat</div></div></div>
+                <Icon name=”chevR” size={16} color=”var(--ink-3)” />
+              </div>
+
+              <div style={{ ...sToggle, borderBottom: 'none', cursor: 'pointer' }} onClick={() => { setPendingDelete(raw(g)); setSettingsFor(null); }}>
+                <div style={sLabel}><Icon name=”trash” size={18} color=”var(--clay-ink)” /><div><div style={{ ...sName, color: 'var(--clay-ink)' }}>Delete {g.kind === 'team' ? 'team' : 'group'}</div></div></div>
+              </div>
+            </div>
+          </div>
+        );
+      })() : null}
+      {sealing ? <SkConfirm icon=”lock” title={(sealing.on ? 'Seal “' : 'Unseal “') + sealing.g.name + '”?'} confirmLabel={sealing.busy ? 'Sealing…' : (sealing.on ? 'Seal it' : 'Unseal')} busy={!!sealing.busy} err={sealing.err || ''} body={sealing.on ? 'From now on its messages are encrypted end-to-end — not even the relay can read them. Messages already posted stay as they are.' : 'New messages become readable by the relay again. Messages already sealed stay sealed.'} onConfirm={doSeal} onCancel={() => { if (!sealing.busy) setSealing(null); }} /> : null}
     </div>
   );
 }

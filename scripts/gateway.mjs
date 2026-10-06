@@ -118,7 +118,7 @@ const SETTINGS_FILE = join(DATA_DIR,'relay-settings.json');
 // keepApkCurrent: refresh the APKs this box hands out whenever the update source has different ones.
 // DEFAULT OFF on purpose — see the "KEEPING IT CURRENT WITHOUT A HUMAN" note below. A church on a metered
 // or thin pipe must not be given two 40 MB downloads it never asked for; it gets the warning instead.
-const SETTINGS = { serveApp: true, serveModules: true, serveAudio: true, appUrl: '', mediaCap: 0, churchCap: 0, inviteOnly: false, offerHosting: false, mediaRequiresHost: false, lanAccess: false, keepApkCurrent: false };
+const SETTINGS = { serveApp: true, serveModules: true, serveAudio: true, appUrl: '', mediaCap: 0, churchCap: 0, inviteOnly: false, offerHosting: false, mediaRequiresHost: false, lanAccess: false, keepApkCurrent: false, keepRelayCurrent: false, showChurchNames: false };
 function loadSettings() {
   try {
     const s = JSON.parse(readFileSync(SETTINGS_FILE, 'utf8'));
@@ -129,6 +129,8 @@ function loadSettings() {
       SETTINGS.inviteOnly = s.inviteOnly === true;
       SETTINGS.offerHosting = s.offerHosting === true;
       SETTINGS.keepApkCurrent = s.keepApkCurrent === true;
+      SETTINGS.keepRelayCurrent = s.keepRelayCurrent === true;
+      SETTINGS.showChurchNames = s.showChurchNames === true;
       SETTINGS.mediaRequiresHost = s.mediaRequiresHost === true;
       // Desktop app only: may devices on this wifi reach the relay directly? OFF by default. The desktop
       // launcher reads the `lan-access` marker below at start-up to decide RELAY_HOST, so a change needs a
@@ -437,6 +439,30 @@ async function apkAutoRefresh(why, force = false) {
   } catch (e) { console.error('[apk] automatic refresh failed:', (e && e.message) || e); return false; }
   finally { _apkAutoBusy = false; }
 }
+
+let _relayAutoBusy = false;
+async function relayAutoUpdate(why) {
+  if (_relayAutoBusy || !SETTINGS.keepRelayCurrent || PACKAGED) return false;
+  if (existsSync(UPDATE_FLAG)) return false;
+  const src = codeSource() || ORIGIN;
+  if (!src) return false;
+  _relayAutoBusy = true;
+  try {
+    const base = releaseBundleBase(src);
+    let latest = null;
+    if (base !== src + '/relay-app') {
+      try { const r = await fetch(base + '/bundle.json', { cache: 'no-store', signal: AbortSignal.timeout(6000) }); const j = await r.json(); if (j && typeof j.sha === 'string' && /^[0-9a-f]{40}$/.test(j.sha)) latest = j.sha; } catch {}
+    } else {
+      try { const r = await fetch(src.replace(/\/+$/, '') + '/status', { cache: 'no-store', signal: AbortSignal.timeout(6000) }); const s = await r.json(); if (s && s.releases && s.releases.sha) latest = s.releases.sha; else if (s && s.version) latest = s.version; } catch {}
+    }
+    if (!latest || latest === BUILD.sha) return false;
+    console.log('[relay] auto-update: newer build available (' + why + ') — requesting update');
+    writeFileSync(UPDATE_FLAG, 'auto\n');
+    return true;
+  } catch (e) { console.error('[relay] auto-update check failed:', (e && e.message) || e); return false; }
+  finally { _relayAutoBusy = false; }
+}
+setInterval(() => { if (SETTINGS.keepRelayCurrent) relayAutoUpdate('periodic check').catch(() => {}); }, 3600 * 1000);
 
 // The absolute address to send a member to. SETTINGS.appUrl is what the operator has TOLD this box it is
 // reachable at (behind a tunnel the Host header can be anything); fall back to the host the asker used.
@@ -1056,6 +1082,10 @@ function churchPetName(hex) {
   // to about 3%. A collision is cosmetic — nothing routes or gates on the label and the npub is shown beside
   // it — but two identical rows are exactly the confusion this label exists to prevent.
   return cap(_PET_ADJ[x % 16]) + ' ' + cap(_PET_NOUN[(x >>> 4) % 16]) + ' ' + (1000 + (x >>> 9) % 9000);
+}
+function churchLabel(hex) {
+  if (SETTINGS.showChurchNames) { const n = displayName(hex); if (n) return n; }
+  return churchPetName(hex);
 }
 // hex pub -> { by: 'operator' | 'self', at: unix-seconds } — PROVENANCE. Nothing recorded how a church came
 // to be on a relay, so an operator faced with rows they never added had no way to tell which were theirs,
@@ -6133,7 +6163,7 @@ function serveStatic(req, res) {
       ok: true, ...act,
       // resolve pubkeys to the names the operator configured — the console would otherwise print raw npubs.
       // churchPetName() derives from the key; curChurches() is scoped to the /config handler, not here.
-      churches: (act.churches || []).map(c => ({ ...c, name: churchPetName(c.church) })),
+      churches: (act.churches || []).map(c => ({ ...c, name: churchLabel(c.church) })),
       media: { bytes: _mediaBytesTotal, capBytes: effMediaCap() },
       uptimeMs: Date.now() - STARTED_AT,
       // LIVE SOCKETS, for the operator's "Connected now" card. It is the one figure on that dashboard the
@@ -6765,7 +6795,7 @@ function serveStatic(req, res) {
     if (req.method === 'OPTIONS') { res.writeHead(204, { ...SEC_HEADERS, ...CORS }); res.end(); return; }
     const isAdmin = adminOK(req);
     const curChurches = () => [...CHURCH_PUBS].map(p => { const m = CHURCH_META.get(p) || {};
-      return { npub: npubEncode(p), name: churchPetName(p), by: m.by || '', at: m.at || 0 }; });
+      return { npub: npubEncode(p), name: churchLabel(p), by: m.by || '', at: m.at || 0 }; });
     // RELAY-AUDIT-2026-07-20 H1: loadChurches() rebuilds ONLY CHURCH_PUBS/MEDIA_HOSTS. Every
     // other map — MEMBER_DOCS, MEMBERS, GROUP_CHURCH, STEWARDS_BY, BLOCKED_BY, MINORS_BY, APPROVED_BY,
     // GUARDIANS_BY, NETWORKS_BY, ADMITTED_BY, REQUIRE_APPROVAL, MEALS_*, ROSTER_*, FINANCE_SEQ — is only
@@ -7037,6 +7067,8 @@ function serveStatic(req, res) {
           if ('inviteOnly' in s) SETTINGS.inviteOnly = !!s.inviteOnly;
           if ('offerHosting' in s) SETTINGS.offerHosting = !!s.offerHosting;
           if ('keepApkCurrent' in s) SETTINGS.keepApkCurrent = !!s.keepApkCurrent;
+          if ('keepRelayCurrent' in s) SETTINGS.keepRelayCurrent = !!s.keepRelayCurrent;
+          if ('showChurchNames' in s) SETTINGS.showChurchNames = !!s.showChurchNames;
           saveSettings();
           // push the new offer/access state to the directory now, so discovery reflects it without waiting for
           // the next go-public/boot (no-op unless this relay is public + has a claimed name).
@@ -7044,6 +7076,7 @@ function serveStatic(req, res) {
           // Turning the automatic refresh ON acts NOW rather than at the next 12-hour tick. An operator who
           // ticks the box because the panel just told them they are behind must not be left still behind.
           if ('keepApkCurrent' in s && SETTINGS.keepApkCurrent) { apkAutoRefresh('the operator turned it on', true).catch(() => {}); }
+          if ('keepRelayCurrent' in s && SETTINGS.keepRelayCurrent) { relayAutoUpdate('the operator turned it on').catch(() => {}); }
           res.writeHead(200, H); res.end(JSON.stringify({ ok: true, settings: SETTINGS, origin: ORIGIN, packaged: PACKAGED }));
         } catch (e) { res.writeHead(400, H); res.end(JSON.stringify({ error: String((e && e.message) || 'bad request') })); }
       });

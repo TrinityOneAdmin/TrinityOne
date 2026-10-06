@@ -92,6 +92,7 @@
         document.getElementById('s-events').textContent = total.toLocaleString();
         if (st.connections != null) document.getElementById('s-conns').textContent = st.connections;
       }
+      renderDisk(s.storage);
       // sync health — the point of the card is 'is this working?', not a button
       const sw = document.getElementById('syncWhen');
       if (sw && s.sync) {
@@ -302,6 +303,8 @@
       const io = document.getElementById('t-inviteonly'); if (io) io.checked = s.inviteOnly === true;   // access mode lives with the church list card
       const lan = document.getElementById('t-lan'); if (lan) lan.checked = s.lanAccess === true;   // desktop app only; read at launch from the lan-access marker
       const of = document.getElementById('t-offer'); if (of) of.checked = s.offerHosting === true;
+      const sn = document.getElementById('t-shownames'); if (sn) sn.checked = s.showChurchNames === true;
+      const krc = document.getElementById('keepRelayCurrent'); if (krc) krc.checked = s.keepRelayCurrent === true;
       // backup/restore card (unlocked with the admin token, same as this settings fetch). The download streams a
       // big file, so it's a plain <a download> with the token in the query rather than a fetch-into-memory blob.
       const bc = document.getElementById('backupCard'); if (bc) bc.style.display = 'block';
@@ -378,6 +381,16 @@
       const r = await fetch('/settings', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify({ offerHosting: on }) });
       if (!r.ok) throw new Error('save failed');
       if (msg) { msg.style.color = 'var(--sage-ink)'; msg.textContent = on ? '· ✓ discoverable — other churches can auto-find this relay' : '· ✓ private — not advertised'; setTimeout(() => { msg.textContent = ''; }, 3000); }
+    } catch (err) { e.target.checked = !on; if (msg) { msg.style.color = 'var(--clay-ink)'; msg.textContent = '· ✗ ' + (err.message || 'failed'); } }
+  };
+  document.getElementById('t-shownames').onchange = async (e) => {
+    const on = e.target.checked, msg = document.getElementById('cfgMsg');
+    if (msg) { msg.style.color = 'var(--ink-3)'; msg.textContent = '· saving…'; }
+    try {
+      const r = await fetch('/settings', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify({ showChurchNames: on }) });
+      if (!r.ok) throw new Error('save failed');
+      if (msg) { msg.style.color = 'var(--sage-ink)'; msg.textContent = on ? '· ✓ showing real church names' : '· ✓ using generated names'; setTimeout(() => { msg.textContent = ''; }, 3000); }
+      loadConfig();
     } catch (err) { e.target.checked = !on; if (msg) { msg.style.color = 'var(--clay-ink)'; msg.textContent = '· ✗ ' + (err.message || 'failed'); } }
   };
   // restore: two-click confirm (webview confirm() is unreliable), then stream the file to /relay-restore.
@@ -725,6 +738,17 @@
       if (on) setTimeout(loadApkStatus, 2500);   // it starts fetching immediately; show the result
     } catch (err) { e.target.checked = !on; m.style.color = 'var(--clay-ink)'; m.textContent = '✗ ' + (err.message || 'failed'); }
   });
+  document.getElementById('keepRelayCurrent')?.addEventListener('change', async (e) => {
+    const on = e.target.checked, m = document.getElementById('updateMsg');
+    m.style.color = 'var(--ink-3)'; m.textContent = '· saving…';
+    try {
+      const r = await fetch('/settings', { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify({ keepRelayCurrent: on }) });
+      if (!r.ok) throw new Error('save failed');
+      m.style.color = 'var(--sage-ink)';
+      m.textContent = on ? '· ✓ auto-update on — checks hourly' : '· ✓ off — update by hand with the button above';
+      setTimeout(() => { m.textContent = ''; }, 4000);
+    } catch (err) { e.target.checked = !on; m.style.color = 'var(--clay-ink)'; m.textContent = '· ✗ ' + (err.message || 'failed'); }
+  });
   document.getElementById('syncNow')?.addEventListener('click', async () => {
     // Feedback goes to #syncNowMsg, which sits under THIS button in the Settings card. It used to write to
     // #syncMsg — the Relay-health row on the DASHBOARD tab, hidden while Settings is open — so a click (and
@@ -1067,6 +1091,26 @@
         : pct >= 90 ? 'Nearly full — only ' + fmtStore(left) + ' left. Raise the limit in Settings or remove some media.'
         : pct >= 75 ? fmtStore(left) + ' left.'
         : (pct < 1 ? 'Under 1% used' : Math.round(pct) + '% used') + ' · ' + fmtStore(left) + ' free.';
+    }
+  }
+
+  function renderDisk(d) {
+    const row = document.getElementById('diskRow'); if (!row || !d) return;
+    const total = Number(d.totalBytes) || 0, free = Number(d.freeBytes) || 0;
+    if (!total) return;
+    const used = total - free, pct = (used / total) * 100, left = free;
+    row.style.display = 'block';
+    const text = document.getElementById('diskText'), fill = document.getElementById('diskFill'), note = document.getElementById('diskNote');
+    if (text) text.textContent = fmtStore(used) + ' of ' + fmtStore(total);
+    if (fill) {
+      fill.style.width = (used > 0 ? Math.max(2, Math.min(100, Math.round(pct))) : 0) + '%';
+      fill.className = 'bar-fill' + (pct >= 90 ? ' meter--crit' : pct >= 75 ? ' meter--warn' : '');
+    }
+    if (note) {
+      note.className = 'meter-note' + (pct >= 90 ? ' meter--crit' : pct >= 75 ? ' meter--warn' : '');
+      note.textContent = pct >= 95 ? 'Disk nearly full — ' + fmtStore(left) + ' left. Free space or the relay will stop accepting data.'
+        : pct >= 75 ? fmtStore(left) + ' free on this drive.'
+        : Math.round(pct) + '% used · ' + fmtStore(left) + ' free.';
     }
   }
 

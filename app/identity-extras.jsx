@@ -78,6 +78,7 @@ function RecoverySheet({ open, onClose, ctx }) {
   const [busy, setBusy] = useIx('');
   const [bkErr, setBkErr] = useIx('');
   const [file, setFile] = useIx(null);
+  const [passVis, setPassVis] = useIx(false);
   useIxE(() => { if (!open) { setBk(null); setPass(''); setBkErr(''); setFile(null); } }, [open]);
   // Record WHEN, not just that it happened. The success toast lasts a few seconds and then nothing on the
   // screen says a backup exists, so members re-ran it or assumed it had failed (measured repeatedly,
@@ -243,7 +244,10 @@ function RecoverySheet({ open, onClose, ctx }) {
             {bk === 'restore' ? (
               <input type="file" accept=".json,application/json" onChange={e => setFile(e.target.files && e.target.files[0])} style={{ width: '100%', fontSize: 13, marginBottom: 10, fontFamily: 'var(--font-ui)' }} />
             ) : null}
-            <input type="password" aria-label={bk === 'export' ? 'Choose a passphrase for your backup' : 'Your backup PIN or passphrase'} autoComplete="off" value={pass} onChange={e => setPass(e.target.value)} placeholder={bk === 'export' ? ('Choose a passphrase — at least ' + ((window.TrinityBackup && window.TrinityBackup.PASS_MIN) || 12) + ' characters') : 'Your backup PIN or passphrase'} style={{ width: '100%', boxSizing: 'border-box', height: 44, border: '1px solid var(--line)', borderRadius: 11, background: 'var(--surface)', padding: '0 13px', fontSize: 14.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
+            <div style={{ position: 'relative' }}>
+              <input type={passVis ? 'text' : 'password'} aria-label={bk === 'export' ? 'Choose a passphrase for your backup' : 'Your backup PIN or passphrase'} autoComplete="off" value={pass} onChange={e => setPass(e.target.value)} placeholder={bk === 'export' ? ('Choose a passphrase — at least ' + ((window.TrinityBackup && window.TrinityBackup.PASS_MIN) || 12) + ' characters') : 'Your backup PIN or passphrase'} style={{ width: '100%', boxSizing: 'border-box', height: 44, border: '1px solid var(--line)', borderRadius: 11, background: 'var(--surface)', padding: '0 44px 0 13px', fontSize: 14.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
+              <button type="button" aria-label={passVis ? 'Hide passphrase' : 'Show passphrase'} onClick={() => setPassVis(v => !v)} style={{ position: 'absolute', right: 4, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', padding: 8, color: 'var(--ink-3)' }}><Icon name={passVis ? 'eyeOff' : 'eye'} size={18} /></button>
+            </div>
             {bkErr ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, marginTop: 7 }}>{bkErr}</div> : null}
             <div style={{ display: 'flex', gap: 9, marginTop: 11 }}>
               <button onClick={() => { setBk(null); setBkErr(''); }} style={{ flex: 1, padding: 11, borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Cancel</button>
@@ -278,7 +282,8 @@ function CommunitySecuritySheet({ open, onClose, ctx }) {
   const [showOff, setShowOff] = useIx(false);
   const [err, setErr] = useIx('');
   const [busy, setBusy] = useIx(false);
-  useIxE(() => { if (!open) { setPin(''); setPin2(''); setOff(''); setShowOff(false); setErr(''); setBusy(false); } }, [open]);
+  const [pinVis, setPinVis] = useIx(false);
+  useIxE(() => { if (!open) { setPin(''); setPin2(''); setOff(''); setShowOff(false); setErr(''); setBusy(false); setPinVis(false); } }, [open]);
   // "Remember me on this device" must be reversible from here, or the only way out is waiting 30 days. Read
   // when the sheet opens (it lives in the secure store, so this is async) and re-read after turning it off.
   const [remUntil, setRemUntil] = useIx(0);
@@ -352,7 +357,10 @@ function CommunitySecuritySheet({ open, onClose, ctx }) {
         <React.Fragment>
           <p style={{ fontFamily: 'var(--font-read)', fontSize: 15, lineHeight: 1.55, color: 'var(--ink-2)', margin: '6px 0 16px' }}>
             Enter your PIN to open the church community on this device. Your Bible and study stay open either way.</p>
-          <input type="password" aria-label="Your PIN" autoFocus autoComplete="off" value={pin} onChange={e => setPin(e.target.value)} placeholder="PIN" style={inp} />
+          <div style={{ position: 'relative' }}>
+            <input type={pinVis ? 'text' : 'password'} aria-label="Your PIN" autoFocus autoComplete="off" value={pin} onChange={e => setPin(e.target.value)} placeholder="PIN" style={{ ...inp, paddingRight: 44 }} />
+            <button type="button" aria-label={pinVis ? 'Hide PIN' : 'Show PIN'} onClick={() => setPinVis(v => !v)} style={{ position: 'absolute', right: 4, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', padding: 8, color: 'var(--ink-3)' }}><Icon name={pinVis ? 'eyeOff' : 'eye'} size={18} /></button>
+          </div>
           {err ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, marginTop: 8 }}>{err}</div> : null}
           <button onClick={doUnlock} disabled={busy} style={{ ...primary, marginTop: 14 }}>{busy ? '…' : 'Unlock'}</button>
         </React.Fragment>
@@ -363,8 +371,11 @@ function CommunitySecuritySheet({ open, onClose, ctx }) {
           <p style={{ fontSize: 13, color: 'var(--ink-3)', lineHeight: 1.55, margin: '8px 0 0' }}>Be aware of what it does <b>not</b> do: someone who inspects this phone properly can still tell that you use TrinityOne and which church you belong to. The PIN protects what is <i>inside</i> your church, not the fact that you are in one.</p>
           <p style={{ fontFamily: 'var(--font-read)', fontSize: 13, lineHeight: 1.5, color: 'var(--ink-3)', margin: '0 0 16px' }}>
             If you forget the PIN, restore your 12-word recovery phrase to get back in. Keep those words safe.</p>
-          <input type="password" aria-label="Choose a PIN or passphrase" autoComplete="new-password" value={pin} onChange={e => setPin(e.target.value)} placeholder="Choose a PIN or passphrase" style={inp} />
-          <input type="password" aria-label="Confirm your PIN" autoComplete="new-password" value={pin2} onChange={e => setPin2(e.target.value)} placeholder="Confirm PIN" style={{ ...inp, marginTop: 10 }} />
+          <div style={{ position: 'relative' }}>
+            <input type={pinVis ? 'text' : 'password'} aria-label="Choose a PIN or passphrase" autoComplete="new-password" value={pin} onChange={e => setPin(e.target.value)} placeholder="Choose a PIN or passphrase" style={{ ...inp, paddingRight: 44 }} />
+            <button type="button" aria-label={pinVis ? 'Hide PIN' : 'Show PIN'} onClick={() => setPinVis(v => !v)} style={{ position: 'absolute', right: 4, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', padding: 8, color: 'var(--ink-3)' }}><Icon name={pinVis ? 'eyeOff' : 'eye'} size={18} /></button>
+          </div>
+          <input type={pinVis ? 'text' : 'password'} aria-label="Confirm your PIN" autoComplete="new-password" value={pin2} onChange={e => setPin2(e.target.value)} placeholder="Confirm PIN" style={{ ...inp, marginTop: 10, paddingRight: 44 }} />
           {err ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, marginTop: 8 }}>{err}</div> : null}
           <button onClick={doEnable} disabled={busy} style={{ ...primary, marginTop: 14 }}>{busy ? '…' : 'Turn on protection'}</button>
         </React.Fragment>
@@ -391,7 +402,10 @@ function CommunitySecuritySheet({ open, onClose, ctx }) {
           ) : (
             <div style={{ marginTop: 12, padding: 13, borderRadius: 13, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
               <div style={{ fontSize: 13, color: 'var(--ink-2)', marginBottom: 9 }}>Enter your PIN to turn protection off. Your identity will be stored unencrypted again.</div>
-              <input type="password" aria-label="Your PIN" value={off} autoComplete="off" onChange={e => setOff(e.target.value)} placeholder="Your PIN" style={inp} />
+              <div style={{ position: 'relative' }}>
+                <input type={pinVis ? 'text' : 'password'} aria-label="Your PIN" value={off} autoComplete="off" onChange={e => setOff(e.target.value)} placeholder="Your PIN" style={{ ...inp, paddingRight: 44 }} />
+                <button type="button" aria-label={pinVis ? 'Hide PIN' : 'Show PIN'} onClick={() => setPinVis(v => !v)} style={{ position: 'absolute', right: 4, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', padding: 8, color: 'var(--ink-3)' }}><Icon name={pinVis ? 'eyeOff' : 'eye'} size={18} /></button>
+              </div>
               {err ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, marginTop: 8 }}>{err}</div> : null}
               <div style={{ display: 'flex', gap: 9, marginTop: 11 }}>
                 <button onClick={() => { setShowOff(false); setOff(''); setErr(''); }} style={{ flex: 1, padding: 11, borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Cancel</button>

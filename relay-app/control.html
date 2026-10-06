@@ -145,16 +145,7 @@
   @keyframes mRise { from { opacity:0; transform:translateY(8px) } to { opacity:1; transform:none } }
   @media (prefers-reduced-motion: reduce) { * { transition-duration:.001ms !important; animation-duration:.001ms !important; } }
 
-  /* ══ Settings, per the design mock ═══════════════════════════════════════════════════════════════
-     Three interaction registers, made visible: applies-immediately (sage), needs-Save (gold), and
-     can't-be-undone (clay-deep). Previously an instant checkbox and "Restore — replaces everything"
-     sat in the same visual register, and the difference was carried only by prose. */
-  .legend { display:flex; gap:20px; flex-wrap:wrap; align-items:center; padding:12px 18px; border:1px solid var(--line);
-            border-radius:var(--r-md); background:var(--surface); box-shadow:var(--shadow-sm); margin-bottom:26px; }
-  .legend-item { display:flex; align-items:center; gap:9px; font-size:12.5px; color:var(--ink-2); font-weight:600; }
-  .legend-swatch { width:14px; height:14px; border-radius:5px; flex-shrink:0; }
-  .ls-instant { background:var(--sage); } .ls-save { background:var(--gold); } .ls-danger { background:var(--clay-deep); }
-  .legend b { color:var(--ink); font-weight:700; }
+  /* ══ Settings ═══════════════════════════════════════════════════════════════════════════════════ */
   /* (.group/.group-head/.group-title/.group-hint/.span-wide/.row2 removed — Settings no longer has
      headed two-up sections; every card now lives in the .deck3 column flow below.) */
   /* Settings is three columns of cards, laid out with CSS multi-column rather than grid.
@@ -440,6 +431,11 @@
       <div class="bar-track"><div class="bar-fill" id="storeFill" style="width:0%"></div></div>
       <div class="meter-note" id="storeNote"></div>
     </div>
+    <div id="diskRow" style="margin-top:10px; display:none">
+      <div class="meter-top"><span class="meter-k">Disk</span><span class="meter-v" id="diskText">—</span></div>
+      <div class="bar-track"><div class="bar-fill" id="diskFill" style="width:0%"></div></div>
+      <div class="meter-note" id="diskNote"></div>
+    </div>
     <div class="muted" style="margin-top:8px">Each church can trust more than one relay, and this box keeps itself level with theirs automatically. Updating and syncing on demand live in <b>Settings</b>.</div>
   </div>
 
@@ -464,12 +460,6 @@
 
   <div id="setBody">
 
-  <!-- the three interaction registers, made learnable instead of guessable -->
-  <div class="legend">
-    <span class="legend-item"><span class="legend-swatch ls-instant"></span><b>Applies immediately</b>&nbsp;— confirmed by the relay</span>
-    <span class="legend-item"><span class="legend-swatch ls-save"></span><b>Needs Save</b>&nbsp;— review, then apply together</span>
-    <span class="legend-item"><span class="legend-swatch ls-danger"></span><b>Can't be undone</b>&nbsp;— asks you to confirm</span>
-  </div>
 
   <!-- Every settings card in one three-column flow, rather than three separately-headed two-up rows. The
        section headings were costing a card's worth of vertical space each to label pairs the card titles
@@ -510,7 +500,8 @@
       </div>
       <div class="ch-toggles">
         <div class="toggle-row"><div class="toggle-main"><div class="toggle-t">Invite-only</div><div class="toggle-s">You add each church. Off = a church can add itself from its Steward console.</div></div><input type="checkbox" class="sw" id="t-inviteonly" aria-label="Invite-only"></div>
-        <div class="toggle-row"><div class="toggle-main"><div class="toggle-t">Offer to host other churches</div><div class="toggle-s">Churches without a server can find this relay via “Auto-find relays” and ask to join.</div></div><input type="checkbox" class="sw" id="t-offer" aria-label="Offer to host other churches"></div>
+        <div class=”toggle-row”><div class=”toggle-main”><div class=”toggle-t”>Offer to host other churches</div><div class=”toggle-s”>Churches without a server can find this relay via “Auto-find relays” and ask to join.</div></div><input type=”checkbox” class=”sw” id=”t-offer” aria-label=”Offer to host other churches”></div>
+        <div class=”toggle-row”><div class=”toggle-main”><div class=”toggle-t”>Show church names</div><div class=”toggle-s”>Off by default — churches are labelled with a generated name from their key. On shows the real name from each church's profile.</div></div><input type=”checkbox” class=”sw” id=”t-shownames” aria-label=”Show church names”></div>
       </div>
       <div class="ch-add">
         <input class="mono" id="addNpub" placeholder="Paste an npub to add a church…" autocomplete="off" spellcheck="false" aria-label="Add a church by npub" />
@@ -596,6 +587,13 @@
           </div>
           <div class="hint" id="syncNowMsg" role="status" aria-live="polite" style="min-height:1.2em"></div>
           <div class="hint">Updating the relay's software does <b>not</b> update the app installer it hands out — those are separate, and the installer has its own card below.</div>
+        </div>
+        <div class="toggle-row" style="margin-top:10px">
+          <div class="toggle-main">
+            <div class="toggle-t">Update automatically</div>
+            <div class="toggle-s">Checks hourly and applies new builds with no downtime beyond the restart. Off by default — the relay restarts briefly each time.</div>
+          </div>
+          <input type="checkbox" class="sw" id="keepRelayCurrent" aria-label="Update relay software automatically">
         </div>
       </section>
 

@@ -8,7 +8,7 @@ function SearchScreen({ ctx, onBack }) {
   const [active, setActive] = useSrch(qParam.trim());
   const versions = Bible.versions();
   const [ver, setVer] = useSrch(Bible.activeVersion);
-  const run = (term) => { const t = term.trim(); setQ(t); setActive(t); };
+  const run = (term) => { const t = term.trim(); setQ(t); setActive(t); setTab('all'); };
 
   const isStrong = /^[GH]\d+$/i.test(active);
   const lexEntry = isStrong ? Bible.lex(active) : null;
@@ -26,6 +26,7 @@ function SearchScreen({ ctx, onBack }) {
   const hits = React.useMemo(() => active && !isStrong ? Bible.search(active, 250, ver) : [], [active, ver, modTick]);
   // free-text search also scans installed dictionary/lexicon DEFINITIONS (guard in case an older cached engine has no searchDict)
   const dictHits = React.useMemo(() => active && !isStrong && Bible.searchDict ? Bible.searchDict(active, 24) : [], [active, modTick]);
+  const [tab, setTab] = useSrch('all');
   const seeds = ['light', 'love', 'God', 'beginning', 'life'];
 
   const hl = (text) => {
@@ -109,53 +110,70 @@ function SearchScreen({ ctx, onBack }) {
             </div>
           ) : (
             <React.Fragment>
-              {dictHits.length ? (
+              {dictHits.length && hits.length ? (
+                <div className=”no-scrollbar” style={{ display: 'flex', gap: 0, marginBottom: 16, borderRadius: 12, border: '1px solid var(--line)', overflow: 'hidden' }}>
+                  {[['words', 'Words · ' + dictHits.length], ['verses', 'Verses · ' + hits.length + (hits.length >= 250 ? '+' : '')]].map(([k, label]) => (
+                    <button key={k} onClick={() => setTab(k)} style={{ flex: 1, padding: '10px 0', border: 'none', cursor: 'pointer',
+                      fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13.5,
+                      background: tab === k ? 'var(--clay)' : 'var(--surface)', color: tab === k ? 'var(--on-clay)' : 'var(--ink-2)' }}>{label}</button>
+                  ))}
+                </div>
+              ) : null}
+              {(tab !== 'verses' && dictHits.length) ? (
                 <div style={{ marginBottom: 22 }}>
-                  <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--clay-ink)', letterSpacing: '.5px', marginBottom: 10 }}>DICTIONARY · {dictHits.length}{dictHits.length >= 24 ? '+' : ''} match{dictHits.length === 1 ? '' : 'es'}</div>
+                  {!(dictHits.length && hits.length) ? <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--clay-ink)', letterSpacing: '.5px', marginBottom: 10 }}>DICTIONARY · {dictHits.length}{dictHits.length >= 24 ? '+' : ''} match{dictHits.length === 1 ? '' : 'es'}</div> : null}
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
                     {dictHits.map(d => {
                       const strong = /^[GH]\d+$/i.test(d.id);
                       return (
-                        <div key={d.id} onClick={strong ? () => ctx.openWord(d.id) : undefined} style={{
+                        <div key={d.id} onClick={() => strong ? ctx.openWord(d.id) : run(d.lemma || d.id)} style={{
                           padding: '13px 15px', borderRadius: 15, background: 'var(--surface)', border: '1px solid var(--line)',
-                          boxShadow: 'var(--shadow)', cursor: strong ? 'pointer' : 'default' }}>
+                          boxShadow: 'var(--shadow)', cursor: 'pointer' }}>
                           <div style={{ display: 'flex', alignItems: 'baseline', gap: 9, flexWrap: 'wrap' }}>
                             <span style={{ fontFamily: 'var(--font-read)', fontSize: 18, fontWeight: 600, color: 'var(--ink)' }}>{d.lemma || d.id}</span>
                             {d.translit ? <span style={{ fontFamily: 'var(--font-read)', fontStyle: 'italic', fontSize: 14, color: 'var(--ink-2)' }}>{d.translit}</span> : null}
                             {strong ? <span style={{ marginLeft: 'auto', fontSize: 11, fontWeight: 700, color: 'var(--clay-ink)', background: 'var(--clay-soft)', padding: '2px 8px', borderRadius: 999 }}>{d.id}</span> : null}
                           </div>
                           {(d.short || d.gloss) ? <div style={{ fontSize: 13.5, color: 'var(--ink-2)', marginTop: 4, lineHeight: 1.45 }}>{d.short || d.gloss}</div> : null}
+                          <div style={{ fontSize: 12, color: 'var(--clay)', fontWeight: 600, marginTop: 6 }}>{strong ? 'Tap for full definition' : 'Tap to search verses'} →</div>
                         </div>
                       );
                     })}
                   </div>
                 </div>
               ) : null}
-              <div style={{ fontSize: 13.5, color: 'var(--ink-2)', marginBottom: 18 }}>
-                <b style={{ color: 'var(--ink)' }}>{hits.length}{hits.length >= 250 ? '+' : ''}</b> result{hits.length === 1 ? '' : 's'} for “<b style={{ color: 'var(--clay)' }}>{active}</b>”
-              </div>
-              {hits.length ? (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
-                  {hits.map((r, i) => (
-                    <div key={i} onClick={() => ctx.gotoRef(r.book, r.chap, r.verse)} style={{
-                      padding: 15, borderRadius: 16, background: 'var(--surface)', border: '1px solid var(--line)', cursor: 'pointer', boxShadow: 'var(--shadow)' }}>
-                      <div style={{ fontWeight: 700, color: 'var(--clay)', fontSize: 13.5, marginBottom: 4 }}>{r.ref}</div>
-                      <p style={{ margin: 0, fontFamily: 'var(--font-read)', fontSize: 16.5, lineHeight: 1.5, color: 'var(--ink)', textWrap: 'pretty' }}
-                        dangerouslySetInnerHTML={{ __html: window.sanitizeHtml(hl(r.text)) }} />
-                    </div>
-                  ))}
-                </div>
-              ) : (
+              {tab !== 'words' ? (
                 <React.Fragment>
-                  <p style={{ color: 'var(--ink-2)', fontFamily: 'var(--font-read)', fontSize: 16.5, lineHeight: 1.55, marginBottom: 14 }}>
-                    No verses in this translation match “{active}”. Try another word, switch translations in the reader, or add another from the catalogue.
-                  </p>
-                  <button onClick={() => ctx.openStore('language', 'bibles')} style={{ display: 'inline-flex', alignItems: 'center', gap: 9,
-                    padding: '12px 16px', borderRadius: 14, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 700, fontSize: 14.5,
-                    fontFamily: 'var(--font-ui)', cursor: 'pointer' }}>
-                    <Icon name="globe" size={17} color="#fff" /> Search 1,000+ translations</button>
+                  <div style={{ fontSize: 13.5, color: 'var(--ink-2)', marginBottom: 18 }}>
+                    <b style={{ color: 'var(--ink)' }}>{hits.length}{hits.length >= 250 ? '+' : ''}</b> result{hits.length === 1 ? '' : 's'} for “<b style={{ color: 'var(--clay)' }}>{active}</b>”
+                  </div>
+                  {hits.length ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
+                      {hits.map((r, i) => (
+                        <div key={i} onClick={() => { if (onBack) onBack(); ctx.gotoRef(r.book, r.chap, r.verse); }} style={{
+                          padding: 15, borderRadius: 16, background: 'var(--surface)', border: '1px solid var(--line)', cursor: 'pointer', boxShadow: 'var(--shadow)' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <div style={{ fontWeight: 700, color: 'var(--clay)', fontSize: 13.5 }}>{r.ref}</div>
+                            <Icon name=”chevR” size={14} color=”var(--clay)” style={{ marginLeft: 'auto', flexShrink: 0 }} />
+                          </div>
+                          <p style={{ margin: '4px 0 0', fontFamily: 'var(--font-read)', fontSize: 16.5, lineHeight: 1.5, color: 'var(--ink)', textWrap: 'pretty' }}
+                            dangerouslySetInnerHTML={{ __html: window.sanitizeHtml(hl(r.text)) }} />
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <React.Fragment>
+                      <p style={{ color: 'var(--ink-2)', fontFamily: 'var(--font-read)', fontSize: 16.5, lineHeight: 1.55, marginBottom: 14 }}>
+                        No verses in this translation match “{active}”. Try another word, switch translations in the reader, or add another from the catalogue.
+                      </p>
+                      <button onClick={() => ctx.openStore('language', 'bibles')} style={{ display: 'inline-flex', alignItems: 'center', gap: 9,
+                        padding: '12px 16px', borderRadius: 14, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 700, fontSize: 14.5,
+                        fontFamily: 'var(--font-ui)', cursor: 'pointer' }}>
+                        <Icon name=”globe” size={17} color=”#fff” /> Search 1,000+ translations</button>
+                    </React.Fragment>
+                  )}
                 </React.Fragment>
-              )}
+              ) : null}
             </React.Fragment>
           )}
         </div>
