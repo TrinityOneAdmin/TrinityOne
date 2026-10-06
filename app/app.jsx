@@ -178,6 +178,16 @@ function useBible(){
 // "Saved to Photos" / "Card ready to share" and did nothing at all. Sharing the words is what a member
 // actually wants, and unlike rendering the card to an image it needs no extra library.
 function verseShareText(v) { if (!v) return ''; const t = String(v.text || '').trim(); const r = String(v.ref || '').trim(); return r ? (t + '\n\n' + r) : t; }
+function verseShareUrl(v) {
+  if (!v || !v.text) return '';
+  var FS = window.Fellowship, relays = FS && FS.relays;
+  if (!relays || !relays.length) return '';
+  var base = String(relays[0]).replace(/^wss:\/\//i, 'https://').replace(/^ws:\/\//i, 'http://').replace(/\/relay\/?$/, '').replace(/\/+$/, '');
+  if (!base) return '';
+  var p = new URLSearchParams(); p.set('r', String(v.ref || '')); p.set('t', String(v.text || '')); if (v.version) p.set('v', v.version);
+  return base + '/v?' + p.toString();
+}
+function verseShareFull(v) { var t = verseShareText(v); var u = verseShareUrl(v); return u ? t + '\n\n' + u : t; }
 const CARD_STYLES = [
   { id: 'clay', bg: 'linear-gradient(155deg, var(--clay), var(--clay-deep))', fg: '#fff', serif: true },
   { id: 'sage', bg: 'linear-gradient(155deg, #6BA17C, #3C6E57)', fg: '#fff', serif: true },
@@ -198,7 +208,7 @@ function ShareCard({ verse, open, onClose, ctx }) {
           {/* These two used to be theatre: one toasted "Card ready to share" and the other "Saved to Photos",
               and neither rendered, saved or shared anything. ctx.shareText is the real thing (native share
               sheet, then Web Share, then clipboard), so share the verse itself rather than lie about a file. */}
-          <IconBtn name="share" title="Share this verse" onClick={() => { ctx.shareText(verseShareText(verse), 'A verse for you'); }} />
+          <IconBtn name="share" title="Share this verse" onClick={() => { ctx.shareText(verseShareFull(verse), 'A verse for you'); }} />
         </div>
         <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '8px 26px' }}>
           <div style={{
@@ -226,7 +236,7 @@ function ShareCard({ verse, open, onClose, ctx }) {
               }} />
             ))}
           </div>
-          <button onClick={() => { ctx.shareText(verseShareText(verse), 'A verse for you'); }} style={{
+          <button onClick={() => { ctx.shareText(verseShareFull(verse), 'A verse for you'); }} style={{
             width: '100%', padding: 15, borderRadius: 16, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)',
             fontWeight: 700, fontSize: 15.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', marginBottom: 14,
             display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,

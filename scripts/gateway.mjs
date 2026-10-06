@@ -22,6 +22,7 @@ import { openStore, matchFilter } from './event-store.mjs';
 import { D, MEMBER_WRITABLE_TYPES } from './trinity-doc-types.mjs';   // NAMES, plus the one NARROWING list (see memberDocTypeOk)
 import { buildCalendar, publicEventFields } from './public-calendar.mjs';   // the church's PUBLIC calendar feed (pure: no I/O, no policy)
 import { buildWidgetScript } from './public-widget.mjs';   // the embeddable calendar widget (pure: same script for every church)
+import { buildVersePage } from './public-verse.mjs';       // standalone verse page for public sharing (pure: no I/O, no store)
 // WHO MAY HOLD THE CHECK-IN HELPER KEY is asked in ONE place, and this is not it — see the file's own header.
 // The relay imports three things and derives nothing: the parser (so a grant means the same to the box that
 // stores it and the console that mints it), and the declared-source test (so a grant cannot claim a
@@ -6158,6 +6159,24 @@ function serveStatic(req, res) {
   // NOTHING IN THE PRODUCT CONSULTS THIS YET. The proof and the gates that read it land separately and
   // deliberately: a relay older than this cannot answer, so the day something starts REQUIRING an answer is
   // the day every un-upgraded relay drops out of its church's network. Adding the endpoint is safe alone.
+  // SHARED VERSE PAGE — a self-contained HTML page showing a Bible verse, linked from the app's share sheet.
+  // No auth, no store lookup: the verse text travels in the URL's query params and is templated into the HTML
+  // so that Open Graph tags work for link previews (WhatsApp, iMessage, Slack). The CSP allows inline style
+  // (the page's own CSS) and nothing else. Cached briefly so repeated taps don't re-render.
+  if (route === '/v') {
+    if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405, { 'Allow': 'GET, HEAD', ...SEC_HEADERS }); res.end(); return; }
+    let r = '', t = '', v = '';
+    try { const q = new URL(req.url, 'http://x').searchParams; r = q.get('r') || ''; t = q.get('t') || ''; v = q.get('v') || ''; } catch {}
+    const body = Buffer.from(buildVersePage(r, t, v), 'utf8');
+    res.writeHead(200, {
+      'Content-Type': 'text/html; charset=utf-8', 'Content-Length': body.length,
+      'Cache-Control': 'public, max-age=3600',
+      'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+      'Access-Control-Allow-Origin': '*', ...SEC_HEADERS,
+    });
+    res.end(req.method === 'HEAD' ? undefined : body);
+    return;
+  }
   // THE CHURCH'S PUBLIC CALENDAR — the one thing this relay serves about a church without authentication, and
   // only while that church has asked it to. See publicFeed() for the rules; this line only routes.
   if (route === '/public' || route.startsWith('/public/')) { publicFeed(req, res, route); return; }
