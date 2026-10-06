@@ -1729,6 +1729,7 @@ function rejectLog(evt, ws, why) {
   } catch (e) { /* logging must never break the relay */ }
 }
 const STARTED_AT = Date.now();
+let _wsBytesIn = 0, _wsBytesOut = 0;
 const MEMBERS = new Set();     // EFFECTIVE members (write-allowed): self-joined, minus blocked, minus unapproved (when a church gates joining). Rebuilt by rebuildMembers().
 const MEMBER_DOCS = new Map(); // churchpub -> Set(pubkeys who published a member: doc — i.e. asked to join / joined)
 const TRUSTED_RELAYS = new Map(); // churchpub -> Set(relay pubkeys the church authorised as trusted infra — may pull the FULL corpus)
@@ -6145,6 +6146,7 @@ function serveStatic(req, res) {
       // than a church fact, but it is still a signal about how busy a congregation is, and the gated
       // endpoint costs nothing to use — the panel already sends the token for its activity chart.
       connections: wss ? wss.clients.size : 0,
+      traffic: { bytesIn: _wsBytesIn, bytesOut: _wsBytesOut },
     }));
     return;
   }
@@ -6246,6 +6248,36 @@ function serveStatic(req, res) {
   // public request has an X-Forwarded-For header and a public Host — we require BOTH a real loopback socket AND
   // no proxy header AND a loopback Host, which only a direct same-machine request satisfies. No CORS header is
   // sent, so a cross-origin page in a local browser can't read the response either (only the relay's own UI can).
+  if (route === '/dns-check') {
+    const H = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...SEC_HEADERS };
+    if (!adminOK(req)) { res.writeHead(401, H); res.end('{"error":"unauthorized"}'); return; }
+    let domain = ''; try { domain = new URL(req.url, 'http://x').searchParams.get('domain') || ''; } catch {}
+    domain = domain.toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '').trim();
+    if (!domain || !/^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/.test(domain)) { res.writeHead(400, H); res.end(JSON.stringify({ error: 'invalid domain' })); return; }
+    (async () => {
+      try {
+        const addrs = await dnsLookup(domain, { all: true });
+        const resolved = (addrs || []).map(a => a.address);
+        const ts = await tsStateCached();
+        const ownAddrs = [];
+        if (ts && ts.dnsName) {
+          try { const ta = await dnsLookup(ts.dnsName, { all: true }); for (const a of (ta || [])) ownAddrs.push(a.address); } catch {}
+        }
+        const ra = (req.socket && req.socket.localAddress) || '';
+        if (ra && ra !== '::' && ra !== '0.0.0.0') ownAddrs.push(ra.replace(/^::ffff:/, ''));
+        const ownSet = new Set(ownAddrs);
+        const matches = resolved.filter(a => ownSet.has(a));
+        const pointsHere = matches.length > 0;
+        const tsDns = (ts && ts.dnsName) || '';
+        res.writeHead(200, H);
+        res.end(JSON.stringify({ ok: true, domain, resolved, ownAddrs: [...ownSet], pointsHere, tsDns: tsDns.replace(/\.$/, '') }));
+      } catch (e) {
+        const msg = /ENOTFOUND|ENODATA/.test(String(e.code || '')) ? 'domain not found in DNS' : String(e.message || e);
+        res.writeHead(200, H); res.end(JSON.stringify({ ok: false, domain, error: msg }));
+      }
+    })();
+    return;
+  }
   if (route === '/local-token') {
     const ra = (req.socket && req.socket.remoteAddress) || '';
     const loopbackSock = ra === '127.0.0.1' || ra === '::1' || ra === '::ffff:127.0.0.1';
@@ -8130,6 +8162,8 @@ server.on('upgrade', (req, socket, head) => {
 wss.on('connection', (ws, req) => {
   subs.set(ws, new Map());
   ws.isAlive = true;
+  const _origSend = ws.send.bind(ws);
+  ws.send = (data, ...a) => { _wsBytesOut += (typeof data === 'string') ? Buffer.byteLength(data) : (data && data.length) || 0; return _origSend(data, ...a); };
   // The host this client actually dialled, for the NIP-42 relay-binding check below. Cloudflare/Tailscale
   // tunnels forward the original Host, so this is the public name the member typed/was invited to.
   // AN IPv6-LITERAL HOST IS "[::1]:8000", AND SPLITTING ON ":" TURNS IT INTO "[". Audit 2026-09-02 #20.
@@ -8151,6 +8185,7 @@ wss.on('connection', (ws, req) => {
   // ordinary public reads have zero auth overhead and invite-group members auth exactly when needed.
   ws.on('pong', () => { ws.isAlive = true; });
   ws.on('message', raw => {
+    _wsBytesIn += (typeof raw === 'string') ? Buffer.byteLength(raw) : raw.length;
     // DoS guard: verifyEvent (schnorr) runs on every inbound EVENT, so an unthrottled flood — even of
     // forged events that get rejected — is a CPU-amplification vector. Cap inbound messages per
     // connection (~100/s, far above any legitimate client); persistent abuse closes the socket.

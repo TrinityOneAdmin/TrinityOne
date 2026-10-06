@@ -296,6 +296,7 @@
       document.getElementById('t-modules').checked = s.serveModules !== false;
       document.getElementById('t-audio').checked = s.serveAudio !== false;
       document.getElementById('t-appurl').value = s.appUrl || '';
+      if (typeof updateDnsWizard === 'function') { _dnsTs = ''; updateDnsWizard(); }
       const gb = (b) => b ? String(Math.round(b / 1e9 * 100) / 100) : '';
       document.getElementById('t-mediacap').value = gb(s.mediaCap);
       document.getElementById('t-churchcap').value = gb(s.churchCap);
@@ -360,6 +361,54 @@
     } catch (e) { msg.style.color = 'var(--clay-ink)'; msg.textContent = '· ✗ ' + e.message; }
   }
   document.getElementById('saveServes').onclick = saveServes;
+
+  // ── DNS wizard: show setup instructions when a domain is entered ──────────
+  var _dnsTs = '';
+  function updateDnsWizard() {
+    const raw = (document.getElementById('t-appurl').value || '').trim();
+    const domain = raw.replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '').toLowerCase();
+    const wiz = document.getElementById('dnsWizard');
+    if (!domain || !/^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/.test(domain)) { wiz.style.display = 'none'; return; }
+    if (domain === _dnsTs) return;
+    _dnsTs = domain;
+    wiz.style.display = 'block';
+    const steps = document.getElementById('dnsSteps');
+    steps.innerHTML =
+      '<div style="margin-bottom:6px">Go to your domain registrar (where you bought <code>' + esc(domain) + '</code>) and create a DNS record:</div>' +
+      '<table style="width:100%; border-collapse:collapse; font-size:12px; font-family:var(--mono)">' +
+      '<tr style="border-bottom:1px solid var(--line)"><td style="padding:5px 8px; font-weight:700; color:var(--ink-3)">Type</td><td style="padding:5px 8px"><b>A</b> (or <b>CNAME</b>)</td></tr>' +
+      '<tr style="border-bottom:1px solid var(--line)"><td style="padding:5px 8px; font-weight:700; color:var(--ink-3)">Name</td><td style="padding:5px 8px">' + esc(domain) + '</td></tr>' +
+      '<tr><td style="padding:5px 8px; font-weight:700; color:var(--ink-3)">Points to</td><td style="padding:5px 8px" id="dnsTarget"><span style="color:var(--ink-3)">loading…</span></td></tr>' +
+      '</table>' +
+      '<div style="font-size:11.5px; color:var(--ink-3); margin-top:8px">If using a CNAME, point it at your Tailscale hostname. If using an A record, point it at this relay’s IP address. Changes can take a few minutes to propagate.</div>';
+    fetch('/dns-check?domain=' + encodeURIComponent(domain), { headers: authHeaders(), cache: 'no-store' })
+      .then(r => r.json()).then(j => {
+        const tgt = document.getElementById('dnsTarget');
+        if (!tgt) return;
+        if (j.tsDns) tgt.innerHTML = '<b>' + esc(j.tsDns) + '</b> <span style="color:var(--ink-3)">(CNAME)</span> or <b>' + esc((j.ownAddrs || [])[0] || '?') + '</b> <span style="color:var(--ink-3)">(A record)</span>';
+        else if (j.ownAddrs && j.ownAddrs.length) tgt.innerHTML = '<b>' + esc(j.ownAddrs[0]) + '</b>';
+        else tgt.textContent = '(could not detect — check your network)';
+      }).catch(() => {});
+  }
+  document.getElementById('t-appurl').addEventListener('input', updateDnsWizard);
+  document.getElementById('t-appurl').addEventListener('change', updateDnsWizard);
+  document.getElementById('dnsCheck').onclick = async () => {
+    const raw = (document.getElementById('t-appurl').value || '').trim();
+    const domain = raw.replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '').toLowerCase();
+    const res = document.getElementById('dnsResult');
+    if (!domain) { res.textContent = ''; return; }
+    res.style.color = 'var(--ink-3)'; res.textContent = 'Checking…';
+    try {
+      const r = await fetch('/dns-check?domain=' + encodeURIComponent(domain), { headers: authHeaders(), cache: 'no-store' });
+      const j = await r.json();
+      if (!j.ok) { res.style.color = 'var(--clay-ink)'; res.textContent = '✗ ' + (j.error || 'lookup failed'); return; }
+      if (j.pointsHere) { res.style.color = 'var(--sage-ink)'; res.textContent = '✓ ' + domain + ' points to this relay'; }
+      else { res.style.color = 'var(--clay-ink)'; res.textContent = '✗ ' + domain + ' resolves to ' + (j.resolved || []).join(', ') + ' — not this relay' + ((j.ownAddrs || []).length ? ' (' + j.ownAddrs.join(', ') + ')' : ''); }
+    } catch (e) { res.style.color = 'var(--clay-ink)'; res.textContent = '✗ ' + e.message; }
+  };
+  // show the wizard if a domain is already saved
+  setTimeout(updateDnsWizard, 500);
+
   // access mode: invite-only saves live (its own switch, not tied to the church-list Save button)
   document.getElementById('t-inviteonly').onchange = async (e) => {
     const on = e.target.checked, msg = document.getElementById('cfgMsg');
@@ -1089,6 +1138,8 @@
       const media = document.getElementById('s-media');
       if (media) media.textContent = fmtStore((s.media || {}).bytes);
       renderStorage(s.media || {});
+      const tf = s.traffic; const tEl = document.getElementById('s-traffic');
+      if (tf && tEl) tEl.textContent = fmtBytes((tf.bytesIn || 0) + (tf.bytesOut || 0)) || '0 B';
     } catch (e) { /* relay down — the hero already says so */ }
   }
   // the activity window moves slowly; a minute is plenty and keeps "Sent today" honest without polling

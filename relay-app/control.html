@@ -377,6 +377,7 @@
     <div class="stat"><div class="n" id="s-conns">—</div><div class="l">Connected now</div></div>
     <div class="stat"><div class="n" id="s-today">—</div><div class="l">Sent today</div></div>
     <div class="stat"><div class="n" id="s-media">—</div><div class="l">Media stored</div></div>
+    <div class="stat"><div class="n" id="s-traffic">—</div><div class="l">Traffic (session)</div></div>
   </div>
 
   <!-- card deck: auto-fill grid, so it is 1 column on a phone and packs to 2–3 on a laptop without a
@@ -538,8 +539,16 @@
         </div>
         <div class="field" style="margin-top:16px">
           <div class="field-l">Church web address (optional)</div>
-          <input id="t-appurl" placeholder="https://yourchurch.org" spellcheck="false" autocapitalize="none" aria-label="Church web address" />
-          <div class="hint">Point your domain's DNS at this box — the app, joining codes and handles read as yours.</div>
+          <input id="t-appurl" placeholder="yourchurch.org" spellcheck="false" autocapitalize="none" aria-label="Church web address" />
+          <div class="hint">Your own domain. The app, joining codes and handles read as yours.</div>
+          <div id="dnsWizard" style="display:none; margin-top:12px; padding:14px; border-radius:var(--r-sm); background:var(--surface-2); border:1px solid var(--line)">
+            <div style="font-weight:700; font-size:13px; margin-bottom:8px">DNS setup</div>
+            <div id="dnsSteps" style="font-size:12.5px; color:var(--ink-2); line-height:1.6"></div>
+            <div style="display:flex; gap:8px; margin-top:10px; align-items:center">
+              <button class="btn btn-ghost" id="dnsCheck" style="white-space:nowrap"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;vertical-align:-2px"><path d="M20 6 9 17l-5-5"></path></svg> Verify DNS</button>
+              <span id="dnsResult" style="font-size:12.5px; font-weight:600"></span>
+            </div>
+          </div>
         </div>
         <div class="field">
           <div class="field-l">Storage limits <span id="mediaUsed" style="text-transform:none; letter-spacing:0"></span></div>
