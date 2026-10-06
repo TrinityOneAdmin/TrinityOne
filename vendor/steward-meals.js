@@ -65,6 +65,12 @@
     const CARECHAT_D = NET + "/carechat:";
     const uid = (p) => p + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
     const now = () => Math.floor(Date.now() / 1e3);
+    const _lastStampM = /* @__PURE__ */ new Map();
+    function _monotonicM(dtag) {
+      const n = now(), last = _lastStampM.get(dtag) || 0, at = n > last ? n : last + 1;
+      _lastStampM.set(dtag, at);
+      return at;
+    }
     const activeChurch = () => {
       const s = S();
       return s && (s.actingChurch || s.churchPub) || "";
@@ -598,11 +604,14 @@
         } catch (e) {
         }
       }
-      const sealed = S().sealToPubs([...audience, ...extra, cp], { text: body, by: cp, at: now() });
+      const msgId = Math.random().toString(36).slice(2, 10);
+      const dtag = CARECHAT_D + reqId + ":" + msgId;
+      const at = _monotonicM(dtag);
+      const sealed = S().sealToPubs([...audience, ...extra, cp], { text: body, by: cp, at });
       if (!sealed) return null;
-      const tags = [["d", CARECHAT_D + reqId + ":" + Math.random().toString(36).slice(2, 10)], ["t", NET], ["t", "carechat"], ["church", cp]];
+      const tags = [["d", dtag], ["t", NET], ["t", "carechat"], ["church", cp]];
       if (requesterPub) tags.push(["p", requesterPub]);
-      return S().publishSigned({ kind: 30078, created_at: now(), tags, content: JSON.stringify(sealed) });
+      return S().publishSigned({ kind: 30078, created_at: at, tags, content: JSON.stringify(sealed) });
     }
     window.StewardMeals = {
       // settings

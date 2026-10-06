@@ -322,3 +322,19 @@ test('37: a verse the reader DID pick still highlights, and tapping the same ver
   R.tapVerse(7); assert.equal(cardOpen(R), true);
   R.tapVerse(7); assert.equal(cardOpen(R), false, 'tapping the only selected verse again should deselect it and close the card');
 });
+
+// ── Strong's numbers remember their toggle, and are visible by default ───────────────────────────────────
+// Regression 2026-10-04 (Oppo APK, Philippians 2): AKJV+S selected, Strong's dictionary installed, no
+// inline concordance numbers visible. The toggle defaulted to false and was not persisted to localStorage,
+// so every app launch hid them — a member who chose the "+S" variant (the whole point of which is Strong's)
+// never saw them unless they found and toggled the setting every single time.
+const READ = readFileSync(new URL('../app/screens-read.jsx', import.meta.url), 'utf8');
+
+test("the Strong's toggle is persisted to localStorage and defaults to visible", () => {
+  const src = READ.replace(/\/\/[^\n]*/g, '');
+  assert.match(src, /showStrongs.*lsGet\('trinityone\.readerStrongs'/,
+    'showStrongs must be initialised from localStorage, not hardcoded false — without this every launch hides ' +
+    "the concordance numbers that the member chose a Strong's Bible for");
+  assert.match(src, /lsSet\('trinityone\.readerStrongs', showStrongs\)/,
+    'the toggle must persist to localStorage, or toggling it on does nothing after the next launch');
+});

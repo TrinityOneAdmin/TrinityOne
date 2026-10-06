@@ -30,7 +30,7 @@ const ME = 'm'.repeat(64), RECIP = 'r'.repeat(64);
 const TODAY = '2026-10-02';
 const NEED = { id: 'n1', type: 'meals', status: 'open', recipient: RECIP, startDate: '2026-10-05', endDate: '2026-10-06', meals: ['dinner'], title: 'Meals for the Okafor family' };
 
-function card({ minorState, isMinor = false, embedded = true, slots = [], focus = true }) {
+function card({ minorState, isMinor = false, embedded = true, slots = [], focus = true, freshLocalStorage = false }) {
   const { React, draw } = miniReact();
   const globals = {
     React, console, setTimeout, clearTimeout, setInterval, clearInterval,
@@ -38,7 +38,7 @@ function card({ minorState, isMinor = false, embedded = true, slots = [], focus 
     ChurchBadge: Stub('ChurchBadge'),
     document: { addEventListener() {}, removeEventListener() {}, querySelector: () => null },
     navigator: { userAgent: '' }, location: { search: '', hostname: 'x' },
-    localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+    localStorage: { getItem: freshLocalStorage ? () => null : (k) => (k === 'trinityone.care.sec.need' || k === 'trinityone.care.sec.give') ? '1' : null, setItem() {}, removeItem() {} },
     lsGet: (k, d) => d, lsSet: () => {},
     cx: (...a) => a.filter(Boolean).join(' '),
     SectionLabel: Stub('SectionLabel'), Halo: Stub('Halo'), Sheet: Stub('Sheet'), IconBtn: Stub('IconBtn'),
@@ -91,12 +91,12 @@ for (const [label, args] of [['a confirmed MINOR', { minorState: 'minor', isMino
     assert.match(c.words, /If you need help/, 'the half they ARE offered — asking for help — went with it');
   });
 
-  test(`${label} on the TODAY card is offered no sign-up either`, () => {
+  test(`${label} on the TODAY card sees no care card at all (reaches care via the What’s Happening link)`, () => {
     const c = card({ ...args, embedded: false, focus: false });
     assert.doesNotMatch(c.words, /Someone in the church could use a hand/);
     assert.doesNotMatch(c.words, /Meals for the Okafor family/);
     assert.equal(button(c.tree, 'I’ll help').length, 0);
-    assert.match(c.words, /Ask for help/, 're-anchor: the Today card lost its ask-for-help control altogether');
+    assert.doesNotMatch(c.words, /Practical care/, 'the care card should be gated off Today for a child with no actionable items');
   });
 }
 
@@ -154,4 +154,18 @@ test('ENGINE CONTROL: a confirmed adult, and a member whose answer has not arriv
     assert.equal(r && r.ok, true, 'the guard refused a member the church has not marked as a child: ' + JSON.stringify(self));
     assert.equal(f.published.length, 1);
   }
+});
+
+// ── care sections default to collapsed ───────────────────────────────────────────────────────────────────
+// A fresh install (localStorage returns null for the section keys) must show both "If you need help" and
+// "If you can help" as headings, but NOT their contents — CareSection defaults to collapsed, so the member
+// sees a tidy summary, not two long open lists.
+test('both care sections start COLLAPSED for a fresh user — the headings appear but the sign-up content does not', () => {
+  const c = card({ minorState: 'adult', freshLocalStorage: true });
+  assert.match(c.words, /If you need help/, 'the section heading must still render when collapsed');
+  assert.match(c.words, /If you can help/, 'the section heading must still render when collapsed');
+  assert.doesNotMatch(c.words, /Sign up for a day/,
+    'a collapsed section rendered its children — CareSection.defaultOpen is not false');
+  assert.doesNotMatch(c.words, /Meals for the Okafor family/,
+    'a collapsed section rendered its children — CareSection.defaultOpen is not false');
 });

@@ -1522,7 +1522,7 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
     return (
       <Overlay open={open} onClose={onClose}>
         <div style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 8px)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 16px 6px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 16px 6px' }}>
             <button onClick={() => setEdit(false)} style={{ border: 'none', background: 'none', color: 'var(--ink-2)', fontWeight: 600, fontSize: 15, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Cancel</button>
             <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17 }}>Edit profile</span>
             <button onClick={() => {
@@ -1577,7 +1577,7 @@ function ProfileSheet({ open, onClose, identity, onSave, ctx }) {
   return (
     <Overlay open={open} onClose={onClose}>
       <div style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 8px)' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 16px 6px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 16px 6px' }}>
           <IconBtn name="chevL" onClick={onClose} />
           <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17 }}>You</span>
           <IconBtn name="pen" onClick={() => setEdit(true)} />
@@ -1892,8 +1892,8 @@ function ChildrenAtChurchSheet({ open, onClose, ctx }) {
   );
   return (
     <Overlay open={open} onClose={onClose}>
-      <div style={{ paddingTop: 50, flexShrink: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px 6px' }}>
+      <div style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 8px)', flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px 12px' }}>
           <IconBtn name="chevL" onClick={onClose} />
           <h1 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 24, fontWeight: 700, letterSpacing: '-.4px' }}>Children at church</h1>
         </div>
@@ -2060,8 +2060,8 @@ function FamilySheet({ open, onClose, ctx }) {
   const words = made ? made.mnemonic.split(/\s+/) : [];
   return (
     <Overlay open={open} onClose={onClose}>
-      <div style={{ paddingTop: 50 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 16px 6px' }}>
+      <div style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 8px)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 16px 12px' }}>
           <IconBtn name="chevL" onClick={() => { if (stage === 'list') onClose(); else { setStage('list'); setMade(null); setName(''); setErr(''); } }} />
           <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17 }}>{stage === 'reveal' ? 'Set up the child’s device' : stage === 'name' ? 'Add a child' : 'Children’s accounts'}</span>
           <div style={{ width: 38 }} />

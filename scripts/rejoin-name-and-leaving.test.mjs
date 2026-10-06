@@ -31,6 +31,7 @@ import { fnBody, stripComments } from './test-slice.mjs';
 const BACKUP = readFileSync(new URL('../app/backup.jsx', import.meta.url), 'utf8');
 const CHURCH = readFileSync(new URL('../app/screens-church.jsx', import.meta.url), 'utf8');
 const DASH   = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
+const FELLOW = readFileSync(new URL('../src/fellowship.src.js', import.meta.url), 'utf8');
 
 test('a backup carries the member’s own name — and NOT the church directory', () => {
   const src = stripComments(BACKUP);
@@ -100,4 +101,37 @@ test('the console catches up on enrolment when it is unlocked', () => {
     'naming a church must re-run the enrolment effect: it bails on !church.name and is the only thing that ' +
     'mints the name key, so without this a new church has no key until some unrelated change fires — which ' +
     'is the 8-minute window in which its calendar was written in the clear');
+});
+
+// ── REJOIN: a returning member's docs hub is re-opened after the member doc lands ──────────────────────────
+// 2026-10-06. The docs hub subscription races with announceMembership: the hub opens (from subscribeChurchJoin)
+// before the member doc is on the relay, so canRead withholds the admitted: doc. After EOSE, the stored doc is
+// never re-sent, and the member stays on "waiting for approval" forever — the console knows they're admitted,
+// the phone does not. The fix: after a FRESH join (not a heartbeat) lands, close and re-open the hub so the
+// relay re-evaluates canRead with the member doc on disk.
+const VENDOR = readFileSync(new URL('../vendor/fellowship.js', import.meta.url), 'utf8');
+
+test('a fresh join re-opens the docs hub so the relay can serve gated docs', () => {
+  const fn = fnBody(FELLOW, 'async announceMembership', 'announceMembership');
+  const src = stripComments(fn);
+  assert.match(src, /!firstJoined.*_docsHubs/s,
+    'after a fresh join publish (not a heartbeat), the docs hub must be re-opened — without this a returning ' +
+    "member's admitted doc is withheld because the hub opened before the member doc landed on the relay");
+  assert.match(src, /_docsHubOpen\(hub\)/,
+    'the hub must be re-opened, not just closed — closing without re-opening drops the subscription');
+  // The same fix in _outboxFlush: the announce may fail and land via retry.
+  const flush = fnBody(FELLOW, 'async function _outboxFlush()', '_outboxFlush');
+  const fs2 = stripComments(flush);
+  assert.match(fs2, /item\.join.*_docsHubs/s,
+    'when a queued join lands via outbox retry, the docs hub must also be re-opened');
+  assert.match(fs2, /_docsHubOpen\(hub\)/,
+    'the outbox path must re-open the hub too');
+});
+
+test('the rejoin hub re-open survives bundling', () => {
+  const vFn = fnBody(VENDOR, 'async announceMembership(', 'vendor announceMembership');
+  assert.match(vFn, /!firstJoined/,
+    'the fresh-join docs-hub re-open was removed by the bundler — dead-code elimination ate it');
+  assert.match(vFn, /_docsHubOpen/,
+    'the hub re-open call was removed from the bundled announceMembership');
 });

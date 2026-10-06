@@ -3450,6 +3450,7 @@ async function _outboxFlush() {
         _outbox = _outbox.filter(o => o.evt.id !== item.evt.id);
         _dmPlain.delete(item.evt.id);   // delivered by RETRY — the first-attempt path clears its own; this one was leaking for the session
         _outboxSave();
+        if (item.join) { const _cp = item.join; setTimeout(() => { const hub = _docsHubs.get(_cp); if (hub && hub.closer) { const c = hub.closer; hub.closer = null; try { c(); } catch {} _docsHubOpen(hub); } }, 500); }
       } catch (e) {
         const errs = (e && e.errors) ? e.errors : [e];               // AggregateError from Promise.any
         const permanent = errs.length && errs.every(isPermanentRefusal);
@@ -4335,6 +4336,10 @@ window.Fellowship = {
       // request". Queueing first protects the failure path; forgetting to dequeue broke the happy one.
       _outbox = _outbox.filter(o => o.evt.id !== evt.id);
       _outboxSave();
+      // REJOIN: the docs hub may have opened before this event landed, so the
+      // relay withheld gated docs (admitted:, groups) because we were not yet
+      // effective. Re-open the hub now that the relay holds our member doc.
+      if (!firstJoined) { const _cp = cp; setTimeout(() => { const hub = _docsHubs.get(_cp); if (hub && hub.closer) { const c = hub.closer; hub.closer = null; try { c(); } catch {} _docsHubOpen(hub); } }, 500); }
     }
     catch (e) { console.warn('[fellowship] membership publish failed — queued for retry', e); }
     return ok ? evt : null;
@@ -7579,12 +7584,13 @@ window.Fellowship = {
     // the adults the church cleared, and widening it to the rota is the whole defect this file was written
     // for. Only the request's own `aud` tag may authorise the widening.
     const extra = audience.team ? ((await _fetchCareTeam(cp)) || []) : [];
-    const sealed = _sealToPubs([...audience.pubs, ...extra, cp, pub], { text: body, by: pub, at: Math.floor(Date.now() / 1000) });
-    if (!sealed) return null;
     const msgId = _hex(crypto.getRandomValues(new Uint8Array(6)));
     const tags = [['d', CARECHAT_D + reqId + ':' + msgId], ['t', NET], ['t', 'carechat'], ['church', cp]];
     if (requesterPub) tags.push(['p', requesterPub]);
-    const evt = finalizeEvent({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags, content: JSON.stringify(sealed) }, sk);
+    const tmpl = _monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags, content: '' });
+    const sealed = _sealToPubs([...audience.pubs, ...extra, cp, pub], { text: body, by: pub, at: tmpl.created_at });
+    if (!sealed) return null;
+    const evt = finalizeEvent({ ...tmpl, content: JSON.stringify(sealed) }, sk);
     try { await _publishAny(publishSetFor(cp), evt); } catch (e) { return null; }
     return { id: msgId };
   },

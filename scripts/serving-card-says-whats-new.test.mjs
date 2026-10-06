@@ -492,3 +492,43 @@ for (const width of WIDTHS) {
       `at ${width}px the badged page scrolls sideways (${badged.docScrollW}px of content in ${width}px)`);
   });
 }
+
+// ── care link on the What's Happening card ────────────────────────────────────────────────────────────────
+// Owner 2026-10-03: care lives in the Care tab, not on Today. A "Care" label on the What's Happening card
+// is the discoverability path — three members could not find the tab on their own.
+
+test('the What’s Happening card shows a Care link when the church has care enabled', () => {
+  const s = todayScreen({ care: { settings: { enabled: true } } });
+  const tree = s.draw();
+  const card = servingCard(tree);
+  assert.ok(card.length >= 1, 'the What’s happening card is not on the screen');
+  const cardTexts = texts(card[0]);
+  assert.ok(cardTexts.some(t => /care/i.test(t)),
+    'the What’s Happening card does not mention care — a member with care enabled cannot discover the Care tab ' +
+    'from the home screen');
+});
+
+test('tapping Care on the What’s Happening card opens the Care tab, not the default', () => {
+  const s = todayScreen({ care: { settings: { enabled: true } } });
+  const tree = s.draw();
+  const careSpans = find(tree, n => n.type === 'span' && typeof (n.props || {}).onClick === 'function'
+    && texts(n).some(t => /care/i.test(t)));
+  assert.ok(careSpans.length >= 1, 'no tappable Care element on the What’s Happening card');
+  careSpans[0].props.onClick({ stopPropagation() {} });
+  assert.deepEqual(s.opened, [['care']],
+    `tapping Care navigated to ${JSON.stringify(s.opened)} instead of the care tab`);
+});
+
+test('no Care link when the church has care disabled', () => {
+  for (const careState of [undefined, {}, { settings: {} }, { settings: { enabled: false } }]) {
+    const s = todayScreen({ care: careState });
+    const tree = s.draw();
+    const card = servingCard(tree);
+    assert.ok(card.length >= 1, 'the card is missing for care state ' + JSON.stringify(careState));
+    const careSpans = find(tree, n => n.type === 'span' && typeof (n.props || {}).onClick === 'function'
+      && texts(n).some(t => /care/i.test(t)));
+    assert.equal(careSpans.length, 0,
+      `care is ${JSON.stringify(careState)} but a tappable Care link appeared on Today — a member whose church ` +
+      `has care turned off would tap it and find nothing`);
+  }
+});

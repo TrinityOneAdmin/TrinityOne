@@ -230,7 +230,7 @@ function IdentitySwitcher({ church, churchName, initials, onEditName, compact = 
               <button key={idn.pub} onClick={() => pick(idn.pub)} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '9px 10px', borderRadius: 10, border: 'none', cursor: 'pointer', textAlign: 'left', background: on ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'transparent', fontFamily: 'var(--font-ui)' }}>
                 <div style={{ width: 28, height: 28, borderRadius: 8, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--clay) 13%, var(--surface))', color: 'var(--clay-ink)' }}><Icon name={icon} size={15} /></div>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontWeight: 700, fontSize: 13.5, color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</div>
+                  <div style={{ fontWeight: 700, fontSize: 14, lineHeight: 1.3 }}>{label}</div>
                   <div style={{ fontSize: 10.5, color: 'var(--ink-3)' }}>{subtitle}</div>
                 </div>
                 {on ? <Icon name="check" size={15} stroke={2.6} color="var(--clay)" /> : null}
@@ -586,7 +586,10 @@ function PublishErrorBanner() {
   // other message here uses, because the whole point of the slot is that nothing has gone wrong for the
   // person reading it.
   const clamped = modalUp && !openWide;   // one line while a dialog is up, until the steward says otherwise
-  const card = (text, key, clear, tone) => (
+  const card = (text, key, clear, tone) => {
+    const isLong = !modalUp && typeof text === 'string' && text.length > 45;
+    const truncated = clamped || (isLong && !openWide);
+    return (
     <div key={key} role="alert" aria-live={tone === 'sg' ? 'assertive' : 'polite'} aria-atomic="true"
       // ⚠ THE CARD INTERCEPTS, AND IT MUST. A pass-through card shipped here for exactly one commit and was
       // the worst thing on this branch: the card is OPAQUE, so an 11px band that painted as an error banner
@@ -597,7 +600,7 @@ function PublishErrorBanner() {
       // attribute above.
       style={{ pointerEvents: 'auto', maxWidth: 560, width: '100%', display: 'flex', alignItems: clamped ? 'center' : 'flex-start', gap: 10, padding: clamped ? '5px 10px' : '12px 14px', borderRadius: 13, background: tone === 'quiet' ? 'var(--surface-2)' : 'color-mix(in oklab, var(--clay) 12%, var(--surface))', border: tone === 'quiet' ? '1px solid var(--line)' : '1px solid color-mix(in oklab, var(--clay) 40%, transparent)', boxShadow: 'var(--shadow-lg)' }}>
       <Icon name={tone === 'sg' ? 'shield' : 'bolt'} size={17} color={tone === 'quiet' ? 'var(--ink-3)' : 'var(--clay)'} style={{ flexShrink: 0, marginTop: clamped ? 0 : 1 }} />
-      <div style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: tone === 'quiet' ? 'var(--ink-2)' : 'var(--ink)', lineHeight: 1.45, fontWeight: 600, ...(clamped ? { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } : null) }}>
+      <div style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: tone === 'quiet' ? 'var(--ink-2)' : 'var(--ink)', lineHeight: 1.45, fontWeight: 600, ...(truncated ? { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } : null) }}>
         {/* THE WAY BACK DOWN, the inverse of `Show`. Expanding the banner over a dialog shortens that dialog to
             calc(100vh - 220px - 28px) (steward.html); at 730x328 that is 80px of dialog, and until this pill
             existed nothing collapsed the banner again while the dialog stayed open — `openWide` cleared only on
@@ -610,7 +613,7 @@ function PublishErrorBanner() {
             `stew-reach-44` (steward.html) adds an invisible ::before that extends the HIT area 9px above and
             below, past 44 — the codebase’s own floor — without a taller pill and without reaching sideways,
             where Dismiss is. The pill’s top sits 11px inside the card, so the extra 9 never leaves it. */}
-        {modalUp && openWide ? <button onClick={() => setOpenWide(false)} aria-label="Collapse this message to one line" title="Collapse this message to one line" className="stew-reach-44"
+        {(modalUp || isLong) && openWide ? <button onClick={() => setOpenWide(false)} aria-label="Collapse this message to one line" title="Collapse this message to one line" className="stew-reach-44"
           style={{ pointerEvents: 'auto', float: 'right', margin: '-2px 0 4px 10px', border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '4px 9px', minHeight: 28, cursor: 'pointer', fontSize: 11.5, fontWeight: 700, fontFamily: 'var(--font-ui)', color: 'var(--ink-2)' }}>Collapse</button> : null}
         {text}
       </div>
@@ -628,7 +631,7 @@ function PublishErrorBanner() {
           UI-AUDIT-PLAN-console-apk.md §2 item 2) — so this is the strip's height, the whole of what exists.
           No horizontal reach: Dismiss is beside it and the two must not overlap
           (scripts/the-error-banner-clears-a-dialog-on-the-phone.test.mjs). */}
-      {clamped ? <button onClick={() => setOpenWide(true)} aria-label="Show the whole message" title="Show the whole message"
+      {truncated ? <button onClick={() => setOpenWide(true)} aria-label="Show the whole message" title="Show the whole message"
         style={{ pointerEvents: 'auto', border: 'none', background: 'none', padding: 0, minHeight: 36, margin: '-6px 0', display: 'flex', alignItems: 'center', cursor: 'pointer', flexShrink: 0, fontFamily: 'var(--font-ui)' }}>
         <span style={{ display: 'inline-flex', alignItems: 'center', boxSizing: 'border-box', border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '4px 9px', minHeight: 24, fontSize: 11.5, fontWeight: 700, color: 'var(--ink-2)' }}>Show</span></button> : null}
       {/* ⚠ A TARGET BIGGER THAN ITS CARD IS NOT A BIGGER TARGET. TWO DIFFERENT SHAPES, ONE PER STATE.
@@ -705,6 +708,7 @@ function PublishErrorBanner() {
             : { minHeight: 44, padding: 14, margin: -14 }) }}><Icon name="x" size={16} /></button>
     </div>
   );
+  };
   // BELOW the header, not over it. Absolutely positioned at top:12 the card covered the entire tab strip at
   // 360px — measured with elementFromPoint, every control including the Members tab the message tells you to
   // open. `top: 64` clears the header, and pointerEvents:none on the wrapper means the gap either side of the
@@ -1438,7 +1442,7 @@ function StewSetupWizard({ church, onDone, onTab, onSettings, onInvite, onNewPos
   );
 
   if (step === 1) return (
-    <WizShell step={step} title="Your church’s recovery key" sub="These 12 words are your church — nothing else can restore it: not us, not your relay, not a backup file."
+    <WizShell step={step} title="Your church’s recovery key" sub={<React.Fragment><b style={{ color: 'var(--ink)' }}>These 12 words are your church</b> — nothing else can restore it.</React.Fragment>}
       footer={<React.Fragment>
         <button onClick={() => setStep(0)} className="sk-btn sk-btn--ghost" style={{ padding: '12px 16px' }}><Icon name="chevL" size={15} color="currentColor" /> Back</button>
         <div style={{ flex: 1 }} />
@@ -3956,7 +3960,7 @@ function GroupChatModal({ group, onClose }) {
                       empty innerText, aria-label null — a screen reader had nothing to announce. */}
                   <button onClick={() => setMenuFor(v => v === m.id ? '' : m.id)} title="Moderate" aria-label={'Moderate the message from ' + (nameFor(m.by) || 'a member')} aria-expanded={menuFor === m.id} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 3, borderRadius: 7 }}><Icon name="dots" size={15} /></button>
                   {menuFor === m.id ? (
-                    <div style={{ position: 'absolute', top: 22, [m.mine ? 'left' : 'right']: 0, zIndex: 6, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 5, minWidth: 154, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    <div style={{ position: 'absolute', top: 22, left: 0, zIndex: 6, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 5, minWidth: 154, display: 'flex', flexDirection: 'column', gap: 2 }}>
                       <button onClick={() => (pin && pin.msgId === m.id) ? doUnpin() : doPin(m)} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer', padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="pin" size={15} color="#8a6717" /> {(pin && pin.msgId === m.id) ? 'Unpin message' : 'Pin message'}</button>
                       <button onClick={() => doRemove(m)} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer', padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--clay-ink)', textAlign: 'left' }}><Icon name="trash" size={15} color="var(--clay)" /> Remove message</button>
                     </div>
@@ -5904,6 +5908,11 @@ function DashMembers() {
   // Which member we have just told the steward something about, and what. Per-row rather than a page banner:
   // the thing being explained happened to one person and the row is where they are looking.
   const [minorNotice, setMinorNotice] = React.useState(null);   // { pk, text }
+  const [dmConvos, setDmConvos] = React.useState([]);
+  const [dmOpen, setDmOpen] = React.useState(true);
+  const _dmConn = window.useStewardConn ? window.useStewardConn() : 0;
+  React.useEffect(() => (window.Steward && window.Steward.subscribeDMConvos ? window.Steward.subscribeDMConvos(setDmConvos) : undefined), [_dmConn]);
+  const openDm = (c) => { const m = members.find(x => x.pubkey === c.peer); window.dispatchEvent(new CustomEvent('steward-open-dm', { detail: { pubkey: c.peer, npub: c.npub, name: (m && m.name) || '', nip05: m && m.nip05 } })); };
   // does THIS church allow children to have photographs at all? (church profile → features.childPhotos)
   const kidPhotosAllowed = !!(church && church.features && church.features.childPhotos === true);
   // (a refusal is already on the banner — _requireTrustedView raised it — and must not escape the click uncaught)
@@ -6647,6 +6656,35 @@ function DashMembers() {
           </div>
         </div>
       ) : null}
+      {dmConvos.length ? (
+        <div style={{ marginBottom: 12, borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface)', overflow: 'hidden' }}>
+          <div onClick={() => setDmOpen(v => !v)} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '12px 14px', cursor: 'pointer', userSelect: 'none' }}>
+            <Icon name="chat" size={16} color="var(--clay-ink)" />
+            <div style={{ flex: 1, fontWeight: 800, fontSize: 13, color: 'var(--ink)' }}>Private messages · {dmConvos.length}</div>
+            <Icon name={dmOpen ? 'chevU' : 'chevD'} size={14} color="var(--ink-3)" />
+          </div>
+          {dmOpen ? (
+            <div className="no-scrollbar" style={{ maxHeight: 240, overflowY: 'auto', padding: '0 10px 10px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {dmConvos.map(c => {
+                const m = members.find(x => x.pubkey === c.peer);
+                const name = (m && m.name) || 'Member';
+                const handle = m && m.nip05 ? m.nip05 : null;
+                const initials = (name !== 'Member' ? name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'AN').toUpperCase();
+                return (
+                  <div key={c.peer} onClick={() => openDm(c)} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)', cursor: 'pointer' }}>
+                    <SkBadge initials={initials} av={(m && m.av) || null} pubkey={c.peer} size={32} radius={10} accent={SK_TINT.gold.fg} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 700, fontSize: 14, lineHeight: 1.3 }}>{name}</div>
+                      <div style={{ fontSize: 11.5, color: handle ? 'var(--sage-ink)' : 'var(--ink-3)', fontWeight: handle ? 700 : 400, fontFamily: handle ? 'var(--font-ui)' : 'var(--mono)' }}>{handle ? '@' + handle : shortNpub(c.npub)}</div>
+                    </div>
+                    <Icon name="chat" size={15} color="var(--clay-ink)" />
+                  </div>
+                );
+              })}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
       {/* A rotation that did not land. Rendered at the top of the panel and NOT tied to the confirm dialog,
           which has already closed by the time the publish resolves — the same mistake that made the safety
           check's warning unreachable three times. It stays until dismissed: the steward believes the person
@@ -6698,7 +6736,7 @@ function DashMembers() {
                 <div key={m.pubkey} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 10, background: 'var(--surface)', border: '1px solid var(--line)' }}>
                   <SkBadge initials={initials} av={m.av} pubkey={m.pubkey} size={32} radius={10} accent={SK_TINT[named ? 'gold' : 'sage'].fg} />
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 700, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</div>
+                    <div style={{ fontWeight: 700, fontSize: 14, lineHeight: 1.3 }}>{label}</div>
                     <div style={{ fontSize: 11.5, color: 'var(--ink-3)', fontFamily: nameHandle(m) ? 'var(--font-ui)' : 'var(--mono)' }}>{nameHandle(m) ? '@' + nameHandle(m) : shortNpub(m.npub)} · wants to join</div>
                   </div>
                   {/* ON THE ROW, NEVER BEHIND A MENU. Admission is the one act a steward takes on this list, and only
@@ -10870,7 +10908,8 @@ function StewDmWindow({ peer, offset, onClose }) {
   const scRef = React.useRef(null);
   const [rxFor, setRxFor] = React.useState('');   // msg id whose emoji picker is open
   const [err, setErr] = React.useState('');      // a send that never left this console, said out loud
-  React.useEffect(() => window.Steward.subscribeDMThread(peer.pubkey, setMsgs), [peer.pubkey]);
+  const _threadConn = window.useStewardConn ? window.useStewardConn() : 0;
+  React.useEffect(() => window.Steward.subscribeDMThread(peer.pubkey, setMsgs), [peer.pubkey, _threadConn]);
   // ⚠ THE OTHER HALF OF THE OUTBOX, AND IT LIVED NOWHERE. The engine has had outboxForPeer, retryQueuedDM
   // and dropQueuedDM since the outbox was added; this window called none of them, and `msgs` only ever holds
   // what comes BACK off the relay. So a message the console had safely queued was invisible: the composer
@@ -10920,7 +10959,7 @@ function StewDmWindow({ peer, offset, onClose }) {
   const DM_EMOJI = ['❤️', '🙏', '👍', '😂', '😮', '😢'];
   const initials = (peer.name && peer.name !== 'Anonymous' ? peer.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'AN').toUpperCase();
   return (
-    <div style={{ width: 316, background: 'var(--surface)', borderRadius: '14px 14px 0 0', border: '1px solid var(--line)', borderBottom: 'none', boxShadow: 'var(--shadow-lg)', display: 'flex', flexDirection: 'column', overflow: 'hidden', height: min ? 48 : 420, transition: 'height .18s' }}>
+    <div style={{ width: '100%', background: 'var(--surface)', borderTop: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', display: 'flex', flexDirection: 'column', overflow: 'hidden', height: min ? 48 : 420, transition: 'height .18s', pointerEvents: 'auto' }}>
       <div onClick={() => setMin(v => !v)} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '9px 11px', cursor: 'pointer', background: 'var(--surface)', borderBottom: min ? 'none' : '1px solid var(--line)', flexShrink: 0 }}>
         <SkBadge initials={initials} size={28} radius={9} accent={SK_TINT.gold.fg} />
         <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 13.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{peer.name || 'Member'}</div><div style={{ fontSize: 10.5, color: nameHandle(peer) ? 'var(--sage-ink)' : 'var(--ink-3)', fontWeight: nameHandle(peer) ? 700 : 400, fontFamily: nameHandle(peer) ? 'var(--font-ui)' : 'var(--mono)' }}>{nameHandle(peer) ? '@' + nameHandle(peer) : shortNpub(peer.npub)}</div></div>
@@ -10996,7 +11035,7 @@ function MemberChatDock() {
   const closeG = (id) => setGrps(gs => gs.filter(x => x.id !== id));
   if (!peers.length && !grps.length) return null;
   return (
-    <div style={{ position: 'absolute', right: 20, bottom: 0, zIndex: 130, display: 'flex', gap: 12, alignItems: 'flex-end' }}>
+    <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, zIndex: 130, display: 'flex', flexDirection: 'column', pointerEvents: 'none' }}>
       {grps.map(g => <GroupChatModal key={g.id} group={g} onClose={() => closeG(g.id)} />)}
       {peers.map(p => <StewDmWindow key={p.pubkey} peer={p} onClose={() => close(p.pubkey)} />)}
     </div>

@@ -75,9 +75,9 @@ function NotificationsScreen({ open, onClose, ctx }) {
           </div>
         </div>
       ) : null}
-      <div style={{ paddingTop: 50, flexShrink: 0, borderBottom: '1px solid var(--line-2)',
+      <div style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 8px)', flexShrink: 0, borderBottom: '1px solid var(--line-2)',
         background: 'color-mix(in oklab, var(--paper) 92%, transparent)' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px 14px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px 12px' }}>
           <IconBtn name="chevL" onClick={onClose} />
           <div style={{ flex: 1 }}>
             <h1 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 24, fontWeight: 700, letterSpacing: '-.4px' }}>Notifications</h1>
@@ -199,8 +199,8 @@ function ListenScreen({ open, onClose, ctx }) {
 
   return (
     <Overlay open={open} onClose={onClose}>
-      <div style={{ paddingTop: 50, flexShrink: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px 6px' }}>
+      <div style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 8px)', flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px 12px' }}>
           <IconBtn name="chevL" onClick={onClose} />
           <div style={{ flex: 1, minWidth: 0 }}>
             <h1 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 24, fontWeight: 700, letterSpacing: '-.4px' }}>Listen</h1>
@@ -334,8 +334,8 @@ function NotifSettingsScreen({ open, onClose, ctx }) {
 
   return (
     <Overlay open={open} onClose={onClose}>
-      <div style={{ paddingTop: 50, flexShrink: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px 6px' }}>
+      <div style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 8px)', flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px 12px' }}>
           <IconBtn name="chevL" onClick={onClose} />
           <h1 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 24, fontWeight: 700, letterSpacing: '-.4px' }}>Notifications</h1>
         </div>
@@ -401,8 +401,8 @@ function CurrencyScreen({ open, onClose, ctx }) {
   const pick = (c) => { if (LN) LN.setCurrency(c); setCode(c); ctx.toast('Showing amounts in ' + c); };
   return (
     <Overlay open={open} onClose={onClose}>
-      <div style={{ paddingTop: 50, flexShrink: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px 6px' }}>
+      <div style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 8px)', flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px 12px' }}>
           <IconBtn name="chevL" onClick={onClose} />
           <h1 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 24, fontWeight: 700, letterSpacing: '-.4px' }}>Currency</h1>
         </div>

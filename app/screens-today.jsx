@@ -361,24 +361,27 @@ function CareRequestCard({ r, ctx, child, onApprove, onDecline, onSeen, canMessa
   const urg = ({ soon: 'This week', month: 'Soon', norush: 'No rush' })[r.urgency] || '';
   return (
     <div style={{ padding: 15, borderRadius: 18, background: 'var(--surface)', border: '1.5px solid color-mix(in oklab, var(--clay) 34%, var(--line))', boxShadow: 'var(--shadow)', marginBottom: 11 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-        <div style={{ width: 36, height: 36, borderRadius: 11, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)' }}><Icon name={CARE_TYPE_ICON[r.type] || 'heart'} size={19} /></div>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 8 }}>
+        <div style={{ width: 36, height: 36, borderRadius: 11, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)', marginTop: 2 }}><Icon name={CARE_TYPE_ICON[r.type] || 'heart'} size={19} /></div>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, color: 'var(--ink)' }}>{careTypeLabel(r)} · for {who}</div>
-          <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{returned ? (r.status === 'approved' ? 'Wrote again — help is already set up' : 'Wrote again — you had closed this request') : ([when, urg].filter(Boolean).join(' · ') || 'Asked for help')}</div>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, color: 'var(--ink)', lineHeight: 1.25 }}>{careTypeLabel(r)}</div>
+          <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--ink-2)', marginTop: 2 }}>for {who}</div>
+          <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 2 }}>{returned ? (r.status === 'approved' ? 'Wrote again — help is already set up' : 'Wrote again — you had closed this request') : ([when, urg].filter(Boolean).join(' · ') || 'Asked for help')}</div>
         </div>
       </div>
       {r.sealed ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', fontStyle: 'italic' }}>Details hidden — this device isn’t on the care team’s key list.</div>
         : r.note ? <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, whiteSpace: 'pre-wrap', padding: '2px 0 4px' }}>{r.note}</div> : null}
-      <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }}>
         {/* NOT FOR A CHILD. "Set up help" publishes a NEED — which the whole congregation reads, signs up to,
             and which carries the person's name. That is the route by which a private disclosure becomes a
             notice-board item, so the control is absent rather than disabled: a greyed button invites a tap and
             reads as a fault. `child` is passed from the caller, and `onApprove` is null there as well, so a
             future edit that forgets one of the two still does not publish a child's words. */}
-        {!r.sealed && !child && r.status !== 'approved' ? <button onClick={onApprove} className="care-btn" style={{ flex: 1, minWidth: 120, padding: '10px', borderRadius: 12, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 800, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}><Icon name="check" size={15} color="var(--on-clay)" stroke={2.6} /> Set up help</button> : null}
-        {canMessage ? <button onClick={onMessage} style={{ padding: '10px 14px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'inline-flex', alignItems: 'center', gap: 6 }}><Icon name="chat" size={14} color="currentColor" /> Message</button> : null}
-        <button onClick={async () => { setBusy('d'); setFailed(false); let ok = null; try { ok = await (returned ? onSeen() : onDecline()); } catch (e) {} setFailed(!ok); setBusy(''); }} disabled={busy === 'd'} style={{ padding: '10px 14px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-3)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>{busy === 'd' ? '…' : (returned ? 'Seen — no reply needed' : 'Close — not needed')}</button>
+        {!r.sealed && !child && r.status !== 'approved' ? <button onClick={onApprove} className="care-btn" style={{ width: '100%', padding: '11px', borderRadius: 12, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 800, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}><Icon name="check" size={15} color="var(--on-clay)" stroke={2.6} /> Set up help</button> : null}
+        <div style={{ display: 'flex', gap: 8 }}>
+          {canMessage ? <button onClick={onMessage} style={{ flex: 1, padding: '10px 14px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-2)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}><Icon name="chat" size={14} color="currentColor" /> Message</button> : null}
+          <button onClick={async () => { setBusy('d'); setFailed(false); let ok = null; try { ok = await (returned ? onSeen() : onDecline()); } catch (e) {} setFailed(!ok); setBusy(''); }} disabled={busy === 'd'} style={{ flex: 1, padding: '10px 14px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink-3)', fontWeight: 700, fontSize: 13.5, cursor: 'pointer', fontFamily: 'var(--font-ui)', textAlign: 'center' }}>{busy === 'd' ? '…' : (returned ? 'Seen' : 'Close')}</button>
+        </div>
       </div>
       {failed ? <div role="alert" style={{ fontSize: 12.5, color: 'var(--clay-deep, #b4462f)', marginTop: 9, lineHeight: 1.45 }}>{returned ? 'That didn’t reach the church — it will stay on your list until it does.' : 'That didn’t reach the church — this request is still open, and the person who asked has not been told anything.'}</div> : null}
     </div>
@@ -497,12 +500,17 @@ function CareChatSheet({ reqId, requesterPub, title, onClose }) {
         </div>
         <div className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 8 }}>
           {msgs.length === 0 ? <div style={{ fontSize: 13, color: 'var(--ink-3)', textAlign: 'center', margin: 'auto', maxWidth: 250, lineHeight: 1.5 }}>No messages yet. Anything here stays between you and the people helping you.</div> : null}
-          {msgs.map(m => (
+          {msgs.map(m => {
+            const ts = m.at ? (() => { try { return new Date(m.at * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); } catch { return ''; } })() : '';
+            const copy = () => { try { navigator.clipboard.writeText(m.text); } catch {} };
+            return (
             <div key={m.id} style={{ alignSelf: m.mine ? 'flex-end' : 'flex-start', maxWidth: '82%' }}>
               {!m.mine ? <div style={{ fontSize: 11, color: 'var(--ink-3)', margin: '0 0 2px 11px' }}>{careName(m.from, '')}</div> : null}
-              <div style={{ padding: '9px 13px', borderRadius: 15, background: m.mine ? 'var(--clay)' : 'var(--surface-2)', color: m.mine ? '#fff' : 'var(--ink)', fontSize: 14.5, lineHeight: 1.4, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.text}</div>
+              <div onContextMenu={e => { e.preventDefault(); copy(); }} style={{ padding: '9px 13px', borderRadius: 15, background: m.mine ? 'var(--clay)' : 'var(--surface-2)', color: m.mine ? '#fff' : 'var(--ink)', fontSize: 14.5, lineHeight: 1.4, whiteSpace: 'pre-wrap', wordBreak: 'break-word', userSelect: 'text', WebkitUserSelect: 'text' }}>{m.text}</div>
+              {ts ? <div style={{ fontSize: 10, color: m.mine ? 'var(--ink-3)' : 'var(--ink-3)', textAlign: m.mine ? 'right' : 'left', margin: '2px 11px 0', opacity: .7 }}>{ts}</div> : null}
             </div>
-          ))}
+            );
+          })}
           <div ref={endRef} />
         </div>
         {err ? <div role="alert" style={{ fontSize: 12.5, lineHeight: 1.45, color: 'var(--ink)', background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', borderTop: '1px solid color-mix(in oklab, var(--clay) 26%, var(--line))', padding: '10px 14px', flexShrink: 0 }}>{err}</div> : null}
@@ -1041,7 +1049,7 @@ function AskForHelp({ ctx, linkOnly }) {
 // Collapsible heading for the Care tab. Asking for help and offering help are different frames of mind, and
 // interleaving them made the tab read as one undifferentiated list — so each lives under its own heading that
 // remembers whether you left it open.
-function CareSection({ id, title, sub, icon, count, defaultOpen = true, children }) {
+function CareSection({ id, title, sub, icon, count, defaultOpen = false, children }) {
   const KEY = 'trinityone.care.sec.' + id;
   const [open, setOpen] = React.useState(() => { try { const v = localStorage.getItem(KEY); return v === null ? defaultOpen : v === '1'; } catch (e) { return defaultOpen; } });
   const toggle = () => { const v = !open; setOpen(v); try { localStorage.setItem(KEY, v ? '1' : '0'); } catch (e) {} };
@@ -1239,7 +1247,7 @@ function CareCard({ ctx, embedded }) {
   // Needs with a day still to take. A fully covered one stays listed (its own row says "all covered") but must
   // not make the header ask for help, nor count towards "If you can help".
   const stillNeedHelp = live.filter(n => !careNeedDays(n, care.slots || [], care.skips || []).covered);
-  const needsBlock = live.length ? (
+  const needsBlock = liveShown.length ? (
     <div style={{ padding: 14, borderRadius: 18, background: 'color-mix(in oklab, var(--sage) 7%, var(--surface))', border: '1px solid color-mix(in oklab, var(--sage) 26%, var(--line))', boxShadow: 'var(--shadow)' }}>
       <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 11 }}>{!canVolunteer ? 'You\'re signed up to help with this. You can cancel a day if you need to.' : stillNeedHelp.length ? 'Someone in the church could use a hand. Sign up for a day — a meal, a ride, an errand.' : 'All covered — every day on these is taken. Thank you.'}</div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
@@ -1284,14 +1292,10 @@ function CareCard({ ctx, embedded }) {
       </React.Fragment>
     );
   }
-  // TODAY VARIANT. It used to return null on `!live.length`, which hid it in exactly the moment somebody
-  // needs it: nobody has asked yet, and the person reading is the one who wants to ask. Verity, 71, with a
-  // broken wrist, hunted through Community and the You page and found Care only inside "Serving & events" —
-  // "Serving to me means ME doing something for the church, not the church doing something for me. If I'd
-  // needed help badly I'd have telephoned Miriam." Two more members never found it at all.
-  //
-  // So the card shows the ask first and any open needs under it. Still hidden entirely for a church that has
-  // not switched care on (the `!s.enabled` guard above) — owner's decision, 2026-08-23.
+  // TODAY VARIANT. Show only when this member has something actionable — on the care roster, or the church
+  // has a need arranged for them, or there are open needs they can volunteer for / are signed up for.
+  // Everyone else reaches Care via the "Care" link on the Serving & events card.
+  if (!onCareRoster && !mineNeeds.length && !liveShown.length) return null;
   return (
     <div style={{ marginBottom: 22, animation: 'trinityFade .5s ease both' }}>
       <SectionLabel>Practical care</SectionLabel>
@@ -2359,57 +2363,13 @@ function TodayScreen({ ctx }) {
               <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>What’s happening</span>
               <ServingNewDot n={servNew} />
             </div>
-            <div style={{ fontSize: 12.5, color: 'var(--ink-3)', fontWeight: 600 }}>See what’s on · RSVP · your rota</div>
+            <div style={{ fontSize: 12.5, color: 'var(--ink-3)', fontWeight: 600 }}>See what’s on · RSVP · your rota{(_care.settings && _care.settings.enabled) ? <span onClick={(e) => { e.stopPropagation(); ctx.openServing && ctx.openServing('care'); }} style={{ color: 'var(--clay)' }}> · Care</span> : null}</div>
           </div>
           <Icon name="chevR" size={18} color="var(--ink-3)" />
         </div>
       )}
 
-      {/* Verse of the day — minimisable hero (below the care + serving cards) */}
-      {votdMin ? (
-        <button type="button" onClick={toggleVotd} aria-label={'Show the verse of the day \u2014 ' + votd.ref} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', boxSizing: 'border-box', minHeight: 44, textAlign: 'left', border: 'none', fontFamily: 'var(--font-ui)', padding: '11px 15px', borderRadius: 16, marginBottom: 22, cursor: 'pointer', background: 'linear-gradient(150deg, var(--clay), var(--clay-deep))', color: 'var(--on-clay)', boxShadow: 'var(--shadow)', animation: 'trinityFade .4s ease both' }}>
-          <Icon name="sparkle" size={15} color="#fff" style={{ flexShrink: 0, opacity: .92 }} />
-          <div style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Verse of the day · {votd.ref}</div>
-          <Icon name="chevD" size={18} color="#fff" style={{ flexShrink: 0, opacity: .92 }} />
-        </button>
-      ) : (
-      <div onClick={() => ctx.openShareSheet(votd)} style={{
-        position: 'relative', borderRadius: 26, overflow: 'hidden', cursor: 'pointer',
-        background: 'linear-gradient(155deg, var(--clay) 0%, var(--clay-deep) 100%)',
-        padding: '22px 22px 18px', color: '#fff', marginBottom: 22, boxShadow: 'var(--shadow-lg)',
-        animation: 'trinityFade .5s ease .05s both',
-      }}>
-        <div style={{ position: 'absolute', inset: 0, opacity: .5,
-          background: 'radial-gradient(circle at 85% 12%, rgba(255,255,255,.28), transparent 42%)' }} />
-        <div style={{ position: 'absolute', right: -28, bottom: -34, opacity: .14 }}>
-          <Icon name="sun" size={180} stroke={1.2} color="#fff" />
-        </div>
-        <div style={{ position: 'relative' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 7 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 11.5, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', opacity: .92 }}>
-              <Icon name="sparkle" size={15} stroke={2} /> Verse of the day
-            </div>
-            <button onClick={(e) => { e.stopPropagation(); toggleVotd(); }} aria-label="Minimise" style={{ border: 'none', background: 'rgba(255,255,255,.18)', color: '#fff', width: 28, height: 28, borderRadius: 999, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="chevU" size={16} color="#fff" /></button>
-          </div>
-          <p style={{ fontFamily: 'var(--font-read)', fontSize: 23, lineHeight: 1.38, margin: '14px 0 14px', fontWeight: 500, textWrap: 'pretty' }}>
-            {votdQ.open}{votd.text}{votdQ.close}
-          </p>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <span style={{ fontWeight: 700, fontSize: 14, letterSpacing: '.2px' }}>{votd.ref} · {votd.version}</span>
-            <div style={{ display: 'flex', gap: 8 }}>
-              {['heart', 'share'].map(n => (
-                <div key={n} style={{ width: 36, height: 36, borderRadius: 12, background: 'rgba(255,255,255,.18)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }}>
-                  <Icon name={n} size={17} stroke={2} color="#fff" />
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      </div>
-      )}
-
-      {/* WAITING FOR APPROVAL, SAID ON THE FIRST SCREEN. The waiting page itself is praised by every member
+{/* WAITING FOR APPROVAL, SAID ON THE FIRST SCREEN. The waiting page itself is praised by every member
           who reaches it — the problem is that it lives on one tab out of five, and six people across four
           rounds looked at Today first and saw a normal, working app. Bridget, 74: "On my home screen the
           church's name sits at the top with no sign at all that I'm still waiting, so at a glance I'd have
@@ -2493,7 +2453,51 @@ function TodayScreen({ ctx }) {
         );
       })() : null}
 
-      {/* Continue reading */}
+      {/* Verse of the day — minimisable hero (near the reading section) */}
+      {votdMin ? (
+        <button type="button" onClick={toggleVotd} aria-label={'Show the verse of the day \u2014 ' + votd.ref} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', boxSizing: 'border-box', minHeight: 44, textAlign: 'left', border: 'none', fontFamily: 'var(--font-ui)', padding: '11px 15px', borderRadius: 16, marginBottom: 22, cursor: 'pointer', background: 'linear-gradient(150deg, var(--clay), var(--clay-deep))', color: 'var(--on-clay)', boxShadow: 'var(--shadow)', animation: 'trinityFade .4s ease both' }}>
+          <Icon name="sparkle" size={15} color="#fff" style={{ flexShrink: 0, opacity: .92 }} />
+          <div style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Verse of the day · {votd.ref}</div>
+          <Icon name="chevD" size={18} color="#fff" style={{ flexShrink: 0, opacity: .92 }} />
+        </button>
+      ) : (
+      <div onClick={() => ctx.openShareSheet(votd)} style={{
+        position: 'relative', borderRadius: 26, overflow: 'hidden', cursor: 'pointer',
+        background: 'linear-gradient(155deg, var(--clay) 0%, var(--clay-deep) 100%)',
+        padding: '22px 22px 18px', color: '#fff', marginBottom: 22, boxShadow: 'var(--shadow-lg)',
+        animation: 'trinityFade .5s ease .05s both',
+      }}>
+        <div style={{ position: 'absolute', inset: 0, opacity: .5,
+          background: 'radial-gradient(circle at 85% 12%, rgba(255,255,255,.28), transparent 42%)' }} />
+        <div style={{ position: 'absolute', right: -28, bottom: -34, opacity: .14 }}>
+          <Icon name="sun" size={180} stroke={1.2} color="#fff" />
+        </div>
+        <div style={{ position: 'relative' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 7 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 11.5, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', opacity: .92 }}>
+              <Icon name="sparkle" size={15} stroke={2} /> Verse of the day
+            </div>
+            <button onClick={(e) => { e.stopPropagation(); toggleVotd(); }} aria-label="Minimise" style={{ border: 'none', background: 'rgba(255,255,255,.18)', color: '#fff', width: 28, height: 28, borderRadius: 999, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="chevU" size={16} color="#fff" /></button>
+          </div>
+          <p style={{ fontFamily: 'var(--font-read)', fontSize: 23, lineHeight: 1.38, margin: '14px 0 14px', fontWeight: 500, textWrap: 'pretty' }}>
+            {votdQ.open}{votd.text}{votdQ.close}
+          </p>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span style={{ fontWeight: 700, fontSize: 14, letterSpacing: '.2px' }}>{votd.ref} · {votd.version}</span>
+            <div style={{ display: 'flex', gap: 8 }}>
+              {['heart', 'share'].map(n => (
+                <div key={n} style={{ width: 36, height: 36, borderRadius: 12, background: 'rgba(255,255,255,.18)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }}>
+                  <Icon name={n} size={17} stroke={2} color="#fff" />
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+      )}
+
+            {/* Continue reading */}
       <SectionLabel>Continue reading</SectionLabel>
       <div onClick={() => ctx.openReader()} style={{
         display: 'flex', alignItems: 'center', gap: 14, padding: 14, borderRadius: 20,

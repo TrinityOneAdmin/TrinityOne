@@ -17,7 +17,7 @@ ICON_BAK="$(mktemp -d)"
 # whatever happens, put the member project back (app id, name, icon, and the member www/)
 restore() {
   sed -i 's/applicationId "com.trinityone.steward"/applicationId "com.trinityone.app"/' "$GRADLE" 2>/dev/null || true
-  sed -i 's#<string name="app_name">TrinityOne Steward</string>#<string name="app_name">TrinityOne</string>#' "$STRINGS" 2>/dev/null || true
+  sed -i 's#<string name="app_name">TrinityOne Console</string>#<string name="app_name">TrinityOne</string>#' "$STRINGS" 2>/dev/null || true
   for d in $DENS; do cp "$ICON_BAK/mipmap-$d/"*.png "$RES/mipmap-$d/" 2>/dev/null || true; done
   rm -rf "$ICON_BAK"
   echo "restoring member www/ + project…"
@@ -81,7 +81,7 @@ sed -i -e '/babel\.min\.js/d' -e 's#<script type="text/babel" src="\([^"]*\)\.js
 
 # 2. swap to the Steward app identity (separate install from the member app)
 sed -i 's/applicationId "com.trinityone.app"/applicationId "com.trinityone.steward"/' "$GRADLE"
-sed -i 's#<string name="app_name">TrinityOne</string>#<string name="app_name">TrinityOne Steward</string>#' "$STRINGS"
+sed -i 's#<string name="app_name">TrinityOne</string>#<string name="app_name">TrinityOne Console</string>#' "$STRINGS"
 
 # 3. copy webDir into the native project + build
 #

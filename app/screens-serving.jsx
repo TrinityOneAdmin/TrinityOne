@@ -1338,6 +1338,7 @@ function KidsRegister({ ctx }) {
 function ServingScreen({ open, onClose, ctx, docked }) {
   const [tab, setTab] = useSv('serving');
   const [sheet, setSheet] = useSv(null);   // { kind, item }
+  const [swapHidden, setSwapHidden] = useSv({});
   const [rosterOpen, setRosterOpen] = useSv(false);
   const [svcExpanded, setSvcExpanded] = useSv(false);   // show all upcoming services vs the first 3
   const tabEls = React.useRef({});
@@ -1438,7 +1439,7 @@ function ServingScreen({ open, onClose, ctx, docked }) {
 
   return (
     <Overlay open={open} onClose={onClose} docked={docked} label="What's happening">
-      <div style={{ paddingTop: 50, background: 'color-mix(in oklab, var(--surface) 92%, transparent)', backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)', borderBottom: '1px solid var(--line)', flexShrink: 0 }}>
+      <div style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 8px)', background: 'color-mix(in oklab, var(--surface) 92%, transparent)', backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)', borderBottom: '1px solid var(--line)', flexShrink: 0 }}>
         {/* ⚠ THE BACK BUTTON MOVED DOWN ONTO THE TAB ROW — owner, 2026-09-12, "the empty header row".
             Removing the title and the church name on 2026-09-11 left this row holding a 38px back button and
             an empty spacer, and it still cost 58px (38 + 8 + 12) of a 360px-wide phone: a whole row of
@@ -1509,12 +1510,21 @@ function ServingScreen({ open, onClose, ctx, docked }) {
             {/* A TEAMMATE ASKED ME TO COVER (owner, 2026-10-02). The ask arrives from the other member's phone, not
                 from the church; saying yes tells the asker and the church, and the church confirms the swap with
                 one tap. Nothing about the rota changes until then. */}
-            {swapView.asks.map(a => {
+            {swapView.asks.filter(a => !swapHidden[a.from + '|' + a.id]).map(a => {
               const who = svNameOf(ctx, a.from) || 'A teammate';
               const sl = a.slot || {};
+              const cardKey = a.from + '|' + a.id;
+              const dismiss = () => setSwapHidden(h => ({ ...h, [cardKey]: true }));
+              let _y0 = 0, _dy = 0, _el = null, _armed = false;
+              const ts = (e) => { const t = e.touches[0]; _y0 = t.clientY; _dy = 0; _el = e.currentTarget; _armed = false; };
+              const tm = (e) => { _dy = e.touches[0].clientY - _y0; if (Math.abs(_dy) > 10) _armed = true; if (_armed && _dy > 0 && _el) { _el.style.transform = 'translateY(' + _dy + 'px)'; _el.style.opacity = Math.max(0, 1 - _dy / 140); } };
+              const te = () => { if (_armed && _dy > 70) { if (_el) { _el.style.transition = 'transform .2s, opacity .2s'; _el.style.transform = 'translateY(160px)'; _el.style.opacity = '0'; } setTimeout(dismiss, 200); } else if (_el) { _el.style.transition = 'transform .2s, opacity .2s'; _el.style.transform = ''; _el.style.opacity = ''; } };
               return (
-                <div key={a.from + '|' + a.id} style={{ borderRadius: 20, padding: 16, marginBottom: 16, background: 'var(--surface)', border: '1.5px solid color-mix(in oklab, var(--gold) 50%, var(--line))', boxShadow: 'var(--shadow)' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 11, fontWeight: 800, letterSpacing: '.6px', color: '#8a6717', marginBottom: 12 }}><Icon name="swap" size={14} color="var(--gold)" /> {who.toUpperCase()} ASKED YOU TO COVER</div>
+                <div key={cardKey} onTouchStart={ts} onTouchMove={tm} onTouchEnd={te} style={{ borderRadius: 20, padding: 16, marginBottom: 16, background: 'var(--surface)', border: '1.5px solid color-mix(in oklab, var(--gold) 50%, var(--line))', boxShadow: 'var(--shadow)', willChange: 'transform, opacity' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 11, fontWeight: 800, letterSpacing: '.6px', color: '#8a6717', marginBottom: 12 }}>
+                    <Icon name="swap" size={14} color="var(--gold)" /> {who.toUpperCase()} ASKED YOU TO COVER
+                    <button onClick={dismiss} aria-label="Dismiss" style={{ marginLeft: 'auto', border: 'none', background: 'none', cursor: 'pointer', padding: 2, display: 'flex', color: 'var(--ink-3)' }}><Icon name="x" size={15} color="currentColor" /></button>
+                  </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 13, marginBottom: 13 }}>
                     <ServDateBlock iso={sl.date} accent="var(--gold)" />
                     <div style={{ flex: 1, minWidth: 0 }}>

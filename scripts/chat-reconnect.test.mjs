@@ -238,3 +238,35 @@ test('the screens can see the reconnect signal at all', () => {
     'screens-chat.jsx reads ctx.connTick — without it on the ctx object both deps above are permanently undefined, ' +
     'which is a dependency that never changes and so a subscription that never re-opens');
 });
+
+// ── the steward console's DM subscriptions must also reconnect ────────────────────────────────────────────
+// The member app was fixed (above); the console was NOT. Both subscribeDMConvos (the inbox) and
+// subscribeDMThread (an open conversation) had no connection dependency, so a dropped socket left the
+// steward's private messages frozen for the session — and the steward has no way to know, because the
+// socket reports healthy and nothing else is wrong. A vicar answering a member in distress would see no
+// replies and no errors. The console's reconnect signal is useStewardConn(), the equivalent of connTick.
+const DASH = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
+
+test('the console DM inbox re-subscribes on reconnect', () => {
+  const src = stripComments(DASH);
+  const at = src.indexOf('subscribeDMConvos(setDmConvos)');
+  assert.notEqual(at, -1, 'the console DM inbox subscription is gone — re-anchor this test');
+  const deps = src.slice(at, src.indexOf(');', at) + 30);
+  assert.match(deps, /\[_dmConn\]/,
+    'the console DM inbox subscribes once at mount and never again — a dropped socket leaves every private ' +
+    'message preview frozen for the session, which is A1 on the owner\'s priority list');
+  assert.match(src.slice(src.lastIndexOf('useStewardConn', at), at), /useStewardConn/,
+    'useStewardConn must be called in the same component to provide the dependency');
+});
+
+test('an open console DM thread re-subscribes on reconnect', () => {
+  const src = stripComments(DASH);
+  const at = src.indexOf('subscribeDMThread(peer.pubkey, setMsgs)');
+  assert.notEqual(at, -1, 'the console DM thread subscription is gone — re-anchor this test');
+  const deps = src.slice(at, src.indexOf('];', at) + 2);
+  assert.match(deps, /\[peer\.pubkey, _threadConn\]/,
+    'a steward reading a conversation with a member across a signal drop sees no new messages — and nothing ' +
+    'tells them it stopped, because the socket is healthy');
+  assert.match(src.slice(src.lastIndexOf('useStewardConn', at), at), /useStewardConn/,
+    'useStewardConn must be called in StewDmWindow to provide the dependency');
+});

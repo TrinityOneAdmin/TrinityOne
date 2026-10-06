@@ -528,3 +528,13 @@ test('the window unsubscribes when it closes', async () => {
     'THE LISTENER OUTLIVED THE WINDOW. Every thread a steward opens leaves one behind, each calling into a ' +
     'component that is no longer on screen.');
 });
+
+// ── the console DM window is full-width on the Members page ──────────────────────────────────────────────
+test('the console DM window fills the page width, not a fixed 316px card', async () => {
+  const w = await dmWindow({ id: 'e1' });
+  const tree = w.draw();
+  const outer = tree;
+  assert.ok(outer && outer.props && outer.props.style, 're-anchor: StewDmWindow root has no style');
+  assert.equal(outer.props.style.width, '100%',
+    'the console DM window has a fixed width — it should be full-width on the Members page');
+});

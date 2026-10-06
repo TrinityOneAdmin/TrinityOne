@@ -73,13 +73,14 @@ const CHILD_REQUEST = sealTo(ellie.sk, [church.pub, ellie.pub, grace.pub], { not
 function buildSender({ requestEvent }) {
   const audienceFn = slice(SRC, 'async function _fetchCareThreadAudience(', '\n}\n') + '\n}';
   const sealFn = slice(SRC, 'function _sealToPubs(', '\n}\n') + '\n}';
+  const monoFn = 'const _lastStampF = new Map();\n' + slice(SRC, 'function _monotonicF(', '\n}\n') + '\n}';
   const method = slice(SRC, '  async sendCareChat(reqId, requesterPub, text) {', '  subscribeCareChat(reqId, cb) {');
   const published = [];
   const pool = { querySync: async () => (requestEvent ? [requestEvent] : []) };
   const fn = new Function(
     'pool', 'churchRelays', 'publishSetFor', 'isNoNetworkRelay', 'CAREREQ_D', 'CARECHAT_D', 'NET', 'sk', 'pub', 'window', 'crypto',
     'nip44e', 'nip44ck', '_hex', 'finalizeEvent', '_publishAny', 'published',
-    `${audienceFn}\n${sealFn}\nconst api = { ${method} __end(){} };\nreturn api.sendCareChat;`
+    `${monoFn}\n${audienceFn}\n${sealFn}\nconst api = { ${method} __end(){} };\nreturn api.sendCareChat;`
   )(
     pool, () => ['ws://x'], () => ['ws://x'], () => false, 'trinityone/carereq:', 'trinityone/carechat:', 'trinityone',
     grace.sk, grace.pub,
@@ -96,13 +97,14 @@ test('the cleared adult can open the child’s reply — the whole point', async
   // Ellie replies. Run it as ELLIE by rebuilding with her keys.
   const audienceFn = slice(SRC, 'async function _fetchCareThreadAudience(', '\n}\n') + '\n}';
   const sealFn = slice(SRC, 'function _sealToPubs(', '\n}\n') + '\n}';
+  const monoFn = 'const _lastStampF = new Map();\n' + slice(SRC, 'function _monotonicF(', '\n}\n') + '\n}';
   const method = slice(SRC, '  async sendCareChat(reqId, requesterPub, text) {', '  subscribeCareChat(reqId, cb) {');
   const published = [];
   const reqEvent = { created_at: 100, pubkey: ellie.pub, content: JSON.stringify(CHILD_REQUEST) };
   const send = new Function(
     'pool', 'churchRelays', 'publishSetFor', 'isNoNetworkRelay', 'CAREREQ_D', 'CARECHAT_D', 'NET', 'sk', 'pub', 'window', 'crypto',
     'nip44e', 'nip44ck', '_hex', 'finalizeEvent', '_publishAny',
-    `${audienceFn}\n${sealFn}\nconst api = { ${method} __end(){} };\nreturn api.sendCareChat;`
+    `${monoFn}\n${audienceFn}\n${sealFn}\nconst api = { ${method} __end(){} };\nreturn api.sendCareChat;`
   )(
     { querySync: async () => [reqEvent] }, () => ['ws://x'], () => ['ws://x'], () => false,
     'trinityone/carereq:', 'trinityone/carechat:', 'trinityone',
@@ -127,13 +129,14 @@ test('the cleared adult can open the child’s reply — the whole point', async
 test('and the care rota, who were never in the request, are not given a key to it', async () => {
   const audienceFn = slice(SRC, 'async function _fetchCareThreadAudience(', '\n}\n') + '\n}';
   const sealFn = slice(SRC, 'function _sealToPubs(', '\n}\n') + '\n}';
+  const monoFn = 'const _lastStampF = new Map();\n' + slice(SRC, 'function _monotonicF(', '\n}\n') + '\n}';
   const method = slice(SRC, '  async sendCareChat(reqId, requesterPub, text) {', '  subscribeCareChat(reqId, cb) {');
   const published = [];
   const reqEvent = { created_at: 100, pubkey: ellie.pub, content: JSON.stringify(CHILD_REQUEST) };
   const send = new Function(
     'pool', 'churchRelays', 'publishSetFor', 'isNoNetworkRelay', 'CAREREQ_D', 'CARECHAT_D', 'NET', 'sk', 'pub', 'window', 'crypto',
     'nip44e', 'nip44ck', '_hex', 'finalizeEvent', '_publishAny',
-    `${audienceFn}\n${sealFn}\nconst api = { ${method} __end(){} };\nreturn api.sendCareChat;`
+    `${monoFn}\n${audienceFn}\n${sealFn}\nconst api = { ${method} __end(){} };\nreturn api.sendCareChat;`
   )(
     { querySync: async () => [reqEvent] }, () => ['ws://x'], () => ['ws://x'], () => false,
     'trinityone/carereq:', 'trinityone/carechat:', 'trinityone',
@@ -158,6 +161,7 @@ test('a request document forged by somebody else is ignored', async () => {
   // on somebody else's behalf, so only the asker's own copy may decide who a reply reaches.
   const audienceFn = slice(SRC, 'async function _fetchCareThreadAudience(', '\n}\n') + '\n}';
   const sealFn = slice(SRC, 'function _sealToPubs(', '\n}\n') + '\n}';
+  const monoFn = 'const _lastStampF = new Map();\n' + slice(SRC, 'function _monotonicF(', '\n}\n') + '\n}';
   const method = slice(SRC, '  async sendCareChat(reqId, requesterPub, text) {', '  subscribeCareChat(reqId, cb) {');
   const published = [];
   const real   = { created_at: 100, pubkey: ellie.pub, content: JSON.stringify(CHILD_REQUEST) };
@@ -166,7 +170,7 @@ test('a request document forged by somebody else is ignored', async () => {
   const send = new Function(
     'pool', 'churchRelays', 'publishSetFor', 'isNoNetworkRelay', 'CAREREQ_D', 'CARECHAT_D', 'NET', 'sk', 'pub', 'window', 'crypto',
     'nip44e', 'nip44ck', '_hex', 'finalizeEvent', '_publishAny',
-    `${audienceFn}\n${sealFn}\nconst api = { ${method} __end(){} };\nreturn api.sendCareChat;`
+    `${monoFn}\n${audienceFn}\n${sealFn}\nconst api = { ${method} __end(){} };\nreturn api.sendCareChat;`
   )(
     { querySync: async () => [real, forged] }, () => ['ws://x'], () => ['ws://x'], () => false,
     'trinityone/carereq:', 'trinityone/carechat:', 'trinityone',
@@ -201,6 +205,7 @@ test('when the request cannot be read, it REFUSES — it does not fall back to t
 // function no test ever executes can regress in any way at all. So execute it.
 function buildConsoleSender({ requestEvents }) {
   const fn = slice(MEALS_SRC, '  async function sendCareChat(', '\n  }\n') + '\n  }';
+  const monoFn = 'const _lastStampM = new Map();\n' + slice(MEALS_SRC, 'function _monotonicM(', '\n\n');
   const published = [];
   const S = () => ({
     churchPub: church.pub,
@@ -213,7 +218,7 @@ function buildConsoleSender({ requestEvents }) {
     },
   });
   const send = new Function('S', 'now', 'CAREREQ_D', 'CARECHAT_D', 'CARETEAM_D', 'NET', 'Math',
-    fn + '\nreturn sendCareChat;')(
+    monoFn + '\n' + fn + '\nreturn sendCareChat;')(
     S, () => 1000, 'trinityone/carereq:', 'trinityone/carechat:', 'trinityone/careteam:', 'trinityone', Math);
   return { send, published };
 }
@@ -268,13 +273,14 @@ test('the shipped bundles carry it', () => {
 function sendWith({ reqTags, careTeam }) {
   const audienceFn = slice(SRC, 'async function _fetchCareThreadAudience(', '\n}\n') + '\n}';
   const sealFn = slice(SRC, 'function _sealToPubs(', '\n}\n') + '\n}';
+  const monoFn = 'const _lastStampF = new Map();\n' + slice(SRC, 'function _monotonicF(', '\n}\n') + '\n}';
   const method = slice(SRC, '  async sendCareChat(reqId, requesterPub, text) {', '  subscribeCareChat(reqId, cb) {');
   const published = [];
   const reqEvent = { created_at: 100, pubkey: ellie.pub, tags: reqTags, content: JSON.stringify(CHILD_REQUEST) };
   const send = new Function(
     'pool', 'churchRelays', 'publishSetFor', 'isNoNetworkRelay', 'CAREREQ_D', 'CARECHAT_D', 'NET', 'sk', 'pub', 'window', 'crypto',
     'nip44e', 'nip44ck', '_hex', 'finalizeEvent', '_publishAny', '_fetchCareTeam',
-    `${audienceFn}\n${sealFn}\nconst api = { ${method} __end(){} };\nreturn api.sendCareChat;`
+    `${monoFn}\n${audienceFn}\n${sealFn}\nconst api = { ${method} __end(){} };\nreturn api.sendCareChat;`
   )(
     { querySync: async () => [reqEvent] }, () => ['ws://x'], () => ['ws://x'], () => false,
     'trinityone/carereq:', 'trinityone/carechat:', 'trinityone',

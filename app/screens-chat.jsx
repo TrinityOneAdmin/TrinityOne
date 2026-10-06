@@ -1047,7 +1047,7 @@ function Row({ me, m, children, ctx, mod }) {
           <React.Fragment>
             <button onClick={M.onOpenMenu} title="Message actions" aria-label="Message actions" style={{ position: 'absolute', top: -7, [me ? 'left' : 'right']: -30, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 999, width: 30, height: 30, cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: 'var(--shadow)' }}><Icon name="dots" size={15} /></button>
             {M.menuOpen ? (
-              <div style={{ position: 'absolute', top: 18, [me ? 'left' : 'right']: -26, zIndex: 5, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 5, minWidth: 150, display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <div style={{ position: 'absolute', top: 18, left: 0, zIndex: 5, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 5, minWidth: 150, display: 'flex', flexDirection: 'column', gap: 2 }}>
                 {M.onReply ? <button onClick={M.onReply} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer', padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="reply" size={15} color="var(--ink-2)" /> Reply</button> : null}
                 {/* REPLY PRIVATELY — answer the person, not the room. Two conditions, and both matter:
                     · not my own message (replying privately to yourself is nonsense), and
@@ -1133,7 +1133,7 @@ function ServingEntry({ ctx }) {
         <div style={{ width: 44, height: 44, borderRadius: 13, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage)' }}><Icon name="calCheck" size={22} /></div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5 }}>What’s happening</div>
-          <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ink-3)' }}>See what’s on · RSVP · your rota</div>
+          <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ink-3)' }}>See what’s on · RSVP · your rota{(ctx.care && ctx.care.settings && ctx.care.settings.enabled) ? <span onClick={(e) => { e.stopPropagation(); ctx.openServing && ctx.openServing('care'); }} style={{ color: 'var(--clay)' }}> · Care</span> : null}</div>
         </div>
         <Icon name="chevR" size={18} color="var(--ink-3)" />
       </button>
@@ -1543,7 +1543,7 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
 
   return (
     <Overlay open={open} onClose={onClose} docked={docked}>
-      <div style={{ paddingTop: docked ? 12 : 50, background: 'color-mix(in oklab, var(--surface) 92%, transparent)',
+      <div style={{ paddingTop: docked ? 12 : 'calc(env(safe-area-inset-top, 0px) + 8px)', background: 'color-mix(in oklab, var(--surface) 92%, transparent)',
         backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)', borderBottom: '1px solid var(--line)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '8px 14px 11px' }}>
           {!docked ? <IconBtn name="chevL" onClick={onClose} size={22} style={{ height: 38, minWidth: 38, borderRadius: 12, border: 'none', background: 'none', boxShadow: 'none' }} /> : null}
@@ -2060,7 +2060,7 @@ function DMThread({ peer, open, onClose, ctx, docked }) {
   const react = (m, emoji) => { if (FS && FS.reactDM) FS.reactDM(peer, m.id, m.myReaction === emoji ? '-' : emoji); setRxFor(''); };
   return (
     <Overlay open={open} onClose={onClose} docked={docked}>
-      <div style={{ paddingTop: docked ? 12 : 50, background: 'var(--surface)', borderBottom: '1px solid var(--line)' }}>
+      <div style={{ paddingTop: docked ? 12 : 'calc(env(safe-area-inset-top, 0px) + 8px)', background: 'var(--surface)', borderBottom: '1px solid var(--line)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '8px 14px 11px' }}>
           <IconBtn name="chevL" onClick={onClose} size={22} style={{ height: 38, minWidth: 38, borderRadius: 12, border: 'none', background: 'none', boxShadow: 'none' }} />
           <UserAvatar av={avOf(d)} name={d.handle} size={38} />
@@ -2178,7 +2178,7 @@ function DMInbox({ open, onClose, ctx, docked }) {
   useCE(() => { if (convos.length && FS && FS.requestProfiles) FS.requestProfiles(convos.map(c => c.peer)); }, [convos]);
   return (
     <Overlay open={open} onClose={onClose} docked={docked}>
-      <div style={{ paddingTop: docked ? 12 : 50 }}>
+      <div style={{ paddingTop: docked ? 12 : 'calc(env(safe-area-inset-top, 0px) + 8px)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 18px 12px' }}>
           <IconBtn name="chevL" onClick={onClose} />
           <h1 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 23, fontWeight: 700 }}>Messages</h1>
@@ -2241,7 +2241,7 @@ function PeopleScreen({ open, onClose, ctx, docked }) {
   const list = people.filter(m => !ql || nameOf(m).toLowerCase().includes(ql) || (m.nip05 || '').toLowerCase().includes(ql));
   return (
     <Overlay open={open} onClose={onClose} docked={docked}>
-      <div style={{ paddingTop: docked ? 12 : 50, flexShrink: 0, background: 'var(--surface)', borderBottom: '1px solid var(--line)' }}>
+      <div style={{ paddingTop: docked ? 12 : 'calc(env(safe-area-inset-top, 0px) + 8px)', flexShrink: 0, background: 'var(--surface)', borderBottom: '1px solid var(--line)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px 6px' }}>
           <IconBtn name="chevL" onClick={onClose} />
           <div style={{ flex: 1, minWidth: 0 }}>

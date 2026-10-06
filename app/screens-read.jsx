@@ -746,7 +746,7 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked }) {
         style={docked
           ? { position: 'absolute', inset: 0, background: 'var(--surface)', display: 'flex', flexDirection: 'column' }
           : { position: 'absolute', top: 0, right: 0, bottom: 0, zIndex: 25, width: 'min(440px, 88%)', background: 'var(--surface)', borderLeft: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', transform: open ? 'translateX(0)' : 'translateX(101%)', transition: 'transform .32s cubic-bezier(.32,.72,0,1)', display: 'flex', flexDirection: 'column' }}>
-        <div style={{ paddingTop: docked ? 16 : 50, flexShrink: 0, borderBottom: '1px solid var(--line)' }}>
+        <div style={{ paddingTop: docked ? 16 : 'calc(env(safe-area-inset-top, 0px) + 8px)', flexShrink: 0, borderBottom: '1px solid var(--line)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '8px 14px 8px' }}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>Study</div>
@@ -836,7 +836,7 @@ function ReadScreen({ ctx }) {
   const [compare, setCompare] = useS(false);
   const [scale, setScale] = useS(() => lsGet('trinityone.readerScale', 1.08));
   const [serif, setSerif] = useS(() => lsGet('trinityone.readerSerif', true));
-  const [showStrongs, setShowStrongs] = useS(false);
+  const [showStrongs, setShowStrongs] = useS(() => lsGet('trinityone.readerStrongs', true));
   const [sel, setSel] = useS([]);   // selected verse numbers — multi-select to copy/share a passage together
   // ⚠ THE VERSE THE READER ARRIVED AT IS NOT A SELECTION (sim item 37, 2026-10-02). Opening the reader on
   // "Continue reading", or jumping from Today / Search / the book picker, lands on a verse. That used to be
@@ -876,6 +876,7 @@ function ReadScreen({ ctx }) {
   useE(() => () => { if (synth) try { synth.cancel(); } catch (e) {} }, []);
   useE(() => { lsSet('trinityone.readerScale', scale); }, [scale]);
   useE(() => { lsSet('trinityone.readerSerif', serif); }, [serif]);
+  useE(() => { lsSet('trinityone.readerStrongs', showStrongs); }, [showStrongs]);
   // arriving on a specific verse (from Today / Search / Book picker): select it + scroll it into view
   useE(() => {
     const roll = rollRef.current; rollRef.current = null;   // consumed here whether it matches or not
@@ -914,6 +915,10 @@ function ReadScreen({ ctx }) {
     const has = sel.some(x => String(x) === String(n));
     const next = has ? sel.filter(x => String(x) !== String(n)) : [...sel, n];
     setSel(next); setCarry([]); setArrived(null); setSheet(next.length ? 'action' : null);
+    if (next.length) {
+      const v = next[next.length - 1];
+      setTimeout(() => { const sc = scrollRef.current; const el = sc && sc.querySelector('#rv-' + v); if (el) try { const top = el.offsetTop - sc.offsetTop - (sc.clientHeight * 0.28); sc.scrollTo({ top: Math.max(0, top), behavior: 'smooth' }); } catch (e) {} }, 80);
+    }
   };
   // ✕ (and the Back button) on the verse card CANCELS the selection, not just the card. It used to close the
   // card and leave the verses selected and unseen, so the next tap added to them (sim item 37). Copy and
