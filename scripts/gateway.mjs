@@ -6231,7 +6231,8 @@ function publicFeed(req, res, route) {
     const pshare = SHARE_BY.get(pcp);
     if (!pshare || !pshare.plans) return notFound();
     const all = PUBPLANS.get(pcp);
-    let plans = all ? [...all.values()] : [];
+    const pnow = Math.floor(Date.now() / 1000);
+    let plans = all ? [...all.values()].filter(p => !p.publishAt || p.publishAt <= pnow) : [];
     plans.sort((a, b) => (b.ts || 0) - (a.ts || 0));
     if (pshare.planLimit) plans = plans.slice(0, pshare.planLimit);
     let pname = '';
@@ -6253,7 +6254,8 @@ function publicFeed(req, res, route) {
     const dshare = SHARE_BY.get(dcp);
     if (!dshare || !dshare.devos) return notFound();
     const all = PUBDEVOS.get(dcp);
-    let devos = all ? [...all.values()] : [];
+    const dnow = Math.floor(Date.now() / 1000);
+    let devos = all ? [...all.values()].filter(d => !d.publishAt || d.publishAt <= dnow) : [];
     devos.sort((a, b) => (b.ts || 0) - (a.ts || 0));
     if (dshare.devoLimit) devos = devos.slice(0, dshare.devoLimit);
     let dname = '';

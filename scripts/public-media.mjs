@@ -102,13 +102,13 @@ export function publicPlanFields(p) {
   if (!title) return null;
   if (p.draft) return null;
   if (p.public === false) return null;
-  if (p.publishAt && p.publishAt > Math.floor(Date.now() / 1000)) return null;
   const days = Array.isArray(p.days) ? p.days.map(d => ({
     d: Number(d.d) || 0,
     ref: String(d.ref || '').slice(0, 200).trim(),
     label: String(d.label || '').slice(0, 200).trim(),
   })).filter(d => d.ref) : [];
   if (!days.length) return null;
+  const publishAt = (typeof p.publishAt === 'number' && p.publishAt > 0) ? Math.floor(p.publishAt) : 0;
   return {
     id: String(p.id || '').slice(0, 64),
     title,
@@ -118,6 +118,7 @@ export function publicPlanFields(p) {
     days,
     len: days.length,
     ts: Number(p.ts) || 0,
+    publishAt,
   };
 }
 
@@ -139,7 +140,7 @@ export function publicDevoFields(d) {
   if (!title) return null;
   if (d.draft) return null;
   if (d.public === false) return null;
-  if (d.publishAt && d.publishAt > Math.floor(Date.now() / 1000)) return null;
+  const publishAt = (typeof d.publishAt === 'number' && d.publishAt > 0) ? Math.floor(d.publishAt) : 0;
   return {
     id: String(d.id || '').slice(0, 64),
     title,
@@ -147,6 +148,7 @@ export function publicDevoFields(d) {
     series: String(d.series || '').slice(0, 80).trim() || undefined,
     text: String(d.text || '').slice(0, 4000).trim(),
     ts: Number(d.ts) || 0,
+    publishAt,
   };
 }
 
