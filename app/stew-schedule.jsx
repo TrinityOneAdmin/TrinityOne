@@ -9,6 +9,12 @@ const SCH_DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 // The toolbar label for each rota-visibility setting. Short enough for the button; the menu carries the
 // explanation, and the caveat that this applies from now on rather than retroactively.
 const ROTA_VIS_LABEL = { church: 'Everyone', team: 'Serving teams', stewards: 'Stewards only' };
+const SCH_EVENT_TIME_KEY = 'trinityone.steward.eventTime';
+function schLastEventTime() {
+  try { const v = localStorage.getItem(SCH_EVENT_TIME_KEY); return /^\d{2}:\d{2}$/.test(v || '') ? v : '19:30'; } catch (e) { return '19:30'; }
+}
+const SCH_DRAFT_STORE = {};   // church pubkey -> { svcId: assignMap }
+const schDraftChurch = () => String((window.Steward && window.Steward.pubkey) || '');
 function schDate(s) { try { return new Date(s + 'T00:00'); } catch { return new Date(); } }
 function schKey(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
 function schParts(s) { const d = schDate(s); return { dow: SCH_DOW[d.getDay()], day: d.getDate(), mon: SCH_MON[d.getMonth()] }; }
@@ -216,7 +222,8 @@ function publishCareTeamFor(teamId, careTeamId, people) {
 }
 
 // ── manage a team's roster: the roles it needs + the people who can serve ──
-function RosterModal({ team, roster, members, onClose, onCreate }) {
+function RosterModal({ team, roster, members: allMembers, onClose, onCreate }) {
+  const members = window.useStewardPickableMembers ? window.useStewardPickableMembers(allMembers) : allMembers;
   const [roles, setRoles] = useSch(() => (roster && roster.roles ? roster.roles.map(r => ({ ...r })) : []));
   const [people, setPeople] = useSch(() => (roster && roster.people ? roster.people.map(p => ({ ...p })) : []));
   const [pods, setPods] = useSch(() => (roster && roster.pods ? roster.pods.map(p => ({ ...p, fills: { ...(p.fills || {}) } })) : []));
@@ -447,7 +454,7 @@ function SchRepeatRow({ repeat, setRepeat, until, setUntil, nth, setNth, date, p
 function SchAddServiceModal({ onClose }) {
   const [name, setName] = useSch('Sunday Gathering');
   const [date, setDate] = useSch('');
-  const [time, setTime] = useSch('10:30');
+  const [time, setTime] = useSch(schLastEventTime);
   const [repeat, setRepeat] = useSch('none');
   const [until, setUntil] = useSch('');
   const [err, setErr] = useSch('');
@@ -607,7 +614,9 @@ function DashRota({ onNewTeam }) {
   const defaultSvc = (sortedSvcs.find(s => (s.date || '') >= todayStr) || sortedSvcs[sortedSvcs.length - 1] || {}).id;
 
   const [sel, setSel] = useSch(null);
-  const [draft, setDraft] = useSch({});         // { svcId: assignMap } — local unsaved edits
+  const draftChurch = schDraftChurch();
+  const [draft, setDraftState] = useSch(() => ({ ...(SCH_DRAFT_STORE[draftChurch] || {}) }));   // { svcId: assignMap } — local unsaved edits
+  const setDraft = (v) => setDraftState(d => { const n = typeof v === 'function' ? v(d) : v; SCH_DRAFT_STORE[draftChurch] = n; return n; });
   const seeded = useSchR(new Set());
   const [assignSlot, setAssignSlot] = useSch(null);
   const [rosterTeam, setRosterTeam] = useSch(null);
@@ -1150,6 +1159,7 @@ function SchEventModal({ day, onClose }) {
     }
     setBusy(false);
     if (out.some(r => r == null)) { setErr(schNoKey()); return; }
+    try { if (/^\d{2}:\d{2}$/.test(time || '')) localStorage.setItem(SCH_EVENT_TIME_KEY, time); } catch (e) {}
     onClose();
   };
   return (
