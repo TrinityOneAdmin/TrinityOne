@@ -627,7 +627,7 @@ function DashRota({ onNewTeam }) {
   // seed each service's draft from its published rota the first time we see it
   useSchE(() => {
     let changed = false; const next = { ...draft };
-    rotas.forEach(r => { if (!seeded.current.has(r.service)) { seeded.current.add(r.service); next[r.service] = { ...(r.assign || {}) }; changed = true; } });
+    rotas.forEach(r => { if (!seeded.current.has(r.service)) { seeded.current.add(r.service); if (next[r.service] === undefined) { next[r.service] = { ...(r.assign || {}) }; changed = true; } } });
     if (changed) setDraft(next);
   }, [rotas]);
 
@@ -1095,7 +1095,7 @@ function SchEventModal({ day, onClose }) {
   const existingEvents = window.useStewardEvents ? window.useStewardEvents() : [];   // to gently warn on a same-time clash
   const [title, setTitle] = useSch('');
   const [date, setDate] = useSch(day || '');
-  const [time, setTime] = useSch('19:30');
+  const [time, setTime] = useSch(schLastEventTime);
   const [where, setWhere] = useSch('');
   const [blurb, setBlurb] = useSch('');
   const [accent, setAccent] = useSch('var(--clay)');
@@ -1194,6 +1194,7 @@ function SchEventModal({ day, onClose }) {
         <div style={{ flex: 1 }}><div style={schLbl}>Date</div><input aria-label="Date" type="date" value={date} max={SCH_MAX_DATE} onChange={e => setDate(e.target.value)} style={schFld} /></div>
         <div style={{ width: 130 }}><div style={schLbl}>Time</div><input aria-label="Time" type="time" value={time} onChange={e => setTime(e.target.value)} style={schFld} /></div>
       </div>
+      {planned.length > 1 ? <div role="status" style={{ fontSize: 12.5, color: 'var(--ink-2)', marginTop: 6, lineHeight: 1.4 }}>All {planned.length} dates use this time — set it here, once, before you add them.</div> : null}
       {clashes.length ? (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 9, padding: '9px 12px', borderRadius: 11, background: 'color-mix(in oklab, var(--gold) 12%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 30%, var(--line))', fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.4 }}>
           <Icon name="bell" size={15} color="#8a6717" style={{ flexShrink: 0 }} />
