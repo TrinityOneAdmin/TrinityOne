@@ -5080,23 +5080,23 @@ function ago(ts) {
 }
 
 function NewPlanModal({ onClose }) {
-  const [mode, setMode] = React.useState(‘manual’);   // manual | upload
-  const [name, setName] = React.useState(‘’);
-  const [tag, setTag] = React.useState(‘’);
-  const [blurb, setBlurb] = React.useState(‘’);
-  const [text, setText] = React.useState(‘’);
+  const [mode, setMode] = React.useState('manual');   // manual | upload
+  const [name, setName] = React.useState('');
+  const [tag, setTag] = React.useState('');
+  const [blurb, setBlurb] = React.useState('');
+  const [text, setText] = React.useState('');
   const [parsedDays, setParsedDays] = React.useState(null);   // [{ d, ref, label }] from file upload
-  const [fileName, setFileName] = React.useState(‘’);
+  const [fileName, setFileName] = React.useState('');
   const [schedAt, setSchedAt] = React.useState(0);
-  const toLocalInput = (sec) => { if (!sec) return ‘’; const d = new Date(sec * 1000); const p = n => String(n).padStart(2, ‘0’); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`; };
+  const toLocalInput = (sec) => { if (!sec) return ''; const d = new Date(sec * 1000); const p = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`; };
   const fromLocalInput = (s) => { if (!s) return 0; const t = new Date(s).getTime(); return Number.isFinite(t) ? Math.floor(t / 1000) : 0; };
   const isFuture = schedAt && schedAt * 1000 > Date.now();
   const inputRef = React.useRef(null);
   const parsePlanFile = (fname, raw) => {
-    const baseTitle = fname.replace(/\.(txt|md|markdown)$/i, ‘’).replace(/[-_]+/g, ‘ ‘).trim() || ‘Untitled’;
-    const lines = raw.split(‘\n’).map(s => s.trim()).filter(Boolean);
+    const baseTitle = fname.replace(/\.(txt|md|markdown)$/i, '').replace(/[-_]+/g, ' ').trim() || 'Untitled';
+    const lines = raw.split('\n').map(s => s.trim()).filter(Boolean);
     let title = baseTitle;
-    if (lines[0] && /^#+\s+/.test(lines[0])) { title = lines[0].replace(/^#+\s*/, ‘’).replace(/\s*[—–-]\s*Weekly Plan$/i, ‘’).trim() || baseTitle; }
+    if (lines[0] && /^#+\s+/.test(lines[0])) { title = lines[0].replace(/^#+\s*/, '').replace(/\s*[—–-]\s*Weekly Plan$/i, '').trim() || baseTitle; }
     const dayRx = /^#{2,3}\s+Day\s+(\d+)\s*[—–-]\s*(.+)/i;
     const readRx = /^\*\*Read:\s*(.+?)\*\*/;
     const richDays = [];
@@ -5104,118 +5104,118 @@ function NewPlanModal({ onClose }) {
       const dm = dayRx.exec(lines[i]);
       if (!dm) continue;
       const d = parseInt(dm[1], 10), label = dm[2].trim();
-      let ref = ‘’;
-      if (i + 1 < lines.length) { const rm = readRx.exec(lines[i + 1]); if (rm) ref = rm[1].trim().replace(/–/g, ‘-’).replace(/—/g, ‘-’); }
+      let ref = '';
+      if (i + 1 < lines.length) { const rm = readRx.exec(lines[i + 1]); if (rm) ref = rm[1].trim().replace(/–/g, '-').replace(/—/g, '-'); }
       if (ref) richDays.push({ d, ref, label });
     }
-    let sub = ‘’, fileTag = ‘Custom’, fileBlurb = ‘’;
+    let sub = '', fileTag = 'Custom', fileBlurb = '';
     if (richDays.length) {
       const subLine = lines.find(l => /^#{2,3}\s+Series\s+/i.test(l));
-      if (subLine) { sub = subLine.replace(/^#+\s*/, ‘’).trim(); const tm = /of\s+"([^"]+)"/.exec(sub); if (tm) fileTag = tm[1]; }
-      const blurbLine = lines.find(l => /^\*[^*]/.test(l) && l.endsWith(‘*’));
-      if (blurbLine) fileBlurb = blurbLine.replace(/^\*|\*$/g, ‘’).trim().slice(0, 500);
+      if (subLine) { sub = subLine.replace(/^#+\s*/, '').trim(); const tm = /of\s+"([^"]+)"/.exec(sub); if (tm) fileTag = tm[1]; }
+      const blurbLine = lines.find(l => /^\*[^*]/.test(l) && l.endsWith('*'));
+      if (blurbLine) fileBlurb = blurbLine.replace(/^\*|\*$/g, '').trim().slice(0, 500);
       return { title, sub, tag: fileTag, blurb: fileBlurb, days: richDays };
     }
     const simpleDays = lines.filter(l => !/^#/.test(l)).map((ref, i) => ({ d: i + 1, ref, label: ref }));
-    return { title, sub, tag: ‘Custom’, blurb: ‘’, days: simpleDays };
+    return { title, sub, tag: 'Custom', blurb: '', days: simpleDays };
   };
   const handleFile = (f) => {
     if (!f) return;
     if (!/\.(txt|md|markdown)$/i.test(f.name)) return;
     const r = new FileReader();
     r.onload = () => {
-      const result = parsePlanFile(f.name, String(r.result || ‘’));
+      const result = parsePlanFile(f.name, String(r.result || ''));
       setFileName(f.name);
       setName(result.title);
-      setTag(result.tag || ‘’);
-      setBlurb(result.blurb || ‘’);
+      setTag(result.tag || '');
+      setBlurb(result.blurb || '');
       setParsedDays(result.days);
     };
     r.readAsText(f);
   };
-  const manualLines = text.split(‘\n’).map(s => s.trim()).filter(Boolean);
-  const activeDays = mode === ‘upload’ && parsedDays ? parsedDays : manualLines.map((ref, i) => ({ d: i + 1, ref, label: ref }));
+  const manualLines = text.split('\n').map(s => s.trim()).filter(Boolean);
+  const activeDays = mode === 'upload' && parsedDays ? parsedDays : manualLines.map((ref, i) => ({ d: i + 1, ref, label: ref }));
   const canPublish = name.trim() && activeDays.length > 0;
   const create = (asDraft) => {
     if (!canPublish) return;
-    window.Steward.publishPlan({ id: ‘custom-’ + Date.now().toString(36), title: name.trim(), sub: activeDays.length + ‘ day’ + (activeDays.length === 1 ? ‘’ : ‘s’), tag: tag.trim() || ‘Custom’, accent: ‘var(--clay)’, blurb: blurb.trim(), days: activeDays, publishAt: isFuture ? schedAt : 0, draft: !!asDraft });
+    window.Steward.publishPlan({ id: 'custom-' + Date.now().toString(36), title: name.trim(), sub: activeDays.length + ' day' + (activeDays.length === 1 ? '' : 's'), tag: tag.trim() || 'Custom', accent: 'var(--clay)', blurb: blurb.trim(), days: activeDays, publishAt: isFuture ? schedAt : 0, draft: !!asDraft });
     onClose();
   };
   const modeBtn = (k, label, icon) => (
-    <button type="button" onClick={() => setMode(k)} style={{ flex: 1, display: ‘flex’, alignItems: ‘center’, justifyContent: ‘center’, gap: 7, padding: ‘10px 12px’, borderRadius: 11, cursor: ‘pointer’, fontFamily: ‘var(--font-ui)’, fontWeight: 700, fontSize: 13, background: mode === k ? ‘color-mix(in oklab, var(--clay) 10%, var(--surface))’ : ‘var(--surface-2)’, border: ‘1.5px solid ‘ + (mode === k ? ‘var(--clay)’ : ‘var(--line)’), color: mode === k ? ‘var(--clay-ink)’ : ‘var(--ink-2)’ }}><Icon name={icon} size={14} color={mode === k ? ‘var(--clay)’ : ‘var(--ink-3)’} /> {label}</button>
+    <button type="button" onClick={() => setMode(k)} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, padding: '10px 12px', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, background: mode === k ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'var(--surface-2)', border: '1.5px solid ' + (mode === k ? 'var(--clay)' : 'var(--line)'), color: mode === k ? 'var(--clay-ink)' : 'var(--ink-2)' }}><Icon name={icon} size={14} color={mode === k ? 'var(--clay)' : 'var(--ink-3)'} /> {label}</button>
   );
   const dlgRef = useStewDialog(onClose);
   return (
-    <div onClick={onClose} style={{ position: ‘fixed’, overflowY: ‘auto’, inset: 0, zIndex: 90, background: ‘rgba(40,32,24,.42)’, backdropFilter: ‘blur(3px)’, display: ‘flex’, alignItems: ‘safe center’, justifyContent: ‘center’ }}>
-      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="Create a reading plan" tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 520, maxWidth: ‘92%’, maxHeight: ‘88%’, display: ‘flex’, flexDirection: ‘column’, overflow: ‘hidden’, background: ‘var(--surface)’, borderRadius: 22, border: ‘1px solid var(--line)’, boxShadow: ‘var(--shadow-lg)’ }}>
-        <div style={{ flex: ‘1 1 auto’, minHeight: 0, overflowY: ‘auto’, padding: ‘28px 28px 8px’ }}>
-        <div style={{ fontFamily: ‘var(--font-display)’, fontWeight: 800, fontSize: 22 }}>Create a reading plan</div>
-        <p style={{ fontSize: 13.5, color: ‘var(--ink-2)’, lineHeight: 1.55, margin: ‘8px 0 14px’ }}>Type readings by hand, or upload a Markdown file.</p>
-        <div style={{ display: ‘flex’, gap: 8, marginBottom: 16 }}>
-          {modeBtn(‘manual’, ‘Type it’, ‘pen’)}
-          {modeBtn(‘upload’, ‘Upload file’, ‘share’)}
+    <div onClick={onClose} style={{ position: 'fixed', overflowY: 'auto', inset: 0, zIndex: 90, background: 'rgba(40,32,24,.42)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'safe center', justifyContent: 'center' }}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="Create a reading plan" tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 520, maxWidth: '92%', maxHeight: '88%', display: 'flex', flexDirection: 'column', overflow: 'hidden', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)' }}>
+        <div style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', padding: '28px 28px 8px' }}>
+        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22 }}>Create a reading plan</div>
+        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 14px' }}>Type readings by hand, or upload a Markdown file.</p>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+          {modeBtn('manual', 'Type it', 'pen')}
+          {modeBtn('upload', 'Upload file', 'share')}
         </div>
-        {mode === ‘upload’ ? (
+        {mode === 'upload' ? (
           <React.Fragment>
-            <div onClick={() => inputRef.current && inputRef.current.click()} style={{ border: ‘2px dashed var(--line)’, borderRadius: 14, background: ‘var(--surface-2)’, padding: ‘18px 16px’, textAlign: ‘center’, cursor: ‘pointer’, marginBottom: 14 }}>
+            <div onClick={() => inputRef.current && inputRef.current.click()} style={{ border: '2px dashed var(--line)', borderRadius: 14, background: 'var(--surface-2)', padding: '18px 16px', textAlign: 'center', cursor: 'pointer', marginBottom: 14 }}>
               {parsedDays ? (
-                <div style={{ display: ‘flex’, alignItems: ‘center’, gap: 10, justifyContent: ‘center’ }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'center' }}>
                   <Icon name="read" size={20} color="var(--clay)" />
-                  <div style={{ textAlign: ‘left’ }}>
+                  <div style={{ textAlign: 'left' }}>
                     <div style={{ fontWeight: 700, fontSize: 13.5 }}>{fileName}</div>
-                    <div style={{ fontSize: 12, color: ‘var(--ink-3)’ }}>{parsedDays.length} day{parsedDays.length === 1 ? ‘’ : ‘s’} found. Tap to choose a different file.</div>
+                    <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{parsedDays.length} day{parsedDays.length === 1 ? '' : 's'} found. Tap to choose a different file.</div>
                   </div>
                 </div>
               ) : (
                 <React.Fragment>
                   <Icon name="share" size={22} color="var(--ink-3)" />
                   <div style={{ fontWeight: 700, fontSize: 14, marginTop: 6 }}>Choose a .md or .txt file</div>
-                  <div style={{ fontSize: 12, color: ‘var(--ink-3)’, marginTop: 2 }}>Accepts the devotional format or simple one-ref-per-line.</div>
+                  <div style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 2 }}>Accepts the devotional format or simple one-ref-per-line.</div>
                 </React.Fragment>
               )}
-              <input ref={inputRef} type="file" accept=".md,.markdown,.txt,text/plain,text/markdown" onChange={e => { handleFile(e.target.files[0]); e.target.value = ‘’; }} style={{ display: ‘none’ }} />
+              <input ref={inputRef} type="file" accept=".md,.markdown,.txt,text/plain,text/markdown" onChange={e => { handleFile(e.target.files[0]); e.target.value = ''; }} style={{ display: 'none' }} />
             </div>
           </React.Fragment>
         ) : null}
-        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: ‘1.2px’, textTransform: ‘uppercase’, color: ‘var(--ink-3)’, marginBottom: 6 }}>Name</div>
-        <input value={name} onChange={e => setName(e.target.value)} autoFocus placeholder="e.g. Advent — Light Has Come" style={{ width: ‘100%’, boxSizing: ‘border-box’, height: 46, border: ‘1px solid var(--line)’, borderRadius: 12, background: ‘var(--surface-2)’, padding: ‘0 14px’, fontSize: 15, fontFamily: ‘var(--font-ui)’, color: ‘var(--ink)’, outline: ‘none’, marginBottom: 14 }} />
-        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: ‘1.2px’, textTransform: ‘uppercase’, color: ‘var(--ink-3)’, marginBottom: 6 }}>Tag (optional)</div>
-        <input value={tag} onChange={e => setTag(e.target.value)} placeholder="e.g. Advent" style={{ width: ‘100%’, boxSizing: ‘border-box’, height: 46, border: ‘1px solid var(--line)’, borderRadius: 12, background: ‘var(--surface-2)’, padding: ‘0 14px’, fontSize: 15, fontFamily: ‘var(--font-ui)’, color: ‘var(--ink)’, outline: ‘none’, marginBottom: 14 }} />
-        {mode === ‘manual’ ? (
+        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 6 }}>Name</div>
+        <input value={name} onChange={e => setName(e.target.value)} autoFocus placeholder="e.g. Advent — Light Has Come" style={{ width: '100%', boxSizing: 'border-box', height: 46, border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '0 14px', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 14 }} />
+        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 6 }}>Tag (optional)</div>
+        <input value={tag} onChange={e => setTag(e.target.value)} placeholder="e.g. Advent" style={{ width: '100%', boxSizing: 'border-box', height: 46, border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '0 14px', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 14 }} />
+        {mode === 'manual' ? (
           <React.Fragment>
-            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: ‘1.2px’, textTransform: ‘uppercase’, color: ‘var(--ink-3)’, marginBottom: 6 }}>Readings — one per line {manualLines.length ? ‘· ‘ + manualLines.length + ‘ day’ + (manualLines.length === 1 ? ‘’ : ‘s’) : ‘’}</div>
-            <textarea value={text} onChange={e => setText(e.target.value)} rows={7} placeholder={‘John 1\nJohn 2\nIsaiah 53\nPsalm 22’} style={{ width: ‘100%’, boxSizing: ‘border-box’, border: ‘1px solid var(--line)’, borderRadius: 12, background: ‘var(--surface-2)’, padding: ‘12px 14px’, fontSize: 14.5, fontFamily: ‘var(--mono)’, color: ‘var(--ink)’, outline: ‘none’, resize: ‘vertical’, lineHeight: 1.6 }} />
+            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 6 }}>Readings — one per line {manualLines.length ? '· ' + manualLines.length + ' day' + (manualLines.length === 1 ? '' : 's') : ''}</div>
+            <textarea value={text} onChange={e => setText(e.target.value)} rows={7} placeholder={'John 1\nJohn 2\nIsaiah 53\nPsalm 22'} style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '12px 14px', fontSize: 14.5, fontFamily: 'var(--mono)', color: 'var(--ink)', outline: 'none', resize: 'vertical', lineHeight: 1.6 }} />
           </React.Fragment>
         ) : parsedDays && parsedDays.length ? (
           <React.Fragment>
-            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: ‘1.2px’, textTransform: ‘uppercase’, color: ‘var(--ink-3)’, marginBottom: 6 }}>Preview {‘·’} {parsedDays.length} day{parsedDays.length === 1 ? ‘’ : ‘s’}</div>
-            <div style={{ maxHeight: 180, overflowY: ‘auto’, border: ‘1px solid var(--line)’, borderRadius: 12, background: ‘var(--surface-2)’, padding: ‘6px 0’ }}>
+            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 6 }}>Preview {'·'} {parsedDays.length} day{parsedDays.length === 1 ? '' : 's'}</div>
+            <div style={{ maxHeight: 180, overflowY: 'auto', border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '6px 0' }}>
               {parsedDays.map((day, i) => (
-                <div key={i} style={{ display: ‘flex’, gap: 10, alignItems: ‘baseline’, padding: ‘5px 14px’, fontSize: 13, borderBottom: i < parsedDays.length - 1 ? ‘1px solid var(--line)’ : ‘none’ }}>
-                  <span style={{ fontWeight: 800, fontSize: 11, color: ‘var(--clay)’, minWidth: 34 }}>Day {day.d}</span>
+                <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'baseline', padding: '5px 14px', fontSize: 13, borderBottom: i < parsedDays.length - 1 ? '1px solid var(--line)' : 'none' }}>
+                  <span style={{ fontWeight: 800, fontSize: 11, color: 'var(--clay)', minWidth: 34 }}>Day {day.d}</span>
                   <span style={{ fontWeight: 600, minWidth: 100 }}>{day.ref}</span>
-                  <span style={{ color: ‘var(--ink-3)’, flex: 1, overflow: ‘hidden’, textOverflow: ‘ellipsis’, whiteSpace: ‘nowrap’ }}>{day.label}</span>
+                  <span style={{ color: 'var(--ink-3)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{day.label}</span>
                 </div>
               ))}
             </div>
           </React.Fragment>
         ) : null}
-        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: ‘1.2px’, textTransform: ‘uppercase’, color: ‘var(--ink-3)’, margin: ‘16px 0 6px’ }}>Release</div>
-        <div style={{ display: ‘flex’, gap: 8 }}>
-          <button type="button" onClick={() => setSchedAt(0)} style={{ flex: 1, padding: ‘11px 12px’, borderRadius: 11, cursor: ‘pointer’, fontFamily: ‘var(--font-ui)’, fontWeight: 700, fontSize: 13, background: !schedAt ? ‘color-mix(in oklab, var(--clay) 10%, var(--surface))’ : ‘var(--surface-2)’, border: ‘1.5px solid ‘ + (!schedAt ? ‘var(--clay)’ : ‘var(--line)’), color: !schedAt ? ‘var(--clay-ink)’ : ‘var(--ink-2)’ }}>Now</button>
-          <button type="button" onClick={() => setSchedAt(schedAt || Math.floor(Date.now() / 1000) + 7 * 86400)} style={{ flex: 1, padding: ‘11px 12px’, borderRadius: 11, cursor: ‘pointer’, fontFamily: ‘var(--font-ui)’, fontWeight: 700, fontSize: 13, background: schedAt ? ‘color-mix(in oklab, var(--clay) 10%, var(--surface))’ : ‘var(--surface-2)’, border: ‘1.5px solid ‘ + (schedAt ? ‘var(--clay)’ : ‘var(--line)’), color: schedAt ? ‘var(--clay-ink)’ : ‘var(--ink-2)’ }}>Schedule...</button>
+        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '16px 0 6px' }}>Release</div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button type="button" onClick={() => setSchedAt(0)} style={{ flex: 1, padding: '11px 12px', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, background: !schedAt ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'var(--surface-2)', border: '1.5px solid ' + (!schedAt ? 'var(--clay)' : 'var(--line)'), color: !schedAt ? 'var(--clay-ink)' : 'var(--ink-2)' }}>Now</button>
+          <button type="button" onClick={() => setSchedAt(schedAt || Math.floor(Date.now() / 1000) + 7 * 86400)} style={{ flex: 1, padding: '11px 12px', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, background: schedAt ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'var(--surface-2)', border: '1.5px solid ' + (schedAt ? 'var(--clay)' : 'var(--line)'), color: schedAt ? 'var(--clay-ink)' : 'var(--ink-2)' }}>Schedule...</button>
         </div>
         {schedAt ? (
           <React.Fragment>
-            <input type="datetime-local" value={toLocalInput(schedAt)} min={toLocalInput(Math.floor(Date.now() / 1000))} onChange={e => setSchedAt(fromLocalInput(e.target.value))} style={{ width: ‘100%’, boxSizing: ‘border-box’, height: 46, border: ‘1px solid var(--line)’, borderRadius: 12, background: ‘var(--surface-2)’, padding: ‘0 14px’, fontSize: 15, fontFamily: ‘var(--font-ui)’, color: ‘var(--ink)’, outline: ‘none’, margin: ‘8px 0 6px’ }} />
-            <div style={{ fontSize: 12, color: isFuture ? ‘var(--ink-2)’ : ‘var(--clay-ink)’ }}>{isFuture ? ‘Hidden from members until ‘ + new Date(schedAt * 1000).toLocaleString([], { weekday: ‘short’, day: ‘numeric’, month: ‘short’, hour: ‘2-digit’, minute: ‘2-digit’ }) + ‘.’ : ‘That time is in the past — it will publish immediately.’}</div>
+            <input type="datetime-local" value={toLocalInput(schedAt)} min={toLocalInput(Math.floor(Date.now() / 1000))} onChange={e => setSchedAt(fromLocalInput(e.target.value))} style={{ width: '100%', boxSizing: 'border-box', height: 46, border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '0 14px', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', margin: '8px 0 6px' }} />
+            <div style={{ fontSize: 12, color: isFuture ? 'var(--ink-2)' : 'var(--clay-ink)' }}>{isFuture ? 'Hidden from members until ' + new Date(schedAt * 1000).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) + '.' : 'That time is in the past — it will publish immediately.'}</div>
           </React.Fragment>
         ) : null}
         </div>
-        <div style={{ flexShrink: 0, display: ‘flex’, gap: 10, padding: ‘14px 28px 22px’, borderTop: ‘1px solid var(--line)’ }}>
-          <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: ‘0 0 auto’, padding: ‘12px 14px’, fontSize: 14 }}>Cancel</button>
-          <button onClick={() => create(true)} disabled={!canPublish} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 13.5, opacity: canPublish ? 1 : 0.55 }} title="Hold it — members won’t see it until you publish">Save as draft</button>
-          <button onClick={() => create(false)} disabled={!canPublish} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 13.5, opacity: canPublish ? 1 : 0.55 }}><Icon name="send" size={15} color="var(--on-clay)" /> {isFuture ? ‘Schedule’ : ‘Publish now’}</button>
+        <div style={{ flexShrink: 0, display: 'flex', gap: 10, padding: '14px 28px 22px', borderTop: '1px solid var(--line)' }}>
+          <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: '0 0 auto', padding: '12px 14px', fontSize: 14 }}>Cancel</button>
+          <button onClick={() => create(true)} disabled={!canPublish} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 13.5, opacity: canPublish ? 1 : 0.55 }} title="Hold it — members won't see it until you publish">Save as draft</button>
+          <button onClick={() => create(false)} disabled={!canPublish} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 13.5, opacity: canPublish ? 1 : 0.55 }}><Icon name="send" size={15} color="var(--on-clay)" /> {isFuture ? 'Schedule' : 'Publish now'}</button>
         </div>
       </div>
     </div>
@@ -5913,7 +5913,7 @@ function BulkUploadModal({ kind, onClose }) {
       <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={'Bulk upload ' + (isPlans ? 'reading plans' : 'devotionals')} tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 560, maxWidth: '96%', maxHeight: '90%', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', overflow: 'hidden', animation: 'lumenScale .2s ease both' }}>
         <div style={{ padding: '24px 26px 0' }}>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22 }}>Bulk upload {isPlans ? 'reading plans' : 'devotionals'}</div>
-          <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 16px' }}>{isPlans ? 'Each file becomes a plan. Use the devotional format (### Day 1 — Title, **Read: Reference**) or a simple list with one Bible reference per line. A “# Title” first line is used as the name.' : 'Each Markdown / text file becomes a devotional. The first “# Heading” (or the filename) is the title.'} They land as <b>drafts</b>, so you can arrange and schedule them before anything reaches members.</p>
+          <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 16px' }}>{isPlans ? 'Each file becomes a plan. Use the devotional format (### Day 1 — Title, **Read: Reference**) or a simple list with one Bible reference per line. A "# Title" first line is used as the name.' : 'Each Markdown / text file becomes a devotional. The first "# Heading" (or the filename) is the title.'} They land as <b>drafts</b>, so you can arrange and schedule them before anything reaches members.</p>
         </div>
         <div style={{ padding: '0 26px' }}>
           <div onDragOver={e => { e.preventDefault(); setDrag(true); }} onDragLeave={() => setDrag(false)} onDrop={e => { e.preventDefault(); setDrag(false); addFiles(e.dataTransfer.files); }} onClick={() => inputRef.current && inputRef.current.click()}
