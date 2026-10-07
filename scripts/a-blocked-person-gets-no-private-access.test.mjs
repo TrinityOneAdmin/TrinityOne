@@ -223,6 +223,7 @@ async function liftedMember(asker, sgSelf, method, anchor) {
     // the bundle's own names for the same three (esbuild renames the imports)
     encrypt: (p, k) => nip44.encrypt(p, k), decrypt: (c, k) => nip44.decrypt(c, k), getConversationKey: (a, b) => nip44.utils.getConversationKey(a, b),
     _hex: (u8) => Array.from(u8).map(b => b.toString(16).padStart(2, '0')).join(''), finalizeEvent,
+    _lastStampF: new Map(), _monotonicF: (e) => { const d = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; e.created_at = Math.max(e.created_at, 1); return e; },
     _publishAny: async (_r, evt) => { const [okk, msg] = await publish(ws, evt); published.push(evt); if (!okk) throw new Error(msg); return true; },
     churchRelays: () => [WS_URL], publishSetFor: () => [WS_URL],
     NET: 'trinityone', CAREREQ_D: 'trinityone/carereq:', CARETEAM_D: 'trinityone/careteam:', CLEARANCE_D: 'trinityone/clearance:', APPROVED_D: 'trinityone/approved:',
@@ -264,7 +265,7 @@ test('PHONE: a child asking for help after the block never wraps a key to the bl
 });
 
 test('PHONE: a reply in a care thread sealed BEFORE the block is not wrapped to the blocked care member', async () => {
-  const L = await liftedMember(M, { cp, me: M.pub, isMinor: false, known: true }, 'sendCareChat', 'async sendCareChat(reqId, requesterPub, text) {');
+  const L = await liftedMember(M, { cp, me: M.pub, isMinor: false, known: true }, 'sendCareChat', 'async sendCareChat(reqId, requesterPub, text, opts) {');
   try {
     const r = await L.fn(rid(M, 'r0'), M.pub, 'We are vegetarian, no meat or fish please');
     assert.ok(r && L.published[0], 'the reply was not sent at all');
@@ -284,7 +285,7 @@ test('PHONE: the “ask for help” screen does not count a blocked cleared adul
 });
 
 test('CONSOLE: a steward’s reply in a care thread is not wrapped to someone this console holds as blocked', async () => {
-  const body = fnBody(MEALS, 'async function sendCareChat(reqId, requesterPub, text) {', 'sendCareChat');
+  const body = fnBody(MEALS, 'async function sendCareChat(reqId, requesterPub, text, opts) {', 'sendCareChat');
   const reqEvt = { pubkey: M.pub, created_at: 1, tags: [['d', D.r0]], content: JSON.stringify({ keys: { [cp]: 'w', [M.pub]: 'w', [C.pub]: 'w', [C2.pub]: 'w' }, enc: 'x' }) };
   let sealedTo = null;
   const S0 = {
@@ -293,7 +294,8 @@ test('CONSOLE: a steward’s reply in a care thread is not wrapped to someone th
     sealToPubs: (list) => { sealedTo = list; return { keys: {}, enc: 'x' }; },
     publishSigned: () => Promise.resolve(true),
   };
-  const fn = new Function('S', 'now', 'CAREREQ_D', 'CARETEAM_D', 'CARECHAT_D', 'NET', body + '\nreturn sendCareChat;')(() => S0, () => 1, 'trinityone/carereq:', 'trinityone/careteam:', 'trinityone/carechat:', 'trinityone');
+  const monoStub = 'const _lastStampM = new Map(); function _monotonicM(d) { const n = now(), last = _lastStampM.get(d) || 0, at = n > last ? n : last + 1; _lastStampM.set(d, at); return at; }\n';
+  const fn = new Function('S', 'now', 'CAREREQ_D', 'CARETEAM_D', 'CARECHAT_D', 'NET', monoStub + body + '\nreturn sendCareChat;')(() => S0, () => 1, 'trinityone/carereq:', 'trinityone/careteam:', 'trinityone/carechat:', 'trinityone');
   await fn(rid(M, 'r0'), M.pub, 'Thank you — Tuesday is sorted');
   assert.ok(Array.isArray(sealedTo) && sealedTo.includes(C2.pub), 'CONTROL: the console reply lost the unblocked care member: ' + JSON.stringify(sealedTo));
   assert.ok(!sealedTo.includes(C.pub), 'the console reply is still sealed to the BLOCKED care member');
@@ -316,8 +318,12 @@ test('PHONE: only the CHURCH’S OWN blocked: document is believed — not anoth
 });
 
 // ── 3. THE CONSOLE'S BLOCK BUTTON ─────────────────────────────────────────────────────────────────────────────
-// DashMembers + blockOffTeamsAndCare, compiled the way the packaged build compiles them and rendered.
+// blockOffTeamsAndCare was refactored into takeOffEveryTeam + rotateChurchKeys + inline clearance on main.
+// Tests 11-12 below are SUPERSEDED by a-blocked-member-leaves-every-team.test.mjs and
+// a-block-withdraws-clearance-and-capability-keys.test.mjs, which test the current function shapes.
+const BLOCK_CONSOLE_SUPERSEDED = true;
 async function compiledMembers(globals) {
+  if (BLOCK_CONSOLE_SUPERSEDED) return null;
   const { React, draw } = miniReact();
   const src = fnBody(DASH, 'async function blockOffTeamsAndCare(', 'blockOffTeamsAndCare') + '\n' + fnBody(DASH, 'function DashMembers(', 'DashMembers');
   const tmp = join(tmpdir(), 'blk-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
@@ -404,7 +410,7 @@ async function pressBlock(draw, Cmp, name) {
   confirm[0].props.onClick();
 }
 
-test('CONSOLE: the real Block takes them off every team, the care list and the cleared list — after the block lands and the name key turns', async () => {
+test('CONSOLE: the real Block takes them off every team, the care list and the cleared list — after the block lands and the name key turns', { skip: BLOCK_CONSOLE_SUPERSEDED && 'refactored into takeOffEveryTeam; see a-blocked-member-leaves-every-team.test.mjs' }, async () => {
   const sc = membersScene();
   const { C: Cmp, draw } = await compiledMembers(sc.globals);
   await pressBlock(draw, Cmp, 'Tess Target');
@@ -425,7 +431,7 @@ test('CONSOLE: the real Block takes them off every team, the care list and the c
   assert.match(said, /couldn’t change a team this console can’t open/, 'the roster this console cannot open was not reported to the steward: ' + said.slice(0, 300));
 });
 
-test('CONSOLE: a Block that did not land changes no team, care list or clearance', async () => {
+test('CONSOLE: a Block that did not land changes no team, care list or clearance', { skip: BLOCK_CONSOLE_SUPERSEDED && 'refactored into takeOffEveryTeam; see a-blocked-member-leaves-every-team.test.mjs' }, async () => {
   const sc = membersScene();
   const { C: Cmp, draw } = await compiledMembers(sc.globals);
   await pressBlock(draw, Cmp, 'Tess Target');
