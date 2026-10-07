@@ -195,7 +195,7 @@ function PlansScreen({ ctx }) {
   );
 
   return (
-    <ScreenScroll>
+    <ScreenScroll top="calc(env(safe-area-inset-top, 0px) + 8px)">
       <ReadPlansTabs ctx={ctx} style={{ marginBottom: 18 }} />
       <h1 style={{ margin: '0 0 4px', fontFamily: 'var(--font-display)', fontSize: 30, fontWeight: 700, letterSpacing: '-.5px', animation: 'trinityFade .5s ease both' }}>Reading Plans</h1>
       <p style={{ margin: '0 0 20px', color: 'var(--ink-2)', fontSize: 14.5, lineHeight: 1.4 }}>A little every day. Pick a path and let it carry you.</p>
@@ -311,7 +311,7 @@ function PlanDetail({ plan, open, onClose, ctx }) {
 
   return (
     <Overlay open={open} onClose={onClose}>
-      <div style={{ paddingTop: 50, background: 'linear-gradient(160deg, var(--clay), var(--clay-deep))', color: 'var(--on-clay)', position: 'relative', overflow: 'hidden' }}>
+      <div style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 8px)', background: 'linear-gradient(160deg, var(--clay), var(--clay-deep))', color: 'var(--on-clay)', position: 'relative', overflow: 'hidden' }}>
         <div style={{ position: 'absolute', right: -30, top: 0, opacity: .15 }}><Icon name="read" size={180} stroke={1.2} color="#fff" /></div>
         <div style={{ padding: '10px 16px 22px', position: 'relative' }}>
           <button onClick={onClose} style={{ width: 40, height: 40, borderRadius: 13, border: 'none', background: 'rgba(255,255,255,.2)',
@@ -455,7 +455,7 @@ function DevoDayReader({ devo, day, parsed, open, onClose, ctx }) {
   const next = idx < parsed.days.length - 1 ? parsed.days[idx + 1] : null;
   return (
     <Overlay open={open} onClose={onClose}>
-      <div style={{ paddingTop: 50, flexShrink: 0, background: 'var(--surface)', borderBottom: '1px solid var(--line)' }}>
+      <div style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 8px)', flexShrink: 0, background: 'var(--surface)', borderBottom: '1px solid var(--line)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px 12px' }}>
           <IconBtn name="chevL" onClick={onClose} />
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -514,7 +514,7 @@ function ChurchDevoView({ devo, open, onClose, ctx }) {
     const isMd = devo.type === 'md' || /(^|\n)#{1,3}\s|\*\*[^*]+\*\*/.test(devo.text || '');
     return (
       <Overlay open={open} onClose={onClose}>
-        <div style={{ paddingTop: 50, flexShrink: 0, background: 'var(--surface)', borderBottom: '1px solid var(--line)' }}>
+        <div style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 8px)', flexShrink: 0, background: 'var(--surface)', borderBottom: '1px solid var(--line)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px 12px' }}>
             <IconBtn name="chevL" onClick={onClose} />
             <div style={{ flex: 1, minWidth: 0 }}>
@@ -543,7 +543,7 @@ function ChurchDevoView({ devo, open, onClose, ctx }) {
   const pct = parsed.count ? doneSet.size / parsed.count : 0;
   return (
     <Overlay open={open} onClose={onClose}>
-      <div style={{ paddingTop: 50, background: 'linear-gradient(160deg, var(--clay), var(--clay-deep))', color: 'var(--on-clay)', position: 'relative', overflow: 'hidden', flexShrink: 0 }}>
+      <div style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 8px)', background: 'linear-gradient(160deg, var(--clay), var(--clay-deep))', color: 'var(--on-clay)', position: 'relative', overflow: 'hidden', flexShrink: 0 }}>
         <div style={{ position: 'absolute', right: -30, top: 0, opacity: .15 }}><Icon name="read" size={180} stroke={1.2} color="#fff" /></div>
         <div style={{ padding: '10px 16px 22px', position: 'relative' }}>
           <button onClick={onClose} style={{ width: 40, height: 40, borderRadius: 13, border: 'none', background: 'rgba(255,255,255,.2)', color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }}>

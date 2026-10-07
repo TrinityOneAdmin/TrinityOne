@@ -422,50 +422,66 @@ function SafetyCheckPanel() {
 function StewCareChat({ reqId, requesterPub, title, onClose }) {
   const [msgs, setMsgs] = React.useState([]);
   const [text, setText] = React.useState('');
-  // sendCareChat now refuses rather than sealing a reply to the care rota when it cannot establish who the
-  // thread reaches. Restoring the text without saying anything reads as a typo, not a failure. See the same
-  // change in app/screens-today.jsx — the member sheet and this one must behave alike.
   const [err, setErr] = React.useState('');
+  const [menuMsg, setMenuMsg] = React.useState(null);
+  const [replyTo, setReplyTo] = React.useState(null);
   const endRef = React.useRef(null);
+  const inputRef = React.useRef(null);
+  const REACTIONS = ['❤️', '🙏', '👍', '✅'];
   React.useEffect(() => { let u = null; try { u = window.StewardMeals.subscribeCareChat(reqId, setMsgs); } catch (e) {} return () => { try { u && u(); } catch (e) {} }; }, [reqId]);
   React.useEffect(() => { try { endRef.current && endRef.current.scrollIntoView({ block: 'end' }); } catch (e) {} }, [msgs.length]);
-  const send = async () => { const t = text.trim(); if (!t) return; setText(''); setErr(''); let ok = null; try { ok = await window.StewardMeals.sendCareChat(reqId, requesterPub, t); } catch (e) {} if (!ok) { setText(t); setErr('Couldn’t send — we couldn’t confirm who this conversation reaches. Check your connection and try again.'); } };
-  // ESCAPE CLOSES IT. This panel had no role, no aria-modal and no key handler: to a screen reader it was an
-  // anonymous div, and to a keyboard user the only way out was a mouse click on the backdrop. Found in the
-  // accessibility sweep, 2026-08-27 — pressing Escape did nothing at all.
+  const send = async () => {
+    const t = text.trim(); if (!t) return;
+    const opts = {};
+    if (replyTo) opts.replyTo = replyTo.id;
+    setText(''); setReplyTo(null); setErr('');
+    let ok = null; try { ok = await window.StewardMeals.sendCareChat(reqId, requesterPub, t, Object.keys(opts).length ? opts : undefined); } catch (e) {}
+    if (!ok) { setText(t); setErr('Couldn\u2019t send \u2014 we couldn\u2019t confirm who this conversation reaches. Check your connection and try again.'); }
+  };
+  const react = async (msgId, emoji) => { setMenuMsg(null); try { await window.StewardMeals.sendCareChat(reqId, requesterPub, '', { reaction: emoji, replyTo: msgId }); } catch (e) {} };
+  const startReply = (m) => { setMenuMsg(null); setReplyTo(m); try { inputRef.current && inputRef.current.focus(); } catch (e) {} };
+  const textMsgs = msgs.filter(m => m.text);
+  const reactionsByMsg = {};
+  msgs.filter(m => m.reaction && m.replyTo).forEach(m => { if (!reactionsByMsg[m.replyTo]) reactionsByMsg[m.replyTo] = []; reactionsByMsg[m.replyTo].push(m.reaction); });
+  const msgById = {};
+  textMsgs.forEach(m => { msgById[m.id] = m; });
   React.useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
-  // …AND IT TELLS THE CONSOLE IT IS A MODAL. This panel rolls its own Escape rather than using useStewDialog,
-  // so it was invisible to the one thing that has to know a dialog is open: the error banner, which sits above
-  // every overlay (AUDIT-9) and therefore has to move out of the way of a dialog's title while one is up.
-  // Registration only — the focus trap is a separate question this panel has not answered.
-  // REGISTER AS A MODAL — see useStewModalOpen in app/stew-modal.jsx, which every other console dialog
-  // reaches through useStewDialog.
-  //
-  // ⚠ WHY THIS IS WRITTEN AS AN EXPRESSION AND NOT AS A NAMED HELPER. Two reasons, both measured today:
-  //   · a bare `useStewModalOpen(true)` is undefined in the ~26 tests that compile ONE app file and hand it
-  //     its globals by name, and none of them is about a modal registry. It took nine of them down;
-  //   · hoisting it into a module-level const, in BOTH this file and the other overlay's file, is a
-  //     DUPLICATE TOP-LEVEL NAME across two classic scripts, which is a SyntaxError that blanks the whole
-  //     console — this codebase has shipped that exact defect before.
-  // The fallback keeps the hook COUNT identical (one useEffect either way), so this is not a conditional
-  // hook: it is the same hook, from one of two places.
   (typeof useStewModalOpen === 'function' ? useStewModalOpen : () => React.useEffect(() => {}, []))(true);
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 90, background: 'rgba(40,32,24,.42)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <div onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Care conversation" style={{ width: 440, maxWidth: '92%', height: '70vh', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderRadius: 20, border: '1px solid var(--line)', overflow: 'hidden' }}>
+      <div onClick={e => { e.stopPropagation(); setMenuMsg(null); }} role="dialog" aria-modal="true" aria-label="Care conversation" style={{ width: 440, maxWidth: '92%', height: '70vh', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderRadius: 20, border: '1px solid var(--line)', overflow: 'hidden' }}>
         <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--line)', display: 'flex', alignItems: 'center', gap: 8 }}><Icon name="heart" size={17} color="var(--clay)" /><div style={{ flex: 1, fontWeight: 800, fontSize: 15 }}>{title || 'Care conversation'}</div><button onClick={onClose} aria-label="Close this conversation" title="Close this conversation" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="x" size={18} color="currentColor" /></button></div>
         <div style={{ flex: 1, overflowY: 'auto', padding: 14, display: 'flex', flexDirection: 'column', gap: 7 }}>
-          {msgs.length === 0 ? <div style={{ margin: 'auto', color: 'var(--ink-3)', fontSize: 13 }}>No messages yet.</div> : null}
-          {msgs.map(m => <div key={m.id} style={{ alignSelf: m.mine ? 'flex-end' : 'flex-start', maxWidth: '80%', padding: '8px 12px', borderRadius: 13, background: m.mine ? 'var(--clay)' : 'var(--surface-2)', color: m.mine ? '#fff' : 'var(--ink)', fontSize: 14, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.text}</div>)}
+          {textMsgs.length === 0 ? <div style={{ margin: 'auto', color: 'var(--ink-3)', fontSize: 13 }}>No messages yet.</div> : null}
+          {textMsgs.map(m => {
+            const rxns = reactionsByMsg[m.id];
+            const quoted = m.replyTo && msgById[m.replyTo];
+            const copy = () => { try { navigator.clipboard.writeText(m.text); } catch {} };
+            return (
+            <div key={m.id} style={{ alignSelf: m.mine ? 'flex-end' : 'flex-start', maxWidth: '80%', position: 'relative' }}>
+              {quoted ? <div style={{ fontSize: 11, color: 'var(--ink-3)', padding: '3px 9px', margin: '0 3px 2px', borderLeft: '2px solid var(--clay)', borderRadius: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{quoted.text ? quoted.text.slice(0, 80) : ''}</div> : null}
+              <div onContextMenu={e => { e.preventDefault(); setMenuMsg(menuMsg === m.id ? null : m.id); }} style={{ padding: '8px 12px', borderRadius: 13, background: m.mine ? 'var(--clay)' : 'var(--surface-2)', color: m.mine ? '#fff' : 'var(--ink)', fontSize: 14, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.text}</div>
+              {rxns ? <div style={{ display: 'flex', gap: 2, flexWrap: 'wrap', margin: '2px 5px 0', justifyContent: m.mine ? 'flex-end' : 'flex-start' }}>{rxns.map((r, i) => <span key={i} style={{ fontSize: 13, lineHeight: 1 }}>{r}</span>)}</div> : null}
+              {menuMsg === m.id ? <div onClick={e => e.stopPropagation()} style={{ position: 'absolute', bottom: '100%', [m.mine ? 'right' : 'left']: 0, marginBottom: 4, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 14, boxShadow: 'var(--shadow-lg)', padding: 6, display: 'flex', flexDirection: 'column', gap: 2, zIndex: 10, minWidth: 140 }}>
+                <div style={{ display: 'flex', gap: 4, padding: '4px 6px' }}>{REACTIONS.map(emoji => <button key={emoji} onClick={() => react(m.id, emoji)} style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: 18, padding: '2px 3px', borderRadius: 8 }}>{emoji}</button>)}</div>
+                <button onClick={() => startReply(m)} style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '7px 10px', border: 'none', background: 'none', cursor: 'pointer', borderRadius: 8, fontSize: 13, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="reply" size={14} color="var(--ink-2)" /> Reply</button>
+                <button onClick={() => { copy(); setMenuMsg(null); }} style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '7px 10px', border: 'none', background: 'none', cursor: 'pointer', borderRadius: 8, fontSize: 13, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="copy" size={14} color="var(--ink-2)" /> Copy</button>
+              </div> : null}
+            </div>);
+          })}
           <div ref={endRef} />
         </div>
         {err ? <div role="alert" style={{ fontSize: 12.5, lineHeight: 1.45, padding: '10px 14px', borderTop: '1px solid color-mix(in oklab, var(--clay) 26%, var(--line))', background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', color: 'var(--ink)' }}>{err}</div> : null}
-        <div style={{ display: 'flex', gap: 8, padding: 12, borderTop: '1px solid var(--line)' }}>
-          <input value={text} maxLength={4000} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); send(); } }} placeholder="Write a message…" style={{ flex: 1, padding: '10px 13px', borderRadius: 999, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontSize: 14, outline: 'none' }} />
+        {replyTo ? <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderTop: '1px solid var(--line)', background: 'var(--surface-2)' }}>
+          <div style={{ flex: 1, minWidth: 0, fontSize: 12, color: 'var(--ink-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}><span style={{ fontWeight: 700 }}>Replying</span> {replyTo.text ? replyTo.text.slice(0, 60) : ''}</div>
+          <button onClick={() => setReplyTo(null)} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 2 }}><Icon name="x" size={14} color="currentColor" /></button>
+        </div> : null}
+        <div style={{ display: 'flex', gap: 8, padding: 12, borderTop: replyTo ? 'none' : '1px solid var(--line)' }}>
+          <input ref={inputRef} value={text} maxLength={4000} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); send(); } }} placeholder="Write a message…" style={{ flex: 1, padding: '10px 13px', borderRadius: 999, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontSize: 14, outline: 'none' }} />
           <button onClick={send} aria-label="Send this reply" title="Send this reply" className="sk-btn sk-btn--clay" style={{ padding: '0 16px' }}><Icon name="send" size={16} color="var(--on-clay)" /></button>
         </div>
       </div>

@@ -13967,7 +13967,7 @@
     },
     // ── shared care-team↔asker thread for a request (the "Message" action). Sealed to the care team + the asker
     // (+ the church + ourselves), so any care member can join in and the asker can reply. ──
-    async sendCareChat(reqId, requesterPub, text) {
+    async sendCareChat(reqId, requesterPub, text, opts) {
       const cp = window.Fellowship.churchPub;
       if (!sk) {
         try {
@@ -13976,7 +13976,9 @@
         }
       }
       const body = String(text || "").trim();
-      if (!sk || !cp || !reqId || !body) return null;
+      const reaction = opts && opts.reaction ? String(opts.reaction) : "";
+      const replyTo = opts && opts.replyTo ? String(opts.replyTo) : "";
+      if (!sk || !cp || !reqId || !body && !reaction) return null;
       const audience = await _fetchCareThreadAudience(cp, reqId, requesterPub);
       if (!audience) return null;
       const extra = audience.team ? await _fetchCareTeam(cp) || [] : [];
@@ -13984,7 +13986,11 @@
       const tags = [["d", CARECHAT_D + reqId + ":" + msgId], ["t", NET], ["t", "carechat"], ["church", cp]];
       if (requesterPub) tags.push(["p", requesterPub]);
       const tmpl = _monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1e3), tags, content: "" });
-      const sealed = _sealToPubs([...audience.pubs, ...extra, cp, pub], { text: body, by: pub, at: tmpl.created_at });
+      const payload = { by: pub, at: tmpl.created_at };
+      if (body) payload.text = body;
+      if (reaction) payload.reaction = reaction;
+      if (replyTo) payload.replyTo = replyTo;
+      const sealed = _sealToPubs([...audience.pubs, ...extra, cp, pub], payload);
       if (!sealed) return null;
       const evt = finalizeEvent2({ ...tmpl, content: JSON.stringify(sealed) }, sk);
       try {
@@ -14017,8 +14023,12 @@
             body = _openSealed(JSON.parse(e.content), e.pubkey);
           } catch (e2) {
           }
-          if (!body || !body.text) return;
-          byId.set(id, { id, from: e.pubkey, mine: e.pubkey === pub, at: body.at || e.created_at, text: String(body.text) });
+          if (!body || !body.text && !body.reaction) return;
+          const entry = { id, from: e.pubkey, mine: e.pubkey === pub, at: body.at || e.created_at };
+          if (body.text) entry.text = String(body.text);
+          if (body.reaction) entry.reaction = String(body.reaction);
+          if (body.replyTo) entry.replyTo = String(body.replyTo);
+          byId.set(id, entry);
           emit();
         },
         oneose() {

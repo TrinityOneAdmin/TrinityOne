@@ -467,12 +467,12 @@ function CareChatSheet({ reqId, requesterPub, title, onClose }) {
   const [msgs, setMsgs] = React.useState([]);
   const [text, setText] = React.useState('');
   const [busy, setBusy] = React.useState(false);
-  // A FAILED SEND USED TO BE INVISIBLE. The text was restored to the box and nothing else happened, which
-  // reads as "I mistyped" rather than "that did not send". sendCareChat now refuses rather than falling back
-  // to the care rota when it cannot establish who the thread reaches, so silence here would hide exactly the
-  // case this round exists to fix.
   const [err, setErr] = React.useState('');
+  const [menuMsg, setMenuMsg] = React.useState(null);
+  const [replyTo, setReplyTo] = React.useState(null);
   const endRef = React.useRef(null);
+  const inputRef = React.useRef(null);
+  const REACTIONS = ['❤️', '🙏', '👍', '✅'];
   React.useEffect(() => {
     if (!(window.Fellowship && window.Fellowship.subscribeCareChat)) return;
     let unsub = null;
@@ -482,40 +482,66 @@ function CareChatSheet({ reqId, requesterPub, title, onClose }) {
   React.useEffect(() => { try { endRef.current && endRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' }); } catch (e) {} }, [msgs.length]);
   const send = async () => {
     const t = text.trim(); if (!t || busy) return;
-    setText(''); setBusy(true); setErr('');
+    const opts = {};
+    if (replyTo) opts.replyTo = replyTo.id;
+    setText(''); setReplyTo(null); setBusy(true); setErr('');
     let ok = null;
-    try { ok = await window.Fellowship.sendCareChat(reqId, requesterPub, t); } catch (e) {}
+    try { ok = await window.Fellowship.sendCareChat(reqId, requesterPub, t, Object.keys(opts).length ? opts : undefined); } catch (e) {}
     setBusy(false);
-    // truthy = sent, falsy = not sent. Deliberately NOT an {error} object: a truthy error would read as
-    // success to every `if (!ok)` caller, and there is more than one.
-    if (!ok) { setText(t); setErr('Couldn’t send — we couldn’t confirm who this conversation reaches. Check your connection and try again.'); }
+    if (!ok) { setText(t); setErr('Couldn\u2019t send \u2014 we couldn\u2019t confirm who this conversation reaches. Check your connection and try again.'); }
   };
+  const react = async (msgId, emoji) => {
+    setMenuMsg(null);
+    try { await window.Fellowship.sendCareChat(reqId, requesterPub, '', { reaction: emoji, replyTo: msgId }); } catch (e) {}
+  };
+  const startReply = (m) => { setMenuMsg(null); setReplyTo(m); try { inputRef.current && inputRef.current.focus(); } catch (e) {} };
+  const textMsgs = msgs.filter(m => m.text);
+  const reactionsByMsg = {};
+  msgs.filter(m => m.reaction && m.replyTo).forEach(m => {
+    if (!reactionsByMsg[m.replyTo]) reactionsByMsg[m.replyTo] = [];
+    reactionsByMsg[m.replyTo].push(m.reaction);
+  });
+  const msgById = {};
+  textMsgs.forEach(m => { msgById[m.id] = m; });
   return (
     <div onClick={onClose} style={{ position: 'absolute', inset: 0, zIndex: 65, background: 'rgba(34,28,22,.5)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
-      <div onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Care conversation" style={{ width: '100%', maxWidth: 500, height: '82%', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderRadius: '22px 22px 0 0', border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', overflow: 'hidden' }}>
+      <div onClick={e => { e.stopPropagation(); setMenuMsg(null); }} role="dialog" aria-modal="true" aria-label="Care conversation" style={{ width: '100%', maxWidth: 500, height: '82%', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderRadius: '22px 22px 0 0', border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', overflow: 'hidden' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '15px 18px', borderBottom: '1px solid var(--line)', flexShrink: 0 }}>
           <Icon name="heart" size={19} color="var(--clay)" />
           <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 17, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title || 'Care conversation'}</div><div style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>Private — only the people helping you</div></div>
           <button onClick={onClose} aria-label="Close" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', padding: 4, display: 'flex' }}><Icon name="x" size={20} color="currentColor" /></button>
         </div>
         <div className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {msgs.length === 0 ? <div style={{ fontSize: 13, color: 'var(--ink-3)', textAlign: 'center', margin: 'auto', maxWidth: 250, lineHeight: 1.5 }}>No messages yet. Anything here stays between you and the people helping you.</div> : null}
-          {msgs.map(m => {
+          {textMsgs.length === 0 ? <div style={{ fontSize: 13, color: 'var(--ink-3)', textAlign: 'center', margin: 'auto', maxWidth: 250, lineHeight: 1.5 }}>No messages yet. Anything here stays between you and the people helping you.</div> : null}
+          {textMsgs.map(m => {
             const ts = m.at ? (() => { try { return new Date(m.at * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); } catch { return ''; } })() : '';
             const copy = () => { try { navigator.clipboard.writeText(m.text); } catch {} };
+            const rxns = reactionsByMsg[m.id];
+            const quoted = m.replyTo && msgById[m.replyTo];
             return (
-            <div key={m.id} style={{ alignSelf: m.mine ? 'flex-end' : 'flex-start', maxWidth: '82%' }}>
+            <div key={m.id} style={{ alignSelf: m.mine ? 'flex-end' : 'flex-start', maxWidth: '82%', position: 'relative' }}>
               {!m.mine ? <div style={{ fontSize: 11, color: 'var(--ink-3)', margin: '0 0 2px 11px' }}>{careName(m.from, '')}</div> : null}
-              <div onContextMenu={e => { e.preventDefault(); copy(); }} style={{ padding: '9px 13px', borderRadius: 15, background: m.mine ? 'var(--clay)' : 'var(--surface-2)', color: m.mine ? '#fff' : 'var(--ink)', fontSize: 14.5, lineHeight: 1.4, whiteSpace: 'pre-wrap', wordBreak: 'break-word', userSelect: 'text', WebkitUserSelect: 'text' }}>{m.text}</div>
-              {ts ? <div style={{ fontSize: 10, color: m.mine ? 'var(--ink-3)' : 'var(--ink-3)', textAlign: m.mine ? 'right' : 'left', margin: '2px 11px 0', opacity: .7 }}>{ts}</div> : null}
+              {quoted ? <div style={{ fontSize: 11.5, color: 'var(--ink-3)', padding: '4px 10px', margin: '0 4px 2px', borderLeft: '2px solid var(--clay)', borderRadius: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}>{quoted.text ? quoted.text.slice(0, 80) : ''}</div> : null}
+              <div onContextMenu={e => { e.preventDefault(); setMenuMsg(menuMsg === m.id ? null : m.id); }} onClick={e => { if (menuMsg && menuMsg !== m.id) { setMenuMsg(null); e.stopPropagation(); } }} style={{ padding: '9px 13px', borderRadius: 15, background: m.mine ? 'var(--clay)' : 'var(--surface-2)', color: m.mine ? '#fff' : 'var(--ink)', fontSize: 14.5, lineHeight: 1.4, whiteSpace: 'pre-wrap', wordBreak: 'break-word', userSelect: 'text', WebkitUserSelect: 'text' }}>{m.text}</div>
+              {rxns ? <div style={{ display: 'flex', gap: 2, flexWrap: 'wrap', margin: '2px 6px 0', justifyContent: m.mine ? 'flex-end' : 'flex-start' }}>{rxns.map((r, i) => <span key={i} style={{ fontSize: 14, lineHeight: 1 }}>{r}</span>)}</div> : null}
+              {menuMsg === m.id ? <div onClick={e => e.stopPropagation()} style={{ position: 'absolute', bottom: '100%', [m.mine ? 'right' : 'left']: 0, marginBottom: 4, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 14, boxShadow: 'var(--shadow-lg)', padding: 6, display: 'flex', flexDirection: 'column', gap: 2, zIndex: 10, minWidth: 140 }}>
+                <div style={{ display: 'flex', gap: 4, padding: '4px 6px' }}>{REACTIONS.map(emoji => <button key={emoji} onClick={() => react(m.id, emoji)} style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: 20, padding: '2px 4px', borderRadius: 8 }}>{emoji}</button>)}</div>
+                <button onClick={() => startReply(m)} style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '8px 10px', border: 'none', background: 'none', cursor: 'pointer', borderRadius: 8, fontSize: 13, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="reply" size={14} color="var(--ink-2)" /> Reply</button>
+                <button onClick={() => { copy(); setMenuMsg(null); }} style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '8px 10px', border: 'none', background: 'none', cursor: 'pointer', borderRadius: 8, fontSize: 13, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="copy" size={14} color="var(--ink-2)" /> Copy</button>
+              </div> : null}
+              {ts ? <div style={{ fontSize: 10, color: 'var(--ink-3)', textAlign: m.mine ? 'right' : 'left', margin: '2px 11px 0', opacity: .7 }}>{ts}</div> : null}
             </div>
             );
           })}
           <div ref={endRef} />
         </div>
         {err ? <div role="alert" style={{ fontSize: 12.5, lineHeight: 1.45, color: 'var(--ink)', background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', borderTop: '1px solid color-mix(in oklab, var(--clay) 26%, var(--line))', padding: '10px 14px', flexShrink: 0 }}>{err}</div> : null}
-        <div style={{ display: 'flex', gap: 8, padding: '12px 14px calc(12px + env(safe-area-inset-bottom))', borderTop: '1px solid var(--line)', flexShrink: 0 }}>
-          <input value={text} maxLength={4000} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); send(); } }} placeholder="Write a message…" style={{ flex: 1, minWidth: 0, padding: '11px 14px', borderRadius: 999, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontSize: 14.5, fontFamily: 'var(--font-ui)', outline: 'none' }} />
+        {replyTo ? <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px', borderTop: '1px solid var(--line)', background: 'var(--surface-2)', flexShrink: 0 }}>
+          <div style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: 'var(--ink-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}><span style={{ fontWeight: 700 }}>Replying</span> {replyTo.text ? replyTo.text.slice(0, 60) : ''}</div>
+          <button onClick={() => setReplyTo(null)} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 2 }}><Icon name="x" size={14} color="currentColor" /></button>
+        </div> : null}
+        <div style={{ display: 'flex', gap: 8, padding: '12px 14px calc(12px + env(safe-area-inset-bottom))', borderTop: replyTo ? 'none' : '1px solid var(--line)', flexShrink: 0 }}>
+          <input ref={inputRef} value={text} maxLength={4000} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); send(); } }} placeholder="Write a message…" style={{ flex: 1, minWidth: 0, padding: '11px 14px', borderRadius: 999, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontSize: 14.5, fontFamily: 'var(--font-ui)', outline: 'none' }} />
           <button onClick={send} disabled={busy || !text.trim()} aria-label="Send" style={{ flexShrink: 0, width: 44, height: 44, borderRadius: 999, border: 'none', background: text.trim() ? 'var(--clay)' : 'var(--surface-2)', color: text.trim() ? '#fff' : 'var(--ink-3)', cursor: text.trim() ? 'pointer' : 'default', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="send" size={18} color="currentColor" /></button>
         </div>
       </div>

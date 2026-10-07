@@ -23,6 +23,7 @@ import { D, MEMBER_WRITABLE_TYPES } from './trinity-doc-types.mjs';   // NAMES, 
 import { buildCalendar, publicEventFields } from './public-calendar.mjs';   // the church's PUBLIC calendar feed (pure: no I/O, no policy)
 import { buildWidgetScript } from './public-widget.mjs';   // the embeddable calendar widget (pure: same script for every church)
 import { buildVersePage } from './public-verse.mjs';       // standalone verse page for public sharing (pure: no I/O, no store)
+import { buildSermonFeed, publicSermonFields, buildPlansFeed, publicPlanFields } from './public-media.mjs';   // the church's PUBLIC sermon podcast feed (pure: no I/O, no policy)
 // WHO MAY HOLD THE CHECK-IN HELPER KEY is asked in ONE place, and this is not it — see the file's own header.
 // The relay imports three things and derives nothing: the parser (so a grant means the same to the box that
 // stores it and the console that mints it), and the declared-source test (so a grant cannot claim a
@@ -2975,6 +2976,8 @@ const EVENT_AUDIENCE = new Map();   // eventId -> { cp, gid, by } recorded when 
 // no share: document, or one whose switch is off, serves nothing at /public/…, which is the default.
 const SHARE_BY = new Map();     // churchpub -> { calendar: bool, optOut: Set(eventId), horizonMonths, calName, detail }
 const PUBEVENTS = new Map();    // churchpub -> Map(eventId -> the noticeboard fields, as publicEventFields() admits them)
+const PUBSERMONS = new Map();   // churchpub -> Map(sermonId -> noticeboard fields, as publicSermonFields() admits them)
+const PUBPLANS = new Map();    // churchpub -> Map(planId -> plan fields, as publicPlanFields() admits them)
 
 // ---- marketing email capture (website "Stay updated" form) — opt-in list, stored locally ----
 const SUBS_FILE = join(DATA_DIR,'subscribers.json');
@@ -3285,7 +3288,7 @@ function clearDerivedMaps() {
                    GROUP_LEADERS, GROUP_LEADER_BY, GROUP_EVENTPOLICY, STEWARDS_BY, STEWARD_CAPS, BLOCKED_BY, MINORS_BY, APPROVED_BY, NOPHOTO_BY,
                    GUARDIANS_BY, NETWORKS_BY, ADMITTED_BY, ADMITTED_SRC, ROSTER_BY, ROSTER_PEOPLE, MEALS_ADMIN_GROUP, ROTA_VIS, CHECKIN_HELPERS,
                    CHECKIN_PERMITS,
-                   FINANCE_SEQ, FIN_SEEN, CARE_RECIPIENT, CARE_SKIPHASH, PEER_URLS, TRUSTED_RELAYS, EVENT_AUDIENCE, SHARE_BY, PUBEVENTS]) { try { m.clear(); } catch {} }
+                   FINANCE_SEQ, FIN_SEEN, CARE_RECIPIENT, CARE_SKIPHASH, PEER_URLS, TRUSTED_RELAYS, EVENT_AUDIENCE, SHARE_BY, PUBEVENTS, PUBSERMONS, PUBPLANS]) { try { m.clear(); } catch {} }
   // CHECKIN_PERMITS was missing here, and it is the HALF OF THE CONJUNCTION THE WHOLE 2026-09-09 RESTRUCTURE
   // RESTS ON. Added 2026-09-10. It was the only line on which the two check-in siblings differed, and it
   // failed OPEN in exactly the class the GROUP_CHILDSAFE note below describes.
@@ -3500,7 +3503,7 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
       const horizonMonths = [3, 6, 12].includes(c && c.horizonMonths) ? c.horizonMonths : 6;
       const calName = String((c && c.calName) || '').slice(0, 120);
       const detail = (c && c.detail === 'short') ? 'short' : 'full';
-      SHARE_BY.set(e.pubkey, { calendar: !!(c && c.calendar === true), optOut, horizonMonths, calName, detail });
+      SHARE_BY.set(e.pubkey, { calendar: !!(c && c.calendar === true), sermons: !!(c && c.sermons === true), plans: !!(c && c.plans === true), optOut, horizonMonths, calName, detail });
     }
   }
   else if (d.startsWith(PUBEVENT_D) && CHURCH_PUBS.has(e.pubkey)) {
@@ -3511,6 +3514,37 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
       let c = null; try { c = JSON.parse(e.content); } catch {}
       const f = publicEventFields({ ...(c && typeof c === 'object' ? c : {}), id });   // the d-tag names the event; the body may not rename it
       if (f) m.set(id, f); else m.delete(id);
+    }
+  }
+  // SERMON FEED MAP — same shape as PUBEVENTS. Populated from sermon: documents so publicFeed() can
+  // build /public/<npub>/sermons.xml without querying the store on every request. The church is
+  // identified by the ["church", <cp>] tag (namedChurch), same as the write gate above.
+  else if (d.startsWith(SERMON_D)) {
+    const cp = e.pubkey === d.slice(SERMON_D.length) ? '' : namedChurch(e) || e.pubkey;
+    const church = CHURCH_PUBS.has(e.pubkey) ? e.pubkey : (CHURCH_PUBS.has(cp) ? cp : '');
+    if (church) {
+      const id = d.slice(SERMON_D.length);
+      let m = PUBSERMONS.get(church); if (!m) { m = new Map(); PUBSERMONS.set(church, m); }
+      if (removed || (e.tags || []).some(t => t[0] === 'deleted') || !e.content) { m.delete(id); if (!m.size) PUBSERMONS.delete(church); }
+      else {
+        let c = null; try { c = JSON.parse(e.content); } catch {}
+        const blobIdx = _blobsByChurch.get(church);
+        const f = publicSermonFields({ ...(c && typeof c === 'object' ? c : {}), id, size: (blobIdx && c && c.sha256 && blobIdx.get(c.sha256)) || 0 });
+        if (f) m.set(id, f); else m.delete(id);
+      }
+    }
+  }
+  else if (d.startsWith(PLAN_D)) {
+    const church = CHURCH_PUBS.has(e.pubkey) ? e.pubkey : '';
+    if (church) {
+      const id = d.slice(PLAN_D.length);
+      let m = PUBPLANS.get(church); if (!m) { m = new Map(); PUBPLANS.set(church, m); }
+      if (removed || (e.tags || []).some(t => t[0] === 'deleted') || !e.content) { m.delete(id); if (!m.size) PUBPLANS.delete(church); }
+      else {
+        let c = null; try { c = JSON.parse(e.content); } catch {}
+        const f = publicPlanFields({ ...(c && typeof c === 'object' ? c : {}), id, ts: e.created_at });
+        if (f) m.set(id, f); else m.delete(id);
+      }
     }
   }
   else if (d.startsWith(JOINPOLICY_D) && CHURCH_PUBS.has(cp = d.slice(JOINPOLICY_D.length)) && (e.pubkey === cp || stewardCan(e.pubkey, cp, 'any'))) {   // a church's join policy
@@ -6086,6 +6120,9 @@ const PUBLIC_CSP = "default-src 'none'; frame-ancestors 'none'; base-uri 'none';
 const WIDGET_CSP = "default-src 'none'; script-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
 const PUBLIC_ROUTE = /^\/public\/(npub1[a-z0-9]{58})\/(?:calendar\.ics|e\/([A-Za-z0-9_-]{1,64})\.ics)$/;
 const WIDGET_ROUTE = /^\/public\/(npub1[a-z0-9]{58})\/widget\.js$/;
+const SERMON_FEED_ROUTE = /^\/public\/(npub1[a-z0-9]{58})\/sermons\.xml$/;
+const PLANS_FEED_ROUTE = /^\/public\/(npub1[a-z0-9]{58})\/plans\.json$/;
+const PUBLIC_MEDIA_ROUTE = /^\/public\/(npub1[a-z0-9]{58})\/media\/([0-9a-f]{64})$/;
 // Built once — the script is identical for every church, so there is nothing per-church to rebuild per request.
 let _widgetJs = null;
 function widgetJs() { if (_widgetJs === null) _widgetJs = buildWidgetScript(); return _widgetJs; }
@@ -6118,6 +6155,81 @@ function publicFeed(req, res, route) {
     });
     res.end(req.method === 'HEAD' ? undefined : wbody);
     return;
+  }
+  // SERMON PODCAST FEED — /public/<npub>/sermons.xml. Same gate as the calendar: the church must exist
+  // on this relay and have sermons sharing on. The RSS carries only noticeboard fields (title, speaker,
+  // scripture ref, duration) and a content-addressed media URL on this same relay.
+  const sf = SERMON_FEED_ROUTE.exec(route);
+  if (sf) {
+    const scp = toHexPub(sf[1]);
+    if (!scp || !CHURCH_PUBS.has(scp)) return notFound();
+    const sshare = SHARE_BY.get(scp);
+    if (!sshare || !sshare.sermons) return notFound();
+    const all = PUBSERMONS.get(scp);
+    const sermons = all ? [...all.values()] : [];
+    let sname = (sshare.sermonFeedName || '').trim();
+    if (!sname) try { const prof = store.query({ kinds: [0], authors: [scp], limit: 1 })[0]; if (prof) sname = String(JSON.parse(prof.content || '{}').name || '').slice(0, 120); } catch {}
+    const proto = req.headers['x-forwarded-proto'] || (req.socket.encrypted ? 'https' : 'http');
+    const host = (req.headers['x-forwarded-host'] || req.headers['host'] || '').split(',')[0].trim();
+    const baseUrl = proto + '://' + host;
+    const sbody = Buffer.from(buildSermonFeed(sermons, { name: sname, churchNpub: sf[1], baseUrl }), 'utf8');
+    res.writeHead(200, {
+      'Content-Type': 'application/rss+xml; charset=utf-8', 'Content-Length': sbody.length,
+      'Cache-Control': 'public, max-age=300', 'Content-Security-Policy': PUBLIC_CSP,
+      'Access-Control-Allow-Origin': '*', ...SEC_HEADERS,
+    });
+    res.end(req.method === 'HEAD' ? undefined : sbody);
+    return;
+  }
+  // READING PLANS FEED — /public/<npub>/plans.json. Same gate pattern: church exists and plans sharing on.
+  const pf = PLANS_FEED_ROUTE.exec(route);
+  if (pf) {
+    const pcp = toHexPub(pf[1]);
+    if (!pcp || !CHURCH_PUBS.has(pcp)) return notFound();
+    const pshare = SHARE_BY.get(pcp);
+    if (!pshare || !pshare.plans) return notFound();
+    const all = PUBPLANS.get(pcp);
+    const plans = all ? [...all.values()] : [];
+    let pname = '';
+    try { const prof = store.query({ kinds: [0], authors: [pcp], limit: 1 })[0]; if (prof) pname = String(JSON.parse(prof.content || '{}').name || '').slice(0, 120); } catch {}
+    const pbody = Buffer.from(buildPlansFeed(plans, { name: pname, churchNpub: pf[1], baseUrl: (req.headers['x-forwarded-proto'] || (req.socket.encrypted ? 'https' : 'http')) + '://' + ((req.headers['x-forwarded-host'] || req.headers['host'] || '').split(',')[0].trim()) }), 'utf8');
+    res.writeHead(200, {
+      'Content-Type': 'application/json; charset=utf-8', 'Content-Length': pbody.length,
+      'Cache-Control': 'public, max-age=300', 'Content-Security-Policy': PUBLIC_CSP,
+      'Access-Control-Allow-Origin': '*', ...SEC_HEADERS,
+    });
+    res.end(req.method === 'HEAD' ? undefined : pbody);
+    return;
+  }
+  // PUBLIC MEDIA — /public/<npub>/media/<sha256>. Serves a sermon's audio/video blob WITHOUT member auth,
+  // gated on three conditions: (a) the church exists, (b) sermons sharing is on, (c) the sha256 is
+  // referenced by a sermon from that church. A church that switches sharing off gets 404 on every media
+  // URL, same as the feed itself. This does NOT widen the WebSocket read gate (canRead stays default-deny).
+  const pm = PUBLIC_MEDIA_ROUTE.exec(route);
+  if (pm) {
+    const mcp = toHexPub(pm[1]);
+    if (!mcp || !CHURCH_PUBS.has(mcp)) return notFound();
+    const mshare = SHARE_BY.get(mcp);
+    if (!mshare || !mshare.sermons) return notFound();
+    const sha = pm[2];
+    const smap = PUBSERMONS.get(mcp);
+    if (!smap || ![...smap.values()].some(s => s.sha256 === sha)) return notFound();
+    const file = join(BLOB_DIR, sha); let st; try { st = statSync(file); } catch { return notFound(); }
+    let ct = 'application/octet-stream'; try { ct = readFileSync(join(BLOB_DIR, sha + '.type'), 'utf8').trim() || ct; } catch {}
+    const base = { 'Content-Type': ct, 'Access-Control-Allow-Origin': '*', 'Accept-Ranges': 'bytes', 'Cache-Control': 'public, max-age=3600', 'Content-Security-Policy': PUBLIC_CSP, ...SEC_HEADERS };
+    const range = req.headers['range'] && /bytes=(\d*)-(\d*)/.exec(req.headers['range']);
+    if (range) {
+      let start, end;
+      if (range[1] === '' && range[2] !== '') { const n = parseInt(range[2], 10); start = Math.max(0, st.size - n); end = st.size - 1; }
+      else { start = range[1] ? parseInt(range[1], 10) : 0; end = range[2] ? parseInt(range[2], 10) : st.size - 1; }
+      if (start > end || end >= st.size || start < 0) { res.writeHead(416, base); res.end(); return; }
+      res.writeHead(206, { ...base, 'Content-Range': `bytes ${start}-${end}/${st.size}`, 'Content-Length': end - start + 1 });
+      if (req.method === 'HEAD') { res.end(); return; }
+      createReadStream(file, { start, end }).pipe(res); return;
+    }
+    res.writeHead(200, { ...base, 'Content-Length': st.size });
+    if (req.method === 'HEAD') { res.end(); return; }
+    createReadStream(file).pipe(res); return;
   }
   const m = PUBLIC_ROUTE.exec(route);
   if (!m) return notFound();

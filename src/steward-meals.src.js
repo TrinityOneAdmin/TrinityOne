@@ -458,14 +458,17 @@ import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   //
     const cp = S().churchPub, prefix = CARECHAT_D + reqId + ':', byId = new Map();
     const emit = () => { try { cb([...byId.values()].sort((a, b) => (a.at || 0) - (b.at || 0))); } catch (e) {} };
     const sub = S().subscribeMany([{ kinds: [30078], '#t': ['carechat'], '#church': [cp] }], {
-      onevent(e) { const d = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (!d.startsWith(prefix)) return; const id = d.slice(prefix.length); if (byId.has(id)) return; let b = null; try { b = S().openSealedFromPeer(JSON.parse(e.content), e.pubkey); } catch (x) {} if (!b || !b.text) return; byId.set(id, { id, from: e.pubkey, mine: e.pubkey === cp, at: b.at || e.created_at, text: String(b.text) }); emit(); },
+      onevent(e) { const d = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (!d.startsWith(prefix)) return; const id = d.slice(prefix.length); if (byId.has(id)) return; let b = null; try { b = S().openSealedFromPeer(JSON.parse(e.content), e.pubkey); } catch (x) {} if (!b || (!b.text && !b.reaction)) return; const entry = { id, from: e.pubkey, mine: e.pubkey === cp, at: b.at || e.created_at }; if (b.text) entry.text = String(b.text); if (b.reaction) entry.reaction = String(b.reaction); if (b.replyTo) entry.replyTo = String(b.replyTo); byId.set(id, entry); emit(); },
       oneose() { emit(); },
     });
     return () => { try { sub.close(); } catch (e) {} };
   }
-  async function sendCareChat(reqId, requesterPub, text) {
+  async function sendCareChat(reqId, requesterPub, text, opts) {
     if (!S() || !S().publishSigned || !S().churchPub || !reqId || !requesterPub) return null;
-    const body = String(text || '').trim(); if (!body) return null;
+    const body = String(text || '').trim();
+    const reaction = opts && opts.reaction ? String(opts.reaction) : '';
+    const replyTo = opts && opts.replyTo ? String(opts.replyTo) : '';
+    if (!body && !reaction) return null;
     const cp = S().churchPub;
     // WHO A REPLY REACHES IS DECIDED BY THE REQUEST, NOT BY WHO IS TYPING — and the console is a sender too.
     // This used to seal to the care-team roster, so a steward answering a young person's request produced a
@@ -516,7 +519,11 @@ import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   //
     const msgId = Math.random().toString(36).slice(2, 10);
     const dtag = CARECHAT_D + reqId + ':' + msgId;
     const at = _monotonicM(dtag);
-    const sealed = S().sealToPubs([...audience, ...extra, cp], { text: body, by: cp, at });
+    const payload = { by: cp, at };
+    if (body) payload.text = body;
+    if (reaction) payload.reaction = reaction;
+    if (replyTo) payload.replyTo = replyTo;
+    const sealed = S().sealToPubs([...audience, ...extra, cp], payload);
     if (!sealed) return null;
     const tags = [['d', dtag], ['t', NET], ['t', 'carechat'], ['church', cp]];
     if (requesterPub) tags.push(['p', requesterPub]);

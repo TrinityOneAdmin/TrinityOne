@@ -23,7 +23,7 @@ function AllUsesView({ id, open, onClose, ctx }) {
   return (
     <Overlay open={open} onClose={onClose}>
       {/* header */}
-      <div style={{ paddingTop: 50, flexShrink: 0, background: 'var(--clay-soft)', borderBottom: '1px solid color-mix(in oklab, var(--clay) 20%, transparent)' }}>
+      <div style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 8px)', flexShrink: 0, background: 'var(--clay-soft)', borderBottom: '1px solid color-mix(in oklab, var(--clay) 20%, transparent)' }}>
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: '8px 16px 4px' }}>
           <IconBtn name="chevL" onClick={onClose} />
           <div style={{ flex: 1, minWidth: 0, paddingTop: 2 }}>
@@ -91,7 +91,7 @@ function ConcordanceIndex({ open, onClose, ctx }) {
 
   return (
     <Overlay open={open} onClose={onClose}>
-      <div style={{ paddingTop: 50, flexShrink: 0, background: 'color-mix(in oklab, var(--paper) 92%, transparent)', borderBottom: '1px solid var(--line-2)' }}>
+      <div style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 8px)', flexShrink: 0, background: 'color-mix(in oklab, var(--paper) 92%, transparent)', borderBottom: '1px solid var(--line-2)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px 12px' }}>
           <IconBtn name="chevL" onClick={onClose} />
           <div style={{ flex: 1, minWidth: 0 }}>

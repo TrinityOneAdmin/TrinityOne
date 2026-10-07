@@ -201,7 +201,7 @@ function ShareCard({ verse, open, onClose, ctx }) {
   const s = CARD_STYLES[style];
   return (
     <Overlay open={open} onClose={onClose}>
-      <div style={{ paddingTop: 50, display: 'flex', flexDirection: 'column', height: '100%' }}>
+      <div style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 50px)', display: 'flex', flexDirection: 'column', height: '100%' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 16px' }}>
           <IconBtn name="chevL" onClick={onClose} />
           <span style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17 }}>Share verse</span>
@@ -252,7 +252,7 @@ function DevotionalView({ open, onClose, ctx }) {
   const d = window.TrinityData.DEVOTIONAL;
   return (
     <Overlay open={open} onClose={onClose}>
-      <div style={{ paddingTop: 50, background: 'linear-gradient(160deg, #6BA17C, #3C6E57)', color: '#fff', position: 'relative', overflow: 'hidden' }}>
+      <div style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 50px)', background: 'linear-gradient(160deg, #6BA17C, #3C6E57)', color: '#fff', position: 'relative', overflow: 'hidden' }}>
         <div style={{ position: 'absolute', right: -24, top: -10, opacity: .18 }}><Icon name="sun" size={150} stroke={1.3} color="#fff" /></div>
         <div style={{ padding: '10px 18px 24px', position: 'relative' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>

@@ -74,7 +74,7 @@ function buildSender({ requestEvent }) {
   const audienceFn = slice(SRC, 'async function _fetchCareThreadAudience(', '\n}\n') + '\n}';
   const sealFn = slice(SRC, 'function _sealToPubs(', '\n}\n') + '\n}';
   const monoFn = 'const _lastStampF = new Map();\n' + slice(SRC, 'function _monotonicF(', '\n}\n') + '\n}';
-  const method = slice(SRC, '  async sendCareChat(reqId, requesterPub, text) {', '  subscribeCareChat(reqId, cb) {');
+  const method = slice(SRC, '  async sendCareChat(reqId, requesterPub, text, opts) {', '  subscribeCareChat(reqId, cb) {');
   const published = [];
   const pool = { querySync: async () => (requestEvent ? [requestEvent] : []) };
   const fn = new Function(
@@ -98,7 +98,7 @@ test('the cleared adult can open the child’s reply — the whole point', async
   const audienceFn = slice(SRC, 'async function _fetchCareThreadAudience(', '\n}\n') + '\n}';
   const sealFn = slice(SRC, 'function _sealToPubs(', '\n}\n') + '\n}';
   const monoFn = 'const _lastStampF = new Map();\n' + slice(SRC, 'function _monotonicF(', '\n}\n') + '\n}';
-  const method = slice(SRC, '  async sendCareChat(reqId, requesterPub, text) {', '  subscribeCareChat(reqId, cb) {');
+  const method = slice(SRC, '  async sendCareChat(reqId, requesterPub, text, opts) {', '  subscribeCareChat(reqId, cb) {');
   const published = [];
   const reqEvent = { created_at: 100, pubkey: ellie.pub, content: JSON.stringify(CHILD_REQUEST) };
   const send = new Function(
@@ -130,7 +130,7 @@ test('and the care rota, who were never in the request, are not given a key to i
   const audienceFn = slice(SRC, 'async function _fetchCareThreadAudience(', '\n}\n') + '\n}';
   const sealFn = slice(SRC, 'function _sealToPubs(', '\n}\n') + '\n}';
   const monoFn = 'const _lastStampF = new Map();\n' + slice(SRC, 'function _monotonicF(', '\n}\n') + '\n}';
-  const method = slice(SRC, '  async sendCareChat(reqId, requesterPub, text) {', '  subscribeCareChat(reqId, cb) {');
+  const method = slice(SRC, '  async sendCareChat(reqId, requesterPub, text, opts) {', '  subscribeCareChat(reqId, cb) {');
   const published = [];
   const reqEvent = { created_at: 100, pubkey: ellie.pub, content: JSON.stringify(CHILD_REQUEST) };
   const send = new Function(
@@ -162,7 +162,7 @@ test('a request document forged by somebody else is ignored', async () => {
   const audienceFn = slice(SRC, 'async function _fetchCareThreadAudience(', '\n}\n') + '\n}';
   const sealFn = slice(SRC, 'function _sealToPubs(', '\n}\n') + '\n}';
   const monoFn = 'const _lastStampF = new Map();\n' + slice(SRC, 'function _monotonicF(', '\n}\n') + '\n}';
-  const method = slice(SRC, '  async sendCareChat(reqId, requesterPub, text) {', '  subscribeCareChat(reqId, cb) {');
+  const method = slice(SRC, '  async sendCareChat(reqId, requesterPub, text, opts) {', '  subscribeCareChat(reqId, cb) {');
   const published = [];
   const real   = { created_at: 100, pubkey: ellie.pub, content: JSON.stringify(CHILD_REQUEST) };
   const forged = { created_at: 999, pubkey: rota.pub,
@@ -274,7 +274,7 @@ function sendWith({ reqTags, careTeam }) {
   const audienceFn = slice(SRC, 'async function _fetchCareThreadAudience(', '\n}\n') + '\n}';
   const sealFn = slice(SRC, 'function _sealToPubs(', '\n}\n') + '\n}';
   const monoFn = 'const _lastStampF = new Map();\n' + slice(SRC, 'function _monotonicF(', '\n}\n') + '\n}';
-  const method = slice(SRC, '  async sendCareChat(reqId, requesterPub, text) {', '  subscribeCareChat(reqId, cb) {');
+  const method = slice(SRC, '  async sendCareChat(reqId, requesterPub, text, opts) {', '  subscribeCareChat(reqId, cb) {');
   const published = [];
   const reqEvent = { created_at: 100, pubkey: ellie.pub, tags: reqTags, content: JSON.stringify(CHILD_REQUEST) };
   const send = new Function(

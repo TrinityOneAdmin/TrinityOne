@@ -7589,11 +7589,13 @@ window.Fellowship = {
   },
   // ── shared care-team↔asker thread for a request (the "Message" action). Sealed to the care team + the asker
   // (+ the church + ourselves), so any care member can join in and the asker can reply. ──
-  async sendCareChat(reqId, requesterPub, text) {
+  async sendCareChat(reqId, requesterPub, text, opts) {
     const cp = window.Fellowship.churchPub;
     if (!sk) { try { await window.Fellowship.ready; } catch {} }
     const body = String(text || '').trim();
-    if (!sk || !cp || !reqId || !body) return null;
+    const reaction = opts && opts.reaction ? String(opts.reaction) : '';
+    const replyTo = opts && opts.replyTo ? String(opts.replyTo) : '';
+    if (!sk || !cp || !reqId || (!body && !reaction)) return null;
     // See _fetchCareThreadAudience. NO FALLBACK TO THE CARE TEAM: falling back is the bug this replaces, and
     // a silent wide seal on a child's thread is worse than a send that visibly fails.
     const audience = await _fetchCareThreadAudience(cp, reqId, requesterPub);
@@ -7607,7 +7609,11 @@ window.Fellowship = {
     const tags = [['d', CARECHAT_D + reqId + ':' + msgId], ['t', NET], ['t', 'carechat'], ['church', cp]];
     if (requesterPub) tags.push(['p', requesterPub]);
     const tmpl = _monotonicF({ kind: 30078, created_at: Math.floor(Date.now() / 1000), tags, content: '' });
-    const sealed = _sealToPubs([...audience.pubs, ...extra, cp, pub], { text: body, by: pub, at: tmpl.created_at });
+    const payload = { by: pub, at: tmpl.created_at };
+    if (body) payload.text = body;
+    if (reaction) payload.reaction = reaction;
+    if (replyTo) payload.replyTo = replyTo;
+    const sealed = _sealToPubs([...audience.pubs, ...extra, cp, pub], payload);
     if (!sealed) return null;
     const evt = finalizeEvent({ ...tmpl, content: JSON.stringify(sealed) }, sk);
     try { await _publishAny(publishSetFor(cp), evt); } catch (e) { return null; }
@@ -7625,8 +7631,12 @@ window.Fellowship = {
         const id = d.slice(prefix.length);
         if (byId.has(id)) return;
         let body = null; try { body = _openSealed(JSON.parse(e.content), e.pubkey); } catch (e2) {}
-        if (!body || !body.text) return;   // undecryptable (non-audience) or empty → skip
-        byId.set(id, { id, from: e.pubkey, mine: e.pubkey === pub, at: body.at || e.created_at, text: String(body.text) });
+        if (!body || (!body.text && !body.reaction)) return;
+        const entry = { id, from: e.pubkey, mine: e.pubkey === pub, at: body.at || e.created_at };
+        if (body.text) entry.text = String(body.text);
+        if (body.reaction) entry.reaction = String(body.reaction);
+        if (body.replyTo) entry.replyTo = String(body.replyTo);
+        byId.set(id, entry);
         emit();
       },
       oneose() { emit(); },

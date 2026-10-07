@@ -96,7 +96,7 @@ function BookReader({ book, open, onClose, ctx }) {
   return (
     <Overlay open={open} onClose={onClose}>
       {/* sticky header */}
-      <div style={{ paddingTop: 50, flexShrink: 0, background: 'color-mix(in oklab, var(--paper) 92%, transparent)', borderBottom: '1px solid var(--line-2)' }}>
+      <div style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 8px)', flexShrink: 0, background: 'color-mix(in oklab, var(--paper) 92%, transparent)', borderBottom: '1px solid var(--line-2)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 14px 10px' }}>
           <IconBtn name="chevL" onClick={onClose} />
           <div style={{ flex: 1, minWidth: 0, textAlign: 'center' }}>

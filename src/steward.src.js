@@ -4580,7 +4580,7 @@ let _reqSeq = 0;
 // fourth setting the design names and is deliberately NOT here — events are floating-time and this app has
 // never stored one; inventing one would be a guess, not a default.
 const WEB_HORIZON_OK = new Set([3, 6, 12]);
-const WEB_DEFAULT = Object.freeze({ calendar: false, sermons: false, plans: false, optOut: [], optIn: [], address: 'own', horizonMonths: 6, calName: '', detail: 'full' });
+const WEB_DEFAULT = Object.freeze({ calendar: false, sermons: false, plans: false, optOut: [], optIn: [], address: 'own', horizonMonths: 6, calName: '', sermonFeedName: '', detail: 'full' });
 const WEB_ID_OK = /^[A-Za-z0-9_-]{1,64}$/;
 const _webIds = (v) => [...new Set((Array.isArray(v) ? v : []).map(x => String(x)).filter(x => WEB_ID_OK.test(x)))];
 function _webNormalise(c) {
@@ -4612,8 +4612,9 @@ function _webNormalise(c) {
   // five-year hall-booking pattern or a description-heavy feed nobody asked for.
   const horizonMonths = WEB_HORIZON_OK.has(o.horizonMonths) ? o.horizonMonths : 6;
   const calName = String(o.calName || '').slice(0, 120);
+  const sermonFeedName = String(o.sermonFeedName || '').slice(0, 120);
   const detail = o.detail === 'short' ? 'short' : 'full';
-  return { calendar: o.calendar === true, sermons: false, plans: false, optOut, optIn: _webIds(o.optIn).filter(x => !optOut.includes(x)), address: 'own', horizonMonths, calName, detail };
+  return { calendar: o.calendar === true, sermons: o.sermons === true, plans: o.plans === true, optOut, optIn: _webIds(o.optIn).filter(x => !optOut.includes(x)), address: 'own', horizonMonths, calName, sermonFeedName, detail };
 }
 // THE TWO LISTS MUST NEVER HOLD THE SAME ID (AUDIT-feeds-round5-2026-09-22 F1). `optOut` holds the
 // whole-church events a steward ticked OFF; `optIn` the GROUP events a steward ticked ON. An id in both is

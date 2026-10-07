@@ -71,7 +71,7 @@ function BackupWalkthrough({ onClose, onComplete, ctx, fs = 1 }) {
 
   return (
     <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', background: 'var(--paper)' }}>
-      <div style={{ paddingTop: 50, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '50px 16px 6px' }}>
+      <div style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 8px)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: 'calc(env(safe-area-inset-top, 0px) + 8px) 16px 6px' }}>
         <IconBtn name={step === 0 ? 'x' : 'chevL'} onClick={() => step === 0 ? onClose() : setStep(s => Math.max(0, s - 1))} />
         <div style={{ display: 'flex', gap: 6 }}>
           {[0, 1, 2, 3].map(i => <div key={i} style={{ width: step > i ? 22 : 8, height: 8, borderRadius: 999, background: step > i ? 'var(--clay)' : 'var(--line)', transition: 'all .3s' }} />)}
@@ -198,7 +198,7 @@ function HelpCenter({ open, onClose, initial, ctx }) {
       ) : (
         <React.Fragment>
           {/* header */}
-          <div style={{ paddingTop: 50, background: 'color-mix(in oklab, var(--paper) 90%, transparent)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)', borderBottom: '1px solid var(--line-2)', position: 'relative', zIndex: 2 }}>
+          <div style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 8px)', background: 'color-mix(in oklab, var(--paper) 90%, transparent)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)', borderBottom: '1px solid var(--line-2)', position: 'relative', zIndex: 2 }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '8px 14px 11px' }}>
               {view === 'index'
                 ? <IconBtn name="chevL" onClick={onClose} />

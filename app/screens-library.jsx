@@ -55,10 +55,8 @@ function LibraryHome({ ctx }) {
   const byCat = {}; for (const v of Object.values(inst)) { const c = (v && v.category) || 'bibles'; byCat[c] = (byCat[c] || 0) + 1; }
   const nBibles = (window.Bible && window.Bible.versions ? window.Bible.versions().length : 0) || byCat.bibles || 0;
   const nJournals = (ctx.journalEntries || []).length;
-  const nDevos = (ctx.churchDevos || []).length;   // devotionals are steward-published, not installed modules
   const countFor = (id) => {
     if (id === 'journals') return nJournals === 0 ? 'None yet' : nJournals + (nJournals === 1 ? ' entry' : ' entries');
-    if (id === 'devotionals') return nDevos === 0 ? 'From your church' : nDevos + (nDevos === 1 ? ' devotional' : ' devotionals');
     const n = id === 'bibles' ? nBibles : (byCat[id] || 0);
     if (n === 0) return 'None yet';
     const noun = id === 'bibles' ? 'version' : id === 'commentaries' ? 'set' : id === 'dictionaries' ? 'reference' : 'item';
@@ -86,7 +84,6 @@ function LibraryHome({ ctx }) {
           m.id === 'bibles' ? ctx.openStore('language', 'bibles')
           : m.id === 'dictionaries' ? ctx.openStore('featured', 'dictionaries')
           : m.id === 'commentaries' ? ctx.openStore('featured', 'commentaries')
-          : m.id === 'devotionals' ? ctx.go('plans')   // devotionals are steward-published — live in Plans/Today, not a download catalog
           : ctx.openModule(m)
         } />)}
       </div>
@@ -358,7 +355,7 @@ function JournalView({ entry, open, onClose, ctx }) {
   if (!entry) return null;
   return (
     <Overlay open={open} onClose={onClose}>
-      <div style={{ paddingTop: 50 }}>
+      <div style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 8px)' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 16px 6px' }}>
           <IconBtn name="chevL" onClick={onClose} />
           <IconBtn name="pen" onClick={() => { onClose(); setTimeout(() => ctx && ctx.editJournal(entry), 220); }} />
@@ -410,7 +407,7 @@ function JournalEditor({ entry, open, onClose, ctx }) {
 
   return (
     <Overlay open={open} onClose={onClose}>
-      <div style={{ paddingTop: 50, flexShrink: 0, borderBottom: '1px solid var(--line-2)' }}>
+      <div style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 8px)', flexShrink: 0, borderBottom: '1px solid var(--line-2)' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '8px 14px 11px' }}>
           <button onClick={onClose} style={{ border: 'none', background: 'none', color: 'var(--ink-2)', fontWeight: 600, fontSize: 15, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Cancel</button>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16 }}>{editing ? 'Edit entry' : 'New entry'}</div>
@@ -478,7 +475,7 @@ function ModuleView({ module, open, onClose, ctx }) {
   return (
     <Overlay open={open} onClose={onClose}>
       {/* header */}
-      <div style={{ paddingTop: 50, flexShrink: 0, background: 'color-mix(in oklab, var(--paper) 92%, transparent)', borderBottom: '1px solid var(--line-2)' }}>
+      <div style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 8px)', flexShrink: 0, background: 'color-mix(in oklab, var(--paper) 92%, transparent)', borderBottom: '1px solid var(--line-2)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px 12px' }}>
           <IconBtn name="chevL" onClick={onClose} />
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -598,7 +595,7 @@ function CollectionView({ coll, open, onClose, ctx }) {
 
   return (
     <Overlay open={open} onClose={onClose}>
-      <div style={{ paddingTop: 50, flexShrink: 0, background: 'color-mix(in oklab, var(--paper) 92%, transparent)', borderBottom: '1px solid var(--line-2)' }}>
+      <div style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 8px)', flexShrink: 0, background: 'color-mix(in oklab, var(--paper) 92%, transparent)', borderBottom: '1px solid var(--line-2)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px 12px' }}>
           <IconBtn name="chevL" onClick={onClose} />
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -898,7 +895,7 @@ function ModuleStore({ open, onClose, ctx, initialView, category }) {
 
   return (
     <Overlay open={open} onClose={onClose}>
-      <div style={{ paddingTop: 50 }}>
+      <div style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 8px)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 18px 10px' }}>
           <IconBtn name="chevL" onClick={onClose} />
           <div>

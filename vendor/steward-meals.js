@@ -512,8 +512,12 @@
             b = S().openSealedFromPeer(JSON.parse(e.content), e.pubkey);
           } catch (x) {
           }
-          if (!b || !b.text) return;
-          byId.set(id, { id, from: e.pubkey, mine: e.pubkey === cp, at: b.at || e.created_at, text: String(b.text) });
+          if (!b || !b.text && !b.reaction) return;
+          const entry = { id, from: e.pubkey, mine: e.pubkey === cp, at: b.at || e.created_at };
+          if (b.text) entry.text = String(b.text);
+          if (b.reaction) entry.reaction = String(b.reaction);
+          if (b.replyTo) entry.replyTo = String(b.replyTo);
+          byId.set(id, entry);
           emit();
         },
         oneose() {
@@ -527,10 +531,12 @@
         }
       };
     }
-    async function sendCareChat(reqId, requesterPub, text) {
+    async function sendCareChat(reqId, requesterPub, text, opts) {
       if (!S() || !S().publishSigned || !S().churchPub || !reqId || !requesterPub) return null;
       const body = String(text || "").trim();
-      if (!body) return null;
+      const reaction = opts && opts.reaction ? String(opts.reaction) : "";
+      const replyTo = opts && opts.replyTo ? String(opts.replyTo) : "";
+      if (!body && !reaction) return null;
       const cp = S().churchPub;
       let audience = null, teamThread = false;
       try {
@@ -607,7 +613,11 @@
       const msgId = Math.random().toString(36).slice(2, 10);
       const dtag = CARECHAT_D + reqId + ":" + msgId;
       const at = _monotonicM(dtag);
-      const sealed = S().sealToPubs([...audience, ...extra, cp], { text: body, by: cp, at });
+      const payload = { by: cp, at };
+      if (body) payload.text = body;
+      if (reaction) payload.reaction = reaction;
+      if (replyTo) payload.replyTo = replyTo;
+      const sealed = S().sealToPubs([...audience, ...extra, cp], payload);
       if (!sealed) return null;
       const tags = [["d", dtag], ["t", NET], ["t", "carechat"], ["church", cp]];
       if (requesterPub) tags.push(["p", requesterPub]);

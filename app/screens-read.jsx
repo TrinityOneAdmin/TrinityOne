@@ -885,7 +885,15 @@ function ReadScreen({ ctx }) {
     if (!(roll && roll.book === loc.book && roll.chap === loc.chap)) { setSel([]); setCarry([]); setArrived(loc.verse || null); }
     const sc = scrollRef.current; if (!sc) return;
     if (loc.verse) {
-      setTimeout(() => { const el = sc.querySelector('#rv-' + loc.verse); if (el && el.scrollIntoView) el.scrollIntoView({ block: 'center' }); else sc.scrollTop = 0; }, 60);
+      var go = function() {
+        var s = scrollRef.current; if (!s) return;
+        var el = s.querySelector('#rv-' + loc.verse); if (!el) return;
+        el.scrollIntoView({ block: 'start', behavior: 'instant' });
+      };
+      go();
+      setTimeout(go, 100);
+      setTimeout(go, 350);
+      setTimeout(go, 600);
     } else { sc.scrollTop = 0; }
   }, [loc.book, loc.chap, loc.verse, version]);
 
@@ -917,7 +925,7 @@ function ReadScreen({ ctx }) {
     setSel(next); setCarry([]); setArrived(null); setSheet(next.length ? 'action' : null);
     if (next.length) {
       const v = next[next.length - 1];
-      setTimeout(() => { const sc = scrollRef.current; const el = sc && sc.querySelector('#rv-' + v); if (el) try { const top = el.offsetTop - sc.offsetTop - (sc.clientHeight * 0.28); sc.scrollTo({ top: Math.max(0, top), behavior: 'smooth' }); } catch (e) {} }, 80);
+      setTimeout(() => { const el = scrollRef.current && scrollRef.current.querySelector('#rv-' + v); if (el) try { el.scrollIntoView({ block: 'start', behavior: 'smooth' }); } catch (e) {} }, 80);
     }
   };
   // ✕ (and the Back button) on the verse card CANCELS the selection, not just the card. It used to close the
@@ -1119,7 +1127,7 @@ function ReadScreen({ ctx }) {
 
       <div ref={scrollRef} className="no-scrollbar"
         onTouchStart={onSwipeStart} onTouchMove={onSwipeMove} onTouchEnd={onSwipeEnd} onTouchCancel={() => { swipe.current = null; }}
-        style={{ position: 'absolute', inset: 0, overflowY: 'auto', overflowX: 'hidden', padding: 'calc(env(safe-area-inset-top, 0px) + 122px) 18px 116px' }}>
+        style={{ position: 'absolute', inset: 0, overflowY: 'auto', overflowX: 'hidden', padding: 'calc(env(safe-area-inset-top, 0px) + 122px) 18px 116px', scrollPaddingTop: 'calc(env(safe-area-inset-top, 0px) + 130px)', overflowAnchor: 'none' }}>
         <div style={{ animation: 'trinityFade .4s ease both' }}>
           <div style={{ textAlign: 'center', marginBottom: 22 }}>
             <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--clay)', letterSpacing: '1.5px', textTransform: 'uppercase' }}>{bname}</div>
@@ -1220,4 +1228,4 @@ const navBtnStyle = {
   cursor: 'pointer', color: 'var(--ink-2)', fontWeight: 600, fontSize: 14, fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)',
 };
 
-Object.assign(window, { ReadScreen, verseRefLabel });
+Object.assign(window, { ReadScreen, verseRefLabel, WordStudySheet });

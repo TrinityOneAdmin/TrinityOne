@@ -5080,97 +5080,142 @@ function ago(ts) {
 }
 
 function NewPlanModal({ onClose }) {
-  const [name, setName] = React.useState('');
-  const [tag, setTag] = React.useState('');
-  const [readings, setReadings] = React.useState([]);
-  const [rpBook, setRpBook] = React.useState('');
-  const [rpChap, setRpChap] = React.useState('');
-  const [rpFrom, setRpFrom] = React.useState('');
-  const [rpTo, setRpTo] = React.useState('');
-  var rpEntry = VP_BOOKS.find(function(b) { return b[0] === rpBook; });
-  var rpMaxChap = rpEntry ? rpEntry[1] : 0;
-  var rpChapList = [];
-  for (var _ri = 1; _ri <= rpMaxChap; _ri++) rpChapList.push(_ri);
-  var rpAssembled = '';
-  if (rpBook && rpChap) {
-    rpAssembled = rpBook + ' ' + rpChap;
-    if (rpFrom) {
-      rpAssembled += ':' + rpFrom;
-      if (rpTo && Number(rpTo) > Number(rpFrom)) rpAssembled += '-' + rpTo;
-    }
-  }
-  var rpAdd = function() {
-    if (!rpAssembled) return;
-    setReadings(function(prev) { return prev.concat([rpAssembled]); });
-    setRpBook(''); setRpChap(''); setRpFrom(''); setRpTo('');
-  };
-  var rpRemove = function(idx) {
-    setReadings(function(prev) { return prev.filter(function(_, i) { return i !== idx; }); });
-  };
-  const [schedAt, setSchedAt] = React.useState(0);   // unix sec; 0 = publish now
-  const toLocalInput = (sec) => { if (!sec) return ''; const d = new Date(sec * 1000); const p = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`; };
+  const [mode, setMode] = React.useState(‘manual’);   // manual | upload
+  const [name, setName] = React.useState(‘’);
+  const [tag, setTag] = React.useState(‘’);
+  const [blurb, setBlurb] = React.useState(‘’);
+  const [text, setText] = React.useState(‘’);
+  const [parsedDays, setParsedDays] = React.useState(null);   // [{ d, ref, label }] from file upload
+  const [fileName, setFileName] = React.useState(‘’);
+  const [schedAt, setSchedAt] = React.useState(0);
+  const toLocalInput = (sec) => { if (!sec) return ‘’; const d = new Date(sec * 1000); const p = n => String(n).padStart(2, ‘0’); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`; };
   const fromLocalInput = (s) => { if (!s) return 0; const t = new Date(s).getTime(); return Number.isFinite(t) ? Math.floor(t / 1000) : 0; };
   const isFuture = schedAt && schedAt * 1000 > Date.now();
-  const lines = readings;
+  const inputRef = React.useRef(null);
+  const parsePlanFile = (fname, raw) => {
+    const baseTitle = fname.replace(/\.(txt|md|markdown)$/i, ‘’).replace(/[-_]+/g, ‘ ‘).trim() || ‘Untitled’;
+    const lines = raw.split(‘\n’).map(s => s.trim()).filter(Boolean);
+    let title = baseTitle;
+    if (lines[0] && /^#+\s+/.test(lines[0])) { title = lines[0].replace(/^#+\s*/, ‘’).replace(/\s*[—–-]\s*Weekly Plan$/i, ‘’).trim() || baseTitle; }
+    const dayRx = /^#{2,3}\s+Day\s+(\d+)\s*[—–-]\s*(.+)/i;
+    const readRx = /^\*\*Read:\s*(.+?)\*\*/;
+    const richDays = [];
+    for (let i = 0; i < lines.length; i++) {
+      const dm = dayRx.exec(lines[i]);
+      if (!dm) continue;
+      const d = parseInt(dm[1], 10), label = dm[2].trim();
+      let ref = ‘’;
+      if (i + 1 < lines.length) { const rm = readRx.exec(lines[i + 1]); if (rm) ref = rm[1].trim().replace(/–/g, ‘-’).replace(/—/g, ‘-’); }
+      if (ref) richDays.push({ d, ref, label });
+    }
+    let sub = ‘’, fileTag = ‘Custom’, fileBlurb = ‘’;
+    if (richDays.length) {
+      const subLine = lines.find(l => /^#{2,3}\s+Series\s+/i.test(l));
+      if (subLine) { sub = subLine.replace(/^#+\s*/, ‘’).trim(); const tm = /of\s+"([^"]+)"/.exec(sub); if (tm) fileTag = tm[1]; }
+      const blurbLine = lines.find(l => /^\*[^*]/.test(l) && l.endsWith(‘*’));
+      if (blurbLine) fileBlurb = blurbLine.replace(/^\*|\*$/g, ‘’).trim().slice(0, 500);
+      return { title, sub, tag: fileTag, blurb: fileBlurb, days: richDays };
+    }
+    const simpleDays = lines.filter(l => !/^#/.test(l)).map((ref, i) => ({ d: i + 1, ref, label: ref }));
+    return { title, sub, tag: ‘Custom’, blurb: ‘’, days: simpleDays };
+  };
+  const handleFile = (f) => {
+    if (!f) return;
+    if (!/\.(txt|md|markdown)$/i.test(f.name)) return;
+    const r = new FileReader();
+    r.onload = () => {
+      const result = parsePlanFile(f.name, String(r.result || ‘’));
+      setFileName(f.name);
+      setName(result.title);
+      setTag(result.tag || ‘’);
+      setBlurb(result.blurb || ‘’);
+      setParsedDays(result.days);
+    };
+    r.readAsText(f);
+  };
+  const manualLines = text.split(‘\n’).map(s => s.trim()).filter(Boolean);
+  const activeDays = mode === ‘upload’ && parsedDays ? parsedDays : manualLines.map((ref, i) => ({ d: i + 1, ref, label: ref }));
+  const canPublish = name.trim() && activeDays.length > 0;
   const create = (asDraft) => {
-    if (!name.trim() || !lines.length) return;
-    const days = lines.map((ref, i) => ({ d: i + 1, ref, label: ref }));
-    window.Steward.publishPlan({ id: 'custom-' + Date.now().toString(36), title: name.trim(), sub: days.length + ' day' + (days.length === 1 ? '' : 's'), tag: tag.trim() || 'Custom', accent: 'var(--clay)', blurb: '', days, publishAt: isFuture ? schedAt : 0, draft: !!asDraft });
+    if (!canPublish) return;
+    window.Steward.publishPlan({ id: ‘custom-’ + Date.now().toString(36), title: name.trim(), sub: activeDays.length + ‘ day’ + (activeDays.length === 1 ? ‘’ : ‘s’), tag: tag.trim() || ‘Custom’, accent: ‘var(--clay)’, blurb: blurb.trim(), days: activeDays, publishAt: isFuture ? schedAt : 0, draft: !!asDraft });
     onClose();
   };
-  const dlgRef = useStewDialog(onClose);   // a11y: Escape + focus (dialog semantics on the panel below)
+  const modeBtn = (k, label, icon) => (
+    <button type="button" onClick={() => setMode(k)} style={{ flex: 1, display: ‘flex’, alignItems: ‘center’, justifyContent: ‘center’, gap: 7, padding: ‘10px 12px’, borderRadius: 11, cursor: ‘pointer’, fontFamily: ‘var(--font-ui)’, fontWeight: 700, fontSize: 13, background: mode === k ? ‘color-mix(in oklab, var(--clay) 10%, var(--surface))’ : ‘var(--surface-2)’, border: ‘1.5px solid ‘ + (mode === k ? ‘var(--clay)’ : ‘var(--line)’), color: mode === k ? ‘var(--clay-ink)’ : ‘var(--ink-2)’ }}><Icon name={icon} size={14} color={mode === k ? ‘var(--clay)’ : ‘var(--ink-3)’} /> {label}</button>
+  );
+  const dlgRef = useStewDialog(onClose);
   return (
-    <div onClick={onClose} style={{ position: 'fixed', overflowY: 'auto', inset: 0, zIndex: 90, background: 'rgba(40,32,24,.42)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'safe center', justifyContent: 'center' }}>
-      {/* Pinned footer, scrolling body — the shape SkConfirm explains. This one's three footer buttons were
-          HALF-clipped by the 88% cap on the Oppo at 360x730 (audit 2026-09-19 §D: 134/260, 128/247, 170/325
-          of their pixels reachable) — which is why the test scans each button's whole rect, not its centre. */}
-      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="Create a reading plan" tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 500, maxWidth: '92%', maxHeight: '88%', display: 'flex', flexDirection: 'column', overflow: 'hidden', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)' }}>
-        <div style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', padding: '28px 28px 8px' }}>
-        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22 }}>Create a reading plan</div>
-        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 18px' }}>Your own plan — a sermon series, a season's readings, anything. One reading per line; each line is a day.</p>
-        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 6 }}>Name</div>
-        <input value={name} onChange={e => setName(e.target.value)} autoFocus placeholder="e.g. Advent — Light Has Come" style={{ width: '100%', boxSizing: 'border-box', height: 46, border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '0 14px', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 14 }} />
-        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 6 }}>Tag (optional)</div>
-        <input value={tag} onChange={e => setTag(e.target.value)} placeholder="e.g. Advent" style={{ width: '100%', boxSizing: 'border-box', height: 46, border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '0 14px', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 14 }} />
-        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 6 }}>Readings {lines.length ? '\u00b7 ' + lines.length + ' day' + (lines.length === 1 ? '' : 's') : ''}</div>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'end', marginBottom: 10 }}>
-          <select value={rpBook} onChange={function(e) { setRpBook(e.target.value); setRpChap(''); setRpFrom(''); setRpTo(''); }} style={Object.assign({ height: 38, padding: '0 8px', borderRadius: 10, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 13.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }, { flex: '1 1 140px', maxWidth: 200 })} aria-label="Book">
-            <option value="">Book</option>
-            {VP_BOOKS.map(function(b) { return <option key={b[0]} value={b[0]}>{b[0]}</option>; })}
-          </select>
-          {rpBook ? <select value={rpChap} onChange={function(e) { setRpChap(e.target.value); setRpFrom(''); setRpTo(''); }} style={Object.assign({ height: 38, padding: '0 8px', borderRadius: 10, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 13.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }, { width: 70 })} aria-label="Chapter">
-            <option value="">Ch.</option>
-            {rpChapList.map(function(c) { return <option key={c} value={String(c)}>{c}</option>; })}
-          </select> : null}
-          {rpChap ? <input type="number" min="1" value={rpFrom} onChange={function(e) { setRpFrom(e.target.value.replace(/[^0-9]/g, '')); }} placeholder="from" style={Object.assign({ height: 38, padding: '0 8px', borderRadius: 10, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 13.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }, { width: 60, textAlign: 'center' })} aria-label="From verse" /> : null}
-          {rpFrom ? <input type="number" min={Number(rpFrom) + 1} value={rpTo} onChange={function(e) { setRpTo(e.target.value.replace(/[^0-9]/g, '')); }} placeholder="to" style={Object.assign({ height: 38, padding: '0 8px', borderRadius: 10, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 13.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }, { width: 60, textAlign: 'center' })} aria-label="To verse" /> : null}
-          {rpAssembled ? <button onClick={rpAdd} className="sk-btn sk-btn--clay" style={{ padding: '7px 12px', fontSize: 12.5, height: 38 }}><Icon name="plus" size={13} color="var(--on-clay)" /> Add</button> : null}
+    <div onClick={onClose} style={{ position: ‘fixed’, overflowY: ‘auto’, inset: 0, zIndex: 90, background: ‘rgba(40,32,24,.42)’, backdropFilter: ‘blur(3px)’, display: ‘flex’, alignItems: ‘safe center’, justifyContent: ‘center’ }}>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="Create a reading plan" tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 520, maxWidth: ‘92%’, maxHeight: ‘88%’, display: ‘flex’, flexDirection: ‘column’, overflow: ‘hidden’, background: ‘var(--surface)’, borderRadius: 22, border: ‘1px solid var(--line)’, boxShadow: ‘var(--shadow-lg)’ }}>
+        <div style={{ flex: ‘1 1 auto’, minHeight: 0, overflowY: ‘auto’, padding: ‘28px 28px 8px’ }}>
+        <div style={{ fontFamily: ‘var(--font-display)’, fontWeight: 800, fontSize: 22 }}>Create a reading plan</div>
+        <p style={{ fontSize: 13.5, color: ‘var(--ink-2)’, lineHeight: 1.55, margin: ‘8px 0 14px’ }}>Type readings by hand, or upload a Markdown file.</p>
+        <div style={{ display: ‘flex’, gap: 8, marginBottom: 16 }}>
+          {modeBtn(‘manual’, ‘Type it’, ‘pen’)}
+          {modeBtn(‘upload’, ‘Upload file’, ‘share’)}
         </div>
-        {readings.length > 0 ? <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 200, overflowY: 'auto', marginBottom: 6 }}>
-          {readings.map(function(r, i) {
-            return <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', borderRadius: 10, background: 'var(--surface-2)', border: '1px solid var(--line)', fontSize: 13.5 }}>
-              <span style={{ width: 22, textAlign: 'center', fontWeight: 700, fontSize: 11, color: 'var(--ink-3)' }}>{i + 1}</span>
-              <span style={{ flex: 1, fontWeight: 600 }}>{r}</span>
-              <button onClick={function() { rpRemove(i); }} style={{ border: 'none', background: 'none', cursor: 'pointer', padding: 2, color: 'var(--ink-3)' }}><Icon name="x" size={14} color="currentColor" /></button>
-            </div>;
-          })}
-        </div> : <div style={{ padding: '12px 0', textAlign: 'center', color: 'var(--ink-3)', fontSize: 13 }}>Pick a book and chapter above to add readings.</div>}
-        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '16px 0 6px' }}>Release</div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button type="button" onClick={() => setSchedAt(0)} style={{ flex: 1, padding: '11px 12px', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, background: !schedAt ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'var(--surface-2)', border: '1.5px solid ' + (!schedAt ? 'var(--clay)' : 'var(--line)'), color: !schedAt ? 'var(--clay-ink)' : 'var(--ink-2)' }}>Now</button>
-          <button type="button" onClick={() => setSchedAt(schedAt || Math.floor(Date.now() / 1000) + 7 * 86400)} style={{ flex: 1, padding: '11px 12px', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, background: schedAt ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'var(--surface-2)', border: '1.5px solid ' + (schedAt ? 'var(--clay)' : 'var(--line)'), color: schedAt ? 'var(--clay-ink)' : 'var(--ink-2)' }}>Schedule…</button>
+        {mode === ‘upload’ ? (
+          <React.Fragment>
+            <div onClick={() => inputRef.current && inputRef.current.click()} style={{ border: ‘2px dashed var(--line)’, borderRadius: 14, background: ‘var(--surface-2)’, padding: ‘18px 16px’, textAlign: ‘center’, cursor: ‘pointer’, marginBottom: 14 }}>
+              {parsedDays ? (
+                <div style={{ display: ‘flex’, alignItems: ‘center’, gap: 10, justifyContent: ‘center’ }}>
+                  <Icon name="read" size={20} color="var(--clay)" />
+                  <div style={{ textAlign: ‘left’ }}>
+                    <div style={{ fontWeight: 700, fontSize: 13.5 }}>{fileName}</div>
+                    <div style={{ fontSize: 12, color: ‘var(--ink-3)’ }}>{parsedDays.length} day{parsedDays.length === 1 ? ‘’ : ‘s’} found. Tap to choose a different file.</div>
+                  </div>
+                </div>
+              ) : (
+                <React.Fragment>
+                  <Icon name="share" size={22} color="var(--ink-3)" />
+                  <div style={{ fontWeight: 700, fontSize: 14, marginTop: 6 }}>Choose a .md or .txt file</div>
+                  <div style={{ fontSize: 12, color: ‘var(--ink-3)’, marginTop: 2 }}>Accepts the devotional format or simple one-ref-per-line.</div>
+                </React.Fragment>
+              )}
+              <input ref={inputRef} type="file" accept=".md,.markdown,.txt,text/plain,text/markdown" onChange={e => { handleFile(e.target.files[0]); e.target.value = ‘’; }} style={{ display: ‘none’ }} />
+            </div>
+          </React.Fragment>
+        ) : null}
+        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: ‘1.2px’, textTransform: ‘uppercase’, color: ‘var(--ink-3)’, marginBottom: 6 }}>Name</div>
+        <input value={name} onChange={e => setName(e.target.value)} autoFocus placeholder="e.g. Advent — Light Has Come" style={{ width: ‘100%’, boxSizing: ‘border-box’, height: 46, border: ‘1px solid var(--line)’, borderRadius: 12, background: ‘var(--surface-2)’, padding: ‘0 14px’, fontSize: 15, fontFamily: ‘var(--font-ui)’, color: ‘var(--ink)’, outline: ‘none’, marginBottom: 14 }} />
+        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: ‘1.2px’, textTransform: ‘uppercase’, color: ‘var(--ink-3)’, marginBottom: 6 }}>Tag (optional)</div>
+        <input value={tag} onChange={e => setTag(e.target.value)} placeholder="e.g. Advent" style={{ width: ‘100%’, boxSizing: ‘border-box’, height: 46, border: ‘1px solid var(--line)’, borderRadius: 12, background: ‘var(--surface-2)’, padding: ‘0 14px’, fontSize: 15, fontFamily: ‘var(--font-ui)’, color: ‘var(--ink)’, outline: ‘none’, marginBottom: 14 }} />
+        {mode === ‘manual’ ? (
+          <React.Fragment>
+            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: ‘1.2px’, textTransform: ‘uppercase’, color: ‘var(--ink-3)’, marginBottom: 6 }}>Readings — one per line {manualLines.length ? ‘· ‘ + manualLines.length + ‘ day’ + (manualLines.length === 1 ? ‘’ : ‘s’) : ‘’}</div>
+            <textarea value={text} onChange={e => setText(e.target.value)} rows={7} placeholder={‘John 1\nJohn 2\nIsaiah 53\nPsalm 22’} style={{ width: ‘100%’, boxSizing: ‘border-box’, border: ‘1px solid var(--line)’, borderRadius: 12, background: ‘var(--surface-2)’, padding: ‘12px 14px’, fontSize: 14.5, fontFamily: ‘var(--mono)’, color: ‘var(--ink)’, outline: ‘none’, resize: ‘vertical’, lineHeight: 1.6 }} />
+          </React.Fragment>
+        ) : parsedDays && parsedDays.length ? (
+          <React.Fragment>
+            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: ‘1.2px’, textTransform: ‘uppercase’, color: ‘var(--ink-3)’, marginBottom: 6 }}>Preview {‘·’} {parsedDays.length} day{parsedDays.length === 1 ? ‘’ : ‘s’}</div>
+            <div style={{ maxHeight: 180, overflowY: ‘auto’, border: ‘1px solid var(--line)’, borderRadius: 12, background: ‘var(--surface-2)’, padding: ‘6px 0’ }}>
+              {parsedDays.map((day, i) => (
+                <div key={i} style={{ display: ‘flex’, gap: 10, alignItems: ‘baseline’, padding: ‘5px 14px’, fontSize: 13, borderBottom: i < parsedDays.length - 1 ? ‘1px solid var(--line)’ : ‘none’ }}>
+                  <span style={{ fontWeight: 800, fontSize: 11, color: ‘var(--clay)’, minWidth: 34 }}>Day {day.d}</span>
+                  <span style={{ fontWeight: 600, minWidth: 100 }}>{day.ref}</span>
+                  <span style={{ color: ‘var(--ink-3)’, flex: 1, overflow: ‘hidden’, textOverflow: ‘ellipsis’, whiteSpace: ‘nowrap’ }}>{day.label}</span>
+                </div>
+              ))}
+            </div>
+          </React.Fragment>
+        ) : null}
+        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: ‘1.2px’, textTransform: ‘uppercase’, color: ‘var(--ink-3)’, margin: ‘16px 0 6px’ }}>Release</div>
+        <div style={{ display: ‘flex’, gap: 8 }}>
+          <button type="button" onClick={() => setSchedAt(0)} style={{ flex: 1, padding: ‘11px 12px’, borderRadius: 11, cursor: ‘pointer’, fontFamily: ‘var(--font-ui)’, fontWeight: 700, fontSize: 13, background: !schedAt ? ‘color-mix(in oklab, var(--clay) 10%, var(--surface))’ : ‘var(--surface-2)’, border: ‘1.5px solid ‘ + (!schedAt ? ‘var(--clay)’ : ‘var(--line)’), color: !schedAt ? ‘var(--clay-ink)’ : ‘var(--ink-2)’ }}>Now</button>
+          <button type="button" onClick={() => setSchedAt(schedAt || Math.floor(Date.now() / 1000) + 7 * 86400)} style={{ flex: 1, padding: ‘11px 12px’, borderRadius: 11, cursor: ‘pointer’, fontFamily: ‘var(--font-ui)’, fontWeight: 700, fontSize: 13, background: schedAt ? ‘color-mix(in oklab, var(--clay) 10%, var(--surface))’ : ‘var(--surface-2)’, border: ‘1.5px solid ‘ + (schedAt ? ‘var(--clay)’ : ‘var(--line)’), color: schedAt ? ‘var(--clay-ink)’ : ‘var(--ink-2)’ }}>Schedule...</button>
         </div>
         {schedAt ? (
           <React.Fragment>
-            <input type="datetime-local" value={toLocalInput(schedAt)} min={toLocalInput(Math.floor(Date.now() / 1000))} onChange={e => setSchedAt(fromLocalInput(e.target.value))} style={{ width: '100%', boxSizing: 'border-box', height: 46, border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '0 14px', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', margin: '8px 0 6px' }} />
-            <div style={{ fontSize: 12, color: isFuture ? 'var(--ink-2)' : 'var(--clay-ink)' }}>{isFuture ? `Hidden from members until ${new Date(schedAt * 1000).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}.` : 'That time is in the past — it will publish immediately.'}</div>
+            <input type="datetime-local" value={toLocalInput(schedAt)} min={toLocalInput(Math.floor(Date.now() / 1000))} onChange={e => setSchedAt(fromLocalInput(e.target.value))} style={{ width: ‘100%’, boxSizing: ‘border-box’, height: 46, border: ‘1px solid var(--line)’, borderRadius: 12, background: ‘var(--surface-2)’, padding: ‘0 14px’, fontSize: 15, fontFamily: ‘var(--font-ui)’, color: ‘var(--ink)’, outline: ‘none’, margin: ‘8px 0 6px’ }} />
+            <div style={{ fontSize: 12, color: isFuture ? ‘var(--ink-2)’ : ‘var(--clay-ink)’ }}>{isFuture ? ‘Hidden from members until ‘ + new Date(schedAt * 1000).toLocaleString([], { weekday: ‘short’, day: ‘numeric’, month: ‘short’, hour: ‘2-digit’, minute: ‘2-digit’ }) + ‘.’ : ‘That time is in the past — it will publish immediately.’}</div>
           </React.Fragment>
         ) : null}
         </div>
-        <div style={{ flexShrink: 0, display: 'flex', gap: 10, padding: '14px 28px 22px', borderTop: '1px solid var(--line)' }}>
-          <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: '0 0 auto', padding: '12px 14px', fontSize: 14 }}>Cancel</button>
-          <button onClick={() => create(true)} disabled={!name.trim() || !lines.length} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 13.5, opacity: (!name.trim() || !lines.length) ? 0.55 : 1 }} title="Hold it — members won’t see it until you publish">Save as draft</button>
-          <button onClick={() => create(false)} disabled={!name.trim() || !lines.length} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 13.5, opacity: (!name.trim() || !lines.length) ? 0.55 : 1 }}><Icon name="send" size={15} color="var(--on-clay)" /> {isFuture ? 'Schedule' : 'Publish now'}</button>
+        <div style={{ flexShrink: 0, display: ‘flex’, gap: 10, padding: ‘14px 28px 22px’, borderTop: ‘1px solid var(--line)’ }}>
+          <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: ‘0 0 auto’, padding: ‘12px 14px’, fontSize: 14 }}>Cancel</button>
+          <button onClick={() => create(true)} disabled={!canPublish} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 13.5, opacity: canPublish ? 1 : 0.55 }} title="Hold it — members won’t see it until you publish">Save as draft</button>
+          <button onClick={() => create(false)} disabled={!canPublish} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 13.5, opacity: canPublish ? 1 : 0.55 }}><Icon name="send" size={15} color="var(--on-clay)" /> {isFuture ? ‘Schedule’ : ‘Publish now’}</button>
         </div>
       </div>
     </div>
@@ -5807,11 +5852,30 @@ function BulkUploadModal({ kind, onClose }) {
   const parse = (name, raw) => {
     const baseTitle = name.replace(/\.(txt|md|markdown)$/i, '').replace(/[-_]+/g, ' ').trim() || 'Untitled';
     if (isPlans) {
-      let lines = raw.split('\n').map(s => s.trim()).filter(Boolean);
+      const lines = raw.split('\n').map(s => s.trim()).filter(Boolean);
       let title = baseTitle;
-      if (lines[0] && /^#+\s+/.test(lines[0])) { title = lines[0].replace(/^#+\s*/, '').trim() || baseTitle; lines = lines.slice(1); }
-      const days = lines.map((ref, i) => ({ d: i + 1, ref, label: ref }));
-      return { name, title, count: days.length, days, error: days.length ? '' : 'no readings' };
+      if (lines[0] && /^#+\s+/.test(lines[0])) { title = lines[0].replace(/^#+\s*/, '').replace(/\s*[—–-]\s*Weekly Plan$/i, '').trim() || baseTitle; }
+      const dayRx = /^#{2,3}\s+Day\s+(\d+)\s*[—–-]\s*(.+)/i;
+      const readRx = /^\*\*Read:\s*(.+?)\*\*/;
+      const richDays = [];
+      for (let i = 0; i < lines.length; i++) {
+        const dm = dayRx.exec(lines[i]);
+        if (!dm) continue;
+        const d = parseInt(dm[1], 10), label = dm[2].trim();
+        let ref = '';
+        if (i + 1 < lines.length) { const rm = readRx.exec(lines[i + 1]); if (rm) ref = rm[1].trim().replace(/–/g, '-').replace(/—/g, '-'); }
+        if (ref) richDays.push({ d, ref, label });
+      }
+      if (richDays.length) {
+        let sub = '', tag = 'Custom', blurb = '';
+        const subLine = lines.find(l => /^#{2,3}\s+Series\s+/i.test(l));
+        if (subLine) { sub = subLine.replace(/^#+\s*/, '').trim(); const tm = /of\s+"([^"]+)"/.exec(sub); if (tm) tag = tm[1]; }
+        const blurbLine = lines.find(l => /^\*[^*]/.test(l) && l.endsWith('*'));
+        if (blurbLine) blurb = blurbLine.replace(/^\*|\*$/g, '').trim().slice(0, 500);
+        return { name, title, sub, blurb, tag, count: richDays.length, days: richDays, error: '' };
+      }
+      const simpleDays = lines.filter(l => !/^#/.test(l)).map((ref, i) => ({ d: i + 1, ref, label: ref }));
+      return { name, title, count: simpleDays.length, days: simpleDays, error: simpleDays.length ? '' : 'no readings' };
     }
     const h = raw.match(/^\s*#\s+(.+)$/m);
     const rf = raw.match(/\b(?:[1-3]\s?)?[A-Z][a-z]+\s+\d+(?::\d+(?:-\d+)?)?\b/);
@@ -5835,7 +5899,7 @@ function BulkUploadModal({ kind, onClose }) {
       try {
         // bulk uploads land as DRAFTS so the steward can arrange + schedule a series before any of it
         // reaches members — then they publish (or schedule) it deliberately.
-        if (isPlans) await Promise.resolve(window.Steward.publishPlan({ id: 'bulk-' + Date.now().toString(36) + i, title: it.title, sub: it.count + ' day' + (it.count === 1 ? '' : 's'), tag: 'Custom', accent: 'var(--clay)', blurb: '', days: it.days, draft: true }));
+        if (isPlans) await Promise.resolve(window.Steward.publishPlan({ id: 'bulk-' + Date.now().toString(36) + i, title: it.title, sub: it.sub || (it.count + ' day' + (it.count === 1 ? '' : 's')), tag: it.tag || 'Custom', accent: 'var(--clay)', blurb: it.blurb || '', days: it.days, draft: true }));
         else await Promise.resolve(window.Steward.publishDevotional({ title: it.title, ref: it.ref || '', type: 'txt', text: it.text, draft: true }));
       } catch (e) {}
       setDone(d => d + 1);
@@ -5849,7 +5913,7 @@ function BulkUploadModal({ kind, onClose }) {
       <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={'Bulk upload ' + (isPlans ? 'reading plans' : 'devotionals')} tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 560, maxWidth: '96%', maxHeight: '90%', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', overflow: 'hidden', animation: 'lumenScale .2s ease both' }}>
         <div style={{ padding: '24px 26px 0' }}>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22 }}>Bulk upload {isPlans ? 'reading plans' : 'devotionals'}</div>
-          <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 16px' }}>{isPlans ? 'Each text file becomes a plan, with one Bible reference per line (a “# Title” first line is used as the name).' : 'Each Markdown / text file becomes a devotional. The first “# Heading” (or the filename) is the title.'} They land as <b>drafts</b>, so you can arrange and schedule them before anything reaches members.</p>
+          <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 16px' }}>{isPlans ? 'Each file becomes a plan. Use the devotional format (### Day 1 — Title, **Read: Reference**) or a simple list with one Bible reference per line. A “# Title” first line is used as the name.' : 'Each Markdown / text file becomes a devotional. The first “# Heading” (or the filename) is the title.'} They land as <b>drafts</b>, so you can arrange and schedule them before anything reaches members.</p>
         </div>
         <div style={{ padding: '0 26px' }}>
           <div onDragOver={e => { e.preventDefault(); setDrag(true); }} onDragLeave={() => setDrag(false)} onDrop={e => { e.preventDefault(); setDrag(false); addFiles(e.dataTransfer.files); }} onClick={() => inputRef.current && inputRef.current.click()}
@@ -9562,6 +9626,8 @@ function DashWebsitePanel({ church }) {
   React.useEffect(() => (window.Steward.subscribeWebsiteShare ? window.Steward.subscribeWebsiteShare(setShare) : undefined), []);
   const known = !!(share && share.known);
   const on = !!(share && share.calendar);
+  const sermonsOn = !!(share && share.sermons);
+  const plansOn = !!(share && share.plans);
   const blocked = (share && share.blocked) || 0;
   const whyBlocked = (WEB_BLOCKED_WHY[(share && share.blockedWhy)] || WEB_BLOCKED_WHY.shape)[blocked === 1 ? 0 : 1];
   const held = (share && share.held) || 0;
@@ -9578,6 +9644,9 @@ function DashWebsitePanel({ church }) {
   const [calNameEdit, setCalNameEdit] = React.useState(null);
   const savedCalName = (share && share.calName) || '';
   const calName = calNameEdit !== null ? calNameEdit : savedCalName;
+  const [sermonNameEdit, setSermonNameEdit] = React.useState(null);
+  const savedSermonName = (share && share.sermonFeedName) || '';
+  const sermonName = sermonNameEdit !== null ? sermonNameEdit : savedSermonName;
   const patchShare = async (patch) => {
     if (busy || !known) return false;
     setBusy(true); setMsg('');
@@ -9588,6 +9657,7 @@ function DashWebsitePanel({ church }) {
     return ok;
   };
   const saveCalName = async () => { const val = calName; setCalNameEdit(null); if (val !== savedCalName) await patchShare({ calName: val }); };
+  const saveSermonName = async () => { const val = sermonName; setSermonNameEdit(null); if (val !== savedSermonName) await patchShare({ sermonFeedName: val }); };
   const toggle = async () => {
     if (busy || !known) return;
     setBusy(true); setMsg('');
@@ -9619,39 +9689,28 @@ function DashWebsitePanel({ church }) {
   const row = (checked) => ({ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 11, borderRadius: 11, border: '1px solid var(--line)', background: checked ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface-2)' });
   return (
     <Panel title="Your website">
+      {/* Calendar */}
       <div onClick={toggle} className="set-row" style={{ ...row(on), opacity: known ? 1 : .6 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontWeight: 700, fontSize: 14.5 }}>Share our calendar on our website</div>
-          <div className="set-desc" style={{ color: 'var(--ink-2)' }}>{on ? 'On — whole-church events are on a public feed, except any ticked “Not on the website”; a group’s event only if you tick it on.' : 'Off — nothing about your calendar leaves the app.'}</div>
+          <div style={{ fontWeight: 700, fontSize: 14.5 }}>Share our calendar</div>
+          <div className="set-desc" style={{ color: 'var(--ink-2)' }}>{on ? 'On \u2014 whole-church events are on a public feed.' : 'Off \u2014 nothing about your calendar leaves the app.'}</div>
         </div>
-        <button onClick={(e) => { e.stopPropagation(); toggle(); }} disabled={busy || !known} aria-label="Share our calendar on our website" role="switch" aria-checked={on} title="Put your events on a feed your website can show" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: on ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
+        <button onClick={(e) => { e.stopPropagation(); toggle(); }} disabled={busy || !known} aria-label="Share our calendar" role="switch" aria-checked={on} title="Put your events on a feed your website can show" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: on ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
           <span style={{ position: 'absolute', top: 3, left: on ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
         </button>
       </div>
       {msg ? <div role="alert" style={{ marginTop: 8, fontSize: 12.5, fontWeight: 600, color: 'var(--clay-ink)' }}>{msg}</div> : null}
-      {/* AN EVENT THE MIRROR COULD NOT PUBLISH IS SAID HERE. One event this console cannot open used to park
-          the whole mirror for the session while this switch went on reading "On" (audit F3). It no longer
-          does — the rest are published — but a church whose old name key is gone would otherwise never learn
-          why one event is missing from its website. The engine only reports after several retries, because
-          the key is usually merely late. */}
       {blocked ? (
         <div role="status" style={{ marginTop: 8, fontSize: 12.5, fontWeight: 600, color: 'var(--clay-ink)' }}>
-          {blocked === 1 ? '1 event could not be published' : blocked + ' events could not be published'} — {whyBlocked}
+          {blocked === 1 ? '1 event could not be published' : blocked + ' events could not be published'} \u2014 {whyBlocked}
         </div>
       ) : null}
-      {/* AND WHAT IS STILL OUT THERE. The engine leaves a copy it cannot classify ON the website rather than
-          emptying a church's public calendar because a console is slow, offline or mid-restore
-          (AUDIT-feeds-round3-2026-09-22 F1, where an empty key ring withdrew five of five whole-church
-          events). That decision is only honest if the church is told which way it fell, so this line is the
-          other half of the one above: what could not be published, and what is still published anyway. */}
       {held ? (
         <div role="status" style={{ marginTop: 6, fontSize: 12.5, fontWeight: 600, color: 'var(--ink-2)' }}>
-          {held === 1 ? '1 of them is still on your website — this console could not open it to check.'
-            : held + ' of them are still on your website — this console could not open them to check.'}
+          {held === 1 ? '1 of them is still on your website \u2014 this console could not open it to check.'
+            : held + ' of them are still on your website \u2014 this console could not open them to check.'}
         </div>
       ) : null}
-      {/* NO IDS, NO CONTROL — rather than a greyed-out button a steward cannot press and is never told why.
-          An engine older than the ids (or one that has not reported yet) simply does not draw this. */}
       {held && heldIds.length ? (
         <button onClick={takeOff} disabled={busy || !known} aria-label="Take off our website"
           title="Your website stops showing them. Put the tick back from the event itself once a church key can open it again."
@@ -9659,10 +9718,9 @@ function DashWebsitePanel({ church }) {
           {held === 1 ? 'Take it off our website' : 'Take them off our website'}
         </button>
       ) : null}
-
       {on ? (
-        <React.Fragment>
-          <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', margin: '14px 0 6px' }}>How far ahead</div>
+        <div style={{ padding: '6px 0 10px', borderBottom: '1px solid var(--line)', marginBottom: 10 }}>
+          <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', margin: '8px 0 6px' }}>How far ahead</div>
           <div className="set-desc" style={{ color: 'var(--ink-2)', marginBottom: 8 }}>Events further out than this stay off the feed.</div>
           <div role="radiogroup" aria-label="How far ahead" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             {[[3, '3 months'], [6, '6 months'], [12, '12 months']].map(([m, label]) => (
@@ -9692,20 +9750,91 @@ function DashWebsitePanel({ church }) {
               <input type="radio" name="website-detail" value="short" checked={detail === 'short'} disabled={busy || !known} onChange={() => patchShare({ detail: 'short' })} aria-label="Short" style={{ marginTop: 3 }} />
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontWeight: 700, fontSize: 14 }}>Short</div>
-                <div className="set-desc" style={{ color: 'var(--ink-2)' }}>Just the title and time — no place, no note.</div>
+                <div className="set-desc" style={{ color: 'var(--ink-2)' }}>Just the title and time \u2014 no place, no note.</div>
               </div>
             </label>
           </div>
-        </React.Fragment>
+
+          {url ? (
+            <React.Fragment>
+              <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', margin: '14px 0 6px' }}>Feed address</div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <input readOnly value={url} aria-label="Feed address" onFocus={e => e.target.select()} style={{ flex: 1, minWidth: 220, height: 36, padding: '0 10px', borderRadius: 9, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink-2)', fontFamily: 'var(--mono)', fontSize: 12 }} />
+                <button onClick={copy} className="sk-btn sk-btn--clay" aria-label="Copy feed address" style={{ padding: '8px 14px', fontSize: 13 }}><Icon name="copy" size={14} color="var(--on-clay)" /> Copy</button>
+                {copied ? <div role="status" style={{ fontSize: 12.5, fontWeight: 600, color: copied === 'Copied' ? 'var(--sage-ink)' : 'var(--clay-ink)' }}>{copied}</div> : null}
+              </div>
+              <div className="set-desc" style={{ color: 'var(--ink-3)', marginTop: 6 }}>Paste it into your website calendar block, or subscribe from a calendar app.</div>
+            </React.Fragment>
+          ) : null}
+        </div>
       ) : null}
 
+      {/* Sermons */}
+      <div onClick={() => patchShare({ sermons: !sermonsOn })} className="set-row" style={{ ...row(sermonsOn), opacity: known ? 1 : .6, marginTop: 10 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontWeight: 700, fontSize: 14.5 }}>Share our sermons</div>
+          <div className="set-desc" style={{ color: 'var(--ink-2)' }}>{sermonsOn ? 'On \u2014 sermons are on a public podcast feed.' : 'Off \u2014 sermon audio stays inside the app.'}</div>
+        </div>
+        <button onClick={(e) => { e.stopPropagation(); patchShare({ sermons: !sermonsOn }); }} disabled={busy || !known} aria-label="Share our sermons" role="switch" aria-checked={sermonsOn} title="Put your sermons on a public podcast feed" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: sermonsOn ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
+          <span style={{ position: 'absolute', top: 3, left: sermonsOn ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
+        </button>
+      </div>
+      {sermonsOn ? (
+        <div style={{ padding: '6px 0 10px', borderBottom: '1px solid var(--line)', marginBottom: 10 }}>
+          <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', margin: '8px 0 6px' }}>Podcast name</div>
+          <div className="set-desc" style={{ color: 'var(--ink-2)', marginBottom: 8 }}>What a podcast app or feed reader shows as the channel name.</div>
+          <input value={sermonName} onChange={e => setSermonNameEdit(e.target.value)} onBlur={saveSermonName} onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }}
+            disabled={busy || !known} placeholder={(church.name || 'Your church') + ' \u2014 Sermons'} aria-label="Podcast name"
+            style={{ width: '100%', boxSizing: 'border-box', height: 40, padding: '0 13px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', outline: 'none', fontSize: 14, color: 'var(--ink)', fontFamily: 'var(--font-ui)' }} />
+
+          {url ? (
+            <React.Fragment>
+              <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', margin: '14px 0 6px' }}>Feed address</div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <input readOnly value={url.replace(/\/calendar\.ics$/, '/sermons.xml')} aria-label="Sermon feed address" onFocus={e => e.target.select()} style={{ flex: 1, minWidth: 220, height: 36, padding: '0 10px', borderRadius: 9, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink-2)', fontFamily: 'var(--mono)', fontSize: 12 }} />
+                <button onClick={() => { const ok = copyText(url.replace(/\/calendar\.ics$/, '/sermons.xml')); setCopied(ok ? 'Copied' : 'Could not copy'); setTimeout(() => setCopied(''), 2500); }} className="sk-btn sk-btn--clay" aria-label="Copy sermon feed address" style={{ padding: '8px 14px', fontSize: 13 }}><Icon name="copy" size={14} color="var(--on-clay)" /> Copy</button>
+                {copied ? <div role="status" style={{ fontSize: 12.5, fontWeight: 600, color: copied === 'Copied' ? 'var(--sage-ink)' : 'var(--clay-ink)' }}>{copied}</div> : null}
+              </div>
+              <div className="set-desc" style={{ color: 'var(--ink-3)', marginTop: 6 }}>Paste it into a podcast app or your website audio block.</div>
+            </React.Fragment>
+          ) : null}
+        </div>
+      ) : null}
+
+      {/* Reading plans */}
+      <div onClick={() => patchShare({ plans: !plansOn })} className="set-row" style={{ ...row(plansOn), opacity: known ? 1 : .6, marginTop: 10 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontWeight: 700, fontSize: 14.5 }}>Share reading plans</div>
+          <div className="set-desc" style={{ color: 'var(--ink-2)' }}>{plansOn ? 'On \u2014 your reading plans are on a public feed.' : 'Off \u2014 reading plans stay inside the app.'}</div>
+        </div>
+        <button onClick={(e) => { e.stopPropagation(); patchShare({ plans: !plansOn }); }} disabled={busy || !known} aria-label="Share reading plans" role="switch" aria-checked={plansOn} title="Put your reading plans on a public feed" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: plansOn ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
+          <span style={{ position: 'absolute', top: 3, left: plansOn ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
+        </button>
+      </div>
+      {plansOn ? (
+        <div style={{ padding: '6px 0 10px', borderBottom: '1px solid var(--line)', marginBottom: 10 }}>
+          {url ? (
+            <React.Fragment>
+              <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', margin: '8px 0 6px' }}>Feed address</div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <input readOnly value={url.replace(/\/calendar\.ics$/, '/plans.json')} aria-label="Plans feed address" onFocus={e => e.target.select()} style={{ flex: 1, minWidth: 220, height: 36, padding: '0 10px', borderRadius: 9, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink-2)', fontFamily: 'var(--mono)', fontSize: 12 }} />
+                <button onClick={() => { const ok = copyText(url.replace(/\/calendar\.ics$/, '/plans.json')); setCopied(ok ? 'Copied' : 'Could not copy'); setTimeout(() => setCopied(''), 2500); }} className="sk-btn sk-btn--clay" aria-label="Copy plans feed address" style={{ padding: '8px 14px', fontSize: 13 }}><Icon name="copy" size={14} color="var(--on-clay)" /> Copy</button>
+                {copied ? <div role="status" style={{ fontSize: 12.5, fontWeight: 600, color: copied === 'Copied' ? 'var(--sage-ink)' : 'var(--clay-ink)' }}>{copied}</div> : null}
+              </div>
+              <div className="set-desc" style={{ color: 'var(--ink-3)', marginTop: 6 }}>Your website can fetch this to show your reading plans.</div>
+            </React.Fragment>
+          ) : null}
+        </div>
+      ) : null}
+
+      {/* Served from (shared) */}
       <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', margin: '14px 0 6px' }}>Served from</div>
       <div role="radiogroup" aria-label="Served from" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 12px', borderRadius: 11, border: '1px solid var(--clay)', background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', cursor: 'default' }}>
           <input type="radio" name="website-address" value="own" checked readOnly aria-label="Our own relay" style={{ marginTop: 3 }} />
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontWeight: 700, fontSize: 14 }}>Our own relay</div>
-            <div className="set-desc" style={{ color: 'var(--ink-2)' }}>Anyone who opens the address can see where your church’s data is kept.</div>
+            <div className="set-desc" style={{ color: 'var(--ink-2)' }}>Anyone who opens the address can see where your data is kept.</div>
           </div>
         </label>
         <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 12px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface-2)', opacity: .6, cursor: 'not-allowed' }}>
@@ -9716,18 +9845,6 @@ function DashWebsitePanel({ church }) {
           </div>
         </label>
       </div>
-
-      {on && url ? (
-        <React.Fragment>
-          <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', margin: '14px 0 6px' }}>Feed address</div>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            <input readOnly value={url} aria-label="Feed address" onFocus={e => e.target.select()} style={{ flex: 1, minWidth: 220, height: 36, padding: '0 10px', borderRadius: 9, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink-2)', fontFamily: 'var(--mono)', fontSize: 12 }} />
-            <button onClick={copy} className="sk-btn sk-btn--clay" aria-label="Copy feed address" style={{ padding: '8px 14px', fontSize: 13 }}><Icon name="copy" size={14} color="var(--on-clay)" /> Copy</button>
-            {copied ? <div role="status" style={{ fontSize: 12.5, fontWeight: 600, color: copied === 'Copied' ? 'var(--sage-ink)' : 'var(--clay-ink)' }}>{copied}</div> : null}
-          </div>
-          <div className="set-desc" style={{ color: 'var(--ink-3)', marginTop: 6 }}>Paste it into your website’s calendar block, or subscribe to it from a calendar app.</div>
-        </React.Fragment>
-      ) : null}
     </Panel>
   );
 }
