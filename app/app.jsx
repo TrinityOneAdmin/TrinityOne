@@ -153,7 +153,7 @@ function _mergeChurchProfile(cs, id, p){
     channel: p.channel != null ? p.channel : x.channel, audioFeed: p.audioFeed != null ? p.audioFeed : x.audioFeed,
     lnaddr: p.lud16 != null ? p.lud16 : x.lnaddr, giving: p.giving != null ? p.giving : x.giving,
     picture: p.picture != null ? p.picture : x.picture, banner: p.banner != null ? p.banner : x.banner,
-    bannerFade: p.bannerFade != null ? p.bannerFade : x.bannerFade, accent: p.accent != null ? p.accent : x.accent,
+    bannerFade: p.bannerFade != null ? p.bannerFade : x.bannerFade, accent: p.accent != null ? p.accent : x.accent, titleColor: p.titleColor != null ? p.titleColor : x.titleColor,
     features: p.features != null ? p.features : x.features, rules: p.rules != null ? p.rules : x.rules,
     initials: (p.name || x.name || '?').split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase() };
   const same = (a, b) => a === b || (a && b && typeof a === 'object' && JSON.stringify(a) === JSON.stringify(b));

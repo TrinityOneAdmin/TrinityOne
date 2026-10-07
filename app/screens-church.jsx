@@ -122,7 +122,7 @@ function ChurchPill({ ctx }) {
         <span style={{ position: 'absolute', right: 12, top: 'calc(env(safe-area-inset-top, 0px) + 12px)', width: 30, height: 30, borderRadius: 999, background: 'rgba(0,0,0,.32)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="chevD" size={18} stroke={2.4} color="#fff" /></span>
         <span style={{ position: 'absolute', left: 14, bottom: 22, right: 50, display: 'flex', alignItems: 'center', gap: 11 }}>
           <ChurchBadge church={c} size={40} radius={12} />
-          <span style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 19, color: '#fff', lineHeight: 1.15, textShadow: '0 1px 6px rgba(0,0,0,.6)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</span>
+          <span style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 19, color: c.titleColor || '#fff', lineHeight: 1.15, textShadow: '0 1px 6px rgba(0,0,0,.6)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</span>
         </span>
       </button>
     );

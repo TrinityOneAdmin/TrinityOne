@@ -2298,12 +2298,25 @@ function TodayScreen({ ctx }) {
   // `ctx.servingSeenTs` is the per-church mark; app/app.jsx stamps it forward from ctx.openServing().
   const servNew = servingNewCount(ctx, ctx.servingSeenTs);
   const fmtServe = (d) => { try { return new Date(d + 'T00:00').toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'short' }); } catch { return d; } };
+  const [servHidden, setServHidden] = React.useState(() => { try { return localStorage.getItem('trinityone.serving.cardHidden') === '1'; } catch { return false; } });
+  const dismissServing = (e) => { if (e) e.stopPropagation(); try { localStorage.setItem('trinityone.serving.cardHidden', '1'); } catch {} setServHidden(true); };
+  const _openServingOrig = ctx.openServing;
+  const openServingAndShow = React.useCallback((...a) => { try { localStorage.removeItem('trinityone.serving.cardHidden'); } catch {} setServHidden(false); _openServingOrig && _openServingOrig(...a); }, [_openServingOrig]);
 
   return (
     <ScreenScroll top="calc(env(safe-area-inset-top, 0px) + 8px)">
       <SafetyBanner ctx={ctx} />
       <RecoveryNudge ctx={ctx} />
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 20, animation: 'trinityFade .5s ease both' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, animation: 'trinityFade .5s ease both' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginRight: 16 }}>
+          <svg viewBox="0 0 100 100" aria-label="TrinityOne" style={{ width: 28, height: 28, flexShrink: 0 }}>
+            <path d="M81.2 67.9 A36 36 0 0 1 31.3 80.7" fill="none" stroke="var(--ink)" strokeWidth="7" strokeLinecap="round" />
+            <path d="M18.8 68.0 A36 36 0 0 1 32.7 18.4" fill="none" stroke="var(--ink)" strokeWidth="7" strokeLinecap="round" />
+            <path d="M49.9 14.0 A36 36 0 0 1 86.0 50.8" fill="none" stroke="var(--ink)" strokeWidth="7" strokeLinecap="round" />
+            <circle cx="50" cy="50" r="6.5" fill="var(--gold)" />
+          </svg>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 16, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink)' }}>Trinity<span style={{ color: 'var(--clay)' }}>One</span></div>
+        </div>
         <div style={{ display: 'flex', gap: 8 }}>
           {(() => {
             const hdrBtn = { width: 40, height: 40, borderRadius: 14, border: '1px solid var(--line)',
@@ -2363,43 +2376,48 @@ function TodayScreen({ ctx }) {
           unconditionally — "Serving & events · RSVP · your rota" — so a locked phone still announced that its
           owner belongs to a church with a rota even after the church's NAME was hidden. Hiding one string is
           not hiding the church. AUDIT-2026-07-27. */}
-      {!ctx.church ? null : (servNext || servPendingN) ? (
-        <div onClick={() => ctx.openServing && ctx.openServing()} style={{ display: 'flex', alignItems: 'center', gap: 13, padding: 14, borderRadius: 18, marginBottom: 22, cursor: 'pointer', boxShadow: 'var(--shadow)', animation: 'trinityFade .5s ease both',
-          background: servPendingN ? 'color-mix(in oklab, var(--gold) 9%, var(--surface))' : 'color-mix(in oklab, var(--sage) 9%, var(--surface))',
-          border: servPendingN ? '1px solid color-mix(in oklab, var(--gold) 32%, var(--line))' : '1px solid color-mix(in oklab, var(--sage) 30%, var(--line))' }}>
-          <div style={{ width: 46, height: 46, borderRadius: 14, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
-            background: servPendingN ? 'color-mix(in oklab, var(--gold) 18%, var(--surface))' : 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: servPendingN ? '#8a6717' : 'var(--sage)' }}><Icon name={servPendingN ? 'sparkle' : 'calCheck'} size={22} stroke={1.8} /></div>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            {servPendingN ? (
-              <React.Fragment>
-                <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5 }}>Can you serve?<ServingNewDot n={servNew} /></div>
-                <div style={{ fontSize: 12.5, color: '#8a6717', fontWeight: 600 }}>{servPendingN} request{servPendingN > 1 ? 's' : ''} waiting for your reply</div>
-              </React.Fragment>
-            ) : (
-              <React.Fragment>
-                <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5 }}>You’re serving · {servNext.teamName}<ServingNewDot n={servNew} /></div>
-                <div style={{ fontSize: 12.5, color: 'var(--sage)', fontWeight: 600 }}>{servNext.role} · {fmtServe(servNext.date)}</div>
-              </React.Fragment>
-            )}
+      {!ctx.church ? null : servHidden ? null : (servNext || servPendingN) ? (
+        <div style={{ position: "relative", marginBottom: 22, animation: "trinityFade .5s ease both" }}>
+          <div onClick={() => openServingAndShow()} style={{ display: "flex", alignItems: "center", gap: 13, padding: 14, borderRadius: 18, cursor: "pointer", boxShadow: "var(--shadow)",
+            background: servPendingN ? "color-mix(in oklab, var(--gold) 9%, var(--surface))" : "color-mix(in oklab, var(--sage) 9%, var(--surface))",
+            border: servPendingN ? "1px solid color-mix(in oklab, var(--gold) 32%, var(--line))" : "1px solid color-mix(in oklab, var(--sage) 30%, var(--line))" }}>
+            <div style={{ width: 46, height: 46, borderRadius: 14, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center",
+              background: servPendingN ? "color-mix(in oklab, var(--gold) 18%, var(--surface))" : "color-mix(in oklab, var(--sage) 16%, var(--surface))", color: servPendingN ? "#8a6717" : "var(--sage)" }}><Icon name={servPendingN ? "sparkle" : "calCheck"} size={22} stroke={1.8} /></div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              {servPendingN ? (
+                <React.Fragment>
+                  <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15.5 }}>Can you serve?<ServingNewDot n={servNew} /></div>
+                  <div style={{ fontSize: 12.5, color: "#8a6717", fontWeight: 600 }}>{servPendingN} request{servPendingN > 1 ? "s" : ""} waiting for your reply</div>
+                </React.Fragment>
+              ) : (
+                <React.Fragment>
+                  <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15.5 }}>You{"’"}re serving {"·"} {servNext.teamName}<ServingNewDot n={servNew} /></div>
+                  <div style={{ fontSize: 12.5, color: "var(--sage)", fontWeight: 600 }}>{servNext.role} {"·"} {fmtServe(servNext.date)}</div>
+                </React.Fragment>
+              )}
+            </div>
+            <Icon name="chevR" size={18} color="var(--ink-3)" />
           </div>
-          <Icon name="chevR" size={18} color="var(--ink-3)" />
+          <button onClick={dismissServing} aria-label="Dismiss" style={{ position: "absolute", top: -6, right: -6, width: 24, height: 24, borderRadius: 999, border: "1px solid var(--line)", background: "var(--surface)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", padding: 0, boxShadow: "var(--shadow)" }}><Icon name="x" size={13} stroke={2.4} color="var(--ink-3)" /></button>
         </div>
       ) : (
-        /* not rostered yet — still surface Serving & events so it's always reachable */
-        <div onClick={() => ctx.openServing && ctx.openServing()} style={{ display: 'flex', alignItems: 'center', gap: 13, padding: 14, borderRadius: 18, marginBottom: 22, cursor: 'pointer', boxShadow: 'var(--shadow)', animation: 'trinityFade .5s ease both', background: 'var(--surface)', border: '1px solid var(--line)' }}>
-          <div style={{ width: 46, height: 46, borderRadius: 14, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage)' }}><Icon name="calCheck" size={22} stroke={1.8} /></div>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            {/* The title and its dot are ONE line. "What’s happening" plus a "9+" badge is wider than the
-                old "Serving & events" was, and at 320px it wrapped and grew the card 79px -> 95px
-                (serving-card-says-whats-new.test.mjs catches exactly this). nowrap + ellipsis keeps the
-                dot beside the title instead of under it; minWidth:0 lets the ellipsis actually engage. */}
-            <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, display: 'flex', alignItems: 'center', minWidth: 0 }}>
-              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>What’s happening</span>
-              <ServingNewDot n={servNew} />
+        <div style={{ position: "relative", marginBottom: 22, animation: "trinityFade .5s ease both" }}>
+          <div onClick={() => openServingAndShow()} style={{ display: "flex", alignItems: "center", gap: 13, padding: 14, borderRadius: 18, cursor: "pointer", boxShadow: "var(--shadow)", background: "var(--surface)", border: "1px solid var(--line)" }}>
+            <div style={{ width: 46, height: 46, borderRadius: 14, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "color-mix(in oklab, var(--sage) 16%, var(--surface))", color: "var(--sage)" }}><Icon name="calCheck" size={22} stroke={1.8} /></div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              {/* The title and its dot are ONE line. "What’s happening" plus a "9+" badge is wider than the
+                  old "Serving & events" was, and at 320px it wrapped and grew the card 79px -> 95px
+                  (serving-card-says-whats-new.test.mjs catches exactly this). nowrap + ellipsis keeps the
+                  dot beside the title instead of under it; minWidth:0 lets the ellipsis actually engage. */}
+              <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15.5, display: "flex", alignItems: "center", minWidth: 0 }}>
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>What{"’"}s happening</span>
+                <ServingNewDot n={servNew} />
+              </div>
+              <div style={{ fontSize: 12.5, color: "var(--ink-3)", fontWeight: 600 }}>See what{"’"}s on {"·"} RSVP {"·"} your rota{(_care.settings && _care.settings.enabled) ? <span onClick={(e) => { e.stopPropagation(); ctx.openServing && ctx.openServing("care"); }} style={{ color: "var(--clay)" }}> {"·"} Care</span> : null}</div>
             </div>
-            <div style={{ fontSize: 12.5, color: 'var(--ink-3)', fontWeight: 600 }}>See what’s on · RSVP · your rota{(_care.settings && _care.settings.enabled) ? <span onClick={(e) => { e.stopPropagation(); ctx.openServing && ctx.openServing('care'); }} style={{ color: 'var(--clay)' }}> · Care</span> : null}</div>
+            <Icon name="chevR" size={18} color="var(--ink-3)" />
           </div>
-          <Icon name="chevR" size={18} color="var(--ink-3)" />
+          <button onClick={dismissServing} aria-label="Dismiss" style={{ position: "absolute", top: -6, right: -6, width: 24, height: 24, borderRadius: 999, border: "1px solid var(--line)", background: "var(--surface)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", padding: 0, boxShadow: "var(--shadow)" }}><Icon name="x" size={13} stroke={2.4} color="var(--ink-3)" /></button>
         </div>
       )}
 

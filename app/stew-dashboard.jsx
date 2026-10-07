@@ -3900,7 +3900,7 @@ function GroupChatModal({ group, onClose }) {
   const isTeam = group.kind === 'team';
   const accent = isTeam ? (group.accent || 'var(--clay)') : group.kind === 'broadcast' ? '#8a6717' : 'var(--sage)';
   return (
-    <div style={{ width: 344, maxWidth: 'calc(100vw - 48px)', height: 480, maxHeight: '82vh', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderRadius: '16px 16px 0 0', border: '1px solid var(--line)', borderBottom: 'none', boxShadow: 'var(--shadow-lg)', overflow: 'hidden', animation: 'lumenRise .22s cubic-bezier(.2,.8,.3,1.1) both' }}>
+    <div style={{ width: '100%', maxWidth: 'calc(100vw - 32px)', height: 480, maxHeight: '82vh', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderRadius: '16px 16px 0 0', border: '1px solid var(--line)', borderBottom: 'none', boxShadow: 'var(--shadow-lg)', overflow: 'hidden', animation: 'lumenRise .22s cubic-bezier(.2,.8,.3,1.1) both' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '13px 15px', borderBottom: '1px solid var(--line)' }}>
           <div style={{ width: 36, height: 36, borderRadius: 11, background: `color-mix(in oklab, ${accent} 16%, var(--surface))`, color: accent, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={isTeam ? (group.icon || 'shield') : group.kind === 'broadcast' ? 'send' : 'chat'} size={19} /></div>
           <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16 }}>{group.name}</div><div style={{ fontSize: 12, color: 'var(--ink-3)' }}>{isTeam ? 'Team chat' : group.kind === 'broadcast' ? 'Broadcast' : 'Group chat'} · you post as the church</div></div>
@@ -7135,68 +7135,65 @@ function DashMembers() {
       </div>
     );
   };
-  return (
-    <Panel title="Members" action={<span style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>{/* "Invite your church" printed cards hidden for the pilot — re-add this button to restore (BulkInviteModal + state remain below) */}<SkPill tint="sage">{total ? `${activeM.length} active${chatting ? ` · ${chatting} chatting` : ''}` : 'none yet'}</SkPill></span>} style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      {/* EVERYONE WHO HOLDS THIS CHURCH, ON THE SCREEN CALLED MEMBERS. An owner who had just given three
-          people the run of the church read "No members yet" here — because a delegated steward is not a
-          member, and nothing anywhere listed them together. Their words: there is no single screen showing
-          everyone with access. This is that screen; the roster's own panel stays the place to change it. */}
-      {stewardRoster.length ? (
-        <div style={{ padding: '11px 13px', borderRadius: 12, marginBottom: 12, background: 'color-mix(in oklab, var(--gold, #b58a2b) 9%, var(--surface))', border: '1px solid var(--line)' }}>
-          <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '.4px', color: 'var(--ink-3)', marginBottom: 7 }}>PEOPLE WHO HELP RUN THIS CHURCH · {stewardRoster.length}</div>
-          {stewardRoster.map(pk => {
-            const S = window.Steward;
-            const nm = ((S.stewardLabels && S.stewardLabels()) || {})[pk] || (S.stewardName ? S.stewardName(pk) : '') || 'Steward';
-            const cp = ((S.stewardCaps && S.stewardCaps()) || {})[pk];
-            // THE SAME WORDS THE DELEGATED-STEWARDS PANEL USES: this line printed the stored capability keys
-            // raw ("content, sealedrooms"). Sim 2026-10-02 #55.
-            const what = !Array.isArray(cp) ? 'everything' : (cp.length ? cp.map(c => STEW_CAP_LABEL[c] || c).join(', ') : 'nothing yet');
+  const dmPanel = dmConvos.length ? (
+    <div style={{ borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface)', overflow: 'hidden', ...(narrow ? { marginBottom: 12 } : {}) }}>
+      <div onClick={narrow ? () => setDmOpen(v => !v) : undefined} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '12px 14px', ...(narrow ? { cursor: 'pointer', userSelect: 'none' } : {}) }}>
+        <Icon name="chat" size={16} color="var(--clay-ink)" />
+        <div style={{ flex: 1, fontWeight: 800, fontSize: 13, color: 'var(--ink)' }}>Private messages · {dmConvos.length}</div>
+        {narrow ? <Icon name={dmOpen ? 'chevU' : 'chevD'} size={14} color="var(--ink-3)" /> : null}
+      </div>
+      {(!narrow || dmOpen) ? (
+        <div className="no-scrollbar" style={{ overflowY: 'auto', padding: '0 10px 10px', display: 'flex', flexDirection: 'column', gap: 6, ...(narrow ? { maxHeight: 240 } : {}) }}>
+          {dmConvos.map(c => {
+            const m = members.find(x => x.pubkey === c.peer);
+            const name = (m && m.name) || 'Member';
+            const handle = m && m.nip05 ? m.nip05 : null;
+            const initials = (name !== 'Member' ? name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'AN').toUpperCase();
             return (
-              <div key={pk} style={{ display: 'flex', alignItems: 'baseline', gap: 8, fontSize: 13, color: 'var(--ink-2)', padding: '2px 0' }}>
-                <span style={{ fontWeight: 700, color: 'var(--ink)' }}>{nm}</span>
-                <span style={{ fontSize: 12, color: 'var(--ink-3)' }}>{what}</span>
+              <div key={c.peer} onClick={() => openDm(c)} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)', cursor: 'pointer' }}>
+                <SkBadge initials={initials} av={(m && m.av) || null} pubkey={c.peer} size={32} radius={10} accent={SK_TINT.gold.fg} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14, lineHeight: 1.3 }}>{name}</div>
+                  {handle ? <div style={{ fontSize: 11.5, color: 'var(--sage-ink)', fontWeight: 700, fontFamily: 'var(--font-ui)' }}>@{handle}</div> : null}
+                </div>
+                <Icon name="chat" size={15} color="var(--clay-ink)" />
               </div>
             );
           })}
-          <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 6, lineHeight: 1.45 }}>
-            {/* Delegates read this list too (round 7 — a steward found it and called it the one page naming
-                who runs the church). Settings → Security is owner-only, so pointing them there sends them to
-                a door that is not there for them. */}
-            They sign in with their own keys, not yours. {delegated
-              ? 'Only whoever holds the church key can change what they may do, or remove them.'
-              : 'Change what they may do, or remove them, under Settings → Security → Delegated stewards.'}
-          </div>
         </div>
       ) : null}
-      {dmConvos.length ? (
-        <div style={{ marginBottom: 12, borderRadius: 14, border: '1px solid var(--line)', background: 'var(--surface)', overflow: 'hidden' }}>
-          <div onClick={() => setDmOpen(v => !v)} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '12px 14px', cursor: 'pointer', userSelect: 'none' }}>
-            <Icon name="chat" size={16} color="var(--clay-ink)" />
-            <div style={{ flex: 1, fontWeight: 800, fontSize: 13, color: 'var(--ink)' }}>Private messages · {dmConvos.length}</div>
-            <Icon name={dmOpen ? 'chevU' : 'chevD'} size={14} color="var(--ink-3)" />
+    </div>
+  ) : null;
+
+  const stewardRosterPanel = stewardRoster.length ? (
+    <div style={{ padding: '11px 13px', borderRadius: 12, marginBottom: 12, background: 'color-mix(in oklab, var(--gold, #b58a2b) 9%, var(--surface))', border: '1px solid var(--line)' }}>
+      <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '.4px', color: 'var(--ink-3)', marginBottom: 7 }}>PEOPLE WHO HELP RUN THIS CHURCH · {stewardRoster.length}</div>
+      {stewardRoster.map(pk => {
+        const S = window.Steward;
+        const nm = ((S.stewardLabels && S.stewardLabels()) || {})[pk] || (S.stewardName ? S.stewardName(pk) : '') || 'Steward';
+        const cp = ((S.stewardCaps && S.stewardCaps()) || {})[pk];
+        const what = !Array.isArray(cp) ? 'everything' : (cp.length ? cp.map(c => STEW_CAP_LABEL[c] || c).join(', ') : 'nothing yet');
+        return (
+          <div key={pk} style={{ display: 'flex', alignItems: 'baseline', gap: 8, fontSize: 13, color: 'var(--ink-2)', padding: '2px 0' }}>
+            <span style={{ fontWeight: 700, color: 'var(--ink)' }}>{nm}</span>
+            <span style={{ fontSize: 12, color: 'var(--ink-3)' }}>{what}</span>
           </div>
-          {dmOpen ? (
-            <div className="no-scrollbar" style={{ maxHeight: 240, overflowY: 'auto', padding: '0 10px 10px', display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {dmConvos.map(c => {
-                const m = members.find(x => x.pubkey === c.peer);
-                const name = (m && m.name) || 'Member';
-                const handle = m && m.nip05 ? m.nip05 : null;
-                const initials = (name !== 'Member' ? name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'AN').toUpperCase();
-                return (
-                  <div key={c.peer} onClick={() => openDm(c)} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)', cursor: 'pointer' }}>
-                    <SkBadge initials={initials} av={(m && m.av) || null} pubkey={c.peer} size={32} radius={10} accent={SK_TINT.gold.fg} />
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontWeight: 700, fontSize: 14, lineHeight: 1.3 }}>{name}</div>
-                      <div style={{ fontSize: 11.5, color: handle ? 'var(--sage-ink)' : 'var(--ink-3)', fontWeight: handle ? 700 : 400, fontFamily: handle ? 'var(--font-ui)' : 'var(--mono)' }}>{handle ? '@' + handle : shortNpub(c.npub)}</div>
-                    </div>
-                    <Icon name="chat" size={15} color="var(--clay-ink)" />
-                  </div>
-                );
-              })}
-            </div>
-          ) : null}
-        </div>
-      ) : null}
+        );
+      })}
+      <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 6, lineHeight: 1.45 }}>
+        They sign in with their own keys, not yours. {delegated
+          ? 'Only whoever holds the church key can change what they may do, or remove them.'
+          : 'Change what they may do, or remove them, under Settings → Security → Delegated stewards.'}
+      </div>
+    </div>
+  ) : null;
+
+  return (
+    <Panel title="Members" action={<span style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>{/* "Invite your church" printed cards hidden for the pilot — re-add this button to restore (BulkInviteModal + state remain below) */}<SkPill tint="sage">{total ? `${activeM.length} active${chatting ? ` · ${chatting} chatting` : ''}` : 'none yet'}</SkPill></span>} style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+      <div style={narrow ? {} : { display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 16, flex: 1, minHeight: 0 }}>
+      <div className="no-scrollbar" style={narrow ? {} : { overflowY: 'auto', minHeight: 0 }}>
+      {stewardRosterPanel}
+      {narrow ? dmPanel : null}
       {/* A rotation that did not land. Rendered at the top of the panel and NOT tied to the confirm dialog,
           which has already closed by the time the publish resolves — the same mistake that made the safety
           check's warning unreachable three times. It stays until dismissed: the steward believes the person
@@ -7405,6 +7402,9 @@ function DashMembers() {
         </div>
         </React.Fragment>
       )}
+      </div>
+      {!narrow ? <div className="no-scrollbar" style={{ overflowY: 'auto', minHeight: 0 }}>{dmPanel}</div> : null}
+      </div>
       {/* The phone's ⋯ sheet. Looked up by pubkey on every render so its labels follow the state they act on
           ("Mark as child" becomes "No longer a child" once the list lands); it goes with the member if they are
           blocked or filtered away while it is open. */}
@@ -10430,6 +10430,11 @@ function DashBrandingPanel({ church }) {
   // the relay) visibly reverts to 16 after you set it. Clearing (accent → '') is a defined value, so it still syncs.
   React.useEffect(() => { if (church.accent !== undefined) setAccentState(church.accent || ''); }, [church.accent]);
   const [cropFile, setCropFile] = React.useState(null);
+  const [titleCol, setTitleColState] = React.useState(church.titleColor || '');
+  const titleColTimer = React.useRef(null);
+  React.useEffect(() => { if (church.titleColor !== undefined) setTitleColState(church.titleColor || ''); }, [church.titleColor]);
+  const onTitleCol = (v) => { setTitleColState(v); if (titleColTimer.current) clearTimeout(titleColTimer.current); titleColTimer.current = setTimeout(() => window.Steward.publishProfile({ titleColor: v }), 400); };
+  const resetTitleCol = () => { if (titleColTimer.current) clearTimeout(titleColTimer.current); setTitleColState(''); window.Steward.publishProfile({ titleColor: '' }); };
   const [fade, setFadeState] = React.useState(typeof church.bannerFade === 'number' ? church.bannerFade : 16);
   const fadeTimer = React.useRef(null);
   React.useEffect(() => { if (typeof church.bannerFade === 'number') setFadeState(church.bannerFade); }, [church.bannerFade]);
@@ -10466,7 +10471,7 @@ function DashBrandingPanel({ church }) {
         <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to top, rgba(0,0,0,.55), rgba(0,0,0,0) 60%)' }} />
         <div style={{ position: 'absolute', left: 12, bottom: 10, display: 'flex', alignItems: 'center', gap: 10 }}>
           <SkBadge initials={initials} picture={church.picture} accent={acc} size={36} radius={999} style={{ boxShadow: '0 2px 8px rgba(0,0,0,.35)' }} />
-          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 16, color: '#fff', textShadow: '0 1px 6px rgba(0,0,0,.6)' }}>{church.name || 'Your church'}</div>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 16, color: titleCol || '#fff', textShadow: '0 1px 6px rgba(0,0,0,.6)' }}>{church.name || 'Your church'}</div>
         </div>
       </div>
       <div style={{ display: 'flex', gap: 9, marginTop: 10 }}>
@@ -10484,6 +10489,23 @@ function DashBrandingPanel({ church }) {
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <input type="range" min="0" max="80" step="2" value={fade} onChange={e => onFade(Number(e.target.value))} style={{ flex: 1, accentColor: acc }} />
             <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--ink-2)', minWidth: 52, textAlign: 'right' }}>{fade === 0 ? 'None' : fade + '%'}</span>
+          </div>
+        </div>
+      ) : null}
+
+      {church.banner ? (
+        <div style={{ marginTop: 14 }}>
+          <div style={lbl}>Title colour</div>
+          <div className="set-note" style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 8 }}>The colour of your church name on top of the banner image.</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+            {['#FFFFFF', '#F5F0E8', '#1A1815', '#C9B99A'].map(s => (
+              <button key={s} onClick={() => onTitleCol(s)} title={s} style={{ width: 28, height: 28, borderRadius: 999, background: s, cursor: 'pointer', border: (titleCol || '#FFFFFF').toUpperCase() === s ? '3px solid var(--ink)' : '1px solid var(--line)', padding: 0 }} />
+            ))}
+            <label title="Pick any colour" style={{ position: 'relative', width: 34, height: 34, borderRadius: 999, cursor: 'pointer', flexShrink: 0, background: 'conic-gradient(#f00,#ff0,#0f0,#0ff,#00f,#f0f,#f00)', border: '2px solid var(--line)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <span style={{ width: 16, height: 16, borderRadius: 999, background: titleCol || '#fff', border: '2px solid var(--surface)', boxShadow: '0 0 0 1px var(--line)' }} />
+              <input type="color" value={titleCol || '#ffffff'} onChange={e => onTitleCol(e.target.value)} aria-label="Title colour picker" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 'none', padding: 0, cursor: 'pointer', opacity: 0 }} />
+            </label>
+            {titleCol ? <button onClick={resetTitleCol} title="Reset to white" style={{ border: 'none', background: 'none', padding: '4px 6px', color: 'var(--clay-ink)', fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 12.5 }}>Reset</button> : null}
           </div>
         </div>
       ) : null}
@@ -11588,7 +11610,7 @@ function StewDmWindow({ peer, offset, onClose }) {
 
 function MemberChatDock() {
   const [peers, setPeers] = React.useState([]);
-  const [grps, setGrps] = React.useState([]);   // group chats docked alongside DMs — several windows along the bottom
+  const [grps, setGrps] = React.useState([]);
   React.useEffect(() => {
     const onDm = (e) => { const p = e.detail; if (!p || !p.pubkey) return; setPeers(ps => ps.some(x => x.pubkey === p.pubkey) ? ps : [...ps, p].slice(-3)); };
     const onGrp = (e) => { const g = e.detail; if (!g || !g.id) return; setGrps(gs => gs.some(x => x.id === g.id) ? gs : [...gs, g].slice(-3)); };
@@ -11598,11 +11620,12 @@ function MemberChatDock() {
   }, []);
   const close = (pk) => setPeers(ps => ps.filter(x => x.pubkey !== pk));
   const closeG = (id) => setGrps(gs => gs.filter(x => x.id !== id));
-  if (!peers.length && !grps.length) return null;
+  const total = peers.length + grps.length;
+  if (!total) return null;
   return (
-    <div style={{ position: 'fixed', right: 16, bottom: 0, zIndex: 130, display: 'flex', flexDirection: 'row-reverse', alignItems: 'flex-end', gap: 8, pointerEvents: 'none' }}>
-      {grps.map(function(g) { return <div key={g.id} style={{ width: 340, maxWidth: '40vw', pointerEvents: 'auto' }}><GroupChatModal group={g} onClose={function() { closeG(g.id); }} /></div>; })}
-      {peers.map(function(p) { return <div key={p.pubkey} style={{ width: 340, maxWidth: '40vw', pointerEvents: 'auto' }}><StewDmWindow peer={p} onClose={function() { close(p.pubkey); }} /></div>; })}
+    <div style={{ position: 'fixed', right: 16, bottom: 0, zIndex: 130, display: 'flex', flexDirection: 'row-reverse', alignItems: 'flex-end', gap: 8, maxWidth: 'calc(100vw - 32px)', pointerEvents: 'none' }}>
+      {grps.map(function(g) { return <div key={g.id} style={{ width: total > 1 ? 'calc((100vw - 48px) / ' + total + ')' : 380, maxWidth: 380, minWidth: 260, flexShrink: 1, pointerEvents: 'auto' }}><GroupChatModal group={g} onClose={function() { closeG(g.id); }} /></div>; })}
+      {peers.map(function(p) { return <div key={p.pubkey} style={{ width: total > 1 ? 'calc((100vw - 48px) / ' + total + ')' : 380, maxWidth: 380, minWidth: 260, flexShrink: 1, pointerEvents: 'auto' }}><StewDmWindow peer={p} onClose={function() { close(p.pubkey); }} /></div>; })}
     </div>
   );
 }
