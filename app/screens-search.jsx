@@ -111,7 +111,7 @@ function SearchScreen({ ctx, onBack }) {
           ) : (
             <React.Fragment>
               {dictHits.length && hits.length ? (
-                <div className=”no-scrollbar” style={{ display: 'flex', gap: 0, marginBottom: 16, borderRadius: 12, border: '1px solid var(--line)', overflow: 'hidden' }}>
+                <div className="no-scrollbar" style={{ display: 'flex', gap: 0, marginBottom: 16, borderRadius: 12, border: '1px solid var(--line)', overflow: 'hidden' }}>
                   {[['words', 'Words · ' + dictHits.length], ['verses', 'Verses · ' + hits.length + (hits.length >= 250 ? '+' : '')]].map(([k, label]) => (
                     <button key={k} onClick={() => setTab(k)} style={{ flex: 1, padding: '10px 0', border: 'none', cursor: 'pointer',
                       fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13.5,
@@ -145,7 +145,7 @@ function SearchScreen({ ctx, onBack }) {
               {tab !== 'words' ? (
                 <React.Fragment>
                   <div style={{ fontSize: 13.5, color: 'var(--ink-2)', marginBottom: 18 }}>
-                    <b style={{ color: 'var(--ink)' }}>{hits.length}{hits.length >= 250 ? '+' : ''}</b> result{hits.length === 1 ? '' : 's'} for “<b style={{ color: 'var(--clay)' }}>{active}</b>”
+                    <b style={{ color: 'var(--ink)' }}>{hits.length}{hits.length >= 250 ? '+' : ''}</b> result{hits.length === 1 ? '' : 's'} for "<b style={{ color: 'var(--clay)' }}>{active}</b>"
                   </div>
                   {hits.length ? (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
@@ -154,7 +154,7 @@ function SearchScreen({ ctx, onBack }) {
                           padding: 15, borderRadius: 16, background: 'var(--surface)', border: '1px solid var(--line)', cursor: 'pointer', boxShadow: 'var(--shadow)' }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                             <div style={{ fontWeight: 700, color: 'var(--clay)', fontSize: 13.5 }}>{r.ref}</div>
-                            <Icon name=”chevR” size={14} color=”var(--clay)” style={{ marginLeft: 'auto', flexShrink: 0 }} />
+                            <Icon name="chevR" size={14} color="var(--clay)" style={{ marginLeft: 'auto', flexShrink: 0 }} />
                           </div>
                           <p style={{ margin: '4px 0 0', fontFamily: 'var(--font-read)', fontSize: 16.5, lineHeight: 1.5, color: 'var(--ink)', textWrap: 'pretty' }}
                             dangerouslySetInnerHTML={{ __html: window.sanitizeHtml(hl(r.text)) }} />
@@ -164,12 +164,12 @@ function SearchScreen({ ctx, onBack }) {
                   ) : (
                     <React.Fragment>
                       <p style={{ color: 'var(--ink-2)', fontFamily: 'var(--font-read)', fontSize: 16.5, lineHeight: 1.55, marginBottom: 14 }}>
-                        No verses in this translation match “{active}”. Try another word, switch translations in the reader, or add another from the catalogue.
+                        No verses in this translation match "{active}". Try another word, switch translations in the reader, or add another from the catalogue.
                       </p>
                       <button onClick={() => ctx.openStore('language', 'bibles')} style={{ display: 'inline-flex', alignItems: 'center', gap: 9,
                         padding: '12px 16px', borderRadius: 14, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', fontWeight: 700, fontSize: 14.5,
                         fontFamily: 'var(--font-ui)', cursor: 'pointer' }}>
-                        <Icon name=”globe” size={17} color=”#fff” /> Search 1,000+ translations</button>
+                        <Icon name="globe" size={17} color="#fff" /> Search 1,000+ translations</button>
                     </React.Fragment>
                   )}
                 </React.Fragment>
