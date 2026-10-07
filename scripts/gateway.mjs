@@ -23,7 +23,7 @@ import { D, MEMBER_WRITABLE_TYPES } from './trinity-doc-types.mjs';   // NAMES, 
 import { buildCalendar, publicEventFields } from './public-calendar.mjs';   // the church's PUBLIC calendar feed (pure: no I/O, no policy)
 import { buildWidgetScript } from './public-widget.mjs';   // the embeddable calendar widget (pure: same script for every church)
 import { buildVersePage } from './public-verse.mjs';       // standalone verse page for public sharing (pure: no I/O, no store)
-import { buildSermonFeed, publicSermonFields, buildPlansFeed, publicPlanFields } from './public-media.mjs';   // the church's PUBLIC sermon podcast feed (pure: no I/O, no policy)
+import { buildSermonFeed, publicSermonFields, buildPlansFeed, publicPlanFields, buildDevosFeed, publicDevoFields } from './public-media.mjs';   // the church's PUBLIC sermon podcast feed (pure: no I/O, no policy)
 // WHO MAY HOLD THE CHECK-IN HELPER KEY is asked in ONE place, and this is not it — see the file's own header.
 // The relay imports three things and derives nothing: the parser (so a grant means the same to the box that
 // stores it and the console that mints it), and the declared-source test (so a grant cannot claim a
@@ -2978,6 +2978,7 @@ const SHARE_BY = new Map();     // churchpub -> { calendar: bool, optOut: Set(ev
 const PUBEVENTS = new Map();    // churchpub -> Map(eventId -> the noticeboard fields, as publicEventFields() admits them)
 const PUBSERMONS = new Map();   // churchpub -> Map(sermonId -> noticeboard fields, as publicSermonFields() admits them)
 const PUBPLANS = new Map();    // churchpub -> Map(planId -> plan fields, as publicPlanFields() admits them)
+const PUBDEVOS = new Map();    // churchpub -> Map(devoId -> devotional fields, as publicDevoFields() admits them)
 
 // ---- marketing email capture (website "Stay updated" form) — opt-in list, stored locally ----
 const SUBS_FILE = join(DATA_DIR,'subscribers.json');
@@ -3288,7 +3289,7 @@ function clearDerivedMaps() {
                    GROUP_LEADERS, GROUP_LEADER_BY, GROUP_EVENTPOLICY, STEWARDS_BY, STEWARD_CAPS, BLOCKED_BY, MINORS_BY, APPROVED_BY, NOPHOTO_BY,
                    GUARDIANS_BY, NETWORKS_BY, ADMITTED_BY, ADMITTED_SRC, ROSTER_BY, ROSTER_PEOPLE, MEALS_ADMIN_GROUP, ROTA_VIS, CHECKIN_HELPERS,
                    CHECKIN_PERMITS,
-                   FINANCE_SEQ, FIN_SEEN, CARE_RECIPIENT, CARE_SKIPHASH, PEER_URLS, TRUSTED_RELAYS, EVENT_AUDIENCE, SHARE_BY, PUBEVENTS, PUBSERMONS, PUBPLANS]) { try { m.clear(); } catch {} }
+                   FINANCE_SEQ, FIN_SEEN, CARE_RECIPIENT, CARE_SKIPHASH, PEER_URLS, TRUSTED_RELAYS, EVENT_AUDIENCE, SHARE_BY, PUBEVENTS, PUBSERMONS, PUBPLANS, PUBDEVOS]) { try { m.clear(); } catch {} }
   // CHECKIN_PERMITS was missing here, and it is the HALF OF THE CONJUNCTION THE WHOLE 2026-09-09 RESTRUCTURE
   // RESTS ON. Added 2026-09-10. It was the only line on which the two check-in siblings differed, and it
   // failed OPEN in exactly the class the GROUP_CHILDSAFE note below describes.
@@ -3503,7 +3504,11 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
       const horizonMonths = [3, 6, 12].includes(c && c.horizonMonths) ? c.horizonMonths : 6;
       const calName = String((c && c.calName) || '').slice(0, 120);
       const detail = (c && c.detail === 'short') ? 'short' : 'full';
-      SHARE_BY.set(e.pubkey, { calendar: !!(c && c.calendar === true), sermons: !!(c && c.sermons === true), plans: !!(c && c.plans === true), optOut, horizonMonths, calName, detail });
+      const sermonFeedName = String((c && c.sermonFeedName) || '').slice(0, 120);
+      const sermonLimit = (c && typeof c.sermonLimit === 'number' && c.sermonLimit >= 0 && c.sermonLimit <= 100) ? Math.floor(c.sermonLimit) : 10;
+      const planLimit = (c && typeof c.planLimit === 'number' && c.planLimit >= 0 && c.planLimit <= 100) ? Math.floor(c.planLimit) : 0;
+      const devoLimit = (c && typeof c.devoLimit === 'number' && c.devoLimit >= 0 && c.devoLimit <= 100) ? Math.floor(c.devoLimit) : 0;
+      SHARE_BY.set(e.pubkey, { calendar: !!(c && c.calendar === true), sermons: !!(c && c.sermons === true), plans: !!(c && c.plans === true), devos: !!(c && c.devos === true), optOut, horizonMonths, calName, detail, sermonFeedName, sermonLimit, planLimit, devoLimit });
     }
   }
   else if (d.startsWith(PUBEVENT_D) && CHURCH_PUBS.has(e.pubkey)) {
@@ -3543,6 +3548,19 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
       else {
         let c = null; try { c = JSON.parse(e.content); } catch {}
         const f = publicPlanFields({ ...(c && typeof c === 'object' ? c : {}), id, ts: e.created_at });
+        if (f) m.set(id, f); else m.delete(id);
+      }
+    }
+  }
+  else if (d.startsWith(DEVO_D)) {
+    const church = CHURCH_PUBS.has(e.pubkey) ? e.pubkey : '';
+    if (church) {
+      const id = d.slice(DEVO_D.length);
+      let m = PUBDEVOS.get(church); if (!m) { m = new Map(); PUBDEVOS.set(church, m); }
+      if (removed || (e.tags || []).some(t => t[0] === 'deleted') || !e.content) { m.delete(id); if (!m.size) PUBDEVOS.delete(church); }
+      else {
+        let c = null; try { c = JSON.parse(e.content); } catch {}
+        const f = publicDevoFields({ ...(c && typeof c === 'object' ? c : {}), id, ts: e.created_at });
         if (f) m.set(id, f); else m.delete(id);
       }
     }
@@ -6120,8 +6138,10 @@ const PUBLIC_CSP = "default-src 'none'; frame-ancestors 'none'; base-uri 'none';
 const WIDGET_CSP = "default-src 'none'; script-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
 const PUBLIC_ROUTE = /^\/public\/(npub1[a-z0-9]{58})\/(?:calendar\.ics|e\/([A-Za-z0-9_-]{1,64})\.ics)$/;
 const WIDGET_ROUTE = /^\/public\/(npub1[a-z0-9]{58})\/widget\.js$/;
+const WIDGET_PREVIEW_ROUTE = /^\/public\/(npub1[a-z0-9]{58})\/widget-preview$/;
 const SERMON_FEED_ROUTE = /^\/public\/(npub1[a-z0-9]{58})\/sermons\.xml$/;
 const PLANS_FEED_ROUTE = /^\/public\/(npub1[a-z0-9]{58})\/plans\.json$/;
+const DEVOS_FEED_ROUTE = /^\/public\/(npub1[a-z0-9]{58})\/devotionals\.json$/;
 const PUBLIC_MEDIA_ROUTE = /^\/public\/(npub1[a-z0-9]{58})\/media\/([0-9a-f]{64})$/;
 // Built once — the script is identical for every church, so there is nothing per-church to rebuild per request.
 let _widgetJs = null;
@@ -6156,6 +6176,26 @@ function publicFeed(req, res, route) {
     res.end(req.method === 'HEAD' ? undefined : wbody);
     return;
   }
+  // WIDGET PREVIEW — /public/<npub>/widget-preview?mode=list|compact|month. A minimal HTML page that
+  // embeds the widget script so the steward console can show a live preview in an iframe.
+  const wp = WIDGET_PREVIEW_ROUTE.exec(route);
+  if (wp) {
+    const wpcp = toHexPub(wp[1]);
+    if (!wpcp || !CHURCH_PUBS.has(wpcp)) return notFound();
+    const wpshare = SHARE_BY.get(wpcp);
+    const wpModeRaw = req.url && new URL('http://x' + req.url).searchParams.get('mode');
+    const wpMode = ['list', 'compact', 'month', 'sermons', 'sermons-sm', 'sermons-lg', 'plans', 'plans-sm', 'plans-lg', 'devos', 'devos-sm', 'devos-lg'].includes(wpModeRaw) ? wpModeRaw : 'list';
+    const wpNeedsFlag = wpMode.startsWith('sermons') ? 'sermons' : wpMode.startsWith('plans') ? 'plans' : wpMode.startsWith('devos') ? 'devos' : 'calendar';
+    if (!wpshare || !wpshare[wpNeedsFlag]) return notFound();
+    const wpHtml = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:12px;font-family:system-ui,-apple-system,sans-serif;background:#f7f4ef}</style></head><body><script src="/public/${wp[1]}/widget.js?v=${BUILD.short}&_=${Date.now()}" data-mode="${wpMode}" data-preview="1"><\/script></body></html>`;
+    const wpBody = Buffer.from(wpHtml, 'utf8');
+    res.writeHead(200, {
+      'Content-Type': 'text/html; charset=utf-8', 'Content-Length': wpBody.length,
+      'Cache-Control': 'no-store', 'X-Frame-Options': 'SAMEORIGIN', ...SEC_HEADERS,
+    });
+    res.end(req.method === 'HEAD' ? undefined : wpBody);
+    return;
+  }
   // SERMON PODCAST FEED — /public/<npub>/sermons.xml. Same gate as the calendar: the church must exist
   // on this relay and have sermons sharing on. The RSS carries only noticeboard fields (title, speaker,
   // scripture ref, duration) and a content-addressed media URL on this same relay.
@@ -6166,7 +6206,9 @@ function publicFeed(req, res, route) {
     const sshare = SHARE_BY.get(scp);
     if (!sshare || !sshare.sermons) return notFound();
     const all = PUBSERMONS.get(scp);
-    const sermons = all ? [...all.values()] : [];
+    let sermons = all ? [...all.values()] : [];
+    sermons.sort((a, b) => ((b.contentTs || b.ts || b.at || 0) - (a.contentTs || a.ts || a.at || 0)));
+    if (sshare.sermonLimit) sermons = sermons.slice(0, sshare.sermonLimit);
     let sname = (sshare.sermonFeedName || '').trim();
     if (!sname) try { const prof = store.query({ kinds: [0], authors: [scp], limit: 1 })[0]; if (prof) sname = String(JSON.parse(prof.content || '{}').name || '').slice(0, 120); } catch {}
     const proto = req.headers['x-forwarded-proto'] || (req.socket.encrypted ? 'https' : 'http');
@@ -6189,7 +6231,8 @@ function publicFeed(req, res, route) {
     const pshare = SHARE_BY.get(pcp);
     if (!pshare || !pshare.plans) return notFound();
     const all = PUBPLANS.get(pcp);
-    const plans = all ? [...all.values()] : [];
+    let plans = all ? [...all.values()] : [];
+    if (pshare.planLimit) plans = plans.slice(0, pshare.planLimit);
     let pname = '';
     try { const prof = store.query({ kinds: [0], authors: [pcp], limit: 1 })[0]; if (prof) pname = String(JSON.parse(prof.content || '{}').name || '').slice(0, 120); } catch {}
     const pbody = Buffer.from(buildPlansFeed(plans, { name: pname, churchNpub: pf[1], baseUrl: (req.headers['x-forwarded-proto'] || (req.socket.encrypted ? 'https' : 'http')) + '://' + ((req.headers['x-forwarded-host'] || req.headers['host'] || '').split(',')[0].trim()) }), 'utf8');
@@ -6199,6 +6242,27 @@ function publicFeed(req, res, route) {
       'Access-Control-Allow-Origin': '*', ...SEC_HEADERS,
     });
     res.end(req.method === 'HEAD' ? undefined : pbody);
+    return;
+  }
+  // DEVOTIONALS FEED — /public/<npub>/devotionals.json. Same gate pattern as plans.
+  const df = DEVOS_FEED_ROUTE.exec(route);
+  if (df) {
+    const dcp = toHexPub(df[1]);
+    if (!dcp || !CHURCH_PUBS.has(dcp)) return notFound();
+    const dshare = SHARE_BY.get(dcp);
+    if (!dshare || !dshare.devos) return notFound();
+    const all = PUBDEVOS.get(dcp);
+    let devos = all ? [...all.values()] : [];
+    if (dshare.devoLimit) devos = devos.slice(0, dshare.devoLimit);
+    let dname = '';
+    try { const prof = store.query({ kinds: [0], authors: [dcp], limit: 1 })[0]; if (prof) dname = String(JSON.parse(prof.content || '{}').name || '').slice(0, 120); } catch {}
+    const dbody = Buffer.from(buildDevosFeed(devos, { name: dname, churchNpub: df[1], baseUrl: (req.headers['x-forwarded-proto'] || (req.socket.encrypted ? 'https' : 'http')) + '://' + ((req.headers['x-forwarded-host'] || req.headers['host'] || '').split(',')[0].trim()) }), 'utf8');
+    res.writeHead(200, {
+      'Content-Type': 'application/json; charset=utf-8', 'Content-Length': dbody.length,
+      'Cache-Control': 'public, max-age=300', 'Content-Security-Policy': PUBLIC_CSP,
+      'Access-Control-Allow-Origin': '*', ...SEC_HEADERS,
+    });
+    res.end(req.method === 'HEAD' ? undefined : dbody);
     return;
   }
   // PUBLIC MEDIA — /public/<npub>/media/<sha256>. Serves a sermon's audio/video blob WITHOUT member auth,

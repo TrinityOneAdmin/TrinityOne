@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Widget Test</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, sans-serif; background: #f7f4ef; color: #1a1815; padding: 24px 16px; }
+  h1 { font-size: 22px; margin: 0 0 6px; }
+  .sub { font-size: 14px; color: #6b5e4f; margin-bottom: 28px; }
+  .section { margin-bottom: 36px; padding: 20px; background: #fff; border-radius: 14px; border: 1px solid #e8e2d8; }
+  .section h2 { font-size: 16px; margin: 0 0 4px; }
+  .section .desc { font-size: 13px; color: #6b5e4f; margin-bottom: 14px; }
+  code { font-size: 12px; background: #f5f0e8; padding: 2px 6px; border-radius: 4px; }
+</style>
+</head>
+<body>
+
+<h1>Widget Test Page</h1>
+<div class="sub">All widget modes &mdash; calendar (3), sermons (3), plans (3), devotionals (3)</div>
+
+<div class="section">
+  <h2>Calendar &mdash; List</h2>
+  <div class="desc"><code>data-mode="list"</code></div>
+  <script src="/public/npub1adz2nckewaq72faamz5nus6250zwgdlws9xc58qu5dac39944x7qqrv2r7/widget.js" data-mode="list" data-accent="#8B6F47"></script>
+</div>
+
+<div class="section">
+  <h2>Calendar &mdash; Compact</h2>
+  <div class="desc"><code>data-mode="compact"</code></div>
+  <script src="/public/npub1adz2nckewaq72faamz5nus6250zwgdlws9xc58qu5dac39944x7qqrv2r7/widget.js" data-mode="compact" data-accent="#8B6F47"></script>
+</div>
+
+<div class="section">
+  <h2>Calendar &mdash; Month</h2>
+  <div class="desc"><code>data-mode="month"</code></div>
+  <script src="/public/npub1adz2nckewaq72faamz5nus6250zwgdlws9xc58qu5dac39944x7qqrv2r7/widget.js" data-mode="month" data-accent="#8B6F47"></script>
+</div>
+
+<div class="section">
+  <h2>Sermons &mdash; Small</h2>
+  <div class="desc"><code>data-mode="sermons-sm"</code> &mdash; compact title list, no player</div>
+  <script src="/public/npub1adz2nckewaq72faamz5nus6250zwgdlws9xc58qu5dac39944x7qqrv2r7/widget.js" data-mode="sermons-sm" data-accent="#8B6F47"></script>
+</div>
+
+<div class="section">
+  <h2>Sermons &mdash; Medium</h2>
+  <div class="desc"><code>data-mode="sermons"</code> &mdash; title, date, description, native audio</div>
+  <script src="/public/npub1adz2nckewaq72faamz5nus6250zwgdlws9xc58qu5dac39944x7qqrv2r7/widget.js" data-mode="sermons" data-accent="#8B6F47"></script>
+</div>
+
+<div class="section">
+  <h2>Sermons &mdash; Large</h2>
+  <div class="desc"><code>data-mode="sermons-lg"</code> &mdash; full cards, custom player with speed control</div>
+  <script src="/public/npub1adz2nckewaq72faamz5nus6250zwgdlws9xc58qu5dac39944x7qqrv2r7/widget.js" data-mode="sermons-lg" data-accent="#8B6F47"></script>
+</div>
+
+<div class="section">
+  <h2>Plans &mdash; Small</h2>
+  <div class="desc"><code>data-mode="plans-sm"</code> &mdash; compact title list with day count</div>
+  <script src="/public/npub1adz2nckewaq72faamz5nus6250zwgdlws9xc58qu5dac39944x7qqrv2r7/widget.js" data-mode="plans-sm" data-accent="#8B6F47"></script>
+</div>
+
+<div class="section">
+  <h2>Plans &mdash; Medium</h2>
+  <div class="desc"><code>data-mode="plans"</code> &mdash; cards with blurb and first 5 days</div>
+  <script src="/public/npub1adz2nckewaq72faamz5nus6250zwgdlws9xc58qu5dac39944x7qqrv2r7/widget.js" data-mode="plans" data-accent="#8B6F47"></script>
+</div>
+
+<div class="section">
+  <h2>Plans &mdash; Large</h2>
+  <div class="desc"><code>data-mode="plans-lg"</code> &mdash; full cards with all days expanded</div>
+  <script src="/public/npub1adz2nckewaq72faamz5nus6250zwgdlws9xc58qu5dac39944x7qqrv2r7/widget.js" data-mode="plans-lg" data-accent="#8B6F47"></script>
+</div>
+
+<div class="section">
+  <h2>Devotionals &mdash; Small</h2>
+  <div class="desc"><code>data-mode="devos-sm"</code> &mdash; compact title list with scripture reference</div>
+  <script src="/public/npub1adz2nckewaq72faamz5nus6250zwgdlws9xc58qu5dac39944x7qqrv2r7/widget.js" data-mode="devos-sm" data-accent="#8B6F47"></script>
+</div>
+
+<div class="section">
+  <h2>Devotionals &mdash; Medium</h2>
+  <div class="desc"><code>data-mode="devos"</code> &mdash; cards with title, reference, series and text preview</div>
+  <script src="/public/npub1adz2nckewaq72faamz5nus6250zwgdlws9xc58qu5dac39944x7qqrv2r7/widget.js" data-mode="devos" data-accent="#8B6F47"></script>
+</div>
+
+<div class="section">
+  <h2>Devotionals &mdash; Large</h2>
+  <div class="desc"><code>data-mode="devos-lg"</code> &mdash; full cards with complete devotional text</div>
+  <script src="/public/npub1adz2nckewaq72faamz5nus6250zwgdlws9xc58qu5dac39944x7qqrv2r7/widget.js" data-mode="devos-lg" data-accent="#8B6F47"></script>
+</div>
+
+</body>
+</html>

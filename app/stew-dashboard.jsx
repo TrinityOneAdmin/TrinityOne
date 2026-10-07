@@ -5558,6 +5558,7 @@ function DashPlans() {
         <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{p.sub || (p.days ? p.days.length + ' days' : '')}{p.tag ? ' · ' + p.tag : ''}{isShared && p.publishAt && p.publishAt * 1000 > Date.now() ? ' · ' + new Date(p.publishAt * 1000).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : ''}</div>
       </div>
       {isShared && p.draft ? <button onClick={() => window.Steward.publishPlan({ ...p, draft: false })} className="sk-btn sk-btn--clay" style={{ padding: '7px 11px', fontSize: 12.5 }} title="Publish this plan now"><Icon name="send" size={13} color="var(--on-clay)" /> Publish</button> : null}
+      {isShared && !p.draft ? <button onClick={(e) => { e.stopPropagation(); window.Steward.publishPlan({ ...p, public: p.public === false }); }} role="switch" aria-checked={p.public !== false} aria-label="Show on website" title={p.public === false ? 'Hidden from your website feed' : 'Visible on your website feed'} style={{ width: 38, height: 22, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: p.public !== false ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}><span style={{ position: 'absolute', top: 2, left: p.public !== false ? 18 : 2, width: 18, height: 18, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 2px rgba(0,0,0,.25)' }} /></button> : null}
       {isShared
         ? <button onClick={() => window.Steward.removePlan(p.id)} className="sk-btn sk-btn--ghost" style={{ padding: '7px 12px', fontSize: 12.5 }}>Unshare</button>
         : <button onClick={() => window.Steward.publishPlan(p)} className="sk-btn sk-btn--clay" style={{ padding: '7px 12px', fontSize: 12.5 }}><Icon name="send" size={14} color="var(--on-clay)" /> Share</button>}
@@ -5708,7 +5709,7 @@ function DashDevotionals() {
   })();
   // re-publish a devotional carrying ALL its fields, with optional overrides — so an edit to order/series/
   // schedule never silently drops the draft state, text, or anything else.
-  const republish = (d, over) => window.Steward.publishDevotional({ id: d.id, title: d.title, ref: d.ref, type: d.type, text: d.text, order: d.order, series: d.series, publishAt: d.publishAt, draft: d.draft, ...over });
+  const republish = (d, over) => window.Steward.publishDevotional({ id: d.id, title: d.title, ref: d.ref, type: d.type, text: d.text, order: d.order, series: d.series, publishAt: d.publishAt, draft: d.draft, public: d.public, ...over });
   // give a group an explicit name (also migrates a legacy "Series N" group): re-publish each with the new series
   const renameSeries = (items, name) => { items.forEach(d => republish(d, { series: name })); };
   // drip-release a series: stagger each item's publishAt by `interval` seconds from `startSec`, in display
@@ -5797,6 +5798,7 @@ function DashDevotionals() {
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', flexShrink: 0, justifyContent: narrow ? 'flex-end' : 'initial' }}>
                 {d.draft ? <button onClick={() => republish(d, { draft: false })} title="Publish this one now" style={{ border: 'none', background: 'var(--clay-ink)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: 'var(--on-clay)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, flexShrink: 0 }}><Icon name="send" size={13} color="var(--on-clay)" /> Publish</button> : null}
+                {!d.draft ? <label onClick={(e) => e.stopPropagation()} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', flexShrink: 0 }}><span style={{ fontSize: 11, fontWeight: 700, color: d.public !== false ? 'var(--clay-ink)' : 'var(--ink-3)' }}>{d.public !== false ? 'Website' : 'Hidden'}</span><button onClick={(e) => { e.stopPropagation(); republish(d, { public: d.public === false }); }} role="switch" aria-checked={d.public !== false} aria-label="Show on website" title={d.public === false ? 'Hidden from your website feed' : 'Visible on your website feed'} style={{ width: 38, height: 22, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: d.public !== false ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}><span style={{ position: 'absolute', top: 2, left: d.public !== false ? 18 : 2, width: 18, height: 18, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 2px rgba(0,0,0,.25)' }} /></button></label> : null}
                 <button onClick={() => setEditing(d)} title="Edit" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="pen" size={14} color="currentColor" /> Edit</button>
                 <button onClick={() => window.Steward.removeDevotional(d.id)} title="Remove" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '8px 10px', minWidth: 40, minHeight: 40, boxSizing: 'border-box', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={15} color="currentColor" /></button>
                 </div>
@@ -9618,6 +9620,48 @@ const WEB_BLOCKED_WHY = {
   shape: ['its details could not be read.', 'their details could not be read.'],
   mixed: ['its details could not be read.', 'they could not be read, for more than one reason.'],
 };
+function WidgetEmbed({ url, modes, descriptions }) {
+  const [mode, setMode] = React.useState(modes[0][0]);
+  const [snippetCopied, setSnippetCopied] = React.useState('');
+  const widgetUrl = url.replace(/\/calendar\.ics$/, '/widget.js');
+  const snippet = '<script src="' + widgetUrl + '" data-mode="' + mode + '"><\/script>';
+  const isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+  const previewBase = url.replace(/\/calendar\.ics$/, '');
+  const copySnippet = () => { const ok = copyText(snippet); setSnippetCopied(ok ? 'Copied' : 'Select and copy'); setTimeout(() => setSnippetCopied(''), 2500); };
+  const desc = descriptions && descriptions[mode];
+  const previewH = mode === 'month' ? 420 : mode.startsWith('plans-lg') ? 500 : mode.startsWith('plans') ? 380 : mode === 'sermons-lg' ? 500 : 280;
+  return (
+    <div style={{ marginTop: 14 }}>
+      <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', marginBottom: 6 }}>Embed on your website</div>
+      {modes.length > 1 ? (
+        <React.Fragment>
+          <div className="set-desc" style={{ color: 'var(--ink-2)', marginBottom: 10 }}>Paste this into your site. Pick a style:</div>
+          <div role="radiogroup" aria-label="Widget style" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
+            {modes.map(([v, label]) => (
+              <label key={v} style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '7px 12px', borderRadius: 999, border: '1px solid ' + (mode === v ? 'var(--clay)' : 'var(--line)'), background: mode === v ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface-2)', cursor: 'pointer' }}>
+                <input type="radio" name="widget-mode" value={v} checked={mode === v} onChange={() => setMode(v)} style={{ margin: 0 }} />
+                <span style={{ fontSize: 13, fontWeight: 700 }}>{label}</span>
+              </label>
+            ))}
+          </div>
+        </React.Fragment>
+      ) : <div className="set-desc" style={{ color: 'var(--ink-2)', marginBottom: 10 }}>Paste this into your site:</div>}
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <input readOnly value={snippet} aria-label="Widget embed code" onFocus={e => e.target.select()} style={{ flex: 1, minWidth: 220, height: 36, padding: '0 10px', borderRadius: 9, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink-2)', fontFamily: 'var(--mono)', fontSize: 11 }} />
+        <button onClick={copySnippet} className="sk-btn sk-btn--clay" aria-label="Copy embed code" style={{ padding: '8px 14px', fontSize: 13 }}><Icon name="copy" size={14} color="var(--on-clay)" /> Copy</button>
+        {snippetCopied ? <div role="status" style={{ fontSize: 12.5, fontWeight: 600, color: snippetCopied === 'Copied' ? 'var(--sage-ink)' : 'var(--clay-ink)' }}>{snippetCopied}</div> : null}
+      </div>
+      {desc ? <div className="set-desc" style={{ color: 'var(--ink-3)', marginTop: 6 }}>{desc}</div> : null}
+      {!isNative ? (
+        <div style={{ marginTop: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', marginBottom: 6 }}>Preview</div>
+          <iframe src={previewBase + '/widget-preview?mode=' + mode} style={{ width: '100%', height: previewH, border: '1px solid var(--line)', borderRadius: 11, background: 'var(--surface)' }} title="Widget preview" />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function DashWebsitePanel({ church }) {
   const [share, setShare] = React.useState(null);   // null until the engine has answered
   const [busy, setBusy] = React.useState(false);
@@ -9628,6 +9672,7 @@ function DashWebsitePanel({ church }) {
   const on = !!(share && share.calendar);
   const sermonsOn = !!(share && share.sermons);
   const plansOn = !!(share && share.plans);
+  const devosOn = !!(share && share.devos);
   const blocked = (share && share.blocked) || 0;
   const whyBlocked = (WEB_BLOCKED_WHY[(share && share.blockedWhy)] || WEB_BLOCKED_WHY.shape)[blocked === 1 ? 0 : 1];
   const held = (share && share.held) || 0;
@@ -9637,6 +9682,9 @@ function DashWebsitePanel({ church }) {
   // patch onto whatever the engine already holds, so each control only ever names the field it changed.
   const horizonMonths = (share && share.horizonMonths) || 6;
   const detail = (share && share.detail) || 'full';
+  const sermonLimit = (share && share.sermonLimit) || 10;
+  const planLimit = (share && share.planLimit) || 0;
+  const devoLimit = (share && share.devoLimit) || 0;
   // `calNameEdit` is null whenever nobody is mid-edit, so the field reads straight from the share document —
   // no effect needed to keep it in sync when the document changes elsewhere. Typing sets it; blurring clears
   // it back to null once saved, the same "derive, don't mirror" shape the rest of this file avoids a sync
@@ -9683,166 +9731,206 @@ function DashWebsitePanel({ church }) {
     setMsg(ok ? (heldIds.length === 1 ? 'Taken off — your website no longer shows it.' : 'Taken off — your website no longer shows them.')
       : 'Not saved — the relay didn’t accept the change.');
   };
-  // copyText, not navigator.clipboard: the console runs on plain http on a LAN box, where the clipboard API is
-  // undefined, and copyText already carries the execCommand fallback that copes with that (see its note).
-  const copy = () => { setCopied(copyText(url) ? 'Copied' : 'Couldn’t copy — select the address and copy it'); setTimeout(() => setCopied(''), 2500); };
+  const copy = (val) => { setCopied(copyText(val || url) ? 'Copied' : 'Couldn’t copy — select the address and copy it'); setTimeout(() => setCopied(''), 2500); };
   const row = (checked) => ({ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 11, borderRadius: 11, border: '1px solid var(--line)', background: checked ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface-2)' });
+  const [tab, setTab] = React.useState('calendar');
+  const tabStyle = (t) => ({ padding: '8px 16px', fontSize: 13.5, fontWeight: 700, border: 'none', borderBottom: tab === t ? '2px solid var(--clay)' : '2px solid transparent', background: 'none', color: tab === t ? 'var(--clay-ink)' : 'var(--ink-3)', cursor: 'pointer', fontFamily: 'var(--font-ui)' });
+  const sermonUrl = url ? url.replace(/\/calendar\.ics$/, '/sermons.xml') : '';
+  const plansUrl = url ? url.replace(/\/calendar\.ics$/, '/plans.json') : '';
+  const devosUrl = url ? url.replace(/\/calendar\.ics$/, '/devotionals.json') : '';
   return (
     <Panel title="Your website">
-      {/* Calendar */}
-      <div onClick={toggle} className="set-row" style={{ ...row(on), opacity: known ? 1 : .6 }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontWeight: 700, fontSize: 14.5 }}>Share our calendar</div>
-          <div className="set-desc" style={{ color: 'var(--ink-2)' }}>{on ? 'On \u2014 whole-church events are on a public feed.' : 'Off \u2014 nothing about your calendar leaves the app.'}</div>
-        </div>
-        <button onClick={(e) => { e.stopPropagation(); toggle(); }} disabled={busy || !known} aria-label="Share our calendar" role="switch" aria-checked={on} title="Put your events on a feed your website can show" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: on ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
-          <span style={{ position: 'absolute', top: 3, left: on ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
-        </button>
+      <div style={{ display: 'flex', gap: 0, borderBottom: '1px solid var(--line)', marginBottom: 14 }}>
+        <button onClick={() => setTab('calendar')} style={tabStyle('calendar')}>Calendar</button>
+        <button onClick={() => setTab('plans')} style={tabStyle('plans')}>Reading Plans</button>
+        <button onClick={() => setTab('sermons')} style={tabStyle('sermons')}>Sermons</button>
+        <button onClick={() => setTab('devos')} style={tabStyle('devos')}>Devotionals</button>
       </div>
-      {msg ? <div role="alert" style={{ marginTop: 8, fontSize: 12.5, fontWeight: 600, color: 'var(--clay-ink)' }}>{msg}</div> : null}
-      {blocked ? (
-        <div role="status" style={{ marginTop: 8, fontSize: 12.5, fontWeight: 600, color: 'var(--clay-ink)' }}>
-          {blocked === 1 ? '1 event could not be published' : blocked + ' events could not be published'} \u2014 {whyBlocked}
-        </div>
-      ) : null}
-      {held ? (
-        <div role="status" style={{ marginTop: 6, fontSize: 12.5, fontWeight: 600, color: 'var(--ink-2)' }}>
-          {held === 1 ? '1 of them is still on your website \u2014 this console could not open it to check.'
-            : held + ' of them are still on your website \u2014 this console could not open them to check.'}
-        </div>
-      ) : null}
-      {held && heldIds.length ? (
-        <button onClick={takeOff} disabled={busy || !known} aria-label="Take off our website"
-          title="Your website stops showing them. Put the tick back from the event itself once a church key can open it again."
-          className="sk-btn sk-btn--ghost" style={{ marginTop: 6, padding: '7px 13px', fontSize: 12.5, opacity: (busy || !known) ? .5 : 1 }}>
-          {held === 1 ? 'Take it off our website' : 'Take them off our website'}
-        </button>
-      ) : null}
-      {on ? (
-        <div style={{ padding: '6px 0 10px', borderBottom: '1px solid var(--line)', marginBottom: 10 }}>
-          <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', margin: '8px 0 6px' }}>How far ahead</div>
-          <div className="set-desc" style={{ color: 'var(--ink-2)', marginBottom: 8 }}>Events further out than this stay off the feed.</div>
-          <div role="radiogroup" aria-label="How far ahead" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            {[[3, '3 months'], [6, '6 months'], [12, '12 months']].map(([m, label]) => (
-              <label key={m} style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '7px 12px', borderRadius: 999, border: '1px solid ' + (horizonMonths === m ? 'var(--clay)' : 'var(--line)'), background: horizonMonths === m ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface-2)', cursor: known ? 'pointer' : 'default', opacity: (busy || !known) ? .6 : 1 }}>
-                <input type="radio" name="website-horizon" value={m} checked={horizonMonths === m} disabled={busy || !known} onChange={() => patchShare({ horizonMonths: m })} aria-label={label} style={{ margin: 0 }} />
-                <span style={{ fontSize: 13, fontWeight: 700 }}>{label}</span>
-              </label>
-            ))}
+
+      {tab === 'calendar' ? (
+        <React.Fragment>
+          <div onClick={toggle} className="set-row" style={{ ...row(on), opacity: known ? 1 : .6 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 700, fontSize: 14.5 }}>Share our calendar</div>
+              <div className="set-desc" style={{ color: 'var(--ink-2)' }}>{on ? 'On — whole-church events are on a public feed.' : 'Off — nothing about your calendar leaves the app.'}</div>
+            </div>
+            <button onClick={(e) => { e.stopPropagation(); toggle(); }} disabled={busy || !known} aria-label="Share our calendar" role="switch" aria-checked={on} title="Put your events on a feed your website can show" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: on ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
+              <span style={{ position: 'absolute', top: 3, left: on ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
+            </button>
           </div>
-
-          <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', margin: '14px 0 6px' }}>Calendar name</div>
-          <div className="set-desc" style={{ color: 'var(--ink-2)', marginBottom: 8 }}>What someone sees when they subscribe.</div>
-          <input value={calName} onChange={e => setCalNameEdit(e.target.value)} onBlur={saveCalName} onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }}
-            disabled={busy || !known} placeholder={church.name || 'Your church'} aria-label="Calendar name"
-            style={{ width: '100%', boxSizing: 'border-box', height: 40, padding: '0 13px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', outline: 'none', fontSize: 14, color: 'var(--ink)', fontFamily: 'var(--font-ui)' }} />
-
-          <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', margin: '14px 0 6px' }}>How much of each event</div>
-          <div role="radiogroup" aria-label="How much of each event" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 12px', borderRadius: 11, border: '1px solid ' + (detail === 'full' ? 'var(--clay)' : 'var(--line)'), background: detail === 'full' ? 'color-mix(in oklab, var(--clay) 7%, var(--surface))' : 'var(--surface-2)', cursor: known ? 'pointer' : 'default' }}>
-              <input type="radio" name="website-detail" value="full" checked={detail === 'full'} disabled={busy || !known} onChange={() => patchShare({ detail: 'full' })} aria-label="Full" style={{ marginTop: 3 }} />
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 700, fontSize: 14 }}>Full</div>
-                <div className="set-desc" style={{ color: 'var(--ink-2)' }}>Title, time, place and any note you wrote.</div>
+          {msg ? <div role="alert" style={{ marginTop: 8, fontSize: 12.5, fontWeight: 600, color: 'var(--clay-ink)' }}>{msg}</div> : null}
+          {blocked ? <div role="status" style={{ marginTop: 8, fontSize: 12.5, fontWeight: 600, color: 'var(--clay-ink)' }}>{blocked === 1 ? '1 event could not be published' : blocked + ' events could not be published'} {'—'} {whyBlocked}</div> : null}
+          {held ? <div role="status" style={{ marginTop: 6, fontSize: 12.5, fontWeight: 600, color: 'var(--ink-2)' }}>{held === 1 ? '1 of them is still on your website — this console could not open it to check.' : held + ' of them are still on your website — this console could not open them to check.'}</div> : null}
+          {held && heldIds.length ? <button onClick={takeOff} disabled={busy || !known} aria-label="Take off our website" title="Your website stops showing them." className="sk-btn sk-btn--ghost" style={{ marginTop: 6, padding: '7px 13px', fontSize: 12.5, opacity: (busy || !known) ? .5 : 1 }}>{held === 1 ? 'Take it off our website' : 'Take them off our website'}</button> : null}
+          {on ? (
+            <div style={{ padding: '6px 0 10px' }}>
+              <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', margin: '8px 0 6px' }}>How far ahead</div>
+              <div className="set-desc" style={{ color: 'var(--ink-2)', marginBottom: 8 }}>Events further out than this stay off the feed.</div>
+              <div role="radiogroup" aria-label="How far ahead" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                {[[3, '3 months'], [6, '6 months'], [12, '12 months']].map(([m, label]) => (
+                  <label key={m} style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '7px 12px', borderRadius: 999, border: '1px solid ' + (horizonMonths === m ? 'var(--clay)' : 'var(--line)'), background: horizonMonths === m ? 'color-mix(in oklab, var(--clay) 9%, var(--surface))' : 'var(--surface-2)', cursor: known ? 'pointer' : 'default', opacity: (busy || !known) ? .6 : 1 }}>
+                    <input type="radio" name="website-horizon" value={m} checked={horizonMonths === m} disabled={busy || !known} onChange={() => patchShare({ horizonMonths: m })} aria-label={label} style={{ margin: 0 }} />
+                    <span style={{ fontSize: 13, fontWeight: 700 }}>{label}</span>
+                  </label>
+                ))}
               </div>
-            </label>
-            <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 12px', borderRadius: 11, border: '1px solid ' + (detail === 'short' ? 'var(--clay)' : 'var(--line)'), background: detail === 'short' ? 'color-mix(in oklab, var(--clay) 7%, var(--surface))' : 'var(--surface-2)', cursor: known ? 'pointer' : 'default' }}>
-              <input type="radio" name="website-detail" value="short" checked={detail === 'short'} disabled={busy || !known} onChange={() => patchShare({ detail: 'short' })} aria-label="Short" style={{ marginTop: 3 }} />
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 700, fontSize: 14 }}>Short</div>
-                <div className="set-desc" style={{ color: 'var(--ink-2)' }}>Just the title and time \u2014 no place, no note.</div>
+              <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', margin: '14px 0 6px' }}>Calendar name</div>
+              <div className="set-desc" style={{ color: 'var(--ink-2)', marginBottom: 8 }}>What someone sees when they subscribe.</div>
+              <input value={calName} onChange={e => setCalNameEdit(e.target.value)} onBlur={saveCalName} onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }} disabled={busy || !known} placeholder={church.name || 'Your church'} aria-label="Calendar name" style={{ width: '100%', boxSizing: 'border-box', height: 40, padding: '0 13px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', outline: 'none', fontSize: 14, color: 'var(--ink)', fontFamily: 'var(--font-ui)' }} />
+              <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', margin: '14px 0 6px' }}>How much of each event</div>
+              <div role="radiogroup" aria-label="How much of each event" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 12px', borderRadius: 11, border: '1px solid ' + (detail === 'full' ? 'var(--clay)' : 'var(--line)'), background: detail === 'full' ? 'color-mix(in oklab, var(--clay) 7%, var(--surface))' : 'var(--surface-2)', cursor: known ? 'pointer' : 'default' }}>
+                  <input type="radio" name="website-detail" value="full" checked={detail === 'full'} disabled={busy || !known} onChange={() => patchShare({ detail: 'full' })} aria-label="Full" style={{ marginTop: 3 }} />
+                  <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14 }}>Full</div><div className="set-desc" style={{ color: 'var(--ink-2)' }}>Title, time, place and any note you wrote.</div></div>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 12px', borderRadius: 11, border: '1px solid ' + (detail === 'short' ? 'var(--clay)' : 'var(--line)'), background: detail === 'short' ? 'color-mix(in oklab, var(--clay) 7%, var(--surface))' : 'var(--surface-2)', cursor: known ? 'pointer' : 'default' }}>
+                  <input type="radio" name="website-detail" value="short" checked={detail === 'short'} disabled={busy || !known} onChange={() => patchShare({ detail: 'short' })} aria-label="Short" style={{ marginTop: 3 }} />
+                  <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14 }}>Short</div><div className="set-desc" style={{ color: 'var(--ink-2)' }}>Just the title and time {'—'} no place, no note.</div></div>
+                </label>
               </div>
-            </label>
+              {url ? (
+                <React.Fragment>
+                  <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', margin: '14px 0 6px' }}>Feed address</div>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <input readOnly value={url} aria-label="Feed address" onFocus={e => e.target.select()} style={{ flex: 1, minWidth: 220, height: 36, padding: '0 10px', borderRadius: 9, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink-2)', fontFamily: 'var(--mono)', fontSize: 12 }} />
+                    <button onClick={() => copy(url)} className="sk-btn sk-btn--clay" style={{ padding: '8px 14px', fontSize: 13 }}><Icon name="copy" size={14} color="var(--on-clay)" /> Copy</button>
+                    {copied ? <div role="status" style={{ fontSize: 12.5, fontWeight: 600, color: copied === 'Copied' ? 'var(--sage-ink)' : 'var(--clay-ink)' }}>{copied}</div> : null}
+                  </div>
+                  <div className="set-desc" style={{ color: 'var(--ink-3)', marginTop: 6 }}>Paste it into a calendar app to subscribe, or use the widget below to show it on your website.</div>
+                  <WidgetEmbed url={url} modes={[['list', 'List'], ['compact', 'Compact'], ['month', 'Month']]} descriptions={{ list: 'Shows upcoming events in a list.', compact: 'A compact one-line-per-event view.', month: 'A full month grid with event labels.' }} />
+                </React.Fragment>
+              ) : null}
+            </div>
+          ) : null}
+        </React.Fragment>
+      ) : null}
+
+      {tab === 'sermons' ? (
+        <React.Fragment>
+          <div onClick={() => patchShare({ sermons: !sermonsOn })} className="set-row" style={{ ...row(sermonsOn), opacity: known ? 1 : .6 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 700, fontSize: 14.5 }}>Share our sermons</div>
+              <div className="set-desc" style={{ color: 'var(--ink-2)' }}>{sermonsOn ? 'On — sermons are on a public podcast feed.' : 'Off — sermon audio stays inside the app.'}</div>
+            </div>
+            <button onClick={(e) => { e.stopPropagation(); patchShare({ sermons: !sermonsOn }); }} disabled={busy || !known} aria-label="Share our sermons" role="switch" aria-checked={sermonsOn} title="Put your sermons on a public podcast feed" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: sermonsOn ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
+              <span style={{ position: 'absolute', top: 3, left: sermonsOn ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
+            </button>
           </div>
-
-          {url ? (
-            <React.Fragment>
-              <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', margin: '14px 0 6px' }}>Feed address</div>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                <input readOnly value={url} aria-label="Feed address" onFocus={e => e.target.select()} style={{ flex: 1, minWidth: 220, height: 36, padding: '0 10px', borderRadius: 9, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink-2)', fontFamily: 'var(--mono)', fontSize: 12 }} />
-                <button onClick={copy} className="sk-btn sk-btn--clay" aria-label="Copy feed address" style={{ padding: '8px 14px', fontSize: 13 }}><Icon name="copy" size={14} color="var(--on-clay)" /> Copy</button>
-                {copied ? <div role="status" style={{ fontSize: 12.5, fontWeight: 600, color: copied === 'Copied' ? 'var(--sage-ink)' : 'var(--clay-ink)' }}>{copied}</div> : null}
+          {msg ? <div role="alert" style={{ marginTop: 8, fontSize: 12.5, fontWeight: 600, color: 'var(--clay-ink)' }}>{msg}</div> : null}
+          {sermonsOn ? (
+            <div style={{ padding: '6px 0 10px' }}>
+              <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', margin: '8px 0 6px' }}>Podcast name</div>
+              <div className="set-desc" style={{ color: 'var(--ink-2)', marginBottom: 8 }}>What a podcast app or feed reader shows as the channel name.</div>
+              <input value={sermonName} onChange={e => setSermonNameEdit(e.target.value)} onBlur={saveSermonName} onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }} disabled={busy || !known} placeholder={(church.name || 'Your church') + ' — Sermons'} aria-label="Podcast name" style={{ width: '100%', boxSizing: 'border-box', height: 40, padding: '0 13px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', outline: 'none', fontSize: 14, color: 'var(--ink)', fontFamily: 'var(--font-ui)' }} />
+              <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', margin: '14px 0 6px' }}>How many on the feed</div>
+              <div className="set-desc" style={{ color: 'var(--ink-2)', marginBottom: 8 }}>Older sermons past this count stay off the public feed.</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <input type="number" min="1" max="100" value={sermonLimit} disabled={busy || !known} onChange={e => { const v = Math.max(1, Math.min(100, parseInt(e.target.value, 10) || 10)); patchShare({ sermonLimit: v }); }} aria-label="Number of sermons on feed" style={{ width: 70, height: 36, padding: '0 10px', borderRadius: 9, border: '1px solid var(--line)', background: 'var(--surface)', fontSize: 14, fontWeight: 700, color: 'var(--ink)', fontFamily: 'var(--font-ui)', textAlign: 'center' }} />
+                <span style={{ fontSize: 13, color: 'var(--ink-2)' }}>sermons</span>
               </div>
-              <div className="set-desc" style={{ color: 'var(--ink-3)', marginTop: 6 }}>Paste it into your website calendar block, or subscribe from a calendar app.</div>
-            </React.Fragment>
+              {url ? (
+                <React.Fragment>
+                  <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', margin: '14px 0 6px' }}>Feed address (RSS)</div>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <input readOnly value={sermonUrl} aria-label="Sermon feed address" onFocus={e => e.target.select()} style={{ flex: 1, minWidth: 220, height: 36, padding: '0 10px', borderRadius: 9, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink-2)', fontFamily: 'var(--mono)', fontSize: 12 }} />
+                    <button onClick={() => copy(sermonUrl)} className="sk-btn sk-btn--clay" style={{ padding: '8px 14px', fontSize: 13 }}><Icon name="copy" size={14} color="var(--on-clay)" /> Copy</button>
+                    {copied ? <div role="status" style={{ fontSize: 12.5, fontWeight: 600, color: copied === 'Copied' ? 'var(--sage-ink)' : 'var(--clay-ink)' }}>{copied}</div> : null}
+                  </div>
+                  <div className="set-desc" style={{ color: 'var(--ink-3)', marginTop: 6 }}>Paste it into a podcast app, or use the widget below to show a player on your website.</div>
+                  <WidgetEmbed url={url} modes={[['sermons-sm', 'Small'], ['sermons', 'Medium'], ['sermons-lg', 'Large']]} descriptions={{ 'sermons-sm': 'Compact title list — no audio player.', sermons: 'Title, date, description and audio player.', 'sermons-lg': 'Full cards with custom player and speed control.' }} />
+                </React.Fragment>
+              ) : null}
+            </div>
           ) : null}
-        </div>
+        </React.Fragment>
       ) : null}
 
-      {/* Sermons */}
-      <div onClick={() => patchShare({ sermons: !sermonsOn })} className="set-row" style={{ ...row(sermonsOn), opacity: known ? 1 : .6, marginTop: 10 }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontWeight: 700, fontSize: 14.5 }}>Share our sermons</div>
-          <div className="set-desc" style={{ color: 'var(--ink-2)' }}>{sermonsOn ? 'On \u2014 sermons are on a public podcast feed.' : 'Off \u2014 sermon audio stays inside the app.'}</div>
-        </div>
-        <button onClick={(e) => { e.stopPropagation(); patchShare({ sermons: !sermonsOn }); }} disabled={busy || !known} aria-label="Share our sermons" role="switch" aria-checked={sermonsOn} title="Put your sermons on a public podcast feed" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: sermonsOn ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
-          <span style={{ position: 'absolute', top: 3, left: sermonsOn ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
-        </button>
-      </div>
-      {sermonsOn ? (
-        <div style={{ padding: '6px 0 10px', borderBottom: '1px solid var(--line)', marginBottom: 10 }}>
-          <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', margin: '8px 0 6px' }}>Podcast name</div>
-          <div className="set-desc" style={{ color: 'var(--ink-2)', marginBottom: 8 }}>What a podcast app or feed reader shows as the channel name.</div>
-          <input value={sermonName} onChange={e => setSermonNameEdit(e.target.value)} onBlur={saveSermonName} onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }}
-            disabled={busy || !known} placeholder={(church.name || 'Your church') + ' \u2014 Sermons'} aria-label="Podcast name"
-            style={{ width: '100%', boxSizing: 'border-box', height: 40, padding: '0 13px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface)', outline: 'none', fontSize: 14, color: 'var(--ink)', fontFamily: 'var(--font-ui)' }} />
-
-          {url ? (
-            <React.Fragment>
-              <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', margin: '14px 0 6px' }}>Feed address</div>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                <input readOnly value={url.replace(/\/calendar\.ics$/, '/sermons.xml')} aria-label="Sermon feed address" onFocus={e => e.target.select()} style={{ flex: 1, minWidth: 220, height: 36, padding: '0 10px', borderRadius: 9, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink-2)', fontFamily: 'var(--mono)', fontSize: 12 }} />
-                <button onClick={() => { const ok = copyText(url.replace(/\/calendar\.ics$/, '/sermons.xml')); setCopied(ok ? 'Copied' : 'Could not copy'); setTimeout(() => setCopied(''), 2500); }} className="sk-btn sk-btn--clay" aria-label="Copy sermon feed address" style={{ padding: '8px 14px', fontSize: 13 }}><Icon name="copy" size={14} color="var(--on-clay)" /> Copy</button>
-                {copied ? <div role="status" style={{ fontSize: 12.5, fontWeight: 600, color: copied === 'Copied' ? 'var(--sage-ink)' : 'var(--clay-ink)' }}>{copied}</div> : null}
+      {tab === 'plans' ? (
+        <React.Fragment>
+          <div onClick={() => patchShare({ plans: !plansOn })} className="set-row" style={{ ...row(plansOn), opacity: known ? 1 : .6 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 700, fontSize: 14.5 }}>Share reading plans</div>
+              <div className="set-desc" style={{ color: 'var(--ink-2)' }}>{plansOn ? 'On — your reading plans are on a public feed.' : 'Off — reading plans stay inside the app.'}</div>
+            </div>
+            <button onClick={(e) => { e.stopPropagation(); patchShare({ plans: !plansOn }); }} disabled={busy || !known} aria-label="Share reading plans" role="switch" aria-checked={plansOn} title="Put your reading plans on a public feed" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: plansOn ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
+              <span style={{ position: 'absolute', top: 3, left: plansOn ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
+            </button>
+          </div>
+          {msg ? <div role="alert" style={{ marginTop: 8, fontSize: 12.5, fontWeight: 600, color: 'var(--clay-ink)' }}>{msg}</div> : null}
+          {plansOn ? (
+            <div style={{ padding: '6px 0 10px' }}>
+              <div className="set-desc" style={{ color: 'var(--ink-2)', marginBottom: 10 }}>Use the toggle on each plan (in the Reading Plans tab) to choose which ones appear on your website.</div>
+              <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', margin: '8px 0 6px' }}>How many on the feed</div>
+              <div className="set-desc" style={{ color: 'var(--ink-2)', marginBottom: 8 }}>Limit how many plans appear on the public feed. 0 means all.</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <input type="number" min="0" max="100" value={planLimit} disabled={busy || !known} onChange={e => { const v = Math.max(0, Math.min(100, parseInt(e.target.value, 10) || 0)); patchShare({ planLimit: v }); }} aria-label="Number of plans on feed" style={{ width: 70, height: 36, padding: '0 10px', borderRadius: 9, border: '1px solid var(--line)', background: 'var(--surface)', fontSize: 14, fontWeight: 700, color: 'var(--ink)', fontFamily: 'var(--font-ui)', textAlign: 'center' }} />
+                <span style={{ fontSize: 13, color: 'var(--ink-2)' }}>plans (0 = all)</span>
               </div>
-              <div className="set-desc" style={{ color: 'var(--ink-3)', marginTop: 6 }}>Paste it into a podcast app or your website audio block.</div>
-            </React.Fragment>
+              {url ? (
+                <React.Fragment>
+                  <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', margin: '8px 0 6px' }}>Feed address</div>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <input readOnly value={plansUrl} aria-label="Plans feed address" onFocus={e => e.target.select()} style={{ flex: 1, minWidth: 220, height: 36, padding: '0 10px', borderRadius: 9, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink-2)', fontFamily: 'var(--mono)', fontSize: 12 }} />
+                    <button onClick={() => copy(plansUrl)} className="sk-btn sk-btn--clay" style={{ padding: '8px 14px', fontSize: 13 }}><Icon name="copy" size={14} color="var(--on-clay)" /> Copy</button>
+                    {copied ? <div role="status" style={{ fontSize: 12.5, fontWeight: 600, color: copied === 'Copied' ? 'var(--sage-ink)' : 'var(--clay-ink)' }}>{copied}</div> : null}
+                  </div>
+                  <div className="set-desc" style={{ color: 'var(--ink-3)', marginTop: 6 }}>Your website can fetch this JSON, or use the widget below.</div>
+                  <WidgetEmbed url={url} modes={[['plans-sm', 'Small'], ['plans', 'Medium'], ['plans-lg', 'Large']]} descriptions={{ 'plans-sm': 'Compact title list with day count.', plans: 'Cards with blurb and first 5 day references.', 'plans-lg': 'Full cards with all day references expanded.' }} />
+                </React.Fragment>
+              ) : null}
+            </div>
           ) : null}
-        </div>
+        </React.Fragment>
       ) : null}
 
-      {/* Reading plans */}
-      <div onClick={() => patchShare({ plans: !plansOn })} className="set-row" style={{ ...row(plansOn), opacity: known ? 1 : .6, marginTop: 10 }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontWeight: 700, fontSize: 14.5 }}>Share reading plans</div>
-          <div className="set-desc" style={{ color: 'var(--ink-2)' }}>{plansOn ? 'On \u2014 your reading plans are on a public feed.' : 'Off \u2014 reading plans stay inside the app.'}</div>
-        </div>
-        <button onClick={(e) => { e.stopPropagation(); patchShare({ plans: !plansOn }); }} disabled={busy || !known} aria-label="Share reading plans" role="switch" aria-checked={plansOn} title="Put your reading plans on a public feed" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: plansOn ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
-          <span style={{ position: 'absolute', top: 3, left: plansOn ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
-        </button>
-      </div>
-      {plansOn ? (
-        <div style={{ padding: '6px 0 10px', borderBottom: '1px solid var(--line)', marginBottom: 10 }}>
-          {url ? (
-            <React.Fragment>
-              <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', margin: '8px 0 6px' }}>Feed address</div>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                <input readOnly value={url.replace(/\/calendar\.ics$/, '/plans.json')} aria-label="Plans feed address" onFocus={e => e.target.select()} style={{ flex: 1, minWidth: 220, height: 36, padding: '0 10px', borderRadius: 9, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink-2)', fontFamily: 'var(--mono)', fontSize: 12 }} />
-                <button onClick={() => { const ok = copyText(url.replace(/\/calendar\.ics$/, '/plans.json')); setCopied(ok ? 'Copied' : 'Could not copy'); setTimeout(() => setCopied(''), 2500); }} className="sk-btn sk-btn--clay" aria-label="Copy plans feed address" style={{ padding: '8px 14px', fontSize: 13 }}><Icon name="copy" size={14} color="var(--on-clay)" /> Copy</button>
-                {copied ? <div role="status" style={{ fontSize: 12.5, fontWeight: 600, color: copied === 'Copied' ? 'var(--sage-ink)' : 'var(--clay-ink)' }}>{copied}</div> : null}
+      {tab === 'devos' ? (
+        <React.Fragment>
+          <div onClick={() => patchShare({ devos: !devosOn })} className="set-row" style={{ ...row(devosOn), opacity: known ? 1 : .6 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 700, fontSize: 14.5 }}>Share devotionals</div>
+              <div className="set-desc" style={{ color: 'var(--ink-2)' }}>{devosOn ? 'On — your devotionals are on a public feed.' : 'Off — devotionals stay inside the app.'}</div>
+            </div>
+            <button onClick={(e) => { e.stopPropagation(); patchShare({ devos: !devosOn }); }} disabled={busy || !known} aria-label="Share devotionals" role="switch" aria-checked={devosOn} title="Put your devotionals on a public feed" style={{ width: 48, height: 28, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: devosOn ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}>
+              <span style={{ position: 'absolute', top: 3, left: devosOn ? 23 : 3, width: 22, height: 22, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 3px rgba(0,0,0,.25)' }} />
+            </button>
+          </div>
+          {msg ? <div role="alert" style={{ marginTop: 8, fontSize: 12.5, fontWeight: 600, color: 'var(--clay-ink)' }}>{msg}</div> : null}
+          {devosOn ? (
+            <div style={{ padding: '6px 0 10px' }}>
+              <div className="set-desc" style={{ color: 'var(--ink-2)', marginBottom: 10 }}>Use the toggle on each devotional (in the Devotionals tab) to choose which ones appear on your website.</div>
+              <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', margin: '8px 0 6px' }}>How many on the feed</div>
+              <div className="set-desc" style={{ color: 'var(--ink-2)', marginBottom: 8 }}>Limit how many devotionals appear on the public feed. 0 means all.</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <input type="number" min="0" max="100" value={devoLimit} disabled={busy || !known} onChange={e => { const v = Math.max(0, Math.min(100, parseInt(e.target.value, 10) || 0)); patchShare({ devoLimit: v }); }} aria-label="Number of devotionals on feed" style={{ width: 70, height: 36, padding: '0 10px', borderRadius: 9, border: '1px solid var(--line)', background: 'var(--surface)', fontSize: 14, fontWeight: 700, color: 'var(--ink)', fontFamily: 'var(--font-ui)', textAlign: 'center' }} />
+                <span style={{ fontSize: 13, color: 'var(--ink-2)' }}>devotionals (0 = all)</span>
               </div>
-              <div className="set-desc" style={{ color: 'var(--ink-3)', marginTop: 6 }}>Your website can fetch this to show your reading plans.</div>
-            </React.Fragment>
+              {url ? (
+                <React.Fragment>
+                  <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', margin: '8px 0 6px' }}>Feed address</div>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <input readOnly value={devosUrl} aria-label="Devotionals feed address" onFocus={e => e.target.select()} style={{ flex: 1, minWidth: 220, height: 36, padding: '0 10px', borderRadius: 9, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink-2)', fontFamily: 'var(--mono)', fontSize: 12 }} />
+                    <button onClick={() => copy(devosUrl)} className="sk-btn sk-btn--clay" style={{ padding: '8px 14px', fontSize: 13 }}><Icon name="copy" size={14} color="var(--on-clay)" /> Copy</button>
+                    {copied ? <div role="status" style={{ fontSize: 12.5, fontWeight: 600, color: copied === 'Copied' ? 'var(--sage-ink)' : 'var(--clay-ink)' }}>{copied}</div> : null}
+                  </div>
+                  <div className="set-desc" style={{ color: 'var(--ink-3)', marginTop: 6 }}>Your website can fetch this JSON, or use the widget below.</div>
+                  <WidgetEmbed url={url} modes={[['devos-sm', 'Small'], ['devos', 'Medium'], ['devos-lg', 'Large']]} descriptions={{ 'devos-sm': 'Compact list — title and scripture reference.', devos: 'Cards with title, reference, series and text preview.', 'devos-lg': 'Full cards with complete devotional text.' }} />
+                </React.Fragment>
+              ) : null}
+            </div>
           ) : null}
-        </div>
+        </React.Fragment>
       ) : null}
 
-      {/* Served from (shared) */}
+      {/* Served from */}
       <div style={{ fontSize: 13, fontWeight: 800, color: 'var(--ink)', margin: '14px 0 6px' }}>Served from</div>
       <div role="radiogroup" aria-label="Served from" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 12px', borderRadius: 11, border: '1px solid var(--clay)', background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', cursor: 'default' }}>
           <input type="radio" name="website-address" value="own" checked readOnly aria-label="Our own relay" style={{ marginTop: 3 }} />
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontWeight: 700, fontSize: 14 }}>Our own relay</div>
-            <div className="set-desc" style={{ color: 'var(--ink-2)' }}>Anyone who opens the address can see where your data is kept.</div>
-          </div>
+          <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14 }}>Our own relay</div><div className="set-desc" style={{ color: 'var(--ink-2)' }}>Anyone who opens the address can see where your data is kept.</div></div>
         </label>
         <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 12px', borderRadius: 11, border: '1px solid var(--line)', background: 'var(--surface-2)', opacity: .6, cursor: 'not-allowed' }}>
           <input type="radio" name="website-address" value="hosted" disabled aria-label="Via app.trinityone.church (coming)" style={{ marginTop: 3 }} />
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontWeight: 700, fontSize: 14 }}>Via app.trinityone.church <span style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', marginLeft: 6 }}>Coming</span></div>
-            <div className="set-desc" style={{ color: 'var(--ink-2)' }}>Shows only that you use TrinityOne.</div>
-          </div>
+          <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14 }}>Via app.trinityone.church <span style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', marginLeft: 6 }}>Coming</span></div><div className="set-desc" style={{ color: 'var(--ink-2)' }}>Shows only that you use TrinityOne.</div></div>
         </label>
       </div>
     </Panel>

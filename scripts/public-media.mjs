@@ -101,6 +101,7 @@ export function publicPlanFields(p) {
   const title = String(p.title || '').slice(0, 300).trim();
   if (!title) return null;
   if (p.draft) return null;
+  if (p.public === false) return null;
   const days = Array.isArray(p.days) ? p.days.map(d => ({
     d: Number(d.d) || 0,
     ref: String(d.ref || '').slice(0, 200).trim(),
@@ -128,5 +129,33 @@ export function buildPlansFeed(plans, { name = '', churchNpub = '', baseUrl = ''
     churchNpub: churchNpub || undefined,
     base: baseUrl || undefined,
     plans: rows,
+  }, null, 2) + '\n';
+}
+
+export function publicDevoFields(d) {
+  if (!d || typeof d !== 'object') return null;
+  const title = String(d.title || '').slice(0, 300).trim();
+  if (!title) return null;
+  if (d.draft) return null;
+  if (d.public === false) return null;
+  return {
+    id: String(d.id || '').slice(0, 64),
+    title,
+    ref: String(d.ref || '').slice(0, 200).trim(),
+    series: String(d.series || '').slice(0, 80).trim() || undefined,
+    text: String(d.text || '').slice(0, 4000).trim(),
+    ts: Number(d.ts) || 0,
+  };
+}
+
+export function buildDevosFeed(devos, { name = '', churchNpub = '', baseUrl = '' } = {}) {
+  const rows = (Array.isArray(devos) ? devos : []).map(publicDevoFields).filter(Boolean)
+    .sort((a, b) => (b.ts || 0) - (a.ts || 0));
+  return JSON.stringify({
+    generator: 'TrinityOne',
+    church: name || undefined,
+    churchNpub: churchNpub || undefined,
+    base: baseUrl || undefined,
+    devotionals: rows,
   }, null, 2) + '\n';
 }

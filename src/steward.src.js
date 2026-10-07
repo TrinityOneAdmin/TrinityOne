@@ -4614,7 +4614,10 @@ function _webNormalise(c) {
   const calName = String(o.calName || '').slice(0, 120);
   const sermonFeedName = String(o.sermonFeedName || '').slice(0, 120);
   const detail = o.detail === 'short' ? 'short' : 'full';
-  return { calendar: o.calendar === true, sermons: o.sermons === true, plans: o.plans === true, optOut, optIn: _webIds(o.optIn).filter(x => !optOut.includes(x)), address: 'own', horizonMonths, calName, sermonFeedName, detail };
+  const devos = o.devos === true;
+  const planLimit = (typeof o.planLimit === 'number' && o.planLimit >= 0 && o.planLimit <= 100) ? Math.floor(o.planLimit) : 0;
+  const devoLimit = (typeof o.devoLimit === 'number' && o.devoLimit >= 0 && o.devoLimit <= 100) ? Math.floor(o.devoLimit) : 0;
+  return { calendar: o.calendar === true, sermons: o.sermons === true, plans: o.plans === true, devos, optOut, optIn: _webIds(o.optIn).filter(x => !optOut.includes(x)), address: 'own', horizonMonths, calName, sermonFeedName, detail, planLimit, devoLimit };
 }
 // THE TWO LISTS MUST NEVER HOLD THE SAME ID (AUDIT-feeds-round5-2026-09-22 F1). `optOut` holds the
 // whole-church events a steward ticked OFF; `optIn` the GROUP events a steward ticked ON. An id in both is
@@ -9309,7 +9312,7 @@ window.Steward = {
     const signer = skFor(asPub); if (!signer) return Promise.resolve(null);
     const id = plan.id || ('plan' + Date.now());
     const pubAt = plan.publishAt && plan.publishAt > now() ? Math.floor(plan.publishAt) : 0;   // schedule: members hide until this unix-sec time
-    const content = JSON.stringify({ id, title: plan.title || 'Plan', sub: plan.sub || '', tag: plan.tag || '', accent: plan.accent || 'var(--clay)', blurb: plan.blurb || '', days: plan.days || [], publishAt: pubAt, draft: !!plan.draft });
+    const content = JSON.stringify({ id, title: plan.title || 'Plan', sub: plan.sub || '', tag: plan.tag || '', accent: plan.accent || 'var(--clay)', blurb: plan.blurb || '', days: plan.days || [], publishAt: pubAt, draft: !!plan.draft, public: plan.public !== false });
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', PLAN_D + id], ['t', NET]], content }, signer))
       .then(e => ({ id, ...JSON.parse(content), ts: e && e.created_at }));
   },
@@ -9346,6 +9349,7 @@ window.Steward = {
     if (devo.series) base.series = String(devo.series).slice(0, 80);   // the named series this devotional belongs to (groups it in both apps)
     if (devo.publishAt && devo.publishAt > now()) base.publishAt = Math.floor(devo.publishAt);   // schedule: members hide it until this unix-sec time; the steward still sees it
     if (devo.draft) base.draft = true;   // held: hidden from members until the steward publishes (regardless of publishAt)
+    base.public = devo.public !== false;
     const content = JSON.stringify(base);
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', DEVO_D + id], ['t', NET]], content }))
       .then(e => ({ id, ...JSON.parse(content), ts: e && e.created_at }));
@@ -9393,7 +9397,7 @@ window.Steward = {
         if (!d.startsWith(DEVO_D)) return;
         const id = d.slice(DEVO_D.length);
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { _forgetById(versions, byId, id, e.pubkey, e.created_at, _consoleDisplay, { churchPub: pub, targets: _tombstoneTargets(e), mayName: _consoleChurchVoice }); emit(); return; }
-        try { const c = JSON.parse(e.content); _absorbById(versions, byId, id, { id, title: c.title, ref: c.ref, type: c.type, text: c.text || '', order: c.order, series: c.series || '', publishAt: c.publishAt || 0, draft: !!c.draft, hasFile: !!c.text, ts: e.created_at, _by: e.pubkey }, _consoleDisplay); emit(); } catch {}
+        try { const c = JSON.parse(e.content); _absorbById(versions, byId, id, { id, title: c.title, ref: c.ref, type: c.type, text: c.text || '', order: c.order, series: c.series || '', publishAt: c.publishAt || 0, draft: !!c.draft, public: c.public !== false, hasFile: !!c.text, ts: e.created_at, _by: e.pubkey }, _consoleDisplay); emit(); } catch {}
       },
       oneose() { emit(); },
     });
