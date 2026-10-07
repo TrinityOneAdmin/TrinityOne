@@ -18197,7 +18197,7 @@ zoo`.split("\n");
   var _svcSeq = 0;
   var _reqSeq = 0;
   var WEB_HORIZON_OK = /* @__PURE__ */ new Set([3, 6, 12]);
-  var WEB_DEFAULT = Object.freeze({ calendar: false, sermons: false, plans: false, optOut: [], optIn: [], address: "own", horizonMonths: 6, calName: "", sermonFeedName: "", detail: "full" });
+  var WEB_DEFAULT = Object.freeze({ calendar: false, sermons: false, plans: false, optOut: [], optIn: [], address: "own", horizonMonths: 6, calName: "", sermonFeedName: "", sermonLimit: 10, detail: "full" });
   var WEB_ID_OK = /^[A-Za-z0-9_-]{1,64}$/;
   var _webIds = (v) => [...new Set((Array.isArray(v) ? v : []).map((x) => String(x)).filter((x) => WEB_ID_OK.test(x)))];
   function _webNormalise(c) {
@@ -18210,7 +18210,8 @@ zoo`.split("\n");
     const devos = o.devos === true;
     const planLimit = typeof o.planLimit === "number" && o.planLimit >= 0 && o.planLimit <= 100 ? Math.floor(o.planLimit) : 0;
     const devoLimit = typeof o.devoLimit === "number" && o.devoLimit >= 0 && o.devoLimit <= 100 ? Math.floor(o.devoLimit) : 0;
-    return { calendar: o.calendar === true, sermons: o.sermons === true, plans: o.plans === true, devos, optOut, optIn: _webIds(o.optIn).filter((x) => !optOut.includes(x)), address: "own", horizonMonths, calName, sermonFeedName, detail, planLimit, devoLimit };
+    const sermonLimit = typeof o.sermonLimit === "number" && o.sermonLimit >= 0 && o.sermonLimit <= 100 ? Math.floor(o.sermonLimit) : 10;
+    return { calendar: o.calendar === true, sermons: o.sermons === true, plans: o.plans === true, devos, optOut, optIn: _webIds(o.optIn).filter((x) => !optOut.includes(x)), address: "own", horizonMonths, calName, sermonFeedName, sermonLimit, detail, planLimit, devoLimit };
   }
   function _webOneList(st, w, next) {
     const same = (a, b) => a.length === b.length && a.every((x, i3) => x === b[i3]);

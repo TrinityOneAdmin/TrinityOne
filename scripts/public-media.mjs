@@ -102,6 +102,7 @@ export function publicPlanFields(p) {
   if (!title) return null;
   if (p.draft) return null;
   if (p.public === false) return null;
+  if (p.publishAt && p.publishAt > Math.floor(Date.now() / 1000)) return null;
   const days = Array.isArray(p.days) ? p.days.map(d => ({
     d: Number(d.d) || 0,
     ref: String(d.ref || '').slice(0, 200).trim(),
@@ -138,6 +139,7 @@ export function publicDevoFields(d) {
   if (!title) return null;
   if (d.draft) return null;
   if (d.public === false) return null;
+  if (d.publishAt && d.publishAt > Math.floor(Date.now() / 1000)) return null;
   return {
     id: String(d.id || '').slice(0, 64),
     title,

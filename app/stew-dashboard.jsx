@@ -5622,7 +5622,7 @@ function NewDevotionalModal({ onClose, editing, seriesOptions }) {
     setBusy(true);
     const text = file ? file.text : (editing ? editing.text : '');
     const type = file ? file.type : (editing ? editing.type : 'txt');
-    Promise.resolve(window.Steward.publishDevotional({ id: editing ? editing.id : undefined, title: title.trim(), ref: ref.trim(), series: series.trim(), publishAt: isFuture ? schedAt : 0, draft: !!asDraft, type, text: text || '', order: editing ? editing.order : undefined })).then(() => onClose());
+    Promise.resolve(window.Steward.publishDevotional({ id: editing ? editing.id : undefined, title: title.trim(), ref: ref.trim(), series: series.trim(), publishAt: isFuture ? schedAt : 0, draft: !!asDraft, type, text: text || '', order: editing ? editing.order : undefined, public: editing ? editing.public : undefined })).then(() => onClose());
   };
   const dlgRef = useStewDialog(onClose);   // a11y: Escape + focus (dialog semantics on the panel below)
   return (

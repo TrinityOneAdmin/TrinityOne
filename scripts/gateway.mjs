@@ -6166,7 +6166,7 @@ function publicFeed(req, res, route) {
     const wcp = toHexPub(wm[1]);
     if (!wcp || !CHURCH_PUBS.has(wcp)) return notFound();
     const wshare = SHARE_BY.get(wcp);
-    if (!wshare || !wshare.calendar) return notFound();
+    if (!wshare || !(wshare.calendar || wshare.sermons || wshare.plans || wshare.devos)) return notFound();
     const wbody = Buffer.from(widgetJs(), 'utf8');
     res.writeHead(200, {
       'Content-Type': 'text/javascript; charset=utf-8', 'Content-Length': wbody.length,
@@ -6232,6 +6232,7 @@ function publicFeed(req, res, route) {
     if (!pshare || !pshare.plans) return notFound();
     const all = PUBPLANS.get(pcp);
     let plans = all ? [...all.values()] : [];
+    plans.sort((a, b) => (b.ts || 0) - (a.ts || 0));
     if (pshare.planLimit) plans = plans.slice(0, pshare.planLimit);
     let pname = '';
     try { const prof = store.query({ kinds: [0], authors: [pcp], limit: 1 })[0]; if (prof) pname = String(JSON.parse(prof.content || '{}').name || '').slice(0, 120); } catch {}
@@ -6253,6 +6254,7 @@ function publicFeed(req, res, route) {
     if (!dshare || !dshare.devos) return notFound();
     const all = PUBDEVOS.get(dcp);
     let devos = all ? [...all.values()] : [];
+    devos.sort((a, b) => (b.ts || 0) - (a.ts || 0));
     if (dshare.devoLimit) devos = devos.slice(0, dshare.devoLimit);
     let dname = '';
     try { const prof = store.query({ kinds: [0], authors: [dcp], limit: 1 })[0]; if (prof) dname = String(JSON.parse(prof.content || '{}').name || '').slice(0, 120); } catch {}
