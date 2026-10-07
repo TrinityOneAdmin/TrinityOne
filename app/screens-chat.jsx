@@ -509,8 +509,7 @@ function ChatScreen({ ctx }) {
           <Icon name="chevR" size={17} color="var(--clay)" />
         </div>
       ) : null}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: (ctx.churchNetworks || []).length ? 12 : (givingOn ? 16 : 20), animation: 'trinityFade .5s ease .04s both' }}>
-        <h1 style={{ margin: 0, fontFamily: 'var(--font-display)', fontSize: 30, fontWeight: 700, letterSpacing: '-.5px' }}>Chat</h1>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', marginBottom: (ctx.churchNetworks || []).length ? 12 : (givingOn ? 16 : 20), animation: 'trinityFade .5s ease .04s both' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
           <IconBtn name="search" onClick={() => { if (searchOpen) { setSearchOpen(false); setQ(''); } else setSearchOpen(true); }} title="Search" />
           <span style={{ position: 'relative', display: 'inline-flex' }}>
@@ -706,8 +705,8 @@ function ChatScreen({ ctx }) {
           header button stays; this puts the last few where they were already looking. */}
       {dmThreads.length ? (
         <React.Fragment>
-          <SectionLabel>Private messages</SectionLabel>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 22 }}>
+          <CatLabel label="Private messages" ck="dm" />
+          {!collapsed.dm ? <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 22, animation: 'trinityFade .5s ease .08s both' }}>
             {dmThreads.slice(0, 3).map(c => {
               const F = window.Fellowship;
               const d = (F && F.displayFor) ? F.displayFor(c.peer) : { handle: '' };
@@ -724,7 +723,7 @@ function ChatScreen({ ctx }) {
               );
             })}
             {dmThreads.length > 3 ? <button onClick={() => ctx.openDMInbox()} style={{ alignSelf: 'flex-start', border: 'none', background: 'none', padding: '2px 2px', cursor: 'pointer', color: 'var(--clay)', fontWeight: 700, fontSize: 13, fontFamily: 'var(--font-ui)' }}>All private messages ({dmThreads.length})</button> : null}
-          </div>
+          </div> : null}
         </React.Fragment>
       ) : null}
 
