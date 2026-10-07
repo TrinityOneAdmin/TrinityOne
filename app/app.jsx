@@ -2106,6 +2106,7 @@ function App() {
     dmThreads,  // the same feed, so the Chat list does not open a second one
     walletSats, setWalletSats, giving, setGiving,
     funds, addFund: (f) => setFunds(fs => [...fs, { ...f, id: f.id || ('fund' + Date.now()), church: activeChurch }]),
+    churchNpub: activeChurch,
     readView, setReadView,
     openReader: () => { setReadView('bible'); setTab('read'); },
     openPlans: () => { setReadView('plans'); setTab('read'); },

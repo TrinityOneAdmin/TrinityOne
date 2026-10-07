@@ -2179,19 +2179,60 @@ function TodayScreen({ ctx }) {
 
   // church verse prompt — a steward pushed a specific verse for all members
   const [versePrompt, setVersePrompt] = React.useState(null);
+  const [vpTick, setVpTick] = React.useState(0);
   React.useEffect(() => {
     if (!window.Fellowship || !window.Fellowship.subscribeChurchVersePrompt || !ctx.churchNpub) return;
     return window.Fellowship.subscribeChurchVersePrompt(ctx.churchNpub, setVersePrompt);
   }, [ctx.churchNpub]);
-  let vpText = versePrompt ? versePrompt.ref : '';
-  let vpVersion = '';
-  if (versePrompt && versePrompt.ref && Bible.loaded) {
-    const vl = Bible.parseRef(versePrompt.ref);
-    if (vl && Bible.books().includes(vl.book)) {
-      const vr = Bible.getVerses(vl.book, vl.chap).find(v => String(v.v) === String(vl.verse));
-      if (vr) { vpText = vr.text; vpVersion = Bible.activeVersion; }
+
+  // resolve active schedule entries — show all verses whose scheduled time has passed
+  const vpNow = Math.floor(Date.now() / 1000);
+  const vpSchedule = (versePrompt && Array.isArray(versePrompt.schedule)) ? versePrompt.schedule : [];
+  let vpVisible = false;
+  let vpActiveRef = '';
+  let vpActiveNote = '';
+  if (vpSchedule.length > 0) {
+    const past = vpSchedule.filter(function(s) { return s.at <= vpNow; }).sort(function(a, b) { return a.at - b.at; });
+    if (past.length > 0) {
+      vpVisible = true;
+      vpActiveRef = past.map(function(s) { return s.ref; }).filter(Boolean).join('; ');
+      vpActiveNote = past[past.length - 1].note || (versePrompt ? versePrompt.note : '');
     }
+  } else if (versePrompt) {
+    vpVisible = true;
+    vpActiveRef = versePrompt.ref || '';
+    vpActiveNote = versePrompt.note || '';
   }
+
+  // timer: reveal the next scheduled entry when its time arrives
+  React.useEffect(() => {
+    if (!versePrompt || vpSchedule.length === 0) return;
+    const future = vpSchedule.filter(function(s) { return s.at > Math.floor(Date.now() / 1000); });
+    if (future.length === 0) return;
+    const next = future.reduce(function(a, b) { return a.at < b.at ? a : b; });
+    const ms = (next.at - Math.floor(Date.now() / 1000)) * 1000 + 500;
+    if (ms > 86400000) return;
+    const tid = setTimeout(function() { setVpTick(function(n) { return n + 1; }); }, ms);
+    return function() { clearTimeout(tid); };
+  }, [versePrompt, vpTick]);
+
+  const vpRefs = vpActiveRef ? vpActiveRef.split('; ').filter(Boolean) : [];
+  const vpPages = vpRefs.map(function(ref) {
+    var text = ref, version = '';
+    if (Bible.loaded) {
+      var vl = Bible.parseRef(ref);
+      if (vl && Bible.books().includes(vl.book)) {
+        var vr = Bible.getVerses(vl.book, vl.chap).find(function(v) { return String(v.v) === String(vl.verse); });
+        if (vr) { text = vr.text; version = Bible.activeVersion; }
+      }
+    }
+    return { ref: ref, text: text, version: version };
+  });
+  const [vpIdx, setVpIdx] = React.useState(0);
+  const vpTouchRef = React.useRef(null);
+  const vpPage = vpPages[vpIdx] || vpPages[0] || null;
+  let vpText = vpPage ? vpPage.text : '';
+  let vpVersion = vpPage ? vpPage.version : '';
 
   // continue reading — from the live reading location
   const loc = ctx.loc;
@@ -2470,9 +2511,20 @@ function TodayScreen({ ctx }) {
       })() : null}
 
       {/* Church verse prompt — steward-pushed verse for the whole congregation */}
-      {versePrompt && versePrompt.ref ? (
-        <div onClick={() => { const vl = Bible.parseRef(versePrompt.ref); if (vl) ctx.goToVerse(vl.book, vl.chap, vl.verse); }} style={{
-          position: 'relative', borderRadius: 22, overflow: 'hidden', cursor: 'pointer',
+      {vpPage && vpVisible ? (
+        <div
+          onTouchStart={(e) => { vpTouchRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY }; }}
+          onTouchEnd={(e) => {
+            if (!vpTouchRef.current || vpPages.length < 2) return;
+            var dx = e.changedTouches[0].clientX - vpTouchRef.current.x;
+            var dy = e.changedTouches[0].clientY - vpTouchRef.current.y;
+            vpTouchRef.current = null;
+            if (Math.abs(dx) < 40 || Math.abs(dy) > Math.abs(dx)) return;
+            if (dx < 0) setVpIdx(function(i) { return i < vpPages.length - 1 ? i + 1 : 0; });
+            else setVpIdx(function(i) { return i > 0 ? i - 1 : vpPages.length - 1; });
+          }}
+          style={{
+          position: 'relative', borderRadius: 22, overflow: 'hidden',
           background: 'linear-gradient(155deg, var(--sage) 0%, var(--sage-ink) 100%)',
           padding: '20px 20px 16px', color: '#fff', marginBottom: 16, boxShadow: 'var(--shadow-lg)',
           animation: 'trinityFade .5s ease both',
@@ -2482,18 +2534,29 @@ function TodayScreen({ ctx }) {
           <div style={{ position: 'absolute', right: -20, bottom: -28, opacity: .12 }}>
             <Icon name="book" size={150} stroke={1.2} color="#fff" />
           </div>
-          <div style={{ position: 'relative' }}>
+          <div style={{ position: 'relative', cursor: 'pointer' }} onClick={() => { const vl = Bible.parseRef(vpPage.ref); if (vl) ctx.gotoRef(vl.book, vl.chap, vl.verse); }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 11, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', opacity: .88 }}>
               <Icon name="sparkle" size={14} stroke={2} /> Your church is reading
             </div>
-            {vpText && vpText !== versePrompt.ref ? (
+            {vpText && vpText !== vpPage.ref ? (
               <p style={{ fontFamily: 'var(--font-read)', fontSize: 20, lineHeight: 1.38, margin: '12px 0 10px', fontWeight: 500, textWrap: 'pretty' }}>
                 {votdQuoteMarks(vpText).open}{vpText}{votdQuoteMarks(vpText).close}
               </p>
             ) : null}
-            <div style={{ fontWeight: 700, fontSize: 14, letterSpacing: '.2px' }}>{versePrompt.ref}{vpVersion ? ' · ' + vpVersion : ''}</div>
-            {versePrompt.note ? <div style={{ fontSize: 13, opacity: .88, marginTop: 8, lineHeight: 1.45, fontStyle: 'italic' }}>{versePrompt.note}</div> : null}
+            <div style={{ fontWeight: 700, fontSize: 14, letterSpacing: '.2px' }}>{vpPage.ref}{vpVersion ? ' \u00b7 ' + vpVersion : ''}</div>
+            {vpActiveNote ? <div style={{ fontSize: 13, opacity: .88, marginTop: 8, lineHeight: 1.45, fontStyle: 'italic' }}>{vpActiveNote}</div> : null}
           </div>
+          {vpPages.length > 1 ? (
+            <div style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 14 }}>
+              <button onClick={(e) => { e.stopPropagation(); setVpIdx(function(i) { return i > 0 ? i - 1 : vpPages.length - 1; }); }} style={{ border: 'none', background: 'rgba(255,255,255,.18)', borderRadius: 99, width: 30, height: 30, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#fff', flexShrink: 0 }}><Icon name="chevL" size={16} color="#fff" /></button>
+              <div style={{ display: 'flex', gap: 7, alignItems: 'center' }}>
+                {vpPages.map(function(_, i) {
+                  return <div key={i} onClick={function(e) { e.stopPropagation(); setVpIdx(i); }} style={{ width: i === vpIdx ? 20 : 8, height: 8, borderRadius: 99, background: i === vpIdx ? '#fff' : 'rgba(255,255,255,.4)', cursor: 'pointer', transition: 'all .2s ease' }} />;
+                })}
+              </div>
+              <button onClick={(e) => { e.stopPropagation(); setVpIdx(function(i) { return i < vpPages.length - 1 ? i + 1 : 0; }); }} style={{ border: 'none', background: 'rgba(255,255,255,.18)', borderRadius: 99, width: 30, height: 30, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#fff', flexShrink: 0 }}><Icon name="chevR" size={16} color="#fff" /></button>
+            </div>
+          ) : null}
         </div>
       ) : null}
 

@@ -3250,7 +3250,26 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
       <span className="sk-btn sk-btn--clay" style={{ padding: '9px 14px', fontSize: 13.5, flexShrink: 0 }}>Review <Icon name="chevR" size={15} color="var(--on-clay)" /></span>
     </button>
   ) : null;
-  // on narrow, panels size to content and the page scrolls; on wide they fill a fixed-height grid + scroll inside.
+  // live verse prompt indicator on overview
+  var _ovVpState = React.useState(null), _ovVp = _ovVpState[0], _setOvVp = _ovVpState[1];
+  React.useEffect(function() {
+    if (!window.Steward || !window.Steward.subscribeVersePrompt) return;
+    return window.Steward.subscribeVersePrompt(function(v) { _setOvVp(v); });
+  }, []);
+  var _ovHasSchedule = _ovVp && Array.isArray(_ovVp.schedule) && _ovVp.schedule.length > 0;
+  var _ovAllFuture = _ovHasSchedule && _ovVp.schedule.every(function(s) { return s.at > Math.floor(Date.now() / 1000); });
+  var verseBanner = (_ovVp && _ovVp.ref) ? (
+    <button onClick={function() { onTab('resources'); }} style={{ display: 'flex', alignItems: 'center', gap: 13, width: '100%', textAlign: 'left', cursor: 'pointer', padding: '14px 18px', borderRadius: 16, border: '1px solid color-mix(in oklab, ' + (_ovAllFuture ? 'var(--clay)' : 'var(--sage)') + ' 30%, var(--line))', background: 'color-mix(in oklab, ' + (_ovAllFuture ? 'var(--clay)' : 'var(--sage)') + ' 10%, var(--surface))', fontFamily: 'var(--font-ui)' }}>
+      <div style={{ width: 42, height: 42, borderRadius: 12, flexShrink: 0, background: _ovAllFuture ? 'var(--clay)' : 'var(--sage)', color: _ovAllFuture ? 'var(--on-clay)' : 'var(--on-sage)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={_ovAllFuture ? 'clock' : 'book'} size={21} color="currentColor" /></div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 800, fontSize: 15.5, color: _ovAllFuture ? 'var(--clay-ink)' : 'var(--sage-ink)' }}>{_ovAllFuture ? 'Verse prompt scheduled' : 'Verse prompt is live'}</div>
+        <div style={{ fontSize: 13.5, color: 'var(--ink-2)' }}>{_ovVp.ref}</div>
+      </div>
+      <SkPill tint={_ovAllFuture ? 'clay' : 'sage'}>{_ovAllFuture ? 'Scheduled' : 'Live'}</SkPill>
+    </button>
+  ) : null;
+
+    // on narrow, panels size to content and the page scrolls; on wide they fill a fixed-height grid + scroll inside.
   // THE LOWER CARDS STACK IN THE SUITE'S WINDOW TOO (`snug`, under 1000px). Side by side in a 612px pane they were
   // 300px and 308px wide (measured 2026-09-22 at 900x780): "Notices" ellipsed to "Noti…" beside its Broadcast
   // pill, and the joining card's QR sat against a 142px text column with the code, the npub box and five
@@ -3328,7 +3347,7 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
   if (narrow) {
     return (
       <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 16 }}>
-        {pendingBanner}{careReqBanner}{stewardReqBanner}{stat}{joinPanel}{groupsPanel}{activityPanel}
+        {pendingBanner}{careReqBanner}{stewardReqBanner}{verseBanner}{stat}{joinPanel}{groupsPanel}{activityPanel}
         {chatModal}
       </div>
     );
@@ -3337,7 +3356,7 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
     // the Suite's window: the desktop stat row, then one column of content-sized cards — see `stacked`
     return (
       <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 18 }}>
-        {pendingBanner}{careReqBanner}{stewardReqBanner}{stat}{groupsPanel}{joinPanel}{activityPanel}
+        {pendingBanner}{careReqBanner}{stewardReqBanner}{verseBanner}{stat}{groupsPanel}{joinPanel}{activityPanel}
         {chatModal}
       </div>
     );
@@ -3347,6 +3366,7 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
       {pendingBanner}
       {careReqBanner}
       {stewardReqBanner}
+      {verseBanner}
       {stat}
       <div style={{ display: 'grid', gridTemplateColumns: '1.45fr 1fr', gap: 18, flex: 1, minHeight: 0 }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 18, minHeight: 0 }}>{groupsPanel}</div>
@@ -4996,12 +5016,36 @@ function ago(ts) {
 function NewPlanModal({ onClose }) {
   const [name, setName] = React.useState('');
   const [tag, setTag] = React.useState('');
-  const [text, setText] = React.useState('');
+  const [readings, setReadings] = React.useState([]);
+  const [rpBook, setRpBook] = React.useState('');
+  const [rpChap, setRpChap] = React.useState('');
+  const [rpFrom, setRpFrom] = React.useState('');
+  const [rpTo, setRpTo] = React.useState('');
+  var rpEntry = VP_BOOKS.find(function(b) { return b[0] === rpBook; });
+  var rpMaxChap = rpEntry ? rpEntry[1] : 0;
+  var rpChapList = [];
+  for (var _ri = 1; _ri <= rpMaxChap; _ri++) rpChapList.push(_ri);
+  var rpAssembled = '';
+  if (rpBook && rpChap) {
+    rpAssembled = rpBook + ' ' + rpChap;
+    if (rpFrom) {
+      rpAssembled += ':' + rpFrom;
+      if (rpTo && Number(rpTo) > Number(rpFrom)) rpAssembled += '-' + rpTo;
+    }
+  }
+  var rpAdd = function() {
+    if (!rpAssembled) return;
+    setReadings(function(prev) { return prev.concat([rpAssembled]); });
+    setRpBook(''); setRpChap(''); setRpFrom(''); setRpTo('');
+  };
+  var rpRemove = function(idx) {
+    setReadings(function(prev) { return prev.filter(function(_, i) { return i !== idx; }); });
+  };
   const [schedAt, setSchedAt] = React.useState(0);   // unix sec; 0 = publish now
   const toLocalInput = (sec) => { if (!sec) return ''; const d = new Date(sec * 1000); const p = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`; };
   const fromLocalInput = (s) => { if (!s) return 0; const t = new Date(s).getTime(); return Number.isFinite(t) ? Math.floor(t / 1000) : 0; };
   const isFuture = schedAt && schedAt * 1000 > Date.now();
-  const lines = text.split('\n').map(s => s.trim()).filter(Boolean);
+  const lines = readings;
   const create = (asDraft) => {
     if (!name.trim() || !lines.length) return;
     const days = lines.map((ref, i) => ({ d: i + 1, ref, label: ref }));
@@ -5022,8 +5066,29 @@ function NewPlanModal({ onClose }) {
         <input value={name} onChange={e => setName(e.target.value)} autoFocus placeholder="e.g. Advent — Light Has Come" style={{ width: '100%', boxSizing: 'border-box', height: 46, border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '0 14px', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 14 }} />
         <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 6 }}>Tag (optional)</div>
         <input value={tag} onChange={e => setTag(e.target.value)} placeholder="e.g. Advent" style={{ width: '100%', boxSizing: 'border-box', height: 46, border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '0 14px', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 14 }} />
-        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 6 }}>Readings — one per line {lines.length ? `· ${lines.length} day${lines.length === 1 ? '' : 's'}` : ''}</div>
-        <textarea value={text} onChange={e => setText(e.target.value)} rows={7} placeholder={'John 1\nJohn 2\nIsaiah 53\nPsalm 22'} style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '12px 14px', fontSize: 14.5, fontFamily: 'var(--mono)', color: 'var(--ink)', outline: 'none', resize: 'vertical', lineHeight: 1.6 }} />
+        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 6 }}>Readings {lines.length ? '\u00b7 ' + lines.length + ' day' + (lines.length === 1 ? '' : 's') : ''}</div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'end', marginBottom: 10 }}>
+          <select value={rpBook} onChange={function(e) { setRpBook(e.target.value); setRpChap(''); setRpFrom(''); setRpTo(''); }} style={Object.assign({ height: 38, padding: '0 8px', borderRadius: 10, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 13.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }, { flex: '1 1 140px', maxWidth: 200 })} aria-label="Book">
+            <option value="">Book</option>
+            {VP_BOOKS.map(function(b) { return <option key={b[0]} value={b[0]}>{b[0]}</option>; })}
+          </select>
+          {rpBook ? <select value={rpChap} onChange={function(e) { setRpChap(e.target.value); setRpFrom(''); setRpTo(''); }} style={Object.assign({ height: 38, padding: '0 8px', borderRadius: 10, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 13.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }, { width: 70 })} aria-label="Chapter">
+            <option value="">Ch.</option>
+            {rpChapList.map(function(c) { return <option key={c} value={String(c)}>{c}</option>; })}
+          </select> : null}
+          {rpChap ? <input type="number" min="1" value={rpFrom} onChange={function(e) { setRpFrom(e.target.value.replace(/[^0-9]/g, '')); }} placeholder="from" style={Object.assign({ height: 38, padding: '0 8px', borderRadius: 10, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 13.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }, { width: 60, textAlign: 'center' })} aria-label="From verse" /> : null}
+          {rpFrom ? <input type="number" min={Number(rpFrom) + 1} value={rpTo} onChange={function(e) { setRpTo(e.target.value.replace(/[^0-9]/g, '')); }} placeholder="to" style={Object.assign({ height: 38, padding: '0 8px', borderRadius: 10, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 13.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }, { width: 60, textAlign: 'center' })} aria-label="To verse" /> : null}
+          {rpAssembled ? <button onClick={rpAdd} className="sk-btn sk-btn--clay" style={{ padding: '7px 12px', fontSize: 12.5, height: 38 }}><Icon name="plus" size={13} color="var(--on-clay)" /> Add</button> : null}
+        </div>
+        {readings.length > 0 ? <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 200, overflowY: 'auto', marginBottom: 6 }}>
+          {readings.map(function(r, i) {
+            return <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', borderRadius: 10, background: 'var(--surface-2)', border: '1px solid var(--line)', fontSize: 13.5 }}>
+              <span style={{ width: 22, textAlign: 'center', fontWeight: 700, fontSize: 11, color: 'var(--ink-3)' }}>{i + 1}</span>
+              <span style={{ flex: 1, fontWeight: 600 }}>{r}</span>
+              <button onClick={function() { rpRemove(i); }} style={{ border: 'none', background: 'none', cursor: 'pointer', padding: 2, color: 'var(--ink-3)' }}><Icon name="x" size={14} color="currentColor" /></button>
+            </div>;
+          })}
+        </div> : <div style={{ padding: '12px 0', textAlign: 'center', color: 'var(--ink-3)', fontSize: 13 }}>Pick a book and chapter above to add readings.</div>}
         <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '16px 0 6px' }}>Release</div>
         <div style={{ display: 'flex', gap: 8 }}>
           <button type="button" onClick={() => setSchedAt(0)} style={{ flex: 1, padding: '11px 12px', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, background: !schedAt ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'var(--surface-2)', border: '1.5px solid ' + (!schedAt ? 'var(--clay)' : 'var(--line)'), color: !schedAt ? 'var(--clay-ink)' : 'var(--ink-2)' }}>Now</button>
@@ -5046,44 +5111,322 @@ function NewPlanModal({ onClose }) {
   );
 }
 
-function VersePromptCard() {
-  const [vp, setVp] = React.useState(null);
-  const [ref, setRef] = React.useState('');
-  const [note, setNote] = React.useState('');
-  const [busy, setBusy] = React.useState(false);
-  const [msg, setMsg] = React.useState('');
-  React.useEffect(() => {
-    if (!window.Steward.subscribeVersePrompt) return;
-    return window.Steward.subscribeVersePrompt(v => { setVp(v); if (v && v.ref) { setRef(v.ref); setNote(v.note || ''); } });
+var VP_BOOKS = [
+  ['Genesis',50],['Exodus',40],['Leviticus',27],['Numbers',36],['Deuteronomy',34],
+  ['Joshua',24],['Judges',21],['Ruth',4],['1 Samuel',31],['2 Samuel',24],
+  ['1 Kings',22],['2 Kings',25],['1 Chronicles',29],['2 Chronicles',36],
+  ['Ezra',10],['Nehemiah',13],['Esther',10],['Job',42],['Psalms',150],
+  ['Proverbs',31],['Ecclesiastes',12],['Song of Solomon',8],['Isaiah',66],
+  ['Jeremiah',52],['Lamentations',5],['Ezekiel',48],['Daniel',12],['Hosea',14],
+  ['Joel',3],['Amos',9],['Obadiah',1],['Jonah',4],['Micah',7],['Nahum',3],
+  ['Habakkuk',3],['Zephaniah',3],['Haggai',2],['Zechariah',14],['Malachi',4],
+  ['Matthew',28],['Mark',16],['Luke',24],['John',21],['Acts',28],['Romans',16],
+  ['1 Corinthians',16],['2 Corinthians',13],['Galatians',6],['Ephesians',6],
+  ['Philippians',4],['Colossians',4],['1 Thessalonians',5],['2 Thessalonians',3],
+  ['1 Timothy',6],['2 Timothy',4],['Titus',3],['Philemon',1],['Hebrews',13],
+  ['James',5],['1 Peter',5],['2 Peter',3],['1 John',5],['2 John',1],['3 John',1],
+  ['Jude',1],['Revelation',22]
+];
+
+function DashVersePrompt() {
+  var _s = React.useState, _e = React.useEffect;
+  var vpState = _s(null), vp = vpState[0], setVp = vpState[1];
+  var bookState = _s(''), book = bookState[0], setBook = bookState[1];
+  var chapState = _s(''), chap = chapState[0], setChap = chapState[1];
+  var fromState = _s(''), fromV = fromState[0], setFrom = fromState[1];
+  var toState = _s(''), toV = toState[0], setTo = toState[1];
+  var refsState = _s([]), refs = refsState[0], setRefs = refsState[1];
+  var busyState = _s(false), busy = busyState[0], setBusy = busyState[1];
+  var msgState = _s(''), msg = msgState[0], setMsg = msgState[1];
+  var editSchState = _s(null), editSch = editSchState[0], setEditSch = editSchState[1];
+  var toLocalInput = function(sec) { if (!sec) return ''; var d = new Date(sec * 1000); var p = function(n) { return String(n).padStart(2, '0'); }; return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + 'T' + p(d.getHours()) + ':' + p(d.getMinutes()); };
+  var fromLocalInput = function(s) { if (!s) return 0; var t = new Date(s).getTime(); return Number.isFinite(t) ? Math.floor(t / 1000) : 0; };
+  var saveEditSch = function() {
+    if (!editSch || !vp) return;
+    setBusy(true);
+    var combined = editSch.map(function(s) { return s.ref; }).filter(Boolean).join('; ');
+    var schedule = editSch.map(function(s) { return { at: s.at, ref: s.ref, note: s.note || '' }; }).sort(function(a, b) { return a.at - b.at; });
+    window.Steward.publishVersePrompt(combined, '', schedule).then(function() {
+      setEditSch(null); setMsg('Updated'); setTimeout(function() { setMsg(''); }, 3000);
+    }).catch(function(e) { setMsg('Failed: ' + (e.message || 'error')); }).then(function() { setBusy(false); });
+  };
+  var removeSchEntry = function(idx) {
+    if (!vp || !Array.isArray(vp.schedule)) return;
+    var remaining = vp.schedule.filter(function(_, i) { return i !== idx; });
+    if (remaining.length === 0) { clear(); return; }
+    setBusy(true);
+    var combined = remaining.map(function(s) { return s.ref; }).filter(Boolean).join('; ');
+    window.Steward.publishVersePrompt(combined, '', remaining).then(function() {
+      setMsg('Removed'); setTimeout(function() { setMsg(''); }, 3000);
+    }).catch(function(e) { setMsg('Failed: ' + (e.message || 'error')); }).then(function() { setBusy(false); });
+  };
+  var pvIdxState = _s(0), pvIdx = pvIdxState[0], setPvIdx = pvIdxState[1];
+  var bibleTickState = _s(0), bibleTick = bibleTickState[0], setBibleTick = bibleTickState[1];
+  var versionState = _s(''), bibleVersion = versionState[0], setBibleVersion = versionState[1];
+
+  _e(function() {
+    if (!window.Bible) return;
+    var unsub = window.Bible.subscribe(function() { setBibleTick(function(n) { return n + 1; }); });
+    if (window.Bible.loaded && !bibleVersion) setBibleVersion(window.Bible.activeVersion || '');
+    return unsub;
   }, []);
-  const push = async () => {
-    if (!ref.trim()) return;
-    setBusy(true); setMsg('');
-    try { await window.Steward.publishVersePrompt(ref.trim(), note.trim()); setMsg('✓ Sent'); setTimeout(() => setMsg(''), 2000); }
-    catch (e) { setMsg('✗ ' + (e.message || 'failed')); }
-    setBusy(false);
+  _e(function() {
+    if (window.Bible && window.Bible.loaded && !bibleVersion) setBibleVersion(window.Bible.activeVersion || '');
+  }, [bibleTick]);
+  var bibleLoaded = window.Bible && window.Bible.loaded;
+  var bibleVersions = bibleLoaded ? window.Bible.versions() : [];
+  var resolveText = function(ref) {
+    if (!bibleLoaded) return null;
+    var vl = window.Bible.parseRef(ref);
+    if (!vl || !window.Bible.books().includes(vl.book)) return null;
+    var ver = bibleVersion || window.Bible.activeVersion;
+    var verses = window.Bible.getVerses(vl.book, vl.chap, ver) || [];
+    if (vl.verse) {
+      var endV = ref.match(/:(\d+)-(\d+)/);
+      if (endV) {
+        var from = Number(endV[1]), to = Number(endV[2]);
+        var texts = verses.filter(function(v) { return v.v >= from && v.v <= to; }).map(function(v) { return v.text; });
+        return texts.length ? texts.join(' ') : null;
+      }
+      var vr = verses.find(function(v) { return String(v.v) === String(vl.verse); });
+      return vr ? vr.text : null;
+    }
+    return verses.map(function(v) { return v.text; }).join(' ');
   };
-  const clear = async () => {
-    setBusy(true); setMsg('');
-    try { await window.Steward.removeVersePrompt(); setRef(''); setNote(''); setVp(null); setMsg('✓ Cleared'); setTimeout(() => setMsg(''), 2000); }
-    catch (e) { setMsg('✗ ' + (e.message || 'failed')); }
-    setBusy(false);
+  var pvRefs = (vp && vp.ref) ? vp.ref.split('; ').filter(Boolean) : [];
+  var pvSafeIdx = pvIdx < pvRefs.length ? pvIdx : 0;
+  var pvRef = pvRefs[pvSafeIdx] || '';
+  var pvText = pvRef ? resolveText(pvRef) : null;
+
+  _e(function() {
+    if (!window.Steward.subscribeVersePrompt) return;
+    return window.Steward.subscribeVersePrompt(function(v) {
+      setVp(v);
+      if (v && v.showAt && v.showAt > Math.floor(Date.now() / 1000)) {
+        setScheduled(true);
+        var d = new Date(v.showAt * 1000);
+        setSchedDate(d.toISOString().slice(0, 10));
+        setSchedTime(d.toTimeString().slice(0, 5));
+      }
+    });
+  }, []);
+
+  var bookEntry = VP_BOOKS.find(function(b) { return b[0] === book; });
+  var maxChap = bookEntry ? bookEntry[1] : 0;
+  var chapList = [];
+  for (var i = 1; i <= maxChap; i++) chapList.push(i);
+
+  var assembled = '';
+  if (book && chap) {
+    assembled = book + ' ' + chap;
+    if (fromV) {
+      assembled += ':' + fromV;
+      if (toV && Number(toV) > Number(fromV)) assembled += '-' + toV;
+    }
+  }
+
+  var addRef = function() {
+    if (!assembled) return;
+    if (refs.some(function(r) { return r.ref === assembled; })) return;
+    setRefs(function(prev) { return prev.concat([{ ref: assembled, date: '', time: '' }]); });
+    setBook(''); setChap(''); setFrom(''); setTo('');
   };
+
+  var removeRef = function(idx) {
+    setRefs(function(prev) { return prev.filter(function(_, i) { return i !== idx; }); });
+  };
+
+  var updateRefSched = function(idx, field, val) {
+    setRefs(function(prev) { return prev.map(function(r, i) { if (i !== idx) return r; var n = { ref: r.ref, date: r.date, time: r.time }; n[field] = val; return n; }); });
+  };
+
+  var push = function() {
+    if (refs.length === 0) return;
+    setBusy(true); setMsg('');
+    var newSchedule = refs.filter(function(r) { return r.date && r.time; }).map(function(r) {
+      return { at: Math.floor(new Date(r.date + 'T' + r.time).getTime() / 1000), ref: r.ref, note: '' };
+    });
+    var existingSchedule = (vp && vp.schedule) ? vp.schedule : [];
+    var existingRefs = (vp && vp.ref) ? vp.ref : '';
+    var newImmediateRefs = refs.filter(function(r) { return !r.date || !r.time; }).map(function(r) { return r.ref; });
+    var mergedSchedule = existingSchedule.concat(newSchedule).sort(function(a, b) { return a.at - b.at; });
+    var allRefParts = [];
+    if (existingRefs) allRefParts.push(existingRefs);
+    newImmediateRefs.forEach(function(r) { if (allRefParts.indexOf(r) === -1 && existingRefs.indexOf(r) === -1) allRefParts.push(r); });
+    mergedSchedule.forEach(function(s) { if (allRefParts.join('; ').indexOf(s.ref) === -1) allRefParts.push(s.ref); });
+    var combined = allRefParts.join('; ');
+    var hasSchedule = mergedSchedule.length > 0;
+    window.Steward.publishVersePrompt(combined, '', hasSchedule ? mergedSchedule : undefined).then(function() {
+      var label = hasSchedule ? 'Scheduled' : 'Sent to church';
+      setRefs([]); setBook(''); setChap(''); setFrom(''); setTo('');
+      setMsg(label); setTimeout(function() { setMsg(''); }, 4000);
+    }).catch(function(e) { setMsg('Failed: ' + (e.message || 'error')); }).then(function() { setBusy(false); });
+  };
+
+  var clear = function() {
+    setBusy(true); setMsg('');
+    window.Steward.removeVersePrompt().then(function() {
+      setRefs([]); setBook(''); setChap(''); setFrom(''); setTo(''); setVp(null);
+      setMsg('Cleared'); setTimeout(function() { setMsg(''); }, 3000);
+    }).catch(function(e) { setMsg('Failed: ' + (e.message || 'error')); }).then(function() { setBusy(false); });
+  };
+
+  var selStyle = { height: 42, padding: '0 10px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 14, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' };
+  var numStyle = Object.assign({}, selStyle, { width: 72, textAlign: 'center' });
+
   return (
-    <Panel title="Verse prompt" action={vp && vp.ref ? <SkPill tint="sage">Live</SkPill> : null}>
-      <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 12 }}>Push a verse for the whole church to read. It appears on every member’s home screen.</div>
-      <div style={{ display: 'flex', gap: 9, flexWrap: 'wrap' }}>
-        <input value={ref} onChange={e => setRef(e.target.value)} placeholder="e.g. John 3:16" aria-label="Bible reference" style={{ flex: '1 1 140px', height: 42, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 14, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
-        <input value={note} onChange={e => setNote(e.target.value)} placeholder="Note (optional)" aria-label="Note to members" style={{ flex: '2 1 180px', height: 42, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 14, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 18, height: '100%' }}>
+      {vp && vp.ref ? (function() {
+        var vpSch = Array.isArray(vp.schedule) ? vp.schedule : [];
+        var vpVerses = vp.ref.split('; ').filter(Boolean);
+        var nowSec = Math.floor(Date.now() / 1000);
+        var allLive = vpSch.length === 0 || vpSch.every(function(s) { return s.at <= nowSec; });
+        var allFuture = vpSch.length > 0 && vpSch.every(function(s) { return s.at > nowSec; });
+        var statusLabel = allFuture ? 'Scheduled' : allLive ? 'Live now' : 'Partially live';
+        var statusColor = allFuture ? 'var(--clay-ink)' : 'var(--sage-ink)';
+        return <div style={{ padding: '14px 16px', borderRadius: 14, background: allFuture ? 'color-mix(in oklab, var(--clay) 8%, var(--surface))' : 'color-mix(in oklab, var(--sage) 12%, var(--surface))', border: '1px solid ' + (allFuture ? 'color-mix(in oklab, var(--clay) 20%, var(--line))' : 'color-mix(in oklab, var(--sage) 25%, var(--line))') }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: vpSch.length > 0 ? 10 : 0 }}>
+            <Icon name={allFuture ? 'clock' : 'sparkle'} size={16} color={statusColor} />
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.5px', textTransform: 'uppercase', color: statusColor, marginBottom: 2 }}>{statusLabel}</div>
+            </div>
+            <button onClick={clear} disabled={busy} className="sk-btn sk-btn--ghost" style={{ padding: '7px 12px', fontSize: 12.5 }}>Clear</button>
+          </div>
+          {vpSch.length > 0 ? (editSch ? <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {editSch.map(function(s, i) {
+              var live = s.at <= nowSec;
+              return <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderRadius: 10, background: 'var(--surface-2)', border: '1px solid var(--line)', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 13.5, fontWeight: 600, flex: '1 1 120px', minWidth: 80 }}>{s.ref}</span>
+                <input type="datetime-local" value={toLocalInput(s.at)} onChange={function(e) { setEditSch(function(prev) { return prev.map(function(x, j) { return j === i ? { ref: x.ref, at: fromLocalInput(e.target.value), note: x.note } : x; }); }); }} style={{ height: 34, border: '1px solid var(--line)', borderRadius: 10, background: 'var(--surface)', padding: '0 10px', fontSize: 13, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
+              </div>;
+            })}
+            <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+              <button onClick={saveEditSch} disabled={busy} className="sk-btn sk-btn--clay" style={{ padding: '7px 14px', fontSize: 12.5 }}><Icon name="send" size={13} color="var(--on-clay)" /> Save</button>
+              <button onClick={function() { setEditSch(null); }} className="sk-btn sk-btn--ghost" style={{ padding: '7px 14px', fontSize: 12.5 }}>Cancel</button>
+            </div>
+          </div> : <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {vpSch.map(function(s, i) {
+              var live = s.at <= nowSec;
+              return <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderRadius: 10, background: live ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface-2)', border: '1px solid var(--line)' }}>
+                <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: '.3px', padding: '2px 7px', borderRadius: 99, background: live ? 'var(--sage-soft)' : 'var(--clay-soft)', color: live ? 'var(--sage-ink)' : 'var(--clay-ink)' }}>{live ? 'LIVE' : 'SCHEDULED'}</span>
+                <span style={{ flex: 1, fontSize: 13.5, fontWeight: 600 }}>{s.ref || vp.ref}</span>
+                <span style={{ fontSize: 12, color: 'var(--ink-3)' }}>{new Date(s.at * 1000).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
+                <button type="button" onClick={function() { removeSchEntry(i); }} disabled={busy} style={{ border: 'none', background: 'none', cursor: 'pointer', padding: 2, color: 'var(--ink-3)', flexShrink: 0 }} title="Remove"><Icon name="x" size={14} color="currentColor" /></button>
+              </div>;
+            })}
+            <button type="button" onClick={function() { setEditSch(vpSch.map(function(s) { return { ref: s.ref, at: s.at, note: s.note || '' }; })); }} style={{ alignSelf: 'flex-start', border: 'none', background: 'none', cursor: 'pointer', padding: '4px 0', color: statusColor, fontSize: 12, fontWeight: 700, fontFamily: 'var(--font-ui)' }}>Edit schedule</button>
+          </div>) : <div style={{ fontSize: 14.5, fontWeight: 600, color: 'var(--ink)' }}>{vp.ref}</div>}
+        </div>;
+      })() : null}
+
+      <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', flex: 1, minHeight: 0, alignItems: 'flex-start' }}>
+      <Panel title="Add a passage" style={{ flex: '1 1 280px', maxWidth: '50%', minWidth: 280 }}>
+        <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 14 }}>Pick a verse or range. Add multiple passages, then push them all to the church at once.</div>
+        {bibleVersions.length > 1 ? <div style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', marginBottom: 4, letterSpacing: '0.3px' }}>TRANSLATION</div>
+          <select value={bibleVersion} onChange={function(e) { setBibleVersion(e.target.value); }} style={Object.assign({}, selStyle, { width: 'auto', minWidth: 140 })} aria-label="Translation">
+            {bibleVersions.map(function(v) { return <option key={v} value={v}>{v}</option>; })}
+          </select>
+        </div> : null}
+
+        <div style={{ display: 'flex', gap: 9, flexWrap: 'wrap', alignItems: 'end' }}>
+          <div style={{ flex: '1 1 180px', maxWidth: 240 }}>
+            <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', marginBottom: 4, letterSpacing: '0.3px' }}>BOOK</div>
+            <select value={book} onChange={function(e) { setBook(e.target.value); setChap(''); setFrom(''); setTo(''); }} style={Object.assign({}, selStyle, { width: '100%' })} aria-label="Book">
+              <option value="">Choose a book</option>
+              {VP_BOOKS.map(function(b) { return <option key={b[0]} value={b[0]}>{b[0]}</option>; })}
+            </select>
+          </div>
+          {book ? <div style={{ flex: '0 0 80px' }}>
+            <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', marginBottom: 4, letterSpacing: '0.3px' }}>CHAPTER</div>
+            <select value={chap} onChange={function(e) { setChap(e.target.value); setFrom(''); setTo(''); }} style={Object.assign({}, selStyle, { width: '100%' })} aria-label="Chapter">
+              <option value="">Ch.</option>
+              {chapList.map(function(c) { return <option key={c} value={String(c)}>{c}</option>; })}
+            </select>
+          </div> : null}
+          {chap ? <div style={{ flex: '0 0 72px' }}>
+            <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', marginBottom: 4, letterSpacing: '0.3px' }}>FROM</div>
+            <input type="number" min="1" value={fromV} onChange={function(e) { setFrom(e.target.value.replace(/[^0-9]/g, '')); }} placeholder="v" style={numStyle} aria-label="From verse" />
+          </div> : null}
+          {fromV ? <div style={{ flex: '0 0 72px' }}>
+            <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', marginBottom: 4, letterSpacing: '0.3px' }}>TO</div>
+            <input type="number" min={Number(fromV) + 1} value={toV} onChange={function(e) { setTo(e.target.value.replace(/[^0-9]/g, '')); }} placeholder="v" style={numStyle} aria-label="To verse (optional)" />
+          </div> : null}
+        </div>
+        {assembled ? <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 12 }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--ink)' }}>{assembled}</div>
+          <button onClick={addRef} className="sk-btn sk-btn--clay" style={{ padding: '7px 14px', fontSize: 13 }}><Icon name="plus" size={14} color="var(--on-clay)" /> Add</button>
+        </div> : null}
+        {assembled ? (function() {
+          var previewText = resolveText(assembled);
+          return <div style={{ marginTop: 14, padding: 14, borderRadius: 16, background: 'linear-gradient(155deg, #6b8f71 0%, #3d5a40 100%)', color: '#fff', position: 'relative', overflow: 'hidden' }}>
+            <div style={{ position: 'absolute', right: -14, bottom: -20, opacity: .10 }}><Icon name="book" size={100} stroke={1.2} color="#fff" /></div>
+            <div style={{ position: 'relative' }}>
+              <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', opacity: .8, marginBottom: 6, display: 'flex', alignItems: 'center', gap: 5 }}><Icon name="sparkle" size={12} stroke={2} /> Your church is reading</div>
+              {previewText ? <p style={{ fontSize: 15, lineHeight: 1.45, margin: '0 0 8px', fontStyle: 'italic', opacity: .92 }}>{previewText.length > 300 ? previewText.slice(0, 300) + '…' : previewText}</p> : null}
+              <div style={{ fontWeight: 700, fontSize: 14 }}>{assembled}{bibleVersion ? ' · ' + bibleVersion : ''}</div>
+            </div>
+          </div>;
+        })() : null}
+      </Panel>
+
+      {refs.length > 0 ? <Panel title={'Passages to send \u00b7 ' + refs.length}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 14 }}>
+          {refs.map(function(r, i) {
+            var hasSched = r.date && r.time;
+            var ts = hasSched ? new Date(r.date + 'T' + r.time).getTime() : 0;
+            var past = ts && ts < Date.now();
+            return <div key={i} style={{ padding: '12px 14px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+                <Icon name="book" size={16} color="var(--sage-ink)" />
+                <div style={{ flex: 1, fontSize: 14.5, fontWeight: 600 }}>{r.ref}</div>
+                <button onClick={function() { removeRef(i); }} style={{ border: 'none', background: 'none', cursor: 'pointer', padding: 4, color: 'var(--ink-3)' }} title="Remove"><Icon name="x" size={16} color="currentColor" /></button>
+              </div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '0.3px' }}>WHEN</div>
+                <input type="date" value={r.date} onChange={function(e) { updateRefSched(i, 'date', e.target.value); }} style={Object.assign({}, selStyle, { width: 148, height: 34, fontSize: 12.5 })} />
+                <input type="time" value={r.time} onChange={function(e) { updateRefSched(i, 'time', e.target.value); }} style={Object.assign({}, selStyle, { width: 108, height: 34, fontSize: 12.5 })} />
+                {!hasSched ? <span style={{ fontSize: 11, color: 'var(--ink-3)' }}>now</span> : past ? <span style={{ fontSize: 11, color: 'var(--clay-ink)', fontWeight: 700 }}>past</span> : <span style={{ fontSize: 11, color: 'var(--sage-ink)', fontWeight: 700 }}>scheduled</span>}
+              </div>
+            </div>;
+          })}
+        </div>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+          <button onClick={push} disabled={busy} className="sk-btn sk-btn--clay" style={{ padding: '10px 18px', fontSize: 14, opacity: busy ? 0.55 : 1 }}><Icon name={refs.some(function(r) { return r.date && r.time; }) ? 'clock' : 'send'} size={15} color="var(--on-clay)" /> {refs.some(function(r) { return r.date && r.time; }) ? 'Schedule' : 'Set for church'}</button>
+          {msg ? <span style={{ fontSize: 13, fontWeight: 700, color: msg.indexOf('Failed') === 0 ? 'var(--clay-ink)' : 'var(--sage-ink)' }}>{msg}</span> : null}
+        </div>
+      </Panel> : null}
+
+      {pvRefs.length > 0 ? <div style={{ flex: '1 1 100%', maxWidth: 420 }}>
+          <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', marginBottom: 8, letterSpacing: '0.3px' }}>MEMBER PREVIEW</div>
+          <div style={{ borderRadius: 22, overflow: 'hidden', background: 'linear-gradient(155deg, #6b8f71 0%, #3d5a40 100%)', padding: '20px 20px 16px', color: '#fff', position: 'relative', boxShadow: '0 4px 20px rgba(0,0,0,.15)' }}>
+            <div style={{ position: 'absolute', inset: 0, opacity: .4, background: 'radial-gradient(circle at 80% 15%, rgba(255,255,255,.3), transparent 45%)', pointerEvents: 'none' }} />
+            <div style={{ position: 'absolute', right: -20, bottom: -28, opacity: .12, pointerEvents: 'none' }}><Icon name="book" size={150} stroke={1.2} color="#fff" /></div>
+            <div style={{ position: 'relative' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 11, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', opacity: .88 }}>
+                <Icon name="sparkle" size={14} stroke={2} /> Your church is reading
+              </div>
+              {pvText ? <p style={{ fontFamily: 'serif', fontSize: 18, lineHeight: 1.4, margin: '10px 0 8px', fontWeight: 500, fontStyle: 'italic' }}>{pvText.length > 400 ? pvText.slice(0, 400) + '…' : pvText}</p>
+                : <div style={{ fontSize: 13, opacity: .7, marginTop: 10, lineHeight: 1.45, fontStyle: 'italic' }}>Loading verse text…</div>}
+              <div style={{ fontWeight: 700, fontSize: 14, letterSpacing: '.2px', marginTop: 4 }}>{pvRef}{bibleVersion ? ' · ' + bibleVersion : ''}</div>
+            </div>
+            {pvRefs.length > 1 ? <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 14, position: 'relative', zIndex: 2 }}>
+              <button type="button" onClick={function() { setPvIdx(function(i) { return i > 0 ? i - 1 : pvRefs.length - 1; }); }} style={{ border: 'none', background: 'rgba(255,255,255,.18)', borderRadius: 99, width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}><Icon name="chevL" size={14} color="#fff" /></button>
+              <div style={{ display: 'flex', gap: 6 }}>
+                {pvRefs.map(function(_, i) { return <div key={i} onClick={function() { setPvIdx(i); }} style={{ width: i === pvSafeIdx ? 18 : 7, height: 7, borderRadius: 99, background: i === pvSafeIdx ? '#fff' : 'rgba(255,255,255,.4)', cursor: 'pointer', transition: 'all .2s ease' }} />; })}
+              </div>
+              <button type="button" onClick={function() { setPvIdx(function(i) { return i < pvRefs.length - 1 ? i + 1 : 0; }); }} style={{ border: 'none', background: 'rgba(255,255,255,.18)', borderRadius: 99, width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}><Icon name="chevR" size={14} color="#fff" /></button>
+            </div> : null}
+          </div>
+        </div> : null}
+
+      {refs.length === 0 && !assembled ? <div style={{ flex: '1 1 280px', maxWidth: '50%', minWidth: 280, padding: '24px 0', textAlign: 'center', color: 'var(--ink-3)', fontSize: 13.5 }}>Pick a book and chapter above, then add it to the list.</div> : null}
       </div>
-      <div style={{ display: 'flex', gap: 9, marginTop: 10, alignItems: 'center' }}>
-        <button onClick={push} disabled={busy || !ref.trim()} className="sk-btn sk-btn--clay" style={{ padding: '9px 15px', fontSize: 13, opacity: (busy || !ref.trim()) ? 0.55 : 1 }}><Icon name="send" size={14} color="var(--on-clay)" /> Push to church</button>
-        {vp && vp.ref ? <button onClick={clear} disabled={busy} className="sk-btn sk-btn--ghost" style={{ padding: '9px 13px', fontSize: 13 }}>Clear</button> : null}
-        {msg ? <span style={{ fontSize: 12.5, fontWeight: 600, color: msg[0] === '✓' ? 'var(--sage-ink)' : 'var(--clay-ink)' }}>{msg}</span> : null}
-      </div>
-    </Panel>
+    </div>
   );
 }
+window.DashVersePrompt = DashVersePrompt;
+
 
 function DashPlans() {
   const shared = window.useStewardPlans();          // plans currently shared with the church
@@ -5114,7 +5457,6 @@ function DashPlans() {
       {creating ? <NewPlanModal onClose={() => setCreating(false)} /> : null}
       {/* single scroll container so a long drafts list can't push the library off the bottom */}
       <div className="no-scrollbar" style={{ display: 'flex', flexDirection: 'column', gap: 16, flex: 1, minHeight: 0, overflowY: 'auto', paddingBottom: 12 }}>
-      <VersePromptCard />
       <Panel title={`Shared with your church${shared.length ? ` · ${shared.length}` : ''}`}
         action={<div style={{ display: 'flex', gap: 8 }}>
           {planDrafts.length > 0 ? <button onClick={() => { if (confirm(`Publish ${planDrafts.length} draft plan${planDrafts.length === 1 ? '' : 's'}? Scheduled ones still wait for their date.`)) planDrafts.forEach(p => window.Steward.publishPlan({ ...p, draft: false })); }} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }} title="Take all held draft plans live"><Icon name="send" size={15} color="var(--on-clay)" /> Publish {planDrafts.length} draft{planDrafts.length === 1 ? '' : 's'}</button> : null}
@@ -5493,11 +5835,11 @@ function DashResources() {
     <div style={{ position: 'relative', height: '100%', display: 'flex', flexDirection: 'column' }}>
       {bulk ? <BulkUploadModal kind={view} onClose={() => setBulk(false)} /> : null}
       <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginBottom: 16 }}>
-        <div style={{ ...seg, maxWidth: '100%', overflowX: 'auto' }}>{btn('plans', 'Reading plans')}{btn('devotionals', 'Devotionals')}{btn('media', 'Sermons')}</div>
+        <div style={{ ...seg, maxWidth: '100%', overflowX: 'auto' }}>{btn('plans', 'Reading plans')}{btn('devotionals', 'Devotionals')}{btn('media', 'Sermons')}{btn('verse', 'Verse prompt')}</div>
         <div style={{ flex: 1 }} />
-        {view !== 'media' ? <button onClick={() => setBulk(true)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13, whiteSpace: 'nowrap', flexShrink: 0 }}><Icon name="share" size={15} color="currentColor" /> Bulk upload</button> : null}
+        {(view === 'plans' || view === 'devotionals') ? <button onClick={() => setBulk(true)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13, whiteSpace: 'nowrap', flexShrink: 0 }}><Icon name="share" size={15} color="currentColor" /> Bulk upload</button> : null}
       </div>
-      <div style={{ flex: 1, minHeight: 0 }}>{view === 'plans' ? <DashPlans /> : view === 'devotionals' ? <DashDevotionals /> : <DashSermons />}</div>
+      <div style={{ flex: 1, minHeight: 0 }}>{view === 'plans' ? <DashPlans /> : view === 'devotionals' ? <DashDevotionals /> : view === 'verse' ? <DashVersePrompt /> : <DashSermons />}</div>
     </div>
   );
 }
@@ -11075,9 +11417,9 @@ function MemberChatDock() {
   const closeG = (id) => setGrps(gs => gs.filter(x => x.id !== id));
   if (!peers.length && !grps.length) return null;
   return (
-    <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, zIndex: 130, display: 'flex', flexDirection: 'column', pointerEvents: 'none' }}>
-      {grps.map(g => <GroupChatModal key={g.id} group={g} onClose={() => closeG(g.id)} />)}
-      {peers.map(p => <StewDmWindow key={p.pubkey} peer={p} onClose={() => close(p.pubkey)} />)}
+    <div style={{ position: 'fixed', right: 16, bottom: 0, zIndex: 130, display: 'flex', flexDirection: 'row-reverse', alignItems: 'flex-end', gap: 8, pointerEvents: 'none' }}>
+      {grps.map(function(g) { return <div key={g.id} style={{ width: 340, maxWidth: '40vw', pointerEvents: 'auto' }}><GroupChatModal group={g} onClose={function() { closeG(g.id); }} /></div>; })}
+      {peers.map(function(p) { return <div key={p.pubkey} style={{ width: 340, maxWidth: '40vw', pointerEvents: 'auto' }}><StewDmWindow peer={p} onClose={function() { close(p.pubkey); }} /></div>; })}
     </div>
   );
 }

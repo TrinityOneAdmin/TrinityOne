@@ -5914,7 +5914,7 @@ window.Fellowship = {
         if (!_trust(e)) return;
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { if (current) { current = null; cb(null); } return; }
         if (current && current.ts >= e.created_at) return;
-        try { const j = JSON.parse(e.content); current = { ref: j.ref || '', note: j.note || '', ts: e.created_at }; cb(current); } catch {}
+        try { const j = JSON.parse(e.content); current = { ref: j.ref || '', note: j.note || '', schedule: Array.isArray(j.schedule) ? j.schedule : (j.showAt ? [{ at: j.showAt, ref: j.ref || '', note: j.note || '' }] : []), ts: e.created_at }; cb(current); } catch {}
       },
       oneose() { cb(current); },
     });

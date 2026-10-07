@@ -12205,7 +12205,7 @@
           if (current && current.ts >= e.created_at) return;
           try {
             const j = JSON.parse(e.content);
-            current = { ref: j.ref || "", note: j.note || "", ts: e.created_at };
+            current = { ref: j.ref || "", note: j.note || "", schedule: Array.isArray(j.schedule) ? j.schedule : j.showAt ? [{ at: j.showAt, ref: j.ref || "", note: j.note || "" }] : [], ts: e.created_at };
             cb(current);
           } catch {
           }

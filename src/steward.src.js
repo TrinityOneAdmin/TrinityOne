@@ -9353,11 +9353,13 @@ window.Steward = {
     if (!sk) return Promise.resolve(null);
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', DEVO_D + id], ['t', NET], ['deleted', '1']], content: '' }));
   },
-  publishVersePrompt(ref, note) {
+  publishVersePrompt(ref, note, schedule) {
     if (!sk) return Promise.resolve(null);
-    const content = JSON.stringify({ ref: String(ref || ''), note: String(note || '') });
+    const obj = { ref: String(ref || ''), note: String(note || '') };
+    if (Array.isArray(schedule) && schedule.length) { obj.schedule = schedule.map(s => ({ at: Number(s.at), ref: String(s.ref || ref || ''), note: String(s.note || '') })); obj.showAt = obj.schedule[0].at; }
+    const content = JSON.stringify(obj);
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', VERSE_PROMPT_D], ['t', NET]], content }))
-      .then(e => ({ ref, note, ts: e && e.created_at }));
+      .then(e => ({ ref, note, schedule: obj.schedule || [], ts: e && e.created_at }));
   },
   removeVersePrompt() {
     if (!sk) return Promise.resolve(null);
@@ -9369,7 +9371,7 @@ window.Steward = {
       onevent(e) {
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { if (current) { current = null; cb(null); } return; }
         if (current && current.ts >= e.created_at) return;
-        try { const j = JSON.parse(e.content); current = { ref: j.ref || '', note: j.note || '', ts: e.created_at }; cb(current); } catch {}
+        try { const j = JSON.parse(e.content); current = { ref: j.ref || '', note: j.note || '', schedule: Array.isArray(j.schedule) ? j.schedule : (j.showAt ? [{ at: j.showAt, ref: j.ref || '', note: j.note || '' }] : []), ts: e.created_at }; cb(current); } catch {}
       },
       oneose() { cb(current); },
     });

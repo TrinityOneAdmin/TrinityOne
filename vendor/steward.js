@@ -22671,10 +22671,15 @@ zoo`.split("\n");
       if (!sk) return Promise.resolve(null);
       return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", DEVO_D + id], ["t", NET], ["deleted", "1"]], content: "" }));
     },
-    publishVersePrompt(ref, note) {
+    publishVersePrompt(ref, note, schedule) {
       if (!sk) return Promise.resolve(null);
-      const content = JSON.stringify({ ref: String(ref || ""), note: String(note || "") });
-      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", VERSE_PROMPT_D], ["t", NET]], content })).then((e) => ({ ref, note, ts: e && e.created_at }));
+      const obj = { ref: String(ref || ""), note: String(note || "") };
+      if (Array.isArray(schedule) && schedule.length) {
+        obj.schedule = schedule.map((s) => ({ at: Number(s.at), ref: String(s.ref || ref || ""), note: String(s.note || "") }));
+        obj.showAt = obj.schedule[0].at;
+      }
+      const content = JSON.stringify(obj);
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", VERSE_PROMPT_D], ["t", NET]], content })).then((e) => ({ ref, note, schedule: obj.schedule || [], ts: e && e.created_at }));
     },
     removeVersePrompt() {
       if (!sk) return Promise.resolve(null);
@@ -22694,7 +22699,7 @@ zoo`.split("\n");
           if (current && current.ts >= e.created_at) return;
           try {
             const j = JSON.parse(e.content);
-            current = { ref: j.ref || "", note: j.note || "", ts: e.created_at };
+            current = { ref: j.ref || "", note: j.note || "", schedule: Array.isArray(j.schedule) ? j.schedule : j.showAt ? [{ at: j.showAt, ref: j.ref || "", note: j.note || "" }] : [], ts: e.created_at };
             cb(current);
           } catch {
           }
