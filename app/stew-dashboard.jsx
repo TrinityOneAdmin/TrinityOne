@@ -6952,11 +6952,12 @@ function DashMembers() {
   // false on a partial write, so "unblocked" could otherwise be true on one relay and false on another.
   const [confirmUnblock, setConfirmUnblock] = React.useState(null);
   const [blockErr, setBlockErr] = React.useState('');
+  const [unblocking, setUnblocking] = React.useState(null);
   // `unblock: [pk]` — the only way setBlocked takes anyone off the list (it keeps everyone this console holds as blocked)
-  const unblock = (pk) => (() => { try { return Promise.resolve(window.Steward.setBlocked(blockedList.filter(p => p !== pk), { unblock: [pk] })); } catch (e) { return Promise.reject(e); } })()   // a synchronous refusal is a rejection, not an uncaught throw
-    .then((ok) => { setConfirmUnblock(null); setBlockErr(ok ? '' : 'Couldn’t unblock ' + (nameByPub[pk] || 'that member')
+  const unblock = (pk) => { setUnblocking(pk); return (() => { try { return Promise.resolve(window.Steward.setBlocked(blockedList.filter(p => p !== pk), { unblock: [pk] })); } catch (e) { return Promise.reject(e); } })()   // a synchronous refusal is a rejection, not an uncaught throw
+    .then((ok) => { setUnblocking(null); setConfirmUnblock(null); setBlockErr(ok ? '' : 'Couldn’t unblock ' + (nameByPub[pk] || 'that member')
       + ' — the relay didn’t accept it, so they are still blocked. Try again.'); return ok; })
-    .catch(() => { setConfirmUnblock(null); setBlockErr('Couldn’t reach the relay to unblock them.'); return null; });
+    .catch(() => { setUnblocking(null); setConfirmUnblock(null); setBlockErr('Couldn’t reach the relay to unblock them.'); return null; }); };
   const total = members.length;
   // "last seen" = newest of a post or a membership heartbeat. No activity in 90 days → inactive list.
   const INACTIVE_DAYS = 90;
@@ -7084,7 +7085,7 @@ function DashMembers() {
                   <button onClick={() => block(m.pubkey)} title="Confirm — bans them from posting & hides their messages" style={{ border: 'none', background: 'var(--clay-ink)', color: 'var(--on-clay)', borderRadius: 9, padding: '6px 9px', cursor: 'pointer', display: 'flex', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>Block</button>
                   <button onClick={() => setConfirmBlock(null)} title="Cancel" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', fontFamily: 'var(--font-ui)' }}><Icon name="x" size={15} color="currentColor" /></button>
                 </React.Fragment>
-              : <button onClick={() => setConfirmBlock(m.pubkey)} title="Remove / block this member" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', fontFamily: 'var(--font-ui)' }}><Icon name="shield" size={15} color="currentColor" /></button>}
+              : <button onClick={() => setConfirmBlock(m.pubkey)} title="Remove / block this member" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 4, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="shield" size={15} color="currentColor" />Block</button>}
           </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap', paddingLeft: 48 }}>
@@ -7391,7 +7392,9 @@ function DashMembers() {
                     <div style={{ fontWeight: 700, fontSize: 14 }}>{nameByPub[pk] || 'A member with no name set'}</div>
                     <div style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--ink-3)' }}>{String(pk).slice(0, 12)}…</div>
                   </div>
-                  {confirmUnblock === pk
+                  {unblocking === pk
+                    ? <button disabled style={{ border: 'none', background: 'var(--sage-ink)', color: 'var(--on-sage, #fff)', borderRadius: 9, padding: '6px 11px', cursor: 'wait', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, opacity: 0.7 }}>Unblocking…</button>
+                    : confirmUnblock === pk
                     ? <React.Fragment>
                         <button onClick={() => unblock(pk)} aria-label={'Confirm: let ' + (nameByPub[pk] || 'this member') + ' back in'} style={{ border: 'none', background: 'var(--sage-ink)', color: 'var(--on-sage, #fff)', borderRadius: 9, padding: '6px 11px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>Let them back in</button>
                         <button onClick={() => setConfirmUnblock(null)} aria-label="Cancel" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 9px', cursor: 'pointer', color: 'var(--ink-3)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>Cancel</button>
