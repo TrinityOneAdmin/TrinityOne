@@ -2173,7 +2173,11 @@ function TodayScreen({ ctx }) {
   // already shows the date and the time on its own status bar, an inch above this line, and "Good morning"
   // is two lines of the most valuable space on the screen saying nothing a member did not know. What is left
   // in this column is the one thing only this app can tell them — which church they are looking at.
-  // day-streak: +1 per consecutive calendar day the app is opened
+  // day-streak: +1 per consecutive calendar day the app is opened.
+  // ⚠ NOTHING DRAWS `streak` ANY MORE (2026-10-09, see the header row below) — the count is still rolled
+  // forward and still persisted, deliberately, because app/help-data.jsx promises a member it is being
+  // kept and `trinityone.streak` has no other reader to migrate. Do not delete this as dead code without
+  // deciding what happens to that promise; it is state with no surface, not a leftover.
   const [streak, setStreak] = useStateT(() => (lsGet('trinityone.streak', { count: 0 }).count) || 0);
   useEffectT(() => {
     // THE LOCAL DAY, not the UTC one. Both lines here read `toISOString()`, which is the UTC calendar day:
@@ -2339,13 +2343,18 @@ function TodayScreen({ ctx }) {
             background: 'var(--surface)', color: 'var(--ink)', cursor: 'pointer', boxShadow: 'var(--shadow)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
           }}><Icon name={ctx.dark ? 'sun' : 'moon'} size={19} /></button>
-          <button title={`${streak}-day reading streak`}
-            onClick={() => ctx.toast(streak > 0 ? `🔥 ${streak}-day reading streak — open the app each day to keep it going` : 'Open the app each day to build a reading streak')}
-            style={{
-            height: 40, padding: '0 12px', borderRadius: 14, background: 'var(--clay-soft)', border: 'none', cursor: 'pointer',
-            color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', gap: 5, fontWeight: 700, fontSize: 14,
-            boxShadow: 'var(--shadow)', fontFamily: 'var(--font-ui)',
-          }}><Icon name="flame" size={18} stroke={2} />{streak}</button>
+          {/* NO READING-STREAK PILL. The flame + count sat here until 2026-10-09 and the owner asked for
+              it off: they never asked for it in the first place, and it was the fourth control in a row
+              that cannot wrap and cannot shrink. Measured on the owner's Oppo (CPH2477, 360 CSS px) the
+              flame showed and the number was cut off at the right edge; at a 365-day streak the pill ended
+              at x=398 in a 320px viewport. Removing it frees ~56px and the row fits every width this app
+              ships on - scripts/todays-header-fits-the-phone.test.mjs measures exactly that.
+              THE STREAK COUNT ITSELF IS LEFT ALONE, on purpose. `trinityone.streak` has no other reader
+              (checked across app/, scripts/ and relay-app/ on 2026-10-09), so deleting the computation
+              would be safe - and would also stop the count accruing, which app/help-data.jsx still
+              promises a member ("open the app each day to build a quiet reading streak"). Keeping the
+              state and removing only the UI is the smaller change, and leaves the count there for
+              whatever surface the owner does ask for. */}
         </div>
       </div>
 
