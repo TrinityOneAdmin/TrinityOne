@@ -443,6 +443,7 @@ function liftAnnounceAndWipe() {
     // something else, so the stamp is the identity here; its own behaviour is a-second-write-in-the-same-second-is-not-a-failure.test.mjs.
     _monotonicF: (t) => t,
     finalizeEvent2: (t) => { const e = { ...t, id: 'e' + (sent.length + 1), sig: 's', pubkey: MEMBER }; sent.push(e); return e; },
+    _docsHubs: new Map(),   // announceMembership schedules a 500ms hub reopen on rejoin; no hub open = no-op (unstubbed it threw after the test ended)
     _outbox: [], _outboxSave: () => {}, _publishAny: async () => true, publishSetFor: () => ['wss://r'],
     _queueJoinIntent: () => { throw new Error('keyless path taken — the stub key did not reach the function'); },
     _markJoinSent: () => {},
