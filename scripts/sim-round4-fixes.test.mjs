@@ -69,7 +69,8 @@ test('private conversations appear in the list of conversations', () => {
   // Neither was hunting for a button. They were looking for the thread where threads live.
   const i = CHAT.indexOf('function ChatScreen');
   const fn = CHAT.slice(i, CHAT.indexOf('\nfunction ', i + 10));
-  assert.match(fn, /<SectionLabel>Private messages<\/SectionLabel>/, 'the Chat list still hides private threads');
+  // Re-anchored 2026-10-09: the heading became a collapsible <CatLabel label="Private messages" ck="dm" /> (ec443e4, DM collapse chevron).
+  assert.match(fn, /<CatLabel label="Private messages" ck="dm" \/>/, 'the Chat list still hides private threads');
   // It must NOT open its own subscription: the app already holds one permanently for the unread dot, and a
   // second meant replaying and decrypting up to a thousand messages twice over, again on every foregrounding.
   assert.equal(/subscribeDMs/.test(fn), false, 'the Chat list opens a second private-message subscription');

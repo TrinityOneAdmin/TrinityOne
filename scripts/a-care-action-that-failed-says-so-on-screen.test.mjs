@@ -99,7 +99,7 @@ const CTX = { safeguard: {}, canDMPeer: () => false, toast() {} };
 
 test('Close — not needed: a close that reached no relay is said out loud', async () => {
   const { draw, CareRequestCard } = screen();
-  const tree = await press(draw, CareRequestCard, { r: INCOMING, ctx: CTX, child: false, onApprove: null, onDecline: async () => null, canMessage: false, onMessage: null }, 'Close — not needed');
+  const tree = await press(draw, CareRequestCard, { r: INCOMING, ctx: CTX, child: false, onApprove: null, onDecline: async () => null, canMessage: false, onMessage: null }, 'Close');
   assert.match(alerts(tree), /still open/i,
     'the card went back to normal and said nothing, so the care team believes the request is dealt with. ' +
     'It is not, and the person who asked has been told nothing either');
@@ -107,7 +107,7 @@ test('Close — not needed: a close that reached no relay is said out loud', asy
 
 test('CONTROL: a close that DID land says nothing', async () => {
   const { draw, CareRequestCard } = screen();
-  const tree = await press(draw, CareRequestCard, { r: INCOMING, ctx: CTX, child: false, onApprove: null, onDecline: async () => ({ id: 'evt' }), canMessage: false, onMessage: null }, 'Close — not needed');
+  const tree = await press(draw, CareRequestCard, { r: INCOMING, ctx: CTX, child: false, onApprove: null, onDecline: async () => ({ id: 'evt' }), canMessage: false, onMessage: null }, 'Close');
   assert.equal(alerts(tree), '', 'a successful close now shows a failure message');
 });
 
