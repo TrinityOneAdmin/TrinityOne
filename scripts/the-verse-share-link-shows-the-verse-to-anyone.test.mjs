@@ -16,7 +16,7 @@ import { npubEncode } from 'nostr-tools/nip19';
 import { requireFreePort } from './test-ports.mjs';
 import { fnBody } from './test-slice.mjs';
 
-const PORT = 19921;
+const PORT = 19951;
 const HTTP = `http://127.0.0.1:${PORT}`;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const K = () => { const sk = generateSecretKey(); return { sk, pub: getPublicKey(sk) }; };

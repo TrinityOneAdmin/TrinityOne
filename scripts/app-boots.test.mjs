@@ -159,12 +159,26 @@ const type = (ph, val) => `(() => { const i=[...document.querySelectorAll('input
   if(!i) return 'miss';
   const set=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
   set.call(i, ${JSON.stringify(val)}); i.dispatchEvent(new Event('input',{bubbles:true})); return 'ok'; })()`;
+// Polls instead of sleeping a fixed time. In-browser Babel has to transpile every JSX file before the first
+// screen exists, and on a busy box (the whole suite running) that is far longer than the 9s this used to
+// assume: both dashboard tests passed alone and failed in the suite for that reason alone. `settles` returns
+// the LAST value it saw, so when the budget runs out the caller's own assertion still runs and still reports
+// what it always reported; a screen that really never arrives still fails, just at the budget.
+const settles = async (probe, ok, budget = 90000) => {
+  const t0 = Date.now();
+  for (;;) {
+    const v = await probe();
+    if (ok(v) || Date.now() - t0 > budget) return v;
+    await new Promise(r => setTimeout(r, 250));
+  }
+};
 const toDashboard = async ({ evalIn, wait }) => {
-  await evalIn(click('/Start a new church/i')); await wait(2500);
-  await evalIn(type('At least 8', 'cedar-harbour-lamp-42'));
+  await settles(() => evalIn(click('/Start a new church/i')), v => v === 'ok');
+  await settles(() => evalIn(type('At least 8', 'cedar-harbour-lamp-42')), v => v === 'ok');
   await evalIn(type('Type it again', 'cedar-harbour-lamp-42'));
   await evalIn(click('/Set PIN/i'));
-  await wait(9000);   // key generation + first render of the whole dashboard
+  // key generation + first render of the whole dashboard: wait for it to be as big as a dashboard is
+  await settles(() => evalIn(`document.querySelectorAll('#root *').length`), v => v > 120);
 };
 
 test('the steward console mounts its DASHBOARD without throwing', { skip: !CHROME ? 'no chromium' : false, timeout: 180000 }, async () => {
@@ -204,6 +218,7 @@ test('a steward can open Help from the dashboard, read a guide, and Escape out o
     await toDashboard(d);
     const { evalIn, wait } = d;
     const dialog = `document.querySelector('[role="dialog"][aria-label="Help"]')`;
+    await settles(() => evalIn(`!![...document.querySelectorAll('button')].find(x=>x.getAttribute('aria-label')==='Help')`), v => v === true);
     seen.pressed = await evalIn(`(() => { const b=[...document.querySelectorAll('button')].find(x=>x.getAttribute('aria-label')==='Help'); if(!b) return 'miss'; b.click(); return 'ok'; })()`);
     seen.screen = await evalIn(`(document.body.innerText||'').trim().slice(0,240)`);
     await wait(800);
