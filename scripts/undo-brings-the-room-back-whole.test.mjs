@@ -156,7 +156,7 @@ test('A ROW CONTROL THAT DID NOT SAVE SAYS SO INSTEAD OF PAINTING THE NEW STATE'
   await toggle[0].props.onClick();
   await new Promise(r => setTimeout(r, 5));
   const onScreen = texts(g.redraw()).join(' ');
-  assert.match(onScreen, /didn’t accept|couldn’t|could not/i,
+  assert.match(onScreen, /didn[’']t accept|couldn[’']t|could not/i,
     'the relay refused the change and the console said nothing. A steward who presses "Child-safe" and is ' +
     'shown no error believes a safeguarding setting is in force when it is not');
   assert.match(onScreen, /Safeguarding leads/,
@@ -171,7 +171,7 @@ test('UNDO THAT THE RELAY REFUSED DOES NOT CLAIM THE ROOM IS BACK', async () => 
   g.redraw();
   await g.btnByText(/^Undo$/)[0].props.onClick();
   await new Promise(r => setTimeout(r, 5));
-  assert.match(texts(g.redraw()).join(' '), /didn’t accept|couldn’t|could not/i,
+  assert.match(texts(g.redraw()).join(' '), /didn[’']t accept|couldn[’']t|could not/i,
     'Undo failed and the console said nothing, so the steward believes the room is back when it is gone');
 });
 
