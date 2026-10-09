@@ -393,9 +393,9 @@ test('4. pressing ⋯ on an adult opens their sheet with the card\'s actions; "M
 // Recorded at 1280x900 on 74eade2, before the change, from this harness: the accessible names of every
 // control on the row, in order, and its pills. The phone row must not have reached the desktop.
 const DESKTOP = {
-  [PEOPLE.adult.name]:   { tags: ['joined'], buttons: ['Copy npub', 'Remove / block this member', 'Chat', 'Mark as a child: Persephone Wilde', 'Clear for youth work: Persephone Wilde — this also lets them message a child privately', 'Reconnect'] },
-  [PEOPLE.child.name]:   { tags: ['joined', 'child', 'no guardian'], buttons: ['Copy npub', 'Remove / block this member', 'Chat', 'Unmark as a child: Ivy Whitlock', 'Clear for youth work: Ivy Whitlock — this also lets them message a child privately', 'Link parent', 'Reconnect', 'Photos off ✓'] },
-  [PEOPLE.cleared.name]: { tags: ['cleared for youth'], buttons: ['Copy npub', 'Remove / block this member', 'Chat', 'Mark as a child: Ruth Whitlock', 'Remove youth clearance from Ruth Whitlock', 'Reconnect'] },
+  [PEOPLE.adult.name]:   { tags: ['joined'], buttons: ['Copy npub', 'Block', 'Chat', 'Mark as a child: Persephone Wilde', 'Clear for youth work: Persephone Wilde — this also lets them message a child privately', 'Reconnect'] },
+  [PEOPLE.child.name]:   { tags: ['joined', 'child', 'no guardian'], buttons: ['Copy npub', 'Block', 'Chat', 'Unmark as a child: Ivy Whitlock', 'Clear for youth work: Ivy Whitlock — this also lets them message a child privately', 'Link parent', 'Reconnect', 'Photos off ✓'] },
+  [PEOPLE.cleared.name]: { tags: ['cleared for youth'], buttons: ['Copy npub', 'Block', 'Chat', 'Mark as a child: Ruth Whitlock', 'Remove youth clearance from Ruth Whitlock', 'Reconnect'] },
 };
 test('5. at 1280 wide the member row is the desktop card it was: the same controls in the same order, the same pills, no ⋯', SKIP, async () => {
   await setSize(DW, DH);
