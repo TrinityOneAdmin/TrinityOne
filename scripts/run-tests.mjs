@@ -98,7 +98,23 @@ const LOCK = join(tmpdir(), 'trinityone-suite.lock');
 let lockHeld = false;
 const readLock = () => { try { return JSON.parse(readFileSync(LOCK, 'utf8')); } catch { return null; } };
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
+// RE-ENTRANT FOR OUR OWN CHILDREN. scripts/the-relay-bundle-is-published-to-the-release.test.mjs drives
+// release.sh, which runs `npm test` as its own gate — a suite inside a suite. The first version of this
+// lock refused that nested run, so the release refused for the WRONG reason ("a red test stops the
+// release" instead of "that key is wrong") and five of its assertions failed. Caught by the pre-merge
+// comparison, two hours after the lock was written.
+// The env var is inherited by every child process, so a nested run recognises its own ancestor and
+// proceeds. A genuinely separate suite has no such ancestor and is still refused.
+const HELD_BY = process.env.TRINITYONE_SUITE_LOCK;
+const alreadyOurs = () => {
+  if (!HELD_BY) return false;
+  const pid = Number(HELD_BY);
+  if (!pid) return false;
+  try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
+};
+
 const takeLock = () => {
+  if (alreadyOurs()) { console.error(`run-tests: nested run under pid ${HELD_BY} — lock already held by our own ancestor`); return; }
   for (let attempt = 0; attempt < 2; attempt++) {
     try { closeSync(openSync(LOCK, 'wx')); } catch {
       const held = readLock();
@@ -114,7 +130,7 @@ const takeLock = () => {
       continue;
     }
     writeFileSync(LOCK, JSON.stringify({ pid: process.pid, started: Date.now(), cwd: process.cwd() }));
-    lockHeld = true; return;
+    lockHeld = true; process.env.TRINITYONE_SUITE_LOCK = String(process.pid); return;
   }
   console.error('run-tests: could not take the suite lock'); process.exit(1);
 };
