@@ -33,10 +33,19 @@ test('a person who DECLINED does not count as cover: 0/1, a gap to fill, and nev
   assert.match(out, /0\/1 filled/, 'the Welcome team card still counts the declined person as filled');
 });
 
-test('a "wants swap" person still holds the slot until someone is confirmed in their place', () => {
-  // The brief names DECLINED only. A swap ask is not a refusal: they are on the rota until a replacement is confirmed.
+test('a "wants swap" person leaves the slot as a GAP, and the board still names who asked', () => {
+  // RULE CHANGED BY THE OWNER, 2026-10-09. This test used to assert the opposite — that a swap ask is not a
+  // refusal, so the asker still holds the slot and it reads 1/1. `a0b7a0d` (2026-10-07) made a swap-asked slot
+  // count as a GAP, which left this one test red; `scripts/a-declined-slot-is-a-gap.test.mjs` asserts the new
+  // rule. Asked which rule to keep, the owner chose the NEW one: a steward should see the hole while the swap is
+  // still being arranged, because nobody has agreed to cover it yet. So this assertion was turned round to match
+  // the owner's decision — it is NOT a test bent to fit the code, and the engine was not touched.
   const out = mountBoard({ requests: [REQ], replies: [said('swap')] }).text();
-  assert.match(out, /1\/1 roles filled/);
+  assert.match(out, /0\/1 roles filled/, 'a swap-asked slot was counted as filled (owner rule, 2026-10-09: it is a gap)');
+  assert.match(out, /1 gap to fill/, 'the swap-asked slot is not offered to the steward as a gap');
+  assert.doesNotMatch(out, /Fully covered/, '"Fully covered" over a slot whose person has asked to be let off');
+  // It is a gap AND the person is still shown on it, labelled — the steward can see who asked and chase it.
+  assert.match(out, /Wants swap/, 'the slot no longer says the person asked to swap');
 });
 
 test('only the NEWEST request for the slot decides, so re-asking someone who declined once is not held against them', () => {
