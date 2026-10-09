@@ -156,7 +156,7 @@ const visible = (n, out = []) => {
 const badge = tree => { const d = dots(tree); return d.length ? visible(d[0]).join('').trim() : null; };
 // The card itself: the tappable thing whose title is "What’s happening".
 const servingCard = tree => find(tree, n => typeof (n.props || {}).onClick === 'function'
-  && texts(n).some(t => t.includes('What\u2019s happening')));
+  && texts(n).join('').includes('What\u2019s happening'));
 
 const ev = (id, ts, extra) => ({ id, ts, date: '2026-10-04', time: '10:00', title: 'Event ' + id, ...extra });
 const many = (n, ts) => Array.from({ length: n }, (_, i) => ev('e' + i, ts));
@@ -402,7 +402,7 @@ html,body{margin:0;padding:0} #app{position:relative;width:100%;height:100vh;ove
 function page(over) {
   const { html, nodes } = serialize(todayScreen(over).draw());
   const card = nodes.findIndex(n => n.type === 'div' && typeof (n.props || {}).onClick === 'function'
-    && texts(n).some(t => t.includes('What\u2019s happening')));
+    && texts(n).join('').includes('What\u2019s happening'));
   const title = nodes.findIndex(n => n.type === 'div' && texts(n).join('').startsWith('What\u2019s happening'));
   const dot = nodes.findIndex(n => /since you last looked/i.test(String((n.props || {})['aria-label'] || '')));
   assert.ok(card >= 0 && title >= 0, 'the What’s happening card is not in the serialised tree');
