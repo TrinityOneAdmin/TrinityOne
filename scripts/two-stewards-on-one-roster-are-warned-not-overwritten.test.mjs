@@ -285,8 +285,9 @@ test('B is WARNED, and B\'s plain Save is GONE, when A saves the roster B has op
   assert.ok(timing.v1 > timing.v0, `A's save landed in the same second as v0 (both ${timing.v1}) — newest-wins is to the second, so NO version check of this shape could have fired. This is not a pass.`);
 
   // …and now the thing the in-process test cannot reach: B's open form noticing, off the wire.
-  await B.waitFor(`${modalText}.includes(${JSON.stringify(WARNING)})`, 60000,
-    'B\'s open roster form noticing A\'s write');
+  // The label is the failure message. With the guard gone this wait is the FIRST thing that fails, so it —
+  // not the assertion under it — has to say what a steward loses.
+  await B.waitFor(`${modalText}.includes(${JSON.stringify(WARNING)})`, 60000, 'THE DEFECT a0b7a0d SHIPPED: A saved this roster and B\'s open form says nothing. B\'s next Save silently replaces A\'s people and roles, and neither steward is ever told');
   assert.match(await B.ev(modalText), new RegExp(WARNING),
     'THE DEFECT a0b7a0d SHIPPED: B\'s form says nothing about A\'s write. B\'s next Save silently deletes A\'s people and roles, and neither steward is told.');
   assert.equal(await B.ev(hasButton(/^Save roster$/)), false,
@@ -298,7 +299,9 @@ test('B is WARNED, and B\'s plain Save is GONE, when A saves the roster B has op
 });
 
 test('"Reload their version" brings A\'s person — off the relay — into B\'s form', { skip: !CHROME && 'no chromium' }, async () => {
-  await B.press(/Reload their version/, 'B\'s Reload their version');
+  // No warning means no "Reload their version" either: with the guard gone a steward has NO WAY to take the
+  // other steward's version short of retyping it, and no reason to know they should.
+  await B.press(/Reload their version/, 'B\'s Reload their version — absent, so A\'s work can only be kept by B retyping it from memory');
   await B.waitFor(`${modalText}.includes(${JSON.stringify(RUTH)})`, 20000, 'A\'s person arriving in B\'s form');
   const t = await B.ev(modalText);
   assert.ok(t.includes(RUTH), `Reload their version did not bring A's person across. "${RUTH}" was typed into A's browser and has travelled relay→B's subscription→B's form; without it the only way to keep A's work is for B to retype it from memory.`);
@@ -319,7 +322,8 @@ test('"Save mine anyway" publishes, and does replace A\'s version — the docume
   await waitSaved(A, 'second Save roster', () => A.press(/^Save roster$/, 'A\'s second Save roster, again'));
   await H.waitFor(() => rosterStamps(A)[0] > timing.v1, { timeout: 30000, label: 'the relay storing A\'s second roster' });
   timing.v2 = rosterStamps(A)[0];
-  await B.waitFor(`${modalText}.includes(${JSON.stringify(WARNING)})`, 60000, 'B warned a second time');
+  await B.waitFor(`${modalText}.includes(${JSON.stringify(WARNING)})`, 60000,
+    'B to be warned a second time. Unwarned, "Save mine anyway" is not a choice B made — it is the only Save there is, and it deletes A\'s work');
 
   // B keeps their own, knowingly. The form B is holding is A's v1 (Ruth) plus nothing — so what B publishes
   // must be v1's people WITHOUT Tom: that is the replacement, and it is the behaviour the warning bought
