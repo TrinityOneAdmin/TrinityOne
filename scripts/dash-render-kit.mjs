@@ -37,7 +37,9 @@ export const said = (n) => {
 export const SCH = readFileSync(join(ROOT, 'app/stew-schedule.jsx'), 'utf8');
 export async function compiled(name, globals, extra = [], src0 = DASH) {
   const { React, draw } = miniReact();
-  const pick = (e) => (typeof e === 'string' ? fnBody(src0, 'function ' + e + '(', e) : fnBody(e.src, 'function ' + e.name + '(', e.name));
+  // `{ src, const: 'NAME' }` reads a single-line top-level `const NAME = …;` table (STEW_CAP_LABEL) from the shipped file
+  const constLine = (e) => { const m = e.src.match(new RegExp('^const ' + e.const + ' = .*;$', 'gm')); if (!m || m.length !== 1) throw new Error('expected exactly one single-line top-level const ' + e.const + ', found ' + (m ? m.length : 0)); return m[0]; };
+  const pick = (e) => (e && e.const ? constLine(e) : typeof e === 'string' ? fnBody(src0, 'function ' + e + '(', e) : fnBody(e.src, 'function ' + e.name + '(', e.name));
   const src = [fnBody(src0, 'function ' + name + '(', name), ...extra.map(pick)].join('\n');
   const tmp = join(tmpdir(), 'dk-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
   let js;

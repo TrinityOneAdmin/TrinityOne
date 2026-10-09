@@ -121,7 +121,7 @@ const PICKERS = {
   async RosterModal(win) {
     const { React, draw } = miniReact();
     const C = await component('sch', SCH, 'RosterModal', 'function RosterModal(', {
-      ...baseGlobals(React, win), useSch: React.useState, useSchE: React.useEffect, useSchR: React.useRef, teamMeta: (t) => ({ name: t.name, icon: 'hand', accent: 'var(--clay)' }), schBtn: {}, schInp: {} });
+      ...baseGlobals(React, win), useSchBlocked: new Function('window', `${fnBody(SCH, 'function useSchBlocked(', 'useSchBlocked')}\nreturn useSchBlocked;`)(win), useSch: React.useState, useSchE: React.useEffect, useSchR: React.useRef, teamMeta: (t) => ({ name: t.name, icon: 'hand', accent: 'var(--clay)' }), schBtn: {}, schInp: {} });
     return draw(C, { team: { id: 't1', name: 'Welcome team', members: [] }, roster: { team: 't1', people: [], roles: [], pods: [] }, members: MEMBERS, onClose() {} });
   },
   async RecipientPicker(win) {

@@ -21,7 +21,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { compiled, membersGlobals, press, reads, SCH, find } from './dash-render-kit.mjs';
+import { fnBody } from './test-slice.mjs';
+import { readFileSync } from 'node:fs';
 import { loadScreen, miniReact, texts } from './render-jsx-screen.mjs';
+
+// the SHIPPED picker hook (app/steward-root.jsx), lifted: both pickers consult window.useStewardPickableMembers and fall
+// back to the UNFILTERED list when it is absent, so a window without it proves nothing about the blocklist.
+const ROOT_JSX = readFileSync(new URL('../app/steward-root.jsx', import.meta.url), 'utf8');
+const withPickable = (win) => {
+  win.useStewardPickableMembers = new Function('window', `${fnBody(ROOT_JSX, 'function useStewardPickableMembers(', 'useStewardPickableMembers')}\nreturn useStewardPickableMembers;`)(win);
+  return win;
+};
 
 const BRAM = 'a'.repeat(64), CLEO = 'b'.repeat(64), OTHER = 'c'.repeat(64);
 const NOW = Math.floor(Date.now() / 1000);
@@ -161,8 +171,8 @@ test('THE STEWARD PICKER: "Add a steward" does not offer a blocked member', asyn
     const steward = { pubkey: 'f'.repeat(64), actingChurch: '', hasPinLock: () => false, stewardCaps: () => ({}), stewardCapNames: () => ['care'],
       stewardLabels: () => ({}), stewardName: () => '', stewardSince: () => ({}), stewardCodeToPub: () => null, stewardInvitePayload: () => 'x', qrSVG: () => '' };
     const { C, draw } = await compiled('DashStewardsPanel', { ...membersGlobals({ steward, members }), StewQRScanner: () => null, shortNpub: (n) => n,
-      window: { Steward: steward, Capacitor: null, usePendingStewards: () => [], useStewardMembers: () => members, useStewardStewards: () => [],
-        useStewardGroups: () => [], useStewardBlocked: () => blocked, addEventListener() {}, removeEventListener() {}, dispatchEvent: () => true } });
+      window: withPickable({ Steward: steward, Capacitor: null, usePendingStewards: () => [], useStewardMembers: () => members, useStewardStewards: () => [],
+        useStewardGroups: () => [], useStewardBlocked: () => blocked, addEventListener() {}, removeEventListener() {}, dispatchEvent: () => true }) });
     let tree = draw(C, { church: { name: 'St Aidan' } });
     await press(tree, /Add a steward/);
     return BLOCKED_LABEL(draw(C, { church: { name: 'St Aidan' } }));
@@ -177,8 +187,8 @@ test('THE STEWARD PICKER: "Add a steward" does not offer a blocked member', asyn
 test('THE LEADER PICKER: "Group leaders" does not offer a blocked member', async () => {
   const open = async (blocked) => {
     const steward = { actingChurch: '', publishGroup: () => Promise.resolve({ id: 'g', ts: 1 }), sendDM: () => Promise.resolve(true) };
-    const g = { ...membersGlobals({ steward, members }), window: { Steward: steward, useStewardMembers: () => members, useStewardBlocked: () => blocked,
-      addEventListener() {}, removeEventListener() {}, dispatchEvent: () => true } };
+    const g = { ...membersGlobals({ steward, members }), window: withPickable({ Steward: steward, useStewardMembers: () => members, useStewardBlocked: () => blocked,
+      addEventListener() {}, removeEventListener() {}, dispatchEvent: () => true }) };
     const { C, draw } = await compiled('GroupLeadersModal', { ...g, useStewDialog: () => ({ current: null }), StewModal: (p) => (p && p.children) || null, Modal: (p) => (p && p.children) || null });
     return BLOCKED_LABEL(draw(C, { group: { id: 'g', name: 'Youth', leaders: [] }, onClose() {} }));
   };

@@ -24,7 +24,7 @@ import { webcrypto } from 'node:crypto';
 import { generateSecretKey, getPublicKey } from 'nostr-tools/pure';
 import { v2 as nip44 } from 'nostr-tools/nip44';
 import { fnBody } from './test-slice.mjs';
-import { compiled, membersGlobals, press, reads } from './dash-render-kit.mjs';
+import { compiled, membersGlobals, press, reads, DASH } from './dash-render-kit.mjs';
 
 const VENDOR = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
 
@@ -52,7 +52,7 @@ function rig({ approved = [ADULT, OTHER], setApproved, setBlocked } = {}) {
   return { calls, g };
 }
 async function blockBram(r) {
-  const { C, draw } = await compiled('DashMembers', r.g, ['rotateChurchKeys', 'takeOffEveryTeam']);
+  const { C, draw } = await compiled('DashMembers', r.g, ['rotateChurchKeys', 'takeOffEveryTeam', { src: DASH, const: 'STEW_CAP_LABEL' }]);
   let tree = draw(C, {});
   await press(tree, /Remove \/ block this member/, { which: 0 });
   tree = draw(C, {});
