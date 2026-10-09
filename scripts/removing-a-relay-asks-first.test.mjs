@@ -92,7 +92,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const ROOT = new URL('../', import.meta.url).pathname;
-const DASH = readFileSync(join(ROOT, 'app/stew-dashboard.jsx'), 'utf8');
+// fnBody (test-slice.mjs) is quote-aware but not JSX-aware: the straight apostrophe in DashRelaysCard's footer TEXT
+// ("Your church's messages…") opens a string it never closes, so the brace walk runs past the card and reports
+// "could not find the end of DashRelaysCard". The app is valid JSX and renders that text correctly, so the
+// slicer's input is normalised here rather than the shipped copy changed. Only that one sentence is touched,
+// and only if still present (if the app later adopts the curly form this is a no-op).
+const DASH = readFileSync(join(ROOT, 'app/stew-dashboard.jsx'), 'utf8')
+  .replace("Your church's messages, groups and members live on the relays above", 'Your church\u2019s messages, groups and members live on the relays above');
 
 function mini() {
   const states = []; const memos = []; const effDeps = []; let queued = [];
