@@ -62,6 +62,8 @@ const LONG = 'The key was saved, and “Musicians” is now sealed on 1 of 4 rel
 
 let relay, chr, ws, dataDir, prof, evalIn, send, booted = '';
 const errors = [];
+// What the boot waited for and how long each state took, so a boot failure says WHY (see before()).
+const bootTrace = [];
 
 async function waitReady(ms = 20000) {
   const t0 = Date.now();
@@ -133,13 +135,53 @@ before(async () => {
 
   // The real path to a real dashboard, exactly as the sibling files walk it — WITH the first-run wizard left
   // up, because its shell is under test here (see the note at the top).
-  await sleep(9000);
-  booted = await evalIn(click('/Start a new church/i'));
-  await sleep(2500);
-  await evalIn(type('At least 8', PIN));
-  await evalIn(type('Type it again', PIN));
-  await evalIn(click('/Set PIN/i'));
-  await sleep(13000);
+  // WAIT ON STATE, NOT ON A CLOCK (2026-10-09). Until today this boot was three fixed sleeps: 9000ms for
+  // steward.html to transpile 23 app/*.jsx files in-browser plus React/sql-wasm/fflate, 2500ms for the PIN
+  // step, 13000ms for the first-run wizard. Run alone that is plenty. Run inside a concurrent suite it is
+  // not, and then EVERY row in this file fails behind the CONTROL for a reason the CONTROL never printed.
+  // Same reasoning, and the same repo precedent, as reseat-safeguarding.test.mjs: scripts/run-tests.mjs
+  // records that it "failed about two full runs in three, and passed every time it ran alone... That test
+  // now waits on state rather than sleeping a fixed 400ms". The budget below is a CEILING, never a delay —
+  // on a free box each state arrives in the first poll or two and the boot moves straight on.
+  //
+  // And every step is now CHECKED. Before today only the first click's result was kept; the two type() calls
+  // and the "Set PIN" click were discarded, so a PIN step that never appeared was first noticed much later
+  // as a missing wizard, with nothing to say why. Each step records what it was waiting for and what it last
+  // saw, and the CONTROL prints the whole trace.
+  const BOOT_BUDGET = 90000;
+  const pollFor = async (what, expression) => {
+    const t0 = Date.now();
+    for (;;) {
+      let last;
+      try { last = await evalIn(expression); } catch (e) { last = 'the page would not evaluate: ' + String((e && e.message) || e).slice(0, 160); }
+      if (last === 'ok') { bootTrace.push(`${what}: ok after ${Date.now() - t0}ms`); return 'ok'; }
+      if (Date.now() - t0 > BOOT_BUDGET) {
+        const why = `${what}: NEVER ARRIVED in ${Math.round((Date.now() - t0) / 1000)}s (last saw: ${JSON.stringify(last)})`;
+        bootTrace.push(why);
+        return why;
+      }
+      await sleep(250);
+    }
+  };
+  const step = async (what, expression) => { const r = await pollFor(what, expression); if (r !== 'ok' && booted === 'ok') booted = r; };
+
+  // 1. The app has booted when the real "Start a new church" button is in the DOM. click() returns 'miss'
+  //    until it is there and clicks exactly once when it is, so polling it cannot double-click.
+  booted = await pollFor('the "Start a new church" button', click('/Start a new church/i'));
+  // 2. The PIN step, named by the two placeholders the next two lines type into.
+  if (booted === 'ok') await step('both PIN boxes', `(() => { const ph = [...document.querySelectorAll('input')].map(i => i.placeholder || '');
+    return (ph.some(p => p.includes('At least 8')) && ph.some(p => p.includes('Type it again'))) ? 'ok' : 'placeholders on screen: ' + JSON.stringify(ph).slice(0, 180); })()`);
+  if (booted === 'ok') {
+    const a = await evalIn(type('At least 8', PIN));
+    const b = await evalIn(type('Type it again', PIN));
+    bootTrace.push(`typing the PIN into both boxes: ${a} / ${b}`);
+    if (a !== 'ok' || b !== 'ok') booted = `a PIN box would not take a value (${a} / ${b})`;
+  }
+  // 3. "Set PIN" is disabled until both boxes agree, so wait for ENABLED, then press it once.
+  if (booted === 'ok') await step('an enabled "Set PIN" button', `(() => { const b = [...document.querySelectorAll('button')].find(x => /Set PIN/i.test((x.textContent || '').trim()));
+    if (!b) return 'no "Set PIN" button on screen'; if (b.disabled) return '"Set PIN" is on screen but still disabled'; b.click(); return 'ok'; })()`);
+  // 4. The dashboard with the wizard over it — the state every row below starts from.
+  if (booted === 'ok') await step('the first-run wizard panel', `(() => document.querySelector('[data-stew-modal-panel]') ? 'ok' : 'no [data-stew-modal-panel] in the DOM yet')()`);
 });
 
 after(async () => {
@@ -307,10 +349,24 @@ const pressInWizard = async (label) => {
   assert.equal(r, 'ok', `no enabled "${label}" button in the wizard`);
 };
 const noop = async () => {};
+// POLL, DO NOT SLEEP, over anything that waits on a relay round trip. Returns the LAST value it saw once the
+// budget is spent, so the caller's own assertion still runs and still reports exactly what it reported before:
+// this only stops a slow box being read as a missing step. Same reasoning as the boot in before(), and as the
+// PIN-field poll the reload row below already uses.
+const settles = async (probe, ok, budget = 60000) => {
+  const t0 = Date.now();
+  for (;;) {
+    const v = await probe();
+    if (ok(v) || Date.now() - t0 > budget) return v;
+    await sleep(250);
+  }
+};
 
 test('CONTROL: the console reached its dashboard at 360x730 with the first-run wizard on screen — without which nothing below proves anything',
   { skip: !CHROME ? 'no chromium' : false, timeout: 240000 }, async () => {
-    assert.equal(booted, 'ok', 'the "Start a new church" button was never found');
+    assert.equal(booted, 'ok', 'the console never reached its dashboard with the wizard up. The boot waits on STATE, '
+      + 'so this is what it was waiting for and what it last saw:\n  ' + bootTrace.join('\n  ')
+      + '\nand the console threw:\n  ' + (errors.length ? errors.join('\n  ') : '(nothing)'));
     const v = JSON.parse(await evalIn('JSON.stringify({ w: innerWidth, h: innerHeight })'));
     assert.deepEqual(v, { w: 360, h: 730 }, 'the viewport is not the phone we claim to be measuring');
     assert.equal(await wizardUp(), true, 'the first-run wizard is not on screen; this file measures its shell first (see the note at the top)');
@@ -326,15 +382,15 @@ test('WizShell: step 0 (Continue) and step 1 (Back, Continue) keep their footer 
     assert.equal(await evalIn(type('Your church’s name', 'St Aidan of the Footers')), 'ok', 're-anchor: no church-name field on step 0');
     await sleep(300);
     await pressInWizard('Continue');
-    await sleep(3500);
-    assert.match(await wizardTitle(), /recovery key/i, 're-anchor: Continue on step 0 did not reach the recovery-key step');
+    // saveName() awaits selfRegister + publishProfile + ensureJoinPolicy before it advances, so how long
+    // step 0 takes is a relay round trip, not a constant. This was a flat 3500ms.
+    assert.match(await settles(wizardTitle, t => /recovery key/i.test(t)), /recovery key/i, 're-anchor: Continue on step 0 did not reach the recovery-key step');
     await checkDialog('WizShell step 1', { open: noop, close: noop, panelSel: WIZ, labels: ['Back', 'Continue'], sizeLabel: '360x730 upright', stays: true });
     // 730x328: the case the audit photographed — every step hid Continue under a 258px card
     await setSize(730, 328);
     await checkDialog('WizShell step 1', { open: noop, close: noop, panelSel: WIZ, labels: ['Back', 'Continue'], sizeLabel: '730x328 landscape', stays: true });
     await pressInWizard('Back');
-    await sleep(800);
-    assert.match(await wizardTitle(), /Welcome/, 're-anchor: Back did not return to step 0');
+    assert.match(await settles(wizardTitle, t => /Welcome/.test(t)), /Welcome/, 're-anchor: Back did not return to step 0');
     await checkDialog('WizShell step 0', { open: noop, close: noop, panelSel: WIZ, labels: ['Continue'], sizeLabel: '730x328 landscape', stays: true });
     await setSize(360, 730);
     assert.deepEqual(errors, [], 'the console threw during the wizard:\n  ' + errors.join('\n  '));
