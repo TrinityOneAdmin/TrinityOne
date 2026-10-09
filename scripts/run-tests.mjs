@@ -38,7 +38,7 @@
 // oversubscribe exactly the way 111 does here. The cap is a ceiling, never a floor. Note also that
 // availableParallelism() follows an affinity mask but NOT a cgroup CPU quota, so a container limited with
 // `--cpus=2` still reports the host's core count and would take the 24.
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { readdirSync, readFileSync, writeFileSync, mkdtempSync, rmSync, openSync, closeSync, unlinkSync, existsSync, readdirSync as readdirSync2 } from 'node:fs';
 import { availableParallelism } from 'node:os';
 import { tmpdir } from 'node:os';
@@ -127,6 +127,16 @@ const releaseLock = () => {
 };
 takeLock();
 process.on('exit', releaseLock);
+
+// SWEEP THE INVISIBLE CHROMIUM LITTER BEFORE WE ADD MORE. 57 files here drive a headless snap
+// chromium, and a snap gets a PRIVATE /tmp, so the profile the test deletes is a 4KB stub while
+// its real 171MB sits in /tmp/snap-private-tmp/ where nothing can see it. Measured 2026-10-09:
+// 44GB in 2,394 dirs, root at 94%. The owner had cleared ~50GB of the same thing that morning.
+// Never fatal: a failed sweep must not stop a suite.
+try {
+  const sweep = fileURLToPath(new URL('./sweep-chromium-tmp.mjs', import.meta.url));
+  spawnSync(process.execPath, [sweep], { stdio: 'inherit', timeout: 60000 });
+} catch {}
 
 // Write a TAP stream to a temp file so the count floor can read it after the run, without piping
 // stdout through this process (which deadlocks under the suite's output volume).
