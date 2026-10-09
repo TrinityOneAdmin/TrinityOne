@@ -77,6 +77,16 @@ function buildNonGitTree() {
   assert.ok(LOCALS.length >= 5, `only ${LOCALS.length} local imports found from gateway.mjs — the scan is broken`);
   for (const must of ['event-store.mjs', 'trinity-doc-types.mjs', 'checkin-role-source.mjs'])
     assert.ok(LOCALS.includes(must), `the scan did not find ${must}, which gateway.mjs is known to import — the scan is broken`);
+  // THE ONE GAP IN DERIVING THE LIST, CLOSED. The release tarball is built by `git archive`
+  // (scripts/build-strict-tgz.sh:37), which ships TRACKED files only. Deriving the stand-in's file list from
+  // gateway.mjs's own imports therefore cannot, by itself, notice an import of a file that is not tracked:
+  // the stand-in would copy it off disk and go green while the shipped relay arrived without it and would
+  // not start. So assert every derived file is tracked. (scripts/sim*.mjs is gitignored, so this is not
+  // hypothetical — .gitignore:114.)
+  const tracked = new Set(spawnSync('git', ['-C', ROOT, 'ls-files', 'scripts'], { encoding: 'utf8' })
+    .stdout.split('\n').filter(Boolean).map(f => f.replace(/^scripts\//, '')));
+  for (const f of LOCALS)
+    assert.ok(tracked.has(f), `gateway.mjs imports scripts/${f}, which git does NOT track — the release tarball is built with \`git archive\` and would ship without it, so the relay would not start. Track it or stop importing it.`);
   for (const f of LOCALS) copyFileSync(join(ROOT, 'scripts', f), join(dir, 'scripts', f));
   symlinkSync(join(ROOT, 'node_modules'), join(dir, 'node_modules'));
   writeFileSync(join(dir, 'version.txt'), 'sha: ' + '1'.repeat(40) + '\ndate: 2026-07-29T00:00:00+01:00\n');
