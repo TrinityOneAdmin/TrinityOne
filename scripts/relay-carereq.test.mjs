@@ -20,7 +20,7 @@ import { generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure
 import { npubEncode } from 'nostr-tools/nip19';
 import { requireFreePort } from './test-ports.mjs';
 
-const PORT = 8856;
+const PORT = 19950;
 const WS_URL = `ws://127.0.0.1:${PORT}/relay`;
 const MEMBER_D = 'trinityone/member:', CAREREQ_D = 'trinityone/carereq:', CARETEAM_D = 'trinityone/careteam:', CARESTATUS_D = 'trinityone/carereqstatus:', CARECHAT_D = 'trinityone/carechat:';
 // A CARE REQUEST ID NAMES ITS ASKER — `<first16 of their pubkey>-<tail>` — and the relay refuses one that

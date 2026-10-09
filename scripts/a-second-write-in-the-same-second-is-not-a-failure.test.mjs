@@ -63,6 +63,9 @@ function phone(T, { stamp = 'real' } = {}) {
     localStorage: { getItem: (k) => (kv.has(k) ? kv.get(k) : null), setItem: (k, v) => kv.set(k, String(v)), removeItem: (k) => kv.delete(k) },
     finalizeEvent2: (t, key) => finalizeEvent(t, key),
     _lastStampF: lastStamp,
+    // announceMembership schedules a 500ms docs-hub reopen after a rejoin; with no hub open it is a no-op. Unstubbed, the
+    // timer fires after the test ended, throws ReferenceError, and node --test reports a bare "test failed".
+    _docsHubs: new Map(),
     _outbox: [], _outboxSave: () => {}, _markJoinSent: () => {}, _clearJoinSent: () => {}, _dropJoinIntent: () => {},
     _queueJoinIntent: () => {}, _forgetChurch: () => {}, _joinSent: {}, _joinIntents: [],
     publishSetFor: () => ['wss://relay.test/relay'],

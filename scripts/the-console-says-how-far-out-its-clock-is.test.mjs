@@ -189,7 +189,13 @@ test('_pickSkew takes the median of three and the closer-to-local of two', () =>
 // renders the REAL DashRelaysCard driven by the REAL useStewardClockSkew hook, so deleting EITHER — the
 // render, or the hook that feeds it — turns this red. A stub of the hook would let the hook be deleted with
 // every test still green, which is the exact shape rule 1 exists to forbid.
-const DASH = readFileSync(join(ROOT, 'app/stew-dashboard.jsx'), 'utf8');
+// fnBody (test-slice.mjs) is quote-aware but not JSX-aware: the straight apostrophe in DashRelaysCard's footer TEXT
+// ("Your church's messages…") opens a string it never closes, so the brace walk runs past the card and reports
+// "could not find the end of DashRelaysCard". The app is valid JSX and renders that text correctly, so the
+// slicer's input is normalised here rather than the shipped copy changed. Only that one sentence is touched,
+// and only if still present (if the app later adopts the curly form this is a no-op).
+const DASH = readFileSync(join(ROOT, 'app/stew-dashboard.jsx'), 'utf8')
+  .replace("Your church's messages, groups and members live on the relays above", 'Your church\u2019s messages, groups and members live on the relays above');
 const ROOTJSX = readFileSync(join(ROOT, 'app/steward-root.jsx'), 'utf8');
 
 function mini() {

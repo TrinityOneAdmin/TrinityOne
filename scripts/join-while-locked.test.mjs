@@ -38,6 +38,7 @@ function lift(overrides = {}) {
     // setEventRsvp / announceMembership / leaveMembership stamp through _monotonicF (sim item 19). These tests are about
     // something else, so the stamp is the identity here; its own behaviour is a-second-write-in-the-same-second-is-not-a-failure.test.mjs.
     _monotonicF: (t) => t,
+    _docsHubs: new Map(),   // announceMembership schedules a 500ms hub reopen on rejoin; no hub open = no-op (unstubbed it threw after the test ended)
     _joinSent: {}, _outbox: [], _outboxFailed: [], _outboxSave: () => {},
     _publishAny: async (relays, evt) => { published.push(evt); if (scope.refuse) throw new Error(scope.refuse); return true; },
     publishSetFor: () => ['ws://x'],

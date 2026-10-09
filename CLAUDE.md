@@ -135,6 +135,34 @@ produced a false finding on three separate occasions.
   finding. (Corrected 2026-09-22: this said ".gitignore:96" and "exactly one on disk"; both were wrong, and
   an agent chasing the line number concluded the drivers were tracked, which they are not.)
 
+## Browser tests leak 171MB each, INVISIBLY — do not "fix" it by adding cleanup
+
+Measured 2026-10-09: **44GB in 2,394 directories, root at 94% full.** The owner had cleared ~50GB
+of the same thing that morning. It returns within a day.
+
+The 172 files that drive a browser already do `mkdtempSync(join(tmpdir(), 'trin-…'))` and `rmSync`
+it in `after()`. **That code is correct and it runs.** It is defeated by snap:
+
+    the test writes   /tmp/trin-x                                    -> real /tmp, ends up 4.0K
+    chromium writes   /tmp/snap-private-tmp/snap.chromium/tmp/trin-x -> 171MB, orphaned
+
+Chromium here is a SNAP, and a snap gets a PRIVATE `/tmp` bind-mounted over the real one. The test
+deletes the 4.0K stub it can see; the 171MB it cannot see stays. Measured on one profile name:
+snap-private **167M** vs real `/tmp` **4.0K**. Adding more `rmSync` calls CANNOT fix this, and
+moving profiles off `/tmp` does not work either — snap's AppArmor confinement blocks chromium from
+writing a user-data-dir to an arbitrary path.
+
+`/tmp/snap-private-tmp` is root-owned and unreadable from outside, so `du /tmp` reports ~128M and
+shows you nothing. The only way in is `/proc/<chromium-pid>/root/tmp`.
+
+**`scripts/sweep-chromium-tmp.mjs` handles it, and `run-tests.mjs` runs it before every suite.**
+It never touches a profile a live browser is using, and skips anything under 10 minutes old. To
+check by hand:
+
+    P=$(pgrep -f '[c]hrome.*headless' | head -1); du -sh /proc/$P/root/tmp
+
+If root is filling and `du /tmp` looks innocent, this is why.
+
 ## Sabotage must be scoped to the function under test
 
 Near-identical sibling functions are this codebase's house style, so a plain string-replace hits the

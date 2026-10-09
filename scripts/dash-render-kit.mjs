@@ -8,7 +8,9 @@
 //
 // `extra` names top-level functions in the same file that the component calls (rotateChurchKeys, …); they are
 // compiled alongside it, from the SAME source, so a call into them is the shipped code and not a stub.
-import { writeFileSync, rmSync, readFileSync } from 'node:fs';
+import { writeFileSync, rmSync, readFileSync, mkdirSync, existsSync, renameSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -37,7 +39,9 @@ export const said = (n) => {
 export const SCH = readFileSync(join(ROOT, 'app/stew-schedule.jsx'), 'utf8');
 export async function compiled(name, globals, extra = [], src0 = DASH) {
   const { React, draw } = miniReact();
-  const pick = (e) => (typeof e === 'string' ? fnBody(src0, 'function ' + e + '(', e) : fnBody(e.src, 'function ' + e.name + '(', e.name));
+  // `{ src, const: 'NAME' }` reads a single-line top-level `const NAME = …;` table (STEW_CAP_LABEL) from the shipped file
+  const constLine = (e) => { const m = e.src.match(new RegExp('^const ' + e.const + ' = .*;$', 'gm')); if (!m || m.length !== 1) throw new Error('expected exactly one single-line top-level const ' + e.const + ', found ' + (m ? m.length : 0)); return m[0]; };
+  const pick = (e) => (e && e.const ? constLine(e) : typeof e === 'string' ? fnBody(src0, 'function ' + e + '(', e) : fnBody(e.src, 'function ' + e.name + '(', e.name));
   const src = [fnBody(src0, 'function ' + name + '(', name), ...extra.map(pick)].join('\n');
   const tmp = join(tmpdir(), 'dk-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
   let js;
@@ -48,9 +52,21 @@ export async function compiled(name, globals, extra = [], src0 = DASH) {
   const g = { React, ...globals };
   const key = '__dk_' + Math.random().toString(36).slice(2);
   globalThis[key] = g;
-  const preamble = Object.keys(g).map(k => `const ${k} = globalThis.${key}.${k};`).join('\n');
-  const mod = await import('data:text/javascript;base64,' + Buffer.from(preamble + '\n' + js).toString('base64'));
-  delete globalThis[key];
+  // The module goes to a REAL file, not a data: URL. A data: URL carries the whole compiled screen (~100 KB) and
+  // appears in every frame of every stack trace, so one failing test printed ~160 KB. The file is content-addressed
+  // (name = hash of its text) under node_modules/.cache, so it is written once, never leaks into /tmp, needs no
+  // cleanup (a killed process leaves nothing that grows), and a trace names a short path. The per-call globals key
+  // travels in the URL query, so the file text is identical for identical input and each import is still evaluated
+  // afresh (a distinct query is a distinct module).
+  const preamble = "const __g = globalThis[new URL(import.meta.url).searchParams.get('k')];\n"
+    + Object.keys(g).map(k => `const ${k} = __g.${JSON.stringify(k).startsWith('"') && /^[A-Za-z_$][\w$]*$/.test(k) ? k : '[' + JSON.stringify(k) + ']'};`).join('\n');
+  const text = preamble + '\n' + js;
+  const dir = join(ROOT, 'node_modules/.cache/dash-render-kit');
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, createHash('sha1').update(text).digest('hex').slice(0, 12) + '-' + name + '.mjs');
+  if (!existsSync(file)) { const part = file + '.' + process.pid + '.part'; writeFileSync(part, text); renameSync(part, file); }
+  let mod;
+  try { mod = await import(pathToFileURL(file).href + '?k=' + key); } finally { delete globalThis[key]; }
   return { C: mod[name], draw };
 }
 

@@ -244,7 +244,7 @@ test('a member with no children checked in is shown NOTHING about check-in', () 
       'Most of a congregation, most Sundays, is in exactly this state.');
   }
   // …and the rest of the Today screen still renders, so the line above is not "the whole screen is empty".
-  assert.match(said(screen), /St Chad/, 're-anchor: the Today screen rendered nothing at all, so the absences above are vacuous');
+  assert.match(said(screen), /Verse of the day/, 're-anchor: the Today screen rendered nothing at all (anchored on the verse card; the church pill was removed from Today in ec443e4), so the absences above are vacuous');
 });
 
 test('an app that has not finished loading shows nothing either — not an empty register', () => {

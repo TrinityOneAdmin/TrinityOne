@@ -191,7 +191,7 @@ test(`the twelve words start within ${WORDS_WITHIN}px of the card's top and are 
     // console-words still spells out that every member joins again.
     assert.match(m.stepText, /two paper copies, in two places/i, 'one paper copy in one place is how churches actually lose this');
     assert.match(m.stepText, /not locked, gone/i, 'the consequence must be concrete — "cannot be recovered" reads as boilerplate');
-    assert.match(m.stepText, /not us, not your relay, not a backup file/i, 'stewards assume a backup file or the relay can save them; say plainly that neither can');
+    assert.match(m.stepText, /nothing else can restore it/i, 'stewards assume a backup file or the relay can save them; say plainly that nothing else can (re-anchored 2026-10-09: fb93a55 cut the named list "not us, not your relay, not a backup file" from the step subtitle)');
     assert.ok(m.label.top >= 0 && m.box.bottom <= m.vh,
       `the phrase box (${m.box.top}..${m.box.bottom}) is not fully inside the ${m.vh}px viewport with the card unscrolled`);
     assert.equal(m.checkboxHit, 'self', `the acknowledgement checkbox cannot be reached (elementFromPoint at its centre after scrolling to it → ${m.checkboxHit})`);

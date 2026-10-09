@@ -39,6 +39,8 @@ function device() {
       pub: CHURCH, NET: 'trinityone',
       JSON, Math, Date, console, String, Number, Map, Set, Array, Infinity, setTimeout, clearTimeout,
       npubEncode: (x) => x,
+      // subscribeMembers consults the steward roster (sim finding 29) and registers a re-emit hook; nobody here is a steward.
+      _careRoster: new Set(), _memberEmitters: new Set(), _exStewardSet: () => new Set(),
       localStorage: { getItem: (k) => storage[k] || null, setItem: (k, v) => { storage[k] = v; } },
       window: { Steward: { openMemberName: () => '' } },
     };

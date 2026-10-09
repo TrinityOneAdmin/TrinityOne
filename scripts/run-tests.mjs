@@ -38,8 +38,8 @@
 // oversubscribe exactly the way 111 does here. The cap is a ceiling, never a floor. Note also that
 // availableParallelism() follows an affinity mask but NOT a cgroup CPU quota, so a container limited with
 // `--cpus=2` still reports the host's core count and would take the 24.
-import { spawn } from 'node:child_process';
-import { readdirSync, readFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { readdirSync, readFileSync, writeFileSync, mkdtempSync, rmSync, openSync, closeSync, unlinkSync, existsSync, readdirSync as readdirSync2 } from 'node:fs';
 import { availableParallelism } from 'node:os';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -80,6 +80,79 @@ if (!files.length) { console.error('run-tests: no *.test.mjs found in ' + dir); 
 // A caller who names a concurrency means it — don't hand node two --test-concurrency flags and hope.
 const ownFlags = flags.some(f => f.startsWith('--test-concurrency')) ? [] : [`--test-concurrency=${concurrency}`];
 console.error(`run-tests: ${files.length} files, concurrency ${ownFlags.length ? concurrency : '(caller-set)'} of ${availableParallelism()} threads${flags.length ? ', flags: ' + flags.join(' ') : ''}`);
+
+// ── ONE SUITE AT A TIME ──────────────────────────────────────────────────────────────────────────────────
+// THE DEFECT THIS EXISTS FOR, measured 2026-10-09: a true baseline of 188 failures was reported, on the same
+// commit, as 547, then 453, then 269 — every one of them a second suite running concurrently. 148 test files
+// bind a UNIQUE FIXED PORT via scripts/test-ports.mjs, so two suites race for all 148 by construction. Five
+// sessions in a row then reasoned on top of numbers that were never real, and a genuine regression sat
+// unnoticed underneath them for two days.
+//
+// test-ports.mjs already says, in its own words, that it is "deliberately NOT a lock … this catches
+// leftovers, which is the whole observed failure mode, not concurrent suites". This is the other half.
+//
+// Refuse rather than queue: a developer who is told "pid 1234 has been running the suite for 4 minutes"
+// makes a better decision than one whose command silently blocks. A lock whose owner is DEAD is taken over,
+// because a killed run (SIGKILL skips every cleanup path) must not wedge the repo for ever.
+const LOCK = join(tmpdir(), 'trinityone-suite.lock');
+let lockHeld = false;
+const readLock = () => { try { return JSON.parse(readFileSync(LOCK, 'utf8')); } catch { return null; } };
+const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
+// RE-ENTRANT FOR OUR OWN CHILDREN. scripts/the-relay-bundle-is-published-to-the-release.test.mjs drives
+// release.sh, which runs `npm test` as its own gate — a suite inside a suite. The first version of this
+// lock refused that nested run, so the release refused for the WRONG reason ("a red test stops the
+// release" instead of "that key is wrong") and five of its assertions failed. Caught by the pre-merge
+// comparison, two hours after the lock was written.
+// The env var is inherited by every child process, so a nested run recognises its own ancestor and
+// proceeds. A genuinely separate suite has no such ancestor and is still refused.
+const HELD_BY = process.env.TRINITYONE_SUITE_LOCK;
+const alreadyOurs = () => {
+  if (!HELD_BY) return false;
+  const pid = Number(HELD_BY);
+  if (!pid) return false;
+  try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
+};
+
+const takeLock = () => {
+  if (alreadyOurs()) { console.error(`run-tests: nested run under pid ${HELD_BY} — lock already held by our own ancestor`); return; }
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try { closeSync(openSync(LOCK, 'wx')); } catch {
+      const held = readLock();
+      if (held && held.pid && alive(held.pid) && held.pid !== process.pid) {
+        const mins = held.started ? Math.round((Date.now() - held.started) / 60000) : '?';
+        console.error(`\n✗ another suite is already running — pid ${held.pid}, ${mins} min, in ${held.cwd || '?'}`);
+        console.error(`  Two suites race for the 148 fixed ports and BOTH report false failures.`);
+        console.error(`  Wait for it, or if it is wedged: kill ${held.pid} && rm ${LOCK}`);
+        process.exit(1);
+      }
+      console.error(`run-tests: taking over a stale lock from pid ${held && held.pid} (not running)`);
+      try { unlinkSync(LOCK); } catch {}
+      continue;
+    }
+    writeFileSync(LOCK, JSON.stringify({ pid: process.pid, started: Date.now(), cwd: process.cwd() }));
+    lockHeld = true; process.env.TRINITYONE_SUITE_LOCK = String(process.pid); return;
+  }
+  console.error('run-tests: could not take the suite lock'); process.exit(1);
+};
+// Only ours to release — never delete a lock another pid has since taken.
+const releaseLock = () => {
+  if (!lockHeld) return;
+  const held = readLock();
+  if (held && held.pid === process.pid) { try { unlinkSync(LOCK); } catch {} }
+  lockHeld = false;
+};
+takeLock();
+process.on('exit', releaseLock);
+
+// SWEEP THE INVISIBLE CHROMIUM LITTER BEFORE WE ADD MORE. 57 files here drive a headless snap
+// chromium, and a snap gets a PRIVATE /tmp, so the profile the test deletes is a 4KB stub while
+// its real 171MB sits in /tmp/snap-private-tmp/ where nothing can see it. Measured 2026-10-09:
+// 44GB in 2,394 dirs, root at 94%. The owner had cleared ~50GB of the same thing that morning.
+// Never fatal: a failed sweep must not stop a suite.
+try {
+  const sweep = fileURLToPath(new URL('./sweep-chromium-tmp.mjs', import.meta.url));
+  spawnSync(process.execPath, [sweep], { stdio: 'inherit', timeout: 60000 });
+} catch {}
 
 // Write a TAP stream to a temp file so the count floor can read it after the run, without piping
 // stdout through this process (which deadlocks under the suite's output volume).
@@ -136,8 +209,33 @@ child.on('exit', (code, signal) => {
         console.error(`\n✗ skip budget: ${skip} skipped, budget is ${SKIP_BUDGET}`);
         exitCode = 1;
       }
+      // COMPARE AGAINST A MEASURED, DATED BASELINE — not against anybody's memory. Informational, never
+      // fatal: a drifting number is a prompt to look, and a gate that cried wolf would just get raised.
+      try {
+        const b = JSON.parse(readFileSync(new URL('./test-baseline.json', import.meta.url), 'utf8'));
+        const failMatch = tapTail.match(/^# fail\s+(\d+)/m);
+        const testMatch = tapTail.match(/^# tests\s+(\d+)/m);
+        const fail = failMatch ? Number(failMatch[1]) : null;
+        const total = testMatch ? Number(testMatch[1]) : null;
+        if (fail !== null && shardN === 1) {
+          const df = fail - b.fail, dt = total === null ? 0 : total - b.tests;
+          const sign = (n) => (n > 0 ? '+' : '') + n;
+          console.error(`\nbaseline ${b.recorded} (${b.commit}): ${b.tests} tests, ${b.fail} fail` +
+            `  →  now ${total} tests, ${fail} fail   [${sign(dt)} tests, ${sign(df)} fail]`);
+          if (df > 0) console.error(`  ${df} MORE failing than the baseline. Something regressed, or the baseline is stale.`);
+          if (dt < 0) console.error(`  ${-dt} FEWER tests than the baseline. Account for every one (CLAUDE.md rule 8).`);
+        }
+      } catch {}
     }
   } catch {}
-  try { rmSync(tapDir, { recursive: true }); } catch {}
+  // KEEP THE TAP. It used to be deleted here, so the only durable record of what failed died with the run —
+  // and a failure list you cannot diff against the previous one is a list you can only guess at. Prune to the
+  // five most recent instead; each is ~3MB.
+  console.error(`run-tests: TAP kept at ${tapFile}`);
+  try {
+    const runs = readdirSync2(tmpdir()).filter(d => d.startsWith('trinityone-test-')).sort();
+    for (const d of runs.slice(0, Math.max(0, runs.length - 5))) rmSync(join(tmpdir(), d), { recursive: true, force: true });
+  } catch {}
+  releaseLock();
   process.exit(exitCode);
 });

@@ -46,7 +46,17 @@ const NOT_TRACKED = new Set(['apks.html', 'welcome-sim.html']);
 // unreachable, and that really is correct.
 // When the pilot ends, the go-live checklist in welcome.html says this page "can stay or be removed"; if it is
 // removed, remove this line with it rather than leaving a dead exemption behind.
-const ENTRY_POINTS = new Set(['join.html', 'pilot.html']);
+//
+// widget-test.html joins them on 2026-10-09. It landed in 98b1972 (the devotionals widget) as a hand-opened
+// developer page for the embeddable widget: its title is "Widget Test", it embeds one church's widget.js, and
+// nothing on the brochure should link to it. Its ONLY sane route is somebody typing the URL. NOTE it is a
+// tracked root .html and the gateway serves it publicly (no deny rule) — recorded, not decided here.
+const ENTRY_POINTS = new Set(['join.html', 'pilot.html', 'widget-test.html']);
+
+// THE WIDGET SCRIPT IS NOT A FILE. /public/<npub>/widget.js is answered by a gateway route (WIDGET_ROUTE in
+// scripts/gateway.mjs, built by public-widget.mjs), so existsSync() can never find it. The exemption is this
+// ONE exact shape, and the test below proves the route it names is really in the gateway.
+const WIDGET_JS_ROUTE = /^\/public\/npub1[a-z0-9]{58}\/widget\.js$/;
 
 const pages = readdirSync(ROOT).filter(f => f.endsWith('.html') && !APP_SHELLS.has(f) && !NOT_TRACKED.has(f));
 
@@ -66,12 +76,19 @@ test('every internal link points at a file that exists', () => {
       const target = u.startsWith('/') ? u.slice(1) : u;
       if (!target || target.endsWith('/')) continue;              // directory / root links
       if (NOT_TRACKED.has(target)) continue;
+      if (WIDGET_JS_ROUTE.test(u)) continue;                      // served by the gateway, not a file
       if (!existsSync(ROOT + target)) broken.push(`${p} → ${u}`);
     }
   }
   assert.deepEqual(broken, [],
     'these links 404. A dead link on the brochure is worse than a missing page: the reader believes there ' +
     'is something there and concludes the product is broken.\n  ' + broken.join('\n  '));
+});
+
+test('the widget route the link check exempts really exists in the gateway', () => {
+  const gw = read('scripts/gateway.mjs');
+  assert.match(gw, /const WIDGET_ROUTE = \/\^\\\/public\\\/\(npub1\[a-z0-9\]\{58\}\)\\\/widget\\\.js\$\//,
+    'WIDGET_ROUTE is gone or changed in gateway.mjs — the exemption in this file would now hide a real 404');
 });
 
 // The hero's feature pills carry their screenshot in `data-shot`, and pills.js swaps it into the <img> on tap.

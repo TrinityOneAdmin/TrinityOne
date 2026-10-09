@@ -1,0 +1,12 @@
+{
+  "_why": "The recorded result of a CLEAN full run, so a later run can be compared against a MEASURED number instead of somebody's memory. On 2026-10-09 a session compared a 5840-test suite against a remembered '~2029' from 2026-08-29, when the repo had 265 test files instead of 664, and spent hours on a non-problem. Update this whenever you land a real change in the pass/fail counts, and say why in the commit.",
+  "recorded": "2026-10-09",
+  "commit": "7a557ef",
+  "branch": "integration/suite-repair",
+  "tests": 5835,
+  "pass": 5801,
+  "fail": 30,
+  "skipped": 2,
+  "todo": 2,
+  "notes": "Clean box, main tree, nothing else running, 428s. The 30 are enumerated in the session notes; 6 of them are deliberate open findings (3 unnamed password fields, 1 contrast failure, 4 doc-registry/verse-prompt) left red on purpose."
+}

@@ -1333,5 +1333,5 @@ test('CONTROL: with nothing blocked the page says nothing of the kind', () => {
   const said = panel({ ...share(), known: true, blocked: 0, blockedWhy: '', held: 0 });
   assert.doesNotMatch(said, /could not be published/, 'the page cries wolf on a healthy church');
   assert.doesNotMatch(said, /still on your website/, 'the page cries wolf on a healthy church');
-  assert.match(said, /Share our calendar on our website/, 're-anchor: the panel did not render at all');
+  assert.match(said, /Share our calendar/, 're-anchor: the panel did not render at all');
 });

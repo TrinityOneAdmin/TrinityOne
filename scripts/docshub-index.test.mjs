@@ -71,7 +71,12 @@ function registrations() {
     // _dkeyOf('trinityone/pinsermon:') and _dkeyOf('trinityone/pinsermon:<cp>') are both "pinsermon", so the
     // declared slice really does replay the document. It is treated as a PREFIX below, because that is what
     // the constant is and bucketing is the property this file exists to protect.
-    const g = block.match(/onevent\(e, d\) \{[\s\S]*?if \(!?d(?:\.startsWith\((\w+)\)|\s*!==\s*(\w+)\s*\+[^)]*|\s*!==\s*(\w+))\) return;/);
+    const g = block.match(/onevent\(e, d\) \{[\s\S]*?if \(!?d(?:\.startsWith\((\w+)\)|\s*!==\s*(\w+)\s*\+[^)]*|\s*!==\s*(\w+|'[^']+'))\) return;/);
+    // FOURTH SHAPE, 2026-10-09: the guard names its d-tag as a STRING LITERAL, not a constant —
+    // subscribeChurchVersePrompt (a2d1d12) writes `want: ['trinityone/verse-prompt']` and
+    // `if (d !== 'trinityone/verse-prompt') return;`. Same exact-d-tag meaning as the bare-name form; the
+    // literal is compared to `want` verbatim (quotes included) and resolved to its value below so the bucketing
+    // check still RUNS on it rather than being skipped for want of a constant.
     // ── AND THE MULTI-PREFIX DISPATCH SHAPE, added 2026-09-10 ─────────────────────────────────────────────
     // subscribeCheckinRegister reads THREE document types on one registration — a clearance, a session-key
     // envelope and the records themselves — because the three decide one answer together and splitting them
@@ -126,7 +131,7 @@ test('every handler replays the SAME slice its own guard accepts', () => {
     assert.equal(r.want, r.guard,
       `handler declares want: [${r.want}] but its onevent guards on ${r.guard} — it will replay the wrong slice and render blank`);
     // For the named constants, the declared prefix and a REAL d-tag built from it must land in the same bucket.
-    const val = consts.get(r.want);
+    const val = consts.get(r.want) || (/^'[^']+'$/.test(r.want) ? r.want.slice(1, -1) : null);
     if (!val) continue;
     assert.notEqual(dkey(val), '', `${r.want} has no doc type — it would fall into the catch-all bucket`);
     if (r.exact) {
