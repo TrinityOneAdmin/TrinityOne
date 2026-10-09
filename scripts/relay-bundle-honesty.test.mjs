@@ -60,20 +60,24 @@ function buildNonGitTree() {
   // public-widget.mjs. The comment above predicted the failure mode exactly and the comment was not enough, so
   // the list is now CHECKED against gateway.mjs's real imports below. Hand-maintained still — a new import is
   // a decision this harness should make on purpose — but it can no longer go quietly out of date.
-  const LOCALS = ['event-store.mjs', 'trinity-doc-types.mjs', 'checkin-role-source.mjs',
-                  'public-calendar.mjs', 'public-widget.mjs'];
+  // DERIVED, NOT RESTATED (2026-10-09). The hand list went stale a third time when gateway.mjs gained
+  // public-verse.mjs and public-media.mjs, so the list is now computed: every `./x.mjs` gateway.mjs imports,
+  // static or dynamic, followed transitively through the files it pulls in. Why this is safe: the packaging
+  // paths ship every TRACKED file under scripts/ (see above), so "gateway.mjs needs it" and "the stand-in
+  // relay must carry it" are the same set. What the old hand check bought — a loud message instead of a relay
+  // that silently will not start — is kept by the sanity assertions below (the scan must find the known core
+  // files, every derived file must exist) and by the "stand-in relay is actually up" test.
+  const importScan = /(?:from|import\()\s*'\.\/([\w.-]+\.mjs)'/g;
+  const LOCALS = [];
+  for (const queue = ['gateway.mjs']; queue.length;) {
+    const f = queue.pop();
+    const src = readFileSync(join(ROOT, 'scripts', f), 'utf8');
+    for (const m of src.matchAll(importScan)) if (!LOCALS.includes(m[1])) { LOCALS.push(m[1]); queue.push(m[1]); }
+  }
+  assert.ok(LOCALS.length >= 5, `only ${LOCALS.length} local imports found from gateway.mjs — the scan is broken`);
+  for (const must of ['event-store.mjs', 'trinity-doc-types.mjs', 'checkin-role-source.mjs'])
+    assert.ok(LOCALS.includes(must), `the scan did not find ${must}, which gateway.mjs is known to import — the scan is broken`);
   for (const f of LOCALS) copyFileSync(join(ROOT, 'scripts', f), join(dir, 'scripts', f));
-  // THE LIST CHECKS ITSELF. Every `./x.mjs` gateway.mjs imports, static or dynamic, must be in LOCALS. Without
-  // this the only symptom of a missing file is a stand-in relay that will not start — at which point the three
-  // refusal assertions below stop being made and one of them still PASSES, because "no answer at all" is not
-  // 200 and carries fewer than 4096 bytes. A test that is red and simultaneously not testing is the worst of
-  // both, and that is the state this file was in from 2026-09-11 to 2026-09-26.
-  const gw = readFileSync(join(ROOT, 'scripts', 'gateway.mjs'), 'utf8');
-  const imported = [...gw.matchAll(/(?:from|import\()\s*'\.\/([\w.-]+\.mjs)'/g)].map(m => m[1]);
-  assert.ok(imported.length >= 5, `only ${imported.length} local imports found in gateway.mjs — the scan is broken, not the list`);
-  assert.deepEqual([...new Set(imported)].filter(f => !LOCALS.includes(f)), [],
-    'gateway.mjs imports a local file this harness does not copy into the stand-in relay. The relay will not ' +
-    'start, and the refusal assertions below will stop being made. Add it to LOCALS in the same commit.');
   symlinkSync(join(ROOT, 'node_modules'), join(dir, 'node_modules'));
   writeFileSync(join(dir, 'version.txt'), 'sha: ' + '1'.repeat(40) + '\ndate: 2026-07-29T00:00:00+01:00\n');
   writeFileSync(join(dir, 'index.html'), '<!doctype html><title>stand-in</title>\n');
