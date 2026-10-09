@@ -17,6 +17,12 @@ import { stripComments } from './test-slice.mjs';
 // PIN gate. Audit 2026-09-04.
 const FILES = ['app/identity.jsx', 'app/identity-extras.jsx', 'app/stew-dashboard.jsx', 'app/steward-root.jsx'];
 
+// A PASSWORD FIELD IS WRITTEN TWO WAYS NOW. c13603a (2026-10-06, "eye toggle on all PIN inputs") turned most of
+// them from `type="password"` into `type={vis ? 'text' : 'password'}` so they can show what was typed. A
+// pattern that only knows the literal form went blind to 12 of the 23 and reported "10 found, 19 expected" —
+// which reads as lost fields and was in fact a lost extractor. Both forms are read; the floor below is unchanged.
+const PW = /type=(?:"password"|\{[^{}]*'password'[^{}]*\})/g;
+
 // FIND THE WHOLE TAG, not `<input[^>]*type="password"[^>]*>`. That pattern stops at the first ">" — and a
 // JSX attribute routinely contains one, in an arrow function: `onChange={e => …}`. So any password input
 // whose handler is written before `type=` was invisible to it. Measured before this fix: it saw 5 of the 7
@@ -27,7 +33,7 @@ const FILES = ['app/identity.jsx', 'app/identity-extras.jsx', 'app/stew-dashboar
 // tracking brace depth so a ">" inside `{...}` does not end the tag.
 function passwordTags(src) {
   const out = [];
-  for (const m of src.matchAll(/type="password"/g)) {
+  for (const m of src.matchAll(PW)) {
     const start = src.lastIndexOf('<input', m.index);
     if (start < 0) { out.push('(a password field with no <input before it: ' + src.slice(Math.max(0, m.index - 40), m.index + 20) + ')'); continue; }
     let depth = 0, end = -1;
@@ -50,7 +56,7 @@ test('every secret field says what it is', () => {
     const tags = passwordTags(src);
     // The count is part of the assertion: if the extractor ever stops finding them, that must be a failure
     // and not a quietly empty pass.
-    assert.equal(tags.length, (src.match(/type="password"/g) || []).length,
+    assert.equal(tags.length, (src.match(PW) || []).length,
       f + ': the tag extractor lost a password field — every one of them must be checked, not most');
     seen += tags.length;
     for (const tag of tags) {

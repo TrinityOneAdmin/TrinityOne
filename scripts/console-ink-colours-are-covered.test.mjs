@@ -428,6 +428,24 @@ const BARE_INVENTORY = [
     [1, "background: restoreTarget === k ? 'var(--clay)' : 'transparent'"],
     [1, "background: up ? 'var(--sage)' : 'var(--clay)'"],
     [2, "color: 'var(--clay)'"],                            // the "One" of the TrinityOne wordmark, twice
+    // 2026-10-09: ten sites that landed after the baseline, nine of them reviewed here as NON-TEXT and recorded.
+    // The tenth — an 11px bold "Day N" label painted bare --clay (Plans, de4b9a7) — is TEXT, fails 4.5:1, and is
+    // deliberately NOT recorded: it stays NEW until the app moves it to --clay-ink.
+    // Five switch TRACKS (role="switch" pills with no text, 1.4.11's 3:1 governs, like the nine above):
+    // Plans/devotionals "Show on website" (p.public, d.public) and the website-share switches (sermons/plans/devos).
+    [1, "background: p.public !== false ? 'var(--clay)' : 'var(--line)'"],
+    [1, "background: d.public !== false ? 'var(--clay)' : 'var(--line)'"],
+    [1, "background: sermonsOn ? 'var(--clay)' : 'var(--line)'"],
+    [1, "background: plansOn ? 'var(--clay)' : 'var(--line)'"],
+    [1, "background: devosOn ? 'var(--clay)' : 'var(--line)'"],
+    // The Overview "Resources" card (_ovAllFuture): a 42px icon tile (its glyph is --on-clay / --on-sage, not
+    // these) plus a 10% tint behind and a border. No text is painted in the bare token.
+    [1, "background: _ovAllFuture ? 'var(--clay)' : 'var(--sage)'"],
+    [1, "background: 'color-mix(in oklab, ' + (_ovAllFuture ? 'var(--clay)' : 'var(--sage)') + ' 10%, var(--surface))'"],
+    // The Groups row's 40px icon tile: a 16% tint, and the <Icon size={20}> glyph (no text) in the group's accent.
+    // The team half of the glyph was already --clay-ink; the sage half is a 20px graphic (3:1), not text.
+    [1, "background: `color-mix(in oklab, ${g.accent || (g.kind === 'team' ? 'var(--clay)' : 'var(--sage)')} 16%, var(--surface))`"],
+    [1, "color: g.accent || (g.kind === 'team' ? 'var(--clay-ink)' : 'var(--sage)')"],
   ]],
   ['app/stew-data.jsx', []],
   ['app/stew-extension.jsx', [

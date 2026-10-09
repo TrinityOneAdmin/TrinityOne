@@ -145,8 +145,12 @@ test('every activeChurch resolution still funnels through the same find()', () =
   // the same pass as everything else.
   // 44 → 45: answerSwap resolves activeChurch to its npub for the swap answer's church. With a stale id, np is
   // undefined and `ask.church || np` falls back to the ask's own church — the safe direction.
-  assert.equal(sites.length, 45,
-    `the active-church resolution sites changed (${sites.length} vs 45) — if that is deliberate, confirm each new one benefits from the heal, then update this count`);
+  // 45 → 46 (6e12753, sim 32/34): the effect that subscribes Fellowship.subscribeSermons so the Today featured
+  // card can overlay the pinned sermon with its current title. Same find() shape as the subscribePinnedSermon
+  // effect directly above it; with a stale id np is undefined, the list falls back to [] and the card keeps the
+  // pin's own title — the safe direction — and the heal puts it right on the same pass as everything else.
+  assert.equal(sites.length, 46,
+    `the active-church resolution sites changed (${sites.length} vs 46) — if that is deliberate, confirm each new one benefits from the heal, then update this count`);
 });
 
 test('a MISSING active church heals too, not only a dangling one', () => {
