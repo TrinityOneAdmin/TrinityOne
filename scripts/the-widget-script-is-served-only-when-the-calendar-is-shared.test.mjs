@@ -92,7 +92,11 @@ test('a co-tenant church\'s switch never turns on another church\'s widget', asy
 test('the served bytes make no reference to any external host, and only fetch a same-origin calendar.ics', async () => {
   assert.equal((await publish(pub, shareDoc(grace, ap, { calendar: true, optOut: [], address: 'own' })))[0], true);
   await sleep(200);
-  const text = await (await get(widgetUrl(NPUB))).text();
+  const raw = await (await get(widgetUrl(NPUB))).text();
+  // The podcast feed reader looks up iTunes-namespaced elements. An XML namespace is an identifier compared as a
+  // string, never fetched, so the ONE iTunes namespace URI used as a getElementsByTagNameNS argument is not an
+  // external reference. Anything else (any other URL, or that URL anywhere else) still fails below.
+  const text = raw.split("getElementsByTagNameNS('http://www.itunes.com/dtds/podcast-1.0.dtd'").join('getElementsByTagNameNS(NS');
   assert.equal(/https?:\/\//.test(text), false, 'the widget script names an external URL: ' + (text.match(/https?:\/\/\S+/) || [])[0]);
   assert.equal(/\b(cdn|googleapis|gstatic|jsdelivr|unpkg|cloudflare)\b/i.test(text), false, 'the widget script names a third-party host');
   assert.match(text, /['"]\/calendar\.ics['"]/, 'the widget does not fetch a relative, same-origin calendar.ics');

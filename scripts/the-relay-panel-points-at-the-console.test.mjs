@@ -166,6 +166,8 @@ test('the wizard never promises "add your church", and its last step opens the c
     assert.equal(await c.evalIn(`localStorage.getItem('to_relay_setup_seen')`), null, 'the console step marked the box "set up" while it still held nothing');
     assert.equal(await c.evalIn(`sessionStorage.getItem('to_relay_setup_skipped')`), '1', 'the console step did not dismiss the wizard for this visit');
     // The Churches card (Settings) says it too, without the old false claim about accepting the whole internet.
+    // cfgList starts as "Loading…" and fills when /config answers; wait for that rather than race it.
+    await waitFor(c, `/created in the console/i.test(document.getElementById('cfgList').innerText)`, true);
     const cfg = String(await c.evalIn(`document.getElementById('cfgList').innerText`));
     assert.match(cfg, /created in the console/i, 'the empty Churches card does not say where a church is created');
     assert.doesNotMatch(cfg, /anyone on the internet/i, 'the Churches card still claims an unconfigured relay accepts writes from anyone — accept() refuses them');
