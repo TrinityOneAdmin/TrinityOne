@@ -198,8 +198,8 @@ test('LIST: a set-up request the person wrote to again is listed, with Message a
     'the returned request is not on the phone’s list — the care admin has no door to the thread. Drew: ' + words(p.tree).slice(0, 400));
   assert.equal(button(p.tree, 'Message').length, 1, 'no Message button on the returned request');
   assert.equal(button(p.tree, 'Set up help').length, 0, 'a request that already has its need was offered "Set up help" a second time');
-  assert.equal(button(p.tree, 'Close — not needed').length, 0, 'a returned thread offers a "close" that would tell the asker help was cancelled');
-  assert.equal(button(p.tree, 'Seen — no reply needed').length, 1, 'no way to clear it without replying');
+  assert.equal(button(p.tree, 'Close').length, 0, 'a returned thread offers a "close" that would tell the asker help was cancelled');
+  assert.equal(button(p.tree, 'Seen').length, 1, 'no way to clear it without replying');
 });
 
 test('LIST: a CLOSED request that returns may be set up after all', () => {
@@ -207,7 +207,7 @@ test('LIST: a CLOSED request that returns may be set up after all', () => {
   assert.match(words(p.tree), /Wrote again — you had closed this request/);
   assert.equal(button(p.tree, 'Set up help').length, 1, 'a closed request that came back cannot be set up');
   assert.equal(button(p.tree, 'Message').length, 1);
-  assert.equal(button(p.tree, 'Close — not needed').length, 0);
+  assert.equal(button(p.tree, 'Close').length, 0);
 });
 
 test('LIST: a set-up request with NOTHING new is not listed (the list does not fill with finished work)', () => {
@@ -221,8 +221,8 @@ test('LIST: an OPEN request is exactly as before — Set up help, Message, Close
   assert.match(words(p.tree), /Asked for help/);
   assert.equal(button(p.tree, 'Set up help').length, 1);
   assert.equal(button(p.tree, 'Message').length, 1);
-  assert.equal(button(p.tree, 'Seen — no reply needed').length, 0, 'an open request offers "Seen", which would write a status over a request nobody has dealt with');
-  const close = button(p.tree, 'Close — not needed');
+  assert.equal(button(p.tree, 'Seen').length, 0, 'an open request offers "Seen", which would write a status over a request nobody has dealt with');
+  const close = button(p.tree, 'Close');
   assert.equal(close.length, 1);
   close[0].props.onClick(); await flush();
   assert.deepEqual(p.calls.decline, ['r1'], 'Close no longer closes the request');
@@ -231,7 +231,7 @@ test('LIST: an OPEN request is exactly as before — Set up help, Message, Close
 
 test('LIST: "Seen" re-writes the SAME status and need — it must not close the request', async () => {
   const p = list([REQ({ status: 'approved', needId: 'n1', newMessage: true })]);
-  button(p.tree, 'Seen — no reply needed')[0].props.onClick(); await flush();
+  button(p.tree, 'Seen')[0].props.onClick(); await flush();
   assert.deepEqual(p.calls.seen, [['r1', ASKER, { status: 'approved', needId: 'n1' }]],
     'Seen did not re-write the request’s own status. Calls: ' + JSON.stringify(p.calls.seen));
   assert.deepEqual(p.calls.decline, [], 'Seen CLOSED the request — the asker would be told help was cancelled');
@@ -239,7 +239,7 @@ test('LIST: "Seen" re-writes the SAME status and need — it must not close the 
 
 test('LIST: a "Seen" that did not land says so, and the row stays', async () => {
   const p = list([REQ({ status: 'approved', needId: 'n1', newMessage: true })], { seenResult: null });
-  button(p.tree, 'Seen — no reply needed')[0].props.onClick(); await flush();
+  button(p.tree, 'Seen')[0].props.onClick(); await flush();
   const t = p.redraw();
   assert.match(words(t), /didn’t reach the church — it will stay on your list/, 'a refused "Seen" is silent. Drew: ' + words(t).slice(0, 500));
   assert.equal(button(t, 'Message').length, 1, 'the row left although nothing was written');
@@ -258,7 +258,7 @@ test('LIST: a returned CHILD’s request offers Message and Seen, and never "Set
   const p = list([REQ({ from: KID, status: 'declined', newMessage: true })], { minors: [KID] });
   assert.equal(button(p.tree, 'Message').length, 1, 'a young person who wrote again has no door');
   assert.equal(button(p.tree, 'Set up help').length, 0, 'a child’s returned thread was offered the button that publishes a need to the whole church');
-  assert.equal(button(p.tree, 'Seen — no reply needed').length, 1);
+  assert.equal(button(p.tree, 'Seen').length, 1);
   assert.match(words(p.tree), /FROM A YOUNG PERSON/, 're-anchor: a child’s request is no longer filed under the confidential heading');
 });
 

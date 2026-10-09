@@ -270,12 +270,12 @@ function overview(list) {
 
 test('BANNER: a returned thread counts on the Overview — alone, and beside a new request', () => {
   const alone = overview([REQ({ status: 'approved', needId: 'n1', newMessage: true }), REQ({ id: 'r2', status: 'declined', newMessage: true })]);
-  assert.match(alone, /2 new messages on requests you’ve already dealt with/,
+  assert.match(alone, /2 people wrote back on care/,
     'two people wrote to requests already dealt with and the Overview says nothing. Drew: ' + alone.slice(0, 600));
   assert.doesNotMatch(alone, /asked for help/, 'the banner claims people have asked for help when only old threads have messages');
   assert.match(alone, /Open Care to read and reply/);
   const both = overview([REQ({ id: 'r1' }), REQ({ id: 'r2', status: 'approved', needId: 'n1', newMessage: true })]);
-  assert.match(both, /1 person has asked for help · 1 new message on requests you’ve already dealt with/, 'both counts should show together: ' + both.slice(0, 600));
+  assert.match(both, /1 person has asked for help · 1 person wrote back on care/, 'both counts should show together: ' + both.slice(0, 600));
 });
 
 test('BANNER: nothing waiting means no banner; finished work does not count', () => {
