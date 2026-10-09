@@ -254,7 +254,7 @@ test('a member who has said nothing about children sees NOTHING about check-in',
   for (const w of ['we’re here', 'children’s worker', 'bringing']) {
     assert.ok(!s.includes(w), 'THE TODAY SCREEN RAISES CHECK-IN WITH SOMEBODY WHO HAS NOTHING TO DO WITH IT ("' + w + '")');
   }
-  assert.match(said(t.screen()), /St Chad/, 're-anchor: the Today screen rendered nothing at all, so the absence above is vacuous');
+  assert.match(said(t.screen()), /Verse of the day/, 're-anchor: the Today screen rendered nothing at all (anchored on the verse card; the church pill was removed from Today in ec443e4), so the absence above is vacuous');
 });
 
 test('ticking the box but typing no names shows nothing — an empty code is a dead end at a door', () => {

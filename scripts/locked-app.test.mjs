@@ -13,6 +13,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { loadScreen, miniReact, texts } from './render-jsx-screen.mjs';
 
 const APP = readFileSync(new URL('../app/app.jsx', import.meta.url), 'utf8');
 const TODAY = readFileSync(new URL('../app/screens-today.jsx', import.meta.url), 'utf8');
@@ -29,9 +30,51 @@ test('a locked app has no church in context at all', () => {
 });
 
 test('the serving card cannot render without a church', () => {
-  const at = TODAY.indexOf('{!ctx.church ? null : (servNext || servPendingN)');
+  // Re-anchored 2026-10-09: the gate grew a `servHidden` branch ("{!ctx.church ? null : servHidden ? null : (servNext || servPendingN)"),
+  // so the old literal no longer exists. The gate itself is intact. Anchoring on the leading `{!ctx.church ? null :` alone.
+  const at = TODAY.indexOf('{!ctx.church ? null : ');
   assert.notEqual(at, -1,
     'the serving card renders unconditionally again — "What’s happening · RSVP · your rota" on a locked phone says church as loudly as the name did');
+  assert.match(TODAY.slice(at, TODAY.indexOf('\n', at)), /servNext \|\| servPendingN/,
+    'the ctx.church gate no longer sits on the serving card line');
+});
+
+// RULE 3: the text match above can be satisfied by a gate that is disabled. This one RENDERS the Today screen.
+function renderToday(church) {
+  const { React, draw } = miniReact();
+  const Stub = (n) => { const f = function () { return null; }; Object.defineProperty(f, 'name', { value: n }); return f; };
+  const LS = { getItem: () => null, setItem() {}, removeItem() {} };
+  const win = { Fellowship: { myPubkey: 'me' }, Capacitor: { isNativePlatform: () => false },
+    TrinityData: { VOTD_POOL: [{ ref: 'John 3:16', text: 'x' }], PLANS: [{ id: 'p1', name: 'A plan', days: [{ d: 1, ref: 'Gen 1' }] }], NOTIFICATIONS: [] },
+    Bible: { parseRef: () => null, loaded: false, books: () => [], getVerses: () => [], bookName: () => 'G', bookAbbr: () => 'G', maxChapter: () => 50, activeVersion: 'WEB' },
+    addEventListener() {}, removeEventListener() {}, dispatchEvent() {}, matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
+    localStorage: LS, innerWidth: 390 };
+  const globals = { React, window: win,
+    document: { addEventListener() {}, removeEventListener() {}, createElement: () => ({ style: {}, appendChild() {}, remove() {}, click() {} }), body: { appendChild() {}, removeChild() {} } },
+    navigator: { userAgent: '' }, localStorage: LS, setTimeout, clearTimeout, setInterval, clearInterval, console,
+    Icon: Stub('Icon'), IconBtn: Stub('IconBtn'), ChurchBadge: Stub('ChurchBadge'), SafetyBanner: Stub('SafetyBanner'),
+    CareCard: Stub('CareCard'), AskForHelp: Stub('AskForHelp'),
+    SectionLabel: function SectionLabel(p) { return React.createElement('h2', {}, p.children); },
+    BottomSheet: ({ open, children }) => (open ? children : null),
+    Overlay: function Overlay(p) { return React.createElement('div', {}, p.open ? p.children : null); },
+    safeCssColor: (c) => c, todayISO: () => '2026-09-06', lsGet: (k, d) => d, lsSet: () => {},
+    Math, Date, JSON, Set, Map, Number, String, Array, Promise, Object, isNaN, Boolean, parseInt, parseFloat };
+  const mod = loadScreen('app/screens-today.jsx', ['TodayScreen'], globals);
+  const ctx = { myChildren: { children: [], askAtDesk: 0, settled: true }, church,
+    care: { settings: { enabled: false }, needs: [], myPub: 'me' },
+    planProgress: {}, loc: null, churchDevos: [], servNext: null, servPending: [], servingSeenTs: 0, netUnread: 0, dark: false,
+    openServing() {}, openChurchSwitcher() {}, openSearch() {}, openNotifications() {}, openListen() {},
+    toggleDark() {}, toast() {}, openShareSheet() {}, openEvent() {}, openHelp() {} };
+  return texts(draw(mod.TodayScreen, { ctx })).join(' ').replace(/\s+/g, ' ');
+}
+
+test('RENDERED: a locked phone (no ctx.church) draws no serving card; CONTROL: with a church it does', () => {
+  const locked = renderToday(null);
+  assert.match(locked, /Verse of the day/, 're-anchor: the Today screen rendered nothing, so the absence below is vacuous');
+  assert.doesNotMatch(locked, /What\s*.\s*s\s*happening/,
+    'A LOCKED PHONE DRAWS "What’s happening · RSVP · your rota" — it says church as loudly as the name did');
+  const open = renderToday({ id: 'c1', name: "St Chad's", npub: 'n'.repeat(8) });
+  assert.match(open, /What\s*.\s*s\s*happening/, 'CONTROL: with a church the card should draw, or the absence above proves nothing');
 });
 
 test('the honest limit is written down next to the fix', () => {

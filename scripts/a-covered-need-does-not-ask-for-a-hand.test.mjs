@@ -35,7 +35,8 @@ function card({ needs, slots = [], skips = [], embedded = false }) {
              activeVersion: 'WEB', refLabel: () => '', defaultLoc: () => ({ book: 43, chap: 1 }) } };
   const globals = {
     React, window: win,
-    localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+    // The Care tab's sections (CareSection) start collapsed; a stored '1' is how a member who has opened one sees it open.
+    localStorage: { getItem: (k) => (/^trinityone\.care\.sec\./.test(k) ? '1' : null), setItem() {}, removeItem() {} },
     document: { addEventListener() {}, removeEventListener() {}, querySelector: () => null },
     navigator: { userAgent: '' }, location: { search: '', hostname: 'x' },
     setTimeout, clearTimeout, setInterval, clearInterval, console,
