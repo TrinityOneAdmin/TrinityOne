@@ -768,6 +768,7 @@ function DashRota({ onNewTeam }) {
       saves.push(window.Steward.publishRota({ service: s.id, published: true, assign: next })
         .then(async r => {
           if (r == null) return { rota: null, failed: 0, tried: 0 };
+          setDraft(d => ({ ...d, [s.id]: next }));   // this service's draft is now what was published, selected or not, so its echo is not mistaken for someone else's
           const asked = await sendRequestsFor(s.id, s.date, s.time, s.name, next);
           return { rota: r, failed: asked.failed, tried: asked.tried, heldPubs: asked.heldPubs };
         }));
@@ -941,7 +942,7 @@ function DashRota({ onNewTeam }) {
       if (r == null) { lost++; continue; }   // do not ask anyone to serve on a rota that does not exist
       const asked = await sendRequestsFor(s.id, s.date, s.time, s.name, filled);
       unasked += asked.failed; triedAsks += asked.tried; (asked.heldPubs || []).forEach(p => heldAsks.add(p));
-      if (s.id === svcId) setAssign(filled);
+      setDraft(d => ({ ...d, [s.id]: filled }));   // as above: every service published, not only the selected one
     }
     if (lost) { setFlash(schNoKey()); setTimeout(() => setFlash(''), 4000); return; }
     const madeLead = `${createCopies ? 'Created + filled' : 'Filled the gaps on'} ${ensured.length - skipped} service${ensured.length - skipped === 1 ? '' : 's'}` + skipNote(skipped);

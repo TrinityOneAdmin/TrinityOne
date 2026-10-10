@@ -142,3 +142,43 @@ test('(c) Confirm-swap on a stale draft publishes nothing', async () => {
   assert.deepEqual(m.calls.publishRota, [], 'a swap was published over the other steward\'s change');
   assert.deepEqual(m.calls.sendServingRequest, []);
 });
+
+// THE ECHO OF THE STEWARD'S OWN BULK PUBLISH IS NOT SOMEONE ELSE'S. Rotate pods and Auto-fill publish every
+// upcoming service but used to refresh only the SELECTED service's draft, so an unpublished edit on another
+// service made its own echo look like a stranger's change: a false warning and a refused Publish.
+const echoOf = (m) => ['svc1', 'svc2'].map(sv => ({ id: sv, service: sv, published: true, ts: 200, assign: publishedFor(m, sv).at(-1).assign }));
+// `edited` gets the unpublished edit; the OTHER service is the one on screen when the bulk action runs
+async function editOneSelectAnother(edited, shown, clearIt) {
+  const m = board();
+  await m.press(edited === 'svc1' ? 'Sun 13' : 'Sun 20'); m.draw();
+  if (clearIt) {   // leave a GAP, so the fill changes this draft (a fill that finds nothing to do would leave it equal to the published copy)
+    find(m.draw(), n => n.type === 'button' && /^Greeter: /.test(n.props['aria-label'] || ''))[0].props.onClick();
+    find(m.draw(), n => n.props && typeof n.props.onClear === 'function')[0].props.onClear(); m.draw();
+  } else edit(m, 'Greeter', SAM);
+  await m.press(shown === 'svc1' ? 'Sun 13' : 'Sun 20'); m.draw();
+  return m;
+}
+const assertEchoIsOwn = async (m, edited) => {
+  const sent = publishedFor(m, edited).at(-1);
+  m.deliver(echoOf(m));
+  await m.press(edited === 'svc1' ? 'Sun 13' : 'Sun 20'); const out = m.text();
+  assert.doesNotMatch(out, WARN, 'THE DEFECT: the steward\'s own bulk publish came back as "someone else published"');
+  await m.press('Published'); await settle();   // the draft equals what was published, so the button reads Published
+  assert.equal(publishedFor(m, edited).length, 2, 'the Publish was refused or the button was not Published');
+  assert.deepEqual(publishedFor(m, edited).at(-1).assign, sent.assign, edited + ' draft is not what was published');
+};
+
+test('Rotate pods: an unpublished edit on ANOTHER service does not turn the echo of the rotation into a warning', async () => {
+  const m = await editOneSelectAnother('svc1', 'svc2');
+  find(m.draw(), n => n.type === 'select' && /serving pod/.test(n.props.title || ''))[0].props.onChange({ target: { value: '__rotate__' } });
+  await settle();
+  assert.equal(publishedFor(m, 'svc1').length, 1, 'the fixture did not rotate svc1');
+  await assertEchoIsOwn(m, 'svc1');
+});
+
+test('Auto-fill: an unpublished edit on ANOTHER service does not turn the echo of the fill into a warning', async () => {
+  const m = await editOneSelectAnother('svc2', 'svc1', true);   // fills run from the service on screen forwards
+  await m.press('Auto-fill'); await m.press('Fill existing services'); await settle();
+  assert.equal(publishedFor(m, 'svc2').length, 1, 'the fixture did not fill svc2');
+  await assertEchoIsOwn(m, 'svc2');
+});
