@@ -2537,7 +2537,6 @@ const _applyNoPhotoList = (list) => { _noPhoto = pubSet(list); };   // shared no
 // lowercased on both sides (the blockedSet normalisation), because a case-mismatch here would silently drop
 // LEGITIMATE members from envelopes.
 let _localBlocked = new Set();
-let _minorsHere = { cp: '', list: [] };   // the children list last applied by subscribeSafeguard, and whose; read by minorsHere()
 // …AND IT NO LONGER STARTS EMPTY (audit of 5276297, HIGH 2). "Fails open toward the subscription list" assumed the
 // subscription's first answer was the church's blocklist. On a slow link it was not: nostr-tools' own EOSE timer
 // (4.4 s) answered first, with no blocklist in it, and the enrolment wrapped the name and care keys to the member
@@ -7335,10 +7334,45 @@ window.Steward = {
   // Who this console holds as blocked, for the acting church — the same floored set every key builder filters by.
   // A copy, lower-case hex. Readers: StewardMeals.publishCareTeam and StewardMeals.sendCareChat (steward-meals.src.js).
   blockedHere() { return [..._localBlocked]; },
-  // Who this console holds as a CHILD of the church it is looking at — the newest minors: document the safeguarding
-  // subscription applied, for that church only (another church's list, or none loaded yet, gives []). A copy,
-  // lower-case hex. Reader: StewardMeals.publishCareTeam (a child is never on the care list, owner 2026-10-10).
-  minorsHere() { const cp = actingChurch || pub; return (cp && _minorsHere.cp === cp) ? [..._minorsHere.list] : []; },
+  // WHO IS A CHILD OF THE CHURCH THIS CONSOLE IS LOOKING AT — read from the relay NOW, one shot, by whoever asks.
+  // Resolves { known, list } (list = lower-case hex). Readers: StewardMeals.publishCareTeam, refreshCareTeam and
+  // sendCareChat (a child is never on the care list, owner 2026-10-10).
+  //
+  // A FRESH READ, NOT A SCREEN'S COPY. The first version (8fb38d9) read a copy the safeguarding subscription kept,
+  // and that subscription only runs while the Members / Check-in / Care-requests screens are open — so the two
+  // places that publish the care list (Settings -> Features, the rota's roster editor) usually saw no children
+  // and published the child onto it (audit of 8fb38d9).
+  //
+  // `known` is the honest question, as minorsKnown() asks it in subscribeSafeguard: we hold the church-signed
+  // document, or the relay said "that is everything" while we were authenticated to read an owner-only doc.
+  // Authentication is required BEFORE the REQ as well as at EOSE: a REQ answered before the login landed is
+  // answered as a stranger (empty), and an EOSE that happens to arrive after the login would otherwise vouch for
+  // that empty answer. Anything else — no relay, timeout, unreadable content — is `known: false`, and the caller
+  // decides what that means.
+  readMinors() {
+    const cp = actingChurch || pub;
+    if (!cp) return Promise.resolve({ known: false, list: [] });
+    const authedAtStart = _isRelayAuthed();
+    return new Promise((resolve) => {
+      let best = null, done = false, sub = null;
+      const finish = (eosed) => {
+        if (done) return; done = true; try { sub && sub.close(); } catch (e) {}
+        if (best) {
+          let list = null; try { list = (JSON.parse(best.content || '{}').pubkeys) || []; } catch (e) { list = null; }
+          if (!Array.isArray(list)) return resolve({ known: false, list: [] });
+          return resolve({ known: true, list: list.map(x => String(x || '').toLowerCase()).filter(Boolean) });
+        }
+        resolve({ known: !!(eosed && authedAtStart && _isRelayAuthed()), list: [] });
+      };
+      try {
+        sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [cp], '#d': [MINORS_D + cp] }], {
+          onevent(e) { if (!e || e.pubkey !== cp || _authFuture(e)) return; if (!best || e.created_at > best.created_at) best = e; },
+          oneose() { finish(true); },
+        });
+      } catch (e) { finish(false); return; }
+      setTimeout(() => finish(false), 5000);
+    });
+  },
   setBlocked(pubkeys) {   // replace the whole blocklist (pass hex pubkeys); a 2nd argument { unblock: [...] } names who THIS action lets back in
     const opts = arguments[1];   // read here, not named in the signature: six test harnesses lift this method by `setBlocked(pubkeys) {`
     _requireTrustedView('blocked list');
@@ -7455,7 +7489,7 @@ window.Steward = {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (_authFuture(e)) return;   // no future-dated pins on any safeguarding doc
         // minors + approved are OWNER-ONLY; nophoto is owner-or-steward — mirror the relay per doc.
-        if (d === MINORS_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tMinors) return; tMinors = e.created_at; sawMinors = true; try { minors = (JSON.parse(e.content).pubkeys) || []; } catch { minors = []; } _minorsHere = { cp: pub, list: minors.map(x => String(x || '').toLowerCase()) }; onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown() }); }
+        if (d === MINORS_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tMinors) return; tMinors = e.created_at; sawMinors = true; try { minors = (JSON.parse(e.content).pubkeys) || []; } catch { minors = []; } onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown() }); }
         else if (d === APPROVED_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tApproved) return; tApproved = e.created_at; sawApproved = true; try { const _a = JSON.parse(e.content); approved = _a.pubkeys || [];
           // AN OLDER CONSOLE WRITES THE PLAIN LIST WITH NO RECORD ATTACHED. That means "written by something
           // that has never heard of the record", NOT "the record is empty" — and treating it as empty wiped
@@ -8053,7 +8087,15 @@ window.Steward = {
     // A partial write now reports FAILURE. A steward who ticks "mark as a child" and sees it succeed has been
     // told the protection is in force; if the record reached one relay of three, it is in force on one of
     // three. An error is recoverable, false reassurance is not.
-    return _landed('list of children', _skewGate(() => _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', MINORS_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list }) }), sk))));
+    // A CHILD JUST MARKED COMES OFF THE CARE LIST (owner 2026-10-10: a child is never on the care team). The care
+    // list is otherwise republished only when the roster changes, so a person marked AFTER being put on the care
+    // team stayed on the list members seal asks for help to. Only after the children list LANDED, and it reads
+    // the list back from the relay itself (refreshCareTeam -> readMinors), so it acts on what the relay holds.
+    const r = _landed('list of children', _skewGate(() => _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', MINORS_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list }) }), sk))));
+    return Promise.resolve(r).then((ok) => {
+      if (ok) { try { const M = window.StewardMeals; if (M && M.refreshCareTeam) M.refreshCareTeam().catch(() => {}); } catch (e) {} }
+      return ok;
+    });
   },
   // `opts.listKnown` — has the CALLER actually read this church's cleared list? The console has that answer
   // (its safeguarding subscription reports `loaded`) and this module does not: an empty remembered list means

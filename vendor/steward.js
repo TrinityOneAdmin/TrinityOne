@@ -16956,7 +16956,6 @@ zoo`.split("\n");
     _noPhoto = pubSet(list);
   };
   var _localBlocked = /* @__PURE__ */ new Set();
-  var _minorsHere = { cp: "", list: [] };
   var _localBlockedAt = 0;
   var _setBlockedSeq = 0;
   var BLOCKED_LAST_LS = "trinityone.steward.blockedlast.";
@@ -20939,12 +20938,62 @@ zoo`.split("\n");
     blockedHere() {
       return [..._localBlocked];
     },
-    // Who this console holds as a CHILD of the church it is looking at — the newest minors: document the safeguarding
-    // subscription applied, for that church only (another church's list, or none loaded yet, gives []). A copy,
-    // lower-case hex. Reader: StewardMeals.publishCareTeam (a child is never on the care list, owner 2026-10-10).
-    minorsHere() {
+    // WHO IS A CHILD OF THE CHURCH THIS CONSOLE IS LOOKING AT — read from the relay NOW, one shot, by whoever asks.
+    // Resolves { known, list } (list = lower-case hex). Readers: StewardMeals.publishCareTeam, refreshCareTeam and
+    // sendCareChat (a child is never on the care list, owner 2026-10-10).
+    //
+    // A FRESH READ, NOT A SCREEN'S COPY. The first version (8fb38d9) read a copy the safeguarding subscription kept,
+    // and that subscription only runs while the Members / Check-in / Care-requests screens are open — so the two
+    // places that publish the care list (Settings -> Features, the rota's roster editor) usually saw no children
+    // and published the child onto it (audit of 8fb38d9).
+    //
+    // `known` is the honest question, as minorsKnown() asks it in subscribeSafeguard: we hold the church-signed
+    // document, or the relay said "that is everything" while we were authenticated to read an owner-only doc.
+    // Authentication is required BEFORE the REQ as well as at EOSE: a REQ answered before the login landed is
+    // answered as a stranger (empty), and an EOSE that happens to arrive after the login would otherwise vouch for
+    // that empty answer. Anything else — no relay, timeout, unreadable content — is `known: false`, and the caller
+    // decides what that means.
+    readMinors() {
       const cp = actingChurch || pub;
-      return cp && _minorsHere.cp === cp ? [..._minorsHere.list] : [];
+      if (!cp) return Promise.resolve({ known: false, list: [] });
+      const authedAtStart = _isRelayAuthed();
+      return new Promise((resolve) => {
+        let best = null, done = false, sub = null;
+        const finish = (eosed) => {
+          if (done) return;
+          done = true;
+          try {
+            sub && sub.close();
+          } catch (e) {
+          }
+          if (best) {
+            let list = null;
+            try {
+              list = JSON.parse(best.content || "{}").pubkeys || [];
+            } catch (e) {
+              list = null;
+            }
+            if (!Array.isArray(list)) return resolve({ known: false, list: [] });
+            return resolve({ known: true, list: list.map((x) => String(x || "").toLowerCase()).filter(Boolean) });
+          }
+          resolve({ known: !!(eosed && authedAtStart && _isRelayAuthed()), list: [] });
+        };
+        try {
+          sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [cp], "#d": [MINORS_D + cp] }], {
+            onevent(e) {
+              if (!e || e.pubkey !== cp || _authFuture(e)) return;
+              if (!best || e.created_at > best.created_at) best = e;
+            },
+            oneose() {
+              finish(true);
+            }
+          });
+        } catch (e) {
+          finish(false);
+          return;
+        }
+        setTimeout(() => finish(false), 5e3);
+      });
     },
     setBlocked(pubkeys) {
       const opts = arguments[1];
@@ -21007,7 +21056,6 @@ zoo`.split("\n");
             } catch {
               minors = [];
             }
-            _minorsHere = { cp: pub, list: minors.map((x) => String(x || "").toLowerCase()) };
             onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown() });
           } else if (d === APPROVED_D + pub) {
             if (!_byChurch(e)) return;
@@ -21427,7 +21475,18 @@ zoo`.split("\n");
       _requireTrustedView("list of children");
       if (!sk) return Promise.resolve(null);
       const list = [...new Set((pubkeys || []).filter(Boolean))];
-      return _landed("list of children", _skewGate(() => _publishToRelays(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", MINORS_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list }) }), sk))));
+      const r = _landed("list of children", _skewGate(() => _publishToRelays(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", MINORS_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list }) }), sk))));
+      return Promise.resolve(r).then((ok) => {
+        if (ok) {
+          try {
+            const M = window.StewardMeals;
+            if (M && M.refreshCareTeam) M.refreshCareTeam().catch(() => {
+            });
+          } catch (e) {
+          }
+        }
+        return ok;
+      });
     },
     // `opts.listKnown` — has the CALLER actually read this church's cleared list? The console has that answer
     // (its safeguarding subscription reports `loaded`) and this module does not: an empty remembered list means

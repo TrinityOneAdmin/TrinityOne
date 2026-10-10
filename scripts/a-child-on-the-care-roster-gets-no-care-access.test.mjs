@@ -13,9 +13,10 @@
 // TWO PARTS, each at the point the person meets it:
 //   1. the RELAY, black-box on a real gateway: the same roster holds a child and an adult; the child is refused,
 //      the adult (control) is served;
-//   2. the console's PUBLISH POINT for the care list (publishCareTeam), out of the SHIPPED bundle
-//      vendor/steward-meals.js and called: a person this console holds as a child is not written onto the list
-//      every member's phone seals a new ask for help to.
+//   2. the CONSOLE, shipped code out of vendor/steward.js + vendor/steward-meals.js against that same relay: the
+//      children list is READ FROM THE RELAY (readMinors), the care list written to the relay leaves the child off
+//      (publishCareTeam), a child marked later is taken off it (refreshCareTeam), nothing is published while the
+//      children list cannot be read, and a care reply is never sealed to a child carer (sendCareChat).
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -99,7 +100,7 @@ before(async () => {
   await ok(ev(M, D.req, 'CIPHER-r1', [['church', cp]]), 'an adult asks for help');
   await sleep(200);
 });
-after(() => { try { pub && pub.close(); } catch {} try { relay && relay.kill('SIGKILL'); } catch {} try { rmSync(dataDir, { recursive: true, force: true }); } catch {} });
+after(() => { try { pub && pub.close(); } catch {} try { churchWs && churchWs.close(); } catch {} try { relay && relay.kill('SIGKILL'); } catch {} try { rmSync(dataDir, { recursive: true, force: true }); } catch {} });
 
 // ── 1. THE RELAY ──────────────────────────────────────────────────────────────────────────────────────────
 test('control: the ADULT on the care roster is served the ask for help, the children list, parent links and a clearance', async () => {
@@ -123,28 +124,148 @@ test('the child is refused by the CHURCH-TAG filter too (how the care screens ac
   assert.ok(!got.some(e => dOf(e) === D.req || dOf(e) === D.clearance), 'a #church REQ hands the child the ask or a clearance');
 });
 
-// ── 2. THE CARE-LIST PUBLISH POINT ────────────────────────────────────────────────────────────────────────
-test('publishCareTeam (shipped bundle) never writes a person this console holds as a child onto the care list', async () => {
-  const body = fnBody(MEALS, 'function publishCareTeam(memberPubs) {', 'publishCareTeam');
-  const sent = [];
-  const S0 = { churchPub: cp, blockedHere: () => [], minorsHere: () => [CH.pub], publishSigned: (e) => { sent.push(e); return Promise.resolve(true); } };
-  const fn = new Function('S', 'now', 'CARETEAM_D', 'NET', body + '\nreturn publishCareTeam;')(() => S0, () => 1, 'trinityone/careteam:', 'trinityone');
-  await fn([CH.pub, AD.pub]);
-  assert.equal(sent.length, 1, 'publishCareTeam published nothing');
-  const pubs = JSON.parse(sent[0].content).pubs;
-  assert.ok(pubs.includes(AD.pub) && pubs.includes(cp), 'CONTROL: the adult care member or the church key is missing');
-  assert.ok(!pubs.includes(CH.pub), 'publishCareTeam put a child on the list members seal asks for help to');
-  // case: rosters carry lower-case hex, but a hand-edited or upper-case key must not slip through
-  sent.length = 0;
-  await fn([CH.pub.toUpperCase(), AD.pub]);
-  assert.ok(!JSON.parse(sent[0].content).pubs.includes(CH.pub), 'an upper-case child key slipped onto the care list');
+// ── 2. THE CONSOLE: the care list and care replies, with the children list READ FROM THIS RELAY ─────────────
+// Audit of 8fb38d9: the first version stubbed the children list (`minorsHere`), so deleting the line that
+// actually fed it left every test green. These run the SHIPPED readMinors (vendor/steward.js) against the live
+// gateway above, through a minimal pool that is genuinely NIP-42-authenticated as the church key, and hand its
+// answer to the SHIPPED publishCareTeam / refreshCareTeam / sendCareChat (vendor/steward-meals.js), whose writes
+// go to the same relay. What is supplied, not shipped: the pool (one authenticated socket), relays(), and
+// _isRelayAuthed (true only because that socket really did log in; false in the cannot-read test).
+const STEWARD = readFileSync(join(ROOT, 'vendor/steward.js'), 'utf8');
+let churchWs = null;
+function shimPool(sock = () => churchWs) {
+  return {
+    subscribeMany(_urls, filters, h) {
+      const churchWs = sock();
+      const id = 's' + Math.random().toString(36).slice(2, 9); let closed = false;
+      const on = (d) => { const m = JSON.parse(d); if (m[1] !== id) return;
+        if (m[0] === 'EVENT' && h.onevent) h.onevent(m[2]);
+        if (m[0] === 'EOSE' && h.oneose) h.oneose(); };
+      churchWs.on('message', on);
+      churchWs.send(JSON.stringify(['REQ', id, ...filters]));
+      return { close() { if (closed) return; closed = true; churchWs.off('message', on); try { churchWs.send(JSON.stringify(['CLOSE', id])); } catch {} } };
+    },
+  };
+}
+function liftReadMinors({ authedNow = true, pool = shimPool() } = {}) {
+  const body = fnBody(STEWARD, 'readMinors() {', 'Steward.readMinors');
+  return new Function('actingChurch', 'pub', 'pool', 'relays', '_isRelayAuthed', '_authFuture', 'MINORS_D', 'return function ' + body + ';')(
+    '', cp, pool, () => [WS_URL], () => authedNow, () => false, 'trinityone/minors:');
+}
+function liftMeals(name, sig, extra = {}) {
+  const body = fnBody(MEALS, sig, name);
+  const names = ['S', 'now', 'CARETEAM_D', 'CAREREQ_D', 'CARECHAT_D', 'NET', '_careTeamWait', 'setTimeout', '_monotonicM', 'publishCareTeam', ...Object.keys(extra)];
+  return (vals) => new Function(...names, 'return ' + body + ';')(...names.map(n => vals[n]));
+}
+const S0 = (over = {}) => {
+  const pool = shimPool();
+  return {
+    churchPub: cp, blockedHere: () => [],
+    readMinors: liftReadMinors(),
+    subscribeMany: (filters, h) => pool.subscribeMany([WS_URL], filters, h),
+    publishSigned: async (tmpl) => { const [ok, why] = await publish(pub, finalizeEvent(tmpl, church.sk)); assert.equal(ok, true, 'relay refused the console write: ' + why); return true; },
+    ...over,
+  };
+};
+const relayCareTeam = async () => { const ws = await authed(AD); try { const evs = await query(ws, { kinds: [30078], '#d': ['trinityone/careteam:' + cp] }); evs.sort((a, b) => b.created_at - a.created_at); return evs[0] ? JSON.parse(evs[0].content).pubs : null; } finally { ws.close(); } };
+const fakeTimers = () => { const t = []; const f = (fn) => { t.push(fn); return t.length; }; f.pending = t; return f; };
+
+test('setup: the console is logged in to this relay as the church key', async () => {
+  churchWs = await authed(church);
+  const got = await query(churchWs, { kinds: [30078], '#d': [D.minors] });
+  assert.equal(got.length, 1, 'the church key cannot read its own children list on this relay — nothing below would mean anything');
 });
 
-test('Steward.minorsHere (shipped bundle) answers only for the church the console is looking at', () => {
-  const STEWARD = readFileSync(join(ROOT, 'vendor/steward.js'), 'utf8');
-  const body = fnBody(STEWARD, 'minorsHere() {', 'Steward.minorsHere');
-  const mk = (actingChurch, pub, held) => new Function('actingChurch', 'pub', '_minorsHere', 'return function ' + body + ';')(actingChurch, pub, held)();
-  assert.deepEqual(mk('', cp, { cp, list: [CH.pub] }), [CH.pub], 'the owner console does not report its own church’s children');
-  assert.deepEqual(mk('', cp, { cp: 'e'.repeat(64), list: [CH.pub] }), [], 'another church’s children list leaked across a church switch');
-  assert.deepEqual(mk('', cp, { cp: '', list: [] }), [], 'nothing loaded must read as nobody');
+test('readMinors (shipped) reads the children list from the relay, as known', async () => {
+  const m = await liftReadMinors()();
+  assert.equal(m.known, true, 'a logged-in read that got the document did not count as known');
+  assert.deepEqual(m.list.slice().sort(), [CH.pub, KID2.pub].sort(), 'readMinors did not return the church’s children');
+});
+
+test('publishCareTeam (shipped) with the REAL children read writes the care list to the relay WITHOUT the child', async () => {
+  const S = S0(); let pc;
+  pc = liftMeals('publishCareTeam', 'async function publishCareTeam(memberPubs) {')({ S: () => S, now, CARETEAM_D: 'trinityone/careteam:', NET: 'trinityone', _careTeamWait: { pubs: null, tries: 0, timer: 0 }, setTimeout: fakeTimers(), get publishCareTeam() { return pc; } });
+  const r = await pc([CH.pub, AD.pub]);
+  assert.equal(r, true, 'publishCareTeam did not publish');
+  const pubs = await relayCareTeam();
+  assert.ok(pubs && pubs.includes(AD.pub) && pubs.includes(cp), 'CONTROL: the adult or the church key is missing from the relay’s care list');
+  assert.ok(!pubs.includes(CH.pub), 'the care list on the relay names the child — members will seal asks for help to them');
+});
+
+test('publishCareTeam: if the children list cannot be read it publishes NOTHING, says false, and schedules a retry', async () => {
+  // a REAL socket that never logged in: the relay withholds the owner-only children list and answers EOSE
+  const anon = await connect();
+  const S = S0({ readMinors: liftReadMinors({ authedNow: false, pool: shimPool(() => anon) }) });
+  const before = await relayCareTeam();
+  const timers = fakeTimers(); let pc;
+  pc = liftMeals('publishCareTeam', 'async function publishCareTeam(memberPubs) {')({ S: () => S, now, CARETEAM_D: 'trinityone/careteam:', NET: 'trinityone', _careTeamWait: { pubs: null, tries: 0, timer: 0 }, setTimeout: timers, get publishCareTeam() { return pc; } });
+  const r = await pc([CH.pub, AD.pub, M.pub]);
+  assert.equal(r, false, 'a care list published (or claimed) while the children list was unknown');
+  await sleep(300);
+  assert.deepEqual(await relayCareTeam(), before, 'the care list on the relay changed while the children list was unknown');
+  assert.equal(timers.pending.length, 1, 'no retry was scheduled — the adults’ care list would wait for the next roster edit');
+  anon.close();
+});
+
+test('refreshCareTeam (shipped): a child marked AFTER joining the care list is taken off it', async () => {
+  // the relay's care list names the child, as one written before they were marked would
+  const [ok] = await publish(pub, ev(church, 'trinityone/careteam:' + cp, JSON.stringify({ pubs: [cp, CH.pub, AD.pub], updated: now() })));
+  assert.equal(ok, true);
+  await sleep(150);
+  assert.ok((await relayCareTeam()).includes(CH.pub), 'setup: the care list should name the child here');
+  const S = S0(); let pc;
+  const vals = { S: () => S, now, CARETEAM_D: 'trinityone/careteam:', NET: 'trinityone', _careTeamWait: { pubs: null, tries: 0, timer: 0 }, setTimeout: fakeTimers(), get publishCareTeam() { return pc; } };
+  pc = liftMeals('publishCareTeam', 'async function publishCareTeam(memberPubs) {')(vals);
+  const refresh = liftMeals('refreshCareTeam', 'async function refreshCareTeam() {')(vals);
+  await refresh();
+  const pubs = await relayCareTeam();
+  assert.ok(pubs.includes(AD.pub), 'CONTROL: the adult was taken off too');
+  assert.ok(!pubs.includes(CH.pub), 'the child is still on the care list after the refresh');
+});
+
+test('sendCareChat (shipped): a reply is never sealed to a child on the care team, but a child ASKER keeps their own thread', async () => {
+  const r2 = rid(M, 'r2'), k1 = rid(KID2, 'k1');
+  const okP = async (evt) => { const [o, why] = await publish(pub, evt); assert.equal(o, true, why); };
+  await okP(ev(M, 'trinityone/carereq:' + r2, JSON.stringify({ keys: { [cp]: 'w', [M.pub]: 'w', [CH.pub]: 'w', [AD.pub]: 'w' }, enc: 'x' }), [['church', cp], ['aud', 'team']]));
+  await okP(ev(KID2, 'trinityone/carereq:' + k1, JSON.stringify({ keys: { [cp]: 'w', [KID2.pub]: 'w', [AD.pub]: 'w' }, enc: 'x' }), [['church', cp]]));
+  await sleep(150);
+  const sealedTo = [];
+  const S = S0({ sealToPubs: (pubs) => { sealedTo.push(pubs.slice()); return { keys: {}, enc: 'x' }; }, publishSigned: async () => true });
+  const _last = new Map();
+  const send = liftMeals('sendCareChat', 'async function sendCareChat(reqId, requesterPub, text, opts) {')({ S: () => S, now, CARETEAM_D: 'trinityone/careteam:', CAREREQ_D: 'trinityone/carereq:', CARECHAT_D: 'trinityone/carechat:', NET: 'trinityone', setTimeout, _monotonicM: (d) => { const n = now(); _last.set(d, n); return n; } });
+  await send(r2, M.pub, 'we can help');
+  await send(k1, KID2.pub, 'we hear you');
+  assert.equal(sealedTo.length, 2, 'sendCareChat did not seal both replies');
+  assert.ok(sealedTo[0].includes(AD.pub) && sealedTo[0].includes(M.pub), 'CONTROL: the adult carer or the asker lost the reply');
+  assert.ok(!sealedTo[0].includes(CH.pub), 'a care reply was sealed to a child on the care team');
+  assert.ok(sealedTo[1].includes(KID2.pub), 'a child asker was cut out of their own thread');
+});
+
+test('Steward.setMinors (shipped): marking a care-team member as a child takes them off the relay’s care list', async () => {
+  const N2 = K();   // an adult on the care list who is about to be marked a child
+  const [ok0] = await publish(pub, ev(church, 'trinityone/careteam:' + cp, JSON.stringify({ pubs: [cp, AD.pub, N2.pub], updated: now() })));
+  assert.equal(ok0, true);
+  await sleep(150);
+  assert.ok((await relayCareTeam()).includes(N2.pub), 'setup: N2 should be on the care list');
+  const S = S0(); let pc;
+  const vals = { S: () => S, now, CARETEAM_D: 'trinityone/careteam:', NET: 'trinityone', _careTeamWait: { pubs: null, tries: 0, timer: 0 }, setTimeout: fakeTimers(), get publishCareTeam() { return pc; } };
+  pc = liftMeals('publishCareTeam', 'async function publishCareTeam(memberPubs) {')(vals);
+  const refreshCareTeam = liftMeals('refreshCareTeam', 'async function refreshCareTeam() {')(vals);
+  let refreshed = null;
+  const win = { StewardMeals: { refreshCareTeam: () => (refreshed = refreshCareTeam()) } };
+  const body = fnBody(STEWARD, 'setMinors(pubkeys) {', 'Steward.setMinors');
+  // the bundle's own names for the helpers setMinors calls (esbuild renamed finalizeEvent to finalizeEvent2)
+  assert.ok(body.includes('finalizeEvent2('), 're-anchor: setMinors no longer calls finalizeEvent2 in the bundle');
+  const setMinors = new Function('_requireTrustedView', 'sk', '_landed', '_skewGate', '_publishToRelays', 'finalizeEvent2', '_monotonic', 'now', 'MINORS_D', 'pub', 'NET', 'window',
+    'return function ' + body + ';')(
+    () => {}, church.sk, (_w, p) => Promise.resolve(p), (f) => f(),
+    async (evt) => { const [o] = await publish(pub, evt); return o; },
+    finalizeEvent, (t) => t, now, 'trinityone/minors:', cp, 'trinityone', win);
+  const r = await setMinors([CH.pub, KID2.pub, N2.pub]);
+  assert.equal(r, true, 'the children list did not land');
+  assert.ok(refreshed, 'setMinors did not ask the care module to refresh the care list');
+  await refreshed;
+  const pubs = await relayCareTeam();
+  assert.ok(pubs.includes(AD.pub), 'CONTROL: the adult was taken off too');
+  assert.ok(!pubs.includes(N2.pub), 'a person just marked as a child is still on the care list');
 });
