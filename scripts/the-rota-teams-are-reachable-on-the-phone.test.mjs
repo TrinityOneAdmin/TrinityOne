@@ -43,6 +43,16 @@ import * as H from './relay-network-harness.mjs';
 
 const CHROME = ['/usr/bin/chromium-browser', '/usr/bin/chromium', '/usr/bin/google-chrome'].find(p => existsSync(p));
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+// Polls instead of sleeping a fixed time: a loaded box is slower, not broken. Returns the LAST value seen when
+// the budget is spent, so the caller's own assertion still runs and still reports what it always reported.
+const settles = async (probe, ok, budget = 90000) => {
+  const t0 = Date.now();
+  for (;;) {
+    const v = await probe();
+    if (ok(v) || Date.now() - t0 > budget) return v;
+    await sleep(250);
+  }
+};
 
 // The viewports this file measures. The two phone ones are the Oppo CPH2477 both ways up, the sizes the
 // defect was photographed at. The short desktop window is the owner's Suite window: the same collapse
@@ -135,13 +145,14 @@ before(async () => {
     if(!i) return 'miss';
     const set=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
     set.call(i, ${JSON.stringify(val)}); i.dispatchEvent(new Event('input',{bubbles:true})); return 'ok'; })()`;
-  await sleep(9000);
+  await settles(() => evalIn(`!![...document.querySelectorAll('button')].find(x=>/Start a new church/i.test((x.textContent||'').trim()))`), v => v === true);
   booted = await evalIn(click('/Start a new church/i'));
-  await sleep(2500);
+  await settles(() => evalIn(`!![...document.querySelectorAll('input')].find(x=>(x.placeholder||'').includes('At least 8'))`), v => v === true);
   await evalIn(type('At least 8', 'cedar-harbour-lamp-42'));
   await evalIn(type('Type it again', 'cedar-harbour-lamp-42'));
   await evalIn(click('/Set PIN/i'));
-  await sleep(13000);
+  // key generation: the church key exists once Set PIN has been through (selfRegister below needs it)
+  await settles(() => evalIn(`window.Steward && window.Steward.churchPub || ''`), v => /^[0-9a-f]{64}$/.test(String(v)));
 
   // The wizard's name step, without the wizard: register the church on the box that serves this console
   // (`createHere` is the one opt-in that makes the serving box a registration target — the same call the
@@ -161,11 +172,13 @@ before(async () => {
   // recovers this. The wizard flag survives the reload (only creating a church clears it), so no shim is
   // needed a second time; the PIN is the one set above.
   await send('Page.reload', { ignoreCache: false });
-  await sleep(9000);
+  // the PIN field is what a console that remembers its church shows; typing is idempotent, so probe by typing
+  await settles(() => evalIn(type('Your PIN or passphrase', 'cedar-harbour-lamp-42')), v => v === 'ok');
   const unlocked = await evalIn(type('Your PIN or passphrase', 'cedar-harbour-lamp-42'));
   assert.equal(unlocked, 'ok', 'no PIN field after the reload — the console did not remember its church');
   await evalIn(click('/^Unlock$/'));
-  await sleep(12000);
+  // unlocked = the church key is back in memory
+  await settles(() => evalIn(`!!(window.Steward && window.Steward.hasKey && window.Steward.churchPub)`), v => v === true);
 
   // ── A CHURCH WITH THREE SERVING TEAMS, ROLES ON EACH, AND ONE SERVICE ─────────────────────────────────
   // Through the console's own API — the calls the wizard's "serving team" step and the New team dialog make

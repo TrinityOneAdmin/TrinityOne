@@ -36,6 +36,16 @@ import * as H from './relay-network-harness.mjs';
 
 const CHROME = ['/usr/bin/chromium-browser', '/usr/bin/chromium', '/usr/bin/google-chrome'].find(p => existsSync(p));
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+// Polls instead of sleeping a fixed time: a loaded box is slower, not broken. Returns the LAST value seen when
+// the budget is spent, so the caller's own assertion still runs and still reports what it always reported.
+const settles = async (probe, ok, budget = 90000) => {
+  const t0 = Date.now();
+  for (;;) {
+    const v = await probe();
+    if (ok(v) || Date.now() - t0 > budget) return v;
+    await sleep(250);
+  }
+};
 after(() => H.stopAll());
 
 // What the box holds for this church, read from ITS OWN sqlite — not from a subscription the console could
@@ -94,14 +104,16 @@ test('a church created in the console lands on the box that made it, in the same
       if(!i) return 'miss';
       const set=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
       set.call(i, ${JSON.stringify(val)}); i.dispatchEvent(new Event('input',{bubbles:true})); return 'ok'; })()`;
+    await settles(() => evalIn(`!![...document.querySelectorAll('button')].find(x=>/Start a new church/i.test((x.textContent||'').trim()))`), v => v === true);
     assert.equal(await evalIn(click('/Start a new church/i')), 'ok', 'the console never offered "Start a new church"');
-    await sleep(2500);
+    await settles(() => evalIn(`!![...document.querySelectorAll('input')].find(x=>(x.placeholder||'').includes('At least 8'))`), v => v === true);
     assert.equal(await evalIn(typePh('At least 8', 'cedar-harbour-lamp-42')), 'ok', 'the PIN box was not on screen');
     assert.equal(await evalIn(typePh('Type it again', 'cedar-harbour-lamp-42')), 'ok', 'the confirm-PIN box was not on screen');
     assert.equal(await evalIn(click('/Set PIN/i')), 'ok', 'the console never offered "Set PIN"');
-    await sleep(12000);   // key generation + the first render of the whole dashboard, wizard included
-
-    const churchPub = await evalIn(`window.Steward && window.Steward.churchPub || ''`);
+    // key generation + the first render of the whole dashboard, wizard included: wait for the key itself
+    const churchPubNow = () => evalIn(`window.Steward && window.Steward.churchPub || ''`);
+    await settles(churchPubNow, v => /^[0-9a-f]{64}$/.test(String(v)));
+    const churchPub = await churchPubNow();
     assert.match(String(churchPub), /^[0-9a-f]{64}$/, 'no church key after the PIN step — the wizard never started');
 
     // THE STAGING, measured rather than assumed: the probe at setKey has by now asked the box about a
@@ -113,12 +125,22 @@ test('a church created in the console lands on the box that made it, in the same
       'recorded, so this run is not staging the defect it exists to catch');
 
     // The name step. Its field is the only input labelled "Church name"; Continue is the button under it.
+    await settles(() => evalIn(`!!document.querySelector('input[aria-label="Church name"]')`), v => v === true);
     assert.equal(await evalIn(typeInto('input[aria-label="Church name"]', 'St Columba on the Box')), 'ok', 'the name field was not on screen');
     await sleep(300);
     assert.equal(await evalIn(click('/^Continue$/')), 'ok', 'the wizard never offered "Continue"');
     // selfRegister (one HTTP round trip to the box, plus two black-holed ones that fail fast) then the
     // profile and the join policy through publish(). Generous, because a slow pass here is not a defect.
-    await sleep(15000);
+    // Waits on the OUTCOMES the assertions below read (the box's church.json row, the console's record of it,
+    // and the last founding document), not on a clock. The budget running out falls through to those assertions.
+    const registered = async () => {
+      let c = null; try { c = JSON.parse(readFileSync(join(relay.dataDir, 'church.json'), 'utf8')); } catch (e) {}
+      const row = c && (c.churches || []).find(x => x && String(x.npub || '') !== '');
+      if (!row) return false;
+      if (await evalIn(`localStorage.getItem('trinityone.steward.boxhosts.' + window.Steward.churchPub)`) !== '1') return false;
+      return heldBy(relay, churchPub).some(h => h.dtag.startsWith('trinityone/joinpolicy:'));
+    };
+    await settles(registered, v => v === true);
 
     // Same session, still. The recovery-by-reload is precisely what this must not be satisfied by.
     const mark = await evalIn(`window.__sameSession || ''`);
