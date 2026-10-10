@@ -15,6 +15,12 @@ function schLastEventTime() {
 }
 const SCH_DRAFT_STORE = {};   // church pubkey -> { svcId: assignMap }
 const schDraftChurch = () => String((window.Steward && window.Steward.pubkey) || '');
+// WHICH PUBLISHED VERSION EACH DRAFT WAS BUILT FROM: church pubkey -> { svcId: { ts, assign } }, where ts is the
+// created_at of the published rota the draft started from. A rota is ONE document per service and Publish
+// replaces it whole (newest wins), so a draft built from an old copy silently erased whatever another steward
+// published since. Kept beside SCH_DRAFT_STORE so it survives leaving the page with the draft it describes.
+const SCH_BASE_STORE = {};
+const schBases = (church) => (SCH_BASE_STORE[church] = SCH_BASE_STORE[church] || {});
 function schDate(s) { try { return new Date(s + 'T00:00'); } catch { return new Date(); } }
 function schKey(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
 function schParts(s) { const d = schDate(s); return { dow: SCH_DOW[d.getDay()], day: d.getDate(), mon: SCH_MON[d.getMonth()] }; }
@@ -671,19 +677,46 @@ function DashRota({ onNewTeam }) {
   const draftChurch = schDraftChurch();
   const [draft, setDraftState] = useSch(() => ({ ...(SCH_DRAFT_STORE[draftChurch] || {}) }));   // { svcId: assignMap } — local unsaved edits
   const setDraft = (v) => setDraftState(d => { const n = typeof v === 'function' ? v(d) : v; SCH_DRAFT_STORE[draftChurch] = n; return n; });
-  const seeded = useSchR(new Set());
   const [assignSlot, setAssignSlot] = useSch(null);
   const [rosterTeam, setRosterTeam] = useSch(null);
   const [adding, setAdding] = useSch(false);
   const [fillMenu, setFillMenu] = useSch(false);
   const [flash, setFlash] = useSch('');
 
-  // seed each service's draft from its published rota the first time we see it
+  // Seed each service's draft from its published rota the first time we see it, and follow the published rota
+  // afterwards while the draft holds nothing of the steward's own. A newer published copy meeting an EDITED draft
+  // is left alone here: rotaBehind() below sees it, and Publish refuses until the steward chooses.
   useSchE(() => {
+    const bases = schBases(draftChurch);
     let changed = false; const next = { ...draft };
-    rotas.forEach(r => { if (!seeded.current.has(r.service)) { seeded.current.add(r.service); if (next[r.service] === undefined) { next[r.service] = { ...(r.assign || {}) }; changed = true; } } });
+    rotas.forEach(r => {
+      const copy = () => ({ ...(r.assign || {}) });
+      const b = bases[r.service];
+      if (!b) { bases[r.service] = { ts: r.ts || 0, assign: copy() }; if (next[r.service] === undefined) { next[r.service] = copy(); changed = true; } return; }
+      if ((r.ts || 0) <= b.ts) return;
+      const mine = next[r.service];
+      if (mine === undefined || sameAssign(mine, b.assign) || sameAssign(mine, r.assign)) { bases[r.service] = { ts: r.ts || 0, assign: copy() }; next[r.service] = copy(); changed = true; }
+    });
     if (changed) setDraft(next);
   }, [rotas]);
+  // ⚠ A newer rota has been published for this service than the one the draft was built from, and the draft is not
+  // that rota. Publishing the draft would replace the whole document and erase the other steward's change.
+  const rotaBehind = (id) => {
+    const p = persisted(id), b = schBases(draftChurch)[id], d = draft[id];
+    return !!(p && b && d !== undefined && (p.ts || 0) > b.ts && !sameAssign(d, p.assign));
+  };
+  // …and the same, when the steward has also edited the draft (the case worth interrupting them for).
+  const rotaConflict = (id) => { const b = schBases(draftChurch)[id]; return rotaBehind(id) && !!b && !sameAssign(draft[id], b.assign); };
+  // Take the published rota as it now stands: the draft and the baseline both.
+  const reloadRota = (id) => {
+    const p = persisted(id); if (!p) return;
+    schBases(draftChurch)[id] = { ts: p.ts || 0, assign: { ...(p.assign || {}) } };
+    setDraft(d => ({ ...d, [id]: { ...(p.assign || {}) } }));
+  };
+  // Knowingly keep the steward's version over theirs: only the baseline moves.
+  const keepMine = (id) => { const p = persisted(id); if (p) schBases(draftChurch)[id] = { ts: p.ts || 0, assign: { ...(p.assign || {}) } }; };
+  const staleMsg = 'Someone else published this rota after you started. Reload to see theirs, or keep yours, which replaces theirs.';
+  const skipNote = (n) => n ? ' - ' + n + ' skipped, changed by someone else (open each, reload)' : '';
 
   const svcId = sel || defaultSvc;
   const svc = sortedSvcs.find(s => s.id === svcId);
@@ -721,8 +754,9 @@ function DashRota({ onNewTeam }) {
     const r = rosterFor(team.id); const pods = r.pods || []; if (!pods.length) return 0;
     const today = todayISO();
     const upcoming = (services || []).filter(s => (s.date || '') >= today).sort((a, b) => (a.date || '').localeCompare(b.date || ''));
-    const saves = [];
+    const saves = []; let skipped = 0;
     upcoming.forEach((s, i) => {
+      if (rotaBehind(s.id)) { skipped++; return; }   // someone else published since this draft was built: do not replace it
       const pod = pods[i % pods.length];
       const next = { ...(assignFor(s.id) || {}) };   // keep other teams' people
       (r.roles || []).forEach(role => {
@@ -742,12 +776,12 @@ function DashRota({ onNewTeam }) {
       const lost = out.filter(r => r.rota == null).length;
       if (lost) { setFlash(schNoKey()); setTimeout(() => setFlash(''), 4000); return; }
       const unasked = out.reduce((n, r) => n + r.failed, 0);
-      const rotLead = 'Rotated ' + pods.length + ' pods across ' + upcoming.length + ' service' + (upcoming.length === 1 ? '' : 's');
+      const rotLead = 'Rotated ' + pods.length + ' pods across ' + (upcoming.length - skipped) + ' service' + (upcoming.length - skipped === 1 ? '' : 's') + skipNote(skipped);
       if (unasked) { setFlash(unaskedFlash(rotLead, unasked, out.reduce((n, r) => n + r.tried, 0), 'Open each service and press Publish')); setTimeout(() => setFlash(''), 6000); return; }
       const rotHeld = new Set(out.flatMap(r => r.heldPubs || [])).size;   // PEOPLE, not slots: one person over four weeks is one
       if (rotHeld) { setFlash(heldFlash(rotLead, rotHeld, 'Open each service and press Publish')); setTimeout(() => setFlash(''), 6000); return; }
       setFlash(rotLead);
-      setTimeout(() => setFlash(''), 2600);
+      setTimeout(() => setFlash(''), skipped ? 6000 : 2600);
     });
     return upcoming.length;
   };
@@ -893,7 +927,7 @@ function DashRota({ onNewTeam }) {
       const probe = await window.Steward.publishService({ id: svc.id, name: svc.name, date: svc.date, time: svc.time });
       if (probe == null) { setFlash(schNoKey()); setTimeout(() => setFlash(''), 4000); return; }
     }
-    let lost = 0, unasked = 0, triedAsks = 0; const heldAsks = new Set();
+    let lost = 0, unasked = 0, triedAsks = 0, skipped = 0; const heldAsks = new Set();
     const load = { counts: null };   // shared across every service below, so the fill ROTATES — see fillAssign
     for (const dt of dates) {
       if (byDate[dt]) { ensured.push(byDate[dt]); continue; }
@@ -901,6 +935,7 @@ function DashRota({ onNewTeam }) {
       if (ns) ensured.push(ns); else lost++;
     }
     for (const s of ensured) {
+      if (rotaBehind(s.id)) { skipped++; continue; }   // someone else published since this draft was built: do not replace it
       const filled = fillAssign(assignFor(s.id) || {}, s.date, s.id, load);
       const r = await window.Steward.publishRota({ service: s.id, published: true, assign: filled });
       if (r == null) { lost++; continue; }   // do not ask anyone to serve on a rota that does not exist
@@ -909,10 +944,10 @@ function DashRota({ onNewTeam }) {
       if (s.id === svcId) setAssign(filled);
     }
     if (lost) { setFlash(schNoKey()); setTimeout(() => setFlash(''), 4000); return; }
-    const madeLead = `${createCopies ? 'Created + filled' : 'Filled the gaps on'} ${ensured.length} service${ensured.length > 1 ? 's' : ''}`;
+    const madeLead = `${createCopies ? 'Created + filled' : 'Filled the gaps on'} ${ensured.length - skipped} service${ensured.length - skipped === 1 ? '' : 's'}` + skipNote(skipped);
     if (unasked) { setFlash(unaskedFlash(madeLead, unasked, triedAsks, 'Open each service and press Publish')); setTimeout(() => setFlash(''), 6000); return; }
     if (heldAsks.size) { setFlash(heldFlash(madeLead, heldAsks.size, 'Open each service and press Publish')); setTimeout(() => setFlash(''), 6000); return; }
-    setFlash(madeLead); setTimeout(() => setFlash(''), 2800);
+    setFlash(madeLead); setTimeout(() => setFlash(''), skipped ? 6000 : 2800);
   };
   const assignFor = (id) => (draft[id] !== undefined ? draft[id] : (persisted(id) ? persisted(id).assign : null));
   const copyLastWeek = () => {
@@ -923,6 +958,7 @@ function DashRota({ onNewTeam }) {
     setAssign({ ...assignFor(src.id) }); setFlash(`Copied ${schParts(src.date).day} ${schParts(src.date).mon}`); setTimeout(() => setFlash(''), 2200);
   };
   const publish = async () => {
+    if (rotaBehind(svcId)) { setFlash('Not published - ' + staleMsg); setTimeout(() => setFlash(''), 5000); return; }
     const r = await window.Steward.publishRota({ service: svcId, published: true, assign });
     // Do NOT ask people to serve on a rota that was not saved: they would get the request and the rota would
     // not exist. sendRequestsFor is the outward-facing half, so it waits on the publish landing.
@@ -933,11 +969,15 @@ function DashRota({ onNewTeam }) {
     setFlash('Published — everyone assigned has been asked'); setTimeout(() => setFlash(''), 2400);
   };
 
+  // "Publish mine anyway": the steward chose to replace theirs, so from here the draft is based on it.
+  const publishMine = () => { keepMine(svcId); return publish(); };
+
   // ONE TAP TO CONFIRM A SWAP (owner, 2026-10-02: "after the teammate says yes, the steward confirms the swap with
   // one tap"). Puts the teammate on the slot, publishes the rota, and asks them through the ordinary "Can you
   // serve?" request (alreadyAsked is per person, so they have none for this slot yet). It sends nothing if the rota
   // did not save — the same rule publish() keeps — and says so.
   const confirmSwap = async (slot, from, mate) => {
+    if (rotaBehind(svcId)) { setFlash('Not swapped - ' + staleMsg); setTimeout(() => setFlash(''), 5000); return; }
     const next = { ...assign, [slot.key]: { id: mate.id, name: mate.name, pub: mate.pub || '' } };
     setAssign(next);
     const r = await window.Steward.publishRota({ service: svcId, published: true, assign: next });
@@ -1071,6 +1111,13 @@ function DashRota({ onNewTeam }) {
               <Icon name={isPublished ? 'check' : 'send'} size={15} color="#fff" /> {isPublished ? 'Published' : (pers && pers.published ? 'Publish changes' : 'Publish rota')}</button>
             </div>
           </div>
+          {rotaConflict(svcId) ? <div role="alert" style={{ fontSize: 13, color: 'var(--clay-ink)', fontWeight: 700, lineHeight: 1.5, margin: '0 0 10px', padding: '10px 12px', borderRadius: 12, background: 'color-mix(in oklab, var(--gold) 12%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 40%, transparent)' }}>
+            Someone else published this rota after you started. Reload to see theirs - or keep yours, which replaces theirs.
+            <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+              <button onClick={() => reloadRota(svcId)} className="sk-btn" style={{ padding: '7px 12px', fontSize: 12.5 }}>Reload their version</button>
+              <button onClick={publishMine} className="sk-btn sk-btn--ghost" style={{ padding: '7px 12px', fontSize: 12.5 }}>Publish mine anyway</button>
+            </div>
+          </div> : null}
           {runsheetOpen ? <RunsheetModal service={svc} sheet={(runsheets.find(r => r.id === svc.id) || {}).items || []} onClose={() => setRunsheetOpen(false)} /> : null}
 
           {/* team cards */}

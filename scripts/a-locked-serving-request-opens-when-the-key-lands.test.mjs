@@ -412,6 +412,8 @@ function publishers(asked) {
     SCH_NO_KEY: 'no key', setTimeout: () => {}, sendRequestsFor: async () => asked,
     schAddMonths: () => '2099-10-05', schGenDates: () => ['2099-10-04'], fillAssign: () => ASSIGN, assignFor: () => ASSIGN,
     rosterFor: () => ({ roles: [{ id: 'r1' }], pods: [{ name: 'Pod A', fills: {} }], people: [] }), todayISO: () => '2026-09-30',
+    // the stale-draft guard (a-rota-draft-does-not-overwrite-another-stewards-publish.test.mjs): nobody else has published here
+    rotaBehind: () => false, skipNote: () => '', staleMsg: '',
   };
   const names = Object.keys(world);
   // The verdict rule is file-level since 2026-10-02 (rotaSlotVerdict, shared with the calendar and the coverage
