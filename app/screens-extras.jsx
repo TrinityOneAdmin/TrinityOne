@@ -239,7 +239,7 @@ function ListenScreen({ open, onClose, ctx }) {
                 <div style={{ fontSize: 12.5, opacity: .85, marginTop: 4 }}>{[lsnPubDate(cur.published), cur.duration].filter(Boolean).join(' · ')}</div>
               </div>
             </div>
-            <AudioControls onClay />
+            <AudioControls onClay durationText={cur.duration} />
           </div>
         ) : null}
 

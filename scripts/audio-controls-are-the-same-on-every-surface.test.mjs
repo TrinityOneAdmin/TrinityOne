@@ -215,7 +215,7 @@ test('POINT OF USE — Sermons (Watch): starting one from the list gives it the 
 async function listenWorld({ audioFeed, sermons }) {
   const w = world();
   w.win.Fellowship = { subscribeSermons: (_n, cb) => { cb(sermons || []); return () => {}; }, gatewayBase: () => 'http://gw', fetchSermon: async (m) => 'blob:' + m.sha256 };
-  const eps = ['p1', 'p2', 'p3', 'p4'].map((id, i) => ({ id, title: 'Episode ' + (i + 1), audio: 'https://pod/' + id + '.mp3', published: '2026-01-0' + (i + 1) }));
+  const eps = ['p1', 'p2', 'p3', 'p4'].map((id, i) => ({ id, title: 'Episode ' + (i + 1), audio: 'https://pod/' + id + '.mp3', published: '2026-01-0' + (i + 1), duration: '42:10' }));
   const globals = { ...w.base, useTrinityAudio: w.audio.useTrinityAudio, AudioControls: w.audio.AudioControls,
     Sheet: ({ children }) => children, Screen: ({ children }) => children, Overlay: ({ children }) => children,
     fetch: async () => ({ json: async () => ({ channel: { name: 'The Pod' }, episodes: eps }) }) };
@@ -279,4 +279,69 @@ test('the docked mini player carries previous / play / next from the same engine
   press(tree, 'Next track'); assert.equal(w.el.src, 'blob:c');
   tree = draw(); w.el.currentTime = 0;
   press(tree, 'Previous track'); assert.equal(w.el.src, 'blob:b');
+});
+
+// ───────────── a sermon still downloading must not let the PREVIOUS one play under its title ─────────────
+async function watchWorld(fetchSermon) {
+  const w = world();
+  w.win.Fellowship = { subscribeSermons: (_n, cb) => { cb(SERMONS); return () => {}; }, gatewayBase: () => '', fetchSermon };
+  w.win.Bible.getVideos = async () => ({ channel: null, videos: [] });
+  const globals = { ...w.base, useTrinityAudio: w.audio.useTrinityAudio, AudioControls: w.audio.AudioControls, fetch: async () => { throw new Error('no feed'); } };
+  const { WatchView } = loadScreen('app/screens-watch.jsx', ['WatchView'], globals);
+  const ctx = { church: { npub: 'npub1c', name: 'St Mary’s', channel: '' }, toast: m => w.toasts.push(m), openVideo() {} };
+  const redraw = () => { w.draw(WatchView, { ctx }); return w.draw(WatchView, { ctx }); };
+  redraw(); await settle(); const tree = redraw();
+  find(tree, n => n.type === 'button' && texts(n).join(' ').includes('Sermon A'))[0].props.onClick(); await settle();
+  assert.equal(w.el.src, 'blob:sha-s1', 'sermon A did not start — re-anchor this test');
+  return { w, redraw };
+}
+
+test('POINT OF USE — while the next sermon downloads, Play / seek / scrubber cannot drive the previous one', async () => {
+  let release; const gate = new Promise(r => { release = r; });
+  const { w, redraw } = await watchWorld(async (m) => { if (m.sha256 === 'sha-s2') await gate; return 'blob:' + m.sha256; });
+  w.el.duration = 100; w.el.currentTime = 40; w.el.emit('timeupdate');   // the scrubber is at 40s of sermon A
+  press(redraw(), 'Next track');                       // sermon B starts downloading
+  const tree = redraw();
+  assert.equal(w.A.current.id, 's2');
+  assert.equal(w.el.src, '', 'the old sermon is still loaded in the element while the new one downloads');
+  assert.equal(byLabel(tree, 'Play').length, 1, 'no Play button while loading');
+  press(tree, 'Play'); assert.equal(w.el.paused, true, 'PLAY RESUMED THE PREVIOUS SERMON under the new title');
+  w.el.duration = 100; w.el.currentTime = 40;
+  press(tree, 'Forward 10 seconds'); assert.equal(w.el.currentTime, 40, '+10 moved the old sermon');
+  sliders(tree)[0].props.onPointerDown({ currentTarget: { getBoundingClientRect: () => ({ left: 0, width: 100 }), setPointerCapture() {} }, clientX: 90, pointerId: 1 });
+  assert.equal(w.el.currentTime, 40, 'the scrubber moved the old sermon');
+  assert.equal(sliders(tree)[0].props['aria-valuenow'], 0, 'the scrubber still shows the old position');
+  release(); await settle();
+  assert.equal(w.el.src, 'blob:sha-s2'); assert.equal(w.el.paused, false, 'the new sermon did not start once it arrived');
+});
+
+test('POINT OF USE — a sermon that fails to download says so on the controls; Play retries it', async () => {
+  let fail = true;
+  const { w, redraw } = await watchWorld(async (m) => { if (m.sha256 === 'sha-s2' && fail) throw new Error('offline'); return 'blob:' + m.sha256; });
+  press(redraw(), 'Next track'); await settle();
+  let tree = redraw();
+  assert.match(texts(tree).join(' '), /Couldn.t load/, 'a failed download is silent on the controls');
+  assert.match(w.toasts.join('|'), /Couldn.t load: offline/);
+  assert.equal(w.el.paused, true);
+  fail = false;
+  press(tree, 'Play'); await settle();
+  assert.equal(w.el.src, 'blob:sha-s2', 'Play did not retry the failed sermon');
+  tree = redraw(); assert.doesNotMatch(texts(tree).join(' '), /Couldn.t load/, 'the failure notice stayed after a successful retry');
+});
+
+test('POINT OF USE — a failed sermon does not block Next: it moves on to the one after', async () => {
+  const { w, redraw } = await watchWorld(async (m) => { if (m.sha256 === 'sha-s2') throw new Error('offline'); return 'blob:' + m.sha256; });
+  press(redraw(), 'Next track'); await settle();
+  press(redraw(), 'Next track'); await settle();
+  assert.equal(w.el.src, 'blob:sha-s3');
+});
+
+test('POINT OF USE — Listen: the episode’s own length shows as the total until the audio reports its duration', async () => {
+  const { w, redraw } = await listenWorld({ audioFeed: 'http://feed', sermons: [] });
+  find(redraw(), n => n.type === 'button' && texts(n).join(' ').includes('Episode 2'))[0].props.onClick(); await settle();
+  w.el.duration = 0;
+  // read it out of the shared controls themselves — the card header above them prints the length too
+  const ac = find(redraw(), n => typeof n.type === 'function' && n.type.name === 'AudioControls');
+  assert.equal(ac.length, 1, 'no shared controls on the Listen card');
+  assert.equal(find(ac[0], n => n.type === 'span' && (n.kids || []).includes('42:10')).length, 1, 'the total time is blank in the controls before metadata loads');
 });

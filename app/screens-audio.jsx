@@ -19,8 +19,8 @@
   const applyRate = () => { try { el.defaultPlaybackRate = rate; el.playbackRate = rate; } catch (e) {} };
   applyRate();
 
-  let queue = [], qi = -1, playTok = 0;
-  let state = { track: null, playing: false, loading: false, t: 0, d: 0, rate, q: queue, qi };
+  let queue = [], qi = -1, playTok = 0, pending = false;   // pending = a queued track is still being fetched: the element holds NO source
+  let state = { track: null, playing: false, loading: false, failed: false, t: 0, d: 0, rate, q: queue, qi };
   const subs = new Set();
   const emit = () => { state = { ...state }; subs.forEach(fn => { try { fn(state); } catch (e) {} }); };
   const set = (p) => { Object.assign(state, p); emit(); };
@@ -62,22 +62,27 @@
       if (Array.isArray(list) && list.length) { queue = list; qi = Math.max(0, list.findIndex(t => t.id === track.id)); }
       else { queue = [track]; qi = 0; }
       const tok = ++playTok;
+      pending = false;
       const start = () => {
         if (el.src !== track.src) el.src = track.src;
         applyRate();
-        set({ track, loading: true, q: queue, qi });
+        set({ track, loading: true, failed: false, q: queue, qi });
         mediaSession(track);
         el.play().then(() => set({ playing: true, loading: false })).catch(() => set({ playing: false, loading: false }));
       };
       if (track.src) { start(); return; }
-      set({ track, loading: true, playing: false, q: queue, qi });
+      // DETACH the old source while the new one downloads: otherwise Play / the scrubber would drive the
+      // PREVIOUS sermon's element under the NEW title. Play and seek are also no-ops until it lands.
+      pending = true;
+      try { el.pause(); el.removeAttribute('src'); el.load(); } catch (e) {}
+      set({ track, loading: true, playing: false, failed: false, t: 0, d: 0, q: queue, qi });
       mediaSession(track);
-      try { el.pause(); } catch (e) {}
+      const fail = () => { if (tok === playTok) { pending = false; set({ loading: false, playing: false, failed: true }); } };
       Promise.resolve().then(() => track.resolve()).then(src => {
         if (tok !== playTok) return;                  // the listener chose something else while this downloaded
-        if (!src) { set({ loading: false, playing: false }); return; }
-        track.src = src; start();
-      }).catch(() => { if (tok === playTok) set({ loading: false, playing: false }); });
+        if (!src) { fail(); return; }
+        pending = false; track.src = src; start();
+      }).catch(fail);
     },
     rates: RATES.slice(),
     get rate() { return rate; },
@@ -87,14 +92,15 @@
       try { localStorage.setItem(RATE_KEY, String(r)); } catch (e) {}
       set({ rate });
     },
-    toggle() { if (!state.track) return; if (el.paused) el.play().catch(() => {}); else el.pause(); },
-    seek(delta) { if (el.duration) el.currentTime = Math.max(0, Math.min(el.duration, (el.currentTime || 0) + delta)); },
-    seekTo(frac) { if (el.duration) el.currentTime = Math.max(0, Math.min(1, frac)) * el.duration; },
+    // a failed fetch is retried by Play (the track is still current, it just has no source); a fetch in flight ignores it
+    toggle() { if (!state.track || pending) return; if (state.failed) { api.play(state.track, queue); return; } if (el.paused) el.play().catch(() => {}); else el.pause(); },
+    seek(delta) { if (!pending && el.duration) el.currentTime = Math.max(0, Math.min(el.duration, (el.currentTime || 0) + delta)); },
+    seekTo(frac) { if (!pending && el.duration) el.currentTime = Math.max(0, Math.min(1, frac)) * el.duration; },
     next() { if (qi >= 0 && qi + 1 < queue.length) api.play(queue[qi + 1], queue); },
     prev() { if (el.currentTime > 3) { el.currentTime = 0; return; } if (qi > 0) api.play(queue[qi - 1], queue); },
     hasNext() { return qi >= 0 && qi + 1 < queue.length; },
     hasPrev() { return qi > 0; },
-    stop() { playTok++; try { el.pause(); el.removeAttribute('src'); el.load(); } catch (e) {} queue = []; qi = -1; set({ track: null, playing: false, loading: false, t: 0, d: 0, q: queue, qi }); },
+    stop() { playTok++; pending = false; try { el.pause(); el.removeAttribute('src'); el.load(); } catch (e) {} queue = []; qi = -1; set({ track: null, playing: false, loading: false, failed: false, t: 0, d: 0, q: queue, qi }); },
     get current() { return state.track; },
     subscribe(fn) { subs.add(fn); fn(state); return () => subs.delete(fn); },
   };
@@ -103,7 +109,7 @@
 
 // React hook: subscribe a component to the audio engine's state
 function useTrinityAudio() {
-  const [s, setS] = React.useState(() => ({ track: window.TrinityAudio ? window.TrinityAudio.current : null, playing: false, loading: false, t: 0, d: 0, rate: 1, q: [], qi: -1 }));
+  const [s, setS] = React.useState(() => ({ track: window.TrinityAudio ? window.TrinityAudio.current : null, playing: false, loading: false, failed: false, t: 0, d: 0, rate: 1, q: [], qi: -1 }));
   React.useEffect(() => (window.TrinityAudio ? window.TrinityAudio.subscribe(setS) : undefined), []);
   return s;
 }
@@ -132,7 +138,7 @@ function sermonAudioTrack(s, o) {
 // scrubber, -10 / +10, previous / next, play/pause, speed, and the queue with the current item marked.
 // `match(track)` (optional) limits where it shows: a surface passes a test for "tracks that belong here" and
 // the card appears only while one of those is loaded. `onClay` = drawn on the clay-coloured card.
-function AudioControls({ onClay, heading, match }) {
+function AudioControls({ onClay, heading, match, durationText }) {
   const a = useTrinityAudio();
   const dragging = React.useRef(false);
   const listRef = React.useRef(null);
@@ -171,8 +177,9 @@ function AudioControls({ onClay, heading, match }) {
         </div>
       </div>
       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5, fontWeight: 600, color: dim, marginTop: 2 }}>
-        <span>{fmtTime(a.t)}</span><span>{a.d ? fmtTime(a.d) : ''}</span>
+        <span>{fmtTime(a.t)}</span><span>{a.d ? fmtTime(a.d) : (durationText || '')}</span>
       </div>
+      {a.failed ? <div role="status" style={{ textAlign: 'center', fontSize: 12.5, fontWeight: 700, marginTop: 6, color: fg }}>{'Couldn\u2019t load \u00b7 press Play to retry'}</div> : null}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: 8 }}>
         <button onClick={() => A.prev()} aria-label="Previous track" title="Previous" style={circ}><Icon name="rewind" size={22} color="currentColor" /></button>
         <button onClick={() => A.seek(-10)} aria-label="Back 10 seconds" title="Back 10 seconds" style={circ}>{'−10'}</button>
