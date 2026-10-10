@@ -1010,7 +1010,7 @@ const MEDIAKEY_D = D.MEDIAKEY;   // Tier-2 media key wrapped per-member — its 
 // scripts/relay-challenges-a-key-read.test.mjs derives the same set from the doc registry (every D.*KEY) and
 // fails when a key-envelope type is added there and not here.
 const KEY_ENVELOPE_D = [NAMEKEY_D, CAREKEY_D, MEDIAKEY_D, GROUPKEY_D, FINANCEKEY_D, CHECKINKEY_D];
-// (a parent's guardian-link REQUEST is d=trinityone/guardreq:<childpub>, authored by the parent — member-writable, falls to the default member rule)
+// (a parent's guardian-link REQUEST is d=trinityone/guardreq:<childpub>, authored by the parent — member-writable; READ only by that parent, the child, the church and its safeguarding stewards — canRead's GUARDREQ_D branch, 2026-10-10)
 const JOINPOLICY_D = D.JOINPOLICY; // church-signed join policy — d=joinpolicy:<churchpub>, content {approval:bool}; ON = members need steward approval to post
 const ADMITTED_D = D.ADMITTED;   // church-signed allowlist of approved members — d=admitted:<churchpub> (only meaningful when approval is ON)
 // THE CHURCH'S WEBSITE (reference/DESIGN-embeddable-church-info.md, phase 1). Both church-key-only and plaintext:
@@ -5139,6 +5139,20 @@ function canRead(e, authed) {
       if (d.startsWith(GUARDNOTICE_D)) {
         const subj = toHexPub(d.slice(GUARDNOTICE_D.length)) || '';
         if (authed && subj && authed === subj) return true;
+        return !!authed && (authed === cp || stewardCan(authed, cp, 'safeguarding'));
+      }
+      // GUARDIAN-LINK REQUESTS (owner, 2026-10-10). d=guardreq:<child>, authored by the parent, p-tagged to the
+      // church and the child, content {child, parent} in the clear. This branch did not exist, so they fell to
+      // the member rule below and every admitted member could list the church's parent/child pairs with one
+      // `#p: [<church>]` REQ. Same readers as a guardian notice, plus the two people the request is about: the
+      // parent who wrote it, the child its d-tag names (validated against the content in accept()), the church,
+      // and a steward the church gave the safeguarding job. `cp` is owningChurch() — the p-tagged church.
+      // Readers of guardreq:, enumerated: the member app's _rebuildFamily (the parent, `authors: [own key]`);
+      // the console's subscribeGuardianRequests (`#p: [church]`, authed as the church key or, delegated, as a
+      // steward's own key); nothing reads them as the child; the relay itself reads none.
+      if (d.startsWith(GUARDREQ_D)) {
+        const subj = toHexPub(d.slice(GUARDREQ_D.length)) || '';
+        if (authed && (authed === e.pubkey || (subj && authed === subj))) return true;
         return !!authed && (authed === cp || stewardCan(authed, cp, 'safeguarding'));
       }
     }
