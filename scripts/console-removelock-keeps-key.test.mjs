@@ -46,6 +46,7 @@ function lockRemover({ mnemonic = 'a b c d e f g h i j k l', hasMarker = true, p
     ENC_LS: 'trinityone.steward.church-key.enc',
     encBlobRemove: async () => { seen.removed++; return true; },
     _setNeedsPin: (v) => { seen.needsPin++; },
+    _stay: { clear: async () => {} },   // stay-open records (stayopen-is-kept-in-the-keystore.test.mjs): not this file's question
     window: { Steward: { verifyPin: async () => { seen.verified++; return pinOk; }, locked: true } },
   };
   const names = Object.keys(scope);

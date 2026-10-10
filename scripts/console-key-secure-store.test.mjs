@@ -304,8 +304,9 @@ test('…and removeKey() actually hands back something to await', async () => {
   let cleared = false;
   const sentinel = new Promise(r => setTimeout(() => { cleared = true; r('cleared'); }, 5));
   const win = { Steward: {}, dispatchEvent() {} };
-  const fn = new Function('localStorage', 'KEY_LS', 'encBlobRemove', 'window', 'CustomEvent', body);
-  const got = fn({ removeItem() {} }, 'k', () => sentinel, win, class { constructor(t, o) { this.type = t; Object.assign(this, o); } });
+  // _stay: the stay-open record removeKey() also clears (stayopen-is-kept-in-the-keystore.test.mjs) — not this test's question
+  const fn = new Function('localStorage', 'KEY_LS', 'encBlobRemove', 'window', 'CustomEvent', '_stay', body);
+  const got = fn({ removeItem() {} }, 'k', () => sentinel, win, class { constructor(t, o) { this.type = t; Object.assign(this, o); } }, { clear: async () => {} });
 
   assert.ok(got && typeof got.then === 'function',
     'removeKey() returned ' + String(got) + ' rather than a promise, so `await window.Steward.removeKey()` in ' +

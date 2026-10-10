@@ -808,29 +808,37 @@ function StewardUnlock() {
   // escalating cooldown persisted across reloads so a reload can't reset it. NB this defends the on-device
   // attacker; offline brute-force of a copied blob is bounded by PIN length + PBKDF2-600k, not by this guard.
   const GUARD_KEY = 'trinityone.steward.pinguard';
-  const STAY_KEY = 'trinityone.steward.stayopen';
-  const STAY_TTL = 30 * 24 * 60 * 60 * 1000;
   const readGuard = () => { try { return JSON.parse(localStorage.getItem(GUARD_KEY) || '{}') || {}; } catch { return {}; } };
-  const readStay = () => { try { const s = JSON.parse(localStorage.getItem(STAY_KEY) || 'null'); return s && s.until > Date.now() ? s : null; } catch { return null; } };
   const [pin, setPin] = useSt('');
   const [busy, setBusy] = useSt(false);
   const [err, setErr] = useSt('');
+  // "Stay open for 30 days" lives in the engine (makeStayOpen, src/steward.src.js): the steward APK keeps it in
+  // the hardware store, a browser is not offered it at all. It used to be the PIN in plaintext in localStorage.
+  // stayAvail: the box is shown only where the engine can keep it. stayOpen: TICKED when a live record exists
+  // for this church, so the box tells the truth after a lock instead of always starting unticked.
+  const [stayAvail, setStayAvail] = useSt(false);
   const [stayOpen, setStayOpen] = useSt(false);
   const [waitLeft, setWaitLeft] = useSt(() => { const g = readGuard(); return Math.max(0, Math.ceil(((g.until || 0) - Date.now()) / 1000)); });
   const [lostKey, setLostKey] = useSt(false);
   const [pinVis, setPinVis] = useSt(false);   // the device-bound key is gone — offer the way out, not a retry loop
-  // auto-unlock from a saved "stay open" PIN — try once on mount
-  const autoTried = React.useRef(false);
+  // Read the real stay-open state, and replay it — the engine replays once per launch, so a lock later in the
+  // session shows this screen with the box ticked rather than reopening by itself.
   useStE(() => {
-    if (autoTried.current) return;
-    autoTried.current = true;
-    const saved = readStay();
-    if (!saved || !saved.p) return;
-    setBusy(true);
-    window.Steward.unlock(saved.p).then(ok => {
-      if (ok) { try { localStorage.removeItem(GUARD_KEY); } catch {} }
-      else { try { localStorage.removeItem(STAY_KEY); } catch {} setBusy(false); }
-    }).catch(() => { try { localStorage.removeItem(STAY_KEY); } catch {} setBusy(false); });
+    let live = true;
+    const S = window.Steward;
+    Promise.resolve(S.stayOpenStatus ? S.stayOpenStatus() : null).then(st => {
+      if (!live || !st) return;
+      setStayAvail(!!st.available); setStayOpen(!!(st.available && st.active));
+      if (!st.available || !st.active || !S.unlockStayOpen) return;
+      setBusy(true);
+      return S.unlockStayOpen().then(ok => {
+        if (ok) { try { localStorage.removeItem(GUARD_KEY); } catch (e) {} return; }
+        if (!live) return;
+        setBusy(false);
+        if (ok === false) setStayOpen(false);   // the engine deleted a record that would not open this church
+      });
+    }).catch(() => { if (live) setBusy(false); });
+    return () => { live = false; };
   }, []);
   useStE(() => { if (waitLeft <= 0) return; const t = setInterval(() => { const g = readGuard(); const left = Math.max(0, Math.ceil(((g.until || 0) - Date.now()) / 1000)); setWaitLeft(left); if (left <= 0) { setErr(''); clearInterval(t); } }, 500); return () => clearInterval(t); }, [waitLeft > 0]);   // eslint-disable-line react-hooks/exhaustive-deps
   const submit = async () => {
@@ -841,8 +849,8 @@ function StewardUnlock() {
     const ok = await window.Steward.unlock(pin);   // fires steward-key on success → StewardRoot re-renders
     if (ok) {
       try { localStorage.removeItem(GUARD_KEY); } catch {}
-      if (stayOpen) { try { localStorage.setItem(STAY_KEY, JSON.stringify({ p: pin, until: Date.now() + STAY_TTL })); } catch {} }
-      else { try { localStorage.removeItem(STAY_KEY); } catch {} }
+      // ticked → keep it (native only; the engine refuses elsewhere); unticked → delete any record.
+      try { if (window.Steward.setStayOpen) await window.Steward.setStayOpen(pin, stayAvail && stayOpen); } catch (e) {}
       return;
     }
     // AUDIT-2026-07-30. The stored key is bound to THIS browser (a key it can use but never read). If that
@@ -889,13 +897,15 @@ function StewardUnlock() {
           <button type="button" aria-label={pinVis ? 'Hide PIN' : 'Show PIN'} onClick={() => setPinVis(v => !v)} style={{ position: 'absolute', right: 4, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', padding: 8, color: 'var(--ink-3)' }}><Icon name={pinVis ? 'eyeOff' : 'eye'} size={18} /></button>
         </div>
         {err ? <div style={{ fontSize: 12.5, color: 'var(--clay-ink)', fontWeight: 600, marginTop: 8 }}>{err}{blocked ? ' (' + waitLeft + 's)' : ''}</div> : null}
-        <label style={{ width: '100%', display: 'flex', alignItems: 'flex-start', gap: 10, marginTop: 14, cursor: 'pointer', textAlign: 'left' }}>
-          <input type="checkbox" checked={stayOpen} onChange={e => setStayOpen(e.target.checked)} style={{ marginTop: 2, width: 18, height: 18, flexShrink: 0 }} />
-          <span style={{ fontSize: 13, lineHeight: 1.5, color: 'var(--ink-2)' }}>
-            Stay open for <b>30 days</b>.<br />
-            <span style={{ color: 'var(--ink-3)' }}>Anyone who opens this browser can act as the church.</span>
-          </span>
-        </label>
+        {stayAvail ? (
+          <label style={{ width: '100%', display: 'flex', alignItems: 'flex-start', gap: 10, marginTop: 14, cursor: 'pointer', textAlign: 'left' }}>
+            <input type="checkbox" aria-label="Stay open for 30 days" checked={stayOpen} onChange={e => setStayOpen(e.target.checked)} style={{ marginTop: 2, width: 18, height: 18, flexShrink: 0 }} />
+            <span style={{ fontSize: 13, lineHeight: 1.5, color: 'var(--ink-2)' }}>
+              Stay open for <b>30 days</b>.<br />
+              <span style={{ color: 'var(--ink-3)' }}>Anyone who can unlock this phone can act as the church.</span>
+            </span>
+          </label>
+        ) : null}
         <button onClick={submit} disabled={!pin || busy || blocked} className="sk-btn sk-btn--clay" style={{ width: '100%', justifyContent: 'center', padding: '13px', fontSize: 15, marginTop: 14, opacity: (!pin || busy || blocked) ? .5 : 1 }}>{blocked ? 'Locked — wait ' + waitLeft + 's' : (busy ? 'Unlocking…' : 'Unlock')}</button>
         {/* AUDIT-2026-07-30. The lost-device-key message used to say 'Use "I have my 12 words"' — a control that
             exists only in the MEMBER app. The console's equivalent is called "Restore a church" and lives on
@@ -905,7 +915,12 @@ function StewardUnlock() {
             back except clearing site data by hand, which nothing told them.
             Shown only in that state, so the ordinary locked screen keeps its single obvious action. */}
         {lostKey ? (
-          <button onClick={() => { try { localStorage.removeItem('trinityone.steward.church-key.enc'); } catch (e) {} location.reload(); }}
+          <button onClick={async () => {
+              try { localStorage.removeItem('trinityone.steward.church-key.enc'); } catch (e) {}
+              // a stay-open record for the church being replaced must not outlive it (init() re-checks too)
+              try { if (window.Steward.clearStayOpen) await Promise.race([window.Steward.clearStayOpen(), new Promise(r => setTimeout(r, 3000))]); } catch (e) {}
+              location.reload();
+            }}
             className="sk-btn sk-btn--ghost" style={{ width: '100%', justifyContent: 'center', padding: '11px 16px', fontSize: 13.5, marginTop: 10 }}>
             Restore this church with my 12 words
           </button>

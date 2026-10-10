@@ -3383,6 +3383,132 @@ async function deriveAes(pin, salt, iterations) {
   const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(pin), 'PBKDF2', false, ['deriveKey']);
   return crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: iterations || PIN_ITER_LEGACY, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
 }
+// The same PBKDF2 output as deriveAes, as 32 raw bytes — what "stay open" keeps instead of the PIN itself.
+async function deriveAesBits(pin, salt, iterations) {
+  const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(pin), 'PBKDF2', false, ['deriveBits']);
+  return new Uint8Array(await crypto.subtle.deriveBits({ name: 'PBKDF2', salt, iterations: iterations || PIN_ITER_LEGACY, hash: 'SHA-256' }, base, 256));
+}
+// ── "STAY OPEN FOR 30 DAYS" — steward APK only ───────────────────────────────────────────────────────────────
+//
+// It used to be `{ p: <the PIN in plaintext>, until }` in localStorage, on every platform. Threat model: lawful
+// compulsion and DEVICE SEIZURE. A plaintext PIN in a file is read straight off a forensic image, and a PIN is a
+// human secret people reuse.
+//
+// WHAT IS KEPT NOW is the PBKDF2 output for the CURRENT blob (its salt + iteration count), not the PIN. It opens
+// this one ciphertext and nothing else, tells nobody what the PIN was, and is dead the moment the PIN changes
+// (a new PIN is a new salt) — so a missed clear on some future PIN path cannot leave a working record behind.
+// It lives ONLY in the OS hardware store (the plugin the church key and the member app's "remember" use), with
+// its expiry and the church it was made for inside the same record, so "clear site data" cannot extend it.
+//
+// HONEST LIMIT: on a seized phone this record opens the church exactly as the PIN would — that is what "stay
+// open" means. What it changes is WHERE that power sits (the Keystore, not a file) and that the PIN never leaks.
+//
+// NOT OFFERED IN A BROWSER. There is no hardware store there; the only place for it is a file. available()
+// answers false and every write is refused. The legacy plaintext record is deleted on every platform.
+const STAY_LEGACY_LS = 'trinityone.steward.stayopen';     // the old plaintext-PIN record: delete on sight, never read
+const STAY_SS = 'trinityone.steward.stayopen.v2';         // SecureStorage key (native only)
+const STAY_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+function makeStayOpen(deps) {
+  const { secure, isNative, lsRemove, now, readBlob, deriveBits, pubOf } = deps;
+  let replayed = false;   // the record is replayed ONCE per launch: a lock later in the session really locks
+  const purgeLegacy = () => { try { lsRemove(STAY_LEGACY_LS); } catch (e) {} };
+  const clear = async () => {
+    purgeLegacy();
+    if (!isNative()) return;
+    try { const { S } = await secure(); await S.remove(STAY_SS); } catch (e) { console.warn('[steward] stay-open clear failed', e); }
+  };
+  const blobOf = async () => {
+    try { const raw = await readBlob(); const b = raw ? JSON.parse(raw) : null; return b && b.ct && b.iv && b.salt ? b : null; }
+    catch (e) { return null; }
+  };
+  const openBlob = async (bits, blob) => {
+    const key = await crypto.subtle.importKey('raw', bits, { name: 'AES-GCM' }, false, ['decrypt']);
+    return new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64d(blob.iv) }, key, b64d(blob.ct)));
+  };
+  // The live record and the blob it is for, or null. Anything expired, malformed, or made for a different
+  // blob (a PIN change, a restore) is DELETED here, at the read, so no caller has to remember to.
+  const read = async () => {
+    purgeLegacy();
+    if (!isNative()) return null;
+    let rec = null;
+    try { const { S } = await secure(); const s = await S.get(STAY_SS); if (!s) return null; rec = JSON.parse(String(s)); }
+    catch (e) { await clear(); return null; }
+    if (!rec || rec.v !== 1 || typeof rec.k !== 'string' || typeof rec.salt !== 'string' || typeof rec.owner !== 'string' || !(rec.until > now())) { await clear(); return null; }
+    const blob = await blobOf();
+    if (!blob || blob.salt !== rec.salt) { await clear(); return null; }
+    return { rec, blob };
+  };
+  return {
+    available: () => !!isNative(),
+    purgeLegacy,
+    clear,
+    async status() { const r = await read(); return { available: !!isNative(), active: !!r }; },
+    // → { seed } on success; { seed: null, skipped: true } after the first try this launch; otherwise
+    // { seed: null } with any record deleted. The owner check: the seed must be the church the record names.
+    async replay() {
+      if (replayed) return { seed: null, skipped: true };
+      replayed = true;
+      const r = await read();
+      if (!r) return { seed: null };
+      try {
+        const seed = await openBlob(b64d(r.rec.k), r.blob);
+        if (pubOf(seed) !== r.rec.owner) throw new Error('stay-open record is for a different church');
+        return { seed };
+      } catch (e) { await clear(); return { seed: null, failed: true }; }
+    },
+    // after a successful unlock with `pin`: on → keep the derived key for 30 days; off → delete. TRUE only if
+    // the result is what was asked for (a write is read back).
+    async save(pin, on) {
+      replayed = true;   // the steward typed the PIN this launch; nothing left to replay
+      if (!on || !isNative()) { await clear(); return !on; }
+      const blob = await blobOf();
+      if (!blob) return false;
+      try {
+        const bits = await deriveBits(pin, b64d(blob.salt), blob.it || PIN_ITER_LEGACY);
+        const seed = await openBlob(bits, blob);   // proves these bytes open THIS blob before anything is kept
+        const payload = JSON.stringify({ v: 1, k: b64e(bits), salt: blob.salt, owner: pubOf(seed), until: now() + STAY_TTL_MS });
+        const { S } = await secure();
+        await S.set(STAY_SS, payload);
+        const back = await S.get(STAY_SS);
+        if (back == null || String(back) !== payload) { await clear(); return false; }
+        return true;
+      } catch (e) { console.warn('[steward] stay-open save failed', e); await clear(); return false; }
+    },
+  };
+}
+// The decrypted seed goes into memory and the console comes back as whoever it was before the lock. Shared by
+// unlock(pin) and the stay-open replay so both restore the acting identity the same way.
+function _enterUnlocked(seed) {
+  setKey(seed); window.Steward.locked = false;
+  // RESTORE THE ACTING IDENTITY, or stop claiming one.
+  //
+  // setKey() rebuilds `pub` from THIS DEVICE'S OWN seed. For an owner that is the church and everything is
+  // consistent. For a delegated steward it is their personal key — while `actingChurch` survives the lock
+  // untouched, because lock() only forgets key material. So without this the console comes back saying
+  // "Acting as steward for <church>" in the header while every subscription reads the DELEGATE'S OWN
+  // empty documents.
+  //
+  // Measured on a live console, 2026-08-20 (round 7, R7-25): lock then unlock, and subscribeSafeguard goes
+  // from {minors: 1, guardians: 1, loaded: true} to {minors: 0, guardians: 0, loaded: false}. The kids
+  // check-in panel then renders "No children marked yet" — which hides the whole register INCLUDING a
+  // child currently checked in, so there is no "Check out" control left to press. A safeguarding lead
+  // whose console idle-locked could not check a child out, and nothing anywhere said why. Every symptom
+  // is silence; the header goes on lying throughout.
+  //
+  // Clear first, then re-enter through setActiveIdentity() — the one function that sets `pub` and
+  // `actingChurch` together — so a failure to get back leaves the console honestly in its own identity
+  // rather than half in someone else's.
+  if (actingChurch) {
+    const target = actingChurch;
+    actingChurch = ''; window.Steward.actingChurch = '';
+    try { window.Steward.setActiveIdentity(target); } catch (e) {}
+  }
+  window.dispatchEvent(new CustomEvent('steward-key', { detail: { npub: window.Steward.npub } }));
+}
+const _stay = makeStayOpen({
+  secure: _secureStore, isNative: _isNative, lsRemove: (k) => localStorage.removeItem(k), now: () => Date.now(),
+  readBlob: encBlobRaw, deriveBits: deriveAesBits, pubOf: (m) => getPublicKey(privateKeyFromSeedWords(m)),
+});
 // HANDOFF-2026-07-31 (1). nostr-tools does NOT reject when it cannot open the socket — SimplePool.publish
 // RESOLVES that relay's promise with the plain string `"connection failure: " + err`. A resolution satisfies
 // Promise.any, so this fell straight through to the success path: it fired steward-publish-ok, returned the
@@ -5105,6 +5231,8 @@ window.Steward = {
     // without it, "Remove this church from this device" can leave the church key in the Keystore for ever with
     // nothing left to notice. AUDIT-2026-07-31.
     try { encBlobRemoveResume(); } catch (e) {}
+    // The old "stay open" record held the PIN in plaintext in localStorage. Deleted on every load, never read.
+    _stay.purgeLegacy();
     if (mnemonicOverride) {
       // test hook — keep behaviour but force PIN setup so an injected key never persists plaintext past first boot
       lsSet(KEY_LS, mnemonicOverride); setKey(mnemonicOverride);
@@ -5132,6 +5260,7 @@ window.Steward = {
       // new church", and the resume re-announces once it knows.
       window.Steward.locked = true; return false;
     }
+    _stay.clear();   // no church key on this device: a stay-open record can only be left over from one that went
     return false;
   },
   // ---- PIN lock API ----
@@ -5179,6 +5308,9 @@ window.Steward = {
     // The file restore is now committed: the steward localStorage keys the file wrote are kept.
     // Clear the snapshot so discardUnsavedKey cannot undo them after a successful PIN.
     try { if (window.TrinityBackup && window.TrinityBackup._commitStewardRestore) window.TrinityBackup._commitStewardRestore(); } catch (e) {}
+    // A NEW PIN ENDS "STAY OPEN". The record could no longer open the new blob anyway (new salt), but it is
+    // deleted rather than left to be found dead: the steward chose a new secret and expects to be asked for it.
+    await _stay.clear();
     _setNeedsPin(false);   // SECURITY-AUDIT-2026-06-25 Critical-2: encrypted form now persisted; clear the force flag
     return true;
   },
@@ -5197,33 +5329,21 @@ window.Steward = {
     try {
       const o = JSON.parse(raw);
       const seed = new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64d(o.iv) }, await deriveAes(pin, b64d(o.salt), o.it || PIN_ITER_LEGACY), b64d(o.ct)));
-      setKey(seed); window.Steward.locked = false;
-      // RESTORE THE ACTING IDENTITY, or stop claiming one.
-      //
-      // setKey() rebuilds `pub` from THIS DEVICE'S OWN seed. For an owner that is the church and everything is
-      // consistent. For a delegated steward it is their personal key — while `actingChurch` survives the lock
-      // untouched, because lock() only forgets key material. So without this the console comes back saying
-      // "Acting as steward for <church>" in the header while every subscription reads the DELEGATE'S OWN
-      // empty documents.
-      //
-      // Measured on a live console, 2026-08-20 (round 7, R7-25): lock then unlock, and subscribeSafeguard goes
-      // from {minors: 1, guardians: 1, loaded: true} to {minors: 0, guardians: 0, loaded: false}. The kids
-      // check-in panel then renders "No children marked yet" — which hides the whole register INCLUDING a
-      // child currently checked in, so there is no "Check out" control left to press. A safeguarding lead
-      // whose console idle-locked could not check a child out, and nothing anywhere said why. Every symptom
-      // is silence; the header goes on lying throughout.
-      //
-      // Clear first, then re-enter through setActiveIdentity() — the one function that sets `pub` and
-      // `actingChurch` together — so a failure to get back leaves the console honestly in its own identity
-      // rather than half in someone else's.
-      if (actingChurch) {
-        const target = actingChurch;
-        actingChurch = ''; window.Steward.actingChurch = '';
-        try { window.Steward.setActiveIdentity(target); } catch (e) {}
-      }
-      window.dispatchEvent(new CustomEvent('steward-key', { detail: { npub: window.Steward.npub } }));
+      _enterUnlocked(seed);
       return true;
     } catch { return false; }
+  },
+  // ---- "stay open for 30 days" (steward APK only; see makeStayOpen) ----
+  stayOpenStatus() { return _stay.status(); },        // -> { available, active }; deletes a dead record
+  setStayOpen(pin, on) { return _stay.save(pin, !!on); },
+  clearStayOpen() { return _stay.clear(); },
+  // Replay the stored key ONCE per launch. true = unlocked; false = no usable record (any record deleted);
+  // null = already tried this launch, so a lock later in the session stays locked.
+  async unlockStayOpen() {
+    const r = await _stay.replay();
+    if (!r.seed) return r.skipped ? null : false;
+    _enterUnlocked(r.seed);
+    return true;
   },
   lock() {                                         // forget the in-memory key (idle / manual); seed stays encrypted
     // "seed stays encrypted" is only true once it HAS been encrypted. While needsPin is set — after createKey,
@@ -5273,6 +5393,7 @@ window.Steward = {
     if (lsGet(ENC_LS) && !(await window.Steward.verifyPin(pin))) return false;   // wrong/empty PIN → refuse
     window.Steward.locked = false;
     _setNeedsPin(true);   // force an immediate re-PIN, which overwrites the stored blob
+    await _stay.clear();  // the PIN is being replaced, so a stay-open made with the old one ends here
     return true;
   },
   // THE WAY BACK FROM THE FORCED-PIN GATE (owner, 2026-09-22: "We still need a back or cancel button at this
@@ -5648,6 +5769,7 @@ window.Steward = {
     // it, or the roster effect republishes church A's name/care/media keys as church B's. `location.reload()`
     // used to do this by accident; nothing did it on purpose. See _resetChurchScopedState.
     _resetChurchScopedState();
+    _stay.clear();   // a restore replaces the church: no stay-open record survives it (fire-and-forget; init re-checks)
     _setNeedsPin(true);
     // fire steward-key so the first-run welcome advances to the console (createKey does this too)
     window.dispatchEvent(new CustomEvent('steward-key', { detail: { npub: window.Steward.npub } }));
@@ -5758,6 +5880,7 @@ window.Steward = {
     try { localStorage.removeItem(KEY_LS); } catch {}
     window.Steward.keyResumedUnknown = false;   // K2: the steward has now answered the question the device could not
     const done = encBlobRemove();   // S6: "remove from THIS device" is a lie if the Keystore copy survives
+    _stay.clear();                  // …and so is a stay-open record that would open it
     sk = null; pub = null; currentMnemonic = null;
     window.Steward.pubkey = null; window.Steward.npub = null; window.Steward.hasKey = false; window.Steward.locked = false;
     window.dispatchEvent(new CustomEvent('steward-key', { detail: { npub: null } }));

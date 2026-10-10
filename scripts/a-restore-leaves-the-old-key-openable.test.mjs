@@ -33,7 +33,7 @@ function stewardWithKey() {
     npubEncode: () => 'npub1restored',
     validateMnemonic: () => true, wordlist: [],
     _loadBoxHosts: () => {}, _refreshBoxHostsUs: () => {},
-    _resetChurchScopedState: () => {}, _setNeedsPin: () => {},
+    _resetChurchScopedState: () => {}, _setNeedsPin: () => {}, _stay: { clear: async () => {} },   // stay-open records: not this file's question
     _blockedLastSet: () => new Set(), _localBlocked: new Set(), _localBlockedAt: 0,   // setKey/setActiveIdentity now seed the church's last blocklist (2026-10-02): not this file's question
     lsGet: (k) => (k in store ? store[k] : null),
     lsSet: (k, v) => { store[k] = v; },
@@ -90,7 +90,7 @@ test('a phrase that fails its checksum restores NOTHING', () => {
       new Proxy({ ...bad.store && {}, validateMnemonic: () => false, wordlist: [],
         privateKeyFromSeedWords: () => new Uint8Array(32), getPublicKey: () => 'f'.repeat(64), getPublicKey2: () => 'f'.repeat(64),
         npubEncode: () => 'n', _loadBoxHosts: () => {}, _refreshBoxHostsUs: () => {},
-        _resetChurchScopedState: () => {}, _setNeedsPin: () => {},
+        _resetChurchScopedState: () => {}, _setNeedsPin: () => {}, _stay: { clear: async () => {} },   // stay-open records: not this file's question
         _blockedLastSet: () => new Set(), _localBlocked: new Set(), _localBlockedAt: 0,   // setKey/setActiveIdentity now seed the church's last blocklist (2026-10-02): not this file's question
         window: { Steward: {}, dispatchEvent: () => {}, CustomEvent: function () {} },
         String, JSON, Array, Object, Boolean, Number, Math, Promise, console, RegExp, Error, Uint8Array }, {
