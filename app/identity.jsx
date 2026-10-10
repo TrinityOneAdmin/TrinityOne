@@ -698,7 +698,7 @@ function IdentityOnboarding({ open, identity, onSave, onSkip, initialRestore, su
             <React.Fragment>
               <div style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '20px 0 7px' }}>2 · Your file password</div>
               <div style={{ position: 'relative' }}>
-                <input type={rShowPass ? 'text' : 'password'} value={rFilePass} autoFocus autoCapitalize="none" autoCorrect="off" spellCheck={false}
+                <input type={rShowPass ? 'text' : 'password'} value={rFilePass} aria-label="Your backup file password" autoFocus autoCapitalize="none" autoCorrect="off" spellCheck={false}
                   onChange={e => { setRFilePass(e.target.value); setRErr(''); }}
                   onKeyDown={e => { if (e.key === 'Enter' && rFilePass) doRestoreFile(); }}
                   placeholder="the password you chose for this backup"

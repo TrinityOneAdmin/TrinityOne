@@ -66,6 +66,7 @@ export const DOC_TYPES = Object.freeze({
   'trinityone/devotional:':   { write: 'steward',   read: 'members', scope: 'tag' },
   'trinityone/rota:':         { write: 'steward',   read: 'members', scope: 'tag',    note: 'narrowed to the serving teams / stewards when rota-settings says so' },
   'trinityone/rota-settings': { write: 'steward',   read: 'members', scope: 'author', note: 'who may FETCH rota:/runsheet: — church-signed {visibility}' },
+  'trinityone/verse-prompt':  { write: 'steward',   read: 'members', scope: 'author', gatedBy: "authed === cp || networkOf(authed, cp) || stewardCan(authed, cp, 'any')", note: 'the church’s verse prompt {ref, note, schedule}; bare d-tag, singleton per church, tombstoned with a deleted tag. Declared 2026-10-10, five days after the client feature (a2d1d12) and nine after registry enforcement (3fbc94c). No rule of its own in the relay: reads fall to canRead’s default-deny member rule (an effective member, steward, care admin or the church; a stranger is refused), and the owning church resolves from the author or the [church] tag' },
   'trinityone/roster:':       { write: 'steward',   read: 'members', scope: 'tag' },
   'trinityone/service:':      { write: 'steward',   read: 'members', scope: 'tag' },
   'trinityone/request:':      { write: 'steward',   read: 'members', scope: 'tag' },
