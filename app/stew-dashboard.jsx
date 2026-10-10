@@ -5080,7 +5080,30 @@ function ago(ts) {
 }
 
 function NewPlanModal({ onClose }) {
-  const [mode, setMode] = React.useState('manual');   // manual | upload
+  const [mode, setMode] = React.useState('manual');   // manual | upload | pick
+  const [picked, setPicked] = React.useState([]);   // readings added with the Book/Chapter picker
+  const [rpBook, setRpBook] = React.useState('');
+  const [rpChap, setRpChap] = React.useState('');
+  const [rpFrom, setRpFrom] = React.useState('');
+  const [rpTo, setRpTo] = React.useState('');
+  const rpEntry = VP_BOOKS.find(function(b) { return b[0] === rpBook; });
+  const rpChapList = [];
+  for (let _ri = 1; _ri <= (rpEntry ? rpEntry[1] : 0); _ri++) rpChapList.push(_ri);
+  let rpAssembled = '';
+  if (rpBook && rpChap) {
+    rpAssembled = rpBook + ' ' + rpChap;
+    if (rpFrom) {
+      rpAssembled += ':' + rpFrom;
+      if (rpTo && Number(rpTo) > Number(rpFrom)) rpAssembled += '-' + rpTo;
+    }
+  }
+  const rpAdd = () => {
+    if (!rpAssembled) return;
+    setPicked(prev => prev.concat([rpAssembled]));
+    setRpBook(''); setRpChap(''); setRpFrom(''); setRpTo('');
+  };
+  const rpRemove = (idx) => setPicked(prev => prev.filter((_, i) => i !== idx));
+  const rpSel = { height: 38, padding: '0 8px', borderRadius: 10, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 13.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' };
   const [name, setName] = React.useState('');
   const [tag, setTag] = React.useState('');
   const [blurb, setBlurb] = React.useState('');
@@ -5134,7 +5157,9 @@ function NewPlanModal({ onClose }) {
     r.readAsText(f);
   };
   const manualLines = text.split('\n').map(s => s.trim()).filter(Boolean);
-  const activeDays = mode === 'upload' && parsedDays ? parsedDays : manualLines.map((ref, i) => ({ d: i + 1, ref, label: ref }));
+  const activeDays = mode === 'upload' && parsedDays ? parsedDays
+    : mode === 'pick' ? picked.map((ref, i) => ({ d: i + 1, ref, label: ref }))
+    : manualLines.map((ref, i) => ({ d: i + 1, ref, label: ref }));
   const canPublish = name.trim() && activeDays.length > 0;
   const create = (asDraft) => {
     if (!canPublish) return;
@@ -5150,9 +5175,10 @@ function NewPlanModal({ onClose }) {
       <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="Create a reading plan" tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 520, maxWidth: '92%', maxHeight: '88%', display: 'flex', flexDirection: 'column', overflow: 'hidden', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)' }}>
         <div style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', padding: '28px 28px 8px' }}>
         <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22 }}>Create a reading plan</div>
-        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 14px' }}>Type readings by hand, or upload a Markdown file.</p>
+        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 14px' }}>Pick verses, type them, or upload a file.</p>
         <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
           {modeBtn('manual', 'Type it', 'pen')}
+          {modeBtn('pick', 'Pick verses', 'read')}
           {modeBtn('upload', 'Upload file', 'share')}
         </div>
         {mode === 'upload' ? (
@@ -5185,6 +5211,32 @@ function NewPlanModal({ onClose }) {
           <React.Fragment>
             <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 6 }}>Readings — one per line {manualLines.length ? '· ' + manualLines.length + ' day' + (manualLines.length === 1 ? '' : 's') : ''}</div>
             <textarea value={text} onChange={e => setText(e.target.value)} rows={7} placeholder={'John 1\nJohn 2\nIsaiah 53\nPsalm 22'} style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '12px 14px', fontSize: 14.5, fontFamily: 'var(--mono)', color: 'var(--ink)', outline: 'none', resize: 'vertical', lineHeight: 1.6 }} />
+          </React.Fragment>
+        ) : mode === 'pick' ? (
+          <React.Fragment>
+            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 6 }}>Readings {picked.length ? '\u00b7 ' + picked.length + ' day' + (picked.length === 1 ? '' : 's') : ''}</div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'end', marginBottom: 10 }}>
+              <select value={rpBook} onChange={e => { setRpBook(e.target.value); setRpChap(''); setRpFrom(''); setRpTo(''); }} style={Object.assign({}, rpSel, { flex: '1 1 140px', maxWidth: 200 })} aria-label="Book" title="Book">
+                <option value="">Book</option>
+                {VP_BOOKS.map(b => <option key={b[0]} value={b[0]}>{b[0]}</option>)}
+              </select>
+              {rpBook ? <select value={rpChap} onChange={e => { setRpChap(e.target.value); setRpFrom(''); setRpTo(''); }} style={Object.assign({}, rpSel, { width: 70 })} aria-label="Chapter" title="Chapter">
+                <option value="">Ch.</option>
+                {rpChapList.map(c => <option key={c} value={String(c)}>{c}</option>)}
+              </select> : null}
+              {rpChap ? <input type="number" min="1" value={rpFrom} onChange={e => { setRpFrom(e.target.value.replace(/[^0-9]/g, '')); setRpTo(''); }} placeholder="from" style={Object.assign({}, rpSel, { width: 60, textAlign: 'center' })} aria-label="From verse" title="From verse (optional)" /> : null}
+              {rpFrom ? <input type="number" min={Number(rpFrom) + 1} value={rpTo} onChange={e => { setRpTo(e.target.value.replace(/[^0-9]/g, '')); }} placeholder="to" style={Object.assign({}, rpSel, { width: 60, textAlign: 'center' })} aria-label="To verse" title="To verse (optional)" /> : null}
+              {rpAssembled ? <button type="button" onClick={rpAdd} className="sk-btn sk-btn--clay" aria-label={'Add ' + rpAssembled} title={'Add ' + rpAssembled} style={{ padding: '7px 12px', fontSize: 12.5, height: 38 }}><Icon name="plus" size={13} color="var(--on-clay)" /> Add</button> : null}
+            </div>
+            {picked.length > 0 ? <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 200, overflowY: 'auto', marginBottom: 6 }}>
+              {picked.map((r, i) => (
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', borderRadius: 10, background: 'var(--surface-2)', border: '1px solid var(--line)', fontSize: 13.5 }}>
+                  <span style={{ width: 22, textAlign: 'center', fontWeight: 700, fontSize: 11, color: 'var(--ink-3)' }}>{i + 1}</span>
+                  <span style={{ flex: 1, fontWeight: 600 }}>{r}</span>
+                  <button type="button" onClick={() => rpRemove(i)} aria-label={'Remove ' + r} title={'Remove ' + r} style={{ border: 'none', background: 'none', cursor: 'pointer', padding: 2, color: 'var(--ink-3)' }}><Icon name="x" size={14} color="currentColor" /></button>
+                </div>
+              ))}
+            </div> : <div style={{ padding: '12px 0', textAlign: 'center', color: 'var(--ink-3)', fontSize: 13 }}>Pick a book and chapter above to add readings.</div>}
           </React.Fragment>
         ) : parsedDays && parsedDays.length ? (
           <React.Fragment>
