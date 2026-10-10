@@ -387,7 +387,13 @@ import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   //
     // settings panel's effect, which republishes from whatever roster it last saw — so a stale roster cannot put
     // them back. Members' phones seal every new ask for help to this list.
     const blocked = new Set(((S().blockedHere && S().blockedHere()) || []).map(p => String(p || '').toLowerCase()));
-    const pubs = [...new Set([cp, ...((memberPubs || []).map(p => String(p || '').trim().toLowerCase()).filter(p => p && !blocked.has(p)))])];
+    // NEVER A CHILD EITHER (owner, 2026-10-10: a child is never on the care team, whatever the roster says). The
+    // relay already refuses a child every care-team read; this keeps members' phones from SEALING a new ask for
+    // help to them, which no read gate can undo. The roster picker is the generic one and rightly offers children
+    // for other teams, so the filter lives here, at the one door this list is written through. Best effort: it
+    // knows only the children this console has loaded (minorsHere is empty until the children list arrives).
+    const minors = new Set(((S().minorsHere && S().minorsHere()) || []).map(p => String(p || '').toLowerCase()));
+    const pubs = [...new Set([cp, ...((memberPubs || []).map(p => String(p || '').trim().toLowerCase()).filter(p => p && !blocked.has(p) && !minors.has(p)))])];
     return S().publishSigned({ kind: 30078, created_at: now(), tags: [['d', CARETEAM_D + cp], ['t', NET]], content: JSON.stringify({ pubs, updated: now() }) });
   }
 

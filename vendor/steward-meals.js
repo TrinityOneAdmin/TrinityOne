@@ -377,7 +377,8 @@
       if (S().actingChurch) return Promise.resolve(null);
       const cp = S().churchPub;
       const blocked = new Set((S().blockedHere && S().blockedHere() || []).map((p) => String(p || "").toLowerCase()));
-      const pubs = [.../* @__PURE__ */ new Set([cp, ...(memberPubs || []).map((p) => String(p || "").trim().toLowerCase()).filter((p) => p && !blocked.has(p))])];
+      const minors = new Set((S().minorsHere && S().minorsHere() || []).map((p) => String(p || "").toLowerCase()));
+      const pubs = [.../* @__PURE__ */ new Set([cp, ...(memberPubs || []).map((p) => String(p || "").trim().toLowerCase()).filter((p) => p && !blocked.has(p) && !minors.has(p))])];
       return S().publishSigned({ kind: 30078, created_at: now(), tags: [["d", CARETEAM_D + cp], ["t", NET]], content: JSON.stringify({ pubs, updated: now() }) });
     }
     function subscribeCareRequests(cb) {

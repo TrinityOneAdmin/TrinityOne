@@ -2537,6 +2537,7 @@ const _applyNoPhotoList = (list) => { _noPhoto = pubSet(list); };   // shared no
 // lowercased on both sides (the blockedSet normalisation), because a case-mismatch here would silently drop
 // LEGITIMATE members from envelopes.
 let _localBlocked = new Set();
+let _minorsHere = { cp: '', list: [] };   // the children list last applied by subscribeSafeguard, and whose; read by minorsHere()
 // …AND IT NO LONGER STARTS EMPTY (audit of 5276297, HIGH 2). "Fails open toward the subscription list" assumed the
 // subscription's first answer was the church's blocklist. On a slow link it was not: nostr-tools' own EOSE timer
 // (4.4 s) answered first, with no blocklist in it, and the enrolment wrapped the name and care keys to the member
@@ -7334,6 +7335,10 @@ window.Steward = {
   // Who this console holds as blocked, for the acting church — the same floored set every key builder filters by.
   // A copy, lower-case hex. Readers: StewardMeals.publishCareTeam and StewardMeals.sendCareChat (steward-meals.src.js).
   blockedHere() { return [..._localBlocked]; },
+  // Who this console holds as a CHILD of the church it is looking at — the newest minors: document the safeguarding
+  // subscription applied, for that church only (another church's list, or none loaded yet, gives []). A copy,
+  // lower-case hex. Reader: StewardMeals.publishCareTeam (a child is never on the care list, owner 2026-10-10).
+  minorsHere() { const cp = actingChurch || pub; return (cp && _minorsHere.cp === cp) ? [..._minorsHere.list] : []; },
   setBlocked(pubkeys) {   // replace the whole blocklist (pass hex pubkeys); a 2nd argument { unblock: [...] } names who THIS action lets back in
     const opts = arguments[1];   // read here, not named in the signature: six test harnesses lift this method by `setBlocked(pubkeys) {`
     _requireTrustedView('blocked list');
@@ -7450,7 +7455,7 @@ window.Steward = {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (_authFuture(e)) return;   // no future-dated pins on any safeguarding doc
         // minors + approved are OWNER-ONLY; nophoto is owner-or-steward — mirror the relay per doc.
-        if (d === MINORS_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tMinors) return; tMinors = e.created_at; sawMinors = true; try { minors = (JSON.parse(e.content).pubkeys) || []; } catch { minors = []; } onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown() }); }
+        if (d === MINORS_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tMinors) return; tMinors = e.created_at; sawMinors = true; try { minors = (JSON.parse(e.content).pubkeys) || []; } catch { minors = []; } _minorsHere = { cp: pub, list: minors.map(x => String(x || '').toLowerCase()) }; onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown() }); }
         else if (d === APPROVED_D + pub) { if (!_byChurch(e)) return; if (e.created_at < tApproved) return; tApproved = e.created_at; sawApproved = true; try { const _a = JSON.parse(e.content); approved = _a.pubkeys || [];
           // AN OLDER CONSOLE WRITES THE PLAIN LIST WITH NO RECORD ATTACHED. That means "written by something
           // that has never heard of the record", NOT "the record is empty" — and treating it as empty wiped

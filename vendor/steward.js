@@ -16956,6 +16956,7 @@ zoo`.split("\n");
     _noPhoto = pubSet(list);
   };
   var _localBlocked = /* @__PURE__ */ new Set();
+  var _minorsHere = { cp: "", list: [] };
   var _localBlockedAt = 0;
   var _setBlockedSeq = 0;
   var BLOCKED_LAST_LS = "trinityone.steward.blockedlast.";
@@ -20938,6 +20939,13 @@ zoo`.split("\n");
     blockedHere() {
       return [..._localBlocked];
     },
+    // Who this console holds as a CHILD of the church it is looking at — the newest minors: document the safeguarding
+    // subscription applied, for that church only (another church's list, or none loaded yet, gives []). A copy,
+    // lower-case hex. Reader: StewardMeals.publishCareTeam (a child is never on the care list, owner 2026-10-10).
+    minorsHere() {
+      const cp = actingChurch || pub;
+      return cp && _minorsHere.cp === cp ? [..._minorsHere.list] : [];
+    },
     setBlocked(pubkeys) {
       const opts = arguments[1];
       _requireTrustedView("blocked list");
@@ -20999,6 +21007,7 @@ zoo`.split("\n");
             } catch {
               minors = [];
             }
+            _minorsHere = { cp: pub, list: minors.map((x) => String(x || "").toLowerCase()) };
             onLists({ minors, approved, cleared, nophoto, guardians, loaded: isLoaded(), clearedKnown: clearedKnown(), minorsKnown: minorsKnown() });
           } else if (d === APPROVED_D + pub) {
             if (!_byChurch(e)) return;

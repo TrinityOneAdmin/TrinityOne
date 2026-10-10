@@ -2481,7 +2481,13 @@ const grantorOk = (src) => !!(src && (src.by === src.cp || networkOf(src.by, src
 // satisfying grantorOk with its own {by:B, cp:B} — and careAdmin() is a read grant for cp's carereq:, safe:,
 // safeguarding lists and (via the default-deny branch) every kind-30078 doc of that church. Require the
 // roster's own recorded church to be cp; ownership is additionally pinned at write time in note().
-const careAdmin = (pub, cp) => { const g = cp && MEALS_ADMIN_GROUP.get(cp); const src = g && ROSTER_BY.get(g); const ppl = g && ROSTER_PEOPLE.get(g); return !!(ppl && ppl.has(pub) && src && src.cp === cp && grantorOk(src)); };
+// A CHILD IS NEVER ON THE CARE TEAM (owner, 2026-10-10), WHATEVER THE ROSTER SAYS. The roster is written with the
+// same member picker every team uses, and that picker rightly offers children (a youth band is a team), so a
+// child can land on the care team's roster by one ordinary click. Until this check, that click handed them
+// adults' asks for help, the children list, parent links, other members' clearances and every church document
+// careAdmin() grants below. Asked per church (minorOf, never the relay-wide union): only a person's own church
+// says they are a child. It can only REFUSE — an adult's grant is unchanged.
+const careAdmin = (pub, cp) => { if (minorOf(pub, cp)) return false; const g = cp && MEALS_ADMIN_GROUP.get(cp); const src = g && ROSTER_BY.get(g); const ppl = g && ROSTER_PEOPLE.get(g); return !!(ppl && ppl.has(pub) && src && src.cp === cp && grantorOk(src)); };
 // FIRST-WRITER OWNERSHIP for relay-global id namespaces (group:<id>, roster:<id>). Nothing in the d-tag binds
 // an id to the church that created it, so any configured church key could republish another church's id and
 // take it over — flipping an invite-only group to public (its whole history then served to anonymous REQs) or
