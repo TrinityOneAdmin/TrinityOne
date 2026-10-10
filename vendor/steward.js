@@ -19329,6 +19329,12 @@ zoo`.split("\n");
     // wherever its phrase is held — this only forgets it locally; it does not delete/rotate the key.
     // Returns a promise so a caller CAN await the hardware-store half; the localStorage half is cleared
     // synchronously first, so every existing synchronous caller behaves exactly as before.
+    // FORGET EVERY CHURCH'S CHILDREN LIST ON THIS DEVICE (the sealed device copy, see _minorsLastGet). For a screen that
+    // throws the stored key away by its own route instead of removeKey() — the unlock screen's "Restore this church
+    // with my 12 words" (audit of 83b7a4f).
+    forgetChildrenLists() {
+      _minorsLastClear("");
+    },
     removeKey() {
       try {
         localStorage.removeItem(KEY_LS);

@@ -533,3 +533,87 @@ test('(seal d) Steward.setMinors (shipped): a church switch while the write is i
   assert.deepEqual(dev.get(B), [M.pub], 'church A’s children were filed as church B’s device copy');
   assert.equal(dev.get(cp), null, 'a list was filed after the console had left the church');
 });
+
+// ── 6. AUDIT OF 83b7a4f: every path that drops a church drops its children list ───────────────────────────────
+// The engine paths are lifted from the bundle and CALLED inside a scope where the device copy (MINORS_LAST_LS,
+// _minorsLastClear, localStorage) is the real thing over a Map and everything else the function touches is a
+// cell or a do-nothing function. That context answers no question these tests ask: each asserts only what
+// happened to the stored children lists.
+function engineScope(store, cells) {
+  const ls = (cells && cells.localStorage) || fakeLS(store);   // a rendered screen's own browser storage, when given
+  const helpers = new Function('localStorage', 'lsGet', 'lsSet', 'churchSk', 'encrypt2', 'decrypt3', deviceHelpers() + '\nreturn { MINORS_LAST_LS, _minorsLastClear, _minorsLastGet, _minorsLastSet };')(
+    ls, (k) => ls.getItem(k), (k, v) => ls.setItem(k, v), church.sk, nip44v2.encrypt, nip44v2.decrypt);
+  const t = { localStorage: ls, lsGet: (k) => ls.getItem(k), lsSet: (k, v) => ls.setItem(k, v), ...helpers,
+    window: { Steward: {}, StewardMeals: null, dispatchEvent() { return true; }, addEventListener() {} },
+    CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init && init.detail; } }, ...cells };
+  // a name nobody supplied is an inert object: callable, every property and call returns itself (so `.clear()`,
+  // `.set()` and `fn()` all do nothing), never a thenable
+  const inert = new Proxy(function () {}, { get: (_t, k) => (k === 'then' || typeof k === 'symbol' ? undefined : inert), apply: () => inert, construct: () => inert });
+  return new Proxy(t, {
+    has: (o, k) => typeof k === 'string' && !(k in globalThis && !(k in o)),
+    get: (o, k) => (k in o ? o[k] : (k === Symbol.unscopables ? undefined : inert)),
+    set: (o, k, v) => { o[k] = v; return true; },
+  });
+}
+const liftIn = (scope, anchor, name, method) => new Function('scope', `with (scope) { return (${method ? 'function ' : ''}${fnBody(STEWARD, anchor, name)}); }`)(scope);
+const copies = (store) => [...store.keys()].filter(k => k.startsWith('trinityone.steward.minorslast.')).map(k => k.slice('trinityone.steward.minorslast.'.length)).sort();
+
+test('(drop a) restoreKey -> _resetChurchScopedState (shipped) deletes every church’s children list', () => {
+  const store = new Map();
+  const scope = engineScope(store, { validateMnemonic: () => true, wordlist: [], churchSk: church.sk, _keyReadEpoch: 0, _careKeyVer: 0, _mediaKeyVer: 0 });
+  const dev = liftDevice({ store });
+  dev.set(cp, [CH.pub]); dev.set('b'.repeat(64), [KID2.pub]);
+  store.set('trinityone.steward.unrelated', 'keep');
+  scope._resetChurchScopedState = liftIn(scope, 'function _resetChurchScopedState() {', '_resetChurchScopedState');
+  const restoreKey = liftIn(scope, 'restoreKey(mnemonic) {', 'Steward.restoreKey', true);
+  restoreKey(Array(12).fill('abandon').join(' '));
+  assert.deepEqual(copies(store), [], 'a children list survived restoring a different church key');
+  assert.equal(store.get('trinityone.steward.unrelated'), 'keep', 'CONTROL: the reset deleted something it should not');
+});
+
+test('(drop b) setActiveIdentity (shipped): switching church deletes the copy of the church left, keeps the one entered', () => {
+  const store = new Map();
+  const A = cp, B = 'b'.repeat(64);
+  const scope = engineScope(store, { churchPub: A, pub: A, actingChurch: '', churchSk: church.sk, sk: church.sk, stewardedChurches: new Map([[B, { name: 'B' }]]),
+    toPubHex: (x) => (/^[0-9a-f]{64}$/i.test(x) ? x.toLowerCase() : null), _keyReadEpoch: 0, _careKeyVer: 0, _mediaKeyVer: 0, netKeys: () => [] });
+  const dev = liftDevice({ store });
+  dev.set(A, [CH.pub]); dev.set(B, [KID2.pub]);
+  const setActiveIdentity = liftIn(scope, 'setActiveIdentity(targetPub) {', 'Steward.setActiveIdentity', true);
+  setActiveIdentity(B);
+  assert.equal(scope.pub, B, 'setup: the switch did not happen');
+  assert.deepEqual(copies(store), [B], 'leaving church A left its children list on the device (or the entered church’s was deleted)');
+});
+
+test('(drop c) the unlock screen’s “Restore this church with my 12 words” (steward-root.jsx, rendered) forgets every children list', async () => {
+  const { loadConsole, fakeReact, fakeBrowser, fakeSteward, nodes, texts } = await import('./console-screens.mjs');
+  const R = fakeReact();
+  const B = fakeBrowser();
+  const store = new Map();
+  // the device copies, sealed, in THIS browser's storage
+  const dev = liftDevice({ store });
+  dev.set(cp, [CH.pub]); dev.set('b'.repeat(64), [KID2.pub]);
+  for (const [k, v] of store) B.localStorage.setItem(k, v);
+  B.localStorage.setItem('trinityone.steward.church-key.enc', 'blob');
+  // the engine's forgetChildrenLists, lifted from the bundle over this browser's storage
+  const sc = engineScope(new Map(), { localStorage: B.localStorage });
+  const forget = liftIn(sc, 'forgetChildrenLists() {', 'Steward.forgetChildrenLists', true);
+  let reloaded = 0;
+  B.window.location.reload = () => { reloaded++; };
+  B.window.Steward = fakeSteward({ hasKey: false, locked: true, deviceKeyLost: true, unlock: async () => false, forgetChildrenLists: forget });
+  const { StewardUnlock } = loadConsole({ React: R.React, window: B.window, expr: '{ StewardUnlock }' });
+  const draw = () => { R.reset(); const t = StewardUnlock({}); R.flush(); return t; };
+  let tree = draw();
+  const input = nodes(tree).find(n => n.type === 'input' && n.props && typeof n.props.onChange === 'function');
+  input.props.onChange({ target: { value: '1234' } });
+  tree = draw();
+  const unlockBtn = nodes(tree).find(n => n.type === 'button' && texts(n).join(' ').includes('Unlock'));
+  await unlockBtn.props.onClick();
+  tree = draw();
+  const restore = nodes(tree).find(n => n.type === 'button' && texts(n).join(' ').includes('Restore this church with my 12 words'));
+  assert.ok(restore, 'setup: the lost-key screen did not offer “Restore this church with my 12 words”');
+  restore.props.onClick();
+  const left = []; for (let i = 0; i < B.localStorage.length; i++) left.push(B.localStorage.key(i));
+  assert.equal(reloaded, 1, 'setup: the button did not reload');
+  assert.equal(B.localStorage.getItem('trinityone.steward.church-key.enc'), null, 'CONTROL: the key blob was not removed');
+  assert.deepEqual(left.filter(k => k.startsWith('trinityone.steward.minorslast.')), [], 'a children list survived “Restore this church”');
+});
