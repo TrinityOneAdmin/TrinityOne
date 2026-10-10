@@ -172,7 +172,11 @@ function WatchView({ ctx }) {
       const dec = s.enc && FS.mediaDecryptor ? await FS.mediaDecryptor(churchNpub) : null;
       if (s.enc && !dec) { ctx.toast('This recording is for members — your app hasn’t received the unlock key yet. It’s sent automatically once your steward is online; try again shortly.'); setLoadingId(null); return; }
       const src = await FS.fetchSermon({ sha256: s.sha256, hosts, mime: s.mime, enc: s.enc }, { mime: s.mime || 'audio/mpeg', decrypt: dec });
-      window.TrinityAudio.play({ id: s.id, title: s.title, subtitle: chName, src, album: chName });
+      // queue = the audio sermons in the order this list shows them, so Next goes to the next sermon
+      const mine = { id: s.id, title: s.title, subtitle: chName, src, album: chName };
+      const audioSermonList = sermons.filter(x => !String(x.mime || '').startsWith('video'));
+      const sermonQueue = audioSermonList.map(x => x.id === s.id ? mine : window.sermonAudioTrack(x, { subtitle: chName, churchNpub, toast: ctx.toast }));
+      window.TrinityAudio.play(mine, sermonQueue);
     } catch (e) { ctx.toast('Couldn’t load: ' + (e.message || 'error')); }
     setLoadingId(null);
   };
@@ -231,6 +235,7 @@ function WatchView({ ctx }) {
           {audioSermons.length ? (
             <React.Fragment>
               {<div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', textTransform: 'uppercase', margin: '0 2px 8px' }}><Icon name="headphones" size={13} color="var(--ink-3)" /> Listen</div>}
+              <div style={{ margin: '0 0 12px' }}><AudioControls match={(t) => audioSermons.some(x => x.id === t.id)} heading /></div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: (videoSermons.length || hasYT) ? 22 : 0 }}>
                 {audioSermons.map(s => <SermonRow key={s.id} s={s} loading={loadingId === s.id} onClick={() => playSelf(s)} />)}
               </div>

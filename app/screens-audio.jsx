@@ -10,13 +10,23 @@
   el.setAttribute('playsinline', '');
   document.body.appendChild(el);
 
-  let state = { track: null, playing: false, loading: false, t: 0, d: 0 };
-  let queue = [], qi = -1;
+  // Playback speed: one value for every surface, kept per device. Setting `src` makes the browser reload the
+  // element and reset playbackRate to defaultPlaybackRate, so BOTH are set, and again on loadstart.
+  const RATE_KEY = 'trinityone.audioRate';
+  const RATES = [0.75, 1, 1.25, 1.5, 2];
+  let rate = 1;
+  try { const v = parseFloat(localStorage.getItem(RATE_KEY)); if (RATES.indexOf(v) >= 0) rate = v; } catch (e) {}
+  const applyRate = () => { try { el.defaultPlaybackRate = rate; el.playbackRate = rate; } catch (e) {} };
+  applyRate();
+
+  let queue = [], qi = -1, playTok = 0;
+  let state = { track: null, playing: false, loading: false, t: 0, d: 0, rate, q: queue, qi };
   const subs = new Set();
   const emit = () => { state = { ...state }; subs.forEach(fn => { try { fn(state); } catch (e) {} }); };
   const set = (p) => { Object.assign(state, p); emit(); };
 
   el.addEventListener('timeupdate', () => set({ t: el.currentTime, d: el.duration || 0 }));
+  el.addEventListener('loadstart', applyRate);
   el.addEventListener('durationchange', () => set({ d: el.duration || 0 }));
   el.addEventListener('play', () => set({ playing: true }));
   el.addEventListener('pause', () => set({ playing: false }));
@@ -34,8 +44,8 @@
       });
       const h = (a, fn) => { try { navigator.mediaSession.setActionHandler(a, fn); } catch (e) {} };
       h('play', () => api.toggle()); h('pause', () => api.toggle());
-      h('seekbackward', (d) => api.seek(-(d && d.seekOffset || 15)));
-      h('seekforward', (d) => api.seek(d && d.seekOffset || 30));
+      h('seekbackward', (d) => api.seek(-(d && d.seekOffset || 10)));
+      h('seekforward', (d) => api.seek(d && d.seekOffset || 10));
       h('previoustrack', queue.length > 1 ? () => api.prev() : null);
       h('nexttrack', queue.length > 1 ? () => api.next() : null);
       h('seekto', (d) => { if (d && d.seekTime != null && el.duration) el.currentTime = d.seekTime; });
@@ -45,14 +55,37 @@
   const api = {
     // play a track now. `list` (optional) sets the queue so ended → next and the lock-screen skip work.
     // track = { id, title, subtitle, src, image, album }
+    // A queued track may carry `resolve()` (async → src) instead of `src` — a sermon's audio is a gated
+    // download, fetched only when its turn comes, so "next" works without downloading the whole list.
     play(track, list) {
-      if (!track || !track.src) return;
+      if (!track || (!track.src && typeof track.resolve !== 'function')) return;
       if (Array.isArray(list) && list.length) { queue = list; qi = Math.max(0, list.findIndex(t => t.id === track.id)); }
       else { queue = [track]; qi = 0; }
-      if (el.src !== track.src) el.src = track.src;
-      set({ track, loading: true });
+      const tok = ++playTok;
+      const start = () => {
+        if (el.src !== track.src) el.src = track.src;
+        applyRate();
+        set({ track, loading: true, q: queue, qi });
+        mediaSession(track);
+        el.play().then(() => set({ playing: true, loading: false })).catch(() => set({ playing: false, loading: false }));
+      };
+      if (track.src) { start(); return; }
+      set({ track, loading: true, playing: false, q: queue, qi });
       mediaSession(track);
-      el.play().then(() => set({ playing: true, loading: false })).catch(() => set({ playing: false, loading: false }));
+      try { el.pause(); } catch (e) {}
+      Promise.resolve().then(() => track.resolve()).then(src => {
+        if (tok !== playTok) return;                  // the listener chose something else while this downloaded
+        if (!src) { set({ loading: false, playing: false }); return; }
+        track.src = src; start();
+      }).catch(() => { if (tok === playTok) set({ loading: false, playing: false }); });
+    },
+    rates: RATES.slice(),
+    get rate() { return rate; },
+    setRate(r) {
+      r = Number(r); if (RATES.indexOf(r) < 0) return;
+      rate = r; applyRate();
+      try { localStorage.setItem(RATE_KEY, String(r)); } catch (e) {}
+      set({ rate });
     },
     toggle() { if (!state.track) return; if (el.paused) el.play().catch(() => {}); else el.pause(); },
     seek(delta) { if (el.duration) el.currentTime = Math.max(0, Math.min(el.duration, (el.currentTime || 0) + delta)); },
@@ -61,7 +94,7 @@
     prev() { if (el.currentTime > 3) { el.currentTime = 0; return; } if (qi > 0) api.play(queue[qi - 1], queue); },
     hasNext() { return qi >= 0 && qi + 1 < queue.length; },
     hasPrev() { return qi > 0; },
-    stop() { try { el.pause(); el.removeAttribute('src'); el.load(); } catch (e) {} queue = []; qi = -1; set({ track: null, playing: false, t: 0, d: 0 }); },
+    stop() { playTok++; try { el.pause(); el.removeAttribute('src'); el.load(); } catch (e) {} queue = []; qi = -1; set({ track: null, playing: false, loading: false, t: 0, d: 0, q: queue, qi }); },
     get current() { return state.track; },
     subscribe(fn) { subs.add(fn); fn(state); return () => subs.delete(fn); },
   };
@@ -70,12 +103,111 @@
 
 // React hook: subscribe a component to the audio engine's state
 function useTrinityAudio() {
-  const [s, setS] = React.useState(() => (window.TrinityAudio ? { track: window.TrinityAudio.current, playing: false, loading: false, t: 0, d: 0 } : { track: null, playing: false, loading: false, t: 0, d: 0 }));
+  const [s, setS] = React.useState(() => ({ track: window.TrinityAudio ? window.TrinityAudio.current : null, playing: false, loading: false, t: 0, d: 0, rate: 1, q: [], qi: -1 }));
   React.useEffect(() => (window.TrinityAudio ? window.TrinityAudio.subscribe(setS) : undefined), []);
   return s;
 }
 
 const fmtTime = (s) => { s = Math.max(0, Math.floor(s || 0)); const m = Math.floor(s / 60), ss = s % 60; return m + ':' + String(ss).padStart(2, '0'); };
+
+// A sermon's audio is a member-gated download, so its queue entries carry `resolve()` (fetch + verify +
+// decrypt) instead of a `src`; the engine calls it when that sermon's turn comes. `o` = { subtitle, toast,
+// churchNpub }; returns a track the engine can queue. Failure toasts and resolves to null (engine stops loading).
+function sermonAudioTrack(s, o) {
+  o = o || {};
+  const hosts = (s.hosts && s.hosts.length) ? s.hosts : (s.host ? [s.host] : []);
+  return { id: s.id, title: s.title, subtitle: o.subtitle || '', album: o.subtitle || '', image: s.image,
+    resolve: async () => {
+      const FS = window.Fellowship;
+      try {
+        if (!hosts.length || !s.sha256 || !FS) throw new Error('This sermon is unavailable');
+        const dec = s.enc && FS.mediaDecryptor ? await FS.mediaDecryptor(o.churchNpub) : null;
+        if (s.enc && !dec) throw new Error('needs the church media key');
+        return await FS.fetchSermon({ sha256: s.sha256, hosts, mime: s.mime, enc: s.enc }, { mime: s.mime || 'audio/mpeg', decrypt: dec });
+      } catch (e) { if (o.toast) o.toast('Couldn’t load: ' + ((e && e.message) || 'error')); return null; }
+    } };
+}
+
+// ── AudioControls: THE one set of audio controls, used by every surface (Bible chapter, sermons, podcast).
+// scrubber, -10 / +10, previous / next, play/pause, speed, and the queue with the current item marked.
+// `match(track)` (optional) limits where it shows: a surface passes a test for "tracks that belong here" and
+// the card appears only while one of those is loaded. `onClay` = drawn on the clay-coloured card.
+function AudioControls({ onClay, heading, match }) {
+  const a = useTrinityAudio();
+  const dragging = React.useRef(false);
+  const listRef = React.useRef(null);
+  const A = window.TrinityAudio;
+  const qi = a.qi, q = a.q || [];
+  React.useEffect(() => {
+    try { const box = listRef.current; const cur = box && box.querySelector && box.querySelector('[aria-current]'); if (cur && box.scrollTo) box.scrollTo({ top: Math.max(0, cur.offsetTop - box.offsetTop - 6) }); } catch (e) {}
+  }, [qi, q.length]);
+  if (!a.track || (match && !match(a.track))) return null;
+  const fg = onClay ? '#fff' : 'var(--ink)';
+  const dim = onClay ? 'rgba(255,255,255,.8)' : 'var(--ink-3)';
+  const rail = onClay ? 'rgba(255,255,255,.25)' : 'var(--line)';
+  const fill = onClay ? '#fff' : 'var(--clay)';
+  const chipBg = (on) => on ? (onClay ? '#fff' : 'var(--clay)') : (onClay ? 'rgba(255,255,255,.16)' : 'var(--surface-2)');
+  const chipFg = (on) => on ? (onClay ? 'var(--clay-deep)' : 'var(--on-clay)') : fg;
+  const pct = a.d ? Math.min(100, (a.t / a.d) * 100) : 0;
+  const hasNext = qi >= 0 && qi + 1 < q.length;
+  const seekFrom = (e) => { const r = e.currentTarget.getBoundingClientRect(); if (r && r.width) A.seekTo((e.clientX - r.left) / r.width); };
+  const circ = { width: 44, height: 44, borderRadius: 999, border: 'none', background: 'transparent', color: fg, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13.5, padding: 0 };
+  return (
+    <div style={{ color: fg, fontFamily: 'var(--font-ui)' }}>
+      {heading ? (
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17, lineHeight: 1.2 }}>{a.track.title}</div>
+          {a.track.subtitle ? <div style={{ fontSize: 12.5, color: dim, marginTop: 3 }}>{a.track.subtitle}</div> : null}
+        </div>
+      ) : null}
+      <div role="slider" tabIndex={0} aria-label="Seek" title="Seek" aria-valuemin={0} aria-valuemax={Math.round(a.d || 0)} aria-valuenow={Math.round(a.t || 0)} aria-valuetext={fmtTime(a.t) + ' of ' + fmtTime(a.d)}
+        onPointerDown={(e) => { dragging.current = true; try { e.currentTarget.setPointerCapture(e.pointerId); } catch (x) {} seekFrom(e); }}
+        onPointerMove={(e) => { if (dragging.current) seekFrom(e); }}
+        onPointerUp={() => { dragging.current = false; }} onPointerCancel={() => { dragging.current = false; }}
+        onKeyDown={(e) => { if (e.key === 'ArrowLeft') { e.preventDefault(); A.seek(-5); } else if (e.key === 'ArrowRight') { e.preventDefault(); A.seek(5); } }}
+        style={{ padding: '10px 0', cursor: 'pointer', touchAction: 'none' }}>
+        <div style={{ height: 6, borderRadius: 3, background: rail, overflow: 'hidden' }}>
+          <div style={{ width: pct + '%', height: '100%', background: fill, borderRadius: 3 }} />
+        </div>
+      </div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5, fontWeight: 600, color: dim, marginTop: 2 }}>
+        <span>{fmtTime(a.t)}</span><span>{a.d ? fmtTime(a.d) : ''}</span>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: 8 }}>
+        <button onClick={() => A.prev()} aria-label="Previous track" title="Previous" style={circ}><Icon name="rewind" size={22} color="currentColor" /></button>
+        <button onClick={() => A.seek(-10)} aria-label="Back 10 seconds" title="Back 10 seconds" style={circ}>{'−10'}</button>
+        <button onClick={() => A.toggle()} aria-label={a.playing ? 'Pause' : 'Play'} title={a.playing ? 'Pause' : 'Play'} style={{ ...circ, width: 58, height: 58, background: onClay ? '#fff' : 'var(--clay)', color: onClay ? 'var(--ink)' : 'var(--on-clay)' }}>
+          {a.loading ? <span style={{ width: 20, height: 20, borderRadius: 999, border: '2.5px solid rgba(128,128,128,.4)', borderTopColor: 'currentColor', display: 'inline-block', animation: 'trinitySpin .8s linear infinite' }} /> : <Icon name={a.playing ? 'pause' : 'play'} size={24} color="currentColor" />}
+        </button>
+        <button onClick={() => A.seek(10)} aria-label="Forward 10 seconds" title="Forward 10 seconds" style={circ}>{'+10'}</button>
+        <button onClick={() => A.next()} disabled={!hasNext} aria-label="Next track" title="Next" style={{ ...circ, opacity: hasNext ? 1 : 0.35, cursor: hasNext ? 'pointer' : 'default' }}><Icon name="forward" size={22} color="currentColor" /></button>
+      </div>
+      <div role="group" aria-label="Playback speed" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: 8 }}>
+        {(A.rates || [1]).map(r => (
+          <button key={r} onClick={() => A.setRate(r)} aria-pressed={a.rate === r} aria-label={'Speed ' + r + ' times'} title={'Speed ' + r + '×'}
+            style={{ minWidth: 44, height: 32, borderRadius: 999, border: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, background: chipBg(a.rate === r), color: chipFg(a.rate === r) }}>{r + '×'}</button>
+        ))}
+      </div>
+      {q.length > 1 ? (
+        <div style={{ marginTop: 14 }}>
+          <div style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: dim, marginBottom: 6 }}>Up next</div>
+          <div ref={listRef} role="list" aria-label="Up next" className="no-scrollbar" style={{ maxHeight: 170, overflowY: 'auto', position: 'relative' }}>
+            {q.map((t, i) => {
+              const isCur = i === qi;
+              return (
+                <button key={t.id} role="listitem" aria-current={isCur ? 'true' : undefined} aria-label={(isCur ? 'Now playing: ' : 'Play ') + t.title} onClick={() => (isCur ? A.toggle() : A.play(t, q))}
+                  style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left', padding: '8px 6px', border: 'none', borderRadius: 10, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: isCur ? 700 : 500, color: fg, background: isCur ? (onClay ? 'rgba(255,255,255,.18)' : 'color-mix(in oklab, var(--clay) 10%, var(--surface))') : 'transparent' }}>
+                  <span style={{ width: 18, flexShrink: 0, display: 'flex', justifyContent: 'center' }}>{isCur ? <Icon name={a.playing ? 'pause' : 'play'} size={13} color="currentColor" /> : null}</span>
+                  <span style={{ flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.title}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 // ── MiniPlayer: a persistent bar docked above the tab bar whenever something is loaded ──
 function MiniPlayer({ ctx }) {
@@ -100,9 +232,11 @@ function MiniPlayer({ ctx }) {
         <div style={{ fontWeight: 700, fontSize: 13.5, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.track.title}</div>
         <div style={{ fontSize: 11.5, color: 'var(--ink-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.track.subtitle || ''}</div>
       </div>
+      {(a.q || []).length > 1 ? <button onClick={(e) => { e.stopPropagation(); window.TrinityAudio.prev(); }} aria-label="Previous track" title="Previous" style={{ width: 30, height: 38, flexShrink: 0, border: 'none', background: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="rewind" size={18} color="var(--ink-2)" /></button> : null}
       <button onClick={(e) => { e.stopPropagation(); window.TrinityAudio.toggle(); }} aria-label={a.playing ? 'Pause' : 'Play'} style={{ width: 38, height: 38, flexShrink: 0, borderRadius: 999, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         {a.loading ? <span style={{ width: 16, height: 16, borderRadius: 999, border: '2px solid rgba(255,255,255,.5)', borderTopColor: '#fff', display: 'inline-block', animation: 'trinitySpin .8s linear infinite' }} /> : <Icon name={a.playing ? 'pause' : 'play'} size={18} color="#fff" />}
       </button>
+      {(a.q || []).length > 1 ? <button onClick={(e) => { e.stopPropagation(); window.TrinityAudio.next(); }} disabled={!(a.qi >= 0 && a.qi + 1 < a.q.length)} aria-label="Next track" title="Next" style={{ width: 30, height: 38, flexShrink: 0, border: 'none', background: 'none', cursor: 'pointer', opacity: (a.qi >= 0 && a.qi + 1 < a.q.length) ? 1 : 0.35, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="forward" size={18} color="var(--ink-2)" /></button> : null}
       <button onClick={(e) => { e.stopPropagation(); window.TrinityAudio.stop(); }} aria-label="Close player" style={{ width: 30, height: 38, flexShrink: 0, border: 'none', background: 'none', color: 'var(--ink-3)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <Icon name="x" size={16} color="var(--ink-3)" />
       </button>
@@ -290,6 +424,8 @@ function AudioBiblesScreen({ open, onClose, ctx }) {
 window.AudioBiblesScreen = AudioBiblesScreen;
 window.MiniPlayer = MiniPlayer;
 window.useTrinityAudio = useTrinityAudio;
+window.AudioControls = AudioControls;
+window.sermonAudioTrack = sermonAudioTrack;
 window.audioFmtTime = fmtTime;
 window.playBibleChapter = playBibleChapter;
 window.bibleChapterTrackId = (b, c) => 'bible:' + b + ':' + c;
