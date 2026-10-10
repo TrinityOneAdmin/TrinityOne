@@ -162,8 +162,10 @@ function DashMealsPanel({ church }) {
     const pubs = teamPeople.map(p => p && p.pub).filter(Boolean);
     const key = pubs.slice().sort().join(',');
     if (key === _careTeamPub.current) return;
-    _careTeamPub.current = key;
-    try { window.StewardMeals.publishCareTeam(pubs); } catch (e) {}
+    // REMEMBERED ONLY ONCE IT LANDED (re-audit of 0eb3cf9): set before publishing, a false — the children list
+    // could not be read, or the write failed — was never tried again by this panel.
+    let sent = null; try { sent = window.StewardMeals.publishCareTeam(pubs); } catch (e) {}
+    Promise.resolve(sent).then((ok) => { if (ok) _careTeamPub.current = key; }, () => {});
   }, [on, teamPeople.map(p => p && p.pub).join(',')]);
   // SWITCHING IT ON IS NOT THE SAME AS ANYONE KNOWING. Verity and Callum both had to be told, out of band,
   // that this existed and where to find it; Miriam's own words about a feature she never noticed were "I never

@@ -17129,6 +17129,11 @@ zoo`.split("\n");
     _keyReadEpoch++;
     _careKeyVer++;
     _mediaKeyVer++;
+    try {
+      const M = window.StewardMeals;
+      if (M && M.dropPendingCareTeam) M.dropPendingCareTeam();
+    } catch (e) {
+    }
     for (const k of Object.keys(CAP_KEYS)) _capState[k] = { ring: [], docKeys: null, rev: 1, at: 0, checked: false };
     _checkinMigrated = "";
     _ckKeysSettled = "";
@@ -20947,25 +20952,28 @@ zoo`.split("\n");
     // places that publish the care list (Settings -> Features, the rota's roster editor) usually saw no children
     // and published the child onto it (audit of 8fb38d9).
     //
-    // `known` is the honest question, as minorsKnown() asks it in subscribeSafeguard: we hold the church-signed
-    // document, or the relay said "that is everything" while we were authenticated to read an owner-only doc.
-    // Authentication is required BEFORE the REQ as well as at EOSE: a REQ answered before the login landed is
-    // answered as a stranger (empty), and an EOSE that happens to arrive after the login would otherwise vouch for
-    // that empty answer. Anything else — no relay, timeout, unreadable content — is `known: false`, and the caller
-    // decides what that means.
+    // `known: false` — no relay, a relay that did not answer trustworthily (see inside), unreadable content, or a
+    // delegate's empty answer — and the caller decides what that means.
     readMinors() {
       const cp = actingChurch || pub;
-      if (!cp) return Promise.resolve({ known: false, list: [] });
-      const authedAtStart = _isRelayAuthed();
+      const urls = cp ? relays() : [];
+      if (!cp || !urls.length) return Promise.resolve({ known: false, list: [] });
+      const ownerView = !actingChurch && pub === churchPub;
+      const epoch = _keyReadEpoch, at = Date.now();
       return new Promise((resolve) => {
-        let best = null, done = false, sub = null;
-        const finish = (eosed) => {
+        let best = null, done = false;
+        const answers = /* @__PURE__ */ new Map(), subs = [];
+        const finish = () => {
           if (done) return;
           done = true;
-          try {
-            sub && sub.close();
-          } catch (e) {
+          for (const x of subs) {
+            x.tok.closed = true;
+            try {
+              x.sub.close();
+            } catch (e) {
+            }
           }
+          if (!urls.every((u) => answers.get(u) === true)) return resolve({ known: false, list: [] });
           if (best) {
             let list = null;
             try {
@@ -20976,23 +20984,36 @@ zoo`.split("\n");
             if (!Array.isArray(list)) return resolve({ known: false, list: [] });
             return resolve({ known: true, list: list.map((x) => String(x || "").toLowerCase()).filter(Boolean) });
           }
-          resolve({ known: !!(eosed && authedAtStart && _isRelayAuthed()), list: [] });
+          resolve({ known: ownerView, list: [] });
         };
-        try {
-          sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [cp], "#d": [MINORS_D + cp] }], {
-            onevent(e) {
-              if (!e || e.pubkey !== cp || _authFuture(e)) return;
-              if (!best || e.created_at > best.created_at) best = e;
-            },
-            oneose() {
-              finish(true);
-            }
-          });
-        } catch (e) {
-          finish(false);
-          return;
+        for (const url of urls) {
+          const tok = { cp, epoch, at, url, wait: 4400, closed: false, relayClosed: false };
+          let sub = null;
+          try {
+            sub = pool.subscribeMany([url], [{ kinds: [30078], authors: [cp], "#d": [MINORS_D + cp] }], {
+              onevent(e) {
+                if (tok.closed || !e || e.pubkey !== cp || _authFuture(e)) return;
+                if (!best || e.created_at > best.created_at) best = e;
+              },
+              // a microtask later, so a CLOSED's onclose (which nostr-tools runs right after this) has marked the token
+              oneose() {
+                queueMicrotask(() => {
+                  if (done) return;
+                  answers.set(url, _keyReadOk(tok));
+                  if (urls.every((u) => answers.has(u))) finish();
+                });
+              },
+              onclose() {
+                tok.relayClosed = true;
+              }
+            });
+          } catch (e) {
+            answers.set(url, false);
+          }
+          if (sub) subs.push({ tok, sub });
         }
-        setTimeout(() => finish(false), 5e3);
+        if (urls.every((u) => answers.has(u))) finish();
+        setTimeout(finish, 5e3);
       });
     },
     setBlocked(pubkeys) {
@@ -24593,6 +24614,11 @@ zoo`.split("\n");
       _keyReadEpoch++;
       _careKeyVer++;
       _mediaKeyVer++;
+      try {
+        const M = window.StewardMeals;
+        if (M && M.dropPendingCareTeam) M.dropPendingCareTeam();
+      } catch (e) {
+      }
       _latestGuardNotice.clear();
       window.Steward.pubkey = pub;
       window.Steward.npub = npubEncode(pub);

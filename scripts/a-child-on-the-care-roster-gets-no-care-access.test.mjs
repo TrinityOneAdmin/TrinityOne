@@ -24,7 +24,7 @@ import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:net';
-import { WebSocket } from 'ws';
+import { WebSocket, WebSocketServer } from 'ws';
 import { generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure';
 import { npubEncode } from 'nostr-tools/nip19';
 import { fnBody } from './test-slice.mjs';
@@ -129,36 +129,44 @@ test('the child is refused by the CHURCH-TAG filter too (how the care screens ac
 // actually fed it left every test green. These run the SHIPPED readMinors (vendor/steward.js) against the live
 // gateway above, through a minimal pool that is genuinely NIP-42-authenticated as the church key, and hand its
 // answer to the SHIPPED publishCareTeam / refreshCareTeam / sendCareChat (vendor/steward-meals.js), whose writes
-// go to the same relay. What is supplied, not shipped: the pool (one authenticated socket), relays(), and
-// _isRelayAuthed (true only because that socket really did log in; false in the cannot-read test).
+// go to the same relay. What is supplied, not shipped: the pool (one socket per relay URL), relays(), and
+// _keyReadAuthedOn (true for a URL only if THAT socket's NIP-42 login really got the relay's OK, false for a
+// socket that never logged in). readMinors' trust rule, _keyReadOk, is lifted from the bundle with it.
 const STEWARD = readFileSync(join(ROOT, 'vendor/steward.js'), 'utf8');
 let churchWs = null;
-function shimPool(sock = () => churchWs) {
+// entries(): url -> { ws, ok, synthetic }. `synthetic` emulates nostr-tools' own timer (baseEoseTimeout 4400 ms,
+// pool.js): a relay that never answers still gets an oneose, from the library, 4400 ms after the REQ.
+const mainEntries = () => ({ [WS_URL]: { ws: churchWs, ok: true } });
+function shimPool(entries = mainEntries) {
   return {
-    subscribeMany(_urls, filters, h) {
-      const churchWs = sock();
+    subscribeMany(urls, filters, h) {
+      const ent = entries()[urls[0]];
+      const ws = ent.ws;
       const id = 's' + Math.random().toString(36).slice(2, 9); let closed = false;
       const on = (d) => { const m = JSON.parse(d); if (m[1] !== id) return;
         if (m[0] === 'EVENT' && h.onevent) h.onevent(m[2]);
         if (m[0] === 'EOSE' && h.oneose) h.oneose(); };
-      churchWs.on('message', on);
-      churchWs.send(JSON.stringify(['REQ', id, ...filters]));
-      return { close() { if (closed) return; closed = true; churchWs.off('message', on); try { churchWs.send(JSON.stringify(['CLOSE', id])); } catch {} } };
+      ws.on('message', on);
+      ws.send(JSON.stringify(['REQ', id, ...filters]));
+      const t = ent.synthetic ? setTimeout(() => { if (!closed && h.oneose) h.oneose(); }, 4400) : null;
+      return { close() { if (closed) return; closed = true; clearTimeout(t); ws.off('message', on); try { ws.send(JSON.stringify(['CLOSE', id])); } catch {} } };
     },
   };
 }
-function liftReadMinors({ authedNow = true, pool = shimPool() } = {}) {
+function liftReadMinors({ entries = mainEntries, actingChurch = '', pubK = cp, churchPubK = cp } = {}) {
   const body = fnBody(STEWARD, 'readMinors() {', 'Steward.readMinors');
-  return new Function('actingChurch', 'pub', 'pool', 'relays', '_isRelayAuthed', '_authFuture', 'MINORS_D', 'return function ' + body + ';')(
-    '', cp, pool, () => [WS_URL], () => authedNow, () => false, 'trinityone/minors:');
+  const okFn = fnBody(STEWARD, 'function _keyReadOk(tok) {', '_keyReadOk');
+  return new Function('actingChurch', 'pub', 'churchPub', 'pool', 'relays', '_authFuture', 'MINORS_D', '_keyReadEpoch', '_keyReadAuthedOn',
+    okFn + '\nreturn function ' + body + ';')(
+    actingChurch, pubK, churchPubK, shimPool(entries), () => Object.keys(entries()), () => false, 'trinityone/minors:', 1, (u) => !!(entries()[u] || {}).ok);
 }
 function liftMeals(name, sig, extra = {}) {
   const body = fnBody(MEALS, sig, name);
-  const names = ['S', 'now', 'CARETEAM_D', 'CAREREQ_D', 'CARECHAT_D', 'NET', '_careTeamWait', 'setTimeout', '_monotonicM', 'publishCareTeam', ...Object.keys(extra)];
+  const names = ['S', 'now', 'CARETEAM_D', 'CAREREQ_D', 'CARECHAT_D', 'NET', '_careTeamWait', 'setTimeout', 'clearTimeout', '_monotonicM', 'publishCareTeam', 'dropPendingCareTeam', ...Object.keys(extra)];
   return (vals) => new Function(...names, 'return ' + body + ';')(...names.map(n => vals[n]));
 }
 const S0 = (over = {}) => {
-  const pool = shimPool();
+  const pool = shimPool();   // the main relay, over the church's logged-in socket
   return {
     churchPub: cp, blockedHere: () => [],
     readMinors: liftReadMinors(),
@@ -195,7 +203,7 @@ test('publishCareTeam (shipped) with the REAL children read writes the care list
 test('publishCareTeam: if the children list cannot be read it publishes NOTHING, says false, and schedules a retry', async () => {
   // a REAL socket that never logged in: the relay withholds the owner-only children list and answers EOSE
   const anon = await connect();
-  const S = S0({ readMinors: liftReadMinors({ authedNow: false, pool: shimPool(() => anon) }) });
+  const S = S0({ readMinors: liftReadMinors({ entries: () => ({ [WS_URL]: { ws: anon, ok: false } }) }) });
   const before = await relayCareTeam();
   const timers = fakeTimers(); let pc;
   pc = liftMeals('publishCareTeam', 'async function publishCareTeam(memberPubs) {')({ S: () => S, now, CARETEAM_D: 'trinityone/careteam:', NET: 'trinityone', _careTeamWait: { pubs: null, tries: 0, timer: 0 }, setTimeout: timers, get publishCareTeam() { return pc; } });
@@ -268,4 +276,110 @@ test('Steward.setMinors (shipped): marking a care-team member as a child takes t
   const pubs = await relayCareTeam();
   assert.ok(pubs.includes(AD.pub), 'CONTROL: the adult was taken off too');
   assert.ok(!pubs.includes(N2.pub), 'a person just marked as a child is still on the care list');
+});
+
+// ── 3. RE-AUDIT OF 0eb3cf9: what counts as KNOWING the children list, and whose retry it is ──────────────────
+async function authedAt(url, who) {
+  const ws = await new Promise((res, rej) => { const w = new WebSocket(url); w.on('open', () => res(w)); w.on('error', rej); });
+  await new Promise((resolve) => {
+    const on = (d) => { const m = JSON.parse(d);
+      if (m[0] === 'AUTH') ws.send(JSON.stringify(['AUTH', finalizeEvent({ kind: 22242, created_at: Math.floor(Date.now() / 1000), tags: [['relay', url], ['challenge', m[1]]], content: '' }, who.sk)]));
+      if (m[0] === 'OK' && m[2] === true) { ws.off('message', on); resolve(); } };
+    ws.on('message', on);
+    ws.send(JSON.stringify(['REQ', 'kick', { kinds: [4], '#p': [who.pub], limit: 1 }]));
+    setTimeout(resolve, 1500);
+  });
+  return ws;
+}
+
+test('readMinors: an EOSE from nostr-tools’ own 4.4 s timer (a relay that said nothing) is NOT “no children”', async () => {
+  const port = await freePort();
+  const wss = new WebSocketServer({ port, host: '127.0.0.1' });   // accepts the REQ and never answers
+  const url = `ws://127.0.0.1:${port}/relay`;
+  const silent = await new Promise((res, rej) => { const w = new WebSocket(url); w.on('open', () => res(w)); w.on('error', rej); });
+  try {
+    const m = await liftReadMinors({ entries: () => ({ [url]: { ws: silent, ok: true, synthetic: true } }) })();
+    assert.equal(m.known, false, 'the library’s timer was taken as the relay saying “no children”');
+  } finally { silent.close(); wss.close(); }
+});
+
+test('readMinors: with two relays, one logged in and one that withheld the list from an un-logged-in socket, the list is UNKNOWN — and publishCareTeam publishes nothing', async () => {
+  // relay 2 is a fresh relay for the same church that never got the children list; the church IS logged in there.
+  const port2 = await freePort(); const url2 = `ws://127.0.0.1:${port2}/relay`;
+  const dir2 = mkdtempSync(join(tmpdir(), 'trin-childcare2-'));
+  const relay2 = spawn(process.execPath, ['scripts/gateway.mjs', String(port2)], { cwd: ROOT, env: { ...process.env, TRINITY_DATA_DIR: dir2, CHURCH_NPUB: npubEncode(cp), RELAY_MAX_EVENTS: '5000' }, stdio: 'ignore' });
+  let ws2 = null, anon = null;
+  try {
+    for (let t0 = Date.now(); Date.now() - t0 < 15000; await sleep(150)) { try { const r = await fetch(`http://127.0.0.1:${port2}/status`); if (r.ok) break; } catch {} }
+    ws2 = await authedAt(url2, church);
+    anon = await connect();   // the main relay, which HOLDS the list, over a socket that never logged in
+    const entries = () => ({ [url2]: { ws: ws2, ok: true }, [WS_URL]: { ws: anon, ok: false } });
+    const m = await liftReadMinors({ entries })();
+    assert.equal(m.known, false, 'one logged-in relay with no list vouched for another that withheld it — “no children”');
+    const S = S0({ readMinors: liftReadMinors({ entries }) });
+    const before = await relayCareTeam();
+    const w = { pubs: null, cp: '', tries: 0, timer: 0 }; let pc;
+    pc = liftMeals('publishCareTeam', 'async function publishCareTeam(memberPubs) {')({ S: () => S, now, CARETEAM_D: 'trinityone/careteam:', NET: 'trinityone', _careTeamWait: w, setTimeout: fakeTimers(), get publishCareTeam() { return pc; } });
+    assert.equal(await pc([CH.pub, AD.pub]), false, 'the care list was published on a children list one relay withheld');
+    await sleep(200);
+    assert.deepEqual(await relayCareTeam(), before, 'the relay’s care list changed');
+  } finally { try { ws2 && ws2.close(); } catch {} try { anon && anon.close(); } catch {} try { relay2.kill('SIGKILL'); } catch {} try { rmSync(dir2, { recursive: true, force: true }); } catch {} }
+});
+
+test('publishCareTeam: a retry asked for one church never publishes after the console moves to another (and dropPendingCareTeam clears it)', async () => {
+  const OTHER = K();
+  const sent = [];
+  let known = false;
+  const S = { churchPub: cp, actingChurch: '', blockedHere: () => [], readMinors: async () => (known ? { known: true, list: [] } : { known: false, list: [] }),
+    publishSigned: async (t) => { sent.push(t); return true; } };
+  const w = { pubs: null, cp: '', tries: 0, timer: 0 };
+  const timers = fakeTimers(); let pc, drop;
+  const vals = { S: () => S, now, CARETEAM_D: 'trinityone/careteam:', NET: 'trinityone', _careTeamWait: w, setTimeout: timers, clearTimeout: () => {}, get publishCareTeam() { return pc; }, get dropPendingCareTeam() { return drop; } };
+  drop = liftMeals('dropPendingCareTeam', 'function dropPendingCareTeam() {')(vals);   // first: publishCareTeam's retry calls it
+  pc = liftMeals('publishCareTeam', 'async function publishCareTeam(memberPubs) {')(vals);
+  assert.equal(await pc([AD.pub, M.pub]), false, 'setup: an unknown children list must not publish');
+  assert.equal(timers.pending.length, 1, 'setup: a retry should be waiting');
+  // a key restore: the same console is now church OTHER, and its children list now reads fine
+  S.churchPub = OTHER.pub; known = true;
+  timers.pending[0]();
+  await sleep(50);
+  assert.deepEqual(sent.map(t => t.tags[0][1]), [], 'church A’s carers were published as church B’s care list: ' + sent.map(t => t.content).join(' | '));
+  // CONTROL: on the SAME church the retry does publish
+  S.churchPub = cp; known = false; w.timer = 0;
+  await pc([AD.pub]);
+  known = true; timers.pending[timers.pending.length - 1]();
+  await sleep(50);
+  assert.equal(sent.length, 1, 'CONTROL: a retry for the church we are still on did not publish');
+  // and the church reset's hook empties the queue
+  known = false; await pc([AD.pub]);
+  drop();
+  assert.equal(w.pubs, null, 'dropPendingCareTeam left a pending list');
+});
+
+test('a delegated steward WITHOUT safeguarding never reads the children list as known, and their care reply keeps the request’s own audience', async () => {
+  const DEL = K();
+  const okP = async (evt, what) => { const [o, why] = await publish(pub, evt); assert.equal(o, true, what + ' — ' + why); };
+  await okP(ev(church, 'trinityone/stewards:' + cp, JSON.stringify({ pubkeys: [DEL.pub], caps: { [DEL.pub]: ['care'] } })), 'a care-only delegate');
+  await sleep(150);
+  const delWs = await authed(DEL);
+  try {
+    const got = await query(delWs, { kinds: [30078], '#d': [D.minors] });
+    assert.equal(got.length, 0, 'setup: the relay served the children list to a care-only delegate');
+    const entries = () => ({ [WS_URL]: { ws: delWs, ok: true } });
+    const m = await liftReadMinors({ entries, actingChurch: cp, pubK: cp, churchPubK: DEL.pub })();
+    assert.equal(m.known, false, 'a delegate’s withheld (empty) answer was taken as “no children”');
+    // their reply on an ordinary adult request: only the request's own audience, never widened
+    const r3 = rid(M, 'r3');
+    await okP(ev(M, 'trinityone/carereq:' + r3, JSON.stringify({ keys: { [cp]: 'w', [M.pub]: 'w', [AD.pub]: 'w' }, enc: 'x' }), [['church', cp], ['aud', 'team']]), 'request r3');
+    await sleep(150);
+    const sealedTo = [];
+    const pool = shimPool(entries);
+    const S = { churchPub: DEL.pub, actingChurch: cp, blockedHere: () => [], readMinors: liftReadMinors({ entries, actingChurch: cp, pubK: cp, churchPubK: DEL.pub }),
+      subscribeMany: (f, h) => pool.subscribeMany([WS_URL], f, h), sealToPubs: (p) => { sealedTo.push(p.slice()); return { keys: {}, enc: 'x' }; }, publishSigned: async () => true };
+    const send = liftMeals('sendCareChat', 'async function sendCareChat(reqId, requesterPub, text, opts) {')({ S: () => S, now, CARETEAM_D: 'trinityone/careteam:', CAREREQ_D: 'trinityone/carereq:', CARECHAT_D: 'trinityone/carechat:', NET: 'trinityone', setTimeout, _monotonicM: () => now() });
+    await send(r3, M.pub, 'on our way');
+    assert.equal(sealedTo.length, 1, 'the delegate’s reply was not sealed');
+    // (+ the sender: sendCareChat seals to S().churchPub, which on a delegate's console is the delegate's own key)
+    assert.deepEqual(sealedTo[0].slice().sort(), [cp, M.pub, AD.pub, DEL.pub].sort(), 'the delegate’s reply went beyond the request’s own audience');
+  } finally { delWs.close(); }
 });

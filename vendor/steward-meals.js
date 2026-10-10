@@ -372,20 +372,36 @@
       if (!roster || !Array.isArray(roster.people)) return false;
       return roster.people.some((p) => p && p.pub && p.pub.toLowerCase() === memberPub.toLowerCase());
     }
-    const _careTeamWait = { pubs: null, tries: 0, timer: 0 };
+    const _careTeamWait = { pubs: null, cp: "", tries: 0, timer: 0 };
+    function dropPendingCareTeam() {
+      try {
+        if (_careTeamWait.timer) clearTimeout(_careTeamWait.timer);
+      } catch (e) {
+      }
+      _careTeamWait.timer = 0;
+      _careTeamWait.pubs = null;
+      _careTeamWait.cp = "";
+      _careTeamWait.tries = 0;
+    }
     async function publishCareTeam(memberPubs) {
       if (!S() || !S().publishSigned || !S().churchPub) return null;
       if (S().actingChurch) return null;
       const cp = S().churchPub;
       const m = S().readMinors ? await S().readMinors() : null;
+      if (!S() || S().churchPub !== cp || S().actingChurch) return null;
       if (!m || !m.known) {
         _careTeamWait.pubs = memberPubs || [];
+        _careTeamWait.cp = cp;
         _careTeamWait.tries = 0;
         if (!_careTeamWait.timer) {
           const again = () => {
             _careTeamWait.timer = 0;
             const pending = _careTeamWait.pubs;
             if (!pending || ++_careTeamWait.tries > 15) return;
+            if (!S() || S().actingChurch || S().churchPub !== _careTeamWait.cp) {
+              dropPendingCareTeam();
+              return;
+            }
             const tries = _careTeamWait.tries;
             publishCareTeam(pending).then((r) => {
               _careTeamWait.tries = tries;
@@ -398,6 +414,7 @@
         return false;
       }
       _careTeamWait.pubs = null;
+      _careTeamWait.cp = "";
       const minors = new Set(m.list.map((p) => String(p || "").toLowerCase()));
       const blocked = new Set((S().blockedHere && S().blockedHere() || []).map((p) => String(p || "").toLowerCase()));
       const pubs = [.../* @__PURE__ */ new Set([cp, ...(memberPubs || []).map((p) => String(p || "").trim().toLowerCase()).filter((p) => p && !blocked.has(p) && !minors.has(p))])];
@@ -705,6 +722,7 @@
       // care-team recipient roster (for the "ask for help" seal)
       publishCareTeam,
       refreshCareTeam,
+      dropPendingCareTeam,
       // "ask for help" requests (console side): triage / approve / decline / thread
       subscribeCareRequests,
       setCareRequestStatus,

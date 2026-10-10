@@ -2854,6 +2854,7 @@ function _resetChurchScopedState() {
   _mediaKeyHex = null; _mediaKeyRing = []; _mediaKeyDocKeys = null; _mediaKeyChecked = false; _mediaKeyPushRefused = null;
   // …and no read, publish or "we looked" opened before this line may count afterwards — see _keyReadOk.
   _keyReadEpoch++; _careKeyVer++; _mediaKeyVer++;
+  try { const M = window.StewardMeals; if (M && M.dropPendingCareTeam) M.dropPendingCareTeam(); } catch (e) {}   // a care list waiting to be retried belongs to the church it was asked for
   // Every capability envelope belongs here too. The comment above is not decorative: carrying a `checked`
   // flag across a church switch answers "already looked" for a church nobody has looked at.
   for (const k of Object.keys(CAP_KEYS)) _capState[k] = { ring: [], docKeys: null, rev: 1, at: 0, checked: false };
@@ -7343,34 +7344,54 @@ window.Steward = {
   // places that publish the care list (Settings -> Features, the rota's roster editor) usually saw no children
   // and published the child onto it (audit of 8fb38d9).
   //
-  // `known` is the honest question, as minorsKnown() asks it in subscribeSafeguard: we hold the church-signed
-  // document, or the relay said "that is everything" while we were authenticated to read an owner-only doc.
-  // Authentication is required BEFORE the REQ as well as at EOSE: a REQ answered before the login landed is
-  // answered as a stranger (empty), and an EOSE that happens to arrive after the login would otherwise vouch for
-  // that empty answer. Anything else — no relay, timeout, unreadable content — is `known: false`, and the caller
-  // decides what that means.
+  // `known: false` — no relay, a relay that did not answer trustworthily (see inside), unreadable content, or a
+  // delegate's empty answer — and the caller decides what that means.
   readMinors() {
     const cp = actingChurch || pub;
-    if (!cp) return Promise.resolve({ known: false, list: [] });
-    const authedAtStart = _isRelayAuthed();
+    const urls = cp ? relays() : [];
+    if (!cp || !urls.length) return Promise.resolve({ known: false, list: [] });
+    // AN EMPTY ANSWER MEANS "NO CHILDREN" ONLY ON THE CHURCH'S OWN CONSOLE. minors: is owner-only on the relay
+    // and served to a delegate only if they hold the safeguarding job (or are on the care team), so a delegate's
+    // empty answer cannot tell "no children" from "not shown to you" — for a delegate it is UNKNOWN, always
+    // (owner's lead, 2026-10-10). A delegate who IS shown the document gets it, and that is known.
+    const ownerView = !actingChurch && pub === churchPub;
+    // ONE SUBSCRIPTION PER RELAY, AND EVERY RELAY MUST ANSWER TRUSTWORTHILY — the key reads' rule (_openKeyRead,
+    // _keyReadOk), for the same reasons (re-audit of 0eb3cf9): nostr-tools fires oneose from its own 4.4 s timer
+    // for a relay that said nothing, on our own close, and on a CLOSED; and _isRelayAuthed() is true if ANY relay
+    // is logged in, so one authenticated relay vouched for another that refused our login and withheld the list.
+    // Here each relay's EOSE counts only if it came before the library's timer, was not a CLOSED or our close,
+    // is for the church and epoch we are still on, and came over a socket whose login THAT relay accepted.
+    // Anything less from any relay in the set is UNKNOWN. The newest church-signed copy any relay sent is used.
+    const epoch = _keyReadEpoch, at = Date.now();
     return new Promise((resolve) => {
-      let best = null, done = false, sub = null;
-      const finish = (eosed) => {
-        if (done) return; done = true; try { sub && sub.close(); } catch (e) {}
+      let best = null, done = false;
+      const answers = new Map(), subs = [];
+      const finish = () => {
+        if (done) return; done = true;
+        for (const x of subs) { x.tok.closed = true; try { x.sub.close(); } catch (e) {} }
+        if (!urls.every(u => answers.get(u) === true)) return resolve({ known: false, list: [] });
         if (best) {
           let list = null; try { list = (JSON.parse(best.content || '{}').pubkeys) || []; } catch (e) { list = null; }
           if (!Array.isArray(list)) return resolve({ known: false, list: [] });
           return resolve({ known: true, list: list.map(x => String(x || '').toLowerCase()).filter(Boolean) });
         }
-        resolve({ known: !!(eosed && authedAtStart && _isRelayAuthed()), list: [] });
+        resolve({ known: ownerView, list: [] });
       };
-      try {
-        sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [cp], '#d': [MINORS_D + cp] }], {
-          onevent(e) { if (!e || e.pubkey !== cp || _authFuture(e)) return; if (!best || e.created_at > best.created_at) best = e; },
-          oneose() { finish(true); },
-        });
-      } catch (e) { finish(false); return; }
-      setTimeout(() => finish(false), 5000);
+      for (const url of urls) {
+        const tok = { cp, epoch, at, url, wait: 4400, closed: false, relayClosed: false };
+        let sub = null;
+        try {
+          sub = pool.subscribeMany([url], [{ kinds: [30078], authors: [cp], '#d': [MINORS_D + cp] }], {
+            onevent(e) { if (tok.closed || !e || e.pubkey !== cp || _authFuture(e)) return; if (!best || e.created_at > best.created_at) best = e; },
+            // a microtask later, so a CLOSED's onclose (which nostr-tools runs right after this) has marked the token
+            oneose() { queueMicrotask(() => { if (done) return; answers.set(url, _keyReadOk(tok)); if (urls.every(u => answers.has(u))) finish(); }); },
+            onclose() { tok.relayClosed = true; },
+          });
+        } catch (e) { answers.set(url, false); }
+        if (sub) subs.push({ tok, sub });
+      }
+      if (urls.every(u => answers.has(u))) finish();
+      setTimeout(finish, 5000);
     });
   },
   setBlocked(pubkeys) {   // replace the whole blocklist (pass hex pubkeys); a 2nd argument { unblock: [...] } names who THIS action lets back in
@@ -11129,6 +11150,7 @@ window.Steward = {
     // re-entering the SAME church passed every "is this still the current church?" check (audit of e6a2e02).
     // See _keyReadOk. The name key's flag is cleared above; this epoch covers it too.
     _keyReadEpoch++; _careKeyVer++; _mediaKeyVer++;
+    try { const M = window.StewardMeals; if (M && M.dropPendingCareTeam) M.dropPendingCareTeam(); } catch (e) {}   // a care list waiting to be retried belongs to the church it was asked for
     _latestGuardNotice.clear();  // see _resetChurchScopedState — one church's guardian-notice retries must not send another's
     // NOTE: the block above is now the same list as _resetChurchScopedState(), minus the NIP-42 state. A
     // SWITCH keeps this device's key while a RESTORE replaces it, so clearing the authenticated sockets here is

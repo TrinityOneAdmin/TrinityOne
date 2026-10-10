@@ -375,7 +375,11 @@ import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   //
   // request to = the church key (always, so the owner can triage) + the care-team group's members (passed in
   // from the console, which holds the rosters). Just pubkeys, no secrets. Re-published when the team changes.
   // WHILE THE CHILDREN LIST CANNOT BE READ, the newest list asked for waits here and is retried (see below).
-  const _careTeamWait = { pubs: null, tries: 0, timer: 0 };
+  // CARRIES THE CHURCH IT WAS ASKED FOR (re-audit of 0eb3cf9): a key restore or identity switch changes churchPub
+  // without a reload, and a retry holding only the people list published church A's carers as church B's care
+  // list. A retry for a church we are no longer on is dropped, and the console's church reset drops it at once.
+  const _careTeamWait = { pubs: null, cp: '', tries: 0, timer: 0 };
+  function dropPendingCareTeam() { try { if (_careTeamWait.timer) clearTimeout(_careTeamWait.timer); } catch (e) {} _careTeamWait.timer = 0; _careTeamWait.pubs = null; _careTeamWait.cp = ''; _careTeamWait.tries = 0; }
   async function publishCareTeam(memberPubs) {
     if (!S() || !S().publishSigned || !S().churchPub) return null;
     // A DELEGATED CONSOLE DOES NOT PUBLISH THIS. `cp` below is `churchPub` — the delegate's own key, not the church
@@ -398,12 +402,14 @@ import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   //
     // save, Block, or child marking tries again after that. Adults are never held back by a church that has no
     // children: a relay that answers "no such document" while we are logged in is a known, empty list.
     const m = S().readMinors ? await S().readMinors() : null;
+    if (!S() || S().churchPub !== cp || S().actingChurch) return null;   // the church changed while we read: not ours to publish
     if (!m || !m.known) {
-      _careTeamWait.pubs = memberPubs || []; _careTeamWait.tries = 0;
+      _careTeamWait.pubs = memberPubs || []; _careTeamWait.cp = cp; _careTeamWait.tries = 0;
       if (!_careTeamWait.timer) {
         const again = () => {
           _careTeamWait.timer = 0;
           const pending = _careTeamWait.pubs; if (!pending || ++_careTeamWait.tries > 15) return;
+          if (!S() || S().actingChurch || S().churchPub !== _careTeamWait.cp) { dropPendingCareTeam(); return; }   // asked for another church
           const tries = _careTeamWait.tries;
           publishCareTeam(pending).then((r) => {
             _careTeamWait.tries = tries;   // a failed retry must not reset the count it is counting
@@ -414,7 +420,7 @@ import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   //
       }
       return false;
     }
-    _careTeamWait.pubs = null;
+    _careTeamWait.pubs = null; _careTeamWait.cp = '';
     const minors = new Set(m.list.map(p => String(p || '').toLowerCase()));
     // NEVER SOMEONE THIS CONSOLE HOLDS AS BLOCKED (owner, 2026-10-02: blocking removes someone from the care list).
     // The one door this document is written through — Block, the roster editor (publishCareTeamFor) and the Care
@@ -614,7 +620,7 @@ import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   //
     // settings
     subscribeSettings, setEnabled, cachedEnabled,
     // care-team recipient roster (for the "ask for help" seal)
-    publishCareTeam, refreshCareTeam,
+    publishCareTeam, refreshCareTeam, dropPendingCareTeam,
     // "ask for help" requests (console side): triage / approve / decline / thread
     subscribeCareRequests, setCareRequestStatus, declineCareRequest, approveCareRequest, subscribeCareChat, sendCareChat,
     // needs
