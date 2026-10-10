@@ -2552,6 +2552,16 @@ function _blockedLastSet(cp) {
   try { const l = JSON.parse(lsGet(BLOCKED_LAST_LS + cp) || '[]'); return new Set((Array.isArray(l) ? l : []).map(p => String(p).toLowerCase())); }
   catch (e) { return new Set(); }
 }
+// THIS CHURCH'S LAST GENUINE CHILDREN LIST ON THIS DEVICE — readMinors' floor while a relay is down, and its answer
+// when none is reachable (final audit of 1cf269c, option A). Written by readMinors (a genuine answer; the union
+// while a relay is left out) and by setMinors (this console's own marking, once it landed). Names children by
+// pubkey only, on the steward's own device, beside the member and blocked lists it already keeps.
+const MINORS_LAST_LS = 'trinityone.steward.minorslast.';
+function _minorsLastGet(cp) {
+  try { const v = lsGet(MINORS_LAST_LS + cp); if (v == null) return null; const l = JSON.parse(v); return Array.isArray(l) ? l.map(p => String(p).toLowerCase()) : null; }
+  catch (e) { return null; }
+}
+function _minorsLastSet(cp, list) { if (cp) lsSet(MINORS_LAST_LS + cp, JSON.stringify([...new Set((list || []).map(p => String(p).toLowerCase()))])); }
 function _noteBlockedList(cp, epoch, list, at) {
   if (!_stillOn(cp, epoch) || (at || 0) < _localBlockedAt) return;   // another church now, or older than what we hold
   _localBlocked = new Set((list || []).map(p => String(p).toLowerCase()));
@@ -7348,40 +7358,66 @@ window.Steward = {
   // delegate's empty answer — and the caller decides what that means.
   readMinors() {
     const cp = actingChurch || pub;
-    const urls = cp ? relays() : [];
-    if (!cp || !urls.length) return Promise.resolve({ known: false, list: [] });
+    const unknown = { known: false, list: [] };
+    if (!cp) return Promise.resolve(unknown);
+    const urls = relays();
+    const device = _minorsLastGet(cp);   // this church's last genuine children list on this device, or null
+    if (!urls.length) return Promise.resolve(device ? { known: true, list: device } : unknown);
     // AN EMPTY ANSWER MEANS "NO CHILDREN" ONLY ON THE CHURCH'S OWN CONSOLE. minors: is owner-only on the relay
     // and served to a delegate only if they hold the safeguarding job (or are on the care team), so a delegate's
     // empty answer cannot tell "no children" from "not shown to you" — for a delegate it is UNKNOWN, always
     // (owner's lead, 2026-10-10). A delegate who IS shown the document gets it, and that is known.
     const ownerView = !actingChurch && pub === churchPub;
-    // ONE SUBSCRIPTION PER RELAY, AND EVERY RELAY MUST ANSWER TRUSTWORTHILY — the key reads' rule (_openKeyRead,
-    // _keyReadOk), for the same reasons (re-audit of 0eb3cf9): nostr-tools fires oneose from its own 4.4 s timer
-    // for a relay that said nothing, on our own close, and on a CLOSED; and _isRelayAuthed() is true if ANY relay
-    // is logged in, so one authenticated relay vouched for another that refused our login and withheld the list.
-    // Here each relay's EOSE counts only if it came before the library's timer, was not a CLOSED or our close,
-    // is for the church and epoch we are still on, and came over a socket whose login THAT relay accepted.
-    // Anything less from any relay in the set is UNKNOWN. The newest church-signed copy any relay sent is used.
+    // ONE SUBSCRIPTION PER RELAY, each answer judged by the key reads' rule (_openKeyRead, _keyReadOk; re-audit
+    // of 0eb3cf9): an EOSE counts only if it came before the library's own timer, was not a CLOSED or our own
+    // close, is for the church and epoch we are still on, and came over a socket whose login THAT relay accepted.
+    // A relay that is already connected gets `maxWait`, as the key reads do, so a slow but genuine answer beats
+    // nostr-tools' 4.4 s timer instead of reading as unknown.
+    //
+    // …AND A RELAY WHOSE CONNECTION HAS FAILED DOES NOT HOLD IT (final audit of 1cf269c; owner, option A) — the
+    // blocklist read's `withoutFailed` rule (audit of 831dcea), because a proved relay stays in the set for up to
+    // 30 days and "every relay" froze the care list for as long as one was down. The list is KNOWN once every
+    // relay that is CONNECTED has answered genuinely and at least one has. A connected relay that did not answer
+    // genuinely (timer, CLOSED, login not accepted) still makes it UNKNOWN. If NO relay is reachable, this
+    // church's last genuine list on this device is used if there is one; otherwise UNKNOWN.
+    //
+    // MERGE, NEVER SHRINK, WHILE A RELAY IS LEFT OUT: then the answer is the relays' newest list PLUS everyone on
+    // the device copy, and that union is kept. The missing relay may be the only one holding the newest marking,
+    // and the list is used only to keep people OFF the care list, so a person wrongly treated as a child loses a
+    // care seat (visible, fixable) while a child wrongly treated as an adult is sealed asks for help. When every
+    // relay answered genuinely, the newest church-signed list replaces the device copy, as the blocklist does.
     const epoch = _keyReadEpoch, at = Date.now();
+    let longest = 4400;
     return new Promise((resolve) => {
       let best = null, done = false;
       const answers = new Map(), subs = [];
       const finish = () => {
         if (done) return; done = true;
         for (const x of subs) { x.tok.closed = true; try { x.sub.close(); } catch (e) {} }
-        if (!urls.every(u => answers.get(u) === true)) return resolve({ known: false, list: [] });
+        const ok = urls.filter(u => answers.get(u) === true);
+        const left = urls.filter(u => answers.get(u) !== true);
+        if (!left.every(u => !_keyReadConnected(u))) return resolve(unknown);   // a reachable relay did not answer
+        if (!ok.length) return resolve(device ? { known: true, list: device } : unknown);   // none reachable
+        let live;
         if (best) {
           let list = null; try { list = (JSON.parse(best.content || '{}').pubkeys) || []; } catch (e) { list = null; }
-          if (!Array.isArray(list)) return resolve({ known: false, list: [] });
-          return resolve({ known: true, list: list.map(x => String(x || '').toLowerCase()).filter(Boolean) });
-        }
-        resolve({ known: ownerView, list: [] });
+          if (!Array.isArray(list)) return resolve(unknown);
+          live = list.map(x => String(x || '').toLowerCase()).filter(Boolean);
+        } else if (ownerView) live = [];
+        else return resolve(unknown);
+        const list = left.length ? [...new Set([...live, ...(device || [])])] : live;
+        if (_stillOn(cp, epoch)) _minorsLastSet(cp, list);
+        resolve({ known: true, list });
       };
       for (const url of urls) {
-        const tok = { cp, epoch, at, url, wait: 4400, closed: false, relayClosed: false };
+        let up = false; try { const r = pool.relays.get(normalizeURL(url)); up = !!(r && r.connected); } catch (e) {}
+        const wait = up ? _KEY_READ_LONG_WAIT : 4400;
+        if (wait > longest) longest = wait;
+        const tok = { cp, epoch, at, url, wait, closed: false, relayClosed: false };
         let sub = null;
         try {
           sub = pool.subscribeMany([url], [{ kinds: [30078], authors: [cp], '#d': [MINORS_D + cp] }], {
+            ...(up ? { maxWait: _KEY_READ_LONG_WAIT } : {}),
             onevent(e) { if (tok.closed || !e || e.pubkey !== cp || _authFuture(e)) return; if (!best || e.created_at > best.created_at) best = e; },
             // a microtask later, so a CLOSED's onclose (which nostr-tools runs right after this) has marked the token
             oneose() { queueMicrotask(() => { if (done) return; answers.set(url, _keyReadOk(tok)); if (urls.every(u => answers.has(u))) finish(); }); },
@@ -7391,7 +7427,7 @@ window.Steward = {
         if (sub) subs.push({ tok, sub });
       }
       if (urls.every(u => answers.has(u))) finish();
-      setTimeout(finish, 5000);
+      setTimeout(finish, longest + 600);
     });
   },
   setBlocked(pubkeys) {   // replace the whole blocklist (pass hex pubkeys); a 2nd argument { unblock: [...] } names who THIS action lets back in
@@ -8114,7 +8150,7 @@ window.Steward = {
     // the list back from the relay itself (refreshCareTeam -> readMinors), so it acts on what the relay holds.
     const r = _landed('list of children', _skewGate(() => _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', MINORS_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list }) }), sk))));
     return Promise.resolve(r).then((ok) => {
-      if (ok) { try { const M = window.StewardMeals; if (M && M.refreshCareTeam) M.refreshCareTeam().catch(() => {}); } catch (e) {} }
+      if (ok) { try { _minorsLastSet(pub, list); } catch (e) {} try { const M = window.StewardMeals; if (M && M.refreshCareTeam) M.refreshCareTeam().catch(() => {}); } catch (e) {} }
       return ok;
     });
   },

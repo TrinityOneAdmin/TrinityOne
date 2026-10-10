@@ -16967,6 +16967,20 @@ zoo`.split("\n");
       return /* @__PURE__ */ new Set();
     }
   }
+  var MINORS_LAST_LS = "trinityone.steward.minorslast.";
+  function _minorsLastGet(cp) {
+    try {
+      const v = lsGet(MINORS_LAST_LS + cp);
+      if (v == null) return null;
+      const l = JSON.parse(v);
+      return Array.isArray(l) ? l.map((p) => String(p).toLowerCase()) : null;
+    } catch (e) {
+      return null;
+    }
+  }
+  function _minorsLastSet(cp, list) {
+    if (cp) lsSet(MINORS_LAST_LS + cp, JSON.stringify([...new Set((list || []).map((p) => String(p).toLowerCase()))]));
+  }
   function _noteBlockedList(cp, epoch, list, at) {
     if (!_stillOn(cp, epoch) || (at || 0) < _localBlockedAt) return;
     _localBlocked = new Set((list || []).map((p) => String(p).toLowerCase()));
@@ -20956,10 +20970,14 @@ zoo`.split("\n");
     // delegate's empty answer — and the caller decides what that means.
     readMinors() {
       const cp = actingChurch || pub;
-      const urls = cp ? relays() : [];
-      if (!cp || !urls.length) return Promise.resolve({ known: false, list: [] });
+      const unknown = { known: false, list: [] };
+      if (!cp) return Promise.resolve(unknown);
+      const urls = relays();
+      const device = _minorsLastGet(cp);
+      if (!urls.length) return Promise.resolve(device ? { known: true, list: device } : unknown);
       const ownerView = !actingChurch && pub === churchPub;
       const epoch = _keyReadEpoch, at = Date.now();
+      let longest = 4400;
       return new Promise((resolve) => {
         let best = null, done = false;
         const answers = /* @__PURE__ */ new Map(), subs = [];
@@ -20973,24 +20991,40 @@ zoo`.split("\n");
             } catch (e) {
             }
           }
-          if (!urls.every((u) => answers.get(u) === true)) return resolve({ known: false, list: [] });
+          const ok = urls.filter((u) => answers.get(u) === true);
+          const left = urls.filter((u) => answers.get(u) !== true);
+          if (!left.every((u) => !_keyReadConnected(u))) return resolve(unknown);
+          if (!ok.length) return resolve(device ? { known: true, list: device } : unknown);
+          let live;
           if (best) {
-            let list = null;
+            let list2 = null;
             try {
-              list = JSON.parse(best.content || "{}").pubkeys || [];
+              list2 = JSON.parse(best.content || "{}").pubkeys || [];
             } catch (e) {
-              list = null;
+              list2 = null;
             }
-            if (!Array.isArray(list)) return resolve({ known: false, list: [] });
-            return resolve({ known: true, list: list.map((x) => String(x || "").toLowerCase()).filter(Boolean) });
-          }
-          resolve({ known: ownerView, list: [] });
+            if (!Array.isArray(list2)) return resolve(unknown);
+            live = list2.map((x) => String(x || "").toLowerCase()).filter(Boolean);
+          } else if (ownerView) live = [];
+          else return resolve(unknown);
+          const list = left.length ? [.../* @__PURE__ */ new Set([...live, ...device || []])] : live;
+          if (_stillOn(cp, epoch)) _minorsLastSet(cp, list);
+          resolve({ known: true, list });
         };
         for (const url of urls) {
-          const tok = { cp, epoch, at, url, wait: 4400, closed: false, relayClosed: false };
+          let up = false;
+          try {
+            const r = pool.relays.get(normalizeURL2(url));
+            up = !!(r && r.connected);
+          } catch (e) {
+          }
+          const wait = up ? _KEY_READ_LONG_WAIT : 4400;
+          if (wait > longest) longest = wait;
+          const tok = { cp, epoch, at, url, wait, closed: false, relayClosed: false };
           let sub = null;
           try {
             sub = pool.subscribeMany([url], [{ kinds: [30078], authors: [cp], "#d": [MINORS_D + cp] }], {
+              ...up ? { maxWait: _KEY_READ_LONG_WAIT } : {},
               onevent(e) {
                 if (tok.closed || !e || e.pubkey !== cp || _authFuture(e)) return;
                 if (!best || e.created_at > best.created_at) best = e;
@@ -21013,7 +21047,7 @@ zoo`.split("\n");
           if (sub) subs.push({ tok, sub });
         }
         if (urls.every((u) => answers.has(u))) finish();
-        setTimeout(finish, 5e3);
+        setTimeout(finish, longest + 600);
       });
     },
     setBlocked(pubkeys) {
@@ -21499,6 +21533,10 @@ zoo`.split("\n");
       const r = _landed("list of children", _skewGate(() => _publishToRelays(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", MINORS_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list }) }), sk))));
       return Promise.resolve(r).then((ok) => {
         if (ok) {
+          try {
+            _minorsLastSet(pub, list);
+          } catch (e) {
+          }
           try {
             const M = window.StewardMeals;
             if (M && M.refreshCareTeam) M.refreshCareTeam().catch(() => {

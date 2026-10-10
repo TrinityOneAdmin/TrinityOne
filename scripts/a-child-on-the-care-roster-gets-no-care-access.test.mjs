@@ -129,36 +129,48 @@ test('the child is refused by the CHURCH-TAG filter too (how the care screens ac
 // actually fed it left every test green. These run the SHIPPED readMinors (vendor/steward.js) against the live
 // gateway above, through a minimal pool that is genuinely NIP-42-authenticated as the church key, and hand its
 // answer to the SHIPPED publishCareTeam / refreshCareTeam / sendCareChat (vendor/steward-meals.js), whose writes
-// go to the same relay. What is supplied, not shipped: the pool (one socket per relay URL), relays(), and
-// _keyReadAuthedOn (true for a URL only if THAT socket's NIP-42 login really got the relay's OK, false for a
-// socket that never logged in). readMinors' trust rule, _keyReadOk, is lifted from the bundle with it.
+// go to the same relay. What is supplied, not shipped: the pool (one socket per relay URL, plus the two things
+// nostr-tools does on its own — the EOSE timer at maxWait or 4400 ms, and onclose+oneose for a relay it could not
+// reach), relays(), the device storage, and _keyReadAuthedOn (true for a URL only if THAT socket's NIP-42 login
+// really got the relay's OK). readMinors' rules (_keyReadOk, _keyReadConnected, the device copy) are lifted from
+// the bundle with it.
 const STEWARD = readFileSync(join(ROOT, 'vendor/steward.js'), 'utf8');
 let churchWs = null;
-// entries(): url -> { ws, ok, synthetic }. `synthetic` emulates nostr-tools' own timer (baseEoseTimeout 4400 ms,
-// pool.js): a relay that never answers still gets an oneose, from the library, 4400 ms after the REQ.
+// entries(): url -> { ws, ok, down, delay }. down: nothing listens there (not in pool.relays, fails at once).
+// delay: the relay's frames reach us that many ms late (a slow but alive relay).
 const mainEntries = () => ({ [WS_URL]: { ws: churchWs, ok: true } });
 function shimPool(entries = mainEntries) {
   return {
+    get relays() { const m = new Map(); for (const [u, e] of Object.entries(entries())) if (!e.down) m.set(u, { connected: true }); return m; },
     subscribeMany(urls, filters, h) {
       const ent = entries()[urls[0]];
+      if (ent.down) { setTimeout(() => { h.onclose && h.onclose(['relay connection failed']); h.oneose && h.oneose(); }, 20); return { close() {} }; }
       const ws = ent.ws;
-      const id = 's' + Math.random().toString(36).slice(2, 9); let closed = false;
-      const on = (d) => { const m = JSON.parse(d); if (m[1] !== id) return;
+      const id = 's' + Math.random().toString(36).slice(2, 9); let closed = false, eosed = false;
+      const on = (d) => { const go = () => { if (closed) return; const m = JSON.parse(d); if (m[1] !== id) return;
         if (m[0] === 'EVENT' && h.onevent) h.onevent(m[2]);
-        if (m[0] === 'EOSE' && h.oneose) h.oneose(); };
+        if (m[0] === 'EOSE' && !eosed) { eosed = true; h.oneose && h.oneose(); } };
+        ent.delay ? setTimeout(go, ent.delay) : go(); };
       ws.on('message', on);
       ws.send(JSON.stringify(['REQ', id, ...filters]));
-      const t = ent.synthetic ? setTimeout(() => { if (!closed && h.oneose) h.oneose(); }, 4400) : null;
+      // nostr-tools' own timer: oneose at maxWait if given, else baseEoseTimeout (4400 ms), whatever the relay did
+      const t = setTimeout(() => { if (!closed && !eosed) { eosed = true; h.oneose && h.oneose(); } }, h.maxWait || 4400);
       return { close() { if (closed) return; closed = true; clearTimeout(t); ws.off('message', on); try { ws.send(JSON.stringify(['CLOSE', id])); } catch {} } };
     },
   };
 }
-function liftReadMinors({ entries = mainEntries, actingChurch = '', pubK = cp, churchPubK = cp } = {}) {
+function liftReadMinors({ entries = mainEntries, actingChurch = '', pubK = cp, churchPubK = cp, store = new Map() } = {}) {
   const body = fnBody(STEWARD, 'readMinors() {', 'Steward.readMinors');
-  const okFn = fnBody(STEWARD, 'function _keyReadOk(tok) {', '_keyReadOk');
-  return new Function('actingChurch', 'pub', 'churchPub', 'pool', 'relays', '_authFuture', 'MINORS_D', '_keyReadEpoch', '_keyReadAuthedOn',
-    okFn + '\nreturn function ' + body + ';')(
-    actingChurch, pubK, churchPubK, shimPool(entries), () => Object.keys(entries()), () => false, 'trinityone/minors:', 1, (u) => !!(entries()[u] || {}).ok);
+  const helpers = [fnBody(STEWARD, 'function _keyReadOk(tok) {', '_keyReadOk'), fnBody(STEWARD, 'function _keyReadConnected(url) {', '_keyReadConnected'),
+    (/\n {2}var MINORS_LAST_LS = [^\n]*;/.exec(STEWARD) || [''])[0], fnBody(STEWARD, 'function _minorsLastGet(cp) {', '_minorsLastGet'), fnBody(STEWARD, 'function _minorsLastSet(cp, list) {', '_minorsLastSet')];
+  assert.ok(helpers[2], 're-anchor: MINORS_LAST_LS is not in the bundle');
+  // esbuild named nostr-tools' normalizeURL `normalizeURL2` in this bundle; a wrong name is a ReferenceError that
+  // readMinors' own try/catch would swallow, silently treating every relay as not connected
+  assert.ok(body.includes('normalizeURL2('), 're-anchor: readMinors no longer calls normalizeURL2 in the bundle');
+  return new Function('actingChurch', 'pub', 'churchPub', 'pool', 'relays', '_authFuture', 'MINORS_D', '_keyReadEpoch', '_keyReadAuthedOn', 'normalizeURL2', '_KEY_READ_LONG_WAIT', '_stillOn', 'lsGet', 'lsSet',
+    helpers.join('\n') + '\nreturn function ' + body + ';')(
+    actingChurch, pubK, churchPubK, shimPool(entries), () => Object.keys(entries()), () => false, 'trinityone/minors:', 1, (u) => !!(entries()[u] || {}).ok,
+    (u) => u, 15000, () => true, (k) => (store.has(k) ? store.get(k) : null), (k, v) => store.set(k, v));
 }
 function liftMeals(name, sig, extra = {}) {
   const body = fnBody(MEALS, sig, name);
@@ -264,14 +276,16 @@ test('Steward.setMinors (shipped): marking a care-team member as a child takes t
   const body = fnBody(STEWARD, 'setMinors(pubkeys) {', 'Steward.setMinors');
   // the bundle's own names for the helpers setMinors calls (esbuild renamed finalizeEvent to finalizeEvent2)
   assert.ok(body.includes('finalizeEvent2('), 're-anchor: setMinors no longer calls finalizeEvent2 in the bundle');
-  const setMinors = new Function('_requireTrustedView', 'sk', '_landed', '_skewGate', '_publishToRelays', 'finalizeEvent2', '_monotonic', 'now', 'MINORS_D', 'pub', 'NET', 'window',
+  const deviceSaved = [];
+  const setMinors = new Function('_requireTrustedView', 'sk', '_landed', '_skewGate', '_publishToRelays', 'finalizeEvent2', '_monotonic', 'now', 'MINORS_D', 'pub', 'NET', 'window', '_minorsLastSet',
     'return function ' + body + ';')(
     () => {}, church.sk, (_w, p) => Promise.resolve(p), (f) => f(),
     async (evt) => { const [o] = await publish(pub, evt); return o; },
-    finalizeEvent, (t) => t, now, 'trinityone/minors:', cp, 'trinityone', win);
+    finalizeEvent, (t) => t, now, 'trinityone/minors:', cp, 'trinityone', win, (c, l) => deviceSaved.push([c, l]));
   const r = await setMinors([CH.pub, KID2.pub, N2.pub]);
   assert.equal(r, true, 'the children list did not land');
   assert.ok(refreshed, 'setMinors did not ask the care module to refresh the care list');
+  assert.deepEqual(deviceSaved.map(([c, l]) => [c, l.slice().sort()]), [[cp, [CH.pub, KID2.pub, N2.pub].sort()]], 'setMinors did not keep its landed list as this church’s device copy');
   await refreshed;
   const pubs = await relayCareTeam();
   assert.ok(pubs.includes(AD.pub), 'CONTROL: the adult was taken off too');
@@ -292,13 +306,13 @@ async function authedAt(url, who) {
   return ws;
 }
 
-test('readMinors: an EOSE from nostr-tools’ own 4.4 s timer (a relay that said nothing) is NOT “no children”', async () => {
+test('readMinors: an EOSE from nostr-tools’ own timer (a connected relay that said nothing until maxWait) is NOT “no children”', async () => {
   const port = await freePort();
   const wss = new WebSocketServer({ port, host: '127.0.0.1' });   // accepts the REQ and never answers
   const url = `ws://127.0.0.1:${port}/relay`;
   const silent = await new Promise((res, rej) => { const w = new WebSocket(url); w.on('open', () => res(w)); w.on('error', rej); });
   try {
-    const m = await liftReadMinors({ entries: () => ({ [url]: { ws: silent, ok: true, synthetic: true } }) })();
+    const m = await liftReadMinors({ entries: () => ({ [url]: { ws: silent, ok: true } }) })();
     assert.equal(m.known, false, 'the library’s timer was taken as the relay saying “no children”');
   } finally { silent.close(); wss.close(); }
 });
@@ -382,4 +396,60 @@ test('a delegated steward WITHOUT safeguarding never reads the children list as 
     // (+ the sender: sendCareChat seals to S().churchPub, which on a delegate's console is the delegate's own key)
     assert.deepEqual(sealedTo[0].slice().sort(), [cp, M.pub, AD.pub, DEL.pub].sort(), 'the delegate’s reply went beyond the request’s own audience');
   } finally { delWs.close(); }
+});
+
+// ── 4. FINAL AUDIT OF 1cf269c (owner, option A): a relay that is DOWN does not freeze the care list ───────────
+const DOWN = 'ws://127.0.0.1:1/relay';   // nothing listens: nostr-tools fails the connection and closes the REQ
+const LAST = 'trinityone.steward.minorslast.' + cp;
+function pcWith(readMinors) {
+  const S = S0({ readMinors }); let pc;
+  pc = liftMeals('publishCareTeam', 'async function publishCareTeam(memberPubs) {')({ S: () => S, now, CARETEAM_D: 'trinityone/careteam:', NET: 'trinityone', _careTeamWait: { pubs: null, cp: '', tries: 0, timer: 0 }, setTimeout: fakeTimers(), get publishCareTeam() { return pc; } });
+  return pc;
+}
+
+test('(a) one church relay permanently DOWN + one healthy logged-in relay: the care list publishes, WITHOUT the child', async () => {
+  const entries = () => ({ [DOWN]: { down: true }, [WS_URL]: { ws: churchWs, ok: true } });
+  const r = await pcWith(liftReadMinors({ entries }))([CH.pub, AD.pub]);
+  assert.equal(r, true, 'a relay that is down froze the care list');
+  const pubs = await relayCareTeam();
+  assert.ok(pubs.includes(AD.pub), 'CONTROL: the adult is missing');
+  assert.ok(!pubs.includes(CH.pub), 'the child was published onto the care list');
+});
+
+test('(b) EVERY relay down, with this church’s children list on the device: publishes using the device copy', async () => {
+  const store = new Map([[LAST, JSON.stringify([CH.pub])]]);
+  const entries = () => ({ [DOWN]: { down: true } });
+  const r = await pcWith(liftReadMinors({ entries, store }))([CH.pub, M.pub]);
+  assert.equal(r, true, 'the device copy was not used when no relay could be reached');
+  const pubs = await relayCareTeam();
+  assert.ok(pubs.includes(M.pub), 'CONTROL: the adult is missing');
+  assert.ok(!pubs.includes(CH.pub), 'the device copy’s child was published onto the care list');
+});
+
+test('(c) EVERY relay down and NO device copy: publishes nothing', async () => {
+  const before = await relayCareTeam();
+  const entries = () => ({ [DOWN]: { down: true } });
+  const r = await pcWith(liftReadMinors({ entries, store: new Map() }))([CH.pub, AD.pub]);
+  assert.equal(r, false, 'a care list was published with no children list at all');
+  await sleep(200);
+  assert.deepEqual(await relayCareTeam(), before, 'the relay’s care list changed');
+});
+
+test('(d) merge, never shrink: while a relay is left out, someone on the device copy stays excluded even if the reachable relay’s list lacks them', async () => {
+  const Y = K();   // marked as a child on this device; the reachable relay's list does not name them
+  const store = new Map([[LAST, JSON.stringify([Y.pub])]]);
+  const floored = () => ({ [DOWN]: { down: true }, [WS_URL]: { ws: churchWs, ok: true } });
+  assert.equal(await pcWith(liftReadMinors({ entries: floored, store }))([Y.pub, AD.pub]), true);
+  assert.ok(!(await relayCareTeam()).includes(Y.pub), 'a relay that missed the newest marking put the child back on the care list');
+  assert.ok(JSON.parse(store.get(LAST)).includes(Y.pub) && JSON.parse(store.get(LAST)).includes(CH.pub), 'the device copy did not become the union');
+  // CONTROL: when EVERY relay answers genuinely, the relays' newest list replaces the device copy
+  const all = await liftReadMinors({ entries: mainEntries, store })();
+  assert.equal(all.known, true);
+  assert.ok(!all.list.includes(Y.pub), 'CONTROL: a full genuine answer did not replace the device copy');
+});
+
+test('(e) a slow but alive relay (answers after 5 s) is read, not treated as unknown (maxWait)', async () => {
+  const m = await liftReadMinors({ entries: () => ({ [WS_URL]: { ws: churchWs, ok: true, delay: 5000 } }) })();
+  assert.equal(m.known, true, 'a relay that answered genuinely after 5 s was treated as unknown');
+  assert.ok(m.list.includes(CH.pub), 'the slow relay’s children list was not used');
 });
