@@ -177,6 +177,68 @@ function regexCanStart(out) {
 // seventeen change under either denominator. Everything else downstream of the number reproduces and is
 // untouched: 70 lines of real code restored, 5 correctly blanked, 0 in neither class, and 61 -> 75 of 78
 // parsing.
+// ── BRING THE HELPERS A SLICE DEPENDS ON ────────────────────────────────────────────────────────────────
+// THE DEFECT CLASS THIS CLOSES, which has now cost four branches and two days. A test lifts one function out
+// of a bundle and runs it with `new Function(...names, 'return ' + body)`. The body calls a helper defined at
+// the TOP LEVEL of that bundle — not a parameter, not a global — so the lifted copy throws
+// `X is not defined` while the shipped app is perfectly fine. Observed: `_nowSecF` (e3f3714, ~102 failures),
+// `STEW_CAP_LABEL` (71194e1, 5), `useSchBlocked` (1), `churchPub` / `churchSk` /
+// `_refreshVisibleNetworkPubs` (fix/network-relay-registration, ~42). Every one was a GREEN product change
+// reported as a red test, and the noise is what let five deleted features hide for two days.
+//
+// Stubbing is the wrong answer — render-jsx-screen.mjs says why: "a silently-stubbed global is how a test
+// ends up asserting about something that is not the code". So this lifts the REAL definitions, the way
+// liftKeyRead / liftWithoutBlocked already do by hand, and just does it by following the references.
+//
+// OPT-IN. fnBody is unchanged and its 251 call sites keep their exact behaviour.
+//
+//     const body = fnBody(BUNDLE, 'function publishThing(');
+//     new Function(...names, deps(BUNDLE, body, names) + 'return ' + body)(...values);
+//
+// `provided` is the names the caller already supplies (its `names` array): those are NOT lifted, because the
+// caller's stub must win — that is how a test substitutes a fake relay or a fixed clock.
+const findTop = (src, forms) => { for (const f of forms) { const i = src.indexOf(f); if (i !== -1) return i; } return -1; };
+export function deps(bundle, body, provided = [], { maxDepth = 4 } = {}) {
+  const have = new Set(provided);
+  const out = [];
+  const seen = new Set();
+  // Scan with strings and comments removed, so a name mentioned in a message or a comment is not chased.
+  const scan = (text, depth) => {
+    if (depth > maxDepth) return;
+    const bare = stripStrings(stripComments(text));
+    for (const m of bare.matchAll(/\b([A-Za-z_$][A-Za-z0-9_$]*)\b/g)) {
+      const name = m[1];
+      if (have.has(name) || seen.has(name)) continue;
+      // Only TOP-LEVEL definitions of the bundle, anchored at its indentation — never a nested one, and
+      // never a property access like `x.foo`.
+      // A helper is a FUNCTION or a top-level VARIABLE. _nowSecF needed both: its own definition and the
+      // `_relaySkewSec` / `_skewMeasuredAt` the skew measurement lives in. Lifting only functions left the
+      // next ReferenceError one layer down — caught by CALLING the lifted function, not merely building it.
+      // `new Function` parses happily and throws only when run, so build-only checks prove nothing here.
+      // A helper is a FUNCTION or a top-level VARIABLE. _nowSecF needed both: itself, and the
+      // `_relaySkewSec` / `_skewMeasuredAt` the skew measurement lives in. Lifting only functions left the
+      // next ReferenceError one layer down — found by CALLING the lifted function, not merely building it.
+      // `new Function` parses happily and throws only when run, so a build-only check proves nothing here.
+      // indexOf, not RegExp: the name is interpolated, and escaping a built pattern got this wrong twice.
+      const fnAt  = findTop(bundle, ['\n  function ' + name + '(', '\n  async function ' + name + '(']);
+      const varAt = findTop(bundle, ['\n  var ' + name + ' ', '\n  let ' + name + ' ', '\n  const ' + name + ' ']);
+      let src = null;
+      if (fnAt !== -1) {
+        src = fnBody(bundle, bundle.indexOf('function ' + name + '(', fnAt));
+      } else if (varAt !== -1) {
+        const semi = bundle.indexOf(';', varAt);
+        if (semi === -1) continue;
+        src = bundle.slice(varAt + 1, semi + 1).trim();
+      } else continue;
+      seen.add(name);
+      scan(src, depth + 1);           // a helper may need a helper, or a variable
+      out.push(src);
+    }
+  };
+  scan(body, 0);
+  return out.length ? out.join('\n') + '\n' : '';
+}
+
 export function stripComments(src) {
   let out = '', q = '';
   for (let i = 0; i < src.length; i++) {
