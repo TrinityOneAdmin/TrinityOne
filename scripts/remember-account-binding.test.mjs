@@ -63,11 +63,14 @@ function rig({ native = true, record = null, markerPub = ALICE } = {}) {
     }
     assert.fail('could not find the end of ' + name);
   };
-  const bodies = ['rememberRead', 'rememberWrite', 'rememberClear', 'rememberedSeed'].map(pick).join('\n')
+  // orphanEncOwner too: rememberedSeed now asks the blob in the hardware store for its owner first. This rig
+  // puts no blob there, so it answers '' and the marker (markerPub) decides, exactly as these cases assume.
+  const bodies = ['rememberRead', 'rememberWrite', 'rememberClear', 'rememberedSeed', 'orphanEncOwner'].map(pick).join('\n')
     .replace(/await import\('@aparajita\/capacitor-secure-storage'\)/g, '({ SecureStorage: __SS })');
   const scope = {
     __SS: SecureStorage,
     REMEMBER_KEY: 'trinityone.nostr.remember',
+    ENC_KEY: 'trinityone.nostr.mnemonic.enc',
     isNative: () => native,
     nowSec: () => Math.floor(Date.now() / 1000),
     encOwnerPub: () => markerPub,

@@ -12078,7 +12078,9 @@ zoo`.split("\n"));
   async function rememberedSeed() {
     const rec = await rememberRead();
     if (!rec) return null;
-    const owner = encOwnerPub();
+    const marker = encOwnerPub() || "";
+    const held = isNative() ? await orphanEncOwner() : "";
+    const owner = held && marker && held.toLowerCase() !== String(marker).toLowerCase() ? "" : held || marker;
     if (!owner || !rec.pub || String(rec.pub).toLowerCase() !== String(owner).toLowerCase()) {
       await rememberClear();
       return null;
