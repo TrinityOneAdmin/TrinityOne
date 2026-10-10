@@ -27,6 +27,8 @@ import { createServer } from 'node:net';
 import { WebSocket, WebSocketServer } from 'ws';
 import { generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure';
 import { npubEncode } from 'nostr-tools/nip19';
+import * as nip44m from 'nostr-tools/nip44';
+const nip44v2 = nip44m.v2;
 import { fnBody } from './test-slice.mjs';
 
 const ROOT = new URL('../', import.meta.url).pathname;
@@ -159,18 +161,34 @@ function shimPool(entries = mainEntries) {
     },
   };
 }
-function liftReadMinors({ entries = mainEntries, actingChurch = '', pubK = cp, churchPubK = cp, store = new Map() } = {}) {
+// THE DEVICE COPY, lifted from the bundle: sealed with the console's own key (audit of c17a640). `store` is a Map
+// standing in for localStorage; `sk` is the console's unlocked key (churchSk), null when locked.
+const fakeLS = (store) => ({ getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)), removeItem: (k) => store.delete(k),
+  key: (i) => [...store.keys()][i] ?? null, get length() { return store.size; } });
+function deviceHelpers() {
+  const lsVar = (/\n {2}var MINORS_LAST_LS = [^\n]*;/.exec(STEWARD) || [''])[0];
+  assert.ok(lsVar, 're-anchor: MINORS_LAST_LS is not in the bundle');
+  const get = fnBody(STEWARD, 'function _minorsLastGet(cp) {', '_minorsLastGet'), set = fnBody(STEWARD, 'function _minorsLastSet(cp, list) {', '_minorsLastSet');
+  // esbuild's names for nostr-tools' nip44 encrypt/decrypt in this bundle — a wrong name throws inside a try and
+  // reads as "no device copy", so assert them
+  assert.ok(get.includes('decrypt3(') && set.includes('encrypt2('), 're-anchor: the device copy no longer seals with encrypt2/decrypt3');
+  return [lsVar, get, set, fnBody(STEWARD, 'function _minorsLastClear(keep) {', '_minorsLastClear')].join('\n');
+}
+const DEVICE_NAMES = ['churchSk', 'encrypt2', 'decrypt3', 'localStorage', 'lsGet', 'lsSet'];
+const deviceVals = (store, sk) => { const ls = fakeLS(store); return [sk, nip44v2.encrypt, nip44v2.decrypt, ls, (k) => ls.getItem(k), (k, v) => ls.setItem(k, v)]; };
+function liftDevice({ store = new Map(), sk = church.sk } = {}) {
+  return new Function(...DEVICE_NAMES, deviceHelpers() + '\nreturn { get: _minorsLastGet, set: _minorsLastSet, clear: _minorsLastClear };')(...deviceVals(store, sk));
+}
+function liftReadMinors({ entries = mainEntries, actingChurch = '', pubK = cp, churchPubK = cp, store = new Map(), sk = church.sk } = {}) {
   const body = fnBody(STEWARD, 'readMinors() {', 'Steward.readMinors');
-  const helpers = [fnBody(STEWARD, 'function _keyReadOk(tok) {', '_keyReadOk'), fnBody(STEWARD, 'function _keyReadConnected(url) {', '_keyReadConnected'),
-    (/\n {2}var MINORS_LAST_LS = [^\n]*;/.exec(STEWARD) || [''])[0], fnBody(STEWARD, 'function _minorsLastGet(cp) {', '_minorsLastGet'), fnBody(STEWARD, 'function _minorsLastSet(cp, list) {', '_minorsLastSet')];
-  assert.ok(helpers[2], 're-anchor: MINORS_LAST_LS is not in the bundle');
+  const helpers = [fnBody(STEWARD, 'function _keyReadOk(tok) {', '_keyReadOk'), fnBody(STEWARD, 'function _keyReadConnected(url) {', '_keyReadConnected'), deviceHelpers()];
   // esbuild named nostr-tools' normalizeURL `normalizeURL2` in this bundle; a wrong name is a ReferenceError that
   // readMinors' own try/catch would swallow, silently treating every relay as not connected
   assert.ok(body.includes('normalizeURL2('), 're-anchor: readMinors no longer calls normalizeURL2 in the bundle');
-  return new Function('actingChurch', 'pub', 'churchPub', 'pool', 'relays', '_authFuture', 'MINORS_D', '_keyReadEpoch', '_keyReadAuthedOn', 'normalizeURL2', '_KEY_READ_LONG_WAIT', '_stillOn', 'lsGet', 'lsSet',
+  return new Function('actingChurch', 'pub', 'churchPub', 'pool', 'relays', '_authFuture', 'MINORS_D', '_keyReadEpoch', '_keyReadAuthedOn', 'normalizeURL2', '_KEY_READ_LONG_WAIT', '_stillOn', ...DEVICE_NAMES,
     helpers.join('\n') + '\nreturn function ' + body + ';')(
     actingChurch, pubK, churchPubK, shimPool(entries), () => Object.keys(entries()), () => false, 'trinityone/minors:', 1, (u) => !!(entries()[u] || {}).ok,
-    (u) => u, 15000, () => true, (k) => (store.has(k) ? store.get(k) : null), (k, v) => store.set(k, v));
+    (u) => u, 15000, () => true, ...deviceVals(store, sk));
 }
 function liftMeals(name, sig, extra = {}) {
   const body = fnBody(MEALS, sig, name);
@@ -277,11 +295,11 @@ test('Steward.setMinors (shipped): marking a care-team member as a child takes t
   // the bundle's own names for the helpers setMinors calls (esbuild renamed finalizeEvent to finalizeEvent2)
   assert.ok(body.includes('finalizeEvent2('), 're-anchor: setMinors no longer calls finalizeEvent2 in the bundle');
   const deviceSaved = [];
-  const setMinors = new Function('_requireTrustedView', 'sk', '_landed', '_skewGate', '_publishToRelays', 'finalizeEvent2', '_monotonic', 'now', 'MINORS_D', 'pub', 'NET', 'window', '_minorsLastSet',
+  const setMinors = new Function('_requireTrustedView', 'sk', '_landed', '_skewGate', '_publishToRelays', 'finalizeEvent2', '_monotonic', 'now', 'MINORS_D', 'pub', 'NET', 'window', '_minorsLastSet', 'actingChurch', '_keyReadEpoch', '_stillOn',
     'return function ' + body + ';')(
     () => {}, church.sk, (_w, p) => Promise.resolve(p), (f) => f(),
     async (evt) => { const [o] = await publish(pub, evt); return o; },
-    finalizeEvent, (t) => t, now, 'trinityone/minors:', cp, 'trinityone', win, (c, l) => deviceSaved.push([c, l]));
+    finalizeEvent, (t) => t, now, 'trinityone/minors:', cp, 'trinityone', win, (c, l) => deviceSaved.push([c, l]), '', 1, () => true);
   const r = await setMinors([CH.pub, KID2.pub, N2.pub]);
   assert.equal(r, true, 'the children list did not land');
   assert.ok(refreshed, 'setMinors did not ask the care module to refresh the care list');
@@ -417,7 +435,7 @@ test('(a) one church relay permanently DOWN + one healthy logged-in relay: the c
 });
 
 test('(b) EVERY relay down, with this church’s children list on the device: publishes using the device copy', async () => {
-  const store = new Map([[LAST, JSON.stringify([CH.pub])]]);
+  const store = new Map(); liftDevice({ store }).set(cp, [CH.pub]);
   const entries = () => ({ [DOWN]: { down: true } });
   const r = await pcWith(liftReadMinors({ entries, store }))([CH.pub, M.pub]);
   assert.equal(r, true, 'the device copy was not used when no relay could be reached');
@@ -437,11 +455,12 @@ test('(c) EVERY relay down and NO device copy: publishes nothing', async () => {
 
 test('(d) merge, never shrink: while a relay is left out, someone on the device copy stays excluded even if the reachable relay’s list lacks them', async () => {
   const Y = K();   // marked as a child on this device; the reachable relay's list does not name them
-  const store = new Map([[LAST, JSON.stringify([Y.pub])]]);
+  const store = new Map(); liftDevice({ store }).set(cp, [Y.pub]);
   const floored = () => ({ [DOWN]: { down: true }, [WS_URL]: { ws: churchWs, ok: true } });
   assert.equal(await pcWith(liftReadMinors({ entries: floored, store }))([Y.pub, AD.pub]), true);
   assert.ok(!(await relayCareTeam()).includes(Y.pub), 'a relay that missed the newest marking put the child back on the care list');
-  assert.ok(JSON.parse(store.get(LAST)).includes(Y.pub) && JSON.parse(store.get(LAST)).includes(CH.pub), 'the device copy did not become the union');
+  const kept = liftDevice({ store }).get(cp) || [];
+  assert.ok(kept.includes(Y.pub) && kept.includes(CH.pub), 'the device copy did not become the union');
   // CONTROL: when EVERY relay answers genuinely, the relays' newest list replaces the device copy
   const all = await liftReadMinors({ entries: mainEntries, store })();
   assert.equal(all.known, true);
@@ -452,4 +471,65 @@ test('(e) a slow but alive relay (answers after 5 s) is read, not treated as unk
   const m = await liftReadMinors({ entries: () => ({ [WS_URL]: { ws: churchWs, ok: true, delay: 5000 } }) })();
   assert.equal(m.known, true, 'a relay that answered genuinely after 5 s was treated as unknown');
   assert.ok(m.list.includes(CH.pub), 'the slow relay’s children list was not used');
+});
+
+// ── 5. AUDIT OF c17a640: the device copy is SEALED at rest and does not outlive its church ─────────────────────
+test('(seal a) the device copy holds no child’s key in the clear, opens again with the unlocked key, and an old plaintext copy is deleted unused', () => {
+  const store = new Map();
+  const dev = liftDevice({ store });
+  dev.set(cp, [CH.pub, KID2.pub]);
+  const raw = [...store.values()].join('\n');
+  assert.ok(store.size === 1 && raw.length > 0, 'nothing was stored');
+  assert.ok(!raw.includes(CH.pub) && !raw.includes(KID2.pub) && !raw.toLowerCase().includes(CH.pub.slice(0, 16)), 'a child’s key is readable in localStorage');
+  assert.deepEqual(dev.get(cp).slice().sort(), [CH.pub, KID2.pub].sort(), 'the sealed copy does not open again with the same key');
+  assert.equal(dev.get('e'.repeat(64)), null, 'a copy answered for a church it was not stored for');
+  // the c17a640 shape — a bare plaintext array — is never used, and is removed
+  store.set(LAST, JSON.stringify([CH.pub]));
+  assert.equal(dev.get(cp), null, 'a plaintext copy was used');
+  assert.equal(store.has(LAST), false, 'a plaintext copy was left on the device');
+});
+
+test('(seal b) with the key LOCKED the device copy is unusable: every relay down -> UNKNOWN, publish nothing (control: unlocked -> used)', async () => {
+  const store = new Map(); liftDevice({ store }).set(cp, [CH.pub]);
+  const entries = () => ({ [DOWN]: { down: true } });
+  const locked = await liftReadMinors({ entries, store, sk: null })();
+  assert.equal(locked.known, false, 'a locked console read its sealed children list');
+  assert.equal(await pcWith(liftReadMinors({ entries, store, sk: null }))([CH.pub, AD.pub]), false, 'a locked console published a care list from the device copy');
+  const open = await liftReadMinors({ entries, store })();
+  assert.ok(open.known && open.list.includes(CH.pub), 'CONTROL: the unlocked console could not use its own sealed copy');
+});
+
+test('(seal c) Steward.removeKey (shipped) deletes every church’s device copy and nothing else', () => {
+  const store = new Map();
+  const dev = liftDevice({ store });
+  dev.set(cp, [CH.pub]); dev.set('e'.repeat(64), [KID2.pub]);
+  store.set('trinityone.steward.unrelated', 'keep');
+  const body = fnBody(STEWARD, 'removeKey() {', 'Steward.removeKey');
+  const win = { Steward: {}, dispatchEvent() {} };
+  const removeKey = new Function(...DEVICE_NAMES, 'KEY_LS', 'window', 'encBlobRemove', 'sk', 'pub', 'currentMnemonic',
+    deviceHelpers() + '\nreturn function ' + body + ';')(...deviceVals(store, church.sk), 'trinityone.steward.key', win, () => Promise.resolve(true), church.sk, cp, 'x');
+  removeKey();
+  assert.deepEqual([...store.keys()].filter(k => k.startsWith('trinityone.steward.minorslast.')), [], 'a children list survived removing the key');
+  assert.equal(store.get('trinityone.steward.unrelated'), 'keep', 'CONTROL: removeKey deleted something it should not');
+});
+
+test('(seal d) Steward.setMinors (shipped): a church switch while the write is in flight does not overwrite the other church’s copy', async () => {
+  const B = 'b'.repeat(64);
+  const store = new Map();
+  const dev = liftDevice({ store });
+  dev.set(B, [M.pub]);                       // church B's own copy on this device
+  const body = fnBody(STEWARD, 'setMinors(pubkeys) {', 'Steward.setMinors');
+  const stillOn = fnBody(STEWARD, 'function _stillOn(cp0, ep0) {', '_stillOn');
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const api = new Function(...DEVICE_NAMES, '_requireTrustedView', 'sk', '_landed', '_skewGate', '_publishToRelays', 'finalizeEvent2', '_monotonic', 'now', 'MINORS_D', 'pub', 'NET', 'window', 'actingChurch', '_keyReadEpoch',
+    deviceHelpers() + '\n' + stillOn + '\nreturn { setMinors: function ' + body + ', switchTo(p) { pub = p; _keyReadEpoch++; } };')(
+    ...deviceVals(store, church.sk), () => {}, church.sk, (_w, p) => Promise.resolve(p), (f) => f(), () => gate,
+    (t) => t, (t) => t, now, 'trinityone/minors:', cp, 'trinityone', { StewardMeals: null }, '', 1);
+  const p = api.setMinors([CH.pub, KID2.pub]);   // church A's (cp's) children
+  api.switchTo(B);                                // the console moves to church B before the write lands
+  release(true);
+  assert.equal(await p, true);
+  assert.deepEqual(dev.get(B), [M.pub], 'church A’s children were filed as church B’s device copy');
+  assert.equal(dev.get(cp), null, 'a list was filed after the console had left the church');
 });

@@ -2554,14 +2554,43 @@ function _blockedLastSet(cp) {
 }
 // THIS CHURCH'S LAST GENUINE CHILDREN LIST ON THIS DEVICE — readMinors' floor while a relay is down, and its answer
 // when none is reachable (final audit of 1cf269c, option A). Written by readMinors (a genuine answer; the union
-// while a relay is left out) and by setMinors (this console's own marking, once it landed). Names children by
-// pubkey only, on the steward's own device, beside the member and blocked lists it already keeps.
+// while a relay is left out) and by setMinors (this console's own marking, once it landed, on the same church).
+//
+// SEALED AT REST (owner, 2026-10-10, audit of c17a640). It names which members are CHILDREN, and the console
+// already keeps a plaintext pubkey->name members cache, so a plaintext copy let a seized console name the
+// congregation's children. It is NIP-44-sealed with this console's own key (churchSk), exactly as the network
+// phrases are (saveNetKey / netKeys), and carries the church it is for inside the seal. With the key locked or
+// absent it cannot be opened and reads as ABSENT, so readMinors falls to UNKNOWN — the safe side. A value in the
+// old plaintext shape (a bare array, c17a640) is deleted on sight, never used.
+//
+// AND IT DOES NOT OUTLIVE THE CHURCH IT IS FOR ON THIS DEVICE: removeKey() and _resetChurchScopedState() (a key
+// restored or discarded) delete every copy; setActiveIdentity() deletes every copy except the church it enters,
+// so a console that stops acting for a church — delegated or not — leaves no list of its children behind.
 const MINORS_LAST_LS = 'trinityone.steward.minorslast.';
 function _minorsLastGet(cp) {
-  try { const v = lsGet(MINORS_LAST_LS + cp); if (v == null) return null; const l = JSON.parse(v); return Array.isArray(l) ? l.map(p => String(p).toLowerCase()) : null; }
-  catch (e) { return null; }
+  if (!cp || !churchSk) return null;
+  const v = lsGet(MINORS_LAST_LS + cp);
+  if (v == null) return null;
+  let o = null; try { o = JSON.parse(v); } catch (e) { o = null; }
+  if (!o || typeof o !== 'object' || Array.isArray(o) || typeof o.s !== 'string') { try { localStorage.removeItem(MINORS_LAST_LS + cp); } catch (e) {} return null; }
+  try {
+    const d = JSON.parse(nip44d(o.s, churchSk));
+    if (!d || d.cp !== cp || !Array.isArray(d.list)) return null;
+    return d.list.map(p => String(p).toLowerCase());
+  } catch (e) { return null; }   // sealed under a key this console no longer holds
 }
-function _minorsLastSet(cp, list) { if (cp) lsSet(MINORS_LAST_LS + cp, JSON.stringify([...new Set((list || []).map(p => String(p).toLowerCase()))])); }
+function _minorsLastSet(cp, list) {
+  if (!cp || !churchSk) return;
+  const clean = [...new Set((list || []).map(p => String(p).toLowerCase()))];
+  try { lsSet(MINORS_LAST_LS + cp, JSON.stringify({ s: nip44e(JSON.stringify({ cp, list: clean }), churchSk) })); } catch (e) {}
+}
+function _minorsLastClear(keep) {
+  try {
+    const ks = [];
+    for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k && k.startsWith(MINORS_LAST_LS) && (!keep || k !== MINORS_LAST_LS + keep)) ks.push(k); }
+    for (const k of ks) localStorage.removeItem(k);
+  } catch (e) {}
+}
 function _noteBlockedList(cp, epoch, list, at) {
   if (!_stillOn(cp, epoch) || (at || 0) < _localBlockedAt) return;   // another church now, or older than what we hold
   _localBlocked = new Set((list || []).map(p => String(p).toLowerCase()));
@@ -2865,6 +2894,7 @@ function _resetChurchScopedState() {
   // …and no read, publish or "we looked" opened before this line may count afterwards — see _keyReadOk.
   _keyReadEpoch++; _careKeyVer++; _mediaKeyVer++;
   try { const M = window.StewardMeals; if (M && M.dropPendingCareTeam) M.dropPendingCareTeam(); } catch (e) {}   // a care list waiting to be retried belongs to the church it was asked for
+  _minorsLastClear('');   // the key that sealed every device copy of a children list is gone or replaced
   // Every capability envelope belongs here too. The comment above is not decorative: carrying a `checked`
   // flag across a church switch answers "already looked" for a church nobody has looked at.
   for (const k of Object.keys(CAP_KEYS)) _capState[k] = { ring: [], docKeys: null, rev: 1, at: 0, checked: false };
@@ -5767,6 +5797,7 @@ window.Steward = {
   // synchronously first, so every existing synchronous caller behaves exactly as before.
   removeKey() {
     try { localStorage.removeItem(KEY_LS); } catch {}
+    _minorsLastClear('');   // no church's children list stays on a device whose key was removed
     window.Steward.keyResumedUnknown = false;   // K2: the steward has now answered the question the device could not
     const done = encBlobRemove();   // S6: "remove from THIS device" is a lie if the Keystore copy survives
     sk = null; pub = null; currentMnemonic = null;
@@ -8135,6 +8166,9 @@ window.Steward = {
     _requireTrustedView('list of children');
     if (!sk) return Promise.resolve(null);
     const list = [...new Set((pubkeys || []).filter(Boolean))];
+    // the church this list is for (see the device copy below); read inside a try like every use of the device copy
+    // here, so nothing about that copy can turn a list that landed into a refusal
+    let cp0 = '', ep0 = -1; try { cp0 = actingChurch || pub; ep0 = _keyReadEpoch; } catch (e) {}
     // ALL RELAYS, NOT THE FIRST TO ANSWER. A relay polices a church's traffic with its OWN copy of this
     // document; a relay that never received it cannot police anything and fails open. `publish()` is
     // Promise.any — it resolves the moment one relay accepts — while members' apps fan their messages to every
@@ -8150,7 +8184,9 @@ window.Steward = {
     // the list back from the relay itself (refreshCareTeam -> readMinors), so it acts on what the relay holds.
     const r = _landed('list of children', _skewGate(() => _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', MINORS_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list }) }), sk))));
     return Promise.resolve(r).then((ok) => {
-      if (ok) { try { _minorsLastSet(pub, list); } catch (e) {} try { const M = window.StewardMeals; if (M && M.refreshCareTeam) M.refreshCareTeam().catch(() => {}); } catch (e) {} }
+      // only if the console is STILL on that church: a switch while the write was in flight must not file this
+      // church's children under the next one (audit of c17a640)
+      if (ok) { try { if (_stillOn(cp0, ep0)) _minorsLastSet(cp0, list); } catch (e) {} try { const M = window.StewardMeals; if (M && M.refreshCareTeam) M.refreshCareTeam().catch(() => {}); } catch (e) {} }
       return ok;
     });
   },
@@ -11187,6 +11223,7 @@ window.Steward = {
     // See _keyReadOk. The name key's flag is cleared above; this epoch covers it too.
     _keyReadEpoch++; _careKeyVer++; _mediaKeyVer++;
     try { const M = window.StewardMeals; if (M && M.dropPendingCareTeam) M.dropPendingCareTeam(); } catch (e) {}   // a care list waiting to be retried belongs to the church it was asked for
+    _minorsLastClear(actingChurch || pub);   // leaving a church leaves no list of its children on this device
     _latestGuardNotice.clear();  // see _resetChurchScopedState — one church's guardian-notice retries must not send another's
     // NOTE: the block above is now the same list as _resetChurchScopedState(), minus the NIP-42 state. A
     // SWITCH keeps this device's key while a RESTORE replaces it, so clearing the authenticated sockets here is

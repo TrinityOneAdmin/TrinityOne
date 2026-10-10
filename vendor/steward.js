@@ -16969,17 +16969,48 @@ zoo`.split("\n");
   }
   var MINORS_LAST_LS = "trinityone.steward.minorslast.";
   function _minorsLastGet(cp) {
+    if (!cp || !churchSk) return null;
+    const v = lsGet(MINORS_LAST_LS + cp);
+    if (v == null) return null;
+    let o = null;
     try {
-      const v = lsGet(MINORS_LAST_LS + cp);
-      if (v == null) return null;
-      const l = JSON.parse(v);
-      return Array.isArray(l) ? l.map((p) => String(p).toLowerCase()) : null;
+      o = JSON.parse(v);
+    } catch (e) {
+      o = null;
+    }
+    if (!o || typeof o !== "object" || Array.isArray(o) || typeof o.s !== "string") {
+      try {
+        localStorage.removeItem(MINORS_LAST_LS + cp);
+      } catch (e) {
+      }
+      return null;
+    }
+    try {
+      const d = JSON.parse(decrypt3(o.s, churchSk));
+      if (!d || d.cp !== cp || !Array.isArray(d.list)) return null;
+      return d.list.map((p) => String(p).toLowerCase());
     } catch (e) {
       return null;
     }
   }
   function _minorsLastSet(cp, list) {
-    if (cp) lsSet(MINORS_LAST_LS + cp, JSON.stringify([...new Set((list || []).map((p) => String(p).toLowerCase()))]));
+    if (!cp || !churchSk) return;
+    const clean5 = [...new Set((list || []).map((p) => String(p).toLowerCase()))];
+    try {
+      lsSet(MINORS_LAST_LS + cp, JSON.stringify({ s: encrypt2(JSON.stringify({ cp, list: clean5 }), churchSk) }));
+    } catch (e) {
+    }
+  }
+  function _minorsLastClear(keep) {
+    try {
+      const ks = [];
+      for (let i3 = 0; i3 < localStorage.length; i3++) {
+        const k = localStorage.key(i3);
+        if (k && k.startsWith(MINORS_LAST_LS) && (!keep || k !== MINORS_LAST_LS + keep)) ks.push(k);
+      }
+      for (const k of ks) localStorage.removeItem(k);
+    } catch (e) {
+    }
   }
   function _noteBlockedList(cp, epoch, list, at) {
     if (!_stillOn(cp, epoch) || (at || 0) < _localBlockedAt) return;
@@ -17148,6 +17179,7 @@ zoo`.split("\n");
       if (M && M.dropPendingCareTeam) M.dropPendingCareTeam();
     } catch (e) {
     }
+    _minorsLastClear("");
     for (const k of Object.keys(CAP_KEYS)) _capState[k] = { ring: [], docKeys: null, rev: 1, at: 0, checked: false };
     _checkinMigrated = "";
     _ckKeysSettled = "";
@@ -19302,6 +19334,7 @@ zoo`.split("\n");
         localStorage.removeItem(KEY_LS);
       } catch {
       }
+      _minorsLastClear("");
       window.Steward.keyResumedUnknown = false;
       const done = encBlobRemove();
       sk = null;
@@ -21530,11 +21563,17 @@ zoo`.split("\n");
       _requireTrustedView("list of children");
       if (!sk) return Promise.resolve(null);
       const list = [...new Set((pubkeys || []).filter(Boolean))];
+      let cp0 = "", ep0 = -1;
+      try {
+        cp0 = actingChurch || pub;
+        ep0 = _keyReadEpoch;
+      } catch (e) {
+      }
       const r = _landed("list of children", _skewGate(() => _publishToRelays(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", MINORS_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list }) }), sk))));
       return Promise.resolve(r).then((ok) => {
         if (ok) {
           try {
-            _minorsLastSet(pub, list);
+            if (_stillOn(cp0, ep0)) _minorsLastSet(cp0, list);
           } catch (e) {
           }
           try {
@@ -24657,6 +24696,7 @@ zoo`.split("\n");
         if (M && M.dropPendingCareTeam) M.dropPendingCareTeam();
       } catch (e) {
       }
+      _minorsLastClear(actingChurch || pub);
       _latestGuardNotice.clear();
       window.Steward.pubkey = pub;
       window.Steward.npub = npubEncode(pub);
