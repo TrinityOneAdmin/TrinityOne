@@ -388,7 +388,7 @@ async function watchTab() {
   };
   const globals = {
     React, window: win,
-    Icon: () => null, SectionLabel: ({ children }) => children, SermonRow: ({ s }) => s.title,
+    Icon: () => null, AudioControls: () => null, SectionLabel: ({ children }) => children, SermonRow: ({ s }) => s.title,
     setTimeout, clearTimeout, fetch: async () => { throw new Error('the screen must not fetch a feed with no channel set'); },
     Math, Date, JSON, String, Number, Boolean, Object, Array, Set, Map, console, Promise, RegExp,
   };

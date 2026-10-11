@@ -2145,7 +2145,12 @@ function App() {
         const dec = s.enc && FS.mediaDecryptor ? await FS.mediaDecryptor(np) : null;
         if (s.enc && !dec) { toast('This encrypted sermon needs the church media key'); return; }
         const src = await FS.fetchSermon({ sha256: s.sha256, hosts, mime: s.mime, enc: s.enc }, { mime: s.mime || 'audio/mpeg', decrypt: dec });
-        window.TrinityAudio.play({ id: s.id, title: s.title, subtitle: cname, src, album: cname });
+        // queue = the church's audio sermons, newest first (the order subscribeSermons delivers), so Next plays the
+        // next OLDER sermon; the others download only when their turn comes. A pin not in the list plays alone.
+        const mine = { id: s.id, title: s.title, subtitle: cname, src, album: cname };
+        const audioList = (featuredSermonList || []).filter(x => x && !String(x.mime || '').startsWith('video'));
+        const queue = audioList.some(x => x.id === s.id) ? audioList.map(x => x.id === s.id ? mine : window.sermonAudioTrack(x, { subtitle: cname, churchNpub: np, toast })) : [mine];
+        window.TrinityAudio.play(mine, queue);
       } catch (e) { toast('Couldn’t load: ' + (e.message || 'error'), { error: true }); }
     },
     openWord: (id) => setWordOv(id),
