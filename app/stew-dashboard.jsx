@@ -5590,19 +5590,25 @@ function DashPlans() {
 }
 window.DashPlans = DashPlans;
 
-// Upload OR edit a devotional — a reflection on a passage as a text (.txt) or Markdown (.md) file.
-// Passing `editing` (an existing devo) pre-fills it and re-publishes under the same id; the file is
-// optional when editing (title/passage can change without re-uploading the text).
+// Write, upload OR edit a devotional — a reflection on a passage, typed into a large text box ("Write", the
+// default) or supplied as a text (.txt) / Markdown (.md) file ("Upload file"). Both publish the same document.
+// Passing `editing` (an existing devo) pre-fills it, opens in Write mode with its text loaded, and re-publishes
+// under the same id.
 function NewDevotionalModal({ onClose, editing, seriesOptions }) {
   const [title, setTitle] = React.useState(editing ? editing.title || '' : '');
   const [ref, setRef] = React.useState(editing ? editing.ref || '' : '');
   const [series, setSeries] = React.useState(editing ? editing.series || '' : '');
   const [schedAt, setSchedAt] = React.useState(editing && editing.publishAt ? editing.publishAt : 0);   // unix sec; 0 = publish now
   const [file, setFile] = React.useState(null);   // { type, name, text? } — a NEW replacement file
+  const [mode, setMode] = React.useState('write');   // write | upload — Write is the default, and what editing opens in
+  const [body, setBody] = React.useState(editing ? editing.text || '' : '');   // the typed text; kept when switching modes
+  const bodyRef = React.useRef(null);
   const [busy, setBusy] = React.useState(false);
   const toLocalInput = (sec) => { if (!sec) return ''; const d = new Date(sec * 1000); const p = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`; };
   const fromLocalInput = (s) => { if (!s) return 0; const t = new Date(s).getTime(); return Number.isFinite(t) ? Math.floor(t / 1000) : 0; };
   const isFuture = schedAt && schedAt * 1000 > Date.now();
+  // the text box grows with what is written, so a long reflection is never a tiny scrolling window
+  React.useEffect(() => { const el = bodyRef.current; if (el && el.style) { el.style.height = 'auto'; el.style.height = Math.max(el.scrollHeight, 280) + 'px'; } }, [body, mode]);
   const pick = (f) => {
     if (!f) return;
     const isText = /\.(txt|md|markdown)$/i.test(f.name) || /^text\//i.test(f.type) || f.type === '';
@@ -5614,22 +5620,32 @@ function NewDevotionalModal({ onClose, editing, seriesOptions }) {
     r.readAsText(f);
     if (!title.trim()) setTitle(f.name.replace(/\.(txt|md|markdown)$/i, ''));
   };
-  const canSave = title.trim() && (file ? !file.error : !!editing) && !busy;   // new needs a file; edit can reuse the old text
+  // Write needs some text; Upload needs a good file (or, when editing, keeps the current text) — never an empty body
+  const canSave = title.trim() && (mode === 'write' ? !!body.trim() : (file ? !file.error : !!editing)) && !busy;
   const wasDraft = !editing || !!editing.draft;   // new uploads + held items default to draft; a live item stays live
   // asDraft: true holds it (hidden from members); false publishes it (live now or on its schedule)
   const create = (asDraft) => {
     if (!canSave) return;
     setBusy(true);
-    const text = file ? file.text : (editing ? editing.text : '');
-    const type = file ? file.type : (editing ? editing.type : 'txt');
+    const useFile = mode === 'upload' && file;
+    const text = mode === 'write' ? body : (useFile ? file.text : (editing ? editing.text : ''));
+    const type = useFile ? file.type : (editing ? editing.type || 'txt' : 'txt');
     Promise.resolve(window.Steward.publishDevotional({ id: editing ? editing.id : undefined, title: title.trim(), ref: ref.trim(), series: series.trim(), publishAt: isFuture ? schedAt : 0, draft: !!asDraft, type, text: text || '', order: editing ? editing.order : undefined, public: editing ? editing.public : undefined })).then(() => onClose());
   };
+  const modeBtn = (k, label, icon) => (
+    <button type="button" onClick={() => setMode(k)} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, padding: '10px 12px', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, background: mode === k ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'var(--surface-2)', border: '1.5px solid ' + (mode === k ? 'var(--clay)' : 'var(--line)'), color: mode === k ? 'var(--clay-ink)' : 'var(--ink-2)' }}><Icon name={icon} size={14} color={mode === k ? 'var(--clay)' : 'var(--ink-3)'} /> {label}</button>
+  );
   const dlgRef = useStewDialog(onClose);   // a11y: Escape + focus (dialog semantics on the panel below)
   return (
     <div onClick={onClose} style={{ position: 'fixed', overflowY: 'auto', inset: 0, zIndex: 90, background: 'rgba(40,32,24,.42)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'safe center', justifyContent: 'center' }}>
-      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={editing ? 'Edit devotional' : 'Upload a devotional'} tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 480, maxWidth: '92%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 28 }}>
-        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22 }}>{editing ? 'Edit devotional' : 'Upload a devotional'}</div>
-        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 18px' }}>{editing ? 'Update the title or passage, or replace the text file. Members see the change in their app.' : 'A reflection on a passage, as a text (.txt) or Markdown (.md) file. Your congregation reads it in their app.'}</p>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={editing ? 'Edit devotional' : 'New devotional'} tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 560, maxWidth: '92%', maxHeight: '88%', display: 'flex', flexDirection: 'column', overflow: 'hidden', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)' }}>
+        <div style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', padding: '28px 28px 8px' }}>
+        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22 }}>{editing ? 'Edit devotional' : 'New devotional'}</div>
+        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 14px' }}>{editing ? 'Update the wording, title or passage. Members see the change in their app.' : 'Write a reflection, or upload one. Your congregation reads it in their app.'}</p>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+          {modeBtn('write', 'Write', 'pen')}
+          {modeBtn('upload', 'Upload file', 'share')}
+        </div>
         <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 6 }}>Title</div>
         <input value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Resting in Psalm 23" style={{ width: '100%', boxSizing: 'border-box', height: 46, border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '0 14px', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 14 }} />
         <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 6 }}>Passage (optional)</div>
@@ -5648,6 +5664,12 @@ function NewDevotionalModal({ onClose, editing, seriesOptions }) {
             <div style={{ fontSize: 12, color: isFuture ? 'var(--ink-2)' : 'var(--clay-ink)', marginBottom: 14 }}>{isFuture ? `Hidden from members until ${new Date(schedAt * 1000).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}.` : 'That time is in the past — it will publish immediately.'}</div>
           </React.Fragment>
         ) : null}
+        {mode === 'write' ? (
+          <React.Fragment>
+            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 6 }}>Devotional</div>
+            <textarea ref={bodyRef} aria-label="Devotional text" value={body} onChange={e => setBody(e.target.value)} placeholder="Begin writing…" style={{ display: 'block', width: '100%', boxSizing: 'border-box', minHeight: 280, border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '16px 18px', fontSize: 16.5, lineHeight: 1.75, fontFamily: 'var(--font-serif)', color: 'var(--ink)', outline: 'none', resize: 'vertical', whiteSpace: 'pre-wrap', overflow: 'hidden' }} />
+          </React.Fragment>
+        ) : (
         <label style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '14px 16px', borderRadius: 13, border: '1px dashed var(--line)', background: 'var(--surface-2)', cursor: 'pointer' }}>
           <Icon name="read" size={20} color="var(--clay)" />
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -5656,7 +5678,9 @@ function NewDevotionalModal({ onClose, editing, seriesOptions }) {
           </div>
           <input type="file" accept=".txt,.md,.markdown,text/plain,text/markdown" onChange={e => pick(e.target.files && e.target.files[0])} style={{ display: 'none' }} />
         </label>
-        <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
+        )}
+        </div>
+        <div style={{ flex: '0 0 auto', display: 'flex', gap: 10, padding: '14px 28px 24px', borderTop: '1px solid var(--line)' }}>
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: '0 0 auto', padding: '12px 14px', fontSize: 14 }}>Cancel</button>
           {wasDraft ? (
             <React.Fragment>
@@ -5758,10 +5782,10 @@ function DashDevotionals() {
         action={<div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           {draftCount > 0 ? <button onClick={() => { if (confirm(`Publish ${draftCount} draft${draftCount === 1 ? '' : 's'}? Scheduled ones still wait for their date.`)) publishDrafts(devos); }} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }} title="Take all held drafts live (keeping any schedules)"><Icon name="send" size={15} color="var(--on-clay)" /> Publish {draftCount} draft{draftCount === 1 ? '' : 's'}</button> : null}
           <button onClick={() => window.TrinityTemplates.openDevoTemplate()} className="sk-btn sk-btn--ghost" style={{ padding: '8px 12px', fontSize: 13 }} title="The writing template + house style for a devotional series"><Icon name="receipt" size={15} color="currentColor" /> Template</button>
-          <button onClick={() => setAdding(true)} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="plus" size={15} color="var(--on-clay)" /> Upload devotional</button>
+          <button onClick={() => setAdding(true)} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="plus" size={15} color="var(--on-clay)" /> New devotional</button>
         </div>} style={{ height: '100%' }}>
         {devos.length === 0 ? (
-          <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, padding: '6px 2px' }}>No devotionals yet. Upload a .txt or .md reflection on a passage — your congregation reads it in their app.</div>
+          <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, padding: '6px 2px' }}>No devotionals yet. Write a reflection on a passage, or upload a .txt or .md file — your congregation reads it in their app.</div>
         ) : (
           <React.Fragment>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '0 2px 10px', flexWrap: 'wrap' }}>
