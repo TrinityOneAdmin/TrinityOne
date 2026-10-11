@@ -24,7 +24,7 @@ async function load() {
   const modal = SRC.slice(m0, SRC.indexOf('\nvar VP_BOOKS', m0));
   const at = SRC.indexOf('var VP_BOOKS = [');
   assert.ok(at > 0, 're-anchor: VP_BOOKS');
-  const books = SRC.slice(at, SRC.indexOf('];', at) + 2);
+  const books = SRC.slice(at, SRC.indexOf('\nfunction DashVersePrompt', at));   // VP_BOOKS + its VP_BOOKS.verses table
   const tmp = join(tmpdir(), 'planpick-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
   let js;
   try {
@@ -107,4 +107,48 @@ test('"Upload file" still reads a file into readings', async () => {
   s.act(() => inp.props.onChange({ target: { files: [{ name: 'plan.txt', text: 'Genesis 1\nGenesis 2' }], value: 'x' } }));
   s.click('Publish now');
   assert.deepEqual(s.published[0].days.map(d => d.ref), ['Genesis 1', 'Genesis 2']);
+});
+
+// ---- the verse dropdowns (owner feedback 2026-10-11: "a list, not an input for the verse numbers") ----
+test('From/To verse are dropdowns listing only verses that exist; John 3, 16 to 21 publishes "John 3:16-21"', async () => {
+  const s = await load();
+  s.click('Pick verses');
+  s.set('Book', 'John'); s.set('Chapter', '3');
+  assert.equal(s.byLabel('From verse').type, 'select', 'From verse is a <select>, not a typed input');
+  assert.deepEqual(s.options('From verse'), ['', ...Array.from({ length: 36 }, (_, i) => String(i + 1))], 'Whole chapter + exactly 1..36');
+  assert.equal(s.find(n => n.type === 'input' && n.props['aria-label'] === 'From verse').length, 0);
+  s.set('From verse', '16');
+  assert.equal(s.byLabel('To verse').type, 'select');
+  assert.deepEqual(s.options('To verse'), ['', ...Array.from({ length: 21 }, (_, i) => String(i + 16))], 'dash + 16..36 only');
+  s.set('To verse', '21');
+  s.click('Add'); s.nameIt('X'); s.click('Publish now');
+  assert.deepEqual(s.published[0].days.map(d => d.ref), ['John 3:16-21']);
+});
+
+test('changing Book or Chapter resets From and To', async () => {
+  const s = await load();
+  s.click('Pick verses');
+  s.set('Book', 'John'); s.set('Chapter', '3'); s.set('From verse', '16'); s.set('To verse', '21');
+  s.set('Chapter', '1');
+  assert.equal(s.find(n => n.type === 'select' && n.props['aria-label'] === 'From verse')[0].props.value, '');
+  assert.equal(s.find(n => n.props && n.props['aria-label'] === 'To verse').length, 0, 'To hides until a From is chosen');
+  s.set('From verse', '5'); s.set('Book', 'Psalms'); s.set('Chapter', '117');
+  assert.equal(s.byLabel('From verse').props.value, '');
+  assert.deepEqual(s.options('From verse'), ['', '1', '2'], 'Psalm 117 has two verses');
+});
+
+test('VP_BOOKS.verses is the KJV table: 66 books, VP_BOOKS chapter counts, 1189 chapters, 31102 verses', () => {
+  const at = SRC.indexOf('var VP_BOOKS = [');
+  const code = SRC.slice(at, SRC.indexOf('\nfunction DashVersePrompt', at));
+  const VP = new Function(code + '\nreturn VP_BOOKS;')();
+  assert.equal(VP.length, 66);
+  assert.equal(VP.verses.length, 66);
+  const t = VP.verses.map(x => x.split(',').map(Number));
+  VP.forEach((b, i) => assert.equal(t[i].length, b[1], b[0] + ' chapter count'));
+  assert.equal(t.reduce((a, c) => a + c.length, 0), 1189);
+  assert.equal(t.flat().reduce((a, c) => a + c, 0), 31102);
+  assert.ok(t.flat().every(n => n >= 1));
+  const v = (book, ch) => t[VP.findIndex(b => b[0] === book)][ch - 1];
+  for (const [b, c, n] of [['Genesis', 1, 31], ['Psalms', 119, 176], ['Psalms', 117, 2], ['John', 3, 36], ['3 John', 1, 14], ['Malachi', 4, 6], ['Revelation', 22, 21]])
+    assert.equal(v(b, c), n, b + ' ' + c);
 });
