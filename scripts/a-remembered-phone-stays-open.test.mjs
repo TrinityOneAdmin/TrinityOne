@@ -19,6 +19,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { loadScreen, miniReact, texts as treeTexts, find as treeFind } from './render-jsx-screen.mjs';
 
 const BUNDLE = readFileSync(new URL('../vendor/identity.js', import.meta.url), 'utf8');
 
@@ -302,5 +303,184 @@ test('unlocking an OLD blob records whose it is, so the next kill does not lose 
   const boot = bootWith(p);
   await boot.run();
   assert.deepEqual(boot.applied, [{ open: true, pub: OWNER }], 'back-filled, and it still locks');
+});
+
+// ── THE MARKER THAT SURVIVES WITHOUT ITS OWNER (2026-10-10) ─────────────────────────────────────────────────
+//
+// Everything above kills the marker OUTRIGHT, and the orphan path rebuilds it. The Pixel can also leave the
+// marker standing WITHOUT `pub`: a `{v:2,native:1}` written by an earlier recovery or by unlock()'s M12
+// migration, with the later write that added the owner lost to the same flush race. hasEnc() is then true,
+// init() never reaches the orphan path, and rememberedSeed() — which asked ONLY the marker — found no owner,
+// failed closed and deleted the record. These cases drive the shipped bundle through that exact state.
+
+// The shipped object methods, sliced out of the TrinityIdentity literal.
+function liftMethod(decl) {
+  const i = BUNDLE.indexOf(decl);
+  assert.ok(i > 0, decl + ' is not in vendor/identity.js — re-anchor this test');
+  assert.equal(BUNDLE.indexOf(decl, i + 1), -1, decl + ' appears twice in the bundle — slice is ambiguous');
+  let d = 0;
+  for (let k = BUNDLE.indexOf('{', i + decl.length - 1); k < BUNDLE.length; k++) {
+    if (BUNDLE[k] === '{') d++;
+    else if (BUNDLE[k] === '}') { d--; if (!d) return BUNDLE.slice(i, k + 1); }
+  }
+  throw new Error('unbalanced braces slicing ' + decl);
+}
+
+// A whole phone's worth of the shipped remember feature: write (rememberDevice), boot (init), read
+// (rememberedUntil) and forget (forgetDevice) over ONE fake phone, with `seed` as the unlocked session.
+function memberApp(p, seed) {
+  const fns = [
+    lift('async function hasOrphanEncBlob(', 'hasOrphanEncBlob'),
+    lift('async function orphanEncOwner(', 'orphanEncOwner'),
+    lift('async function rememberedSeed(', 'rememberedSeed'),
+    lift('async function rememberRead(', 'rememberRead'),
+    lift('async function rememberWrite(', 'rememberWrite'),
+    lift('async function rememberClear(', 'rememberClear'),
+    lift('function encOwnerPub(', 'encOwnerPub'),
+    lift('function encMarker(', 'encMarker'),
+    lift('function hasEnc(', 'hasEnc'),
+    lift('async function init(', 'init'),
+  ].join('\n');
+  const methods = [liftMethod('async rememberDevice() {'), liftMethod('async forgetDevice() {'),
+                   liftMethod('async rememberedUntil() {')].join(',\n');
+  const src = (fns + '\nconst api = {\n' + methods + '\n};')
+    .replace(/await Promise\.resolve\(\)\.then\(\(\) => \(init_esm\(\), esm_exports\)\)/g, '({ SecureStorage: __SS })');
+  assert.ok(!/esm_exports/.test(src), 'the plugin import shim no longer matches the bundle — re-anchor it');
+  const applied = [];
+  const names  = ['ENC_KEY', 'REMEMBER_KEY', 'REMEMBER_DAYS', 'localStorage', 'isNative', 'nowSec', 'console',
+                  'JSON', 'String', 'Date', '__SS', 'apply', 'applyLocked', 'deriveProfile', 'secureGet',
+                  'secureSet', 'generateSeedWords', 'isEphemeral', '_recoveryReference'];
+  const values = ['trinityone.nostr.mnemonic.enc', 'trinityone.nostr.remember', 30, p.localStorage,
+                  () => true, () => Math.floor(Date.now() / 1000), { warn() {} }, JSON, String, Date, p.SecureStorage,
+                  (prof) => applied.push({ open: true, pub: prof && prof.pubkey }),
+                  () => applied.push({ open: false }),
+                  (m) => ({ pubkey: m === SEED ? OWNER : 'e'.repeat(64) }),
+                  async () => null, async () => {}, () => SEED, () => false, () => ''];
+  const app = new Function(...names, 'let sessionMnemonic = ' + JSON.stringify(seed) + ';\n' + src +
+    '\nreturn { init, api, rememberedSeed };')(...values);
+  return { ...app, applied };
+}
+
+// What setPin leaves on the phone, WITHOUT a remember record — the member then ticks the box for real.
+function pinSet(p) {
+  p.secure.set('trinityone.nostr.mnemonic.enc', JSON.stringify({ v: 2, it: 600000, salt: 's', iv: 'i', ct: 'c', pub: OWNER }));
+  p.local.set('trinityone.nostr.mnemonic.enc', JSON.stringify({ v: 2, native: 1, pub: OWNER }));
+}
+// The Pixel case: the marker survives the kill, but as an older write that never carried the owner.
+const loseOwnerFromMarker = (p) => p.local.set('trinityone.nostr.mnemonic.enc', JSON.stringify({ v: 2, native: 1 }));
+
+test('tick "stay open", the marker survives the kill WITHOUT its owner — the phone still opens, record intact', async () => {
+  const p = phone(); pinSet(p);
+  const before = memberApp(p, SEED);
+  assert.equal(await before.api.rememberDevice(), true, 'ticking the box did not save anything — re-anchor');
+  const until = await before.api.rememberedUntil();
+  assert.ok(until > Math.floor(Date.now() / 1000) + 29 * 86400, 'the record is not 30 days out');
+
+  loseOwnerFromMarker(p);                         // force-stop: the owner-bearing marker write never flushed
+  const after = memberApp(p, null);               // a fresh process — nothing in memory
+  await after.init();
+  assert.deepEqual(after.applied, [{ open: true, pub: OWNER }],
+    'the phone asked for the PIN after ONE restart despite a valid 30-day record and a blob that says whose ' +
+    'it is — the Pixel bug, by the route the orphan-path fix never reached');
+  assert.ok(p.secure.has('trinityone.nostr.remember'),
+    'and the record was DESTROYED, so ticking the box again fails identically');
+  assert.equal(await after.api.rememberedUntil(), until, 'the profile sheet no longer shows the date it stays open until');
+
+  // …and a SECOND restart in the same state (the owner's hand test is "force-stop, relaunch, twice")
+  const again = memberApp(p, null);
+  await again.init();
+  assert.deepEqual(again.applied, [{ open: true, pub: OWNER }], 'it survived one restart and not two');
+});
+
+test('marker without owner + a record for a DIFFERENT account: refused and destroyed', async () => {
+  const p = phone(); pinSet(p);
+  p.secure.set('trinityone.nostr.remember',
+    JSON.stringify({ m: SEED, until: Math.floor(Date.now() / 1000) + 30 * 86400, pub: 'f'.repeat(64) }));
+  loseOwnerFromMarker(p);
+  const app = memberApp(p, null);
+  await app.init();
+  assert.deepEqual(app.applied, [{ open: false }],
+    'a record naming another account opened this phone once the blob was consulted instead of the marker');
+  assert.equal(p.secure.has('trinityone.nostr.remember'), false, 'a mismatched record must be destroyed on sight');
+});
+
+test('blob and marker name DIFFERENT accounts: cannot tell which is true, so it refuses', async () => {
+  const p = phone(); pinSet(p);
+  const app0 = memberApp(p, SEED);
+  assert.equal(await app0.api.rememberDevice(), true);
+  // The record matches the blob; the marker names somebody else. Either could be the stale one.
+  p.local.set('trinityone.nostr.mnemonic.enc', JSON.stringify({ v: 2, native: 1, pub: 'd'.repeat(64) }));
+  const app = memberApp(p, null);
+  assert.equal(await app.rememberedSeed(), null,
+    'blob and marker disagree about whose phone this is, and the record opened it anyway — guessing the ' +
+    'owner is the one thing this check must never do');
+  assert.equal(p.secure.has('trinityone.nostr.remember'), false);
+});
+
+test('no owner ANYWHERE (old blob, anonymous marker) still fails closed', async () => {
+  const p = phone(); pinSet(p);
+  const app0 = memberApp(p, SEED);
+  assert.equal(await app0.api.rememberDevice(), true);
+  p.secure.set('trinityone.nostr.mnemonic.enc', JSON.stringify({ v: 2, it: 600000, salt: 's', iv: 'i', ct: 'c' }));
+  loseOwnerFromMarker(p);
+  const app = memberApp(p, null);
+  await app.init();
+  assert.deepEqual(app.applied, [{ open: false }], 'with nothing to check the record against, it opened anyway');
+});
+
+test('an expired record still locks, by the same route', async () => {
+  const p = phone(); pinSet(p);
+  p.secure.set('trinityone.nostr.remember',
+    JSON.stringify({ m: SEED, until: Math.floor(Date.now() / 1000) - 60, pub: OWNER }));
+  loseOwnerFromMarker(p);
+  const app = memberApp(p, null);
+  await app.init();
+  assert.deepEqual(app.applied, [{ open: false }], '30 days must mean 30 days');
+  assert.equal(p.secure.has('trinityone.nostr.remember'), false, 'a lapsed record should be cleared on the way out');
+});
+
+test('turning "stay open" off deletes the record, and the next launch asks for the PIN', async () => {
+  const p = phone(); pinSet(p);
+  const app0 = memberApp(p, SEED);
+  assert.equal(await app0.api.rememberDevice(), true);
+  assert.equal(await app0.api.forgetDevice(), true);
+  assert.equal(p.secure.has('trinityone.nostr.remember'), false, 'forgetDevice left the seed in the secure store');
+  assert.equal(await app0.api.rememberedUntil(), 0, 'the profile sheet still says this phone stays open');
+  const app = memberApp(p, null);
+  await app.init();
+  assert.deepEqual(app.applied, [{ open: false }], 'turned off, and the phone still opened without the PIN');
+});
+
+// ── AND THE MEMBER CAN SEE IT STUCK ───────────────────────────────────────────────────────────────────────
+// The only place "stay open" is shown after the unlock screen has gone is the security sheet's "This phone
+// stays open without your PIN until <date>" panel, drawn from rememberedUntil(). Draw the SHIPPED sheet, with
+// rememberedUntil wired to the SHIPPED bundle over the phone that just restarted the Pixel way.
+test('after the restart, the security sheet still SAYS the phone stays open', async () => {
+  const p = phone(); pinSet(p);
+  assert.equal(await memberApp(p, SEED).api.rememberDevice(), true);
+  loseOwnerFromMarker(p);
+  const app = memberApp(p, null);
+  await app.init();                               // the boot that used to destroy the record
+
+  const { React, draw } = miniReact();
+  const ID = { hasPin: () => true, isLocked: () => false, rememberedUntil: () => app.api.rememberedUntil(),
+               forgetDevice: () => app.api.forgetDevice() };
+  const globals = {
+    React, window: { TrinityIdentity: ID, addEventListener() {}, removeEventListener() {} },
+    document: { addEventListener() {}, removeEventListener() {}, querySelector: () => null },
+    navigator: { userAgent: '' }, localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+    setTimeout, clearTimeout, console, Icon: () => null, IconBtn: () => null,
+    BottomSheet: ({ open, children }) => (open ? React.createElement('div', {}, children) : null),
+  };
+  const mod = loadScreen('app/identity-extras.jsx', ['CommunitySecuritySheet'], globals);
+  const props = { open: true, onClose() {}, ctx: { toast() {} } };
+  draw(mod.CommunitySecuritySheet, props);        // mount: the effect asks the secure store
+  for (let i = 0; i < 30; i++) await Promise.resolve();
+  const said = treeTexts(draw(mod.CommunitySecuritySheet, props)).join(' ');
+  assert.match(said, /stays open without your PIN until/,
+    'the member ticked "stay open", the phone restarted, and the security sheet no longer says so. Drew: ' + said);
+  assert.ok(treeFind(draw(mod.CommunitySecuritySheet, props),
+    n => n.type === 'button' && /Ask for my PIN again/.test(treeTexts(n).join(' '))).length === 1,
+    'the way to turn it off is not on the screen');
 });
 
