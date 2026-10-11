@@ -16967,6 +16967,51 @@ zoo`.split("\n");
       return /* @__PURE__ */ new Set();
     }
   }
+  var MINORS_LAST_LS = "trinityone.steward.minorslast.";
+  function _minorsLastGet(cp) {
+    if (!cp || !churchSk) return null;
+    const v = lsGet(MINORS_LAST_LS + cp);
+    if (v == null) return null;
+    let o = null;
+    try {
+      o = JSON.parse(v);
+    } catch (e) {
+      o = null;
+    }
+    if (!o || typeof o !== "object" || Array.isArray(o) || typeof o.s !== "string") {
+      try {
+        localStorage.removeItem(MINORS_LAST_LS + cp);
+      } catch (e) {
+      }
+      return null;
+    }
+    try {
+      const d = JSON.parse(decrypt3(o.s, churchSk));
+      if (!d || d.cp !== cp || !Array.isArray(d.list)) return null;
+      return d.list.map((p) => String(p).toLowerCase());
+    } catch (e) {
+      return null;
+    }
+  }
+  function _minorsLastSet(cp, list) {
+    if (!cp || !churchSk) return;
+    const clean5 = [...new Set((list || []).map((p) => String(p).toLowerCase()))];
+    try {
+      lsSet(MINORS_LAST_LS + cp, JSON.stringify({ s: encrypt2(JSON.stringify({ cp, list: clean5 }), churchSk) }));
+    } catch (e) {
+    }
+  }
+  function _minorsLastClear(keep) {
+    try {
+      const ks = [];
+      for (let i3 = 0; i3 < localStorage.length; i3++) {
+        const k = localStorage.key(i3);
+        if (k && k.startsWith(MINORS_LAST_LS) && (!keep || k !== MINORS_LAST_LS + keep)) ks.push(k);
+      }
+      for (const k of ks) localStorage.removeItem(k);
+    } catch (e) {
+    }
+  }
   function _noteBlockedList(cp, epoch, list, at) {
     if (!_stillOn(cp, epoch) || (at || 0) < _localBlockedAt) return;
     _localBlocked = new Set((list || []).map((p) => String(p).toLowerCase()));
@@ -17129,6 +17174,12 @@ zoo`.split("\n");
     _keyReadEpoch++;
     _careKeyVer++;
     _mediaKeyVer++;
+    try {
+      const M = window.StewardMeals;
+      if (M && M.dropPendingCareTeam) M.dropPendingCareTeam();
+    } catch (e) {
+    }
+    _minorsLastClear("");
     for (const k of Object.keys(CAP_KEYS)) _capState[k] = { ring: [], docKeys: null, rev: 1, at: 0, checked: false };
     _checkinMigrated = "";
     _ckKeysSettled = "";
@@ -19278,11 +19329,18 @@ zoo`.split("\n");
     // wherever its phrase is held — this only forgets it locally; it does not delete/rotate the key.
     // Returns a promise so a caller CAN await the hardware-store half; the localStorage half is cleared
     // synchronously first, so every existing synchronous caller behaves exactly as before.
+    // FORGET EVERY CHURCH'S CHILDREN LIST ON THIS DEVICE (the sealed device copy, see _minorsLastGet). For a screen that
+    // throws the stored key away by its own route instead of removeKey() — the unlock screen's "Restore this church
+    // with my 12 words" (audit of 83b7a4f).
+    forgetChildrenLists() {
+      _minorsLastClear("");
+    },
     removeKey() {
       try {
         localStorage.removeItem(KEY_LS);
       } catch {
       }
+      _minorsLastClear("");
       window.Steward.keyResumedUnknown = false;
       const done = encBlobRemove();
       sk = null;
@@ -20938,6 +20996,99 @@ zoo`.split("\n");
     blockedHere() {
       return [..._localBlocked];
     },
+    // WHO IS A CHILD OF THE CHURCH THIS CONSOLE IS LOOKING AT — read from the relay NOW, one shot, by whoever asks.
+    // Resolves { known, list } (list = lower-case hex). Readers: StewardMeals.publishCareTeam, refreshCareTeam and
+    // sendCareChat (a child is never on the care list, owner 2026-10-10).
+    //
+    // A FRESH READ, NOT A SCREEN'S COPY. The first version (8fb38d9) read a copy the safeguarding subscription kept,
+    // and that subscription only runs while the Members / Check-in / Care-requests screens are open — so the two
+    // places that publish the care list (Settings -> Features, the rota's roster editor) usually saw no children
+    // and published the child onto it (audit of 8fb38d9).
+    //
+    // `known: false` — no relay, a relay that did not answer trustworthily (see inside), unreadable content, or a
+    // delegate's empty answer — and the caller decides what that means.
+    readMinors() {
+      const cp = actingChurch || pub;
+      const unknown = { known: false, list: [] };
+      if (!cp) return Promise.resolve(unknown);
+      const urls = relays();
+      const device = _minorsLastGet(cp);
+      if (!urls.length) return Promise.resolve(device ? { known: true, list: device } : unknown);
+      const ownerView = !actingChurch && pub === churchPub;
+      const epoch = _keyReadEpoch, at = Date.now();
+      let longest = 4400;
+      return new Promise((resolve) => {
+        let best = null, done = false;
+        const answers = /* @__PURE__ */ new Map(), subs = [];
+        const finish = () => {
+          if (done) return;
+          done = true;
+          for (const x of subs) {
+            x.tok.closed = true;
+            try {
+              x.sub.close();
+            } catch (e) {
+            }
+          }
+          const ok = urls.filter((u) => answers.get(u) === true);
+          const left = urls.filter((u) => answers.get(u) !== true);
+          if (!left.every((u) => !_keyReadConnected(u))) return resolve(unknown);
+          if (!ok.length) return resolve(device ? { known: true, list: device } : unknown);
+          let live;
+          if (best) {
+            let list2 = null;
+            try {
+              list2 = JSON.parse(best.content || "{}").pubkeys || [];
+            } catch (e) {
+              list2 = null;
+            }
+            if (!Array.isArray(list2)) return resolve(unknown);
+            live = list2.map((x) => String(x || "").toLowerCase()).filter(Boolean);
+          } else if (ownerView) live = [];
+          else return resolve(unknown);
+          const list = left.length ? [.../* @__PURE__ */ new Set([...live, ...device || []])] : live;
+          if (_stillOn(cp, epoch)) _minorsLastSet(cp, list);
+          resolve({ known: true, list });
+        };
+        for (const url of urls) {
+          let up = false;
+          try {
+            const r = pool.relays.get(normalizeURL2(url));
+            up = !!(r && r.connected);
+          } catch (e) {
+          }
+          const wait = up ? _KEY_READ_LONG_WAIT : 4400;
+          if (wait > longest) longest = wait;
+          const tok = { cp, epoch, at, url, wait, closed: false, relayClosed: false };
+          let sub = null;
+          try {
+            sub = pool.subscribeMany([url], [{ kinds: [30078], authors: [cp], "#d": [MINORS_D + cp] }], {
+              ...up ? { maxWait: _KEY_READ_LONG_WAIT } : {},
+              onevent(e) {
+                if (tok.closed || !e || e.pubkey !== cp || _authFuture(e)) return;
+                if (!best || e.created_at > best.created_at) best = e;
+              },
+              // a microtask later, so a CLOSED's onclose (which nostr-tools runs right after this) has marked the token
+              oneose() {
+                queueMicrotask(() => {
+                  if (done) return;
+                  answers.set(url, _keyReadOk(tok));
+                  if (urls.every((u) => answers.has(u))) finish();
+                });
+              },
+              onclose() {
+                tok.relayClosed = true;
+              }
+            });
+          } catch (e) {
+            answers.set(url, false);
+          }
+          if (sub) subs.push({ tok, sub });
+        }
+        if (urls.every((u) => answers.has(u))) finish();
+        setTimeout(finish, longest + 600);
+      });
+    },
     setBlocked(pubkeys) {
       const opts = arguments[1];
       _requireTrustedView("blocked list");
@@ -21418,7 +21569,28 @@ zoo`.split("\n");
       _requireTrustedView("list of children");
       if (!sk) return Promise.resolve(null);
       const list = [...new Set((pubkeys || []).filter(Boolean))];
-      return _landed("list of children", _skewGate(() => _publishToRelays(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", MINORS_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list }) }), sk))));
+      let cp0 = "", ep0 = -1;
+      try {
+        cp0 = actingChurch || pub;
+        ep0 = _keyReadEpoch;
+      } catch (e) {
+      }
+      const r = _landed("list of children", _skewGate(() => _publishToRelays(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", MINORS_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list }) }), sk))));
+      return Promise.resolve(r).then((ok) => {
+        if (ok) {
+          try {
+            if (_stillOn(cp0, ep0)) _minorsLastSet(cp0, list);
+          } catch (e) {
+          }
+          try {
+            const M = window.StewardMeals;
+            if (M && M.refreshCareTeam) M.refreshCareTeam().catch(() => {
+            });
+          } catch (e) {
+          }
+        }
+        return ok;
+      });
     },
     // `opts.listKnown` — has the CALLER actually read this church's cleared list? The console has that answer
     // (its safeguarding subscription reports `loaded`) and this module does not: an empty remembered list means
@@ -24525,6 +24697,12 @@ zoo`.split("\n");
       _keyReadEpoch++;
       _careKeyVer++;
       _mediaKeyVer++;
+      try {
+        const M = window.StewardMeals;
+        if (M && M.dropPendingCareTeam) M.dropPendingCareTeam();
+      } catch (e) {
+      }
+      _minorsLastClear(actingChurch || pub);
       _latestGuardNotice.clear();
       window.Steward.pubkey = pub;
       window.Steward.npub = npubEncode(pub);

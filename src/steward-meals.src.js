@@ -374,21 +374,89 @@ import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   //
   // Publish the care-team RECIPIENT roster (careteam:<cp>) — the pubkeys a member seals an "ask for help"
   // request to = the church key (always, so the owner can triage) + the care-team group's members (passed in
   // from the console, which holds the rosters). Just pubkeys, no secrets. Re-published when the team changes.
-  function publishCareTeam(memberPubs) {
-    if (!S() || !S().publishSigned || !S().churchPub) return Promise.resolve(null);
+  // WHILE THE CHILDREN LIST CANNOT BE READ, the newest list asked for waits here and is retried (see below).
+  // CARRIES THE CHURCH IT WAS ASKED FOR (re-audit of 0eb3cf9): a key restore or identity switch changes churchPub
+  // without a reload, and a retry holding only the people list published church A's carers as church B's care
+  // list. A retry for a church we are no longer on is dropped, and the console's church reset drops it at once.
+  const _careTeamWait = { pubs: null, cp: '', tries: 0, timer: 0 };
+  function dropPendingCareTeam() { try { if (_careTeamWait.timer) clearTimeout(_careTeamWait.timer); } catch (e) {} _careTeamWait.timer = 0; _careTeamWait.pubs = null; _careTeamWait.cp = ''; _careTeamWait.tries = 0; }
+  async function publishCareTeam(memberPubs) {
+    if (!S() || !S().publishSigned || !S().churchPub) return null;
     // A DELEGATED CONSOLE DOES NOT PUBLISH THIS. `cp` below is `churchPub` — the delegate's own key, not the church
     // they are running — so the document would be d-tagged to a key that is nobody's church. It was never reached
     // while a delegate's care switch read Off (the panel's effect is gated on it); now that the switch tells the
     // truth the effect runs, and this keeps it a no-op exactly as it was.
-    if (S().actingChurch) return Promise.resolve(null);
+    if (S().actingChurch) return null;
     const cp = S().churchPub;
+    // NEVER A CHILD (owner, 2026-10-10: a child is never on the care team, whatever the roster says). The relay
+    // refuses a child every care-team read; this keeps members' phones from SEALING a new ask for help to them.
+    // The roster picker is the generic one and rightly offers children for other teams, so the filter lives here,
+    // at the one door this document is written through, and it READS THE CHILDREN LIST FROM THE RELAY ITSELF
+    // (Steward.readMinors) — not a copy some screen may or may not have loaded (audit of 8fb38d9).
+    //
+    // IF THE LIST CANNOT BE READ, NOTHING IS PUBLISHED, and this says so with `false` (Block reports a false as
+    // "the care team's list" not updating). Publishing anyway could seal asks to a child; publishing nobody would
+    // silently empty the care team. The list the relay already holds stays in force. "Cannot be read" means no
+    // relay answered while we were logged in — when the publish itself would almost certainly fail too — so the
+    // newest list asked for is kept and retried every 20 s for five minutes, latest ask wins, and the next roster
+    // save, Block, or child marking tries again after that. Adults are never held back by a church that has no
+    // children: a relay that answers "no such document" while we are logged in is a known, empty list.
+    const m = S().readMinors ? await S().readMinors() : null;
+    if (!S() || S().churchPub !== cp || S().actingChurch) return null;   // the church changed while we read: not ours to publish
+    if (!m || !m.known) {
+      _careTeamWait.pubs = memberPubs || []; _careTeamWait.cp = cp; _careTeamWait.tries = 0;
+      if (!_careTeamWait.timer) {
+        const again = () => {
+          _careTeamWait.timer = 0;
+          const pending = _careTeamWait.pubs; if (!pending || ++_careTeamWait.tries > 15) return;
+          if (!S() || S().actingChurch || S().churchPub !== _careTeamWait.cp) { dropPendingCareTeam(); return; }   // asked for another church
+          const tries = _careTeamWait.tries;
+          publishCareTeam(pending).then((r) => {
+            _careTeamWait.tries = tries;   // a failed retry must not reset the count it is counting
+            if (r === false && _careTeamWait.pubs === pending && !_careTeamWait.timer) _careTeamWait.timer = setTimeout(again, 20000);
+          }, () => {});
+        };
+        _careTeamWait.timer = setTimeout(again, 20000);
+      }
+      return false;
+    }
+    _careTeamWait.pubs = null; _careTeamWait.cp = '';
+    const minors = new Set(m.list.map(p => String(p || '').toLowerCase()));
     // NEVER SOMEONE THIS CONSOLE HOLDS AS BLOCKED (owner, 2026-10-02: blocking removes someone from the care list).
     // The one door this document is written through — Block, the roster editor (publishCareTeamFor) and the Care
     // settings panel's effect, which republishes from whatever roster it last saw — so a stale roster cannot put
     // them back. Members' phones seal every new ask for help to this list.
     const blocked = new Set(((S().blockedHere && S().blockedHere()) || []).map(p => String(p || '').toLowerCase()));
-    const pubs = [...new Set([cp, ...((memberPubs || []).map(p => String(p || '').trim().toLowerCase()).filter(p => p && !blocked.has(p)))])];
+    const pubs = [...new Set([cp, ...((memberPubs || []).map(p => String(p || '').trim().toLowerCase()).filter(p => p && !blocked.has(p) && !minors.has(p)))])];
     return S().publishSigned({ kind: 30078, created_at: now(), tags: [['d', CARETEAM_D + cp], ['t', NET]], content: JSON.stringify({ pubs, updated: now() }) });
+  }
+
+  // TAKE ANY CHILD OFF THE CARE LIST THE RELAY HOLDS NOW. Called by Steward.setMinors after a children list lands,
+  // because the care list is otherwise republished only when the roster changes — a person marked as a child
+  // AFTER being put on the care team stayed on it (audit of 8fb38d9). Reads both documents from the relay and
+  // republishes only when the stored list actually names a child; the republish goes through publishCareTeam,
+  // so the same children read and the same "cannot read -> do not publish" rule apply.
+  async function refreshCareTeam() {
+    if (!S() || !S().subscribeMany || !S().churchPub || S().actingChurch) return null;
+    const cp = S().churchPub;
+    const cur = await new Promise((res) => {
+      let best = null, done = false, sub = null;
+      const fin = () => { if (done) return; done = true; try { sub && sub.close(); } catch (x) {} res(best); };
+      try {
+        sub = S().subscribeMany([{ kinds: [30078], authors: [cp], '#d': [CARETEAM_D + cp] }], {
+          onevent(e) { if (e.pubkey !== cp) return; if (!best || e.created_at > best.created_at) best = e; },
+          oneose: fin,
+        });
+      } catch (x) { fin(); return; }
+      setTimeout(fin, 5000);
+    });
+    if (!cur) return null;
+    let pubs = []; try { pubs = (JSON.parse(cur.content || '{}').pubs || []).map(p => String(p || '').toLowerCase()); } catch (x) { return null; }
+    const m = S().readMinors ? await S().readMinors() : null;
+    if (!m || !m.known) return false;
+    const minors = new Set(m.list);
+    if (!pubs.some(p => minors.has(p))) return null;   // nothing to take off
+    return publishCareTeam(pubs.filter(p => p !== cp));
   }
 
   // ---- "Ask for help" requests (console/owner side): triage, approve into a need, chat ----
@@ -523,7 +591,17 @@ import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   //
     }
     // …minus anyone this console holds as blocked: the request may have been sealed to them before the block.
     const blockedNow = new Set(((S().blockedHere && S().blockedHere()) || []).map(p => String(p || '').toLowerCase()));
-    const toPubs = [...audience, ...extra].filter(p => !blockedNow.has(String(p || '').toLowerCase()));
+    // …and minus any CHILD of this church (owner 2026-10-10: a child is never on the care team) — the request
+    // may have been sealed to one who was on the care list then, and the current care list may still name one.
+    // The ASKER is kept even if they are a child: it is their own thread. Read from the relay, as publishCareTeam
+    // does. If the children list cannot be read the reply still goes — the relay refuses a child every care
+    // thread read (careAdmin), and a care reply silently not sending is its own harm — but only to the request's
+    // original audience, never widened to the current care list.
+    const mk = S().readMinors ? await S().readMinors().catch(() => null) : null;
+    const kids = new Set(((mk && mk.known && mk.list) || []).map(p => String(p || '').toLowerCase()));
+    const askerHex = String(requesterPub || '').toLowerCase();
+    if (!(mk && mk.known)) extra = [];
+    const toPubs = [...audience, ...extra].filter(p => { const h = String(p || '').toLowerCase(); return !blockedNow.has(h) && (h === askerHex || !kids.has(h)); });
     const msgId = Math.random().toString(36).slice(2, 10);
     const dtag = CARECHAT_D + reqId + ':' + msgId;
     const at = _monotonicM(dtag);
@@ -542,7 +620,7 @@ import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   //
     // settings
     subscribeSettings, setEnabled, cachedEnabled,
     // care-team recipient roster (for the "ask for help" seal)
-    publishCareTeam,
+    publishCareTeam, refreshCareTeam, dropPendingCareTeam,
     // "ask for help" requests (console side): triage / approve / decline / thread
     subscribeCareRequests, setCareRequestStatus, declineCareRequest, approveCareRequest, subscribeCareChat, sendCareChat,
     // needs

@@ -2552,6 +2552,45 @@ function _blockedLastSet(cp) {
   try { const l = JSON.parse(lsGet(BLOCKED_LAST_LS + cp) || '[]'); return new Set((Array.isArray(l) ? l : []).map(p => String(p).toLowerCase())); }
   catch (e) { return new Set(); }
 }
+// THIS CHURCH'S LAST GENUINE CHILDREN LIST ON THIS DEVICE — readMinors' floor while a relay is down, and its answer
+// when none is reachable (final audit of 1cf269c, option A). Written by readMinors (a genuine answer; the union
+// while a relay is left out) and by setMinors (this console's own marking, once it landed, on the same church).
+//
+// SEALED AT REST (owner, 2026-10-10, audit of c17a640). It names which members are CHILDREN, and the console
+// already keeps a plaintext pubkey->name members cache, so a plaintext copy let a seized console name the
+// congregation's children. It is NIP-44-sealed with this console's own key (churchSk), exactly as the network
+// phrases are (saveNetKey / netKeys), and carries the church it is for inside the seal. With the key locked or
+// absent it cannot be opened and reads as ABSENT, so readMinors falls to UNKNOWN — the safe side. A value in the
+// old plaintext shape (a bare array, c17a640) is deleted on sight, never used.
+//
+// AND IT DOES NOT OUTLIVE THE CHURCH IT IS FOR ON THIS DEVICE: removeKey() and _resetChurchScopedState() (a key
+// restored or discarded) delete every copy; setActiveIdentity() deletes every copy except the church it enters,
+// so a console that stops acting for a church — delegated or not — leaves no list of its children behind.
+const MINORS_LAST_LS = 'trinityone.steward.minorslast.';
+function _minorsLastGet(cp) {
+  if (!cp || !churchSk) return null;
+  const v = lsGet(MINORS_LAST_LS + cp);
+  if (v == null) return null;
+  let o = null; try { o = JSON.parse(v); } catch (e) { o = null; }
+  if (!o || typeof o !== 'object' || Array.isArray(o) || typeof o.s !== 'string') { try { localStorage.removeItem(MINORS_LAST_LS + cp); } catch (e) {} return null; }
+  try {
+    const d = JSON.parse(nip44d(o.s, churchSk));
+    if (!d || d.cp !== cp || !Array.isArray(d.list)) return null;
+    return d.list.map(p => String(p).toLowerCase());
+  } catch (e) { return null; }   // sealed under a key this console no longer holds
+}
+function _minorsLastSet(cp, list) {
+  if (!cp || !churchSk) return;
+  const clean = [...new Set((list || []).map(p => String(p).toLowerCase()))];
+  try { lsSet(MINORS_LAST_LS + cp, JSON.stringify({ s: nip44e(JSON.stringify({ cp, list: clean }), churchSk) })); } catch (e) {}
+}
+function _minorsLastClear(keep) {
+  try {
+    const ks = [];
+    for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k && k.startsWith(MINORS_LAST_LS) && (!keep || k !== MINORS_LAST_LS + keep)) ks.push(k); }
+    for (const k of ks) localStorage.removeItem(k);
+  } catch (e) {}
+}
 function _noteBlockedList(cp, epoch, list, at) {
   if (!_stillOn(cp, epoch) || (at || 0) < _localBlockedAt) return;   // another church now, or older than what we hold
   _localBlocked = new Set((list || []).map(p => String(p).toLowerCase()));
@@ -2854,6 +2893,8 @@ function _resetChurchScopedState() {
   _mediaKeyHex = null; _mediaKeyRing = []; _mediaKeyDocKeys = null; _mediaKeyChecked = false; _mediaKeyPushRefused = null;
   // …and no read, publish or "we looked" opened before this line may count afterwards — see _keyReadOk.
   _keyReadEpoch++; _careKeyVer++; _mediaKeyVer++;
+  try { const M = window.StewardMeals; if (M && M.dropPendingCareTeam) M.dropPendingCareTeam(); } catch (e) {}   // a care list waiting to be retried belongs to the church it was asked for
+  _minorsLastClear('');   // the key that sealed every device copy of a children list is gone or replaced
   // Every capability envelope belongs here too. The comment above is not decorative: carrying a `checked`
   // flag across a church switch answers "already looked" for a church nobody has looked at.
   for (const k of Object.keys(CAP_KEYS)) _capState[k] = { ring: [], docKeys: null, rev: 1, at: 0, checked: false };
@@ -5754,8 +5795,13 @@ window.Steward = {
   // wherever its phrase is held — this only forgets it locally; it does not delete/rotate the key.
   // Returns a promise so a caller CAN await the hardware-store half; the localStorage half is cleared
   // synchronously first, so every existing synchronous caller behaves exactly as before.
+  // FORGET EVERY CHURCH'S CHILDREN LIST ON THIS DEVICE (the sealed device copy, see _minorsLastGet). For a screen that
+  // throws the stored key away by its own route instead of removeKey() — the unlock screen's "Restore this church
+  // with my 12 words" (audit of 83b7a4f).
+  forgetChildrenLists() { _minorsLastClear(''); },
   removeKey() {
     try { localStorage.removeItem(KEY_LS); } catch {}
+    _minorsLastClear('');   // no church's children list stays on a device whose key was removed
     window.Steward.keyResumedUnknown = false;   // K2: the steward has now answered the question the device could not
     const done = encBlobRemove();   // S6: "remove from THIS device" is a lie if the Keystore copy survives
     sk = null; pub = null; currentMnemonic = null;
@@ -7334,6 +7380,91 @@ window.Steward = {
   // Who this console holds as blocked, for the acting church — the same floored set every key builder filters by.
   // A copy, lower-case hex. Readers: StewardMeals.publishCareTeam and StewardMeals.sendCareChat (steward-meals.src.js).
   blockedHere() { return [..._localBlocked]; },
+  // WHO IS A CHILD OF THE CHURCH THIS CONSOLE IS LOOKING AT — read from the relay NOW, one shot, by whoever asks.
+  // Resolves { known, list } (list = lower-case hex). Readers: StewardMeals.publishCareTeam, refreshCareTeam and
+  // sendCareChat (a child is never on the care list, owner 2026-10-10).
+  //
+  // A FRESH READ, NOT A SCREEN'S COPY. The first version (8fb38d9) read a copy the safeguarding subscription kept,
+  // and that subscription only runs while the Members / Check-in / Care-requests screens are open — so the two
+  // places that publish the care list (Settings -> Features, the rota's roster editor) usually saw no children
+  // and published the child onto it (audit of 8fb38d9).
+  //
+  // `known: false` — no relay, a relay that did not answer trustworthily (see inside), unreadable content, or a
+  // delegate's empty answer — and the caller decides what that means.
+  readMinors() {
+    const cp = actingChurch || pub;
+    const unknown = { known: false, list: [] };
+    if (!cp) return Promise.resolve(unknown);
+    const urls = relays();
+    const device = _minorsLastGet(cp);   // this church's last genuine children list on this device, or null
+    if (!urls.length) return Promise.resolve(device ? { known: true, list: device } : unknown);
+    // AN EMPTY ANSWER MEANS "NO CHILDREN" ONLY ON THE CHURCH'S OWN CONSOLE. minors: is owner-only on the relay
+    // and served to a delegate only if they hold the safeguarding job (or are on the care team), so a delegate's
+    // empty answer cannot tell "no children" from "not shown to you" — for a delegate it is UNKNOWN, always
+    // (owner's lead, 2026-10-10). A delegate who IS shown the document gets it, and that is known.
+    const ownerView = !actingChurch && pub === churchPub;
+    // ONE SUBSCRIPTION PER RELAY, each answer judged by the key reads' rule (_openKeyRead, _keyReadOk; re-audit
+    // of 0eb3cf9): an EOSE counts only if it came before the library's own timer, was not a CLOSED or our own
+    // close, is for the church and epoch we are still on, and came over a socket whose login THAT relay accepted.
+    // A relay that is already connected gets `maxWait`, as the key reads do, so a slow but genuine answer beats
+    // nostr-tools' 4.4 s timer instead of reading as unknown.
+    //
+    // …AND A RELAY WHOSE CONNECTION HAS FAILED DOES NOT HOLD IT (final audit of 1cf269c; owner, option A) — the
+    // blocklist read's `withoutFailed` rule (audit of 831dcea), because a proved relay stays in the set for up to
+    // 30 days and "every relay" froze the care list for as long as one was down. The list is KNOWN once every
+    // relay that is CONNECTED has answered genuinely and at least one has. A connected relay that did not answer
+    // genuinely (timer, CLOSED, login not accepted) still makes it UNKNOWN. If NO relay is reachable, this
+    // church's last genuine list on this device is used if there is one; otherwise UNKNOWN.
+    //
+    // MERGE, NEVER SHRINK, WHILE A RELAY IS LEFT OUT: then the answer is the relays' newest list PLUS everyone on
+    // the device copy, and that union is kept. The missing relay may be the only one holding the newest marking,
+    // and the list is used only to keep people OFF the care list, so a person wrongly treated as a child loses a
+    // care seat (visible, fixable) while a child wrongly treated as an adult is sealed asks for help. When every
+    // relay answered genuinely, the newest church-signed list replaces the device copy, as the blocklist does.
+    const epoch = _keyReadEpoch, at = Date.now();
+    let longest = 4400;
+    return new Promise((resolve) => {
+      let best = null, done = false;
+      const answers = new Map(), subs = [];
+      const finish = () => {
+        if (done) return; done = true;
+        for (const x of subs) { x.tok.closed = true; try { x.sub.close(); } catch (e) {} }
+        const ok = urls.filter(u => answers.get(u) === true);
+        const left = urls.filter(u => answers.get(u) !== true);
+        if (!left.every(u => !_keyReadConnected(u))) return resolve(unknown);   // a reachable relay did not answer
+        if (!ok.length) return resolve(device ? { known: true, list: device } : unknown);   // none reachable
+        let live;
+        if (best) {
+          let list = null; try { list = (JSON.parse(best.content || '{}').pubkeys) || []; } catch (e) { list = null; }
+          if (!Array.isArray(list)) return resolve(unknown);
+          live = list.map(x => String(x || '').toLowerCase()).filter(Boolean);
+        } else if (ownerView) live = [];
+        else return resolve(unknown);
+        const list = left.length ? [...new Set([...live, ...(device || [])])] : live;
+        if (_stillOn(cp, epoch)) _minorsLastSet(cp, list);
+        resolve({ known: true, list });
+      };
+      for (const url of urls) {
+        let up = false; try { const r = pool.relays.get(normalizeURL(url)); up = !!(r && r.connected); } catch (e) {}
+        const wait = up ? _KEY_READ_LONG_WAIT : 4400;
+        if (wait > longest) longest = wait;
+        const tok = { cp, epoch, at, url, wait, closed: false, relayClosed: false };
+        let sub = null;
+        try {
+          sub = pool.subscribeMany([url], [{ kinds: [30078], authors: [cp], '#d': [MINORS_D + cp] }], {
+            ...(up ? { maxWait: _KEY_READ_LONG_WAIT } : {}),
+            onevent(e) { if (tok.closed || !e || e.pubkey !== cp || _authFuture(e)) return; if (!best || e.created_at > best.created_at) best = e; },
+            // a microtask later, so a CLOSED's onclose (which nostr-tools runs right after this) has marked the token
+            oneose() { queueMicrotask(() => { if (done) return; answers.set(url, _keyReadOk(tok)); if (urls.every(u => answers.has(u))) finish(); }); },
+            onclose() { tok.relayClosed = true; },
+          });
+        } catch (e) { answers.set(url, false); }
+        if (sub) subs.push({ tok, sub });
+      }
+      if (urls.every(u => answers.has(u))) finish();
+      setTimeout(finish, longest + 600);
+    });
+  },
   setBlocked(pubkeys) {   // replace the whole blocklist (pass hex pubkeys); a 2nd argument { unblock: [...] } names who THIS action lets back in
     const opts = arguments[1];   // read here, not named in the signature: six test harnesses lift this method by `setBlocked(pubkeys) {`
     _requireTrustedView('blocked list');
@@ -8039,6 +8170,9 @@ window.Steward = {
     _requireTrustedView('list of children');
     if (!sk) return Promise.resolve(null);
     const list = [...new Set((pubkeys || []).filter(Boolean))];
+    // the church this list is for (see the device copy below); read inside a try like every use of the device copy
+    // here, so nothing about that copy can turn a list that landed into a refusal
+    let cp0 = '', ep0 = -1; try { cp0 = actingChurch || pub; ep0 = _keyReadEpoch; } catch (e) {}
     // ALL RELAYS, NOT THE FIRST TO ANSWER. A relay polices a church's traffic with its OWN copy of this
     // document; a relay that never received it cannot police anything and fails open. `publish()` is
     // Promise.any — it resolves the moment one relay accepts — while members' apps fan their messages to every
@@ -8048,7 +8182,17 @@ window.Steward = {
     // A partial write now reports FAILURE. A steward who ticks "mark as a child" and sees it succeed has been
     // told the protection is in force; if the record reached one relay of three, it is in force on one of
     // three. An error is recoverable, false reassurance is not.
-    return _landed('list of children', _skewGate(() => _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', MINORS_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list }) }), sk))));
+    // A CHILD JUST MARKED COMES OFF THE CARE LIST (owner 2026-10-10: a child is never on the care team). The care
+    // list is otherwise republished only when the roster changes, so a person marked AFTER being put on the care
+    // team stayed on the list members seal asks for help to. Only after the children list LANDED, and it reads
+    // the list back from the relay itself (refreshCareTeam -> readMinors), so it acts on what the relay holds.
+    const r = _landed('list of children', _skewGate(() => _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', MINORS_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list }) }), sk))));
+    return Promise.resolve(r).then((ok) => {
+      // only if the console is STILL on that church: a switch while the write was in flight must not file this
+      // church's children under the next one (audit of c17a640)
+      if (ok) { try { if (_stillOn(cp0, ep0)) _minorsLastSet(cp0, list); } catch (e) {} try { const M = window.StewardMeals; if (M && M.refreshCareTeam) M.refreshCareTeam().catch(() => {}); } catch (e) {} }
+      return ok;
+    });
   },
   // `opts.listKnown` — has the CALLER actually read this church's cleared list? The console has that answer
   // (its safeguarding subscription reports `loaded`) and this module does not: an empty remembered list means
@@ -11082,6 +11226,8 @@ window.Steward = {
     // re-entering the SAME church passed every "is this still the current church?" check (audit of e6a2e02).
     // See _keyReadOk. The name key's flag is cleared above; this epoch covers it too.
     _keyReadEpoch++; _careKeyVer++; _mediaKeyVer++;
+    try { const M = window.StewardMeals; if (M && M.dropPendingCareTeam) M.dropPendingCareTeam(); } catch (e) {}   // a care list waiting to be retried belongs to the church it was asked for
+    _minorsLastClear(actingChurch || pub);   // leaving a church leaves no list of its children on this device
     _latestGuardNotice.clear();  // see _resetChurchScopedState — one church's guardian-notice retries must not send another's
     // NOTE: the block above is now the same list as _resetChurchScopedState(), minus the NIP-42 state. A
     // SWITCH keeps this device's key while a RESTORE replaces it, so clearing the authenticated sockets here is

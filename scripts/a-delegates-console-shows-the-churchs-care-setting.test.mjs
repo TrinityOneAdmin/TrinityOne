@@ -55,6 +55,8 @@ function relayed({ churchPub, actingChurch, docs }) {
     },
     publishSigned: async (tmpl) => { published.push(tmpl); return true; },
     isDelegated: () => !!actingChurch,
+    // since 2026-10-10 publishCareTeam reads the church's children list from the relay first; this church has none
+    readMinors: async () => ({ known: true, list: [] }),
   });
   return { Steward, subs, published };
 }
@@ -69,7 +71,7 @@ function drawPanel(env) {
   return { shown: () => texts(tree).join(' | '), draw, unmount, window };
 }
 
-test('a delegate running a church that has care ON sees it On', () => {
+test('a delegate running a church that has care ON sees it On', async () => {
   // The relay holds the church's settings; the delegate's own key holds nothing.
   const env = relayed({ churchPub: OWN, actingChurch: CHURCH, docs: [settingsDoc(CHURCH, true)] });
   const p = drawPanel(env);
@@ -123,6 +125,7 @@ test('a delegate\'s console does not publish the care-team roster (it names chur
     env.Steward.subscribeRosters = (cb) => { cb([team]); return () => {}; };
     const p = drawPanel(env);
     p.draw();
+    await new Promise(r => setTimeout(r, 0));   // publishCareTeam is async (it reads the children list first)
     const careteam = env.published.filter(t => (t.tags || []).some(x => x[0] === 'd' && String(x[1]).startsWith('trinityone/careteam:')));
     assert.equal(careteam.length > 0, expectPublished,
       acting ? 'a delegate published careteam:<own key> — a document for a church that is nobody\'s'

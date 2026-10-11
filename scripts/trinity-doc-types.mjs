@@ -157,7 +157,7 @@ export const DOC_TYPES = Object.freeze({
   'trinityone/minors:':       { write: 'church',    read: 'church',  scope: 'suffix', note: 'OWNER-ONLY write, NOT served to ordinary members' },
   'trinityone/approved:':     { write: 'church',    read: 'members', scope: 'suffix', note: 'cleared adults — a child\'s app needs this to know who is safe' },
   'trinityone/guardians:':    { write: 'church',    read: 'church',  scope: 'suffix', note: 'child->parents map, NOT served to ordinary members' },
-  'trinityone/guardreq:':     { write: 'member',    read: 'members', scope: 'tag',    note: 'the AUTHOR is the claimed parent — never trust a parent field' },
+  'trinityone/guardreq:':     { write: 'member',    read: 'subject', scope: 'tag',    note: 'the AUTHOR is the claimed parent — never trust a parent field. READ (2026-10-10, was \'members\', which let every member list parent/child pairs): the parent who wrote it, the child its d-tag names, the church and a steward with safeguarding — canRead\u2019s GUARDREQ_D branch' },
   'trinityone/guardnotice:':  { write: 'church',    read: 'subject', scope: 'tag' },
   'trinityone/clearance:':    { write: 'steward',   read: 'subject', scope: 'tag',    note: 'sealed to the member: tells them only about themselves' },
   'trinityone/nophoto:':      { write: 'steward',   read: 'members', scope: 'suffix', note: 'photo suppression — see scripts/trinity-rules.mjs' },

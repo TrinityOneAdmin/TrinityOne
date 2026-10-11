@@ -905,7 +905,7 @@ function StewardUnlock() {
             back except clearing site data by hand, which nothing told them.
             Shown only in that state, so the ordinary locked screen keeps its single obvious action. */}
         {lostKey ? (
-          <button onClick={() => { try { localStorage.removeItem('trinityone.steward.church-key.enc'); } catch (e) {} location.reload(); }}
+          <button onClick={() => { try { window.Steward.forgetChildrenLists && window.Steward.forgetChildrenLists(); } catch (e) {} try { localStorage.removeItem('trinityone.steward.church-key.enc'); } catch (e) {} location.reload(); }}
             className="sk-btn sk-btn--ghost" style={{ width: '100%', justifyContent: 'center', padding: '11px 16px', fontSize: 13.5, marginTop: 10 }}>
             Restore this church with my 12 words
           </button>
