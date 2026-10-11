@@ -3669,7 +3669,7 @@ function NewGroupModal({ open, onClose }) {
 
 // Manage who's in an invite-only group after it's created (add/remove the allowlist). Re-publishes the
 // group with the new member set — the relay then enforces posting + the read-gate against it.
-// `getCurrent` (optional) returns the group document AS IT IS NOW; save() publishes on top of that, so another steward's
+// `getCurrent` (optional) returns the group document AS IT IS NOW (null if it was deleted); save() publishes on top of that, so another steward's
 // change made while this dialog was open (childsafe, encryption, category, leaders) is not reverted by a stale snapshot.
 function EditGroupMembersModal({ group, getCurrent, onClose }) {
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
@@ -3690,9 +3690,21 @@ function EditGroupMembersModal({ group, getCurrent, onClose }) {
   const orphans = [...sel].filter(pk => !known.has(pk));   // in the group but not in the current roster
   const save = () => {
     setBusy(true); setErr('');
-    const newM = [...sel];
-    const cur = (getCurrent && getCurrent()) || group;
-    const removed = (group.members || []).some(pk => !sel.has(pk)) || (cur.members || []).some(pk => !sel.has(pk));   // someone dropped → rotate the key
+    // THE DIALOG'S DELTA, applied to the group AS IT IS NOW (not the list seeded at open): someone another steward
+    // removed meanwhile stays removed, someone they added stays added. getCurrent() is null when the group has
+    // been deleted meanwhile — then nothing is published (it would resurrect it).
+    const cur = getCurrent ? getCurrent() : group;
+    if (!cur) {
+      setBusy(false);
+      try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'group', message: 'This group was removed, so nothing was saved.' } })); } catch (e) {}
+      onClose();
+      return;
+    }
+    const openM = Array.isArray(group.members) ? group.members : [];
+    const addedByMe = [...sel].filter(pk => !openM.includes(pk));
+    const removedByMe = openM.filter(pk => !sel.has(pk));
+    const newM = [...new Set([...(Array.isArray(cur.members) ? cur.members : []).filter(pk => !removedByMe.includes(pk)), ...addedByMe])];
+    const removed = removedByMe.length > 0;   // someone dropped → rotate the key
     // don't hang forever if the relay never ACKs — surface it so it's not a dead button
     const guard = setTimeout(() => { setBusy(false); setErr('Couldn’t reach the relay — check your connection and try again.'); }, 8000);
     // Keep the team's roster in step with the allowlist. Only when this group HAS a roster — a plain
@@ -3713,9 +3725,7 @@ function EditGroupMembersModal({ group, getCurrent, onClose }) {
         // read grant over every care need and every "ask for help" in the church. Reconciling the whole list
         // meant that opening this dialog on a church whose two lists had drifted and pressing Save WITHOUT
         // CHANGING ANYTHING promoted every member of that chat room to careAdmin. A delta cannot do that.
-        const before = Array.isArray(group.members) ? group.members : [];
-        const added = newM.filter(pk => !before.includes(pk));
-        const removed = before.filter(pk => !newM.includes(pk));
+        const added = addedByMe, removed = removedByMe;
         if (!added.length && !removed.length) return;
         const people = teamPeopleForAllowlist(r.people, added, removed, members);
         // Do not write the care team from a roster that did not save: publishCareTeamFor would then name a
@@ -3726,7 +3736,7 @@ function EditGroupMembersModal({ group, getCurrent, onClose }) {
       } catch (e) {}
     };
     Promise.resolve(window.Steward.publishGroup({ ...cur, visibility: 'invite', members: newM }))
-      .then(() => { if (group.encrypted && window.Steward.publishGroupKey) return window.Steward.publishGroupKey(group.id, newM, { rotate: removed }); })
+      .then(() => { if (cur.encrypted && window.Steward.publishGroupKey) return window.Steward.publishGroupKey(group.id, newM, { rotate: removed }); })
       .then((r) => {
         clearTimeout(guard);
         // AUDIT-2026-08-10 item A, state 6 — the one LEAK-shaped failure here. If the rotate publish didn't
@@ -3734,7 +3744,7 @@ function EditGroupMembersModal({ group, getCurrent, onClose }) {
         // members post — while this console's own key state has already advanced, so its posts seal under a
         // key no member holds. Closing quietly buries both. Stay open, say it plainly; a retry re-runs the
         // rotate (the ring grows by one more superseded key, which is harmless).
-        if (group.encrypted && window.Steward.publishGroupKey && (r === null || r === false)) {
+        if (cur.encrypted && window.Steward.publishGroupKey && (r === null || r === false)) {
           setBusy(false);
           setErr(removed
             ? 'The group’s new key could not be saved — anyone you removed CAN STILL READ this group until Save succeeds. Check your connection and press Save again.'
@@ -4185,7 +4195,7 @@ function DashGroups() {
   const rawById = new Map(all.map(g => [g.id, g]));
   const raw = (g) => (g && rawById.get(g.id)) || g;
   const rawByIdRef = React.useRef(rawById); rawByIdRef.current = rawById;   // the dialogs read THIS at save time, not the map from the render they opened in
-  const currentOf = (g) => () => (g && rawByIdRef.current.get(g.id)) || g;
+  const currentOf = (g) => () => (g && rawByIdRef.current.get(g.id)) || null;   // null = deleted meanwhile; the dialogs then publish nothing
   const items = all.map(g => ({ ...g, sub: groupLiveSub(g, realCount, rosters), ic: g.kind === 'team' ? (g.icon || 'shield') : g.kind === 'broadcast' ? 'send' : 'chat', fg: g.kind === 'team' ? (g.accent || 'var(--clay)') : g.kind === 'broadcast' ? '#8a6717' : 'var(--sage)' }));
   // type filter for the list — only surfaces when there's more than one type to choose between
   const groupFilters = (() => {
@@ -4415,7 +4425,14 @@ function GroupLeadersModal({ group, getCurrent, onClose }) {
     // exact defect the commit titled "a control that failed no longer says it worked" was written to remove,
     // one modal along. AUDIT-2026-08-30.
     let saved = null;
-    try { saved = await window.Steward.publishGroup({ ...((getCurrent && getCurrent()) || group), leaders: [...sel], eventPolicy: pol }); }
+    const cur = getCurrent ? getCurrent() : group;
+    if (!cur) {   // deleted meanwhile: publishing would resurrect it
+      setSaving(false);
+      try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'group', message: 'This group was removed, so nothing was saved.' } })); } catch (e) {}
+      onClose();
+      return;
+    }
+    try { saved = await window.Steward.publishGroup({ ...cur, leaders: [...sel], eventPolicy: pol }); }
     catch (e) { saved = null; }
     if (!saved) {
       // NOTHING IS SENT AND NOBODY IS TOLD. Announcing leadership to people whose leadership did not save is

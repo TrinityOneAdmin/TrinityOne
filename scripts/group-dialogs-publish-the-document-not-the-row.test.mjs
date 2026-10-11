@@ -47,13 +47,13 @@ const ALICE = { pubkey: 'aa11', name: 'Alice' };
 
 async function screen() {
   const { React, draw } = miniReact();
-  const published = [];
+  const published = [], keys = [], events = [];
   let groups = [ROOM];
   let captured = null;
   const win = {
-    Steward: { publishGroup: async (g) => { published.push(g); return { ...g, ts: 1 }; }, sendDM: async () => ({ id: 'dm' }) },
+    Steward: { publishGroup: async (g) => { published.push(g); return { ...g, ts: 1 }; }, sendDM: async () => ({ id: 'dm' }), publishGroupKey: async (id, list, o) => { keys.push({ id, list, o }); return { ok: 1 }; } },
     useStewardGroups: () => groups, useStewardRosters: () => [], useStewardMembers: () => [ALICE],
-    useStewardCategories: () => [], dispatchEvent: () => true, addEventListener() {}, removeEventListener() {},
+    useStewardCategories: () => [], dispatchEvent: (e) => { events.push(e); return true; }, addEventListener() {}, removeEventListener() {},
   };
   const mod = await loadMany([
     { name: 'DashGroups', anchor: 'function DashGroups()' },
@@ -88,7 +88,7 @@ async function screen() {
     await save[0].props.onClick();
     for (let i = 0; i < 8; i++) await tick();
   };
-  return { published, rowButton, redraw, clickSave, setGroups: (g) => { groups = g; } };
+  return { published, keys, events, rowButton, redraw, clickSave, setGroups: (g) => { groups = g; } };
 }
 
 test('CONTROL: the row is decorated, and Leaders opens a dialog that saves', async () => {
@@ -133,4 +133,54 @@ test('Invite: child-safe and category set by another steward after the dialog op
   await s.clickSave();
   assert.equal(s.published[0].childsafe, true, 'Save reverted the child-safe flag another steward had just set');
   assert.equal(s.published[0].category, 'kids');
+});
+
+test('Invite: someone another steward removed after the dialog opened is NOT re-added, and is not a key recipient', async () => {
+  const s = await screen();
+  s.setGroups([{ ...ROOM, encrypted: true }]);
+  s.redraw();
+  s.rowButton(/Invite/).props.onClick();
+  s.redraw();
+  s.setGroups([{ ...ROOM, encrypted: true, members: ['aa11'] }]);   // another steward removed bb22
+  s.redraw();
+  await s.clickSave();
+  assert.deepEqual(s.published[0].members, ['aa11'], 'Save re-added the member another steward had removed');
+  assert.equal(s.keys.length, 1);
+  assert.deepEqual(s.keys[0].list, ['aa11'], 'the group key was sealed to the member another steward removed');
+});
+
+test('Invite: a member another steward added meanwhile is kept', async () => {
+  const s = await screen();
+  s.rowButton(/Invite/).props.onClick();
+  s.redraw();
+  s.setGroups([{ ...ROOM, members: ['aa11', 'bb22', 'cc33'] }]);
+  s.redraw();
+  await s.clickSave();
+  assert.deepEqual([...s.published[0].members].sort(), ['aa11', 'bb22', 'cc33']);
+});
+
+test('Invite: encryption turned on by another steward after open still gets its key, for the new list', async () => {
+  const s = await screen();
+  s.rowButton(/Invite/).props.onClick();
+  s.redraw();
+  s.setGroups([{ ...ROOM, encrypted: true }]);
+  s.redraw();
+  await s.clickSave();
+  assert.equal(s.keys.length, 1, 'the group was encrypted meanwhile but no key was published for the saved list');
+  assert.deepEqual(s.keys[0].list, ['aa11', 'bb22']);
+});
+
+test('Invite and Leaders: a group deleted after the dialog opened is not resurrected, and the steward is told', async () => {
+  for (const which of [/Invite/, /Leaders/]) {
+    const s = await screen();
+    s.rowButton(which).props.onClick();
+    s.redraw();
+    s.setGroups([]);   // another steward deleted it
+    s.redraw();
+    await s.clickSave();
+    assert.equal(s.published.length, 0, `${which}: Save republished a deleted group`);
+    assert.equal(s.keys.length, 0);
+    const msg = s.events.map(e => JSON.stringify(e && e.detail)).join(' ');
+    assert.match(msg, /was removed/, `${which}: nothing told the steward the group was gone`);
+  }
 });
