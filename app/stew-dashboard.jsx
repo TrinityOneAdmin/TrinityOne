@@ -5604,6 +5604,7 @@ function NewDevotionalModal({ onClose, editing, seriesOptions }) {
   const [body, setBody] = React.useState(editing ? editing.text || '' : '');   // the typed text; kept when switching modes
   const bodyRef = React.useRef(null);
   const [busy, setBusy] = React.useState(false);
+  const [saveErr, setSaveErr] = React.useState('');   // set when the engine refuses the publish; the dialog stays open with the text intact
   const toLocalInput = (sec) => { if (!sec) return ''; const d = new Date(sec * 1000); const p = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`; };
   const fromLocalInput = (s) => { if (!s) return 0; const t = new Date(s).getTime(); return Number.isFinite(t) ? Math.floor(t / 1000) : 0; };
   const isFuture = schedAt && schedAt * 1000 > Date.now();
@@ -5620,17 +5621,19 @@ function NewDevotionalModal({ onClose, editing, seriesOptions }) {
     r.readAsText(f);
     if (!title.trim()) setTitle(f.name.replace(/\.(txt|md|markdown)$/i, ''));
   };
-  // Write needs some text; Upload needs a good file (or, when editing, keeps the current text) — never an empty body
-  const canSave = title.trim() && (mode === 'write' ? !!body.trim() : (file ? !file.error : !!editing)) && !busy;
+  // Write needs some text (an old devotional that was saved with none may still be edited without adding any);  Upload needs a good file (or, when editing, keeps the current text) — never an empty body
+  const canSave = title.trim() && (mode === 'write' ? (!!body.trim() || (!!editing && !String(editing.text || '').trim())) : (file ? !file.error : !!editing)) && !busy;
   const wasDraft = !editing || !!editing.draft;   // new uploads + held items default to draft; a live item stays live
   // asDraft: true holds it (hidden from members); false publishes it (live now or on its schedule)
   const create = (asDraft) => {
     if (!canSave) return;
-    setBusy(true);
+    setBusy(true); setSaveErr('');
     const useFile = mode === 'upload' && file;
     const text = mode === 'write' ? body : (useFile ? file.text : (editing ? editing.text : ''));
     const type = useFile ? file.type : (editing ? editing.type || 'txt' : 'txt');
-    Promise.resolve(window.Steward.publishDevotional({ id: editing ? editing.id : undefined, title: title.trim(), ref: ref.trim(), series: series.trim(), publishAt: isFuture ? schedAt : 0, draft: !!asDraft, type, text: text || '', order: editing ? editing.order : undefined, public: editing ? editing.public : undefined })).then(() => onClose());
+    Promise.resolve(window.Steward.publishDevotional({ id: editing ? editing.id : undefined, title: title.trim(), ref: ref.trim(), series: series.trim(), publishAt: isFuture ? schedAt : 0, draft: !!asDraft, type, text: text || '', order: editing ? editing.order : undefined, public: editing ? editing.public : undefined }))
+      .then(r => { if (r == null) { setBusy(false); setSaveErr('Not saved — try again. Your text is still here.'); return; } onClose(); },
+            () => { setBusy(false); setSaveErr('Not saved — try again. Your text is still here.'); });
   };
   const modeBtn = (k, label, icon) => (
     <button type="button" onClick={() => setMode(k)} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, padding: '10px 12px', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, background: mode === k ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'var(--surface-2)', border: '1.5px solid ' + (mode === k ? 'var(--clay)' : 'var(--line)'), color: mode === k ? 'var(--clay-ink)' : 'var(--ink-2)' }}><Icon name={icon} size={14} color={mode === k ? 'var(--clay)' : 'var(--ink-3)'} /> {label}</button>
@@ -5680,6 +5683,7 @@ function NewDevotionalModal({ onClose, editing, seriesOptions }) {
         </label>
         )}
         </div>
+        {saveErr ? <div role="alert" style={{ flex: '0 0 auto', padding: '10px 28px 0', fontSize: 13, color: 'var(--clay-ink)' }}>{saveErr}</div> : null}
         <div style={{ flex: '0 0 auto', display: 'flex', gap: 10, padding: '14px 28px 24px', borderTop: '1px solid var(--line)' }}>
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: '0 0 auto', padding: '12px 14px', fontSize: 14 }}>Cancel</button>
           {wasDraft ? (

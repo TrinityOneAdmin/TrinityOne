@@ -21,10 +21,10 @@ import { loadConsole, fakeReact, fakeBrowser, fakeSteward, nodes, texts } from '
 
 const LONG = 'Be still, and know.\n\nThe first paragraph rests here,\nwith a hard line break inside it.\n\n\n## A heading\n\n- one\n- two\n\nTrailing paragraph — with “curly” quotes and calm.';
 
-function open(props = {}, devos = []) {
+function open(props = {}, devos = [], answer = () => Promise.resolve({ id: 'saved' })) {
   const { React, reset, flush, unmount, fresh } = fakeReact();
   const published = [];
-  const Steward = fakeSteward({ publishDevotional: (d) => { published.push(d); return Promise.resolve(); }, subscribeProfile: () => () => {} });
+  const Steward = fakeSteward({ publishDevotional: (d) => { published.push(d); return answer(); }, subscribeProfile: () => () => {} });
   const { window } = fakeBrowser({ Steward });
   window.useStewardDevotionals = () => devos;
   // a FileReader that actually reads: the dialog's file pick goes through it
@@ -151,6 +151,52 @@ test('editing in Upload mode with no new file keeps the old text and type', asyn
   h.click(h.btn(/Save changes/)); await tick();
   assert.equal(h.published[0].text, 'kept'); assert.equal(h.published[0].type, 'md');
   h.unmount();
+});
+
+// ── a refused publish must not eat the steward's writing (audit of 38f4aac) ───────────────────────────────
+for (const [how, answer] of [['resolves null (no key / refused)', () => Promise.resolve(null)], ['rejects', () => Promise.reject(new Error('relay down'))]]) {
+  test('publishDevotional ' + how + ': the dialog stays open, the text is intact, and it says Not saved', async () => {
+    const h = open({}, [], answer); h.redraw();
+    h.type(h.input(/Resting in Psalm/), 'Title'); h.type(h.area(), LONG);
+    h.click(h.btn(/Publish now/)); await tick(); h.redraw();
+    assert.equal(h.closed(), 0, 'THE DIALOG CLOSED ON A REFUSED PUBLISH — the typed text is gone');
+    assert.equal(h.area().props.value, LONG, 'the typed text was lost');
+    assert.match(texts(h.find(n => n.props && n.props.role === 'alert')).join(''), /Not saved/);
+    assert.ok(!h.btn(/Publish now/).props.disabled, 'the button stayed stuck on busy, so the steward cannot try again');
+    h.unmount();
+  });
+}
+
+test('after a refused publish a retry that succeeds closes the dialog and clears the message', async () => {
+  let n = 0;
+  const h = open({}, [], () => Promise.resolve(n++ === 0 ? null : { id: 'ok' })); h.redraw();
+  h.type(h.input(/Resting in Psalm/), 'Title'); h.type(h.area(), LONG);
+  h.click(h.btn(/Publish now/)); await tick(); h.redraw();
+  assert.equal(h.closed(), 0);
+  h.click(h.btn(/Publish now/)); await tick(); h.redraw();
+  assert.equal(h.closed(), 1);
+  assert.equal(h.find(x => x.props && x.props.role === 'alert'), undefined);
+  h.unmount();
+});
+
+test('editing: a refused Save changes also stays open with the edited text', async () => {
+  const h = open({ editing: { id: 'd1', title: 'T', type: 'txt', text: 'abc', draft: false } }, [], () => Promise.resolve(null)); h.redraw();
+  h.type(h.area(), 'abc, edited');
+  h.click(h.btn(/Save changes/)); await tick(); h.redraw();
+  assert.equal(h.closed(), 0); assert.equal(h.area().props.value, 'abc, edited');
+  assert.match(texts(h.find(n => n.props && n.props.role === 'alert')).join(''), /Not saved/);
+  h.unmount();
+});
+
+test('editing an old devotional whose stored text is empty: a title-only change can be saved; a new one still needs text', async () => {
+  const h = open({ editing: { id: 'd0', title: 'Old', type: 'txt', text: '', draft: false } }, []); h.redraw();
+  h.type(h.input(/Resting in Psalm/), 'Renamed');
+  assert.ok(!h.btn(/Save changes/).props.disabled, 'a title-only edit of an empty-bodied devotional is blocked');
+  h.click(h.btn(/Save changes/)); await tick();
+  assert.equal(h.published[0].title, 'Renamed'); assert.equal(h.published[0].text, '');
+  const n = open(); n.redraw(); n.type(n.input(/Resting in Psalm/), 'T');
+  assert.ok(n.btn(/Publish now/).props.disabled, 'a NEW devotional can be published empty');
+  h.unmount(); n.unmount();
 });
 
 test('POINT OF USE: the devotionals screen offers "New devotional", and it opens the dialog with a text box', () => {
