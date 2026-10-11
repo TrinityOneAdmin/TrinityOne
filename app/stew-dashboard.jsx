@@ -3669,7 +3669,9 @@ function NewGroupModal({ open, onClose }) {
 
 // Manage who's in an invite-only group after it's created (add/remove the allowlist). Re-publishes the
 // group with the new member set — the relay then enforces posting + the read-gate against it.
-function EditGroupMembersModal({ group, onClose }) {
+// `getCurrent` (optional) returns the group document AS IT IS NOW (null if it was deleted); save() publishes on top of that, so another steward's
+// change made while this dialog was open (childsafe, encryption, category, leaders) is not reverted by a stale snapshot.
+function EditGroupMembersModal({ group, getCurrent, onClose }) {
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
   // WHAT IS OFFERED: not people still waiting to join, not the blocked (sim A2 #7) — but whoever is ALREADY in
   // the group stays listed so they can be un-ticked. `members` stays the full list for `known`/`orphans` and the
@@ -3688,8 +3690,21 @@ function EditGroupMembersModal({ group, onClose }) {
   const orphans = [...sel].filter(pk => !known.has(pk));   // in the group but not in the current roster
   const save = () => {
     setBusy(true); setErr('');
-    const newM = [...sel];
-    const removed = (group.members || []).some(pk => !sel.has(pk));   // someone dropped → rotate the key
+    // THE DIALOG'S DELTA, applied to the group AS IT IS NOW (not the list seeded at open): someone another steward
+    // removed meanwhile stays removed, someone they added stays added. getCurrent() is null when the group has
+    // been deleted meanwhile — then nothing is published (it would resurrect it).
+    const cur = getCurrent ? getCurrent() : group;
+    if (!cur) {
+      setBusy(false);
+      try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'group', message: 'This group was removed, so nothing was saved.' } })); } catch (e) {}
+      onClose();
+      return;
+    }
+    const openM = Array.isArray(group.members) ? group.members : [];
+    const addedByMe = [...sel].filter(pk => !openM.includes(pk));
+    const removedByMe = openM.filter(pk => !sel.has(pk));
+    const newM = [...new Set([...(Array.isArray(cur.members) ? cur.members : []).filter(pk => !removedByMe.includes(pk)), ...addedByMe])];
+    const removed = removedByMe.length > 0;   // someone dropped → rotate the key
     // don't hang forever if the relay never ACKs — surface it so it's not a dead button
     const guard = setTimeout(() => { setBusy(false); setErr('Couldn’t reach the relay — check your connection and try again.'); }, 8000);
     // Keep the team's roster in step with the allowlist. Only when this group HAS a roster — a plain
@@ -3710,9 +3725,7 @@ function EditGroupMembersModal({ group, onClose }) {
         // read grant over every care need and every "ask for help" in the church. Reconciling the whole list
         // meant that opening this dialog on a church whose two lists had drifted and pressing Save WITHOUT
         // CHANGING ANYTHING promoted every member of that chat room to careAdmin. A delta cannot do that.
-        const before = Array.isArray(group.members) ? group.members : [];
-        const added = newM.filter(pk => !before.includes(pk));
-        const removed = before.filter(pk => !newM.includes(pk));
+        const added = addedByMe, removed = removedByMe;
         if (!added.length && !removed.length) return;
         const people = teamPeopleForAllowlist(r.people, added, removed, members);
         // Do not write the care team from a roster that did not save: publishCareTeamFor would then name a
@@ -3722,8 +3735,8 @@ function EditGroupMembersModal({ group, onClose }) {
           .catch(() => {});
       } catch (e) {}
     };
-    Promise.resolve(window.Steward.publishGroup({ ...group, visibility: 'invite', members: newM }))
-      .then(() => { if (group.encrypted && window.Steward.publishGroupKey) return window.Steward.publishGroupKey(group.id, newM, { rotate: removed }); })
+    Promise.resolve(window.Steward.publishGroup({ ...cur, visibility: 'invite', members: newM }))
+      .then(() => { if (cur.encrypted && window.Steward.publishGroupKey) return window.Steward.publishGroupKey(group.id, newM, { rotate: removed }); })
       .then((r) => {
         clearTimeout(guard);
         // AUDIT-2026-08-10 item A, state 6 — the one LEAK-shaped failure here. If the rotate publish didn't
@@ -3731,7 +3744,7 @@ function EditGroupMembersModal({ group, onClose }) {
         // members post — while this console's own key state has already advanced, so its posts seal under a
         // key no member holds. Closing quietly buries both. Stay open, say it plainly; a retry re-runs the
         // rotate (the ring grows by one more superseded key, which is harmless).
-        if (group.encrypted && window.Steward.publishGroupKey && (r === null || r === false)) {
+        if (cur.encrypted && window.Steward.publishGroupKey && (r === null || r === false)) {
           setBusy(false);
           setErr(removed
             ? 'The group’s new key could not be saved — anyone you removed CAN STILL READ this group until Save succeeds. Check your connection and press Save again.'
@@ -4181,6 +4194,8 @@ function DashGroups() {
   // So every control resolves back to the RAW group document by id before publishing.
   const rawById = new Map(all.map(g => [g.id, g]));
   const raw = (g) => (g && rawById.get(g.id)) || g;
+  const rawByIdRef = React.useRef(rawById); rawByIdRef.current = rawById;   // the dialogs read THIS at save time, not the map from the render they opened in
+  const currentOf = (g) => () => (g && rawByIdRef.current.get(g.id)) || null;   // null = deleted meanwhile; the dialogs then publish nothing
   const items = all.map(g => ({ ...g, sub: groupLiveSub(g, realCount, rosters), ic: g.kind === 'team' ? (g.icon || 'shield') : g.kind === 'broadcast' ? 'send' : 'chat', fg: g.kind === 'team' ? (g.accent || 'var(--clay)') : g.kind === 'broadcast' ? '#8a6717' : 'var(--sage)' }));
   // type filter for the list — only surfaces when there's more than one type to choose between
   const groupFilters = (() => {
@@ -4267,8 +4282,8 @@ function DashGroups() {
             {(it.leaders && it.leaders.length) ? <SkPill tint="sage">{it.leaders.length} leader{it.leaders.length === 1 ? '' : 's'}</SkPill> : null}
             <button onClick={() => pubOr(window.Steward.publishGroup({ ...raw(it), childsafe: !it.childsafe }), 'Couldn\'t change child-safe on "' + (it.name || 'that group') + '" — the relay didn\'t accept it, so it is unchanged. Check the relay and try again.')} aria-pressed={!!it.childsafe} aria-label={(it.name || 'This group') + ' — child-safe is ' + (it.childsafe ? 'on. Press to restrict it to adults' : 'off. Press to let members marked as a child join')} title={it.childsafe ? 'Child-safe — members marked as a child can join. Click to restrict to adults' : 'Hidden from children. Click to mark child-safe so under-18s can join'} style={{ border: '1px solid ' + (it.childsafe ? 'color-mix(in oklab, var(--sage) 40%, var(--line))' : 'var(--line)'), background: it.childsafe ? 'color-mix(in oklab, var(--sage) 8%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: it.childsafe ? 'var(--sage-ink)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name={it.childsafe ? 'check' : 'pray'} size={14} color="currentColor" /> {it.childsafe ? 'Child-safe' : 'Child-safe?'}</button>
             {it.kind !== 'team' ? <button onClick={() => toggleEncrypt(it)} aria-pressed={!!it.encrypted} aria-label={(it.name || 'This group') + ' — encryption is ' + (it.encrypted ? 'on. Press to turn it off' : 'off. Press to seal it end-to-end')} title={it.encrypted ? 'Sealed end-to-end — even the relay can\'t read it. Click to turn off' : 'Encrypt this group end-to-end. Click to seal'} style={{ border: '1px solid ' + (it.encrypted ? 'color-mix(in oklab, var(--clay) 40%, var(--line))' : 'var(--line)'), background: it.encrypted ? 'color-mix(in oklab, var(--clay) 8%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: it.encrypted ? 'var(--clay-ink)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="lock" size={14} color="currentColor" /> {it.encrypted ? 'Encrypted' : 'Encrypt?'}</button> : null}
-            {it.visibility === 'invite' ? <button onClick={() => setEditMembersFor(it)} title="Manage who’s in this invite-only group" style={{ border: '1px solid color-mix(in oklab, var(--clay) 35%, var(--line))', background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="lock" size={14} color="currentColor" /> Invite · {(it.members || []).length}</button> : null}
-            <button onClick={() => setLeadersFor(it)} title="Members who help run this group" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--sage-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="users" size={15} color="currentColor" /> Leaders</button>
+            {it.visibility === 'invite' ? <button onClick={() => setEditMembersFor(raw(it))} title="Manage who’s in this invite-only group" style={{ border: '1px solid color-mix(in oklab, var(--clay) 35%, var(--line))', background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="lock" size={14} color="currentColor" /> Invite · {(it.members || []).length}</button> : null}
+            <button onClick={() => setLeadersFor(raw(it))} title="Members who help run this group" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--sage-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="users" size={15} color="currentColor" /> Leaders</button>
             <button onClick={() => window.dispatchEvent(new CustomEvent('steward-open-group-chat', { detail: it }))} title="Open chat" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="chat" size={15} color="currentColor" /> Chat</button>
           </React.Fragment>
         )}
@@ -4298,8 +4313,8 @@ function DashGroups() {
           </div>
         </div>
       ) : null}
-      {leadersFor ? <GroupLeadersModal group={leadersFor} onClose={() => setLeadersFor(null)} /> : null}
-      {editMembersFor ? <EditGroupMembersModal group={editMembersFor} onClose={() => setEditMembersFor(null)} /> : null}
+      {leadersFor ? <GroupLeadersModal group={leadersFor} getCurrent={currentOf(leadersFor)} onClose={() => setLeadersFor(null)} /> : null}
+      {editMembersFor ? <EditGroupMembersModal group={editMembersFor} getCurrent={currentOf(editMembersFor)} onClose={() => setEditMembersFor(null)} /> : null}
       {settingsFor ? (() => {
         const g = settingsFor;
         const sToggle = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 0', borderBottom: '1px solid var(--line)' };
@@ -4368,7 +4383,8 @@ function DashGroups() {
 
 // pick which members may post events for a group. The chosen pubkeys go into the group def's `leaders`;
 // the relay then lets exactly those members publish events scoped to this group.
-function GroupLeadersModal({ group, onClose }) {
+// `getCurrent`: see EditGroupMembersModal — save() builds on the group as it is now, not as it was when opened.
+function GroupLeadersModal({ group, getCurrent, onClose }) {
   // Not people still waiting to join, not the blocked (sim A2 #7) — but existing leaders stay listed so they can
   // be un-ticked. Every use of `members` below is a pick list or a lookup of someone already ticked.
   const allMembers = window.useStewardMembers().filter(m => m.pubkey);
@@ -4409,7 +4425,14 @@ function GroupLeadersModal({ group, onClose }) {
     // exact defect the commit titled "a control that failed no longer says it worked" was written to remove,
     // one modal along. AUDIT-2026-08-30.
     let saved = null;
-    try { saved = await window.Steward.publishGroup({ ...group, leaders: [...sel], eventPolicy: pol }); }
+    const cur = getCurrent ? getCurrent() : group;
+    if (!cur) {   // deleted meanwhile: publishing would resurrect it
+      setSaving(false);
+      try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'group', message: 'This group was removed, so nothing was saved.' } })); } catch (e) {}
+      onClose();
+      return;
+    }
+    try { saved = await window.Steward.publishGroup({ ...cur, leaders: [...sel], eventPolicy: pol }); }
     catch (e) { saved = null; }
     if (!saved) {
       // NOTHING IS SENT AND NOBODY IS TOLD. Announcing leadership to people whose leadership did not save is
