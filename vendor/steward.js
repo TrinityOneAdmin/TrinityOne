@@ -22621,7 +22621,8 @@ zoo`.split("\n");
       if (!signer) return Promise.resolve(null);
       const id = plan.id || "plan" + Date.now();
       const pubAt = plan.publishAt && plan.publishAt > now() ? Math.floor(plan.publishAt) : 0;
-      const content = JSON.stringify({ id, title: plan.title || "Plan", sub: plan.sub || "", tag: plan.tag || "", accent: plan.accent || "var(--clay)", blurb: plan.blurb || "", days: plan.days || [], publishAt: pubAt, draft: !!plan.draft, public: plan.public !== false });
+      const created = Number(plan.created) || Number(plan.ts) || now();
+      const content = JSON.stringify({ id, title: plan.title || "Plan", sub: plan.sub || "", tag: plan.tag || "", accent: plan.accent || "var(--clay)", blurb: plan.blurb || "", days: plan.days || [], publishAt: pubAt, draft: !!plan.draft, public: plan.public !== false, created });
       return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", PLAN_D + id], ["t", NET]], content }, signer)).then((e) => ({ id, ...JSON.parse(content), ts: e && e.created_at }));
     },
     removePlan(id) {
@@ -22633,7 +22634,7 @@ zoo`.split("\n");
       const byId = /* @__PURE__ */ new Map();
       const versions = /* @__PURE__ */ new Map();
       const emit = () => {
-        const arr = [...byId.values()].sort((a, b) => (a.ts || 0) - (b.ts || 0));
+        const arr = [...byId.values()].sort((a, b) => (a.created || a.ts || 0) - (b.created || b.ts || 0));
         try {
           localStorage.setItem(CACHE_KEY, JSON.stringify(arr));
         } catch {
