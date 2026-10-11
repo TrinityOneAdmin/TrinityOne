@@ -5244,7 +5244,7 @@ function NewPlanModal({ onClose }) {
             <div style={{ maxHeight: 180, overflowY: 'auto', border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '6px 0' }}>
               {parsedDays.map((day, i) => (
                 <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'baseline', padding: '5px 14px', fontSize: 13, borderBottom: i < parsedDays.length - 1 ? '1px solid var(--line)' : 'none' }}>
-                  <span style={{ fontWeight: 800, fontSize: 11, color: 'var(--clay)', minWidth: 34 }}>Day {day.d}</span>
+                  <span style={{ fontWeight: 800, fontSize: 11, color: 'var(--clay-ink)', minWidth: 34 }}>Day {day.d}</span>
                   <span style={{ fontWeight: 600, minWidth: 100 }}>{day.ref}</span>
                   <span style={{ color: 'var(--ink-3)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{day.label}</span>
                 </div>
@@ -8697,7 +8697,7 @@ function StewBackupModal({ church, onClose }) {
         </div>
         <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 7 }}>Passphrase</div>
         <div style={{ display: 'flex', gap: 9 }}>
-          <input value={pass} onChange={e => { setPass(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') make(); }} type={show ? 'text' : 'password'} autoFocus inputMode="text" placeholder="four random words, or 12+ characters" style={{ flex: 1, height: 46, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
+          <input value={pass} aria-label="Choose a passphrase for the backup file" onChange={e => { setPass(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') make(); }} type={show ? 'text' : 'password'} autoFocus inputMode="text" placeholder="four random words, or 12+ characters" style={{ flex: 1, height: 46, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
           <button onClick={() => setShow(s => !s)} className="sk-btn sk-btn--ghost" style={{ padding: '0 14px' }}>{show ? 'Hide' : 'Show'}</button>
         </div>
         {strength ? <div style={{ fontSize: 12, color: strength.c, fontWeight: 600, marginTop: 7 }}>{strength.t}{strength.c === 'var(--clay)' ? ' · longer is safer' : ''}</div> : null}
@@ -11489,7 +11489,7 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
           <div style={{ marginTop: 10, padding: '11px 13px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
             <div style={{ fontSize: 12.5, color: 'var(--sage-ink)', fontWeight: 700, marginBottom: 7 }}>✓ {cFile.name}</div>
             <div style={{ display: 'flex', gap: 8 }}>
-              <input type={cShow ? 'text' : 'password'} value={cPass} autoCapitalize="none" autoCorrect="off" spellCheck={false}
+              <input type={cShow ? 'text' : 'password'} value={cPass} aria-label="Passphrase of the backup file" autoCapitalize="none" autoCorrect="off" spellCheck={false}
                 onChange={e => { setCPass(e.target.value); setCErr(''); }}
                 onKeyDown={e => { if (e.key === 'Enter' && cPass) restoreFromFile(); }}
                 placeholder="the passphrase for this backup"
