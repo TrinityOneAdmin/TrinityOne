@@ -2613,6 +2613,10 @@ function App() {
             {desktop ? (
               <div style={{ position: 'absolute', inset: 0, display: 'flex', overflow: 'hidden' }}>
                 <DesktopNav active={tab} onChange={(t) => { setOpenServing(false); setTab(t); }} tabs={visibleTabs} unread={{ chat: chatUnread || dmUnread }} onProfile={commLocked ? undefined : () => ctx.openProfile()} profileAv={identity.avatar} profileName={identity.name} />
+                {/* content column + THE player on its own row beneath it (desktop has no tab-bar dock; the player
+                    takes layout space here, so it covers neither the sidebar nor any pane's controls) */}
+                <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+                <div style={{ flex: 1, minHeight: 0, display: 'flex', position: 'relative' }}>
                 {tab === 'chat' && ctx.church && ctx.church.npub ? (
                   <div style={{ flex: 1, display: 'flex', minWidth: 0, background: 'var(--paper)' }}>
                     <div style={{ width: 372, flexShrink: 0, position: 'relative', borderRight: '1px solid var(--line)' }}>{screens.chat}</div>
@@ -2647,6 +2651,9 @@ function App() {
                     <div style={{ position: 'relative', width: '100%', maxWidth: 920, borderRight: '1px solid var(--line)' }}>{screens[tab]}</div>
                   </div>
                 )}
+                </div>
+                <div style={{ flexShrink: 0, background: 'var(--paper)' }}><MiniPlayer ctx={ctx} inline /></div>
+                </div>
               </div>
             ) : (
               <React.Fragment>
