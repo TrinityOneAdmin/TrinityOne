@@ -59,6 +59,9 @@ function world({ stored = {} } = {}) {
 const trk = (id, extra) => ({ id, title: 'T-' + id, src: 'blob:' + id, ...(extra || {}) });
 const byLabel = (tree, label) => find(tree, n => n.type === 'button' && n.props && n.props['aria-label'] === label);
 const press = (tree, label) => { const b = byLabel(tree, label); assert.equal(b.length, 1, `expected exactly one control labelled "${label}" on this screen, found ${b.length}`); b[0].props.onClick({ stopPropagation() {} }); };
+// The speed control is ONE pill; its name carries the current rate, so find it by prefix and tap it.
+const speedPill = tree => { const b = find(tree, n => n.type === 'button' && n.props && /^Playback speed /.test(n.props['aria-label'] || '')); assert.equal(b.length, 1, `expected exactly one speed pill, found ${b.length}`); return b[0]; };
+const tapSpeed = tree => speedPill(tree).props.onClick({ stopPropagation() {} });
 const sliders = tree => find(tree, n => n.props && n.props.role === 'slider');
 
 // ─────────────────────────────────── ENGINE ───────────────────────────────────
@@ -74,6 +77,23 @@ test('ENGINE: the chosen speed is applied to the element, kept per device, and s
   assert.equal(w.el.playbackRate, 1.5, 'THE SPEED WAS LOST WHEN THE TRACK CHANGED — the element reloads on a new src and falls back to 1x');
   w.A.setRate(3);
   assert.equal(w.el.playbackRate, 1.5, 'a speed outside the offered list was accepted');
+});
+
+test('POINT OF USE — the speed pill shows the current rate and a tap on the last speed wraps to the first', () => {
+  const w = world();
+  w.A.play(trk('a'), [trk('a'), trk('b')]);
+  const draw = () => { w.draw(w.audio.AudioControls, {}); return w.draw(w.audio.AudioControls, {}); };
+  w.A.setRate(2);
+  let tree = draw();
+  const pill = speedPill(tree);
+  assert.ok(texts(tree).includes('2\u00d7'), 'the pill does not show the current rate');
+  assert.equal(find(tree, n => n.props && n.props['aria-label'] === 'Playback speed').length, 0, 'the old chip group is still drawn');
+  tapSpeed(tree);
+  assert.equal(w.el.playbackRate, 0.75, 'tapping 2x did not wrap to 0.75x');
+  assert.equal(w.store['trinityone.audioRate'], '0.75');
+  tree = draw();
+  assert.ok(texts(tree).includes('0.75\u00d7'));
+  assert.equal(pill.props.title.includes('tap to change'), true);
 });
 
 test('ENGINE: a remembered speed is used from the very first play after a restart', () => {
@@ -136,7 +156,10 @@ async function drill({ redraw, w, want }) {
   assert.equal(el.currentTime, 50, 'dragging the scrubber did not seek');
   sl[0].props.onPointerUp();
 
-  press(tree, 'Speed 1.5 times'); assert.equal(el.playbackRate, 1.5, 'the speed buttons did not change the speed');
+  assert.equal(speedPill(tree).props['aria-label'], 'Playback speed 1\u00d7, tap to change');
+  tapSpeed(tree); assert.equal(el.playbackRate, 1.25, 'one tap on the speed pill did not go 1 -> 1.25');
+  tree = redraw(); assert.equal(speedPill(tree).props['aria-label'], 'Playback speed 1.25\u00d7, tap to change', 'the pill does not show the new rate');
+  tapSpeed(tree); assert.equal(el.playbackRate, 1.5, 'the speed pill did not go 1.25 -> 1.5');
 
   press(tree, 'Next track'); await settle();
   assert.equal(el.src, want.next, 'NEXT went to the wrong place');

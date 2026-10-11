@@ -152,8 +152,6 @@ function AudioControls({ onClay, heading, match, durationText }) {
   const dim = onClay ? 'rgba(255,255,255,.8)' : 'var(--ink-3)';
   const rail = onClay ? 'rgba(255,255,255,.25)' : 'var(--line)';
   const fill = onClay ? '#fff' : 'var(--clay)';
-  const chipBg = (on) => on ? (onClay ? '#fff' : 'var(--clay)') : (onClay ? 'rgba(255,255,255,.16)' : 'var(--surface-2)');
-  const chipFg = (on) => on ? (onClay ? 'var(--clay-deep)' : 'var(--on-clay)') : fg;
   const pct = a.d ? Math.min(100, (a.t / a.d) * 100) : 0;
   const hasNext = qi >= 0 && qi + 1 < q.length;
   const seekFrom = (e) => { const r = e.currentTarget.getBoundingClientRect(); if (r && r.width) A.seekTo((e.clientX - r.left) / r.width); };
@@ -188,12 +186,8 @@ function AudioControls({ onClay, heading, match, durationText }) {
         </button>
         <button onClick={() => A.seek(10)} aria-label="Forward 10 seconds" title="Forward 10 seconds" style={circ}>{'+10'}</button>
         <button onClick={() => A.next()} disabled={!hasNext} aria-label="Next track" title="Next" style={{ ...circ, opacity: hasNext ? 1 : 0.35, cursor: hasNext ? 'pointer' : 'default' }}><Icon name="forward" size={22} color="currentColor" /></button>
-      </div>
-      <div role="group" aria-label="Playback speed" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: 8 }}>
-        {(A.rates || [1]).map(r => (
-          <button key={r} onClick={() => A.setRate(r)} aria-pressed={a.rate === r} aria-label={'Speed ' + r + ' times'} title={'Speed ' + r + '×'}
-            style={{ minWidth: 44, height: 32, borderRadius: 999, border: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, background: chipBg(a.rate === r), color: chipFg(a.rate === r) }}>{r + '×'}</button>
-        ))}
+        <button onClick={() => { const rs = A.rates || [1]; const i = rs.indexOf(a.rate); A.setRate(rs[(i + 1) % rs.length]); }} aria-label={'Playback speed ' + a.rate + '\u00d7, tap to change'} title={'Playback speed ' + a.rate + '\u00d7 \u00b7 tap to change'}
+          style={{ minWidth: 40, height: 28, padding: '0 8px', borderRadius: 999, border: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, background: onClay ? 'rgba(255,255,255,.16)' : 'var(--surface-2)', color: fg, flexShrink: 0 }}>{a.rate + '\u00d7'}</button>
       </div>
       {q.length > 1 ? (
         <div style={{ marginTop: 14 }}>
