@@ -61,7 +61,7 @@ async function modal({ publish, dm }) {
   const { React, draw } = miniReact();
   const closed = [], published = [], dms = [];
   let press = 0;
-  const Comp = await loadComponent('GroupLeadersModal', 'function GroupLeadersModal({ group, onClose }) {', {
+  const Comp = await loadComponent('GroupLeadersModal', 'function GroupLeadersModal({ group, getCurrent, onClose }) {', {
     React,
     window: {
       useStewardMembers: () => [RONALD, MAUD],
