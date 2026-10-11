@@ -506,8 +506,10 @@ test('(seal c) Steward.removeKey (shipped) deletes every church’s device copy 
   store.set('trinityone.steward.unrelated', 'keep');
   const body = fnBody(STEWARD, 'removeKey() {', 'Steward.removeKey');
   const win = { Steward: {}, dispatchEvent() {} };
-  const removeKey = new Function(...DEVICE_NAMES, 'KEY_LS', 'window', 'encBlobRemove', 'sk', 'pub', 'currentMnemonic',
-    deviceHelpers() + '\nreturn function ' + body + ';')(...deviceVals(store, church.sk), 'trinityone.steward.key', win, () => Promise.resolve(true), church.sk, cp, 'x');
+  // `_stay` is fix/stay-open-console's stay-open record (removeKey also clears it once both branches are in);
+  // an inert stand-in here — this test is about the children lists, the stay-open file tests its own clear.
+  const removeKey = new Function(...DEVICE_NAMES, 'KEY_LS', 'window', 'encBlobRemove', 'sk', 'pub', 'currentMnemonic', '_stay',
+    deviceHelpers() + '\nreturn function ' + body + ';')(...deviceVals(store, church.sk), 'trinityone.steward.key', win, () => Promise.resolve(true), church.sk, cp, 'x', { clear: () => Promise.resolve() });
   removeKey();
   assert.deepEqual([...store.keys()].filter(k => k.startsWith('trinityone.steward.minorslast.')), [], 'a children list survived removing the key');
   assert.equal(store.get('trinityone.steward.unrelated'), 'keep', 'CONTROL: removeKey deleted something it should not');
@@ -611,7 +613,8 @@ test('(drop c) the unlock screen’s “Restore this church with my 12 words” 
   tree = draw();
   const restore = nodes(tree).find(n => n.type === 'button' && texts(n).join(' ').includes('Restore this church with my 12 words'));
   assert.ok(restore, 'setup: the lost-key screen did not offer “Restore this church with my 12 words”');
-  restore.props.onClick();
+  // the handler is async once fix/stay-open-console is in (it awaits the stay-open clear before reloading)
+  await restore.props.onClick();
   const left = []; for (let i = 0; i < B.localStorage.length; i++) left.push(B.localStorage.key(i));
   assert.equal(reloaded, 1, 'setup: the button did not reload');
   assert.equal(B.localStorage.getItem('trinityone.steward.church-key.enc'), null, 'CONTROL: the key blob was not removed');

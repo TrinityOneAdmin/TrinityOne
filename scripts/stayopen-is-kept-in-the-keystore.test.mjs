@@ -278,6 +278,7 @@ test('(g) removing the lock, removing the church, and restoring from 12 words ea
   {
     const { dev, stay } = await deviceWithRecord();
     const o = liftMethod('removeKey() {', { localStorage: { removeItem() {} }, KEY_LS: 'k', encBlobRemove: async () => true, _stay: stay,
+      _minorsLastClear: () => {},   // fix/child-safety-leaks' sealed children lists — inert here; that file tests its own clear
       window: { Steward: {}, dispatchEvent() {} }, CustomEvent: class {} });
     await o.removeKey(); await new Promise(r => setImmediate(r));
     assert.equal(dev.hw.map[SS_KEY], undefined, 'removeKey ("Remove this church from this device") left the stay-open record');
