@@ -19735,10 +19735,14 @@ zoo`.split("\n");
       }
       return true;
     },
-    // Pin/feature a sermon → members get a Today card + a notification. One per church (addressable → replaces).
-    pinSermon(s) {
+    // Pin/feature a sermon → members get a Today card, and a notification UNLESS the steward chose "quietly".
+    // `opts.notify === false` writes `notify:false` into the document (the Today card still shows; the member's
+    // bell entry and the relay's push both skip it). Anything else writes NO field, which every reader takes as
+    // "notify" — so an older console's document, and an older reader of a new one, behave exactly as before.
+    // One per church (addressable → replaces).
+    pinSermon(s, opts) {
       if (!sk) return Promise.resolve(null);
-      const content = JSON.stringify({ id: s.id, title: s.title || "Sermon", sha256: s.sha256, hosts: s.hosts && s.hosts.length ? s.hosts : s.host ? [s.host] : [], mime: s.mime || "", enc: s.enc || void 0, ts: now() });
+      const content = JSON.stringify({ id: s.id, title: s.title || "Sermon", sha256: s.sha256, hosts: s.hosts && s.hosts.length ? s.hosts : s.host ? [s.host] : [], mime: s.mime || "", enc: s.enc || void 0, notify: opts && opts.notify === false ? false : void 0, ts: now() });
       return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", PINSERMON_D + pub], ["t", NET]], content }));
     },
     unpinSermon() {
