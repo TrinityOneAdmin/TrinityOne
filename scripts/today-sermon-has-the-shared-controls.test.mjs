@@ -147,3 +147,28 @@ test('Today: App renders THE player, and its timeline, \u00b110, speed pill and 
   assert.equal(window.TrinityAudio.current.id, 'oldest', 'an Up next jump did not play that sermon');
   assert.equal(el.src, 'blob:sha-oldest');
 });
+
+// AUDIT OF e4a17a0, D1: the desktop layout (a wide window: fullscreen && width >= 900) had NO player, so with
+// the page cards gone, audio started there could not be paused, skipped or stopped. App must render THE player
+// in that layout too — inline, on its own row under the content — and its controls must work.
+test('Desktop layout (window >= 900px): App renders THE player inline, and its Pause pauses', async () => {
+  window.TrinityAudio.stop();
+  window.innerWidth = 1200;
+  window.dispatch('resize');
+  try {
+    draw(); draw();
+    deliver('subscribeSermons', LIST);
+    deliver('subscribePinnedSermon', { ...LIST[0], ts: 1 });
+    const ctx = todayCtx();
+    await ctx.playSermon(ctx.pinnedSermon);
+    assert.equal(el.paused, false, 'the featured sermon did not start — re-anchor this test');
+    const players = nodes(draw()).filter(n => n.type && n.type.name === 'MiniPlayer');
+    assert.equal(players.length, 1, `THE DESKTOP LAYOUT HAS ${players.length} PLAYERS — with no control card on any page, none means audio cannot be stopped`);
+    assert.equal(players[0].props.inline, true, 'the desktop player is the floating tab-bar one — desktop has no tab bar to dock above');
+    const saved = window.React; window.React = mini.React;
+    let tree;
+    try { mini.draw(players[0].type, players[0].props); tree = mini.draw(players[0].type, players[0].props); } finally { window.React = saved; }
+    press(tree, 'Pause');
+    assert.equal(el.paused, true, 'the desktop player’s Pause did not pause');
+  } finally { window.innerWidth = 390; window.dispatch('resize'); draw(); }
+});

@@ -21,7 +21,7 @@ import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, extname, normalize } from 'node:path';
 import { WebSocket } from 'ws';
-import { loadScreen, miniReact, find } from './render-jsx-screen.mjs';
+import { loadScreen, miniReact, find, compileScreen } from './render-jsx-screen.mjs';
 import { requireFreePort } from './test-ports.mjs';
 
 const ROOT = new URL('../', import.meta.url).pathname;
@@ -119,6 +119,9 @@ before(async () => {
   srv = createServer((req, res) => {
     const p = decodeURIComponent(req.url.split('?')[0]);
     if (p === '/page.html') { res.writeHead(200, { 'content-type': 'text/html' }); return res.end(PAGE.html); }
+    if (p === '/live.html') { res.writeHead(200, { 'content-type': 'text/html' }); return res.end(LIVE_HTML); }
+    const c = /^\/c\/(app\/[a-z-]+\.jsx)\.js$/.exec(p);
+    if (c && LIVE_FILES.includes(c[1])) { res.writeHead(200, { 'content-type': 'text/javascript' }); return res.end(compileScreen(c[1])); }
     const f = join(ROOT, normalize(p).replace(/^(\.\.[/\\])+/, ''));
     if (!f.startsWith(ROOT) || !existsSync(f)) { res.writeHead(404); return res.end(); }
     res.writeHead(200, { 'content-type': { '.css': 'text/css', '.woff2': 'font/woff2' }[extname(f)] || 'application/octet-stream' });
@@ -193,4 +196,92 @@ for (const width of [320, 360, 390]) {
     const card = m.region.h - (m.list.bottom - m.list.y);
     assert.ok(card <= 150, `the player (queue closed) is ${card}px tall at ${width}px — the owner asked for "a little bigger"`);
   });
+}
+
+// ══════════════════ LIVE: THE PAGE UNDER THE PLAYER SCROLLS CLEAR OF IT (audit of e4a17a0, D2) ══════════════════
+// The player is ~130px tall (more with Up next open) and floats over the bottom of the page under it, so every
+// scrolling page must pad by the player's height or its last rows sit behind it. This half runs the REAL
+// app files with the REAL React (vendor/react*.js) in the browser — the player's own effect measures it and
+// publishes the height; nothing here sets it — mounts a tab's page with the real MiniPlayer and TabBar over it
+// (as app.jsx docks them), starts a track, scrolls the page to the bottom and measures the lowest thing drawn
+// on it against the player's top edge. Today and Library -> Watch & Listen both use ScreenScroll.
+const LIVE_FILES = ['app/icons.jsx', 'app/ui.jsx', 'app/screens-today.jsx', 'app/screens-church.jsx', 'app/screens-library.jsx', 'app/screens-watch.jsx', 'app/screens-audio.jsx'];
+const LIVE_HTML = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="stylesheet" href="/vendor/fonts/fonts.css">
+<style>${[...readFileSync(join(ROOT, 'index.html'), 'utf8').matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)].map(m => m[1]).join('\n')}
+html,body{margin:0;padding:0} #app{position:relative;width:100%;height:100vh;overflow:hidden} *{animation:none!important}</style>
+<div id="app" class="trinity"></div>
+<script src="/vendor/react.production.min.js"></script><script src="/vendor/react-dom.production.min.js"></script>
+<script src="/engine.js"></script>
+<script>
+  window.__errors = []; window.addEventListener('error', e => window.__errors.push(String(e.message)));
+  const SERMONS = Array.from({ length: 14 }, (_, i) => ({ id: 's' + i, title: 'Sermon number ' + (i + 1), mime: 'audio/mp4', sha256: 'x' + i, hosts: ['h'], contentTs: 1790000000 - i * 604800 }));
+  window.Fellowship = { subscribeSermons: (_n, cb) => { cb(SERMONS); return () => {}; }, gatewayBase: () => '', fetchSermon: async () => null,
+    subscribeCareRequests: () => () => {}, cancelCareRequest() {}, childCareAudience: async () => [] };
+  window.Bible = { parseRef: () => null, loaded: false, books: () => [], getVerses: () => [], maxChapter: () => 1, activeVersion: 'WEB',
+    refLabel: () => '', defaultLoc: () => ({ book: 43, chap: 1 }), getVideos: async () => ({ channel: null, videos: [] }), bookName: () => 'John' };
+  window.TrinityData = { NOTIFICATIONS: [], PLANS: [{ id: 'p1', name: 'Plan', days: [{ d: 1, ref: 'John 1' }] }], VOTD_POOL: [{ ref: 'John 3:16', text: 'For God so loved the world.' }], MODULES: [], COLLECTIONS: [], JOURNAL: [] };
+  window.MyData = { count: () => 0, list: () => [], on: () => () => {}, settings: { get: () => ({}) } };
+</script>
+${LIVE_FILES.map(f => `<script src="/c/${f}.js"></script>`).join('\n')}
+<script>
+  const stub = () => null;
+  for (const n of ['Sheet', 'Halo', 'ChurchBadge', 'UserAvatar']) if (typeof window[n] === 'undefined') window[n] = stub;
+  if (typeof window.lsGet === 'undefined') { window.lsGet = (k, d) => d; window.lsSet = () => {}; }
+  if (typeof window.todayISO === 'undefined') window.todayISO = () => new Date().toISOString().slice(0, 10);
+  const ctx = { church: { name: 'St Bartholomew-the-Great', initials: 'SB', npub: 'np1', audioFeed: null, channel: '' },
+    openChurchSwitcher() {}, openSearch() {}, openNotifications() {}, toggleDark() {}, dark: false, toast() {}, netUnread: 0,
+    openServing() {}, openListen() {}, openVideo() {}, planProgress: {}, plans: [], bookmarks: [], notes: {}, highlights: {}, openShareSheet() {} };
+  window.__mount = (tab) => {
+    const e = React.createElement;
+    const Page = tab === 'today' ? TodayScreen : LibraryScreen;
+    const Dock = () => e(React.Fragment, null,
+      e('div', { id: 'page', style: { position: 'absolute', inset: 0 } }, e(Page, { ctx })),
+      e(MiniPlayer, { ctx }), e(TabBar, { active: tab, onChange() {} }));
+    ReactDOM.createRoot(document.getElementById('app')).render(e(Dock));
+  };
+  window.__play = () => {
+    const q = Array.from({ length: 6 }, (_, i) => ({ id: 'q' + i, title: 'Track ' + (i + 1), subtitle: 'St Bartholomew-the-Great', src: 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=' }));
+    window.TrinityAudio.play(q[1], q);
+  };
+</script>`;
+
+async function live(width, tab, { queueOpen = false } = {}) {
+  await send('Emulation.setDeviceMetricsOverride', { width, height: 760, deviceScaleFactor: 1, mobile: true });
+  await send('Page.navigate', { url: `http://127.0.0.1:${srv.address().port}/live.html` });
+  await sleep(600);
+  const expr = `(async () => { const wait = ms => new Promise(r => setTimeout(r, ms));
+    try { await document.fonts.ready; } catch (e) {}
+    __mount(${JSON.stringify(tab)}); await wait(300);
+    if (${JSON.stringify(tab)} === 'library') { const b = [...document.querySelectorAll('#page button')].find(x => /Watch/.test(x.textContent)); if (b) b.click(); await wait(400); }
+    __play(); await wait(400);
+    if (${queueOpen}) { const u = document.querySelector('[aria-label="Up next"]'); if (u) u.click(); await wait(400); }
+    const R = document.querySelector('[role="region"][aria-label="Audio player"]');
+    const sc = [...document.querySelectorAll('#page *')].find(n => getComputedStyle(n).overflowY === 'auto' && n.scrollHeight > n.clientHeight);
+    if (sc) { sc.scrollTop = sc.scrollHeight; await wait(250); }
+    let low = null, lowBottom = -1;
+    if (sc) for (const n of sc.querySelectorAll('*')) { const b = n.getBoundingClientRect(); if (b.height > 0 && b.width > 0 && b.bottom > lowBottom) { lowBottom = b.bottom; low = (n.textContent || n.tagName).trim().slice(0, 50); } }
+    return JSON.stringify({ errors: window.__errors, hasPlayer: !!R, playerTop: R ? Math.round(R.getBoundingClientRect().top) : null,
+      playerH: R ? Math.round(R.getBoundingClientRect().height) : null, scrolls: !!sc, lowBottom: Math.round(lowBottom), low,
+      watchRows: [...document.querySelectorAll('#page button')].filter(b => /Sermon number/.test(b.textContent)).length,
+      cssVar: getComputedStyle(document.documentElement).getPropertyValue('--trinity-player-h').trim() }); })()`;
+  const r = await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true });
+  assert.ok(!(r.result && r.result.exceptionDetails), 'the live probe threw: ' + JSON.stringify(r.result && r.result.exceptionDetails || {}).slice(0, 400));
+  return JSON.parse(r.result.result.value);
+}
+
+for (const [tab, label] of [['today', 'Today'], ['library', 'Library > Watch & Listen']]) {
+  for (const queueOpen of [false, true]) {
+    test(`LIVE 360px: with a track playing${queueOpen ? ' and Up next open' : ''}, the bottom of ${label} scrolls clear of the player`,
+      { skip: !CHROME ? 'no chromium' : false, timeout: 60000 }, async () => {
+      const m = await live(360, tab, { queueOpen });
+      assert.deepEqual(m.errors, [], 'the live page threw: ' + m.errors.join(' | '));
+      assert.ok(m.hasPlayer, 'the player did not appear after a track was started');
+      assert.ok(m.scrolls, `the ${label} page does not scroll at 360px — the fixture is too short to test anything`);
+      if (tab === 'library') assert.ok(m.watchRows >= 10, `Watch & Listen did not open with its sermon list (rows: ${m.watchRows})`);
+      assert.ok(m.lowBottom <= m.playerTop,
+        `THE BOTTOM OF ${label.toUpperCase()} IS BEHIND THE PLAYER: scrolled to the end, the last thing on the page ("${m.low}") ends at ` +
+        `y=${m.lowBottom} and the player (h=${m.playerH}) starts at y=${m.playerTop}. Published --trinity-player-h: ${m.cssVar}`);
+    });
+  }
 }

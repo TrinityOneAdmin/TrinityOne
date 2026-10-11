@@ -209,7 +209,7 @@ function ListenScreen({ open, onClose, ctx }) {
         </div>
       </div>
 
-      <div className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: audio.track ? '10px 16px 190px' : '10px 16px 30px' }}>
+      <div className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '10px 16px calc(30px + var(--trinity-listen-player-h, 0px))' }}>
         {loading && !episodes.length ? (
           <div style={{ textAlign: 'center', padding: '60px 24px', color: 'var(--ink-3)' }}><div style={{ width: 26, height: 26, margin: '0 auto', borderRadius: 999, border: '2.5px solid var(--line)', borderTopColor: 'var(--clay)', animation: 'trinitySpin .8s linear infinite' }} /><p style={{ marginTop: 14, fontSize: 14 }}>Loading episodes…</p></div>
         ) : null}
@@ -254,7 +254,7 @@ function ListenScreen({ open, onClose, ctx }) {
       </div>
       {/* THE player (owner 2026-10-11: one player, no controls on the page). This screen covers the tab-bar
           dock, so the same floating player docks at this screen's foot. Guarded: no audio script, no player. */}
-      {window.MiniPlayer ? React.createElement(window.MiniPlayer, { ctx, bottom: 'max(12px, env(safe-area-inset-bottom))' }) : null}
+      {window.MiniPlayer ? React.createElement(window.MiniPlayer, { ctx, bottom: 'max(12px, env(safe-area-inset-bottom))', heightVar: '--trinity-listen-player-h' }) : null}
     </Overlay>
   );
 }

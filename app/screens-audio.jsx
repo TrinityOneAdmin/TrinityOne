@@ -213,9 +213,31 @@ function AudioQueue({ a }) {
 // ── MiniPlayer: THE player, docked above the tab bar whenever something is loaded. Title, timeline, the
 // controls row, and "Up next" (collapsed; the list opens just above the player). Tapping it does NOT navigate.
 // `bottom` lets a full-screen overlay (Listen) dock the same player at its own foot, where there is no tab bar.
-function MiniPlayer({ ctx, bottom }) {
+//
+// THE SPACE IT TAKES (audit of e4a17a0, D2). A floating player sits over the bottom of whatever page is under
+// it, so it publishes its REAL height (+ an 8px gap; 0 when nothing is loaded or it unmounts) as a CSS variable
+// on <html>, and every scrolling page adds that to its bottom padding: ScreenScroll (Today, Library + Watch,
+// Community, Plans, Search) and the reader use `--trinity-player-h`; Listen, which docks its own copy, passes
+// `heightVar="--trinity-listen-player-h"`. Measured, so the open Up next list is counted too.
+// `inline` = the desktop layout: the player takes its own row in the layout, covers nothing, publishes nothing.
+function MiniPlayer({ ctx, bottom, inline, heightVar }) {
   const a = useTrinityAudio();
   const [showQ, setShowQ] = React.useState(false);
+  const boxRef = React.useRef(null);
+  const cssVar = heightVar || '--trinity-player-h';
+  React.useEffect(() => {
+    const root = typeof document !== 'undefined' && document.documentElement;
+    if (!root || !root.style || typeof root.style.setProperty !== 'function') return undefined;
+    const put = () => {
+      const box = !inline && boxRef.current;
+      const h = box && box.getBoundingClientRect ? Math.ceil(box.getBoundingClientRect().height) : 0;
+      root.style.setProperty(cssVar, (h ? h + 8 : 0) + 'px');
+    };
+    put();
+    let ro = null;
+    try { if (boxRef.current && typeof ResizeObserver !== 'undefined') { ro = new ResizeObserver(put); ro.observe(boxRef.current); } } catch (e) {}
+    return () => { try { if (ro) ro.disconnect(); } catch (e) {} root.style.setProperty(cssVar, '0px'); };
+  });
   if (!a.track || !window.TrinityAudio) return null;
   const A = window.TrinityAudio;
   const hasQ = (a.q || []).length > 1;
@@ -232,7 +254,10 @@ function MiniPlayer({ ctx, bottom }) {
     </React.Fragment>
   );
   return (
-    <div role="region" aria-label="Audio player" style={{
+    <div ref={boxRef} role="region" aria-label="Audio player" style={inline ? {
+      position: 'relative', width: '100%', maxWidth: 560, margin: '0 auto', padding: '8px 12px 10px', boxSizing: 'border-box',
+      display: 'flex', flexDirection: 'column', gap: 6,
+    } : {
       position: 'absolute', left: 12, right: 12, zIndex: 24,
       bottom: bottom || 'calc(max(12px, env(safe-area-inset-bottom)) + 74px)',
       display: 'flex', flexDirection: 'column', gap: 6, animation: 'trinityRise .22s ease both',
