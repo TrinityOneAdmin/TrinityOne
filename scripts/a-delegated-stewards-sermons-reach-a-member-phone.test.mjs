@@ -114,7 +114,7 @@ function consoleApi({ signer, actingChurch }) {
   const ttBody = fnBody(STEWARD_VENDOR, 'function _tombstoneTargets(e) {', '_tombstoneTargets');
   const psBody = fnBody(STEWARD_VENDOR, 'publishSermon(s) {', 'publishSermon');
   const ssBody = fnBody(STEWARD_VENDOR, 'subscribeSermons(onSermons) {', 'subscribeSermons');
-  const pinBody = fnBody(STEWARD_VENDOR, 'pinSermon(s) {', 'pinSermon');
+  const pinBody = fnBody(STEWARD_VENDOR, 'pinSermon(s, opts) {', 'pinSermon');
   const spsBody = fnBody(STEWARD_VENDOR, 'subscribePinnedSermon(onPinned) {', 'subscribePinnedSermon');
 
   Object.assign(scope, new Function('scope', `with (scope) { ${feBody}

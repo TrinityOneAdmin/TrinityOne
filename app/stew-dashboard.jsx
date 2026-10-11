@@ -9374,6 +9374,7 @@ function DashSermons() {
   const [encOn, setEncOn] = React.useState(_churchEnc);
   const autoBackups = React.useMemo(() => { try { return (window.Steward.mediaHosts ? window.Steward.mediaHosts() : []).slice(1); } catch { return []; } }, []);
   const [mirrorHosts, setMirrorHosts] = React.useState(autoBackups.join(', '));   // auto-filled from the church's other relays; editable
+  const [featureChoiceId, setFeatureChoiceId] = React.useState(null);   // the sermon whose "Feature and notify / Feature quietly" choice is open
   const [pinnedId, setPinnedId] = React.useState(null);   // the currently-featured sermon (pushed to members' Today)
   const conn = window.useStewardConn ? window.useStewardConn() : 0;   // re-subscribe after a relay restart / reconnect (else a sermon uploaded elsewhere never appears)
   // FOLLOW A CHURCH SWITCH. These three were keyed on `conn` alone, so an owner who stewards a second church and
@@ -9390,7 +9391,10 @@ function DashSermons() {
   React.useEffect(() => (window.Steward.subscribeSermons ? window.Steward.subscribeSermons(list => { setSermons(list || []); setSermonsLoaded(true); }) : undefined), [conn, _sermIdv]);
   React.useEffect(() => (window.Steward.subscribeMediaKey ? window.Steward.subscribeMediaKey() : undefined), [conn, _sermIdv]);
   React.useEffect(() => (window.Steward.subscribePinnedSermon ? window.Steward.subscribePinnedSermon(p => setPinnedId(p && p.id)) : undefined), [conn, _sermIdv]);
-  const togglePin = (s) => { if (pinnedId === s.id) window.Steward.unpinSermon(); else window.Steward.pinSermon(s); };
+  // Featured -> tap unfeatures. Not featured -> tap opens the choice; the steward decides EVERY time whether
+  // members are notified (no default). `notify:false` is the quiet pin; the notifying one passes `true`.
+  const togglePin = (s) => { if (pinnedId === s.id) { setFeatureChoiceId(null); window.Steward.unpinSermon(); } else setFeatureChoiceId(featureChoiceId === s.id ? null : s.id); };
+  const doFeature = (s, notifyMembers) => { setFeatureChoiceId(null); return window.Steward.pinSermon(s, { notify: notifyMembers }); };
   // ── A CONSOLE THAT MAY NOT PUBLISH LEARNS SO BEFORE ANY BYTES LEAVE THE PHONE ───────────────────────────
   // AUDIT-steward-doc-rules-round2-2026-09-22, finding R1. At the time this was written the engine refused
   // `trinityone/sermon:` on EVERY delegated console (publishSermon / removeSermon, and the relay too) — but
@@ -9481,7 +9485,7 @@ function DashSermons() {
       const pub = await window.Steward.publishSermon({ title: (fields && fields.title) || f.name.replace(/\.[^.]+$/, ''), desc: (fields && fields.desc) || undefined, sha256: b.sha256, host: b.host, hosts: b.hosts, mime: b.mime, size: b.size, enc: b.enc });
       uploadedSigs.current.add(f.name + '|' + f.size + '|' + f.lastModified);   // published, so a repeat really would be a second copy
       let pinned = false;
-      if (notify && pub && window.Steward.pinSermon) { try { pinned = !!(await window.Steward.pinSermon(pub)); } catch (e) {} }
+      if (notify && pub && window.Steward.pinSermon) { try { pinned = !!(await window.Steward.pinSermon(pub, { notify: true })); } catch (e) {} }
       const backups = (b.hosts || []).length - 1;
       setUpMsg('✓ Uploaded “' + f.name + '”' + (b.enc ? ' (encrypted)' : '') + (notify ? (pinned ? ' · members notified' : ' · saved, but members weren’t notified — tap 📌 on it to try again') : '') + (backups > 0 ? ` · ${backups} backup${backups > 1 ? 's' : ''}` : (mirrors.length ? ' · backups failed' : '')));
       ok = true;
@@ -9538,14 +9542,20 @@ function DashSermons() {
       <Panel title="Self-hosted sermons">
         <div className="set-note" style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 12 }}>Upload the church’s <b>own audio or video</b> — it lives on your relay, <b>members only</b> (no YouTube, no public feed). Both land in members’ <b>Watch &amp; Listen</b> tab — audio under Listen, video under Watch. Great over a thin connection.</div>
         {sermons.length ? <div style={{ display: 'flex', flexDirection: 'column', gap: 7, marginBottom: 12 }}>{sermons.map(s => (
-          <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+          <div key={s.id} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, padding: '9px 12px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
             <Icon name={String(s.mime || '').startsWith('video') ? 'play' : 'headphones'} size={16} color="var(--sage)" />
             <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 13.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.title}</div><div style={{ fontSize: 11.5, color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.desc ? s.desc : (fmtSize(s.size || 0) + (s.enc ? ' · encrypted' : ''))}</div></div>
             {/* EDIT IS A `sermon:` WRITE TOO — it re-publishes the same document — so it is locked on a
                 delegated console beside the other two, rather than letting a steward retype a title and
                 meet the refusal only once they press Save. */}
             <button onClick={() => { if (_churchOnly) { setUpMsg('✗ ' + SERMON_OWNER_ONLY); return; } setEditing(s); }} aria-disabled={_churchOnly || undefined} title={_churchOnly ? SERMON_OWNER_ONLY : 'Edit name & details'} aria-label="Edit sermon" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '8px 10px', minWidth: 40, minHeight: 40, boxSizing: 'border-box', alignItems: 'center', justifyContent: 'center', cursor: _churchOnly ? 'not-allowed' : 'pointer', opacity: _churchOnly ? 0.55 : 1, color: 'var(--ink-3)', display: 'flex' }}><Icon name={_churchOnly ? 'lock' : 'pen'} size={14} color="currentColor" /></button>
-            <button onClick={() => togglePin(s)} title={pinnedId === s.id ? 'Pinned to members’ Today — tap to unpin' : 'Pin to members’ Today (sends a notification)'} style={{ border: '1px solid ' + (pinnedId === s.id ? 'var(--clay)' : 'var(--line)'), background: pinnedId === s.id ? 'var(--clay)' : 'var(--surface)', borderRadius: 9, padding: '8px 10px', minWidth: 40, minHeight: 40, boxSizing: 'border-box', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: pinnedId === s.id ? '#fff' : 'var(--ink-3)', display: 'flex' }}><Icon name="pin" size={14} color="currentColor" /></button>
+            <button onClick={() => togglePin(s)} title={pinnedId === s.id ? 'Pinned to members’ Today — tap to unpin' : 'Feature on members’ Today'} style={{ border: '1px solid ' + (pinnedId === s.id ? 'var(--clay)' : 'var(--line)'), background: pinnedId === s.id ? 'var(--clay)' : 'var(--surface)', borderRadius: 9, padding: '8px 10px', minHeight: 40, boxSizing: 'border-box', alignItems: 'center', justifyContent: 'center', gap: 5, cursor: 'pointer', color: pinnedId === s.id ? '#fff' : 'var(--ink-2)', fontSize: 12.5, fontWeight: 700, fontFamily: 'var(--font-ui)', display: 'flex' }}><Icon name="pin" size={14} color="currentColor" />{pinnedId === s.id ? 'Featured' : 'Feature'}</button>
+            {featureChoiceId === s.id && pinnedId !== s.id ? (
+              <div style={{ flexBasis: '100%', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <button onClick={() => doFeature(s, true)} className="sk-btn sk-btn--clay" style={{ fontSize: 12.5, minHeight: 40 }}>Feature and notify</button>
+                <button onClick={() => doFeature(s, false)} className="sk-btn sk-btn--ghost" style={{ fontSize: 12.5, minHeight: 40 }}>Feature quietly</button>
+              </div>
+            ) : null}
             {/* NO "This can’t be undone" OVER SOMETHING THAT CANNOT HAPPEN. The confirmation sheet used to
                 open on a delegated console and take the press, and only then did the engine refuse. */}
             <button onClick={() => { if (_churchOnly) { setUpMsg('✗ ' + SERMON_REMOVE_OWNER_ONLY); return; } setPendingDelete(s); }} aria-disabled={_churchOnly || undefined} title={_churchOnly ? SERMON_REMOVE_OWNER_ONLY : 'Remove'} aria-label="Remove sermon" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '8px 10px', minWidth: 40, minHeight: 40, boxSizing: 'border-box', alignItems: 'center', justifyContent: 'center', cursor: _churchOnly ? 'not-allowed' : 'pointer', opacity: _churchOnly ? 0.55 : 1, color: 'var(--ink-3)', display: 'flex' }}><Icon name={_churchOnly ? 'lock' : 'trash'} size={14} color="currentColor" /></button>
