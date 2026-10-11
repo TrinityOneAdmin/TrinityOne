@@ -224,7 +224,10 @@ test('a subscription left over from the previous church cannot POISON the new on
 // "Check out" control left to press. That is the entire explanation for R7-1, which had been filed as a
 // check-out bug. Every symptom was silence.
 test('unlocking restores the acting identity, or claims none', () => {
-  const body = stripComments(fnBody(SRC, 'async unlock(pin) {', 'unlock'));
+  // unlock(pin) and the stay-open replay both enter through _enterUnlocked(seed), so the ordering lives there.
+  const unlockBody = stripComments(fnBody(SRC, 'async unlock(pin) {', 'unlock'));
+  assert.ok(unlockBody.includes('_enterUnlocked(seed)'), 're-anchor: unlock no longer enters through _enterUnlocked');
+  const body = stripComments(fnBody(SRC, 'function _enterUnlocked(seed) {', '_enterUnlocked'));
   const setKeyAt = body.indexOf('setKey(seed)');
   const restoreAt = body.indexOf('setActiveIdentity(target)');
   assert.ok(setKeyAt > 0, 're-anchor: unlock no longer calls setKey');
