@@ -5965,7 +5965,7 @@ window.Fellowship = {
       const all = [...byId.values()].filter(x => _churchVoice(pubk, x));   // roster-trust (M2)
       if (!eosed && !all.length) return;
       saveDocCache('plans', pubk, all);
-      onPlans(scheduleVisible(all).sort((a, b) => (a.ts || 0) - (b.ts || 0)));
+      onPlans(scheduleVisible(all).sort((a, b) => (a.created || a.ts || 0) - (b.created || b.ts || 0)));
       timer = scheduleNextReveal(all, timer, emit);
     };
     if (byId.size) emit();   // paint cached plans before the shared hub replays/answers
