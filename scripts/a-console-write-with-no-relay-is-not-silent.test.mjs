@@ -62,6 +62,16 @@ const CAPS = (() => {
   return new Function(src + '\nreturn { STAMP_CAP_SEC, SKEW_CAP_SEC };')();
 })();
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+// Polls instead of sleeping a fixed time: a loaded box is slower, not broken. Returns the LAST value seen when
+// the budget is spent, so the caller's own assertion still runs and still reports what it always reported.
+const settles = async (probe, ok, budget = 90000) => {
+  const t0 = Date.now();
+  for (;;) {
+    const v = await probe();
+    if (ok(v) || Date.now() - t0 > budget) return v;
+    await sleep(250);
+  }
+};
 
 // ── a browser's worth of world ──────────────────────────────────────────────────────────────────────────
 function memStore() {
@@ -366,14 +376,16 @@ test('the steward SEES a message when a console write has nowhere to go', { skip
       if(!i) return 'miss';
       const set=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
       set.call(i, ${JSON.stringify(val)}); i.dispatchEvent(new Event('input',{bubbles:true})); return 'ok'; })()`;
+    await settles(() => evalIn(`!![...document.querySelectorAll('button')].find(x=>/Start a new church/i.test((x.textContent||'').trim()))`), v => v === true);
     assert.equal(await evalIn(click('/Start a new church/i')), 'ok', 'the console never offered "Start a new church"');
-    await sleep(2500);
+    await settles(() => evalIn(`!![...document.querySelectorAll('input')].find(x=>(x.placeholder||'').includes('At least 8'))`), v => v === true);
     assert.equal(await evalIn(type('At least 8', 'cedar-harbour-lamp-42')), 'ok', 'the PIN box was not on screen');
     assert.equal(await evalIn(type('Type it again', 'cedar-harbour-lamp-42')), 'ok', 'the confirm-PIN box was not on screen');
     assert.equal(await evalIn(click('/Set PIN/i')), 'ok', 'the console never offered "Set PIN"');
-    await sleep(12000);   // key generation + the first render of the whole dashboard
-
-    const nodes = await evalIn(`document.querySelectorAll('#root *').length`);
+    // key generation + the first render of the whole dashboard: wait for the dashboard's size
+    const nodesNow = () => evalIn(`document.querySelectorAll('#root *').length`);
+    await settles(nodesNow, v => v > 120);
+    const nodes = await nodesNow();
     assert.ok(nodes > 120, `#root has ${nodes} nodes — the console did not reach its dashboard, so anything below proves nothing`);
 
     const alerts = () => evalIn(`JSON.stringify([...document.querySelectorAll('[role="alert"]')].map(n => (n.textContent||'').trim()))`);
