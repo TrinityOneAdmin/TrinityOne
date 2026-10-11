@@ -9,13 +9,15 @@
 // <audio>. It delivers a pin and a sermon list the way the engine would, takes the ctx App hands the Today screen,
 // and calls the `ctx.playSermon` that Today's card calls. Nothing reads app/*.jsx text.
 //
-// REACHABILITY OF THE FULL CONTROLS. Today shows the docked MiniPlayer (previous / play / next), and tapping it
-// opens the Listen screen, which draws the full AudioControls for any sermon in the church list (covered in
-// audio-controls-are-the-same-on-every-surface.test.mjs). This file asserts the two halves that are App's own:
-// App renders the MiniPlayer, and its tap target (ctx.openListen) puts the Listen screen on.
+// THE CONTROLS ARE ON THE PLAYER (owner 2026-10-11: one player, the floating one). App renders the docked
+// MiniPlayer above the tab bar; this file takes THE MiniPlayer element App rendered (its own props), draws it
+// through the expanding miniature React in render-jsx-screen.mjs, and PRESSES its controls — Next, Previous,
+// seek, the timeline, the speed pill and an Up next jump — after starting the sermon the way Today's card
+// does. Tapping the player no longer opens Listen, so nothing here asserts that any more.
 import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { fakeReact, appBrowser, loadApp, nodes } from './app-screens.mjs';
+import { miniReact, find } from './render-jsx-screen.mjs';
 
 const settle = () => new Promise(r => setTimeout(r, 0));
 function fakeEl() {
@@ -66,11 +68,26 @@ const todayCtx = () => {
   return screen.props.ctx;
 };
 
+// THE player App rendered, drawn for real. The app's components resolve `React` from the shared global scope
+// at call time, so the expanding miniature React is swapped in for the draw and the App's own fake put back.
+const mini = miniReact();
+function overlay() {
+  const el0 = nodes(draw()).find(n => n.type && n.type.name === 'MiniPlayer');
+  assert.ok(el0, 'App no longer renders the docked player');
+  const saved = window.React; window.React = mini.React;
+  try { mini.draw(el0.type, el0.props); return mini.draw(el0.type, el0.props); } finally { window.React = saved; }
+}
+const press = (tree, label) => {
+  const b = find(tree, n => n.type === 'button' && n.props && n.props['aria-label'] === label);
+  assert.equal(b.length, 1, `expected exactly one "${label}" on the player, found ${b.length}`);
+  b[0].props.onClick({ stopPropagation() {} });
+};
+
 // newest first, as subscribeSermons delivers
 const sermon = (id, i) => ({ id, title: 'Sermon ' + id, sha256: 'sha-' + id, hosts: ['https://h'], mime: 'audio/mp4', contentTs: 1000 - i });
 const LIST = [sermon('new', 0), sermon('mid', 1), sermon('old', 2), sermon('oldest', 3), { ...sermon('vid', 4), mime: 'video/mp4' }];
 
-test('Today card: the featured sermon starts with a queue, and Next plays the next OLDER sermon', async () => {
+test('Today card: the featured sermon starts with a queue, and the player\u2019s Next plays the next OLDER sermon', async () => {
   draw(); await new Promise(r => setTimeout(r, 1500)); draw();
   deliver('subscribeSermons', LIST);
   deliver('subscribePinnedSermon', { ...LIST[1], ts: 1 });
@@ -82,13 +99,14 @@ test('Today card: the featured sermon starts with a queue, and Next plays the ne
   assert.equal(A.current.id, 'mid');
   assert.equal(A.hasNext(), true, 'NO NEXT: the Today card still starts its sermon with no queue');
   assert.equal(A.hasPrev(), true, 'the newer sermon should be reachable with Previous');
-  A.next(); await settle();
-  assert.equal(A.current.id, 'old', 'Next did not go to the next OLDER sermon');
+  press(overlay(), 'Next track'); await settle();
+  assert.equal(A.current.id, 'old', 'the player\u2019s Next did not go to the next OLDER sermon');
   assert.equal(el.src, 'blob:sha-old', 'the older sermon was not fetched when its turn came');
-  A.next(); await settle();
+  press(overlay(), 'Next track'); await settle();
   assert.equal(A.current.id, 'oldest');
-  assert.equal(A.hasNext(), false, 'the video sermon must not be in the audio queue');
-  A.prev(); await settle();
+  assert.equal(find(overlay(), n => n.type === 'button' && n.props['aria-label'] === 'Next track')[0].props.disabled, true, 'the video sermon must not be in the audio queue');
+  el.currentTime = 0;
+  press(overlay(), 'Previous track'); await settle();
   assert.equal(A.current.id, 'old');
 });
 
@@ -103,13 +121,29 @@ test('Today card: a pinned sermon that is not in the church list plays on its ow
   assert.equal(window.TrinityAudio.hasNext(), false);
 });
 
-test('Today: App renders the docked mini player, and its tap target opens the Listen screen (where the full controls live)', async () => {
-  const names = (t) => nodes(t).map(n => n.type && n.type.name).filter(Boolean);
+test('Today: App renders THE player, and its timeline, \u00b110, speed pill and Up next drive the Today sermon', async () => {
   window.TrinityAudio.stop();
-  assert.ok(names(draw()).includes('MiniPlayer'), 'App no longer renders the mini player');
+  deliver('subscribeSermons', LIST);
+  deliver('subscribePinnedSermon', { ...LIST[0], ts: 1 });
   const ctx = todayCtx();
-  assert.equal(typeof ctx.openListen, 'function');
-  ctx.openListen();
-  const listen = nodes(draw()).filter(n => n.type && n.type.name === 'ListenScreen');
-  assert.ok(listen.length && listen.some(n => n.props.open === true), 'openListen did not open the Listen screen');
+  await ctx.playSermon(ctx.pinnedSermon);
+  assert.equal(el.src, 'blob:sha-new', 'the featured sermon did not start — re-anchor this test');
+  let tree = overlay();
+  el.duration = 100; el.currentTime = 20;
+  press(tree, 'Forward 10 seconds'); assert.equal(el.currentTime, 30, 'the player\u2019s +10 did nothing');
+  press(tree, 'Back 10 seconds'); assert.equal(el.currentTime, 20, 'the player\u2019s -10 did nothing');
+  const sl = find(tree, n => n.props && n.props.role === 'slider');
+  assert.equal(sl.length, 1, 'no timeline on the player');
+  sl[0].props.onPointerDown({ currentTarget: { getBoundingClientRect: () => ({ left: 0, width: 200 }), setPointerCapture() {} }, clientX: 150, pointerId: 1 });
+  assert.equal(el.currentTime, 75, 'tapping the timeline did not seek');
+  const pill = find(tree, n => n.type === 'button' && /^Playback speed /.test(n.props['aria-label'] || ''));
+  assert.equal(pill.length, 1, 'no speed pill on the player');
+  pill[0].props.onClick(); assert.equal(el.playbackRate, 1.25, 'the speed pill did nothing');
+  assert.equal(find(tree, n => n.props && n.props.role === 'list').length, 0, 'Up next must start collapsed');
+  press(tree, 'Up next');
+  tree = overlay();
+  assert.equal(find(tree, n => n.props && n.props.role === 'list' && n.props['aria-label'] === 'Up next').length, 1, 'Up next did not open');
+  press(tree, 'Play Sermon oldest'); await settle();
+  assert.equal(window.TrinityAudio.current.id, 'oldest', 'an Up next jump did not play that sermon');
+  assert.equal(el.src, 'blob:sha-oldest');
 });

@@ -134,113 +134,124 @@ function sermonAudioTrack(s, o) {
     } };
 }
 
-// ── AudioControls: THE one set of audio controls, used by every surface (Bible chapter, sermons, podcast).
-// scrubber, -10 / +10, previous / next, play/pause, speed, and the queue with the current item marked.
-// `match(track)` (optional) limits where it shows: a surface passes a test for "tracks that belong here" and
-// the card appears only while one of those is loaded. `onClay` = drawn on the clay-coloured card.
-function AudioControls({ onClay, heading, match, durationText }) {
-  const a = useTrinityAudio();
+// ── THE PLAYER. Owner decision 2026-10-11: ONE player, the floating one docked above the tab bar. The pages
+// (Bible reader, Watch, Listen) keep their lists and play buttons and draw NO controls of their own.
+// It is built from three small pieces so each control exists once: AudioScrubber, AudioButtons, AudioQueue.
+
+// timeline: elapsed · draggable / tappable rail · total. `durationText` is shown until the audio reports its length.
+function AudioScrubber({ a, durationText }) {
   const dragging = React.useRef(false);
+  const A = window.TrinityAudio;
+  const pct = a.d ? Math.min(100, (a.t / a.d) * 100) : 0;
+  const seekFrom = (e) => { const r = e.currentTarget.getBoundingClientRect(); if (r && r.width && A) A.seekTo((e.clientX - r.left) / r.width); };
+  const time = { fontSize: 11, fontWeight: 600, color: 'var(--ink-3)', minWidth: 34, fontVariantNumeric: 'tabular-nums', flexShrink: 0 };
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <span style={time}>{fmtTime(a.t)}</span>
+      <div role="slider" tabIndex={0} aria-label="Seek" title="Seek" aria-valuemin={0} aria-valuemax={Math.round(a.d || 0)} aria-valuenow={Math.round(a.t || 0)} aria-valuetext={fmtTime(a.t) + ' of ' + fmtTime(a.d)}
+        onPointerDown={(e) => { dragging.current = true; try { e.currentTarget.setPointerCapture(e.pointerId); } catch (x) {} seekFrom(e); }}
+        onPointerMove={(e) => { if (dragging.current) seekFrom(e); }}
+        onPointerUp={() => { dragging.current = false; }} onPointerCancel={() => { dragging.current = false; }}
+        onKeyDown={(e) => { if (!A) return; if (e.key === 'ArrowLeft') { e.preventDefault(); A.seek(-5); } else if (e.key === 'ArrowRight') { e.preventDefault(); A.seek(5); } }}
+        style={{ flex: 1, minWidth: 0, padding: '9px 0', cursor: 'pointer', touchAction: 'none' }}>
+        <div style={{ height: 5, borderRadius: 3, background: 'var(--line)', overflow: 'hidden' }}>
+          <div style={{ width: pct + '%', height: '100%', background: 'var(--clay)', borderRadius: 3 }} />
+        </div>
+      </div>
+      <span style={{ ...time, textAlign: 'right' }}>{a.d ? fmtTime(a.d) : (durationText || '')}</span>
+    </div>
+  );
+}
+
+// previous · −10 · play/pause · +10 · next · speed pill
+function AudioButtons({ a }) {
+  const A = window.TrinityAudio;
+  if (!A) return null;
+  const q = a.q || [], qi = a.qi;
+  const hasNext = qi >= 0 && qi + 1 < q.length;
+  const btn = { width: 38, height: 38, borderRadius: 999, border: 'none', background: 'transparent', color: 'var(--ink)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, padding: 0, flexShrink: 0 };
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
+      <button onClick={() => A.prev()} aria-label="Previous track" title="Previous" style={btn}><Icon name="rewind" size={20} color="currentColor" /></button>
+      <button onClick={() => A.seek(-10)} aria-label="Back 10 seconds" title="Back 10 seconds" style={btn}>{'−10'}</button>
+      <button onClick={() => A.toggle()} aria-label={a.playing ? 'Pause' : 'Play'} title={a.playing ? 'Pause' : 'Play'} style={{ ...btn, width: 44, height: 44, background: 'var(--clay)', color: 'var(--on-clay)' }}>
+        {a.loading ? <span style={{ width: 18, height: 18, borderRadius: 999, border: '2.5px solid rgba(255,255,255,.45)', borderTopColor: 'currentColor', display: 'inline-block', animation: 'trinitySpin .8s linear infinite' }} /> : <Icon name={a.playing ? 'pause' : 'play'} size={20} color="currentColor" />}
+      </button>
+      <button onClick={() => A.seek(10)} aria-label="Forward 10 seconds" title="Forward 10 seconds" style={btn}>{'+10'}</button>
+      <button onClick={() => A.next()} disabled={!hasNext} aria-label="Next track" title="Next" style={{ ...btn, opacity: hasNext ? 1 : 0.35, cursor: hasNext ? 'pointer' : 'default' }}><Icon name="forward" size={20} color="currentColor" /></button>
+      <button onClick={() => { const rs = A.rates || [1]; const i = rs.indexOf(a.rate); A.setRate(rs[(i + 1) % rs.length]); }} aria-label={'Playback speed ' + a.rate + '×, tap to change'} title={'Playback speed ' + a.rate + '× · tap to change'}
+        style={{ minWidth: 40, height: 28, marginLeft: 4, padding: '0 8px', borderRadius: 999, border: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, background: 'var(--surface-2)', color: 'var(--ink)', flexShrink: 0 }}>{a.rate + '×'}</button>
+    </div>
+  );
+}
+
+// the queue, current item marked; tapping an item plays it (tapping the current one pauses / resumes)
+function AudioQueue({ a }) {
   const listRef = React.useRef(null);
   const A = window.TrinityAudio;
   const qi = a.qi, q = a.q || [];
   React.useEffect(() => {
     try { const box = listRef.current; const cur = box && box.querySelector && box.querySelector('[aria-current]'); if (cur && box.scrollTo) box.scrollTo({ top: Math.max(0, cur.offsetTop - box.offsetTop - 6) }); } catch (e) {}
   }, [qi, q.length]);
-  if (!a.track || (match && !match(a.track))) return null;
-  const fg = onClay ? '#fff' : 'var(--ink)';
-  const dim = onClay ? 'rgba(255,255,255,.8)' : 'var(--ink-3)';
-  const rail = onClay ? 'rgba(255,255,255,.25)' : 'var(--line)';
-  const fill = onClay ? '#fff' : 'var(--clay)';
-  const pct = a.d ? Math.min(100, (a.t / a.d) * 100) : 0;
-  const hasNext = qi >= 0 && qi + 1 < q.length;
-  const seekFrom = (e) => { const r = e.currentTarget.getBoundingClientRect(); if (r && r.width) A.seekTo((e.clientX - r.left) / r.width); };
-  const circ = { width: 44, height: 44, borderRadius: 999, border: 'none', background: 'transparent', color: fg, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13.5, padding: 0 };
+  if (!A || q.length < 2) return null;
   return (
-    <div style={{ color: fg, fontFamily: 'var(--font-ui)' }}>
-      {heading ? (
-        <div style={{ marginBottom: 12 }}>
-          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17, lineHeight: 1.2 }}>{a.track.title}</div>
-          {a.track.subtitle ? <div style={{ fontSize: 12.5, color: dim, marginTop: 3 }}>{a.track.subtitle}</div> : null}
-        </div>
-      ) : null}
-      <div role="slider" tabIndex={0} aria-label="Seek" title="Seek" aria-valuemin={0} aria-valuemax={Math.round(a.d || 0)} aria-valuenow={Math.round(a.t || 0)} aria-valuetext={fmtTime(a.t) + ' of ' + fmtTime(a.d)}
-        onPointerDown={(e) => { dragging.current = true; try { e.currentTarget.setPointerCapture(e.pointerId); } catch (x) {} seekFrom(e); }}
-        onPointerMove={(e) => { if (dragging.current) seekFrom(e); }}
-        onPointerUp={() => { dragging.current = false; }} onPointerCancel={() => { dragging.current = false; }}
-        onKeyDown={(e) => { if (e.key === 'ArrowLeft') { e.preventDefault(); A.seek(-5); } else if (e.key === 'ArrowRight') { e.preventDefault(); A.seek(5); } }}
-        style={{ padding: '10px 0', cursor: 'pointer', touchAction: 'none' }}>
-        <div style={{ height: 6, borderRadius: 3, background: rail, overflow: 'hidden' }}>
-          <div style={{ width: pct + '%', height: '100%', background: fill, borderRadius: 3 }} />
-        </div>
-      </div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5, fontWeight: 600, color: dim, marginTop: 2 }}>
-        <span>{fmtTime(a.t)}</span><span>{a.d ? fmtTime(a.d) : (durationText || '')}</span>
-      </div>
-      {a.failed ? <div role="status" style={{ textAlign: 'center', fontSize: 12.5, fontWeight: 700, marginTop: 6, color: fg }}>{'Couldn\u2019t load \u00b7 press Play to retry'}</div> : null}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: 8 }}>
-        <button onClick={() => A.prev()} aria-label="Previous track" title="Previous" style={circ}><Icon name="rewind" size={22} color="currentColor" /></button>
-        <button onClick={() => A.seek(-10)} aria-label="Back 10 seconds" title="Back 10 seconds" style={circ}>{'−10'}</button>
-        <button onClick={() => A.toggle()} aria-label={a.playing ? 'Pause' : 'Play'} title={a.playing ? 'Pause' : 'Play'} style={{ ...circ, width: 58, height: 58, background: onClay ? '#fff' : 'var(--clay)', color: onClay ? 'var(--ink)' : 'var(--on-clay)' }}>
-          {a.loading ? <span style={{ width: 20, height: 20, borderRadius: 999, border: '2.5px solid rgba(128,128,128,.4)', borderTopColor: 'currentColor', display: 'inline-block', animation: 'trinitySpin .8s linear infinite' }} /> : <Icon name={a.playing ? 'pause' : 'play'} size={24} color="currentColor" />}
-        </button>
-        <button onClick={() => A.seek(10)} aria-label="Forward 10 seconds" title="Forward 10 seconds" style={circ}>{'+10'}</button>
-        <button onClick={() => A.next()} disabled={!hasNext} aria-label="Next track" title="Next" style={{ ...circ, opacity: hasNext ? 1 : 0.35, cursor: hasNext ? 'pointer' : 'default' }}><Icon name="forward" size={22} color="currentColor" /></button>
-        <button onClick={() => { const rs = A.rates || [1]; const i = rs.indexOf(a.rate); A.setRate(rs[(i + 1) % rs.length]); }} aria-label={'Playback speed ' + a.rate + '\u00d7, tap to change'} title={'Playback speed ' + a.rate + '\u00d7 \u00b7 tap to change'}
-          style={{ minWidth: 40, height: 28, padding: '0 8px', borderRadius: 999, border: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12.5, background: onClay ? 'rgba(255,255,255,.16)' : 'var(--surface-2)', color: fg, flexShrink: 0 }}>{a.rate + '\u00d7'}</button>
-      </div>
-      {q.length > 1 ? (
-        <div style={{ marginTop: 14 }}>
-          <div style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: dim, marginBottom: 6 }}>Up next</div>
-          <div ref={listRef} role="list" aria-label="Up next" className="no-scrollbar" style={{ maxHeight: 170, overflowY: 'auto', position: 'relative' }}>
-            {q.map((t, i) => {
-              const isCur = i === qi;
-              return (
-                <button key={t.id} role="listitem" aria-current={isCur ? 'true' : undefined} aria-label={(isCur ? 'Now playing: ' : 'Play ') + t.title} onClick={() => (isCur ? A.toggle() : A.play(t, q))}
-                  style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left', padding: '8px 6px', border: 'none', borderRadius: 10, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: isCur ? 700 : 500, color: fg, background: isCur ? (onClay ? 'rgba(255,255,255,.18)' : 'color-mix(in oklab, var(--clay) 10%, var(--surface))') : 'transparent' }}>
-                  <span style={{ width: 18, flexShrink: 0, display: 'flex', justifyContent: 'center' }}>{isCur ? <Icon name={a.playing ? 'pause' : 'play'} size={13} color="currentColor" /> : null}</span>
-                  <span style={{ flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.title}</span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      ) : null}
+    <div ref={listRef} role="list" aria-label="Up next" className="no-scrollbar" style={{ maxHeight: 200, overflowY: 'auto', position: 'relative' }}>
+      {q.map((t, i) => {
+        const isCur = i === qi;
+        return (
+          <button key={t.id} role="listitem" aria-current={isCur ? 'true' : undefined} aria-label={(isCur ? 'Now playing: ' : 'Play ') + t.title} title={t.title} onClick={() => (isCur ? A.toggle() : A.play(t, q))}
+            style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', textAlign: 'left', padding: '8px 6px', border: 'none', borderRadius: 10, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: isCur ? 700 : 500, color: 'var(--ink)', background: isCur ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'transparent' }}>
+            <span style={{ width: 16, flexShrink: 0, display: 'flex', justifyContent: 'center' }}>{isCur ? <Icon name={a.playing ? 'pause' : 'play'} size={12} color="currentColor" /> : null}</span>
+            <span style={{ flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.title}</span>
+          </button>
+        );
+      })}
     </div>
   );
 }
 
-// ── MiniPlayer: a persistent bar docked above the tab bar whenever something is loaded ──
-function MiniPlayer({ ctx }) {
+// ── MiniPlayer: THE player, docked above the tab bar whenever something is loaded. Title, timeline, the
+// controls row, and "Up next" (collapsed; the list opens just above the player). Tapping it does NOT navigate.
+// `bottom` lets a full-screen overlay (Listen) dock the same player at its own foot, where there is no tab bar.
+function MiniPlayer({ ctx, bottom }) {
   const a = useTrinityAudio();
-  if (!a.track) return null;
-  const pct = a.d ? (a.t / a.d) * 100 : 0;
+  const [showQ, setShowQ] = React.useState(false);
+  if (!a.track || !window.TrinityAudio) return null;
+  const A = window.TrinityAudio;
+  const hasQ = (a.q || []).length > 1;
+  const open = showQ && hasQ;
+  const flip = () => { if (hasQ) setShowQ(v => !v); };
+  const card = { background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 18, boxShadow: 'var(--shadow-lg)' };
+  const small = { width: 32, height: 32, flexShrink: 0, border: 'none', background: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0, borderRadius: 999 };
+  const words = (
+    <React.Fragment>
+      <div style={{ fontWeight: 700, fontSize: 13.5, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.track.title}</div>
+      {a.failed
+        ? <div role="status" style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--clay)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{'Couldn’t load · press Play to retry'}</div>
+        : <div style={{ fontSize: 11.5, color: 'var(--ink-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.track.subtitle || ''}</div>}
+    </React.Fragment>
+  );
   return (
-    <div onClick={() => ctx.openListen && ctx.openListen()} style={{
+    <div role="region" aria-label="Audio player" style={{
       position: 'absolute', left: 12, right: 12, zIndex: 24,
-      bottom: 'calc(max(12px, env(safe-area-inset-bottom)) + 74px)',
-      display: 'flex', alignItems: 'center', gap: 11, padding: '8px 10px', cursor: 'pointer', overflow: 'hidden',
-      background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 18, boxShadow: 'var(--shadow-lg)',
-      animation: 'trinityRise .22s ease both',
+      bottom: bottom || 'calc(max(12px, env(safe-area-inset-bottom)) + 74px)',
+      display: 'flex', flexDirection: 'column', gap: 6, animation: 'trinityRise .22s ease both',
     }}>
-      <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 2.5, background: 'var(--line)' }}>
-        <div style={{ width: pct + '%', height: '100%', background: 'var(--clay)' }} />
+      {open ? <div style={{ ...card, padding: 6 }}><AudioQueue a={a} /></div> : null}
+      <div style={{ ...card, padding: '8px 10px 6px', overflow: 'hidden' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ width: 34, height: 34, borderRadius: 9, flexShrink: 0, background: a.track.image ? `center/cover url(${a.track.image})` : 'color-mix(in oklab, var(--clay) 14%, var(--surface))', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            {!a.track.image ? <Icon name="headphones" size={17} color="var(--clay)" /> : null}
+          </div>
+          {hasQ
+            ? <button onClick={flip} aria-label={a.track.title} aria-expanded={open} title={open ? 'Hide up next' : 'Show up next'} style={{ flex: 1, minWidth: 0, textAlign: 'left', border: 'none', background: 'none', padding: 0, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>{words}</button>
+            : <div style={{ flex: 1, minWidth: 0 }}>{words}</div>}
+          {hasQ ? <button onClick={flip} aria-label="Up next" aria-expanded={open} title={open ? 'Hide up next' : 'Up next'} style={{ ...small, background: open ? 'var(--surface-2)' : 'none' }}><Icon name="menu" size={17} color="var(--ink-2)" /></button> : null}
+          <button onClick={() => A.stop()} aria-label="Close player" title="Close player" style={small}><Icon name="x" size={16} color="var(--ink-3)" /></button>
+        </div>
+        <AudioScrubber a={a} durationText={a.track.duration} />
+        <AudioButtons a={a} />
       </div>
-      <div style={{ width: 40, height: 40, borderRadius: 10, flexShrink: 0, background: a.track.image ? `center/cover url(${a.track.image})` : 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        {!a.track.image ? <Icon name="headphones" size={19} color="var(--clay)" /> : null}
-      </div>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontWeight: 700, fontSize: 13.5, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.track.title}</div>
-        <div style={{ fontSize: 11.5, color: 'var(--ink-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.track.subtitle || ''}</div>
-      </div>
-      {(a.q || []).length > 1 ? <button onClick={(e) => { e.stopPropagation(); window.TrinityAudio.prev(); }} aria-label="Previous track" title="Previous" style={{ width: 30, height: 38, flexShrink: 0, border: 'none', background: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="rewind" size={18} color="var(--ink-2)" /></button> : null}
-      <button onClick={(e) => { e.stopPropagation(); window.TrinityAudio.toggle(); }} aria-label={a.playing ? 'Pause' : 'Play'} style={{ width: 38, height: 38, flexShrink: 0, borderRadius: 999, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        {a.loading ? <span style={{ width: 16, height: 16, borderRadius: 999, border: '2px solid rgba(255,255,255,.5)', borderTopColor: '#fff', display: 'inline-block', animation: 'trinitySpin .8s linear infinite' }} /> : <Icon name={a.playing ? 'pause' : 'play'} size={18} color="#fff" />}
-      </button>
-      {(a.q || []).length > 1 ? <button onClick={(e) => { e.stopPropagation(); window.TrinityAudio.next(); }} disabled={!(a.qi >= 0 && a.qi + 1 < a.q.length)} aria-label="Next track" title="Next" style={{ width: 30, height: 38, flexShrink: 0, border: 'none', background: 'none', cursor: 'pointer', opacity: (a.qi >= 0 && a.qi + 1 < a.q.length) ? 1 : 0.35, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="forward" size={18} color="var(--ink-2)" /></button> : null}
-      <button onClick={(e) => { e.stopPropagation(); window.TrinityAudio.stop(); }} aria-label="Close player" style={{ width: 30, height: 38, flexShrink: 0, border: 'none', background: 'none', color: 'var(--ink-3)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <Icon name="x" size={16} color="var(--ink-3)" />
-      </button>
     </div>
   );
 }
@@ -425,7 +436,6 @@ function AudioBiblesScreen({ open, onClose, ctx }) {
 window.AudioBiblesScreen = AudioBiblesScreen;
 window.MiniPlayer = MiniPlayer;
 window.useTrinityAudio = useTrinityAudio;
-window.AudioControls = AudioControls;
 window.sermonAudioTrack = sermonAudioTrack;
 window.audioFmtTime = fmtTime;
 window.playBibleChapter = playBibleChapter;

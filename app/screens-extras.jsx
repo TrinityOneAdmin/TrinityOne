@@ -173,7 +173,7 @@ function ListenScreen({ open, onClose, ctx }) {
   // episode row, the now-playing header and `trackOf`'s mini-player subtitle.
   const sermonEps = sermons.filter(s => !String(s.mime || '').startsWith('video')).map(s => ({ id: s.id, title: s.title, desc: s.desc, published: s.contentTs ? new Date(s.contentTs * 1000).toISOString() : '', _sermon: true, sha256: s.sha256, hosts: (s.hosts && s.hosts.length) ? s.hosts : (s.host ? [s.host] : []), mime: s.mime, enc: s.enc, size: s.size }));
   const episodes = [...sermonEps, ...((data && data.episodes) || [])];
-  const trackOf = (ep) => ({ id: ep.id, title: ep.title, subtitle: [lsnPubDate(ep.published), chName].filter(Boolean).join(' · '), src: ep.audio, image: ep.image, album: chName });
+  const trackOf = (ep) => ({ id: ep.id, title: ep.title, subtitle: [lsnPubDate(ep.published), chName].filter(Boolean).join(' · '), src: ep.audio, image: ep.image, album: chName, duration: ep.duration || '' });
   const curId = audio.track && audio.track.id;
   const cur = episodes.find(e => e.id === curId) || null;
   const playing = audio.playing;
@@ -209,7 +209,7 @@ function ListenScreen({ open, onClose, ctx }) {
         </div>
       </div>
 
-      <div className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '10px 16px 30px' }}>
+      <div className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: audio.track ? '10px 16px 190px' : '10px 16px 30px' }}>
         {loading && !episodes.length ? (
           <div style={{ textAlign: 'center', padding: '60px 24px', color: 'var(--ink-3)' }}><div style={{ width: 26, height: 26, margin: '0 auto', borderRadius: 999, border: '2.5px solid var(--line)', borderTopColor: 'var(--clay)', animation: 'trinitySpin .8s linear infinite' }} /><p style={{ marginTop: 14, fontSize: 14 }}>Loading episodes…</p></div>
         ) : null}
@@ -223,23 +223,6 @@ function ListenScreen({ open, onClose, ctx }) {
                 producing: the app knows why, and says something untrue instead. */}
             <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17, color: 'var(--ink-2)' }}>{(data && data.error) ? 'Can’t reach the audio just now' : 'Nothing to listen to yet'}</div>
             <p style={{ fontSize: 14, lineHeight: 1.5, maxWidth: 260, margin: '6px auto 0' }}>{(data && data.error) ? 'This is your connection, not your church — it will load when you are back online.' : (audioFeed ? 'Your church’s audio will appear here soon.' : 'Your church hasn’t added an audio feed yet.')}</p>
-          </div>
-        ) : null}
-
-        {/* now playing */}
-        {cur ? (
-          <div style={{ borderRadius: 26, overflow: 'hidden', background: 'linear-gradient(155deg, var(--clay), var(--clay-deep))', color: 'var(--on-clay)', padding: 22, marginBottom: 24, boxShadow: 'var(--shadow-lg)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 11.5, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', opacity: .9 }}>
-              <Icon name="headphones" size={16} stroke={2} color="#fff" /> Now playing
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 16, margin: '18px 0' }}>
-              <div style={{ width: 72, height: 72, borderRadius: 16, background: cur.image ? `center/cover url(${cur.image})` : 'rgba(255,255,255,.16)', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{!cur.image ? <Icon name="headphones" size={28} color="#fff" /> : null}</div>
-              <div style={{ minWidth: 0 }}>
-                <div style={{ fontFamily: 'var(--font-display)', fontSize: 19, fontWeight: 700, lineHeight: 1.15 }}>{cur.title}</div>
-                <div style={{ fontSize: 12.5, opacity: .85, marginTop: 4 }}>{[lsnPubDate(cur.published), cur.duration].filter(Boolean).join(' · ')}</div>
-              </div>
-            </div>
-            <AudioControls onClay durationText={cur.duration} />
           </div>
         ) : null}
 
@@ -269,6 +252,9 @@ function ListenScreen({ open, onClose, ctx }) {
           </React.Fragment>
         ) : null}
       </div>
+      {/* THE player (owner 2026-10-11: one player, no controls on the page). This screen covers the tab-bar
+          dock, so the same floating player docks at this screen's foot. Guarded: no audio script, no player. */}
+      {window.MiniPlayer ? React.createElement(window.MiniPlayer, { ctx, bottom: 'max(12px, env(safe-area-inset-bottom))' }) : null}
     </Overlay>
   );
 }

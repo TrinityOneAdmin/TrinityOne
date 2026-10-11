@@ -235,7 +235,6 @@ function WatchView({ ctx }) {
           {audioSermons.length ? (
             <React.Fragment>
               {<div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', textTransform: 'uppercase', margin: '0 2px 8px' }}><Icon name="headphones" size={13} color="var(--ink-3)" /> Listen</div>}
-              <div style={{ margin: '0 0 12px' }}><AudioControls match={(t) => audioSermons.some(x => x.id === t.id)} heading /></div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: (videoSermons.length || hasYT) ? 22 : 0 }}>
                 {audioSermons.map(s => <SermonRow key={s.id} s={s} loading={loadingId === s.id} onClick={() => playSelf(s)} />)}
               </div>

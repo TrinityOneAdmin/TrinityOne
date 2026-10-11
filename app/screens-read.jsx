@@ -1127,10 +1127,8 @@ function ReadScreen({ ctx }) {
 
       <div ref={scrollRef} className="no-scrollbar"
         onTouchStart={onSwipeStart} onTouchMove={onSwipeMove} onTouchEnd={onSwipeEnd} onTouchCancel={() => { swipe.current = null; }}
-        style={{ position: 'absolute', inset: 0, overflowY: 'auto', overflowX: 'hidden', padding: 'calc(env(safe-area-inset-top, 0px) + 122px) 18px 116px', scrollPaddingTop: 'calc(env(safe-area-inset-top, 0px) + 130px)', overflowAnchor: 'none' }}>
+        style={{ position: 'absolute', inset: 0, overflowY: 'auto', overflowX: 'hidden', padding: 'calc(env(safe-area-inset-top, 0px) + 122px) 18px ' + (audio.track ? 250 : 116) + 'px', scrollPaddingTop: 'calc(env(safe-area-inset-top, 0px) + 130px)', overflowAnchor: 'none' }}>
         <div style={{ animation: 'trinityFade .4s ease both' }}>
-          {/* the shared audio controls, while a Bible chapter is loaded (any chapter — it follows the queue) */}
-          {audio.track && /^bible:/.test(audio.track.id || '') ? <div style={{ background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 18, padding: '14px 14px 10px', marginBottom: 18, boxShadow: 'var(--shadow)' }}><AudioControls heading /></div> : null}
           <div style={{ textAlign: 'center', marginBottom: 22 }}>
             <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--clay)', letterSpacing: '1.5px', textTransform: 'uppercase' }}>{bname}</div>
             <h1 style={{ fontFamily: 'var(--font-display)', fontSize: 27, fontWeight: 700, margin: '6px 0 0', letterSpacing: '-.4px' }}>Chapter {loc.chap}</h1>
