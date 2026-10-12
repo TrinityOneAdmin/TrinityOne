@@ -357,6 +357,9 @@ let _careKeyChecked = false;     // have we actually LOOKED for an envelope? min
 // NEWEST envelope carried a copy this console opened. The re-seal needs both; a rotation needs `_careKeyMine`.
 // READERS: ensureCareKeyForMembers, rotateCareKey. WRITERS: subscribeCareKey, _ingestCareKeyEnv, the two resets.
 let _careKeyFresh = false;
+// the created_at of the care envelope this console holds (round 3d): at the SAME rev, an OLDER envelope does not replace
+// it — see _ingestCareKeyEnv. WRITERS: _ingestCareKeyEnv, ensureCareKeyForMembers, rotateCareKey, the two resets.
+let _careKeyAt = 0;
 let _careKeyMine = false;
 let _careRoster = new Set();     // the church's current steward pubkeys — who may author the envelope
 // A STEWARD WHO ONLY POSTS IS NOT A MEMBER (sim finding 29). The relay lets a steward write chat without a
@@ -1285,6 +1288,21 @@ function _ingestCareKeyEnv(e) {
   try {
     const o = JSON.parse(e.content || '{}');
     if ((o.rev || 1) < _careKeyRev) return;                  // a lagging relay must not resurrect an older envelope
+    // …NOR, AT THE SAME REV, AN OLDER ONE (round 3d; audit of 0f5cd2d). Two consoles that rotate from the same rev both
+    // write rev+1; the one this console holds — its own rotation, typically — must not be silently replaced by the
+    // other's earlier one, which may be wrapped to someone this console has just blocked. Its keys are not lost: any
+    // this console can open join the TAIL of the ring, so needs sealed under them still open here and the next re-seal
+    // carries them to members as old keys. A NEWER envelope at the same rev still wins (newest wins, as before).
+    if ((o.rev || 1) === _careKeyRev && (e.created_at || 0) < _careKeyAt) {
+      const m2 = o.keys && churchPub && o.keys[churchPub];
+      if (m2 && churchSk) {
+        const pl = nip44d(m2, nip44ck(churchSk, e.pubkey));
+        let rg = null; try { const q = JSON.parse(pl); if (Array.isArray(q)) rg = q.filter(k => typeof k === 'string' && k); } catch (x2) {}
+        for (const k of (rg && rg.length ? rg : [pl])) if (_careKeyRing.indexOf(k) === -1) _careKeyRing.push(k);
+      }
+      return;
+    }
+    _careKeyAt = e.created_at || 0;
     _careKeyDocKeys = o.keys || null; _careKeyRev = o.rev || 1;
     _careKeyMine = false;   // until this envelope's copy for us has opened — see _careKeyMine
     const mine = o.keys && churchPub && o.keys[churchPub];
@@ -3076,7 +3094,7 @@ function _resetChurchScopedState() {
   _applyNoPhotoList([]);
   // The `*Checked` flags are the mint gates — "have we actually LOOKED for an envelope?". Carried across, they
   // report TRUE for a church nobody has looked at yet, which is what lets a stale ring be published as new.
-  _careKeyHex = null; _careKeyRing = []; _careKeyDocKeys = null; _careKeyRev = 0; _careKeyChecked = false; _careKeyPending = []; _careKeyFresh = false; _careKeyMine = false;
+  _careKeyHex = null; _careKeyRing = []; _careKeyDocKeys = null; _careKeyRev = 0; _careKeyChecked = false; _careKeyPending = []; _careKeyFresh = false; _careKeyMine = false; _careKeyAt = 0;
   _mediaKeyHex = null; _mediaKeyRing = []; _mediaKeyDocKeys = null; _mediaKeyChecked = false; _mediaKeyPushRefused = null; _mediaKeyFresh = false; _mediaKeyMine = false; _mediaKeyAt = 0;
   // …and no read, publish or "we looked" opened before this line may count afterwards — see _keyReadOk.
   _keyReadEpoch++; _careKeyVer++; _mediaKeyVer++;
@@ -6682,6 +6700,7 @@ window.Steward = {
     // `pub` is NEVER read after an await below: the envelope's d-tag and recipients come from `pub0`.
     const pub0 = pub, ep0 = _keyReadEpoch, sk0 = sk;
     if (!_isRelayAuthed()) return false;                          // never act on an untrusted view (see the mint gate)
+    if (!_mediaKeyFresh) return false;                             // never from the device copy alone (round 3d) — see rotateCareKey
     // NOTHING TO ROTATE (audit of 5276297, MEDIUM): a church that has never uploaded an encrypted sermon has no
     // sermon key, and `false` here made every owner's Block say "could not change the sermon key … Try blocking
     // them again". Only when we have genuinely LOOKED (a settled read) and there is no envelope at all — the name
@@ -6815,7 +6834,7 @@ window.Steward = {
     // shortened to the fitted one: a trimmed key may still have sealed something on this device.
     if (ok !== false && _careKeyVer === _v1 && _stillOn(cp, ep0)) {
       if (minting) { _careKeyRing = ring0.slice(); _careKeyHex = ring0[0]; _careKeyRev = rev; }
-      _careKeyDocKeys = keys; _careKeyMine = true; _careKeyVer++;
+      _careKeyDocKeys = keys; _careKeyMine = true; _careKeyVer++; _careKeyAt = Math.max(_careKeyAt, _cev.created_at || 0);   // round 3d
       _keyEnvSave('care', cp, _cev, churchPub, keys[churchPub]);   // round 3c, MED 2 — see _keyEnvSave
     }
     return ok;
@@ -6858,6 +6877,12 @@ window.Steward = {
     if (!sk || !cp || !churchPub) return false;
     if (!_careKeyChecked || !_isRelayAuthed()) return false;  // same trusted-view rule as minting
     if (!_careKeyHex) return false;                            // nothing to rotate yet — ensureCareKeyForMembers mints the first
+    // NEVER FROM THE DEVICE COPY ALONE (round 3d; audit of 0f5cd2d). Since 3c the envelope this console last accepted is
+    // restored before any relay answers — to paint and to seal with — but a rotation built on it before this
+    // connection's read has settled can be built on a ring another console has already superseded (its key missing,
+    // the person it blocked still in). Refused, as the re-seal is: `false`, so Block and Remove say the key did not
+    // change and to try again. That is what a reload did before 3c, when there was nothing to rotate from.
+    if (!_careKeyFresh) return false;
     if (_careKeyDocKeys && !_careKeyMine) return false;        // the newest envelope has no copy we opened: our ring is older, and a rotation from it would drop the current key (round 3a)
     _careKeyVer++;   // a rotation is under way: any publish still sealing the old ring must not land after it
     const fresh = _hex(crypto.getRandomValues(new Uint8Array(32)));
@@ -6913,6 +6938,7 @@ window.Steward = {
     // relay when the console returns.
     if (!_stillOn(cp, ep0)) return true;
     _careKeyRing = ring; _careKeyHex = fresh; _careKeyRev = rev0; _careKeyDocKeys = keys; _careKeyMine = true; _careKeyVer++;
+    _careKeyAt = _cev.created_at || 0;   // round 3d: our rotation is the envelope at this rev — see _ingestCareKeyEnv
     _keyEnvSave('care', cp, _cev, churchPub, keys[churchPub]);   // round 3c, MED 2 — see _keyEnvSave
     return true;
   },
@@ -11776,7 +11802,7 @@ window.Steward = {
     // until this console has re-read the new church's envelope; KeyDistributor (app/stew-dashboard.jsx)
     // re-subscribes on the identity change to do exactly that. The buffered-envelope list goes too: it held
     // church A's unverified envelopes.
-    _careKeyHex = null; _careKeyRing = []; _careKeyDocKeys = null; _careKeyRev = 0; _careKeyChecked = false; _careKeyPending = []; _careKeyFresh = false; _careKeyMine = false;
+    _careKeyHex = null; _careKeyRing = []; _careKeyDocKeys = null; _careKeyRev = 0; _careKeyChecked = false; _careKeyPending = []; _careKeyFresh = false; _careKeyMine = false; _careKeyAt = 0;
     _mediaKeyHex = null; _mediaKeyRing = []; _mediaKeyDocKeys = null; _mediaKeyChecked = false; _mediaKeyPushRefused = null; _mediaKeyFresh = false; _mediaKeyMine = false; _mediaKeyAt = 0;
     // …AND A NEW EPOCH, so no read or publish opened before this line counts afterwards. Resetting the flags
     // alone was not enough: the subscriptions the dashboard is about to close fire `oneose` AS they close, and

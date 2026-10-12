@@ -15375,6 +15375,7 @@ zoo`.split("\n");
   var _careKeyRev = 0;
   var _careKeyChecked = false;
   var _careKeyFresh = false;
+  var _careKeyAt = 0;
   var _careKeyMine = false;
   var _careRoster = /* @__PURE__ */ new Set();
   var _exStewardsKey = () => "trinityone.steward.exstewards." + (pub || "");
@@ -15851,6 +15852,21 @@ zoo`.split("\n");
     try {
       const o = JSON.parse(e.content || "{}");
       if ((o.rev || 1) < _careKeyRev) return;
+      if ((o.rev || 1) === _careKeyRev && (e.created_at || 0) < _careKeyAt) {
+        const m2 = o.keys && churchPub && o.keys[churchPub];
+        if (m2 && churchSk) {
+          const pl = decrypt3(m2, getConversationKey(churchSk, e.pubkey));
+          let rg = null;
+          try {
+            const q = JSON.parse(pl);
+            if (Array.isArray(q)) rg = q.filter((k) => typeof k === "string" && k);
+          } catch (x2) {
+          }
+          for (const k of rg && rg.length ? rg : [pl]) if (_careKeyRing.indexOf(k) === -1) _careKeyRing.push(k);
+        }
+        return;
+      }
+      _careKeyAt = e.created_at || 0;
       _careKeyDocKeys = o.keys || null;
       _careKeyRev = o.rev || 1;
       _careKeyMine = false;
@@ -17340,6 +17356,7 @@ zoo`.split("\n");
     _careKeyPending = [];
     _careKeyFresh = false;
     _careKeyMine = false;
+    _careKeyAt = 0;
     _mediaKeyHex = null;
     _mediaKeyRing = [];
     _mediaKeyDocKeys = null;
@@ -20181,6 +20198,7 @@ zoo`.split("\n");
       if (!sk || !pub) return false;
       const pub0 = pub, ep0 = _keyReadEpoch, sk0 = sk;
       if (!_isRelayAuthed()) return false;
+      if (!_mediaKeyFresh) return false;
       if (!_mediaKeyHex) return _mediaKeyChecked && !_mediaKeyDocKeys ? { rotated: false, reason: "no sermon key yet" } : false;
       if (_mediaKeyDocKeys && !_mediaKeyMine) return false;
       _mediaKeyVer++;
@@ -20308,6 +20326,7 @@ zoo`.split("\n");
         _careKeyDocKeys = keys;
         _careKeyMine = true;
         _careKeyVer++;
+        _careKeyAt = Math.max(_careKeyAt, _cev.created_at || 0);
         _keyEnvSave("care", cp, _cev, churchPub, keys[churchPub]);
       }
       return ok;
@@ -20385,6 +20404,7 @@ zoo`.split("\n");
       if (!sk || !cp || !churchPub) return false;
       if (!_careKeyChecked || !_isRelayAuthed()) return false;
       if (!_careKeyHex) return false;
+      if (!_careKeyFresh) return false;
       if (_careKeyDocKeys && !_careKeyMine) return false;
       _careKeyVer++;
       const fresh = _hex(crypto.getRandomValues(new Uint8Array(32)));
@@ -20434,6 +20454,7 @@ zoo`.split("\n");
       _careKeyDocKeys = keys;
       _careKeyMine = true;
       _careKeyVer++;
+      _careKeyAt = _cev.created_at || 0;
       _keyEnvSave("care", cp, _cev, churchPub, keys[churchPub]);
       return true;
     },
@@ -25377,6 +25398,7 @@ zoo`.split("\n");
       _careKeyPending = [];
       _careKeyFresh = false;
       _careKeyMine = false;
+      _careKeyAt = 0;
       _mediaKeyHex = null;
       _mediaKeyRing = [];
       _mediaKeyDocKeys = null;

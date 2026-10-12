@@ -52,7 +52,7 @@ function engine() {
   const t = {
     pub: A.pub, actingChurch: '', churchPub: A.pub, churchSk: A.sk, sk: A.sk,
     NET: 'trinityone', NAMEKEY_D, CAREKEY_D, MEDIAKEY_D, NAME_RING_MAX: 50,
-    _careKeyHex: null, _careKeyRing: [], _careKeyDocKeys: null, _careKeyRev: 0, _careKeyChecked: false, _careKeyPending: [], _careKeyVer: 0,
+    _careKeyHex: null, _careKeyRing: [], _careKeyDocKeys: null, _careKeyRev: 0, _careKeyChecked: false, _careKeyPending: [], _careKeyVer: 0, _careKeyAt: 0,   // _careKeyAt: round 3d
     _careRoster: new Set(), _CAREKEY_PENDING_TTL: 12000,
     _mediaKeyHex: null, _mediaKeyRing: [], _mediaKeyDocKeys: null, _mediaKeyChecked: false, _mediaKeyPushRefused: null, _mediaKeyVer: 0,
     _careKeyFresh: false, _careKeyMine: false, _mediaKeyFresh: false, _mediaKeyMine: false, _mediaKeyAt: 0,   // round 3a (b)
@@ -772,7 +772,7 @@ test('setBlocked never drops someone this console holds as blocked — only an e
 test('rotateCareKey and rotateMediaKey never wrap the new key to someone this console holds as blocked, whatever list they are handed', async () => {
   const e = engine();
   e.t._localBlocked = new Set([M2.pub]);
-  e.t._careKeyHex = 'aa'.repeat(32); e.t._careKeyRing = ['aa'.repeat(32)]; e.t._careKeyChecked = true; e.t._careKeyRev = 1;
+  e.t._careKeyHex = 'aa'.repeat(32); e.t._careKeyRing = ['aa'.repeat(32)]; e.t._careKeyChecked = true; e.t._careKeyRev = 1; e.t._careKeyFresh = true;   // read on this connection — round 3d: a rotation needs it
   e.t._mediaKeyHex = 'cc'.repeat(32); e.t._mediaKeyRing = ['cc'.repeat(32)]; e.t._mediaKeyChecked = true; e.t._mediaKeyFresh = true;   // read on this connection — round 3a (b)
   for (const [what, call, d] of [['care', () => e.S.rotateCareKey([M1.pub, M2.pub], []), CAREKEY_D], ['sermon', () => e.S.rotateMediaKey([M1.pub, M2.pub], []), MEDIAKEY_D]]) {
     const p0 = e.published.length;
@@ -1236,7 +1236,7 @@ test('rotateCareKey, rotateMediaKey and a room rotation carry every current hold
   const e = engine();
   e.t._localBlocked = new Set([M3.pub]);
   const holders = { [A.pub]: 'x', [M1.pub]: 'x', [M2.pub]: 'x', [M3.pub]: 'x' };
-  e.t._careKeyHex = 'aa'.repeat(32); e.t._careKeyRing = ['aa'.repeat(32)]; e.t._careKeyChecked = true; e.t._careKeyRev = 1; e.t._careKeyDocKeys = { ...holders }; e.t._careKeyMine = true;
+  e.t._careKeyHex = 'aa'.repeat(32); e.t._careKeyRing = ['aa'.repeat(32)]; e.t._careKeyChecked = true; e.t._careKeyRev = 1; e.t._careKeyDocKeys = { ...holders }; e.t._careKeyMine = true; e.t._careKeyFresh = true;   // read on this connection — round 3d
   e.t._mediaKeyHex = 'cc'.repeat(32); e.t._mediaKeyRing = ['cc'.repeat(32)]; e.t._mediaKeyChecked = true; e.t._mediaKeyFresh = true; e.t._mediaKeyDocKeys = { ...holders }; e.t._mediaKeyMine = true;
   const gid = 'room-3c';
   e.t.__skeys[gid] = [unhex('dd'.repeat(32))]; e.t.__senvRecips[gid] = Object.keys(holders); e.t.__senvMine[gid] = true;
@@ -1381,4 +1381,63 @@ test('LOW ii: sealGroup hands the dialog\'s onTurn to the key publish, which cal
   const r = await e.S.sealGroup({ id: gid, name: 'Sealed' }, [M1.pub], { onTurn: () => { turned++; } });
   assert.ok(r && r.sealed, 'CONTROL: the room was not sealed: ' + JSON.stringify(r));
   assert.equal(turned, 1, 'SEALGROUP DID NOT HAND THE DIALOG\'S onTurn TO THE KEY PUBLISH — the dialog\'s 8 s never starts, so only the 30 s bound is left');
+});
+
+// ROUND 3d, MED (audit of 0f5cd2d): THE DEVICE COPY IS NEVER THE BASIS OF A ROTATION. 3c restores the care/sermon envelope
+// this console last accepted before any relay answers — so it can paint and seal — but Block and removing a delegate
+// rotated from it too. Device 1 kept care rev 1 (K1; A, M1, M2, M3); another console published rev 2 (K2) blocking M2;
+// device 1 reloaded and blocked M3 before the relay answered: it rotated from rev 1 (M2 still in, K2 not in its ring) and
+// published "rev 2" — and the relay's real rev 2, arriving at the same rev, then replaced it, so the console sealed with
+// K2, which M3 holds. A rotation now refuses until this connection's read has settled (the same `fresh` the re-seal uses),
+// which is what 432c676 did by having nothing to rotate; and an envelope at the SAME rev as the one this console holds
+// replaces it only if it is newer, its keys otherwise joining the ring's tail.
+const K2 = '22'.repeat(32);
+for (const [kind, D, sub, rotate, hexOf, ringOf] of [
+  ['care', CAREKEY_D, 'subscribeCareKey', 'rotateCareKey', (t) => t._careKeyHex, (t) => t._careKeyRing],
+  ['sermon', MEDIAKEY_D, 'subscribeMediaKey', 'rotateMediaKey', (t) => t._mediaKeyHex, (t) => t._mediaKeyRing],
+]) {
+  test(`3d MED · ${kind}: a Block before this connection's read has settled does not rotate from the device copy — and after it, rotates from the relay's newer key`, async () => {
+    const e1 = engine(); e1.t.up = new Set([R1]);
+    e1.S[sub]();
+    const s1 = e1.subs.at(-1);
+    s1.handlers.onevent(envAt(D, A, [K1], [A.pub, M1.pub, M2.pub, M3.pub], OLD_AT, 1)); await e1.eose(s1);
+    assert.equal(hexOf(e1.t), K1, 'CONTROL: device 1 did not keep rev 1');
+    // device 1 reloads; the read is open, nothing has answered yet
+    const e2 = engine(); e2.t.up = new Set([R1]); e2.t.localStorage = e1.t.localStorage;
+    e2.S[sub]();
+    const s2 = e2.subs.at(-1);
+    assert.equal(hexOf(e2.t), K1, 'CONTROL: the device copy was not restored');
+    e2.t._localBlocked = new Set([M3.pub]);                       // Block M3, NOW
+    const p0 = e2.published.length;
+    const r = await e2.S[rotate]([M1.pub, M2.pub], []);
+    assert.equal(e2.published.length, p0, `A ${kind.toUpperCase()} ROTATION WAS PUBLISHED FROM THE DEVICE COPY BEFORE THE RELAY ANSWERED — it is built on a ring that may be superseded`);
+    assert.equal(r, false, `the refused ${kind} rotation did not report failure (block() must warn)`);
+    // the relay answers: another console's rev 2 (K2), which blocked M2
+    s2.handlers.onevent(envAt(D, A, [K2, K1], [A.pub, M1.pub, M3.pub], OLD_AT + 500, 2)); await e2.eose(s2);
+    assert.equal(hexOf(e2.t), K2, 'CONTROL: the relay\'s newer key was not taken');
+    assert.equal(await e2.S[rotate]([M1.pub], []), true, 'CONTROL: once the read settled, the rotation did not publish');
+    const out = e2.published.slice(p0).find(ev => dtag(ev) === D + A.pub);
+    const to = Object.keys(JSON.parse(out.content).keys);
+    assert.ok(!to.includes(M3.pub), `the ${kind} rotation kept M3`);
+    const ring = JSON.parse(nip44.v2.decrypt(JSON.parse(out.content).keys[M1.pub], ck(M1.sk, A.pub)));
+    assert.ok(ring.includes(K2), `THE ${kind.toUpperCase()} ROTATION'S RING LACKS K2 — needs sealed under it no longer open`);
+    assert.notEqual(ring[0], K2, `the ${kind} rotation did not make a new key`);
+  });
+}
+test('3d MED · care: an envelope at the SAME rev as this console\'s own rotation, but older, does not replace it — its key joins the ring', async () => {
+  const e = engine(); e.t.up = new Set([R1]);
+  e.S.subscribeCareKey();
+  const s = e.subs.at(-1);
+  s.handlers.onevent(envAt(CAREKEY_D, A, [K1], [A.pub, M1.pub, M3.pub], OLD_AT, 1)); await e.eose(s);
+  e.t._localBlocked = new Set([M3.pub]);
+  assert.equal(await e.S.rotateCareKey([M1.pub], []), true, 'CONTROL: the rotation did not publish');
+  const mine = e.t._careKeyHex;
+  assert.equal(e.t._careKeyRev, 2, 'CONTROL: the rotation is not rev 2');
+  // another console's rev 2, made earlier from the same rev 1, arrives now
+  s.handlers.onevent(envAt(CAREKEY_D, A, [K2, K1], [A.pub, M1.pub, M3.pub], OLD_AT + 500, 2));
+  assert.equal(e.t._careKeyHex, mine, 'AN OLDER ENVELOPE AT THE SAME REV REPLACED THIS CONSOLE\'S OWN ROTATION — it now seals with a key the blocked M3 holds');
+  assert.ok(e.t._careKeyRing.includes(K2), 'the other console\'s key did not join this console\'s ring — needs sealed under it would not open here');
+  // CONTROL: a NEWER envelope at the same rev still wins (newest wins, as before)
+  s.handlers.onevent(envAt(CAREKEY_D, A, [K2, K1], [A.pub, M1.pub], 1759300000 + 5, 2));
+  assert.equal(e.t._careKeyHex, K2, 'CONTROL: a newer envelope at the same rev was refused');
 });

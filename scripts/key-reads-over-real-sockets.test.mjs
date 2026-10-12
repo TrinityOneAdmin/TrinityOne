@@ -102,7 +102,7 @@ function engine(A, urls) {
     pool, relays: () => urls.slice(), normalizeURL2: normalizeURL, finalizeEvent2: finalizeEvent,
     pub: A.pub, actingChurch: '', churchPub: A.pub, churchSk: A.sk, sk: A.sk,
     NET: 'trinityone', NAMEKEY_D, CAREKEY_D, MEDIAKEY_D, NAME_RING_MAX: 50,
-    _careKeyHex: null, _careKeyRing: [], _careKeyDocKeys: null, _careKeyRev: 0, _careKeyChecked: false, _careKeyPending: [], _careKeyVer: 0, _careKeyFresh: false, _careKeyMine: false,
+    _careKeyHex: null, _careKeyRing: [], _careKeyDocKeys: null, _careKeyRev: 0, _careKeyChecked: false, _careKeyPending: [], _careKeyVer: 0, _careKeyFresh: false, _careKeyMine: false, _careKeyAt: 0,   // _careKeyAt: round 3d
     _careRoster: new Set(), _CAREKEY_PENDING_TTL: 12000,
     _mediaKeyHex: null, _mediaKeyRing: [], _mediaKeyDocKeys: null, _mediaKeyChecked: false, _mediaKeyPushRefused: null, _mediaKeyVer: 0, _mediaKeyFresh: false, _mediaKeyMine: false, _mediaKeyAt: 0,   // round 3a (b)
     _nameKeyRing: [], _nameKeyDocKeys: null, _nameKeyChecked: false, _nameKeyAt: 0, _nameKeyBusy: null,

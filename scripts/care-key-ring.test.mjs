@@ -85,7 +85,10 @@ test('the MEDIA key has the same ring + rotation (a removed member must not keep
 
 test('legacy envelopes (a bare hex key, no ring) are still readable', () => {
   // A church upgrading mid-flight has an envelope holding a plain hex string, not a JSON array.
-  const ingest = BUNDLE.slice(BUNDLE.indexOf('function _ingestCareKeyEnv'), BUNDLE.indexOf('function _ingestCareKeyEnv') + 1200);
+  // RE-ANCHORED 2026-10-12 (round 3d): the same-rev guard at the top of the function pushed the fallback past a fixed
+  // 1200-character window. It now reads the whole function, up to the next top-level function.
+  const _at = BUNDLE.indexOf('function _ingestCareKeyEnv');
+  const ingest = BUNDLE.slice(_at, BUNDLE.indexOf('\n  function ', _at + 10));
   assert.match(ingest, /Array\.isArray/, 'the ingest must detect the array form');
   assert.match(ingest, /\[plain\]/, 'and fall back to treating a bare string as a one-key ring');
 });

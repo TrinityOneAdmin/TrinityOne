@@ -42,7 +42,7 @@ function engine({ media = {}, care = {} } = {}) {
     _mediaKeyHex: media.ring ? media.ring[0] : null, _mediaKeyRing: media.ring ? media.ring.slice() : [],
     _mediaKeyDocKeys: {}, _mediaKeyPushRefused: null,
     _careKeyHex: care.ring ? care.ring[0] : null, _careKeyRing: care.ring ? care.ring.slice() : [],
-    _careKeyDocKeys: care.ring ? {} : null, _careKeyRev: 3, _careKeyChecked: true, _careKeyPending: [],
+    _careKeyDocKeys: care.ring ? {} : null, _careKeyRev: 3, _careKeyChecked: true, _careKeyPending: [], _careKeyAt: 0,   // _careKeyAt: round 3d
     ...keyEnvFns(BUNDLE),   // round 3c, MED 2: the kept care/sermon envelope (test-slice.mjs)
     _mediaKeyAt: 0,   // round 3c, MED 2: every publisher of the sermon key stamps it
     _mediaKeyVer: 0, _careKeyVer: 0, _mediaKeyFresh: true, _mediaKeyMine: true, _careKeyFresh: true, _careKeyMine: true,   // round 3a: the per-room publish queue; the care/sermon reads as fresh and ours (tested in key-reads-settle-only-…)
