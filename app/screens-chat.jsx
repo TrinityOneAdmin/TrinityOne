@@ -1678,8 +1678,14 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
             empty state for a few seconds first, which is not misleading either way, and then the truth. */}
         {visibleMsgs.length ? bubbles : (
           <div style={{ textAlign: 'center', color: 'var(--ink-3)', padding: '38px 26px', fontSize: 13.5, lineHeight: 1.55 }}>
+            {/* AN ENCRYPTED ROOM THIS PHONE HAS NO KEY FOR IS NOT EMPTY. Its messages cannot be opened, so they
+                are not shown — and "No messages yet" over a room full of conversation told the member nobody
+                was there, and invited a hello their phone would refuse to send. encState is the same answer the
+                header's lock label reads (Fellowship.groupEncState). */}
             {connected || !settled
-              ? <React.Fragment><div style={{ fontWeight: 700, color: 'var(--ink-2)', marginBottom: 4 }}>No messages yet</div>Say hello — the first message in a room is always the hardest.</React.Fragment>
+              ? (encState === 'nokey'
+                ? <div style={{ fontWeight: 700, color: 'var(--ink-2)' }}>Waiting for this room’s key</div>
+                : <React.Fragment><div style={{ fontWeight: 700, color: 'var(--ink-2)', marginBottom: 4 }}>No messages yet</div>Say hello — the first message in a room is always the hardest.</React.Fragment>)
               : <React.Fragment><div style={{ fontWeight: 700, color: 'var(--ink-2)', marginBottom: 4 }}>Can’t reach your church</div>You may be offline, or its relay may be down. Anything you send will go when you reconnect.</React.Fragment>}
           </div>
         )}
