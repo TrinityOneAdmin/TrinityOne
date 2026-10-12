@@ -190,7 +190,7 @@ function leaveScreen(result) {
   const scope = {
     churches: [{ id: 'npub1church', npub: 'npub1church' }, { id: 'npub1other', npub: 'npub1other' }],
     activeChurch: 'npub1church',
-    setChurches: (v) => { scope.churches = v; },
+    setChurches: (v) => { scope.churches = typeof v === 'function' ? v(scope.churches) : v; },   // the app passes an updater (3457b0e): a real React setter accepts either
     setActiveChurch: () => {},
     lsSet: () => {},
     toast: (m, o) => toasts.push(String(m)),
