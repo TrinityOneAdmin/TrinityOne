@@ -153,7 +153,7 @@ test('blocking is refused while acting as a delegated steward, and never re-keys
   // the group rotation itself lives in rotateChurchKeys now (the body Block and removing a delegate share)
   assert.match(body + '\n' + fnBody(DASH, 'function rotateChurchKeys(', 'rotateChurchKeys'), /!delegated\s*&&\s*Array\.isArray\(groups\)/,
     'a delegated steward can re-key another church’s group under the wrong key and lock the owner out');
-  const dist = DASH.slice(DASH.indexOf('const memberPubs = members.map'), DASH.indexOf('const memberPubs = members.map') + 600);
+  const dist = fnBody(DASH, 'for (const g of groups) {', 'the key distributor loop');
   assert.match(dist, /filter\(notBlocked\)/,
     'the key distributor hands the freshly-rotated key straight back to the blocked member on the next roster tick');
 });
@@ -284,7 +284,7 @@ test('a locally-blocked member is excluded from the group key envelope', async (
   const C = K().pub;
   const src = `
     let _localBlocked = new Set([C]);
-    const _skeys = { g1: [new Uint8Array(32).fill(9)] }, _srev = { g1: 1 }, _senvTs = {};
+    const _skeys = { g1: [new Uint8Array(32).fill(9)] }, _srev = { g1: 1 }, _senvTs = {}, _senvRecips = {};
     const GROUP_RING_MAX = 12, GROUPKEY_D = 'trinityone/groupkey:', NET = 'trinityone';
     const churchSk = new Uint8Array(32).fill(3), churchPub = CP;
     const _isRelayAuthed = () => true;
@@ -322,7 +322,10 @@ test('a locally-blocked member is excluded from the group key envelope', async (
 // without an in-flight guard a slow envelope publish is fired AGAIN on the next tick, and a persistently
 // refused one is re-sent on EVERY tick — full near-1 MB envelopes, repeatedly, on the metered links this
 // product is built for. These tests lift the real loop out of app/stew-dashboard.jsx and DRIVE it: comments
-// cannot satisfy them, and a mutant that advances `last` optimistically or drops the guard goes red.
+// cannot satisfy them, and a mutant that records success optimistically or drops the guard goes red.
+// Since 2026-10-12 the loop reconciles against the room's newest envelope (Steward.groupKeyRecipients /
+// groupKeyMissing) instead of a `last` memo; the fake engine below records the recipients of a publish that
+// SUCCEEDS, as publishGroupKey does, and starts every room wrapped to member 'a'.
 function distributorRig() {
   const D = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
   const loop = fnBody(D, 'for (const g of groups) {', 'the key distributor loop');
@@ -330,16 +333,22 @@ function distributorRig() {
     calls: [],
     result: Promise.resolve(true),          // what publishGroupKey resolves for the next call(s)
     nowVal: 1_000_000,                      // fake clock, advanced by hand
-    last: { current: {} }, pending: { current: {} }, nextTry: { current: {} }, failCount: { current: {} },
+    env: { g1: ['a'] },                     // room id -> recipients of its newest envelope
+    unsealable: { current: {} }, pending: { current: {} }, nextTry: { current: {} }, failCount: { current: {} },
   };
   const win = {
-    Steward: { publishGroupKey: (gid, recips, opts) => { rig.calls.push([gid, [...recips], opts]); return rig.result; } },
+    Steward: {
+      publishGroupKey: (gid, recips, opts) => { rig.calls.push([gid, [...recips], opts]);
+        return Promise.resolve(rig.result).then(r => { if (r !== null && r !== false) rig.env[gid] = [...recips]; return r; }); },
+      groupKeyRecipients: (gid) => rig.env[gid] ? [...rig.env[gid]] : null,
+      groupKeyMissing: (gid, pubs) => rig.env[gid] ? pubs.filter(p => !rig.env[gid].includes(p)) : null,
+    },
     dispatchEvent: () => {},
   };
   const fakeDate = { now: () => rig.nowVal };
-  const fn = new Function('groups', 'memberPubs', 'notBlocked', 'last', 'pending', 'nextTry', 'failCount',
+  const fn = new Function('groups', 'approvedPubs', 'notBlocked', 'unsealable', 'pending', 'nextTry', 'failCount',
     'window', 'Date', 'CustomEvent', loop);
-  rig.tick = (groups, memberPubs) => fn(groups, memberPubs, () => true, rig.last, rig.pending, rig.nextTry,
+  rig.tick = (groups, memberPubs) => fn(groups, memberPubs, () => true, rig.unsealable, rig.pending, rig.nextTry,
     rig.failCount, win, fakeDate, function CustomEvent() {});
   return rig;
 }
@@ -349,8 +358,8 @@ const G1 = { id: 'g1', name: 'Prayer', encrypted: true };
 test('distributor: a publish in flight is not fired again by the next roster tick', async () => {
   const r = distributorRig();
   let resolve1; r.result = new Promise(res => { resolve1 = res; });
-  r.tick([G1], ['a']);                       // first sighting — seeds `last`, publishes nothing
-  assert.equal(r.calls.length, 0, 'sanity: the first sighting is already keyed by create/edit');
+  r.tick([G1], ['a']);                       // the envelope already holds 'a' — publishes nothing
+  assert.equal(r.calls.length, 0, 'sanity: a room whose envelope holds everyone is not re-keyed');
   r.tick([G1], ['a', 'b']);                  // someone joined → one publish starts
   r.tick([G1], ['a', 'b']);                  // the 150ms coalesced re-emit lands while it is still in flight
   r.tick([G1], ['a', 'b']);
@@ -367,7 +376,7 @@ test('distributor: a roster that grew DURING the flight is still retried after i
   r.tick([G1], ['a', 'b']);                  // publish for a,b in flight
   r.tick([G1], ['a', 'b', 'c']);             // c joins mid-flight — skipped now, must NOT be lost
   assert.equal(r.calls.length, 1);
-  resolve1(true); await settle();            // `last` advances with the a,b captured AT CALL TIME
+  resolve1(true); await settle();            // the envelope now holds a,b — what was published AT CALL TIME
   r.result = Promise.resolve(true);
   r.tick([G1], ['a', 'b', 'c']);
   assert.equal(r.calls.length, 2, 'the joiner who arrived during the flight was never keyed — silent, permanent');
@@ -390,7 +399,7 @@ test('distributor: a refused publish backs off instead of hammering, then retrie
   await settle();
   assert.equal(r.calls.length, 2, 'backoff must be a delay, not a tombstone — the retry is the whole repair');
   r.tick([G1], ['a', 'b']);                  // success advanced `last` — no further sends
-  assert.equal(r.calls.length, 2, 'success must advance `last` (the never-publish mutant fails here)');
+  assert.equal(r.calls.length, 2, 'a successful publish must settle the room (the never-publish mutant fails here)');
 });
 
 test('distributor: a rejected publish clears the in-flight guard rather than wedging the group', async () => {
@@ -412,7 +421,7 @@ test('a room that could not be keyed is retried, not marked done', () => {
   // Brace-matched, not a fixed window: test-windows.test.mjs exists because a hand-picked character count
   // silently stops covering the code it names the moment that code grows, and every assertion after the cut
   // then reads a truncated slice and passes over nothing. This one was 532 characters short on its first run.
-  const body = fnBody(DASH2, 'if (key !== prev) {', 'the key distributor branch');
+  const body = fnBody(DASH2, 'for (const g of groups) {', 'the key distributor loop');
   assert.match(body, /if \(r === null \|\| r === false\) return;/,
     'the roster is recorded as handled even when nothing was published — publishGroupKey does nothing when ' +
     'this console has no ring yet, so the member who joined in that window is never keyed, and the next ' +

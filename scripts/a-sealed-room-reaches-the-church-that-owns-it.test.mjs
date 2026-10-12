@@ -128,7 +128,7 @@ function consoleApi({ signer, actingChurch, churchPubOverride }) {
     sk: signer.sk, pub: actingChurch || signer.pub, actingChurch,
     churchSk: signer.sk, churchPub: churchPubOverride || signer.pub,
     NET, GROUPKEY_D, GROUP_RING_MAX: 12,
-    _skeys: {}, _srev: {}, _senvTs: {}, _localBlocked: new Set(),
+    _skeys: {}, _srev: {}, _senvTs: {}, _senvRecips: {}, _localBlocked: new Set(),
     _isRelayAuthed: () => true,
     _requireTrustedView: () => {},
     _monotonic: (t) => t,

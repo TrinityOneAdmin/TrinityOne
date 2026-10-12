@@ -201,6 +201,7 @@ function distributor(groups) {
   const { React, draw } = miniReact();
   const calls = [];
   let members = [{ pubkey: 'a'.repeat(64) }];
+  const envelope = ['f'.repeat(64), 'a'.repeat(64)];
   const win = {
     useStewardChurch: () => ({ name: 'St Aidan', features: {} }),
     useStewardGroups: () => groups || [],
@@ -216,6 +217,10 @@ function distributor(groups) {
       ensureNameKeyForMembers: (...a) => calls.push(['name', a]),
       ensureGroupKeys: (...a) => calls.push(['groups', a]),
       publishGroupKey: (...a) => { calls.push(['groupkey', a]); return Promise.resolve(null); },
+      // the room's envelope as this console last saw it: wrapped to the church and the one member there at the
+      // start. The distributor reconciles against this (2026-10-12) rather than a first-sighting memo.
+      groupKeyRecipients: () => envelope.slice(),
+      groupKeyMissing: (gid, pubs) => (pubs || []).filter(p => !envelope.includes(p)),
     },
     addEventListener() {}, removeEventListener() {},
   };
@@ -225,8 +230,8 @@ function distributor(groups) {
   });
   draw(mod.KeyDistributor, {});
   calls.join = calls.join;   // keep the array plain
-  // SOMEBODY JOINS. The distributor records a room's roster on FIRST sighting and only publishes when it
-  // GROWS, so one draw can never reach the group-key path — which is exactly how the groupkey half of this
+  // SOMEBODY JOINS. The distributor publishes only for a member the room's envelope has no copy for, and the
+  // envelope above already holds everyone drawn first, so one draw can never reach the group-key path — which is exactly how the groupkey half of this
   // fix came to be untested (audit finding F2, 2026-09-17).
   calls.grow = () => { members = [...members, { pubkey: 'c'.repeat(64) }]; draw(mod.KeyDistributor, {}); return calls; };
   return calls;
@@ -247,8 +252,8 @@ test('…and it marks the GROUP-KEY envelope the same way, which is the other ha
   // publishErrorMessage names BOTH documents the delegated console was refused: carekey: and groupkey:.
   const calls = distributor([{ id: 'g1', name: 'Musicians', encrypted: true }]);
   assert.deepEqual(calls.filter(c => c[0] === 'groupkey'), [],
-    're-anchor: the distributor keyed a room on FIRST sighting, which it must never do — the room was already ' +
-    'keyed when it was created, and re-keying on mount would spend a near-1MB envelope on every console open');
+    're-anchor: the distributor re-keyed a room whose envelope already holds everyone — re-keying on mount ' +
+    'would spend a near-1MB envelope on every console open');
   calls.grow();
   const gk = calls.find(c => c[0] === 'groupkey');
   assert.ok(gk, 'a member joined an encrypted room and no key envelope was published at all');

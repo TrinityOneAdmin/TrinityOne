@@ -922,6 +922,14 @@ const GROUP_RING_MAX = 50;   // raised from 12 (cloud audit finding 9): 12 remov
 // that by its member count and pushed the event past the relay's 1 MB maxPayload. AUDIT-2026-07-27.
 const _srev = {};    // groupId -> envelope revision (bumped on rotate)
 const _senvTs = {};  // groupId -> latest envelope created_at (ignore stale/out-of-order)
+// groupId -> the RECIPIENTS of the newest envelope we have seen (Object.keys(env.keys)), as hex pubkeys. The
+// key distributor reconciles against this rather than assuming a room it first sees is already keyed to
+// everyone: that was only true on the console that created the room, so a console with no saved member list
+// (new device, reinstall, cleared data, a delegate) counted a member who joined while no console was open as
+// keyed, and they never got the room key. Same idea as _nameKeyDocKeys for the name key.
+// READERS: stewIngestKey and publishGroupKey (writers), Steward.groupKeyRecipients / groupKeyMissing (getters,
+// read by KeyDistributor in app/stew-dashboard.jsx).
+const _senvRecips = {};
 const _hex = (u) => Array.from(u).map(b => b.toString(16).padStart(2, '0')).join('');
 const _unhex = (h) => new Uint8Array((String(h).match(/.{1,2}/g) || []).map(x => parseInt(x, 16)));
 const _b64 = (u8) => { let s = ''; const c = 0x8000; for (let i = 0; i < u8.length; i += c) s += String.fromCharCode.apply(null, u8.subarray(i, i + c)); return btoa(s); };   // Uint8Array -> base64 (chunked, stack-safe)
@@ -934,6 +942,7 @@ function stewIngestKey(e) {
   _senvTs[gid] = e.created_at || 0;
   try {
     const env = JSON.parse(e.content || '{}'); _srev[gid] = env.rev || 1;
+    _senvRecips[gid] = (env.keys && typeof env.keys === 'object') ? Object.keys(env.keys).map(p => String(p).toLowerCase()) : [];
     const mine = env.keys && churchPub && env.keys[churchPub];
     if (mine && churchSk) {
       const plain = nip44d(mine, nip44ck(churchSk, e.pubkey));
@@ -942,6 +951,8 @@ function stewIngestKey(e) {
       _skeys[gid] = (ring && ring.length ? ring : [plain]).map(_unhex);   // legacy envelopes hold a bare hex string
     }
   } catch {}
+  // tell the key distributor a room's envelope changed, so it reconciles at once rather than on the next roster tick
+  try { if (typeof window !== 'undefined' && window.dispatchEvent) window.dispatchEvent(new CustomEvent('steward-groupkey', { detail: { id: gid } })); } catch (e) {}
 }
 const now = () => Math.floor(Date.now() / 1000);
 // Author discipline for the church's replaceable AUTHORITY docs (blocklist, admitted, stewards, guardians,
@@ -7318,6 +7329,7 @@ window.Steward = {
         catch (e) { missed.push(pk); }
       }
       build.missed = missed;
+      build.recips = Object.keys(keys);
       return JSON.stringify({ rev, keys, rings });
     };
     // A church large enough to push the sealed ring past the relay's 1 MB cap sheds history rather than
@@ -7352,11 +7364,27 @@ window.Steward = {
     _skeys[groupId] = ring;
     _srev[groupId] = rev;
     _senvTs[groupId] = _env.created_at || 0;
+    _senvRecips[groupId] = (build.recips || []).map(p => String(p).toLowerCase());
     if (skipped.length) {
       console.warn('[steward] group key ' + groupId + ': could not seal to ' + skipped.length + ' member(s) — they cannot read or post in that room');
       return { ok: true, skipped: skipped.slice() };
     }
     return true;
+  },
+  // WHO THE NEWEST ENVELOPE OF A ROOM IS WRAPPED TO — or null when this console holds no ring for the room (its
+  // envelope has not been ingested, or carries no copy for this church), in which case nothing can be re-wrapped
+  // anyway (publishGroupKey with reuseOnly would do nothing). Read by KeyDistributor (app/stew-dashboard.jsx).
+  groupKeyRecipients(groupId) {
+    if (!(_skeys[groupId] || []).length || !_senvRecips[groupId]) return null;
+    return _senvRecips[groupId].slice();
+  },
+  // which of `pubs` (hex or npub) the room's newest envelope has NO copy for — null as for groupKeyRecipients.
+  // Returns the entries as given, so a caller can compare them with its own list.
+  groupKeyMissing(groupId, pubs) {
+    const have = window.Steward.groupKeyRecipients(groupId);
+    if (!have) return null;
+    const hs = new Set(have);
+    return (pubs || []).filter(p => { const h = toPubHex(p); return h && !hs.has(h); });
   },
   // ---- CREATE a room that is meant to be encrypted: it is never created without its key (new church, 2026-10-02). ----
   //

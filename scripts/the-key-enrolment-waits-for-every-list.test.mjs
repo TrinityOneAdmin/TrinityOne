@@ -38,7 +38,12 @@ async function keyDistributor() {
   const calls = [];
   const timers = [];
   const lists = { members: [], groups: [], stewards: [], blocked: [] };
-  const record = (name) => (...a) => { calls.push({ name, members: (a[0] || []).slice() }); return Promise.resolve(null); };
+  // the rooms' key envelopes as the engine last saw them, per church: env[church][roomId] = recipients. absent = no
+  // ring held (the engine's groupKeyRecipients answers null). Set by the tests.
+  const env = {};
+  const churchNow = () => g.window.Steward.actingChurch || g.window.Steward.churchPub;
+  const approval = { on: false, admitted: [], loaded: { subscribeJoinPolicy: true, subscribeAdmitted: true, subscribeBlocked: true } };
+  const record = (name) => (...a) => { calls.push({ name, members: (a[0] || []).slice(), second: a[1] }); return Promise.resolve(null); };
   const g = {
     React, setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; }, clearTimeout: () => {},   // the mount re-check timers, fired by hand
     window: {
@@ -47,9 +52,14 @@ async function keyDistributor() {
         subscribeMediaKey: () => () => {}, subscribeCareKey: () => () => {}, subscribeNameKey: () => () => {},
         subscribeWebsiteShare: () => () => {}, setCareRoster: () => {},
         ensureMediaKeyForMembers: record('media'), ensureCareKeyForMembers: record('care'), ensureNameKeyForMembers: record('name'),
-        ensureGroupKeys: record('groups'), publishGroupKey: record('groupkey'),
+        ensureGroupKeys: record('groups'),
+        publishGroupKey: (gid, recips, opts) => { calls.push({ name: 'groupkey', gid, members: (recips || []).slice(), opts }); return Promise.resolve(null); },
+        groupKeyRecipients: (gid) => { const e = (env[churchNow()] || {})[gid]; return e ? e.slice() : null; },
+        groupKeyMissing: (gid, pubs) => { const e = (env[churchNow()] || {})[gid]; return e ? (pubs || []).filter(p => !e.includes(p)) : null; },
         actingChurch: '', activePub: 'a'.repeat(64), churchPub: 'a'.repeat(64),
       },
+      useStewardJoinPolicy: () => approval.on, useStewardAdmitted: () => approval.admitted,
+      stewardStreamLoaded: (m) => !!approval.loaded[m],
       useStewardChurch: () => ({ name: 'St Aidan' }),
       useStewardGroups: () => lists.groups, useStewardMembers: () => lists.members,
       useStewardStewards: () => lists.stewards, useStewardBlocked: () => lists.blocked,
@@ -64,7 +74,7 @@ async function keyDistributor() {
   delete globalThis[key];
   const set = (name, arr, isCurrent) => { if (isCurrent) current.add(arr); lists[name] = arr; };
   const render = () => draw(mod.KeyDistributor, {});
-  return { set, render, calls, timers, steward: g.window.Steward };
+  return { set, render, calls, timers, steward: g.window.Steward, env, approval };
 }
 const enrolled = (calls) => calls.filter(c => c.name === 'care' || c.name === 'name' || c.name === 'media');
 
@@ -95,34 +105,38 @@ test('no enrolment while the MEMBER list is another church\'s (the reload-into-B
   }
 });
 
-// THE KEY DISTRIBUTOR'S MEMORY IS PER CHURCH (audit of 5276297, HIGH 1). Its `last` map — the recipients it last keyed
-// each room to — survived a church switch, so a room id it had seen in one church was "already keyed" in the next,
-// and that church's members looked like new recipients: it re-published the room's key to them.
-test('a room the distributor saw in one church is a FIRST sighting in the next — no key is re-published to the new church\'s people', async () => {
+// THE KEY DISTRIBUTOR'S MEMORY IS PER CHURCH (audit of 5276297, HIGH 1). It used to remember the recipients it last
+// keyed each room to, and that memo survived a church switch. Since 2026-10-12 it keeps no such memo: it reconciles
+// every room against the room's OWN newest envelope (Steward.groupKeyRecipients), which is per room and so per church.
+// These rows keep the three switch scenarios the memo was guarding, against that envelope.
+const A = 'a'.repeat(64), BCH = 'e'.repeat(64);
+test('a room whose envelope already holds everyone is not re-keyed — in this church or after a switch', async () => {
   const k = await keyDistributor();
   const room = { id: 'room-x', name: 'Sealed', encrypted: true };
+  k.env[A] = { 'room-x': [A, MB] };
+  k.env[BCH] = { 'room-x': [BCH, MB2] };
   k.set('members', [{ pubkey: MB }], true); k.set('groups', [room], true); k.set('stewards', [ST], true); k.set('blocked', [], true);
-  k.render();                                     // church A: first sighting of the room, remembered
-  assert.equal(k.calls.filter(c => c.name === 'groupkey').length, 0, 'CONTROL: a first sighting published a room key');
-  k.steward.actingChurch = 'b'.repeat(64);        // the console switches church; the same room id is on the list it sees
+  k.render();
+  assert.equal(k.calls.filter(c => c.name === 'groupkey').length, 0, 'CONTROL: a room whose envelope already holds every member was re-keyed');
+  k.steward.actingChurch = BCH;                   // the console switches church; the same room id is on the list it sees
   k.set('members', [{ pubkey: MB2 }], true); k.set('groups', [{ ...room }], true); k.set('stewards', [ST], true); k.set('blocked', [], true);
   k.render();
   const keyed = k.calls.filter(c => c.name === 'groupkey');
-  assert.deepEqual(keyed, [], 'THE ROOM\'S KEY WAS RE-PUBLISHED TO THE NEXT CHURCH\'S MEMBERS because the distributor remembered it from the last church: ' + JSON.stringify(keyed));
-  // CONTROL: in one church, a room whose members grew IS re-keyed — the memo still does its job
+  assert.deepEqual(keyed, [], 'THE ROOM\'S KEY WAS RE-PUBLISHED after a switch although its envelope already holds every member: ' + JSON.stringify(keyed));
+  // CONTROL: in one church, a member the envelope lacks IS keyed
   k.set('members', [{ pubkey: MB2 }, { pubkey: MB }], true); k.set('groups', [{ ...room }], true);
   k.render();
-  assert.equal(k.calls.filter(c => c.name === 'groupkey').length, 1, 'CONTROL: a room whose members grew in the same church was not re-keyed');
+  assert.equal(k.calls.filter(c => c.name === 'groupkey').length, 1, 'CONTROL: a member the room\'s envelope lacks was not keyed');
 });
-// …AND IT IS KEPT PER CHURCH, NOT WIPED (audit of 831dcea). Wiping it on every switch made A's rooms a first sighting on
-// the way back from B, so a member who joined A while the console was on B was recorded as already keyed — and was
-// never given A's room key. (The browser row: a-member-who-joined-while-the-console-was-away-gets-the-room-key.)
+// …a member who joined A while the console was elsewhere is keyed on the way back (audit of 831dcea). (The browser row:
+// a-member-who-joined-while-the-console-was-away-gets-the-room-key.)
 test('a member who joined church A while the console was on church B is given A\'s room key when it comes back to A', async () => {
   const k = await keyDistributor();
   const room = { id: 'room-a', name: 'Sealed', encrypted: true };
+  k.env[A] = { 'room-a': [A, MB] };
   k.set('members', [{ pubkey: MB }], true); k.set('groups', [room], true); k.set('stewards', [ST], true); k.set('blocked', [], true);
   k.render();                                     // church A: the room, keyed to MB
-  k.steward.actingChurch = 'e'.repeat(64);        // the console acts for church B
+  k.steward.actingChurch = BCH;                   // the console acts for church B
   k.set('members', [{ pubkey: ST }], true); k.set('groups', [], true); k.set('stewards', [ST], true); k.set('blocked', [], true);
   k.render();
   assert.equal(k.calls.filter(c => c.name === 'groupkey').length, 0, 'CONTROL: a room key was published before anyone joined');
@@ -130,25 +144,118 @@ test('a member who joined church A while the console was on church B is given A\
   k.set('members', [{ pubkey: MB }, { pubkey: MB2 }], true); k.set('groups', [{ ...room }], true); k.set('stewards', [ST], true); k.set('blocked', [], true);
   k.render();
   const keyed = k.calls.filter(c => c.name === 'groupkey');
-  assert.equal(keyed.length, 1, 'A MEMBER WHO JOINED CHURCH A WHILE THE CONSOLE WAS ON B WAS NEVER GIVEN A\'S ROOM KEY — the room was a "first sighting" on the way back (audit of 831dcea)');
+  assert.equal(keyed.length, 1, 'A MEMBER WHO JOINED CHURCH A WHILE THE CONSOLE WAS ON B WAS NEVER GIVEN A\'S ROOM KEY (audit of 831dcea)');
 });
 // …and a room-key publish that answers after a switch settles ITS church's memo, not the one the console is on now:
 // written into B's, A's "in flight" mark would stay set and A's room would never be re-keyed again.
 test('a room-key publish that answers after a switch is recorded for the church it was made for', async () => {
   const k = await keyDistributor();
   const room = { id: 'room-a', name: 'Sealed', encrypted: true };
+  k.env[A] = { 'room-a': [A, MB] };
   let answer; const inFlight = new Promise(r => { answer = r; });
   k.steward.publishGroupKey = () => { k.calls.push({ name: 'groupkey' }); return inFlight; };
   k.set('members', [{ pubkey: MB }], true); k.set('groups', [room], true); k.set('stewards', [ST], true); k.set('blocked', [], true);
-  k.render();                                     // A: first sighting
+  k.render();                                     // A: everyone keyed
   k.set('members', [{ pubkey: MB }, { pubkey: MB2 }], true); k.render();   // A grows: the publish starts…
   assert.equal(k.calls.filter(c => c.name === 'groupkey').length, 1, 'CONTROL: the grown room was not re-keyed');
-  k.steward.actingChurch = 'e'.repeat(64);        // …the console switches to B before it answers
+  k.steward.actingChurch = BCH;                   // …the console switches to B before it answers
   k.set('members', [{ pubkey: ST }], true); k.set('groups', [], true); k.render();
+  k.env[A]['room-a'] = [A, MB, MB2];              // what the engine records when the publish lands
   answer({ ok: true }); await new Promise(r => setTimeout(r, 0));   // …and it answers, keyed
   k.steward.actingChurch = '';                    // back on A, a third member joins
   k.set('members', [{ pubkey: MB }, { pubkey: MB2 }, { pubkey: ST }], true); k.set('groups', [{ ...room }], true); k.render();
   assert.equal(k.calls.filter(c => c.name === 'groupkey').length, 2, 'THE PUBLISH THAT ANSWERED ON B LEFT A\'S ROOM MARKED "IN FLIGHT" — nobody who joins A is given its key again');
+});
+
+// ── 2026-10-12: RECONCILE, NOT "FIRST SIGHTING = ALREADY KEYED" ─────────────────────────────────────────────────────
+// A console that had never seen the room before — a new device, a reinstall, cleared data, a delegate — recorded the
+// members it first saw as already keyed. A member who joined while no console was open was among them and never got
+// the key. The FIRST render must already key whoever the room's envelope lacks, and must keep everyone it holds.
+test('the FIRST render keys a member the room\'s envelope lacks, and an open room never drops anyone it already holds', async () => {
+  const k = await keyDistributor();
+  const OLD = '9'.repeat(64);                     // in the envelope, not (yet) in the streamed member list
+  k.env[A] = { 'room-o': [A, MB, OLD] };
+  k.set('members', [{ pubkey: MB }, { pubkey: MB2 }], true);
+  k.set('groups', [{ id: 'room-o', name: 'Prayer', encrypted: true }], true); k.set('stewards', [ST], true); k.set('blocked', [], true);
+  k.render();
+  const keyed = k.calls.filter(c => c.name === 'groupkey');
+  assert.equal(keyed.length, 1, 'A MEMBER WHO JOINED WHILE NO CONSOLE WAS OPEN WAS COUNTED AS KEYED ON FIRST SIGHT and never given the room key');
+  assert.ok(keyed[0].members.includes(MB2), 'the member the envelope lacks is not among the recipients: ' + JSON.stringify(keyed[0].members));
+  assert.ok(keyed[0].members.includes(OLD), 'AN OPEN ROOM DROPPED SOMEBODY IT ALREADY HELD — the member list streams in pieces and the phone deletes its key when an envelope leaves it out');
+  assert.equal(keyed[0].opts && keyed[0].opts.reuseOnly, true, 'the background re-key must never mint');
+  // an INVITE room is keyed to its own list, not a union — a union would re-add somebody just taken out
+  const k2 = await keyDistributor();
+  k2.env[A] = { 'room-i': [A, MB, OLD] };
+  k2.set('members', [{ pubkey: MB }, { pubkey: MB2 }], true);
+  k2.set('groups', [{ id: 'room-i', name: 'Leaders', encrypted: true, visibility: 'invite', members: [MB, MB2] }], true); k2.set('stewards', [ST], true); k2.set('blocked', [], true);
+  k2.render();
+  const ik = k2.calls.filter(c => c.name === 'groupkey');
+  assert.equal(ik.length, 1, 'CONTROL: an invite member the envelope lacks was not keyed');
+  assert.deepEqual([...ik[0].members].sort(), [MB, MB2].sort(), 'an invite room was keyed to something other than its own list');
+  // nobody missing → nothing published (it must not loop)
+  const k3 = await keyDistributor();
+  k3.env[A] = { 'room-o': [A, MB] };
+  k3.set('members', [{ pubkey: MB }], true); k3.set('groups', [{ id: 'room-o', encrypted: true }], true); k3.set('stewards', [ST], true); k3.set('blocked', [], true);
+  k3.render(); k3.render();
+  assert.equal(k3.calls.filter(c => c.name === 'groupkey').length, 0, 'a room whose envelope holds everyone was re-published');
+});
+
+// A MEMBER AWAITING APPROVAL is not a member: the relay already says so (gateway.mjs rebuildMembers). The open-room, care
+// and sermon keys — and the healer that mints a missing room key — go to APPROVED members only; the NAME key still
+// reaches them (they seal their name for the approval queue).
+test('with approval on, a member awaiting approval gets no open-room, care, sermon or healer key — but does get the name key', async () => {
+  const k = await keyDistributor();
+  k.approval.on = true; k.approval.admitted = [MB];   // MB admitted, MB2 waiting
+  k.env[A] = { 'room-o': [A] };
+  k.set('members', [{ pubkey: MB }, { pubkey: MB2 }], true);
+  k.set('groups', [{ id: 'room-o', name: 'Prayer', encrypted: true }], true); k.set('stewards', [ST], true); k.set('blocked', [], true);
+  k.render();
+  for (const name of ['care', 'media']) {
+    const c = k.calls.filter(x => x.name === name);
+    assert.ok(c.length >= 1, `CONTROL: the ${name} enrolment did not run`);
+    for (const x of c) assert.deepEqual(x.members, [MB], `THE ${name.toUpperCase()} KEY WAS OFFERED TO A MEMBER STILL WAITING FOR APPROVAL`);
+  }
+  const heal = k.calls.filter(x => x.name === 'groups');
+  assert.ok(heal.length >= 1, 'CONTROL: the healer (ensureGroupKeys) did not run');
+  for (const x of heal) assert.deepEqual(x.second, [MB], 'THE HEALER WOULD MINT A ROOM KEY FOR A MEMBER STILL WAITING FOR APPROVAL');
+  const gk = k.calls.filter(c => c.name === 'groupkey');
+  assert.equal(gk.length, 1, 'CONTROL: the admitted member was not keyed to the open room');
+  assert.ok(!gk[0].members.includes(MB2), 'THE OPEN ROOM\'S KEY WAS WRAPPED TO A MEMBER STILL WAITING FOR APPROVAL');
+  const nm = k.calls.filter(c => c.name === 'name');
+  assert.ok(nm.length && nm.every(c => c.members.includes(MB2)), 'the NAME key must still reach a pending member — they seal their name for the approval queue');
+  // approving them keys them at once
+  await new Promise(r => setTimeout(r, 0));     // the first publish answers (in-flight guard clears)
+  k.approval.admitted = [MB, MB2]; k.env[A]['room-o'] = [A, MB];
+  k.render();
+  const after = k.calls.filter(c => c.name === 'groupkey');
+  assert.equal(after.length, 2, 'APPROVING A MEMBER DID NOT KEY THEM — the enrolment does not re-run on the admitted list');
+  assert.ok(after[1].members.includes(MB2), 'the newly approved member is not among the recipients');
+  const care = k.calls.filter(c => c.name === 'care');
+  assert.deepEqual([...care[care.length - 1].members].sort(), [MB, MB2].sort(), 'the newly approved member was not offered the care key');
+});
+test('with approval on, nobody new is keyed until the admitted and blocked lists have arrived (fail closed)', async () => {
+  const k = await keyDistributor();
+  k.approval.on = true; k.approval.admitted = []; k.approval.loaded.subscribeAdmitted = false;
+  k.env[A] = { 'room-o': [A] };
+  k.set('members', [{ pubkey: MB }], true);
+  k.set('groups', [{ id: 'room-o', name: 'Prayer', encrypted: true }], true); k.set('stewards', [ST], true); k.set('blocked', [], true);
+  k.render();
+  for (const t of k.timers.splice(0)) t.fn();
+  for (const name of ['care', 'media', 'groups', 'groupkey'])
+    assert.deepEqual(k.calls.filter(c => c.name === name), [], `the ${name} key was handed out before the admitted list had arrived`);
+  assert.ok(k.calls.some(c => c.name === 'name'), 'CONTROL: the name key enrolment must not wait on the approval lists');
+  // the policy itself not yet known counts the same — "approval off" must not be read from "not arrived"
+  const k2 = await keyDistributor();
+  k2.approval.loaded.subscribeJoinPolicy = false;
+  k2.env[A] = { 'room-o': [A] };
+  k2.set('members', [{ pubkey: MB }], true);
+  k2.set('groups', [{ id: 'room-o', encrypted: true }], true); k2.set('stewards', [ST], true); k2.set('blocked', [], true);
+  k2.render();
+  for (const name of ['care', 'media', 'groupkey'])
+    assert.deepEqual(k2.calls.filter(c => c.name === name), [], `the ${name} key was handed out before the join policy had arrived`);
+  // CONTROL: approval off and known → everyone not blocked
+  k2.approval.loaded.subscribeJoinPolicy = true; k2.set('members', [{ pubkey: MB }], true); k2.render();
+  assert.ok(k2.calls.some(c => c.name === 'groupkey' && c.members.includes(MB)), 'CONTROL: with approval off the member was not keyed');
 });
 
 // THE MOUNT RE-CHECK TIMERS (3.5 s and 9 s) go through the same two rules as the effect (audits of 3bc8905 and 5276297:

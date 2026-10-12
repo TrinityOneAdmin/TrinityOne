@@ -147,7 +147,7 @@ function consoleApi({ signer, actingChurch }) {
     sk: signer.sk, pub: cp, actingChurch,
     churchSk: signer.sk, churchPub: signer.pub,
     NET, GROUPKEY_D, JOINPOLICY_D, NOPHOTO_D, GROUP_RING_MAX: 12,
-    _skeys: {}, _srev: {}, _senvTs: {}, _localBlocked: new Set(),
+    _skeys: {}, _srev: {}, _senvTs: {}, _senvRecips: {}, _localBlocked: new Set(),
     _isRelayAuthed: () => true,
     _requireTrustedView: () => {}, _landed: _landedShipped,
     _monotonic: (t) => t,   // the shipped one guards same-second replaceables; it needs state and is irrelevant here

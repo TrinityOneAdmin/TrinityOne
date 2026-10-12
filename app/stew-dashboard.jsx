@@ -788,14 +788,13 @@ function JoinNotifier() {
   );
 }
 
-// auto-distribute encrypted-group keys to NEW members (an open group keys everyone; an invite group its
-// allowlist). reuse-only — it never mints a new key in the background (that would orphan history); removals
-// are rotated explicitly from the edit-members modal. Renders nothing.
+// auto-distribute encrypted-group keys to members the room's envelope has no copy for (an open group keys every
+// APPROVED member; an invite group its allowlist). reuse-only — it never mints a new key in the background (that
+// would orphan history); removals are rotated explicitly from Block and the edit-members modal. Renders nothing.
 function KeyDistributor() {
   const church = window.useStewardChurch ? window.useStewardChurch() : { name: '' };
   const groups = window.useStewardGroups ? window.useStewardGroups() : [];
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
-  const last = React.useRef({});
   // AUDIT-2026-08-10 item C. subscribeMembers coalesces at ~150ms and re-emits on every church event burst,
   // so this effect re-runs constantly. Without these, a slow envelope publish was fired AGAIN on the next
   // tick, and a persistently refused one was re-sent on every tick — full near-1 MB envelopes, repeatedly,
@@ -807,11 +806,12 @@ function KeyDistributor() {
   // `last` entry when the console came back to A — and A's members looked like new recipients of B's room key
   // (audit of 5276297, HIGH 1). KEPT per church, not wiped (audit of 831dcea): wiping them made A's rooms a first
   // sighting on the way back from B, so a member who joined A meanwhile was recorded as keyed and never was.
-  const memos = React.useRef({});      // church → its { last, pending, nextTry, failCount }
+  const unsealable = React.useRef({});   // group id → pubkeys a successful publish still left out (see the loop)
+  const memos = React.useRef({});      // church → its { unsealable, pending, nextTry, failCount }
   const memoFor = React.useRef(null);
   { const cpNow = (window.Steward && (window.Steward.actingChurch || window.Steward.churchPub)) || '';
-    if (memoFor.current !== cpNow) { memoFor.current = cpNow; const m = memos.current[cpNow] || (memos.current[cpNow] = { last: {}, pending: {}, nextTry: {}, failCount: {} });
-      last.current = m.last; pending.current = m.pending; nextTry.current = m.nextTry; failCount.current = m.failCount; } }
+    if (memoFor.current !== cpNow) { memoFor.current = cpNow; const m = memos.current[cpNow] || (memos.current[cpNow] = { unsealable: {}, pending: {}, nextTry: {}, failCount: {} });
+      unsealable.current = m.unsealable; pending.current = m.pending; nextTry.current = m.nextTry; failCount.current = m.failCount; } }
   const membersRef = React.useRef([]); membersRef.current = members;
   // CATCH UP AFTER A LOCK. The console auto-locks after 10 minutes idle and `Steward.lock()` forgets the key,
   // so every envelope published in that window is refused — and the backoff above then records those refusals
@@ -855,7 +855,9 @@ function KeyDistributor() {
   React.useEffect(() => {
     const f = () => setKeysReadTick(t => t + 1);
     window.addEventListener('steward-keys-read', f);
-    return () => window.removeEventListener('steward-keys-read', f);
+    // …and when a room's key envelope arrives or changes (stewIngestKey), so the room is reconciled against it
+    window.addEventListener('steward-groupkey', f);
+    return () => { window.removeEventListener('steward-keys-read', f); window.removeEventListener('steward-groupkey', f); };
   }, []);
   // #17: load the church media key whenever the console is open (not only on the Sermons tab) so we can re-key joiners
   React.useEffect(() => (window.Steward && window.Steward.subscribeMediaKey ? window.Steward.subscribeMediaKey() : undefined), [_kdIdv, _kdConn, _kdWho]);
@@ -888,6 +890,8 @@ function KeyDistributor() {
   const blockedList = window.useStewardBlocked ? window.useStewardBlocked() : [];
   const blockedSet = React.useMemo(() => new Set((blockedList || []).map(p => String(p || '').toLowerCase())), [blockedList]);
   const blockedRef = React.useRef([]); blockedRef.current = blockedList;
+  // a change to the blocklist may make someone sealable again (an unblock) — forget who was left out
+  React.useEffect(() => { unsealable.current = {}; const m = memos.current[memoFor.current]; if (m) m.unsealable = unsealable.current; }, [blockedList]);
   // EVERY LIST THE ENROLMENT USES MUST BE THE CURRENT CHURCH'S. The member, steward, group and blocked hooks keep
   // their last value until the new church's stream delivers, so for a beat after a switch this component held
   // church A's lists while the engine was on church B — and the enrolment below wrapped B's keys to A's members,
@@ -901,6 +905,24 @@ function KeyDistributor() {
     return S.listIsCurrent(m) && S.listIsCurrent(g) && S.listIsCurrent(st) && S.listIsCurrent(bl);
   };
   const notBlocked = (pk) => pk && !blockedSet.has(String(pk).toLowerCase());
+  // WHO IS A MEMBER FOR KEYS. useStewardMembers() lists everyone with a member document, including people still
+  // WAITING FOR APPROVAL when the church requires it. The relay already treats them as non-members (gateway.mjs
+  // rebuildMembers), but this distributor handed them the open-room, care and sermon keys anyway. So the rooms,
+  // care and media keys go to APPROVED members only: everyone not blocked when approval is off, and only the
+  // admitted list when it is on. Until the policy (and, with approval on, the admitted and blocked lists) have
+  // actually arrived, nobody new is keyed — on a hard reload those lists are briefly empty, and "nobody is
+  // admitted" must not be read from "the list has not come yet" in EITHER direction. Same test as
+  // useStewardPickableMembers (steward-root.jsx). The NAME key is NOT narrowed: a pending member needs it to seal
+  // their name for the approval queue.
+  const admittedList = window.useStewardAdmitted ? window.useStewardAdmitted() : [];
+  const joinApproval = window.useStewardJoinPolicy ? window.useStewardJoinPolicy() : false;
+  const admittedSet = React.useMemo(() => new Set((admittedList || []).map(p => String(p || '').toLowerCase())), [admittedList]);
+  const _kdIdv0 = window.useStewardIdv ? window.useStewardIdv() : 0;
+  const _kdLoaded = (m) => !window.stewardStreamLoaded || window.stewardStreamLoaded(m, _kdIdv0);
+  const approvalKnown = _kdLoaded('subscribeJoinPolicy') && (!joinApproval || (_kdLoaded('subscribeAdmitted') && _kdLoaded('subscribeBlocked')));
+  // pubs -> the approved ones, or null when we cannot tell yet (key nobody new)
+  const approvedOf = (pubs) => !approvalKnown ? null : (joinApproval ? pubs.filter(pk => admittedSet.has(String(pk).toLowerCase())) : pubs);
+  const approvedOfRef = React.useRef(approvedOf); approvedOfRef.current = approvedOf;
   React.useEffect(() => {
     // SAME GUARD AS THE CAPABILITY MINT, and for the same measured reason. A delegated steward viewing their
     // OWN identity has no acting church, so this effect ran on a console whose church exists nowhere and
@@ -912,60 +934,67 @@ function KeyDistributor() {
     if (!church.name) return;   // no church of our own to key — see the capability mint for the full note
     if (!_kdListsCurrent(members, groups, stewardRoster, blockedList)) return;   // a list from another church, or none yet — see _kdListsCurrent
     const memberPubs = members.map(m => m.pubkey).filter(notBlocked);
+    const approvedPubs = approvedOf(memberPubs);   // null = the approval lists have not arrived: key nobody new
+    // RECONCILE EVERY ENCRYPTED ROOM AGAINST ITS ENVELOPE. This used to record the roster it first saw as "already
+    // keyed by create/edit" — true only on the console that created the room. On a console with no saved member
+    // list (a new device, a reinstall, cleared data, a delegate), a member who joined while no console was open was
+    // counted as keyed and never got the key: their room stayed empty and their posts were refused, until somebody
+    // else joined. Now: whoever the room should reach and the newest envelope (Steward.groupKeyRecipients, recorded
+    // by stewIngestKey) has no copy for is added.
+    //   OPEN rooms GROW ONLY — recips = wanted ∪ current recipients, minus blocked. The member list streams in
+    //   pieces, and the member app DELETES its key when an envelope leaves it out (fellowship _ingestGroupKey), so
+    //   a partial list must never drop anybody. Removal is Block's job (a rotation), untouched here.
+    //   INVITE rooms — recips = the room's own list minus blocked. That list is one whole document; a union would
+    //   re-add somebody the steward just took out.
+    // Nobody missing → nothing published, so this does not loop.
     for (const g of groups) {
       if (!g.encrypted) continue;
-      const recips = (g.visibility === 'invite' ? (g.members || []) : memberPubs).filter(notBlocked);
-      const key = [...new Set(recips)].sort().join(',');
-      const prev = last.current[g.id];
-      if (prev === undefined) { last.current[g.id] = key; continue; }   // first sighting — already keyed by create/edit
-      if (key !== prev) {
-        const grew = recips.some(pk => pk && !prev.split(',').includes(pk));
-        // ONLY RECORD IT AS HANDLED IF IT ACTUALLY WAS. This wrote `last.current[g.id] = key` whether or not
-        // anything was published — and publishGroupKey with reuseOnly returns immediately, doing nothing, if
-        // this console has not yet received the room's key envelope (it must never mint a second key over an
-        // existing one). So a console that started while the envelope was still in flight recorded the new
-        // roster as done, and the next tick saw no change and never tried again. The member who joined in
-        // that window has no key, for good: nothing in the room decrypts for them, and since the send now
-        // refuses rather than publishing in clear, they cannot post either — while the app tells them to try
-        // again in a moment, indefinitely.
-        //
-        // Leaving `last` un-advanced is what makes the next tick retry, which is the whole repair.
-        if (grew && window.Steward.publishGroupKey) {
-          // In-flight guard + backoff (AUDIT-2026-08-10 item C) — the retry semantics above are untouched.
-          // Skipping while a publish is in flight loses nothing: `last` is only advanced with the value
-          // captured AT CALL TIME, so a roster that grew DURING the flight still differs on the next tick
-          // and is retried. A REFUSED publish (real bandwidth spent) backs off exponentially, capped at
-          // 60s — a joining member must not wait minutes for their key, and a Pi relay that comes back
-          // within a minute keys them; a null (reuseOnly with no ring — returns immediately, no network)
-          // gets no backoff, because the call is free and the retry is the whole repair.
-          if (pending.current[g.id]) continue;
-          if (Date.now() < (nextTry.current[g.id] || 0)) continue;
-          // THIS church's memo, held for the answer: the console may be on another church by the time it lands,
-          // and the result belongs to the church the publish was made for (the memo is per church — above).
-          const L = last.current, P = pending.current, N = nextTry.current, F = failCount.current;
-          P[g.id] = true;
-          Promise.resolve(window.Steward.publishGroupKey(g.id, recips, { reuseOnly: true, background: true })).then(r => {
-            P[g.id] = false;
-            if (r === false) {
-              const n = (F[g.id] || 0) + 1; F[g.id] = n;
-              N[g.id] = Date.now() + Math.min(60000, 2000 * Math.pow(2, n - 1));
-            }
-            if (r === null || r === false) return;                       // not keyed — leave `last` alone so we come back
-            L[g.id] = key;
-            delete F[g.id]; delete N[g.id];
-            const missed = r && r.skipped;
-            // The console's existing warning channel, rather than a new banner nobody knows to look at.
-            if (missed && missed.length) {
-              try {
-                window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'group key',
-                  message: missed.length + ' member(s) could not be given the key for “' + (g.name || 'a group') + '”. They will not be able to read or post in that room. Open the group and save it again to re-send.' } }));
-              } catch (e) {}
-            }
-          }).catch(() => { P[g.id] = false; });   // a throw must not wedge the guard shut
-        } else {
-          last.current[g.id] = key;                                      // nothing to publish (shrank, or no key API)
+      const invite = g.visibility === 'invite';
+      if (!invite && !approvedPubs) continue;   // approval lists not in yet — fail closed, see approvedOf
+      const wanted = [...new Set((invite ? (g.members || []) : approvedPubs).filter(notBlocked))];
+      const S = window.Steward;
+      // null = this console holds no ring for the room (envelope not ingested yet, or no copy for this church):
+      // a reuseOnly publish could do nothing. ensureGroupKeys below is what heals a room with no key at all.
+      const have = S && S.groupKeyRecipients ? S.groupKeyRecipients(g.id) : null;
+      if (!have || !S.publishGroupKey) continue;
+      const U = unsealable.current[g.id] || [];
+      const missing = (S.groupKeyMissing(g.id, wanted) || []).filter(pk => !U.includes(pk));
+      if (!missing.length) continue;
+      const recips = invite ? wanted : [...new Set([...wanted, ...have])].filter(notBlocked);
+      // In-flight guard + backoff (AUDIT-2026-08-10 item C). Skipping while a publish is in flight loses nothing:
+      // a joiner who arrived during the flight is still missing from the envelope on the next tick and is retried.
+      // A REFUSED publish (real bandwidth spent) backs off exponentially, capped at 60s — a joining member must not
+      // wait minutes for their key, and a Pi relay that comes back within a minute keys them; a null (reuseOnly
+      // with no ring — returns immediately, no network) gets no backoff, because the call is free and the retry is
+      // the whole repair.
+      if (pending.current[g.id]) continue;
+      if (Date.now() < (nextTry.current[g.id] || 0)) continue;
+      // THIS church's memo, held for the answer: the console may be on another church by the time it lands,
+      // and the result belongs to the church the publish was made for (the memo is per church — above).
+      const P = pending.current, N = nextTry.current, F = failCount.current, Un = unsealable.current;
+      P[g.id] = true;
+      Promise.resolve(S.publishGroupKey(g.id, recips, { reuseOnly: true, background: true })).then(r => {
+        P[g.id] = false;
+        if (r === false) {
+          const n = (F[g.id] || 0) + 1; F[g.id] = n;
+          N[g.id] = Date.now() + Math.min(60000, 2000 * Math.pow(2, n - 1));
         }
-      }
+        if (r === null || r === false) return;                       // not keyed — nothing recorded, so we come back
+        delete F[g.id]; delete N[g.id];
+        // whoever a SUCCESSFUL publish still left out (a key nobody can seal to, or someone blocked on this device)
+        // goes in `unsealable` — this replaces the old `last` memo. Without it they would look missing on every
+        // roster tick and the whole envelope would be re-sent each time. Cleared when the blocklist changes.
+        const still = S.groupKeyMissing(g.id, missing) || [];
+        if (still.length) Un[g.id] = [...new Set([...(Un[g.id] || []), ...still])];
+        const missed = r && r.skipped;
+        // The console's existing warning channel, rather than a new banner nobody knows to look at.
+        if (missed && missed.length) {
+          try {
+            window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'group key',
+              message: missed.length + ' member(s) could not be given the key for “' + (g.name || 'a group') + '”. They will not be able to read or post in that room. Open the group and save it again to re-send.' } }));
+          } catch (e) {}
+        }
+      }).catch(() => { P[g.id] = false; });   // a throw must not wedge the guard shut
     }
     // #17: re-wrap the church MEDIA key for the current roster too. Unlike groups (keyed at create/edit), the media
     // key is only published at sermon UPLOAD, so a member who joined since is missing from it and can't decrypt
@@ -975,7 +1004,8 @@ function KeyDistributor() {
     // sermon upload screen refuses with "hasn't shared its media key with this account yet". Only this
     // console — the owner's — may publish the envelope, so this is the only place the roster can be added.
     // Same argument, same argument list, as the care key on the line below.
-    if (window.Steward && window.Steward.ensureMediaKeyForMembers) window.Steward.ensureMediaKeyForMembers(memberPubs, stewardRoster);
+    // APPROVED members only (approvedOf, above) — and nobody new while that cannot be told yet.
+    if (approvedPubs && window.Steward && window.Steward.ensureMediaKeyForMembers) window.Steward.ensureMediaKeyForMembers(approvedPubs, stewardRoster);
     // H3: and the CARE key, so every member can open a need and volunteer. Mints only after the
     // subscription has confirmed no envelope exists — never on a cold null, which is what orphaned
     // every sealed need in the first attempt. Stewards are included so a delegated console can re-key.
@@ -986,10 +1016,10 @@ function KeyDistributor() {
     // 2026-09-17 (relay rejected.log, 13:01:48 and 13:01:55, bracketing a seal that worked). The refusal is
     // still reported — quietly, once, by PublishErrorBanner — and a care control the steward TAPS is
     // untouched by this, because it does not come through here.
-    if (window.Steward && window.Steward.ensureCareKeyForMembers) window.Steward.ensureCareKeyForMembers(memberPubs, stewardRoster, { background: true });
+    if (approvedPubs && window.Steward && window.Steward.ensureCareKeyForMembers) window.Steward.ensureCareKeyForMembers(approvedPubs, stewardRoster, { background: true });
     // …and the NAME key. Without this nothing ever mints one, the member app's key list stays empty, and every
     // seal silently no-ops — the whole mechanism present and doing nothing, which is the failure mode this
-    // codebase specialises in.
+    // codebase specialises in. ALL members, pending ones included — they seal their name for the approval queue.
     if (window.Steward && window.Steward.ensureNameKeyForMembers) window.Steward.ensureNameKeyForMembers(memberPubs, stewardRoster);
     // …and any ENCRYPTED ROOM THAT HAS NO KEY AT ALL, which the block above cannot help with: it publishes
     // reuseOnly, and reuseOnly refuses to mint by design, so a room whose key was never published in the first
@@ -1000,7 +1030,7 @@ function KeyDistributor() {
     // on every roster change because it refuses to act unless it is authenticated, asks the relay rather than
     // trusting local state, treats a failed query as unknown rather than absent, and never re-keys a room that
     // already holds encrypted messages.
-    if (window.Steward && window.Steward.ensureGroupKeys) window.Steward.ensureGroupKeys(groups, memberPubs);
+    if (approvedPubs && window.Steward && window.Steward.ensureGroupKeys) window.Steward.ensureGroupKeys(groups, approvedPubs);
     // `blockedList` IS a dependency — notBlocked closes over it. Without it, unblocking someone re-ran
     // nothing: `unblock` only rewrites the blocklist, so the person came back to the roster but never got the
     // group, care, media or name keys back. They saw empty rooms indefinitely, and no one would think to
@@ -1011,14 +1041,17 @@ function KeyDistributor() {
   // the key waited for some unrelated change to groups or members. That is the 8-minute gap measured on the
   // relay between the first calendar document and the namekey: envelope, and post-fix it is 8 minutes of the
   // calendar refusing to save rather than 8 minutes of writing in the clear.
-  }, [groups, members, stewardRoster, blockedList, unlockTick, church.name, keysReadTick]);   // unlockTick: re-run the whole enrolment when the key comes back after a lock; keysReadTick: when a key read settles
+  // admittedList / joinApproval / approvalKnown: approving someone (or the lists arriving) keys them at once.
+  }, [groups, members, stewardRoster, blockedList, unlockTick, church.name, keysReadTick, admittedList, joinApproval, approvalKnown]);   // unlockTick: re-run the whole enrolment when the key comes back after a lock; keysReadTick: when a key read settles or a room's envelope arrives
   // the media key loads ASYNC (subscribeMediaKey) and may arrive AFTER the roster settles, so the effect above can run
   // before we hold the key. Re-check a couple of times on mount — ensureMediaKeyForMembers is idempotent + cheap.
   React.useEffect(() => {
     const call = () => {
       if (!_kdListsCurrent(membersRef.current, groupsRef.current, stewardRosterRef.current, blockedRef.current)) return;   // see _kdListsCurrent
       const bs = new Set((blockedRef.current || []).map(p => String(p || '').toLowerCase()));
-      if (window.Steward && window.Steward.ensureMediaKeyForMembers) window.Steward.ensureMediaKeyForMembers(membersRef.current.map(m => m.pubkey).filter(p => p && !bs.has(String(p).toLowerCase())), stewardRosterRef.current);
+      const approved = approvedOfRef.current(membersRef.current.map(m => m.pubkey).filter(p => p && !bs.has(String(p).toLowerCase())));
+      if (!approved) return;   // approval lists not in yet — see approvedOf
+      if (window.Steward && window.Steward.ensureMediaKeyForMembers) window.Steward.ensureMediaKeyForMembers(approved, stewardRosterRef.current);
     };
     const t1 = setTimeout(call, 3500), t2 = setTimeout(call, 9000);
     return () => { clearTimeout(t1); clearTimeout(t2); };
