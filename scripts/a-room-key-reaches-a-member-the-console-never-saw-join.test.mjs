@@ -342,6 +342,7 @@ const blockOnScreen = async (who, others) => {
   await sleep(500);
   assert.equal(await evalIn(`(() => { const b = document.querySelector('button[title="Confirm — bans them from posting & hides their messages"]') || document.querySelector('button[title="Confirm — blocks them from joining or posting, and re-keys the church"]'); if (!b) return 'miss'; b.click(); return 'ok'; })()`), 'ok', 'no Block confirmation');
 };
+const MG = H.key();   // joins in row G; stays through row H's Block
 const SEND_HOOK = `(() => { if (window.__envHooked) { window.__env = []; return 1; } window.__envHooked = 1; window.__env = [];
   const os = WebSocket.prototype.send;
   WebSocket.prototype.send = function (d) { try { if (typeof d === 'string' && d.startsWith('["EVENT"')) { const e = JSON.parse(d)[1]; const dd = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
@@ -360,8 +361,7 @@ test('G · a Block pressed on the Members screen takes no approved member\'s key
   for (const x of rotated) {
     for (const k of [M1, MF]) assert.ok(x.recips.includes(k.pub), `A BLOCK TOOK ${nm(k.pub)}'S ${x.d.slice(11, 19)} AWAY — an approved member who stays, dropped by the rotation (the member app deletes the key it is no longer given): [${x.recips.map(nm)}]`);
   }
-  // a member approved and joining straight after the Block
-  const MG = H.key();
+  // a member approved and joining straight after the Block (MG: module scope, row H blocks around them)
   assert.equal(await admit([MG.pub]), 'ok', 'the approval was not saved');
   const t1 = Date.now();
   await H.publishAll(relay, [joinTo(churchA, MG)]);
@@ -369,5 +369,32 @@ test('G · a Block pressed on the Members screen takes no approved member\'s key
   const tJoin = Date.now() - t1;
   console.log(`[liveness] Block → all three keys rotated (seen on the relay): ${(tRotated / 1000).toFixed(1)} s; approved member dropped by any rotated envelope: none; member approved after the Block → keyed to room, care and sermon: ${got ? (tJoin / 1000).toFixed(1) + ' s' : 'NOT within ' + WAIT / 1000 + ' s'}`);
   assert.ok(got, `A MEMBER APPROVED STRAIGHT AFTER A BLOCK WAS NOT KEYED within ${WAIT / 1000} s — ${show()}`);
+  assert.deepEqual(errors, [], 'the console threw:\n  ' + errors.join('\n  '));
+});
+
+// ── ROUND 3d, LOW 2 (audit of 0f5cd2d): SOMEONE WHO HAS LEFT IS NOT CARRIED THROUGH A BLOCK ──────────────────────────────
+// 3c's floor kept every current holder of a key through a Block, so a member who had LEFT (their member document
+// tombstoned) kept every rotated key — against the owner's rule that someone who leaves cannot read what is sealed after
+// they left (DOMAIN 2026-09-30). The console's member list now says when it is a genuine read of the member documents,
+// and then a holder not on it is let go. Here M1, keyed to all three, leaves; the steward Blocks MF on the real screen;
+// none of the rotated envelopes the console SENDS may include M1, and the member who stays (MG) keeps everything.
+test('H · someone who has LEFT is not carried through a Block pressed on the Members screen — once the member list is a genuine read', { skip: SKIP, timeout: 300000 }, async () => {
+  assert.ok([M1, MF].every(k => room().includes(k.pub) && care().includes(k.pub) && media().includes(k.pub)), 'CONTROL: M1 and MF are not both keyed — run A–G first: ' + show());
+  const ts = Math.floor(Date.now() / 1000);
+  await H.publishAll(relay, [finalizeEvent({ kind: 30078, created_at: ts, tags: [['d', MEMBER_D + churchA], ['t', 'trinityone'], ['p', churchA], ['deleted', '1']], content: '' }, M1.sk)]);
+  // the console's member list drops M1, and is FRESH (a genuine read of the member documents has settled)
+  const fresh = await (async () => { const t0 = Date.now(); while (Date.now() - t0 < 45000) {
+    const r = await evalIn(`new Promise(res => { let done = false; const off = window.Steward.subscribeMembers(l => { if (done) return; if (window.Steward.listIsFresh(l)) { done = true; try { off(); } catch (e) {} res({ fresh: true, m1: l.some(m => m.pubkey === ${JSON.stringify(M1.pub)}) }); } }); setTimeout(() => { if (!done) { done = true; try { off(); } catch (e) {} res({ fresh: false }); } }, 15000); })`);
+    if (r && r.fresh && !r.m1) return true; await sleep(1000); } return false; })();
+  assert.ok(fresh, 'CONTROL: the console\'s member list never became a fresh read without M1 — over a real relay the member-document read did not settle, or M1\'s leaving was not seen');
+  await evalIn(SEND_HOOK);
+  await blockOnScreen(MF, [MG]);
+  assert.ok(await until(() => !room().includes(MF.pub) && !care().includes(MF.pub) && !media().includes(MF.pub), 45000), 'CONTROL: the Block did not rotate MF out: ' + show());
+  const sent = await evalIn('window.__env');
+  const rotated = sent.filter(x => !x.recips.includes(MF.pub) && (x.d === GROUPKEY_D + roomId || x.d === CAREKEY_D + churchA || x.d === MEDIAKEY_D + churchA));
+  assert.ok(rotated.length >= 3, 'CONTROL: fewer than three rotated envelopes were sent');
+  for (const x of rotated) assert.ok(!x.recips.includes(M1.pub), `SOMEONE WHO HAS LEFT (M1) WAS CARRIED THROUGH THE BLOCK'S ${x.d.slice(11, 19)} ROTATION: [${x.recips.map(nm)}]`);
+  await sleep(10000);   // the distributor's ticks: M1 must not be handed back either
+  assert.ok(!room().includes(M1.pub) && !care().includes(M1.pub) && !media().includes(M1.pub), 'the distributor handed the rotated keys back to someone who has LEFT: ' + show());
   assert.deepEqual(errors, [], 'the console threw:\n  ' + errors.join('\n  '));
 });

@@ -16899,6 +16899,7 @@ zoo`.split("\n");
     }
   }
   function _freshDocRead(cp0, ds, onevent, onFresh) {
+    const _ownFilters = arguments[4] || null;
     let stop = null, stopped = false;
     const open = () => {
       if (stopped) return;
@@ -16910,7 +16911,7 @@ zoo`.split("\n");
       }
       const st = _openKeyRead(
         cp0,
-        [{ kinds: [30078], authors: [cp0], "#d": ds }, { kinds: [30078], "#church": [cp0], "#d": ds }],
+        _ownFilters || [{ kinds: [30078], authors: [cp0], "#d": ds }, { kinds: [30078], "#church": [cp0], "#d": ds }],
         (e) => {
           if (!stopped) onevent(e);
         },
@@ -17381,6 +17382,13 @@ zoo`.split("\n");
     _authedRelays.clear();
     _latestGuardNotice.clear();
     _senvPending.clear();
+    try {
+      for (let i3 = localStorage.length - 1; i3 >= 0; i3--) {
+        const k = localStorage.key(i3);
+        if (k && k.indexOf("trinityone.steward.keyenv.") === 0) localStorage.removeItem(k);
+      }
+    } catch (e) {
+    }
   }
   var ENC_LS = "trinityone.steward.church-key.enc";
   var ENC_PENDING_LS = "trinityone.steward.church-key.removing";
@@ -19687,6 +19695,13 @@ zoo`.split("\n");
       try {
         localStorage.removeItem(KEY_LS);
       } catch {
+      }
+      try {
+        for (let i3 = localStorage.length - 1; i3 >= 0; i3--) {
+          const k = localStorage.key(i3);
+          if (k && k.indexOf("trinityone.steward.keyenv.") === 0) localStorage.removeItem(k);
+        }
+      } catch (e) {
       }
       _minorsLastClear("");
       window.Steward.keyResumedUnknown = false;
@@ -24989,8 +25004,10 @@ zoo`.split("\n");
     // church's pubkey (['p', churchPub]), so we read kind-1 events addressed to us, aggregate by
     // author, and resolve each author's kind-0 profile. The church's own posts are excluded.
     subscribeMembers(onMembers) {
+      const tok = _freshTok();
       {
         const _tag = _listTag(), _deliver = onMembers;
+        _tag.sub = tok;
         onMembers = (list) => _deliver(_stampFor(list, _tag));
       }
       const MEMBER_D = "trinityone/member:";
@@ -25145,6 +25162,25 @@ zoo`.split("\n");
         }
       };
       _membersReask.add(reask);
+      const stopRead = actingChurch ? () => {
+      } : _freshDocRead(
+        cp0,
+        [MEMBER_D + cp0],
+        (e) => handlers.onevent(e),
+        () => {
+          tok.genuine = true;
+          tok.at = Date.now();
+          if (emitTimer) {
+            try {
+              clearTimeout(emitTimer);
+            } catch (e) {
+            }
+            emitTimer = null;
+          }
+          emitNow();
+        },
+        [{ kinds: [30078], "#d": [MEMBER_D + cp0] }]
+      );
       const reseatSub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
@@ -25182,6 +25218,11 @@ zoo`.split("\n");
         }
       });
       return () => {
+        tok.live = false;
+        try {
+          stopRead();
+        } catch {
+        }
         _memberEmitters.delete(emit);
         _membersReask.delete(reask);
         try {

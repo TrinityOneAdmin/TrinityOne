@@ -89,7 +89,8 @@ function engine() {
     // what the REAL setActiveIdentity touches besides the key state (lifted below)
     stewardedChurches: new Map([[B.pub, { name: 'B' }]]), netKeys: () => [],
     // remembers what it is given: the console keeps each church's last genuine blocklist (2026-10-02)
-    localStorage: { _m: new Map(), setItem(k, v) { this._m.set(k, String(v)); }, getItem(k) { return this._m.has(k) ? this._m.get(k) : null; } }, ACTIVE_ID_KEY: 'k',
+    localStorage: { _m: new Map(), setItem(k, v) { this._m.set(k, String(v)); }, getItem(k) { return this._m.has(k) ? this._m.get(k) : null; },
+      removeItem(k) { this._m.delete(k); }, get length() { return this._m.size; }, key(i) { return [...this._m.keys()][i] ?? null; } }, ACTIVE_ID_KEY: 'k',   // removeItem/length/key: round 3d (LOW 3)
     _loadBoxHosts() {}, _refreshBoxHostsUs() {}, _gate: { refresh() {} }, relaysRaw: () => [],
     lastProfile: {}, _profileLoaded: false, _clearanceSent: new Map(), _careRosterKnown: false, _careRosterSeen: false,
     _stewardCaps: {}, _stewardNames: {}, _stewardNamesCt: '', _stewardSince: {}, _applyNoPhotoList() {},
@@ -169,6 +170,7 @@ function engine() {
     M('    groupKeyRecipients(groupId) {'), M('    groupKeyDropped(groupId) {'), M('    groupKeyMissing(groupId, pubs) {'),
     M('    async publishGroupKey(groupId, memberPubs, opts = {}) {'), M('    async ensureGroupKeys(groups, memberPubs) {'),
     M('    async sealGroup(group, memberPubs) {'),   // round 3c, LOW ii
+    M('    subscribeMembers(onMembers) {'),           // round 3d, LOW 2
   ].join(',\n');
   t.t = t;
   const S = new Function('scope', `with (scope) { ${decls}\n return { ${methods} }; }`)(proxy);
@@ -1440,4 +1442,46 @@ test('3d MED · care: an envelope at the SAME rev as this console\'s own rotatio
   // CONTROL: a NEWER envelope at the same rev still wins (newest wins, as before)
   s.handlers.onevent(envAt(CAREKEY_D, A, [K2, K1], [A.pub, M1.pub], 1759300000 + 5, 2));
   assert.equal(e.t._careKeyHex, K2, 'CONTROL: a newer envelope at the same rev was refused');
+});
+
+// ROUND 3d, LOW 3 (audit of 0f5cd2d): the care/sermon envelopes 3c keeps on the device carry the church's recipient list
+// — members and delegates, in the clear. They go when the key goes (removeKey) and on a key restore or a discarded key
+// (_resetChurchScopedState); NOT on a church switch, which keeps the device's key (see the note in the reset).
+test('LOW 3: the kept care/sermon envelopes are cleared by a key restore, and by removing the key — not by a church switch', async () => {
+  const keep = (e) => [...e.t.localStorage._m.keys()].filter(k => k.startsWith('trinityone.steward.keyenv.'));
+  const seeded = async () => {
+    const e = engine(); e.t.up = new Set([R1]);
+    e.S.subscribeMediaKey();
+    const s = e.subs.at(-1);
+    s.handlers.onevent(envAt(MEDIAKEY_D, A, [K1], [A.pub, M1.pub], OLD_AT)); await e.eose(s);
+    e.t.localStorage.setItem('trinityone.steward.other', 'x');   // someone else's entry: must survive
+    assert.equal(keep(e).length, 1, 'CONTROL: nothing was kept');
+    return e;
+  };
+  { const e = await seeded(); assert.equal(e.S.setActiveIdentity(A.pub), true); assert.equal(keep(e).length, 1, 'a church SWITCH threw away the kept envelope — round 3c\'s protection gone on every switch'); }
+  { const e = await seeded(); e.t.__resetChurchScopedState(); assert.equal(keep(e).length, 0, 'A KEY RESTORE LEFT THE KEPT ENVELOPES (the church\'s recipient list) ON THE DEVICE'); assert.equal(e.t.localStorage.getItem('trinityone.steward.other'), 'x', 'the reset cleared an unrelated entry'); }
+  { const e = await seeded();
+    const removeKey = new Function('localStorage', 'KEY_LS', 'encBlobRemove', '_stay', '_minorsLastClear', 'window', 'CustomEvent',
+      'return ({ ' + fnBody(BUNDLE, BUNDLE.indexOf('    removeKey() {') + 4, 'removeKey() {') + ' });')(e.t.localStorage, 'k', async () => true, { clear() {} }, () => {}, { Steward: {}, dispatchEvent() {} }, class {});
+    await removeKey.removeKey();
+    assert.equal(keep(e).length, 0, 'REMOVING THE KEY LEFT THE KEPT ENVELOPES (the church\'s recipient list) ON THE DEVICE');
+    assert.equal(e.t.localStorage.getItem('trinityone.steward.other'), 'x', 'removeKey cleared an unrelated entry'); }
+});
+
+// ROUND 3d, LOW 2 (audit of 0f5cd2d): THE MEMBER LIST SAYS WHEN IT IS A GENUINE READ. Block and Remove let a holder who has
+// left go only once the member list is fresh — a narrow read of the member documents settled on every connected relay —
+// never from the cache it paints from first.
+test('LOW 2: the member list is FRESH only once a genuine read of the member documents has settled', async () => {
+  const e = engine(); e.t.up = new Set([R1]);
+  let last = null;
+  e.S.subscribeMembers((l) => { last = l; });
+  const read = e.subs.find(r => r.d === 'trinityone/member:' + A.pub);
+  assert.ok(read, 'THE MEMBER LIST OPENS NO READ OF THE MEMBER DOCUMENTS — it can never be told fresh');
+  assert.ok(!e.S.listIsFresh(last), 'the member list was fresh before any relay answered');
+  const ts = 1759299000;
+  read.handlers.onevent({ pubkey: M1.pub, kind: 30078, created_at: ts, tags: [['d', 'trinityone/member:' + A.pub], ['p', A.pub]], content: JSON.stringify({ joined: ts }) });
+  assert.ok(!e.S.listIsFresh(last), 'the member list was fresh before the read had settled');
+  await e.eose(read);
+  assert.ok(e.S.listIsFresh(last), 'A SETTLED, GENUINE READ OF THE MEMBER DOCUMENTS DID NOT MAKE THE MEMBER LIST FRESH');
+  assert.ok(last.some(m => m.pubkey === M1.pub), 'the fresh list does not include the member the read delivered');
 });

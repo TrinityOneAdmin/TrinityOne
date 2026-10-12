@@ -437,3 +437,60 @@ test('LOW ii: the room-member dialog pauses its 8 s while the key publish waits 
   await withTimers(() => editMembers(w, true));
   assert.ok(opts && opts.rotate === true && typeof opts.onTurn === 'function', 'the room-member dialog gave the key publish no onTurn (or did not rotate)');
 });
+
+// ROUND 3d, LOW 1 (audit of 0f5cd2d): THE PAUSE ITSELF, RUN. The row above only checks that onTurn is handed over;
+// removing keyQueued() — the line that stops the 8 s while the key publish waits its turn — left it green. This runs the
+// dialog's Save under a hand-driven clock: the key publish is held, unstarted, for 9 s and the dialog must NOT say
+// "Couldn't reach the relay"; then its turn comes, and 9 s later it must (the control that the clock is live).
+test('LOW 1: the room-member dialog says nothing while the key publish waits its turn — and does once its turn has run 8 s', async () => {
+  const realSet = globalThis.setTimeout, realClear = globalThis.clearTimeout;
+  let now = 0, seq = 0; const due = new Map();
+  globalThis.setTimeout = (fn, ms, ...a) => { if (!ms) return realSet(fn, 0, ...a); const id = 'f' + (++seq); due.set(id, { at: now + ms, fn }); return id; };
+  globalThis.clearTimeout = (id) => { if (typeof id === 'string') due.delete(id); else realClear(id); };
+  const advance = (ms) => { now += ms; for (const [id, t] of [...due]) if (t.at <= now) { due.delete(id); t.fn(); } };
+  try {
+    const w = world({ approval: true });
+    const { mod, draw } = load(w);
+    const group = { id: 'g-lead', name: 'Leaders', kind: 'group', visibility: 'invite', encrypted: true, members: [MB, BOB] };
+    w.S.publishGroup = (g) => Promise.resolve({ ...g, ts: 1 });
+    let opts = null;
+    w.S.publishGroupKey = (gid, recips, o) => { opts = o; return new Promise(() => {}); };   // waiting its turn
+    const props = { group, getCurrent: () => group, onClose() {} };
+    let tree = draw(mod.EditGroupMembersModal, props);
+    find(tree, n => n.type === 'button' && texts(n).join(' ').includes('Bob'))[0].props.onClick();
+    tree = draw(mod.EditGroupMembersModal, props);
+    find(tree, n => n.type === 'button' && String((n.props || {}).className || '').includes('sk-btn--clay'))[0].props.onClick();
+    for (let i = 0; i < 8; i++) await tick();
+    assert.ok(opts && typeof opts.onTurn === 'function', 'CONTROL: the key publish was not reached, or was given no onTurn');
+    advance(9000);
+    tree = draw(mod.EditGroupMembersModal, props);
+    assert.doesNotMatch(texts(tree).join(' '), /reach the relay/, 'THE DIALOG SAID "COULDN\'T REACH THE RELAY" WHILE THE KEY PUBLISH WAS ONLY WAITING ITS TURN');
+    opts.onTurn();
+    advance(9000);
+    tree = draw(mod.EditGroupMembersModal, props);
+    assert.match(texts(tree).join(' '), /reach the relay/, 'CONTROL: 9 s into its own turn, the dialog still said nothing — the clock is not driving it');
+  } finally { globalThis.setTimeout = realSet; globalThis.clearTimeout = realClear; }
+});
+
+// ROUND 3d, LOW 2 (audit of 0f5cd2d): THE HOLDER FLOOR LETS GO OF SOMEONE WHO HAS LEFT — once the member list can say so.
+// 3c kept every current holder through a Block (approval off or unknown), so someone who had LEFT the church kept every
+// rotated key (DOMAIN 2026-09-30: they cannot read anything sealed after they left). With the member list FRESH, a holder
+// not on it is let go; while it is not, the floor stands and a cold console loses nobody.
+const LEFT = 'f'.repeat(64);   // held the keys; has since left — no longer on the member list
+test('LOW 2: with the member list FRESH, Block and Remove let go of a holder who has left — and with it not fresh, keep them (the floor)', async () => {
+  for (const [what, run] of [['Block', block], ['Remove', removeDelegate]]) {
+    for (const approval of [false, null]) {
+      for (const membersFresh of [true, false]) {
+        const w = world({ approval });
+        if (membersFresh) { const real = w.S.listIsFresh; w.S.listIsFresh = (l) => l === w.lists.members || real(l); }
+        await run(w);
+        const o = optsOf(w, 'rotateCareKey');
+        assert.ok(o && typeof o.keepIf === 'function', `${what}: CONTROL — no keepIf`);
+        assert.equal(o.keepIf(MB), true, `${what} approval=${approval} fresh=${membersFresh}: an approved member who stays lost the key`);
+        assert.equal(o.keepIf(LEFT), !membersFresh, membersFresh
+          ? `${what} approval=${approval}: SOMEONE WHO HAS LEFT KEPT THE ROTATED KEY though the member list was a genuine read without them`
+          : `${what} approval=${approval}: with the member list NOT fresh, a holder was dropped — a cold console must lose nobody`);
+      }
+    }
+  }
+});

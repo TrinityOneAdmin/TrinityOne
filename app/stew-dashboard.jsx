@@ -6622,10 +6622,17 @@ const CLEARANCE_RETRY_MS = 60000;
 //                   when approval is on, and is then either already a holder (unchanged) or not keyed at all; an
 //                   open-join church loses no one.
 //               Built here, not in a helper beside it: every test that runs Block or Remove lifts this function by name.
-function rotateChurchKeys({ memberPubs, namePubs, keepKr, keepKnown, goingPk, stewardPubs, groups, delegated, dropPk, isBlocked }) {
+// `keepOnly`    (round 3d, LOW 2) the members who stay, as a Set of lower-case pubkeys — passed ONLY when the member
+//               list is FRESH (Steward.listIsFresh: a genuine read of the member documents has settled, not the cache).
+//               A holder not on it has left the church (DOMAIN 2026-09-30: someone who leaves cannot read anything
+//               sealed after they left), and the rotation lets them go, as a Block before round 3c did. While the list
+//               is not fresh it is null, and the floor above stands: a cold console, the policy unknown, loses nobody.
+//               The stewards who stay are added from `stewardPubs`, the church by the engine — neither needs to be on it.
+function rotateChurchKeys({ memberPubs, namePubs, keepKr, keepKnown, keepOnly, goingPk, stewardPubs, groups, delegated, dropPk, isBlocked }) {
   const _lc = (p) => String(p || '').toLowerCase(), _going = _lc(goingPk);
   const keepIf = keepKr ? (h) => {
     if (!h || (_going && _lc(h) === _going) || isBlocked(h)) return false;
+    if (keepOnly && !keepOnly.has(_lc(h))) return false;
     if (!keepKnown) return true;
     const a = keepKr.approved([h]);
     return !!(a && a.length);
@@ -7290,7 +7297,9 @@ function DashMembers() {
       const remaining = known || dmKr.orAdmitted(everyone);
       // AWAITED, AND A FAILURE REPORTED: rotation is what actually takes the keys away from the person being
       // blocked. The body, and every reason it is written the way it is, is rotateChurchKeys (above DashMembers).
-      const rotating = rotateChurchKeys({ memberPubs: remaining, namePubs: everyone, keepKr: dmKr, keepKnown: !!known, goingPk: pk, stewardPubs: stewardRoster || [], groups, delegated, dropPk: pk, isBlocked });
+      // …and once the member list is a genuine read (not the cache), a holder no longer on it has LEFT and is let go (round 3d)
+      const keepOnly = (window.Steward.listIsFresh && window.Steward.listIsFresh(members)) ? new Set(everyone.map(p => String(p).toLowerCase())) : null;
+      const rotating = rotateChurchKeys({ memberPubs: remaining, namePubs: everyone, keepKr: dmKr, keepKnown: !!known, keepOnly, goingPk: pk, stewardPubs: stewardRoster || [], groups, delegated, dropPk: pk, isBlocked });
       // ...and off every team, the care list and the future rota slots - only for a Block that LANDED (`ok === false` may
       // be only partly saved, and unblocking does not put anyone back). See takeOffEveryTeam.
       const teams = ok === false ? Promise.resolve([]) : takeOffEveryTeam({ pk, rosters: rostersAll, rotas: rotasAll, services: servicesAll, careTeamId });
@@ -9366,7 +9375,8 @@ function DashStewardsPanel({ church }) {
       const known = spKr.approved(everyone);
       const memberPubs = known || spKr.orAdmitted(everyone);   // approved only — see stewKeyRecipients
       // the NAME key to everyone who stays, and every current holder but the removed delegate keeps the rest (round 3c, HIGH 1)
-      return rotateChurchKeys({ memberPubs, namePubs: everyone, keepKr: spKr, keepKnown: !!known, goingPk: pk, stewardPubs: next, groups, delegated: false, isBlocked }).then((failed) => {
+      const keepOnly = (window.Steward.listIsFresh && window.Steward.listIsFresh(members)) ? new Set(everyone.map(p => String(p).toLowerCase())) : null;   // round 3d — see rotateChurchKeys
+      return rotateChurchKeys({ memberPubs, namePubs: everyone, keepKr: spKr, keepKnown: !!known, keepOnly, goingPk: pk, stewardPubs: next, groups, delegated: false, isBlocked }).then((failed) => {
         const tail = alsoMember ? ' They are also a member, so they keep what members can open — to put them out of the church, block them from Members.' : '';
         if (failed.length) setRemoveNote({ tone: 'fail', text: who + ' is no longer a steward, but this console could not change ' + failed.join(' or ') + ', so they may still be able to open things sealed with it. Try removing them again.' + tail });
         else setRemoveNote({ tone: 'ok', text: who + ' is no longer a steward, and the church’s keys have been changed so they can’t open anything sealed from now on. What they could already open stays open.' + tail }); setTimeout(() => setRemoveNote(n => (n && n.tone === 'ok') ? null : n), 8000);   // a confirmation is a moment; a failure stays

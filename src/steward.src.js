@@ -2561,11 +2561,15 @@ function _reconfirmFresh() { for (const f of [..._freshReopeners]) { try { f(); 
 // live changes after that, and an open narrow read per list per relay would spend the relay's subscription slots.
 // Returns the closer.
 function _freshDocRead(cp0, ds, onevent, onFresh) {
+  const _ownFilters = arguments[4] || null;
   let stop = null, stopped = false;
   const open = () => {
     if (stopped) return;
     if (stop) { try { stop(); } catch (e) {} }
-    const st = _openKeyRead(cp0, [{ kinds: [30078], authors: [cp0], '#d': ds }, { kinds: [30078], '#church': [cp0], '#d': ds }],
+    // `arguments[4]` (round 3d): filters of the caller's own, for a document that is neither signed by the church nor
+    // tagged with it — the member documents, which each member signs (subscribeMembers). Read here, not named in the
+    // signature: test harnesses lift this function by its first line.
+    const st = _openKeyRead(cp0, _ownFilters || [{ kinds: [30078], authors: [cp0], '#d': ds }, { kinds: [30078], '#church': [cp0], '#d': ds }],
       (e) => { if (!stopped) onevent(e); },
       (how) => { if (stopped) return; onFresh(how); setTimeout(() => { if (stop === st) { try { st(); } catch (e) {} } }, 0); },
       undefined, { withoutFailed: true });
@@ -3120,6 +3124,12 @@ function _resetChurchScopedState() {
   // …AND ROOM KEY ENVELOPES HELD BACK FOR AN AUTHOR THE ROSTER DID NOT NAME YET (round 3c, LOW iv): they were church A's,
   // re-checked against church B's roster on B's next roster change.
   _senvPending.clear();
+  // …AND THE CARE / SERMON ENVELOPES KEPT ON THE DEVICE (round 3d, LOW 3; see _keyEnvSave): their recipient lists name the
+  // church's members and delegates, and a key restore or a discarded key is not that church's console any more. Not on
+  // a church SWITCH (setActiveIdentity): the device's key stays, each entry is per church, and clearing there would throw
+  // away what round 3c (MED 2) keeps every time a delegate goes to another church and back. The prefix is KEYENV_LS's,
+  // spelled out so this line needs nothing else.
+  try { for (let i = localStorage.length - 1; i >= 0; i--) { const k = localStorage.key(i); if (k && k.indexOf('trinityone.steward.keyenv.') === 0) localStorage.removeItem(k); } } catch (e) {}
 }
 
 // ── console PIN lock: encrypt the church seed at rest with a PIN/passphrase (AES-GCM, PBKDF2). A
@@ -6131,6 +6141,8 @@ window.Steward = {
   forgetChildrenLists() { _minorsLastClear(''); },
   removeKey() {
     try { localStorage.removeItem(KEY_LS); } catch {}
+    // the care / sermon envelopes kept on this device go with the key (round 3d, LOW 3) — see _resetChurchScopedState
+    try { for (let i = localStorage.length - 1; i >= 0; i--) { const k = localStorage.key(i); if (k && k.indexOf('trinityone.steward.keyenv.') === 0) localStorage.removeItem(k); } } catch (e) {}
     _minorsLastClear('');   // no church's children list stays on a device whose key was removed
     window.Steward.keyResumedUnknown = false;   // K2: the steward has now answered the question the device could not
     const done = encBlobRemove();   // S6: "remove from THIS device" is a lie if the Keystore copy survives
@@ -11476,7 +11488,12 @@ window.Steward = {
   // church's pubkey (['p', churchPub]), so we read kind-1 events addressed to us, aggregate by
   // author, and resolve each author's kind-0 profile. The church's own posts are excluded.
   subscribeMembers(onMembers) {
-    { const _tag = _listTag(), _deliver = onMembers; onMembers = (list) => _deliver(_stampFor(list, _tag)); }   // stamped with the church it was opened for — see _listTag
+    // FRESH as well as current (round 3d, LOW 2; audit of 0f5cd2d): Block and removing a delegate keep every current
+    // holder of a key (round 3c) — but only while the member list cannot say who has gone. Once a genuine read of the
+    // MEMBER DOCUMENTS has settled on every connected relay (not the cache this list paints from first), a holder who
+    // is not on it has left, and the rotation lets them go. Steward.listIsFresh(members) answers that.
+    const tok = _freshTok();
+    { const _tag = _listTag(), _deliver = onMembers; _tag.sub = tok; onMembers = (list) => _deliver(_stampFor(list, _tag)); }   // stamped with the church it was opened for — see _listTag
     const MEMBER_D = 'trinityone/member:';
     const CACHE_KEY = 'trinityone.steward.members.' + (pub || '');
     const byPub = new Map();          // pubkey -> { pubkey, npub, name, picture, count, lastTs, firstTs, joined }
@@ -11586,6 +11603,15 @@ window.Steward = {
     let sub = openMain();
     const reask = () => { const old = sub; sub = openMain(); try { old.close(); } catch (e) {} };
     _membersReask.add(reask);
+    // the genuine read of every member document (round 3d, LOW 2) — see the note at the top. Each document goes through
+    // the same handler, so the list it marks fresh is the list that includes them.
+    // OWNER'S CONSOLE ONLY. Only the church key Blocks or removes a delegate — the two users of this freshness — so a
+    // delegated console has no use for it. And it cost one there: with this read open while acting for a stewarded church,
+    // switching to it and back left the name key unread for 30 s (console-keys-follow-the-church-switch, 2/2 red; green
+    // with the read gated here). WHY was not pinned down — the same file logged "auth timed out" — so it is not claimed.
+    const stopRead = actingChurch ? () => {} : _freshDocRead(cp0, [MEMBER_D + cp0], (e) => handlers.onevent(e),
+      () => { tok.genuine = true; tok.at = Date.now(); if (emitTimer) { try { clearTimeout(emitTimer); } catch (e) {} emitTimer = null; } emitNow(); },
+      [{ kinds: [30078], '#d': [MEMBER_D + cp0] }]);
     // the church's own signed re-seat map (same doc the Reconnect button writes). Its own small subscription:
     // the roster sub above is keyed on ['p',<church>], which a re-seat doc does not carry.
     const reseatSub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
@@ -11615,7 +11641,7 @@ window.Steward = {
       },
       oneose() {},
     });
-    return () => { _memberEmitters.delete(emit); _membersReask.delete(reask); try { sub.close(); } catch {} try { reseatSub.close(); } catch {} if (emitTimer) { try { clearTimeout(emitTimer); } catch {} } if (profTimer) { try { clearTimeout(profTimer); } catch {} } if (profSub) { try { profSub.close(); } catch {} } };
+    return () => { tok.live = false; try { stopRead(); } catch {} _memberEmitters.delete(emit); _membersReask.delete(reask); try { sub.close(); } catch {} try { reseatSub.close(); } catch {} if (emitTimer) { try { clearTimeout(emitTimer); } catch {} } if (profTimer) { try { clearTimeout(profTimer); } catch {} } if (profSub) { try { profSub.close(); } catch {} } };
   },
 
   // ---- church profile (kind-0): name etc. shown to members and in the console ----
