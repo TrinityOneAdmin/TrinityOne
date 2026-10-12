@@ -209,7 +209,7 @@ function ListenScreen({ open, onClose, ctx }) {
         </div>
       </div>
 
-      <div className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '10px 16px calc(30px + var(--trinity-listen-player-h, 0px))' }}>
+      <div className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '10px 16px max(30px, var(--trinity-listen-player-h, 0px))' }}>
         {loading && !episodes.length ? (
           <div style={{ textAlign: 'center', padding: '60px 24px', color: 'var(--ink-3)' }}><div style={{ width: 26, height: 26, margin: '0 auto', borderRadius: 999, border: '2.5px solid var(--line)', borderTopColor: 'var(--clay)', animation: 'trinitySpin .8s linear infinite' }} /><p style={{ marginTop: 14, fontSize: 14 }}>Loading episodes…</p></div>
         ) : null}
