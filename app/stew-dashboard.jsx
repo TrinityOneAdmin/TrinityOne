@@ -5244,6 +5244,7 @@ function NewPlanModal({ onClose }) {
         ) : mode === 'pick' ? (
           <React.Fragment>
             <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 6 }}>Readings {picked.length ? '\u00b7 ' + picked.length + ' day' + (picked.length === 1 ? '' : 's') : ''}</div>
+            <div data-testid="rp-day-label" style={{ fontSize: 12.5, fontWeight: 800, color: 'var(--clay)', marginBottom: 6 }}>{'Day ' + (picked.length + 1)}</div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'end', marginBottom: 10 }}>
               <select value={rpBook} onChange={e => { setRpBook(e.target.value); setRpChap(''); setRpFrom(''); setRpTo(''); }} style={Object.assign({}, rpSel, { flex: '1 1 140px', maxWidth: 200 })} aria-label="Book" title="Book">
                 <option value="">Book</option>
@@ -5261,7 +5262,7 @@ function NewPlanModal({ onClose }) {
                 <option value="">{'\u2014'}</option>
                 {rpVerseList.filter(v => v >= Number(rpFrom)).map(v => <option key={v} value={String(v)}>{v}</option>)}
               </select> : null}
-              {rpAssembled ? <button type="button" onClick={rpAdd} className="sk-btn sk-btn--clay" aria-label={'Add ' + rpAssembled} title={'Add ' + rpAssembled} style={{ padding: '7px 12px', fontSize: 12.5, height: 38 }}><Icon name="plus" size={13} color="var(--on-clay)" /> Add</button> : null}
+              {rpAssembled ? <button type="button" onClick={rpAdd} className="sk-btn sk-btn--clay" aria-label={'Add ' + rpAssembled + ' as day ' + (picked.length + 1)} title={'Add ' + rpAssembled + ' as day ' + (picked.length + 1)} style={{ padding: '7px 12px', fontSize: 12.5, height: 38 }}><Icon name="plus" size={13} color="var(--on-clay)" /> {'Add day ' + (picked.length + 1)}</button> : null}
             </div>
             {picked.length > 0 ? <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 200, overflowY: 'auto', marginBottom: 6 }}>
               {picked.map((r, i) => (
