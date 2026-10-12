@@ -5221,7 +5221,7 @@ function NewPlanModal({ onClose }) {
         ) : mode === 'pick' ? (
           <React.Fragment>
             <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 6 }}>Readings {picked.length ? '\u00b7 ' + picked.length + ' day' + (picked.length === 1 ? '' : 's') : ''}</div>
-            <div data-testid="rp-day-label" style={{ fontSize: 12.5, fontWeight: 800, color: 'var(--clay)', marginBottom: 6 }}>{'Day ' + (picked.length + 1)}</div>
+            <div data-testid="rp-day-label" style={{ fontSize: 12.5, fontWeight: 800, color: 'var(--clay-ink)', marginBottom: 6 }}>{'Day ' + (picked.length + 1)}</div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'end', marginBottom: 10 }}>
               <select value={rpBook} onChange={e => { setRpBook(e.target.value); setRpChap(''); setRpFrom(''); setRpTo(''); }} style={Object.assign({}, rpSel, { flex: '1 1 140px', maxWidth: 200 })} aria-label="Book" title="Book">
                 <option value="">Book</option>
@@ -5257,7 +5257,7 @@ function NewPlanModal({ onClose }) {
             <div style={{ maxHeight: 180, overflowY: 'auto', border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '6px 0' }}>
               {parsedDays.map((day, i) => (
                 <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'baseline', padding: '5px 14px', fontSize: 13, borderBottom: i < parsedDays.length - 1 ? '1px solid var(--line)' : 'none' }}>
-                  <span style={{ fontWeight: 800, fontSize: 11, color: 'var(--clay)', minWidth: 34 }}>Day {day.d}</span>
+                  <span style={{ fontWeight: 800, fontSize: 11, color: 'var(--clay-ink)', minWidth: 34 }}>Day {day.d}</span>
                   <span style={{ fontWeight: 600, minWidth: 100 }}>{day.ref}</span>
                   <span style={{ color: 'var(--ink-3)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{day.label}</span>
                 </div>
