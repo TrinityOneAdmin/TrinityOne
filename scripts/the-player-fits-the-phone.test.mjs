@@ -212,6 +212,17 @@ for (const width of [320, 360, 390]) {
 // browser cannot be given a real env(safe-area-inset-bottom), so `?safe=N` applies what that inset does to the
 // app's own two bottom offsets — `max(12px, env(safe-area-inset-bottom))` becomes N for the tab bar and the
 // player's dock — and the cases run with N = 48 at 360x760 and at 412x915 (Pixel-like), as well as N = 0.
+//
+// DEVICE RESULT on 43e470c (Pixel 10 Pro, Android WebView 154.0.8037): STILL behind the player, and this file
+// still green. On the phone (CDP, 2026-10-12) the Library scroller had padding-bottom 214px = the variable,
+// scrollHeight 1088, clientHeight 805 — yet scrollTop = 9999 settled at 165.7, i.e. a scroll range 117px
+// short: exactly as if the padding were its 96px floor. No script set scrollTop (setter trapped). A bare test
+// div on the same phone: padding `max(96px, var(--x))` scrolled as 96px, `calc(0px + var(--x))` as 0, plain
+// `214px` correctly; a CHILD BOX whose height used the var scrolled correctly. This Chromium (155, headless)
+// scrolls all of them correctly, so the engine fault cannot be reproduced here. What this file CAN hold is the
+// structure that works on the phone: the scroller's padding-bottom stays its fixed value while the player is
+// up, and the extra room is a real box ([data-player-room]) inside it — asserted from computed styles below,
+// alongside the geometry. Putting the var back into the padding fails that assertion in every case.
 const LIVE_FILES = ['app/icons.jsx', 'app/ui.jsx', 'app/screens-today.jsx', 'app/screens-church.jsx', 'app/screens-library.jsx', 'app/screens-watch.jsx', 'app/screens-audio.jsx'];
 const LIVE_HTML = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <link rel="stylesheet" href="/vendor/fonts/fonts.css">
@@ -276,11 +287,13 @@ async function live({ w, h, safe }, tab, { queueOpen = false } = {}) {
     const sc = [...document.querySelectorAll('#page *')].find(n => getComputedStyle(n).overflowY === 'auto');
     if (sc) { sc.scrollTop = sc.scrollHeight; await wait(250); }
     let low = null, lowBottom = -1;
-    if (sc) for (const n of sc.querySelectorAll('*')) { const b = n.getBoundingClientRect(); if (b.height > 0 && b.width > 0 && b.bottom > lowBottom) { lowBottom = b.bottom; low = (n.textContent || n.tagName).trim().slice(0, 50); } }
+    if (sc) for (const n of sc.querySelectorAll('*')) { if (n.closest('[data-player-room]')) continue; const b = n.getBoundingClientRect(); if (b.height > 0 && b.width > 0 && b.bottom > lowBottom) { lowBottom = b.bottom; low = (n.textContent || n.tagName).trim().slice(0, 50); } }
     return JSON.stringify({ errors: window.__errors, hasPlayer: !!R, playerTop: R ? Math.round(R.getBoundingClientRect().top) : null,
       playerH: R ? Math.round(R.getBoundingClientRect().height) : null, scrolls: !!(sc && sc.scrollHeight > sc.clientHeight), measured: !!sc, lowBottom: Math.round(lowBottom), low,
       watchRows: [...document.querySelectorAll('#page button')].filter(b => /Sermon number/.test(b.textContent)).length,
       tabTop: TB ? Math.round(TB.getBoundingClientRect().top) : null,
+      padB: sc ? getComputedStyle(sc).paddingBottom : null,
+      roomH: (() => { const rm = sc && [...sc.children].find(k => k.hasAttribute('data-player-room')); return rm ? Math.round(rm.getBoundingClientRect().height) : -1; })(),
       cssVar: getComputedStyle(document.documentElement).getPropertyValue('--trinity-player-h').trim() }); })()`;
   const r = await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true });
   assert.ok(!(r.result && r.result.exceptionDetails), 'the live probe threw: ' + JSON.stringify(r.result && r.result.exceptionDetails || {}).slice(0, 400));
@@ -300,6 +313,9 @@ for (const g of GEOMS) for (const [tab, label] of [['today', 'Today'], ['library
       if (tab === 'watch') assert.ok(m.watchRows >= 10, `Watch & Listen did not open with its sermon list (rows: ${m.watchRows})`);
       // the emulated inset really moved the dock: tab bar bottom edge at h - max(12, safe)
       assert.ok(m.tabTop != null && Math.abs(m.tabTop - (g.h - Math.max(12, g.safe) - 66)) <= 1, `the tab bar is not where a ${g.safe}px inset puts it (top y=${m.tabTop})`);
+      // THE ROOM IS A BOX, NOT var() PADDING — the form Android WebView 154 scrolls correctly (see the note above)
+      assert.equal(m.padB, '96px', `${label}'s scroller padding-bottom is ${m.padB} while the player is up — var-driven padding does not extend the scroll range on the Pixel's WebView`);
+      assert.ok(m.roomH > 0, `no room box for the player inside ${label}'s scroller (height ${m.roomH})`);
       assert.ok(m.lowBottom <= m.playerTop,
         `THE BOTTOM OF ${label.toUpperCase()} IS BEHIND THE PLAYER: scrolled to the end, the last thing on the page ("${m.low}") ends at ` +
         `y=${m.lowBottom} and the player (h=${m.playerH}) starts at y=${m.playerTop}. Published --trinity-player-h: ${m.cssVar}`);

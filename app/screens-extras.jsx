@@ -209,7 +209,7 @@ function ListenScreen({ open, onClose, ctx }) {
         </div>
       </div>
 
-      <div className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '10px 16px max(30px, var(--trinity-listen-player-h, 0px))' }}>
+      <div className="no-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '10px 16px 30px' }}>
         {loading && !episodes.length ? (
           <div style={{ textAlign: 'center', padding: '60px 24px', color: 'var(--ink-3)' }}><div style={{ width: 26, height: 26, margin: '0 auto', borderRadius: 999, border: '2.5px solid var(--line)', borderTopColor: 'var(--clay)', animation: 'trinitySpin .8s linear infinite' }} /><p style={{ marginTop: 14, fontSize: 14 }}>Loading episodes…</p></div>
         ) : null}
@@ -251,6 +251,8 @@ function ListenScreen({ open, onClose, ctx }) {
             </div>
           </React.Fragment>
         ) : null}
+        {/* room for the docked player: a box, not var() padding — see ScreenScroll in screens-today.jsx */}
+        <div aria-hidden="true" data-player-room="" style={{ height: 'max(0px, calc(var(--trinity-listen-player-h, 0px) - 30px))' }} />
       </div>
       {/* THE player (owner 2026-10-11: one player, no controls on the page). This screen covers the tab-bar
           dock, so the same floating player docks at this screen's foot. Guarded: no audio script, no player. */}
