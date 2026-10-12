@@ -11,7 +11,7 @@ export const CASES = [
     name: 'remember-me: ownership check removed',
     file: 'src/identity.src.js',
     // the exact shape of the pre-fix code: trust any live record
-    find: `  const owner = encOwnerPub();
+    find: `  const owner = (held && marker && held.toLowerCase() !== String(marker).toLowerCase()) ? '' : (held || marker);
   if (!owner || !rec.pub || String(rec.pub).toLowerCase() !== String(owner).toLowerCase()) {
     await rememberClear();
     return null;
@@ -42,6 +42,29 @@ export const CASES = [
     find: `    if (o.until <= nowSec()) { await rememberClear(); return null; }`,
     replace: `    if (false) { await rememberClear(); return null; }`,
     test: 'scripts/remember-account-binding.test.mjs',
+  },
+  {
+    name: 'remember-me: owner read from the localStorage marker only',
+    file: 'src/identity.src.js',
+    // the pre-2026-10-10 shape: a marker that survived a kill WITHOUT its pub found no owner and the record
+    // was deleted — "stay open" dead after one force-stop on the Pixel
+    find: `  const held = isNative() ? await orphanEncOwner() : '';`,
+    replace: `  const held = '';`,
+    test: 'scripts/a-remembered-phone-stays-open.test.mjs',
+  },
+  {
+    name: 'remember-me: blob/marker disagreement trusted',
+    file: 'src/identity.src.js',
+    find: `  const owner = (held && marker && held.toLowerCase() !== String(marker).toLowerCase()) ? '' : (held || marker);`,
+    replace: `  const owner = held || marker;`,
+    test: 'scripts/a-remembered-phone-stays-open.test.mjs',
+  },
+  {
+    name: 'remember-me: security sheet stops showing the stay-open date',
+    file: 'app/identity-extras.jsx',
+    find: `          {remUntil > 0 ? (`,
+    replace: `          {false ? (`,
+    test: 'scripts/a-remembered-phone-stays-open.test.mjs',
   },
   {
     name: 'boot-key: interrupted write reported as "no key"',

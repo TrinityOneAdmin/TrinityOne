@@ -159,7 +159,7 @@ function IdentitySwitcher({ church, churchName, initials, onEditName, compact = 
   React.useEffect(() => { const f = () => force(x => x + 1); window.addEventListener('steward-networks', f); return () => window.removeEventListener('steward-networks', f); }, []);
   const ids = (window.Steward.identities ? window.Steward.identities() : []);
   const activePub = window.Steward.activePub;
-  const networks = ids.filter(i => i.kind === 'network');
+  const networks = window.NETWORKS_ENABLED === true ? ids.filter(i => i.kind === 'network') : [];   // NETWORKS SWITCH (app/stew-data.jsx)
   const viewingNetwork = window.Steward.isViewingNetwork && window.Steward.isViewingNetwork();
   const delegated = window.Steward.isDelegated && window.Steward.isDelegated();
   const offChurch = viewingNetwork || delegated;   // not on our own church identity
@@ -216,7 +216,7 @@ function IdentitySwitcher({ church, churchName, initials, onEditName, compact = 
       )}
       {open ? (
         <div style={popStyle}>
-          {ids.map(idn => {
+          {ids.filter(idn => idn.kind !== 'network' || window.NETWORKS_ENABLED === true).map(idn => {   /* NETWORKS SWITCH */
             const on = idn.pub === activePub;
             // THE OWN CHURCH'S ROW NAMES THE OWN CHURCH. `church` is the profile of whatever the console is
             // running NOW, so while acting for a stewarded church (or viewing a network) this row said that
@@ -3669,7 +3669,9 @@ function NewGroupModal({ open, onClose }) {
 
 // Manage who's in an invite-only group after it's created (add/remove the allowlist). Re-publishes the
 // group with the new member set — the relay then enforces posting + the read-gate against it.
-function EditGroupMembersModal({ group, onClose }) {
+// `getCurrent` (optional) returns the group document AS IT IS NOW (null if it was deleted); save() publishes on top of that, so another steward's
+// change made while this dialog was open (childsafe, encryption, category, leaders) is not reverted by a stale snapshot.
+function EditGroupMembersModal({ group, getCurrent, onClose }) {
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
   // WHAT IS OFFERED: not people still waiting to join, not the blocked (sim A2 #7) — but whoever is ALREADY in
   // the group stays listed so they can be un-ticked. `members` stays the full list for `known`/`orphans` and the
@@ -3688,8 +3690,21 @@ function EditGroupMembersModal({ group, onClose }) {
   const orphans = [...sel].filter(pk => !known.has(pk));   // in the group but not in the current roster
   const save = () => {
     setBusy(true); setErr('');
-    const newM = [...sel];
-    const removed = (group.members || []).some(pk => !sel.has(pk));   // someone dropped → rotate the key
+    // THE DIALOG'S DELTA, applied to the group AS IT IS NOW (not the list seeded at open): someone another steward
+    // removed meanwhile stays removed, someone they added stays added. getCurrent() is null when the group has
+    // been deleted meanwhile — then nothing is published (it would resurrect it).
+    const cur = getCurrent ? getCurrent() : group;
+    if (!cur) {
+      setBusy(false);
+      try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'group', message: 'This group was removed, so nothing was saved.' } })); } catch (e) {}
+      onClose();
+      return;
+    }
+    const openM = Array.isArray(group.members) ? group.members : [];
+    const addedByMe = [...sel].filter(pk => !openM.includes(pk));
+    const removedByMe = openM.filter(pk => !sel.has(pk));
+    const newM = [...new Set([...(Array.isArray(cur.members) ? cur.members : []).filter(pk => !removedByMe.includes(pk)), ...addedByMe])];
+    const removed = removedByMe.length > 0;   // someone dropped → rotate the key
     // don't hang forever if the relay never ACKs — surface it so it's not a dead button
     const guard = setTimeout(() => { setBusy(false); setErr('Couldn’t reach the relay — check your connection and try again.'); }, 8000);
     // Keep the team's roster in step with the allowlist. Only when this group HAS a roster — a plain
@@ -3710,9 +3725,7 @@ function EditGroupMembersModal({ group, onClose }) {
         // read grant over every care need and every "ask for help" in the church. Reconciling the whole list
         // meant that opening this dialog on a church whose two lists had drifted and pressing Save WITHOUT
         // CHANGING ANYTHING promoted every member of that chat room to careAdmin. A delta cannot do that.
-        const before = Array.isArray(group.members) ? group.members : [];
-        const added = newM.filter(pk => !before.includes(pk));
-        const removed = before.filter(pk => !newM.includes(pk));
+        const added = addedByMe, removed = removedByMe;
         if (!added.length && !removed.length) return;
         const people = teamPeopleForAllowlist(r.people, added, removed, members);
         // Do not write the care team from a roster that did not save: publishCareTeamFor would then name a
@@ -3722,8 +3735,8 @@ function EditGroupMembersModal({ group, onClose }) {
           .catch(() => {});
       } catch (e) {}
     };
-    Promise.resolve(window.Steward.publishGroup({ ...group, visibility: 'invite', members: newM }))
-      .then(() => { if (group.encrypted && window.Steward.publishGroupKey) return window.Steward.publishGroupKey(group.id, newM, { rotate: removed }); })
+    Promise.resolve(window.Steward.publishGroup({ ...cur, visibility: 'invite', members: newM }))
+      .then(() => { if (cur.encrypted && window.Steward.publishGroupKey) return window.Steward.publishGroupKey(group.id, newM, { rotate: removed }); })
       .then((r) => {
         clearTimeout(guard);
         // AUDIT-2026-08-10 item A, state 6 — the one LEAK-shaped failure here. If the rotate publish didn't
@@ -3731,7 +3744,7 @@ function EditGroupMembersModal({ group, onClose }) {
         // members post — while this console's own key state has already advanced, so its posts seal under a
         // key no member holds. Closing quietly buries both. Stay open, say it plainly; a retry re-runs the
         // rotate (the ring grows by one more superseded key, which is harmless).
-        if (group.encrypted && window.Steward.publishGroupKey && (r === null || r === false)) {
+        if (cur.encrypted && window.Steward.publishGroupKey && (r === null || r === false)) {
           setBusy(false);
           setErr(removed
             ? 'The group’s new key could not be saved — anyone you removed CAN STILL READ this group until Save succeeds. Check your connection and press Save again.'
@@ -4181,6 +4194,8 @@ function DashGroups() {
   // So every control resolves back to the RAW group document by id before publishing.
   const rawById = new Map(all.map(g => [g.id, g]));
   const raw = (g) => (g && rawById.get(g.id)) || g;
+  const rawByIdRef = React.useRef(rawById); rawByIdRef.current = rawById;   // the dialogs read THIS at save time, not the map from the render they opened in
+  const currentOf = (g) => () => (g && rawByIdRef.current.get(g.id)) || null;   // null = deleted meanwhile; the dialogs then publish nothing
   const items = all.map(g => ({ ...g, sub: groupLiveSub(g, realCount, rosters), ic: g.kind === 'team' ? (g.icon || 'shield') : g.kind === 'broadcast' ? 'send' : 'chat', fg: g.kind === 'team' ? (g.accent || 'var(--clay)') : g.kind === 'broadcast' ? '#8a6717' : 'var(--sage)' }));
   // type filter for the list — only surfaces when there's more than one type to choose between
   const groupFilters = (() => {
@@ -4267,8 +4282,8 @@ function DashGroups() {
             {(it.leaders && it.leaders.length) ? <SkPill tint="sage">{it.leaders.length} leader{it.leaders.length === 1 ? '' : 's'}</SkPill> : null}
             <button onClick={() => pubOr(window.Steward.publishGroup({ ...raw(it), childsafe: !it.childsafe }), 'Couldn\'t change child-safe on "' + (it.name || 'that group') + '" — the relay didn\'t accept it, so it is unchanged. Check the relay and try again.')} aria-pressed={!!it.childsafe} aria-label={(it.name || 'This group') + ' — child-safe is ' + (it.childsafe ? 'on. Press to restrict it to adults' : 'off. Press to let members marked as a child join')} title={it.childsafe ? 'Child-safe — members marked as a child can join. Click to restrict to adults' : 'Hidden from children. Click to mark child-safe so under-18s can join'} style={{ border: '1px solid ' + (it.childsafe ? 'color-mix(in oklab, var(--sage) 40%, var(--line))' : 'var(--line)'), background: it.childsafe ? 'color-mix(in oklab, var(--sage) 8%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: it.childsafe ? 'var(--sage-ink)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name={it.childsafe ? 'check' : 'pray'} size={14} color="currentColor" /> {it.childsafe ? 'Child-safe' : 'Child-safe?'}</button>
             {it.kind !== 'team' ? <button onClick={() => toggleEncrypt(it)} aria-pressed={!!it.encrypted} aria-label={(it.name || 'This group') + ' — encryption is ' + (it.encrypted ? 'on. Press to turn it off' : 'off. Press to seal it end-to-end')} title={it.encrypted ? 'Sealed end-to-end — even the relay can\'t read it. Click to turn off' : 'Encrypt this group end-to-end. Click to seal'} style={{ border: '1px solid ' + (it.encrypted ? 'color-mix(in oklab, var(--clay) 40%, var(--line))' : 'var(--line)'), background: it.encrypted ? 'color-mix(in oklab, var(--clay) 8%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: it.encrypted ? 'var(--clay-ink)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="lock" size={14} color="currentColor" /> {it.encrypted ? 'Encrypted' : 'Encrypt?'}</button> : null}
-            {it.visibility === 'invite' ? <button onClick={() => setEditMembersFor(it)} title="Manage who’s in this invite-only group" style={{ border: '1px solid color-mix(in oklab, var(--clay) 35%, var(--line))', background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="lock" size={14} color="currentColor" /> Invite · {(it.members || []).length}</button> : null}
-            <button onClick={() => setLeadersFor(it)} title="Members who help run this group" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--sage-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="users" size={15} color="currentColor" /> Leaders</button>
+            {it.visibility === 'invite' ? <button onClick={() => setEditMembersFor(raw(it))} title="Manage who’s in this invite-only group" style={{ border: '1px solid color-mix(in oklab, var(--clay) 35%, var(--line))', background: 'color-mix(in oklab, var(--clay) 7%, var(--surface))', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="lock" size={14} color="currentColor" /> Invite · {(it.members || []).length}</button> : null}
+            <button onClick={() => setLeadersFor(raw(it))} title="Members who help run this group" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--sage-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="users" size={15} color="currentColor" /> Leaders</button>
             <button onClick={() => window.dispatchEvent(new CustomEvent('steward-open-group-chat', { detail: it }))} title="Open chat" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="chat" size={15} color="currentColor" /> Chat</button>
           </React.Fragment>
         )}
@@ -4298,8 +4313,8 @@ function DashGroups() {
           </div>
         </div>
       ) : null}
-      {leadersFor ? <GroupLeadersModal group={leadersFor} onClose={() => setLeadersFor(null)} /> : null}
-      {editMembersFor ? <EditGroupMembersModal group={editMembersFor} onClose={() => setEditMembersFor(null)} /> : null}
+      {leadersFor ? <GroupLeadersModal group={leadersFor} getCurrent={currentOf(leadersFor)} onClose={() => setLeadersFor(null)} /> : null}
+      {editMembersFor ? <EditGroupMembersModal group={editMembersFor} getCurrent={currentOf(editMembersFor)} onClose={() => setEditMembersFor(null)} /> : null}
       {settingsFor ? (() => {
         const g = settingsFor;
         const sToggle = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 0', borderBottom: '1px solid var(--line)' };
@@ -4368,7 +4383,8 @@ function DashGroups() {
 
 // pick which members may post events for a group. The chosen pubkeys go into the group def's `leaders`;
 // the relay then lets exactly those members publish events scoped to this group.
-function GroupLeadersModal({ group, onClose }) {
+// `getCurrent`: see EditGroupMembersModal — save() builds on the group as it is now, not as it was when opened.
+function GroupLeadersModal({ group, getCurrent, onClose }) {
   // Not people still waiting to join, not the blocked (sim A2 #7) — but existing leaders stay listed so they can
   // be un-ticked. Every use of `members` below is a pick list or a lookup of someone already ticked.
   const allMembers = window.useStewardMembers().filter(m => m.pubkey);
@@ -4409,7 +4425,14 @@ function GroupLeadersModal({ group, onClose }) {
     // exact defect the commit titled "a control that failed no longer says it worked" was written to remove,
     // one modal along. AUDIT-2026-08-30.
     let saved = null;
-    try { saved = await window.Steward.publishGroup({ ...group, leaders: [...sel], eventPolicy: pol }); }
+    const cur = getCurrent ? getCurrent() : group;
+    if (!cur) {   // deleted meanwhile: publishing would resurrect it
+      setSaving(false);
+      try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'group', message: 'This group was removed, so nothing was saved.' } })); } catch (e) {}
+      onClose();
+      return;
+    }
+    try { saved = await window.Steward.publishGroup({ ...cur, leaders: [...sel], eventPolicy: pol }); }
     catch (e) { saved = null; }
     if (!saved) {
       // NOTHING IS SENT AND NOBODY IS TOLD. Announcing leadership to people whose leadership did not save is
@@ -5080,7 +5103,36 @@ function ago(ts) {
 }
 
 function NewPlanModal({ onClose }) {
-  const [mode, setMode] = React.useState('manual');   // manual | upload
+  const [mode, setMode] = React.useState('manual');   // manual | upload | pick
+  const [picked, setPicked] = React.useState([]);   // readings added with the Book/Chapter picker
+  const [rpBook, setRpBook] = React.useState('');
+  const [rpChap, setRpChap] = React.useState('');
+  const [rpFrom, setRpFrom] = React.useState('');
+  const [rpTo, setRpTo] = React.useState('');
+  const rpEntry = VP_BOOKS.find(function(b) { return b[0] === rpBook; });
+  const rpChapList = [];
+  for (let _ri = 1; _ri <= (rpEntry ? rpEntry[1] : 0); _ri++) rpChapList.push(_ri);
+  // verses that exist in the chosen chapter (VP_BOOKS.verses: one comma list of verse counts per book)
+  const rpVerseList = [];
+  if (rpEntry && rpChap) {
+    const _rvn = Number(String(VP_BOOKS.verses[VP_BOOKS.indexOf(rpEntry)] || '').split(',')[Number(rpChap) - 1]) || 0;
+    for (let _rv = 1; _rv <= _rvn; _rv++) rpVerseList.push(_rv);
+  }
+  let rpAssembled = '';
+  if (rpBook && rpChap) {
+    rpAssembled = rpBook + ' ' + rpChap;
+    if (rpFrom) {
+      rpAssembled += ':' + rpFrom;
+      if (rpTo && Number(rpTo) > Number(rpFrom)) rpAssembled += '-' + rpTo;
+    }
+  }
+  const rpAdd = () => {
+    if (!rpAssembled) return;
+    setPicked(prev => prev.concat([rpAssembled]));
+    setRpBook(''); setRpChap(''); setRpFrom(''); setRpTo('');
+  };
+  const rpRemove = (idx) => setPicked(prev => prev.filter((_, i) => i !== idx));
+  const rpSel = { height: 38, padding: '0 8px', borderRadius: 10, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 13.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' };
   const [name, setName] = React.useState('');
   const [tag, setTag] = React.useState('');
   const [blurb, setBlurb] = React.useState('');
@@ -5134,7 +5186,9 @@ function NewPlanModal({ onClose }) {
     r.readAsText(f);
   };
   const manualLines = text.split('\n').map(s => s.trim()).filter(Boolean);
-  const activeDays = mode === 'upload' && parsedDays ? parsedDays : manualLines.map((ref, i) => ({ d: i + 1, ref, label: ref }));
+  const activeDays = mode === 'upload' && parsedDays ? parsedDays
+    : mode === 'pick' ? picked.map((ref, i) => ({ d: i + 1, ref, label: ref }))
+    : manualLines.map((ref, i) => ({ d: i + 1, ref, label: ref }));
   const canPublish = name.trim() && activeDays.length > 0;
   const create = (asDraft) => {
     if (!canPublish) return;
@@ -5150,9 +5204,10 @@ function NewPlanModal({ onClose }) {
       <div ref={dlgRef} role="dialog" aria-modal="true" aria-label="Create a reading plan" tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 520, maxWidth: '92%', maxHeight: '88%', display: 'flex', flexDirection: 'column', overflow: 'hidden', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)' }}>
         <div style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', padding: '28px 28px 8px' }}>
         <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22 }}>Create a reading plan</div>
-        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 14px' }}>Type readings by hand, or upload a Markdown file.</p>
+        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 14px' }}>Pick verses, type them, or upload a file.</p>
         <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
           {modeBtn('manual', 'Type it', 'pen')}
+          {modeBtn('pick', 'Pick verses', 'read')}
           {modeBtn('upload', 'Upload file', 'share')}
         </div>
         {mode === 'upload' ? (
@@ -5186,13 +5241,46 @@ function NewPlanModal({ onClose }) {
             <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 6 }}>Readings — one per line {manualLines.length ? '· ' + manualLines.length + ' day' + (manualLines.length === 1 ? '' : 's') : ''}</div>
             <textarea value={text} onChange={e => setText(e.target.value)} rows={7} placeholder={'John 1\nJohn 2\nIsaiah 53\nPsalm 22'} style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '12px 14px', fontSize: 14.5, fontFamily: 'var(--mono)', color: 'var(--ink)', outline: 'none', resize: 'vertical', lineHeight: 1.6 }} />
           </React.Fragment>
+        ) : mode === 'pick' ? (
+          <React.Fragment>
+            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 6 }}>Readings {picked.length ? '\u00b7 ' + picked.length + ' day' + (picked.length === 1 ? '' : 's') : ''}</div>
+            <div data-testid="rp-day-label" style={{ fontSize: 12.5, fontWeight: 800, color: 'var(--clay-ink)', marginBottom: 6 }}>{'Day ' + (picked.length + 1)}</div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'end', marginBottom: 10 }}>
+              <select value={rpBook} onChange={e => { setRpBook(e.target.value); setRpChap(''); setRpFrom(''); setRpTo(''); }} style={Object.assign({}, rpSel, { flex: '1 1 140px', maxWidth: 200 })} aria-label="Book" title="Book">
+                <option value="">Book</option>
+                {VP_BOOKS.map(b => <option key={b[0]} value={b[0]}>{b[0]}</option>)}
+              </select>
+              {rpBook ? <select value={rpChap} onChange={e => { setRpChap(e.target.value); setRpFrom(''); setRpTo(''); }} style={Object.assign({}, rpSel, { width: 70 })} aria-label="Chapter" title="Chapter">
+                <option value="">Ch.</option>
+                {rpChapList.map(c => <option key={c} value={String(c)}>{c}</option>)}
+              </select> : null}
+              {rpChap ? <select value={rpFrom} onChange={e => { setRpFrom(e.target.value); setRpTo(''); }} style={Object.assign({}, rpSel, { width: 118 })} aria-label="From verse" title="From verse (optional)">
+                <option value="">Whole chapter</option>
+                {rpVerseList.map(v => <option key={v} value={String(v)}>{v}</option>)}
+              </select> : null}
+              {rpFrom ? <select value={rpTo} onChange={e => { setRpTo(e.target.value); }} style={Object.assign({}, rpSel, { width: 70 })} aria-label="To verse" title="To verse (optional)">
+                <option value="">{'\u2014'}</option>
+                {rpVerseList.filter(v => v >= Number(rpFrom)).map(v => <option key={v} value={String(v)}>{v}</option>)}
+              </select> : null}
+              {rpAssembled ? <button type="button" onClick={rpAdd} className="sk-btn sk-btn--clay" aria-label={'Add ' + rpAssembled + ' as day ' + (picked.length + 1)} title={'Add ' + rpAssembled + ' as day ' + (picked.length + 1)} style={{ padding: '7px 12px', fontSize: 12.5, height: 38 }}><Icon name="plus" size={13} color="var(--on-clay)" /> {'Add day ' + (picked.length + 1)}</button> : null}
+            </div>
+            {picked.length > 0 ? <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 200, overflowY: 'auto', marginBottom: 6 }}>
+              {picked.map((r, i) => (
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', borderRadius: 10, background: 'var(--surface-2)', border: '1px solid var(--line)', fontSize: 13.5 }}>
+                  <span style={{ width: 22, textAlign: 'center', fontWeight: 700, fontSize: 11, color: 'var(--ink-3)' }}>{i + 1}</span>
+                  <span style={{ flex: 1, fontWeight: 600 }}>{r}</span>
+                  <button type="button" onClick={() => rpRemove(i)} aria-label={'Remove ' + r} title={'Remove ' + r} style={{ border: 'none', background: 'none', cursor: 'pointer', padding: 2, color: 'var(--ink-3)' }}><Icon name="x" size={14} color="currentColor" /></button>
+                </div>
+              ))}
+            </div> : <div style={{ padding: '12px 0', textAlign: 'center', color: 'var(--ink-3)', fontSize: 13 }}>Pick a book and chapter above to add readings.</div>}
+          </React.Fragment>
         ) : parsedDays && parsedDays.length ? (
           <React.Fragment>
             <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 6 }}>Preview {'·'} {parsedDays.length} day{parsedDays.length === 1 ? '' : 's'}</div>
             <div style={{ maxHeight: 180, overflowY: 'auto', border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '6px 0' }}>
               {parsedDays.map((day, i) => (
                 <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'baseline', padding: '5px 14px', fontSize: 13, borderBottom: i < parsedDays.length - 1 ? '1px solid var(--line)' : 'none' }}>
-                  <span style={{ fontWeight: 800, fontSize: 11, color: 'var(--clay)', minWidth: 34 }}>Day {day.d}</span>
+                  <span style={{ fontWeight: 800, fontSize: 11, color: 'var(--clay-ink)', minWidth: 34 }}>Day {day.d}</span>
                   <span style={{ fontWeight: 600, minWidth: 100 }}>{day.ref}</span>
                   <span style={{ color: 'var(--ink-3)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{day.label}</span>
                 </div>
@@ -5237,6 +5325,75 @@ var VP_BOOKS = [
   ['1 Timothy',6],['2 Timothy',4],['Titus',3],['Philemon',1],['Hebrews',13],
   ['James',5],['1 Peter',5],['2 Peter',3],['1 John',5],['2 John',1],['3 John',1],
   ['Jude',1],['Revelation',22]
+];
+// Verses per chapter (KJV / Protestant versification), one string per book in VP_BOOKS order. Read by the Pick-verses dropdowns.
+VP_BOOKS.verses = [
+  '31,25,24,26,32,22,24,22,29,32,32,20,18,24,21,16,27,33,38,18,34,24,20,67,34,35,46,22,35,43,55,32,20,31,29,43,36,30,23,23,57,38,34,34,28,34,31,22,33,26',
+  '22,25,22,31,23,30,25,32,35,29,10,51,22,31,27,36,16,27,25,26,36,31,33,18,40,37,21,43,46,38,18,35,23,35,35,38,29,31,43,38',
+  '17,16,17,35,19,30,38,36,24,20,47,8,59,57,33,34,16,30,37,27,24,33,44,23,55,46,34',
+  '54,34,51,49,31,27,89,26,23,36,35,16,33,45,41,50,13,32,22,29,35,41,30,25,18,65,23,31,40,16,54,42,56,29,34,13',
+  '46,37,29,49,33,25,26,20,29,22,32,32,18,29,23,22,20,22,21,20,23,30,25,22,19,19,26,68,29,20,30,52,29,12',
+  '18,24,17,24,15,27,26,35,27,43,23,24,33,15,63,10,18,28,51,9,45,34,16,33',
+  '36,23,31,24,31,40,25,35,57,18,40,15,25,20,20,31,13,31,30,48,25',
+  '22,23,18,22',
+  '28,36,21,22,12,21,17,22,27,27,15,25,23,52,35,23,58,30,24,42,15,23,29,22,44,25,12,25,11,31,13',
+  '27,32,39,12,25,23,29,18,13,19,27,31,39,33,37,23,29,33,43,26,22,51,39,25',
+  '53,46,28,34,18,38,51,66,28,29,43,33,34,31,34,34,24,46,21,43,29,53',
+  '18,25,27,44,27,33,20,29,37,36,21,21,25,29,38,20,41,37,37,21,26,20,37,20,30',
+  '54,55,24,43,26,81,40,40,44,14,47,40,14,17,29,43,27,17,19,8,30,19,32,31,31,32,34,21,30',
+  '17,18,17,22,14,42,22,18,31,19,23,16,22,15,19,14,19,34,11,37,20,12,21,27,28,23,9,27,36,27,21,33,25,33,27,23',
+  '11,70,13,24,17,22,28,36,15,44',
+  '11,20,32,23,19,19,73,18,38,39,36,47,31',
+  '22,23,15,17,14,14,10,17,32,3',
+  '22,13,26,21,27,30,21,22,35,22,20,25,28,22,35,22,16,21,29,29,34,30,17,25,6,14,23,28,25,31,40,22,33,37,16,33,24,41,30,24,34,17',
+  '6,12,8,8,12,10,17,9,20,18,7,8,6,7,5,11,15,50,14,9,13,31,6,10,22,12,14,9,11,12,24,11,22,22,28,12,40,22,13,17,13,11,5,26,17,11,9,14,20,23,19,9,6,7,23,13,11,11,17,12,8,12,11,10,13,20,7,35,36,5,24,20,28,23,10,12,20,72,13,19,16,8,18,12,13,17,7,18,52,17,16,15,5,23,11,13,12,9,9,5,8,28,22,35,45,48,43,13,31,7,10,10,9,8,18,19,2,29,176,7,8,9,4,8,5,6,5,6,8,8,3,18,3,3,21,26,9,8,24,13,10,7,12,15,21,10,20,14,9,6',
+  '33,22,35,27,23,35,27,36,18,32,31,28,25,35,33,33,28,24,29,30,31,29,35,34,28,28,27,28,27,33,31',
+  '18,26,22,16,20,12,29,17,18,20,10,14',
+  '17,17,11,16,16,13,13,14',
+  '31,22,26,6,30,13,25,22,21,34,16,6,22,32,9,14,14,7,25,6,17,25,18,23,12,21,13,29,24,33,9,20,24,17,10,22,38,22,8,31,29,25,28,28,25,13,15,22,26,11,23,15,12,17,13,12,21,14,21,22,11,12,19,12,25,24',
+  '19,37,25,31,31,30,34,22,26,25,23,17,27,22,21,21,27,23,15,18,14,30,40,10,38,24,22,17,32,24,40,44,26,22,19,32,21,28,18,16,18,22,13,30,5,28,7,47,39,46,64,34',
+  '22,22,66,22,22',
+  '28,10,27,17,17,14,27,18,11,22,25,28,23,23,8,63,24,32,14,49,32,31,49,27,17,21,36,26,21,26,18,32,33,31,15,38,28,23,29,49,26,20,27,31,25,24,23,35',
+  '21,49,30,37,31,28,28,27,27,21,45,13',
+  '11,23,5,19,15,11,16,14,17,15,12,14,16,9',
+  '20,32,21',
+  '15,16,15,13,27,14,17,14,15',
+  '21',
+  '17,10,10,11',
+  '16,13,12,13,15,16,20',
+  '15,13,19',
+  '17,20,19',
+  '18,15,20',
+  '15,23',
+  '21,13,10,14,11,15,14,23,17,12,17,14,9,21',
+  '14,17,18,6',
+  '25,23,17,25,48,34,29,34,38,42,30,50,58,36,39,28,27,35,30,34,46,46,39,51,46,75,66,20',
+  '45,28,35,41,43,56,37,38,50,52,33,44,37,72,47,20',
+  '80,52,38,44,39,49,50,56,62,42,54,59,35,35,32,31,37,43,48,47,38,71,56,53',
+  '51,25,36,54,47,71,53,59,41,42,57,50,38,31,27,33,26,40,42,31,25',
+  '26,47,26,37,42,15,60,40,43,48,30,25,52,28,41,40,34,28,41,38,40,30,35,27,27,32,44,31',
+  '32,29,31,25,21,23,25,39,33,21,36,21,14,23,33,27',
+  '31,16,23,21,13,20,40,13,27,33,34,31,13,40,58,24',
+  '24,17,18,18,21,18,16,24,15,18,33,21,14',
+  '24,21,29,31,26,18',
+  '23,22,21,32,33,24',
+  '30,30,21,23',
+  '29,23,25,18',
+  '10,20,13,18,28',
+  '12,17,18',
+  '20,15,16,16,25,21',
+  '18,26,17,22',
+  '16,15,15',
+  '25',
+  '14,18,19,16,14,20,28,13,28,39,40,29,25',
+  '27,26,18,17,20',
+  '25,25,22,19,14',
+  '21,22,18',
+  '10,29,24,21,21',
+  '13',
+  '14',
+  '25',
+  '20,29,22,11,14,17,17,13,21,11,19,17,18,20,8,21,18,24,21,15,27,21',
 ];
 
 function DashVersePrompt() {
@@ -5339,7 +5496,10 @@ function DashVersePrompt() {
   var addRef = function() {
     if (!assembled) return;
     if (refs.some(function(r) { return r.ref === assembled; })) return;
-    setRefs(function(prev) { return prev.concat([{ ref: assembled, date: '', time: '' }]); });
+    // WHEN starts at the current local minute (an untouched row means "now"); the steward can change it
+    var n = new Date(), p2 = function(x) { return String(x).padStart(2, '0'); };
+    var nowDate = n.getFullYear() + '-' + p2(n.getMonth() + 1) + '-' + p2(n.getDate()), nowTime = p2(n.getHours()) + ':' + p2(n.getMinutes());
+    setRefs(function(prev) { return prev.concat([{ ref: assembled, date: nowDate, time: nowTime }]); });
     setBook(''); setChap(''); setFrom(''); setTo('');
   };
 
@@ -5354,12 +5514,18 @@ function DashVersePrompt() {
   var push = function() {
     if (refs.length === 0) return;
     setBusy(true); setMsg('');
-    var newSchedule = refs.filter(function(r) { return r.date && r.time; }).map(function(r) {
+    var existingSchedule = (vp && vp.schedule) ? vp.schedule : [];
+    // a row dated at or before this minute is "now": it goes out as an immediate passage, exactly as an empty row used to,
+    // unless the prompt already carries a schedule (members read only the schedule then, so it is kept as a past entry)
+    var nowMs = Date.now();
+    var anyFuture = refs.some(function(r) { return r.date && r.time && new Date(r.date + 'T' + r.time).getTime() > nowMs; });
+    var keepPast = anyFuture || existingSchedule.length > 0;
+    var isSched = function(r) { return r.date && r.time && (keepPast || new Date(r.date + 'T' + r.time).getTime() > nowMs); };
+    var newSchedule = refs.filter(isSched).map(function(r) {
       return { at: Math.floor(new Date(r.date + 'T' + r.time).getTime() / 1000), ref: r.ref, note: '' };
     });
-    var existingSchedule = (vp && vp.schedule) ? vp.schedule : [];
     var existingRefs = (vp && vp.ref) ? vp.ref : '';
-    var newImmediateRefs = refs.filter(function(r) { return !r.date || !r.time; }).map(function(r) { return r.ref; });
+    var newImmediateRefs = refs.filter(function(r) { return !isSched(r); }).map(function(r) { return r.ref; });
     var mergedSchedule = existingSchedule.concat(newSchedule).sort(function(a, b) { return a.at - b.at; });
     var allRefParts = [];
     if (existingRefs) allRefParts.push(existingRefs);
@@ -5486,7 +5652,8 @@ function DashVersePrompt() {
           {refs.map(function(r, i) {
             var hasSched = r.date && r.time;
             var ts = hasSched ? new Date(r.date + 'T' + r.time).getTime() : 0;
-            var past = ts && ts < Date.now();
+            var past = ts && ts < Date.now() - 60000;   // the default WHEN is the minute it was added: that is "now", not "past"
+            var isNow = !hasSched || (ts && ts <= Date.now());
             return <div key={i} style={{ padding: '12px 14px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
                 <Icon name="book" size={16} color="var(--sage-ink)" />
@@ -5497,13 +5664,13 @@ function DashVersePrompt() {
                 <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '0.3px' }}>WHEN</div>
                 <input type="date" value={r.date} onChange={function(e) { updateRefSched(i, 'date', e.target.value); }} style={Object.assign({}, selStyle, { width: 148, height: 34, fontSize: 12.5 })} />
                 <input type="time" value={r.time} onChange={function(e) { updateRefSched(i, 'time', e.target.value); }} style={Object.assign({}, selStyle, { width: 108, height: 34, fontSize: 12.5 })} />
-                {!hasSched ? <span style={{ fontSize: 11, color: 'var(--ink-3)' }}>now</span> : past ? <span style={{ fontSize: 11, color: 'var(--clay-ink)', fontWeight: 700 }}>past</span> : <span style={{ fontSize: 11, color: 'var(--sage-ink)', fontWeight: 700 }}>scheduled</span>}
+                {isNow && !past ? <span style={{ fontSize: 11, color: 'var(--ink-3)' }}>now</span> : past ? <span style={{ fontSize: 11, color: 'var(--clay-ink)', fontWeight: 700 }}>past</span> : <span style={{ fontSize: 11, color: 'var(--sage-ink)', fontWeight: 700 }}>scheduled</span>}
               </div>
             </div>;
           })}
         </div>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-          <button onClick={push} disabled={busy} className="sk-btn sk-btn--clay" style={{ padding: '10px 18px', fontSize: 14, opacity: busy ? 0.55 : 1 }}><Icon name={refs.some(function(r) { return r.date && r.time; }) ? 'clock' : 'send'} size={15} color="var(--on-clay)" /> {refs.some(function(r) { return r.date && r.time; }) ? 'Schedule' : 'Set for church'}</button>
+          <button onClick={push} disabled={busy} className="sk-btn sk-btn--clay" style={{ padding: '10px 18px', fontSize: 14, opacity: busy ? 0.55 : 1 }}><Icon name={refs.some(function(r) { return r.date && r.time && new Date(r.date + 'T' + r.time).getTime() > Date.now(); }) ? 'clock' : 'send'} size={15} color="var(--on-clay)" /> {refs.some(function(r) { return r.date && r.time && new Date(r.date + 'T' + r.time).getTime() > Date.now(); }) ? 'Schedule' : 'Set for church'}</button>
           {msg ? <span style={{ fontSize: 13, fontWeight: 700, color: msg.indexOf('Failed') === 0 ? 'var(--clay-ink)' : 'var(--sage-ink)' }}>{msg}</span> : null}
         </div>
       </Panel> : null}
@@ -5542,6 +5709,14 @@ window.DashVersePrompt = DashVersePrompt;
 function DashPlans() {
   const shared = window.useStewardPlans();          // plans currently shared with the church
   const [creating, setCreating] = React.useState(false);
+  const [planErr, setPlanErr] = React.useState({});   // plan id -> short "didn't save" note beside its Website switch
+  // Flip "Show on website". The switch reads p.public from the plans subscription, so it only moves once the
+  // new copy has really landed; a refused publish (publishPlan resolves with no ts) leaves it where it was.
+  const togglePublic = (p) => {
+    const note = (m) => setPlanErr(prev => { const n = Object.assign({}, prev); if (m) n[p.id] = m; else delete n[p.id]; return n; });
+    note('');
+    Promise.resolve(window.Steward.publishPlan({ ...p, public: p.public === false })).then(r => { if (!r || !r.ts) note('Not saved'); }, () => note('Not saved'));
+  };
   const sharedIds = new Set(shared.map(p => p.id));
   const library = (window.SK && window.SK.planLibrary) || [];
   const available = library.filter(p => !sharedIds.has(p.id));
@@ -5558,7 +5733,7 @@ function DashPlans() {
         <div style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>{p.sub || (p.days ? p.days.length + ' days' : '')}{p.tag ? ' · ' + p.tag : ''}{isShared && p.publishAt && p.publishAt * 1000 > Date.now() ? ' · ' + new Date(p.publishAt * 1000).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : ''}</div>
       </div>
       {isShared && p.draft ? <button onClick={() => window.Steward.publishPlan({ ...p, draft: false })} className="sk-btn sk-btn--clay" style={{ padding: '7px 11px', fontSize: 12.5 }} title="Publish this plan now"><Icon name="send" size={13} color="var(--on-clay)" /> Publish</button> : null}
-      {isShared && !p.draft ? <button onClick={(e) => { e.stopPropagation(); window.Steward.publishPlan({ ...p, public: p.public === false }); }} role="switch" aria-checked={p.public !== false} aria-label="Show on website" title={p.public === false ? 'Hidden from your website feed' : 'Visible on your website feed'} style={{ width: 38, height: 22, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: p.public !== false ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}><span style={{ position: 'absolute', top: 2, left: p.public !== false ? 18 : 2, width: 18, height: 18, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 2px rgba(0,0,0,.25)' }} /></button> : null}
+      {isShared && !p.draft ? <label onClick={(e) => e.stopPropagation()} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', flexShrink: 0 }}>{planErr[p.id] ? <span role="alert" style={{ fontSize: 11, fontWeight: 700, color: 'var(--danger, #b3261e)' }}>{planErr[p.id]}</span> : null}<span style={{ fontSize: 11, fontWeight: 700, color: p.public !== false ? 'var(--clay-ink)' : 'var(--ink-3)' }}>Website</span><button onClick={(e) => { e.stopPropagation(); togglePublic(p); }} role="switch" aria-checked={p.public !== false} aria-label="Show on website" title={p.public === false ? 'Hidden from your website feed' : 'Visible on your website feed'} style={{ width: 38, height: 22, borderRadius: 999, border: 'none', cursor: 'pointer', flexShrink: 0, background: p.public !== false ? 'var(--clay)' : 'var(--line)', position: 'relative', transition: 'background .2s' }}><span style={{ position: 'absolute', top: 2, left: p.public !== false ? 18 : 2, width: 18, height: 18, borderRadius: 999, background: '#fff', transition: 'left .2s', boxShadow: '0 1px 2px rgba(0,0,0,.25)' }} /></button></label> : null}
       {isShared
         ? <button onClick={() => window.Steward.removePlan(p.id)} className="sk-btn sk-btn--ghost" style={{ padding: '7px 12px', fontSize: 12.5 }}>Unshare</button>
         : <button onClick={() => window.Steward.publishPlan(p)} className="sk-btn sk-btn--clay" style={{ padding: '7px 12px', fontSize: 12.5 }}><Icon name="send" size={14} color="var(--on-clay)" /> Share</button>}
@@ -5590,19 +5765,26 @@ function DashPlans() {
 }
 window.DashPlans = DashPlans;
 
-// Upload OR edit a devotional — a reflection on a passage as a text (.txt) or Markdown (.md) file.
-// Passing `editing` (an existing devo) pre-fills it and re-publishes under the same id; the file is
-// optional when editing (title/passage can change without re-uploading the text).
+// Write, upload OR edit a devotional — a reflection on a passage, typed into a large text box ("Write", the
+// default) or supplied as a text (.txt) / Markdown (.md) file ("Upload file"). Both publish the same document.
+// Passing `editing` (an existing devo) pre-fills it, opens in Write mode with its text loaded, and re-publishes
+// under the same id.
 function NewDevotionalModal({ onClose, editing, seriesOptions }) {
   const [title, setTitle] = React.useState(editing ? editing.title || '' : '');
   const [ref, setRef] = React.useState(editing ? editing.ref || '' : '');
   const [series, setSeries] = React.useState(editing ? editing.series || '' : '');
   const [schedAt, setSchedAt] = React.useState(editing && editing.publishAt ? editing.publishAt : 0);   // unix sec; 0 = publish now
   const [file, setFile] = React.useState(null);   // { type, name, text? } — a NEW replacement file
+  const [mode, setMode] = React.useState('write');   // write | upload — Write is the default, and what editing opens in
+  const [body, setBody] = React.useState(editing ? editing.text || '' : '');   // the typed text; kept when switching modes
+  const bodyRef = React.useRef(null);
   const [busy, setBusy] = React.useState(false);
+  const [saveErr, setSaveErr] = React.useState('');   // set when the engine refuses the publish; the dialog stays open with the text intact
   const toLocalInput = (sec) => { if (!sec) return ''; const d = new Date(sec * 1000); const p = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`; };
   const fromLocalInput = (s) => { if (!s) return 0; const t = new Date(s).getTime(); return Number.isFinite(t) ? Math.floor(t / 1000) : 0; };
   const isFuture = schedAt && schedAt * 1000 > Date.now();
+  // the text box grows with what is written, so a long reflection is never a tiny scrolling window
+  React.useEffect(() => { const el = bodyRef.current; if (el && el.style) { el.style.height = 'auto'; el.style.height = Math.max(el.scrollHeight, 280) + 'px'; } }, [body, mode]);
   const pick = (f) => {
     if (!f) return;
     const isText = /\.(txt|md|markdown)$/i.test(f.name) || /^text\//i.test(f.type) || f.type === '';
@@ -5614,22 +5796,34 @@ function NewDevotionalModal({ onClose, editing, seriesOptions }) {
     r.readAsText(f);
     if (!title.trim()) setTitle(f.name.replace(/\.(txt|md|markdown)$/i, ''));
   };
-  const canSave = title.trim() && (file ? !file.error : !!editing) && !busy;   // new needs a file; edit can reuse the old text
+  // Write needs some text (an old devotional that was saved with none may still be edited without adding any);  Upload needs a good file (or, when editing, keeps the current text) — never an empty body
+  const canSave = title.trim() && (mode === 'write' ? (!!body.trim() || (!!editing && !String(editing.text || '').trim())) : (file ? !file.error : !!editing)) && !busy;
   const wasDraft = !editing || !!editing.draft;   // new uploads + held items default to draft; a live item stays live
   // asDraft: true holds it (hidden from members); false publishes it (live now or on its schedule)
   const create = (asDraft) => {
     if (!canSave) return;
-    setBusy(true);
-    const text = file ? file.text : (editing ? editing.text : '');
-    const type = file ? file.type : (editing ? editing.type : 'txt');
-    Promise.resolve(window.Steward.publishDevotional({ id: editing ? editing.id : undefined, title: title.trim(), ref: ref.trim(), series: series.trim(), publishAt: isFuture ? schedAt : 0, draft: !!asDraft, type, text: text || '', order: editing ? editing.order : undefined, public: editing ? editing.public : undefined })).then(() => onClose());
+    setBusy(true); setSaveErr('');
+    const useFile = mode === 'upload' && file;
+    const text = mode === 'write' ? body : (useFile ? file.text : (editing ? editing.text : ''));
+    const type = useFile ? file.type : (editing ? editing.type || 'txt' : 'txt');
+    Promise.resolve(window.Steward.publishDevotional({ id: editing ? editing.id : undefined, title: title.trim(), ref: ref.trim(), series: series.trim(), publishAt: isFuture ? schedAt : 0, draft: !!asDraft, type, text: text || '', order: editing ? editing.order : undefined, public: editing ? editing.public : undefined }))
+      .then(r => { if (r == null) { setBusy(false); setSaveErr('Not saved — try again. Your text is still here.'); return; } onClose(); },
+            () => { setBusy(false); setSaveErr('Not saved — try again. Your text is still here.'); });
   };
+  const modeBtn = (k, label, icon) => (
+    <button type="button" onClick={() => setMode(k)} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, padding: '10px 12px', borderRadius: 11, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, background: mode === k ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'var(--surface-2)', border: '1.5px solid ' + (mode === k ? 'var(--clay)' : 'var(--line)'), color: mode === k ? 'var(--clay-ink)' : 'var(--ink-2)' }}><Icon name={icon} size={14} color={mode === k ? 'var(--clay)' : 'var(--ink-3)'} /> {label}</button>
+  );
   const dlgRef = useStewDialog(onClose);   // a11y: Escape + focus (dialog semantics on the panel below)
   return (
     <div onClick={onClose} style={{ position: 'fixed', overflowY: 'auto', inset: 0, zIndex: 90, background: 'rgba(40,32,24,.42)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'safe center', justifyContent: 'center' }}>
-      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={editing ? 'Edit devotional' : 'Upload a devotional'} tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 480, maxWidth: '92%', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)', padding: 28 }}>
-        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22 }}>{editing ? 'Edit devotional' : 'Upload a devotional'}</div>
-        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 18px' }}>{editing ? 'Update the title or passage, or replace the text file. Members see the change in their app.' : 'A reflection on a passage, as a text (.txt) or Markdown (.md) file. Your congregation reads it in their app.'}</p>
+      <div ref={dlgRef} role="dialog" aria-modal="true" aria-label={editing ? 'Edit devotional' : 'New devotional'} tabIndex={-1} onClick={e => e.stopPropagation()} style={{ width: 560, maxWidth: '92%', maxHeight: '88%', display: 'flex', flexDirection: 'column', overflow: 'hidden', background: 'var(--surface)', borderRadius: 22, border: '1px solid var(--line)', boxShadow: 'var(--shadow-lg)' }}>
+        <div style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', padding: '28px 28px 8px' }}>
+        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 22 }}>{editing ? 'Edit devotional' : 'New devotional'}</div>
+        <p style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, margin: '8px 0 14px' }}>{editing ? 'Update the wording, title or passage. Members see the change in their app.' : 'Write a reflection, or upload one. Your congregation reads it in their app.'}</p>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+          {modeBtn('write', 'Write', 'pen')}
+          {modeBtn('upload', 'Upload file', 'share')}
+        </div>
         <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 6 }}>Title</div>
         <input value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Resting in Psalm 23" style={{ width: '100%', boxSizing: 'border-box', height: 46, border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '0 14px', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none', marginBottom: 14 }} />
         <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 6 }}>Passage (optional)</div>
@@ -5648,6 +5842,12 @@ function NewDevotionalModal({ onClose, editing, seriesOptions }) {
             <div style={{ fontSize: 12, color: isFuture ? 'var(--ink-2)' : 'var(--clay-ink)', marginBottom: 14 }}>{isFuture ? `Hidden from members until ${new Date(schedAt * 1000).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}.` : 'That time is in the past — it will publish immediately.'}</div>
           </React.Fragment>
         ) : null}
+        {mode === 'write' ? (
+          <React.Fragment>
+            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 6 }}>Devotional</div>
+            <textarea ref={bodyRef} aria-label="Devotional text" value={body} onChange={e => setBody(e.target.value)} placeholder="Begin writing…" style={{ display: 'block', width: '100%', boxSizing: 'border-box', minHeight: 280, border: '1px solid var(--line)', borderRadius: 12, background: 'var(--surface-2)', padding: '16px 18px', fontSize: 16.5, lineHeight: 1.75, fontFamily: 'var(--font-serif)', color: 'var(--ink)', outline: 'none', resize: 'vertical', whiteSpace: 'pre-wrap', overflow: 'hidden' }} />
+          </React.Fragment>
+        ) : (
         <label style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '14px 16px', borderRadius: 13, border: '1px dashed var(--line)', background: 'var(--surface-2)', cursor: 'pointer' }}>
           <Icon name="read" size={20} color="var(--clay)" />
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -5656,7 +5856,10 @@ function NewDevotionalModal({ onClose, editing, seriesOptions }) {
           </div>
           <input type="file" accept=".txt,.md,.markdown,text/plain,text/markdown" onChange={e => pick(e.target.files && e.target.files[0])} style={{ display: 'none' }} />
         </label>
-        <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
+        )}
+        </div>
+        {saveErr ? <div role="alert" style={{ flex: '0 0 auto', padding: '10px 28px 0', fontSize: 13, color: 'var(--clay-ink)' }}>{saveErr}</div> : null}
+        <div style={{ flex: '0 0 auto', display: 'flex', gap: 10, padding: '14px 28px 24px', borderTop: '1px solid var(--line)' }}>
           <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: '0 0 auto', padding: '12px 14px', fontSize: 14 }}>Cancel</button>
           {wasDraft ? (
             <React.Fragment>
@@ -5758,10 +5961,10 @@ function DashDevotionals() {
         action={<div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           {draftCount > 0 ? <button onClick={() => { if (confirm(`Publish ${draftCount} draft${draftCount === 1 ? '' : 's'}? Scheduled ones still wait for their date.`)) publishDrafts(devos); }} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }} title="Take all held drafts live (keeping any schedules)"><Icon name="send" size={15} color="var(--on-clay)" /> Publish {draftCount} draft{draftCount === 1 ? '' : 's'}</button> : null}
           <button onClick={() => window.TrinityTemplates.openDevoTemplate()} className="sk-btn sk-btn--ghost" style={{ padding: '8px 12px', fontSize: 13 }} title="The writing template + house style for a devotional series"><Icon name="receipt" size={15} color="currentColor" /> Template</button>
-          <button onClick={() => setAdding(true)} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="plus" size={15} color="var(--on-clay)" /> Upload devotional</button>
+          <button onClick={() => setAdding(true)} className="sk-btn sk-btn--clay" style={{ padding: '8px 13px', fontSize: 13 }}><Icon name="plus" size={15} color="var(--on-clay)" /> New devotional</button>
         </div>} style={{ height: '100%' }}>
         {devos.length === 0 ? (
-          <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, padding: '6px 2px' }}>No devotionals yet. Upload a .txt or .md reflection on a passage — your congregation reads it in their app.</div>
+          <div style={{ fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5, padding: '6px 2px' }}>No devotionals yet. Write a reflection on a passage, or upload a .txt or .md file — your congregation reads it in their app.</div>
         ) : (
           <React.Fragment>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '0 2px 10px', flexWrap: 'wrap' }}>
@@ -8645,7 +8848,7 @@ function StewBackupModal({ church, onClose }) {
         </div>
         <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', marginBottom: 7 }}>Passphrase</div>
         <div style={{ display: 'flex', gap: 9 }}>
-          <input value={pass} onChange={e => { setPass(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') make(); }} type={show ? 'text' : 'password'} autoFocus inputMode="text" placeholder="four random words, or 12+ characters" style={{ flex: 1, height: 46, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
+          <input value={pass} aria-label="Choose a passphrase for the backup file" onChange={e => { setPass(e.target.value); setErr(''); }} onKeyDown={e => { if (e.key === 'Enter') make(); }} type={show ? 'text' : 'password'} autoFocus inputMode="text" placeholder="four random words, or 12+ characters" style={{ flex: 1, height: 46, padding: '0 13px', borderRadius: 12, border: '1px solid var(--line)', background: 'var(--surface-2)', fontSize: 15, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
           <button onClick={() => setShow(s => !s)} className="sk-btn sk-btn--ghost" style={{ padding: '0 14px' }}>{show ? 'Hide' : 'Show'}</button>
         </div>
         {strength ? <div style={{ fontSize: 12, color: strength.c, fontWeight: 600, marginTop: 7 }}>{strength.t}{strength.c === 'var(--clay)' ? ' · longer is safer' : ''}</div> : null}
@@ -9374,6 +9577,7 @@ function DashSermons() {
   const [encOn, setEncOn] = React.useState(_churchEnc);
   const autoBackups = React.useMemo(() => { try { return (window.Steward.mediaHosts ? window.Steward.mediaHosts() : []).slice(1); } catch { return []; } }, []);
   const [mirrorHosts, setMirrorHosts] = React.useState(autoBackups.join(', '));   // auto-filled from the church's other relays; editable
+  const [featureChoiceId, setFeatureChoiceId] = React.useState(null);   // the sermon whose "Feature and notify / Feature quietly" choice is open
   const [pinnedId, setPinnedId] = React.useState(null);   // the currently-featured sermon (pushed to members' Today)
   const conn = window.useStewardConn ? window.useStewardConn() : 0;   // re-subscribe after a relay restart / reconnect (else a sermon uploaded elsewhere never appears)
   // FOLLOW A CHURCH SWITCH. These three were keyed on `conn` alone, so an owner who stewards a second church and
@@ -9390,7 +9594,10 @@ function DashSermons() {
   React.useEffect(() => (window.Steward.subscribeSermons ? window.Steward.subscribeSermons(list => { setSermons(list || []); setSermonsLoaded(true); }) : undefined), [conn, _sermIdv]);
   React.useEffect(() => (window.Steward.subscribeMediaKey ? window.Steward.subscribeMediaKey() : undefined), [conn, _sermIdv]);
   React.useEffect(() => (window.Steward.subscribePinnedSermon ? window.Steward.subscribePinnedSermon(p => setPinnedId(p && p.id)) : undefined), [conn, _sermIdv]);
-  const togglePin = (s) => { if (pinnedId === s.id) window.Steward.unpinSermon(); else window.Steward.pinSermon(s); };
+  // Featured -> tap unfeatures. Not featured -> tap opens the choice; the steward decides EVERY time whether
+  // members are notified (no default). `notify:false` is the quiet pin; the notifying one passes `true`.
+  const togglePin = (s) => { if (pinnedId === s.id) { setFeatureChoiceId(null); window.Steward.unpinSermon(); } else setFeatureChoiceId(featureChoiceId === s.id ? null : s.id); };
+  const doFeature = (s, notifyMembers) => { setFeatureChoiceId(null); return window.Steward.pinSermon(s, { notify: notifyMembers }); };
   // ── A CONSOLE THAT MAY NOT PUBLISH LEARNS SO BEFORE ANY BYTES LEAVE THE PHONE ───────────────────────────
   // AUDIT-steward-doc-rules-round2-2026-09-22, finding R1. At the time this was written the engine refused
   // `trinityone/sermon:` on EVERY delegated console (publishSermon / removeSermon, and the relay too) — but
@@ -9481,7 +9688,7 @@ function DashSermons() {
       const pub = await window.Steward.publishSermon({ title: (fields && fields.title) || f.name.replace(/\.[^.]+$/, ''), desc: (fields && fields.desc) || undefined, sha256: b.sha256, host: b.host, hosts: b.hosts, mime: b.mime, size: b.size, enc: b.enc });
       uploadedSigs.current.add(f.name + '|' + f.size + '|' + f.lastModified);   // published, so a repeat really would be a second copy
       let pinned = false;
-      if (notify && pub && window.Steward.pinSermon) { try { pinned = !!(await window.Steward.pinSermon(pub)); } catch (e) {} }
+      if (notify && pub && window.Steward.pinSermon) { try { pinned = !!(await window.Steward.pinSermon(pub, { notify: true })); } catch (e) {} }
       const backups = (b.hosts || []).length - 1;
       setUpMsg('✓ Uploaded “' + f.name + '”' + (b.enc ? ' (encrypted)' : '') + (notify ? (pinned ? ' · members notified' : ' · saved, but members weren’t notified — tap 📌 on it to try again') : '') + (backups > 0 ? ` · ${backups} backup${backups > 1 ? 's' : ''}` : (mirrors.length ? ' · backups failed' : '')));
       ok = true;
@@ -9538,14 +9745,20 @@ function DashSermons() {
       <Panel title="Self-hosted sermons">
         <div className="set-note" style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5, marginBottom: 12 }}>Upload the church’s <b>own audio or video</b> — it lives on your relay, <b>members only</b> (no YouTube, no public feed). Both land in members’ <b>Watch &amp; Listen</b> tab — audio under Listen, video under Watch. Great over a thin connection.</div>
         {sermons.length ? <div style={{ display: 'flex', flexDirection: 'column', gap: 7, marginBottom: 12 }}>{sermons.map(s => (
-          <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+          <div key={s.id} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, padding: '9px 12px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
             <Icon name={String(s.mime || '').startsWith('video') ? 'play' : 'headphones'} size={16} color="var(--sage)" />
             <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 13.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.title}</div><div style={{ fontSize: 11.5, color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.desc ? s.desc : (fmtSize(s.size || 0) + (s.enc ? ' · encrypted' : ''))}</div></div>
             {/* EDIT IS A `sermon:` WRITE TOO — it re-publishes the same document — so it is locked on a
                 delegated console beside the other two, rather than letting a steward retype a title and
                 meet the refusal only once they press Save. */}
             <button onClick={() => { if (_churchOnly) { setUpMsg('✗ ' + SERMON_OWNER_ONLY); return; } setEditing(s); }} aria-disabled={_churchOnly || undefined} title={_churchOnly ? SERMON_OWNER_ONLY : 'Edit name & details'} aria-label="Edit sermon" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '8px 10px', minWidth: 40, minHeight: 40, boxSizing: 'border-box', alignItems: 'center', justifyContent: 'center', cursor: _churchOnly ? 'not-allowed' : 'pointer', opacity: _churchOnly ? 0.55 : 1, color: 'var(--ink-3)', display: 'flex' }}><Icon name={_churchOnly ? 'lock' : 'pen'} size={14} color="currentColor" /></button>
-            <button onClick={() => togglePin(s)} title={pinnedId === s.id ? 'Pinned to members’ Today — tap to unpin' : 'Pin to members’ Today (sends a notification)'} style={{ border: '1px solid ' + (pinnedId === s.id ? 'var(--clay)' : 'var(--line)'), background: pinnedId === s.id ? 'var(--clay)' : 'var(--surface)', borderRadius: 9, padding: '8px 10px', minWidth: 40, minHeight: 40, boxSizing: 'border-box', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: pinnedId === s.id ? '#fff' : 'var(--ink-3)', display: 'flex' }}><Icon name="pin" size={14} color="currentColor" /></button>
+            <button onClick={() => togglePin(s)} title={pinnedId === s.id ? 'Pinned to members’ Today — tap to unpin' : 'Feature on members’ Today'} style={{ border: '1px solid ' + (pinnedId === s.id ? 'var(--clay)' : 'var(--line)'), background: pinnedId === s.id ? 'var(--clay)' : 'var(--surface)', borderRadius: 9, padding: '8px 10px', minHeight: 40, boxSizing: 'border-box', alignItems: 'center', justifyContent: 'center', gap: 5, cursor: 'pointer', color: pinnedId === s.id ? '#fff' : 'var(--ink-2)', fontSize: 12.5, fontWeight: 700, fontFamily: 'var(--font-ui)', display: 'flex' }}><Icon name="pin" size={14} color="currentColor" />{pinnedId === s.id ? 'Featured' : 'Feature'}</button>
+            {featureChoiceId === s.id && pinnedId !== s.id ? (
+              <div style={{ flexBasis: '100%', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <button onClick={() => doFeature(s, true)} className="sk-btn sk-btn--clay" style={{ fontSize: 12.5, minHeight: 40 }}>Feature and notify</button>
+                <button onClick={() => doFeature(s, false)} className="sk-btn sk-btn--ghost" style={{ fontSize: 12.5, minHeight: 40 }}>Feature quietly</button>
+              </div>
+            ) : null}
             {/* NO "This can’t be undone" OVER SOMETHING THAT CANNOT HAPPEN. The confirmation sheet used to
                 open on a delegated console and take the press, and only then did the engine refuse. */}
             <button onClick={() => { if (_churchOnly) { setUpMsg('✗ ' + SERMON_REMOVE_OWNER_ONLY); return; } setPendingDelete(s); }} aria-disabled={_churchOnly || undefined} title={_churchOnly ? SERMON_REMOVE_OWNER_ONLY : 'Remove'} aria-label="Remove sermon" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '8px 10px', minWidth: 40, minHeight: 40, boxSizing: 'border-box', alignItems: 'center', justifyContent: 'center', cursor: _churchOnly ? 'not-allowed' : 'pointer', opacity: _churchOnly ? 0.55 : 1, color: 'var(--ink-3)', display: 'flex' }}><Icon name={_churchOnly ? 'lock' : 'trash'} size={14} color="currentColor" /></button>
@@ -11084,7 +11297,7 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
   // bodies, so the list and the detail cannot disagree: a page missing from this list cannot be opened, and
   // one present in it always has a body.
   const groups = React.useMemo(() => SETTINGS_GROUPS
-    .map(([g, items]) => [g, items.filter(p => (delegated ? !p.owner : !p.delegate))])
+    .map(([g, items]) => [g, items.filter(p => (delegated ? !p.owner : !p.delegate) && (p.k !== 'network' || window.NETWORKS_ENABLED === true))])   // NETWORKS SWITCH: the Network page
     .filter(([, items]) => items.length), [delegated]);
   const pages = groups.reduce((a, [, items]) => a.concat(items), []);
   // ON A PHONE THE LIST IS THE FIRST SCREEN and a page opens on tap, so nothing is open to begin with. In a
@@ -11370,7 +11583,7 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
       {open === 'add-relay' ? <DashAddRelayCard /> : null}
       {open === 'history' ? <DashRelayHistoryCard /> : null}
       {open === 'ownbox' ? <DashRunRelayCard /> : null}
-      {open === 'network' ? <DashNetworksPanel /> : null}
+      {open === 'network' && window.NETWORKS_ENABLED === true ? <DashNetworksPanel /> : null}
 
       {open === 'access' ? (
       <Panel title="Security">
@@ -11437,7 +11650,7 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
           <div style={{ marginTop: 10, padding: '11px 13px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
             <div style={{ fontSize: 12.5, color: 'var(--sage-ink)', fontWeight: 700, marginBottom: 7 }}>✓ {cFile.name}</div>
             <div style={{ display: 'flex', gap: 8 }}>
-              <input type={cShow ? 'text' : 'password'} value={cPass} autoCapitalize="none" autoCorrect="off" spellCheck={false}
+              <input type={cShow ? 'text' : 'password'} value={cPass} aria-label="Passphrase of the backup file" autoCapitalize="none" autoCorrect="off" spellCheck={false}
                 onChange={e => { setCPass(e.target.value); setCErr(''); }}
                 onKeyDown={e => { if (e.key === 'Enter' && cPass) restoreFromFile(); }}
                 placeholder="the passphrase for this backup"

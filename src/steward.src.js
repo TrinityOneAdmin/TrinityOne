@@ -2552,6 +2552,45 @@ function _blockedLastSet(cp) {
   try { const l = JSON.parse(lsGet(BLOCKED_LAST_LS + cp) || '[]'); return new Set((Array.isArray(l) ? l : []).map(p => String(p).toLowerCase())); }
   catch (e) { return new Set(); }
 }
+// THIS CHURCH'S LAST GENUINE CHILDREN LIST ON THIS DEVICE — readMinors' floor while a relay is down, and its answer
+// when none is reachable (final audit of 1cf269c, option A). Written by readMinors (a genuine answer; the union
+// while a relay is left out) and by setMinors (this console's own marking, once it landed, on the same church).
+//
+// SEALED AT REST (owner, 2026-10-10, audit of c17a640). It names which members are CHILDREN, and the console
+// already keeps a plaintext pubkey->name members cache, so a plaintext copy let a seized console name the
+// congregation's children. It is NIP-44-sealed with this console's own key (churchSk), exactly as the network
+// phrases are (saveNetKey / netKeys), and carries the church it is for inside the seal. With the key locked or
+// absent it cannot be opened and reads as ABSENT, so readMinors falls to UNKNOWN — the safe side. A value in the
+// old plaintext shape (a bare array, c17a640) is deleted on sight, never used.
+//
+// AND IT DOES NOT OUTLIVE THE CHURCH IT IS FOR ON THIS DEVICE: removeKey() and _resetChurchScopedState() (a key
+// restored or discarded) delete every copy; setActiveIdentity() deletes every copy except the church it enters,
+// so a console that stops acting for a church — delegated or not — leaves no list of its children behind.
+const MINORS_LAST_LS = 'trinityone.steward.minorslast.';
+function _minorsLastGet(cp) {
+  if (!cp || !churchSk) return null;
+  const v = lsGet(MINORS_LAST_LS + cp);
+  if (v == null) return null;
+  let o = null; try { o = JSON.parse(v); } catch (e) { o = null; }
+  if (!o || typeof o !== 'object' || Array.isArray(o) || typeof o.s !== 'string') { try { localStorage.removeItem(MINORS_LAST_LS + cp); } catch (e) {} return null; }
+  try {
+    const d = JSON.parse(nip44d(o.s, churchSk));
+    if (!d || d.cp !== cp || !Array.isArray(d.list)) return null;
+    return d.list.map(p => String(p).toLowerCase());
+  } catch (e) { return null; }   // sealed under a key this console no longer holds
+}
+function _minorsLastSet(cp, list) {
+  if (!cp || !churchSk) return;
+  const clean = [...new Set((list || []).map(p => String(p).toLowerCase()))];
+  try { lsSet(MINORS_LAST_LS + cp, JSON.stringify({ s: nip44e(JSON.stringify({ cp, list: clean }), churchSk) })); } catch (e) {}
+}
+function _minorsLastClear(keep) {
+  try {
+    const ks = [];
+    for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k && k.startsWith(MINORS_LAST_LS) && (!keep || k !== MINORS_LAST_LS + keep)) ks.push(k); }
+    for (const k of ks) localStorage.removeItem(k);
+  } catch (e) {}
+}
 function _noteBlockedList(cp, epoch, list, at) {
   if (!_stillOn(cp, epoch) || (at || 0) < _localBlockedAt) return;   // another church now, or older than what we hold
   _localBlocked = new Set((list || []).map(p => String(p).toLowerCase()));
@@ -2854,6 +2893,8 @@ function _resetChurchScopedState() {
   _mediaKeyHex = null; _mediaKeyRing = []; _mediaKeyDocKeys = null; _mediaKeyChecked = false; _mediaKeyPushRefused = null;
   // …and no read, publish or "we looked" opened before this line may count afterwards — see _keyReadOk.
   _keyReadEpoch++; _careKeyVer++; _mediaKeyVer++;
+  try { const M = window.StewardMeals; if (M && M.dropPendingCareTeam) M.dropPendingCareTeam(); } catch (e) {}   // a care list waiting to be retried belongs to the church it was asked for
+  _minorsLastClear('');   // the key that sealed every device copy of a children list is gone or replaced
   // Every capability envelope belongs here too. The comment above is not decorative: carrying a `checked`
   // flag across a church switch answers "already looked" for a church nobody has looked at.
   for (const k of Object.keys(CAP_KEYS)) _capState[k] = { ring: [], docKeys: null, rev: 1, at: 0, checked: false };
@@ -3383,6 +3424,132 @@ async function deriveAes(pin, salt, iterations) {
   const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(pin), 'PBKDF2', false, ['deriveKey']);
   return crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: iterations || PIN_ITER_LEGACY, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
 }
+// The same PBKDF2 output as deriveAes, as 32 raw bytes — what "stay open" keeps instead of the PIN itself.
+async function deriveAesBits(pin, salt, iterations) {
+  const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(pin), 'PBKDF2', false, ['deriveBits']);
+  return new Uint8Array(await crypto.subtle.deriveBits({ name: 'PBKDF2', salt, iterations: iterations || PIN_ITER_LEGACY, hash: 'SHA-256' }, base, 256));
+}
+// ── "STAY OPEN FOR 30 DAYS" — steward APK only ───────────────────────────────────────────────────────────────
+//
+// It used to be `{ p: <the PIN in plaintext>, until }` in localStorage, on every platform. Threat model: lawful
+// compulsion and DEVICE SEIZURE. A plaintext PIN in a file is read straight off a forensic image, and a PIN is a
+// human secret people reuse.
+//
+// WHAT IS KEPT NOW is the PBKDF2 output for the CURRENT blob (its salt + iteration count), not the PIN. It opens
+// this one ciphertext and nothing else, tells nobody what the PIN was, and is dead the moment the PIN changes
+// (a new PIN is a new salt) — so a missed clear on some future PIN path cannot leave a working record behind.
+// It lives ONLY in the OS hardware store (the plugin the church key and the member app's "remember" use), with
+// its expiry and the church it was made for inside the same record, so "clear site data" cannot extend it.
+//
+// HONEST LIMIT: on a seized phone this record opens the church exactly as the PIN would — that is what "stay
+// open" means. What it changes is WHERE that power sits (the Keystore, not a file) and that the PIN never leaks.
+//
+// NOT OFFERED IN A BROWSER. There is no hardware store there; the only place for it is a file. available()
+// answers false and every write is refused. The legacy plaintext record is deleted on every platform.
+const STAY_LEGACY_LS = 'trinityone.steward.stayopen';     // the old plaintext-PIN record: delete on sight, never read
+const STAY_SS = 'trinityone.steward.stayopen.v2';         // SecureStorage key (native only)
+const STAY_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+function makeStayOpen(deps) {
+  const { secure, isNative, lsRemove, now, readBlob, deriveBits, pubOf } = deps;
+  let replayed = false;   // the record is replayed ONCE per launch: a lock later in the session really locks
+  const purgeLegacy = () => { try { lsRemove(STAY_LEGACY_LS); } catch (e) {} };
+  const clear = async () => {
+    purgeLegacy();
+    if (!isNative()) return;
+    try { const { S } = await secure(); await S.remove(STAY_SS); } catch (e) { console.warn('[steward] stay-open clear failed', e); }
+  };
+  const blobOf = async () => {
+    try { const raw = await readBlob(); const b = raw ? JSON.parse(raw) : null; return b && b.ct && b.iv && b.salt ? b : null; }
+    catch (e) { return null; }
+  };
+  const openBlob = async (bits, blob) => {
+    const key = await crypto.subtle.importKey('raw', bits, { name: 'AES-GCM' }, false, ['decrypt']);
+    return new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64d(blob.iv) }, key, b64d(blob.ct)));
+  };
+  // The live record and the blob it is for, or null. Anything expired, malformed, or made for a different
+  // blob (a PIN change, a restore) is DELETED here, at the read, so no caller has to remember to.
+  const read = async () => {
+    purgeLegacy();
+    if (!isNative()) return null;
+    let rec = null;
+    try { const { S } = await secure(); const s = await S.get(STAY_SS); if (!s) return null; rec = JSON.parse(String(s)); }
+    catch (e) { await clear(); return null; }
+    if (!rec || rec.v !== 1 || typeof rec.k !== 'string' || typeof rec.salt !== 'string' || typeof rec.owner !== 'string' || !(rec.until > now())) { await clear(); return null; }
+    const blob = await blobOf();
+    if (!blob || blob.salt !== rec.salt) { await clear(); return null; }
+    return { rec, blob };
+  };
+  return {
+    available: () => !!isNative(),
+    purgeLegacy,
+    clear,
+    async status() { const r = await read(); return { available: !!isNative(), active: !!r }; },
+    // → { seed } on success; { seed: null, skipped: true } after the first try this launch; otherwise
+    // { seed: null } with any record deleted. The owner check: the seed must be the church the record names.
+    async replay() {
+      if (replayed) return { seed: null, skipped: true };
+      replayed = true;
+      const r = await read();
+      if (!r) return { seed: null };
+      try {
+        const seed = await openBlob(b64d(r.rec.k), r.blob);
+        if (pubOf(seed) !== r.rec.owner) throw new Error('stay-open record is for a different church');
+        return { seed };
+      } catch (e) { await clear(); return { seed: null, failed: true }; }
+    },
+    // after a successful unlock with `pin`: on → keep the derived key for 30 days; off → delete. TRUE only if
+    // the result is what was asked for (a write is read back).
+    async save(pin, on) {
+      replayed = true;   // the steward typed the PIN this launch; nothing left to replay
+      if (!on || !isNative()) { await clear(); return !on; }
+      const blob = await blobOf();
+      if (!blob) return false;
+      try {
+        const bits = await deriveBits(pin, b64d(blob.salt), blob.it || PIN_ITER_LEGACY);
+        const seed = await openBlob(bits, blob);   // proves these bytes open THIS blob before anything is kept
+        const payload = JSON.stringify({ v: 1, k: b64e(bits), salt: blob.salt, owner: pubOf(seed), until: now() + STAY_TTL_MS });
+        const { S } = await secure();
+        await S.set(STAY_SS, payload);
+        const back = await S.get(STAY_SS);
+        if (back == null || String(back) !== payload) { await clear(); return false; }
+        return true;
+      } catch (e) { console.warn('[steward] stay-open save failed', e); await clear(); return false; }
+    },
+  };
+}
+// The decrypted seed goes into memory and the console comes back as whoever it was before the lock. Shared by
+// unlock(pin) and the stay-open replay so both restore the acting identity the same way.
+function _enterUnlocked(seed) {
+  setKey(seed); window.Steward.locked = false;
+  // RESTORE THE ACTING IDENTITY, or stop claiming one.
+  //
+  // setKey() rebuilds `pub` from THIS DEVICE'S OWN seed. For an owner that is the church and everything is
+  // consistent. For a delegated steward it is their personal key — while `actingChurch` survives the lock
+  // untouched, because lock() only forgets key material. So without this the console comes back saying
+  // "Acting as steward for <church>" in the header while every subscription reads the DELEGATE'S OWN
+  // empty documents.
+  //
+  // Measured on a live console, 2026-08-20 (round 7, R7-25): lock then unlock, and subscribeSafeguard goes
+  // from {minors: 1, guardians: 1, loaded: true} to {minors: 0, guardians: 0, loaded: false}. The kids
+  // check-in panel then renders "No children marked yet" — which hides the whole register INCLUDING a
+  // child currently checked in, so there is no "Check out" control left to press. A safeguarding lead
+  // whose console idle-locked could not check a child out, and nothing anywhere said why. Every symptom
+  // is silence; the header goes on lying throughout.
+  //
+  // Clear first, then re-enter through setActiveIdentity() — the one function that sets `pub` and
+  // `actingChurch` together — so a failure to get back leaves the console honestly in its own identity
+  // rather than half in someone else's.
+  if (actingChurch) {
+    const target = actingChurch;
+    actingChurch = ''; window.Steward.actingChurch = '';
+    try { window.Steward.setActiveIdentity(target); } catch (e) {}
+  }
+  window.dispatchEvent(new CustomEvent('steward-key', { detail: { npub: window.Steward.npub } }));
+}
+const _stay = makeStayOpen({
+  secure: _secureStore, isNative: _isNative, lsRemove: (k) => localStorage.removeItem(k), now: () => Date.now(),
+  readBlob: encBlobRaw, deriveBits: deriveAesBits, pubOf: (m) => getPublicKey(privateKeyFromSeedWords(m)),
+});
 // HANDOFF-2026-07-31 (1). nostr-tools does NOT reject when it cannot open the socket — SimplePool.publish
 // RESOLVES that relay's promise with the plain string `"connection failure: " + err`. A resolution satisfies
 // Promise.any, so this fell straight through to the success path: it fired steward-publish-ok, returned the
@@ -5105,6 +5272,8 @@ window.Steward = {
     // without it, "Remove this church from this device" can leave the church key in the Keystore for ever with
     // nothing left to notice. AUDIT-2026-07-31.
     try { encBlobRemoveResume(); } catch (e) {}
+    // The old "stay open" record held the PIN in plaintext in localStorage. Deleted on every load, never read.
+    _stay.purgeLegacy();
     if (mnemonicOverride) {
       // test hook — keep behaviour but force PIN setup so an injected key never persists plaintext past first boot
       lsSet(KEY_LS, mnemonicOverride); setKey(mnemonicOverride);
@@ -5132,6 +5301,7 @@ window.Steward = {
       // new church", and the resume re-announces once it knows.
       window.Steward.locked = true; return false;
     }
+    _stay.clear();   // no church key on this device: a stay-open record can only be left over from one that went
     return false;
   },
   // ---- PIN lock API ----
@@ -5179,6 +5349,9 @@ window.Steward = {
     // The file restore is now committed: the steward localStorage keys the file wrote are kept.
     // Clear the snapshot so discardUnsavedKey cannot undo them after a successful PIN.
     try { if (window.TrinityBackup && window.TrinityBackup._commitStewardRestore) window.TrinityBackup._commitStewardRestore(); } catch (e) {}
+    // A NEW PIN ENDS "STAY OPEN". The record could no longer open the new blob anyway (new salt), but it is
+    // deleted rather than left to be found dead: the steward chose a new secret and expects to be asked for it.
+    await _stay.clear();
     _setNeedsPin(false);   // SECURITY-AUDIT-2026-06-25 Critical-2: encrypted form now persisted; clear the force flag
     return true;
   },
@@ -5197,33 +5370,21 @@ window.Steward = {
     try {
       const o = JSON.parse(raw);
       const seed = new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64d(o.iv) }, await deriveAes(pin, b64d(o.salt), o.it || PIN_ITER_LEGACY), b64d(o.ct)));
-      setKey(seed); window.Steward.locked = false;
-      // RESTORE THE ACTING IDENTITY, or stop claiming one.
-      //
-      // setKey() rebuilds `pub` from THIS DEVICE'S OWN seed. For an owner that is the church and everything is
-      // consistent. For a delegated steward it is their personal key — while `actingChurch` survives the lock
-      // untouched, because lock() only forgets key material. So without this the console comes back saying
-      // "Acting as steward for <church>" in the header while every subscription reads the DELEGATE'S OWN
-      // empty documents.
-      //
-      // Measured on a live console, 2026-08-20 (round 7, R7-25): lock then unlock, and subscribeSafeguard goes
-      // from {minors: 1, guardians: 1, loaded: true} to {minors: 0, guardians: 0, loaded: false}. The kids
-      // check-in panel then renders "No children marked yet" — which hides the whole register INCLUDING a
-      // child currently checked in, so there is no "Check out" control left to press. A safeguarding lead
-      // whose console idle-locked could not check a child out, and nothing anywhere said why. Every symptom
-      // is silence; the header goes on lying throughout.
-      //
-      // Clear first, then re-enter through setActiveIdentity() — the one function that sets `pub` and
-      // `actingChurch` together — so a failure to get back leaves the console honestly in its own identity
-      // rather than half in someone else's.
-      if (actingChurch) {
-        const target = actingChurch;
-        actingChurch = ''; window.Steward.actingChurch = '';
-        try { window.Steward.setActiveIdentity(target); } catch (e) {}
-      }
-      window.dispatchEvent(new CustomEvent('steward-key', { detail: { npub: window.Steward.npub } }));
+      _enterUnlocked(seed);
       return true;
     } catch { return false; }
+  },
+  // ---- "stay open for 30 days" (steward APK only; see makeStayOpen) ----
+  stayOpenStatus() { return _stay.status(); },        // -> { available, active }; deletes a dead record
+  setStayOpen(pin, on) { return _stay.save(pin, !!on); },
+  clearStayOpen() { return _stay.clear(); },
+  // Replay the stored key ONCE per launch. true = unlocked; false = no usable record (any record deleted);
+  // null = already tried this launch, so a lock later in the session stays locked.
+  async unlockStayOpen() {
+    const r = await _stay.replay();
+    if (!r.seed) return r.skipped ? null : false;
+    _enterUnlocked(r.seed);
+    return true;
   },
   lock() {                                         // forget the in-memory key (idle / manual); seed stays encrypted
     // "seed stays encrypted" is only true once it HAS been encrypted. While needsPin is set — after createKey,
@@ -5273,6 +5434,7 @@ window.Steward = {
     if (lsGet(ENC_LS) && !(await window.Steward.verifyPin(pin))) return false;   // wrong/empty PIN → refuse
     window.Steward.locked = false;
     _setNeedsPin(true);   // force an immediate re-PIN, which overwrites the stored blob
+    await _stay.clear();  // the PIN is being replaced, so a stay-open made with the old one ends here
     return true;
   },
   // THE WAY BACK FROM THE FORCED-PIN GATE (owner, 2026-09-22: "We still need a back or cancel button at this
@@ -5648,6 +5810,7 @@ window.Steward = {
     // it, or the roster effect republishes church A's name/care/media keys as church B's. `location.reload()`
     // used to do this by accident; nothing did it on purpose. See _resetChurchScopedState.
     _resetChurchScopedState();
+    _stay.clear();   // a restore replaces the church: no stay-open record survives it (fire-and-forget; init re-checks)
     _setNeedsPin(true);
     // fire steward-key so the first-run welcome advances to the console (createKey does this too)
     window.dispatchEvent(new CustomEvent('steward-key', { detail: { npub: window.Steward.npub } }));
@@ -5754,10 +5917,16 @@ window.Steward = {
   // wherever its phrase is held — this only forgets it locally; it does not delete/rotate the key.
   // Returns a promise so a caller CAN await the hardware-store half; the localStorage half is cleared
   // synchronously first, so every existing synchronous caller behaves exactly as before.
+  // FORGET EVERY CHURCH'S CHILDREN LIST ON THIS DEVICE (the sealed device copy, see _minorsLastGet). For a screen that
+  // throws the stored key away by its own route instead of removeKey() — the unlock screen's "Restore this church
+  // with my 12 words" (audit of 83b7a4f).
+  forgetChildrenLists() { _minorsLastClear(''); },
   removeKey() {
     try { localStorage.removeItem(KEY_LS); } catch {}
+    _minorsLastClear('');   // no church's children list stays on a device whose key was removed
     window.Steward.keyResumedUnknown = false;   // K2: the steward has now answered the question the device could not
     const done = encBlobRemove();   // S6: "remove from THIS device" is a lie if the Keystore copy survives
+    _stay.clear();                  // …and so is a stay-open record that would open it
     sk = null; pub = null; currentMnemonic = null;
     window.Steward.pubkey = null; window.Steward.npub = null; window.Steward.hasKey = false; window.Steward.locked = false;
     window.dispatchEvent(new CustomEvent('steward-key', { detail: { npub: null } }));
@@ -6008,10 +6177,14 @@ window.Steward = {
     }
     return true;
   },
-  // Pin/feature a sermon → members get a Today card + a notification. One per church (addressable → replaces).
-  pinSermon(s) {
+  // Pin/feature a sermon → members get a Today card, and a notification UNLESS the steward chose "quietly".
+  // `opts.notify === false` writes `notify:false` into the document (the Today card still shows; the member's
+  // bell entry and the relay's push both skip it). Anything else writes NO field, which every reader takes as
+  // "notify" — so an older console's document, and an older reader of a new one, behave exactly as before.
+  // One per church (addressable → replaces).
+  pinSermon(s, opts) {
     if (!sk) return Promise.resolve(null);
-    const content = JSON.stringify({ id: s.id, title: s.title || 'Sermon', sha256: s.sha256, hosts: (s.hosts && s.hosts.length) ? s.hosts : (s.host ? [s.host] : []), mime: s.mime || '', enc: s.enc || undefined, ts: now() });
+    const content = JSON.stringify({ id: s.id, title: s.title || 'Sermon', sha256: s.sha256, hosts: (s.hosts && s.hosts.length) ? s.hosts : (s.host ? [s.host] : []), mime: s.mime || '', enc: s.enc || undefined, notify: (opts && opts.notify === false) ? false : undefined, ts: now() });
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', PINSERMON_D + pub], ['t', NET]], content }));
   },
   unpinSermon() {
@@ -7334,6 +7507,91 @@ window.Steward = {
   // Who this console holds as blocked, for the acting church — the same floored set every key builder filters by.
   // A copy, lower-case hex. Readers: StewardMeals.publishCareTeam and StewardMeals.sendCareChat (steward-meals.src.js).
   blockedHere() { return [..._localBlocked]; },
+  // WHO IS A CHILD OF THE CHURCH THIS CONSOLE IS LOOKING AT — read from the relay NOW, one shot, by whoever asks.
+  // Resolves { known, list } (list = lower-case hex). Readers: StewardMeals.publishCareTeam, refreshCareTeam and
+  // sendCareChat (a child is never on the care list, owner 2026-10-10).
+  //
+  // A FRESH READ, NOT A SCREEN'S COPY. The first version (8fb38d9) read a copy the safeguarding subscription kept,
+  // and that subscription only runs while the Members / Check-in / Care-requests screens are open — so the two
+  // places that publish the care list (Settings -> Features, the rota's roster editor) usually saw no children
+  // and published the child onto it (audit of 8fb38d9).
+  //
+  // `known: false` — no relay, a relay that did not answer trustworthily (see inside), unreadable content, or a
+  // delegate's empty answer — and the caller decides what that means.
+  readMinors() {
+    const cp = actingChurch || pub;
+    const unknown = { known: false, list: [] };
+    if (!cp) return Promise.resolve(unknown);
+    const urls = relays();
+    const device = _minorsLastGet(cp);   // this church's last genuine children list on this device, or null
+    if (!urls.length) return Promise.resolve(device ? { known: true, list: device } : unknown);
+    // AN EMPTY ANSWER MEANS "NO CHILDREN" ONLY ON THE CHURCH'S OWN CONSOLE. minors: is owner-only on the relay
+    // and served to a delegate only if they hold the safeguarding job (or are on the care team), so a delegate's
+    // empty answer cannot tell "no children" from "not shown to you" — for a delegate it is UNKNOWN, always
+    // (owner's lead, 2026-10-10). A delegate who IS shown the document gets it, and that is known.
+    const ownerView = !actingChurch && pub === churchPub;
+    // ONE SUBSCRIPTION PER RELAY, each answer judged by the key reads' rule (_openKeyRead, _keyReadOk; re-audit
+    // of 0eb3cf9): an EOSE counts only if it came before the library's own timer, was not a CLOSED or our own
+    // close, is for the church and epoch we are still on, and came over a socket whose login THAT relay accepted.
+    // A relay that is already connected gets `maxWait`, as the key reads do, so a slow but genuine answer beats
+    // nostr-tools' 4.4 s timer instead of reading as unknown.
+    //
+    // …AND A RELAY WHOSE CONNECTION HAS FAILED DOES NOT HOLD IT (final audit of 1cf269c; owner, option A) — the
+    // blocklist read's `withoutFailed` rule (audit of 831dcea), because a proved relay stays in the set for up to
+    // 30 days and "every relay" froze the care list for as long as one was down. The list is KNOWN once every
+    // relay that is CONNECTED has answered genuinely and at least one has. A connected relay that did not answer
+    // genuinely (timer, CLOSED, login not accepted) still makes it UNKNOWN. If NO relay is reachable, this
+    // church's last genuine list on this device is used if there is one; otherwise UNKNOWN.
+    //
+    // MERGE, NEVER SHRINK, WHILE A RELAY IS LEFT OUT: then the answer is the relays' newest list PLUS everyone on
+    // the device copy, and that union is kept. The missing relay may be the only one holding the newest marking,
+    // and the list is used only to keep people OFF the care list, so a person wrongly treated as a child loses a
+    // care seat (visible, fixable) while a child wrongly treated as an adult is sealed asks for help. When every
+    // relay answered genuinely, the newest church-signed list replaces the device copy, as the blocklist does.
+    const epoch = _keyReadEpoch, at = Date.now();
+    let longest = 4400;
+    return new Promise((resolve) => {
+      let best = null, done = false;
+      const answers = new Map(), subs = [];
+      const finish = () => {
+        if (done) return; done = true;
+        for (const x of subs) { x.tok.closed = true; try { x.sub.close(); } catch (e) {} }
+        const ok = urls.filter(u => answers.get(u) === true);
+        const left = urls.filter(u => answers.get(u) !== true);
+        if (!left.every(u => !_keyReadConnected(u))) return resolve(unknown);   // a reachable relay did not answer
+        if (!ok.length) return resolve(device ? { known: true, list: device } : unknown);   // none reachable
+        let live;
+        if (best) {
+          let list = null; try { list = (JSON.parse(best.content || '{}').pubkeys) || []; } catch (e) { list = null; }
+          if (!Array.isArray(list)) return resolve(unknown);
+          live = list.map(x => String(x || '').toLowerCase()).filter(Boolean);
+        } else if (ownerView) live = [];
+        else return resolve(unknown);
+        const list = left.length ? [...new Set([...live, ...(device || [])])] : live;
+        if (_stillOn(cp, epoch)) _minorsLastSet(cp, list);
+        resolve({ known: true, list });
+      };
+      for (const url of urls) {
+        let up = false; try { const r = pool.relays.get(normalizeURL(url)); up = !!(r && r.connected); } catch (e) {}
+        const wait = up ? _KEY_READ_LONG_WAIT : 4400;
+        if (wait > longest) longest = wait;
+        const tok = { cp, epoch, at, url, wait, closed: false, relayClosed: false };
+        let sub = null;
+        try {
+          sub = pool.subscribeMany([url], [{ kinds: [30078], authors: [cp], '#d': [MINORS_D + cp] }], {
+            ...(up ? { maxWait: _KEY_READ_LONG_WAIT } : {}),
+            onevent(e) { if (tok.closed || !e || e.pubkey !== cp || _authFuture(e)) return; if (!best || e.created_at > best.created_at) best = e; },
+            // a microtask later, so a CLOSED's onclose (which nostr-tools runs right after this) has marked the token
+            oneose() { queueMicrotask(() => { if (done) return; answers.set(url, _keyReadOk(tok)); if (urls.every(u => answers.has(u))) finish(); }); },
+            onclose() { tok.relayClosed = true; },
+          });
+        } catch (e) { answers.set(url, false); }
+        if (sub) subs.push({ tok, sub });
+      }
+      if (urls.every(u => answers.has(u))) finish();
+      setTimeout(finish, longest + 600);
+    });
+  },
   setBlocked(pubkeys) {   // replace the whole blocklist (pass hex pubkeys); a 2nd argument { unblock: [...] } names who THIS action lets back in
     const opts = arguments[1];   // read here, not named in the signature: six test harnesses lift this method by `setBlocked(pubkeys) {`
     _requireTrustedView('blocked list');
@@ -8039,6 +8297,9 @@ window.Steward = {
     _requireTrustedView('list of children');
     if (!sk) return Promise.resolve(null);
     const list = [...new Set((pubkeys || []).filter(Boolean))];
+    // the church this list is for (see the device copy below); read inside a try like every use of the device copy
+    // here, so nothing about that copy can turn a list that landed into a refusal
+    let cp0 = '', ep0 = -1; try { cp0 = actingChurch || pub; ep0 = _keyReadEpoch; } catch (e) {}
     // ALL RELAYS, NOT THE FIRST TO ANSWER. A relay polices a church's traffic with its OWN copy of this
     // document; a relay that never received it cannot police anything and fails open. `publish()` is
     // Promise.any — it resolves the moment one relay accepts — while members' apps fan their messages to every
@@ -8048,7 +8309,17 @@ window.Steward = {
     // A partial write now reports FAILURE. A steward who ticks "mark as a child" and sees it succeed has been
     // told the protection is in force; if the record reached one relay of three, it is in force on one of
     // three. An error is recoverable, false reassurance is not.
-    return _landed('list of children', _skewGate(() => _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', MINORS_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list }) }), sk))));
+    // A CHILD JUST MARKED COMES OFF THE CARE LIST (owner 2026-10-10: a child is never on the care team). The care
+    // list is otherwise republished only when the roster changes, so a person marked AFTER being put on the care
+    // team stayed on the list members seal asks for help to. Only after the children list LANDED, and it reads
+    // the list back from the relay itself (refreshCareTeam -> readMinors), so it acts on what the relay holds.
+    const r = _landed('list of children', _skewGate(() => _publishToRelays(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', MINORS_D + pub], ['t', NET]], content: JSON.stringify({ pubkeys: list }) }), sk))));
+    return Promise.resolve(r).then((ok) => {
+      // only if the console is STILL on that church: a switch while the write was in flight must not file this
+      // church's children under the next one (audit of c17a640)
+      if (ok) { try { if (_stillOn(cp0, ep0)) _minorsLastSet(cp0, list); } catch (e) {} try { const M = window.StewardMeals; if (M && M.refreshCareTeam) M.refreshCareTeam().catch(() => {}); } catch (e) {} }
+      return ok;
+    });
   },
   // `opts.listKnown` — has the CALLER actually read this church's cleared list? The console has that answer
   // (its safeguarding subscription reports `loaded`) and this module does not: an empty remembered list means
@@ -9334,7 +9605,10 @@ window.Steward = {
     const signer = skFor(asPub); if (!signer) return Promise.resolve(null);
     const id = plan.id || ('plan' + Date.now());
     const pubAt = plan.publishAt && plan.publishAt > now() ? Math.floor(plan.publishAt) : 0;   // schedule: members hide until this unix-sec time
-    const content = JSON.stringify({ id, title: plan.title || 'Plan', sub: plan.sub || '', tag: plan.tag || '', accent: plan.accent || 'var(--clay)', blurb: plan.blurb || '', days: plan.days || [], publishAt: pubAt, draft: !!plan.draft, public: plan.public !== false });
+    // `created` = when the plan was FIRST shared; carried through every republish so the list keeps its place when a
+    // switch is toggled or a draft published (ts is re-stamped each save). A plan from before this field falls back to its ts.
+    const created = Number(plan.created) || Number(plan.ts) || now();
+    const content = JSON.stringify({ id, title: plan.title || 'Plan', sub: plan.sub || '', tag: plan.tag || '', accent: plan.accent || 'var(--clay)', blurb: plan.blurb || '', days: plan.days || [], publishAt: pubAt, draft: !!plan.draft, public: plan.public !== false, created });
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', PLAN_D + id], ['t', NET]], content }, signer))
       .then(e => ({ id, ...JSON.parse(content), ts: e && e.created_at }));
   },
@@ -9346,7 +9620,7 @@ window.Steward = {
     const CACHE_KEY = 'trinityone.steward.plans.v2.' + (pub || '');   // v2: see _taggedForAnotherChurch
     const byId = new Map();
     const versions = new Map();   // id -> Map(author -> their copy); see src/church-doc-store.src.js
-    const emit = () => { const arr = [...byId.values()].sort((a, b) => (a.ts || 0) - (b.ts || 0)); try { localStorage.setItem(CACHE_KEY, JSON.stringify(arr)); } catch {} onPlans(arr); };
+    const emit = () => { const arr = [...byId.values()].sort((a, b) => (a.created || a.ts || 0) - (b.created || b.ts || 0)); try { localStorage.setItem(CACHE_KEY, JSON.stringify(arr)); } catch {} onPlans(arr); };
     try { const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || '[]'); if (Array.isArray(cached)) { _seedFromCache(versions, byId, cached, _consoleDisplay); if (cached.length) onPlans(cached); } } catch {}
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
       onevent(e) {
@@ -11082,6 +11356,8 @@ window.Steward = {
     // re-entering the SAME church passed every "is this still the current church?" check (audit of e6a2e02).
     // See _keyReadOk. The name key's flag is cleared above; this epoch covers it too.
     _keyReadEpoch++; _careKeyVer++; _mediaKeyVer++;
+    try { const M = window.StewardMeals; if (M && M.dropPendingCareTeam) M.dropPendingCareTeam(); } catch (e) {}   // a care list waiting to be retried belongs to the church it was asked for
+    _minorsLastClear(actingChurch || pub);   // leaving a church leaves no list of its children on this device
     _latestGuardNotice.clear();  // see _resetChurchScopedState — one church's guardian-notice retries must not send another's
     // NOTE: the block above is now the same list as _resetChurchScopedState(), minus the NIP-42 state. A
     // SWITCH keeps this device's key while a RESTORE replaces it, so clearing the authenticated sockets here is

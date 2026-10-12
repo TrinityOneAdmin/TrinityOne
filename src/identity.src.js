@@ -210,7 +210,22 @@ function encOwnerPub() {
 async function rememberedSeed() {
   const rec = await rememberRead();   // expiry is enforced in there
   if (!rec) return null;
-  const owner = encOwnerPub();
+  // WHOSE ACCOUNT IS THIS? Asked of the blob in the hardware store FIRST, the localStorage marker second.
+  //
+  // 74b1645 fixed the boot where the marker was lost OUTRIGHT (the orphan path rebuilds it from the blob). It
+  // left the boot where the marker SURVIVES WITHOUT ITS OWNER: a `{v:2,native:1}` from an earlier recovery or
+  // from unlock()'s M12 migration, with the later write that added `pub` lost to the same WebView flush race.
+  // hasEnc() is true, so init() never reaches the orphan path, this read found no owner, failed closed, and
+  // DELETED the record — "stay open" dead after one force-stop, exactly as reported.
+  //
+  // The blob's own `pub` is the better witness anyway: setPin and backfillEncOwner write it from the very
+  // seed that is in the ciphertext beside it, in the store that survives. The marker is only a copy. The
+  // property is unchanged — a record opens the phone ONLY if it names the account the encrypted blob holds:
+  // no owner anywhere still refuses, a record naming another account still refuses, and if blob and marker
+  // name DIFFERENT accounts we cannot tell which is true, so that refuses too.
+  const marker = encOwnerPub() || '';
+  const held = isNative() ? await orphanEncOwner() : '';
+  const owner = (held && marker && held.toLowerCase() !== String(marker).toLowerCase()) ? '' : (held || marker);
   if (!owner || !rec.pub || String(rec.pub).toLowerCase() !== String(owner).toLowerCase()) {
     await rememberClear();
     return null;

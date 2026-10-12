@@ -1,6 +1,13 @@
 // data.jsx — TrinityOne content (public-domain scripture: KJV + World English Bible)
 // Attached to window.TrinityData
 
+// THE NETWORKS SWITCH. Owner decision (reference/DOMAIN.md, 2026-10-11): networks are OFF in this product until
+// the network branch is properly tested -- nobody can create, join, switch into or follow a network. Nothing
+// is deleted; the engines (src/*.src.js) and relay are untouched. To turn networks back on, change `false`
+// below to `true` (or set window.NETWORKS_ENABLED = true before this file loads). Every UI entry point reads
+// `window.NETWORKS_ENABLED === true`; this is the only place it is given a value.
+if (typeof window !== 'undefined' && typeof window.NETWORKS_ENABLED === 'undefined') window.NETWORKS_ENABLED = false;
+
 const BOOKS = [
   { abbr: 'Gen', name: 'Genesis', ch: 50, group: 'ot' },
   { abbr: 'Exo', name: 'Exodus', ch: 40, group: 'ot' },

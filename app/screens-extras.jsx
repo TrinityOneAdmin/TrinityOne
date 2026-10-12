@@ -173,11 +173,10 @@ function ListenScreen({ open, onClose, ctx }) {
   // episode row, the now-playing header and `trackOf`'s mini-player subtitle.
   const sermonEps = sermons.filter(s => !String(s.mime || '').startsWith('video')).map(s => ({ id: s.id, title: s.title, desc: s.desc, published: s.contentTs ? new Date(s.contentTs * 1000).toISOString() : '', _sermon: true, sha256: s.sha256, hosts: (s.hosts && s.hosts.length) ? s.hosts : (s.host ? [s.host] : []), mime: s.mime, enc: s.enc, size: s.size }));
   const episodes = [...sermonEps, ...((data && data.episodes) || [])];
-  const trackOf = (ep) => ({ id: ep.id, title: ep.title, subtitle: [lsnPubDate(ep.published), chName].filter(Boolean).join(' · '), src: ep.audio, image: ep.image, album: chName });
+  const trackOf = (ep) => ({ id: ep.id, title: ep.title, subtitle: [lsnPubDate(ep.published), chName].filter(Boolean).join(' · '), src: ep.audio, image: ep.image, album: chName, duration: ep.duration || '' });
   const curId = audio.track && audio.track.id;
   const cur = episodes.find(e => e.id === curId) || null;
   const playing = audio.playing;
-  const pos = { t: audio.t, d: audio.d };
   const playEp = async (ep) => {
     if (ep._sermon) {   // Tier 2: fetch the member-gated blob (NIP-98), verify its sha256, then play it
       if (!ep.hosts || !ep.hosts.length || !ep.sha256) { ctx.toast('This sermon is unavailable'); return; }
@@ -186,7 +185,10 @@ function ListenScreen({ open, onClose, ctx }) {
         const dec = ep.enc && FS.mediaDecryptor ? await FS.mediaDecryptor(churchNpub) : null;   // Tier 2: church media key
         if (ep.enc && !dec) { ctx.toast('This recording is for members — your app hasn’t received the unlock key yet. It’s sent automatically once your steward is online; try again shortly.'); setLoadingId(null); return; }
         const src = await FS.fetchSermon({ sha256: ep.sha256, hosts: ep.hosts, mime: ep.mime, enc: ep.enc }, { mime: ep.mime || 'audio/mpeg', decrypt: dec });
-        window.TrinityAudio.play({ id: ep.id, title: ep.title, subtitle: chName, src, image: ep.image, album: chName });
+        // queue = the sermons in the order this list shows them, so Next goes to the next sermon
+        const mine = { id: ep.id, title: ep.title, subtitle: chName, src, image: ep.image, album: chName };
+        const sermonQueue = sermonEps.map(x => x.id === ep.id ? mine : window.sermonAudioTrack(x, { subtitle: chName, churchNpub, toast: ctx.toast }));
+        window.TrinityAudio.play(mine, sermonQueue);
       } catch (e) { ctx.toast('Couldn’t load: ' + (e.message || 'error')); }
       setLoadingId(null); return;
     }
@@ -194,8 +196,6 @@ function ListenScreen({ open, onClose, ctx }) {
     window.TrinityAudio.play(trackOf(ep), episodes.filter(x => !x._sermon).map(trackOf));
   };
   const toggle = () => window.TrinityAudio.toggle();
-  const seek = (delta) => window.TrinityAudio.seek(delta);
-  const onBar = (e) => { const r = e.currentTarget.getBoundingClientRect(); window.TrinityAudio.seekTo((e.clientX - r.left) / r.width); };
 
   return (
     <Overlay open={open} onClose={onClose}>
@@ -226,35 +226,6 @@ function ListenScreen({ open, onClose, ctx }) {
           </div>
         ) : null}
 
-        {/* now playing */}
-        {cur ? (
-          <div style={{ borderRadius: 26, overflow: 'hidden', background: 'linear-gradient(155deg, var(--clay), var(--clay-deep))', color: 'var(--on-clay)', padding: 22, marginBottom: 24, boxShadow: 'var(--shadow-lg)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 11.5, fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', opacity: .9 }}>
-              <Icon name="headphones" size={16} stroke={2} color="#fff" /> Now playing
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 16, margin: '18px 0' }}>
-              <div style={{ width: 72, height: 72, borderRadius: 16, background: cur.image ? `center/cover url(${cur.image})` : 'rgba(255,255,255,.16)', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{!cur.image ? <Icon name="headphones" size={28} color="#fff" /> : null}</div>
-              <div style={{ minWidth: 0 }}>
-                <div style={{ fontFamily: 'var(--font-display)', fontSize: 19, fontWeight: 700, lineHeight: 1.15 }}>{cur.title}</div>
-                <div style={{ fontSize: 12.5, opacity: .85, marginTop: 4 }}>{[lsnPubDate(cur.published), cur.duration].filter(Boolean).join(' · ')}</div>
-              </div>
-            </div>
-            <div onClick={onBar} style={{ height: 6, borderRadius: 3, background: 'rgba(255,255,255,.25)', overflow: 'hidden', cursor: 'pointer' }}>
-              <div style={{ width: `${pos.d ? (pos.t / pos.d) * 100 : 0}%`, height: '100%', background: '#fff', borderRadius: 3 }} />
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5, fontWeight: 600, opacity: .85, marginTop: 7 }}>
-              <span>{lsnClock(pos.t)}</span><span>{pos.d ? lsnClock(pos.d) : (cur.duration || '')}</span>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 26, marginTop: 16 }}>
-              <button onClick={() => seek(-15)} aria-label="Back 15s" style={transBtn}><Icon name="rewind" size={26} color="#fff" /></button>
-              <button onClick={toggle} aria-label="Play/pause" style={{ width: 64, height: 64, borderRadius: 999, border: 'none', cursor: 'pointer', background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 6px 18px rgba(0,0,0,.25)' }}>
-                <Icon name={playing ? 'pause' : 'play'} size={26} color="var(--ink)" />
-              </button>
-              <button onClick={() => seek(15)} aria-label="Forward 15s" style={transBtn}><Icon name="forward" size={26} color="#fff" /></button>
-            </div>
-          </div>
-        ) : null}
-
         {/* episode list */}
         {episodes.length ? (
           <React.Fragment>
@@ -280,12 +251,16 @@ function ListenScreen({ open, onClose, ctx }) {
             </div>
           </React.Fragment>
         ) : null}
+        {/* room for the docked player: a box, not var() padding — see ScreenScroll in screens-today.jsx */}
+        <div aria-hidden="true" data-player-room="" style={{ height: 'max(0px, calc(var(--trinity-listen-player-h, 0px) - 30px))' }} />
       </div>
+      {/* THE player (owner 2026-10-11: one player, no controls on the page). This screen covers the tab-bar
+          dock, so the same floating player docks at this screen's foot. Guarded: no audio script, no player. */}
+      {window.MiniPlayer ? React.createElement(window.MiniPlayer, { ctx, bottom: 'max(12px, env(safe-area-inset-bottom))', heightVar: '--trinity-listen-player-h' }) : null}
     </Overlay>
   );
 }
 
-const transBtn = { width: 44, height: 44, borderRadius: 999, border: 'none', background: 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' };
 
 // ── Notification settings: which alerts the member wants (DMs, announcements, serving, reminders) ──
 function NotifToggleRow({ icon, accent, label, sub, on, disabled, onFlip }) {

@@ -10,13 +10,23 @@
   el.setAttribute('playsinline', '');
   document.body.appendChild(el);
 
-  let state = { track: null, playing: false, loading: false, t: 0, d: 0 };
-  let queue = [], qi = -1;
+  // Playback speed: one value for every surface, kept per device. Setting `src` makes the browser reload the
+  // element and reset playbackRate to defaultPlaybackRate, so BOTH are set, and again on loadstart.
+  const RATE_KEY = 'trinityone.audioRate';
+  const RATES = [0.75, 1, 1.25, 1.5, 2];
+  let rate = 1;
+  try { const v = parseFloat(localStorage.getItem(RATE_KEY)); if (RATES.indexOf(v) >= 0) rate = v; } catch (e) {}
+  const applyRate = () => { try { el.defaultPlaybackRate = rate; el.playbackRate = rate; } catch (e) {} };
+  applyRate();
+
+  let queue = [], qi = -1, playTok = 0, pending = false;   // pending = a queued track is still being fetched: the element holds NO source
+  let state = { track: null, playing: false, loading: false, failed: false, t: 0, d: 0, rate, q: queue, qi };
   const subs = new Set();
   const emit = () => { state = { ...state }; subs.forEach(fn => { try { fn(state); } catch (e) {} }); };
   const set = (p) => { Object.assign(state, p); emit(); };
 
   el.addEventListener('timeupdate', () => set({ t: el.currentTime, d: el.duration || 0 }));
+  el.addEventListener('loadstart', applyRate);
   el.addEventListener('durationchange', () => set({ d: el.duration || 0 }));
   el.addEventListener('play', () => set({ playing: true }));
   el.addEventListener('pause', () => set({ playing: false }));
@@ -34,8 +44,8 @@
       });
       const h = (a, fn) => { try { navigator.mediaSession.setActionHandler(a, fn); } catch (e) {} };
       h('play', () => api.toggle()); h('pause', () => api.toggle());
-      h('seekbackward', (d) => api.seek(-(d && d.seekOffset || 15)));
-      h('seekforward', (d) => api.seek(d && d.seekOffset || 30));
+      h('seekbackward', (d) => api.seek(-(d && d.seekOffset || 10)));
+      h('seekforward', (d) => api.seek(d && d.seekOffset || 10));
       h('previoustrack', queue.length > 1 ? () => api.prev() : null);
       h('nexttrack', queue.length > 1 ? () => api.next() : null);
       h('seekto', (d) => { if (d && d.seekTime != null && el.duration) el.currentTime = d.seekTime; });
@@ -45,23 +55,52 @@
   const api = {
     // play a track now. `list` (optional) sets the queue so ended → next and the lock-screen skip work.
     // track = { id, title, subtitle, src, image, album }
+    // A queued track may carry `resolve()` (async → src) instead of `src` — a sermon's audio is a gated
+    // download, fetched only when its turn comes, so "next" works without downloading the whole list.
     play(track, list) {
-      if (!track || !track.src) return;
+      if (!track || (!track.src && typeof track.resolve !== 'function')) return;
       if (Array.isArray(list) && list.length) { queue = list; qi = Math.max(0, list.findIndex(t => t.id === track.id)); }
       else { queue = [track]; qi = 0; }
-      if (el.src !== track.src) el.src = track.src;
-      set({ track, loading: true });
+      const tok = ++playTok;
+      pending = false;
+      const start = () => {
+        if (el.src !== track.src) el.src = track.src;
+        applyRate();
+        set({ track, loading: true, failed: false, q: queue, qi });
+        mediaSession(track);
+        el.play().then(() => set({ playing: true, loading: false })).catch(() => set({ playing: false, loading: false }));
+      };
+      if (track.src) { start(); return; }
+      // DETACH the old source while the new one downloads: otherwise Play / the scrubber would drive the
+      // PREVIOUS sermon's element under the NEW title. Play and seek are also no-ops until it lands.
+      pending = true;
+      try { el.pause(); el.removeAttribute('src'); el.load(); } catch (e) {}
+      set({ track, loading: true, playing: false, failed: false, t: 0, d: 0, q: queue, qi });
       mediaSession(track);
-      el.play().then(() => set({ playing: true, loading: false })).catch(() => set({ playing: false, loading: false }));
+      const fail = () => { if (tok === playTok) { pending = false; set({ loading: false, playing: false, failed: true }); } };
+      Promise.resolve().then(() => track.resolve()).then(src => {
+        if (tok !== playTok) return;                  // the listener chose something else while this downloaded
+        if (!src) { fail(); return; }
+        pending = false; track.src = src; start();
+      }).catch(fail);
     },
-    toggle() { if (!state.track) return; if (el.paused) el.play().catch(() => {}); else el.pause(); },
-    seek(delta) { if (el.duration) el.currentTime = Math.max(0, Math.min(el.duration, (el.currentTime || 0) + delta)); },
-    seekTo(frac) { if (el.duration) el.currentTime = Math.max(0, Math.min(1, frac)) * el.duration; },
+    rates: RATES.slice(),
+    get rate() { return rate; },
+    setRate(r) {
+      r = Number(r); if (RATES.indexOf(r) < 0) return;
+      rate = r; applyRate();
+      try { localStorage.setItem(RATE_KEY, String(r)); } catch (e) {}
+      set({ rate });
+    },
+    // a failed fetch is retried by Play (the track is still current, it just has no source); a fetch in flight ignores it
+    toggle() { if (!state.track || pending) return; if (state.failed) { api.play(state.track, queue); return; } if (el.paused) el.play().catch(() => {}); else el.pause(); },
+    seek(delta) { if (!pending && el.duration) el.currentTime = Math.max(0, Math.min(el.duration, (el.currentTime || 0) + delta)); },
+    seekTo(frac) { if (!pending && el.duration) el.currentTime = Math.max(0, Math.min(1, frac)) * el.duration; },
     next() { if (qi >= 0 && qi + 1 < queue.length) api.play(queue[qi + 1], queue); },
     prev() { if (el.currentTime > 3) { el.currentTime = 0; return; } if (qi > 0) api.play(queue[qi - 1], queue); },
     hasNext() { return qi >= 0 && qi + 1 < queue.length; },
     hasPrev() { return qi > 0; },
-    stop() { try { el.pause(); el.removeAttribute('src'); el.load(); } catch (e) {} queue = []; qi = -1; set({ track: null, playing: false, t: 0, d: 0 }); },
+    stop() { playTok++; pending = false; try { el.pause(); el.removeAttribute('src'); el.load(); } catch (e) {} queue = []; qi = -1; set({ track: null, playing: false, loading: false, failed: false, t: 0, d: 0, q: queue, qi }); },
     get current() { return state.track; },
     subscribe(fn) { subs.add(fn); fn(state); return () => subs.delete(fn); },
   };
@@ -70,42 +109,186 @@
 
 // React hook: subscribe a component to the audio engine's state
 function useTrinityAudio() {
-  const [s, setS] = React.useState(() => (window.TrinityAudio ? { track: window.TrinityAudio.current, playing: false, loading: false, t: 0, d: 0 } : { track: null, playing: false, loading: false, t: 0, d: 0 }));
+  const [s, setS] = React.useState(() => ({ track: window.TrinityAudio ? window.TrinityAudio.current : null, playing: false, loading: false, failed: false, t: 0, d: 0, rate: 1, q: [], qi: -1 }));
   React.useEffect(() => (window.TrinityAudio ? window.TrinityAudio.subscribe(setS) : undefined), []);
   return s;
 }
 
 const fmtTime = (s) => { s = Math.max(0, Math.floor(s || 0)); const m = Math.floor(s / 60), ss = s % 60; return m + ':' + String(ss).padStart(2, '0'); };
 
-// ── MiniPlayer: a persistent bar docked above the tab bar whenever something is loaded ──
-function MiniPlayer({ ctx }) {
-  const a = useTrinityAudio();
-  if (!a.track) return null;
-  const pct = a.d ? (a.t / a.d) * 100 : 0;
+// A sermon's audio is a member-gated download, so its queue entries carry `resolve()` (fetch + verify +
+// decrypt) instead of a `src`; the engine calls it when that sermon's turn comes. `o` = { subtitle, toast,
+// churchNpub }; returns a track the engine can queue. Failure toasts and resolves to null (engine stops loading).
+function sermonAudioTrack(s, o) {
+  o = o || {};
+  const hosts = (s.hosts && s.hosts.length) ? s.hosts : (s.host ? [s.host] : []);
+  return { id: s.id, title: s.title, subtitle: o.subtitle || '', album: o.subtitle || '', image: s.image,
+    resolve: async () => {
+      const FS = window.Fellowship;
+      try {
+        if (!hosts.length || !s.sha256 || !FS) throw new Error('This sermon is unavailable');
+        const dec = s.enc && FS.mediaDecryptor ? await FS.mediaDecryptor(o.churchNpub) : null;
+        if (s.enc && !dec) throw new Error('needs the church media key');
+        return await FS.fetchSermon({ sha256: s.sha256, hosts, mime: s.mime, enc: s.enc }, { mime: s.mime || 'audio/mpeg', decrypt: dec });
+      } catch (e) { if (o.toast) o.toast('Couldn’t load: ' + ((e && e.message) || 'error')); return null; }
+    } };
+}
+
+// ── THE PLAYER. Owner decision 2026-10-11: ONE player, the floating one docked above the tab bar. The pages
+// (Bible reader, Watch, Listen) keep their lists and play buttons and draw NO controls of their own.
+// It is built from three small pieces so each control exists once: AudioScrubber, AudioButtons, AudioQueue.
+
+// timeline: elapsed · draggable / tappable rail · total. `durationText` is shown until the audio reports its length.
+function AudioScrubber({ a, durationText }) {
+  const dragging = React.useRef(false);
+  const A = window.TrinityAudio;
+  const pct = a.d ? Math.min(100, (a.t / a.d) * 100) : 0;
+  const seekFrom = (e) => { const r = e.currentTarget.getBoundingClientRect(); if (r && r.width && A) A.seekTo((e.clientX - r.left) / r.width); };
+  const time = { fontSize: 11, fontWeight: 600, color: 'var(--ink-3)', minWidth: 34, fontVariantNumeric: 'tabular-nums', flexShrink: 0 };
   return (
-    <div onClick={() => ctx.openListen && ctx.openListen()} style={{
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <span style={time}>{fmtTime(a.t)}</span>
+      <div role="slider" tabIndex={0} aria-label="Seek" title="Seek" aria-valuemin={0} aria-valuemax={Math.round(a.d || 0)} aria-valuenow={Math.round(a.t || 0)} aria-valuetext={fmtTime(a.t) + ' of ' + fmtTime(a.d)}
+        onPointerDown={(e) => { dragging.current = true; try { e.currentTarget.setPointerCapture(e.pointerId); } catch (x) {} seekFrom(e); }}
+        onPointerMove={(e) => { if (dragging.current) seekFrom(e); }}
+        onPointerUp={() => { dragging.current = false; }} onPointerCancel={() => { dragging.current = false; }}
+        onKeyDown={(e) => { if (!A) return; if (e.key === 'ArrowLeft') { e.preventDefault(); A.seek(-5); } else if (e.key === 'ArrowRight') { e.preventDefault(); A.seek(5); } }}
+        style={{ flex: 1, minWidth: 0, padding: '9px 0', cursor: 'pointer', touchAction: 'none' }}>
+        <div style={{ height: 5, borderRadius: 3, background: 'var(--line)', overflow: 'hidden' }}>
+          <div style={{ width: pct + '%', height: '100%', background: 'var(--clay)', borderRadius: 3 }} />
+        </div>
+      </div>
+      <span style={{ ...time, textAlign: 'right' }}>{a.d ? fmtTime(a.d) : (durationText || '')}</span>
+    </div>
+  );
+}
+
+// previous · −10 · play/pause · +10 · next · speed pill
+function AudioButtons({ a }) {
+  const A = window.TrinityAudio;
+  if (!A) return null;
+  const q = a.q || [], qi = a.qi;
+  const hasNext = qi >= 0 && qi + 1 < q.length;
+  const btn = { width: 38, height: 38, borderRadius: 999, border: 'none', background: 'transparent', color: 'var(--ink)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13, padding: 0, flexShrink: 0 };
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
+      <button onClick={() => A.prev()} aria-label="Previous track" title="Previous" style={btn}><Icon name="rewind" size={20} color="currentColor" /></button>
+      <button onClick={() => A.seek(-10)} aria-label="Back 10 seconds" title="Back 10 seconds" style={btn}>{'−10'}</button>
+      <button onClick={() => A.toggle()} aria-label={a.playing ? 'Pause' : 'Play'} title={a.playing ? 'Pause' : 'Play'} style={{ ...btn, width: 44, height: 44, background: 'var(--clay)', color: 'var(--on-clay)' }}>
+        {a.loading ? <span style={{ width: 18, height: 18, borderRadius: 999, border: '2.5px solid rgba(255,255,255,.45)', borderTopColor: 'currentColor', display: 'inline-block', animation: 'trinitySpin .8s linear infinite' }} /> : <Icon name={a.playing ? 'pause' : 'play'} size={20} color="currentColor" />}
+      </button>
+      <button onClick={() => A.seek(10)} aria-label="Forward 10 seconds" title="Forward 10 seconds" style={btn}>{'+10'}</button>
+      <button onClick={() => A.next()} disabled={!hasNext} aria-label="Next track" title="Next" style={{ ...btn, opacity: hasNext ? 1 : 0.35, cursor: hasNext ? 'pointer' : 'default' }}><Icon name="forward" size={20} color="currentColor" /></button>
+      <button onClick={() => { const rs = A.rates || [1]; const i = rs.indexOf(a.rate); A.setRate(rs[(i + 1) % rs.length]); }} aria-label={'Playback speed ' + a.rate + '×, tap to change'} title={'Playback speed ' + a.rate + '× · tap to change'}
+        style={{ minWidth: 40, height: 28, marginLeft: 4, padding: '0 8px', borderRadius: 999, border: 'none', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, background: 'var(--surface-2)', color: 'var(--ink)', flexShrink: 0 }}>{a.rate + '×'}</button>
+    </div>
+  );
+}
+
+// the queue, current item marked; tapping an item plays it (tapping the current one pauses / resumes)
+function AudioQueue({ a }) {
+  const listRef = React.useRef(null);
+  const A = window.TrinityAudio;
+  const qi = a.qi, q = a.q || [];
+  React.useEffect(() => {
+    try { const box = listRef.current; const cur = box && box.querySelector && box.querySelector('[aria-current]'); if (cur && box.scrollTo) box.scrollTo({ top: Math.max(0, cur.offsetTop - box.offsetTop - 6) }); } catch (e) {}
+  }, [qi, q.length]);
+  if (!A || q.length < 2) return null;
+  return (
+    <div ref={listRef} role="list" aria-label="Up next" className="no-scrollbar" style={{ maxHeight: 200, overflowY: 'auto', position: 'relative' }}>
+      {q.map((t, i) => {
+        const isCur = i === qi;
+        return (
+          <button key={t.id} role="listitem" aria-current={isCur ? 'true' : undefined} aria-label={(isCur ? 'Now playing: ' : 'Play ') + t.title} title={t.title} onClick={() => (isCur ? A.toggle() : A.play(t, q))}
+            style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', textAlign: 'left', padding: '8px 6px', border: 'none', borderRadius: 10, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: isCur ? 700 : 500, color: 'var(--ink)', background: isCur ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'transparent' }}>
+            <span style={{ width: 16, flexShrink: 0, display: 'flex', justifyContent: 'center' }}>{isCur ? <Icon name={a.playing ? 'pause' : 'play'} size={12} color="currentColor" /> : null}</span>
+            <span style={{ flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.title}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── MiniPlayer: THE player, docked above the tab bar whenever something is loaded. Title, timeline, the
+// controls row, and "Up next" (collapsed; the list opens just above the player). Tapping it does NOT navigate.
+// `bottom` lets a full-screen overlay (Listen) dock the same player at its own foot, where there is no tab bar.
+//
+// THE SPACE IT TAKES (audits of e4a17a0 D2, and the device result on 1e0cdbc). A floating player sits over
+// the bottom of whatever page is under it. It publishes, as a CSS variable on <html>, the distance from the
+// BOTTOM OF THE VIEWPORT TO ITS OWN TOP EDGE (+ a 12px gap) — 0 when nothing is loaded, when it unmounts, or
+// when inline — and every scrolling page uses max(its own bottom padding, that). Measuring the top edge, not
+// the player's height, is the point: on a phone the player sits above the tab bar AND the gesture-bar
+// safe-area inset, and "height + a guessed tab-bar constant" left the last card behind it on the Pixel and
+// the Oppo. Re-measured on every render, on resize (rotation, safe-area change) and when the box changes size
+// (Up next opened). ScreenScroll (Today, Library + Watch, Community, Plans, Search) and the reader use
+// `--trinity-player-h`; Listen, which docks its own copy, passes `heightVar="--trinity-listen-player-h"`.
+// `inline` = the desktop layout: the player takes its own row in the layout, covers nothing, publishes 0.
+function MiniPlayer({ ctx, bottom, inline, heightVar }) {
+  const a = useTrinityAudio();
+  const [showQ, setShowQ] = React.useState(false);
+  const boxRef = React.useRef(null);
+  const cssVar = heightVar || '--trinity-player-h';
+  React.useEffect(() => {
+    const root = typeof document !== 'undefined' && document.documentElement;
+    if (!root || !root.style || typeof root.style.setProperty !== 'function') return undefined;
+    const put = () => {
+      const box = !inline && boxRef.current;
+      const vh = (typeof window !== 'undefined' && window.innerHeight) || 0;
+      const top = box && box.getBoundingClientRect ? box.getBoundingClientRect().top : null;
+      const d = (box && vh && top != null) ? Math.max(0, Math.ceil(vh - top)) : 0;
+      root.style.setProperty(cssVar, (d ? d + 12 : 0) + 'px');
+    };
+    put();
+    let ro = null;
+    try { if (boxRef.current && typeof ResizeObserver !== 'undefined') { ro = new ResizeObserver(put); ro.observe(boxRef.current); } } catch (e) {}
+    const vv = typeof window !== 'undefined' ? window.visualViewport : null;
+    try { if (typeof window !== 'undefined' && window.addEventListener) window.addEventListener('resize', put); if (vv && vv.addEventListener) vv.addEventListener('resize', put); } catch (e) {}
+    return () => {
+      try { if (ro) ro.disconnect(); } catch (e) {}
+      try { if (window.removeEventListener) window.removeEventListener('resize', put); if (vv && vv.removeEventListener) vv.removeEventListener('resize', put); } catch (e) {}
+      root.style.setProperty(cssVar, '0px');
+    };
+  });
+  if (!a.track || !window.TrinityAudio) return null;
+  const A = window.TrinityAudio;
+  const hasQ = (a.q || []).length > 1;
+  const open = showQ && hasQ;
+  const flip = () => { if (hasQ) setShowQ(v => !v); };
+  const card = { background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 18, boxShadow: 'var(--shadow-lg)' };
+  const small = { width: 32, height: 32, flexShrink: 0, border: 'none', background: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0, borderRadius: 999 };
+  const words = (
+    <React.Fragment>
+      <div style={{ fontWeight: 700, fontSize: 13.5, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.track.title}</div>
+      {a.failed
+        ? <div role="status" style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--clay)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{'Couldn’t load · press Play to retry'}</div>
+        : <div style={{ fontSize: 11.5, color: 'var(--ink-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.track.subtitle || ''}</div>}
+    </React.Fragment>
+  );
+  return (
+    <div ref={boxRef} role="region" aria-label="Audio player" style={inline ? {
+      position: 'relative', width: '100%', maxWidth: 560, margin: '0 auto', padding: '8px 12px 10px', boxSizing: 'border-box',
+      display: 'flex', flexDirection: 'column', gap: 6,
+    } : {
       position: 'absolute', left: 12, right: 12, zIndex: 24,
-      bottom: 'calc(max(12px, env(safe-area-inset-bottom)) + 74px)',
-      display: 'flex', alignItems: 'center', gap: 11, padding: '8px 10px', cursor: 'pointer', overflow: 'hidden',
-      background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 18, boxShadow: 'var(--shadow-lg)',
-      animation: 'trinityRise .22s ease both',
+      bottom: bottom || 'calc(max(12px, env(safe-area-inset-bottom)) + 74px)',
+      display: 'flex', flexDirection: 'column', gap: 6, animation: 'trinityRise .22s ease both',
     }}>
-      <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 2.5, background: 'var(--line)' }}>
-        <div style={{ width: pct + '%', height: '100%', background: 'var(--clay)' }} />
+      {open ? <div style={{ ...card, padding: 6 }}><AudioQueue a={a} /></div> : null}
+      <div style={{ ...card, padding: '8px 10px 6px', overflow: 'hidden' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ width: 34, height: 34, borderRadius: 9, flexShrink: 0, background: a.track.image ? `center/cover url(${a.track.image})` : 'color-mix(in oklab, var(--clay) 14%, var(--surface))', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            {!a.track.image ? <Icon name="headphones" size={17} color="var(--clay)" /> : null}
+          </div>
+          {hasQ
+            ? <button onClick={flip} aria-label={a.track.title} aria-expanded={open} title={open ? 'Hide up next' : 'Show up next'} style={{ flex: 1, minWidth: 0, textAlign: 'left', border: 'none', background: 'none', padding: 0, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>{words}</button>
+            : <div style={{ flex: 1, minWidth: 0 }}>{words}</div>}
+          {hasQ ? <button onClick={flip} aria-label="Up next" aria-expanded={open} title={open ? 'Hide up next' : 'Up next'} style={{ ...small, background: open ? 'var(--surface-2)' : 'none' }}><Icon name="menu" size={17} color="var(--ink-2)" /></button> : null}
+          <button onClick={() => A.stop()} aria-label="Close player" title="Close player" style={small}><Icon name="x" size={16} color="var(--ink-3)" /></button>
+        </div>
+        <AudioScrubber a={a} durationText={a.track.duration} />
+        <AudioButtons a={a} />
       </div>
-      <div style={{ width: 40, height: 40, borderRadius: 10, flexShrink: 0, background: a.track.image ? `center/cover url(${a.track.image})` : 'color-mix(in oklab, var(--clay) 14%, var(--surface))', color: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        {!a.track.image ? <Icon name="headphones" size={19} color="var(--clay)" /> : null}
-      </div>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontWeight: 700, fontSize: 13.5, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.track.title}</div>
-        <div style={{ fontSize: 11.5, color: 'var(--ink-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.track.subtitle || ''}</div>
-      </div>
-      <button onClick={(e) => { e.stopPropagation(); window.TrinityAudio.toggle(); }} aria-label={a.playing ? 'Pause' : 'Play'} style={{ width: 38, height: 38, flexShrink: 0, borderRadius: 999, border: 'none', background: 'var(--clay)', color: 'var(--on-clay)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        {a.loading ? <span style={{ width: 16, height: 16, borderRadius: 999, border: '2px solid rgba(255,255,255,.5)', borderTopColor: '#fff', display: 'inline-block', animation: 'trinitySpin .8s linear infinite' }} /> : <Icon name={a.playing ? 'pause' : 'play'} size={18} color="#fff" />}
-      </button>
-      <button onClick={(e) => { e.stopPropagation(); window.TrinityAudio.stop(); }} aria-label="Close player" style={{ width: 30, height: 38, flexShrink: 0, border: 'none', background: 'none', color: 'var(--ink-3)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <Icon name="x" size={16} color="var(--ink-3)" />
-      </button>
     </div>
   );
 }
@@ -290,6 +473,7 @@ function AudioBiblesScreen({ open, onClose, ctx }) {
 window.AudioBiblesScreen = AudioBiblesScreen;
 window.MiniPlayer = MiniPlayer;
 window.useTrinityAudio = useTrinityAudio;
+window.sermonAudioTrack = sermonAudioTrack;
 window.audioFmtTime = fmtTime;
 window.playBibleChapter = playBibleChapter;
 window.bibleChapterTrackId = (b, c) => 'bible:' + b + ':' + c;

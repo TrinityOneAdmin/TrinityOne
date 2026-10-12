@@ -411,6 +411,7 @@ function App() {
 
   // reading location + active version (lifted so Today/Search can navigate)
   const [loc, setLoc] = useA(null);
+  const [planRead, setPlanRead] = useA(null);   // { plan, day } while the reader was opened FROM a plan day; PlanReadBar shows only while the reader is still on that day's passage
   // On boot the reader opens where this member left off in the translation that loaded (resolveStartLoc,
   // above), else at the translation's default. Every later navigation — the reader's own controls, gotoRef
   // from Search / a plan / the notes panel, openPlanDay — goes through setLoc after this and so wins over the
@@ -796,13 +797,18 @@ function App() {
   const [activeChurch, setActiveChurch] = useA(() => lsGet('trinityone.activeChurch', (window.TrinityData.CHURCHES[0] || {}).id || null));
   // churches the member follows persist across reloads (a scanned QR / pasted npub should stick).
   // Stored set = the real followed churches (npub ids); merged with the built-in sample churches.
-  const [churches, setChurches] = useA(() => {
+  const [churchesStored, setChurches] = useA(() => {
     const base = window.TrinityData.CHURCHES;
     const followed = (lsGet('trinityone.followedChurches', []) || []).filter(f => f && f.id && !base.find(b => b.id === f.id));
     return [...base, ...followed];
   });
+  // NETWORKS SWITCH (app/data.jsx): `churchesStored` is what is kept on the phone, network entries included, so
+  // turning networks back on brings them back. `churches` is what every screen and every lookup sees: with the
+  // switch off a followed network is not listed, cannot be switched to, and cannot be the active church (the
+  // heal effect below falls back to a real church exactly as it does for any id not in the list).
+  const churches = React.useMemo(() => window.NETWORKS_ENABLED === true ? churchesStored : churchesStored.filter(c => c.kind !== 'network'), [churchesStored]);
   // persist the followed (real, npub-id) churches — incl. names resolved from the relay — on any change
-  useAE(() => { try { lsSet('trinityone.followedChurches', churches.filter(c => typeof c.id === 'string' && c.id.indexOf('npub1') === 0)); } catch (e) {} }, [churches]);
+  useAE(() => { try { lsSet('trinityone.followedChurches', churchesStored.filter(c => typeof c.id === 'string' && c.id.indexOf('npub1') === 0)); } catch (e) {} }, [churchesStored]);
   // on load, refresh each followed church's name/groups from the relay (names may have changed)
   useAE(() => {
     if (!(window.Fellowship && window.Fellowship.subscribeChurchProfile)) return;
@@ -858,6 +864,9 @@ function App() {
     const m = String(raw || '').match(/npub1[0-9a-z]{20,}/);
     if (!m) return false;
     const npub = m[0];
+    // NETWORKS SWITCH: a code that is a network this phone already knows (a stored entry tagged kind 'network') is refused.
+    // An unknown network npub is not recognisable here; it falls to checkChurch below, which finds no church for it.
+    if (window.NETWORKS_ENABLED !== true && churchesStored.some(c => c.id === npub && c.kind === 'network')) { toast('Networks aren’t available yet'); return false; }
     // UX #1: validate the bech32 CHECKSUM before following. The regex matches shape only, so a mistyped code (one
     // wrong char) previously passed and we'd follow a phantom church stuck showing the placeholder name "Church".
     // toPub returns null on a bad checksum → reject here so the Follow sheet shows its "couldn't find that church" error.
@@ -967,7 +976,7 @@ function App() {
       }
     }
     const remaining = churches.filter(c => c.id !== npub);
-    setChurches(remaining);
+    setChurches(cs => cs.filter(c => c.id !== npub));   // from the STORED list, so a hidden network is not dropped by leaving a church
     if (activeChurch === npub) {
       const next = (remaining.find(c => c.npub) || remaining[0] || {}).id || null;
       setActiveChurch(next); lsSet('trinityone.activeChurch', next);
@@ -1613,7 +1622,7 @@ function App() {
   useAE(() => {
     if (!lazyReady) return;
     const np = (churches.find(c => c.id === activeChurch) || {}).npub;
-    if (!np || !(window.Fellowship && window.Fellowship.subscribeChurchNetworks)) { setChurchNetworks([]); return; }
+    if (window.NETWORKS_ENABLED !== true || !np || !(window.Fellowship && window.Fellowship.subscribeChurchNetworks)) { /* NETWORKS SWITCH (app/data.jsx): off = a member follows no network */ setChurchNetworks([]); return; }
     return window.Fellowship.subscribeChurchNetworks(np, setChurchNetworks);
   }, [activeChurch, churches, connTick, lazyReady]);
   useAE(() => {
@@ -1679,7 +1688,7 @@ function App() {
     netAnnouncements.forEach(a => out.push({ id: 'net:' + a.id, kind: 'network', group: a._network || 'Network', text: a.text, ts: a.ts, detail: true }));
     broadcastMsgs.forEach(m => out.push({ id: 'bc:' + m.id, kind: 'notice', group: _churchNameFor, text: m.text, ts: m.ts, groupObj: churchGroups.find(g => g.id === m.gid) || null }));
     churchDevos.forEach(d => out.push({ id: 'devo:' + d.id, kind: 'devotional', group: _churchNameFor, text: 'Shared a devotional · ' + (d.title || ''), ts: d.ts, devo: d }));
-    if (pinnedSermon && pinnedSermon.sha256) out.push({ id: 'sermon:' + pinnedSermon.id, kind: 'sermon', group: _churchNameFor, text: (String(pinnedSermon.mime || '').startsWith('video') ? 'New video · ' : 'New audio clip · ') + (pinnedSermon.title || ''), ts: pinnedSermon.ts || pinnedSermon.at, sermon: pinnedSermon });
+    if (pinnedSermon && pinnedSermon.sha256 && pinnedSermon.notify !== false) out.push({ id: 'sermon:' + pinnedSermon.id, kind: 'sermon', group: _churchNameFor, text: (String(pinnedSermon.mime || '').startsWith('video') ? 'New video · ' : 'New audio clip · ') + (pinnedSermon.title || ''), ts: pinnedSermon.ts || pinnedSermon.at, sermon: pinnedSermon });
     churchPlans.forEach(p => out.push({ id: 'plan:' + p.id, kind: 'plan', group: _churchNameFor, text: 'Shared a reading plan · ' + (p.title || ''), ts: p.ts, go: 'plans' }));
     churchEvents.filter(_eventVisibleToMe).forEach(e => out.push({ id: 'evt:' + e.id, kind: 'event', group: _churchNameFor, text: 'New event · ' + (e.title || ''), ts: e.ts, go: 'event', event: e }));
     // asked to serve / put on the rota (sim 2026-10-02 #49) - built by notifServingItems in screens-extras.jsx
@@ -2072,7 +2081,7 @@ function App() {
     go: (t) => { if (t === 'plans') { setReadView('plans'); setTab('read'); } else if (t === 'bible') { setReadView('bible'); setTab('read'); } else setTab(t); },
     toast,
     loc, setLoc, version, setVersion: (v) => Bible.setActive(v),
-    gotoRef: (book, chap, verse) => { setLoc({ book, chap, verse }); setReadView('bible'); setTab('read'); },
+    gotoRef: (book, chap, verse) => { setPlanRead(null); setLoc({ book, chap, verse }); setReadView('bible'); setTab('read'); },
     addModule: () => Bible.pickFile(),
     // "bibles" scopes the name: a commentary or a dictionary may legitimately be called KJV too, and
     // this sheet only ever means the translation. Without it, removeModule resolved the name against
@@ -2129,7 +2138,9 @@ function App() {
     openPlanDay: (plan, day) => {
       const loc = Bible.parseRef(day.ref);
       if (!loc || !Bible.books().includes(loc.book)) { toast(day.ref + ' isn’t in this translation'); return; }
-      setLoc({ book: loc.book, chap: loc.chap, verse: loc.verse }); setReadView('bible'); setTab('read');
+      // planRead is tied to THIS location object (and this church): any other way of moving the reader makes a new object, so the bar goes away
+      const at = { book: loc.book, chap: loc.chap, verse: loc.verse };
+      setPlanRead({ plan, day, loc: at, church: activeChurch }); setLoc(at); setReadView('bible'); setTab('read');
     },
     openJournal: (j) => setJournal(j),
     openVideo: (v) => setVideo(v),
@@ -2145,7 +2156,12 @@ function App() {
         const dec = s.enc && FS.mediaDecryptor ? await FS.mediaDecryptor(np) : null;
         if (s.enc && !dec) { toast('This encrypted sermon needs the church media key'); return; }
         const src = await FS.fetchSermon({ sha256: s.sha256, hosts, mime: s.mime, enc: s.enc }, { mime: s.mime || 'audio/mpeg', decrypt: dec });
-        window.TrinityAudio.play({ id: s.id, title: s.title, subtitle: cname, src, album: cname });
+        // queue = the church's audio sermons, newest first (the order subscribeSermons delivers), so Next plays the
+        // next OLDER sermon; the others download only when their turn comes. A pin not in the list plays alone.
+        const mine = { id: s.id, title: s.title, subtitle: cname, src, album: cname };
+        const audioList = (featuredSermonList || []).filter(x => x && !String(x.mime || '').startsWith('video'));
+        const queue = audioList.some(x => x.id === s.id) ? audioList.map(x => x.id === s.id ? mine : window.sermonAudioTrack(x, { subtitle: cname, churchNpub: np, toast })) : [mine];
+        window.TrinityAudio.play(mine, queue);
       } catch (e) { toast('Couldn’t load: ' + (e.message || 'error'), { error: true }); }
     },
     openWord: (id) => setWordOv(id),
@@ -2208,6 +2224,8 @@ function App() {
     notes, setNote: (k, txt) => { if (txt) MD.put('notes', { id: k, ref: k, text: txt }); else MD.remove('notes', k); },
     bookmarks, toggleBookmark: (k) => { if (MD.has('bookmarks', k)) MD.remove('bookmarks', k); else MD.put('bookmarks', { id: k, ref: k }); },
     planProgress,
+    planRead,
+    planChurch: activeChurch,
     devoProgress,
     churchPlans: [...churchPlans, ...netPlans].map(p => (typeof p.len === 'number') ? p : { ...p, len: (p.days || []).length }),
     churchDevos,
@@ -2608,6 +2626,10 @@ function App() {
             {desktop ? (
               <div style={{ position: 'absolute', inset: 0, display: 'flex', overflow: 'hidden' }}>
                 <DesktopNav active={tab} onChange={(t) => { setOpenServing(false); setTab(t); }} tabs={visibleTabs} unread={{ chat: chatUnread || dmUnread }} onProfile={commLocked ? undefined : () => ctx.openProfile()} profileAv={identity.avatar} profileName={identity.name} />
+                {/* content column + THE player on its own row beneath it (desktop has no tab-bar dock; the player
+                    takes layout space here, so it covers neither the sidebar nor any pane's controls) */}
+                <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+                <div style={{ flex: 1, minHeight: 0, display: 'flex', position: 'relative' }}>
                 {tab === 'chat' && ctx.church && ctx.church.npub ? (
                   <div style={{ flex: 1, display: 'flex', minWidth: 0, background: 'var(--paper)' }}>
                     <div style={{ width: 372, flexShrink: 0, position: 'relative', borderRight: '1px solid var(--line)' }}>{screens.chat}</div>
@@ -2642,6 +2664,9 @@ function App() {
                     <div style={{ position: 'relative', width: '100%', maxWidth: 920, borderRight: '1px solid var(--line)' }}>{screens[tab]}</div>
                   </div>
                 )}
+                </div>
+                <div style={{ flexShrink: 0, background: 'var(--paper)' }}><MiniPlayer ctx={ctx} inline /></div>
+                </div>
               </div>
             ) : (
               <React.Fragment>

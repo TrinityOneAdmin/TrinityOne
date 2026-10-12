@@ -442,10 +442,12 @@ test('CONSOLE: a Block that did not land changes no team, care list or clearance
 
 // ── 4. THE PUBLISH POINTS: a stale roster cannot put them back ─────────────────────────────────────────────
 test('ENGINE: publishCareTeam never lists someone this console holds as blocked (the Care panel republishes from stale rosters)', async () => {
-  const body = fnBody(MEALS, 'function publishCareTeam(memberPubs) {', 'publishCareTeam');
+  // async since 2026-10-10: it reads the church's children list from the relay first (readMinors); a known,
+  // empty list here, so this test still asks only about the BLOCKED filter.
+  const body = fnBody(MEALS, 'async function publishCareTeam(memberPubs) {', 'publishCareTeam');
   const sent = [];
-  const S0 = { churchPub: 'f'.repeat(64), blockedHere: () => [T], publishSigned: (e) => { sent.push(e); return Promise.resolve(true); } };
-  const fn = new Function('S', 'now', 'CARETEAM_D', 'NET', body + '\nreturn publishCareTeam;')(() => S0, () => 1, 'trinityone/careteam:', 'trinityone');
+  const S0 = { churchPub: 'f'.repeat(64), blockedHere: () => [T], readMinors: async () => ({ known: true, list: [] }), publishSigned: (e) => { sent.push(e); return Promise.resolve(true); } };
+  const fn = new Function('S', 'now', 'CARETEAM_D', 'NET', '_careTeamWait', body + '\nreturn publishCareTeam;')(() => S0, () => 1, 'trinityone/careteam:', 'trinityone', { pubs: null, tries: 0, timer: 0 });
   await fn([T, CC]);
   const pubs = JSON.parse(sent[0].content).pubs;
   assert.ok(pubs.includes(CC), 'CONTROL: the unblocked care member is missing');

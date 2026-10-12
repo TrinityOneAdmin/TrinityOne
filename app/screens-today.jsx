@@ -1,13 +1,20 @@
 // screens-today.jsx — the home / "Today" dashboard
 const { useState: useStateT, useEffect: useEffectT } = React;
 
+// THE ROOM UNDER THE PAGE FOR THE FLOATING PLAYER IS A BOX, NOT PADDING. Measured on the Pixel 10 Pro
+// (Android WebView 154), 2026-10-12: a scroll container whose padding-bottom uses var() reports the right
+// computed padding and scrollHeight, but its real scroll range ignores the var — `max(96px, var(--x))` scrolled
+// as if it were 96px, `calc(0px + var(--x))` as if 0 — so the last card stayed behind the player and no swipe
+// could reach it. A plain px padding, or a child box whose HEIGHT uses the var, scroll correctly there. So the
+// padding stays fixed and this spacer adds whatever more the player needs (see MiniPlayer: the var is the
+// distance from the viewport bottom to the player's top edge + 12px).
 function ScreenScroll({ children, top = 56, bottom = 96, style = {} }) {
   const tp = typeof top === 'number' ? top + 'px' : top;   // allow a CSS string (e.g. a safe-area calc)
   return (
     <div className="no-scrollbar" style={{
       position: 'absolute', inset: 0, overflowY: 'auto', overflowX: 'hidden',
       padding: `${tp} 18px ${bottom}px`, ...style,
-    }}>{children}</div>
+    }}>{children}<div aria-hidden="true" data-player-room="" style={{ height: `max(0px, calc(var(--trinity-player-h, 0px) - ${bottom}px))` }} /></div>
   );
 }
 

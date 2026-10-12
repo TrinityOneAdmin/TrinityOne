@@ -16967,6 +16967,51 @@ zoo`.split("\n");
       return /* @__PURE__ */ new Set();
     }
   }
+  var MINORS_LAST_LS = "trinityone.steward.minorslast.";
+  function _minorsLastGet(cp) {
+    if (!cp || !churchSk) return null;
+    const v = lsGet(MINORS_LAST_LS + cp);
+    if (v == null) return null;
+    let o = null;
+    try {
+      o = JSON.parse(v);
+    } catch (e) {
+      o = null;
+    }
+    if (!o || typeof o !== "object" || Array.isArray(o) || typeof o.s !== "string") {
+      try {
+        localStorage.removeItem(MINORS_LAST_LS + cp);
+      } catch (e) {
+      }
+      return null;
+    }
+    try {
+      const d = JSON.parse(decrypt3(o.s, churchSk));
+      if (!d || d.cp !== cp || !Array.isArray(d.list)) return null;
+      return d.list.map((p) => String(p).toLowerCase());
+    } catch (e) {
+      return null;
+    }
+  }
+  function _minorsLastSet(cp, list) {
+    if (!cp || !churchSk) return;
+    const clean5 = [...new Set((list || []).map((p) => String(p).toLowerCase()))];
+    try {
+      lsSet(MINORS_LAST_LS + cp, JSON.stringify({ s: encrypt2(JSON.stringify({ cp, list: clean5 }), churchSk) }));
+    } catch (e) {
+    }
+  }
+  function _minorsLastClear(keep) {
+    try {
+      const ks = [];
+      for (let i3 = 0; i3 < localStorage.length; i3++) {
+        const k = localStorage.key(i3);
+        if (k && k.startsWith(MINORS_LAST_LS) && (!keep || k !== MINORS_LAST_LS + keep)) ks.push(k);
+      }
+      for (const k of ks) localStorage.removeItem(k);
+    } catch (e) {
+    }
+  }
   function _noteBlockedList(cp, epoch, list, at) {
     if (!_stillOn(cp, epoch) || (at || 0) < _localBlockedAt) return;
     _localBlocked = new Set((list || []).map((p) => String(p).toLowerCase()));
@@ -17129,6 +17174,12 @@ zoo`.split("\n");
     _keyReadEpoch++;
     _careKeyVer++;
     _mediaKeyVer++;
+    try {
+      const M = window.StewardMeals;
+      if (M && M.dropPendingCareTeam) M.dropPendingCareTeam();
+    } catch (e) {
+    }
+    _minorsLastClear("");
     for (const k of Object.keys(CAP_KEYS)) _capState[k] = { ring: [], docKeys: null, rev: 1, at: 0, checked: false };
     _checkinMigrated = "";
     _ckKeysSettled = "";
@@ -17511,6 +17562,146 @@ zoo`.split("\n");
     const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(pin), "PBKDF2", false, ["deriveKey"]);
     return crypto.subtle.deriveKey({ name: "PBKDF2", salt, iterations: iterations || PIN_ITER_LEGACY, hash: "SHA-256" }, base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
   }
+  async function deriveAesBits(pin, salt, iterations) {
+    const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(pin), "PBKDF2", false, ["deriveBits"]);
+    return new Uint8Array(await crypto.subtle.deriveBits({ name: "PBKDF2", salt, iterations: iterations || PIN_ITER_LEGACY, hash: "SHA-256" }, base, 256));
+  }
+  var STAY_LEGACY_LS = "trinityone.steward.stayopen";
+  var STAY_SS = "trinityone.steward.stayopen.v2";
+  var STAY_TTL_MS = 30 * 24 * 60 * 60 * 1e3;
+  function makeStayOpen(deps) {
+    const { secure, isNative, lsRemove, now: now2, readBlob, deriveBits, pubOf } = deps;
+    let replayed = false;
+    const purgeLegacy = () => {
+      try {
+        lsRemove(STAY_LEGACY_LS);
+      } catch (e) {
+      }
+    };
+    const clear = async () => {
+      purgeLegacy();
+      if (!isNative()) return;
+      try {
+        const { S } = await secure();
+        await S.remove(STAY_SS);
+      } catch (e) {
+        console.warn("[steward] stay-open clear failed", e);
+      }
+    };
+    const blobOf = async () => {
+      try {
+        const raw = await readBlob();
+        const b = raw ? JSON.parse(raw) : null;
+        return b && b.ct && b.iv && b.salt ? b : null;
+      } catch (e) {
+        return null;
+      }
+    };
+    const openBlob = async (bits2, blob) => {
+      const key = await crypto.subtle.importKey("raw", bits2, { name: "AES-GCM" }, false, ["decrypt"]);
+      return new TextDecoder().decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: b64d(blob.iv) }, key, b64d(blob.ct)));
+    };
+    const read = async () => {
+      purgeLegacy();
+      if (!isNative()) return null;
+      let rec = null;
+      try {
+        const { S } = await secure();
+        const s = await S.get(STAY_SS);
+        if (!s) return null;
+        rec = JSON.parse(String(s));
+      } catch (e) {
+        await clear();
+        return null;
+      }
+      if (!rec || rec.v !== 1 || typeof rec.k !== "string" || typeof rec.salt !== "string" || typeof rec.owner !== "string" || !(rec.until > now2())) {
+        await clear();
+        return null;
+      }
+      const blob = await blobOf();
+      if (!blob || blob.salt !== rec.salt) {
+        await clear();
+        return null;
+      }
+      return { rec, blob };
+    };
+    return {
+      available: () => !!isNative(),
+      purgeLegacy,
+      clear,
+      async status() {
+        const r = await read();
+        return { available: !!isNative(), active: !!r };
+      },
+      // → { seed } on success; { seed: null, skipped: true } after the first try this launch; otherwise
+      // { seed: null } with any record deleted. The owner check: the seed must be the church the record names.
+      async replay() {
+        if (replayed) return { seed: null, skipped: true };
+        replayed = true;
+        const r = await read();
+        if (!r) return { seed: null };
+        try {
+          const seed = await openBlob(b64d(r.rec.k), r.blob);
+          if (pubOf(seed) !== r.rec.owner) throw new Error("stay-open record is for a different church");
+          return { seed };
+        } catch (e) {
+          await clear();
+          return { seed: null, failed: true };
+        }
+      },
+      // after a successful unlock with `pin`: on → keep the derived key for 30 days; off → delete. TRUE only if
+      // the result is what was asked for (a write is read back).
+      async save(pin, on) {
+        replayed = true;
+        if (!on || !isNative()) {
+          await clear();
+          return !on;
+        }
+        const blob = await blobOf();
+        if (!blob) return false;
+        try {
+          const bits2 = await deriveBits(pin, b64d(blob.salt), blob.it || PIN_ITER_LEGACY);
+          const seed = await openBlob(bits2, blob);
+          const payload = JSON.stringify({ v: 1, k: b64e(bits2), salt: blob.salt, owner: pubOf(seed), until: now2() + STAY_TTL_MS });
+          const { S } = await secure();
+          await S.set(STAY_SS, payload);
+          const back = await S.get(STAY_SS);
+          if (back == null || String(back) !== payload) {
+            await clear();
+            return false;
+          }
+          return true;
+        } catch (e) {
+          console.warn("[steward] stay-open save failed", e);
+          await clear();
+          return false;
+        }
+      }
+    };
+  }
+  function _enterUnlocked(seed) {
+    setKey(seed);
+    window.Steward.locked = false;
+    if (actingChurch) {
+      const target = actingChurch;
+      actingChurch = "";
+      window.Steward.actingChurch = "";
+      try {
+        window.Steward.setActiveIdentity(target);
+      } catch (e) {
+      }
+    }
+    window.dispatchEvent(new CustomEvent("steward-key", { detail: { npub: window.Steward.npub } }));
+  }
+  var _stay = makeStayOpen({
+    secure: _secureStore,
+    isNative: _isNative,
+    lsRemove: (k) => localStorage.removeItem(k),
+    now: () => Date.now(),
+    readBlob: encBlobRaw,
+    deriveBits: deriveAesBits,
+    pubOf: (m) => getPublicKey2(privateKeyFromSeedWords(m))
+  });
   async function publish(evt, opts) {
     const _bg = !!(opts && opts.background);
     await _waitForRegistration();
@@ -18652,6 +18843,7 @@ zoo`.split("\n");
         encBlobRemoveResume();
       } catch (e) {
       }
+      _stay.purgeLegacy();
       if (mnemonicOverride) {
         lsSet(KEY_LS, mnemonicOverride);
         setKey(mnemonicOverride);
@@ -18676,6 +18868,7 @@ zoo`.split("\n");
         window.Steward.locked = true;
         return false;
       }
+      _stay.clear();
       return false;
     },
     // ---- PIN lock API ----
@@ -18698,6 +18891,7 @@ zoo`.split("\n");
         if (window.TrinityBackup && window.TrinityBackup._commitStewardRestore) window.TrinityBackup._commitStewardRestore();
       } catch (e) {
       }
+      await _stay.clear();
       _setNeedsPin(false);
       return true;
     },
@@ -18717,22 +18911,30 @@ zoo`.split("\n");
       try {
         const o = JSON.parse(raw);
         const seed = new TextDecoder().decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: b64d(o.iv) }, await deriveAes(pin, b64d(o.salt), o.it || PIN_ITER_LEGACY), b64d(o.ct)));
-        setKey(seed);
-        window.Steward.locked = false;
-        if (actingChurch) {
-          const target = actingChurch;
-          actingChurch = "";
-          window.Steward.actingChurch = "";
-          try {
-            window.Steward.setActiveIdentity(target);
-          } catch (e) {
-          }
-        }
-        window.dispatchEvent(new CustomEvent("steward-key", { detail: { npub: window.Steward.npub } }));
+        _enterUnlocked(seed);
         return true;
       } catch {
         return false;
       }
+    },
+    // ---- "stay open for 30 days" (steward APK only; see makeStayOpen) ----
+    stayOpenStatus() {
+      return _stay.status();
+    },
+    // -> { available, active }; deletes a dead record
+    setStayOpen(pin, on) {
+      return _stay.save(pin, !!on);
+    },
+    clearStayOpen() {
+      return _stay.clear();
+    },
+    // Replay the stored key ONCE per launch. true = unlocked; false = no usable record (any record deleted);
+    // null = already tried this launch, so a lock later in the session stays locked.
+    async unlockStayOpen() {
+      const r = await _stay.replay();
+      if (!r.seed) return r.skipped ? null : false;
+      _enterUnlocked(r.seed);
+      return true;
     },
     lock() {
       if (needsPin) return;
@@ -18790,6 +18992,7 @@ zoo`.split("\n");
       if (lsGet(ENC_LS) && !await window.Steward.verifyPin(pin)) return false;
       window.Steward.locked = false;
       _setNeedsPin(true);
+      await _stay.clear();
       return true;
     },
     // THE WAY BACK FROM THE FORCED-PIN GATE (owner, 2026-09-22: "We still need a back or cancel button at this
@@ -19132,6 +19335,7 @@ zoo`.split("\n");
       if (!validateMnemonic(m, wordlist)) throw new Error("That doesn\u2019t look like a valid 12-word recovery phrase \u2014 check the spelling of each word.");
       setKey(m);
       _resetChurchScopedState();
+      _stay.clear();
       _setNeedsPin(true);
       window.dispatchEvent(new CustomEvent("steward-key", { detail: { npub: window.Steward.npub } }));
       return { npub: window.Steward.npub };
@@ -19278,13 +19482,21 @@ zoo`.split("\n");
     // wherever its phrase is held — this only forgets it locally; it does not delete/rotate the key.
     // Returns a promise so a caller CAN await the hardware-store half; the localStorage half is cleared
     // synchronously first, so every existing synchronous caller behaves exactly as before.
+    // FORGET EVERY CHURCH'S CHILDREN LIST ON THIS DEVICE (the sealed device copy, see _minorsLastGet). For a screen that
+    // throws the stored key away by its own route instead of removeKey() — the unlock screen's "Restore this church
+    // with my 12 words" (audit of 83b7a4f).
+    forgetChildrenLists() {
+      _minorsLastClear("");
+    },
     removeKey() {
       try {
         localStorage.removeItem(KEY_LS);
       } catch {
       }
+      _minorsLastClear("");
       window.Steward.keyResumedUnknown = false;
       const done = encBlobRemove();
+      _stay.clear();
       sk = null;
       pub = null;
       currentMnemonic = null;
@@ -19523,10 +19735,14 @@ zoo`.split("\n");
       }
       return true;
     },
-    // Pin/feature a sermon → members get a Today card + a notification. One per church (addressable → replaces).
-    pinSermon(s) {
+    // Pin/feature a sermon → members get a Today card, and a notification UNLESS the steward chose "quietly".
+    // `opts.notify === false` writes `notify:false` into the document (the Today card still shows; the member's
+    // bell entry and the relay's push both skip it). Anything else writes NO field, which every reader takes as
+    // "notify" — so an older console's document, and an older reader of a new one, behave exactly as before.
+    // One per church (addressable → replaces).
+    pinSermon(s, opts) {
       if (!sk) return Promise.resolve(null);
-      const content = JSON.stringify({ id: s.id, title: s.title || "Sermon", sha256: s.sha256, hosts: s.hosts && s.hosts.length ? s.hosts : s.host ? [s.host] : [], mime: s.mime || "", enc: s.enc || void 0, ts: now() });
+      const content = JSON.stringify({ id: s.id, title: s.title || "Sermon", sha256: s.sha256, hosts: s.hosts && s.hosts.length ? s.hosts : s.host ? [s.host] : [], mime: s.mime || "", enc: s.enc || void 0, notify: opts && opts.notify === false ? false : void 0, ts: now() });
       return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", PINSERMON_D + pub], ["t", NET]], content }));
     },
     unpinSermon() {
@@ -20938,6 +21154,99 @@ zoo`.split("\n");
     blockedHere() {
       return [..._localBlocked];
     },
+    // WHO IS A CHILD OF THE CHURCH THIS CONSOLE IS LOOKING AT — read from the relay NOW, one shot, by whoever asks.
+    // Resolves { known, list } (list = lower-case hex). Readers: StewardMeals.publishCareTeam, refreshCareTeam and
+    // sendCareChat (a child is never on the care list, owner 2026-10-10).
+    //
+    // A FRESH READ, NOT A SCREEN'S COPY. The first version (8fb38d9) read a copy the safeguarding subscription kept,
+    // and that subscription only runs while the Members / Check-in / Care-requests screens are open — so the two
+    // places that publish the care list (Settings -> Features, the rota's roster editor) usually saw no children
+    // and published the child onto it (audit of 8fb38d9).
+    //
+    // `known: false` — no relay, a relay that did not answer trustworthily (see inside), unreadable content, or a
+    // delegate's empty answer — and the caller decides what that means.
+    readMinors() {
+      const cp = actingChurch || pub;
+      const unknown = { known: false, list: [] };
+      if (!cp) return Promise.resolve(unknown);
+      const urls = relays();
+      const device = _minorsLastGet(cp);
+      if (!urls.length) return Promise.resolve(device ? { known: true, list: device } : unknown);
+      const ownerView = !actingChurch && pub === churchPub;
+      const epoch = _keyReadEpoch, at = Date.now();
+      let longest = 4400;
+      return new Promise((resolve) => {
+        let best = null, done = false;
+        const answers = /* @__PURE__ */ new Map(), subs = [];
+        const finish = () => {
+          if (done) return;
+          done = true;
+          for (const x of subs) {
+            x.tok.closed = true;
+            try {
+              x.sub.close();
+            } catch (e) {
+            }
+          }
+          const ok = urls.filter((u) => answers.get(u) === true);
+          const left = urls.filter((u) => answers.get(u) !== true);
+          if (!left.every((u) => !_keyReadConnected(u))) return resolve(unknown);
+          if (!ok.length) return resolve(device ? { known: true, list: device } : unknown);
+          let live;
+          if (best) {
+            let list2 = null;
+            try {
+              list2 = JSON.parse(best.content || "{}").pubkeys || [];
+            } catch (e) {
+              list2 = null;
+            }
+            if (!Array.isArray(list2)) return resolve(unknown);
+            live = list2.map((x) => String(x || "").toLowerCase()).filter(Boolean);
+          } else if (ownerView) live = [];
+          else return resolve(unknown);
+          const list = left.length ? [.../* @__PURE__ */ new Set([...live, ...device || []])] : live;
+          if (_stillOn(cp, epoch)) _minorsLastSet(cp, list);
+          resolve({ known: true, list });
+        };
+        for (const url of urls) {
+          let up = false;
+          try {
+            const r = pool.relays.get(normalizeURL2(url));
+            up = !!(r && r.connected);
+          } catch (e) {
+          }
+          const wait = up ? _KEY_READ_LONG_WAIT : 4400;
+          if (wait > longest) longest = wait;
+          const tok = { cp, epoch, at, url, wait, closed: false, relayClosed: false };
+          let sub = null;
+          try {
+            sub = pool.subscribeMany([url], [{ kinds: [30078], authors: [cp], "#d": [MINORS_D + cp] }], {
+              ...up ? { maxWait: _KEY_READ_LONG_WAIT } : {},
+              onevent(e) {
+                if (tok.closed || !e || e.pubkey !== cp || _authFuture(e)) return;
+                if (!best || e.created_at > best.created_at) best = e;
+              },
+              // a microtask later, so a CLOSED's onclose (which nostr-tools runs right after this) has marked the token
+              oneose() {
+                queueMicrotask(() => {
+                  if (done) return;
+                  answers.set(url, _keyReadOk(tok));
+                  if (urls.every((u) => answers.has(u))) finish();
+                });
+              },
+              onclose() {
+                tok.relayClosed = true;
+              }
+            });
+          } catch (e) {
+            answers.set(url, false);
+          }
+          if (sub) subs.push({ tok, sub });
+        }
+        if (urls.every((u) => answers.has(u))) finish();
+        setTimeout(finish, longest + 600);
+      });
+    },
     setBlocked(pubkeys) {
       const opts = arguments[1];
       _requireTrustedView("blocked list");
@@ -21418,7 +21727,28 @@ zoo`.split("\n");
       _requireTrustedView("list of children");
       if (!sk) return Promise.resolve(null);
       const list = [...new Set((pubkeys || []).filter(Boolean))];
-      return _landed("list of children", _skewGate(() => _publishToRelays(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", MINORS_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list }) }), sk))));
+      let cp0 = "", ep0 = -1;
+      try {
+        cp0 = actingChurch || pub;
+        ep0 = _keyReadEpoch;
+      } catch (e) {
+      }
+      const r = _landed("list of children", _skewGate(() => _publishToRelays(finalizeEvent2(_monotonic({ kind: 30078, created_at: now(), tags: [["d", MINORS_D + pub], ["t", NET]], content: JSON.stringify({ pubkeys: list }) }), sk))));
+      return Promise.resolve(r).then((ok) => {
+        if (ok) {
+          try {
+            if (_stillOn(cp0, ep0)) _minorsLastSet(cp0, list);
+          } catch (e) {
+          }
+          try {
+            const M = window.StewardMeals;
+            if (M && M.refreshCareTeam) M.refreshCareTeam().catch(() => {
+            });
+          } catch (e) {
+          }
+        }
+        return ok;
+      });
     },
     // `opts.listKnown` — has the CALLER actually read this church's cleared list? The console has that answer
     // (its safeguarding subscription reports `loaded`) and this module does not: an empty remembered list means
@@ -22621,7 +22951,8 @@ zoo`.split("\n");
       if (!signer) return Promise.resolve(null);
       const id = plan.id || "plan" + Date.now();
       const pubAt = plan.publishAt && plan.publishAt > now() ? Math.floor(plan.publishAt) : 0;
-      const content = JSON.stringify({ id, title: plan.title || "Plan", sub: plan.sub || "", tag: plan.tag || "", accent: plan.accent || "var(--clay)", blurb: plan.blurb || "", days: plan.days || [], publishAt: pubAt, draft: !!plan.draft, public: plan.public !== false });
+      const created = Number(plan.created) || Number(plan.ts) || now();
+      const content = JSON.stringify({ id, title: plan.title || "Plan", sub: plan.sub || "", tag: plan.tag || "", accent: plan.accent || "var(--clay)", blurb: plan.blurb || "", days: plan.days || [], publishAt: pubAt, draft: !!plan.draft, public: plan.public !== false, created });
       return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", PLAN_D + id], ["t", NET]], content }, signer)).then((e) => ({ id, ...JSON.parse(content), ts: e && e.created_at }));
     },
     removePlan(id) {
@@ -22633,7 +22964,7 @@ zoo`.split("\n");
       const byId = /* @__PURE__ */ new Map();
       const versions = /* @__PURE__ */ new Map();
       const emit = () => {
-        const arr = [...byId.values()].sort((a, b) => (a.ts || 0) - (b.ts || 0));
+        const arr = [...byId.values()].sort((a, b) => (a.created || a.ts || 0) - (b.created || b.ts || 0));
         try {
           localStorage.setItem(CACHE_KEY, JSON.stringify(arr));
         } catch {
@@ -24525,6 +24856,12 @@ zoo`.split("\n");
       _keyReadEpoch++;
       _careKeyVer++;
       _mediaKeyVer++;
+      try {
+        const M = window.StewardMeals;
+        if (M && M.dropPendingCareTeam) M.dropPendingCareTeam();
+      } catch (e) {
+      }
+      _minorsLastClear(actingChurch || pub);
       _latestGuardNotice.clear();
       window.Steward.pubkey = pub;
       window.Steward.npub = npubEncode(pub);

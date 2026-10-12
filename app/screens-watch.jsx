@@ -172,7 +172,11 @@ function WatchView({ ctx }) {
       const dec = s.enc && FS.mediaDecryptor ? await FS.mediaDecryptor(churchNpub) : null;
       if (s.enc && !dec) { ctx.toast('This recording is for members — your app hasn’t received the unlock key yet. It’s sent automatically once your steward is online; try again shortly.'); setLoadingId(null); return; }
       const src = await FS.fetchSermon({ sha256: s.sha256, hosts, mime: s.mime, enc: s.enc }, { mime: s.mime || 'audio/mpeg', decrypt: dec });
-      window.TrinityAudio.play({ id: s.id, title: s.title, subtitle: chName, src, album: chName });
+      // queue = the audio sermons in the order this list shows them, so Next goes to the next sermon
+      const mine = { id: s.id, title: s.title, subtitle: chName, src, album: chName };
+      const audioSermonList = sermons.filter(x => !String(x.mime || '').startsWith('video'));
+      const sermonQueue = audioSermonList.map(x => x.id === s.id ? mine : window.sermonAudioTrack(x, { subtitle: chName, churchNpub, toast: ctx.toast }));
+      window.TrinityAudio.play(mine, sermonQueue);
     } catch (e) { ctx.toast('Couldn’t load: ' + (e.message || 'error')); }
     setLoadingId(null);
   };

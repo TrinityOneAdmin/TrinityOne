@@ -93,7 +93,7 @@ function engine() {
     CAP_KEYS: { finance: { d: 'trinityone/financekey:', cap: 'finance', legacy: false, explicit: false } },
     _capState: { finance: { ring: [], docKeys: null, rev: 1, at: 0, checked: false } },
     churchSkHeld: () => !!t.churchSk, _capAllows: () => () => true, _warnUnsealed() {}, _sealEachFailed: [], _legacyBookKeyHex: () => '', _capRingChanged() {},
-    _checkinMigrated: '', _ckKeysSettled: '', _ckSessionKeys: new Map(), _latestGuardNotice: new Map(), npubEncode: (p) => 'npub' + p,
+    _checkinMigrated: '', _ckKeysSettled: '', _ckSessionKeys: new Map(), _latestGuardNotice: new Map(), npubEncode: (p) => 'npub' + p, _minorsLastClear: () => {},
     _clearedTrail: null, _authedRelays: new Map(), _authAccepted: new Map(),   // …and what _resetChurchScopedState touches
     // …and setKey (a church unlocked, or the console reloaded): the seed words stand for a church here; the bundle's
     // own name for getPublicKey is read off the shipped body, not guessed

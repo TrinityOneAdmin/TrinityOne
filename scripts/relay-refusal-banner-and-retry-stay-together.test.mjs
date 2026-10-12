@@ -48,6 +48,7 @@ function console_({ rejected = null, relays = [], steward = {}, React } = {}) {
   };
   const selfRegisterCalls = [];
   const win = {
+    NETWORKS_ENABLED: true,   // the NETWORKS SWITCH (app/stew-data.jsx): on, because this file counts/opens the Network page; OFF is asserted in settings-cards-sit-in-authored-stacks and settings-pages-are-a-list-and-a-detail
     useStewardChurch: () => ({ name: 'Grace Church', npub: 'npub1grace', features: {}, rules: {} }),
     useStewardIdv: () => 0,
     useStewardRelays: () => relays, useStewardNetworks: () => [], useStewardRosters: () => [],

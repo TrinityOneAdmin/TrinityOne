@@ -372,13 +372,94 @@
       if (!roster || !Array.isArray(roster.people)) return false;
       return roster.people.some((p) => p && p.pub && p.pub.toLowerCase() === memberPub.toLowerCase());
     }
-    function publishCareTeam(memberPubs) {
-      if (!S() || !S().publishSigned || !S().churchPub) return Promise.resolve(null);
-      if (S().actingChurch) return Promise.resolve(null);
+    const _careTeamWait = { pubs: null, cp: "", tries: 0, timer: 0 };
+    function dropPendingCareTeam() {
+      try {
+        if (_careTeamWait.timer) clearTimeout(_careTeamWait.timer);
+      } catch (e) {
+      }
+      _careTeamWait.timer = 0;
+      _careTeamWait.pubs = null;
+      _careTeamWait.cp = "";
+      _careTeamWait.tries = 0;
+    }
+    async function publishCareTeam(memberPubs) {
+      if (!S() || !S().publishSigned || !S().churchPub) return null;
+      if (S().actingChurch) return null;
       const cp = S().churchPub;
+      const m = S().readMinors ? await S().readMinors() : null;
+      if (!S() || S().churchPub !== cp || S().actingChurch) return null;
+      if (!m || !m.known) {
+        _careTeamWait.pubs = memberPubs || [];
+        _careTeamWait.cp = cp;
+        _careTeamWait.tries = 0;
+        if (!_careTeamWait.timer) {
+          const again = () => {
+            _careTeamWait.timer = 0;
+            const pending = _careTeamWait.pubs;
+            if (!pending || ++_careTeamWait.tries > 15) return;
+            if (!S() || S().actingChurch || S().churchPub !== _careTeamWait.cp) {
+              dropPendingCareTeam();
+              return;
+            }
+            const tries = _careTeamWait.tries;
+            publishCareTeam(pending).then((r) => {
+              _careTeamWait.tries = tries;
+              if (r === false && _careTeamWait.pubs === pending && !_careTeamWait.timer) _careTeamWait.timer = setTimeout(again, 2e4);
+            }, () => {
+            });
+          };
+          _careTeamWait.timer = setTimeout(again, 2e4);
+        }
+        return false;
+      }
+      _careTeamWait.pubs = null;
+      _careTeamWait.cp = "";
+      const minors = new Set(m.list.map((p) => String(p || "").toLowerCase()));
       const blocked = new Set((S().blockedHere && S().blockedHere() || []).map((p) => String(p || "").toLowerCase()));
-      const pubs = [.../* @__PURE__ */ new Set([cp, ...(memberPubs || []).map((p) => String(p || "").trim().toLowerCase()).filter((p) => p && !blocked.has(p))])];
+      const pubs = [.../* @__PURE__ */ new Set([cp, ...(memberPubs || []).map((p) => String(p || "").trim().toLowerCase()).filter((p) => p && !blocked.has(p) && !minors.has(p))])];
       return S().publishSigned({ kind: 30078, created_at: now(), tags: [["d", CARETEAM_D + cp], ["t", NET]], content: JSON.stringify({ pubs, updated: now() }) });
+    }
+    async function refreshCareTeam() {
+      if (!S() || !S().subscribeMany || !S().churchPub || S().actingChurch) return null;
+      const cp = S().churchPub;
+      const cur = await new Promise((res) => {
+        let best = null, done = false, sub = null;
+        const fin = () => {
+          if (done) return;
+          done = true;
+          try {
+            sub && sub.close();
+          } catch (x) {
+          }
+          res(best);
+        };
+        try {
+          sub = S().subscribeMany([{ kinds: [30078], authors: [cp], "#d": [CARETEAM_D + cp] }], {
+            onevent(e) {
+              if (e.pubkey !== cp) return;
+              if (!best || e.created_at > best.created_at) best = e;
+            },
+            oneose: fin
+          });
+        } catch (x) {
+          fin();
+          return;
+        }
+        setTimeout(fin, 5e3);
+      });
+      if (!cur) return null;
+      let pubs = [];
+      try {
+        pubs = (JSON.parse(cur.content || "{}").pubs || []).map((p) => String(p || "").toLowerCase());
+      } catch (x) {
+        return null;
+      }
+      const m = S().readMinors ? await S().readMinors() : null;
+      if (!m || !m.known) return false;
+      const minors = new Set(m.list);
+      if (!pubs.some((p) => minors.has(p))) return null;
+      return publishCareTeam(pubs.filter((p) => p !== cp));
     }
     function subscribeCareRequests(cb) {
       if (!S() || !S().subscribeMany || !S().churchPub) {
@@ -612,7 +693,14 @@
         }
       }
       const blockedNow = new Set((S().blockedHere && S().blockedHere() || []).map((p) => String(p || "").toLowerCase()));
-      const toPubs = [...audience, ...extra].filter((p) => !blockedNow.has(String(p || "").toLowerCase()));
+      const mk = S().readMinors ? await S().readMinors().catch(() => null) : null;
+      const kids = new Set((mk && mk.known && mk.list || []).map((p) => String(p || "").toLowerCase()));
+      const askerHex = String(requesterPub || "").toLowerCase();
+      if (!(mk && mk.known)) extra = [];
+      const toPubs = [...audience, ...extra].filter((p) => {
+        const h = String(p || "").toLowerCase();
+        return !blockedNow.has(h) && (h === askerHex || !kids.has(h));
+      });
       const msgId = Math.random().toString(36).slice(2, 10);
       const dtag = CARECHAT_D + reqId + ":" + msgId;
       const at = _monotonicM(dtag);
@@ -633,6 +721,8 @@
       cachedEnabled,
       // care-team recipient roster (for the "ask for help" seal)
       publishCareTeam,
+      refreshCareTeam,
+      dropPendingCareTeam,
       // "ask for help" requests (console side): triage / approve / decline / thread
       subscribeCareRequests,
       setCareRequestStatus,

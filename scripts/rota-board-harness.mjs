@@ -22,7 +22,7 @@ const JS = transformSync(readFileSync(new URL('../app/stew-schedule.jsx', import
 
 export const h = (type, props, ...kids) => ({ type, props: props || {}, kids: kids.flat(Infinity) });
 
-export function loadSchedule(extraScope = {}, extraWindow = {}, names = ['DashRota']) {
+export function loadSchedule(extraScope = {}, extraWindow = {}, names = ['DashRota'], { effects = false } = {}) {
   const winBase = { confirm: () => true, ...extraWindow };
   const win = new Proxy(winBase, {
     get(t, k) {
@@ -32,14 +32,21 @@ export function loadSchedule(extraScope = {}, extraWindow = {}, names = ['DashRo
     },
     has: () => true,
   });
-  let states = [], idx = 0, refs = [], ridx = 0;
+  let states = [], idx = 0, refs = [], ridx = 0, ei = 0, effDeps = [], queued = [];
   const React = {
     useState(init) {
       const i = idx++;
       if (states.length <= i) states[i] = (typeof init === 'function' ? init() : init);
       return [states[i], (v) => { states[i] = typeof v === 'function' ? v(states[i]) : v; }];
     },
-    useEffect() {},
+    // OFF by default (existing tests rely on it). With { effects: true } an effect runs after the draw that queued it
+    // when its deps changed, as React would; flush() runs the queue. The rota board seeds and refreshes its draft here.
+    useEffect(fn, deps) {
+      if (!effects) return;
+      const i = ei++, prev = effDeps[i];
+      const same = Array.isArray(prev) && Array.isArray(deps) && prev.length === deps.length && prev.every((v, k) => Object.is(v, deps[k]));
+      if (!same) { effDeps[i] = deps; queued.push(fn); }
+    },
     useRef(init) { const i = ridx++; if (!refs[i]) refs[i] = { current: init === undefined ? null : init }; return refs[i]; },
     useMemo: (f) => f(),
     createElement: h,
@@ -55,9 +62,10 @@ export function loadSchedule(extraScope = {}, extraWindow = {}, names = ['DashRo
   };
   const keys = Object.keys(scope);
   const mod = new Function(...keys, JS + '\nreturn { ' + names.join(', ') + ' };')(...keys.map(k => scope[k]));
-  const reset = () => { idx = 0; ridx = 0; };
-  const resetAll = () => { states = []; refs = []; idx = 0; ridx = 0; };
-  return { mod, reset, resetAll, win, get states() { return states; } };
+  const reset = () => { idx = 0; ridx = 0; ei = 0; };
+  const resetAll = () => { states = []; refs = []; idx = 0; ridx = 0; ei = 0; effDeps = []; queued = []; };
+  const flush = () => { const q = queued; queued = []; q.forEach(f => f()); return q.length; };
+  return { mod, reset, resetAll, flush, win, get states() { return states; } };
 }
 
 // The standard fixture: one team ("Welcome", one role "Greeter"), one service, one published rota with `who` on it.
@@ -69,8 +77,9 @@ export function mountBoard({
   rosters = [{ team: 't1', roles: [{ id: 'r1', name: 'Greeter' }], people: [{ id: 'p1', name: 'Ruth Bexley', pub: PUB_A }], pods: [] }],
   services = [SERVICE],
   rotas = [{ id: 'svc1', service: 'svc1', published: true, assign: { 't1::r1': { id: 'p1', name: 'Ruth Bexley', pub: PUB_A } } }],
-  requests = [], replies = [], unavail = {}, steward = {}, confirm,
+  requests = [], replies = [], unavail = {}, steward = {}, confirm, effects = false,
 } = {}) {
+  let rotasNow = rotas;
   const calls = { publishRota: [], sendServingRequest: [], publishService: [] };
   const Steward = {
     publishService: async (s) => { calls.publishService.push(s); return { id: s.id || ('svc-' + s.date), ...s }; },
@@ -81,12 +90,18 @@ export function mountBoard({
   };
   const sch = loadSchedule({}, {
     useStewardGroups: () => teams, useStewardRosters: () => rosters, useStewardServices: () => services,
-    useStewardRotas: () => rotas, useStewardRequests: () => requests, useStewardRequestReplies: () => replies,
+    useStewardRotas: () => rotasNow, useStewardRequests: () => requests, useStewardRequestReplies: () => replies,
     useStewardUnavail: () => unavail, Steward, ...(confirm ? { confirm } : {}),
-  });
-  const draw = () => { sch.reset(); return sch.mod.DashRota({ onNewTeam() {} }); };
+  }, ['DashRota'], { effects });
+  const draw = () => {
+    sch.reset(); let tree = sch.mod.DashRota({ onNewTeam() {} });
+    for (let i = 0; i < 4 && sch.flush(); i++) { sch.reset(); tree = sch.mod.DashRota({ onNewTeam() {} }); }   // effects set state: draw again
+    return tree;
+  };
   return {
     draw, calls, sch,
+    // another steward publishes: the console's rota subscription now returns `next`
+    deliver: (next) => { rotasNow = next; return draw(); },
     text: () => reads(draw()),
     // a button whose visible text contains `label`; throws (not returns undefined) when there is none, so a
     // test can never pass because it clicked nothing

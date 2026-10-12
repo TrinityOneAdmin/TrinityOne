@@ -65,6 +65,7 @@ function loadSetPin() {
     // stubbed to the localStorage behaviour the assertions below already expect. Where it lands is covered by
     // scripts/console-key-secure-store.test.mjs, which drives the real thing.
     encBlobWrite: async (str) => { store['e'] = str; return true; },
+    _stay: { clear: async () => {} },   // stay-open records (stayopen-is-kept-in-the-keystore.test.mjs): not this file's question
     crypto, TextEncoder, Uint8Array, JSON,
   };
   const args = Object.keys(scope);

@@ -1173,6 +1173,7 @@ function ReadScreen({ ctx }) {
             </div>
           )}
 
+          {typeof PlanReadBar === 'function' ? <PlanReadBar ctx={ctx} loc={loc} /> : null}
           {/* footer nav */}
           <div style={{ display: 'flex', gap: 10, marginTop: 26 }}>
             <button disabled={!prev} onClick={() => prev && ctx.setLoc(prev)} style={{ ...navBtnStyle, opacity: prev ? 1 : .4 }}>
@@ -1183,6 +1184,8 @@ function ReadScreen({ ctx }) {
             </button>
           </div>
         </div>
+        {/* room for the floating player: a box, not var() padding — see ScreenScroll in screens-today.jsx */}
+        <div aria-hidden="true" data-player-room="" style={{ height: 'max(0px, calc(var(--trinity-player-h, 0px) - 116px))' }} />
       </div>
 
       <ActionSheet label={rangeRef} multi={multi} ctx={sheetCtx} open={sheet === 'action'} onClose={dismiss}
