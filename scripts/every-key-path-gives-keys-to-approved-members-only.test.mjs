@@ -220,6 +220,44 @@ test('…and while approval cannot be told, Block still rotates — to the admit
   assert.deepEqual(rotatedTo(w, 'rotateCareKey'), [MB], 'with approval unknown, Block rotated the care key to someone not on the admitted list');
 });
 
+// ROUND 3c, HIGH 1 (audit of 432c676). 3a narrowed Block's whole list to the approved members, and that list also fed the
+// NAME key rotation — a member waiting for approval lost the name key they need to seal their name for the queue
+// (a-blocked-member-this-console-remembers-stays-blocked went red). And with approval unknown the list became the
+// admitted list alone: in an open-join church that is nobody, so care, sermon and rooms were rotated to the church
+// alone and every phone deleted its key. Now: the name key goes to everyone who stays; the other three keep every
+// current holder who passes `keepIf`.
+const optsOf = (w, name) => (w.calls.find(x => x.name === name) || { a: [] }).a[2];
+test('Block: the NAME key still goes to a member waiting for approval — only the blocked person leaves it', async () => {
+  for (const approval of [true, null]) {
+    const w = world({ approval });
+    await block(w);
+    const to = rotatedTo(w, 'ensureNameKeyForMembers');
+    assert.ok(to, 'CONTROL: the name key was not rotated');
+    assert.ok(to.includes(MP), `approval=${approval}: BLOCK TOOK THE NAME KEY FROM A MEMBER WAITING FOR APPROVAL — they cannot seal their name for the queue`);
+    assert.ok(to.includes(MB) && !to.includes(BOB), `approval=${approval}: the name key went to the blocked person, or not to an approved member`);
+  }
+});
+test('Block: every current holder of the care, sermon and open-room keys keeps them — approval known: the approved; unknown: everyone but the blocked', async () => {
+  for (const [approval, mp] of [[true, false], [null, true]]) {
+    const w = world({ approval });
+    await block(w);
+    for (const name of ['rotateCareKey', 'rotateMediaKey', 'publishGroupKey']) {
+      const o = optsOf(w, name);
+      assert.ok(o && typeof o.keepIf === 'function', `approval=${approval}: ${name} WAS GIVEN NO keepIf — a rotation to a partial list takes the key off every holder it misses`);
+      assert.equal(o.keepIf(MB), true, `approval=${approval}: ${name} would take the key off an APPROVED holder`);
+      assert.equal(o.keepIf(BOB), false, `approval=${approval}: ${name} would keep the key for the person being BLOCKED`);
+      assert.equal(o.keepIf(MP), mp, `approval=${approval}: ${name} kept=${!mp} a holder waiting for approval`);
+    }
+  }
+});
+test('Block: with approval unknown in an OPEN-JOIN church nobody admitted, the rotation is not to the church alone', async () => {
+  const w = world({ approval: null });
+  w.lists.admitted.length = 0;                     // an open-join church: nobody is on the admitted list
+  await block(w);
+  const o = optsOf(w, 'rotateCareKey');
+  assert.ok(o && o.keepIf(MB) && o.keepIf(MP), 'AN OPEN-JOIN CHURCH WHOSE POLICY HAD NOT LOADED HAD EVERY MEMBER\'S CARE KEY ROTATED AWAY');
+});
+
 // ── 5. removing a delegate (DashStewardsPanel.remove → rotateChurchKeys) ────────────────────────────────────────────
 async function removeDelegate(w) {
   const { mod, draw } = load(w);
@@ -239,6 +277,17 @@ test('removing a delegate rotates the keys to the APPROVED members — never one
   await removeDelegate(w);
   assert.ok(w.calls.some(x => x.name === 'setStewards'), 'CONTROL: the roster was not written');
   assert.deepEqual([...rotatedTo(w, 'rotateCareKey')].sort(), [MB, BOB].sort(), 'REMOVING A DELEGATE ROTATED THE CARE KEY TO A MEMBER STILL WAITING');
+});
+
+test('removing a delegate: the NAME key still goes to a member waiting; the removed delegate keeps no other key as a holder', async () => {
+  const w = world({ approval: true });
+  await removeDelegate(w);
+  const to = rotatedTo(w, 'ensureNameKeyForMembers');
+  assert.ok(to && to.includes(MP), 'REMOVING A DELEGATE TOOK THE NAME KEY FROM A MEMBER WAITING FOR APPROVAL');
+  const o = optsOf(w, 'rotateCareKey');
+  assert.ok(o && typeof o.keepIf === 'function', 'removing a delegate gave the care rotation no keepIf');
+  assert.equal(o.keepIf(ST), false, 'THE REMOVED DELEGATE WOULD KEEP THE CARE KEY AS A CURRENT HOLDER');
+  assert.equal(o.keepIf(MB), true, 'an approved holder would lose the care key when a delegate is removed');
 });
 
 // ── 6. the first sermon upload (DashSermons.doUpload → mediaEncryptor, which MINTS the sermon key) ──────────────────

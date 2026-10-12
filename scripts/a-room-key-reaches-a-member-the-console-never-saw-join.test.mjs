@@ -25,7 +25,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { WebSocket } from 'ws';
-import { finalizeEvent } from 'nostr-tools';
+import { finalizeEvent, nip19 } from 'nostr-tools';
 import * as H from './relay-network-harness.mjs';
 
 const CHROME = ['/usr/bin/chromium-browser', '/usr/bin/chromium', '/usr/bin/google-chrome'].find(p => existsSync(p));
@@ -319,4 +319,55 @@ test('F · a SECOND console that was away while MA was blocked comes back with s
     assert.ok(!room().includes(MA.pub), 'once the blocklist arrived, the second console re-keyed MA anyway: ' + show());
     assert.ok(room().includes(M1.pub), 'CONTROL: a member who was not blocked lost the room key: ' + show());
   } finally { await two.close(); }
+});
+
+// ── ROUND 3c, HIGH 1 (audit of 432c676): BLOCK, PRESSED ON THE MEMBERS SCREEN, TAKES NOBODY ELSE'S KEY — AND HOW FAST ──
+// 3a narrowed every rotation to the approved members it could name, and the member app deletes a key it is no longer
+// given — so a Block that could not tell approval rotated care, sermon and rooms to the admitted list alone, and in an
+// open-join church to nobody. The owner's rule is "once admitted, rooms open". This row presses Block on the real screen
+// and reads every key envelope the console SENDS (off its socket, not the relay's newest copy, so a drop the distributor
+// repaired a second later is still seen): none of the rotated envelopes may leave out an approved member who stays. Then
+// a member approved and joining straight after the Block is timed until they hold all three keys. Both times are logged
+// as the liveness measurement.
+const blockOnScreen = async (who, others) => {
+  const npub = (p) => nip19.npubEncode(p).slice(0, 12);
+  await evalIn(click('/^Members$/')); await sleep(2000);
+  await evalIn(`(() => { if (document.querySelector('button[title="Remove / block this member"]')) return 'direct'; const b = [...document.querySelectorAll('button')].find(x => /^More for /.test(x.getAttribute('aria-label') || '')); if (b) b.click(); return 'more'; })()`);
+  await sleep(600);
+  const opened = await evalIn(`(() => { const me = ${JSON.stringify(npub(who.pub))}, others = ${JSON.stringify(others.map(o => npub(o.pub)))};
+    const btns = [...document.querySelectorAll('button[title="Remove / block this member"], button[title="Decline — blocks this person from joining or posting"]')];
+    const mine = btns.find(b => { let n = b; for (let i = 0; i < 8 && n; i++) { n = n.parentElement; const t = (n && n.textContent) || ''; if (t.includes(me)) return !others.some(o => t.includes(o)); if (others.some(o => t.includes(o))) return false; } return false; }) || null;
+    if (!mine) return 'miss:' + btns.length; mine.click(); return 'ok'; })()`);
+  assert.equal(opened, 'ok', 'no Block button for ' + nm(who.pub));
+  await sleep(500);
+  assert.equal(await evalIn(`(() => { const b = document.querySelector('button[title="Confirm — bans them from posting & hides their messages"]') || document.querySelector('button[title="Confirm — blocks them from joining or posting, and re-keys the church"]'); if (!b) return 'miss'; b.click(); return 'ok'; })()`), 'ok', 'no Block confirmation');
+};
+const SEND_HOOK = `(() => { if (window.__envHooked) { window.__env = []; return 1; } window.__envHooked = 1; window.__env = [];
+  const os = WebSocket.prototype.send;
+  WebSocket.prototype.send = function (d) { try { if (typeof d === 'string' && d.startsWith('["EVENT"')) { const e = JSON.parse(d)[1]; const dd = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+      if (/^trinityone\\/(carekey|mediakey|groupkey):/.test(dd)) window.__env.push({ d: dd, at: Date.now(), recips: Object.keys(JSON.parse(e.content).keys || {}) }); } } catch (x) {}
+    return os.call(this, d); }; return 1; })()`;
+test('G · a Block pressed on the Members screen takes no approved member\'s key, even for a moment — and a member approved straight after is keyed promptly', { skip: SKIP, timeout: 300000 }, async () => {
+  assert.ok([M1, MF, MP].every(k => room().includes(k.pub) && care().includes(k.pub) && media().includes(k.pub)), 'CONTROL: M1, MF and MP are not all keyed before the Block — run A–F first: ' + show());
+  await evalIn(SEND_HOOK);
+  const t0 = Date.now();
+  await blockOnScreen(MP, [M1, MF]);
+  assert.ok(await until(() => !room().includes(MP.pub) && !care().includes(MP.pub) && !media().includes(MP.pub), 45000), 'CONTROL: the Block did not rotate MP out of all three keys: ' + show());
+  const tRotated = Date.now() - t0;
+  const sent = await evalIn('window.__env');
+  const rotated = sent.filter(x => !x.recips.includes(MP.pub) && (x.d === GROUPKEY_D + roomId || x.d === CAREKEY_D + churchA || x.d === MEDIAKEY_D + churchA));
+  assert.ok(rotated.length >= 3, 'CONTROL: the console sent fewer than three rotated envelopes: ' + JSON.stringify(sent.map(x => x.d.slice(11, 19))));
+  for (const x of rotated) {
+    for (const k of [M1, MF]) assert.ok(x.recips.includes(k.pub), `A BLOCK TOOK ${nm(k.pub)}'S ${x.d.slice(11, 19)} AWAY — an approved member who stays, dropped by the rotation (the member app deletes the key it is no longer given): [${x.recips.map(nm)}]`);
+  }
+  // a member approved and joining straight after the Block
+  const MG = H.key();
+  assert.equal(await admit([MG.pub]), 'ok', 'the approval was not saved');
+  const t1 = Date.now();
+  await H.publishAll(relay, [joinTo(churchA, MG)]);
+  const got = await until(() => room().includes(MG.pub) && care().includes(MG.pub) && media().includes(MG.pub), WAIT);
+  const tJoin = Date.now() - t1;
+  console.log(`[liveness] Block → all three keys rotated (seen on the relay): ${(tRotated / 1000).toFixed(1)} s; approved member dropped by any rotated envelope: none; member approved after the Block → keyed to room, care and sermon: ${got ? (tJoin / 1000).toFixed(1) + ' s' : 'NOT within ' + WAIT / 1000 + ' s'}`);
+  assert.ok(got, `A MEMBER APPROVED STRAIGHT AFTER A BLOCK WAS NOT KEYED within ${WAIT / 1000} s — ${show()}`);
+  assert.deepEqual(errors, [], 'the console threw:\n  ' + errors.join('\n  '));
 });

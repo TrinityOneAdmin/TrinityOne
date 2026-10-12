@@ -146,7 +146,7 @@ function engine() {
     stmt(BUNDLE, 'var _senvMine = '), stmt(BUNDLE, 'var _senvDropped = '),
     stmt(BUNDLE, 'var _senvPending = '), fnBody(BUNDLE, 'function _reCheckGroupKeyPending() {'), 't.__reCheckGk = _reCheckGroupKeyPending; t.__senvPending = _senvPending; t.__gkChain = _gkChain; t.__membersReask = _membersReask;',
     fnBody(BUNDLE, 'function _noteEnvelopeDrops(gid, prev, next) {'), fnBody(BUNDLE, 'function stewIngestKey(e) {'),
-    't.__ingest = stewIngestKey; t.__skeys = _skeys; t.__senvMine = _senvMine;',
+    't.__ingest = stewIngestKey; t.__skeys = _skeys; t.__senvMine = _senvMine; t.__senvRecips = _senvRecips;',
     stmt(BUNDLE, 'var _exStewardsKey = '), fnBody(BUNDLE, 'function _exStewardSet() {'),
     stmt(BUNDLE, 'var _exStewardsAtKey = '), fnBody(BUNDLE, 'function _exStewardRemovedAt() {'),
     fnBody(BUNDLE, 'function _rememberExStewards(before, after, at) {'), 't.__rememberEx = _rememberExStewards;',
@@ -1224,4 +1224,38 @@ test('round 3a · (b): with a relay DOWN, the care and sermon reads are fresh fo
     assert.equal(e.t[checked], false, `${method}: THE MINT GATE OPENED WITH A RELAY DOWN — it may hold the envelope`);
     assert.deepEqual(e.fireTimers(), [2000], `${method}: the down relay is never asked again, so the mint gate can never open`);
   }
+});
+
+// ROUND 3c, HIGH 1 (audit of 432c676): A ROTATION KEEPS EVERY CURRENT HOLDER WHO PASSES `keepIf`. The caller's member list
+// can be partial, or only the admitted list while approval is unknown; the member app deletes a key it is no longer
+// given. So whoever holds the key now and passes the caller's `keepIf` is carried into the new envelope — but never
+// someone this console holds as blocked, whatever `keepIf` says.
+test('rotateCareKey, rotateMediaKey and a room rotation carry every current holder `keepIf` passes — and never the blocked', async () => {
+  const e = engine();
+  e.t._localBlocked = new Set([M3.pub]);
+  const holders = { [A.pub]: 'x', [M1.pub]: 'x', [M2.pub]: 'x', [M3.pub]: 'x' };
+  e.t._careKeyHex = 'aa'.repeat(32); e.t._careKeyRing = ['aa'.repeat(32)]; e.t._careKeyChecked = true; e.t._careKeyRev = 1; e.t._careKeyDocKeys = { ...holders }; e.t._careKeyMine = true;
+  e.t._mediaKeyHex = 'cc'.repeat(32); e.t._mediaKeyRing = ['cc'.repeat(32)]; e.t._mediaKeyChecked = true; e.t._mediaKeyFresh = true; e.t._mediaKeyDocKeys = { ...holders }; e.t._mediaKeyMine = true;
+  const gid = 'room-3c';
+  e.t.__skeys[gid] = [unhex('dd'.repeat(32))]; e.t.__senvRecips[gid] = Object.keys(holders); e.t.__senvMine[gid] = true;
+  const keepIf = (p) => p !== M2.pub;              // the caller says: everyone but M2 (the person leaving)
+  for (const [what, call, d] of [
+    ['care', () => e.S.rotateCareKey([], [], { keepIf }), CAREKEY_D + A.pub],
+    ['sermon', () => e.S.rotateMediaKey([], [], { keepIf }), MEDIAKEY_D + A.pub],
+    ['room', () => e.S.publishGroupKey(gid, [], { rotate: true, keepIf }), 'trinityone/groupkey:' + gid],
+  ]) {
+    const p0 = e.published.length;
+    await call();
+    const env = e.published.slice(p0).find(ev => dtag(ev) === d);
+    assert.ok(env, `CONTROL: no ${what} rotation was published`);
+    const to = Object.keys(JSON.parse(env.content).keys || {});
+    assert.ok(to.includes(M1.pub), `THE ${what.toUpperCase()} ROTATION TOOK THE KEY OFF A CURRENT HOLDER keepIf KEPT — handed an empty list, it rotated to the church alone`);
+    assert.ok(!to.includes(M2.pub), `the ${what} rotation kept the person keepIf left out`);
+    assert.ok(!to.includes(M3.pub), `THE ${what.toUpperCase()} ROTATION KEPT A HOLDER THIS CONSOLE HOLDS AS BLOCKED`);
+  }
+  // CONTROL: without keepIf, the rotation is exactly the list it was given (the old contract)
+  const p1 = e.published.length;
+  await e.S.rotateCareKey([], []);
+  const plain = e.published.slice(p1).find(ev => dtag(ev) === CAREKEY_D + A.pub);
+  assert.ok(plain && !Object.keys(JSON.parse(plain.content).keys).includes(M1.pub), 'CONTROL: without keepIf a rotation still carried holders');
 });

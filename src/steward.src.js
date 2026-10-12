@@ -6648,7 +6648,14 @@ window.Steward = {
     _mediaKeyVer++;   // a rotation is under way: an ensureMediaKeyForMembers still sealing the old ring must not publish it
     const fresh = _hex(crypto.getRandomValues(new Uint8Array(32)));
     const full = [fresh, ...(_mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex])].slice(0, 50);
-    const want = [...new Set([pub0, ...(memberPubs || []).filter(Boolean), ...(stewardPubs || []).filter(Boolean)])]
+    // WHOEVER HOLDS THE KEY NOW AND PASSES `keepIf` KEEPS IT (round 3c, HIGH 1). A rotation exists to take ONE person
+    // out; everybody else who holds the key must keep it. The caller's member list can be partial (a cold start) or,
+    // with approval not yet known, only the admitted list — and the member app deletes a key it is no longer given, so
+    // rotating to that list alone took the key off every member it missed until the distributor put them back. The
+    // third argument is read here, not named in the signature: test harnesses lift this method by its first line.
+    const _keepIf = (arguments[2] && typeof arguments[2].keepIf === 'function') ? arguments[2].keepIf : null;
+    const _held = _keepIf ? Object.keys(_mediaKeyDocKeys || {}).filter(p => { try { return !!_keepIf(p); } catch (e) { return false; } }) : [];
+    const want = [...new Set([pub0, ...(memberPubs || []).filter(Boolean), ...(stewardPubs || []).filter(Boolean), ..._held])]
       .filter(p => !_localBlocked.has(String(p).toLowerCase()));   // the blocked are never given a key — the caller's list is not the last word (audit of ce15f92)
     // FIT THE ENVELOPE — rotate with a shorter history rather than not rotate at all (see rotateCareKey: a
     // refused rotation leaves the blocked member holding the key). Owner, 2026-10-01.
@@ -6804,7 +6811,10 @@ window.Steward = {
     if (_careKeyDocKeys && !_careKeyMine) return false;        // the newest envelope has no copy we opened: our ring is older, and a rotation from it would drop the current key (round 3a)
     _careKeyVer++;   // a rotation is under way: any publish still sealing the old ring must not land after it
     const fresh = _hex(crypto.getRandomValues(new Uint8Array(32)));
-    const want = [...new Set([cp, churchPub, ...(memberPubs || []), ...(stewardPubs || [])].filter(Boolean))]
+    // WHOEVER HOLDS THE KEY NOW AND PASSES `keepIf` KEEPS IT (round 3c, HIGH 1) — see rotateMediaKey.
+    const _keepIf = (arguments[2] && typeof arguments[2].keepIf === 'function') ? arguments[2].keepIf : null;
+    const _held = _keepIf ? Object.keys(_careKeyDocKeys || {}).filter(p => { try { return !!_keepIf(p); } catch (e) { return false; } }) : [];
+    const want = [...new Set([cp, churchPub, ...(memberPubs || []), ...(stewardPubs || []), ..._held].filter(Boolean))]
       .filter(p => !_localBlocked.has(String(p).toLowerCase()));   // the blocked are never given a key — the caller's list is not the last word (audit of ce15f92)
     // FIT THE ENVELOPE TO THE CHURCH, and rotate a shorter history rather than not rotating at all.
     //
@@ -7466,7 +7476,10 @@ window.Steward = {
       // `churchPub` so the steward who just made the room can still read it (they are only in `memberPubs` if
       // they happen to be in the group). In the ordinary owner case the two are the same value and the Set
       // collapses them, so the recipient list is byte-identical to before.
-      const recips = [...new Set([actingChurch || churchPub, churchPub, ...(memberPubs || []).map(p => toPubHex(p) || p).filter(Boolean)])]
+      // A ROTATION KEEPS EVERY CURRENT HOLDER WHO PASSES `opts.keepIf` (round 3c, HIGH 1) — see rotateMediaKey. Read
+      // here, inside the queue turn, so it is the envelope as it stands after anything queued ahead of us.
+      const _held = (opts.rotate && typeof opts.keepIf === 'function') ? (_senvRecips[groupId] || []).filter(p => { try { return !!opts.keepIf(p); } catch (e) { return false; } }) : [];
+      const recips = [...new Set([actingChurch || churchPub, churchPub, ...(memberPubs || []).map(p => toPubHex(p) || p).filter(Boolean), ..._held])]
         .filter(p => !_localBlocked.has(String(p).toLowerCase()));
       let ring = _skeys[groupId] || [];
       let key = ring[0];

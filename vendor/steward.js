@@ -20156,7 +20156,15 @@ zoo`.split("\n");
       _mediaKeyVer++;
       const fresh = _hex(crypto.getRandomValues(new Uint8Array(32)));
       const full = [fresh, ..._mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex]].slice(0, 50);
-      const want = [.../* @__PURE__ */ new Set([pub0, ...(memberPubs || []).filter(Boolean), ...(stewardPubs || []).filter(Boolean)])].filter((p) => !_localBlocked.has(String(p).toLowerCase()));
+      const _keepIf = arguments[2] && typeof arguments[2].keepIf === "function" ? arguments[2].keepIf : null;
+      const _held = _keepIf ? Object.keys(_mediaKeyDocKeys || {}).filter((p) => {
+        try {
+          return !!_keepIf(p);
+        } catch (e) {
+          return false;
+        }
+      }) : [];
+      const want = [.../* @__PURE__ */ new Set([pub0, ...(memberPubs || []).filter(Boolean), ...(stewardPubs || []).filter(Boolean), ..._held])].filter((p) => !_localBlocked.has(String(p).toLowerCase()));
       const ring = _fitKeyRing(full, want.length, (pl) => encrypt2(pl, getConversationKey(sk0, want[0])));
       if (!ring) {
         console.warn("[steward] media key rotation too large for one document at " + want.length + " recipients");
@@ -20341,7 +20349,15 @@ zoo`.split("\n");
       if (_careKeyDocKeys && !_careKeyMine) return false;
       _careKeyVer++;
       const fresh = _hex(crypto.getRandomValues(new Uint8Array(32)));
-      const want = [...new Set([cp, churchPub, ...memberPubs || [], ...stewardPubs || []].filter(Boolean))].filter((p) => !_localBlocked.has(String(p).toLowerCase()));
+      const _keepIf = arguments[2] && typeof arguments[2].keepIf === "function" ? arguments[2].keepIf : null;
+      const _held = _keepIf ? Object.keys(_careKeyDocKeys || {}).filter((p) => {
+        try {
+          return !!_keepIf(p);
+        } catch (e) {
+          return false;
+        }
+      }) : [];
+      const want = [...new Set([cp, churchPub, ...memberPubs || [], ...stewardPubs || [], ..._held].filter(Boolean))].filter((p) => !_localBlocked.has(String(p).toLowerCase()));
       const full = [fresh, ..._careKeyRing.length ? _careKeyRing : [_careKeyHex]].slice(0, 50);
       const probe = want[0];
       let ring = null;
@@ -21156,7 +21172,14 @@ zoo`.split("\n");
         const haveRing = (_skeys[groupId] || []).length > 0;
         if (opts.reuseOnly && !haveRing) return Promise.resolve(null);
         if (opts.reuseOnly && _senvMine[groupId] !== true) return Promise.resolve(null);
-        const recips = [.../* @__PURE__ */ new Set([actingChurch || churchPub, churchPub, ...(memberPubs || []).map((p) => toPubHex(p) || p).filter(Boolean)])].filter((p) => !_localBlocked.has(String(p).toLowerCase()));
+        const _held = opts.rotate && typeof opts.keepIf === "function" ? (_senvRecips[groupId] || []).filter((p) => {
+          try {
+            return !!opts.keepIf(p);
+          } catch (e) {
+            return false;
+          }
+        }) : [];
+        const recips = [.../* @__PURE__ */ new Set([actingChurch || churchPub, churchPub, ...(memberPubs || []).map((p) => toPubHex(p) || p).filter(Boolean), ..._held])].filter((p) => !_localBlocked.has(String(p).toLowerCase()));
         let ring = _skeys[groupId] || [];
         let key = ring[0];
         if (!opts.rotate && !key && !_isRelayAuthed()) return Promise.resolve(null);

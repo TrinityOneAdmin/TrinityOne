@@ -132,6 +132,12 @@ before(async () => {
   await waitFor(`window.Steward.nameKeyReady() && !!window.Steward.careSeal({ a: 1 })`, 90000, 'church A\'s own name and care keys');
   await waitFor(`(window.Steward.identities() || []).some(x => x.kind === 'steward' && x.pub === ${JSON.stringify(B.pub)})`, 60000, 'church B in the switcher');
   ASK = privateKeyFromSeedWords(await evalIn('window.Steward.exportMnemonic()'));
+  // A new church starts with approval ON, and the care key goes to APPROVED members only (78ffad0) — so M3 joining would
+  // wait for approval and this setup's own control failed ("never keyed"): it passes at c4cdd0a and failed at 432c676,
+  // found by round 3c's run of every test that drives the key paths. The same fix 3a made in the sibling file
+  // the-key-enrolment-never-uses-another-churchs-lists: this file is about a church switch, not approval.
+  assert.equal(await evalIn(`window.Steward.setJoinPolicy(false).then(r => r ? 'ok' : String(r))`), 'ok', 'CONTROL: open join could not be set');
+  await sleep(3000);
   // TWO MEMBERS JOIN A, and the console keys them
   await H.publishAll(relay, [join_(M), join_(M3)]);
   { const t0 = Date.now(); let ok = false; while (Date.now() - t0 < 60000 && !ok) { const n = ringOfA(NAMEKEY_D), c = ringOfA(CAREKEY_D); ok = !!(n && c && n.recips.includes(M3.pub) && c.recips.includes(M3.pub) && n.recips.includes(M.pub)); if (!ok) await sleep(500); } assert.ok(ok, 'church A\'s members were never keyed — the rows below would prove nothing'); }

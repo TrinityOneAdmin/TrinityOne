@@ -6593,16 +6593,38 @@ const CLEARANCE_RETRY_MS = 60000;
 // Returns a promise of the names of the keys that did NOT rotate ([] = all did). The calls themselves are made
 // synchronously, before the promise exists. Capability keys (finance, check-in) are not here: they re-key
 // themselves from the steward roster (ensureCapKeyFor), whoever changed it.
-function rotateChurchKeys({ memberPubs, stewardPubs, groups, delegated, dropPk, isBlocked }) {
+// `namePubs`    (round 3c, HIGH 1) who gets the new NAME key: every known member who is not blocked and not leaving,
+//               approved or not — a member waiting for approval needs it to seal their name for the queue. The
+//               care, sermon and open-room keys go to `memberPubs` (approved only) instead.
+// `keepKr`, `keepKnown`, `goingPk` (round 3c, HIGH 1) — which CURRENT HOLDERS of the care, sermon and open-room keys
+//               keep them (`keepIf`, below). A rotation takes one person out (`goingPk`: the one blocked, or the
+//               delegate removed); everybody else who holds a key keeps it, so a partial member list, or one that is
+//               only the admitted list while approval is unknown, takes nobody else's key away. Never anyone blocked.
+//               `keepKr` is the caller's useStewKeyRecipients(); `keepKnown` whether its approved() could tell:
+//                 · known — a holder keeps the key if the shared filter approves them (approval off: everyone not
+//                   blocked; on: the admitted). A holder the member list has not delivered yet is not dropped for that.
+//                 · NOT known — every holder keeps it. The rotation then hands the key to nobody new except members on
+//                   the admitted list, and takes it from nobody but the person leaving. A pending member exists only
+//                   when approval is on, and is then either already a holder (unchanged) or not keyed at all; an
+//                   open-join church loses no one.
+//               Built here, not in a helper beside it: every test that runs Block or Remove lifts this function by name.
+function rotateChurchKeys({ memberPubs, namePubs, keepKr, keepKnown, goingPk, stewardPubs, groups, delegated, dropPk, isBlocked }) {
+  const _lc = (p) => String(p || '').toLowerCase(), _going = _lc(goingPk);
+  const keepIf = keepKr ? (h) => {
+    if (!h || (_going && _lc(h) === _going) || isBlocked(h)) return false;
+    if (!keepKnown) return true;
+    const a = keepKr.approved([h]);
+    return !!(a && a.length);
+  } : undefined;
   // AWAIT THESE, AND REPORT A FAILURE. Rotation is what actually takes the keys away from the person
   // being blocked; the block list alone is a note. These were fire-and-forget, so on a church large
   // enough for the envelope to be refused (measured: ~723 members for care) the steward saw "blocked"
   // while the member kept the key. Nothing said otherwise.
   const rotations = [];
-  if (window.Steward.rotateCareKey) rotations.push(Promise.resolve(window.Steward.rotateCareKey(memberPubs, stewardPubs || [])).then(r => ['the care key', r]));
+  if (window.Steward.rotateCareKey) rotations.push(Promise.resolve(window.Steward.rotateCareKey(memberPubs, stewardPubs || [], { keepIf })).then(r => ['the care key', r]));
   // `stewardRoster` — a rotation rewrites the whole recipient list, so without it blocking one member
   // would take the sermon key away from every delegated steward. Same list rotateCareKey gets above.
-  if (window.Steward.rotateMediaKey) rotations.push(Promise.resolve(window.Steward.rotateMediaKey(memberPubs, stewardPubs || [])).then(r => ['the sermon key', r]));
+  if (window.Steward.rotateMediaKey) rotations.push(Promise.resolve(window.Steward.rotateMediaKey(memberPubs, stewardPubs || [], { keepIf })).then(r => ['the sermon key', r]));
   // THE NAME KEY IS IN THIS LIST TOO. It was fired and forgotten one line below while care and media were
   // awaited, which made it the worst of the three to lose: a blocked member still holding the name key can
   // read the whole congregation's names. What is reported below (audit of 3bc8905, and this comment
@@ -6616,7 +6638,7 @@ function rotateChurchKeys({ memberPubs, stewardPubs, groups, delegated, dropPk, 
   // church's name key. Members accept it (newest wins, steward-authored is allowed) and every sealed name
   // in the congregation stops opening — the whole roster goes anonymous from one Block tap. steward.src.js
   // refuses this from its own side too; both guards stay. AUDIT-2026-07-27.
-  if (!delegated && window.Steward.ensureNameKeyForMembers) rotations.push(Promise.resolve(window.Steward.ensureNameKeyForMembers(memberPubs, stewardPubs || [], { rotate: true })).then(r => ['the name key', r]));
+  if (!delegated && window.Steward.ensureNameKeyForMembers) rotations.push(Promise.resolve(window.Steward.ensureNameKeyForMembers(namePubs || memberPubs, stewardPubs || [], { rotate: true })).then(r => ['the name key', r]));
   // ENCRYPTED GROUPS TOO. Blocking rotated the care and media keys and nothing else, so a blocked person's
   // phone carried on decrypting every future message in every encrypted group — forever. The background
   // distributor cannot cover it: it only republishes when the recipient set GREW, and a block shrinks it,
@@ -6653,7 +6675,7 @@ function rotateChurchKeys({ memberPubs, stewardPubs, groups, delegated, dropPk, 
     // room without a key (fellowship publishMessage): a rotation that quietly fails no longer leaks the
     // room to the blocked member — it locks the remaining members out of talking in it, while the app
     // tells them it will sort itself out shortly. Silence is not survivable in either direction.
-    if (window.Steward.publishGroupKey) rotations.push(Promise.resolve(window.Steward.publishGroupKey(g.id, recips, { rotate: true })).then(r => ['the key for ' + (g.name || 'a group'), r]));
+    if (window.Steward.publishGroupKey) rotations.push(Promise.resolve(window.Steward.publishGroupKey(g.id, recips, invite ? { rotate: true } : { rotate: true, keepIf })).then(r => ['the key for ' + (g.name || 'a group'), r]));
     // Only a Block takes the person out of an invite-only room's own member list.
     if (dropPk && invite && window.Steward.publishGroup) window.Steward.publishGroup({ ...g, members: recips });
   }
@@ -7247,10 +7269,14 @@ function DashMembers() {
       if (saveNote) setBlockWarn(saveNote);
       // APPROVED members only (round 3a, HIGH 1) — and when that cannot be told yet, the members on the admitted list:
       // fewer people, never one still waiting. A Block must not wait for a list; the distributor adds the rest.
-      const remaining = dmKr.orAdmitted(members.map(m => m.pubkey).filter(p => p && p.toLowerCase() !== String(pk || '').toLowerCase() && !isBlocked(p)));
+      // …but the NAME key goes to everyone who stays, approved or not (round 3c, HIGH 1), and every current holder of the
+      // other keys who stays keeps them — see rotateChurchKeys (`keepIf`).
+      const everyone = members.map(m => m.pubkey).filter(p => p && p.toLowerCase() !== String(pk || '').toLowerCase() && !isBlocked(p));
+      const known = dmKr.approved(everyone);
+      const remaining = known || dmKr.orAdmitted(everyone);
       // AWAITED, AND A FAILURE REPORTED: rotation is what actually takes the keys away from the person being
       // blocked. The body, and every reason it is written the way it is, is rotateChurchKeys (above DashMembers).
-      const rotating = rotateChurchKeys({ memberPubs: remaining, stewardPubs: stewardRoster || [], groups, delegated, dropPk: pk, isBlocked });
+      const rotating = rotateChurchKeys({ memberPubs: remaining, namePubs: everyone, keepKr: dmKr, keepKnown: !!known, goingPk: pk, stewardPubs: stewardRoster || [], groups, delegated, dropPk: pk, isBlocked });
       // ...and off every team, the care list and the future rota slots - only for a Block that LANDED (`ok === false` may
       // be only partly saved, and unblocking does not put anyone back). See takeOffEveryTeam.
       const teams = ok === false ? Promise.resolve([]) : takeOffEveryTeam({ pk, rosters: rostersAll, rotas: rotasAll, services: servicesAll, careTeamId });
@@ -9322,8 +9348,11 @@ function DashStewardsPanel({ church }) {
       // A removal that did not land rotates nothing: they are still a steward, and re-keying around a steward
       // the relay still honours would only lock out the wrong person.
       if (!ok) { setRemoveNote({ tone: 'fail', text: 'Couldn’t remove ' + who + ' — the relay didn’t accept it, so they are STILL a steward and nothing was re-keyed. Try again.' }); return null; }
-      const memberPubs = spKr.orAdmitted(members.map(m => m.pubkey).filter(p => p && !isBlocked(p)));   // approved only — see stewKeyRecipients
-      return rotateChurchKeys({ memberPubs, stewardPubs: next, groups, delegated: false, isBlocked }).then((failed) => {
+      const everyone = members.map(m => m.pubkey).filter(p => p && !isBlocked(p));
+      const known = spKr.approved(everyone);
+      const memberPubs = known || spKr.orAdmitted(everyone);   // approved only — see stewKeyRecipients
+      // the NAME key to everyone who stays, and every current holder but the removed delegate keeps the rest (round 3c, HIGH 1)
+      return rotateChurchKeys({ memberPubs, namePubs: everyone, keepKr: spKr, keepKnown: !!known, goingPk: pk, stewardPubs: next, groups, delegated: false, isBlocked }).then((failed) => {
         const tail = alsoMember ? ' They are also a member, so they keep what members can open — to put them out of the church, block them from Members.' : '';
         if (failed.length) setRemoveNote({ tone: 'fail', text: who + ' is no longer a steward, but this console could not change ' + failed.join(' or ') + ', so they may still be able to open things sealed with it. Try removing them again.' + tail });
         else setRemoveNote({ tone: 'ok', text: who + ' is no longer a steward, and the church’s keys have been changed so they can’t open anything sealed from now on. What they could already open stays open.' + tail }); setTimeout(() => setRemoveNote(n => (n && n.tone === 'ok') ? null : n), 8000);   // a confirmation is a moment; a failure stays

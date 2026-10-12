@@ -140,7 +140,7 @@ function liftBlock() {
     ${rotateSrc}
     ${filterSrc}
     // the shared approved-members filter Block rotates to (round 3a), real; nobody here is waiting for approval
-    const dmKr = { orAdmitted: (p) => stewKeyRecipientsOrAdmitted(p, blockedList, members.map(m => m.pubkey)) };
+    const dmKr = { approved: (p) => stewKeyRecipients(p, blockedList, members.map(m => m.pubkey)), orAdmitted: (p) => stewKeyRecipientsOrAdmitted(p, blockedList, members.map(m => m.pubkey)) };   // approved(): round 3c — Block asks it first, and the name key and the holders' floor follow from its answer
     ${body}
     return block;
   `);
