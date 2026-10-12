@@ -214,12 +214,16 @@ function AudioQueue({ a }) {
 // controls row, and "Up next" (collapsed; the list opens just above the player). Tapping it does NOT navigate.
 // `bottom` lets a full-screen overlay (Listen) dock the same player at its own foot, where there is no tab bar.
 //
-// THE SPACE IT TAKES (audit of e4a17a0, D2). A floating player sits over the bottom of whatever page is under
-// it, so it publishes its REAL height (+ an 8px gap; 0 when nothing is loaded or it unmounts) as a CSS variable
-// on <html>, and every scrolling page adds that to its bottom padding: ScreenScroll (Today, Library + Watch,
-// Community, Plans, Search) and the reader use `--trinity-player-h`; Listen, which docks its own copy, passes
-// `heightVar="--trinity-listen-player-h"`. Measured, so the open Up next list is counted too.
-// `inline` = the desktop layout: the player takes its own row in the layout, covers nothing, publishes nothing.
+// THE SPACE IT TAKES (audits of e4a17a0 D2, and the device result on 1e0cdbc). A floating player sits over
+// the bottom of whatever page is under it. It publishes, as a CSS variable on <html>, the distance from the
+// BOTTOM OF THE VIEWPORT TO ITS OWN TOP EDGE (+ a 12px gap) — 0 when nothing is loaded, when it unmounts, or
+// when inline — and every scrolling page uses max(its own bottom padding, that). Measuring the top edge, not
+// the player's height, is the point: on a phone the player sits above the tab bar AND the gesture-bar
+// safe-area inset, and "height + a guessed tab-bar constant" left the last card behind it on the Pixel and
+// the Oppo. Re-measured on every render, on resize (rotation, safe-area change) and when the box changes size
+// (Up next opened). ScreenScroll (Today, Library + Watch, Community, Plans, Search) and the reader use
+// `--trinity-player-h`; Listen, which docks its own copy, passes `heightVar="--trinity-listen-player-h"`.
+// `inline` = the desktop layout: the player takes its own row in the layout, covers nothing, publishes 0.
 function MiniPlayer({ ctx, bottom, inline, heightVar }) {
   const a = useTrinityAudio();
   const [showQ, setShowQ] = React.useState(false);
@@ -230,13 +234,21 @@ function MiniPlayer({ ctx, bottom, inline, heightVar }) {
     if (!root || !root.style || typeof root.style.setProperty !== 'function') return undefined;
     const put = () => {
       const box = !inline && boxRef.current;
-      const h = box && box.getBoundingClientRect ? Math.ceil(box.getBoundingClientRect().height) : 0;
-      root.style.setProperty(cssVar, (h ? h + 8 : 0) + 'px');
+      const vh = (typeof window !== 'undefined' && window.innerHeight) || 0;
+      const top = box && box.getBoundingClientRect ? box.getBoundingClientRect().top : null;
+      const d = (box && vh && top != null) ? Math.max(0, Math.ceil(vh - top)) : 0;
+      root.style.setProperty(cssVar, (d ? d + 12 : 0) + 'px');
     };
     put();
     let ro = null;
     try { if (boxRef.current && typeof ResizeObserver !== 'undefined') { ro = new ResizeObserver(put); ro.observe(boxRef.current); } } catch (e) {}
-    return () => { try { if (ro) ro.disconnect(); } catch (e) {} root.style.setProperty(cssVar, '0px'); };
+    const vv = typeof window !== 'undefined' ? window.visualViewport : null;
+    try { if (typeof window !== 'undefined' && window.addEventListener) window.addEventListener('resize', put); if (vv && vv.addEventListener) vv.addEventListener('resize', put); } catch (e) {}
+    return () => {
+      try { if (ro) ro.disconnect(); } catch (e) {}
+      try { if (window.removeEventListener) window.removeEventListener('resize', put); if (vv && vv.removeEventListener) vv.removeEventListener('resize', put); } catch (e) {}
+      root.style.setProperty(cssVar, '0px');
+    };
   });
   if (!a.track || !window.TrinityAudio) return null;
   const A = window.TrinityAudio;

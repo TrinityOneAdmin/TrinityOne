@@ -204,13 +204,27 @@ for (const width of [320, 360, 390]) {
 // app files with the REAL React (vendor/react*.js) in the browser — the player's own effect measures it and
 // publishes the height; nothing here sets it — mounts a tab's page with the real MiniPlayer and TabBar over it
 // (as app.jsx docks them), starts a track, scrolls the page to the bottom and measures the lowest thing drawn
-// on it against the player's top edge. Today and Library -> Watch & Listen both use ScreenScroll.
+// on it against the player's top edge. Today and Library (home, and Watch & Listen) all use ScreenScroll.
+//
+// DEVICE RESULT on 1e0cdbc (Pixel 10 Pro + Oppo): the last Library card was STILL behind the player, while
+// this file passed. On a phone the player sits above the tab bar AND the gesture-bar safe-area inset, and this
+// page had no inset, so "player height + a fixed tab-bar allowance" happened to fit here and not there. A
+// browser cannot be given a real env(safe-area-inset-bottom), so `?safe=N` applies what that inset does to the
+// app's own two bottom offsets — `max(12px, env(safe-area-inset-bottom))` becomes N for the tab bar and the
+// player's dock — and the cases run with N = 48 at 360x760 and at 412x915 (Pixel-like), as well as N = 0.
 const LIVE_FILES = ['app/icons.jsx', 'app/ui.jsx', 'app/screens-today.jsx', 'app/screens-church.jsx', 'app/screens-library.jsx', 'app/screens-watch.jsx', 'app/screens-audio.jsx'];
 const LIVE_HTML = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <link rel="stylesheet" href="/vendor/fonts/fonts.css">
 <style>${[...readFileSync(join(ROOT, 'index.html'), 'utf8').matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)].map(m => m[1]).join('\n')}
 html,body{margin:0;padding:0} #app{position:relative;width:100%;height:100vh;overflow:hidden} *{animation:none!important}</style>
 <div id="app" class="trinity"></div>
+<script>
+  // emulate a bottom safe-area inset of N px: the tab bar and the player dock both read max(12px, env(...))
+  const SAFE = +(new URLSearchParams(location.search).get('safe') || 0);
+  if (SAFE) { const st = document.createElement('style');
+    st.textContent = '#app > [role="region"][aria-label="Audio player"]{bottom:' + (SAFE + 74) + 'px !important} #app > div:last-child{bottom:' + SAFE + 'px !important}';
+    document.head.appendChild(st); }
+</script>
 <script src="/vendor/react.production.min.js"></script><script src="/vendor/react-dom.production.min.js"></script>
 <script src="/engine.js"></script>
 <script>
@@ -220,7 +234,8 @@ html,body{margin:0;padding:0} #app{position:relative;width:100%;height:100vh;ove
     subscribeCareRequests: () => () => {}, cancelCareRequest() {}, childCareAudience: async () => [] };
   window.Bible = { parseRef: () => null, loaded: false, books: () => [], getVerses: () => [], maxChapter: () => 1, activeVersion: 'WEB',
     refLabel: () => '', defaultLoc: () => ({ book: 43, chap: 1 }), getVideos: async () => ({ channel: null, videos: [] }), bookName: () => 'John' };
-  window.TrinityData = { NOTIFICATIONS: [], PLANS: [{ id: 'p1', name: 'Plan', days: [{ d: 1, ref: 'John 1' }] }], VOTD_POOL: [{ ref: 'John 3:16', text: 'For God so loved the world.' }], MODULES: [], COLLECTIONS: [], JOURNAL: [] };
+  window.TrinityData = { NOTIFICATIONS: [], PLANS: [{ id: 'p1', name: 'Plan', days: [{ d: 1, ref: 'John 1' }] }], VOTD_POOL: [{ ref: 'John 3:16', text: 'For God so loved the world.' }], MODULES: ['bibles', 'commentaries', 'dictionaries', 'devotionals', 'books', 'journals'].map(id => ({ id, name: id[0].toUpperCase() + id.slice(1), icon: 'book', accent: 'var(--clay)' })),
+    COLLECTIONS: [{ id: 'highlights', name: 'Highlights', icon: 'marker' }, { id: 'notes', name: 'Notes', icon: 'note' }, { id: 'bookmarks', name: 'Bookmarks', icon: 'bookmark' }], JOURNAL: [] };
   window.MyData = { count: () => 0, list: () => [], on: () => () => {}, settings: { get: () => ({}) } };
 </script>
 ${LIVE_FILES.map(f => `<script src="/c/${f}.js"></script>`).join('\n')}
@@ -234,7 +249,7 @@ ${LIVE_FILES.map(f => `<script src="/c/${f}.js"></script>`).join('\n')}
     openServing() {}, openListen() {}, openVideo() {}, planProgress: {}, plans: [], bookmarks: [], notes: {}, highlights: {}, openShareSheet() {} };
   window.__mount = (tab) => {
     const e = React.createElement;
-    const Page = tab === 'today' ? TodayScreen : LibraryScreen;
+    const Page = tab === 'today' ? TodayScreen : LibraryScreen;   // 'library' = Library home, 'watch' = Library > Watch & Listen
     const Dock = () => e(React.Fragment, null,
       e('div', { id: 'page', style: { position: 'absolute', inset: 0 } }, e(Page, { ctx })),
       e(MiniPlayer, { ctx }), e(TabBar, { active: tab, onChange() {} }));
@@ -246,39 +261,45 @@ ${LIVE_FILES.map(f => `<script src="/c/${f}.js"></script>`).join('\n')}
   };
 </script>`;
 
-async function live(width, tab, { queueOpen = false } = {}) {
-  await send('Emulation.setDeviceMetricsOverride', { width, height: 760, deviceScaleFactor: 1, mobile: true });
-  await send('Page.navigate', { url: `http://127.0.0.1:${srv.address().port}/live.html` });
+async function live({ w, h, safe }, tab, { queueOpen = false } = {}) {
+  await send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: true });
+  await send('Page.navigate', { url: `http://127.0.0.1:${srv.address().port}/live.html?safe=${safe}` });
   await sleep(600);
   const expr = `(async () => { const wait = ms => new Promise(r => setTimeout(r, ms));
     try { await document.fonts.ready; } catch (e) {}
     __mount(${JSON.stringify(tab)}); await wait(300);
-    if (${JSON.stringify(tab)} === 'library') { const b = [...document.querySelectorAll('#page button')].find(x => /Watch/.test(x.textContent)); if (b) b.click(); await wait(400); }
+    if (${JSON.stringify(tab)} === 'watch') { const b = [...document.querySelectorAll('#page button')].find(x => /Watch/.test(x.textContent)); if (b) b.click(); await wait(400); }
     __play(); await wait(400);
     if (${queueOpen}) { const u = document.querySelector('[aria-label="Up next"]'); if (u) u.click(); await wait(400); }
     const R = document.querySelector('[role="region"][aria-label="Audio player"]');
-    const sc = [...document.querySelectorAll('#page *')].find(n => getComputedStyle(n).overflowY === 'auto' && n.scrollHeight > n.clientHeight);
+    const TB = document.querySelector('#app > div:last-child');
+    const sc = [...document.querySelectorAll('#page *')].find(n => getComputedStyle(n).overflowY === 'auto');
     if (sc) { sc.scrollTop = sc.scrollHeight; await wait(250); }
     let low = null, lowBottom = -1;
     if (sc) for (const n of sc.querySelectorAll('*')) { const b = n.getBoundingClientRect(); if (b.height > 0 && b.width > 0 && b.bottom > lowBottom) { lowBottom = b.bottom; low = (n.textContent || n.tagName).trim().slice(0, 50); } }
     return JSON.stringify({ errors: window.__errors, hasPlayer: !!R, playerTop: R ? Math.round(R.getBoundingClientRect().top) : null,
-      playerH: R ? Math.round(R.getBoundingClientRect().height) : null, scrolls: !!sc, lowBottom: Math.round(lowBottom), low,
+      playerH: R ? Math.round(R.getBoundingClientRect().height) : null, scrolls: !!(sc && sc.scrollHeight > sc.clientHeight), measured: !!sc, lowBottom: Math.round(lowBottom), low,
       watchRows: [...document.querySelectorAll('#page button')].filter(b => /Sermon number/.test(b.textContent)).length,
+      tabTop: TB ? Math.round(TB.getBoundingClientRect().top) : null,
       cssVar: getComputedStyle(document.documentElement).getPropertyValue('--trinity-player-h').trim() }); })()`;
   const r = await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true });
   assert.ok(!(r.result && r.result.exceptionDetails), 'the live probe threw: ' + JSON.stringify(r.result && r.result.exceptionDetails || {}).slice(0, 400));
   return JSON.parse(r.result.result.value);
 }
 
-for (const [tab, label] of [['today', 'Today'], ['library', 'Library > Watch & Listen']]) {
+const GEOMS = [{ w: 360, h: 760, safe: 0 }, { w: 360, h: 760, safe: 48 }, { w: 412, h: 915, safe: 48 }];
+for (const g of GEOMS) for (const [tab, label] of [['today', 'Today'], ['library', 'Library'], ['watch', 'Library > Watch & Listen']]) {
   for (const queueOpen of [false, true]) {
-    test(`LIVE 360px: with a track playing${queueOpen ? ' and Up next open' : ''}, the bottom of ${label} scrolls clear of the player`,
+    test(`LIVE ${g.w}x${g.h}, bottom inset ${g.safe}px: with a track playing${queueOpen ? ' and Up next open' : ''}, the bottom of ${label} scrolls clear of the player`,
       { skip: !CHROME ? 'no chromium' : false, timeout: 60000 }, async () => {
-      const m = await live(360, tab, { queueOpen });
+      const m = await live(g, tab, { queueOpen });
       assert.deepEqual(m.errors, [], 'the live page threw: ' + m.errors.join(' | '));
       assert.ok(m.hasPlayer, 'the player did not appear after a track was started');
-      assert.ok(m.scrolls, `the ${label} page does not scroll at 360px — the fixture is too short to test anything`);
-      if (tab === 'library') assert.ok(m.watchRows >= 10, `Watch & Listen did not open with its sermon list (rows: ${m.watchRows})`);
+      assert.ok(m.measured && m.lowBottom > 0, `found no page content to measure on ${label}`);
+      if (tab === 'watch' || g.h <= 760) assert.ok(m.scrolls, `the ${label} page does not scroll — the fixture is too short to test anything`);
+      if (tab === 'watch') assert.ok(m.watchRows >= 10, `Watch & Listen did not open with its sermon list (rows: ${m.watchRows})`);
+      // the emulated inset really moved the dock: tab bar bottom edge at h - max(12, safe)
+      assert.ok(m.tabTop != null && Math.abs(m.tabTop - (g.h - Math.max(12, g.safe) - 66)) <= 1, `the tab bar is not where a ${g.safe}px inset puts it (top y=${m.tabTop})`);
       assert.ok(m.lowBottom <= m.playerTop,
         `THE BOTTOM OF ${label.toUpperCase()} IS BEHIND THE PLAYER: scrolled to the end, the last thing on the page ("${m.low}") ends at ` +
         `y=${m.lowBottom} and the player (h=${m.playerH}) starts at y=${m.playerTop}. Published --trinity-player-h: ${m.cssVar}`);

@@ -6,8 +6,8 @@ function ScreenScroll({ children, top = 56, bottom = 96, style = {} }) {
   return (
     <div className="no-scrollbar" style={{
       position: 'absolute', inset: 0, overflowY: 'auto', overflowX: 'hidden',
-      // + the floating player's measured height while one is loaded (0px otherwise) — see MiniPlayer
-      padding: `${tp} 18px calc(${bottom}px + var(--trinity-player-h, 0px))`, ...style,
+      // at least the distance from the viewport bottom to the floating player's top edge (0px with nothing loaded) — see MiniPlayer
+      padding: `${tp} 18px max(${bottom}px, var(--trinity-player-h, 0px))`, ...style,
     }}>{children}</div>
   );
 }
