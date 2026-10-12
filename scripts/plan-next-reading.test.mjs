@@ -44,14 +44,15 @@ function world() {
     step: (at, dir) => ({ book: at.book, chap: at.chap + dir }),
     parseRef: (r) => { const m = /^John (\d+)(?::(\d+))?/.exec(r); return m ? { book: 43, chap: +m[1], verse: m[2] ? +m[2] : undefined } : null; },
   };
-  const win = { Bible, speechSynthesis: null, innerWidth: 360, sanitizeHtml: h => h, getSelection: () => ({ toString: () => '' }), TrinityData: { CROSSREFS: {} } };
-  const st = { loc: { book: 43, chap: 9 }, planRead: null, plans: {}, said: [] };
+  const win = { Bible, speechSynthesis: null, innerWidth: 360, sanitizeHtml: h => h, getSelection: () => ({ toString: () => '' }), TrinityData: { CROSSREFS: {}, PLANS: [] } };
+  const st = { loc: { book: 43, chap: 9 }, planRead: null, plans: {}, said: [], church: 'A', churchPlans: [PLAN] };
   const settings = { get: (k, d) => (k === 'plans' ? st.plans : d), set: (k, v) => { if (k === 'plans') st.plans = v; } };
   const toast = m => st.said.push(m);
-  const openPlanDay = lift('openPlanDay', 'openJournal', { Bible, toast, setPlanRead: v => { st.planRead = v; }, setLoc: v => { st.loc = v; }, setReadView() {}, setTab() {} });
+  // re-lifted per call so the church the app is on NOW is the one the shipped code reads
+  const openPlanDay = (plan, day) => lift('openPlanDay', 'openJournal', { Bible, toast, activeChurch: st.church, setPlanRead: v => { st.planRead = v; }, setLoc: v => { st.loc = v; }, setReadView() {}, setTab() {} })(plan, day);
   const togglePlanDay = lift('togglePlanDay', 'toggleDevoDay', { MD: { settings } });
   const ctx = {
-    get loc() { return st.loc; }, get planRead() { return st.planRead; }, get planProgress() { return st.plans; },
+    get loc() { return st.loc; }, get planRead() { return st.planRead; }, get planProgress() { return st.plans; }, get planChurch() { return st.church; }, get churchPlans() { return st.churchPlans; },
     version: 'WEB', setLoc: l => { st.loc = l; }, toast, openPlanDay, togglePlanDay,
     gotoRef: (book, chap, verse) => { st.planRead = null; st.loc = { book, chap, verse }; },
     highlights: {}, notes: {}, bookmarks: [], toggleBookmark() {}, setHighlight() {}, setNote() {},
@@ -75,7 +76,7 @@ function world() {
   const bar = () => find(reader(), n => n.props && n.props['data-testid'] === 'plan-read-bar')[0];
   const press = (label) => { const b = find(bar(), n => n.type === 'button' && texts(n).join(' ').includes(label)); assert.equal(b.length, 1, 'no single button "' + label + '"'); b[0].props.onClick(); };
   const openDay = (n) => { const rows = find(detail(), x => x.type === 'div' && x.props.onClick && texts(x).join(' ').includes('Day ' + n + ' label')); rows[rows.length - 1].props.onClick(); };
-  return { st, ctx, bar, press, openDay, label: () => texts(bar()).join(' | ') };
+  return { st, ctx, reader, bar, press, openDay, label: () => texts(bar()).join(' | ') };
 }
 
 test('opening Day 1 from the plan shows Mark day done and "Next: Day 2" in the reader; Next opens Day 2 in the reader', () => {
@@ -118,4 +119,35 @@ test('a reader opened outside a plan, or paged away from the day, shows no bar',
   w.openDay(1);
   w.ctx.gotoRef(43, 1);
   assert.equal(w.bar(), undefined, 'a non-plan jump kept the plan context');
+});
+
+// the reader's own chapter buttons (found by their rendered label), as in reader-swipes-to-the-next-chapter
+const foot = (tree, label) => { const b = find(tree, n => n.type === 'button' && texts(n).join(' ').includes(label) && String((n.props.style || {}).borderRadius) === '15'); assert.equal(b.length, 1, label); b[0].props.onClick(); };
+
+test('John 3 from a plan, then John 4 and back to John 3 by the chapter buttons: no stale bar', () => {
+  const w = world();
+  w.openDay(3);
+  assert.ok(w.bar());
+  foot(w.reader(), 'John 4');
+  assert.equal(w.st.loc.chap, 4);
+  assert.equal(w.bar(), undefined);
+  foot(w.reader(), 'John 3');
+  assert.equal(w.st.loc.chap, 3);
+  assert.equal(w.bar(), undefined, 'a later visit to the same chapter shows the old plan bar');
+});
+
+test('switching church drops the plan bar', () => {
+  const w = world();
+  w.openDay(1);
+  assert.ok(w.bar());
+  w.st.church = 'B';
+  assert.equal(w.bar(), undefined);
+});
+
+test('a plan that is no longer in the plans list drops the plan bar', () => {
+  const w = world();
+  w.openDay(1);
+  assert.ok(w.bar());
+  w.st.churchPlans = [];
+  assert.equal(w.bar(), undefined);
 });
