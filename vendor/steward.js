@@ -16860,6 +16860,7 @@ zoo`.split("\n");
   var _joinPolicyStates = /* @__PURE__ */ new Set();
   var _membersReask = /* @__PURE__ */ new Set();
   var _gkChain = /* @__PURE__ */ new Map();
+  var _gkWaiting = /* @__PURE__ */ new Map();
   var _ensureGroupKeysBusy = /* @__PURE__ */ new Set();
   var _ensureGroupKeysQuiet = /* @__PURE__ */ new Map();
   function _freshTok() {
@@ -17362,6 +17363,7 @@ zoo`.split("\n");
     _ckSessionKeys.clear();
     _authedRelays.clear();
     _latestGuardNotice.clear();
+    _senvPending.clear();
   }
   var ENC_LS = "trinityone.steward.church-key.enc";
   var ENC_PENDING_LS = "trinityone.steward.church-key.removing";
@@ -21206,6 +21208,8 @@ zoo`.split("\n");
     },
     async publishGroupKey(groupId, memberPubs, opts = {}) {
       const prior = _gkChain.get(groupId) || null;
+      const _interactive = !opts.background;
+      if (_interactive) _gkWaiting.set(groupId, (_gkWaiting.get(groupId) || 0) + 1);
       let done = null;
       const turn = new Promise((r) => {
         done = r;
@@ -21213,6 +21217,17 @@ zoo`.split("\n");
       const tail = (prior || Promise.resolve()).then(() => turn, () => turn);
       _gkChain.set(groupId, tail);
       const run = async () => {
+        if (_interactive) {
+          const n = (_gkWaiting.get(groupId) || 1) - 1;
+          if (n > 0) _gkWaiting.set(groupId, n);
+          else _gkWaiting.delete(groupId);
+        } else if (opts.reuseOnly && (_gkWaiting.get(groupId) || 0) > 0) return null;
+        if (typeof opts.onTurn === "function") {
+          try {
+            opts.onTurn();
+          } catch (e) {
+          }
+        }
         if (!churchSk || !churchPub) return Promise.resolve(null);
         const haveRing = (_skeys[groupId] || []).length > 0;
         if (opts.reuseOnly && !haveRing) return Promise.resolve(null);
@@ -21395,8 +21410,9 @@ zoo`.split("\n");
       if (!group || !group.id || !churchSk) return { sealed: false, reason: "cannot-key" };
       if (!_isRelayAuthed()) return { sealed: false, reason: "not-authed" };
       let r = null;
+      const _onTurn = arguments[2] && arguments[2].onTurn;
       try {
-        r = await window.Steward.publishGroupKey(group.id, memberPubs);
+        r = await window.Steward.publishGroupKey(group.id, memberPubs, _onTurn ? { onTurn: _onTurn } : void 0);
       } catch (e) {
         r = null;
       }
@@ -25379,6 +25395,7 @@ zoo`.split("\n");
       }
       _minorsLastClear(actingChurch || pub);
       _latestGuardNotice.clear();
+      _senvPending.clear();
       window.Steward.pubkey = pub;
       window.Steward.npub = npubEncode(pub);
       window.Steward.activePub = pub;

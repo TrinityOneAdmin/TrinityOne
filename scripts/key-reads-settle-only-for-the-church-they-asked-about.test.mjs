@@ -168,6 +168,7 @@ function engine() {
     M('    listIsFresh(list, since) {'), M('    groupFresh(list, groupId, since) {'), M('    joinPolicyFresh(since) {'),
     M('    groupKeyRecipients(groupId) {'), M('    groupKeyDropped(groupId) {'), M('    groupKeyMissing(groupId, pubs) {'),
     M('    async publishGroupKey(groupId, memberPubs, opts = {}) {'), M('    async ensureGroupKeys(groups, memberPubs) {'),
+    M('    async sealGroup(group, memberPubs) {'),   // round 3c, LOW ii
   ].join(',\n');
   t.t = t;
   const S = new Function('scope', `with (scope) { ${decls}\n return { ${methods} }; }`)(proxy);
@@ -1326,4 +1327,58 @@ test('the kept envelope holds no key in the clear — only this console\'s own s
   const kept = [...e.t.localStorage._m.entries()].filter(([k]) => k.startsWith('trinityone.steward.keyenv.'));
   assert.equal(kept.length, 1, 'CONTROL: the envelope was not kept on the device');
   assert.ok(!kept[0][1].includes(K1), 'THE SERMON KEY WAS WRITTEN TO THE DEVICE IN THE CLEAR');
+});
+
+// ROUND 3c, LOW iv (audit of 432c676): a room-key envelope held back because its author was not on the roster YET was
+// church A's, and both resets left it in place — to be re-checked against church B's roster on B's next roster change.
+test('LOW iv: both resets empty the buffer of room-key envelopes held for an author the roster did not name yet', () => {
+  for (const [what, reset] of [['setActiveIdentity (a switch)', (e) => assert.equal(e.S.setActiveIdentity(A.pub), true, 'CONTROL: the switch failed')], ['_resetChurchScopedState (a key restore)', (e) => e.t.__resetChurchScopedState()]]) {
+    const e = engine();
+    e.t.__senvPending.set('room-of-a', envelope('trinityone/groupkey:', M1, 'room-of-a', ['ee'.repeat(32)], [A.pub]));
+    reset(e);
+    assert.equal(e.t.__senvPending.size, 0, `${what} LEFT CHURCH A'S UNVERIFIED ROOM-KEY ENVELOPES to be judged against the next church's roster`);
+  }
+});
+
+// ROUND 3c, LOW ii (audit of 432c676): a steward's seal or edit queued behind background re-keys waited for every one of
+// them, and the dialog's 8 s timer said "Couldn't reach the relay" while it waited. A background re-key whose turn comes
+// while a steward's publish is waiting now does nothing (null — the distributor asks again, free); one already IN FLIGHT
+// is still waited for (round 3a, HIGH 2); and the steward's `onTurn` runs only when its own turn comes, which is when the
+// dialog starts its timer.
+test('LOW ii: a background re-key queued behind one in flight steps aside for a steward\'s publish, and onTurn fires only on the steward\'s turn', async () => {
+  const e = engine();
+  const gid = 'room-q';
+  e.t.__skeys[gid] = [unhex('dd'.repeat(32))]; e.t.__senvRecips[gid] = [A.pub, M1.pub]; e.t.__senvMine[gid] = true;
+  const g = gate(); const real = e.t.publish; const sent = [];
+  e.t.publish = async (ev) => { sent.push(ev); if (sent.length === 1) await g.p; return real(ev); };
+  const inFlight = e.S.publishGroupKey(gid, [M1.pub, M2.pub], { reuseOnly: true, background: true });
+  await flush();
+  assert.equal(sent.length, 1, 'CONTROL: the first background re-key is not in flight');
+  const queued = e.S.publishGroupKey(gid, [M1.pub, M3.pub], { reuseOnly: true, background: true });
+  let turned = 0;
+  const steward = e.S.publishGroupKey(gid, [M1.pub], { rotate: true, onTurn: () => { turned++; } });
+  await flush();
+  assert.equal(turned, 0, 'the steward\'s onTurn fired while a publish was still in flight — HIGH 2 says it waits for that one');
+  g.release();
+  const [, rq, rs] = await Promise.all([inFlight, queued, steward]);
+  assert.equal(rq, null, 'A BACKGROUND RE-KEY THAT HAD NOT STARTED RAN WHILE A STEWARD\'S PUBLISH WAITED BEHIND IT');
+  assert.equal(turned, 1, 'the steward\'s onTurn did not fire exactly once');
+  assert.ok(rs, 'CONTROL: the steward\'s publish did not land');
+  assert.equal(sent.length, 2, 'publishes made: the one in flight and the steward\'s — nothing else');
+  // CONTROL: with no steward waiting, a queued background re-key runs as before
+  const q2 = await e.S.publishGroupKey(gid, [M1.pub, M3.pub], { reuseOnly: true, background: true });
+  assert.ok(q2 !== null, 'CONTROL: a background re-key with nobody waiting did nothing');
+});
+
+// …and sealGroup (the seal dialog's engine call) hands the dialog's onTurn through to the room's key publish (LOW ii).
+test('LOW ii: sealGroup hands the dialog\'s onTurn to the key publish, which calls it once on its turn', async () => {
+  const e = engine();
+  const gid = 'room-s';
+  e.t.__skeys[gid] = [unhex('dd'.repeat(32))]; e.t.__senvRecips[gid] = [A.pub, M1.pub]; e.t.__senvMine[gid] = true;
+  e.t.window.Steward.publishGroupKey = (...a) => e.S.publishGroupKey(...a);
+  e.t.window.Steward.publishGroup = async (g) => ({ ...g, ts: 1 });
+  let turned = 0;
+  const r = await e.S.sealGroup({ id: gid, name: 'Sealed' }, [M1.pub], { onTurn: () => { turned++; } });
+  assert.ok(r && r.sealed, 'CONTROL: the room was not sealed: ' + JSON.stringify(r));
+  assert.equal(turned, 1, 'SEALGROUP DID NOT HAND THE DIALOG\'S onTurn TO THE KEY PUBLISH — the dialog\'s 8 s never starts, so only the 30 s bound is left');
 });

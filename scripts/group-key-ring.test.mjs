@@ -131,9 +131,12 @@ test('an untrusted author cannot install a key ring', () => {
 
 test('the console publishes a RING, not a single key', () => {
   const STEWARD = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
-  const at = STEWARD.indexOf('publishGroupKey(');
+  // RE-ANCHORED 2026-10-12 (round 3c): this took the FIRST 'publishGroupKey(' in the bundle — ensureGroupKeys' call to it —
+  // and read 2000 characters on, which reached into the method only by luck of the layout; the method's new queue lines
+  // pushed the ring past the window. It now starts at the method itself, with the same window.
+  const at = STEWARD.indexOf('async publishGroupKey(groupId');
   assert.notEqual(at, -1, 'publishGroupKey missing from the shipped console bundle');
-  const body = STEWARD.slice(at, at + 2000);
+  const body = STEWARD.slice(at, at + 2600);
   assert.match(body, /ring\s*=\s*\[\s*key,\s*\.\.\.ring\s*\]/, 'rotation no longer carries the superseded keys — a block will erase the group’s history again');
   assert.match(body, /JSON\.stringify\(r\.map\(/, 'the envelope must wrap the whole ring');
   assert.doesNotMatch(body, /nip44e\(_hex\(key\)/, 'the envelope is still wrapping one bare key');
@@ -291,7 +294,7 @@ test('a locally-blocked member is excluded from the group key envelope', async (
   const C = K().pub;
   const src = `
     let _localBlocked = new Set([C]);
-    const _skeys = { g1: [new Uint8Array(32).fill(9)] }, _srev = { g1: 1 }, _senvTs = {}, _senvRecips = {}, _senvMine = {}, _gkChain = new Map();
+    const _skeys = { g1: [new Uint8Array(32).fill(9)] }, _srev = { g1: 1 }, _senvTs = {}, _senvRecips = {}, _senvMine = {}, _gkChain = new Map(), _gkWaiting = new Map();   // _gkWaiting: round 3c (LOW ii), the queue's waiting count
     const _noteEnvelopeDrops = () => {};   // the drop memo (round 2) — tested in key-reads-settle-only-for-the-church-they-asked-about
     const GROUP_RING_MAX = 12, GROUPKEY_D = 'trinityone/groupkey:', NET = 'trinityone';
     const churchSk = new Uint8Array(32).fill(3), churchPub = CP;

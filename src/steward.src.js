@@ -2521,6 +2521,7 @@ const _freshReopeners = new Set();   // the open fresh reads' re-open functions 
 const _joinPolicyStates = new Set(); // each open subscribeJoinPolicy's { tag, approval } — see Steward.joinPolicyFresh
 const _membersReask = new Set();     // each open subscribeMembers' re-ask — called by setBlocked once an unblock lands
 const _gkChain = new Map();          // room id -> the tail of its publishGroupKey queue (round 3a, HIGH 2)
+const _gkWaiting = new Map();        // room id -> interactive publishGroupKey calls waiting their turn (round 3c, LOW ii)
 // ensureGroupKeys' per-room guards, keyed "<church>|<room>": a check in flight, and "the relay has an envelope, don't ask
 // again until" (finding 6 of the audit of 78ffad0). READER and WRITER: ensureGroupKeys only.
 const _ensureGroupKeysBusy = new Set();
@@ -3098,6 +3099,9 @@ function _resetChurchScopedState() {
   // never proved itself — the exact false-true the comment above it warns "silently destroys a church's keys".
   _authedRelays.clear();
   _latestGuardNotice.clear();   // one church's pending notice retries must not send another's
+  // …AND ROOM KEY ENVELOPES HELD BACK FOR AN AUTHOR THE ROSTER DID NOT NAME YET (round 3c, LOW iv): they were church A's,
+  // re-checked against church B's roster on B's next roster change.
+  _senvPending.clear();
 }
 
 // ── console PIN lock: encrypt the church seed at rest with a PIN/passphrase (AES-GCM, PBKDF2). A
@@ -7507,10 +7511,20 @@ window.Steward = {
     // one before it (a per-room chain, _gkChain) and then reads the ring afresh, so a rotation builds on whatever the
     // re-key left and a re-key queued behind a rotation re-wraps the NEW key. The body below is unchanged otherwise.
     const prior = _gkChain.get(groupId) || null;
+    // A STEWARD'S PUBLISH DOES NOT QUEUE BEHIND BACKGROUND RE-KEYS THAT HAVE NOT STARTED (round 3c, LOW ii; audit of
+    // 432c676). An interactive call counts itself as waiting; a background re-key (reuseOnly) whose turn comes while one
+    // waits does nothing and answers null — the distributor asks again on its next tick, free (null gets no backoff).
+    // One already IN FLIGHT is still waited for: that is HIGH 2's guarantee, and it stands. The steward's dialog times
+    // its "couldn't reach the relay" from `opts.onTurn`, which runs when this call's turn actually comes.
+    const _interactive = !opts.background;
+    if (_interactive) _gkWaiting.set(groupId, (_gkWaiting.get(groupId) || 0) + 1);
     let done = null; const turn = new Promise((r) => { done = r; });
     const tail = (prior || Promise.resolve()).then(() => turn, () => turn);
     _gkChain.set(groupId, tail);
     const run = async () => {
+      if (_interactive) { const n = (_gkWaiting.get(groupId) || 1) - 1; if (n > 0) _gkWaiting.set(groupId, n); else _gkWaiting.delete(groupId); }
+      else if (opts.reuseOnly && (_gkWaiting.get(groupId) || 0) > 0) return null;   // a steward's publish is waiting — see above
+      if (typeof opts.onTurn === 'function') { try { opts.onTurn(); } catch (e) {} }
       if (!churchSk || !churchPub) return Promise.resolve(null);
       const haveRing = (_skeys[groupId] || []).length > 0;
       if (opts.reuseOnly && !haveRing) return Promise.resolve(null);   // background re-key must NOT mint a new key (would orphan history)
@@ -7726,7 +7740,11 @@ window.Steward = {
     if (!group || !group.id || !churchSk) return { sealed: false, reason: 'cannot-key' };
     if (!_isRelayAuthed()) return { sealed: false, reason: 'not-authed' };
     let r = null;
-    try { r = await window.Steward.publishGroupKey(group.id, memberPubs); } catch (e) { r = null; }
+    // `arguments[2].onTurn` (round 3c, LOW ii): the dialog's "couldn't reach the relay" timer starts when this room's
+    // key publish actually STARTS, not while it waits its turn behind one already in flight (see publishGroupKey).
+    // Read here, not named in the signature: test harnesses lift this method by its first line.
+    const _onTurn = arguments[2] && arguments[2].onTurn;
+    try { r = await window.Steward.publishGroupKey(group.id, memberPubs, _onTurn ? { onTurn: _onTurn } : undefined); } catch (e) { r = null; }
     // no usable envelope on the relay → the group doc is never touched; the room stays honestly cleartext
     if (r === null || r === false) return { sealed: false, reason: r === null ? 'cannot-key' : 'relay-refused' };
     // `_sealAt` IS NOT DECORATION — a spread from an EARLIER write of this same document would be read as
@@ -11768,6 +11786,7 @@ window.Steward = {
     try { const M = window.StewardMeals; if (M && M.dropPendingCareTeam) M.dropPendingCareTeam(); } catch (e) {}   // a care list waiting to be retried belongs to the church it was asked for
     _minorsLastClear(actingChurch || pub);   // leaving a church leaves no list of its children on this device
     _latestGuardNotice.clear();  // see _resetChurchScopedState — one church's guardian-notice retries must not send another's
+    _senvPending.clear();        // see _resetChurchScopedState (round 3c, LOW iv)
     // NOTE: the block above is now the same list as _resetChurchScopedState(), minus the NIP-42 state. A
     // SWITCH keeps this device's key while a RESTORE replaces it, so clearing the authenticated sockets here is
     // not obviously correct and is not what this fix is for. The duplication IS the bug class that produced

@@ -389,3 +389,51 @@ test('the team roster editor: the room key rotates only once the room\'s member 
   assert.equal(bad.calls.filter(x => x.name === 'publishGroupKey').length, 0, 'THE TEAM ROOM\'S KEY WAS ROTATED OVER A MEMBER LIST THAT DID NOT SAVE');
   assert.match(texts(bad.tree).join(' '), /wasn’t, so the room’s key was not changed/, 'the steward was not told');
 });
+
+// ROUND 3c, LOW iii (audit of 432c676): the lists can go stale part-way through "Encrypt all" (a reconnect closes the
+// subscriptions the shared filter reads). encRecips() then answered null, and sealGroup(g, null) sealed the room to the
+// church and its stewards alone — the congregation locked out of it. The sweep now stops sealing there, names what it
+// did not seal, and leaves "Encrypt all" off.
+test('sealing ALL rooms: if the member list goes stale part-way, the rest are NOT sealed to nobody — they are left, and named', async () => {
+  const w = world({ approval: true });
+  w.lists.groups.push({ id: 'g-two', name: 'Youth', kind: 'group', encrypted: false });
+  const realSeal = w.S.sealGroup;
+  w.S.sealGroup = (...a) => { const r = realSeal(...a); w.S.listIsFresh = () => false; return r; };   // a reconnect, just after the first room
+  await sealAll(w);
+  const c = w.calls.filter(x => x.name === 'sealGroup');
+  assert.equal(c.length, 1, 'CONTROL: the first room was not sealed, or the second was');
+  assert.ok(c.every(x => Array.isArray(x.a[1]) && x.a[1].length), 'A ROOM WAS SEALED TO NOBODY (null recipients) — the church and stewards alone');
+  const said = w.events.filter(e => e.type === 'steward-write-blocked').map(e => e.detail.message).join(' ');
+  assert.match(said, /still loading/, 'the steward was not told some rooms were not sealed');
+  assert.match(said, /Youth/, 'the room left unsealed was not named');
+  assert.ok(!w.calls.some(x => x.name === 'publishProfile'), '"Encrypt all" was switched on though a room was left unsealed');
+});
+
+// ROUND 3c, LOW ii (audit of 432c676): the seal dialog's and the room-member dialog's 8 s "Couldn't reach the relay"
+// timer ran while the room's key publish was still waiting for a background re-key already in flight (round 3a's
+// one-at-a-time queue), and said the relay was unreachable when it was not. The 8 s now starts on the publish's own
+// turn (`onTurn`); a 30 s bound covers a turn that never comes. Read off the timers the dialog arms.
+async function withTimers(fn) {
+  const real = globalThis.setTimeout, armed = [];
+  globalThis.setTimeout = (f, ms, ...a) => { armed.push(ms); return real(f, Math.min(ms || 0, 1), ...a) && 0; };
+  try { await fn(); } finally { globalThis.setTimeout = real; }
+  return armed;
+}
+test('LOW ii: the seal dialog starts its 8 s only when the key publish\'s turn comes — never while it waits', async () => {
+  for (const turns of [false, true]) {
+    const w = world({ approval: true });
+    w.S.sealGroup = (g, rc, o) => { w.calls.push({ name: 'sealGroup', a: [g, rc, o] }); if (turns && o && o.onTurn) o.onTurn(); return Promise.resolve({ sealed: true, skipped: [] }); };   // the turn came (or did not) before it answered
+    const armed = await withTimers(() => sealOne(w));
+    const c = w.calls.find(x => x.name === 'sealGroup');
+    assert.ok(c && c.a[2] && typeof c.a[2].onTurn === 'function', 'the seal dialog gave the key publish no onTurn');
+    assert.ok(armed.includes(30000), 'CONTROL: no outer bound was armed');
+    assert.equal(armed.includes(8000), turns, turns ? 'the 8 s was not armed when the turn came' : 'THE 8 s WAS ARMED WHILE THE KEY PUBLISH WAS STILL WAITING ITS TURN — "couldn\'t reach the relay" over a queue');
+  }
+});
+test('LOW ii: the room-member dialog pauses its 8 s while the key publish waits its turn, and re-arms it on the turn', async () => {
+  const w = world({ approval: true });
+  let opts = null;
+  w.S.publishGroupKey = (gid, recips, o) => { opts = o; w.calls.push({ name: 'publishGroupKey', a: [gid, recips, o] }); return Promise.resolve(true); };
+  await withTimers(() => editMembers(w, true));
+  assert.ok(opts && opts.rotate === true && typeof opts.onTurn === 'function', 'the room-member dialog gave the key publish no onTurn (or did not rotate)');
+});

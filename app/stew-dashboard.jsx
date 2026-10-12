@@ -983,7 +983,10 @@ function KeyDistributor() {
   // blocklist, the join policy, the admitted list when approval is on, and the room's own document and envelope.
   const _kdReconfirmed = (g, at) => {
     const S = window.Steward;
+    // …AND THE STEWARD ROSTER (round 3c, LOW i): since 3a an open room is keyed to the roster too, so a removed delegate
+    // who is not a member is "wanted" again by a roster read from before the removal.
     return _kdFresh(blockedList, at) && _kdJoin(at) !== null && (!joinApproval || _kdFresh(admittedList, at))
+      && _kdFresh(stewardRoster, at)
       && !!(S && S.groupFresh && S.groupFresh(groups, g.id, at));
   };
   // pubs -> the approved ones, or null when we cannot tell yet (key nobody new)
@@ -3820,7 +3823,13 @@ function EditGroupMembersModal({ group, getCurrent, onClose }) {
     const newM = [...new Set([...(Array.isArray(cur.members) ? cur.members : []).filter(pk => !removedByMe.includes(pk)), ...addedByMe])];
     const removed = removedByMe.length > 0;   // someone dropped → rotate the key
     // don't hang forever if the relay never ACKs — surface it so it's not a dead button
-    const guard = setTimeout(() => { setBusy(false); setErr('Couldn’t reach the relay — check your connection and try again.'); }, 8000);
+    // The 8 s is paused while the room's key publish waits its turn behind a background re-key already in flight, and
+    // starts again when its turn comes (round 3c, LOW ii — see publishGroupKey); a 30 s outer bound covers the rest.
+    const unreached = () => { setBusy(false); setErr('Couldn’t reach the relay — check your connection and try again.'); };
+    let guard = setTimeout(unreached, 8000);
+    const outer = setTimeout(unreached, 30000);
+    const keyTurn = { onTurn: () => { clearTimeout(guard); guard = setTimeout(unreached, 8000); } };
+    const keyQueued = () => { clearTimeout(guard); };
     // Keep the team's roster in step with the allowlist. Only when this group HAS a roster — a plain
     // invite-only group is not a team and has no rota or care role to inherit. If the roster document has
     // not arrived yet there is nothing to reconcile against, so we leave it rather than publish a roster we
@@ -3855,10 +3864,10 @@ function EditGroupMembersModal({ group, getCurrent, onClose }) {
       // re-adds them. No rotation, and the dialog stays open saying so.
       .then((saved) => {
         if (!saved || !saved.id) throw new Error('The member list wasn’t saved, so nobody was added or removed and the room’s key was not changed. Check your connection and press Save again.');
-        if (cur.encrypted && window.Steward.publishGroupKey) return window.Steward.publishGroupKey(group.id, newM, { rotate: removed });
+        if (cur.encrypted && window.Steward.publishGroupKey) { keyQueued(); return window.Steward.publishGroupKey(group.id, newM, { rotate: removed, ...keyTurn }); }
       })
       .then((r) => {
-        clearTimeout(guard);
+        clearTimeout(guard); clearTimeout(outer);
         // AUDIT-2026-08-10 item A, state 6 — the one LEAK-shaped failure here. If the rotate publish didn't
         // land, the OLD envelope stays current on the relay, so anyone just removed KEEPS READING what
         // members post — while this console's own key state has already advanced, so its posts seal under a
@@ -3880,7 +3889,7 @@ function EditGroupMembersModal({ group, getCurrent, onClose }) {
         }
         onClose();
       })
-      .catch((e) => { clearTimeout(guard); setBusy(false); setErr((e && e.message) || 'Couldn’t save members — please try again.'); });
+      .catch((e) => { clearTimeout(guard); clearTimeout(outer); setBusy(false); setErr((e && e.message) || 'Couldn’t save members — please try again.'); });
   };
   const lbl = { fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '0 0 8px' };
   const dlgRef = useStewDialog(() => { if (!busy) onClose(); });   // a11y: Escape + focus (dialog semantics on the panel below)
@@ -4245,10 +4254,15 @@ function DashGroups() {
     setSealing({ ...s, busy: true, err: '' });
     // don't hang forever if the relay never ACKs — surface it so it's not a dead button (same 8s guard as
     // EditGroupMembersModal.save). A late success after the guard fired still closes the dialog honestly.
-    const guard = setTimeout(() => setSealing(cur => (cur && cur.busy) ? { ...cur, busy: false, err: 'Couldn’t reach the relay — check your connection and try again. Nothing is sealed yet.' } : cur), 8000);
+    // THE 8 s START WHEN THE KEY PUBLISH STARTS (round 3c, LOW ii): it may first wait for a background re-key of this
+    // room already in flight (round 3a, HIGH 2), and that wait is not "couldn't reach the relay". `onTurn` arms it;
+    // a 30 s outer bound covers a turn that never comes.
+    const unreached = () => setSealing(cur => (cur && cur.busy) ? { ...cur, busy: false, err: 'Couldn’t reach the relay — check your connection and try again. Nothing is sealed yet.' } : cur);
+    let guard = null;
+    const outer = setTimeout(unreached, 30000);
     let r = null;
-    try { r = await window.Steward.sealGroup(s.g, rc); } catch (e) { r = null; }
-    clearTimeout(guard);
+    try { r = await window.Steward.sealGroup(s.g, rc, { onTurn: () => { if (!guard) guard = setTimeout(unreached, 8000); } }); } catch (e) { r = null; }
+    clearTimeout(guard); clearTimeout(outer);
     if (!r || !r.sealed) {
       // ⚠ 'flag-partial' IS A DIFFERENT SENTENCE FROM 'flag-failed', AND SAYING THE WRONG ONE IS A LIE ABOUT
       // PRIVACY. Both mean the flag write is not done — Steward.sealGroup keeps all-must-accept, and neither
@@ -10438,6 +10452,10 @@ function DashFeaturesPanel({ church, show = null }) {
     // "stays unencrypted" is untrue of the relay the church actually lives on. It still is not success —
     // "Encrypt all" stays off for it, exactly as for a total failure.
     const failed = [], partial = [], half = [];
+    // THE LISTS CAN GO STALE PART-WAY THROUGH (round 3c, LOW iii): a reconnect closes the subscriptions the shared filter
+    // reads, encRecips() then answers null, and sealGroup(g, null) sealed the room to the church and stewards alone.
+    // The sweep stops sealing at the first open room it cannot name members for; the rest are named, and stay as they are.
+    const notYet = [];
     for (const g of allGroups) {
       // Teams are skipped DELIBERATELY — they have no encryption control of their own, and encRecips() below
       // would seal a team room to every member of the church rather than to its roster, which is the wrong
@@ -10446,13 +10464,17 @@ function DashFeaturesPanel({ church, show = null }) {
       // sweep, 2026-08-28: with the switch ON, a team room was still storing messages in clear, exactly as
       // this line intends and the copy denied.
       if (g.kind === 'team' || g.encrypted) continue;
+      if (notYet.length) { notYet.push(g.name || 'a group'); continue; }
+      const rc = encRecips(g);
+      if (!rc) { notYet.push(g.name || 'a group'); continue; }
       let r = null;
-      try { r = await window.Steward.sealGroup(g, encRecips(g)); } catch (e) { r = null; }
+      try { r = await window.Steward.sealGroup(g, rc); } catch (e) { r = null; }
       if (!r || !r.sealed) (r && r.reason === 'flag-partial' ? half : failed).push(g.name || 'a group');
       else if (r.skipped && r.skipped.length) partial.push(r.skipped.length + ' member(s) could not be given the key for “' + (g.name || 'a group') + '”');
     }
-    if (failed.length || partial.length || half.length) {
+    if (failed.length || partial.length || half.length || notYet.length) {
       const parts = [];
+      if (notYet.length) parts.push('Your church’s member list was still loading, so ' + notYet.length + ' group' + (notYet.length === 1 ? ' was' : 's were') + ' not sealed: ' + notYet.join(', ') + '. “Encrypt all” stays off — try again in a moment.');
       // Same rule as the seal dialog above: a relay that did not ACK may be offline rather than refusing, so
       // this says what is TRUE of the rooms and sends the steward to look, rather than diagnosing for them.
       if (half.length) parts.push(half.length + ' group' + (half.length === 1 ? '' : 's') + ' reached only some of your relays, so ' + (half.length === 1 ? 'it is' : 'they are') + ' sealed on those and still readable on the others: ' + half.join(', ') + '. “Encrypt all” stays off. Check Settings → Relays.');
@@ -10460,7 +10482,7 @@ function DashFeaturesPanel({ church, show = null }) {
       if (partial.length) parts.push(partial.join('; ') + '. They will not be able to read or post there. Open each group and save it again to re-send.');
       try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'group key', message: parts.join(' ') } })); } catch (e) {}
     }
-    if (!failed.length && !half.length) window.Steward.publishProfile({ features: { ...f, encryptComms: true } });
+    if (!failed.length && !half.length && !notYet.length) window.Steward.publishProfile({ features: { ...f, encryptComms: true } });
   };
   const toggleEncryptAll = () => { if (encOn) window.Steward.publishProfile({ features: { ...f, encryptComms: false } }); else setConfirmEnc(true); };
   // member photos — ON by default; a church opts out via memberPhotos:false. Children are excluded unless

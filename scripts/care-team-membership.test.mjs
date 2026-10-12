@@ -159,7 +159,7 @@ test('nothing stands in front of the group-key rotation', () => {
   // and went on reading everything posted afterwards, while the console showed a generic save error. That is
   // the one leak-shaped failure this save path's own comments exist to prevent.
   const save = stripComments(fnBody(DASH, 'const save = () => {'));
-  const rotate = save.indexOf('publishGroupKey(group.id, newM, { rotate: removed })');
+  const rotate = save.indexOf('publishGroupKey(group.id, newM, { rotate: removed, ...keyTurn })');   // re-anchored 2026-10-12 (round 3c, LOW ii: the dialog's onTurn rides along)
   const reconcile = save.indexOf('reconcileRoster()');
   assert.notEqual(rotate, -1, 'the key rotation is gone — re-anchor this test');
   assert.notEqual(reconcile, -1, 'the roster reconcile is gone — re-anchor this test');

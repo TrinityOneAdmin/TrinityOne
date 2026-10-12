@@ -498,3 +498,31 @@ test('round 3a: a delegate who is not a member is keyed to an OPEN room — and 
   assert.equal(keyed[0].gid, 'room-o');
   assert.ok(keyed[0].members.includes(ST), 'A DELEGATE WHO IS NOT A MEMBER WAS NOT GIVEN THE OPEN ROOM\'S KEY — they cannot key anyone who joins');
 });
+
+// ROUND 3c, LOW i (audit of 432c676): THE HOLD ALSO WAITS FOR THE STEWARD ROSTER. Since 3a an open room is keyed to the
+// steward roster too, so a delegate who is not a member and was removed — dropped from the room by the removal's
+// rotation — is "wanted" again by a roster read from before the removal. The hold must not release them until the roster
+// has been re-read since the drop, as it already waits for the blocklist, the join policy and the room itself.
+test('LOW i: a removed delegate the rotation dropped is not re-keyed from a steward roster read before the drop', async () => {
+  const ST2 = '9'.repeat(64);
+  const k = await keyDistributor();
+  k.env[A] = { 'room-o': [A, MB] };
+  k.dropped[A] = { 'room-o': [{ pub: ST2, at: 100 }] };
+  // every list re-read after the drop (200) — but the roster is the copy from before it (50), still naming ST2
+  k.set('members', [{ pubkey: MB }], true, { at: 200 }); k.set('groups', [openRoom], true, { at: 200 });
+  k.set('stewards', [ST, ST2], true, { at: 50 }); k.set('blocked', [], true, { at: 200 });
+  k.approval.at = { policy: 200, admitted: 200 };
+  k.render();
+  const keyed = k.calls.filter(c => c.name === 'groupkey');
+  assert.ok(!keyed.some(c => c.members.includes(ST2)), 'A REMOVED DELEGATE WAS WRAPPED BACK INTO THE OPEN ROOM from a steward roster read before the removal: ' + JSON.stringify(keyed.map(c => c.members)));
+  // CONTROL: once the roster has been re-read since the drop and no longer names them, nothing; if it still names them
+  // (they were never removed — the drop was a partial list's), they are re-added
+  const k2 = await keyDistributor();
+  k2.env[A] = { 'room-o': [A, MB] };
+  k2.dropped[A] = { 'room-o': [{ pub: ST2, at: 100 }] };
+  k2.set('members', [{ pubkey: MB }], true, { at: 200 }); k2.set('groups', [openRoom], true, { at: 200 });
+  k2.set('stewards', [ST, ST2], true, { at: 200 }); k2.set('blocked', [], true, { at: 200 });
+  k2.approval.at = { policy: 200, admitted: 200 };
+  k2.render();
+  assert.ok(k2.calls.some(c => c.name === 'groupkey' && c.members.includes(ST2)), 'CONTROL: a steward the roster still names, re-read since the drop, was never re-keyed');
+});

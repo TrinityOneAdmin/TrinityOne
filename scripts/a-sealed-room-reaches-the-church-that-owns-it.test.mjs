@@ -128,7 +128,7 @@ function consoleApi({ signer, actingChurch, churchPubOverride }) {
     sk: signer.sk, pub: actingChurch || signer.pub, actingChurch,
     churchSk: signer.sk, churchPub: churchPubOverride || signer.pub,
     NET, GROUPKEY_D, GROUP_RING_MAX: 12,
-    _skeys: {}, _srev: {}, _senvTs: {}, _senvRecips: {}, _senvMine: {}, _noteEnvelopeDrops: () => {}, _gkChain: new Map(), _localBlocked: new Set(),   // _senvMine, _noteEnvelopeDrops: round 2 (tested in key-reads-settle-only-for-the-church-they-asked-about)
+    _skeys: {}, _srev: {}, _senvTs: {}, _senvRecips: {}, _senvMine: {}, _noteEnvelopeDrops: () => {}, _gkChain: new Map(), _gkWaiting: new Map(), _localBlocked: new Set(),   // _senvMine, _noteEnvelopeDrops: round 2 (tested in key-reads-settle-only-for-the-church-they-asked-about)
     _isRelayAuthed: () => true,
     _requireTrustedView: () => {},
     _monotonic: (t) => t,
