@@ -90,7 +90,9 @@ test('…nor before the console has actually LOOKED for an existing envelope', (
   // Guarded since 2026-10-01: only a TRUSTWORTHY end-of-stored-events — not our own close, not a read from
   // before a reset, not nostr-tools' timer, and authenticated — may say "looked" (see _keyReadOk;
   // scripts/console-keys-follow-the-church-switch.test.mjs drives it).
-  assert.match(body('subscribeMediaKey(', BUNDLE), /_openKeyRead\([\s\S]*\(\) => \{\s*if \(!_mediaKeyChecked\) \{\s*_mediaKeyChecked = true/,
+  // Since round 3a the settle receives `how` (which relays were left out): the mint gate opens only when none were.
+  // RUN in key-reads-settle-only-for-the-church-they-asked-about.test.mjs ("relay DOWN", and the KINDS rows).
+  assert.match(body('subscribeMediaKey(', BUNDLE), /_openKeyRead\([\s\S]*\(how\) => \{[^}]*if \(!_mediaKeyChecked && !\(how && how\.without && how\.without\.length\)\)\s*_mediaKeyChecked = true/,
     'nothing ever sets _mediaKeyChecked, so the guard above can never open and encrypted uploads are blocked '
     + 'for ever — a flag that is only ever false is not a fix');
 });

@@ -55,6 +55,7 @@ function engine() {
     _careKeyHex: null, _careKeyRing: [], _careKeyDocKeys: null, _careKeyRev: 0, _careKeyChecked: false, _careKeyPending: [], _careKeyVer: 0,
     _careRoster: new Set(), _CAREKEY_PENDING_TTL: 12000,
     _mediaKeyHex: null, _mediaKeyRing: [], _mediaKeyDocKeys: null, _mediaKeyChecked: false, _mediaKeyPushRefused: null, _mediaKeyVer: 0,
+    _careKeyFresh: false, _careKeyMine: false, _mediaKeyFresh: false, _mediaKeyMine: false, _mediaKeyAt: 0,   // round 3a (b)
     _nameKeyRing: [], _nameKeyDocKeys: null, _nameKeyChecked: false, _nameKeyAt: 0, _nameKeyBusy: null,
     _localBlocked: new Set(), _localBlockedAt: 0, _setBlockedSeq: 0, toPubHex: (p) => p, _myOwnPub: () => A.pub,
     // login state: `authed` for the whole set (the mint gates' _isRelayAuthed); per relay, the relay's OK
@@ -143,6 +144,7 @@ function engine() {
     // round 2 of the room-key reconcile: a room's envelope state, its drop memo, and the ex-steward record (P4)
     stmt(BUNDLE, 'var _skeys = '), stmt(BUNDLE, 'var _srev = '), stmt(BUNDLE, 'var _senvTs = '), stmt(BUNDLE, 'var _senvRecips = '),
     stmt(BUNDLE, 'var _senvMine = '), stmt(BUNDLE, 'var _senvDropped = '),
+    stmt(BUNDLE, 'var _senvPending = '), fnBody(BUNDLE, 'function _reCheckGroupKeyPending() {'), 't.__reCheckGk = _reCheckGroupKeyPending; t.__senvPending = _senvPending; t.__gkChain = _gkChain; t.__membersReask = _membersReask;',
     fnBody(BUNDLE, 'function _noteEnvelopeDrops(gid, prev, next) {'), fnBody(BUNDLE, 'function stewIngestKey(e) {'),
     't.__ingest = stewIngestKey; t.__skeys = _skeys; t.__senvMine = _senvMine;',
     stmt(BUNDLE, 'var _exStewardsKey = '), fnBody(BUNDLE, 'function _exStewardSet() {'),
@@ -456,8 +458,8 @@ test('name: CONTROL — with nothing arriving, the first name key is minted and 
 const RING_A = ['a1'.repeat(32), 'a2'.repeat(32)];
 const M1 = K(), M2 = K(), M3 = K();
 const onA = (e, kind) => {   // church A, read and keyed, as the console holds it before the Block
-  if (kind === 'care') { e.t._careKeyChecked = true; e.t._careKeyHex = RING_A[0]; e.t._careKeyRing = RING_A.slice(); e.t._careKeyDocKeys = { [A.pub]: 'x', [M1.pub]: 'x', [M2.pub]: 'x' }; e.t._careKeyRev = 1; }
-  if (kind === 'media') { e.t._mediaKeyChecked = true; e.t._mediaKeyHex = RING_A[0]; e.t._mediaKeyRing = RING_A.slice(); e.t._mediaKeyDocKeys = { [A.pub]: 'x', [M1.pub]: 'x' }; }
+  if (kind === 'care') { e.t._careKeyChecked = true; e.t._careKeyHex = RING_A[0]; e.t._careKeyRing = RING_A.slice(); e.t._careKeyDocKeys = { [A.pub]: 'x', [M1.pub]: 'x', [M2.pub]: 'x' }; e.t._careKeyRev = 1; e.t._careKeyFresh = true; e.t._careKeyMine = true; }   // fresh + ours: round 3a (b)
+  if (kind === 'media') { e.t._mediaKeyChecked = true; e.t._mediaKeyHex = RING_A[0]; e.t._mediaKeyRing = RING_A.slice(); e.t._mediaKeyDocKeys = { [A.pub]: 'x', [M1.pub]: 'x' }; e.t._mediaKeyFresh = true; e.t._mediaKeyMine = true; }
   if (kind === 'name') { e.t._nameKeyChecked = true; e.t._nameKeyRing = RING_A.slice(); e.t._nameKeyDocKeys = { [A.pub]: 'x', [M1.pub]: 'x' }; }
 };
 const holdSeal = (e) => { const g = gate(); const real = e.t._sealEach; e.t._sealEach = async (...a) => { await g.p; return real(...a); }; return g; };
@@ -769,7 +771,7 @@ test('rotateCareKey and rotateMediaKey never wrap the new key to someone this co
   const e = engine();
   e.t._localBlocked = new Set([M2.pub]);
   e.t._careKeyHex = 'aa'.repeat(32); e.t._careKeyRing = ['aa'.repeat(32)]; e.t._careKeyChecked = true; e.t._careKeyRev = 1;
-  e.t._mediaKeyHex = 'cc'.repeat(32); e.t._mediaKeyRing = ['cc'.repeat(32)]; e.t._mediaKeyChecked = true;
+  e.t._mediaKeyHex = 'cc'.repeat(32); e.t._mediaKeyRing = ['cc'.repeat(32)]; e.t._mediaKeyChecked = true; e.t._mediaKeyFresh = true;   // read on this connection — round 3a (b)
   for (const [what, call, d] of [['care', () => e.S.rotateCareKey([M1.pub, M2.pub], []), CAREKEY_D], ['sermon', () => e.S.rotateMediaKey([M1.pub, M2.pub], []), MEDIAKEY_D]]) {
     const p0 = e.published.length;
     await call();
@@ -1051,8 +1053,8 @@ test('round 2 · P4: the roster that drops a steward is recorded with its date (
 });
 
 for (const [kind, call, prime] of [
-  ['care', (e, m) => e.S.ensureCareKeyForMembers(m, []), (e, have) => { e.t._careKeyChecked = true; e.t._careKeyHex = 'aa'.repeat(32); e.t._careKeyRing = ['aa'.repeat(32)]; e.t._careKeyRev = 1; e.t._careKeyDocKeys = have; }],
-  ['media', (e, m) => e.S.ensureMediaKeyForMembers(m, []), (e, have) => { e.t._mediaKeyHex = 'bb'.repeat(32); e.t._mediaKeyRing = ['bb'.repeat(32)]; e.t._mediaKeyDocKeys = have; }],
+  ['care', (e, m) => e.S.ensureCareKeyForMembers(m, []), (e, have) => { e.t._careKeyChecked = true; e.t._careKeyHex = 'aa'.repeat(32); e.t._careKeyRing = ['aa'.repeat(32)]; e.t._careKeyRev = 1; e.t._careKeyDocKeys = have; e.t._careKeyFresh = true; e.t._careKeyMine = true; }],
+  ['media', (e, m) => e.S.ensureMediaKeyForMembers(m, []), (e, have) => { e.t._mediaKeyHex = 'bb'.repeat(32); e.t._mediaKeyRing = ['bb'.repeat(32)]; e.t._mediaKeyDocKeys = have; e.t._mediaKeyFresh = true; e.t._mediaKeyMine = true; }],
 ]) {
   test(`round 2 · P3: the ${kind} key only GROWS — a partial member list never drops anyone the envelope holds; the blocked still go`, async () => {
     const e = engine();
@@ -1102,4 +1104,124 @@ test('round 2 · P2: two copies stamped the SAME second do not "drop" each other
   e.t.__ingest(envelope(GK_D, A, 'r3', ring, [A.pub, MB.pub], 1759300000));   // another author's copy, same second
   assert.deepEqual(e.S.groupKeyDropped('r3'), [], 'an equal-stamped copy counted as a rotation that dropped somebody');
   assert.equal(e.subs.filter(r => r.d === BL_D + A.pub).length, reads, 'an equal-stamped copy re-opened the reads — re-delivered, it would do so for ever');
+});
+
+// ── ROUND 3a (audit of 244a6fe) ─────────────────────────────────────────────────────────────────────────────────────
+const ringOf = (e, gid) => (e.t.__skeys[gid] || []).map(hex);
+const openKey = (ev, who) => nip44.v2.decrypt(JSON.parse(ev.content).keys[who.pub], ck(who.sk, ev.pubkey));   // `keys` holds the CURRENT key, bare hex
+function gated(e) {
+  const g = { waiting: [], open: false };
+  e.t.publish = (ev) => { e.published.push(ev); if (g.open) return Promise.resolve({ id: 'ok' }); return new Promise(r => g.waiting.push(() => r({ id: 'ok' }))); };
+  g.release = async () => { g.open = true; for (const f of g.waiting.splice(0)) f(); for (let i = 0; i < 6; i++) await flush(); };
+  return g;
+}
+test('round 3a · HIGH 2: a background re-key in flight when a rotation starts — one publish per room at a time, and the rotation is what stays', async () => {
+  const e = engine();
+  const MB = K(), BOB = K();
+  const ring0 = [hex(generateSecretKey())];
+  e.t.__ingest(envelope(GK_D, A, 'r5', ring0, [A.pub, MB.pub, BOB.pub], 1759299000));
+  const g = gated(e);
+  const bg = e.S.publishGroupKey('r5', [MB.pub, BOB.pub], { reuseOnly: true, background: true });   // the background re-key, in flight
+  await flush();
+  const rot = e.S.publishGroupKey('r5', [MB.pub], { rotate: true });                                 // Block rotates meanwhile
+  for (let i = 0; i < 4; i++) await flush();
+  assert.equal(e.published.length, 1, 'TWO KEY PUBLISHES FOR ONE ROOM WERE IN FLIGHT AT ONCE — the older one can land last and restore the pre-Block ring');
+  await g.release(); await bg; await rot;
+  assert.equal(e.published.length, 2, 'CONTROL: the rotation never ran');
+  const rotated = openKey(e.published[1], A);
+  assert.notEqual(rotated, ring0[0], 'CONTROL: the second publish is not the rotation');
+  assert.equal(ringOf(e, 'r5')[0], rotated, 'THE CONSOLE\'S CURRENT ROOM KEY IS NOT THE ROTATED ONE — its next re-key republishes the key the blocked person holds');
+  assert.ok(!Object.keys(JSON.parse(e.published[1].content).keys).includes(BOB.pub), 'CONTROL: the rotation re-wrapped to Bob');
+});
+test('round 3a · HIGH 2: a publish that lands after a NEWER envelope was read does not put its older ring back here', async () => {
+  const e = engine();
+  const MB = K(), S1 = K();
+  e.t._careRoster = new Set([S1.pub]);
+  const ring0 = [hex(generateSecretKey())], ringNew = [hex(generateSecretKey())];
+  e.t.__ingest(envelope(GK_D, A, 'r6', ring0, [A.pub, MB.pub], 1759299000));
+  const g = gated(e);
+  const bg = e.S.publishGroupKey('r6', [MB.pub, K().pub], { reuseOnly: true, background: true });
+  await flush();
+  // another console's rotation (a rostered steward, wrapped to this church too) is read while ours is in flight
+  e.t.__ingest({ ...envelope(GK_D, S1, 'r6', ringNew, [A.pub, MB.pub], 1759300500), tags: [['d', GK_D + 'r6'], ['t', 'trinityone'], ['church', A.pub]] });
+  e.t.churchSk = A.sk;
+  await g.release(); await bg;
+  assert.notEqual(ringOf(e, 'r6')[0], ring0[0], 'THE OLDER RING CAME BACK AFTER THE PUBLISH LANDED — the next re-key would republish it over the rotation');
+});
+test('round 3a · LOW i: a room envelope stamped far in the future, or by a key no roster names, is not taken — a steward\'s is, once the roster names them', async () => {
+  const e = engine();
+  const MB = K(), X = K(), S1 = K();
+  const ring = [hex(generateSecretKey())];
+  e.t.__ingest(envelope(GK_D, A, 'r7', ring, [A.pub, MB.pub], 1759300000 + 99999));
+  assert.equal(e.S.groupKeyRecipients('r7'), null, 'A FAR-FUTURE ENVELOPE WAS TAKEN — newest-wins would pin it for good');
+  e.t.__ingest({ ...envelope(GK_D, X, 'r7', ring, [A.pub, MB.pub], 1759300000), tags: [['d', GK_D + 'r7'], ['t', 'trinityone'], ['church', A.pub]] });
+  assert.equal(e.S.groupKeyRecipients('r7'), null, 'AN ENVELOPE SIGNED BY A KEY NO ROSTER NAMES WAS TAKEN');
+  // a delegate's real envelope that arrives before the roster does: kept, and taken once the roster names them
+  e.t.__ingest({ ...envelope(GK_D, S1, 'r7', ring, [A.pub, MB.pub], 1759300001), tags: [['d', GK_D + 'r7'], ['t', 'trinityone'], ['church', A.pub]] });
+  assert.equal(e.S.groupKeyRecipients('r7'), null, 'CONTROL: taken before the roster named the author');
+  e.t._careRoster = new Set([S1.pub]);
+  e.t.__reCheckGk();
+  assert.ok(e.S.groupKeyRecipients('r7'), 'A DELEGATE\'S REAL ENVELOPE WAS LOST because it arrived before the steward roster');
+  assert.ok(e.S.groupKeyRecipients('r7').includes(MB.pub));
+});
+test('round 3a · LOW ii: after an unblock that only PARTLY saved, the member lists are still asked again', async () => {
+  const e = engine();
+  const P = K();
+  e.t._localBlocked = new Set([P.pub]);
+  let asked = 0; e.t.__membersReask.add(() => { asked++; });
+  e.t._publishToRelays = async () => false;      // one relay refused: a partial save
+  await e.S.setBlocked([], { unblock: [P.pub] });
+  for (let i = 0; i < 4; i++) await flush();
+  assert.equal(asked, 1, 'AFTER A PARTIAL UNBLOCK THE MEMBER LIST WAS NOT ASKED AGAIN — the relays that took it serve the person now');
+  assert.ok(e.t._localBlocked.has(P.pub), 'CONTROL: a partial unblock still keeps them blocked on this console');
+});
+for (const [kind, sub, d, ensure, prime] of [
+  ['care', 'subscribeCareKey', CAREKEY_D, (e, m) => e.S.ensureCareKeyForMembers(m, []), (e) => { e.t._careKeyChecked = true; }],
+  ['media', 'subscribeMediaKey', MEDIAKEY_D, (e, m) => e.S.ensureMediaKeyForMembers(m, []), (e) => { e.t._mediaKeyChecked = true; }],
+]) {
+  test(`round 3a · (b): the ${kind} key is not re-sealed after a reconnect until the read has settled again, nor from a ring the newest envelope moved past`, async () => {
+    const e = engine();
+    const M1 = K(), NEW = K();
+    const ring = [hex(generateSecretKey())];
+    e.S[sub]();
+    const r1 = e.subs.at(-1);
+    r1.handlers.onevent(envelope(d, A, A.pub, ring, [A.pub, M1.pub], 1759300000));
+    await e.eose(r1);
+    prime(e);
+    // the reconnect: the read re-opens and has not settled
+    e.S[sub]();
+    const n = e.published.length;
+    await ensure(e, [M1.pub, NEW.pub]);
+    assert.equal(e.published.length, n, `THE ${kind.toUpperCase()} KEY WAS RE-SEALED BEFORE THE RE-OPENED READ SETTLED — a ring from before a rotation can go back on the relay`);
+    await e.eose(e.subs.at(-1));
+    await ensure(e, [M1.pub, NEW.pub]);
+    assert.equal(e.published.length, n + 1, `CONTROL: once read, the ${kind} key was not re-sealed for the new member`);
+    // a NEWER envelope with no copy for this console (a rotation that left it out)
+    e.subs.at(-1).handlers.onevent(envelope(d, A, A.pub, [hex(generateSecretKey())], [M1.pub], 1759300100));
+    const m = e.published.length;
+    await ensure(e, [M1.pub, NEW.pub, K().pub]);
+    assert.equal(e.published.length, m, `THE ${kind.toUpperCase()} KEY WAS RE-SEALED FROM A RING THE NEWEST ENVELOPE HAS MOVED PAST`);
+  });
+}
+test('round 3a · (b): a lagging relay\'s OLDER sermon-key envelope does not become the current key', async () => {
+  const e = engine();
+  const M1 = K();
+  const older = [hex(generateSecretKey())], newer = [hex(generateSecretKey()), older[0]];
+  e.S.subscribeMediaKey();
+  const r = e.subs.at(-1);
+  r.handlers.onevent(envelope(MEDIAKEY_D, A, A.pub, newer, [A.pub, M1.pub], 1759300100));
+  r.handlers.onevent(envelope(MEDIAKEY_D, A, A.pub, older, [A.pub, M1.pub], 1759300000));
+  assert.equal(e.t._mediaKeyHex, newer[0], 'AN OLDER SERMON-KEY ENVELOPE ARRIVING LATE BECAME THE CURRENT KEY — the next re-seal would put it back on the relay');
+});
+test('round 3a · (b): with a relay DOWN, the care and sermon reads are fresh for re-sealing — but the mint gate stays shut and the down relay is asked again', async () => {
+  for (const [method, fresh, checked] of [['subscribeCareKey', '_careKeyFresh', '_careKeyChecked'], ['subscribeMediaKey', '_mediaKeyFresh', '_mediaKeyChecked']]) {
+    const e = engine(); e.t.relayList = [R1, R2];
+    e.S[method]();
+    const [r1, r2] = e.subs.slice(-2);
+    await e.closedByRelay(r1, 'connection failure: relay unreachable');
+    await e.eose(r2);
+    assert.equal(e.t[fresh], true, `${method}: A RELAY THAT IS DOWN HELD BACK EVERY RE-SEAL — nobody new gets the key while it stays down`);
+    assert.equal(e.t[checked], false, `${method}: THE MINT GATE OPENED WITH A RELAY DOWN — it may hold the envelope`);
+    assert.deepEqual(e.fireTimers(), [2000], `${method}: the down relay is never asked again, so the mint gate can never open`);
+  }
 });

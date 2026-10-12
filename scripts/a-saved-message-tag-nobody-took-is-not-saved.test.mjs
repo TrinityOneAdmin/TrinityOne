@@ -284,7 +284,7 @@ test('mediaEncryptor REFUSES TO ENCRYPT when the key envelope was refused', asyn
   // file with a key whose envelope never reached a relay and pushed the ciphertext to every host. Nobody,
   // the church included, can ever decrypt it. The mint gate a few lines above this one exists to prevent
   // exactly that loss; this is the same loss reached through the other door.
-  const decls = 'let _mediaKeyHex = null; let _mediaKeyRing = []; let _mediaKeyChecked = true; let _mediaKeyDocKeys = null; let _mediaKeyVer = 0;';
+  const decls = 'let _mediaKeyHex = null; let _mediaKeyRing = []; let _mediaKeyChecked = true; let _mediaKeyDocKeys = null; let _mediaKeyVer = 0; let _mediaKeyMine = false;';   // _mediaKeyMine: round 3a
   const env = {
     _isRelayAuthed: () => true,
     _sealEach: async (payload, targets) => Object.fromEntries(targets.map(t => [t, 'WRAPPED'])),
@@ -304,6 +304,7 @@ test('mediaEncryptor REFUSES TO ENCRYPT when the key envelope was refused', asyn
 const MEDIA_ENV = (extra = '') => `
   let _mediaKeyRing = []; let _mediaKeyVer = 0;
   let _mediaKeyChecked = true;
+  let _mediaKeyFresh = true; let _mediaKeyMine = true; let _mediaKeyAt = 0;   // round 3a (b): read on this connection, and ours
   let _mediaKeyDocKeys = null;
   const _isRelayAuthed = () => true;
   const _unhex = (h) => new Uint8Array(h.match(/../g).map(x => parseInt(x, 16)));
@@ -339,7 +340,7 @@ test('ENCRYPTION: a delegated console recovers the key from ITS OWN entry in the
     // Read them out of the bundle instead of hard-coding, because the numeric suffixes move on every build.
     [DEC]: (payload, ck) => (payload.startsWith(ck.replace('ck:', '') + '/') ? payload.split('/')[1] : (() => { throw new Error('wrong recipient'); })()),
     [CK]: (_sk, other) => 'ck:' + other,
-  }, [], `let _mediaKeyHex = null; let _mediaKeyRing = []; let _mediaKeyDocKeys = null; let _mediaKeyPushRefused = 'x'; let _mediaKeyChecked = false; let _mediaKeyVer = 0;
+  }, [], `let _mediaKeyHex = null; let _mediaKeyRing = []; let _mediaKeyDocKeys = null; let _mediaKeyPushRefused = 'x'; let _mediaKeyChecked = false; let _mediaKeyVer = 0; let _mediaKeyFresh = false; let _mediaKeyMine = false; let _mediaKeyAt = 0;
      ${fnBody(BUNDLE, 'function _myOwnPub() {', '_myOwnPub')}
      globalThis['${peek}'] = () => _mediaKeyHex;`);
   r.fn();
@@ -1243,7 +1244,7 @@ async function runMediaKey(answer, calls = 3, memberPubs = ['m1', 'm2'], saidNo 
   // this function ASSIGNS to _mediaKeyDocKeys and _mediaKeyPushRefused — a const would throw TypeError from
   // inside the lifted code, which an assertion about "it stopped publishing" would happily accept.
   const decls = 'let _mediaKeyHex = "aa"; let _mediaKeyRing = ["aa"]; let _mediaKeyDocKeys = null; '
-    + 'let _mediaKeyPushRefused = null; let _mediaKeyVer = 0;\n'
+    + 'let _mediaKeyPushRefused = null; let _mediaKeyVer = 0; let _mediaKeyFresh = true; let _mediaKeyMine = true; let _mediaKeyAt = 0;\n'   // round 3a (b): read on this connection, and ours
     + `globalThis.${peek} = () => ({ docKeys: _mediaKeyDocKeys, refused: _mediaKeyPushRefused });\n`;
   const lifted = await runLifted('ensureMediaKeyForMembers(memberPubs, stewardPubs)', 'ensureMediaKeyForMembers', answer, {
     publish: async (evt, opts) => {
@@ -1357,6 +1358,7 @@ async function runMediaKeyForReal(answers, calls = 3, memberPubs = ['m1', 'm2'])
     _hex: () => 'bb',
     crypto: { getRandomValues: (a) => a },
     decrypt3: (a) => a,
+    getConversationKey: () => 'ck', _myOwnPub: () => 'CP', _keyReadAuthedOn: () => true,   // the envelope's copy for us opens, and the sermon-key read settles on a logged-in relay (round 3a: re-sealing waits for that)
     pool: {
       publish: (targets) => {
         const a = answers[Math.min(n, answers.length - 1)];
@@ -1385,7 +1387,7 @@ async function runMediaKeyForReal(answers, calls = 3, memberPubs = ['m1', 'm2'])
   // Mutable module state the lifted function ASSIGNS to must be `let`, or a const throws TypeError from
   // inside the lifted code and "it stopped publishing" would read as a pass.
   const decls = 'let _mediaKeyHex = "aa"; let _mediaKeyRing = ["aa"]; let _mediaKeyDocKeys = null; '
-    + 'let _mediaKeyPushRefused = null; let _mediaKeyChecked = false; let _mediaKeyVer = 0;\n' + liftKeyRead(BUNDLE);
+    + 'let _mediaKeyPushRefused = null; let _mediaKeyChecked = false; let _mediaKeyVer = 0; let _mediaKeyFresh = true; let _mediaKeyMine = true; let _mediaKeyAt = 0;\n' + liftKeyRead(BUNDLE);   // round 3a (b): this console has read the sermon key on this connection, and it is ours
   const pubSrc = fnBody(BUNDLE, '  async function publish(evt, opts) {', 'publish in the shipped bundle');
   const family = [
     fnBody(BUNDLE, '    async ensureMediaKeyForMembers(memberPubs, stewardPubs) {', 'ensureMediaKeyForMembers in the shipped bundle'),
@@ -1398,7 +1400,7 @@ async function runMediaKeyForReal(answers, calls = 3, memberPubs = ['m1', 'm2'])
     return { fn: _o.ensureMediaKeyForMembers.bind(_o), rotate: _o.rotateMediaKey.bind(_o),
              subscribe: _o.subscribeMediaKey.bind(_o),
              forget: (fp) => { _mediaKeyPushRefused = fp; },
-             peek: () => ({ docKeys: _mediaKeyDocKeys, refused: _mediaKeyPushRefused }) }; }`)(proxy);
+             peek: () => ({ docKeys: _mediaKeyDocKeys, refused: _mediaKeyPushRefused, fresh: _mediaKeyFresh, mine: _mediaKeyMine }) }; }`)(proxy);
   const out = [];
   for (let i = 0; i < calls; i++) out.push(await api.fn(memberPubs));
   return { out, attempts, banners, errors, subs, api, state: api.peek() };
@@ -1514,11 +1516,13 @@ test('THE CLEARS: an envelope ARRIVING makes the console ask again too', async (
   assert.equal(p.api.peek().refused, null,
     'AN ARRIVING ENVELOPE NO LONGER CLEARS THE MEMO. The recipient map has changed underneath this console ' +
     'and it goes on skipping until the roster itself changes.');
+  // …and the read SETTLES (round 3a: nothing is re-sealed from a read that has not settled on this connection)
+  if (p.subs[0].oneose) { p.subs[0].oneose(); for (let i = 0; i < 4; i++) await new Promise(r => setTimeout(r, 0)); }
   const before = p.attempts.length;
   await p.api.fn(['m1', 'm2']);
   assert.equal(p.attempts.length, before + 1,
     'THE POINT OF USE: an envelope arrived that does not key m2, and the console still will not re-wrap ' +
-    'for them. Attempts: ' + JSON.stringify(p.attempts));
+    'for them. Attempts: ' + JSON.stringify(p.attempts) + ' state: ' + JSON.stringify(p.api.peek()));
   stop();
 });
 

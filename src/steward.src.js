@@ -350,6 +350,14 @@ let _careKeyRing = [];           // current key first, then superseded ones — 
 let _careKeyDocKeys = null;      // the envelope's wrapped-per-member map (to detect who is missing)
 let _careKeyRev = 0;             // envelope revision — rotation is NOT wired yet, but readers must tolerate it
 let _careKeyChecked = false;     // have we actually LOOKED for an envelope? mint gate — see (1) above
+// FRESH ON THIS CONNECTION, AND OURS (round 3a, (b)). `_careKeyChecked` stays true across a reconnect, so a member who
+// joined while the console was away looked missing from the envelope it still held, and the background re-seal put
+// the ring it held — possibly from before a rotation made elsewhere — back on the relay with a newer timestamp.
+// `_careKeyFresh` is cleared when the care read re-opens and set when it settles; `_careKeyMine` says whether the
+// NEWEST envelope carried a copy this console opened. The re-seal needs both; a rotation needs `_careKeyMine`.
+// READERS: ensureCareKeyForMembers, rotateCareKey. WRITERS: subscribeCareKey, _ingestCareKeyEnv, the two resets.
+let _careKeyFresh = false;
+let _careKeyMine = false;
 let _careRoster = new Set();     // the church's current steward pubkeys — who may author the envelope
 // A STEWARD WHO ONLY POSTS IS NOT A MEMBER (sim finding 29). The relay lets a steward write chat without a
 // `member:` document, and subscribeMembers turns any kind-1 addressed to the church into a member row — so a
@@ -430,6 +438,12 @@ let _mediaKeyPushRefused = null;
 // AUDIT 2026-08-02.
 // Bumped whenever the media key state changes under an awaiting publisher — the media twin of _careKeyVer.
 let _mediaKeyVer = 0;
+// the sermon-key twins of _careKeyFresh / _careKeyMine (round 3a, (b)), and the newest envelope's created_at: the
+// reader had no newest-wins, so a lagging relay's older envelope became the current key through the ring merge.
+// READERS: ensureMediaKeyForMembers, rotateMediaKey, subscribeMediaKey. WRITERS: subscribeMediaKey, the two resets.
+let _mediaKeyFresh = false;
+let _mediaKeyMine = false;
+let _mediaKeyAt = 0;
 let _mediaKeyChecked = false;    // set only from subscribeMediaKey's oneose — see the mint gate                   // the latest media-key doc's wrapped-per-member map (to detect members not yet keyed)
 async function _sha256hex(u8) { const d = await crypto.subtle.digest('SHA-256', u8); return Array.from(new Uint8Array(d)).map(b => b.toString(16).padStart(2, '0')).join(''); }
 const JOINPOLICY_D = 'trinityone/joinpolicy:'; // join policy {approval:bool}, d=joinpolicy:<churchpub>
@@ -956,6 +970,16 @@ const _senvMine = {};
 // re-read shows they are still wanted. Cleared for a person when an envelope includes them again.
 // READERS: Steward.groupKeyDropped (KeyDistributor). WRITERS: _noteEnvelopeDrops (stewIngestKey, publishGroupKey).
 const _senvDropped = {};
+// room id -> the newest envelope whose author the steward roster did not (yet) name — see stewIngestKey. Re-checked on
+// every roster change (_memberEmitters, poked by subscribeStewards). READERS/WRITERS: stewIngestKey, _reCheckGroupKeyPending.
+const _senvPending = new Map();
+function _reCheckGroupKeyPending() {
+  for (const [gid, e] of [..._senvPending]) {
+    if (_authFuture(e)) { _senvPending.delete(gid); continue; }
+    if (_byChurchOrSteward(e)) { _senvPending.delete(gid); stewIngestKey(e); }
+  }
+}
+_memberEmitters.add(_reCheckGroupKeyPending);
 function _noteEnvelopeDrops(gid, prev, next) {
   const m = _senvDropped[gid] || (_senvDropped[gid] = new Map());
   const nx = new Set(next || []);
@@ -975,6 +999,14 @@ const _isNative = () => !!(typeof window !== 'undefined' && window.Capacitor && 
 function stewIngestKey(e) {
   const d = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (!d.startsWith(GROUPKEY_D)) return;
   const gid = d.slice(GROUPKEY_D.length);
+  // WHO MAY WRITE A ROOM'S KEY, and no far-future stamps (round 3a, LOW i) — the member app's own rule. There was no
+  // check here at all: on a relay that does not enforce, anyone could hand this console an envelope stamped years
+  // ahead, newest-wins would pin it, and the distributor would reconcile against its recipients for good. The church,
+  // or a steward on its roster. An author the roster does not name YET (it arrives on its own subscription) is kept,
+  // newest per room, and re-checked whenever the roster changes — dropping a delegate's real envelope would leave the
+  // room looking unkeyed until a reload.
+  if (_authFuture(e)) return;
+  if (!_byChurchOrSteward(e)) { const p = _senvPending.get(gid); if (!p || (p.created_at || 0) <= (e.created_at || 0)) _senvPending.set(gid, e); return; }
   if ((_senvTs[gid] || 0) > (e.created_at || 0)) return;   // ignore an older envelope arriving late
   const newer = (e.created_at || 0) > (_senvTs[gid] || 0);   // a drop counts only from a strictly NEWER envelope — see below
   _senvTs[gid] = e.created_at || 0;
@@ -1220,6 +1252,7 @@ function _ingestCareKeyEnv(e) {
     const o = JSON.parse(e.content || '{}');
     if ((o.rev || 1) < _careKeyRev) return;                  // a lagging relay must not resurrect an older envelope
     _careKeyDocKeys = o.keys || null; _careKeyRev = o.rev || 1;
+    _careKeyMine = false;   // until this envelope's copy for us has opened — see _careKeyMine
     const mine = o.keys && churchPub && o.keys[churchPub];
     // KEY RING (audit 2026-07-24). Rotating the care key when a member is removed would, on its own, make every
     // previously-sealed need unreadable — the exact permanent loss this codebase already suffered once. So the
@@ -1231,6 +1264,7 @@ function _ingestCareKeyEnv(e) {
       let ring = null; try { const p = JSON.parse(plain); if (Array.isArray(p)) ring = p.filter(k => typeof k === 'string' && k); } catch (x) {}
       _careKeyRing = ring && ring.length ? ring : [plain];
       _careKeyHex = _careKeyRing[0];
+      _careKeyMine = true;
     }
     _careKeyVer++;
   } catch (x) {}
@@ -2451,6 +2485,7 @@ function _stampFor(list, tag) {
 const _freshReopeners = new Set();   // the open fresh reads' re-open functions — see _reconfirmFresh
 const _joinPolicyStates = new Set(); // each open subscribeJoinPolicy's { tag, approval } — see Steward.joinPolicyFresh
 const _membersReask = new Set();     // each open subscribeMembers' re-ask — called by setBlocked once an unblock lands
+const _gkChain = new Map();          // room id -> the tail of its publishGroupKey queue (round 3a, HIGH 2)
 // ensureGroupKeys' per-room guards, keyed "<church>|<room>": a check in flight, and "the relay has an envelope, don't ask
 // again until" (finding 6 of the audit of 78ffad0). READER and WRITER: ensureGroupKeys only.
 const _ensureGroupKeysBusy = new Set();
@@ -2556,7 +2591,13 @@ function _openKeyRead(cp, filters, onevent, onSettled, kind, opts) {
       if (v.every(x => x === true)) { settled(); const w = kind && _keyReadWaiting.get(kind); if (w && w.answers === answers) w.settled = true; onSettled(); return; }
       if (opts && opts.withoutFailed) {                        // see `opts.withoutFailed`, above
         const without = urls.filter(u => answers.get(u) !== true);
-        if (without.length < urls.length && without.every(u => !_keyReadConnected(u))) { settled(); onSettled({ without }); return; }
+        if (without.length < urls.length && without.every(u => !_keyReadConnected(u))) {
+          // `opts.keepAsking` (the care and sermon key reads, round 3a): report the partial answer — enough to re-seal the
+          // key we hold — but go on asking, with the usual backoff, until EVERY relay has answered, because only that
+          // opens their mint gate. Without it the read stopped here and a new church with a relay down never minted.
+          if (opts.keepAsking) { onSettled({ without }); retry(); return; }
+          settled(); onSettled({ without }); return;
+        }
       }
       if (v.some(x => x === false)) { retry(); return; }     // a CLOSED, a timer, a drop: ask again, later
       _keyReadAfterAuth(again);                              // genuine but not yet logged in: ask again on login (held since its answer — `again`)
@@ -2999,8 +3040,8 @@ function _resetChurchScopedState() {
   _applyNoPhotoList([]);
   // The `*Checked` flags are the mint gates — "have we actually LOOKED for an envelope?". Carried across, they
   // report TRUE for a church nobody has looked at yet, which is what lets a stale ring be published as new.
-  _careKeyHex = null; _careKeyRing = []; _careKeyDocKeys = null; _careKeyRev = 0; _careKeyChecked = false; _careKeyPending = [];
-  _mediaKeyHex = null; _mediaKeyRing = []; _mediaKeyDocKeys = null; _mediaKeyChecked = false; _mediaKeyPushRefused = null;
+  _careKeyHex = null; _careKeyRing = []; _careKeyDocKeys = null; _careKeyRev = 0; _careKeyChecked = false; _careKeyPending = []; _careKeyFresh = false; _careKeyMine = false;
+  _mediaKeyHex = null; _mediaKeyRing = []; _mediaKeyDocKeys = null; _mediaKeyChecked = false; _mediaKeyPushRefused = null; _mediaKeyFresh = false; _mediaKeyMine = false; _mediaKeyAt = 0;
   // …and no read, publish or "we looked" opened before this line may count afterwards — see _keyReadOk.
   _keyReadEpoch++; _careKeyVer++; _mediaKeyVer++;
   try { const M = window.StewardMeals; if (M && M.dropPendingCareTeam) M.dropPendingCareTeam(); } catch (e) {}   // a care list waiting to be retried belongs to the church it was asked for
@@ -6434,7 +6475,7 @@ window.Steward = {
       const _env = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', MEDIAKEY_D + pub0], ['t', NET]], content: JSON.stringify({ keys, rev: now() }) }));
       if (_env === false) throw new Error('Can’t encrypt this upload — your church’s media key could not be saved, so nothing encrypted with it could ever be played. Nothing has been uploaded. A church media key can only be published from the console that holds the church’s own key.');
       if (!_stillOn(pub0, ep0)) throw new Error(_moved);
-      _mediaKeyHex = fresh; _mediaKeyRing = [fresh, ..._mediaKeyRing.filter(k => k !== fresh)]; _mediaKeyDocKeys = keys; _mediaKeyVer++;
+      _mediaKeyHex = fresh; _mediaKeyRing = [fresh, ..._mediaKeyRing.filter(k => k !== fresh)]; _mediaKeyDocKeys = keys; _mediaKeyMine = true; _mediaKeyVer++;
       useHex = fresh;
     }
     }
@@ -6479,6 +6520,8 @@ window.Steward = {
     // key-distributor effect and the mount re-check timers, both in app/stew-dashboard.jsx.
     if (actingChurch) return false;
     if (!sk || !_mediaKeyHex) return false;                       // no media key on this device → nothing to distribute yet
+    if (!_mediaKeyFresh) return false;                             // not read on this connection — see _mediaKeyFresh
+    if (_mediaKeyDocKeys && !_mediaKeyMine) return false;          // the newest envelope is not ours to re-wrap: the ring we hold is older
     // CAPTURED AT ENTRY, CHECKED AFTER EVERY AWAIT (audit of d1116f6): the console can switch church while this
     // runs, and a result committed or published after the switch hands this church's keys to the next one.
     const pub0 = pub, ep0 = _keyReadEpoch, sk0 = sk;
@@ -6520,7 +6563,7 @@ window.Steward = {
     // Reflect what we just published so we don't loop — unless something moved during the publish, in which
     // case the newer state stands. The console's OWN ring is left as it was: the envelope may be trimmed to fit,
     // but a key this device holds may have sealed something and must not be forgotten for that.
-    if (ok !== false) { if (_mediaKeyVer === _v0) { _mediaKeyDocKeys = keys; _mediaKeyPushRefused = null; _mediaKeyVer++; } return ok; }
+    if (ok !== false) { if (_mediaKeyVer === _v0) { _mediaKeyDocKeys = keys; _mediaKeyMine = true; _mediaKeyPushRefused = null; _mediaKeyVer++; } return ok; }
     // ⚠ A BLIP IS NOT A RULE, AND THIS MEMO IS ONLY ALLOWED TO REMEMBER RULES.
     //
     // `publish()` returns false for a refusal AND for a connection failure AND for "no relay could be
@@ -6601,6 +6644,7 @@ window.Steward = {
     // them again". Only when we have genuinely LOOKED (a settled read) and there is no envelope at all — the name
     // key's answer for the same case. Not yet looked, or an envelope we cannot open: still false, still said.
     if (!_mediaKeyHex) return (_mediaKeyChecked && !_mediaKeyDocKeys) ? { rotated: false, reason: 'no sermon key yet' } : false;
+    if (_mediaKeyDocKeys && !_mediaKeyMine) return false;          // the newest envelope has no copy we opened — see rotateCareKey (round 3a)
     _mediaKeyVer++;   // a rotation is under way: an ensureMediaKeyForMembers still sealing the old ring must not publish it
     const fresh = _hex(crypto.getRandomValues(new Uint8Array(32)));
     const full = [fresh, ...(_mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex])].slice(0, 50);
@@ -6621,7 +6665,7 @@ window.Steward = {
     // envelope, so the reason ensureMediaKeyForMembers stopped asking no longer holds.
     // The console keeps the WHOLE ring it rotated from (plus anything that arrived meanwhile), not the fitted
     // one: the envelope may be trimmed to fit, but a key this device holds may have sealed something.
-    _mediaKeyRing = [...full, ..._mediaKeyRing.filter(k => full.indexOf(k) === -1)]; _mediaKeyHex = fresh; _mediaKeyDocKeys = keys; _mediaKeyPushRefused = null; _mediaKeyVer++;
+    _mediaKeyRing = [...full, ..._mediaKeyRing.filter(k => full.indexOf(k) === -1)]; _mediaKeyHex = fresh; _mediaKeyDocKeys = keys; _mediaKeyMine = true; _mediaKeyPushRefused = null; _mediaKeyVer++;
     return true;
   },
   // ---- care key: same envelope as the media key, for the Care module's sensitive fields ----
@@ -6629,6 +6673,7 @@ window.Steward = {
   // the church, so using it here is what made the previous attempt impossible to satisfy.
   subscribeCareKey() {
     const cp = actingChurch || pub; if (!cp) return () => {};
+    _careKeyFresh = false;   // re-opened (a reconnect, a remount): nothing is re-sealed until this read settles — see _careKeyFresh
     return _openKeyRead(cp, [{ kinds: [30078], authors: [cp], '#d': [CAREKEY_D + cp] },
                              { kinds: [30078], '#church': [cp], '#d': [CAREKEY_D + cp] }],
       (e) => {
@@ -6640,7 +6685,12 @@ window.Steward = {
         _ingestCareKeyEnv(e);
       },
       // "No envelope came back" opens the mint gate ONLY on a trustworthy answer from every relay — _openKeyRead.
-      () => { if (!_careKeyChecked) { _careKeyChecked = true; _keysReadSignal('care'); } }, 'care');
+      // TWO ANSWERS FROM ONE READ (round 3a, (b)). "Fresh" — fine to re-seal the key we hold — needs every CONNECTED relay
+      // to have answered genuinely (the blocklist's rule, `withoutFailed`): with a proved relay down for days, nobody new
+      // would get the care key at all (measured: a-relay-that-is-down-does-not-hold-back-new-members-keys). The MINT gate
+      // (`_careKeyChecked`) still needs EVERY relay — minting over an envelope a down relay holds destroys the church's
+      // care records — so a settle that left a relay out does not set it.
+      (how) => { _careKeyFresh = true; if (!_careKeyChecked && !(how && how.without && how.without.length)) _careKeyChecked = true; _keysReadSignal('care'); }, 'care', { withoutFailed: true, keepAsking: true });
   },
   // Wrap the care key for everyone who needs it. MINTS only on a first run where we have positively
   // established there is no envelope — never on a cold `_careKeyHex === null`, which is the ordinary state
@@ -6655,6 +6705,8 @@ window.Steward = {
     const cp = actingChurch || pub, ep0 = _keyReadEpoch, sk0 = sk;
     if (!sk || !cp || !churchPub) return false;
     if (!_careKeyChecked) return false;                       // haven't looked yet — minting now would orphan
+    if (!_careKeyFresh) return false;                         // not read on this connection — see _careKeyFresh
+    if (_careKeyHex && _careKeyDocKeys && !_careKeyMine) return false;   // the newest envelope is not ours to re-wrap: the ring we hold is older
     _reCheckCareKeyPending();                                 // adopt any envelope now verifiable; drop expired forgeries
     if (_careKeyPending.length) return false;                 // an unverified envelope may be a REAL one whose author is still loading — never mint a second key over it
     if (!_careKeyHex) {
@@ -6707,7 +6759,7 @@ window.Steward = {
     // shortened to the fitted one: a trimmed key may still have sealed something on this device.
     if (ok !== false && _careKeyVer === _v1 && _stillOn(cp, ep0)) {
       if (minting) { _careKeyRing = ring0.slice(); _careKeyHex = ring0[0]; _careKeyRev = rev; }
-      _careKeyDocKeys = keys; _careKeyVer++;
+      _careKeyDocKeys = keys; _careKeyMine = true; _careKeyVer++;
     }
     return ok;
   },
@@ -6749,6 +6801,7 @@ window.Steward = {
     if (!sk || !cp || !churchPub) return false;
     if (!_careKeyChecked || !_isRelayAuthed()) return false;  // same trusted-view rule as minting
     if (!_careKeyHex) return false;                            // nothing to rotate yet — ensureCareKeyForMembers mints the first
+    if (_careKeyDocKeys && !_careKeyMine) return false;        // the newest envelope has no copy we opened: our ring is older, and a rotation from it would drop the current key (round 3a)
     _careKeyVer++;   // a rotation is under way: any publish still sealing the old ring must not land after it
     const fresh = _hex(crypto.getRandomValues(new Uint8Array(32)));
     const want = [...new Set([cp, churchPub, ...(memberPubs || []), ...(stewardPubs || [])].filter(Boolean))]
@@ -6798,7 +6851,7 @@ window.Steward = {
     // moved on, the new ring belongs to a church it is no longer running: adopt nothing; it is read back from the
     // relay when the console returns.
     if (!_stillOn(cp, ep0)) return true;
-    _careKeyRing = ring; _careKeyHex = fresh; _careKeyRev = rev0; _careKeyDocKeys = keys; _careKeyVer++;
+    _careKeyRing = ring; _careKeyHex = fresh; _careKeyRev = rev0; _careKeyDocKeys = keys; _careKeyMine = true; _careKeyVer++;
     return true;
   },
   // has this device actually completed a NIP-42 auth? Callers use it to tell "the church has none" apart
@@ -6827,6 +6880,7 @@ window.Steward = {
     // and in that beat it must neither hand church A's key ring to church B nor tell B's mint gate "looked".
     // (2026-10-01, audit5.)
     const forPub = pub;
+    _mediaKeyFresh = false;   // re-opened: nothing is re-sealed until this read settles — see _mediaKeyFresh
     return _openKeyRead(forPub, [{ kinds: [30078], authors: [pub], '#d': [MEDIAKEY_D + pub] }],
       // Ring-aware, and tolerant of the legacy shape: a wrapped value is a JSON array of keys now (newest
       // first) but older envelopes hold one bare hex string. Reading only the new form would make every
@@ -6834,9 +6888,10 @@ window.Steward = {
       /* `_mediaKeyPushRefused = null` (F2): an envelope LANDING is new information — the recipient map has
          changed under us, so whatever this console last had refused is worth asking again. Without this a
          console that was refused once would go on skipping until the roster itself changed. */
-      function onMediaKeyEnvelope(e) { if (forPub !== pub || e.pubkey !== pub || ((e.tags || []).find(t => t[0] === 'd') || [])[1] !== MEDIAKEY_D + pub) return; try { const o = JSON.parse(e.content); _mediaKeyDocKeys = (o && o.keys) || null; _mediaKeyPushRefused = null; _mediaKeyVer++; const _meKey = _myOwnPub(); const mine = o.keys && (o.keys[_meKey] || (_meKey === pub ? null : o.keys[pub]));   /* OPTION A: on a DELEGATED console `pub` is the CHURCH, so o.keys[pub] is the entry sealed TO THE CHURCH and our key cannot open it — _mediaKeyHex stayed null and mediaEncryptor then tried to MINT. Our own entry is there already: the church seals to [church, ...members] and a delegated steward is normally also a member. Owner console: _myOwnPub() === pub, so this is the old lookup exactly. */ if (mine && sk) { const plain = nip44d(mine, nip44ck(sk, e.pubkey)); let r = null; try { const q = JSON.parse(plain); if (Array.isArray(q)) r = q.filter(k => typeof k === 'string' && k); } catch (x2) {} const incoming = (r && r.length) ? r : [plain]; _mediaKeyRing = [...incoming, ..._mediaKeyRing.filter(k => incoming.indexOf(k) === -1)]; _mediaKeyHex = _mediaKeyRing[0];   /* KEEP what this device already held: if we minted before the envelope arrived, discarding our key here would orphan anything encrypted in that window. Rotation must never drop a key that has already sealed something. */ } } catch (x) {} },
+      function onMediaKeyEnvelope(e) { if (forPub !== pub || e.pubkey !== pub || ((e.tags || []).find(t => t[0] === 'd') || [])[1] !== MEDIAKEY_D + pub) return; if ((e.created_at || 0) < _mediaKeyAt) return; /* newest wins — see _mediaKeyAt */ _mediaKeyAt = e.created_at || 0; _mediaKeyMine = false; try { const o = JSON.parse(e.content); _mediaKeyDocKeys = (o && o.keys) || null; _mediaKeyPushRefused = null; _mediaKeyVer++; const _meKey = _myOwnPub(); const mine = o.keys && (o.keys[_meKey] || (_meKey === pub ? null : o.keys[pub]));   /* OPTION A: on a DELEGATED console `pub` is the CHURCH, so o.keys[pub] is the entry sealed TO THE CHURCH and our key cannot open it — _mediaKeyHex stayed null and mediaEncryptor then tried to MINT. Our own entry is there already: the church seals to [church, ...members] and a delegated steward is normally also a member. Owner console: _myOwnPub() === pub, so this is the old lookup exactly. */ if (mine && sk) { const plain = nip44d(mine, nip44ck(sk, e.pubkey)); let r = null; try { const q = JSON.parse(plain); if (Array.isArray(q)) r = q.filter(k => typeof k === 'string' && k); } catch (x2) {} const incoming = (r && r.length) ? r : [plain]; _mediaKeyRing = [...incoming, ..._mediaKeyRing.filter(k => incoming.indexOf(k) === -1)]; _mediaKeyHex = _mediaKeyRing[0]; _mediaKeyMine = true;   /* KEEP what this device already held: if we minted before the envelope arrived, discarding our key here would orphan anything encrypted in that window. Rotation must never drop a key that has already sealed something. */ } } catch (x) {} },
       // no envelope came back → it is safe to mint one, but ONLY on a trustworthy answer from every relay
-      () => { if (!_mediaKeyChecked) { _mediaKeyChecked = true; _keysReadSignal('media'); } }, 'media');
+      // fresh on every connected relay; the mint gate on every relay — see subscribeCareKey (round 3a, (b))
+      (how) => { _mediaKeyFresh = true; if (!_mediaKeyChecked && !(how && how.without && how.without.length)) _mediaKeyChecked = true; _keysReadSignal('media'); }, 'media', { withoutFailed: true, keepAsking: true });
   },
   // true if every relay this console has opened is still connected. The console's reconnect ticker only
   // re-subscribes when this is FALSE — so a healthy socket never triggers a full-corpus re-query (the steward
@@ -7384,116 +7439,133 @@ window.Steward = {
     return out;
   },
   async publishGroupKey(groupId, memberPubs, opts = {}) {
-    if (!churchSk || !churchPub) return Promise.resolve(null);
-    const haveRing = (_skeys[groupId] || []).length > 0;
-    if (opts.reuseOnly && !haveRing) return Promise.resolve(null);   // background re-key must NOT mint a new key (would orphan history)
-    // …NOR REUSE A RING THE NEWEST ENVELOPE HAS MOVED PAST. If the room's newest envelope carried no copy we could
-    // open, the ring we hold is an older generation, and re-publishing it would undo that rotation (see _senvMine).
-    if (opts.reuseOnly && _senvMine[groupId] !== true) return Promise.resolve(null);
-    // The locally-known blocklist wins over a stale caller list (AUDIT-2026-08-10 item B): the roster effect
-    // calls this with the same stale roster in the same post-block window as the name key.
-    // WHOSE ROOM IS THIS? `churchPub` is THIS DEVICE'S OWN KEY, not the church's — setActiveIdentity's
-    // delegated branch leaves churchSk/churchPub alone and moves `pub`/`actingChurch` instead ("delegated:
-    // OUR key signs, church's context reads"). So a delegated steward sealing a room wrapped the key to
-    // THEMSELVES and the group's members, and the CHURCH OWNER was not a recipient of the key to their own
-    // room: their console's stewIngestKey looks for env.keys[<the church's key>] and found nothing, so the
-    // owner could neither read the room nor add anybody to it afterwards.
-    // BOTH keys go in, deliberately: `actingChurch || churchPub` so the church is always sealed to, and
-    // `churchPub` so the steward who just made the room can still read it (they are only in `memberPubs` if
-    // they happen to be in the group). In the ordinary owner case the two are the same value and the Set
-    // collapses them, so the recipient list is byte-identical to before.
-    const recips = [...new Set([actingChurch || churchPub, churchPub, ...(memberPubs || []).map(p => toPubHex(p) || p).filter(Boolean)])]
-      .filter(p => !_localBlocked.has(String(p).toLowerCase()));
-    let ring = _skeys[groupId] || [];
-    let key = ring[0];
-    // AUDIT-2026-07-24: the contract above ("must NOT mint a new key — would orphan history") was enforced only
-    // for the background reuseOnly path. The INTERACTIVE path — a steward adding one member to an existing
-    // encrypted group — minted whenever `key` was missing, and `_skeys` is populated only when the envelope has
-    // arrived. Adding a member before it landed re-keyed the group and orphaned every prior message in it,
-    // permanently. A missing key is only safe to interpret as "new group" once we've had an authenticated read.
-    if (!opts.rotate && !key && !_isRelayAuthed()) return Promise.resolve(null);
-    // ROTATION KEEPS THE OLD KEYS. Replacing the ring with one fresh key is what made a block erase the group's
-    // whole readable history on every phone — _decEvt drops what it cannot open, so the messages simply vanish.
-    // Carry the superseded keys along, newest first, exactly as the care key does. AUDIT-2026-07-27.
-    let rev = _srev[groupId] || 1;
-    if (opts.rotate || !key) {
-      key = crypto.getRandomValues(new Uint8Array(32));
-      rev = (_srev[groupId] || 0) + 1;
-      ring = [key, ...ring].slice(0, GROUP_RING_MAX);
-    } else if (!ring.length) ring = [key];
-    // TWO SHAPES, DELIBERATELY. `keys` holds ONLY the current key as bare hex — exactly what every already-
-    // installed app expects. `rings` holds the whole ring as a JSON array for apps that understand it.
-    // Writing only the ring shape was a silent field break in the direction that actually happens: the console
-    // and relay update first and phones follow over days, so the next roster tick would have re-keyed every
-    // group with a payload old apps parse into garbage. _decEvt DROPS what it cannot open, so every member on
-    // an un-updated phone would have opened Prayer or their life group to an EMPTY ROOM — no error, no spinner,
-    // nothing to diagnose. The compat comment on the member side reasoned about the opposite direction only.
-    // AUDIT-2026-07-27.
-    // A MEMBER WE COULD NOT SEAL TO MUST NOT VANISH QUIETLY. This loop skipped any pubkey that threw and
-    // carried on, and the publish reported success — so that member was simply absent from the envelope.
-    // The member side treats "no copy for me" as REMOVAL and deletes any key it held, so they lose the room
-    // rather than merely failing to gain it: nothing new decrypts, and (since the send now refuses rather
-    // than publishing in clear) nothing can be posted either, with the app telling them to try again in a
-    // moment, indefinitely. Nobody is told — not them, not the steward.
-    //
-    // The skip itself is right: one unusable pubkey must not cost everyone else their key. What was wrong is
-    // that it was silent. Collect them and hand them back.
-    // `build` stays self-contained and returns the skips alongside the envelope rather than writing to a
-    // variable outside itself — group-key-ring.test.mjs lifts this function out of the source and runs it,
-    // and an outer reference turns that test into a ReferenceError rather than a check.
-    let skipped = [];
-    const build = (r) => {
-      const keys = {}, rings = {}, missed = [];
-      const cur = _hex(r[0]), wrapped = JSON.stringify(r.map(_hex));
-      for (const pk of recips) {
-        try { const ck = nip44ck(churchSk, pk); keys[pk] = nip44e(cur, ck); rings[pk] = nip44e(wrapped, ck); }
-        catch (e) { missed.push(pk); }
-      }
-      build.missed = missed;
-      build.recips = Object.keys(keys);
-      return JSON.stringify({ rev, keys, rings });
-    };
-    // A church large enough to push the sealed ring past the relay's 1 MB cap sheds history rather than
-    // failing to publish: a shorter ring costs old messages, a refused envelope costs the group entirely.
-    let content = build(ring);
-    skipped = build.missed || [];
-    for (let r = ring.length; content.length > 900000 && r > 1; ) {
-      r = Math.max(1, r >> 1);
-      content = build(ring.slice(0, r));
+    // ONE KEY PUBLISH PER ROOM AT A TIME ON THIS CONSOLE (round 3a, HIGH 2). A background re-key still in flight when
+    // Block rotated used to land after the rotation and restore the pre-Block ring here. Each call now waits for the
+    // one before it (a per-room chain, _gkChain) and then reads the ring afresh, so a rotation builds on whatever the
+    // re-key left and a re-key queued behind a rotation re-wraps the NEW key. The body below is unchanged otherwise.
+    const prior = _gkChain.get(groupId) || null;
+    let done = null; const turn = new Promise((r) => { done = r; });
+    const tail = (prior || Promise.resolve()).then(() => turn, () => turn);
+    _gkChain.set(groupId, tail);
+    const run = async () => {
+      if (!churchSk || !churchPub) return Promise.resolve(null);
+      const haveRing = (_skeys[groupId] || []).length > 0;
+      if (opts.reuseOnly && !haveRing) return Promise.resolve(null);   // background re-key must NOT mint a new key (would orphan history)
+      // …NOR REUSE A RING THE NEWEST ENVELOPE HAS MOVED PAST. If the room's newest envelope carried no copy we could
+      // open, the ring we hold is an older generation, and re-publishing it would undo that rotation (see _senvMine).
+      if (opts.reuseOnly && _senvMine[groupId] !== true) return Promise.resolve(null);
+      // The locally-known blocklist wins over a stale caller list (AUDIT-2026-08-10 item B): the roster effect
+      // calls this with the same stale roster in the same post-block window as the name key.
+      // WHOSE ROOM IS THIS? `churchPub` is THIS DEVICE'S OWN KEY, not the church's — setActiveIdentity's
+      // delegated branch leaves churchSk/churchPub alone and moves `pub`/`actingChurch` instead ("delegated:
+      // OUR key signs, church's context reads"). So a delegated steward sealing a room wrapped the key to
+      // THEMSELVES and the group's members, and the CHURCH OWNER was not a recipient of the key to their own
+      // room: their console's stewIngestKey looks for env.keys[<the church's key>] and found nothing, so the
+      // owner could neither read the room nor add anybody to it afterwards.
+      // BOTH keys go in, deliberately: `actingChurch || churchPub` so the church is always sealed to, and
+      // `churchPub` so the steward who just made the room can still read it (they are only in `memberPubs` if
+      // they happen to be in the group). In the ordinary owner case the two are the same value and the Set
+      // collapses them, so the recipient list is byte-identical to before.
+      const recips = [...new Set([actingChurch || churchPub, churchPub, ...(memberPubs || []).map(p => toPubHex(p) || p).filter(Boolean)])]
+        .filter(p => !_localBlocked.has(String(p).toLowerCase()));
+      let ring = _skeys[groupId] || [];
+      let key = ring[0];
+      // AUDIT-2026-07-24: the contract above ("must NOT mint a new key — would orphan history") was enforced only
+      // for the background reuseOnly path. The INTERACTIVE path — a steward adding one member to an existing
+      // encrypted group — minted whenever `key` was missing, and `_skeys` is populated only when the envelope has
+      // arrived. Adding a member before it landed re-keyed the group and orphaned every prior message in it,
+      // permanently. A missing key is only safe to interpret as "new group" once we've had an authenticated read.
+      if (!opts.rotate && !key && !_isRelayAuthed()) return Promise.resolve(null);
+      // ROTATION KEEPS THE OLD KEYS. Replacing the ring with one fresh key is what made a block erase the group's
+      // whole readable history on every phone — _decEvt drops what it cannot open, so the messages simply vanish.
+      // Carry the superseded keys along, newest first, exactly as the care key does. AUDIT-2026-07-27.
+      let rev = _srev[groupId] || 1;
+      if (opts.rotate || !key) {
+        key = crypto.getRandomValues(new Uint8Array(32));
+        rev = (_srev[groupId] || 0) + 1;
+        ring = [key, ...ring].slice(0, GROUP_RING_MAX);
+      } else if (!ring.length) ring = [key];
+      // TWO SHAPES, DELIBERATELY. `keys` holds ONLY the current key as bare hex — exactly what every already-
+      // installed app expects. `rings` holds the whole ring as a JSON array for apps that understand it.
+      // Writing only the ring shape was a silent field break in the direction that actually happens: the console
+      // and relay update first and phones follow over days, so the next roster tick would have re-keyed every
+      // group with a payload old apps parse into garbage. _decEvt DROPS what it cannot open, so every member on
+      // an un-updated phone would have opened Prayer or their life group to an EMPTY ROOM — no error, no spinner,
+      // nothing to diagnose. The compat comment on the member side reasoned about the opposite direction only.
+      // AUDIT-2026-07-27.
+      // A MEMBER WE COULD NOT SEAL TO MUST NOT VANISH QUIETLY. This loop skipped any pubkey that threw and
+      // carried on, and the publish reported success — so that member was simply absent from the envelope.
+      // The member side treats "no copy for me" as REMOVAL and deletes any key it held, so they lose the room
+      // rather than merely failing to gain it: nothing new decrypts, and (since the send now refuses rather
+      // than publishing in clear) nothing can be posted either, with the app telling them to try again in a
+      // moment, indefinitely. Nobody is told — not them, not the steward.
+      //
+      // The skip itself is right: one unusable pubkey must not cost everyone else their key. What was wrong is
+      // that it was silent. Collect them and hand them back.
+      // `build` stays self-contained and returns the skips alongside the envelope rather than writing to a
+      // variable outside itself — group-key-ring.test.mjs lifts this function out of the source and runs it,
+      // and an outer reference turns that test into a ReferenceError rather than a check.
+      let skipped = [];
+      const build = (r) => {
+        const keys = {}, rings = {}, missed = [];
+        const cur = _hex(r[0]), wrapped = JSON.stringify(r.map(_hex));
+        for (const pk of recips) {
+          try { const ck = nip44ck(churchSk, pk); keys[pk] = nip44e(cur, ck); rings[pk] = nip44e(wrapped, ck); }
+          catch (e) { missed.push(pk); }
+        }
+        build.missed = missed;
+        build.recips = Object.keys(keys);
+        return JSON.stringify({ rev, keys, rings });
+      };
+      // A church large enough to push the sealed ring past the relay's 1 MB cap sheds history rather than
+      // failing to publish: a shorter ring costs old messages, a refused envelope costs the group entirely.
+      let content = build(ring);
       skipped = build.missed || [];
-    }
-    // feChurch, NOT a bare finalizeEvent — and this one is the worst of the three writers it was missing from.
-    // Every reader of a church document asks the relay for "signed by the church OR tagged with the church"
-    // (the union filter in subscribeGroups here, and the shared hub in src/fellowship.src.js). A delegated
-    // steward's envelope is signed by the STEWARD and, without the tag, named no church — so it matched
-    // neither half. Measured: the relay stores it, and asking for it back as the church key AND as an
-    // ordinary member both return nothing. The console reported success and flagged the group encrypted, and
-    // the room rendered EMPTY rather than broken on every phone in the congregation, so nobody reports it.
-    // `churchSk` stays the signer because in delegated mode it IS `sk` — the steward's own key; feChurch only
-    // adds the ['church', <cp>] tag (and routes through _monotonic, which every other publisher already gets).
-    // `opts.background` is the CALLER's answer to "did a steward ask for this", never this function's own:
-    // the interactive seal (sealGroup) and the edit-members rotation pass nothing and stay loud, while the
-    // key-distributor effect and ensureGroupKeys pass true. See the note above publish().
-    const _env = feChurch({ kind: 30078, created_at: now(), tags: [['d', GROUPKEY_D + groupId], ['t', NET]], content }, churchSk);
-    // _senvTs IS THE STAMP WE ACTUALLY WROTE, not a second reading of the clock. It used to be set to now()
-    // a few lines above, before the envelope existed — and feChurch routes through _monotonic, which can
-    // hand back `last + 1` rather than the reading the call site took. The two therefore disagreed by a
-    // second or more, and stewIngestKey drops an envelope whose created_at is BELOW _senvTs, so our own
-    // envelope coming back off the relay could be discarded as stale. Take the number off the signed event.
-    const ok = await publish(_env, { background: !!opts.background });
-    if (ok === false) return false;
-    _skeys[groupId] = ring;
-    _srev[groupId] = rev;
-    _senvTs[groupId] = _env.created_at || 0;
-    { const prevR = _senvRecips[groupId];
-      _senvRecips[groupId] = (build.recips || []).map(p => String(p).toLowerCase());
-      _senvMine[groupId] = true;
-      _noteEnvelopeDrops(groupId, prevR, _senvRecips[groupId]); }   // a rotation run here holds its drops too — see _senvDropped
-    if (skipped.length) {
-      console.warn('[steward] group key ' + groupId + ': could not seal to ' + skipped.length + ' member(s) — they cannot read or post in that room');
-      return { ok: true, skipped: skipped.slice() };
-    }
-    return true;
+      for (let r = ring.length; content.length > 900000 && r > 1; ) {
+        r = Math.max(1, r >> 1);
+        content = build(ring.slice(0, r));
+        skipped = build.missed || [];
+      }
+      // feChurch, NOT a bare finalizeEvent — and this one is the worst of the three writers it was missing from.
+      // Every reader of a church document asks the relay for "signed by the church OR tagged with the church"
+      // (the union filter in subscribeGroups here, and the shared hub in src/fellowship.src.js). A delegated
+      // steward's envelope is signed by the STEWARD and, without the tag, named no church — so it matched
+      // neither half. Measured: the relay stores it, and asking for it back as the church key AND as an
+      // ordinary member both return nothing. The console reported success and flagged the group encrypted, and
+      // the room rendered EMPTY rather than broken on every phone in the congregation, so nobody reports it.
+      // `churchSk` stays the signer because in delegated mode it IS `sk` — the steward's own key; feChurch only
+      // adds the ['church', <cp>] tag (and routes through _monotonic, which every other publisher already gets).
+      // `opts.background` is the CALLER's answer to "did a steward ask for this", never this function's own:
+      // the interactive seal (sealGroup) and the edit-members rotation pass nothing and stay loud, while the
+      // key-distributor effect and ensureGroupKeys pass true. See the note above publish().
+      const _env = feChurch({ kind: 30078, created_at: now(), tags: [['d', GROUPKEY_D + groupId], ['t', NET]], content }, churchSk);
+      // _senvTs IS THE STAMP WE ACTUALLY WROTE, not a second reading of the clock. It used to be set to now()
+      // a few lines above, before the envelope existed — and feChurch routes through _monotonic, which can
+      // hand back `last + 1` rather than the reading the call site took. The two therefore disagreed by a
+      // second or more, and stewIngestKey drops an envelope whose created_at is BELOW _senvTs, so our own
+      // envelope coming back off the relay could be discarded as stale. Take the number off the signed event.
+      const ok = await publish(_env, { background: !!opts.background });
+      if (ok === false) return false;
+      // NEVER OVERWRITE STATE THAT MOVED WHILE WE PUBLISHED (round 3a, HIGH 2). A newer envelope may have been ingested
+      // during the await — another console's rotation. Adopting ours would put the older ring back as this console's
+      // current one, and its next re-key would republish it with a newer timestamp: the blocked person reads again.
+      // (Ordered by created_at, as stewIngestKey orders; round 3b may move both to the key generation.)
+      if ((_senvTs[groupId] || 0) > (_env.created_at || 0)) return skipped.length ? { ok: true, skipped: skipped.slice() } : true;
+      _skeys[groupId] = ring;
+      _srev[groupId] = rev;
+      _senvTs[groupId] = _env.created_at || 0;
+      { const prevR = _senvRecips[groupId];
+        _senvRecips[groupId] = (build.recips || []).map(p => String(p).toLowerCase());
+        _senvMine[groupId] = true;
+        _noteEnvelopeDrops(groupId, prevR, _senvRecips[groupId]); }   // a rotation run here holds its drops too — see _senvDropped
+      if (skipped.length) {
+        console.warn('[steward] group key ' + groupId + ': could not seal to ' + skipped.length + ' member(s) — they cannot read or post in that room');
+        return { ok: true, skipped: skipped.slice() };
+      }
+      return true;
+    };
+    try { if (prior) { try { await prior; } catch (e) {} } return await run(); }
+    finally { done(); if (_gkChain.get(groupId) === tail) _gkChain.delete(groupId); }
   },
   // WHO THE NEWEST ENVELOPE OF A ROOM IS WRAPPED TO — or null when this console holds no ring for the room (its
   // envelope has not been ingested, or carries no copy for this church), in which case nothing can be re-wrapped
@@ -7818,8 +7890,12 @@ window.Steward = {
       if (ok && drop.length && seq === _setBlockedSeq && (actingChurch || pub) === cp0) {
         for (const p of drop) _localBlocked.delete(p);
         lsSet(BLOCKED_LAST_LS + cp0, JSON.stringify([..._localBlocked]));
-        // …and ask the relay for the member list again: it withheld the unblocked person's events until now (see
-        // subscribeMembers), so a console that opened while they were blocked would never key them again.
+      }
+      // …and ask the relay for the member list again: it withheld the unblocked person's events until now (see
+      // subscribeMembers), so a console that opened while they were blocked would never key them again. ALSO after a
+      // PARTIAL save (round 3a, LOW ii): the relays that took the unblock serve them now. Asking costs one query; the
+      // keys still follow this console's own blocklist, which keeps them blocked until every relay has said yes.
+      if (drop.length && seq === _setBlockedSeq && (actingChurch || pub) === cp0) {
         for (const f of [..._membersReask]) { try { f(); } catch (e) {} }
       }
       return ok;
@@ -11616,8 +11692,8 @@ window.Steward = {
     // until this console has re-read the new church's envelope; KeyDistributor (app/stew-dashboard.jsx)
     // re-subscribes on the identity change to do exactly that. The buffered-envelope list goes too: it held
     // church A's unverified envelopes.
-    _careKeyHex = null; _careKeyRing = []; _careKeyDocKeys = null; _careKeyRev = 0; _careKeyChecked = false; _careKeyPending = [];
-    _mediaKeyHex = null; _mediaKeyRing = []; _mediaKeyDocKeys = null; _mediaKeyChecked = false; _mediaKeyPushRefused = null;
+    _careKeyHex = null; _careKeyRing = []; _careKeyDocKeys = null; _careKeyRev = 0; _careKeyChecked = false; _careKeyPending = []; _careKeyFresh = false; _careKeyMine = false;
+    _mediaKeyHex = null; _mediaKeyRing = []; _mediaKeyDocKeys = null; _mediaKeyChecked = false; _mediaKeyPushRefused = null; _mediaKeyFresh = false; _mediaKeyMine = false; _mediaKeyAt = 0;
     // …AND A NEW EPOCH, so no read or publish opened before this line counts afterwards. Resetting the flags
     // alone was not enough: the subscriptions the dashboard is about to close fire `oneose` AS they close, and
     // re-entering the SAME church passed every "is this still the current church?" check (audit of e6a2e02).

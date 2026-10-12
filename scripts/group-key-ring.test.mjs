@@ -291,7 +291,7 @@ test('a locally-blocked member is excluded from the group key envelope', async (
   const C = K().pub;
   const src = `
     let _localBlocked = new Set([C]);
-    const _skeys = { g1: [new Uint8Array(32).fill(9)] }, _srev = { g1: 1 }, _senvTs = {}, _senvRecips = {}, _senvMine = {};
+    const _skeys = { g1: [new Uint8Array(32).fill(9)] }, _srev = { g1: 1 }, _senvTs = {}, _senvRecips = {}, _senvMine = {}, _gkChain = new Map();
     const _noteEnvelopeDrops = () => {};   // the drop memo (round 2) — tested in key-reads-settle-only-for-the-church-they-asked-about
     const GROUP_RING_MAX = 12, GROUPKEY_D = 'trinityone/groupkey:', NET = 'trinityone';
     const churchSk = new Uint8Array(32).fill(3), churchPub = CP;
@@ -358,10 +358,10 @@ function distributorRig() {
   rig.events = [];
   const fakeDate = { now: () => rig.nowVal };
   const fn = new Function('groups', 'approvedPubs', 'notBlocked', 'unsealable', 'pending', 'nextTry', 'failCount',
-    'window', 'Date', 'CustomEvent', '_kdReconfirmed', loop);
+    'window', 'Date', 'CustomEvent', '_kdReconfirmed', 'stewardRoster', loop);
   rig.notBlocked = () => true;
   rig.tick = (groups, memberPubs) => fn(groups, memberPubs, (pk) => rig.notBlocked(pk), rig.unsealable, rig.pending, rig.nextTry,
-    rig.failCount, win, fakeDate, function CustomEvent(type, init) { this.type = type; this.detail = (init || {}).detail; }, () => true);
+    rig.failCount, win, fakeDate, function CustomEvent(type, init) { this.type = type; this.detail = (init || {}).detail; }, () => true, []);   // no stewards: since round 3a open rooms add the roster
   return rig;
 }
 const settle = () => new Promise(res => setImmediate(res));

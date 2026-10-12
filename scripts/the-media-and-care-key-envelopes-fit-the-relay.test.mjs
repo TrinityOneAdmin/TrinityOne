@@ -43,7 +43,7 @@ function engine({ media = {}, care = {} } = {}) {
     _mediaKeyDocKeys: {}, _mediaKeyPushRefused: null,
     _careKeyHex: care.ring ? care.ring[0] : null, _careKeyRing: care.ring ? care.ring.slice() : [],
     _careKeyDocKeys: care.ring ? {} : null, _careKeyRev: 3, _careKeyChecked: true, _careKeyPending: [],
-    _mediaKeyVer: 0, _careKeyVer: 0,
+    _mediaKeyVer: 0, _careKeyVer: 0, _mediaKeyFresh: true, _mediaKeyMine: true, _careKeyFresh: true, _careKeyMine: true,   // round 3a: the per-room publish queue; the care/sermon reads as fresh and ours (tested in key-reads-settle-only-…)
     CAREKEY_D: 'trinityone/carekey:', churchSk: CHURCH_SK,
     decrypt3: (ct, ck) => nip44.v2.decrypt(ct, ck),
     _reCheckCareKeyPending: () => {}, _churchHasCareNeeds: async () => true,

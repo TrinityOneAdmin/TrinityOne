@@ -15374,6 +15374,8 @@ zoo`.split("\n");
   var _careKeyDocKeys = null;
   var _careKeyRev = 0;
   var _careKeyChecked = false;
+  var _careKeyFresh = false;
+  var _careKeyMine = false;
   var _careRoster = /* @__PURE__ */ new Set();
   var _exStewardsKey = () => "trinityone.steward.exstewards." + (pub || "");
   function _exStewardSet() {
@@ -15442,6 +15444,9 @@ zoo`.split("\n");
   var _mediaKeyDocKeys = null;
   var _mediaKeyPushRefused = null;
   var _mediaKeyVer = 0;
+  var _mediaKeyFresh = false;
+  var _mediaKeyMine = false;
+  var _mediaKeyAt = 0;
   var _mediaKeyChecked = false;
   async function _sha256hex(u83) {
     const d = await crypto.subtle.digest("SHA-256", u83);
@@ -15599,6 +15604,20 @@ zoo`.split("\n");
   var _senvRecips = {};
   var _senvMine = {};
   var _senvDropped = {};
+  var _senvPending = /* @__PURE__ */ new Map();
+  function _reCheckGroupKeyPending() {
+    for (const [gid, e] of [..._senvPending]) {
+      if (_authFuture(e)) {
+        _senvPending.delete(gid);
+        continue;
+      }
+      if (_byChurchOrSteward(e)) {
+        _senvPending.delete(gid);
+        stewIngestKey(e);
+      }
+    }
+  }
+  _memberEmitters.add(_reCheckGroupKeyPending);
   function _noteEnvelopeDrops(gid, prev, next) {
     const m = _senvDropped[gid] || (_senvDropped[gid] = /* @__PURE__ */ new Map());
     const nx = new Set(next || []);
@@ -15623,6 +15642,12 @@ zoo`.split("\n");
     const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
     if (!d.startsWith(GROUPKEY_D)) return;
     const gid = d.slice(GROUPKEY_D.length);
+    if (_authFuture(e)) return;
+    if (!_byChurchOrSteward(e)) {
+      const p = _senvPending.get(gid);
+      if (!p || (p.created_at || 0) <= (e.created_at || 0)) _senvPending.set(gid, e);
+      return;
+    }
     if ((_senvTs[gid] || 0) > (e.created_at || 0)) return;
     const newer = (e.created_at || 0) > (_senvTs[gid] || 0);
     _senvTs[gid] = e.created_at || 0;
@@ -15807,6 +15832,7 @@ zoo`.split("\n");
       if ((o.rev || 1) < _careKeyRev) return;
       _careKeyDocKeys = o.keys || null;
       _careKeyRev = o.rev || 1;
+      _careKeyMine = false;
       const mine = o.keys && churchPub && o.keys[churchPub];
       if (mine && churchSk) {
         const plain = decrypt3(mine, getConversationKey(churchSk, e.pubkey));
@@ -15818,6 +15844,7 @@ zoo`.split("\n");
         }
         _careKeyRing = ring && ring.length ? ring : [plain];
         _careKeyHex = _careKeyRing[0];
+        _careKeyMine = true;
       }
       _careKeyVer++;
     } catch (x) {
@@ -16810,6 +16837,7 @@ zoo`.split("\n");
   var _freshReopeners = /* @__PURE__ */ new Set();
   var _joinPolicyStates = /* @__PURE__ */ new Set();
   var _membersReask = /* @__PURE__ */ new Set();
+  var _gkChain = /* @__PURE__ */ new Map();
   var _ensureGroupKeysBusy = /* @__PURE__ */ new Set();
   var _ensureGroupKeysQuiet = /* @__PURE__ */ new Map();
   function _freshTok() {
@@ -16961,6 +16989,11 @@ zoo`.split("\n");
         if (opts && opts.withoutFailed) {
           const without = urls.filter((u) => answers.get(u) !== true);
           if (without.length < urls.length && without.every((u) => !_keyReadConnected(u))) {
+            if (opts.keepAsking) {
+              onSettled({ without });
+              retry();
+              return;
+            }
             settled();
             onSettled({ without });
             return;
@@ -17282,11 +17315,16 @@ zoo`.split("\n");
     _careKeyRev = 0;
     _careKeyChecked = false;
     _careKeyPending = [];
+    _careKeyFresh = false;
+    _careKeyMine = false;
     _mediaKeyHex = null;
     _mediaKeyRing = [];
     _mediaKeyDocKeys = null;
     _mediaKeyChecked = false;
     _mediaKeyPushRefused = null;
+    _mediaKeyFresh = false;
+    _mediaKeyMine = false;
+    _mediaKeyAt = 0;
     _keyReadEpoch++;
     _careKeyVer++;
     _mediaKeyVer++;
@@ -20022,6 +20060,7 @@ zoo`.split("\n");
           _mediaKeyHex = fresh;
           _mediaKeyRing = [fresh, ..._mediaKeyRing.filter((k) => k !== fresh)];
           _mediaKeyDocKeys = keys;
+          _mediaKeyMine = true;
           _mediaKeyVer++;
           useHex = fresh;
         }
@@ -20055,6 +20094,8 @@ zoo`.split("\n");
     async ensureMediaKeyForMembers(memberPubs, stewardPubs) {
       if (actingChurch) return false;
       if (!sk || !_mediaKeyHex) return false;
+      if (!_mediaKeyFresh) return false;
+      if (_mediaKeyDocKeys && !_mediaKeyMine) return false;
       const pub0 = pub, ep0 = _keyReadEpoch, sk0 = sk;
       const have = _mediaKeyDocKeys || {};
       const want = [.../* @__PURE__ */ new Set([pub0, ...(memberPubs || []).filter(Boolean), ...(stewardPubs || []).filter(Boolean), ...Object.keys(have)])].filter((p) => !_localBlocked.has(String(p).toLowerCase()));
@@ -20078,6 +20119,7 @@ zoo`.split("\n");
       if (ok !== false) {
         if (_mediaKeyVer === _v0) {
           _mediaKeyDocKeys = keys;
+          _mediaKeyMine = true;
           _mediaKeyPushRefused = null;
           _mediaKeyVer++;
         }
@@ -20110,6 +20152,7 @@ zoo`.split("\n");
       const pub0 = pub, ep0 = _keyReadEpoch, sk0 = sk;
       if (!_isRelayAuthed()) return false;
       if (!_mediaKeyHex) return _mediaKeyChecked && !_mediaKeyDocKeys ? { rotated: false, reason: "no sermon key yet" } : false;
+      if (_mediaKeyDocKeys && !_mediaKeyMine) return false;
       _mediaKeyVer++;
       const fresh = _hex(crypto.getRandomValues(new Uint8Array(32)));
       const full = [fresh, ..._mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex]].slice(0, 50);
@@ -20129,6 +20172,7 @@ zoo`.split("\n");
       _mediaKeyRing = [...full, ..._mediaKeyRing.filter((k) => full.indexOf(k) === -1)];
       _mediaKeyHex = fresh;
       _mediaKeyDocKeys = keys;
+      _mediaKeyMine = true;
       _mediaKeyPushRefused = null;
       _mediaKeyVer++;
       return true;
@@ -20140,6 +20184,7 @@ zoo`.split("\n");
       const cp = actingChurch || pub;
       if (!cp) return () => {
       };
+      _careKeyFresh = false;
       return _openKeyRead(
         cp,
         [
@@ -20155,13 +20200,18 @@ zoo`.split("\n");
           _ingestCareKeyEnv(e);
         },
         // "No envelope came back" opens the mint gate ONLY on a trustworthy answer from every relay — _openKeyRead.
-        () => {
-          if (!_careKeyChecked) {
-            _careKeyChecked = true;
-            _keysReadSignal("care");
-          }
+        // TWO ANSWERS FROM ONE READ (round 3a, (b)). "Fresh" — fine to re-seal the key we hold — needs every CONNECTED relay
+        // to have answered genuinely (the blocklist's rule, `withoutFailed`): with a proved relay down for days, nobody new
+        // would get the care key at all (measured: a-relay-that-is-down-does-not-hold-back-new-members-keys). The MINT gate
+        // (`_careKeyChecked`) still needs EVERY relay — minting over an envelope a down relay holds destroys the church's
+        // care records — so a settle that left a relay out does not set it.
+        (how) => {
+          _careKeyFresh = true;
+          if (!_careKeyChecked && !(how && how.without && how.without.length)) _careKeyChecked = true;
+          _keysReadSignal("care");
         },
-        "care"
+        "care",
+        { withoutFailed: true, keepAsking: true }
       );
     },
     // Wrap the care key for everyone who needs it. MINTS only on a first run where we have positively
@@ -20175,6 +20225,8 @@ zoo`.split("\n");
       const cp = actingChurch || pub, ep0 = _keyReadEpoch, sk0 = sk;
       if (!sk || !cp || !churchPub) return false;
       if (!_careKeyChecked) return false;
+      if (!_careKeyFresh) return false;
+      if (_careKeyHex && _careKeyDocKeys && !_careKeyMine) return false;
       _reCheckCareKeyPending();
       if (_careKeyPending.length) return false;
       if (!_careKeyHex) {
@@ -20208,6 +20260,7 @@ zoo`.split("\n");
           _careKeyRev = rev2;
         }
         _careKeyDocKeys = keys;
+        _careKeyMine = true;
         _careKeyVer++;
       }
       return ok;
@@ -20285,6 +20338,7 @@ zoo`.split("\n");
       if (!sk || !cp || !churchPub) return false;
       if (!_careKeyChecked || !_isRelayAuthed()) return false;
       if (!_careKeyHex) return false;
+      if (_careKeyDocKeys && !_careKeyMine) return false;
       _careKeyVer++;
       const fresh = _hex(crypto.getRandomValues(new Uint8Array(32)));
       const want = [...new Set([cp, churchPub, ...memberPubs || [], ...stewardPubs || []].filter(Boolean))].filter((p) => !_localBlocked.has(String(p).toLowerCase()));
@@ -20322,6 +20376,7 @@ zoo`.split("\n");
       _careKeyHex = fresh;
       _careKeyRev = rev0;
       _careKeyDocKeys = keys;
+      _careKeyMine = true;
       _careKeyVer++;
       return true;
     },
@@ -20352,6 +20407,7 @@ zoo`.split("\n");
       if (!pub) return () => {
       };
       const forPub = pub;
+      _mediaKeyFresh = false;
       return _openKeyRead(
         forPub,
         [{ kinds: [30078], authors: [pub], "#d": [MEDIAKEY_D + pub] }],
@@ -20363,6 +20419,9 @@ zoo`.split("\n");
            console that was refused once would go on skipping until the roster itself changed. */
         function onMediaKeyEnvelope(e) {
           if (forPub !== pub || e.pubkey !== pub || ((e.tags || []).find((t) => t[0] === "d") || [])[1] !== MEDIAKEY_D + pub) return;
+          if ((e.created_at || 0) < _mediaKeyAt) return;
+          _mediaKeyAt = e.created_at || 0;
+          _mediaKeyMine = false;
           try {
             const o = JSON.parse(e.content);
             _mediaKeyDocKeys = o && o.keys || null;
@@ -20381,18 +20440,20 @@ zoo`.split("\n");
               const incoming = r && r.length ? r : [plain];
               _mediaKeyRing = [...incoming, ..._mediaKeyRing.filter((k) => incoming.indexOf(k) === -1)];
               _mediaKeyHex = _mediaKeyRing[0];
+              _mediaKeyMine = true;
             }
           } catch (x) {
           }
         },
         // no envelope came back → it is safe to mint one, but ONLY on a trustworthy answer from every relay
-        () => {
-          if (!_mediaKeyChecked) {
-            _mediaKeyChecked = true;
-            _keysReadSignal("media");
-          }
+        // fresh on every connected relay; the mint gate on every relay — see subscribeCareKey (round 3a, (b))
+        (how) => {
+          _mediaKeyFresh = true;
+          if (!_mediaKeyChecked && !(how && how.without && how.without.length)) _mediaKeyChecked = true;
+          _keysReadSignal("media");
         },
-        "media"
+        "media",
+        { withoutFailed: true, keepAsking: true }
       );
     },
     // true if every relay this console has opened is still connected. The console's reconnect ticker only
@@ -21083,61 +21144,83 @@ zoo`.split("\n");
       return out;
     },
     async publishGroupKey(groupId, memberPubs, opts = {}) {
-      if (!churchSk || !churchPub) return Promise.resolve(null);
-      const haveRing = (_skeys[groupId] || []).length > 0;
-      if (opts.reuseOnly && !haveRing) return Promise.resolve(null);
-      if (opts.reuseOnly && _senvMine[groupId] !== true) return Promise.resolve(null);
-      const recips = [.../* @__PURE__ */ new Set([actingChurch || churchPub, churchPub, ...(memberPubs || []).map((p) => toPubHex(p) || p).filter(Boolean)])].filter((p) => !_localBlocked.has(String(p).toLowerCase()));
-      let ring = _skeys[groupId] || [];
-      let key = ring[0];
-      if (!opts.rotate && !key && !_isRelayAuthed()) return Promise.resolve(null);
-      let rev2 = _srev[groupId] || 1;
-      if (opts.rotate || !key) {
-        key = crypto.getRandomValues(new Uint8Array(32));
-        rev2 = (_srev[groupId] || 0) + 1;
-        ring = [key, ...ring].slice(0, GROUP_RING_MAX);
-      } else if (!ring.length) ring = [key];
-      let skipped = [];
-      const build = (r) => {
-        const keys = {}, rings = {}, missed = [];
-        const cur = _hex(r[0]), wrapped = JSON.stringify(r.map(_hex));
-        for (const pk of recips) {
+      const prior = _gkChain.get(groupId) || null;
+      let done = null;
+      const turn = new Promise((r) => {
+        done = r;
+      });
+      const tail = (prior || Promise.resolve()).then(() => turn, () => turn);
+      _gkChain.set(groupId, tail);
+      const run = async () => {
+        if (!churchSk || !churchPub) return Promise.resolve(null);
+        const haveRing = (_skeys[groupId] || []).length > 0;
+        if (opts.reuseOnly && !haveRing) return Promise.resolve(null);
+        if (opts.reuseOnly && _senvMine[groupId] !== true) return Promise.resolve(null);
+        const recips = [.../* @__PURE__ */ new Set([actingChurch || churchPub, churchPub, ...(memberPubs || []).map((p) => toPubHex(p) || p).filter(Boolean)])].filter((p) => !_localBlocked.has(String(p).toLowerCase()));
+        let ring = _skeys[groupId] || [];
+        let key = ring[0];
+        if (!opts.rotate && !key && !_isRelayAuthed()) return Promise.resolve(null);
+        let rev2 = _srev[groupId] || 1;
+        if (opts.rotate || !key) {
+          key = crypto.getRandomValues(new Uint8Array(32));
+          rev2 = (_srev[groupId] || 0) + 1;
+          ring = [key, ...ring].slice(0, GROUP_RING_MAX);
+        } else if (!ring.length) ring = [key];
+        let skipped = [];
+        const build = (r) => {
+          const keys = {}, rings = {}, missed = [];
+          const cur = _hex(r[0]), wrapped = JSON.stringify(r.map(_hex));
+          for (const pk of recips) {
+            try {
+              const ck = getConversationKey(churchSk, pk);
+              keys[pk] = encrypt2(cur, ck);
+              rings[pk] = encrypt2(wrapped, ck);
+            } catch (e) {
+              missed.push(pk);
+            }
+          }
+          build.missed = missed;
+          build.recips = Object.keys(keys);
+          return JSON.stringify({ rev: rev2, keys, rings });
+        };
+        let content = build(ring);
+        skipped = build.missed || [];
+        for (let r = ring.length; content.length > 9e5 && r > 1; ) {
+          r = Math.max(1, r >> 1);
+          content = build(ring.slice(0, r));
+          skipped = build.missed || [];
+        }
+        const _env = feChurch({ kind: 30078, created_at: now(), tags: [["d", GROUPKEY_D + groupId], ["t", NET]], content }, churchSk);
+        const ok = await publish(_env, { background: !!opts.background });
+        if (ok === false) return false;
+        if ((_senvTs[groupId] || 0) > (_env.created_at || 0)) return skipped.length ? { ok: true, skipped: skipped.slice() } : true;
+        _skeys[groupId] = ring;
+        _srev[groupId] = rev2;
+        _senvTs[groupId] = _env.created_at || 0;
+        {
+          const prevR = _senvRecips[groupId];
+          _senvRecips[groupId] = (build.recips || []).map((p) => String(p).toLowerCase());
+          _senvMine[groupId] = true;
+          _noteEnvelopeDrops(groupId, prevR, _senvRecips[groupId]);
+        }
+        if (skipped.length) {
+          console.warn("[steward] group key " + groupId + ": could not seal to " + skipped.length + " member(s) \u2014 they cannot read or post in that room");
+          return { ok: true, skipped: skipped.slice() };
+        }
+        return true;
+      };
+      try {
+        if (prior) {
           try {
-            const ck = getConversationKey(churchSk, pk);
-            keys[pk] = encrypt2(cur, ck);
-            rings[pk] = encrypt2(wrapped, ck);
+            await prior;
           } catch (e) {
-            missed.push(pk);
           }
         }
-        build.missed = missed;
-        build.recips = Object.keys(keys);
-        return JSON.stringify({ rev: rev2, keys, rings });
-      };
-      let content = build(ring);
-      skipped = build.missed || [];
-      for (let r = ring.length; content.length > 9e5 && r > 1; ) {
-        r = Math.max(1, r >> 1);
-        content = build(ring.slice(0, r));
-        skipped = build.missed || [];
+        return await run();
+      } finally {
+        done();
+        if (_gkChain.get(groupId) === tail) _gkChain.delete(groupId);
       }
-      const _env = feChurch({ kind: 30078, created_at: now(), tags: [["d", GROUPKEY_D + groupId], ["t", NET]], content }, churchSk);
-      const ok = await publish(_env, { background: !!opts.background });
-      if (ok === false) return false;
-      _skeys[groupId] = ring;
-      _srev[groupId] = rev2;
-      _senvTs[groupId] = _env.created_at || 0;
-      {
-        const prevR = _senvRecips[groupId];
-        _senvRecips[groupId] = (build.recips || []).map((p) => String(p).toLowerCase());
-        _senvMine[groupId] = true;
-        _noteEnvelopeDrops(groupId, prevR, _senvRecips[groupId]);
-      }
-      if (skipped.length) {
-        console.warn("[steward] group key " + groupId + ": could not seal to " + skipped.length + " member(s) \u2014 they cannot read or post in that room");
-        return { ok: true, skipped: skipped.slice() };
-      }
-      return true;
     },
     // WHO THE NEWEST ENVELOPE OF A ROOM IS WRAPPED TO — or null when this console holds no ring for the room (its
     // envelope has not been ingested, or carries no copy for this church), in which case nothing can be re-wrapped
@@ -21450,6 +21533,8 @@ zoo`.split("\n");
         if (ok && drop.length && seq === _setBlockedSeq && (actingChurch || pub) === cp0) {
           for (const p of drop) _localBlocked.delete(p);
           lsSet(BLOCKED_LAST_LS + cp0, JSON.stringify([..._localBlocked]));
+        }
+        if (drop.length && seq === _setBlockedSeq && (actingChurch || pub) === cp0) {
           for (const f of [..._membersReask]) {
             try {
               f();
@@ -25206,11 +25291,16 @@ zoo`.split("\n");
       _careKeyRev = 0;
       _careKeyChecked = false;
       _careKeyPending = [];
+      _careKeyFresh = false;
+      _careKeyMine = false;
       _mediaKeyHex = null;
       _mediaKeyRing = [];
       _mediaKeyDocKeys = null;
       _mediaKeyChecked = false;
       _mediaKeyPushRefused = null;
+      _mediaKeyFresh = false;
+      _mediaKeyMine = false;
+      _mediaKeyAt = 0;
       _keyReadEpoch++;
       _careKeyVer++;
       _mediaKeyVer++;
