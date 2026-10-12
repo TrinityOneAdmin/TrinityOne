@@ -117,6 +117,13 @@ before(async () => {
   await unlock();
   await waitFor(`window.Steward.nameKeyReady() && !!window.Steward.careSeal({ a: 1 })`, 90000, 'church A\'s own name and care keys');
   await waitFor(`(window.Steward.identities() || []).some(x => x.kind === 'steward' && x.pub === ${JSON.stringify(B.pub)})`, 60000, 'church B in the switcher');
+  // AN OPEN-JOIN CHURCH (added 2026-10-12). A new church starts with "people must be approved" ON (ensureJoinPolicy),
+  // and since the room, care and sermon keys now go to APPROVED members only, a member who merely joined is waiting
+  // for approval and correctly gets none of them. This file is about a church switch, not approval, so its church chose open
+  // join — the members below are members, as the relay also counts them. (Approval: a-room-key-reaches-a-member-the-
+  // console-never-saw-join.test.mjs.)
+  assert.equal(await evalIn(`window.Steward.setJoinPolicy(false).then(r => r ? 'ok' : String(r))`), 'ok', 'CONTROL: open join could not be set');
+  await new Promise(r => setTimeout(r, 3000));          // the console's own policy stream sees the change
   await H.publishAll(relay, [joinTo(churchA, M), joinTo(churchA, M3)]);
   await sleep(6000);
   // an OPEN encrypted room in A, keyed to A's members

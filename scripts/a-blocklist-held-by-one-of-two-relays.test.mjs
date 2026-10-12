@@ -166,6 +166,13 @@ before(async () => {
   await reload();                                          // every subscription opens over both relays from the start
   await waitFor(`(window.Steward.relayList() || []).length >= 2`, 60000, 'relay 2 still admitted after a reload');
   await waitFor(`window.Steward.nameKeyReady() && !!window.Steward.careSeal({ a: 1 })`, 90000, 'church A\'s own name and care keys');
+  // AN OPEN-JOIN CHURCH (added 2026-10-12). A new church starts with "people must be approved" ON (ensureJoinPolicy),
+  // and since the room, care and sermon keys now go to APPROVED members only, a member who merely joined is waiting
+  // for approval and correctly gets none of them. This file is about which relay holds a Block, not approval, so its church chose open
+  // join — the members below are members, as the relay also counts them. (Approval: a-room-key-reaches-a-member-the-
+  // console-never-saw-join.test.mjs.)
+  assert.equal(await evalIn(`window.Steward.setJoinPolicy(false).then(r => r ? 'ok' : String(r))`), 'ok', 'CONTROL: open join could not be set');
+  await new Promise(r => setTimeout(r, 3000));          // the console's own policy stream sees the change
   // CONTROL, both relays up: two members join and are keyed
   await H.publishAll(r1, [joinTo(churchA, M), joinTo(churchA, MX)]); await H.publishAll(r2, [joinTo(churchA, M), joinTo(churchA, MX)]);
   assert.ok(await until(() => { const n = recipsOn(r1, NAMEKEY_D + churchA); return n.includes(M.pub) && n.includes(MX.pub); }, 60000),

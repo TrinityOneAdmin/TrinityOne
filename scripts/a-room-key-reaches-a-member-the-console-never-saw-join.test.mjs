@@ -1,0 +1,194 @@
+// A MEMBER WHO JOINED WHILE NO CONSOLE WAS OPEN GETS THE ROOM KEY — EVEN ON A CONSOLE WITH NO SAVED MEMBER LIST —
+// AND A MEMBER STILL WAITING FOR APPROVAL GETS NO ROOM, CARE OR SERMON KEY UNTIL THEY ARE APPROVED.
+//   Run: node --test scripts/a-room-key-reaches-a-member-the-console-never-saw-join.test.mjs
+//
+// THE DEFECTS (2026-10-12, proved by the verify-roomkeys probe).
+//   A. KeyDistributor (app/stew-dashboard.jsx) recorded the members it FIRST saw for each encrypted room as
+//      "already keyed". True only on the console that created the room. On a console with no saved member list —
+//      a new device, a reinstall, cleared data, a delegate — a member who joined while no console was open was
+//      counted as keyed and never got the key: their room was empty and their posts refused, until somebody else
+//      joined. (scripts/a-member-who-joined-while-the-console-was-away-gets-the-room-key.test.mjs passed throughout:
+//      it switches church inside ONE page session, so the distributor's in-memory memo was never empty.) The
+//      distributor now reconciles each room against its newest envelope (Steward.groupKeyRecipients).
+//   B. With "require approval" on, a member awaiting approval (a member doc, not on the admitted list) was handed
+//      the open-room, care and sermon keys. The relay already treats them as non-members (gateway.mjs
+//      rebuildMembers). Those keys now go to approved members only; approving someone keys them at once.
+//
+// THE POINT OF USE (CLAUDE.md rule 1): a real gateway on a FREE port, the real console in headless chromium, the
+// church made by the wizard, the console closed and reopened with its member cache CLEARED, and every key checked in
+// the envelopes the relay actually stores. Skips itself without chromium. Derived from the probe's probe.mjs.
+import { test, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { existsSync, mkdtempSync, rmSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
+import { WebSocket } from 'ws';
+import { finalizeEvent } from 'nostr-tools';
+import * as H from './relay-network-harness.mjs';
+
+const CHROME = ['/usr/bin/chromium-browser', '/usr/bin/chromium', '/usr/bin/google-chrome'].find(p => existsSync(p));
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+const PIN = 'cedar-harbour-lamp-42';
+const MEMBER_D = 'trinityone/member:', GROUPKEY_D = 'trinityone/groupkey:', CAREKEY_D = 'trinityone/carekey:', MEDIAKEY_D = 'trinityone/mediakey:', NAMEKEY_D = 'trinityone/namekey:';
+const WAIT = 45000;
+
+let relay, chr, ws, prof, evalIn, churchA = '', roomId = '';
+const M1 = H.key(), MF = H.key(), MA = H.key(), MP = H.key();
+const errors = [];
+const nm = (p) => p === churchA ? 'church' : p === M1.pub ? 'M1' : p === MF.pub ? 'MF' : p === MA.pub ? 'MA' : p === MP.pub ? 'MP' : String(p).slice(0, 6);
+function held(where, ...args) {
+  const db = new DatabaseSync(join(relay.dataDir, 'relay.sqlite'), { readOnly: true });
+  try { return db.prepare('SELECT raw FROM events WHERE kind = 30078 AND ' + where).all(...args).map(r => { try { return JSON.parse(String(r.raw || '')); } catch { return {}; } }); }
+  finally { db.close(); }
+}
+// the recipients of the NEWEST stored envelope for a d-tag
+const recipsOf = (d) => { const e = held('dtag = ?', d).sort((a, b) => b.created_at - a.created_at)[0]; try { return Object.keys(JSON.parse(e.content).keys || {}); } catch { return []; } };
+const room = () => recipsOf(GROUPKEY_D + roomId);
+const care = () => recipsOf(CAREKEY_D + churchA);
+const media = () => recipsOf(MEDIAKEY_D + churchA);
+const names = () => recipsOf(NAMEKEY_D + churchA);
+const show = () => `room [${room().map(nm)}] care [${care().map(nm)}] media [${media().map(nm)}]`;
+const click = (re) => `(() => { const b=[...document.querySelectorAll('button')].find(x=>${re}.test((x.textContent||'').trim())); if(b){b.click();return 'ok';} return 'miss'; })()`;
+const typeInto = (sel, val) => `(() => { const i=document.querySelector(${JSON.stringify(sel)}); if(!i) return 'miss';
+  const set=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set; set.call(i, ${JSON.stringify(val)}); i.dispatchEvent(new Event('input',{bubbles:true})); return 'ok'; })()`;
+const typePh = (ph, val) => `(() => { const i=[...document.querySelectorAll('input')].find(x=>(x.placeholder||'').includes(${JSON.stringify(ph)})); if(!i) return 'miss';
+  const set=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set; set.call(i, ${JSON.stringify(val)}); i.dispatchEvent(new Event('input',{bubbles:true})); return 'ok'; })()`;
+async function waitFor(expr, ms = 60000, label = expr) {
+  const t0 = Date.now();
+  while (Date.now() - t0 < ms) { try { if (await evalIn(expr)) return true; } catch {} await sleep(400); }
+  throw new Error('timed out waiting for: ' + label);
+}
+async function until(pred, ms) { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (pred()) return true; await sleep(1000); } return pred(); }
+const press = async (re, label) => { assert.equal(await evalIn(click(re)), 'ok', `nothing on screen matched ${label || re}`); await sleep(500); };
+const joinTo = (church, k) => { const ts = Math.floor(Date.now() / 1000); return finalizeEvent({ kind: 30078, created_at: ts, tags: [['d', MEMBER_D + church], ['t', 'trinityone'], ['p', church]], content: JSON.stringify({ joined: ts }) }, k.sk); };
+async function unlock() {
+  await waitFor(`[...document.querySelectorAll('input')].some(x => (x.placeholder||'').includes('Your PIN or passphrase'))`, 90000, 'the unlock screen');
+  assert.equal(await evalIn(typePh('Your PIN or passphrase', PIN)), 'ok');
+  await press('/^Unlock/');
+  await waitFor(`[...document.querySelectorAll('button')].some(x => (x.textContent||'').trim() === 'Settings') && !document.querySelector('[data-stew-modal-panel]')`, 90000, 'the dashboard');
+}
+// NO CONSOLE OPEN: the page leaves the console entirely (about:blank), so nothing is subscribed to anything.
+async function closeConsole() { await evalIn(`(() => { location.href = 'about:blank'; return 1; })()`).catch(() => {}); await sleep(2500); }
+// …and comes back as a console that has never seen this church's members: the saved member list is removed BEFORE
+// the console script runs its first render (it is read in useStewardMembers' initial state).
+async function openConsoleWithNoMemberCache() {
+  await evalIn(`(() => { location.href = ${JSON.stringify(relay.base + '/steward.html')}; return 1; })()`).catch(() => {});
+  await sleep(1500);
+  await evalIn(`(() => { localStorage.removeItem('trinityone.steward.members.' + ${JSON.stringify(churchA)}); return 1; })()`).catch(() => {});
+  await unlock();
+}
+// the admitted list as the console reads it, plus `add`, written through the console's own setAdmitted
+const admit = (pubs) => evalIn(`(async () => { const S = window.Steward;
+  const cur = await new Promise(res => { let done = false; S.subscribeAdmitted(l => { if (!done) { done = true; res(l); } }); setTimeout(() => { if (!done) { done = true; res([]); } }, 4000); });
+  const r = await S.setAdmitted([...new Set([...(cur || []), ...${JSON.stringify(pubs)}])]); return (r === false || r == null) ? String(r) : 'ok'; })()`);
+const admittedHeld = () => held('dtag = ?', 'trinityone/admitted:' + churchA).flatMap(e => { try { return JSON.parse(e.content).pubkeys || []; } catch { return []; } });
+
+before(async () => {
+  if (!CHROME) return;
+  relay = await H.startRelay({ name: 'roomkey-reconcile', env: { TRINITY_TAILSCALE_BIN: '/nonexistent' } });
+  const cdp = await H.freePort('the roomkey-reconcile test\'s Chrome debug port');
+  prof = mkdtempSync(join(tmpdir(), 'trin-roomkeyrec-chr-'));
+  const BLOCK_PROD = '--host-resolver-rules=MAP app.trinityone.church 127.0.0.1:9, MAP *.ts.net 127.0.0.1:9, MAP trinityone.church 127.0.0.1:9';
+  chr = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${cdp}`, '--no-sandbox', '--disable-gpu', BLOCK_PROD, `--user-data-dir=${prof}`, '--window-size=1280,1200', `${relay.base}/steward.html`], { stdio: 'ignore' });
+  let targets = null;
+  for (let i = 0; i < 40 && !targets; i++) { await sleep(400); try { targets = await (await fetch(`http://127.0.0.1:${cdp}/json`)).json(); } catch {} }
+  assert.ok(targets && targets.length, 'chromium never exposed a debug target');
+  const page = targets.find(t => t.type === 'page') || targets[0];
+  ws = new WebSocket(page.webSocketDebuggerUrl, { perMessageDeflate: false, maxPayload: 5e8 });
+  await new Promise((res, rej) => { ws.on('open', res); ws.on('error', rej); });
+  let id = 0; const pend = new Map();
+  ws.on('message', (d) => { const m = JSON.parse(d);
+    if (m.method === 'Runtime.exceptionThrown') { const e = m.params.exceptionDetails; errors.push((e.exception?.description || e.text || '').split('\n')[0]); }
+    if (m.id && pend.has(m.id)) { pend.get(m.id)(m); pend.delete(m.id); } });
+  const send = (method, params = {}) => new Promise(r => { const i = ++id; pend.set(i, r); ws.send(JSON.stringify({ id: i, method, params })); });
+  await send('Runtime.enable');
+  evalIn = async (expression) => {
+    const rr = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
+    if (rr?.result?.exceptionDetails) throw new Error('in-page: ' + JSON.stringify(rr.result.exceptionDetails.exception || rr.result.exceptionDetails).slice(0, 300));
+    return rr?.result?.result?.value;
+  };
+  // the church, by the wizard
+  await waitFor(`[...document.querySelectorAll('button')].some(x => /Start a new church/i.test((x.textContent||'').trim()))`, 90000, 'Start a new church');
+  await press('/Start a new church/i');
+  await waitFor(`[...document.querySelectorAll('input')].some(x => (x.placeholder||'').includes('At least 8'))`, 60000, 'the PIN box');
+  assert.equal(await evalIn(typePh('At least 8', PIN)), 'ok');
+  assert.equal(await evalIn(typePh('Type it again', PIN)), 'ok');
+  await press('/Set PIN/i');
+  await waitFor(`!!document.querySelector('input[aria-label="Church name"]')`, 90000, 'the wizard name step');
+  churchA = await evalIn(`window.Steward && window.Steward.churchPub || ''`);
+  const npubA = await evalIn(`window.Steward.npub || ''`);
+  assert.equal(await evalIn(typeInto('input[aria-label="Church name"]', 'St Bede Reconcile')), 'ok');
+  await sleep(300);
+  await press('/^Continue$/');
+  { const t0 = Date.now(); let ok = false; while (!ok && Date.now() - t0 < 30000) { try { ok = (JSON.parse(readFileSync(join(relay.dataDir, 'church.json'), 'utf8')).churches || []).some(c => c && c.npub === npubA); } catch {} if (!ok) await sleep(400); } assert.ok(ok, 'the box never registered the church'); }
+  await waitFor(`localStorage.getItem('trinityone.steward.boxhosts.' + window.Steward.churchPub) === '1'`, 30000, 'the console to learn the box holds it');
+  await evalIn(`(() => { localStorage.setItem('trinityone.steward.wizard.done', '1'); localStorage.removeItem('trinityone.steward.newchurch'); location.reload(); return 'ok'; })()`);
+  await sleep(3000);
+  await unlock();
+  await waitFor(`window.Steward.nameKeyReady() && !!window.Steward.careSeal({ a: 1 })`, 90000, 'the church\'s name and care keys');
+  // A new church starts with approval ON (ensureJoinPolicy). Row A is about the reconcile, so the church is open-join
+  // until row B switches approval on the way the Rules & privacy switch does.
+  assert.equal(await evalIn(`window.Steward.setJoinPolicy(false).then(r => r ? 'ok' : String(r))`), 'ok', 'CONTROL: open join could not be set');
+  await sleep(3000);
+  // M1 joins; an OPEN encrypted room is made, keyed to M1; the sermon key is made as the upload screen makes it
+  await H.publishAll(relay, [joinTo(churchA, M1)]);
+  await sleep(5000);
+  const made = await evalIn(`(async () => { const S = window.Steward; const g = await S.publishGroup({ name: 'Bede Sealed', encrypted: true });
+    if (!g || !g.id) return { err: 'no group' }; const r = await S.publishGroupKey(g.id, [${JSON.stringify(M1.pub)}]); return { id: g.id, key: r === null ? 'null' : r === false ? 'false' : 'ok' }; })()`);
+  assert.equal(made.key, 'ok', 'CONTROL: the room\'s key was not published: ' + JSON.stringify(made));
+  roomId = made.id;
+  assert.equal(await evalIn(`window.Steward.mediaEncryptor([${JSON.stringify(M1.pub)}]).then(() => 'ok', e => 'ERR ' + e.message)`), 'ok', 'CONTROL: the sermon key could not be made');
+  assert.ok(await until(() => room().includes(M1.pub) && care().includes(M1.pub) && media().includes(M1.pub), WAIT),
+    'CONTROL: M1 was not keyed to the room, care and sermon keys while the console was open — ' + show());
+});
+
+after(async () => {
+  try { ws && ws.close(); } catch {}
+  try { chr && chr.kill('SIGKILL'); } catch {}
+  H.stopAll();
+  try { prof && rmSync(prof, { recursive: true, force: true }); } catch {}
+});
+
+const SKIP = !CHROME ? 'no chromium' : false;
+
+test('A · a member who joined while no console was open is given the room key by a console with NO saved member list', { skip: SKIP, timeout: 240000 }, async () => {
+  await closeConsole();
+  await H.publishAll(relay, [joinTo(churchA, MF)]);                  // MF joins with no console open
+  await sleep(3000);
+  assert.ok(!room().includes(MF.pub), 'CONTROL: MF was keyed with no console open — this row would prove nothing');
+  await openConsoleWithNoMemberCache();
+  const got = await until(() => room().includes(MF.pub), WAIT);
+  assert.ok(got, `A MEMBER WHO JOINED WHILE NO CONSOLE WAS OPEN WAS NEVER GIVEN THE ROOM KEY within ${WAIT / 1000} s by a console with no saved member list — ${show()}`);
+  assert.ok(room().includes(M1.pub), 'the reconcile DROPPED a member the room was already keyed to — the phone deletes its key when that happens: ' + show());
+});
+
+test('B · with approval on, a member still waiting for approval gets NO room, care or sermon key — while an approved joiner gets all three', { skip: SKIP, timeout: 300000 }, async () => {
+  // the Rules & privacy switch's order: grandfather everyone already here, then turn approval on. MA is admitted
+  // ahead of joining (the control); MP is not (the pending member).
+  assert.equal(await admit([M1.pub, MF.pub, MA.pub]), 'ok', 'the admitted list was not saved');
+  assert.notEqual(await evalIn(`window.Steward.setJoinPolicy(true).then(r => String(r))`), 'false', 'approval could not be switched on');
+  assert.ok(await until(() => admittedHeld().includes(MA.pub) && held('dtag = ?', 'trinityone/joinpolicy:' + churchA).length > 0, 20000), 'CONTROL: the admitted list / join policy never reached the relay');
+  await closeConsole();
+  await H.publishAll(relay, [joinTo(churchA, MA), joinTo(churchA, MP)]);   // both join with no console open
+  await sleep(3000);
+  await openConsoleWithNoMemberCache();
+  // CONTROL — the distributor ran, with approval on, on this cold console: the approved joiner has all three
+  assert.ok(await until(() => room().includes(MA.pub) && care().includes(MA.pub) && media().includes(MA.pub), WAIT),
+    'CONTROL: an APPROVED member who joined while the console was closed was not keyed — this row would prove nothing: ' + show());
+  // …and the name key DOES reach the pending member (they seal their name for the approval queue) — unchanged
+  assert.ok(await until(() => names().includes(MP.pub), WAIT), 'the NAME key no longer reaches a member waiting for approval — they cannot seal their name for the queue');
+  await sleep(5000);                                                  // give a wrong publish every chance to land
+  assert.ok(!room().includes(MP.pub), 'THE OPEN ROOM\'S KEY WAS GIVEN TO A MEMBER STILL WAITING FOR APPROVAL — ' + show());
+  assert.ok(!care().includes(MP.pub), 'THE CARE KEY WAS GIVEN TO A MEMBER STILL WAITING FOR APPROVAL — ' + show());
+  assert.ok(!media().includes(MP.pub), 'THE SERMON KEY WAS GIVEN TO A MEMBER STILL WAITING FOR APPROVAL — ' + show());
+});
+
+test('C · approving them gives them all three at once', { skip: SKIP, timeout: 240000 }, async () => {
+  assert.ok(!room().includes(MP.pub), 'CONTROL: MP already had the room key — run B first');
+  assert.equal(await admit([MP.pub]), 'ok', 'the approval was not saved');
+  const got = await until(() => room().includes(MP.pub) && care().includes(MP.pub) && media().includes(MP.pub), WAIT);
+  assert.ok(got, `AN APPROVED MEMBER WAS NOT GIVEN THE ROOM, CARE AND SERMON KEYS within ${WAIT / 1000} s — ${show()}`);
+  assert.deepEqual(errors, [], 'the console threw:\n  ' + errors.join('\n  '));
+});
