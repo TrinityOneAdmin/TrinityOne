@@ -1233,7 +1233,7 @@ function SchEventModal({ day, onClose }) {
   const [held, setHeld] = useSch(false);
   const [shown, setShown] = useSch(false);   // the inverse tick, for a group-scoped event — see SchWebsiteShownRow
   const canHold = !!(window.Steward.setWebsiteHeld && !(window.Steward.isDelegated && window.Steward.isDelegated()));
-  const ownedNets = React.useMemo(() => (window.Steward.ownedNetworks ? window.Steward.ownedNetworks() : []), []);
+  const ownedNets = React.useMemo(() => (window.NETWORKS_ENABLED === true && window.Steward.ownedNetworks ? window.Steward.ownedNetworks() : []), []);   // NETWORKS SWITCH (app/stew-data.jsx)
   const [asPub, setAsPub] = useSch('');          // '' = the church; else an owned network's pub
   const asNetwork = !!asPub;
   const onImage = (file) => {

@@ -1613,7 +1613,7 @@ function App() {
   useAE(() => {
     if (!lazyReady) return;
     const np = (churches.find(c => c.id === activeChurch) || {}).npub;
-    if (!np || !(window.Fellowship && window.Fellowship.subscribeChurchNetworks)) { setChurchNetworks([]); return; }
+    if (window.NETWORKS_ENABLED !== true || !np || !(window.Fellowship && window.Fellowship.subscribeChurchNetworks)) { /* NETWORKS SWITCH (app/data.jsx): off = a member follows no network */ setChurchNetworks([]); return; }
     return window.Fellowship.subscribeChurchNetworks(np, setChurchNetworks);
   }, [activeChurch, churches, connTick, lazyReady]);
   useAE(() => {

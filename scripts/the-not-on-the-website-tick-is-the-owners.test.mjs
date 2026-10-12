@@ -18,7 +18,7 @@ import { transformSync } from 'esbuild';
 const SRC = readFileSync(new URL('../app/stew-schedule.jsx', import.meta.url), 'utf8');
 const JS = transformSync(SRC, { loader: 'jsx', jsx: 'transform', jsxFactory: 'h', jsxFragment: 'Frag' }).code;
 
-function mount(componentName, props, { steward = {}, preset = {}, events = [], groups = [] } = {}) {
+function mount(componentName, props, { steward = {}, preset = {}, events = [], groups = [], flags = {} } = {}) {
   const states = []; let idx = 0;
   const React = {
     useState(init) { const i = idx++; if (states.length <= i) states.push(Object.prototype.hasOwnProperty.call(preset, i) ? preset[i] : (typeof init === 'function' ? init() : init)); return [states[i], (v) => { states[i] = typeof v === 'function' ? v(states[i]) : v; }]; },
@@ -28,7 +28,7 @@ function mount(componentName, props, { steward = {}, preset = {}, events = [], g
   const h = (type, props2, ...kids) => ({ type, props: { ...(props2 || {}), children: kids.flat() } });
   const dispatched = [];
   const win = { Steward: steward, useStewardGroups: () => groups, useStewardEvents: () => events,
-    dispatchEvent(e) { dispatched.push(e); return true; }, confirm: () => true };
+    dispatchEvent(e) { dispatched.push(e); return true; }, confirm: () => true, ...flags };
   const scope = { React, h, Frag: 'Frag', Icon: () => null, SchModal: (p) => h('modal', p), useStewDialog: () => ({ current: null }), todayISO: () => '2026-09-22',
     window: win, CustomEvent: class CustomEvent { constructor(type, init) { this.type = type; this.detail = init && init.detail; } } };
   const names = Object.keys(scope);
@@ -172,4 +172,17 @@ test('F3: both event date fields cap the year at a date this product can write d
     assert.equal(f.props.max, '9999-12-31',
       `${name}: THE EVENT DATE FIELD HAS NO MAX (${JSON.stringify(f.props.max)}) — a steward can type a year the public calendar cannot represent, which is how F3 is reached from the console`);
   }
+});
+
+// ── NETWORKS SWITCH (reference/DOMAIN.md 2026-10-11): the "Publish as <network>" picker ────────────────
+// The real SchEventModal, rendered with an owner who owns a network. The only thing that differs between the
+// two rows is window.NETWORKS_ENABLED, so the flag is the only thing hiding the picker.
+const netButton = (m) => m.nodes().find(n => n.type === 'button' && JSON.stringify(n.props.children || '').includes('Regions Beyond'));
+test('NETWORKS OFF: an owner who owns a network is not offered "Publish as" that network in the New event dialog', () => {
+  const m = mount('SchEventModal', { day: '', onClose() {} }, { steward: owner({ ownedNetworks: () => [{ pub: 'net-pub', name: 'Regions Beyond' }] }) });
+  assert.equal(netButton(m), undefined, 'the network picker is drawn with the networks switch off');
+});
+test('NETWORKS ON (control): the same dialog offers the network — the switch is the only thing hiding it', () => {
+  const m = mount('SchEventModal', { day: '', onClose() {} }, { steward: owner({ ownedNetworks: () => [{ pub: 'net-pub', name: 'Regions Beyond' }] }), flags: { NETWORKS_ENABLED: true } });
+  assert.ok(netButton(m), 'with the switch on, the network picker is not drawn — the control is blind');
 });
