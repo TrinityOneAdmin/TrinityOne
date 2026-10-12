@@ -8443,11 +8443,30 @@ wss.on('connection', (ws, req) => {
     // forged events that get rejected — is a CPU-amplification vector. Cap inbound messages per
     // connection (~100/s, far above any legitimate client); persistent abuse closes the socket.
     const _now = Date.now();
-    if (_now - ws._rl.t >= 1000) { ws._rl.t = _now; ws._rl.n = 0; }
-    if (++ws._rl.n > 100) { if (++ws._rl.drop > 500) { try { ws.close(1008, 'rate limit'); } catch (e) {} } return; }
+    if (_now - ws._rl.t >= 1000) { ws._rl.t = _now; ws._rl.n = 0; ws._rl.a = 0; }
     let msg; try { msg = JSON.parse(raw); } catch { return; }
     if (!Array.isArray(msg) || !msg.length) return;   // a non-array message (or empty) would throw at the destructure below
     const [type, ...rest] = msg;
+    // OVER THE LIMIT, SAY SO — AND NEVER LOSE A LOGIN (round 3e; audit of b102dc6). This dropped every frame past the
+    // 100th in a second WITHOUT A WORD. A console opening a church sends more than that in its first second (measured:
+    // 102 REQ/CLOSE frames before its AUTH), so the AUTH itself was dropped: no OK ever came, nostr-tools gave up on
+    // the login for the life of the socket, and every private read on it waited for a login that could not happen —
+    // the "name key never came back" stall in console-keys-follow-the-church-switch. Now:
+    //   · AUTH and CLOSE are not counted against the 100: a CLOSE costs nothing, and AUTH has its own small budget
+    //     (10 a second — one is all a client needs) because it is the frame every private read depends on;
+    //   · a REQ past the limit gets CLOSED 'rate-limited:' and an EVENT gets OK false 'rate-limited:', so the client
+    //     knows to ask again instead of waiting for an answer that will never come.
+    // Persistent abuse still closes the socket, exactly as before.
+    const _isAuth = type === 'AUTH', _isClose = type === 'CLOSE';
+    const _over = _isAuth ? (++ws._rl.a > 10) : (!_isClose && ++ws._rl.n > 100);
+    if (_over) {
+      if (++ws._rl.drop > 500) { try { ws.close(1008, 'rate limit'); } catch (e) {} return; }
+      try {
+        if (type === 'REQ' && typeof rest[0] === 'string') ws.send(JSON.stringify(['CLOSED', rest[0], 'rate-limited: too many messages — ask again in a moment']));
+        else if ((type === 'EVENT' || _isAuth) && rest[0] && rest[0].id) ws.send(JSON.stringify(['OK', rest[0].id, false, 'rate-limited: too many messages — try again in a moment']));
+      } catch (e) {}
+      return;
+    }
     if (type === 'EVENT') {
       const evt = rest[0]; if (!evt || !evt.id) return;
       // NIP-01: a relay MUST verify the signature before storing/serving. Without this, anyone could

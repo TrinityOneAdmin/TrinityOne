@@ -2424,7 +2424,27 @@ pool.automaticallyAuth = (url) => async (authEvent) => {
       try {
         const r = pool.relays.get(k);
         if (r && r.authPromise && typeof r.authPromise.then === 'function') {
-          r.authPromise.then(() => { try { _authAccepted.set(k, r); _runKeyReadAuthWaiters(); } catch (e) {} }, () => { try { if (_authAccepted.get(k) === r) _authAccepted.delete(k); } catch (e) {} });
+          const p = r.authPromise;
+          // A LOGIN THAT FAILED MUST NOT STICK (round 3e; audit of b102dc6). nostr-tools keeps relay.authPromise for the
+          // life of the connection — a REJECTED one too — and answers every later challenge with it, so once one AUTH
+          // got no OK ("auth timed out") that socket never signed in again: every key read on it answered "not logged
+          // in" and waited for a login that could not come. Measured in console-keys-follow-the-church-switch with the
+          // member read open on a delegated console: one AUTH with no OK, then 60+ challenges on the same connection and
+          // not one AUTH sent, and the name key never came back. (Why that one OK never came was not pinned down.) So a
+          // failed login is cleared, and a TIMED-OUT one is tried again at once, once per challenge — a refusal (OK false)
+          // is not retried until the relay challenges again.
+          p.then(() => { try { _authAccepted.set(k, r); _runKeyReadAuthWaiters(); } catch (e) {} }, (err) => {
+            try { if (_authAccepted.get(k) === r) _authAccepted.delete(k); } catch (e) {}
+            try {
+              if (r.authPromise !== p) return;
+              r.authPromise = undefined;
+              const ch = r.challenge;
+              if (ch && /timed out/i.test(String((err && err.message) || err || '')) && r.__authRetriedFor !== ch && typeof r.onauth === 'function') {
+                r.__authRetriedFor = ch;
+                r.auth(r.onauth).catch(() => {});
+              }
+            } catch (e) {}
+          });
         }
       } catch (e) {}
     }, 0);
@@ -11605,10 +11625,12 @@ window.Steward = {
     _membersReask.add(reask);
     // the genuine read of every member document (round 3d, LOW 2) — see the note at the top. Each document goes through
     // the same handler, so the list it marks fresh is the list that includes them.
-    // OWNER'S CONSOLE ONLY. Only the church key Blocks or removes a delegate — the two users of this freshness — so a
-    // delegated console has no use for it. And it cost one there: with this read open while acting for a stewarded church,
-    // switching to it and back left the name key unread for 30 s (console-keys-follow-the-church-switch, 2/2 red; green
-    // with the read gated here). WHY was not pinned down — the same file logged "auth timed out" — so it is not claimed.
+    // OWNER'S CONSOLE ONLY, because only the church key Blocks or removes a delegate — the two users of this freshness —
+    // so on a delegated console it would be one more request for nothing. (It is NOT hiding a fault any more. With it
+    // open there, a church switch used to leave the name key unread: the extra requests pushed the console past the
+    // relay's 100-a-second limit, the relay silently dropped the AUTH, and nostr-tools never logged in again on that
+    // socket. Both halves are fixed at the root — the relay answers or exempts (gateway.mjs, the rate limit) and a failed
+    // login is retried (pool.automaticallyAuth) — and console-keys-follow-the-church-switch passed 2/2 with this gate removed.)
     const stopRead = actingChurch ? () => {} : _freshDocRead(cp0, [MEMBER_D + cp0], (e) => handlers.onevent(e),
       () => { tok.genuine = true; tok.at = Date.now(); if (emitTimer) { try { clearTimeout(emitTimer); } catch (e) {} emitTimer = null; } emitNow(); },
       [{ kinds: [30078], '#d': [MEMBER_D + cp0] }]);

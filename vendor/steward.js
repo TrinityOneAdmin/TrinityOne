@@ -16804,15 +16804,27 @@ zoo`.split("\n");
         try {
           const r = pool.relays.get(k);
           if (r && r.authPromise && typeof r.authPromise.then === "function") {
-            r.authPromise.then(() => {
+            const p = r.authPromise;
+            p.then(() => {
               try {
                 _authAccepted.set(k, r);
                 _runKeyReadAuthWaiters();
               } catch (e) {
               }
-            }, () => {
+            }, (err2) => {
               try {
                 if (_authAccepted.get(k) === r) _authAccepted.delete(k);
+              } catch (e) {
+              }
+              try {
+                if (r.authPromise !== p) return;
+                r.authPromise = void 0;
+                const ch = r.challenge;
+                if (ch && /timed out/i.test(String(err2 && err2.message || err2 || "")) && r.__authRetriedFor !== ch && typeof r.onauth === "function") {
+                  r.__authRetriedFor = ch;
+                  r.auth(r.onauth).catch(() => {
+                  });
+                }
               } catch (e) {
               }
             });
