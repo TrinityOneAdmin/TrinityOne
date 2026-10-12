@@ -1173,6 +1173,7 @@ function ReadScreen({ ctx }) {
             </div>
           )}
 
+          {typeof PlanReadBar === 'function' ? <PlanReadBar ctx={ctx} loc={loc} /> : null}
           {/* footer nav */}
           <div style={{ display: 'flex', gap: 10, marginTop: 26 }}>
             <button disabled={!prev} onClick={() => prev && ctx.setLoc(prev)} style={{ ...navBtnStyle, opacity: prev ? 1 : .4 }}>

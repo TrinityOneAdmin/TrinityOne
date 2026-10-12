@@ -411,6 +411,7 @@ function App() {
 
   // reading location + active version (lifted so Today/Search can navigate)
   const [loc, setLoc] = useA(null);
+  const [planRead, setPlanRead] = useA(null);   // { plan, day } while the reader was opened FROM a plan day; PlanReadBar shows only while the reader is still on that day's passage
   // On boot the reader opens where this member left off in the translation that loaded (resolveStartLoc,
   // above), else at the translation's default. Every later navigation — the reader's own controls, gotoRef
   // from Search / a plan / the notes panel, openPlanDay — goes through setLoc after this and so wins over the
@@ -2072,7 +2073,7 @@ function App() {
     go: (t) => { if (t === 'plans') { setReadView('plans'); setTab('read'); } else if (t === 'bible') { setReadView('bible'); setTab('read'); } else setTab(t); },
     toast,
     loc, setLoc, version, setVersion: (v) => Bible.setActive(v),
-    gotoRef: (book, chap, verse) => { setLoc({ book, chap, verse }); setReadView('bible'); setTab('read'); },
+    gotoRef: (book, chap, verse) => { setPlanRead(null); setLoc({ book, chap, verse }); setReadView('bible'); setTab('read'); },
     addModule: () => Bible.pickFile(),
     // "bibles" scopes the name: a commentary or a dictionary may legitimately be called KJV too, and
     // this sheet only ever means the translation. Without it, removeModule resolved the name against
@@ -2129,7 +2130,7 @@ function App() {
     openPlanDay: (plan, day) => {
       const loc = Bible.parseRef(day.ref);
       if (!loc || !Bible.books().includes(loc.book)) { toast(day.ref + ' isn’t in this translation'); return; }
-      setLoc({ book: loc.book, chap: loc.chap, verse: loc.verse }); setReadView('bible'); setTab('read');
+      setPlanRead({ plan, day }); setLoc({ book: loc.book, chap: loc.chap, verse: loc.verse }); setReadView('bible'); setTab('read');
     },
     openJournal: (j) => setJournal(j),
     openVideo: (v) => setVideo(v),
@@ -2208,6 +2209,7 @@ function App() {
     notes, setNote: (k, txt) => { if (txt) MD.put('notes', { id: k, ref: k, text: txt }); else MD.remove('notes', k); },
     bookmarks, toggleBookmark: (k) => { if (MD.has('bookmarks', k)) MD.remove('bookmarks', k); else MD.put('bookmarks', { id: k, ref: k }); },
     planProgress,
+    planRead,
     devoProgress,
     churchPlans: [...churchPlans, ...netPlans].map(p => (typeof p.len === 'number') ? p : { ...p, len: (p.days || []).length }),
     churchDevos,

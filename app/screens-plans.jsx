@@ -2,6 +2,36 @@
 const { useState: useP } = React;
 
 function doneDays(ctx, id) { return ctx.planProgress[id] || []; }
+
+// The bar under a passage that was opened FROM a plan day: "Mark day done" and "Next: Day N+1 · ref".
+// Shown only while the reader is still on that day's passage (so paging elsewhere hides it); null otherwise.
+// Marking done is ctx.togglePlanDay, the same call as the tick in the plan's day list.
+function PlanReadBar({ ctx, loc }) {
+  const pr = ctx.planRead;
+  if (!pr || !pr.plan || !pr.day || !loc) return null;
+  const B = window.Bible;
+  const at = B && B.parseRef ? B.parseRef(pr.day.ref) : null;
+  if (!at || at.book !== loc.book || at.chap !== loc.chap) return null;
+  const days = pr.plan.days || [];
+  const idx = days.findIndex(x => x.d === pr.day.d);
+  const next = idx >= 0 ? days[idx + 1] : null;
+  const isDone = doneDays(ctx, pr.plan.id).indexOf(pr.day.d) >= 0;
+  const btn = { flex: '1 1 0', minWidth: 0, padding: '11px 12px', borderRadius: 13, cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' };
+  return (
+    <div data-testid="plan-read-bar" style={{ display: 'flex', gap: 10, marginTop: 22 }}>
+      <button onClick={() => ctx.togglePlanDay(pr.plan.id, pr.day.d)} title={isDone ? 'Day ' + pr.day.d + ' is done — tap to undo' : 'Mark day ' + pr.day.d + ' done'}
+        style={{ ...btn, background: isDone ? 'var(--clay-soft)' : 'var(--surface)', border: '1.5px solid var(--clay)', color: 'var(--clay)' }}>
+        {isDone ? 'Day done' : 'Mark day done'}
+      </button>
+      {next ? (
+        <button onClick={() => ctx.openPlanDay(pr.plan, next)} title={'Open day ' + next.d + ': ' + next.ref}
+          style={{ ...btn, flex: '1.6 1 0', background: 'var(--clay)', border: 'none', color: 'var(--on-clay)' }}>
+          {'Next: Day ' + next.d + ' · ' + next.ref + ' →'}
+        </button>
+      ) : null}
+    </div>
+  );
+}
 function nextDay(plan, doneSet) { return plan.days.find(d => !doneSet.has(d.d)) || plan.days[plan.days.length - 1]; }
 
 // a church devotional rendered with the SAME card dimensions as a PlanCard (for the 2-col grid)
@@ -306,7 +336,7 @@ function PlanDetail({ plan, open, onClose, ctx }) {
     const loc = window.Bible.parseRef(d.ref);
     if (!loc) { ctx.toast('Could not open ' + d.ref); return; }
     if (!window.Bible.books().includes(loc.book)) { ctx.toast(d.ref + ' isn’t in this translation'); return; }
-    onClose(); ctx.gotoRef(loc.book, loc.chap, loc.verse);
+    onClose(); ctx.openPlanDay(plan, d);   // opens the reader WITH the plan context, so the reader can offer Mark done / Next
   };
 
   return (

@@ -152,3 +152,23 @@ test('VP_BOOKS.verses is the KJV table: 66 books, VP_BOOKS chapter counts, 1189 
   for (const [b, c, n] of [['Genesis', 1, 31], ['Psalms', 119, 176], ['Psalms', 117, 2], ['John', 3, 36], ['3 John', 1, 14], ['Malachi', 4, 6], ['Revelation', 22, 21]])
     assert.equal(v(b, c), n, b + ' ' + c);
 });
+
+// ---- each Add makes ONE day, and the dialog says which (owner 2026-10-12: "not clear that selecting the book again will create another listing") ----
+test('the picker row names the day the next Add creates, and the button says "Add day N"', async () => {
+  const s = await load();
+  s.click('Pick verses');
+  const dayLabel = () => s.find(n => n.props && n.props['data-testid'] === 'rp-day-label').map(n => n.kids.join('')).join('');
+  assert.equal(dayLabel(), 'Day 1');
+  s.set('Book', 'John'); s.set('Chapter', '1');
+  assert.ok(s.btn('Add day 1'), 'button reads "Add day 1" before the first Add');
+  assert.match(s.btn('Add day 1').props['aria-label'], /Add John 1 as day 1/);
+  s.click('Add day 1');
+  assert.equal(dayLabel(), 'Day 2', 'the picker row still says Day 1 after an Add');
+  assert.equal(s.find(n => n.type === 'span' && n.kids.join('') === 'John 1').length, 1, 'the day added is listed');
+  s.set('Book', 'Mark'); s.set('Chapter', '2');
+  assert.ok(s.btn('Add day 2'), 'button reads "Add day 2" after one Add');
+  s.click('Add day 2');
+  assert.equal(dayLabel(), 'Day 3');
+  s.nameIt('X'); s.click('Publish now');
+  assert.deepEqual(s.published[0].days.map(d => [d.d, d.ref]), [[1, 'John 1'], [2, 'Mark 2']], 'what is published is unchanged');
+});
