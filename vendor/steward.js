@@ -15447,6 +15447,27 @@ zoo`.split("\n");
   var _mediaKeyFresh = false;
   var _mediaKeyMine = false;
   var _mediaKeyAt = 0;
+  var KEYENV_LS = "trinityone.steward.keyenv.";
+  function _keyEnvSave(kind, cp, e, selfKey, mineCt) {
+    try {
+      if (!cp || !e || !selfKey || typeof mineCt !== "string" || !mineCt) return;
+      const o = JSON.parse(e.content || "{}");
+      lsSet(KEYENV_LS + kind + "." + cp, JSON.stringify({ at: e.created_at || 0, rev: o.rev || 1, author: e.pubkey, self: selfKey, mine: mineCt, recips: Object.keys(o.keys || {}) }));
+    } catch (x) {
+    }
+  }
+  function _keyEnvRestore(kind, cp, d) {
+    try {
+      const o = JSON.parse(lsGet(KEYENV_LS + kind + "." + cp) || "null");
+      if (!o || typeof o.mine !== "string" || !o.author || !o.self || !Array.isArray(o.recips)) return null;
+      const keys = {};
+      for (const p of o.recips) if (typeof p === "string" && p) keys[p] = "1";
+      keys[o.self] = o.mine;
+      return { pubkey: o.author, created_at: o.at || 0, kind: 30078, tags: [["d", d + cp]], content: JSON.stringify({ rev: o.rev || 1, keys }), restored: true };
+    } catch (x) {
+      return null;
+    }
+  }
   var _mediaKeyChecked = false;
   async function _sha256hex(u83) {
     const d = await crypto.subtle.digest("SHA-256", u83);
@@ -15845,6 +15866,7 @@ zoo`.split("\n");
         _careKeyRing = ring && ring.length ? ring : [plain];
         _careKeyHex = _careKeyRing[0];
         _careKeyMine = true;
+        if (!e.restored) _keyEnvSave("care", actingChurch || pub, e, churchPub, mine);
       }
       _careKeyVer++;
     } catch (x) {
@@ -20054,7 +20076,8 @@ zoo`.split("\n");
           const keys = await _sealEach(JSON.stringify([fresh]), targets, (pl, mp) => encrypt2(pl, getConversationKey(sk0, mp)));
           const _moved = "Can\u2019t encrypt this upload \u2014 this console changed church, or your church\u2019s media key arrived, while the key was being prepared. Nothing has been uploaded. Try again.";
           if (!_stillOn(pub0, ep0) || _mediaKeyVer !== v0 || _mediaKeyHex) throw new Error(_moved);
-          const _env = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", MEDIAKEY_D + pub0], ["t", NET]], content: JSON.stringify({ keys, rev: now() }) }));
+          const _mev = feChurch({ kind: 30078, created_at: now(), tags: [["d", MEDIAKEY_D + pub0], ["t", NET]], content: JSON.stringify({ keys, rev: now() }) });
+          const _env = await publish(_mev);
           if (_env === false) throw new Error("Can\u2019t encrypt this upload \u2014 your church\u2019s media key could not be saved, so nothing encrypted with it could ever be played. Nothing has been uploaded. A church media key can only be published from the console that holds the church\u2019s own key.");
           if (!_stillOn(pub0, ep0)) throw new Error(_moved);
           _mediaKeyHex = fresh;
@@ -20062,6 +20085,8 @@ zoo`.split("\n");
           _mediaKeyDocKeys = keys;
           _mediaKeyMine = true;
           _mediaKeyVer++;
+          _mediaKeyAt = Math.max(_mediaKeyAt, _mev.created_at || 0);
+          _keyEnvSave("media", pub0, _mev, pub0, keys[pub0]);
           useHex = fresh;
         }
       }
@@ -20114,7 +20139,8 @@ zoo`.split("\n");
       const keys = await _sealEach(_mring, want, (pl, mp) => encrypt2(pl, getConversationKey(sk0, mp)));
       if (_mediaKeyVer !== _v0 || !_stillOn(pub0, ep0)) return false;
       const _pubOpts = { background: true };
-      const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", MEDIAKEY_D + pub0], ["t", NET]], content: JSON.stringify({ keys, rev: now() }) }), _pubOpts);
+      const _mev = feChurch({ kind: 30078, created_at: now(), tags: [["d", MEDIAKEY_D + pub0], ["t", NET]], content: JSON.stringify({ keys, rev: now() }) });
+      const ok = await publish(_mev, _pubOpts);
       if (!_stillOn(pub0, ep0)) return ok;
       if (ok !== false) {
         if (_mediaKeyVer === _v0) {
@@ -20122,6 +20148,8 @@ zoo`.split("\n");
           _mediaKeyMine = true;
           _mediaKeyPushRefused = null;
           _mediaKeyVer++;
+          _mediaKeyAt = Math.max(_mediaKeyAt, _mev.created_at || 0);
+          _keyEnvSave("media", pub0, _mev, pub0, keys[pub0]);
         }
         return ok;
       }
@@ -20174,7 +20202,8 @@ zoo`.split("\n");
       const payload = JSON.stringify(ring);
       const keys = await _sealEach(payload, want, (pl, mp) => encrypt2(pl, getConversationKey(sk0, mp)));
       if (!_stillOn(pub0, ep0)) return false;
-      const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", MEDIAKEY_D + pub0], ["t", NET]], content: JSON.stringify({ keys, rev: now() }) }));
+      const _mev = feChurch({ kind: 30078, created_at: now(), tags: [["d", MEDIAKEY_D + pub0], ["t", NET]], content: JSON.stringify({ keys, rev: now() }) });
+      const ok = await publish(_mev);
       if (ok === false) return false;
       if (!_stillOn(pub0, ep0)) return true;
       _mediaKeyRing = [...full, ..._mediaKeyRing.filter((k) => full.indexOf(k) === -1)];
@@ -20183,6 +20212,8 @@ zoo`.split("\n");
       _mediaKeyMine = true;
       _mediaKeyPushRefused = null;
       _mediaKeyVer++;
+      _mediaKeyAt = Math.max(_mediaKeyAt, _mev.created_at || 0);
+      _keyEnvSave("media", pub0, _mev, pub0, keys[pub0]);
       return true;
     },
     // ---- care key: same envelope as the media key, for the Care module's sensitive fields ----
@@ -20193,6 +20224,10 @@ zoo`.split("\n");
       if (!cp) return () => {
       };
       _careKeyFresh = false;
+      {
+        const r = _keyEnvRestore("care", cp, CAREKEY_D);
+        if (r) _ingestCareKeyEnv(r);
+      }
       return _openKeyRead(
         cp,
         [
@@ -20260,7 +20295,8 @@ zoo`.split("\n");
       const _ring = JSON.stringify(_cfit);
       const keys = await _sealEach(_ring, want, (pl, mp) => encrypt2(pl, getConversationKey(sk0, mp)));
       if (_careKeyVer !== _v1 || !_stillOn(cp, ep0)) return false;
-      const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", CAREKEY_D + cp], ["t", NET]], content: JSON.stringify({ keys, rev: rev2 }) }), { background: !!(opts && opts.background) });
+      const _cev = feChurch({ kind: 30078, created_at: now(), tags: [["d", CAREKEY_D + cp], ["t", NET]], content: JSON.stringify({ keys, rev: rev2 }) });
+      const ok = await publish(_cev, { background: !!(opts && opts.background) });
       if (ok !== false && _careKeyVer === _v1 && _stillOn(cp, ep0)) {
         if (minting) {
           _careKeyRing = ring0.slice();
@@ -20270,6 +20306,7 @@ zoo`.split("\n");
         _careKeyDocKeys = keys;
         _careKeyMine = true;
         _careKeyVer++;
+        _keyEnvSave("care", cp, _cev, churchPub, keys[churchPub]);
       }
       return ok;
     },
@@ -20385,7 +20422,8 @@ zoo`.split("\n");
       }
       if (ring.length < full.length) console.warn("[steward] care key ring trimmed to " + ring.length + " to fit " + want.length + " members \u2014 older sealed care records will no longer open");
       if (!_stillOn(cp, ep0)) return false;
-      const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", CAREKEY_D + cp], ["t", NET]], content: JSON.stringify({ keys, rev: rev0 }) }));
+      const _cev = feChurch({ kind: 30078, created_at: now(), tags: [["d", CAREKEY_D + cp], ["t", NET]], content: JSON.stringify({ keys, rev: rev0 }) });
+      const ok = await publish(_cev);
       if (ok === false) return false;
       if (!_stillOn(cp, ep0)) return true;
       _careKeyRing = ring;
@@ -20394,6 +20432,7 @@ zoo`.split("\n");
       _careKeyDocKeys = keys;
       _careKeyMine = true;
       _careKeyVer++;
+      _keyEnvSave("care", cp, _cev, churchPub, keys[churchPub]);
       return true;
     },
     // has this device actually completed a NIP-42 auth? Callers use it to tell "the church has none" apart
@@ -20424,6 +20463,39 @@ zoo`.split("\n");
       };
       const forPub = pub;
       _mediaKeyFresh = false;
+      const _onEnv = function onMediaKeyEnvelope(e) {
+        if (forPub !== pub || e.pubkey !== pub || ((e.tags || []).find((t) => t[0] === "d") || [])[1] !== MEDIAKEY_D + pub) return;
+        if ((e.created_at || 0) < _mediaKeyAt) return;
+        _mediaKeyAt = e.created_at || 0;
+        _mediaKeyMine = false;
+        try {
+          const o = JSON.parse(e.content);
+          _mediaKeyDocKeys = o && o.keys || null;
+          _mediaKeyPushRefused = null;
+          _mediaKeyVer++;
+          const _meKey = _myOwnPub();
+          const mine = o.keys && (o.keys[_meKey] || (_meKey === pub ? null : o.keys[pub]));
+          if (mine && sk) {
+            const plain = decrypt3(mine, getConversationKey(sk, e.pubkey));
+            let r = null;
+            try {
+              const q = JSON.parse(plain);
+              if (Array.isArray(q)) r = q.filter((k) => typeof k === "string" && k);
+            } catch (x2) {
+            }
+            const incoming = r && r.length ? r : [plain];
+            _mediaKeyRing = [...incoming, ..._mediaKeyRing.filter((k) => incoming.indexOf(k) === -1)];
+            _mediaKeyHex = _mediaKeyRing[0];
+            _mediaKeyMine = true;
+            if (!e.restored) _keyEnvSave("media", forPub, e, o.keys[_meKey] ? _meKey : pub, mine);
+          }
+        } catch (x) {
+        }
+      };
+      {
+        const r = _keyEnvRestore("media", forPub, MEDIAKEY_D);
+        if (r) _onEnv(r);
+      }
       return _openKeyRead(
         forPub,
         [{ kinds: [30078], authors: [pub], "#d": [MEDIAKEY_D + pub] }],
@@ -20433,34 +20505,7 @@ zoo`.split("\n");
         /* `_mediaKeyPushRefused = null` (F2): an envelope LANDING is new information — the recipient map has
            changed under us, so whatever this console last had refused is worth asking again. Without this a
            console that was refused once would go on skipping until the roster itself changed. */
-        function onMediaKeyEnvelope(e) {
-          if (forPub !== pub || e.pubkey !== pub || ((e.tags || []).find((t) => t[0] === "d") || [])[1] !== MEDIAKEY_D + pub) return;
-          if ((e.created_at || 0) < _mediaKeyAt) return;
-          _mediaKeyAt = e.created_at || 0;
-          _mediaKeyMine = false;
-          try {
-            const o = JSON.parse(e.content);
-            _mediaKeyDocKeys = o && o.keys || null;
-            _mediaKeyPushRefused = null;
-            _mediaKeyVer++;
-            const _meKey = _myOwnPub();
-            const mine = o.keys && (o.keys[_meKey] || (_meKey === pub ? null : o.keys[pub]));
-            if (mine && sk) {
-              const plain = decrypt3(mine, getConversationKey(sk, e.pubkey));
-              let r = null;
-              try {
-                const q = JSON.parse(plain);
-                if (Array.isArray(q)) r = q.filter((k) => typeof k === "string" && k);
-              } catch (x2) {
-              }
-              const incoming = r && r.length ? r : [plain];
-              _mediaKeyRing = [...incoming, ..._mediaKeyRing.filter((k) => incoming.indexOf(k) === -1)];
-              _mediaKeyHex = _mediaKeyRing[0];
-              _mediaKeyMine = true;
-            }
-          } catch (x) {
-          }
-        },
+        _onEnv,
         // no envelope came back → it is safe to mint one, but ONLY on a trustworthy answer from every relay
         // fresh on every connected relay; the mint gate on every relay — see subscribeCareKey (round 3a, (b))
         (how) => {

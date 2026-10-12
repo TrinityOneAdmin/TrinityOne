@@ -144,6 +144,7 @@ function engine() {
     // round 2 of the room-key reconcile: a room's envelope state, its drop memo, and the ex-steward record (P4)
     stmt(BUNDLE, 'var _skeys = '), stmt(BUNDLE, 'var _srev = '), stmt(BUNDLE, 'var _senvTs = '), stmt(BUNDLE, 'var _senvRecips = '),
     stmt(BUNDLE, 'var _senvMine = '), stmt(BUNDLE, 'var _senvDropped = '),
+    stmt(BUNDLE, 'var KEYENV_LS = '), fnBody(BUNDLE, 'function _keyEnvSave(kind, cp, e, selfKey, mineCt) {'), fnBody(BUNDLE, 'function _keyEnvRestore(kind, cp, d) {'),   // round 3c, MED 2
     stmt(BUNDLE, 'var _senvPending = '), fnBody(BUNDLE, 'function _reCheckGroupKeyPending() {'), 't.__reCheckGk = _reCheckGroupKeyPending; t.__senvPending = _senvPending; t.__gkChain = _gkChain; t.__membersReask = _membersReask;',
     fnBody(BUNDLE, 'function _noteEnvelopeDrops(gid, prev, next) {'), fnBody(BUNDLE, 'function stewIngestKey(e) {'),
     't.__ingest = stewIngestKey; t.__skeys = _skeys; t.__senvMine = _senvMine; t.__senvRecips = _senvRecips;',
@@ -1258,4 +1259,71 @@ test('rotateCareKey, rotateMediaKey and a room rotation carry every current hold
   await e.S.rotateCareKey([], []);
   const plain = e.published.slice(p1).find(ev => dtag(ev) === CAREKEY_D + A.pub);
   assert.ok(plain && !Object.keys(JSON.parse(plain.content).keys).includes(M1.pub), 'CONTROL: without keepIf a rotation still carried holders');
+});
+
+// ROUND 3c, MED 2 (audit of 432c676): THE CARE AND SERMON KEYS NEVER GO BACK TO THE RING FROM BEFORE A BLOCK. Two holes:
+// (1) rotateMediaKey never stamped `_mediaKeyAt`, so the envelope from before the Block, replayed by a lagging relay or a
+// re-read, was taken over the rotation in the same session — the blocked person's key back as the current one; (2) after
+// a reload, with the relay holding the rotation down and one holding the older envelope up, the read settled on the
+// connected relay alone (round 3a), the console adopted the older envelope as its own and re-sealed that ring with a
+// newer stamp. Now every envelope the console accepts or publishes is kept on the device (_keyEnvSave) and restored
+// before any relay answers.
+const K1 = '11'.repeat(32);
+const envAt = (d, author, ring, recips, at, rev = 1) => ({ pubkey: author.pub, kind: 30078, created_at: at,
+  tags: [['d', d + A.pub], ['t', 'trinityone']],
+  content: JSON.stringify({ rev, keys: Object.fromEntries(recips.map(p => [p, nip44.v2.encrypt(JSON.stringify(ring), ck(author.sk, p))])) }) });
+const headFor = (ev, who) => JSON.parse(nip44.v2.decrypt(JSON.parse(ev.content).keys[who.pub], ck(who.sk, A.pub)))[0];
+const OLD_AT = 1759299000;   // the envelope from before the Block: older than anything the console publishes (now() = 1759300000)
+test('sermon key: after a Block\'s rotation, the envelope from before it — replayed — does not become the current key again', async () => {
+  const e = engine(); e.t.up = new Set([R1]);
+  e.S.subscribeMediaKey();
+  const s = e.subs.at(-1);
+  s.handlers.onevent(envAt(MEDIAKEY_D, A, [K1], [A.pub, M1.pub, M2.pub], OLD_AT)); await e.eose(s);
+  assert.equal(e.t._mediaKeyHex, K1, 'CONTROL: the sermon key was not read');
+  e.t._localBlocked = new Set([M2.pub]);
+  assert.equal(await e.S.rotateMediaKey([M1.pub], []), true, 'CONTROL: the rotation did not publish');
+  const k2 = e.t._mediaKeyHex;
+  assert.notEqual(k2, K1, 'CONTROL: the rotation did not change the key');
+  s.handlers.onevent(envAt(MEDIAKEY_D, A, [K1], [A.pub, M1.pub, M2.pub], OLD_AT));   // a lagging relay, or a re-read
+  assert.equal(e.t._mediaKeyHex, k2, 'THE ENVELOPE FROM BEFORE THE BLOCK WAS TAKEN OVER THE ROTATION — new sermons would be sealed with the key the blocked person holds');
+});
+for (const [kind, D, sub, rotate, ensure, hexOf] of [
+  ['sermon', MEDIAKEY_D, 'subscribeMediaKey', 'rotateMediaKey', 'ensureMediaKeyForMembers', (t) => t._mediaKeyHex],
+  ['care', CAREKEY_D, 'subscribeCareKey', 'rotateCareKey', 'ensureCareKeyForMembers', (t) => t._careKeyHex],
+]) {
+  test(`${kind} key: after a reload with the relay that took the Block's rotation DOWN, the console keeps the rotated key — it does not adopt and re-seal the older ring the other relay still holds`, async () => {
+    // BEFORE THE RELOAD: the console reads the church's key, blocks M2 and rotates
+    const e1 = engine(); e1.t.up = new Set([R1]);
+    e1.S[sub]();
+    const s1 = e1.subs.at(-1);
+    s1.handlers.onevent(envAt(D, A, [K1], [A.pub, M1.pub, M2.pub], OLD_AT, 1)); await e1.eose(s1);
+    assert.equal(hexOf(e1.t), K1, 'CONTROL: the key was not read');
+    e1.t._localBlocked = new Set([M2.pub]);
+    assert.equal(await e1.S[rotate]([M1.pub], []), true, 'CONTROL: the rotation did not publish');
+    const k2 = hexOf(e1.t);
+    // THE RELOAD: a new console on the same device; the relay that took the rotation is down, the one that holds the
+    // envelope from before the Block answers — the read settles on it alone (round 3a)
+    const e2 = engine(); e2.t.up = new Set([R1]); e2.t.localStorage = e1.t.localStorage;
+    e2.t._localBlocked = new Set([M2.pub]);   // the device's copy of the blocklist (HIGH 2, unchanged)
+    e2.S[sub]();
+    const s2 = e2.subs.at(-1);
+    s2.handlers.onevent(envAt(D, A, [K1], [A.pub, M1.pub, M2.pub], OLD_AT, 1)); await e2.eose(s2);
+    assert.equal(hexOf(e2.t), k2, `AFTER THE RELOAD THE CONSOLE TOOK THE ${kind.toUpperCase()} KEY FROM BEFORE THE BLOCK AS ITS OWN — the key the blocked person holds`);
+    // a new member joins: the re-seal hands them the ROTATED key, never the old ring
+    const p0 = e2.published.length;
+    await e2.S[ensure]([M1.pub, M3.pub], []);
+    const out = e2.published.slice(p0).find(ev => dtag(ev) === D + A.pub);
+    assert.ok(out, `CONTROL: the ${kind} key was not re-sealed for the new member`);
+    assert.equal(headFor(out, M3), k2, `THE RE-SEAL HANDED THE NEW MEMBER THE ${kind.toUpperCase()} KEY FROM BEFORE THE BLOCK`);
+    assert.ok(!Object.keys(JSON.parse(out.content).keys).includes(M2.pub), `the re-seal wrapped the ${kind} key to the blocked member`);
+  });
+}
+test('the kept envelope holds no key in the clear — only this console\'s own sealed copy', async () => {
+  const e = engine(); e.t.up = new Set([R1]);
+  e.S.subscribeMediaKey();
+  const s = e.subs.at(-1);
+  s.handlers.onevent(envAt(MEDIAKEY_D, A, [K1], [A.pub, M1.pub], OLD_AT)); await e.eose(s);
+  const kept = [...e.t.localStorage._m.entries()].filter(([k]) => k.startsWith('trinityone.steward.keyenv.'));
+  assert.equal(kept.length, 1, 'CONTROL: the envelope was not kept on the device');
+  assert.ok(!kept[0][1].includes(K1), 'THE SERMON KEY WAS WRITTEN TO THE DEVICE IN THE CLEAR');
 });

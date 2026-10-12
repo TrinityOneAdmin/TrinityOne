@@ -24,7 +24,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { nip44, generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools';
 import { SimplePool, useWebSocketImplementation } from 'nostr-tools/pool';
 import { normalizeURL } from 'nostr-tools/utils';
-import { fnBody, stmt, liftKeyRead } from './test-slice.mjs';
+import { fnBody, stmt, liftKeyRead, keyEnvFns } from './test-slice.mjs';
 
 useWebSocketImplementation(WebSocket);
 // THE SCENARIOS RUN IN A CHILD PROCESS (this same file, with KEY_READS_CHILD=1). nostr-tools re-throws a refused
@@ -117,6 +117,7 @@ function engine(A, urls) {
     window: { dispatchEvent: () => true },
     CustomEvent: class { constructor(type, init) { this.type = type; this.detail = (init || {}).detail; } },
     console: { warn() {}, log() {}, error() {} },
+    ...keyEnvFns(BUNDLE),   // round 3c, MED 2: the kept care/sermon envelope (test-slice.mjs)
     JSON, Set, Map, Object, Array, String, Number, Boolean, Promise, Error, Math, Uint8Array, Date, setTimeout, clearTimeout, queueMicrotask,
   };
   const proxy = new Proxy(t, {

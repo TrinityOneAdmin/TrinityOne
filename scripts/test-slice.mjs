@@ -459,3 +459,22 @@ export function liftWithoutBlocked(bundle) {
   assert.ok(m, 'could not lift _withoutBlocked from the bundle — re-anchor this helper, do not delete it');
   return m[0];
 }
+
+// THE CARE / SERMON KEY ENVELOPE THE CONSOLE KEEPS ON THE DEVICE (round 3c, MED 2) — vendor/steward.js's KEYENV_LS,
+// _keyEnvSave and _keyEnvRestore, lifted as source text. Every reader and publisher of those two envelopes calls them
+// (subscribeCareKey/MediaKey, _ingestCareKeyEnv, ensure*/rotate*, mediaEncryptor), so a harness that runs any of those
+// needs them. Free variables the harness must provide: `lsGet`, `lsSet`.
+export function liftKeyEnv(bundle) {
+  return [
+    stmt(bundle, 'var KEYENV_LS = ', 'KEYENV_LS'),
+    fnBody(bundle, 'function _keyEnvSave(kind, cp, e, selfKey, mineCt) {', '_keyEnvSave'),
+    fnBody(bundle, 'function _keyEnvRestore(kind, cp, d) {', '_keyEnvRestore'),
+  ].join('\n');
+}
+// …and as real functions over their own in-memory store, for a harness that hands its lifted code a scope OBJECT:
+// `...keyEnvFns(BUNDLE)`. Lifted, not stubbed: a no-op would decide for the harness what the console remembers.
+export function keyEnvFns(bundle, store = new Map()) {
+  const lsGet = (k) => (store.has(k) ? store.get(k) : null);
+  const lsSet = (k, v) => { store.set(k, String(v)); };
+  return new Function('lsGet', 'lsSet', liftKeyEnv(bundle) + '\nreturn { KEYENV_LS, _keyEnvSave, _keyEnvRestore };')(lsGet, lsSet);
+}

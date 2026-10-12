@@ -41,7 +41,7 @@ import { join } from 'node:path';
 import { generateSecretKey, getPublicKey } from 'nostr-tools/pure';
 import { v2 as nip44 } from 'nostr-tools/nip44';
 import { miniReact, find } from './render-jsx-screen.mjs';
-import { fnBody, liftKeyRead } from './test-slice.mjs';
+import { fnBody, liftKeyRead, keyEnvFns } from './test-slice.mjs';
 
 const ROOT = new URL('../', import.meta.url).pathname;
 const BUNDLE = readFileSync(join(ROOT, 'vendor/steward.js'), 'utf8');
@@ -85,7 +85,8 @@ function ownerEngine() {
   const scope = {
     actingChurch: '', pub: churchPub, sk: churchSk,
     _mediaKeyHex: KEY, _mediaKeyRing: [KEY], _mediaKeyDocKeys: null, _mediaKeyPushRefused: null,
-    _mediaKeyChecked: true, _localBlocked: new Set(), _sealEachFailed: [], _mediaKeyVer: 0, _mediaKeyFresh: true, _mediaKeyMine: true,   // round 3a: the per-room publish queue; the care/sermon reads as fresh and ours (tested in key-reads-settle-only-…)
+    _mediaKeyChecked: true, _localBlocked: new Set(), _sealEachFailed: [], _mediaKeyVer: 0, _mediaKeyFresh: true, _mediaKeyMine: true, _mediaKeyAt: 0,   // round 3c, MED 2: every publisher of the sermon key stamps it
+    // round 3a: the per-room publish queue; the care/sermon reads as fresh and ours (tested in key-reads-settle-only-…)
     _isRelayAuthed: () => true,
     MEDIAKEY_D: 'trinityone/mediakey:', NET: 'trinityone',
     now: () => 1758800000,
@@ -94,6 +95,7 @@ function ownerEngine() {
     getConversationKey: (a, b) => nip44.utils.getConversationKey(a, b),
     feChurch: (t) => ({ ...t, pubkey: churchPub }),      // the owner signs with the church key
     _fitKeyRing,
+    ...keyEnvFns(BUNDLE),   // round 3c, MED 2: the kept care/sermon envelope (test-slice.mjs)
     publish: async (evt) => { published.push(evt); return true; },
   };
   const body = [
@@ -152,6 +154,7 @@ function consoleReads(envelope, mySk) {
     _mediaKeyDocKeys: null, _mediaKeyPushRefused: 'a-previous-refusal', _mediaKeyRing: [], _mediaKeyHex: null,
     _mediaKeyChecked: false, _mediaKeyVer: 0, actingChurch: '', _isRelayAuthed: () => true, _mediaKeyFresh: true, _mediaKeyMine: true, _mediaKeyAt: 0,   // round 3a: the per-room publish queue; the care/sermon reads as fresh and ours (tested in key-reads-settle-only-…)
     _myOwnPub: () => myPub, pub: churchPub, sk: mySk,
+    ...keyEnvFns(BUNDLE),   // round 3c, MED 2: the kept care/sermon envelope (test-slice.mjs)
     MEDIAKEY_D: 'trinityone/mediakey:',
     relays: () => ['wss://relay.example'],
     pool: { subscribeMany: (_r, _f, h) => { handlers = h; return { close() {} }; } },

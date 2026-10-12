@@ -41,7 +41,7 @@ import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadScreen, miniReact, texts, find } from './render-jsx-screen.mjs';
-import { fnBody, liftKeyRead } from './test-slice.mjs';
+import { fnBody, liftKeyRead, keyEnvFns } from './test-slice.mjs';
 
 const ROOT = new URL('../', import.meta.url).pathname;
 const BUNDLE = readFileSync(join(ROOT, 'vendor/steward.js'), 'utf8');
@@ -77,6 +77,7 @@ function engine({ actingChurch, mediaKeyHex = KEY, mediaDocKeys = 'default', med
     _mediaKeyPushRefused: null,
     _mediaKeyChecked: mediaChecked,
     _localBlocked: new Set(),
+    ...keyEnvFns(BUNDLE),   // round 3c, MED 2: the kept care/sermon envelope (test-slice.mjs)
     _isRelayAuthed: () => true, _fitKeyRing, console, _mediaKeyVer: 0, _mediaKeyFresh: true, _mediaKeyMine: true, _mediaKeyAt: 0,   // round 3a: the per-room publish queue; the care/sermon reads as fresh and ours (tested in key-reads-settle-only-…)
     MEDIAKEY_D: 'trinityone/mediakey:',
     NET: 'trinityone',

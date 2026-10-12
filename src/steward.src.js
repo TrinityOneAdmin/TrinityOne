@@ -444,6 +444,40 @@ let _mediaKeyVer = 0;
 let _mediaKeyFresh = false;
 let _mediaKeyMine = false;
 let _mediaKeyAt = 0;
+// THE NEWEST CARE / SERMON KEY ENVELOPE THIS CONSOLE HAS ACCEPTED, KEPT ON THE DEVICE PER CHURCH (round 3c, MED 2; audit of
+// 432c676). After a reload the console held nothing, and its key reads settle once every CONNECTED relay has answered
+// (round 3a, so a relay that is down for days does not hold back new members). With the relay that took a Block's
+// rotation down and one still holding the envelope from before it up, the console adopted the older envelope as its
+// own, re-sealed that ring with a newer stamp and sealed new sermons and care needs with the key the blocked person
+// holds. Now each envelope it accepts (read, or published by itself) is kept, and restored before any relay answers, so
+// the ordinary newest-wins rule (_mediaKeyAt; the care key's rev) refuses the older one.
+// WHAT IS KEPT: who wrote it, when, its rev, the recipient pubkeys, and this console's OWN SEALED COPY — ciphertext,
+// opened again with the church key on restore. No key is stored in the clear, so copied storage is as inert as before.
+// Rebuilt into an envelope of the same shape with a placeholder for everyone else's copy (only WHO is read from those).
+// WRITERS: the two envelope readers (subscribeMediaKey, _ingestCareKeyEnv) and every publisher of the two envelopes —
+// mediaEncryptor's mint, ensureMediaKeyForMembers, rotateMediaKey, ensureCareKeyForMembers, rotateCareKey.
+// READERS: subscribeMediaKey, subscribeCareKey (on open).
+// NOT CLOSED HERE (round 3b, item c): a console that never accepted the newer envelope (another device, cleared storage)
+// reading only the stale relay; and phones, whose sermon reader takes no order and whose care reader checks the stamp
+// before the rev.
+const KEYENV_LS = 'trinityone.steward.keyenv.';
+function _keyEnvSave(kind, cp, e, selfKey, mineCt) {
+  try {
+    if (!cp || !e || !selfKey || typeof mineCt !== 'string' || !mineCt) return;
+    const o = JSON.parse(e.content || '{}');
+    lsSet(KEYENV_LS + kind + '.' + cp, JSON.stringify({ at: e.created_at || 0, rev: o.rev || 1, author: e.pubkey, self: selfKey, mine: mineCt, recips: Object.keys(o.keys || {}) }));
+  } catch (x) {}
+}
+function _keyEnvRestore(kind, cp, d) {
+  try {
+    const o = JSON.parse(lsGet(KEYENV_LS + kind + '.' + cp) || 'null');
+    if (!o || typeof o.mine !== 'string' || !o.author || !o.self || !Array.isArray(o.recips)) return null;
+    const keys = {};
+    for (const p of o.recips) if (typeof p === 'string' && p) keys[p] = '1';
+    keys[o.self] = o.mine;
+    return { pubkey: o.author, created_at: o.at || 0, kind: 30078, tags: [['d', d + cp]], content: JSON.stringify({ rev: o.rev || 1, keys }), restored: true };
+  } catch (x) { return null; }
+}
 let _mediaKeyChecked = false;    // set only from subscribeMediaKey's oneose — see the mint gate                   // the latest media-key doc's wrapped-per-member map (to detect members not yet keyed)
 async function _sha256hex(u8) { const d = await crypto.subtle.digest('SHA-256', u8); return Array.from(new Uint8Array(d)).map(b => b.toString(16).padStart(2, '0')).join(''); }
 const JOINPOLICY_D = 'trinityone/joinpolicy:'; // join policy {approval:bool}, d=joinpolicy:<churchpub>
@@ -1265,6 +1299,7 @@ function _ingestCareKeyEnv(e) {
       _careKeyRing = ring && ring.length ? ring : [plain];
       _careKeyHex = _careKeyRing[0];
       _careKeyMine = true;
+      if (!e.restored) _keyEnvSave('care', actingChurch || pub, e, churchPub, mine);   // round 3c, MED 2 — see _keyEnvSave
     }
     _careKeyVer++;
   } catch (x) {}
@@ -6472,10 +6507,13 @@ window.Steward = {
       const keys = await _sealEach(JSON.stringify([fresh]), targets, (pl, mp) => nip44e(pl, nip44ck(sk0, mp)));
       const _moved = 'Can’t encrypt this upload — this console changed church, or your church’s media key arrived, while the key was being prepared. Nothing has been uploaded. Try again.';
       if (!_stillOn(pub0, ep0) || _mediaKeyVer !== v0 || _mediaKeyHex) throw new Error(_moved);
-      const _env = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', MEDIAKEY_D + pub0], ['t', NET]], content: JSON.stringify({ keys, rev: now() }) }));
+      const _mev = feChurch({ kind: 30078, created_at: now(), tags: [['d', MEDIAKEY_D + pub0], ['t', NET]], content: JSON.stringify({ keys, rev: now() }) });
+      const _env = await publish(_mev);
       if (_env === false) throw new Error('Can’t encrypt this upload — your church’s media key could not be saved, so nothing encrypted with it could ever be played. Nothing has been uploaded. A church media key can only be published from the console that holds the church’s own key.');
       if (!_stillOn(pub0, ep0)) throw new Error(_moved);
       _mediaKeyHex = fresh; _mediaKeyRing = [fresh, ..._mediaKeyRing.filter(k => k !== fresh)]; _mediaKeyDocKeys = keys; _mediaKeyMine = true; _mediaKeyVer++;
+      // OUR OWN ENVELOPE IS THE NEWEST (round 3c, MED 2): an older one replayed after this must not be taken over it
+      _mediaKeyAt = Math.max(_mediaKeyAt, _mev.created_at || 0); _keyEnvSave('media', pub0, _mev, pub0, keys[pub0]);
       useHex = fresh;
     }
     }
@@ -6558,12 +6596,13 @@ window.Steward = {
     // standing alarm says "That change wasn't saved", and there was no change and no steward. It is still
     // reported, quietly and once, by PublishErrorBanner, and always to the log.
     const _pubOpts = { background: true };
-    const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', MEDIAKEY_D + pub0], ['t', NET]], content: JSON.stringify({ keys, rev: now() }) }), _pubOpts);
+    const _mev = feChurch({ kind: 30078, created_at: now(), tags: [['d', MEDIAKEY_D + pub0], ['t', NET]], content: JSON.stringify({ keys, rev: now() }) });
+    const ok = await publish(_mev, _pubOpts);
     if (!_stillOn(pub0, ep0)) return ok;                    // landed for pub0 (or not); nothing to adopt or remember here
     // Reflect what we just published so we don't loop — unless something moved during the publish, in which
     // case the newer state stands. The console's OWN ring is left as it was: the envelope may be trimmed to fit,
     // but a key this device holds may have sealed something and must not be forgotten for that.
-    if (ok !== false) { if (_mediaKeyVer === _v0) { _mediaKeyDocKeys = keys; _mediaKeyMine = true; _mediaKeyPushRefused = null; _mediaKeyVer++; } return ok; }
+    if (ok !== false) { if (_mediaKeyVer === _v0) { _mediaKeyDocKeys = keys; _mediaKeyMine = true; _mediaKeyPushRefused = null; _mediaKeyVer++; _mediaKeyAt = Math.max(_mediaKeyAt, _mev.created_at || 0); _keyEnvSave('media', pub0, _mev, pub0, keys[pub0]); } return ok; }   // round 3c, MED 2: our own envelope is the newest
     // ⚠ A BLIP IS NOT A RULE, AND THIS MEMO IS ONLY ALLOWED TO REMEMBER RULES.
     //
     // `publish()` returns false for a refusal AND for a connection failure AND for "no relay could be
@@ -6665,7 +6704,8 @@ window.Steward = {
     const payload = JSON.stringify(ring);
     const keys = await _sealEach(payload, want, (pl, mp) => nip44e(pl, nip44ck(sk0, mp)));
     if (!_stillOn(pub0, ep0)) return false;                  // switched while sealing: nothing published, Block reports it
-    const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', MEDIAKEY_D + pub0], ['t', NET]], content: JSON.stringify({ keys, rev: now() }) }));
+    const _mev = feChurch({ kind: 30078, created_at: now(), tags: [['d', MEDIAKEY_D + pub0], ['t', NET]], content: JSON.stringify({ keys, rev: now() }) });
+    const ok = await publish(_mev);
     if (ok === false) return false;
     if (!_stillOn(pub0, ep0)) return true;                   // it landed for pub0; adopt nothing into the church we moved to
     // …and the refusal memo goes with it (F2): a rotation that landed proves this console CAN write the
@@ -6673,6 +6713,9 @@ window.Steward = {
     // The console keeps the WHOLE ring it rotated from (plus anything that arrived meanwhile), not the fitted
     // one: the envelope may be trimmed to fit, but a key this device holds may have sealed something.
     _mediaKeyRing = [...full, ..._mediaKeyRing.filter(k => full.indexOf(k) === -1)]; _mediaKeyHex = fresh; _mediaKeyDocKeys = keys; _mediaKeyMine = true; _mediaKeyPushRefused = null; _mediaKeyVer++;
+    // OUR ROTATION IS THE NEWEST ENVELOPE (round 3c, MED 2; audit of 432c676): without the stamp, the envelope from before
+    // the Block, replayed by a lagging relay or a re-read, was taken over it — the blocked person's key back as current.
+    _mediaKeyAt = Math.max(_mediaKeyAt, _mev.created_at || 0); _keyEnvSave('media', pub0, _mev, pub0, keys[pub0]);
     return true;
   },
   // ---- care key: same envelope as the media key, for the Care module's sensitive fields ----
@@ -6681,6 +6724,7 @@ window.Steward = {
   subscribeCareKey() {
     const cp = actingChurch || pub; if (!cp) return () => {};
     _careKeyFresh = false;   // re-opened (a reconnect, a remount): nothing is re-sealed until this read settles — see _careKeyFresh
+    { const r = _keyEnvRestore('care', cp, CAREKEY_D); if (r) _ingestCareKeyEnv(r); }   // what this console last accepted comes first (round 3c, MED 2) — see _keyEnvSave
     return _openKeyRead(cp, [{ kinds: [30078], authors: [cp], '#d': [CAREKEY_D + cp] },
                              { kinds: [30078], '#church': [cp], '#d': [CAREKEY_D + cp] }],
       (e) => {
@@ -6761,12 +6805,14 @@ window.Steward = {
     // THE STATE MAY HAVE MOVED WHILE WE SEALED — an envelope arrived, a rotation landed, the church changed.
     // Publishing now would put a ring decided on before that back over it. Stop; the next roster tick redoes it.
     if (_careKeyVer !== _v1 || !_stillOn(cp, ep0)) return false;
-    const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', CAREKEY_D + cp], ['t', NET]], content: JSON.stringify({ keys, rev }) }), { background: !!(opts && opts.background) });
+    const _cev = feChurch({ kind: 30078, created_at: now(), tags: [['d', CAREKEY_D + cp], ['t', NET]], content: JSON.stringify({ keys, rev }) });
+    const ok = await publish(_cev, { background: !!(opts && opts.background) });
     // Adopt what we published only if nothing moved during the publish either. The console's OWN ring is not
     // shortened to the fitted one: a trimmed key may still have sealed something on this device.
     if (ok !== false && _careKeyVer === _v1 && _stillOn(cp, ep0)) {
       if (minting) { _careKeyRing = ring0.slice(); _careKeyHex = ring0[0]; _careKeyRev = rev; }
       _careKeyDocKeys = keys; _careKeyMine = true; _careKeyVer++;
+      _keyEnvSave('care', cp, _cev, churchPub, keys[churchPub]);   // round 3c, MED 2 — see _keyEnvSave
     }
     return ok;
   },
@@ -6855,13 +6901,15 @@ window.Steward = {
     }
     if (ring.length < full.length) console.warn('[steward] care key ring trimmed to ' + ring.length + ' to fit ' + want.length + ' members — older sealed care records will no longer open');
     if (!_stillOn(cp, ep0)) return false;                    // switched while sealing: nothing published, Block reports it
-    const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', CAREKEY_D + cp], ['t', NET]], content: JSON.stringify({ keys, rev: rev0 }) }));
+    const _cev = feChurch({ kind: 30078, created_at: now(), tags: [['d', CAREKEY_D + cp], ['t', NET]], content: JSON.stringify({ keys, rev: rev0 }) });
+    const ok = await publish(_cev);
     if (ok === false) return false;
     // It landed, on THIS church's envelope (cp, captured) — so the rotation happened. But if the console has
     // moved on, the new ring belongs to a church it is no longer running: adopt nothing; it is read back from the
     // relay when the console returns.
     if (!_stillOn(cp, ep0)) return true;
     _careKeyRing = ring; _careKeyHex = fresh; _careKeyRev = rev0; _careKeyDocKeys = keys; _careKeyMine = true; _careKeyVer++;
+    _keyEnvSave('care', cp, _cev, churchPub, keys[churchPub]);   // round 3c, MED 2 — see _keyEnvSave
     return true;
   },
   // has this device actually completed a NIP-42 auth? Callers use it to tell "the church has none" apart
@@ -6891,6 +6939,11 @@ window.Steward = {
     // (2026-10-01, audit5.)
     const forPub = pub;
     _mediaKeyFresh = false;   // re-opened: nothing is re-sealed until this read settles — see _mediaKeyFresh
+    const _onEnv = function onMediaKeyEnvelope(e) { if (forPub !== pub || e.pubkey !== pub || ((e.tags || []).find(t => t[0] === 'd') || [])[1] !== MEDIAKEY_D + pub) return; if ((e.created_at || 0) < _mediaKeyAt) return; /* newest wins — see _mediaKeyAt */ _mediaKeyAt = e.created_at || 0; _mediaKeyMine = false; try { const o = JSON.parse(e.content); _mediaKeyDocKeys = (o && o.keys) || null; _mediaKeyPushRefused = null; _mediaKeyVer++; const _meKey = _myOwnPub(); const mine = o.keys && (o.keys[_meKey] || (_meKey === pub ? null : o.keys[pub]));   /* OPTION A: on a DELEGATED console `pub` is the CHURCH, so o.keys[pub] is the entry sealed TO THE CHURCH and our key cannot open it — _mediaKeyHex stayed null and mediaEncryptor then tried to MINT. Our own entry is there already: the church seals to [church, ...members] and a delegated steward is normally also a member. Owner console: _myOwnPub() === pub, so this is the old lookup exactly. */ if (mine && sk) { const plain = nip44d(mine, nip44ck(sk, e.pubkey)); let r = null; try { const q = JSON.parse(plain); if (Array.isArray(q)) r = q.filter(k => typeof k === 'string' && k); } catch (x2) {} const incoming = (r && r.length) ? r : [plain]; _mediaKeyRing = [...incoming, ..._mediaKeyRing.filter(k => incoming.indexOf(k) === -1)]; _mediaKeyHex = _mediaKeyRing[0]; _mediaKeyMine = true; if (!e.restored) _keyEnvSave('media', forPub, e, o.keys[_meKey] ? _meKey : pub, mine);   /* KEEP what this device already held: if we minted before the envelope arrived, discarding our key here would orphan anything encrypted in that window. Rotation must never drop a key that has already sealed something. */ } } catch (x) {} };
+    // WHAT THIS CONSOLE LAST ACCEPTED COMES FIRST (round 3c, MED 2): the newest envelope it accepted for this church, kept on
+    // the device, so a relay still holding an OLDER one cannot become the key this console re-seals and uploads with
+    // while the relay that has the newer one is down. Newest-wins (_mediaKeyAt) does the rest. See _keyEnvSave.
+    { const r = _keyEnvRestore('media', forPub, MEDIAKEY_D); if (r) _onEnv(r); }
     return _openKeyRead(forPub, [{ kinds: [30078], authors: [pub], '#d': [MEDIAKEY_D + pub] }],
       // Ring-aware, and tolerant of the legacy shape: a wrapped value is a JSON array of keys now (newest
       // first) but older envelopes hold one bare hex string. Reading only the new form would make every
@@ -6898,7 +6951,7 @@ window.Steward = {
       /* `_mediaKeyPushRefused = null` (F2): an envelope LANDING is new information — the recipient map has
          changed under us, so whatever this console last had refused is worth asking again. Without this a
          console that was refused once would go on skipping until the roster itself changed. */
-      function onMediaKeyEnvelope(e) { if (forPub !== pub || e.pubkey !== pub || ((e.tags || []).find(t => t[0] === 'd') || [])[1] !== MEDIAKEY_D + pub) return; if ((e.created_at || 0) < _mediaKeyAt) return; /* newest wins — see _mediaKeyAt */ _mediaKeyAt = e.created_at || 0; _mediaKeyMine = false; try { const o = JSON.parse(e.content); _mediaKeyDocKeys = (o && o.keys) || null; _mediaKeyPushRefused = null; _mediaKeyVer++; const _meKey = _myOwnPub(); const mine = o.keys && (o.keys[_meKey] || (_meKey === pub ? null : o.keys[pub]));   /* OPTION A: on a DELEGATED console `pub` is the CHURCH, so o.keys[pub] is the entry sealed TO THE CHURCH and our key cannot open it — _mediaKeyHex stayed null and mediaEncryptor then tried to MINT. Our own entry is there already: the church seals to [church, ...members] and a delegated steward is normally also a member. Owner console: _myOwnPub() === pub, so this is the old lookup exactly. */ if (mine && sk) { const plain = nip44d(mine, nip44ck(sk, e.pubkey)); let r = null; try { const q = JSON.parse(plain); if (Array.isArray(q)) r = q.filter(k => typeof k === 'string' && k); } catch (x2) {} const incoming = (r && r.length) ? r : [plain]; _mediaKeyRing = [...incoming, ..._mediaKeyRing.filter(k => incoming.indexOf(k) === -1)]; _mediaKeyHex = _mediaKeyRing[0]; _mediaKeyMine = true;   /* KEEP what this device already held: if we minted before the envelope arrived, discarding our key here would orphan anything encrypted in that window. Rotation must never drop a key that has already sealed something. */ } } catch (x) {} },
+      _onEnv,
       // no envelope came back → it is safe to mint one, but ONLY on a trustworthy answer from every relay
       // fresh on every connected relay; the mint gate on every relay — see subscribeCareKey (round 3a, (b))
       (how) => { _mediaKeyFresh = true; if (!_mediaKeyChecked && !(how && how.without && how.without.length)) _mediaKeyChecked = true; _keysReadSignal('media'); }, 'media', { withoutFailed: true, keepAsking: true });

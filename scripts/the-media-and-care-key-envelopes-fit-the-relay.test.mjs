@@ -17,7 +17,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { nip44, generateSecretKey, getPublicKey } from 'nostr-tools';
-import { fnBody, stmt, liftKeyRead } from './test-slice.mjs';
+import { fnBody, stmt, liftKeyRead, keyEnvFns } from './test-slice.mjs';
 
 const ROOT = new URL('../', import.meta.url).pathname;
 const BUNDLE = readFileSync(join(ROOT, 'vendor/steward.js'), 'utf8');
@@ -43,6 +43,8 @@ function engine({ media = {}, care = {} } = {}) {
     _mediaKeyDocKeys: {}, _mediaKeyPushRefused: null,
     _careKeyHex: care.ring ? care.ring[0] : null, _careKeyRing: care.ring ? care.ring.slice() : [],
     _careKeyDocKeys: care.ring ? {} : null, _careKeyRev: 3, _careKeyChecked: true, _careKeyPending: [],
+    ...keyEnvFns(BUNDLE),   // round 3c, MED 2: the kept care/sermon envelope (test-slice.mjs)
+    _mediaKeyAt: 0,   // round 3c, MED 2: every publisher of the sermon key stamps it
     _mediaKeyVer: 0, _careKeyVer: 0, _mediaKeyFresh: true, _mediaKeyMine: true, _careKeyFresh: true, _careKeyMine: true,   // round 3a: the per-room publish queue; the care/sermon reads as fresh and ours (tested in key-reads-settle-only-…)
     CAREKEY_D: 'trinityone/carekey:', churchSk: CHURCH_SK,
     decrypt3: (ct, ck) => nip44.v2.decrypt(ct, ck),

@@ -37,7 +37,7 @@ import { readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fnBody, liftKeyRead } from './test-slice.mjs';
+import { fnBody, liftKeyRead, keyEnvFns } from './test-slice.mjs';
 import { miniReact, texts, button, find, loadScreen, reads } from './render-jsx-screen.mjs';
 
 const ROOT = new URL('../', import.meta.url).pathname;
@@ -160,6 +160,7 @@ async function runLifted(sig, name, answer, scope = {}, args = [], decls = '') {
     // stubbed: a stub returning `tags` unchanged would let every delegated-console test go green over an
     // upload that never names the church, which is the defect itself.
     _localBlocked: new Set(),
+    ...keyEnvFns(BUNDLE),   // round 3c, MED 2: the kept care/sermon envelope (test-slice.mjs)
     _blobAuthTags: new Function('actingChurch', fnBody(BUNDLE, 'function _blobAuthTags(tags) {', '_blobAuthTags') + '\nreturn _blobAuthTags;')(scope.actingChurch || ''),
     fetch: async () => ({ ok: true }),
     btoa: (s) => Buffer.from(s, 'binary').toString('base64'),
@@ -284,7 +285,7 @@ test('mediaEncryptor REFUSES TO ENCRYPT when the key envelope was refused', asyn
   // file with a key whose envelope never reached a relay and pushed the ciphertext to every host. Nobody,
   // the church included, can ever decrypt it. The mint gate a few lines above this one exists to prevent
   // exactly that loss; this is the same loss reached through the other door.
-  const decls = 'let _mediaKeyHex = null; let _mediaKeyRing = []; let _mediaKeyChecked = true; let _mediaKeyDocKeys = null; let _mediaKeyVer = 0; let _mediaKeyMine = false;';   // _mediaKeyMine: round 3a
+  const decls = 'let _mediaKeyHex = null; let _mediaKeyRing = []; let _mediaKeyChecked = true; let _mediaKeyDocKeys = null; let _mediaKeyVer = 0; let _mediaKeyMine = false; let _mediaKeyAt = 0;';   // _mediaKeyMine: round 3a; _mediaKeyAt: round 3c (MED 2), every publisher stamps it
   const env = {
     _isRelayAuthed: () => true,
     _sealEach: async (payload, targets) => Object.fromEntries(targets.map(t => [t, 'WRAPPED'])),
@@ -1256,6 +1257,7 @@ async function runMediaKey(answer, calls = 3, memberPubs = ['m1', 'm2'], saidNo 
       return answer;
     },
     _localBlocked: new Set(), _fitKeyRing,
+    ...keyEnvFns(BUNDLE),   // round 3c, MED 2: the kept care/sermon envelope (test-slice.mjs)
     _sealEach: async (pl, want) => Object.fromEntries(want.map(p => [p, 'sealed-for-' + p])),
     nip44e: (a) => a, nip44ck: () => 'ck',
     encrypt2: (a) => a, getConversationKey: () => 'ck',   // the bundle's names — the ring fitter seals one sample
@@ -1344,6 +1346,7 @@ async function runMediaKeyForReal(answers, calls = 3, memberPubs = ['m1', 'm2'])
   const scope = {
     sk: 'SK', pub: 'CP', actingChurch: '',
     _localBlocked: new Set(), _lastOk: new Map(), _fitKeyRing,
+    ...keyEnvFns(BUNDLE),   // round 3c, MED 2: the kept care/sermon envelope (test-slice.mjs)
     MEDIAKEY_D: 'trinityone/mediakey:', NET: 'trinityone', NO_NETWORK_RELAY: 'no-network-relay',
     now: () => 1700000000 + n,
     feChurch: (t) => t,
