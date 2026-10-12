@@ -9,6 +9,11 @@ function doneDays(ctx, id) { return ctx.planProgress[id] || []; }
 function PlanReadBar({ ctx, loc }) {
   const pr = ctx.planRead;
   if (!pr || !pr.plan || !pr.day || !loc) return null;
+  // the plan context is only for the exact location the plan day opened, in the church it was opened in, while the plan still exists
+  if (pr.loc !== loc || pr.church !== ctx.planChurch) return null;
+  const _D = window.TrinityData;
+  const still = (ctx.churchPlans || []).concat((_D && _D.PLANS) || []).some(p => p.id === pr.plan.id);
+  if (!still) return null;
   const B = window.Bible;
   const at = B && B.parseRef ? B.parseRef(pr.day.ref) : null;
   if (!at || at.book !== loc.book || at.chap !== loc.chap) return null;
@@ -636,4 +641,4 @@ function ChurchDevoView({ devo, open, onClose, ctx }) {
   );
 }
 
-Object.assign(window, { PlansScreen, PlanDetail, ChurchDevoView, parseDevoDays });
+Object.assign(window, { PlansScreen, PlanDetail, PlanReadBar, ChurchDevoView, parseDevoDays });

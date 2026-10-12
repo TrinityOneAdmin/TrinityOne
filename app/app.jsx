@@ -2130,7 +2130,9 @@ function App() {
     openPlanDay: (plan, day) => {
       const loc = Bible.parseRef(day.ref);
       if (!loc || !Bible.books().includes(loc.book)) { toast(day.ref + ' isn’t in this translation'); return; }
-      setPlanRead({ plan, day }); setLoc({ book: loc.book, chap: loc.chap, verse: loc.verse }); setReadView('bible'); setTab('read');
+      // planRead is tied to THIS location object (and this church): any other way of moving the reader makes a new object, so the bar goes away
+      const at = { book: loc.book, chap: loc.chap, verse: loc.verse };
+      setPlanRead({ plan, day, loc: at, church: activeChurch }); setLoc(at); setReadView('bible'); setTab('read');
     },
     openJournal: (j) => setJournal(j),
     openVideo: (v) => setVideo(v),
@@ -2210,6 +2212,7 @@ function App() {
     bookmarks, toggleBookmark: (k) => { if (MD.has('bookmarks', k)) MD.remove('bookmarks', k); else MD.put('bookmarks', { id: k, ref: k }); },
     planProgress,
     planRead,
+    planChurch: activeChurch,
     devoProgress,
     churchPlans: [...churchPlans, ...netPlans].map(p => (typeof p.len === 'number') ? p : { ...p, len: (p.days || []).length }),
     churchDevos,
