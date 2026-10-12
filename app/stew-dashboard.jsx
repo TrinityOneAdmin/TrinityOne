@@ -5461,7 +5461,20 @@ function DashVersePrompt() {
     }
     return verses.map(function(v) { return v.text; }).join(' ');
   };
-  var pvRefs = (vp && vp.ref) ? vp.ref.split('; ').filter(Boolean) : [];
+  // The passages MEMBERS can see right now. This is the same rule as the member app's Today card
+  // (app/screens-today.jsx, vpSchedule/vpActiveRef): with a schedule, only the entries whose time has come; with none,
+  // the prompt's own ref. The console preview used to split `vp.ref` (every passage ever added to the prompt,
+  // scheduled-for-later ones included, plus any older unscheduled one the schedule no longer shows) and so previewed
+  // passages no member could see.
+  var dvpLiveRefs = function(vp, nowSec) {
+    if (!vp) return [];
+    var sch = Array.isArray(vp.schedule) ? vp.schedule : [];
+    var ref = sch.length > 0
+      ? sch.filter(function(s) { return s.at <= nowSec; }).sort(function(a, b) { return a.at - b.at; }).map(function(s) { return s.ref; }).filter(Boolean).join('; ')
+      : (vp.ref || '');
+    return ref ? ref.split('; ').filter(Boolean) : [];
+  };
+  var pvRefs = dvpLiveRefs(vp, Math.floor(Date.now() / 1000));
   var pvSafeIdx = pvIdx < pvRefs.length ? pvIdx : 0;
   var pvRef = pvRefs[pvSafeIdx] || '';
   var pvText = pvRef ? resolveText(pvRef) : null;
