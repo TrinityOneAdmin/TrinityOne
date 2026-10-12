@@ -82,7 +82,9 @@ function engine() {
       },
     },
     window: { Steward: {}, dispatchEvent: (e) => { events.push({ type: e.type, detail: e.detail }); if (e.type === 'steward-keys-read') signals.push(e.detail.kind); return true; } },
-    BLOCKED_D: 'trinityone/blocked:', STEWARDS_D: 'trinityone/stewards:', _byChurch: (e) => e.pubkey === t.pub, _openChurchDoc: () => null,
+    BLOCKED_D: 'trinityone/blocked:', STEWARDS_D: 'trinityone/stewards:',
+    JOINPOLICY_D: 'trinityone/joinpolicy:', ADMITTED_D: 'trinityone/admitted:', GROUP_D: 'trinityone/group:', GROUPKEY_D: 'trinityone/groupkey:',
+    GROUP_RING_MAX: 50, _memberEmitters: new Set(), _byChurch: (e) => e.pubkey === t.pub, _openChurchDoc: () => null,
     // what the REAL setActiveIdentity touches besides the key state (lifted below)
     stewardedChurches: new Map([[B.pub, { name: 'B' }]]), netKeys: () => [],
     // remembers what it is given: the console keeps each church's last genuine blocklist (2026-10-02)
@@ -138,6 +140,14 @@ function engine() {
     't.__runAuthWaiters = _runKeyReadAuthWaiters;',
     't.__resetChurchScopedState = _resetChurchScopedState;',
     't.__authWaiters = _keyReadAuthWaiters;',                                    // the login waiters a read leaves behind (audit of 637bc0c)
+    // round 2 of the room-key reconcile: a room's envelope state, its drop memo, and the ex-steward record (P4)
+    stmt(BUNDLE, 'var _skeys = '), stmt(BUNDLE, 'var _srev = '), stmt(BUNDLE, 'var _senvTs = '), stmt(BUNDLE, 'var _senvRecips = '),
+    stmt(BUNDLE, 'var _senvMine = '), stmt(BUNDLE, 'var _senvDropped = '),
+    fnBody(BUNDLE, 'function _noteEnvelopeDrops(gid, prev, next) {'), fnBody(BUNDLE, 'function stewIngestKey(e) {'),
+    't.__ingest = stewIngestKey; t.__skeys = _skeys; t.__senvMine = _senvMine;',
+    stmt(BUNDLE, 'var _exStewardsKey = '), fnBody(BUNDLE, 'function _exStewardSet() {'),
+    stmt(BUNDLE, 'var _exStewardsAtKey = '), fnBody(BUNDLE, 'function _exStewardRemovedAt() {'),
+    fnBody(BUNDLE, 'function _rememberExStewards(before, after, at) {'), 't.__rememberEx = _rememberExStewards;',
   ].join('\n');
   const M = (a) => fnBody(BUNDLE, a, a + ' in the shipped bundle');
   const methods = [
@@ -151,6 +161,10 @@ function engine() {
     M('    async ensureNameKeyForMembers(memberPubs, stewardPubs, opts = {}) {'),
     M('    subscribeBlocked(onBlocked) {'), M('    subscribeStewards(onList) {'),
     M('    listIsCurrent(list) {'), M('    keyWaitNote(kind) {'), M('    setBlocked(pubkeys) {'),
+    M('    subscribeJoinPolicy(onPolicy) {'), M('    subscribeAdmitted(onList) {'),
+    M('    listIsFresh(list, since) {'), M('    groupFresh(list, groupId, since) {'), M('    joinPolicyFresh(since) {'),
+    M('    groupKeyRecipients(groupId) {'), M('    groupKeyDropped(groupId) {'), M('    groupKeyMissing(groupId, pubs) {'),
+    M('    async publishGroupKey(groupId, memberPubs, opts = {}) {'), M('    async ensureGroupKeys(groups, memberPubs) {'),
   ].join(',\n');
   t.t = t;
   const S = new Function('scope', `with (scope) { ${decls}\n return { ${methods} }; }`)(proxy);
@@ -609,7 +623,8 @@ test('a list fetched for one church is not current once the church changes WITHO
   const e = engine();
   let got = null;
   e.S.subscribeStewards((list) => { got = list; });
-  e.subs.at(-1).handlers.oneose();
+  // the roster STREAM (no d-tag in its filter) — since round 2 a narrow fresh read of the roster opens beside it
+  e.subs.find(r => !r.d).handlers.oneose();
   assert.equal(e.S.listIsCurrent(got), true, 'CONTROL: the list is current for the church it was fetched for');
   e.t.pub = B.pub; e.t.churchPub = B.pub;                   // the church key replaced; no switch, no new epoch
   assert.equal(e.S.listIsCurrent(got), false, 'A LIST FETCHED FOR THE OLD CHURCH IS "CURRENT" AFTER A KEY RESTORE — the enrolment would wrap the new church\'s keys to the old one\'s people');
@@ -908,4 +923,183 @@ test('mediaEncryptor: the "can’t encrypt yet" refusal names the relay that is 
   await e.eose(e.subs.slice(-2)[0]);                        // R1 answered; R2 never does
   e.t.clock += 9000;                                        // (a relay is named only once the read has waited — see the row above)
   await assert.rejects(e.S.mediaEncryptor([M1.pub]), /second\.example isn’t answering/, 'the sermon upload is refused with "wait a moment" while a relay that is down holds back the church\'s first sermon key');
+});
+
+// ── ROUND 2 OF THE ROOM-KEY RECONCILE (audit of 78ffad0): THE LISTS THE KEY DISTRIBUTOR TRUSTS ARE FRESH ─────────────
+// The distributor itself is driven in the-key-enrolment-waits-for-every-list.test.mjs; these rows run the ENGINE side,
+// sliced out of the shipped bundle: who sets "fresh", who clears it, the drop memo, and the stale-ring refusal.
+const JP_D = 'trinityone/joinpolicy:', AD_D = 'trinityone/admitted:', GK_D = 'trinityone/groupkey:', BL_D = 'trinityone/blocked:';
+const doc30078 = (author, d, at, content, extra = []) => ({ pubkey: author, created_at: at, kind: 30078, tags: [['d', d], ['t', 'trinityone'], ...extra], content: JSON.stringify(content) });
+const streamOf = (e) => e.subs.find(r => !r.d && !r.closed);
+
+test('round 2 · finding 2: the join policy counts for the key distributor only on a GENUINE read — not the stream\'s timer "off"', async () => {
+  const e = engine();
+  const seen = [];
+  e.S.subscribeJoinPolicy((v) => seen.push(v));
+  const narrow = e.subs.find(r => r.d === JP_D + A.pub), stream = streamOf(e);
+  assert.ok(narrow && stream, 're-anchor: subscribeJoinPolicy no longer opens a stream AND a narrow read of the policy document');
+  stream.handlers.oneose(); await flush();                    // nostr-tools' 4.4 s timer fires before the document
+  assert.equal(seen.at(-1), false, 'CONTROL: the screens still get the stream\'s answer');
+  assert.equal(e.S.joinPolicyFresh(), null, 'THE STREAM\'S TIMER "approval is off" COUNTED AS THE CHURCH\'S POLICY — a member still waiting is keyed (audit of 78ffad0, finding 2)');
+  narrow.handlers.onevent(doc30078(A.pub, JP_D + A.pub, 100, { approval: true }));
+  assert.equal(e.S.joinPolicyFresh(), null, 'the policy counted before its read had settled');
+  await e.eose(narrow);
+  assert.equal(e.S.joinPolicyFresh(), true, 'CONTROL: the genuine answer — approval on — is not what the distributor reads');
+  assert.ok(e.signals.includes('joinpolicy'), 'the distributor is not told the policy has been read, so nothing re-runs it');
+  assert.equal(e.S.joinPolicyFresh(e.t.clock), null, 'a read that settled BEFORE `since` counted as a re-read after it');
+});
+
+test('round 2 · HIGH 1: a list from a subscription that has CLOSED is not fresh — the previous connection\'s blocklist cannot key anyone', async () => {
+  const e = engine();
+  let got = null;
+  const close = e.S.subscribeBlocked((l) => { got = l; });
+  await e.eose(e.subs.find(r => r.d === BL_D + A.pub));
+  assert.equal(e.S.listIsFresh(got), true, 'CONTROL: a genuine read of the blocklist is not fresh');
+  assert.equal(e.S.listIsCurrent(got), true, 'CONTROL: and current');
+  close();                                                   // the reconnect: this subscription closes, the screen keeps its list
+  assert.equal(e.S.listIsCurrent(got), true, 'CONTROL: still "current" — which is exactly the hole');
+  assert.equal(e.S.listIsFresh(got), false, 'THE PREVIOUS CONNECTION\'S BLOCKLIST STILL COUNTS AS FRESH — the auditor\'s second console re-keys Bob (audit of 78ffad0, HIGH 1)');
+});
+
+test('round 2 · P2: an envelope that DROPS someone is remembered, and every fresh read is asked again at once', async () => {
+  const e = engine();
+  const MB = K(), BOB = K();
+  let bl = null;
+  e.S.subscribeBlocked((l) => { bl = l; });
+  await e.eose(e.subs.find(r => r.d === BL_D + A.pub));
+  const ring = [hex(generateSecretKey())];
+  e.t.__ingest(envelope(GK_D, A, 'r1', ring, [A.pub, MB.pub, BOB.pub], 1759300000));
+  assert.deepEqual(e.S.groupKeyDropped('r1'), [], 'CONTROL: the first envelope dropped nobody');
+  assert.deepEqual([...e.S.groupKeyRecipients('r1')].sort(), [A.pub, MB.pub, BOB.pub].sort(), 'CONTROL: recipients');
+  const narrowsBefore = e.subs.filter(r => r.d === BL_D + A.pub).length;
+  e.t.clock += 1000;
+  const dropAt = e.t.clock;
+  e.t.__ingest(envelope(GK_D, A, 'r1', ring, [A.pub, MB.pub], 1759300100));
+  const dropped = e.S.groupKeyDropped('r1');
+  assert.deepEqual(dropped.map(x => x.pub), [BOB.pub], 'THE ROTATION\'S DROP WAS NOT REMEMBERED — the distributor would wrap the new key straight back');
+  assert.equal(dropped[0].at, dropAt, 'the drop is not stamped with when it was seen');
+  assert.ok(e.subs.filter(r => r.d === BL_D + A.pub).length > narrowsBefore, 'THE BLOCKLIST WAS NOT RE-READ after the drop — "has it been read since?" could never become true');
+  assert.equal(e.S.listIsFresh(bl, dropAt), false, 'a blocklist read BEFORE the drop counts as read after it');
+  e.t.clock += 10;
+  await e.eose(e.subs.filter(r => r.d === BL_D + A.pub).at(-1));
+  assert.equal(e.S.listIsFresh(bl, dropAt), true, 'CONTROL: the re-read, settled, does not count as after the drop');
+  // the person comes back in a later envelope: no longer held
+  e.t.__ingest(envelope(GK_D, A, 'r1', ring, [A.pub, MB.pub, BOB.pub], 1759300200));
+  assert.deepEqual(e.S.groupKeyDropped('r1'), [], 'someone an envelope includes again is still held');
+});
+
+test('round 2 · A2: when the newest envelope has no copy this console can open, nothing is re-wrapped from the older ring', async () => {
+  const e = engine();
+  e.t.window.Steward = e.S;
+  const MB = K(), M2 = K();
+  const ring = [hex(generateSecretKey())];
+  const env = (recips, at) => envelope(GK_D, A, 'r2', ring, recips, at);
+  e.t.__ingest(env([A.pub, MB.pub], 1759300000));
+  assert.ok(e.S.groupKeyRecipients('r2'), 'CONTROL: an envelope with our copy gives us its recipients');
+  e.t.__ingest(env([MB.pub], 1759300100));                    // the owner's rotation, which left this console out
+  assert.equal(e.S.groupKeyRecipients('r2'), null, 'THE NEWEST ENVELOPE HAS NO COPY FOR US BUT ITS RECIPIENTS ARE STILL OFFERED — the distributor republishes the OLD ring over the rotation');
+  const n = e.published.length;
+  const r = await e.S.publishGroupKey('r2', [MB.pub, M2.pub], { reuseOnly: true, background: true });
+  assert.equal(r, null, 'a reuse-only publish from a ring the newest envelope has moved past did not refuse');
+  assert.equal(e.published.length, n, 'A PRE-ROTATION RING WAS PUBLISHED AS THE ROOM\'S CURRENT KEY');
+});
+
+test('round 2 · P4: an approval by a steward this device saw removed counts if written before the removal — a stranger\'s never, nor one dated after', async () => {
+  const e = engine();
+  const W = K(), X = K(), ADA = K(), BEN = K(), EVE = K(), ZED = K();
+  e.t.__rememberEx([W.pub], [], 1759300150);                 // a church-signed roster dropped W at 1759300150
+  let got = null;
+  e.S.subscribeAdmitted((l) => { got = l; });
+  const narrow = e.subs.find(r => r.d === AD_D + A.pub);
+  assert.ok(narrow, 're-anchor: subscribeAdmitted no longer opens a narrow read of the admitted list');
+  narrow.handlers.onevent(doc30078(A.pub, AD_D + A.pub, 1759300100, { pubkeys: [ADA.pub] }));
+  narrow.handlers.onevent(doc30078(W.pub, AD_D + A.pub, 1759300140, { pubkeys: [BEN.pub] }, [['church', A.pub]]));
+  narrow.handlers.onevent(doc30078(X.pub, AD_D + A.pub, 1759300140, { pubkeys: [EVE.pub] }, [['church', A.pub]]));
+  assert.ok(got.includes(ADA.pub), 'CONTROL: the church\'s own approval');
+  assert.ok(got.includes(BEN.pub), 'A MEMBER APPROVED BY A SINCE-REMOVED STEWARD LOOKS PENDING — the relay lets them in, the console withholds their keys (audit of 78ffad0, finding 3)');
+  assert.ok(!got.includes(EVE.pub), 'AN APPROVAL SIGNED BY A KEY NO ROSTER EVER NAMED WAS COUNTED — a non-enforcing relay can admit anyone, and the next Approve launders it into the church\'s copy');
+  assert.equal(e.S.listIsFresh(got), false, 'the admitted list counted as fresh before its read had settled');
+  await e.eose(narrow);
+  assert.equal(e.S.listIsFresh(got), true, 'CONTROL: the settled read is not fresh');
+  // the ex-steward's own LATER list, dated after their removal (a non-enforcing relay accepted it): it does not count
+  narrow.handlers.onevent(doc30078(W.pub, AD_D + A.pub, 1759300160, { pubkeys: [BEN.pub, ZED.pub] }, [['church', A.pub]]));
+  assert.ok(!got.includes(ZED.pub), 'AN EX-STEWARD WROTE AN APPROVAL AFTER THEIR REMOVAL AND IT COUNTED');
+  // the future clamp stays
+  narrow.handlers.onevent(doc30078(A.pub, AD_D + A.pub, 1759300000 + 999999, { pubkeys: [EVE.pub] }));
+  assert.ok(!got.includes(EVE.pub), 'a far-future copy was counted');
+  // a current steward still counts
+  const S1 = K(); e.t._careRoster = new Set([S1.pub]);
+  narrow.handlers.onevent(doc30078(S1.pub, AD_D + A.pub, 1759300170, { pubkeys: [EVE.pub] }, [['church', A.pub]]));
+  assert.ok(got.includes(EVE.pub), 'CONTROL: a current steward\'s approval no longer counts');
+});
+
+test('round 2 · P4: the roster that drops a steward is recorded with its date (the writer of the ex-steward record)', async () => {
+  const e = engine();
+  const W = K();
+  const rec = [];
+  e.t._stewardRosterChanged = (before, after, at) => rec.push(at);
+  e.S.subscribeStewards(() => {});
+  const stream = streamOf(e);
+  stream.handlers.onevent(doc30078(A.pub, 'trinityone/stewards:' + A.pub, 1759300100, { pubkeys: [W.pub] }));
+  stream.handlers.onevent(doc30078(A.pub, 'trinityone/stewards:' + A.pub, 1759300150, { pubkeys: [] }));
+  assert.deepEqual(rec, [1759300100, 1759300150], 'the roster\'s date is not handed on, so no removal can be dated');
+  // …and the record itself: dated, and cleared if they come back
+  e.t.__rememberEx([W.pub], [], 1759300150);
+  assert.equal(JSON.parse(e.t.localStorage.getItem('trinityone.steward.exstewards.at.' + A.pub))[W.pub], 1759300150);
+  e.t.__rememberEx([], [W.pub], 1759300200);
+  assert.equal(JSON.parse(e.t.localStorage.getItem('trinityone.steward.exstewards.at.' + A.pub))[W.pub], undefined, 'a steward put back on the roster still carries a removal date');
+});
+
+for (const [kind, call, prime] of [
+  ['care', (e, m) => e.S.ensureCareKeyForMembers(m, []), (e, have) => { e.t._careKeyChecked = true; e.t._careKeyHex = 'aa'.repeat(32); e.t._careKeyRing = ['aa'.repeat(32)]; e.t._careKeyRev = 1; e.t._careKeyDocKeys = have; }],
+  ['media', (e, m) => e.S.ensureMediaKeyForMembers(m, []), (e, have) => { e.t._mediaKeyHex = 'bb'.repeat(32); e.t._mediaKeyRing = ['bb'.repeat(32)]; e.t._mediaKeyDocKeys = have; }],
+]) {
+  test(`round 2 · P3: the ${kind} key only GROWS — a partial member list never drops anyone the envelope holds; the blocked still go`, async () => {
+    const e = engine();
+    const M1 = K(), M2 = K(), OLD = K(), BAD = K();
+    prime(e, { [A.pub]: 'x', [M1.pub]: 'x', [OLD.pub]: 'x', [BAD.pub]: 'x' });
+    e.t._localBlocked = new Set([BAD.pub]);
+    await call(e, [M1.pub, M2.pub]);                          // OLD is in the envelope, not in this (partial) list
+    const last = e.published.at(-1);
+    assert.ok(last, `CONTROL: the ${kind} envelope was not republished for the new member`);
+    const keys = Object.keys(JSON.parse(last.content).keys);
+    assert.ok(keys.includes(M2.pub), 'CONTROL: the new member is not in it');
+    assert.ok(keys.includes(OLD.pub), `THE ${kind.toUpperCase()} KEY WAS RE-SEALED WITHOUT A MEMBER IT HELD — a partial list took their key away (audit of 78ffad0, finding 3)`);
+    assert.ok(!keys.includes(BAD.pub), `the ${kind} key was re-sealed to somebody blocked`);
+  });
+}
+
+test('round 2 · P6: two overlapping runs of the room-key healer mint ONE key, and a room whose envelope exists is not re-asked at once', async () => {
+  const e = engine();
+  e.t.window.Steward = e.S;
+  let release; const held = new Promise(r => { release = r; });
+  const queries = [];
+  e.t.pool.querySync = async (urls, filters) => { queries.push(filters[0]); await held; return ((filters[0] || {})['#d'] || [])[0] === 'trinityone/group:r9' ? [{ id: 'canary' }] : []; };
+  const mints = [];
+  e.S.publishGroupKey = async (gid) => { mints.push(gid); return true; };
+  const room = [{ id: 'r9', encrypted: true }];
+  const one = e.S.ensureGroupKeys(room, []), two = e.S.ensureGroupKeys(room, []);
+  release(); await one; await two;
+  assert.equal(mints.length, 1, 'TWO OVERLAPPING HEALER RUNS BOTH MINTED A KEY FOR ONE ROOM — whatever was sealed under the first is lost (audit of 78ffad0, finding 6)');
+  // a room the relay says HAS an envelope (one this console cannot open): not asked about again for a while
+  e.t.pool.querySync = async (urls, filters) => { queries.push(filters[0]); const d = ((filters[0] || {})['#d'] || [])[0]; return d === 'trinityone/group:r8' ? [{ id: 'c' }] : d === 'trinityone/groupkey:r8' ? [{ id: 'env' }] : []; };
+  const q0 = queries.length;
+  await e.S.ensureGroupKeys([{ id: 'r8', encrypted: true }], []);
+  const q1 = queries.length;
+  assert.ok(q1 > q0, 'CONTROL: the room was not checked at all');
+  await e.S.ensureGroupKeys([{ id: 'r8', encrypted: true }], []);
+  assert.equal(queries.length, q1, 'a room whose envelope the relay just confirmed was queried again at once — three relay queries per envelope arrival');
+});
+
+test('round 2 · P2: two copies stamped the SAME second do not "drop" each other — each drop re-opens every read, so that would loop', async () => {
+  const e = engine();
+  const MB = K(), BOB = K();
+  e.S.subscribeBlocked(() => {});
+  await e.eose(e.subs.find(r => r.d === BL_D + A.pub));
+  const ring = [hex(generateSecretKey())];
+  e.t.__ingest(envelope(GK_D, A, 'r3', ring, [A.pub, MB.pub, BOB.pub], 1759300000));
+  const reads = e.subs.filter(r => r.d === BL_D + A.pub).length;
+  e.t.__ingest(envelope(GK_D, A, 'r3', ring, [A.pub, MB.pub], 1759300000));   // another author's copy, same second
+  assert.deepEqual(e.S.groupKeyDropped('r3'), [], 'an equal-stamped copy counted as a rotation that dropped somebody');
+  assert.equal(e.subs.filter(r => r.d === BL_D + A.pub).length, reads, 'an equal-stamped copy re-opened the reads — re-delivered, it would do so for ever');
 });

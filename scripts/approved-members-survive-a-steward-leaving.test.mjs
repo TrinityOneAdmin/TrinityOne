@@ -325,6 +325,11 @@ function drivenAdmitted() {
     relays: () => [WS_URL], pub: cp, ADMITTED_D, NET,
     _authFuture: () => false, _careRoster: new Set([warden.pub]),
     _byChurchOrSteward: (e) => e.pubkey === cp || e.pubkey === warden.pub,
+    // round 2 of the room-key reconcile: subscribeAdmitted stamps its list (fresh reads are tested in
+    // key-reads-settle-only-for-the-church-they-asked-about.test.mjs), also counts a steward this device saw removed
+    // (nobody here), and re-folds when the roster changes. None of that is what this file drives.
+    _freshTok: () => ({ live: true, genuine: false, at: 0 }), _listTag: () => ({}), _stampFor: (l) => l,
+    _freshDocRead: () => () => {}, _keysReadSignal: () => {}, _exStewardRemovedAt: () => ({}), _memberEmitters: new Set(),
   };
   const keys = Object.keys(scope);
   const api = new Function(...keys, src + '\nreturn api;')(...keys.map(k => scope[k]));

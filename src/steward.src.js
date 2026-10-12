@@ -361,10 +361,23 @@ const _exStewardsKey = () => 'trinityone.steward.exstewards.' + (pub || '');
 function _exStewardSet() {
   try { const a = JSON.parse(localStorage.getItem(_exStewardsKey()) || '[]'); return new Set(Array.isArray(a) ? a.filter(x => typeof x === 'string') : []); } catch (e) { return new Set(); }
 }
-// `before` is the roster we held, `after` the one now in force; whoever left it is an ex-steward.
-function _rememberExStewards(before, after) {
+// `before` is the roster we held, `after` the one now in force; whoever left it is an ex-steward. `at` (optional) is
+// the created_at of the church-signed roster that dropped them — kept beside the set, under its own key (add, never
+// repurpose), for subscribeAdmitted: an approval a departed steward wrote while still rostered keeps counting, one
+// dated after the roster that removed them does not. Someone who comes BACK onto the roster loses the record.
+const _exStewardsAtKey = () => 'trinityone.steward.exstewards.at.' + (pub || '');
+function _exStewardRemovedAt() {
+  try { const o = JSON.parse(localStorage.getItem(_exStewardsAtKey()) || '{}'); return (o && typeof o === 'object' && !Array.isArray(o)) ? o : {}; } catch (e) { return {}; }
+}
+function _rememberExStewards(before, after, at) {
   try {
     const now_ = new Set(after || []); const gone = [...(before || [])].filter(p => p && !now_.has(p));
+    if (at) {
+      const m = _exStewardRemovedAt(); let moved = false;
+      for (const p of now_) if (p in m) { delete m[p]; moved = true; }                  // back on the roster
+      for (const p of gone) if (!(p in m)) { m[p] = at; moved = true; }               // the FIRST roster seen without them
+      if (moved) localStorage.setItem(_exStewardsAtKey(), JSON.stringify(m));
+    }
     if (!gone.length) return;
     const ex = _exStewardSet(); let grew = false;
     for (const p of gone) if (!ex.has(p)) { ex.add(p); grew = true; }
@@ -378,7 +391,7 @@ function _pokeMemberLists() { for (const f of [..._memberEmitters]) { try { f();
 // ONE CALL from subscribeStewards when a roster document lands: whoever it dropped becomes an ex-steward, and the
 // Members lists already on screen are re-filtered against the new roster. (Kept as one name on purpose — a
 // second free variable in subscribeStewards breaks every test that lifts it.)
-function _stewardRosterChanged(before, after) { _rememberExStewards(before, after); _pokeMemberLists(); }
+function _stewardRosterChanged(before, after, at) { _rememberExStewards(before, after, at); _pokeMemberLists(); }
 // HAVE WE ACTUALLY SEEN A ROSTER, as opposed to simply not having one yet? An empty set means both, and the
 // difference decides whether a steward-authored clearance is "an author the member honours" or "nobody".
 // Reading it as the latter during the boot race turned the cross-author check off and skipped the member.
@@ -930,6 +943,30 @@ const _senvTs = {};  // groupId -> latest envelope created_at (ignore stale/out-
 // READERS: stewIngestKey and publishGroupKey (writers), Steward.groupKeyRecipients / groupKeyMissing (getters,
 // read by KeyDistributor in app/stew-dashboard.jsx).
 const _senvRecips = {};
+// groupId -> did the newest envelope carry a copy THIS console could open? When it did not (a delegate the owner's
+// rotation left out, say), `_skeys` still holds the PREVIOUS ring — and a reuse-only publish from it, newer than the
+// rotation, would put the pre-rotation key back as every member's current key, the blocked person's included. So
+// groupKeyRecipients answers null and a reuse-only publishGroupKey refuses unless this is true.
+// READERS: Steward.groupKeyRecipients, publishGroupKey. WRITERS: stewIngestKey, publishGroupKey.
+const _senvMine = {};
+// groupId -> Map(pubkey -> when a newer envelope was seen to DROP them). Kept so the key distributor does not wrap
+// the room key straight back to somebody a rotation took out, before the lists that would say why (blocklist, the
+// room's own member list, the admitted list) have been re-read SINCE (_reconfirmFresh). It is a hold, not a ban:
+// a rotation run from a partial member list drops people nobody meant to remove, and they are re-added once the
+// re-read shows they are still wanted. Cleared for a person when an envelope includes them again.
+// READERS: Steward.groupKeyDropped (KeyDistributor). WRITERS: _noteEnvelopeDrops (stewIngestKey, publishGroupKey).
+const _senvDropped = {};
+function _noteEnvelopeDrops(gid, prev, next) {
+  const m = _senvDropped[gid] || (_senvDropped[gid] = new Map());
+  const nx = new Set(next || []);
+  for (const pk of nx) m.delete(pk);
+  if (!Array.isArray(prev)) return;
+  const gone = prev.filter(pk => !nx.has(pk));
+  if (!gone.length) return;
+  const t = Date.now();
+  for (const pk of gone) m.set(pk, t);
+  _reconfirmFresh();   // ask the authority lists again, now — see _senvDropped
+}
 const _hex = (u) => Array.from(u).map(b => b.toString(16).padStart(2, '0')).join('');
 const _unhex = (h) => new Uint8Array((String(h).match(/.{1,2}/g) || []).map(x => parseInt(x, 16)));
 const _b64 = (u8) => { let s = ''; const c = 0x8000; for (let i = 0; i < u8.length; i += c) s += String.fromCharCode.apply(null, u8.subarray(i, i + c)); return btoa(s); };   // Uint8Array -> base64 (chunked, stack-safe)
@@ -939,16 +976,24 @@ function stewIngestKey(e) {
   const d = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; if (!d.startsWith(GROUPKEY_D)) return;
   const gid = d.slice(GROUPKEY_D.length);
   if ((_senvTs[gid] || 0) > (e.created_at || 0)) return;   // ignore an older envelope arriving late
+  const newer = (e.created_at || 0) > (_senvTs[gid] || 0);   // a drop counts only from a strictly NEWER envelope — see below
   _senvTs[gid] = e.created_at || 0;
   try {
     const env = JSON.parse(e.content || '{}'); _srev[gid] = env.rev || 1;
+    const prev = _senvRecips[gid];
     _senvRecips[gid] = (env.keys && typeof env.keys === 'object') ? Object.keys(env.keys).map(p => String(p).toLowerCase()) : [];
+    _senvMine[gid] = false;   // until this envelope's copy for us has actually opened — see _senvMine
+    // ONLY A STRICTLY NEWER ENVELOPE CAN DROP ANYBODY. Two copies with the same created_at (two authors in one second)
+    // re-delivered by every re-read would otherwise "drop" each other's recipients in turn, and each drop re-opens the
+    // reads (_reconfirmFresh) — a loop. Someone an equal-stamped copy includes still clears their hold.
+    _noteEnvelopeDrops(gid, newer ? prev : null, _senvRecips[gid]);
     const mine = env.keys && churchPub && env.keys[churchPub];
     if (mine && churchSk) {
       const plain = nip44d(mine, nip44ck(churchSk, e.pubkey));
       let ring = null;
       try { const p = JSON.parse(plain); if (Array.isArray(p)) ring = p.filter(x => typeof x === 'string' && /^[0-9a-f]+$/i.test(x)); } catch (x) {}
       _skeys[gid] = (ring && ring.length ? ring : [plain]).map(_unhex);   // legacy envelopes hold a bare hex string
+      _senvMine[gid] = true;
     }
   } catch {}
   // tell the key distributor a room's envelope changed, so it reconciles at once rather than on the next roster tick
@@ -2386,6 +2431,60 @@ function _listTag() { return { cp: actingChurch || pub, epoch: _keyReadEpoch }; 
 function _stampFor(list, tag) {
   if (Array.isArray(list)) { try { Object.defineProperty(list, '_for', { value: tag, configurable: true, enumerable: false }); } catch (e) {} }
   return list;
+}
+// ── FRESH, NOT ONLY CURRENT (room-key reconcile, round 2) ─────────────────────────────────────────────────────────
+// "Current" says a list is for the church and epoch the console is on. It does not say the list came from the
+// subscription that is open NOW: the screens' hook cache (makeSub, app/steward-root.jsx) has no connection counter
+// in its key, so after a reconnect it repaints the PREVIOUS connection's list — and its stamp is still current,
+// because the epoch only moves on a switch or a restore. A second console that was away while the owner blocked
+// somebody therefore held the old blocklist while the rotated room envelope (without that person) arrived, and its
+// key distributor wrapped the new key straight back to them (audit of 78ffad0, HIGH 1).
+//
+// So the authority lists the key distributor uses carry a token for the subscription that made them: `live` until
+// that subscription closes, `genuine` once a NARROW read of the documents has settled by the key reads' rule
+// (_openKeyRead, `withoutFailed` — every connected relay answered trustworthily and at least one did), and `at`, when
+// it last settled. A drop seen in a room envelope re-opens every such read (_reconfirmFresh) so the distributor can
+// ask "has this list been re-read SINCE?" (Steward.listIsFresh(list, since)).
+// READERS of the token: _listIsFresh (Steward.listIsFresh, Steward.groupFresh, Steward.joinPolicyFresh), read by
+// KeyDistributor (app/stew-dashboard.jsx). WRITERS: subscribeBlocked, subscribeAdmitted, subscribeJoinPolicy,
+// subscribeStewards, subscribeGroups (each through _freshDocRead).
+const _freshReopeners = new Set();   // the open fresh reads' re-open functions — see _reconfirmFresh
+const _joinPolicyStates = new Set(); // each open subscribeJoinPolicy's { tag, approval } — see Steward.joinPolicyFresh
+const _membersReask = new Set();     // each open subscribeMembers' re-ask — called by setBlocked once an unblock lands
+// ensureGroupKeys' per-room guards, keyed "<church>|<room>": a check in flight, and "the relay has an envelope, don't ask
+// again until" (finding 6 of the audit of 78ffad0). READER and WRITER: ensureGroupKeys only.
+const _ensureGroupKeysBusy = new Set();
+const _ensureGroupKeysQuiet = new Map();
+function _freshTok() { return { live: true, genuine: false, at: 0 }; }
+function _tokIsFresh(t, since) {
+  if (!t || !t.cp || t.cp !== (actingChurch || pub) || t.epoch !== _keyReadEpoch) return false;
+  const s = t.sub;
+  return !!s && s.live === true && s.genuine === true && (!since || s.at > since);
+}
+function _listIsFresh(list, since) { return _tokIsFresh(list && list._for, since); }
+// Ask every fresh read again, now. Called when a room envelope DROPS somebody (stewIngestKey): whoever it dropped is
+// held back until the lists that would justify re-adding them have been re-read after the drop.
+function _reconfirmFresh() { for (const f of [..._freshReopeners]) { try { f(); } catch (e) {} } }
+// A fresh read of the church documents at the d-tags `ds`, for the church `cp0`: both shapes every reader of a
+// church document asks for (signed by the church, or tagged with it), each relay judged on its own. Every event goes
+// to `onevent` (the caller's own validation decides what counts); `onFresh(how)` runs on EVERY settle — the first,
+// and each re-open by _reconfirmFresh. The read closes once it has settled: the caller's broad subscription carries
+// live changes after that, and an open narrow read per list per relay would spend the relay's subscription slots.
+// Returns the closer.
+function _freshDocRead(cp0, ds, onevent, onFresh) {
+  let stop = null, stopped = false;
+  const open = () => {
+    if (stopped) return;
+    if (stop) { try { stop(); } catch (e) {} }
+    const st = _openKeyRead(cp0, [{ kinds: [30078], authors: [cp0], '#d': ds }, { kinds: [30078], '#church': [cp0], '#d': ds }],
+      (e) => { if (!stopped) onevent(e); },
+      (how) => { if (stopped) return; onFresh(how); setTimeout(() => { if (stop === st) { try { st(); } catch (e) {} } }, 0); },
+      undefined, { withoutFailed: true });
+    stop = st;
+  };
+  _freshReopeners.add(open);
+  open();
+  return () => { stopped = true; _freshReopeners.delete(open); if (stop) { try { stop(); } catch (e) {} } };
 }
 // true = a trustworthy answer from this relay for the church we are on; 'unauthed' = genuine, but this socket's
 // login has not been accepted; false = not an answer (our own close, a CLOSED, a reset since, the timer).
@@ -6383,9 +6482,14 @@ window.Steward = {
     // CAPTURED AT ENTRY, CHECKED AFTER EVERY AWAIT (audit of d1116f6): the console can switch church while this
     // runs, and a result committed or published after the switch hands this church's keys to the next one.
     const pub0 = pub, ep0 = _keyReadEpoch, sk0 = sk;
-    const want = [...new Set([pub0, ...(memberPubs || []).filter(Boolean), ...(stewardPubs || []).filter(Boolean)])]
-      .filter(p => !_localBlocked.has(String(p).toLowerCase()));   // a just-blocked member must not be re-keyed (item B)
+    // GROW ONLY, like the name key (audit of 78ffad0, finding 3). This sealed to EXACTLY the list it was given, and the
+    // caller's list is now narrowed to approved members and can be partial for a moment (a cold start, a stream still
+    // arriving): a re-seal from it took real members out of the envelope, and a member's app forgets a key the
+    // envelope no longer holds for it. So everyone the current envelope holds stays, minus anyone blocked. Taking
+    // somebody OUT is rotateMediaKey's job (Block, removing a delegate), which writes exactly its list.
     const have = _mediaKeyDocKeys || {};
+    const want = [...new Set([pub0, ...(memberPubs || []).filter(Boolean), ...(stewardPubs || []).filter(Boolean), ...Object.keys(have)])]
+      .filter(p => !_localBlocked.has(String(p).toLowerCase()));   // a just-blocked member must not be re-keyed (item B)
     if (want.every(p => have[p])) return false;                   // everyone's already keyed — no republish
     // …AND DON'T ASK AGAIN FOR A SET THAT WAS JUST REFUSED (finding F2). Without this the guard above is the
     // only brake, and it cannot apply, because a refused document never becomes a `have`. The sealing below
@@ -6580,9 +6684,12 @@ window.Steward = {
     const rev = minting ? 1 : _careKeyRev;
     // include ourselves (delegated stewards sign with their own key) and the steward roster, so a steward
     // can open needs and re-wrap for new members without the owner present
-    const want = [...new Set([cp, churchPub, ...(memberPubs || []), ...(stewardPubs || [])].filter(Boolean))]
-      .filter(p => !_localBlocked.has(String(p).toLowerCase()));   // a just-blocked member must not be re-keyed (item B)
+    // GROW ONLY — see ensureMediaKeyForMembers (audit of 78ffad0, finding 3): the member app DELETES its care key when
+    // the envelope leaves it out (fellowship _ingestCareKey), so a re-seal from a partial list must never drop anyone
+    // the envelope holds. Removal is rotateCareKey's (Block, removing a delegate). The blocked are still filtered out.
     const have = (minting ? null : _careKeyDocKeys) || {};
+    const want = [...new Set([cp, churchPub, ...(memberPubs || []), ...(stewardPubs || []), ...Object.keys(have)].filter(Boolean))]
+      .filter(p => !_localBlocked.has(String(p).toLowerCase()));   // a just-blocked member must not be re-keyed (item B)
     if (want.every(p2 => have[p2])) return false;             // everyone's keyed — no republish
     const _v1 = _careKeyVer;
     // FIT THE ENVELOPE (owner, 2026-10-01) — the same trade rotateCareKey makes: keep the current key, drop
@@ -7221,6 +7328,16 @@ window.Steward = {
     for (const g of (groups || [])) {
       if (!g || !g.id || !g.encrypted) continue;
       if ((_skeys[g.id] || []).length) continue;      // (2) we already hold the ring — nothing is missing
+      // (2b) ONE CHECK PER ROOM AT A TIME (audit of 78ffad0, finding 6). The key distributor now re-runs on every
+      // envelope that arrives, so two runs overlapped: both found no envelope, and both MINTED — two keys for one
+      // room, and whatever was sealed under the first is lost. A room already being checked is skipped, and a room
+      // the relay just said HAS an envelope (one this console cannot open — a delegate's, say) is not asked about
+      // again for a minute: three relay queries per room per envelope arrival was the bandwidth half of the finding.
+      const gk = cp + '|' + g.id;
+      if (_ensureGroupKeysBusy.has(gk)) continue;
+      if (Date.now() < (_ensureGroupKeysQuiet.get(gk) || 0)) continue;
+      _ensureGroupKeysBusy.add(gk);
+      try {
       // (3) ASK THE RELAY DIRECTLY rather than trusting a local stream flag. A missed subscription frame and a
       // genuinely absent envelope look identical from in here, and one of them must never lead to a mint.
       // A FAILED query is not an answer: on any error we leave the room alone.
@@ -7244,7 +7361,7 @@ window.Steward = {
       const envelopes = await pool.querySync(relays(), [{ kinds: [30078], authors: [...new Set([cp, churchPub])], '#d': [GROUPKEY_D + g.id], limit: 1 }]);
       const sealed = await pool.querySync(relays(), [{ kinds: [1], '#t': [g.id], limit: 20 }]);
       if (!Array.isArray(envelopes) || !Array.isArray(sealed)) continue;
-      if (envelopes.length) continue;                 // the envelope exists; we simply have not ingested it yet
+      if (envelopes.length) { _ensureGroupKeysQuiet.set(gk, Date.now() + 60000); continue; }   // the envelope exists; we simply have not ingested it yet
       // (5) A room with sealed traffic MUST already have a key we have not been handed. Minting now would make
       // those messages permanently unreadable, so refuse and let a human decide.
       if (sealed.some(e => (e.tags || []).some(t => t[0] === 'enc' && t[1] === '1'))) {
@@ -7262,6 +7379,7 @@ window.Steward = {
       const recips = g.visibility === 'invite' ? (g.members || []) : (memberPubs || []);
       const r = await this.publishGroupKey(g.id, recips, { background: true });
       out.push({ id: g.id, name: g.name || '', state: (r === null || r === false) ? 'failed' : 'issued' });
+      } finally { _ensureGroupKeysBusy.delete(gk); }
     }
     return out;
   },
@@ -7269,6 +7387,9 @@ window.Steward = {
     if (!churchSk || !churchPub) return Promise.resolve(null);
     const haveRing = (_skeys[groupId] || []).length > 0;
     if (opts.reuseOnly && !haveRing) return Promise.resolve(null);   // background re-key must NOT mint a new key (would orphan history)
+    // …NOR REUSE A RING THE NEWEST ENVELOPE HAS MOVED PAST. If the room's newest envelope carried no copy we could
+    // open, the ring we hold is an older generation, and re-publishing it would undo that rotation (see _senvMine).
+    if (opts.reuseOnly && _senvMine[groupId] !== true) return Promise.resolve(null);
     // The locally-known blocklist wins over a stale caller list (AUDIT-2026-08-10 item B): the roster effect
     // calls this with the same stale roster in the same post-block window as the name key.
     // WHOSE ROOM IS THIS? `churchPub` is THIS DEVICE'S OWN KEY, not the church's — setActiveIdentity's
@@ -7364,7 +7485,10 @@ window.Steward = {
     _skeys[groupId] = ring;
     _srev[groupId] = rev;
     _senvTs[groupId] = _env.created_at || 0;
-    _senvRecips[groupId] = (build.recips || []).map(p => String(p).toLowerCase());
+    { const prevR = _senvRecips[groupId];
+      _senvRecips[groupId] = (build.recips || []).map(p => String(p).toLowerCase());
+      _senvMine[groupId] = true;
+      _noteEnvelopeDrops(groupId, prevR, _senvRecips[groupId]); }   // a rotation run here holds its drops too — see _senvDropped
     if (skipped.length) {
       console.warn('[steward] group key ' + groupId + ': could not seal to ' + skipped.length + ' member(s) — they cannot read or post in that room');
       return { ok: true, skipped: skipped.slice() };
@@ -7374,9 +7498,34 @@ window.Steward = {
   // WHO THE NEWEST ENVELOPE OF A ROOM IS WRAPPED TO — or null when this console holds no ring for the room (its
   // envelope has not been ingested, or carries no copy for this church), in which case nothing can be re-wrapped
   // anyway (publishGroupKey with reuseOnly would do nothing). Read by KeyDistributor (app/stew-dashboard.jsx).
+  // …and null too when the newest envelope had no copy this console could open (_senvMine): the ring we hold is then
+  // an older generation, and nothing may be re-wrapped from it.
   groupKeyRecipients(groupId) {
-    if (!(_skeys[groupId] || []).length || !_senvRecips[groupId]) return null;
+    if (!(_skeys[groupId] || []).length || !_senvRecips[groupId] || _senvMine[groupId] !== true) return null;
     return _senvRecips[groupId].slice();
+  },
+  // who the room's newest envelopes DROPPED, and when this console saw it: [{ pub, at }] (lower-case hex). The key
+  // distributor holds them back until the authority lists have been re-read since `at` (see _senvDropped).
+  groupKeyDropped(groupId) {
+    const m = _senvDropped[groupId];
+    return m ? [...m.entries()].map(([p, at]) => ({ pub: p, at })) : [];
+  },
+  // IS THIS LIST FRESH — the current church's, from a subscription open now, settled by a genuine per-relay read, and
+  // (with `since`) re-read after that moment? See _freshDocRead. Read by KeyDistributor (app/stew-dashboard.jsx).
+  listIsFresh(list, since) { return _listIsFresh(list, since); },
+  // the same, for one ROOM of a group list: its document and key envelope have been read genuinely (subscribeGroups)
+  groupFresh(list, groupId, since) {
+    const t = list && list._for;
+    if (!_tokIsFresh(t)) return false;
+    const at = t.sub.rooms && t.sub.rooms.get(groupId);
+    return !!at && (!since || at > since);
+  },
+  // the join policy as a FRESH read has it: true / false, or null when no fresh read is in hand. A boolean cannot carry
+  // the stamp an array does, so the engine keeps it (subscribeJoinPolicy). Read by KeyDistributor.
+  joinPolicyFresh(since) {
+    let best = null;
+    for (const st of _joinPolicyStates) if (_tokIsFresh(st.tag, since) && (!best || st.tag.sub.at > best.tag.sub.at)) best = st;
+    return best ? best.approval : null;
   },
   // which of `pubs` (hex or npub) the room's newest envelope has NO copy for — null as for groupKeyRecipients.
   // Returns the entries as given, so a caller can compare them with its own list.
@@ -7505,7 +7654,10 @@ window.Steward = {
     // another steward unblocked elsewhere while a relay was down (the audit of 29d4941/51d6ebf). setBlocked keeps
     // the floor too, against a screen list from before this read settled.
     // Every relay answering genuinely is the old rule unchanged: the relays' newest list replaces the device copy.
-    const _tag = _listTag(), _deliver = onBlocked, cp0 = pub;
+    // `_tag.sub` — the token that makes this list FRESH as well as current (see _freshDocRead): live until this
+    // subscription closes, genuine once the narrow read below has settled, re-read when a room envelope drops someone.
+    const _tag = _listTag(), _deliver = onBlocked, cp0 = pub, tok = _freshTok();
+    _tag.sub = tok;
     let genuine = false, floored = false;
     const withFloor = (list) => (floored ? [...new Set([...(list || []).map(p => String(p).toLowerCase()), ..._blockedLastSet(cp0)])] : list);
     onBlocked = (list) => _deliver(genuine ? _stampFor(withFloor(list), _tag) : list);   // stamped with the church it was opened for — see _listTag
@@ -7526,11 +7678,12 @@ window.Steward = {
       onevent(e) { if (take(e)) onBlocked(cur); },
       oneose() { onBlocked(cur); },
     });
-    const stopRead = _openKeyRead(cp0, [{ kinds: [30078], authors: [cp0], '#d': [BLOCKED_D + cp0] }],
+    // EVERY settle counts, not only the first: a re-read after a room envelope dropped somebody (_reconfirmFresh) is
+    // what lets the distributor tell "blocked" from "dropped by a rotation run from a partial list".
+    const stopRead = _freshDocRead(cp0, [BLOCKED_D + cp0],
       (e) => { if (take(e)) onBlocked(cur); },
-      (how) => { if (genuine) return; genuine = true; floored = !!(how && how.without && how.without.length); cur = [...cur]; _noteBlockedList(cp0, _tag.epoch, withFloor(cur), latest); onBlocked(cur); },
-      undefined, { withoutFailed: true });
-    return () => { try { sub.close(); } catch {} try { stopRead(); } catch {} };
+      (how) => { genuine = true; floored = !!(how && how.without && how.without.length); tok.genuine = true; tok.at = Date.now(); cur = [...cur]; _noteBlockedList(cp0, _tag.epoch, withFloor(cur), latest); onBlocked(cur); _keysReadSignal('blocked'); });
+    return () => { tok.live = false; try { sub.close(); } catch {} try { stopRead(); } catch {} };
   },
   // Who this console holds as blocked, for the acting church — the same floored set every key builder filters by.
   // A copy, lower-case hex. Readers: StewardMeals.publishCareTeam and StewardMeals.sendCareChat (steward-meals.src.js).
@@ -7665,6 +7818,9 @@ window.Steward = {
       if (ok && drop.length && seq === _setBlockedSeq && (actingChurch || pub) === cp0) {
         for (const p of drop) _localBlocked.delete(p);
         lsSet(BLOCKED_LAST_LS + cp0, JSON.stringify([..._localBlocked]));
+        // …and ask the relay for the member list again: it withheld the unblocked person's events until now (see
+        // subscribeMembers), so a console that opened while they were blocked would never key them again.
+        for (const f of [..._membersReask]) { try { f(); } catch (e) {} }
       }
       return ok;
     }));
@@ -8519,21 +8675,35 @@ window.Steward = {
   // ---- joining: by default anyone with the invite/QR joins instantly. A steward can switch on
   // "require approval", and then a new member is held as a pending request until admitted. The relay
   // reads joinpolicy:<churchpub> + the admitted:<churchpub> allowlist and withholds posting until then. ----
+  // THE STREAM'S `false` IS NOT AN ANSWER (audit of 78ffad0, finding 2). It delivers `approval` from `oneose`, and on
+  // a slow link nostr-tools' own EOSE timer (4.4 s) fires before the joinpolicy document arrives: "approval is off",
+  // and the key distributor handed the open-room, care and sermon keys to a member still waiting to be let in —
+  // for good, since those keys only grow. The screens still get the stream (a switch should not wait), but the key
+  // distributor reads Steward.joinPolicyFresh(), which answers only once a NARROW read of this one document has
+  // settled genuinely on every connected relay (_freshDocRead) — the blocklist's rule. `cp0`: the church it was
+  // opened for, as subscribeBlocked keeps it.
   subscribeJoinPolicy(onPolicy) {   // onPolicy(true|false) — does joining need approval?
+    const cp0 = pub, tag = _listTag(), tok = _freshTok(); tag.sub = tok;
+    const state = { tag, approval: false };
+    _joinPolicyStates.add(state);
     let approval = false, latest = 0;
-    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
-      onevent(e) {
-        const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
-        if (d !== JOINPOLICY_D + pub) return;
-        if (_authFuture(e) || !_byChurchOrSteward(e)) return;   // church or a rostered steward may set the join policy
-        if (e.created_at < latest) return; latest = e.created_at;   // newest wins — a stale copy must not silently turn approval back off
-        if (e.tags.some(t => t[0] === 'deleted') || !e.content) approval = false;
-        else { try { approval = !!JSON.parse(e.content).approval; } catch { approval = false; } }
-        onPolicy(approval);
-      },
+    const take = (e) => {
+      const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+      if (d !== JOINPOLICY_D + cp0) return false;
+      if (_authFuture(e) || !_byChurchOrSteward(e)) return false;   // church or a rostered steward may set the join policy
+      if (e.created_at < latest) return false; latest = e.created_at;   // newest wins — a stale copy must not silently turn approval back off
+      if (e.tags.some(t => t[0] === 'deleted') || !e.content) approval = false;
+      else { try { approval = !!JSON.parse(e.content).approval; } catch { approval = false; } }
+      state.approval = approval;
+      return true;
+    };
+    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [cp0], '#t': [NET] }, { kinds: [30078], '#church': [cp0], '#t': [NET] }], {
+      onevent(e) { if (take(e)) onPolicy(approval); },
       oneose() { onPolicy(approval); },
     });
-    return () => { try { sub.close(); } catch {} };
+    const stopRead = _freshDocRead(cp0, [JOINPOLICY_D + cp0], (e) => { if (take(e)) onPolicy(approval); },
+      () => { tok.genuine = true; tok.at = Date.now(); state.approval = approval; onPolicy(approval); _keysReadSignal('joinpolicy'); });
+    return () => { tok.live = false; _joinPolicyStates.delete(state); try { sub.close(); } catch {} try { stopRead(); } catch {} };
   },
   setJoinPolicy(approval) {   // turn approval-to-join on/off
     if (!sk) return Promise.resolve(null);
@@ -8622,31 +8792,62 @@ window.Steward = {
   // still carries them. Blocking is unaffected — it is a separate document and a separate gate at the relay,
   // and blocking is how a member is actually removed (see the Block path in app/stew-dashboard.jsx).
   //
-  // _byChurchOrSteward IS KEPT, AND THAT IS A DELIBERATE SEAM. It is a CURRENT-roster test, so a departed
-  // steward's copy stops appearing in this console's view even though the relay keeps serving it (that is
-  // what the retractionExempt entry in scripts/gateway.mjs is for). Dropping the test would mean a relay
-  // could hand this console admissions signed by any key at all — and the very next Approve press would
-  // republish them as the CHURCH'S OWN signed copy, laundering a forgery into the church's authority. The
-  // people themselves are not un-admitted by this: the relay's own allowlist is what the doors read.
+  // WHOSE COPY COUNTS (audit of 78ffad0, finding 3; the owner's rule of 2026-09-16, "approved members must always
+  // survive a steward leaving"). This used to be _byChurchOrSteward — the church or a CURRENT steward — so a member a
+  // since-removed delegate had approved looked pending here while the relay (until its next restart) let them in, and
+  // the key distributor withheld their keys. Now three authors count:
+  //   · the church;
+  //   · a steward on the current roster;
+  //   · a steward THIS DEVICE SAW on a church-signed roster and then saw dropped from it, for a copy dated no later
+  //     than the roster that dropped them (_exStewardRemovedAt, written by subscribeStewards).
+  // WHY NOT EVERY AUTHOR, as the relay's union reads to the eye. A relay that does not enforce (a public one a church
+  // adds) could then hand this console approvals signed by any key at all — and the next Approve press would publish
+  // them as the CHURCH'S OWN signed copy, laundering a forgery into the church's authority. Every author counted here
+  // is one a church-signed roster named, and an ex-steward cannot write themselves a later approval. The future clamp
+  // (_authFuture) stays. What it costs: a device that never saw the removal still shows that person as waiting (the
+  // safe direction), and the relay itself forgets a departed steward's approvals when it restarts (the KNOWN GAP in
+  // approved-members-survive-a-steward-leaving.test.mjs, the owner's to decide) — this console may then key someone the
+  // relay holds back, who gets keys the relay will not serve them data for.
+  //
+  // FRESH, NOT ONLY CURRENT: the list is stamped for the church, with the token a narrow read of this one address sets
+  // once it has settled genuinely on every connected relay (_freshDocRead) — the key distributor uses nothing less.
+  // Every copy is kept, and the union recomputed whenever the steward roster changes (_memberEmitters), so a steward's
+  // copy that arrived before the roster is counted once the roster says who they are.
   subscribeAdmitted(onList) {   // the approved-members allowlist → [pubkeys]
+    const cp0 = pub, tok = _freshTok();
+    { const _tag = _listTag(), _deliver = onList; _tag.sub = tok; onList = (list) => _deliver(_stampFor(list, _tag)); }   // see _listTag, _freshDocRead
     let cur = [];
     const byAuthor = new Map();   // author pubkey -> { at, pubkeys } — newest per author, unioned below
-    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
-      onevent(e) {
-        const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
-        if (d !== ADMITTED_D + pub) return;
-        if (_authFuture(e) || !_byChurchOrSteward(e)) return;   // church or a rostered steward may admit members
-        const prev = byAuthor.get(e.pubkey);
-        if (prev && e.created_at < prev.at) return;             // this author's own older list — not the whole church's
-        let list = []; try { list = (JSON.parse(e.content).pubkeys) || []; } catch { list = []; }
-        byAuthor.set(e.pubkey, { at: e.created_at, pubkeys: list });
-        const all = new Set(); for (const v of byAuthor.values()) for (const pk of v.pubkeys) if (pk) all.add(pk);
-        cur = [...all];
-        onList(cur);
-      },
+    const counts = (author, at) => {
+      if (author === cp0 || _careRoster.has(author)) return true;
+      const gone = _exStewardRemovedAt()[author];
+      return !!gone && at <= gone;
+    };
+    const fold = () => {
+      const all = new Set();
+      for (const [author, v] of byAuthor) if (counts(author, v.at)) for (const pk of v.pubkeys) if (pk) all.add(pk);
+      cur = [...all];
+    };
+    const take = (e) => {
+      const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+      if (d !== ADMITTED_D + cp0) return false;
+      if (_authFuture(e)) return false;                        // a far-future stamp would pin over every later list
+      const prev = byAuthor.get(e.pubkey);
+      if (prev && e.created_at < prev.at) return false;        // this author's own older list — not the whole church's
+      let list = []; try { list = (JSON.parse(e.content).pubkeys) || []; } catch { list = []; }
+      byAuthor.set(e.pubkey, { at: e.created_at, pubkeys: Array.isArray(list) ? list : [] });
+      fold();
+      return true;
+    };
+    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [cp0], '#t': [NET] }, { kinds: [30078], '#church': [cp0], '#t': [NET] }], {
+      onevent(e) { if (take(e)) onList(cur); },
       oneose() { onList(cur); },
     });
-    return () => { try { sub.close(); } catch {} };
+    const refold = () => { if (!byAuthor.size) return; const was = cur.slice().sort().join(','); fold(); if (cur.slice().sort().join(',') !== was) onList(cur); };
+    _memberEmitters.add(refold);   // the steward roster arrived or changed — see _pokeMemberLists
+    const stopRead = _freshDocRead(cp0, [ADMITTED_D + cp0], (e) => { if (take(e)) onList(cur); },
+      () => { tok.genuine = true; tok.at = Date.now(); cur = [...cur]; onList(cur); _keysReadSignal('admitted'); });
+    return () => { tok.live = false; _memberEmitters.delete(refold); try { sub.close(); } catch {} try { stopRead(); } catch {} };
   },
   // ── RE-SEAT: a member lost their 12 words and came back on a NEW key ───────────────────────────────
   // Their old key is gone for good — nobody has it, not the church, not us. So this does NOT recover an
@@ -8974,9 +9175,13 @@ window.Steward = {
   // grants those keys day-to-day church powers (but never the roster/blocklist/relay-policy — owner-only),
   // and revocation = re-publish the roster without them. See STEWARD-ROSTER-DESIGN.md. ----
   subscribeStewards(onList) {   // the current steward roster → [hex pubkeys]
-    { const _tag = _listTag(), _deliver = onList; onList = (list) => _deliver(_stampFor(list, _tag)); }   // stamped with the church it was opened for — see _listTag
+    // FRESH as well as current (see _freshDocRead): a removed delegate is taken out of the care, sermon and name keys by
+    // a rotation, and a second console holding the roster from before it — a cache, or the previous connection's —
+    // wrapped them straight back in on its next tick (the same race as the auditor's room-key one, through this list).
+    const tok = _freshTok();
+    { const _tag = _listTag(), _deliver = onList; _tag.sub = tok; onList = (list) => _deliver(_stampFor(list, _tag)); }   // stamped with the church it was opened for — see _listTag
     let cur = [], latest = 0;
-    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
+    const handlers = {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (d !== STEWARDS_D + pub) return;
@@ -9021,7 +9226,7 @@ window.Steward = {
         _careRoster = new Set(cur.filter(Boolean));
         _careRosterKnown = true;
         _careRosterSeen = true;   // a real roster DOCUMENT, as opposed to the oneose below — see _consoleDisplay
-        _stewardRosterChanged(_rosterBefore, cur);   // remember who left it, and re-filter the open Members lists
+        _stewardRosterChanged(_rosterBefore, cur, e.created_at);   // remember who left it (and when), and re-filter the open Members lists
         onList(cur);
       },
       oneose() {
@@ -9036,8 +9241,11 @@ window.Steward = {
         try { if (_isRelayAuthed()) _careRosterKnown = true; } catch (e) {}
         onList(cur);
       },
-    });
-    return () => { try { sub.close(); } catch {} };
+    };
+    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], handlers);
+    const stopRead = _freshDocRead(pub, [STEWARDS_D + pub], (e) => handlers.onevent(e),
+      () => { tok.genuine = true; tok.at = Date.now(); _careRosterKnown = true; onList([...cur]); _keysReadSignal('stewards'); });
+    return () => { tok.live = false; try { sub.close(); } catch {} try { stopRead(); } catch {} };
   },
   setStewards(pubkeys, caps, names) {   // OWNER-ONLY: replace the whole steward roster (pass hex pubkeys)
     _requireTrustedView('steward roster');
@@ -9599,15 +9807,34 @@ window.Steward = {
     return () => { try { sub.close(); } catch {} };
   },
   subscribeGroups(onGroups) {
-    { const _tag = _listTag(), _deliver = onGroups; onGroups = (list) => _deliver(_stampFor(list, _tag)); }   // stamped with the church it was opened for — see _listTag
+    // EACH ENCRYPTED ROOM IS FRESH OR NOT ON ITS OWN (room-key reconcile, round 2; see _freshDocRead). The list is
+    // painted from the device cache at once and the relays answer newest first, so a ROTATED key envelope arrives
+    // before the room document it follows — and until every stored envelope is in, the console may hold an older
+    // ring, whose reuse-only republish would put the pre-rotation key back. So a narrow read of every encrypted room's
+    // document AND key envelope (small: one of each per author) is opened alongside, and `tok.rooms` records when each
+    // room last settled genuinely on every connected relay. Re-opened when a new encrypted room appears, and by
+    // _reconfirmFresh. Read by Steward.groupFresh.
+    const cp0 = pub, tok = _freshTok(); tok.rooms = new Map();
+    { const _tag = _listTag(), _deliver = onGroups; _tag.sub = tok; onGroups = (list) => _deliver(_stampFor(list, _tag)); }   // stamped with the church it was opened for — see _listTag
     const CACHE_KEY = 'trinityone.steward.groups.v2.' + (pub || '');   // v2: see _taggedForAnotherChurch — an older cache may hold another church's rooms
     const byId = new Map();
     const versions = new Map();   // id -> Map(author -> their copy); see src/church-doc-store.src.js
+    let narrowSig = '', stopNarrow = null;
+    const wantNarrow = () => {
+      const ids = [...byId.values()].filter(g => g && g.encrypted && g.id).map(g => g.id).sort();
+      const sig = ids.join(',');
+      if (sig === narrowSig) return;
+      narrowSig = sig;
+      if (stopNarrow) { try { stopNarrow(); } catch (e) {} stopNarrow = null; }
+      if (!ids.length) return;
+      stopNarrow = _freshDocRead(cp0, [].concat(...ids.map(id => [GROUP_D + id, GROUPKEY_D + id])), (e) => handlers.onevent(e),
+        () => { const t = Date.now(); for (const id of ids) tok.rooms.set(id, t); tok.genuine = true; tok.at = t; emit(); _keysReadSignal('groups'); });
+    };
     // steward-chosen order first (groups without an order fall to the end, by age)
-    const emit = () => { const arr = [...byId.values()].sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || (a.ts || 0) - (b.ts || 0)); try { localStorage.setItem(CACHE_KEY, JSON.stringify(arr)); } catch {} onGroups(arr); };
+    const emit = () => { const arr = [...byId.values()].sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || (a.ts || 0) - (b.ts || 0)); try { localStorage.setItem(CACHE_KEY, JSON.stringify(arr)); } catch {} onGroups(arr); wantNarrow(); };
     // paint cached groups instantly so the page doesn't flash empty before the relay answers
     try { const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || '[]'); if (Array.isArray(cached)) { _seedFromCache(versions, byId, cached, _consoleDisplay); for (const g of cached) if (g && g.encrypted) _sealedGroupIds.add(g.id); if (cached.length) onGroups(cached); } } catch {}
-    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
+    const handlers = {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (d.startsWith(GROUPKEY_D)) { stewIngestKey(e); return; }   // cache the church's own group keys
@@ -9621,8 +9848,10 @@ window.Steward = {
         try { const g = JSON.parse(e.content); if (g.encrypted) _sealedGroupIds.add(id); else _sealedGroupIds.delete(id); _absorbById(versions, byId, id, { id, ...g, ts: e.created_at, _by: e.pubkey }, _consoleDisplay); emit(); } catch {}
       },
       oneose() { emit(); },
-    });
-    return () => { try { sub.close(); } catch {} };
+    };
+    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], handlers);
+    wantNarrow();   // the rooms the cache already knows are read at once
+    return () => { tok.live = false; try { sub.close(); } catch {} if (stopNarrow) { try { stopNarrow(); } catch (e) {} } };
   },
 
   // ---- reading plans the church shares with the congregation ----
@@ -11140,7 +11369,12 @@ window.Steward = {
       if (!profTimer) profTimer = setTimeout(rebuildProfSub, 400);   // coalesce a burst of new members into one re-sub
     };
     // kind-1 = participation (message count); kind-30078 member:<pub> = an explicit join (even if quiet)
-    const sub = pool.subscribeMany(relays(), [{ kinds: [1], '#p': [pub] }, { kinds: [30078], '#p': [pub] }], {
+    // RE-ASKED AFTER AN UNBLOCK (room-key reconcile, round 2). The relay withholds a blocked person's events, so a
+    // console that opened this list while someone was blocked never saw their member document — and after the Unblock
+    // nothing asked again: they stayed off this list, so the key distributor never gave them the room, care, sermon or
+    // name key back (measured: a-room-key-reaches-a-member-the-console-never-saw-join, row E). setBlocked re-opens
+    // this subscription (`_membersReask`) once an unblock has landed. Counts cannot climb from it: `liveIds` dedupes.
+    const handlers = {
       onevent(e) {
         if (e.pubkey === pub) return;                  // skip the church's own posts
         if (e.kind === 30078) {
@@ -11160,7 +11394,12 @@ window.Steward = {
         byPub.set(e.pubkey, m); ensureProfile(e.pubkey); emit();
       },
       oneose() { emit(); },
-    });
+    };
+    const cp0 = pub;
+    const openMain = () => pool.subscribeMany(relays(), [{ kinds: [1], '#p': [cp0] }, { kinds: [30078], '#p': [cp0] }], handlers);
+    let sub = openMain();
+    const reask = () => { const old = sub; sub = openMain(); try { old.close(); } catch (e) {} };
+    _membersReask.add(reask);
     // the church's own signed re-seat map (same doc the Reconnect button writes). Its own small subscription:
     // the roster sub above is keyed on ['p',<church>], which a re-seat doc does not carry.
     const reseatSub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
@@ -11190,7 +11429,7 @@ window.Steward = {
       },
       oneose() {},
     });
-    return () => { _memberEmitters.delete(emit); try { sub.close(); } catch {} try { reseatSub.close(); } catch {} if (emitTimer) { try { clearTimeout(emitTimer); } catch {} } if (profTimer) { try { clearTimeout(profTimer); } catch {} } if (profSub) { try { profSub.close(); } catch {} } };
+    return () => { _memberEmitters.delete(emit); _membersReask.delete(reask); try { sub.close(); } catch {} try { reseatSub.close(); } catch {} if (emitTimer) { try { clearTimeout(emitTimer); } catch {} } if (profTimer) { try { clearTimeout(profTimer); } catch {} } if (profSub) { try { profSub.close(); } catch {} } };
   },
 
   // ---- church profile (kind-0): name etc. shown to members and in the console ----

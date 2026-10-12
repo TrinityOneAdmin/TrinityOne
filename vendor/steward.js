@@ -15384,10 +15384,32 @@ zoo`.split("\n");
       return /* @__PURE__ */ new Set();
     }
   }
-  function _rememberExStewards(before, after) {
+  var _exStewardsAtKey = () => "trinityone.steward.exstewards.at." + (pub || "");
+  function _exStewardRemovedAt() {
+    try {
+      const o = JSON.parse(localStorage.getItem(_exStewardsAtKey()) || "{}");
+      return o && typeof o === "object" && !Array.isArray(o) ? o : {};
+    } catch (e) {
+      return {};
+    }
+  }
+  function _rememberExStewards(before, after, at) {
     try {
       const now_ = new Set(after || []);
       const gone = [...before || []].filter((p) => p && !now_.has(p));
+      if (at) {
+        const m = _exStewardRemovedAt();
+        let moved = false;
+        for (const p of now_) if (p in m) {
+          delete m[p];
+          moved = true;
+        }
+        for (const p of gone) if (!(p in m)) {
+          m[p] = at;
+          moved = true;
+        }
+        if (moved) localStorage.setItem(_exStewardsAtKey(), JSON.stringify(m));
+      }
       if (!gone.length) return;
       const ex = _exStewardSet();
       let grew = false;
@@ -15408,8 +15430,8 @@ zoo`.split("\n");
       }
     }
   }
-  function _stewardRosterChanged(before, after) {
-    _rememberExStewards(before, after);
+  function _stewardRosterChanged(before, after, at) {
+    _rememberExStewards(before, after, at);
     _pokeMemberLists();
   }
   var _careRosterKnown = false;
@@ -15575,6 +15597,19 @@ zoo`.split("\n");
   var _srev = {};
   var _senvTs = {};
   var _senvRecips = {};
+  var _senvMine = {};
+  var _senvDropped = {};
+  function _noteEnvelopeDrops(gid, prev, next) {
+    const m = _senvDropped[gid] || (_senvDropped[gid] = /* @__PURE__ */ new Map());
+    const nx = new Set(next || []);
+    for (const pk of nx) m.delete(pk);
+    if (!Array.isArray(prev)) return;
+    const gone = prev.filter((pk) => !nx.has(pk));
+    if (!gone.length) return;
+    const t = Date.now();
+    for (const pk of gone) m.set(pk, t);
+    _reconfirmFresh();
+  }
   var _hex = (u) => Array.from(u).map((b) => b.toString(16).padStart(2, "0")).join("");
   var _unhex = (h) => new Uint8Array((String(h).match(/.{1,2}/g) || []).map((x) => parseInt(x, 16)));
   var _b64 = (u83) => {
@@ -15589,11 +15624,15 @@ zoo`.split("\n");
     if (!d.startsWith(GROUPKEY_D)) return;
     const gid = d.slice(GROUPKEY_D.length);
     if ((_senvTs[gid] || 0) > (e.created_at || 0)) return;
+    const newer = (e.created_at || 0) > (_senvTs[gid] || 0);
     _senvTs[gid] = e.created_at || 0;
     try {
       const env = JSON.parse(e.content || "{}");
       _srev[gid] = env.rev || 1;
+      const prev = _senvRecips[gid];
       _senvRecips[gid] = env.keys && typeof env.keys === "object" ? Object.keys(env.keys).map((p) => String(p).toLowerCase()) : [];
+      _senvMine[gid] = false;
+      _noteEnvelopeDrops(gid, newer ? prev : null, _senvRecips[gid]);
       const mine = env.keys && churchPub && env.keys[churchPub];
       if (mine && churchSk) {
         const plain = decrypt3(mine, getConversationKey(churchSk, e.pubkey));
@@ -15604,6 +15643,7 @@ zoo`.split("\n");
         } catch (x) {
         }
         _skeys[gid] = (ring && ring.length ? ring : [plain]).map(_unhex);
+        _senvMine[gid] = true;
       }
     } catch {
     }
@@ -16766,6 +16806,76 @@ zoo`.split("\n");
       }
     }
     return list;
+  }
+  var _freshReopeners = /* @__PURE__ */ new Set();
+  var _joinPolicyStates = /* @__PURE__ */ new Set();
+  var _membersReask = /* @__PURE__ */ new Set();
+  var _ensureGroupKeysBusy = /* @__PURE__ */ new Set();
+  var _ensureGroupKeysQuiet = /* @__PURE__ */ new Map();
+  function _freshTok() {
+    return { live: true, genuine: false, at: 0 };
+  }
+  function _tokIsFresh(t, since) {
+    if (!t || !t.cp || t.cp !== (actingChurch || pub) || t.epoch !== _keyReadEpoch) return false;
+    const s = t.sub;
+    return !!s && s.live === true && s.genuine === true && (!since || s.at > since);
+  }
+  function _listIsFresh(list, since) {
+    return _tokIsFresh(list && list._for, since);
+  }
+  function _reconfirmFresh() {
+    for (const f of [..._freshReopeners]) {
+      try {
+        f();
+      } catch (e) {
+      }
+    }
+  }
+  function _freshDocRead(cp0, ds, onevent, onFresh) {
+    let stop = null, stopped = false;
+    const open = () => {
+      if (stopped) return;
+      if (stop) {
+        try {
+          stop();
+        } catch (e) {
+        }
+      }
+      const st = _openKeyRead(
+        cp0,
+        [{ kinds: [30078], authors: [cp0], "#d": ds }, { kinds: [30078], "#church": [cp0], "#d": ds }],
+        (e) => {
+          if (!stopped) onevent(e);
+        },
+        (how) => {
+          if (stopped) return;
+          onFresh(how);
+          setTimeout(() => {
+            if (stop === st) {
+              try {
+                st();
+              } catch (e) {
+              }
+            }
+          }, 0);
+        },
+        void 0,
+        { withoutFailed: true }
+      );
+      stop = st;
+    };
+    _freshReopeners.add(open);
+    open();
+    return () => {
+      stopped = true;
+      _freshReopeners.delete(open);
+      if (stop) {
+        try {
+          stop();
+        } catch (e) {
+        }
+      }
+    };
   }
   function _keyReadOk(tok) {
     if (!tok || tok.closed || tok.relayClosed || tok.epoch !== _keyReadEpoch || !tok.cp || tok.cp !== (actingChurch || pub)) return false;
@@ -19946,8 +20056,8 @@ zoo`.split("\n");
       if (actingChurch) return false;
       if (!sk || !_mediaKeyHex) return false;
       const pub0 = pub, ep0 = _keyReadEpoch, sk0 = sk;
-      const want = [.../* @__PURE__ */ new Set([pub0, ...(memberPubs || []).filter(Boolean), ...(stewardPubs || []).filter(Boolean)])].filter((p) => !_localBlocked.has(String(p).toLowerCase()));
       const have = _mediaKeyDocKeys || {};
+      const want = [.../* @__PURE__ */ new Set([pub0, ...(memberPubs || []).filter(Boolean), ...(stewardPubs || []).filter(Boolean), ...Object.keys(have)])].filter((p) => !_localBlocked.has(String(p).toLowerCase()));
       if (want.every((p) => have[p])) return false;
       const fp = want.slice().sort().join(",");
       if (_mediaKeyPushRefused === fp) return false;
@@ -20077,8 +20187,8 @@ zoo`.split("\n");
       const minting = !_careKeyHex;
       const ring0 = minting ? [_hex(crypto.getRandomValues(new Uint8Array(32)))] : _careKeyRing.length ? _careKeyRing : [_careKeyHex];
       const rev2 = minting ? 1 : _careKeyRev;
-      const want = [...new Set([cp, churchPub, ...memberPubs || [], ...stewardPubs || []].filter(Boolean))].filter((p) => !_localBlocked.has(String(p).toLowerCase()));
       const have = (minting ? null : _careKeyDocKeys) || {};
+      const want = [...new Set([cp, churchPub, ...memberPubs || [], ...stewardPubs || [], ...Object.keys(have)].filter(Boolean))].filter((p) => !_localBlocked.has(String(p).toLowerCase()));
       if (want.every((p2) => have[p2])) return false;
       const _v1 = _careKeyVer;
       const _cfit = _fitKeyRing(ring0, want.length, (pl) => encrypt2(pl, getConversationKey(sk0, want[0])));
@@ -20945,19 +21055,30 @@ zoo`.split("\n");
       for (const g of groups || []) {
         if (!g || !g.id || !g.encrypted) continue;
         if ((_skeys[g.id] || []).length) continue;
-        const canary = await pool.querySync(relays(), [{ kinds: [30078], "#d": [GROUP_D + g.id], limit: 1 }]);
-        if (!Array.isArray(canary) || !canary.length) continue;
-        const envelopes = await pool.querySync(relays(), [{ kinds: [30078], authors: [.../* @__PURE__ */ new Set([cp, churchPub])], "#d": [GROUPKEY_D + g.id], limit: 1 }]);
-        const sealed = await pool.querySync(relays(), [{ kinds: [1], "#t": [g.id], limit: 20 }]);
-        if (!Array.isArray(envelopes) || !Array.isArray(sealed)) continue;
-        if (envelopes.length) continue;
-        if (sealed.some((e) => (e.tags || []).some((t) => t[0] === "enc" && t[1] === "1"))) {
-          out.push({ id: g.id, name: g.name || "", state: "needs-decision" });
-          continue;
+        const gk = cp + "|" + g.id;
+        if (_ensureGroupKeysBusy.has(gk)) continue;
+        if (Date.now() < (_ensureGroupKeysQuiet.get(gk) || 0)) continue;
+        _ensureGroupKeysBusy.add(gk);
+        try {
+          const canary = await pool.querySync(relays(), [{ kinds: [30078], "#d": [GROUP_D + g.id], limit: 1 }]);
+          if (!Array.isArray(canary) || !canary.length) continue;
+          const envelopes = await pool.querySync(relays(), [{ kinds: [30078], authors: [.../* @__PURE__ */ new Set([cp, churchPub])], "#d": [GROUPKEY_D + g.id], limit: 1 }]);
+          const sealed = await pool.querySync(relays(), [{ kinds: [1], "#t": [g.id], limit: 20 }]);
+          if (!Array.isArray(envelopes) || !Array.isArray(sealed)) continue;
+          if (envelopes.length) {
+            _ensureGroupKeysQuiet.set(gk, Date.now() + 6e4);
+            continue;
+          }
+          if (sealed.some((e) => (e.tags || []).some((t) => t[0] === "enc" && t[1] === "1"))) {
+            out.push({ id: g.id, name: g.name || "", state: "needs-decision" });
+            continue;
+          }
+          const recips = g.visibility === "invite" ? g.members || [] : memberPubs || [];
+          const r = await this.publishGroupKey(g.id, recips, { background: true });
+          out.push({ id: g.id, name: g.name || "", state: r === null || r === false ? "failed" : "issued" });
+        } finally {
+          _ensureGroupKeysBusy.delete(gk);
         }
-        const recips = g.visibility === "invite" ? g.members || [] : memberPubs || [];
-        const r = await this.publishGroupKey(g.id, recips, { background: true });
-        out.push({ id: g.id, name: g.name || "", state: r === null || r === false ? "failed" : "issued" });
       }
       return out;
     },
@@ -20965,6 +21086,7 @@ zoo`.split("\n");
       if (!churchSk || !churchPub) return Promise.resolve(null);
       const haveRing = (_skeys[groupId] || []).length > 0;
       if (opts.reuseOnly && !haveRing) return Promise.resolve(null);
+      if (opts.reuseOnly && _senvMine[groupId] !== true) return Promise.resolve(null);
       const recips = [.../* @__PURE__ */ new Set([actingChurch || churchPub, churchPub, ...(memberPubs || []).map((p) => toPubHex(p) || p).filter(Boolean)])].filter((p) => !_localBlocked.has(String(p).toLowerCase()));
       let ring = _skeys[groupId] || [];
       let key = ring[0];
@@ -21005,7 +21127,12 @@ zoo`.split("\n");
       _skeys[groupId] = ring;
       _srev[groupId] = rev2;
       _senvTs[groupId] = _env.created_at || 0;
-      _senvRecips[groupId] = (build.recips || []).map((p) => String(p).toLowerCase());
+      {
+        const prevR = _senvRecips[groupId];
+        _senvRecips[groupId] = (build.recips || []).map((p) => String(p).toLowerCase());
+        _senvMine[groupId] = true;
+        _noteEnvelopeDrops(groupId, prevR, _senvRecips[groupId]);
+      }
       if (skipped.length) {
         console.warn("[steward] group key " + groupId + ": could not seal to " + skipped.length + " member(s) \u2014 they cannot read or post in that room");
         return { ok: true, skipped: skipped.slice() };
@@ -21015,9 +21142,36 @@ zoo`.split("\n");
     // WHO THE NEWEST ENVELOPE OF A ROOM IS WRAPPED TO — or null when this console holds no ring for the room (its
     // envelope has not been ingested, or carries no copy for this church), in which case nothing can be re-wrapped
     // anyway (publishGroupKey with reuseOnly would do nothing). Read by KeyDistributor (app/stew-dashboard.jsx).
+    // …and null too when the newest envelope had no copy this console could open (_senvMine): the ring we hold is then
+    // an older generation, and nothing may be re-wrapped from it.
     groupKeyRecipients(groupId) {
-      if (!(_skeys[groupId] || []).length || !_senvRecips[groupId]) return null;
+      if (!(_skeys[groupId] || []).length || !_senvRecips[groupId] || _senvMine[groupId] !== true) return null;
       return _senvRecips[groupId].slice();
+    },
+    // who the room's newest envelopes DROPPED, and when this console saw it: [{ pub, at }] (lower-case hex). The key
+    // distributor holds them back until the authority lists have been re-read since `at` (see _senvDropped).
+    groupKeyDropped(groupId) {
+      const m = _senvDropped[groupId];
+      return m ? [...m.entries()].map(([p, at]) => ({ pub: p, at })) : [];
+    },
+    // IS THIS LIST FRESH — the current church's, from a subscription open now, settled by a genuine per-relay read, and
+    // (with `since`) re-read after that moment? See _freshDocRead. Read by KeyDistributor (app/stew-dashboard.jsx).
+    listIsFresh(list, since) {
+      return _listIsFresh(list, since);
+    },
+    // the same, for one ROOM of a group list: its document and key envelope have been read genuinely (subscribeGroups)
+    groupFresh(list, groupId, since) {
+      const t = list && list._for;
+      if (!_tokIsFresh(t)) return false;
+      const at = t.sub.rooms && t.sub.rooms.get(groupId);
+      return !!at && (!since || at > since);
+    },
+    // the join policy as a FRESH read has it: true / false, or null when no fresh read is in hand. A boolean cannot carry
+    // the stamp an array does, so the engine keeps it (subscribeJoinPolicy). Read by KeyDistributor.
+    joinPolicyFresh(since) {
+      let best = null;
+      for (const st of _joinPolicyStates) if (_tokIsFresh(st.tag, since) && (!best || st.tag.sub.at > best.tag.sub.at)) best = st;
+      return best ? best.approval : null;
     },
     // which of `pubs` (hex or npub) the room's newest envelope has NO copy for — null as for groupKeyRecipients.
     // Returns the entries as given, so a caller can compare them with its own list.
@@ -21120,7 +21274,8 @@ zoo`.split("\n");
     // ---- moderation: the church's blocklist (banned member pubkeys). The relay rejects their writes
     // and withholds their existing events. Replaceable doc d=blocked:<churchpub>. ----
     subscribeBlocked(onBlocked) {
-      const _tag = _listTag(), _deliver = onBlocked, cp0 = pub;
+      const _tag = _listTag(), _deliver = onBlocked, cp0 = pub, tok = _freshTok();
+      _tag.sub = tok;
       let genuine = false, floored = false;
       const withFloor = (list) => floored ? [.../* @__PURE__ */ new Set([...(list || []).map((p) => String(p).toLowerCase()), ..._blockedLastSet(cp0)])] : list;
       onBlocked = (list) => _deliver(genuine ? _stampFor(withFloor(list), _tag) : list);
@@ -21147,24 +21302,25 @@ zoo`.split("\n");
           onBlocked(cur);
         }
       });
-      const stopRead = _openKeyRead(
+      const stopRead = _freshDocRead(
         cp0,
-        [{ kinds: [30078], authors: [cp0], "#d": [BLOCKED_D + cp0] }],
+        [BLOCKED_D + cp0],
         (e) => {
           if (take(e)) onBlocked(cur);
         },
         (how) => {
-          if (genuine) return;
           genuine = true;
           floored = !!(how && how.without && how.without.length);
+          tok.genuine = true;
+          tok.at = Date.now();
           cur = [...cur];
           _noteBlockedList(cp0, _tag.epoch, withFloor(cur), latest);
           onBlocked(cur);
-        },
-        void 0,
-        { withoutFailed: true }
+          _keysReadSignal("blocked");
+        }
       );
       return () => {
+        tok.live = false;
         try {
           sub.close();
         } catch {
@@ -21294,6 +21450,12 @@ zoo`.split("\n");
         if (ok && drop.length && seq === _setBlockedSeq && (actingChurch || pub) === cp0) {
           for (const p of drop) _localBlocked.delete(p);
           lsSet(BLOCKED_LAST_LS + cp0, JSON.stringify([..._localBlocked]));
+          for (const f of [..._membersReask]) {
+            try {
+              f();
+            } catch (e) {
+            }
+          }
         }
         return ok;
       }));
@@ -21940,32 +22102,67 @@ zoo`.split("\n");
     // ---- joining: by default anyone with the invite/QR joins instantly. A steward can switch on
     // "require approval", and then a new member is held as a pending request until admitted. The relay
     // reads joinpolicy:<churchpub> + the admitted:<churchpub> allowlist and withholds posting until then. ----
+    // THE STREAM'S `false` IS NOT AN ANSWER (audit of 78ffad0, finding 2). It delivers `approval` from `oneose`, and on
+    // a slow link nostr-tools' own EOSE timer (4.4 s) fires before the joinpolicy document arrives: "approval is off",
+    // and the key distributor handed the open-room, care and sermon keys to a member still waiting to be let in —
+    // for good, since those keys only grow. The screens still get the stream (a switch should not wait), but the key
+    // distributor reads Steward.joinPolicyFresh(), which answers only once a NARROW read of this one document has
+    // settled genuinely on every connected relay (_freshDocRead) — the blocklist's rule. `cp0`: the church it was
+    // opened for, as subscribeBlocked keeps it.
     subscribeJoinPolicy(onPolicy) {
+      const cp0 = pub, tag = _listTag(), tok = _freshTok();
+      tag.sub = tok;
+      const state = { tag, approval: false };
+      _joinPolicyStates.add(state);
       let approval = false, latest = 0;
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
-        onevent(e) {
-          const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
-          if (d !== JOINPOLICY_D + pub) return;
-          if (_authFuture(e) || !_byChurchOrSteward(e)) return;
-          if (e.created_at < latest) return;
-          latest = e.created_at;
-          if (e.tags.some((t) => t[0] === "deleted") || !e.content) approval = false;
-          else {
-            try {
-              approval = !!JSON.parse(e.content).approval;
-            } catch {
-              approval = false;
-            }
+      const take = (e) => {
+        const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+        if (d !== JOINPOLICY_D + cp0) return false;
+        if (_authFuture(e) || !_byChurchOrSteward(e)) return false;
+        if (e.created_at < latest) return false;
+        latest = e.created_at;
+        if (e.tags.some((t) => t[0] === "deleted") || !e.content) approval = false;
+        else {
+          try {
+            approval = !!JSON.parse(e.content).approval;
+          } catch {
+            approval = false;
           }
-          onPolicy(approval);
+        }
+        state.approval = approval;
+        return true;
+      };
+      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [cp0], "#t": [NET] }, { kinds: [30078], "#church": [cp0], "#t": [NET] }], {
+        onevent(e) {
+          if (take(e)) onPolicy(approval);
         },
         oneose() {
           onPolicy(approval);
         }
       });
+      const stopRead = _freshDocRead(
+        cp0,
+        [JOINPOLICY_D + cp0],
+        (e) => {
+          if (take(e)) onPolicy(approval);
+        },
+        () => {
+          tok.genuine = true;
+          tok.at = Date.now();
+          state.approval = approval;
+          onPolicy(approval);
+          _keysReadSignal("joinpolicy");
+        }
+      );
       return () => {
+        tok.live = false;
+        _joinPolicyStates.delete(state);
         try {
           sub.close();
+        } catch {
+        }
+        try {
+          stopRead();
         } catch {
         }
       };
@@ -22060,41 +22257,102 @@ zoo`.split("\n");
     // still carries them. Blocking is unaffected — it is a separate document and a separate gate at the relay,
     // and blocking is how a member is actually removed (see the Block path in app/stew-dashboard.jsx).
     //
-    // _byChurchOrSteward IS KEPT, AND THAT IS A DELIBERATE SEAM. It is a CURRENT-roster test, so a departed
-    // steward's copy stops appearing in this console's view even though the relay keeps serving it (that is
-    // what the retractionExempt entry in scripts/gateway.mjs is for). Dropping the test would mean a relay
-    // could hand this console admissions signed by any key at all — and the very next Approve press would
-    // republish them as the CHURCH'S OWN signed copy, laundering a forgery into the church's authority. The
-    // people themselves are not un-admitted by this: the relay's own allowlist is what the doors read.
+    // WHOSE COPY COUNTS (audit of 78ffad0, finding 3; the owner's rule of 2026-09-16, "approved members must always
+    // survive a steward leaving"). This used to be _byChurchOrSteward — the church or a CURRENT steward — so a member a
+    // since-removed delegate had approved looked pending here while the relay (until its next restart) let them in, and
+    // the key distributor withheld their keys. Now three authors count:
+    //   · the church;
+    //   · a steward on the current roster;
+    //   · a steward THIS DEVICE SAW on a church-signed roster and then saw dropped from it, for a copy dated no later
+    //     than the roster that dropped them (_exStewardRemovedAt, written by subscribeStewards).
+    // WHY NOT EVERY AUTHOR, as the relay's union reads to the eye. A relay that does not enforce (a public one a church
+    // adds) could then hand this console approvals signed by any key at all — and the next Approve press would publish
+    // them as the CHURCH'S OWN signed copy, laundering a forgery into the church's authority. Every author counted here
+    // is one a church-signed roster named, and an ex-steward cannot write themselves a later approval. The future clamp
+    // (_authFuture) stays. What it costs: a device that never saw the removal still shows that person as waiting (the
+    // safe direction), and the relay itself forgets a departed steward's approvals when it restarts (the KNOWN GAP in
+    // approved-members-survive-a-steward-leaving.test.mjs, the owner's to decide) — this console may then key someone the
+    // relay holds back, who gets keys the relay will not serve them data for.
+    //
+    // FRESH, NOT ONLY CURRENT: the list is stamped for the church, with the token a narrow read of this one address sets
+    // once it has settled genuinely on every connected relay (_freshDocRead) — the key distributor uses nothing less.
+    // Every copy is kept, and the union recomputed whenever the steward roster changes (_memberEmitters), so a steward's
+    // copy that arrived before the roster is counted once the roster says who they are.
     subscribeAdmitted(onList) {
+      const cp0 = pub, tok = _freshTok();
+      {
+        const _tag = _listTag(), _deliver = onList;
+        _tag.sub = tok;
+        onList = (list) => _deliver(_stampFor(list, _tag));
+      }
       let cur = [];
       const byAuthor = /* @__PURE__ */ new Map();
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
+      const counts = (author, at) => {
+        if (author === cp0 || _careRoster.has(author)) return true;
+        const gone = _exStewardRemovedAt()[author];
+        return !!gone && at <= gone;
+      };
+      const fold = () => {
+        const all = /* @__PURE__ */ new Set();
+        for (const [author, v] of byAuthor) if (counts(author, v.at)) {
+          for (const pk of v.pubkeys) if (pk) all.add(pk);
+        }
+        cur = [...all];
+      };
+      const take = (e) => {
+        const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+        if (d !== ADMITTED_D + cp0) return false;
+        if (_authFuture(e)) return false;
+        const prev = byAuthor.get(e.pubkey);
+        if (prev && e.created_at < prev.at) return false;
+        let list = [];
+        try {
+          list = JSON.parse(e.content).pubkeys || [];
+        } catch {
+          list = [];
+        }
+        byAuthor.set(e.pubkey, { at: e.created_at, pubkeys: Array.isArray(list) ? list : [] });
+        fold();
+        return true;
+      };
+      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [cp0], "#t": [NET] }, { kinds: [30078], "#church": [cp0], "#t": [NET] }], {
         onevent(e) {
-          const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
-          if (d !== ADMITTED_D + pub) return;
-          if (_authFuture(e) || !_byChurchOrSteward(e)) return;
-          const prev = byAuthor.get(e.pubkey);
-          if (prev && e.created_at < prev.at) return;
-          let list = [];
-          try {
-            list = JSON.parse(e.content).pubkeys || [];
-          } catch {
-            list = [];
-          }
-          byAuthor.set(e.pubkey, { at: e.created_at, pubkeys: list });
-          const all = /* @__PURE__ */ new Set();
-          for (const v of byAuthor.values()) for (const pk of v.pubkeys) if (pk) all.add(pk);
-          cur = [...all];
-          onList(cur);
+          if (take(e)) onList(cur);
         },
         oneose() {
           onList(cur);
         }
       });
+      const refold = () => {
+        if (!byAuthor.size) return;
+        const was = cur.slice().sort().join(",");
+        fold();
+        if (cur.slice().sort().join(",") !== was) onList(cur);
+      };
+      _memberEmitters.add(refold);
+      const stopRead = _freshDocRead(
+        cp0,
+        [ADMITTED_D + cp0],
+        (e) => {
+          if (take(e)) onList(cur);
+        },
+        () => {
+          tok.genuine = true;
+          tok.at = Date.now();
+          cur = [...cur];
+          onList(cur);
+          _keysReadSignal("admitted");
+        }
+      );
       return () => {
+        tok.live = false;
+        _memberEmitters.delete(refold);
         try {
           sub.close();
+        } catch {
+        }
+        try {
+          stopRead();
         } catch {
         }
       };
@@ -22367,12 +22625,14 @@ zoo`.split("\n");
     // grants those keys day-to-day church powers (but never the roster/blocklist/relay-policy — owner-only),
     // and revocation = re-publish the roster without them. See STEWARD-ROSTER-DESIGN.md. ----
     subscribeStewards(onList) {
+      const tok = _freshTok();
       {
         const _tag = _listTag(), _deliver = onList;
+        _tag.sub = tok;
         onList = (list) => _deliver(_stampFor(list, _tag));
       }
       let cur = [], latest = 0;
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
+      const handlers = {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (d !== STEWARDS_D + pub) return;
@@ -22412,7 +22672,7 @@ zoo`.split("\n");
           _careRoster = new Set(cur.filter(Boolean));
           _careRosterKnown = true;
           _careRosterSeen = true;
-          _stewardRosterChanged(_rosterBefore, cur);
+          _stewardRosterChanged(_rosterBefore, cur, e.created_at);
           onList(cur);
         },
         oneose() {
@@ -22422,10 +22682,28 @@ zoo`.split("\n");
           }
           onList(cur);
         }
-      });
+      };
+      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], handlers);
+      const stopRead = _freshDocRead(
+        pub,
+        [STEWARDS_D + pub],
+        (e) => handlers.onevent(e),
+        () => {
+          tok.genuine = true;
+          tok.at = Date.now();
+          _careRosterKnown = true;
+          onList([...cur]);
+          _keysReadSignal("stewards");
+        }
+      );
       return () => {
+        tok.live = false;
         try {
           sub.close();
+        } catch {
+        }
+        try {
+          stopRead();
         } catch {
         }
       };
@@ -22910,13 +23188,44 @@ zoo`.split("\n");
       };
     },
     subscribeGroups(onGroups) {
+      const cp0 = pub, tok = _freshTok();
+      tok.rooms = /* @__PURE__ */ new Map();
       {
         const _tag = _listTag(), _deliver = onGroups;
+        _tag.sub = tok;
         onGroups = (list) => _deliver(_stampFor(list, _tag));
       }
       const CACHE_KEY = "trinityone.steward.groups.v2." + (pub || "");
       const byId = /* @__PURE__ */ new Map();
       const versions = /* @__PURE__ */ new Map();
+      let narrowSig = "", stopNarrow = null;
+      const wantNarrow = () => {
+        const ids = [...byId.values()].filter((g) => g && g.encrypted && g.id).map((g) => g.id).sort();
+        const sig = ids.join(",");
+        if (sig === narrowSig) return;
+        narrowSig = sig;
+        if (stopNarrow) {
+          try {
+            stopNarrow();
+          } catch (e) {
+          }
+          stopNarrow = null;
+        }
+        if (!ids.length) return;
+        stopNarrow = _freshDocRead(
+          cp0,
+          [].concat(...ids.map((id) => [GROUP_D + id, GROUPKEY_D + id])),
+          (e) => handlers.onevent(e),
+          () => {
+            const t = Date.now();
+            for (const id of ids) tok.rooms.set(id, t);
+            tok.genuine = true;
+            tok.at = t;
+            emit();
+            _keysReadSignal("groups");
+          }
+        );
+      };
       const emit = () => {
         const arr = [...byId.values()].sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || (a.ts || 0) - (b.ts || 0));
         try {
@@ -22924,6 +23233,7 @@ zoo`.split("\n");
         } catch {
         }
         onGroups(arr);
+        wantNarrow();
       };
       try {
         const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || "[]");
@@ -22934,7 +23244,7 @@ zoo`.split("\n");
         }
       } catch {
       }
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
+      const handlers = {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (d.startsWith(GROUPKEY_D)) {
@@ -22960,11 +23270,20 @@ zoo`.split("\n");
         oneose() {
           emit();
         }
-      });
+      };
+      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], handlers);
+      wantNarrow();
       return () => {
+        tok.live = false;
         try {
           sub.close();
         } catch {
+        }
+        if (stopNarrow) {
+          try {
+            stopNarrow();
+          } catch (e) {
+          }
         }
       };
     },
@@ -24576,7 +24895,7 @@ zoo`.split("\n");
         profWanted.add(pk);
         if (!profTimer) profTimer = setTimeout(rebuildProfSub, 400);
       };
-      const sub = pool.subscribeMany(relays(), [{ kinds: [1], "#p": [pub] }, { kinds: [30078], "#p": [pub] }], {
+      const handlers = {
         onevent(e) {
           if (e.pubkey === pub) return;
           if (e.kind === 30078) {
@@ -24623,7 +24942,19 @@ zoo`.split("\n");
         oneose() {
           emit();
         }
-      });
+      };
+      const cp0 = pub;
+      const openMain = () => pool.subscribeMany(relays(), [{ kinds: [1], "#p": [cp0] }, { kinds: [30078], "#p": [cp0] }], handlers);
+      let sub = openMain();
+      const reask = () => {
+        const old = sub;
+        sub = openMain();
+        try {
+          old.close();
+        } catch (e) {
+        }
+      };
+      _membersReask.add(reask);
       const reseatSub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
@@ -24662,6 +24993,7 @@ zoo`.split("\n");
       });
       return () => {
         _memberEmitters.delete(emit);
+        _membersReask.delete(reask);
         try {
           sub.close();
         } catch {

@@ -70,6 +70,7 @@ const NET = 'trinityone';
 // test did exactly that and survived its own sabotage.
 function consoleAt({ relayAuthed = true, cache = null, oldCache = null, mountGroups = 'now' } = {}) {
   const opened = [];
+  const freshReads = [];   // the narrow reads subscribeGroups opens beside its stream (round 2) — see the last test
   const stored = new Map();
   if (cache) stored.set('trinityone.steward.groups.v2.' + CHURCH, JSON.stringify(cache));
   if (oldCache) stored.set('trinityone.steward.groups.' + CHURCH, JSON.stringify(oldCache));   // written before 2026-10-02
@@ -94,6 +95,11 @@ function consoleAt({ relayAuthed = true, cache = null, oldCache = null, mountGro
     _sealedGroupIds: new Set(),
     // both readers stamp each list with the church and epoch they were opened for (_listTag, lifted below)
     actingChurch: '', _keyReadEpoch: 0,
+    // …and since round 2 of the room-key reconcile each also opens a narrow "fresh" read beside its stream, which the
+    // key distributor waits on (tested in key-reads-settle-only-for-the-church-they-asked-about.test.mjs). This file
+    // is about what the screens DISPLAY, so the narrow read opens nothing here and `opened` still counts the streams.
+    _freshTok: () => ({ live: true, genuine: false, at: 0 }), _keysReadSignal: () => {},
+    _freshDocRead: (cp, ds, onevent, onFresh) => { const r = { ds, onevent, onFresh, closed: false }; freshReads.push(r); return () => { r.closed = true; }; },
   };
   const body = ['_pickWinner', '_reduceVersions', '_absorbById', '_forgetById', '_tombstoneTargets',
     // `_capsOf` is how both predicates read the capability list — it normalises it the way the relay does
@@ -135,8 +141,10 @@ function consoleAt({ relayAuthed = true, cache = null, oldCache = null, mountGro
       tags: [['d', GROUP_D + id], ['t', NET], ['deleted', '1'], ['church', CHURCH], ...forWhom.map(f => ['for', f])],
     }),
     eose: () => sub().oneose(),
+    raw: (e) => sub().onevent(e),
     names: () => groups.map(g => g.name).filter(Boolean).sort(),
     painted: () => groups,
+    freshReads,
     cached: () => JSON.parse(stored.get('trinityone.steward.groups.v2.' + CHURCH) || '[]').map(g => g.name).filter(Boolean).sort(),
   };
 }
@@ -325,4 +333,30 @@ test('READER: a groups cache written before 2026-10-02 — which may hold anothe
   // CONTROL: the current cache is painted
   const d = consoleAt({ cache: [{ id: 'g1', name: 'Sunday Prayer', ts: 50, _by: CHURCH }] });
   assert.deepEqual(d.painted().map(g => g.name), ['Sunday Prayer'], 'CONTROL: the current cache is no longer painted at all');
+});
+
+// ROUND 2 OF THE ROOM-KEY RECONCILE: EACH ENCRYPTED ROOM IS "FRESH" ON ITS OWN. The key distributor re-keys a room only
+// once a narrow read of that room's document AND key envelope has settled genuinely (Steward.groupFresh) — the cached
+// copy paints at once, and the relays answer newest first, so a rotated envelope arrives before the document behind it.
+// The shipped subscribeGroups, run: which reads it opens, what settles, and that a closed subscription's list is not live.
+test('round 2 · the groups reader reads each ENCRYPTED room\'s document and envelope genuinely, and says which rooms have settled', () => {
+  const c = consoleAt({ cache: [{ id: 'sealed1', name: 'Prayer', encrypted: true }, { id: 'open1', name: 'Notices' }] });
+  const gr = () => c.freshReads.filter(r => r.ds.some(d => d.startsWith('trinityone/group')));   // (the steward roster opens its own)
+  assert.equal(gr().length, 1, 'the rooms the cache already knows are not read at once');
+  assert.deepEqual([...gr()[0].ds].sort(), ['trinityone/group:sealed1', 'trinityone/groupkey:sealed1'],
+    'the narrow read does not cover exactly the encrypted room\'s document and key envelope');
+  const tokOf = () => c.painted()._for && c.painted()._for.sub;
+  c.group(CHURCH, 'sealed1', 'Prayer');
+  assert.ok(!(tokOf() && tokOf().rooms && tokOf().rooms.get('sealed1')), 'a room counted as read before its narrow read settled');
+  gr()[0].onFresh({});
+  assert.ok(tokOf().rooms.get('sealed1') > 0, 'THE SETTLED READ DID NOT MARK THE ROOM FRESH — the key distributor would never re-key it');
+  assert.equal(tokOf().live, true, 'CONTROL: the open subscription\'s token is not live');
+  // a new encrypted room appears on the stream: the read is opened again, covering it
+  c.eose();
+  const before = gr().length;
+  const ev = { pubkey: CHURCH, created_at: 300, content: JSON.stringify({ name: 'Leaders', encrypted: true, visibility: 'invite', members: [] }), tags: [['d', GROUP_D + 'sealed2'], ['t', NET]] };
+  c.raw(ev);
+  assert.ok(gr().length > before, 'a NEW encrypted room was never read genuinely, so it could never be re-keyed');
+  assert.ok(gr().at(-1).ds.includes('trinityone/groupkey:sealed2'), 'the re-opened read does not cover the new room');
+  assert.ok(gr()[0].closed, 'the superseded narrow read was left open');
 });
