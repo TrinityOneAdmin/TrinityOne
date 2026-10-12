@@ -5495,7 +5495,10 @@ function DashVersePrompt() {
   var addRef = function() {
     if (!assembled) return;
     if (refs.some(function(r) { return r.ref === assembled; })) return;
-    setRefs(function(prev) { return prev.concat([{ ref: assembled, date: '', time: '' }]); });
+    // WHEN starts at the current local minute (an untouched row means "now"); the steward can change it
+    var n = new Date(), p2 = function(x) { return String(x).padStart(2, '0'); };
+    var nowDate = n.getFullYear() + '-' + p2(n.getMonth() + 1) + '-' + p2(n.getDate()), nowTime = p2(n.getHours()) + ':' + p2(n.getMinutes());
+    setRefs(function(prev) { return prev.concat([{ ref: assembled, date: nowDate, time: nowTime }]); });
     setBook(''); setChap(''); setFrom(''); setTo('');
   };
 
@@ -5510,12 +5513,18 @@ function DashVersePrompt() {
   var push = function() {
     if (refs.length === 0) return;
     setBusy(true); setMsg('');
-    var newSchedule = refs.filter(function(r) { return r.date && r.time; }).map(function(r) {
+    var existingSchedule = (vp && vp.schedule) ? vp.schedule : [];
+    // a row dated at or before this minute is "now": it goes out as an immediate passage, exactly as an empty row used to,
+    // unless the prompt already carries a schedule (members read only the schedule then, so it is kept as a past entry)
+    var nowMs = Date.now();
+    var anyFuture = refs.some(function(r) { return r.date && r.time && new Date(r.date + 'T' + r.time).getTime() > nowMs; });
+    var keepPast = anyFuture || existingSchedule.length > 0;
+    var isSched = function(r) { return r.date && r.time && (keepPast || new Date(r.date + 'T' + r.time).getTime() > nowMs); };
+    var newSchedule = refs.filter(isSched).map(function(r) {
       return { at: Math.floor(new Date(r.date + 'T' + r.time).getTime() / 1000), ref: r.ref, note: '' };
     });
-    var existingSchedule = (vp && vp.schedule) ? vp.schedule : [];
     var existingRefs = (vp && vp.ref) ? vp.ref : '';
-    var newImmediateRefs = refs.filter(function(r) { return !r.date || !r.time; }).map(function(r) { return r.ref; });
+    var newImmediateRefs = refs.filter(function(r) { return !isSched(r); }).map(function(r) { return r.ref; });
     var mergedSchedule = existingSchedule.concat(newSchedule).sort(function(a, b) { return a.at - b.at; });
     var allRefParts = [];
     if (existingRefs) allRefParts.push(existingRefs);
@@ -5642,7 +5651,8 @@ function DashVersePrompt() {
           {refs.map(function(r, i) {
             var hasSched = r.date && r.time;
             var ts = hasSched ? new Date(r.date + 'T' + r.time).getTime() : 0;
-            var past = ts && ts < Date.now();
+            var past = ts && ts < Date.now() - 60000;   // the default WHEN is the minute it was added: that is "now", not "past"
+            var isNow = !hasSched || (ts && ts <= Date.now());
             return <div key={i} style={{ padding: '12px 14px', borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
                 <Icon name="book" size={16} color="var(--sage-ink)" />
@@ -5653,13 +5663,13 @@ function DashVersePrompt() {
                 <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '0.3px' }}>WHEN</div>
                 <input type="date" value={r.date} onChange={function(e) { updateRefSched(i, 'date', e.target.value); }} style={Object.assign({}, selStyle, { width: 148, height: 34, fontSize: 12.5 })} />
                 <input type="time" value={r.time} onChange={function(e) { updateRefSched(i, 'time', e.target.value); }} style={Object.assign({}, selStyle, { width: 108, height: 34, fontSize: 12.5 })} />
-                {!hasSched ? <span style={{ fontSize: 11, color: 'var(--ink-3)' }}>now</span> : past ? <span style={{ fontSize: 11, color: 'var(--clay-ink)', fontWeight: 700 }}>past</span> : <span style={{ fontSize: 11, color: 'var(--sage-ink)', fontWeight: 700 }}>scheduled</span>}
+                {isNow && !past ? <span style={{ fontSize: 11, color: 'var(--ink-3)' }}>now</span> : past ? <span style={{ fontSize: 11, color: 'var(--clay-ink)', fontWeight: 700 }}>past</span> : <span style={{ fontSize: 11, color: 'var(--sage-ink)', fontWeight: 700 }}>scheduled</span>}
               </div>
             </div>;
           })}
         </div>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-          <button onClick={push} disabled={busy} className="sk-btn sk-btn--clay" style={{ padding: '10px 18px', fontSize: 14, opacity: busy ? 0.55 : 1 }}><Icon name={refs.some(function(r) { return r.date && r.time; }) ? 'clock' : 'send'} size={15} color="var(--on-clay)" /> {refs.some(function(r) { return r.date && r.time; }) ? 'Schedule' : 'Set for church'}</button>
+          <button onClick={push} disabled={busy} className="sk-btn sk-btn--clay" style={{ padding: '10px 18px', fontSize: 14, opacity: busy ? 0.55 : 1 }}><Icon name={refs.some(function(r) { return r.date && r.time && new Date(r.date + 'T' + r.time).getTime() > Date.now(); }) ? 'clock' : 'send'} size={15} color="var(--on-clay)" /> {refs.some(function(r) { return r.date && r.time && new Date(r.date + 'T' + r.time).getTime() > Date.now(); }) ? 'Schedule' : 'Set for church'}</button>
           {msg ? <span style={{ fontSize: 13, fontWeight: 700, color: msg.indexOf('Failed') === 0 ? 'var(--clay-ink)' : 'var(--sage-ink)' }}>{msg}</span> : null}
         </div>
       </Panel> : null}
