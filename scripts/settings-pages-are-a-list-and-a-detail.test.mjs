@@ -46,6 +46,7 @@ function consoleWith(React, over = {}) {
     removeItem: (k) => store.delete(k),
   };
   const win = {
+    NETWORKS_ENABLED: over.networks === undefined ? true : over.networks,   // the NETWORKS SWITCH (app/stew-data.jsx): on, because this file counts/opens the Network page; OFF is asserted in settings-cards-sit-in-authored-stacks and settings-pages-are-a-list-and-a-detail
     useStewardChurch: () => ({ name: 'Grace Church', npub: 'npub1grace', features: {}, rules: {} }),
     useStewardIdv: () => 0,
     useStewardRelays: () => (over.relays || []), useStewardNetworks: () => [], useStewardRosters: () => [],
@@ -481,4 +482,18 @@ test('the sidebar’s "lock with a PIN" link opens the Church key page, with the
   assert.ok(dlg.length >= 1,
     'the one-shot "pin" intent no longer opens the PIN dialog. The link is the only way into locking this ' +
     'console from the sidebar, and without a PIN the church key sits unencrypted on this computer');
+});
+
+// ── NETWORKS SWITCH OFF: a deep link to "network" must land somewhere sensible, never blank ──────────────
+test('NETWORKS OFF: a deep link to "network" opens another page with cards of its own, not a blank and not the Network page', () => {
+  const s = settings('network', { networks: false });
+  assert.equal(region(s.tree).length, 1, 'the deep link to "network" opened no page at all');
+  assert.ok(cardsOn(s.tree).length >= 1, 'the deep link to "network" landed on a page with no cards (a blank detail)');
+  assert.ok(!cardsOn(s.tree).includes('Network'), 'the Network card is drawn with the switch off');
+  const cur = openRow(s.tree);
+  assert.ok(cur, 'no row in the list is marked as the open page');
+  assert.ok(!rows(s.tree).some(r => /Belong to a group of churches/.test(JSON.stringify(r.props.children))), 'the Network row is in the list with the switch off');
+  // It lands on the first page of the Network page's own group (Infrastructure): Relays. That is the designed
+  // fallback, and it is the ONE Relays page (the fix-it control lives there once), not a second copy of it.
+  assert.deepEqual(cardsOn(s.tree), cardsOn(settings('relays', { networks: false }).tree), 'the "network" deep link did not land on the plain Relays page');
 });
