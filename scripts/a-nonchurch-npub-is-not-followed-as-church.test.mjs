@@ -69,10 +69,10 @@ test('POINT OF USE: followChurch calls checkChurch and announces membership only
   const env = makeFollowEnv('church');
   // Build the callable. The arrow function closes over churches, setChurches, setActiveChurch, lsSet, toast,
   // and reads window.Fellowship. We inject them all.
-  const fn = new Function('churches', 'setChurches', 'setActiveChurch', 'lsSet', 'toast', 'window', 'setTimeout', 'unconfirmedChurches',
+  const fn = new Function('churches', 'setChurches', 'setActiveChurch', 'lsSet', 'toast', 'window', 'setTimeout', 'unconfirmedChurches', 'churchesStored',
     body + '\nreturn followChurch;'
   )(env.churches, env.setChurches, env.setActiveChurch, env.lsSet, env.toast,
-    { Fellowship: env.Fellowship, addEventListener: () => {}, removeEventListener: () => {} }, setTimeout, env.unconfirmed);
+    { Fellowship: env.Fellowship, addEventListener: () => {}, removeEventListener: () => {} }, setTimeout, env.unconfirmed, env.churches);
 
   // A valid npub that checkChurch says IS a church → announceMembership must fire
   fn('npub1gxa6a0eaga9hy2mpjk6gxpxaxvywwvezrnsrgxennkfhwru7ngnsevqeyr');
@@ -88,10 +88,10 @@ test('POINT OF USE: followChurch calls checkChurch and announces membership only
 test('POINT OF USE: followChurch does NOT announce membership when checkChurch returns "not-found" (executed)', async () => {
   const body = liftFollowChurch(APPJSX);
   const env = makeFollowEnv('not-found');
-  const fn = new Function('churches', 'setChurches', 'setActiveChurch', 'lsSet', 'toast', 'window', 'setTimeout', 'unconfirmedChurches',
+  const fn = new Function('churches', 'setChurches', 'setActiveChurch', 'lsSet', 'toast', 'window', 'setTimeout', 'unconfirmedChurches', 'churchesStored',
     body + '\nreturn followChurch;'
   )(env.churches, env.setChurches, env.setActiveChurch, env.lsSet, env.toast,
-    { Fellowship: env.Fellowship, addEventListener: () => {}, removeEventListener: () => {} }, setTimeout, env.unconfirmed);
+    { Fellowship: env.Fellowship, addEventListener: () => {}, removeEventListener: () => {} }, setTimeout, env.unconfirmed, env.churches);
 
   fn('npub1gxa6a0eaga9hy2mpjk6gxpxaxvywwvezrnsrgxennkfhwru7ngnsevqeyr');
   await new Promise(r => setTimeout(r, 50));
@@ -108,10 +108,10 @@ test('POINT OF USE: followChurch does NOT announce membership when checkChurch r
 test('POINT OF USE: followChurch removes the church entry on "not-found" (executed)', async () => {
   const body = liftFollowChurch(APPJSX);
   const env = makeFollowEnv('not-found');
-  const fn = new Function('churches', 'setChurches', 'setActiveChurch', 'lsSet', 'toast', 'window', 'setTimeout', 'unconfirmedChurches',
+  const fn = new Function('churches', 'setChurches', 'setActiveChurch', 'lsSet', 'toast', 'window', 'setTimeout', 'unconfirmedChurches', 'churchesStored',
     body + '\nreturn followChurch;'
   )(env.churches, env.setChurches, env.setActiveChurch, env.lsSet, env.toast,
-    { Fellowship: env.Fellowship, addEventListener: () => {}, removeEventListener: () => {} }, setTimeout, env.unconfirmed);
+    { Fellowship: env.Fellowship, addEventListener: () => {}, removeEventListener: () => {} }, setTimeout, env.unconfirmed, env.churches);
 
   fn('npub1gxa6a0eaga9hy2mpjk6gxpxaxvywwvezrnsrgxennkfhwru7ngnsevqeyr');
   await new Promise(r => setTimeout(r, 50));
@@ -135,10 +135,10 @@ test('POINT OF USE: followChurch waits for the invite relay to be proved before 
   env.Fellowship.adoptInviteRelays = () => new Promise(r => { resolveAdoption = () => { adopted = true; r({ added: ['wss://box'] }); }; });
   const seenAtCheck = [];
   env.Fellowship.checkChurch = async () => { seenAtCheck.push(adopted); env.calls.checkChurch++; return 'church'; };
-  const fn = new Function('churches', 'setChurches', 'setActiveChurch', 'lsSet', 'toast', 'window', 'setTimeout', 'unconfirmedChurches',
+  const fn = new Function('churches', 'setChurches', 'setActiveChurch', 'lsSet', 'toast', 'window', 'setTimeout', 'unconfirmedChurches', 'churchesStored',
     body + '\nreturn followChurch;'
   )(env.churches, env.setChurches, env.setActiveChurch, env.lsSet, env.toast,
-    { Fellowship: env.Fellowship, addEventListener: () => {}, removeEventListener: () => {} }, setTimeout, env.unconfirmed);
+    { Fellowship: env.Fellowship, addEventListener: () => {}, removeEventListener: () => {} }, setTimeout, env.unconfirmed, env.churches);
 
   fn('npub1gxa6a0eaga9hy2mpjk6gxpxaxvywwvezrnsrgxennkfhwru7ngnsevqeyr?relay=wss://box');
   await new Promise(r => setTimeout(r, 50));
@@ -163,10 +163,10 @@ function liftWithGate(checkResult, { setTimeoutImpl = setTimeout, followed = [] 
   followed.forEach(c => env.churches.push(c));
   const atActive = [];   // what the set held when setActiveChurch ran -- i.e. when the heartbeat effect would next run
   env.setActiveChurch = (fn) => { atActive.push(typeof fn === 'function' ? 'fn' : env.unconfirmed.current.has(fn)); };
-  const fn = new Function('churches', 'setChurches', 'setActiveChurch', 'lsSet', 'toast', 'window', 'setTimeout', 'unconfirmedChurches',
+  const fn = new Function('churches', 'setChurches', 'setActiveChurch', 'lsSet', 'toast', 'window', 'setTimeout', 'unconfirmedChurches', 'churchesStored',
     body + '\nreturn followChurch;'
   )(env.churches, env.setChurches, env.setActiveChurch, env.lsSet, env.toast,
-    { Fellowship: env.Fellowship, addEventListener: () => {}, removeEventListener: () => {} }, setTimeoutImpl, env.unconfirmed);
+    { Fellowship: env.Fellowship, addEventListener: () => {}, removeEventListener: () => {} }, setTimeoutImpl, env.unconfirmed, env.churches);
   return { fn, env, atActive };
 }
 const tick = (ms = 60) => new Promise(r => setTimeout(r, ms));

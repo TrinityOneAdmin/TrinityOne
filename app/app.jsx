@@ -796,13 +796,18 @@ function App() {
   const [activeChurch, setActiveChurch] = useA(() => lsGet('trinityone.activeChurch', (window.TrinityData.CHURCHES[0] || {}).id || null));
   // churches the member follows persist across reloads (a scanned QR / pasted npub should stick).
   // Stored set = the real followed churches (npub ids); merged with the built-in sample churches.
-  const [churches, setChurches] = useA(() => {
+  const [churchesStored, setChurches] = useA(() => {
     const base = window.TrinityData.CHURCHES;
     const followed = (lsGet('trinityone.followedChurches', []) || []).filter(f => f && f.id && !base.find(b => b.id === f.id));
     return [...base, ...followed];
   });
+  // NETWORKS SWITCH (app/data.jsx): `churchesStored` is what is kept on the phone, network entries included, so
+  // turning networks back on brings them back. `churches` is what every screen and every lookup sees: with the
+  // switch off a followed network is not listed, cannot be switched to, and cannot be the active church (the
+  // heal effect below falls back to a real church exactly as it does for any id not in the list).
+  const churches = React.useMemo(() => window.NETWORKS_ENABLED === true ? churchesStored : churchesStored.filter(c => c.kind !== 'network'), [churchesStored]);
   // persist the followed (real, npub-id) churches — incl. names resolved from the relay — on any change
-  useAE(() => { try { lsSet('trinityone.followedChurches', churches.filter(c => typeof c.id === 'string' && c.id.indexOf('npub1') === 0)); } catch (e) {} }, [churches]);
+  useAE(() => { try { lsSet('trinityone.followedChurches', churchesStored.filter(c => typeof c.id === 'string' && c.id.indexOf('npub1') === 0)); } catch (e) {} }, [churchesStored]);
   // on load, refresh each followed church's name/groups from the relay (names may have changed)
   useAE(() => {
     if (!(window.Fellowship && window.Fellowship.subscribeChurchProfile)) return;
@@ -858,6 +863,9 @@ function App() {
     const m = String(raw || '').match(/npub1[0-9a-z]{20,}/);
     if (!m) return false;
     const npub = m[0];
+    // NETWORKS SWITCH: a code that is a network this phone already knows (a stored entry tagged kind 'network') is refused.
+    // An unknown network npub is not recognisable here; it falls to checkChurch below, which finds no church for it.
+    if (window.NETWORKS_ENABLED !== true && churchesStored.some(c => c.id === npub && c.kind === 'network')) { toast('Networks aren’t available yet'); return false; }
     // UX #1: validate the bech32 CHECKSUM before following. The regex matches shape only, so a mistyped code (one
     // wrong char) previously passed and we'd follow a phantom church stuck showing the placeholder name "Church".
     // toPub returns null on a bad checksum → reject here so the Follow sheet shows its "couldn't find that church" error.
@@ -967,7 +975,7 @@ function App() {
       }
     }
     const remaining = churches.filter(c => c.id !== npub);
-    setChurches(remaining);
+    setChurches(cs => cs.filter(c => c.id !== npub));   // from the STORED list, so a hidden network is not dropped by leaving a church
     if (activeChurch === npub) {
       const next = (remaining.find(c => c.npub) || remaining[0] || {}).id || null;
       setActiveChurch(next); lsSet('trinityone.activeChurch', next);
