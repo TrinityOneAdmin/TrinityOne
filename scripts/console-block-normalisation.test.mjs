@@ -28,6 +28,7 @@
 // app/stew-dashboard.jsx by anchored regex and executed. Reverting either one to its raw form turns the
 // behavioural tests red, not just the textual ones.
 import { test } from 'node:test';
+import { fnBody } from './test-slice.mjs';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -128,6 +129,7 @@ function liftBlock() {
   // …and takeOffEveryTeam (the roster / care-team / rota half of Block), which sits beside it
   const rotateSrc = SRC.slice(rotateAt, SRC.indexOf('function DashMembers()', rotateAt));
   const setLine = SRC.match(SET_LINE_RE)[0];
+  const filterSrc = ['stewKeyRecipients', 'stewKeyRecipientsOrAdmitted'].map(n => fnBody(SRC, 'function ' + n + '(', n)).join('\n');
   const fnLine = (SRC.match(/^\s*const isBlocked = .*$/m) || { 0: '  const isBlocked = (pk) => blockedSet.has(pk);' })[0];
   // eslint-disable-next-line no-new-func
   return new Function('window', 'deps', `
@@ -136,6 +138,9 @@ function liftBlock() {
     ${setLine}
     ${fnLine}
     ${rotateSrc}
+    ${filterSrc}
+    // the shared approved-members filter Block rotates to (round 3a), real; nobody here is waiting for approval
+    const dmKr = { orAdmitted: (p) => stewKeyRecipientsOrAdmitted(p, blockedList, members.map(m => m.pubkey)) };
     ${body}
     return block;
   `);

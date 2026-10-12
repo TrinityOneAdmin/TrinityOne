@@ -77,7 +77,7 @@ function engine({ actingChurch, mediaKeyHex = KEY, mediaDocKeys = 'default', med
     _mediaKeyPushRefused: null,
     _mediaKeyChecked: mediaChecked,
     _localBlocked: new Set(),
-    _isRelayAuthed: () => true, _fitKeyRing, console, _mediaKeyVer: 0,
+    _isRelayAuthed: () => true, _fitKeyRing, console, _mediaKeyVer: 0, _mediaKeyFresh: true, _mediaKeyMine: true, _mediaKeyAt: 0,   // round 3a: the per-room publish queue; the care/sermon reads as fresh and ours (tested in key-reads-settle-only-…)
     MEDIAKEY_D: 'trinityone/mediakey:',
     NET: 'trinityone',
     now: () => 1758800000,
@@ -266,7 +266,10 @@ async function membersPage({ delegated, rotateMedia, nameResult = null, engineOp
   const { React, draw } = miniReact();
   const NOW = Math.floor(Date.now() / 1000);
   // block() calls rotateChurchKeys, the shipped top-level function beside DashMembers — compiled with it, not stubbed
-  const src = fnBody(DASH, 'function rotateChurchKeys(', 'rotateChurchKeys') + '\n' + fnBody(DASH, 'function takeOffEveryTeam(', 'takeOffEveryTeam') + '\n' + fnBody(DASH, 'function DashMembers()', 'DashMembers');
+  const src = fnBody(DASH, 'function rotateChurchKeys(', 'rotateChurchKeys') + '\n' + fnBody(DASH, 'function takeOffEveryTeam(', 'takeOffEveryTeam') + '\n' + fnBody(DASH, 'function DashMembers()', 'DashMembers')
+    // + the shared approved-members filter Block rotates to (round 3a, HIGH 1) — compiled in, not stubbed
+    + '\n' + ['stewKeyRecipients', 'stewKeyRecipientsOrAdmitted', 'useStewKeyRecipients'].map(n => fnBody(DASH, 'function ' + n + '(', n)).join('\n')
+    + '\n' + DASH.match(/^const STEW_KEYS_LOADING = .*;$/m)[0];
   const tmp = join(tmpdir(), 'mk-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
   let js;
   try {

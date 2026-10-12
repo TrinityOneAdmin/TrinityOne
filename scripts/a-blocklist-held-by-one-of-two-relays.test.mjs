@@ -43,9 +43,9 @@ const BLOCKED_D = 'trinityone/blocked:';
 const WAIT = 30000;   // the stall: nothing in 50 s+; the fixed console keys a joiner within a couple of seconds
 
 let r1, r2, chr, ws, prof, evalIn, cdpSend, churchA = '', ASK = null, roomId = '';
-const B = H.key(), M = H.key(), MX = H.key(), M2 = H.key();
+const B = H.key(), M = H.key(), MX = H.key(), M2 = H.key(), MA2 = H.key(), MP2 = H.key();   // MA2 approved, MP2 waiting (approval-on row)
 const errors = [];
-const nm = (p) => p === churchA ? 'A' : p === M.pub ? 'M' : p === MX.pub ? 'MX' : p === M2.pub ? 'M2' : String(p).slice(0, 6);
+const nm = (p) => p === churchA ? 'A' : p === MA2.pub ? 'MA2' : p === MP2.pub ? 'MP2' : p === M.pub ? 'M' : p === MX.pub ? 'MX' : p === M2.pub ? 'M2' : String(p).slice(0, 6);
 function held(relay, where, ...args) {
   const db = new DatabaseSync(join(relay.dataDir, 'relay.sqlite'), { readOnly: true });
   try { return db.prepare('SELECT raw FROM events WHERE kind = 30078 AND ' + where).all(...args).map(r => { try { return JSON.parse(String(r.raw || '')); } catch { return {}; } }); }
@@ -216,6 +216,27 @@ test('two healthy relays, only relay 2 holding the Block: after a reload a membe
   assert.ok(got, `TWO HEALTHY RELAYS HELD BACK A NEW MEMBER'S KEYS for ${WAIT / 1000} s — the read that answered before its login was accepted was never asked again (audit of 29d4941/51d6ebf): name [${now(NAMEKEY_D + churchA)}], care [${now(CAREKEY_D + churchA)}], room [${now(GROUPKEY_D + roomId)}]`);
   assert.deepEqual(await sentTo(MX.pub), [], 'a key envelope was sent wrapped to MX, whom the church blocked (relay 2 holds the Block)');
   for (const d of [NAMEKEY_D + churchA, CAREKEY_D + churchA, GROUPKEY_D + roomId]) assert.ok(!recipsOn(r1, d).includes(MX.pub), `relay 1 now holds ${d.slice(11, 19)} wrapped to MX`);
+});
+
+// APPROVAL ON (round 3a, LOW iii). This file's church was switched to open join for its other rows, but approval-on is
+// what a new church starts with — so the same relay arrangement is run with it on: the join policy and the admitted
+// list must be read genuinely on BOTH relays, an APPROVED joiner keyed, one still waiting given only the name key.
+test('approval ON, two healthy relays: an APPROVED joiner gets the name, care and room keys; one still waiting gets only the name key', { skip: SKIP, timeout: 300000 }, async () => {
+  const pol = await evalIn(`window.Steward.setJoinPolicy(true).then(r => String(!!r))`);
+  const adm = await evalIn(`window.Steward.setAdmitted([${JSON.stringify(M.pub)}, ${JSON.stringify(M2.pub)}, ${JSON.stringify(MA2.pub)}]).then(r => String(!!r))`);
+  assert.ok(held(r1, 'dtag = ?', 'trinityone/joinpolicy:' + churchA).some(e => { try { return JSON.parse(e.content).approval === true; } catch { return false; } }), 'CONTROL: relay 1 does not hold "approval on" (' + pol + ')');
+  assert.ok(held(r1, 'dtag = ?', 'trinityone/admitted:' + churchA).some(e => { try { return (JSON.parse(e.content).pubkeys || []).includes(MA2.pub); } catch { return false; } }), 'CONTROL: relay 1 does not hold the approval of MA2 (' + adm + ')');
+  await reload();
+  await sleep(12000);
+  await evalIn('(() => { window.__env = []; return 1; })()');
+  await H.publishAll(r1, [joinTo(churchA, MA2), joinTo(churchA, MP2)]); await H.publishAll(r2, [joinTo(churchA, MA2), joinTo(churchA, MP2)]);
+  const ok = await until(() => recipsOn(r1, NAMEKEY_D + churchA).includes(MA2.pub) && recipsOn(r1, CAREKEY_D + churchA).includes(MA2.pub) && recipsOn(r1, GROUPKEY_D + roomId).includes(MA2.pub), WAIT);
+  const now = (d) => recipsOn(r1, d).map(nm).sort().join(',');
+  assert.ok(ok, `AN APPROVED JOINER WAS NOT KEYED within ${WAIT / 1000} s with approval on — name [${now(NAMEKEY_D + churchA)}], care [${now(CAREKEY_D + churchA)}], room [${now(GROUPKEY_D + roomId)}]`);
+  assert.ok(await until(() => recipsOn(r1, NAMEKEY_D + churchA).includes(MP2.pub), WAIT), 'the NAME key did not reach the member still waiting — they cannot seal their name for the approval queue');
+  await sleep(5000);
+  for (const d of [CAREKEY_D + churchA, GROUPKEY_D + roomId]) assert.ok(!recipsOn(r1, d).includes(MP2.pub), `${d.slice(11, 19)} WAS WRAPPED TO A MEMBER STILL WAITING FOR APPROVAL — ${now(d)}`);
+  assert.deepEqual(await sentTo(MX.pub), [], 'a key envelope was sent wrapped to MX, whom the church blocked');
 });
 
 // THE OWNER'S RULE, AND ITS ACCEPTED COST. The console is closed; another console unblocks MX (a newer blocklist without

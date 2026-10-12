@@ -64,7 +64,7 @@ const tick = () => new Promise(r => setTimeout(r, 5));
 // One component out of the console, compiled by the real esbuild and loaded as a module. Same mechanism as
 // scripts/a-dm-that-never-sent-is-not-sent.test.mjs.
 async function loadConsoleComponent(name, anchor, globals) {
-  const src = fnBody(STEW, anchor, name);
+  const src = fnBody(STEW, anchor, name) + '\n' + ['stewKeyRecipients', 'stewKeyRecipientsOrAdmitted', 'useStewKeyRecipients'].map(n => fnBody(STEW, 'function ' + n + '(', n)).join('\n') + '\n' + STEW.match(/^const STEW_KEYS_LOADING = .*;$/m)[0];   // + the shared approved-members filter (round 3a) — compiled in, real
   const tmp = join(tmpdir(), 'csafe-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
   let js;
   try {
@@ -87,7 +87,7 @@ async function groupsTab() {
   const published = [];
   let captured = null;
   const win = {
-    Steward: { publishGroup: (g) => { published.push(g); return Promise.resolve({ ...g, ts: 1 }); } },
+    Steward: { publishGroup: (g) => { published.push(g); return Promise.resolve({ ...g, ts: 1 }); }, joinPolicyFresh: () => false, listIsFresh: () => true },
     useStewardGroups: () => [], useStewardRosters: () => [], useStewardMembers: () => [],
     useStewardCategories: () => [], dispatchEvent: () => true,
     addEventListener() {}, removeEventListener() {},
@@ -152,6 +152,7 @@ async function newGroupModal() {
   const published = [];
   const win = {
     Steward: { publishGroup: (g) => { published.push(g); return Promise.resolve({ id: 'g1', ...g, ts: 1 }); },
+      joinPolicyFresh: () => false, listIsFresh: () => true,   // an open-join church whose lists have been read (round 3a's shared filter)
       publishGroupKey: async () => ({ skipped: [] }),
       // a new church's rooms are encrypted by default, and an encrypted room comes through createEncryptedGroup (key
       // first, then the flagged room — src/steward.src.js). Same contract here, recording the room it publishes, so what

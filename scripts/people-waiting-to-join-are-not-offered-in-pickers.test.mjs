@@ -53,7 +53,7 @@ const Stub = (n) => { const f = function () { return null; }; Object.definePrope
 const Pass = (n) => { const f = function (p) { return p.children === undefined ? null : p.children; }; Object.defineProperty(f, 'name', { value: n }); return f; };
 
 async function component(file, src, name, anchor, globals) {
-  const body = fnBody(src, anchor, name);
+  const body = fnBody(src, anchor, name) + (/\buseStewKeyRecipients\(/.test(fnBody(src, anchor, name)) ? '' + '\n' + ['stewKeyRecipients', 'stewKeyRecipientsOrAdmitted', 'useStewKeyRecipients'].map(n => fnBody(src, 'function ' + n + '(', n)).join('\n') + '\n' + src.match(/^const STEW_KEYS_LOADING = .*;$/m)[0] : '');   // + the shared filter (round 3a), real
   const tmp = join(tmpdir(), 'pickers-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
   let js;
   try {

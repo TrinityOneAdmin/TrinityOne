@@ -25,7 +25,7 @@ async function joinQueue() {
   const { React, draw } = miniReact();
   const NOW = Math.floor(Date.now() / 1000);
   const blocked = [];
-  const src = fnBody(STEW, 'function DashMembers()', 'DashMembers');
+  const src = fnBody(STEW, 'function DashMembers()', 'DashMembers') + '\n' + ['stewKeyRecipients', 'stewKeyRecipientsOrAdmitted', 'useStewKeyRecipients'].map(n => fnBody(STEW, 'function ' + n + '(', n)).join('\n') + '\n' + STEW.match(/^const STEW_KEYS_LOADING = .*;$/m)[0];   // + the shared filter (round 3a), real
   const tmp = join(tmpdir(), 'decl-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
   let js;
   try {

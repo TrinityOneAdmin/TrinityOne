@@ -201,7 +201,7 @@ function distributor(groups) {
   const { React, draw } = miniReact();
   const calls = [];
   let members = [{ pubkey: 'a'.repeat(64) }];
-  const envelope = ['f'.repeat(64), 'a'.repeat(64)];
+  const envelope = ['f'.repeat(64), 'a'.repeat(64), 'b'.repeat(64)];   // …and the steward 'b': since round 3a an open room is keyed to the steward roster too
   const win = {
     useStewardChurch: () => ({ name: 'St Aidan', features: {} }),
     useStewardGroups: () => groups || [],

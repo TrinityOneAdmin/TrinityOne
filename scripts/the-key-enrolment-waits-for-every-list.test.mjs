@@ -27,7 +27,8 @@ const MB = 'b'.repeat(64), MB2 = 'c'.repeat(64), ST = 'd'.repeat(64);
 
 async function keyDistributor() {
   const { React, draw } = miniReact();
-  const src = fnBody(DASH, 'function KeyDistributor() {', 'KeyDistributor');
+  // + the shared approved-members filter it calls (round 3a, HIGH 1)
+  const src = fnBody(DASH, 'function stewKeyRecipients(pubs, blockedList, admittedList) {', 'stewKeyRecipients') + '\n' + fnBody(DASH, 'function KeyDistributor() {', 'KeyDistributor');
   const tmp = join(tmpdir(), 'kd-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
   let js;
   try {
@@ -49,6 +50,8 @@ async function keyDistributor() {
   // the rooms' key envelopes as the engine last saw them, per church: env[church][roomId] = recipients. absent = no
   // ring held (the engine's groupKeyRecipients answers null). Set by the tests.
   const env = {};
+  const flags = { stewardKeyed: true };
+  const envOf = (gid) => { const e = (env[churchNow()] || {})[gid]; return e ? (flags.stewardKeyed ? [...e, ST] : e) : null; };
   const churchNow = () => g.window.Steward.actingChurch || g.window.Steward.churchPub;
   // `loaded` now means "a genuine read has settled" (Steward.joinPolicyFresh / listIsFresh), at `at`
   const approval = { on: false, admitted: [], loaded: { subscribeJoinPolicy: true, subscribeAdmitted: true, subscribeBlocked: true }, at: { policy: 1, admitted: 1 } };
@@ -71,8 +74,11 @@ async function keyDistributor() {
         ensureMediaKeyForMembers: record('media'), ensureCareKeyForMembers: record('care'), ensureNameKeyForMembers: record('name'),
         ensureGroupKeys: record('groups'),
         publishGroupKey: (gid, recips, opts) => { calls.push({ name: 'groupkey', gid, members: (recips || []).slice(), opts }); return Promise.resolve(null); },
-        groupKeyRecipients: (gid) => { const e = (env[churchNow()] || {})[gid]; return e ? e.slice() : null; },
-        groupKeyMissing: (gid, pubs) => { const e = (env[churchNow()] || {})[gid]; return e ? (pubs || []).filter(p => !e.includes(p)) : null; },
+        // Since round 3a an OPEN room is also keyed to the steward roster. Every envelope below counts the steward ST as
+        // already holding it (`stewardKeyed`), so the rows about MEMBERS read as they did; the row that turns it off
+        // ("a delegate who is not a member is keyed to an open room") is the one about stewards.
+        groupKeyRecipients: (gid) => { const e = envOf(gid); return e ? e.slice() : null; },
+        groupKeyMissing: (gid, pubs) => { const e = envOf(gid); return e ? (pubs || []).filter(p => !e.includes(p)) : null; },
         actingChurch: '', activePub: 'a'.repeat(64), churchPub: 'a'.repeat(64),
       },
       useStewardJoinPolicy: () => approval.on, useStewardAdmitted: () => approval.admitted,
@@ -91,7 +97,7 @@ async function keyDistributor() {
   delete globalThis[key];
   const set = (name, arr, isCurrent, o = {}) => { if (isCurrent) current.add(arr); if (o.stale) stale.add(arr); if (o.at) freshAt.set(arr, o.at); lists[name] = arr; };
   const render = () => draw(mod.KeyDistributor, {});
-  return { set, render, calls, timers, steward: g.window.Steward, env, approval, roomAt, dropped };
+  return { set, render, calls, timers, steward: g.window.Steward, env, approval, roomAt, dropped, flags };
 }
 const enrolled = (calls) => calls.filter(c => c.name === 'care' || c.name === 'name' || c.name === 'media');
 
@@ -180,7 +186,7 @@ test('a room-key publish that answers after a switch is recorded for the church 
   k.env[A]['room-a'] = [A, MB, MB2];              // what the engine records when the publish lands
   answer({ ok: true }); await new Promise(r => setTimeout(r, 0));   // …and it answers, keyed
   k.steward.actingChurch = '';                    // back on A, a third member joins
-  k.set('members', [{ pubkey: MB }, { pubkey: MB2 }, { pubkey: ST }], true); k.set('groups', [{ ...room }], true); k.render();
+  k.set('members', [{ pubkey: MB }, { pubkey: MB2 }, { pubkey: '8'.repeat(64) }], true); k.set('groups', [{ ...room }], true); k.render();   // (not ST: since round 3a the steward is in every open room already)
   assert.equal(k.calls.filter(c => c.name === 'groupkey').length, 2, 'THE PUBLISH THAT ANSWERED ON B LEFT A\'S ROOM MARKED "IN FLIGHT" — nobody who joins A is given its key again');
 });
 
@@ -234,7 +240,8 @@ test('with approval on, a member awaiting approval gets no open-room, care, serm
   }
   const heal = k.calls.filter(x => x.name === 'groups');
   assert.ok(heal.length >= 1, 'CONTROL: the healer (ensureGroupKeys) did not run');
-  for (const x of heal) assert.deepEqual(x.second, [MB], 'THE HEALER WOULD MINT A ROOM KEY FOR A MEMBER STILL WAITING FOR APPROVAL');
+  // the approved member and (round 3a) the steward roster — never the one still waiting
+  for (const x of heal) assert.deepEqual([...x.second].sort(), [MB, ST].sort(), 'THE HEALER WOULD MINT A ROOM KEY FOR A MEMBER STILL WAITING FOR APPROVAL');
   const gk = k.calls.filter(c => c.name === 'groupkey');
   assert.equal(gk.length, 1, 'CONTROL: the admitted member was not keyed to the open room');
   assert.ok(!gk[0].members.includes(MB2), 'THE OPEN ROOM\'S KEY WAS WRAPPED TO A MEMBER STILL WAITING FOR APPROVAL');
@@ -473,4 +480,21 @@ test('finding 4: a member a successful publish could not seal to is not re-sent 
   assert.equal(k.calls.filter(c => c.name === 'groupkey').length, 1, 'THE WHOLE ENVELOPE WAS RE-SENT ON EVERY ROSTER TICK for a member nobody can seal to');
   k.set('blocked', [ST], true); k.render();       // the blocklist changes
   assert.equal(k.calls.filter(c => c.name === 'groupkey').length, 2, 'a blocklist change did not let the left-out member be tried again');
+});
+
+// ROUND 3a, LOW-MED: an OPEN room is keyed to the steward roster as well as the approved members — a delegate who is not a
+// member must hold the room key, or they cannot re-key anyone and admitted members wait for the owner's console. An
+// INVITE room stays its own list.
+test('round 3a: a delegate who is not a member is keyed to an OPEN room — and not to an invite room they are not in', async () => {
+  const k = await keyDistributor();
+  k.flags.stewardKeyed = false;
+  k.env[A] = { 'room-o': [A, MB], 'room-i': [A, MB] };
+  k.set('members', [{ pubkey: MB }], true);
+  k.set('groups', [openRoom, { id: 'room-i', name: 'Leaders', encrypted: true, visibility: 'invite', members: [MB] }], true);
+  k.set('stewards', [ST], true); k.set('blocked', [], true);
+  k.render();
+  const keyed = k.calls.filter(c => c.name === 'groupkey');
+  assert.equal(keyed.length, 1, 'only the open room should be re-keyed: ' + JSON.stringify(keyed.map(c => c.gid)));
+  assert.equal(keyed[0].gid, 'room-o');
+  assert.ok(keyed[0].members.includes(ST), 'A DELEGATE WHO IS NOT A MEMBER WAS NOT GIVEN THE OPEN ROOM\'S KEY — they cannot key anyone who joins');
 });

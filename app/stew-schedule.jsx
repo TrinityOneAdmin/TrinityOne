@@ -312,7 +312,14 @@ function RosterModal({ team, roster, members: allMembers, onClose, onCreate }) {
         if (added.length || removed.length) {
           const members0 = Array.isArray(t.members) ? t.members : [];
           const want = teamAllowlistForPeople(members0, added, removed);
-          await Promise.resolve(window.Steward.publishGroup({ ...t, visibility: 'invite', members: want }));
+          const saved = await Promise.resolve(window.Steward.publishGroup({ ...t, visibility: 'invite', members: want }));
+          // NO KEY CHANGE OVER AN UNSAVED LIST (round 3a): the relay would still name whoever was taken off, and the key
+          // distributor's hold re-reads that list and re-adds them. Say so and stop.
+          if (!saved || !saved.id) {
+            setSaving(false);
+            setSaveErr('The team is saved, but its room’s member list wasn’t, so the room’s key was not changed. Check your connection and press Save again.');
+            return;
+          }
           // TAKING SOMEONE OFF MUST ROTATE THE KEY, and a rotation that did not happen must not read as one
           // that did. publishGroupKey does not throw on its failure modes — it returns null (no church key,
           // or the relay is unauthenticated) and false (every relay refused) — and it advances this console's

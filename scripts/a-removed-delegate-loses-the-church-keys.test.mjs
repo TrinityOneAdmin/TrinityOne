@@ -27,6 +27,7 @@ function setup({ setStewardsResult = true, careResult = true, delegateIsMember =
   const calls = { setStewards: [], care: [], media: [], name: [], groupKey: [], publishGroup: [] };
   const steward = {
     pubkey: CHURCH, actingChurch: '',
+    joinPolicyFresh: () => false, listIsFresh: () => true,   // an open-join church whose lists have been read (round 3a's shared filter)
     setStewards: (list) => { calls.setStewards.push(list); return Promise.resolve(setStewardsResult); },
     rotateCareKey: (m, s) => { calls.care.push({ m, s }); return Promise.resolve(careResult); },
     rotateMediaKey: (m, s) => { calls.media.push({ m, s }); return Promise.resolve(true); },
@@ -90,7 +91,9 @@ test('removing a delegate rotates the care, sermon and name keys and every encry
   const byId = Object.fromEntries(s.calls.groupKey.map(c => [c.id, c]));
   assert.deepEqual(Object.keys(byId).sort(), ['inv', 'open'], 'rooms re-keyed: ' + Object.keys(byId) + ' (every encrypted room, and only those)');
   assert.equal(byId.open.o.rotate, true); assert.equal(byId.inv.o.rotate, true);
-  assert.deepEqual(byId.open.m.sort(), [M1, M2].sort(), 'an open room is keyed to the members');
+  // the members AND the stewards who remain (round 3a): a delegate who is not a member must keep the open room's key
+  assert.deepEqual(byId.open.m.sort(), [M1, M2, OTHER_STEW].sort(), 'an open room is keyed to the members and the remaining stewards');
+  assert.ok(!byId.open.m.includes(DELEGATE), 'the removed delegate is still keyed to the open room');
   assert.deepEqual(byId.inv.m, [M1], 'an invite-only room is keyed to ITS members (minus the blocked), not the whole church');
   assert.equal(s.calls.publishGroup.length, 0, 'removing a delegate must not edit any room’s member list (that is Block’s job)');
   for (const list of [...s.calls.care, ...s.calls.media, ...s.calls.name, ...s.calls.groupKey].flatMap(c => [...(c.m || []), ...(c.s || [])]))

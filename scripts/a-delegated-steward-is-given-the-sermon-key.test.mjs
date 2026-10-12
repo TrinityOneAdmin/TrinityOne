@@ -85,7 +85,7 @@ function ownerEngine() {
   const scope = {
     actingChurch: '', pub: churchPub, sk: churchSk,
     _mediaKeyHex: KEY, _mediaKeyRing: [KEY], _mediaKeyDocKeys: null, _mediaKeyPushRefused: null,
-    _mediaKeyChecked: true, _localBlocked: new Set(), _sealEachFailed: [], _mediaKeyVer: 0,
+    _mediaKeyChecked: true, _localBlocked: new Set(), _sealEachFailed: [], _mediaKeyVer: 0, _mediaKeyFresh: true, _mediaKeyMine: true,   // round 3a: the per-room publish queue; the care/sermon reads as fresh and ours (tested in key-reads-settle-only-…)
     _isRelayAuthed: () => true,
     MEDIAKEY_D: 'trinityone/mediakey:', NET: 'trinityone',
     now: () => 1758800000,
@@ -150,7 +150,7 @@ function consoleReads(envelope, mySk) {
   let handlers = null;
   const scope = {
     _mediaKeyDocKeys: null, _mediaKeyPushRefused: 'a-previous-refusal', _mediaKeyRing: [], _mediaKeyHex: null,
-    _mediaKeyChecked: false, _mediaKeyVer: 0, actingChurch: '', _isRelayAuthed: () => true,
+    _mediaKeyChecked: false, _mediaKeyVer: 0, actingChurch: '', _isRelayAuthed: () => true, _mediaKeyFresh: true, _mediaKeyMine: true, _mediaKeyAt: 0,   // round 3a: the per-room publish queue; the care/sermon reads as fresh and ours (tested in key-reads-settle-only-…)
     _myOwnPub: () => myPub, pub: churchPub, sk: mySk,
     MEDIAKEY_D: 'trinityone/mediakey:',
     relays: () => ['wss://relay.example'],
@@ -234,7 +234,7 @@ test('BACKWARDS COMPATIBLE: the extra recipients do not disturb a member’s own
 let _kdMod = null;
 async function keyDistributorModule() {
   if (_kdMod) return _kdMod;
-  const src = fnBody(DASH, 'function KeyDistributor()', 'KeyDistributor');
+  const src = fnBody(DASH, 'function stewKeyRecipients(pubs, blockedList, admittedList) {', 'stewKeyRecipients') + '\n' + fnBody(DASH, 'function KeyDistributor()', 'KeyDistributor');   // + the shared filter it calls (round 3a)
   const tmp = join(tmpdir(), 'kd-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
   let js;
   try {
@@ -338,7 +338,8 @@ async function blockOnMembersPage() {
   const { React, draw } = miniReact();
   const NOW = Math.floor(Date.now() / 1000);
   // block() calls rotateChurchKeys, the shipped top-level function beside DashMembers — compiled with it, not stubbed
-  const src = fnBody(DASH, 'function rotateChurchKeys(', 'rotateChurchKeys') + '\n' + fnBody(DASH, 'function takeOffEveryTeam(', 'takeOffEveryTeam') + '\n' + fnBody(DASH, 'function DashMembers()', 'DashMembers');
+  const src = fnBody(DASH, 'function rotateChurchKeys(', 'rotateChurchKeys') + '\n' + fnBody(DASH, 'function takeOffEveryTeam(', 'takeOffEveryTeam') + '\n' + fnBody(DASH, 'function DashMembers()', 'DashMembers')
+    + '\n' + ['stewKeyRecipients', 'stewKeyRecipientsOrAdmitted', 'useStewKeyRecipients'].map(n => fnBody(DASH, 'function ' + n + '(', n)).join('\n') + '\n' + DASH.match(/^const STEW_KEYS_LOADING = .*;$/m)[0];   // + the shared filter Block rotates to (round 3a)
   const tmp = join(tmpdir(), 'dm-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
   let js;
   try {
@@ -377,6 +378,8 @@ async function blockOnMembersPage() {
         rotateCareKey: () => Promise.resolve(true),
         ensureNameKeyForMembers: () => Promise.resolve(null),
         rotateMediaKey: (...a) => { rot.push(a); return Promise.resolve(true); },
+        // an open-join church whose lists have been read (round 3a: Block rotates to the shared approved-members filter)
+        joinPolicyFresh: () => false, listIsFresh: () => true,
       },
       useStewardGroups: () => [], useStewardStewards: () => [delegPub],
       useStewardChurch: () => ({ name: 'St Aidan', features: {} }),

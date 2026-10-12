@@ -206,7 +206,7 @@ test('the console mints and maintains the name key', async () => {
   const tmp = join(tmpdir(), 'kdn-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
   let js;
   try {
-    writeFileSync(tmp, fnBody(DASH, 'function KeyDistributor() {', 'KeyDistributor') + '\nexport { KeyDistributor };\n');
+    writeFileSync(tmp, fnBody(DASH, 'function stewKeyRecipients(pubs, blockedList, admittedList) {', 'stewKeyRecipients') + '\n' + fnBody(DASH, 'function KeyDistributor() {', 'KeyDistributor') + '\nexport { KeyDistributor };\n');   // + the shared filter (round 3a)
     js = execFileSync(join(ROOT, 'node_modules/.bin/esbuild'), [tmp, '--jsx=transform', '--format=esm', '--log-level=error'], { encoding: 'utf8' });
   } finally { rmSync(tmp, { force: true }); }
   const M = 'b'.repeat(64), P = 'c'.repeat(64), ST = 'd'.repeat(64);

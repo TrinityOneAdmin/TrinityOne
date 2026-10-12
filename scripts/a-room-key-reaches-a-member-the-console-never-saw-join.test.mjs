@@ -34,7 +34,7 @@ const PIN = 'cedar-harbour-lamp-42';
 const MEMBER_D = 'trinityone/member:', GROUPKEY_D = 'trinityone/groupkey:', CAREKEY_D = 'trinityone/carekey:', MEDIAKEY_D = 'trinityone/mediakey:', NAMEKEY_D = 'trinityone/namekey:';
 const WAIT = 45000;
 
-let relay, chr, ws, prof, evalIn, churchA = '', roomId = '';
+let relay, chr, ws, prof, evalIn, churchA = '', roomId = '', cdpPort = 0;
 const M1 = H.key(), MF = H.key(), MA = H.key(), MP = H.key();
 const errors = [];
 const nm = (p) => p === churchA ? 'church' : p === M1.pub ? 'M1' : p === MF.pub ? 'MF' : p === MA.pub ? 'MA' : p === MP.pub ? 'MP' : String(p).slice(0, 6);
@@ -89,6 +89,7 @@ before(async () => {
   if (!CHROME) return;
   relay = await H.startRelay({ name: 'roomkey-reconcile', env: { TRINITY_TAILSCALE_BIN: '/nonexistent' } });
   const cdp = await H.freePort('the roomkey-reconcile test\'s Chrome debug port');
+  cdpPort = cdp;
   prof = mkdtempSync(join(tmpdir(), 'trin-roomkeyrec-chr-'));
   const BLOCK_PROD = '--host-resolver-rules=MAP app.trinityone.church 127.0.0.1:9, MAP *.ts.net 127.0.0.1:9, MAP trinityone.church 127.0.0.1:9';
   chr = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${cdp}`, '--no-sandbox', '--disable-gpu', BLOCK_PROD, `--user-data-dir=${prof}`, '--window-size=1280,1200', `${relay.base}/steward.html`], { stdio: 'ignore' });
@@ -231,4 +232,91 @@ test('E · unblocking them gives the room, care and sermon keys back', { skip: S
   const why = got ? '' : await evalIn(`JSON.stringify({ blockedHere: window.Steward.blockedHere(), device: localStorage.getItem('trinityone.steward.blockedlast.' + ${JSON.stringify(churchA)}), relays: window.Steward.relayList(), join: window.Steward.joinPolicyFresh && window.Steward.joinPolicyFresh() })`).catch(e => String(e));
   assert.ok(got, `UNBLOCKING A MEMBER DID NOT GIVE THEM THEIR KEYS BACK within ${WAIT / 1000} s — ${show()} — console: ${why}`);
   assert.deepEqual(errors, [], 'the console threw:\n  ' + errors.join('\n  '));
+});
+
+// ── ROUND 3a (MED): A REAL SECOND CONSOLE ──────────────────────────────────────────────────────────────────────────
+// Row D is the console that pressed Block, and its own remembered blocklist protects it — with the freshness gate and
+// the drop hold both removed from KeyDistributor, D still passed (audit of 244a6fe). This row is the auditor's case:
+// a SECOND console (the owner's other device — here a second tab of the same browser profile, which shares the stored
+// church key but not the first tab's memory) is AWAY while the first blocks MA and rotates the room. It comes back,
+// its screens still holding the lists from before, and the rotated envelope arrives while the subscription that
+// carries the blocklist is slow (a page-level WebSocket shim holds that one subscription's frames back — in order, its
+// EOSE included: "that answer is late", not "the relay lied"). It must not wrap the new room key back to MA.
+// The shim is installed before the console's scripts load; nostr-tools captures window.WebSocket at load.
+const WS_SHIM = `(() => {
+  const W = window.WebSocket; window.__ws = [];
+  const H = window.__hold = { offline: false, on: false, d: '', subs: new Set(), q: [] };
+  class HW extends W {
+    constructor(u, p) { super(H.offline ? 'ws://127.0.0.1:9/' : u, p); window.__ws.push(this); }
+    set onmessage(fn) { this.__on = fn; if (!this.__wired) { this.__wired = true; W.prototype.addEventListener.call(this, 'message', (ev) => this.__route(ev)); } }
+    get onmessage() { return this.__on; }
+    __route(ev) {
+      let sid = null;
+      try { const m = JSON.parse(ev.data); if (Array.isArray(m) && (m[0] === 'EVENT' || m[0] === 'EOSE' || m[0] === 'CLOSED')) { sid = m[1];
+        if (H.on && m[0] === 'EVENT' && m[2] && (m[2].tags || []).some(t => t[0] === 'd' && String(t[1]).startsWith(H.d))) H.subs.add(sid); } } catch (e) {}
+      if (sid && H.subs.has(sid)) { H.q.push([this, ev]); return; }
+      if (this.__on) this.__on(ev);
+    }
+  }
+  window.WebSocket = HW;
+  window.__release = () => { H.on = false; const q = H.q; H.q = []; H.subs.clear(); for (const [w, ev] of q) { try { w.__on && w.__on(ev); } catch (e) {} } return q.length; };
+})();`;
+async function secondConsole() {
+  const t = await (await fetch(`http://127.0.0.1:${cdpPort}/json/new?about:blank`, { method: 'PUT' })).json();
+  const w2 = new WebSocket(t.webSocketDebuggerUrl, { perMessageDeflate: false, maxPayload: 5e8 });
+  await new Promise((res, rej) => { w2.on('open', res); w2.on('error', rej); });
+  let id = 0; const pend = new Map();
+  w2.on('message', (d) => { const m = JSON.parse(d); if (m.id && pend.has(m.id)) { pend.get(m.id)(m); pend.delete(m.id); } });
+  const send = (method, params = {}) => new Promise(r => { const i = ++id; pend.set(i, r); w2.send(JSON.stringify({ id: i, method, params })); });
+  await send('Runtime.enable'); await send('Page.enable');
+  await send('Page.addScriptToEvaluateOnNewDocument', { source: WS_SHIM });
+  const ev = async (expression) => {
+    const rr = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
+    if (rr?.result?.exceptionDetails) throw new Error('in tab 2: ' + JSON.stringify(rr.result.exceptionDetails.exception || rr.result.exceptionDetails).slice(0, 300));
+    return rr?.result?.result?.value;
+  };
+  await send('Page.navigate', { url: relay.base + '/steward.html' });
+  await sleep(2500);
+  // unlock, as the first tab does
+  const t0 = Date.now();
+  while (Date.now() - t0 < 90000 && !(await ev(`[...document.querySelectorAll('input')].some(x => (x.placeholder||'').includes('Your PIN or passphrase'))`).catch(() => false))) await sleep(400);
+  await ev(typePh('Your PIN or passphrase', PIN)); await sleep(200);
+  await ev(click('/^Unlock/')); await sleep(500);
+  const t1 = Date.now();
+  while (Date.now() - t1 < 90000 && !(await ev(`[...document.querySelectorAll('button')].some(x => (x.textContent||'').trim() === 'Settings') && !document.querySelector('[data-stew-modal-panel]')`).catch(() => false))) await sleep(400);
+  return { ev, close: async () => { try { await fetch(`http://127.0.0.1:${cdpPort}/json/close/${t.id}`); } catch {} try { w2.close(); } catch {} } };
+}
+const blockAndRotate = (pk, keep) => evalIn(`(async () => { const S = window.Steward;
+  const ok = await S.setBlocked([${JSON.stringify(pk)}]);
+  const keep = ${JSON.stringify(keep)};
+  const r = [ok, await S.rotateCareKey(keep, []), await S.rotateMediaKey(keep, []), await S.publishGroupKey(${JSON.stringify('')} + window.__roomId, keep, { rotate: true })];
+  return r.map(x => (x && typeof x === 'object') ? 'ok' : String(x)).join(','); })()`);
+
+test('F · a SECOND console that was away while MA was blocked comes back with stale lists and a slow blocklist answer — and does not re-key MA', { skip: SKIP, timeout: 360000 }, async () => {
+  assert.ok(room().includes(MA.pub), 'CONTROL: MA is not in the room before the block — run A–E first: ' + show());
+  const two = await secondConsole();
+  try {
+    assert.ok(await until(() => true, 1) && await (async () => { const t0 = Date.now(); while (Date.now() - t0 < 60000) { if (await two.ev(`(() => { const r = window.Steward.groupKeyRecipients(${JSON.stringify(roomId)}); return !!(r && r.includes(${JSON.stringify(MA.pub)})); })()`).catch(() => false)) return true; await sleep(500); } return false; })(),
+      'CONTROL: the second console never read the room\'s envelope with MA in it');
+    await sleep(6000);                                         // let its lists settle — fresh, before the block
+    // AWAY: its sockets closed, and any reconnect sent to a dead port
+    await two.ev(`(() => { window.__hold.offline = true; for (const w of window.__ws) { try { w.close(); } catch (e) {} } return 1; })()`);
+    await sleep(3000);
+    // the FIRST console blocks MA and rotates the room, care and sermon keys away from them
+    await evalIn(`(() => { window.__roomId = ${JSON.stringify(roomId)}; return 1; })()`);
+    const r = await blockAndRotate(MA.pub, [M1.pub, MF.pub, MP.pub]);
+    assert.ok(!/false|null|undefined/.test(r), 'CONTROL: the block or a rotation did not land: ' + r);
+    assert.ok(await until(() => !room().includes(MA.pub), 20000), 'CONTROL: the rotation did not take MA out of the room: ' + show());
+    // BACK: the blocklist's subscriptions are slow (held), everything else flows; the console reconnects
+    await two.ev(`(() => { window.__hold.d = 'trinityone/blocked:'; window.__hold.on = true; window.__hold.offline = false; window.dispatchEvent(new Event('online')); return 1; })()`);
+    await sleep(25000);
+    assert.ok(!room().includes(MA.pub), 'THE SECOND CONSOLE WRAPPED THE ROTATED ROOM KEY BACK TO THE MEMBER JUST BLOCKED — from the lists it held before it went away (audit of 78ffad0, HIGH 1): ' + show());
+    const held = await two.ev(`window.__hold.q.length`);
+    assert.ok(held > 0, 'CONTROL: nothing was held back — the second console read the blocklist at once, so this row proved nothing');
+    // the blocklist answer arrives: still nothing for MA
+    await two.ev(`window.__release()`);
+    await sleep(10000);
+    assert.ok(!room().includes(MA.pub), 'once the blocklist arrived, the second console re-keyed MA anyway: ' + show());
+    assert.ok(room().includes(M1.pub), 'CONTROL: a member who was not blocked lost the room key: ' + show());
+  } finally { await two.close(); }
 });
