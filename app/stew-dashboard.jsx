@@ -899,10 +899,21 @@ function KeyDistributor() {
   // the switch, from A's own closed stream, so "has it been replaced yet?" was not enough). The engine stamps each
   // list with the church and epoch its stream was opened for, and enrolment runs only when all four carry the
   // stamp of the church the console is on now (Steward.listIsCurrent). A cached or initial list has no stamp.
+  //
+  // …AND THE AUTHORITY LISTS MUST BE FRESH, NOT ONLY CURRENT (room-key reconcile, round 2; audit of 78ffad0, HIGH 1).
+  // "Current" is the church and epoch; it survives a reconnect, and the hooks repaint the previous connection's list
+  // from their cache. A second console that was away while the owner blocked somebody held the old blocklist when the
+  // rotated envelope arrived, and wrapped the new key straight back to them. Steward.listIsFresh: the church's, from
+  // a subscription open NOW, settled by a genuine read on every connected relay. The blocked and steward lists must
+  // be fresh for any enrolment (a stale roster re-keys a removed delegate); each room needs its own document and
+  // envelope fresh (Steward.groupFresh, in the loop). The MEMBER list only needs to be current: it lists everyone
+  // who ever joined or posted and never shrinks on a removal, so a stale one can delay a new member, never re-add
+  // a removed one — the removal is the blocklist's, and that is fresh.
+  const _kdFresh = (l, since) => { const S = window.Steward; return !!(S && S.listIsFresh && S.listIsFresh(l, since)); };
   const _kdListsCurrent = (m, g, st, bl) => {
     const S = window.Steward;
     if (!S || !S.listIsCurrent) return false;
-    return S.listIsCurrent(m) && S.listIsCurrent(g) && S.listIsCurrent(st) && S.listIsCurrent(bl);
+    return S.listIsCurrent(m) && S.listIsCurrent(g) && _kdFresh(st) && _kdFresh(bl);
   };
   const notBlocked = (pk) => pk && !blockedSet.has(String(pk).toLowerCase());
   // WHO IS A MEMBER FOR KEYS. useStewardMembers() lists everyone with a member document, including people still
@@ -914,12 +925,27 @@ function KeyDistributor() {
   // admitted" must not be read from "the list has not come yet" in EITHER direction. Same test as
   // useStewardPickableMembers (steward-root.jsx). The NAME key is NOT narrowed: a pending member needs it to seal
   // their name for the approval queue.
+  //
+  // "ARRIVED" MEANS A GENUINE ANSWER (audit of 78ffad0, finding 2). This read stewardStreamLoaded(), which flips on the
+  // stream's first delivery — and the join-policy stream delivers `false` from its EOSE, which nostr-tools' own timer
+  // fires on a slow link before the document arrives. Approval read as off, and a member still waiting was given the
+  // open-room, care and sermon keys for good. The policy now comes from Steward.joinPolicyFresh() (null until a
+  // genuine read has settled), and the admitted list must be fresh. The two hooks are still called: they are what
+  // keeps the two subscriptions open.
   const admittedList = window.useStewardAdmitted ? window.useStewardAdmitted() : [];
-  const joinApproval = window.useStewardJoinPolicy ? window.useStewardJoinPolicy() : false;
+  if (window.useStewardJoinPolicy) window.useStewardJoinPolicy();
+  const _kdJoin = (since) => { const S = window.Steward; return (S && S.joinPolicyFresh) ? S.joinPolicyFresh(since) : null; };
+  const joinFresh = _kdJoin();                     // true / false, or null = no genuine answer yet
+  const joinApproval = joinFresh === true;
   const admittedSet = React.useMemo(() => new Set((admittedList || []).map(p => String(p || '').toLowerCase())), [admittedList]);
-  const _kdIdv0 = window.useStewardIdv ? window.useStewardIdv() : 0;
-  const _kdLoaded = (m) => !window.stewardStreamLoaded || window.stewardStreamLoaded(m, _kdIdv0);
-  const approvalKnown = _kdLoaded('subscribeJoinPolicy') && (!joinApproval || (_kdLoaded('subscribeAdmitted') && _kdLoaded('subscribeBlocked')));
+  const approvalKnown = joinFresh !== null && _kdFresh(blockedList) && (!joinApproval || _kdFresh(admittedList));
+  // HAS EVERYTHING THAT WOULD SAY WHY SOMEBODY WAS DROPPED BEEN RE-READ SINCE `at`? (P2, see the room loop.) The
+  // blocklist, the join policy, the admitted list when approval is on, and the room's own document and envelope.
+  const _kdReconfirmed = (g, at) => {
+    const S = window.Steward;
+    return _kdFresh(blockedList, at) && _kdJoin(at) !== null && (!joinApproval || _kdFresh(admittedList, at))
+      && !!(S && S.groupFresh && S.groupFresh(groups, g.id, at));
+  };
   // pubs -> the approved ones, or null when we cannot tell yet (key nobody new)
   const approvedOf = (pubs) => !approvalKnown ? null : (joinApproval ? pubs.filter(pk => admittedSet.has(String(pk).toLowerCase())) : pubs);
   const approvedOfRef = React.useRef(approvedOf); approvedOfRef.current = approvedOf;
@@ -951,16 +977,26 @@ function KeyDistributor() {
       if (!g.encrypted) continue;
       const invite = g.visibility === 'invite';
       if (!invite && !approvedPubs) continue;   // approval lists not in yet — fail closed, see approvedOf
-      const wanted = [...new Set((invite ? (g.members || []) : approvedPubs).filter(notBlocked))];
       const S = window.Steward;
+      // THE ROOM'S OWN DOCUMENT AND KEY ENVELOPE MUST BE A GENUINE READ (Steward.groupFresh). The cached room document
+      // paints at once and the relays answer newest first, so a rotated envelope arrived before the document that
+      // explains it; and a ring older than the newest envelope, republished, would undo a rotation.
+      if (!S || !S.groupFresh || !S.groupFresh(groups, g.id)) continue;
+      // HELD, NOT RE-ADDED (P2). Whoever a newer envelope DROPPED — a Block's rotation, a removal from an invite room —
+      // is kept out until the lists that would say why have been re-read since the drop was seen (the engine re-reads
+      // them at once). A rotation run from a partial member list drops people nobody meant to remove: once the re-read
+      // shows them still wanted, they are re-added. Someone blocked or taken off the room's list never is.
+      const held = new Set((S.groupKeyDropped ? S.groupKeyDropped(g.id) : []).filter(x => !_kdReconfirmed(g, x.at)).map(x => x.pub));
+      const notHeld = (pk) => !held.has(String(pk || '').toLowerCase());
+      const wanted = [...new Set((invite ? (g.members || []) : approvedPubs).filter(notBlocked))].filter(notHeld);
       // null = this console holds no ring for the room (envelope not ingested yet, or no copy for this church):
       // a reuseOnly publish could do nothing. ensureGroupKeys below is what heals a room with no key at all.
-      const have = S && S.groupKeyRecipients ? S.groupKeyRecipients(g.id) : null;
+      const have = S.groupKeyRecipients ? S.groupKeyRecipients(g.id) : null;
       if (!have || !S.publishGroupKey) continue;
       const U = unsealable.current[g.id] || [];
       const missing = (S.groupKeyMissing(g.id, wanted) || []).filter(pk => !U.includes(pk));
       if (!missing.length) continue;
-      const recips = invite ? wanted : [...new Set([...wanted, ...have])].filter(notBlocked);
+      const recips = invite ? wanted : [...new Set([...wanted, ...have])].filter(notBlocked).filter(notHeld);
       // In-flight guard + backoff (AUDIT-2026-08-10 item C). Skipping while a publish is in flight loses nothing:
       // a joiner who arrived during the flight is still missing from the envelope on the next tick and is retried.
       // A REFUSED publish (real bandwidth spent) backs off exponentially, capped at 60s — a joining member must not

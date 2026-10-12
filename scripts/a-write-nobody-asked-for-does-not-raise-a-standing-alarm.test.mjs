@@ -212,6 +212,7 @@ function distributor(groups) {
       subscribeMediaKey: () => () => {}, subscribeCareKey: () => () => {}, subscribeNameKey: () => () => {},
       setCareRoster: () => {},
       listIsCurrent: () => true,   // the lists are the current church's — the gate is pinned in the-key-enrolment-waits-for-every-list
+      listIsFresh: () => true, joinPolicyFresh: () => false, groupFresh: () => true, groupKeyDropped: () => [],   // fresh, open join (round 2 — same rig)
       ensureMediaKeyForMembers: (...a) => calls.push(['media', a]),
       ensureCareKeyForMembers: (...a) => calls.push(['care', a]),
       ensureNameKeyForMembers: (...a) => calls.push(['name', a]),
@@ -274,6 +275,7 @@ function liftEnsureGroupKeys(spy) {
     churchSk: new Uint8Array(32).fill(3), churchPub: 'c'.repeat(64),
     _isRelayAuthed: () => true,
     _skeys: {},                                   // we hold no ring, so the room looks unkeyed
+    _ensureGroupKeysBusy: new Set(), _ensureGroupKeysQuiet: new Map(),   // the per-room guards (round 2, P6)
     relays: () => ['wss://one.example/relay'],
     GROUP_D: 'trinityone/group:', GROUPKEY_D: 'trinityone/groupkey:',
     // The one state that reaches the publish: the group document exists, no envelope exists, and nothing

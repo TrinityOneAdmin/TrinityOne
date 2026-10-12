@@ -153,9 +153,16 @@ test('blocking is refused while acting as a delegated steward, and never re-keys
   // the group rotation itself lives in rotateChurchKeys now (the body Block and removing a delegate share)
   assert.match(body + '\n' + fnBody(DASH, 'function rotateChurchKeys(', 'rotateChurchKeys'), /!delegated\s*&&\s*Array\.isArray\(groups\)/,
     'a delegated steward can re-key another church’s group under the wrong key and lock the owner out');
-  const dist = fnBody(DASH, 'for (const g of groups) {', 'the key distributor loop');
-  assert.match(dist, /filter\(notBlocked\)/,
-    'the key distributor hands the freshly-rotated key straight back to the blocked member on the next roster tick');
+  // THE DISTRIBUTOR HALF, RUN (rule 3 — this was a regex over the jsx, which `false &&` would have left green): the
+  // real loop, an envelope that holds 'a', a member list with blocked 'b' and unblocked 'c' — and 'b' must not be keyed.
+  const r = distributorRig();
+  r.notBlocked = (pk) => pk !== 'b';
+  r.tick([G1], ['a', 'b', 'c']);
+  assert.equal(r.calls.length, 1, 'CONTROL: the unblocked joiner was not keyed');
+  assert.ok(!r.calls[0][1].includes('b'), 'the key distributor hands the freshly-rotated key straight back to the blocked member on the next roster tick');
+  r.env.g1 = ['a', 'b'];                       // …even when the envelope still holds them (a union must not re-add them)
+  r.tick([G1], ['a', 'b', 'c']);
+  assert.ok(r.calls.every(c => !c[1].includes('b')), 'the open-room union re-added a blocked member out of the old envelope');
 });
 
 // ── the phones that have NOT updated ─────────────────────────────────────────────────────────────────────────
@@ -284,7 +291,8 @@ test('a locally-blocked member is excluded from the group key envelope', async (
   const C = K().pub;
   const src = `
     let _localBlocked = new Set([C]);
-    const _skeys = { g1: [new Uint8Array(32).fill(9)] }, _srev = { g1: 1 }, _senvTs = {}, _senvRecips = {};
+    const _skeys = { g1: [new Uint8Array(32).fill(9)] }, _srev = { g1: 1 }, _senvTs = {}, _senvRecips = {}, _senvMine = {};
+    const _noteEnvelopeDrops = () => {};   // the drop memo (round 2) — tested in key-reads-settle-only-for-the-church-they-asked-about
     const GROUP_RING_MAX = 12, GROUPKEY_D = 'trinityone/groupkey:', NET = 'trinityone';
     const churchSk = new Uint8Array(32).fill(3), churchPub = CP;
     const _isRelayAuthed = () => true;
@@ -342,14 +350,18 @@ function distributorRig() {
         return Promise.resolve(rig.result).then(r => { if (r !== null && r !== false) rig.env[gid] = [...recips]; return r; }); },
       groupKeyRecipients: (gid) => rig.env[gid] ? [...rig.env[gid]] : null,
       groupKeyMissing: (gid, pubs) => rig.env[gid] ? pubs.filter(p => !rig.env[gid].includes(p)) : null,
+      // round 2: every room here has been read genuinely and dropped nobody (those rules: the-key-enrolment rig)
+      groupFresh: () => true, groupKeyDropped: () => [],
     },
-    dispatchEvent: () => {},
+    dispatchEvent: (e) => { rig.events.push(e); return true; },
   };
+  rig.events = [];
   const fakeDate = { now: () => rig.nowVal };
   const fn = new Function('groups', 'approvedPubs', 'notBlocked', 'unsealable', 'pending', 'nextTry', 'failCount',
-    'window', 'Date', 'CustomEvent', loop);
-  rig.tick = (groups, memberPubs) => fn(groups, memberPubs, () => true, rig.unsealable, rig.pending, rig.nextTry,
-    rig.failCount, win, fakeDate, function CustomEvent() {});
+    'window', 'Date', 'CustomEvent', '_kdReconfirmed', loop);
+  rig.notBlocked = () => true;
+  rig.tick = (groups, memberPubs) => fn(groups, memberPubs, (pk) => rig.notBlocked(pk), rig.unsealable, rig.pending, rig.nextTry,
+    rig.failCount, win, fakeDate, function CustomEvent(type, init) { this.type = type; this.detail = (init || {}).detail; }, () => true);
   return rig;
 }
 const settle = () => new Promise(res => setImmediate(res));
@@ -416,19 +428,27 @@ test('distributor: a rejected publish clears the in-flight guard rather than wed
   assert.equal(r.calls.length, 2, 'after a throw the next tick must try again');
 });
 
-test('a room that could not be keyed is retried, not marked done', () => {
-  const DASH2 = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
-  // Brace-matched, not a fixed window: test-windows.test.mjs exists because a hand-picked character count
-  // silently stops covering the code it names the moment that code grows, and every assertion after the cut
-  // then reads a truncated slice and passes over nothing. This one was 532 characters short on its first run.
-  const body = fnBody(DASH2, 'for (const g of groups) {', 'the key distributor loop');
-  assert.match(body, /if \(r === null \|\| r === false\) return;/,
+test('a room that could not be keyed is retried, not marked done', async () => {
+  // RUN, not matched (rule 3: these were three regexes over app/stew-dashboard.jsx). The real loop, driven.
+  const r = distributorRig();
+  r.result = Promise.resolve(null);            // publishGroupKey did nothing (no ring on this console yet)
+  r.tick([G1], ['a', 'b']);
+  await settle();
+  r.result = Promise.resolve(true);
+  r.tick([G1], ['a', 'b']);
+  assert.equal(r.calls.length, 2,
     'the roster is recorded as handled even when nothing was published — publishGroupKey does nothing when ' +
     'this console has no ring yet, so the member who joined in that window is never keyed, and the next ' +
     'tick sees no change and never comes back');
-  assert.match(DASH2, /could not be given the key for/,
-    'members that could not be keyed are not surfaced to the steward, who is the only person able to fix it');
-  assert.match(DASH2, /steward-write-blocked'[^)]*group key/s,
-    'the warning does not go through the console\'s existing write-blocked channel, so it is raised somewhere ' +
-    'nobody is watching');
+  // a publish that landed but could not seal to somebody is SAID, through the console's write-blocked channel
+  const r2 = distributorRig();
+  r2.result = Promise.resolve({ ok: true, skipped: ['b'] });
+  r2.tick([G1], ['a', 'b']);
+  await settle();
+  const said = r2.events.filter(e => e.type === 'steward-write-blocked');
+  assert.equal(said.length, 1,
+    'members that could not be keyed are not surfaced to the steward through the console\'s existing write-blocked ' +
+    'channel, so it is raised somewhere nobody is watching');
+  assert.equal(said[0].detail.what, 'group key');
+  assert.match(said[0].detail.message, /could not be given the key for/, 'the steward is not told who could not be keyed');
 });

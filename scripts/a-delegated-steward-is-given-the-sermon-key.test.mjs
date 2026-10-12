@@ -272,6 +272,7 @@ async function renderKeyDistributor(rosters, members) {
         // every list on screen is the current church's — this file is about WHAT the screen passes, and the
         // church gate on those lists is pinned in the-key-enrolment-waits-for-every-list
         listIsCurrent: () => true,
+        listIsFresh: () => true, joinPolicyFresh: () => false, groupFresh: () => true, groupKeyDropped: () => [],   // fresh, open join (round 2 — the gates are pinned in the-key-enrolment rig)
         ensureMediaKeyForMembers: (...a) => { media.push(a); return Promise.resolve(true); },
         ensureCareKeyForMembers: () => Promise.resolve(true),
         ensureNameKeyForMembers: () => Promise.resolve(null),

@@ -191,27 +191,63 @@ test('changing your name re-seals it everywhere, and a late-arriving key seals o
 // dormant mechanism. These are the checks that would have caught that, and they are deliberately about the
 // CALL SITES rather than the protocol, because the protocol was never the part that was missing.
 
-test('the console mints and maintains the name key', () => {
+test('the console mints and maintains the name key', async () => {
+  // RUN, not matched (CLAUDE.md rule 3 — this was three regexes over app/stew-dashboard.jsx, which `false &&` in front
+  // of a call would have left green). The real KeyDistributor, compiled out of the jsx and rendered once with every
+  // list in hand; the engine records what it is asked to do. The full enrolment rules (fresh lists, approval, the
+  // blocked) are driven in the-key-enrolment-waits-for-every-list.test.mjs; a pending member's room, care and sermon
+  // keys at the point of use in a-room-key-reaches-a-member-the-console-never-saw-join.test.mjs.
+  const { miniReact } = await import('./render-jsx-screen.mjs');
+  const { execFileSync } = await import('node:child_process');
+  const { writeFileSync } = await import('node:fs');
   const DASH = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
-  assert.match(DASH, /subscribeNameKey/, 'the console never loads the envelope, so it cannot re-key anyone');
-  // Anchor the distributor EFFECT's arrow, not the ensureCareKeyForMembers CALL: the call-shaped anchor made
-  // fnBody slice past the effect into its neighbours, so this assertion was passing against code outside the
-  // loop it names (AUDIT-2026-08-10 item E). The arrow after `notBlocked` is the roster effect itself.
-  const at = DASH.indexOf('() => {', DASH.indexOf('const notBlocked = (pk)'));
-  assert.notEqual(at, -1, 'the key-distributor loop moved — re-anchor this test');
-  const body = fnBody(DASH, at, 'the key-distributor roster effect');
-  // RE-ANCHORED 2026-09-17: the call gained a third argument, `{ background: true }`, which marks it as a
-  // write no steward asked for so a correct refusal cannot raise the console's standing alarm. Both of the
-  // arguments this test is about are still pinned.
-  // RE-ANCHORED 2026-10-12: the care key now goes to APPROVED members (`approvedPubs` — a member awaiting
-  // approval is not keyed; a-pending-member-gets-no-room-care-or-media-key.test.mjs drives that). The NAME key
-  // below still goes to every member, pending ones included.
-  assert.match(body, /ensureCareKeyForMembers\(approvedPubs, stewardRoster[,)]/,
-    'the distributor no longer maintains the care key for the roster');
+  const ROOT = new URL('../', import.meta.url).pathname;
+  const { React, draw } = miniReact();
+  const tmp = join(tmpdir(), 'kdn-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
+  let js;
+  try {
+    writeFileSync(tmp, fnBody(DASH, 'function KeyDistributor() {', 'KeyDistributor') + '\nexport { KeyDistributor };\n');
+    js = execFileSync(join(ROOT, 'node_modules/.bin/esbuild'), [tmp, '--jsx=transform', '--format=esm', '--log-level=error'], { encoding: 'utf8' });
+  } finally { rmSync(tmp, { force: true }); }
+  const M = 'b'.repeat(64), P = 'c'.repeat(64), ST = 'd'.repeat(64);
+  const calls = [], subscribed = [];
+  const stamp = (l) => { stamped.add(l); return l; };
+  const stamped = new WeakSet();
+  const lists = { members: stamp([{ pubkey: M }, { pubkey: P }]), groups: stamp([]), stewards: stamp([ST]), blocked: stamp([]), admitted: stamp([M]) };
+  const rec = (name) => (...a) => { calls.push({ name, members: [...(a[0] || [])], second: a[1] }); return Promise.resolve(null); };
+  const g = {
+    React, setTimeout: () => 0, clearTimeout: () => {},
+    window: {
+      Steward: {
+        listIsCurrent: (l) => stamped.has(l), listIsFresh: (l) => stamped.has(l), groupFresh: () => true,
+        joinPolicyFresh: () => true,                   // approval ON: P is waiting, M is admitted
+        groupKeyDropped: () => [], groupKeyRecipients: () => null, groupKeyMissing: () => null,
+        subscribeMediaKey: () => () => {}, subscribeCareKey: () => () => {}, subscribeWebsiteShare: () => () => {}, setCareRoster: () => {},
+        subscribeNameKey: () => { subscribed.push('name'); return () => {}; },
+        ensureMediaKeyForMembers: rec('media'), ensureCareKeyForMembers: rec('care'), ensureNameKeyForMembers: rec('name'), ensureGroupKeys: rec('groups'),
+        actingChurch: '', activePub: 'a'.repeat(64), churchPub: 'a'.repeat(64),
+      },
+      useStewardChurch: () => ({ name: 'St Aidan' }), useStewardGroups: () => lists.groups, useStewardMembers: () => lists.members,
+      useStewardStewards: () => lists.stewards, useStewardBlocked: () => lists.blocked, useStewardAdmitted: () => lists.admitted,
+      useStewardJoinPolicy: () => true, useStewardIdv: () => 0, useStewardConn: () => 0,
+      addEventListener() {}, removeEventListener() {},
+    },
+  };
+  const key = '__kdn_' + Math.random().toString(36).slice(2);
+  globalThis[key] = g;
+  const mod = await import('data:text/javascript;base64,' + Buffer.from(Object.keys(g).map(k => `const ${k} = globalThis.${key}.${k};`).join('\n') + '\n' + js).toString('base64'));
+  delete globalThis[key];
+  draw(mod.KeyDistributor, {});
+  assert.ok(subscribed.includes('name'), 'the console never loads the envelope, so it cannot re-key anyone');
+  const care = calls.filter(c => c.name === 'care'), name = calls.filter(c => c.name === 'name');
+  assert.ok(care.length, 'the distributor no longer maintains the care key for the roster');
+  assert.deepEqual(care[0].members, [M], 'the care key went to someone other than the APPROVED members');
+  assert.deepEqual(care[0].second, [ST], 'the care key is not maintained for the steward roster — a delegated console is not a recipient of the envelope it maintains');
   // The steward roster is passed too: without it a delegated console is not a recipient of the envelope it
   // is meant to maintain, which is how it ended up holding an empty ring and wiping the church's names.
-  assert.match(body, /ensureNameKeyForMembers\(memberPubs, stewardRoster\)/,
-    'nothing mints a name key, so every seal in the member app silently does nothing');
+  assert.ok(name.length, 'nothing mints a name key, so every seal in the member app silently does nothing');
+  assert.deepEqual([...name[0].members].sort(), [M, P].sort(), 'the NAME key must reach every member, a pending one included — they seal their name for the approval queue');
+  assert.deepEqual(name[0].second, [ST], 'the name key is not maintained for the steward roster');
 });
 
 test('blocking a member rotates the name key too', () => {

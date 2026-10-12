@@ -192,3 +192,43 @@ test('C · approving them gives them all three at once', { skip: SKIP, timeout: 
   assert.ok(got, `AN APPROVED MEMBER WAS NOT GIVEN THE ROOM, CARE AND SERMON KEYS within ${WAIT / 1000} s — ${show()}`);
   assert.deepEqual(errors, [], 'the console threw:\n  ' + errors.join('\n  '));
 });
+
+// ── ROUND 2 (audit of 78ffad0): A BLOCKED PERSON STAYS OUT — ON THE LIVE CONSOLE AND ON A COLD ONE — AND UNBLOCK BRINGS THEM BACK ──
+// HIGH 1 of the audit was a console re-wrapping the ROTATED room key to the person just blocked, because the lists it
+// reconciled against were not fresh. The rows below drive the real engine against a real relay: MF is blocked and every
+// key rotated away from them — by the same calls rotateChurchKeys (app/stew-dashboard.jsx, Block) makes, made here
+// directly, so the Block screen itself is not what is under test — then the console stays open, then is closed and
+// reopened cold. The reconcile must never put MF back. Unblocking MF must give all three keys back (P2: the hold is a
+// hold, not a ban).
+test('D · a blocked member\'s keys are rotated away and NOT handed back — not by the live console, not by a cold one', { skip: SKIP, timeout: 300000 }, async () => {
+  assert.ok(room().includes(MF.pub) && care().includes(MF.pub) && media().includes(MF.pub), 'CONTROL: MF was not keyed before the block — run A–C first: ' + show());
+  const r = await evalIn(`(async () => { const S = window.Steward;
+    const ok = await S.setBlocked([${JSON.stringify(MF.pub)}]);
+    const keep = ${JSON.stringify([M1.pub, MA.pub, MP.pub])};
+    const r = [ok, await S.rotateCareKey(keep, []), await S.rotateMediaKey(keep, []), await S.publishGroupKey(${JSON.stringify(roomId)}, keep, { rotate: true })];
+    return r.map(x => (x && typeof x === 'object') ? 'ok' : String(x)).join(','); })()`);
+  assert.ok(!/false|null|undefined/.test(r), 'CONTROL: the block or a rotation did not land: ' + r);
+  assert.ok(await until(() => !room().includes(MF.pub) && !care().includes(MF.pub) && !media().includes(MF.pub), 20000), 'CONTROL: the rotations did not take MF out: ' + show());
+  // the live console: membership ticks, envelopes come back from the relay, the reconcile runs on each
+  await H.publishAll(relay, [joinTo(churchA, M1)]);            // a roster event (M1 re-announces), so the distributor re-runs
+  await sleep(15000);
+  assert.ok(!room().includes(MF.pub), 'THE LIVE CONSOLE WRAPPED THE ROTATED ROOM KEY BACK TO THE MEMBER IT JUST BLOCKED — ' + show());
+  assert.ok(!care().includes(MF.pub) && !media().includes(MF.pub), 'the live console gave the blocked member the care or sermon key back — ' + show());
+  // a cold console: no saved member list, every list read afresh
+  await closeConsole();
+  await openConsoleWithNoMemberCache();
+  await sleep(20000);
+  assert.ok(!room().includes(MF.pub), 'A COLD CONSOLE WRAPPED THE ROTATED ROOM KEY BACK TO THE BLOCKED MEMBER — ' + show());
+  assert.ok(!care().includes(MF.pub) && !media().includes(MF.pub), 'a cold console gave the blocked member the care or sermon key back — ' + show());
+  assert.ok(room().includes(M1.pub) && care().includes(M1.pub), 'the rotation or the reconcile took a member who was NOT blocked out — ' + show());
+});
+
+test('E · unblocking them gives the room, care and sermon keys back', { skip: SKIP, timeout: 300000 }, async () => {
+  assert.ok(!room().includes(MF.pub), 'CONTROL: MF still had the room key — run D first');
+  const r = await evalIn(`window.Steward.setBlocked([], { unblock: [${JSON.stringify(MF.pub)}] }).then(x => String(!!x))`);
+  assert.equal(r, 'true', 'the unblock was not saved');
+  const got = await until(() => room().includes(MF.pub) && care().includes(MF.pub) && media().includes(MF.pub), WAIT);
+  const why = got ? '' : await evalIn(`JSON.stringify({ blockedHere: window.Steward.blockedHere(), device: localStorage.getItem('trinityone.steward.blockedlast.' + ${JSON.stringify(churchA)}), relays: window.Steward.relayList(), join: window.Steward.joinPolicyFresh && window.Steward.joinPolicyFresh() })`).catch(e => String(e));
+  assert.ok(got, `UNBLOCKING A MEMBER DID NOT GIVE THEM THEIR KEYS BACK within ${WAIT / 1000} s — ${show()} — console: ${why}`);
+  assert.deepEqual(errors, [], 'the console threw:\n  ' + errors.join('\n  '));
+});

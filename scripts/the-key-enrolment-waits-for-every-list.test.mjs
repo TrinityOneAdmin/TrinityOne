@@ -35,6 +35,14 @@ async function keyDistributor() {
     js = execFileSync(join(ROOT, 'node_modules/.bin/esbuild'), [tmp, '--jsx=transform', '--format=esm', '--log-level=error'], { encoding: 'utf8' });
   } finally { rmSync(tmp, { force: true }); }
   const current = new WeakSet();
+  // FRESH, NOT ONLY CURRENT (round 2): a list the test marks current is also FRESH — read genuinely on a subscription
+  // open now — at `freshAt` (default 1), unless `set(..., { stale: true })` says it is the previous connection's copy.
+  // The engine's own rule is tested where it lives (key-reads-settle-only-for-the-church-they-asked-about); this rig
+  // asks only whether the distributor CONSULTS it.
+  const stale = new WeakSet();
+  const freshAt = new WeakMap();
+  const roomAt = {};        // room id -> when its document + envelope last settled genuinely (default: the list's)
+  const dropped = {};       // church -> room id -> [{ pub, at }] — who a newer envelope dropped (Steward.groupKeyDropped)
   const calls = [];
   const timers = [];
   const lists = { members: [], groups: [], stewards: [], blocked: [] };
@@ -42,13 +50,22 @@ async function keyDistributor() {
   // ring held (the engine's groupKeyRecipients answers null). Set by the tests.
   const env = {};
   const churchNow = () => g.window.Steward.actingChurch || g.window.Steward.churchPub;
-  const approval = { on: false, admitted: [], loaded: { subscribeJoinPolicy: true, subscribeAdmitted: true, subscribeBlocked: true } };
+  // `loaded` now means "a genuine read has settled" (Steward.joinPolicyFresh / listIsFresh), at `at`
+  const approval = { on: false, admitted: [], loaded: { subscribeJoinPolicy: true, subscribeAdmitted: true, subscribeBlocked: true }, at: { policy: 1, admitted: 1 } };
+  const freshOf = (l) => {
+    if (l === approval.admitted) return approval.loaded.subscribeAdmitted ? approval.at.admitted : 0;
+    return (l && current.has(l) && !stale.has(l)) ? (freshAt.get(l) || 1) : 0;
+  };
   const record = (name) => (...a) => { calls.push({ name, members: (a[0] || []).slice(), second: a[1] }); return Promise.resolve(null); };
   const g = {
     React, setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; }, clearTimeout: () => {},   // the mount re-check timers, fired by hand
     window: {
       Steward: {
         listIsCurrent: (l) => !!l && current.has(l),
+        listIsFresh: (l, since) => { const at = freshOf(l); return !!at && (!since || at > since); },
+        groupFresh: (list, id, since) => { const base = freshOf(list); if (!base) return false; const at = (id in roomAt) ? roomAt[id] : base; return !!at && (!since || at > since); },
+        joinPolicyFresh: (since) => (!approval.loaded.subscribeJoinPolicy || (since && approval.at.policy <= since)) ? null : approval.on,
+        groupKeyDropped: (gid) => ((dropped[churchNow()] || {})[gid] || []).slice(),
         subscribeMediaKey: () => () => {}, subscribeCareKey: () => () => {}, subscribeNameKey: () => () => {},
         subscribeWebsiteShare: () => () => {}, setCareRoster: () => {},
         ensureMediaKeyForMembers: record('media'), ensureCareKeyForMembers: record('care'), ensureNameKeyForMembers: record('name'),
@@ -72,9 +89,9 @@ async function keyDistributor() {
   const preamble = Object.keys(g).map(k => `const ${k} = globalThis.${key}.${k};`).join('\n');
   const mod = await import('data:text/javascript;base64,' + Buffer.from(preamble + '\n' + js).toString('base64'));
   delete globalThis[key];
-  const set = (name, arr, isCurrent) => { if (isCurrent) current.add(arr); lists[name] = arr; };
+  const set = (name, arr, isCurrent, o = {}) => { if (isCurrent) current.add(arr); if (o.stale) stale.add(arr); if (o.at) freshAt.set(arr, o.at); lists[name] = arr; };
   const render = () => draw(mod.KeyDistributor, {});
-  return { set, render, calls, timers, steward: g.window.Steward, env, approval };
+  return { set, render, calls, timers, steward: g.window.Steward, env, approval, roomAt, dropped };
 }
 const enrolled = (calls) => calls.filter(c => c.name === 'care' || c.name === 'name' || c.name === 'media');
 
@@ -298,4 +315,162 @@ test('useStewardMembers re-subscribes when the church changes without a switch (
   window.Steward.churchPub = 'c'.repeat(64);       // a key restore: the church changes, no switch event
   draw(C, {});
   assert.equal(subs, 2, 'THE MEMBER LIST STAYED ON THE OLD CHURCH after a key restore — nobody would be enrolled until a reload');
+});
+
+// ── ROUND 2 (audit of 78ffad0): FRESH LISTS, AND A ROTATION'S DROPS ARE HELD ────────────────────────────────────────
+// HIGH 1, the auditor's scenario: a SECOND console (the owner's other device, a delegate) was away while the first
+// blocked Bob. The first published the blocklist, then every room's ROTATED envelope without Bob. The second comes
+// back: its screens repaint the previous connection's lists from cache — still stamped "current", because only a
+// switch moves the epoch — and the rotated envelope arrives. 78ffad0 saw Bob wanted and missing and wrapped the new
+// key straight back to him.
+const BOB = '7'.repeat(64);
+const openRoom = { id: 'room-o', name: 'Prayer', encrypted: true };
+const toBob = (calls) => calls.filter(c => c.name === 'groupkey' && c.members.includes(BOB));
+test('HIGH 1: a rotated envelope without Bob, met with the previous connection\'s lists, does NOT re-key Bob', async () => {
+  const k = await keyDistributor();
+  k.env[A] = { 'room-o': [A, MB, BOB] };
+  k.set('members', [{ pubkey: MB }, { pubkey: BOB }], true); k.set('groups', [openRoom], true); k.set('stewards', [ST], true); k.set('blocked', [], true);
+  k.render();
+  assert.equal(k.calls.filter(c => c.name === 'groupkey').length, 0, 'CONTROL: a room that holds everyone was re-keyed');
+  const before = k.calls.length;
+  // the reconnect: every list on screen is the previous connection's copy (current, NOT fresh); the rotation lands
+  const stale = { stale: true };
+  k.set('members', [{ pubkey: MB }, { pubkey: BOB }], true, stale); k.set('groups', [{ ...openRoom }], true, stale);
+  k.set('stewards', [ST], true, stale); k.set('blocked', [], true, stale);
+  k.env[A]['room-o'] = [A, MB];
+  k.dropped[A] = { 'room-o': [{ pub: BOB, at: 100 }] };
+  k.render();
+  assert.deepEqual(toBob(k.calls), [], 'THE ROTATED ROOM KEY WAS WRAPPED BACK TO THE PERSON JUST BLOCKED, from the previous connection\'s lists (audit of 78ffad0, HIGH 1)');
+  assert.deepEqual(enrolled(k.calls.slice(before)), [], 'a care, name or sermon key was enrolled from the previous connection\'s lists');
+  // the genuine re-read arrives: Bob IS blocked. Still nothing for Bob — and a new member is keyed without him.
+  k.set('members', [{ pubkey: MB }, { pubkey: BOB }, { pubkey: MB2 }], true, { at: 200 }); k.set('groups', [{ ...openRoom }], true, { at: 200 });
+  k.set('stewards', [ST], true, { at: 200 }); k.set('blocked', [BOB], true, { at: 200 });
+  k.approval.at = { policy: 200, admitted: 200 };
+  k.render();
+  const keyed = k.calls.filter(c => c.name === 'groupkey');
+  assert.equal(keyed.length, 1, 'CONTROL: once the lists were fresh, the new member was not keyed');
+  assert.ok(keyed[0].members.includes(MB2) && !keyed[0].members.includes(BOB), 'the fresh re-key: ' + JSON.stringify(keyed[0].members));
+});
+test('P2: while the lists have not been RE-READ since a drop, the dropped person is held — even on lists that were fresh before it', async () => {
+  const k = await keyDistributor();
+  k.env[A] = { 'room-o': [A, MB] };
+  k.dropped[A] = { 'room-o': [{ pub: BOB, at: 100 }] };
+  // the live case: the blocklist this console holds was read at 50 (before the block); the drop was seen at 100
+  k.set('members', [{ pubkey: MB }, { pubkey: BOB }, { pubkey: MB2 }], true, { at: 50 }); k.set('groups', [openRoom], true, { at: 50 });
+  k.set('stewards', [ST], true, { at: 50 }); k.set('blocked', [], true, { at: 50 });
+  k.render();
+  const keyed = k.calls.filter(c => c.name === 'groupkey');
+  assert.equal(keyed.length, 1, 'CONTROL: the member the envelope lacks (MB2) was not keyed');
+  assert.ok(!keyed[0].members.includes(BOB), 'A PERSON A ROTATION JUST DROPPED WAS WRAPPED BACK IN before the blocklist was re-read: ' + JSON.stringify(keyed[0].members));
+});
+test('P2: someone a rotation dropped who is NOT blocked (a Block run from a partial member list) is re-added once the lists are re-read', async () => {
+  const k = await keyDistributor();
+  k.env[A] = { 'room-o': [A, MB] };
+  k.dropped[A] = { 'room-o': [{ pub: MB2, at: 100 }] };
+  k.set('members', [{ pubkey: MB }, { pubkey: MB2 }], true, { at: 200 }); k.set('groups', [openRoom], true, { at: 200 });
+  k.set('stewards', [ST], true, { at: 200 }); k.set('blocked', [], true, { at: 200 });
+  k.approval.at = { policy: 200, admitted: 200 };
+  k.render();
+  const keyed = k.calls.filter(c => c.name === 'groupkey');
+  assert.equal(keyed.length, 1, 'A MEMBER A ROTATION DROPPED BY ACCIDENT WAS NEVER GIVEN THE ROOM KEY BACK — "never re-add" made a partial list\'s mistake permanent');
+  assert.ok(keyed[0].members.includes(MB2), JSON.stringify(keyed[0].members));
+  // …but not while the room's own document and envelope have not been re-read since the drop
+  const k2 = await keyDistributor();
+  k2.env[A] = { 'room-o': [A, MB] };
+  k2.dropped[A] = { 'room-o': [{ pub: MB2, at: 100 }] };
+  k2.set('members', [{ pubkey: MB }, { pubkey: MB2 }], true, { at: 200 }); k2.set('groups', [openRoom], true, { at: 200 });
+  k2.set('stewards', [ST], true, { at: 200 }); k2.set('blocked', [], true, { at: 200 });
+  k2.roomAt['room-o'] = 90;
+  k2.approval.at = { policy: 200, admitted: 200 };
+  k2.render();
+  assert.equal(k2.calls.filter(c => c.name === 'groupkey').length, 0, 'the room was re-keyed to a dropped person from a room read older than the drop');
+  // …nor while the join policy has not
+  const k3 = await keyDistributor();
+  k3.env[A] = { 'room-o': [A, MB] };
+  k3.dropped[A] = { 'room-o': [{ pub: MB2, at: 100 }] };
+  k3.set('members', [{ pubkey: MB }, { pubkey: MB2 }], true, { at: 200 }); k3.set('groups', [openRoom], true, { at: 200 });
+  k3.set('stewards', [ST], true, { at: 200 }); k3.set('blocked', [], true, { at: 200 });
+  k3.approval.at = { policy: 50, admitted: 200 };
+  k3.render();
+  assert.equal(k3.calls.filter(c => c.name === 'groupkey').length, 0, 'the room was re-keyed to a dropped person from a join-policy read older than the drop');
+});
+test('unblock re-keys: a blocked person the rotation dropped is given the room key again once the blocklist no longer lists them', async () => {
+  const k = await keyDistributor();
+  k.env[A] = { 'room-o': [A, MB] };
+  k.dropped[A] = { 'room-o': [{ pub: BOB, at: 100 }] };
+  k.approval.at = { policy: 200, admitted: 200 };
+  k.set('members', [{ pubkey: MB }, { pubkey: BOB }], true, { at: 200 }); k.set('groups', [openRoom], true, { at: 200 });
+  k.set('stewards', [ST], true, { at: 200 }); k.set('blocked', [BOB], true, { at: 200 });
+  k.render();
+  assert.deepEqual(toBob(k.calls), [], 'CONTROL: a blocked person was keyed');
+  k.set('blocked', [], true, { at: 300 });        // Unblock: the blocklist, read again, no longer lists Bob
+  k.render();
+  assert.equal(toBob(k.calls).length, 1, 'UNBLOCKING SOMEBODY DID NOT GIVE THEM THE ROOM KEY BACK');
+});
+test('re-invite re-keys: someone taken off an invite room is not keyed from a stale copy, and is keyed when the room lists them again', async () => {
+  const k = await keyDistributor();
+  const inv = { id: 'room-i', name: 'Leaders', encrypted: true, visibility: 'invite', members: [MB, BOB] };
+  k.env[A] = { 'room-i': [A, MB] };
+  k.dropped[A] = { 'room-i': [{ pub: BOB, at: 100 }] };
+  k.approval.at = { policy: 200, admitted: 200 };
+  // the PREVIOUS connection's copy of the room still lists Bob: nothing
+  k.set('members', [{ pubkey: MB }, { pubkey: BOB }], true, { at: 200 }); k.set('groups', [inv], true, { stale: true });
+  k.set('stewards', [ST], true, { at: 200 }); k.set('blocked', [], true, { at: 200 });
+  k.render();
+  assert.deepEqual(toBob(k.calls), [], 'A STALE COPY OF AN INVITE ROOM RE-KEYED THE PERSON JUST TAKEN OUT OF IT');
+  // read again: the room's list no longer has Bob
+  k.set('groups', [{ ...inv, members: [MB] }], true, { at: 200 }); k.render();
+  assert.deepEqual(toBob(k.calls), [], 'someone taken off the room was keyed to it');
+  // the steward adds Bob back to the room
+  k.set('groups', [{ ...inv, members: [MB, BOB] }], true, { at: 300 }); k.render();
+  assert.equal(toBob(k.calls).length, 1, 'RE-INVITING SOMEBODY DID NOT GIVE THEM THE ROOM KEY');
+});
+test('finding 2: approval on, but no GENUINE read of the policy yet (the stream\'s EOSE timer said "off") — a pending member gets no room, care or sermon key', async () => {
+  const k = await keyDistributor();
+  k.approval.on = true; k.approval.admitted = [MB];
+  k.approval.loaded.subscribeJoinPolicy = false;  // Steward.joinPolicyFresh → null
+  k.env[A] = { 'room-o': [A, MB] };
+  k.set('members', [{ pubkey: MB }, { pubkey: MB2 }], true); k.set('groups', [openRoom], true); k.set('stewards', [ST], true); k.set('blocked', [], true);
+  k.render();
+  for (const t of k.timers.splice(0)) t.fn();
+  for (const name of ['care', 'media', 'groupkey', 'groups'])
+    assert.ok(!k.calls.some(c => c.name === name && (c.members.includes(MB2) || (c.second || []).includes(MB2))), `the ${name} key went to a member still waiting, before the join policy was read genuinely`);
+  k.approval.loaded.subscribeJoinPolicy = true; k.set('members', [{ pubkey: MB }, { pubkey: MB2 }], true); k.render();
+  assert.ok(!k.calls.some(c => c.name === 'groupkey' && c.members.includes(MB2)), 'with approval on (genuinely), the pending member was keyed');
+  assert.ok(k.calls.some(c => c.name === 'care' && c.members.includes(MB)), 'CONTROL: the admitted member got no care key');
+});
+test('A1: no care, sermon or name key while the STEWARD roster is the previous connection\'s copy (a removed delegate would be re-keyed)', async () => {
+  const k = await keyDistributor();
+  k.set('members', [{ pubkey: MB }], true); k.set('groups', [], true); k.set('stewards', [ST], true, { stale: true }); k.set('blocked', [], true);
+  k.render();
+  for (const t of k.timers.splice(0)) t.fn();
+  assert.deepEqual(enrolled(k.calls), [], 'THE CHURCH\'S KEYS WERE WRAPPED FROM A STALE STEWARD ROSTER');
+  k.set('stewards', [ST], true); k.render();
+  assert.equal(enrolled(k.calls).length, 3, 'CONTROL: a fresh roster did not enrol');
+});
+test('a room whose own document and envelope have not been read genuinely is not re-keyed', async () => {
+  const k = await keyDistributor();
+  k.env[A] = { 'room-o': [A] };
+  k.roomAt['room-o'] = 0;
+  k.set('members', [{ pubkey: MB }], true); k.set('groups', [openRoom], true); k.set('stewards', [ST], true); k.set('blocked', [], true);
+  k.render();
+  assert.equal(k.calls.filter(c => c.name === 'groupkey').length, 0, 'a room was re-keyed from a document/envelope read that had not settled');
+  k.roomAt['room-o'] = 5; k.set('members', [{ pubkey: MB }], true); k.render();
+  assert.equal(k.calls.filter(c => c.name === 'groupkey').length, 1, 'CONTROL: once read, the room was not keyed');
+});
+// FINDING 4: the `unsealable` memo. A publish that succeeds but leaves somebody out (a key nobody can seal to) must not
+// be re-sent on every roster tick — full envelopes, repeatedly — and a blocklist change (an Unblock) forgets it.
+test('finding 4: a member a successful publish could not seal to is not re-sent on every tick; a blocklist change tries again', async () => {
+  const k = await keyDistributor();
+  const BAD = 'f'.repeat(64);
+  k.env[A] = { 'room-o': [A, MB] };
+  k.steward.publishGroupKey = (gid, recips, opts) => { k.calls.push({ name: 'groupkey', gid, members: recips.slice(), opts }); return Promise.resolve({ ok: true, skipped: [BAD] }); };
+  k.set('members', [{ pubkey: MB }, { pubkey: BAD }], true); k.set('groups', [openRoom], true); k.set('stewards', [ST], true); k.set('blocked', [], true);
+  k.render();
+  assert.equal(k.calls.filter(c => c.name === 'groupkey').length, 1, 'CONTROL: the unsealable member was not tried once');
+  await new Promise(r => setTimeout(r, 0));      // the publish answers: BAD is still not in the envelope
+  for (let i = 0; i < 3; i++) { k.set('members', [{ pubkey: MB }, { pubkey: BAD }], true); k.render(); await new Promise(r => setTimeout(r, 0)); }
+  assert.equal(k.calls.filter(c => c.name === 'groupkey').length, 1, 'THE WHOLE ENVELOPE WAS RE-SENT ON EVERY ROSTER TICK for a member nobody can seal to');
+  k.set('blocked', [ST], true); k.render();       // the blocklist changes
+  assert.equal(k.calls.filter(c => c.name === 'groupkey').length, 2, 'a blocklist change did not let the left-out member be tried again');
 });
