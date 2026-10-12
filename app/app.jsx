@@ -2140,6 +2140,7 @@ function App() {
       if (!loc || !Bible.books().includes(loc.book)) { toast(day.ref + ' isn’t in this translation'); return; }
       // planRead is tied to THIS location object (and this church): any other way of moving the reader makes a new object, so the bar goes away
       const at = { book: loc.book, chap: loc.chap, verse: loc.verse };
+      if (loc.verseEnd) at.verseEnd = loc.verseEnd;   // "John 3:16-21": the reader highlights the whole range, not just verse 16
       setPlanRead({ plan, day, loc: at, church: activeChurch }); setLoc(at); setReadView('bible'); setTab('read');
     },
     openJournal: (j) => setJournal(j),
