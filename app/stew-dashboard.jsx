@@ -159,7 +159,7 @@ function IdentitySwitcher({ church, churchName, initials, onEditName, compact = 
   React.useEffect(() => { const f = () => force(x => x + 1); window.addEventListener('steward-networks', f); return () => window.removeEventListener('steward-networks', f); }, []);
   const ids = (window.Steward.identities ? window.Steward.identities() : []);
   const activePub = window.Steward.activePub;
-  const networks = ids.filter(i => i.kind === 'network');
+  const networks = window.NETWORKS_ENABLED === true ? ids.filter(i => i.kind === 'network') : [];   // NETWORKS SWITCH (app/stew-data.jsx)
   const viewingNetwork = window.Steward.isViewingNetwork && window.Steward.isViewingNetwork();
   const delegated = window.Steward.isDelegated && window.Steward.isDelegated();
   const offChurch = viewingNetwork || delegated;   // not on our own church identity
@@ -216,7 +216,7 @@ function IdentitySwitcher({ church, churchName, initials, onEditName, compact = 
       )}
       {open ? (
         <div style={popStyle}>
-          {ids.map(idn => {
+          {ids.filter(idn => idn.kind !== 'network' || window.NETWORKS_ENABLED === true).map(idn => {   /* NETWORKS SWITCH */
             const on = idn.pub === activePub;
             // THE OWN CHURCH'S ROW NAMES THE OWN CHURCH. `church` is the profile of whatever the console is
             // running NOW, so while acting for a stewarded church (or viewing a network) this row said that
@@ -11297,7 +11297,7 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
   // bodies, so the list and the detail cannot disagree: a page missing from this list cannot be opened, and
   // one present in it always has a body.
   const groups = React.useMemo(() => SETTINGS_GROUPS
-    .map(([g, items]) => [g, items.filter(p => (delegated ? !p.owner : !p.delegate))])
+    .map(([g, items]) => [g, items.filter(p => (delegated ? !p.owner : !p.delegate) && (p.k !== 'network' || window.NETWORKS_ENABLED === true))])   // NETWORKS SWITCH: the Network page
     .filter(([, items]) => items.length), [delegated]);
   const pages = groups.reduce((a, [, items]) => a.concat(items), []);
   // ON A PHONE THE LIST IS THE FIRST SCREEN and a page opens on tap, so nothing is open to begin with. In a
@@ -11583,7 +11583,7 @@ function DashSettings({ onTab, initialSection, initialIntent, onSectionConsumed 
       {open === 'add-relay' ? <DashAddRelayCard /> : null}
       {open === 'history' ? <DashRelayHistoryCard /> : null}
       {open === 'ownbox' ? <DashRunRelayCard /> : null}
-      {open === 'network' ? <DashNetworksPanel /> : null}
+      {open === 'network' && window.NETWORKS_ENABLED === true ? <DashNetworksPanel /> : null}
 
       {open === 'access' ? (
       <Panel title="Security">

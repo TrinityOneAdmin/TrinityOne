@@ -25,7 +25,7 @@ const reads = (t) => texts(t).join(' ').replace(/\s+/g, ' ').trim();
 // what a row SAYS: the text of its children, not its icons' names and colours
 const said = (n) => { const out = []; const walk = (x) => { if (x == null || x === false) return; if (typeof x === 'string' || typeof x === 'number') { out.push(String(x)); return; } if (Array.isArray(x)) { x.forEach(walk); return; } (x.kids || []).forEach(walk); }; walk(n); return out.join(' ').replace(/\s+/g, ' ').trim(); };
 
-async function switcher({ ids, activePub, delegated, church }) {
+async function switcher({ ids, activePub, delegated, church, networksOn = true }) {
   const { React, draw } = miniReact();
   const src = fnBody(DASH, 'function IdentitySwitcher(', 'IdentitySwitcher');
   const tmp = join(tmpdir(), 'idsw-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
@@ -37,6 +37,7 @@ async function switcher({ ids, activePub, delegated, church }) {
   const g = {
     React, Icon: () => null, SkBadge: () => null, useStewNarrow: () => false, churchHandle: () => '',
     window: {
+      NETWORKS_ENABLED: networksOn,   // the NETWORKS SWITCH (app/stew-data.jsx); on here because these tests are about the church rows
       useStewardIdv: () => 0, useStewardStewardedChurches: () => [B],
       Steward: { identities: () => ids, activePub, isViewingNetwork: () => false, isDelegated: () => delegated, setActiveIdentity() {} },
       addEventListener() {}, removeEventListener() {},
@@ -55,7 +56,7 @@ async function switcher({ ids, activePub, delegated, church }) {
   tree = draw(mod.IdentitySwitcher, props);
   // the rows of the open list: one per identity, each a button whose second line says what it is
   const rowFor = (sub) => find(tree, n => n && n.type === 'button' && said(n).endsWith(sub)).map(said);
-  return { own: rowFor('Your church'), stewarded: rowFor('You steward this church') };
+  return { own: rowFor('Your church'), stewarded: rowFor('You steward this church'), network: rowFor('Network console') };
 }
 
 test('THE CALL SITE: acting for church B, the "Your church" row names the console\'s OWN church', async () => {
@@ -93,4 +94,17 @@ test('THE ENGINE: identities() names the own church from what its own kind-0 sai
   assert.match(reader, /e\.pubkey === churchPub\) _rememberOwnName\(/, 'subscribeProfile remembers a name without checking it is the own church\'s kind-0');
   const ids = fnBody(BUNDLE, '  identities() {', 'identities');
   assert.match(ids, /kind: "church"[^}]*name: _ownChurchName\(\)/, 'identities() no longer hands the switcher the own church\'s name');
+});
+
+// ── NETWORKS SWITCH (reference/DOMAIN.md 2026-10-11): no way to switch the console into a network ─────
+const NET = 'c'.repeat(64);
+const withNet = { ids: [{ kind: 'church', pub: A, name: 'St Aidan' }, { kind: 'network', pub: NET, name: 'Regions Beyond' }, { kind: 'steward', pub: B, name: 'St Bede' }], activePub: A, delegated: false, church: { name: 'St Aidan' } };
+test('NETWORKS OFF: the open switcher offers no network row, though the console owns one', async () => {
+  const s = await switcher({ ...withNet, networksOn: false });
+  assert.equal(s.network.length, 0, 'the switcher lets a steward switch into a network with the networks switch off: ' + s.network);
+  assert.equal(s.own.length, 1, 're-anchor: the church row went missing too');
+});
+test('NETWORKS ON (control): the same console shows the network row — the switch is the only thing hiding it', async () => {
+  const s = await switcher({ ...withNet, networksOn: true });
+  assert.equal(s.network.length, 1, 'with the switch on the network row is missing, so the OFF test above proves nothing');
 });

@@ -50,6 +50,9 @@ const JS = compileScreen('app/stew-dashboard.jsx');
 // are furniture from other app files and the browser.
 function consoleWith(React, over = {}) {
   const win = {
+    // the NETWORKS SWITCH (app/stew-data.jsx, reference/DOMAIN.md 2026-10-11). ON by default here so the Network
+    // page's card test below still exercises the panel; the OFF behaviour is asserted at the end of this file.
+    NETWORKS_ENABLED: over.networks === undefined ? true : over.networks,
     useStewardChurch: () => ({ name: 'Grace Church', npub: 'npub1grace', features: {}, rules: {} }),
     useStewardIdv: () => 0,
     useStewardRelays: () => [], useStewardNetworks: () => [], useStewardRosters: () => [],
@@ -354,4 +357,17 @@ test('the roomy spacing is the DEFAULT, so a narrow page is never compacted by a
   assert.match(h2[1], /font-size:\s*15px/,
     'the compact card title is no longer 15px. The phone default is Panel’s own inline 16.5px, and this rule ' +
     'is the only thing that changes it — moving the 15px out of @container would apply it everywhere');
+});
+
+// ── NETWORKS SWITCH: the Network settings page, create / join controls ─────────────────────────────────
+const said = (tree) => texts(tree).join(' ');
+test('NETWORKS OFF: the settings list has no Network page and no deep link opens it', () => {
+  const { tree } = withDraw('network', { networks: false });
+  assert.doesNotMatch(said(tree), /Belong to a group of churches/, 'the Network row is in the settings list with the switch off');
+  assert.doesNotMatch(said(tree), /Create a network|Network code|Join a network|Network name/, 'a create/join control is on screen with the switch off');
+});
+test('NETWORKS ON (control): the same screen lists the Network page and its create control', () => {
+  const { tree } = withDraw('network', { networks: true });
+  assert.match(said(tree), /Belong to a group of churches/, 'the Network row is missing with the switch on');
+  assert.match(said(tree), /Create a network|Network code/, 'the create/join controls are missing with the switch on, so the OFF test proves nothing');
 });

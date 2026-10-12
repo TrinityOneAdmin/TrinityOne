@@ -1,6 +1,13 @@
 // stew-data.jsx — shared sample data + small UI primitives for the steward surfaces
 // Exports to window: SK (data), and primitives SkPill, SkBadge, SkField, SkToggle, SkQR, SkKey, SkSpark
 
+// THE NETWORKS SWITCH. Owner decision (reference/DOMAIN.md, 2026-10-11): networks are OFF in this product until
+// the network branch is properly tested -- nobody can create, join, switch into or follow a network. Nothing
+// is deleted; the engines (src/*.src.js) and relay are untouched. To turn networks back on, change `false`
+// below to `true` (or set window.NETWORKS_ENABLED = true before this file loads). Every UI entry point reads
+// `window.NETWORKS_ENABLED === true`; this is the only place it is given a value.
+if (typeof window !== 'undefined' && typeof window.NETWORKS_ENABLED === 'undefined') window.NETWORKS_ENABLED = false;
+
 const SK = {
   church: {
     name: 'Grace Chapel', sub: 'Riverside · main campus', initials: 'GC', accent: 'var(--clay)',
