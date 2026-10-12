@@ -1127,7 +1127,7 @@ function ReadScreen({ ctx }) {
 
       <div ref={scrollRef} className="no-scrollbar"
         onTouchStart={onSwipeStart} onTouchMove={onSwipeMove} onTouchEnd={onSwipeEnd} onTouchCancel={() => { swipe.current = null; }}
-        style={{ position: 'absolute', inset: 0, overflowY: 'auto', overflowX: 'hidden', padding: 'calc(env(safe-area-inset-top, 0px) + 122px) 18px max(116px, var(--trinity-player-h, 0px))', scrollPaddingTop: 'calc(env(safe-area-inset-top, 0px) + 130px)', overflowAnchor: 'none' }}>
+        style={{ position: 'absolute', inset: 0, overflowY: 'auto', overflowX: 'hidden', padding: 'calc(env(safe-area-inset-top, 0px) + 122px) 18px 116px', scrollPaddingTop: 'calc(env(safe-area-inset-top, 0px) + 130px)', overflowAnchor: 'none' }}>
         <div style={{ animation: 'trinityFade .4s ease both' }}>
           <div style={{ textAlign: 'center', marginBottom: 22 }}>
             <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--clay)', letterSpacing: '1.5px', textTransform: 'uppercase' }}>{bname}</div>
@@ -1184,6 +1184,8 @@ function ReadScreen({ ctx }) {
             </button>
           </div>
         </div>
+        {/* room for the floating player: a box, not var() padding — see ScreenScroll in screens-today.jsx */}
+        <div aria-hidden="true" data-player-room="" style={{ height: 'max(0px, calc(var(--trinity-player-h, 0px) - 116px))' }} />
       </div>
 
       <ActionSheet label={rangeRef} multi={multi} ctx={sheetCtx} open={sheet === 'action'} onClose={dismiss}
