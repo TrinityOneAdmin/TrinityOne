@@ -11,6 +11,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { fnBody } from './test-slice.mjs';
 import vm from 'node:vm';
 import { webcrypto } from 'node:crypto';
 import { finalizeEvent, getPublicKey } from 'nostr-tools/pure';
@@ -95,7 +96,9 @@ test('the Fellowship bundle actually exposes the gated accessor mydata asks for'
   // vendor/*.js is bundler output (dead code is removed), so a text match here is honest (rule 3).
   const at = FELLOW_BUNDLE.indexOf('window.Fellowship = {');
   assert.notEqual(at, -1);
-  assert.match(FELLOW_BUNDLE.slice(at, at + 6000), /\n\s*churchOwnProvedRelays,\n/, 'Fellowship.churchOwnProvedRelays is not exported - mydata would sync nowhere');
+  // The exported object is ~258KB, so a 6000-char window covered only its start: the accessor could be
+  // dropped from the export list further down and this would still pass (scripts/test-windows.test.mjs).
+  assert.match(fnBody(FELLOW_BUNDLE, 'window.Fellowship = {'), /\n\s*churchOwnProvedRelays,\n/, 'Fellowship.churchOwnProvedRelays is not exported - mydata would sync nowhere');
 });
 
 

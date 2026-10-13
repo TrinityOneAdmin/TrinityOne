@@ -22,7 +22,14 @@ import { npubEncode } from 'nostr-tools/nip19';
 import { requireFreePort } from './test-ports.mjs';
 
 const CHROME = ['/usr/bin/chromium-browser', '/usr/bin/chromium', '/usr/bin/google-chrome'].find(p => existsSync(p));
-const PORT = 8783, CDP = 9443;   // unique across scripts/*.test.mjs -- a duplicate fixed port deadlocks both files
+const PORT = 8783, CDP = 9443, CDP2 = 9444;   // unique across scripts/*.test.mjs -- a duplicate fixed port deadlocks both files
+// EVERY BROWSER THIS FILE OPENS, so after() can reap one that a TIMED-OUT test never closed. node --test
+// abandons a test's RESULT on timeout but not its BODY: the body kept awaiting, kept chromium alive holding the
+// debug port, and this file never exited -- stalling a whole 712-file suite for 92 minutes on 2026-10-13 (both
+// tests pass alone in ~40s; under 24-way load they exceeded the 240s timeout). after() still runs after a
+// timeout, so it is the only hook that can clean up. The second test also gets its OWN debug port, so a leaked
+// browser from the first can never answer for the second's.
+const LIVE = new Set();
 const WS_URL = `ws://127.0.0.1:${PORT}/relay`;
 const ROOT = new URL('..', import.meta.url).pathname;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -42,6 +49,7 @@ const put = (evt) => new Promise(res => { const on = d => { const m = JSON.parse
 before(async () => {
   await requireFreePort(PORT, 'a-steward-approval-survives-a-later-church-copy.test.mjs');
   await requireFreePort(CDP, 'a-steward-approval-survives-a-later-church-copy.test.mjs (Chrome debug port)');
+  await requireFreePort(CDP2, 'a-steward-approval-survives-a-later-church-copy.test.mjs (second Chrome debug port)');
   if (!CHROME) return;
   dataDir = mkdtempSync(join(tmpdir(), 'trin-twoadmit-'));
   relay = spawn(process.execPath, ['scripts/gateway.mjs', String(PORT)], {
@@ -57,19 +65,23 @@ before(async () => {
   await ok(finalizeEvent({ kind: 30078, created_at: nowS(), tags: [['d', 'trinityone/joinpolicy:' + churchPub], ['t', 'trinityone']], content: JSON.stringify({ approval: true }) }, churchSk), 'join policy');
   await ok(finalizeEvent({ kind: 30078, created_at: nowS(), tags: [['d', 'trinityone/stewards:' + churchPub], ['t', 'trinityone']], content: JSON.stringify({ pubkeys: [stewardPub] }) }, churchSk), 'steward roster');
 });
-after(() => { try { relayWs && relayWs.close(); } catch {} try { relay && relay.kill('SIGKILL'); } catch {} try { rmSync(dataDir, { recursive: true, force: true }); } catch {} });
+after(() => { for (const reap of LIVE) { try { reap(); } catch {} } LIVE.clear(); try { relayWs && relayWs.close(); } catch {} try { relay && relay.kill('SIGKILL'); } catch {} try { rmSync(dataDir, { recursive: true, force: true }); } catch {} });
 
 // One browser, driven by hand. Returns helpers; the caller closes it.
-async function open(profileTag) {
+async function open(profileTag, cdp = CDP) {
   const prof = join(tmpdir(), 'trin-chr-twoadmit-' + process.pid + '-' + profileTag);
   const BLOCK_PROD = '--host-resolver-rules=MAP app.trinityone.church 127.0.0.1:9, MAP *.ts.net 127.0.0.1:9, MAP trinityone.church 127.0.0.1:9';
   // Headless throttles timers on a page it considers hidden, so the splash's own dismissal never fires and the
   // app looks broken (scripts/onboarding-shot.probe.mjs was written after I nearly reported that as a bug).
-  const chr = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${CDP}`, '--no-sandbox', '--disable-gpu',
+  const chr = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${cdp}`, '--no-sandbox', '--disable-gpu',
     '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding', '--disable-background-timer-throttling',
     BLOCK_PROD, `--user-data-dir=${prof}`, '--window-size=420,900', `http://127.0.0.1:${PORT}/index.html`], { stdio: 'ignore' });
+  // Registered BEFORE the first await: if chromium never exposes a debug target the assert below throws, and
+  // nobody would be holding a handle to kill the browser it did start.
+  const reap = () => { try { chr.kill('SIGKILL'); } catch {} try { rmSync(prof, { recursive: true, force: true }); } catch {} };
+  LIVE.add(reap);
   let targets = null;
-  for (let i = 0; i < 40 && !targets; i++) { await sleep(400); try { targets = await (await fetch(`http://127.0.0.1:${CDP}/json`)).json(); } catch {} }
+  for (let i = 0; i < 40 && !targets; i++) { await sleep(400); try { targets = await (await fetch(`http://127.0.0.1:${cdp}/json`)).json(); } catch {} }
   assert.ok(targets && targets.length, 'chromium never exposed a debug target');
   const page = targets.find(t => t.type === 'page') || targets[0];
   const ws = new WebSocket(page.webSocketDebuggerUrl, { perMessageDeflate: false, maxPayload: 5e8 });
@@ -106,7 +118,7 @@ async function open(profileTag) {
     assert.fail(`timed out waiting for ${why || expr} — buttons were: ${await buttons()}`);
   };
   const hasButton = (label) => js(`[...document.querySelectorAll('button')].some(e => ((e.innerText||'').indexOf(${JSON.stringify(label)}) >= 0))`);
-  const close = () => { try { ws.close(); } catch {} try { chr.kill('SIGKILL'); } catch {} try { rmSync(prof, { recursive: true, force: true }); } catch {} };
+  const close = () => { try { ws.close(); } catch {} reap(); LIVE.delete(reap); };
   return { js, text, pageText, buttons, click, waitFor, hasButton, errors, close, frames };
 }
 
@@ -130,8 +142,8 @@ async function freshDevice(tag) {
 
 
 // Open a set-up phone, learn its key, and return it still waiting on the follow link.
-async function phone(tag) {
-  const d = await open(tag);
+async function phone(tag, cdp = CDP) {
+  const d = await open(tag, cdp);
   await sleep(2500);
   await d.js(`(() => { localStorage.setItem('trinityone.relays', ${JSON.stringify(JSON.stringify([WS_URL]))}); localStorage.setItem('trinityone.onboarded', 'true'); return 1; })()`);
   await d.js(`location.reload()`);
@@ -175,7 +187,7 @@ test('a member the STEWARD approved stays admitted on their phone when the churc
 });
 
 test('a member NEITHER list names is still waiting (the union does not admit everybody)', { skip: !CHROME ? 'no chromium' : false, timeout: 240000 }, async () => {
-  const { d } = await phone('nobody');
+  const { d } = await phone('nobody', CDP2);
   try {
     await follow(d);
     const s = await whenJoinStateIs(d, false, 'a member nobody approved was not reported as waiting');

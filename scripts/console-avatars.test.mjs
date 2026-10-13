@@ -11,6 +11,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { fnBody } from './test-slice.mjs';
 
 const DATA = readFileSync(new URL('../app/stew-data.jsx', import.meta.url), 'utf8');
 const DASH = readFileSync(new URL('../app/stew-dashboard.jsx', import.meta.url), 'utf8');
@@ -101,7 +102,9 @@ test('the console passes it where it draws a member', () => {
   // this window landing nowhere near the render. `const joinRow` IS the row, so it cannot drift again.
   const at = DASH.indexOf('const joinRow');
   assert.notEqual(at, -1, 'the join row moved — re-anchor this test');
-  assert.match(DASH.slice(at, at + 3400), /av=\{m\.av\}/,
+  // fnBody() reads to the real closing brace, so this cannot silently stop covering joinRow the way a
+  // fixed 3400-char window did once the row gained its own Approve path (scripts/test-windows.test.mjs).
+  assert.match(fnBody(DASH, 'const joinRow'), /av=\{m\.av\}/,
     'join requests still show a faceless badge, which is the screen where a steward approves a stranger');
 });
 

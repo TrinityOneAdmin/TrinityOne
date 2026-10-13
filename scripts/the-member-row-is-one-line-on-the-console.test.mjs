@@ -17,7 +17,10 @@ import { generateSeedWords, privateKeyFromSeedWords } from 'nostr-tools/nip06';
 import { requireFreePort } from './test-ports.mjs';
 
 const CHROME = ['/usr/bin/chromium-browser', '/usr/bin/chromium', '/usr/bin/google-chrome'].find(p => existsSync(p));
-const PORT = 8872, CDP = 9372;   // 88xx: 8868 batch-a, 8869/8871 taken; 93xx taken: 9350-9358, 9360-9364, 9366-9369, 9371, 9381, 9412
+const PORT = 8872, CDP = 9373;   // 88xx: 8868 batch-a, 8869/8871 taken; 93xx taken: 9350-9358, 9360-9364, 9366-9372, 9381, 9412
+// 9372 was free on this branch and ALSO chosen by the-pin-gate-goes-back-in-a-browser.test.mjs on another; the two
+// only met at the integration merge, where a shared debug port deadlocked both files. scripts/test-ports.test.mjs
+// caught it. Moved to 9373.
 const ROOT = new URL('..', import.meta.url).pathname;
 const VW = 360, VH = 730, LW = 730, LH = 328, DW = 1280, DH = 900;
 const PIN = 'cedar-harbour-lamp-42';
