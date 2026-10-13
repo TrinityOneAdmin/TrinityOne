@@ -4522,6 +4522,11 @@ async function _waitForRegistration() {
   _regGate = null;   // latched: whichever way that went, nothing waits on registration again this session
 }
 const _lastStamp = new Map();   // d-tag -> the created_at we last published for it
+// d-tag -> the newest created_at a RELAY HAS ACTUALLY DELIVERED to us for it. Written ONLY by _noteSeenStamp (so only from
+// _subAddr's onevent). It is deliberately NOT _lastStamp: _lastStamp is also bumped by _monotonic at event CREATION, for
+// our own write attempts, before the write is sent and whether or not it lands. "Has another party changed this?"
+// (rotaChangedSince) must be answered from this map; a failed write of our own must never read as somebody else's change.
+const _seenStamp = new Map();
 const _lastOk = new Map();      // d-tag -> the created_at of the last copy the relay ACCEPTED
 // ── A COPY WE CANNOT OPEN IS NOT AN EMPTY DOCUMENT (the roster wipe, 2026-10-12) ─────────────────────────
 // A console that opens before the church name key arrives sees every sealed calendar document as `_locked`.
@@ -4540,7 +4545,10 @@ function _saveFailed(why) { _lastSaveFail = why; return null; }
 // A version we RECEIVED counts as a stamp we must beat. Two consoles signing with one church key both stamp
 // `now()`, and a tie is refused by the relay ("a newer version of this is already stored"); feeding what we
 // saw into `_lastStamp` makes our next write of that document land one second past it. Called by _subAddr.
-function _noteSeenStamp(d, ts) { if (d && ts > 0 && (_lastStamp.get(d) || 0) < ts) _lastStamp.set(d, ts); }
+function _noteSeenStamp(d, ts) {
+  if (d && ts > 0 && (_seenStamp.get(d) || 0) < ts) _seenStamp.set(d, ts);
+  if (d && ts > 0 && (_lastStamp.get(d) || 0) < ts) _lastStamp.set(d, ts);
+}
 // ⚠ WHICH RELAYS TOOK THE WRITE — the one question `_publishToRelays`'s return value cannot answer.
 //
 // THAT RULE IS UNTOUCHED BY THIS. `_publishToRelays` still answers `evt` only when EVERY targeted relay
@@ -11560,12 +11568,13 @@ window.Steward = {
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', ROTA_D + rota.service], ['t', NET]], content }), po)
       .then((ok) => (ok ? { id: rota.service, service: rota.service, published: !!rota.published, assign: rota.assign || {} } : _saveFailed(/newer version/i.test(po.reason || '') ? 'clash' : 'relay')));   // false = reached no relay; see publishService
   },
-  // HAS THIS CONSOLE SEEN (or written) A NEWER COPY OF THIS ROTA THAN `ts`? `_lastStamp` holds the newest created_at this
-  // console has either received from a relay (_noteSeenStamp, kept by _subAddr) or published for the document, so it
-  // also covers a copy delivered after a screen's snapshot was taken and our OWN write whose echo has not arrived.
-  // A caller that is about to rewrite a rota from a copy it read earlier asks this first. A missing `ts` counts as
-  // older than anything. Callers: takeOffEveryTeam (stew-dashboard.jsx) only.
-  rotaChangedSince(serviceId, ts) { return (_lastStamp.get(ROTA_D + serviceId) || 0) > (Number(ts) || 0); },
+  // HAS A RELAY DELIVERED A NEWER COPY OF THIS ROTA THAN `ts`? Answered from `_seenStamp`, which only _noteSeenStamp
+  // (events a relay delivered, via _subAddr) writes. It must NOT read `_lastStamp`: _monotonic bumps that for our OWN
+  // write attempts at creation time, so after one refused write it would exceed the screen's `ts` for ever (no echo can
+  // refresh `ts`, nothing landed) and every later Block press would be skipped as "someone else changed it".
+  // Our own successful write is echoed back through the same subscription, which raises this map and the screen's rotas together.
+  // A missing `ts` counts as older than anything. Callers: takeOffEveryTeam (stew-dashboard.jsx) only.
+  rotaChangedSince(serviceId, ts) { return (_seenStamp.get(ROTA_D + serviceId) || 0) > (Number(ts) || 0); },
   removeRota(serviceId) {
     if (!sk) return Promise.resolve(null);
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', ROTA_D + serviceId], ['t', NET], ['deleted', '1']], content: '' }));

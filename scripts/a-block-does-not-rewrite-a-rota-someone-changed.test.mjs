@@ -76,6 +76,7 @@ function engine(clock) {
     ${fn('function _tombstoneTargets(e)')}
     ${fn('function _forgetById(versions, byId, id, by, ts, trusted, opts)')}
     ${st('var _lastStamp = ')}
+    ${st('var _seenStamp = ')}
     ${st('var _lockedAddr = ')}
     ${fn('function _addrLocked(d)')}
     ${st('var _lastSaveFail = ')}
@@ -156,4 +157,30 @@ test('a FAILED write says the save failed and does NOT blame another steward (re
   assert.equal(eng.sent.length, 1, 'exactly one attempt, no retry: ' + eng.sent.length);
   assert.match(said, /could not take them off a future rota \(the save failed/, 'a refused write was swallowed: ' + said.slice(0, 300));
   assert.doesNotMatch(said, /someone else changed/, 'blamed a co-steward for our own failed save: ' + said.slice(0, 300));
+});
+
+test('REGRESSION: a second Block press after a failed first one STILL attempts the write (real engine)', async () => {
+  const eng = engine({ s: T + 10 });
+  const rotas = held(eng, T, { 'w::r1': SLOT_B, 'w::r2': SLOT_C });
+  eng.gate.refuse = true;
+  await block({ eng, rotas: rotas() });                 // press 1: the relay refuses; nothing lands, no echo reaches the screen
+  assert.equal(eng.sent.length, 1);
+  eng.gate.refuse = false;
+  const said = await block({ eng, rotas: rotas() });    // press 2: the screen still holds the same copy
+  assert.equal(eng.sent.length, 2, 'the second press was silently skipped - the blocked person stays on the rota');
+  assert.deepEqual(Object.keys(lastRota(eng)), ['w::r2']);
+  assert.doesNotMatch(said, /could not take them off/);
+});
+
+test('the guard still fires after a failed first press when another steward\'s copy is DELIVERED', async () => {
+  const eng = engine({ s: T + 10 });
+  const stale = held(eng, T, { 'w::r1': SLOT_B, 'w::r2': SLOT_C })();
+  eng.gate.refuse = true;
+  await block({ eng, rotas: stale });                   // press 1 fails: our own stamp is minted, nothing lands
+  assert.equal(eng.sent.length, 1);
+  eng.gate.refuse = false;
+  theirs(eng);                                          // now a relay really delivers someone else's newer copy
+  const said = await block({ eng, rotas: stale });
+  assert.equal(eng.sent.length, 1, 'Block overwrote a delivered newer rota');
+  assert.match(said, /could not take them off a future rota someone else changed/);
 });

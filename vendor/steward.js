@@ -18508,6 +18508,7 @@ zoo`.split("\n");
     _regGate = null;
   }
   var _lastStamp = /* @__PURE__ */ new Map();
+  var _seenStamp = /* @__PURE__ */ new Map();
   var _lastOk = /* @__PURE__ */ new Map();
   var _lockedAddr = /* @__PURE__ */ new Set();
   function _addrLocked(d) {
@@ -18519,6 +18520,7 @@ zoo`.split("\n");
     return null;
   }
   function _noteSeenStamp(d, ts) {
+    if (d && ts > 0 && (_seenStamp.get(d) || 0) < ts) _seenStamp.set(d, ts);
     if (d && ts > 0 && (_lastStamp.get(d) || 0) < ts) _lastStamp.set(d, ts);
   }
   var _lastSpread = /* @__PURE__ */ new Map();
@@ -25096,13 +25098,14 @@ zoo`.split("\n");
       const po = {};
       return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", ROTA_D + rota.service], ["t", NET]], content }), po).then((ok) => ok ? { id: rota.service, service: rota.service, published: !!rota.published, assign: rota.assign || {} } : _saveFailed(/newer version/i.test(po.reason || "") ? "clash" : "relay"));
     },
-    // HAS THIS CONSOLE SEEN (or written) A NEWER COPY OF THIS ROTA THAN `ts`? `_lastStamp` holds the newest created_at this
-    // console has either received from a relay (_noteSeenStamp, kept by _subAddr) or published for the document, so it
-    // also covers a copy delivered after a screen's snapshot was taken and our OWN write whose echo has not arrived.
-    // A caller that is about to rewrite a rota from a copy it read earlier asks this first. A missing `ts` counts as
-    // older than anything. Callers: takeOffEveryTeam (stew-dashboard.jsx) only.
+    // HAS A RELAY DELIVERED A NEWER COPY OF THIS ROTA THAN `ts`? Answered from `_seenStamp`, which only _noteSeenStamp
+    // (events a relay delivered, via _subAddr) writes. It must NOT read `_lastStamp`: _monotonic bumps that for our OWN
+    // write attempts at creation time, so after one refused write it would exceed the screen's `ts` for ever (no echo can
+    // refresh `ts`, nothing landed) and every later Block press would be skipped as "someone else changed it".
+    // Our own successful write is echoed back through the same subscription, which raises this map and the screen's rotas together.
+    // A missing `ts` counts as older than anything. Callers: takeOffEveryTeam (stew-dashboard.jsx) only.
     rotaChangedSince(serviceId, ts) {
-      return (_lastStamp.get(ROTA_D + serviceId) || 0) > (Number(ts) || 0);
+      return (_seenStamp.get(ROTA_D + serviceId) || 0) > (Number(ts) || 0);
     },
     removeRota(serviceId) {
       if (!sk) return Promise.resolve(null);
