@@ -212,7 +212,7 @@ async function screen(sealResult) {
     useStewardJoinPolicy: () => false,
     useStewardIdv: () => 0,
     stewardStreamLoaded: () => true,
-    Steward: { sealGroup: async () => sealResult, publishGroup: async () => null },
+    Steward: { sealGroup: async () => sealResult, publishGroup: async () => null, joinPolicyFresh: () => false, listIsFresh: () => true },   // open join, lists read (round 3a)
     addEventListener() {}, removeEventListener() {}, dispatchEvent() {},
     localStorage: { getItem: () => null, setItem() {} },
   };
@@ -312,6 +312,7 @@ async function sweep(sealResult) {
       sealGroup: async () => sealResult,
       publishProfile: (pr) => { profiles.push(pr); return Promise.resolve(true); },
       setJoinPolicy() {}, setAdmitted() {},
+      joinPolicyFresh: () => false, listIsFresh: () => true,   // an open-join church whose lists have been read (round 3a's shared filter)
     },
     addEventListener() {}, removeEventListener() {},
     dispatchEvent: (e) => { events.push({ type: e.type, detail: e.detail }); },

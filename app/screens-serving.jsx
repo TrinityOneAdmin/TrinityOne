@@ -232,6 +232,12 @@ function svMyTeams(ctx) {
   return [...seen.values()];
 }
 
+// "the Welcome team" - but a team already NAMED "Care team" is "the Care team", not "the Care team team".
+function svTheTeam(name) {
+  const n = String(name == null ? '' : name).trim() || 'Team';
+  return 'the ' + (/\bteam$/i.test(n) ? n : n + ' team');
+}
+
 function ServAvatar({ name, size = 34, accent = 'var(--clay)', me = false }) {
   const ac = safeCssColor(accent);   // SECURITY-AUDIT-2026-07-06 H2/L6: guard team accent against url() beacon smuggling
   return <div style={{ width: size, height: size, borderRadius: 999, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: me ? size * 0.3 : size * 0.36, background: me ? 'var(--ink)' : `linear-gradient(150deg, ${ac}, color-mix(in oklab, ${ac} 62%, #16120c))` }}>{me ? 'You' : svInitials(name)}</div>;
@@ -1635,7 +1641,7 @@ function ServingScreen({ open, onClose, ctx, docked }) {
                         <div key={t.id} style={{ width: 46, height: 46, borderRadius: 14, background: `color-mix(in oklab, ${safeCssColor(t.accent)} 15%, var(--surface))`, color: safeCssColor(t.accent), display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={t.icon || 'hand'} size={24} /></div>
                       ))}
                     </div>
-                    <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17, color: 'var(--ink)', marginBottom: 5 }}>You’re on {(ctx.myRosterTeams || []).length === 1 ? 'the ' + ctx.myRosterTeams[0].name + ' team' : (ctx.myRosterTeams || []).length + ' teams'}</div>
+                    <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 17, color: 'var(--ink)', marginBottom: 5 }}>You’re on {(ctx.myRosterTeams || []).length === 1 ? svTheTeam(ctx.myRosterTeams[0].name) : (ctx.myRosterTeams || []).length + ' teams'}</div>
                     <p style={{ fontSize: 14, lineHeight: 1.5, maxWidth: 280, margin: '0 auto', color: 'var(--ink-2)' }}>No dates scheduled for you yet. When your church puts you on a service, it’ll show up here and we’ll remind you the day before.</p>
                     {(ctx.myRosterTeams || []).length > 1 ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', marginTop: 10 }}>{(ctx.myRosterTeams || []).map(t => t.name).join(' · ')}</div> : null}
                   </div>

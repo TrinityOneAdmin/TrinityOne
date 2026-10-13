@@ -35,7 +35,7 @@ const VENDOR = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'u
 // gate deleted. Caught by sabotage, not by being green. The mint gate is the most dangerous code in this file
 // and its test was the vacuous one.
 const fn = (() => {
-  const i = VENDOR.indexOf('ensureGroupKeys');
+  const i = VENDOR.indexOf('async ensureGroupKeys(');   // the METHOD — 55019b7 added `_ensureGroupKeysBusy`/`Quiet` module vars earlier in the bundle, which a bare name matched first
   if (i < 0) return '';
   const j = VENDOR.indexOf('publishGroupKey', i);      // the next method — the reconciler ends before it
   return VENDOR.slice(i, j > i ? j : i + 2200);

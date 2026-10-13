@@ -34,6 +34,7 @@ import { WebSocket } from 'ws';
 import { generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure';
 import { npubEncode } from 'nostr-tools/nip19';
 import { requireFreePort } from './test-ports.mjs';
+import { openStore } from './event-store.mjs';
 import { fnBody, stmt, stripComments } from './test-slice.mjs';
 
 const STEWARD = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
@@ -128,17 +129,18 @@ const memberDoc = (who) => finalizeEvent({ kind: 30078, created_at: at(), tags: 
 // lifted out of vendor/steward.js and RUN — a test that hand-rolled the event would pass with the console's
 // own line reverted. `publish` is captured (this file sends it to the real relay itself) and
 // _requireTrustedView is stubbed, because neither is the question here; the SIGNING path is the shipped one.
-function grab(sig) {
-  let a = STEWARD.indexOf(sig);
+function grab(sig, SRC = STEWARD) {
+  let a = SRC.indexOf(sig);
   assert.notEqual(a, -1, sig + ' is gone from the shipped bundle — re-anchor this test, or rebuild');
-  if (STEWARD.slice(Math.max(0, a - 6), a) === 'async ') a -= 6;
+  assert.equal(SRC.indexOf(sig, a + 1), -1, sig + ' appears twice in the shipped bundle — re-anchor this test');
+  if (SRC.slice(Math.max(0, a - 6), a) === 'async ') a -= 6;
   let depth = 0, q = '';
-  for (let i = STEWARD.indexOf('{', a); i < STEWARD.length; i++) {
-    const c = STEWARD[i], prev = STEWARD[i - 1];
+  for (let i = SRC.indexOf('{', a); i < SRC.length; i++) {
+    const c = SRC[i], prev = SRC[i - 1];
     if (q) { if (c === q && prev !== '\\') q = ''; continue; }
     if (c === '"' || c === "'" || c === '`') { q = c; continue; }
-    if (c === '/' && STEWARD[i + 1] === '/') { i = STEWARD.indexOf('\n', i); if (i === -1) break; continue; }
-    if (c === '{') depth++; else if (c === '}' && --depth === 0) return STEWARD.slice(a, i + 1);
+    if (c === '/' && SRC[i + 1] === '/') { i = SRC.indexOf('\n', i); if (i === -1) break; continue; }
+    if (c === '{') depth++; else if (c === '}' && --depth === 0) return SRC.slice(a, i + 1);
   }
   assert.fail('could not find the end of ' + sig);
 }
@@ -236,11 +238,63 @@ test('BOTH APPROVALS COUNT — the later one does not quietly cancel the earlier
     '— got authors: ' + [...authors].join(', '));
 });
 
+// ── ITEM D: Ben's phone is open while the church removes the warden ─────────────────────────────────────────
+// A LIVE SUBSCRIPTION, as Ben's phone holds one: open across the removal, so it sees documents in the order the relay
+// broadcasts them. The events are replayed through the member app's own join-state code below.
+const FELLOWSHIP = readFileSync(new URL('../vendor/fellowship.js', import.meta.url), 'utf8');
+async function watchAs(who, filters) {
+  const ws = await connect();
+  const subId = 'w' + Math.random().toString(36).slice(2, 8);
+  const events = [];
+  let ready;
+  const eosed = new Promise(r => { ready = r; });
+  ws.on('message', (d) => {
+    const m = JSON.parse(d);
+    if (m[0] === 'EVENT' && m[1] === subId) events.push(m[2]);
+    else if (m[0] === 'EOSE' && m[1] === subId) ready();
+    else if (m[0] === 'AUTH') ws.send(JSON.stringify(['AUTH', finalizeEvent({ kind: 22242, created_at: now(), tags: [['relay', WS_URL], ['challenge', m[1]]], content: '' }, who.sk)]));
+  });
+  ws.on('error', () => {});
+  await new Promise(r => setTimeout(r, 400));   // logged in first, or the default-deny read gate answers nothing
+  ws.send(JSON.stringify(['REQ', subId, ...filters]));
+  await Promise.race([eosed, new Promise(r => setTimeout(r, 1500))]);
+  return { events, close: () => { try { ws.close(); } catch {} } };
+}
+// THE MEMBER APP'S JOIN STATE, lifted out of vendor/fellowship.js and RUN: subscribeChurchJoin, fed by a stand-in for
+// the church-docs hub doing what _onChurchDocs does — the church's roster goes through the shipped _absorbRoster and
+// then onroster(); everything else to onevent(e, d). app/app.jsx (~1555) shows "You're no longer in this church"
+// exactly when a church that gates joining (approval) stops reporting isAdmitted for someone it once admitted.
+function phoneJoinStates(me, events) {
+  const src = grab('function _absorbRoster(cp, d, e)', FELLOWSHIP) + '\nconst api = { ' + grab('subscribeChurchJoin(churchNpub, onState) {', FELLOWSHIP) + ' };';
+  let hub = null;
+  const scope = {
+    _churchRoster: new Map(), _fireTrust: () => {}, toPub: (x) => x, pub: me,
+    window: { Fellowship: { myPubkey: me } }, authState: () => ({ failed: false }),
+    _onChurchDocs: (_cp, h) => { hub = h; return () => {}; },
+  };
+  const keys = Object.keys(scope);
+  const { api, _absorbRoster } = new Function(...keys, src + '\nreturn { api, _absorbRoster };')(...keys.map(k => scope[k]));
+  const states = [];
+  api.subscribeChurchJoin(cp, (st) => states.push(st));
+  assert.ok(hub, 're-anchor: subscribeChurchJoin no longer registers on the church-docs hub');
+  for (const e of events) {
+    const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
+    if (_absorbRoster(cp, d, e)) { if (hub.onroster) hub.onroster(); } else hub.onevent(e, d);
+  }
+  return states;
+}
+let phoneWatch;
+test('ITEM D: Ben’s phone is open before the warden is removed', async () => {
+  phoneWatch = await watchAs(ben, CONSOLE_FILTERS);
+  assert.ok(phoneWatch.events.some(e => e.pubkey === warden.pub), 're-anchor: Ben is not served the warden’s approval, so the rows below prove nothing');
+});
+
 test('THE HEADLINE: the warden stands down, the relay restarts, and nothing the warden approved is withheld', async () => {
   const ws = await connect();
   assert.equal((await publish(ws, roster([], {}))).ok, true, 'the church could not empty its own roster');
-  await new Promise(r => setTimeout(r, 200));
+  await new Promise(r => setTimeout(r, 400));
   ws.close();
+  phoneWatch.close();
 
   // RESTART, so every lookup table is rebuilt from disk. A map that is merely stale in memory would hide this.
   await stop();
@@ -259,31 +313,81 @@ test('THE HEADLINE: the warden stands down, the relay restarts, and nothing the 
     'the two copies between them no longer name both people the church approved');
 });
 
-test('KNOWN GAP, MEASURED AND REPORTED RATHER THAN GUESSED: the relay’s own allowlist forgets a departed steward', async () => {
-  // This is NOT an endorsement of the behaviour. It is the boundary of this commit, pinned so that whoever
-  // closes it sees this test go red and knows exactly which line moved.
-  //
-  // canRead now keeps SERVING the warden's copy (the test above). But note()'s ADMITTED_D ingest asks
-  // `stewardCan(e.pubkey, cp, 'any')`, which is a CURRENT-roster question, and hydrateMaps() replays from
-  // disk on every boot — so after the restart above, Ben is no longer in ADMITTED_BY and the relay stops
-  // treating him as an effective member.
-  //
-  // WHY IT IS NOT FIXED HERE. The only way to fix it at that line is to stop asking who the author was.
-  // Unlike the check-in withdrawal next door — which can only ever REFUSE somebody — this document GRANTS,
-  // and /import is reachable by any church key registered on the box (see _exportAuth) and writes straight to
-  // the store with no accept() pass. An unauthored ingest would therefore let one church on a shared
-  // community relay admit members into another church's gated corpus. The evidence needed to tell a
-  // departed-but-genuine steward from a co-tenant's forgery is the roster as it stood when the document was
-  // written, and the next roster overwrites it. That is an owner's decision, not an improvisation.
-  const benSees = await admittedDocsSeenBy(ben);
-  assert.equal(benSees.length, 0,
-    'GOOD NEWS, NOT A FAILURE: the relay now keeps honouring a departed steward’s approvals across a ' +
-    'restart. If that was done deliberately, delete this test and say so; if it was not, something widened ' +
-    'note()’s ADMITTED_D ingest and the co-tenant question above needs answering.');
-  const adaSees = await admittedDocsSeenBy(ada);
-  assert.ok(adaSees.length > 0,
-    're-anchor: the CHURCH’s own approval stopped working after a restart, which is a different fault ' +
-    'entirely and a much worse one');
+const chat = (who) => finalizeEvent({ kind: 1, created_at: now(), tags: [['t', NET], ['church', cp]], content: 'hello' }, who.sk);
+const cleo = K();   // joined, never approved: the control that proves the instrument can say "no"
+
+test('ITEM D (relay): after the removal AND a restart, Ben can still read his church and post — the old KNOWN GAP, closed', async () => {
+  // This row used to PIN the gap: the relay rebuilt its allowlist on boot from current stewards only. It now keeps a
+  // copy it accepted from the warden while they were a steward (gateway.mjs ADMITTED_RECEIPTS) — no console involved.
+  const ws = await connect();
+  assert.equal((await publish(ws, memberDoc(cleo))).ok, true, 're-anchor: a member: doc was refused');
+  ws.close();
+  await new Promise(r => setTimeout(r, 200));
+  assert.equal((await admittedDocsSeenBy(cleo)).length, 0, 'CONTROL: an unapproved member can read the allowlist, so a read proves nothing here');
+  const cw = await connect(); const cr = await publish(cw, chat(cleo)); cw.close();
+  assert.equal(cr.ok, false, 'CONTROL: an unapproved member can post, so a post proves nothing here');
+
+  assert.ok((await admittedDocsSeenBy(ben)).length > 0,
+    'after the warden was removed and the relay restarted, Ben — whom the warden approved — can no longer read his ' +
+    'church: "blocked: not a member". Removing a steward un-approved the people they let in.');
+  const bw = await connect(); const br = await publish(bw, chat(ben)); bw.close();
+  assert.equal(br.ok, true, 'Ben can no longer post after the warden left and the relay restarted: ' + br.why);
+  assert.ok((await admittedDocsSeenBy(ada)).length > 0, 're-anchor: the church’s OWN approval of Ada stopped working');
+});
+
+test('ITEM D (phone, point of use): Ben’s open app never stops reporting him admitted — member app engine, run', () => {
+  const evs = phoneWatch.events.filter(e => { const d = (e.tags.find(t => t[0] === 'd') || [])[1] || ''; return d === ADMITTED_D + cp || d === STEWARDS_D + cp || d === JOINPOLICY_D + cp; });
+  assert.ok(evs.some(e => ((e.tags.find(t => t[0] === 'd') || [])[1]) === STEWARDS_D + cp && JSON.parse(e.content).pubkeys.length === 0),
+    're-anchor: Ben’s live subscription never received the roster without the warden, so this proves nothing');
+  const states = phoneJoinStates(ben.pub, evs);
+  const firstIn = states.findIndex(st => st.isAdmitted);
+  assert.ok(firstIn >= 0, 're-anchor: the member app never saw Ben admitted in the first place');
+  assert.ok(states.slice(firstIn).some(st => st.approval), 're-anchor: the church never read as gating joins, so "removed" could not show anyway');
+  const lost = states.slice(firstIn).find(st => st.approval && !st.isAdmitted);
+  assert.equal(lost, undefined,
+    'the moment Ben’s phone took the roster without the warden it stopped counting the warden’s approval, so a ' +
+    'church that gates joining told him "You’re no longer in this church" — for nothing he did. States: ' + JSON.stringify(states));
+});
+
+test('ITEM D (console): a second, COLD console still counts Ben as approved — SHIPPED subscribeAdmitted, run', async () => {
+  // Cold: it never saw the warden on a roster (empty roster, no record of the removal). It is fed exactly what the
+  // relay serves the church after the restart.
+  const docs = await admittedDocsSeenBy(church);
+  const cold = drivenAdmitted({ careRoster: [] });
+  for (const e of docs) cold.deliver(e);
+  assert.ok(cold.last() && cold.last().includes(ben.pub),
+    'a console that did not see the removal treats Ben as still waiting, so it leaves him out of every new key. Saw: ' + JSON.stringify(cold.last()));
+});
+
+test('ITEM D (relay): a copy that never passed the write gate is neither served nor honoured — e.g. planted by /import', async () => {
+  // Put straight onto disk while the relay is down — the /import route also writes with no accept() pass. Signed by a
+  // key that was never a steward, naming Cleo. Without the receipt rule the read gate served it to every reader.
+  const stranger = K();
+  const planted = finalizeEvent({ kind: 30078, created_at: now(), tags: [['d', ADMITTED_D + cp], ['t', NET], ['church', cp]], content: JSON.stringify({ pubkeys: [cleo.pub] }) }, stranger.sk);
+  await stop();
+  const st = openStore(join(dataDir, 'relay.sqlite'));
+  try { assert.equal(st.put(planted, cp), 'stored', 're-anchor: could not plant the copy'); } finally { st.close(); }
+  await start();
+  const docs = await admittedDocsSeenBy(church);
+  assert.ok(!docs.some(e => e.pubkey === stranger.pub),
+    'a non-steward’s approved-members list that never passed the write gate is SERVED — and phones and consoles count every copy they are served');
+  assert.equal((await admittedDocsSeenBy(cleo)).length, 0, 'a planted list admitted Cleo at the relay');
+  assert.ok(docs.some(e => e.pubkey === warden.pub), 're-anchor: the warden’s receipted copy stopped being served');
+});
+
+test('ITEM D (relay): the receipt is for ONE copy — a different list from the same departed steward is not honoured', async () => {
+  // The warden's receipted copy names Ben. A newer copy signed by the warden after removal, naming Cleo, reaches the
+  // disk by a route with no write gate (as /import would). It must not ride on the warden's old receipt: the receipt
+  // binds the exact event id, not the author. Audit of 5072bb1 (LOW): "any receipt from this author" left every row green.
+  const later = finalizeEvent({ kind: 30078, created_at: now() + 5, tags: [['d', ADMITTED_D + cp], ['t', NET], ['church', cp]], content: JSON.stringify({ pubkeys: [cleo.pub] }) }, warden.sk);
+  await stop();
+  const st = openStore(join(dataDir, 'relay.sqlite'));
+  try { assert.equal(st.put(later, cp), 'stored', 're-anchor: could not plant the later copy'); } finally { st.close(); }
+  await start();
+  const docs = await admittedDocsSeenBy(church);
+  assert.ok(!docs.some(e => e.id === later.id),
+    'a list the departed warden signed AFTER removal is served on the strength of the receipt for their EARLIER list');
+  assert.equal((await admittedDocsSeenBy(cleo)).length, 0, 'a departed steward’s post-removal list admitted Cleo at the relay');
 });
 
 test('a departed steward may still write NOTHING more — the exemption is about serving the past', async () => {
@@ -317,14 +421,19 @@ test('the retraction exemption is a READ gate and nothing else', () => {
 // instance with its own `handlers`; sharing one fake pool across two instances silently rebinds the first,
 // which would let a case drive a subscription it is not the subject of.
 const admittedDoc = (who, ts, pubkeys) => ({ pubkey: who, created_at: ts, tags: [['d', ADMITTED_D + cp], ['t', NET]], content: JSON.stringify({ pubkeys }) });
-function drivenAdmitted() {
+function drivenAdmitted({ careRoster = [warden.pub] } = {}) {
   const src = 'const api = { ' + grab('subscribeAdmitted(onList)') + ' };';
   let handlers = null;
   const scope = {
     pool: { subscribeMany: (_urls, _filters, h) => { handlers = h; return { close() {} }; } },
     relays: () => [WS_URL], pub: cp, ADMITTED_D, NET,
-    _authFuture: () => false, _careRoster: new Set([warden.pub]),
+    _authFuture: () => false, _careRoster: new Set(careRoster),
     _byChurchOrSteward: (e) => e.pubkey === cp || e.pubkey === warden.pub,
+    // round 2 of the room-key reconcile: subscribeAdmitted stamps its list (fresh reads are tested in
+    // key-reads-settle-only-for-the-church-they-asked-about.test.mjs), also counts a steward this device saw removed
+    // (nobody here), and re-folds when the roster changes. None of that is what this file drives.
+    _freshTok: () => ({ live: true, genuine: false, at: 0 }), _listTag: () => ({}), _stampFor: (l) => l,
+    _freshDocRead: () => () => {}, _keysReadSignal: () => {}, _exStewardRemovedAt: () => ({}), _memberEmitters: new Set(),
   };
   const keys = Object.keys(scope);
   const api = new Function(...keys, src + '\nreturn api;')(...keys.map(k => scope[k]));

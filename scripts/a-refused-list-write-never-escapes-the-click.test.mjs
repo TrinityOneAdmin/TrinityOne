@@ -34,7 +34,8 @@ const refused = (what) => () => { const e = new Error('Couldn’t save the ' + w
 
 async function compiled(name, globals) {
   const { React, draw } = miniReact();
-  const src = fnBody(DASH, 'function ' + name + '(', name);
+  // + the shared approved-members filter the screens hand keys out with (round 3a) — compiled in, real
+  const src = fnBody(DASH, 'function ' + name + '(', name) + '\n' + ['stewKeyRecipients', 'stewKeyRecipientsOrAdmitted', 'useStewKeyRecipients'].map(n => fnBody(DASH, 'function ' + n + '(', n)).join('\n') + '\n' + DASH.match(/^const STEW_KEYS_LOADING = .*;$/m)[0];
   const tmp = join(tmpdir(), 'rw-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
   let js;
   try {

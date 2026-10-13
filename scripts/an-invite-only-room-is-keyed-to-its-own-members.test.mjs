@@ -29,7 +29,7 @@ function run({ actingChurch = '', groups, memberPubs, envelopeAuthoredBy = null 
   const pubKey = actingChurch ? DELEGATE : OWNER;   // `pub` / `churchPub`: on a delegated console, this device's own key
   const scope = {
     actingChurch, pub: pubKey, sk: new Uint8Array(32), churchSk: new Uint8Array(32), churchPub: pubKey,
-    _isRelayAuthed: () => true, _skeys: {},
+    _isRelayAuthed: () => true, _skeys: {}, _ensureGroupKeysBusy: new Set(), _ensureGroupKeysQuiet: new Map(),   // the per-room guards (round 2, P6)
     relays: () => ['wss://r'], GROUP_D: 'trinityone/group:', GROUPKEY_D: 'trinityone/groupkey:',
     pool: { querySync: async (_r, filters) => {
       const f = filters[0]; asked.push(f);

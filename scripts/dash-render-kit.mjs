@@ -42,7 +42,13 @@ export async function compiled(name, globals, extra = [], src0 = DASH) {
   // `{ src, const: 'NAME' }` reads a single-line top-level `const NAME = …;` table (STEW_CAP_LABEL) from the shipped file
   const constLine = (e) => { const m = e.src.match(new RegExp('^const ' + e.const + ' = .*;$', 'gm')); if (!m || m.length !== 1) throw new Error('expected exactly one single-line top-level const ' + e.const + ', found ' + (m ? m.length : 0)); return m[0]; };
   const pick = (e) => (e && e.const ? constLine(e) : typeof e === 'string' ? fnBody(src0, 'function ' + e + '(', e) : fnBody(e.src, 'function ' + e.name + '(', e.name));
-  const src = [fnBody(src0, 'function ' + name + '(', name), ...extra.map(pick)].join('\n');
+  let src = [fnBody(src0, 'function ' + name + '(', name), ...extra.map(pick)].join('\n');
+  // THE SHARED APPROVED-MEMBERS FILTER (round 3a): every screen that hands out a key calls useStewKeyRecipients, so it
+  // is compiled in, real, whenever the screen uses it — a stub would answer "who is approved?" for the test.
+  if (src0 === DASH && /\buseStewKeyRecipients\(/.test(src) && !/function useStewKeyRecipients\(/.test(src)) {
+    src += '\n' + ['stewKeyRecipients', 'stewKeyRecipientsOrAdmitted', 'useStewKeyRecipients'].map(n => fnBody(DASH, 'function ' + n + '(', n)).join('\n')
+      + '\n' + constLine({ src: DASH, const: 'STEW_KEYS_LOADING' });
+  }
   const tmp = join(tmpdir(), 'dk-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
   let js;
   try {

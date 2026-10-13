@@ -27,6 +27,7 @@ function setup({ setStewardsResult = true, careResult = true, delegateIsMember =
   const calls = { setStewards: [], care: [], media: [], name: [], groupKey: [], publishGroup: [] };
   const steward = {
     pubkey: CHURCH, actingChurch: '',
+    joinPolicyFresh: () => false, listIsFresh: () => true,   // an open-join church whose lists have been read (round 3a's shared filter)
     setStewards: (list) => { calls.setStewards.push(list); return Promise.resolve(setStewardsResult); },
     rotateCareKey: (m, s) => { calls.care.push({ m, s }); return Promise.resolve(careResult); },
     rotateMediaKey: (m, s) => { calls.media.push({ m, s }); return Promise.resolve(true); },
@@ -90,7 +91,9 @@ test('removing a delegate rotates the care, sermon and name keys and every encry
   const byId = Object.fromEntries(s.calls.groupKey.map(c => [c.id, c]));
   assert.deepEqual(Object.keys(byId).sort(), ['inv', 'open'], 'rooms re-keyed: ' + Object.keys(byId) + ' (every encrypted room, and only those)');
   assert.equal(byId.open.o.rotate, true); assert.equal(byId.inv.o.rotate, true);
-  assert.deepEqual(byId.open.m.sort(), [M1, M2].sort(), 'an open room is keyed to the members');
+  // the members AND the stewards who remain (round 3a): a delegate who is not a member must keep the open room's key
+  assert.deepEqual(byId.open.m.sort(), [M1, M2, OTHER_STEW].sort(), 'an open room is keyed to the members and the remaining stewards');
+  assert.ok(!byId.open.m.includes(DELEGATE), 'the removed delegate is still keyed to the open room');
   assert.deepEqual(byId.inv.m, [M1], 'an invite-only room is keyed to ITS members (minus the blocked), not the whole church');
   assert.equal(s.calls.publishGroup.length, 0, 'removing a delegate must not edit any room’s member list (that is Block’s job)');
   for (const list of [...s.calls.care, ...s.calls.media, ...s.calls.name, ...s.calls.groupKey].flatMap(c => [...(c.m || []), ...(c.s || [])]))
@@ -162,11 +165,15 @@ test('Block (dropPk): the person leaves the invite-only rooms they were in, and 
 
 test('a DELEGATED console re-keys no room (only the owner may), and does not report the owner-only keys as failures', async () => {
   const r = recorder();
-  const steward = { ...r.steward, rotateMediaKey: () => Promise.resolve(null), ensureNameKeyForMembers: () => Promise.resolve(null) };
+  const remembered = [];
+  const steward = { ...r.steward, rotateMediaKey: () => Promise.resolve(null), ensureNameKeyForMembers: () => Promise.resolve(null), rememberRotation: (...a) => remembered.push(a) };
   const failed = await rotator(steward)({
     memberPubs: [M1], stewardPubs: [], delegated: true, dropPk: M2, isBlocked: none,
     groups: [{ id: 'g', encrypted: true, visibility: 'open' }],
   });
   assert.equal(r.c.groupKey.length, 0, 'a delegated console re-keyed an encrypted room in someone else’s church');
   assert.deepEqual(failed, [], 'the deliberate owner-only decline was reported as a failure');
+  // round 3g (finding 1): nothing is remembered on a delegated console — only the church key can run these, so a record
+  // there could never run and its "Try again" would never end
+  assert.deepEqual(remembered, [], 'A DELEGATED CONSOLE REMEMBERED A ROTATION IT CAN NEVER RUN: ' + JSON.stringify(remembered));
 });

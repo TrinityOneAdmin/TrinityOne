@@ -52,9 +52,10 @@ function engine() {
   const t = {
     pub: A.pub, actingChurch: '', churchPub: A.pub, churchSk: A.sk, sk: A.sk,
     NET: 'trinityone', NAMEKEY_D, CAREKEY_D, MEDIAKEY_D, NAME_RING_MAX: 50,
-    _careKeyHex: null, _careKeyRing: [], _careKeyDocKeys: null, _careKeyRev: 0, _careKeyChecked: false, _careKeyPending: [], _careKeyVer: 0,
+    _careKeyHex: null, _careKeyRing: [], _careKeyDocKeys: null, _careKeyRev: 0, _careKeyChecked: false, _careKeyPending: [], _careKeyVer: 0, _careKeyAt: 0,   // _careKeyAt: round 3d
     _careRoster: new Set(), _CAREKEY_PENDING_TTL: 12000,
     _mediaKeyHex: null, _mediaKeyRing: [], _mediaKeyDocKeys: null, _mediaKeyChecked: false, _mediaKeyPushRefused: null, _mediaKeyVer: 0,
+    _careKeyFresh: false, _careKeyMine: false, _mediaKeyFresh: false, _mediaKeyMine: false, _mediaKeyAt: 0,   // round 3a (b)
     _nameKeyRing: [], _nameKeyDocKeys: null, _nameKeyChecked: false, _nameKeyAt: 0, _nameKeyBusy: null,
     _localBlocked: new Set(), _localBlockedAt: 0, _setBlockedSeq: 0, toPubHex: (p) => p, _myOwnPub: () => A.pub,
     // login state: `authed` for the whole set (the mint gates' _isRelayAuthed); per relay, the relay's OK
@@ -82,11 +83,14 @@ function engine() {
       },
     },
     window: { Steward: {}, dispatchEvent: (e) => { events.push({ type: e.type, detail: e.detail }); if (e.type === 'steward-keys-read') signals.push(e.detail.kind); return true; } },
-    BLOCKED_D: 'trinityone/blocked:', STEWARDS_D: 'trinityone/stewards:', _byChurch: (e) => e.pubkey === t.pub, _openChurchDoc: () => null,
+    BLOCKED_D: 'trinityone/blocked:', STEWARDS_D: 'trinityone/stewards:',
+    JOINPOLICY_D: 'trinityone/joinpolicy:', ADMITTED_D: 'trinityone/admitted:', GROUP_D: 'trinityone/group:', GROUPKEY_D: 'trinityone/groupkey:',
+    GROUP_RING_MAX: 50, _memberEmitters: new Set(), _byChurch: (e) => e.pubkey === t.pub, _openChurchDoc: () => null,
     // what the REAL setActiveIdentity touches besides the key state (lifted below)
     stewardedChurches: new Map([[B.pub, { name: 'B' }]]), netKeys: () => [],
     // remembers what it is given: the console keeps each church's last genuine blocklist (2026-10-02)
-    localStorage: { _m: new Map(), setItem(k, v) { this._m.set(k, String(v)); }, getItem(k) { return this._m.has(k) ? this._m.get(k) : null; } }, ACTIVE_ID_KEY: 'k',
+    localStorage: { _m: new Map(), setItem(k, v) { this._m.set(k, String(v)); }, getItem(k) { return this._m.has(k) ? this._m.get(k) : null; },
+      removeItem(k) { this._m.delete(k); }, get length() { return this._m.size; }, key(i) { return [...this._m.keys()][i] ?? null; } }, ACTIVE_ID_KEY: 'k',   // removeItem/length/key: round 3d (LOW 3)
     _loadBoxHosts() {}, _refreshBoxHostsUs() {}, _gate: { refresh() {} }, relaysRaw: () => [],
     lastProfile: {}, _profileLoaded: false, _clearanceSent: new Map(), _careRosterKnown: false, _careRosterSeen: false,
     _stewardCaps: {}, _stewardNames: {}, _stewardNamesCt: '', _stewardSince: {}, _applyNoPhotoList() {},
@@ -138,6 +142,19 @@ function engine() {
     't.__runAuthWaiters = _runKeyReadAuthWaiters;',
     't.__resetChurchScopedState = _resetChurchScopedState;',
     't.__authWaiters = _keyReadAuthWaiters;',                                    // the login waiters a read leaves behind (audit of 637bc0c)
+    // round 2 of the room-key reconcile: a room's envelope state, its drop memo, and the ex-steward record (P4)
+    stmt(BUNDLE, 'var _skeys = '), stmt(BUNDLE, 'var _srev = '), stmt(BUNDLE, 'var _senvTs = '), stmt(BUNDLE, 'var _senvRecips = '),
+    stmt(BUNDLE, 'var _senvMine = '), stmt(BUNDLE, 'var _senvDropped = '),
+    stmt(BUNDLE, 'var KEYENV_LS = '), fnBody(BUNDLE, 'function _keyEnvSave(kind, cp, e, selfKey, mineCt) {'), fnBody(BUNDLE, 'function _keyEnvRestore(kind, cp, d) {'),   // round 3c, MED 2
+    stmt(BUNDLE, 'var PENDINGROT_LS = '), fnBody(BUNDLE, 'function _pendingRotAll(cp) {'), fnBody(BUNDLE, 'function _pendingRotAdd(kind, cp, drop, why) {'), fnBody(BUNDLE, 'function _pendingRotClear(kind, cp) {'),   // round 3e, MED 1 (_runPendingRotations itself comes with liftKeyRead)
+    stmt(BUNDLE, 'var _senvPending = '), fnBody(BUNDLE, 'function _reCheckGroupKeyPending() {'), 't.__reCheckGk = _reCheckGroupKeyPending; t.__senvPending = _senvPending; t.__gkChain = _gkChain; t.__membersReask = _membersReask;',
+    fnBody(BUNDLE, 'function _noteEnvelopeDrops(gid, prev, next) {'), fnBody(BUNDLE, 'function stewIngestKey(e) {'),
+    't.__ingest = stewIngestKey; t.__skeys = _skeys; t.__senvMine = _senvMine; t.__senvRecips = _senvRecips;',
+    // round 3g: the group list the runner reads, and a list stamped as a FRESH read for the church the engine is on
+    't.__setLastGroups = (list) => { _lastGroups = { cp: actingChurch || pub, list }; }; t.__freshList = (arr) => _stampFor(arr, { cp: actingChurch || pub, epoch: _keyReadEpoch, sub: { live: true, genuine: true, at: 1 } });',
+    stmt(BUNDLE, 'var _exStewardsKey = '), fnBody(BUNDLE, 'function _exStewardSet() {'),
+    stmt(BUNDLE, 'var _exStewardsAtKey = '), fnBody(BUNDLE, 'function _exStewardRemovedAt() {'),
+    fnBody(BUNDLE, 'function _rememberExStewards(before, after, at) {'), 't.__rememberEx = _rememberExStewards;',
   ].join('\n');
   const M = (a) => fnBody(BUNDLE, a, a + ' in the shipped bundle');
   const methods = [
@@ -151,6 +168,13 @@ function engine() {
     M('    async ensureNameKeyForMembers(memberPubs, stewardPubs, opts = {}) {'),
     M('    subscribeBlocked(onBlocked) {'), M('    subscribeStewards(onList) {'),
     M('    listIsCurrent(list) {'), M('    keyWaitNote(kind) {'), M('    setBlocked(pubkeys) {'),
+    M('    subscribeJoinPolicy(onPolicy) {'), M('    subscribeAdmitted(onList) {'),
+    M('    listIsFresh(list, since) {'), M('    groupFresh(list, groupId, since) {'), M('    joinPolicyFresh(since) {'),
+    M('    groupKeyRecipients(groupId) {'), M('    groupKeyDropped(groupId) {'), M('    groupKeyMissing(groupId, pubs) {'),
+    M('    async publishGroupKey(groupId, memberPubs, opts = {}) {'), M('    async ensureGroupKeys(groups, memberPubs) {'),
+    M('    async sealGroup(group, memberPubs) {'),   // round 3c, LOW ii
+    M('    subscribeMembers(onMembers) {'),           // round 3d, LOW 2
+    M('    rememberRotation(kind, drop, why, failed) {'), M('    retryPendingRotations() {'), M('    rotationStatus(pk) {'),   // round 3f; rotationStatus 3g
   ].join(',\n');
   t.t = t;
   const S = new Function('scope', `with (scope) { ${decls}\n return { ${methods} }; }`)(proxy);
@@ -442,8 +466,8 @@ test('name: CONTROL — with nothing arriving, the first name key is minted and 
 const RING_A = ['a1'.repeat(32), 'a2'.repeat(32)];
 const M1 = K(), M2 = K(), M3 = K();
 const onA = (e, kind) => {   // church A, read and keyed, as the console holds it before the Block
-  if (kind === 'care') { e.t._careKeyChecked = true; e.t._careKeyHex = RING_A[0]; e.t._careKeyRing = RING_A.slice(); e.t._careKeyDocKeys = { [A.pub]: 'x', [M1.pub]: 'x', [M2.pub]: 'x' }; e.t._careKeyRev = 1; }
-  if (kind === 'media') { e.t._mediaKeyChecked = true; e.t._mediaKeyHex = RING_A[0]; e.t._mediaKeyRing = RING_A.slice(); e.t._mediaKeyDocKeys = { [A.pub]: 'x', [M1.pub]: 'x' }; }
+  if (kind === 'care') { e.t._careKeyChecked = true; e.t._careKeyHex = RING_A[0]; e.t._careKeyRing = RING_A.slice(); e.t._careKeyDocKeys = { [A.pub]: 'x', [M1.pub]: 'x', [M2.pub]: 'x' }; e.t._careKeyRev = 1; e.t._careKeyFresh = true; e.t._careKeyMine = true; }   // fresh + ours: round 3a (b)
+  if (kind === 'media') { e.t._mediaKeyChecked = true; e.t._mediaKeyHex = RING_A[0]; e.t._mediaKeyRing = RING_A.slice(); e.t._mediaKeyDocKeys = { [A.pub]: 'x', [M1.pub]: 'x' }; e.t._mediaKeyFresh = true; e.t._mediaKeyMine = true; }
   if (kind === 'name') { e.t._nameKeyChecked = true; e.t._nameKeyRing = RING_A.slice(); e.t._nameKeyDocKeys = { [A.pub]: 'x', [M1.pub]: 'x' }; }
 };
 const holdSeal = (e) => { const g = gate(); const real = e.t._sealEach; e.t._sealEach = async (...a) => { await g.p; return real(...a); }; return g; };
@@ -609,7 +633,8 @@ test('a list fetched for one church is not current once the church changes WITHO
   const e = engine();
   let got = null;
   e.S.subscribeStewards((list) => { got = list; });
-  e.subs.at(-1).handlers.oneose();
+  // the roster STREAM (no d-tag in its filter) — since round 2 a narrow fresh read of the roster opens beside it
+  e.subs.find(r => !r.d).handlers.oneose();
   assert.equal(e.S.listIsCurrent(got), true, 'CONTROL: the list is current for the church it was fetched for');
   e.t.pub = B.pub; e.t.churchPub = B.pub;                   // the church key replaced; no switch, no new epoch
   assert.equal(e.S.listIsCurrent(got), false, 'A LIST FETCHED FOR THE OLD CHURCH IS "CURRENT" AFTER A KEY RESTORE — the enrolment would wrap the new church\'s keys to the old one\'s people');
@@ -753,8 +778,8 @@ test('setBlocked never drops someone this console holds as blocked — only an e
 test('rotateCareKey and rotateMediaKey never wrap the new key to someone this console holds as blocked, whatever list they are handed', async () => {
   const e = engine();
   e.t._localBlocked = new Set([M2.pub]);
-  e.t._careKeyHex = 'aa'.repeat(32); e.t._careKeyRing = ['aa'.repeat(32)]; e.t._careKeyChecked = true; e.t._careKeyRev = 1;
-  e.t._mediaKeyHex = 'cc'.repeat(32); e.t._mediaKeyRing = ['cc'.repeat(32)]; e.t._mediaKeyChecked = true;
+  e.t._careKeyHex = 'aa'.repeat(32); e.t._careKeyRing = ['aa'.repeat(32)]; e.t._careKeyChecked = true; e.t._careKeyRev = 1; e.t._careKeyFresh = true;   // read on this connection — round 3d: a rotation needs it
+  e.t._mediaKeyHex = 'cc'.repeat(32); e.t._mediaKeyRing = ['cc'.repeat(32)]; e.t._mediaKeyChecked = true; e.t._mediaKeyFresh = true;   // read on this connection — round 3a (b)
   for (const [what, call, d] of [['care', () => e.S.rotateCareKey([M1.pub, M2.pub], []), CAREKEY_D], ['sermon', () => e.S.rotateMediaKey([M1.pub, M2.pub], []), MEDIAKEY_D]]) {
     const p0 = e.published.length;
     await call();
@@ -908,4 +933,860 @@ test('mediaEncryptor: the "can’t encrypt yet" refusal names the relay that is 
   await e.eose(e.subs.slice(-2)[0]);                        // R1 answered; R2 never does
   e.t.clock += 9000;                                        // (a relay is named only once the read has waited — see the row above)
   await assert.rejects(e.S.mediaEncryptor([M1.pub]), /second\.example isn’t answering/, 'the sermon upload is refused with "wait a moment" while a relay that is down holds back the church\'s first sermon key');
+});
+
+// ── ROUND 2 OF THE ROOM-KEY RECONCILE (audit of 78ffad0): THE LISTS THE KEY DISTRIBUTOR TRUSTS ARE FRESH ─────────────
+// The distributor itself is driven in the-key-enrolment-waits-for-every-list.test.mjs; these rows run the ENGINE side,
+// sliced out of the shipped bundle: who sets "fresh", who clears it, the drop memo, and the stale-ring refusal.
+const JP_D = 'trinityone/joinpolicy:', AD_D = 'trinityone/admitted:', GK_D = 'trinityone/groupkey:', BL_D = 'trinityone/blocked:';
+const doc30078 = (author, d, at, content, extra = []) => ({ pubkey: author, created_at: at, kind: 30078, tags: [['d', d], ['t', 'trinityone'], ...extra], content: JSON.stringify(content) });
+const streamOf = (e) => e.subs.find(r => !r.d && !r.closed);
+
+test('round 2 · finding 2: the join policy counts for the key distributor only on a GENUINE read — not the stream\'s timer "off"', async () => {
+  const e = engine();
+  const seen = [];
+  e.S.subscribeJoinPolicy((v) => seen.push(v));
+  const narrow = e.subs.find(r => r.d === JP_D + A.pub), stream = streamOf(e);
+  assert.ok(narrow && stream, 're-anchor: subscribeJoinPolicy no longer opens a stream AND a narrow read of the policy document');
+  stream.handlers.oneose(); await flush();                    // nostr-tools' 4.4 s timer fires before the document
+  assert.equal(seen.at(-1), false, 'CONTROL: the screens still get the stream\'s answer');
+  assert.equal(e.S.joinPolicyFresh(), null, 'THE STREAM\'S TIMER "approval is off" COUNTED AS THE CHURCH\'S POLICY — a member still waiting is keyed (audit of 78ffad0, finding 2)');
+  narrow.handlers.onevent(doc30078(A.pub, JP_D + A.pub, 100, { approval: true }));
+  assert.equal(e.S.joinPolicyFresh(), null, 'the policy counted before its read had settled');
+  await e.eose(narrow);
+  assert.equal(e.S.joinPolicyFresh(), true, 'CONTROL: the genuine answer — approval on — is not what the distributor reads');
+  assert.ok(e.signals.includes('joinpolicy'), 'the distributor is not told the policy has been read, so nothing re-runs it');
+  assert.equal(e.S.joinPolicyFresh(e.t.clock), null, 'a read that settled BEFORE `since` counted as a re-read after it');
+});
+
+test('round 2 · HIGH 1: a list from a subscription that has CLOSED is not fresh — the previous connection\'s blocklist cannot key anyone', async () => {
+  const e = engine();
+  let got = null;
+  const close = e.S.subscribeBlocked((l) => { got = l; });
+  await e.eose(e.subs.find(r => r.d === BL_D + A.pub));
+  assert.equal(e.S.listIsFresh(got), true, 'CONTROL: a genuine read of the blocklist is not fresh');
+  assert.equal(e.S.listIsCurrent(got), true, 'CONTROL: and current');
+  close();                                                   // the reconnect: this subscription closes, the screen keeps its list
+  assert.equal(e.S.listIsCurrent(got), true, 'CONTROL: still "current" — which is exactly the hole');
+  assert.equal(e.S.listIsFresh(got), false, 'THE PREVIOUS CONNECTION\'S BLOCKLIST STILL COUNTS AS FRESH — the auditor\'s second console re-keys Bob (audit of 78ffad0, HIGH 1)');
+});
+
+test('round 2 · P2: an envelope that DROPS someone is remembered, and every fresh read is asked again at once', async () => {
+  const e = engine();
+  const MB = K(), BOB = K();
+  let bl = null;
+  e.S.subscribeBlocked((l) => { bl = l; });
+  await e.eose(e.subs.find(r => r.d === BL_D + A.pub));
+  const ring = [hex(generateSecretKey())];
+  e.t.__ingest(envelope(GK_D, A, 'r1', ring, [A.pub, MB.pub, BOB.pub], 1759300000));
+  assert.deepEqual(e.S.groupKeyDropped('r1'), [], 'CONTROL: the first envelope dropped nobody');
+  assert.deepEqual([...e.S.groupKeyRecipients('r1')].sort(), [A.pub, MB.pub, BOB.pub].sort(), 'CONTROL: recipients');
+  const narrowsBefore = e.subs.filter(r => r.d === BL_D + A.pub).length;
+  e.t.clock += 1000;
+  const dropAt = e.t.clock;
+  e.t.__ingest(envelope(GK_D, A, 'r1', ring, [A.pub, MB.pub], 1759300100));
+  const dropped = e.S.groupKeyDropped('r1');
+  assert.deepEqual(dropped.map(x => x.pub), [BOB.pub], 'THE ROTATION\'S DROP WAS NOT REMEMBERED — the distributor would wrap the new key straight back');
+  assert.equal(dropped[0].at, dropAt, 'the drop is not stamped with when it was seen');
+  assert.ok(e.subs.filter(r => r.d === BL_D + A.pub).length > narrowsBefore, 'THE BLOCKLIST WAS NOT RE-READ after the drop — "has it been read since?" could never become true');
+  assert.equal(e.S.listIsFresh(bl, dropAt), false, 'a blocklist read BEFORE the drop counts as read after it');
+  e.t.clock += 10;
+  await e.eose(e.subs.filter(r => r.d === BL_D + A.pub).at(-1));
+  assert.equal(e.S.listIsFresh(bl, dropAt), true, 'CONTROL: the re-read, settled, does not count as after the drop');
+  // the person comes back in a later envelope: no longer held
+  e.t.__ingest(envelope(GK_D, A, 'r1', ring, [A.pub, MB.pub, BOB.pub], 1759300200));
+  assert.deepEqual(e.S.groupKeyDropped('r1'), [], 'someone an envelope includes again is still held');
+});
+
+test('round 2 · A2: when the newest envelope has no copy this console can open, nothing is re-wrapped from the older ring', async () => {
+  const e = engine();
+  e.t.window.Steward = e.S;
+  const MB = K(), M2 = K();
+  const ring = [hex(generateSecretKey())];
+  const env = (recips, at) => envelope(GK_D, A, 'r2', ring, recips, at);
+  e.t.__ingest(env([A.pub, MB.pub], 1759300000));
+  assert.ok(e.S.groupKeyRecipients('r2'), 'CONTROL: an envelope with our copy gives us its recipients');
+  e.t.__ingest(env([MB.pub], 1759300100));                    // the owner's rotation, which left this console out
+  assert.equal(e.S.groupKeyRecipients('r2'), null, 'THE NEWEST ENVELOPE HAS NO COPY FOR US BUT ITS RECIPIENTS ARE STILL OFFERED — the distributor republishes the OLD ring over the rotation');
+  const n = e.published.length;
+  const r = await e.S.publishGroupKey('r2', [MB.pub, M2.pub], { reuseOnly: true, background: true });
+  assert.equal(r, null, 'a reuse-only publish from a ring the newest envelope has moved past did not refuse');
+  assert.equal(e.published.length, n, 'A PRE-ROTATION RING WAS PUBLISHED AS THE ROOM\'S CURRENT KEY');
+});
+
+test('round 2 · P4: an approval by a steward this device saw removed counts if written before the removal — a stranger\'s never, nor one dated after', async () => {
+  const e = engine();
+  const W = K(), X = K(), ADA = K(), BEN = K(), EVE = K(), ZED = K();
+  e.t.__rememberEx([W.pub], [], 1759300150);                 // a church-signed roster dropped W at 1759300150
+  let got = null;
+  e.S.subscribeAdmitted((l) => { got = l; });
+  const narrow = e.subs.find(r => r.d === AD_D + A.pub);
+  assert.ok(narrow, 're-anchor: subscribeAdmitted no longer opens a narrow read of the admitted list');
+  narrow.handlers.onevent(doc30078(A.pub, AD_D + A.pub, 1759300100, { pubkeys: [ADA.pub] }));
+  narrow.handlers.onevent(doc30078(W.pub, AD_D + A.pub, 1759300140, { pubkeys: [BEN.pub] }, [['church', A.pub]]));
+  narrow.handlers.onevent(doc30078(X.pub, AD_D + A.pub, 1759300140, { pubkeys: [EVE.pub] }, [['church', A.pub]]));
+  assert.ok(got.includes(ADA.pub), 'CONTROL: the church\'s own approval');
+  assert.ok(got.includes(BEN.pub), 'A MEMBER APPROVED BY A SINCE-REMOVED STEWARD LOOKS PENDING — the relay lets them in, the console withholds their keys (audit of 78ffad0, finding 3)');
+  // ITEM D (2026-10-13) MOVED THE STRANGER / AFTER-REMOVAL GUARD TO THE RELAY. Every copy the console is SERVED now counts,
+  // so a cold console counts a departed steward's approvals. A key no roster named, or an ex-steward's list written
+  // after removal, is refused by the relay's write gate and — if planted by /import — withheld by its read gate
+  // (gateway.mjs ADMITTED_RECEIPTS; proved by approved-members-survive-a-steward-leaving.test.mjs, "never passed the
+  // write gate"). What this console now trusts is: our relays serve only what they honour.
+  assert.ok(got.includes(EVE.pub), 'ITEM D: a copy the relay SERVED was not counted — a cold console would withhold keys from people the relay admits');
+  assert.equal(e.S.listIsFresh(got), false, 'the admitted list counted as fresh before its read had settled');
+  await e.eose(narrow);
+  assert.equal(e.S.listIsFresh(got), true, 'CONTROL: the settled read is not fresh');
+  // the ex-steward's own LATER list, dated after their removal (a non-enforcing relay accepted it): it does not count
+  // (item D) the ex-steward's later list is the relay's to refuse — see above; here it would simply count.
+  // the future clamp stays
+  narrow.handlers.onevent(doc30078(A.pub, AD_D + A.pub, 1759300000 + 999999, { pubkeys: [ZED.pub] }));
+  assert.ok(!got.includes(ZED.pub), 'a far-future copy was counted');
+  // a current steward still counts
+  const S1 = K(), FAY = K(); e.t._careRoster = new Set([S1.pub]);
+  narrow.handlers.onevent(doc30078(S1.pub, AD_D + A.pub, 1759300170, { pubkeys: [FAY.pub] }, [['church', A.pub]]));
+  assert.ok(got.includes(FAY.pub), 'CONTROL: a current steward\'s approval no longer counts');
+});
+
+test('round 2 · P4: the roster that drops a steward is recorded with its date (the writer of the ex-steward record)', async () => {
+  const e = engine();
+  const W = K();
+  const rec = [];
+  e.t._stewardRosterChanged = (before, after, at) => rec.push(at);
+  e.S.subscribeStewards(() => {});
+  const stream = streamOf(e);
+  stream.handlers.onevent(doc30078(A.pub, 'trinityone/stewards:' + A.pub, 1759300100, { pubkeys: [W.pub] }));
+  stream.handlers.onevent(doc30078(A.pub, 'trinityone/stewards:' + A.pub, 1759300150, { pubkeys: [] }));
+  assert.deepEqual(rec, [1759300100, 1759300150], 'the roster\'s date is not handed on, so no removal can be dated');
+  // …and the record itself: dated, and cleared if they come back
+  e.t.__rememberEx([W.pub], [], 1759300150);
+  assert.equal(JSON.parse(e.t.localStorage.getItem('trinityone.steward.exstewards.at.' + A.pub))[W.pub], 1759300150);
+  e.t.__rememberEx([], [W.pub], 1759300200);
+  assert.equal(JSON.parse(e.t.localStorage.getItem('trinityone.steward.exstewards.at.' + A.pub))[W.pub], undefined, 'a steward put back on the roster still carries a removal date');
+});
+
+for (const [kind, call, prime] of [
+  ['care', (e, m) => e.S.ensureCareKeyForMembers(m, []), (e, have) => { e.t._careKeyChecked = true; e.t._careKeyHex = 'aa'.repeat(32); e.t._careKeyRing = ['aa'.repeat(32)]; e.t._careKeyRev = 1; e.t._careKeyDocKeys = have; e.t._careKeyFresh = true; e.t._careKeyMine = true; }],
+  ['media', (e, m) => e.S.ensureMediaKeyForMembers(m, []), (e, have) => { e.t._mediaKeyHex = 'bb'.repeat(32); e.t._mediaKeyRing = ['bb'.repeat(32)]; e.t._mediaKeyDocKeys = have; e.t._mediaKeyFresh = true; e.t._mediaKeyMine = true; }],
+]) {
+  test(`round 2 · P3: the ${kind} key only GROWS — a partial member list never drops anyone the envelope holds; the blocked still go`, async () => {
+    const e = engine();
+    const M1 = K(), M2 = K(), OLD = K(), BAD = K();
+    prime(e, { [A.pub]: 'x', [M1.pub]: 'x', [OLD.pub]: 'x', [BAD.pub]: 'x' });
+    e.t._localBlocked = new Set([BAD.pub]);
+    await call(e, [M1.pub, M2.pub]);                          // OLD is in the envelope, not in this (partial) list
+    const last = e.published.at(-1);
+    assert.ok(last, `CONTROL: the ${kind} envelope was not republished for the new member`);
+    const keys = Object.keys(JSON.parse(last.content).keys);
+    assert.ok(keys.includes(M2.pub), 'CONTROL: the new member is not in it');
+    assert.ok(keys.includes(OLD.pub), `THE ${kind.toUpperCase()} KEY WAS RE-SEALED WITHOUT A MEMBER IT HELD — a partial list took their key away (audit of 78ffad0, finding 3)`);
+    assert.ok(!keys.includes(BAD.pub), `the ${kind} key was re-sealed to somebody blocked`);
+  });
+}
+
+test('round 2 · P6: two overlapping runs of the room-key healer mint ONE key, and a room whose envelope exists is not re-asked at once', async () => {
+  const e = engine();
+  e.t.window.Steward = e.S;
+  let release; const held = new Promise(r => { release = r; });
+  const queries = [];
+  e.t.pool.querySync = async (urls, filters) => { queries.push(filters[0]); await held; return ((filters[0] || {})['#d'] || [])[0] === 'trinityone/group:r9' ? [{ id: 'canary' }] : []; };
+  const mints = [];
+  e.S.publishGroupKey = async (gid) => { mints.push(gid); return true; };
+  const room = [{ id: 'r9', encrypted: true }];
+  const one = e.S.ensureGroupKeys(room, []), two = e.S.ensureGroupKeys(room, []);
+  release(); await one; await two;
+  assert.equal(mints.length, 1, 'TWO OVERLAPPING HEALER RUNS BOTH MINTED A KEY FOR ONE ROOM — whatever was sealed under the first is lost (audit of 78ffad0, finding 6)');
+  // a room the relay says HAS an envelope (one this console cannot open): not asked about again for a while
+  e.t.pool.querySync = async (urls, filters) => { queries.push(filters[0]); const d = ((filters[0] || {})['#d'] || [])[0]; return d === 'trinityone/group:r8' ? [{ id: 'c' }] : d === 'trinityone/groupkey:r8' ? [{ id: 'env' }] : []; };
+  const q0 = queries.length;
+  await e.S.ensureGroupKeys([{ id: 'r8', encrypted: true }], []);
+  const q1 = queries.length;
+  assert.ok(q1 > q0, 'CONTROL: the room was not checked at all');
+  await e.S.ensureGroupKeys([{ id: 'r8', encrypted: true }], []);
+  assert.equal(queries.length, q1, 'a room whose envelope the relay just confirmed was queried again at once — three relay queries per envelope arrival');
+});
+
+test('round 2 · P2: two copies stamped the SAME second do not "drop" each other — each drop re-opens every read, so that would loop', async () => {
+  const e = engine();
+  const MB = K(), BOB = K();
+  e.S.subscribeBlocked(() => {});
+  await e.eose(e.subs.find(r => r.d === BL_D + A.pub));
+  const ring = [hex(generateSecretKey())];
+  e.t.__ingest(envelope(GK_D, A, 'r3', ring, [A.pub, MB.pub, BOB.pub], 1759300000));
+  const reads = e.subs.filter(r => r.d === BL_D + A.pub).length;
+  e.t.__ingest(envelope(GK_D, A, 'r3', ring, [A.pub, MB.pub], 1759300000));   // another author's copy, same second
+  assert.deepEqual(e.S.groupKeyDropped('r3'), [], 'an equal-stamped copy counted as a rotation that dropped somebody');
+  assert.equal(e.subs.filter(r => r.d === BL_D + A.pub).length, reads, 'an equal-stamped copy re-opened the reads — re-delivered, it would do so for ever');
+});
+
+// ── ROUND 3a (audit of 244a6fe) ─────────────────────────────────────────────────────────────────────────────────────
+const ringOf = (e, gid) => (e.t.__skeys[gid] || []).map(hex);
+const openKey = (ev, who) => nip44.v2.decrypt(JSON.parse(ev.content).keys[who.pub], ck(who.sk, ev.pubkey));   // `keys` holds the CURRENT key, bare hex
+function gated(e) {
+  const g = { waiting: [], open: false };
+  e.t.publish = (ev) => { e.published.push(ev); if (g.open) return Promise.resolve({ id: 'ok' }); return new Promise(r => g.waiting.push(() => r({ id: 'ok' }))); };
+  g.release = async () => { g.open = true; for (const f of g.waiting.splice(0)) f(); for (let i = 0; i < 6; i++) await flush(); };
+  return g;
+}
+test('round 3a · HIGH 2: a background re-key in flight when a rotation starts — one publish per room at a time, and the rotation is what stays', async () => {
+  const e = engine();
+  const MB = K(), BOB = K();
+  const ring0 = [hex(generateSecretKey())];
+  e.t.__ingest(envelope(GK_D, A, 'r5', ring0, [A.pub, MB.pub, BOB.pub], 1759299000));
+  const g = gated(e);
+  const bg = e.S.publishGroupKey('r5', [MB.pub, BOB.pub], { reuseOnly: true, background: true });   // the background re-key, in flight
+  await flush();
+  const rot = e.S.publishGroupKey('r5', [MB.pub], { rotate: true });                                 // Block rotates meanwhile
+  for (let i = 0; i < 4; i++) await flush();
+  assert.equal(e.published.length, 1, 'TWO KEY PUBLISHES FOR ONE ROOM WERE IN FLIGHT AT ONCE — the older one can land last and restore the pre-Block ring');
+  await g.release(); await bg; await rot;
+  assert.equal(e.published.length, 2, 'CONTROL: the rotation never ran');
+  const rotated = openKey(e.published[1], A);
+  assert.notEqual(rotated, ring0[0], 'CONTROL: the second publish is not the rotation');
+  assert.equal(ringOf(e, 'r5')[0], rotated, 'THE CONSOLE\'S CURRENT ROOM KEY IS NOT THE ROTATED ONE — its next re-key republishes the key the blocked person holds');
+  assert.ok(!Object.keys(JSON.parse(e.published[1].content).keys).includes(BOB.pub), 'CONTROL: the rotation re-wrapped to Bob');
+});
+test('round 3a · HIGH 2: a publish that lands after a NEWER envelope was read does not put its older ring back here', async () => {
+  const e = engine();
+  const MB = K(), S1 = K();
+  e.t._careRoster = new Set([S1.pub]);
+  const ring0 = [hex(generateSecretKey())], ringNew = [hex(generateSecretKey())];
+  e.t.__ingest(envelope(GK_D, A, 'r6', ring0, [A.pub, MB.pub], 1759299000));
+  const g = gated(e);
+  const bg = e.S.publishGroupKey('r6', [MB.pub, K().pub], { reuseOnly: true, background: true });
+  await flush();
+  // another console's rotation (a rostered steward, wrapped to this church too) is read while ours is in flight
+  e.t.__ingest({ ...envelope(GK_D, S1, 'r6', ringNew, [A.pub, MB.pub], 1759300500), tags: [['d', GK_D + 'r6'], ['t', 'trinityone'], ['church', A.pub]] });
+  e.t.churchSk = A.sk;
+  await g.release(); await bg;
+  assert.notEqual(ringOf(e, 'r6')[0], ring0[0], 'THE OLDER RING CAME BACK AFTER THE PUBLISH LANDED — the next re-key would republish it over the rotation');
+});
+test('round 3a · LOW i: a room envelope stamped far in the future, or by a key no roster names, is not taken — a steward\'s is, once the roster names them', async () => {
+  const e = engine();
+  const MB = K(), X = K(), S1 = K();
+  const ring = [hex(generateSecretKey())];
+  e.t.__ingest(envelope(GK_D, A, 'r7', ring, [A.pub, MB.pub], 1759300000 + 99999));
+  assert.equal(e.S.groupKeyRecipients('r7'), null, 'A FAR-FUTURE ENVELOPE WAS TAKEN — newest-wins would pin it for good');
+  e.t.__ingest({ ...envelope(GK_D, X, 'r7', ring, [A.pub, MB.pub], 1759300000), tags: [['d', GK_D + 'r7'], ['t', 'trinityone'], ['church', A.pub]] });
+  assert.equal(e.S.groupKeyRecipients('r7'), null, 'AN ENVELOPE SIGNED BY A KEY NO ROSTER NAMES WAS TAKEN');
+  // a delegate's real envelope that arrives before the roster does: kept, and taken once the roster names them
+  e.t.__ingest({ ...envelope(GK_D, S1, 'r7', ring, [A.pub, MB.pub], 1759300001), tags: [['d', GK_D + 'r7'], ['t', 'trinityone'], ['church', A.pub]] });
+  assert.equal(e.S.groupKeyRecipients('r7'), null, 'CONTROL: taken before the roster named the author');
+  e.t._careRoster = new Set([S1.pub]);
+  e.t.__reCheckGk();
+  assert.ok(e.S.groupKeyRecipients('r7'), 'A DELEGATE\'S REAL ENVELOPE WAS LOST because it arrived before the steward roster');
+  assert.ok(e.S.groupKeyRecipients('r7').includes(MB.pub));
+});
+test('round 3a · LOW ii: after an unblock that only PARTLY saved, the member lists are still asked again', async () => {
+  const e = engine();
+  const P = K();
+  e.t._localBlocked = new Set([P.pub]);
+  let asked = 0; e.t.__membersReask.add(() => { asked++; });
+  e.t._publishToRelays = async () => false;      // one relay refused: a partial save
+  await e.S.setBlocked([], { unblock: [P.pub] });
+  for (let i = 0; i < 4; i++) await flush();
+  assert.equal(asked, 1, 'AFTER A PARTIAL UNBLOCK THE MEMBER LIST WAS NOT ASKED AGAIN — the relays that took it serve the person now');
+  assert.ok(e.t._localBlocked.has(P.pub), 'CONTROL: a partial unblock still keeps them blocked on this console');
+});
+for (const [kind, sub, d, ensure, prime] of [
+  ['care', 'subscribeCareKey', CAREKEY_D, (e, m) => e.S.ensureCareKeyForMembers(m, []), (e) => { e.t._careKeyChecked = true; }],
+  ['media', 'subscribeMediaKey', MEDIAKEY_D, (e, m) => e.S.ensureMediaKeyForMembers(m, []), (e) => { e.t._mediaKeyChecked = true; }],
+]) {
+  test(`round 3a · (b): the ${kind} key is not re-sealed after a reconnect until the read has settled again, nor from a ring the newest envelope moved past`, async () => {
+    const e = engine();
+    const M1 = K(), NEW = K();
+    const ring = [hex(generateSecretKey())];
+    e.S[sub]();
+    const r1 = e.subs.at(-1);
+    r1.handlers.onevent(envelope(d, A, A.pub, ring, [A.pub, M1.pub], 1759300000));
+    await e.eose(r1);
+    prime(e);
+    // the reconnect: the read re-opens and has not settled
+    e.S[sub]();
+    const n = e.published.length;
+    await ensure(e, [M1.pub, NEW.pub]);
+    assert.equal(e.published.length, n, `THE ${kind.toUpperCase()} KEY WAS RE-SEALED BEFORE THE RE-OPENED READ SETTLED — a ring from before a rotation can go back on the relay`);
+    await e.eose(e.subs.at(-1));
+    await ensure(e, [M1.pub, NEW.pub]);
+    assert.equal(e.published.length, n + 1, `CONTROL: once read, the ${kind} key was not re-sealed for the new member`);
+    // a NEWER envelope with no copy for this console (a rotation that left it out)
+    e.subs.at(-1).handlers.onevent(envelope(d, A, A.pub, [hex(generateSecretKey())], [M1.pub], 1759300100));
+    const m = e.published.length;
+    await ensure(e, [M1.pub, NEW.pub, K().pub]);
+    assert.equal(e.published.length, m, `THE ${kind.toUpperCase()} KEY WAS RE-SEALED FROM A RING THE NEWEST ENVELOPE HAS MOVED PAST`);
+  });
+}
+test('round 3a · (b): a lagging relay\'s OLDER sermon-key envelope does not become the current key', async () => {
+  const e = engine();
+  const M1 = K();
+  const older = [hex(generateSecretKey())], newer = [hex(generateSecretKey()), older[0]];
+  e.S.subscribeMediaKey();
+  const r = e.subs.at(-1);
+  r.handlers.onevent(envelope(MEDIAKEY_D, A, A.pub, newer, [A.pub, M1.pub], 1759300100));
+  r.handlers.onevent(envelope(MEDIAKEY_D, A, A.pub, older, [A.pub, M1.pub], 1759300000));
+  assert.equal(e.t._mediaKeyHex, newer[0], 'AN OLDER SERMON-KEY ENVELOPE ARRIVING LATE BECAME THE CURRENT KEY — the next re-seal would put it back on the relay');
+});
+test('round 3a · (b): with a relay DOWN, the care and sermon reads are fresh for re-sealing — but the mint gate stays shut and the down relay is asked again', async () => {
+  for (const [method, fresh, checked] of [['subscribeCareKey', '_careKeyFresh', '_careKeyChecked'], ['subscribeMediaKey', '_mediaKeyFresh', '_mediaKeyChecked']]) {
+    const e = engine(); e.t.relayList = [R1, R2];
+    e.S[method]();
+    const [r1, r2] = e.subs.slice(-2);
+    await e.closedByRelay(r1, 'connection failure: relay unreachable');
+    await e.eose(r2);
+    assert.equal(e.t[fresh], true, `${method}: A RELAY THAT IS DOWN HELD BACK EVERY RE-SEAL — nobody new gets the key while it stays down`);
+    assert.equal(e.t[checked], false, `${method}: THE MINT GATE OPENED WITH A RELAY DOWN — it may hold the envelope`);
+    assert.deepEqual(e.fireTimers(), [2000], `${method}: the down relay is never asked again, so the mint gate can never open`);
+  }
+});
+
+// ROUND 3c, HIGH 1 (audit of 432c676): A ROTATION KEEPS EVERY CURRENT HOLDER WHO PASSES `keepIf`. The caller's member list
+// can be partial, or only the admitted list while approval is unknown; the member app deletes a key it is no longer
+// given. So whoever holds the key now and passes the caller's `keepIf` is carried into the new envelope — but never
+// someone this console holds as blocked, whatever `keepIf` says.
+test('rotateCareKey, rotateMediaKey and a room rotation carry every current holder `keepIf` passes — and never the blocked', async () => {
+  const e = engine();
+  e.t._localBlocked = new Set([M3.pub]);
+  const holders = { [A.pub]: 'x', [M1.pub]: 'x', [M2.pub]: 'x', [M3.pub]: 'x' };
+  e.t._careKeyHex = 'aa'.repeat(32); e.t._careKeyRing = ['aa'.repeat(32)]; e.t._careKeyChecked = true; e.t._careKeyRev = 1; e.t._careKeyDocKeys = { ...holders }; e.t._careKeyMine = true; e.t._careKeyFresh = true;   // read on this connection — round 3d
+  e.t._mediaKeyHex = 'cc'.repeat(32); e.t._mediaKeyRing = ['cc'.repeat(32)]; e.t._mediaKeyChecked = true; e.t._mediaKeyFresh = true; e.t._mediaKeyDocKeys = { ...holders }; e.t._mediaKeyMine = true;
+  const gid = 'room-3c';
+  e.t.__skeys[gid] = [unhex('dd'.repeat(32))]; e.t.__senvRecips[gid] = Object.keys(holders); e.t.__senvMine[gid] = true;
+  const keepIf = (p) => p !== M2.pub;              // the caller says: everyone but M2 (the person leaving)
+  for (const [what, call, d] of [
+    ['care', () => e.S.rotateCareKey([], [], { keepIf }), CAREKEY_D + A.pub],
+    ['sermon', () => e.S.rotateMediaKey([], [], { keepIf }), MEDIAKEY_D + A.pub],
+    ['room', () => e.S.publishGroupKey(gid, [], { rotate: true, keepIf }), 'trinityone/groupkey:' + gid],
+  ]) {
+    const p0 = e.published.length;
+    await call();
+    const env = e.published.slice(p0).find(ev => dtag(ev) === d);
+    assert.ok(env, `CONTROL: no ${what} rotation was published`);
+    const to = Object.keys(JSON.parse(env.content).keys || {});
+    assert.ok(to.includes(M1.pub), `THE ${what.toUpperCase()} ROTATION TOOK THE KEY OFF A CURRENT HOLDER keepIf KEPT — handed an empty list, it rotated to the church alone`);
+    assert.ok(!to.includes(M2.pub), `the ${what} rotation kept the person keepIf left out`);
+    assert.ok(!to.includes(M3.pub), `THE ${what.toUpperCase()} ROTATION KEPT A HOLDER THIS CONSOLE HOLDS AS BLOCKED`);
+  }
+  // CONTROL: without keepIf, the rotation is exactly the list it was given (the old contract)
+  const p1 = e.published.length;
+  await e.S.rotateCareKey([], []);
+  const plain = e.published.slice(p1).find(ev => dtag(ev) === CAREKEY_D + A.pub);
+  assert.ok(plain && !Object.keys(JSON.parse(plain.content).keys).includes(M1.pub), 'CONTROL: without keepIf a rotation still carried holders');
+});
+
+// ROUND 3c, MED 2 (audit of 432c676): THE CARE AND SERMON KEYS NEVER GO BACK TO THE RING FROM BEFORE A BLOCK. Two holes:
+// (1) rotateMediaKey never stamped `_mediaKeyAt`, so the envelope from before the Block, replayed by a lagging relay or a
+// re-read, was taken over the rotation in the same session — the blocked person's key back as the current one; (2) after
+// a reload, with the relay holding the rotation down and one holding the older envelope up, the read settled on the
+// connected relay alone (round 3a), the console adopted the older envelope as its own and re-sealed that ring with a
+// newer stamp. Now every envelope the console accepts or publishes is kept on the device (_keyEnvSave) and restored
+// before any relay answers.
+const K1 = '11'.repeat(32);
+const envAt = (d, author, ring, recips, at, rev = 1) => ({ pubkey: author.pub, kind: 30078, created_at: at,
+  tags: [['d', d + A.pub], ['t', 'trinityone']],
+  content: JSON.stringify({ rev, keys: Object.fromEntries(recips.map(p => [p, nip44.v2.encrypt(JSON.stringify(ring), ck(author.sk, p))])) }) });
+const headFor = (ev, who) => JSON.parse(nip44.v2.decrypt(JSON.parse(ev.content).keys[who.pub], ck(who.sk, A.pub)))[0];
+const OLD_AT = 1759299000;   // the envelope from before the Block: older than anything the console publishes (now() = 1759300000)
+test('sermon key: after a Block\'s rotation, the envelope from before it — replayed — does not become the current key again', async () => {
+  const e = engine(); e.t.up = new Set([R1]);
+  e.S.subscribeMediaKey();
+  const s = e.subs.at(-1);
+  s.handlers.onevent(envAt(MEDIAKEY_D, A, [K1], [A.pub, M1.pub, M2.pub], OLD_AT)); await e.eose(s);
+  assert.equal(e.t._mediaKeyHex, K1, 'CONTROL: the sermon key was not read');
+  e.t._localBlocked = new Set([M2.pub]);
+  assert.equal(await e.S.rotateMediaKey([M1.pub], []), true, 'CONTROL: the rotation did not publish');
+  const k2 = e.t._mediaKeyHex;
+  assert.notEqual(k2, K1, 'CONTROL: the rotation did not change the key');
+  s.handlers.onevent(envAt(MEDIAKEY_D, A, [K1], [A.pub, M1.pub, M2.pub], OLD_AT));   // a lagging relay, or a re-read
+  assert.equal(e.t._mediaKeyHex, k2, 'THE ENVELOPE FROM BEFORE THE BLOCK WAS TAKEN OVER THE ROTATION — new sermons would be sealed with the key the blocked person holds');
+});
+for (const [kind, D, sub, rotate, ensure, hexOf] of [
+  ['sermon', MEDIAKEY_D, 'subscribeMediaKey', 'rotateMediaKey', 'ensureMediaKeyForMembers', (t) => t._mediaKeyHex],
+  ['care', CAREKEY_D, 'subscribeCareKey', 'rotateCareKey', 'ensureCareKeyForMembers', (t) => t._careKeyHex],
+]) {
+  test(`${kind} key: after a reload with the relay that took the Block's rotation DOWN, the console keeps the rotated key — it does not adopt and re-seal the older ring the other relay still holds`, async () => {
+    // BEFORE THE RELOAD: the console reads the church's key, blocks M2 and rotates
+    const e1 = engine(); e1.t.up = new Set([R1]);
+    e1.S[sub]();
+    const s1 = e1.subs.at(-1);
+    s1.handlers.onevent(envAt(D, A, [K1], [A.pub, M1.pub, M2.pub], OLD_AT, 1)); await e1.eose(s1);
+    assert.equal(hexOf(e1.t), K1, 'CONTROL: the key was not read');
+    e1.t._localBlocked = new Set([M2.pub]);
+    assert.equal(await e1.S[rotate]([M1.pub], []), true, 'CONTROL: the rotation did not publish');
+    const k2 = hexOf(e1.t);
+    // THE RELOAD: a new console on the same device; the relay that took the rotation is down, the one that holds the
+    // envelope from before the Block answers — the read settles on it alone (round 3a)
+    const e2 = engine(); e2.t.up = new Set([R1]); e2.t.localStorage = e1.t.localStorage;
+    e2.t._localBlocked = new Set([M2.pub]);   // the device's copy of the blocklist (HIGH 2, unchanged)
+    e2.S[sub]();
+    const s2 = e2.subs.at(-1);
+    s2.handlers.onevent(envAt(D, A, [K1], [A.pub, M1.pub, M2.pub], OLD_AT, 1)); await e2.eose(s2);
+    assert.equal(hexOf(e2.t), k2, `AFTER THE RELOAD THE CONSOLE TOOK THE ${kind.toUpperCase()} KEY FROM BEFORE THE BLOCK AS ITS OWN — the key the blocked person holds`);
+    // a new member joins: the re-seal hands them the ROTATED key, never the old ring
+    const p0 = e2.published.length;
+    await e2.S[ensure]([M1.pub, M3.pub], []);
+    const out = e2.published.slice(p0).find(ev => dtag(ev) === D + A.pub);
+    assert.ok(out, `CONTROL: the ${kind} key was not re-sealed for the new member`);
+    assert.equal(headFor(out, M3), k2, `THE RE-SEAL HANDED THE NEW MEMBER THE ${kind.toUpperCase()} KEY FROM BEFORE THE BLOCK`);
+    assert.ok(!Object.keys(JSON.parse(out.content).keys).includes(M2.pub), `the re-seal wrapped the ${kind} key to the blocked member`);
+  });
+}
+test('the kept envelope holds no key in the clear — only this console\'s own sealed copy', async () => {
+  const e = engine(); e.t.up = new Set([R1]);
+  e.S.subscribeMediaKey();
+  const s = e.subs.at(-1);
+  s.handlers.onevent(envAt(MEDIAKEY_D, A, [K1], [A.pub, M1.pub], OLD_AT)); await e.eose(s);
+  const kept = [...e.t.localStorage._m.entries()].filter(([k]) => k.startsWith('trinityone.steward.keyenv.'));
+  assert.equal(kept.length, 1, 'CONTROL: the envelope was not kept on the device');
+  assert.ok(!kept[0][1].includes(K1), 'THE SERMON KEY WAS WRITTEN TO THE DEVICE IN THE CLEAR');
+});
+
+// ROUND 3c, LOW iv (audit of 432c676): a room-key envelope held back because its author was not on the roster YET was
+// church A's, and both resets left it in place — to be re-checked against church B's roster on B's next roster change.
+test('LOW iv: both resets empty the buffer of room-key envelopes held for an author the roster did not name yet', () => {
+  for (const [what, reset] of [['setActiveIdentity (a switch)', (e) => assert.equal(e.S.setActiveIdentity(A.pub), true, 'CONTROL: the switch failed')], ['_resetChurchScopedState (a key restore)', (e) => e.t.__resetChurchScopedState()]]) {
+    const e = engine();
+    e.t.__senvPending.set('room-of-a', envelope('trinityone/groupkey:', M1, 'room-of-a', ['ee'.repeat(32)], [A.pub]));
+    reset(e);
+    assert.equal(e.t.__senvPending.size, 0, `${what} LEFT CHURCH A'S UNVERIFIED ROOM-KEY ENVELOPES to be judged against the next church's roster`);
+  }
+});
+
+// ROUND 3c, LOW ii (audit of 432c676): a steward's seal or edit queued behind background re-keys waited for every one of
+// them, and the dialog's 8 s timer said "Couldn't reach the relay" while it waited. A background re-key whose turn comes
+// while a steward's publish is waiting now does nothing (null — the distributor asks again, free); one already IN FLIGHT
+// is still waited for (round 3a, HIGH 2); and the steward's `onTurn` runs only when its own turn comes, which is when the
+// dialog starts its timer.
+test('LOW ii: a background re-key queued behind one in flight steps aside for a steward\'s publish, and onTurn fires only on the steward\'s turn', async () => {
+  const e = engine();
+  const gid = 'room-q';
+  e.t.__skeys[gid] = [unhex('dd'.repeat(32))]; e.t.__senvRecips[gid] = [A.pub, M1.pub]; e.t.__senvMine[gid] = true;
+  const g = gate(); const real = e.t.publish; const sent = [];
+  e.t.publish = async (ev) => { sent.push(ev); if (sent.length === 1) await g.p; return real(ev); };
+  const inFlight = e.S.publishGroupKey(gid, [M1.pub, M2.pub], { reuseOnly: true, background: true });
+  await flush();
+  assert.equal(sent.length, 1, 'CONTROL: the first background re-key is not in flight');
+  const queued = e.S.publishGroupKey(gid, [M1.pub, M3.pub], { reuseOnly: true, background: true });
+  let turned = 0;
+  const steward = e.S.publishGroupKey(gid, [M1.pub], { rotate: true, onTurn: () => { turned++; } });
+  await flush();
+  assert.equal(turned, 0, 'the steward\'s onTurn fired while a publish was still in flight — HIGH 2 says it waits for that one');
+  g.release();
+  const [, rq, rs] = await Promise.all([inFlight, queued, steward]);
+  assert.equal(rq, null, 'A BACKGROUND RE-KEY THAT HAD NOT STARTED RAN WHILE A STEWARD\'S PUBLISH WAITED BEHIND IT');
+  assert.equal(turned, 1, 'the steward\'s onTurn did not fire exactly once');
+  assert.ok(rs, 'CONTROL: the steward\'s publish did not land');
+  assert.equal(sent.length, 2, 'publishes made: the one in flight and the steward\'s — nothing else');
+  // CONTROL: with no steward waiting, a queued background re-key runs as before
+  const q2 = await e.S.publishGroupKey(gid, [M1.pub, M3.pub], { reuseOnly: true, background: true });
+  assert.ok(q2 !== null, 'CONTROL: a background re-key with nobody waiting did nothing');
+});
+
+// …and sealGroup (the seal dialog's engine call) hands the dialog's onTurn through to the room's key publish (LOW ii).
+test('LOW ii: sealGroup hands the dialog\'s onTurn to the key publish, which calls it once on its turn', async () => {
+  const e = engine();
+  const gid = 'room-s';
+  e.t.__skeys[gid] = [unhex('dd'.repeat(32))]; e.t.__senvRecips[gid] = [A.pub, M1.pub]; e.t.__senvMine[gid] = true;
+  e.t.window.Steward.publishGroupKey = (...a) => e.S.publishGroupKey(...a);
+  e.t.window.Steward.publishGroup = async (g) => ({ ...g, ts: 1 });
+  let turned = 0;
+  const r = await e.S.sealGroup({ id: gid, name: 'Sealed' }, [M1.pub], { onTurn: () => { turned++; } });
+  assert.ok(r && r.sealed, 'CONTROL: the room was not sealed: ' + JSON.stringify(r));
+  assert.equal(turned, 1, 'SEALGROUP DID NOT HAND THE DIALOG\'S onTurn TO THE KEY PUBLISH — the dialog\'s 8 s never starts, so only the 30 s bound is left');
+});
+
+// ROUND 3d, MED (audit of 0f5cd2d): THE DEVICE COPY IS NEVER THE BASIS OF A ROTATION. 3c restores the care/sermon envelope
+// this console last accepted before any relay answers — so it can paint and seal — but Block and removing a delegate
+// rotated from it too. Device 1 kept care rev 1 (K1; A, M1, M2, M3); another console published rev 2 (K2) blocking M2;
+// device 1 reloaded and blocked M3 before the relay answered: it rotated from rev 1 (M2 still in, K2 not in its ring) and
+// published "rev 2" — and the relay's real rev 2, arriving at the same rev, then replaced it, so the console sealed with
+// K2, which M3 holds. A rotation now refuses until this connection's read has settled (the same `fresh` the re-seal uses),
+// which is what 432c676 did by having nothing to rotate; and an envelope at the SAME rev as the one this console holds
+// replaces it only if it is newer, its keys otherwise joining the ring's tail.
+const K2 = '22'.repeat(32);
+for (const [kind, D, sub, rotate, hexOf, ringOf] of [
+  ['care', CAREKEY_D, 'subscribeCareKey', 'rotateCareKey', (t) => t._careKeyHex, (t) => t._careKeyRing],
+  ['sermon', MEDIAKEY_D, 'subscribeMediaKey', 'rotateMediaKey', (t) => t._mediaKeyHex, (t) => t._mediaKeyRing],
+]) {
+  test(`3d MED · ${kind}: a Block before this connection's read has settled does not rotate from the device copy — and after it, rotates from the relay's newer key`, async () => {
+    const e1 = engine(); e1.t.up = new Set([R1]);
+    e1.S[sub]();
+    const s1 = e1.subs.at(-1);
+    s1.handlers.onevent(envAt(D, A, [K1], [A.pub, M1.pub, M2.pub, M3.pub], OLD_AT, 1)); await e1.eose(s1);
+    assert.equal(hexOf(e1.t), K1, 'CONTROL: device 1 did not keep rev 1');
+    // device 1 reloads; the read is open, nothing has answered yet
+    const e2 = engine(); e2.t.up = new Set([R1]); e2.t.localStorage = e1.t.localStorage;
+    e2.S[sub]();
+    const s2 = e2.subs.at(-1);
+    assert.equal(hexOf(e2.t), K1, 'CONTROL: the device copy was not restored');
+    e2.t._localBlocked = new Set([M3.pub]);                       // Block M3, NOW
+    const p0 = e2.published.length;
+    const r = await e2.S[rotate]([M1.pub, M2.pub], []);
+    assert.equal(e2.published.length, p0, `A ${kind.toUpperCase()} ROTATION WAS PUBLISHED FROM THE DEVICE COPY BEFORE THE RELAY ANSWERED — it is built on a ring that may be superseded`);
+    assert.deepEqual(r, { pending: true }, `the held-back ${kind} rotation did not say it is waiting (round 3e: remembered, run when the read settles)`);
+    // the relay answers: another console's rev 2 (K2), which blocked M2
+    s2.handlers.onevent(envAt(D, A, [K2, K1], [A.pub, M1.pub, M3.pub], OLD_AT + 500, 2)); await e2.eose(s2);
+    assert.equal(hexOf(e2.t), K2, 'CONTROL: the relay\'s newer key was not taken');
+    assert.equal(await e2.S[rotate]([M1.pub], []), true, 'CONTROL: once the read settled, the rotation did not publish');
+    const out = e2.published.slice(p0).find(ev => dtag(ev) === D + A.pub);
+    const to = Object.keys(JSON.parse(out.content).keys);
+    assert.ok(!to.includes(M3.pub), `the ${kind} rotation kept M3`);
+    const ring = JSON.parse(nip44.v2.decrypt(JSON.parse(out.content).keys[M1.pub], ck(M1.sk, A.pub)));
+    assert.ok(ring.includes(K2), `THE ${kind.toUpperCase()} ROTATION'S RING LACKS K2 — needs sealed under it no longer open`);
+    assert.notEqual(ring[0], K2, `the ${kind} rotation did not make a new key`);
+  });
+}
+test('3d MED · care: an envelope at the SAME rev as this console\'s own rotation, but older, does not replace it — its key joins the ring', async () => {
+  const e = engine(); e.t.up = new Set([R1]);
+  e.S.subscribeCareKey();
+  const s = e.subs.at(-1);
+  s.handlers.onevent(envAt(CAREKEY_D, A, [K1], [A.pub, M1.pub, M3.pub], OLD_AT, 1)); await e.eose(s);
+  e.t._localBlocked = new Set([M3.pub]);
+  assert.equal(await e.S.rotateCareKey([M1.pub], []), true, 'CONTROL: the rotation did not publish');
+  const mine = e.t._careKeyHex;
+  assert.equal(e.t._careKeyRev, 2, 'CONTROL: the rotation is not rev 2');
+  // another console's rev 2, made earlier from the same rev 1, arrives now
+  s.handlers.onevent(envAt(CAREKEY_D, A, [K2, K1], [A.pub, M1.pub, M3.pub], OLD_AT + 500, 2));
+  assert.equal(e.t._careKeyHex, mine, 'AN OLDER ENVELOPE AT THE SAME REV REPLACED THIS CONSOLE\'S OWN ROTATION — it now seals with a key the blocked M3 holds');
+  assert.ok(e.t._careKeyRing.includes(K2), 'the other console\'s key did not join this console\'s ring — needs sealed under it would not open here');
+  // CONTROL: a NEWER envelope at the same rev still wins (newest wins, as before)
+  s.handlers.onevent(envAt(CAREKEY_D, A, [K2, K1], [A.pub, M1.pub], 1759300000 + 5, 2));
+  assert.equal(e.t._careKeyHex, K2, 'CONTROL: a newer envelope at the same rev was refused');
+});
+
+// ROUND 3d, LOW 3 (audit of 0f5cd2d): the care/sermon envelopes 3c keeps on the device carry the church's recipient list
+// — members and delegates, in the clear. They go when the key goes (removeKey) and on a key restore or a discarded key
+// (_resetChurchScopedState); NOT on a church switch, which keeps the device's key (see the note in the reset).
+test('LOW 3: the kept care/sermon envelopes are cleared by a key restore, and by removing the key — not by a church switch', async () => {
+  const keep = (e) => [...e.t.localStorage._m.keys()].filter(k => k.startsWith('trinityone.steward.keyenv.'));
+  const seeded = async () => {
+    const e = engine(); e.t.up = new Set([R1]);
+    e.S.subscribeMediaKey();
+    const s = e.subs.at(-1);
+    s.handlers.onevent(envAt(MEDIAKEY_D, A, [K1], [A.pub, M1.pub], OLD_AT)); await e.eose(s);
+    e.t.localStorage.setItem('trinityone.steward.other', 'x');   // someone else's entry: must survive
+    assert.equal(keep(e).length, 1, 'CONTROL: nothing was kept');
+    return e;
+  };
+  { const e = await seeded(); assert.equal(e.S.setActiveIdentity(A.pub), true); assert.equal(keep(e).length, 1, 'a church SWITCH threw away the kept envelope — round 3c\'s protection gone on every switch'); }
+  { const e = await seeded(); e.t.__resetChurchScopedState(); assert.equal(keep(e).length, 0, 'A KEY RESTORE LEFT THE KEPT ENVELOPES (the church\'s recipient list) ON THE DEVICE'); assert.equal(e.t.localStorage.getItem('trinityone.steward.other'), 'x', 'the reset cleared an unrelated entry'); }
+  { const e = await seeded();
+    const removeKey = new Function('localStorage', 'KEY_LS', 'encBlobRemove', '_stay', '_minorsLastClear', 'window', 'CustomEvent',
+      'return ({ ' + fnBody(BUNDLE, BUNDLE.indexOf('    removeKey() {') + 4, 'removeKey() {') + ' });')(e.t.localStorage, 'k', async () => true, { clear() {} }, () => {}, { Steward: {}, dispatchEvent() {} }, class {});
+    await removeKey.removeKey();
+    assert.equal(keep(e).length, 0, 'REMOVING THE KEY LEFT THE KEPT ENVELOPES (the church\'s recipient list) ON THE DEVICE');
+    assert.equal(e.t.localStorage.getItem('trinityone.steward.other'), 'x', 'removeKey cleared an unrelated entry'); }
+});
+
+// ROUND 3d, LOW 2 (audit of 0f5cd2d): THE MEMBER LIST SAYS WHEN IT IS A GENUINE READ. Block and Remove let a holder who has
+// left go only once the member list is fresh — a narrow read of the member documents settled on every connected relay —
+// never from the cache it paints from first.
+test('LOW 2: the member list is FRESH only once a genuine read of the member documents has settled', async () => {
+  const e = engine(); e.t.up = new Set([R1]);
+  let last = null;
+  e.S.subscribeMembers((l) => { last = l; });
+  const read = e.subs.find(r => r.d === 'trinityone/member:' + A.pub);
+  assert.ok(read, 'THE MEMBER LIST OPENS NO READ OF THE MEMBER DOCUMENTS — it can never be told fresh');
+  assert.ok(!e.S.listIsFresh(last), 'the member list was fresh before any relay answered');
+  const ts = 1759299000;
+  read.handlers.onevent({ pubkey: M1.pub, kind: 30078, created_at: ts, tags: [['d', 'trinityone/member:' + A.pub], ['p', A.pub]], content: JSON.stringify({ joined: ts }) });
+  assert.ok(!e.S.listIsFresh(last), 'the member list was fresh before the read had settled');
+  await e.eose(read);
+  assert.ok(e.S.listIsFresh(last), 'A SETTLED, GENUINE READ OF THE MEMBER DOCUMENTS DID NOT MAKE THE MEMBER LIST FRESH');
+  assert.ok(last.some(m => m.pubkey === M1.pub), 'the fresh list does not include the member the read delivered');
+});
+
+// ROUND 3e, MED 2 (audit of b102dc6): A MEMBER LIST READ FROM ONE RELAY IS NOT COMPLETE. The member-document read used
+// "every CONNECTED relay", so with the second relay down the list from the first was marked fresh — and Block's keepOnly
+// then dropped approved holders whose member document lives only on the down relay, and their phones deleted their keys.
+// A key is taken only on positive evidence: the read is fresh only once EVERY relay in the church's set has answered.
+test('3e MED 2: with one of two relays down, the member list is NOT fresh — and becomes fresh once both have answered', async () => {
+  const e = engine(); e.t.relayList = [R1, R2]; e.t.up = new Set([R1]);   // R2 is down
+  let last = null;
+  e.S.subscribeMembers((l) => { last = l; });
+  const reads = () => e.subs.filter(r => r.d === 'trinityone/member:' + A.pub && !r.closed);
+  const [r1, r2] = [reads().find(r => r.url === R1), reads().find(r => r.url === R2)];
+  assert.ok(r1 && r2, 'CONTROL: the member-document read was not opened on both relays');
+  const ts = 1759299000;
+  r1.handlers.onevent({ pubkey: M1.pub, kind: 30078, created_at: ts, tags: [['d', 'trinityone/member:' + A.pub], ['p', A.pub]], content: JSON.stringify({ joined: ts }) });
+  await e.eose(r1);
+  await e.closedByRelay(r2, 'connection failed');                       // the down relay: no answer
+  assert.ok(!e.S.listIsFresh(last), 'A MEMBER LIST READ FROM ONE RELAY, WITH THE OTHER DOWN, WAS MARKED FRESH — Block would take keys from members whose document only the down relay holds');
+  // the down relay comes back: the read asks again, both answer, and now the list is fresh
+  e.t.up = new Set([R1, R2]);
+  e.fireTimers();
+  const [s1, s2] = [reads().find(r => r.url === R1), reads().find(r => r.url === R2)];
+  assert.ok(s1 && s2, 'CONTROL: the member read did not ask again');
+  s2.handlers.onevent({ pubkey: M2.pub, kind: 30078, created_at: ts, tags: [['d', 'trinityone/member:' + A.pub], ['p', A.pub]], content: JSON.stringify({ joined: ts }) });
+  await e.eose(s1); await e.eose(s2);
+  assert.ok(e.S.listIsFresh(last), 'CONTROL: with both relays answering, the member list never became fresh');
+  assert.ok(last.some(m => m.pubkey === M2.pub), 'the fresh list lacks the member only the second relay held');
+});
+
+// ROUND 3e, LOW 1 (audit of b102dc6): the care ring is READ, both shapes — executed, because care-key-ring's text check
+// could be satisfied by the same-rev block's own Array.isArray. A ring envelope gives the whole ring; a legacy envelope
+// (one bare hex key, from before the ring) gives a one-key ring.
+test('3e LOW 1: the care envelope\'s ring is read whole, and a legacy bare-key envelope as a one-key ring', async () => {
+  const e = engine(); e.t.up = new Set([R1]);
+  e.S.subscribeCareKey();
+  const s = e.subs.at(-1);
+  s.handlers.onevent(envAt(CAREKEY_D, A, [K2, K1], [A.pub, M1.pub], OLD_AT, 1));
+  assert.deepEqual(e.t._careKeyRing, [K2, K1], 'A RING ENVELOPE WAS NOT READ AS ITS RING — needs sealed under the older key would not open');
+  const legacy = { pubkey: A.pub, kind: 30078, created_at: OLD_AT + 10, tags: [['d', CAREKEY_D + A.pub], ['t', 'trinityone']],
+    content: JSON.stringify({ rev: 2, keys: { [A.pub]: nip44.v2.encrypt(K1, ck(A.sk, A.pub)) } }) };
+  s.handlers.onevent(legacy);
+  assert.deepEqual(e.t._careKeyRing, [K1], 'a legacy envelope (one bare hex key) was not read as a one-key ring');
+});
+
+// ROUND 3e, MED 1 (audit of b102dc6): A BLOCK DURING THE KEY READ IS REMEMBERED, AND RUNS WHEN THE READ SETTLES. 3d made a
+// rotation refuse (`false`) until this connection's read had settled — and nothing ever ran it again: the person stayed on
+// the Blocked list holding the key, and the screen said "try blocking them again", which it offers no way to do. Now the
+// rotation is remembered per church (kept on the device), and runs on its own as soon as that key's read settles.
+const pendingOf = (e) => { try { return JSON.parse(e.t.localStorage.getItem('trinityone.steward.pendingrot.' + A.pub) || '{}'); } catch { return {}; } };
+for (const [kind, D, sub, rotate, hexOf] of [
+  ['care', CAREKEY_D, 'subscribeCareKey', 'rotateCareKey', (t) => t._careKeyHex],
+  ['sermon', MEDIAKEY_D, 'subscribeMediaKey', 'rotateMediaKey', (t) => t._mediaKeyHex],
+]) {
+  const key = kind === 'care' ? 'care' : 'media';
+  test(`3e MED 1 · ${kind}: a Block before the read settles is remembered — and runs by itself when it settles, M3 out, everyone else kept`, async () => {
+    const e = engine(); e.t.up = new Set([R1]);
+    e.t.window.Steward = e.S;                                 // the runner calls the rotations through window.Steward, as the console does
+    e.S[sub]();
+    const s = e.subs.at(-1);
+    e.t._localBlocked = new Set([M3.pub]); e.t._localBlockedAt = 1;   // a blocklist this console has read or written (round 3f: the runner re-checks against it)                     // Block M3, NOW — before the relay has answered
+    const r = await e.S[rotate]([M1.pub], [], { keepIf: (h) => h !== M3.pub, drop: [M3.pub] });
+    assert.deepEqual(r, { pending: true }, `a ${kind} rotation before the read settled did not say it is WAITING (block() would call it a failure)`);
+    assert.deepEqual((pendingOf(e)[key] || {}).drop, [M3.pub], `THE ${kind.toUpperCase()} ROTATION WAS NOT REMEMBERED — nothing would ever run it`);
+    const p0 = e.published.length;
+    s.handlers.onevent(envAt(D, A, [K1], [A.pub, M1.pub, M2.pub, M3.pub], OLD_AT, 1)); await e.eose(s);
+    for (let i = 0; i < 6; i++) await flush();
+    const out = e.published.slice(p0).find(ev => dtag(ev) === D + A.pub);
+    assert.ok(out, `THE REMEMBERED ${kind.toUpperCase()} ROTATION NEVER RAN once the read settled — the blocked person keeps the key`);
+    const to = Object.keys(JSON.parse(out.content).keys);
+    assert.ok(!to.includes(M3.pub), `the remembered ${kind} rotation kept M3`);
+    assert.ok(to.includes(M1.pub) && to.includes(M2.pub), `the remembered ${kind} rotation dropped a holder who stays`);
+    assert.notEqual(hexOf(e.t), K1, `the ${kind} key did not change`);
+    assert.equal(pendingOf(e)[key], undefined, `the ${kind} rotation that ran was left remembered — it would run again`);
+    assert.ok(e.events.some(x => x.type === 'steward-rotations'), 'the screen was not told the records changed');   // round 3g: one signal, the screen asks
+    assert.deepEqual(e.S.rotationStatus(M3.pub).done, [key], `the screen's status for M3 does not say the ${kind} key was changed`);
+  });
+}
+test('3e MED 1: a remembered rotation survives a RELOAD and runs on the next console\'s settle', async () => {
+  const e1 = engine(); e1.t.up = new Set([R1]);
+  e1.S.subscribeCareKey();
+  e1.t._localBlocked = new Set([M3.pub]); e1.t._localBlockedAt = 1;   // a blocklist this console has read or written (round 3f: the runner re-checks against it)
+  assert.deepEqual(await e1.S.rotateCareKey([M1.pub], [], { drop: [M3.pub] }), { pending: true }, 'CONTROL: not remembered');
+  const e2 = engine(); e2.t.up = new Set([R1]); e2.t.localStorage = e1.t.localStorage; e2.t.window.Steward = e2.S;
+  e2.t._localBlocked = new Set([M3.pub]); e2.t._localBlockedAt = 1;   // a blocklist this console has read or written (round 3f: the runner re-checks against it)
+  e2.S.subscribeCareKey();
+  const s = e2.subs.at(-1);
+  s.handlers.onevent(envAt(CAREKEY_D, A, [K1], [A.pub, M1.pub, M3.pub], OLD_AT, 1)); await e2.eose(s);
+  for (let i = 0; i < 6; i++) await flush();
+  const out = e2.published.find(ev => dtag(ev) === CAREKEY_D + A.pub);
+  assert.ok(out && !Object.keys(JSON.parse(out.content).keys).includes(M3.pub), 'A ROTATION REMEMBERED BEFORE A RELOAD DID NOT RUN AFTER IT');
+});
+test('3e MED 1: an Unblock takes the person back out of a remembered rotation', async () => {
+  const e = engine(); e.t.up = new Set([R1]);
+  e.S.subscribeCareKey();
+  await e.S.rotateCareKey([M1.pub], [], { drop: [M3.pub] });
+  assert.deepEqual((pendingOf(e).care || {}).drop, [M3.pub], 'CONTROL: not remembered');
+  e.t._localBlocked = new Set([M3.pub]); e.t._localBlockedAt = 1;   // a blocklist this console has read or written (round 3f: the runner re-checks against it)
+  await e.S.setBlocked([], { unblock: [M3.pub] });
+  for (let i = 0; i < 4; i++) await flush();
+  assert.equal(pendingOf(e).care, undefined, 'AN UNBLOCKED PERSON IS STILL WAITING TO BE ROTATED OUT');
+});
+test('3e MED 1: the name key — a Block before its read settles is remembered and runs when it settles', async () => {
+  const e = engine(); e.t.up = new Set([R1]); e.t.window.Steward = e.S;
+  e.S.subscribeNameKey();
+  const s = e.subs.at(-1);
+  e.t._localBlocked = new Set([M3.pub]); e.t._localBlockedAt = 1;   // a blocklist this console has read or written (round 3f: the runner re-checks against it)
+  const r = await e.S.ensureNameKeyForMembers([M1.pub], [], { rotate: true, drop: [M3.pub] });
+  assert.deepEqual(r, { pending: true }, 'a name-key rotation before the read settled was not remembered (block() called it a failure)');
+  const p0 = e.published.length;
+  s.handlers.onevent(envelope(NAMEKEY_D, A, A.pub, ['aa'.repeat(32)], [A.pub, M1.pub, M2.pub, M3.pub])); await e.eose(s);
+  for (let i = 0; i < 6; i++) await flush();
+  const out = e.published.slice(p0).find(ev => dtag(ev) === NAMEKEY_D + A.pub);
+  assert.ok(out, 'THE REMEMBERED NAME-KEY ROTATION NEVER RAN');
+  const to = Object.keys(JSON.parse(out.content).keys);
+  assert.ok(!to.includes(M3.pub) && to.includes(M1.pub) && to.includes(M2.pub), 'the remembered name-key rotation got its recipients wrong: ' + to.length);
+});
+
+// ── ROUND 3f (audit of 4bb1ed1): THE REMEMBERED ROTATIONS ─────────────────────────────────────────────────────────────
+const remember = (e, kind, drop, why) => { const o = pendingOf(e); o[kind] = { drop, why: Object.fromEntries(drop.map(p => [p, why])) }; e.t.localStorage.setItem('trinityone.steward.pendingrot.' + A.pub, JSON.stringify(o)); };
+async function readyCare(e, holders) {
+  e.S.subscribeCareKey();
+  const s = e.subs.at(-1);
+  s.handlers.onevent(envAt(CAREKEY_D, A, [K1], holders, OLD_AT, 1)); await e.eose(s);
+}
+// T1 — the rotation itself must take the person out. With them BLOCKED the blocklist hid a broken filter; a REMOVED
+// DELEGATE is not blocked, so only the rotation's own `drop` keeps the new key from them. ROUND 3g (finding 3; audit of
+// b4b7277): …but only a delegate who is NOT a member. One who is still an APPROVED member keeps member keys, as the direct
+// path does (it rotates to the approved members, the delegate among them) and as the screen promises ("They are also a
+// member, so they keep what members can open"). The 3f version of this row enshrined the opposite.
+async function knownMembers(e, pubs) {
+  e.S.subscribeMembers(() => {});
+  const r = e.subs.filter(x => x.d === 'trinityone/member:' + A.pub).at(-1);
+  const ts = 1759299000;
+  for (const pk of pubs) r.handlers.onevent({ pubkey: pk, kind: 30078, created_at: ts, tags: [['d', 'trinityone/member:' + A.pub], ['p', A.pub]], content: JSON.stringify({ joined: ts }) });
+  await e.eose(r);
+}
+test('3f T1 / 3g: a remembered rotation for a REMOVED DELEGATE (not blocked) leaves them out — unless they are still an approved member, who keeps member keys', async () => {
+  for (const [stillMember, wantKept] of [[false, false], [true, true]]) {
+    const e = engine(); e.t.up = new Set([R1]); e.t.window.Steward = e.S;
+    e.t._localBlockedAt = 1; e.t._careRosterKnown = true; e.t._careRoster = new Set();   // the roster has been read: M3 is not on it
+    e.S.joinPolicyFresh = () => false;                       // approval off, known: every member is approved
+    await knownMembers(e, stillMember ? [M1.pub, M3.pub] : [M1.pub]);
+    remember(e, 'care', [M3.pub], 'remove');                 // M3 stands in for the removed delegate
+    const p0 = e.published.length;
+    await readyCare(e, [A.pub, M1.pub, M3.pub]);
+    for (let i = 0; i < 6; i++) await flush();
+    const out = e.published.slice(p0).find(ev => dtag(ev) === CAREKEY_D + A.pub);
+    if (!wantKept) {
+      assert.ok(out, 'CONTROL: the remembered rotation did not run');
+      const to = Object.keys(JSON.parse(out.content).keys);
+      assert.ok(!to.includes(M3.pub), 'THE REMOVED DELEGATE (NOT BLOCKED, NOT A MEMBER) WAS GIVEN THE NEW KEY — the remembered rotation did not take them out');
+      assert.ok(to.includes(M1.pub), 'a holder who stays was dropped');
+      assert.deepEqual(e.S.rotationStatus(M3.pub).done, ['care'], 'the screen\'s status does not say the care key was changed');
+    } else {
+      assert.equal(out, undefined, 'A REMOVED DELEGATE WHO IS STILL AN APPROVED MEMBER HAD THE CARE KEY TAKEN — the direct path, and the screen, say they keep member access');
+      assert.equal(pendingOf(e).care, undefined, 'the record was kept though there is nothing to take');
+      assert.deepEqual(e.S.rotationStatus(M3.pub).member, ['care'], 'the screen\'s status does not say they keep it as a member');
+    }
+  }
+});
+// P3 — the record is re-checked against the lists NOW: an Unblock, or a delegate put back, on ANOTHER console.
+test('3f P3: a remembered rotation whose person was UNBLOCKED elsewhere — or whose delegate is back on the roster — is dropped, not run', async () => {
+  for (const [why, setup] of [
+    ['block', (e) => { e.t._localBlockedAt = 1; e.t._localBlocked = new Set(); }],                                   // a blocklist read since: M3 is not on it
+    ['remove', (e) => { e.t._localBlockedAt = 1; e.t._careRosterKnown = true; e.t._careRoster = new Set([M3.pub]); }],   // M3 is back on the roster
+  ]) {
+    const e = engine(); e.t.up = new Set([R1]); e.t.window.Steward = e.S;
+    setup(e);
+    remember(e, 'care', [M3.pub], why);
+    const p0 = e.published.length;
+    await readyCare(e, [A.pub, M1.pub, M3.pub]);
+    for (let i = 0; i < 6; i++) await flush();
+    assert.equal(e.published.slice(p0).filter(ev => dtag(ev) === CAREKEY_D + A.pub).length, 0, `(${why}) A REMEMBERED ROTATION RAN FOR SOMEONE NO LONGER ${why === 'block' ? 'BLOCKED' : 'REMOVED'} — the other console's decision was undone`);
+    assert.equal(pendingOf(e).care, undefined, `(${why}) the stale record was kept — it would run later`);
+  }
+  // CONTROL: with the blocklist not yet read (only the device's copy), it waits — neither runs nor is dropped
+  const e = engine(); e.t.up = new Set([R1]); e.t.window.Steward = e.S;
+  e.t._localBlocked = new Set([M3.pub]); e.t._localBlockedAt = 0;
+  remember(e, 'care', [M3.pub], 'block');
+  await readyCare(e, [A.pub, M1.pub, M3.pub]);
+  for (let i = 0; i < 6; i++) await flush();
+  assert.ok(pendingOf(e).care, 'CONTROL: with only the device copy of the blocklist, the record was dropped or run');
+});
+// P1 — a ROOM key that failed is remembered too, and "Try again" runs it; with nothing left, "Try again" says done.
+test('3f P1: a remembered ROOM rotation runs on "Try again" — the person out, the others kept — and an empty retry says done', async () => {
+  const e = engine(); e.t.up = new Set([R1]); e.t.window.Steward = e.S;
+  e.t._localBlocked = new Set([M3.pub]); e.t._localBlockedAt = 1;
+  const gid = 'room-p1';
+  e.t.__skeys[gid] = [unhex('dd'.repeat(32))]; e.t.__senvRecips[gid] = [A.pub, M1.pub, M3.pub]; e.t.__senvMine[gid] = true;
+  e.S.rememberRotation('room:' + gid, [M3.pub], 'block');
+  const p0 = e.published.length;
+  await e.S.retryPendingRotations();
+  const out = e.published.slice(p0).find(ev => dtag(ev) === 'trinityone/groupkey:' + gid);
+  assert.ok(out, 'A REMEMBERED ROOM ROTATION DID NOT RUN ON "TRY AGAIN" — the screen would say "Trying again…" for ever');
+  const to = Object.keys(JSON.parse(out.content).keys);
+  assert.ok(!to.includes(M3.pub) && to.includes(M1.pub), 'the room rotation got its recipients wrong');
+  assert.equal(pendingOf(e)['room:' + gid], undefined, 'the room rotation that ran is still remembered');
+  e.events.length = 0;
+  await e.S.retryPendingRotations();
+  assert.ok(e.events.some(x => x.type === 'steward-rotations'), 'AN EMPTY "TRY AGAIN" SAID NOTHING — the screen\'s "Trying again…" would stick');   // round 3g: every run ends in the signal
+});
+// P2 — the name key's rebuild: the envelope this console holds may be an OLDER one (another relay not caught up); members
+// the console knows were added since must not be dropped — their phones would delete the name key.
+test('3f P2: a remembered NAME-key rotation, read first from a relay holding an OLDER envelope, keeps the members added since', async () => {
+  const e = engine(); e.t.relayList = [R1, R2]; e.t.up = new Set([R1, R2]); e.t.window.Steward = e.S;
+  e.t._localBlocked = new Set([M3.pub]); e.t._localBlockedAt = 1;
+  e.S.subscribeMembers(() => {});
+  const mreads = e.subs.filter(r => r.d === 'trinityone/member:' + A.pub);
+  const ts = 1759299000;
+  for (const r of mreads) for (const k of [M1, M2, M3]) r.handlers.onevent({ pubkey: k.pub, kind: 30078, created_at: ts, tags: [['d', 'trinityone/member:' + A.pub], ['p', A.pub]], content: JSON.stringify({ joined: ts }) });
+  for (const r of mreads) await e.eose(r);
+  remember(e, 'name', [M3.pub], 'block');
+  e.S.subscribeNameKey();
+  const n1 = e.subs.filter(r => r.d === NAMEKEY_D + A.pub).find(r => r.url === R1);
+  const p0 = e.published.length;
+  n1.handlers.onevent(envelope(NAMEKEY_D, A, A.pub, ['aa'.repeat(32)], [A.pub, M1.pub, M3.pub]));   // R1: the OLDER envelope, before M2 joined
+  await e.eose(n1);
+  await e.S.retryPendingRotations();
+  for (let i = 0; i < 6; i++) await flush();
+  const out = e.published.slice(p0).find(ev => dtag(ev) === NAMEKEY_D + A.pub);
+  assert.ok(out, 'CONTROL: the remembered name-key rotation did not run');
+  const to = Object.keys(JSON.parse(out.content).keys);
+  assert.ok(to.includes(M2.pub), 'A MEMBER ADDED SINCE THE OLDER ENVELOPE (M2) WAS DROPPED FROM THE NAME KEY — their phone deletes it');
+  assert.ok(!to.includes(M3.pub) && to.includes(M1.pub), 'the name-key rotation got the leaver or a holder wrong');
+});
+// P4 — "every relay" is the church's relays NOW: a relay admitted since the member list settled un-freshes it until read.
+test('3f P4: when the church\'s relay set grows, the member list is no longer fresh — until the new set has answered', async () => {
+  const e = engine(); e.t.relayList = [R1]; e.t.up = new Set([R1, R2]);
+  const ls = {}; e.t.window.addEventListener = (t, f) => { (ls[t] = ls[t] || []).push(f); }; e.t.window.removeEventListener = () => {};
+  let last = null;
+  e.S.subscribeMembers((l) => { last = l; });
+  await e.eose(e.subs.find(r => r.d === 'trinityone/member:' + A.pub && r.url === R1));
+  assert.ok(e.S.listIsFresh(last), 'CONTROL: one relay, answered — the list is not fresh');
+  e.t.relayList = [R1, R2];                                  // a relay is admitted
+  assert.ok(!e.S.listIsFresh(last), 'A RELAY ADMITTED SINCE DID NOT UN-FRESH THE MEMBER LIST — it may hold someone\'s member document');
+  for (const f of (ls['steward-relays'] || [])) f();         // the console's signal that the set changed: the read asks again
+  const reads = e.subs.filter(r => r.d === 'trinityone/member:' + A.pub && !r.closed);
+  assert.ok(reads.some(r => r.url === R2), 'THE MEMBER READ DID NOT ASK THE NEW RELAY when the set changed');
+  for (const r of reads) await e.eose(r);
+  assert.ok(e.S.listIsFresh(last), 'once the new set had answered, the member list did not become fresh again');
+});
+
+// ── ROUND 3g (audit of b4b7277): THE RECORDS AND WHAT THE SCREEN IS TOLD ─────────────────────────────────────────────
+// Finding 2: a remembered ROOM rotation for a room that no longer exists was skipped and kept for ever (its ring is never
+// held again), and the banner waited behind it. With a FRESH group list that lacks the room, the record is dropped and the
+// person's status says the room is gone — never "waiting".
+test('3g finding 2: a remembered rotation for a room that NO LONGER EXISTS is dropped — and said as gone, not left waiting', async () => {
+  const e = engine(); e.t.up = new Set([R1]); e.t.window.Steward = e.S;
+  e.t._localBlocked = new Set([M3.pub]); e.t._localBlockedAt = 1;
+  e.S.rememberRotation('room:room-gone', [M3.pub], 'block', true);
+  assert.deepEqual(e.S.rotationStatus(M3.pub).failed, ['room:room-gone'], 'CONTROL: the failure was not recorded');
+  e.t.__setLastGroups(e.t.__freshList([{ id: 'other-room', name: 'Other', encrypted: true }]));   // a fresh list, the room not in it
+  await e.S.retryPendingRotations();
+  assert.equal(pendingOf(e)['room:room-gone'], undefined, 'A RECORD FOR A ROOM THAT NO LONGER EXISTS WAS KEPT — it can never run, and the banner waits behind it for ever');
+  const st = e.S.rotationStatus(M3.pub);
+  assert.deepEqual([st.gone, st.waiting, st.failed], [['room:room-gone'], [], []], 'the status does not say the room is gone: ' + JSON.stringify(st));
+  // CONTROL: with only a cached (not fresh) group list, a missing room is missing DATA — the record waits
+  const e2 = engine(); e2.t.up = new Set([R1]); e2.t.window.Steward = e2.S;
+  e2.t._localBlocked = new Set([M3.pub]); e2.t._localBlockedAt = 1;
+  e2.S.rememberRotation('room:room-x', [M3.pub], 'block', true);
+  e2.t.__setLastGroups([{ id: 'other-room', encrypted: true }]);   // unstamped: not fresh
+  await e2.S.retryPendingRotations();
+  assert.ok(pendingOf(e2)['room:room-x'], 'CONTROL: a room missing from a CACHED list was dropped — that is missing data, not evidence');
+});
+// Finding 1: on a console acting for another church a record cannot run (only the church key rotates these). It is said —
+// "only the owner's console can" — never left silent.
+test('3g finding 1: on a console acting for ANOTHER church, a remembered rotation is said as "only the owner can" — Try again ends visibly', async () => {
+  const e = engine(); e.t.up = new Set([R1]); e.t.window.Steward = e.S;
+  e.t.pub = B.pub; e.t.actingChurch = B.pub;
+  e.S.rememberRotation('care', [M3.pub], 'block', true);
+  e.events.length = 0;
+  await e.S.retryPendingRotations();
+  assert.ok(e.events.some(x => x.type === 'steward-rotations'), '"TRY AGAIN" ON A DELEGATED CONSOLE ENDED IN SILENCE — the banner would stick');
+  assert.deepEqual(e.S.rotationStatus(M3.pub).owner, ['care'], 'the status does not say only the owner\'s console can change it');
+});
+// Finding 5: a Block outranks a removal. Remove D, then Block D, then D is put back on the roster elsewhere: D is still
+// BLOCKED, so the record must still run — it used to be cleared, and blocked D kept the old key.
+test('3g finding 5: Remove D, then Block D — the record\'s reason becomes "block", and D put back on the roster elsewhere is still rotated out', async () => {
+  const e = engine(); e.t.up = new Set([R1]); e.t.window.Steward = e.S;
+  e.S.rememberRotation('care', [M3.pub], 'remove');
+  e.S.rememberRotation('care', [M3.pub], 'block');
+  assert.equal(pendingOf(e).care.why[M3.pub], 'block', 'A BLOCK AFTER A REMOVAL LEFT THE REASON AS "remove"');
+  e.t._localBlocked = new Set([M3.pub]); e.t._localBlockedAt = 1;
+  e.t._careRosterKnown = true; e.t._careRoster = new Set([M3.pub]);   // put back on the roster on another console
+  const p0 = e.published.length;
+  await readyCare(e, [A.pub, M1.pub, M3.pub]);
+  for (let i = 0; i < 6; i++) await flush();
+  const out = e.published.slice(p0).find(ev => dtag(ev) === CAREKEY_D + A.pub);
+  assert.ok(out && !Object.keys(JSON.parse(out.content).keys).includes(M3.pub), 'BLOCKED D KEPT THE CARE KEY — the record was cleared because D was put back on the roster, though D is blocked');
+  // and a "cleared" record is said as cleared, never as done
+  const e2 = engine(); e2.t.up = new Set([R1]); e2.t.window.Steward = e2.S;
+  e2.t._localBlocked = new Set(); e2.t._localBlockedAt = 1;           // unblocked on another console
+  e2.S.rememberRotation('care', [M3.pub], 'block', true);
+  await readyCare(e2, [A.pub, M1.pub, M3.pub]);
+  for (let i = 0; i < 6; i++) await flush();
+  const st = e2.S.rotationStatus(M3.pub);
+  assert.deepEqual([st.cleared, st.done], [['care'], []], 'A RECORD CLEARED BECAUSE THEY WERE UNBLOCKED ELSEWHERE WAS SAID AS "DONE": ' + JSON.stringify(st));
 });

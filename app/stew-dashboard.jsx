@@ -788,14 +788,53 @@ function JoinNotifier() {
   );
 }
 
-// auto-distribute encrypted-group keys to NEW members (an open group keys everyone; an invite group its
-// allowlist). reuse-only — it never mints a new key in the background (that would orphan history); removals
-// are rotated explicitly from the edit-members modal. Renders nothing.
+// ONE APPROVED-MEMBERS FILTER FOR EVERY KEY (round 3a, HIGH 1). The key distributor narrowed the room, care and sermon
+// keys to APPROVED members in 78ffad0, but five other paths still wrapped them to everyone with a member document —
+// Block's rotation, removing a delegate, a new open encrypted room, sealing one room or all of them, and the first
+// sermon upload — so a member still waiting to be let in was handed keys that, since round 2, only ever grow. Every
+// one of them now asks this:
+//   pubs -> the approved ones (not blocked; and on the admitted list when the church requires approval), or NULL when
+//   that cannot be told: the join policy, the blocklist, or (approval on) the admitted list has no genuine read on a
+//   subscription open now (Steward.joinPolicyFresh / listIsFresh — round 2).
+// An action that CAN wait refuses on null and says so. An action that must not (Block, removing a delegate — a refusal
+// would leave the person holding every key) uses stewKeyRecipientsOrAdmitted: the members on the admitted list it
+// holds, never anyone else — fewer people, never a pending one; the distributor adds the rest once the lists are fresh.
+// CALLERS (rule 2): KeyDistributor; NewGroupModal.create; DashGroups.doSeal; the seal-all sweep (doEncryptAll);
+// DashMembers.block; DashStewardsPanel.remove; the sermon upload (mediaEncryptor). Invite-only rooms keep their own
+// list — the steward chose those people, and the pickers already hide anyone pending (useStewardPickableMembers).
+function stewKeyRecipients(pubs, blockedList, admittedList) {
+  const S = window.Steward;
+  if (!S || !S.listIsFresh || !S.joinPolicyFresh) return null;
+  const approval = S.joinPolicyFresh();
+  if (approval === null || !S.listIsFresh(blockedList)) return null;
+  if (approval && !S.listIsFresh(admittedList)) return null;
+  const lc = (p) => String(p || '').toLowerCase();
+  const bl = new Set((blockedList || []).map(lc)), ad = new Set((admittedList || []).map(lc));
+  return [...new Set((pubs || []).filter(pk => pk && !bl.has(lc(pk)) && (!approval || ad.has(lc(pk)))))];
+}
+function stewKeyRecipientsOrAdmitted(pubs, blockedList, admittedList) {
+  const known = stewKeyRecipients(pubs, blockedList, admittedList);
+  if (known) return known;
+  const lc = (p) => String(p || '').toLowerCase();
+  const bl = new Set((blockedList || []).map(lc)), ad = new Set((admittedList || []).map(lc));
+  return [...new Set((pubs || []).filter(pk => pk && ad.has(lc(pk)) && !bl.has(lc(pk))))];
+}
+// The hook a screen calls: keeps the three subscriptions the filter needs open, and hands back both forms.
+function useStewKeyRecipients() {
+  const blocked = window.useStewardBlocked ? window.useStewardBlocked() : [];
+  const admitted = window.useStewardAdmitted ? window.useStewardAdmitted() : [];
+  if (window.useStewardJoinPolicy) window.useStewardJoinPolicy();
+  return { approved: (pubs) => stewKeyRecipients(pubs, blocked, admitted), orAdmitted: (pubs) => stewKeyRecipientsOrAdmitted(pubs, blocked, admitted) };
+}
+const STEW_KEYS_LOADING = 'Your church’s member list is still loading, so nobody new can be given this key yet. Nothing was changed — try again in a moment.';
+
+// auto-distribute encrypted-group keys to members the room's envelope has no copy for (an open group keys every
+// APPROVED member; an invite group its allowlist). reuse-only — it never mints a new key in the background (that
+// would orphan history); removals are rotated explicitly from Block and the edit-members modal. Renders nothing.
 function KeyDistributor() {
   const church = window.useStewardChurch ? window.useStewardChurch() : { name: '' };
   const groups = window.useStewardGroups ? window.useStewardGroups() : [];
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
-  const last = React.useRef({});
   // AUDIT-2026-08-10 item C. subscribeMembers coalesces at ~150ms and re-emits on every church event burst,
   // so this effect re-runs constantly. Without these, a slow envelope publish was fired AGAIN on the next
   // tick, and a persistently refused one was re-sent on every tick — full near-1 MB envelopes, repeatedly,
@@ -807,11 +846,12 @@ function KeyDistributor() {
   // `last` entry when the console came back to A — and A's members looked like new recipients of B's room key
   // (audit of 5276297, HIGH 1). KEPT per church, not wiped (audit of 831dcea): wiping them made A's rooms a first
   // sighting on the way back from B, so a member who joined A meanwhile was recorded as keyed and never was.
-  const memos = React.useRef({});      // church → its { last, pending, nextTry, failCount }
+  const unsealable = React.useRef({});   // group id → pubkeys a successful publish still left out (see the loop)
+  const memos = React.useRef({});      // church → its { unsealable, pending, nextTry, failCount }
   const memoFor = React.useRef(null);
   { const cpNow = (window.Steward && (window.Steward.actingChurch || window.Steward.churchPub)) || '';
-    if (memoFor.current !== cpNow) { memoFor.current = cpNow; const m = memos.current[cpNow] || (memos.current[cpNow] = { last: {}, pending: {}, nextTry: {}, failCount: {} });
-      last.current = m.last; pending.current = m.pending; nextTry.current = m.nextTry; failCount.current = m.failCount; } }
+    if (memoFor.current !== cpNow) { memoFor.current = cpNow; const m = memos.current[cpNow] || (memos.current[cpNow] = { unsealable: {}, pending: {}, nextTry: {}, failCount: {} });
+      unsealable.current = m.unsealable; pending.current = m.pending; nextTry.current = m.nextTry; failCount.current = m.failCount; } }
   const membersRef = React.useRef([]); membersRef.current = members;
   // CATCH UP AFTER A LOCK. The console auto-locks after 10 minutes idle and `Steward.lock()` forgets the key,
   // so every envelope published in that window is refused — and the backoff above then records those refusals
@@ -855,7 +895,9 @@ function KeyDistributor() {
   React.useEffect(() => {
     const f = () => setKeysReadTick(t => t + 1);
     window.addEventListener('steward-keys-read', f);
-    return () => window.removeEventListener('steward-keys-read', f);
+    // …and when a room's key envelope arrives or changes (stewIngestKey), so the room is reconciled against it
+    window.addEventListener('steward-groupkey', f);
+    return () => { window.removeEventListener('steward-keys-read', f); window.removeEventListener('steward-groupkey', f); };
   }, []);
   // #17: load the church media key whenever the console is open (not only on the Sermons tab) so we can re-key joiners
   React.useEffect(() => (window.Steward && window.Steward.subscribeMediaKey ? window.Steward.subscribeMediaKey() : undefined), [_kdIdv, _kdConn, _kdWho]);
@@ -888,6 +930,8 @@ function KeyDistributor() {
   const blockedList = window.useStewardBlocked ? window.useStewardBlocked() : [];
   const blockedSet = React.useMemo(() => new Set((blockedList || []).map(p => String(p || '').toLowerCase())), [blockedList]);
   const blockedRef = React.useRef([]); blockedRef.current = blockedList;
+  // a change to the blocklist may make someone sealable again (an unblock) — forget who was left out
+  React.useEffect(() => { unsealable.current = {}; const m = memos.current[memoFor.current]; if (m) m.unsealable = unsealable.current; }, [blockedList]);
   // EVERY LIST THE ENROLMENT USES MUST BE THE CURRENT CHURCH'S. The member, steward, group and blocked hooks keep
   // their last value until the new church's stream delivers, so for a beat after a switch this component held
   // church A's lists while the engine was on church B — and the enrolment below wrapped B's keys to A's members,
@@ -895,12 +939,60 @@ function KeyDistributor() {
   // the switch, from A's own closed stream, so "has it been replaced yet?" was not enough). The engine stamps each
   // list with the church and epoch its stream was opened for, and enrolment runs only when all four carry the
   // stamp of the church the console is on now (Steward.listIsCurrent). A cached or initial list has no stamp.
+  //
+  // …AND THE AUTHORITY LISTS MUST BE FRESH, NOT ONLY CURRENT (room-key reconcile, round 2; audit of 78ffad0, HIGH 1).
+  // "Current" is the church and epoch; it survives a reconnect, and the hooks repaint the previous connection's list
+  // from their cache. A second console that was away while the owner blocked somebody held the old blocklist when the
+  // rotated envelope arrived, and wrapped the new key straight back to them. Steward.listIsFresh: the church's, from
+  // a subscription open NOW, settled by a genuine read on every connected relay. The blocked and steward lists must
+  // be fresh for any enrolment (a stale roster re-keys a removed delegate); each room needs its own document and
+  // envelope fresh (Steward.groupFresh, in the loop). The MEMBER list only needs to be current: it lists everyone
+  // who ever joined or posted and never shrinks on a removal, so a stale one can delay a new member, never re-add
+  // a removed one — the removal is the blocklist's, and that is fresh.
+  const _kdFresh = (l, since) => { const S = window.Steward; return !!(S && S.listIsFresh && S.listIsFresh(l, since)); };
   const _kdListsCurrent = (m, g, st, bl) => {
     const S = window.Steward;
     if (!S || !S.listIsCurrent) return false;
-    return S.listIsCurrent(m) && S.listIsCurrent(g) && S.listIsCurrent(st) && S.listIsCurrent(bl);
+    return S.listIsCurrent(m) && S.listIsCurrent(g) && _kdFresh(st) && _kdFresh(bl);
   };
   const notBlocked = (pk) => pk && !blockedSet.has(String(pk).toLowerCase());
+  // WHO IS A MEMBER FOR KEYS. useStewardMembers() lists everyone with a member document, including people still
+  // WAITING FOR APPROVAL when the church requires it. The relay already treats them as non-members (gateway.mjs
+  // rebuildMembers), but this distributor handed them the open-room, care and sermon keys anyway. So the rooms,
+  // care and media keys go to APPROVED members only: everyone not blocked when approval is off, and only the
+  // admitted list when it is on. Until the policy (and, with approval on, the admitted and blocked lists) have
+  // actually arrived, nobody new is keyed — on a hard reload those lists are briefly empty, and "nobody is
+  // admitted" must not be read from "the list has not come yet" in EITHER direction. Same test as
+  // useStewardPickableMembers (steward-root.jsx). The NAME key is NOT narrowed: a pending member needs it to seal
+  // their name for the approval queue.
+  //
+  // "ARRIVED" MEANS A GENUINE ANSWER (audit of 78ffad0, finding 2). This read stewardStreamLoaded(), which flips on the
+  // stream's first delivery — and the join-policy stream delivers `false` from its EOSE, which nostr-tools' own timer
+  // fires on a slow link before the document arrives. Approval read as off, and a member still waiting was given the
+  // open-room, care and sermon keys for good. The policy now comes from Steward.joinPolicyFresh() (null until a
+  // genuine read has settled), and the admitted list must be fresh. The two hooks are still called: they are what
+  // keeps the two subscriptions open.
+  const admittedList = window.useStewardAdmitted ? window.useStewardAdmitted() : [];
+  if (window.useStewardJoinPolicy) window.useStewardJoinPolicy();
+  const _kdJoin = (since) => { const S = window.Steward; return (S && S.joinPolicyFresh) ? S.joinPolicyFresh(since) : null; };
+  const joinFresh = _kdJoin();                     // true / false, or null = no genuine answer yet
+  const joinApproval = joinFresh === true;
+  const admittedSet = React.useMemo(() => new Set((admittedList || []).map(p => String(p || '').toLowerCase())), [admittedList]);
+  const approvalKnown = joinFresh !== null && _kdFresh(blockedList) && (!joinApproval || _kdFresh(admittedList));
+  // HAS EVERYTHING THAT WOULD SAY WHY SOMEBODY WAS DROPPED BEEN RE-READ SINCE `at`? (P2, see the room loop.) The
+  // blocklist, the join policy, the admitted list when approval is on, and the room's own document and envelope.
+  const _kdReconfirmed = (g, at) => {
+    const S = window.Steward;
+    // …AND THE STEWARD ROSTER (round 3c, LOW i): since 3a an open room is keyed to the roster too, so a removed delegate
+    // who is not a member is "wanted" again by a roster read from before the removal.
+    return _kdFresh(blockedList, at) && _kdJoin(at) !== null && (!joinApproval || _kdFresh(admittedList, at))
+      && _kdFresh(stewardRoster, at)
+      && !!(S && S.groupFresh && S.groupFresh(groups, g.id, at));
+  };
+  // pubs -> the approved ones, or null when we cannot tell yet (key nobody new)
+  // THE SHARED FILTER (stewKeyRecipients, above) — the same answer every interactive key path gets.
+  const approvedOf = (pubs) => !approvalKnown ? null : stewKeyRecipients(pubs, blockedList, admittedList);
+  const approvedOfRef = React.useRef(approvedOf); approvedOfRef.current = approvedOf;
   React.useEffect(() => {
     // SAME GUARD AS THE CAPABILITY MINT, and for the same measured reason. A delegated steward viewing their
     // OWN identity has no acting church, so this effect ran on a console whose church exists nowhere and
@@ -912,60 +1004,79 @@ function KeyDistributor() {
     if (!church.name) return;   // no church of our own to key — see the capability mint for the full note
     if (!_kdListsCurrent(members, groups, stewardRoster, blockedList)) return;   // a list from another church, or none yet — see _kdListsCurrent
     const memberPubs = members.map(m => m.pubkey).filter(notBlocked);
+    const approvedPubs = approvedOf(memberPubs);   // null = the approval lists have not arrived: key nobody new
+    // RECONCILE EVERY ENCRYPTED ROOM AGAINST ITS ENVELOPE. This used to record the roster it first saw as "already
+    // keyed by create/edit" — true only on the console that created the room. On a console with no saved member
+    // list (a new device, a reinstall, cleared data, a delegate), a member who joined while no console was open was
+    // counted as keyed and never got the key: their room stayed empty and their posts were refused, until somebody
+    // else joined. Now: whoever the room should reach and the newest envelope (Steward.groupKeyRecipients, recorded
+    // by stewIngestKey) has no copy for is added.
+    //   OPEN rooms GROW ONLY — recips = wanted ∪ current recipients, minus blocked. The member list streams in
+    //   pieces, and the member app DELETES its key when an envelope leaves it out (fellowship _ingestGroupKey), so
+    //   a partial list must never drop anybody. Removal is Block's job (a rotation), untouched here.
+    //   INVITE rooms — recips = the room's own list minus blocked. That list is one whole document; a union would
+    //   re-add somebody the steward just took out.
+    // Nobody missing → nothing published, so this does not loop.
     for (const g of groups) {
       if (!g.encrypted) continue;
-      const recips = (g.visibility === 'invite' ? (g.members || []) : memberPubs).filter(notBlocked);
-      const key = [...new Set(recips)].sort().join(',');
-      const prev = last.current[g.id];
-      if (prev === undefined) { last.current[g.id] = key; continue; }   // first sighting — already keyed by create/edit
-      if (key !== prev) {
-        const grew = recips.some(pk => pk && !prev.split(',').includes(pk));
-        // ONLY RECORD IT AS HANDLED IF IT ACTUALLY WAS. This wrote `last.current[g.id] = key` whether or not
-        // anything was published — and publishGroupKey with reuseOnly returns immediately, doing nothing, if
-        // this console has not yet received the room's key envelope (it must never mint a second key over an
-        // existing one). So a console that started while the envelope was still in flight recorded the new
-        // roster as done, and the next tick saw no change and never tried again. The member who joined in
-        // that window has no key, for good: nothing in the room decrypts for them, and since the send now
-        // refuses rather than publishing in clear, they cannot post either — while the app tells them to try
-        // again in a moment, indefinitely.
-        //
-        // Leaving `last` un-advanced is what makes the next tick retry, which is the whole repair.
-        if (grew && window.Steward.publishGroupKey) {
-          // In-flight guard + backoff (AUDIT-2026-08-10 item C) — the retry semantics above are untouched.
-          // Skipping while a publish is in flight loses nothing: `last` is only advanced with the value
-          // captured AT CALL TIME, so a roster that grew DURING the flight still differs on the next tick
-          // and is retried. A REFUSED publish (real bandwidth spent) backs off exponentially, capped at
-          // 60s — a joining member must not wait minutes for their key, and a Pi relay that comes back
-          // within a minute keys them; a null (reuseOnly with no ring — returns immediately, no network)
-          // gets no backoff, because the call is free and the retry is the whole repair.
-          if (pending.current[g.id]) continue;
-          if (Date.now() < (nextTry.current[g.id] || 0)) continue;
-          // THIS church's memo, held for the answer: the console may be on another church by the time it lands,
-          // and the result belongs to the church the publish was made for (the memo is per church — above).
-          const L = last.current, P = pending.current, N = nextTry.current, F = failCount.current;
-          P[g.id] = true;
-          Promise.resolve(window.Steward.publishGroupKey(g.id, recips, { reuseOnly: true, background: true })).then(r => {
-            P[g.id] = false;
-            if (r === false) {
-              const n = (F[g.id] || 0) + 1; F[g.id] = n;
-              N[g.id] = Date.now() + Math.min(60000, 2000 * Math.pow(2, n - 1));
-            }
-            if (r === null || r === false) return;                       // not keyed — leave `last` alone so we come back
-            L[g.id] = key;
-            delete F[g.id]; delete N[g.id];
-            const missed = r && r.skipped;
-            // The console's existing warning channel, rather than a new banner nobody knows to look at.
-            if (missed && missed.length) {
-              try {
-                window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'group key',
-                  message: missed.length + ' member(s) could not be given the key for “' + (g.name || 'a group') + '”. They will not be able to read or post in that room. Open the group and save it again to re-send.' } }));
-              } catch (e) {}
-            }
-          }).catch(() => { P[g.id] = false; });   // a throw must not wedge the guard shut
-        } else {
-          last.current[g.id] = key;                                      // nothing to publish (shrank, or no key API)
+      const invite = g.visibility === 'invite';
+      if (!invite && !approvedPubs) continue;   // approval lists not in yet — fail closed, see approvedOf
+      const S = window.Steward;
+      // THE ROOM'S OWN DOCUMENT AND KEY ENVELOPE MUST BE A GENUINE READ (Steward.groupFresh). The cached room document
+      // paints at once and the relays answer newest first, so a rotated envelope arrived before the document that
+      // explains it; and a ring older than the newest envelope, republished, would undo a rotation.
+      if (!S || !S.groupFresh || !S.groupFresh(groups, g.id)) continue;
+      // HELD, NOT RE-ADDED (P2). Whoever a newer envelope DROPPED — a Block's rotation, a removal from an invite room —
+      // is kept out until the lists that would say why have been re-read since the drop was seen (the engine re-reads
+      // them at once). A rotation run from a partial member list drops people nobody meant to remove: once the re-read
+      // shows them still wanted, they are re-added. Someone blocked or taken off the room's list never is.
+      const held = new Set((S.groupKeyDropped ? S.groupKeyDropped(g.id) : []).filter(x => !_kdReconfirmed(g, x.at)).map(x => x.pub));
+      const notHeld = (pk) => !held.has(String(pk || '').toLowerCase());
+      // OPEN rooms: the approved members AND the steward roster (round 3a) — a delegate who is not a member must hold
+      // the key, or they cannot re-key anyone and admitted members wait for the owner's console.
+      const wanted = [...new Set((invite ? (g.members || []) : [...approvedPubs, ...(stewardRoster || [])]).filter(notBlocked))].filter(notHeld);
+      // null = this console holds no ring for the room (envelope not ingested yet, or no copy for this church):
+      // a reuseOnly publish could do nothing. ensureGroupKeys below is what heals a room with no key at all.
+      const have = S.groupKeyRecipients ? S.groupKeyRecipients(g.id) : null;
+      if (!have || !S.publishGroupKey) continue;
+      const U = unsealable.current[g.id] || [];
+      const missing = (S.groupKeyMissing(g.id, wanted) || []).filter(pk => !U.includes(pk));
+      if (!missing.length) continue;
+      const recips = invite ? wanted : [...new Set([...wanted, ...have])].filter(notBlocked).filter(notHeld);
+      // In-flight guard + backoff (AUDIT-2026-08-10 item C). Skipping while a publish is in flight loses nothing:
+      // a joiner who arrived during the flight is still missing from the envelope on the next tick and is retried.
+      // A REFUSED publish (real bandwidth spent) backs off exponentially, capped at 60s — a joining member must not
+      // wait minutes for their key, and a Pi relay that comes back within a minute keys them; a null (reuseOnly
+      // with no ring — returns immediately, no network) gets no backoff, because the call is free and the retry is
+      // the whole repair.
+      if (pending.current[g.id]) continue;
+      if (Date.now() < (nextTry.current[g.id] || 0)) continue;
+      // THIS church's memo, held for the answer: the console may be on another church by the time it lands,
+      // and the result belongs to the church the publish was made for (the memo is per church — above).
+      const P = pending.current, N = nextTry.current, F = failCount.current, Un = unsealable.current;
+      P[g.id] = true;
+      Promise.resolve(S.publishGroupKey(g.id, recips, { reuseOnly: true, background: true })).then(r => {
+        P[g.id] = false;
+        if (r === false) {
+          const n = (F[g.id] || 0) + 1; F[g.id] = n;
+          N[g.id] = Date.now() + Math.min(60000, 2000 * Math.pow(2, n - 1));
         }
-      }
+        if (r === null || r === false) return;                       // not keyed — nothing recorded, so we come back
+        delete F[g.id]; delete N[g.id];
+        // whoever a SUCCESSFUL publish still left out (a key nobody can seal to, or someone blocked on this device)
+        // goes in `unsealable` — this replaces the old `last` memo. Without it they would look missing on every
+        // roster tick and the whole envelope would be re-sent each time. Cleared when the blocklist changes.
+        const still = S.groupKeyMissing(g.id, missing) || [];
+        if (still.length) Un[g.id] = [...new Set([...(Un[g.id] || []), ...still])];
+        const missed = r && r.skipped;
+        // The console's existing warning channel, rather than a new banner nobody knows to look at.
+        if (missed && missed.length) {
+          try {
+            window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'group key',
+              message: missed.length + ' member(s) could not be given the key for “' + (g.name || 'a group') + '”. They will not be able to read or post in that room. Open the group and save it again to re-send.' } }));
+          } catch (e) {}
+        }
+      }).catch(() => { P[g.id] = false; });   // a throw must not wedge the guard shut
     }
     // #17: re-wrap the church MEDIA key for the current roster too. Unlike groups (keyed at create/edit), the media
     // key is only published at sermon UPLOAD, so a member who joined since is missing from it and can't decrypt
@@ -975,7 +1086,8 @@ function KeyDistributor() {
     // sermon upload screen refuses with "hasn't shared its media key with this account yet". Only this
     // console — the owner's — may publish the envelope, so this is the only place the roster can be added.
     // Same argument, same argument list, as the care key on the line below.
-    if (window.Steward && window.Steward.ensureMediaKeyForMembers) window.Steward.ensureMediaKeyForMembers(memberPubs, stewardRoster);
+    // APPROVED members only (approvedOf, above) — and nobody new while that cannot be told yet.
+    if (approvedPubs && window.Steward && window.Steward.ensureMediaKeyForMembers) window.Steward.ensureMediaKeyForMembers(approvedPubs, stewardRoster);
     // H3: and the CARE key, so every member can open a need and volunteer. Mints only after the
     // subscription has confirmed no envelope exists — never on a cold null, which is what orphaned
     // every sealed need in the first attempt. Stewards are included so a delegated console can re-key.
@@ -986,10 +1098,10 @@ function KeyDistributor() {
     // 2026-09-17 (relay rejected.log, 13:01:48 and 13:01:55, bracketing a seal that worked). The refusal is
     // still reported — quietly, once, by PublishErrorBanner — and a care control the steward TAPS is
     // untouched by this, because it does not come through here.
-    if (window.Steward && window.Steward.ensureCareKeyForMembers) window.Steward.ensureCareKeyForMembers(memberPubs, stewardRoster, { background: true });
+    if (approvedPubs && window.Steward && window.Steward.ensureCareKeyForMembers) window.Steward.ensureCareKeyForMembers(approvedPubs, stewardRoster, { background: true });
     // …and the NAME key. Without this nothing ever mints one, the member app's key list stays empty, and every
     // seal silently no-ops — the whole mechanism present and doing nothing, which is the failure mode this
-    // codebase specialises in.
+    // codebase specialises in. ALL members, pending ones included — they seal their name for the approval queue.
     if (window.Steward && window.Steward.ensureNameKeyForMembers) window.Steward.ensureNameKeyForMembers(memberPubs, stewardRoster);
     // …and any ENCRYPTED ROOM THAT HAS NO KEY AT ALL, which the block above cannot help with: it publishes
     // reuseOnly, and reuseOnly refuses to mint by design, so a room whose key was never published in the first
@@ -1000,7 +1112,7 @@ function KeyDistributor() {
     // on every roster change because it refuses to act unless it is authenticated, asks the relay rather than
     // trusting local state, treats a failed query as unknown rather than absent, and never re-keys a room that
     // already holds encrypted messages.
-    if (window.Steward && window.Steward.ensureGroupKeys) window.Steward.ensureGroupKeys(groups, memberPubs);
+    if (approvedPubs && window.Steward && window.Steward.ensureGroupKeys) window.Steward.ensureGroupKeys(groups, [...new Set([...approvedPubs, ...(stewardRoster || []).filter(notBlocked)])]);
     // `blockedList` IS a dependency — notBlocked closes over it. Without it, unblocking someone re-ran
     // nothing: `unblock` only rewrites the blocklist, so the person came back to the roster but never got the
     // group, care, media or name keys back. They saw empty rooms indefinitely, and no one would think to
@@ -1011,14 +1123,17 @@ function KeyDistributor() {
   // the key waited for some unrelated change to groups or members. That is the 8-minute gap measured on the
   // relay between the first calendar document and the namekey: envelope, and post-fix it is 8 minutes of the
   // calendar refusing to save rather than 8 minutes of writing in the clear.
-  }, [groups, members, stewardRoster, blockedList, unlockTick, church.name, keysReadTick]);   // unlockTick: re-run the whole enrolment when the key comes back after a lock; keysReadTick: when a key read settles
+  // admittedList / joinApproval / approvalKnown: approving someone (or the lists arriving) keys them at once.
+  }, [groups, members, stewardRoster, blockedList, unlockTick, church.name, keysReadTick, admittedList, joinApproval, approvalKnown]);   // unlockTick: re-run the whole enrolment when the key comes back after a lock; keysReadTick: when a key read settles or a room's envelope arrives
   // the media key loads ASYNC (subscribeMediaKey) and may arrive AFTER the roster settles, so the effect above can run
   // before we hold the key. Re-check a couple of times on mount — ensureMediaKeyForMembers is idempotent + cheap.
   React.useEffect(() => {
     const call = () => {
       if (!_kdListsCurrent(membersRef.current, groupsRef.current, stewardRosterRef.current, blockedRef.current)) return;   // see _kdListsCurrent
       const bs = new Set((blockedRef.current || []).map(p => String(p || '').toLowerCase()));
-      if (window.Steward && window.Steward.ensureMediaKeyForMembers) window.Steward.ensureMediaKeyForMembers(membersRef.current.map(m => m.pubkey).filter(p => p && !bs.has(String(p).toLowerCase())), stewardRosterRef.current);
+      const approved = approvedOfRef.current(membersRef.current.map(m => m.pubkey).filter(p => p && !bs.has(String(p).toLowerCase())));
+      if (!approved) return;   // approval lists not in yet — see approvedOf
+      if (window.Steward && window.Steward.ensureMediaKeyForMembers) window.Steward.ensureMediaKeyForMembers(approved, stewardRosterRef.current);
     };
     const t1 = setTimeout(call, 3500), t2 = setTimeout(call, 9000);
     return () => { clearTimeout(t1); clearTimeout(t2); };
@@ -3544,6 +3659,7 @@ function NewGroupModal({ open, onClose }) {
   // the real component in a browser; the source-text test and the device check (which rendered it already
   // open, the one transition that works) both missed it.
   const ngDlgRef = useStewDialog(onClose, open);
+  const ngKr = useStewKeyRecipients();   // the shared approved-members filter (round 3a, HIGH 1)
   if (!open) return null;
   const togglePk = (pk) => setSel(s => { const n = new Set(s); n.has(pk) ? n.delete(pk) : n.add(pk); return n; });
   const create = async () => {
@@ -3560,8 +3676,9 @@ function NewGroupModal({ open, onClose }) {
     // waiting (bounded) for the sign-in. If it cannot, NOTHING is created: this dialog stays open with everything
     // typed, and says why. There is no fallback to a cleartext room.
     if (sealed) {
-      // Recipients: the allowlist (invite) or everyone (open).
-      const recips = inviteOnly ? [...sel] : members.map(m => m.pubkey);
+      // Recipients: the allowlist (invite) or the APPROVED members (open) — never someone still waiting to be let in.
+      const recips = inviteOnly ? [...sel] : ngKr.approved(members.map(m => m.pubkey));
+      if (!recips) { setNote(STEW_KEYS_LOADING); return; }
       setBusy(true); setNote('');
       try { if (window.Steward.keysSettingUp && window.Steward.keysSettingUp('name')) setNote('Setting up your church’s keys…'); } catch (e) {}
       let r = null;
@@ -3706,7 +3823,13 @@ function EditGroupMembersModal({ group, getCurrent, onClose }) {
     const newM = [...new Set([...(Array.isArray(cur.members) ? cur.members : []).filter(pk => !removedByMe.includes(pk)), ...addedByMe])];
     const removed = removedByMe.length > 0;   // someone dropped → rotate the key
     // don't hang forever if the relay never ACKs — surface it so it's not a dead button
-    const guard = setTimeout(() => { setBusy(false); setErr('Couldn’t reach the relay — check your connection and try again.'); }, 8000);
+    // The 8 s is paused while the room's key publish waits its turn behind a background re-key already in flight, and
+    // starts again when its turn comes (round 3c, LOW ii — see publishGroupKey); a 30 s outer bound covers the rest.
+    const unreached = () => { setBusy(false); setErr('Couldn’t reach the relay — check your connection and try again.'); };
+    let guard = setTimeout(unreached, 8000);
+    const outer = setTimeout(unreached, 30000);
+    const keyTurn = { onTurn: () => { clearTimeout(guard); guard = setTimeout(unreached, 8000); } };
+    const keyQueued = () => { clearTimeout(guard); };
     // Keep the team's roster in step with the allowlist. Only when this group HAS a roster — a plain
     // invite-only group is not a team and has no rota or care role to inherit. If the roster document has
     // not arrived yet there is nothing to reconcile against, so we leave it rather than publish a roster we
@@ -3720,7 +3843,7 @@ function EditGroupMembersModal({ group, getCurrent, onClose }) {
     const reconcileRoster = () => {
       try {
         const r = (rosters || []).find(x => x && x.team === group.id);
-        if (!r || !window.Steward.publishRoster) return;
+        if (!r || r._locked || !window.Steward.publishRoster) return;   // locked: not read yet, so nothing to reconcile against
         // ONLY WHAT THE STEWARD CHANGED. roster:<id>.people is what the relay reads to grant careAdmin — a
         // read grant over every care need and every "ask for help" in the church. Reconciling the whole list
         // meant that opening this dialog on a church whose two lists had drifted and pressing Save WITHOUT
@@ -3736,9 +3859,15 @@ function EditGroupMembersModal({ group, getCurrent, onClose }) {
       } catch (e) {}
     };
     Promise.resolve(window.Steward.publishGroup({ ...cur, visibility: 'invite', members: newM }))
-      .then(() => { if (cur.encrypted && window.Steward.publishGroupKey) return window.Steward.publishGroupKey(group.id, newM, { rotate: removed }); })
+      // THE ROOM'S LIST MUST HAVE SAVED BEFORE THE KEY CHANGES (round 3a). This rotated whatever publishGroup said: with
+      // the list unsaved, the relay still names the person removed, and round 2's hold re-reads exactly that list and
+      // re-adds them. No rotation, and the dialog stays open saying so.
+      .then((saved) => {
+        if (!saved || !saved.id) throw new Error('The member list wasn’t saved, so nobody was added or removed and the room’s key was not changed. Check your connection and press Save again.');
+        if (cur.encrypted && window.Steward.publishGroupKey) { keyQueued(); return window.Steward.publishGroupKey(group.id, newM, { rotate: removed, ...keyTurn }); }
+      })
       .then((r) => {
-        clearTimeout(guard);
+        clearTimeout(guard); clearTimeout(outer);
         // AUDIT-2026-08-10 item A, state 6 — the one LEAK-shaped failure here. If the rotate publish didn't
         // land, the OLD envelope stays current on the relay, so anyone just removed KEEPS READING what
         // members post — while this console's own key state has already advanced, so its posts seal under a
@@ -3760,7 +3889,7 @@ function EditGroupMembersModal({ group, getCurrent, onClose }) {
         }
         onClose();
       })
-      .catch((e) => { clearTimeout(guard); setBusy(false); setErr((e && e.message) || 'Couldn’t save members — please try again.'); });
+      .catch((e) => { clearTimeout(guard); clearTimeout(outer); setBusy(false); setErr((e && e.message) || 'Couldn’t save members — please try again.'); });
   };
   const lbl = { fontSize: 11.5, fontWeight: 700, color: 'var(--ink-3)', letterSpacing: '.5px', margin: '0 0 8px' };
   const dlgRef = useStewDialog(() => { if (!busy) onClose(); });   // a11y: Escape + focus (dialog semantics on the panel below)
@@ -4107,7 +4236,8 @@ function DashGroups() {
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
   const cats = window.useStewardCategories ? window.useStewardCategories() : [];   // named containers groups sit in
   const [catsOpen, setCatsOpen] = React.useState(false);
-  const recipsFor = (g) => g.visibility === 'invite' ? (g.members || []) : members.map(m => m.pubkey);
+  const dgKr = useStewKeyRecipients();   // the shared approved-members filter (round 3a, HIGH 1)
+  const recipsFor = (g) => g.visibility === 'invite' ? (g.members || []) : dgKr.approved(members.map(m => m.pubkey));   // null = not known yet
   // seal/unseal a single group. Enabling loses nothing (past plaintext stays); KeyDistributor keys new members after.
   const [sealing, setSealing] = React.useState(null);   // { g, on, busy, err } → styled confirm before (un)sealing
   const toggleEncrypt = (g) => setSealing({ g, on: !g.encrypted });
@@ -4119,13 +4249,20 @@ function DashGroups() {
   const doSeal = async () => {
     const s = sealing; if (!s || s.busy) return;
     if (!s.on) { setSealing(null); window.Steward.publishGroup({ ...s.g, encrypted: false }); return; }
+    const rc = recipsFor(s.g);
+    if (!rc) { setSealing({ ...s, busy: false, err: STEW_KEYS_LOADING }); return; }
     setSealing({ ...s, busy: true, err: '' });
     // don't hang forever if the relay never ACKs — surface it so it's not a dead button (same 8s guard as
     // EditGroupMembersModal.save). A late success after the guard fired still closes the dialog honestly.
-    const guard = setTimeout(() => setSealing(cur => (cur && cur.busy) ? { ...cur, busy: false, err: 'Couldn’t reach the relay — check your connection and try again. Nothing is sealed yet.' } : cur), 8000);
+    // THE 8 s START WHEN THE KEY PUBLISH STARTS (round 3c, LOW ii): it may first wait for a background re-key of this
+    // room already in flight (round 3a, HIGH 2), and that wait is not "couldn't reach the relay". `onTurn` arms it;
+    // a 30 s outer bound covers a turn that never comes.
+    const unreached = () => setSealing(cur => (cur && cur.busy) ? { ...cur, busy: false, err: 'Couldn’t reach the relay — check your connection and try again. Nothing is sealed yet.' } : cur);
+    let guard = null;
+    const outer = setTimeout(unreached, 30000);
     let r = null;
-    try { r = await window.Steward.sealGroup(s.g, recipsFor(s.g)); } catch (e) { r = null; }
-    clearTimeout(guard);
+    try { r = await window.Steward.sealGroup(s.g, rc, { onTurn: () => { if (!guard) guard = setTimeout(unreached, 8000); } }); } catch (e) { r = null; }
+    clearTimeout(guard); clearTimeout(outer);
     if (!r || !r.sealed) {
       // ⚠ 'flag-partial' IS A DIFFERENT SENTENCE FROM 'flag-failed', AND SAYING THE WRONG ONE IS A LIE ABOUT
       // PRIVACY. Both mean the flag write is not done — Steward.sealGroup keeps all-must-accept, and neither
@@ -5461,7 +5598,20 @@ function DashVersePrompt() {
     }
     return verses.map(function(v) { return v.text; }).join(' ');
   };
-  var pvRefs = (vp && vp.ref) ? vp.ref.split('; ').filter(Boolean) : [];
+  // The passages MEMBERS can see right now. This is the same rule as the member app's Today card
+  // (app/screens-today.jsx, vpSchedule/vpActiveRef): with a schedule, only the entries whose time has come; with none,
+  // the prompt's own ref. The console preview used to split `vp.ref` (every passage ever added to the prompt,
+  // scheduled-for-later ones included, plus any older unscheduled one the schedule no longer shows) and so previewed
+  // passages no member could see.
+  var dvpLiveRefs = function(vp, nowSec) {
+    if (!vp) return [];
+    var sch = Array.isArray(vp.schedule) ? vp.schedule : [];
+    var ref = sch.length > 0
+      ? sch.filter(function(s) { return s.at <= nowSec; }).sort(function(a, b) { return a.at - b.at; }).map(function(s) { return s.ref; }).filter(Boolean).join('; ')
+      : (vp.ref || '');
+    return ref ? ref.split('; ').filter(Boolean) : [];
+  };
+  var pvRefs = dvpLiveRefs(vp, Math.floor(Date.now() / 1000));
   var pvSafeIdx = pvIdx < pvRefs.length ? pvIdx : 0;
   var pvRef = pvRefs[pvSafeIdx] || '';
   var pvText = pvRef ? resolveText(pvRef) : null;
@@ -6467,80 +6617,140 @@ const CLEARANCE_RETRY_MS = 60000;
 //               removed delegate is left out simply by not being in this list
 // `dropPk`      Block only: the person leaving. Skips invite-only rooms they were not in, and takes them out of
 //               the member list of the rooms they were in. Omit it when removing a delegate.
-// Returns a promise of the names of the keys that did NOT rotate ([] = all did). The calls themselves are made
+// Returns a promise of the names of the keys that did NOT rotate ([] = all did), with `.pending`: the names of those
+// that are WAITING for their key read to settle (round 3e). The calls are made after a brief wait for the key reads
+// (up to 10 s, below); before round 3e they were made
 // synchronously, before the promise exists. Capability keys (finance, check-in) are not here: they re-key
 // themselves from the steward roster (ensureCapKeyFor), whoever changed it.
-function rotateChurchKeys({ memberPubs, stewardPubs, groups, delegated, dropPk, isBlocked }) {
-  // AWAIT THESE, AND REPORT A FAILURE. Rotation is what actually takes the keys away from the person
-  // being blocked; the block list alone is a note. These were fire-and-forget, so on a church large
-  // enough for the envelope to be refused (measured: ~723 members for care) the steward saw "blocked"
-  // while the member kept the key. Nothing said otherwise.
-  const rotations = [];
-  if (window.Steward.rotateCareKey) rotations.push(Promise.resolve(window.Steward.rotateCareKey(memberPubs, stewardPubs || [])).then(r => ['the care key', r]));
-  // `stewardRoster` — a rotation rewrites the whole recipient list, so without it blocking one member
-  // would take the sermon key away from every delegated steward. Same list rotateCareKey gets above.
-  if (window.Steward.rotateMediaKey) rotations.push(Promise.resolve(window.Steward.rotateMediaKey(memberPubs, stewardPubs || [])).then(r => ['the sermon key', r]));
-  // THE NAME KEY IS IN THIS LIST TOO. It was fired and forgotten one line below while care and media were
-  // awaited, which made it the worst of the three to lose: a blocked member still holding the name key can
-  // read the whole congregation's names. What is reported below (audit of 3bc8905, and this comment
-  // corrected after the audit of 5276297): `false` always, and `null` on an OWNER's console — a rotation that
-  // did not happen leaves the blocked member holding the key. A DELEGATED console's `null` is the deliberate
-  // decline (the owner-only keys) and is said separately below; "nothing to rotate" comes back as an object
-  // ({ rotated: false }), not null, so it stays quiet.
-  //
-  // NOT AS A DELEGATED STEWARD. A delegated console can never read the owner's name-key envelope, so it
-  // holds an EMPTY ring; rotating from empty minted a brand-new single-key ring and published it as the
-  // church's name key. Members accept it (newest wins, steward-authored is allowed) and every sealed name
-  // in the congregation stops opening — the whole roster goes anonymous from one Block tap. steward.src.js
-  // refuses this from its own side too; both guards stay. AUDIT-2026-07-27.
-  if (!delegated && window.Steward.ensureNameKeyForMembers) rotations.push(Promise.resolve(window.Steward.ensureNameKeyForMembers(memberPubs, stewardPubs || [], { rotate: true })).then(r => ['the name key', r]));
-  // ENCRYPTED GROUPS TOO. Blocking rotated the care and media keys and nothing else, so a blocked person's
-  // phone carried on decrypting every future message in every encrypted group — forever. The background
-  // distributor cannot cover it: it only republishes when the recipient set GREW, and a block shrinks it,
-  // so a removal published nothing at all. The only {rotate:true} call site was the invite-only members
-  // editor, which does not exist for an OPEN encrypted group. The contract in steward.src.js says removal
-  // MUST rotate; this is the path that was missing it. AUDIT-2026-07-27.
-  // NOT AS A DELEGATED STEWARD. publishGroupKey always signs with churchSk and always seeded the recipient
-  // set with churchPub — this device's OWN church key. Acting for a church we merely steward, that re-keys
-  // THEIR group under OUR key and left the owning church out of the recipients, locking them out of their
-  // own room. The same commit added exactly this guard to publishProfile and missed it here. AUDIT-2026-07-27.
-  //
-  // ⚠ HALF OF THAT REASON IS GONE AND THE GUARD IS DELIBERATELY KEPT. Since the 2026-09-17 merge,
-  // publishGroupKey seeds from `actingChurch || churchPub`, so the owning church IS a recipient now and
-  // the lockout above can no longer happen (proved in scripts/a-sealed-room-reaches-the-church-that-owns-it
-  // .test.mjs, "the CHURCH can really UNWRAP its own entry"). The guard stays because letting a delegated
-  // console re-key every encrypted room in someone else's church as a side effect of ONE Block tap is a
-  // separate decision, and it is the owner's to make, not a merge's. What it costs today: blocking someone
-  // from a delegated console does not rotate that church's room keys, so the blocked person's phone can
-  // still read future messages in rooms they were in until the owner's own console blocks them too. THAT
-  // IS AN OPEN GAP, reported and not patched here — it needs the owner's call and a phone.
-  const grps = (!delegated && Array.isArray(groups)) ? groups : [];
-  for (const g of grps) {
-    if (!g || !g.encrypted) continue;
-    const invite = g.visibility === 'invite';
-    // BLOCK passes `dropPk` and skips an invite-only room the person was never in (nothing of theirs to rotate).
-    // REMOVING A DELEGATE passes none: they may hold any room's key (a delegate that minted one is in its
-    // envelope), so every encrypted room is re-keyed.
-    if (dropPk && invite && !(g.members || []).includes(dropPk)) continue;
-    const recips = (invite ? (g.members || []).filter(p => p !== dropPk && !isBlocked(p)) : memberPubs);
-    // AWAITED AND REPORTED, like care and the name key beside them. This was fire-and-forget, and it
-    // became the more serious of the two once the member app started REFUSING to send into an encrypted
-    // room without a key (fellowship publishMessage): a rotation that quietly fails no longer leaks the
-    // room to the blocked member — it locks the remaining members out of talking in it, while the app
-    // tells them it will sort itself out shortly. Silence is not survivable in either direction.
-    if (window.Steward.publishGroupKey) rotations.push(Promise.resolve(window.Steward.publishGroupKey(g.id, recips, { rotate: true })).then(r => ['the key for ' + (g.name || 'a group'), r]));
-    // Only a Block takes the person out of an invite-only room's own member list.
-    if (dropPk && invite && window.Steward.publishGroup) window.Steward.publishGroup({ ...g, members: recips });
-  }
-  // AWAITED AFTER THE GROUP LOOP, not before it. This sat above the loop, so the group-key
-  // rotations pushed below were collected into an array nothing was waiting on any more — the exact
-  // fire-and-forget the rest of this handler exists to undo.
-  return Promise.all(rotations).then(rs => {
-    // NULL IS A FAILURE TOO (audit of 3bc8905). A rotation returns null when it did not happen — no trusted
-    // view, an envelope this console is not in, or a name-key Block queued across a church switch — and the
-    // blocked member then still holds that key. Only a DELEGATED console gets null by design (the owner-only
-    // sermon key), and it is told so by block().
-    return rs.filter(([, ok]) => ok === false || (ok == null && !delegated)).map(([what]) => what);
+// `namePubs`    (round 3c, HIGH 1) who gets the new NAME key: every known member who is not blocked and not leaving,
+//               approved or not — a member waiting for approval needs it to seal their name for the queue. The
+//               care, sermon and open-room keys go to `memberPubs` (approved only) instead.
+// `keepKr`, `keepKnown`, `goingPk` (round 3c, HIGH 1) — which CURRENT HOLDERS of the care, sermon and open-room keys
+//               keep them (`keepIf`, below). A rotation takes one person out (`goingPk`: the one blocked, or the
+//               delegate removed); everybody else who holds a key keeps it, so a partial member list, or one that is
+//               only the admitted list while approval is unknown, takes nobody else's key away. Never anyone blocked.
+//               `keepKr` is the caller's useStewKeyRecipients(); `keepKnown` whether its approved() could tell:
+//                 · known — a holder keeps the key if the shared filter approves them (approval off: everyone not
+//                   blocked; on: the admitted). A holder the member list has not delivered yet is not dropped for that.
+//                 · NOT known — every holder keeps it. The rotation then hands the key to nobody new except members on
+//                   the admitted list, and takes it from nobody but the person leaving. A pending member exists only
+//                   when approval is on, and is then either already a holder (unchanged) or not keyed at all; an
+//                   open-join church loses no one.
+//               Built here, not in a helper beside it: every test that runs Block or Remove lifts this function by name.
+// `keepOnly`    (round 3d, LOW 2) the members who stay, as a Set of lower-case pubkeys — passed ONLY when the member
+//               list is FRESH (Steward.listIsFresh: a genuine read of the member documents has settled, not the cache).
+//               A holder not on it has left the church (DOMAIN 2026-09-30: someone who leaves cannot read anything
+//               sealed after they left), and the rotation lets them go, as a Block before round 3c did. While the list
+//               is not fresh it is null, and the floor above stands: a cold console, the policy unknown, loses nobody.
+//               The stewards who stay are added from `stewardPubs`, the church by the engine — neither needs to be on it.
+function rotateChurchKeys({ memberPubs, namePubs, keepKr, keepKnown, keepOnly, goingPk, stewardPubs, groups, delegated, dropPk, isBlocked }) {
+  const _lc = (p) => String(p || '').toLowerCase(), _going = _lc(goingPk);
+  const keepIf = keepKr ? (h) => {
+    if (!h || (_going && _lc(h) === _going) || isBlocked(h)) return false;
+    if (keepOnly && !keepOnly.has(_lc(h))) return false;
+    if (!keepKnown) return true;
+    const a = keepKr.approved([h]);
+    return !!(a && a.length);
+  } : undefined;
+  // WHOM THIS ROTATION TAKES OUT (round 3e): remembered with it if it has to wait — see the engine's PENDINGROT_LS.
+  const drop = [dropPk || goingPk].filter(Boolean);
+  // …and WHY (round 3f, P3): a Block or a delegate's removal — re-checked against the lists before a remembered one runs
+  const why = dropPk ? 'block' : 'remove';
+  // WAIT, BRIEFLY, FOR THE KEY READS (round 3e, MED 1). In a console's first seconds, and after a dropped connection,
+  // the care, sermon and name reads have not settled, and a rotation must not run from what this device last held
+  // (round 3d). Up to 10 s for all three (Steward.keysFresh) covers an ordinary open; past that the engine REMEMBERS the
+  // rotation and runs it when the read settles, and block()/remove() say so.
+  const S0 = window.Steward;
+  const ready = () => !S0.keysFresh || (S0.keysFresh('care') && S0.keysFresh('media') && (delegated || S0.keysFresh('name')));
+  const waited = new Promise((res) => { const t0 = Date.now(); const tick = () => { if (ready() || Date.now() - t0 >= 10000) return res(); setTimeout(tick, 250); }; tick(); });
+  return waited.then(() => {
+    // AWAIT THESE, AND REPORT A FAILURE. Rotation is what actually takes the keys away from the person
+    // being blocked; the block list alone is a note. These were fire-and-forget, so on a church large
+    // enough for the envelope to be refused (measured: ~723 members for care) the steward saw "blocked"
+    // while the member kept the key. Nothing said otherwise.
+    const rotations = [];
+    if (window.Steward.rotateCareKey) rotations.push(Promise.resolve(window.Steward.rotateCareKey(memberPubs, stewardPubs || [], { keepIf, drop, why })).then(r => ['the care key', r, 'care']));
+    // `stewardRoster` — a rotation rewrites the whole recipient list, so without it blocking one member
+    // would take the sermon key away from every delegated steward. Same list rotateCareKey gets above.
+    if (window.Steward.rotateMediaKey) rotations.push(Promise.resolve(window.Steward.rotateMediaKey(memberPubs, stewardPubs || [], { keepIf, drop, why })).then(r => ['the sermon key', r, 'media']));
+    // THE NAME KEY IS IN THIS LIST TOO. It was fired and forgotten one line below while care and media were
+    // awaited, which made it the worst of the three to lose: a blocked member still holding the name key can
+    // read the whole congregation's names. What is reported below (audit of 3bc8905, and this comment
+    // corrected after the audit of 5276297): `false` always, and `null` on an OWNER's console — a rotation that
+    // did not happen leaves the blocked member holding the key. A DELEGATED console's `null` is the deliberate
+    // decline (the owner-only keys) and is said separately below; "nothing to rotate" comes back as an object
+    // ({ rotated: false }), not null, so it stays quiet.
+    //
+    // NOT AS A DELEGATED STEWARD. A delegated console can never read the owner's name-key envelope, so it
+    // holds an EMPTY ring; rotating from empty minted a brand-new single-key ring and published it as the
+    // church's name key. Members accept it (newest wins, steward-authored is allowed) and every sealed name
+    // in the congregation stops opening — the whole roster goes anonymous from one Block tap. steward.src.js
+    // refuses this from its own side too; both guards stay. AUDIT-2026-07-27.
+    if (!delegated && window.Steward.ensureNameKeyForMembers) rotations.push(Promise.resolve(window.Steward.ensureNameKeyForMembers(namePubs || memberPubs, stewardPubs || [], { rotate: true, drop, why })).then(r => ['the name key', r, 'name']));
+    // ENCRYPTED GROUPS TOO. Blocking rotated the care and media keys and nothing else, so a blocked person's
+    // phone carried on decrypting every future message in every encrypted group — forever. The background
+    // distributor cannot cover it: it only republishes when the recipient set GREW, and a block shrinks it,
+    // so a removal published nothing at all. The only {rotate:true} call site was the invite-only members
+    // editor, which does not exist for an OPEN encrypted group. The contract in steward.src.js says removal
+    // MUST rotate; this is the path that was missing it. AUDIT-2026-07-27.
+    // NOT AS A DELEGATED STEWARD. publishGroupKey always signs with churchSk and always seeded the recipient
+    // set with churchPub — this device's OWN church key. Acting for a church we merely steward, that re-keys
+    // THEIR group under OUR key and left the owning church out of the recipients, locking them out of their
+    // own room. The same commit added exactly this guard to publishProfile and missed it here. AUDIT-2026-07-27.
+    //
+    // ⚠ HALF OF THAT REASON IS GONE AND THE GUARD IS DELIBERATELY KEPT. Since the 2026-09-17 merge,
+    // publishGroupKey seeds from `actingChurch || churchPub`, so the owning church IS a recipient now and
+    // the lockout above can no longer happen (proved in scripts/a-sealed-room-reaches-the-church-that-owns-it
+    // .test.mjs, "the CHURCH can really UNWRAP its own entry"). The guard stays because letting a delegated
+    // console re-key every encrypted room in someone else's church as a side effect of ONE Block tap is a
+    // separate decision, and it is the owner's to make, not a merge's. What it costs today: blocking someone
+    // from a delegated console does not rotate that church's room keys, so the blocked person's phone can
+    // still read future messages in rooms they were in until the owner's own console blocks them too. THAT
+    // IS AN OPEN GAP, reported and not patched here — it needs the owner's call and a phone.
+    const grps = (!delegated && Array.isArray(groups)) ? groups : [];
+    for (const g of grps) {
+      if (!g || !g.encrypted) continue;
+      const invite = g.visibility === 'invite';
+      // BLOCK passes `dropPk` and skips an invite-only room the person was never in (nothing of theirs to rotate).
+      // REMOVING A DELEGATE passes none: they may hold any room's key (a delegate that minted one is in its
+      // envelope), so every encrypted room is re-keyed.
+      if (dropPk && invite && !(g.members || []).includes(dropPk)) continue;
+      // OPEN rooms go to the members AND the stewards who remain (round 3a) — as the care and sermon rotations above
+      // already do. Without them a delegate who is not a member lost the room key on every Block and could not key anyone.
+      const recips = (invite ? (g.members || []).filter(p => p !== dropPk && !isBlocked(p)) : [...new Set([...memberPubs, ...(stewardPubs || [])])].filter(p => p !== dropPk && !isBlocked(p)));
+      // AWAITED AND REPORTED, like care and the name key beside them. This was fire-and-forget, and it
+      // became the more serious of the two once the member app started REFUSING to send into an encrypted
+      // room without a key (fellowship publishMessage): a rotation that quietly fails no longer leaks the
+      // room to the blocked member — it locks the remaining members out of talking in it, while the app
+      // tells them it will sort itself out shortly. Silence is not survivable in either direction.
+      if (window.Steward.publishGroupKey) rotations.push(Promise.resolve(window.Steward.publishGroupKey(g.id, recips, invite ? { rotate: true } : { rotate: true, keepIf })).then(r => ['the key for ' + (g.name || 'a group'), r, 'room:' + g.id]));
+      // Only a Block takes the person out of an invite-only room's own member list.
+      if (dropPk && invite && window.Steward.publishGroup) window.Steward.publishGroup({ ...g, members: recips });
+    }
+    // AWAITED AFTER THE GROUP LOOP, not before it. This sat above the loop, so the group-key
+    // rotations pushed below were collected into an array nothing was waiting on any more — the exact
+    // fire-and-forget the rest of this handler exists to undo.
+    return Promise.all(rotations).then(rs => {
+      // NULL IS A FAILURE TOO (audit of 3bc8905). A rotation returns null when it did not happen — no trusted
+      // view, an envelope this console is not in, or a name-key Block queued across a church switch — and the
+      // blocked member then still holds that key. Only a DELEGATED console gets null by design (the owner-only
+      // sermon key), and it is told so by block().
+      const failed = rs.filter(([, ok]) => ok === false || (ok == null && !delegated)).map(([what]) => what);
+      // A ROTATION THAT IS WAITING IS NOT A FAILURE (round 3e, MED 1): `{ pending: true }` — the key's read has not settled
+      // on this connection, the engine has remembered the rotation, and runs it when it does (_runPendingRotations). Said
+      // as such by block() and remove(). And one that FAILED for real is remembered too, so the screen's "Try again"
+      // (Steward.retryPendingRotations) and the next settle run it — the person is already on the Blocked list, which
+      // offers only Unblock, so "block them again" was never something the steward could do.
+      // non-enumerable, so a caller (or a test) comparing the failure list as an array sees only the failures
+      Object.defineProperty(failed, 'pending', { value: rs.filter(([, ok]) => ok && ok.pending).map(([what]) => what), enumerable: false });
+      // EVERY KIND OF KEY, ROOMS INCLUDED (round 3f, P1; audit of 4bb1ed1): a room key that failed was not remembered, so
+      // "Try again" found nothing to run, said "Trying again…" and stuck there. Each rotation carries its kind
+      // ('care' | 'media' | 'name' | 'room:<id>') and every one that failed is remembered with whom it takes out, and why.
+      // …remembered as FAILED (round 3g: the banner offers "Try again" from that), and never on a DELEGATED console (finding 1):
+      // a delegate cannot run these — only the church key can — so a record there could never run.
+      if (!delegated) for (const [, ok, kind] of rs) if (kind && (ok === false || ok == null) && window.Steward.rememberRotation) { try { window.Steward.rememberRotation(kind, drop, why, true); } catch (e) {} }
+      return failed;
+    });
   });
 }
 
@@ -6560,7 +6770,8 @@ function takeOffEveryTeam({ pk, rosters, rotas, services, careTeamId }) {
   const isHim = (pub) => !!pub && String(pub).toLowerCase() === lc;
   const jobs = [];
   for (const r of (Array.isArray(rosters) ? rosters : [])) {
-    if (!r || !r.team || !(r.people || []).some(p => p && isHim(p.pub))) continue;
+    // a LOCKED roster (not readable on this console yet) is never published from — block() reports it instead
+    if (!r || r._locked || !r.team || !(r.people || []).some(p => p && isHim(p.pub))) continue;
     const people = (r.people || []).filter(p => !(p && isHim(p.pub)));
     jobs.push(Promise.resolve(S.publishRoster(r.team, { roles: r.roles || [], people, pods: r.pods || [] }))
       .then((ok) => {
@@ -7066,6 +7277,7 @@ function DashMembers() {
   // losing the point of it. Anyone who has not set a name is called out separately — "Anonymous" is exactly
   // the row a steward would want to look at twice.
   const [confirmAdmitAll, setConfirmAdmitAll] = React.useState(false);
+  const dmKr = useStewKeyRecipients();   // the shared approved-members filter (round 3a, HIGH 1) — Block rotates to it
   const [admitAllBusy, setAdmitAllBusy] = React.useState(false);
   const [admitAllErr, setAdmitAllErr] = React.useState('');
   const admitAll = async () => {
@@ -7083,6 +7295,48 @@ function DashMembers() {
   const [showBlocked, setShowBlocked] = React.useState(false);
   const [confirmBlock, setConfirmBlock] = React.useState(null);
   const [blockWarn, setBlockWarn] = React.useState('');   // a rotation that did not land — the member may still hold the key
+  // THE BANNER SAYS WHAT THE ENGINE'S RECORDS SAY (round 3g). A Block or a removal whose keys did not all change at once
+  // keeps { pk, verb, pre, post } here; the words are worked out on every render from Steward.rotationStatus(pk) — per
+  // key: waiting, failed, done, cleared (the reason went away elsewhere), member (a removed delegate who is still a member
+  // keeps member access), gone (the room no longer exists), owner (only the owner's console can) — and re-read whenever the
+  // engine says something changed (`steward-rotations`). "Try again" shows "Trying again…" until that signal, which every
+  // run of the engine's runner ends with. A plain string is a one-off warning, as before.
+  const [blockWarnTick, setBlockWarnTick] = React.useState(0);
+  React.useEffect(() => {
+    if (!window.addEventListener) return undefined;
+    const f = () => { setBlockWarnTick(t => t + 1); setBlockWarn(cur => (cur && cur.trying) ? { ...cur, trying: false } : cur); };
+    window.addEventListener('steward-rotations', f);
+    return () => window.removeEventListener('steward-rotations', f);
+  }, []);
+  const blockWarnView = (() => {
+    const w = blockWarn;
+    if (!w || typeof w === 'string' || !w.pk) return w || null;
+    if (w.trying) return { tone: 'wait', text: 'Trying again…' };
+    // an engine without rotationStatus (or a status it could not give) still gets the outcome the Block itself saw
+    const st0 = (window.Steward.rotationStatus && window.Steward.rotationStatus(w.pk)) || null;
+    const st = (st0 && Array.isArray(st0.waiting)) ? st0 : { waiting: (w.pendKinds || []), failed: (w.failedKinds || []), done: [], cleared: [], member: [], gone: [], owner: [] };
+    const roomName = (k) => ((groups || []).find(g => g && g.id === k.slice(5)) || {}).name || 'a room';
+    const keyOf = (k) => k.indexOf('room:') === 0 ? 'the key for ' + roomName(k) : ({ care: 'the care key', media: 'the sermon key', name: 'the name key' })[k] || k;
+    const accessOf = (k) => k.indexOf('room:') === 0 ? 'the room “' + roomName(k) + '”' : ({ care: 'care notes', media: 'sermons', name: 'names' })[k] || k;
+    const L = (ks, f) => ks.map(f).join(' and ');
+    const head = 'Blocked';
+    const pre = w.pre || '', post = w.post || '';
+    if (st.owner.length) return { tone: 'fail', text: pre + head + ', but only the church owner’s console can change ' + L(st.owner, keyOf) + '.' + post };
+    if (st.failed.length) return { tone: 'fail', retry: true, text: pre + head + ', but this console could not change ' + L(st.failed, keyOf) + ' yet, so they may still be able to open things sealed with ' + (st.failed.length > 1 ? 'them' : 'it') + '.' + post };
+    if (st.waiting.length) return { tone: 'wait', text: pre + head + '. Their access to ' + L(st.waiting, accessOf) + ' will be removed as soon as this console finishes connecting.' + post };
+    const parts = [];
+    if (st.done.length) parts.push('Done — they can no longer open anything sealed from now on. What they could already open stays open.');
+    if (st.cleared.length) parts.push((w.verb === 'block' ? 'They were unblocked on another console' : 'They were made a steward again on another console') + ', so nothing more was changed for ' + L(st.cleared, accessOf) + '.');
+    if (st.member.length) parts.push('They are also a member, so they keep ' + L(st.member, accessOf) + '.');
+    if (st.gone.length) parts.push(L(st.gone, accessOf).replace(/^t/, 'T') + (st.gone.length > 1 ? ' no longer exist' : ' no longer exists') + ', so there was no key left to change.');
+    if (!parts.length) return (pre || post) ? { tone: 'ok', text: (pre + post).trim() } : null;
+    return { tone: 'ok', text: pre + parts.join(' ') + post };
+  })();
+  React.useEffect(() => {   // a confirmation is a moment (owner, "confirmations are moments"); a failure or a wait stays
+    if (!blockWarnView || blockWarnView.tone !== 'ok' || !blockWarn || !blockWarn.pk) return undefined;
+    const t = setTimeout(() => setBlockWarn(cur => (cur && cur.pk && !cur.trying) ? null : cur), 8000);
+    return () => clearTimeout(t);
+  }, [blockWarnView && blockWarnView.tone, blockWarnTick]);
   const [q, setQ] = React.useState('');
   const ql = q.trim().toLowerCase();
   const matchQ = (m) => !ql || (m.name || '').toLowerCase().includes(ql) || (m.nip05 || '').toLowerCase().includes(ql) || (m.npub || '').toLowerCase().includes(ql);
@@ -7119,10 +7373,18 @@ function DashMembers() {
         ? 'Couldn’t save the block on every relay, so ' + who + ' may not be blocked everywhere yet. This console holds them as blocked and has changed the keys; press Block again, or check your relay.'
         : '';
       if (saveNote) setBlockWarn(saveNote);
-      const remaining = members.map(m => m.pubkey).filter(p => p && p.toLowerCase() !== String(pk || '').toLowerCase() && !isBlocked(p));
+      // APPROVED members only (round 3a, HIGH 1) — and when that cannot be told yet, the members on the admitted list:
+      // fewer people, never one still waiting. A Block must not wait for a list; the distributor adds the rest.
+      // …but the NAME key goes to everyone who stays, approved or not (round 3c, HIGH 1), and every current holder of the
+      // other keys who stays keeps them — see rotateChurchKeys (`keepIf`).
+      const everyone = members.map(m => m.pubkey).filter(p => p && p.toLowerCase() !== String(pk || '').toLowerCase() && !isBlocked(p));
+      const known = dmKr.approved(everyone);
+      const remaining = known || dmKr.orAdmitted(everyone);
       // AWAITED, AND A FAILURE REPORTED: rotation is what actually takes the keys away from the person being
       // blocked. The body, and every reason it is written the way it is, is rotateChurchKeys (above DashMembers).
-      const rotating = rotateChurchKeys({ memberPubs: remaining, stewardPubs: stewardRoster || [], groups, delegated, dropPk: pk, isBlocked });
+      // …and once the member list is a genuine read (not the cache), a holder no longer on it has LEFT and is let go (round 3d)
+      const keepOnly = (window.Steward.listIsFresh && window.Steward.listIsFresh(members)) ? new Set(everyone.map(p => String(p).toLowerCase())) : null;
+      const rotating = rotateChurchKeys({ memberPubs: remaining, namePubs: everyone, keepKr: dmKr, keepKnown: !!known, keepOnly, goingPk: pk, stewardPubs: stewardRoster || [], groups, delegated, dropPk: pk, isBlocked });
       // ...and off every team, the care list and the future rota slots - only for a Block that LANDED (`ok === false` may
       // be only partly saved, and unblocking does not put anyone back). See takeOffEveryTeam.
       const teams = ok === false ? Promise.resolve([]) : takeOffEveryTeam({ pk, rosters: rostersAll, rotas: rotasAll, services: servicesAll, careTeamId });
@@ -7142,10 +7404,24 @@ function DashMembers() {
       if (window.Steward.ensureCapKeyFor) for (const kind of ['finance', 'checkin']) {
         try { Promise.resolve(window.Steward.ensureCapKeyFor(kind, stewardRoster || [], (window.Steward.stewardCaps && window.Steward.stewardCaps()) || {})).catch(() => {}); } catch (e) {}
       }
+      // A TEAM THIS CONSOLE CANNOT READ YET (its roster is sealed under a name key that has not landed) cannot be
+      // checked or rewritten, so it is counted and said — never silently skipped, never published from empty.
+      const lockedTeams = ok === false ? 0 : (Array.isArray(rostersAll) ? rostersAll : []).filter(r => r && r._locked && r.team).length;
+      const lockedNote = lockedTeams ? 'Couldn\u2019t remove them from ' + lockedTeams + ' team' + (lockedTeams === 1 ? '' : 's') + ' \u2014 try again shortly.' : '';
       return Promise.all([rotating, teams, clearing]).then(([failed, teamFailed, clearFailed]) => {
         const offFailed = [...teamFailed, ...clearFailed];
-        const teamNote = offFailed.length ? 'They are blocked, but this console could not take them off ' + offFailed.join(' or ') + ' \u2014 take them off by hand.' : '';
-        if (failed.length) setBlockWarn((saveNote ? saveNote + ' It also could not change ' + failed.join(' or ') + ', so they may still be able to open things sealed with it.' : 'Removed them from the church, but could not change ' + failed.join(' or ') + '. They may still be able to open things sealed with it. Try blocking them again — and if it keeps failing, your church may have grown past what one key document can hold.') + (teamNote ? ' ' + teamNote : ''));
+        const teamNote = [offFailed.length ? 'They are blocked, but this console could not take them off ' + offFailed.join(' or ') + ' \u2014 take them off by hand.' : '', lockedNote].filter(Boolean).join(' ');
+        // WHAT IS TRUE, SAID (round 3e, MED 1; audit of b102dc6). This said "Try blocking them again — and if it keeps
+        // failing, your church may have grown past what one key document can hold": the person is already on the
+        // Blocked list, which offers only Unblock, and the cause was almost always a key read still settling, not size.
+        //   · a key WAITING for its read (failed.pending): the engine runs it when the read settles — say that, and the
+        //     confirmation follows (the engine records it — blockWarnView, round 3g);
+        //   · a key that truly could not change: say so, with "Try again" (Steward.retryPendingRotations — rotateChurchKeys
+        //     remembered it).
+        // the words come from the engine's records for this person (round 3g) — see blockWarnView
+        const pend = failed.pending || [];
+        const K = { 'the care key': 'care', 'the sermon key': 'media', 'the name key': 'name' }, kindOf = (w) => K[w] || ('room:' + (((groups || []).find(g => g && w === 'the key for ' + (g.name || 'a group')) || {}).id || w));
+        if (failed.length || pend.length) setBlockWarn({ pk, verb: 'block', pre: saveNote ? saveNote + ' ' : '', post: teamNote ? ' ' + teamNote : '', failedKinds: failed.map(kindOf), pendKinds: pend.map(kindOf) });
         else if (teamNote) setBlockWarn((saveNote ? saveNote + ' ' : '') + teamNote);
       });
     }).catch(() => {});
@@ -7404,9 +7680,10 @@ function DashMembers() {
           which has already closed by the time the publish resolves — the same mistake that made the safety
           check's warning unreachable three times. It stays until dismissed: the steward believes the person
           is out, and this is the one thing that says otherwise. */}
-      {blockWarn ? (
-        <div role="alert" style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '11px 13px', borderRadius: 12, marginBottom: 12, background: 'var(--clay-soft)', border: '1px solid var(--clay)' }}>
-          <div style={{ flex: 1, minWidth: 0, fontSize: 13, lineHeight: 1.45, color: 'var(--ink)' }}>{blockWarn}</div>
+      {blockWarnView ? (
+        <div role={(blockWarnView.tone === 'ok' || blockWarnView.tone === 'wait') ? 'status' : 'alert'} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '11px 13px', borderRadius: 12, marginBottom: 12, background: (blockWarnView.tone === 'ok' || blockWarnView.tone === 'wait') ? 'var(--surface-2)' : 'var(--clay-soft)', border: '1px solid ' + ((blockWarnView.tone === 'ok' || blockWarnView.tone === 'wait') ? 'var(--line)' : 'var(--clay)') }}>
+          <div style={{ flex: 1, minWidth: 0, fontSize: 13, lineHeight: 1.45, color: 'var(--ink)' }}>{typeof blockWarnView === 'string' ? blockWarnView : blockWarnView.text}
+            {blockWarnView.retry && window.Steward.retryPendingRotations ? <> <button onClick={() => { setBlockWarn(cur => (cur && cur.pk) ? { ...cur, trying: true } : cur); try { window.Steward.retryPendingRotations(); } catch (e) {} }} style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 13, textDecoration: 'underline', fontFamily: 'var(--font-ui)' }}>Try again</button></> : null}</div>
           <button onClick={() => setBlockWarn('')} aria-label="Dismiss" style={{ flexShrink: 0, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', fontSize: 16, lineHeight: 1, padding: 2 }}>×</button>
         </div>
       ) : null}
@@ -9096,6 +9373,48 @@ function DashStewardsPanel({ church }) {
   const blockedList = window.useStewardBlocked ? window.useStewardBlocked() : [];
   const isBlockedHere = (pk) => (blockedList || []).some(p => String(p || '').toLowerCase() === String(pk || '').toLowerCase());
   const [removeNote, setRemoveNote] = React.useState(null);   // { tone: 'ok' | 'fail', text } — what removing someone did
+  // THE BANNER SAYS WHAT THE ENGINE'S RECORDS SAY (round 3g). A Block or a removal whose keys did not all change at once
+  // keeps { pk, verb, pre, post } here; the words are worked out on every render from Steward.rotationStatus(pk) — per
+  // key: waiting, failed, done, cleared (the reason went away elsewhere), member (a removed delegate who is still a member
+  // keeps member access), gone (the room no longer exists), owner (only the owner's console can) — and re-read whenever the
+  // engine says something changed (`steward-rotations`). "Try again" shows "Trying again…" until that signal, which every
+  // run of the engine's runner ends with. A plain string is a one-off warning, as before.
+  const [removeNoteTick, setRemoveNoteTick] = React.useState(0);
+  React.useEffect(() => {
+    if (!window.addEventListener) return undefined;
+    const f = () => { setRemoveNoteTick(t => t + 1); setRemoveNote(cur => (cur && cur.trying) ? { ...cur, trying: false } : cur); };
+    window.addEventListener('steward-rotations', f);
+    return () => window.removeEventListener('steward-rotations', f);
+  }, []);
+  const removeNoteView = (() => {
+    const w = removeNote;
+    if (!w || typeof w === 'string' || !w.pk) return w || null;
+    if (w.trying) return { tone: 'wait', text: 'Trying again…' };
+    // an engine without rotationStatus (or a status it could not give) still gets the outcome the Block itself saw
+    const st0 = (window.Steward.rotationStatus && window.Steward.rotationStatus(w.pk)) || null;
+    const st = (st0 && Array.isArray(st0.waiting)) ? st0 : { waiting: (w.pendKinds || []), failed: (w.failedKinds || []), done: [], cleared: [], member: [], gone: [], owner: [] };
+    const roomName = (k) => ((groups || []).find(g => g && g.id === k.slice(5)) || {}).name || 'a room';
+    const keyOf = (k) => k.indexOf('room:') === 0 ? 'the key for ' + roomName(k) : ({ care: 'the care key', media: 'the sermon key', name: 'the name key' })[k] || k;
+    const accessOf = (k) => k.indexOf('room:') === 0 ? 'the room “' + roomName(k) + '”' : ({ care: 'care notes', media: 'sermons', name: 'names' })[k] || k;
+    const L = (ks, f) => ks.map(f).join(' and ');
+    const head = w.who + ' is no longer a steward';
+    const pre = w.pre || '', post = w.post || '';
+    if (st.owner.length) return { tone: 'fail', text: pre + head + ', but only the church owner’s console can change ' + L(st.owner, keyOf) + '.' + post };
+    if (st.failed.length) return { tone: 'fail', retry: true, text: pre + head + ', but this console could not change ' + L(st.failed, keyOf) + ' yet, so they may still be able to open things sealed with ' + (st.failed.length > 1 ? 'them' : 'it') + '.' + post };
+    if (st.waiting.length) return { tone: 'wait', text: pre + head + '. Their access to ' + L(st.waiting, accessOf) + ' will be removed as soon as this console finishes connecting.' + post };
+    const parts = [];
+    if (st.done.length) parts.push('Done — they can no longer open anything sealed from now on. What they could already open stays open.');
+    if (st.cleared.length) parts.push((w.verb === 'block' ? 'They were unblocked on another console' : 'They were made a steward again on another console') + ', so nothing more was changed for ' + L(st.cleared, accessOf) + '.');
+    if (st.member.length) parts.push('They are also a member, so they keep ' + L(st.member, accessOf) + '.');
+    if (st.gone.length) parts.push(L(st.gone, accessOf).replace(/^t/, 'T') + (st.gone.length > 1 ? ' no longer exist' : ' no longer exists') + ', so there was no key left to change.');
+    if (!parts.length) return (pre || post) ? { tone: 'ok', text: (pre + post).trim() } : null;
+    return { tone: 'ok', text: pre + parts.join(' ') + post };
+  })();
+  React.useEffect(() => {   // a confirmation is a moment (owner, "confirmations are moments"); a failure or a wait stays
+    if (!removeNoteView || removeNoteView.tone !== 'ok' || !removeNote || !removeNote.pk) return undefined;
+    const t = setTimeout(() => setRemoveNote(cur => (cur && cur.pk && !cur.trying) ? null : cur), 8000);
+    return () => clearTimeout(t);
+  }, [removeNoteView && removeNoteView.tone, removeNoteTick]);
   const [adding, setAdding] = React.useState(false);
   const [q, setQ] = React.useState('');
   const [code, setCode] = React.useState('');
@@ -9180,6 +9499,7 @@ function DashStewardsPanel({ church }) {
   //
   // Rotation only protects what is sealed from now on — what they could already open stays open — and a delegate
   // who is ALSO a member keeps member-level keys (to put someone out of the church, block them). The note says both.
+  const spKr = useStewKeyRecipients();   // the shared approved-members filter (round 3a, HIGH 1)
   const remove = (pk) => {
     setConfirmRemove(null); setRemoveNote(null);
     const next = stewards.filter(p => p !== pk);
@@ -9193,11 +9513,18 @@ function DashStewardsPanel({ church }) {
       // A removal that did not land rotates nothing: they are still a steward, and re-keying around a steward
       // the relay still honours would only lock out the wrong person.
       if (!ok) { setRemoveNote({ tone: 'fail', text: 'Couldn’t remove ' + who + ' — the relay didn’t accept it, so they are STILL a steward and nothing was re-keyed. Try again.' }); return null; }
-      const memberPubs = members.map(m => m.pubkey).filter(p => p && !isBlocked(p));
-      return rotateChurchKeys({ memberPubs, stewardPubs: next, groups, delegated: false, isBlocked }).then((failed) => {
+      const everyone = members.map(m => m.pubkey).filter(p => p && !isBlocked(p));
+      const known = spKr.approved(everyone);
+      const memberPubs = known || spKr.orAdmitted(everyone);   // approved only — see stewKeyRecipients
+      // the NAME key to everyone who stays, and every current holder but the removed delegate keeps the rest (round 3c, HIGH 1)
+      const keepOnly = (window.Steward.listIsFresh && window.Steward.listIsFresh(members)) ? new Set(everyone.map(p => String(p).toLowerCase())) : null;   // round 3d — see rotateChurchKeys
+      return rotateChurchKeys({ memberPubs, namePubs: everyone, keepKr: spKr, keepKnown: !!known, keepOnly, goingPk: pk, stewardPubs: next, groups, delegated: false, isBlocked }).then((failed) => {
         const tail = alsoMember ? ' They are also a member, so they keep what members can open — to put them out of the church, block them from Members.' : '';
-        if (failed.length) setRemoveNote({ tone: 'fail', text: who + ' is no longer a steward, but this console could not change ' + failed.join(' or ') + ', so they may still be able to open things sealed with it. Try removing them again.' + tail });
-        else setRemoveNote({ tone: 'ok', text: who + ' is no longer a steward, and the church’s keys have been changed so they can’t open anything sealed from now on. What they could already open stays open.' + tail }); setTimeout(() => setRemoveNote(n => (n && n.tone === 'ok') ? null : n), 8000);   // a confirmation is a moment; a failure stays
+        // what is true (round 3e, MED 1) — see block(): they are off the roster, so "try removing them again" was not possible
+        const pend = failed.pending || [];
+        const K = { 'the care key': 'care', 'the sermon key': 'media', 'the name key': 'name' }, kindOf = (w) => K[w] || ('room:' + (((groups || []).find(g => g && w === 'the key for ' + (g.name || 'a group')) || {}).id || w));
+        if (failed.length || pend.length) setRemoveNote({ pk, who, verb: 'remove', post: tail, failedKinds: failed.map(kindOf), pendKinds: pend.map(kindOf) });   // words from the engine's records (round 3g) — see removeNoteView
+        else setRemoveNote({ tone: 'ok', text: who + ' is no longer a steward, and the church’s keys have been changed so they can’t open anything sealed from now on. What they could already open stays open.' + tail }); setTimeout(() => setRemoveNote(n => (n && n.tone === 'ok' && !n.pending) ? null : n), 8000);   // a confirmation is a moment; a failure — or a wait — stays
       });
     }).catch(() => { setRemoveNote({ tone: 'fail', text: 'Couldn’t finish removing ' + who + ' — the relay could not be reached. Check whether they are still listed, and try again.' }); });
   };
@@ -9309,9 +9636,10 @@ function DashStewardsPanel({ church }) {
           </div>
         ))}
       </div> : null}
-      {removeNote ? (
-        <div role={removeNote.tone === 'fail' ? 'alert' : 'status'} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 12px', borderRadius: 12, marginBottom: 12, background: removeNote.tone === 'fail' ? 'var(--clay-soft)' : 'var(--surface-2)', border: '1px solid ' + (removeNote.tone === 'fail' ? 'var(--clay)' : 'var(--line)') }}>
-          <div style={{ flex: 1, minWidth: 0, fontSize: 13, lineHeight: 1.45, color: 'var(--ink)' }}>{removeNote.text}</div>
+      {removeNoteView ? (
+        <div role={removeNoteView.tone === 'fail' ? 'alert' : 'status'} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 12px', borderRadius: 12, marginBottom: 12, background: removeNoteView.tone === 'fail' ? 'var(--clay-soft)' : 'var(--surface-2)', border: '1px solid ' + (removeNoteView.tone === 'fail' ? 'var(--clay)' : 'var(--line)') }}>
+          <div style={{ flex: 1, minWidth: 0, fontSize: 13, lineHeight: 1.45, color: 'var(--ink)' }}>{removeNoteView.text}
+            {removeNoteView.retry && window.Steward.retryPendingRotations ? <> <button onClick={() => { setRemoveNote(cur => (cur && cur.pk) ? { ...cur, trying: true } : cur); try { window.Steward.retryPendingRotations(); } catch (e) {} }} style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 13, textDecoration: 'underline', fontFamily: 'var(--font-ui)' }}>Try again</button></> : null}</div>
           <button onClick={() => setRemoveNote(null)} aria-label="Dismiss" style={{ flexShrink: 0, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', fontSize: 16, lineHeight: 1, padding: 2 }}>×</button>
         </div>
       ) : null}
@@ -9593,6 +9921,7 @@ function DashSermons() {
   React.useEffect(() => { setSermons([]); setSermonsLoaded(false); }, [_sermIdv]);
   React.useEffect(() => (window.Steward.subscribeSermons ? window.Steward.subscribeSermons(list => { setSermons(list || []); setSermonsLoaded(true); }) : undefined), [conn, _sermIdv]);
   React.useEffect(() => (window.Steward.subscribeMediaKey ? window.Steward.subscribeMediaKey() : undefined), [conn, _sermIdv]);
+  const smKr = useStewKeyRecipients();   // the shared approved-members filter (round 3a, HIGH 1) — the first upload mints the sermon key
   React.useEffect(() => (window.Steward.subscribePinnedSermon ? window.Steward.subscribePinnedSermon(p => setPinnedId(p && p.id)) : undefined), [conn, _sermIdv]);
   // Featured -> tap unfeatures. Not featured -> tap opens the choice; the steward decides EVERY time whether
   // members are notified (no default). `notify:false` is the quiet pin; the notifying one passes `true`.
@@ -9668,7 +9997,9 @@ function DashSermons() {
     setUpBusy(true); setUpMsg((bigVid ? '⚠ Large video (' + fmtSize(f.size) + ') — slow to upload' + (encOn ? ' + play' : '') + '. ' : '') + (encOn ? 'Encrypting + uploading ' : 'Uploading ') + f.name + '…');
     let ok = false;
     try {
-      const encFn = (encOn && window.Steward.mediaEncryptor) ? await window.Steward.mediaEncryptor(members.map(m => m.pubkey).filter(Boolean)) : undefined;
+      // APPROVED members only (round 3a): the first upload MINTS the sermon key and wraps it to this list. When approval
+      // cannot be told yet, the admitted ones — fewer, never someone waiting; the distributor adds the rest.
+      const encFn = (encOn && window.Steward.mediaEncryptor) ? await window.Steward.mediaEncryptor(smKr.orAdmitted(members.map(m => m.pubkey).filter(Boolean))) : undefined;
       const mirrors = mirrorHosts.split(',').map(s => s.trim()).filter(Boolean);
       const b = await window.Steward.uploadBlob(f, encFn, mirrors);
       // The blob store is content-addressed and deduped itself; it was the DOC that was minted twice, under a
@@ -9753,15 +10084,18 @@ function DashSermons() {
                 meet the refusal only once they press Save. */}
             <button onClick={() => { if (_churchOnly) { setUpMsg('✗ ' + SERMON_OWNER_ONLY); return; } setEditing(s); }} aria-disabled={_churchOnly || undefined} title={_churchOnly ? SERMON_OWNER_ONLY : 'Edit name & details'} aria-label="Edit sermon" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '8px 10px', minWidth: 40, minHeight: 40, boxSizing: 'border-box', alignItems: 'center', justifyContent: 'center', cursor: _churchOnly ? 'not-allowed' : 'pointer', opacity: _churchOnly ? 0.55 : 1, color: 'var(--ink-3)', display: 'flex' }}><Icon name={_churchOnly ? 'lock' : 'pen'} size={14} color="currentColor" /></button>
             <button onClick={() => togglePin(s)} title={pinnedId === s.id ? 'Pinned to members’ Today — tap to unpin' : 'Feature on members’ Today'} style={{ border: '1px solid ' + (pinnedId === s.id ? 'var(--clay)' : 'var(--line)'), background: pinnedId === s.id ? 'var(--clay)' : 'var(--surface)', borderRadius: 9, padding: '8px 10px', minHeight: 40, boxSizing: 'border-box', alignItems: 'center', justifyContent: 'center', gap: 5, cursor: 'pointer', color: pinnedId === s.id ? '#fff' : 'var(--ink-2)', fontSize: 12.5, fontWeight: 700, fontFamily: 'var(--font-ui)', display: 'flex' }}><Icon name="pin" size={14} color="currentColor" />{pinnedId === s.id ? 'Featured' : 'Feature'}</button>
+            {/* NO "This can’t be undone" OVER SOMETHING THAT CANNOT HAPPEN. The confirmation sheet used to
+                open on a delegated console and take the press, and only then did the engine refuse. */}
+            <button onClick={() => { if (_churchOnly) { setUpMsg('✗ ' + SERMON_REMOVE_OWNER_ONLY); return; } setPendingDelete(s); }} aria-disabled={_churchOnly || undefined} title={_churchOnly ? SERMON_REMOVE_OWNER_ONLY : 'Remove'} aria-label="Remove sermon" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '8px 10px', minWidth: 40, minHeight: 40, boxSizing: 'border-box', alignItems: 'center', justifyContent: 'center', cursor: _churchOnly ? 'not-allowed' : 'pointer', opacity: _churchOnly ? 0.55 : 1, color: 'var(--ink-3)', display: 'flex' }}><Icon name={_churchOnly ? 'lock' : 'trash'} size={14} color="currentColor" /></button>
+            {/* LAST CHILD ON PURPOSE. The row wraps (flex-wrap), and this block is 100% wide: placed between Feature and
+                Remove it forced a line break there and left the Remove button alone on a third line on a phone. */}
             {featureChoiceId === s.id && pinnedId !== s.id ? (
-              <div style={{ flexBasis: '100%', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <div data-testid="feature-choice" style={{ flexBasis: '100%', display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)' }}>Tell members?</span>
                 <button onClick={() => doFeature(s, true)} className="sk-btn sk-btn--clay" style={{ fontSize: 12.5, minHeight: 40 }}>Feature and notify</button>
                 <button onClick={() => doFeature(s, false)} className="sk-btn sk-btn--ghost" style={{ fontSize: 12.5, minHeight: 40 }}>Feature quietly</button>
               </div>
             ) : null}
-            {/* NO "This can’t be undone" OVER SOMETHING THAT CANNOT HAPPEN. The confirmation sheet used to
-                open on a delegated console and take the press, and only then did the engine refuse. */}
-            <button onClick={() => { if (_churchOnly) { setUpMsg('✗ ' + SERMON_REMOVE_OWNER_ONLY); return; } setPendingDelete(s); }} aria-disabled={_churchOnly || undefined} title={_churchOnly ? SERMON_REMOVE_OWNER_ONLY : 'Remove'} aria-label="Remove sermon" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '8px 10px', minWidth: 40, minHeight: 40, boxSizing: 'border-box', alignItems: 'center', justifyContent: 'center', cursor: _churchOnly ? 'not-allowed' : 'pointer', opacity: _churchOnly ? 0.55 : 1, color: 'var(--ink-3)', display: 'flex' }}><Icon name={_churchOnly ? 'lock' : 'trash'} size={14} color="currentColor" /></button>
           </div>))}</div> : null}
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: 'var(--ink-2)', margin: '0 0 10px', cursor: 'pointer', lineHeight: 1.4 }}>
           <input type="checkbox" checked={encOn} onChange={e => setEncOn(e.target.checked)} style={{ flexShrink: 0 }} />
@@ -10257,7 +10591,8 @@ function DashFeaturesPanel({ church, show = null }) {
   const encTeams = (allGroups || []).filter(g => g && g.kind === 'team');
   const encOn = f.encryptComms !== false && encUnsealed.length === 0;
   const [confirmEnc, setConfirmEnc] = React.useState(false);
-  const encRecips = (g) => g.visibility === 'invite' ? (g.members || []) : allMembers.map(m => m.pubkey);
+  const encKr = useStewKeyRecipients();   // the shared approved-members filter (round 3a, HIGH 1)
+  const encRecips = (g) => g.visibility === 'invite' ? (g.members || []) : encKr.approved(allMembers.map(m => m.pubkey));   // null = not known yet
   // AUDIT-2026-08-10 item A. This sweep used to fire flag+key for every group at once and read no results:
   // any subset that failed became dead rooms en masse, silently. Now each group goes through
   // Steward.sealGroup (key first, flag second, both awaited) — SEQUENTIALLY on purpose, because a Pi relay
@@ -10266,11 +10601,20 @@ function DashFeaturesPanel({ church, show = null }) {
   // group sealed — so "Encrypt all: on" never overstates what happened.
   const doEncryptAll = async () => {
     setConfirmEnc(false);
+    // NOTHING IS SEALED TO A LIST THAT CANNOT BE TOLD YET (round 3a): refuse the whole sweep, said once.
+    if ((allGroups || []).some(g => g && g.kind !== 'team' && !g.encrypted && g.visibility !== 'invite') && !encRecips({ visibility: 'open' })) {
+      try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'group key', message: STEW_KEYS_LOADING } })); } catch (e) {}
+      return;
+    }
     // THREE OUTCOMES, NOT TWO. `half` is the same distinction the seal dialog gained on 2026-09-17: a flag
     // write that reached SOME relays leaves the room sealed on those and cleartext on the rest, so calling it
     // "stays unencrypted" is untrue of the relay the church actually lives on. It still is not success —
     // "Encrypt all" stays off for it, exactly as for a total failure.
     const failed = [], partial = [], half = [];
+    // THE LISTS CAN GO STALE PART-WAY THROUGH (round 3c, LOW iii): a reconnect closes the subscriptions the shared filter
+    // reads, encRecips() then answers null, and sealGroup(g, null) sealed the room to the church and stewards alone.
+    // The sweep stops sealing at the first open room it cannot name members for; the rest are named, and stay as they are.
+    const notYet = [];
     for (const g of allGroups) {
       // Teams are skipped DELIBERATELY — they have no encryption control of their own, and encRecips() below
       // would seal a team room to every member of the church rather than to its roster, which is the wrong
@@ -10279,13 +10623,17 @@ function DashFeaturesPanel({ church, show = null }) {
       // sweep, 2026-08-28: with the switch ON, a team room was still storing messages in clear, exactly as
       // this line intends and the copy denied.
       if (g.kind === 'team' || g.encrypted) continue;
+      if (notYet.length) { notYet.push(g.name || 'a group'); continue; }
+      const rc = encRecips(g);
+      if (!rc) { notYet.push(g.name || 'a group'); continue; }
       let r = null;
-      try { r = await window.Steward.sealGroup(g, encRecips(g)); } catch (e) { r = null; }
+      try { r = await window.Steward.sealGroup(g, rc); } catch (e) { r = null; }
       if (!r || !r.sealed) (r && r.reason === 'flag-partial' ? half : failed).push(g.name || 'a group');
       else if (r.skipped && r.skipped.length) partial.push(r.skipped.length + ' member(s) could not be given the key for “' + (g.name || 'a group') + '”');
     }
-    if (failed.length || partial.length || half.length) {
+    if (failed.length || partial.length || half.length || notYet.length) {
       const parts = [];
+      if (notYet.length) parts.push('Your church’s member list was still loading, so ' + notYet.length + ' group' + (notYet.length === 1 ? ' was' : 's were') + ' not sealed: ' + notYet.join(', ') + '. “Encrypt all” stays off — try again in a moment.');
       // Same rule as the seal dialog above: a relay that did not ACK may be offline rather than refusing, so
       // this says what is TRUE of the rooms and sends the steward to look, rather than diagnosing for them.
       if (half.length) parts.push(half.length + ' group' + (half.length === 1 ? '' : 's') + ' reached only some of your relays, so ' + (half.length === 1 ? 'it is' : 'they are') + ' sealed on those and still readable on the others: ' + half.join(', ') + '. “Encrypt all” stays off. Check Settings → Relays.');
@@ -10293,7 +10641,7 @@ function DashFeaturesPanel({ church, show = null }) {
       if (partial.length) parts.push(partial.join('; ') + '. They will not be able to read or post there. Open each group and save it again to re-send.');
       try { window.dispatchEvent(new CustomEvent('steward-write-blocked', { detail: { what: 'group key', message: parts.join(' ') } })); } catch (e) {}
     }
-    if (!failed.length && !half.length) window.Steward.publishProfile({ features: { ...f, encryptComms: true } });
+    if (!failed.length && !half.length && !notYet.length) window.Steward.publishProfile({ features: { ...f, encryptComms: true } });
   };
   const toggleEncryptAll = () => { if (encOn) window.Steward.publishProfile({ features: { ...f, encryptComms: false } }); else setConfirmEnc(true); };
   // member photos — ON by default; a church opts out via memberPhotos:false. Children are excluded unless

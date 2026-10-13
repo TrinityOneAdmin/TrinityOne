@@ -22,7 +22,7 @@ import { join } from 'node:path';
 import { webcrypto } from 'node:crypto';
 import { generateSecretKey, getPublicKey } from 'nostr-tools/pure';
 import { v2 as nip44 } from 'nostr-tools/nip44';
-import { fnBody, liftKeyRead } from './test-slice.mjs';
+import { fnBody, liftKeyRead, keyEnvFns } from './test-slice.mjs';
 
 const ROOT = new URL('../', import.meta.url).pathname;
 const BUNDLE = readFileSync(join(ROOT, 'vendor/steward.js'), 'utf8');
@@ -43,7 +43,8 @@ function ownerScope(opts = {}) {
     _mediaKeyRing: opts.hasKey ? [KEY] : [],
     _mediaKeyDocKeys: opts.hasKey ? { [churchPub]: 'sealed-blob' } : null,
     _mediaKeyChecked: true,
-    _mediaKeyPushRefused: null, _mediaKeyVer: 0,
+    _mediaKeyPushRefused: null, _mediaKeyVer: 0, _mediaKeyAt: 0,   // round 3c, MED 2: every publisher of the sermon key stamps it
+    ...keyEnvFns(BUNDLE),   // round 3c, MED 2: the kept care/sermon envelope (test-slice.mjs)
     _localBlocked: new Set(),
     _sealEachFailed: [],
     _isRelayAuthed: () => true,

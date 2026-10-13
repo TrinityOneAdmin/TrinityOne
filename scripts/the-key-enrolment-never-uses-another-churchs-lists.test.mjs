@@ -144,6 +144,12 @@ before(async () => {
   await waitFor(`[...document.querySelectorAll('button')].some(x => (x.textContent||'').trim() === 'Settings') && !document.querySelector('[data-stew-modal-panel]')`, 90000, 'the dashboard, with no wizard');
   await waitFor(`window.Steward.nameKeyReady() && !!window.Steward.careSeal({ a: 1 })`, 90000, 'church A\'s own name and care keys');
   await waitFor(`(window.Steward.identities() || []).some(x => x.kind === 'steward' && x.pub === ${JSON.stringify(B.pub)})`, 60000, 'church B in the switcher');
+  // A new church starts with approval ON (ensureJoinPolicy), and since 78ffad0 the care key goes to APPROVED members
+  // only — so M and M3 joining would wait for approval and this setup's own control failed ("never keyed"), at 78ffad0
+  // as on its successor. This file is about which church's lists are used, not about approval: A is made open-join,
+  // the way the Rules & privacy switch does it.
+  assert.equal(await evalIn(`window.Steward.setJoinPolicy(false).then(r => r ? 'ok' : String(r))`), 'ok', 'CONTROL: open join could not be set');
+  await sleep(3000);
   // A's members join, and the console keys them
   await H.publishAll(relay, [joinTo(churchA, M), joinTo(churchA, M3)]);
   { const t0 = Date.now(); let ok = false; while (Date.now() - t0 < 60000 && !ok) { const n = recipsOf(NAMEKEY_D + churchA), c = recipsOf(CAREKEY_D + churchA); ok = !!(n && c && n.includes(M3.pub) && c.includes(M3.pub) && n.includes(M.pub)); if (!ok) await sleep(500); } assert.ok(ok, 'church A\'s members were never keyed — the rows below would prove nothing'); }

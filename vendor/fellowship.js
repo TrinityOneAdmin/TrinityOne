@@ -3551,6 +3551,7 @@
     if (wild && wild._tomb && (wild.ts || 0) >= (rec.ts || 0)) return false;
     if (had && had._tomb && (had.ts || 0) >= (rec.ts || 0)) return false;
     if (had && (had.ts || 0) > (rec.ts || 0)) return false;
+    if (had && rec._locked && !had._locked && !had._tomb && (had.ts || 0) >= (rec.ts || 0)) return false;
     vers.set(by, rec);
     const win = _reduceVersions(vers, byId, id, trusted);
     return !!win && win._by === by;
@@ -4014,6 +4015,30 @@
       dropped(list, cp) {
         const t = nowSec();
         return (Array.isArray(list) ? list : []).filter((u) => u && !admitCached(map, u, cp, t));
+      },
+      // THE ADDRESSES THIS GATE HAS NO VERDICT ON YET: not admitted, and either never tried or with a proof still running.
+      // A failed proof IS a verdict (the box was asked and did not prove), so a down relay does not hold anything for ever.
+      // READER: the name key's FIRST mint (_nameKeyMintBlockers, src/steward.src.js) — a relay not yet proved may be the
+      // one that holds the church's key, and "nobody has a key" decided before it was asked is a guess.
+      unsettled(list, cp) {
+        const t = nowSec();
+        return (Array.isArray(list) ? list : []).filter((u) => {
+          if (!u || admitCached(map, u, cp, t)) return false;
+          const k = _relayKey(u);
+          return inflight.has(k) || !attempted.has(k);
+        });
+      },
+      // Resolves once every proof running for these addresses has finished (starting any not yet tried). Never rejects.
+      async whenSettled(list, cp) {
+        try {
+          this.admit(list, cp);
+        } catch {
+        }
+        const ps = (Array.isArray(list) ? list : []).map((u) => inflight.get(_relayKey(u))).filter(Boolean);
+        try {
+          await Promise.all(ps);
+        } catch {
+        }
       },
       forget(url) {
         const k = _relayKey(url);
@@ -12159,10 +12184,7 @@
       const admittedByAuthor = /* @__PURE__ */ new Map();
       const _admittedUnion = () => {
         const all = /* @__PURE__ */ new Set();
-        for (const [author, v] of admittedByAuthor) {
-          if (author !== pubk && !(_churchRoster.get(pubk) && _churchRoster.get(pubk).has(author))) continue;
-          for (const pk of v.pubkeys) if (pk) all.add(pk);
-        }
+        for (const v of admittedByAuthor.values()) for (const pk of v.pubkeys) if (pk) all.add(pk);
         return all;
       };
       const me = window.Fellowship.myPubkey || pub;

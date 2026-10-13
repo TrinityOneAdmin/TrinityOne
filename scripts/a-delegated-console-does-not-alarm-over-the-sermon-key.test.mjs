@@ -41,7 +41,7 @@ import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadScreen, miniReact, texts, find } from './render-jsx-screen.mjs';
-import { fnBody, liftKeyRead } from './test-slice.mjs';
+import { fnBody, liftKeyRead, keyEnvFns } from './test-slice.mjs';
 
 const ROOT = new URL('../', import.meta.url).pathname;
 const BUNDLE = readFileSync(join(ROOT, 'vendor/steward.js'), 'utf8');
@@ -77,7 +77,8 @@ function engine({ actingChurch, mediaKeyHex = KEY, mediaDocKeys = 'default', med
     _mediaKeyPushRefused: null,
     _mediaKeyChecked: mediaChecked,
     _localBlocked: new Set(),
-    _isRelayAuthed: () => true, _fitKeyRing, console, _mediaKeyVer: 0,
+    ...keyEnvFns(BUNDLE),   // round 3c, MED 2: the kept care/sermon envelope (test-slice.mjs)
+    _isRelayAuthed: () => true, _fitKeyRing, console, _mediaKeyVer: 0, _mediaKeyFresh: true, _mediaKeyMine: true, _mediaKeyAt: 0,   // round 3a: the per-room publish queue; the care/sermon reads as fresh and ours (tested in key-reads-settle-only-…)
     MEDIAKEY_D: 'trinityone/mediakey:',
     NET: 'trinityone',
     now: () => 1758800000,
@@ -266,7 +267,10 @@ async function membersPage({ delegated, rotateMedia, nameResult = null, engineOp
   const { React, draw } = miniReact();
   const NOW = Math.floor(Date.now() / 1000);
   // block() calls rotateChurchKeys, the shipped top-level function beside DashMembers — compiled with it, not stubbed
-  const src = fnBody(DASH, 'function rotateChurchKeys(', 'rotateChurchKeys') + '\n' + fnBody(DASH, 'function takeOffEveryTeam(', 'takeOffEveryTeam') + '\n' + fnBody(DASH, 'function DashMembers()', 'DashMembers');
+  const src = fnBody(DASH, 'function rotateChurchKeys(', 'rotateChurchKeys') + '\n' + fnBody(DASH, 'function takeOffEveryTeam(', 'takeOffEveryTeam') + '\n' + fnBody(DASH, 'function DashMembers()', 'DashMembers')
+    // + the shared approved-members filter Block rotates to (round 3a, HIGH 1) — compiled in, not stubbed
+    + '\n' + ['stewKeyRecipients', 'stewKeyRecipientsOrAdmitted', 'useStewKeyRecipients'].map(n => fnBody(DASH, 'function ' + n + '(', n)).join('\n')
+    + '\n' + DASH.match(/^const STEW_KEYS_LOADING = .*;$/m)[0];
   const tmp = join(tmpdir(), 'mk-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
   let js;
   try {
@@ -395,5 +399,7 @@ test('THE CALL SITE: an OWNER\'s Block in a church with NO sermon key says nothi
 });
 test('CONTROL: …but one whose sermon-key read has not settled (it may HAVE one) is still warned', async () => {
   const p = await membersPage({ delegated: false, nameResult: { id: 'published' }, engineOpts: { mediaKeyHex: null, mediaDocKeys: null, mediaChecked: false } });
-  assert.match(p.said, /could not change the sermon key/, 'a sermon key the console has not looked for is treated as absent — a blocked member may still hold it: ' + p.said);
+  // round 3e (MED 1): not yet read is not "could not change" — the rotation is remembered and runs when the read settles,
+  // and the screen says the sermon access WILL be removed. Either way it is not treated as absent, which is this row's point.
+  assert.match(p.said, /could not change the sermon key|sermons will be removed as soon as this console finishes connecting/, 'a sermon key the console has not looked for is treated as absent — a blocked member may still hold it: ' + p.said);
 });

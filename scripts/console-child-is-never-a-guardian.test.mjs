@@ -36,7 +36,7 @@ const NAMES = { [KID_A]: 'Tom Okafor', [KID_B]: 'Ivy Okafor', [ADULT]: 'Ruth Oka
 const members = () => Object.keys(NAMES).map(pk => ({ pubkey: pk, npub: 'npub1' + pk.slice(0, 8), name: NAMES[pk], count: 2, lastTs: NOW - 60, joined: NOW - 9000 }));
 
 async function loadSlices(anchors, exportNames, globals) {
-  const src = anchors.map(([anchor, what]) => fnBody(STEW, anchor, what)).join('\n');
+  const src = anchors.map(([anchor, what]) => fnBody(STEW, anchor, what)).join('\n') + '\n' + ['stewKeyRecipients', 'stewKeyRecipientsOrAdmitted', 'useStewKeyRecipients'].map(n => fnBody(STEW, 'function ' + n + '(', n)).join('\n') + '\n' + STEW.match(/^const STEW_KEYS_LOADING = .*;$/m)[0];   // + the shared approved-members filter (round 3a), real
   const tmp = join(tmpdir(), 'cing-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
   let js;
   try {

@@ -159,7 +159,7 @@ test('nothing stands in front of the group-key rotation', () => {
   // and went on reading everything posted afterwards, while the console showed a generic save error. That is
   // the one leak-shaped failure this save path's own comments exist to prevent.
   const save = stripComments(fnBody(DASH, 'const save = () => {'));
-  const rotate = save.indexOf('publishGroupKey(group.id, newM, { rotate: removed })');
+  const rotate = save.indexOf('publishGroupKey(group.id, newM, { rotate: removed, ...keyTurn })');   // re-anchored 2026-10-12 (round 3c, LOW ii: the dialog's onTurn rides along)
   const reconcile = save.indexOf('reconcileRoster()');
   assert.notEqual(rotate, -1, 'the key rotation is gone — re-anchor this test');
   assert.notEqual(reconcile, -1, 'the roster reconcile is gone — re-anchor this test');
@@ -177,10 +177,10 @@ test('saving a roster twice in a second is not possible', () => {
   // replaceable documents are newest-wins TO THE SECOND — so the second write is silently refused, and it can
   // interleave with the group-key rotation.
   const save = stripComments(fnBody(SCHEDULE, 'const save = async () => {'));
-  assert.match(save, /if \(saving\) return;/, 'a second click must do nothing');
+  assert.match(save, /if \(saving( \|\| locked)?\) return;/, 'a second click must do nothing');
   assert.match(save, /setSaving\(true\)/);
   const btn = stripComments(SCHEDULE.slice(SCHEDULE.indexOf('Save roster') - 400, SCHEDULE.indexOf('Save roster') + 40));
-  assert.match(btn, /disabled=\{saving\}/, 'and the button must say so, or the steward has no reason not to click again');
+  assert.match(btn, /disabled=\{saving( \|\| locked)?\}/, 'and the button must say so, or the steward has no reason not to click again');
 });
 
 test('the roster editor keeps the invite allowlist in step', () => {

@@ -1802,6 +1802,39 @@ const ADMITTED_BY = new Map();      // churchpub -> Set(approved member pubkeys)
 // branch. They all ask `admitted.has(pk)`, which is what the union answers; only how the Set is built moves.
 // ADMITTED_SRC has exactly one writer (note()'s ADMITTED_D branch) and one reader (rebuildAdmitted()).
 const ADMITTED_SRC = new Map();     // churchpub -> Map(author pubkey -> Set(pubkeys they approved))
+// AN APPROVAL IS THE CHURCH'S ONCE THIS RELAY ACCEPTED IT FROM A STEWARD (item D; owner 2026-09-16 "approved members
+// must always survive a steward leaving", 2026-10-13 "co-steward approvals should always be saved under the Church's
+// own key" and "what happens inside the church shouldn't be dependent on the church console being open").
+// A delegate signs with their own key and only the owner console holds the church's, so the church-state property is
+// recorded HERE: when this relay takes in a steward's `admitted:` copy, it writes down that exact event id. note() (and
+// so every restart) and canRead() then honour THAT copy — and only that one — after its author leaves the roster.
+// NO BACKDATING: created_at is never consulted. A removed delegate's new copy is refused by accept() and, arriving by
+// any other route, finds them no longer a steward — so it gets no receipt, whatever it is dated.
+// WHERE IT IS WRITTEN: in note()'s ADMITTED_D branch, so EVERY route that stores a copy receipts it on the same rule —
+// the live EVENT path, relay-to-relay sync and reconcile (a box that was down when the approval was made), /import,
+// and hydrate at boot (which is also the migration: a copy already on disk before receipts existed, from an author
+// who is STILL a steward, gets one, so removing them later does not stop it being served). The rule is the same on
+// every route: the author is a current steward of that church at the moment this relay takes the copy in. That adds
+// no trust — the relay already serves and honours exactly those copies — and a non-steward's copy, however it
+// arrived, never gets one. Not carried by /export -> /import: the importing box re-derives receipts by the same
+// rule, so a copy whose author has already left by then is not receipted there.
+// WRITER: _receiptAdmitted (note()). READERS: _admittedReceipted (note()'s ADMITTED_D ingest, canRead).
+const ADMITTED_RECEIPTS_FILE = join(DATA_DIR, 'admitted-receipts.json');
+let ADMITTED_RECEIPTS = {};   // churchpub -> { author pubkey -> event id of the copy accepted from them as a steward }
+try { const o = JSON.parse(readFileSync(ADMITTED_RECEIPTS_FILE, 'utf8')); if (o && typeof o === 'object' && !Array.isArray(o)) ADMITTED_RECEIPTS = o; else console.error('[relay] admitted-receipts.json is not an object — starting with no approval receipts'); }
+catch (x) { if (!x || x.code !== 'ENOENT') console.error('[relay] could not read admitted-receipts.json — starting with no approval receipts:', x && x.message); }
+function _admittedReceipted(cp, e) { const m = ADMITTED_RECEIPTS[cp]; return !!(m && typeof m === 'object' && e && m[e.pubkey] === e.id); }
+function _receiptAdmitted(e) {
+  const d = ((e.tags || []).find(t => t[0] === 'd') || [])[1] || '';
+  if (e.kind !== 30078 || !d.startsWith(ADMITTED_D)) return;
+  const cp = d.slice(ADMITTED_D.length);
+  if (!CHURCH_PUBS.has(cp) || e.pubkey === cp || !stewardCan(e.pubkey, cp, 'any')) return;
+  const m = (ADMITTED_RECEIPTS[cp] && typeof ADMITTED_RECEIPTS[cp] === 'object') ? ADMITTED_RECEIPTS[cp] : (ADMITTED_RECEIPTS[cp] = {});
+  if (m[e.pubkey] === e.id) return;
+  m[e.pubkey] = e.id;
+  try { const tmp = ADMITTED_RECEIPTS_FILE + '.tmp'; writeFileSync(tmp, JSON.stringify(ADMITTED_RECEIPTS)); renameSync(tmp, ADMITTED_RECEIPTS_FILE); }
+  catch (x) { console.error('[relay] could not save an approval receipt — this approval will not survive a restart if its steward leaves:', x && x.message); }
+}
 function rebuildAdmitted(cp) {
   const per = ADMITTED_SRC.get(cp);
   const out = new Set();
@@ -3577,7 +3610,8 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     if (approval) REQUIRE_APPROVAL.add(cp); else REQUIRE_APPROVAL.delete(cp);
     if (!_hydrating) rebuildMembers();
   }
-  else if (d.startsWith(ADMITTED_D) && CHURCH_PUBS.has(cp = d.slice(ADMITTED_D.length)) && (e.pubkey === cp || stewardCan(e.pubkey, cp, 'any'))) {   // a church's approved-members allowlist
+  else if (d.startsWith(ADMITTED_D) && CHURCH_PUBS.has(cp = d.slice(ADMITTED_D.length)) && (e.pubkey === cp || stewardCan(e.pubkey, cp, 'any') || _admittedReceipted(cp, e))) {   // a church's approved-members allowlist (a receipted copy outlives its steward — see ADMITTED_RECEIPTS)
+    _receiptAdmitted(e);   // a current steward's copy, by whatever route it arrived — see ADMITTED_RECEIPTS
     // PER AUTHOR, THEN UNIONED — see ADMITTED_SRC. `.set(cp, set)` here meant the last copy to replay won,
     // and on a rehydrate that is whichever has the later created_at. The church approves Ada at 10:02, the
     // churchwarden approves Ben at 10:03, and after the next restart Ada is waiting to be let in again.
@@ -5235,6 +5269,10 @@ function canRead(e, authed) {
     // created stop being served to the congregation. An owner who writes them an EMPTY capability list is
     // saying "nothing", and that reads the same as removing them — which is today's behaviour for removal.
     if (ch && !retractionExempt) { if (!(e.pubkey === ch || stewardCan(e.pubkey, ch, 'any'))) return false; }
+    // …BUT AN ALLOWLIST COPY IS SERVED ONLY IF THIS RELAY HONOURS IT (item D): the church's, a current steward's, or one
+    // it receipted from a steward (ADMITTED_RECEIPTS). Phones and consoles count every copy they are served, so this
+    // is what keeps an /import-planted copy from a non-steward off them. Keyed on the d-tag's church, not the tag.
+    if (d.startsWith(ADMITTED_D)) { const acp = d.slice(ADMITTED_D.length); if (!(e.pubkey === acp || stewardCan(e.pubkey, acp, 'any') || _admittedReceipted(acp, e))) return false; }
     if (!authed) return false;
     // ══ THE CHURCH'S BOOKS ARE NOT THE CONGREGATION'S ═════════════════════════════════════════════════════
     //
@@ -8431,7 +8469,10 @@ wss.on('connection', (ws, req) => {
   // port strip is anchored at the end and there are no brackets to remove.
   ws._host = String((req && req.headers && req.headers.host) || '').replace(/:\d+$/, '').replace(/^\[|\]$/g, '').toLowerCase();
   ws._auth = null;                                    // pubkey once the client proves it via NIP-42 AUTH
-  ws._rl = { n: 0, t: Date.now(), drop: 0 };          // per-connection inbound rate limit (CPU-DoS guard)
+  // per-connection inbound rate limit (CPU-DoS guard). EVERY counter starts at 0 (round 3f, R1; audit of 4bb1ed1): `a` was
+  // left undefined, `undefined + 1` is NaN and `NaN > 10` is false, so the AUTH budget did not exist in a connection's first
+  // second — measured: 500 AUTHs at connect, 244 verified and accepted.
+  ws._rl = { n: 0, a: 0, f: 0, t: Date.now(), drop: 0, dt: Date.now() };
   ws._challenge = randomBytes(16).toString('hex');    // per-connection nonce
   // LAZY NIP-42: we do NOT challenge on connect (that made every member pay a slow auth round-trip).
   // We only send the AUTH challenge when a REQ actually tries to read invite-only content (below), so
@@ -8443,11 +8484,58 @@ wss.on('connection', (ws, req) => {
     // forged events that get rejected — is a CPU-amplification vector. Cap inbound messages per
     // connection (~100/s, far above any legitimate client); persistent abuse closes the socket.
     const _now = Date.now();
-    if (_now - ws._rl.t >= 1000) { ws._rl.t = _now; ws._rl.n = 0; }
-    if (++ws._rl.n > 100) { if (++ws._rl.drop > 500) { try { ws.close(1008, 'rate limit'); } catch (e) {} } return; }
-    let msg; try { msg = JSON.parse(raw); } catch { return; }
-    if (!Array.isArray(msg) || !msg.length) return;   // a non-array message (or empty) would throw at the destructure below
+    if (_now - ws._rl.t >= 1000) { ws._rl.t = _now; ws._rl.n = 0; ws._rl.a = 0; ws._rl.f = 0; }
+    // PERSISTENT ABUSE CLOSES THE SOCKET — whatever the frames are (round 3f, R2; audit of 4bb1ed1). 5c35bfd parsed each
+    // frame BEFORE counting it, so unparseable frames and non-arrays returned before any counter, and a CLOSE was never
+    // counted at all: a flood of 50 KB garbage, or of CLOSEs, ran for ever where b102dc6 closed the socket. Now every frame
+    // is counted before it is parsed — at most 300 a second of anything (a console opening a church sends ~100), and a
+    // frame the relay cannot use (unparseable, not an array) counts as abuse outright. Abuse adds up; past 500 the socket
+    // is closed (1008), as it always was. ONE FRAME IS EXEMPT FROM THE 300: an AUTH, looked at cheaply before parsing, so
+    // a flood of anything else cannot starve the login (5c35bfd's fix) — it has its own budget of 10 a second instead.
+    // ABUSE IS COUNTED OVER A WINDOW, NOT A LIFETIME (round 3g, finding 4; audit of b4b7277). The count never went down, so a
+    // long-lived console that bursts now and then — 120 requests a second for half a minute, say — was eventually closed
+    // as an abuser. It now starts again every 10 seconds: past 500 within one window is a flood, and is closed (1008).
+    const _abuse = () => { if (_now - ws._rl.dt >= 10000) { ws._rl.dt = _now; ws._rl.drop = 0; } if (++ws._rl.drop > 500) { try { ws.close(1008, 'rate limit'); } catch (e) {} } };
+    const _head = (typeof raw === 'string' ? raw : raw.subarray(0, 12).toString()).slice(0, 12);
+    const _looksAuth = /^\[\s*"AUTH"/.test(_head);
+    if (!_looksAuth && ++ws._rl.f > 300) {
+      _abuse();
+      // …AND A REQUEST OR AN EVENT PAST THE 300 IS ANSWERED, NOT DROPPED (round 3g, finding 4) — the silent drop 5c35bfd
+      // removed at 100 had come back at 300: measured, 250 CLOSEs then 80 REQs left 30 REQs with no answer, and an EVENT
+      // as the 301st frame got no OK. Only those two are worth the parse, and only until the socket is closed for abuse.
+      if (ws.readyState === 1 && /^\[\s*"(REQ|EVENT)"/.test(_head)) {
+        try {
+          const m = JSON.parse(raw);
+          if (Array.isArray(m) && m[0] === 'REQ' && typeof m[1] === 'string') ws.send(JSON.stringify(['CLOSED', m[1], 'rate-limited: too many messages — ask again in a moment']));
+          else if (Array.isArray(m) && m[0] === 'EVENT' && m[1] && m[1].id) ws.send(JSON.stringify(['OK', m[1].id, false, 'rate-limited: too many messages — try again in a moment']));
+        } catch (e) {}
+      }
+      return;
+    }
+    let msg; try { msg = JSON.parse(raw); } catch { _abuse(); return; }
+    if (!Array.isArray(msg) || !msg.length) { _abuse(); return; }   // a non-array message (or empty) would throw at the destructure below
     const [type, ...rest] = msg;
+    if (_looksAuth && type !== 'AUTH' && ++ws._rl.f > 300) { _abuse(); return; }   // it only LOOKED like an AUTH: counted after all
+    // OVER THE LIMIT, SAY SO — AND NEVER LOSE A LOGIN (round 3e; audit of b102dc6). This dropped every frame past the
+    // 100th in a second WITHOUT A WORD. A console opening a church sends more than that in its first second (measured:
+    // 102 REQ/CLOSE frames before its AUTH), so the AUTH itself was dropped: no OK ever came, nostr-tools gave up on
+    // the login for the life of the socket, and every private read on it waited for a login that could not happen —
+    // the "name key never came back" stall in console-keys-follow-the-church-switch. Now:
+    //   · AUTH and CLOSE are not counted against the 100: a CLOSE costs nothing, and AUTH has its own small budget
+    //     (10 a second — one is all a client needs) because it is the frame every private read depends on;
+    //   · a REQ past the limit gets CLOSED 'rate-limited:' and an EVENT gets OK false 'rate-limited:', so the client
+    //     knows to ask again instead of waiting for an answer that will never come.
+    // Persistent abuse still closes the socket — and since round 3f that is true of every kind of frame (see above).
+    const _isAuth = type === 'AUTH', _isClose = type === 'CLOSE';
+    const _over = _isAuth ? (++ws._rl.a > 10) : (!_isClose && ++ws._rl.n > 100);
+    if (_over) {
+      _abuse(); if (ws.readyState !== 1) return;
+      try {
+        if (type === 'REQ' && typeof rest[0] === 'string') ws.send(JSON.stringify(['CLOSED', rest[0], 'rate-limited: too many messages — ask again in a moment']));
+        else if ((type === 'EVENT' || _isAuth) && rest[0] && rest[0].id) ws.send(JSON.stringify(['OK', rest[0].id, false, 'rate-limited: too many messages — try again in a moment']));
+      } catch (e) {}
+      return;
+    }
     if (type === 'EVENT') {
       const evt = rest[0]; if (!evt || !evt.id) return;
       // NIP-01: a relay MUST verify the signature before storing/serving. Without this, anyone could
@@ -8529,7 +8617,7 @@ wss.on('connection', (ws, req) => {
       // revoked steward restoring their authority, a child's DM protections being stripped — and worst,
       // replaying a stale group doc put the attacker back in GROUP_MEMBERS, which canRead() consults, handing
       // them the READ history of an invite-only group. The store was always right; the running relay was not.
-      if (putRes === 'stored') note(evt);   // a membership/broadcast change takes effect for subsequent events
+      if (putRes === 'stored') note(evt);   // a membership/broadcast change takes effect for subsequent events (a steward's approval is receipted inside — ADMITTED_RECEIPTS)
       // NIP-09 BEFORE the duplicate/have-newer early returns: a re-sent kind-5 comes back as 'duplicate', and
       // the old code returned on that without ever applying the deletion — so the second and every later
       // delivery of a deletion was a no-op. That is the usual case after a reconnect or a resync.

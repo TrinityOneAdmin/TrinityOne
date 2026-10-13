@@ -31,7 +31,8 @@ const read = (f) => readFileSync(join(ROOT, f), 'utf8');
 // ReferenceError at the point of use, which is what we want — a silently-stubbed global is how a test ends
 // up asserting about something that is not the code.
 async function loadComponent(file, name, anchor, globals) {
-  const src = fnBody(read(file), anchor, name);
+  const whole = read(file);
+  const src = fnBody(whole, anchor, name) + (/\buseStewKeyRecipients\(/.test(fnBody(whole, anchor, name)) ? '' + '\n' + ['stewKeyRecipients', 'stewKeyRecipientsOrAdmitted', 'useStewKeyRecipients'].map(n => fnBody(whole, 'function ' + n + '(', n)).join('\n') + '\n' + whole.match(/^const STEW_KEYS_LOADING = .*;$/m)[0] : '');   // + the shared filter (round 3a), real
   const tmp = join(tmpdir(), 'rows-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
   let js;
   try {

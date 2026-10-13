@@ -28,7 +28,7 @@ const ROOT = new URL('../', import.meta.url).pathname;
 const STEW = readFileSync(join(ROOT, 'app/stew-dashboard.jsx'), 'utf8');
 
 async function loadConsoleComponent(name, anchor, globals) {
-  const src = fnBody(STEW, anchor, name);
+  const src = fnBody(STEW, anchor, name) + '\n' + ['stewKeyRecipients', 'stewKeyRecipientsOrAdmitted', 'useStewKeyRecipients'].map(n => fnBody(STEW, 'function ' + n + '(', n)).join('\n') + '\n' + STEW.match(/^const STEW_KEYS_LOADING = .*;$/m)[0];   // + the shared approved-members filter (round 3a) — compiled in, real
   const tmp = join(tmpdir(), 'undo-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
   let js;
   try {

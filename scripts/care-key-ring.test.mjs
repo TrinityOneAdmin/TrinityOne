@@ -59,7 +59,7 @@ test('the envelope wraps the whole ring, not just the current key', () => {
 });
 
 test('rotation exists, is gated like minting, and keeps the old keys', () => {
-  const b = body('rotateCareKey(');
+  const b = body('async rotateCareKey(');   // re-anchored 2026-10-13 (round 3e): the first 'rotateCareKey(' in the bundle is now _runPendingRotations' call to it
   assert.match(b, /_isRelayAuthed\(\)/, 'rotation must not run from an untrusted view — same rule as minting');
   // Assert the CONSTRUCTION carries the old ring forward — matching the name alone passes even if the new
   // ring is built as [fresh] and the old keys are dropped (verified: that sabotage slipped through once).
@@ -72,7 +72,7 @@ test('rotation exists, is gated like minting, and keeps the old keys', () => {
 });
 
 test('the MEDIA key has the same ring + rotation (a removed member must not keep sermon access)', () => {
-  const rot = body('rotateMediaKey(');
+  const rot = body('async rotateMediaKey(');   // re-anchored 2026-10-13 (round 3e) — see rotateCareKey above
   assert.match(rot, /_isRelayAuthed\(\)/, 'media rotation must not run from an untrusted view');
   // `full` since 2026-10-01, as rotateCareKey above: the ring is fitted to the relay's 1 MB cap, so the full
   // history and the ring published are two things. Whatever is published starts from the fresh key.
@@ -85,7 +85,17 @@ test('the MEDIA key has the same ring + rotation (a removed member must not keep
 
 test('legacy envelopes (a bare hex key, no ring) are still readable', () => {
   // A church upgrading mid-flight has an envelope holding a plain hex string, not a JSON array.
-  const ingest = BUNDLE.slice(BUNDLE.indexOf('function _ingestCareKeyEnv'), BUNDLE.indexOf('function _ingestCareKeyEnv') + 1200);
+  // RE-ANCHORED 2026-10-12 (round 3d): the same-rev guard at the top of the function pushed the fallback past a fixed
+  // 1200-character window. It now reads the whole function, up to the next top-level function.
+  const _at = BUNDLE.indexOf('function _ingestCareKeyEnv');
+  // …and NARROWED AGAIN 2026-10-13 (round 3e, LOW 1; audit of b102dc6): the whole function also holds the same-rev block,
+  // whose OWN Array.isArray satisfied this check with the main path's disabled. It now reads only the main path — from
+  // where an envelope is accepted (_careKeyAt is stamped) to the end of the function. (b102dc6's message said the widening
+  // did not weaken this check. It did; this restores it.) The executed version is in key-reads-settle-only-…, 3e LOW 1.
+  const _fnEnd = BUNDLE.indexOf('\n  function ', _at + 10);
+  const _main = BUNDLE.indexOf('_careKeyAt = e.created_at', _at);
+  assert.ok(_main > _at && _main < _fnEnd, 're-anchor: the main path of _ingestCareKeyEnv no longer starts by stamping _careKeyAt');
+  const ingest = BUNDLE.slice(_main, _fnEnd);
   assert.match(ingest, /Array\.isArray/, 'the ingest must detect the array form');
   assert.match(ingest, /\[plain\]/, 'and fall back to treating a bare string as a one-key ring');
 });

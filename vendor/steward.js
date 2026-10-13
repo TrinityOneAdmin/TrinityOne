@@ -6321,6 +6321,7 @@
     if (wild && wild._tomb && (wild.ts || 0) >= (rec.ts || 0)) return false;
     if (had && had._tomb && (had.ts || 0) >= (rec.ts || 0)) return false;
     if (had && (had.ts || 0) > (rec.ts || 0)) return false;
+    if (had && rec._locked && !had._locked && !had._tomb && (had.ts || 0) >= (rec.ts || 0)) return false;
     vers.set(by, rec);
     const win = _reduceVersions(vers, byId, id, trusted);
     return !!win && win._by === by;
@@ -6781,6 +6782,30 @@
       dropped(list, cp) {
         const t = nowSec();
         return (Array.isArray(list) ? list : []).filter((u) => u && !admitCached(map, u, cp, t));
+      },
+      // THE ADDRESSES THIS GATE HAS NO VERDICT ON YET: not admitted, and either never tried or with a proof still running.
+      // A failed proof IS a verdict (the box was asked and did not prove), so a down relay does not hold anything for ever.
+      // READER: the name key's FIRST mint (_nameKeyMintBlockers, src/steward.src.js) — a relay not yet proved may be the
+      // one that holds the church's key, and "nobody has a key" decided before it was asked is a guess.
+      unsettled(list, cp) {
+        const t = nowSec();
+        return (Array.isArray(list) ? list : []).filter((u) => {
+          if (!u || admitCached(map, u, cp, t)) return false;
+          const k = _relayKey(u);
+          return inflight.has(k) || !attempted.has(k);
+        });
+      },
+      // Resolves once every proof running for these addresses has finished (starting any not yet tried). Never rejects.
+      async whenSettled(list, cp) {
+        try {
+          this.admit(list, cp);
+        } catch {
+        }
+        const ps = (Array.isArray(list) ? list : []).map((u) => inflight.get(_relayKey(u))).filter(Boolean);
+        try {
+          await Promise.all(ps);
+        } catch {
+        }
       },
       forget(url) {
         const k = _relayKey(url);
@@ -15374,6 +15399,9 @@ zoo`.split("\n");
   var _careKeyDocKeys = null;
   var _careKeyRev = 0;
   var _careKeyChecked = false;
+  var _careKeyFresh = false;
+  var _careKeyAt = 0;
+  var _careKeyMine = false;
   var _careRoster = /* @__PURE__ */ new Set();
   var _exStewardsKey = () => "trinityone.steward.exstewards." + (pub || "");
   function _exStewardSet() {
@@ -15384,10 +15412,32 @@ zoo`.split("\n");
       return /* @__PURE__ */ new Set();
     }
   }
-  function _rememberExStewards(before, after) {
+  var _exStewardsAtKey = () => "trinityone.steward.exstewards.at." + (pub || "");
+  function _exStewardRemovedAt() {
+    try {
+      const o = JSON.parse(localStorage.getItem(_exStewardsAtKey()) || "{}");
+      return o && typeof o === "object" && !Array.isArray(o) ? o : {};
+    } catch (e) {
+      return {};
+    }
+  }
+  function _rememberExStewards(before, after, at) {
     try {
       const now_ = new Set(after || []);
       const gone = [...before || []].filter((p) => p && !now_.has(p));
+      if (at) {
+        const m = _exStewardRemovedAt();
+        let moved = false;
+        for (const p of now_) if (p in m) {
+          delete m[p];
+          moved = true;
+        }
+        for (const p of gone) if (!(p in m)) {
+          m[p] = at;
+          moved = true;
+        }
+        if (moved) localStorage.setItem(_exStewardsAtKey(), JSON.stringify(m));
+      }
       if (!gone.length) return;
       const ex = _exStewardSet();
       let grew = false;
@@ -15408,8 +15458,8 @@ zoo`.split("\n");
       }
     }
   }
-  function _stewardRosterChanged(before, after) {
-    _rememberExStewards(before, after);
+  function _stewardRosterChanged(before, after, at) {
+    _rememberExStewards(before, after, at);
     _pokeMemberLists();
   }
   var _careRosterKnown = false;
@@ -15420,6 +15470,66 @@ zoo`.split("\n");
   var _mediaKeyDocKeys = null;
   var _mediaKeyPushRefused = null;
   var _mediaKeyVer = 0;
+  var _mediaKeyFresh = false;
+  var _mediaKeyMine = false;
+  var _mediaKeyAt = 0;
+  var KEYENV_LS = "trinityone.steward.keyenv.";
+  function _keyEnvSave(kind, cp, e, selfKey, mineCt) {
+    try {
+      if (!cp || !e || !selfKey || typeof mineCt !== "string" || !mineCt) return;
+      const o = JSON.parse(e.content || "{}");
+      lsSet(KEYENV_LS + kind + "." + cp, JSON.stringify({ at: e.created_at || 0, rev: o.rev || 1, author: e.pubkey, self: selfKey, mine: mineCt, recips: Object.keys(o.keys || {}) }));
+    } catch (x) {
+    }
+  }
+  function _keyEnvRestore(kind, cp, d) {
+    try {
+      const o = JSON.parse(lsGet(KEYENV_LS + kind + "." + cp) || "null");
+      if (!o || typeof o.mine !== "string" || !o.author || !o.self || !Array.isArray(o.recips)) return null;
+      const keys = {};
+      for (const p of o.recips) if (typeof p === "string" && p) keys[p] = "1";
+      keys[o.self] = o.mine;
+      return { pubkey: o.author, created_at: o.at || 0, kind: 30078, tags: [["d", d + cp]], content: JSON.stringify({ rev: o.rev || 1, keys }), restored: true };
+    } catch (x) {
+      return null;
+    }
+  }
+  var PENDINGROT_LS = "trinityone.steward.pendingrot.";
+  function _pendingRotAll(cp) {
+    try {
+      const o = JSON.parse(lsGet(PENDINGROT_LS + cp) || "null");
+      return o && typeof o === "object" ? o : {};
+    } catch (x) {
+      return {};
+    }
+  }
+  function _pendingRotAdd(kind, cp, drop, why) {
+    try {
+      if (!cp) return;
+      const o = _pendingRotAll(cp), cur = o[kind] || { drop: [] };
+      const add2 = (drop || []).map((p) => String(p || "").toLowerCase()).filter(Boolean);
+      cur.drop = [.../* @__PURE__ */ new Set([...cur.drop || [], ...add2])];
+      cur.why = cur.why || {};
+      for (const p of add2) cur.why[p] = why === "remove" && cur.why[p] !== "block" ? "remove" : "block";
+      o[kind] = cur;
+      lsSet(PENDINGROT_LS + cp, JSON.stringify(o));
+      try {
+        _rotNote(cp, add2, kind, "waiting");
+        _rotChanged();
+      } catch (x) {
+      }
+    } catch (x) {
+    }
+  }
+  function _pendingRotClear(kind, cp) {
+    try {
+      const o = _pendingRotAll(cp);
+      if (!(kind in o)) return;
+      delete o[kind];
+      lsSet(PENDINGROT_LS + cp, JSON.stringify(o));
+    } catch (x) {
+    }
+  }
   var _mediaKeyChecked = false;
   async function _sha256hex(u83) {
     const d = await crypto.subtle.digest("SHA-256", u83);
@@ -15574,6 +15684,34 @@ zoo`.split("\n");
   var GROUP_RING_MAX = 50;
   var _srev = {};
   var _senvTs = {};
+  var _senvRecips = {};
+  var _senvMine = {};
+  var _senvDropped = {};
+  var _senvPending = /* @__PURE__ */ new Map();
+  function _reCheckGroupKeyPending() {
+    for (const [gid, e] of [..._senvPending]) {
+      if (_authFuture(e)) {
+        _senvPending.delete(gid);
+        continue;
+      }
+      if (_byChurchOrSteward(e)) {
+        _senvPending.delete(gid);
+        stewIngestKey(e);
+      }
+    }
+  }
+  _memberEmitters.add(_reCheckGroupKeyPending);
+  function _noteEnvelopeDrops(gid, prev, next) {
+    const m = _senvDropped[gid] || (_senvDropped[gid] = /* @__PURE__ */ new Map());
+    const nx = new Set(next || []);
+    for (const pk of nx) m.delete(pk);
+    if (!Array.isArray(prev)) return;
+    const gone = prev.filter((pk) => !nx.has(pk));
+    if (!gone.length) return;
+    const t = Date.now();
+    for (const pk of gone) m.set(pk, t);
+    _reconfirmFresh();
+  }
   var _hex = (u) => Array.from(u).map((b) => b.toString(16).padStart(2, "0")).join("");
   var _unhex = (h) => new Uint8Array((String(h).match(/.{1,2}/g) || []).map((x) => parseInt(x, 16)));
   var _b64 = (u83) => {
@@ -15587,11 +15725,22 @@ zoo`.split("\n");
     const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
     if (!d.startsWith(GROUPKEY_D)) return;
     const gid = d.slice(GROUPKEY_D.length);
+    if (_authFuture(e)) return;
+    if (!_byChurchOrSteward(e)) {
+      const p = _senvPending.get(gid);
+      if (!p || (p.created_at || 0) <= (e.created_at || 0)) _senvPending.set(gid, e);
+      return;
+    }
     if ((_senvTs[gid] || 0) > (e.created_at || 0)) return;
+    const newer = (e.created_at || 0) > (_senvTs[gid] || 0);
     _senvTs[gid] = e.created_at || 0;
     try {
       const env = JSON.parse(e.content || "{}");
       _srev[gid] = env.rev || 1;
+      const prev = _senvRecips[gid];
+      _senvRecips[gid] = env.keys && typeof env.keys === "object" ? Object.keys(env.keys).map((p) => String(p).toLowerCase()) : [];
+      _senvMine[gid] = false;
+      _noteEnvelopeDrops(gid, newer ? prev : null, _senvRecips[gid]);
       const mine = env.keys && churchPub && env.keys[churchPub];
       if (mine && churchSk) {
         const plain = decrypt3(mine, getConversationKey(churchSk, e.pubkey));
@@ -15602,8 +15751,13 @@ zoo`.split("\n");
         } catch (x) {
         }
         _skeys[gid] = (ring && ring.length ? ring : [plain]).map(_unhex);
+        _senvMine[gid] = true;
       }
     } catch {
+    }
+    try {
+      if (typeof window !== "undefined" && window.dispatchEvent) window.dispatchEvent(new CustomEvent("steward-groupkey", { detail: { id: gid } }));
+    } catch (e2) {
     }
   }
   var now = () => Math.floor(Date.now() / 1e3);
@@ -15759,8 +15913,24 @@ zoo`.split("\n");
     try {
       const o = JSON.parse(e.content || "{}");
       if ((o.rev || 1) < _careKeyRev) return;
+      if ((o.rev || 1) === _careKeyRev && (e.created_at || 0) < _careKeyAt) {
+        const m2 = o.keys && churchPub && o.keys[churchPub];
+        if (m2 && churchSk) {
+          const pl = decrypt3(m2, getConversationKey(churchSk, e.pubkey));
+          let rg = null;
+          try {
+            const q = JSON.parse(pl);
+            if (Array.isArray(q)) rg = q.filter((k) => typeof k === "string" && k);
+          } catch (x2) {
+          }
+          for (const k of rg && rg.length ? rg : [pl]) if (_careKeyRing.indexOf(k) === -1) _careKeyRing.push(k);
+        }
+        return;
+      }
+      _careKeyAt = e.created_at || 0;
       _careKeyDocKeys = o.keys || null;
       _careKeyRev = o.rev || 1;
+      _careKeyMine = false;
       const mine = o.keys && churchPub && o.keys[churchPub];
       if (mine && churchSk) {
         const plain = decrypt3(mine, getConversationKey(churchSk, e.pubkey));
@@ -15772,6 +15942,8 @@ zoo`.split("\n");
         }
         _careKeyRing = ring && ring.length ? ring : [plain];
         _careKeyHex = _careKeyRing[0];
+        _careKeyMine = true;
+        if (!e.restored) _keyEnvSave("care", actingChurch || pub, e, churchPub, mine);
       }
       _careKeyVer++;
     } catch (x) {
@@ -16693,15 +16865,27 @@ zoo`.split("\n");
         try {
           const r = pool.relays.get(k);
           if (r && r.authPromise && typeof r.authPromise.then === "function") {
-            r.authPromise.then(() => {
+            const p = r.authPromise;
+            p.then(() => {
               try {
                 _authAccepted.set(k, r);
                 _runKeyReadAuthWaiters();
               } catch (e) {
               }
-            }, () => {
+            }, (err2) => {
               try {
                 if (_authAccepted.get(k) === r) _authAccepted.delete(k);
+              } catch (e) {
+              }
+              try {
+                if (r.authPromise !== p) return;
+                r.authPromise = void 0;
+                const ch = r.challenge;
+                if (ch && /timed out/i.test(String(err2 && err2.message || err2 || "")) && r.__authRetriedFor !== ch && typeof r.onauth === "function") {
+                  r.__authRetriedFor = ch;
+                  r.auth(r.onauth).catch(() => {
+                  });
+                }
               } catch (e) {
               }
             });
@@ -16761,6 +16945,88 @@ zoo`.split("\n");
     }
     return list;
   }
+  var _freshReopeners = /* @__PURE__ */ new Set();
+  var _joinPolicyStates = /* @__PURE__ */ new Set();
+  var _membersReask = /* @__PURE__ */ new Set();
+  var _gkChain = /* @__PURE__ */ new Map();
+  var _gkWaiting = /* @__PURE__ */ new Map();
+  var _ensureGroupKeysBusy = /* @__PURE__ */ new Set();
+  var _ensureGroupKeysQuiet = /* @__PURE__ */ new Map();
+  function _freshTok() {
+    return { live: true, genuine: false, at: 0 };
+  }
+  function _tokIsFresh(t, since) {
+    if (!t || !t.cp || t.cp !== (actingChurch || pub) || t.epoch !== _keyReadEpoch) return false;
+    const s = t.sub;
+    if (s && s.relaySet !== void 0) {
+      let now_ = "";
+      try {
+        now_ = relays().slice().sort().join(" ");
+      } catch (e) {
+      }
+      if (s.relaySet !== now_) return false;
+    }
+    return !!s && s.live === true && s.genuine === true && (!since || s.at > since);
+  }
+  function _listIsFresh(list, since) {
+    return _tokIsFresh(list && list._for, since);
+  }
+  function _reconfirmFresh() {
+    for (const f of [..._freshReopeners]) {
+      try {
+        f();
+      } catch (e) {
+      }
+    }
+  }
+  function _freshDocRead(cp0, ds, onevent, onFresh) {
+    const _ownFilters = arguments[4] || null;
+    const _everyRelay = !!(arguments[5] && arguments[5].everyRelay);
+    let stop = null, stopped = false;
+    const open = () => {
+      if (stopped) return;
+      if (stop) {
+        try {
+          stop();
+        } catch (e) {
+        }
+      }
+      const st = _openKeyRead(
+        cp0,
+        _ownFilters || [{ kinds: [30078], authors: [cp0], "#d": ds }, { kinds: [30078], "#church": [cp0], "#d": ds }],
+        (e) => {
+          if (!stopped) onevent(e);
+        },
+        (how) => {
+          if (stopped) return;
+          onFresh(how);
+          setTimeout(() => {
+            if (stop === st) {
+              try {
+                st();
+              } catch (e) {
+              }
+            }
+          }, 0);
+        },
+        void 0,
+        { withoutFailed: !_everyRelay }
+      );
+      stop = st;
+    };
+    _freshReopeners.add(open);
+    open();
+    return () => {
+      stopped = true;
+      _freshReopeners.delete(open);
+      if (stop) {
+        try {
+          stop();
+        } catch (e) {
+        }
+      }
+    };
+  }
   function _keyReadOk(tok) {
     if (!tok || tok.closed || tok.relayClosed || tok.epoch !== _keyReadEpoch || !tok.cp || tok.cp !== (actingChurch || pub)) return false;
     if (Date.now() - tok.at >= tok.wait - 100) return false;
@@ -16778,6 +17044,184 @@ zoo`.split("\n");
       } catch (e) {
       }
     }
+    try {
+      _runPendingRotations();
+    } catch (e) {
+    }
+  }
+  var _pendingRotBusy = false;
+  var _pendingRotAgain = false;
+  var _lastMembers = { cp: "", pubs: [] };
+  var _lastGroups = { cp: "", list: null };
+  var _lastAdmitted = { cp: "", list: null };
+  var _rotOutcome = /* @__PURE__ */ new Map();
+  function _rotNote(cp, pks, kind, state) {
+    try {
+      let byPk = _rotOutcome.get(cp);
+      if (!byPk) {
+        byPk = /* @__PURE__ */ new Map();
+        _rotOutcome.set(cp, byPk);
+      }
+      for (const pk of pks || []) {
+        const k = _lcPk(pk);
+        if (!k) continue;
+        let m = byPk.get(k);
+        if (!m) {
+          m = /* @__PURE__ */ new Map();
+          byPk.set(k, m);
+        }
+        m.set(kind, state);
+      }
+    } catch (e) {
+    }
+  }
+  function _rotChanged() {
+    try {
+      window.dispatchEvent(new CustomEvent("steward-rotations"));
+    } catch (e) {
+    }
+  }
+  async function _runPendingRotations(explicit) {
+    try {
+      return await _runPendingRotationsNow(!!explicit);
+    } catch (e) {
+      _pendingRotBusy = false;
+      _rotChanged();
+    }
+  }
+  var _lcPk = (x) => String(x || "").toLowerCase();
+  async function _runPendingRotationsNow(explicit) {
+    const cp = actingChurch || pub;
+    if (!cp) return;
+    if (_pendingRotBusy) {
+      _pendingRotAgain = true;
+      return;
+    }
+    const all = _pendingRotAll(cp);
+    if (actingChurch) {
+      for (const kind of Object.keys(all)) _rotNote(cp, all[kind] && all[kind].drop || [], kind, "owner");
+      _rotChanged();
+      return;
+    }
+    if (!Object.keys(all).length) {
+      _rotChanged();
+      return;
+    }
+    const S = typeof window !== "undefined" && window.Steward || null;
+    if (!S) return;
+    _pendingRotBusy = true;
+    try {
+      for (const kind of Object.keys(all)) {
+        const p = all[kind];
+        if (!p) continue;
+        const room = kind.indexOf("room:") === 0 ? kind.slice(5) : "";
+        if (!room && kind !== "care" && kind !== "media" && kind !== "name") {
+          _pendingRotClear(kind, cp);
+          continue;
+        }
+        const was = (p.drop || []).map(_lcPk);
+        if (room) {
+          const gl = _lastGroups.cp === cp && _listIsFresh(_lastGroups.list) ? _lastGroups.list : null;
+          const g = gl ? gl.find((x) => x && x.id === room) : void 0;
+          if (gl && (!g || g.deleted || !g.encrypted)) {
+            _pendingRotClear(kind, cp);
+            _rotNote(cp, was, kind, "gone");
+            continue;
+          }
+        }
+        if (!_isRelayAuthed()) continue;
+        if (kind === "care" && !_careKeyFresh) continue;
+        if (kind === "media" && !_mediaKeyFresh) continue;
+        if (kind === "name" && !_nameKeyChecked) continue;
+        if (room && !((_skeys[room] || []).length && _senvMine[room] === true)) continue;
+        if (_localBlockedAt === 0) continue;
+        const why = p.why || {};
+        if (was.some((pk) => why[pk] === "remove") && !_careRosterKnown) continue;
+        const still = was.filter((pk) => why[pk] === "remove" ? !_careRoster.has(pk) : _localBlocked.has(pk));
+        const cleared = was.filter((pk) => still.indexOf(pk) === -1);
+        const removedAndMember = [];
+        if (still.some((pk) => why[pk] === "remove")) {
+          if (_lastMembers.cp !== cp) continue;
+          const members = new Set(_lastMembers.pubs.map(_lcPk));
+          let approval = null;
+          try {
+            approval = S.joinPolicyFresh ? S.joinPolicyFresh() : null;
+          } catch (e) {
+          }
+          const ad = _lastAdmitted.cp === cp && _listIsFresh(_lastAdmitted.list) ? new Set(_lastAdmitted.list.map(_lcPk)) : null;
+          if (approval === null || approval === true && !ad) {
+            if (kind !== "name") continue;
+          }
+          const gl = _lastGroups.cp === cp && _listIsFresh(_lastGroups.list) ? _lastGroups.list : null;
+          const g = room && gl ? gl.find((x) => x && x.id === room) : null;
+          if (room && !g) continue;
+          for (const pk of still) {
+            if (why[pk] !== "remove" || !members.has(pk)) continue;
+            const approved = approval === false || ad && ad.has(pk);
+            const keeps = kind === "name" ? true : room && g.visibility === "invite" ? (g.members || []).map(_lcPk).indexOf(pk) !== -1 : !!approved;
+            if (keeps) removedAndMember.push(pk);
+          }
+        }
+        const drop = still.filter((pk) => removedAndMember.indexOf(pk) === -1);
+        if (cleared.length) _rotNote(cp, cleared, kind, "cleared");
+        if (removedAndMember.length) _rotNote(cp, removedAndMember, kind, "member");
+        if (!drop.length) {
+          _pendingRotClear(kind, cp);
+          continue;
+        }
+        if (drop.length !== was.length) {
+          try {
+            const o = _pendingRotAll(cp);
+            if (o[kind]) {
+              o[kind].drop = drop;
+              lsSet(PENDINGROT_LS + cp, JSON.stringify(o));
+            }
+          } catch (e) {
+          }
+        }
+        const keepIf = (h) => drop.indexOf(_lcPk(h)) === -1;
+        let r = null;
+        try {
+          if (kind === "care") r = await S.rotateCareKey([], [], { keepIf, drop });
+          else if (kind === "media") r = await S.rotateMediaKey([], [], { keepIf, drop });
+          else if (room) r = await S.publishGroupKey(room, [], { rotate: true, keepIf, background: true });
+          else {
+            const known = _lastMembers.cp === cp ? _lastMembers.pubs : [];
+            r = await S.ensureNameKeyForMembers([...new Set([...Object.keys(_nameKeyDocKeys || {}), ...known].map(_lcPk))].filter(keepIf), [], { rotate: true, drop });
+          }
+        } catch (e) {
+          r = false;
+        }
+        if ((actingChurch || pub) !== cp) return;
+        if (r && r.pending) continue;
+        if (r === false || r == null) {
+          _rotNote(cp, drop, kind, "failed");
+          continue;
+        }
+        _pendingRotClear(kind, cp);
+        _rotNote(cp, drop, kind, "done");
+      }
+    } finally {
+      _pendingRotBusy = false;
+    }
+    if (_pendingRotAgain) {
+      _pendingRotAgain = false;
+      return _runPendingRotationsNow(explicit);
+    }
+    _rotChanged();
+  }
+  function _rotationStatus(pk) {
+    const cp = actingChurch || pub, k = _lcPk(pk);
+    const out = { waiting: [], failed: [], done: [], cleared: [], member: [], gone: [], owner: [] };
+    const seen = new Map((_rotOutcome.get(cp) || /* @__PURE__ */ new Map()).get(k) || []);
+    const all = _pendingRotAll(cp);
+    for (const kind of Object.keys(all)) {
+      if (!(all[kind] && all[kind].drop || []).map(_lcPk).includes(k)) continue;
+      const st = seen.get(kind);
+      if (st !== "failed" && st !== "owner") seen.set(kind, "waiting");
+    }
+    for (const [kind, st] of seen) if (out[st]) out[st].push(kind);
+    return out;
   }
   var _keyReadWaiting = /* @__PURE__ */ new Map();
   function _keyReadConnected(url) {
@@ -16845,6 +17289,11 @@ zoo`.split("\n");
         if (opts && opts.withoutFailed) {
           const without = urls.filter((u) => answers.get(u) !== true);
           if (without.length < urls.length && without.every((u) => !_keyReadConnected(u))) {
+            if (opts.keepAsking) {
+              onSettled({ without });
+              retry();
+              return;
+            }
             settled();
             onSettled({ without });
             return;
@@ -16912,6 +17361,40 @@ zoo`.split("\n");
     });
     if (!hosts.length) return "";
     return hosts.length === 1 ? hosts[0] + " isn\u2019t answering" : hosts.join(" and ") + " aren\u2019t answering";
+  }
+  function _nameKeyMintBlockers(cp) {
+    let unproved = [];
+    try {
+      unproved = _gate.unsettled(relaysRaw(), pub);
+    } catch (e) {
+      unproved = [];
+    }
+    const w = _keyReadWaiting.get("name");
+    const read = w && w.settled && w.cp === cp && w.epoch === _keyReadEpoch ? w.urls : [];
+    let unread = [];
+    try {
+      unread = relays().filter((u) => !read.includes(u));
+    } catch (e) {
+      unread = ["?"];
+    }
+    return { unproved, unread };
+  }
+  var _nameMintWaiting = null;
+  function _nameKeyMintLater(cp) {
+    if (_nameMintWaiting) return;
+    const ep = _keyReadEpoch;
+    let p;
+    try {
+      p = _gate.whenSettled(relaysRaw(), pub);
+    } catch (e) {
+      p = Promise.resolve();
+    }
+    _nameMintWaiting = Promise.resolve(p).then(() => {
+      _nameMintWaiting = null;
+      if (ep === _keyReadEpoch && cp === (actingChurch || pub)) setTimeout(() => _keysReadSignal("name"), 1500);
+    }, () => {
+      _nameMintWaiting = null;
+    });
   }
   function _keysReadSignal(kind) {
     try {
@@ -17166,11 +17649,17 @@ zoo`.split("\n");
     _careKeyRev = 0;
     _careKeyChecked = false;
     _careKeyPending = [];
+    _careKeyFresh = false;
+    _careKeyMine = false;
+    _careKeyAt = 0;
     _mediaKeyHex = null;
     _mediaKeyRing = [];
     _mediaKeyDocKeys = null;
     _mediaKeyChecked = false;
     _mediaKeyPushRefused = null;
+    _mediaKeyFresh = false;
+    _mediaKeyMine = false;
+    _mediaKeyAt = 0;
     _keyReadEpoch++;
     _careKeyVer++;
     _mediaKeyVer++;
@@ -17186,6 +17675,14 @@ zoo`.split("\n");
     _ckSessionKeys.clear();
     _authedRelays.clear();
     _latestGuardNotice.clear();
+    _senvPending.clear();
+    try {
+      for (let i3 = localStorage.length - 1; i3 >= 0; i3--) {
+        const k = localStorage.key(i3);
+        if (k && k.indexOf("trinityone.steward.keyenv.") === 0) localStorage.removeItem(k);
+      }
+    } catch (e) {
+    }
   }
   var ENC_LS = "trinityone.steward.church-key.enc";
   var ENC_PENDING_LS = "trinityone.steward.church-key.removing";
@@ -18012,6 +18509,18 @@ zoo`.split("\n");
   }
   var _lastStamp = /* @__PURE__ */ new Map();
   var _lastOk = /* @__PURE__ */ new Map();
+  var _lockedAddr = /* @__PURE__ */ new Set();
+  function _addrLocked(d) {
+    return _lockedAddr.has(d);
+  }
+  var _lastSaveFail = "";
+  function _saveFailed(why) {
+    _lastSaveFail = why;
+    return null;
+  }
+  function _noteSeenStamp(d, ts) {
+    if (d && ts > 0 && (_lastStamp.get(d) || 0) < ts) _lastStamp.set(d, ts);
+  }
   var _lastSpread = /* @__PURE__ */ new Map();
   function _noteSpread(evt, landed, missed) {
     try {
@@ -19493,6 +20002,13 @@ zoo`.split("\n");
         localStorage.removeItem(KEY_LS);
       } catch {
       }
+      try {
+        for (let i3 = localStorage.length - 1; i3 >= 0; i3--) {
+          const k = localStorage.key(i3);
+          if (k && (k.indexOf("trinityone.steward.keyenv.") === 0 || k.indexOf("trinityone.steward.pendingrot.") === 0)) localStorage.removeItem(k);
+        }
+      } catch (e) {
+      }
       _minorsLastClear("");
       window.Steward.keyResumedUnknown = false;
       const done = encBlobRemove();
@@ -19900,13 +20416,17 @@ zoo`.split("\n");
           const keys = await _sealEach(JSON.stringify([fresh]), targets, (pl, mp) => encrypt2(pl, getConversationKey(sk0, mp)));
           const _moved = "Can\u2019t encrypt this upload \u2014 this console changed church, or your church\u2019s media key arrived, while the key was being prepared. Nothing has been uploaded. Try again.";
           if (!_stillOn(pub0, ep0) || _mediaKeyVer !== v0 || _mediaKeyHex) throw new Error(_moved);
-          const _env = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", MEDIAKEY_D + pub0], ["t", NET]], content: JSON.stringify({ keys, rev: now() }) }));
+          const _mev = feChurch({ kind: 30078, created_at: now(), tags: [["d", MEDIAKEY_D + pub0], ["t", NET]], content: JSON.stringify({ keys, rev: now() }) });
+          const _env = await publish(_mev);
           if (_env === false) throw new Error("Can\u2019t encrypt this upload \u2014 your church\u2019s media key could not be saved, so nothing encrypted with it could ever be played. Nothing has been uploaded. A church media key can only be published from the console that holds the church\u2019s own key.");
           if (!_stillOn(pub0, ep0)) throw new Error(_moved);
           _mediaKeyHex = fresh;
           _mediaKeyRing = [fresh, ..._mediaKeyRing.filter((k) => k !== fresh)];
           _mediaKeyDocKeys = keys;
+          _mediaKeyMine = true;
           _mediaKeyVer++;
+          _mediaKeyAt = Math.max(_mediaKeyAt, _mev.created_at || 0);
+          _keyEnvSave("media", pub0, _mev, pub0, keys[pub0]);
           useHex = fresh;
         }
       }
@@ -19939,9 +20459,11 @@ zoo`.split("\n");
     async ensureMediaKeyForMembers(memberPubs, stewardPubs) {
       if (actingChurch) return false;
       if (!sk || !_mediaKeyHex) return false;
+      if (!_mediaKeyFresh) return false;
+      if (_mediaKeyDocKeys && !_mediaKeyMine) return false;
       const pub0 = pub, ep0 = _keyReadEpoch, sk0 = sk;
-      const want = [.../* @__PURE__ */ new Set([pub0, ...(memberPubs || []).filter(Boolean), ...(stewardPubs || []).filter(Boolean)])].filter((p) => !_localBlocked.has(String(p).toLowerCase()));
       const have = _mediaKeyDocKeys || {};
+      const want = [.../* @__PURE__ */ new Set([pub0, ...(memberPubs || []).filter(Boolean), ...(stewardPubs || []).filter(Boolean), ...Object.keys(have)])].filter((p) => !_localBlocked.has(String(p).toLowerCase()));
       if (want.every((p) => have[p])) return false;
       const fp = want.slice().sort().join(",");
       if (_mediaKeyPushRefused === fp) return false;
@@ -19957,13 +20479,17 @@ zoo`.split("\n");
       const keys = await _sealEach(_mring, want, (pl, mp) => encrypt2(pl, getConversationKey(sk0, mp)));
       if (_mediaKeyVer !== _v0 || !_stillOn(pub0, ep0)) return false;
       const _pubOpts = { background: true };
-      const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", MEDIAKEY_D + pub0], ["t", NET]], content: JSON.stringify({ keys, rev: now() }) }), _pubOpts);
+      const _mev = feChurch({ kind: 30078, created_at: now(), tags: [["d", MEDIAKEY_D + pub0], ["t", NET]], content: JSON.stringify({ keys, rev: now() }) });
+      const ok = await publish(_mev, _pubOpts);
       if (!_stillOn(pub0, ep0)) return ok;
       if (ok !== false) {
         if (_mediaKeyVer === _v0) {
           _mediaKeyDocKeys = keys;
+          _mediaKeyMine = true;
           _mediaKeyPushRefused = null;
           _mediaKeyVer++;
+          _mediaKeyAt = Math.max(_mediaKeyAt, _mev.created_at || 0);
+          _keyEnvSave("media", pub0, _mev, pub0, keys[pub0]);
         }
         return ok;
       }
@@ -19992,12 +20518,35 @@ zoo`.split("\n");
       if (actingChurch) return null;
       if (!sk || !pub) return false;
       const pub0 = pub, ep0 = _keyReadEpoch, sk0 = sk;
-      if (!_isRelayAuthed()) return false;
-      if (!_mediaKeyHex) return _mediaKeyChecked && !_mediaKeyDocKeys ? { rotated: false, reason: "no sermon key yet" } : false;
+      const _opt = arguments[2] || {}, _drop = Array.isArray(_opt.drop) ? _opt.drop : [];
+      if (!_isRelayAuthed() || !_mediaKeyFresh) {
+        try {
+          _pendingRotAdd("media", pub0, _drop, _opt.why);
+        } catch (x) {
+        }
+        return { pending: true };
+      }
+      if (!_mediaKeyHex) {
+        if (_mediaKeyChecked && !_mediaKeyDocKeys) return { rotated: false, reason: "no sermon key yet" };
+        try {
+          _pendingRotAdd("media", pub0, _drop, _opt.why);
+        } catch (x) {
+        }
+        return { pending: true };
+      }
+      if (_mediaKeyDocKeys && !_mediaKeyMine) return false;
       _mediaKeyVer++;
       const fresh = _hex(crypto.getRandomValues(new Uint8Array(32)));
       const full = [fresh, ..._mediaKeyRing.length ? _mediaKeyRing : [_mediaKeyHex]].slice(0, 50);
-      const want = [.../* @__PURE__ */ new Set([pub0, ...(memberPubs || []).filter(Boolean), ...(stewardPubs || []).filter(Boolean)])].filter((p) => !_localBlocked.has(String(p).toLowerCase()));
+      const _keepIf = arguments[2] && typeof arguments[2].keepIf === "function" ? arguments[2].keepIf : null;
+      const _held = _keepIf ? Object.keys(_mediaKeyDocKeys || {}).filter((p) => {
+        try {
+          return !!_keepIf(p);
+        } catch (e) {
+          return false;
+        }
+      }) : [];
+      const want = [.../* @__PURE__ */ new Set([pub0, ...(memberPubs || []).filter(Boolean), ...(stewardPubs || []).filter(Boolean), ..._held])].filter((p) => !_localBlocked.has(String(p).toLowerCase()));
       const ring = _fitKeyRing(full, want.length, (pl) => encrypt2(pl, getConversationKey(sk0, want[0])));
       if (!ring) {
         console.warn("[steward] media key rotation too large for one document at " + want.length + " recipients");
@@ -20007,14 +20556,18 @@ zoo`.split("\n");
       const payload = JSON.stringify(ring);
       const keys = await _sealEach(payload, want, (pl, mp) => encrypt2(pl, getConversationKey(sk0, mp)));
       if (!_stillOn(pub0, ep0)) return false;
-      const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", MEDIAKEY_D + pub0], ["t", NET]], content: JSON.stringify({ keys, rev: now() }) }));
+      const _mev = feChurch({ kind: 30078, created_at: now(), tags: [["d", MEDIAKEY_D + pub0], ["t", NET]], content: JSON.stringify({ keys, rev: now() }) });
+      const ok = await publish(_mev);
       if (ok === false) return false;
       if (!_stillOn(pub0, ep0)) return true;
       _mediaKeyRing = [...full, ..._mediaKeyRing.filter((k) => full.indexOf(k) === -1)];
       _mediaKeyHex = fresh;
       _mediaKeyDocKeys = keys;
+      _mediaKeyMine = true;
       _mediaKeyPushRefused = null;
       _mediaKeyVer++;
+      _mediaKeyAt = Math.max(_mediaKeyAt, _mev.created_at || 0);
+      _keyEnvSave("media", pub0, _mev, pub0, keys[pub0]);
       return true;
     },
     // ---- care key: same envelope as the media key, for the Care module's sensitive fields ----
@@ -20024,6 +20577,11 @@ zoo`.split("\n");
       const cp = actingChurch || pub;
       if (!cp) return () => {
       };
+      _careKeyFresh = false;
+      {
+        const r = _keyEnvRestore("care", cp, CAREKEY_D);
+        if (r) _ingestCareKeyEnv(r);
+      }
       return _openKeyRead(
         cp,
         [
@@ -20039,13 +20597,22 @@ zoo`.split("\n");
           _ingestCareKeyEnv(e);
         },
         // "No envelope came back" opens the mint gate ONLY on a trustworthy answer from every relay — _openKeyRead.
-        () => {
-          if (!_careKeyChecked) {
-            _careKeyChecked = true;
-            _keysReadSignal("care");
+        // TWO ANSWERS FROM ONE READ (round 3a, (b)). "Fresh" — fine to re-seal the key we hold — needs every CONNECTED relay
+        // to have answered genuinely (the blocklist's rule, `withoutFailed`): with a proved relay down for days, nobody new
+        // would get the care key at all (measured: a-relay-that-is-down-does-not-hold-back-new-members-keys). The MINT gate
+        // (`_careKeyChecked`) still needs EVERY relay — minting over an envelope a down relay holds destroys the church's
+        // care records — so a settle that left a relay out does not set it.
+        (how) => {
+          _careKeyFresh = true;
+          if (!_careKeyChecked && !(how && how.without && how.without.length)) _careKeyChecked = true;
+          _keysReadSignal("care");
+          try {
+            _runPendingRotations();
+          } catch (e) {
           }
         },
-        "care"
+        "care",
+        { withoutFailed: true, keepAsking: true }
       );
     },
     // Wrap the care key for everyone who needs it. MINTS only on a first run where we have positively
@@ -20059,6 +20626,8 @@ zoo`.split("\n");
       const cp = actingChurch || pub, ep0 = _keyReadEpoch, sk0 = sk;
       if (!sk || !cp || !churchPub) return false;
       if (!_careKeyChecked) return false;
+      if (!_careKeyFresh) return false;
+      if (_careKeyHex && _careKeyDocKeys && !_careKeyMine) return false;
       _reCheckCareKeyPending();
       if (_careKeyPending.length) return false;
       if (!_careKeyHex) {
@@ -20071,8 +20640,8 @@ zoo`.split("\n");
       const minting = !_careKeyHex;
       const ring0 = minting ? [_hex(crypto.getRandomValues(new Uint8Array(32)))] : _careKeyRing.length ? _careKeyRing : [_careKeyHex];
       const rev2 = minting ? 1 : _careKeyRev;
-      const want = [...new Set([cp, churchPub, ...memberPubs || [], ...stewardPubs || []].filter(Boolean))].filter((p) => !_localBlocked.has(String(p).toLowerCase()));
       const have = (minting ? null : _careKeyDocKeys) || {};
+      const want = [...new Set([cp, churchPub, ...memberPubs || [], ...stewardPubs || [], ...Object.keys(have)].filter(Boolean))].filter((p) => !_localBlocked.has(String(p).toLowerCase()));
       if (want.every((p2) => have[p2])) return false;
       const _v1 = _careKeyVer;
       const _cfit = _fitKeyRing(ring0, want.length, (pl) => encrypt2(pl, getConversationKey(sk0, want[0])));
@@ -20084,7 +20653,8 @@ zoo`.split("\n");
       const _ring = JSON.stringify(_cfit);
       const keys = await _sealEach(_ring, want, (pl, mp) => encrypt2(pl, getConversationKey(sk0, mp)));
       if (_careKeyVer !== _v1 || !_stillOn(cp, ep0)) return false;
-      const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", CAREKEY_D + cp], ["t", NET]], content: JSON.stringify({ keys, rev: rev2 }) }), { background: !!(opts && opts.background) });
+      const _cev = feChurch({ kind: 30078, created_at: now(), tags: [["d", CAREKEY_D + cp], ["t", NET]], content: JSON.stringify({ keys, rev: rev2 }) });
+      const ok = await publish(_cev, { background: !!(opts && opts.background) });
       if (ok !== false && _careKeyVer === _v1 && _stillOn(cp, ep0)) {
         if (minting) {
           _careKeyRing = ring0.slice();
@@ -20092,7 +20662,10 @@ zoo`.split("\n");
           _careKeyRev = rev2;
         }
         _careKeyDocKeys = keys;
+        _careKeyMine = true;
         _careKeyVer++;
+        _careKeyAt = Math.max(_careKeyAt, _cev.created_at || 0);
+        _keyEnvSave("care", cp, _cev, churchPub, keys[churchPub]);
       }
       return ok;
     },
@@ -20166,12 +20739,35 @@ zoo`.split("\n");
     // them), and the new envelope simply isn't wrapped to the person who left.
     async rotateCareKey(memberPubs, stewardPubs) {
       const cp = actingChurch || pub, ep0 = _keyReadEpoch, sk0 = sk, rev0 = (_careKeyRev || 1) + 1;
+      const _opt = arguments[2] || {}, _drop = Array.isArray(_opt.drop) ? _opt.drop : [];
       if (!sk || !cp || !churchPub) return false;
-      if (!_careKeyChecked || !_isRelayAuthed()) return false;
-      if (!_careKeyHex) return false;
+      if (!_careKeyFresh || !_isRelayAuthed()) {
+        try {
+          _pendingRotAdd("care", cp, _drop, _opt.why);
+        } catch (x) {
+        }
+        return { pending: true };
+      }
+      if (!_careKeyHex) {
+        if (_careKeyChecked && !_careKeyDocKeys) return { rotated: false, reason: "no care key yet" };
+        try {
+          _pendingRotAdd("care", cp, _drop, _opt.why);
+        } catch (x) {
+        }
+        return { pending: true };
+      }
+      if (_careKeyDocKeys && !_careKeyMine) return false;
       _careKeyVer++;
       const fresh = _hex(crypto.getRandomValues(new Uint8Array(32)));
-      const want = [...new Set([cp, churchPub, ...memberPubs || [], ...stewardPubs || []].filter(Boolean))].filter((p) => !_localBlocked.has(String(p).toLowerCase()));
+      const _keepIf = arguments[2] && typeof arguments[2].keepIf === "function" ? arguments[2].keepIf : null;
+      const _held = _keepIf ? Object.keys(_careKeyDocKeys || {}).filter((p) => {
+        try {
+          return !!_keepIf(p);
+        } catch (e) {
+          return false;
+        }
+      }) : [];
+      const want = [...new Set([cp, churchPub, ...memberPubs || [], ...stewardPubs || [], ..._held].filter(Boolean))].filter((p) => !_localBlocked.has(String(p).toLowerCase()));
       const full = [fresh, ..._careKeyRing.length ? _careKeyRing : [_careKeyHex]].slice(0, 50);
       const probe = want[0];
       let ring = null;
@@ -20199,14 +20795,18 @@ zoo`.split("\n");
       }
       if (ring.length < full.length) console.warn("[steward] care key ring trimmed to " + ring.length + " to fit " + want.length + " members \u2014 older sealed care records will no longer open");
       if (!_stillOn(cp, ep0)) return false;
-      const ok = await publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", CAREKEY_D + cp], ["t", NET]], content: JSON.stringify({ keys, rev: rev0 }) }));
+      const _cev = feChurch({ kind: 30078, created_at: now(), tags: [["d", CAREKEY_D + cp], ["t", NET]], content: JSON.stringify({ keys, rev: rev0 }) });
+      const ok = await publish(_cev);
       if (ok === false) return false;
       if (!_stillOn(cp, ep0)) return true;
       _careKeyRing = ring;
       _careKeyHex = fresh;
       _careKeyRev = rev0;
       _careKeyDocKeys = keys;
+      _careKeyMine = true;
       _careKeyVer++;
+      _careKeyAt = _cev.created_at || 0;
+      _keyEnvSave("care", cp, _cev, churchPub, keys[churchPub]);
       return true;
     },
     // has this device actually completed a NIP-42 auth? Callers use it to tell "the church has none" apart
@@ -20236,6 +20836,40 @@ zoo`.split("\n");
       if (!pub) return () => {
       };
       const forPub = pub;
+      _mediaKeyFresh = false;
+      const _onEnv = function onMediaKeyEnvelope(e) {
+        if (forPub !== pub || e.pubkey !== pub || ((e.tags || []).find((t) => t[0] === "d") || [])[1] !== MEDIAKEY_D + pub) return;
+        if ((e.created_at || 0) < _mediaKeyAt) return;
+        _mediaKeyAt = e.created_at || 0;
+        _mediaKeyMine = false;
+        try {
+          const o = JSON.parse(e.content);
+          _mediaKeyDocKeys = o && o.keys || null;
+          _mediaKeyPushRefused = null;
+          _mediaKeyVer++;
+          const _meKey = _myOwnPub();
+          const mine = o.keys && (o.keys[_meKey] || (_meKey === pub ? null : o.keys[pub]));
+          if (mine && sk) {
+            const plain = decrypt3(mine, getConversationKey(sk, e.pubkey));
+            let r = null;
+            try {
+              const q = JSON.parse(plain);
+              if (Array.isArray(q)) r = q.filter((k) => typeof k === "string" && k);
+            } catch (x2) {
+            }
+            const incoming = r && r.length ? r : [plain];
+            _mediaKeyRing = [...incoming, ..._mediaKeyRing.filter((k) => incoming.indexOf(k) === -1)];
+            _mediaKeyHex = _mediaKeyRing[0];
+            _mediaKeyMine = true;
+            if (!e.restored) _keyEnvSave("media", forPub, e, o.keys[_meKey] ? _meKey : pub, mine);
+          }
+        } catch (x) {
+        }
+      };
+      {
+        const r = _keyEnvRestore("media", forPub, MEDIAKEY_D);
+        if (r) _onEnv(r);
+      }
       return _openKeyRead(
         forPub,
         [{ kinds: [30078], authors: [pub], "#d": [MEDIAKEY_D + pub] }],
@@ -20245,38 +20879,20 @@ zoo`.split("\n");
         /* `_mediaKeyPushRefused = null` (F2): an envelope LANDING is new information — the recipient map has
            changed under us, so whatever this console last had refused is worth asking again. Without this a
            console that was refused once would go on skipping until the roster itself changed. */
-        function onMediaKeyEnvelope(e) {
-          if (forPub !== pub || e.pubkey !== pub || ((e.tags || []).find((t) => t[0] === "d") || [])[1] !== MEDIAKEY_D + pub) return;
-          try {
-            const o = JSON.parse(e.content);
-            _mediaKeyDocKeys = o && o.keys || null;
-            _mediaKeyPushRefused = null;
-            _mediaKeyVer++;
-            const _meKey = _myOwnPub();
-            const mine = o.keys && (o.keys[_meKey] || (_meKey === pub ? null : o.keys[pub]));
-            if (mine && sk) {
-              const plain = decrypt3(mine, getConversationKey(sk, e.pubkey));
-              let r = null;
-              try {
-                const q = JSON.parse(plain);
-                if (Array.isArray(q)) r = q.filter((k) => typeof k === "string" && k);
-              } catch (x2) {
-              }
-              const incoming = r && r.length ? r : [plain];
-              _mediaKeyRing = [...incoming, ..._mediaKeyRing.filter((k) => incoming.indexOf(k) === -1)];
-              _mediaKeyHex = _mediaKeyRing[0];
-            }
-          } catch (x) {
-          }
-        },
+        _onEnv,
         // no envelope came back → it is safe to mint one, but ONLY on a trustworthy answer from every relay
-        () => {
-          if (!_mediaKeyChecked) {
-            _mediaKeyChecked = true;
-            _keysReadSignal("media");
+        // fresh on every connected relay; the mint gate on every relay — see subscribeCareKey (round 3a, (b))
+        (how) => {
+          _mediaKeyFresh = true;
+          if (!_mediaKeyChecked && !(how && how.without && how.without.length)) _mediaKeyChecked = true;
+          _keysReadSignal("media");
+          try {
+            _runPendingRotations();
+          } catch (e) {
           }
         },
-        "media"
+        "media",
+        { withoutFailed: true, keepAsking: true }
       );
     },
     // true if every relay this console has opened is still connected. The console's reconnect ticker only
@@ -20939,70 +21555,176 @@ zoo`.split("\n");
       for (const g of groups || []) {
         if (!g || !g.id || !g.encrypted) continue;
         if ((_skeys[g.id] || []).length) continue;
-        const canary = await pool.querySync(relays(), [{ kinds: [30078], "#d": [GROUP_D + g.id], limit: 1 }]);
-        if (!Array.isArray(canary) || !canary.length) continue;
-        const envelopes = await pool.querySync(relays(), [{ kinds: [30078], authors: [.../* @__PURE__ */ new Set([cp, churchPub])], "#d": [GROUPKEY_D + g.id], limit: 1 }]);
-        const sealed = await pool.querySync(relays(), [{ kinds: [1], "#t": [g.id], limit: 20 }]);
-        if (!Array.isArray(envelopes) || !Array.isArray(sealed)) continue;
-        if (envelopes.length) continue;
-        if (sealed.some((e) => (e.tags || []).some((t) => t[0] === "enc" && t[1] === "1"))) {
-          out.push({ id: g.id, name: g.name || "", state: "needs-decision" });
-          continue;
+        const gk = cp + "|" + g.id;
+        if (_ensureGroupKeysBusy.has(gk)) continue;
+        if (Date.now() < (_ensureGroupKeysQuiet.get(gk) || 0)) continue;
+        _ensureGroupKeysBusy.add(gk);
+        try {
+          const canary = await pool.querySync(relays(), [{ kinds: [30078], "#d": [GROUP_D + g.id], limit: 1 }]);
+          if (!Array.isArray(canary) || !canary.length) continue;
+          const envelopes = await pool.querySync(relays(), [{ kinds: [30078], authors: [.../* @__PURE__ */ new Set([cp, churchPub])], "#d": [GROUPKEY_D + g.id], limit: 1 }]);
+          const sealed = await pool.querySync(relays(), [{ kinds: [1], "#t": [g.id], limit: 20 }]);
+          if (!Array.isArray(envelopes) || !Array.isArray(sealed)) continue;
+          if (envelopes.length) {
+            _ensureGroupKeysQuiet.set(gk, Date.now() + 6e4);
+            continue;
+          }
+          if (sealed.some((e) => (e.tags || []).some((t) => t[0] === "enc" && t[1] === "1"))) {
+            out.push({ id: g.id, name: g.name || "", state: "needs-decision" });
+            continue;
+          }
+          const recips = g.visibility === "invite" ? g.members || [] : memberPubs || [];
+          const r = await this.publishGroupKey(g.id, recips, { background: true });
+          out.push({ id: g.id, name: g.name || "", state: r === null || r === false ? "failed" : "issued" });
+        } finally {
+          _ensureGroupKeysBusy.delete(gk);
         }
-        const recips = g.visibility === "invite" ? g.members || [] : memberPubs || [];
-        const r = await this.publishGroupKey(g.id, recips, { background: true });
-        out.push({ id: g.id, name: g.name || "", state: r === null || r === false ? "failed" : "issued" });
       }
       return out;
     },
     async publishGroupKey(groupId, memberPubs, opts = {}) {
-      if (!churchSk || !churchPub) return Promise.resolve(null);
-      const haveRing = (_skeys[groupId] || []).length > 0;
-      if (opts.reuseOnly && !haveRing) return Promise.resolve(null);
-      const recips = [.../* @__PURE__ */ new Set([actingChurch || churchPub, churchPub, ...(memberPubs || []).map((p) => toPubHex(p) || p).filter(Boolean)])].filter((p) => !_localBlocked.has(String(p).toLowerCase()));
-      let ring = _skeys[groupId] || [];
-      let key = ring[0];
-      if (!opts.rotate && !key && !_isRelayAuthed()) return Promise.resolve(null);
-      let rev2 = _srev[groupId] || 1;
-      if (opts.rotate || !key) {
-        key = crypto.getRandomValues(new Uint8Array(32));
-        rev2 = (_srev[groupId] || 0) + 1;
-        ring = [key, ...ring].slice(0, GROUP_RING_MAX);
-      } else if (!ring.length) ring = [key];
-      let skipped = [];
-      const build = (r) => {
-        const keys = {}, rings = {}, missed = [];
-        const cur = _hex(r[0]), wrapped = JSON.stringify(r.map(_hex));
-        for (const pk of recips) {
+      const prior = _gkChain.get(groupId) || null;
+      const _interactive = !opts.background;
+      if (_interactive) _gkWaiting.set(groupId, (_gkWaiting.get(groupId) || 0) + 1);
+      let done = null;
+      const turn = new Promise((r) => {
+        done = r;
+      });
+      const tail = (prior || Promise.resolve()).then(() => turn, () => turn);
+      _gkChain.set(groupId, tail);
+      const run = async () => {
+        if (_interactive) {
+          const n = (_gkWaiting.get(groupId) || 1) - 1;
+          if (n > 0) _gkWaiting.set(groupId, n);
+          else _gkWaiting.delete(groupId);
+        } else if (opts.reuseOnly && (_gkWaiting.get(groupId) || 0) > 0) return null;
+        if (typeof opts.onTurn === "function") {
           try {
-            const ck = getConversationKey(churchSk, pk);
-            keys[pk] = encrypt2(cur, ck);
-            rings[pk] = encrypt2(wrapped, ck);
+            opts.onTurn();
           } catch (e) {
-            missed.push(pk);
           }
         }
-        build.missed = missed;
-        return JSON.stringify({ rev: rev2, keys, rings });
-      };
-      let content = build(ring);
-      skipped = build.missed || [];
-      for (let r = ring.length; content.length > 9e5 && r > 1; ) {
-        r = Math.max(1, r >> 1);
-        content = build(ring.slice(0, r));
+        if (!churchSk || !churchPub) return Promise.resolve(null);
+        const haveRing = (_skeys[groupId] || []).length > 0;
+        if (opts.reuseOnly && !haveRing) return Promise.resolve(null);
+        if (opts.reuseOnly && _senvMine[groupId] !== true) return Promise.resolve(null);
+        const _held = opts.rotate && typeof opts.keepIf === "function" ? (_senvRecips[groupId] || []).filter((p) => {
+          try {
+            return !!opts.keepIf(p);
+          } catch (e) {
+            return false;
+          }
+        }) : [];
+        const recips = [.../* @__PURE__ */ new Set([actingChurch || churchPub, churchPub, ...(memberPubs || []).map((p) => toPubHex(p) || p).filter(Boolean), ..._held])].filter((p) => !_localBlocked.has(String(p).toLowerCase()));
+        let ring = _skeys[groupId] || [];
+        let key = ring[0];
+        if (!opts.rotate && !key && !_isRelayAuthed()) return Promise.resolve(null);
+        let rev2 = _srev[groupId] || 1;
+        if (opts.rotate || !key) {
+          key = crypto.getRandomValues(new Uint8Array(32));
+          rev2 = (_srev[groupId] || 0) + 1;
+          ring = [key, ...ring].slice(0, GROUP_RING_MAX);
+        } else if (!ring.length) ring = [key];
+        let skipped = [];
+        const build = (r) => {
+          const keys = {}, rings = {}, missed = [];
+          const cur = _hex(r[0]), wrapped = JSON.stringify(r.map(_hex));
+          for (const pk of recips) {
+            try {
+              const ck = getConversationKey(churchSk, pk);
+              keys[pk] = encrypt2(cur, ck);
+              rings[pk] = encrypt2(wrapped, ck);
+            } catch (e) {
+              missed.push(pk);
+            }
+          }
+          build.missed = missed;
+          build.recips = Object.keys(keys);
+          return JSON.stringify({ rev: rev2, keys, rings });
+        };
+        let content = build(ring);
         skipped = build.missed || [];
+        for (let r = ring.length; content.length > 9e5 && r > 1; ) {
+          r = Math.max(1, r >> 1);
+          content = build(ring.slice(0, r));
+          skipped = build.missed || [];
+        }
+        const _env = feChurch({ kind: 30078, created_at: now(), tags: [["d", GROUPKEY_D + groupId], ["t", NET]], content }, churchSk);
+        const ok = await publish(_env, { background: !!opts.background });
+        if (ok === false) return false;
+        if ((_senvTs[groupId] || 0) > (_env.created_at || 0)) return skipped.length ? { ok: true, skipped: skipped.slice() } : true;
+        _skeys[groupId] = ring;
+        _srev[groupId] = rev2;
+        _senvTs[groupId] = _env.created_at || 0;
+        {
+          const prevR = _senvRecips[groupId];
+          _senvRecips[groupId] = (build.recips || []).map((p) => String(p).toLowerCase());
+          _senvMine[groupId] = true;
+          _noteEnvelopeDrops(groupId, prevR, _senvRecips[groupId]);
+        }
+        if (skipped.length) {
+          console.warn("[steward] group key " + groupId + ": could not seal to " + skipped.length + " member(s) \u2014 they cannot read or post in that room");
+          return { ok: true, skipped: skipped.slice() };
+        }
+        return true;
+      };
+      try {
+        if (prior) {
+          try {
+            await prior;
+          } catch (e) {
+          }
+        }
+        return await run();
+      } finally {
+        done();
+        if (_gkChain.get(groupId) === tail) _gkChain.delete(groupId);
       }
-      const _env = feChurch({ kind: 30078, created_at: now(), tags: [["d", GROUPKEY_D + groupId], ["t", NET]], content }, churchSk);
-      const ok = await publish(_env, { background: !!opts.background });
-      if (ok === false) return false;
-      _skeys[groupId] = ring;
-      _srev[groupId] = rev2;
-      _senvTs[groupId] = _env.created_at || 0;
-      if (skipped.length) {
-        console.warn("[steward] group key " + groupId + ": could not seal to " + skipped.length + " member(s) \u2014 they cannot read or post in that room");
-        return { ok: true, skipped: skipped.slice() };
-      }
-      return true;
+    },
+    // WHO THE NEWEST ENVELOPE OF A ROOM IS WRAPPED TO — or null when this console holds no ring for the room (its
+    // envelope has not been ingested, or carries no copy for this church), in which case nothing can be re-wrapped
+    // anyway (publishGroupKey with reuseOnly would do nothing). Read by KeyDistributor (app/stew-dashboard.jsx).
+    // …and null too when the newest envelope had no copy this console could open (_senvMine): the ring we hold is then
+    // an older generation, and nothing may be re-wrapped from it.
+    groupKeyRecipients(groupId) {
+      if (!(_skeys[groupId] || []).length || !_senvRecips[groupId] || _senvMine[groupId] !== true) return null;
+      return _senvRecips[groupId].slice();
+    },
+    // who the room's newest envelopes DROPPED, and when this console saw it: [{ pub, at }] (lower-case hex). The key
+    // distributor holds them back until the authority lists have been re-read since `at` (see _senvDropped).
+    groupKeyDropped(groupId) {
+      const m = _senvDropped[groupId];
+      return m ? [...m.entries()].map(([p, at]) => ({ pub: p, at })) : [];
+    },
+    // IS THIS LIST FRESH — the current church's, from a subscription open now, settled by a genuine per-relay read, and
+    // (with `since`) re-read after that moment? See _freshDocRead. Read by KeyDistributor (app/stew-dashboard.jsx).
+    listIsFresh(list, since) {
+      return _listIsFresh(list, since);
+    },
+    // the same, for one ROOM of a group list: its document and key envelope have been read genuinely (subscribeGroups)
+    groupFresh(list, groupId, since) {
+      const t = list && list._for;
+      if (!_tokIsFresh(t)) return false;
+      const at = t.sub.rooms && t.sub.rooms.get(groupId);
+      return !!at && (!since || at > since);
+    },
+    // the join policy as a FRESH read has it: true / false, or null when no fresh read is in hand. A boolean cannot carry
+    // the stamp an array does, so the engine keeps it (subscribeJoinPolicy). Read by KeyDistributor.
+    joinPolicyFresh(since) {
+      let best = null;
+      for (const st of _joinPolicyStates) if (_tokIsFresh(st.tag, since) && (!best || st.tag.sub.at > best.tag.sub.at)) best = st;
+      return best ? best.approval : null;
+    },
+    // which of `pubs` (hex or npub) the room's newest envelope has NO copy for — null as for groupKeyRecipients.
+    // Returns the entries as given, so a caller can compare them with its own list.
+    groupKeyMissing(groupId, pubs) {
+      const have = window.Steward.groupKeyRecipients(groupId);
+      if (!have) return null;
+      const hs = new Set(have);
+      return (pubs || []).filter((p) => {
+        const h = toPubHex(p);
+        return h && !hs.has(h);
+      });
     },
     // ---- CREATE a room that is meant to be encrypted: it is never created without its key (new church, 2026-10-02). ----
     //
@@ -21064,8 +21786,9 @@ zoo`.split("\n");
       if (!group || !group.id || !churchSk) return { sealed: false, reason: "cannot-key" };
       if (!_isRelayAuthed()) return { sealed: false, reason: "not-authed" };
       let r = null;
+      const _onTurn = arguments[2] && arguments[2].onTurn;
       try {
-        r = await window.Steward.publishGroupKey(group.id, memberPubs);
+        r = await window.Steward.publishGroupKey(group.id, memberPubs, _onTurn ? { onTurn: _onTurn } : void 0);
       } catch (e) {
         r = null;
       }
@@ -21094,7 +21817,8 @@ zoo`.split("\n");
     // ---- moderation: the church's blocklist (banned member pubkeys). The relay rejects their writes
     // and withholds their existing events. Replaceable doc d=blocked:<churchpub>. ----
     subscribeBlocked(onBlocked) {
-      const _tag = _listTag(), _deliver = onBlocked, cp0 = pub;
+      const _tag = _listTag(), _deliver = onBlocked, cp0 = pub, tok = _freshTok();
+      _tag.sub = tok;
       let genuine = false, floored = false;
       const withFloor = (list) => floored ? [.../* @__PURE__ */ new Set([...(list || []).map((p) => String(p).toLowerCase()), ..._blockedLastSet(cp0)])] : list;
       onBlocked = (list) => _deliver(genuine ? _stampFor(withFloor(list), _tag) : list);
@@ -21121,24 +21845,25 @@ zoo`.split("\n");
           onBlocked(cur);
         }
       });
-      const stopRead = _openKeyRead(
+      const stopRead = _freshDocRead(
         cp0,
-        [{ kinds: [30078], authors: [cp0], "#d": [BLOCKED_D + cp0] }],
+        [BLOCKED_D + cp0],
         (e) => {
           if (take(e)) onBlocked(cur);
         },
         (how) => {
-          if (genuine) return;
           genuine = true;
           floored = !!(how && how.without && how.without.length);
+          tok.genuine = true;
+          tok.at = Date.now();
           cur = [...cur];
           _noteBlockedList(cp0, _tag.epoch, withFloor(cur), latest);
           onBlocked(cur);
-        },
-        void 0,
-        { withoutFailed: true }
+          _keysReadSignal("blocked");
+        }
       );
       return () => {
+        tok.live = false;
         try {
           sub.close();
         } catch {
@@ -21268,6 +21993,26 @@ zoo`.split("\n");
         if (ok && drop.length && seq === _setBlockedSeq && (actingChurch || pub) === cp0) {
           for (const p of drop) _localBlocked.delete(p);
           lsSet(BLOCKED_LAST_LS + cp0, JSON.stringify([..._localBlocked]));
+          try {
+            const o = _pendingRotAll(cp0);
+            let moved = false;
+            for (const k of Object.keys(o)) {
+              const before = (o[k].drop || []).length;
+              o[k].drop = (o[k].drop || []).filter((x) => drop.indexOf(x) === -1);
+              if (o[k].drop.length !== before) moved = true;
+              if (!o[k].drop.length) delete o[k];
+            }
+            if (moved) lsSet(PENDINGROT_LS + cp0, JSON.stringify(o));
+          } catch (x) {
+          }
+        }
+        if (drop.length && seq === _setBlockedSeq && (actingChurch || pub) === cp0) {
+          for (const f of [..._membersReask]) {
+            try {
+              f();
+            } catch (e) {
+            }
+          }
         }
         return ok;
       }));
@@ -21607,10 +22352,24 @@ zoo`.split("\n");
     async _ensureNameKeyLocked(memberPubs, stewardPubs, opts = {}) {
       if (!churchSk || !churchPub) return Promise.resolve(null);
       const cp = actingChurch || pub, ep0 = _keyReadEpoch;
-      if (!_nameKeyChecked || !_isRelayAuthed()) return Promise.resolve(null);
+      if (!_nameKeyChecked || !_isRelayAuthed()) {
+        if (opts.rotate) {
+          try {
+            _pendingRotAdd("name", cp, Array.isArray(opts.drop) ? opts.drop : [], opts.why);
+          } catch (x) {
+          }
+          return Promise.resolve({ pending: true });
+        }
+        return Promise.resolve(null);
+      }
       let ring = _nameKeyRing.slice();
       if (!ring.length && _nameKeyDocKeys) return Promise.resolve(null);
       if (opts.rotate && !ring.length) return Promise.resolve({ rotated: false, reason: "no name key yet" });
+      if (!ring.length) {
+        const b = _nameKeyMintBlockers(cp);
+        if (b.unproved.length) _nameKeyMintLater(cp);
+        if (b.unproved.length || b.unread.length) return Promise.resolve(null);
+      }
       if (opts.rotate || !ring.length) ring = [_hex(crypto.getRandomValues(new Uint8Array(32))), ...ring].slice(0, NAME_RING_MAX);
       const want = [...new Set([cp, churchPub, ...memberPubs || [], ...stewardPubs || []].map((p) => toPubHex(p) || p).filter(Boolean))].filter((p) => !_localBlocked.has(String(p).toLowerCase()));
       const have = _nameKeyDocKeys || {};
@@ -21642,8 +22401,15 @@ zoo`.split("\n");
       const keys = await _sealEach(wrapped, recips, (pl, pk) => encrypt2(pl, getConversationKey(churchSk, pk)));
       if (_nameKeyDocKeys !== _dk0 || _nameKeyRing !== _r0 || !_stillOn(cp, ep0)) return opts.rotate ? false : null;
       const at = now();
-      const out = await publish(feChurch({ kind: 30078, created_at: at, tags: [["d", NAMEKEY_D + cp], ["t", NET]], content: JSON.stringify({ rev: ring.length, keys }) }));
+      const _nev = feChurch({ kind: 30078, created_at: at, tags: [["d", NAMEKEY_D + cp], ["t", NET]], content: JSON.stringify({ rev: ring.length, keys }) });
+      const out = await publish(_nev);
       if (out === false) return false;
+      if (_stillOn(cp, ep0) && churchPub && keys[churchPub]) {
+        try {
+          _keyEnvSave("name", cp, _nev, churchPub, keys[churchPub]);
+        } catch (x) {
+        }
+      }
       if (!_stillOn(cp, ep0)) return out;
       _nameKeyRing = ring;
       _nameKeyDocKeys = keys;
@@ -21654,39 +22420,55 @@ zoo`.split("\n");
     // read the envelope back (the church's own copy) so the console can decrypt members' names
     subscribeNameKey() {
       const cp = actingChurch || pub;
+      const onEnv = (e) => {
+        if (cp !== (actingChurch || pub) || ((e.tags || []).find((t) => t[0] === "d") || [])[1] !== NAMEKEY_D + cp) return;
+        if (!_byChurchOrSteward(e)) return;
+        if (_authFuture(e) || (e.created_at || 0) < _nameKeyAt) return;
+        try {
+          const env = JSON.parse(e.content || "{}");
+          if (env.keys && typeof env.keys === "object") {
+            _nameKeyDocKeys = env.keys;
+            if (!e.restored) _nameKeyChecked = true;
+            _nameKeyAt = e.created_at || 0;
+          }
+          const mine = env.keys && churchPub && env.keys[churchPub];
+          if (!mine || !churchSk) return;
+          const plain = decrypt3(mine, getConversationKey(churchSk, e.pubkey));
+          const r = JSON.parse(plain);
+          if (Array.isArray(r)) {
+            const had = _nameKeyReady();
+            _nameKeyRing = r.filter((x) => typeof x === "string" && /^[0-9a-f]+$/i.test(x));
+            _nameKeyRingChanged();
+            if (!e.restored) {
+              try {
+                _keyEnvSave("name", cp, e, churchPub, mine);
+              } catch (x2) {
+              }
+            }
+            if (!had && _nameKeyReady()) _webQueueSync();
+          }
+        } catch (x) {
+        }
+      };
+      try {
+        const r = _keyEnvRestore("name", cp, NAMEKEY_D);
+        if (r) onEnv(r);
+      } catch (x) {
+      }
       return _openKeyRead(
         cp,
         [{ kinds: [30078], "#d": [NAMEKEY_D + cp] }],
-        (e) => {
-          if (cp !== (actingChurch || pub) || ((e.tags || []).find((t) => t[0] === "d") || [])[1] !== NAMEKEY_D + cp) return;
-          if (!_byChurchOrSteward(e)) return;
-          if (_authFuture(e) || (e.created_at || 0) < _nameKeyAt) return;
-          try {
-            const env = JSON.parse(e.content || "{}");
-            if (env.keys && typeof env.keys === "object") {
-              _nameKeyDocKeys = env.keys;
-              _nameKeyChecked = true;
-              _nameKeyAt = e.created_at || 0;
-            }
-            const mine = env.keys && churchPub && env.keys[churchPub];
-            if (!mine || !churchSk) return;
-            const plain = decrypt3(mine, getConversationKey(churchSk, e.pubkey));
-            const r = JSON.parse(plain);
-            if (Array.isArray(r)) {
-              const had = _nameKeyReady();
-              _nameKeyRing = r.filter((x) => typeof x === "string" && /^[0-9a-f]+$/i.test(x));
-              _nameKeyRingChanged();
-              if (!had && _nameKeyReady()) _webQueueSync();
-            }
-          } catch (x) {
-          }
-        },
+        onEnv,
         // the relay answered — a church with no envelope yet may now mint its first, but ONLY on a trustworthy
         // answer from every relay (_openKeyRead). This is the gate the audit of e6a2e02 watched open on our own close.
+        // SIGNALLED ON EVERY SETTLE, not only the first: a read re-opened over a relay proved since (a cold console) is
+        // what the first-mint gate (_nameKeyMintBlockers) waits for, and only this tells the enrolment to ask again.
         () => {
-          if (!_nameKeyChecked) {
-            _nameKeyChecked = true;
-            _keysReadSignal("name");
+          _nameKeyChecked = true;
+          _keysReadSignal("name");
+          try {
+            _runPendingRotations();
+          } catch (e) {
           }
         },
         "name"
@@ -21722,6 +22504,14 @@ zoo`.split("\n");
     },
     nameKeyReady() {
       return _nameKeyReady();
+    },
+    // Is this team's roster on show only as a copy this console cannot open? StewardMeals.publishCareTeam refuses then.
+    rosterLocked(teamId) {
+      return !!teamId && _addrLocked(ROSTER_D + teamId);
+    },
+    // Why the last calendar save (roster, rota, service, run sheet, room, booking) came back null — see _saveFailed.
+    lastSaveFailure() {
+      return _lastSaveFail;
     },
     setMinors(pubkeys) {
       _requireTrustedView("list of children");
@@ -21914,32 +22704,67 @@ zoo`.split("\n");
     // ---- joining: by default anyone with the invite/QR joins instantly. A steward can switch on
     // "require approval", and then a new member is held as a pending request until admitted. The relay
     // reads joinpolicy:<churchpub> + the admitted:<churchpub> allowlist and withholds posting until then. ----
+    // THE STREAM'S `false` IS NOT AN ANSWER (audit of 78ffad0, finding 2). It delivers `approval` from `oneose`, and on
+    // a slow link nostr-tools' own EOSE timer (4.4 s) fires before the joinpolicy document arrives: "approval is off",
+    // and the key distributor handed the open-room, care and sermon keys to a member still waiting to be let in —
+    // for good, since those keys only grow. The screens still get the stream (a switch should not wait), but the key
+    // distributor reads Steward.joinPolicyFresh(), which answers only once a NARROW read of this one document has
+    // settled genuinely on every connected relay (_freshDocRead) — the blocklist's rule. `cp0`: the church it was
+    // opened for, as subscribeBlocked keeps it.
     subscribeJoinPolicy(onPolicy) {
+      const cp0 = pub, tag = _listTag(), tok = _freshTok();
+      tag.sub = tok;
+      const state = { tag, approval: false };
+      _joinPolicyStates.add(state);
       let approval = false, latest = 0;
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
-        onevent(e) {
-          const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
-          if (d !== JOINPOLICY_D + pub) return;
-          if (_authFuture(e) || !_byChurchOrSteward(e)) return;
-          if (e.created_at < latest) return;
-          latest = e.created_at;
-          if (e.tags.some((t) => t[0] === "deleted") || !e.content) approval = false;
-          else {
-            try {
-              approval = !!JSON.parse(e.content).approval;
-            } catch {
-              approval = false;
-            }
+      const take = (e) => {
+        const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+        if (d !== JOINPOLICY_D + cp0) return false;
+        if (_authFuture(e) || !_byChurchOrSteward(e)) return false;
+        if (e.created_at < latest) return false;
+        latest = e.created_at;
+        if (e.tags.some((t) => t[0] === "deleted") || !e.content) approval = false;
+        else {
+          try {
+            approval = !!JSON.parse(e.content).approval;
+          } catch {
+            approval = false;
           }
-          onPolicy(approval);
+        }
+        state.approval = approval;
+        return true;
+      };
+      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [cp0], "#t": [NET] }, { kinds: [30078], "#church": [cp0], "#t": [NET] }], {
+        onevent(e) {
+          if (take(e)) onPolicy(approval);
         },
         oneose() {
           onPolicy(approval);
         }
       });
+      const stopRead = _freshDocRead(
+        cp0,
+        [JOINPOLICY_D + cp0],
+        (e) => {
+          if (take(e)) onPolicy(approval);
+        },
+        () => {
+          tok.genuine = true;
+          tok.at = Date.now();
+          state.approval = approval;
+          onPolicy(approval);
+          _keysReadSignal("joinpolicy");
+        }
+      );
       return () => {
+        tok.live = false;
+        _joinPolicyStates.delete(state);
         try {
           sub.close();
+        } catch {
+        }
+        try {
+          stopRead();
         } catch {
         }
       };
@@ -22034,41 +22859,106 @@ zoo`.split("\n");
     // still carries them. Blocking is unaffected — it is a separate document and a separate gate at the relay,
     // and blocking is how a member is actually removed (see the Block path in app/stew-dashboard.jsx).
     //
-    // _byChurchOrSteward IS KEPT, AND THAT IS A DELIBERATE SEAM. It is a CURRENT-roster test, so a departed
-    // steward's copy stops appearing in this console's view even though the relay keeps serving it (that is
-    // what the retractionExempt entry in scripts/gateway.mjs is for). Dropping the test would mean a relay
-    // could hand this console admissions signed by any key at all — and the very next Approve press would
-    // republish them as the CHURCH'S OWN signed copy, laundering a forgery into the church's authority. The
-    // people themselves are not un-admitted by this: the relay's own allowlist is what the doors read.
+    // [HISTORY — superseded by ITEM D at `counts` below: every SERVED copy now counts.]
+    // WHOSE COPY COUNTS (audit of 78ffad0, finding 3; the owner's rule of 2026-09-16, "approved members must always
+    // survive a steward leaving"). This used to be _byChurchOrSteward — the church or a CURRENT steward — so a member a
+    // since-removed delegate had approved looked pending here while the relay (until its next restart) let them in, and
+    // the key distributor withheld their keys. Now three authors count:
+    //   · the church;
+    //   · a steward on the current roster;
+    //   · a steward THIS DEVICE SAW on a church-signed roster and then saw dropped from it, for a copy dated no later
+    //     than the roster that dropped them (_exStewardRemovedAt, written by subscribeStewards).
+    // WHY NOT EVERY AUTHOR, as the relay's union reads to the eye. A relay that does not enforce (a public one a church
+    // adds) could then hand this console approvals signed by any key at all — and the next Approve press would publish
+    // them as the CHURCH'S OWN signed copy, laundering a forgery into the church's authority. Every author counted here
+    // is one a church-signed roster named, and an ex-steward cannot write themselves a later approval. The future clamp
+    // (_authFuture) stays. What it costs: a device that never saw the removal still shows that person as waiting (the
+    // safe direction), and the relay itself forgets a departed steward's approvals when it restarts (the KNOWN GAP in
+    // approved-members-survive-a-steward-leaving.test.mjs, the owner's to decide) — this console may then key someone the
+    // relay holds back, who gets keys the relay will not serve them data for.
+    //
+    // FRESH, NOT ONLY CURRENT: the list is stamped for the church, with the token a narrow read of this one address sets
+    // once it has settled genuinely on every connected relay (_freshDocRead) — the key distributor uses nothing less.
+    // Every copy is kept, and the union recomputed whenever the steward roster changes (_memberEmitters), so a steward's
+    // copy that arrived before the roster is counted once the roster says who they are.
     subscribeAdmitted(onList) {
+      const cp0 = pub, tok = _freshTok();
+      {
+        const _tag = _listTag(), _deliver = onList;
+        _tag.sub = tok;
+        onList = (list) => {
+          const l = _stampFor(list, _tag);
+          try {
+            if (cp0 === (actingChurch || pub)) _lastAdmitted = { cp: cp0, list: l };
+          } catch (e) {
+          }
+          return _deliver(l);
+        };
+      }
       let cur = [];
       const byAuthor = /* @__PURE__ */ new Map();
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
+      const counts = () => true;
+      const fold = () => {
+        const all = /* @__PURE__ */ new Set();
+        for (const [author, v] of byAuthor) if (counts(author, v.at)) {
+          for (const pk of v.pubkeys) if (pk) all.add(pk);
+        }
+        cur = [...all];
+      };
+      const take = (e) => {
+        const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
+        if (d !== ADMITTED_D + cp0) return false;
+        if (_authFuture(e)) return false;
+        const prev = byAuthor.get(e.pubkey);
+        if (prev && e.created_at < prev.at) return false;
+        let list = [];
+        try {
+          list = JSON.parse(e.content).pubkeys || [];
+        } catch {
+          list = [];
+        }
+        byAuthor.set(e.pubkey, { at: e.created_at, pubkeys: Array.isArray(list) ? list : [] });
+        fold();
+        return true;
+      };
+      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [cp0], "#t": [NET] }, { kinds: [30078], "#church": [cp0], "#t": [NET] }], {
         onevent(e) {
-          const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
-          if (d !== ADMITTED_D + pub) return;
-          if (_authFuture(e) || !_byChurchOrSteward(e)) return;
-          const prev = byAuthor.get(e.pubkey);
-          if (prev && e.created_at < prev.at) return;
-          let list = [];
-          try {
-            list = JSON.parse(e.content).pubkeys || [];
-          } catch {
-            list = [];
-          }
-          byAuthor.set(e.pubkey, { at: e.created_at, pubkeys: list });
-          const all = /* @__PURE__ */ new Set();
-          for (const v of byAuthor.values()) for (const pk of v.pubkeys) if (pk) all.add(pk);
-          cur = [...all];
-          onList(cur);
+          if (take(e)) onList(cur);
         },
         oneose() {
           onList(cur);
         }
       });
+      const refold = () => {
+        if (!byAuthor.size) return;
+        const was = cur.slice().sort().join(",");
+        fold();
+        if (cur.slice().sort().join(",") !== was) onList(cur);
+      };
+      _memberEmitters.add(refold);
+      const stopRead = _freshDocRead(
+        cp0,
+        [ADMITTED_D + cp0],
+        (e) => {
+          if (take(e)) onList(cur);
+        },
+        () => {
+          tok.genuine = true;
+          tok.at = Date.now();
+          cur = [...cur];
+          onList(cur);
+          _keysReadSignal("admitted");
+        }
+      );
       return () => {
+        tok.live = false;
+        _memberEmitters.delete(refold);
         try {
           sub.close();
+        } catch {
+        }
+        try {
+          stopRead();
         } catch {
         }
       };
@@ -22341,12 +23231,14 @@ zoo`.split("\n");
     // grants those keys day-to-day church powers (but never the roster/blocklist/relay-policy — owner-only),
     // and revocation = re-publish the roster without them. See STEWARD-ROSTER-DESIGN.md. ----
     subscribeStewards(onList) {
+      const tok = _freshTok();
       {
         const _tag = _listTag(), _deliver = onList;
+        _tag.sub = tok;
         onList = (list) => _deliver(_stampFor(list, _tag));
       }
       let cur = [], latest = 0;
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
+      const handlers = {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (d !== STEWARDS_D + pub) return;
@@ -22386,7 +23278,7 @@ zoo`.split("\n");
           _careRoster = new Set(cur.filter(Boolean));
           _careRosterKnown = true;
           _careRosterSeen = true;
-          _stewardRosterChanged(_rosterBefore, cur);
+          _stewardRosterChanged(_rosterBefore, cur, e.created_at);
           onList(cur);
         },
         oneose() {
@@ -22396,10 +23288,28 @@ zoo`.split("\n");
           }
           onList(cur);
         }
-      });
+      };
+      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], handlers);
+      const stopRead = _freshDocRead(
+        pub,
+        [STEWARDS_D + pub],
+        (e) => handlers.onevent(e),
+        () => {
+          tok.genuine = true;
+          tok.at = Date.now();
+          _careRosterKnown = true;
+          onList([...cur]);
+          _keysReadSignal("stewards");
+        }
+      );
       return () => {
+        tok.live = false;
         try {
           sub.close();
+        } catch {
+        }
+        try {
+          stopRead();
         } catch {
         }
       };
@@ -22884,13 +23794,44 @@ zoo`.split("\n");
       };
     },
     subscribeGroups(onGroups) {
+      const cp0 = pub, tok = _freshTok();
+      tok.rooms = /* @__PURE__ */ new Map();
       {
         const _tag = _listTag(), _deliver = onGroups;
+        _tag.sub = tok;
         onGroups = (list) => _deliver(_stampFor(list, _tag));
       }
       const CACHE_KEY = "trinityone.steward.groups.v2." + (pub || "");
       const byId = /* @__PURE__ */ new Map();
       const versions = /* @__PURE__ */ new Map();
+      let narrowSig = "", stopNarrow = null;
+      const wantNarrow = () => {
+        const ids = [...byId.values()].filter((g) => g && g.encrypted && g.id).map((g) => g.id).sort();
+        const sig = ids.join(",");
+        if (sig === narrowSig) return;
+        narrowSig = sig;
+        if (stopNarrow) {
+          try {
+            stopNarrow();
+          } catch (e) {
+          }
+          stopNarrow = null;
+        }
+        if (!ids.length) return;
+        stopNarrow = _freshDocRead(
+          cp0,
+          [].concat(...ids.map((id) => [GROUP_D + id, GROUPKEY_D + id])),
+          (e) => handlers.onevent(e),
+          () => {
+            const t = Date.now();
+            for (const id of ids) tok.rooms.set(id, t);
+            tok.genuine = true;
+            tok.at = t;
+            emit();
+            _keysReadSignal("groups");
+          }
+        );
+      };
       const emit = () => {
         const arr = [...byId.values()].sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || (a.ts || 0) - (b.ts || 0));
         try {
@@ -22898,6 +23839,11 @@ zoo`.split("\n");
         } catch {
         }
         onGroups(arr);
+        try {
+          if (cp0 === (actingChurch || pub)) _lastGroups = { cp: cp0, list: arr };
+        } catch (e) {
+        }
+        wantNarrow();
       };
       try {
         const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || "[]");
@@ -22908,7 +23854,7 @@ zoo`.split("\n");
         }
       } catch {
       }
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
+      const handlers = {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (d.startsWith(GROUPKEY_D)) {
@@ -22934,11 +23880,20 @@ zoo`.split("\n");
         oneose() {
           emit();
         }
-      });
+      };
+      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], handlers);
+      wantNarrow();
       return () => {
+        tok.live = false;
         try {
           sub.close();
         } catch {
+        }
+        if (stopNarrow) {
+          try {
+            stopNarrow();
+          } catch (e) {
+          }
         }
       };
     },
@@ -23119,19 +24074,35 @@ zoo`.split("\n");
     },
     // ════════════ SERVING / ROTA / CALENDAR (the coverage board) ════════════
     // A generic addressable-doc subscription over the church's own kind-30078 with a given d-prefix.
-    _subAddr(prefix, map, onItems) {
+    _subAddr(prefix, map, onItems, lockedShape) {
       const CACHE_KEY = "trinityone.steward.addr.v2." + prefix + (pub || "");
       const byId = /* @__PURE__ */ new Map();
       const versions = /* @__PURE__ */ new Map();
+      const lockedRaw = /* @__PURE__ */ new Map();
+      const marked = /* @__PURE__ */ new Set();
+      const syncLocked = () => {
+        for (const d of marked) _lockedAddr.delete(d);
+        marked.clear();
+        for (const r of byId.values()) {
+          if (!r || r.id == null) continue;
+          const d = prefix + r.id;
+          if (r._locked) {
+            marked.add(d);
+            _lockedAddr.add(d);
+          } else _lockedAddr.delete(d);
+        }
+      };
       try {
         const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || "[]");
         if (Array.isArray(cached)) {
           _seedFromCache(versions, byId, cached, _consoleDisplay);
+          syncLocked();
           if (cached.length) onItems(cached);
         }
       } catch {
       }
       const emit = () => {
+        syncLocked();
         const arr = [...byId.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0));
         try {
           localStorage.setItem(CACHE_KEY, JSON.stringify(arr));
@@ -23139,12 +24110,15 @@ zoo`.split("\n");
         }
         onItems(arr);
       };
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
+      const handlers = {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (!d.startsWith(prefix)) return;
           const id = d.slice(prefix.length);
+          _noteSeenStamp(d, e.created_at || 0);
+          const rawKey = id + "\n" + e.pubkey;
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
+            lockedRaw.delete(rawKey);
             _forgetById(versions, byId, id, e.pubkey, e.created_at, _consoleDisplay, { churchPub: pub, targets: _tombstoneTargets(e), mayName: _consoleChurchVoice });
             emit();
             return;
@@ -23152,10 +24126,14 @@ zoo`.split("\n");
           try {
             const c = _openChurchDoc(e.content);
             if (c === null) {
-              _absorbById(versions, byId, id, { id, _locked: true, ts: e.created_at, _by: e.pubkey }, _consoleDisplay);
+              const was2 = lockedRaw.get(rawKey);
+              if (!was2 || (was2.created_at || 0) <= (e.created_at || 0)) lockedRaw.set(rawKey, e);
+              _absorbById(versions, byId, id, { id, ...lockedShape ? lockedShape(id) : {}, _locked: true, ts: e.created_at, _by: e.pubkey }, _consoleDisplay);
               emit();
               return;
             }
+            const was = lockedRaw.get(rawKey);
+            if (was && (was.created_at || 0) <= (e.created_at || 0)) lockedRaw.delete(rawKey);
             _absorbById(versions, byId, id, { id, ...map(c, id), ts: e.created_at, _by: e.pubkey }, _consoleDisplay);
             emit();
           } catch {
@@ -23164,12 +24142,17 @@ zoo`.split("\n");
         oneose() {
           emit();
         }
+      };
+      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], handlers);
+      const stopKey = _onNameKeyRing(() => {
+        for (const e of [...lockedRaw.values()]) handlers.onevent(e);
       });
       return () => {
         try {
           sub.close();
         } catch {
         }
+        stopKey();
       };
     },
     // ---- team rosters: the roles a team needs + the people who can serve ----
@@ -23183,27 +24166,42 @@ zoo`.split("\n");
     // alone silently revokes both grants: care goes unmanageable and 'serving teams' becomes 'nobody'. The
     // pubkeys must move to a pubkey-only document (the `careteam:` shape) in the SAME change.
     async publishRoster(teamId, roster) {
+      _lastSaveFail = "";
       if (!sk || !teamId) return null;
+      if (_addrLocked(ROSTER_D + teamId)) return _saveFailed("locked");
       const roles = (roster.roles || []).map((r) => ({ id: r.id || "r" + Math.random().toString(36).slice(2, 7), name: r.name || "Role" }));
       const people = (roster.people || []).filter((p) => !(p && p.pub && _localBlocked.has(String(p.pub).toLowerCase()))).map((p) => ({ id: p.id || "p" + Math.random().toString(36).slice(2, 7), name: p.name || "", pub: p.pub || "" }));
       const pods = (roster.pods || []).map((p) => ({ id: p.id || "pod" + Math.random().toString(36).slice(2, 7), name: p.name || "Pod", fills: p.fills && typeof p.fills === "object" ? p.fills : {} }));
       const sealed = await _sealChurchDocReady({ roles, people, pods });
-      if (sealed == null) return null;
+      if (sealed == null) return _saveFailed("nokey");
+      if (_addrLocked(ROSTER_D + teamId)) return _saveFailed("locked");
       const content = JSON.stringify({ pubs: people.map((p) => p.pub).filter(Boolean), e: JSON.parse(sealed).e });
-      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", ROSTER_D + teamId], ["t", NET]], content })).then((ok) => ok ? { id: teamId, roles, people, pods } : null);
+      const po = {};
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", ROSTER_D + teamId], ["t", NET]], content }), po).then((ok) => ok ? { id: teamId, roles, people, pods } : _saveFailed(/newer version/i.test(po.reason || "") ? "clash" : "relay"));
     },
     subscribeRosters(onRosters) {
-      return this._subAddr(ROSTER_D, (c, id) => ({ team: id, roles: c.roles || [], people: c.people || [], pods: c.pods || [] }), onRosters);
+      return this._subAddr(
+        ROSTER_D,
+        (c, id) => ({ team: id, roles: c.roles || [], people: c.people || [], pods: c.pods || [] }),
+        onRosters,
+        // a locked roster is still THIS team's roster: found by `team`, with empty lists so no screen trips over it — and
+        // `_locked`, which every screen that edits it checks (DashRota, RosterModal, the care panel, Block)
+        (id) => ({ team: id, roles: [], people: [], pods: [] })
+      );
     },
     // ---- services: a dated gathering people serve at ----
     // service = { id?, date:'YYYY-MM-DD', time:'10:30', name }
     async publishService(svc) {
+      _lastSaveFail = "";
       if (!sk) return null;
       const id = svc.id || "svc" + Date.now().toString(36) + (++_svcSeq).toString(36) + Math.random().toString(36).slice(2, 7);
+      if (_addrLocked(SERVICE_D + id)) return _saveFailed("locked");
       const doc = { date: svc.date || "", time: svc.time || "10:30", name: svc.name || "Sunday Gathering" };
       const content = await _sealChurchDocReady(doc);
-      if (content == null) return null;
-      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", SERVICE_D + id], ["t", NET]], content })).then((ok) => ok ? { id, ...doc } : null);
+      if (content == null) return _saveFailed("nokey");
+      if (_addrLocked(SERVICE_D + id)) return _saveFailed("locked");
+      const po = {};
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", SERVICE_D + id], ["t", NET]], content }), po).then((ok) => ok ? { id, ...doc } : _saveFailed(/newer version/i.test(po.reason || "") ? "clash" : "relay"));
     },
     removeService(id) {
       if (!sk) return Promise.resolve(null);
@@ -23214,10 +24212,14 @@ zoo`.split("\n");
     },
     // ---- run sheets: a service's order-of-service + song setlist (d=runsheet:<serviceId>) ----
     async publishRunsheet(serviceId, items) {
+      _lastSaveFail = "";
       if (!sk || !serviceId) return Promise.resolve(null);
+      if (_addrLocked(RUNSHEET_D + serviceId)) return _saveFailed("locked");
       const content = await _sealChurchDocReady({ items: Array.isArray(items) ? items : [] });
-      if (content == null) return null;
-      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", RUNSHEET_D + serviceId], ["t", NET]], content }));
+      if (content == null) return _saveFailed("nokey");
+      if (_addrLocked(RUNSHEET_D + serviceId)) return _saveFailed("locked");
+      const po = {};
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", RUNSHEET_D + serviceId], ["t", NET]], content }), po).then((ok) => ok ? ok : (_saveFailed(/newer version/i.test(po.reason || "") ? "clash" : "relay"), ok));
     },
     subscribeRunsheets(onSheets) {
       return this._subAddr(RUNSHEET_D, (c) => ({ items: Array.isArray(c.items) ? c.items : [] }), onSheets);
@@ -24044,12 +25046,16 @@ zoo`.split("\n");
     // ---- rooms & bookings: a shared room calendar (steward-booked) ----
     // room = { id?, name, capacity?, note? } ; booking = { id?, roomId, date:'YYYY-MM-DD', start:'HH:MM', end:'HH:MM', title, note }
     async publishRoom(room) {
+      _lastSaveFail = "";
       if (!sk) return null;
       const id = room.id || "room" + Date.now();
+      if (_addrLocked(ROOM_D + id)) return _saveFailed("locked");
       const doc = { name: (room.name || "Room").trim(), capacity: room.capacity || "", note: (room.note || "").trim() };
       const content = await _sealChurchDocReady(doc);
-      if (content == null) return null;
-      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", ROOM_D + id], ["t", NET]], content })).then((ok) => ok ? { id, ...doc } : null);
+      if (content == null) return _saveFailed("nokey");
+      if (_addrLocked(ROOM_D + id)) return _saveFailed("locked");
+      const po = {};
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", ROOM_D + id], ["t", NET]], content }), po).then((ok) => ok ? { id, ...doc } : _saveFailed(/newer version/i.test(po.reason || "") ? "clash" : "relay"));
     },
     removeRoom(id) {
       if (!sk) return Promise.resolve(null);
@@ -24059,12 +25065,16 @@ zoo`.split("\n");
       return this._subAddr(ROOM_D, (c) => ({ name: c.name, capacity: c.capacity, note: c.note }), cb);
     },
     async publishBooking(b) {
+      _lastSaveFail = "";
       if (!sk || !b || !b.roomId) return Promise.resolve(null);
       const id = b.id || "bk" + Date.now();
+      if (_addrLocked(BOOKING_D + id)) return _saveFailed("locked");
       const doc = { roomId: b.roomId, date: b.date || "", start: b.start || "", end: b.end || "", title: (b.title || "").trim(), note: (b.note || "").trim() };
       const content = await _sealChurchDocReady(doc);
-      if (content == null) return null;
-      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", BOOKING_D + id], ["t", NET]], content })).then((ok) => ok ? { id, ...doc } : null);
+      if (content == null) return _saveFailed("nokey");
+      if (_addrLocked(BOOKING_D + id)) return _saveFailed("locked");
+      const po = {};
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", BOOKING_D + id], ["t", NET]], content }), po).then((ok) => ok ? { id, ...doc } : _saveFailed(/newer version/i.test(po.reason || "") ? "clash" : "relay"));
     },
     removeBooking(id) {
       if (!sk) return Promise.resolve(null);
@@ -24076,11 +25086,15 @@ zoo`.split("\n");
     // ---- rota: assignments for one service (latest wins; published flag) ----
     // rota = { service:<serviceId>, published:bool, assign:{ '<teamId>::<roleId>': {name, pub} } }
     async publishRota(rota) {
+      _lastSaveFail = "";
       if (!sk || !rota || !rota.service) return Promise.resolve(null);
+      if (_addrLocked(ROTA_D + rota.service)) return _saveFailed("locked");
       const doc = { service: rota.service, published: !!rota.published, assign: rota.assign || {} };
       const content = await _sealChurchDocReady(doc);
-      if (content == null) return null;
-      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", ROTA_D + rota.service], ["t", NET]], content })).then((ok) => ok ? { id: rota.service, service: rota.service, published: !!rota.published, assign: rota.assign || {} } : null);
+      if (content == null) return _saveFailed("nokey");
+      if (_addrLocked(ROTA_D + rota.service)) return _saveFailed("locked");
+      const po = {};
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", ROTA_D + rota.service], ["t", NET]], content }), po).then((ok) => ok ? { id: rota.service, service: rota.service, published: !!rota.published, assign: rota.assign || {} } : _saveFailed(/newer version/i.test(po.reason || "") ? "clash" : "relay"));
     },
     removeRota(serviceId) {
       if (!sk) return Promise.resolve(null);
@@ -24454,8 +25468,10 @@ zoo`.split("\n");
     // church's pubkey (['p', churchPub]), so we read kind-1 events addressed to us, aggregate by
     // author, and resolve each author's kind-0 profile. The church's own posts are excluded.
     subscribeMembers(onMembers) {
+      const tok = _freshTok();
       {
         const _tag = _listTag(), _deliver = onMembers;
+        _tag.sub = tok;
         onMembers = (list) => _deliver(_stampFor(list, _tag));
       }
       const MEMBER_D = "trinityone/member:";
@@ -24503,6 +25519,10 @@ zoo`.split("\n");
         } catch {
         }
         onMembers(arr);
+        try {
+          if (cp0 === (actingChurch || pub)) _lastMembers = { cp: cp0, pubs: arr.map((m) => m.pubkey).filter(Boolean) };
+        } catch (e) {
+        }
       };
       const emit = () => {
         if (emitTimer) return;
@@ -24550,7 +25570,7 @@ zoo`.split("\n");
         profWanted.add(pk);
         if (!profTimer) profTimer = setTimeout(rebuildProfSub, 400);
       };
-      const sub = pool.subscribeMany(relays(), [{ kinds: [1], "#p": [pub] }, { kinds: [30078], "#p": [pub] }], {
+      const handlers = {
         onevent(e) {
           if (e.pubkey === pub) return;
           if (e.kind === 30078) {
@@ -24597,7 +25617,58 @@ zoo`.split("\n");
         oneose() {
           emit();
         }
-      });
+      };
+      const cp0 = pub;
+      const openMain = () => pool.subscribeMany(relays(), [{ kinds: [1], "#p": [cp0] }, { kinds: [30078], "#p": [cp0] }], handlers);
+      let sub = openMain();
+      const reask = () => {
+        const old = sub;
+        sub = openMain();
+        try {
+          old.close();
+        } catch (e) {
+        }
+      };
+      _membersReask.add(reask);
+      const openRead = () => actingChurch ? () => {
+      } : _freshDocRead(
+        cp0,
+        [MEMBER_D + cp0],
+        (e) => handlers.onevent(e),
+        () => {
+          tok.genuine = true;
+          tok.at = Date.now();
+          try {
+            tok.relaySet = relays().slice().sort().join(" ");
+          } catch (e) {
+          }
+          if (emitTimer) {
+            try {
+              clearTimeout(emitTimer);
+            } catch (e) {
+            }
+            emitTimer = null;
+          }
+          emitNow();
+        },
+        [{ kinds: [30078], "#d": [MEMBER_D + cp0] }],
+        // EVERY RELAY, NOT EVERY CONNECTED ONE (round 3e). A key is taken from someone only on positive evidence — blocked,
+        // removed, or absent from a list EVERY relay vouched for — never because a relay that holds their member document
+        // is down. With a relay down this list is never fresh, so Block and Remove keep the floor (round 3c) and drop nobody.
+        { everyRelay: true }
+      );
+      let stopRead = openRead();
+      const onRelays = () => {
+        try {
+          stopRead();
+        } catch (e) {
+        }
+        stopRead = openRead();
+      };
+      try {
+        if (typeof window !== "undefined" && window.addEventListener) window.addEventListener("steward-relays", onRelays);
+      } catch (e) {
+      }
       const reseatSub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
@@ -24635,7 +25706,17 @@ zoo`.split("\n");
         }
       });
       return () => {
+        tok.live = false;
+        try {
+          stopRead();
+        } catch {
+        }
+        try {
+          window.removeEventListener("steward-relays", onRelays);
+        } catch {
+        }
         _memberEmitters.delete(emit);
+        _membersReask.delete(reask);
         try {
           sub.close();
         } catch {
@@ -24848,11 +25929,17 @@ zoo`.split("\n");
       _careKeyRev = 0;
       _careKeyChecked = false;
       _careKeyPending = [];
+      _careKeyFresh = false;
+      _careKeyMine = false;
+      _careKeyAt = 0;
       _mediaKeyHex = null;
       _mediaKeyRing = [];
       _mediaKeyDocKeys = null;
       _mediaKeyChecked = false;
       _mediaKeyPushRefused = null;
+      _mediaKeyFresh = false;
+      _mediaKeyMine = false;
+      _mediaKeyAt = 0;
       _keyReadEpoch++;
       _careKeyVer++;
       _mediaKeyVer++;
@@ -24863,6 +25950,7 @@ zoo`.split("\n");
       }
       _minorsLastClear(actingChurch || pub);
       _latestGuardNotice.clear();
+      _senvPending.clear();
       window.Steward.pubkey = pub;
       window.Steward.npub = npubEncode(pub);
       window.Steward.activePub = pub;
@@ -24881,6 +25969,39 @@ zoo`.split("\n");
     listIsCurrent(list) {
       const t = list && list._for;
       return !!t && !!t.cp && t.cp === (actingChurch || pub) && t.epoch === _keyReadEpoch;
+    },
+    // ROUND 3e, MED 1 — the screens' half of a rotation that could not run yet (see PENDINGROT_LS):
+    //   keysFresh(kind)       has this key's read settled on this connection, signed in? rotateChurchKeys waits on it (bounded)
+    //   rememberRotation(k,d) remember a rotation that FAILED for real, so "Try again" and the next settle run it
+    //   retryPendingRotations() the screen's "Try again"
+    //   pendingRotations()    which keys still wait, for the church this console is on
+    keysFresh(kind) {
+      if (!_isRelayAuthed()) return false;
+      return kind === "care" ? _careKeyFresh : kind === "media" ? _mediaKeyFresh : kind === "name" ? _nameKeyChecked : false;
+    },
+    rememberRotation(kind, drop, why, failed) {
+      try {
+        _pendingRotAdd(kind, actingChurch || pub, drop || [], why);
+        if (failed) {
+          _rotNote(actingChurch || pub, drop || [], kind, "failed");
+          _rotChanged();
+        }
+      } catch (e) {
+      }
+    },
+    retryPendingRotations() {
+      return _runPendingRotations(true);
+    },
+    rotationStatus(pk) {
+      try {
+        return _rotationStatus(pk);
+      } catch (e) {
+        return { waiting: [], failed: [], done: [], cleared: [], member: [], gone: [], owner: [] };
+      }
+    },
+    // round 3g — see _rotOutcome
+    pendingRotations() {
+      return Object.keys(_pendingRotAll(actingChurch || pub));
     },
     // "relay.x isn't answering" for a key read of the church we are on that a relay is holding up, or ''.
     keyWaitNote(kind) {

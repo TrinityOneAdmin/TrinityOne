@@ -137,7 +137,12 @@ test('a delegated console cannot mint a name key over the owner’s', () => {
   const fn = STEWARD.slice(at, at + 2600);
   assert.match(fn, /if \(opts\.rotate && !ring\.length\) return/, 'a rotate with no ring still mints a replacement key');
   assert.match(fn, /if \(!ring\.length && _nameKeyDocKeys\) return/, 'an envelope exists and we are not in it — minting over it orphans every sealed name');
-  assert.match(fn, /if \(!_nameKeyChecked \|\| !_isRelayAuthed\(\)\) return/, 'the console will mint from a view it never established');
+  // WHAT THIS CHECKS, AND WHAT IT DOES NOT (round 3f, T2; audit of 4bb1ed1). It is a TEXT check: that the not-yet-signed-in
+  // gate is there and that its routine path answers null — mints nothing. It does NOT test the branch that remembers a
+  // Block's rotation (`{ pending: true }`): renaming that branch's condition left this green. That branch is tested by
+  // running it — key-reads-settle-only-for-the-church-they-asked-about, "3e MED 1: the name key — a Block before its read
+  // settles is remembered and runs when it settles". The 3e version of this line claimed more than a text match can show.
+  assert.match(fn, /if \(!_nameKeyChecked \|\| !_isRelayAuthed\(\)\) \{[\s\S]{0,600}?return Promise\.resolve\(null\);/, 'the console will mint from a view it never established');
   assert.match(DASH, /!delegated && window\.Steward\.ensureNameKeyForMembers/, 'block() still rotates the name key while acting as a delegated steward');
 });
 

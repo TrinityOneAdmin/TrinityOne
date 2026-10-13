@@ -896,6 +896,10 @@ function ReadScreen({ ctx }) {
       setTimeout(go, 600);
     } else { sc.scrollTop = 0; }
   }, [loc.book, loc.chap, loc.verse, version]);
+  // The verses a plan day / link arrived on. A range ("John 3:16-21") carries loc.verseEnd and lights all of it;
+  // `arrived` is still the single first verse, and goes null on any tap, which clears the whole range.
+  const inArrived = (v) => arrived != null && (String(arrived) === String(v)
+    || (!!loc.verseEnd && Number(arrived) === Number(loc.verse) && Number(v) >= Number(arrived) && Number(v) <= Number(loc.verseEnd)));
 
   // perf #7: memoize the SQL+regex verse parse — the whole Read screen re-renders on any App state change (every
   // relay event, the periodic tick), and getVerses re-queried + re-parsed the chapter (and the compare pane) each time.
@@ -1151,7 +1155,7 @@ function ReadScreen({ ctx }) {
                 return (
                   <VerseRow key={row.v} n={row.v} html={row.html}
                     hl={ctx.highlights[k]} note={notes[k]} bookmarked={ctx.bookmarks.includes(k)}
-                    selected={selSorted.some(v => String(v) === String(row.v))} reading={(narrateState !== 'idle' && String(narrateV) === String(row.v)) || (arrived != null && String(arrived) === String(row.v))} onSelect={selectVerse} onWord={openWord} />
+                    selected={selSorted.some(v => String(v) === String(row.v))} reading={(narrateState !== 'idle' && String(narrateV) === String(row.v)) || inArrived(row.v)} onSelect={selectVerse} onWord={openWord} />
                 );
               })}
             </p>

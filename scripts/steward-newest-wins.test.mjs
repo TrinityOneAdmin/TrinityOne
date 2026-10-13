@@ -137,7 +137,10 @@ test('the guard is a real comparison against a tracked timestamp, not a constant
 // relay is accepted as truth, and (with newest-wins) a FUTURE-dated forgery pins over the real doc forever.
 // The correct signer per doc must mirror the relay's accept() exactly, so the wrong guard is as bad as none.
 const OWNER_ONLY = ['subscribeBlocked', 'subscribeStewards', 'subscribeGuardians'];       // church key only
-const STEWARD_WRITABLE = ['subscribeJoinPolicy', 'subscribeAdmitted'];                     // church OR a rostered steward
+// subscribeAdmitted LEFT this list in round 2 of the room-key reconcile (P4): it counts the church, a rostered steward,
+// AND a steward this device saw removed for a copy dated before the removal — its own rule, checked below and RUN in
+// key-reads-settle-only-for-the-church-they-asked-about.test.mjs ("round 2 · P4").
+const STEWARD_WRITABLE = ['subscribeJoinPolicy'];                                                // church OR a rostered steward
 // subscribeSafeguard carries all four: minors/approved/guardians owner-only, nophoto steward-writable.
 // Guardians joined it 2026-08-09 — it used to have its own subscription with byte-identical filters,
 // which meant `loaded` could say nothing about whether the parent-link map had arrived, and the
@@ -160,6 +163,12 @@ test('owner-only docs require the church key; steward-writable also accept a ros
   for (const name of STEWARD_WRITABLE) {
     assert.match(handlerBody(name), /_byChurchOrSteward\(e\)/, `${name} is steward-writable but does not accept a rostered steward — it would drop legitimate delegated writes`);
   }
+  const ad = handlerBody('subscribeAdmitted');
+  // ITEM D (2026-10-13): subscribeAdmitted counts every copy the relay serves (the relay's read gate decides which —
+  // gateway.mjs ADMITTED_RECEIPTS). Behaviour is driven in approved-members-survive-a-steward-leaving.test.mjs and
+  // key-reads-settle-only-for-the-church-they-asked-about.test.mjs; this scan only checks the clamp below survives.
+  assert.match(ad, /const counts = /, 're-anchor: subscribeAdmitted no longer decides which copies count');
+  assert.match(ad, /_authFuture\(e\)/, 'subscribeAdmitted lost its future clamp');
   // safeguard: minors+approved gated by _byChurch, nophoto by _byChurchOrSteward
   const sg = handlerBody('subscribeSafeguard');
   assert.equal((sg.match(/_byChurch\(e\)/g) || []).length, 3,

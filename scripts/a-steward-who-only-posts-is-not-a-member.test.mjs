@@ -28,7 +28,7 @@ const REAL = 'member1';         // a real member: has a member: document AND pos
 const OTHER = 'chatter1';       // posts only, not a steward — NOT touched by this change (owner decision)
 
 function liftGhostHelpers() {
-  const m = /\n  var _exStewardsKey = [\s\S]*?\n  function _stewardRosterChanged\(before, after\) \{[\s\S]*?\n  \}/.exec(STEWARD);
+  const m = /\n  var _exStewardsKey = [\s\S]*?\n  function _stewardRosterChanged\(before, after(?:, at)?\) \{[\s\S]*?\n  \}/.exec(STEWARD);   // `at`: the removal date (round 2, P4)
   assert.ok(m, 'could not lift the ghost-filter helpers from the bundle — re-anchor this test, do not delete it');
   return m[0];
 }

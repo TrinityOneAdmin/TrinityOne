@@ -99,6 +99,14 @@ const SCH_NO_KEY = 'Not saved — your church’s key hasn’t arrived yet. Give
 // relay's name on those would send the steward after the wrong thing.
 function schNoKey() {
   let why = '';
+  // NOT EVERY NULL IS A MISSING KEY (the roster wipe work, 2026-10-12). The calendar publishers record why they
+  // refused (Steward.lastSaveFailure): a co-steward's save in the same second was being reported as "your church's
+  // key hasn't arrived", which sent people looking for a fault that was not there.
+  let fail = '';
+  try { const S1 = window.Steward; fail = (S1 && S1.lastSaveFailure) ? String(S1.lastSaveFailure() || '') : ''; } catch (e) { fail = ''; }
+  if (fail === 'clash') return 'Not saved — someone saved this a moment ago. Check what they changed, then try again.';
+  if (fail === 'locked') return 'Not saved — this console can’t read the saved copy yet, and saving now would overwrite it. Try again shortly.';
+  if (fail === 'relay') return 'Not saved — no relay took it. Check your connection and try again.';
   // …AND WHILE THE CONSOLE IS STILL SIGNING IN (a new church's first minutes) SAY SO — nothing is wrong, and "your
   // church's key hasn't arrived" sends a steward looking for a fault. Steward.keysSettingUp is true only until the
   // sign-in and the key read have settled; after that the plainer message below stands.
@@ -228,7 +236,7 @@ function publishCareTeamFor(teamId, careTeamId, people) {
   // Its OWN extraction: teamAllowlistForPeople now takes a delta, and quietly reusing it here made this
   // publish the roster objects instead of their pubkeys.
   const pubs = [...new Set((people || []).map(p => p && p.pub).filter(Boolean))];
-  try { return Promise.resolve(window.StewardMeals.publishCareTeam(pubs)); } catch (e) { return Promise.resolve(null); }
+  try { return Promise.resolve(window.StewardMeals.publishCareTeam(pubs, { team: careTeamId })); } catch (e) { return Promise.resolve(null); }
 }
 
 // ── manage a team's roster: the roles it needs + the people who can serve ──
@@ -263,7 +271,12 @@ function RosterModal({ team, roster, members: allMembers, onClose, onCreate }) {
   // inside the same second share a timestamp and cannot be told apart; that is the limit of the approach.
   const openedTs = useSchR((roster && roster.ts) || 0);
   const liveTs = (roster && roster.ts) || 0;
-  const theirs = !!liveTs && liveTs !== openedTs.current && !saving;
+  // A ROSTER THIS CONSOLE CANNOT OPEN YET (the roster wipe, 2026-10-12). It reaches here as an empty team, so this
+  // form would hold nothing — and Save would publish that nothing over the real team. Say so and offer no Save.
+  // When the key lands the same version opens with the same `ts`, so `theirs` never fires: take it in here instead.
+  const locked = !!(roster && roster._locked);
+  const openedLocked = useSchR(locked);
+  const theirs = !locked && !openedLocked.current && !!liveTs && liveTs !== openedTs.current && !saving;
   // Take the roster as it now stands: the form, the pods, and the allowlist baseline Save diffs against.
   const reloadTheirs = () => {
     setRoles(roster && roster.roles ? roster.roles.map(r => ({ ...r })) : []);
@@ -272,6 +285,7 @@ function RosterModal({ team, roster, members: allMembers, onClose, onCreate }) {
     startPubs.current = (roster && roster.people ? roster.people : []).map(p => p && p.pub).filter(Boolean);
     openedTs.current = liveTs; setSaveErr('');
   };
+  useSchE(() => { if (openedLocked.current && !locked) { openedLocked.current = false; reloadTheirs(); } }, [locked]);
   const rid = () => 'r' + Math.random().toString(36).slice(2, 7);
   const pid = () => 'p' + Math.random().toString(36).slice(2, 7);
   const addRole = () => { if (!newRole.trim()) return; setRoles(r => [...r, { id: rid(), name: newRole.trim() }]); setNewRole(''); };
@@ -291,7 +305,7 @@ function RosterModal({ team, roster, members: allMembers, onClose, onCreate }) {
   // (When `theirs` is true the ordinary Save button is not rendered at all — the footer offers only
   // "Reload their version" and "Save mine anyway" — so this is only ever reached by an explicit choice.)
   const save = async () => {
-    if (saving) return;
+    if (saving || locked) return;
     setSaving(true); setSaveErr('');
     let t = team;
     try {
@@ -312,7 +326,14 @@ function RosterModal({ team, roster, members: allMembers, onClose, onCreate }) {
         if (added.length || removed.length) {
           const members0 = Array.isArray(t.members) ? t.members : [];
           const want = teamAllowlistForPeople(members0, added, removed);
-          await Promise.resolve(window.Steward.publishGroup({ ...t, visibility: 'invite', members: want }));
+          const saved = await Promise.resolve(window.Steward.publishGroup({ ...t, visibility: 'invite', members: want }));
+          // NO KEY CHANGE OVER AN UNSAVED LIST (round 3a): the relay would still name whoever was taken off, and the key
+          // distributor's hold re-reads that list and re-adds them. Say so and stop.
+          if (!saved || !saved.id) {
+            setSaving(false);
+            setSaveErr('The team is saved, but its room’s member list wasn’t, so the room’s key was not changed. Check your connection and press Save again.');
+            return;
+          }
           // TAKING SOMEONE OFF MUST ROTATE THE KEY, and a rotation that did not happen must not read as one
           // that did. publishGroupKey does not throw on its failure modes — it returns null (no church key,
           // or the relay is unauthenticated) and false (every relay refused) — and it advances this console's
@@ -404,6 +425,7 @@ function RosterModal({ team, roster, members: allMembers, onClose, onCreate }) {
       </div>
       <button onClick={addPod} className="sk-btn sk-btn--ghost" style={{ padding: '9px 14px', fontSize: 13 }}><Icon name="plus" size={15} color="currentColor" /> Add a pod</button>
 
+      {locked ? <div role="alert" style={{ fontSize: 13, color: 'var(--clay-ink)', fontWeight: 700, lineHeight: 1.5, marginTop: 18, padding: '10px 12px', borderRadius: 12, background: 'color-mix(in oklab, var(--gold) 12%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 40%, transparent)' }}>Can’t read this team yet</div> : null}
       {theirs ? <div role="alert" style={{ fontSize: 13, color: 'var(--clay-ink)', fontWeight: 700, lineHeight: 1.5, marginTop: 18, padding: '10px 12px', borderRadius: 12, background: 'color-mix(in oklab, var(--gold) 12%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 40%, transparent)' }}>Someone else changed this roster after you opened it. Reload to see their version — or keep yours, which replaces theirs.</div> : null}
       <div style={{ display: 'flex', gap: 10, marginTop: theirs ? 10 : 22 }}>
         <button onClick={onClose} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Cancel</button>
@@ -414,7 +436,7 @@ function RosterModal({ team, roster, members: allMembers, onClose, onCreate }) {
             <button onClick={() => save()} className="sk-btn sk-btn--ghost" style={{ flex: 1, padding: 12, fontSize: 14 }}>Save mine anyway</button>
           </React.Fragment>
         ) : (
-          <button onClick={() => save()} disabled={saving} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: saving ? 0.6 : 1, cursor: saving ? 'default' : 'pointer' }}><Icon name="check" size={16} color="var(--on-clay)" /> {saving ? 'Saving…' : 'Save roster'}</button>
+          <button onClick={() => save()} disabled={saving || locked} className="sk-btn sk-btn--clay" style={{ flex: 1, padding: 12, fontSize: 14, opacity: (saving || locked) ? 0.6 : 1, cursor: (saving || locked) ? 'default' : 'pointer' }}><Icon name="check" size={16} color="var(--on-clay)" /> {saving ? 'Saving…' : 'Save roster'}</button>
         )}
       </div>
     </SchModal>
@@ -647,6 +669,8 @@ function DashRota({ onNewTeam }) {
   const slotVerdict = (svcId, teamId, roleId, pub) => isBlockedPub(pub) ? 'blocked'
     : rotaSlotVerdict(requests, replyById, svcId, teamId, roleId, pub, lockedFor(pub));
 
+  // A LOCKED roster (sealed under a name key this console does not hold yet) arrives with empty lists and `_locked`:
+  // the team card says "Can't read this team yet" and offers no Roster button, pods or slots to fill from it.
   const rosterFor = (id) => rosters.find(r => r.team === id) || { roles: [], people: [] };
   // WHO A SWAP ASK NAMED, AND WHAT THEY SAID. The member's 'swap' reply has always carried `swapTo`, and this
   // board has never read it — it only ever showed "Wants swap" (sim 2026-10-02, item 25). Now the member's app
@@ -1151,7 +1175,7 @@ function DashRota({ onNewTeam }) {
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                       <div style={{ width: 34, height: 34, borderRadius: 11, background: `color-mix(in oklab, ${m.accent} 16%, var(--surface))`, color: m.accent, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={m.icon} size={19} /></div>
                       <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name}</div><div style={{ fontSize: 11.5, color: r.roles.length && tFilled === r.roles.length ? 'var(--sage-ink)' : 'var(--ink-3)', fontWeight: 600 }}>{tFilled}/{r.roles.length} filled</div></div>
-                      <button onClick={() => setRosterTeam(t)} title="Manage roster" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 10px', cursor: 'pointer', color: 'var(--ink-2)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, flexShrink: 0 }}><Icon name="users" size={14} /> Roster</button>
+                      <button onClick={() => { if (!r._locked) setRosterTeam(t); }} disabled={!!r._locked} title={r._locked ? 'Can’t read this team yet' : 'Manage roster'} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 10px', cursor: r._locked ? 'default' : 'pointer', opacity: r._locked ? 0.5 : 1, color: 'var(--ink-2)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, flexShrink: 0 }}><Icon name="users" size={14} /> Roster</button>
                     </div>
                     {(r.pods && r.pods.length) ? (
                       <select value="" onChange={e => {
@@ -1166,7 +1190,8 @@ function DashRota({ onNewTeam }) {
                     ) : null}
                   </div>
                   <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    {r.roles.length === 0 ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', padding: '4px 2px' }}>No roles — add some via <b>Roster</b>.</div> : null}
+                    {r._locked ? <div role="status" style={{ fontSize: 12.5, color: 'var(--ink-3)', padding: '4px 2px', fontWeight: 600 }}>Can’t read this team yet</div>
+                      : r.roles.length === 0 ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', padding: '4px 2px' }}>No roles — add some via <b>Roster</b>.</div> : null}
                     {r.roles.map(role => {
                       const key = t.id + '::' + role.id; const a = assign[key];
                       const slot = { key, service: svc, team: t, role };
