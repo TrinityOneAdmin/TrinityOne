@@ -465,3 +465,21 @@ test('L2 a second relay refusing while the page is open is marked without waitin
     'the problem until the 30-second health probe happens to repaint the card');
   assert.deepEqual(s.mod.relaysThatRefused().map(r => r.url), [A, B]);
 });
+
+test('L1 a refusal that names nobody does not leave the PREVIOUS relay named', () => {
+  // Reachable from third-party or modified relays only: it needs a refusal that is BOTH classified as the
+  // membership refusal (so the alarm is raised at all) and worded as a connection failure (so it is filtered
+  // out as "this relay was merely offline"). Our own relay never says "connection failure" —
+  // `grep -c 'connection failure' scripts/gateway.mjs` is 0.
+  const s = withRelays(TWO, [{ url: A, error: 'blocked: not a member' }]);
+  assert.equal(pillCount(s.render()), 1, 're-anchor: the first refusal is not on screen');
+  s.mod.noteRelayRejection([{ url: B, error: 'connection failure: not permitted' }]);
+  assert.deepEqual(s.mod.relaysThatRefused(), [],
+    'a new refusal that named nobody left the OLD list standing, so the alarm now points at a relay that had ' +
+    'nothing to do with it');
+  assert.equal(pillCount(s.render()), 0, 'the pill is still on the relay named by the PREVIOUS refusal');
+  // the alarm itself must still be up: "a relay refused us" with no url is a real state, and this does not
+  // claim to fix the alarm-with-no-pill case — only to stop it naming the wrong relay
+  assert.equal(s.mod.relayRejectionActive(), true,
+    'the alarm was dropped as well, which this must not do — a refusal with no url is still a refusal');
+});

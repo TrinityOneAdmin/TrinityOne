@@ -266,7 +266,14 @@ function noteRelayRejection(refused) {
     // genuine refusals. Naming it would put "Refused our last change" on a box that was merely offline.
     const list = (Array.isArray(refused) ? refused : []).filter(r => r && r.url && !/^connection failure/i.test(String(r.error || '')))
       .map(r => ({ url: String(r.url), error: String(r.error || '').slice(0, 300), at: Date.now() }));
+    // AND WHEN NOTHING GENUINE WAS REFUSED, FORGET WHOEVER WAS NAMED LAST. If the filter above empties the
+    // list — every entry was an unreachable relay — this wrote no key and left the PREVIOUS list in place, so
+    // the new alarm put "Refused our last change" on a relay that had nothing to do with it. The timestamp on
+    // the line above still has to be written: "a relay refused us" with no url is a real state, and an older
+    // publish path calls this with no list at all (asserted in the-relay-row-says-which-one-refused). So this
+    // does NOT remove the alarm-with-no-pill case — it only stops the alarm naming the wrong relay.
     if (list.length) localStorage.setItem(window.REG_REFUSED_LS, JSON.stringify(list));
+    else try { localStorage.removeItem(window.REG_REFUSED_LS); } catch (e) {}
   } catch (e) {}
   try { window.dispatchEvent(new CustomEvent('steward-relay-rejected')); } catch (e) {}
 }
