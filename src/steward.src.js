@@ -9208,7 +9208,7 @@ window.Steward = {
       () => { tok.genuine = true; tok.at = Date.now(); state.approval = approval; onPolicy(approval); _keysReadSignal('joinpolicy'); });
     return () => { tok.live = false; _joinPolicyStates.delete(state); try { sub.close(); } catch {} try { stopRead(); } catch {} };
   },
-  setJoinPolicy(approval) {   // turn approval-to-join on/off
+  setJoinPolicy(approval, opts) {   // turn approval-to-join on/off. `opts` is publish()'s (ensureJoinPolicy passes background:true)
     if (!sk) return Promise.resolve(null);
     // feChurch, NOT a bare finalizeEvent. "Rules & privacy" has no owner lock, so a delegated steward with
     // the Members capability can press this — and the relay ACCEPTS their write and starts enforcing it at
@@ -9218,7 +9218,7 @@ window.Steward = {
     // copy matches neither. So the switch on screen stayed OFF while the relay enforced ON; pressing it again
     // only set it on again, and a delegated console could never turn it back off. Members arriving with a
     // join link were held pending indefinitely with nothing on screen saying so.
-    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', JOINPOLICY_D + pub], ['t', NET]], content: JSON.stringify({ approval: !!approval }) }, sk));
+    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', JOINPOLICY_D + pub], ['t', NET]], content: JSON.stringify({ approval: !!approval }) }, sk), opts);
   },
   // AUDIT-2026-07-28 F10. A new church published its join policy at wizard step 0 — before the relay had been
   // told the church exists. accept() refuses any kind-30078 write from a key that is not a configured church
@@ -9245,20 +9245,42 @@ window.Steward = {
   async ensureJoinPolicy() {
     if (!sk) return { ok: false, reason: 'no key' };
     const cp = pub;
-    const read = await new Promise((resolve) => {
-      let best = null, eosed = false, done = false;
-      const finish = () => { if (done) return; done = true; try { sub.close(); } catch (e) {} resolve({ best, eosed }); };
+    // One read, used twice: before the write (any copy at all means a choice was made) and after a refusal
+    // (is the relay's COUNTING state already what we wanted?). `counted` is the newest copy subscribeJoinPolicy
+    // would act on — the church's, or a rostered steward's — and nothing else; `best` is the newest of any.
+    const readPolicy = () => new Promise((resolve) => {
+      let best = null, counted = null, eosed = false, done = false;
+      const finish = () => { if (done) return; done = true; try { sub.close(); } catch (e) {} resolve({ best, counted, eosed }); };
       // Both shapes subscribeJoinPolicy uses: the church's own doc, and one a rostered steward wrote for it.
       const sub = pool.subscribeMany(relays(), [
         { kinds: [30078], authors: [cp], '#d': [JOINPOLICY_D + cp] },
         { kinds: [30078], '#church': [cp], '#d': [JOINPOLICY_D + cp] },
-      ], { onevent(e) { if (!best || (e.created_at || 0) > (best.created_at || 0)) best = e; }, oneose() { eosed = true; finish(); } });
+      ], { onevent(e) {
+        if (!best || (e.created_at || 0) > (best.created_at || 0)) best = e;
+        if (!_authFuture(e) && (e.pubkey === cp || _careRoster.has(e.pubkey)) && (!counted || (e.created_at || 0) > (counted.created_at || 0))) counted = e;
+      }, oneose() { eosed = true; finish(); } });
       setTimeout(finish, 5000);
     });
+    const read = await readPolicy();
     if (!read.eosed) return { ok: false, reason: 'the relay did not answer' };
     if (read.best) return { ok: true, already: true };
-    const r = await window.Steward.setJoinPolicy(true);
+    // background: the steward did not press anything, so a refusal must not raise the "change wasn't saved" banner
+    // by itself (publishErrorMessage); the genuine case is announced below, once we have looked again.
+    const r = await window.Steward.setJoinPolicy(true, { background: true });
     if (r) return { ok: true, published: true };
+    // A REFUSAL IS NOT YET A PROBLEM. A delegated steward may simply not be allowed to write this document, or
+    // the first read may have been empty because the relay had not finished answering — and either way the
+    // policy we wanted may already be in force. Look again, and judge by the copy that COUNTS (the church's or
+    // a rostered steward's, newest), not merely the newest one present. Only if the relay does not already say
+    // "approval on" does the alarm below fire, unchanged.
+    try {
+      const again = await readPolicy();
+      const c = again.counted;
+      if (c && !(c.tags || []).some(t => t[0] === 'deleted') && c.content) {
+        let on = false; try { on = !!JSON.parse(c.content).approval; } catch (e) { on = false; }
+        if (on) return { ok: true, already: true, afterRefusal: true };
+      }
+    } catch (e) {}
     // Refused. Say so — a church silently left open to anyone holding the join link is the thing this
     // whole document exists to prevent, and the console has a mounted banner for exactly this.
     try {
@@ -9810,6 +9832,35 @@ window.Steward = {
     }
 
     return _landed('steward roster', _skewGate(() => publish(finalizeEvent(_monotonic({ kind: 30078, created_at: now(), tags: [['d', STEWARDS_D + pub], ['t', NET]], content: JSON.stringify(doc) }), sk))));
+  },
+  // DID A REMOVAL LAND? setStewards() answers false when no relay ACKNOWLEDGED the write, and that is not the same as
+  // "no relay applied it": the OK can be lost with the socket (the app backgrounded mid-write). So read each relay's
+  // newest church-signed roster and say what is TRUE, in three words and never a guess:
+  //   'landed'     the newest roster any relay holds no longer lists them;
+  //   'not-landed' EVERY relay answered, and every one still lists them;
+  //   'unknown'    anything else (a relay silent, nothing found). Callers must not claim either way.
+  // Callers: DashStewardsPanel.remove (app/stew-dashboard.jsx), the only one.
+  async stewardRemovalOutcome(pk) {
+    const want = String(pk || '').toLowerCase();
+    if (!want || !pub) return 'unknown';
+    const urls = relays();
+    if (!urls.length) return 'unknown';
+    const d = STEWARDS_D + pub;
+    const reads = await Promise.all(urls.map(u => _newestByD([{ kinds: [30078], authors: [pub], '#d': [d] }], 6000, [u], pub, (e) => e.pubkey === pub && !_authFuture(e))
+      .then(r => ({ complete: r.complete, top: (r.byD.get(d) || {}).top || null }), () => ({ complete: false, top: null }))));
+    let newest = null;
+    for (const r of reads) if (r.top && _beatsDoc(r.top, newest)) newest = r.top;
+    if (!newest) return 'unknown';
+    let listed = [];
+    if (!(newest.tags || []).some(t => t[0] === 'deleted') && newest.content) { try { listed = ((JSON.parse(newest.content) || {}).pubkeys || []); } catch (e) { return 'unknown'; } }
+    const has = (l) => l.map(x => String(x).toLowerCase()).includes(want);
+    if (!has(listed)) return 'landed';
+    const everyoneStillListsThem = reads.every(r => {
+      if (!r.complete || !r.top) return false;
+      if ((r.top.tags || []).some(t => t[0] === 'deleted') || !r.top.content) return false;
+      try { return has((JSON.parse(r.top.content) || {}).pubkeys || []); } catch (e) { return false; }
+    });
+    return everyoneStillListsThem ? 'not-landed' : 'unknown';
   },
   // What this church has granted each steward. Empty array = nothing; ABSENT = everything (an unscoped
   // steward, which is every steward that existed before this feature).

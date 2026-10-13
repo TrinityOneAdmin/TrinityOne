@@ -9509,10 +9509,18 @@ function DashStewardsPanel({ church }) {
     const blockedSet = new Set((blockedList || []).map(p => String(p || '').toLowerCase()));
     const isBlocked = (p) => blockedSet.has(String(p || '').toLowerCase());
     const alsoMember = !!(byPub.get(pk) && byPub.get(pk).joined);
-    wrote.then((ok) => {
+    // "NO OK" IS NOT "REFUSED". The relay's OK can be lost with the socket (the app was in the background when Revoke
+    // was pressed) while the roster was written. So a false answer is checked against what the relays actually hold,
+    // and the re-key follows THAT: landed -> re-key; definitely not -> say so; cannot tell -> say that, change nothing.
+    const settle = (ok) => {
+      if (ok) return Promise.resolve('landed');
+      return Promise.resolve().then(() => window.Steward.stewardRemovalOutcome(pk)).catch(() => 'unknown');
+    };
+    wrote.then(settle).then((outcome) => {
       // A removal that did not land rotates nothing: they are still a steward, and re-keying around a steward
-      // the relay still honours would only lock out the wrong person.
-      if (!ok) { setRemoveNote({ tone: 'fail', text: 'Couldn’t remove ' + who + ' — the relay didn’t accept it, so they are STILL a steward and nothing was re-keyed. Try again.' }); return null; }
+      // the relay still honours would only lock out the wrong person. One we cannot confirm rotates nothing either.
+      if (outcome === 'not-landed') { setRemoveNote({ tone: 'fail', text: 'Couldn’t remove ' + who + ' — every relay still lists them as a steward, and nothing was re-keyed. Try again.' }); return null; }
+      if (outcome !== 'landed') { setRemoveNote({ tone: 'fail', text: 'Couldn’t confirm that ' + who + ' was removed — the relay didn’t answer, and nothing was re-keyed. Check the list, then try again.' }); return null; }
       const everyone = members.map(m => m.pubkey).filter(p => p && !isBlocked(p));
       const known = spKr.approved(everyone);
       const memberPubs = known || spKr.orAdmitted(everyone);   // approved only — see stewKeyRecipients
