@@ -6733,7 +6733,9 @@ function rotateChurchKeys({ memberPubs, namePubs, keepKr, keepKnown, keepOnly, g
       // EVERY KIND OF KEY, ROOMS INCLUDED (round 3f, P1; audit of 4bb1ed1): a room key that failed was not remembered, so
       // "Try again" found nothing to run, said "Trying again…" and stuck there. Each rotation carries its kind
       // ('care' | 'media' | 'name' | 'room:<id>') and every one that failed is remembered with whom it takes out, and why.
-      for (const [, ok, kind] of rs) if (kind && (ok === false || (ok == null && !delegated)) && window.Steward.rememberRotation) { try { window.Steward.rememberRotation(kind, drop, why); } catch (e) {} }
+      // …remembered as FAILED (round 3g: the banner offers "Try again" from that), and never on a DELEGATED console (finding 1):
+      // a delegate cannot run these — only the church key can — so a record there could never run.
+      if (!delegated) for (const [, ok, kind] of rs) if (kind && (ok === false || ok == null) && window.Steward.rememberRotation) { try { window.Steward.rememberRotation(kind, drop, why, true); } catch (e) {} }
       return failed;
     });
   });
@@ -7279,18 +7281,48 @@ function DashMembers() {
   const [showBlocked, setShowBlocked] = React.useState(false);
   const [confirmBlock, setConfirmBlock] = React.useState(null);
   const [blockWarn, setBlockWarn] = React.useState('');   // a rotation that did not land — the member may still hold the key
-  // …or one WAITING for its key read (round 3e, MED 1): { pending: true, text } until the engine says it ran
-  // (steward-rotation-done, nothing left waiting → a confirmation that clears itself), or that it could not
-  // (steward-rotation-failed → { retry: true, text }, with "Try again"). A plain string is the old one-off warning.
+  // THE BANNER SAYS WHAT THE ENGINE'S RECORDS SAY (round 3g). A Block or a removal whose keys did not all change at once
+  // keeps { pk, verb, pre, post } here; the words are worked out on every render from Steward.rotationStatus(pk) — per
+  // key: waiting, failed, done, cleared (the reason went away elsewhere), member (a removed delegate who is still a member
+  // keeps member access), gone (the room no longer exists), owner (only the owner's console can) — and re-read whenever the
+  // engine says something changed (`steward-rotations`). "Try again" shows "Trying again…" until that signal, which every
+  // run of the engine's runner ends with. A plain string is a one-off warning, as before.
+  const [blockWarnTick, setBlockWarnTick] = React.useState(0);
   React.useEffect(() => {
-    const done = (ev) => { if (ev && ev.detail && ev.detail.left > 0) return;
-      setBlockWarn(cur => (cur && cur.pending) ? { ok: true, text: 'Done — they can no longer open anything sealed from now on. What they could already open stays open.' } : cur);
-      setTimeout(() => setBlockWarn(cur => (cur && cur.ok) ? '' : cur), 8000); };
-    const failedEv = () => setBlockWarn(cur => (cur && cur.pending) ? { retry: true, text: 'Blocked, but this console could not change their keys yet, so they may still be able to open things sealed with them.' } : cur);
     if (!window.addEventListener) return undefined;
-    window.addEventListener('steward-rotation-done', done); window.addEventListener('steward-rotation-failed', failedEv);
-    return () => { window.removeEventListener('steward-rotation-done', done); window.removeEventListener('steward-rotation-failed', failedEv); };
+    const f = () => { setBlockWarnTick(t => t + 1); setBlockWarn(cur => (cur && cur.trying) ? { ...cur, trying: false } : cur); };
+    window.addEventListener('steward-rotations', f);
+    return () => window.removeEventListener('steward-rotations', f);
   }, []);
+  const blockWarnView = (() => {
+    const w = blockWarn;
+    if (!w || typeof w === 'string' || !w.pk) return w || null;
+    if (w.trying) return { tone: 'wait', text: 'Trying again…' };
+    // an engine without rotationStatus (or a status it could not give) still gets the outcome the Block itself saw
+    const st0 = (window.Steward.rotationStatus && window.Steward.rotationStatus(w.pk)) || null;
+    const st = (st0 && Array.isArray(st0.waiting)) ? st0 : { waiting: (w.pendKinds || []), failed: (w.failedKinds || []), done: [], cleared: [], member: [], gone: [], owner: [] };
+    const roomName = (k) => ((groups || []).find(g => g && g.id === k.slice(5)) || {}).name || 'a room';
+    const keyOf = (k) => k.indexOf('room:') === 0 ? 'the key for ' + roomName(k) : ({ care: 'the care key', media: 'the sermon key', name: 'the name key' })[k] || k;
+    const accessOf = (k) => k.indexOf('room:') === 0 ? 'the room “' + roomName(k) + '”' : ({ care: 'care notes', media: 'sermons', name: 'names' })[k] || k;
+    const L = (ks, f) => ks.map(f).join(' and ');
+    const head = 'Blocked';
+    const pre = w.pre || '', post = w.post || '';
+    if (st.owner.length) return { tone: 'fail', text: pre + head + ', but only the church owner’s console can change ' + L(st.owner, keyOf) + '.' + post };
+    if (st.failed.length) return { tone: 'fail', retry: true, text: pre + head + ', but this console could not change ' + L(st.failed, keyOf) + ' yet, so they may still be able to open things sealed with ' + (st.failed.length > 1 ? 'them' : 'it') + '.' + post };
+    if (st.waiting.length) return { tone: 'wait', text: pre + head + '. Their access to ' + L(st.waiting, accessOf) + ' will be removed as soon as this console finishes connecting.' + post };
+    const parts = [];
+    if (st.done.length) parts.push('Done — they can no longer open anything sealed from now on. What they could already open stays open.');
+    if (st.cleared.length) parts.push((w.verb === 'block' ? 'They were unblocked on another console' : 'They were made a steward again on another console') + ', so nothing more was changed for ' + L(st.cleared, accessOf) + '.');
+    if (st.member.length) parts.push('They are also a member, so they keep ' + L(st.member, accessOf) + '.');
+    if (st.gone.length) parts.push(L(st.gone, accessOf).replace(/^t/, 'T') + (st.gone.length > 1 ? ' no longer exist' : ' no longer exists') + ', so there was no key left to change.');
+    if (!parts.length) return (pre || post) ? { tone: 'ok', text: (pre + post).trim() } : null;
+    return { tone: 'ok', text: pre + parts.join(' ') + post };
+  })();
+  React.useEffect(() => {   // a confirmation is a moment (owner, "confirmations are moments"); a failure or a wait stays
+    if (!blockWarnView || blockWarnView.tone !== 'ok' || !blockWarn || !blockWarn.pk) return undefined;
+    const t = setTimeout(() => setBlockWarn(cur => (cur && cur.pk && !cur.trying) ? null : cur), 8000);
+    return () => clearTimeout(t);
+  }, [blockWarnView && blockWarnView.tone, blockWarnTick]);
   const [q, setQ] = React.useState('');
   const ql = q.trim().toLowerCase();
   const matchQ = (m) => !ql || (m.name || '').toLowerCase().includes(ql) || (m.nip05 || '').toLowerCase().includes(ql) || (m.npub || '').toLowerCase().includes(ql);
@@ -7365,13 +7397,13 @@ function DashMembers() {
         // failing, your church may have grown past what one key document can hold": the person is already on the
         // Blocked list, which offers only Unblock, and the cause was almost always a key read still settling, not size.
         //   · a key WAITING for its read (failed.pending): the engine runs it when the read settles — say that, and the
-        //     confirmation follows (steward-rotation-done, below);
+        //     confirmation follows (the engine records it — blockWarnView, round 3g);
         //   · a key that truly could not change: say so, with "Try again" (Steward.retryPendingRotations — rotateChurchKeys
         //     remembered it).
-        const pend = failed.pending || [], W = { 'the care key': 'care notes', 'the sermon key': 'sermons', 'the name key': 'names' };
-        const tail = teamNote ? ' ' + teamNote : '';
-        if (failed.length) setBlockWarn({ retry: true, text: (saveNote ? saveNote + ' ' : '') + 'Blocked, but this console could not change ' + failed.join(' or ') + ' yet, so they may still be able to open things sealed with it.' + tail });
-        else if (pend.length) setBlockWarn({ pending: true, text: (saveNote ? saveNote + ' ' : '') + 'Blocked. Their access to ' + pend.map(w => W[w] || w).join(' and ') + ' will be removed as soon as this console finishes connecting.' + tail });
+        // the words come from the engine's records for this person (round 3g) — see blockWarnView
+        const pend = failed.pending || [];
+        const K = { 'the care key': 'care', 'the sermon key': 'media', 'the name key': 'name' }, kindOf = (w) => K[w] || ('room:' + (((groups || []).find(g => g && w === 'the key for ' + (g.name || 'a group')) || {}).id || w));
+        if (failed.length || pend.length) setBlockWarn({ pk, verb: 'block', pre: saveNote ? saveNote + ' ' : '', post: teamNote ? ' ' + teamNote : '', failedKinds: failed.map(kindOf), pendKinds: pend.map(kindOf) });
         else if (teamNote) setBlockWarn((saveNote ? saveNote + ' ' : '') + teamNote);
       });
     }).catch(() => {});
@@ -7630,10 +7662,10 @@ function DashMembers() {
           which has already closed by the time the publish resolves — the same mistake that made the safety
           check's warning unreachable three times. It stays until dismissed: the steward believes the person
           is out, and this is the one thing that says otherwise. */}
-      {blockWarn ? (
-        <div role={(blockWarn.ok || blockWarn.pending) ? 'status' : 'alert'} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '11px 13px', borderRadius: 12, marginBottom: 12, background: (blockWarn.ok || blockWarn.pending) ? 'var(--surface-2)' : 'var(--clay-soft)', border: '1px solid ' + ((blockWarn.ok || blockWarn.pending) ? 'var(--line)' : 'var(--clay)') }}>
-          <div style={{ flex: 1, minWidth: 0, fontSize: 13, lineHeight: 1.45, color: 'var(--ink)' }}>{typeof blockWarn === 'string' ? blockWarn : blockWarn.text}
-            {blockWarn.retry && window.Steward.retryPendingRotations ? <> <button onClick={() => { setBlockWarn({ pending: true, text: 'Trying again…' }); try { window.Steward.retryPendingRotations(); } catch (e) {} }} style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 13, textDecoration: 'underline', fontFamily: 'var(--font-ui)' }}>Try again</button></> : null}</div>
+      {blockWarnView ? (
+        <div role={(blockWarnView.tone === 'ok' || blockWarnView.tone === 'wait') ? 'status' : 'alert'} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '11px 13px', borderRadius: 12, marginBottom: 12, background: (blockWarnView.tone === 'ok' || blockWarnView.tone === 'wait') ? 'var(--surface-2)' : 'var(--clay-soft)', border: '1px solid ' + ((blockWarnView.tone === 'ok' || blockWarnView.tone === 'wait') ? 'var(--line)' : 'var(--clay)') }}>
+          <div style={{ flex: 1, minWidth: 0, fontSize: 13, lineHeight: 1.45, color: 'var(--ink)' }}>{typeof blockWarnView === 'string' ? blockWarnView : blockWarnView.text}
+            {blockWarnView.retry && window.Steward.retryPendingRotations ? <> <button onClick={() => { setBlockWarn(cur => (cur && cur.pk) ? { ...cur, trying: true } : cur); try { window.Steward.retryPendingRotations(); } catch (e) {} }} style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 13, textDecoration: 'underline', fontFamily: 'var(--font-ui)' }}>Try again</button></> : null}</div>
           <button onClick={() => setBlockWarn('')} aria-label="Dismiss" style={{ flexShrink: 0, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', fontSize: 16, lineHeight: 1, padding: 2 }}>×</button>
         </div>
       ) : null}
@@ -9323,16 +9355,48 @@ function DashStewardsPanel({ church }) {
   const blockedList = window.useStewardBlocked ? window.useStewardBlocked() : [];
   const isBlockedHere = (pk) => (blockedList || []).some(p => String(p || '').toLowerCase() === String(pk || '').toLowerCase());
   const [removeNote, setRemoveNote] = React.useState(null);   // { tone: 'ok' | 'fail', text } — what removing someone did
-  // …and its waiting form (round 3e, MED 1) — see DashMembers' blockWarn: { pending: true } until the engine says it ran or failed
+  // THE BANNER SAYS WHAT THE ENGINE'S RECORDS SAY (round 3g). A Block or a removal whose keys did not all change at once
+  // keeps { pk, verb, pre, post } here; the words are worked out on every render from Steward.rotationStatus(pk) — per
+  // key: waiting, failed, done, cleared (the reason went away elsewhere), member (a removed delegate who is still a member
+  // keeps member access), gone (the room no longer exists), owner (only the owner's console can) — and re-read whenever the
+  // engine says something changed (`steward-rotations`). "Try again" shows "Trying again…" until that signal, which every
+  // run of the engine's runner ends with. A plain string is a one-off warning, as before.
+  const [removeNoteTick, setRemoveNoteTick] = React.useState(0);
   React.useEffect(() => {
-    const done = (ev) => { if (ev && ev.detail && ev.detail.left > 0) return;
-      setRemoveNote(n => (n && n.pending) ? { tone: 'ok', text: 'Done — the church’s keys have been changed, so they can’t open anything sealed from now on.' } : n);
-      setTimeout(() => setRemoveNote(n => (n && n.tone === 'ok' && !n.pending) ? null : n), 8000); };
-    const failedEv = () => setRemoveNote(n => (n && n.pending) ? { tone: 'fail', retry: true, text: 'This console could not change the church’s keys yet, so they may still be able to open things sealed with them.' } : n);
     if (!window.addEventListener) return undefined;
-    window.addEventListener('steward-rotation-done', done); window.addEventListener('steward-rotation-failed', failedEv);
-    return () => { window.removeEventListener('steward-rotation-done', done); window.removeEventListener('steward-rotation-failed', failedEv); };
+    const f = () => { setRemoveNoteTick(t => t + 1); setRemoveNote(cur => (cur && cur.trying) ? { ...cur, trying: false } : cur); };
+    window.addEventListener('steward-rotations', f);
+    return () => window.removeEventListener('steward-rotations', f);
   }, []);
+  const removeNoteView = (() => {
+    const w = removeNote;
+    if (!w || typeof w === 'string' || !w.pk) return w || null;
+    if (w.trying) return { tone: 'wait', text: 'Trying again…' };
+    // an engine without rotationStatus (or a status it could not give) still gets the outcome the Block itself saw
+    const st0 = (window.Steward.rotationStatus && window.Steward.rotationStatus(w.pk)) || null;
+    const st = (st0 && Array.isArray(st0.waiting)) ? st0 : { waiting: (w.pendKinds || []), failed: (w.failedKinds || []), done: [], cleared: [], member: [], gone: [], owner: [] };
+    const roomName = (k) => ((groups || []).find(g => g && g.id === k.slice(5)) || {}).name || 'a room';
+    const keyOf = (k) => k.indexOf('room:') === 0 ? 'the key for ' + roomName(k) : ({ care: 'the care key', media: 'the sermon key', name: 'the name key' })[k] || k;
+    const accessOf = (k) => k.indexOf('room:') === 0 ? 'the room “' + roomName(k) + '”' : ({ care: 'care notes', media: 'sermons', name: 'names' })[k] || k;
+    const L = (ks, f) => ks.map(f).join(' and ');
+    const head = w.who + ' is no longer a steward';
+    const pre = w.pre || '', post = w.post || '';
+    if (st.owner.length) return { tone: 'fail', text: pre + head + ', but only the church owner’s console can change ' + L(st.owner, keyOf) + '.' + post };
+    if (st.failed.length) return { tone: 'fail', retry: true, text: pre + head + ', but this console could not change ' + L(st.failed, keyOf) + ' yet, so they may still be able to open things sealed with ' + (st.failed.length > 1 ? 'them' : 'it') + '.' + post };
+    if (st.waiting.length) return { tone: 'wait', text: pre + head + '. Their access to ' + L(st.waiting, accessOf) + ' will be removed as soon as this console finishes connecting.' + post };
+    const parts = [];
+    if (st.done.length) parts.push('Done — they can no longer open anything sealed from now on. What they could already open stays open.');
+    if (st.cleared.length) parts.push((w.verb === 'block' ? 'They were unblocked on another console' : 'They were made a steward again on another console') + ', so nothing more was changed for ' + L(st.cleared, accessOf) + '.');
+    if (st.member.length) parts.push('They are also a member, so they keep ' + L(st.member, accessOf) + '.');
+    if (st.gone.length) parts.push(L(st.gone, accessOf).replace(/^t/, 'T') + (st.gone.length > 1 ? ' no longer exist' : ' no longer exists') + ', so there was no key left to change.');
+    if (!parts.length) return (pre || post) ? { tone: 'ok', text: (pre + post).trim() } : null;
+    return { tone: 'ok', text: pre + parts.join(' ') + post };
+  })();
+  React.useEffect(() => {   // a confirmation is a moment (owner, "confirmations are moments"); a failure or a wait stays
+    if (!removeNoteView || removeNoteView.tone !== 'ok' || !removeNote || !removeNote.pk) return undefined;
+    const t = setTimeout(() => setRemoveNote(cur => (cur && cur.pk && !cur.trying) ? null : cur), 8000);
+    return () => clearTimeout(t);
+  }, [removeNoteView && removeNoteView.tone, removeNoteTick]);
   const [adding, setAdding] = React.useState(false);
   const [q, setQ] = React.useState('');
   const [code, setCode] = React.useState('');
@@ -9439,9 +9503,9 @@ function DashStewardsPanel({ church }) {
       return rotateChurchKeys({ memberPubs, namePubs: everyone, keepKr: spKr, keepKnown: !!known, keepOnly, goingPk: pk, stewardPubs: next, groups, delegated: false, isBlocked }).then((failed) => {
         const tail = alsoMember ? ' They are also a member, so they keep what members can open — to put them out of the church, block them from Members.' : '';
         // what is true (round 3e, MED 1) — see block(): they are off the roster, so "try removing them again" was not possible
-        const pend = failed.pending || [], W = { 'the care key': 'care notes', 'the sermon key': 'sermons', 'the name key': 'names' };
-        if (failed.length) setRemoveNote({ tone: 'fail', retry: true, text: who + ' is no longer a steward, but this console could not change ' + failed.join(' or ') + ' yet, so they may still be able to open things sealed with it.' + tail });
-        else if (pend.length) setRemoveNote({ tone: 'ok', pending: true, text: who + ' is no longer a steward. Their access to ' + pend.map(w => W[w] || w).join(' and ') + ' will be removed as soon as this console finishes connecting.' + tail });
+        const pend = failed.pending || [];
+        const K = { 'the care key': 'care', 'the sermon key': 'media', 'the name key': 'name' }, kindOf = (w) => K[w] || ('room:' + (((groups || []).find(g => g && w === 'the key for ' + (g.name || 'a group')) || {}).id || w));
+        if (failed.length || pend.length) setRemoveNote({ pk, who, verb: 'remove', post: tail, failedKinds: failed.map(kindOf), pendKinds: pend.map(kindOf) });   // words from the engine's records (round 3g) — see removeNoteView
         else setRemoveNote({ tone: 'ok', text: who + ' is no longer a steward, and the church’s keys have been changed so they can’t open anything sealed from now on. What they could already open stays open.' + tail }); setTimeout(() => setRemoveNote(n => (n && n.tone === 'ok' && !n.pending) ? null : n), 8000);   // a confirmation is a moment; a failure — or a wait — stays
       });
     }).catch(() => { setRemoveNote({ tone: 'fail', text: 'Couldn’t finish removing ' + who + ' — the relay could not be reached. Check whether they are still listed, and try again.' }); });
@@ -9554,10 +9618,10 @@ function DashStewardsPanel({ church }) {
           </div>
         ))}
       </div> : null}
-      {removeNote ? (
-        <div role={removeNote.tone === 'fail' ? 'alert' : 'status'} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 12px', borderRadius: 12, marginBottom: 12, background: removeNote.tone === 'fail' ? 'var(--clay-soft)' : 'var(--surface-2)', border: '1px solid ' + (removeNote.tone === 'fail' ? 'var(--clay)' : 'var(--line)') }}>
-          <div style={{ flex: 1, minWidth: 0, fontSize: 13, lineHeight: 1.45, color: 'var(--ink)' }}>{removeNote.text}
-            {removeNote.retry && window.Steward.retryPendingRotations ? <> <button onClick={() => { setRemoveNote({ tone: 'ok', pending: true, text: 'Trying again…' }); try { window.Steward.retryPendingRotations(); } catch (e) {} }} style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 13, textDecoration: 'underline', fontFamily: 'var(--font-ui)' }}>Try again</button></> : null}</div>
+      {removeNoteView ? (
+        <div role={removeNoteView.tone === 'fail' ? 'alert' : 'status'} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 12px', borderRadius: 12, marginBottom: 12, background: removeNoteView.tone === 'fail' ? 'var(--clay-soft)' : 'var(--surface-2)', border: '1px solid ' + (removeNoteView.tone === 'fail' ? 'var(--clay)' : 'var(--line)') }}>
+          <div style={{ flex: 1, minWidth: 0, fontSize: 13, lineHeight: 1.45, color: 'var(--ink)' }}>{removeNoteView.text}
+            {removeNoteView.retry && window.Steward.retryPendingRotations ? <> <button onClick={() => { setRemoveNote(cur => (cur && cur.pk) ? { ...cur, trying: true } : cur); try { window.Steward.retryPendingRotations(); } catch (e) {} }} style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer', color: 'var(--clay-ink)', fontWeight: 700, fontSize: 13, textDecoration: 'underline', fontFamily: 'var(--font-ui)' }}>Try again</button></> : null}</div>
           <button onClick={() => setRemoveNote(null)} aria-label="Dismiss" style={{ flexShrink: 0, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', fontSize: 16, lineHeight: 1, padding: 2 }}>×</button>
         </div>
       ) : null}

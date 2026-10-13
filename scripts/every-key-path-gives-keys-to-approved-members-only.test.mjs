@@ -500,6 +500,18 @@ test('LOW 2: with the member list FRESH, Block and Remove let go of a holder who
 // finishes connecting", then "Done" when the engine reports it ran. A rotation that really failed says so, with
 // "Try again" — never "try blocking them again" (the person is on the Blocked list, which offers only Unblock) nor
 // "grown past what one key document can hold" (almost never the cause).
+// ROUND 3g: the banner reads Steward.rotationStatus(pk) and re-reads it on `steward-rotations`. The stub engine below keeps
+// a status the way the real one does (a waiting rotation → "waiting"; a remembered failure → "failed"), so these rows test
+// the SCREEN's words for each state; the states themselves are produced by the real runner in
+// key-reads-settle-only-for-the-church-they-asked-about and in browser row J of a-room-key-reaches-….
+function withStatus(w) {
+  const st = {};   // pk -> { waiting, failed, done, cleared, member, gone, owner }
+  const of = (pk) => (st[pk] = st[pk] || { waiting: [], failed: [], done: [], cleared: [], member: [], gone: [], owner: [] });
+  w.S.rotationStatus = (pk) => of(pk);
+  w.S.rememberRotation = (kind, drop, why, failed) => { w.calls.push({ name: 'rememberRotation', a: [kind, drop, why, failed] }); for (const pk of drop) { const o = of(pk); if (failed) o.failed.push(kind); else o.waiting.push(kind); } };
+  const pendingFor = (kind) => (...a) => { w.calls.push({ name: kind === 'care' ? 'rotateCareKey' : 'rotateMediaKey', a }); for (const pk of (a[2] && a[2].drop) || []) of(pk).waiting.push(kind); return Promise.resolve({ pending: true }); };
+  return { of, pendingFor };
+}
 async function blockShown(w) {
   w.lists.groups.length = 0; w.lists.groups.push({ id: 'g-open', name: 'Prayer', kind: 'group', encrypted: true });
   const listeners = {};
@@ -518,16 +530,31 @@ async function blockShown(w) {
 }
 test('3e MED 1: a Block whose care key is WAITING for its read says so truthfully — and then "Done" when it has run', async () => {
   const w = world({ approval: true });
-  w.S.rotateCareKey = (...a) => { w.calls.push({ name: 'rotateCareKey', a }); return Promise.resolve({ pending: true }); };
+  const ws = withStatus(w);
+  w.S.rotateCareKey = ws.pendingFor('care');
   const v = await blockShown(w);
   assert.match(v.said(), /will be removed as soon as this console finishes connecting/, 'a WAITING rotation was not said as waiting: ' + v.said().slice(0, 300));
   assert.doesNotMatch(v.said(), /Try blocking them again|grown past/, 'THE SCREEN TOLD THE STEWARD TO BLOCK AGAIN (impossible) OR BLAMED THE CHURCH\'S SIZE');
   assert.deepEqual(rotatedTo(w, 'rotateCareKey') && w.calls.find(x => x.name === 'rotateCareKey').a[2].drop, [BOB], 'the rotation was not told whom it takes out — it could not be remembered for later');
-  v.fire('steward-rotation-done', { kind: 'care', left: 0 });
+  ws.of(BOB).waiting = []; ws.of(BOB).done = ['care'];      // the engine ran it
+  v.fire('steward-rotations');
   assert.match(v.said(), /Done — they can no longer open anything sealed/, 'the screen never said the waiting rotation had run');
+});
+test('3g: the screen says a TRUE thing when nothing was rotated — unblocked elsewhere, still a member, or a room gone', async () => {
+  const w = world({ approval: true });
+  const ws = withStatus(w);
+  w.S.rotateCareKey = ws.pendingFor('care');
+  const v = await blockShown(w);
+  ws.of(BOB).waiting = []; ws.of(BOB).cleared = ['care']; ws.of(BOB).gone = ['room:g-open'];
+  v.fire('steward-rotations');
+  const said = v.said();
+  assert.doesNotMatch(said, /Done — they can no longer open/, 'THE SCREEN SAID "DONE — THEY CAN NO LONGER OPEN…" THOUGH NOTHING WAS ROTATED (they were unblocked elsewhere)');
+  assert.match(said, /unblocked on another console, so nothing more was changed for care notes/, 'the unblock elsewhere was not said: ' + said.slice(0, 300));
+  assert.match(said, /The room “Prayer” no longer exists, so there was no key left to change/, 'the room that is gone was not said');
 });
 test('3e MED 1: a Block whose care key truly could not change says so, with "Try again" — which retries', async () => {
   const w = world({ approval: true });
+  withStatus(w);
   w.S.rotateCareKey = (...a) => { w.calls.push({ name: 'rotateCareKey', a }); return Promise.resolve(false); };
   const v = await blockShown(w);
   assert.match(v.said(), /could not change the care key yet/, 'a failed rotation was not named: ' + v.said().slice(0, 300));
@@ -537,6 +564,9 @@ test('3e MED 1: a Block whose care key truly could not change says so, with "Try
   assert.ok(again, 'no "Try again" control for a rotation that failed');
   again.props.onClick();
   assert.ok(w.calls.some(x => x.name === 'retryPendingRotations'), '"Try again" did not retry the rotation');
+  assert.match(v.said(), /Trying again…/, '"Try again" showed nothing while it ran');
+  v.fire('steward-rotations');                                 // the runner finished (and the key still could not change)
+  assert.match(v.said(), /could not change the care key yet/, 'AFTER "TRY AGAIN" ENDED THE SCREEN DID NOT SAY THE TRUE OUTCOME — it stuck or went quiet');
 });
 test('3e MED 1: Block waits, briefly, for the key reads — and rotates once they have settled', async () => {
   const w = world({ approval: true });
@@ -560,7 +590,8 @@ test('3e MED 1: Block waits, briefly, for the key reads — and rotates once the
 });
 test('3e MED 1: removing a delegate whose keys are WAITING says so truthfully — not "try removing them again"', async () => {
   const w = world({ approval: true });
-  w.S.rotateCareKey = (...a) => { w.calls.push({ name: 'rotateCareKey', a }); return Promise.resolve({ pending: true }); };
+  const ws = withStatus(w);
+  w.S.rotateCareKey = ws.pendingFor('care');
   const { mod, draw } = load(w);
   const props = { church: { name: 'St Aidan', features: {} } };
   let tree = draw(mod.DashStewardsPanel, props);
@@ -579,16 +610,18 @@ test('3e MED 1: removing a delegate whose keys are WAITING says so truthfully �
 // is remembered now, the room's with its id, so Try again runs it.
 test('3f P1: a Block whose ROOM key failed offers "Try again" — and the failed room rotation is what it will run', async () => {
   const w = world({ approval: true });
+  const ws = withStatus(w);
   w.S.publishGroupKey = (...a) => { w.calls.push({ name: 'publishGroupKey', a }); return Promise.resolve(false); };
   const v = await blockShown(w);
   assert.match(v.said(), /could not change the key for Prayer yet/, 'the failed room key was not named: ' + v.said().slice(0, 300));
   const r = w.calls.find(x => x.name === 'rememberRotation' && x.a[0] === 'room:g-open');
   assert.ok(r, 'THE FAILED ROOM ROTATION WAS NOT REMEMBERED — "Try again" would find nothing to run and stick at "Trying again…"');
-  assert.deepEqual([r.a[1], r.a[2]], [[BOB], 'block'], 'the room rotation was remembered without whom it takes out, or why');
+  assert.deepEqual([r.a[1], r.a[2], r.a[3]], [[BOB], 'block', true], 'the room rotation was remembered without whom it takes out, or why, or as failed');
   const again = find(v.tree(), n => n.type === 'button' && /^Try again$/.test(texts(n).join(' ').trim()))[0];
   assert.ok(again, 'no "Try again" for the failed room key');
   again.props.onClick();
   assert.ok(w.calls.some(x => x.name === 'retryPendingRotations'), '"Try again" did not retry');
-  v.fire('steward-rotation-done', { kind: 'room:g-open', left: 0 });
+  ws.of(BOB).failed = []; ws.of(BOB).done = ['room:g-open'];   // the engine ran it (the real runner does this in browser row J)
+  v.fire('steward-rotations');
   assert.match(v.said(), /Done — they can no longer open anything sealed/, 'the retry finishing never cleared "Trying again…"');
 });

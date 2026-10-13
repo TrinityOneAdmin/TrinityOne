@@ -506,9 +506,12 @@ function _pendingRotAdd(kind, cp, drop, why) {
     const add = (drop || []).map(p => String(p || '').toLowerCase()).filter(Boolean);
     cur.drop = [...new Set([...(cur.drop || []), ...add])];
     cur.why = cur.why || {};
-    for (const p of add) cur.why[p] = (why === 'remove') ? 'remove' : (cur.why[p] || 'block');
+    // A BLOCK OUTRANKS A REMOVAL (round 3g, finding 5): remove D as a delegate, then Block D — D is taken out because they
+    // are BLOCKED, and a later "put back on the roster" elsewhere must not clear it. `why` only ever moves up to 'block'.
+    for (const p of add) cur.why[p] = (why === 'remove' && cur.why[p] !== 'block') ? 'remove' : 'block';
     o[kind] = cur;
     lsSet(PENDINGROT_LS + cp, JSON.stringify(o));
+    try { _rotNote(cp, add, kind, 'waiting'); _rotChanged(); } catch (x) {}
   } catch (x) {}
 }
 function _pendingRotClear(kind, cp) {
@@ -2654,56 +2657,121 @@ function _runKeyReadAuthWaiters() {
   for (const again of ws) { try { again(); } catch (e) {} }
   try { _runPendingRotations(); } catch (e) {}   // a login accepted may be what a remembered rotation waited for (round 3e)
 }
-// RUN THE ROTATIONS THAT COULD NOT RUN YET (round 3e, MED 1) — see PENDINGROT_LS. Called when a care, sermon or name
-// key read settles, when a login is accepted, and by Steward.retryPendingRotations (the screen's "Try again"). Each one
-// runs only once its own key's read has settled; it rotates to the envelope's CURRENT holders minus whom it takes out
-// (and minus anyone this console holds as blocked — the rotations filter that themselves): the floor Block uses
-// (round 3c). Members not yet keyed are added by the key distributor, as always. Done: cleared, and
-// `steward-rotation-done` says so (with how many are still waiting). A real failure: kept, and `steward-rotation-failed`
-// says which key — the screen offers "Try again".
+// RUN THE ROTATIONS THAT COULD NOT RUN YET (rounds 3e–3g) — see PENDINGROT_LS. Called when a care, sermon or name key read
+// settles, when a login is accepted, and by Steward.retryPendingRotations (the screen's "Try again").
+//
+// ROUND 3g: ONE SOURCE OF TRUTH FOR THE SCREEN. The banner used to piece the story together from events ("done, N left",
+// "failed") and kept its own idea of what was waiting — and every round found another way for it to stick ("Trying
+// again…" for ever; "…as soon as this console finishes connecting" behind a record that could never run). Now the engine
+// keeps, per church and per PERSON, the state of every key a Block or a removal is taking them out of
+// (`_rotOutcome`, read through Steward.rotationStatus(pk)), and says only "something changed" (`steward-rotations`). The
+// screen asks, and shows what is true. Every run of the runner ends in that signal, so "Try again" always has a visible
+// outcome. The states, per key:
+//   waiting — remembered, not run yet (the read has not settled, or the room's key has not arrived)
+//   failed  — the last attempt failed (the screen offers "Try again")
+//   done    — rotated: they cannot open what is sealed from now on
+//   cleared — not rotated, because the reason no longer holds: unblocked, or put back as a steward, on another console
+//   member  — not rotated, because the delegate removed is still a member and keeps member access (as the direct path does)
+//   gone    — dropped: the room no longer exists (or is no longer sealed), so there is no key left to change
+//   owner   — this console cannot run it (acting for another church): only the church owner's console can
+// Each runs only once its own key's read has settled; it rotates to the envelope's CURRENT holders minus whom it takes
+// out (and minus anyone this console holds as blocked — the rotations filter that themselves): the floor Block uses
+// (round 3c). Members not yet keyed are added by the key distributor, as always.
 let _pendingRotBusy = false, _pendingRotAgain = false;
-// the member list subscribeMembers last delivered, for the church it was for (round 3f, P2) — see the name key's rebuild
+// the member list subscribeMembers last delivered, for the church it was for (round 3f, P2) — the name key's rebuild, and
+// (round 3g) whether a removed delegate is still a member
 let _lastMembers = { cp: '', pubs: [] };
+// the group list and the admitted list subscribeGroups / subscribeAdmitted last delivered (round 3g), stamped (see _listTag)
+// — a room that no longer exists, and whether a removed delegate is an APPROVED member, are read from them only when FRESH
+let _lastGroups = { cp: '', list: null };
+let _lastAdmitted = { cp: '', list: null };
+// church -> Map(person -> Map(key kind -> state)) — see above. In memory: after a reload, what is still remembered on the
+// device (PENDINGROT_LS) is "waiting" again until it runs.
+const _rotOutcome = new Map();
+function _rotNote(cp, pks, kind, state) {
+  try {
+    let byPk = _rotOutcome.get(cp); if (!byPk) { byPk = new Map(); _rotOutcome.set(cp, byPk); }
+    for (const pk of (pks || [])) { const k = _lcPk(pk); if (!k) continue; let m = byPk.get(k); if (!m) { m = new Map(); byPk.set(k, m); } m.set(kind, state); }
+  } catch (e) {}
+}
+function _rotChanged() { try { window.dispatchEvent(new CustomEvent('steward-rotations')); } catch (e) {} }
 async function _runPendingRotations(explicit) {
-  try { return await _runPendingRotationsNow(!!explicit); } catch (e) { _pendingRotBusy = false; }   // its callers fire and forget it
+  try { return await _runPendingRotationsNow(!!explicit); } catch (e) { _pendingRotBusy = false; _rotChanged(); }   // its callers fire and forget it
 }
 const _lcPk = (x) => String(x || '').toLowerCase();
 async function _runPendingRotationsNow(explicit) {
   const cp = actingChurch || pub;
-  if (!cp || actingChurch) return;   // only the church key rotates these (block/remove are owner-only)
+  if (!cp) return;
   // ONE RUN AT A TIME — and a call that arrives during it (the sermon read settling while the care rotation publishes) is
   // not lost: the run goes round again when it finishes.
   if (_pendingRotBusy) { _pendingRotAgain = true; return; }
   const all = _pendingRotAll(cp);
-  // "Try again" with nothing left to do says so (round 3f, P1) — the screen's "Trying again…" must not stick for ever
-  if (!Object.keys(all).length) { if (explicit) { try { window.dispatchEvent(new CustomEvent('steward-rotation-done', { detail: { kind: '', left: 0 } })); } catch (e) {} } return; }
+  // ACTING FOR ANOTHER CHURCH (round 3g, finding 1): only the church key rotates these — Block and removing a delegate are
+  // the owner's. A record here (this device was that church's owner console) cannot run: say so, never sit silent.
+  if (actingChurch) {
+    for (const kind of Object.keys(all)) _rotNote(cp, (all[kind] && all[kind].drop) || [], kind, 'owner');
+    _rotChanged(); return;
+  }
+  if (!Object.keys(all).length) { _rotChanged(); return; }   // nothing remembered: still a visible outcome for "Try again"
   const S = (typeof window !== 'undefined' && window.Steward) || null;
   if (!S) return;
   _pendingRotBusy = true;
   try {
     for (const kind of Object.keys(all)) {
       const p = all[kind]; if (!p) continue;
-      if (!_isRelayAuthed()) continue;
       const room = kind.indexOf('room:') === 0 ? kind.slice(5) : '';
+      if (!room && kind !== 'care' && kind !== 'media' && kind !== 'name') { _pendingRotClear(kind, cp); continue; }
+      const was = (p.drop || []).map(_lcPk);
+      // A ROOM THAT NO LONGER EXISTS — or is no longer sealed — has no key left to change (round 3g, finding 2). Read from a
+      // FRESH group list only: a room missing from a cached one is missing data, not evidence.
+      if (room) {
+        const gl = (_lastGroups.cp === cp && _listIsFresh(_lastGroups.list)) ? _lastGroups.list : null;
+        const g = gl ? gl.find(x => x && x.id === room) : undefined;
+        if (gl && (!g || g.deleted || !g.encrypted)) { _pendingRotClear(kind, cp); _rotNote(cp, was, kind, 'gone'); continue; }
+      }
+      if (!_isRelayAuthed()) continue;
       if (kind === 'care' && !_careKeyFresh) continue;
       if (kind === 'media' && !_mediaKeyFresh) continue;
       if (kind === 'name' && !_nameKeyChecked) continue;
       // a room's ring and newest envelope must be in hand and ours — never a rotation from nothing (that would mint)
       if (room && !((_skeys[room] || []).length && _senvMine[room] === true)) continue;
-      if (!room && kind !== 'care' && kind !== 'media' && kind !== 'name') { _pendingRotClear(kind, cp); continue; }
-      // WHOM IT TAKES OUT, RE-CHECKED NOW (round 3f, P3; audit of 4bb1ed1). The record was written when the Block or the
-      // removal was made; an Unblock — or the delegate put back — on ANOTHER console never reaches it. So each person must
-      // still be blocked (on a blocklist this console has read from a relay or written itself — `_localBlockedAt`), or
-      // still off the steward roster (once the roster has been read), or they are let go from the record.
+      // WHOM IT TAKES OUT, RE-CHECKED NOW (round 3f, P3). The record was written when the Block or the removal was made; an
+      // Unblock — or the delegate put back — on ANOTHER console never reaches it. So each person must still be blocked (on a
+      // blocklist this console has read from a relay or written itself — `_localBlockedAt`), or still off the steward
+      // roster (once the roster has been read), or they are let go from the record — said as "cleared", never as "done".
       if (_localBlockedAt === 0) continue;                 // the blocklist this console holds is only the device's copy yet
       const why = p.why || {};
-      const was = (p.drop || []).map(_lcPk);
       if (was.some(pk => why[pk] === 'remove') && !_careRosterKnown) continue;   // the roster has not been read yet
-      const drop = was.filter(pk => (why[pk] === 'remove') ? !_careRoster.has(pk) : _localBlocked.has(pk));
-      if (drop.length !== was.length) {
-        if (!drop.length) { _pendingRotClear(kind, cp); try { window.dispatchEvent(new CustomEvent('steward-rotation-done', { detail: { kind, left: Object.keys(_pendingRotAll(cp)).length } })); } catch (e) {} continue; }
-        try { const o = _pendingRotAll(cp); if (o[kind]) { o[kind].drop = drop; lsSet(PENDINGROT_LS + cp, JSON.stringify(o)); } } catch (e) {}
+      const still = was.filter(pk => (why[pk] === 'remove') ? !_careRoster.has(pk) : _localBlocked.has(pk));
+      const cleared = was.filter(pk => still.indexOf(pk) === -1);
+      // A REMOVED DELEGATE WHO IS STILL A MEMBER KEEPS MEMBER ACCESS (round 3g, finding 3) — what the direct path does: it
+      // rotates the care, sermon and open-room keys to the APPROVED members, the name key to every member, and an invite
+      // room to its own list, and the delegate is in those like anyone else. Positive evidence only: a member list or an
+      // approval answer this console does not have yet means wait, not drop.
+      const removedAndMember = [];
+      if (still.some(pk => why[pk] === 'remove')) {
+        if (_lastMembers.cp !== cp) continue;              // no member list yet — cannot tell
+        const members = new Set(_lastMembers.pubs.map(_lcPk));
+        let approval = null; try { approval = S.joinPolicyFresh ? S.joinPolicyFresh() : null; } catch (e) {}
+        const ad = (_lastAdmitted.cp === cp && _listIsFresh(_lastAdmitted.list)) ? new Set(_lastAdmitted.list.map(_lcPk)) : null;
+        if (approval === null || (approval === true && !ad)) { if (kind !== 'name') continue; }   // approval not known — wait
+        const gl = (_lastGroups.cp === cp && _listIsFresh(_lastGroups.list)) ? _lastGroups.list : null;
+        const g = room && gl ? gl.find(x => x && x.id === room) : null;
+        if (room && !g) continue;                          // the room's own list is not known yet — wait
+        for (const pk of still) {
+          if (why[pk] !== 'remove' || !members.has(pk)) continue;
+          const approved = approval === false || (ad && ad.has(pk));
+          const keeps = kind === 'name' ? true
+            : (room && g.visibility === 'invite') ? (g.members || []).map(_lcPk).indexOf(pk) !== -1
+            : !!approved;
+          if (keeps) removedAndMember.push(pk);
+        }
       }
+      const drop = still.filter(pk => removedAndMember.indexOf(pk) === -1);
+      if (cleared.length) _rotNote(cp, cleared, kind, 'cleared');
+      if (removedAndMember.length) _rotNote(cp, removedAndMember, kind, 'member');
+      if (!drop.length) { _pendingRotClear(kind, cp); continue; }
+      if (drop.length !== was.length) { try { const o = _pendingRotAll(cp); if (o[kind]) { o[kind].drop = drop; lsSet(PENDINGROT_LS + cp, JSON.stringify(o)); } } catch (e) {} }
       const keepIf = (h) => drop.indexOf(_lcPk(h)) === -1;
       let r = null;
       try {
@@ -2721,15 +2789,29 @@ async function _runPendingRotationsNow(explicit) {
       } catch (e) { r = false; }
       if ((actingChurch || pub) !== cp) return;           // the console moved church while this ran
       if (r && r.pending) continue;                        // still not ready — it is still remembered
-      if (r === false || r == null) {
-        try { window.dispatchEvent(new CustomEvent('steward-rotation-failed', { detail: { kind } })); } catch (e) {}
-        continue;
-      }
+      if (r === false || r == null) { _rotNote(cp, drop, kind, 'failed'); continue; }
       _pendingRotClear(kind, cp);
-      try { window.dispatchEvent(new CustomEvent('steward-rotation-done', { detail: { kind, left: Object.keys(_pendingRotAll(cp)).length } })); } catch (e) {}
+      _rotNote(cp, drop, kind, 'done');
     }
   } finally { _pendingRotBusy = false; }
-  if (_pendingRotAgain) { _pendingRotAgain = false; return _runPendingRotationsNow(); }
+  if (_pendingRotAgain) { _pendingRotAgain = false; return _runPendingRotationsNow(explicit); }
+  _rotChanged();
+}
+// THE STATE OF EVERY KEY A BLOCK OR A REMOVAL IS TAKING `pk` OUT OF, for the church this console is on (round 3g):
+// { waiting: [kinds], failed: [kinds], done, cleared, member, gone, owner }. A kind still remembered on the device is
+// "waiting" unless its last attempt failed or it cannot run here. Read by the Members and Stewards screens.
+function _rotationStatus(pk) {
+  const cp = actingChurch || pub, k = _lcPk(pk);
+  const out = { waiting: [], failed: [], done: [], cleared: [], member: [], gone: [], owner: [] };
+  const seen = new Map(((_rotOutcome.get(cp) || new Map()).get(k)) || []);
+  const all = _pendingRotAll(cp);
+  for (const kind of Object.keys(all)) {
+    if (!((all[kind] && all[kind].drop) || []).map(_lcPk).includes(k)) continue;
+    const st = seen.get(kind);
+    if (st !== 'failed' && st !== 'owner') seen.set(kind, 'waiting');
+  }
+  for (const [kind, st] of seen) if (out[st]) out[st].push(kind);
+  return out;
 }
 // Open a read of one church's key envelope: one subscription per relay in this console's set, `onevent` for
 // every envelope that arrives, and `onSettled` once — when every relay has answered trustworthily. Returns the
@@ -9171,7 +9253,7 @@ window.Steward = {
   // copy that arrived before the roster is counted once the roster says who they are.
   subscribeAdmitted(onList) {   // the approved-members allowlist → [pubkeys]
     const cp0 = pub, tok = _freshTok();
-    { const _tag = _listTag(), _deliver = onList; _tag.sub = tok; onList = (list) => _deliver(_stampFor(list, _tag)); }   // see _listTag, _freshDocRead
+    { const _tag = _listTag(), _deliver = onList; _tag.sub = tok; onList = (list) => { const l = _stampFor(list, _tag); try { if (cp0 === (actingChurch || pub)) _lastAdmitted = { cp: cp0, list: l }; } catch (e) {} return _deliver(l); }; }   // see _listTag, _freshDocRead; _lastAdmitted: round 3g
     let cur = [];
     const byAuthor = new Map();   // author pubkey -> { at, pubkeys } — newest per author, unioned below
     const counts = (author, at) => {
@@ -10187,7 +10269,7 @@ window.Steward = {
         () => { const t = Date.now(); for (const id of ids) tok.rooms.set(id, t); tok.genuine = true; tok.at = t; emit(); _keysReadSignal('groups'); });
     };
     // steward-chosen order first (groups without an order fall to the end, by age)
-    const emit = () => { const arr = [...byId.values()].sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || (a.ts || 0) - (b.ts || 0)); try { localStorage.setItem(CACHE_KEY, JSON.stringify(arr)); } catch {} onGroups(arr); wantNarrow(); };
+    const emit = () => { const arr = [...byId.values()].sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || (a.ts || 0) - (b.ts || 0)); try { localStorage.setItem(CACHE_KEY, JSON.stringify(arr)); } catch {} onGroups(arr); try { if (cp0 === (actingChurch || pub)) _lastGroups = { cp: cp0, list: arr }; } catch (e) {} wantNarrow(); };   // _lastGroups: round 3g
     // paint cached groups instantly so the page doesn't flash empty before the relay answers
     try { const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || '[]'); if (Array.isArray(cached)) { _seedFromCache(versions, byId, cached, _consoleDisplay); for (const g of cached) if (g && g.encrypted) _sealedGroupIds.add(g.id); if (cached.length) onGroups(cached); } } catch {}
     const handlers = {
@@ -12028,8 +12110,9 @@ window.Steward = {
   //   retryPendingRotations() the screen's "Try again"
   //   pendingRotations()    which keys still wait, for the church this console is on
   keysFresh(kind) { if (!_isRelayAuthed()) return false; return kind === 'care' ? _careKeyFresh : kind === 'media' ? _mediaKeyFresh : kind === 'name' ? _nameKeyChecked : false; },
-  rememberRotation(kind, drop, why) { try { _pendingRotAdd(kind, actingChurch || pub, drop || [], why); } catch (e) {} },
+  rememberRotation(kind, drop, why, failed) { try { _pendingRotAdd(kind, actingChurch || pub, drop || [], why); if (failed) { _rotNote(actingChurch || pub, drop || [], kind, 'failed'); _rotChanged(); } } catch (e) {} },
   retryPendingRotations() { return _runPendingRotations(true); },
+  rotationStatus(pk) { try { return _rotationStatus(pk); } catch (e) { return { waiting: [], failed: [], done: [], cleared: [], member: [], gone: [], owner: [] }; } },   // round 3g — see _rotOutcome
   pendingRotations() { return Object.keys(_pendingRotAll(actingChurch || pub)); },
   // "relay.x isn't answering" for a key read of the church we are on that a relay is holding up, or ''.
   keyWaitNote(kind) { return _keyWaitNote(kind); },

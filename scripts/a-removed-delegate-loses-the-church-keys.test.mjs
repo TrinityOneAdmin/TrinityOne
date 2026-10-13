@@ -165,11 +165,15 @@ test('Block (dropPk): the person leaves the invite-only rooms they were in, and 
 
 test('a DELEGATED console re-keys no room (only the owner may), and does not report the owner-only keys as failures', async () => {
   const r = recorder();
-  const steward = { ...r.steward, rotateMediaKey: () => Promise.resolve(null), ensureNameKeyForMembers: () => Promise.resolve(null) };
+  const remembered = [];
+  const steward = { ...r.steward, rotateMediaKey: () => Promise.resolve(null), ensureNameKeyForMembers: () => Promise.resolve(null), rememberRotation: (...a) => remembered.push(a) };
   const failed = await rotator(steward)({
     memberPubs: [M1], stewardPubs: [], delegated: true, dropPk: M2, isBlocked: none,
     groups: [{ id: 'g', encrypted: true, visibility: 'open' }],
   });
   assert.equal(r.c.groupKey.length, 0, 'a delegated console re-keyed an encrypted room in someone else’s church');
   assert.deepEqual(failed, [], 'the deliberate owner-only decline was reported as a failure');
+  // round 3g (finding 1): nothing is remembered on a delegated console — only the church key can run these, so a record
+  // there could never run and its "Try again" would never end
+  assert.deepEqual(remembered, [], 'A DELEGATED CONSOLE REMEMBERED A ROTATION IT CAN NEVER RUN: ' + JSON.stringify(remembered));
 });

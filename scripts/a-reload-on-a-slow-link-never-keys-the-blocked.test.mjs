@@ -194,3 +194,26 @@ test('…and on a console with no copy of the blocklist on the device, the enrol
   assert.deepEqual(await reloadSlow('reload, no device copy', { forgetDeviceCopy: true }), []);
   assert.deepEqual(errors, [], 'the console threw:\n  ' + errors.join('\n  '));
 });
+
+// ROUND 3g (audit of b4b7277): 3f made this file's church open-join so its setup could key M3 — which dropped the
+// APPROVAL-ON coverage, and approval-on is how every new church starts. This row puts it back: approval ON, an approved
+// member (M5) and one still waiting (M6) join, and after another reload on the slow link the approved one holds the care
+// key, the waiting one does not, and the blocked M still has none.
+const M5 = H.key(), M6 = H.key();
+test('approval ON: after a reload on a slow link, an APPROVED member is keyed, one still waiting is not — and the blocked member still gets nothing', { skip: SKIP, timeout: 360000 }, async () => {
+  assert.notEqual(await evalIn(`window.Steward.setJoinPolicy(true).then(r => String(r))`), 'false', 'CONTROL: approval could not be switched on');
+  const admitted = await evalIn(`(async () => { const S = window.Steward;
+    const cur = await new Promise(res => { let done = false; S.subscribeAdmitted(l => { if (!done) { done = true; res(l); } }); setTimeout(() => { if (!done) { done = true; res([]); } }, 4000); });
+    const r = await S.setAdmitted([...new Set([...(cur || []), ${JSON.stringify(M3.pub)}, ${JSON.stringify(M5.pub)}])]); return (r === false || r == null) ? String(r) : 'ok'; })()`);
+  assert.equal(admitted, 'ok', 'CONTROL: the admitted list was not saved');
+  await sleep(2000);
+  await H.publishAll(relay, [joinTo(churchA, M5), joinTo(churchA, M6)]);
+  assert.deepEqual(await reloadSlow('approval on', { forgetDeviceCopy: false }), [], 'a key envelope named the blocked member');
+  const ok = await (async () => { const t0 = Date.now(); while (Date.now() - t0 < 60000) { const c = recipsOf(CAREKEY_D + churchA) || []; if (c.includes(M5.pub)) return true; await sleep(1000); } return false; })();
+  assert.ok(ok, 'UNDER APPROVAL ON, AN APPROVED MEMBER WAS NEVER GIVEN THE CARE KEY after a reload on a slow link');
+  await sleep(5000);
+  const c = recipsOf(CAREKEY_D + churchA) || [];
+  assert.ok(!c.includes(M6.pub), 'UNDER APPROVAL ON, A MEMBER STILL WAITING FOR APPROVAL WAS GIVEN THE CARE KEY');
+  assert.ok(!c.includes(M.pub), 'the blocked member was given the care key');
+  assert.deepEqual(errors, [], 'the console threw:\n  ' + errors.join('\n  '));
+});

@@ -111,7 +111,9 @@ test('the console notices a rotation that did not land, and shows it', () => {
   assert.match(DASH, /rotations\.push\(Promise\.resolve\(window\.Steward\.rotateCareKey\(/,
     'the console still fires rotation and forgets it — a failure cannot be noticed if it is never awaited');
   assert.match(DASH, /setBlockWarn\(/, 'nothing records a failed rotation');
-  assert.match(DASH, /\{blockWarn \?/,
+  // re-anchored 2026-10-13 (round 3g): the banner renders blockWarnView — the words worked out from blockWarn and the engine's
+  // record of each key (Steward.rotationStatus) — so that is what must be rendered. Executed in every-key-path, 3e/3g rows.
+  assert.match(DASH, /\{blockWarnView \?/,
     'the failure is recorded into state that is never rendered. That exact mistake made the safety-check ' +
     'warning unreachable three times — the steward believes the person is out, and this is the only thing ' +
     'that says otherwise');

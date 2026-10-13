@@ -15485,9 +15485,14 @@ zoo`.split("\n");
       const add2 = (drop || []).map((p) => String(p || "").toLowerCase()).filter(Boolean);
       cur.drop = [.../* @__PURE__ */ new Set([...cur.drop || [], ...add2])];
       cur.why = cur.why || {};
-      for (const p of add2) cur.why[p] = why === "remove" ? "remove" : cur.why[p] || "block";
+      for (const p of add2) cur.why[p] = why === "remove" && cur.why[p] !== "block" ? "remove" : "block";
       o[kind] = cur;
       lsSet(PENDINGROT_LS + cp, JSON.stringify(o));
+      try {
+        _rotNote(cp, add2, kind, "waiting");
+        _rotChanged();
+      } catch (x) {
+      }
     } catch (x) {
     }
   }
@@ -17022,29 +17027,59 @@ zoo`.split("\n");
   var _pendingRotBusy = false;
   var _pendingRotAgain = false;
   var _lastMembers = { cp: "", pubs: [] };
+  var _lastGroups = { cp: "", list: null };
+  var _lastAdmitted = { cp: "", list: null };
+  var _rotOutcome = /* @__PURE__ */ new Map();
+  function _rotNote(cp, pks, kind, state) {
+    try {
+      let byPk = _rotOutcome.get(cp);
+      if (!byPk) {
+        byPk = /* @__PURE__ */ new Map();
+        _rotOutcome.set(cp, byPk);
+      }
+      for (const pk of pks || []) {
+        const k = _lcPk(pk);
+        if (!k) continue;
+        let m = byPk.get(k);
+        if (!m) {
+          m = /* @__PURE__ */ new Map();
+          byPk.set(k, m);
+        }
+        m.set(kind, state);
+      }
+    } catch (e) {
+    }
+  }
+  function _rotChanged() {
+    try {
+      window.dispatchEvent(new CustomEvent("steward-rotations"));
+    } catch (e) {
+    }
+  }
   async function _runPendingRotations(explicit) {
     try {
       return await _runPendingRotationsNow(!!explicit);
     } catch (e) {
       _pendingRotBusy = false;
+      _rotChanged();
     }
   }
   var _lcPk = (x) => String(x || "").toLowerCase();
   async function _runPendingRotationsNow(explicit) {
     const cp = actingChurch || pub;
-    if (!cp || actingChurch) return;
+    if (!cp) return;
     if (_pendingRotBusy) {
       _pendingRotAgain = true;
       return;
     }
     const all = _pendingRotAll(cp);
+    if (actingChurch) {
+      for (const kind of Object.keys(all)) _rotNote(cp, all[kind] && all[kind].drop || [], kind, "owner");
+      _rotChanged();
+      return;
+    }
     if (!Object.keys(all).length) {
-      if (explicit) {
-        try {
-          window.dispatchEvent(new CustomEvent("steward-rotation-done", { detail: { kind: "", left: 0 } }));
-        } catch (e) {
-        }
-      }
+      _rotChanged();
       return;
     }
     const S = typeof window !== "undefined" && window.Steward || null;
@@ -17054,30 +17089,62 @@ zoo`.split("\n");
       for (const kind of Object.keys(all)) {
         const p = all[kind];
         if (!p) continue;
-        if (!_isRelayAuthed()) continue;
         const room = kind.indexOf("room:") === 0 ? kind.slice(5) : "";
-        if (kind === "care" && !_careKeyFresh) continue;
-        if (kind === "media" && !_mediaKeyFresh) continue;
-        if (kind === "name" && !_nameKeyChecked) continue;
-        if (room && !((_skeys[room] || []).length && _senvMine[room] === true)) continue;
         if (!room && kind !== "care" && kind !== "media" && kind !== "name") {
           _pendingRotClear(kind, cp);
           continue;
         }
-        if (_localBlockedAt === 0) continue;
-        const why = p.why || {};
         const was = (p.drop || []).map(_lcPk);
-        if (was.some((pk) => why[pk] === "remove") && !_careRosterKnown) continue;
-        const drop = was.filter((pk) => why[pk] === "remove" ? !_careRoster.has(pk) : _localBlocked.has(pk));
-        if (drop.length !== was.length) {
-          if (!drop.length) {
+        if (room) {
+          const gl = _lastGroups.cp === cp && _listIsFresh(_lastGroups.list) ? _lastGroups.list : null;
+          const g = gl ? gl.find((x) => x && x.id === room) : void 0;
+          if (gl && (!g || g.deleted || !g.encrypted)) {
             _pendingRotClear(kind, cp);
-            try {
-              window.dispatchEvent(new CustomEvent("steward-rotation-done", { detail: { kind, left: Object.keys(_pendingRotAll(cp)).length } }));
-            } catch (e) {
-            }
+            _rotNote(cp, was, kind, "gone");
             continue;
           }
+        }
+        if (!_isRelayAuthed()) continue;
+        if (kind === "care" && !_careKeyFresh) continue;
+        if (kind === "media" && !_mediaKeyFresh) continue;
+        if (kind === "name" && !_nameKeyChecked) continue;
+        if (room && !((_skeys[room] || []).length && _senvMine[room] === true)) continue;
+        if (_localBlockedAt === 0) continue;
+        const why = p.why || {};
+        if (was.some((pk) => why[pk] === "remove") && !_careRosterKnown) continue;
+        const still = was.filter((pk) => why[pk] === "remove" ? !_careRoster.has(pk) : _localBlocked.has(pk));
+        const cleared = was.filter((pk) => still.indexOf(pk) === -1);
+        const removedAndMember = [];
+        if (still.some((pk) => why[pk] === "remove")) {
+          if (_lastMembers.cp !== cp) continue;
+          const members = new Set(_lastMembers.pubs.map(_lcPk));
+          let approval = null;
+          try {
+            approval = S.joinPolicyFresh ? S.joinPolicyFresh() : null;
+          } catch (e) {
+          }
+          const ad = _lastAdmitted.cp === cp && _listIsFresh(_lastAdmitted.list) ? new Set(_lastAdmitted.list.map(_lcPk)) : null;
+          if (approval === null || approval === true && !ad) {
+            if (kind !== "name") continue;
+          }
+          const gl = _lastGroups.cp === cp && _listIsFresh(_lastGroups.list) ? _lastGroups.list : null;
+          const g = room && gl ? gl.find((x) => x && x.id === room) : null;
+          if (room && !g) continue;
+          for (const pk of still) {
+            if (why[pk] !== "remove" || !members.has(pk)) continue;
+            const approved = approval === false || ad && ad.has(pk);
+            const keeps = kind === "name" ? true : room && g.visibility === "invite" ? (g.members || []).map(_lcPk).indexOf(pk) !== -1 : !!approved;
+            if (keeps) removedAndMember.push(pk);
+          }
+        }
+        const drop = still.filter((pk) => removedAndMember.indexOf(pk) === -1);
+        if (cleared.length) _rotNote(cp, cleared, kind, "cleared");
+        if (removedAndMember.length) _rotNote(cp, removedAndMember, kind, "member");
+        if (!drop.length) {
+          _pendingRotClear(kind, cp);
+          continue;
+        }
+        if (drop.length !== was.length) {
           try {
             const o = _pendingRotAll(cp);
             if (o[kind]) {
@@ -17103,25 +17170,33 @@ zoo`.split("\n");
         if ((actingChurch || pub) !== cp) return;
         if (r && r.pending) continue;
         if (r === false || r == null) {
-          try {
-            window.dispatchEvent(new CustomEvent("steward-rotation-failed", { detail: { kind } }));
-          } catch (e) {
-          }
+          _rotNote(cp, drop, kind, "failed");
           continue;
         }
         _pendingRotClear(kind, cp);
-        try {
-          window.dispatchEvent(new CustomEvent("steward-rotation-done", { detail: { kind, left: Object.keys(_pendingRotAll(cp)).length } }));
-        } catch (e) {
-        }
+        _rotNote(cp, drop, kind, "done");
       }
     } finally {
       _pendingRotBusy = false;
     }
     if (_pendingRotAgain) {
       _pendingRotAgain = false;
-      return _runPendingRotationsNow();
+      return _runPendingRotationsNow(explicit);
     }
+    _rotChanged();
+  }
+  function _rotationStatus(pk) {
+    const cp = actingChurch || pub, k = _lcPk(pk);
+    const out = { waiting: [], failed: [], done: [], cleared: [], member: [], gone: [], owner: [] };
+    const seen = new Map((_rotOutcome.get(cp) || /* @__PURE__ */ new Map()).get(k) || []);
+    const all = _pendingRotAll(cp);
+    for (const kind of Object.keys(all)) {
+      if (!(all[kind] && all[kind].drop || []).map(_lcPk).includes(k)) continue;
+      const st = seen.get(kind);
+      if (st !== "failed" && st !== "owner") seen.set(kind, "waiting");
+    }
+    for (const [kind, st] of seen) if (out[st]) out[st].push(kind);
+    return out;
   }
   var _keyReadWaiting = /* @__PURE__ */ new Map();
   function _keyReadConnected(url) {
@@ -22707,7 +22782,14 @@ zoo`.split("\n");
       {
         const _tag = _listTag(), _deliver = onList;
         _tag.sub = tok;
-        onList = (list) => _deliver(_stampFor(list, _tag));
+        onList = (list) => {
+          const l = _stampFor(list, _tag);
+          try {
+            if (cp0 === (actingChurch || pub)) _lastAdmitted = { cp: cp0, list: l };
+          } catch (e) {
+          }
+          return _deliver(l);
+        };
       }
       let cur = [];
       const byAuthor = /* @__PURE__ */ new Map();
@@ -23657,6 +23739,10 @@ zoo`.split("\n");
         } catch {
         }
         onGroups(arr);
+        try {
+          if (cp0 === (actingChurch || pub)) _lastGroups = { cp: cp0, list: arr };
+        } catch (e) {
+        }
         wantNarrow();
       };
       try {
@@ -25734,15 +25820,27 @@ zoo`.split("\n");
       if (!_isRelayAuthed()) return false;
       return kind === "care" ? _careKeyFresh : kind === "media" ? _mediaKeyFresh : kind === "name" ? _nameKeyChecked : false;
     },
-    rememberRotation(kind, drop, why) {
+    rememberRotation(kind, drop, why, failed) {
       try {
         _pendingRotAdd(kind, actingChurch || pub, drop || [], why);
+        if (failed) {
+          _rotNote(actingChurch || pub, drop || [], kind, "failed");
+          _rotChanged();
+        }
       } catch (e) {
       }
     },
     retryPendingRotations() {
       return _runPendingRotations(true);
     },
+    rotationStatus(pk) {
+      try {
+        return _rotationStatus(pk);
+      } catch (e) {
+        return { waiting: [], failed: [], done: [], cleared: [], member: [], gone: [], owner: [] };
+      }
+    },
+    // round 3g — see _rotOutcome
     pendingRotations() {
       return Object.keys(_pendingRotAll(actingChurch || pub));
     },

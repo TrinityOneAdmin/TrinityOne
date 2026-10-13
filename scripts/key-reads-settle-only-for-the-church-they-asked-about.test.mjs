@@ -150,6 +150,8 @@ function engine() {
     stmt(BUNDLE, 'var _senvPending = '), fnBody(BUNDLE, 'function _reCheckGroupKeyPending() {'), 't.__reCheckGk = _reCheckGroupKeyPending; t.__senvPending = _senvPending; t.__gkChain = _gkChain; t.__membersReask = _membersReask;',
     fnBody(BUNDLE, 'function _noteEnvelopeDrops(gid, prev, next) {'), fnBody(BUNDLE, 'function stewIngestKey(e) {'),
     't.__ingest = stewIngestKey; t.__skeys = _skeys; t.__senvMine = _senvMine; t.__senvRecips = _senvRecips;',
+    // round 3g: the group list the runner reads, and a list stamped as a FRESH read for the church the engine is on
+    't.__setLastGroups = (list) => { _lastGroups = { cp: actingChurch || pub, list }; }; t.__freshList = (arr) => _stampFor(arr, { cp: actingChurch || pub, epoch: _keyReadEpoch, sub: { live: true, genuine: true, at: 1 } });',
     stmt(BUNDLE, 'var _exStewardsKey = '), fnBody(BUNDLE, 'function _exStewardSet() {'),
     stmt(BUNDLE, 'var _exStewardsAtKey = '), fnBody(BUNDLE, 'function _exStewardRemovedAt() {'),
     fnBody(BUNDLE, 'function _rememberExStewards(before, after, at) {'), 't.__rememberEx = _rememberExStewards;',
@@ -172,7 +174,7 @@ function engine() {
     M('    async publishGroupKey(groupId, memberPubs, opts = {}) {'), M('    async ensureGroupKeys(groups, memberPubs) {'),
     M('    async sealGroup(group, memberPubs) {'),   // round 3c, LOW ii
     M('    subscribeMembers(onMembers) {'),           // round 3d, LOW 2
-    M('    rememberRotation(kind, drop, why) {'), M('    retryPendingRotations() {'),   // round 3f
+    M('    rememberRotation(kind, drop, why, failed) {'), M('    retryPendingRotations() {'), M('    rotationStatus(pk) {'),   // round 3f; rotationStatus 3g
   ].join(',\n');
   t.t = t;
   const S = new Function('scope', `with (scope) { ${decls}\n return { ${methods} }; }`)(proxy);
@@ -1559,7 +1561,8 @@ for (const [kind, D, sub, rotate, hexOf] of [
     assert.ok(to.includes(M1.pub) && to.includes(M2.pub), `the remembered ${kind} rotation dropped a holder who stays`);
     assert.notEqual(hexOf(e.t), K1, `the ${kind} key did not change`);
     assert.equal(pendingOf(e)[key], undefined, `the ${kind} rotation that ran was left remembered — it would run again`);
-    assert.ok(e.events.some(x => x.type === 'steward-rotation-done' && x.detail.kind === key), 'the screen was not told the rotation is done');
+    assert.ok(e.events.some(x => x.type === 'steward-rotations'), 'the screen was not told the records changed');   // round 3g: one signal, the screen asks
+    assert.deepEqual(e.S.rotationStatus(M3.pub).done, [key], `the screen's status for M3 does not say the ${kind} key was changed`);
   });
 }
 test('3e MED 1: a remembered rotation survives a RELOAD and runs on the next console\'s settle', async () => {
@@ -1610,19 +1613,40 @@ async function readyCare(e, holders) {
   s.handlers.onevent(envAt(CAREKEY_D, A, [K1], holders, OLD_AT, 1)); await e.eose(s);
 }
 // T1 — the rotation itself must take the person out. With them BLOCKED the blocklist hid a broken filter; a REMOVED
-// DELEGATE is not blocked, so only the rotation's own `drop` keeps the new key from them.
-test('3f T1: a remembered rotation for a REMOVED DELEGATE (not blocked) leaves them out — the rotation\'s own filter, not the blocklist', async () => {
-  const e = engine(); e.t.up = new Set([R1]); e.t.window.Steward = e.S;
-  e.t._localBlockedAt = 1; e.t._careRosterKnown = true; e.t._careRoster = new Set();   // the roster has been read: ST is not on it
-  remember(e, 'care', [M3.pub], 'remove');                 // M3 stands in for the removed delegate
-  const p0 = e.published.length;
-  await readyCare(e, [A.pub, M1.pub, M3.pub]);
-  for (let i = 0; i < 6; i++) await flush();
-  const out = e.published.slice(p0).find(ev => dtag(ev) === CAREKEY_D + A.pub);
-  assert.ok(out, 'CONTROL: the remembered rotation did not run');
-  const to = Object.keys(JSON.parse(out.content).keys);
-  assert.ok(!to.includes(M3.pub), 'THE REMOVED DELEGATE (NOT BLOCKED) WAS GIVEN THE NEW KEY — the remembered rotation did not take them out');
-  assert.ok(to.includes(M1.pub), 'a holder who stays was dropped');
+// DELEGATE is not blocked, so only the rotation's own `drop` keeps the new key from them. ROUND 3g (finding 3; audit of
+// b4b7277): …but only a delegate who is NOT a member. One who is still an APPROVED member keeps member keys, as the direct
+// path does (it rotates to the approved members, the delegate among them) and as the screen promises ("They are also a
+// member, so they keep what members can open"). The 3f version of this row enshrined the opposite.
+async function knownMembers(e, pubs) {
+  e.S.subscribeMembers(() => {});
+  const r = e.subs.filter(x => x.d === 'trinityone/member:' + A.pub).at(-1);
+  const ts = 1759299000;
+  for (const pk of pubs) r.handlers.onevent({ pubkey: pk, kind: 30078, created_at: ts, tags: [['d', 'trinityone/member:' + A.pub], ['p', A.pub]], content: JSON.stringify({ joined: ts }) });
+  await e.eose(r);
+}
+test('3f T1 / 3g: a remembered rotation for a REMOVED DELEGATE (not blocked) leaves them out — unless they are still an approved member, who keeps member keys', async () => {
+  for (const [stillMember, wantKept] of [[false, false], [true, true]]) {
+    const e = engine(); e.t.up = new Set([R1]); e.t.window.Steward = e.S;
+    e.t._localBlockedAt = 1; e.t._careRosterKnown = true; e.t._careRoster = new Set();   // the roster has been read: M3 is not on it
+    e.S.joinPolicyFresh = () => false;                       // approval off, known: every member is approved
+    await knownMembers(e, stillMember ? [M1.pub, M3.pub] : [M1.pub]);
+    remember(e, 'care', [M3.pub], 'remove');                 // M3 stands in for the removed delegate
+    const p0 = e.published.length;
+    await readyCare(e, [A.pub, M1.pub, M3.pub]);
+    for (let i = 0; i < 6; i++) await flush();
+    const out = e.published.slice(p0).find(ev => dtag(ev) === CAREKEY_D + A.pub);
+    if (!wantKept) {
+      assert.ok(out, 'CONTROL: the remembered rotation did not run');
+      const to = Object.keys(JSON.parse(out.content).keys);
+      assert.ok(!to.includes(M3.pub), 'THE REMOVED DELEGATE (NOT BLOCKED, NOT A MEMBER) WAS GIVEN THE NEW KEY — the remembered rotation did not take them out');
+      assert.ok(to.includes(M1.pub), 'a holder who stays was dropped');
+      assert.deepEqual(e.S.rotationStatus(M3.pub).done, ['care'], 'the screen\'s status does not say the care key was changed');
+    } else {
+      assert.equal(out, undefined, 'A REMOVED DELEGATE WHO IS STILL AN APPROVED MEMBER HAD THE CARE KEY TAKEN — the direct path, and the screen, say they keep member access');
+      assert.equal(pendingOf(e).care, undefined, 'the record was kept though there is nothing to take');
+      assert.deepEqual(e.S.rotationStatus(M3.pub).member, ['care'], 'the screen\'s status does not say they keep it as a member');
+    }
+  }
 });
 // P3 — the record is re-checked against the lists NOW: an Unblock, or a delegate put back, on ANOTHER console.
 test('3f P3: a remembered rotation whose person was UNBLOCKED elsewhere — or whose delegate is back on the roster — is dropped, not run', async () => {
@@ -1663,7 +1687,7 @@ test('3f P1: a remembered ROOM rotation runs on "Try again" — the person out, 
   assert.equal(pendingOf(e)['room:' + gid], undefined, 'the room rotation that ran is still remembered');
   e.events.length = 0;
   await e.S.retryPendingRotations();
-  assert.ok(e.events.some(x => x.type === 'steward-rotation-done' && x.detail.left === 0), 'AN EMPTY "TRY AGAIN" SAID NOTHING — the screen\'s "Trying again…" would stick');
+  assert.ok(e.events.some(x => x.type === 'steward-rotations'), 'AN EMPTY "TRY AGAIN" SAID NOTHING — the screen\'s "Trying again…" would stick');   // round 3g: every run ends in the signal
 });
 // P2 — the name key's rebuild: the envelope this console holds may be an OLDER one (another relay not caught up); members
 // the console knows were added since must not be dropped — their phones would delete the name key.
@@ -1704,4 +1728,61 @@ test('3f P4: when the church\'s relay set grows, the member list is no longer fr
   assert.ok(reads.some(r => r.url === R2), 'THE MEMBER READ DID NOT ASK THE NEW RELAY when the set changed');
   for (const r of reads) await e.eose(r);
   assert.ok(e.S.listIsFresh(last), 'once the new set had answered, the member list did not become fresh again');
+});
+
+// ── ROUND 3g (audit of b4b7277): THE RECORDS AND WHAT THE SCREEN IS TOLD ─────────────────────────────────────────────
+// Finding 2: a remembered ROOM rotation for a room that no longer exists was skipped and kept for ever (its ring is never
+// held again), and the banner waited behind it. With a FRESH group list that lacks the room, the record is dropped and the
+// person's status says the room is gone — never "waiting".
+test('3g finding 2: a remembered rotation for a room that NO LONGER EXISTS is dropped — and said as gone, not left waiting', async () => {
+  const e = engine(); e.t.up = new Set([R1]); e.t.window.Steward = e.S;
+  e.t._localBlocked = new Set([M3.pub]); e.t._localBlockedAt = 1;
+  e.S.rememberRotation('room:room-gone', [M3.pub], 'block', true);
+  assert.deepEqual(e.S.rotationStatus(M3.pub).failed, ['room:room-gone'], 'CONTROL: the failure was not recorded');
+  e.t.__setLastGroups(e.t.__freshList([{ id: 'other-room', name: 'Other', encrypted: true }]));   // a fresh list, the room not in it
+  await e.S.retryPendingRotations();
+  assert.equal(pendingOf(e)['room:room-gone'], undefined, 'A RECORD FOR A ROOM THAT NO LONGER EXISTS WAS KEPT — it can never run, and the banner waits behind it for ever');
+  const st = e.S.rotationStatus(M3.pub);
+  assert.deepEqual([st.gone, st.waiting, st.failed], [['room:room-gone'], [], []], 'the status does not say the room is gone: ' + JSON.stringify(st));
+  // CONTROL: with only a cached (not fresh) group list, a missing room is missing DATA — the record waits
+  const e2 = engine(); e2.t.up = new Set([R1]); e2.t.window.Steward = e2.S;
+  e2.t._localBlocked = new Set([M3.pub]); e2.t._localBlockedAt = 1;
+  e2.S.rememberRotation('room:room-x', [M3.pub], 'block', true);
+  e2.t.__setLastGroups([{ id: 'other-room', encrypted: true }]);   // unstamped: not fresh
+  await e2.S.retryPendingRotations();
+  assert.ok(pendingOf(e2)['room:room-x'], 'CONTROL: a room missing from a CACHED list was dropped — that is missing data, not evidence');
+});
+// Finding 1: on a console acting for another church a record cannot run (only the church key rotates these). It is said —
+// "only the owner's console can" — never left silent.
+test('3g finding 1: on a console acting for ANOTHER church, a remembered rotation is said as "only the owner can" — Try again ends visibly', async () => {
+  const e = engine(); e.t.up = new Set([R1]); e.t.window.Steward = e.S;
+  e.t.pub = B.pub; e.t.actingChurch = B.pub;
+  e.S.rememberRotation('care', [M3.pub], 'block', true);
+  e.events.length = 0;
+  await e.S.retryPendingRotations();
+  assert.ok(e.events.some(x => x.type === 'steward-rotations'), '"TRY AGAIN" ON A DELEGATED CONSOLE ENDED IN SILENCE — the banner would stick');
+  assert.deepEqual(e.S.rotationStatus(M3.pub).owner, ['care'], 'the status does not say only the owner\'s console can change it');
+});
+// Finding 5: a Block outranks a removal. Remove D, then Block D, then D is put back on the roster elsewhere: D is still
+// BLOCKED, so the record must still run — it used to be cleared, and blocked D kept the old key.
+test('3g finding 5: Remove D, then Block D — the record\'s reason becomes "block", and D put back on the roster elsewhere is still rotated out', async () => {
+  const e = engine(); e.t.up = new Set([R1]); e.t.window.Steward = e.S;
+  e.S.rememberRotation('care', [M3.pub], 'remove');
+  e.S.rememberRotation('care', [M3.pub], 'block');
+  assert.equal(pendingOf(e).care.why[M3.pub], 'block', 'A BLOCK AFTER A REMOVAL LEFT THE REASON AS "remove"');
+  e.t._localBlocked = new Set([M3.pub]); e.t._localBlockedAt = 1;
+  e.t._careRosterKnown = true; e.t._careRoster = new Set([M3.pub]);   // put back on the roster on another console
+  const p0 = e.published.length;
+  await readyCare(e, [A.pub, M1.pub, M3.pub]);
+  for (let i = 0; i < 6; i++) await flush();
+  const out = e.published.slice(p0).find(ev => dtag(ev) === CAREKEY_D + A.pub);
+  assert.ok(out && !Object.keys(JSON.parse(out.content).keys).includes(M3.pub), 'BLOCKED D KEPT THE CARE KEY — the record was cleared because D was put back on the roster, though D is blocked');
+  // and a "cleared" record is said as cleared, never as done
+  const e2 = engine(); e2.t.up = new Set([R1]); e2.t.window.Steward = e2.S;
+  e2.t._localBlocked = new Set(); e2.t._localBlockedAt = 1;           // unblocked on another console
+  e2.S.rememberRotation('care', [M3.pub], 'block', true);
+  await readyCare(e2, [A.pub, M1.pub, M3.pub]);
+  for (let i = 0; i < 6; i++) await flush();
+  const st = e2.S.rotationStatus(M3.pub);
+  assert.deepEqual([st.cleared, st.done], [['care'], []], 'A RECORD CLEARED BECAUSE THEY WERE UNBLOCKED ELSEWHERE WAS SAID AS "DONE": ' + JSON.stringify(st));
 });

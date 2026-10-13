@@ -452,3 +452,32 @@ test('I · a Block while the care and sermon reads are still held back is REMEMB
     assert.ok(await (async () => { const t2 = Date.now(); while (Date.now() - t2 < 20000) { if (/Done — they can no longer open anything sealed/.test(await ev('document.body.innerText'))) return true; await sleep(500); } return false; })(), 'the screen never said the waiting rotation had run');
   } finally { try { await fetch(`http://127.0.0.1:${cdpPort}/json/close/${t.id}`); } catch {} try { w2.close(); } catch {} }
 });
+
+// ── ROUND 3g (audit of b4b7277): "TRY AGAIN" RUNS THE REAL RETRY, END TO END ─────────────────────────────────────────────
+// every-key-path's Try again rows give the screen a status from a stub; here the console's own runner produces it. MJ is
+// keyed, then blocked on the Members screen while the room-key publish is refused (the page drops that one EVENT on its
+// socket). The screen must name the room key it could not change and offer "Try again"; with the publish let through,
+// pressing it must really rotate the room — MJ out, on the relay — and the screen must then say Done.
+const MJ = H.key();
+test('J · a Block whose ROOM key could not change offers "Try again" — which really rotates the room, and the screen says Done', { skip: SKIP, timeout: 300000 }, async () => {
+  assert.equal(await admit([MJ.pub]), 'ok', 'CONTROL: MJ could not be approved');
+  await H.publishAll(relay, [joinTo(churchA, MJ)]);
+  assert.ok(await until(() => room().includes(MJ.pub) && care().includes(MJ.pub), WAIT), 'CONTROL: MJ was never keyed: ' + show());
+  // refuse the room-key publish: drop any EVENT for this room's key envelope on the socket
+  await evalIn(`(() => { if (!window.__gkDropHooked) { window.__gkDropHooked = 1; const os = WebSocket.prototype.send;
+    WebSocket.prototype.send = function (d) { try { if (window.__dropGk && typeof d === 'string' && d.startsWith('["EVENT"') && d.includes('"trinityone/groupkey:')) return; } catch (e) {} return os.call(this, d); }; }
+    window.__dropGk = true; return 1; })()`);
+  await evalIn(click('/^Members$/')); await sleep(1500);
+  await blockOnScreen(MJ, []);
+  const said1 = await (async () => { const t0 = Date.now(); while (Date.now() - t0 < 60000) { const t = await evalIn('document.body.innerText'); if (/could not change the key for Bede Sealed yet/.test(t)) return t; await sleep(1000); } return await evalIn('document.body.innerText'); })();
+  assert.match(said1, /could not change the key for Bede Sealed yet/, 'the refused room-key rotation was not named: ' + said1.slice(0, 400));
+  assert.ok(room().includes(MJ.pub), 'CONTROL: the room key rotated though its publish was refused — this row would prove nothing');
+  // let it through, and press Try again
+  await evalIn(`(() => { window.__dropGk = false; return 1; })()`);
+  assert.equal(await evalIn(click('/^Try again$/')), 'ok', 'no "Try again" on screen for the room key that could not change');
+  assert.ok(await until(() => !room().includes(MJ.pub), 45000), 'TRY AGAIN DID NOT ROTATE THE ROOM — MJ still holds its key on the relay: ' + show());
+  assert.ok(await (async () => { const t0 = Date.now(); while (Date.now() - t0 < 30000) { if (/Done — they can no longer open anything sealed/.test(await evalIn('document.body.innerText'))) return true; await sleep(500); } return false; })(),
+    'the screen never said Done after the retry ran');
+  assert.ok(room().includes(MA.pub) === false && care().includes(MJ.pub) === false, 'the Block left MJ a care key, or put MA back: ' + show());
+  assert.deepEqual(errors, [], 'the console threw:\n  ' + errors.join('\n  '));
+});
