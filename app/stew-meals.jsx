@@ -157,16 +157,20 @@ function DashMealsPanel({ church }) {
   // Keep the care-team RECIPIENT roster (careteam:<cp>) published so a member's "ask for help" seals to exactly
   // the care team. Re-publish only when the team's membership actually changes (deduped, not every render).
   const _careTeamPub = React.useRef('');
+  const careLocked = !!(careRoster && careRoster._locked);
   React.useEffect(() => {
     if (!on) return;
+    // NEVER FROM A ROSTER THIS CONSOLE CANNOT READ (the roster wipe, 2026-10-12): a locked roster arrives as an empty
+    // team, and publishing from it would seal every member's ask for help to the church alone.
+    if (careLocked) return;
     const pubs = teamPeople.map(p => p && p.pub).filter(Boolean);
     const key = pubs.slice().sort().join(',');
     if (key === _careTeamPub.current) return;
     // REMEMBERED ONLY ONCE IT LANDED (re-audit of 0eb3cf9): set before publishing, a false — the children list
     // could not be read, or the write failed — was never tried again by this panel.
-    let sent = null; try { sent = window.StewardMeals.publishCareTeam(pubs); } catch (e) {}
+    let sent = null; try { sent = window.StewardMeals.publishCareTeam(pubs, { team: s.adminGroupId }); } catch (e) {}
     Promise.resolve(sent).then((ok) => { if (ok) _careTeamPub.current = key; }, () => {});
-  }, [on, teamPeople.map(p => p && p.pub).join(',')]);
+  }, [on, careLocked, teamPeople.map(p => p && p.pub).join(',')]);
   // SWITCHING IT ON IS NOT THE SAME AS ANYONE KNOWING. Verity and Callum both had to be told, out of band,
   // that this existed and where to find it; Miriam's own words about a feature she never noticed were "I never
   // saw an option for that". The church already has a way to tell everyone — a post reaches every member's

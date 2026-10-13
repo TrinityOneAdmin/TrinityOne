@@ -45,7 +45,7 @@ test('an event it cannot open is kept and marked, not dropped', () => {
 });
 
 test('the church calendar reader still unseals too — it was already right', () => {
-  const fn = stripComments(between('_subAddr(prefix, map, onItems)', 'subscribeRosters'));
+  const fn = stripComments(between('_subAddr(prefix, map, onItems, lockedShape)', 'subscribeRosters'));
   assert.match(fn, /_openChurchDoc\(e\.content\)/,
     'the calendar reader lost its unsealing — this is the one that was rescuing members by accident');
 });

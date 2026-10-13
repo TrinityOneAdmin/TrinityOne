@@ -4052,6 +4052,24 @@ async function _waitForRegistration() {
 }
 const _lastStamp = new Map();   // d-tag -> the created_at we last published for it
 const _lastOk = new Map();      // d-tag -> the created_at of the last copy the relay ACCEPTED
+// ── A COPY WE CANNOT OPEN IS NOT AN EMPTY DOCUMENT (the roster wipe, 2026-10-12) ─────────────────────────
+// A console that opens before the church name key arrives sees every sealed calendar document as `_locked`.
+// The screens then showed a locked team as an EMPTY team, and any save — a roster edit, the care panel's effect,
+// Block — published that emptiness over the real one. The relay keeps only the newest copy, so it was gone.
+// `_lockedAddr` holds the full d-tag of every document whose copy on show is locked (kept by _subAddr), and the
+// calendar publishers refuse to overwrite one. Readers: publishRoster, publishService, publishRunsheet,
+// publishRoom, publishBooking, publishRota, and Steward.rosterLocked (StewardMeals.publishCareTeam).
+const _lockedAddr = new Set();
+function _addrLocked(d) { return _lockedAddr.has(d); }
+// WHY THE LAST CALENDAR SAVE CAME BACK NULL. Those publishers return null for every failure, and the forms read
+// every null as "your church's key hasn't arrived" — which was untrue for a refused same-second clash with a
+// co-steward. '' | 'nokey' | 'locked' | 'clash' | 'relay'. Read by Steward.lastSaveFailure (schNoKey).
+let _lastSaveFail = '';
+function _saveFailed(why) { _lastSaveFail = why; return null; }
+// A version we RECEIVED counts as a stamp we must beat. Two consoles signing with one church key both stamp
+// `now()`, and a tie is refused by the relay ("a newer version of this is already stored"); feeding what we
+// saw into `_lastStamp` makes our next write of that document land one second past it. Called by _subAddr.
+function _noteSeenStamp(d, ts) { if (d && ts > 0 && (_lastStamp.get(d) || 0) < ts) _lastStamp.set(d, ts); }
 // ⚠ WHICH RELAYS TOOK THE WRITE — the one question `_publishToRelays`'s return value cannot answer.
 //
 // THAT RULE IS UNTOUCHED BY THIS. `_publishToRelays` still answers `evt` only when EVERY targeted relay
@@ -8293,6 +8311,10 @@ window.Steward = {
     return '';
   },
   nameKeyReady() { return _nameKeyReady(); },
+  // Is this team's roster on show only as a copy this console cannot open? StewardMeals.publishCareTeam refuses then.
+  rosterLocked(teamId) { return !!teamId && _addrLocked(ROSTER_D + teamId); },
+  // Why the last calendar save (roster, rota, service, run sheet, room, booking) came back null — see _saveFailed.
+  lastSaveFailure() { return _lastSaveFail; },
   setMinors(pubkeys) {   // replace the whole minors list (pass hex pubkeys)
     _requireTrustedView('list of children');
     if (!sk) return Promise.resolve(null);
@@ -9702,28 +9724,51 @@ window.Steward = {
 
   // ════════════ SERVING / ROTA / CALENDAR (the coverage board) ════════════
   // A generic addressable-doc subscription over the church's own kind-30078 with a given d-prefix.
-  _subAddr(prefix, map, onItems) {
+  _subAddr(prefix, map, onItems, lockedShape) {
     const CACHE_KEY = 'trinityone.steward.addr.v2.' + prefix + (pub || '');   // v2: see _taggedForAnotherChurch
     const byId = new Map();
     const versions = new Map();   // id -> Map(author -> their copy); see src/church-doc-store.src.js
+    // THE RAW EVENTS WE COULD NOT OPEN, re-read when the name-key ring fills (the roster wipe, 2026-10-12). Without
+    // this a document that arrived before the key stayed locked for the whole session — shown as an empty team,
+    // which the next save published over the real one. Keyed by id + author, like `versions`.
+    const lockedRaw = new Map();
+    // the d-tags THIS subscription has marked locked in `_lockedAddr`, so one it forgets is unmarked too
+    const marked = new Set();
+    const syncLocked = () => {
+      for (const d of marked) _lockedAddr.delete(d);
+      marked.clear();
+      for (const r of byId.values()) {
+        if (!r || r.id == null) continue;
+        const d = prefix + r.id;
+        if (r._locked) { marked.add(d); _lockedAddr.add(d); } else _lockedAddr.delete(d);
+      }
+    };
     // paint the last-known docs instantly so the page doesn't flash empty before the relay answers
-    try { const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || '[]'); if (Array.isArray(cached)) { _seedFromCache(versions, byId, cached, _consoleDisplay); if (cached.length) onItems(cached); } } catch {}
-    const emit = () => { const arr = [...byId.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)); try { localStorage.setItem(CACHE_KEY, JSON.stringify(arr)); } catch {} onItems(arr); };
-    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {
+    try { const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || '[]'); if (Array.isArray(cached)) { _seedFromCache(versions, byId, cached, _consoleDisplay); syncLocked(); if (cached.length) onItems(cached); } } catch {}
+    const emit = () => { syncLocked(); const arr = [...byId.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0)); try { localStorage.setItem(CACHE_KEY, JSON.stringify(arr)); } catch {} onItems(arr); };
+    const handlers = {
       onevent(e) {
         const d = (e.tags.find(t => t[0] === 'd') || [])[1] || '';
         if (!d.startsWith(prefix)) return;
         const id = d.slice(prefix.length);
-        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { _forgetById(versions, byId, id, e.pubkey, e.created_at, _consoleDisplay, { churchPub: pub, targets: _tombstoneTargets(e), mayName: _consoleChurchVoice }); emit(); return; }
+        _noteSeenStamp(d, e.created_at || 0);
+        const rawKey = id + '\n' + e.pubkey;
+        if (e.tags.some(t => t[0] === 'deleted') || !e.content) { lockedRaw.delete(rawKey); _forgetById(versions, byId, id, e.pubkey, e.created_at, _consoleDisplay, { churchPub: pub, targets: _tombstoneTargets(e), mayName: _consoleChurchVoice }); emit(); return; }
         // _openChurchDoc, not JSON.parse: the calendar documents are sealed under the church name key now
         // (cleartext ones written before that still open — it tries plain JSON first). A null means sealed
         // with a key this console does not hold, which must not silently become an empty calendar.
-        try { const c = _openChurchDoc(e.content); if (c === null) { _absorbById(versions, byId, id, { id, _locked: true, ts: e.created_at, _by: e.pubkey }, _consoleDisplay); emit(); return; }
+        // A locked copy KEEPS ITS ID FIELD (`lockedShape`, e.g. a roster's `team`), so the screen can find it and
+        // say "Can't read this team yet" instead of drawing an empty team where it was.
+        try { const c = _openChurchDoc(e.content);
+              if (c === null) { const was = lockedRaw.get(rawKey); if (!was || (was.created_at || 0) <= (e.created_at || 0)) lockedRaw.set(rawKey, e); _absorbById(versions, byId, id, { id, ...(lockedShape ? lockedShape(id) : {}), _locked: true, ts: e.created_at, _by: e.pubkey }, _consoleDisplay); emit(); return; }
+              const was = lockedRaw.get(rawKey); if (was && (was.created_at || 0) <= (e.created_at || 0)) lockedRaw.delete(rawKey);
               _absorbById(versions, byId, id, { id, ...map(c, id), ts: e.created_at, _by: e.pubkey }, _consoleDisplay); emit(); } catch {}
       },
       oneose() { emit(); },
-    });
-    return () => { try { sub.close(); } catch {} };
+    };
+    const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], handlers);
+    const stopKey = _onNameKeyRing(() => { for (const e of [...lockedRaw.values()]) handlers.onevent(e); });
+    return () => { try { sub.close(); } catch {} stopKey(); };
   },
 
   // ---- team rosters: the roles a team needs + the people who can serve ----
@@ -9737,7 +9782,11 @@ window.Steward = {
   // alone silently revokes both grants: care goes unmanageable and 'serving teams' becomes 'nobody'. The
   // pubkeys must move to a pubkey-only document (the `careteam:` shape) in the SAME change.
   async publishRoster(teamId, roster) {
+    _lastSaveFail = '';
     if (!sk || !teamId) return null;
+    // REFUSE TO OVERWRITE A COPY WE CANNOT READ (the roster wipe, 2026-10-12): the form behind this call was built from
+    // nothing, and the relay keeps only the newest copy. `_addrLocked` is kept by _subAddr.
+    if (_addrLocked(ROSTER_D + teamId)) return _saveFailed('locked');
     const roles = (roster.roles || []).map(r => ({ id: r.id || ('r' + Math.random().toString(36).slice(2, 7)), name: r.name || 'Role' }));
     // NOBODY THIS CONSOLE HOLDS AS BLOCKED IS WRITTEN ONTO A TEAM (owner, 2026-10-02: blocking removes someone
     // from every team). The single door every roster write goes through — RosterModal, the invite-only members
@@ -9771,35 +9820,48 @@ window.Steward = {
     // ROLLOUT ORDER IS NOT OPTIONAL: relays before consoles. A new-shape roster on an OLD relay has no
     // `people` to parse, so its ROSTER_PEOPLE set is empty and those six grants fail closed.
     const sealed = await _sealChurchDocReady({ roles, people, pods });
-    if (sealed == null) return null;   // no church key: NOT saved, and never with names in the clear
+    if (sealed == null) return _saveFailed('nokey');   // no church key: NOT saved, and never with names in the clear
+    if (_addrLocked(ROSTER_D + teamId)) return _saveFailed('locked');   // it went locked while we waited for the key
     const content = JSON.stringify({ pubs: people.map(p => p.pub).filter(Boolean), e: JSON.parse(sealed).e });
-    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', ROSTER_D + teamId], ['t', NET]], content }))
+    // `po` carries the relay's own words back, so a refused same-second clash with a co-steward is told apart
+    // from a relay that took nothing (schNoKey used to call both "your church's key hasn't arrived").
+    const po = {};
+    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', ROSTER_D + teamId], ['t', NET]], content }), po)
       // `publish()` RETURNS FALSE ON TOTAL FAILURE — it does not throw and it does not reject. Discarding it
       // with `.then(() => ({...}))` handed every caller a truthy object over a document that reached no
       // relay, which is why the whole "a refused save says so" work of 7a45d4d only ever covered the
       // no-church-key case: with the relay simply unreachable — the ordinary failure on a thin pipe — the
       // modal still closed and the rota still DM'd everyone assigned. Every caller already treats null as
       // "not saved", so surfacing it here closes the common case with the guards that already exist.
-      .then((ok) => (ok ? { id: teamId, roles, people, pods } : null));
+      .then((ok) => (ok ? { id: teamId, roles, people, pods } : _saveFailed(/newer version/i.test(po.reason || '') ? 'clash' : 'relay')));
   },
-  subscribeRosters(onRosters) { return this._subAddr(ROSTER_D, (c, id) => ({ team: id, roles: c.roles || [], people: c.people || [], pods: c.pods || [] }), onRosters); },
+  subscribeRosters(onRosters) { return this._subAddr(ROSTER_D, (c, id) => ({ team: id, roles: c.roles || [], people: c.people || [], pods: c.pods || [] }), onRosters,
+    // a locked roster is still THIS team's roster: found by `team`, with empty lists so no screen trips over it — and
+    // `_locked`, which every screen that edits it checks (DashRota, RosterModal, the care panel, Block)
+    (id) => ({ team: id, roles: [], people: [], pods: [] })); },
 
   // ---- services: a dated gathering people serve at ----
   // service = { id?, date:'YYYY-MM-DD', time:'10:30', name }
   async publishService(svc) {
+    _lastSaveFail = '';
     if (!sk) return null;
     const id = svc.id || ('svc' + Date.now().toString(36) + (++_svcSeq).toString(36) + Math.random().toString(36).slice(2, 7));
+    // REFUSE TO OVERWRITE A COPY WE CANNOT READ (the roster wipe, 2026-10-12): the form behind this call was built from
+    // nothing, and the relay keeps only the newest copy. `_addrLocked` is kept by _subAddr.
+    if (_addrLocked(SERVICE_D + id)) return _saveFailed('locked');
     const doc = { date: svc.date || '', time: svc.time || '10:30', name: svc.name || 'Sunday Gathering' };
     const content = await _sealChurchDocReady(doc);
-    if (content == null) return null;   // the church key never arrived: NOT saved, and never in the clear
-    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', SERVICE_D + id], ['t', NET]], content }))
+    if (content == null) return _saveFailed('nokey');   // the church key never arrived: NOT saved, and never in the clear
+    if (_addrLocked(SERVICE_D + id)) return _saveFailed('locked');
+    const po = {};
+    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', SERVICE_D + id], ['t', NET]], content }), po)
       // `publish()` RETURNS FALSE ON TOTAL FAILURE — it does not throw and it does not reject. Discarding it
       // with `.then(() => ({...}))` handed every caller a truthy object over a document that reached no
       // relay, which is why the whole "a refused save says so" work of 7a45d4d only ever covered the
       // no-church-key case: with the relay simply unreachable — the ordinary failure on a thin pipe — the
       // modal still closed and the rota still DM'd everyone assigned. Every caller already treats null as
       // "not saved", so surfacing it here closes the common case with the guards that already exist.
-      .then((ok) => (ok ? { id, ...doc } : null));
+      .then((ok) => (ok ? { id, ...doc } : _saveFailed(/newer version/i.test(po.reason || '') ? 'clash' : 'relay')));
   },
   removeService(id) {
     if (!sk) return Promise.resolve(null);
@@ -9808,15 +9870,22 @@ window.Steward = {
   subscribeServices(onServices) { return this._subAddr(SERVICE_D, (c) => ({ date: c.date, time: c.time, name: c.name }), onServices); },
   // ---- run sheets: a service's order-of-service + song setlist (d=runsheet:<serviceId>) ----
   async publishRunsheet(serviceId, items) {
+    _lastSaveFail = '';
     if (!sk || !serviceId) return Promise.resolve(null);
+    // REFUSE TO OVERWRITE A COPY WE CANNOT READ (the roster wipe, 2026-10-12): the form behind this call was built from
+    // nothing, and the relay keeps only the newest copy. `_addrLocked` is kept by _subAddr.
+    if (_addrLocked(RUNSHEET_D + serviceId)) return _saveFailed('locked');
     // SEALED, like every other calendar document. This wrote cleartext until 2026-08-18, so the relay held
     // the order of service — including the minister named against each item — readable by anyone with the
     // disk. Reads were already default-deny over the wire (a stranger gets zero events, measured), so the
     // exposure was at rest, which is the half that matters under seizure. Both readers try plaintext first
     // (_openChurchDoc here, CHURCH_SEALED_PFXS in the member app), so sheets written before this still open.
     const content = await _sealChurchDocReady({ items: Array.isArray(items) ? items : [] });
-    if (content == null) return null;   // the church key never arrived: NOT saved, and never in the clear
-    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', RUNSHEET_D + serviceId], ['t', NET]], content }));
+    if (content == null) return _saveFailed('nokey');   // the church key never arrived: NOT saved, and never in the clear
+    if (_addrLocked(RUNSHEET_D + serviceId)) return _saveFailed('locked');
+    const po = {};
+    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', RUNSHEET_D + serviceId], ['t', NET]], content }), po)
+      .then((ok) => (ok ? ok : (_saveFailed(/newer version/i.test(po.reason || '') ? 'clash' : 'relay'), ok)));   // unchanged answer (false), with the reason noted
   },
   subscribeRunsheets(onSheets) { return this._subAddr(RUNSHEET_D, (c) => ({ items: Array.isArray(c.items) ? c.items : [] }), onSheets); },
   // ---- kids check-in (ENCRYPTED to the SAFEGUARDING key: a child's presence + pickup code never leave
@@ -10694,12 +10763,18 @@ window.Steward = {
   // ---- rooms & bookings: a shared room calendar (steward-booked) ----
   // room = { id?, name, capacity?, note? } ; booking = { id?, roomId, date:'YYYY-MM-DD', start:'HH:MM', end:'HH:MM', title, note }
   async publishRoom(room) {
+    _lastSaveFail = '';
     if (!sk) return null;
     const id = room.id || ('room' + Date.now());
+    // REFUSE TO OVERWRITE A COPY WE CANNOT READ (the roster wipe, 2026-10-12): the form behind this call was built from
+    // nothing, and the relay keeps only the newest copy. `_addrLocked` is kept by _subAddr.
+    if (_addrLocked(ROOM_D + id)) return _saveFailed('locked');
     const doc = { name: (room.name || 'Room').trim(), capacity: room.capacity || '', note: (room.note || '').trim() };
     const content = await _sealChurchDocReady(doc);
-    if (content == null) return null;   // the church key never arrived: NOT saved, and never in the clear
-    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', ROOM_D + id], ['t', NET]], content })).then((ok) => (ok ? { id, ...doc } : null));   // false = reached no relay; see publishService
+    if (content == null) return _saveFailed('nokey');   // the church key never arrived: NOT saved, and never in the clear
+    if (_addrLocked(ROOM_D + id)) return _saveFailed('locked');
+    const po = {};
+    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', ROOM_D + id], ['t', NET]], content }), po).then((ok) => (ok ? { id, ...doc } : _saveFailed(/newer version/i.test(po.reason || '') ? 'clash' : 'relay')));   // false = reached no relay; see publishService
   },
   removeRoom(id) {
     if (!sk) return Promise.resolve(null);
@@ -10707,12 +10782,18 @@ window.Steward = {
   },
   subscribeRooms(cb) { return this._subAddr(ROOM_D, (c) => ({ name: c.name, capacity: c.capacity, note: c.note }), cb); },
   async publishBooking(b) {
+    _lastSaveFail = '';
     if (!sk || !b || !b.roomId) return Promise.resolve(null);
     const id = b.id || ('bk' + Date.now());
+    // REFUSE TO OVERWRITE A COPY WE CANNOT READ (the roster wipe, 2026-10-12): the form behind this call was built from
+    // nothing, and the relay keeps only the newest copy. `_addrLocked` is kept by _subAddr.
+    if (_addrLocked(BOOKING_D + id)) return _saveFailed('locked');
     const doc = { roomId: b.roomId, date: b.date || '', start: b.start || '', end: b.end || '', title: (b.title || '').trim(), note: (b.note || '').trim() };
     const content = await _sealChurchDocReady(doc);
-    if (content == null) return null;   // the church key never arrived: NOT saved, and never in the clear
-    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', BOOKING_D + id], ['t', NET]], content })).then((ok) => (ok ? { id, ...doc } : null));   // false = reached no relay; see publishService
+    if (content == null) return _saveFailed('nokey');   // the church key never arrived: NOT saved, and never in the clear
+    if (_addrLocked(BOOKING_D + id)) return _saveFailed('locked');
+    const po = {};
+    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', BOOKING_D + id], ['t', NET]], content }), po).then((ok) => (ok ? { id, ...doc } : _saveFailed(/newer version/i.test(po.reason || '') ? 'clash' : 'relay')));   // false = reached no relay; see publishService
   },
   removeBooking(id) {
     if (!sk) return Promise.resolve(null);
@@ -10723,12 +10804,19 @@ window.Steward = {
   // ---- rota: assignments for one service (latest wins; published flag) ----
   // rota = { service:<serviceId>, published:bool, assign:{ '<teamId>::<roleId>': {name, pub} } }
   async publishRota(rota) {
+    _lastSaveFail = '';
     if (!sk || !rota || !rota.service) return Promise.resolve(null);
+    // REFUSE TO OVERWRITE A COPY WE CANNOT READ (the roster wipe, 2026-10-12): the form behind this call was built from
+    // nothing, and the relay keeps only the newest copy. `_addrLocked` is kept by _subAddr.
+    // For a rota this is also what stops "can you serve?" going out: every caller asks only after a non-null answer.
+    if (_addrLocked(ROTA_D + rota.service)) return _saveFailed('locked');
     const doc = { service: rota.service, published: !!rota.published, assign: rota.assign || {} };
     const content = await _sealChurchDocReady(doc);
-    if (content == null) return null;   // the church key never arrived: NOT saved, and never in the clear
-    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', ROTA_D + rota.service], ['t', NET]], content }))
-      .then((ok) => (ok ? { id: rota.service, service: rota.service, published: !!rota.published, assign: rota.assign || {} } : null));   // false = reached no relay; see publishService
+    if (content == null) return _saveFailed('nokey');   // the church key never arrived: NOT saved, and never in the clear
+    if (_addrLocked(ROTA_D + rota.service)) return _saveFailed('locked');
+    const po = {};
+    return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', ROTA_D + rota.service], ['t', NET]], content }), po)
+      .then((ok) => (ok ? { id: rota.service, service: rota.service, published: !!rota.published, assign: rota.assign || {} } : _saveFailed(/newer version/i.test(po.reason || '') ? 'clash' : 'relay')));   // false = reached no relay; see publishService
   },
   removeRota(serviceId) {
     if (!sk) return Promise.resolve(null);

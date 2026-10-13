@@ -6321,6 +6321,7 @@
     if (wild && wild._tomb && (wild.ts || 0) >= (rec.ts || 0)) return false;
     if (had && had._tomb && (had.ts || 0) >= (rec.ts || 0)) return false;
     if (had && (had.ts || 0) > (rec.ts || 0)) return false;
+    if (had && rec._locked && !had._locked && !had._tomb && (had.ts || 0) >= (rec.ts || 0)) return false;
     vers.set(by, rec);
     const win = _reduceVersions(vers, byId, id, trusted);
     return !!win && win._by === by;
@@ -18012,6 +18013,18 @@ zoo`.split("\n");
   }
   var _lastStamp = /* @__PURE__ */ new Map();
   var _lastOk = /* @__PURE__ */ new Map();
+  var _lockedAddr = /* @__PURE__ */ new Set();
+  function _addrLocked(d) {
+    return _lockedAddr.has(d);
+  }
+  var _lastSaveFail = "";
+  function _saveFailed(why) {
+    _lastSaveFail = why;
+    return null;
+  }
+  function _noteSeenStamp(d, ts) {
+    if (d && ts > 0 && (_lastStamp.get(d) || 0) < ts) _lastStamp.set(d, ts);
+  }
   var _lastSpread = /* @__PURE__ */ new Map();
   function _noteSpread(evt, landed, missed) {
     try {
@@ -21723,6 +21736,14 @@ zoo`.split("\n");
     nameKeyReady() {
       return _nameKeyReady();
     },
+    // Is this team's roster on show only as a copy this console cannot open? StewardMeals.publishCareTeam refuses then.
+    rosterLocked(teamId) {
+      return !!teamId && _addrLocked(ROSTER_D + teamId);
+    },
+    // Why the last calendar save (roster, rota, service, run sheet, room, booking) came back null — see _saveFailed.
+    lastSaveFailure() {
+      return _lastSaveFail;
+    },
     setMinors(pubkeys) {
       _requireTrustedView("list of children");
       if (!sk) return Promise.resolve(null);
@@ -23119,19 +23140,35 @@ zoo`.split("\n");
     },
     // ════════════ SERVING / ROTA / CALENDAR (the coverage board) ════════════
     // A generic addressable-doc subscription over the church's own kind-30078 with a given d-prefix.
-    _subAddr(prefix, map, onItems) {
+    _subAddr(prefix, map, onItems, lockedShape) {
       const CACHE_KEY = "trinityone.steward.addr.v2." + prefix + (pub || "");
       const byId = /* @__PURE__ */ new Map();
       const versions = /* @__PURE__ */ new Map();
+      const lockedRaw = /* @__PURE__ */ new Map();
+      const marked = /* @__PURE__ */ new Set();
+      const syncLocked = () => {
+        for (const d of marked) _lockedAddr.delete(d);
+        marked.clear();
+        for (const r of byId.values()) {
+          if (!r || r.id == null) continue;
+          const d = prefix + r.id;
+          if (r._locked) {
+            marked.add(d);
+            _lockedAddr.add(d);
+          } else _lockedAddr.delete(d);
+        }
+      };
       try {
         const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || "[]");
         if (Array.isArray(cached)) {
           _seedFromCache(versions, byId, cached, _consoleDisplay);
+          syncLocked();
           if (cached.length) onItems(cached);
         }
       } catch {
       }
       const emit = () => {
+        syncLocked();
         const arr = [...byId.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0));
         try {
           localStorage.setItem(CACHE_KEY, JSON.stringify(arr));
@@ -23139,12 +23176,15 @@ zoo`.split("\n");
         }
         onItems(arr);
       };
-      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
+      const handlers = {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
           if (!d.startsWith(prefix)) return;
           const id = d.slice(prefix.length);
+          _noteSeenStamp(d, e.created_at || 0);
+          const rawKey = id + "\n" + e.pubkey;
           if (e.tags.some((t) => t[0] === "deleted") || !e.content) {
+            lockedRaw.delete(rawKey);
             _forgetById(versions, byId, id, e.pubkey, e.created_at, _consoleDisplay, { churchPub: pub, targets: _tombstoneTargets(e), mayName: _consoleChurchVoice });
             emit();
             return;
@@ -23152,10 +23192,14 @@ zoo`.split("\n");
           try {
             const c = _openChurchDoc(e.content);
             if (c === null) {
-              _absorbById(versions, byId, id, { id, _locked: true, ts: e.created_at, _by: e.pubkey }, _consoleDisplay);
+              const was2 = lockedRaw.get(rawKey);
+              if (!was2 || (was2.created_at || 0) <= (e.created_at || 0)) lockedRaw.set(rawKey, e);
+              _absorbById(versions, byId, id, { id, ...lockedShape ? lockedShape(id) : {}, _locked: true, ts: e.created_at, _by: e.pubkey }, _consoleDisplay);
               emit();
               return;
             }
+            const was = lockedRaw.get(rawKey);
+            if (was && (was.created_at || 0) <= (e.created_at || 0)) lockedRaw.delete(rawKey);
             _absorbById(versions, byId, id, { id, ...map(c, id), ts: e.created_at, _by: e.pubkey }, _consoleDisplay);
             emit();
           } catch {
@@ -23164,12 +23208,17 @@ zoo`.split("\n");
         oneose() {
           emit();
         }
+      };
+      const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], handlers);
+      const stopKey = _onNameKeyRing(() => {
+        for (const e of [...lockedRaw.values()]) handlers.onevent(e);
       });
       return () => {
         try {
           sub.close();
         } catch {
         }
+        stopKey();
       };
     },
     // ---- team rosters: the roles a team needs + the people who can serve ----
@@ -23183,27 +23232,42 @@ zoo`.split("\n");
     // alone silently revokes both grants: care goes unmanageable and 'serving teams' becomes 'nobody'. The
     // pubkeys must move to a pubkey-only document (the `careteam:` shape) in the SAME change.
     async publishRoster(teamId, roster) {
+      _lastSaveFail = "";
       if (!sk || !teamId) return null;
+      if (_addrLocked(ROSTER_D + teamId)) return _saveFailed("locked");
       const roles = (roster.roles || []).map((r) => ({ id: r.id || "r" + Math.random().toString(36).slice(2, 7), name: r.name || "Role" }));
       const people = (roster.people || []).filter((p) => !(p && p.pub && _localBlocked.has(String(p.pub).toLowerCase()))).map((p) => ({ id: p.id || "p" + Math.random().toString(36).slice(2, 7), name: p.name || "", pub: p.pub || "" }));
       const pods = (roster.pods || []).map((p) => ({ id: p.id || "pod" + Math.random().toString(36).slice(2, 7), name: p.name || "Pod", fills: p.fills && typeof p.fills === "object" ? p.fills : {} }));
       const sealed = await _sealChurchDocReady({ roles, people, pods });
-      if (sealed == null) return null;
+      if (sealed == null) return _saveFailed("nokey");
+      if (_addrLocked(ROSTER_D + teamId)) return _saveFailed("locked");
       const content = JSON.stringify({ pubs: people.map((p) => p.pub).filter(Boolean), e: JSON.parse(sealed).e });
-      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", ROSTER_D + teamId], ["t", NET]], content })).then((ok) => ok ? { id: teamId, roles, people, pods } : null);
+      const po = {};
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", ROSTER_D + teamId], ["t", NET]], content }), po).then((ok) => ok ? { id: teamId, roles, people, pods } : _saveFailed(/newer version/i.test(po.reason || "") ? "clash" : "relay"));
     },
     subscribeRosters(onRosters) {
-      return this._subAddr(ROSTER_D, (c, id) => ({ team: id, roles: c.roles || [], people: c.people || [], pods: c.pods || [] }), onRosters);
+      return this._subAddr(
+        ROSTER_D,
+        (c, id) => ({ team: id, roles: c.roles || [], people: c.people || [], pods: c.pods || [] }),
+        onRosters,
+        // a locked roster is still THIS team's roster: found by `team`, with empty lists so no screen trips over it — and
+        // `_locked`, which every screen that edits it checks (DashRota, RosterModal, the care panel, Block)
+        (id) => ({ team: id, roles: [], people: [], pods: [] })
+      );
     },
     // ---- services: a dated gathering people serve at ----
     // service = { id?, date:'YYYY-MM-DD', time:'10:30', name }
     async publishService(svc) {
+      _lastSaveFail = "";
       if (!sk) return null;
       const id = svc.id || "svc" + Date.now().toString(36) + (++_svcSeq).toString(36) + Math.random().toString(36).slice(2, 7);
+      if (_addrLocked(SERVICE_D + id)) return _saveFailed("locked");
       const doc = { date: svc.date || "", time: svc.time || "10:30", name: svc.name || "Sunday Gathering" };
       const content = await _sealChurchDocReady(doc);
-      if (content == null) return null;
-      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", SERVICE_D + id], ["t", NET]], content })).then((ok) => ok ? { id, ...doc } : null);
+      if (content == null) return _saveFailed("nokey");
+      if (_addrLocked(SERVICE_D + id)) return _saveFailed("locked");
+      const po = {};
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", SERVICE_D + id], ["t", NET]], content }), po).then((ok) => ok ? { id, ...doc } : _saveFailed(/newer version/i.test(po.reason || "") ? "clash" : "relay"));
     },
     removeService(id) {
       if (!sk) return Promise.resolve(null);
@@ -23214,10 +23278,14 @@ zoo`.split("\n");
     },
     // ---- run sheets: a service's order-of-service + song setlist (d=runsheet:<serviceId>) ----
     async publishRunsheet(serviceId, items) {
+      _lastSaveFail = "";
       if (!sk || !serviceId) return Promise.resolve(null);
+      if (_addrLocked(RUNSHEET_D + serviceId)) return _saveFailed("locked");
       const content = await _sealChurchDocReady({ items: Array.isArray(items) ? items : [] });
-      if (content == null) return null;
-      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", RUNSHEET_D + serviceId], ["t", NET]], content }));
+      if (content == null) return _saveFailed("nokey");
+      if (_addrLocked(RUNSHEET_D + serviceId)) return _saveFailed("locked");
+      const po = {};
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", RUNSHEET_D + serviceId], ["t", NET]], content }), po).then((ok) => ok ? ok : (_saveFailed(/newer version/i.test(po.reason || "") ? "clash" : "relay"), ok));
     },
     subscribeRunsheets(onSheets) {
       return this._subAddr(RUNSHEET_D, (c) => ({ items: Array.isArray(c.items) ? c.items : [] }), onSheets);
@@ -24044,12 +24112,16 @@ zoo`.split("\n");
     // ---- rooms & bookings: a shared room calendar (steward-booked) ----
     // room = { id?, name, capacity?, note? } ; booking = { id?, roomId, date:'YYYY-MM-DD', start:'HH:MM', end:'HH:MM', title, note }
     async publishRoom(room) {
+      _lastSaveFail = "";
       if (!sk) return null;
       const id = room.id || "room" + Date.now();
+      if (_addrLocked(ROOM_D + id)) return _saveFailed("locked");
       const doc = { name: (room.name || "Room").trim(), capacity: room.capacity || "", note: (room.note || "").trim() };
       const content = await _sealChurchDocReady(doc);
-      if (content == null) return null;
-      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", ROOM_D + id], ["t", NET]], content })).then((ok) => ok ? { id, ...doc } : null);
+      if (content == null) return _saveFailed("nokey");
+      if (_addrLocked(ROOM_D + id)) return _saveFailed("locked");
+      const po = {};
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", ROOM_D + id], ["t", NET]], content }), po).then((ok) => ok ? { id, ...doc } : _saveFailed(/newer version/i.test(po.reason || "") ? "clash" : "relay"));
     },
     removeRoom(id) {
       if (!sk) return Promise.resolve(null);
@@ -24059,12 +24131,16 @@ zoo`.split("\n");
       return this._subAddr(ROOM_D, (c) => ({ name: c.name, capacity: c.capacity, note: c.note }), cb);
     },
     async publishBooking(b) {
+      _lastSaveFail = "";
       if (!sk || !b || !b.roomId) return Promise.resolve(null);
       const id = b.id || "bk" + Date.now();
+      if (_addrLocked(BOOKING_D + id)) return _saveFailed("locked");
       const doc = { roomId: b.roomId, date: b.date || "", start: b.start || "", end: b.end || "", title: (b.title || "").trim(), note: (b.note || "").trim() };
       const content = await _sealChurchDocReady(doc);
-      if (content == null) return null;
-      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", BOOKING_D + id], ["t", NET]], content })).then((ok) => ok ? { id, ...doc } : null);
+      if (content == null) return _saveFailed("nokey");
+      if (_addrLocked(BOOKING_D + id)) return _saveFailed("locked");
+      const po = {};
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", BOOKING_D + id], ["t", NET]], content }), po).then((ok) => ok ? { id, ...doc } : _saveFailed(/newer version/i.test(po.reason || "") ? "clash" : "relay"));
     },
     removeBooking(id) {
       if (!sk) return Promise.resolve(null);
@@ -24076,11 +24152,15 @@ zoo`.split("\n");
     // ---- rota: assignments for one service (latest wins; published flag) ----
     // rota = { service:<serviceId>, published:bool, assign:{ '<teamId>::<roleId>': {name, pub} } }
     async publishRota(rota) {
+      _lastSaveFail = "";
       if (!sk || !rota || !rota.service) return Promise.resolve(null);
+      if (_addrLocked(ROTA_D + rota.service)) return _saveFailed("locked");
       const doc = { service: rota.service, published: !!rota.published, assign: rota.assign || {} };
       const content = await _sealChurchDocReady(doc);
-      if (content == null) return null;
-      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", ROTA_D + rota.service], ["t", NET]], content })).then((ok) => ok ? { id: rota.service, service: rota.service, published: !!rota.published, assign: rota.assign || {} } : null);
+      if (content == null) return _saveFailed("nokey");
+      if (_addrLocked(ROTA_D + rota.service)) return _saveFailed("locked");
+      const po = {};
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", ROTA_D + rota.service], ["t", NET]], content }), po).then((ok) => ok ? { id: rota.service, service: rota.service, published: !!rota.published, assign: rota.assign || {} } : _saveFailed(/newer version/i.test(po.reason || "") ? "clash" : "relay"));
     },
     removeRota(serviceId) {
       if (!sk) return Promise.resolve(null);

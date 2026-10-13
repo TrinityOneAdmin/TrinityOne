@@ -3720,7 +3720,7 @@ function EditGroupMembersModal({ group, getCurrent, onClose }) {
     const reconcileRoster = () => {
       try {
         const r = (rosters || []).find(x => x && x.team === group.id);
-        if (!r || !window.Steward.publishRoster) return;
+        if (!r || r._locked || !window.Steward.publishRoster) return;   // locked: not read yet, so nothing to reconcile against
         // ONLY WHAT THE STEWARD CHANGED. roster:<id>.people is what the relay reads to grant careAdmin — a
         // read grant over every care need and every "ask for help" in the church. Reconciling the whole list
         // meant that opening this dialog on a church whose two lists had drifted and pressing Save WITHOUT
@@ -6560,7 +6560,8 @@ function takeOffEveryTeam({ pk, rosters, rotas, services, careTeamId }) {
   const isHim = (pub) => !!pub && String(pub).toLowerCase() === lc;
   const jobs = [];
   for (const r of (Array.isArray(rosters) ? rosters : [])) {
-    if (!r || !r.team || !(r.people || []).some(p => p && isHim(p.pub))) continue;
+    // a LOCKED roster (not readable on this console yet) is never published from — block() reports it instead
+    if (!r || r._locked || !r.team || !(r.people || []).some(p => p && isHim(p.pub))) continue;
     const people = (r.people || []).filter(p => !(p && isHim(p.pub)));
     jobs.push(Promise.resolve(S.publishRoster(r.team, { roles: r.roles || [], people, pods: r.pods || [] }))
       .then((ok) => {
@@ -7142,9 +7143,13 @@ function DashMembers() {
       if (window.Steward.ensureCapKeyFor) for (const kind of ['finance', 'checkin']) {
         try { Promise.resolve(window.Steward.ensureCapKeyFor(kind, stewardRoster || [], (window.Steward.stewardCaps && window.Steward.stewardCaps()) || {})).catch(() => {}); } catch (e) {}
       }
+      // A TEAM THIS CONSOLE CANNOT READ YET (its roster is sealed under a name key that has not landed) cannot be
+      // checked or rewritten, so it is counted and said — never silently skipped, never published from empty.
+      const lockedTeams = ok === false ? 0 : (Array.isArray(rostersAll) ? rostersAll : []).filter(r => r && r._locked && r.team).length;
+      const lockedNote = lockedTeams ? 'Couldn\u2019t remove them from ' + lockedTeams + ' team' + (lockedTeams === 1 ? '' : 's') + ' \u2014 try again shortly.' : '';
       return Promise.all([rotating, teams, clearing]).then(([failed, teamFailed, clearFailed]) => {
         const offFailed = [...teamFailed, ...clearFailed];
-        const teamNote = offFailed.length ? 'They are blocked, but this console could not take them off ' + offFailed.join(' or ') + ' \u2014 take them off by hand.' : '';
+        const teamNote = [offFailed.length ? 'They are blocked, but this console could not take them off ' + offFailed.join(' or ') + ' \u2014 take them off by hand.' : '', lockedNote].filter(Boolean).join(' ');
         if (failed.length) setBlockWarn((saveNote ? saveNote + ' It also could not change ' + failed.join(' or ') + ', so they may still be able to open things sealed with it.' : 'Removed them from the church, but could not change ' + failed.join(' or ') + '. They may still be able to open things sealed with it. Try blocking them again — and if it keeps failing, your church may have grown past what one key document can hold.') + (teamNote ? ' ' + teamNote : ''));
         else if (teamNote) setBlockWarn((saveNote ? saveNote + ' ' : '') + teamNote);
       });

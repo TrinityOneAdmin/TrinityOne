@@ -444,10 +444,10 @@ test('CONSOLE: a Block that did not land changes no team, care list or clearance
 test('ENGINE: publishCareTeam never lists someone this console holds as blocked (the Care panel republishes from stale rosters)', async () => {
   // async since 2026-10-10: it reads the church's children list from the relay first (readMinors); a known,
   // empty list here, so this test still asks only about the BLOCKED filter.
-  const body = fnBody(MEALS, 'async function publishCareTeam(memberPubs) {', 'publishCareTeam');
+  const body = fnBody(MEALS, 'async function publishCareTeam(memberPubs, opts) {', 'publishCareTeam');
   const sent = [];
   const S0 = { churchPub: 'f'.repeat(64), blockedHere: () => [T], readMinors: async () => ({ known: true, list: [] }), publishSigned: (e) => { sent.push(e); return Promise.resolve(true); } };
-  const fn = new Function('S', 'now', 'CARETEAM_D', 'NET', '_careTeamWait', body + '\nreturn publishCareTeam;')(() => S0, () => 1, 'trinityone/careteam:', 'trinityone', { pubs: null, tries: 0, timer: 0 });
+  const fn = new Function('S', 'now', 'CARETEAM_D', 'NET', '_careTeamWait', '_careTeamSeen', body + '\nreturn publishCareTeam;')(() => S0, () => 1, 'trinityone/careteam:', 'trinityone', { pubs: null, tries: 0, timer: 0 }, '');
   await fn([T, CC]);
   const pubs = JSON.parse(sent[0].content).pubs;
   assert.ok(pubs.includes(CC), 'CONTROL: the unblocked care member is missing');
@@ -461,6 +461,7 @@ test('ENGINE: publishRoster never writes someone this console holds as blocked o
     sk: 'k', _localBlocked: new Set([T]), now: () => 1, NET: 'trinityone', ROSTER_D: 'trinityone/roster:',
     _sealChurchDocReady: async (doc) => JSON.stringify({ e: JSON.stringify(doc) }),
     feChurch: (e) => e, publish: (e) => { sent.push(e); return Promise.resolve(true); },
+    _addrLocked: () => false, _saveFailed: () => null, _lastSaveFail: '',   // fix/locked-roster-guard: nothing locked here
   };
   const names = Object.keys(deps);
   const obj = new Function(...names, 'return ({ ' + body + ' });')(...names.map(n => deps[n]));

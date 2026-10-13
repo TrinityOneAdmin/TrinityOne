@@ -74,6 +74,8 @@ import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   //
   function cachedEnabled() { try { return localStorage.getItem(enKey()) === '1'; } catch (e) { return false; } }
 
   const DEFAULTS = { enabled: false, visibility: 'all', openedBy: 'steward', adminGroupId: '' };
+  // THE CARE TEAM AS LAST READ, for publishCareTeam's locked-roster refusal when a caller does not name it.
+  let _careTeamSeen = '';
 
   function subscribeSettings(cb) {
     if (!S() || !S().subscribeMany || !activeChurch()) { cb({ ...DEFAULTS }); return () => {}; }
@@ -97,6 +99,7 @@ import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   //
               openedBy: (doc.openedBy === 'member' ? 'member' : 'steward'),
               adminGroupId: String(doc.adminGroupId || ''),
             };
+            _careTeamSeen = seen.doc.adminGroupId;
             emit();
           } catch (err) {}
         },
@@ -380,8 +383,15 @@ import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   //
   // list. A retry for a church we are no longer on is dropped, and the console's church reset drops it at once.
   const _careTeamWait = { pubs: null, cp: '', tries: 0, timer: 0 };
   function dropPendingCareTeam() { try { if (_careTeamWait.timer) clearTimeout(_careTeamWait.timer); } catch (e) {} _careTeamWait.timer = 0; _careTeamWait.pubs = null; _careTeamWait.cp = ''; _careTeamWait.tries = 0; }
-  async function publishCareTeam(memberPubs) {
+  // `opts.team` — the care team the list was built from (callers that know it pass it); `opts.fromList` — the list
+  // came from careteam: itself, not from a roster (refreshCareTeam), so a locked roster has no bearing on it.
+  async function publishCareTeam(memberPubs, opts) {
     if (!S() || !S().publishSigned || !S().churchPub) return null;
+    // NEVER FROM A ROSTER THIS CONSOLE CANNOT READ (the roster wipe, 2026-10-12). A locked roster reaches the screens
+    // as an EMPTY team, so the list handed in here would name nobody and seal every member's ask for help to the
+    // church alone. `false` is "not published", which Block reports and the care panel retries on its next change.
+    const team = (opts && opts.team) || _careTeamSeen;
+    if (!(opts && opts.fromList) && team && S().rosterLocked && S().rosterLocked(team)) return false;
     // A DELEGATED CONSOLE DOES NOT PUBLISH THIS. `cp` below is `churchPub` — the delegate's own key, not the church
     // they are running — so the document would be d-tagged to a key that is nobody's church. It was never reached
     // while a delegate's care switch read Off (the panel's effect is gated on it); now that the switch tells the
@@ -404,14 +414,14 @@ import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   //
     const m = S().readMinors ? await S().readMinors() : null;
     if (!S() || S().churchPub !== cp || S().actingChurch) return null;   // the church changed while we read: not ours to publish
     if (!m || !m.known) {
-      _careTeamWait.pubs = memberPubs || []; _careTeamWait.cp = cp; _careTeamWait.tries = 0;
+      _careTeamWait.pubs = memberPubs || []; _careTeamWait.cp = cp; _careTeamWait.tries = 0; _careTeamWait.opts = opts;
       if (!_careTeamWait.timer) {
         const again = () => {
           _careTeamWait.timer = 0;
           const pending = _careTeamWait.pubs; if (!pending || ++_careTeamWait.tries > 15) return;
           if (!S() || S().actingChurch || S().churchPub !== _careTeamWait.cp) { dropPendingCareTeam(); return; }   // asked for another church
           const tries = _careTeamWait.tries;
-          publishCareTeam(pending).then((r) => {
+          publishCareTeam(pending, _careTeamWait.opts).then((r) => {
             _careTeamWait.tries = tries;   // a failed retry must not reset the count it is counting
             if (r === false && _careTeamWait.pubs === pending && !_careTeamWait.timer) _careTeamWait.timer = setTimeout(again, 20000);
           }, () => {});
@@ -456,7 +466,7 @@ import { careThreadAttention } from '../scripts/care-thread-attention.mjs';   //
     if (!m || !m.known) return false;
     const minors = new Set(m.list);
     if (!pubs.some(p => minors.has(p))) return null;   // nothing to take off
-    return publishCareTeam(pubs.filter(p => p !== cp));
+    return publishCareTeam(pubs.filter(p => p !== cp), { fromList: true });
   }
 
   // ---- "Ask for help" requests (console/owner side): triage, approve into a need, chat ----
