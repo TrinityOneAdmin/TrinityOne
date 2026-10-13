@@ -7,9 +7,10 @@
 // rota this console could not open (_locked) was already refused; an unlocked, merely stale one was not.
 //
 // THE FIX. takeOffEveryTeam asks Steward.rotaChangedSince(service, ts) at write time (ts = the copy it read). A rota
-// that has moved on is skipped and named. A refused write (a same-second tie is the clock) is retried ONCE after the
-// second boundary, but only if the rota still has not changed - the wait is also what lets a co-steward's copy
-// arrive. A second refusal is reported, never swallowed.
+// that has moved on is skipped and named. ONE attempt, NO retry: publishRota stamps the rota (_monotonic) before it
+// writes, so a retry's own freshness check would read our failed attempt as "someone else changed it" and every
+// later Block press would be silently skipped. A failed write is reported as a failed save, never blamed on a
+// co-steward, and the next Block press still tries to write.
 //
 // HOW THIS ASSERTS (CLAUDE.md rules 1, 3). The REAL DashMembers is rendered and its REAL Block pressed. The engine is
 // the SHIPPED bundle (vendor/steward.js) with its real _subAddr/subscribeRotas/publishRota/rotaChangedSince and the
@@ -46,6 +47,7 @@ const rotaEvent = (svc, at, assign) => finalizeEvent({ kind: 30078, created_at: 
   content: JSON.stringify({ service: svc, published: true, assign }) }, churchSk);
 
 function engine(clock) {
+  const gate = { refuse: false };   // true: the relay refuses every write (nothing lands, no echo comes back)
   const subs = [], sent = [], store = openStore(':memory:');
   const world = {
     pub: CP, sk: churchSk, NET, actingChurch: '', ROTA_D, ROSTER_D: 'trinityone/roster:',
@@ -58,6 +60,7 @@ function engine(clock) {
     _skewShift: () => 0, STAMP_CAP_SEC: 600, SKEW_CAP_SEC: 900, finalizeEvent,
     publish: async (evt, opts) => {
       sent.push(evt);
+      if (gate.refuse) { if (opts) { opts.reason = 'invalid: a newer version of this is already stored'; opts.refused = true; } return false; }
       const r = store.put(evt);
       if (r === 'stored' || r === 'duplicate') return evt;
       if (opts) { opts.reason = 'invalid: a newer version of this is already stored'; opts.refused = true; }
@@ -90,7 +93,7 @@ function engine(clock) {
                 ${fn('subscribeRotas(onRotas)')}, ${fn('async publishRota(rota)')},
                 ${fn('rotaChangedSince(serviceId, ts)')}, ${fn('lastSaveFailure()')} };
     return { S };`;
-  return { ...new Function(...names, body)(...names.map(n => world[n])), subs, sent, store };
+  return { ...new Function(...names, body)(...names.map(n => world[n])), subs, sent, store, gate };
 }
 
 const members = [{ pubkey: BRAM, npub: 'npub1aa', name: 'Bram Whitlock', count: 2, lastTs: T, joined: T - 86400 }];
@@ -105,15 +108,12 @@ async function block({ eng, rotas, publishRota }) {
     rotaChangedSince: eng.S.rotaChangedSince, lastSaveFailure: eng.S.lastSaveFailure };
   const g = membersGlobals({ steward, members, extraWindow: { useStewardRosters: () => [], useStewardRotas: () => rotas, useStewardServices: () => services,
     useMealsSettings: () => ({ adminGroupId: '' }), StewardMeals: { publishCareTeam: () => Promise.resolve(true) }, todayISO: () => '2026-10-02' } });
-  // the kit stubs setTimeout to a no-op; the retry's one-second wait must actually elapse (shortened) or it hangs for ever
-  const realSetTimeout = globalThis.setTimeout;
-  g.setTimeout = (f, ms) => (ms === 1100 ? realSetTimeout(f, 20) : 0);
   const { C, draw } = await compiled('DashMembers', g, ['rotateChurchKeys', 'takeOffEveryTeam', { src: SCH, name: 'publishCareTeamFor' }]);
   let tree = draw(C, {});
   await press(tree, /Remove \/ block this member/, { which: 0 });
   tree = draw(C, {});
   await press(tree, /Confirm — bans them/);
-  await new Promise(r => setTimeout(r, 400));   // covers the one retry's second-boundary wait
+  await new Promise(r => setTimeout(r, 100));
   return reads(draw(C, {}));
 }
 // the console holds the rota as the subscription handed it over (ts = the relay event's created_at)
@@ -148,30 +148,12 @@ test('THE DEFECT: another steward saved the rota after this console read it - Bl
   assert.match(said, /could not take them off a future rota someone else changed/, 'the skip was silent: ' + said.slice(0, 300));
 });
 
-test('a same-second refusal is retried ONCE after the second boundary and then lands (the clock, not the steward)', async () => {
+test('a FAILED write says the save failed and does NOT blame another steward (real engine, relay refuses)', async () => {
   const eng = engine({ s: T + 10 });
   const rotas = held(eng, T, { 'w::r1': SLOT_B, 'w::r2': SLOT_C });
-  let n = 0;
-  const said = await block({ eng, rotas: rotas(), publishRota: async (r) => { n++; return n === 1 ? null : eng.S.publishRota(r); } });
-  assert.equal(n, 2, 'attempts: ' + n);
-  assert.equal(eng.sent.length, 1);
-  assert.doesNotMatch(said, /could not take them off/);
-});
-
-test('a SECOND refusal is real and still surfaces', async () => {
-  const eng = engine({ s: T + 10 });
-  const rotas = held(eng, T, { 'w::r1': SLOT_B, 'w::r2': SLOT_C });
-  let n = 0;
-  const said = await block({ eng, rotas: rotas(), publishRota: async () => { n++; return null; } });
-  assert.equal(n, 2, 'exactly one retry: ' + n);
-  assert.match(said, /could not take them off a future rota\b/, 'a refused write was swallowed: ' + said.slice(0, 300));
-});
-
-test('a co-steward\'s copy arriving during the retry wait stops the retry - it is not overwritten', async () => {
-  const eng = engine({ s: T + 10 });
-  const rotas = held(eng, T, { 'w::r1': SLOT_B, 'w::r2': SLOT_C });
-  let n = 0;
-  const said = await block({ eng, rotas: rotas(), publishRota: async () => { n++; theirs(eng); return null; } });   // their save is what made ours tie
-  assert.equal(n, 1, 'retried over a copy that arrived during the wait: ' + n);
-  assert.match(said, /someone else changed/);
+  eng.gate.refuse = true;
+  const said = await block({ eng, rotas: rotas() });
+  assert.equal(eng.sent.length, 1, 'exactly one attempt, no retry: ' + eng.sent.length);
+  assert.match(said, /could not take them off a future rota \(the save failed/, 'a refused write was swallowed: ' + said.slice(0, 300));
+  assert.doesNotMatch(said, /someone else changed/, 'blamed a co-steward for our own failed save: ' + said.slice(0, 300));
 });

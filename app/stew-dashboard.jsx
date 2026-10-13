@@ -6792,20 +6792,14 @@ function takeOffEveryTeam({ pk, rosters, rotas, services, careTeamId }) {
     // FRESHNESS (concurrent-save guard): `ro` is the copy this console read EARLIER. The relay keeps only the newest
     // copy, so rewriting from an older one erases whatever another steward (or this steward's other screen) saved
     // since. Checked at write time against the newest stamp the engine has seen; a changed rota is skipped and named,
-    // never overwritten. A refused write (a same-second tie with a co-steward is the clock, not the steward) gets
-    // ONE retry after the second boundary - as reseatMember's w() - but only if the rota STILL has not changed by then,
-    // because the wait is also what lets a co-steward's copy arrive.
-    const changed = () => !!S.rotaChangedSince && S.rotaChangedSince(ro.service, ro.ts);
+    // never overwritten. ONE attempt, no retry: publishRota stamps the rota (_monotonic) before it writes, so after a
+    // failed attempt this same check would read our own stamp as "someone else changed it" - and, with no relay echo to
+    // refresh ro.ts, would skip every later Block on this rota. A failed write is reported as a failed save instead.
     jobs.push((async () => {
-      if (changed()) { failed.push('a future rota someone else changed a moment ago'); return; }
-      let ok = await S.publishRota({ service: ro.service, published: !!ro.published, assign: next });
-      if (ok == null || ok === false) {
-        await new Promise(r => setTimeout(r, 1100));
-        if (changed()) { failed.push('a future rota someone else changed a moment ago'); return; }
-        ok = await S.publishRota({ service: ro.service, published: !!ro.published, assign: next });
-      }
-      if (ok == null || ok === false) failed.push('a future rota');
-    })().catch(() => { failed.push('a future rota'); }));
+      if (S.rotaChangedSince && S.rotaChangedSince(ro.service, ro.ts)) { failed.push('a future rota someone else changed a moment ago'); return; }
+      const ok = await S.publishRota({ service: ro.service, published: !!ro.published, assign: next });
+      if (ok == null || ok === false) failed.push('a future rota (the save failed \u2014 try again)');
+    })().catch(() => { failed.push('a future rota (the save failed \u2014 try again)'); }));
   }
   return Promise.all(jobs).then(() => [...new Set(failed)]);
 }
