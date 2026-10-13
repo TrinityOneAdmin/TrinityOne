@@ -37,6 +37,7 @@
     if (wild && wild._tomb && (wild.ts || 0) >= (rec.ts || 0)) return false;
     if (had && had._tomb && (had.ts || 0) >= (rec.ts || 0)) return false;
     if (had && (had.ts || 0) > (rec.ts || 0)) return false;
+    if (had && rec._locked && !had._locked && !had._tomb && (had.ts || 0) >= (rec.ts || 0)) return false;
     vers.set(by, rec);
     const win = _reduceVersions(vers, byId, id, trusted);
     return !!win && win._by === by;
@@ -84,6 +85,7 @@
       }
     }
     const DEFAULTS = { enabled: false, visibility: "all", openedBy: "steward", adminGroupId: "" };
+    let _careTeamSeen = "";
     function subscribeSettings(cb) {
       if (!S() || !S().subscribeMany || !activeChurch()) {
         cb({ ...DEFAULTS });
@@ -116,6 +118,7 @@
                 openedBy: doc.openedBy === "member" ? "member" : "steward",
                 adminGroupId: String(doc.adminGroupId || "")
               };
+              _careTeamSeen = seen.doc.adminGroupId;
               emit();
             } catch (err) {
             }
@@ -383,8 +386,10 @@
       _careTeamWait.cp = "";
       _careTeamWait.tries = 0;
     }
-    async function publishCareTeam(memberPubs) {
+    async function publishCareTeam(memberPubs, opts) {
       if (!S() || !S().publishSigned || !S().churchPub) return null;
+      const team = opts && opts.team || _careTeamSeen;
+      if (!(opts && opts.fromList) && team && S().rosterLocked && S().rosterLocked(team)) return false;
       if (S().actingChurch) return null;
       const cp = S().churchPub;
       const m = S().readMinors ? await S().readMinors() : null;
@@ -393,6 +398,7 @@
         _careTeamWait.pubs = memberPubs || [];
         _careTeamWait.cp = cp;
         _careTeamWait.tries = 0;
+        _careTeamWait.opts = opts;
         if (!_careTeamWait.timer) {
           const again = () => {
             _careTeamWait.timer = 0;
@@ -403,7 +409,7 @@
               return;
             }
             const tries = _careTeamWait.tries;
-            publishCareTeam(pending).then((r) => {
+            publishCareTeam(pending, _careTeamWait.opts).then((r) => {
               _careTeamWait.tries = tries;
               if (r === false && _careTeamWait.pubs === pending && !_careTeamWait.timer) _careTeamWait.timer = setTimeout(again, 2e4);
             }, () => {
@@ -459,7 +465,7 @@
       if (!m || !m.known) return false;
       const minors = new Set(m.list);
       if (!pubs.some((p) => minors.has(p))) return null;
-      return publishCareTeam(pubs.filter((p) => p !== cp));
+      return publishCareTeam(pubs.filter((p) => p !== cp), { fromList: true });
     }
     function subscribeCareRequests(cb) {
       if (!S() || !S().subscribeMany || !S().churchPub) {

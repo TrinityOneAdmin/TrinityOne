@@ -192,7 +192,7 @@ function liftReadMinors({ entries = mainEntries, actingChurch = '', pubK = cp, c
 }
 function liftMeals(name, sig, extra = {}) {
   const body = fnBody(MEALS, sig, name);
-  const names = ['S', 'now', 'CARETEAM_D', 'CAREREQ_D', 'CARECHAT_D', 'NET', '_careTeamWait', 'setTimeout', 'clearTimeout', '_monotonicM', 'publishCareTeam', 'dropPendingCareTeam', ...Object.keys(extra)];
+  const names = ['S', 'now', 'CARETEAM_D', 'CAREREQ_D', 'CARECHAT_D', 'NET', '_careTeamWait', '_careTeamSeen', 'setTimeout', 'clearTimeout', '_monotonicM', 'publishCareTeam', 'dropPendingCareTeam', ...Object.keys(extra)];
   return (vals) => new Function(...names, 'return ' + body + ';')(...names.map(n => vals[n]));
 }
 const S0 = (over = {}) => {
@@ -222,7 +222,7 @@ test('readMinors (shipped) reads the children list from the relay, as known', as
 
 test('publishCareTeam (shipped) with the REAL children read writes the care list to the relay WITHOUT the child', async () => {
   const S = S0(); let pc;
-  pc = liftMeals('publishCareTeam', 'async function publishCareTeam(memberPubs) {')({ S: () => S, now, CARETEAM_D: 'trinityone/careteam:', NET: 'trinityone', _careTeamWait: { pubs: null, tries: 0, timer: 0 }, setTimeout: fakeTimers(), get publishCareTeam() { return pc; } });
+  pc = liftMeals('publishCareTeam', 'async function publishCareTeam(memberPubs, opts) {')({ S: () => S, now, CARETEAM_D: 'trinityone/careteam:', NET: 'trinityone', _careTeamWait: { pubs: null, tries: 0, timer: 0 }, setTimeout: fakeTimers(), get publishCareTeam() { return pc; } });
   const r = await pc([CH.pub, AD.pub]);
   assert.equal(r, true, 'publishCareTeam did not publish');
   const pubs = await relayCareTeam();
@@ -236,7 +236,7 @@ test('publishCareTeam: if the children list cannot be read it publishes NOTHING,
   const S = S0({ readMinors: liftReadMinors({ entries: () => ({ [WS_URL]: { ws: anon, ok: false } }) }) });
   const before = await relayCareTeam();
   const timers = fakeTimers(); let pc;
-  pc = liftMeals('publishCareTeam', 'async function publishCareTeam(memberPubs) {')({ S: () => S, now, CARETEAM_D: 'trinityone/careteam:', NET: 'trinityone', _careTeamWait: { pubs: null, tries: 0, timer: 0 }, setTimeout: timers, get publishCareTeam() { return pc; } });
+  pc = liftMeals('publishCareTeam', 'async function publishCareTeam(memberPubs, opts) {')({ S: () => S, now, CARETEAM_D: 'trinityone/careteam:', NET: 'trinityone', _careTeamWait: { pubs: null, tries: 0, timer: 0 }, setTimeout: timers, get publishCareTeam() { return pc; } });
   const r = await pc([CH.pub, AD.pub, M.pub]);
   assert.equal(r, false, 'a care list published (or claimed) while the children list was unknown');
   await sleep(300);
@@ -253,7 +253,7 @@ test('refreshCareTeam (shipped): a child marked AFTER joining the care list is t
   assert.ok((await relayCareTeam()).includes(CH.pub), 'setup: the care list should name the child here');
   const S = S0(); let pc;
   const vals = { S: () => S, now, CARETEAM_D: 'trinityone/careteam:', NET: 'trinityone', _careTeamWait: { pubs: null, tries: 0, timer: 0 }, setTimeout: fakeTimers(), get publishCareTeam() { return pc; } };
-  pc = liftMeals('publishCareTeam', 'async function publishCareTeam(memberPubs) {')(vals);
+  pc = liftMeals('publishCareTeam', 'async function publishCareTeam(memberPubs, opts) {')(vals);
   const refresh = liftMeals('refreshCareTeam', 'async function refreshCareTeam() {')(vals);
   await refresh();
   const pubs = await relayCareTeam();
@@ -287,7 +287,7 @@ test('Steward.setMinors (shipped): marking a care-team member as a child takes t
   assert.ok((await relayCareTeam()).includes(N2.pub), 'setup: N2 should be on the care list');
   const S = S0(); let pc;
   const vals = { S: () => S, now, CARETEAM_D: 'trinityone/careteam:', NET: 'trinityone', _careTeamWait: { pubs: null, tries: 0, timer: 0 }, setTimeout: fakeTimers(), get publishCareTeam() { return pc; } };
-  pc = liftMeals('publishCareTeam', 'async function publishCareTeam(memberPubs) {')(vals);
+  pc = liftMeals('publishCareTeam', 'async function publishCareTeam(memberPubs, opts) {')(vals);
   const refreshCareTeam = liftMeals('refreshCareTeam', 'async function refreshCareTeam() {')(vals);
   let refreshed = null;
   const win = { StewardMeals: { refreshCareTeam: () => (refreshed = refreshCareTeam()) } };
@@ -351,7 +351,7 @@ test('readMinors: with two relays, one logged in and one that withheld the list 
     const S = S0({ readMinors: liftReadMinors({ entries }) });
     const before = await relayCareTeam();
     const w = { pubs: null, cp: '', tries: 0, timer: 0 }; let pc;
-    pc = liftMeals('publishCareTeam', 'async function publishCareTeam(memberPubs) {')({ S: () => S, now, CARETEAM_D: 'trinityone/careteam:', NET: 'trinityone', _careTeamWait: w, setTimeout: fakeTimers(), get publishCareTeam() { return pc; } });
+    pc = liftMeals('publishCareTeam', 'async function publishCareTeam(memberPubs, opts) {')({ S: () => S, now, CARETEAM_D: 'trinityone/careteam:', NET: 'trinityone', _careTeamWait: w, setTimeout: fakeTimers(), get publishCareTeam() { return pc; } });
     assert.equal(await pc([CH.pub, AD.pub]), false, 'the care list was published on a children list one relay withheld');
     await sleep(200);
     assert.deepEqual(await relayCareTeam(), before, 'the relay’s care list changed');
@@ -368,7 +368,7 @@ test('publishCareTeam: a retry asked for one church never publishes after the co
   const timers = fakeTimers(); let pc, drop;
   const vals = { S: () => S, now, CARETEAM_D: 'trinityone/careteam:', NET: 'trinityone', _careTeamWait: w, setTimeout: timers, clearTimeout: () => {}, get publishCareTeam() { return pc; }, get dropPendingCareTeam() { return drop; } };
   drop = liftMeals('dropPendingCareTeam', 'function dropPendingCareTeam() {')(vals);   // first: publishCareTeam's retry calls it
-  pc = liftMeals('publishCareTeam', 'async function publishCareTeam(memberPubs) {')(vals);
+  pc = liftMeals('publishCareTeam', 'async function publishCareTeam(memberPubs, opts) {')(vals);
   assert.equal(await pc([AD.pub, M.pub]), false, 'setup: an unknown children list must not publish');
   assert.equal(timers.pending.length, 1, 'setup: a retry should be waiting');
   // a key restore: the same console is now church OTHER, and its children list now reads fine
@@ -421,7 +421,7 @@ const DOWN = 'ws://127.0.0.1:1/relay';   // nothing listens: nostr-tools fails t
 const LAST = 'trinityone.steward.minorslast.' + cp;
 function pcWith(readMinors) {
   const S = S0({ readMinors }); let pc;
-  pc = liftMeals('publishCareTeam', 'async function publishCareTeam(memberPubs) {')({ S: () => S, now, CARETEAM_D: 'trinityone/careteam:', NET: 'trinityone', _careTeamWait: { pubs: null, cp: '', tries: 0, timer: 0 }, setTimeout: fakeTimers(), get publishCareTeam() { return pc; } });
+  pc = liftMeals('publishCareTeam', 'async function publishCareTeam(memberPubs, opts) {')({ S: () => S, now, CARETEAM_D: 'trinityone/careteam:', NET: 'trinityone', _careTeamWait: { pubs: null, cp: '', tries: 0, timer: 0 }, setTimeout: fakeTimers(), get publishCareTeam() { return pc; } });
   return pc;
 }
 

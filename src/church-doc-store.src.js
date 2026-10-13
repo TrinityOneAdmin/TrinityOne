@@ -117,6 +117,13 @@ export function _absorbById(versions, byId, id, rec, trusted) {
   // edit it removes is ordinary.
   if (had && had._tomb && (had.ts || 0) >= (rec.ts || 0)) return false;
   if (had && (had.ts || 0) > (rec.ts || 0)) return false;        // an author's own older copy, replayed late
+  // A COPY WE CANNOT OPEN NEVER REPLACES ONE WE DID, AT THE SAME SECOND OR OLDER (the roster wipe, 2026-10-12).
+  // It is the SAME version re-delivered — from a second relay, or after a cache paint — before the name key landed;
+  // letting it win turned an opened team into an empty one on screen. A NEWER locked copy still wins: it is a real
+  // later edit, and showing the stale opened one would invite a save over it. `_locked` is set only by the
+  // sealed-document readers: _subAddr and the group-events reader (src/steward.src.js), and the member app's
+  // church-document reader (src/fellowship.src.js, ~6045).
+  if (had && rec._locked && !had._locked && !had._tomb && (had.ts || 0) >= (rec.ts || 0)) return false;
   vers.set(by, rec);
   const win = _reduceVersions(vers, byId, id, trusted);
   return !!win && win._by === by;                                 // did THIS write become what people see?

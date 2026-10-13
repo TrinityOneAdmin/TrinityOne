@@ -142,6 +142,8 @@ export async function openNewChurch({ gateway, wizard = 'skip', logger = true, n
   });
   const send = (method, params = {}) => new Promise(r => { const i = ++id; pend.set(i, r); cws.send(JSON.stringify({ id: i, method, params })); });
   await send('Runtime.enable'); await send('Network.enable');
+  // raw CDP, for a test that must change the page itself (e.g. a script injected before every load). Additive.
+  s.send = send;
   s.ev = async (expression) => {
     const rr = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
     if (rr?.result?.exceptionDetails) throw new Error('in-page: ' + JSON.stringify(rr.result.exceptionDetails.exception || rr.result.exceptionDetails).slice(0, 300));

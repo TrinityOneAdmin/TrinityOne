@@ -65,6 +65,7 @@ function liftConsole({ church, nameKey }) {
     _nameKeyRing: nameKey ? [nameKey] : [],
     _unhex: unhex, encrypt2: nip44.encrypt, decrypt3: nip44.decrypt,
     feChurch: (t) => finalizeEvent(t, church.sk), now, captured: [], _reqSeq: 0, _svcSeq: 0,
+    _addrLocked: () => false, _saveFailed: () => null, _lastSaveFail: '',   // fix/locked-roster-guard: nothing locked here
     publish: async (e) => { S.captured.push(e); return true; },
   };
   const sealFn = fnBody(STEW, 'function _sealChurchDoc(', '_sealChurchDoc');

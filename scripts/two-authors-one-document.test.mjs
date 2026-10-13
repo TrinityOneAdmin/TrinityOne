@@ -249,7 +249,7 @@ test('EVERY multi-author church document goes through the store — not just the
     assert.match(body, /versions\d*\s*=\s*(\/\* @__PURE__ \*\/\s*)?new Map\(\)/, name + ' keeps only the winner, so a delete blanks it');
     assert.match(body, /_forgetById\(versions\d*, byId/, name + ' still honours a delete by id alone');
   }
-  const con = stripComments(fnBody(S, '_subAddr(prefix, map, onItems)', '_subAddr'));
+  const con = stripComments(fnBody(S, '_subAddr(prefix, map, onItems, lockedShape)', '_subAddr'));
   assert.ok(!/byId\.delete\(/.test(con), 'the console still honours a delete by id, with no author check');
   assert.match(con, /_absorbById\(versions\d*, byId/, 'the console still decides by arrival order');
 });

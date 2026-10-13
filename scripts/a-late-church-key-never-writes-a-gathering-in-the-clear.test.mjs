@@ -58,6 +58,8 @@ function rig({ ring = [], waitMs = 250, keyArrivesAfterMs = 0, relayAccepts = tr
     NET: 'trinityone',
     now: () => 1788573385,
     feChurch: (e) => e,
+    // the locked-document refusal (fix/locked-roster-guard): nothing is locked here, and the reason is only noted
+    _addrLocked: () => false, _saveFailed: () => null, _lastSaveFail: '',
     publish: (e) => { sent.push(e); return Promise.resolve(relayAccepts); },   // publish() resolves FALSE on total failure — it does not throw
   };
   if (keyArrivesAfterMs) setTimeout(() => { scope._nameKeyRing.push(KEY); }, keyArrivesAfterMs);
@@ -126,7 +128,7 @@ test('every calendar publisher refuses, not just the one driven above', () => {
     'async publishRoom(room)', 'async publishBooking(b)', 'async publishRota(rota)', 'async publishEvent(ev, asPub)']) {
     const body = stripComments(fnBody(STEW, sig, sig));
     assert.match(body, /await _sealChurchDocReady\(/, `${sig} does not seal through the ready-sealer`);
-    assert.match(body, /if \(content == null\) return null;/,
+    assert.match(body, /if \(content == null\) return (null|_saveFailed\('nokey'\));/,
       `${sig} seals but does not bail when the key never arrived — it will publish content=null`);
   }
 });

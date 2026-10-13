@@ -177,10 +177,10 @@ test('saving a roster twice in a second is not possible', () => {
   // replaceable documents are newest-wins TO THE SECOND — so the second write is silently refused, and it can
   // interleave with the group-key rotation.
   const save = stripComments(fnBody(SCHEDULE, 'const save = async () => {'));
-  assert.match(save, /if \(saving\) return;/, 'a second click must do nothing');
+  assert.match(save, /if \(saving( \|\| locked)?\) return;/, 'a second click must do nothing');
   assert.match(save, /setSaving\(true\)/);
   const btn = stripComments(SCHEDULE.slice(SCHEDULE.indexOf('Save roster') - 400, SCHEDULE.indexOf('Save roster') + 40));
-  assert.match(btn, /disabled=\{saving\}/, 'and the button must say so, or the steward has no reason not to click again');
+  assert.match(btn, /disabled=\{saving( \|\| locked)?\}/, 'and the button must say so, or the steward has no reason not to click again');
 });
 
 test('the roster editor keeps the invite allowlist in step', () => {
