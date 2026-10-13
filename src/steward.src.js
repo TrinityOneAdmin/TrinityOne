@@ -2913,6 +2913,37 @@ function _keyWaitNote(kind) {
   if (!hosts.length) return '';
   return hosts.length === 1 ? hosts[0] + ' isn’t answering' : hosts.join(' and ') + ' aren’t answering';
 }
+// WHAT STOPS THE NAME KEY'S FIRST MINT (2026-10-13; the bug on main since 267fa08). Never act on missing data: a church
+// gets its first name key only once every relay it might keep one on has been asked. It may not while
+//   - `unproved`: a candidate (relaysRaw()) has no verdict from the gate yet — not proved, its proof not finished; or
+//   - `unread`: a PROVED relay was not in the name-key read that settled (proved since; the read re-opens on admission,
+//     and its settle signals the enrolment — so only `unproved` needs _nameKeyMintLater).
+// A candidate whose proof FAILED is a verdict and does not hold it — the same trade the care and sermon reads make for a
+// relay that is down, without which a church whose shared hosts are unreachable could never get a name key.
+// READER: _ensureNameKeyLocked (first mint only).
+// (Placed above _keysReadSignal on purpose: scripts/test-slice.mjs liftKeyRead() lifts _keyReadEpoch … _keysReadSignal, so every
+// harness that runs the shipped key reads gets these too.)
+function _nameKeyMintBlockers(cp) {
+  let unproved = [];
+  try { unproved = _gate.unsettled(relaysRaw(), pub); } catch (e) { unproved = []; }
+  const w = _keyReadWaiting.get('name');
+  const read = (w && w.settled && w.cp === cp && w.epoch === _keyReadEpoch) ? w.urls : [];
+  let unread = [];
+  try { unread = relays().filter(u => !read.includes(u)); } catch (e) { unread = ['?']; }
+  return { unproved, unread };
+}
+// …and asks again once the gate's proofs finish. A proof that lands re-opens the read (the gate's onChange), and its
+// settle signals; one that fails changes nothing the read can see, so this is what re-runs the enrolment then.
+let _nameMintWaiting = null;
+function _nameKeyMintLater(cp) {
+  if (_nameMintWaiting) return;
+  const ep = _keyReadEpoch;
+  let p; try { p = _gate.whenSettled(relaysRaw(), pub); } catch (e) { p = Promise.resolve(); }
+  _nameMintWaiting = Promise.resolve(p).then(() => {
+    _nameMintWaiting = null;
+    if (ep === _keyReadEpoch && cp === (actingChurch || pub)) setTimeout(() => _keysReadSignal('name'), 1500);
+  }, () => { _nameMintWaiting = null; });
+}
 // Tell the dashboard a key read has settled, so the enrolment effect re-runs — "mint on a signal, not on a
 // stopwatch", as the capability mint does. Nothing else re-runs it when the answer arrives.
 function _keysReadSignal(kind) {
@@ -8800,6 +8831,10 @@ window.Steward = {
     // null — block() treats null as "the rotation did not happen" and warns (audit of 3bc8905) — and not a
     // publish: a rotate with no ring is the bug above.
     if (opts.rotate && !ring.length) return Promise.resolve({ rotated: false, reason: 'no name key yet' });
+    // A FIRST KEY needs an answer from EVERY relay the church might keep it on (2026-10-13). `_nameKeyChecked` says only
+    // that the relays already PROVED on this device answered — and a cold console proves them one at a time, so the
+    // first one proved, if empty, decided "this church has no name key" and minted over the real one on the next relay.
+    if (!ring.length) { const b = _nameKeyMintBlockers(cp); if (b.unproved.length) _nameKeyMintLater(cp); if (b.unproved.length || b.unread.length) return Promise.resolve(null); }
     if (opts.rotate || !ring.length) ring = [_hex(crypto.getRandomValues(new Uint8Array(32))), ...ring].slice(0, NAME_RING_MAX);
     // (3) Include the acting church and the steward roster, not just this device. Omitting `cp` is why a
     // delegated console could never read the envelope in the first place.
@@ -8867,8 +8902,10 @@ window.Steward = {
     // block() reports, so the steward is told to try again rather than believing the key was taken away.
     if (_nameKeyDocKeys !== _dk0 || _nameKeyRing !== _r0 || !_stillOn(cp, ep0)) return opts.rotate ? false : null;
     const at = now();
-    const out = await publish(feChurch({ kind: 30078, created_at: at, tags: [['d', NAMEKEY_D + cp], ['t', NET]], content: JSON.stringify({ rev: ring.length, keys }) }));
+    const _nev = feChurch({ kind: 30078, created_at: at, tags: [['d', NAMEKEY_D + cp], ['t', NET]], content: JSON.stringify({ rev: ring.length, keys }) });
+    const out = await publish(_nev);
     if (out === false) return false;
+    if (_stillOn(cp, ep0) && churchPub && keys[churchPub]) { try { _keyEnvSave('name', cp, _nev, churchPub, keys[churchPub]); } catch (x) {} }   // see _keyEnvSave
     // It landed on `cp`'s envelope (captured). If the console has moved on, that ring is not the current church's:
     // adopt nothing — it is read back from the relay on return. A Block's rotation still DID happen, so it says so.
     if (!_stillOn(cp, ep0)) return out;
@@ -8884,8 +8921,7 @@ window.Steward = {
     // The handler checks the church is still the one this read was opened for — it outlives a switch by a beat,
     // and church A's envelope is authored by A, who passes church B's roster check when A stewards B. Without
     // this, B's console took A's ring (2026-10-01, audit5).
-    return _openKeyRead(cp, [{ kinds: [30078], '#d': [NAMEKEY_D + cp] }],
-      (e) => {
+    const onEnv = (e) => {
         if (cp !== (actingChurch || pub) || ((e.tags || []).find(t => t[0] === 'd') || [])[1] !== NAMEKEY_D + cp) return;
         if (!_byChurchOrSteward(e)) return;   // church key or a CURRENT roster steward, same rule as every other envelope
         if (_authFuture(e) || (e.created_at || 0) < _nameKeyAt) return;   // future-dated (a wrong clock: the shared guard) or an older copy from a relay not caught up — see _nameKeyAt
@@ -8893,7 +8929,9 @@ window.Steward = {
           const env = JSON.parse(e.content || '{}');
           // Record the recipient map even when we cannot open our own copy: "an envelope exists" is exactly
           // what stops this console minting a second key over it.
-          if (env.keys && typeof env.keys === 'object') { _nameKeyDocKeys = env.keys; _nameKeyChecked = true; _nameKeyAt = e.created_at || 0; }
+          // A copy RESTORED from this device is not a relay's answer: it does not open the gate (round 3d — nothing runs
+          // from what this device last held until the relays have answered).
+          if (env.keys && typeof env.keys === 'object') { _nameKeyDocKeys = env.keys; if (!e.restored) _nameKeyChecked = true; _nameKeyAt = e.created_at || 0; }
           const mine = env.keys && churchPub && env.keys[churchPub];
           if (!mine || !churchSk) return;
           const plain = nip44d(mine, nip44ck(churchSk, e.pubkey));
@@ -8902,16 +8940,21 @@ window.Steward = {
             const had = _nameKeyReady();
             _nameKeyRing = r.filter(x => typeof x === 'string' && /^[0-9a-f]+$/i.test(x));
             _nameKeyRingChanged();
+            if (!e.restored) { try { _keyEnvSave('name', cp, e, churchPub, mine); } catch (x2) {} }   // a console that has seen the key never concludes there is none
             // THE KEY LANDING IS NEWS TO THE WEBSITE MIRROR. Nothing else tells it: _webSync's own 2 s retry
             // was the only thing that ever noticed, which is why that retry had to run for ever or the feed
             // would sit empty behind a key that had since arrived. Now the arrival itself asks for a sync.
             if (!had && _nameKeyReady()) _webQueueSync();
           }
         } catch (x) {}
-      },
+      };
+    try { const r = _keyEnvRestore('name', cp, NAMEKEY_D); if (r) onEnv(r); } catch (x) {}   // what this console last accepted comes first — see _keyEnvSave
+    return _openKeyRead(cp, [{ kinds: [30078], '#d': [NAMEKEY_D + cp] }], onEnv,
       // the relay answered — a church with no envelope yet may now mint its first, but ONLY on a trustworthy
       // answer from every relay (_openKeyRead). This is the gate the audit of e6a2e02 watched open on our own close.
-      () => { if (!_nameKeyChecked) { _nameKeyChecked = true; _keysReadSignal('name'); } try { _runPendingRotations(); } catch (e) {} }, 'name');
+      // SIGNALLED ON EVERY SETTLE, not only the first: a read re-opened over a relay proved since (a cold console) is
+      // what the first-mint gate (_nameKeyMintBlockers) waits for, and only this tells the enrolment to ask again.
+      () => { _nameKeyChecked = true; _keysReadSignal('name'); try { _runPendingRotations(); } catch (e) {} }, 'name');
   },
   // open a member's sealed name. Tries every key in the ring so a rotation never hides older names.
   openMemberName(content, authorPub) {

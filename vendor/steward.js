@@ -6783,6 +6783,30 @@
         const t = nowSec();
         return (Array.isArray(list) ? list : []).filter((u) => u && !admitCached(map, u, cp, t));
       },
+      // THE ADDRESSES THIS GATE HAS NO VERDICT ON YET: not admitted, and either never tried or with a proof still running.
+      // A failed proof IS a verdict (the box was asked and did not prove), so a down relay does not hold anything for ever.
+      // READER: the name key's FIRST mint (_nameKeyMintBlockers, src/steward.src.js) — a relay not yet proved may be the
+      // one that holds the church's key, and "nobody has a key" decided before it was asked is a guess.
+      unsettled(list, cp) {
+        const t = nowSec();
+        return (Array.isArray(list) ? list : []).filter((u) => {
+          if (!u || admitCached(map, u, cp, t)) return false;
+          const k = _relayKey(u);
+          return inflight.has(k) || !attempted.has(k);
+        });
+      },
+      // Resolves once every proof running for these addresses has finished (starting any not yet tried). Never rejects.
+      async whenSettled(list, cp) {
+        try {
+          this.admit(list, cp);
+        } catch {
+        }
+        const ps = (Array.isArray(list) ? list : []).map((u) => inflight.get(_relayKey(u))).filter(Boolean);
+        try {
+          await Promise.all(ps);
+        } catch {
+        }
+      },
       forget(url) {
         const k = _relayKey(url);
         if (map.delete(k)) {
@@ -17338,6 +17362,40 @@ zoo`.split("\n");
     if (!hosts.length) return "";
     return hosts.length === 1 ? hosts[0] + " isn\u2019t answering" : hosts.join(" and ") + " aren\u2019t answering";
   }
+  function _nameKeyMintBlockers(cp) {
+    let unproved = [];
+    try {
+      unproved = _gate.unsettled(relaysRaw(), pub);
+    } catch (e) {
+      unproved = [];
+    }
+    const w = _keyReadWaiting.get("name");
+    const read = w && w.settled && w.cp === cp && w.epoch === _keyReadEpoch ? w.urls : [];
+    let unread = [];
+    try {
+      unread = relays().filter((u) => !read.includes(u));
+    } catch (e) {
+      unread = ["?"];
+    }
+    return { unproved, unread };
+  }
+  var _nameMintWaiting = null;
+  function _nameKeyMintLater(cp) {
+    if (_nameMintWaiting) return;
+    const ep = _keyReadEpoch;
+    let p;
+    try {
+      p = _gate.whenSettled(relaysRaw(), pub);
+    } catch (e) {
+      p = Promise.resolve();
+    }
+    _nameMintWaiting = Promise.resolve(p).then(() => {
+      _nameMintWaiting = null;
+      if (ep === _keyReadEpoch && cp === (actingChurch || pub)) setTimeout(() => _keysReadSignal("name"), 1500);
+    }, () => {
+      _nameMintWaiting = null;
+    });
+  }
   function _keysReadSignal(kind) {
     try {
       if (typeof window !== "undefined" && window.dispatchEvent) window.dispatchEvent(new CustomEvent("steward-keys-read", { detail: { kind } }));
@@ -22307,6 +22365,11 @@ zoo`.split("\n");
       let ring = _nameKeyRing.slice();
       if (!ring.length && _nameKeyDocKeys) return Promise.resolve(null);
       if (opts.rotate && !ring.length) return Promise.resolve({ rotated: false, reason: "no name key yet" });
+      if (!ring.length) {
+        const b = _nameKeyMintBlockers(cp);
+        if (b.unproved.length) _nameKeyMintLater(cp);
+        if (b.unproved.length || b.unread.length) return Promise.resolve(null);
+      }
       if (opts.rotate || !ring.length) ring = [_hex(crypto.getRandomValues(new Uint8Array(32))), ...ring].slice(0, NAME_RING_MAX);
       const want = [...new Set([cp, churchPub, ...memberPubs || [], ...stewardPubs || []].map((p) => toPubHex(p) || p).filter(Boolean))].filter((p) => !_localBlocked.has(String(p).toLowerCase()));
       const have = _nameKeyDocKeys || {};
@@ -22338,8 +22401,15 @@ zoo`.split("\n");
       const keys = await _sealEach(wrapped, recips, (pl, pk) => encrypt2(pl, getConversationKey(churchSk, pk)));
       if (_nameKeyDocKeys !== _dk0 || _nameKeyRing !== _r0 || !_stillOn(cp, ep0)) return opts.rotate ? false : null;
       const at = now();
-      const out = await publish(feChurch({ kind: 30078, created_at: at, tags: [["d", NAMEKEY_D + cp], ["t", NET]], content: JSON.stringify({ rev: ring.length, keys }) }));
+      const _nev = feChurch({ kind: 30078, created_at: at, tags: [["d", NAMEKEY_D + cp], ["t", NET]], content: JSON.stringify({ rev: ring.length, keys }) });
+      const out = await publish(_nev);
       if (out === false) return false;
+      if (_stillOn(cp, ep0) && churchPub && keys[churchPub]) {
+        try {
+          _keyEnvSave("name", cp, _nev, churchPub, keys[churchPub]);
+        } catch (x) {
+        }
+      }
       if (!_stillOn(cp, ep0)) return out;
       _nameKeyRing = ring;
       _nameKeyDocKeys = keys;
@@ -22350,40 +22420,52 @@ zoo`.split("\n");
     // read the envelope back (the church's own copy) so the console can decrypt members' names
     subscribeNameKey() {
       const cp = actingChurch || pub;
+      const onEnv = (e) => {
+        if (cp !== (actingChurch || pub) || ((e.tags || []).find((t) => t[0] === "d") || [])[1] !== NAMEKEY_D + cp) return;
+        if (!_byChurchOrSteward(e)) return;
+        if (_authFuture(e) || (e.created_at || 0) < _nameKeyAt) return;
+        try {
+          const env = JSON.parse(e.content || "{}");
+          if (env.keys && typeof env.keys === "object") {
+            _nameKeyDocKeys = env.keys;
+            if (!e.restored) _nameKeyChecked = true;
+            _nameKeyAt = e.created_at || 0;
+          }
+          const mine = env.keys && churchPub && env.keys[churchPub];
+          if (!mine || !churchSk) return;
+          const plain = decrypt3(mine, getConversationKey(churchSk, e.pubkey));
+          const r = JSON.parse(plain);
+          if (Array.isArray(r)) {
+            const had = _nameKeyReady();
+            _nameKeyRing = r.filter((x) => typeof x === "string" && /^[0-9a-f]+$/i.test(x));
+            _nameKeyRingChanged();
+            if (!e.restored) {
+              try {
+                _keyEnvSave("name", cp, e, churchPub, mine);
+              } catch (x2) {
+              }
+            }
+            if (!had && _nameKeyReady()) _webQueueSync();
+          }
+        } catch (x) {
+        }
+      };
+      try {
+        const r = _keyEnvRestore("name", cp, NAMEKEY_D);
+        if (r) onEnv(r);
+      } catch (x) {
+      }
       return _openKeyRead(
         cp,
         [{ kinds: [30078], "#d": [NAMEKEY_D + cp] }],
-        (e) => {
-          if (cp !== (actingChurch || pub) || ((e.tags || []).find((t) => t[0] === "d") || [])[1] !== NAMEKEY_D + cp) return;
-          if (!_byChurchOrSteward(e)) return;
-          if (_authFuture(e) || (e.created_at || 0) < _nameKeyAt) return;
-          try {
-            const env = JSON.parse(e.content || "{}");
-            if (env.keys && typeof env.keys === "object") {
-              _nameKeyDocKeys = env.keys;
-              _nameKeyChecked = true;
-              _nameKeyAt = e.created_at || 0;
-            }
-            const mine = env.keys && churchPub && env.keys[churchPub];
-            if (!mine || !churchSk) return;
-            const plain = decrypt3(mine, getConversationKey(churchSk, e.pubkey));
-            const r = JSON.parse(plain);
-            if (Array.isArray(r)) {
-              const had = _nameKeyReady();
-              _nameKeyRing = r.filter((x) => typeof x === "string" && /^[0-9a-f]+$/i.test(x));
-              _nameKeyRingChanged();
-              if (!had && _nameKeyReady()) _webQueueSync();
-            }
-          } catch (x) {
-          }
-        },
+        onEnv,
         // the relay answered — a church with no envelope yet may now mint its first, but ONLY on a trustworthy
         // answer from every relay (_openKeyRead). This is the gate the audit of e6a2e02 watched open on our own close.
+        // SIGNALLED ON EVERY SETTLE, not only the first: a read re-opened over a relay proved since (a cold console) is
+        // what the first-mint gate (_nameKeyMintBlockers) waits for, and only this tells the enrolment to ask again.
         () => {
-          if (!_nameKeyChecked) {
-            _nameKeyChecked = true;
-            _keysReadSignal("name");
-          }
+          _nameKeyChecked = true;
+          _keysReadSignal("name");
           try {
             _runPendingRotations();
           } catch (e) {

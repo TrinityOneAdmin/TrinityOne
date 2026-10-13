@@ -497,6 +497,24 @@ export function createRelayGate(deps) {
     },
     // What the gate would drop, so a screen can name the address and say why rather than losing it silently.
     dropped(list, cp) { const t = nowSec(); return (Array.isArray(list) ? list : []).filter(u => u && !admitCached(map, u, cp, t)); },
+    // THE ADDRESSES THIS GATE HAS NO VERDICT ON YET: not admitted, and either never tried or with a proof still running.
+    // A failed proof IS a verdict (the box was asked and did not prove), so a down relay does not hold anything for ever.
+    // READER: the name key's FIRST mint (_nameKeyMintBlockers, src/steward.src.js) — a relay not yet proved may be the
+    // one that holds the church's key, and "nobody has a key" decided before it was asked is a guess.
+    unsettled(list, cp) {
+      const t = nowSec();
+      return (Array.isArray(list) ? list : []).filter(u => {
+        if (!u || admitCached(map, u, cp, t)) return false;
+        const k = _relayKey(u);
+        return inflight.has(k) || !attempted.has(k);
+      });
+    },
+    // Resolves once every proof running for these addresses has finished (starting any not yet tried). Never rejects.
+    async whenSettled(list, cp) {
+      try { this.admit(list, cp); } catch {}
+      const ps = (Array.isArray(list) ? list : []).map(u => inflight.get(_relayKey(u))).filter(Boolean);
+      try { await Promise.all(ps); } catch {}
+    },
     forget(url) { const k = _relayKey(url); if (map.delete(k)) { writeVerified(d.store, map); changed(); } },
     _map: map,
   };
