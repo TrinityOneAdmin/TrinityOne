@@ -5260,7 +5260,7 @@ window.Fellowship = {
       if (!peer) return;
       const prev = byPeer.get(peer);
       if (prev && prev.lastTs >= e.created_at) return;
-      let preview = ''; try { preview = await _dmDecrypt(sk, peer, e.content); } catch (err) { preview = '🔒'; }
+      let preview = ''; try { preview = window.Fellowship._dmUnwrap(await _dmDecrypt(sk, peer, e.content)).text; } catch (err) { preview = '🔒'; }
       byPeer.set(peer, { peer, lastTs: e.created_at, preview: (e.pubkey === pub ? 'You: ' : '') + preview });
       emit();
     };

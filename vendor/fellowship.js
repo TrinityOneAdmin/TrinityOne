@@ -11476,7 +11476,7 @@
         if (prev && prev.lastTs >= e.created_at) return;
         let preview = "";
         try {
-          preview = await _dmDecrypt(sk, peer, e.content);
+          preview = window.Fellowship._dmUnwrap(await _dmDecrypt(sk, peer, e.content)).text;
         } catch (err) {
           preview = "\u{1F512}";
         }
