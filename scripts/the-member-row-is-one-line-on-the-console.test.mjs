@@ -254,7 +254,10 @@ test('at 1280px the join-request card is ONE line, at most 56px, with avatar, na
   await setSize(1280, 900);
   const r = await rowOf(NIA, true);
   assert.ok(r.height <= 56, `the join card is ${r.height}px tall - not one line. Buttons: ${JSON.stringify(r.buttons.map(b => [b.label.slice(0, 14), b.left, b.top]))}`);
-  const ap = has(r, /^Approve/), dc = has(r, /^Decline/);
+  // EXACT, not a prefix. The safeguarding round added a second control on this row whose accessible name
+  // STARTS "Approve as a child: …", so /^Approve/ now matches two buttons. Anchoring on the exact label
+  // keeps this test about the LAYOUT and leaves that label free to say what a steward needs to hear.
+  const ap = has(r, /^Approve$/), dc = has(r, /^Decline/);
   assert.equal(ap.length, 1, 'no Approve on the card: ' + JSON.stringify(r.buttons.map(b => b.label)));
   assert.equal(dc.length, 1, 'no Decline on the card');
   assert.ok(Math.abs(ap[0].top - dc[0].top) <= 4, 'Approve and Decline are on different lines');
