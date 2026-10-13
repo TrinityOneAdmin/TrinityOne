@@ -16357,6 +16357,9 @@ zoo`.split("\n");
     if (a.length === 2) return Math.abs(a[0]) <= Math.abs(a[1]) ? a[0] : a[1];
     return a[a.length - 1 >> 1];
   }
+  function _skewSecFrom(relaySec) {
+    return Math.floor(Date.now() / 1e3 - relaySec);
+  }
   async function measureRelaySkew(preferUrl) {
     if (_skewMeasuring) return _skewFlight || _relaySkewSec;
     _skewMeasuring = true;
@@ -16387,7 +16390,7 @@ zoo`.split("\n");
           proof = null;
         }
         if (proof && Number(proof.at) > 0) {
-          _skewByRelay.set(url, { sec: Math.round(Date.now() / 1e3 - Number(proof.at)), at: Date.now(), proven: true });
+          _skewByRelay.set(url, { sec: _skewSecFrom(Number(proof.at)), at: Date.now(), proven: true });
           continue;
         }
         const base = String(url).replace(/^wss:/i, "https:").replace(/^ws:/i, "http:").replace(/\/relay\/?$/i, "").replace(/\/+$/, "");
@@ -16397,7 +16400,7 @@ zoo`.split("\n");
           if (!r.ok) continue;
           const j = await r.json();
           if (!j || typeof j.now !== "number") continue;
-          _skewByRelay.set(url, { sec: Math.round(Date.now() / 1e3 - j.now), at: Date.now(), proven: false });
+          _skewByRelay.set(url, { sec: _skewSecFrom(j.now), at: Date.now(), proven: false });
         } catch (e) {
         }
       }
@@ -18077,12 +18080,17 @@ zoo`.split("\n");
     };
     const clear = async () => {
       purgeLegacy();
-      if (!isNative()) return;
+      if (!isNative()) return true;
       try {
         const { S } = await secure();
         await S.remove(STAY_SS);
+        const back = await S.get(STAY_SS);
+        if (back == null) return true;
+        console.warn("[steward] stay-open clear did not remove the record");
+        return false;
       } catch (e) {
         console.warn("[steward] stay-open clear failed", e);
+        return false;
       }
     };
     const blobOf = async () => {
@@ -18151,8 +18159,8 @@ zoo`.split("\n");
       async save(pin, on) {
         replayed = true;
         if (!on || !isNative()) {
-          await clear();
-          return !on;
+          const gone = await clear();
+          return !on && gone;
         }
         const blob = await blobOf();
         if (!blob) return false;
@@ -24004,10 +24012,10 @@ zoo`.split("\n");
             }
             return;
           }
-          if (current && current.ts >= e.created_at) return;
+          if (current && (current.ts > e.created_at || current.ts === e.created_at && String(current.id || "") <= String(e.id || ""))) return;
           try {
             const j = JSON.parse(e.content);
-            current = { ref: j.ref || "", note: j.note || "", schedule: Array.isArray(j.schedule) ? j.schedule : j.showAt ? [{ at: j.showAt, ref: j.ref || "", note: j.note || "" }] : [], ts: e.created_at };
+            current = { ref: j.ref || "", note: j.note || "", schedule: Array.isArray(j.schedule) ? j.schedule : j.showAt ? [{ at: j.showAt, ref: j.ref || "", note: j.note || "" }] : [], ts: e.created_at, id: e.id };
             cb(current);
           } catch {
           }

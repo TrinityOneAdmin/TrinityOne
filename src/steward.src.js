@@ -1837,6 +1837,16 @@ function _pickSkew(list) {
   if (a.length === 2) return Math.abs(a[0]) <= Math.abs(a[1]) ? a[0] : a[1];
   return a[(a.length - 1) >> 1];
 }
+// THE ONE PLACE A SKEW IS ROUNDED. A relay stamps WHOLE seconds (its `created_at` is floor of its clock), but
+// our local reading is fractional. local_fractional - relay_floor therefore overstates the true skew by the
+// relay's lost fraction (uniform 0..1, plus a little latency). Math.round turned that into +1 about half
+// the time, and since a stamp is `now() - skew`, an over-stated skew stamps ONE SECOND EARLY - measured on
+// 151 of 300 samples with two clocks in agreement. On a same-second tie the lowest event id wins, so an early
+// stamp makes a genuinely newer write look older. Math.floor errs the other way: it can under-state the skew
+// by at most a second (a stamp at worst 1s late, which is inside every future gate), and it never stamps early.
+// A SLOW console measures a NEGATIVE skew; floor rounds that further negative, pushing the stamp forward -
+// the same safe direction. Both measurement sites use this, so the sign convention above is untouched.
+function _skewSecFrom(relaySec) { return Math.floor(Date.now() / 1000 - relaySec); }
 // Best effort, always. Never throws, never blocks a write, and returns the last known figure when nothing
 // answers — a church on a thin pipe is the first audience, not the edge case.
 async function measureRelaySkew(preferUrl) {
@@ -1864,7 +1874,7 @@ async function measureRelaySkew(preferUrl) {
       let proof = null;
       try { proof = await verifyRelayIdentity(url); } catch (e) { proof = null; }
       if (proof && Number(proof.at) > 0) {
-        _skewByRelay.set(url, { sec: Math.round(Date.now() / 1000 - Number(proof.at)), at: Date.now(), proven: true });
+        _skewByRelay.set(url, { sec: _skewSecFrom(Number(proof.at)), at: Date.now(), proven: true });
         continue;
       }
       // FALLBACK, AND IT IS MARKED AS ONE. A relay too old to carry `at` on its proof can still be read from
@@ -1878,7 +1888,7 @@ async function measureRelaySkew(preferUrl) {
         if (!r.ok) continue;
         const j = await r.json();
         if (!j || typeof j.now !== 'number') continue;   // too old to say — ask the next
-        _skewByRelay.set(url, { sec: Math.round(Date.now() / 1000 - j.now), at: Date.now(), proven: false });
+        _skewByRelay.set(url, { sec: _skewSecFrom(j.now), at: Date.now(), proven: false });
       } catch (e) { /* unreachable or not JSON — try the next */ }
     }
     const all = [..._skewByRelay.values()];
@@ -3924,10 +3934,20 @@ function makeStayOpen(deps) {
   const { secure, isNative, lsRemove, now, readBlob, deriveBits, pubOf } = deps;
   let replayed = false;   // the record is replayed ONCE per launch: a lock later in the session really locks
   const purgeLegacy = () => { try { lsRemove(STAY_LEGACY_LS); } catch (e) {} };
+  // → TRUE only when the record is verifiably GONE (read back, like save() reads back a write). It used to
+  // return nothing and swallow a failed removal, so save(pin, false) - the steward UNTICKING the box, which on
+  // a seized phone is the whole point - answered "done" over a record that was still in the Keystore and still
+  // opening the church. The callers that fire-and-forget this ignore the answer, exactly as before.
   const clear = async () => {
     purgeLegacy();
-    if (!isNative()) return;
-    try { const { S } = await secure(); await S.remove(STAY_SS); } catch (e) { console.warn('[steward] stay-open clear failed', e); }
+    if (!isNative()) return true;
+    try {
+      const { S } = await secure(); await S.remove(STAY_SS);
+      const back = await S.get(STAY_SS);
+      if (back == null) return true;
+      console.warn('[steward] stay-open clear did not remove the record');
+      return false;
+    } catch (e) { console.warn('[steward] stay-open clear failed', e); return false; }
   };
   const blobOf = async () => {
     try { const raw = await readBlob(); const b = raw ? JSON.parse(raw) : null; return b && b.ct && b.iv && b.salt ? b : null; }
@@ -3972,7 +3992,7 @@ function makeStayOpen(deps) {
     // the result is what was asked for (a write is read back).
     async save(pin, on) {
       replayed = true;   // the steward typed the PIN this launch; nothing left to replay
-      if (!on || !isNative()) { await clear(); return !on; }
+      if (!on || !isNative()) { const gone = await clear(); return !on && gone; }
       const blob = await blobOf();
       if (!blob) return false;
       try {
@@ -10435,8 +10455,13 @@ window.Steward = {
     const sub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#d': [VERSE_PROMPT_D] }, { kinds: [30078], '#church': [pub], '#d': [VERSE_PROMPT_D] }], {
       onevent(e) {
         if (e.tags.some(t => t[0] === 'deleted') || !e.content) { if (current) { current = null; cb(null); } return; }
-        if (current && current.ts >= e.created_at) return;
-        try { const j = JSON.parse(e.content); current = { ref: j.ref || '', note: j.note || '', schedule: Array.isArray(j.schedule) ? j.schedule : (j.showAt ? [{ at: j.showAt, ref: j.ref || '', note: j.note || '' }] : []), ts: e.created_at }; cb(current); } catch {}
+        // NEVER let an OLDER copy overwrite a newer one. On an exact same-second tie the RELAY keeps the lowest
+        // event id (its replaceable-event rule), so do the same here: a tie between two DIFFERENT events (two
+        // stewards, one second) resolves to the copy the relay holds, not to whichever arrived first. The same
+        // event arriving again from a second relay has an equal id and is skipped, as before. Our own writes
+        // never tie with each other: feChurch() -> _monotonic() already bumps a same-document write to last+1.
+        if (current && (current.ts > e.created_at || (current.ts === e.created_at && String(current.id || '') <= String(e.id || '')))) return;
+        try { const j = JSON.parse(e.content); current = { ref: j.ref || '', note: j.note || '', schedule: Array.isArray(j.schedule) ? j.schedule : (j.showAt ? [{ at: j.showAt, ref: j.ref || '', note: j.note || '' }] : []), ts: e.created_at, id: e.id }; cb(current); } catch {}
       },
       oneose() { cb(current); },
     });
