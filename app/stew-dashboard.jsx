@@ -7538,18 +7538,30 @@ function DashMembers() {
     }
     return (
       <div key={m.pubkey} style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '7px 12px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid var(--line)', opacity: inactive ? 0.62 : 1 }}>
-        {/* ONE ROW (owner spec, 2026-10-13): avatar · name · the controls · copy + Block. The row WRAPS rather than
-            squeezing: the name block keeps a 150px floor, so when the controls will not fit beside it they drop to a
-            second line whole. Plain flex-wrap and px values only (no var() in anything that carries the layout). */}
+        {/* ONE ROW (owner spec, 2026-10-13): avatar · name · the controls · copy + Block. The name block's
+            flex-BASIS is what decides the wrap, because flex line-breaking uses each item's hypothetical size and
+            every other block on this row is flexShrink: 0. At 90px it let all four onto one line and then handed
+            the name whatever was left — 104.5px of the 620px column the old 2fr grid gave it, which ellipsised
+            "Persephone Wilde" and collapsed the @handle to 0px (measured 2026-10-13, headless at 1280x900, with
+            the whole-name test's fixture). At 150px, with the 3fr column this panel's grid now gives the list
+            (697.5px, 671.5px inside its padding and border), an adult row is ONE line, 52px, with the whole
+            name — and it is the @handle that
+            gives way (38.1px of its 132px). A CHILD row cannot be one line at this width whatever the floor is:
+            its controls (458.2px) plus copy + Block (111.3px) plus the avatar and the gaps need 785.5px, so copy
+            + Block drop to a second line and the row is 87px. Plain flex-wrap and px values only (no var() in
+            anything that carries the layout). */}
         <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '6px 10px', minWidth: 0 }}>
           <SkBadge initials={initials} av={m.av} pubkey={m.pubkey} size={36} radius={11} accent={SK_TINT[named ? 'gold' : 'sage'].fg} />
-          <div style={{ flex: '1 1 90px', minWidth: 0 }}>
-            {/* THE NAME WINS THE WIDTH FIGHT. At 360px the name shrank to "R…" while the handle beside it
-                showed in full (audit 2026-09-19 §E, full/portrait/07-members.png): the name was the only
-                flex item allowed to shrink. Now the name never shrinks below its own text (capped at the row
-                so a very long name still ellipsises), and it is the HANDLE that gives way — its text is in a
-                span of its own because text-overflow does not apply to an inline-flex box, only to a block
-                whose children are text. The row clips so the handle's gap cannot poke past the card. */}
+          <div style={{ flex: '1 1 150px', minWidth: 150 }}>
+            {/* THE NAME WINS THE WIDTH FIGHT — and the floor on the block ABOVE is what wins it, not this span.
+                At 360px the name shrank to "R…" while the handle beside it showed in full (audit 2026-09-19 §E,
+                full/portrait/07-members.png): the name was the only flex item allowed to shrink. Inside this
+                block that is fixed — the name is flexShrink: 0 and the HANDLE gives way, its text in a span of
+                its own because text-overflow does not apply to an inline-flex box, only to a block whose
+                children are text, and the row clips so the handle's gap cannot poke past the card. What this
+                span CANNOT do is win width the block was never given: with a 90px basis the block measured
+                104.5px and the name ellipsised anyway, on the screen carrying Child and Clear for youth. A name
+                longer than the block it sits in still ellipsises (maxWidth: 100%) — that part is deliberate. */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0, overflow: 'hidden' }}>
               <span style={{ fontWeight: 700, fontSize: 14.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 0, maxWidth: '100%' }}>{label}</span>
               {nameHandle(m)
@@ -7690,7 +7702,14 @@ function DashMembers() {
 
   return (
     <Panel title="Members" action={<span style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>{/* "Invite your church" printed cards hidden for the pilot — re-add this button to restore (BulkInviteModal + state remain below) */}<SkPill tint="sage">{total ? `${activeM.length} active${chatting ? ` · ${chatting} chatting` : ''}` : 'none yet'}</SkPill></span>} style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <div style={narrow ? {} : { display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 16, flex: 1, minHeight: 0 }}>
+      {/* 3fr, NOT 2fr (owner, 2026-10-13). The ratio is load-bearing, not taste: at 1280x900 the member row
+          needs 671.5px of content to put the avatar, the whole name, the controls and copy + Block on one line,
+          and 2fr gave it 594px — which cut "Persephone Wilde" to 104.5px and the @handle to 0px. 3fr gives
+          697.5px and a 52px row. The second track is FIXED, never conditional on dmConvos: a track that
+          collapses when a private message arrives would resize the list under the steward's cursor, mid-click,
+          on the screen whose buttons write minors:/approved: and block people. What it costs is measured: the
+          private-messages panel goes 310px -> 232.5px at 1280 and 183.3px -> 137.5px at 900. */}
+      <div style={narrow ? {} : { display: 'grid', gridTemplateColumns: '3fr 1fr', gap: 16, flex: 1, minHeight: 0 }}>
       <div className="no-scrollbar" style={narrow ? {} : { overflowY: 'auto', minHeight: 0 }}>
       {stewardRosterPanel}
       {narrow ? dmPanel : null}

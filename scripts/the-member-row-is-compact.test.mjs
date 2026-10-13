@@ -197,3 +197,22 @@ test('a delegated steward (who cannot write guardians) is not offered the parent
   const sheet = find(tree, n => n.props && Array.isArray(n.props.actions))[0];
   assert.ok(sheet && !sheet.props.actions.some(a => a.key === 'parent'), 'a delegated steward is offered the parent action');
 });
+
+// THE NAME BLOCK'S FLOOR. Read off the RENDERED element, not the source (CLAUDE.md rule 3: app/*.jsx ships
+// unbundled, so a `false && ` in front of a condition leaves every word of it in place and a text match still
+// passes). What this cannot see is layout, so the rendered WIDTH of the name and the ellipsis are measured in
+// a browser by the-console-member-row-shows-the-whole-name.test.mjs; this is the cheap guard that fails in
+// two seconds if the floor is taken out again. At a 90px basis the block measured 104.5px of a 620px column
+// at 1280x900 and "Persephone Wilde" ellipsised with the @handle at 0px beside it.
+test('the name block is rendered with a 150px floor, not the 90px basis that truncated every name', () => {
+  const tree = render();
+  for (const nm of ['Persephone Wilde', 'Tobias Ashcroft']) {
+    const row = rowOf(tree, nm);
+    const blocks = find(row, n => n.type === 'div' && n.props && n.props.style && typeof n.props.style.flex === 'string' && /^1 1 \d+(\.\d+)?px$/.test(n.props.style.flex));
+    assert.equal(blocks.length, 1, nm + ': expected exactly one flex-basis block on the row (the name block), got ' + blocks.length);
+    const st = blocks[0].props.style;
+    const basis = parseFloat(String(st.flex).split(' ')[2]);
+    assert.ok(basis >= 150, nm + ": the name block's flex-basis is " + basis + 'px. Flex line-breaking uses the hypothetical size, so at 90px all four blocks fit one line and the name is handed what the controls leave - 104.5px of 620px, ellipsised (measured 2026-10-13)');
+    assert.ok(Number(st.minWidth) >= 150, nm + ": the name block's minWidth is " + JSON.stringify(st.minWidth) + ' - the floor is not guaranteed once the line is full');
+  }
+});
