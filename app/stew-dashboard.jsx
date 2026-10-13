@@ -7725,12 +7725,19 @@ function DashMembers() {
               const named = !!m.name; const label = named ? m.name : 'Anonymous';
               const initials = (named ? m.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'AN').toUpperCase();
               return (
-                <div key={m.pubkey} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 10, background: 'var(--surface)', border: '1px solid var(--line)' }}>
-                  <SkBadge initials={initials} av={m.av} pubkey={m.pubkey} size={32} radius={10} accent={SK_TINT[named ? 'gold' : 'sage'].fg} />
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 700, fontSize: 14, lineHeight: 1.3 }}>{label}</div>
-                    <div style={{ fontSize: 11.5, color: 'var(--ink-3)', fontFamily: nameHandle(m) ? 'var(--font-ui)' : 'var(--mono)' }}>{nameHandle(m) ? '@' + nameHandle(m) : shortNpub(m.npub)} · wants to join</div>
+                <div key={m.pubkey} style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '11px 12px', borderRadius: 10, background: 'var(--surface)', border: '1px solid var(--line)' }}>
+                  {/* THE PERSON GETS A ROW OF THEIR OWN. The name used to share one line with the badge, Approve and the
+                      decline button, so on a 360px phone it was squeezed into ~100px and a real name broke mid-word.
+                      Plain flex and overflow-wrap only (no gap-dependent grid, no var() in padding): Android WebViews
+                      have dropped fancier layout before. */}
+                  <div data-join-person="" style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+                    <SkBadge initials={initials} av={m.av} pubkey={m.pubkey} size={32} radius={10} accent={SK_TINT[named ? 'gold' : 'sage'].fg} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 700, fontSize: 14, lineHeight: 1.3, wordBreak: 'break-word', overflowWrap: 'anywhere' }}>{label}</div>
+                      <div style={{ fontSize: 11.5, color: 'var(--ink-3)', fontFamily: nameHandle(m) ? 'var(--font-ui)' : 'var(--mono)', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>{nameHandle(m) ? '@' + nameHandle(m) : shortNpub(m.npub)} · wants to join</div>
+                    </div>
                   </div>
+                  <div data-join-actions="" style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8 }}>
                   {/* ON THE ROW, NEVER BEHIND A MENU. Admission is the one act a steward takes on this list, and only
                       a human at an unlocked console takes it (decided 2026-08-18) — so when the member rows were
                       compressed to one line for the phone (P12), Approve stayed where Chat sits on a member's row.
@@ -7749,6 +7756,7 @@ function DashMembers() {
                         <button onClick={() => setConfirmBlock(null)} aria-label="Cancel — leave them waiting" title="Cancel" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 9px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0 }}><Icon name="x" size={15} color="currentColor" /></button>
                       </React.Fragment>
                     : <button onClick={() => setConfirmBlock(m.pubkey)} aria-label={'Decline ' + (m.name || nameHandle(m) || shortNpub(m.npub)) + ' — asks you to confirm'} title="Decline — blocks this person from joining or posting" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 9px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0 }}><Icon name="x" size={15} color="currentColor" /></button>}
+                  </div>
                   {/* WHAT HAPPENED TO THIS APPROVE, ON THIS ROW. admitMember's notice (minorNotice) was drawn only on the
                       member list's rows, and a person waiting to join is not on that list — so a refused Approve
                       said nothing where it was pressed (device round 2026-10-01: only the banner spoke). */}
@@ -9612,11 +9620,11 @@ function DashStewardsPanel({ church }) {
         <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--clay-ink)', marginBottom: 7 }}>Requests to steward · {pending.length}</div>
         {pending.map(r => (
           <div key={r.pubkey} style={{ padding: '10px 12px', borderRadius: 12, background: 'color-mix(in oklab, var(--gold) 8%, var(--surface))', border: '1px solid color-mix(in oklab, var(--gold) 26%, var(--line))', marginBottom: 7 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', gap: 11 }}>
               <SkBadge initials={niceName(r.pubkey).split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase()} size={32} radius={10} accent={SK_TINT.gold.fg} />
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 700, fontSize: 13.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{niceName(r.pubkey)}</div>
-                {r.name ? <div style={{ fontSize: 11.5, color: 'var(--ink-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>claims to be “{r.name}”</div> : null}
+              <div style={{ flex: '1 1 150px', minWidth: 0 }}>
+                <div style={{ fontWeight: 700, fontSize: 13.5, wordBreak: 'break-word', overflowWrap: 'anywhere' }}>{niceName(r.pubkey)}</div>
+                {r.name ? <div style={{ fontSize: 11.5, color: 'var(--ink-2)', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>claims to be “{r.name}”</div> : null}
                 <div style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--ink-3)', wordBreak: 'break-all', lineHeight: 1.3 }}>{r.npub} · wants to steward</div>
               </div>
               {approving === r.pubkey ? null : <React.Fragment>
