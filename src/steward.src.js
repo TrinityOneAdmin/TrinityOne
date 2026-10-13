@@ -9230,6 +9230,7 @@ window.Steward = {
   // still carries them. Blocking is unaffected — it is a separate document and a separate gate at the relay,
   // and blocking is how a member is actually removed (see the Block path in app/stew-dashboard.jsx).
   //
+  // [HISTORY — superseded by ITEM D at `counts` below: every SERVED copy now counts.]
   // WHOSE COPY COUNTS (audit of 78ffad0, finding 3; the owner's rule of 2026-09-16, "approved members must always
   // survive a steward leaving"). This used to be _byChurchOrSteward — the church or a CURRENT steward — so a member a
   // since-removed delegate had approved looked pending here while the relay (until its next restart) let them in, and
@@ -9256,11 +9257,14 @@ window.Steward = {
     { const _tag = _listTag(), _deliver = onList; _tag.sub = tok; onList = (list) => { const l = _stampFor(list, _tag); try { if (cp0 === (actingChurch || pub)) _lastAdmitted = { cp: cp0, list: l }; } catch (e) {} return _deliver(l); }; }   // see _listTag, _freshDocRead; _lastAdmitted: round 3g
     let cur = [];
     const byAuthor = new Map();   // author pubkey -> { at, pubkeys } — newest per author, unioned below
-    const counts = (author, at) => {
-      if (author === cp0 || _careRoster.has(author)) return true;
-      const gone = _exStewardRemovedAt()[author];
-      return !!gone && at <= gone;
-    };
+    // ITEM D (owner 2026-10-13: a steward's approval is the church's, and must not depend on a console being open).
+    // Every copy the relay serves counts. The relay now serves an `admitted:` copy only from the church, a current
+    // steward, or a steward it accepted that copy from while they were one (gateway.mjs ADMITTED_RECEIPTS) — the set
+    // it honours itself — so a COLD console, which never saw the delegate leave, no longer shows their approvals as
+    // waiting and leaves those people out of new keys. The laundering worry above (a non-enforcing relay handing us
+    // any author's list) is answered by that read gate plus relay admission (only relays proved to run our software).
+    // A relay not yet upgraded still serves every stored copy, and every stored copy passed its write gate.
+    const counts = () => true;
     const fold = () => {
       const all = new Set();
       for (const [author, v] of byAuthor) if (counts(author, v.at)) for (const pk of v.pubkeys) if (pk) all.add(pk);

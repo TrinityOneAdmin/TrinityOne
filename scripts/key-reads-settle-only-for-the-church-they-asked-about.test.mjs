@@ -1027,20 +1027,24 @@ test('round 2 · P4: an approval by a steward this device saw removed counts if 
   narrow.handlers.onevent(doc30078(X.pub, AD_D + A.pub, 1759300140, { pubkeys: [EVE.pub] }, [['church', A.pub]]));
   assert.ok(got.includes(ADA.pub), 'CONTROL: the church\'s own approval');
   assert.ok(got.includes(BEN.pub), 'A MEMBER APPROVED BY A SINCE-REMOVED STEWARD LOOKS PENDING — the relay lets them in, the console withholds their keys (audit of 78ffad0, finding 3)');
-  assert.ok(!got.includes(EVE.pub), 'AN APPROVAL SIGNED BY A KEY NO ROSTER EVER NAMED WAS COUNTED — a non-enforcing relay can admit anyone, and the next Approve launders it into the church\'s copy');
+  // ITEM D (2026-10-13) MOVED THE STRANGER / AFTER-REMOVAL GUARD TO THE RELAY. Every copy the console is SERVED now counts,
+  // so a cold console counts a departed steward's approvals. A key no roster named, or an ex-steward's list written
+  // after removal, is refused by the relay's write gate and — if planted by /import — withheld by its read gate
+  // (gateway.mjs ADMITTED_RECEIPTS; proved by approved-members-survive-a-steward-leaving.test.mjs, "never passed the
+  // write gate"). What this console now trusts is: our relays serve only what they honour.
+  assert.ok(got.includes(EVE.pub), 'ITEM D: a copy the relay SERVED was not counted — a cold console would withhold keys from people the relay admits');
   assert.equal(e.S.listIsFresh(got), false, 'the admitted list counted as fresh before its read had settled');
   await e.eose(narrow);
   assert.equal(e.S.listIsFresh(got), true, 'CONTROL: the settled read is not fresh');
   // the ex-steward's own LATER list, dated after their removal (a non-enforcing relay accepted it): it does not count
-  narrow.handlers.onevent(doc30078(W.pub, AD_D + A.pub, 1759300160, { pubkeys: [BEN.pub, ZED.pub] }, [['church', A.pub]]));
-  assert.ok(!got.includes(ZED.pub), 'AN EX-STEWARD WROTE AN APPROVAL AFTER THEIR REMOVAL AND IT COUNTED');
+  // (item D) the ex-steward's later list is the relay's to refuse — see above; here it would simply count.
   // the future clamp stays
-  narrow.handlers.onevent(doc30078(A.pub, AD_D + A.pub, 1759300000 + 999999, { pubkeys: [EVE.pub] }));
-  assert.ok(!got.includes(EVE.pub), 'a far-future copy was counted');
+  narrow.handlers.onevent(doc30078(A.pub, AD_D + A.pub, 1759300000 + 999999, { pubkeys: [ZED.pub] }));
+  assert.ok(!got.includes(ZED.pub), 'a far-future copy was counted');
   // a current steward still counts
-  const S1 = K(); e.t._careRoster = new Set([S1.pub]);
-  narrow.handlers.onevent(doc30078(S1.pub, AD_D + A.pub, 1759300170, { pubkeys: [EVE.pub] }, [['church', A.pub]]));
-  assert.ok(got.includes(EVE.pub), 'CONTROL: a current steward\'s approval no longer counts');
+  const S1 = K(), FAY = K(); e.t._careRoster = new Set([S1.pub]);
+  narrow.handlers.onevent(doc30078(S1.pub, AD_D + A.pub, 1759300170, { pubkeys: [FAY.pub] }, [['church', A.pub]]));
+  assert.ok(got.includes(FAY.pub), 'CONTROL: a current steward\'s approval no longer counts');
 });
 
 test('round 2 · P4: the roster that drops a steward is recorded with its date (the writer of the ex-steward record)', async () => {

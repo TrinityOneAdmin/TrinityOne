@@ -5899,12 +5899,17 @@ window.Fellowship = {
     // trust is applied when the union is READ, so a copy that arrived before the steward roster did is counted as soon
     // as the roster arrives (onroster -> emit) instead of being thrown away, and a steward later revoked stops counting.
     const admittedByAuthor = new Map();   // author pubkey -> { at, pubkeys }
+    // EVERY COPY THE CHURCH'S RELAYS SERVE COUNTS — NOT ONLY THE CURRENT ROSTER'S (item D; owner 2026-09-16 "approved
+    // members must always survive a steward leaving"). This used to skip any author not on the CURRENT roster, so the
+    // moment a phone took a roster without the delegate who approved this member, isAdmitted went false and Chat said
+    // "You're no longer in this church" — for nothing the member did. The relay now serves an `admitted:` copy only
+    // from the church, a current steward, or a steward it accepted the copy from while they were one (gateway.mjs
+    // ADMITTED_RECEIPTS), which is exactly the set it honours itself; our relays are the only ones admitted
+    // (CLAUDE.md §10). And this answer is only ever about `me`: a forged copy could change what this phone shows
+    // about its own membership, never what the relay lets it read or write. Only Block removes someone.
     const _admittedUnion = () => {
       const all = new Set();
-      for (const [author, v] of admittedByAuthor) {
-        if (author !== pubk && !(_churchRoster.get(pubk) && _churchRoster.get(pubk).has(author))) continue;   // church key or a current roster steward (M2)
-        for (const pk of v.pubkeys) if (pk) all.add(pk);
-      }
+      for (const v of admittedByAuthor.values()) for (const pk of v.pubkeys) if (pk) all.add(pk);
       return all;
     };
     const me = window.Fellowship.myPubkey || pub;

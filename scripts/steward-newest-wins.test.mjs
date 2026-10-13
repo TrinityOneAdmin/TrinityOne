@@ -164,7 +164,10 @@ test('owner-only docs require the church key; steward-writable also accept a ros
     assert.match(handlerBody(name), /_byChurchOrSteward\(e\)/, `${name} is steward-writable but does not accept a rostered steward — it would drop legitimate delegated writes`);
   }
   const ad = handlerBody('subscribeAdmitted');
-  assert.match(ad, /author === cp0 \|\| _careRoster\.has\(author\)/, 'subscribeAdmitted no longer accepts the church and a rostered steward');
+  // ITEM D (2026-10-13): subscribeAdmitted counts every copy the relay serves (the relay's read gate decides which —
+  // gateway.mjs ADMITTED_RECEIPTS). Behaviour is driven in approved-members-survive-a-steward-leaving.test.mjs and
+  // key-reads-settle-only-for-the-church-they-asked-about.test.mjs; this scan only checks the clamp below survives.
+  assert.match(ad, /const counts = /, 're-anchor: subscribeAdmitted no longer decides which copies count');
   assert.match(ad, /_authFuture\(e\)/, 'subscribeAdmitted lost its future clamp');
   // safeguard: minors+approved gated by _byChurch, nophoto by _byChurchOrSteward
   const sg = handlerBody('subscribeSafeguard');

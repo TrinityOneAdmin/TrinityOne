@@ -1802,6 +1802,32 @@ const ADMITTED_BY = new Map();      // churchpub -> Set(approved member pubkeys)
 // branch. They all ask `admitted.has(pk)`, which is what the union answers; only how the Set is built moves.
 // ADMITTED_SRC has exactly one writer (note()'s ADMITTED_D branch) and one reader (rebuildAdmitted()).
 const ADMITTED_SRC = new Map();     // churchpub -> Map(author pubkey -> Set(pubkeys they approved))
+// AN APPROVAL IS THE CHURCH'S ONCE THIS RELAY ACCEPTED IT FROM A STEWARD (item D; owner 2026-09-16 "approved members
+// must always survive a steward leaving", 2026-10-13 "co-steward approvals should always be saved under the Church's
+// own key" and "what happens inside the church shouldn't be dependent on the church console being open").
+// A delegate signs with their own key and only the owner console holds the church's, so the church-state property is
+// recorded HERE: when the live EVENT path stores a steward's `admitted:` copy — accept() lets one through only from a
+// current steward with the Members capability — this relay writes down that exact event id, at the time it received
+// it. note() (and so every restart) and canRead() then honour that copy after its author leaves the roster.
+// NO BACKDATING: created_at is never consulted. A removed delegate's new copy is refused by accept() and gets no
+// receipt, whatever it is dated. /import and /restore call note() without accept(), so they never write one either —
+// which is what keeps a co-tenant church from planting approvals in another church's corpus.
+// WRITERS: _receiptAdmitted (live EVENT path only). READERS: _admittedReceipted (note()'s ADMITTED_D ingest, canRead).
+const ADMITTED_RECEIPTS_FILE = join(DATA_DIR, 'admitted-receipts.json');
+let ADMITTED_RECEIPTS = {};   // churchpub -> { author pubkey -> event id of the copy accepted from them as a steward }
+try { const o = JSON.parse(readFileSync(ADMITTED_RECEIPTS_FILE, 'utf8')); if (o && typeof o === 'object' && !Array.isArray(o)) ADMITTED_RECEIPTS = o; } catch {}
+function _admittedReceipted(cp, e) { const m = ADMITTED_RECEIPTS[cp]; return !!(m && typeof m === 'object' && e && m[e.pubkey] === e.id); }
+function _receiptAdmitted(e) {
+  const d = ((e.tags || []).find(t => t[0] === 'd') || [])[1] || '';
+  if (e.kind !== 30078 || !d.startsWith(ADMITTED_D)) return;
+  const cp = d.slice(ADMITTED_D.length);
+  if (!CHURCH_PUBS.has(cp) || e.pubkey === cp || !stewardCan(e.pubkey, cp, 'any')) return;
+  const m = (ADMITTED_RECEIPTS[cp] && typeof ADMITTED_RECEIPTS[cp] === 'object') ? ADMITTED_RECEIPTS[cp] : (ADMITTED_RECEIPTS[cp] = {});
+  if (m[e.pubkey] === e.id) return;
+  m[e.pubkey] = e.id;
+  try { const tmp = ADMITTED_RECEIPTS_FILE + '.tmp'; writeFileSync(tmp, JSON.stringify(ADMITTED_RECEIPTS)); renameSync(tmp, ADMITTED_RECEIPTS_FILE); }
+  catch (x) { console.error('[relay] could not save an approval receipt — this approval will not survive a restart if its steward leaves:', x && x.message); }
+}
 function rebuildAdmitted(cp) {
   const per = ADMITTED_SRC.get(cp);
   const out = new Set();
@@ -3577,7 +3603,7 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     if (approval) REQUIRE_APPROVAL.add(cp); else REQUIRE_APPROVAL.delete(cp);
     if (!_hydrating) rebuildMembers();
   }
-  else if (d.startsWith(ADMITTED_D) && CHURCH_PUBS.has(cp = d.slice(ADMITTED_D.length)) && (e.pubkey === cp || stewardCan(e.pubkey, cp, 'any'))) {   // a church's approved-members allowlist
+  else if (d.startsWith(ADMITTED_D) && CHURCH_PUBS.has(cp = d.slice(ADMITTED_D.length)) && (e.pubkey === cp || stewardCan(e.pubkey, cp, 'any') || _admittedReceipted(cp, e))) {   // a church's approved-members allowlist (a receipted copy outlives its steward — see ADMITTED_RECEIPTS)
     // PER AUTHOR, THEN UNIONED — see ADMITTED_SRC. `.set(cp, set)` here meant the last copy to replay won,
     // and on a rehydrate that is whichever has the later created_at. The church approves Ada at 10:02, the
     // churchwarden approves Ben at 10:03, and after the next restart Ada is waiting to be let in again.
@@ -5235,6 +5261,10 @@ function canRead(e, authed) {
     // created stop being served to the congregation. An owner who writes them an EMPTY capability list is
     // saying "nothing", and that reads the same as removing them — which is today's behaviour for removal.
     if (ch && !retractionExempt) { if (!(e.pubkey === ch || stewardCan(e.pubkey, ch, 'any'))) return false; }
+    // …BUT AN ALLOWLIST COPY IS SERVED ONLY IF THIS RELAY HONOURS IT (item D): the church's, a current steward's, or one
+    // it receipted from a steward (ADMITTED_RECEIPTS). Phones and consoles count every copy they are served, so this
+    // is what keeps an /import-planted copy from a non-steward off them. Keyed on the d-tag's church, not the tag.
+    if (d.startsWith(ADMITTED_D)) { const acp = d.slice(ADMITTED_D.length); if (!(e.pubkey === acp || stewardCan(e.pubkey, acp, 'any') || _admittedReceipted(acp, e))) return false; }
     if (!authed) return false;
     // ══ THE CHURCH'S BOOKS ARE NOT THE CONGREGATION'S ═════════════════════════════════════════════════════
     //
@@ -8579,7 +8609,7 @@ wss.on('connection', (ws, req) => {
       // revoked steward restoring their authority, a child's DM protections being stripped — and worst,
       // replaying a stale group doc put the attacker back in GROUP_MEMBERS, which canRead() consults, handing
       // them the READ history of an invite-only group. The store was always right; the running relay was not.
-      if (putRes === 'stored') note(evt);   // a membership/broadcast change takes effect for subsequent events
+      if (putRes === 'stored') { _receiptAdmitted(evt); note(evt); }   // a membership/broadcast change takes effect for subsequent events; a steward's approval is receipted first (ADMITTED_RECEIPTS)
       // NIP-09 BEFORE the duplicate/have-newer early returns: a re-sent kind-5 comes back as 'duplicate', and
       // the old code returned on that without ever applying the deletion — so the second and every later
       // delivery of a deletion was a no-op. That is the usual case after a reconnect or a resync.

@@ -12159,10 +12159,7 @@
       const admittedByAuthor = /* @__PURE__ */ new Map();
       const _admittedUnion = () => {
         const all = /* @__PURE__ */ new Set();
-        for (const [author, v] of admittedByAuthor) {
-          if (author !== pubk && !(_churchRoster.get(pubk) && _churchRoster.get(pubk).has(author))) continue;
-          for (const pk of v.pubkeys) if (pk) all.add(pk);
-        }
+        for (const v of admittedByAuthor.values()) for (const pk of v.pubkeys) if (pk) all.add(pk);
         return all;
       };
       const me = window.Fellowship.myPubkey || pub;

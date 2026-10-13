@@ -22756,6 +22756,7 @@ zoo`.split("\n");
     // still carries them. Blocking is unaffected — it is a separate document and a separate gate at the relay,
     // and blocking is how a member is actually removed (see the Block path in app/stew-dashboard.jsx).
     //
+    // [HISTORY — superseded by ITEM D at `counts` below: every SERVED copy now counts.]
     // WHOSE COPY COUNTS (audit of 78ffad0, finding 3; the owner's rule of 2026-09-16, "approved members must always
     // survive a steward leaving"). This used to be _byChurchOrSteward — the church or a CURRENT steward — so a member a
     // since-removed delegate had approved looked pending here while the relay (until its next restart) let them in, and
@@ -22793,11 +22794,7 @@ zoo`.split("\n");
       }
       let cur = [];
       const byAuthor = /* @__PURE__ */ new Map();
-      const counts = (author, at) => {
-        if (author === cp0 || _careRoster.has(author)) return true;
-        const gone = _exStewardRemovedAt()[author];
-        return !!gone && at <= gone;
-      };
+      const counts = () => true;
       const fold = () => {
         const all = /* @__PURE__ */ new Set();
         for (const [author, v] of byAuthor) if (counts(author, v.at)) {
