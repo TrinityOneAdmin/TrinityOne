@@ -55,10 +55,11 @@ function hardwareStore() {
   const impl = {
     get: async (k) => (k in map ? map[k] : null),
     set: async (k, v) => { map[k] = String(v); },
-    remove: async (k) => { delete map[k]; },
+    remove: async (k) => { if (hw.failRemove > 0) { hw.failRemove--; if (hw.silent) return; throw new Error('keystore busy'); } delete map[k]; },
   };
   const S = new Proxy(impl, { get: (t, p) => (p in t ? t[p] : (typeof p === 'symbol' ? undefined : () => { throw new Error('"SecureStorage.' + String(p) + '()" is not implemented on android'); })) });
-  return { map, S };
+  const hw = { map, S, failRemove: 0, silent: false };
+  return hw;
 }
 
 // A real v2-shaped church-key blob: PBKDF2(pin, salt, it) → AES-GCM over the seed.
@@ -311,5 +312,39 @@ test('(g) "Restore this church with my 12 words" on the lock screen clears it be
   const hold = setTimeout(() => {}, 5000);
   try { await btn.props.onClick(); } finally { clearTimeout(hold); }
   assert.equal(dev.hw.map[SS_KEY], undefined, 'the restore-from-12-words button reloaded with the stay-open record still in the hardware store');
+  L.unmount();
+});
+
+// ── a removal the Keystore could not do ───────────────────────────────────────────────────────────────────
+// clear() used to swallow a failed S.remove, and save(pin, false) - the steward UNTICKING the box - answered
+// "done" over a record that was still there and still opening the church.
+test('(h) the engine does not claim an untick worked when the record is still in the hardware store', async () => {
+  const dev = device(); dev.blob = await makeBlob(PIN, SEED);
+  const L = launch(dev); await L.mount(); await L.typeAndUnlock(PIN, true);
+  assert.ok(dev.hw.map[SS_KEY], 're-anchor: no record was made');
+  dev.hw.failRemove = 1;
+  assert.equal(await L.stay.save(PIN, false), false, 'save(off) said true over a record that is still in the Keystore');
+  assert.ok(dev.hw.map[SS_KEY], 're-anchor: the failing remove did not leave the record');
+  assert.equal(await L.stay.save(PIN, false), true, 'a removal that worked was not reported');
+  assert.equal(dev.hw.map[SS_KEY], undefined);
+  // and the quieter way to fail: remove() RESOLVES but the record is still there. Only reading it back sees that.
+  await L.stay.save(PIN, true);
+  dev.hw.failRemove = 1; dev.hw.silent = true;
+  assert.equal(await L.stay.save(PIN, false), false, 'a remove() that resolved without deleting was reported as done');
+  assert.ok(dev.hw.map[SS_KEY], 're-anchor: the silent remove deleted the record');
+  L.unmount();
+});
+
+test('(h) POINT OF USE: untick + unlock when the first removal fails still ends with the record gone', async () => {
+  const dev = device(); dev.blob = await makeBlob(PIN, SEED);
+  const L1 = launch(dev); await L1.mount(); await L1.typeAndUnlock(PIN, true); persist(dev); L1.unmount();
+  const L = launch(dev); await L.mount(); L.fresh();
+  L.Steward.hasKey = false; L.Steward.locked = true;
+  await L.mount();
+  assert.equal(L.box().props.checked, true, 're-anchor: the box is not ticked after a lock');
+  dev.hw.failRemove = 1;
+  await L.typeAndUnlock(PIN, false);
+  assert.equal(L.Steward.hasKey, true, 're-anchor: the PIN did not unlock');
+  assert.equal(dev.hw.map[SS_KEY], undefined, 'the steward unticked the box, the first removal failed, and the key stayed in the Keystore');
   L.unmount();
 });

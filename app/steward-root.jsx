@@ -850,7 +850,15 @@ function StewardUnlock() {
     if (ok) {
       try { localStorage.removeItem(GUARD_KEY); } catch {}
       // ticked → keep it (native only; the engine refuses elsewhere); unticked → delete any record.
-      try { if (window.Steward.setStayOpen) await window.Steward.setStayOpen(pin, stayAvail && stayOpen); } catch (e) {}
+      // An UNTICK that could not delete the record answers false (the engine reads the removal back); try once
+      // more rather than leave a key in the Keystore that the steward just asked us to remove.
+      try {
+        if (window.Steward.setStayOpen) {
+          const want = stayAvail && stayOpen;
+          const done = await window.Steward.setStayOpen(pin, want);
+          if (!want && done === false && window.Steward.clearStayOpen) await window.Steward.clearStayOpen();
+        }
+      } catch (e) {}
       return;
     }
     // AUDIT-2026-07-30. The stored key is bound to THIS browser (a key it can use but never read). If that

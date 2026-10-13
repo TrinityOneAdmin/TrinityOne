@@ -95,6 +95,7 @@ function engine(relayList) {
     stmt(SHIP, 'var SKEW_CAP_SEC =', 'SKEW_CAP_SEC'),
     fnBody(SHIP, 'function clockLooksWrong', 'clockLooksWrong'),
     fnBody(SHIP, 'function _pickSkew', '_pickSkew'),
+    fnBody(SHIP, 'function _skewSecFrom', '_skewSecFrom'),
     fnBody(SHIP, 'async function measureRelaySkew', 'measureRelaySkew'),
     fnBody(SHIP, 'function relaySkewState', 'relaySkewState'),
   ].join('\n');

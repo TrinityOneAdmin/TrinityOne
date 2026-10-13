@@ -5620,7 +5620,22 @@ function DashVersePrompt() {
       : (vp.ref || '');
     return ref ? ref.split('; ').filter(Boolean) : [];
   };
-  var pvRefs = dvpLiveRefs(vp, Math.floor(Date.now() / 1000));
+  // ONE READING of the clock per render, shared by the preview, the status card and the timer below.
+  var vpNow = Math.floor(Date.now() / 1000);
+  // THE NEXT MOMENT THE CARD CHANGES: the earliest scheduled time still in the future. Without a timer nothing
+  // re-rendered when that second arrived, so "Scheduled" stayed on screen after the passage had gone live to
+  // members. No schedule pending -> null -> no timer at all. `tick` is a dependency so a timer clamped short
+  // (setTimeout cannot wait longer than ~24 days) re-arms itself when it fires early.
+  var vpTickState = _s(0), vpTick = vpTickState[0], setVpTick = vpTickState[1];
+  var vpNextDue = null;
+  (vp && Array.isArray(vp.schedule) ? vp.schedule : []).forEach(function(s) { if (s.at > vpNow && (vpNextDue === null || s.at < vpNextDue)) vpNextDue = s.at; });
+  _e(function() {
+    if (vpNextDue === null) return;
+    // +250ms so the timer lands just AFTER the second, never just before it (an early wake would read "still future")
+    var id = setTimeout(function() { setVpTick(function(t) { return t + 1; }); }, Math.min((vpNextDue - Math.floor(Date.now() / 1000)) * 1000 + 250, 2147000000));
+    return function() { clearTimeout(id); };
+  }, [vpNextDue, vpTick]);
+  var pvRefs = dvpLiveRefs(vp, vpNow);
   var pvSafeIdx = pvIdx < pvRefs.length ? pvIdx : 0;
   var pvRef = pvRefs[pvSafeIdx] || '';
   var pvText = pvRef ? resolveText(pvRef) : null;
@@ -5692,7 +5707,11 @@ function DashVersePrompt() {
     mergedSchedule.forEach(function(s) { if (allRefParts.join('; ').indexOf(s.ref) === -1) allRefParts.push(s.ref); });
     var combined = allRefParts.join('; ');
     var hasSchedule = mergedSchedule.length > 0;
-    window.Steward.publishVersePrompt(combined, '', hasSchedule ? mergedSchedule : undefined).then(function() {
+    window.Steward.publishVersePrompt(combined, '', hasSchedule ? mergedSchedule : undefined).then(function(sent) {
+      // Show what we just wrote without waiting for the relay to echo it back (clear() does the same with
+      // setVp(null)). Only a real, stamped result counts - a blocked publish resolves with no timestamp - and
+      // never over a copy that is already newer, so this cannot let an older write replace a newer one.
+      if (sent && typeof sent.ts === 'number') setVp(function(prev) { return prev && typeof prev.ts === 'number' && prev.ts > sent.ts ? prev : sent; });
       var label = hasSchedule ? 'Scheduled' : 'Sent to church';
       setRefs([]); setBook(''); setChap(''); setFrom(''); setTo('');
       setMsg(label); setTimeout(function() { setMsg(''); }, 4000);
@@ -5715,7 +5734,7 @@ function DashVersePrompt() {
       {vp && vp.ref ? (function() {
         var vpSch = Array.isArray(vp.schedule) ? vp.schedule : [];
         var vpVerses = vp.ref.split('; ').filter(Boolean);
-        var nowSec = Math.floor(Date.now() / 1000);
+        var nowSec = vpNow;
         var allLive = vpSch.length === 0 || vpSch.every(function(s) { return s.at <= nowSec; });
         var allFuture = vpSch.length > 0 && vpSch.every(function(s) { return s.at > nowSec; });
         var statusLabel = allFuture ? 'Scheduled' : allLive ? 'Live now' : 'Partially live';

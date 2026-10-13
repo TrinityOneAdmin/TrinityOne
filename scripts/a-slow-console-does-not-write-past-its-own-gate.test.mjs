@@ -97,6 +97,7 @@ function console_(relayList, churchSk, churchPub) {
     stmt(SHIP, 'var _skewWaited = false', '_skewWaited'),
     fnBody(SHIP, 'function clockLooksWrong', 'clockLooksWrong'),
     fnBody(SHIP, 'function _pickSkew', '_pickSkew'),
+    fnBody(SHIP, 'function _skewSecFrom', '_skewSecFrom'),
     fnBody(SHIP, 'async function measureRelaySkew', 'measureRelaySkew'),
     fnBody(SHIP, 'function relaySkewState', 'relaySkewState'),
     fnBody(SHIP, 'function _skewShift', '_skewShift'),
