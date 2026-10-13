@@ -78,7 +78,9 @@ test('a console opened before its name key shows the team as unreadable, cannot 
   // ── reopen the console with the name key held back, and nothing cached for the rosters ──
   await A.send('Page.enable');
   await A.send('Page.addScriptToEvaluateOnNewDocument', { source: SLOW_KEY });
-  await A.ev(`(() => { for (const k of Object.keys(localStorage)) if (k.startsWith('trinityone.steward.addr.v2.trinityone/roster:')) localStorage.removeItem(k); return 1; })()`);
+  await A.ev(`(() => { for (const k of Object.keys(localStorage)) if (k.startsWith('trinityone.steward.addr.v2.trinityone/roster:') || k.startsWith('trinityone.steward.keyenv.name.')) localStorage.removeItem(k); return 1; })()`);
+  // (0fecf4c: the console now keeps a device copy of the name-key envelope, so a second machine or cleared browser
+  // has neither — clear that too, or the key "lands" from the device before the relay is ever asked)
   await A.send('Page.reload', { ignoreCache: false });
   await sleep(1500);
   await A.waitFor(`!!document.querySelector('input[aria-label="Your console PIN or passphrase"]')`, 60000, 'the unlock screen');
