@@ -18,8 +18,8 @@ const LONG = 'Bartholomew Featherstonehaugh-Cholmondeley';
 const PK = 'd'.repeat(64);
 const members = [{ pubkey: PK, npub: 'npub1dd', name: LONG, count: 0, lastTs: 0, joined: 1 }];
 
-async function joinCard() {
-  const g = membersGlobals({ steward: {}, members, admitted: [], extraWindow: { useStewardJoinPolicy: () => true } });
+async function joinCard(narrow = false) {
+  const g = { ...membersGlobals({ steward: {}, members, admitted: [], extraWindow: { useStewardJoinPolicy: () => true } }), useStewNarrow: () => narrow };
   const { C, draw } = await compiled('DashMembers', g, ['rotateChurchKeys']);
   return draw(C, {});
 }
@@ -76,4 +76,34 @@ test('the steward-request card does not clip a long name', async () => {
   assert.ok(n, 'steward request name not rendered — re-anchor: ' + said(tree).slice(0, 300));
   assert.notEqual(n.props.style.whiteSpace, 'nowrap');
   assert.notEqual(n.props.style.textOverflow, 'ellipsis');
+});
+
+// ── ONE LINE ON THE CONSOLE, TWO ROWS ON A PHONE (owner 2026-10-13: "the webapp approve should be one line as well") ──
+// Rendered, so a `narrow ? a : b` deleted from the screen fails here. Tree-rendered only: heights are asserted in the browser file.
+const cardOf = (tree) => { const p = pathTo(tree, x => x && x.kids && x.kids.length === 1 && x.kids[0] === LONG); return p.find(a => a.props && 'data-join-card' in a.props); };
+const personOf = (tree) => find(tree, n => n && n.props && 'data-join-person' in n.props)[0];
+const actionsOf = (tree) => find(tree, n => n && n.props && 'data-join-actions' in n.props)[0];
+
+test('at console width the card is a ROW: person and actions are siblings on one line, nothing else moved', async () => {
+  const tree = await joinCard(false);
+  const card = cardOf(tree), person = personOf(tree), actions = actionsOf(tree);
+  assert.ok(card && person && actions, 'card / person / actions not found');
+  assert.equal(card.props.style.flexDirection, 'row', 'the wide card is not a row');
+  assert.ok(card.kids.includes(person) && card.kids.includes(actions), 'person and actions are not direct children of the one card');
+  assert.equal(hasButton(person), false, 'a button sits inside the person block');
+  assert.ok(find(actions, x => x && x.type === 'button' && /Approve/.test(said(x))).length === 1, 'Approve left the actions group');
+  assert.ok(find(actions, x => x && x.type === 'button' && /^Decline/.test(String(x.props['aria-label'] || ''))).length === 1, 'Decline left the actions group');
+  assert.ok(person.props.style.minWidth === 0, 'the person block cannot shrink, so a long name would push the buttons off the card');
+});
+
+test('at phone width the card stays the two-row column and the whole long name is still there, unclipped', async () => {
+  const tree = await joinCard(true);
+  const card = cardOf(tree);
+  assert.equal(card.props.style.flexDirection, 'column', 'the narrow card is not the two-row shape');
+  const n = nameNode(tree, LONG);
+  assert.ok(n, 'the long name is not rendered on a phone');
+  assert.notEqual(n.props.style.whiteSpace, 'nowrap');
+  assert.notEqual(n.props.style.textOverflow, 'ellipsis');
+  assert.notEqual(n.props.style.overflow, 'hidden');
+  assert.ok(/anywhere|break-word/.test(String(n.props.style.overflowWrap) + String(n.props.style.wordBreak)));
 });

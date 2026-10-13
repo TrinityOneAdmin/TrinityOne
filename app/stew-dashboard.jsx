@@ -7743,19 +7743,24 @@ function DashMembers() {
               const named = !!m.name; const label = named ? m.name : 'Anonymous';
               const initials = (named ? m.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'AN').toUpperCase();
               return (
-                <div key={m.pubkey} style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '11px 12px', borderRadius: 10, background: 'var(--surface)', border: '1px solid var(--line)' }}>
+                <div key={m.pubkey} data-join-card="" style={narrow
+                  ? { display: 'flex', flexDirection: 'column', gap: 10, padding: '11px 12px', borderRadius: 10, background: 'var(--surface)', border: '1px solid var(--line)' }
+                  : { display: 'flex', flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: '6px 10px', padding: '7px 12px', borderRadius: 10, background: 'var(--surface)', border: '1px solid var(--line)' }}>
+                  {/* ONE LINE ON THE CONSOLE (owner 2026-10-13), TWO ROWS ON A PHONE. Same switch as the member row beside it
+                      (useStewNarrow, under 760px): wide = avatar, name, Approve and the decline all on one line; narrow = the
+                      person on a row of their own, as below. */}
                   {/* THE PERSON GETS A ROW OF THEIR OWN. The name used to share one line with the badge, Approve and the
                       decline button, so on a 360px phone it was squeezed into ~100px and a real name broke mid-word.
                       Plain flex and overflow-wrap only (no gap-dependent grid, no var() in padding): Android WebViews
                       have dropped fancier layout before. */}
-                  <div data-join-person="" style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
-                    <SkBadge initials={initials} av={m.av} pubkey={m.pubkey} size={32} radius={10} accent={SK_TINT[named ? 'gold' : 'sage'].fg} />
+                  <div data-join-person="" style={{ display: 'flex', alignItems: narrow ? 'flex-start' : 'center', gap: 10, ...(narrow ? null : { flex: '1 1 150px', minWidth: 0 }) }}>
+                    <SkBadge initials={initials} av={m.av} pubkey={m.pubkey} size={narrow ? 32 : 36} radius={10} accent={SK_TINT[named ? 'gold' : 'sage'].fg} />
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontWeight: 700, fontSize: 14, lineHeight: 1.3, wordBreak: 'break-word', overflowWrap: 'anywhere' }}>{label}</div>
                       <div style={{ fontSize: 11.5, color: 'var(--ink-3)', fontFamily: nameHandle(m) ? 'var(--font-ui)' : 'var(--mono)', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>{nameHandle(m) ? '@' + nameHandle(m) : shortNpub(m.npub)} · wants to join</div>
                     </div>
                   </div>
-                  <div data-join-actions="" style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8 }}>
+                  <div data-join-actions="" style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, ...(narrow ? null : { flexShrink: 0 }) }}>
                   {/* ON THE ROW, NEVER BEHIND A MENU. Admission is the one act a steward takes on this list, and only
                       a human at an unlocked console takes it (decided 2026-08-18) — so when the member rows were
                       compressed to one line for the phone (P12), Approve stayed where Chat sits on a member's row.

@@ -99,7 +99,7 @@ test('the console passes it where it draws a member', () => {
   // characters earlier, so the window landed nowhere near the render and failed against correct code.
   const at = DASH.indexOf('Requests to join');
   assert.notEqual(at, -1, 'the pending-joins list moved — re-anchor this test');
-  assert.match(DASH.slice(at, at + 2500), /av=\{m\.av\}/,
+  assert.match(DASH.slice(at, at + 3400), /av=\{m\.av\}/,
     'join requests still show a faceless badge, which is the screen where a steward approves a stranger');
 });
 

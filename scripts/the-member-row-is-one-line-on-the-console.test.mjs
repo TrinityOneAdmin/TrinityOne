@@ -245,3 +245,34 @@ test('at 1280px a CHILD row has the parent controls off it, a More button on it,
   await escape();
   assert.deepEqual(errors, [], 'the console threw:\n  ' + errors.join('\n  '));
 });
+
+// THE "REQUESTS TO JOIN" CARD (owner 2026-10-13: "the webapp approve should be one line as well"). Nia is the one pending person.
+// Before this change the card was a name row over an Approve row. Browser-rendered only, device check pending.
+const NIA = PEOPLE.pending.name;
+const JOIN_CARD = `[...document.querySelectorAll('[data-join-card]')].find(c => (c.textContent||'').includes(${JSON.stringify(NIA)}))`;
+test('at 1280px the join-request card is ONE line, at most 56px, with avatar, name, Approve and decline together', SKIP, async () => {
+  await setSize(1280, 900);
+  const r = await rowOf(NIA, true);
+  assert.ok(r.height <= 56, `the join card is ${r.height}px tall - not one line. Buttons: ${JSON.stringify(r.buttons.map(b => [b.label.slice(0, 14), b.left, b.top]))}`);
+  const ap = has(r, /^Approve/), dc = has(r, /^Decline/);
+  assert.equal(ap.length, 1, 'no Approve on the card: ' + JSON.stringify(r.buttons.map(b => b.label)));
+  assert.equal(dc.length, 1, 'no Decline on the card');
+  assert.ok(Math.abs(ap[0].top - dc[0].top) <= 4, 'Approve and Decline are on different lines');
+  const nm = JSON.parse(await evalIn(`(() => { const t = ${JOIN_CARD}; const n = t.querySelector('[data-join-person] div div'); const a = n.getBoundingClientRect(), b = t.querySelector('button').getBoundingClientRect(); return JSON.stringify({ nameTop: a.top, nameBottom: a.bottom, btnTop: b.top, btnBottom: b.bottom }); })()`));
+  assert.ok(nm.btnTop < nm.nameBottom && nm.btnBottom > nm.nameTop, 'the name and the buttons are not on one line: ' + JSON.stringify(nm));
+  console.log(`    join card: ${r.height}px (member row 52px)`);
+  assert.deepEqual(errors, [], 'the console threw:\n  ' + errors.join('\n  '));
+});
+
+test('at 360px the join-request card wraps to the two-row shape and the name is whole', SKIP, async () => {
+  await setSize(360, 730);
+  const m = JSON.parse(await evalIn(`(() => { const t = ${JOIN_CARD}; if (!t) return JSON.stringify({ found: false });
+    t.scrollIntoView({ block: 'center' }); const n = t.querySelector('[data-join-person] div div'); const a = n.getBoundingClientRect(), p = t.querySelector('[data-join-actions]').getBoundingClientRect();
+    return JSON.stringify({ found: true, nameBottom: a.bottom, actionsTop: p.top, clipped: n.scrollWidth > n.clientWidth + 1, text: n.textContent, right: t.getBoundingClientRect().right, vw: innerWidth }); })()`));
+  assert.equal(m.found, true, 'no join card at phone width');
+  assert.ok(m.actionsTop >= m.nameBottom - 2, 'the actions are not below the name on a phone: ' + JSON.stringify(m));
+  assert.equal(m.clipped, false, 'the name is clipped on a phone');
+  assert.equal(m.text, NIA);
+  assert.ok(m.right <= m.vw, 'the card runs off the screen: ' + JSON.stringify(m));
+  assert.deepEqual(errors, [], 'the console threw:\n  ' + errors.join('\n  '));
+});
