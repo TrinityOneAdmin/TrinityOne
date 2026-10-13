@@ -5598,7 +5598,20 @@ function DashVersePrompt() {
     }
     return verses.map(function(v) { return v.text; }).join(' ');
   };
-  var pvRefs = (vp && vp.ref) ? vp.ref.split('; ').filter(Boolean) : [];
+  // The passages MEMBERS can see right now. This is the same rule as the member app's Today card
+  // (app/screens-today.jsx, vpSchedule/vpActiveRef): with a schedule, only the entries whose time has come; with none,
+  // the prompt's own ref. The console preview used to split `vp.ref` (every passage ever added to the prompt,
+  // scheduled-for-later ones included, plus any older unscheduled one the schedule no longer shows) and so previewed
+  // passages no member could see.
+  var dvpLiveRefs = function(vp, nowSec) {
+    if (!vp) return [];
+    var sch = Array.isArray(vp.schedule) ? vp.schedule : [];
+    var ref = sch.length > 0
+      ? sch.filter(function(s) { return s.at <= nowSec; }).sort(function(a, b) { return a.at - b.at; }).map(function(s) { return s.ref; }).filter(Boolean).join('; ')
+      : (vp.ref || '');
+    return ref ? ref.split('; ').filter(Boolean) : [];
+  };
+  var pvRefs = dvpLiveRefs(vp, Math.floor(Date.now() / 1000));
   var pvSafeIdx = pvIdx < pvRefs.length ? pvIdx : 0;
   var pvRef = pvRefs[pvSafeIdx] || '';
   var pvText = pvRef ? resolveText(pvRef) : null;
@@ -10071,15 +10084,18 @@ function DashSermons() {
                 meet the refusal only once they press Save. */}
             <button onClick={() => { if (_churchOnly) { setUpMsg('✗ ' + SERMON_OWNER_ONLY); return; } setEditing(s); }} aria-disabled={_churchOnly || undefined} title={_churchOnly ? SERMON_OWNER_ONLY : 'Edit name & details'} aria-label="Edit sermon" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '8px 10px', minWidth: 40, minHeight: 40, boxSizing: 'border-box', alignItems: 'center', justifyContent: 'center', cursor: _churchOnly ? 'not-allowed' : 'pointer', opacity: _churchOnly ? 0.55 : 1, color: 'var(--ink-3)', display: 'flex' }}><Icon name={_churchOnly ? 'lock' : 'pen'} size={14} color="currentColor" /></button>
             <button onClick={() => togglePin(s)} title={pinnedId === s.id ? 'Pinned to members’ Today — tap to unpin' : 'Feature on members’ Today'} style={{ border: '1px solid ' + (pinnedId === s.id ? 'var(--clay)' : 'var(--line)'), background: pinnedId === s.id ? 'var(--clay)' : 'var(--surface)', borderRadius: 9, padding: '8px 10px', minHeight: 40, boxSizing: 'border-box', alignItems: 'center', justifyContent: 'center', gap: 5, cursor: 'pointer', color: pinnedId === s.id ? '#fff' : 'var(--ink-2)', fontSize: 12.5, fontWeight: 700, fontFamily: 'var(--font-ui)', display: 'flex' }}><Icon name="pin" size={14} color="currentColor" />{pinnedId === s.id ? 'Featured' : 'Feature'}</button>
+            {/* NO "This can’t be undone" OVER SOMETHING THAT CANNOT HAPPEN. The confirmation sheet used to
+                open on a delegated console and take the press, and only then did the engine refuse. */}
+            <button onClick={() => { if (_churchOnly) { setUpMsg('✗ ' + SERMON_REMOVE_OWNER_ONLY); return; } setPendingDelete(s); }} aria-disabled={_churchOnly || undefined} title={_churchOnly ? SERMON_REMOVE_OWNER_ONLY : 'Remove'} aria-label="Remove sermon" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '8px 10px', minWidth: 40, minHeight: 40, boxSizing: 'border-box', alignItems: 'center', justifyContent: 'center', cursor: _churchOnly ? 'not-allowed' : 'pointer', opacity: _churchOnly ? 0.55 : 1, color: 'var(--ink-3)', display: 'flex' }}><Icon name={_churchOnly ? 'lock' : 'trash'} size={14} color="currentColor" /></button>
+            {/* LAST CHILD ON PURPOSE. The row wraps (flex-wrap), and this block is 100% wide: placed between Feature and
+                Remove it forced a line break there and left the Remove button alone on a third line on a phone. */}
             {featureChoiceId === s.id && pinnedId !== s.id ? (
-              <div style={{ flexBasis: '100%', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <div data-testid="feature-choice" style={{ flexBasis: '100%', display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)' }}>Tell members?</span>
                 <button onClick={() => doFeature(s, true)} className="sk-btn sk-btn--clay" style={{ fontSize: 12.5, minHeight: 40 }}>Feature and notify</button>
                 <button onClick={() => doFeature(s, false)} className="sk-btn sk-btn--ghost" style={{ fontSize: 12.5, minHeight: 40 }}>Feature quietly</button>
               </div>
             ) : null}
-            {/* NO "This can’t be undone" OVER SOMETHING THAT CANNOT HAPPEN. The confirmation sheet used to
-                open on a delegated console and take the press, and only then did the engine refuse. */}
-            <button onClick={() => { if (_churchOnly) { setUpMsg('✗ ' + SERMON_REMOVE_OWNER_ONLY); return; } setPendingDelete(s); }} aria-disabled={_churchOnly || undefined} title={_churchOnly ? SERMON_REMOVE_OWNER_ONLY : 'Remove'} aria-label="Remove sermon" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '8px 10px', minWidth: 40, minHeight: 40, boxSizing: 'border-box', alignItems: 'center', justifyContent: 'center', cursor: _churchOnly ? 'not-allowed' : 'pointer', opacity: _churchOnly ? 0.55 : 1, color: 'var(--ink-3)', display: 'flex' }}><Icon name={_churchOnly ? 'lock' : 'trash'} size={14} color="currentColor" /></button>
           </div>))}</div> : null}
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: 'var(--ink-2)', margin: '0 0 10px', cursor: 'pointer', lineHeight: 1.4 }}>
           <input type="checkbox" checked={encOn} onChange={e => setEncOn(e.target.checked)} style={{ flexShrink: 0 }} />

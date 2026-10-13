@@ -73,10 +73,15 @@ window.safeImgUrl = function (v) {
   NAME_TO_NUM["psalm"] = 19; NAME_TO_NUM["song of songs"] = 22;
   const bookNum = name => NAME_TO_NUM[String(name || "").trim().toLowerCase().replace(/\s+/g, " ")] || 0;
   function parseRef(str){
-    const m = String(str || "").match(/^\s*([1-3]?\s?[A-Za-z][A-Za-z ]*?)\s+(\d+)(?::(\d+))?/);
+    // "John 3:16-21" -> verse 16 AND verseEnd 21. verseEnd is present only for a same-chapter range that really
+    // runs forward; "John 3:16-4:2" (a range into the next chapter) and "John 3:16-16" carry none, so a caller
+    // that has never heard of verseEnd sees exactly the object it always did.
+    const m = String(str || "").match(/^\s*([1-3]?\s?[A-Za-z][A-Za-z ]*?)\s+(\d+)(?::(\d+)(?:\s*[-\u2013\u2014]\s*(\d+)(?![\d:]))?)?/);
     if(!m) return null;
     const book = bookNum(m[1]); if(!book) return null;
-    return { book, chap: parseInt(m[2], 10), verse: m[3] ? parseInt(m[3], 10) : undefined };
+    const out = { book, chap: parseInt(m[2], 10), verse: m[3] ? parseInt(m[3], 10) : undefined };
+    if(m[4] && parseInt(m[4], 10) > out.verse) out.verseEnd = parseInt(m[4], 10);
+    return out;
   }
 
   const USFM_BOOK = {
