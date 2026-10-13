@@ -73,7 +73,7 @@ test('a roster signed by anyone but the church is not evidence of anything', asy
 
 // ── DEFECT 1: the screen ─────────────────────────────────────────────────────────────────────────────────
 const M1 = 'a'.repeat(64);
-async function revokeWhenOkIsLost(w, urls) {
+async function revokeWhenOkIsLost(w, urls, { roster: rosterNow = [STEW, OTHER], revoke = true } = {}) {
   const calls = { care: [], setStewards: [] };
   const outcome = removalOutcome(w, urls);
   const steward = {
@@ -90,15 +90,19 @@ async function revokeWhenOkIsLost(w, urls) {
     stewardCodeToPub: () => null, stewardInvitePayload: () => 'x', qrSVG: () => '',
   };
   const globals = { ...common(), StewQRScanner: () => null, window: { Steward: steward, Capacitor: null,
-    usePendingStewards: () => [], useStewardMembers: () => [{ pubkey: M1, name: 'Ann', joined: 1690000000 }], useStewardStewards: () => [STEW, OTHER],
+    usePendingStewards: () => [], useStewardMembers: () => [{ pubkey: M1, name: 'Ann', joined: 1690000000 }], useStewardStewards: () => rosterNow,
     useStewardGroups: () => [], useStewardBlocked: () => [], addEventListener() {}, removeEventListener() {}, dispatchEvent: () => true } };
   const { C, draw } = await compiled('DashStewardsPanel', globals, ['rotateChurchKeys']);
   let tree = draw(C, { church: { name: 'St Aidan' } });
-  await find(tree, n => n && n.type === 'button' && n.props.title === 'Revoke this steward')[0].props.onClick();
-  tree = draw(C, { church: { name: 'St Aidan' } });
-  await press(tree, /Confirm — revoke this steward/);
-  tree = draw(C, { church: { name: 'St Aidan' } });
-  return { calls, said: reads(tree) };
+  // THE REVOKE CONTROL IS RENDERED PER ROSTER ROW, which is why the roster is a parameter: count them.
+  const revokes = () => find(tree, n => n && n.type === 'button' && n.props.title === 'Revoke this steward');
+  if (revoke) {
+    await revokes()[0].props.onClick();
+    tree = draw(C, { church: { name: 'St Aidan' } });
+    await press(tree, /Confirm — revoke this steward/);
+    tree = draw(C, { church: { name: 'St Aidan' } });
+  }
+  return { calls, said: reads(tree), revokeControls: revokes().length };
 }
 test('SCREEN: OK lost but the relay applied it -> no false failure, and the church IS re-keyed', async () => {
   const r = await revokeWhenOkIsLost(world({ A: [roster([OTHER], 200)], B: [roster([OTHER], 200)] }), ['A', 'B']);
@@ -116,6 +120,25 @@ test('SCREEN: OK lost and a relay is silent -> says it cannot tell, rotates noth
   assert.match(r.said, /Couldn’t confirm that Tom Ridley was removed — the relay didn’t answer, and nothing was re-keyed/);
   assert.doesNotMatch(r.said, /STILL a steward|still lists/);
   assert.equal(r.calls.care.length, 0);
+});
+
+// THE WORDS MUST NAME SOMETHING THE STEWARD CAN ACTUALLY DO. The "cannot tell" note used to end "Check the list, then
+// try again": in the case it is written for — the write landed on one relay, the OK went with the socket — the roster
+// read a minute later is the SHORTER one, so the row goes, and with it the only control that calls rotateChurchKeys
+// (the other caller is Block, which needs them to be a member). Nothing was re-keyed and the steward was sent back to
+// a button that no longer exists. Row 2 is the premise, rendered: Revoke is per roster row.
+test('SCREEN: the note it cannot confirm names a route that exists, not an impossible "try again"', async () => {
+  const r = await revokeWhenOkIsLost(world({ A: [roster([STEW, OTHER], 100)], B: [] }), ['A', 'B']);
+  assert.match(r.said, /Check the list — if they’ve gone, add them back and revoke again to change the keys\./);
+  assert.doesNotMatch(r.said, /Check the list, then try again/, 'the steward is sent back to a control that may no longer exist');
+});
+test('SCREEN: Revoke is rendered PER ROSTER ROW — off the roster, theirs is gone', async () => {
+  const silent = () => world({ A: [roster([STEW, OTHER], 100)], B: [] });
+  const before = await revokeWhenOkIsLost(silent(), ['A', 'B'], { revoke: false });
+  assert.equal(before.revokeControls, 2, 'one Revoke per roster row');
+  const after = await revokeWhenOkIsLost(silent(), ['A', 'B'], { roster: [OTHER], revoke: false });
+  assert.equal(after.revokeControls, 1, 'the removed delegate is off the roster and still offered a Revoke');
+  assert.doesNotMatch(after.said, /Tom Ridley/, 'the removed delegate is off the roster and still named on the panel');
 });
 
 // ── DEFECT 2 ─────────────────────────────────────────────────────────────────────────────────────────────
