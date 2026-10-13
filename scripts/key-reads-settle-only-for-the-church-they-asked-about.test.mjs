@@ -1485,3 +1485,45 @@ test('LOW 2: the member list is FRESH only once a genuine read of the member doc
   assert.ok(e.S.listIsFresh(last), 'A SETTLED, GENUINE READ OF THE MEMBER DOCUMENTS DID NOT MAKE THE MEMBER LIST FRESH');
   assert.ok(last.some(m => m.pubkey === M1.pub), 'the fresh list does not include the member the read delivered');
 });
+
+// ROUND 3e, MED 2 (audit of b102dc6): A MEMBER LIST READ FROM ONE RELAY IS NOT COMPLETE. The member-document read used
+// "every CONNECTED relay", so with the second relay down the list from the first was marked fresh — and Block's keepOnly
+// then dropped approved holders whose member document lives only on the down relay, and their phones deleted their keys.
+// A key is taken only on positive evidence: the read is fresh only once EVERY relay in the church's set has answered.
+test('3e MED 2: with one of two relays down, the member list is NOT fresh — and becomes fresh once both have answered', async () => {
+  const e = engine(); e.t.relayList = [R1, R2]; e.t.up = new Set([R1]);   // R2 is down
+  let last = null;
+  e.S.subscribeMembers((l) => { last = l; });
+  const reads = () => e.subs.filter(r => r.d === 'trinityone/member:' + A.pub && !r.closed);
+  const [r1, r2] = [reads().find(r => r.url === R1), reads().find(r => r.url === R2)];
+  assert.ok(r1 && r2, 'CONTROL: the member-document read was not opened on both relays');
+  const ts = 1759299000;
+  r1.handlers.onevent({ pubkey: M1.pub, kind: 30078, created_at: ts, tags: [['d', 'trinityone/member:' + A.pub], ['p', A.pub]], content: JSON.stringify({ joined: ts }) });
+  await e.eose(r1);
+  await e.closedByRelay(r2, 'connection failed');                       // the down relay: no answer
+  assert.ok(!e.S.listIsFresh(last), 'A MEMBER LIST READ FROM ONE RELAY, WITH THE OTHER DOWN, WAS MARKED FRESH — Block would take keys from members whose document only the down relay holds');
+  // the down relay comes back: the read asks again, both answer, and now the list is fresh
+  e.t.up = new Set([R1, R2]);
+  e.fireTimers();
+  const [s1, s2] = [reads().find(r => r.url === R1), reads().find(r => r.url === R2)];
+  assert.ok(s1 && s2, 'CONTROL: the member read did not ask again');
+  s2.handlers.onevent({ pubkey: M2.pub, kind: 30078, created_at: ts, tags: [['d', 'trinityone/member:' + A.pub], ['p', A.pub]], content: JSON.stringify({ joined: ts }) });
+  await e.eose(s1); await e.eose(s2);
+  assert.ok(e.S.listIsFresh(last), 'CONTROL: with both relays answering, the member list never became fresh');
+  assert.ok(last.some(m => m.pubkey === M2.pub), 'the fresh list lacks the member only the second relay held');
+});
+
+// ROUND 3e, LOW 1 (audit of b102dc6): the care ring is READ, both shapes — executed, because care-key-ring's text check
+// could be satisfied by the same-rev block's own Array.isArray. A ring envelope gives the whole ring; a legacy envelope
+// (one bare hex key, from before the ring) gives a one-key ring.
+test('3e LOW 1: the care envelope\'s ring is read whole, and a legacy bare-key envelope as a one-key ring', async () => {
+  const e = engine(); e.t.up = new Set([R1]);
+  e.S.subscribeCareKey();
+  const s = e.subs.at(-1);
+  s.handlers.onevent(envAt(CAREKEY_D, A, [K2, K1], [A.pub, M1.pub], OLD_AT, 1));
+  assert.deepEqual(e.t._careKeyRing, [K2, K1], 'A RING ENVELOPE WAS NOT READ AS ITS RING — needs sealed under the older key would not open');
+  const legacy = { pubkey: A.pub, kind: 30078, created_at: OLD_AT + 10, tags: [['d', CAREKEY_D + A.pub], ['t', 'trinityone']],
+    content: JSON.stringify({ rev: 2, keys: { [A.pub]: nip44.v2.encrypt(K1, ck(A.sk, A.pub)) } }) };
+  s.handlers.onevent(legacy);
+  assert.deepEqual(e.t._careKeyRing, [K1], 'a legacy envelope (one bare hex key) was not read as a one-key ring');
+});

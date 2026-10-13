@@ -16912,6 +16912,7 @@ zoo`.split("\n");
   }
   function _freshDocRead(cp0, ds, onevent, onFresh) {
     const _ownFilters = arguments[4] || null;
+    const _everyRelay = !!(arguments[5] && arguments[5].everyRelay);
     let stop = null, stopped = false;
     const open = () => {
       if (stopped) return;
@@ -16940,7 +16941,7 @@ zoo`.split("\n");
           }, 0);
         },
         void 0,
-        { withoutFailed: true }
+        { withoutFailed: !_everyRelay }
       );
       stop = st;
     };
@@ -25191,7 +25192,11 @@ zoo`.split("\n");
           }
           emitNow();
         },
-        [{ kinds: [30078], "#d": [MEMBER_D + cp0] }]
+        [{ kinds: [30078], "#d": [MEMBER_D + cp0] }],
+        // EVERY RELAY, NOT EVERY CONNECTED ONE (round 3e). A key is taken from someone only on positive evidence — blocked,
+        // removed, or absent from a list EVERY relay vouched for — never because a relay that holds their member document
+        // is down. With a relay down this list is never fresh, so Block and Remove keep the floor (round 3c) and drop nobody.
+        { everyRelay: true }
       );
       const reseatSub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
         onevent(e) {

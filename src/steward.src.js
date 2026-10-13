@@ -2582,6 +2582,11 @@ function _reconfirmFresh() { for (const f of [..._freshReopeners]) { try { f(); 
 // Returns the closer.
 function _freshDocRead(cp0, ds, onevent, onFresh) {
   const _ownFilters = arguments[4] || null;
+  // `arguments[5].everyRelay` (round 3e; audit of b102dc6): settle only once EVERY relay in the church's set has answered
+  // genuinely — the old, strict rule — instead of "every CONNECTED relay" (`withoutFailed`). For a read whose answer is
+  // used to TAKE A KEY AWAY (the member list, subscribeMembers), a relay that is down may be the only one holding
+  // somebody's member document; "not on the list" from the relays that answered is then missing data, not evidence.
+  const _everyRelay = !!(arguments[5] && arguments[5].everyRelay);
   let stop = null, stopped = false;
   const open = () => {
     if (stopped) return;
@@ -2592,7 +2597,7 @@ function _freshDocRead(cp0, ds, onevent, onFresh) {
     const st = _openKeyRead(cp0, _ownFilters || [{ kinds: [30078], authors: [cp0], '#d': ds }, { kinds: [30078], '#church': [cp0], '#d': ds }],
       (e) => { if (!stopped) onevent(e); },
       (how) => { if (stopped) return; onFresh(how); setTimeout(() => { if (stop === st) { try { st(); } catch (e) {} } }, 0); },
-      undefined, { withoutFailed: true });
+      undefined, { withoutFailed: !_everyRelay });
     stop = st;
   };
   _freshReopeners.add(open);
@@ -11633,7 +11638,11 @@ window.Steward = {
     // login is retried (pool.automaticallyAuth) — and console-keys-follow-the-church-switch passed 2/2 with this gate removed.)
     const stopRead = actingChurch ? () => {} : _freshDocRead(cp0, [MEMBER_D + cp0], (e) => handlers.onevent(e),
       () => { tok.genuine = true; tok.at = Date.now(); if (emitTimer) { try { clearTimeout(emitTimer); } catch (e) {} emitTimer = null; } emitNow(); },
-      [{ kinds: [30078], '#d': [MEMBER_D + cp0] }]);
+      [{ kinds: [30078], '#d': [MEMBER_D + cp0] }],
+      // EVERY RELAY, NOT EVERY CONNECTED ONE (round 3e). A key is taken from someone only on positive evidence — blocked,
+      // removed, or absent from a list EVERY relay vouched for — never because a relay that holds their member document
+      // is down. With a relay down this list is never fresh, so Block and Remove keep the floor (round 3c) and drop nobody.
+      { everyRelay: true });
     // the church's own signed re-seat map (same doc the Reconnect button writes). Its own small subscription:
     // the roster sub above is keyed on ['p',<church>], which a re-seat doc does not carry.
     const reseatSub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], '#t': [NET] }, { kinds: [30078], '#church': [pub], '#t': [NET] }], {

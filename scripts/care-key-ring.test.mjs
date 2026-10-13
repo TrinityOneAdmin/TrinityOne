@@ -88,7 +88,14 @@ test('legacy envelopes (a bare hex key, no ring) are still readable', () => {
   // RE-ANCHORED 2026-10-12 (round 3d): the same-rev guard at the top of the function pushed the fallback past a fixed
   // 1200-character window. It now reads the whole function, up to the next top-level function.
   const _at = BUNDLE.indexOf('function _ingestCareKeyEnv');
-  const ingest = BUNDLE.slice(_at, BUNDLE.indexOf('\n  function ', _at + 10));
+  // …and NARROWED AGAIN 2026-10-13 (round 3e, LOW 1; audit of b102dc6): the whole function also holds the same-rev block,
+  // whose OWN Array.isArray satisfied this check with the main path's disabled. It now reads only the main path — from
+  // where an envelope is accepted (_careKeyAt is stamped) to the end of the function. (b102dc6's message said the widening
+  // did not weaken this check. It did; this restores it.) The executed version is in key-reads-settle-only-…, 3e LOW 1.
+  const _fnEnd = BUNDLE.indexOf('\n  function ', _at + 10);
+  const _main = BUNDLE.indexOf('_careKeyAt = e.created_at', _at);
+  assert.ok(_main > _at && _main < _fnEnd, 're-anchor: the main path of _ingestCareKeyEnv no longer starts by stamping _careKeyAt');
+  const ingest = BUNDLE.slice(_main, _fnEnd);
   assert.match(ingest, /Array\.isArray/, 'the ingest must detect the array form');
   assert.match(ingest, /\[plain\]/, 'and fall back to treating a bare string as a one-key ring');
 });

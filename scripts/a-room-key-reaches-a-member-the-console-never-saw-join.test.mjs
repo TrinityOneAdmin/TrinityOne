@@ -394,6 +394,10 @@ test('H · someone who has LEFT is not carried through a Block pressed on the Me
   const rotated = sent.filter(x => !x.recips.includes(MF.pub) && (x.d === GROUPKEY_D + roomId || x.d === CAREKEY_D + churchA || x.d === MEDIAKEY_D + churchA));
   assert.ok(rotated.length >= 3, 'CONTROL: fewer than three rotated envelopes were sent');
   for (const x of rotated) assert.ok(!x.recips.includes(M1.pub), `SOMEONE WHO HAS LEFT (M1) WAS CARRIED THROUGH THE BLOCK'S ${x.d.slice(11, 19)} ROTATION: [${x.recips.map(nm)}]`);
+  // …AND THE MEMBER WHO STAYS KEEPS EVERYTHING (round 3e, LOW 2) — the dangerous direction: a rotation that dropped MG
+  // would make MG's phone delete the key. Every rotated envelope the console sent, and the relay's copy afterwards.
+  for (const x of rotated) assert.ok(x.recips.includes(MG.pub), `THE BLOCK'S ${x.d.slice(11, 19)} ROTATION DROPPED MG, A MEMBER WHO STAYS — their phone deletes the key: [${x.recips.map(nm)}]`);
+  assert.ok(room().includes(MG.pub) && care().includes(MG.pub) && media().includes(MG.pub), 'after the Block, MG (a member who stays) is missing from a key on the relay: ' + show());
   await sleep(10000);   // the distributor's ticks: M1 must not be handed back either
   assert.ok(!room().includes(M1.pub) && !care().includes(M1.pub) && !media().includes(M1.pub), 'the distributor handed the rotated keys back to someone who has LEFT: ' + show());
   assert.deepEqual(errors, [], 'the console threw:\n  ' + errors.join('\n  '));
