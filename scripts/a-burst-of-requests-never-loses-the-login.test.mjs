@@ -122,3 +122,34 @@ for (const [what, frame] of [['unparseable garbage', () => 'x'.repeat(2000)], ['
     assert.equal(code, 1008, `${what.toUpperCase()} BELOW THE PER-SECOND CAP WAS NEVER CUT OFF (got ${code})`);
   });
 }
+
+// ROUND 3g, finding 4 (audit of b4b7277). Two more:
+//   · a REQ or EVENT past the 300-a-second cap was dropped without a word — the silent drop 5c35bfd removed at 100 (measured:
+//     250 CLOSEs then 80 REQs left 30 REQs unanswered; an EVENT as the 301st frame got no OK). Answered now.
+//   · the abuse count never went down, so a long-lived console that bursts now and then was eventually closed. It is now a
+//     10-second window: a flood still closes (every flood row above), a busy console does not.
+test('3g: past the 300-a-second cap, every REQ is still answered and an EVENT gets its OK', async () => {
+  const { ws, frames } = await socket();
+  for (let i = 0; i < 250; i++) ws.send(JSON.stringify(['CLOSE', 'c' + i]));
+  for (let i = 0; i < 80; i++) ws.send(JSON.stringify(['REQ', 'r' + i, { kinds: [1], limit: 1 }]));
+  const ev = finalizeEvent({ kind: 1, created_at: H.now(), tags: [], content: 'hello' }, church.sk);
+  ws.send(JSON.stringify(['EVENT', ev]));
+  await until(() => frames.filter(f => (f[0] === 'EOSE' || f[0] === 'CLOSED') && /^r\d+$/.test(f[1])).length >= 80 && frames.some(f => f[0] === 'OK' && f[1] === ev.id), 5000);
+  const answered = new Set(frames.filter(f => (f[0] === 'EOSE' || f[0] === 'CLOSED')).map(f => f[1]));
+  const silent = Array.from({ length: 80 }, (_, i) => 'r' + i).filter(id => !answered.has(id));
+  assert.deepEqual(silent, [], `REQUESTS PAST THE 300 CAP WERE DROPPED WITHOUT AN ANSWER: ${silent.length} of 80`);
+  assert.ok(frames.some(f => f[0] === 'OK' && f[1] === ev.id), 'AN EVENT PAST THE 300 CAP GOT NO OK — the sender waits for an answer that never comes');
+  ws.close();
+});
+test('3g: a console that is busy for a long time — 140 requests a second for 14 s — is NOT closed as an abuser', { timeout: 60000 }, async () => {
+  const { ws } = await socket();
+  const closed = closedWith(ws);
+  let code = null; closed.then(c => { code = c; });
+  for (let sec = 0; sec < 14 && ws.readyState === 1; sec++) {
+    for (let i = 0; i < 140; i++) ws.send(JSON.stringify(['REQ', 's' + sec + '-' + i, { kinds: [1], limit: 1 }]));
+    for (let i = 0; i < 140; i++) ws.send(JSON.stringify(['CLOSE', 's' + sec + '-' + i]));
+    await H.sleep(1000);
+  }
+  assert.equal(ws.readyState, 1, `A BUSY CONSOLE WAS CLOSED AS AN ABUSER (code ${code}) — the abuse count never went down`);
+  ws.close();
+});

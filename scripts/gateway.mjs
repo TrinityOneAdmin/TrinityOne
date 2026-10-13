@@ -8434,7 +8434,7 @@ wss.on('connection', (ws, req) => {
   // per-connection inbound rate limit (CPU-DoS guard). EVERY counter starts at 0 (round 3f, R1; audit of 4bb1ed1): `a` was
   // left undefined, `undefined + 1` is NaN and `NaN > 10` is false, so the AUTH budget did not exist in a connection's first
   // second — measured: 500 AUTHs at connect, 244 verified and accepted.
-  ws._rl = { n: 0, a: 0, f: 0, t: Date.now(), drop: 0 };
+  ws._rl = { n: 0, a: 0, f: 0, t: Date.now(), drop: 0, dt: Date.now() };
   ws._challenge = randomBytes(16).toString('hex');    // per-connection nonce
   // LAZY NIP-42: we do NOT challenge on connect (that made every member pay a slow auth round-trip).
   // We only send the AUTH challenge when a REQ actually tries to read invite-only content (below), so
@@ -8454,10 +8454,26 @@ wss.on('connection', (ws, req) => {
     // frame the relay cannot use (unparseable, not an array) counts as abuse outright. Abuse adds up; past 500 the socket
     // is closed (1008), as it always was. ONE FRAME IS EXEMPT FROM THE 300: an AUTH, looked at cheaply before parsing, so
     // a flood of anything else cannot starve the login (5c35bfd's fix) — it has its own budget of 10 a second instead.
-    const _abuse = () => { if (++ws._rl.drop > 500) { try { ws.close(1008, 'rate limit'); } catch (e) {} } };
+    // ABUSE IS COUNTED OVER A WINDOW, NOT A LIFETIME (round 3g, finding 4; audit of b4b7277). The count never went down, so a
+    // long-lived console that bursts now and then — 120 requests a second for half a minute, say — was eventually closed
+    // as an abuser. It now starts again every 10 seconds: past 500 within one window is a flood, and is closed (1008).
+    const _abuse = () => { if (_now - ws._rl.dt >= 10000) { ws._rl.dt = _now; ws._rl.drop = 0; } if (++ws._rl.drop > 500) { try { ws.close(1008, 'rate limit'); } catch (e) {} } };
     const _head = (typeof raw === 'string' ? raw : raw.subarray(0, 12).toString()).slice(0, 12);
     const _looksAuth = /^\[\s*"AUTH"/.test(_head);
-    if (!_looksAuth && ++ws._rl.f > 300) { _abuse(); return; }
+    if (!_looksAuth && ++ws._rl.f > 300) {
+      _abuse();
+      // …AND A REQUEST OR AN EVENT PAST THE 300 IS ANSWERED, NOT DROPPED (round 3g, finding 4) — the silent drop 5c35bfd
+      // removed at 100 had come back at 300: measured, 250 CLOSEs then 80 REQs left 30 REQs with no answer, and an EVENT
+      // as the 301st frame got no OK. Only those two are worth the parse, and only until the socket is closed for abuse.
+      if (ws.readyState === 1 && /^\[\s*"(REQ|EVENT)"/.test(_head)) {
+        try {
+          const m = JSON.parse(raw);
+          if (Array.isArray(m) && m[0] === 'REQ' && typeof m[1] === 'string') ws.send(JSON.stringify(['CLOSED', m[1], 'rate-limited: too many messages — ask again in a moment']));
+          else if (Array.isArray(m) && m[0] === 'EVENT' && m[1] && m[1].id) ws.send(JSON.stringify(['OK', m[1].id, false, 'rate-limited: too many messages — try again in a moment']));
+        } catch (e) {}
+      }
+      return;
+    }
     let msg; try { msg = JSON.parse(raw); } catch { _abuse(); return; }
     if (!Array.isArray(msg) || !msg.length) { _abuse(); return; }   // a non-array message (or empty) would throw at the destructure below
     const [type, ...rest] = msg;
