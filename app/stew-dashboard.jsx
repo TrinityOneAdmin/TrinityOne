@@ -4867,7 +4867,11 @@ function DashRelaysCard() {
   const [regNeeded, setRegNeeded] = React.useState(relayRejectionActive);
   const [refusalTick, setRefusalTick] = React.useState(0);   // bumps when one relay's refusal clears but others remain
   React.useEffect(() => {
-    const onRejected = () => setRegNeeded(true);
+    // A SECOND REFUSAL, ON A DIFFERENT RELAY, WHILE THIS PAGE IS OPEN. setRegNeeded(true) is a no-op when the
+    // alarm is already up, so nothing in the refusedSet memo below moved and the pill stayed on the relay that
+    // refused FIRST — until the 30-second health probe happened to hand the card a fresh array. The tick is
+    // what that memo watches for a refusal CHANGING, so bump it here too.
+    const onRejected = () => { setRegNeeded(true); setRefusalTick(n => n + 1); };
     // A relay taking a write clears THAT relay's refusal (clearRelayRefusal, module level, fires
     // steward-relay-cleared when the last one goes). It used to clear everything on any steward-publish-ok -
     // but that fires when ANY relay accepted, so relay B saying yes wiped the pill on relay A still refusing,
@@ -4903,11 +4907,12 @@ function DashRelaysCard() {
   // relay list has asked "are you sure?" since the day it shipped. This is the console catching up.
   const [confirmDrop, setConfirmDrop] = React.useState(null);   // the url awaiting a yes, or null
   const relayName = (u) => { try { return (window.Steward.relayNameFor && window.Steward.relayNameFor(u)) || ''; } catch (e) { return ''; } };
-  // ⚠ `status` STAYS A DEP OF THIS MEMO, and must not be tidied into the `listedRelayKeys` string above. A
-  // SECOND refusal arriving while this page is open cannot move either of the other two deps —
-  // setRegNeeded(true) is a no-op when it is already true, and refusalTick only moves when a refusal CLEARS —
-  // so the fresh array relayStatus() returns on each 30-second probe is the only thing that recomputes this,
-  // and the pill catches up within 30s. Key it on the addresses instead and that 30s wart becomes permanent.
+  // ⚠ `status` STAYS A DEP OF THIS MEMO, and must not be tidied into the `listedRelayKeys` string above —
+  // those are the relay ADDRESSES, which can be identical while the refusal state has moved. refusalTick now
+  // covers a refusal arriving as well as one clearing (see onRejected), and `status` is the repaint when the
+  // health check returns; setRegNeeded(true) covers neither, because it is a no-op when the alarm is already
+  // up. Before the tick was bumped on arrival, a second refusal left the pill on the relay that refused first
+  // until the next 30-second probe; keying this on the addresses would have made that permanent.
   const refusedSet = React.useMemo(() => {
     const key = (u) => String(u || '').trim().toLowerCase().replace(/\/+$/, '');   // same normaliser as relayUrlKey(), inline so this card needs no other global
     const m = new Map();

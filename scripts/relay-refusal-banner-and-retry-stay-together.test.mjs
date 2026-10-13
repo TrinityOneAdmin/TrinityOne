@@ -447,3 +447,21 @@ test('T7 the stale refusal is DELETED, not merely hidden from the page', () => {
     'relay this church no longer publishes to');
   assert.equal(s.localStorage.getItem(s.win.REG_NEEDED_LS), null, 'the alarm timestamp is still in storage');
 });
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────
+// 6. A SECOND REFUSAL REPAINTS THE PILLS AT ONCE. The alarm flag is already up by then, so setRegNeeded(true)
+//    is a no-op and nothing the refusedSet memo watches had moved — the pill stayed on the relay that refused
+//    FIRST until the 30-second health probe happened to hand the card a fresh array.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────
+
+test('L2 a second relay refusing while the page is open is marked without waiting for the next probe', () => {
+  const s = withRelays(TWO, [{ url: A, error: 'blocked: not a member' }]);
+  assert.equal(pillCount(s.render()), 1, 're-anchor: the first refusal is not on screen');
+  // the REAL recorder, through the event it raises — the same path the publish-error banner takes. The relay
+  // list is deliberately NOT re-probed: `status` keeps its identity, so only the refusal signal can repaint.
+  s.mod.noteRelayRejection([{ url: A, error: 'blocked: not a member' }, { url: B, error: 'blocked: not a member' }]);
+  assert.equal(pillCount(s.render()), 2,
+    'a second relay started refusing and only the FIRST one is marked \u2014 the steward is told the wrong relay is ' +
+    'the problem until the 30-second health probe happens to repaint the card');
+  assert.deepEqual(s.mod.relaysThatRefused().map(r => r.url), [A, B]);
+});
