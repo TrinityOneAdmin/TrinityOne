@@ -4426,9 +4426,16 @@ function DashGroups() {
             <button onClick={() => window.dispatchEvent(new CustomEvent('steward-open-group-chat', { detail: it }))} title="Open chat" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 9px', cursor: 'pointer', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="chat" size={15} color="currentColor" /> Chat</button>
           </React.Fragment>
         )}
-        renderAside={(it) => (
-          <button onClick={() => (it.kind === 'team' && window.TeamRemoval ? window.TeamRemoval.ask(it) : setPendingDelete(it))} title={it.kind === 'team' ? 'Remove team' : 'Remove group'} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '8px 10px', minWidth: 40, minHeight: 40, boxSizing: 'border-box', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={15} color="currentColor" /></button>
-        )} />
+        renderAside={(it) => {
+          // THE CARE TEAM IS NOT OFFERED FOR DELETION (owner, 2026-10-13; reference/DOMAIN.md "CARE TEAM CANNOT BE
+          // DELETED"), here as on the Rota page: disabled, with the reason in the tooltip and in the label a
+          // screen reader reads, rather than a confirm dialog that cannot complete. `careTeamId` comes from the
+          // shared removal flow (useTeamRemoval), and TeamRemoval.ask and Steward.removeTeam refuse it as well.
+          const noCare = it.kind === 'team' && !!trs.careTeamId && it.id === trs.careTeamId;
+          return (
+          <button onClick={() => (it.kind === 'team' && window.TeamRemoval ? window.TeamRemoval.ask(it) : setPendingDelete(it))} disabled={noCare} title={noCare ? (trs.careWhy || '') : (it.kind === 'team' ? 'Remove team' : 'Remove group')} aria-label={(it.kind === 'team' ? 'Remove team ' : 'Remove group ') + (it.name || '') + (noCare ? ' — ' + (trs.careWhy || '') : '')} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '8px 10px', minWidth: 40, minHeight: 40, boxSizing: 'border-box', alignItems: 'center', justifyContent: 'center', cursor: noCare ? 'default' : 'pointer', opacity: noCare ? 0.4 : 1, color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={15} color="currentColor" /></button>
+          );
+        }} />
       <NewGroupModal open={adding} onClose={() => setAdding(false)} />
       {catsOpen ? <CategoriesModal cats={cats} groups={all} onClose={() => setCatsOpen(false)} /> : null}
       {chatGroup ? <GroupChatModal group={chatGroup} onClose={() => setChatGroup(null)} /> : null}

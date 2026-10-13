@@ -725,6 +725,10 @@
       subscribeSettings,
       setEnabled,
       cachedEnabled,
+      // WHICH TEAM IS THE CARE TEAM, as last read from the settings document. Steward.removeTeam asks this
+      // so its refusal to delete the care team does not depend on a caller passing the id in (owner,
+      // 2026-10-13, "CARE TEAM CANNOT BE DELETED"). '' until subscribeSettings has had an answer.
+      careTeamId: () => _careTeamSeen,
       // care-team recipient roster (for the "ask for help" seal)
       publishCareTeam,
       refreshCareTeam,

@@ -637,11 +637,21 @@ function rotaSlotCovers(a, verdict) { return !!(a && a.name) && verdict !== 'dec
 // It lives at module level, not in either screen, so leaving the page inside the undo window neither loses the
 // removal nor sends it early. The engine (Steward.removeTeam) is the only thing that writes.
 const TEAM_UNDO_MS = 9000;
+// THE CARE TEAM IS NOT DELETABLE (owner, 2026-10-13; reference/DOMAIN.md "CARE TEAM CANNOT BE DELETED").
+// The words are the engine's (Steward.CARE_TEAM_UNDELETABLE) so there is one copy of the copy; the literal
+// here is only for a console running an older vendor/steward.js, where it would otherwise be blank.
+const CARE_WHY = () => (window.Steward && window.Steward.CARE_TEAM_UNDELETABLE) || 'Every church needs a care team; edit its members instead.';
 const TeamRemoval = (() => {
   const subs = new Set();
   let asking = null, pending = null, timer = null, note = '', err = '', gone = new Set(), latest = {};
   const emit = () => subs.forEach(f => { try { f(); } catch (e) {} });
   const today = () => (window.todayISO ? window.todayISO() : '');
+  // THE LOCAL WALL CLOCK, for "has this service already happened?" in the engine. A service earlier TODAY
+  // counts as past (owner, 2026-10-13), and the engine cannot read this device's clock basis from `today`
+  // alone. Local, to match window.todayISO — never a UTC hour against a local date.
+  const nowHM = () => { const d = new Date(), p = (n) => String(n).padStart(2, '0'); return p(d.getHours()) + ':' + p(d.getMinutes()); };
+  const careId = () => String(latest.careTeamId || '');
+  const isCare = (id) => !!(careId() && id === careId());
   const isLocked = (id) => (latest.rosters || []).some(r => r && r.team === id && r._locked);
   // who clearing the upcoming services would reach: the confirm dialog's one-line count
   const impact = (id) => {
@@ -659,25 +669,38 @@ const TeamRemoval = (() => {
     const t = pending; if (!t) return;
     timer = null; emit();
     let res;
-    try { res = await window.Steward.removeTeam(t.id, { ...latest, teamName: t.name, today: today() }); } catch (e) { res = { ok: false, reason: 'relay' }; }
+    try { res = await window.Steward.removeTeam(t.id, { ...latest, teamName: t.name, today: today(), nowHM: nowHM() }); } catch (e) { res = { ok: false, reason: 'relay' }; }
     pending = null;
     if (res && res.ok) {
       gone.add(t.id);
       note = 'Removed “' + t.name + '”' + (res.told ? ' · ' + res.told + ' ' + (res.told === 1 ? 'person' : 'people') + ' told' : '') + (res.toldFailed ? ' · ' + res.toldFailed + ' could not be told' : '');
       setTimeout(() => { note = ''; emit(); }, 6000);
     } else {
-      err = res && res.reason === 'locked' ? 'Can’t read “' + t.name + '” yet, so it was not removed. Try again in a moment.'
-        : 'Couldn’t remove “' + t.name + '” — the relay didn’t accept it' + (res && res.reason === 'rota' ? ' (an upcoming rota could not be updated)' : '') + ', so it is still there. Nobody was told.';
+      // A PARTIAL RUN MUST NOT SAY "NOTHING HAPPENED". Measured: a refused roster tombstone returns
+      // { ok:false, reason:'roster' } AFTER the upcoming rotas have been cleared, and this line used to say
+      // "it is still there. Nobody was told." — true of the team, false of the rotas, and it sends the steward
+      // away believing there is nothing to put right. `rotasCleared` is the engine's own count of rotas it
+      // WROTE, so this claims nothing the answer does not carry (and the mirror of this bug, a success screen
+      // over nothing written, is in this repo's history too).
+      const nClear = (res && res.rotasCleared) || 0;
+      const partial = nClear ? ' ' + nClear + ' upcoming ' + (nClear === 1 ? 'service has' : 'services have') + ' already been cleared of the team — run the removal again to finish it.' : '';
+      err = res && res.reason === 'care' ? ((res && res.message) || CARE_WHY())
+        : res && res.reason === 'locked' ? 'Can’t read “' + t.name + '” yet, so it was not removed. Try again in a moment.'
+        : res && res.reason === 'stale' ? 'Somebody else changed an upcoming rota while this was waiting, so “' + t.name + '” was not removed and nobody was told. Try again.' + partial
+        : 'Couldn’t remove “' + t.name + '” — the relay didn’t accept it' + (res && res.reason === 'rota' ? ' (an upcoming rota could not be updated)' : '') + ', so the team is still there. Nobody was told.' + partial;
     }
     emit();
   };
   return {
     subscribe(f) { subs.add(f); return () => subs.delete(f); },
     setContext(c) { latest = c || {}; },
-    state: () => ({ asking, pending, undoable: !!(pending && timer), note, err, gone }),
+    state: () => ({ asking, pending, undoable: !!(pending && timer), note, err, gone, careTeamId: careId(), careWhy: CARE_WHY() }),
     ask(team) {
       if (!team || pending) return;
       err = '';
+      // NEVER THE CARE TEAM (owner, 2026-10-13). Both screens disable the control; this is the same refusal on
+      // the one path they share, so neither screen is the only thing holding it.
+      if (isCare(team.id)) { err = CARE_WHY(); emit(); return; }
       if (isLocked(team.id)) { err = 'Can’t read “' + team.name + '” yet, so it can’t be removed. Try again in a moment.'; emit(); return; }
       asking = team; emit();
     },
@@ -703,7 +726,10 @@ function useTeamRemoval() {
   const [, tick] = useSch(0);
   useSchE(() => TeamRemoval.subscribe(() => tick(n => n + 1)), []);
   const hook = (n) => (typeof window[n] === 'function' ? window[n]() : []);
-  TeamRemoval.setContext({ rosters: hook('useStewardRosters'), rotas: hook('useStewardRotas'), services: hook('useStewardServices'), requests: hook('useStewardRequests') });
+  // WHICH TEAM IS THE CARE TEAM. Read here, on the one path both screens share, so each screen gets it without
+  // its own hook — and so the engine is handed it (it also asks StewardMeals itself).
+  const careTeamId = (typeof window.useMealsSettings === 'function' ? ((window.useMealsSettings() || {}).adminGroupId || '') : '');
+  TeamRemoval.setContext({ rosters: hook('useStewardRosters'), rotas: hook('useStewardRotas'), services: hook('useStewardServices'), requests: hook('useStewardRequests'), careTeamId });
   return TeamRemoval.state();
 }
 window.useTeamRemoval = useTeamRemoval;
@@ -1287,7 +1313,10 @@ function DashRota({ onNewTeam }) {
                       <div style={{ width: 34, height: 34, borderRadius: 11, background: `color-mix(in oklab, ${m.accent} 16%, var(--surface))`, color: m.accent, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={m.icon} size={19} /></div>
                       <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name}</div><div style={{ fontSize: 11.5, color: r.roles.length && tFilled === r.roles.length ? 'var(--sage-ink)' : 'var(--ink-3)', fontWeight: 600 }}>{tFilled}/{r.roles.length} filled</div></div>
                       <button onClick={() => { if (!r._locked) setRosterTeam(t); }} disabled={!!r._locked} title={r._locked ? 'Can’t read this team yet' : 'Manage roster'} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 10px', cursor: r._locked ? 'default' : 'pointer', opacity: r._locked ? 0.5 : 1, color: 'var(--ink-2)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, flexShrink: 0 }}><Icon name="users" size={14} /> Roster</button>
-                      <button onClick={() => TeamRemoval.ask(t)} title="Delete team" aria-label={'Delete team ' + m.name} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', flexShrink: 0 }}><Icon name="trash" size={14} color="currentColor" /></button>
+                      {/* THE CARE TEAM IS NOT OFFERED FOR DELETION (owner, 2026-10-13), rather than led into a
+                          confirm dialog that cannot complete: disabled, with the reason in the tooltip and in the
+                          label a screen reader reads. TeamRemoval.ask and Steward.removeTeam refuse it as well. */}
+                      <button onClick={() => TeamRemoval.ask(t)} disabled={trs.careTeamId === t.id} title={trs.careTeamId === t.id ? (trs.careWhy || '') : 'Delete team'} aria-label={trs.careTeamId === t.id ? 'Delete team ' + m.name + ' — ' + (trs.careWhy || '') : 'Delete team ' + m.name} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 8px', cursor: trs.careTeamId === t.id ? 'default' : 'pointer', opacity: trs.careTeamId === t.id ? 0.4 : 1, color: 'var(--ink-3)', display: 'flex', alignItems: 'center', flexShrink: 0 }}><Icon name="trash" size={14} color="currentColor" /></button>
                     </div>
                     {(r.pods && r.pods.length) ? (
                       <select value="" onChange={e => {

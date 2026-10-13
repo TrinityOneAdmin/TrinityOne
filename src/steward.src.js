@@ -287,6 +287,46 @@ const BACKUPMETA_D = 'trinityone/backup-meta:';   // church-wide backup state (l
 // yesterday, and a kids check-in roll that emptied mid-service). Fine for timestamps/filenames only.
 const _todayISO = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
 const CAREKEY_D = 'trinityone/carekey:';
+// ── HAS THIS SERVICE ALREADY HAPPENED? (owner, 2026-10-13; reference/DOMAIN.md "A SERVICE EARLIER TODAY
+// COUNTS AS PAST") ──────────────────────────────
+// `sv.date < today` on its own treats a 9am service as upcoming until midnight, so anything that clears
+// "upcoming" work from it erases the record of who served AND tells those people they are no longer needed.
+// The owner ruled that out: a service that has already finished today keeps its record.
+//
+// THE CLOCK BASIS IS THE LOCAL DEVICE CLOCK — the local calendar day (what `_todayISO` above and
+// `window.todayISO` give) and the local wall clock. NEVER `new Date().toISOString().slice(0,10)`: that is the
+// UTC day, and app/recur.jsx:76-81 documents it as the wrong answer for a calendar date (east of Greenwich it
+// reads as yesterday for part of every evening).
+//
+// AND IT FAILS SAFE. With no readable clock `_localNow().day` is '' and `_svcHasHappened` calls EVERY dated
+// service already-happened: no record is rewritten and nobody is told. The opposite mistake is the
+// unrecoverable one — the record is gone and the people who served have been told they were not needed.
+function _localNow() {
+  try {
+    const d = new Date(), p = (n) => String(n).padStart(2, '0');
+    return { day: d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()), hm: p(d.getHours()) + ':' + p(d.getMinutes()) };
+  } catch (e) { return { day: '', hm: '23:59' }; }
+}
+// A service with NO READABLE DATE answers false here, and every caller skips it separately: "has not happened"
+// is not "is upcoming", and an undated service is never guessed at.
+function _svcHasHappened(sv, today, nowHM) {
+  if (!sv || !sv.date) return false;
+  if (!today) return true;                            // no clock to compare against: keep every record
+  if (sv.date !== today) return sv.date < today;
+  const t = String(sv.time || '');
+  if (!/^\d{1,2}:\d{2}$/.test(t)) return false;        // dated today, no readable time: still upcoming, as before
+  // A service AT this minute counts as happened: it has begun, so its rota is a record and the people on it are
+  // serving, not waiting to be stood down.
+  return (t.length === 4 ? '0' + t : t) <= String(nowHM || '99:99');
+}
+// The one sentence a steward sees when they try to delete the care team (the owner's exact words, 2026-10-13).
+// Exported on the Steward object below so both screens say it without a second copy of the copy.
+const CARE_TEAM_UNDELETABLE = 'Every church needs a care team; edit its members instead.';
+// WHICH TEAM IS THE CARE TEAM, asked of the care module rather than only of the caller, so the refusal in
+// removeTeam cannot be walked around by a caller that simply does not pass it. '' while the care module has not
+// read the setting yet — then only the caller's `careTeamId` decides, which is what both screens pass.
+const _careTeamNow = () => { try { const SM = window.StewardMeals; const v = SM && SM.careTeamId && SM.careTeamId(); return String(v || ''); } catch (e) { return ''; } };
+
 
 // SEAL ONE COPY PER MEMBER, WITHOUT FREEZING THE SCREEN.
 //
@@ -10584,22 +10624,42 @@ window.Steward = {
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', ROSTER_D + teamId], ['t', NET], ['deleted', '1']], content: '' }));
   },
   // THE WHOLE OPERATION, in an order that fails safe:
-  //   0. REFUSE before touching anything if the team, or any rota that might hold its slots, is one this console
-  //      cannot read (_locked). A locked roster shows EMPTY on screen; deleting a team the steward cannot see is the
-  //      roster wipe again. Returns { ok:false, reason:'locked' } and publishes nothing.
-  //   1. UPCOMING rotas (service dated today or later) lose this team's slots. PAST services are never touched: they
-  //      are the record of who served. A service with no readable date is left alone, not guessed at.
+  //   0. REFUSE THE CARE TEAM outright (owner, 2026-10-13), and refuse before touching anything if the team, or
+  //      any UPCOMING rota that might hold its slots, is one this console cannot read (_locked). A locked roster
+  //      shows EMPTY on screen; deleting a team the steward cannot see is the roster wipe again.
+  //   1. UPCOMING rotas (a service still to happen — see _svcHasHappened) lose this team's slots, each checked for
+  //      freshness in the second before it is written. PAST services are never touched: they are the record of who
+  //      served. A service with no readable date is left alone, not guessed at.
   //   2. Only if every rota landed: the roster tombstone, then the group tombstone.
   //   3. Only if the group is gone: tell each person who was on an upcoming slot they are no longer needed.
   // Any failure before 3 stops there and returns { ok:false } with nothing sent to anyone; running it again is safe
-  // (a rota that no longer holds the slots is skipped, a tombstone is idempotent).
-  // `ctx` is what the console has READ: { rosters, rotas, services, requests, today, teamName }.
+  // (a rota that no longer holds the slots is skipped, a tombstone is idempotent). EVERY failure answer carries
+  // `rotasCleared` — how many upcoming rotas were already rewritten before it stopped — because the screens must
+  // not tell a steward "nothing happened" over people who are already off next Sunday's rota.
+  // `ctx` is what the console has READ: { rosters, rotas, services, requests, today, nowHM, careTeamId, teamName }.
   async removeTeam(teamId, ctx) {
     _lastSaveFail = '';
     const c = ctx || {};
     if (!sk || !teamId) return { ok: false, reason: 'nokey' };
+    // 0a. THE CARE TEAM IS NEVER DELETED (owner, 2026-10-13; reference/DOMAIN.md "CARE TEAM CANNOT BE DELETED").
+    // Both screens refuse to offer the control, and this is the same refusal somewhere a screen cannot be the only
+    // thing between a steward and the loss — a guard that lives only in two screens is one copy-paste from gone.
+    // WHAT WOULD BE LOST, so the edge cases can be judged: a team carries TWO lists. Tombstoning the care team's
+    // ROSTER makes the relay drop it (scripts/gateway.mjs:3678), so careAdmin() is false for everyone and nobody can
+    // manage — or even see — open care needs. And `careteam:<churchpub>`, the pubkey list members' phones SEAL a new
+    // "ask for help" to (src/fellowship.src.js:695, :7184), is not written by this function at all, so new asks for
+    // help would stay sealed to the removed people's keys and be readable from an older or non-enforcing relay —
+    // the measured shape at src/fellowship.src.js:906-912.
+    const careId = String(c.careTeamId || _careTeamNow() || '');
+    if (careId && teamId === careId) return { ok: false, reason: 'care', message: CARE_TEAM_UNDELETABLE };
     const rosters = c.rosters || [], rotas = c.rotas || [], services = c.services || [], requests = c.requests || [];
-    const today = c.today || new Date().toISOString().slice(0, 10);
+    // THE LOCAL CLOCK, never the UTC day (see _localNow): `new Date().toISOString().slice(0,10)` was the fallback
+    // here and app/recur.jsx:76-81 documents it as the wrong answer for a calendar date. The screens pass
+    // `today` = window.todayISO() and `nowHM` = the local wall clock; this fallback is for a caller that passes
+    // neither, and with no readable clock it makes every dated service count as already happened.
+    const lnow = _localNow();
+    const today = c.today || lnow.day;
+    const nowHM = /^\d{2}:\d{2}$/.test(String(c.nowHM || '')) ? String(c.nowHM) : lnow.hm;
     const ros = rosters.find(r => r && (r.team === teamId || r.id === teamId));
     if ((ros && ros._locked) || _addrLocked(ROSTER_D + teamId)) return { ok: false, reason: 'locked' };
     const pfx = teamId + '::';
@@ -10608,8 +10668,13 @@ window.Steward = {
       if (!ro) continue;
       const sid = ro.service || ro.id; if (!sid) continue;
       const sv = services.find(x => x && x.id === sid);
-      if (ro._locked || (sv && sv._locked) || _addrLocked(ROTA_D + sid)) return { ok: false, reason: 'locked' };
-      if (!sv || !sv.date || sv.date < today) continue;          // past, undated or unknown: keep the record, touch nothing
+      // PAST / UNDATED / UNKNOWN FIRST, _locked SECOND, AND THE ORDER IS THE FIX. Run the refusal over every rota
+      // and ONE old unreadable rota — or one whose service this console holds no document for — refuses team
+      // deletion for the whole church, possibly for ever, with advice ("try again in a moment") that can never
+      // come true. Only a rota this operation is about to REWRITE may refuse it; a locked PAST rota is not
+      // rewritten, so it has no say.
+      if (!sv || !sv.date || _svcHasHappened(sv, today, nowHM)) continue;
+      if (ro._locked || sv._locked || _addrLocked(ROTA_D + sid)) return { ok: false, reason: 'locked' };
       const assign = ro.assign || {};
       const keys = Object.keys(assign).filter(k => k.startsWith(pfx));
       if (!keys.length) continue;
@@ -10617,13 +10682,25 @@ window.Steward = {
       jobs.push({ sid, sv, ro, keys, next, assign });
     }
     const failedRotas = [];
+    let cleared = 0;
     for (const j of jobs) {
+      // FRESHNESS, IMMEDIATELY BEFORE THE WRITE. `ctx.rotas` is the copy the console read, and writing it back
+      // silently erased a co-steward's addition to a DIFFERENT team on the same rota (measured). `_lastStamp` holds
+      // the newest created_at this console has SEEN for a d-tag (_noteSeenStamp, from the subscription), and it is
+      // updated the moment the event arrives — before any re-render reaches `ctx`. A rota that has moved stops the
+      // operation: nothing is tombstoned, nobody is told, and running the removal again reads the new copy.
+      // NO RETRY, DELIBERATELY: _monotonic bumps _lastStamp at event CREATION, unconditionally, so the same check
+      // made after our own write is true by construction and a retry of this shape cannot terminate. One attempt.
+      // KNOWN COST OF READING _lastStamp: it also carries this console's OWN last write of that rota, so a removal
+      // run before the relay has echoed that write back into `ctx` reports 'stale' rather than overwriting it.
+      // That is the safe direction, and a second run (with the echo in hand) completes.
+      if ((_lastStamp.get(ROTA_D + j.sid) || 0) > (j.ro.ts || 0)) return { ok: false, reason: 'stale', staleRotas: [j.sid], rotasCleared: cleared };
       const r = await window.Steward.publishRota({ service: j.sid, published: !!j.ro.published, assign: j.next });
-      if (!r) failedRotas.push(j.sid);
+      if (r) cleared++; else failedRotas.push(j.sid);
     }
-    if (failedRotas.length) return { ok: false, reason: 'rota', failedRotas };
-    if (!(await window.Steward.removeRoster(teamId))) return { ok: false, reason: 'roster' };
-    if (!(await window.Steward.removeGroup(teamId))) return { ok: false, reason: 'group' };
+    if (failedRotas.length) return { ok: false, reason: 'rota', failedRotas, rotasCleared: cleared };
+    if (!(await window.Steward.removeRoster(teamId))) return { ok: false, reason: 'roster', rotasCleared: cleared };
+    if (!(await window.Steward.removeGroup(teamId))) return { ok: false, reason: 'group', rotasCleared: cleared };
     // 3. NOW, and only now, tell people. One notice per person per slot; the request document for that slot is
     // reused when there is one, so the card they were asked on is the one that changes.
     let told = 0, toldFailed = 0;
@@ -10634,8 +10711,10 @@ window.Steward = {
       const n = await window.Steward.sendServingCancel({ id: old && old.id, memberPub: a.pub, serviceId: j.sid, teamId, roleId, role: (old && old.role) || '', teamName: c.teamName || (old && old.teamName) || 'Team', date: j.sv.date, time: j.sv.time, service: j.sv.name });
       if (n) told++; else toldFailed++;
     }
-    return { ok: true, rotasCleared: jobs.length, told, toldFailed };
+    return { ok: true, rotasCleared: cleared, told, toldFailed };
   },
+  // The copy for the refusal above, so both screens say the owner's words without a second copy of them.
+  CARE_TEAM_UNDELETABLE,
   // "you are no longer needed": the request document for a slot, replaced (same d-tag) by one saying the slot is gone.
   // Additive: `cancelled:true` is ignored by an older member app, which would keep showing its old request.
   async sendServingCancel(req) {
