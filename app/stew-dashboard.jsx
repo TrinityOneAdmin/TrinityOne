@@ -7263,11 +7263,48 @@ function DashMembers() {
   // exists — so the throw left the click handler UNCAUGHT and the row said nothing (device round 2026-10-01,
   // Oppo: Uncaught Error … at admitMember). Still called at once (not a tick later, which every other write here
   // is too); the catch below says which failure it was.
-  const admitMember = (pk) => (() => { try { return Promise.resolve(window.Steward.setAdmitted([...admittedList, pk])); } catch (e) { return Promise.reject(e); } })()
-    .then((ok) => { if (!ok) setMinorNotice({ pk, tone: 'fail', text: 'Couldn’t let ' + (nameByPub[pk] || 'them')
-      + ' in — the relay didn’t accept it, so they are still waiting. Check the relay and try again.' }); return ok; })
-    .catch((e) => { setMinorNotice({ pk, tone: 'fail', text: 'Couldn’t let ' + (nameByPub[pk] || 'them') + ' in — '
-      + ((e && e.notConnected) ? 'this console hasn’t finished connecting to your church, so nothing was changed and they are still waiting.' : 'the relay could not be reached.') }); return null; });
+  // SAFEGUARDING BEFORE ADMISSION (`asChild`), the rule reseatMember has held since 2026-08-02 and which the
+  // ordinary join queue never had. Its comment states the harm plainly: "If the child marking will not save,
+  // the alternative to stopping is a child in the church whom no list names as a child — and safeguardAllows()
+  // then lets any adult DM them."
+  //
+  // Why the queue needed its own door rather than "mark them afterwards". A person waiting to join is filtered
+  // OUT of both member lists (activeM / inactiveM both carry `!pendingSet.has(m.pubkey)`), so "Mark as a child"
+  // DOES NOT EXIST for them. The safe order was not merely unusual, it was unreachable: a steward who already
+  // knew a joiner was 13 had to admit them as an adult and then go and correct it. In between, the relay's
+  // safeguardAllows() lets any member open a private message with them (`minors:<churchpub>` is the only
+  // document it reads), their own phone has no sealed clearance and falls back to that same list — which the
+  // relay refuses to serve an ordinary member, so absence READS AS ADULTHOOD — and the whole-roster back-fill
+  // above can seal {minor:false} to the key inside the window, which their phone then trusts OVER the fallback.
+  // A young person arriving on their own device off an invite is a route the owner established on 2026-08-30
+  // (reference/DOMAIN.md: "a young person can arrive by SEVERAL routes, not one"), not an edge case.
+  //
+  // NOT A POLICY. Plain Approve is unchanged and still admits; the software does not decide who is a child
+  // ("TrinityOne does not decide who is a child; it decides what follows from that mark"). This only gives the
+  // steward who already knows a way to say so first. It fails CLOSED in both directions that matter: a mis-tap
+  // marks an adult as a child, which is one tap to undo on the members list, and a mark the relay REFUSES
+  // admits nobody at all.
+  //
+  // THROUGH toggleMinor, not around it, so this cannot drift from the marking every other screen uses: it is
+  // the audited path that also suppresses an existing photograph (confirmed on the phone 2026-08-27 — the
+  // relay cannot rewrite a kind-0 somebody already signed), ends any guardian role, withdraws a check-in
+  // clearance, re-seals the member's own phone, and names the person in its own refusal notice. `minorsSet`
+  // is checked first because toggleMinor is a TOGGLE: pressing it for somebody already marked would UNMARK
+  // them, which on this control would be the exact inversion of what it promises.
+  const admitMember = async (pk, asChild) => {
+    if (asChild && !minorsSet.has(pk)) {
+      let marked = null;
+      try { marked = await toggleMinor(pk); } catch (e) { marked = null; }
+      // toggleMinor has already set the failure notice, naming them. Stop: nothing has been admitted, the row
+      // is still in the queue, and the steward can press again.
+      if (!marked) return null;
+    }
+    return (() => { try { return Promise.resolve(window.Steward.setAdmitted([...admittedList, pk])); } catch (e) { return Promise.reject(e); } })()
+      .then((ok) => { if (!ok) setMinorNotice({ pk, tone: 'fail', text: 'Couldn’t let ' + (nameByPub[pk] || 'them')
+        + ' in — the relay didn’t accept it, so they are still waiting. Check the relay and try again.' }); return ok; })
+      .catch((e) => { setMinorNotice({ pk, tone: 'fail', text: 'Couldn’t let ' + (nameByPub[pk] || 'them') + ' in — '
+        + ((e && e.notConnected) ? 'this console hasn’t finished connecting to your church, so nothing was changed and they are still waiting.' : 'the relay could not be reached.') }); return null; });
+  };
   // ONE DECISION, ONE PRESS. Opening a church means admitting everyone who came in off the invite at once;
   // Miriam pressed Approve eighteen times to do it, and setAdmitted takes the whole list anyway, so that was
   // eighteen round trips for a single decision.
@@ -7689,6 +7726,18 @@ function DashMembers() {
                       compressed to one line for the phone (P12), Approve stayed where Chat sits on a member's row.
                       44px tall on a phone, the codebase's touch floor, like the row's other controls. */}
                   <button onClick={() => admitMember(m.pubkey)} className="sk-btn sk-btn--clay" style={{ padding: '7px 12px', fontSize: 12.5, flexShrink: 0, ...(narrow ? { minHeight: 44, boxSizing: 'border-box' } : null) }}><Icon name="check" size={14} color="var(--on-clay)" /> Approve</button>
+                  {/* THE SAFE ORDER, MADE REACHABLE. A waiting person is filtered out of both member lists, so
+                      "Mark as a child" does not exist for them: until this control a steward who already knew a
+                      joiner was 13 had to let them in as an adult and then go and correct it, and in between the
+                      relay let any member DM them. See admitMember. OWNER-ONLY, like the marking itself — the
+                      relay rejects a delegated steward's safeguarding write, so offering it would silently no-op.
+                      Short label, consequence in the accessible name and the tooltip, per the house rule on
+                      instructional copy. */}
+                  {!delegated ? <button onClick={() => admitMember(m.pubkey, true)}
+                    aria-label={'Approve as a child: ' + (m.name || nameHandle(m) || shortNpub(m.npub)) + ' — marks them as a child FIRST, then lets them in. Only cleared adults and their own parents can then message them privately'}
+                    title="Mark them as a child, then let them in — so safeguarding applies from the moment they are in the church, not from whenever someone remembers"
+                    style={{ border: '1px solid color-mix(in oklab, var(--clay) 40%, var(--line))', background: 'var(--surface)', borderRadius: 9, padding: '7px 10px', cursor: 'pointer', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, ...(narrow ? { minHeight: 44, boxSizing: 'border-box' } : null) }}>
+                    <Icon name="shield" size={14} color="currentColor" /> As a child</button> : null}
                   {/* TWO TAPS, LIKE THE MEMBERS LIST ALREADY REQUIRES. This ✕ sits a few pixels from
                       Approve, and one tap on it PERMANENTLY blocks the person AND rotates every one of the
                       church's keys — irreversible, from the screen a steward is fastest on. The members
