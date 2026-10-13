@@ -137,7 +137,9 @@ test('a delegated console cannot mint a name key over the owner’s', () => {
   const fn = STEWARD.slice(at, at + 2600);
   assert.match(fn, /if \(opts\.rotate && !ring\.length\) return/, 'a rotate with no ring still mints a replacement key');
   assert.match(fn, /if \(!ring\.length && _nameKeyDocKeys\) return/, 'an envelope exists and we are not in it — minting over it orphans every sealed name');
-  assert.match(fn, /if \(!_nameKeyChecked \|\| !_isRelayAuthed\(\)\) return/, 'the console will mint from a view it never established');
+  // re-anchored 2026-10-13 (round 3e, MED 1): the gate now REMEMBERS a Block's rotation (`{ pending: true }`) instead of
+  // answering null — still without minting or publishing anything. The routine path still returns null.
+  assert.match(fn, /if \(!_nameKeyChecked \|\| !_isRelayAuthed\(\)\) \{[\s\S]{0,600}?return Promise\.resolve\(\{ pending: true \}\);[\s\S]{0,120}?return Promise\.resolve\(null\);/, 'the console will mint from a view it never established');
   assert.match(DASH, /!delegated && window\.Steward\.ensureNameKeyForMembers/, 'block() still rotates the name key while acting as a delegated steward');
 });
 

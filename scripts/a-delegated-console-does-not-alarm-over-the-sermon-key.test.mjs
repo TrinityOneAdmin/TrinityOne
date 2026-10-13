@@ -399,5 +399,7 @@ test('THE CALL SITE: an OWNER\'s Block in a church with NO sermon key says nothi
 });
 test('CONTROL: …but one whose sermon-key read has not settled (it may HAVE one) is still warned', async () => {
   const p = await membersPage({ delegated: false, nameResult: { id: 'published' }, engineOpts: { mediaKeyHex: null, mediaDocKeys: null, mediaChecked: false } });
-  assert.match(p.said, /could not change the sermon key/, 'a sermon key the console has not looked for is treated as absent — a blocked member may still hold it: ' + p.said);
+  // round 3e (MED 1): not yet read is not "could not change" — the rotation is remembered and runs when the read settles,
+  // and the screen says the sermon access WILL be removed. Either way it is not treated as absent, which is this row's point.
+  assert.match(p.said, /could not change the sermon key|sermons will be removed as soon as this console finishes connecting/, 'a sermon key the console has not looked for is treated as absent — a blocked member may still hold it: ' + p.said);
 });

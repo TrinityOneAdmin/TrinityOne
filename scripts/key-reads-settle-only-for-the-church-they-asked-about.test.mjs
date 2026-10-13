@@ -146,6 +146,7 @@ function engine() {
     stmt(BUNDLE, 'var _skeys = '), stmt(BUNDLE, 'var _srev = '), stmt(BUNDLE, 'var _senvTs = '), stmt(BUNDLE, 'var _senvRecips = '),
     stmt(BUNDLE, 'var _senvMine = '), stmt(BUNDLE, 'var _senvDropped = '),
     stmt(BUNDLE, 'var KEYENV_LS = '), fnBody(BUNDLE, 'function _keyEnvSave(kind, cp, e, selfKey, mineCt) {'), fnBody(BUNDLE, 'function _keyEnvRestore(kind, cp, d) {'),   // round 3c, MED 2
+    stmt(BUNDLE, 'var PENDINGROT_LS = '), fnBody(BUNDLE, 'function _pendingRotAll(cp) {'), fnBody(BUNDLE, 'function _pendingRotAdd(kind, cp, drop) {'), fnBody(BUNDLE, 'function _pendingRotClear(kind, cp) {'),   // round 3e, MED 1 (_runPendingRotations itself comes with liftKeyRead)
     stmt(BUNDLE, 'var _senvPending = '), fnBody(BUNDLE, 'function _reCheckGroupKeyPending() {'), 't.__reCheckGk = _reCheckGroupKeyPending; t.__senvPending = _senvPending; t.__gkChain = _gkChain; t.__membersReask = _membersReask;',
     fnBody(BUNDLE, 'function _noteEnvelopeDrops(gid, prev, next) {'), fnBody(BUNDLE, 'function stewIngestKey(e) {'),
     't.__ingest = stewIngestKey; t.__skeys = _skeys; t.__senvMine = _senvMine; t.__senvRecips = _senvRecips;',
@@ -1413,7 +1414,7 @@ for (const [kind, D, sub, rotate, hexOf, ringOf] of [
     const p0 = e2.published.length;
     const r = await e2.S[rotate]([M1.pub, M2.pub], []);
     assert.equal(e2.published.length, p0, `A ${kind.toUpperCase()} ROTATION WAS PUBLISHED FROM THE DEVICE COPY BEFORE THE RELAY ANSWERED — it is built on a ring that may be superseded`);
-    assert.equal(r, false, `the refused ${kind} rotation did not report failure (block() must warn)`);
+    assert.deepEqual(r, { pending: true }, `the held-back ${kind} rotation did not say it is waiting (round 3e: remembered, run when the read settles)`);
     // the relay answers: another console's rev 2 (K2), which blocked M2
     s2.handlers.onevent(envAt(D, A, [K2, K1], [A.pub, M1.pub, M3.pub], OLD_AT + 500, 2)); await e2.eose(s2);
     assert.equal(hexOf(e2.t), K2, 'CONTROL: the relay\'s newer key was not taken');
@@ -1526,4 +1527,76 @@ test('3e LOW 1: the care envelope\'s ring is read whole, and a legacy bare-key e
     content: JSON.stringify({ rev: 2, keys: { [A.pub]: nip44.v2.encrypt(K1, ck(A.sk, A.pub)) } }) };
   s.handlers.onevent(legacy);
   assert.deepEqual(e.t._careKeyRing, [K1], 'a legacy envelope (one bare hex key) was not read as a one-key ring');
+});
+
+// ROUND 3e, MED 1 (audit of b102dc6): A BLOCK DURING THE KEY READ IS REMEMBERED, AND RUNS WHEN THE READ SETTLES. 3d made a
+// rotation refuse (`false`) until this connection's read had settled — and nothing ever ran it again: the person stayed on
+// the Blocked list holding the key, and the screen said "try blocking them again", which it offers no way to do. Now the
+// rotation is remembered per church (kept on the device), and runs on its own as soon as that key's read settles.
+const pendingOf = (e) => { try { return JSON.parse(e.t.localStorage.getItem('trinityone.steward.pendingrot.' + A.pub) || '{}'); } catch { return {}; } };
+for (const [kind, D, sub, rotate, hexOf] of [
+  ['care', CAREKEY_D, 'subscribeCareKey', 'rotateCareKey', (t) => t._careKeyHex],
+  ['sermon', MEDIAKEY_D, 'subscribeMediaKey', 'rotateMediaKey', (t) => t._mediaKeyHex],
+]) {
+  const key = kind === 'care' ? 'care' : 'media';
+  test(`3e MED 1 · ${kind}: a Block before the read settles is remembered — and runs by itself when it settles, M3 out, everyone else kept`, async () => {
+    const e = engine(); e.t.up = new Set([R1]);
+    e.t.window.Steward = e.S;                                 // the runner calls the rotations through window.Steward, as the console does
+    e.S[sub]();
+    const s = e.subs.at(-1);
+    e.t._localBlocked = new Set([M3.pub]);                     // Block M3, NOW — before the relay has answered
+    const r = await e.S[rotate]([M1.pub], [], { keepIf: (h) => h !== M3.pub, drop: [M3.pub] });
+    assert.deepEqual(r, { pending: true }, `a ${kind} rotation before the read settled did not say it is WAITING (block() would call it a failure)`);
+    assert.deepEqual(pendingOf(e)[key], { drop: [M3.pub] }, `THE ${kind.toUpperCase()} ROTATION WAS NOT REMEMBERED — nothing would ever run it`);
+    const p0 = e.published.length;
+    s.handlers.onevent(envAt(D, A, [K1], [A.pub, M1.pub, M2.pub, M3.pub], OLD_AT, 1)); await e.eose(s);
+    for (let i = 0; i < 6; i++) await flush();
+    const out = e.published.slice(p0).find(ev => dtag(ev) === D + A.pub);
+    assert.ok(out, `THE REMEMBERED ${kind.toUpperCase()} ROTATION NEVER RAN once the read settled — the blocked person keeps the key`);
+    const to = Object.keys(JSON.parse(out.content).keys);
+    assert.ok(!to.includes(M3.pub), `the remembered ${kind} rotation kept M3`);
+    assert.ok(to.includes(M1.pub) && to.includes(M2.pub), `the remembered ${kind} rotation dropped a holder who stays`);
+    assert.notEqual(hexOf(e.t), K1, `the ${kind} key did not change`);
+    assert.equal(pendingOf(e)[key], undefined, `the ${kind} rotation that ran was left remembered — it would run again`);
+    assert.ok(e.events.some(x => x.type === 'steward-rotation-done' && x.detail.kind === key), 'the screen was not told the rotation is done');
+  });
+}
+test('3e MED 1: a remembered rotation survives a RELOAD and runs on the next console\'s settle', async () => {
+  const e1 = engine(); e1.t.up = new Set([R1]);
+  e1.S.subscribeCareKey();
+  e1.t._localBlocked = new Set([M3.pub]);
+  assert.deepEqual(await e1.S.rotateCareKey([M1.pub], [], { drop: [M3.pub] }), { pending: true }, 'CONTROL: not remembered');
+  const e2 = engine(); e2.t.up = new Set([R1]); e2.t.localStorage = e1.t.localStorage; e2.t.window.Steward = e2.S;
+  e2.t._localBlocked = new Set([M3.pub]);
+  e2.S.subscribeCareKey();
+  const s = e2.subs.at(-1);
+  s.handlers.onevent(envAt(CAREKEY_D, A, [K1], [A.pub, M1.pub, M3.pub], OLD_AT, 1)); await e2.eose(s);
+  for (let i = 0; i < 6; i++) await flush();
+  const out = e2.published.find(ev => dtag(ev) === CAREKEY_D + A.pub);
+  assert.ok(out && !Object.keys(JSON.parse(out.content).keys).includes(M3.pub), 'A ROTATION REMEMBERED BEFORE A RELOAD DID NOT RUN AFTER IT');
+});
+test('3e MED 1: an Unblock takes the person back out of a remembered rotation', async () => {
+  const e = engine(); e.t.up = new Set([R1]);
+  e.S.subscribeCareKey();
+  await e.S.rotateCareKey([M1.pub], [], { drop: [M3.pub] });
+  assert.deepEqual(pendingOf(e).care, { drop: [M3.pub] }, 'CONTROL: not remembered');
+  e.t._localBlocked = new Set([M3.pub]);
+  await e.S.setBlocked([], { unblock: [M3.pub] });
+  for (let i = 0; i < 4; i++) await flush();
+  assert.equal(pendingOf(e).care, undefined, 'AN UNBLOCKED PERSON IS STILL WAITING TO BE ROTATED OUT');
+});
+test('3e MED 1: the name key — a Block before its read settles is remembered and runs when it settles', async () => {
+  const e = engine(); e.t.up = new Set([R1]); e.t.window.Steward = e.S;
+  e.S.subscribeNameKey();
+  const s = e.subs.at(-1);
+  e.t._localBlocked = new Set([M3.pub]);
+  const r = await e.S.ensureNameKeyForMembers([M1.pub], [], { rotate: true, drop: [M3.pub] });
+  assert.deepEqual(r, { pending: true }, 'a name-key rotation before the read settled was not remembered (block() called it a failure)');
+  const p0 = e.published.length;
+  s.handlers.onevent(envelope(NAMEKEY_D, A, A.pub, ['aa'.repeat(32)], [A.pub, M1.pub, M2.pub, M3.pub])); await e.eose(s);
+  for (let i = 0; i < 6; i++) await flush();
+  const out = e.published.slice(p0).find(ev => dtag(ev) === NAMEKEY_D + A.pub);
+  assert.ok(out, 'THE REMEMBERED NAME-KEY ROTATION NEVER RAN');
+  const to = Object.keys(JSON.parse(out.content).keys);
+  assert.ok(!to.includes(M3.pub) && to.includes(M1.pub) && to.includes(M2.pub), 'the remembered name-key rotation got its recipients wrong: ' + to.length);
 });

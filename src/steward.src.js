@@ -481,6 +481,32 @@ function _keyEnvRestore(kind, cp, d) {
     return { pubkey: o.author, created_at: o.at || 0, kind: 30078, tags: [['d', d + cp]], content: JSON.stringify({ rev: o.rev || 1, keys }), restored: true };
   } catch (x) { return null; }
 }
+// A ROTATION THAT COULD NOT RUN YET (round 3e, MED 1; audit of b102dc6). Block and removing a delegate rotate the care,
+// sermon and name keys — but in a console's first seconds, and after a dropped connection, the key reads have not
+// settled, a rotation must not run from what this device last held (round 3d), and it used to answer `false`: the
+// person stayed on the Blocked list (which offers only Unblock), the screen said "try blocking them again", and nothing
+// ever rotated. Now the rotation is REMEMBERED — per church, per key, with whom it takes out — kept on the device so a
+// reload does not lose it, and run as soon as that key's read settles (_runPendingRotations).
+// Shape: { care: { drop: [hex] }, media: { drop: [hex] }, name: { drop: [hex] } }.
+// WRITERS: rotateCareKey, rotateMediaKey, _ensureNameKeyLocked (rotate), Steward.rememberRotation, setBlocked (an
+// unblock takes the person back out of every `drop`), _runPendingRotations (clears what ran), removeKey (clears all).
+// READERS: _runPendingRotations, Steward.pendingRotations.
+const PENDINGROT_LS = 'trinityone.steward.pendingrot.';
+function _pendingRotAll(cp) {
+  try { const o = JSON.parse(lsGet(PENDINGROT_LS + cp) || 'null'); return (o && typeof o === 'object') ? o : {}; } catch (x) { return {}; }
+}
+function _pendingRotAdd(kind, cp, drop) {
+  try {
+    if (!cp) return;
+    const o = _pendingRotAll(cp), cur = o[kind] || { drop: [] };
+    cur.drop = [...new Set([...(cur.drop || []), ...(drop || []).map(p => String(p || '').toLowerCase()).filter(Boolean)])];
+    o[kind] = cur;
+    lsSet(PENDINGROT_LS + cp, JSON.stringify(o));
+  } catch (x) {}
+}
+function _pendingRotClear(kind, cp) {
+  try { const o = _pendingRotAll(cp); if (!(kind in o)) return; delete o[kind]; lsSet(PENDINGROT_LS + cp, JSON.stringify(o)); } catch (x) {}
+}
 let _mediaKeyChecked = false;    // set only from subscribeMediaKey's oneose — see the mint gate                   // the latest media-key doc's wrapped-per-member map (to detect members not yet keyed)
 async function _sha256hex(u8) { const d = await crypto.subtle.digest('SHA-256', u8); return Array.from(new Uint8Array(d)).map(b => b.toString(16).padStart(2, '0')).join(''); }
 const JOINPOLICY_D = 'trinityone/joinpolicy:'; // join policy {approval:bool}, d=joinpolicy:<churchpub>
@@ -2615,6 +2641,56 @@ function _keyReadAfterAuth(again) { _keyReadAuthWaiters.add(again); }
 function _runKeyReadAuthWaiters() {
   const ws = [..._keyReadAuthWaiters]; _keyReadAuthWaiters.clear();
   for (const again of ws) { try { again(); } catch (e) {} }
+  try { _runPendingRotations(); } catch (e) {}   // a login accepted may be what a remembered rotation waited for (round 3e)
+}
+// RUN THE ROTATIONS THAT COULD NOT RUN YET (round 3e, MED 1) — see PENDINGROT_LS. Called when a care, sermon or name
+// key read settles, when a login is accepted, and by Steward.retryPendingRotations (the screen's "Try again"). Each one
+// runs only once its own key's read has settled; it rotates to the envelope's CURRENT holders minus whom it takes out
+// (and minus anyone this console holds as blocked — the rotations filter that themselves): the floor Block uses
+// (round 3c). Members not yet keyed are added by the key distributor, as always. Done: cleared, and
+// `steward-rotation-done` says so (with how many are still waiting). A real failure: kept, and `steward-rotation-failed`
+// says which key — the screen offers "Try again".
+let _pendingRotBusy = false, _pendingRotAgain = false;
+async function _runPendingRotations() {
+  try { return await _runPendingRotationsNow(); } catch (e) { _pendingRotBusy = false; }   // its callers fire and forget it
+}
+async function _runPendingRotationsNow() {
+  const cp = actingChurch || pub;
+  if (!cp || actingChurch) return;   // only the church key rotates these (block/remove are owner-only)
+  // ONE RUN AT A TIME — and a call that arrives during it (the sermon read settling while the care rotation publishes) is
+  // not lost: the run goes round again when it finishes.
+  if (_pendingRotBusy) { _pendingRotAgain = true; return; }
+  const all = _pendingRotAll(cp);
+  if (!Object.keys(all).length) return;
+  const S = (typeof window !== 'undefined' && window.Steward) || null;
+  if (!S) return;
+  _pendingRotBusy = true;
+  try {
+    for (const kind of ['care', 'media', 'name']) {
+      const p = all[kind]; if (!p) continue;
+      if (!_isRelayAuthed()) continue;
+      if (kind === 'care' && !_careKeyFresh) continue;
+      if (kind === 'media' && !_mediaKeyFresh) continue;
+      if (kind === 'name' && !_nameKeyChecked) continue;
+      const drop = (p.drop || []).map(x => String(x || '').toLowerCase());
+      const keepIf = (h) => drop.indexOf(String(h || '').toLowerCase()) === -1;
+      let r = null;
+      try {
+        if (kind === 'care') r = await S.rotateCareKey([], [], { keepIf, drop });
+        else if (kind === 'media') r = await S.rotateMediaKey([], [], { keepIf, drop });
+        else r = await S.ensureNameKeyForMembers(Object.keys(_nameKeyDocKeys || {}).filter(keepIf), [], { rotate: true, drop });
+      } catch (e) { r = false; }
+      if ((actingChurch || pub) !== cp) return;           // the console moved church while this ran
+      if (r && r.pending) continue;                        // still not ready — it is still remembered
+      if (r === false || r == null) {
+        try { window.dispatchEvent(new CustomEvent('steward-rotation-failed', { detail: { kind } })); } catch (e) {}
+        continue;
+      }
+      _pendingRotClear(kind, cp);
+      try { window.dispatchEvent(new CustomEvent('steward-rotation-done', { detail: { kind, left: Object.keys(_pendingRotAll(cp)).length } })); } catch (e) {}
+    }
+  } finally { _pendingRotBusy = false; }
+  if (_pendingRotAgain) { _pendingRotAgain = false; return _runPendingRotationsNow(); }
 }
 // Open a read of one church's key envelope: one subscription per relay in this console's set, `onevent` for
 // every envelope that arrives, and `onSettled` once — when every relay has answered trustworthily. Returns the
@@ -6166,8 +6242,9 @@ window.Steward = {
   forgetChildrenLists() { _minorsLastClear(''); },
   removeKey() {
     try { localStorage.removeItem(KEY_LS); } catch {}
-    // the care / sermon envelopes kept on this device go with the key (round 3d, LOW 3) — see _resetChurchScopedState
-    try { for (let i = localStorage.length - 1; i >= 0; i--) { const k = localStorage.key(i); if (k && k.indexOf('trinityone.steward.keyenv.') === 0) localStorage.removeItem(k); } } catch (e) {}
+    // the care / sermon envelopes kept on this device go with the key (round 3d, LOW 3) — see _resetChurchScopedState —
+    // and so do the rotations still waiting to run (round 3e; PENDINGROT_LS): there is no church key left to run them
+    try { for (let i = localStorage.length - 1; i >= 0; i--) { const k = localStorage.key(i); if (k && (k.indexOf('trinityone.steward.keyenv.') === 0 || k.indexOf('trinityone.steward.pendingrot.') === 0)) localStorage.removeItem(k); } } catch (e) {}
     _minorsLastClear('');   // no church's children list stays on a device whose key was removed
     window.Steward.keyResumedUnknown = false;   // K2: the steward has now answered the question the device could not
     const done = encBlobRemove();   // S6: "remove from THIS device" is a lie if the Keystore copy survives
@@ -6736,13 +6813,17 @@ window.Steward = {
     // runs, and a result committed or published after the switch hands this church's keys to the next one.
     // `pub` is NEVER read after an await below: the envelope's d-tag and recipients come from `pub0`.
     const pub0 = pub, ep0 = _keyReadEpoch, sk0 = sk;
-    if (!_isRelayAuthed()) return false;                          // never act on an untrusted view (see the mint gate)
-    if (!_mediaKeyFresh) return false;                             // never from the device copy alone (round 3d) — see rotateCareKey
+    const _opt = arguments[2] || {}, _drop = Array.isArray(_opt.drop) ? _opt.drop : [];   // whom this rotation takes out (round 3e)
+    // not yet is not "no" (round 3e, MED 1) — see rotateCareKey: remembered, and run when the read settles
+    if (!_isRelayAuthed() || !_mediaKeyFresh) { try { _pendingRotAdd('media', pub0, _drop); } catch (x) {} return { pending: true }; }
     // NOTHING TO ROTATE (audit of 5276297, MEDIUM): a church that has never uploaded an encrypted sermon has no
     // sermon key, and `false` here made every owner's Block say "could not change the sermon key … Try blocking
     // them again". Only when we have genuinely LOOKED (a settled read) and there is no envelope at all — the name
     // key's answer for the same case. Not yet looked, or an envelope we cannot open: still false, still said.
-    if (!_mediaKeyHex) return (_mediaKeyChecked && !_mediaKeyDocKeys) ? { rotated: false, reason: 'no sermon key yet' } : false;
+    if (!_mediaKeyHex) {
+      if (_mediaKeyChecked && !_mediaKeyDocKeys) return { rotated: false, reason: 'no sermon key yet' };
+      try { _pendingRotAdd('media', pub0, _drop); } catch (x) {} return { pending: true };   // a relay not yet answered may hold it (round 3e)
+    }
     if (_mediaKeyDocKeys && !_mediaKeyMine) return false;          // the newest envelope has no copy we opened — see rotateCareKey (round 3a)
     _mediaKeyVer++;   // a rotation is under way: an ensureMediaKeyForMembers still sealing the old ring must not publish it
     const fresh = _hex(crypto.getRandomValues(new Uint8Array(32)));
@@ -6801,7 +6882,7 @@ window.Steward = {
       // would get the care key at all (measured: a-relay-that-is-down-does-not-hold-back-new-members-keys). The MINT gate
       // (`_careKeyChecked`) still needs EVERY relay — minting over an envelope a down relay holds destroys the church's
       // care records — so a settle that left a relay out does not set it.
-      (how) => { _careKeyFresh = true; if (!_careKeyChecked && !(how && how.without && how.without.length)) _careKeyChecked = true; _keysReadSignal('care'); }, 'care', { withoutFailed: true, keepAsking: true });
+      (how) => { _careKeyFresh = true; if (!_careKeyChecked && !(how && how.without && how.without.length)) _careKeyChecked = true; _keysReadSignal('care'); try { _runPendingRotations(); } catch (e) {} }, 'care', { withoutFailed: true, keepAsking: true });
   },
   // Wrap the care key for everyone who needs it. MINTS only on a first run where we have positively
   // established there is no envelope — never on a cold `_careKeyHex === null`, which is the ordinary state
@@ -6911,15 +6992,21 @@ window.Steward = {
     // A Block interrupted by a switch says so: false before anything is published (block() warns), and nothing
     // is ever adopted into the state of the church the console moved to.
     const cp = actingChurch || pub, ep0 = _keyReadEpoch, sk0 = sk, rev0 = (_careKeyRev || 1) + 1;
+    const _opt = arguments[2] || {}, _drop = Array.isArray(_opt.drop) ? _opt.drop : [];   // whom this rotation takes out (round 3e)
     if (!sk || !cp || !churchPub) return false;
-    if (!_careKeyChecked || !_isRelayAuthed()) return false;  // same trusted-view rule as minting
-    if (!_careKeyHex) return false;                            // nothing to rotate yet — ensureCareKeyForMembers mints the first
-    // NEVER FROM THE DEVICE COPY ALONE (round 3d; audit of 0f5cd2d). Since 3c the envelope this console last accepted is
-    // restored before any relay answers — to paint and to seal with — but a rotation built on it before this
-    // connection's read has settled can be built on a ring another console has already superseded (its key missing,
-    // the person it blocked still in). Refused, as the re-seal is: `false`, so Block and Remove say the key did not
-    // change and to try again. That is what a reload did before 3c, when there was nothing to rotate from.
-    if (!_careKeyFresh) return false;
+    // NEVER FROM THE DEVICE COPY ALONE (round 3d; audit of 0f5cd2d) — and NOT YET IS NOT "NO" (round 3e, MED 1). Since 3c
+    // the envelope this console last accepted is restored before any relay answers — to paint and to seal with — but a
+    // rotation built on it before this connection's read has settled can be built on a ring another console has already
+    // superseded. Until the read has settled on this connection (`fresh`) and the console is signed in, the rotation is
+    // REMEMBERED and runs when it settles (_runPendingRotations): `{ pending: true }`, which Block and Remove say as
+    // "will be removed as soon as this console finishes connecting". It needs `fresh` (every CONNECTED relay), not
+    // `checked` (every relay — the mint gate's rule): with one relay down for good, `checked` never came, and a Block
+    // never rotated this key at all.
+    if (!_careKeyFresh || !_isRelayAuthed()) { try { _pendingRotAdd('care', cp, _drop); } catch (x) {} return { pending: true }; }
+    if (!_careKeyHex) {                                        // nothing to rotate — ensureCareKeyForMembers mints the first
+      if (_careKeyChecked && !_careKeyDocKeys) return { rotated: false, reason: 'no care key yet' };
+      try { _pendingRotAdd('care', cp, _drop); } catch (x) {} return { pending: true };   // a relay not yet answered may hold it
+    }
     if (_careKeyDocKeys && !_careKeyMine) return false;        // the newest envelope has no copy we opened: our ring is older, and a rotation from it would drop the current key (round 3a)
     _careKeyVer++;   // a rotation is under way: any publish still sealing the old ring must not land after it
     const fresh = _hex(crypto.getRandomValues(new Uint8Array(32)));
@@ -7021,7 +7108,7 @@ window.Steward = {
       _onEnv,
       // no envelope came back → it is safe to mint one, but ONLY on a trustworthy answer from every relay
       // fresh on every connected relay; the mint gate on every relay — see subscribeCareKey (round 3a, (b))
-      (how) => { _mediaKeyFresh = true; if (!_mediaKeyChecked && !(how && how.without && how.without.length)) _mediaKeyChecked = true; _keysReadSignal('media'); }, 'media', { withoutFailed: true, keepAsking: true });
+      (how) => { _mediaKeyFresh = true; if (!_mediaKeyChecked && !(how && how.without && how.without.length)) _mediaKeyChecked = true; _keysReadSignal('media'); try { _runPendingRotations(); } catch (e) {} }, 'media', { withoutFailed: true, keepAsking: true });
   },
   // true if every relay this console has opened is still connected. The console's reconnect ticker only
   // re-subscribes when this is FALSE — so a healthy socket never triggers a full-corpus re-query (the steward
@@ -8037,6 +8124,8 @@ window.Steward = {
       if (ok && drop.length && seq === _setBlockedSeq && (actingChurch || pub) === cp0) {
         for (const p of drop) _localBlocked.delete(p);
         lsSet(BLOCKED_LAST_LS + cp0, JSON.stringify([..._localBlocked]));
+        // …and out of any rotation still waiting to take them out (round 3e) — they are let back in
+        try { const o = _pendingRotAll(cp0); let moved = false; for (const k of Object.keys(o)) { const before = (o[k].drop || []).length; o[k].drop = (o[k].drop || []).filter(x => drop.indexOf(x) === -1); if (o[k].drop.length !== before) moved = true; if (!o[k].drop.length) delete o[k]; } if (moved) lsSet(PENDINGROT_LS + cp0, JSON.stringify(o)); } catch (x) {}
       }
       // …and ask the relay for the member list again: it withheld the unblocked person's events until now (see
       // subscribeMembers), so a console that opened while they were blocked would never key them again. ALSO after a
@@ -8555,7 +8644,12 @@ window.Steward = {
     const cp = actingChurch || pub, ep0 = _keyReadEpoch;
     // (1) NEVER act on a view we have not established. "The relay returned no envelope" is not proof that none
     // exists — the envelope is private, so an unauthenticated or unreachable relay gives the same empty answer.
-    if (!_nameKeyChecked || !_isRelayAuthed()) return Promise.resolve(null);
+    if (!_nameKeyChecked || !_isRelayAuthed()) {
+      // NOT YET IS NOT "NO" for a Block's rotation either (round 3e, MED 1) — remembered, and run when the name key's read
+      // settles (_runPendingRotations). A routine grow still answers null: the next roster tick does it.
+      if (opts.rotate) { try { _pendingRotAdd('name', cp, Array.isArray(opts.drop) ? opts.drop : []); } catch (x) {} return Promise.resolve({ pending: true }); }
+      return Promise.resolve(null);
+    }
     let ring = _nameKeyRing.slice();
     // (2) An envelope EXISTS and we are not in it: the church owner must add us. Minting here is what a
     // DELEGATED console did — it can never read the owner's envelope (its own key was not a recipient), so it
@@ -8678,7 +8772,7 @@ window.Steward = {
       },
       // the relay answered — a church with no envelope yet may now mint its first, but ONLY on a trustworthy
       // answer from every relay (_openKeyRead). This is the gate the audit of e6a2e02 watched open on our own close.
-      () => { if (!_nameKeyChecked) { _nameKeyChecked = true; _keysReadSignal('name'); } }, 'name');
+      () => { if (!_nameKeyChecked) { _nameKeyChecked = true; _keysReadSignal('name'); } try { _runPendingRotations(); } catch (e) {} }, 'name');
   },
   // open a member's sealed name. Tries every key in the ring so a rotation never hides older names.
   openMemberName(content, authorPub) {
@@ -11884,6 +11978,15 @@ window.Steward = {
   // Was this list fetched for the church and epoch the console is on now? See _listTag. The key enrolment
   // (KeyDistributor, app/stew-dashboard.jsx) uses a list only when this says yes.
   listIsCurrent(list) { const t = list && list._for; return !!t && !!t.cp && t.cp === (actingChurch || pub) && t.epoch === _keyReadEpoch; },
+  // ROUND 3e, MED 1 — the screens' half of a rotation that could not run yet (see PENDINGROT_LS):
+  //   keysFresh(kind)       has this key's read settled on this connection, signed in? rotateChurchKeys waits on it (bounded)
+  //   rememberRotation(k,d) remember a rotation that FAILED for real, so "Try again" and the next settle run it
+  //   retryPendingRotations() the screen's "Try again"
+  //   pendingRotations()    which keys still wait, for the church this console is on
+  keysFresh(kind) { if (!_isRelayAuthed()) return false; return kind === 'care' ? _careKeyFresh : kind === 'media' ? _mediaKeyFresh : kind === 'name' ? _nameKeyChecked : false; },
+  rememberRotation(kind, drop) { try { _pendingRotAdd(kind, actingChurch || pub, drop || []); } catch (e) {} },
+  retryPendingRotations() { return _runPendingRotations(); },
+  pendingRotations() { return Object.keys(_pendingRotAll(actingChurch || pub)); },
   // "relay.x isn't answering" for a key read of the church we are on that a relay is holding up, or ''.
   keyWaitNote(kind) { return _keyWaitNote(kind); },
   keysSettingUp(kind) { return _keysSettingUp(kind); },          // true only while the console is still signing in / reading — see _keysSettingUp

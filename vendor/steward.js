@@ -15469,6 +15469,34 @@ zoo`.split("\n");
       return null;
     }
   }
+  var PENDINGROT_LS = "trinityone.steward.pendingrot.";
+  function _pendingRotAll(cp) {
+    try {
+      const o = JSON.parse(lsGet(PENDINGROT_LS + cp) || "null");
+      return o && typeof o === "object" ? o : {};
+    } catch (x) {
+      return {};
+    }
+  }
+  function _pendingRotAdd(kind, cp, drop) {
+    try {
+      if (!cp) return;
+      const o = _pendingRotAll(cp), cur = o[kind] || { drop: [] };
+      cur.drop = [.../* @__PURE__ */ new Set([...cur.drop || [], ...(drop || []).map((p) => String(p || "").toLowerCase()).filter(Boolean)])];
+      o[kind] = cur;
+      lsSet(PENDINGROT_LS + cp, JSON.stringify(o));
+    } catch (x) {
+    }
+  }
+  function _pendingRotClear(kind, cp) {
+    try {
+      const o = _pendingRotAll(cp);
+      if (!(kind in o)) return;
+      delete o[kind];
+      lsSet(PENDINGROT_LS + cp, JSON.stringify(o));
+    } catch (x) {
+    }
+  }
   var _mediaKeyChecked = false;
   async function _sha256hex(u83) {
     const d = await crypto.subtle.digest("SHA-256", u83);
@@ -16974,6 +17002,72 @@ zoo`.split("\n");
         again();
       } catch (e) {
       }
+    }
+    try {
+      _runPendingRotations();
+    } catch (e) {
+    }
+  }
+  var _pendingRotBusy = false;
+  var _pendingRotAgain = false;
+  async function _runPendingRotations() {
+    try {
+      return await _runPendingRotationsNow();
+    } catch (e) {
+      _pendingRotBusy = false;
+    }
+  }
+  async function _runPendingRotationsNow() {
+    const cp = actingChurch || pub;
+    if (!cp || actingChurch) return;
+    if (_pendingRotBusy) {
+      _pendingRotAgain = true;
+      return;
+    }
+    const all = _pendingRotAll(cp);
+    if (!Object.keys(all).length) return;
+    const S = typeof window !== "undefined" && window.Steward || null;
+    if (!S) return;
+    _pendingRotBusy = true;
+    try {
+      for (const kind of ["care", "media", "name"]) {
+        const p = all[kind];
+        if (!p) continue;
+        if (!_isRelayAuthed()) continue;
+        if (kind === "care" && !_careKeyFresh) continue;
+        if (kind === "media" && !_mediaKeyFresh) continue;
+        if (kind === "name" && !_nameKeyChecked) continue;
+        const drop = (p.drop || []).map((x) => String(x || "").toLowerCase());
+        const keepIf = (h) => drop.indexOf(String(h || "").toLowerCase()) === -1;
+        let r = null;
+        try {
+          if (kind === "care") r = await S.rotateCareKey([], [], { keepIf, drop });
+          else if (kind === "media") r = await S.rotateMediaKey([], [], { keepIf, drop });
+          else r = await S.ensureNameKeyForMembers(Object.keys(_nameKeyDocKeys || {}).filter(keepIf), [], { rotate: true, drop });
+        } catch (e) {
+          r = false;
+        }
+        if ((actingChurch || pub) !== cp) return;
+        if (r && r.pending) continue;
+        if (r === false || r == null) {
+          try {
+            window.dispatchEvent(new CustomEvent("steward-rotation-failed", { detail: { kind } }));
+          } catch (e) {
+          }
+          continue;
+        }
+        _pendingRotClear(kind, cp);
+        try {
+          window.dispatchEvent(new CustomEvent("steward-rotation-done", { detail: { kind, left: Object.keys(_pendingRotAll(cp)).length } }));
+        } catch (e) {
+        }
+      }
+    } finally {
+      _pendingRotBusy = false;
+    }
+    if (_pendingRotAgain) {
+      _pendingRotAgain = false;
+      return _runPendingRotationsNow();
     }
   }
   var _keyReadWaiting = /* @__PURE__ */ new Map();
@@ -19712,7 +19806,7 @@ zoo`.split("\n");
       try {
         for (let i3 = localStorage.length - 1; i3 >= 0; i3--) {
           const k = localStorage.key(i3);
-          if (k && k.indexOf("trinityone.steward.keyenv.") === 0) localStorage.removeItem(k);
+          if (k && (k.indexOf("trinityone.steward.keyenv.") === 0 || k.indexOf("trinityone.steward.pendingrot.") === 0)) localStorage.removeItem(k);
         }
       } catch (e) {
       }
@@ -20225,9 +20319,22 @@ zoo`.split("\n");
       if (actingChurch) return null;
       if (!sk || !pub) return false;
       const pub0 = pub, ep0 = _keyReadEpoch, sk0 = sk;
-      if (!_isRelayAuthed()) return false;
-      if (!_mediaKeyFresh) return false;
-      if (!_mediaKeyHex) return _mediaKeyChecked && !_mediaKeyDocKeys ? { rotated: false, reason: "no sermon key yet" } : false;
+      const _opt = arguments[2] || {}, _drop = Array.isArray(_opt.drop) ? _opt.drop : [];
+      if (!_isRelayAuthed() || !_mediaKeyFresh) {
+        try {
+          _pendingRotAdd("media", pub0, _drop);
+        } catch (x) {
+        }
+        return { pending: true };
+      }
+      if (!_mediaKeyHex) {
+        if (_mediaKeyChecked && !_mediaKeyDocKeys) return { rotated: false, reason: "no sermon key yet" };
+        try {
+          _pendingRotAdd("media", pub0, _drop);
+        } catch (x) {
+        }
+        return { pending: true };
+      }
       if (_mediaKeyDocKeys && !_mediaKeyMine) return false;
       _mediaKeyVer++;
       const fresh = _hex(crypto.getRandomValues(new Uint8Array(32)));
@@ -20300,6 +20407,10 @@ zoo`.split("\n");
           _careKeyFresh = true;
           if (!_careKeyChecked && !(how && how.without && how.without.length)) _careKeyChecked = true;
           _keysReadSignal("care");
+          try {
+            _runPendingRotations();
+          } catch (e) {
+          }
         },
         "care",
         { withoutFailed: true, keepAsking: true }
@@ -20429,10 +20540,23 @@ zoo`.split("\n");
     // them), and the new envelope simply isn't wrapped to the person who left.
     async rotateCareKey(memberPubs, stewardPubs) {
       const cp = actingChurch || pub, ep0 = _keyReadEpoch, sk0 = sk, rev0 = (_careKeyRev || 1) + 1;
+      const _opt = arguments[2] || {}, _drop = Array.isArray(_opt.drop) ? _opt.drop : [];
       if (!sk || !cp || !churchPub) return false;
-      if (!_careKeyChecked || !_isRelayAuthed()) return false;
-      if (!_careKeyHex) return false;
-      if (!_careKeyFresh) return false;
+      if (!_careKeyFresh || !_isRelayAuthed()) {
+        try {
+          _pendingRotAdd("care", cp, _drop);
+        } catch (x) {
+        }
+        return { pending: true };
+      }
+      if (!_careKeyHex) {
+        if (_careKeyChecked && !_careKeyDocKeys) return { rotated: false, reason: "no care key yet" };
+        try {
+          _pendingRotAdd("care", cp, _drop);
+        } catch (x) {
+        }
+        return { pending: true };
+      }
       if (_careKeyDocKeys && !_careKeyMine) return false;
       _careKeyVer++;
       const fresh = _hex(crypto.getRandomValues(new Uint8Array(32)));
@@ -20563,6 +20687,10 @@ zoo`.split("\n");
           _mediaKeyFresh = true;
           if (!_mediaKeyChecked && !(how && how.without && how.without.length)) _mediaKeyChecked = true;
           _keysReadSignal("media");
+          try {
+            _runPendingRotations();
+          } catch (e) {
+          }
         },
         "media",
         { withoutFailed: true, keepAsking: true }
@@ -21666,6 +21794,18 @@ zoo`.split("\n");
         if (ok && drop.length && seq === _setBlockedSeq && (actingChurch || pub) === cp0) {
           for (const p of drop) _localBlocked.delete(p);
           lsSet(BLOCKED_LAST_LS + cp0, JSON.stringify([..._localBlocked]));
+          try {
+            const o = _pendingRotAll(cp0);
+            let moved = false;
+            for (const k of Object.keys(o)) {
+              const before = (o[k].drop || []).length;
+              o[k].drop = (o[k].drop || []).filter((x) => drop.indexOf(x) === -1);
+              if (o[k].drop.length !== before) moved = true;
+              if (!o[k].drop.length) delete o[k];
+            }
+            if (moved) lsSet(PENDINGROT_LS + cp0, JSON.stringify(o));
+          } catch (x) {
+          }
         }
         if (drop.length && seq === _setBlockedSeq && (actingChurch || pub) === cp0) {
           for (const f of [..._membersReask]) {
@@ -22013,7 +22153,16 @@ zoo`.split("\n");
     async _ensureNameKeyLocked(memberPubs, stewardPubs, opts = {}) {
       if (!churchSk || !churchPub) return Promise.resolve(null);
       const cp = actingChurch || pub, ep0 = _keyReadEpoch;
-      if (!_nameKeyChecked || !_isRelayAuthed()) return Promise.resolve(null);
+      if (!_nameKeyChecked || !_isRelayAuthed()) {
+        if (opts.rotate) {
+          try {
+            _pendingRotAdd("name", cp, Array.isArray(opts.drop) ? opts.drop : []);
+          } catch (x) {
+          }
+          return Promise.resolve({ pending: true });
+        }
+        return Promise.resolve(null);
+      }
       let ring = _nameKeyRing.slice();
       if (!ring.length && _nameKeyDocKeys) return Promise.resolve(null);
       if (opts.rotate && !ring.length) return Promise.resolve({ rotated: false, reason: "no name key yet" });
@@ -22093,6 +22242,10 @@ zoo`.split("\n");
           if (!_nameKeyChecked) {
             _nameKeyChecked = true;
             _keysReadSignal("name");
+          }
+          try {
+            _runPendingRotations();
+          } catch (e) {
           }
         },
         "name"
@@ -25494,6 +25647,27 @@ zoo`.split("\n");
     listIsCurrent(list) {
       const t = list && list._for;
       return !!t && !!t.cp && t.cp === (actingChurch || pub) && t.epoch === _keyReadEpoch;
+    },
+    // ROUND 3e, MED 1 — the screens' half of a rotation that could not run yet (see PENDINGROT_LS):
+    //   keysFresh(kind)       has this key's read settled on this connection, signed in? rotateChurchKeys waits on it (bounded)
+    //   rememberRotation(k,d) remember a rotation that FAILED for real, so "Try again" and the next settle run it
+    //   retryPendingRotations() the screen's "Try again"
+    //   pendingRotations()    which keys still wait, for the church this console is on
+    keysFresh(kind) {
+      if (!_isRelayAuthed()) return false;
+      return kind === "care" ? _careKeyFresh : kind === "media" ? _mediaKeyFresh : kind === "name" ? _nameKeyChecked : false;
+    },
+    rememberRotation(kind, drop) {
+      try {
+        _pendingRotAdd(kind, actingChurch || pub, drop || []);
+      } catch (e) {
+      }
+    },
+    retryPendingRotations() {
+      return _runPendingRotations();
+    },
+    pendingRotations() {
+      return Object.keys(_pendingRotAll(actingChurch || pub));
     },
     // "relay.x isn't answering" for a key read of the church we are on that a relay is holding up, or ''.
     keyWaitNote(kind) {

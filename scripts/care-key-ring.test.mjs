@@ -59,7 +59,7 @@ test('the envelope wraps the whole ring, not just the current key', () => {
 });
 
 test('rotation exists, is gated like minting, and keeps the old keys', () => {
-  const b = body('rotateCareKey(');
+  const b = body('async rotateCareKey(');   // re-anchored 2026-10-13 (round 3e): the first 'rotateCareKey(' in the bundle is now _runPendingRotations' call to it
   assert.match(b, /_isRelayAuthed\(\)/, 'rotation must not run from an untrusted view — same rule as minting');
   // Assert the CONSTRUCTION carries the old ring forward — matching the name alone passes even if the new
   // ring is built as [fresh] and the old keys are dropped (verified: that sabotage slipped through once).
@@ -72,7 +72,7 @@ test('rotation exists, is gated like minting, and keeps the old keys', () => {
 });
 
 test('the MEDIA key has the same ring + rotation (a removed member must not keep sermon access)', () => {
-  const rot = body('rotateMediaKey(');
+  const rot = body('async rotateMediaKey(');   // re-anchored 2026-10-13 (round 3e) — see rotateCareKey above
   assert.match(rot, /_isRelayAuthed\(\)/, 'media rotation must not run from an untrusted view');
   // `full` since 2026-10-01, as rotateCareKey above: the ring is fitted to the relay's 1 MB cap, so the full
   // history and the ring published are two things. Whatever is published starts from the fresh key.

@@ -494,3 +494,82 @@ test('LOW 2: with the member list FRESH, Block and Remove let go of a holder who
     }
   }
 });
+
+// ROUND 3e, MED 1 (audit of b102dc6): BLOCK DURING THE KEY READ — THE SCREEN SAYS WHAT IS TRUE, AND FINISHES THE STORY.
+// A rotation waiting for its key read is not a failure: Block says the access "will be removed as soon as this console
+// finishes connecting", then "Done" when the engine reports it ran. A rotation that really failed says so, with
+// "Try again" — never "try blocking them again" (the person is on the Blocked list, which offers only Unblock) nor
+// "grown past what one key document can hold" (almost never the cause).
+async function blockShown(w) {
+  w.lists.groups.length = 0; w.lists.groups.push({ id: 'g-open', name: 'Prayer', kind: 'group', encrypted: true });
+  const listeners = {};
+  w.win.addEventListener = (t, f) => { (listeners[t] = listeners[t] || []).push(f); };
+  w.win.removeEventListener = () => {};
+  const { mod, draw } = load(w);
+  let tree = draw(mod.DashMembers, {});
+  const bs = find(tree, n => n.type === 'button');
+  const bobAt = bs.findIndex(n => ((n.props || {})['aria-label'] || '') === 'Mark as a child: Bob');
+  bs.slice(0, bobAt).reverse().find(n => /Remove \/ block this member/.test(texts(n).join(' '))).props.onClick();
+  tree = draw(mod.DashMembers, {});
+  find(tree, n => n.type === 'button' && /^Confirm/.test(texts(n).join(' ').trim()))[0].props.onClick();
+  for (let i = 0; i < 10; i++) await tick();
+  const fire = (t, detail) => { for (const f of (listeners[t] || [])) f({ detail }); };
+  return { said: () => texts(draw(mod.DashMembers, {})).join(' '), fire, tree: () => draw(mod.DashMembers, {}) };
+}
+test('3e MED 1: a Block whose care key is WAITING for its read says so truthfully — and then "Done" when it has run', async () => {
+  const w = world({ approval: true });
+  w.S.rotateCareKey = (...a) => { w.calls.push({ name: 'rotateCareKey', a }); return Promise.resolve({ pending: true }); };
+  const v = await blockShown(w);
+  assert.match(v.said(), /will be removed as soon as this console finishes connecting/, 'a WAITING rotation was not said as waiting: ' + v.said().slice(0, 300));
+  assert.doesNotMatch(v.said(), /Try blocking them again|grown past/, 'THE SCREEN TOLD THE STEWARD TO BLOCK AGAIN (impossible) OR BLAMED THE CHURCH\'S SIZE');
+  assert.deepEqual(rotatedTo(w, 'rotateCareKey') && w.calls.find(x => x.name === 'rotateCareKey').a[2].drop, [BOB], 'the rotation was not told whom it takes out — it could not be remembered for later');
+  v.fire('steward-rotation-done', { kind: 'care', left: 0 });
+  assert.match(v.said(), /Done — they can no longer open anything sealed/, 'the screen never said the waiting rotation had run');
+});
+test('3e MED 1: a Block whose care key truly could not change says so, with "Try again" — which retries', async () => {
+  const w = world({ approval: true });
+  w.S.rotateCareKey = (...a) => { w.calls.push({ name: 'rotateCareKey', a }); return Promise.resolve(false); };
+  const v = await blockShown(w);
+  assert.match(v.said(), /could not change the care key yet/, 'a failed rotation was not named: ' + v.said().slice(0, 300));
+  assert.doesNotMatch(v.said(), /Try blocking them again|grown past/, 'THE SCREEN TOLD THE STEWARD TO BLOCK AGAIN (impossible) OR BLAMED THE CHURCH\'S SIZE');
+  assert.ok(w.calls.some(x => x.name === 'rememberRotation' && x.a[0] === 'care'), 'A FAILED ROTATION WAS NOT REMEMBERED — "Try again" would have nothing to run');
+  const again = find(v.tree(), n => n.type === 'button' && /^Try again$/.test(texts(n).join(' ').trim()))[0];
+  assert.ok(again, 'no "Try again" control for a rotation that failed');
+  again.props.onClick();
+  assert.ok(w.calls.some(x => x.name === 'retryPendingRotations'), '"Try again" did not retry the rotation');
+});
+test('3e MED 1: Block waits, briefly, for the key reads — and rotates once they have settled', async () => {
+  const w = world({ approval: true });
+  let fresh = false;
+  w.S.keysFresh = () => fresh;
+  w.lists.groups.length = 0;
+  const { mod, draw } = load(w);
+  let tree = draw(mod.DashMembers, {});
+  const bs = find(tree, n => n.type === 'button');
+  const bobAt = bs.findIndex(n => ((n.props || {})['aria-label'] || '') === 'Mark as a child: Bob');
+  bs.slice(0, bobAt).reverse().find(n => /Remove \/ block this member/.test(texts(n).join(' '))).props.onClick();
+  tree = draw(mod.DashMembers, {});
+  find(tree, n => n.type === 'button' && /^Confirm/.test(texts(n).join(' ').trim()))[0].props.onClick();
+  for (let i = 0; i < 10; i++) await tick();
+  assert.ok(w.calls.some(x => x.name === 'setBlocked'), 'CONTROL: the block was not written');
+  assert.ok(!w.calls.some(x => x.name === 'rotateCareKey'), 'THE ROTATION RAN BEFORE THE KEY READS HAD SETTLED — it did not wait');
+  fresh = true;
+  await new Promise(r => setTimeout(r, 400));
+  for (let i = 0; i < 5; i++) await tick();
+  assert.ok(w.calls.some(x => x.name === 'rotateCareKey'), 'the rotation never ran once the key reads had settled');
+});
+test('3e MED 1: removing a delegate whose keys are WAITING says so truthfully — not "try removing them again"', async () => {
+  const w = world({ approval: true });
+  w.S.rotateCareKey = (...a) => { w.calls.push({ name: 'rotateCareKey', a }); return Promise.resolve({ pending: true }); };
+  const { mod, draw } = load(w);
+  const props = { church: { name: 'St Aidan', features: {} } };
+  let tree = draw(mod.DashStewardsPanel, props);
+  find(tree, n => n.type === 'button' && /^Revoke this steward/.test(texts(n).join(' ').trim()))[0].props.onClick();
+  tree = draw(mod.DashStewardsPanel, props);
+  find(tree, n => n.type === 'button' && /^Confirm — revoke/.test(texts(n).join(' ').trim()))[0].props.onClick();
+  for (let i = 0; i < 10; i++) await tick();
+  const said = texts(draw(mod.DashStewardsPanel, props)).join(' ');
+  assert.match(said, /will be removed as soon as this console finishes connecting/, 'a WAITING rotation was not said as waiting: ' + said.slice(0, 300));
+  assert.doesNotMatch(said, /Try removing them again/, 'THE SCREEN TOLD THE OWNER TO REMOVE A STEWARD WHO IS ALREADY REMOVED');
+  assert.deepEqual(w.calls.find(x => x.name === 'rotateCareKey').a[2].drop, [ST], 'the rotation was not told whom it takes out');
+});

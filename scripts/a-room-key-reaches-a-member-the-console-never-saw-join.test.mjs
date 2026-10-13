@@ -253,7 +253,7 @@ const WS_SHIM = `(() => {
     __route(ev) {
       let sid = null;
       try { const m = JSON.parse(ev.data); if (Array.isArray(m) && (m[0] === 'EVENT' || m[0] === 'EOSE' || m[0] === 'CLOSED')) { sid = m[1];
-        if (H.on && m[0] === 'EVENT' && m[2] && (m[2].tags || []).some(t => t[0] === 'd' && String(t[1]).startsWith(H.d))) H.subs.add(sid); } } catch (e) {}
+        if (H.on && m[0] === 'EVENT' && m[2] && (m[2].tags || []).some(t => t[0] === 'd' && (H.match ? H.match(String(t[1])) : String(t[1]).startsWith(H.d)))) H.subs.add(sid); } } catch (e) {}
       if (sid && H.subs.has(sid)) { H.q.push([this, ev]); return; }
       if (this.__on) this.__on(ev);
     }
@@ -401,4 +401,54 @@ test('H · someone who has LEFT is not carried through a Block pressed on the Me
   await sleep(10000);   // the distributor's ticks: M1 must not be handed back either
   assert.ok(!room().includes(M1.pub) && !care().includes(M1.pub) && !media().includes(M1.pub), 'the distributor handed the rotated keys back to someone who has LEFT: ' + show());
   assert.deepEqual(errors, [], 'the console threw:\n  ' + errors.join('\n  '));
+});
+
+// ── ROUND 3e, MED 1 (audit of b102dc6): A BLOCK WHILE THE KEY READS ARE STILL SETTLING ─────────────────────────────────
+// In a console's first seconds, or after a dropped connection, the care and sermon reads have not settled, and since 3d a
+// rotation must not run from what the device last held. It used to answer `false`: the person stayed blocked but kept the
+// keys, the screen said "try blocking them again" (the Blocked list offers only Unblock), and nothing ever ran it. Now
+// Block waits up to 10 s, then the engine REMEMBERS the rotation and runs it when the read settles, and the screen says so.
+// Here a second tab of the console opens with its care-key AND sermon-key reads held back (the page-level WebSocket shim of
+// row F, armed before the page loads), presses Block on MG, waits out the 10 s, and only then lets the reads through.
+test('I · a Block while the care and sermon reads are still held back is REMEMBERED, said truthfully, and runs once they settle', { skip: SKIP, timeout: 360000 }, async () => {
+  assert.ok(room().includes(MG.pub) && care().includes(MG.pub) && media().includes(MG.pub), 'CONTROL: MG is not keyed — run A–H first: ' + show());
+  const t = await (await fetch(`http://127.0.0.1:${cdpPort}/json/new?about:blank`, { method: 'PUT' })).json();
+  const w2 = new WebSocket(t.webSocketDebuggerUrl, { perMessageDeflate: false, maxPayload: 5e8 });
+  await new Promise((res, rej) => { w2.on('open', res); w2.on('error', rej); });
+  let id = 0; const pend = new Map();
+  w2.on('message', (d) => { const m = JSON.parse(d); if (m.id && pend.has(m.id)) { pend.get(m.id)(m); pend.delete(m.id); } });
+  const send = (method, params = {}) => new Promise(r => { const i = ++id; pend.set(i, r); w2.send(JSON.stringify({ id: i, method, params })); });
+  const ev = async (expression) => { const rr = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true }); return rr?.result?.result?.value; };
+  try {
+    await send('Runtime.enable'); await send('Page.enable');
+    await send('Page.addScriptToEvaluateOnNewDocument', { source: WS_SHIM });
+    // hold every subscription that carries a care or sermon envelope — its events AND its EOSE — from the first frame
+    await send('Page.addScriptToEvaluateOnNewDocument', { source: `(() => { const H = window.__hold; H.on = true; H.d = 'trinityone/'; H.match = (d) => d.startsWith('trinityone/carekey:') || d.startsWith('trinityone/mediakey:'); })();` });
+    await send('Page.navigate', { url: relay.base + '/steward.html' });
+    await sleep(2500);
+    const t0 = Date.now();
+    while (Date.now() - t0 < 90000 && !(await ev(`[...document.querySelectorAll('input')].some(x => (x.placeholder||'').includes('Your PIN or passphrase'))`).catch(() => false))) await sleep(400);
+    await ev(typePh('Your PIN or passphrase', PIN)); await sleep(200); await ev(click('/^Unlock/'));
+    const t1 = Date.now();
+    while (Date.now() - t1 < 90000 && !(await ev(`[...document.querySelectorAll('button')].some(x => (x.textContent||'').trim() === 'Members')`).catch(() => false))) await sleep(400);
+    assert.equal(await ev(`window.Steward.keysFresh('care')`), false, 'CONTROL: the care read was not held back — this row would prove nothing');
+    // Block MG on the Members screen of THIS tab
+    await ev(click('/^Members$/')); await sleep(2000);
+    const me = nip19.npubEncode(MG.pub).slice(0, 12);
+    await ev(`(() => { if (document.querySelector('button[title="Remove / block this member"]')) return 1; const b = [...document.querySelectorAll('button')].find(x => /^More for /.test(x.getAttribute('aria-label') || '')); if (b) b.click(); return 1; })()`);
+    await sleep(600);
+    assert.equal(await ev(`(() => { const btns = [...document.querySelectorAll('button[title="Remove / block this member"], button[title="Decline — blocks this person from joining or posting"]')];
+      const mine = btns.find(b => { let n = b; for (let i = 0; i < 8 && n; i++) { n = n.parentElement; if (((n && n.textContent) || '').includes(${JSON.stringify(me)})) return true; } return false; }); if (!mine) return 'miss'; mine.click(); return 'ok'; })()`), 'ok', 'no Block button for MG');
+    await sleep(500);
+    assert.equal(await ev(`(() => { const b = document.querySelector('button[title="Confirm — bans them from posting & hides their messages"]') || document.querySelector('button[title="Confirm — blocks them from joining or posting, and re-keys the church"]'); if (!b) return 'miss'; b.click(); return 'ok'; })()`), 'ok', 'no Block confirmation');
+    await sleep(13000);                                       // past the 10 s wait: the rotation must now be REMEMBERED
+    const said = await ev('document.body.innerText');
+    assert.match(said, /will be removed as soon as this console finishes connecting/, 'A WAITING ROTATION WAS NOT SAID AS WAITING: ' + said.slice(0, 400));
+    assert.doesNotMatch(said, /Try blocking them again|grown past what one key document/, 'THE SCREEN TOLD THE STEWARD TO BLOCK AGAIN (the Blocked list offers only Unblock) OR BLAMED THE CHURCH\'S SIZE');
+    assert.ok(care().includes(MG.pub), 'CONTROL: the care key rotated while its read was held — this row would prove nothing');
+    // the reads arrive
+    await ev(`window.__release()`);
+    assert.ok(await until(() => !care().includes(MG.pub) && !media().includes(MG.pub), 45000), 'THE REMEMBERED ROTATION NEVER RAN once the reads settled — MG still holds the care or sermon key: ' + show());
+    assert.ok(await (async () => { const t2 = Date.now(); while (Date.now() - t2 < 20000) { if (/Done — they can no longer open anything sealed/.test(await ev('document.body.innerText'))) return true; await sleep(500); } return false; })(), 'the screen never said the waiting rotation had run');
+  } finally { try { await fetch(`http://127.0.0.1:${cdpPort}/json/close/${t.id}`); } catch {} try { w2.close(); } catch {} }
 });
