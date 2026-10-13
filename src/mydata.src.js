@@ -88,7 +88,18 @@ function NostrBackend(cache) {
   var timers = {};
   var onChange = function () {};
 
-  function relays() { return (window.Fellowship && window.Fellowship.relays) || ['ws://127.0.0.1:7447']; }
+  // ADMISSION (RELAY-ADMISSION.md, CLAUDE.md rule 10): these marks say WHICH ROOMS a member reads, so they go
+  // only to relays that PROVED they run our software. That is Fellowship.churchRelays() -- the same gated set
+  // the member's own wallet backup uses -- NOT the raw candidate list `Fellowship.relays`, and NOT the old
+  // hardcoded ws://127.0.0.1:7447 fallback (a relay nobody had proved, and not even a real one on a phone).
+  // May be EMPTY (nothing proved yet: cold boot, or no verified relay). Then nothing is dialled: publish()
+  // does nothing (local stays authoritative) and pull() reports INCONCLUSIVE, so startSync does not push over
+  // a remote copy it never read. `_deferred` remembers it, and 'trinity-relays-verified' re-runs the sync.
+  var _deferred = false;
+  function relays() {
+    try { var f = window.Fellowship; var r = f && f.churchRelays && f.churchRelays(); return Array.isArray(r) ? r : []; }
+    catch (e) { return []; }
+  }
   function tombKey(key) { return 'tomb/' + key; }
   function tombAtKey(key) { return 'tombat/' + key; }
   function idset(arr) { var s = new Set(); (arr || []).forEach(function (it) { if (it && it.id != null) s.add(it.id); }); return s; }
@@ -117,7 +128,9 @@ function NostrBackend(cache) {
     var tombAt = cache.getDoc(tombAtKey(key)) || {};
     var payload = Array.isArray(doc) ? { items: doc, deleted: cache.getDoc(tombKey(key)) || [], deletedAt: Object.keys(tombAt).length ? tombAt : undefined } : { settings: doc };
     var evt = finalizeEvent({ kind: KIND, created_at: Math.floor(Date.now() / 1000), tags: [['d', SYNC[key].d]], content: encode(key, payload) }, sk);
-    try { Promise.any(pool.publish(relays(), evt)).catch(function () {}); } catch (e) { /* offline: local stays authoritative */ }
+    var targets = relays();
+    if (!targets.length) { _deferred = true; return; }   // nothing proved yet: dial nobody, keep the local copy
+    try { Promise.any(pool.publish(targets, evt)).catch(function () {}); } catch (e) { /* offline: local stays authoritative */ }
   }
 
   // merge a remote payload into the local cache; returns true if local changed
@@ -179,6 +192,8 @@ function NostrBackend(cache) {
   }
 
   function pull() {
+    var targets = relays();
+    if (!targets.length) { _deferred = true; return Promise.resolve({ touched: false, inconclusive: true }); }
     return new Promise(function (resolve) {
       var touched = false, done = false, eosed = false, evCount = 0, closed = false, idleT = null;
       _pullAuthed = false;
@@ -189,7 +204,7 @@ function NostrBackend(cache) {
       var scheduleClose = function (ms) { if (closed) return; clearTimeout(idleT); idleT = setTimeout(closeNow, ms); };
       // A challenge that lands AFTER the first (unauth) EOSE means the replay is coming — hold the sub open.
       _onPullAuth = function () { if (eosed) scheduleClose(4000); };
-      var sub = pool.subscribeMany(relays(), [{ kinds: [KIND], authors: [pub], '#d': Object.keys(D_TO_KEY) }], {
+      var sub = pool.subscribeMany(targets, [{ kinds: [KIND], authors: [pub], '#d': Object.keys(D_TO_KEY) }], {
         onevent: function (e) {
           evCount++;
           var dTag = (e.tags.find(function (t) { return t[0] === 'd'; }) || [])[1];
@@ -218,6 +233,8 @@ function NostrBackend(cache) {
 
   return {
     kind: 'nostr',
+    // True once, if a sync was skipped for want of a proved relay; the caller re-runs startSync.
+    takeDeferred: function () { var d = _deferred; _deferred = false; return d; },
     getDoc: function (key) { return cache.getDoc(key); },
     putDoc: function (key, value) {
       if (SYNC[key] && Array.isArray(value)) {
@@ -396,6 +413,8 @@ function MyDataStore(backend) {
     // restarted. Someone journalling while they wait is exactly someone with something on their mind, so the
     // window mattered. Admission is the moment the refusal stops being true; retry then, not at next boot.
     window.addEventListener('trinity-admitted', function () { kick(); });
+    // The gate proves relays AFTER boot. A sync skipped because none was proved yet re-runs when one is.
+    window.addEventListener('trinity-relays-verified', function () { if (backend.takeDeferred && backend.takeDeferred()) kick(); });
   } else {
     api.ready = Promise.resolve(false);
   }

@@ -5213,8 +5213,15 @@
     var timers = {};
     var onChange = function() {
     };
+    var _deferred = false;
     function relays() {
-      return window.Fellowship && window.Fellowship.relays || ["ws://127.0.0.1:7447"];
+      try {
+        var f = window.Fellowship;
+        var r = f && f.churchRelays && f.churchRelays();
+        return Array.isArray(r) ? r : [];
+      } catch (e) {
+        return [];
+      }
     }
     function tombKey(key) {
       return "tomb/" + key;
@@ -5253,8 +5260,13 @@
       var tombAt = cache.getDoc(tombAtKey(key)) || {};
       var payload = Array.isArray(doc) ? { items: doc, deleted: cache.getDoc(tombKey(key)) || [], deletedAt: Object.keys(tombAt).length ? tombAt : void 0 } : { settings: doc };
       var evt = finalizeEvent2({ kind: KIND, created_at: Math.floor(Date.now() / 1e3), tags: [["d", SYNC[key].d]], content: encode(key, payload) }, sk);
+      var targets = relays();
+      if (!targets.length) {
+        _deferred = true;
+        return;
+      }
       try {
-        Promise.any(pool.publish(relays(), evt)).catch(function() {
+        Promise.any(pool.publish(targets, evt)).catch(function() {
         });
       } catch (e) {
       }
@@ -5307,6 +5319,11 @@
       return false;
     }
     function pull() {
+      var targets = relays();
+      if (!targets.length) {
+        _deferred = true;
+        return Promise.resolve({ touched: false, inconclusive: true });
+      }
       return new Promise(function(resolve) {
         var touched = false, done = false, eosed = false, evCount = 0, closed = false, idleT = null;
         _pullAuthed = false;
@@ -5335,7 +5352,7 @@
         _onPullAuth = function() {
           if (eosed) scheduleClose(4e3);
         };
-        var sub = pool.subscribeMany(relays(), [{ kinds: [KIND], authors: [pub], "#d": Object.keys(D_TO_KEY) }], {
+        var sub = pool.subscribeMany(targets, [{ kinds: [KIND], authors: [pub], "#d": Object.keys(D_TO_KEY) }], {
           onevent: function(e) {
             evCount++;
             var dTag = (e.tags.find(function(t) {
@@ -5366,6 +5383,12 @@
     }
     return {
       kind: "nostr",
+      // True once, if a sync was skipped for want of a proved relay; the caller re-runs startSync.
+      takeDeferred: function() {
+        var d = _deferred;
+        _deferred = false;
+        return d;
+      },
       getDoc: function(key) {
         return cache.getDoc(key);
       },
@@ -5620,6 +5643,9 @@
       });
       window.addEventListener("trinity-admitted", function() {
         kick();
+      });
+      window.addEventListener("trinity-relays-verified", function() {
+        if (backend.takeDeferred && backend.takeDeferred()) kick();
       });
     } else {
       api.ready = Promise.resolve(false);

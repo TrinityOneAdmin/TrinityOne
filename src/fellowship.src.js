@@ -3781,6 +3781,9 @@ window.Fellowship = {
   // The church's own membership entries, [{pubkey, alwaysOn, url}]. Exposed for the same reason: so a device
   // session can read what the church actually signed, rather than inferring it from behaviour.
   churchRelayNet,
+  // The GATED relay set (candidates minus anything that has not proved it runs our software). Exposed so the
+  // separate mydata bundle can publish over the proved set instead of the raw `relays` list (rule 10).
+  churchRelays,
   // A2. What has silently failed this session, newest last, capped at 50. A phone has no console, so without
   // this a swallowed throw leaves no trace anywhere a device session can reach — which is why "the feature
   // returns empty" has repeatedly been indistinguishable from "this church has nothing yet".
