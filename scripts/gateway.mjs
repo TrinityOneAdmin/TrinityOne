@@ -8431,7 +8431,10 @@ wss.on('connection', (ws, req) => {
   // port strip is anchored at the end and there are no brackets to remove.
   ws._host = String((req && req.headers && req.headers.host) || '').replace(/:\d+$/, '').replace(/^\[|\]$/g, '').toLowerCase();
   ws._auth = null;                                    // pubkey once the client proves it via NIP-42 AUTH
-  ws._rl = { n: 0, t: Date.now(), drop: 0 };          // per-connection inbound rate limit (CPU-DoS guard)
+  // per-connection inbound rate limit (CPU-DoS guard). EVERY counter starts at 0 (round 3f, R1; audit of 4bb1ed1): `a` was
+  // left undefined, `undefined + 1` is NaN and `NaN > 10` is false, so the AUTH budget did not exist in a connection's first
+  // second — measured: 500 AUTHs at connect, 244 verified and accepted.
+  ws._rl = { n: 0, a: 0, f: 0, t: Date.now(), drop: 0 };
   ws._challenge = randomBytes(16).toString('hex');    // per-connection nonce
   // LAZY NIP-42: we do NOT challenge on connect (that made every member pay a slow auth round-trip).
   // We only send the AUTH challenge when a REQ actually tries to read invite-only content (below), so
@@ -8443,10 +8446,22 @@ wss.on('connection', (ws, req) => {
     // forged events that get rejected — is a CPU-amplification vector. Cap inbound messages per
     // connection (~100/s, far above any legitimate client); persistent abuse closes the socket.
     const _now = Date.now();
-    if (_now - ws._rl.t >= 1000) { ws._rl.t = _now; ws._rl.n = 0; ws._rl.a = 0; }
-    let msg; try { msg = JSON.parse(raw); } catch { return; }
-    if (!Array.isArray(msg) || !msg.length) return;   // a non-array message (or empty) would throw at the destructure below
+    if (_now - ws._rl.t >= 1000) { ws._rl.t = _now; ws._rl.n = 0; ws._rl.a = 0; ws._rl.f = 0; }
+    // PERSISTENT ABUSE CLOSES THE SOCKET — whatever the frames are (round 3f, R2; audit of 4bb1ed1). 5c35bfd parsed each
+    // frame BEFORE counting it, so unparseable frames and non-arrays returned before any counter, and a CLOSE was never
+    // counted at all: a flood of 50 KB garbage, or of CLOSEs, ran for ever where b102dc6 closed the socket. Now every frame
+    // is counted before it is parsed — at most 300 a second of anything (a console opening a church sends ~100), and a
+    // frame the relay cannot use (unparseable, not an array) counts as abuse outright. Abuse adds up; past 500 the socket
+    // is closed (1008), as it always was. ONE FRAME IS EXEMPT FROM THE 300: an AUTH, looked at cheaply before parsing, so
+    // a flood of anything else cannot starve the login (5c35bfd's fix) — it has its own budget of 10 a second instead.
+    const _abuse = () => { if (++ws._rl.drop > 500) { try { ws.close(1008, 'rate limit'); } catch (e) {} } };
+    const _head = (typeof raw === 'string' ? raw : raw.subarray(0, 12).toString()).slice(0, 12);
+    const _looksAuth = /^\[\s*"AUTH"/.test(_head);
+    if (!_looksAuth && ++ws._rl.f > 300) { _abuse(); return; }
+    let msg; try { msg = JSON.parse(raw); } catch { _abuse(); return; }
+    if (!Array.isArray(msg) || !msg.length) { _abuse(); return; }   // a non-array message (or empty) would throw at the destructure below
     const [type, ...rest] = msg;
+    if (_looksAuth && type !== 'AUTH' && ++ws._rl.f > 300) { _abuse(); return; }   // it only LOOKED like an AUTH: counted after all
     // OVER THE LIMIT, SAY SO — AND NEVER LOSE A LOGIN (round 3e; audit of b102dc6). This dropped every frame past the
     // 100th in a second WITHOUT A WORD. A console opening a church sends more than that in its first second (measured:
     // 102 REQ/CLOSE frames before its AUTH), so the AUTH itself was dropped: no OK ever came, nostr-tools gave up on
@@ -8456,11 +8471,11 @@ wss.on('connection', (ws, req) => {
     //     (10 a second — one is all a client needs) because it is the frame every private read depends on;
     //   · a REQ past the limit gets CLOSED 'rate-limited:' and an EVENT gets OK false 'rate-limited:', so the client
     //     knows to ask again instead of waiting for an answer that will never come.
-    // Persistent abuse still closes the socket, exactly as before.
+    // Persistent abuse still closes the socket — and since round 3f that is true of every kind of frame (see above).
     const _isAuth = type === 'AUTH', _isClose = type === 'CLOSE';
     const _over = _isAuth ? (++ws._rl.a > 10) : (!_isClose && ++ws._rl.n > 100);
     if (_over) {
-      if (++ws._rl.drop > 500) { try { ws.close(1008, 'rate limit'); } catch (e) {} return; }
+      _abuse(); if (ws.readyState !== 1) return;
       try {
         if (type === 'REQ' && typeof rest[0] === 'string') ws.send(JSON.stringify(['CLOSED', rest[0], 'rate-limited: too many messages — ask again in a moment']));
         else if ((type === 'EVENT' || _isAuth) && rest[0] && rest[0].id) ws.send(JSON.stringify(['OK', rest[0].id, false, 'rate-limited: too many messages — try again in a moment']));

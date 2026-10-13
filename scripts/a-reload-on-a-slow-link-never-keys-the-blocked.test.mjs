@@ -136,6 +136,13 @@ before(async () => {
   await unlock();
   await waitFor(`[...document.querySelectorAll('button')].some(x => (x.textContent||'').trim() === 'Settings') && !document.querySelector('[data-stew-modal-panel]')`, 90000, 'the dashboard');
   await waitFor(`window.Steward.nameKeyReady() && !!window.Steward.careSeal({ a: 1 })`, 90000, 'church A\'s own keys');
+  // A new church starts with approval ON, and the care key goes to APPROVED members only (78ffad0), so M3 joining would wait
+  // for approval and this setup's control failed ("never keyed") — found by round 3f's run of every file that starts the
+  // relay; deterministic, and not from the gateway change (it fails the same with the gateway at 55019b7). The same fix as
+  // its siblings the-key-enrolment-never-uses-another-churchs-lists (3a) and a-church-switch-mid-publish-hands-over-no-keys
+  // (3c): this file is about a reload on a slow link, not approval.
+  assert.equal(await evalIn(`window.Steward.setJoinPolicy(false).then(r => r ? 'ok' : String(r))`), 'ok', 'CONTROL: open join could not be set');
+  await sleep(3000);
   await H.publishAll(relay, [joinTo(churchA, M), joinTo(churchA, M3)]);
   { const t0 = Date.now(); let ok = false; while (Date.now() - t0 < 60000 && !ok) { const n = recipsOf(NAMEKEY_D + churchA), c = recipsOf(CAREKEY_D + churchA); ok = !!(n && c && n.includes(M.pub) && n.includes(M3.pub) && c.includes(M3.pub)); if (!ok) await sleep(500); } assert.ok(ok, 'church A\'s members were never keyed'); }
   await sleep(3000);
