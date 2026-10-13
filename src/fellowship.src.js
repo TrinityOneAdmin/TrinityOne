@@ -1032,6 +1032,13 @@ function churchRelaysRaw() { return [...new Set([...(window.Fellowship.relays ||
 // the outbox; a care request comes back not-sent. See src/relay-net.src.js for why the order is this way
 // round and why nothing here builds a queue.
 function churchRelays() { return _netRelays(churchRelaysRaw()); }
+// THE CHURCH'S OWN LIST, GATED - narrower than churchRelays() on purpose, for traffic that must go only to
+// the relays THIS church is on. churchRelays() unions CANONICAL_RELAYS in, which is right for church content;
+// it is wrong for a member's personal unread marks (owner, DOMAIN.md 2026-10-13: "Marks should only go to the
+// relays the church is on"). The gate records the canonical roots under scope '' and admits them for ANY church,
+// so a church that deliberately removed a shipped address would otherwise have it dialled again. Admission is
+// unchanged (_netRelays); only the candidate set is smaller. Never wider than churchRelays().
+function churchOwnProvedRelays() { return _netRelays([...new Set(window.Fellowship.relays || [])]); }
 
 // ── IS THIS RELAY ONE OF OURS? (closed-network plan C3 — the predicate; C4's gate consumes it below) ───
 //
@@ -3784,6 +3791,8 @@ window.Fellowship = {
   // The GATED relay set (candidates minus anything that has not proved it runs our software). Exposed so the
   // separate mydata bundle can publish over the proved set instead of the raw `relays` list (rule 10).
   churchRelays,
+  // Same gate, church's OWN configured list only (no shipped canonical addresses). Used by the mydata bundle.
+  churchOwnProvedRelays,
   // A2. What has silently failed this session, newest last, capped at 50. A phone has no console, so without
   // this a swallowed throw leaves no trace anywhere a device session can reach — which is why "the feature
   // returns empty" has repeatedly been indistinguishable from "this church has nothing yet".

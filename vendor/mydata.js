@@ -5194,6 +5194,10 @@
       D_TO_KEY[SYNC[k].d] = k;
     });
     var pool = new SimplePool();
+    var _connects = 0;
+    pool.onRelayConnectionSuccess = function() {
+      _connects++;
+    };
     var sk = null, pub = null, ck = null;
     var _pullAuthed = false;
     var _onPullAuth = null;
@@ -5214,10 +5218,28 @@
     var onChange = function() {
     };
     var _deferred = false;
+    var _reconciled = false;
+    var _pulling = null;
+    function sharedPull() {
+      if (!_pulling) _pulling = pull().then(function(r) {
+        _pulling = null;
+        return r;
+      }, function(e) {
+        _pulling = null;
+        throw e;
+      });
+      return _pulling;
+    }
+    function reconcileThen(then) {
+      sharedPull().then(function() {
+        if (_reconciled) then();
+      }, function() {
+      });
+    }
     function relays() {
       try {
         var f = window.Fellowship;
-        var r = f && f.churchRelays && f.churchRelays();
+        var r = f && f.churchOwnProvedRelays && f.churchOwnProvedRelays();
         return Array.isArray(r) ? r : [];
       } catch (e) {
         return [];
@@ -5263,6 +5285,13 @@
       var targets = relays();
       if (!targets.length) {
         _deferred = true;
+        return;
+      }
+      if (!_reconciled) {
+        _deferred = true;
+        reconcileThen(function() {
+          publish(key);
+        });
         return;
       }
       try {
@@ -5327,10 +5356,12 @@
       return new Promise(function(resolve) {
         var touched = false, done = false, eosed = false, evCount = 0, closed = false, idleT = null;
         _pullAuthed = false;
+        var connects0 = _connects;
         var finish = function() {
           if (done) return;
           done = true;
           _onPullAuth = null;
+          if ((eosed || evCount > 0) && _connects > connects0) _reconciled = true;
           if (touched) onChange();
           resolve({ touched, inconclusive: _pullAuthed && evCount === 0 });
         };
@@ -5442,8 +5473,9 @@
           if (!mnemonic) return false;
           sk = privateKeyFromSeedWords(mnemonic);
           pub = getPublicKey2(sk);
+          _reconciled = false;
           ck = v2.utils.getConversationKey(sk, pub);
-          return pull().then(function(r) {
+          return sharedPull().then(function(r) {
             if (!(r && r.inconclusive)) {
               Object.keys(SYNC).forEach(function(k) {
                 if (cache.getDoc(k) != null) schedulePublish(k);

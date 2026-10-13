@@ -65,6 +65,10 @@ function NostrBackend(cache) {
   Object.keys(SYNC).forEach(function (k) { D_TO_KEY[SYNC[k].d] = k; });
 
   var pool = new SimplePool();
+  // The pool reports EOSE for a relay it could NOT connect to (it closes the sub, and a close counts as EOSE),
+  // so "EOSE seen" alone would call an offline phone reconciled. A real connection is the discriminator.
+  var _connects = 0;
+  pool.onRelayConnectionSuccess = function () { _connects++; };
   var sk = null, pub = null, ck = null;
   // REVIEW-2026-07-20 B2 (data loss): this backend owns its OWN SimplePool, separate from Fellowship's, and
   // never set an auth handler — so it could not answer a NIP-42 challenge. That was harmless while these
@@ -96,8 +100,20 @@ function NostrBackend(cache) {
   // does nothing (local stays authoritative) and pull() reports INCONCLUSIVE, so startSync does not push over
   // a remote copy it never read. `_deferred` remembers it, and 'trinity-relays-verified' re-runs the sync.
   var _deferred = false;
+  // True once a pull in THIS session (for this identity) actually reached a proved relay and saw it finish
+  // (EOSE or events). Reset at every startSync. publish() refuses to run before it.
+  var _reconciled = false;
+  var _pulling = null;
+  // ONE pull at a time: startSync and a publish that finds itself unreconciled share it.
+  function sharedPull() {
+    if (!_pulling) _pulling = pull().then(function (r) { _pulling = null; return r; }, function (e) { _pulling = null; throw e; });
+    return _pulling;
+  }
+  function reconcileThen(then) {
+    sharedPull().then(function () { if (_reconciled) then(); }, function () {});
+  }
   function relays() {
-    try { var f = window.Fellowship; var r = f && f.churchRelays && f.churchRelays(); return Array.isArray(r) ? r : []; }
+    try { var f = window.Fellowship; var r = f && f.churchOwnProvedRelays && f.churchOwnProvedRelays(); return Array.isArray(r) ? r : []; }
     catch (e) { return []; }
   }
   function tombKey(key) { return 'tomb/' + key; }
@@ -130,6 +146,16 @@ function NostrBackend(cache) {
     var evt = finalizeEvent({ kind: KIND, created_at: Math.floor(Date.now() / 1000), tags: [['d', SYNC[key].d]], content: encode(key, payload) }, sk);
     var targets = relays();
     if (!targets.length) { _deferred = true; return; }   // nothing proved yet: dial nobody, keep the local copy
+    // NEVER REPLACE THE RELAY'S COPY FROM A LOCAL STATE THAT HAS NOT BEEN RECONCILED THIS SESSION. A map doc
+    // (chatseen) is one replaceable event: publishing {one room} wipes every other room's read state on every
+    // device. The locked boot empties chatseen on the assumption that startSync restores it, but the boot pull
+    // is skipped when no relay was proved yet, and the retry event is not guaranteed. So the write itself checks:
+    // reconcile first (join the pull in flight, or start one), then publish the merged result.
+    if (!_reconciled) {
+      _deferred = true;
+      reconcileThen(function () { publish(key); });
+      return;
+    }
     try { Promise.any(pool.publish(targets, evt)).catch(function () {}); } catch (e) { /* offline: local stays authoritative */ }
   }
 
@@ -197,9 +223,10 @@ function NostrBackend(cache) {
     return new Promise(function (resolve) {
       var touched = false, done = false, eosed = false, evCount = 0, closed = false, idleT = null;
       _pullAuthed = false;
+      var connects0 = _connects;
       // Resolve a RESULT, not just `touched`: `inconclusive` = we answered a challenge but received nothing,
       // which under default-deny can mean the replay was still in flight rather than the remote being empty.
-      var finish = function () { if (done) return; done = true; _onPullAuth = null; if (touched) onChange(); resolve({ touched: touched, inconclusive: _pullAuthed && evCount === 0 }); };
+      var finish = function () { if (done) return; done = true; _onPullAuth = null; if ((eosed || evCount > 0) && _connects > connects0) _reconciled = true; if (touched) onChange(); resolve({ touched: touched, inconclusive: _pullAuthed && evCount === 0 }); };
       var closeNow = function () { if (closed) return; closed = true; clearTimeout(idleT); try { sub.close(); } catch (e) {} finish(); };
       var scheduleClose = function (ms) { if (closed) return; clearTimeout(idleT); idleT = setTimeout(closeNow, ms); };
       // A challenge that lands AFTER the first (unauth) EOSE means the replay is coming — hold the sub open.
@@ -277,8 +304,9 @@ function NostrBackend(cache) {
         if (!mnemonic) return false; // no persistent identity (e.g. web ephemeral) -> local only
         sk = privateKeyFromSeedWords(mnemonic);
         pub = getPublicKey(sk);
+        _reconciled = false;   // a new identity (or a re-kick) has reconciled nothing yet
         ck = nip44.utils.getConversationKey(sk, pub);
-        return pull().then(function (r) {
+        return sharedPull().then(function (r) {
           // The local→remote migration push (encrypt legacy cleartext / seed a fresh relay). Skip it when
           // the pull was INCONCLUSIVE — we authenticated but received nothing, which under default-deny can
           // mean the replay was still in flight, not that the remote is empty. Republishing the local view

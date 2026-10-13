@@ -7442,6 +7442,9 @@
   function churchRelays() {
     return _netRelays(churchRelaysRaw());
   }
+  function churchOwnProvedRelays() {
+    return _netRelays([...new Set(window.Fellowship.relays || [])]);
+  }
   function _adoptionOrigin() {
     if (_native || _staticHost || !_loc || !_loc.host) return "";
     return _loc.protocol + "//" + _loc.host;
@@ -9935,6 +9938,8 @@
     // The GATED relay set (candidates minus anything that has not proved it runs our software). Exposed so the
     // separate mydata bundle can publish over the proved set instead of the raw `relays` list (rule 10).
     churchRelays,
+    // Same gate, church's OWN configured list only (no shipped canonical addresses). Used by the mydata bundle.
+    churchOwnProvedRelays,
     // A2. What has silently failed this session, newest last, capped at 50. A phone has no console, so without
     // this a swallowed throw leaves no trace anywhere a device session can reach — which is why "the feature
     // returns empty" has repeatedly been indistinguishable from "this church has nothing yet".
