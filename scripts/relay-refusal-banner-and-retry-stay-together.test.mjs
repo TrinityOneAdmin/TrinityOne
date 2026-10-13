@@ -73,6 +73,7 @@ function console_({ rejected = null, relays = [], steward = {}, React } = {}) {
     dispatchEvent(e) { events.push(e && e.type); (listeners.get(e && e.type) || []).slice().forEach(f => f(e)); return true; },
     innerWidth: 1200,
     localStorage,
+    CustomEvent: class CustomEvent { constructor(type, init) { this.type = type; this.detail = init && init.detail; } },
   };
   const globals = {
     React, window: win,
@@ -87,7 +88,7 @@ function console_({ rejected = null, relays = [], steward = {}, React } = {}) {
     SkBadge: function SkBadge() { return null; },
     SkKey: function SkKey() { return null; },
     SkQR: function SkQR() { return null; },
-    SkPill: function SkPill() { return null; },
+    SkPill: function SkPill(p) { return p.children; },   // renders its label, so a test can read a pill off the page
     SK_TINT: { clay: {}, sage: {}, gold: {}, ink: {} },
     DashMealsPanel: function DashMealsPanel() { return null; },
     DashMannaPanel: function DashMannaPanel() { return null; },
@@ -234,9 +235,91 @@ test('the rejection event and the persisted flag are BOTH written by the one cal
 test('a write landing again clears the fault, and the control goes away with it', () => {
   const s = settingsPage('relays', { rejected: REFUSED });
   assert.equal(fixIt(s.tree).length, 1, 're-anchor: the control did not render in the first place');
-  s.win.dispatchEvent(new (class { constructor() { this.type = 'steward-publish-ok'; } })());
+  // THE SIGNAL IS NOW PER RELAY: the engine says WHICH relay acknowledged (steward-relay-accepted), because a
+  // bare steward-publish-ok fires when ANY relay took a write and so cannot say the refusing one is fixed.
+  s.win.dispatchEvent(new s.win.CustomEvent('steward-relay-accepted', { detail: { url: REFUSED[0].url } }));
   assert.equal(fixIt(s.render()).length, 0,
     'the fix-it control is still on screen after a write landed. The steward may have fixed it another way — ' +
     'restored the key, or the operator added the church — and the alarm must not linger for ever');
   assert.equal(s.mod.relayRejectionActive(), false, 'the persisted flag survived a successful write');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+// 4. A REFUSAL ENDS WHEN THAT RELAY TAKES A WRITE. The owner saw "Refused our last change" on a relay for a
+//    week while every save to it worked: the flag cleared only on a 7-day timer, or on a publish-ok heard by
+//    this page WHILE IT WAS OPEN. Each test renders the real Relays page and reads the pill off it.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+const A = 'wss://relay.grace.example/relay';
+const B = 'wss://other.example/relay';
+const TWO = [{ url: A, status: 'on', ms: 18 }, { url: B, status: 'on', ms: 20 }];
+const pillCount = (tree) => texts(tree).filter(t => /Refused our last change/.test(t)).length;
+const accepted = (s, url) => s.win.dispatchEvent(new s.win.CustomEvent('steward-relay-accepted', { detail: { url } }));
+const twoRelays = (refused) => {
+  const { React, draw } = miniReact();
+  const c = console_({ React, relays: TWO, rejected: refused });
+  const render = () => draw(c.mod.DashSettings, { initialSection: 'relays', onSectionConsumed() {} });
+  render();
+  return { ...c, render };
+};
+
+test('CONTROL: a refusal with no successful write since still shows the pill, on the refusing relay only', () => {
+  const s = twoRelays([{ url: A, error: 'blocked: not a member' }]);
+  const t = s.render();
+  assert.equal(pillCount(t), 1, 'the pill is not on screen for a relay that refused - the alarm itself is gone');
+  assert.equal(find(t, n => n.type === 'div' && /refused our last change and said/.test(n.props.title || '')).length, 1);
+});
+
+test('a later write that this relay ACCEPTED removes its pill, and the whole alarm with it', () => {
+  const s = twoRelays([{ url: A, error: 'blocked: not a member' }]);
+  assert.equal(pillCount(s.render()), 1, 're-anchor: no pill to clear');
+  accepted(s, A);
+  assert.equal(pillCount(s.render()), 0, 'the pill survived a write that relay took - it would stay a week');
+  assert.equal(s.mod.relayRejectionActive(), false, 'the global flag outlived the last refusal');
+  assert.deepEqual(s.mod.relaysThatRefused(), []);
+});
+
+test('the pill clears even when the Relays page was CLOSED at the moment the write landed', () => {
+  // the owner's case: the write succeeds on another screen; the page is opened later
+  const { React, draw } = miniReact();
+  const c = console_({ React, relays: TWO, rejected: [{ url: A, error: 'blocked' }] });
+  accepted(c, A);                        // nothing is mounted
+  const t = draw(c.mod.DashSettings, { initialSection: 'relays', onSectionConsumed() {} });
+  assert.equal(pillCount(t), 0, 'a write made while the page was closed did not clear the refusal');
+});
+
+test('a write accepted by the OTHER relay, or an unreachable one, does not clear a relay that refused', () => {
+  const s = twoRelays([{ url: A, error: 'blocked: not a member' }]);
+  accepted(s, B);
+  assert.equal(pillCount(s.render()), 1, 'relay B taking a write cleared relay A, which is still refusing');
+  assert.equal(s.mod.relayRejectionActive(), true);
+  // a publish-ok with no relay named (fires if ANY relay took it) must not clear it either
+  s.win.dispatchEvent(new s.win.CustomEvent('steward-publish-ok', { detail: {} }));
+  assert.equal(pillCount(s.render()), 1, 'a bare publish-ok cleared a refusal it cannot attribute');
+});
+
+test('with two refusing relays, one accepting leaves the other refusing and the flag standing', () => {
+  const s = twoRelays([{ url: A, error: 'blocked' }, { url: B, error: 'blocked' }]);
+  assert.equal(pillCount(s.render()), 2, 're-anchor');
+  accepted(s, A);
+  assert.equal(pillCount(s.render()), 1, 'accepting on A should leave exactly B marked');
+  assert.equal(s.mod.relayRejectionActive(), true, 'the flag dropped while a relay still refuses');
+  assert.deepEqual(s.mod.relaysThatRefused().map(r => r.url), [B]);
+  assert.equal(fixIt(s.render()).length, 1, 'the repair control vanished while a relay still refuses');
+  accepted(s, B);
+  assert.equal(pillCount(s.render()), 0);
+  assert.equal(s.mod.relayRejectionActive(), false);
+  assert.equal(s.localStorage.getItem(s.win.REG_REFUSED_LS), null, 'an empty list is left behind');
+});
+
+test('the URL is matched normalised: case and a trailing slash do not keep the pill alive', () => {
+  const s = twoRelays([{ url: 'WSS://Relay.Grace.Example/relay/', error: 'blocked' }]);
+  assert.equal(pillCount(s.render()), 1, 're-anchor: the stored form did not match the row');
+  accepted(s, 'wss://relay.grace.example/relay');
+  assert.equal(pillCount(s.render()), 0, 'a differently-written address never cleared its refusal');
+});
+
+test('an UNREACHABLE relay is not recorded as having refused', () => {
+  const s = twoRelays([{ url: A, error: 'blocked: not a member' }, { url: B, error: 'connection failure: connection timed out' }]);
+  assert.deepEqual(s.mod.relaysThatRefused().map(r => r.url), [A], 'an offline relay was recorded as refusing');
+  assert.equal(pillCount(s.render()), 1);
 });
