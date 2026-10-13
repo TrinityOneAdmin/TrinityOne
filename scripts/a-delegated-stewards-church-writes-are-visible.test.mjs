@@ -179,7 +179,7 @@ function consoleApi({ signer, actingChurch }) {
   scope[seal[1]] = nip44.utils.getConversationKey;   // REAL nip44, so the church owner's entry below is
   scope[seal[2]] = nip44.encrypt;                    // genuinely decrypted rather than compared to a stub
 
-  const jpBody = fnBody(VENDOR, 'setJoinPolicy(approval) {', 'setJoinPolicy');
+  const jpBody = fnBody(VENDOR, 'setJoinPolicy(approval, opts) {', 'setJoinPolicy');
   const npBody = fnBody(VENDOR, 'setNoPhoto(pubkeys) {', 'setNoPhoto');
   Object.assign(scope, new Function('scope', `with (scope) { ${feBody}
     return ({ ${gkBody},\n ${jpBody},\n ${npBody} }); }`)(scope));

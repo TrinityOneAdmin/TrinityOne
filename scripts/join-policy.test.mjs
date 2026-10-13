@@ -104,7 +104,7 @@ function grabMethod(src, sig) {
 function consoleSide(church) {
   const blocked = [];
   const scope = {
-    sk: church.sk, pub: church.pub, JOINPOLICY_D: JP, NET: 'trinityone', now,
+    sk: church.sk, pub: church.pub, JOINPOLICY_D: JP, NET: 'trinityone', now, _authFuture: () => false, _careRoster: new Set(),
     publish: async (evt) => {
       const w = await conn();
       const [ok] = await rawPublish(w, evt);
@@ -132,7 +132,7 @@ function consoleSide(church) {
     CustomEvent: function (t, d) { this.type = t; this.detail = (d || {}).detail; },
     setTimeout, Promise, JSON,
   };
-  const setJP = grabMethod(STEWARD, 'setJoinPolicy(approval)');
+  const setJP = grabMethod(STEWARD, 'setJoinPolicy(approval, opts)');
   const ensure = grabMethod(STEWARD, 'ensureJoinPolicy()');
   // esbuild renames the nostr-tools import (finalizeEvent2 today). Binding the name I expected instead of the
   // one it emits makes every publish throw — which looks exactly like the relay refusing, i.e. like the bug.
