@@ -24179,6 +24179,79 @@ zoo`.split("\n");
       const po = {};
       return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", ROSTER_D + teamId], ["t", NET]], content }), po).then((ok) => ok ? { id: teamId, roles, people, pods } : _saveFailed(/newer version/i.test(po.reason || "") ? "clash" : "relay"));
     },
+    // ---- REMOVING A TEAM (owner, 2026-10-12; reference/DOMAIN.md "DELETE A ROSTER / ROTA TEAM") ----
+    // removeRoster is the tombstone only; removeTeam below is the whole operation and the only thing the screens call.
+    removeRoster(teamId) {
+      if (!sk || !teamId) return Promise.resolve(null);
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", ROSTER_D + teamId], ["t", NET], ["deleted", "1"]], content: "" }));
+    },
+    // THE WHOLE OPERATION, in an order that fails safe:
+    //   0. REFUSE before touching anything if the team, or any rota that might hold its slots, is one this console
+    //      cannot read (_locked). A locked roster shows EMPTY on screen; deleting a team the steward cannot see is the
+    //      roster wipe again. Returns { ok:false, reason:'locked' } and publishes nothing.
+    //   1. UPCOMING rotas (service dated today or later) lose this team's slots. PAST services are never touched: they
+    //      are the record of who served. A service with no readable date is left alone, not guessed at.
+    //   2. Only if every rota landed: the roster tombstone, then the group tombstone.
+    //   3. Only if the group is gone: tell each person who was on an upcoming slot they are no longer needed.
+    // Any failure before 3 stops there and returns { ok:false } with nothing sent to anyone; running it again is safe
+    // (a rota that no longer holds the slots is skipped, a tombstone is idempotent).
+    // `ctx` is what the console has READ: { rosters, rotas, services, requests, today, teamName }.
+    async removeTeam(teamId, ctx) {
+      _lastSaveFail = "";
+      const c = ctx || {};
+      if (!sk || !teamId) return { ok: false, reason: "nokey" };
+      const rosters = c.rosters || [], rotas = c.rotas || [], services = c.services || [], requests = c.requests || [];
+      const today = c.today || (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
+      const ros = rosters.find((r) => r && (r.team === teamId || r.id === teamId));
+      if (ros && ros._locked || _addrLocked(ROSTER_D + teamId)) return { ok: false, reason: "locked" };
+      const pfx = teamId + "::";
+      const jobs = [];
+      for (const ro of rotas) {
+        if (!ro) continue;
+        const sid = ro.service || ro.id;
+        if (!sid) continue;
+        const sv = services.find((x) => x && x.id === sid);
+        if (ro._locked || sv && sv._locked || _addrLocked(ROTA_D + sid)) return { ok: false, reason: "locked" };
+        if (!sv || !sv.date || sv.date < today) continue;
+        const assign = ro.assign || {};
+        const keys = Object.keys(assign).filter((k) => k.startsWith(pfx));
+        if (!keys.length) continue;
+        const next = { ...assign };
+        keys.forEach((k) => {
+          delete next[k];
+        });
+        jobs.push({ sid, sv, ro, keys, next, assign });
+      }
+      const failedRotas = [];
+      for (const j of jobs) {
+        const r = await window.Steward.publishRota({ service: j.sid, published: !!j.ro.published, assign: j.next });
+        if (!r) failedRotas.push(j.sid);
+      }
+      if (failedRotas.length) return { ok: false, reason: "rota", failedRotas };
+      if (!await window.Steward.removeRoster(teamId)) return { ok: false, reason: "roster" };
+      if (!await window.Steward.removeGroup(teamId)) return { ok: false, reason: "group" };
+      let told = 0, toldFailed = 0;
+      for (const j of jobs) for (const k of j.keys) {
+        const a = j.assign[k];
+        if (!a || !a.pub) continue;
+        const roleId = k.slice(pfx.length);
+        const old = requests.find((q) => q && !q._locked && q.serviceId === j.sid && q.teamId === teamId && q.roleId === roleId && q.memberPub === a.pub);
+        const n = await window.Steward.sendServingCancel({ id: old && old.id, memberPub: a.pub, serviceId: j.sid, teamId, roleId, role: old && old.role || "", teamName: c.teamName || old && old.teamName || "Team", date: j.sv.date, time: j.sv.time, service: j.sv.name });
+        if (n) told++;
+        else toldFailed++;
+      }
+      return { ok: true, rotasCleared: jobs.length, told, toldFailed };
+    },
+    // "you are no longer needed": the request document for a slot, replaced (same d-tag) by one saying the slot is gone.
+    // Additive: `cancelled:true` is ignored by an older member app, which would keep showing its old request.
+    async sendServingCancel(req) {
+      if (!sk || !req || !req.memberPub) return null;
+      const id = req.id || "req" + Date.now().toString(36) + (++_reqSeq).toString(36) + Math.random().toString(36).slice(2, 7);
+      const doc = { serviceId: req.serviceId || "", teamId: req.teamId || "", roleId: req.roleId || "", role: req.role || "", teamName: req.teamName || "", icon: "hand", accent: "var(--clay)", date: req.date || "", time: req.time || "", service: req.service || "", from: "Your church", cancelled: true, note: "You are no longer needed on " + (req.teamName || "this team") + (req.date ? " on " + req.date : "") + "." };
+      const content = await _sealChurchDocReady(doc);
+      if (content == null) return null;
+      return publish(feChurch({ kind: 30078, created_at: now(), tags: [["d", REQUEST_D + id], ["t", NET], ["p", req.memberPub]], content }, sk)).then((ok) => ok ? { id, ...doc, memberPub: req.memberPub } : null);
+    },
     subscribeRosters(onRosters) {
       return this._subAddr(
         ROSTER_D,

@@ -631,8 +631,118 @@ function rotaSlotVerdict(requests, replyById, svcId, teamId, roleId, pub, locked
 // "opening" still count: not answering yet is not a no.
 function rotaSlotCovers(a, verdict) { return !!(a && a.name) && verdict !== 'decline' && verdict !== 'swap' && verdict !== 'blocked'; }
 
+// ════════════════════════ REMOVING A TEAM ════════════════════════
+// ONE flow for BOTH screens that offer it (the Groups screen and this Rota page), owner 2026-10-12:
+//   ask (strong confirm) -> a few seconds of Undo during which NOTHING is published or sent -> Steward.removeTeam.
+// It lives at module level, not in either screen, so leaving the page inside the undo window neither loses the
+// removal nor sends it early. The engine (Steward.removeTeam) is the only thing that writes.
+const TEAM_UNDO_MS = 9000;
+const TeamRemoval = (() => {
+  const subs = new Set();
+  let asking = null, pending = null, timer = null, note = '', err = '', gone = new Set(), latest = {};
+  const emit = () => subs.forEach(f => { try { f(); } catch (e) {} });
+  const today = () => (window.todayISO ? window.todayISO() : '');
+  const isLocked = (id) => (latest.rosters || []).some(r => r && r.team === id && r._locked);
+  // who clearing the upcoming services would reach: the confirm dialog's one-line count
+  const impact = (id) => {
+    const svcs = new Map((latest.services || []).filter(s => s && s.date && s.date >= today()).map(s => [s.id, s]));
+    let services = 0; const people = new Set();
+    (latest.rotas || []).forEach(ro => {
+      const sid = ro && (ro.service || ro.id); if (!svcs.has(sid)) return;
+      const keys = Object.keys(ro.assign || {}).filter(k => k.startsWith(id + '::'));
+      if (keys.length) services++;
+      keys.forEach(k => { const a = ro.assign[k]; if (a && a.pub) people.add(a.pub); });
+    });
+    return { services, people: people.size };
+  };
+  const fire = async () => {
+    const t = pending; if (!t) return;
+    timer = null; emit();
+    let res;
+    try { res = await window.Steward.removeTeam(t.id, { ...latest, teamName: t.name, today: today() }); } catch (e) { res = { ok: false, reason: 'relay' }; }
+    pending = null;
+    if (res && res.ok) {
+      gone.add(t.id);
+      note = 'Removed “' + t.name + '”' + (res.told ? ' · ' + res.told + ' ' + (res.told === 1 ? 'person' : 'people') + ' told' : '') + (res.toldFailed ? ' · ' + res.toldFailed + ' could not be told' : '');
+      setTimeout(() => { note = ''; emit(); }, 6000);
+    } else {
+      err = res && res.reason === 'locked' ? 'Can’t read “' + t.name + '” yet, so it was not removed. Try again in a moment.'
+        : 'Couldn’t remove “' + t.name + '” — the relay didn’t accept it' + (res && res.reason === 'rota' ? ' (an upcoming rota could not be updated)' : '') + ', so it is still there. Nobody was told.';
+    }
+    emit();
+  };
+  return {
+    subscribe(f) { subs.add(f); return () => subs.delete(f); },
+    setContext(c) { latest = c || {}; },
+    state: () => ({ asking, pending, undoable: !!(pending && timer), note, err, gone }),
+    ask(team) {
+      if (!team || pending) return;
+      err = '';
+      if (isLocked(team.id)) { err = 'Can’t read “' + team.name + '” yet, so it can’t be removed. Try again in a moment.'; emit(); return; }
+      asking = team; emit();
+    },
+    dismissAsk() { asking = null; emit(); },
+    dismissErr() { err = ''; emit(); },
+    confirm() {
+      if (!asking) return;
+      pending = asking; asking = null; note = '';
+      clearTimeout(timer); timer = setTimeout(fire, TEAM_UNDO_MS);
+      emit();
+    },
+    undo() {
+      if (!pending || !timer) return;      // too late: it is already being removed
+      clearTimeout(timer); timer = null; pending = null; emit();
+    },
+    impact,
+  };
+})();
+window.TeamRemoval = TeamRemoval;
+
+// Hook: re-render on any change, and keep the engine's view of what the console has READ current.
+function useTeamRemoval() {
+  const [, tick] = useSch(0);
+  useSchE(() => TeamRemoval.subscribe(() => tick(n => n + 1)), []);
+  const hook = (n) => (typeof window[n] === 'function' ? window[n]() : []);
+  TeamRemoval.setContext({ rosters: hook('useStewardRosters'), rotas: hook('useStewardRotas'), services: hook('useStewardServices'), requests: hook('useStewardRequests') });
+  return TeamRemoval.state();
+}
+window.useTeamRemoval = useTeamRemoval;
+
+// The dialog, the undo bar and the failure line. Rendered by both screens.
+function TeamRemovalHost() {
+  const st = useTeamRemoval();
+  const Confirm = window.SkConfirm;
+  const im = st.asking ? TeamRemoval.impact(st.asking.id) : null;
+  const bar = { position: 'fixed', left: '50%', bottom: 18, transform: 'translateX(-50%)', zIndex: 230, background: 'var(--ink)', color: 'var(--paper)', borderRadius: 14, boxShadow: 'var(--shadow-lg)', fontSize: 13.5, fontWeight: 600 };
+  return (
+    <React.Fragment>
+      {st.asking && Confirm ? (
+        <Confirm icon="trash" tint="var(--clay-ink)" title={'Delete “' + st.asking.name + '” for good?'} confirmLabel="Delete team for good"
+          body={'This removes the team and its roster for everyone, and takes it off every upcoming rota. Past services keep their record.'
+            + (im && im.people ? '\n\n' + im.people + ' ' + (im.people === 1 ? 'person' : 'people') + ' on ' + im.services + ' upcoming service' + (im.services === 1 ? '' : 's') + ' will be told they are no longer needed.' : '')
+            + '\n\nTHIS IS FINAL. You get a few seconds to undo; nothing is changed or sent until they pass.'}
+          onConfirm={() => TeamRemoval.confirm()} onCancel={() => TeamRemoval.dismissAsk()} />
+      ) : null}
+      {st.pending ? (
+        <div role="status" style={{ ...bar, display: 'flex', alignItems: 'center', gap: 14, padding: '11px 14px 11px 18px' }}>
+          Removing “{st.pending.name}”…
+          {st.undoable ? <button onClick={() => TeamRemoval.undo()} style={{ border: 'none', background: 'rgba(255,255,255,.16)', color: '#fff', borderRadius: 9, padding: '6px 13px', cursor: 'pointer', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 13 }}>Undo</button> : null}
+        </div>
+      ) : st.note ? <div role="status" style={{ ...bar, padding: '11px 18px' }}>{st.note}</div> : null}
+      {st.err ? (
+        <div role="alert" style={{ position: 'fixed', left: '50%', bottom: 18, transform: 'translateX(-50%)', zIndex: 231, maxWidth: '92%', display: 'flex', alignItems: 'center', gap: 12, background: 'var(--surface)', border: '1px solid color-mix(in oklab, var(--clay) 40%, var(--line))', padding: '11px 14px', borderRadius: 14, boxShadow: 'var(--shadow-lg)', fontSize: 13, color: 'var(--ink-2)' }}>
+          <span style={{ flex: 1 }}>{st.err}</span>
+          <button onClick={() => TeamRemoval.dismissErr()} className="sk-btn sk-btn--ghost" style={{ padding: '5px 10px', fontSize: 12 }}>Dismiss</button>
+        </div>
+      ) : null}
+    </React.Fragment>
+  );
+}
+window.TeamRemovalHost = TeamRemovalHost;
+
 function DashRota({ onNewTeam }) {
-  const teams = window.useStewardGroups().filter(g => g.kind === 'team');
+  const trs = useTeamRemoval();   // a team being removed (or removed) leaves the board at once; Undo brings it back
+  const teams = window.useStewardGroups().filter(g => g.kind === 'team' && !trs.gone.has(g.id) && !(trs.pending && trs.pending.id === g.id));
   const rosters = window.useStewardRosters();
   const services = window.useStewardServices();
   const rotas = window.useStewardRotas();
@@ -1015,6 +1125,7 @@ function DashRota({ onNewTeam }) {
   if (teams.length === 0) {
     return (
       <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <TeamRemovalHost />
         <div style={{ textAlign: 'center', maxWidth: 380 }}>
           <div style={{ width: 56, height: 56, borderRadius: 16, background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 14px' }}><Icon name="hand" size={28} /></div>
           <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 19, marginBottom: 6 }}>Build your first team</div>
@@ -1176,6 +1287,7 @@ function DashRota({ onNewTeam }) {
                       <div style={{ width: 34, height: 34, borderRadius: 11, background: `color-mix(in oklab, ${m.accent} 16%, var(--surface))`, color: m.accent, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name={m.icon} size={19} /></div>
                       <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name}</div><div style={{ fontSize: 11.5, color: r.roles.length && tFilled === r.roles.length ? 'var(--sage-ink)' : 'var(--ink-3)', fontWeight: 600 }}>{tFilled}/{r.roles.length} filled</div></div>
                       <button onClick={() => { if (!r._locked) setRosterTeam(t); }} disabled={!!r._locked} title={r._locked ? 'Can’t read this team yet' : 'Manage roster'} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 10px', cursor: r._locked ? 'default' : 'pointer', opacity: r._locked ? 0.5 : 1, color: 'var(--ink-2)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, flexShrink: 0 }}><Icon name="users" size={14} /> Roster</button>
+                      <button onClick={() => TeamRemoval.ask(t)} title="Delete team" aria-label={'Delete team ' + m.name} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '5px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', flexShrink: 0 }}><Icon name="trash" size={14} color="currentColor" /></button>
                     </div>
                     {(r.pods && r.pods.length) ? (
                       <select value="" onChange={e => {
@@ -1244,6 +1356,7 @@ function DashRota({ onNewTeam }) {
         </React.Fragment>
       )}
 
+      <TeamRemovalHost />
       {flash ? <div style={{ position: 'absolute', bottom: 8, left: '50%', transform: 'translateX(-50%)', background: 'var(--ink)', color: 'var(--paper)', padding: '9px 16px', borderRadius: 999, fontSize: 13, fontWeight: 700, boxShadow: 'var(--shadow-lg)', zIndex: 80 }}>{flash}</div> : null}
       {assignSlot ? <AssignModal slot={assignSlot} roster={rosterFor(assignSlot.team.id)} assign={assign} unavail={unavail} onAssign={(p) => doAssign(assignSlot, p)} onClear={() => clearSlot(assignSlot)} onClose={() => setAssignSlot(null)} /> : null}
       {rosterTeam ? <RosterModal team={rosterTeam} roster={rosterFor(rosterTeam.id)} members={members} onClose={() => setRosterTeam(null)} /> : null}

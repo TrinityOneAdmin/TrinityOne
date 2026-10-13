@@ -4230,7 +4230,8 @@ function CategoriesModal({ cats, groups, onClose }) {
 }
 
 function DashGroups() {
-  const all = window.useStewardGroups();   // groups AND teams (teams are chat channels too)
+  const trs = window.useTeamRemoval ? window.useTeamRemoval() : { gone: new Set(), pending: null };   // a team being removed leaves this list at once; Undo brings it back
+  const all = window.useStewardGroups().filter(g => !(g.kind === 'team' && (trs.gone.has(g.id) || (trs.pending && trs.pending.id === g.id))));   // groups AND teams (teams are chat channels too)
   const realCount = useRealMemberCount();   // "who can see this" must not count blocked or pending people
   const rosters = window.useStewardRosters();
   const members = window.useStewardMembers ? window.useStewardMembers() : [];
@@ -4386,6 +4387,7 @@ function DashGroups() {
           </div>
         </div>
       ) : null}
+      {window.TeamRemovalHost ? <window.TeamRemovalHost /> : null}
       {undo ? (
         <div style={{ position: 'absolute', left: '50%', bottom: 18, transform: 'translateX(-50%)', zIndex: 90, display: 'flex', alignItems: 'center', gap: 14, background: 'var(--ink)', color: 'var(--paper)', padding: '11px 14px 11px 18px', borderRadius: 14, boxShadow: 'var(--shadow-lg)', fontSize: 13.5, fontWeight: 600 }}>
           Removed “{undo.name}”
@@ -4425,7 +4427,7 @@ function DashGroups() {
           </React.Fragment>
         )}
         renderAside={(it) => (
-          <button onClick={() => setPendingDelete(it)} title={it.kind === 'team' ? 'Remove team' : 'Remove group'} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '8px 10px', minWidth: 40, minHeight: 40, boxSizing: 'border-box', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={15} color="currentColor" /></button>
+          <button onClick={() => (it.kind === 'team' && window.TeamRemoval ? window.TeamRemoval.ask(it) : setPendingDelete(it))} title={it.kind === 'team' ? 'Remove team' : 'Remove group'} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '8px 10px', minWidth: 40, minHeight: 40, boxSizing: 'border-box', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex' }}><Icon name="trash" size={15} color="currentColor" /></button>
         )} />
       <NewGroupModal open={adding} onClose={() => setAdding(false)} />
       {catsOpen ? <CategoriesModal cats={cats} groups={all} onClose={() => setCatsOpen(false)} /> : null}

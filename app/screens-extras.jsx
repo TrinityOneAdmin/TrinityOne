@@ -35,6 +35,7 @@ function notifServingItems(reqs, todayIso, churchName) {
   const out = [];
   (reqs || []).forEach(r => {
     if (!r || r._locked || r._unreadable || !r.id || !r.ts || !r.date || String(r.date) < todayIso) return;
+    if (r.cancelled) { out.push({ id: 'req:' + r.id, kind: 'serving', group: churchName, text: 'No longer needed' + (r.role ? ' · ' + r.role : '') + (r.teamName ? ' · ' + r.teamName : ''), ts: r.ts, go: 'serving', req: r }); return; }
     out.push({ id: 'req:' + r.id, kind: 'serving', group: churchName, text: 'Asked you to serve' + (r.role ? ' · ' + r.role : '') + (r.teamName ? ' · ' + r.teamName : ''), ts: r.ts, go: 'serving', req: r });
   });
   return out;
