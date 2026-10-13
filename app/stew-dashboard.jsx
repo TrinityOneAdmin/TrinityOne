@@ -6789,9 +6789,23 @@ function takeOffEveryTeam({ pk, rosters, rotas, services, careTeamId }) {
     const keys = Object.keys(assign).filter(k => assign[k] && isHim(assign[k].pub));
     if (!keys.length) continue;
     const next = { ...assign }; keys.forEach(k => { delete next[k]; });
-    jobs.push(Promise.resolve(S.publishRota({ service: ro.service, published: !!ro.published, assign: next }))
-      .then((ok) => { if (ok == null || ok === false) failed.push('a future rota'); })
-      .catch(() => { failed.push('a future rota'); }));
+    // FRESHNESS (concurrent-save guard): `ro` is the copy this console read EARLIER. The relay keeps only the newest
+    // copy, so rewriting from an older one erases whatever another steward (or this steward's other screen) saved
+    // since. Checked at write time against the newest stamp the engine has seen; a changed rota is skipped and named,
+    // never overwritten. A refused write (a same-second tie with a co-steward is the clock, not the steward) gets
+    // ONE retry after the second boundary - as reseatMember's w() - but only if the rota STILL has not changed by then,
+    // because the wait is also what lets a co-steward's copy arrive.
+    const changed = () => !!S.rotaChangedSince && S.rotaChangedSince(ro.service, ro.ts);
+    jobs.push((async () => {
+      if (changed()) { failed.push('a future rota someone else changed a moment ago'); return; }
+      let ok = await S.publishRota({ service: ro.service, published: !!ro.published, assign: next });
+      if (ok == null || ok === false) {
+        await new Promise(r => setTimeout(r, 1100));
+        if (changed()) { failed.push('a future rota someone else changed a moment ago'); return; }
+        ok = await S.publishRota({ service: ro.service, published: !!ro.published, assign: next });
+      }
+      if (ok == null || ok === false) failed.push('a future rota');
+    })().catch(() => { failed.push('a future rota'); }));
   }
   return Promise.all(jobs).then(() => [...new Set(failed)]);
 }

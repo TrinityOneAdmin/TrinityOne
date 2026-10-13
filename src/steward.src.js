@@ -11560,6 +11560,12 @@ window.Steward = {
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', ROTA_D + rota.service], ['t', NET]], content }), po)
       .then((ok) => (ok ? { id: rota.service, service: rota.service, published: !!rota.published, assign: rota.assign || {} } : _saveFailed(/newer version/i.test(po.reason || '') ? 'clash' : 'relay')));   // false = reached no relay; see publishService
   },
+  // HAS THIS CONSOLE SEEN (or written) A NEWER COPY OF THIS ROTA THAN `ts`? `_lastStamp` holds the newest created_at this
+  // console has either received from a relay (_noteSeenStamp, kept by _subAddr) or published for the document, so it
+  // also covers a copy delivered after a screen's snapshot was taken and our OWN write whose echo has not arrived.
+  // A caller that is about to rewrite a rota from a copy it read earlier asks this first. A missing `ts` counts as
+  // older than anything. Callers: takeOffEveryTeam (stew-dashboard.jsx) only.
+  rotaChangedSince(serviceId, ts) { return (_lastStamp.get(ROTA_D + serviceId) || 0) > (Number(ts) || 0); },
   removeRota(serviceId) {
     if (!sk) return Promise.resolve(null);
     return publish(feChurch({ kind: 30078, created_at: now(), tags: [['d', ROTA_D + serviceId], ['t', NET], ['deleted', '1']], content: '' }));
