@@ -9520,12 +9520,17 @@ window.Steward = {
     // The seat may be the CHILD (an entry keyed by them) or a PARENT (named in some child's list). Both break.
     const g = o.guardians || {};
     let nextG = null;
+    // THE CHILDREN WHOSE OWN ANSWER JUST CHANGED. Collected, not inferred later, because the member's sealed
+    // clearance is the ONLY place a child's phone can learn who its parents are and this is the only moment we
+    // know which children those are. See the re-seal at (4) below for why that matters.
+    const relinkedChildren = [];
     if ((g[oldH] || []).length) { nextG = { ...g }; nextG[newH] = [...new Set([...low(g[newH]), ...low(g[oldH])])]; }
     for (const childK of Object.keys(g)) {
       const parents = low(g[childK]);
       if (parents.indexOf(oldH) !== -1 && parents.indexOf(newH) === -1) {
         nextG = nextG || { ...g };
         nextG[childK] = [...new Set([...low(nextG[childK] || parents), newH])];
+        relinkedChildren.push(String(childK || '').toLowerCase());
       }
     }
     // COPY closed entries to the new key (both as child and as parent) — and KEEP the old ones. A parent's link
@@ -9581,9 +9586,32 @@ window.Steward = {
     // re-seal actually buys is the member's OWN phone knowing its answer without waiting for a back-fill — so
     // a failure is worth naming, not worth undoing. `failed` counts members whose write was not acknowledged;
     // `unverified` means we could not read back to find out, which is not the same as success.
+    //
+    // AND THE CHILDREN AT THE OTHER END OF THE LINK — `relinkedChildren`, not just `[newH]`. GAP (b), 2026-10-13.
+    //
+    // This argument said `[newH]` and nothing else, so when a PARENT was re-seated the only phone told was the
+    // parent's own. The child's phone was never told, and it had no other way to find out:
+    //   · its answer is `myGuardians` in src/fellowship.src.js, read ONLY from `clr.guardians` inside its own
+    //     sealed `clearance:<child>` document — the one re-issued here;
+    //   · the church's `guardians:` map is owner/safeguarding-steward only at the relay (gateway.mjs, the
+    //     MINORS_D/GUARDIANS_D read gate), so a child is never served it and that fallback is permanently {};
+    //   · a `guardnotice:` is d-tagged and p-tagged to a PARENT and its payload is `children` — a child is
+    //     never a recipient, and the handler writes `trinityone.family` and never touches myGuardians;
+    //   · the `reseat:` doc DOES reach the child, but `_superseded()` is consulted by four lists and
+    //     `myGuardians` is not one of them, so it maps nothing from the old parent key to the new one;
+    //   · and the docs-hub cache replays the STALE clearance on every boot.
+    // So the child went on naming the dead parent key until a steward happened to reopen the Members tab and
+    // DashMembers' whole-roster back-fill happened to re-run. Until then canDMPeer's `linked` was false for the
+    // real parent: A PARENT COULD NOT MESSAGE THEIR OWN CHILD, which SAFEGUARDING.md promises they can, and
+    // the child could not reply. There was no push, and no test anywhere drove that direction.
+    //
+    // Fails CLOSED, deliberately: the new clearance names BOTH keys, because nextG keeps the old pair (see the
+    // note on that above — "the old key stays ON the safeguarding lists; that half fails closed, and a key
+    // nobody holds costs nothing"). A STOLEN old phone is handled by `blockOld` at (1), not here.
     const failed = [];
     let clr = null;
-    try { clr = await window.Steward.refreshClearances([newH], nextMins, nextAppr, nextG || g); }
+    const reseal = [newH, ...relinkedChildren].filter((x, i, a) => x && a.indexOf(x) === i);
+    try { clr = await window.Steward.refreshClearances(reseal, nextMins, nextAppr, nextG || g); }
     catch (e) { clr = null; }
     if (!clr || clr.failed > 0 || clr.unverified) failed.push('clearance');
 

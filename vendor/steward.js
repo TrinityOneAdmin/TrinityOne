@@ -23095,6 +23095,7 @@ zoo`.split("\n");
       }
       const g = o.guardians || {};
       let nextG = null;
+      const relinkedChildren = [];
       if ((g[oldH] || []).length) {
         nextG = { ...g };
         nextG[newH] = [.../* @__PURE__ */ new Set([...low(g[newH]), ...low(g[oldH])])];
@@ -23104,6 +23105,7 @@ zoo`.split("\n");
         if (parents.indexOf(oldH) !== -1 && parents.indexOf(newH) === -1) {
           nextG = nextG || { ...g };
           nextG[childK] = [.../* @__PURE__ */ new Set([...low(nextG[childK] || parents), newH])];
+          relinkedChildren.push(String(childK || "").toLowerCase());
         }
       }
       const gc = o.guardiansClosed || {};
@@ -23134,8 +23136,9 @@ zoo`.split("\n");
       if (!await w(() => window.Steward.setAdmitted([.../* @__PURE__ */ new Set([...o.admitted || [], newH])]))) throw new Error("Recorded the reconnection, but couldn\u2019t let the new phone in. Open Members and approve them, or run this again.");
       const failed = [];
       let clr = null;
+      const reseal = [newH, ...relinkedChildren].filter((x, i3, a) => x && a.indexOf(x) === i3);
       try {
-        clr = await window.Steward.refreshClearances([newH], nextMins, nextAppr, nextG || g);
+        clr = await window.Steward.refreshClearances(reseal, nextMins, nextAppr, nextG || g);
       } catch (e) {
         clr = null;
       }
