@@ -1749,7 +1749,7 @@ function App() {
   // the church's published ROTAS are the source of truth for "I'm serving" — derive my slots from them,
   // then layer on any "can you serve?" request + my reply. (Before, this was request-only, so a member
   // placed on a published rota saw nothing until a request happened to arrive.)
-  const _reqFor = (sid, tid, rid) => servReqs.find(r => r.serviceId === sid && r.teamId === tid && r.roleId === rid);
+  const _reqFor = (sid, tid, rid) => servReqs.find(r => !r.cancelled && r.serviceId === sid && r.teamId === tid && r.roleId === rid);
   // 'locked': I answered, but my reply is sealed under a church key this phone does not hold yet. Show the slot
   // as asked-and-waiting rather than guessing which answer it was; the real verdict replaces it when the key lands.
   const _verdict = (q) => { if (!q) return 'none'; const v = servReplies[q.id]; return (!v || v === 'locked') ? 'pending' : v; };
@@ -1782,7 +1782,7 @@ function App() {
   // promising to open, and never did there (audit of d86fbac, #2). `church` on a request is the church's hex key.
   const _activeCp = (() => { try { const c = churches.find(x => x.id === activeChurch); return (c && c.npub && window.Fellowship && window.Fellowship.toPub) ? (window.Fellowship.toPub(c.npub) || '') : ''; } catch (e) { return ''; } })();
   const _lockedHere = (r) => !!(r && r._locked && _activeCp && r.church === _activeCp);
-  const servPending = servReqs.filter(r => !servReplies[r.id] && (_lockedHere(r) || (!r._locked && (r.date || '') >= todayStr)));
+  const servPending = servReqs.filter(r => !r.cancelled && !servReplies[r.id] && (_lockedHere(r) || (!r._locked && (r.date || '') >= todayStr)));
   const _pendKey = new Set(servPending.map(r => r.serviceId + '|' + r.teamId + '|' + r.roleId));
   const servConfirmed = myRotaSlots.filter(s => s._verdict !== 'decline' && s._verdict !== 'swap' && !_pendKey.has(s.serviceId + '|' + s.teamId + '|' + s.roleId));
   const servDeclined = myRotaSlots.filter(s => s._verdict === 'decline' || s._verdict === 'swap');
