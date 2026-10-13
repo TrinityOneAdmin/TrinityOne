@@ -7670,6 +7670,51 @@ function DashMembers() {
     </div>
   ) : null;
 
+  // ONE WAITING PERSON'S ROW, lifted out of the render so a test can draw it and press its controls.
+  // Named, like memberRow, for exactly that reason: scripts/test-slice.mjs refuses a call-shaped anchor
+  // (`pendingJoins.map(m => {`), so while this lived inline NOTHING could reach the Approve button - and
+  // the join queue is the one screen where admission happens. CLAUDE.md rule 1.
+  const joinRow = (m) => {
+              const named = !!m.name; const label = named ? m.name : 'Anonymous';
+              const initials = (named ? m.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'AN').toUpperCase();
+              return (
+                <div key={m.pubkey} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 10, background: 'var(--surface)', border: '1px solid var(--line)' }}>
+                  <SkBadge initials={initials} av={m.av} pubkey={m.pubkey} size={32} radius={10} accent={SK_TINT[named ? 'gold' : 'sage'].fg} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 700, fontSize: 14, lineHeight: 1.3 }}>{label}</div>
+                    <div style={{ fontSize: 11.5, color: 'var(--ink-3)', fontFamily: nameHandle(m) ? 'var(--font-ui)' : 'var(--mono)' }}>{nameHandle(m) ? '@' + nameHandle(m) : shortNpub(m.npub)} · wants to join</div>
+                  </div>
+                  {/* ON THE ROW, NEVER BEHIND A MENU. Admission is the one act a steward takes on this list, and only
+                      a human at an unlocked console takes it (decided 2026-08-18) — so when the member rows were
+                      compressed to one line for the phone (P12), Approve stayed where Chat sits on a member's row.
+                      44px tall on a phone, the codebase's touch floor, like the row's other controls. */}
+                  <button onClick={() => admitMember(m.pubkey)} className="sk-btn sk-btn--clay" style={{ padding: '7px 12px', fontSize: 12.5, flexShrink: 0, ...(narrow ? { minHeight: 44, boxSizing: 'border-box' } : null) }}><Icon name="check" size={14} color="var(--on-clay)" /> Approve</button>
+                  {/* TWO TAPS, LIKE THE MEMBERS LIST ALREADY REQUIRES. This ✕ sits a few pixels from
+                      Approve, and one tap on it PERMANENTLY blocks the person AND rotates every one of the
+                      church's keys — irreversible, from the screen a steward is fastest on. The members
+                      list has asked "are you sure" for this same action all along; the join queue never
+                      did. Audit 2026-09-02 #5.
+                      `confirmBlock` is shared with the members list, so opening one closes the other —
+                      two Confirms on screen at once is exactly the confusion this is meant to remove. */}
+                  {confirmBlock === m.pubkey
+                    ? <React.Fragment>
+                        <button onClick={() => block(m.pubkey)} aria-label={'Confirm: block ' + (m.name || nameHandle(m) || shortNpub(m.npub)) + ' and refuse them entry'} title="Confirm — blocks them from joining or posting, and re-keys the church" style={{ border: 'none', background: 'var(--clay-ink)', color: 'var(--on-clay)', borderRadius: 9, padding: '7px 10px', cursor: 'pointer', display: 'flex', flexShrink: 0, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>Block</button>
+                        <button onClick={() => setConfirmBlock(null)} aria-label="Cancel — leave them waiting" title="Cancel" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 9px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0 }}><Icon name="x" size={15} color="currentColor" /></button>
+                      </React.Fragment>
+                    : <button onClick={() => setConfirmBlock(m.pubkey)} aria-label={'Decline ' + (m.name || nameHandle(m) || shortNpub(m.npub)) + ' — asks you to confirm'} title="Decline — blocks this person from joining or posting" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 9px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0 }}><Icon name="x" size={15} color="currentColor" /></button>}
+                  {/* WHAT HAPPENED TO THIS APPROVE, ON THIS ROW. admitMember's notice (minorNotice) was drawn only on the
+                      member list's rows, and a person waiting to join is not on that list — so a refused Approve
+                      said nothing where it was pressed (device round 2026-10-01: only the banner spoke). */}
+                  {minorNotice && minorNotice.pk === m.pubkey ? (
+                    <div role={minorNotice.tone === 'fail' ? 'alert' : 'status'} style={{ flexBasis: '100%', fontSize: 12.5, lineHeight: 1.45, padding: '9px 12px', borderRadius: 11,
+                      background: minorNotice.tone === 'fail' ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'color-mix(in oklab, var(--gold) 12%, var(--surface))',
+                      border: '1px solid ' + (minorNotice.tone === 'fail' ? 'color-mix(in oklab, var(--clay) 38%, var(--line))' : 'color-mix(in oklab, var(--gold) 34%, var(--line))'), color: 'var(--ink)' }}>
+                      {minorNotice.text}
+                    </div>
+                  ) : null}
+                </div>
+              );
+  };
   return (
     <Panel title="Members" action={<span style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>{/* "Invite your church" printed cards hidden for the pilot — re-add this button to restore (BulkInviteModal + state remain below) */}<SkPill tint="sage">{total ? `${activeM.length} active${chatting ? ` · ${chatting} chatting` : ''}` : 'none yet'}</SkPill></span>} style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       <div style={narrow ? {} : { display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 16, flex: 1, minHeight: 0 }}>
@@ -7721,47 +7766,7 @@ function DashMembers() {
                 requests had the whole page pushed down — the members list, the safeguarding note and everything
                 below it were shoved off-screen behind a wall of Approve buttons. ~4 rows visible, rest scroll. */}
             <div className="no-scrollbar" style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 268, overflowY: 'auto', overscrollBehavior: 'contain' }}>
-            {pendingJoins.map(m => {
-              const named = !!m.name; const label = named ? m.name : 'Anonymous';
-              const initials = (named ? m.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'AN').toUpperCase();
-              return (
-                <div key={m.pubkey} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 10, background: 'var(--surface)', border: '1px solid var(--line)' }}>
-                  <SkBadge initials={initials} av={m.av} pubkey={m.pubkey} size={32} radius={10} accent={SK_TINT[named ? 'gold' : 'sage'].fg} />
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 700, fontSize: 14, lineHeight: 1.3 }}>{label}</div>
-                    <div style={{ fontSize: 11.5, color: 'var(--ink-3)', fontFamily: nameHandle(m) ? 'var(--font-ui)' : 'var(--mono)' }}>{nameHandle(m) ? '@' + nameHandle(m) : shortNpub(m.npub)} · wants to join</div>
-                  </div>
-                  {/* ON THE ROW, NEVER BEHIND A MENU. Admission is the one act a steward takes on this list, and only
-                      a human at an unlocked console takes it (decided 2026-08-18) — so when the member rows were
-                      compressed to one line for the phone (P12), Approve stayed where Chat sits on a member's row.
-                      44px tall on a phone, the codebase's touch floor, like the row's other controls. */}
-                  <button onClick={() => admitMember(m.pubkey)} className="sk-btn sk-btn--clay" style={{ padding: '7px 12px', fontSize: 12.5, flexShrink: 0, ...(narrow ? { minHeight: 44, boxSizing: 'border-box' } : null) }}><Icon name="check" size={14} color="var(--on-clay)" /> Approve</button>
-                  {/* TWO TAPS, LIKE THE MEMBERS LIST ALREADY REQUIRES. This ✕ sits a few pixels from
-                      Approve, and one tap on it PERMANENTLY blocks the person AND rotates every one of the
-                      church's keys — irreversible, from the screen a steward is fastest on. The members
-                      list has asked "are you sure" for this same action all along; the join queue never
-                      did. Audit 2026-09-02 #5.
-                      `confirmBlock` is shared with the members list, so opening one closes the other —
-                      two Confirms on screen at once is exactly the confusion this is meant to remove. */}
-                  {confirmBlock === m.pubkey
-                    ? <React.Fragment>
-                        <button onClick={() => block(m.pubkey)} aria-label={'Confirm: block ' + (m.name || nameHandle(m) || shortNpub(m.npub)) + ' and refuse them entry'} title="Confirm — blocks them from joining or posting, and re-keys the church" style={{ border: 'none', background: 'var(--clay-ink)', color: 'var(--on-clay)', borderRadius: 9, padding: '7px 10px', cursor: 'pointer', display: 'flex', flexShrink: 0, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>Block</button>
-                        <button onClick={() => setConfirmBlock(null)} aria-label="Cancel — leave them waiting" title="Cancel" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 9px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0 }}><Icon name="x" size={15} color="currentColor" /></button>
-                      </React.Fragment>
-                    : <button onClick={() => setConfirmBlock(m.pubkey)} aria-label={'Decline ' + (m.name || nameHandle(m) || shortNpub(m.npub)) + ' — asks you to confirm'} title="Decline — blocks this person from joining or posting" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 9px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0 }}><Icon name="x" size={15} color="currentColor" /></button>}
-                  {/* WHAT HAPPENED TO THIS APPROVE, ON THIS ROW. admitMember's notice (minorNotice) was drawn only on the
-                      member list's rows, and a person waiting to join is not on that list — so a refused Approve
-                      said nothing where it was pressed (device round 2026-10-01: only the banner spoke). */}
-                  {minorNotice && minorNotice.pk === m.pubkey ? (
-                    <div role={minorNotice.tone === 'fail' ? 'alert' : 'status'} style={{ flexBasis: '100%', fontSize: 12.5, lineHeight: 1.45, padding: '9px 12px', borderRadius: 11,
-                      background: minorNotice.tone === 'fail' ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'color-mix(in oklab, var(--gold) 12%, var(--surface))',
-                      border: '1px solid ' + (minorNotice.tone === 'fail' ? 'color-mix(in oklab, var(--clay) 38%, var(--line))' : 'color-mix(in oklab, var(--gold) 34%, var(--line))'), color: 'var(--ink)' }}>
-                      {minorNotice.text}
-                    </div>
-                  ) : null}
-                </div>
-              );
-            })}
+            {pendingJoins.map(joinRow)}
             </div>
           </div>
         ) : null}
