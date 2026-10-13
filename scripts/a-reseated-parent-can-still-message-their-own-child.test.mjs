@@ -26,9 +26,20 @@
 //   · and the docs-hub cache replays the STALE clearance on every boot, before any network answer.
 //
 // So until a steward happened to reopen the Members tab and DashMembers' whole-roster back-fill happened to
-// re-run, `canDMPeer`'s `linked` was FALSE for the real parent and TRUE only for a key nobody holds. A
-// parent could not message their own child, which reference/SAFEGUARDING.md promises they can, and the
-// child could not reply. No test in the suite drove that direction.
+// re-run, the child's sealed clearance went on naming a parent key nobody holds.
+//
+// WHICH DIRECTION WAS ACTUALLY BROKEN — corrected 2026-10-13 (CLAUDE.md rule 4). The first version of this
+// header, and cbdb85a's commit message, said "a parent could not message their own child". That was NOT
+// measured and is not true. Running the real `canDMPeer` (app/app.jsx) for the PARENT's phone: `guardians` is
+// {}, `minors` is [] and `myGuardians` is [] on a parent's device, so the trailing guardian check cannot
+// fire — and the relay permits the send anyway, because `guardianLinkedIn` reads the church map that
+// `setGuardians` had already updated. The parent -> child direction was never blocked, before or after.
+//
+// What WAS genuinely broken, and is what this file proves is fixed, is one-directional and at screen level:
+// THE CHILD'S PHONE. Its only answer is the sealed clearance, so on the child's screen the re-seated parent
+// is filtered OUT of the chat people list (app/screens-chat.jsx:1822) and the child cannot reply (:2047).
+// The child could not reach their parent, and docs/security/SAFEGUARDING.md:161 promises they can. No test
+// in the suite drove that direction.
 //
 // WHAT THIS FILE PROVES, and what it deliberately does not. `reseatMember` is lifted out of the SHIPPED
 // vendor/steward.js by brace-match and run, with setters we control — the same instrument as

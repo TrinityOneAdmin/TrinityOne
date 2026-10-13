@@ -6372,8 +6372,35 @@ function ReseatModal({ member, memberName, realName, isMinor, admittedList, onCl
   const newPub = window.Steward && window.Steward.parseMemberKey ? window.Steward.parseMemberKey(text) : null;
   const same = newPub && newPub === member;
 
+  // CAN THIS CONSOLE SEE THE PARENT LINKS AT ALL? MED, audit 2026-10-13.
+  //
+  // `useStewardGuardians()` is a subscription with NO loaded flag and a default of { links: {} }, so an empty
+  // map means "not arrived yet" and "this church has confirmed no links" alike. Measured (case E): handed
+  // guardians:{}, reseatMember writes no guardian map and re-seals [newH] only — so a re-seat pressed before
+  // the document lands leaves the parent link on the DEAD key and the child's phone is never told. That is
+  // GAP (b) again, by a different door. Nothing is wiped (nextG stays null, so setGuardians is never called);
+  // what is lost is the carry-across.
+  //
+  // So gate it the way the clearance back-fill gates itself — on the evidence that an ABSENT safeguarding
+  // document is honestly absent: `minorsKnown`, meaning the relay has told us everything it holds while we
+  // were authenticated to read the owner-only docs, which the guardian map rides the same subscription as
+  // (subscribeSafeguard: "the guardian map rides here rather than on its own subscription"). Only when the map
+  // we hold is EMPTY: a non-empty map has provably arrived, and gating on a document the console already has
+  // would be refusing for nothing.
+  //
+  // AND NOT ON A DELEGATED CONSOLE. The relay serves minors:/guardians: to the church key (or a safeguarding
+  // steward) alone, so a steward holding only `members` — whose Reconnect the relay does accept, and for whom
+  // the button that opens this modal is deliberately offered — can NEVER satisfy minorsKnown. Gating them
+  // would delete a shipped capability rather than close a hole. Their case is unchanged, and listed.
   const confirm = async () => {
     if (!newPub || same || busy) return;
+    // Read at the moment of the PRESS, not at render: the document can land between the modal opening and the
+    // steward pasting the code, and this is also what keeps `confirm` sliceable on its own for its test.
+    if (!window.Steward.actingChurch && Object.keys(guardiansNow).length === 0 && sgNow.minorsKnown !== true) {
+      setErr('This console hasn’t received your church’s parent and child links yet. '
+        + 'Reconnecting now could leave a child unable to reach their parent — wait a moment and try again.');
+      return;
+    }
     setBusy(true); setErr('');
     try {
       // Record the vouch FIRST, then admit. If admitting failed on its own the member would be able to post
@@ -6414,6 +6441,14 @@ function ReseatModal({ member, memberName, realName, isMinor, admittedList, onCl
             res.guardiansCarried ? 'parent link' : null,
           ].filter(Boolean).reduce((a, s, i, arr) => i === 0 ? s : (i === arr.length - 1 ? a + ' and ' + s : a + ', ' + s), '')}</b> moved across with
           them{res.failed && res.failed.includes('clearance') ? ', though their new phone has not confirmed it yet — it should pick it up shortly' : ', and their new phone has been told'}. </React.Fragment> : null}
+          {/* WHOSE PHONE DID NOT CONFIRM. MED, audit 2026-10-13. cbdb85a widened the clearance re-seal to the
+              CHILDREN at the other end of a moved parent link, but both phones shared one failed:['clearance']
+              — so a CHILD's failure printed the sentence above, which is about the member's own new phone,
+              and the one person who could no longer reach their parent went unmentioned. reseatMember reports
+              them separately now ('childclearance', plus a count), so this says plainly whose phone it is. */}
+          {res && res.failed && res.failed.includes('childclearance') ? <b>{res.childrenNotTold === 1
+            ? 'Their child’s phone has not been told about the new key yet, so the two of them can’t message each other until it has — open Members to send it again. '
+            : 'The phones of ' + res.childrenNotTold + ' of their children have not been told about the new key yet, so they can’t message each other until they have — open Members to send it again. '}</b> : null}
           {res && (res.teamsMoved || res.rotasMoved) ? <React.Fragment>They are still on {res.teamsMoved ? (res.teamsMoved === 1 ? 'their serving team' : 'their ' + res.teamsMoved + ' serving teams') : ''}{res.teamsMoved && res.rotasMoved ? ' and in ' : ''}{res.rotasMoved ? (res.rotasMoved === 1 ? 'the rota they were on' : 'the ' + res.rotasMoved + ' rotas they were on') : ''}, under the new key. </React.Fragment> : null}
           {res && res.failed && res.failed.some(f => /^(team|careteam|rota)/.test(f)) ? <b>Some of their serving places could not be moved across — open Teams and the Rota and check them. </b> : null}
           One thing to finish by hand: if they were in any <b>invite-only</b> groups, open Groups and add them
@@ -6982,6 +7017,48 @@ function DashMembers() {
   // (toggleMinor, approveGuardian, declineGuardian, linkParent, unlinkParent): a church switch during the
   // guardians/minors write must not send this church's list as another (see guardNoticeScope).
   const toggleMinor = async (pk) => {
+    // THE LIST OF CHILDREN MUST BE REAL BEFORE IT IS REPLACED. HIGH, audit 2026-10-13.
+    //
+    // setMinors is a WHOLE-LIST replace and the two lines below build that list out of `sg.minors`. On a
+    // console whose `minors:` document has not arrived, `sg.minors` is [] — so the first press of "Child",
+    // of the phone sheet's "Mark as child", or of the join queue's "Approve as a child" published a list with
+    // ONE key on it and took EVERY OTHER CHILD IN THE CHURCH off it. Measured by rendering the real joinRow
+    // and pressing the real control:
+    //     WARM (list arrived):      setMinors [['childAlice','childBen','joinerpubkey']]
+    //     COLD (minors not known):  setMinors [['joinerpubkey']]
+    //
+    // THE HARM IS TO THE OTHER CHILDREN, not to the one being marked. Their keys leave `minors:`, so
+    // minorOf() is false for them at the relay and safeguardAllows() lets any member open a private message
+    // with them — and the whole-roster back-fill above then seals {minor:false} to each of their phones from
+    // the same emptied list, which their apps trust OVER the list fallback.
+    //
+    // REACHABLE ON A COLD CONSOLE, not a theoretical window. The join queue is gated on `mRosterLoaded` —
+    // the MEMBER roster — while `minors:` is served only to a NIP-42-authenticated reader and so can arrive
+    // materially later; the queue is the top panel of the Members tab, and that control's whole purpose is to
+    // be pressed at once. The members-list "Child" button reaches the same replace by the same route.
+    //
+    // `minorsKnown`, not `loaded`. This is the exact question subscribeSafeguard wrote minorsKnown for —
+    // "has the relay told us everything it has, WHILE WE WERE AUTHENTICATED to read the owner-only minors
+    // doc" — and it is the gate ClearPersonModal already holds its own list behind. `loaded` is
+    // sawMinors && sawEose, which stays permanently FALSE for a church that has never marked a child, so
+    // gating on that would make the first child in every church unmarkable.
+    //
+    // And NOT minorsKnown && relayAuthed(), which the back-fill above uses. That back-fill writes to every
+    // member on the roster off a possibly-empty list, so it needs auth to be live at the moment it runs.
+    // Here, minorsKnown true via `sawMinors` means we HOLD the church-signed document; refusing a steward's
+    // mark because the socket has since dropped would be a refusal with no safety behind it, and a child a
+    // steward cannot mark is an ADULT to the relay. relayAuthed() is already inside minorsKnown's own other
+    // branch, where it is the thing that matters.
+    //
+    // This never blocks a legitimate UN-marking: `minors` is only ever assigned in the MINORS_D branch, which
+    // sets sawMinors, so a non-empty `sg.minors` implies minorsKnown — and `unmarking` can only be true when
+    // `pk` is already on that non-empty list. Fails CLOSED: the hook's own default carries no minorsKnown at
+    // all, so a console with no subscription refuses rather than guesses.
+    if (sg.minorsKnown !== true) {
+      setMinorNotice({ pk, tone: 'fail', text: 'Nothing was changed — this console hasn’t received your church’s '
+        + 'list of children yet, and saving now would take every other child off it. Try again in a moment.' });
+      return null;
+    }
     const noticeScope = window.Steward.guardNoticeScope ? window.Steward.guardNoticeScope() : null;
     const unmarking = minorsSet.has(pk);
     const next = unmarking ? (sg.minors || []).filter(p => p !== pk) : [...(sg.minors || []), pk];
@@ -7012,6 +7089,20 @@ function DashMembers() {
     // the protection lands before the tidy-up, and the relay now ignores a child's guardian entry at decision
     // time, so the gap between the two writes is not a route. A removal the relay refuses is REPORTED, never
     // painted as done — the same standard unlinkParent holds itself to.
+    //
+    // THIS IS THE BRANCH THAT MAKES A MIS-TAP EXPENSIVE, and it is why the notice below says so. It removes
+    // them as guardian of EVERY one of their children, writes a `closed` pair for each, and notifies them;
+    // un-marking restores none of it, and the `closed` pair suppresses their own re-request. Audit 2026-10-13.
+    //
+    // NO CONFIRM STEP, decided here rather than left open. This control is the PROTECTIVE direction, and
+    // friction on it is paid by children: a steward who gives up on marking somebody leaves a child the relay
+    // treats as an adult, which is the fail-OPEN outcome this code exists to prevent. The mis-tap costs an
+    // ADULT their guardian role and a no-photo entry — both repairable by hand, neither a safeguarding
+    // failure — and the steward is told at once, on the row they pressed, with every child named. The
+    // owner's standing preference is a label plus a tooltip over paragraphs, and two Approve-ish controls
+    // already share the join row, so a dialog there would land on the wrong one as often as not. What was
+    // actually wrong was the CLAIM that it was "one tap to undo"; that claim is gone, and the notice below is
+    // honest about what un-marking will not put back.
     let unlinkedFrom = [], nextG = null;
     if (!unmarking && parentSet.has(pk)) {
       nextG = {};
@@ -7081,7 +7172,7 @@ function DashMembers() {
     setMinorNotice(unmarking && (sg.approved || []).indexOf(pk) >= 0
       ? { pk, text: 'No longer marked as a child — and their youth-work clearance was removed with it. If they should be cleared to work with young people, tap “Clear for youth”.' }
       : (unlinkedFrom.length
-        ? { pk, text: 'Marked as a child — and no longer listed as a guardian of ' + unlinkedFrom.map(c => nameByPub[c] || 'a child').join(', ') + '. A child is never a guardian.' }
+        ? { pk, text: 'Marked as a child — and no longer listed as a guardian of ' + unlinkedFrom.map(c => nameByPub[c] || 'a child').join(', ') + '. A child is never a guardian. Un-marking them will not put those links back.' }
         : null));
     // With the new map when a link was removed: the unlinked children's sealed clearances are the only place
     // their phones learn who their confirmed parents are now.
@@ -7281,9 +7372,22 @@ function DashMembers() {
   //
   // NOT A POLICY. Plain Approve is unchanged and still admits; the software does not decide who is a child
   // ("TrinityOne does not decide who is a child; it decides what follows from that mark"). This only gives the
-  // steward who already knows a way to say so first. It fails CLOSED in both directions that matter: a mis-tap
-  // marks an adult as a child, which is one tap to undo on the members list, and a mark the relay REFUSES
-  // admits nobody at all.
+  // steward who already knows a way to say so first.
+  //
+  // IT FAILS CLOSED, BUT IT IS NOT "ONE TAP TO UNDO". This comment and c247462's message both said a mis-tap
+  // "is one tap to undo on the members list". That is false, measured twice over, and is corrected here
+  // because a false claim in the permanent record is worse than the bug it describes (CLAUDE.md rule 4):
+  //   · toggleMinor also adds them to the NO-PHOTO list, and un-marking deliberately LEAVES them there
+  //     (owner, reference/DOMAIN.md 2026-10-12: "marking someone as a child adds them to the no-photo list;
+  //     UN-marking them leaves them there and a steward removes it by hand"). The undo is a different
+  //     control, `toggleNoPhoto`, itself conditionally rendered.
+  //   · if the mis-tapped person is a CONFIRMED GUARDIAN, toggleMinor removes them as guardian of every one
+  //     of their children, writes a `closed` pair for each and notifies them. Un-marking restores none of it,
+  //     and the `closed` pair suppresses their own re-request. Reachable from THIS queue, because
+  //     approveGuardian does not require the parent to be admitted first.
+  // So what still holds, and all that is claimed: a mis-tap marks an adult as a child, which is the safe way
+  // to be wrong and is repairable by hand on the members list, and a mark the relay REFUSES admits nobody at
+  // all. No confirm step — the reasoning is on the guardian branch of toggleMinor.
   //
   // THROUGH toggleMinor, not around it, so this cannot drift from the marking every other screen uses: it is
   // the audited path that also suppresses an existing photograph (confirmed on the phone 2026-08-27 — the

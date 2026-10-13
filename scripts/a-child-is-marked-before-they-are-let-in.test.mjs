@@ -37,8 +37,17 @@
 // (reference/DOMAIN.md: "TrinityOne does not decide who is a child; it decides what follows from that
 // mark"). Plain Approve still admits, unchanged — the CONTROL test below is what keeps that honest. All
 // this adds is a second way in for the case where the steward already knows, so that the window has a
-// door. Fails CLOSED by construction: a mis-tap marks an adult as a child, which is one tap to undo on the
-// members list, and a refused mark admits NOBODY.
+// door. Fails CLOSED by construction: a mis-tap marks an ADULT as a child, which is the safe way to be
+// wrong, and a refused mark admits NOBODY.
+//
+// IT IS NOT, HOWEVER, "ONE TAP TO UNDO" — this header said so, and so did c247462's message, and both were
+// false (corrected 2026-10-13, CLAUDE.md rule 4). toggleMinor also adds the person to the NO-PHOTO list and
+// un-marking deliberately LEAVES them there (owner, reference/DOMAIN.md 2026-10-12), so the undo is a second,
+// conditionally-rendered control; and if the mis-tapped person is a confirmed guardian, toggleMinor ends
+// their guardian role over every one of their children and writes a `closed` pair for each, which un-marking
+// restores none of and which suppresses their own re-request. The screen now says so
+// (scripts/a-cold-console-cannot-empty-the-list-of-children.test.mjs holds that sentence in place); no
+// confirm step was added, and the reasoning for that is on the guardian branch of toggleMinor.
 //
 // WHAT IS REAL HERE. `joinRow`, `admitMember` and `toggleMinor` are sliced out of the shipped
 // app/stew-dashboard.jsx by brace-match (scripts/test-slice.mjs), compiled together with the same esbuild
@@ -101,7 +110,10 @@ async function joinRowFor({ results = {} } = {}) {
   // ORDER IS THE WHOLE POINT, so every write goes into ONE log, in sequence.
   const wrote = [];
   const calls = { notice: [], reseal: [], nophoto: [] };
-  const sg = { loaded: true, clearedKnown: true, cleared: {}, minors: [], approved: [], nophoto: [] };
+  // minorsKnown: toggleMinor refuses a whole-list setMinors until the church's list of children has
+  // actually arrived (FIX 1, 2026-10-13). This fixture is a WARM console; the cold case has its own file,
+  // scripts/a-cold-console-cannot-empty-the-list-of-children.test.mjs.
+  const sg = { loaded: true, minorsKnown: true, clearedKnown: true, cleared: {}, minors: [], approved: [], nophoto: [] };
   const win = {
     Steward: {
       setMinors: (l) => { wrote.push(['minors', l]); return 'minors' in results ? results.minors : true; },

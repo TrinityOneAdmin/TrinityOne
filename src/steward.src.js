@@ -9525,13 +9525,29 @@ window.Steward = {
     // know which children those are. See the re-seal at (4) below for why that matters.
     const relinkedChildren = [];
     if ((g[oldH] || []).length) { nextG = { ...g }; nextG[newH] = [...new Set([...low(g[newH]), ...low(g[oldH])])]; }
+    // WHY THE PUSH IS NOT INSIDE THE `newH === -1` BRANCH. MED, audit 2026-10-13.
+    //
+    // It was, and that made the whole fix survive only a FIRST attempt. A run that got past setGuardians (so
+    // the new key is already on the child's list) and was then refused at setReseats or setAdmitted throws —
+    // including by the same-second NIP-01 tie this function's own note above says refuses roughly half of two
+    // writes in one second, with `w()` giving exactly ONE retry. The steward presses Reconnect again. Run 2
+    // sees the new key already on the link, so the old condition collected NOTHING, `relinkedChildren` was
+    // empty, and the child was never told — the exact gap this code exists to close, surviving a retry.
+    // Measured (case D): with g[child] = [oldKey, newKey], setGuardians was not called and refreshClearances
+    // got [newH] only.
+    //
+    // So the MAP WRITE stays conditional on the link actually changing (nothing republishes a document that
+    // needs no change), and the RE-SEAL is collected for every child this parent is on either way. A re-seal
+    // the child already has is idempotent — refreshClearances de-dupes per member and skips on
+    // read-before-write — while a re-seal missed is a child who cannot reach their parent.
     for (const childK of Object.keys(g)) {
       const parents = low(g[childK]);
-      if (parents.indexOf(oldH) !== -1 && parents.indexOf(newH) === -1) {
+      if (parents.indexOf(oldH) === -1) continue;
+      if (parents.indexOf(newH) === -1) {
         nextG = nextG || { ...g };
         nextG[childK] = [...new Set([...low(nextG[childK] || parents), newH])];
-        relinkedChildren.push(String(childK || '').toLowerCase());
       }
+      relinkedChildren.push(String(childK || '').toLowerCase());
     }
     // COPY closed entries to the new key (both as child and as parent) — and KEEP the old ones. A parent's link
     // request names the child's key as it was when the request was made, and stays on the relay; the Confirm list
@@ -9601,19 +9617,48 @@ window.Steward = {
     //     `myGuardians` is not one of them, so it maps nothing from the old parent key to the new one;
     //   · and the docs-hub cache replays the STALE clearance on every boot.
     // So the child went on naming the dead parent key until a steward happened to reopen the Members tab and
-    // DashMembers' whole-roster back-fill happened to re-run. Until then canDMPeer's `linked` was false for the
-    // real parent: A PARENT COULD NOT MESSAGE THEIR OWN CHILD, which SAFEGUARDING.md promises they can, and
-    // the child could not reply. There was no push, and no test anywhere drove that direction.
+    // DashMembers' whole-roster back-fill happened to re-run.
+    //
+    // WHICH DIRECTION WAS ACTUALLY BROKEN, corrected 2026-10-13 (CLAUDE.md rule 4). cbdb85a's message and the
+    // first version of this note said "a parent could not message their own child". That is NOT what was
+    // measured. Running the real canDMPeer (app/app.jsx) for the PARENT's phone: `guardians` is {}, `minors`
+    // is [] and `myGuardians` is [] on a parent's device, so the trailing guardian check cannot fire — and the
+    // relay permits the send anyway, because `guardianLinkedIn` reads the church map that setGuardians had
+    // already updated. The parent -> child direction was never blocked, before or after.
+    //
+    // What was genuinely broken, and is what this re-seal fixes, is THE CHILD'S PHONE. Its only answer is the
+    // sealed clearance, so on the child's screen the re-seated parent is filtered OUT of the chat people list
+    // (app/screens-chat.jsx:1822) and the child cannot reply (:2047). One direction, at screen level: the
+    // child could not reach their parent, and docs/security/SAFEGUARDING.md:161 promises they can.
     //
     // Fails CLOSED, deliberately: the new clearance names BOTH keys, because nextG keeps the old pair (see the
     // note on that above — "the old key stays ON the safeguarding lists; that half fails closed, and a key
     // nobody holds costs nothing"). A STOLEN old phone is handled by `blockOld` at (1), not here.
+    // TWO PHONES, TWO ANSWERS. MED, introduced by cbdb85a and corrected 2026-10-13.
+    //
+    // One call for [newH, ...relinkedChildren] returned ONE aggregate, so `failed:['clearance']` could mean
+    // the re-seated member's own phone or a child's, and the screen could not tell. Measured (case G): with
+    // only the CHILD's re-seal failing, this returned failed:['clearance'] — and ReseatModal printed "their
+    // new phone has not confirmed it yet", about the wrong phone, with nothing naming the child who now
+    // cannot reach their parent. Before relinkedChildren existed that sentence was true, because [newH] was
+    // the only entry; it became a lie the moment a second kind of member shared the result.
+    //
+    // Two calls, not one flag: these are different members' `clearance:<pub>` documents, so there is no
+    // same-second tie between them, and `refreshClearances` serialises its own batches anyway.
     const failed = [];
     let clr = null;
-    const reseal = [newH, ...relinkedChildren].filter((x, i, a) => x && a.indexOf(x) === i);
-    try { clr = await window.Steward.refreshClearances(reseal, nextMins, nextAppr, nextG || g); }
+    try { clr = await window.Steward.refreshClearances([newH], nextMins, nextAppr, nextG || g); }
     catch (e) { clr = null; }
     if (!clr || clr.failed > 0 || clr.unverified) failed.push('clearance');
+    // THE CHILDREN AT THE OTHER END OF THE LINK, counted separately so the screen can say whose phone it is.
+    const kidsToTell = relinkedChildren.filter((x, i, a) => x && x !== newH && a.indexOf(x) === i);
+    let childrenNotTold = 0;
+    if (kidsToTell.length) {
+      let kclr = null;
+      try { kclr = await window.Steward.refreshClearances(kidsToTell, nextMins, nextAppr, nextG || g); }
+      catch (e) { kclr = null; }
+      if (!kclr || kclr.failed > 0 || kclr.unverified) { failed.push('childclearance'); childrenNotTold = kidsToTell.length; }
+    }
 
     // (5) THE TEAMS AND THE ROTA. Reported, never fatal, for the same reason as (4): the seat has moved.
     //
@@ -9678,6 +9723,10 @@ window.Steward = {
       minorCarried: wasMinor, clearedCarried: wasCleared, guardiansCarried: !!nextG,
       blockedOld: !!o.blockOld,   // only reachable if the block LANDED — a refusal threw above
       teamsMoved, rotasMoved: slotsMoved,
+      // How many children were re-sealed, and how many of those phones did NOT confirm. ReseatModal needs
+      // both: `failed` carries 'childclearance' so the sentence can be written at all, and the count is what
+      // makes it singular or plural. Zero children is zero in both, so the sentence never appears.
+      childrenToldOf: kidsToTell.length, childrenNotTold,
       failed,
     };
   },
