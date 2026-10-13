@@ -1806,16 +1806,23 @@ const ADMITTED_SRC = new Map();     // churchpub -> Map(author pubkey -> Set(pub
 // must always survive a steward leaving", 2026-10-13 "co-steward approvals should always be saved under the Church's
 // own key" and "what happens inside the church shouldn't be dependent on the church console being open").
 // A delegate signs with their own key and only the owner console holds the church's, so the church-state property is
-// recorded HERE: when the live EVENT path stores a steward's `admitted:` copy — accept() lets one through only from a
-// current steward with the Members capability — this relay writes down that exact event id, at the time it received
-// it. note() (and so every restart) and canRead() then honour that copy after its author leaves the roster.
-// NO BACKDATING: created_at is never consulted. A removed delegate's new copy is refused by accept() and gets no
-// receipt, whatever it is dated. /import and /restore call note() without accept(), so they never write one either —
-// which is what keeps a co-tenant church from planting approvals in another church's corpus.
-// WRITERS: _receiptAdmitted (live EVENT path only). READERS: _admittedReceipted (note()'s ADMITTED_D ingest, canRead).
+// recorded HERE: when this relay takes in a steward's `admitted:` copy, it writes down that exact event id. note() (and
+// so every restart) and canRead() then honour THAT copy — and only that one — after its author leaves the roster.
+// NO BACKDATING: created_at is never consulted. A removed delegate's new copy is refused by accept() and, arriving by
+// any other route, finds them no longer a steward — so it gets no receipt, whatever it is dated.
+// WHERE IT IS WRITTEN: in note()'s ADMITTED_D branch, so EVERY route that stores a copy receipts it on the same rule —
+// the live EVENT path, relay-to-relay sync and reconcile (a box that was down when the approval was made), /import,
+// and hydrate at boot (which is also the migration: a copy already on disk before receipts existed, from an author
+// who is STILL a steward, gets one, so removing them later does not stop it being served). The rule is the same on
+// every route: the author is a current steward of that church at the moment this relay takes the copy in. That adds
+// no trust — the relay already serves and honours exactly those copies — and a non-steward's copy, however it
+// arrived, never gets one. Not carried by /export -> /import: the importing box re-derives receipts by the same
+// rule, so a copy whose author has already left by then is not receipted there.
+// WRITER: _receiptAdmitted (note()). READERS: _admittedReceipted (note()'s ADMITTED_D ingest, canRead).
 const ADMITTED_RECEIPTS_FILE = join(DATA_DIR, 'admitted-receipts.json');
 let ADMITTED_RECEIPTS = {};   // churchpub -> { author pubkey -> event id of the copy accepted from them as a steward }
-try { const o = JSON.parse(readFileSync(ADMITTED_RECEIPTS_FILE, 'utf8')); if (o && typeof o === 'object' && !Array.isArray(o)) ADMITTED_RECEIPTS = o; } catch {}
+try { const o = JSON.parse(readFileSync(ADMITTED_RECEIPTS_FILE, 'utf8')); if (o && typeof o === 'object' && !Array.isArray(o)) ADMITTED_RECEIPTS = o; else console.error('[relay] admitted-receipts.json is not an object — starting with no approval receipts'); }
+catch (x) { if (!x || x.code !== 'ENOENT') console.error('[relay] could not read admitted-receipts.json — starting with no approval receipts:', x && x.message); }
 function _admittedReceipted(cp, e) { const m = ADMITTED_RECEIPTS[cp]; return !!(m && typeof m === 'object' && e && m[e.pubkey] === e.id); }
 function _receiptAdmitted(e) {
   const d = ((e.tags || []).find(t => t[0] === 'd') || [])[1] || '';
@@ -3604,6 +3611,7 @@ function note(e) {   // keep MEMBERS / BROADCAST in step with accepted events
     if (!_hydrating) rebuildMembers();
   }
   else if (d.startsWith(ADMITTED_D) && CHURCH_PUBS.has(cp = d.slice(ADMITTED_D.length)) && (e.pubkey === cp || stewardCan(e.pubkey, cp, 'any') || _admittedReceipted(cp, e))) {   // a church's approved-members allowlist (a receipted copy outlives its steward — see ADMITTED_RECEIPTS)
+    _receiptAdmitted(e);   // a current steward's copy, by whatever route it arrived — see ADMITTED_RECEIPTS
     // PER AUTHOR, THEN UNIONED — see ADMITTED_SRC. `.set(cp, set)` here meant the last copy to replay won,
     // and on a rehydrate that is whichever has the later created_at. The church approves Ada at 10:02, the
     // churchwarden approves Ben at 10:03, and after the next restart Ada is waiting to be let in again.
@@ -8609,7 +8617,7 @@ wss.on('connection', (ws, req) => {
       // revoked steward restoring their authority, a child's DM protections being stripped — and worst,
       // replaying a stale group doc put the attacker back in GROUP_MEMBERS, which canRead() consults, handing
       // them the READ history of an invite-only group. The store was always right; the running relay was not.
-      if (putRes === 'stored') { _receiptAdmitted(evt); note(evt); }   // a membership/broadcast change takes effect for subsequent events; a steward's approval is receipted first (ADMITTED_RECEIPTS)
+      if (putRes === 'stored') note(evt);   // a membership/broadcast change takes effect for subsequent events (a steward's approval is receipted inside — ADMITTED_RECEIPTS)
       // NIP-09 BEFORE the duplicate/have-newer early returns: a re-sent kind-5 comes back as 'duplicate', and
       // the old code returned on that without ever applying the deletion — so the second and every later
       // delivery of a deletion was a no-op. That is the usual case after a reconnect or a resync.

@@ -375,6 +375,21 @@ test('ITEM D (relay): a copy that never passed the write gate is neither served 
   assert.ok(docs.some(e => e.pubkey === warden.pub), 're-anchor: the warden’s receipted copy stopped being served');
 });
 
+test('ITEM D (relay): the receipt is for ONE copy — a different list from the same departed steward is not honoured', async () => {
+  // The warden's receipted copy names Ben. A newer copy signed by the warden after removal, naming Cleo, reaches the
+  // disk by a route with no write gate (as /import would). It must not ride on the warden's old receipt: the receipt
+  // binds the exact event id, not the author. Audit of 5072bb1 (LOW): "any receipt from this author" left every row green.
+  const later = finalizeEvent({ kind: 30078, created_at: now() + 5, tags: [['d', ADMITTED_D + cp], ['t', NET], ['church', cp]], content: JSON.stringify({ pubkeys: [cleo.pub] }) }, warden.sk);
+  await stop();
+  const st = openStore(join(dataDir, 'relay.sqlite'));
+  try { assert.equal(st.put(later, cp), 'stored', 're-anchor: could not plant the later copy'); } finally { st.close(); }
+  await start();
+  const docs = await admittedDocsSeenBy(church);
+  assert.ok(!docs.some(e => e.id === later.id),
+    'a list the departed warden signed AFTER removal is served on the strength of the receipt for their EARLIER list');
+  assert.equal((await admittedDocsSeenBy(cleo)).length, 0, 'a departed steward’s post-removal list admitted Cleo at the relay');
+});
+
 test('a departed steward may still write NOTHING more — the exemption is about serving the past', async () => {
   const del = shippedSetAdmitted({ signer: warden, viewPub: cp, acting: cp });
   await del.api.setAdmitted([ben.pub, ada.pub, warden.pub]);
