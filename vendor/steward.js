@@ -15818,8 +15818,12 @@ zoo`.split("\n");
   async function _guardTryOn(urls, ev) {
     let rs = [];
     try {
-      rs = await Promise.allSettled(pool.publish(urls, ev).map((p) => p.then((v) => {
+      rs = await Promise.allSettled(pool.publish(urls, ev).map((p, i3) => p.then((v) => {
         if (typeof v === "string" && v.startsWith("connection failure")) throw new Error(v);
+        try {
+          window.dispatchEvent(new CustomEvent("steward-relay-accepted", { detail: { url: urls[i3] } }));
+        } catch (x) {
+        }
         return v;
       })));
     } catch (e) {
@@ -18217,8 +18221,12 @@ zoo`.split("\n");
       return false;
     }
     try {
-      await Promise.any(pool.publish(_targets, evt).map((p) => p.then((v) => {
+      await Promise.any(pool.publish(_targets, evt).map((p, i3) => p.then((v) => {
         if (typeof v === "string" && v.startsWith("connection failure")) throw new Error(v);
+        try {
+          window.dispatchEvent(new CustomEvent("steward-relay-accepted", { detail: { url: _targets[i3] } }));
+        } catch (x) {
+        }
         return v;
       })));
     } catch (e) {
@@ -18377,8 +18385,12 @@ zoo`.split("\n");
     }
     let rs = [];
     try {
-      rs = await Promise.allSettled(pool.publish(targets, evt).map((p) => p.then((v) => {
+      rs = await Promise.allSettled(pool.publish(targets, evt).map((p, i3) => p.then((v) => {
         if (typeof v === "string" && v.startsWith("connection failure")) throw new Error(v);
+        try {
+          window.dispatchEvent(new CustomEvent("steward-relay-accepted", { detail: { url: targets[i3] } }));
+        } catch (x) {
+        }
         return v;
       })));
     } catch (e) {

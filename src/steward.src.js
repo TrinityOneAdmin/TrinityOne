@@ -1235,8 +1235,10 @@ const _latestGuardNotice = new Map();   // "<signer>|<d-tag>" -> newest notice s
 async function _guardTryOn(urls, ev) {
   let rs = [];
   try {
-    rs = await Promise.allSettled(pool.publish(urls, ev).map(p => p.then(v => {
+    rs = await Promise.allSettled(pool.publish(urls, ev).map((p, i) => p.then(v => {
       if (typeof v === 'string' && v.startsWith('connection failure')) throw new Error(v);
+      // THIS ONE RELAY ACKNOWLEDGED THE WRITE (an unreachable one resolves with the string above and never gets here)
+      try { window.dispatchEvent(new CustomEvent('steward-relay-accepted', { detail: { url: urls[i] } })); } catch (x) {}
       return v;
     })));
   } catch (e) { return { missed: urls.slice(), refused: urls.map(url => ({ url, error: String((e && e.message) || e || '') })) }; }
@@ -4080,8 +4082,10 @@ async function publish(evt, opts) {
     return false;
   }
   try {
-    await Promise.any(pool.publish(_targets, evt).map(p => p.then(v => {
+    await Promise.any(pool.publish(_targets, evt).map((p, i) => p.then(v => {
       if (typeof v === 'string' && v.startsWith('connection failure')) throw new Error(v);
+      // THIS ONE RELAY ACKNOWLEDGED THE WRITE — Promise.any only says "some relay did", so say which, per relay.
+      try { window.dispatchEvent(new CustomEvent('steward-relay-accepted', { detail: { url: _targets[i] } })); } catch (x) {}
       return v;
     })));
   }
@@ -4358,8 +4362,10 @@ async function _publishToRelays(evt, urls) {
   try { for (const u of targets) { const r = pool.relays && pool.relays.get(u); if (r && r.publishTimeout < 12000) r.publishTimeout = 12000; } } catch (e) {}
   let rs = [];
   try {
-    rs = await Promise.allSettled(pool.publish(targets, evt).map(p => p.then(v => {
+    rs = await Promise.allSettled(pool.publish(targets, evt).map((p, i) => p.then(v => {
       if (typeof v === 'string' && v.startsWith('connection failure')) throw new Error(v);
+      // THIS ONE RELAY ACKNOWLEDGED THE WRITE (an unreachable one resolves with the string above and never gets here)
+      try { window.dispatchEvent(new CustomEvent('steward-relay-accepted', { detail: { url: targets[i] } })); } catch (x) {}
       return v;
     })));
   } catch (e) { try { _noteSpread(evt, [], targets.slice()); } catch (x) {} return false; }

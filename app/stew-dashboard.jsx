@@ -261,7 +261,10 @@ function noteRelayRejection(refused) {
   // relay as Live, because a relay answers a socket and refuses a write for entirely different reasons.
   // Stored as its own key so an older console (which reads only the timestamp) is unaffected.
   try {
-    const list = (Array.isArray(refused) ? refused : []).filter(r => r && r.url)
+    // A relay we could not REACH has not refused anything: nostr-tools reports an unreachable relay as a
+    // "connection failure: ..." string, which publish() turns into an error, so it arrives here beside the
+    // genuine refusals. Naming it would put "Refused our last change" on a box that was merely offline.
+    const list = (Array.isArray(refused) ? refused : []).filter(r => r && r.url && !/^connection failure/i.test(String(r.error || '')))
       .map(r => ({ url: String(r.url), error: String(r.error || '').slice(0, 300), at: Date.now() }));
     if (list.length) localStorage.setItem(window.REG_REFUSED_LS, JSON.stringify(list));
   } catch (e) {}
@@ -278,6 +281,27 @@ function clearRelayRejection() {
   try { localStorage.removeItem(window.REG_REFUSED_LS); } catch (e) {}
   try { window.dispatchEvent(new CustomEvent('steward-relay-cleared')); } catch (e) {}
 }
+// ONE RELAY TOOK A WRITE, so its refusal is over. The engine says which relay (steward-relay-accepted, fired
+// per relay from the same place that sees its acknowledgement), and this runs at module level - not inside the
+// Relays page - so a write made while that page is closed clears it too. The list is per relay but the flag
+// is global, so they move together: drop this relay's entry, and drop the flag only when none remain.
+function relayUrlKey(u) { return String(u || '').trim().toLowerCase().replace(/\/+$/, ''); }
+function clearRelayRefusal(url) {
+  const k = relayUrlKey(url);
+  if (!k) return;
+  let list;
+  try { list = JSON.parse(localStorage.getItem(window.REG_REFUSED_LS) || '[]'); } catch (e) { return; }
+  if (!Array.isArray(list) || !list.some(r => r && relayUrlKey(r.url) === k)) return;   // it never refused us: nothing to do
+  const rest = list.filter(r => !(r && relayUrlKey(r.url) === k));
+  if (!rest.length) { clearRelayRejection(); return; }
+  try { localStorage.setItem(window.REG_REFUSED_LS, JSON.stringify(rest)); } catch (e) {}
+  try { window.dispatchEvent(new CustomEvent('steward-relay-refusal-changed')); } catch (e) {}
+}
+try {
+  if (typeof window !== 'undefined' && window.addEventListener) {
+    window.addEventListener('steward-relay-accepted', (e) => { try { clearRelayRefusal(e && e.detail && e.detail.url); } catch (x) {} });
+  }
+} catch (e) {}
 // The flag says "a relay refused our posts". It's stale once posts are landing again — the steward may well
 // have fixed it another way (restored the key, the operator added the church) without touching the in-console
 // token, and the alarm shouldn't linger forever. True only if a rejection is recorded AND still fresh.
@@ -4810,16 +4834,19 @@ function DashRelaysCard() {
   // relay's admin token hands over full control of that relay, so it is not something to leave sitting
   // on screen inviting a steward to go and find one.
   const [regNeeded, setRegNeeded] = React.useState(relayRejectionActive);
+  const [refusalTick, setRefusalTick] = React.useState(0);   // bumps when one relay's refusal clears but others remain
   React.useEffect(() => {
     const onRejected = () => setRegNeeded(true);
-    // A write landing (steward-publish-ok) means the relay is accepting our posts again — so whatever the
-    // steward did to fix it (in-console token, restored key, operator added the church), clear the alarm.
-    const onOk = () => { clearRelayRejection(); setRegNeeded(false); };
+    // A relay taking a write clears THAT relay's refusal (clearRelayRefusal, module level, fires
+    // steward-relay-cleared when the last one goes). It used to clear everything on any steward-publish-ok -
+    // but that fires when ANY relay accepted, so relay B saying yes wiped the pill on relay A still refusing,
+    // and only while this page happened to be open.
     const onCleared = () => setRegNeeded(false);
+    const onChanged = () => setRefusalTick(n => n + 1);
     window.addEventListener('steward-relay-rejected', onRejected);
-    window.addEventListener('steward-publish-ok', onOk);
     window.addEventListener('steward-relay-cleared', onCleared);
-    return () => { window.removeEventListener('steward-relay-rejected', onRejected); window.removeEventListener('steward-publish-ok', onOk); window.removeEventListener('steward-relay-cleared', onCleared); };
+    window.addEventListener('steward-relay-refusal-changed', onChanged);
+    return () => { window.removeEventListener('steward-relay-rejected', onRejected); window.removeEventListener('steward-relay-cleared', onCleared); window.removeEventListener('steward-relay-refusal-changed', onChanged); };
   }, []);
   // WHICH RELAY REFUSED, keyed the way both sides store it. Recomputed when the alarm flips or the health
   // check returns, which is exactly when it can change. Compared with trailing slashes and case removed:
@@ -4836,11 +4863,11 @@ function DashRelaysCard() {
   const [confirmDrop, setConfirmDrop] = React.useState(null);   // the url awaiting a yes, or null
   const relayName = (u) => { try { return (window.Steward.relayNameFor && window.Steward.relayNameFor(u)) || ''; } catch (e) { return ''; } };
   const refusedSet = React.useMemo(() => {
-    const key = (u) => String(u || '').toLowerCase().replace(/\/+$/, '');
+    const key = (u) => String(u || '').trim().toLowerCase().replace(/\/+$/, '');   // same normaliser as relayUrlKey(), inline so this card needs no other global
     const m = new Map();
     for (const r of relaysThatRefused()) m.set(key(r.url), r.error || '');
     return m;
-  }, [regNeeded, status]);
+  }, [regNeeded, status, refusalTick]);
   const [regToken, setRegToken] = React.useState('');
   const [regMsg, setRegMsg] = React.useState('');
   const [regBusy, setRegBusy] = React.useState(false);
@@ -4889,8 +4916,8 @@ function DashRelaysCard() {
           {status.map(r => {
             const self = host && r.url.includes(host);
             const up = r.status === 'on';
-            const refused = refusedSet.has(String(r.url || '').toLowerCase().replace(/\/+$/, ''));
-            const refusedWhy = refused ? refusedSet.get(String(r.url || '').toLowerCase().replace(/\/+$/, '')) : '';
+            const refused = refusedSet.has(String(r.url || '').trim().toLowerCase().replace(/\/+$/, ''));
+            const refusedWhy = refused ? refusedSet.get(String(r.url || '').trim().toLowerCase().replace(/\/+$/, '')) : '';
             return (
               <div key={r.url} title={refusedWhy ? 'This relay refused our last change and said: ' + refusedWhy : undefined} style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '9px 12px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
                 <div style={{ width: 26, height: 26, borderRadius: 8, background: 'var(--surface)', color: up ? 'var(--sage-ink)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="globe" size={15} color="currentColor" /></div>
