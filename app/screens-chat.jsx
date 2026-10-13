@@ -970,33 +970,53 @@ function Row({ me, m, children, ctx, mod }) {
   // It cooperates with the press-and-hold share that was already here: any movement cancels the long-press
   // timer (that was true before), and a mostly-VERTICAL drag resets the offset and gets out of the way so the
   // message list still scrolls normally. Only a clearly horizontal drag arms the reply.
-  const swipe = React.useRef({ x: 0, y: 0, on: false });
+  // ⚠ THE OFFSET LIVES IN THE REF, AND `dx` STATE EXISTS ONLY TO REDRAW. The first version read `dx` state in
+  // onTE, and `dx` there is whatever the LAST COMPLETED RENDER captured — not what the finger last did. React
+  // schedules a touchmove update on InputContinuousLane (a Scheduler macrotask), and Android coalesces
+  // touchmoves to the frame, so the final move of a flick and the touchend that follows it routinely arrive in
+  // the SAME dispatch with no render in between. onTE then tests a stale offset, the threshold is missed and
+  // nothing replies — while the arrow the member watched fill in says it should have. Measured by driving
+  // these three handlers with no redraw between the move and the lift: see
+  // scripts/a-direct-message-can-be-answered.test.mjs. Read `swipe.current.dx`, never `dx`.
+  const swipe = React.useRef({ x: 0, y: 0, on: false, dx: 0 });
   const [dx, setDx] = React.useState(0);
   const canReply = typeof M.onReply === 'function';
   const SWIPE_ARM = 48;    // how far to drag before letting go replies
   const SWIPE_MAX = 76;    // and how far the bubble will move at all
+  const moveTo = (v) => { swipe.current.dx = v; setDx(v); };
   const onTS = (e) => {
     startLP();
     const t = e.touches && e.touches[0];
-    swipe.current = t ? { x: t.clientX, y: t.clientY, on: true } : { x: 0, y: 0, on: false };
+    swipe.current = t ? { x: t.clientX, y: t.clientY, on: true, dx: 0 } : { x: 0, y: 0, on: false, dx: 0 };
+    if (dx) setDx(0);
   };
   const onTM = (e) => {
     cancelLP();
     const t = e.touches && e.touches[0];
     if (!t || !swipe.current.on || !canReply) return;
     const ddx = t.clientX - swipe.current.x, ddy = t.clientY - swipe.current.y;
-    if (Math.abs(ddy) > Math.abs(ddx)) { swipe.current.on = false; if (dx) setDx(0); return; }   // scrolling, not swiping
-    setDx(Math.max(0, Math.min(SWIPE_MAX, ddx)));
+    if (Math.abs(ddy) > Math.abs(ddx)) { swipe.current.on = false; moveTo(0); return; }   // scrolling, not swiping
+    moveTo(Math.max(0, Math.min(SWIPE_MAX, ddx)));
   };
+  // A CANCEL PAST THE THRESHOLD STILL REPLIES, and that is deliberate. touchcancel is what Android fires when
+  // the system takes a gesture away mid-drag, and it is the single most likely way a horizontal drag inside a
+  // scrolling list ends on a phone. Once the arrow has FILLED IN the app has promised "let go and you reply";
+  // abandoning that on a cancel is how a member ends up unable to answer a message at all. Below the
+  // threshold nothing was promised, so a cancel just springs back.
   const onTE = () => {
     cancelLP();
-    if (canReply && dx >= SWIPE_ARM) { try { M.onReply(); } catch (err) {} }
-    swipe.current.on = false;
+    const far = swipe.current.dx;
+    if (canReply && far >= SWIPE_ARM) { try { M.onReply(); } catch (err) {} }
+    swipe.current.on = false; swipe.current.dx = 0;
     if (dx) setDx(0);
   };
   return (
+    // touch-action: pan-y lets the message list keep scrolling and tells the compositor NOT to treat a
+    // HORIZONTAL drag as a pan it owns. Without it the browser may claim the gesture for an ancestor scroller
+    // and fire touchcancel part-way through the drag; React attaches touch listeners passively, so
+    // preventDefault() cannot do this job and the CSS has to.
     <div onTouchStart={onTS} onTouchEnd={onTE} onTouchCancel={onTE} onTouchMove={onTM} onContextMenu={(e) => { e.preventDefault(); doShare(); }}
-      style={{ display: 'flex', flexDirection: 'column', alignItems: me ? 'flex-end' : 'flex-start', animation: 'trinityFade .3s ease both',
+      style={{ display: 'flex', flexDirection: 'column', alignItems: me ? 'flex-end' : 'flex-start', animation: 'trinityFade .3s ease both', touchAction: 'pan-y',
         position: 'relative', transform: dx ? ('translateX(' + dx + 'px)') : '', transition: dx ? '' : 'transform .18s ease' }}>
       {/* the arrow appears from under the bubble as it moves, and fills in once far enough to let go */}
       {dx ? (
@@ -1045,8 +1065,19 @@ function Row({ me, m, children, ctx, mod }) {
         {(M.onReply || M.canModerate || M.onDelete || (!me && canDM && ctx && ctx.openDM)) ? (
           <React.Fragment>
             <button onClick={M.onOpenMenu} title="Message actions" aria-label="Message actions" style={{ position: 'absolute', top: -7, [me ? 'left' : 'right']: -30, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 999, width: 30, height: 30, cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: 'var(--shadow)' }}><Icon name="dots" size={15} /></button>
+            {/* ⚠ THE MENU MUST NOT COVER THE MESSAGE IT ACTS ON. It used to open at `top: 18, left: 0` —
+                18px DOWN FROM THE TOP OF THE BUBBLE, i.e. across it — so a steward deciding whether to
+                reply, or to reply privately, could no longer read the words they were answering. Device
+                screenshot, Oppo at 411px: the message was completely hidden behind the menu card. This is
+                the same mistake as the Bible highlight card that covered the verse the reader had just
+                selected; once is enough.
+                `top: 100%` opens it BELOW the bubble (and below the reaction chips, which are inside this
+                column too), so the message stays readable and the menu overlaps only the message after it.
+                It is anchored to the bubble edge the dots sit on — right for my own messages, left for
+                everyone else's — which is also what keeps it on a narrow screen: a menu wider than its
+                bubble can then only grow INWARD, toward the middle of the screen, never off the edge. */}
             {M.menuOpen ? (
-              <div style={{ position: 'absolute', top: 18, left: 0, zIndex: 5, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 5, minWidth: 150, display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <div style={{ position: 'absolute', top: '100%', marginTop: 6, [me ? 'right' : 'left']: 0, zIndex: 5, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 5, minWidth: 150, maxWidth: 240, display: 'flex', flexDirection: 'column', gap: 2 }}>
                 {M.onReply ? <button onClick={M.onReply} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer', padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="reply" size={15} color="var(--ink-2)" /> Reply</button> : null}
                 {/* REPLY PRIVATELY — answer the person, not the room. Two conditions, and both matter:
                     · not my own message (replying privately to yourself is nonsense), and
@@ -1953,22 +1984,42 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
 // deliberately duplicated in behaviour rather than shared as a component, because a DM bubble has no Row and
 // no moderation menu, and threading one through would have meant a prop for every branch. Keep the two in
 // step: the owner's ask was explicitly that every chat window behave the same way.
-function DMSwipe({ mine, onReply, children }) {
-  const st = React.useRef({ x: 0, y: 0, on: false });
+// A GESTURE MUST NOT BE THE ONLY WAY TO ANSWER A MESSAGE. Device report, Oppo, 0.9.72: "reply is on a swipe,
+// but it doesn't ever engage… I still cant reply." A swipe can be taken away by the operating system, and when
+// it is there is nothing left to tap — so this also carries the same three-dots control a group room has had
+// all along (Row, above). The menu offers Reply only: inside a direct message you are ALREADY private, so
+// "Reply privately" would be meaningless here, and there is nothing to moderate in someone else's inbox.
+function DMSwipe({ mine, onReply, menuOpen, onOpenMenu, children }) {
+  // ⚠ READ `st.current.dx`, NEVER `dx` — see the long note on the same trap in Row above. `dx` state exists
+  // only to redraw; the live offset is the ref, because the last touchmove of a flick and the touchend after
+  // it reach these handlers with no render in between.
+  const st = React.useRef({ x: 0, y: 0, on: false, dx: 0 });
   const [dx, setDx] = React.useState(0);
   const ARM = 48, MAX = 76;
-  const onTS = (e) => { const t = e.touches && e.touches[0]; st.current = t ? { x: t.clientX, y: t.clientY, on: true } : { x: 0, y: 0, on: false }; };
+  const moveTo = (v) => { st.current.dx = v; setDx(v); };
+  const onTS = (e) => {
+    const t = e.touches && e.touches[0];
+    st.current = t ? { x: t.clientX, y: t.clientY, on: true, dx: 0 } : { x: 0, y: 0, on: false, dx: 0 };
+    if (dx) setDx(0);
+  };
   const onTM = (e) => {
     const t = e.touches && e.touches[0];
     if (!t || !st.current.on) return;
     const ddx = t.clientX - st.current.x, ddy = t.clientY - st.current.y;
-    if (Math.abs(ddy) > Math.abs(ddx)) { st.current.on = false; if (dx) setDx(0); return; }   // a scroll, not a swipe
-    setDx(Math.max(0, Math.min(MAX, ddx)));
+    if (Math.abs(ddy) > Math.abs(ddx)) { st.current.on = false; moveTo(0); return; }   // a scroll, not a swipe
+    moveTo(Math.max(0, Math.min(MAX, ddx)));
   };
-  const onTE = () => { if (dx >= ARM && onReply) { try { onReply(); } catch (e) {} } st.current.on = false; if (dx) setDx(0); };
+  // Past the threshold a cancel still replies, for the reason written out in Row.
+  const onTE = () => {
+    const far = st.current.dx;
+    if (far >= ARM && onReply) { try { onReply(); } catch (e) {} }
+    st.current.on = false; st.current.dx = 0;
+    if (dx) setDx(0);
+  };
   return (
+    // touch-action: pan-y — the list still scrolls, the browser does not claim the horizontal drag. See Row.
     <div onTouchStart={onTS} onTouchMove={onTM} onTouchEnd={onTE} onTouchCancel={onTE}
-      style={{ display: 'flex', flexDirection: 'column', alignItems: mine ? 'flex-end' : 'flex-start', position: 'relative',
+      style={{ display: 'flex', flexDirection: 'column', alignItems: mine ? 'flex-end' : 'flex-start', position: 'relative', touchAction: 'pan-y',
         transform: dx ? ('translateX(' + dx + 'px)') : '', transition: dx ? '' : 'transform .18s ease' }}>
       {dx ? (
         <div aria-hidden="true" style={{ position: 'absolute', left: -34, top: '50%', transform: 'translateY(-50%)', opacity: Math.min(1, dx / ARM),
@@ -1977,7 +2028,23 @@ function DMSwipe({ mine, onReply, children }) {
           <Icon name="reply" size={14} color={dx >= ARM ? 'var(--on-clay)' : 'var(--ink-3)'} />
         </div>
       ) : null}
-      {children}
+      {/* the same shape Row uses: a relative column around the bubble so the dots can sit just outside it */}
+      <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', alignItems: mine ? 'flex-end' : 'flex-start' }}>
+        {children}
+        <button onClick={onOpenMenu} title="Message actions" aria-label="Message actions"
+          style={{ position: 'absolute', top: -7, [mine ? 'left' : 'right']: -30, border: '1px solid var(--line)', background: 'var(--surface)',
+            borderRadius: 999, width: 30, height: 30, cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center',
+            justifyContent: 'center', boxShadow: 'var(--shadow)' }}><Icon name="dots" size={15} /></button>
+        {/* below the bubble, anchored to the side the dots are on — see the long note in Row */}
+        {menuOpen ? (
+          <div style={{ position: 'absolute', top: '100%', marginTop: 6, [mine ? 'right' : 'left']: 0, zIndex: 5, background: 'var(--surface)', border: '1px solid var(--line)',
+            borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 5, minWidth: 150, maxWidth: 240, display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <button onClick={onReply} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer',
+              padding: '8px 10px', borderRadius: 8, fontFamily: 'var(--font-ui)', fontSize: 13.5, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}>
+              <Icon name="reply" size={15} color="var(--ink-2)" /> Reply</button>
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -2003,6 +2070,7 @@ function DMThread({ peer, open, onClose, ctx, docked }) {
   const [draft, setDraft] = useC('');
   const [rxFor, setRxFor] = useC('');
   const [dmReply, setDmReply] = useC(null);   // the message being answered, or null — mirrors group rooms
+  const [dmMenuFor, setDmMenuFor] = useC(null);   // which message has its three-dots menu open — mirrors `menuFor` in ChatRoom
   const scRef = useCR();
   const FS = window.Fellowship;
   const DM_EMOJI = REACT_EMOJIS;   // shared with group rooms — see the note on REACT_EMOJIS
@@ -2091,7 +2159,8 @@ function DMThread({ peer, open, onClose, ctx, docked }) {
             <Icon name="lock" size={13} /> Only you two can read these messages</span>
         </div>
         {shownMsgs.map(m => (
-          <DMSwipe key={m.id} mine={m.mine} onReply={() => setDmReply(m)}>
+          <DMSwipe key={m.id} mine={m.mine} onReply={() => { setDmReply(m); setDmMenuFor(null); }}
+            menuOpen={dmMenuFor === m.id} onOpenMenu={() => setDmMenuFor(dmMenuFor === m.id ? null : m.id)}>
             {/* the message this one answers, shown the same way a group room shows it */}
             {m.replyTo && msgById[m.replyTo] ? (
               <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11.5, color: 'var(--ink-3)', margin: '0 4px 3px', maxWidth: 274 }}>
