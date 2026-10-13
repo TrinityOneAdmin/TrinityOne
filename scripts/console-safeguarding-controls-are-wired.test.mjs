@@ -84,7 +84,10 @@ async function memberRowFor({ minor = false, cleared = false, guardianOf = null,
   const guardians = guardianOf ? { [guardianOf]: [PK, OTHER_PARENT] } : {};
   const parentSet = new Set(); Object.values(guardians).forEach(ps => ps.forEach(p => parentSet.add(p)));
   const sg = {
-    loaded: true, clearedKnown: true, cleared: {},
+    // minorsKnown: toggleMinor refuses a whole-list setMinors until the church's list of children has
+    // actually arrived (FIX 1, 2026-10-13). This fixture is a WARM console; the cold case has its own file,
+    // scripts/a-cold-console-cannot-empty-the-list-of-children.test.mjs.
+    loaded: true, minorsKnown: true, clearedKnown: true, cleared: {},
     minors: minor ? [PK] : [],
     approved: cleared ? [PK] : [],
     nophoto: [],

@@ -23159,16 +23159,19 @@ zoo`.split("\n");
       }
       const g = o.guardians || {};
       let nextG = null;
+      const relinkedChildren = [];
       if ((g[oldH] || []).length) {
         nextG = { ...g };
         nextG[newH] = [.../* @__PURE__ */ new Set([...low(g[newH]), ...low(g[oldH])])];
       }
       for (const childK of Object.keys(g)) {
         const parents = low(g[childK]);
-        if (parents.indexOf(oldH) !== -1 && parents.indexOf(newH) === -1) {
+        if (parents.indexOf(oldH) === -1) continue;
+        if (parents.indexOf(newH) === -1) {
           nextG = nextG || { ...g };
           nextG[childK] = [.../* @__PURE__ */ new Set([...low(nextG[childK] || parents), newH])];
         }
+        relinkedChildren.push(String(childK || "").toLowerCase());
       }
       const gc = o.guardiansClosed || {};
       let nextGC = null;
@@ -23204,6 +23207,20 @@ zoo`.split("\n");
         clr = null;
       }
       if (!clr || clr.failed > 0 || clr.unverified) failed.push("clearance");
+      const kidsToTell = relinkedChildren.filter((x, i3, a) => x && x !== newH && a.indexOf(x) === i3);
+      let childrenNotTold = 0;
+      if (kidsToTell.length) {
+        let kclr = null;
+        try {
+          kclr = await window.Steward.refreshClearances(kidsToTell, nextMins, nextAppr, nextG || g);
+        } catch (e) {
+          kclr = null;
+        }
+        if (!kclr || kclr.failed > 0 || kclr.unverified) {
+          failed.push("childclearance");
+          childrenNotTold = kidsToTell.length;
+        }
+      }
       const isOld = (x) => !!x && String(x.pub || "").toLowerCase() === oldH;
       let teamsMoved = 0, slotsMoved = 0, careTeamPeople = null;
       for (const r of Array.isArray(o.rosters) ? o.rosters : []) {
@@ -23264,6 +23281,11 @@ zoo`.split("\n");
         // only reachable if the block LANDED — a refusal threw above
         teamsMoved,
         rotasMoved: slotsMoved,
+        // How many children were re-sealed, and how many of those phones did NOT confirm. ReseatModal needs
+        // both: `failed` carries 'childclearance' so the sentence can be written at all, and the count is what
+        // makes it singular or plural. Zero children is zero in both, so the sentence never appears.
+        childrenToldOf: kidsToTell.length,
+        childrenNotTold,
         failed
       };
     },

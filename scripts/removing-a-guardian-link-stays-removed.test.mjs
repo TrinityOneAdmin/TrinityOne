@@ -59,7 +59,7 @@ function consoleWorld(links, closed = {}) {
     } },
     guardians: links, guardiansClosed: closed,
     setMinorNotice: () => {}, _reseal: () => {},
-    sg: { minors: [], approved: [], nophoto: [] },
+    sg: { minors: [], approved: [], nophoto: [], minorsKnown: true },   // WARM: toggleMinor refuses a cold whole-list replace (FIX 1, 2026-10-13)
     minorsSet: new Set(), nophotoSet: new Set(), ckClearedSet: new Set(), kidPhotosAllowed: true,
     parentSet: new Set(Object.values(links).flat()),
     nameByPub: {},

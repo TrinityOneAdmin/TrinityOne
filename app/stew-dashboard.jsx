@@ -6427,8 +6427,35 @@ function ReseatModal({ member, memberName, realName, isMinor, admittedList, onCl
   const newPub = window.Steward && window.Steward.parseMemberKey ? window.Steward.parseMemberKey(text) : null;
   const same = newPub && newPub === member;
 
+  // CAN THIS CONSOLE SEE THE PARENT LINKS AT ALL? MED, audit 2026-10-13.
+  //
+  // `useStewardGuardians()` is a subscription with NO loaded flag and a default of { links: {} }, so an empty
+  // map means "not arrived yet" and "this church has confirmed no links" alike. Measured (case E): handed
+  // guardians:{}, reseatMember writes no guardian map and re-seals [newH] only — so a re-seat pressed before
+  // the document lands leaves the parent link on the DEAD key and the child's phone is never told. That is
+  // GAP (b) again, by a different door. Nothing is wiped (nextG stays null, so setGuardians is never called);
+  // what is lost is the carry-across.
+  //
+  // So gate it the way the clearance back-fill gates itself — on the evidence that an ABSENT safeguarding
+  // document is honestly absent: `minorsKnown`, meaning the relay has told us everything it holds while we
+  // were authenticated to read the owner-only docs, which the guardian map rides the same subscription as
+  // (subscribeSafeguard: "the guardian map rides here rather than on its own subscription"). Only when the map
+  // we hold is EMPTY: a non-empty map has provably arrived, and gating on a document the console already has
+  // would be refusing for nothing.
+  //
+  // AND NOT ON A DELEGATED CONSOLE. The relay serves minors:/guardians: to the church key (or a safeguarding
+  // steward) alone, so a steward holding only `members` — whose Reconnect the relay does accept, and for whom
+  // the button that opens this modal is deliberately offered — can NEVER satisfy minorsKnown. Gating them
+  // would delete a shipped capability rather than close a hole. Their case is unchanged, and listed.
   const confirm = async () => {
     if (!newPub || same || busy) return;
+    // Read at the moment of the PRESS, not at render: the document can land between the modal opening and the
+    // steward pasting the code, and this is also what keeps `confirm` sliceable on its own for its test.
+    if (!window.Steward.actingChurch && Object.keys(guardiansNow).length === 0 && sgNow.minorsKnown !== true) {
+      setErr('This console hasn’t received your church’s parent and child links yet. '
+        + 'Reconnecting now could leave a child unable to reach their parent — wait a moment and try again.');
+      return;
+    }
     setBusy(true); setErr('');
     try {
       // Record the vouch FIRST, then admit. If admitting failed on its own the member would be able to post
@@ -6469,6 +6496,14 @@ function ReseatModal({ member, memberName, realName, isMinor, admittedList, onCl
             res.guardiansCarried ? 'parent link' : null,
           ].filter(Boolean).reduce((a, s, i, arr) => i === 0 ? s : (i === arr.length - 1 ? a + ' and ' + s : a + ', ' + s), '')}</b> moved across with
           them{res.failed && res.failed.includes('clearance') ? ', though their new phone has not confirmed it yet — it should pick it up shortly' : ', and their new phone has been told'}. </React.Fragment> : null}
+          {/* WHOSE PHONE DID NOT CONFIRM. MED, audit 2026-10-13. cbdb85a widened the clearance re-seal to the
+              CHILDREN at the other end of a moved parent link, but both phones shared one failed:['clearance']
+              — so a CHILD's failure printed the sentence above, which is about the member's own new phone,
+              and the one person who could no longer reach their parent went unmentioned. reseatMember reports
+              them separately now ('childclearance', plus a count), so this says plainly whose phone it is. */}
+          {res && res.failed && res.failed.includes('childclearance') ? <b>{res.childrenNotTold === 1
+            ? 'Their child’s phone has not been told about the new key yet, so the two of them can’t message each other until it has — open Members to send it again. '
+            : 'The phones of ' + res.childrenNotTold + ' of their children have not been told about the new key yet, so they can’t message each other until they have — open Members to send it again. '}</b> : null}
           {res && (res.teamsMoved || res.rotasMoved) ? <React.Fragment>They are still on {res.teamsMoved ? (res.teamsMoved === 1 ? 'their serving team' : 'their ' + res.teamsMoved + ' serving teams') : ''}{res.teamsMoved && res.rotasMoved ? ' and in ' : ''}{res.rotasMoved ? (res.rotasMoved === 1 ? 'the rota they were on' : 'the ' + res.rotasMoved + ' rotas they were on') : ''}, under the new key. </React.Fragment> : null}
           {res && res.failed && res.failed.some(f => /^(team|careteam|rota)/.test(f)) ? <b>Some of their serving places could not be moved across — open Teams and the Rota and check them. </b> : null}
           One thing to finish by hand: if they were in any <b>invite-only</b> groups, open Groups and add them
@@ -7045,6 +7080,48 @@ function DashMembers() {
   // (toggleMinor, approveGuardian, declineGuardian, linkParent, unlinkParent): a church switch during the
   // guardians/minors write must not send this church's list as another (see guardNoticeScope).
   const toggleMinor = async (pk) => {
+    // THE LIST OF CHILDREN MUST BE REAL BEFORE IT IS REPLACED. HIGH, audit 2026-10-13.
+    //
+    // setMinors is a WHOLE-LIST replace and the two lines below build that list out of `sg.minors`. On a
+    // console whose `minors:` document has not arrived, `sg.minors` is [] — so the first press of "Child",
+    // of the phone sheet's "Mark as child", or of the join queue's "Approve as a child" published a list with
+    // ONE key on it and took EVERY OTHER CHILD IN THE CHURCH off it. Measured by rendering the real joinRow
+    // and pressing the real control:
+    //     WARM (list arrived):      setMinors [['childAlice','childBen','joinerpubkey']]
+    //     COLD (minors not known):  setMinors [['joinerpubkey']]
+    //
+    // THE HARM IS TO THE OTHER CHILDREN, not to the one being marked. Their keys leave `minors:`, so
+    // minorOf() is false for them at the relay and safeguardAllows() lets any member open a private message
+    // with them — and the whole-roster back-fill above then seals {minor:false} to each of their phones from
+    // the same emptied list, which their apps trust OVER the list fallback.
+    //
+    // REACHABLE ON A COLD CONSOLE, not a theoretical window. The join queue is gated on `mRosterLoaded` —
+    // the MEMBER roster — while `minors:` is served only to a NIP-42-authenticated reader and so can arrive
+    // materially later; the queue is the top panel of the Members tab, and that control's whole purpose is to
+    // be pressed at once. The members-list "Child" button reaches the same replace by the same route.
+    //
+    // `minorsKnown`, not `loaded`. This is the exact question subscribeSafeguard wrote minorsKnown for —
+    // "has the relay told us everything it has, WHILE WE WERE AUTHENTICATED to read the owner-only minors
+    // doc" — and it is the gate ClearPersonModal already holds its own list behind. `loaded` is
+    // sawMinors && sawEose, which stays permanently FALSE for a church that has never marked a child, so
+    // gating on that would make the first child in every church unmarkable.
+    //
+    // And NOT minorsKnown && relayAuthed(), which the back-fill above uses. That back-fill writes to every
+    // member on the roster off a possibly-empty list, so it needs auth to be live at the moment it runs.
+    // Here, minorsKnown true via `sawMinors` means we HOLD the church-signed document; refusing a steward's
+    // mark because the socket has since dropped would be a refusal with no safety behind it, and a child a
+    // steward cannot mark is an ADULT to the relay. relayAuthed() is already inside minorsKnown's own other
+    // branch, where it is the thing that matters.
+    //
+    // This never blocks a legitimate UN-marking: `minors` is only ever assigned in the MINORS_D branch, which
+    // sets sawMinors, so a non-empty `sg.minors` implies minorsKnown — and `unmarking` can only be true when
+    // `pk` is already on that non-empty list. Fails CLOSED: the hook's own default carries no minorsKnown at
+    // all, so a console with no subscription refuses rather than guesses.
+    if (sg.minorsKnown !== true) {
+      setMinorNotice({ pk, tone: 'fail', text: 'Nothing was changed — this console hasn’t received your church’s '
+        + 'list of children yet, and saving now would take every other child off it. Try again in a moment.' });
+      return null;
+    }
     const noticeScope = window.Steward.guardNoticeScope ? window.Steward.guardNoticeScope() : null;
     const unmarking = minorsSet.has(pk);
     const next = unmarking ? (sg.minors || []).filter(p => p !== pk) : [...(sg.minors || []), pk];
@@ -7075,6 +7152,20 @@ function DashMembers() {
     // the protection lands before the tidy-up, and the relay now ignores a child's guardian entry at decision
     // time, so the gap between the two writes is not a route. A removal the relay refuses is REPORTED, never
     // painted as done — the same standard unlinkParent holds itself to.
+    //
+    // THIS IS THE BRANCH THAT MAKES A MIS-TAP EXPENSIVE, and it is why the notice below says so. It removes
+    // them as guardian of EVERY one of their children, writes a `closed` pair for each, and notifies them;
+    // un-marking restores none of it, and the `closed` pair suppresses their own re-request. Audit 2026-10-13.
+    //
+    // NO CONFIRM STEP, decided here rather than left open. This control is the PROTECTIVE direction, and
+    // friction on it is paid by children: a steward who gives up on marking somebody leaves a child the relay
+    // treats as an adult, which is the fail-OPEN outcome this code exists to prevent. The mis-tap costs an
+    // ADULT their guardian role and a no-photo entry — both repairable by hand, neither a safeguarding
+    // failure — and the steward is told at once, on the row they pressed, with every child named. The
+    // owner's standing preference is a label plus a tooltip over paragraphs, and two Approve-ish controls
+    // already share the join row, so a dialog there would land on the wrong one as often as not. What was
+    // actually wrong was the CLAIM that it was "one tap to undo"; that claim is gone, and the notice below is
+    // honest about what un-marking will not put back.
     let unlinkedFrom = [], nextG = null;
     if (!unmarking && parentSet.has(pk)) {
       nextG = {};
@@ -7144,7 +7235,7 @@ function DashMembers() {
     setMinorNotice(unmarking && (sg.approved || []).indexOf(pk) >= 0
       ? { pk, text: 'No longer marked as a child — and their youth-work clearance was removed with it. If they should be cleared to work with young people, tap “Clear for youth”.' }
       : (unlinkedFrom.length
-        ? { pk, text: 'Marked as a child — and no longer listed as a guardian of ' + unlinkedFrom.map(c => nameByPub[c] || 'a child').join(', ') + '. A child is never a guardian.' }
+        ? { pk, text: 'Marked as a child — and no longer listed as a guardian of ' + unlinkedFrom.map(c => nameByPub[c] || 'a child').join(', ') + '. A child is never a guardian. Un-marking them will not put those links back.' }
         : null));
     // With the new map when a link was removed: the unlinked children's sealed clearances are the only place
     // their phones learn who their confirmed parents are now.
@@ -7326,11 +7417,61 @@ function DashMembers() {
   // exists — so the throw left the click handler UNCAUGHT and the row said nothing (device round 2026-10-01,
   // Oppo: Uncaught Error … at admitMember). Still called at once (not a tick later, which every other write here
   // is too); the catch below says which failure it was.
-  const admitMember = (pk) => (() => { try { return Promise.resolve(window.Steward.setAdmitted([...admittedList, pk])); } catch (e) { return Promise.reject(e); } })()
-    .then((ok) => { if (!ok) setMinorNotice({ pk, tone: 'fail', text: 'Couldn’t let ' + (nameByPub[pk] || 'them')
-      + ' in — the relay didn’t accept it, so they are still waiting. Check the relay and try again.' }); return ok; })
-    .catch((e) => { setMinorNotice({ pk, tone: 'fail', text: 'Couldn’t let ' + (nameByPub[pk] || 'them') + ' in — '
-      + ((e && e.notConnected) ? 'this console hasn’t finished connecting to your church, so nothing was changed and they are still waiting.' : 'the relay could not be reached.') }); return null; });
+  // SAFEGUARDING BEFORE ADMISSION (`asChild`), the rule reseatMember has held since 2026-08-02 and which the
+  // ordinary join queue never had. Its comment states the harm plainly: "If the child marking will not save,
+  // the alternative to stopping is a child in the church whom no list names as a child — and safeguardAllows()
+  // then lets any adult DM them."
+  //
+  // Why the queue needed its own door rather than "mark them afterwards". A person waiting to join is filtered
+  // OUT of both member lists (activeM / inactiveM both carry `!pendingSet.has(m.pubkey)`), so "Mark as a child"
+  // DOES NOT EXIST for them. The safe order was not merely unusual, it was unreachable: a steward who already
+  // knew a joiner was 13 had to admit them as an adult and then go and correct it. In between, the relay's
+  // safeguardAllows() lets any member open a private message with them (`minors:<churchpub>` is the only
+  // document it reads), their own phone has no sealed clearance and falls back to that same list — which the
+  // relay refuses to serve an ordinary member, so absence READS AS ADULTHOOD — and the whole-roster back-fill
+  // above can seal {minor:false} to the key inside the window, which their phone then trusts OVER the fallback.
+  // A young person arriving on their own device off an invite is a route the owner established on 2026-08-30
+  // (reference/DOMAIN.md: "a young person can arrive by SEVERAL routes, not one"), not an edge case.
+  //
+  // NOT A POLICY. Plain Approve is unchanged and still admits; the software does not decide who is a child
+  // ("TrinityOne does not decide who is a child; it decides what follows from that mark"). This only gives the
+  // steward who already knows a way to say so first.
+  //
+  // IT FAILS CLOSED, BUT IT IS NOT "ONE TAP TO UNDO". This comment and c247462's message both said a mis-tap
+  // "is one tap to undo on the members list". That is false, measured twice over, and is corrected here
+  // because a false claim in the permanent record is worse than the bug it describes (CLAUDE.md rule 4):
+  //   · toggleMinor also adds them to the NO-PHOTO list, and un-marking deliberately LEAVES them there
+  //     (owner, reference/DOMAIN.md 2026-10-12: "marking someone as a child adds them to the no-photo list;
+  //     UN-marking them leaves them there and a steward removes it by hand"). The undo is a different
+  //     control, `toggleNoPhoto`, itself conditionally rendered.
+  //   · if the mis-tapped person is a CONFIRMED GUARDIAN, toggleMinor removes them as guardian of every one
+  //     of their children, writes a `closed` pair for each and notifies them. Un-marking restores none of it,
+  //     and the `closed` pair suppresses their own re-request. Reachable from THIS queue, because
+  //     approveGuardian does not require the parent to be admitted first.
+  // So what still holds, and all that is claimed: a mis-tap marks an adult as a child, which is the safe way
+  // to be wrong and is repairable by hand on the members list, and a mark the relay REFUSES admits nobody at
+  // all. No confirm step — the reasoning is on the guardian branch of toggleMinor.
+  //
+  // THROUGH toggleMinor, not around it, so this cannot drift from the marking every other screen uses: it is
+  // the audited path that also suppresses an existing photograph (confirmed on the phone 2026-08-27 — the
+  // relay cannot rewrite a kind-0 somebody already signed), ends any guardian role, withdraws a check-in
+  // clearance, re-seals the member's own phone, and names the person in its own refusal notice. `minorsSet`
+  // is checked first because toggleMinor is a TOGGLE: pressing it for somebody already marked would UNMARK
+  // them, which on this control would be the exact inversion of what it promises.
+  const admitMember = async (pk, asChild) => {
+    if (asChild && !minorsSet.has(pk)) {
+      let marked = null;
+      try { marked = await toggleMinor(pk); } catch (e) { marked = null; }
+      // toggleMinor has already set the failure notice, naming them. Stop: nothing has been admitted, the row
+      // is still in the queue, and the steward can press again.
+      if (!marked) return null;
+    }
+    return (() => { try { return Promise.resolve(window.Steward.setAdmitted([...admittedList, pk])); } catch (e) { return Promise.reject(e); } })()
+      .then((ok) => { if (!ok) setMinorNotice({ pk, tone: 'fail', text: 'Couldn’t let ' + (nameByPub[pk] || 'them')
+        + ' in — the relay didn’t accept it, so they are still waiting. Check the relay and try again.' }); return ok; })
+      .catch((e) => { setMinorNotice({ pk, tone: 'fail', text: 'Couldn’t let ' + (nameByPub[pk] || 'them') + ' in — '
+        + ((e && e.notConnected) ? 'this console hasn’t finished connecting to your church, so nothing was changed and they are still waiting.' : 'the relay could not be reached.') }); return null; });
+  };
   // ONE DECISION, ONE PRESS. Opening a church means admitting everyone who came in off the invite at once;
   // Miriam pressed Approve eighteen times to do it, and setAdmitted takes the whole list anyway, so that was
   // eighteen round trips for a single decision.
@@ -7733,6 +7874,63 @@ function DashMembers() {
     </div>
   ) : null;
 
+  // ONE WAITING PERSON'S ROW, lifted out of the render so a test can draw it and press its controls.
+  // Named, like memberRow, for exactly that reason: scripts/test-slice.mjs refuses a call-shaped anchor
+  // (`pendingJoins.map(m => {`), so while this lived inline NOTHING could reach the Approve button - and
+  // the join queue is the one screen where admission happens. CLAUDE.md rule 1.
+  const joinRow = (m) => {
+              const named = !!m.name; const label = named ? m.name : 'Anonymous';
+              const initials = (named ? m.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'AN').toUpperCase();
+              return (
+                <div key={m.pubkey} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 10, background: 'var(--surface)', border: '1px solid var(--line)' }}>
+                  <SkBadge initials={initials} av={m.av} pubkey={m.pubkey} size={32} radius={10} accent={SK_TINT[named ? 'gold' : 'sage'].fg} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 700, fontSize: 14, lineHeight: 1.3 }}>{label}</div>
+                    <div style={{ fontSize: 11.5, color: 'var(--ink-3)', fontFamily: nameHandle(m) ? 'var(--font-ui)' : 'var(--mono)' }}>{nameHandle(m) ? '@' + nameHandle(m) : shortNpub(m.npub)} · wants to join</div>
+                  </div>
+                  {/* ON THE ROW, NEVER BEHIND A MENU. Admission is the one act a steward takes on this list, and only
+                      a human at an unlocked console takes it (decided 2026-08-18) — so when the member rows were
+                      compressed to one line for the phone (P12), Approve stayed where Chat sits on a member's row.
+                      44px tall on a phone, the codebase's touch floor, like the row's other controls. */}
+                  <button onClick={() => admitMember(m.pubkey)} className="sk-btn sk-btn--clay" style={{ padding: '7px 12px', fontSize: 12.5, flexShrink: 0, ...(narrow ? { minHeight: 44, boxSizing: 'border-box' } : null) }}><Icon name="check" size={14} color="var(--on-clay)" /> Approve</button>
+                  {/* THE SAFE ORDER, MADE REACHABLE. A waiting person is filtered out of both member lists, so
+                      "Mark as a child" does not exist for them: until this control a steward who already knew a
+                      joiner was 13 had to let them in as an adult and then go and correct it, and in between the
+                      relay let any member DM them. See admitMember. OWNER-ONLY, like the marking itself — the
+                      relay rejects a delegated steward's safeguarding write, so offering it would silently no-op.
+                      Short label, consequence in the accessible name and the tooltip, per the house rule on
+                      instructional copy. */}
+                  {!delegated ? <button onClick={() => admitMember(m.pubkey, true)}
+                    aria-label={'Approve as a child: ' + (m.name || nameHandle(m) || shortNpub(m.npub)) + ' — marks them as a child FIRST, then lets them in. Only cleared adults and their own parents can then message them privately'}
+                    title="Mark them as a child, then let them in — so safeguarding applies from the moment they are in the church, not from whenever someone remembers"
+                    style={{ border: '1px solid color-mix(in oklab, var(--clay) 40%, var(--line))', background: 'var(--surface)', borderRadius: 9, padding: '7px 10px', cursor: 'pointer', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12, ...(narrow ? { minHeight: 44, boxSizing: 'border-box' } : null) }}>
+                    <Icon name="shield" size={14} color="currentColor" /> As a child</button> : null}
+                  {/* TWO TAPS, LIKE THE MEMBERS LIST ALREADY REQUIRES. This ✕ sits a few pixels from
+                      Approve, and one tap on it PERMANENTLY blocks the person AND rotates every one of the
+                      church's keys — irreversible, from the screen a steward is fastest on. The members
+                      list has asked "are you sure" for this same action all along; the join queue never
+                      did. Audit 2026-09-02 #5.
+                      `confirmBlock` is shared with the members list, so opening one closes the other —
+                      two Confirms on screen at once is exactly the confusion this is meant to remove. */}
+                  {confirmBlock === m.pubkey
+                    ? <React.Fragment>
+                        <button onClick={() => block(m.pubkey)} aria-label={'Confirm: block ' + (m.name || nameHandle(m) || shortNpub(m.npub)) + ' and refuse them entry'} title="Confirm — blocks them from joining or posting, and re-keys the church" style={{ border: 'none', background: 'var(--clay-ink)', color: 'var(--on-clay)', borderRadius: 9, padding: '7px 10px', cursor: 'pointer', display: 'flex', flexShrink: 0, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>Block</button>
+                        <button onClick={() => setConfirmBlock(null)} aria-label="Cancel — leave them waiting" title="Cancel" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 9px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0 }}><Icon name="x" size={15} color="currentColor" /></button>
+                      </React.Fragment>
+                    : <button onClick={() => setConfirmBlock(m.pubkey)} aria-label={'Decline ' + (m.name || nameHandle(m) || shortNpub(m.npub)) + ' — asks you to confirm'} title="Decline — blocks this person from joining or posting" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 9px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0 }}><Icon name="x" size={15} color="currentColor" /></button>}
+                  {/* WHAT HAPPENED TO THIS APPROVE, ON THIS ROW. admitMember's notice (minorNotice) was drawn only on the
+                      member list's rows, and a person waiting to join is not on that list — so a refused Approve
+                      said nothing where it was pressed (device round 2026-10-01: only the banner spoke). */}
+                  {minorNotice && minorNotice.pk === m.pubkey ? (
+                    <div role={minorNotice.tone === 'fail' ? 'alert' : 'status'} style={{ flexBasis: '100%', fontSize: 12.5, lineHeight: 1.45, padding: '9px 12px', borderRadius: 11,
+                      background: minorNotice.tone === 'fail' ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'color-mix(in oklab, var(--gold) 12%, var(--surface))',
+                      border: '1px solid ' + (minorNotice.tone === 'fail' ? 'color-mix(in oklab, var(--clay) 38%, var(--line))' : 'color-mix(in oklab, var(--gold) 34%, var(--line))'), color: 'var(--ink)' }}>
+                      {minorNotice.text}
+                    </div>
+                  ) : null}
+                </div>
+              );
+  };
   return (
     <Panel title="Members" action={<span style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>{/* "Invite your church" printed cards hidden for the pilot — re-add this button to restore (BulkInviteModal + state remain below) */}<SkPill tint="sage">{total ? `${activeM.length} active${chatting ? ` · ${chatting} chatting` : ''}` : 'none yet'}</SkPill></span>} style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       <div style={narrow ? {} : { display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 16, flex: 1, minHeight: 0 }}>
@@ -7784,47 +7982,7 @@ function DashMembers() {
                 requests had the whole page pushed down — the members list, the safeguarding note and everything
                 below it were shoved off-screen behind a wall of Approve buttons. ~4 rows visible, rest scroll. */}
             <div className="no-scrollbar" style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 268, overflowY: 'auto', overscrollBehavior: 'contain' }}>
-            {pendingJoins.map(m => {
-              const named = !!m.name; const label = named ? m.name : 'Anonymous';
-              const initials = (named ? m.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'AN').toUpperCase();
-              return (
-                <div key={m.pubkey} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 10, background: 'var(--surface)', border: '1px solid var(--line)' }}>
-                  <SkBadge initials={initials} av={m.av} pubkey={m.pubkey} size={32} radius={10} accent={SK_TINT[named ? 'gold' : 'sage'].fg} />
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 700, fontSize: 14, lineHeight: 1.3 }}>{label}</div>
-                    <div style={{ fontSize: 11.5, color: 'var(--ink-3)', fontFamily: nameHandle(m) ? 'var(--font-ui)' : 'var(--mono)' }}>{nameHandle(m) ? '@' + nameHandle(m) : shortNpub(m.npub)} · wants to join</div>
-                  </div>
-                  {/* ON THE ROW, NEVER BEHIND A MENU. Admission is the one act a steward takes on this list, and only
-                      a human at an unlocked console takes it (decided 2026-08-18) — so when the member rows were
-                      compressed to one line for the phone (P12), Approve stayed where Chat sits on a member's row.
-                      44px tall on a phone, the codebase's touch floor, like the row's other controls. */}
-                  <button onClick={() => admitMember(m.pubkey)} className="sk-btn sk-btn--clay" style={{ padding: '7px 12px', fontSize: 12.5, flexShrink: 0, ...(narrow ? { minHeight: 44, boxSizing: 'border-box' } : null) }}><Icon name="check" size={14} color="var(--on-clay)" /> Approve</button>
-                  {/* TWO TAPS, LIKE THE MEMBERS LIST ALREADY REQUIRES. This ✕ sits a few pixels from
-                      Approve, and one tap on it PERMANENTLY blocks the person AND rotates every one of the
-                      church's keys — irreversible, from the screen a steward is fastest on. The members
-                      list has asked "are you sure" for this same action all along; the join queue never
-                      did. Audit 2026-09-02 #5.
-                      `confirmBlock` is shared with the members list, so opening one closes the other —
-                      two Confirms on screen at once is exactly the confusion this is meant to remove. */}
-                  {confirmBlock === m.pubkey
-                    ? <React.Fragment>
-                        <button onClick={() => block(m.pubkey)} aria-label={'Confirm: block ' + (m.name || nameHandle(m) || shortNpub(m.npub)) + ' and refuse them entry'} title="Confirm — blocks them from joining or posting, and re-keys the church" style={{ border: 'none', background: 'var(--clay-ink)', color: 'var(--on-clay)', borderRadius: 9, padding: '7px 10px', cursor: 'pointer', display: 'flex', flexShrink: 0, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>Block</button>
-                        <button onClick={() => setConfirmBlock(null)} aria-label="Cancel — leave them waiting" title="Cancel" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 9px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0 }}><Icon name="x" size={15} color="currentColor" /></button>
-                      </React.Fragment>
-                    : <button onClick={() => setConfirmBlock(m.pubkey)} aria-label={'Decline ' + (m.name || nameHandle(m) || shortNpub(m.npub)) + ' — asks you to confirm'} title="Decline — blocks this person from joining or posting" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '7px 9px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0 }}><Icon name="x" size={15} color="currentColor" /></button>}
-                  {/* WHAT HAPPENED TO THIS APPROVE, ON THIS ROW. admitMember's notice (minorNotice) was drawn only on the
-                      member list's rows, and a person waiting to join is not on that list — so a refused Approve
-                      said nothing where it was pressed (device round 2026-10-01: only the banner spoke). */}
-                  {minorNotice && minorNotice.pk === m.pubkey ? (
-                    <div role={minorNotice.tone === 'fail' ? 'alert' : 'status'} style={{ flexBasis: '100%', fontSize: 12.5, lineHeight: 1.45, padding: '9px 12px', borderRadius: 11,
-                      background: minorNotice.tone === 'fail' ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'color-mix(in oklab, var(--gold) 12%, var(--surface))',
-                      border: '1px solid ' + (minorNotice.tone === 'fail' ? 'color-mix(in oklab, var(--clay) 38%, var(--line))' : 'color-mix(in oklab, var(--gold) 34%, var(--line))'), color: 'var(--ink)' }}>
-                      {minorNotice.text}
-                    </div>
-                  ) : null}
-                </div>
-              );
-            })}
+            {pendingJoins.map(joinRow)}
             </div>
           </div>
         ) : null}
