@@ -218,3 +218,30 @@ test('at 1280px an adult row and a cleared-adult row are ONE line, at most 56px 
   }
   assert.deepEqual(errors, [], 'the console threw:\n  ' + errors.join('\n  '));
 });
+
+// Measured BEFORE this change (1e57878) in this harness: Ivy, a child, 157px (87px after) - the guardian pill and "Link parent" wrapped
+// her row to a second line, taller than the 137px she had before 1e57878. The parent controls now live in More.
+test('at 1280px a CHILD row has the parent controls off it, a More button on it, every control on one line, and is far under its old height', SKIP, async () => {
+  await setSize(1280, 900);
+  const r = await rowOf(PEOPLE.child.name, true);
+  // NOT 52 like an adult: a child carries Photo (children are photo-off by default) as well as Child / Clear / Reconnect, and
+  // those controls fill the 620px column on their own (594px measured), so the NAME takes the line above. That is the owner's
+  // call to make (move Photo / Reconnect / copy into More too); this test holds what THIS change achieved: 157px -> 87px.
+  assert.ok(r.height <= 90, `${PEOPLE.child.name}'s row is ${r.height}px tall - more than the 87px this change measured (157px before it). Buttons: ${JSON.stringify(r.buttons.map(b => [b.label.slice(0, 14), b.left, b.top]))}`);
+  const tops = r.buttons.map(b => b.top);
+  assert.ok(Math.max(...tops) - Math.min(...tops) <= 4, `the controls are not on one line: ${JSON.stringify(tops)}`);
+  assert.deepEqual(has(r, /^(Link parent|Parents)$/), [], 'the parent control is still on the child row');
+  assert.ok(!r.tags.some(t => /no guardian|parent:/.test(t)), 'a guardian pill is still on the child row: ' + JSON.stringify(r.tags));
+  const more = has(r, /^More for /);
+  assert.equal(more.length, 1, 'no More control on the child row: ' + JSON.stringify(r.buttons.map(b => b.label)));
+  assert.ok(more[0].reach > 0.9, 'More is covered by something else: reach ' + more[0].reach);
+  console.log(`    ${PEOPLE.child.name}: ${r.height}px, ${r.buttons.length} controls on one line`);
+  // and More really reaches Link parent, with the guardian state in the header
+  assert.equal(await evalIn(`(() => { const b=[...document.querySelectorAll('button')].find(x=>(x.getAttribute('aria-label')||'')==='More for ${PEOPLE.child.name}'); if(!b) return 'miss'; b.click(); return 'ok'; })()`), 'ok');
+  await sleep(600);
+  const sheet = await evalIn(`(() => { const d=document.querySelector('[role="dialog"][aria-label="More for ${PEOPLE.child.name}"]'); return d ? (d.innerText||'').replace(/\\s+/g,' ') : null; })()`);
+  assert.ok(sheet, 'More did not open the sheet');
+  assert.ok(/Link parent/i.test(sheet) && /no guardian/i.test(sheet), 'the sheet lacks Link parent or the guardian state: ' + sheet);
+  await escape();
+  assert.deepEqual(errors, [], 'the console threw:\n  ' + errors.join('\n  '));
+});

@@ -27,17 +27,17 @@ const MEMBERS = [
   { pubkey: PK.anon2, npub: 'npub1zzzzzzzzz' + 'k'.repeat(40) + 'abcdef', joined: NOW - 5 * 86400, count: 0, lastTs: 0 },
 ];
 
-function render({ nophoto = [], setNoPhoto = () => Promise.resolve(true), members = MEMBERS } = {}) {
+function renderLive({ nophoto = [], setNoPhoto = () => Promise.resolve(true), members = MEMBERS, minors = [], links = {}, delegated = false } = {}) {
   const { React, draw } = miniReact();
   const win = {
     innerWidth: 1280,
     useStewardMembers: () => members,
     useStewardGroups: () => [], useStewardNetworks: () => [], useStewardCategories: () => [],
     useStewardRosters: () => ({}), useStewardChurch: () => ({ name: 'St X', features: {} }),
-    useStewardSafeguard: () => ({ loaded: true, minorsKnown: true, clearedKnown: true, cleared: {}, minors: [], approved: [], nophoto }),
-    useStewardGuardians: () => ({ links: {}, closed: {} }),
+    useStewardSafeguard: () => ({ loaded: true, minorsKnown: true, clearedKnown: true, cleared: {}, minors, approved: [], nophoto }),
+    useStewardGuardians: () => ({ links, closed: {} }),
     usePendingJoins: () => [], usePendingGuardians: () => [],
-    Steward: { pubkey: 'zzz', setNoPhoto },
+    Steward: { pubkey: 'zzz', setNoPhoto, ...(delegated ? { actingChurch: 'c'.repeat(64) } : {}) },
     addEventListener() {}, removeEventListener() {}, dispatchEvent() {},
     localStorage: { getItem: () => null, setItem() {} },
   };
@@ -50,8 +50,9 @@ function render({ nophoto = [], setNoPhoto = () => Promise.resolve(true), member
     DismissibleNote: () => null, StewHelpLink: () => null,
     useStewDialog: () => ({ current: null }), todayISO: () => '2026-10-13',
   });
-  return draw(mod.DashMembers, {});
+  return () => draw(mod.DashMembers, {});
 }
+const render = (o) => renderLive(o)();
 
 // Member cards: the column-flex, radius-13 divs that hold no other such card.
 const isCard = (n) => n.type === 'div' && n.props && n.props.style && n.props.style.flexDirection === 'column' && n.props.style.borderRadius === 13;
@@ -141,4 +142,58 @@ test('Photo is a switch that shows its state and calls the same handler', () => 
     sw.props.onClick();
   }
   assert.deepEqual(calls, [[PK.named], []], 'the toggle must call setNoPhoto: add when on, remove when off');
+});
+
+// ── a CHILD's parent controls are in More, not on the row (owner 2026-10-13: "Parent controls should be in another menu") ──
+// The row is measured in a browser (the-member-row-is-one-line-on-the-console.test.mjs); this asserts, on the RENDERED tree
+// and through the real click path, where the controls are and that they call the same handler.
+const CHILD = PK.named, PARENT = PK.handle;
+const childRow = (o) => rowOf(render({ minors: [CHILD], ...o }), 'Persephone Wilde');
+const sheetOf = (tree) => find(tree, n => n.props && Array.isArray(n.props.actions) && n.props.actions.some(a => a.key === 'parent'))[0];
+
+test('a child row carries no Link parent / Parents button and no guardian pill, only a More button', () => {
+  for (const links of [{}, { [CHILD]: [PARENT] }]) {
+    const row = childRow({ links });
+    const labels = buttonsOf(row).map(labelOf);
+    assert.ok(!labels.some(l => /^(Link parent|Parents)$/.test(l)), 'the parent button is still on the child row: ' + JSON.stringify(labels));
+    assert.deepEqual(find(row, n => n.props && n.props['data-pill']).filter(p => /guardian|parent:/i.test(texts(p).join(' '))), [], 'a guardian pill is still on the child row');
+    const more = buttonsOf(row).filter(b => /^More for /.test(b.props['aria-label'] || ''));
+    assert.equal(more.length, 1, 'expected one More button on the child row: ' + JSON.stringify(buttonsOf(row).map(b => b.props['aria-label'] || labelOf(b))));
+    assert.ok(labels.some(l => /^Chat$/.test(l)) && labels.some(l => /^Reconnect$/.test(l)), 'another control went missing: ' + JSON.stringify(labels));
+  }
+});
+
+test('an adult row gets no More button (nothing in the sheet that the row does not already offer)', () => {
+  const row = rowOf(render({ minors: [CHILD] }), 'Tobias Ashcroft');
+  assert.deepEqual(buttonsOf(row).filter(b => /^More for /.test(b.props['aria-label'] || '')), []);
+});
+
+test('More opens the sheet; Link parent / Parents is in it and opens the guardian picker for THAT child; the header says the guardian state', () => {
+  for (const [links, label, fact] of [[{}, 'Link parent', /no guardian/], [{ [CHILD]: [PARENT] }, 'Parents', /parent:\s+Tobias Ashcroft/]]) {
+    const live = renderLive({ minors: [CHILD], links });
+    let tree = live();
+    assert.equal(sheetOf(tree), undefined, 'the sheet is open before More is pressed');
+    buttonsOf(rowOf(tree, 'Persephone Wilde')).find(b => /^More for /.test(b.props['aria-label'] || '')).props.onClick();
+    tree = live();
+    const sheet = sheetOf(tree);
+    assert.ok(sheet, 'More did not open the sheet with a parent action');
+    const act = sheet.props.actions.find(a => a.key === 'parent');
+    assert.equal(act.label, label);
+    assert.ok(fact.test(sheet.props.facts.map(f => texts(f).join(' ')).join(' | ')), 'the sheet header does not state the guardian state: ' + sheet.props.facts.map(f => texts(f).join(' ')));
+    assert.equal(find(tree, n => n.props && n.props.child === CHILD && n.props.onLink).length, 0, 'the picker was open before the action ran');
+    act.onPick();
+    const picker = find(live(), n => n.props && n.props.child === CHILD && typeof n.props.onLink === 'function');
+    assert.equal(picker.length, 1, 'picking Link parent in More did not open the guardian picker for the child');
+  }
+});
+
+test('a delegated steward (who cannot write guardians) is not offered the parent action in More', () => {
+  const live = renderLive({ minors: [CHILD], delegated: true });
+  let tree = live();
+  const row = rowOf(tree, 'Persephone Wilde');
+  assert.ok(!buttonsOf(row).map(labelOf).some(l => /^(Link parent|Parents)$/.test(l)));
+  buttonsOf(row).find(b => /^More for /.test(b.props['aria-label'] || '')).props.onClick();
+  tree = live();
+  const sheet = find(tree, n => n.props && Array.isArray(n.props.actions))[0];
+  assert.ok(sheet && !sheet.props.actions.some(a => a.key === 'parent'), 'a delegated steward is offered the parent action');
 });

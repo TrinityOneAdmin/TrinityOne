@@ -7579,8 +7579,9 @@ function DashMembers() {
               reserved to the church key), so for them the pill is the only place the fact appears and it stays. */}
           {delegated && minorsSet.has(m.pubkey) ? <SkPill tint="clay">child</SkPill> : null}
           {delegated && approvedSet.has(m.pubkey) ? <SkPill tint="gold">cleared for youth</SkPill> : null}
-          {(guardians[m.pubkey] && guardians[m.pubkey].length) ? <SkPill tint="sage">parent: {guardians[m.pubkey].map(p => nameByPub[p] || 'linked').join(', ')}</SkPill> : null}
-          {minorsSet.has(m.pubkey) && !(guardians[m.pubkey] && guardians[m.pubkey].length) ? <SkPill tint="ink">no guardian</SkPill> : null}
+          {/* A CHILD'S GUARDIAN STATE ("parent: …" / "no guardian") IS NOT ON THE ROW. It made a child's row wrap to a
+              second line (137px, then 157px against an adult's 52px). It is in the More sheet's header, where
+              memberFacts() draws it, and the Link parent / Parents action sits beneath it. */}
           {parentSet.has(m.pubkey) ? <SkPill tint="sage">parent account</SkPill> : null}
           {/* Only data an older console wrote, or a re-seat carried across, can produce this now — which is
               exactly why it must be visible: the row is the only place a steward learns of a historic link.
@@ -7600,10 +7601,6 @@ function DashMembers() {
             {minorsSet.has(m.pubkey) ? 'Child ✓' : 'Child'}</button>
           <button onClick={() => toggleApproved(m.pubkey)} aria-label={(approvedSet.has(m.pubkey) ? 'Remove youth clearance from ' : 'Clear for youth work: ') + (nameByPub[m.pubkey] || 'this member') + (approvedSet.has(m.pubkey) ? '' : ' — this also lets them message a child privately')} title={approvedSet.has(m.pubkey) ? 'Remove youth clearance' : 'Cleared to contact youth — mirror your church’s cleared-worker list. Only cleared adults can DM a child'} style={{ border: '1px solid ' + (approvedSet.has(m.pubkey) ? 'color-mix(in oklab, var(--gold) 45%, var(--line))' : 'var(--line)'), background: approvedSet.has(m.pubkey) ? 'color-mix(in oklab, var(--gold) 14%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: approvedSet.has(m.pubkey) ? '#8a6717' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
             {approvedSet.has(m.pubkey) ? 'Cleared ✓' : 'Clear for youth'}</button>
-          {minorsSet.has(m.pubkey) ? (
-            <button onClick={() => setLinkChild(m.pubkey)} title="Link this child to a parent / guardian — they can always reach each other and the parent can collect them at check-in" style={{ border: '1px solid ' + ((guardians[m.pubkey] && guardians[m.pubkey].length) ? 'color-mix(in oklab, var(--sage) 40%, var(--line))' : 'var(--line)'), background: (guardians[m.pubkey] && guardians[m.pubkey].length) ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--sage-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
-              {(guardians[m.pubkey] && guardians[m.pubkey].length) ? 'Parents' : 'Link parent'}</button>
-          ) : null}
           </React.Fragment>) : null}
           {stewCapState('members').allowed ? (
           <button onClick={() => setReseatFor(m.pubkey)} title="They lost their 12 words and are back on a new phone with a new key — put them back in their place here" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
@@ -7618,6 +7615,13 @@ function DashMembers() {
               <span aria-hidden="true" data-switch={nophotoSet.has(m.pubkey) ? 'off' : 'on'} style={{ position: 'relative', display: 'inline-block', width: 26, height: 14, borderRadius: 7, flexShrink: 0, background: nophotoSet.has(m.pubkey) ? '#b9b3a8' : '#4f8a5b' }}>
                 <span style={{ position: 'absolute', top: 2, left: nophotoSet.has(m.pubkey) ? 2 : 14, width: 10, height: 10, borderRadius: 5, background: '#fff' }} />
               </span></button>
+          ) : null}
+          {/* PARENT CONTROLS LIVE HERE. "Link parent" / "Parents" is an action in this sheet for a child
+              (memberActions, same handler), and the sheet's header carries "parent: …" / "no guardian". Children only: an adult's
+              sheet holds nothing their row does not already offer. */}
+          {minorsSet.has(m.pubkey) ? (
+            <button onClick={() => setMoreFor(m.pubkey)} aria-label={'More for ' + label} aria-haspopup="dialog" aria-expanded={moreFor === m.pubkey ? 'true' : 'false'} title="More: parent / guardian" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', fontFamily: 'var(--font-ui)' }}>
+              <Icon name="dots" size={15} color="currentColor" /></button>
           ) : null}
         </div>
         </div>
