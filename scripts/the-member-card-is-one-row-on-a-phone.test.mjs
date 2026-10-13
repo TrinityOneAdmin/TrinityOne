@@ -392,10 +392,13 @@ test('4. pressing ⋯ on an adult opens their sheet with the card\'s actions; "M
 // ── 5. the desktop row is the row it was ──────────────────────────────────────────────────────────────────
 // Recorded at 1280x900 on 74eade2, before the change, from this harness: the accessible names of every
 // control on the row, in order, and its pills. The phone row must not have reached the desktop.
+// UPDATED 2026-10-13 (member-row compaction, deliberately): no 'joined' / 'child' / 'cleared for youth' pills (the Child ✓ /
+// Cleared ✓ buttons already say it; delegated stewards, who have no such buttons, keep the pills), and the photo
+// control is 'Photo: off' (a switch, aria-label) instead of 'Photos off ✓'. Controls and their ORDER are unchanged.
 const DESKTOP = {
-  [PEOPLE.adult.name]:   { tags: ['joined'], buttons: ['Copy npub', 'Block', 'Chat', 'Mark as a child: Persephone Wilde', 'Clear for youth work: Persephone Wilde — this also lets them message a child privately', 'Reconnect'] },
-  [PEOPLE.child.name]:   { tags: ['joined', 'child', 'no guardian'], buttons: ['Copy npub', 'Block', 'Chat', 'Unmark as a child: Ivy Whitlock', 'Clear for youth work: Ivy Whitlock — this also lets them message a child privately', 'Link parent', 'Reconnect', 'Photos off ✓'] },
-  [PEOPLE.cleared.name]: { tags: ['cleared for youth'], buttons: ['Copy npub', 'Block', 'Chat', 'Mark as a child: Ruth Whitlock', 'Remove youth clearance from Ruth Whitlock', 'Reconnect'] },
+  [PEOPLE.adult.name]:   { tags: [], buttons: ['Copy npub', 'Block', 'Chat', 'Mark as a child: Persephone Wilde', 'Clear for youth work: Persephone Wilde — this also lets them message a child privately', 'Reconnect'] },
+  [PEOPLE.child.name]:   { tags: ['no guardian'], buttons: ['Copy npub', 'Block', 'Chat', 'Unmark as a child: Ivy Whitlock', 'Clear for youth work: Ivy Whitlock — this also lets them message a child privately', 'Link parent', 'Reconnect', 'Photo: off'] },
+  [PEOPLE.cleared.name]: { tags: [], buttons: ['Copy npub', 'Block', 'Chat', 'Mark as a child: Ruth Whitlock', 'Remove youth clearance from Ruth Whitlock', 'Reconnect'] },
 };
 test('5. at 1280 wide the member row is the desktop card it was: the same controls in the same order, the same pills, no ⋯', SKIP, async () => {
   await setSize(DW, DH);

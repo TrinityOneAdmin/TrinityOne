@@ -7537,10 +7537,13 @@ function DashMembers() {
       );
     }
     return (
-      <div key={m.pubkey} style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '12px 14px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid var(--line)', opacity: inactive ? 0.62 : 1 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+      <div key={m.pubkey} style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '7px 12px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid var(--line)', opacity: inactive ? 0.62 : 1 }}>
+        {/* ONE ROW (owner spec, 2026-10-13): avatar · name · the controls · copy + Block. The row WRAPS rather than
+            squeezing: the name block keeps a 150px floor, so when the controls will not fit beside it they drop to a
+            second line whole. Plain flex-wrap and px values only (no var() in anything that carries the layout). */}
+        <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '6px 10px', minWidth: 0 }}>
           <SkBadge initials={initials} av={m.av} pubkey={m.pubkey} size={36} radius={11} accent={SK_TINT[named ? 'gold' : 'sage'].fg} />
-          <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ flex: '1 1 90px', minWidth: 0 }}>
             {/* THE NAME WINS THE WIDTH FIGHT. At 360px the name shrank to "R…" while the handle beside it
                 showed in full (audit 2026-09-19 §E, full/portrait/07-members.png): the name was the only
                 flex item allowed to shrink. Now the name never shrinks below its own text (capped at the row
@@ -7552,11 +7555,14 @@ function DashMembers() {
               {nameHandle(m)
                 ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 11.5, color: 'var(--sage-ink)', fontWeight: 700, flexShrink: 1, minWidth: 0 }} title={m.nip05 || m.npub}>
                     <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>@{nameHandle(m)}</span> <Icon name="check" size={11} stroke={3} color="var(--sage)" style={{ flexShrink: 0 }} /></span>
-                : <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 1, minWidth: 0 }} title={m.npub}>{shortNpub(m.npub)}</span>}
+                : (!named
+                    /* No nicename AND no name: the short npub is the ONLY thing telling two Anonymous rows apart, so it stays. */
+                    ? <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 1, minWidth: 0 }} title={m.npub}>{shortNpub(m.npub)}</span>
+                    : null)}
             </div>
-            <div style={{ fontSize: 12.5, color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.count > 0 ? `${m.count} message${m.count === 1 ? '' : 's'} · last ${ago(m.lastTs)}` : `joined ${ago(m.joined)} · hasn’t posted yet`}</div>
+            {m.count > 0 ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{`${m.count} message${m.count === 1 ? '' : 's'} · last ${ago(m.lastTs)}`}</div> : null}
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, order: 3 }}>
             <button onClick={() => doCopy(m.npub)} title="Copy npub" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', fontFamily: 'var(--font-ui)' }}>
               <Icon name={copied === m.npub ? 'check' : 'link'} size={15} color={copied === m.npub ? 'var(--sage)' : 'currentColor'} /></button>
             {confirmBlock === m.pubkey
@@ -7566,12 +7572,13 @@ function DashMembers() {
                 </React.Fragment>
               : <button onClick={() => setConfirmBlock(m.pubkey)} title="Remove / block this member" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 4, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}><Icon name="shield" size={15} color="currentColor" />Block</button>}
           </div>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap', paddingLeft: 48 }}>
-          {inactive ? <SkPill tint="ink">inactive</SkPill> : (m.count === 0 ? <SkPill tint="ink">joined</SkPill> : null)}
-          {!named ? <SkPill tint="sage">anonymous</SkPill> : null}
-          {minorsSet.has(m.pubkey) ? <SkPill tint="clay">child</SkPill> : null}
-          {approvedSet.has(m.pubkey) ? <SkPill tint="gold">cleared for youth</SkPill> : null}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', flex: '0 1 auto', minWidth: 0, order: 2 }}>
+          {inactive ? <SkPill tint="ink">inactive</SkPill> : null}
+          {/* The Child / Cleared buttons below already say "Child ✓" / "Cleared ✓", so the pills would say it twice on
+              a row that has to stay one line. A delegated steward has NO such buttons (they write minors:/approved:,
+              reserved to the church key), so for them the pill is the only place the fact appears and it stays. */}
+          {delegated && minorsSet.has(m.pubkey) ? <SkPill tint="clay">child</SkPill> : null}
+          {delegated && approvedSet.has(m.pubkey) ? <SkPill tint="gold">cleared for youth</SkPill> : null}
           {(guardians[m.pubkey] && guardians[m.pubkey].length) ? <SkPill tint="sage">parent: {guardians[m.pubkey].map(p => nameByPub[p] || 'linked').join(', ')}</SkPill> : null}
           {minorsSet.has(m.pubkey) && !(guardians[m.pubkey] && guardians[m.pubkey].length) ? <SkPill tint="ink">no guardian</SkPill> : null}
           {parentSet.has(m.pubkey) ? <SkPill tint="sage">parent account</SkPill> : null}
@@ -7579,8 +7586,8 @@ function DashMembers() {
               exactly why it must be visible: the row is the only place a steward learns of a historic link.
               Unmark and re-mark them to clear it, or unlink them from the child's row. */}
           {minorsSet.has(m.pubkey) && parentSet.has(m.pubkey) ? <SkPill tint="clay">child · still listed as a guardian</SkPill> : null}
-          <button onClick={() => window.dispatchEvent(new CustomEvent('steward-open-dm', { detail: { pubkey: m.pubkey, npub: m.npub, name: label, nip05: m.nip05 } }))} title="Message privately" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
-            <Icon name="chat" size={15} color="currentColor" /> Chat</button>
+          <button onClick={() => window.dispatchEvent(new CustomEvent('steward-open-dm', { detail: { pubkey: m.pubkey, npub: m.npub, name: label, nip05: m.nip05 } }))} title="Message privately" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--clay-ink)', display: 'flex', alignItems: 'center', gap: 0, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
+            Chat</button>
           {/* WHAT EACH CONTROL ACTUALLY NEEDS, rather than "are you the owner". One `!delegated` wrapper used to
               hide all five of these from every delegated steward, including the two the relay would have
               accepted: Reconnect is granted by `members` (gateway.mjs, RESEAT_D) and photo suppression by
@@ -7588,32 +7595,39 @@ function DashMembers() {
               re-seat people who lost their words — the capability's own description says so — and the button
               was not on their screen. The other three write minors:/approved:/guardians:, which the relay
               really does reserve to the church key, so they stay hidden and are the only ones that should be. */}
-          {minorNotice && minorNotice.pk === m.pubkey ? (
-            <div role={minorNotice.tone === 'fail' ? 'alert' : 'status'} style={{ flexBasis: '100%', fontSize: 12.5, lineHeight: 1.45, padding: '9px 12px', borderRadius: 11,
+          {!delegated ? (<React.Fragment>
+          <button onClick={() => toggleMinor(m.pubkey)} aria-label={(minorsSet.has(m.pubkey) ? 'Unmark as a child: ' : 'Mark as a child: ') + (nameByPub[m.pubkey] || 'this member')} title={minorsSet.has(m.pubkey) ? 'Unmark as a child' : 'Mark as a child — they’ll only see child-safe groups, and adults can only DM them if cleared for youth'} style={{ border: '1px solid ' + (minorsSet.has(m.pubkey) ? 'color-mix(in oklab, var(--clay) 40%, var(--line))' : 'var(--line)'), background: minorsSet.has(m.pubkey) ? 'color-mix(in oklab, var(--clay) 12%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: minorsSet.has(m.pubkey) ? 'var(--clay-ink)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
+            {minorsSet.has(m.pubkey) ? 'Child ✓' : 'Child'}</button>
+          <button onClick={() => toggleApproved(m.pubkey)} aria-label={(approvedSet.has(m.pubkey) ? 'Remove youth clearance from ' : 'Clear for youth work: ') + (nameByPub[m.pubkey] || 'this member') + (approvedSet.has(m.pubkey) ? '' : ' — this also lets them message a child privately')} title={approvedSet.has(m.pubkey) ? 'Remove youth clearance' : 'Cleared to contact youth — mirror your church’s cleared-worker list. Only cleared adults can DM a child'} style={{ border: '1px solid ' + (approvedSet.has(m.pubkey) ? 'color-mix(in oklab, var(--gold) 45%, var(--line))' : 'var(--line)'), background: approvedSet.has(m.pubkey) ? 'color-mix(in oklab, var(--gold) 14%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: approvedSet.has(m.pubkey) ? '#8a6717' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
+            {approvedSet.has(m.pubkey) ? 'Cleared ✓' : 'Clear for youth'}</button>
+          {minorsSet.has(m.pubkey) ? (
+            <button onClick={() => setLinkChild(m.pubkey)} title="Link this child to a parent / guardian — they can always reach each other and the parent can collect them at check-in" style={{ border: '1px solid ' + ((guardians[m.pubkey] && guardians[m.pubkey].length) ? 'color-mix(in oklab, var(--sage) 40%, var(--line))' : 'var(--line)'), background: (guardians[m.pubkey] && guardians[m.pubkey].length) ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--sage-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
+              {(guardians[m.pubkey] && guardians[m.pubkey].length) ? 'Parents' : 'Link parent'}</button>
+          ) : null}
+          </React.Fragment>) : null}
+          {stewCapState('members').allowed ? (
+          <button onClick={() => setReseatFor(m.pubkey)} title="They lost their 12 words and are back on a new phone with a new key — put them back in their place here" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
+            Reconnect</button>
+          ) : null}
+          {stewCapState('safeguarding').allowed && photosAllowed && (m.hasPhoto || nophotoSet.has(m.pubkey)) ? (
+            /* "Photo" + a small switch: ON = this member's photo is shown, OFF = a steward has turned it off. Same
+               handler as before (toggleNoPhoto); the tooltip still says in full what a tap does. The switch is drawn
+               with plain px/colour values and NO var() in its geometry. */
+            <button role="switch" aria-checked={nophotoSet.has(m.pubkey) ? 'false' : 'true'} aria-label={nophotoSet.has(m.pubkey) ? 'Photo: off' : 'Photo: on'} onClick={() => toggleNoPhoto(m.pubkey)} title={nophotoSet.has(m.pubkey) ? 'Photos are off for this member — your church sees their symbol/initial, and they can’t set a new photo. Tap to allow photos again.' : 'Photos are on. Tap to turn off photos for this member — your church sees their symbol/initial, and they can’t set a photo until you allow it again.'} style={{ border: '1px solid ' + (nophotoSet.has(m.pubkey) ? 'color-mix(in oklab, var(--clay) 40%, var(--line))' : 'var(--line)'), background: nophotoSet.has(m.pubkey) ? 'color-mix(in oklab, var(--clay) 12%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '6px 8px', cursor: 'pointer', color: nophotoSet.has(m.pubkey) ? 'var(--clay-ink)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 7, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
+              Photo
+              <span aria-hidden="true" data-switch={nophotoSet.has(m.pubkey) ? 'off' : 'on'} style={{ position: 'relative', display: 'inline-block', width: 26, height: 14, borderRadius: 7, flexShrink: 0, background: nophotoSet.has(m.pubkey) ? '#b9b3a8' : '#4f8a5b' }}>
+                <span style={{ position: 'absolute', top: 2, left: nophotoSet.has(m.pubkey) ? 2 : 14, width: 10, height: 10, borderRadius: 5, background: '#fff' }} />
+              </span></button>
+          ) : null}
+        </div>
+        </div>
+        {minorNotice && minorNotice.pk === m.pubkey ? (
+            <div role={minorNotice.tone === 'fail' ? 'alert' : 'status'} style={{ fontSize: 12.5, lineHeight: 1.45, padding: '9px 12px', borderRadius: 11,
               background: minorNotice.tone === 'fail' ? 'color-mix(in oklab, var(--clay) 10%, var(--surface))' : 'color-mix(in oklab, var(--gold) 12%, var(--surface))',
               border: '1px solid ' + (minorNotice.tone === 'fail' ? 'color-mix(in oklab, var(--clay) 38%, var(--line))' : 'color-mix(in oklab, var(--gold) 34%, var(--line))'), color: 'var(--ink)' }}>
               {minorNotice.text}
             </div>
           ) : null}
-          {!delegated ? (<React.Fragment>
-          <button onClick={() => toggleMinor(m.pubkey)} aria-label={(minorsSet.has(m.pubkey) ? 'Unmark as a child: ' : 'Mark as a child: ') + (nameByPub[m.pubkey] || 'this member')} title={minorsSet.has(m.pubkey) ? 'Unmark as a child' : 'Mark as a child — they’ll only see child-safe groups, and adults can only DM them if cleared for youth'} style={{ border: '1px solid ' + (minorsSet.has(m.pubkey) ? 'color-mix(in oklab, var(--clay) 40%, var(--line))' : 'var(--line)'), background: minorsSet.has(m.pubkey) ? 'color-mix(in oklab, var(--clay) 12%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: minorsSet.has(m.pubkey) ? 'var(--clay-ink)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
-            <Icon name="pray" size={14} color="currentColor" /> {minorsSet.has(m.pubkey) ? 'Child ✓' : 'Child'}</button>
-          <button onClick={() => toggleApproved(m.pubkey)} aria-label={(approvedSet.has(m.pubkey) ? 'Remove youth clearance from ' : 'Clear for youth work: ') + (nameByPub[m.pubkey] || 'this member') + (approvedSet.has(m.pubkey) ? '' : ' — this also lets them message a child privately')} title={approvedSet.has(m.pubkey) ? 'Remove youth clearance' : 'Cleared to contact youth — mirror your church’s cleared-worker list. Only cleared adults can DM a child'} style={{ border: '1px solid ' + (approvedSet.has(m.pubkey) ? 'color-mix(in oklab, var(--gold) 45%, var(--line))' : 'var(--line)'), background: approvedSet.has(m.pubkey) ? 'color-mix(in oklab, var(--gold) 14%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: approvedSet.has(m.pubkey) ? '#8a6717' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
-            <Icon name="shield" size={14} color="currentColor" /> {approvedSet.has(m.pubkey) ? 'Cleared ✓' : 'Clear for youth'}</button>
-          {minorsSet.has(m.pubkey) ? (
-            <button onClick={() => setLinkChild(m.pubkey)} title="Link this child to a parent / guardian — they can always reach each other and the parent can collect them at check-in" style={{ border: '1px solid ' + ((guardians[m.pubkey] && guardians[m.pubkey].length) ? 'color-mix(in oklab, var(--sage) 40%, var(--line))' : 'var(--line)'), background: (guardians[m.pubkey] && guardians[m.pubkey].length) ? 'color-mix(in oklab, var(--sage) 10%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: 'var(--sage-ink)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
-              <Icon name="users" size={14} color="currentColor" /> {(guardians[m.pubkey] && guardians[m.pubkey].length) ? 'Parents' : 'Link parent'}</button>
-          ) : null}
-          </React.Fragment>) : null}
-          {stewCapState('members').allowed ? (
-          <button onClick={() => setReseatFor(m.pubkey)} title="They lost their 12 words and are back on a new phone with a new key — put them back in their place here" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
-            <Icon name="swap" size={14} color="currentColor" /> Reconnect</button>
-          ) : null}
-          {stewCapState('safeguarding').allowed && photosAllowed && (m.hasPhoto || nophotoSet.has(m.pubkey)) ? (
-            <button onClick={() => toggleNoPhoto(m.pubkey)} title={nophotoSet.has(m.pubkey) ? 'Photos are off for this member — your church sees their symbol/initial, and they can’t set a new photo. Tap to allow photos again.' : 'Turn off photos for this member — your church sees their symbol/initial, and they can’t set a photo until you allow it again.'} style={{ border: '1px solid ' + (nophotoSet.has(m.pubkey) ? 'color-mix(in oklab, var(--clay) 40%, var(--line))' : 'var(--line)'), background: nophotoSet.has(m.pubkey) ? 'color-mix(in oklab, var(--clay) 12%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '6px 10px', cursor: 'pointer', color: nophotoSet.has(m.pubkey) ? 'var(--clay-ink)' : 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
-              <Icon name="refresh" size={14} color="currentColor" /> {nophotoSet.has(m.pubkey) ? 'Photos off ✓' : 'Turn off photo'}</button>
-          ) : null}
-        </div>
       </div>
     );
   };
