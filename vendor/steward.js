@@ -15478,11 +15478,14 @@ zoo`.split("\n");
       return {};
     }
   }
-  function _pendingRotAdd(kind, cp, drop) {
+  function _pendingRotAdd(kind, cp, drop, why) {
     try {
       if (!cp) return;
       const o = _pendingRotAll(cp), cur = o[kind] || { drop: [] };
-      cur.drop = [.../* @__PURE__ */ new Set([...cur.drop || [], ...(drop || []).map((p) => String(p || "").toLowerCase()).filter(Boolean)])];
+      const add2 = (drop || []).map((p) => String(p || "").toLowerCase()).filter(Boolean);
+      cur.drop = [.../* @__PURE__ */ new Set([...cur.drop || [], ...add2])];
+      cur.why = cur.why || {};
+      for (const p of add2) cur.why[p] = why === "remove" ? "remove" : cur.why[p] || "block";
       o[kind] = cur;
       lsSet(PENDINGROT_LS + cp, JSON.stringify(o));
     } catch (x) {
@@ -16925,6 +16928,14 @@ zoo`.split("\n");
   function _tokIsFresh(t, since) {
     if (!t || !t.cp || t.cp !== (actingChurch || pub) || t.epoch !== _keyReadEpoch) return false;
     const s = t.sub;
+    if (s && s.relaySet !== void 0) {
+      let now_ = "";
+      try {
+        now_ = relays().slice().sort().join(" ");
+      } catch (e) {
+      }
+      if (s.relaySet !== now_) return false;
+    }
     return !!s && s.live === true && s.genuine === true && (!since || s.at > since);
   }
   function _listIsFresh(list, since) {
@@ -17010,14 +17021,16 @@ zoo`.split("\n");
   }
   var _pendingRotBusy = false;
   var _pendingRotAgain = false;
-  async function _runPendingRotations() {
+  var _lastMembers = { cp: "", pubs: [] };
+  async function _runPendingRotations(explicit) {
     try {
-      return await _runPendingRotationsNow();
+      return await _runPendingRotationsNow(!!explicit);
     } catch (e) {
       _pendingRotBusy = false;
     }
   }
-  async function _runPendingRotationsNow() {
+  var _lcPk = (x) => String(x || "").toLowerCase();
+  async function _runPendingRotationsNow(explicit) {
     const cp = actingChurch || pub;
     if (!cp || actingChurch) return;
     if (_pendingRotBusy) {
@@ -17025,25 +17038,65 @@ zoo`.split("\n");
       return;
     }
     const all = _pendingRotAll(cp);
-    if (!Object.keys(all).length) return;
+    if (!Object.keys(all).length) {
+      if (explicit) {
+        try {
+          window.dispatchEvent(new CustomEvent("steward-rotation-done", { detail: { kind: "", left: 0 } }));
+        } catch (e) {
+        }
+      }
+      return;
+    }
     const S = typeof window !== "undefined" && window.Steward || null;
     if (!S) return;
     _pendingRotBusy = true;
     try {
-      for (const kind of ["care", "media", "name"]) {
+      for (const kind of Object.keys(all)) {
         const p = all[kind];
         if (!p) continue;
         if (!_isRelayAuthed()) continue;
+        const room = kind.indexOf("room:") === 0 ? kind.slice(5) : "";
         if (kind === "care" && !_careKeyFresh) continue;
         if (kind === "media" && !_mediaKeyFresh) continue;
         if (kind === "name" && !_nameKeyChecked) continue;
-        const drop = (p.drop || []).map((x) => String(x || "").toLowerCase());
-        const keepIf = (h) => drop.indexOf(String(h || "").toLowerCase()) === -1;
+        if (room && !((_skeys[room] || []).length && _senvMine[room] === true)) continue;
+        if (!room && kind !== "care" && kind !== "media" && kind !== "name") {
+          _pendingRotClear(kind, cp);
+          continue;
+        }
+        if (_localBlockedAt === 0) continue;
+        const why = p.why || {};
+        const was = (p.drop || []).map(_lcPk);
+        if (was.some((pk) => why[pk] === "remove") && !_careRosterKnown) continue;
+        const drop = was.filter((pk) => why[pk] === "remove" ? !_careRoster.has(pk) : _localBlocked.has(pk));
+        if (drop.length !== was.length) {
+          if (!drop.length) {
+            _pendingRotClear(kind, cp);
+            try {
+              window.dispatchEvent(new CustomEvent("steward-rotation-done", { detail: { kind, left: Object.keys(_pendingRotAll(cp)).length } }));
+            } catch (e) {
+            }
+            continue;
+          }
+          try {
+            const o = _pendingRotAll(cp);
+            if (o[kind]) {
+              o[kind].drop = drop;
+              lsSet(PENDINGROT_LS + cp, JSON.stringify(o));
+            }
+          } catch (e) {
+          }
+        }
+        const keepIf = (h) => drop.indexOf(_lcPk(h)) === -1;
         let r = null;
         try {
           if (kind === "care") r = await S.rotateCareKey([], [], { keepIf, drop });
           else if (kind === "media") r = await S.rotateMediaKey([], [], { keepIf, drop });
-          else r = await S.ensureNameKeyForMembers(Object.keys(_nameKeyDocKeys || {}).filter(keepIf), [], { rotate: true, drop });
+          else if (room) r = await S.publishGroupKey(room, [], { rotate: true, keepIf, background: true });
+          else {
+            const known = _lastMembers.cp === cp ? _lastMembers.pubs : [];
+            r = await S.ensureNameKeyForMembers([...new Set([...Object.keys(_nameKeyDocKeys || {}), ...known].map(_lcPk))].filter(keepIf), [], { rotate: true, drop });
+          }
         } catch (e) {
           r = false;
         }
@@ -20322,7 +20375,7 @@ zoo`.split("\n");
       const _opt = arguments[2] || {}, _drop = Array.isArray(_opt.drop) ? _opt.drop : [];
       if (!_isRelayAuthed() || !_mediaKeyFresh) {
         try {
-          _pendingRotAdd("media", pub0, _drop);
+          _pendingRotAdd("media", pub0, _drop, _opt.why);
         } catch (x) {
         }
         return { pending: true };
@@ -20330,7 +20383,7 @@ zoo`.split("\n");
       if (!_mediaKeyHex) {
         if (_mediaKeyChecked && !_mediaKeyDocKeys) return { rotated: false, reason: "no sermon key yet" };
         try {
-          _pendingRotAdd("media", pub0, _drop);
+          _pendingRotAdd("media", pub0, _drop, _opt.why);
         } catch (x) {
         }
         return { pending: true };
@@ -20544,7 +20597,7 @@ zoo`.split("\n");
       if (!sk || !cp || !churchPub) return false;
       if (!_careKeyFresh || !_isRelayAuthed()) {
         try {
-          _pendingRotAdd("care", cp, _drop);
+          _pendingRotAdd("care", cp, _drop, _opt.why);
         } catch (x) {
         }
         return { pending: true };
@@ -20552,7 +20605,7 @@ zoo`.split("\n");
       if (!_careKeyHex) {
         if (_careKeyChecked && !_careKeyDocKeys) return { rotated: false, reason: "no care key yet" };
         try {
-          _pendingRotAdd("care", cp, _drop);
+          _pendingRotAdd("care", cp, _drop, _opt.why);
         } catch (x) {
         }
         return { pending: true };
@@ -22156,7 +22209,7 @@ zoo`.split("\n");
       if (!_nameKeyChecked || !_isRelayAuthed()) {
         if (opts.rotate) {
           try {
-            _pendingRotAdd("name", cp, Array.isArray(opts.drop) ? opts.drop : []);
+            _pendingRotAdd("name", cp, Array.isArray(opts.drop) ? opts.drop : [], opts.why);
           } catch (x) {
           }
           return Promise.resolve({ pending: true });
@@ -25221,6 +25274,10 @@ zoo`.split("\n");
         } catch {
         }
         onMembers(arr);
+        try {
+          if (cp0 === (actingChurch || pub)) _lastMembers = { cp: cp0, pubs: arr.map((m) => m.pubkey).filter(Boolean) };
+        } catch (e) {
+        }
       };
       const emit = () => {
         if (emitTimer) return;
@@ -25328,7 +25385,7 @@ zoo`.split("\n");
         }
       };
       _membersReask.add(reask);
-      const stopRead = actingChurch ? () => {
+      const openRead = () => actingChurch ? () => {
       } : _freshDocRead(
         cp0,
         [MEMBER_D + cp0],
@@ -25336,6 +25393,10 @@ zoo`.split("\n");
         () => {
           tok.genuine = true;
           tok.at = Date.now();
+          try {
+            tok.relaySet = relays().slice().sort().join(" ");
+          } catch (e) {
+          }
           if (emitTimer) {
             try {
               clearTimeout(emitTimer);
@@ -25351,6 +25412,18 @@ zoo`.split("\n");
         // is down. With a relay down this list is never fresh, so Block and Remove keep the floor (round 3c) and drop nobody.
         { everyRelay: true }
       );
+      let stopRead = openRead();
+      const onRelays = () => {
+        try {
+          stopRead();
+        } catch (e) {
+        }
+        stopRead = openRead();
+      };
+      try {
+        if (typeof window !== "undefined" && window.addEventListener) window.addEventListener("steward-relays", onRelays);
+      } catch (e) {
+      }
       const reseatSub = pool.subscribeMany(relays(), [{ kinds: [30078], authors: [pub], "#t": [NET] }, { kinds: [30078], "#church": [pub], "#t": [NET] }], {
         onevent(e) {
           const d = (e.tags.find((t) => t[0] === "d") || [])[1] || "";
@@ -25391,6 +25464,10 @@ zoo`.split("\n");
         tok.live = false;
         try {
           stopRead();
+        } catch {
+        }
+        try {
+          window.removeEventListener("steward-relays", onRelays);
         } catch {
         }
         _memberEmitters.delete(emit);
@@ -25657,14 +25734,14 @@ zoo`.split("\n");
       if (!_isRelayAuthed()) return false;
       return kind === "care" ? _careKeyFresh : kind === "media" ? _mediaKeyFresh : kind === "name" ? _nameKeyChecked : false;
     },
-    rememberRotation(kind, drop) {
+    rememberRotation(kind, drop, why) {
       try {
-        _pendingRotAdd(kind, actingChurch || pub, drop || []);
+        _pendingRotAdd(kind, actingChurch || pub, drop || [], why);
       } catch (e) {
       }
     },
     retryPendingRotations() {
-      return _runPendingRotations();
+      return _runPendingRotations(true);
     },
     pendingRotations() {
       return Object.keys(_pendingRotAll(actingChurch || pub));

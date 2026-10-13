@@ -6641,6 +6641,8 @@ function rotateChurchKeys({ memberPubs, namePubs, keepKr, keepKnown, keepOnly, g
   } : undefined;
   // WHOM THIS ROTATION TAKES OUT (round 3e): remembered with it if it has to wait — see the engine's PENDINGROT_LS.
   const drop = [dropPk || goingPk].filter(Boolean);
+  // …and WHY (round 3f, P3): a Block or a delegate's removal — re-checked against the lists before a remembered one runs
+  const why = dropPk ? 'block' : 'remove';
   // WAIT, BRIEFLY, FOR THE KEY READS (round 3e, MED 1). In a console's first seconds, and after a dropped connection,
   // the care, sermon and name reads have not settled, and a rotation must not run from what this device last held
   // (round 3d). Up to 10 s for all three (Steward.keysFresh) covers an ordinary open; past that the engine REMEMBERS the
@@ -6654,10 +6656,10 @@ function rotateChurchKeys({ memberPubs, namePubs, keepKr, keepKnown, keepOnly, g
     // enough for the envelope to be refused (measured: ~723 members for care) the steward saw "blocked"
     // while the member kept the key. Nothing said otherwise.
     const rotations = [];
-    if (window.Steward.rotateCareKey) rotations.push(Promise.resolve(window.Steward.rotateCareKey(memberPubs, stewardPubs || [], { keepIf, drop })).then(r => ['the care key', r]));
+    if (window.Steward.rotateCareKey) rotations.push(Promise.resolve(window.Steward.rotateCareKey(memberPubs, stewardPubs || [], { keepIf, drop, why })).then(r => ['the care key', r, 'care']));
     // `stewardRoster` — a rotation rewrites the whole recipient list, so without it blocking one member
     // would take the sermon key away from every delegated steward. Same list rotateCareKey gets above.
-    if (window.Steward.rotateMediaKey) rotations.push(Promise.resolve(window.Steward.rotateMediaKey(memberPubs, stewardPubs || [], { keepIf, drop })).then(r => ['the sermon key', r]));
+    if (window.Steward.rotateMediaKey) rotations.push(Promise.resolve(window.Steward.rotateMediaKey(memberPubs, stewardPubs || [], { keepIf, drop, why })).then(r => ['the sermon key', r, 'media']));
     // THE NAME KEY IS IN THIS LIST TOO. It was fired and forgotten one line below while care and media were
     // awaited, which made it the worst of the three to lose: a blocked member still holding the name key can
     // read the whole congregation's names. What is reported below (audit of 3bc8905, and this comment
@@ -6671,7 +6673,7 @@ function rotateChurchKeys({ memberPubs, namePubs, keepKr, keepKnown, keepOnly, g
     // church's name key. Members accept it (newest wins, steward-authored is allowed) and every sealed name
     // in the congregation stops opening — the whole roster goes anonymous from one Block tap. steward.src.js
     // refuses this from its own side too; both guards stay. AUDIT-2026-07-27.
-    if (!delegated && window.Steward.ensureNameKeyForMembers) rotations.push(Promise.resolve(window.Steward.ensureNameKeyForMembers(namePubs || memberPubs, stewardPubs || [], { rotate: true, drop })).then(r => ['the name key', r]));
+    if (!delegated && window.Steward.ensureNameKeyForMembers) rotations.push(Promise.resolve(window.Steward.ensureNameKeyForMembers(namePubs || memberPubs, stewardPubs || [], { rotate: true, drop, why })).then(r => ['the name key', r, 'name']));
     // ENCRYPTED GROUPS TOO. Blocking rotated the care and media keys and nothing else, so a blocked person's
     // phone carried on decrypting every future message in every encrypted group — forever. The background
     // distributor cannot cover it: it only republishes when the recipient set GREW, and a block shrinks it,
@@ -6708,7 +6710,7 @@ function rotateChurchKeys({ memberPubs, namePubs, keepKr, keepKnown, keepOnly, g
       // room without a key (fellowship publishMessage): a rotation that quietly fails no longer leaks the
       // room to the blocked member — it locks the remaining members out of talking in it, while the app
       // tells them it will sort itself out shortly. Silence is not survivable in either direction.
-      if (window.Steward.publishGroupKey) rotations.push(Promise.resolve(window.Steward.publishGroupKey(g.id, recips, invite ? { rotate: true } : { rotate: true, keepIf })).then(r => ['the key for ' + (g.name || 'a group'), r]));
+      if (window.Steward.publishGroupKey) rotations.push(Promise.resolve(window.Steward.publishGroupKey(g.id, recips, invite ? { rotate: true } : { rotate: true, keepIf })).then(r => ['the key for ' + (g.name || 'a group'), r, 'room:' + g.id]));
       // Only a Block takes the person out of an invite-only room's own member list.
       if (dropPk && invite && window.Steward.publishGroup) window.Steward.publishGroup({ ...g, members: recips });
     }
@@ -6728,8 +6730,10 @@ function rotateChurchKeys({ memberPubs, namePubs, keepKr, keepKnown, keepOnly, g
       // offers only Unblock, so "block them again" was never something the steward could do.
       // non-enumerable, so a caller (or a test) comparing the failure list as an array sees only the failures
       Object.defineProperty(failed, 'pending', { value: rs.filter(([, ok]) => ok && ok.pending).map(([what]) => what), enumerable: false });
-      const KIND = { 'the care key': 'care', 'the sermon key': 'media', 'the name key': 'name' };
-      for (const what of failed) if (KIND[what] && window.Steward.rememberRotation) { try { window.Steward.rememberRotation(KIND[what], drop); } catch (e) {} }
+      // EVERY KIND OF KEY, ROOMS INCLUDED (round 3f, P1; audit of 4bb1ed1): a room key that failed was not remembered, so
+      // "Try again" found nothing to run, said "Trying again…" and stuck there. Each rotation carries its kind
+      // ('care' | 'media' | 'name' | 'room:<id>') and every one that failed is remembered with whom it takes out, and why.
+      for (const [, ok, kind] of rs) if (kind && (ok === false || (ok == null && !delegated)) && window.Steward.rememberRotation) { try { window.Steward.rememberRotation(kind, drop, why); } catch (e) {} }
       return failed;
     });
   });

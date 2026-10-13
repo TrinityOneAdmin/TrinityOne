@@ -146,7 +146,7 @@ function engine() {
     stmt(BUNDLE, 'var _skeys = '), stmt(BUNDLE, 'var _srev = '), stmt(BUNDLE, 'var _senvTs = '), stmt(BUNDLE, 'var _senvRecips = '),
     stmt(BUNDLE, 'var _senvMine = '), stmt(BUNDLE, 'var _senvDropped = '),
     stmt(BUNDLE, 'var KEYENV_LS = '), fnBody(BUNDLE, 'function _keyEnvSave(kind, cp, e, selfKey, mineCt) {'), fnBody(BUNDLE, 'function _keyEnvRestore(kind, cp, d) {'),   // round 3c, MED 2
-    stmt(BUNDLE, 'var PENDINGROT_LS = '), fnBody(BUNDLE, 'function _pendingRotAll(cp) {'), fnBody(BUNDLE, 'function _pendingRotAdd(kind, cp, drop) {'), fnBody(BUNDLE, 'function _pendingRotClear(kind, cp) {'),   // round 3e, MED 1 (_runPendingRotations itself comes with liftKeyRead)
+    stmt(BUNDLE, 'var PENDINGROT_LS = '), fnBody(BUNDLE, 'function _pendingRotAll(cp) {'), fnBody(BUNDLE, 'function _pendingRotAdd(kind, cp, drop, why) {'), fnBody(BUNDLE, 'function _pendingRotClear(kind, cp) {'),   // round 3e, MED 1 (_runPendingRotations itself comes with liftKeyRead)
     stmt(BUNDLE, 'var _senvPending = '), fnBody(BUNDLE, 'function _reCheckGroupKeyPending() {'), 't.__reCheckGk = _reCheckGroupKeyPending; t.__senvPending = _senvPending; t.__gkChain = _gkChain; t.__membersReask = _membersReask;',
     fnBody(BUNDLE, 'function _noteEnvelopeDrops(gid, prev, next) {'), fnBody(BUNDLE, 'function stewIngestKey(e) {'),
     't.__ingest = stewIngestKey; t.__skeys = _skeys; t.__senvMine = _senvMine; t.__senvRecips = _senvRecips;',
@@ -172,6 +172,7 @@ function engine() {
     M('    async publishGroupKey(groupId, memberPubs, opts = {}) {'), M('    async ensureGroupKeys(groups, memberPubs) {'),
     M('    async sealGroup(group, memberPubs) {'),   // round 3c, LOW ii
     M('    subscribeMembers(onMembers) {'),           // round 3d, LOW 2
+    M('    rememberRotation(kind, drop, why) {'), M('    retryPendingRotations() {'),   // round 3f
   ].join(',\n');
   t.t = t;
   const S = new Function('scope', `with (scope) { ${decls}\n return { ${methods} }; }`)(proxy);
@@ -1544,10 +1545,10 @@ for (const [kind, D, sub, rotate, hexOf] of [
     e.t.window.Steward = e.S;                                 // the runner calls the rotations through window.Steward, as the console does
     e.S[sub]();
     const s = e.subs.at(-1);
-    e.t._localBlocked = new Set([M3.pub]);                     // Block M3, NOW — before the relay has answered
+    e.t._localBlocked = new Set([M3.pub]); e.t._localBlockedAt = 1;   // a blocklist this console has read or written (round 3f: the runner re-checks against it)                     // Block M3, NOW — before the relay has answered
     const r = await e.S[rotate]([M1.pub], [], { keepIf: (h) => h !== M3.pub, drop: [M3.pub] });
     assert.deepEqual(r, { pending: true }, `a ${kind} rotation before the read settled did not say it is WAITING (block() would call it a failure)`);
-    assert.deepEqual(pendingOf(e)[key], { drop: [M3.pub] }, `THE ${kind.toUpperCase()} ROTATION WAS NOT REMEMBERED — nothing would ever run it`);
+    assert.deepEqual((pendingOf(e)[key] || {}).drop, [M3.pub], `THE ${kind.toUpperCase()} ROTATION WAS NOT REMEMBERED — nothing would ever run it`);
     const p0 = e.published.length;
     s.handlers.onevent(envAt(D, A, [K1], [A.pub, M1.pub, M2.pub, M3.pub], OLD_AT, 1)); await e.eose(s);
     for (let i = 0; i < 6; i++) await flush();
@@ -1564,10 +1565,10 @@ for (const [kind, D, sub, rotate, hexOf] of [
 test('3e MED 1: a remembered rotation survives a RELOAD and runs on the next console\'s settle', async () => {
   const e1 = engine(); e1.t.up = new Set([R1]);
   e1.S.subscribeCareKey();
-  e1.t._localBlocked = new Set([M3.pub]);
+  e1.t._localBlocked = new Set([M3.pub]); e1.t._localBlockedAt = 1;   // a blocklist this console has read or written (round 3f: the runner re-checks against it)
   assert.deepEqual(await e1.S.rotateCareKey([M1.pub], [], { drop: [M3.pub] }), { pending: true }, 'CONTROL: not remembered');
   const e2 = engine(); e2.t.up = new Set([R1]); e2.t.localStorage = e1.t.localStorage; e2.t.window.Steward = e2.S;
-  e2.t._localBlocked = new Set([M3.pub]);
+  e2.t._localBlocked = new Set([M3.pub]); e2.t._localBlockedAt = 1;   // a blocklist this console has read or written (round 3f: the runner re-checks against it)
   e2.S.subscribeCareKey();
   const s = e2.subs.at(-1);
   s.handlers.onevent(envAt(CAREKEY_D, A, [K1], [A.pub, M1.pub, M3.pub], OLD_AT, 1)); await e2.eose(s);
@@ -1579,8 +1580,8 @@ test('3e MED 1: an Unblock takes the person back out of a remembered rotation', 
   const e = engine(); e.t.up = new Set([R1]);
   e.S.subscribeCareKey();
   await e.S.rotateCareKey([M1.pub], [], { drop: [M3.pub] });
-  assert.deepEqual(pendingOf(e).care, { drop: [M3.pub] }, 'CONTROL: not remembered');
-  e.t._localBlocked = new Set([M3.pub]);
+  assert.deepEqual((pendingOf(e).care || {}).drop, [M3.pub], 'CONTROL: not remembered');
+  e.t._localBlocked = new Set([M3.pub]); e.t._localBlockedAt = 1;   // a blocklist this console has read or written (round 3f: the runner re-checks against it)
   await e.S.setBlocked([], { unblock: [M3.pub] });
   for (let i = 0; i < 4; i++) await flush();
   assert.equal(pendingOf(e).care, undefined, 'AN UNBLOCKED PERSON IS STILL WAITING TO BE ROTATED OUT');
@@ -1589,7 +1590,7 @@ test('3e MED 1: the name key — a Block before its read settles is remembered a
   const e = engine(); e.t.up = new Set([R1]); e.t.window.Steward = e.S;
   e.S.subscribeNameKey();
   const s = e.subs.at(-1);
-  e.t._localBlocked = new Set([M3.pub]);
+  e.t._localBlocked = new Set([M3.pub]); e.t._localBlockedAt = 1;   // a blocklist this console has read or written (round 3f: the runner re-checks against it)
   const r = await e.S.ensureNameKeyForMembers([M1.pub], [], { rotate: true, drop: [M3.pub] });
   assert.deepEqual(r, { pending: true }, 'a name-key rotation before the read settled was not remembered (block() called it a failure)');
   const p0 = e.published.length;
@@ -1599,4 +1600,108 @@ test('3e MED 1: the name key — a Block before its read settles is remembered a
   assert.ok(out, 'THE REMEMBERED NAME-KEY ROTATION NEVER RAN');
   const to = Object.keys(JSON.parse(out.content).keys);
   assert.ok(!to.includes(M3.pub) && to.includes(M1.pub) && to.includes(M2.pub), 'the remembered name-key rotation got its recipients wrong: ' + to.length);
+});
+
+// ── ROUND 3f (audit of 4bb1ed1): THE REMEMBERED ROTATIONS ─────────────────────────────────────────────────────────────
+const remember = (e, kind, drop, why) => { const o = pendingOf(e); o[kind] = { drop, why: Object.fromEntries(drop.map(p => [p, why])) }; e.t.localStorage.setItem('trinityone.steward.pendingrot.' + A.pub, JSON.stringify(o)); };
+async function readyCare(e, holders) {
+  e.S.subscribeCareKey();
+  const s = e.subs.at(-1);
+  s.handlers.onevent(envAt(CAREKEY_D, A, [K1], holders, OLD_AT, 1)); await e.eose(s);
+}
+// T1 — the rotation itself must take the person out. With them BLOCKED the blocklist hid a broken filter; a REMOVED
+// DELEGATE is not blocked, so only the rotation's own `drop` keeps the new key from them.
+test('3f T1: a remembered rotation for a REMOVED DELEGATE (not blocked) leaves them out — the rotation\'s own filter, not the blocklist', async () => {
+  const e = engine(); e.t.up = new Set([R1]); e.t.window.Steward = e.S;
+  e.t._localBlockedAt = 1; e.t._careRosterKnown = true; e.t._careRoster = new Set();   // the roster has been read: ST is not on it
+  remember(e, 'care', [M3.pub], 'remove');                 // M3 stands in for the removed delegate
+  const p0 = e.published.length;
+  await readyCare(e, [A.pub, M1.pub, M3.pub]);
+  for (let i = 0; i < 6; i++) await flush();
+  const out = e.published.slice(p0).find(ev => dtag(ev) === CAREKEY_D + A.pub);
+  assert.ok(out, 'CONTROL: the remembered rotation did not run');
+  const to = Object.keys(JSON.parse(out.content).keys);
+  assert.ok(!to.includes(M3.pub), 'THE REMOVED DELEGATE (NOT BLOCKED) WAS GIVEN THE NEW KEY — the remembered rotation did not take them out');
+  assert.ok(to.includes(M1.pub), 'a holder who stays was dropped');
+});
+// P3 — the record is re-checked against the lists NOW: an Unblock, or a delegate put back, on ANOTHER console.
+test('3f P3: a remembered rotation whose person was UNBLOCKED elsewhere — or whose delegate is back on the roster — is dropped, not run', async () => {
+  for (const [why, setup] of [
+    ['block', (e) => { e.t._localBlockedAt = 1; e.t._localBlocked = new Set(); }],                                   // a blocklist read since: M3 is not on it
+    ['remove', (e) => { e.t._localBlockedAt = 1; e.t._careRosterKnown = true; e.t._careRoster = new Set([M3.pub]); }],   // M3 is back on the roster
+  ]) {
+    const e = engine(); e.t.up = new Set([R1]); e.t.window.Steward = e.S;
+    setup(e);
+    remember(e, 'care', [M3.pub], why);
+    const p0 = e.published.length;
+    await readyCare(e, [A.pub, M1.pub, M3.pub]);
+    for (let i = 0; i < 6; i++) await flush();
+    assert.equal(e.published.slice(p0).filter(ev => dtag(ev) === CAREKEY_D + A.pub).length, 0, `(${why}) A REMEMBERED ROTATION RAN FOR SOMEONE NO LONGER ${why === 'block' ? 'BLOCKED' : 'REMOVED'} — the other console's decision was undone`);
+    assert.equal(pendingOf(e).care, undefined, `(${why}) the stale record was kept — it would run later`);
+  }
+  // CONTROL: with the blocklist not yet read (only the device's copy), it waits — neither runs nor is dropped
+  const e = engine(); e.t.up = new Set([R1]); e.t.window.Steward = e.S;
+  e.t._localBlocked = new Set([M3.pub]); e.t._localBlockedAt = 0;
+  remember(e, 'care', [M3.pub], 'block');
+  await readyCare(e, [A.pub, M1.pub, M3.pub]);
+  for (let i = 0; i < 6; i++) await flush();
+  assert.ok(pendingOf(e).care, 'CONTROL: with only the device copy of the blocklist, the record was dropped or run');
+});
+// P1 — a ROOM key that failed is remembered too, and "Try again" runs it; with nothing left, "Try again" says done.
+test('3f P1: a remembered ROOM rotation runs on "Try again" — the person out, the others kept — and an empty retry says done', async () => {
+  const e = engine(); e.t.up = new Set([R1]); e.t.window.Steward = e.S;
+  e.t._localBlocked = new Set([M3.pub]); e.t._localBlockedAt = 1;
+  const gid = 'room-p1';
+  e.t.__skeys[gid] = [unhex('dd'.repeat(32))]; e.t.__senvRecips[gid] = [A.pub, M1.pub, M3.pub]; e.t.__senvMine[gid] = true;
+  e.S.rememberRotation('room:' + gid, [M3.pub], 'block');
+  const p0 = e.published.length;
+  await e.S.retryPendingRotations();
+  const out = e.published.slice(p0).find(ev => dtag(ev) === 'trinityone/groupkey:' + gid);
+  assert.ok(out, 'A REMEMBERED ROOM ROTATION DID NOT RUN ON "TRY AGAIN" — the screen would say "Trying again…" for ever');
+  const to = Object.keys(JSON.parse(out.content).keys);
+  assert.ok(!to.includes(M3.pub) && to.includes(M1.pub), 'the room rotation got its recipients wrong');
+  assert.equal(pendingOf(e)['room:' + gid], undefined, 'the room rotation that ran is still remembered');
+  e.events.length = 0;
+  await e.S.retryPendingRotations();
+  assert.ok(e.events.some(x => x.type === 'steward-rotation-done' && x.detail.left === 0), 'AN EMPTY "TRY AGAIN" SAID NOTHING — the screen\'s "Trying again…" would stick');
+});
+// P2 — the name key's rebuild: the envelope this console holds may be an OLDER one (another relay not caught up); members
+// the console knows were added since must not be dropped — their phones would delete the name key.
+test('3f P2: a remembered NAME-key rotation, read first from a relay holding an OLDER envelope, keeps the members added since', async () => {
+  const e = engine(); e.t.relayList = [R1, R2]; e.t.up = new Set([R1, R2]); e.t.window.Steward = e.S;
+  e.t._localBlocked = new Set([M3.pub]); e.t._localBlockedAt = 1;
+  e.S.subscribeMembers(() => {});
+  const mreads = e.subs.filter(r => r.d === 'trinityone/member:' + A.pub);
+  const ts = 1759299000;
+  for (const r of mreads) for (const k of [M1, M2, M3]) r.handlers.onevent({ pubkey: k.pub, kind: 30078, created_at: ts, tags: [['d', 'trinityone/member:' + A.pub], ['p', A.pub]], content: JSON.stringify({ joined: ts }) });
+  for (const r of mreads) await e.eose(r);
+  remember(e, 'name', [M3.pub], 'block');
+  e.S.subscribeNameKey();
+  const n1 = e.subs.filter(r => r.d === NAMEKEY_D + A.pub).find(r => r.url === R1);
+  const p0 = e.published.length;
+  n1.handlers.onevent(envelope(NAMEKEY_D, A, A.pub, ['aa'.repeat(32)], [A.pub, M1.pub, M3.pub]));   // R1: the OLDER envelope, before M2 joined
+  await e.eose(n1);
+  await e.S.retryPendingRotations();
+  for (let i = 0; i < 6; i++) await flush();
+  const out = e.published.slice(p0).find(ev => dtag(ev) === NAMEKEY_D + A.pub);
+  assert.ok(out, 'CONTROL: the remembered name-key rotation did not run');
+  const to = Object.keys(JSON.parse(out.content).keys);
+  assert.ok(to.includes(M2.pub), 'A MEMBER ADDED SINCE THE OLDER ENVELOPE (M2) WAS DROPPED FROM THE NAME KEY — their phone deletes it');
+  assert.ok(!to.includes(M3.pub) && to.includes(M1.pub), 'the name-key rotation got the leaver or a holder wrong');
+});
+// P4 — "every relay" is the church's relays NOW: a relay admitted since the member list settled un-freshes it until read.
+test('3f P4: when the church\'s relay set grows, the member list is no longer fresh — until the new set has answered', async () => {
+  const e = engine(); e.t.relayList = [R1]; e.t.up = new Set([R1, R2]);
+  const ls = {}; e.t.window.addEventListener = (t, f) => { (ls[t] = ls[t] || []).push(f); }; e.t.window.removeEventListener = () => {};
+  let last = null;
+  e.S.subscribeMembers((l) => { last = l; });
+  await e.eose(e.subs.find(r => r.d === 'trinityone/member:' + A.pub && r.url === R1));
+  assert.ok(e.S.listIsFresh(last), 'CONTROL: one relay, answered — the list is not fresh');
+  e.t.relayList = [R1, R2];                                  // a relay is admitted
+  assert.ok(!e.S.listIsFresh(last), 'A RELAY ADMITTED SINCE DID NOT UN-FRESH THE MEMBER LIST — it may hold someone\'s member document');
+  for (const f of (ls['steward-relays'] || [])) f();         // the console's signal that the set changed: the read asks again
+  const reads = e.subs.filter(r => r.d === 'trinityone/member:' + A.pub && !r.closed);
+  assert.ok(reads.some(r => r.url === R2), 'THE MEMBER READ DID NOT ASK THE NEW RELAY when the set changed');
+  for (const r of reads) await e.eose(r);
+  assert.ok(e.S.listIsFresh(last), 'once the new set had answered, the member list did not become fresh again');
 });

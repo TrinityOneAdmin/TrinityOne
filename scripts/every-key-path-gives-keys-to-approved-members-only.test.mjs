@@ -573,3 +573,22 @@ test('3e MED 1: removing a delegate whose keys are WAITING says so truthfully �
   assert.doesNotMatch(said, /Try removing them again/, 'THE SCREEN TOLD THE OWNER TO REMOVE A STEWARD WHO IS ALREADY REMOVED');
   assert.deepEqual(w.calls.find(x => x.name === 'rotateCareKey').a[2].drop, [ST], 'the rotation was not told whom it takes out');
 });
+
+// ROUND 3f, P1 (audit of 4bb1ed1): a ROOM key that failed to rotate offered "Try again" — and Try again found nothing to
+// run, said "Trying again…" and stuck there, because only the care, sermon and name keys were remembered. Every failed key
+// is remembered now, the room's with its id, so Try again runs it.
+test('3f P1: a Block whose ROOM key failed offers "Try again" — and the failed room rotation is what it will run', async () => {
+  const w = world({ approval: true });
+  w.S.publishGroupKey = (...a) => { w.calls.push({ name: 'publishGroupKey', a }); return Promise.resolve(false); };
+  const v = await blockShown(w);
+  assert.match(v.said(), /could not change the key for Prayer yet/, 'the failed room key was not named: ' + v.said().slice(0, 300));
+  const r = w.calls.find(x => x.name === 'rememberRotation' && x.a[0] === 'room:g-open');
+  assert.ok(r, 'THE FAILED ROOM ROTATION WAS NOT REMEMBERED — "Try again" would find nothing to run and stick at "Trying again…"');
+  assert.deepEqual([r.a[1], r.a[2]], [[BOB], 'block'], 'the room rotation was remembered without whom it takes out, or why');
+  const again = find(v.tree(), n => n.type === 'button' && /^Try again$/.test(texts(n).join(' ').trim()))[0];
+  assert.ok(again, 'no "Try again" for the failed room key');
+  again.props.onClick();
+  assert.ok(w.calls.some(x => x.name === 'retryPendingRotations'), '"Try again" did not retry');
+  v.fire('steward-rotation-done', { kind: 'room:g-open', left: 0 });
+  assert.match(v.said(), /Done — they can no longer open anything sealed/, 'the retry finishing never cleared "Trying again…"');
+});
