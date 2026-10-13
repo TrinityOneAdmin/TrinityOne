@@ -51,7 +51,10 @@ function console_({ rejected = null, relays = [], steward = {}, React } = {}) {
     NETWORKS_ENABLED: true,   // the NETWORKS SWITCH (app/stew-data.jsx): on, because this file counts/opens the Network page; OFF is asserted in settings-cards-sit-in-authored-stacks and settings-pages-are-a-list-and-a-detail
     useStewardChurch: () => ({ name: 'Grace Church', npub: 'npub1grace', features: {}, rules: {} }),
     useStewardIdv: () => 0,
-    useStewardRelays: () => relays, useStewardNetworks: () => [], useStewardRosters: () => [],
+    // `relays` may be a FUNCTION, so a test can change the relay list between draws — the real hook
+    // re-probes every 30s and returns a fresh array, and section 5 needs the list to arrive AFTER the
+    // first paint. An array still works exactly as before.
+    useStewardRelays: () => (typeof relays === 'function' ? relays() : relays), useStewardNetworks: () => [], useStewardRosters: () => [],
     useStewardMembers: () => [{ pubkey: 'm1' }], useStewardGroups: () => [],
     useStewardAdmitted: () => [], useStewardJoinPolicy: () => false,
     useStewardStats: () => ({}), useStewardActivity: () => [], useStewardRequests: () => [],
@@ -322,4 +325,125 @@ test('an UNREACHABLE relay is not recorded as having refused', () => {
   const s = twoRelays([{ url: A, error: 'blocked: not a member' }, { url: B, error: 'connection failure: connection timed out' }]);
   assert.deepEqual(s.mod.relaysThatRefused().map(r => r.url), [A], 'an offline relay was recorded as refusing');
   assert.equal(pillCount(s.render()), 1);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────
+// 5. AND A REFUSAL GOES WITH THE RELAY IT NAMES. Section 4 made the only exit "THAT relay took a write", which
+//    left a refusal whose relay is no longer written to with no exit at all but the 7-day timer. Two ordinary
+//    routes in, both measured on the rendered page against the previous commit:
+//      · the steward REMOVES the refusing relay with the trash control on this very page — the obvious
+//        reaction to the warning — and every later write names only the relays that remain;
+//      · a self-hosting church behind a tunnel refuses at one address and its address then churns
+//        (reference/RELAY-ADMISSION.md root 3), so the recorded address is never written to again.
+//    Either way the red "A relay is refusing our posts" alarm and its admin-token control sat on screen for a
+//    week with NO pill on any row to say which relay they were about.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────
+const GONE = 'wss://removed.example/relay';
+// the same page, with the relay list given explicitly (`relays` may be a function — see console_)
+const withRelays = (relays, refused) => {
+  const { React, draw } = miniReact();
+  const c = console_({ React, relays, rejected: refused });
+  const render = () => draw(c.mod.DashSettings, { initialSection: 'relays', onSectionConsumed() {} });
+  render();
+  return { ...c, render };
+};
+
+test('T1 a refusing relay the steward REMOVES takes its alarm with it', () => {
+  // re-anchor on the same fixture with the relay STILL listed, so this cannot pass on a blank page
+  const anchor = withRelays([{ url: GONE, status: 'on', ms: 20 }, { url: B, status: 'on', ms: 20 }],
+    [{ url: GONE, error: 'blocked: not a member' }]);
+  assert.equal(fixIt(anchor.render()).length, 1, 're-anchor: the control did not render even with the relay listed');
+  assert.equal(pillCount(anchor.render()), 1, 're-anchor: no pill rendered even with the relay listed');
+
+  const s = withRelays([{ url: B, status: 'on', ms: 20 }], [{ url: GONE, error: 'blocked: not a member' }]);
+  const t = s.render();
+  assert.equal(fixIt(t).length, 0,
+    'the red alarm and the relay ADMIN-TOKEN control are still on screen for a relay this church no longer ' +
+    'publishes to, and no row can explain which relay — for up to seven days, because nothing is ever ' +
+    'written to that address again and the TTL is the only exit left');
+  assert.equal(pillCount(t), 0, 'a pill is on a row for a relay that is not in the list');
+  assert.equal(s.mod.relayRejectionActive(), false, 'the persisted flag outlived the relay it names');
+  assert.deepEqual(s.mod.relaysThatRefused(), []);
+});
+
+test('T2 a tunnel address that CHURNS leaves no alarm behind at the old address', () => {
+  // RELAY-ADMISSION.md root 3: tunnel addresses churn, which is designed-for, not an edge case. A fix wired
+  // only to the remove-relay button would pass T1 and fail here.
+  const U1 = 'wss://old.ts.net/relay', U2 = 'wss://new.ts.net/relay';
+  const s = withRelays([{ url: U2, status: 'on', ms: 20 }, { url: B, status: 'on', ms: 20 }],
+    [{ url: U1, error: 'blocked: not a member' }]);
+  assert.equal(fixIt(s.render()).length, 0,
+    'the alarm stands against an address this church has moved off — and the new address cannot clear it, ' +
+    'because the refusal is keyed by the OLD url');
+  assert.equal(s.mod.relayRejectionActive(), false);
+  accepted(s, U2);
+  accepted(s, B);
+  assert.equal(fixIt(s.render()).length, 0);
+});
+
+test('T3 DO NOT RE-BREAK: a relay still in the list and still refusing KEEPS its pill', () => {
+  const s = withRelays(TWO, [{ url: A, error: 'blocked: not a member' }]);
+  assert.equal(pillCount(s.render()), 1, 'a live refusal was dropped — the prune is reading the wrong list');
+  assert.equal(fixIt(s.render()).length, 1, 'the repair control went while a listed relay still refuses');
+  // the 30-second health re-probe hands the card a FRESH array of the same addresses: nothing may change
+  const again = withRelays(() => TWO.map(r => ({ ...r })), [{ url: A, error: 'blocked: not a member' }]);
+  assert.equal(pillCount(again.render()), 1, 'a re-probe of the same relays dropped a live refusal');
+  assert.equal(again.mod.relayRejectionActive(), true);
+});
+
+test('T4 DO NOT RE-BREAK: a write accepted by relay B never clears a refusal against relay A', () => {
+  // this guards section 4's own fix, which is the thing most likely to be undone by a later edit
+  const s = withRelays(TWO, [{ url: A, error: 'blocked: not a member' }]);
+  accepted(s, B);
+  assert.equal(pillCount(s.render()), 1, 'relay B taking a write cleared relay A, which is still refusing');
+  assert.equal(s.mod.relayRejectionActive(), true);
+  s.win.dispatchEvent(new s.win.CustomEvent('steward-publish-ok', { detail: {} }));
+  assert.equal(pillCount(s.render()), 1, 'a bare publish-ok cleared a refusal it cannot attribute');
+  accepted(s, A);
+  assert.equal(pillCount(s.render()), 0, 'the relay that refused took a write and kept its pill');
+  assert.equal(s.mod.relayRejectionActive(), false);
+});
+
+test('T5 one refusal gone with its relay, one still listed: exactly the listed one is kept', () => {
+  const s = withRelays([{ url: B, status: 'on', ms: 20 }],
+    [{ url: GONE, error: 'blocked: gone' }, { url: B, error: 'blocked: not a member' }]);
+  assert.deepEqual(s.mod.relaysThatRefused().map(r => r.url), [B],
+    'the whole refusal list was dropped, not just the entries whose relay has left it');
+  assert.equal(pillCount(s.render()), 1, 'B is listed and still refusing and has no pill');
+  assert.equal(fixIt(s.render()).length, 1, 'the repair control went while B still refuses');
+  accepted(s, B);
+  assert.equal(pillCount(s.render()), 0);
+  assert.equal(s.mod.relayRejectionActive(), false);
+  assert.equal(s.localStorage.getItem(s.win.REG_REFUSED_LS), null, 'an empty list is left behind');
+});
+
+test('T6 a relay list that has NOT loaded yet is never read as "that relay is gone"', () => {
+  // THE COLD-BOOT CASE, and the one that would silently discard a real refusal on every boot. relayStatus()
+  // answers over sockets, so the card paints before the list arrives — `status` is [] and the card says
+  // "Checking relays…". An empty list means "we do not know yet", never "every relay is gone".
+  let live = [];
+  const s = withRelays(() => live, [{ url: A, error: 'blocked: not a member' }]);
+  assert.equal(fixIt(s.render()).length, 1,
+    'a real refusal was discarded while the relay health check had not answered — this happens on every ' +
+    'cold open of the Relays page, so the alarm could never be seen at all');
+  assert.deepEqual(s.mod.relaysThatRefused().map(r => r.url), [A]);
+  live = [{ url: A, status: 'on', ms: 20 }, { url: B, status: 'on', ms: 20 }];
+  assert.equal(pillCount(s.render()), 1, 'the list arrived WITH the refusing relay on it and no pill appeared');
+  live = [{ url: B, status: 'on', ms: 20 }];
+  // TWO DRAWS, and that is the real behaviour rather than a harness quirk: the prune runs in an EFFECT, which
+  // React (and this harness) runs after the draw that queued it, so the alarm paints once and is corrected on
+  // the next paint. The steward sees it for one frame of the page they just opened, not for seven days.
+  s.render();
+  assert.equal(fixIt(s.render()).length, 0, 'the relay then left the list and the alarm stayed');
+});
+
+test('T7 the stale refusal is DELETED, not merely hidden from the page', () => {
+  // A render-time filter over relaysThatRefused() would satisfy T1 while leaving the entry in storage for a
+  // week — and relayRejectionActive() is what arms useRegistrationRetry to force selfRegister on every mount.
+  const s = withRelays([{ url: B, status: 'on', ms: 20 }], [{ url: GONE, error: 'blocked: not a member' }]);
+  s.render();
+  assert.equal(s.localStorage.getItem(s.win.REG_REFUSED_LS), null,
+    'the refusal is still in storage, so it is only hidden — the forced re-registration keeps firing over a ' +
+    'relay this church no longer publishes to');
+  assert.equal(s.localStorage.getItem(s.win.REG_NEEDED_LS), null, 'the alarm timestamp is still in storage');
 });

@@ -166,6 +166,12 @@ async function relayPanel({ names = NAMES } = {}) {
     Icon: () => null, SkPill: ({ children }) => ({ type: 'span', props: {}, kids: [children] }),
     SkCard: ({ children }) => ({ type: 'div', props: {}, kids: [children] }),
     relayRejectionActive: false, noteRelayRejection: () => {}, shortNpub: () => '',
+    // MEASURED, not assumed: the card drops a refusal whose relay has left the relay list
+    // (dropRefusalsNotListed), from an effect. Without this name the effect throws ReferenceError — and
+    // flush() below swallows effect errors, so the throw is INVISIBLE and every test here stays green with
+    // that effect dead. A no-op is right: this file is about the remove-relay confirmation, not refusals,
+    // and relaysThatRefused() below already reports none.
+    dropRefusalsNotListed: () => {},
     // The card reads its whole relay list from this hook, so the fixture lives here: one removable relay,
     // answering, in-network, and NOT the church's own box (the trash control is hidden for `self` and for
     // `own`, which would make this test vacuous).
