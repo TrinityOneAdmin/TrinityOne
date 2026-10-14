@@ -77,7 +77,12 @@ function shippedPublishAny(targets, raw) {
   const consts = ['var _PUB_REFUSED =', 'var _PUB_FAILED =', 'var _PUB_SILENT =', 'var WEDGE_ACK_MS =']
     .map(a => stmt(SHIP, a, a)).join('\n');
   const body = fnBody(SHIP, 'function _publishAny(relays, evt) {', '_publishAny');
-  const src = `${consts}\n${lifted}\n${body}\nreturn _publishAny;`;
+  // `_checkIfBlocked` is a fire-and-forget side-effect the blocking feature added to the "blocked" branch of
+  // _publishAny (src/fellowship.src.js). It is unrelated to refusal CLASSIFICATION, which is all this file
+  // tests, so it is stubbed rather than lifted. Without it the lifted _publishAny throws a ReferenceError on
+  // every "blocked" answer and the settled refusal is lost — the exact failure this file exists to catch, but
+  // for the wrong reason (a missing stub, not the shipped code).
+  const src = `${consts}\n${lifted}\nvar _checkIfBlocked = function(){};\n${body}\nreturn _publishAny;`;
   return new Function('pool', '_netRelays', 'churchRelaysRaw', '_noteSendResult', 'NO_NETWORK_RELAY',
     `return (function(){ ${src} })();`)(
       pool, () => targets, () => (raw === undefined ? targets : raw), () => {}, 'no-network-relay');
