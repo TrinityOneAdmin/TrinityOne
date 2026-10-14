@@ -2618,7 +2618,7 @@ function TodayScreen({ ctx }) {
           </div>
         </div>
         <div style={{ width: 38, height: 38, borderRadius: 999, background: 'var(--clay)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-          <Icon name="play" size={16} color="#fff" />
+          <Icon name="book" size={18} color="#fff" />
         </div>
       </div>
 
