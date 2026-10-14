@@ -3823,6 +3823,20 @@ function GroupChatModal({ group, onClose }) {
     clearTimeout(modTimer.current);
     modTimer.current = setTimeout(() => setModMsg(null), 9000);
   };
+  // TAP OFF THE ⋯ MENU CLOSES IT (owner 2026-10-14). Only registered while a menu is open, removed when it
+  // closes. pointerdown (not click) so a touch and a mouse behave alike; capture so a bubble's own handler
+  // cannot swallow it. A press INSIDE the [data-chat-menu] wrapper (the ⋯ button and its menu) is ignored: the
+  // button's own toggle and the items' own handlers do their job. Pure open/close — pin/remove are untouched.
+  React.useEffect(() => {
+    if (!menuFor) return undefined;
+    const off = (e) => {
+      const t = e && e.target;
+      if (t && typeof t.closest === 'function' && t.closest('[data-chat-menu]')) return;
+      setMenuFor('');
+    };
+    document.addEventListener('pointerdown', off, true);
+    return () => document.removeEventListener('pointerdown', off, true);
+  }, [menuFor]);
   const scRef = React.useRef(null);
   const GROUP_EMOJI = ['❤️', '🙏', '👍', '😂', '🔥', '🎉'];
   React.useEffect(() => window.Steward.subscribeGroupChat(group.id, setMsgs), [group.id]);
@@ -3975,7 +3989,7 @@ function GroupChatModal({ group, onClose }) {
               </div> : null}
               <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexDirection: m.mine ? 'row-reverse' : 'row' }}>
                 <div onClick={() => setRxFor(v => v === m.id ? '' : m.id)} title="Tap to react" style={{ padding: '9px 13px', borderRadius: 15, fontSize: 14, lineHeight: 1.4, whiteSpace: 'pre-wrap', background: m.mine ? 'var(--clay)' : 'var(--surface-2)', color: m.mine ? '#fff' : 'var(--ink)', border: m.mine ? 'none' : '1px solid var(--line)', cursor: 'pointer' }}>{msgText(m)}</div>
-                <div style={{ position: 'relative', flexShrink: 0 }}>
+                <div data-chat-menu="1" style={{ position: 'relative', flexShrink: 0 }}>
                   {/* NAMED, and it is the ONLY route to Remove and Pin. Measured 2026-09-04: 21px wide,
                       empty innerText, aria-label null — a screen reader had nothing to announce. */}
                   <button onClick={() => setMenuFor(v => v === m.id ? '' : m.id)} title="Moderate" aria-label={'Moderate the message from ' + (nameFor(m.by) || 'a member')} aria-expanded={menuFor === m.id} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 3, borderRadius: 7 }}><Icon name="dots" size={15} /></button>
