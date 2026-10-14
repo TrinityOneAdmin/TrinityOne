@@ -144,3 +144,41 @@ test('STEP 1: web console has no swipe row at all', async () => {
   const w = await win({ native: false });
   assert.equal(w.rows(w.draw()).length, 0);
 });
+
+// ── STEP 2: an opened ⋯ menu is not left outside the scroller ─────────────────────────────────────────────
+// The menu is absolutely positioned inside an overflowY:auto scroller; below the LAST message it fell outside
+// the visible tile. We can't measure clipping headlessly, so the test asserts the two guards that prevent it:
+// the last message opens UPWARD, and an open menu asks to be scrolled into view. THE REAL CAUSE STILL NEEDS A
+// BROWSER/DEVICE REPRO — see the report.
+async function openMenuOn(w, idx) {
+  const dots = find(w.draw(), n => n.type === 'button' && n.props.title === 'Message actions');
+  dots[idx].props.onClick();
+  return find(w.draw(), n => n.props && n.props['data-reply-menu']);
+}
+
+test('STEP 2: the ⋯ on the LAST message opens its menu upward, with Reply in it', async () => {
+  const w = await win({ native: false });
+  const menus = await openMenuOn(w, 2);
+  assert.equal(menus.length, 1, 'no menu after pressing ⋯');
+  assert.equal(menus[0].props['data-reply-menu'], 'up');
+  assert.equal(menus[0].props.style.bottom, '100%', 'last message menu is still anchored below, outside the scroller');
+  assert.equal(menus[0].props.style.top, undefined);
+  assert.ok(texts(menus[0]).join('').includes('Reply'), 'the menu has no Reply');
+});
+
+test('STEP 2: a menu on an earlier message still opens below the bubble (it must not cover the words)', async () => {
+  const w = await win({ native: false });
+  const menus = await openMenuOn(w, 0);
+  assert.equal(menus[0].props['data-reply-menu'], 'down');
+  assert.equal(menus[0].props.style.top, '100%');
+});
+
+test('STEP 2: an open menu asks to be scrolled into view', async () => {
+  const w = await win({ native: false });
+  const menus = await openMenuOn(w, 2);
+  const ref = menus[0].props.ref;
+  assert.equal(typeof ref, 'function', 'the open menu has no ref to scroll it into view');
+  let asked = null;
+  ref({ scrollIntoView: (o) => { asked = o; } });
+  assert.deepEqual(asked, { block: 'nearest' });
+});

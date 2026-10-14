@@ -12586,6 +12586,8 @@ function StewDmWindow({ peer, offset, onClose }) {
   const startReply = (m) => { setReplyTo(m); setMenuFor(''); };
   const canReply = (m) => !m._pending && !m._failed;   // a waiting message has nothing on the relay to quote yet
   const byId = {}; shown.forEach(m => { byId[m.id] = m; });
+  const lastId = shown.length ? shown[shown.length - 1].id : '';
+  const menuIntoView = React.useCallback((el) => { if (el && el.scrollIntoView) { try { el.scrollIntoView({ block: 'nearest' }); } catch (e) {} } }, []);
   // SWIPE TO REPLY (APK). Same feel as the member app's DMSwipe: the row follows the finger, a reply arrow fills
   // in once the drag is far enough, and letting go past that point replies. The live offset is the REF; the
   // `swipeAt` state exists only to redraw (see the long note in Row/DMSwipe: the last touchmove and the
@@ -12662,7 +12664,14 @@ function StewDmWindow({ peer, offset, onClose }) {
                     style={{ position: 'absolute', top: -6, [m.mine ? 'left' : 'right']: -26, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 999, width: 24, height: 24, cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="dots" size={13} /></button>
                 ) : null}
                 {menuFor === m.id ? (
-                  <div style={{ position: 'absolute', top: '100%', marginTop: 4, [m.mine ? 'right' : 'left']: 0, zIndex: 5, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 10, boxShadow: 'var(--shadow-lg)', padding: 4, minWidth: 110 }}>
+                  // ⚠ THE MENU LIVES INSIDE THE `overflowY: auto` MESSAGE SCROLLER, which CLIPS it. Below the LAST
+                  // message there is nothing to scroll into, so `top: 100%` put Reply outside the visible tile and
+                  // the steward saw the ⋯ do nothing (owner, members page: "reply is not working"). The docked tile
+                  // is only 420px tall, so this bites hardest here. Two guards: the last message opens its menu
+                  // UPWARD (over the message before it, never over its own words), and any open menu scrolls itself
+                  // into view so a message near the bottom edge can't hide it either. NEEDS A DEVICE/BROWSER REPRO
+                  // to confirm this was the whole cause.
+                  <div ref={menuIntoView} data-reply-menu={m.id === lastId ? 'up' : 'down'} style={{ position: 'absolute', ...(m.id === lastId ? { bottom: '100%', marginBottom: 4 } : { top: '100%', marginTop: 4 }), [m.mine ? 'right' : 'left']: 0, zIndex: 5, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 10, boxShadow: 'var(--shadow-lg)', padding: 4, minWidth: 110 }}>
                     <button onClick={() => startReply(m)} style={{ display: 'flex', alignItems: 'center', gap: 7, border: 'none', background: 'none', cursor: 'pointer', padding: '7px 9px', borderRadius: 7, fontFamily: 'var(--font-ui)', fontSize: 13, fontWeight: 600, color: 'var(--ink)' }}>
                       <Icon name="reply" size={14} color="var(--ink-2)" /> Reply</button>
                   </div>
