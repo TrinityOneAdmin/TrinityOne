@@ -51,7 +51,11 @@ import { requireFreePort } from './test-ports.mjs';
 const CHROME = ['/usr/bin/chromium-browser', '/usr/bin/chromium', '/usr/bin/google-chrome'].find(p => existsSync(p));
 const PORT = 8870, CDP = 9370;   // 88xx: 8868 batch-a, 8869/8871 taken; 93xx taken: 9350-9358, 9360-9364, 9366-9369, 9371, 9381, 9412
 const ROOT = new URL('..', import.meta.url).pathname;
-const VW = 360, VH = 730, LW = 730, LH = 328, DW = 1280, DH = 900;
+// DW = 1440, NOT 1280 (2026-10-14). Test 5 below guards that the DESKTOP row is unchanged, and the
+// desktop row now starts at 1366: the owner moved Members to the one-line phone card below that,
+// because at 1280 the desktop row's @handle was squeezed to 24.1px and to 0px by 1240. At 1280 this
+// test was asserting the old decision and went red on the new one. DW is used ONLY by test 5.
+const VW = 360, VH = 730, LW = 730, LH = 328, DW = 1440, DH = 900;
 const PIN = 'cedar-harbour-lamp-42';
 const FLOOR = 44;       // the codebase's touch floor
 const ROW_MAX = 72;     // the row budget: an avatar (36) with the card's padding and a 44px control beside it
@@ -402,7 +406,7 @@ const DESKTOP = {
   [PEOPLE.child.name]:   { tags: [], more: true, buttons: ['Copy npub', 'Block', 'Chat', 'Unmark as a child: Ivy Whitlock', 'Clear for youth work: Ivy Whitlock — this also lets them message a child privately', 'Reconnect', 'Photo: off', 'More for Ivy Whitlock'] },
   [PEOPLE.cleared.name]: { tags: [], buttons: ['Copy npub', 'Block', 'Chat', 'Mark as a child: Ruth Whitlock', 'Remove youth clearance from Ruth Whitlock', 'Reconnect'] },
 };
-test('5. at 1280 wide the member row is the desktop card it was: the same controls in the same order, the same pills, no ⋯', SKIP, async () => {
+test('5. at 1440 wide the member row is the desktop card it was: the same controls in the same order, the same pills, no ⋯', SKIP, async () => {
   await setSize(DW, DH);
   try {
     for (const [name, want] of Object.entries(DESKTOP)) {
