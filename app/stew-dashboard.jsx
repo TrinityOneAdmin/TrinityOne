@@ -12528,6 +12528,13 @@ function StewDmWindow({ peer, offset, onClose }) {
   const [min, setMin] = React.useState(false);
   const scRef = React.useRef(null);
   const [rxFor, setRxFor] = React.useState('');   // msg id whose emoji picker is open
+  // REPLY (owner decision 2026-10-14). `replyTo` holds the message being answered; sendDM wants `{id}`.
+  // Web console: a ⋯ menu on each message. APK: swipe right ALSO works, but the ⋯ stays — a swipe-only
+  // affordance already failed on the Oppo in the member app (DMSwipe), so reply must never hang on a gesture.
+  const [replyTo, setReplyTo] = React.useState(null);
+  const [menuFor, setMenuFor] = React.useState('');   // msg id whose ⋯ menu is open
+  const swipeRef = React.useRef(null);
+  const isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
   const [err, setErr] = React.useState('');      // a send that never left this console, said out loud
   const _threadConn = window.useStewardConn ? window.useStewardConn() : 0;
   React.useEffect(() => window.Steward.subscribeDMThread(peer.pubkey, setMsgs), [peer.pubkey, _threadConn]);
@@ -12571,11 +12578,25 @@ function StewDmWindow({ peer, offset, onClose }) {
     if (!text.trim()) return;
     const body = text.trim();
     setErr('');
-    Promise.resolve(window.Steward.sendDM(peer.pubkey, body))
-      .then(evt => { if (!evt) { setText(t => t || body); setErr('Not sent — this message couldn’t be encrypted, so nothing was sent and nothing is waiting to send. Your words are still here.'); } })
-      .catch(() => { setText(t => t || body); setErr('Not sent — something went wrong sending this. Your words are still here.'); });
-    setText('');
+    const quoting = replyTo;   // keep it: a failed send puts it back with the words
+    Promise.resolve(window.Steward.sendDM(peer.pubkey, body, quoting ? { id: quoting.id } : undefined))
+      .then(evt => { if (!evt) { setText(t => t || body); setReplyTo(r => r || quoting); setErr('Not sent — this message couldn’t be encrypted, so nothing was sent and nothing is waiting to send. Your words are still here.'); } })
+      .catch(() => { setText(t => t || body); setReplyTo(r => r || quoting); setErr('Not sent — something went wrong sending this. Your words are still here.'); });
+    setText(''); setReplyTo(null);
   };
+  const startReply = (m) => { setReplyTo(m); setMenuFor(''); };
+  const canReply = (m) => !m._pending && !m._failed;   // a waiting message has nothing on the relay to quote yet
+  const byId = {}; shown.forEach(m => { byId[m.id] = m; });
+  const swipe = (m) => isNative && canReply(m) ? {
+    onTouchStart: (e) => { const t = e.touches && e.touches[0]; swipeRef.current = t ? { x: t.clientX, y: t.clientY } : null; },
+    onTouchEnd: (e) => {
+      const s0 = swipeRef.current; swipeRef.current = null;
+      const t = e.changedTouches && e.changedTouches[0];
+      if (!s0 || !t) return;
+      const dx = t.clientX - s0.x, dy = t.clientY - s0.y;
+      if (dx >= 48 && Math.abs(dy) < dx / 2) startReply(m);   // a rightward flick, not a scroll
+    },
+  } : {};
   const react = (m, emoji) => { window.Steward.reactDM(peer.pubkey, m.id, m.myReaction === emoji ? '-' : emoji); setRxFor(''); };
   const DM_EMOJI = ['❤️', '🙏', '👍', '😂', '😮', '😢'];
   const initials = (peer.name && peer.name !== 'Anonymous' ? peer.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'AN').toUpperCase();
@@ -12592,8 +12613,28 @@ function StewDmWindow({ peer, offset, onClose }) {
           <div ref={scRef} className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '12px 12px', display: 'flex', flexDirection: 'column', gap: 7 }}>
             <div style={{ textAlign: 'center', fontSize: 11, color: 'var(--ink-3)', marginBottom: 4 }}><Icon name="lock" size={12} /> Encrypted · only you two can read this</div>
             {shown.map(m => (
-              <div key={m.id} style={{ alignSelf: m.mine ? 'flex-end' : 'flex-start', maxWidth: '82%', display: 'flex', flexDirection: 'column', alignItems: m.mine ? 'flex-end' : 'flex-start', position: 'relative' }}>
+              <div key={m.id} {...swipe(m)} style={{ alignSelf: m.mine ? 'flex-end' : 'flex-start', maxWidth: '82%', display: 'flex', flexDirection: 'column', alignItems: m.mine ? 'flex-end' : 'flex-start', position: 'relative' }}>
+                {m.replyTo && byId[m.replyTo] ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'var(--ink-3)', margin: '0 4px 3px', maxWidth: '100%' }}>
+                    <Icon name="reply" size={11} color="var(--ink-3)" />
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontStyle: 'italic' }}>{byId[m.replyTo].text}</span>
+                  </div>
+                ) : m.replyTo ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'var(--ink-3)', margin: '0 4px 3px' }}>
+                    <Icon name="reply" size={11} color="var(--ink-3)" /><span style={{ fontStyle: 'italic' }}>replying to an earlier message</span>
+                  </div>
+                ) : null}
                 <div onClick={() => setRxFor(v => v === m.id ? '' : m.id)} title="Tap to react" style={{ padding: '8px 12px', borderRadius: 14, fontSize: 13.5, lineHeight: 1.4, whiteSpace: 'pre-wrap', background: m.mine ? 'var(--clay)' : 'var(--surface-2)', color: m.mine ? '#fff' : 'var(--ink)', border: m.mine ? 'none' : '1px solid var(--line)', cursor: 'pointer' }}>{m.text}</div>
+                {canReply(m) ? (
+                  <button onClick={() => setMenuFor(v => v === m.id ? '' : m.id)} title="Message actions" aria-label="Message actions"
+                    style={{ position: 'absolute', top: -6, [m.mine ? 'left' : 'right']: -26, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 999, width: 24, height: 24, cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="dots" size={13} /></button>
+                ) : null}
+                {menuFor === m.id ? (
+                  <div style={{ position: 'absolute', top: '100%', marginTop: 4, [m.mine ? 'right' : 'left']: 0, zIndex: 5, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 10, boxShadow: 'var(--shadow-lg)', padding: 4, minWidth: 110 }}>
+                    <button onClick={() => startReply(m)} style={{ display: 'flex', alignItems: 'center', gap: 7, border: 'none', background: 'none', cursor: 'pointer', padding: '7px 9px', borderRadius: 7, fontFamily: 'var(--font-ui)', fontSize: 13, fontWeight: 600, color: 'var(--ink)' }}>
+                      <Icon name="reply" size={14} color="var(--ink-2)" /> Reply</button>
+                  </div>
+                ) : null}
                 {/* A WAITING MESSAGE MUST LOOK LIKE ONE. Without this footer the bubble above is identical to
                     a delivered message, which is worse than showing nothing: the words are safe, and the
                     steward is told they went. Mirrors app/screens-chat.jsx. */}
@@ -12630,6 +12671,16 @@ function StewDmWindow({ peer, offset, onClose }) {
               <Icon name="alert" size={14} color="var(--clay)" />
               <div style={{ flex: 1, minWidth: 0, fontSize: 11.5, lineHeight: 1.45, color: 'var(--ink-2)' }}>{err}</div>
               <button onClick={() => setErr('')} title="Dismiss" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 1, flexShrink: 0 }}><Icon name="x" size={13} /></button>
+            </div>
+          ) : null}
+          {replyTo ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 11px', borderTop: '1px solid var(--line)', background: 'var(--surface-2)', flexShrink: 0 }}>
+              <Icon name="reply" size={13} color="var(--ink-3)" />
+              <div style={{ flex: 1, minWidth: 0, fontSize: 12, color: 'var(--ink-2)' }}>
+                <div style={{ fontWeight: 700, fontSize: 10.5, color: 'var(--ink-3)' }}>Replying to {replyTo.mine ? 'yourself' : (peer.name || 'Member')}</div>
+                <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontStyle: 'italic' }}>{replyTo.text}</div>
+              </div>
+              <button onClick={() => setReplyTo(null)} aria-label="Stop replying" title="Stop replying" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 2, flexShrink: 0 }}><Icon name="x" size={14} /></button>
             </div>
           ) : null}
           <div style={{ display: 'flex', gap: 8, padding: '10px 11px', borderTop: '1px solid var(--line)', flexShrink: 0 }}>
