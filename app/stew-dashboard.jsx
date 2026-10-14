@@ -3087,7 +3087,7 @@ function StatCard({ label, value, sub, ic, tint, onClick, snug = false }) {
   );
 }
 
-function Panel({ title, action, children, style = {}, scroll = false }) {
+function Panel({ title, action, children, style = {}, scroll = false, collapsible = false, open = true, onToggle }) {
   const narrow = useStewNarrow();
   return (
     <div className="sk-panel" style={{ borderRadius: 18, background: 'var(--surface)', border: '1px solid var(--line)', ...(scroll ? { display: 'flex', flexDirection: 'column', minHeight: 0 } : {}), ...style }}>
@@ -3096,10 +3096,11 @@ function Panel({ title, action, children, style = {}, scroll = false }) {
           <h2 style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16.5, margin: 0 }}>{title}</h2>
           <div style={{ flex: 1, minWidth: 24 }} />
           {!narrow ? action : null}
+          {collapsible ? <button onClick={onToggle} aria-expanded={open} aria-label={(open ? 'Collapse ' : 'Expand ') + title} title={open ? 'Collapse' : 'Expand'} style={{ border: 'none', background: 'none', cursor: 'pointer', display: 'flex', padding: 4, marginLeft: 4, color: 'var(--ink-3)' }}><Icon name={open ? 'chevD' : 'chevU'} size={18} color="currentColor" /></button> : null}
         </div>
         {(narrow && action) ? <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>{action}</div> : null}
       </div>
-      {scroll ? <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>{children}</div> : children}
+      {!open ? null : scroll ? <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>{children}</div> : children}
     </div>
   );
 }
@@ -3168,6 +3169,7 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
   const under850 = useStewNarrow(850);
   const fourUp = snug && !under850;
   const [chatGroup, setChatGroup] = React.useState(null);   // group whose chat is open (from a list/activity row)
+  const [joinOpen, setJoinOpen] = React.useState(true);   // the Joining code card's body; the chevron in its header folds it away
   // open a chat by group id (used by both the groups list and the activity feed)
   const openChat = (gid) => { const g = groups.find(x => x.id === gid); if (g) window.dispatchEvent(new CustomEvent('steward-open-group-chat', { detail: g })); else onTab('groups'); };
   // people waiting for approval (only when the church requires it) — surfaced big on the dashboard
@@ -3313,7 +3315,7 @@ function DashOverview({ onTab, onNewPost, onSettings }) {
     </Panel>
   );
   const joinPanel = (
-    <Panel title="Joining code">
+    <Panel title="Joining code" collapsible open={joinOpen} onToggle={() => setJoinOpen(o => !o)}>
       <JoinCard qrSize={92} center={stacked} />
       <div style={{ marginTop: 12 }}><PushEnabler /></div>
     </Panel>
