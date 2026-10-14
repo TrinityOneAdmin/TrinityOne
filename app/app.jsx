@@ -122,6 +122,24 @@ function lsGet(key, fallback){ try{ const v = localStorage.getItem(key); return 
 // else (reader settings, the church list, the member's own data) writes exactly as before.
 const _IDENT_KEY = /(npub1[02-9ac-hj-np-z]{20,}|[0-9a-f]{64})/i;
 function lsCanWrite(key){ try{ return !_IDENT_KEY.test(String(key)) || !!(window.Fellowship && window.Fellowship.myPubkey); }catch(e){ return true; } }
+// The reset a CONFIRMED block triggers: drop the blocked church (local forget only — a blocked phone cannot usefully
+// tombstone itself and the church already knows), re-point the active church, and send the person to "follow a church"
+// exactly as a first run or a leave does. Top-level and dependency-injected so a test can run the real code.
+function _applyBlockedReset(cpHex, d) {
+  const F = d.F;
+  if (!cpHex || !F) return false;
+  const same = (c) => { try { return F.toPub(c.npub || c.id) === cpHex; } catch (e) { return false; } };
+  const gone = d.churches.filter(same);
+  const remaining = d.churches.filter(c => !same(c));
+  gone.forEach(c => { try { F.forgetChurch(c.npub || c.id); } catch (e) {} });
+  d.setChurches(cs => cs.filter(c => !same(c)));
+  const next = (remaining.find(c => c.npub) || remaining[0] || {}).id || null;
+  d.setActiveChurch(next); d.lsSet('trinityone.activeChurch', next);
+  if (!(remaining.find(c => c.id === next) || {}).npub) d.openFollow();   // same test as promptFollowChurch
+  d.toast('Your church has removed your access, so this phone no longer follows it.');
+  try { F.ackAmBlocked(); } catch (e) {}
+  return true;
+}
 function lsSet(key, val){ if(!lsCanWrite(key)) return; try{ localStorage.setItem(key, JSON.stringify(val)); }catch(e){} }
 // ── where the reader was ──
 // 2026-09-21, owner on the Pixel after an update: "it didn't keep my reading position". It never did — the
@@ -465,6 +483,14 @@ function App() {
   const [wordOv, setWordOv] = useA(null);
   const [video, setVideo] = useA(null);
   const extraParam = new URLSearchParams(location.search).get('extra');  // 'notif' | 'listen'
+  // BLOCKED => RESET TO "FOLLOW A CHURCH" (owner, 2026-10-14), not a dead-end banner. The signal is the engine's
+  // CONFIRMED flip (a church-signed blocklist that names this phone's own key) — never a bare "blocked:" refusal
+  // string, which several unrelated relay messages share. The handler reads the LATEST render's state through a ref.
+  const blockedResetRef = React.useRef(null);
+  useAE(function() {
+    var F = window.Fellowship; if (!F || !F.subscribeAmBlocked) return;
+    return F.subscribeAmBlocked(function(flag, cpHex) { if (flag && blockedResetRef.current) blockedResetRef.current(cpHex); });
+  }, []);
   const [notif, setNotif] = useA(extraParam === 'notif');   // notifications overlay
   const [notifSettings, setNotifSettings] = useA(extraParam === 'notifsettings'); // notification settings overlay
   const [currencyOpen, setCurrencyOpen] = useA(extraParam === 'currency'); // currency picker overlay
@@ -846,6 +872,10 @@ function App() {
   }, [showOnboarding]);
   // first-run prompt to follow a church — skippable (closing it lands them in the Bible). Only nudges
   // if they're not already following a real church (deep-linked joiners skip onboarding entirely).
+  blockedResetRef.current = (cpHex) => _applyBlockedReset(cpHex, {
+    F: window.Fellowship, churches: churchesStored, setChurches, setActiveChurch, lsSet, toast,
+    openFollow: () => { setChurchSwitcherMode('follow'); setChurchSwitcher(true); },
+  });
   const promptFollowChurch = () => {
     const followsReal = !!(churches.find(c => c.id === activeChurch) || {}).npub;
     if (!followsReal) { setChurchSwitcherMode('follow'); setChurchSwitcher(true); }
@@ -864,6 +894,9 @@ function App() {
     const m = String(raw || '').match(/npub1[0-9a-z]{20,}/);
     if (!m) return false;
     const npub = m[0];
+    // RE-FOLLOW-LOOP GUARD: a church that has confirmed a block of this key is not re-followed (it would only be
+    // refused again and bounce this phone between onboarding and the block). See _isBlockedChurch in the engine.
+    if (window.Fellowship && window.Fellowship.isBlockedChurch && window.Fellowship.isBlockedChurch(npub)) { toast('That church has removed you, so it can’t be followed again from this phone. Speak to a steward.', { error: true }); return false; }
     // NETWORKS SWITCH: a code that is a network this phone already knows (a stored entry tagged kind 'network') is refused.
     // An unknown network npub is not recognisable here; it falls to checkChurch below, which finds no church for it.
     if (window.NETWORKS_ENABLED !== true && churchesStored.some(c => c.id === npub && c.kind === 'network')) { toast('Networks aren’t available yet'); return false; }
