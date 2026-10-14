@@ -1156,31 +1156,26 @@ function evtToMsg(e) {
 // ── a Community entry into the Serving overlay (shown above the groups list) ──
 function ServingEntry({ ctx }) {
   const next = ctx.servNext; const pending = (ctx.servPending || []).length;
-  if (!next && !pending) {
-    // not rostered — still offer a way into Serving & events
-    return (
-      <div style={{ position: "relative", marginBottom: 14 }}>
-        <button onClick={() => ctx.openServing && ctx.openServing()} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 13, padding: 14, borderRadius: 18, cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)', background: 'var(--surface)', border: '1px solid var(--line)' }}>
+  // ONE card: the "What's happening" entry point, with "You're serving" / "Can you serve?" folded onto it as a
+  // single line underneath when there's a slot (owner 2026-10-14) — not a separate alternate card.
+  return (
+    <div style={{ position: "relative", marginBottom: 14 }}>
+      <button onClick={() => ctx.openServing && ctx.openServing()} style={{ width: '100%', display: 'flex', flexDirection: 'column', padding: 0, borderRadius: 18, cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)', background: 'var(--surface)', border: '1px solid var(--line)', overflow: 'hidden' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 13, padding: 14 }}>
           <div style={{ width: 44, height: 44, borderRadius: 13, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: 'var(--sage)' }}><Icon name="calCheck" size={22} /></div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5 }}>What's happening</div>
             <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ink-3)' }}>See what's on · RSVP · your rota{(ctx.care && ctx.care.settings && ctx.care.settings.enabled) ? <span onClick={(e) => { e.stopPropagation(); ctx.openServing && ctx.openServing('care'); }} style={{ color: 'var(--clay)' }}> · Care</span> : null}</div>
           </div>
           <Icon name="chevR" size={18} color="var(--ink-3)" />
-        </button>
-      </div>
-    );
-  }
-  return (
-    <div style={{ position: "relative", marginBottom: 14 }}>
-      <button onClick={() => ctx.openServing && ctx.openServing()} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 13, padding: 14, borderRadius: 18, cursor: 'pointer', textAlign: 'left', fontFamily: 'var(--font-ui)', boxShadow: 'var(--shadow)',
-        background: pending ? 'color-mix(in oklab, var(--gold) 9%, var(--surface))' : 'color-mix(in oklab, var(--sage) 9%, var(--surface))', border: pending ? '1px solid color-mix(in oklab, var(--gold) 32%, var(--line))' : '1px solid color-mix(in oklab, var(--sage) 30%, var(--line))' }}>
-        <div style={{ width: 44, height: 44, borderRadius: 13, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: pending ? 'color-mix(in oklab, var(--gold) 18%, var(--surface))' : 'color-mix(in oklab, var(--sage) 16%, var(--surface))', color: pending ? '#8a6717' : 'var(--sage)' }}><Icon name={pending ? 'sparkle' : 'calCheck'} size={22} /></div>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5 }}>{pending ? 'Can you serve?' : 'You\u2019re serving'}</div>
-          <div style={{ fontSize: 12.5, fontWeight: 600, color: pending ? '#8a6717' : 'var(--sage)' }}>{pending ? `${pending} request${pending > 1 ? 's' : ''} waiting` : `${next.teamName} · ${next.role}`}</div>
         </div>
-        <Icon name="chevR" size={18} color="var(--ink-3)" />
+        {(next || pending) ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '9px 14px', borderTop: '1px solid var(--line)', fontSize: 12.5, fontWeight: 700, minWidth: 0,
+            background: pending ? 'color-mix(in oklab, var(--gold) 9%, var(--surface))' : 'color-mix(in oklab, var(--sage) 8%, var(--surface))', color: pending ? '#8a6717' : 'var(--sage)' }}>
+            <Icon name={pending ? 'sparkle' : 'calCheck'} size={14} color="currentColor" />
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{pending ? `${pending} request${pending > 1 ? 's' : ''} waiting for your reply` : `You’re serving · ${next.teamName} · ${next.role}`}</span>
+          </div>
+        ) : null}
       </button>
     </div>
   );

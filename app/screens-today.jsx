@@ -2388,45 +2388,35 @@ function TodayScreen({ ctx }) {
           unconditionally — "Serving & events · RSVP · your rota" — so a locked phone still announced that its
           owner belongs to a church with a rota even after the church's NAME was hidden. Hiding one string is
           not hiding the church. AUDIT-2026-07-27. */}
-      {!ctx.church ? null : (servNext || servPendingN) ? (
+      {!ctx.church ? null : (
         <div style={{ position: "relative", marginBottom: 22, animation: "trinityFade .5s ease both" }}>
-          <div onClick={() => ctx.openServing && ctx.openServing()} style={{ display: "flex", alignItems: "center", gap: 13, padding: 14, borderRadius: 18, cursor: "pointer", boxShadow: "var(--shadow)",
-            background: servPendingN ? "color-mix(in oklab, var(--gold) 9%, var(--surface))" : "color-mix(in oklab, var(--sage) 9%, var(--surface))",
-            border: servPendingN ? "1px solid color-mix(in oklab, var(--gold) 32%, var(--line))" : "1px solid color-mix(in oklab, var(--sage) 30%, var(--line))" }}>
-            <div style={{ width: 46, height: 46, borderRadius: 14, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center",
-              background: servPendingN ? "color-mix(in oklab, var(--gold) 18%, var(--surface))" : "color-mix(in oklab, var(--sage) 16%, var(--surface))", color: servPendingN ? "#8a6717" : "var(--sage)" }}><Icon name={servPendingN ? "sparkle" : "calCheck"} size={22} stroke={1.8} /></div>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              {servPendingN ? (
-                <React.Fragment>
-                  <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15.5 }}>Can you serve?<ServingNewDot n={servNew} /></div>
-                  <div style={{ fontSize: 12.5, color: "#8a6717", fontWeight: 600 }}>{servPendingN} request{servPendingN > 1 ? "s" : ""} waiting for your reply</div>
-                </React.Fragment>
-              ) : (
-                <React.Fragment>
-                  <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15.5 }}>You{"’"}re serving {"·"} {servNext.teamName}<ServingNewDot n={servNew} /></div>
-                  <div style={{ fontSize: 12.5, color: "var(--sage)", fontWeight: 600 }}>{servNext.role} {"·"} {fmtServe(servNext.date)}</div>
-                </React.Fragment>
-              )}
-            </div>
-            <Icon name="chevR" size={18} color="var(--ink-3)" />
-          </div>
-        </div>
-      ) : (
-        <div style={{ position: "relative", marginBottom: 22, animation: "trinityFade .5s ease both" }}>
-          <div onClick={() => ctx.openServing && ctx.openServing()} style={{ display: "flex", alignItems: "center", gap: 13, padding: 14, borderRadius: 18, cursor: "pointer", boxShadow: "var(--shadow)", background: "var(--surface)", border: "1px solid var(--line)" }}>
-            <div style={{ width: 46, height: 46, borderRadius: 14, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "color-mix(in oklab, var(--sage) 16%, var(--surface))", color: "var(--sage)" }}><Icon name="calCheck" size={22} stroke={1.8} /></div>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              {/* The title and its dot are ONE line. "What’s happening" plus a "9+" badge is wider than the
-                  old "Serving & events" was, and at 320px it wrapped and grew the card 79px -> 95px
-                  (serving-card-says-whats-new.test.mjs catches exactly this). nowrap + ellipsis keeps the
-                  dot beside the title instead of under it; minWidth:0 lets the ellipsis actually engage. */}
-              <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15.5, display: "flex", alignItems: "center", minWidth: 0 }}>
-                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>What{"’"}s happening</span>
-                <ServingNewDot n={servNew} />
+          <div onClick={() => ctx.openServing && ctx.openServing()} style={{ display: "flex", flexDirection: "column", borderRadius: 18, cursor: "pointer", boxShadow: "var(--shadow)", background: "var(--surface)", border: "1px solid var(--line)", overflow: "hidden" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 13, padding: 14 }}>
+              <div style={{ width: 46, height: 46, borderRadius: 14, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "color-mix(in oklab, var(--sage) 16%, var(--surface))", color: "var(--sage)" }}><Icon name="calCheck" size={22} stroke={1.8} /></div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                {/* The title and its dot are ONE line (serving-card-says-whats-new.test.mjs catches a 320px wrap).
+                    nowrap + ellipsis keeps the dot beside the title; minWidth:0 lets the ellipsis engage. */}
+                <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 15.5, display: "flex", alignItems: "center", minWidth: 0 }}>
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>What{"’"}s happening</span>
+                  <ServingNewDot n={servNew} />
+                </div>
+                <div style={{ fontSize: 12.5, color: "var(--ink-3)", fontWeight: 600 }}>See what{"’"}s on {"·"} RSVP {"·"} your rota{(_care.settings && _care.settings.enabled) ? <span onClick={(e) => { e.stopPropagation(); ctx.openServing && ctx.openServing("care"); }} style={{ color: "var(--clay)" }}> {"·"} Care</span> : null}</div>
               </div>
-              <div style={{ fontSize: 12.5, color: "var(--ink-3)", fontWeight: 600 }}>See what{"’"}s on {"·"} RSVP {"·"} your rota{(_care.settings && _care.settings.enabled) ? <span onClick={(e) => { e.stopPropagation(); ctx.openServing && ctx.openServing("care"); }} style={{ color: "var(--clay)" }}> {"·"} Care</span> : null}</div>
+              <Icon name="chevR" size={18} color="var(--ink-3)" />
             </div>
-            <Icon name="chevR" size={18} color="var(--ink-3)" />
+            {/* SINGLE-LINE SERVING NOTICE (owner 2026-10-14): "You’re serving" / "Can you serve?" folded onto the
+                What’s happening card as ONE line under it, not a separate alternate card. Pending is prioritised
+                and gold; otherwise the next serving slot. nowrap + ellipsis keeps it to one line. */}
+            {(servNext || servPendingN) ? (
+              <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "9px 14px", borderTop: "1px solid var(--line)",
+                background: servPendingN ? "color-mix(in oklab, var(--gold) 9%, var(--surface))" : "color-mix(in oklab, var(--sage) 8%, var(--surface))",
+                color: servPendingN ? "#8a6717" : "var(--sage)", fontSize: 12.5, fontWeight: 700, minWidth: 0 }}>
+                <Icon name={servPendingN ? "sparkle" : "calCheck"} size={14} color="currentColor" />
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{servPendingN
+                  ? <React.Fragment>{servPendingN} request{servPendingN > 1 ? "s" : ""} waiting for your reply</React.Fragment>
+                  : <React.Fragment>You{"’"}re serving {"·"} {servNext.teamName} {"·"} {servNext.role} {"·"} {fmtServe(servNext.date)}</React.Fragment>}</span>
+              </div>
+            ) : null}
           </div>
         </div>
       )}
