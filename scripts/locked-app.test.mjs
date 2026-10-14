@@ -30,13 +30,14 @@ test('a locked app has no church in context at all', () => {
 });
 
 test('the serving card cannot render without a church', () => {
-  // Re-anchored 2026-10-09: the gate grew a `servHidden` branch ("{!ctx.church ? null : servHidden ? null : (servNext || servPendingN)"),
-  // so the old literal no longer exists. The gate itself is intact. Anchoring on the leading `{!ctx.church ? null :` alone.
+  // Re-anchored 2026-10-14: the serving card is now ONE "What's happening" card (You're serving folded onto it as a
+  // single line); the gate is `{!ctx.church ? null : (` and the card follows. Anchor on the gate, then confirm the
+  // card (its "your rota" subtitle) sits directly behind it.
   const at = TODAY.indexOf('{!ctx.church ? null : ');
   assert.notEqual(at, -1,
     'the serving card renders unconditionally again — "What’s happening · RSVP · your rota" on a locked phone says church as loudly as the name did');
-  assert.match(TODAY.slice(at, TODAY.indexOf('\n', at)), /servNext \|\| servPendingN/,
-    'the ctx.church gate no longer sits on the serving card line');
+  assert.match(TODAY.slice(at, at + 160), /position: "relative", marginBottom: 22/,
+    'the What\'s happening card is no longer the ctx.church gate\'s only branch');
 });
 
 // RULE 3: the text match above can be satisfied by a gate that is disabled. This one RENDERS the Today screen.
@@ -64,7 +65,7 @@ function renderToday(church, opts = {}) {
   const mod = loadScreen('app/screens-today.jsx', ['TodayScreen'], globals);
   const ctx = { myChildren: { children: [], askAtDesk: 0, settled: true }, church,
     care: { settings: { enabled: false }, needs: [], myPub: 'me' },
-    planProgress: {}, loc: null, churchDevos: [], servNext: null, servPending: [], servingSeenTs: 0, netUnread: 0, dark: false,
+    planProgress: {}, loc: null, churchDevos: [], servNext: opts.servNext || null, servPending: opts.servPending || [], servingSeenTs: 0, netUnread: 0, dark: false,
     openServing() {}, openChurchSwitcher() {}, openSearch() {}, openNotifications() {}, openListen() {},
     toggleDark() {}, toast() {}, openShareSheet() {}, openEvent() {}, openHelp() {} };
   return texts(draw(mod.TodayScreen, { ctx })).join(' ').replace(/\s+/g, ' ');
@@ -86,6 +87,15 @@ test('RENDERED: the removed dismiss X cannot hide the serving card for ever', ()
   const dismissed = renderToday({ id: 'c1', name: "St Chad's", npub: 'n'.repeat(8) }, { hidden: true });
   assert.match(dismissed, /What\s*.\s*s\s*happening/,
     'the serving card is hidden when the legacy dismiss flag is set — the hide-gate is still live; removing the button alone is not enough');
+});
+
+test('RENDERED: a serving slot shows as a line on the What s happening card (owner 2026-10-14)', () => {
+  // One card now: "You're serving" / "Can you serve?" is a single line folded onto the What's happening card,
+  // not a separate alternate card. Fails if the serving line is deleted.
+  const serving = renderToday({ id: 'c1', name: "St Chad's", npub: 'n'.repeat(8) }, { servNext: { teamName: 'Welcome', role: 'Greeter', date: '2026-10-04' } });
+  assert.match(serving, /What\s*.\s*s\s*happening/, 're-anchor: the What s happening card did not render, so the checks below are vacuous');
+  assert.match(serving, /You\s*.\s*re serving/, 'the "You re serving" line must draw INSIDE the one card when there is a slot');
+  assert.match(serving, /Welcome/, 'the team name must show on the serving line');
 });
 
 test('the honest limit is written down next to the fix', () => {
