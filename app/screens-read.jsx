@@ -729,7 +729,14 @@ function XrefPreviewSheet({ refStr, open, onClose, onGo, version }) {
   );
 }
 
-function CommentaryPanel({ loc, label, open, onClose, ctx, docked }) {
+function CommentaryPanel({ loc, label, open, onClose, ctx, docked, syncRef, readerVerse }) {
+  const panelScrollRef = useR(null);
+  // Scroll the cross-ref list so verse N's group sits near the top — how the panel "follows" the reader.
+  const scrollToVerse = (v) => {
+    const sc = panelScrollRef.current; if (!sc || v == null) return;
+    const el = sc.querySelector('#xr-' + v); if (!el) return;
+    try { sc.scrollTop += el.getBoundingClientRect().top - sc.getBoundingClientRect().top - 10; } catch (e) {}
+  };
   const [view, setView] = useS('commentary');   // 'commentary' | 'notes' | 'crossrefs'
   const [comm, setComm] = useS([]);              // installed commentary modules + active-Bible footnotes
   const [xrefs, setXrefs] = useS({});            // this chapter's cross-references: { verse: [displayRef, …] }
@@ -769,6 +776,16 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked }) {
     read();
     return window.Bible.subscribe ? window.Bible.subscribe(read) : undefined;
   }, [open, view, loc.book, loc.chap]);
+  // Follow the reader: register the scroll handler and align to the reader's current verse whenever the Cross
+  // refs tab is shown or its list fills. On a phone the panel is an overlay, so this aligns on open; when the
+  // panel is docked beside the reader, the reader's onScroll calls the same handler live.
+  useE(() => {
+    if (!open || view !== 'crossrefs') { if (syncRef) syncRef.current = null; return; }
+    if (syncRef) syncRef.current = scrollToVerse;
+    const v = readerVerse ? readerVerse() : null;
+    if (v != null) { scrollToVerse(v); setTimeout(() => scrollToVerse(v), 60); }
+    return () => { if (syncRef) syncRef.current = null; };
+  }, [open, view, loc.book, loc.chap, xrefs]);
   // SWIPE-TO-CLOSE ONLY COUNTS WHEN THE SWIPE IS MOSTLY SIDEWAYS. This measured the finger's rightward travel
   // alone: end more than 56px right of where it started and the panel closed. A long thumb-scroll down these
   // notes is rarely vertical — 60px of drift over 400px of scrolling counted as a swipe, and the panel slid
@@ -812,12 +829,12 @@ function CommentaryPanel({ loc, label, open, onClose, ctx, docked }) {
             <div style={{ display: 'flex', flex: 1, background: 'var(--surface-2)', borderRadius: 12, padding: 3 }}>{seg('commentary', 'Commentary')}{seg('crossrefs', 'Cross refs')}{seg('notes', `My notes${myNotes.length ? ' · ' + myNotes.length : ''}`)}</div>
           </div>
         </div>
-        <div className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '18px 18px 30px', background: 'var(--paper)' }}>
+        <div ref={panelScrollRef} className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '18px 18px 30px', background: 'var(--paper)' }}>
           {view === 'crossrefs' ? (
             Object.keys(xrefs).length ? (
               <React.Fragment>
                 {Object.keys(xrefs).map(n => parseInt(n, 10)).sort((a, b) => a - b).map(v => (
-                  <div key={v} style={{ marginBottom: 16 }}>
+                  <div key={v} id={'xr-' + v} style={{ marginBottom: 16 }}>
                     <span style={{ fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 11.5, color: 'var(--on-clay)', background: 'var(--clay)', padding: '3px 9px', borderRadius: 8, display: 'inline-block', marginBottom: 8 }}>{label}:{v}</span>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                       {(xrefOpen[v] ? xrefs[v] : xrefs[v].slice(0, 4)).map((r, i) => (
@@ -963,6 +980,29 @@ function ReadScreen({ ctx }) {
   const [narrateState, setNarrateState] = useS('idle');   // idle | playing | paused
   const [narrateV, setNarrateV] = useS(null);              // verse number currently being spoken
   const scrollRef = useR();
+  // Cross-reference panel follows the reader: track the verse at the top of the reader, and let the panel
+  // register a "scroll your list to verse N" callback so it can align to where the reader is (owner 2026-10-14).
+  const topVerseRef = useR(null);
+  const panelSyncRef = useR(null);
+  const syncRaf = useR(null);
+  const readerTopVerse = () => {
+    const sc = scrollRef.current; if (!sc) return null;
+    const line = sc.getBoundingClientRect().top + 140;   // just below the sticky header
+    let v = null;
+    const els = sc.querySelectorAll('[id^="rv-"]');
+    for (let i = 0; i < els.length; i++) {
+      if (els[i].getBoundingClientRect().top <= line) v = parseInt(els[i].id.slice(3), 10); else break;
+    }
+    return v;
+  };
+  const onReaderScroll = () => {
+    if (syncRaf.current) return;
+    syncRaf.current = requestAnimationFrame(() => {
+      syncRaf.current = null;
+      const v = readerTopVerse();
+      if (v != null) { topVerseRef.current = v; if (commentaryOpen && panelSyncRef.current) try { panelSyncRef.current(v); } catch (e) {} }
+    });
+  };
   const synth = (typeof window !== 'undefined' && window.speechSynthesis) || null;
   const stopNarration = () => { if (synth) try { synth.cancel(); } catch (e) {} setNarrateState('idle'); setNarrateV(null); };
   // stop speaking when the passage changes or the screen unmounts
@@ -1222,7 +1262,7 @@ function ReadScreen({ ctx }) {
         onSettings={() => setSheet('settings')} compare={!!compare} onCompare={() => setCompare(c => c ? false : true)}
         onListen={listenChapter} narrating={audioOnThis && audio.playing} canListen={true} />
 
-      <div ref={scrollRef} className="no-scrollbar"
+      <div ref={scrollRef} className="no-scrollbar" onScroll={onReaderScroll}
         onTouchStart={onSwipeStart} onTouchMove={onSwipeMove} onTouchEnd={onSwipeEnd} onTouchCancel={() => { swipe.current = null; }}
         style={{ position: 'absolute', inset: 0, overflowY: 'auto', overflowX: 'hidden', padding: 'calc(env(safe-area-inset-top, 0px) + 122px) 18px 116px', scrollPaddingTop: 'calc(env(safe-area-inset-top, 0px) + 130px)', overflowAnchor: 'none' }}>
         <div style={{ animation: 'trinityFade .4s ease both' }}>
@@ -1293,7 +1333,7 @@ function ReadScreen({ ctx }) {
       <WordStudySheet id={wordId} open={sheet === 'word'} onClose={close} onWord={pushWord} canBack={wordStack.length > 1} onBack={backWord} />
       <CrossRefSheet loc={loc} v={sel0} label={labelOf(sel0)} open={sheet === 'cross'} onClose={() => setSheet('action')} ctx={ctx} />
       {ctx.desktop ? null : <CommentaryEdge open={commentaryOpen} onToggle={() => setCommentaryOpen(o => !o)} />}
-      {ctx.desktop ? null : <CommentaryPanel loc={loc} label={bname + ' ' + loc.chap} open={commentaryOpen} onClose={() => setCommentaryOpen(false)} ctx={ctx} />}
+      {ctx.desktop ? null : <CommentaryPanel loc={loc} label={bname + ' ' + loc.chap} open={commentaryOpen} onClose={() => setCommentaryOpen(false)} ctx={ctx} syncRef={panelSyncRef} readerVerse={() => topVerseRef.current} />}
       <NoteEditor label={labelOf(sel0)} open={sheet === 'note'} value={notes[keyOf(sel0)]} onClose={() => setSheet('action')}
         onSave={(t) => { const k = keyOf(sel0); ctx.setNote(k, t); legacyKeysFor(ctx.notes, k).forEach(l => ctx.setNote(l, '')); setSheet('action'); ctx.toast('Note saved'); }} />
       <VersionSheet open={sheet === 'version'} onClose={close} version={version} ctx={ctx} onPick={(k) => { ctx.setVersion(k); close(); }} onAdd={() => { close(); ctx.addModule(); }} />
