@@ -567,7 +567,10 @@ function CollectionView({ coll, open, onClose, ctx }) {
   const [adding, setAdding] = React.useState(false);
   const [pWho, setPWho] = React.useState('');
   const [pText, setPText] = React.useState('');
-  React.useEffect(() => { if (open) { setQ(''); setAdding(false); setPWho(''); setPText(''); } }, [open, coll && coll.id]);
+  // Notes only: the note being edited (the MyData item) and its draft text.
+  const [editNote, setEditNote] = React.useState(null);
+  const [noteText, setNoteText] = React.useState('');
+  React.useEffect(() => { if (open) { setEditNote(null); setQ(''); setAdding(false); setPWho(''); setPText(''); } }, [open, coll && coll.id]);
   React.useEffect(() => MD.on(() => force(x => x + 1)), []);
   if (!coll) return null;
 
@@ -583,6 +586,16 @@ function CollectionView({ coll, open, onClose, ctx }) {
     prayer: 'People and things you’re praying for', crossrefs: 'Where scripture echoes scripture' }[coll.id];
 
   const jump = (it) => { if (!it.ref) return; onClose(); setTimeout(() => ctx.openReader(), 200); ctx.toast('Jumping to ' + it.ref); };
+  // Tapping a NOTE opens an editor (the reader's verse card no longer has a Note tile, so this is the way
+  // back to an existing note). Highlights and bookmarks still jump to the reader.
+  const tap = (it) => { if (isNotes) { setEditNote(it); setNoteText(it.text || ''); } else jump(it); };
+  // Saves through the same MyData path as ctx.setNote in app.jsx (put keyed by id; empty text removes).
+  const saveNote = () => {
+    if (!editNote) return;
+    const t = noteText.trim();
+    if (t) MD.put('notes', { ...editNote, text: t }); else MD.remove('notes', editNote.id);
+    setEditNote(null); ctx.toast(t ? 'Note saved' : 'Note removed');
+  };
   const del = (it) => { MD.remove(coll.id, it.id); ctx.toast('Removed'); };
   const toggleVis = (it) => MD.setVisibility(coll.id, it.id, it.visibility === 'private' ? 'public' : 'private');
   const savePrayer = () => {
@@ -637,8 +650,8 @@ function CollectionView({ coll, open, onClose, ctx }) {
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
             {items.map((it) => (
-              <div key={it.id || it.ref} onClick={() => !isPrayer && jump(it)} style={{
-                padding: 15, borderRadius: 16, background: 'var(--surface)', border: '1px solid var(--line)', cursor: it.ref && !isPrayer ? 'pointer' : 'default', boxShadow: 'var(--shadow)',
+              <div key={it.id || it.ref} onClick={() => !isPrayer && tap(it)} style={{
+                padding: 15, borderRadius: 16, background: 'var(--surface)', border: '1px solid var(--line)', cursor: (it.ref || isNotes) && !isPrayer ? 'pointer' : 'default', boxShadow: 'var(--shadow)',
                 position: 'relative', overflow: 'hidden', paddingLeft: it.color ? 18 : 15, opacity: it.answered ? .62 : 1 }}>
                 {it.color ? <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 5, background: it.color }} /> : null}
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 5, gap: 8 }}>
@@ -680,6 +693,19 @@ function CollectionView({ coll, open, onClose, ctx }) {
           </div>
         )}
       </div>
+      {isNotes ? (
+        <BottomSheet open={!!editNote} onClose={() => setEditNote(null)}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+            <div><div style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>Note on</div>
+            <div style={{ fontFamily: 'var(--font-display)', fontSize: 20, fontWeight: 700 }}>{editNote ? (window.verseRefLabel ? window.verseRefLabel(editNote.ref) : editNote.ref) : ''}</div></div>
+            <button onClick={saveNote} aria-label="Save note" style={{ border: 'none', background: 'var(--clay)', color: 'var(--on-clay)',
+              padding: '10px 18px', borderRadius: 13, fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>Save</button>
+          </div>
+          <textarea autoFocus aria-label="Note text" value={noteText} onChange={e => setNoteText(e.target.value)} placeholder="What is God showing you here?" style={{
+            width: '100%', boxSizing: 'border-box', minHeight: 150, border: '1px solid var(--line)', borderRadius: 16, background: 'var(--surface-2)',
+            padding: 15, fontFamily: 'var(--font-read)', fontSize: 17, lineHeight: 1.5, color: 'var(--ink)', resize: 'none', outline: 'none' }} />
+        </BottomSheet>
+      ) : null}
     </Overlay>);
 
 }

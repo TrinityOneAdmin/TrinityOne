@@ -222,6 +222,7 @@ function library(items) {
     React, window: win, document: { addEventListener() {}, removeEventListener() {} },
     Icon: Stub('Icon'), IconBtn: Stub('IconBtn'), Spinner: Stub('Spinner'), ScreenScroll: (p) => p.children,
     Overlay: ({ children }) => React.createElement('div', {}, children),
+    BottomSheet: ({ open, children }) => open ? React.createElement('div', {}, children) : null,
     safeCssColor: (c) => c || 'var(--clay)',
   };
   const { CollectionView } = loadScreen('app/screens-library.jsx', ['CollectionView'], g);
