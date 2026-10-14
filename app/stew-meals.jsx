@@ -430,6 +430,12 @@ function StewCareChat({ reqId, requesterPub, title, onClose }) {
   const [text, setText] = React.useState('');
   const [err, setErr] = React.useState('');
   const [menuMsg, setMenuMsg] = React.useState(null);
+  const [dotsMsg, setDotsMsg] = React.useState(null);   // the ⋯ (Reply-only) popup, separate from the right-click menu
+  // SWIPE TO REPLY (APK) — the shared TrinityReplyKit (app/reply-kit.jsx); one row is dragged at a time.
+  const isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+  const swipeSt = React.useRef(null);
+  const [swipeAt, setSwipeAt] = React.useState({ id: '', dx: 0 });
+  const menuIntoView = React.useCallback((el) => { if (el && el.scrollIntoView) { try { el.scrollIntoView({ block: 'nearest' }); } catch (e) {} } }, []);
   const [replyTo, setReplyTo] = React.useState(null);
   const endRef = React.useRef(null);
   const inputRef = React.useRef(null);
@@ -445,10 +451,15 @@ function StewCareChat({ reqId, requesterPub, title, onClose }) {
     if (!ok) { setText(t); setErr('Couldn\u2019t send \u2014 we couldn\u2019t confirm who this conversation reaches. Check your connection and try again.'); }
   };
   const react = async (msgId, emoji) => { setMenuMsg(null); try { await window.StewardMeals.sendCareChat(reqId, requesterPub, '', { reaction: emoji, replyTo: msgId }); } catch (e) {} };
-  const startReply = (m) => { setMenuMsg(null); setReplyTo(m); try { inputRef.current && inputRef.current.focus(); } catch (e) {} };
+  const startReply = (m) => { setMenuMsg(null); setDotsMsg(null); setReplyTo(m); try { inputRef.current && inputRef.current.focus(); } catch (e) {} };
   const textMsgs = msgs.filter(m => m.text);
   const reactionsByMsg = {};
   msgs.filter(m => m.reaction && m.replyTo).forEach(m => { if (!reactionsByMsg[m.replyTo]) reactionsByMsg[m.replyTo] = []; reactionsByMsg[m.replyTo].push(m.reaction); });
+  const canReply = (m) => !!m && !!m.id;
+  const swipe = (m) => isNative && canReply(m)
+    ? TrinityReplyKit.handlers(swipeSt, (v) => setSwipeAt(v ? { id: m.id, dx: v } : (p => p.dx ? { id: '', dx: 0 } : p)), () => startReply(m))
+    : {};
+  const lastId = textMsgs.length ? textMsgs[textMsgs.length - 1].id : '';
   const msgById = {};
   textMsgs.forEach(m => { msgById[m.id] = m; });
   React.useEffect(() => {
@@ -468,9 +479,20 @@ function StewCareChat({ reqId, requesterPub, title, onClose }) {
             const quoted = m.replyTo && msgById[m.replyTo];
             const copy = () => { try { navigator.clipboard.writeText(m.text); } catch {} };
             return (
-            <div key={m.id} style={{ alignSelf: m.mine ? 'flex-end' : 'flex-start', maxWidth: '80%', position: 'relative' }}>
-              {quoted ? <div style={{ fontSize: 11, color: 'var(--ink-3)', padding: '3px 9px', margin: '0 3px 2px', borderLeft: '2px solid var(--clay)', borderRadius: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{quoted.text ? quoted.text.slice(0, 80) : ''}</div> : null}
+            <div key={m.id} {...swipe(m)} style={{ alignSelf: m.mine ? 'flex-end' : 'flex-start', maxWidth: '80%', position: 'relative', ...(isNative ? TrinityReplyKit.style(swipeAt.id === m.id ? swipeAt.dx : 0) : {}) }}>
+              {swipeAt.id === m.id ? TrinityReplyKit.cue(swipeAt.dx) : null}
+              {quoted ? TrinityReplyKit.quote({ variant: 'line', size: 11, maxWidth: '100%', text: quoted.text ? quoted.text.slice(0, 80) : '' }) : (m.replyTo ? TrinityReplyKit.quote({ variant: 'line', size: 11, missing: true }) : null)}
               <div onContextMenu={e => { e.preventDefault(); setMenuMsg(menuMsg === m.id ? null : m.id); }} style={{ padding: '8px 12px', borderRadius: 13, background: m.mine ? 'var(--clay)' : 'var(--surface-2)', color: m.mine ? '#fff' : 'var(--ink)', fontSize: 14, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.text}</div>
+              {canReply(m) ? (
+                <button onClick={() => setDotsMsg(dotsMsg === m.id ? null : m.id)} title="Message actions" aria-label="Message actions"
+                  style={{ position: 'absolute', top: -6, [m.mine ? 'left' : 'right']: -30, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 999, width: 24, height: 24, cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="dots" size={14} /></button>
+              ) : null}
+              {/* REPLY ONLY. The ⋯ offers Reply and nothing else on purpose: reactions and Copy stay on the right-click menu as before. */}
+              {dotsMsg === m.id ? (
+                <div data-reply-menu={m.id === lastId ? 'up' : 'down'} ref={menuIntoView} onClick={e => e.stopPropagation()} style={{ position: 'absolute', ...(m.id === lastId ? { bottom: '100%', marginBottom: 4 } : { top: '100%', marginTop: 4 }), [m.mine ? 'right' : 'left']: 0, zIndex: 10, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 5, minWidth: 130 }}>
+                  <button onClick={() => startReply(m)} style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', border: 'none', background: 'none', cursor: 'pointer', padding: '8px 10px', borderRadius: 8, fontSize: 13, fontWeight: 600, color: 'var(--ink)', textAlign: 'left' }}><Icon name="reply" size={14} color="var(--ink-2)" /> Reply</button>
+                </div>
+              ) : null}
               {rxns ? <div style={{ display: 'flex', gap: 2, flexWrap: 'wrap', margin: '2px 5px 0', justifyContent: m.mine ? 'flex-end' : 'flex-start' }}>{rxns.map((r, i) => <span key={i} style={{ fontSize: 13, lineHeight: 1 }}>{r}</span>)}</div> : null}
               {menuMsg === m.id ? <div onClick={e => e.stopPropagation()} style={{ position: 'absolute', bottom: '100%', [m.mine ? 'right' : 'left']: 0, marginBottom: 4, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 14, boxShadow: 'var(--shadow-lg)', padding: 6, display: 'flex', flexDirection: 'column', gap: 2, zIndex: 10, minWidth: 140 }}>
                 <div style={{ display: 'flex', gap: 4, padding: '4px 6px' }}>{REACTIONS.map(emoji => <button key={emoji} onClick={() => react(m.id, emoji)} style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: 18, padding: '2px 3px', borderRadius: 8 }}>{emoji}</button>)}</div>
@@ -482,10 +504,7 @@ function StewCareChat({ reqId, requesterPub, title, onClose }) {
           <div ref={endRef} />
         </div>
         {err ? <div role="alert" style={{ fontSize: 12.5, lineHeight: 1.45, padding: '10px 14px', borderTop: '1px solid color-mix(in oklab, var(--clay) 26%, var(--line))', background: 'color-mix(in oklab, var(--clay) 10%, var(--surface))', color: 'var(--ink)' }}>{err}</div> : null}
-        {replyTo ? <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderTop: '1px solid var(--line)', background: 'var(--surface-2)' }}>
-          <div style={{ flex: 1, minWidth: 0, fontSize: 12, color: 'var(--ink-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}><span style={{ fontWeight: 700 }}>Replying</span> {replyTo.text ? replyTo.text.slice(0, 60) : ''}</div>
-          <button onClick={() => setReplyTo(null)} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 2 }}><Icon name="x" size={14} color="currentColor" /></button>
-        </div> : null}
+        {replyTo ? TrinityReplyKit.bar({ variant: 'console', who: replyTo.mine ? 'yourself' : 'them', text: replyTo.text ? replyTo.text.slice(0, 60) : '', onCancel: () => setReplyTo(null) }) : null}
         <div style={{ display: 'flex', gap: 8, padding: 12, borderTop: replyTo ? 'none' : '1px solid var(--line)' }}>
           <input ref={inputRef} value={text} maxLength={4000} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); send(); } }} placeholder="Write a message…" style={{ flex: 1, padding: '10px 13px', borderRadius: 999, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontSize: 14, outline: 'none' }} />
           <button onClick={send} aria-label="Send this reply" title="Send this reply" className="sk-btn sk-btn--clay" style={{ padding: '0 16px' }}><Icon name="send" size={16} color="var(--on-clay)" /></button>

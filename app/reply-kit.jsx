@@ -14,8 +14,8 @@
 // expand function elements, and a component here would hide the reply bar from every one of them.
 //
 // Users (CLAUDE.md rule 2): Row (group rooms, app/screens-chat.jsx) · DMSwipe + DMThread (member DM, same file)
-// · ChatRoom's reply bar (same file) · StewDmWindow (console DM, app/stew-dashboard.jsx). The care chats and the
-// console GROUP chat are deliberately NOT adopters yet.
+// · ChatRoom's reply bar (same file) · StewDmWindow (console DM, app/stew-dashboard.jsx). · CareChatSheet (app/screens-today.jsx) · StewCareChat (app/stew-meals.jsx).
+// The console GROUP chat is deliberately NOT an adopter yet.
 var TrinityReplyKit = (function () {
   var ARM = 48;   // how far to drag before letting go replies
   var MAX = 76;   // and how far the row will move at all
