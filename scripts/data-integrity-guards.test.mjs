@@ -107,7 +107,7 @@ test('an envelope arriving late does not discard a key this device already holds
 });
 
 test('an encrypted group key is not minted from an untrusted view', () => {
-  assert.match(body('publishGroupKey(', BUNDLE), /_isRelayAuthed\(\)/,
+  assert.match(body('publishGroupKey(groupId', BUNDLE), /_isRelayAuthed\(\)/,
     'minting over an existing group key orphans that group’s entire encrypted history. The reuseOnly path ' +
     'was already guarded; the interactive "add a member" path was not.');
 });
