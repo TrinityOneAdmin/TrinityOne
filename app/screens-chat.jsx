@@ -978,54 +978,21 @@ function Row({ me, m, children, ctx, mod }) {
   // nothing replies — while the arrow the member watched fill in says it should have. Measured by driving
   // these three handlers with no redraw between the move and the lift: see
   // scripts/a-direct-message-can-be-answered.test.mjs. Read `swipe.current.dx`, never `dx`.
-  const swipe = React.useRef({ x: 0, y: 0, on: false, dx: 0 });
-  const [dx, setDx] = React.useState(0);
+  // The swipe itself now lives in app/reply-kit.jsx (TrinityReplyKit.useSwipe) — ONE copy shared with the
+  // member DM and the console DM. Everything the notes above say still holds; it is just implemented there.
+  // The press-and-hold share timer rides along through the kit's start/move/end hooks.
   const canReply = typeof M.onReply === 'function';
-  const SWIPE_ARM = 48;    // how far to drag before letting go replies
-  const SWIPE_MAX = 76;    // and how far the bubble will move at all
-  const moveTo = (v) => { swipe.current.dx = v; setDx(v); };
-  const onTS = (e) => {
-    startLP();
-    const t = e.touches && e.touches[0];
-    swipe.current = t ? { x: t.clientX, y: t.clientY, on: true, dx: 0 } : { x: 0, y: 0, on: false, dx: 0 };
-    if (dx) setDx(0);
-  };
-  const onTM = (e) => {
-    cancelLP();
-    const t = e.touches && e.touches[0];
-    if (!t || !swipe.current.on || !canReply) return;
-    const ddx = t.clientX - swipe.current.x, ddy = t.clientY - swipe.current.y;
-    if (Math.abs(ddy) > Math.abs(ddx)) { swipe.current.on = false; moveTo(0); return; }   // scrolling, not swiping
-    moveTo(Math.max(0, Math.min(SWIPE_MAX, ddx)));
-  };
-  // A CANCEL PAST THE THRESHOLD STILL REPLIES, and that is deliberate. touchcancel is what Android fires when
-  // the system takes a gesture away mid-drag, and it is the single most likely way a horizontal drag inside a
-  // scrolling list ends on a phone. Once the arrow has FILLED IN the app has promised "let go and you reply";
-  // abandoning that on a cancel is how a member ends up unable to answer a message at all. Below the
-  // threshold nothing was promised, so a cancel just springs back.
-  const onTE = () => {
-    cancelLP();
-    const far = swipe.current.dx;
-    if (canReply && far >= SWIPE_ARM) { try { M.onReply(); } catch (err) {} }
-    swipe.current.on = false; swipe.current.dx = 0;
-    if (dx) setDx(0);
-  };
+  const sw = TrinityReplyKit.useSwipe(M.onReply, { enabled: canReply, onStart: startLP, onMove: cancelLP, onEnd: cancelLP });
   return (
     // touch-action: pan-y lets the message list keep scrolling and tells the compositor NOT to treat a
     // HORIZONTAL drag as a pan it owns. Without it the browser may claim the gesture for an ancestor scroller
     // and fire touchcancel part-way through the drag; React attaches touch listeners passively, so
     // preventDefault() cannot do this job and the CSS has to.
-    <div onTouchStart={onTS} onTouchEnd={onTE} onTouchCancel={onTE} onTouchMove={onTM} onContextMenu={(e) => { e.preventDefault(); doShare(); }}
-      style={{ display: 'flex', flexDirection: 'column', alignItems: me ? 'flex-end' : 'flex-start', animation: 'trinityFade .3s ease both', touchAction: 'pan-y',
-        position: 'relative', transform: dx ? ('translateX(' + dx + 'px)') : '', transition: dx ? '' : 'transform .18s ease' }}>
+    <div {...sw.handlers} onContextMenu={(e) => { e.preventDefault(); doShare(); }}
+      style={{ display: 'flex', flexDirection: 'column', alignItems: me ? 'flex-end' : 'flex-start', animation: 'trinityFade .3s ease both',
+        position: 'relative', ...sw.style }}>
       {/* the arrow appears from under the bubble as it moves, and fills in once far enough to let go */}
-      {dx ? (
-        <div aria-hidden="true" style={{ position: 'absolute', left: -34, top: '50%', transform: 'translateY(-50%)', opacity: Math.min(1, dx / SWIPE_ARM),
-          width: 26, height: 26, borderRadius: 999, display: 'flex', alignItems: 'center', justifyContent: 'center',
-          background: dx >= SWIPE_ARM ? 'var(--clay)' : 'var(--surface-2)', border: '1px solid var(--line)' }}>
-          <Icon name="reply" size={14} color={dx >= SWIPE_ARM ? 'var(--on-clay)' : 'var(--ink-3)'} />
-        </div>
-      ) : null}
+      {sw.cue}
       {!me ? <div onClick={() => canDM && ctx.openDM(m.pubkey)} title={canDM ? 'Message ' + d.handle : ''} style={{ display: 'flex', alignItems: 'center', gap: 7, margin: '0 0 4px 4px', cursor: canDM ? 'pointer' : 'default' }}>
         <UserAvatar av={avOf(d)} name={d.handle} size={22} />
         {/* A PARISH LETTER: the church's name on the letterhead, the person's underneath. Round 6 had a vicar's
@@ -1049,18 +1016,13 @@ function Row({ me, m, children, ctx, mod }) {
         <span style={{ fontSize: 11, color: 'var(--ink-3)' }}>{m.when}</span>
       </div> : null}
       <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', alignItems: me ? 'flex-end' : 'flex-start' }}>
-        {M.replyParent ? (
-          <div style={{ maxWidth: 260, marginBottom: 4, padding: '5px 10px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)', borderLeft: '2.5px solid var(--clay)', fontSize: 12, lineHeight: 1.3 }}>
-            <div style={{ fontWeight: 700, color: 'var(--ink-3)' }}>{M.replyParent.me ? 'You' : ((window.Fellowship && window.Fellowship.displayFor && window.Fellowship.displayFor(M.replyParent.pubkey).handle) || 'someone')}</div>
-            <div style={{ color: 'var(--ink-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 240 }}>{shareTextOf(M.replyParent) || '…'}</div>
-          </div>
-        ) : m.replyTo ? (
+        {M.replyParent
+          ? TrinityReplyKit.quote({ variant: 'card',
+              who: M.replyParent.me ? 'You' : ((window.Fellowship && window.Fellowship.displayFor && window.Fellowship.displayFor(M.replyParent.pubkey).handle) || 'someone'),
+              text: shareTextOf(M.replyParent) || '…' })
           // it IS a reply, but the parent isn't in the loaded window (thin pipe) or was hidden/deleted — keep the
           // reply context without leaking any content (audit U2 + U3)
-          <div style={{ maxWidth: 260, marginBottom: 4, padding: '5px 10px', borderRadius: 11, background: 'var(--surface-2)', border: '1px solid var(--line)', borderLeft: '2.5px solid var(--line)', fontSize: 12, lineHeight: 1.3, color: 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5 }}>
-            <Icon name="reply" size={12} color="var(--ink-3)" /><span style={{ fontStyle: 'italic' }}>replying to an earlier message</span>
-          </div>
-        ) : null}
+          : m.replyTo ? TrinityReplyKit.quote({ variant: 'card', missing: true }) : null}
         {children}
         {(M.onReply || M.canModerate || M.onDelete || (!me && canDM && ctx && ctx.openDM)) ? (
           <React.Fragment>
@@ -1742,16 +1704,9 @@ function ChatRoom({ group, open, onClose, ctx, docked }) {
             </div>
           </div>
         ) : null}
-        {replyTo ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 10px', marginBottom: 8, borderRadius: 12, background: 'var(--surface-2)', border: '1px solid var(--line)', borderLeft: '2.5px solid var(--clay)' }}>
-            <Icon name="reply" size={15} color="var(--clay)" style={{ flexShrink: 0 }} />
-            <div style={{ flex: 1, minWidth: 0, fontSize: 12.5, lineHeight: 1.3 }}>
-              <div style={{ fontWeight: 700, color: 'var(--ink-2)' }}>Replying to {replyTo.me ? 'yourself' : ((window.Fellowship && window.Fellowship.displayFor && window.Fellowship.displayFor(replyTo.pubkey).handle) || 'someone')}</div>
-              <div style={{ color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{shareTextOf(replyTo) || '…'}</div>
-            </div>
-            <button onClick={() => setReplyTo(null)} title="Cancel reply" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', flexShrink: 0, padding: 2 }}><Icon name="x" size={16} /></button>
-          </div>
-        ) : null}
+        {replyTo ? TrinityReplyKit.bar({ variant: 'card',
+          who: replyTo.me ? 'yourself' : ((window.Fellowship && window.Fellowship.displayFor && window.Fellowship.displayFor(replyTo.pubkey).handle) || 'someone'),
+          text: shareTextOf(replyTo) || '…', onCancel: () => setReplyTo(null) }) : null}
         <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8 }}>
           <div style={{ position: 'relative', flexShrink: 0 }}>
             {actionsOpen ? <div onClick={() => setActionsOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 9 }} /> : null}
@@ -1979,44 +1934,14 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
 // all along (Row, above). The menu offers Reply only: inside a direct message you are ALREADY private, so
 // "Reply privately" would be meaningless here, and there is nothing to moderate in someone else's inbox.
 function DMSwipe({ mine, onReply, menuOpen, onOpenMenu, children }) {
-  // ⚠ READ `st.current.dx`, NEVER `dx` — see the long note on the same trap in Row above. `dx` state exists
-  // only to redraw; the live offset is the ref, because the last touchmove of a flick and the touchend after
-  // it reach these handlers with no render in between.
-  const st = React.useRef({ x: 0, y: 0, on: false, dx: 0 });
-  const [dx, setDx] = React.useState(0);
-  const ARM = 48, MAX = 76;
-  const moveTo = (v) => { st.current.dx = v; setDx(v); };
-  const onTS = (e) => {
-    const t = e.touches && e.touches[0];
-    st.current = t ? { x: t.clientX, y: t.clientY, on: true, dx: 0 } : { x: 0, y: 0, on: false, dx: 0 };
-    if (dx) setDx(0);
-  };
-  const onTM = (e) => {
-    const t = e.touches && e.touches[0];
-    if (!t || !st.current.on) return;
-    const ddx = t.clientX - st.current.x, ddy = t.clientY - st.current.y;
-    if (Math.abs(ddy) > Math.abs(ddx)) { st.current.on = false; moveTo(0); return; }   // a scroll, not a swipe
-    moveTo(Math.max(0, Math.min(MAX, ddx)));
-  };
-  // Past the threshold a cancel still replies, for the reason written out in Row.
-  const onTE = () => {
-    const far = st.current.dx;
-    if (far >= ARM && onReply) { try { onReply(); } catch (e) {} }
-    st.current.on = false; st.current.dx = 0;
-    if (dx) setDx(0);
-  };
+  // The swipe lives in app/reply-kit.jsx (TrinityReplyKit.useSwipe) — ONE copy shared with Row and the console
+  // DM. ⚠ its offset is a REF, never state read at lift time: see the note on the same trap in the kit.
+  const sw = TrinityReplyKit.useSwipe(onReply);
   return (
-    // touch-action: pan-y — the list still scrolls, the browser does not claim the horizontal drag. See Row.
-    <div onTouchStart={onTS} onTouchMove={onTM} onTouchEnd={onTE} onTouchCancel={onTE}
-      style={{ display: 'flex', flexDirection: 'column', alignItems: mine ? 'flex-end' : 'flex-start', position: 'relative', touchAction: 'pan-y',
-        transform: dx ? ('translateX(' + dx + 'px)') : '', transition: dx ? '' : 'transform .18s ease' }}>
-      {dx ? (
-        <div aria-hidden="true" style={{ position: 'absolute', left: -34, top: '50%', transform: 'translateY(-50%)', opacity: Math.min(1, dx / ARM),
-          width: 26, height: 26, borderRadius: 999, display: 'flex', alignItems: 'center', justifyContent: 'center',
-          background: dx >= ARM ? 'var(--clay)' : 'var(--surface-2)', border: '1px solid var(--line)' }}>
-          <Icon name="reply" size={14} color={dx >= ARM ? 'var(--on-clay)' : 'var(--ink-3)'} />
-        </div>
-      ) : null}
+    // touch-action: pan-y (in sw.style) — the list still scrolls, the browser does not claim the horizontal drag.
+    <div {...sw.handlers}
+      style={{ display: 'flex', flexDirection: 'column', alignItems: mine ? 'flex-end' : 'flex-start', position: 'relative', ...sw.style }}>
+      {sw.cue}
       {/* the same shape Row uses: a relative column around the bubble so the dots can sit just outside it */}
       <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', alignItems: mine ? 'flex-end' : 'flex-start' }}>
         {children}
@@ -2151,16 +2076,9 @@ function DMThread({ peer, open, onClose, ctx, docked }) {
           <DMSwipe key={m.id} mine={m.mine} onReply={() => { setDmReply(m); setDmMenuFor(null); }}
             menuOpen={dmMenuFor === m.id} onOpenMenu={() => setDmMenuFor(dmMenuFor === m.id ? null : m.id)}>
             {/* the message this one answers, shown the same way a group room shows it */}
-            {m.replyTo && msgById[m.replyTo] ? (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11.5, color: 'var(--ink-3)', margin: '0 4px 3px', maxWidth: 274 }}>
-                <Icon name="reply" size={11} color="var(--ink-3)" />
-                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontStyle: 'italic' }}>{msgById[m.replyTo].content}</span>
-              </div>
-            ) : m.replyTo ? (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11.5, color: 'var(--ink-3)', margin: '0 4px 3px' }}>
-                <Icon name="reply" size={11} color="var(--ink-3)" /><span style={{ fontStyle: 'italic' }}>replying to an earlier message</span>
-              </div>
-            ) : null}
+            {m.replyTo && msgById[m.replyTo]
+              ? TrinityReplyKit.quote({ variant: 'line', size: 11.5, maxWidth: 274, text: msgById[m.replyTo].content })
+              : m.replyTo ? TrinityReplyKit.quote({ variant: 'line', size: 11.5, missing: true }) : null}
             <div onClick={() => setRxFor(v => v === m.id ? '' : m.id)} style={{ maxWidth: 274, borderRadius: 18, padding: '10px 14px', boxShadow: 'var(--shadow)', cursor: 'pointer',
               background: m.mine ? 'var(--clay)' : 'var(--surface)', color: m.mine ? '#fff' : 'var(--ink)',
               border: m.mine ? 'none' : '1px solid var(--line)', borderBottomRightRadius: m.mine ? 5 : 18, borderBottomLeftRadius: m.mine ? 18 : 5 }}>
@@ -2207,16 +2125,7 @@ function DMThread({ peer, open, onClose, ctx, docked }) {
         ))}
       </div>
       {/* the message being answered, above the composer — the same affordance a group room shows */}
-      {dmReply ? (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '8px 14px', borderTop: '1px solid var(--line)', background: 'var(--surface-2)' }}>
-          <Icon name="reply" size={14} color="var(--ink-3)" />
-          <div style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: 'var(--ink-2)' }}>
-            <div style={{ fontWeight: 700, fontSize: 11, color: 'var(--ink-3)' }}>Replying to {dmReply.mine ? 'yourself' : d.handle}</div>
-            <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontStyle: 'italic' }}>{dmReply.content}</div>
-          </div>
-          <button onClick={() => setDmReply(null)} aria-label="Stop replying" style={{ border: 'none', background: 'var(--surface)', borderRadius: 999, width: 26, height: 26, cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon name="x" size={14} /></button>
-        </div>
-      ) : null}
+      {dmReply ? TrinityReplyKit.bar({ variant: 'dm', who: dmReply.mine ? 'yourself' : d.handle, text: dmReply.content, onCancel: () => setDmReply(null) }) : null}
       {allowDM ? (
         <div style={{ padding: '8px 12px 14px', borderTop: '1px solid var(--line)', background: 'var(--surface)' }}>
           <div style={{ display: 'flex', alignItems: 'flex-end', gap: 9 }}>

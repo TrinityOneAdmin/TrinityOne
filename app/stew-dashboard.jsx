@@ -12560,7 +12560,6 @@ function StewDmWindow({ peer, offset, onClose }) {
   // affordance already failed on the Oppo in the member app (DMSwipe), so reply must never hang on a gesture.
   const [replyTo, setReplyTo] = React.useState(null);
   const [menuFor, setMenuFor] = React.useState('');   // msg id whose ⋯ menu is open
-  const swipeRef = React.useRef(null);
   const isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
   const [err, setErr] = React.useState('');      // a send that never left this console, said out loud
   const _threadConn = window.useStewardConn ? window.useStewardConn() : 0;
@@ -12614,16 +12613,16 @@ function StewDmWindow({ peer, offset, onClose }) {
   const startReply = (m) => { setReplyTo(m); setMenuFor(''); };
   const canReply = (m) => !m._pending && !m._failed;   // a waiting message has nothing on the relay to quote yet
   const byId = {}; shown.forEach(m => { byId[m.id] = m; });
-  const swipe = (m) => isNative && canReply(m) ? {
-    onTouchStart: (e) => { const t = e.touches && e.touches[0]; swipeRef.current = t ? { x: t.clientX, y: t.clientY } : null; },
-    onTouchEnd: (e) => {
-      const s0 = swipeRef.current; swipeRef.current = null;
-      const t = e.changedTouches && e.changedTouches[0];
-      if (!s0 || !t) return;
-      const dx = t.clientX - s0.x, dy = t.clientY - s0.y;
-      if (dx >= 48 && Math.abs(dy) < dx / 2) startReply(m);   // a rightward flick, not a scroll
-    },
-  } : {};
+  const lastId = shown.length ? shown[shown.length - 1].id : '';
+  const menuIntoView = React.useCallback((el) => { if (el && el.scrollIntoView) { try { el.scrollIntoView({ block: 'nearest' }); } catch (e) {} } }, []);
+  // SWIPE TO REPLY (APK) — the shared TrinityReplyKit handlers (app/reply-kit.jsx): the row follows the finger, a
+  // reply arrow fills in at 48px, letting go past it replies (a cancel past it too), a vertical drag abandons it.
+  // One row is dragged at a time, so one ref + one {id, dx} state serves the whole list.
+  const swipeSt = React.useRef(null);
+  const [swipeAt, setSwipeAt] = React.useState({ id: '', dx: 0 });
+  const swipe = (m) => isNative && canReply(m)
+    ? TrinityReplyKit.handlers(swipeSt, (v) => setSwipeAt(v ? { id: m.id, dx: v } : (p => p.dx ? { id: '', dx: 0 } : p)), () => startReply(m))
+    : {};
   const react = (m, emoji) => { window.Steward.reactDM(peer.pubkey, m.id, m.myReaction === emoji ? '-' : emoji); setRxFor(''); };
   const DM_EMOJI = ['❤️', '🙏', '👍', '😂', '😮', '😢'];
   const initials = (peer.name && peer.name !== 'Anonymous' ? peer.name.split(/\s+/).map(w => w[0]).join('').slice(0, 2) : 'AN').toUpperCase();
@@ -12640,24 +12639,26 @@ function StewDmWindow({ peer, offset, onClose }) {
           <div ref={scRef} className="no-scrollbar" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '12px 12px', display: 'flex', flexDirection: 'column', gap: 7 }}>
             <div style={{ textAlign: 'center', fontSize: 11, color: 'var(--ink-3)', marginBottom: 4 }}><Icon name="lock" size={12} /> Encrypted · only you two can read this</div>
             {shown.map(m => (
-              <div key={m.id} {...swipe(m)} style={{ alignSelf: m.mine ? 'flex-end' : 'flex-start', maxWidth: '82%', display: 'flex', flexDirection: 'column', alignItems: m.mine ? 'flex-end' : 'flex-start', position: 'relative' }}>
-                {m.replyTo && byId[m.replyTo] ? (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'var(--ink-3)', margin: '0 4px 3px', maxWidth: '100%' }}>
-                    <Icon name="reply" size={11} color="var(--ink-3)" />
-                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontStyle: 'italic' }}>{byId[m.replyTo].text}</span>
-                  </div>
-                ) : m.replyTo ? (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'var(--ink-3)', margin: '0 4px 3px' }}>
-                    <Icon name="reply" size={11} color="var(--ink-3)" /><span style={{ fontStyle: 'italic' }}>replying to an earlier message</span>
-                  </div>
-                ) : null}
+              <div key={m.id} {...swipe(m)} style={{ alignSelf: m.mine ? 'flex-end' : 'flex-start', maxWidth: '82%', display: 'flex', flexDirection: 'column', alignItems: m.mine ? 'flex-end' : 'flex-start', position: 'relative',
+                ...(isNative ? TrinityReplyKit.style(swipeAt.id === m.id ? swipeAt.dx : 0) : {}) }}>
+                {swipeAt.id === m.id ? TrinityReplyKit.cue(swipeAt.dx) : null}
+                {m.replyTo && byId[m.replyTo]
+                  ? TrinityReplyKit.quote({ variant: 'line', size: 11, maxWidth: '100%', text: byId[m.replyTo].text })
+                  : m.replyTo ? TrinityReplyKit.quote({ variant: 'line', size: 11, missing: true }) : null}
                 <div onClick={() => setRxFor(v => v === m.id ? '' : m.id)} title="Tap to react" style={{ padding: '8px 12px', borderRadius: 14, fontSize: 13.5, lineHeight: 1.4, whiteSpace: 'pre-wrap', background: m.mine ? 'var(--clay)' : 'var(--surface-2)', color: m.mine ? '#fff' : 'var(--ink)', border: m.mine ? 'none' : '1px solid var(--line)', cursor: 'pointer' }}>{m.text}</div>
                 {canReply(m) ? (
                   <button onClick={() => setMenuFor(v => v === m.id ? '' : m.id)} title="Message actions" aria-label="Message actions"
                     style={{ position: 'absolute', top: -6, [m.mine ? 'left' : 'right']: -26, border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 999, width: 24, height: 24, cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="dots" size={13} /></button>
                 ) : null}
                 {menuFor === m.id ? (
-                  <div style={{ position: 'absolute', top: '100%', marginTop: 4, [m.mine ? 'right' : 'left']: 0, zIndex: 5, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 10, boxShadow: 'var(--shadow-lg)', padding: 4, minWidth: 110 }}>
+                  // ⚠ THE MENU LIVES INSIDE THE `overflowY: auto` MESSAGE SCROLLER, which CLIPS it. Below the LAST
+                  // message there is nothing to scroll into, so `top: 100%` put Reply outside the visible tile and
+                  // the steward saw the ⋯ do nothing (owner, members page: "reply is not working"). The docked tile
+                  // is only 420px tall, so this bites hardest here. Two guards: the last message opens its menu
+                  // UPWARD (over the message before it, never over its own words), and any open menu scrolls itself
+                  // into view so a message near the bottom edge can't hide it either. NEEDS A DEVICE/BROWSER REPRO
+                  // to confirm this was the whole cause.
+                  <div ref={menuIntoView} data-reply-menu={m.id === lastId ? 'up' : 'down'} style={{ position: 'absolute', ...(m.id === lastId ? { bottom: '100%', marginBottom: 4 } : { top: '100%', marginTop: 4 }), [m.mine ? 'right' : 'left']: 0, zIndex: 5, background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 10, boxShadow: 'var(--shadow-lg)', padding: 4, minWidth: 110 }}>
                     <button onClick={() => startReply(m)} style={{ display: 'flex', alignItems: 'center', gap: 7, border: 'none', background: 'none', cursor: 'pointer', padding: '7px 9px', borderRadius: 7, fontFamily: 'var(--font-ui)', fontSize: 13, fontWeight: 600, color: 'var(--ink)' }}>
                       <Icon name="reply" size={14} color="var(--ink-2)" /> Reply</button>
                   </div>
@@ -12700,16 +12701,7 @@ function StewDmWindow({ peer, offset, onClose }) {
               <button onClick={() => setErr('')} title="Dismiss" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 1, flexShrink: 0 }}><Icon name="x" size={13} /></button>
             </div>
           ) : null}
-          {replyTo ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 11px', borderTop: '1px solid var(--line)', background: 'var(--surface-2)', flexShrink: 0 }}>
-              <Icon name="reply" size={13} color="var(--ink-3)" />
-              <div style={{ flex: 1, minWidth: 0, fontSize: 12, color: 'var(--ink-2)' }}>
-                <div style={{ fontWeight: 700, fontSize: 10.5, color: 'var(--ink-3)' }}>Replying to {replyTo.mine ? 'yourself' : (peer.name || 'Member')}</div>
-                <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontStyle: 'italic' }}>{replyTo.text}</div>
-              </div>
-              <button onClick={() => setReplyTo(null)} aria-label="Stop replying" title="Stop replying" style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', padding: 2, flexShrink: 0 }}><Icon name="x" size={14} /></button>
-            </div>
-          ) : null}
+          {replyTo ? TrinityReplyKit.bar({ variant: 'console', who: replyTo.mine ? 'yourself' : (peer.name || 'Member'), text: replyTo.text, onCancel: () => setReplyTo(null) }) : null}
           <div style={{ display: 'flex', gap: 8, padding: '10px 11px', borderTop: '1px solid var(--line)', flexShrink: 0 }}>
             <input value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') send(); }} autoFocus placeholder="Message…" style={{ flex: 1, height: 38, border: '1px solid var(--line)', borderRadius: 11, background: 'var(--surface-2)', padding: '0 12px', fontSize: 13.5, fontFamily: 'var(--font-ui)', color: 'var(--ink)', outline: 'none' }} />
             <button onClick={send} disabled={!text.trim()} title="Send this message" className="sk-btn sk-btn--clay" style={{ padding: '0 13px', opacity: text.trim() ? 1 : 0.5 }}><Icon name="send" size={15} color="var(--on-clay)" /></button>
