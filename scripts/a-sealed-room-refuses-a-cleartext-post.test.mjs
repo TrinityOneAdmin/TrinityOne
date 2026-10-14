@@ -17,7 +17,7 @@ import { fnBody } from './test-slice.mjs';
 const STEWARD = readFileSync(new URL('../vendor/steward.js', import.meta.url), 'utf8');
 
 test('publishPost returns null for a sealed group with no key — shipped bundle, run', async () => {
-  const body = fnBody(STEWARD, 'publishPost(content, group) {', 'publishPost');
+  const body = fnBody(STEWARD, 'publishPost(content, group, replyTo) {', 'publishPost');
   let published = null;
   const scope = {
     sk: new Uint8Array(32).fill(1),
@@ -40,7 +40,7 @@ test('publishPost returns null for a sealed group with no key — shipped bundle
 });
 
 test('publishPost encrypts normally when the key IS available — shipped bundle, run', async () => {
-  const body = fnBody(STEWARD, 'publishPost(content, group) {', 'publishPost');
+  const body = fnBody(STEWARD, 'publishPost(content, group, replyTo) {', 'publishPost');
   let published = null;
   const fakeKey = new Uint8Array(32).fill(42);
   const scope = {
@@ -64,7 +64,7 @@ test('publishPost encrypts normally when the key IS available — shipped bundle
 });
 
 test('publishPost allows plaintext in an UNSEALED group — shipped bundle, run', async () => {
-  const body = fnBody(STEWARD, 'publishPost(content, group) {', 'publishPost');
+  const body = fnBody(STEWARD, 'publishPost(content, group, replyTo) {', 'publishPost');
   let published = null;
   const scope = {
     sk: new Uint8Array(32).fill(1),
