@@ -3589,7 +3589,7 @@ function DashGiving() {
   );
 }
 
-function ListPanel({ title, items, addLabel, renderRight, renderAside, onAdd, empty, reorderable, onReorder, headerExtra, filters }) {
+function ListPanel({ title, items, addLabel, renderRight, renderAside, renderInline, compact, onAdd, empty, reorderable, onReorder, headerExtra, filters }) {
   const [order, setOrder] = React.useState(null);   // working copy while dragging
   const [dragId, setDragId] = React.useState(null);
   const [overId, setOverId] = React.useState(null);
@@ -3642,7 +3642,7 @@ function ListPanel({ title, items, addLabel, renderRight, renderAside, onAdd, em
           <div key={id} draggable={!!canDrag}
             onDragStart={canDrag ? (e) => { setDragId(id); try { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', String(id)); } catch (err) {} } : undefined}
             onDragOver={canDrag ? (e) => onDragOver(e, id) : undefined} onDrop={canDrag ? onDrop : undefined} onDragEnd={canDrag ? () => { setDragId(null); setOverId(null); setOrder(null); } : undefined}
-            style={{ display: 'flex', flexDirection: 'column', gap: 11, padding: '13px 14px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid ' + (overId === id && !dragging ? 'var(--clay)' : 'var(--line)'), opacity: dragging ? 0.4 : 1, boxShadow: dragging ? 'var(--shadow-lg)' : 'none', transition: 'border-color .12s, opacity .12s' }}>
+            style={{ display: 'flex', flexDirection: 'column', gap: 11, padding: compact ? '9px 12px' : '13px 14px', borderRadius: 13, background: 'var(--surface-2)', border: '1px solid ' + (overId === id && !dragging ? 'var(--clay)' : 'var(--line)'), opacity: dragging ? 0.4 : 1, boxShadow: dragging ? 'var(--shadow-lg)' : 'none', transition: 'border-color .12s, opacity .12s' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 13, minWidth: 0 }}>
               {canDrag ? <div title="Drag to reorder" style={{ cursor: 'grab', color: 'var(--ink-3)', display: 'flex', flexShrink: 0, touchAction: 'none' }}><Icon name="dots" size={18} color="currentColor" /></div> : null}
               {/* REORDERING WITHOUT A MOUSE. move() has been defined in this component since it was written
@@ -3663,11 +3663,16 @@ function ListPanel({ title, items, addLabel, renderRight, renderAside, onAdd, em
                   </div>
                 );
               })() : null}
-              <div style={{ width: 38, height: 38, borderRadius: 11, background: 'var(--surface)', color: it.fg || 'var(--clay-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid var(--line)', flexShrink: 0 }}><Icon name={it.ic} size={19} color="currentColor" /></div>
-              <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.name}</div>{it.sub ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.sub}</div> : null}</div>
+              {compact ? null : <div style={{ width: 38, height: 38, borderRadius: 11, background: 'var(--surface)', color: it.fg || 'var(--clay-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid var(--line)', flexShrink: 0 }}><Icon name={it.ic} size={19} color="currentColor" /></div>}
+              {/* compact (APK): one line — name, then the settings gear (renderInline), then the member count.
+                  The gear sits by the NAME and well away from the delete button on the far right, so a tap for
+                  settings is never a tap for delete (owner 2026-10-14). */}
+              {compact
+                ? <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 7, overflow: 'hidden' }}><span style={{ fontWeight: 700, fontSize: 14.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{it.name}</span>{renderInline ? <span style={{ flexShrink: 0, display: 'flex' }}>{renderInline(it)}</span> : null}{it.sub ? <span style={{ fontSize: 12.5, color: 'var(--ink-3)', whiteSpace: 'nowrap', flexShrink: 0 }}>· {it.sub}</span> : null}</div>
+                : <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 14.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.name}</div>{it.sub ? <div style={{ fontSize: 12.5, color: 'var(--ink-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.sub}</div> : null}</div>}
               {renderAside ? <div style={{ flexShrink: 0 }}>{renderAside(it)}</div> : null}
             </div>
-            {renderRight ? <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', paddingLeft: canDrag ? 82 : 51 }}>{renderRight(it)}</div> : null}
+            {renderRight && !compact ? <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', paddingLeft: canDrag ? 82 : 51 }}>{renderRight(it)}</div> : null}
           </div>
           );
         })}
@@ -4468,9 +4473,11 @@ function DashGroups() {
         reorderable onReorder={(arr) => arr.forEach((g, i) => { if (g.order !== i) window.Steward.publishGroup({ ...raw(g), order: i }); })}
         empty="No groups yet — create your church's first chat room (or a team on the Rota page)."
         headerExtra={<button onClick={() => setCatsOpen(true)} className="sk-btn sk-btn--ghost" style={{ padding: '8px 13px', fontSize: 13 }} title="Create named categories (e.g. Lifegroups) to group your groups"><Icon name="books" size={15} /> Categories{cats.length ? ' · ' + cats.length : ''}</button>}
-        renderRight={(it) => isNative ? (
-          <button onClick={() => setSettingsFor(raw(it))} title="Group settings" style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '8px 10px', cursor: 'pointer', color: 'var(--ink-2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="sliders" size={16} /></button>
-        ) : (
+        compact={isNative}
+        renderInline={isNative ? (it) => (
+          <button onClick={() => setSettingsFor(raw(it))} title="Group settings" aria-label={'Settings for ' + (it.name || 'this group')} style={{ border: '1px solid var(--line)', background: 'var(--surface)', borderRadius: 9, padding: '8px 10px', minWidth: 40, minHeight: 40, boxSizing: 'border-box', cursor: 'pointer', color: 'var(--ink-2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="sliders" size={16} /></button>
+        ) : undefined}
+        renderRight={(it) => isNative ? null : (
           <React.Fragment>
             {it.kind !== 'team' && cats.length ? (
               <select value={it.category || ''} onChange={(e) => pubOr(window.Steward.publishGroup({ ...raw(it), category: e.target.value || undefined }), 'Couldn\'t move "' + (it.name || 'that group') + '" into that category — the relay didn\'t accept it.')} title="Put this group in a category" onClick={(e) => e.stopPropagation()} style={{ border: '1px solid ' + (it.category ? 'color-mix(in oklab, var(--clay) 35%, var(--line))' : 'var(--line)'), background: it.category ? 'color-mix(in oklab, var(--clay) 7%, var(--surface))' : 'var(--surface)', borderRadius: 9, padding: '5px 8px', cursor: 'pointer', color: it.category ? 'var(--clay-ink)' : 'var(--ink-3)', fontFamily: 'var(--font-ui)', fontWeight: 700, fontSize: 12 }}>
