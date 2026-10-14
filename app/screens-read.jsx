@@ -163,31 +163,31 @@ function ActionSheet({ label, ctx, open, onClose, onColor, curColor, onNote, onC
   return (
     <BottomSheet open={open} onClose={onClose} passthrough>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
-        <div>
+        <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 12, color: 'var(--ink-3)', fontWeight: 600 }}>{isMulti ? multi + ' verses selected' : 'Verse selected'}</div>
           <div style={{ fontFamily: 'var(--font-display)', fontSize: 20, fontWeight: 700 }}>{label}</div>
         </div>
+        <div data-testid="verse-extent" style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 8, marginRight: 6, flexShrink: 0 }}>
+          <button onClick={ctx._shrink} disabled={!isMulti} title="Remove the last verse" style={{ width: 34, height: 34, borderRadius: 999, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontSize: 20, fontWeight: 700, lineHeight: 1, cursor: isMulti ? 'pointer' : 'default', opacity: isMulti ? 1 : 0.4, fontFamily: 'var(--font-ui)' }}>−</button>
+          <button onClick={ctx._extend} title="Add the next verse" style={{ width: 34, height: 34, borderRadius: 999, border: '1px solid var(--clay)', background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)', fontSize: 20, fontWeight: 700, lineHeight: 1, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>+</button>
+        </div>
         <IconBtn name="x" onClick={onClose} />
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 16 }}>
-        <button onClick={ctx._shrink} disabled={!isMulti} title="Remove the last verse" style={{ width: 38, height: 38, borderRadius: 999, border: '1px solid var(--line)', background: 'var(--surface-2)', color: 'var(--ink)', fontSize: 22, fontWeight: 700, lineHeight: 1, cursor: isMulti ? 'pointer' : 'default', opacity: isMulti ? 1 : 0.4, fontFamily: 'var(--font-ui)' }}>−</button>
-        <button onClick={ctx._extend} title="Add the next verse" style={{ width: 38, height: 38, borderRadius: 999, border: '1px solid var(--clay)', background: 'color-mix(in oklab, var(--clay) 12%, var(--surface))', color: 'var(--clay)', fontSize: 22, fontWeight: 700, lineHeight: 1, cursor: 'pointer', fontFamily: 'var(--font-ui)' }}>+</button>
-      </div>
       <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)', marginBottom: 9 }}>Highlight</div>
-      <div style={{ display: 'flex', gap: 11, marginBottom: 20 }}>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
         {HL_COLORS.map(c => (
           <button key={c.id} onClick={() => onColor(curColor === c.v ? null : c.v)}
             aria-label={(curColor === c.v ? 'Remove ' : 'Highlight ') + c.id}
             title={(curColor === c.v ? 'Remove ' : 'Highlight ') + c.id} style={{
-            width: 44, height: 44, borderRadius: 999, background: c.v, cursor: 'pointer',
+            width: 33, height: 33, borderRadius: 999, background: c.v, cursor: 'pointer',
             border: curColor === c.v ? '2.5px solid var(--ink)' : '2px solid var(--line)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}>{curColor === c.v ? <Icon name="check" size={18} stroke={2.6} color="var(--ink)" /> : null}</button>
+          }}>{curColor === c.v ? <Icon name="check" size={13.5} stroke={2.6} color="var(--ink)" /> : null}</button>
         ))}
         <button onClick={() => onColor(null)} style={{
-          width: 44, height: 44, borderRadius: 999, background: 'var(--surface-2)', cursor: 'pointer',
+          width: 33, height: 33, borderRadius: 999, background: 'var(--surface-2)', cursor: 'pointer',
           border: '2px solid var(--line)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--ink-3)',
-        }}><Icon name="x" size={18} /></button>
+        }}><Icon name="x" size={13.5} /></button>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 10 }}>
         {acts.map(a => (

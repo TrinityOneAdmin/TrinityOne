@@ -110,5 +110,53 @@ test('ActionSheet renders highlight buttons when multi > 1', async () => {
   assert.equal(colorCalls.length, 1, 'the highlight button did not call onColor');
 });
 
+// 2026-10-14 (owner): the − and + live in the TOP ROW beside the verse name (not a separate centred row), and
+// the Highlight swatches are 75% of their old size (44 -> 33). The real ActionSheet is compiled and drawn.
+// Real spacing/geometry is not seeable here — this pins WHICH CONTAINER holds the controls and the size VALUES.
+test('ActionSheet: -/+ share the top row with the verse name and the close X; swatches are 33px', async () => {
+  const { React, draw } = miniReact();
+  const Stub = (n) => { const f = function ({ children }) { return children || null; }; Object.defineProperty(f, 'name', { value: n }); return f; };
+  const src = fnBody(SRC, 'function ActionSheet(', 'ActionSheet');
+  const tmp = join(tmpdir(), 'hltest2-' + process.pid + '-' + Math.random().toString(36).slice(2) + '.jsx');
+  let js;
+  try {
+    writeFileSync(tmp, src + '\nexport { ActionSheet };\n');
+    js = execFileSync(join(ROOT, 'node_modules/.bin/esbuild'), [tmp, '--jsx=transform', '--format=esm', '--log-level=error'], { encoding: 'utf8' });
+  } finally { rmSync(tmp, { force: true }); }
+  const key = '__hltest2_' + Math.random().toString(36).slice(2);
+  globalThis[key] = {
+    React,
+    HL_COLORS: [{ id: 'yellow', v: '#fef3c7' }, { id: 'green', v: '#d1fae5' }],
+    BottomSheet: Stub('BottomSheet'), IconBtn: Stub('IconBtn'), Icon: Stub('Icon'),
+  };
+  const preamble = Object.keys(globalThis[key]).map(k => `const ${k} = globalThis.${key}.${k};`).join('\n');
+  const mod = await import('data:text/javascript;base64,' + Buffer.from(preamble + '\n' + js).toString('base64'));
+  const tree = draw(mod.ActionSheet, {
+    label: 'Gen 1:1-3', multi: 3, open: true,
+    ctx: { _copy: () => {}, _share: () => {}, _shrink: () => {}, _extend: () => {}, highlights: {} },
+    onClose: () => {}, onColor: () => {}, curColor: null,
+    onNote: () => {}, onCross: () => {}, onCommentary: () => {}, bookmarked: false, hasNote: false,
+  });
+  const size = (n) => find(n, () => true).length;
+  const hasLabel = (n) => find(n, x => (x.kids || []).some(k => k === 'Gen 1:1-3')).length > 0;
+  const hasTitled = (n, t) => find(n, x => x.type === 'button' && x.props && x.props.title === t).length > 0;
+  const hasClose = (n) => find(n, x => x.type && x.type.name === 'IconBtn').length > 0;
+  // the SMALLEST container that holds the verse name is the top row
+  const rows = find(tree, n => n.type === 'div' && hasLabel(n)).sort((a, b) => size(a) - size(b));
+  const topRow = rows.find(r => hasClose(r));
+  assert.ok(topRow, 'no container holds both the verse name and the close X');
+  assert.ok(hasTitled(topRow, 'Remove the last verse') && hasTitled(topRow, 'Add the next verse'),
+    'the - and + are not in the same row as the verse name and the close X (they have drifted back into a separate row)');
+  // and nothing else holds them: the buttons sit in exactly one place
+  const strip = find(tree, n => n.type === 'div' && hasTitled(n, 'Add the next verse') && !hasLabel(n) && !hasClose(n))
+    .sort((a, b) => size(a) - size(b))[0];
+  assert.ok(strip && find(strip, x => x.type === 'button').length === 2, 'the -/+ pair is not a two-button group');
+  const swatches = find(tree, n => n.type === 'button' && n.props && n.props.style && /ighlight/.test(String(n.props['aria-label'] || '')));
+  assert.equal(swatches.length, 2);
+  for (const b of swatches) assert.deepEqual([b.props.style.width, b.props.style.height], [33, 33], 'highlight swatch is not 33x33');
+  const clear = find(tree, n => n.type === 'button' && n.props && n.props.style && n.props.style.background === 'var(--surface-2)' && n.props.style.borderRadius === 999 && n.props.style.width === 33);
+  assert.equal(clear.length, 1, 'the clear-X swatch is not 33x33');
+});
+
 // Sabotage: deletion of passageKeys is already caught — buildPassageKeys() fails at indexOf.
 // No text-matching sabotage needed (CLAUDE.md rule 3).
