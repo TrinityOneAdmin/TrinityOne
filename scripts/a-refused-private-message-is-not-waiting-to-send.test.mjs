@@ -56,7 +56,7 @@ function engine({ publishError }) {
   scope._outboxSave = lift(fnBody(BUNDLE, 'function _outboxSave() {', '_outboxSave'), '_outboxSave', scope);
   const F = {
     relays: ['wss://x.invalid'], ready: Promise.resolve(), myPubkey: 'a'.repeat(64),
-    _dmWrap: new Function(fnBody(BUNDLE, '_dmWrap(text, replyTo) {', '_dmWrap').replace(/^_dmWrap/, 'return function _dmWrap'))(),
+    _dmWrap: new Function(fnBody(BUNDLE, '_dmWrap(text, replyTo, meta) {', '_dmWrap').replace(/^_dmWrap/, 'return function _dmWrap'))(),
   };
   scope.window = { Fellowship: F };
   F.sendDM = lift('(' + sendBody.replace(/^async sendDM/, 'async function sendDM') + ')', 'sendDM', scope);

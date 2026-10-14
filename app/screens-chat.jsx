@@ -1933,10 +1933,10 @@ function VerseShareSheet({ payload, open, onClose, ctx }) {
 // it is there is nothing left to tap — so this also carries the same three-dots control a group room has had
 // all along (Row, above). The menu offers Reply only: inside a direct message you are ALREADY private, so
 // "Reply privately" would be meaningless here, and there is nothing to moderate in someone else's inbox.
-function DMSwipe({ mine, onReply, menuOpen, onOpenMenu, children }) {
+function DMSwipe({ mine, onReply, menuOpen, onOpenMenu, noReply, children }) {
   // The swipe lives in app/reply-kit.jsx (TrinityReplyKit.useSwipe) — ONE copy shared with Row and the console
   // DM. ⚠ its offset is a REF, never state read at lift time: see the note on the same trap in the kit.
-  const sw = TrinityReplyKit.useSwipe(onReply);
+  const sw = TrinityReplyKit.useSwipe(onReply, { enabled: !noReply });
   return (
     // touch-action: pan-y (in sw.style) — the list still scrolls, the browser does not claim the horizontal drag.
     <div {...sw.handlers}
@@ -1945,12 +1945,14 @@ function DMSwipe({ mine, onReply, menuOpen, onOpenMenu, children }) {
       {/* the same shape Row uses: a relative column around the bubble so the dots can sit just outside it */}
       <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', alignItems: mine ? 'flex-end' : 'flex-start' }}>
         {children}
-        <button onClick={onOpenMenu} title="Message actions" aria-label="Message actions"
+        {/* AN ANNOUNCEMENT (a church message flagged "no replies") offers no way to answer it: no swipe
+            (enabled:false above), no dots menu with Reply, and DMThread adds no reply bar for it. */}
+        {noReply ? null : <button onClick={onOpenMenu} title="Message actions" aria-label="Message actions"
           style={{ position: 'absolute', top: -7, [mine ? 'left' : 'right']: -30, border: '1px solid var(--line)', background: 'var(--surface)',
             borderRadius: 999, width: 30, height: 30, cursor: 'pointer', color: 'var(--ink-3)', display: 'flex', alignItems: 'center',
-            justifyContent: 'center', boxShadow: 'var(--shadow)' }}><Icon name="dots" size={15} /></button>
+            justifyContent: 'center', boxShadow: 'var(--shadow)' }}><Icon name="dots" size={15} /></button>}
         {/* below the bubble, anchored to the side the dots are on — see the long note in Row */}
-        {menuOpen ? (
+        {menuOpen && !noReply ? (
           <div style={{ position: 'absolute', top: '100%', marginTop: 6, [mine ? 'right' : 'left']: 0, zIndex: 5, background: 'var(--surface)', border: '1px solid var(--line)',
             borderRadius: 12, boxShadow: 'var(--shadow-lg)', padding: 5, minWidth: 150, maxWidth: 240, display: 'flex', flexDirection: 'column', gap: 2 }}>
             <button onClick={onReply} style={{ display: 'flex', alignItems: 'center', gap: 8, border: 'none', background: 'none', cursor: 'pointer',
@@ -2073,12 +2075,13 @@ function DMThread({ peer, open, onClose, ctx, docked }) {
             <Icon name="lock" size={13} /> Only you two can read these messages</span>
         </div>
         {shownMsgs.map(m => (
-          <DMSwipe key={m.id} mine={m.mine} onReply={() => { setDmReply(m); setDmMenuFor(null); }}
+          <DMSwipe key={m.id} mine={m.mine} noReply={!!m.noReply} onReply={() => { if (m.noReply) return; setDmReply(m); setDmMenuFor(null); }}
             menuOpen={dmMenuFor === m.id} onOpenMenu={() => setDmMenuFor(dmMenuFor === m.id ? null : m.id)}>
             {/* the message this one answers, shown the same way a group room shows it */}
             {m.replyTo && msgById[m.replyTo]
               ? TrinityReplyKit.quote({ variant: 'line', size: 11.5, maxWidth: 274, text: msgById[m.replyTo].content })
               : m.replyTo ? TrinityReplyKit.quote({ variant: 'line', size: 11.5, missing: true }) : null}
+            {m.noReply ? <span style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: '.5px', textTransform: 'uppercase', color: 'var(--ink-3)', margin: '0 4px 3px', display: 'inline-flex', alignItems: 'center', gap: 4 }}><Icon name="bell" size={11} color="currentColor" />Announcement</span> : null}
             <div onClick={() => setRxFor(v => v === m.id ? '' : m.id)} style={{ maxWidth: 274, borderRadius: 18, padding: '10px 14px', boxShadow: 'var(--shadow)', cursor: 'pointer',
               background: m.mine ? 'var(--clay)' : 'var(--surface)', color: m.mine ? '#fff' : 'var(--ink)',
               border: m.mine ? 'none' : '1px solid var(--line)', borderBottomRightRadius: m.mine ? 5 : 18, borderBottomLeftRadius: m.mine ? 18 : 5 }}>

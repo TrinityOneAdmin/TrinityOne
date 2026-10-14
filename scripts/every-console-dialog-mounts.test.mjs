@@ -95,6 +95,7 @@ return {
   StewCareChat: { reqId: 'r1', requesterPub: 'cd'.repeat(32), title: 'Care', onClose },
   MealsNeedModal: { need: null, onClose, onSaved() {}, onDeleted() {} },
   SchEventDetail: { event: { id: 'e1', title: 'Evensong', date: '2026-09-20', start: '18:00', end: '19:00' }, onClose },
+  SchEventMessage: { event: { id: 'e1', title: 'Evensong', date: '2026-09-20' }, onClose },
   RoomBookingModal: { bk: { roomId: '', date: '2026-09-20', start: '', end: '', title: '' }, rooms: [], bookings: [], onClose },
   // feat/console-hamburger-nav adds the phone's sections drawer as a dialog. Listed here BEFORE that branch
   // merges (an audit of the two found this file red 3/3 the moment they met); an entry for a component that is

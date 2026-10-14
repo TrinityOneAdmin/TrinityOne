@@ -5224,17 +5224,28 @@ window.Fellowship = {
   // Backward compatible in BOTH directions: every DM ever sent is a bare string, so a body that does not
   // parse as an envelope is simply the message; and an older build receiving an envelope shows the JSON
   // rather than losing the words. Hence `t` carries the full text and nothing is stored only in the wrapper.
-  _dmWrap(text, replyTo) {
-    if (!replyTo || !replyTo.id) return text;
-    try { return JSON.stringify({ v: 1, t: String(text), r: String(replyTo.id).slice(0, 64) }); } catch (e) { return text; }
+  // `meta` (church event messages, 2026-10-14) ADDS two optional fields to the same v:1 envelope: `nr:1` =
+  // "announcement, no replies" and `ev` = the event id it is about. Additive only: an older build reads `t`
+  // and ignores the rest; a body with neither a reply nor meta is still the bare string.
+  _dmWrap(text, replyTo, meta) {
+    const hasR = !!(replyTo && replyTo.id);
+    const nr = !!(meta && meta.noReply), ev = meta && meta.eventId ? String(meta.eventId).slice(0, 64) : '';
+    if (!hasR && !nr && !ev) return text;
+    try {
+      const o = { v: 1, t: String(text) };
+      if (hasR) o.r = String(replyTo.id).slice(0, 64);
+      if (nr) o.nr = 1;
+      if (ev) o.ev = ev;
+      return JSON.stringify(o);
+    } catch (e) { return text; }
   },
   _dmUnwrap(body) {
-    if (typeof body !== 'string' || body[0] !== '{') return { text: body, replyTo: null };
+    if (typeof body !== 'string' || body[0] !== '{') return { text: body, replyTo: null, noReply: false, eventId: null };
     try {
       const o = JSON.parse(body);
-      if (o && o.v === 1 && typeof o.t === 'string') return { text: o.t, replyTo: o.r || null };
+      if (o && o.v === 1 && typeof o.t === 'string') return { text: o.t, replyTo: o.r || null, noReply: o.nr === 1, eventId: o.ev || null };
     } catch (e) {}
-    return { text: body, replyTo: null };
+    return { text: body, replyTo: null, noReply: false, eventId: null };
   },
   async sendDM(peerPub, content, replyTo) {
     if (!sk) await window.Fellowship.ready;
@@ -5304,7 +5315,7 @@ window.Fellowship = {
       const mine = e.pubkey === pub;
       let content = ''; try { content = await _dmDecrypt(sk, peerPub, e.content); } catch (err) { content = '🔒 (could not decrypt)'; }
       const un = window.Fellowship._dmUnwrap(content);
-      const m = { id: e.id, mine, content: un.text, replyTo: un.replyTo, ts: e.created_at, pubkey: e.pubkey };
+      const m = { id: e.id, mine, content: un.text, replyTo: un.replyTo, noReply: !!un.noReply, ts: e.created_at, pubkey: e.pubkey };
       msgs.set(e.id, m); push(m);
     };
     const deliverRx = (e) => {
